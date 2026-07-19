@@ -1,6 +1,6 @@
 # Productivity Pack Design Bible
 
-> Status: accepted product direction, 2026-07-18.
+> Status: accepted product direction, updated 2026-07-18.
 >
 > This document defines the intended product and architecture. It distinguishes
 > current PSFN capabilities from target Productivity Pack work; nothing marked
@@ -49,7 +49,9 @@ them.
 PSFN must remain a complete companion framework without the Productivity Pack.
 Disabling or never installing the Pack must leave ordinary conversation,
 memory, relationships, creativity, care reminders, scheduling, embodiment, and
-world presence intact.
+world presence intact. It must also leave core
+[Partner Affect Estimation](partner-affect.md) operational from whatever core
+signals remain authorized.
 
 Pack enablement is a feature and data-access decision, not a companion
 maturation tier.
@@ -129,7 +131,7 @@ policy. The Productivity Companion designation alone grants none of them.
 
 ### 2.8 No silent second authority
 
-Postgres, Obsidian, external calendars, Omi, and the Knowledge Keeper may all
+Postgres, Obsidian, external calendars, Omi, and Thoth may all
 participate, but each datum must have one declared authority. Synchronization
 creates projections and external bindings, not several competing canonical
 copies.
@@ -149,11 +151,12 @@ belong in the optional Pack.
 | Ordinary companion concerns and care nudges | Yes | Must not store the human backlog in concerns |
 | Voice conversation and direct commands | Yes | Adds Pack-aware capture and planning actions |
 | Typed sensor ingest and situated place semantics | Yes | Adds task/routine Trigger and Evidence rules |
-| Partner facts and preferences in memory/contact context | Yes | Builds the broader Partner Operating Model |
+| Partner Dossier, contact profiles, and relationship graph | Yes | Adds operational context and import Candidates |
+| Partner Affect Estimate and Support Posture | Yes | May contribute additional Signal Observations |
 | Task, Project, Area, Goal, and Routine management | No | Yes |
 | Passive transcript mining and Candidate review | No | Yes |
 | Dayboard | No | Yes |
-| Cross-source behavioral correlations | No | Yes |
+| Productivity and workflow correlations | No | Yes |
 | Financial, subscription, or inbox analysis | No | Optional and separately authorized |
 
 Calendar capability is therefore core-capable but policy-scoped. A companion
@@ -188,7 +191,8 @@ These terms are canonical for the Pack.
 | **Observation** | A normalized source event retained with freshness and confidence. |
 | **Insight** | A bounded correlation or pattern with its evidence window, sample size, missingness, and uncertainty. |
 | **External Binding** | The idempotent relationship between Pack state and an external object such as a calendar event or Obsidian document. |
-| **Partner Operating Model** | The partner-correctable set of durable preferences, routines, current context, and evidence-backed patterns used for assistance. |
+| **Partner Dossier** | Core PSFN's governed view of the partner and their social context, composed from contact profiles, relational memory, social graph, and personal wiki references. |
+| **Partner Operating Model** | The Pack's partner-correctable operational overlay: routines, execution context, friction, strategies, and evidence-backed productivity patterns. |
 
 ### 4.1 Area, Project, Goal, Task, and context are not synonyms
 
@@ -313,7 +317,9 @@ ones.
 | Obsidian access | Existing `vault` integration or bounded filesystem adapter |
 | Durable Pack state | New personal-operations store port with Postgres adapter |
 | Omi and generic completed conversations | One completed-capture ingest port with API, webhook, and vault-file adapters |
-| Research lookup | A narrow Knowledge Keeper query/delivery adapter once a real integration is selected |
+| Partner identity and relationships | Existing contact profile, relational memory, and social-graph stores |
+| Partner affect | Core [`Partner Affect Estimation`](partner-affect.md); Pack contributes observations only |
+| Research lookup | A narrow Thoth query/delivery adapter once a real integration is selected |
 
 Source adapters normalize into the same Capture Artifact or Observation
 contracts. Downstream modules must not know whether an Omi conversation arrived
@@ -352,10 +358,11 @@ across restart and adapter retries.
 | Task, Project, Goal, Routine | Postgres | Dayboard, companion context, optional Obsidian projection |
 | Calendar event | External calendar | External Binding and bounded cached projection |
 | Long-form partner-authored note | Obsidian | Search/index projection |
-| General research wiki | Existing Knowledge Keeper/Obsidian system | PSFN query result or delivered artifact |
+| General research wiki and bulk reference ingestion | Thoth | PSFN query result or delivered artifact |
+| Partner Dossier and relationship graph | PSFN core contact, memory, social-graph, and personal-wiki stores | Bounded prompt/retrieval view |
 | Companion lived conversation | Existing canonical L0 archive | Existing projections |
 | Companion durable memory | Existing PSFN memory substrate | Prompt/retrieval projections |
-| Derived Partner Operating Model entry | Its owning PSFN store with provenance | Bounded prompt context and Dayboard inspection |
+| Derived Partner Operating Model entry | Pack Postgres store with provenance | Bounded prompt context and Dayboard inspection |
 
 No sync path may silently promote a projection into authority.
 
@@ -561,42 +568,92 @@ stale Tasks, Project direction, Goal alignment, Routine evidence, and
 rescheduling. The system should help the partner decide; it should not create
 review busywork merely to prove it is active.
 
-## 9. Obsidian and the Knowledge Keeper
+## 9. Obsidian, Thoth, and Human-Shape Knowledge
 
-Obsidian is the partner's durable, browsable knowledge workspace. It is not a
-one-way dump target.
+Obsidian is the partner's durable, browsable knowledge workspace. It is both an
+input and an output, but a file's namespace and source class decide who owns
+its meaning.
 
-The existing Knowledge Keeper system already ingests research-oriented
-material such as bookmarks, papers, articles, saved repositories, and clipped
-notes, then builds a general reference wiki. That system should remain focused
-on reference knowledge. PSFN should not absorb its entire crawler, archivist,
-or wiki-building implementation into companion core.
+**Thoth** remains the authority for:
+
+- bulk ingestion from bookmarks, papers, articles, repositories, and clips;
+- general wiki and reference construction;
+- the reference-oriented portions of the partner's Obsidian corpus;
+- paper, article, archive, and artifact retrieval.
+
+PSFN must not absorb Thoth's crawler, archivist, or general wiki builder into
+companion core or the Productivity Pack.
 
 The division of labor is:
 
 | System | Owns |
 |---|---|
-| Knowledge Keeper | General research ingestion, reference wiki construction, paper/article/archive retrieval |
-| PSFN core | Companion conversation, memory, relationships, care, situated presence, and core calendar/schedule capability |
-| Productivity Pack | Partner Tasks, Projects, Areas, Goals, Routines, reviews, context rules, evidence, and Partner Operating Model |
-| Obsidian | Human-authored long-form notes and the shared browsable workspace through declared namespaces |
+| Thoth | General wiki/reference data, bulk ingestion, reference-oriented Obsidian data, and research retrieval |
+| PSFN core | Companion conversation and memory, Partner Dossier, contact profiles, social graph, care, situated presence, partner affect, and core calendar/schedule |
+| Productivity Pack | Tasks, Projects, Areas, Goals, Routines, reviews, operational context, evidence, and Partner Operating Model |
+| Obsidian | Human-facing Markdown workspace whose declared namespaces retain the authorities above |
 
-The two systems complement one another through narrow requests. A companion
-may ask the Knowledge Keeper to find a paper by topic, retrieve its metadata or
-abstract, summarize it, and deliver the PDF or a reference. That does not give
-the Knowledge Keeper access to Pack state or give the Pack ownership of the
-general research wiki.
+### 9.1 Partner Dossier versus Partner Operating Model
+
+Human-shape knowledge belongs in PSFN when it is needed for companionship:
+
+- the partner's exact identity and durable preferences;
+- family, friends, coworkers, providers, and other important contacts;
+- roles such as manager, colleague, partner, or family member;
+- provenance-bearing relationship edges;
+- stable personal context and corrections.
+
+Core already has contact profiles, relational memory, a social graph, and a
+personal wiki. The target Partner Dossier is a deeper composite read surface
+over those authorities, not another identity database.
+
+The Pack's Partner Operating Model is narrower. It owns operational patterns,
+routines, execution context, friction, strategies, and links to Areas,
+Projects, Goals, and Tasks.
+
+It may reference the Partner Dossier. It must not duplicate basic contact
+identity or relationship authority.
+
+### 9.2 Markdown and YAML interchange
+
+Thoth and PSFN should exchange governed documents as Markdown with strict YAML
+frontmatter. A minimal transfer record needs:
+
+- stable document and source ids;
+- source class and canonical authority;
+- subject contact id when the document is human-shaped;
+- provenance references and content hash;
+- sensitivity and consent scope;
+- created, updated, and observed timestamps;
+- schema and processing version.
+
+A `human_shape` source class may create import Candidates for the Partner
+Dossier, relational memory, social graph, or Partner Operating Model.
+
+It does not write those stores directly. Review, confidence, subject identity,
+consent, and destination policy still apply.
+
+Stable ids and hashes make the interchange idempotent. A PSFN projection must
+never be re-ingested by Thoth or PSFN as a new partner-authored source.
+
+### 9.3 Narrow collaboration
+
+A companion may ask Thoth to find a paper by topic, retrieve metadata or an
+abstract, summarize it, and deliver the PDF or a reference.
+
+That request does not give Thoth access to Pack state and does not give PSFN
+ownership of the general reference wiki.
 
 The Obsidian integration should eventually define explicit namespaces for:
 
 - source-owned Omi transcripts and summaries;
-- partner-authored notes;
-- Knowledge Keeper reference pages;
-- Pack-authored project or review documents;
+- partner-authored human-shape notes;
+- Thoth reference pages and ingested source material;
+- Pack-authored Project or Review documents;
 - read-only Pack status projections, if retained.
 
 Exact folder names must follow the live vault after inspection. The design must
-not invent a parallel vault tree and then require the partner to migrate to it.
+not invent a parallel vault tree and then require the partner to migrate.
 
 The existing PSFN `vault` surface remains an optional external bridge and must
 not silently copy vault contents into companion memory. See the
@@ -723,13 +780,66 @@ require an upstairs/downstairs application or a separate room task manager.
 
 ### 11.5 Shared physical devices
 
-Current satellites are bound to a companion. A future shared-room device may
-serve several companions only after its identity, audience, privacy, and
-allowlist semantics are explicit.
+Current `satellites.json` binds a satellite to at most one companion. The
+current presence-follow path can also move that companion's emanation when a
+trusted partner enters another bound room.
 
-For Pack behavior, only the Productivity Companion may receive or act on
-partner productivity signals. Shared-device support must not weaken the
-single-Productivity-Companion invariant.
+The target multi-companion policy separates three authorities:
+
+1. **Satellite Primary** — the companion that owns the device's default
+   relationship and gets the first opportunity to respond.
+2. **Observation Recipient** — a companion allowed to receive selected sensor
+   metadata from the device.
+3. **Emanation Member** — a companion explicitly allowed to speak or appear
+   through the device.
+
+These sets are not interchangeable. Receiving a presence observation does not
+grant speech, movement, world control, or access to the room's history.
+
+The designated Productivity Companion may be an Observation Recipient for
+`presence`, `location`, or another exact scope even when it is not the
+Satellite Primary.
+
+It receives the minimum normalized metadata needed to evaluate Pack Triggers.
+Raw sensor feeds and unrelated room activity remain withheld.
+
+#### 11.5.1 Presence is not a summons
+
+Entering a room publishes a presence observation. It does not automatically
+move, wake, or interrupt any companion.
+
+An active conversation may continue across rooms when the current companion,
+partner intent, availability, and device policy allow it. Mere presence
+without an active interaction does not imply that a resting, reading, or
+otherwise occupied companion should follow.
+
+This target rule narrows the currently shipped trust-gated auto-follow behavior.
+Implementation must replace unconditional presence-driven movement rather than
+adding a second competing follow path.
+
+#### 11.5.2 Primary-first response arbitration
+
+When more than one Emanation Member becomes eligible to speak:
+
+1. explicit partner address or an active conversation wins;
+2. otherwise the Satellite Primary receives a short response lease;
+3. the primary may speak, decline, or return a deterministic no-op;
+4. timeout or release makes the next policy-eligible member eligible;
+5. exactly one companion may hold the speech lease at a time.
+
+The Productivity Companion does not gain speaker priority merely because it
+found an eligible Task. It may speak only after the primary declines/releases
+and the device allows its emanation.
+
+Arbitration happens before a model call when eligibility is answerable from
+Task state, availability, fatigue, quiet hours, active conversation, and
+device policy.
+
+Lease acquisition, decline, timeout, release, and speech outcome are audited.
+No companion is fabricated as having chosen to speak when it did not.
+
+Shared-device support must preserve the single-Productivity-Companion
+invariant, companion rest, and fleet privacy.
 
 ## 12. Goals, Projects, and Routines
 
@@ -804,6 +914,18 @@ end, and exercise type, which is suitable for a summarized Evidence adapter:
 Evidence policies are operator-owned and narrow. A new evidence type fails
 closed until mapped.
 
+Some of the same summaries may also be eligible Signal Observations for core
+[Partner Affect Estimation](partner-affect.md). That use is independently
+consented and policy-scoped.
+
+The Pack contributes the observation with provenance. Core owns the composite
+estimate, Support Posture, interaction constraints, and any affect advisory to
+another companion.
+
+Routine Evidence and affect evidence remain separate claims. A workout may
+satisfy a Routine without proving a mood, and an activity change may inform an
+affect estimate without completing a Task.
+
 Receipts may later provide useful evidence:
 
 - compare purchased items against an active shopping list;
@@ -815,22 +937,26 @@ an exact automatic rule.
 
 ## 14. Partner Operating Model
 
-The Partner Operating Model gives the Productivity Companion a better picture
-of the one person it assists.
+The Partner Operating Model gives the Productivity Companion an operational
+picture of the one person it assists.
 
 It may contain:
 
-- durable preferences and dislikes;
-- important people, places, providers, and ordinary travel relationships;
 - sleep/wake, meal, work, and activity patterns;
-- current state with freshness;
+- current execution context with freshness;
 - recurring friction and successful strategies;
 - Area, Project, Goal, and Routine context;
+- preferred planning, review, and nudge patterns;
+- links to relevant people, places, providers, and notes;
 - explicit partner corrections and boundaries.
+
+Core's Partner Dossier owns durable identity, preferences, contact profiles,
+and relationship edges. The Operating Model references those records rather
+than copying them.
 
 It must distinguish:
 
-1. **durable fact or preference** — "I like tacos";
+1. **dossier reference** — the core fact or relationship being used;
 2. **observed pattern** — "wake time has usually fallen in this window over
    the last four weeks";
 3. **current observation** — "the phone is presently at the kitchen Place";
@@ -838,9 +964,13 @@ It must distinguish:
    sample";
 5. **unknown** — insufficient, stale, revoked, or contradictory evidence.
 
-Durable relational facts should reuse existing contact and memory primitives.
 High-frequency observations and statistical patterns belong in focused Pack
-stores or projections rather than flooding memory or prompt context.
+stores or projections rather than flooding the Partner Dossier, memory, or
+prompt context.
+
+The Operating Model may emit a consented Signal Observation to core Partner
+Affect Estimation. It does not own the Partner Affect Estimate or change a
+Support Posture directly.
 
 The partner must be able to inspect, correct, suppress, and delete model
 entries. A correction is durable provenance, not a temporary UI override.
@@ -1041,9 +1171,15 @@ Required rules:
 - source-specific opt-in and revocation;
 - exact designated partner identity;
 - source provenance on every Candidate, Observation, Evidence, and Insight;
+- separate observation-recipient and emanation-member allowlists for shared
+  satellites;
+- sensor delivery to the Productivity Companion grants no speech or movement
+  authority;
 - no raw coordinates in prompts or Pack state;
 - no raw biometric streams in ordinary context;
 - no financial or email data in another companion's context;
+- no Pack-derived Partner Affect Estimate; Pack data enters core only as
+  consented Signal Observations;
 - no passive transcript instruction becomes an external action without
   authority;
 - no third-party conversation participant is silently modeled as the partner;
@@ -1055,8 +1191,7 @@ Required rules:
 - summaries and Insights disclose their source and uncertainty;
 - model calls over sensitive content use the existing trust/CogSec path.
 
-The Productivity Companion can be trusted more deeply without being granted
-unbounded access. "My wife manages this with me" is a relationship and consent
+Deeper delegation to the Productivity Companion is a relationship and consent
 decision expressed through explicit policy, not a bypass around policy.
 
 ## 19. Reference Scenarios
@@ -1128,8 +1263,8 @@ These scenarios are acceptance probes for future design and implementation.
 ### 19.8 Find that paper
 
 1. The partner remembers a paper by topic but not title.
-2. The companion sends a bounded query to the Knowledge Keeper.
-3. The Knowledge Keeper returns likely references and provenance.
+2. The companion sends a bounded query to Thoth.
+3. Thoth returns likely references and provenance.
 4. The companion confirms the intended paper, summarizes it, and delivers the
    PDF or Obsidian reference.
 5. The Pack does not ingest the entire research archive to answer the request.
@@ -1142,6 +1277,22 @@ These scenarios are acceptance probes for future design and implementation.
 4. The request fails closed and is audited.
 5. Ordinary relational conversation and that companion's core reminders remain
    available.
+
+### 19.10 Shared kitchen satellite
+
+1. The kitchen satellite has one Satellite Primary.
+2. The Productivity Companion is an allowed presence Observation Recipient and
+   Emanation Member.
+3. The partner enters the kitchen while the primary is resting.
+4. Both receive only the observations allowed by their scopes.
+5. Presence does not move or wake either companion.
+6. An eligible grocery Task gives the Productivity Companion a reason to
+   request the speech lease.
+7. The primary receives first opportunity and returns a no-op.
+8. The Productivity Companion acquires the released lease and gives one
+   bundled grocery nudge.
+9. The audit shows observation delivery, primary no-op, lease handoff, and one
+   speaker.
 
 ## 20. Delivery Sequence
 
@@ -1183,6 +1334,9 @@ authority.
 - consume coarse phone/Hub Place transitions;
 - add place and recent-intent Triggers;
 - add Nudge lifecycle, bundling, cooldown, and snooze;
+- add observation-recipient and emanation-member policy for shared devices;
+- replace unconditional multi-companion auto-follow with availability-aware
+  response leasing;
 - ship the Costco and kitchen scenarios;
 - keep raw coordinates out of core.
 
@@ -1200,12 +1354,16 @@ authority.
 - add inspectable/correctable Partner Operating Model projections;
 - add bounded Insights with deterministic preconditions.
 
-### Slice 7: Knowledge Keeper and richer Obsidian collaboration
+Core Partner Affect Estimation is a separate delivery track. This slice may
+contribute Signal Observations only after the core contract exists.
+
+### Slice 7: Thoth and richer Obsidian collaboration
 
 - formalize vault namespaces and source receipts;
+- add Markdown/YAML human-shape interchange Candidates;
 - add long-form Project and Review documents;
-- add bounded Knowledge Keeper lookup and artifact delivery;
-- preserve the existing general research ingestion system.
+- add bounded Thoth lookup and artifact delivery;
+- preserve Thoth's general wiki and bulk-ingestion authority.
 
 ### Slice 8: Sensitive connectors
 
@@ -1226,6 +1384,10 @@ The issue graph already contains related work. Implementation planning should
 inspect and extend it rather than create duplicates:
 
 - `psfn-framework-7ang.8` — phone GPS terminates as Place semantics;
+- `psfn-framework-vinz.20` — currently shipped trust-gated presence auto-follow;
+  shared-device arbitration must narrow rather than duplicate it;
+- `psfn-framework-u4v0` — replace that auto-follow path with shared-satellite
+  observation scopes, emanation allowlists, and primary-first response leases;
 - `psfn-framework-vinz.21` — location-scoped concerns/reminders on presence;
 - `psfn-framework-z7qe.8` — derived partner health state from biometric
   summaries;
@@ -1247,6 +1409,7 @@ Current code seams to inspect first:
 - [`src/boundary/integrations/vault/`](../src/boundary/integrations/vault/)
 - [`src/boundary/integrations/world/`](../src/boundary/integrations/world/)
 - [`companion-ui/`](../companion-ui/)
+- [`docs/partner-affect.md`](partner-affect.md)
 
 ## 22. Explicit Non-Goals
 
@@ -1258,12 +1421,14 @@ The initial Productivity Pack does not:
 - replace companion concerns, pending follow-ups, care reminders, North Stars,
   or companion-owned personal projects;
 - build a second calendar application or calendar protocol;
-- replace the Knowledge Keeper or ingest its entire research archive;
+- replace Thoth or ingest its entire reference archive;
+- duplicate core Partner Dossier or Partner Affect authority;
 - treat Obsidian as output-only;
 - stream every passive transcript fragment into cognition;
 - call an LLM on every sensor, location, or calendar event;
 - retain raw GPS or raw biometric streams in ordinary Pack state;
 - perform medical diagnosis;
+- summon a companion or move an emanation from presence alone;
 - move, pay, transfer, cancel, purchase, or block services through financial
   access;
 - infer coercive self-binding rules from Goals;
@@ -1287,9 +1452,11 @@ slice:
    transcript sizes.
 6. Whether PWA notifications are reliable enough before a desktop wrapper is
    justified.
-7. The exact Partner Operating Model fields that belong in existing
-   contact/memory stores versus Pack projections.
-8. The future identity and audience model for shared physical satellites.
+7. The exact Markdown/YAML human-shape schema and mapping into Partner Dossier
+   versus Partner Operating Model Candidates.
+8. The exact shared-satellite observation scopes, Emanation Member config
+   fields, response-lease duration, and eligible-member ordering after the
+   primary releases.
 
 These are bounded implementation decisions, not reasons to weaken the
 constitutional invariants.
@@ -1308,10 +1475,12 @@ The Pack succeeds when:
 - Routines use narrow Evidence without pretending sensor data proves more than
   it does;
 - Obsidian remains a durable source and destination for the partner's thinking;
-- the general Knowledge Keeper and the personal companion complement rather
-  than duplicate one another;
+- Thoth and the personal companion complement rather than duplicate one
+  another;
 - the Partner Operating Model becomes more accurate through use while
   remaining inspectable and correctable;
+- shared satellites deliver scoped observations without summoning companions
+  or producing competing speech;
 - sensitive sources remain optional, isolated, and truthful;
 - one designated companion can provide deep assistance without spreading the
   partner's private operational life across the fleet.

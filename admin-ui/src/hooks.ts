@@ -8,4 +8,3 @@ import { parseCompanionGardenScope } from '$lib/fleet/companion-scope';
 export const reroute: Reroute = ({ url }) => (
   parseCompanionGardenScope(url.pathname)?.innerPath
 );
-

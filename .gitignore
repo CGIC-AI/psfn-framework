@@ -74,3 +74,4 @@ worktrees/
 
 # Provisioned ML model weights (never committed; see npm run provision:injection-model)
 models/
+working_docs/review/

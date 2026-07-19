@@ -85,4 +85,3 @@ describe('Garden fleet portal client', () => {
     }));
   });
 });
-

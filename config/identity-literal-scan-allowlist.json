@@ -61,6 +61,12 @@
       "pattern": "identity-legacy-slug"
     },
     {
+      "path": "src/boundary/gateway/fleet-login-landing.ts",
+      "contains": "PSFN",
+      "reason": "The fleet login landing intentionally presents the framework product brand and does not define a companion identity or persona default.",
+      "pattern": "identity-proper-name"
+    },
+    {
       "path": "src/boundary/fleet-auth/recovery-request-capability.ts",
       "contains": "PSFN-RECOVERY",
       "reason": "The distinct signed recovery-capability type is an internal protocol discriminator, not a companion identity default.",

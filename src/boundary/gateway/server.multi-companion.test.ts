@@ -1515,6 +1515,56 @@ describe('GatewayServer multi-companion routing (flag on)', () => {
     });
   });
 
+  it('falls back to an eligible peer when the active voice owner times out', async () => {
+    const primaryCompanionId = '11111111-1111-4111-8111-111111111111';
+    const activeCompanionId = '22222222-2222-4222-8222-222222222222';
+    const primaryRouted = { messages: new Array<SubstrateMessage>() };
+    const activeRouted = { messages: new Array<SubstrateMessage>() };
+    const primaryResponder = voiceStreamResponder(primaryRouted);
+    const activeDefaultResponder = voiceStreamResponder(activeRouted);
+    let activeEndRequests = 0;
+    const activeResponder = (message: any, emit: (response: unknown) => void): void => {
+      if (message.method === 'voice.transcript.end') {
+        activeEndRequests += 1;
+        if (activeEndRequests > 1) return;
+      }
+      if (message.method === 'voice.transcript.cancel') {
+        emit({ jsonrpc: '2.0', id: message.id, result: { cancelled: true } });
+        return;
+      }
+      activeDefaultResponder(message, emit);
+    };
+    const { server, connect } = await setupServer({
+      ...withSharedSatelliteEligibility(createMinimalOptions()),
+      multiCompanion: multiCompanion({ api: primaryCompanionId }),
+    });
+    const primaryConnection = await connect(primaryResponder);
+    const activeConnection = await connect(activeResponder);
+    await identifyAgent(primaryConnection, primaryCompanionId, 1);
+    await identifyAgent(activeConnection, activeCompanionId, 2);
+    const makeTurn = (addressActive: boolean) => {
+      const message = makeSatelliteVoiceMessage('sat-app', primaryCompanionId);
+      message.routing.satellite.sharedDevice.emanationMemberIds = [
+        primaryCompanionId,
+        activeCompanionId,
+      ];
+      if (addressActive) {
+        message.routing.satellite.addressedCompanionId = activeCompanionId;
+      }
+      return message;
+    };
+
+    await expect(server.requestAgentVoiceStream(makeTurn(true), { timeoutMs: 100 }))
+      .resolves.toMatchObject({ content: 'voice response' });
+    await expect(server.requestAgentVoiceStream(makeTurn(false), { timeoutMs: 25 }))
+      .resolves.toMatchObject({ content: 'voice response' });
+
+    expect(methodFrames(activeConnection, 'voice.transcript.begin')).toHaveLength(2);
+    expect(methodFrames(primaryConnection, 'voice.transcript.begin')).toHaveLength(1);
+    expect(activeEndRequests).toBe(2);
+    expect(primaryRouted.messages).toHaveLength(1);
+  });
+
   it('unrefs and clears each shared-satellite chat attempt timeout when the RPC settles', async () => {
     const primaryCompanionId = '22222222-2222-4222-8222-222222222222';
     const { server, connect } = await setupServer({
@@ -1589,6 +1639,117 @@ describe('GatewayServer multi-companion routing (flag on)', () => {
       setTimeoutSpy.mockRestore();
       unrefSpy.mockRestore();
     }
+  });
+
+  it('falls back to an eligible peer when the active chat owner times out', async () => {
+    const primaryCompanionId = '11111111-1111-4111-8111-111111111111';
+    const activeCompanionId = '22222222-2222-4222-8222-222222222222';
+    let activeChatRequests = 0;
+    const eligibilityResponse = (message: any, emit: (response: unknown) => void): boolean => {
+      if (message.method !== 'satellite.response.eligibility') return false;
+      emit({
+        jsonrpc: '2.0',
+        id: message.id,
+        result: { fatigueAllows: true },
+      });
+      return true;
+    };
+    const { server, connect } = await setupServer({
+      ...withSharedSatelliteEligibility(createMinimalOptions()),
+      multiCompanion: multiCompanion({ api: primaryCompanionId }),
+    });
+    const primaryConnection = await connect((message, emit) => {
+      if (eligibilityResponse(message, emit)) return;
+      if (message.method === 'api.chat.completion') {
+        emit({
+          jsonrpc: '2.0',
+          id: message.id,
+          result: {
+            ok: true,
+            response: {
+              content: 'primary response',
+              channelId: 'satellite:voice:session-sat-app',
+              inputTokens: 2,
+              outputTokens: 2,
+            },
+          },
+        });
+      }
+    });
+    const activeConnection = await connect((message, emit) => {
+      if (eligibilityResponse(message, emit)) return;
+      if (message.method !== 'api.chat.completion') return;
+      activeChatRequests += 1;
+      if (activeChatRequests > 1) {
+        emit({
+          jsonrpc: '2.0',
+          id: message.id,
+          result: {
+            ok: false,
+            error: {
+              status: 504,
+              type: 'request_timeout',
+              message: 'active owner timed out',
+            },
+          },
+        });
+        return;
+      }
+      emit({
+        jsonrpc: '2.0',
+        id: message.id,
+        result: {
+          ok: true,
+          response: {
+            content: 'active response',
+            channelId: 'satellite:voice:session-sat-app',
+            inputTokens: 2,
+            outputTokens: 2,
+          },
+        },
+      });
+    });
+    await identifyAgent(primaryConnection, primaryCompanionId, 1);
+    await identifyAgent(activeConnection, activeCompanionId, 2);
+    const satellite = makeSatelliteVoiceMessage('sat-app', primaryCompanionId)
+      .routing.satellite;
+    satellite.sharedDevice.emanationMemberIds = [primaryCompanionId, activeCompanionId];
+    satellite.addressedCompanionId = activeCompanionId;
+    const params = (requestId: string) => ({
+      requestId,
+      request: {
+        model: 'test-model',
+        messages: [{ role: 'user' as const, content: 'hello' }],
+      },
+      principal: { id: 'principal-1', mode: 'api_key' as const },
+      headers: {},
+    });
+
+    await expect(server.requestSharedSatelliteChatCompletion({
+      satellite,
+      canonicalContactId: 'contact-partner',
+      channelId: 'satellite:voice:session-sat-app',
+      params: params('establish-active-chat'),
+      timeoutMs: 100,
+    })).resolves.toMatchObject({
+      ok: true,
+      response: { content: 'active response' },
+    });
+    delete satellite.addressedCompanionId;
+
+    await expect(server.requestSharedSatelliteChatCompletion({
+      satellite,
+      canonicalContactId: 'contact-partner',
+      channelId: 'satellite:voice:session-sat-app',
+      params: params('retry-active-chat'),
+      timeoutMs: 100,
+    })).resolves.toMatchObject({
+      ok: true,
+      response: { content: 'primary response' },
+    });
+
+    expect(methodFrames(activeConnection, 'api.chat.completion')).toHaveLength(2);
+    expect(methodFrames(primaryConnection, 'api.chat.completion')).toHaveLength(1);
   });
 
   it('fails closed when multi-companion satellite voice has no shared-device policy', async () => {

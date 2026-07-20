@@ -336,7 +336,7 @@ describe('unified Fleet SSO two-companion process boundary', () => {
       jitStepUp: { consumeGrant },
       portalProjection: {
         resolve: async () => ({
-          schemaVersion: 1,
+          schemaVersion: 2,
           generatedAt: new Date(NOW_SECONDS * 1_000).toISOString(),
           session: { state: 'authenticated' },
           companions: [],
@@ -761,7 +761,7 @@ describe('unified Fleet SSO two-companion process boundary', () => {
       companions: [
         {
           companionId: COMPANION_A,
-          availability: 'online',
+          health: { agentRpc: 'up', adminTransport: 'unknown', channels: 'unknown' },
           gardenPath: `/companions/${COMPANION_A}/garden`,
         },
       ],
@@ -777,7 +777,7 @@ describe('unified Fleet SSO two-companion process boundary', () => {
       companions: [
         {
           companionId: COMPANION_B,
-          availability: 'degraded',
+          health: { agentRpc: 'up', adminTransport: 'unknown', channels: 'unknown' },
           gardenPath: `/companions/${COMPANION_B}/garden`,
         },
       ],

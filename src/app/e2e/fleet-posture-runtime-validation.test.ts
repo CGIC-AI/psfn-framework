@@ -171,7 +171,7 @@ function logProjection(
     console.log(JSON.stringify({
       event,
       companionId: companion.companionId,
-      connection: companion.availability,
+      connection: companion.health.agentRpc,
       posture: companion.posture.status === 'unavailable'
         ? 'unavailable'
         : {
@@ -263,7 +263,7 @@ describe('local two-agent fleet posture runtime validation', () => {
     expect(disconnected.companions.find(companion => (
       companion.companionId === COMPANION_B
     ))).toMatchObject({
-      availability: 'offline',
+      health: { agentRpc: 'down', adminTransport: 'unknown', channels: 'unknown' },
       posture: { status: 'unavailable' },
     });
     logProjection('disconnected', disconnected);

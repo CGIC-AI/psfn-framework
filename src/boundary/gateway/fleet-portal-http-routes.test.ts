@@ -18,13 +18,13 @@ afterEach(async () => {
 });
 function projection(): FleetPortalProjection {
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     generatedAt: '2026-07-18T12:00:00.000Z',
     session: { state: 'authenticated' },
     companions: [{
       companionId: COMPANION_A,
       displayName: 'Canopy',
-      availability: 'online',
+      health: { agentRpc: 'up', adminTransport: 'unknown', channels: 'up' },
       posture: { status: 'unavailable' },
       gardenPath: `/companions/${COMPANION_A}/garden`,
     }],

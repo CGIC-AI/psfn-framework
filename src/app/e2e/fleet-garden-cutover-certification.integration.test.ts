@@ -553,7 +553,7 @@ function buildRouter(input: {
     replay: new AtomicRequestCapabilityReplayPort(),
     portalProjection: {
       resolve: async () => ({
-        schemaVersion: 1,
+        schemaVersion: 2,
         generatedAt: new Date().toISOString(),
         session: { state: 'authenticated' },
         companions: [],

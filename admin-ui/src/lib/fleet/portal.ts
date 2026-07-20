@@ -7,7 +7,7 @@ import {
 } from '../../../../src/shared/utils/types.js';
 const MAX_FLEET_COMPANIONS = 256;
 
-export type FleetPortalAvailability = 'online' | 'degraded' | 'offline' | 'unknown';
+export type FleetPortalHealthStatus = 'up' | 'down' | 'unknown';
 export type FleetPortalPostureState = 'clear' | 'pressured' | 'exhausted';
 export type FleetPortalPosture =
   | { status: 'unavailable' }
@@ -21,17 +21,51 @@ export type FleetPortalPosture =
 export interface FleetPortalCompanion {
   companionId: string;
   displayName: string;
-  availability: FleetPortalAvailability;
+  health: FleetPortalHealthDimensions;
   posture: FleetPortalPosture;
   gardenPath?: string;
   avatarRef?: string;
 }
 
 export interface FleetPortalProjection {
-  schemaVersion: 1;
+  schemaVersion: 2;
   generatedAt: string;
   session: { state: 'authenticated' };
   companions: FleetPortalCompanion[];
+}
+
+export interface FleetCardDetails {
+  adminTransport: FleetPortalHealthStatus;
+  avatarUrl?: string;
+}
+
+export interface FleetPortalHealthDimensions {
+  agentRpc: FleetPortalHealthStatus;
+  adminTransport: FleetPortalHealthStatus;
+  channels: FleetPortalHealthStatus;
+}
+
+export type FleetCardHealth = FleetPortalHealthDimensions;
+
+interface FleetReferencePhoto {
+  id: string;
+}
+
+function parseHealthStatus(value: unknown): FleetPortalHealthStatus {
+  if (value === 'up' || value === 'down' || value === 'unknown') return value;
+  throw new Error('Fleet portal returned an invalid health dimension');
+}
+
+function parseHealth(value: unknown): FleetPortalCompanion['health'] {
+  if (!isRecord(value)
+    || !hasExactKeys(value, ['agentRpc', 'adminTransport', 'channels'])) {
+    throw new Error('Fleet portal returned an invalid health projection');
+  }
+  return {
+    agentRpc: parseHealthStatus(value.agentRpc),
+    adminTransport: parseHealthStatus(value.adminTransport),
+    channels: parseHealthStatus(value.channels),
+  };
 }
 
 function parsePostureMetric(value: unknown): {
@@ -84,7 +118,7 @@ function parseCompanion(value: unknown, seen: Set<string>): FleetPortalCompanion
     || typeof value.displayName !== 'string'
     || value.displayName.trim().length === 0
     || value.displayName.length > 256
-    || !['online', 'degraded', 'offline', 'unknown'].includes(String(value.availability))
+    || value.health === undefined
     || value.posture === undefined
     || (value.avatarRef !== undefined
       && (typeof value.avatarRef !== 'string' || value.avatarRef.length > 2_048))
@@ -93,9 +127,9 @@ function parseCompanion(value: unknown, seen: Set<string>): FleetPortalCompanion
     throw new Error('Fleet portal returned an invalid companion projection');
   }
   const keys = [
-    'availability',
     'companionId',
     'displayName',
+    'health',
     'posture',
     ...(value.gardenPath === undefined ? [] : ['gardenPath']),
     ...(value.avatarRef === undefined ? [] : ['avatarRef']),
@@ -107,7 +141,7 @@ function parseCompanion(value: unknown, seen: Set<string>): FleetPortalCompanion
   return {
     companionId: value.companionId,
     displayName: value.displayName,
-    availability: value.availability as FleetPortalAvailability,
+    health: parseHealth(value.health),
     posture: parsePosture(value.posture),
     ...(typeof value.gardenPath === 'string' ? { gardenPath: value.gardenPath } : {}),
     ...(typeof value.avatarRef === 'string' ? { avatarRef: value.avatarRef } : {}),
@@ -117,7 +151,7 @@ function parseCompanion(value: unknown, seen: Set<string>): FleetPortalCompanion
 export function parseFleetPortalProjection(value: unknown): FleetPortalProjection {
   if (!isRecord(value)
     || !hasExactKeys(value, ['schemaVersion', 'generatedAt', 'session', 'companions'])
-    || value.schemaVersion !== 1
+    || value.schemaVersion !== 2
     || typeof value.generatedAt !== 'string'
     || !Number.isFinite(Date.parse(value.generatedAt))
     || !isRecord(value.session)
@@ -129,11 +163,71 @@ export function parseFleetPortalProjection(value: unknown): FleetPortalProjectio
   }
   const seen = new Set<string>();
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     generatedAt: value.generatedAt,
     session: { state: 'authenticated' },
     companions: value.companions.map(companion => parseCompanion(companion, seen)),
   };
+}
+
+export function resolveFleetCardHealth(
+  companion: FleetPortalCompanion,
+  details?: FleetCardDetails,
+): FleetCardHealth {
+  return {
+    agentRpc: companion.health.agentRpc,
+    adminTransport: details?.adminTransport ?? companion.health.adminTransport,
+    channels: companion.health.channels,
+  };
+}
+
+export function selectFirstReferenceAvatar(
+  references: readonly FleetReferencePhoto[],
+  gardenPath: string,
+): string | undefined {
+  const first = references[0];
+  if (!first?.id.trim()) return undefined;
+  return `${gardenPath}/api/admin/image-references/${encodeURIComponent(first.id)}/blob`;
+}
+
+export async function fetchFleetCardDetails(
+  companion: FleetPortalCompanion,
+  signal?: AbortSignal,
+): Promise<FleetCardDetails> {
+  if (!companion.gardenPath) return { adminTransport: 'unknown' };
+  try {
+    const response = await fetch(`${companion.gardenPath}/api/admin/image-references`, {
+      cache: 'no-store',
+      credentials: 'include',
+      headers: { Accept: 'application/json' },
+      ...(signal ? { signal } : {}),
+    });
+    if (response.status === 502 || response.status === 503) {
+      return { adminTransport: 'down' };
+    }
+    if (!response.ok) return { adminTransport: 'unknown' };
+    const value: unknown = await response.json();
+    if (!isRecord(value) || !Array.isArray(value.references)) {
+      return { adminTransport: 'up' };
+    }
+    const references = value.references.flatMap((reference): FleetReferencePhoto[] => (
+      isRecord(reference) && typeof reference.id === 'string' && reference.id.trim()
+        ? [{ id: reference.id }]
+        : []
+    ));
+    const avatarUrl = selectFirstReferenceAvatar(references, companion.gardenPath);
+    return {
+      adminTransport: 'up',
+      ...(avatarUrl ? { avatarUrl } : {}),
+    };
+  } catch (error) {
+    if (signal?.aborted) throw error;
+    if (error instanceof TypeError) {
+      // Browser fetch reports a network-level transport failure as TypeError.
+      return { adminTransport: 'unknown' };
+    }
+    throw error;
+  }
 }
 
 export async function fetchFleetPortalProjection(signal?: AbortSignal): Promise<FleetPortalProjection> {

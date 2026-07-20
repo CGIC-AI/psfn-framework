@@ -79,6 +79,7 @@ import type {
 } from '../../shared/contracts/hub-device-ingress.js';
 import { createCompanionId } from '../../shared/routing/companion-id.js';
 import type { FleetPortalAuthorizationBatchPort } from '../../boundary/gateway/fleet-portal-authorization.js';
+import type { FleetPortalChannelHealthSource } from '../../boundary/gateway/fleet-portal-projection.js';
 import { createGatewayFleetPortalProjection } from './fleet-portal-composition.js';
 import type { FleetModelUsageSummaryQueryPort } from '../../shared/telemetry/model-usage.js';
 import { createGatewayFleetModelUsageProjection } from './fleet-model-usage-composition.js';
@@ -136,6 +137,7 @@ export interface StartOptionalGatewayApiServerOptions extends GatewayApiSurfaceB
   fleetAuthRequestCapabilityVerifier?: RequestCapabilityVerifier;
   fleetAuthRequestCapabilityReplay?: RequestCapabilityReplayPort;
   fleetPortalAuthorization?: FleetPortalAuthorizationBatchPort;
+  fleetPortalChannelHealth?: FleetPortalChannelHealthSource;
   /** Canonical fleet-scoped model-attempt ledger used by the authenticated budget projection. */
   fleetModelUsage?: FleetModelUsageSummaryQueryPort;
   primaryEmbodiments?: PrimaryEmbodimentAuthorityPort;
@@ -492,6 +494,9 @@ export async function startOptionalGatewayApiServer(
       ? { fleet: fleetAuthFleet.companions }
       : {}),
     source: options.gateway,
+    ...(options.fleetPortalChannelHealth
+      ? { channelHealth: options.fleetPortalChannelHealth }
+      : {}),
   });
   const fleetModelUsageProjection = createGatewayFleetModelUsageProjection({
     fleetAuthEnabled: fleetAuthBootstrapOnly,

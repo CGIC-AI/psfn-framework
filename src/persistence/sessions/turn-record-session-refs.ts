@@ -785,6 +785,8 @@ function buildWithheldWireBody(caseChannelId: string): Record<string, unknown> {
  *      (d) a cross-channel continuity entry could not be proven live against
  *          its origin L0 journal (`continuityRedactionDetected`, bead
  *          psfn-framework-ervg).
+ *      (e) the current turn's assistant entry (`assistantMessage.sessionEntryId`)
+ *          is now redacted/absent in L0.
  *    This gate runs even when `plan.messages` is empty: a body whose only
  *    entry-backed content is the current turn (or an empty-history first turn
  *    whose partner entry is later redacted) must still be gated. Only a record
@@ -869,15 +871,16 @@ function gateRenderedViews(
   }
 
   // Withhold the captured wire body if ANY L0 content it serialized is now
-  // redacted/absent: a suppressed history message, the current-turn partner
-  // entry, or any redaction/absence in the recentEntries window. Serving the raw
-  // body in any of those cases would resurrect the exact plaintext L0 removed.
+  // redacted/absent: a suppressed history message, either current-turn entry, or
+  // any redaction/absence in the recentEntries window. Serving the raw body in
+  // any of those cases would resurrect the exact plaintext L0 removed.
   const currentTurnSuppressed = currentTurnPartnerEntryId !== undefined
     && isSuppressedId(currentTurnPartnerEntryId);
   const assistantSuppressed = assistantEntryId !== undefined
     && isSuppressedId(assistantEntryId);
   const withholdWireBody = anyPlanSuppressed
     || currentTurnSuppressed
+    || assistantSuppressed
     || windowRedactionDetected
     || continuityRedactionDetected;
 

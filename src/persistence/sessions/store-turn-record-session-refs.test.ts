@@ -640,6 +640,68 @@ describe('SessionStore captured wire-body CogSec gating (psfn-framework-eb14)', 
     expect(capturedBody(read[0]!)).toMatchObject({ withheld: WITHHELD_WIRE_BODY_MARKER });
   });
 
+  it('withholds the wire body when only an unprovenanced assistant entry is tombstoned', async () => {
+    const dir = makeDir();
+    const companionRoot = join(dir, 'companion-data');
+    const store = new SessionStore(dir);
+    const channelId = 'api:wire-assistant-only';
+    const secret = 'ASSISTANT_ONLY_WIRE_SECRET';
+    const assistantEntryId = store.append({
+      channelId,
+      role: 'assistant',
+      content: secret,
+      timestamp: 1_000,
+    });
+    const wireBody = {
+      model: 'test/model',
+      messages: [{ role: 'assistant', content: secret }],
+    };
+    const record = buildWireTurnRecord(channelId, [], [], wireBody);
+    record.assistantMessage = {
+      role: 'assistant',
+      content: secret,
+      timestamp: 1_000,
+      sessionEntryId: assistantEntryId,
+    };
+    const snapshot = record.observability!.snapshot! as unknown as {
+      promptContext: Record<string, unknown>;
+    };
+    snapshot.promptContext.response = { content: secret };
+    await store.appendTurnRecord(record);
+
+    const before = store.getRecentTurnRecords(channelId, 10);
+    expect(JSON.stringify(capturedBody(before[0]!))).toContain(secret);
+
+    const caseId = 'cogsec_20260720T000000Z_assistant_only';
+    const eventStore = new CogSecEventStore(resolveCogSecEventsPath(companionRoot));
+    const forensicArchive = new CogSecForensicArchive(resolveCogSecForensicArchiveDir(companionRoot));
+    eventStore.createEvent({
+      caseId,
+      type: 'content_poisoning',
+      severity: 'high',
+      sourceChannelId: channelId,
+      safeAgentSummary: 'sealed and removed from active cognition',
+    });
+    await store.applyCogSecTombstones({
+      channelId,
+      caseId,
+      eventStore,
+      forensicArchive,
+      messageIds: [assistantEntryId],
+    });
+
+    const read = store.getRecentTurnRecords(channelId, 10);
+    const readSnapshot = read[0]!.observability!.snapshot as unknown as {
+      plan: { messages: unknown[] };
+      promptContext: { response: { content: string } };
+    };
+    expect(readSnapshot.plan.messages).toEqual([]);
+    expect(read[0]!.assistantMessage?.content).toBe(REDACTED_MESSAGE_PLACEHOLDER);
+    expect(readSnapshot.promptContext.response.content).toBe(REDACTED_MESSAGE_PLACEHOLDER);
+    expect(capturedBody(read[0]!)).toMatchObject({ withheld: WITHHELD_WIRE_BODY_MARKER });
+    expect(JSON.stringify(read)).not.toContain(secret);
+  });
+
   it('scrubs origin-redacted cross-channel content from body.system, continuity entries, and Loom projections', async () => {
     const dir = makeDir();
     const companionRoot = join(dir, 'companion-data');

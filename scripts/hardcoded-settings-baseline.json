@@ -1384,7 +1384,7 @@
       "file": "src/core/cogsec/disclosure/capsule-custody.ts",
       "name": "DEFAULT_MAX_ACTIVE_CAPSULES",
       "value": "3",
-      "note": "Code-owned DEFAULT for the active-capsule queue bound (bible §10.11 'initial cap of three'); already overridable via createShareCapsuleCustodyStore's maxActiveCapsules option. Owned-setting/Garden exposure is deferred to the publication approvals surface (jp36.7.2)."
+      "note": "Code-owned DEFAULT for the active-capsule queue bound (bible \u00a710.11 'initial cap of three'); already overridable via createShareCapsuleCustodyStore's maxActiveCapsules option. Owned-setting/Garden exposure is deferred to the publication approvals surface (jp36.7.2)."
     },
     {
       "file": "src/core/cogsec/drift/drift-evidence-adapters.ts",
@@ -3320,6 +3320,16 @@
       "file": "src/faculties/values/tools.ts",
       "name": "MAX_LIST_LIMIT",
       "value": "200"
+    },
+    {
+      "file": "src/faculties/wiki/personal-projects.ts",
+      "name": "FREE_TIME_MIGRATION_SAMPLE_LIMIT",
+      "value": "50"
+    },
+    {
+      "file": "src/faculties/wiki/personal-projects.ts",
+      "name": "MIGRATION_REPORT_SAMPLE_LIMIT",
+      "value": "50"
     },
     {
       "file": "src/faculties/wiki/personal-projects.ts",

@@ -22,7 +22,7 @@ import {
 } from '../integrations/beads/enablement.js';
 import { resolveModuleRegistryPathFromWorkspace } from '../../system/modules/registry.js';
 import { parseBooleanEnv, parseEnvList, parsePositiveIntEnv } from '../../shared/utils/env.js';
-import { buildShellExecPolicyConfig } from '../sandbox/execution/shell-policy-config.js';
+import { createDefaultShellExecSettings } from '../../system/config/shell-exec-config.js';
 import {
   buildProviderCredentialEnv,
   resolveOptionalCredentialReference,
@@ -298,7 +298,7 @@ function buildGatewayPolicyConfig(
     litellmBaseUrl: config.litellmBaseUrl ?? undefined,
     openRouterModelsApiUrl: config.openRouterModelsApiUrl,
   });
-  const shellExecPolicy = buildShellExecPolicyConfig(env);
+  const shellExecPolicy = config.shellExec ?? createDefaultShellExecSettings();
   const beadsToolsEnabled = resolveBeadsToolsEnabled(env.BEADS_TOOLS_ENABLED, {
     workspaceRoot,
     codebaseRoot,

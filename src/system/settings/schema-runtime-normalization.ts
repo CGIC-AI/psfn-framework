@@ -9,6 +9,7 @@ import {
 import { normalizeGroupMemorySettings } from '../config/group-memory-config.js';
 import { normalizeEmotionScopingSettings } from '../config/emotion-scoping-config.js';
 import { normalizeMemoryRetrievalPolicy } from '../config/memory-retrieval-policy.js';
+import { normalizeShellExecSettings } from '../config/shell-exec-config.js';
 import {
   normalizeFalCreateModelSetting,
   normalizeFalEditModelSetting,
@@ -1037,6 +1038,12 @@ function normalizeCapabilityAndSessionSettings(
   if ('promotedExtendedTools' in settings) {
     normalized.promotedExtendedTools = toPromotedToolList(
       settings.promotedExtendedTools,
+    );
+  }
+  if ('shellExec' in settings) {
+    normalized.shellExec = normalizeShellExecSettings(
+      settings.shellExec,
+      'shellExec',
     );
   }
 

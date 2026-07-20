@@ -79,7 +79,6 @@ spec:
               containerPort: {{ .Values.ports.gatewayRpc }}
           env:
             {{- include "psfn.commonEnv" . | nindent 12 }}
-            {{- include "psfn.shellExecEnv" . | nindent 12 }}
             {{- include "psfn.postgresDatabaseUrlEnv" . | nindent 12 }}
             {{- include "psfn.providerSecretEnv" . | nindent 12 }}
             {{- if .Values.persistence.modelCache.enabled }}
@@ -298,7 +297,6 @@ spec:
               containerPort: {{ .Values.ports.agentAdmin }}
           env:
             {{- include "psfn.commonEnv" . | nindent 12 }}
-            {{- include "psfn.shellExecEnv" . | nindent 12 }}
             {{- include "psfn.postgresDatabaseUrlFileEnv" . | nindent 12 }}
             {{- if .Values.kubeSelfManagement.enabled }}
             {{- /* Kube-aware lifecycle (x5rt.5): the agent detects the guarded

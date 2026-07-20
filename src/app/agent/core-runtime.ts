@@ -443,6 +443,7 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
       },
       repoRoot: process.cwd(),
       getModelUsageQuery,
+      shellExec: config.shellExec,
     },
     runConformance: (trigger) => toolConformanceRunner.run(trigger),
     ...(icpAutonomyRuntime ? { availability: icpAutonomyRuntime } : {}),

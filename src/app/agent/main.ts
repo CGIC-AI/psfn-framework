@@ -86,7 +86,6 @@ import {
   wireOperatorHookRuntime,
   wireShardAndThinkRuntime,
 } from '../startup/composition/composition.js';
-import { buildShellExecPolicyConfig } from '../../boundary/sandbox/execution/shell-policy-config.js';
 import {
   buildCharacterPromptVariablesProvider,
   buildReplConfig,
@@ -145,7 +144,6 @@ import {
 } from '../startup/support/signal-shutdown.js';
 import { buildAgentControlPlane } from './control-plane.js';
 import type { AgentControlPlaneShutdownTargets } from './control-plane.js';
-import { createSandboxBrokerExecutionPort } from '../../boundary/sandbox/sandbox-execution-broker.js';
 import { createLLMProviderPort } from '../../core/agent/contracts.js';
 import { wireIcpInitiationSources } from './icp-initiation-source-wiring.js';
 import { wireCompanionPresenceContext } from './companion-presence-wiring.js';
@@ -715,11 +713,6 @@ async function main(): Promise<void> {
   log.info('Split module registry path resolved', { moduleRegistryPath });
 
   const replConfig = buildReplConfig(config);
-  const sandboxExecutionPort = createSandboxBrokerExecutionPort({
-    workspacePath: pathSnapshot.workspaceRoot,
-    policy: buildShellExecPolicyConfig(process.env),
-    brokerId: 'agent-process',
-  });
   const shardParentIcpDelivery = createPolicyGovernedShardParentIcpDelivery({
     parentCompanionId: resolveCoreCompanionIdFromConfig(config),
     intakeScreening,
@@ -746,7 +739,7 @@ async function main(): Promise<void> {
     onModuleRegistryMutation: async (mutation) => {
       await moduleLoader.applyRegistryMutation(mutation);
     },
-    executionPort: sandboxExecutionPort,
+    executionPort: null,
     compressionGuidelineEvolution,
     shardParentIcpDelivery,
     shardWorkloadRegistry: gateway,

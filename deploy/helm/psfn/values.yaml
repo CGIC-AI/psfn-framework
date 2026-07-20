@@ -32,22 +32,6 @@ securityContext:
     drop:
       - ALL
 
-# Governed model-facing CLI. Disabled by default. When enabled, every command
-# runs inside a Bubblewrap namespace with no network, an empty/curated
-# environment, read-only image binaries, and only runtime.workspacePath mounted
-# writable. Bash is intentionally not a default: an operator must opt in and
-# place it in allowlist for a companion that is trusted with the bounded CLI.
-shellExec:
-  enabled: false
-  allowlist: []
-  envAllowlist: []
-  allowedCwd: []
-  path: /usr/local/bin:/usr/bin:/bin
-  defaultTimeoutMs: 5000
-  maxTimeoutMs: 30000
-  defaultMaxOutputChars: 20000
-  maxOutputChars: 100000
-
 psfnAppImage:
   # One shared image contains dist/ plus admin-ui/build/.
   repository: localhost/psfn-framework
@@ -227,7 +211,13 @@ workloads:
       tag: ""
       digest: ""
     command: ["node", "dist/gateway-main.js"]
-    resources: {}
+    resources:
+      requests:
+        cpu: 100m
+        memory: 2Gi
+      limits:
+        cpu: "2"
+        memory: 4Gi
     writableMounts:
       - /app/system-data
       - /app/logs

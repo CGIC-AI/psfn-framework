@@ -383,6 +383,35 @@ never back a ClusterIssuer. */ -}}
 {{- fail "fleetAuth.enabled=true requires ingress.gateway.path=/ and pathType=Prefix" -}}
 {{- end -}}
 {{- end -}}
+{{- if .Values.fleetAuth.credentialEnv -}}
+{{- if not .Values.fleetAuth.enabled -}}
+{{- fail "fleetAuth.credentialEnv requires fleetAuth.enabled=true" -}}
+{{- end -}}
+{{- $credentialEnvNames := dict -}}
+{{- range $index, $entry := .Values.fleetAuth.credentialEnv -}}
+{{- $name := $entry.name | default "" -}}
+{{- if not (regexMatch "^[A-Z][A-Z0-9_]*$" $name) -}}
+{{- fail (printf "fleetAuth.credentialEnv[%d].name must match ^[A-Z][A-Z0-9_]*$ (fleet-auth.json envName pattern)" $index) -}}
+{{- end -}}
+{{- if hasKey $credentialEnvNames $name -}}
+{{- fail (printf "fleetAuth.credentialEnv name is duplicated: %s" $name) -}}
+{{- end -}}
+{{- $_ := set $credentialEnvNames $name true -}}
+{{- $secretRef := $entry.secretRef | default dict -}}
+{{- $hasSecret := or (ne ($secretRef.name | default "") "") (ne ($secretRef.key | default "") "") -}}
+{{- $hasValue := hasKey $entry "value" -}}
+{{- if eq $hasSecret $hasValue -}}
+{{- fail (printf "fleetAuth.credentialEnv[%d] (%s) requires exactly one of a Secret reference or a plain value" $index $name) -}}
+{{- end -}}
+{{- if $hasSecret -}}
+{{- if or (eq ($secretRef.name | default "") "") (eq ($secretRef.key | default "") "") -}}
+{{- fail (printf "fleetAuth.credentialEnv[%d] (%s) requires both secretRef.name and secretRef.key" $index $name) -}}
+{{- end -}}
+{{- else if eq (printf "%v" $entry.value) "" -}}
+{{- fail (printf "fleetAuth.credentialEnv[%d] (%s) value must not be empty" $index $name) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
 {{- if .Values.companionUiTest.enabled -}}
 {{- if not .Values.fleetAuth.enabled -}}
 {{- fail "companionUiTest.enabled=true requires fleetAuth.enabled=true for the canonical login/session origin" -}}

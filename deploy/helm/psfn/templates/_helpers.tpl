@@ -608,6 +608,27 @@ group: cert-manager.io
   value: postgres
 {{- end -}}
 
+{{/*
+Fleet Auth credential env for the gateway process. fleet-auth.json references
+every credential as { kind: env, envName: FLEET_AUTH_* }; the runtime fails
+closed at startup when a referenced env var is unset, so the chart must be
+able to supply each one. Entries are validated in validations.yaml: an
+uppercase env name plus exactly one of a Secret reference or a plain value.
+*/}}
+{{- define "psfn.fleetAuthCredentialEnv" -}}
+{{- range .Values.fleetAuth.credentialEnv }}
+- name: {{ .name }}
+{{- if .secretRef }}
+  valueFrom:
+    secretKeyRef:
+      name: {{ .secretRef.name }}
+      key: {{ .secretRef.key }}
+{{- else }}
+  value: {{ .value | quote }}
+{{- end }}
+{{- end }}
+{{- end -}}
+
 {{- define "psfn.postgresDatabaseUrlEnv" -}}
 - name: POSTGRES_DATABASE_URL
   valueFrom:

@@ -1963,16 +1963,6 @@
       "value": "500"
     },
     {
-      "file": "src/core/intention/concern-softening.ts",
-      "name": "MAX_MAX_TEXT_CHARS",
-      "value": "2000"
-    },
-    {
-      "file": "src/core/intention/concern-softening.ts",
-      "name": "MIN_MAX_TEXT_CHARS",
-      "value": "8"
-    },
-    {
       "file": "src/core/intention/concerns.ts",
       "name": "CONCERN_DUPLICATE_SIMILARITY_THRESHOLD",
       "value": "0.72"

@@ -10,6 +10,7 @@ import {
   buildConcernCandidateReviewPrompt,
   createAutomatedConcernRuntime,
   deriveConcernCandidatesFromExtraction,
+  parseConcernCandidateReviewResponse,
   type ConcernCandidate,
 } from './concern-candidates.js';
 
@@ -386,9 +387,28 @@ describe('automated concern candidates', () => {
     const prompt = buildConcernCandidateReviewPrompt([makeCandidate('a')]);
 
     expect(prompt).toContain('Is there anything here we should follow up on soon?');
+    expect(prompt).toContain('Selecting an open thread is separate from outbound delivery.');
+    expect(prompt).toContain('targetOpenThreadId');
+    expect(prompt).not.toContain('targetConcernId');
     expect(prompt).toContain('conversationContext');
     expect(prompt).toContain('relatedMemoryContext');
-    expect(prompt.toLowerCase()).not.toMatch(/\b(critical|must|urgent|constant-check)\b/);
+    expect(prompt.toLowerCase()).not.toMatch(/\b(concerns?|worr(?:y|ies|ied)|critical|must|urgent|constant-check)\b/);
+  });
+
+  it('maps the model-facing open-thread merge target to the internal decision field', () => {
+    expect(parseConcernCandidateReviewResponse(JSON.stringify({
+      decisions: [{
+        candidateId: 'a',
+        action: 'merge',
+        reason: 'same thread',
+        targetOpenThreadId: 'thread-1',
+      }],
+    }), [makeCandidate('a')])).toEqual([{
+      candidateId: 'a',
+      action: 'merge',
+      reason: 'same thread',
+      targetConcernId: 'thread-1',
+    }]);
   });
 
   it('checks every few turns and spends no model call for empty or single-item pipes', () => {
@@ -520,7 +540,7 @@ describe('automated concern candidates', () => {
       action: 'create',
       status: 'blocked',
       routeTarget: 'other',
-      reason: 'active concern cap 7 reached; candidate kept out of active concerns',
+      reason: 'open-thread cap 7 reached; candidate was not added',
     }]);
     expect(await concernStore.getActiveConcerns()).toHaveLength(7);
   });

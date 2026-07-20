@@ -172,7 +172,7 @@ Practical consequences:
   - the continuity-gap notice (\`runtime.continuity_notice\`, from the bare \`runtime_continuity_gap_*\` values),
   - the charge-budget wording (\`runtime.charge_budget\`, from the bare \`runtime_charge_*\` values),
   - response-style delivery guidance (\`runtime.response_style\`).
-- Concern-text softening rewrites are operator-tunable data: \`config/concern-softening.json\` (regex rules + truncation length; the shipped default reproduces the previous behavior byte-for-byte).
+- Open-thread wording is gentle at each prompt source; runtime data is not passed through a wording-rewrite shim.
 - Companion-editable overlay blocks: \`runtime.persona_adaptation\` and \`runtime.context\` (\`PromptRuntimeLayoutStore\`).
 
 ## Renderer and the no-silent-leak invariant

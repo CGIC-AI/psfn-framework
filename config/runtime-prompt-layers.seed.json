@@ -13,7 +13,7 @@
       "name": "Runtime Attention",
       "priority": 100,
       "required": false,
-      "content": "<runtime_attention>\n<open_threads>\n{{#if runtime_concerns_count}}Treat these as soft threads to verify, not alarms that must dominate the turn.\n{{/if}}{{runtime_concerns_top_lines}}{{#if runtime_concerns_omitted_count}}\n- {{runtime_concerns_omitted_count}} additional lower-salience thread{{runtime_concerns_omitted_plural_suffix}} omitted.{{/if}}\n</open_threads>\n\n<behavioral_notes>\n{{runtime_behavioral_notes_body}}\n</behavioral_notes>\n\n<skills_index>\n{{runtime_skills_index_body}}\n</skills_index>\n</runtime_attention>"
+      "content": "<runtime_attention>\n<open_threads>\n{{#if runtime_concerns_count}}These are simply things that may be worth revisiting if they fit the moment.\n{{/if}}{{runtime_concerns_top_lines}}{{#if runtime_concerns_omitted_count}}\n- {{runtime_concerns_omitted_count}} additional lower-salience thread{{runtime_concerns_omitted_plural_suffix}} omitted.{{/if}}\n</open_threads>\n\n<behavioral_notes>\n{{runtime_behavioral_notes_body}}\n</behavioral_notes>\n\n<skills_index>\n{{runtime_skills_index_body}}\n</skills_index>\n</runtime_attention>"
     },
     {
       "identifier": "runtime.response_style",

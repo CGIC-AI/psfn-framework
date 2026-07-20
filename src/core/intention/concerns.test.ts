@@ -522,7 +522,7 @@ describe('ActiveConcernStore', () => {
       },
     });
     expect(block).toContain('<open_threads>');
-    expect(block).toContain('Treat these as soft threads to verify, not alarms that must dominate the turn.');
+    expect(block).toContain('These are simply things that may be worth revisiting if they fit the moment.');
     expect(block).toContain('additional lower-salience threads omitted');
     const concernLines = block.split('\n').filter(line => line.startsWith('- '));
     expect(concernLines.length).toBe(6);
@@ -551,7 +551,7 @@ describe('ActiveConcernStore', () => {
     expect(runtimeData.topPriorities).toEqual(['high', 'low']);
     expect(runtimeData.omittedCount).toBe(1);
     expect(runtimeData.topLines).toHaveLength(2);
-    expect(runtimeData.topLines[0]).toMatch(/^- medication reminder logistics \[high; revisit before /);
-    expect(runtimeData.topLines[1]).toMatch(/^- sleep schedule drift \[low; revisit before /);
+    expect(runtimeData.topLines[0]).toMatch(/^- medication reminder logistics \(high salience; available through /);
+    expect(runtimeData.topLines[1]).toMatch(/^- sleep schedule drift \(low salience; available through /);
   });
 });

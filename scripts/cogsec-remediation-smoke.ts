@@ -24,6 +24,7 @@ const EMBEDDING_DIMS = DEFAULT_EMBEDDING_CONFIG.dims;
 const CASE_ID = 'cogsec_20260701T000000Z_smoke';
 const CHANNEL_ID = 'api:cogsec-smoke';
 const DIRTY_L0_TEXT = 'SMOKE_DIRTY_L0_PAYLOAD';
+const CLEAN_L0_TEXT = 'clean response remains';
 const DIRTY_MEMORY_TEXT = 'SMOKE_DIRTY_MEMORY_PAYLOAD';
 const DIRTY_SUMMARY_TEXT = 'SMOKE_DIRTY_SUMMARY_PAYLOAD';
 const REGENERATED_MEMORY_TEXT = 'SMOKE_CLEAN_REGENERATED_MEMORY';
@@ -138,7 +139,7 @@ async function main(): Promise<void> {
     const cleanMessageId = sessionStore.append({
       channelId: CHANNEL_ID,
       role: 'assistant',
-      content: 'clean response remains',
+      content: CLEAN_L0_TEXT,
       timestamp: 2,
     });
     sessionStore.insertCompaction(CHANNEL_ID, DIRTY_SUMMARY_TEXT, cleanMessageId);
@@ -189,6 +190,10 @@ async function main(): Promise<void> {
       timestamp: Date.parse('2026-07-01T00:00:02.000Z'),
     });
     assert(tombstone.tombstonedL0RowCount === 1, 'expected one L0 tombstone');
+    assert(
+      (await sessionStore.searchByKeywords(CLEAN_L0_TEXT, 10)).length > 0,
+      'keyword search backend unavailable or unindexed: clean L0 text not searchable, so the dirty-zero-hits check cannot be trusted',
+    );
     assert((await sessionStore.searchByKeywords(DIRTY_L0_TEXT, 10)).length === 0, 'dirty L0 text remained searchable');
 
     const event = eventStore.getEvent(CASE_ID);

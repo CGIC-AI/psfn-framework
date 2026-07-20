@@ -393,12 +393,22 @@ export class AdminSessionDataService implements AdminSessionService {
       ) {
         throw new Error(`affectedMessageRanges[${index}] must include messageIds, startEntryId, or endEntryId`);
       }
+      if (
+        normalized.startEntryId !== undefined
+        && normalized.endEntryId !== undefined
+        && normalized.endEntryId < normalized.startEntryId
+      ) {
+        throw new Error(`affectedMessageRanges[${index}].endEntryId must be greater than or equal to startEntryId`);
+      }
       return normalized;
     }) ?? [];
 
     const messageIds = normalizeMessageIds(input.messageIds, 'messageIds');
     const startEntryId = normalizeOptionalPositiveInteger(input.startEntryId, 'startEntryId');
     const endEntryId = normalizeOptionalPositiveInteger(input.endEntryId, 'endEntryId');
+    if (startEntryId !== undefined && endEntryId !== undefined && endEntryId < startEntryId) {
+      throw new Error('endEntryId must be greater than or equal to startEntryId');
+    }
     if (messageIds?.length || startEntryId !== undefined || endEntryId !== undefined) {
       ranges.push({
         sourceChannelId,

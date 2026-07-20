@@ -40,6 +40,7 @@
     fetchFleetPortalProjection,
     type FleetPortalProjection,
   } from '$lib/fleet/portal';
+  import { fleetCostNavigationPath } from '$lib/fleet/fleet-costs';
 
   let { children } = $props();
 
@@ -472,7 +473,9 @@
             >
               {#each group.items as item}
                 <a
-                  href={scopeGardenPath(item.path, $page.url.pathname)}
+                  href={item.id === 'fleet-costs'
+                    ? fleetCostNavigationPath($page.url.pathname)
+                    : scopeGardenPath(item.path, $page.url.pathname)}
                   onclick={() => { if (!isDesktop) mobileNavOpen = false; }}
                   class="relative flex items-start gap-3 rounded-lg px-3 py-2.5 transition-colors group"
                   class:bg-gold-50={isActive(item.path)}

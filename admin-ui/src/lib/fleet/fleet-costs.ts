@@ -6,7 +6,12 @@ import type {
   ModelUsageRange,
 } from '../../../../src/shared/telemetry/model-usage.js';
 import { ACCOUNTING_RANGE_OPTIONS } from '../accounting/query-state.js';
-import { companionGardenRoot } from './companion-scope.js';
+import { serializeModelUsageQuery } from '../api/endpoints/model-usage-query.js';
+import {
+  companionGardenRoot,
+  parseCompanionGardenScope,
+} from './companion-scope.js';
+import type { FleetPortalCompanion } from './portal.js';
 
 export type FleetCostSortKey =
   | 'calls'
@@ -49,6 +54,32 @@ export function sortFleetCompanions(
   });
 }
 
+export function fleetSpendShare(
+  row: Extract<FleetModelUsageCompanion, { status: 'available' }>,
+  fleetHeadlineUsd: number | null,
+): number | null {
+  if (fleetHeadlineUsd === null || fleetHeadlineUsd <= 0) return null;
+  return (row.totals.effectiveCost.totalUsd / fleetHeadlineUsd) * 100;
+}
+
+export function selectFleetCostGardenPath(
+  companions: readonly FleetPortalCompanion[],
+): string | null {
+  const reachable = companions.find(companion => (
+    companion.gardenPath
+    && (companion.availability === 'online' || companion.availability === 'degraded')
+  ));
+  return reachable?.gardenPath
+    ?? companions.find(companion => companion.gardenPath)?.gardenPath
+    ?? null;
+}
+
+export function fleetCostNavigationPath(pathname: string): string {
+  return parseCompanionGardenScope(pathname)
+    ? '/fleet#fleet-costs'
+    : '/fleet-costs';
+}
+
 export interface FleetCompanionCostPathState {
   readonly range: ModelUsageRange;
   readonly timezone: string;
@@ -85,5 +116,5 @@ export function buildFleetCompanionCostPath(
     params.set('until', state.customUntilDate);
   }
   const gardenRoot = deployment === 'fleet' ? companionGardenRoot(companionId) : '';
-  return `${gardenRoot}/charge-budget?${params.toString()}`;
+  return `${gardenRoot}/charge-budget?${serializeModelUsageQuery(params)}`;
 }

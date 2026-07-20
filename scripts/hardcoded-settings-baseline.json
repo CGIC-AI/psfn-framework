@@ -1384,7 +1384,7 @@
       "file": "src/core/cogsec/disclosure/capsule-custody.ts",
       "name": "DEFAULT_MAX_ACTIVE_CAPSULES",
       "value": "3",
-      "note": "Code-owned DEFAULT for the active-capsule queue bound (bible \u00a710.11 'initial cap of three'); already overridable via createShareCapsuleCustodyStore's maxActiveCapsules option. Owned-setting/Garden exposure is deferred to the publication approvals surface (jp36.7.2)."
+      "note": "Code-owned DEFAULT for the active-capsule queue bound (bible §10.11 'initial cap of three'); already overridable via createShareCapsuleCustodyStore's maxActiveCapsules option. Owned-setting/Garden exposure is deferred to the publication approvals surface (jp36.7.2)."
     },
     {
       "file": "src/core/cogsec/drift/drift-evidence-adapters.ts",
@@ -3603,6 +3603,12 @@
       "value": "1_000"
     },
     {
+      "file": "src/operator/garden/services/room-arbiter-service.ts",
+      "name": "ADMIN_ARBITER_LIMIT",
+      "value": "100",
+      "note": "Code-owned bounded read ceiling for the read-only Fleet Command arbiter telemetry projection; a DoS/pagination guard, not an operator-tunable policy (mirrors the ICP admin projection's ADMIN_ICP_LIMIT)."
+    },
+    {
       "file": "src/operator/garden/services/session-service.ts",
       "name": "DEFAULT_ADMIN_SESSION_MESSAGE_PAGE_LIMIT",
       "value": "100"
@@ -3821,6 +3827,12 @@
       "file": "src/persistence/postgres/scheduled-prompt-store.ts",
       "name": "MAX_PROMPT_CHARS",
       "value": "32_000"
+    },
+    {
+      "file": "src/persistence/postgres/speaking-arbiter-admin-store.ts",
+      "name": "MAX_ADMIN_ROWS",
+      "value": "200",
+      "note": "Code-owned hard ceiling on rows returned by the read-only arbiter admin projection; an allocation/DoS guard at the admin read boundary (mirrors the ICP admin projection's MAX_ADMIN_ROWS)."
     },
     {
       "file": "src/persistence/repair/memory-participant-name-repair.ts",

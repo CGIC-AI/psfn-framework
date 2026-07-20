@@ -465,7 +465,8 @@ const routeAuthorizationGroups: readonly RouteAuthorizationGroup[] = [
   },
   {
     action: 'autonomy.read', area: 'autonomy', routeIds: [
-      ...ids('GET', ['/api/admin/icp-autonomy']), ...pageIds(['/autonomy']),
+      ...ids('GET', ['/api/admin/icp-autonomy', '/api/admin/room-arbiter']),
+      ...pageIds(['/autonomy', '/room-arbiter']),
     ],
   },
   {

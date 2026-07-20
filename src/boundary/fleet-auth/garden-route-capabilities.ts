@@ -264,6 +264,7 @@ const fixedRoutes: readonly RouteTuple[] = [
   [['GET', 'PATCH'], '/api/admin/settings'], [['GET', 'POST'], '/api/admin/settings/models'],
   ['GET', '/api/admin/settings/schema'], ['GET', '/api/admin/icp-autonomy'],
   ['POST', '/api/admin/icp-autonomy/do-not-disturb'], ['POST', '/api/admin/icp-autonomy/emergency-disable'],
+  ['GET', '/api/admin/room-arbiter'],
 ];
 
 const dynamicRoutes: readonly RouteTuple[] = [
@@ -323,7 +324,7 @@ export const GARDEN_CLIENT_ROUTES = Object.freeze([
   '/cognitive-security/remediation', '/confirmations', '/contact-approvals', '/contacts',
   '/enrollment', '/evals/emotion-sidecar', '/episodic-memory', '/graph-proposals', '/identity',
   '/fleet-costs', '/images', '/memory', '/model-room', '/models', '/places', '/primer', '/prompt-monitor',
-  '/prompts', '/rooms', '/satellites', '/scheduler', '/session-recovery', '/sessions',
+  '/prompts', '/room-arbiter', '/rooms', '/satellites', '/scheduler', '/session-recovery', '/sessions',
   '/settings', '/shards', '/shards/:shardId', '/skills', '/subsystem-health', '/telemetry', '/theme', '/tools',
   '/values', '/wiki', '/wishlist',
 ] as const);

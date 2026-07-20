@@ -163,6 +163,7 @@ export class GardenAdminTransportServer implements Lifecycle {
       subsystemHealthService: config.services.subsystemHealth ?? null,
       toolConformanceService: config.services.toolConformance ?? null,
       icpAutonomyService: config.services.icpAutonomy ?? null,
+      roomArbiterService: config.services.roomArbiter ?? null,
       diagnosticsService: config.services.diagnostics,
       settingsService: config.services.settings,
       sharedWorkspaceService: config.services.sharedWorkspace ?? null,
@@ -234,6 +235,7 @@ export class GardenAdminTransportServer implements Lifecycle {
 
   async stop(): Promise<void> {
     await this.config.services.icpAutonomy?.close?.();
+    await this.config.services.roomArbiter?.close?.();
     return await new Promise((resolve, reject) => {
       this.server.closeAllConnections();
       this.telemetryTransport.close(() => {

@@ -121,10 +121,13 @@ function makeMessage(overrides: Partial<SubstrateMessage> = {}): SubstrateMessag
 function routing(input: {
   placeId?: string;
   presence?: CompanionPresenceMetadata;
+  satelliteOrigin?: boolean;
 }): SubstrateMessage['routing'] {
   return {
     ...(input.presence ? { presence: input.presence } : {}),
-    ...(input.placeId ? { satellite: { placeId: input.placeId } } : {}),
+    ...(input.placeId || input.satelliteOrigin
+      ? { satellite: { ...(input.placeId ? { placeId: input.placeId } : {}) } }
+      : {}),
   } as unknown as SubstrateMessage['routing'];
 }
 
@@ -169,7 +172,9 @@ describe('situated-presence producer', () => {
 
   it('falls back to the presence label when no place resolves (presence is now a consumer)', () => {
     const block = buildSituatedPresenceContextBlock({
-      message: makeMessage({ routing: routing({ presence: SATELLITE_PRESENCE }) }),
+      message: makeMessage({
+        routing: routing({ presence: SATELLITE_PRESENCE, satelliteOrigin: true }),
+      }),
     });
     expect(block).toContain('<runtime_situated_presence>');
     expect(block).toContain('Here: Living Room satellite');
@@ -181,6 +186,7 @@ describe('situated-presence producer', () => {
       message: makeMessage({
         routing: routing({
           presence: { kind: 'satellite', satelliteId: 'sat.x', companionId: 'companion.self' },
+          satelliteOrigin: true,
         }),
       }),
     });
@@ -265,7 +271,7 @@ describe('resolveSituatedPlaceRef (W5a presence coordinates)', () => {
 });
 
 describe('situated-presence producer — active-emanation integration (B2)', () => {
-  it('foregrounds the current active emanation on a placeless (non-satellite) turn', () => {
+  it('does not foreground the physical emanation on a placeless mindspace turn', () => {
     const tracker = new SituatedEmanationTracker();
     // A satellite turn establishes the emanation into the living room.
     buildSituatedPresenceContextBlock({
@@ -275,15 +281,14 @@ describe('situated-presence producer — active-emanation integration (B2)', () 
       placesRegistry: PLACES_REGISTRY,
       emanationTracker: tracker,
     });
-    // A subsequent Discord/Telegram turn carries no place of its own, yet the
-    // block still foregrounds the living room from the active emanation.
+    // A subsequent Discord/Telegram turn needs a resolved virtual twin from
+    // the agent seam; the producer must not claim the physical room directly.
     const block = buildSituatedPresenceContextBlock({
       message: makeMessage(),
       placesRegistry: PLACES_REGISTRY,
       emanationTracker: tracker,
     });
-    expect(block).toContain('Here: Living Room (physical place)');
-    expect(block).toContain('- Floor Lamp (light, effector)');
+    expect(block).toBe('');
   });
 
   it('updates the active emanation when a satellite turn establishes location', () => {
@@ -298,7 +303,7 @@ describe('situated-presence producer — active-emanation integration (B2)', () 
     expect(tracker.resolvePlaceId()).toBe('place.living-room');
   });
 
-  it('switching active emanation between two satellites changes the foregrounded place', () => {
+  it('does not leak either physical room into placeless turns across a handoff', () => {
     const tracker = new SituatedEmanationTracker();
     // Emanate into the living room, then read it on a placeless turn.
     buildSituatedPresenceContextBlock({
@@ -313,7 +318,7 @@ describe('situated-presence producer — active-emanation integration (B2)', () 
       placesRegistry: PLACES_REGISTRY,
       emanationTracker: tracker,
     });
-    expect(first).toContain('Here: Living Room (physical place)');
+    expect(first).toBe('');
 
     // Hand off to the kitchen satellite; the next placeless turn foregrounds it.
     buildSituatedPresenceContextBlock({
@@ -328,8 +333,7 @@ describe('situated-presence producer — active-emanation integration (B2)', () 
       placesRegistry: PLACES_REGISTRY,
       emanationTracker: tracker,
     });
-    expect(second).toContain('Here: Kitchen (physical place)');
-    expect(second).not.toContain('Living Room');
+    expect(second).toBe('');
   });
 
   it('falls back to the honest empty block when nothing has established a place', () => {
@@ -498,6 +502,51 @@ describe('situated-presence producer — mindspace twin (vinz.29)', () => {
     expect(block).not.toContain('Shared mindspace:');
   });
 
+  it('uses origin classification rather than virtual place shape to name the mode', () => {
+    const block = buildSituatedPresenceContextBlock({
+      message: makeMessage({
+        routing: routing({ placeId: 'place.living-room-twin', presence: SATELLITE_PRESENCE }),
+      }),
+      placesRegistry: PLACES_REGISTRY,
+    });
+    expect(block).toContain('Here: Living Room (Twin) (virtual place)');
+    expect(block).not.toContain('Shared mindspace:');
+  });
+
+  it('does not reuse a physical tracker place for a mindspace turn without a resolved twin', () => {
+    const tracker = new SituatedEmanationTracker();
+    buildSituatedPresenceContextBlock({
+      message: makeMessage({
+        routing: routing({ placeId: 'place.kitchen', presence: KITCHEN_PRESENCE }),
+      }),
+      placesRegistry: PLACES_REGISTRY,
+      emanationTracker: tracker,
+    });
+
+    const block = buildSituatedPresenceContextBlock({
+      message: makeMessage({ channelId: 'discord:dm:neutral', routing: { source: 'discord' } }),
+      placesRegistry: PLACES_REGISTRY,
+      emanationTracker: tracker,
+    });
+    expect(block).toBe('');
+  });
+
+  it('does not render a physical presence hint carried by a plain-chat turn', () => {
+    const message = makeMessage({
+      channelId: 'discord:dm:neutral',
+      routing: {
+        source: 'discord',
+        presence: { kind: 'embodiment', embodimentId: 'emb.1', companionId: 'c1' },
+      },
+    });
+
+    expect(buildSituatedPresenceContextBlock({
+      message,
+      placesRegistry: PLACES_REGISTRY,
+    })).toBe('');
+    expect(resolveSituatedSiteId(message, PLACES_REGISTRY)).toBeUndefined();
+  });
+
   it('the situated fallback outranks the tracker fallback (twin over physical emanation)', () => {
     const tracker = new SituatedEmanationTracker();
     // Physically emanated into the living room earlier…
@@ -590,6 +639,7 @@ describe('situated-presence producer — prompt-injection sanitization (S10 cogs
             companionId: 'companion.self',
             label: `Desk${PAYLOAD}`,
           },
+          satelliteOrigin: true,
         }),
       }),
     });
@@ -599,8 +649,9 @@ describe('situated-presence producer — prompt-injection sanitization (S10 cogs
 
   it('neutralizes injected mindspace and co-present companion names', () => {
     const block = buildSituatedPresenceContextBlock({
-      message: makeMessage({ routing: routing({ placeId: 'place.living-room-twin' }) }),
+      message: makeMessage({ channelId: 'discord:dm:neutral', routing: { source: 'discord' } }),
       placesRegistry: PLACES_REGISTRY,
+      situatedFallbackPlaceId: 'place.living-room-twin',
       mindspaceLabel: `Our Space${PAYLOAD}`,
       coPresent: [{ companionId: 'companion.other', displayName: `Mallory${PAYLOAD}` }],
     });

@@ -325,4 +325,24 @@ describe('assertSatellitePlaceBindings', () => {
       /binds to placeId "living_room" which does not exist/u,
     );
   });
+
+  it('fails closed when a satellite binds to a virtual place', () => {
+    const twinned = parsePlacesRegistryConfig({
+      ...exampleRegistry(),
+      places: [
+        ...exampleRegistry().places,
+        {
+          placeId: 'living_room_overlay',
+          siteId: 'home',
+          displayName: 'Living Room Overlay',
+          kind: 'virtual',
+          mirrorsPlaceId: 'living_room',
+          affordances: [],
+        },
+      ],
+    });
+    expect(() => assertSatellitePlaceBindings(satelliteRegistry('living_room_overlay'), twinned)).toThrow(
+      /must bind to a physical place/u,
+    );
+  });
 });

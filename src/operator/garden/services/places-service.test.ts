@@ -55,7 +55,10 @@ const SATELLITES = {
 
 const PLACES = {
   schemaVersion: 1,
-  sites: [{ siteId: 'site-home', displayName: 'Home', kind: 'physical' }],
+  sites: [
+    { siteId: 'site-home', displayName: 'Home', kind: 'physical' },
+    { siteId: 'site-overlay', displayName: 'Home Overlay', kind: 'virtual' },
+  ],
   places: [
     {
       placeId: 'place-kitchen',
@@ -68,6 +71,14 @@ const PLACES = {
       ],
     },
     { placeId: 'place-living', siteId: 'site-home', displayName: 'Living Room', kind: 'physical', affordances: [] },
+    {
+      placeId: 'place-kitchen-overlay',
+      siteId: 'site-overlay',
+      displayName: 'Kitchen Overlay',
+      kind: 'virtual',
+      mirrorsPlaceId: 'place-kitchen',
+      affordances: [],
+    },
   ],
 };
 
@@ -139,10 +150,18 @@ describe('AdminPlacesService', () => {
   it('joins places, affordances, and bound satellites', async () => {
     seed();
     const data = await createAdminPlacesService({ dataDir, fleetCompanionIds: NO_COMPANIONS }).listPlaces();
-    expect(data.places.map(p => p.placeId)).toEqual(['place-kitchen', 'place-living']);
+    expect(data.places.map(p => p.placeId)).toEqual([
+      'place-kitchen',
+      'place-living',
+      'place-kitchen-overlay',
+    ]);
     const kitchen = data.places.find(p => p.placeId === 'place-kitchen')!;
     expect(kitchen.affordances.map(a => a.affordanceId)).toEqual(['aff-light', 'aff-presence']);
     expect(kitchen.satellites.map(s => s.satelliteId)).toEqual(['sat-kitchen']);
+    expect(kitchen.twinPlaceId).toBe('place-kitchen-overlay');
+    const overlay = data.places.find(p => p.placeId === 'place-kitchen-overlay')!;
+    expect(overlay.mirrorsPlaceId).toBe('place-kitchen');
+    expect(overlay.twinPlaceId).toBe('place-kitchen');
     expect(data.unboundSatellites.map(s => s.satelliteId)).toEqual(['sat-roamer']);
     expect(data.danglingSatellites).toEqual([]);
   });
@@ -190,6 +209,13 @@ describe('AdminPlacesService', () => {
       .rejects.toThrow(/unknown satellite/);
   });
 
+  it('fails closed when re-binding a satellite to a virtual place', async () => {
+    seed();
+    await expect(createAdminPlacesService({ dataDir, fleetCompanionIds: NO_COMPANIONS })
+      .rebindSatellite({ satelliteId: 'sat-roamer', placeId: 'place-kitchen-overlay' }))
+      .rejects.toThrow(/must be physical/u);
+  });
+
   it('preserves the governed shared-device policy while changing only placeId', async () => {
     seed();
     const service = createAdminPlacesService({
@@ -217,7 +243,7 @@ describe('buildAdminPlacesRoutes', () => {
     const res = await invokeRoute(routes, 'GET', '/api/admin/places');
     expect(res.status).toBe(200);
     expect(res.headers['Cache-Control']).toBe('no-store');
-    expect(JSON.parse(res.body).places).toHaveLength(2);
+    expect(JSON.parse(res.body).places).toHaveLength(3);
   });
 
   it('re-binds via PATCH /api/admin/places/satellites/:satelliteId/binding', async () => {

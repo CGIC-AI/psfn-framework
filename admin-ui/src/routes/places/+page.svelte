@@ -26,30 +26,14 @@
       .replace(/\b\w/g, (char) => char.toUpperCase());
   }
 
-  // Twin (physical<->virtual overlap) is naming-convention only until vinz.29
-  // lands a formal link: strip a `latent_`/`virtual_` prefix and pair a physical
-  // place with a virtual place that normalizes to the same key.
-  function twinKey(placeId: string): string {
-    return placeId.replace(/^(latent|virtual)[_-]/i, '').toLowerCase();
-  }
-
   let twinById = $derived.by(() => {
     const map = new Map<string, AdminPlaceView>();
-    const byKey = new Map<string, AdminPlaceView[]>();
-    for (const place of data?.places ?? []) {
-      const key = twinKey(place.placeId);
-      const bucket = byKey.get(key) ?? [];
-      bucket.push(place);
-      byKey.set(key, bucket);
-    }
-    for (const bucket of byKey.values()) {
-      if (bucket.length < 2) continue;
-      const physical = bucket.find((p) => p.kind === 'physical');
-      const virtual = bucket.find((p) => p.kind === 'virtual');
-      if (physical && virtual) {
-        map.set(physical.placeId, virtual);
-        map.set(virtual.placeId, physical);
-      }
+    const places = data?.places ?? [];
+    const placeById = new Map(places.map((place) => [place.placeId, place]));
+    for (const place of places) {
+      if (!place.twinPlaceId) continue;
+      const twin = placeById.get(place.twinPlaceId);
+      if (twin) map.set(place.placeId, twin);
     }
     return map;
   });
@@ -65,6 +49,15 @@
     }
     return [...groups.values()];
   });
+
+  let physicalBindingSites = $derived.by(() => (
+    placesBySite
+      .map((site) => ({
+        ...site,
+        places: site.places.filter((place) => place.kind === 'physical'),
+      }))
+      .filter((site) => site.places.length > 0)
+  ));
 
   let stats = $derived.by(() => {
     const places = data?.places ?? [];
@@ -240,7 +233,7 @@
                   {#if twin}
                     <span
                       class="shrink-0 rounded-full bg-gold-50 px-2.5 py-1 text-xs font-semibold text-gold-700"
-                      title={`Naming-convention twin of ${twin.placeId} (formal link pending vinz.29)`}
+                      title={`Authored twin link to ${twin.placeId}`}
                     >⇄ {twin.displayName}</span>
                   {/if}
                 </div>
@@ -301,7 +294,7 @@
                               class="min-w-0 flex-1 rounded-lg border border-bark-300 bg-bark-50 px-2 py-1.5 text-sm text-shadow-800"
                             >
                               <option value="">— Unbound —</option>
-                              {#each placesBySite as optSite}
+                              {#each physicalBindingSites as optSite}
                                 <optgroup label={optSite.displayName}>
                                   {#each optSite.places as optPlace}
                                     <option value={optPlace.placeId}>{optPlace.displayName}</option>
@@ -348,7 +341,7 @@
                   class="min-w-0 flex-1 rounded-lg border border-bark-300 bg-bark-50 px-2 py-1.5 text-sm text-shadow-800"
                 >
                   <option value="">— Unbound —</option>
-                  {#each placesBySite as optSite}
+                  {#each physicalBindingSites as optSite}
                     <optgroup label={optSite.displayName}>
                       {#each optSite.places as optPlace}
                         <option value={optPlace.placeId}>{optPlace.displayName}</option>
@@ -399,7 +392,7 @@
                   class="min-w-0 flex-1 rounded-lg border border-bark-300 bg-bark-50 px-2 py-1.5 text-sm text-shadow-800"
                 >
                   <option value="">— Unbind —</option>
-                  {#each placesBySite as optSite}
+                  {#each physicalBindingSites as optSite}
                     <optgroup label={optSite.displayName}>
                       {#each optSite.places as optPlace}
                         <option value={optPlace.placeId}>{optPlace.displayName}</option>

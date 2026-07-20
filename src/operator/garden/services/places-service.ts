@@ -64,6 +64,10 @@ export interface AdminPlaceView {
   kind: PlaceKind;
   haAreaId?: string;
   description?: string;
+  /** Authored directional link, present on virtual mirror places. */
+  mirrorsPlaceId?: string;
+  /** Symmetric twin lookup for either side of an authored overlap. */
+  twinPlaceId?: string;
   affordances: AdminAffordanceView[];
   /** Satellites whose static `placeId` resolves to this place. */
   satellites: AdminBoundSatelliteView[];
@@ -129,6 +133,12 @@ function buildPlacesData(dataDir: string): AdminPlacesData {
   const satellites = loadSatelliteRegistryConfig(dataDir);
 
   const placeIds = new Set(places.places.map((place) => place.placeId));
+  const twinPlaceIdByPlaceId = new Map<string, string>();
+  for (const place of places.places) {
+    if (!place.mirrorsPlaceId) continue;
+    twinPlaceIdByPlaceId.set(place.placeId, place.mirrorsPlaceId);
+    twinPlaceIdByPlaceId.set(place.mirrorsPlaceId, place.placeId);
+  }
 
   const placeViews: AdminPlaceView[] = places.places.map((place) => ({
     placeId: place.placeId,
@@ -137,6 +147,10 @@ function buildPlacesData(dataDir: string): AdminPlacesData {
     kind: place.kind,
     ...(place.haAreaId ? { haAreaId: place.haAreaId } : {}),
     ...(place.description ? { description: place.description } : {}),
+    ...(place.mirrorsPlaceId ? { mirrorsPlaceId: place.mirrorsPlaceId } : {}),
+    ...(twinPlaceIdByPlaceId.get(place.placeId)
+      ? { twinPlaceId: twinPlaceIdByPlaceId.get(place.placeId) }
+      : {}),
     affordances: place.affordances.map((affordance) => ({
       affordanceId: affordance.affordanceId,
       role: affordance.role,
@@ -215,9 +229,15 @@ export function createAdminPlacesService(options: {
       // the ONLY valid bind target is a place that exists in places.json.
       if (targetPlaceId !== null) {
         const places = loadPlacesRegistryConfig(dataDir);
-        if (!resolvePlaceById(places, targetPlaceId)) {
+        const targetPlace = resolvePlaceById(places, targetPlaceId);
+        if (!targetPlace) {
           throw new Error(
             `cannot bind satellite "${satelliteId}" to placeId "${targetPlaceId}" which does not exist in places.json`,
+          );
+        }
+        if (targetPlace.kind !== 'physical') {
+          throw new Error(
+            `cannot bind satellite "${satelliteId}" to placeId "${targetPlaceId}": satellite places must be physical`,
           );
         }
       }

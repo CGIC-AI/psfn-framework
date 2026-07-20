@@ -39,6 +39,46 @@ function sampleDiscrepancy(): EmotionDiscrepancy {
   };
 }
 
+function sampleMomentaryMoodDiscrepancy(): EmotionDiscrepancy {
+  return {
+    kind: 'momentary_vs_mood',
+    magnitude: 0.6,
+    sides: [
+      {
+        family: 'vad_valence',
+        label: 'momentary_valence',
+        value: 0.5,
+        confidence: 0.82,
+        provenance: [{
+          source: 'classifier_inferred',
+          observedAtMs: Date.parse('2026-07-20T12:00:00.000Z'),
+          modality: 'text',
+          provenanceRef: 'emotion:turn-1',
+        }],
+      },
+      {
+        family: 'mood_valence',
+        label: 'mood_valence',
+        value: -0.1,
+        confidence: 0.82,
+        provenance: [
+          {
+            source: 'classifier_inferred',
+            observedAtMs: Date.parse('2026-07-20T12:00:00.000Z'),
+            modality: 'text',
+            provenanceRef: 'emotion:turn-1',
+          },
+          {
+            source: 'memory_derived',
+            modality: 'runtime',
+            provenanceRef: 'emotion:mood_ema',
+          },
+        ],
+      },
+    ],
+  };
+}
+
 describe('DiscrepancyJournalStore', () => {
   let tmpDir: string;
   let store: DiscrepancyJournalStore;
@@ -96,6 +136,28 @@ describe('DiscrepancyJournalStore', () => {
       internalStateSnapshotRef: 'snapshot-abc',
       discrepancies: [],
     })).toThrow(/must not be empty/);
+  });
+
+  it('round-trips the canonical mood-EMA derivation provenance', () => {
+    store.append({
+      templateId: 'mixed-state-review',
+      templateName: 'Mixed-State Reflection',
+      channelId: 'heartbeat',
+      internalStateSnapshotRef: 'snapshot-mood',
+      discrepancies: [sampleMomentaryMoodDiscrepancy()],
+      createdAt: '2026-07-20T12:00:05.000Z',
+    });
+
+    const [entry] = store.listRecent();
+    const [restored] = entry.discrepancies;
+    const momentarySide = restored.sides.find(side => side.family === 'vad_valence');
+    const moodSide = restored.sides.find(side => side.family === 'mood_valence');
+    expect(momentarySide?.provenance).toHaveLength(1);
+    expect(moodSide?.provenance.at(-1)).toEqual({
+      source: 'memory_derived',
+      modality: 'runtime',
+      provenanceRef: 'emotion:mood_ema',
+    });
   });
 
   it('fails closed when a side is missing its provenance', () => {

@@ -74,8 +74,27 @@ describe('detectEmotionDiscrepancies', () => {
     });
     const split = result.find(d => d.kind === 'momentary_vs_mood');
     expect(split).toBeDefined();
-    expect(split!.sides.find(s => s.label === 'momentary_valence')?.value).toBe(0.5);
-    expect(split!.sides.find(s => s.label === 'mood_valence')?.value).toBe(-0.1);
+    const momentarySide = split!.sides.find(s => s.label === 'momentary_valence');
+    const moodSide = split!.sides.find(s => s.label === 'mood_valence');
+    expect(momentarySide?.value).toBe(0.5);
+    expect(moodSide?.value).toBe(-0.1);
+    expect(momentarySide?.provenance).toEqual([{
+      source: 'classifier_inferred',
+      modality: 'text',
+      provenanceRef: 'test:classifier',
+    }]);
+    expect(moodSide?.provenance).toEqual([
+      {
+        source: 'classifier_inferred',
+        modality: 'text',
+        provenanceRef: 'test:classifier',
+      },
+      {
+        source: 'memory_derived',
+        modality: 'runtime',
+        provenanceRef: 'emotion:mood_ema',
+      },
+    ]);
   });
 
   it('surfaces ACAC self-report vs classifier disagreement', () => {

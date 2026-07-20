@@ -1,5 +1,5 @@
 // ── Cross-family emotional divergence detector ──
-// psfn-framework-031.11.1 (child 1/2 of 031.11).
+// Bead 031.11.1 (child 1/2 of 031.11).
 //
 // The runtime already detects INTRA-discrete conflict (one classifier emitting
 // both a positive and a negative label at once — detectConflictingDiscreteSignals
@@ -222,7 +222,7 @@ function detectMomentaryVsMood(
         label: 'mood_valence',
         value: roundSigned(mood),
         confidence: telemetryConfidence,
-        provenance: cloneProvenance(telemetryProvenance),
+        provenance: moodEmaProvenance(telemetryProvenance),
       },
     ],
   };
@@ -299,6 +299,19 @@ function cloneProvenance(
   provenance: readonly EmotionTelemetryProvenance[],
 ): EmotionTelemetryProvenance[] {
   return provenance.map(entry => ({ ...entry }));
+}
+
+function moodEmaProvenance(
+  provenance: readonly EmotionTelemetryProvenance[],
+): EmotionTelemetryProvenance[] {
+  return [
+    ...cloneProvenance(provenance),
+    {
+      source: 'memory_derived',
+      modality: 'runtime',
+      provenanceRef: 'emotion:mood_ema',
+    },
+  ];
 }
 
 function roundSigned(value: number): number {

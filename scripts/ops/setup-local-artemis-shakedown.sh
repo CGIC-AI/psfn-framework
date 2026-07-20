@@ -19,6 +19,20 @@ PREPARED_ROOT=""
 SEED_ROOT=""
 COMPANION_AUTH_TOKEN=""
 SESSION_INTEGRITY_AUTH_TOKEN=""
+FLEET_AUTH_ASSERTION_PRIVATE_KEY_FILE=""
+PRESERVED_FLEET_AUTH_SECRET_DIR=""
+RETAINED_FLEET_AUTH_OWNER=0
+FLEET_AUTH_DISCORD_CLIENT_SECRET_VALUE=""
+FLEET_AUTH_TOKEN_ENCRYPTION_KEY_VALUE=""
+FLEET_AUTH_SESSION_PEPPER_VALUE=""
+FLEET_AUTH_RECOVERY_CREDENTIAL_VALUE=""
+FLEET_AUTH_RUNTIME_PASSWORD=""
+FLEET_AUTH_MIGRATION_PASSWORD=""
+FLEET_AUTH_BACKUP_PASSWORD=""
+FLEET_AUTH_RUNTIME_DATABASE_URL_VALUE=""
+FLEET_AUTH_MIGRATION_DATABASE_URL_VALUE=""
+FLEET_AUTH_BACKUP_DATABASE_URL_VALUE=""
+FLEET_AUTH_AUTHORITY_FLOOR_ROOT_VALUE="/runtime/logs/fleet-auth-authority"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PORT_FORWARD_RUNNER="${SCRIPT_DIR}/keep-kube-port-forward.sh"
 
@@ -55,12 +69,13 @@ Options:
 
 Secrets:
   The script creates a local app Secret from the current process environment.
-  It generates local API/admin/HMAC/backup placeholders when absent, derives
+  It generates local API/admin/HMAC/backup/fleet-auth credentials when absent, derives
   the role-bound gateway worker proofs (GATEWAY_COMPANION_AUTH_TOKEN and
   GATEWAY_SESSION_INTEGRITY_AUTH_TOKEN) from the same COMPANION_ID and session
   HMAC key, and only copies provider/media keys that are already set in the
-  environment. Discord and Telegram keys are deliberately not copied into this
-  local shakedown.
+  environment. The Discord OAuth client secret is copied only when explicitly
+  supplied as FLEET_AUTH_DISCORD_CLIENT_SECRET; bot and Telegram keys are
+  deliberately not copied into this local shakedown.
 EOF
 }
 
@@ -161,40 +176,25 @@ prepare_seed_root() {
     cp -a "${SHAKEDOWN_ROOT}/workspace/." "$PREPARED_ROOT/workspace/"
   fi
 
-  node - "$PREPARED_ROOT/system-data" "$PWD/config" <<'NODE'
+  node - \
+    "$PREPARED_ROOT/system-data" \
+    "$PWD/config" \
+    "$COMPANION_ID" \
+    "$COMPANION_NAME" \
+    "$PREPARED_ROOT/fleet-auth-assertion-private.pem" <<'NODE'
+const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 
-const [, , systemDataDir, configDir] = process.argv;
-
-// Fleet-only owner files (companions.json) make every single-companion process
-// fail closed when PSFN_MULTI_COMPANION is disabled, so they are only seeded
-// when the multi-companion topology is explicitly enabled. The truthiness set
-// mirrors src/system/config/companions-config.ts (isMultiCompanionEnabled).
-const FLEET_ONLY_TARGETS = new Set(['companions.json']);
-
-function parseBooleanEnv(raw) {
-  const normalized = String(raw).trim().toLowerCase();
-  if (['1', 'true', 'yes', 'on'].includes(normalized)) return true;
-  if (['0', 'false', 'no', 'off'].includes(normalized)) return false;
-  return undefined;
-}
-
-function isMultiCompanionEnabled() {
-  const raw = process.env.PSFN_MULTI_COMPANION;
-  const normalized = raw?.trim();
-  if (!normalized) return false;
-  const parsed = parseBooleanEnv(normalized);
-  if (parsed === undefined) {
-    throw new Error(
-      `Invalid PSFN_MULTI_COMPANION=${JSON.stringify(raw)}. `
-        + 'Expected a boolean flag (1/0, true/false, yes/no, on/off).',
-    );
-  }
-  return parsed;
-}
-
-const multiCompanion = isMultiCompanionEnabled();
+const [
+  ,
+  ,
+  systemDataDir,
+  configDir,
+  companionId,
+  companionName,
+  assertionPrivateKeyPath,
+] = process.argv;
 
 function readJson(file) {
   return JSON.parse(fs.readFileSync(file, 'utf8'));
@@ -280,49 +280,107 @@ function normalizeTrustPolicy(owner) {
 }
 
 function normalizeOwner(targetName, owner) {
+  if (targetName === 'companions.json') {
+    return {
+      companions: [{
+        companionId,
+        companionDataDir: `companions/${companionId}`,
+        characterCardPath: `companions/${companionId}/companion.json`,
+        postgresSchema: 'companion_default',
+        displayName: companionName,
+      }],
+    };
+  }
   if (targetName === 'trust-policy.json') {
     return normalizeTrustPolicy(owner);
   }
   return owner;
 }
 
+function generateFleetAuthOwner(owner) {
+  if (!isRecord(owner) || !isRecord(owner.hubDeviceAssertions)) {
+    throw new Error('fleet-auth seed must contain the canonical owner-file structure');
+  }
+  if (owner.accountRoster !== undefined) {
+    if (!Array.isArray(owner.accountRoster)) {
+      throw new Error('fleet-auth accountRoster must be an array when present');
+    }
+    for (const [index, entry] of owner.accountRoster.entries()) {
+      if (!isRecord(entry) || entry.companionId !== companionId) {
+        throw new Error(
+          `fleet-auth accountRoster[${index}] must target the one generated companion ${companionId}`,
+        );
+      }
+    }
+  }
+  const broker = crypto.generateKeyPairSync('ed25519');
+  const hub = crypto.generateKeyPairSync('ed25519');
+  const brokerPublicKeyPem = broker.publicKey.export({ type: 'spki', format: 'pem' }).toString();
+  const hubPublicKeyPem = hub.publicKey.export({ type: 'spki', format: 'pem' }).toString();
+  const brokerPrivateKeyPem = broker.privateKey.export({ type: 'pkcs8', format: 'pem' }).toString();
+  const generatedAt = Date.now();
+  const notBefore = new Date(generatedAt - 5 * 60_000).toISOString();
+  const notAfter = new Date(generatedAt + 10 * 365 * 24 * 60 * 60_000).toISOString();
+  const brokerKid = `artemis-broker-${crypto.randomBytes(12).toString('hex')}`;
+  const hubKid = `artemis-hub-${crypto.randomBytes(12).toString('hex')}`;
+
+  fs.writeFileSync(assertionPrivateKeyPath, brokerPrivateKeyPem, { mode: 0o600 });
+  return {
+    ...owner,
+    verifierKeys: [{
+      issuer: 'psfn-fleet-auth',
+      kid: brokerKid,
+      publicKeyPem: brokerPublicKeyPem,
+      notBefore,
+      notAfter,
+      status: 'active',
+    }],
+    hubDeviceAssertions: {
+      ...owner.hubDeviceAssertions,
+      keys: [{
+        kid: hubKid,
+        publicKeyPem: hubPublicKeyPem,
+        notBefore,
+        notAfter,
+        status: 'active',
+      }],
+    },
+  };
+}
+
 const migrated = [];
-const skipped = [];
 for (const entry of fs.readdirSync(configDir)) {
   if (!entry.endsWith('.seed.json')) {
     continue;
   }
   const targetName = entry.replace(/\.seed\.json$/, '.json');
-  if (FLEET_ONLY_TARGETS.has(targetName) && !multiCompanion) {
-    skipped.push(targetName);
-    continue;
-  }
   const seedPath = path.join(configDir, entry);
   const targetPath = path.join(systemDataDir, targetName);
   const seed = readJson(seedPath);
-  const owner = normalizeOwner(targetName, fs.existsSync(targetPath) ? mergeDefaults(seed, readJson(targetPath)) : seed);
+  const merged = fs.existsSync(targetPath) ? mergeDefaults(seed, readJson(targetPath)) : seed;
+  const normalized = normalizeOwner(targetName, merged);
+  const owner = targetName === 'fleet-auth.json'
+    ? generateFleetAuthOwner(normalized)
+    : normalized;
   fs.writeFileSync(targetPath, `${JSON.stringify(owner, null, 2)}\n`);
   migrated.push(targetName);
 }
 
-// Fleet-only owners must never be left behind in single-companion mode, even if
-// the fixture shipped one: retaining companions.json fails all processes closed.
-if (!multiCompanion) {
-  for (const targetName of FLEET_ONLY_TARGETS) {
-    const targetPath = path.join(systemDataDir, targetName);
-    if (fs.existsSync(targetPath)) {
-      fs.rmSync(targetPath);
-      skipped.push(targetName);
-    }
-  }
+if (!migrated.includes('companions.json')) {
+  throw new Error('current config is missing companions.seed.json');
+}
+if (!migrated.includes('fleet-auth.json')) {
+  throw new Error('current config is missing fleet-auth.seed.json');
 }
 
-console.log(
-  `prepared ${migrated.length} system owner files from current seed defaults`
-    + (skipped.length > 0 ? `; withheld fleet-only owners: ${[...new Set(skipped)].join(', ')}` : ''),
-);
+console.log(`prepared ${migrated.length} system owner files from current seed defaults`);
 NODE
 
+  FLEET_AUTH_ASSERTION_PRIVATE_KEY_FILE="$PREPARED_ROOT/fleet-auth-assertion-private.pem"
+  [[ -s "$FLEET_AUTH_ASSERTION_PRIVATE_KEY_FILE" ]] || {
+    echo "fleet-auth key generation did not write the broker private key" >&2
+    exit 1
+  }
   SEED_ROOT="$PREPARED_ROOT"
 }
 
@@ -354,6 +412,43 @@ helm_base_args() {
     --set "psfnAppImage.gitCommit=${full}" \
     --set "runtime.companionId=${COMPANION_ID}" \
     --set "runtime.companionName=${COMPANION_NAME}" \
+    --set "runtime.companionDataDir=/runtime/companions/${COMPANION_ID}" \
+    --set "runtime.workspacePath=/runtime/workspaces/personal/${COMPANION_ID}" \
+    --set "runtime.characterCardPath=/runtime/companions/${COMPANION_ID}/companion.json" \
+    --set "fleet.companions[0].companionId=${COMPANION_ID}" \
+    --set "fleet.companions[0].postgresSchema=companion_default" \
+    --set-string "fleet.companions[0].companionDataClaim=" \
+    --set-string "fleet.companions[0].workspaceClaim=" \
+    --set-string "fleet.companions[0].authSecret.name=" \
+    --set-string "fleet.companions[0].authSecret.sessionIntegrityKey=" \
+    --set-string "fleet.companions[0].authSecret.companionAuthKey=" \
+    --set-string "fleetAuth.credentialEnv[0].name=FLEET_AUTH_DISCORD_CLIENT_SECRET" \
+    --set-string "fleetAuth.credentialEnv[0].secretRef.name=psfn-app" \
+    --set-string "fleetAuth.credentialEnv[0].secretRef.key=FLEET_AUTH_DISCORD_CLIENT_SECRET" \
+    --set-string "fleetAuth.credentialEnv[1].name=FLEET_AUTH_TOKEN_ENCRYPTION_KEY" \
+    --set-string "fleetAuth.credentialEnv[1].secretRef.name=psfn-app" \
+    --set-string "fleetAuth.credentialEnv[1].secretRef.key=FLEET_AUTH_TOKEN_ENCRYPTION_KEY" \
+    --set-string "fleetAuth.credentialEnv[2].name=FLEET_AUTH_SESSION_PEPPER" \
+    --set-string "fleetAuth.credentialEnv[2].secretRef.name=psfn-app" \
+    --set-string "fleetAuth.credentialEnv[2].secretRef.key=FLEET_AUTH_SESSION_PEPPER" \
+    --set-string "fleetAuth.credentialEnv[3].name=FLEET_AUTH_ASSERTION_PRIVATE_KEY" \
+    --set-string "fleetAuth.credentialEnv[3].secretRef.name=psfn-app" \
+    --set-string "fleetAuth.credentialEnv[3].secretRef.key=FLEET_AUTH_ASSERTION_PRIVATE_KEY" \
+    --set-string "fleetAuth.credentialEnv[4].name=FLEET_AUTH_RECOVERY_CREDENTIAL" \
+    --set-string "fleetAuth.credentialEnv[4].secretRef.name=psfn-app" \
+    --set-string "fleetAuth.credentialEnv[4].secretRef.key=FLEET_AUTH_RECOVERY_CREDENTIAL" \
+    --set-string "fleetAuth.credentialEnv[5].name=FLEET_AUTH_RUNTIME_DATABASE_URL" \
+    --set-string "fleetAuth.credentialEnv[5].secretRef.name=psfn-app" \
+    --set-string "fleetAuth.credentialEnv[5].secretRef.key=FLEET_AUTH_RUNTIME_DATABASE_URL" \
+    --set-string "fleetAuth.credentialEnv[6].name=FLEET_AUTH_MIGRATION_DATABASE_URL" \
+    --set-string "fleetAuth.credentialEnv[6].secretRef.name=psfn-app" \
+    --set-string "fleetAuth.credentialEnv[6].secretRef.key=FLEET_AUTH_MIGRATION_DATABASE_URL" \
+    --set-string "fleetAuth.credentialEnv[7].name=FLEET_AUTH_BACKUP_DATABASE_URL" \
+    --set-string "fleetAuth.credentialEnv[7].secretRef.name=psfn-app" \
+    --set-string "fleetAuth.credentialEnv[7].secretRef.key=FLEET_AUTH_BACKUP_DATABASE_URL" \
+    --set-string "fleetAuth.credentialEnv[8].name=FLEET_AUTH_AUTHORITY_FLOOR_ROOT" \
+    --set-string "fleetAuth.credentialEnv[8].secretRef.name=psfn-app" \
+    --set-string "fleetAuth.credentialEnv[8].secretRef.key=FLEET_AUTH_AUTHORITY_FLOOR_ROOT" \
     --set identity.seedStarterCard=false \
     --set bootstrap.seedOwnerFiles=false \
     --set secrets.create=false \
@@ -400,6 +495,37 @@ derive_role_bound_tokens() {
   fi
 }
 
+prepare_fleet_auth_credentials() {
+  if ((RETAINED_FLEET_AUTH_OWNER)); then
+    FLEET_AUTH_DISCORD_CLIENT_SECRET_VALUE="$(<"${PRESERVED_FLEET_AUTH_SECRET_DIR}/FLEET_AUTH_DISCORD_CLIENT_SECRET")"
+    FLEET_AUTH_TOKEN_ENCRYPTION_KEY_VALUE="$(<"${PRESERVED_FLEET_AUTH_SECRET_DIR}/FLEET_AUTH_TOKEN_ENCRYPTION_KEY")"
+    FLEET_AUTH_SESSION_PEPPER_VALUE="$(<"${PRESERVED_FLEET_AUTH_SECRET_DIR}/FLEET_AUTH_SESSION_PEPPER")"
+    FLEET_AUTH_RECOVERY_CREDENTIAL_VALUE="$(<"${PRESERVED_FLEET_AUTH_SECRET_DIR}/FLEET_AUTH_RECOVERY_CREDENTIAL")"
+    FLEET_AUTH_RUNTIME_DATABASE_URL_VALUE="$(<"${PRESERVED_FLEET_AUTH_SECRET_DIR}/FLEET_AUTH_RUNTIME_DATABASE_URL")"
+    FLEET_AUTH_MIGRATION_DATABASE_URL_VALUE="$(<"${PRESERVED_FLEET_AUTH_SECRET_DIR}/FLEET_AUTH_MIGRATION_DATABASE_URL")"
+    FLEET_AUTH_BACKUP_DATABASE_URL_VALUE="$(<"${PRESERVED_FLEET_AUTH_SECRET_DIR}/FLEET_AUTH_BACKUP_DATABASE_URL")"
+    FLEET_AUTH_AUTHORITY_FLOOR_ROOT_VALUE="$(<"${PRESERVED_FLEET_AUTH_SECRET_DIR}/FLEET_AUTH_AUTHORITY_FLOOR_ROOT")"
+    if [[ "$FLEET_AUTH_AUTHORITY_FLOOR_ROOT_VALUE" != "/runtime/logs/fleet-auth-authority" ]]; then
+      echo "preserved fleet-auth authority floor must remain at /runtime/logs/fleet-auth-authority" >&2
+      exit 1
+    fi
+    return
+  fi
+
+  FLEET_AUTH_DISCORD_CLIENT_SECRET_VALUE="${FLEET_AUTH_DISCORD_CLIENT_SECRET:-$(random_secret)}"
+  FLEET_AUTH_TOKEN_ENCRYPTION_KEY_VALUE="$(random_secret)"
+  FLEET_AUTH_SESSION_PEPPER_VALUE="$(random_secret)"
+  FLEET_AUTH_RECOVERY_CREDENTIAL_VALUE="$(random_secret)"
+  FLEET_AUTH_RUNTIME_PASSWORD="$(random_secret)"
+  FLEET_AUTH_MIGRATION_PASSWORD="$(random_secret)"
+  FLEET_AUTH_BACKUP_PASSWORD="$(random_secret)"
+  local database_host="${RELEASE}-postgres"
+  local database_name="psfn"
+  FLEET_AUTH_RUNTIME_DATABASE_URL_VALUE="postgresql://fleet_auth_runtime:${FLEET_AUTH_RUNTIME_PASSWORD}@${database_host}:5432/${database_name}"
+  FLEET_AUTH_MIGRATION_DATABASE_URL_VALUE="postgresql://fleet_auth_migration:${FLEET_AUTH_MIGRATION_PASSWORD}@${database_host}:5432/${database_name}"
+  FLEET_AUTH_BACKUP_DATABASE_URL_VALUE="postgresql://fleet_auth_backup:${FLEET_AUTH_BACKUP_PASSWORD}@${database_host}:5432/${database_name}"
+}
+
 write_app_secret_env() {
   local path=$1
   chmod 600 "$path"
@@ -421,9 +547,54 @@ write_app_secret_env() {
     printf 'DEEPGRAM_API_KEY=%s\n' "${DEEPGRAM_API_KEY:-}"
     printf 'ELEVENLABS_API_KEY=%s\n' "${ELEVENLABS_API_KEY:-}"
     printf 'NTFY_TOKEN=%s\n' "${NTFY_TOKEN:-}"
+    printf 'FLEET_AUTH_DISCORD_CLIENT_SECRET=%s\n' "$FLEET_AUTH_DISCORD_CLIENT_SECRET_VALUE"
+    printf 'FLEET_AUTH_TOKEN_ENCRYPTION_KEY=%s\n' "$FLEET_AUTH_TOKEN_ENCRYPTION_KEY_VALUE"
+    printf 'FLEET_AUTH_SESSION_PEPPER=%s\n' "$FLEET_AUTH_SESSION_PEPPER_VALUE"
+    printf 'FLEET_AUTH_RECOVERY_CREDENTIAL=%s\n' "$FLEET_AUTH_RECOVERY_CREDENTIAL_VALUE"
+    printf 'FLEET_AUTH_RUNTIME_DATABASE_URL=%s\n' "$FLEET_AUTH_RUNTIME_DATABASE_URL_VALUE"
+    printf 'FLEET_AUTH_MIGRATION_DATABASE_URL=%s\n' "$FLEET_AUTH_MIGRATION_DATABASE_URL_VALUE"
+    printf 'FLEET_AUTH_BACKUP_DATABASE_URL=%s\n' "$FLEET_AUTH_BACKUP_DATABASE_URL_VALUE"
+    printf 'FLEET_AUTH_AUTHORITY_FLOOR_ROOT=%s\n' "$FLEET_AUTH_AUTHORITY_FLOOR_ROOT_VALUE"
     printf 'DISCORD_TOKEN=\n'
     printf 'DISCORD_BOT_ID=\n'
   } >"$path"
+}
+
+capture_preserved_fleet_auth_credentials() {
+  ((RESET_DATA == 0)) || return 0
+  local secret_json
+  secret_json="$(kubectl -n "$NAMESPACE" get secret psfn-app -o json 2>/dev/null || true)"
+  [[ -n "$secret_json" ]] || return 0
+  PRESERVED_FLEET_AUTH_SECRET_DIR="$PREPARED_ROOT/fleet-auth-preserved-secret"
+  mkdir -p "$PRESERVED_FLEET_AUTH_SECRET_DIR"
+  printf '%s' "$secret_json" | node -e '
+    const fs = require("node:fs");
+    const path = require("node:path");
+    const secret = JSON.parse(fs.readFileSync(0, "utf8"));
+    const outputDir = process.argv[1];
+    const required = [
+      "FLEET_AUTH_DISCORD_CLIENT_SECRET",
+      "FLEET_AUTH_TOKEN_ENCRYPTION_KEY",
+      "FLEET_AUTH_SESSION_PEPPER",
+      "FLEET_AUTH_ASSERTION_PRIVATE_KEY",
+      "FLEET_AUTH_RECOVERY_CREDENTIAL",
+      "FLEET_AUTH_RUNTIME_DATABASE_URL",
+      "FLEET_AUTH_MIGRATION_DATABASE_URL",
+      "FLEET_AUTH_BACKUP_DATABASE_URL",
+      "FLEET_AUTH_AUTHORITY_FLOOR_ROOT",
+    ];
+    for (const name of required) {
+      const encoded = secret.data?.[name];
+      if (typeof encoded !== "string" || encoded.length === 0) {
+        continue;
+      }
+      const decoded = Buffer.from(encoded, "base64");
+      if (decoded.length === 0) {
+        continue;
+      }
+      fs.writeFileSync(path.join(outputDir, name), decoded, { mode: 0o600 });
+    }
+  ' "$PRESERVED_FLEET_AUTH_SECRET_DIR"
 }
 
 create_local_app_secret() {
@@ -433,6 +604,7 @@ create_local_app_secret() {
   write_app_secret_env "$env_file"
   kubectl -n "$NAMESPACE" create secret generic psfn-app \
     --from-env-file="$env_file" \
+    --from-file="FLEET_AUTH_ASSERTION_PRIVATE_KEY=${FLEET_AUTH_ASSERTION_PRIVATE_KEY_FILE}" \
     --dry-run=client \
     -o yaml \
     | kubectl apply -f -
@@ -472,6 +644,8 @@ spec:
           mountPath: /target/companion-data
         - name: workspace
           mountPath: /target/workspace
+        - name: runtime
+          mountPath: /target/runtime
   volumes:
     - name: system-data
       persistentVolumeClaim:
@@ -482,8 +656,46 @@ spec:
     - name: workspace
       persistentVolumeClaim:
         claimName: ${RELEASE}-workspace
+    - name: runtime
+      persistentVolumeClaim:
+        claimName: ${RELEASE}-runtime
 YAML
   kubectl -n "$NAMESPACE" wait --for=condition=Ready "pod/${pod}" --timeout=180s
+}
+
+prepare_fleet_auth_authority_floor() {
+  local pod=$1
+  kubectl -n "$NAMESPACE" exec "$pod" -- sh -c '
+    set -eu
+    install -d -m 700 -o 999 -g 999 /target/runtime/logs/fleet-auth-authority
+  '
+}
+
+verify_fleet_auth_broker_key() {
+  local pod=$1
+  local private_fingerprint
+  local configured_fingerprint
+  private_fingerprint="$(node -e '
+    const crypto = require("node:crypto");
+    const fs = require("node:fs");
+    const privateKey = crypto.createPrivateKey(fs.readFileSync(process.argv[1], "utf8"));
+    const publicDer = crypto.createPublicKey(privateKey).export({ type: "spki", format: "der" });
+    process.stdout.write(crypto.createHash("sha256").update(publicDer).digest("base64url"));
+  ' "$FLEET_AUTH_ASSERTION_PRIVATE_KEY_FILE")"
+  configured_fingerprint="$(kubectl -n "$NAMESPACE" exec "$pod" -- node -e '
+    const crypto = require("node:crypto");
+    const fs = require("node:fs");
+    const owner = JSON.parse(fs.readFileSync("/target/system-data/fleet-auth.json", "utf8"));
+    const active = owner.verifierKeys?.filter((key) => key.status === "active") ?? [];
+    if (active.length !== 1) process.exit(1);
+    const publicDer = crypto.createPublicKey(active[0].publicKeyPem)
+      .export({ type: "spki", format: "der" });
+    process.stdout.write(crypto.createHash("sha256").update(publicDer).digest("base64url"));
+  ')"
+  if [[ -z "$private_fingerprint" || "$private_fingerprint" != "$configured_fingerprint" ]]; then
+    echo "fleet-auth broker private key does not match the retained fleet-auth.json active verifier" >&2
+    exit 1
+  fi
 }
 
 delete_seed_pod() {
@@ -495,6 +707,7 @@ seed_artemis_files() {
   local short=$1
   local pod=psfn-artemis-seed
   launch_seed_pod "$short" "$pod"
+  prepare_fleet_auth_authority_floor "$pod"
   kubectl -n "$NAMESPACE" exec "$pod" -- sh -c 'rm -rf /seed && mkdir -p /seed/system-data /seed/companion-data /seed/workspace'
   kubectl -n "$NAMESPACE" cp "${SEED_ROOT}/system-data/." "${pod}:/seed/system-data"
   kubectl -n "$NAMESPACE" cp "${SEED_ROOT}/companion-data/." "${pod}:/seed/companion-data"
@@ -511,20 +724,27 @@ seed_artemis_files() {
     test -f /target/system-data/settings.json
     test -f /target/system-data/models.json
     test -f /target/system-data/providers.json
+    test -f /target/system-data/companions.json
+    test -f /target/system-data/fleet-auth.json
     test -f /target/companion-data/companion.json
   '
+  verify_fleet_auth_broker_key "$pod"
   delete_seed_pod "$pod"
 }
 
 # Preserve-mode owner-file migration: keep every existing owner file exactly as
 # it is on the PVC and only add owner files that are newly required by the
 # current runtime (e.g. intake-policy.json) but absent from a PVC that predates
-# them. Existing mutable owners are never overwritten, and fleet-only owners
-# withheld by prepare_seed_root (single-companion mode) are never introduced.
+# them. Existing mutable owners are never overwritten.
 migrate_missing_owner_files() {
   local short=$1
   local pod=psfn-artemis-migrate
   launch_seed_pod "$short" "$pod"
+  prepare_fleet_auth_authority_floor "$pod"
+  local retained_fleet_auth_owner=0
+  if kubectl -n "$NAMESPACE" exec "$pod" -- test -f /target/system-data/fleet-auth.json; then
+    retained_fleet_auth_owner=1
+  fi
   kubectl -n "$NAMESPACE" exec "$pod" -- sh -c 'rm -rf /seed && mkdir -p /seed/system-data'
   kubectl -n "$NAMESPACE" cp "${SEED_ROOT}/system-data/." "${pod}:/seed/system-data"
   kubectl -n "$NAMESPACE" exec "$pod" -- sh -c '
@@ -540,7 +760,76 @@ migrate_missing_owner_files() {
       echo "seeded missing owner file: $name"
     done
   '
+  if ((retained_fleet_auth_owner)); then
+    local required_credential
+    for required_credential in \
+      FLEET_AUTH_DISCORD_CLIENT_SECRET \
+      FLEET_AUTH_TOKEN_ENCRYPTION_KEY \
+      FLEET_AUTH_SESSION_PEPPER \
+      FLEET_AUTH_ASSERTION_PRIVATE_KEY \
+      FLEET_AUTH_RECOVERY_CREDENTIAL \
+      FLEET_AUTH_RUNTIME_DATABASE_URL \
+      FLEET_AUTH_MIGRATION_DATABASE_URL \
+      FLEET_AUTH_BACKUP_DATABASE_URL \
+      FLEET_AUTH_AUTHORITY_FLOOR_ROOT; do
+      if [[ -z "$PRESERVED_FLEET_AUTH_SECRET_DIR" \
+        || ! -s "${PRESERVED_FLEET_AUTH_SECRET_DIR}/${required_credential}" ]]; then
+        echo "preserve mode retained fleet-auth.json but psfn-app lacks ${required_credential}" >&2
+        exit 1
+      fi
+    done
+    FLEET_AUTH_ASSERTION_PRIVATE_KEY_FILE="${PRESERVED_FLEET_AUTH_SECRET_DIR}/FLEET_AUTH_ASSERTION_PRIVATE_KEY"
+    RETAINED_FLEET_AUTH_OWNER=1
+  fi
+  verify_fleet_auth_broker_key "$pod"
   delete_seed_pod "$pod"
+}
+
+provision_fleet_auth_database_roles() {
+  if ((RETAINED_FLEET_AUTH_OWNER)); then
+    echo "    retaining existing fleet-auth database roles and credentials"
+    return
+  fi
+  local postgres_pod="${RELEASE}-postgres-0"
+  for password in \
+    "$FLEET_AUTH_RUNTIME_PASSWORD" \
+    "$FLEET_AUTH_MIGRATION_PASSWORD" \
+    "$FLEET_AUTH_BACKUP_PASSWORD"; do
+    if [[ ! "$password" =~ ^[0-9a-f]{64}$ ]]; then
+      echo "generated fleet-auth database password is not canonical 32-byte hex" >&2
+      exit 1
+    fi
+  done
+  kubectl -n "$NAMESPACE" wait --for=condition=Ready "pod/${postgres_pod}" --timeout=180s
+  {
+    cat <<'SQL'
+SELECT format('CREATE ROLE %I LOGIN NOINHERIT', role_name)
+FROM unnest(ARRAY[
+  'fleet_auth_runtime',
+  'fleet_auth_migration',
+  'fleet_auth_backup'
+]) AS roles(role_name)
+WHERE NOT EXISTS (
+  SELECT 1
+  FROM pg_roles
+  WHERE pg_roles.rolname = roles.role_name
+)
+\gexec
+SQL
+    printf "ALTER ROLE fleet_auth_runtime WITH LOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD '%s';\n" \
+      "$FLEET_AUTH_RUNTIME_PASSWORD"
+    printf "ALTER ROLE fleet_auth_migration WITH LOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD '%s';\n" \
+      "$FLEET_AUTH_MIGRATION_PASSWORD"
+    printf "ALTER ROLE fleet_auth_backup WITH LOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD '%s';\n" \
+      "$FLEET_AUTH_BACKUP_PASSWORD"
+    cat <<'SQL'
+GRANT CONNECT ON DATABASE psfn TO fleet_auth_runtime, fleet_auth_migration, fleet_auth_backup;
+GRANT CREATE ON DATABASE psfn TO fleet_auth_migration;
+GRANT CONNECT ON DATABASE psfn_restore_verify TO fleet_auth_migration, fleet_auth_backup;
+GRANT CREATE ON DATABASE psfn_restore_verify TO fleet_auth_migration;
+SQL
+  } | kubectl -n "$NAMESPACE" exec -i "$postgres_pod" -- \
+    psql --set=ON_ERROR_STOP=1 --username=psfn --dbname=postgres
 }
 
 start_port_forward() {
@@ -617,6 +906,7 @@ if ! k3d cluster list "$CLUSTER" >/dev/null 2>&1; then
   k3d cluster create "$CLUSTER" --servers 1 --agents 0 --wait
 fi
 kubectl config use-context "k3d-${CLUSTER}" >/dev/null
+capture_preserved_fleet_auth_credentials
 
 helm repo add jetstack https://charts.jetstack.io >/dev/null
 helm repo update jetstack >/dev/null
@@ -638,7 +928,6 @@ docker build --platform linux/amd64 \
 k3d image import "localhost/psfn-framework:${TAG}" -c "$CLUSTER"
 
 kubectl create namespace "$NAMESPACE" --dry-run=client -o yaml | kubectl apply -f - >/dev/null
-create_local_app_secret
 
 if ((RESET_DATA)); then
   echo "==> resetting local release data in namespace ${NAMESPACE}"
@@ -654,11 +943,8 @@ if ((RESET_DATA)); then
     --ignore-not-found --wait=true >/dev/null
 fi
 
-echo "==> installing PVCs and backing services with app replicas disabled"
+echo "==> installing PVCs, backing services, and fail-closed fleet workloads"
 helm_upgrade "$SHORT" "$FULL" \
-  --set workloads.agent.replicaCount=0 \
-  --set workloads.gateway.replicaCount=0 \
-  --set workloads.garden.replicaCount=0 \
   --timeout 10m >/dev/null
 
 if ((RESET_DATA)); then
@@ -669,13 +955,15 @@ else
   migrate_missing_owner_files "$SHORT"
 fi
 
+prepare_fleet_auth_credentials
+echo "==> provisioning local fleet-auth database roles"
+provision_fleet_auth_database_roles
+create_local_app_secret
+
 if ((RUN_PREFETCH)); then
   echo "==> prefetching local text-emotion model cache"
   kubectl -n "$NAMESPACE" delete job "${RELEASE}-model-prefetch" --ignore-not-found --wait=true >/dev/null
   helm_upgrade "$SHORT" "$FULL" \
-    --set workloads.agent.replicaCount=0 \
-    --set workloads.gateway.replicaCount=0 \
-    --set workloads.garden.replicaCount=0 \
     --set modelPrefetch.enabled=true \
     --timeout 10m >/dev/null
   kubectl -n "$NAMESPACE" wait --for=condition=complete "job/${RELEASE}-model-prefetch" --timeout=30m
@@ -689,7 +977,9 @@ helm_upgrade "$SHORT" "$FULL" \
   --set workloads.garden.replicaCount=1 \
   --timeout 10m >/dev/null
 
-kubectl -n "$NAMESPACE" rollout status deploy/psfn-agent --timeout=300s
+kubectl -n "$NAMESPACE" rollout status deployment \
+  --selector "psfn.io/companion-id=${COMPANION_ID},psfn.io/fleet-target=registered" \
+  --timeout=300s
 kubectl -n "$NAMESPACE" rollout status deploy/psfn-gateway --timeout=300s
 kubectl -n "$NAMESPACE" rollout status deploy/psfn-garden --timeout=300s
 

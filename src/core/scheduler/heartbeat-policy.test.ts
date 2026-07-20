@@ -21,13 +21,14 @@ describe('HeartbeatPolicyStore', () => {
 
   it('creates defaults when file does not exist', () => {
     const policy = store.load();
-    expect(policy.templates).toHaveLength(2);
-    expect(policy.version).toBe(8);
+    expect(policy.templates).toHaveLength(3);
+    expect(policy.version).toBe(9);
     expect(policy.updatedBy).toBe('system');
 
     const ids = policy.templates.map(t => t.id);
     expect(ids).toContain('daily-review');
     expect(ids).toContain('weekly-review');
+    expect(ids).toContain('mixed-state-review');
 
     // File should now exist
     expect(existsSync(join(tmpDir, 'heartbeat-policy.json'))).toBe(true);
@@ -151,7 +152,7 @@ describe('HeartbeatPolicyStore', () => {
     const loaded = store.load();
     const daily = loaded.templates.find(t => t.id === 'daily-review');
     const weekly = loaded.templates.find(t => t.id === 'weekly-review');
-    expect(loaded.version).toBe(8);
+    expect(loaded.version).toBe(9);
     expect(daily?.enabled).toBe(false);
     expect(daily?.cadence).toEqual({ kind: 'daily', hour: 7, minute: 0, timezone: 'local' });
     expect(daily?.prompt).toContain('quiet look back at the day');
@@ -180,7 +181,7 @@ describe('HeartbeatPolicyStore', () => {
     });
 
     const loaded = store.load();
-    expect(loaded.version).toBe(8);
+    expect(loaded.version).toBe(9);
     const daily = loaded.templates.find(t => t.id === 'daily-review');
     expect(daily?.prompt).toContain('I ask openly');
     expect(daily?.prompt).toContain('a real, limited-reach result');
@@ -205,7 +206,7 @@ describe('HeartbeatPolicyStore', () => {
     const loaded = store.load();
     const weekly = loaded.templates.find(t => t.id === 'weekly-review');
 
-    expect(loaded.version).toBe(8);
+    expect(loaded.version).toBe(9);
     expect(weekly?.name).toBe('Weekly Reflection');
     expect(weekly?.cadence).toEqual({
       kind: 'weekly',
@@ -323,7 +324,7 @@ describe('HeartbeatPolicyStore', () => {
     store.save({ templates: 'bad' as any, version: 1, updatedAt: '', updatedBy: '' });
     const policy = store.load();
     // Invalid templates (not an array) triggers default
-    expect(policy.templates).toHaveLength(2);
+    expect(policy.templates).toHaveLength(3);
   });
 
   it('restores defaults when persisted template intervals are invalid', () => {
@@ -348,7 +349,7 @@ describe('HeartbeatPolicyStore', () => {
     );
 
     const policy = store.load();
-    expect(policy.templates).toHaveLength(2);
+    expect(policy.templates).toHaveLength(3);
     expect(policy.version).toBe(99);
     expect(policy.updatedBy).toBe('system');
   });
@@ -376,7 +377,7 @@ describe('HeartbeatPolicyStore', () => {
     );
 
     const policy = store.load();
-    expect(policy.templates).toHaveLength(2);
+    expect(policy.templates).toHaveLength(3);
     expect(policy.version).toBe(99);
     expect(policy.updatedBy).toBe('system');
   });
@@ -414,7 +415,7 @@ describe('HeartbeatPolicyStore', () => {
     const loaded = store.load();
     const dailyReview = loaded.templates.find(t => t.id === 'daily-review');
     const weeklyReview = loaded.templates.find(t => t.id === 'weekly-review');
-    expect(loaded.templates.map(t => t.id)).toEqual(['daily-review', 'weekly-review']);
+    expect(loaded.templates.map(t => t.id)).toEqual(['daily-review', 'weekly-review', 'mixed-state-review']);
     expect(dailyReview?.cadence).toEqual({ kind: 'daily', hour: 6, minute: 0, timezone: 'local' });
     expect(weeklyReview?.cadence).toEqual({
       kind: 'weekly',
@@ -427,7 +428,7 @@ describe('HeartbeatPolicyStore', () => {
     const persisted = JSON.parse(readFileSync(policyPath, 'utf-8')) as { templates: ReflectionTemplate[] };
     const persistedDailyReview = persisted.templates.find(t => t.id === 'daily-review');
     const persistedWeeklyReview = persisted.templates.find(t => t.id === 'weekly-review');
-    expect(persisted.templates.map(t => t.id)).toEqual(['daily-review', 'weekly-review']);
+    expect(persisted.templates.map(t => t.id)).toEqual(['daily-review', 'weekly-review', 'mixed-state-review']);
     expect(persistedDailyReview?.cadence).toEqual({ kind: 'daily', hour: 6, minute: 0, timezone: 'local' });
     expect(persistedWeeklyReview?.cadence).toEqual({
       kind: 'weekly',
@@ -436,6 +437,111 @@ describe('HeartbeatPolicyStore', () => {
       minute: 0,
       timezone: 'local',
     });
+  });
+
+  it('registers a companion-editable mixed-state reflection template that passes validation', () => {
+    const policy = store.load();
+    const mixedState = policy.templates.find(t => t.id === 'mixed-state-review');
+    expect(mixedState).toBeDefined();
+    expect(mixedState!.name).toBe('Mixed-State Reflection');
+    // Registered and valid as an editable governed template (charter §8.7).
+    expect(validateTemplate(mixedState!, true)).toHaveLength(0);
+    // Disabled by default: a blind-cadence firing would manufacture a split even
+    // when nothing diverges. The live surface is the starter mixed-state note.
+    expect(mixedState!.enabled).toBe(false);
+    expect(mixedState!.sendToDiscord).toBe(false);
+    expect(mixedState!.internalStateInput).toBe(true);
+    // Invitation to explore, not resolve (charter §8.3); no raw machinery.
+    expect(mixedState!.prompt).toContain('my systems disagree');
+    expect(mixedState!.prompt).toContain('what might each side be responding to?');
+    expect(mixedState!.prompt).toContain('holding both at once is an honest result');
+    // Telemetry kept separate from the reflection narrative (same guard as the
+    // daily/weekly defaults): schema fields and classifier artifacts stay out.
+    expect(mixedState!.prompt).toContain('belongs in telemetry rather than my own words');
+    expect(mixedState!.prompt).not.toContain('provenance.kind');
+    expect(mixedState!.prompt).not.toContain('acac_self_report');
+  });
+
+  it('seeds the mixed-state reflection template into a store that predates it', () => {
+    const policyPath = join(tmpDir, 'heartbeat-policy.json');
+    writeFileSync(
+      policyPath,
+      JSON.stringify({
+        templates: [
+          {
+            id: 'daily-review',
+            name: 'Daily Reflection',
+            prompt: 'This is my own quiet look back at the day, long enough to pass validation.',
+            intervalMs: 24 * 60 * 60_000,
+            cadence: { kind: 'daily', hour: 6, minute: 0, timezone: 'local' },
+            enabled: true,
+            sendToDiscord: false,
+            internalStateInput: true,
+          },
+          {
+            id: 'weekly-review',
+            name: 'Weekly Reflection',
+            prompt: 'This is my own deeper look back across the week, long enough to pass validation.',
+            intervalMs: 7 * 24 * 60 * 60_000,
+            cadence: { kind: 'weekly', dayOfWeek: 0, hour: 7, minute: 0, timezone: 'local' },
+            enabled: true,
+            sendToDiscord: false,
+            internalStateInput: true,
+          },
+        ],
+        version: 8,
+        updatedAt: '2026-07-19T00:00:00.000Z',
+        updatedBy: 'system',
+      }),
+      'utf-8',
+    );
+
+    const loaded = store.load();
+    expect(loaded.templates.some(t => t.id === 'mixed-state-review')).toBe(true);
+    expect(loaded.version).toBe(9);
+    // Persisted, not just in-memory.
+    const persisted = JSON.parse(readFileSync(policyPath, 'utf-8')) as { templates: ReflectionTemplate[] };
+    expect(persisted.templates.some(t => t.id === 'mixed-state-review')).toBe(true);
+  });
+
+  it('does not resurrect a deliberately deleted mixed-state template at the current version', () => {
+    const policyPath = join(tmpDir, 'heartbeat-policy.json');
+    // A store already at the current prompt-policy version with the mixed-state
+    // template intentionally removed: the seed must respect that deletion.
+    writeFileSync(
+      policyPath,
+      JSON.stringify({
+        templates: [
+          {
+            id: 'daily-review',
+            name: 'Daily Reflection',
+            prompt: 'This is my own quiet look back at the day, long enough to pass validation.',
+            intervalMs: 24 * 60 * 60_000,
+            cadence: { kind: 'daily', hour: 6, minute: 0, timezone: 'local' },
+            enabled: true,
+            sendToDiscord: false,
+            internalStateInput: true,
+          },
+          {
+            id: 'weekly-review',
+            name: 'Weekly Reflection',
+            prompt: 'This is my own deeper look back across the week, long enough to pass validation.',
+            intervalMs: 7 * 24 * 60 * 60_000,
+            cadence: { kind: 'weekly', dayOfWeek: 0, hour: 7, minute: 0, timezone: 'local' },
+            enabled: true,
+            sendToDiscord: false,
+            internalStateInput: true,
+          },
+        ],
+        version: 9,
+        updatedAt: '2026-07-20T00:00:00.000Z',
+        updatedBy: 'agent',
+      }),
+      'utf-8',
+    );
+
+    const loaded = store.load();
+    expect(loaded.templates.some(t => t.id === 'mixed-state-review')).toBe(false);
   });
 
   it('removes legacy whisper defaults during consolidation', () => {
@@ -462,12 +568,12 @@ describe('HeartbeatPolicyStore', () => {
     );
 
     const loaded = store.load();
-    expect(loaded.templates.map(t => t.id)).toEqual(['daily-review', 'weekly-review']);
+    expect(loaded.templates.map(t => t.id)).toEqual(['daily-review', 'weekly-review', 'mixed-state-review']);
     expect(loaded.templates.some(t => t.id === 'whisper')).toBe(false);
     expect(loaded.templates.some(t => t.id === 'musing')).toBe(false);
 
     const persisted = JSON.parse(readFileSync(policyPath, 'utf-8')) as { templates: ReflectionTemplate[] };
-    expect(persisted.templates.map(t => t.id)).toEqual(['daily-review', 'weekly-review']);
+    expect(persisted.templates.map(t => t.id)).toEqual(['daily-review', 'weekly-review', 'mixed-state-review']);
   });
 });
 

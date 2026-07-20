@@ -225,9 +225,33 @@ describe('Garden fleet portal client', () => {
       expect.objectContaining({ credentials: 'include', cache: 'no-store' }),
     );
 
-    vi.mocked(fetch).mockResolvedValueOnce(new Response(null, { status: 503 }));
+    for (const status of [502, 503, 504]) {
+      vi.mocked(fetch).mockResolvedValueOnce(new Response(null, { status }));
+      await expect(fetchFleetCardDetails(companion)).resolves.toEqual({
+        adminTransport: 'down',
+      });
+    }
+  });
+
+  it('degrades a malformed successful admin response without failing the fleet view', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('<html>proxy response</html>', {
+      status: 200,
+      headers: { 'content-type': 'text/html' },
+    })));
+    const companion = {
+      companionId: COMPANION_A,
+      displayName: 'Canopy',
+      health: {
+        agentRpc: 'up' as const,
+        adminTransport: 'unknown' as const,
+        channels: 'up' as const,
+      },
+      posture: { status: 'unavailable' as const },
+      gardenPath: `/companions/${COMPANION_A}/garden`,
+    };
+
     await expect(fetchFleetCardDetails(companion)).resolves.toEqual({
-      adminTransport: 'down',
+      adminTransport: 'unknown',
     });
   });
 });

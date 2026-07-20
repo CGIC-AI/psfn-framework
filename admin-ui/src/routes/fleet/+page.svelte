@@ -137,9 +137,9 @@
         aria-label="Authorized companions"
       >
         {#each projection.companions as companion (companion.companionId)}
+          {@const details = cardDetails[companion.companionId]}
+          {@const health = resolveFleetCardHealth(companion, details)}
           <article class="card-garden flex min-h-64 flex-col p-5">
-            {@const details = cardDetails[companion.companionId]}
-            {@const health = resolveFleetCardHealth(companion, details)}
             <div class="flex items-start gap-3">
               {#if details?.avatarUrl}
                 <img

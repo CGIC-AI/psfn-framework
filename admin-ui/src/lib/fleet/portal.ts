@@ -201,7 +201,7 @@ export async function fetchFleetCardDetails(
       headers: { Accept: 'application/json' },
       ...(signal ? { signal } : {}),
     });
-    if (response.status === 502 || response.status === 503) {
+    if (response.status === 502 || response.status === 503 || response.status === 504) {
       return { adminTransport: 'down' };
     }
     if (!response.ok) return { adminTransport: 'unknown' };
@@ -221,8 +221,10 @@ export async function fetchFleetCardDetails(
     };
   } catch (error) {
     if (signal?.aborted) throw error;
-    if (error instanceof TypeError) {
-      // Browser fetch reports a network-level transport failure as TypeError.
+    if (error instanceof TypeError || error instanceof SyntaxError) {
+      // Browser fetch reports a network-level transport failure as TypeError;
+      // Response.json reports an unusable successful payload as SyntaxError.
+      // Neither proves the companion transport is down.
       return { adminTransport: 'unknown' };
     }
     throw error;

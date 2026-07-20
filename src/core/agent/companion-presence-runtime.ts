@@ -14,6 +14,7 @@ import {
   type CoPresentCompanion,
   type SituatedPlaceRef,
 } from './substrate-agent/runtime-context-sections/situated-presence.js';
+import { classifyTurnPresenceMode } from './substrate-agent/runtime-context-sections/turn-presence-mode.js';
 
 // ── Cross-companion presence runtime (sprint 10, W5a) ──
 //
@@ -65,10 +66,11 @@ export interface CompanionPresenceTurnPort {
    * the turn; failures are logged at error level (not swallowed silently).
    *
    * Dual presence (vinz.29): `situatedFallbackPlaceId` is the turn's resolved
-   * situated fallback (mindspace twin of the last-known physical room, or a
-   * deliberate virtual-move overlay). It is honored only when the turn itself
-   * carries no place AND the fallback resolves to a VIRTUAL place — a
-   * mindspace-foregrounded turn is presence (kind 'virtual') at that twin. A
+   * situated fallback (session assertion twin, last-known physical room's
+   * twin, or a deliberate virtual-move overlay). It is honored only when the turn itself
+   * carries no place, the origin classifies as mindspace, AND the fallback
+   * resolves to a VIRTUAL place — a mindspace-foregrounded turn is presence
+   * (kind 'virtual') at that twin. A
    * physical fallback is never written: physical arrivals require the turn's
    * own satellite binding (a plain-chat turn must not look like walking into
    * a physical room).
@@ -171,8 +173,8 @@ export class CompanionPresenceRuntime implements CompanionPresenceTurnPort {
 
   async observeTurnPlace(message: SubstrateMessage, situatedFallbackPlaceId?: string): Promise<void> {
     // The turn's OWN binding always wins (physical satellite turns). The
-    // fallback is consulted only for placeless turns, and only a VIRTUAL
-    // fallback place is accepted: a mindspace turn is a genuine presence beat
+    // fallback is consulted only for placeless MINDSPACE turns, and only a
+    // VIRTUAL fallback place is accepted: a mindspace turn is a genuine presence beat
     // at the twin (kind 'virtual'), while a physical fallback (active
     // emanation with no twin configured) is deliberately dropped — a plain
     // chat turn must never register as an arrival at a physical room.
@@ -180,7 +182,11 @@ export class CompanionPresenceRuntime implements CompanionPresenceTurnPort {
     const fallbackPlace = !turnPlace && situatedFallbackPlaceId
       ? resolveSituatedPlaceRef(message, this.placesRegistry, situatedFallbackPlaceId)
       : undefined;
-    const place = turnPlace ?? (fallbackPlace?.kind === 'virtual' ? fallbackPlace : undefined);
+    const place = turnPlace ?? (
+      classifyTurnPresenceMode(message) === 'mindspace' && fallbackPlace?.kind === 'virtual'
+        ? fallbackPlace
+        : undefined
+    );
     if (!place) return;
     try {
       const record = await this.store.upsertPresence({

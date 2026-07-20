@@ -12,10 +12,8 @@
 // registry is supplied) is a node inside that place.
 //
 // Twin/overlap links between a physical place and its virtual twin render ONLY
-// when a twin field is present on the place config. This is forward-compatible
-// with vinz.29's future `twinOf`/`mirrorsPlaceId`: the field is PROBED
-// defensively and the current schema declares none, so today no twin links
-// render. This module never adds the twin field to the schema.
+// from the canonical, validated `mirrorsPlaceId` owner-file field. Unknown or
+// retired aliases never create inferred topology.
 //
 // Fail-closed: malformed top-level input throws; a valid-but-EMPTY registry
 // renders a single "no places configured" node (never invalid Mermaid). All ids
@@ -34,13 +32,6 @@ import type {
   SatelliteConfig,
   SatelliteRegistryConfig,
 } from '../../shared/contracts/satellite-registry.js';
-
-/**
- * Place-level fields probed for a physical↔virtual twin binding. Forward-
- * compatible with vinz.29 (`twinOf` / `mirrorsPlaceId`). The current schema
- * declares none of these; they are read defensively off the raw object.
- */
-const TWIN_PLACE_FIELDS = Object.freeze(['twinOf', 'mirrorsPlaceId'] as const);
 
 const CLASS_DEF_LINES = Object.freeze([
   'classDef perceiver fill:#e3f2fd,stroke:#1565c0,color:#0d47a1;',
@@ -115,19 +106,6 @@ function satelliteLabel(satellite: SatelliteConfig): string {
     sanitizeSegment(name),
     sanitizeSegment(satellite.mobility),
   ]);
-}
-
-function probeTwinTargets(place: PlaceConfig): string[] {
-  const raw = place as unknown as Record<string, unknown>;
-  const targets: string[] = [];
-  for (const field of TWIN_PLACE_FIELDS) {
-    const value = raw[field];
-    if (typeof value === 'string') {
-      const trimmed = value.trim();
-      if (trimmed) targets.push(trimmed);
-    }
-  }
-  return targets;
 }
 
 interface RenderState {
@@ -273,17 +251,16 @@ export function renderPlacesMermaid(
     lines.push('  end');
   }
 
-  // Twin/overlap links — rendered ONLY when a probed twin field resolves to a
-  // known place. Deduplicated and stable-sorted (undirected pair key).
+  // Twin/overlap links — rendered ONLY when canonical `mirrorsPlaceId`
+  // resolves to a known place. Deduplicated and stable-sorted.
   const twinPairs = new Set<string>();
   for (const place of sortedPlaces) {
     const sourceNodeId = placeNodeIdByPlaceId.get(place.placeId)!;
-    for (const targetPlaceId of probeTwinTargets(place)) {
-      const targetNodeId = placeNodeIdByPlaceId.get(targetPlaceId);
-      if (!targetNodeId || targetNodeId === sourceNodeId) continue;
-      const [a, b] = [sourceNodeId, targetNodeId].sort();
-      twinPairs.add(`${a}|${b}`);
-    }
+    if (!place.mirrorsPlaceId) continue;
+    const targetNodeId = placeNodeIdByPlaceId.get(place.mirrorsPlaceId);
+    if (!targetNodeId || targetNodeId === sourceNodeId) continue;
+    const [a, b] = [sourceNodeId, targetNodeId].sort();
+    twinPairs.add(`${a}|${b}`);
   }
   const twinLinkLines = [...twinPairs].sort().map((pair) => {
     const [a, b] = pair.split('|');

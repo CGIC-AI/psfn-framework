@@ -26,6 +26,7 @@ import type {
 import type { CompanionPresenceMetadata } from '../../presence-metadata.js';
 import { wrapPromptSectionXml } from '../../../identity/prompt-sections.js';
 import type { SituatedEmanationTracker } from './situated-emanation.js';
+import { classifyTurnPresenceMode } from './turn-presence-mode.js';
 
 /**
  * A co-present companion sharing this place. Multi-companion W5 will populate
@@ -59,10 +60,9 @@ export interface SituatedPresenceContextInput {
   /**
    * Dual-presence situated fallback for THIS turn (vinz.29), resolved by the
    * agent (`resolveSituatedFallbackPlaceIdForTurn`): deliberate virtual move →
-   * mindspace twin of the last-known physical room (plain-chat turns) →
-   * active physical emanation. When present it outranks the tracker's own
-   * fallback so mindspace turns foreground the TWIN place; the turn's own
-   * bound place still outranks it. Absent ⇒ tracker fallback (B2 behavior).
+   * session assertion twin → mindspace twin of the last-known physical room
+   * for plain-chat turns; physical-origin turns may fall back to the active
+   * emanation. The turn's own bound place always outranks it.
    */
   situatedFallbackPlaceId?: string;
   /**
@@ -182,6 +182,7 @@ export function resolveSituatedPlaceRef(
 export function buildSituatedPresenceContextBlock(input: SituatedPresenceContextInput): string {
   const registry = input.placesRegistry;
   const tracker = input.emanationTracker;
+  const presenceMode = classifyTurnPresenceMode(input.message);
 
   // B2: fold this turn into the active-emanation tracker first, so a satellite
   // turn that establishes a place is remembered for later placeless turns.
@@ -189,14 +190,20 @@ export function buildSituatedPresenceContextBlock(input: SituatedPresenceContext
 
   // "Where am I right now" = the turn's own bound place/presence when it has
   // one (a satellite turn — physical always outranks), otherwise the
-  // dual-presence fallback resolved by the agent for this turn (vinz.29:
-  // deliberate virtual move → mindspace twin → physical emanation), otherwise
-  // the tracker's own fallback (B2). Fail closed: nothing resolvable → no
-  // fabrication.
+  // dual-presence fallback resolved by the agent for this turn (vinz.29),
+  // otherwise a mode-compatible tracker fallback. Mindspace turns may reuse a
+  // deliberate virtual move but never the physical emanation. Fail closed:
+  // nothing resolvable → no fabrication.
   const turnPlaceId = readSatellitePlaceId(input.message.routing?.satellite);
-  const turnPresence: CompanionPresenceMetadata | undefined = input.message.routing?.presence;
-  const placeId = turnPlaceId ?? input.situatedFallbackPlaceId ?? tracker?.resolvePlaceId();
-  const presence: CompanionPresenceMetadata | undefined = turnPresence ?? tracker?.resolvePresence();
+  const turnPresence: CompanionPresenceMetadata | undefined = presenceMode === 'physical'
+    ? input.message.routing?.presence
+    : undefined;
+  const trackerFallbackPlaceId = presenceMode === 'physical'
+    ? tracker?.resolvePlaceId()
+    : tracker?.resolveVirtualMovePlaceId();
+  const placeId = turnPlaceId ?? input.situatedFallbackPlaceId ?? trackerFallbackPlaceId;
+  const presence: CompanionPresenceMetadata | undefined = turnPresence
+    ?? (presenceMode === 'physical' ? tracker?.resolvePresence() : undefined);
   const place = resolvePlace(registry, placeId);
   const coPresent = input.coPresent ?? [];
 
@@ -221,7 +228,7 @@ export function buildSituatedPresenceContextBlock(input: SituatedPresenceContext
     // the shared-mindspace layer. Name it with the operator's character-facing
     // label (companion-data) when configured, defaulting to the place's own
     // displayName, and ground it against the mirrored physical room.
-    if (place.kind === 'virtual' && place.mirrorsPlaceId) {
+    if (presenceMode === 'mindspace' && place.kind === 'virtual' && place.mirrorsPlaceId) {
       const mirrored = resolvePlace(registry, place.mirrorsPlaceId);
       const spaceLabel = safeText(input.mindspaceLabel) || placeName;
       const mirroredName = mirrored

@@ -354,10 +354,10 @@ export function resolveAffordancesForPlace(
 
 /**
  * Fail-closed cross-registry check: every satellite that declares a static
- * `placeId` must resolve to a place in `places.json`. A bound placeId with an
- * absent or EMPTY places registry resolves nothing and therefore throws — this
- * single rule covers both unknown-placeId and missing-places.json. Satellites
- * with no `placeId` are unaffected (binding is opt-in and static-only).
+ * `placeId` must resolve to a PHYSICAL place in `places.json`. A bound placeId
+ * with an absent or EMPTY registry resolves nothing and therefore throws. A
+ * virtual target also throws because virtual presence comes from chat origin
+ * resolution, never from a device binding. Unbound satellites are unaffected.
  *
  * Wire this at every entrypoint that loads both registries so agent and gateway
  * boot paths reject the same misconfiguration.
@@ -368,10 +368,17 @@ export function assertSatellitePlaceBindings(
 ): void {
   for (const satellite of satelliteRegistry.satellites) {
     if (satellite.placeId === undefined) continue;
-    if (!resolvePlaceById(placesRegistry, satellite.placeId)) {
+    const place = resolvePlaceById(placesRegistry, satellite.placeId);
+    if (!place) {
       throw new Error(
         `${SATELLITE_REGISTRY_FILE_NAME} satellite "${satellite.satelliteId}" binds to placeId `
         + `"${satellite.placeId}" which does not exist in ${PLACES_REGISTRY_FILE_NAME}`,
+      );
+    }
+    if (place.kind !== 'physical') {
+      throw new Error(
+        `${SATELLITE_REGISTRY_FILE_NAME} satellite "${satellite.satelliteId}" must bind to a physical place, `
+        + `but placeId "${satellite.placeId}" is ${place.kind}`,
       );
     }
   }

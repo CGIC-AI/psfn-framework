@@ -41,7 +41,16 @@ function bindingRequest(): FleetAuthLifecycleCeremonyRequest {
   };
 }
 
-function harness(options: { role?: string; contact?: boolean } = {}) {
+function harness(options: {
+  role?: string;
+  contact?: boolean;
+  accountRoster?: ReadonlyArray<{
+    providerSubjectId: string;
+    companionId: string;
+    role: 'owner' | 'admin' | 'member' | 'guest';
+  }>;
+  accountRosterSatisfiesStepUp?: boolean;
+} = {}) {
   const session = {
     record_id: SESSION_ID,
     principal_id: ACTOR_ID,
@@ -117,6 +126,10 @@ function harness(options: { role?: string; contact?: boolean } = {}) {
     jitStepUp: { startWebAuthn, consumeGrant },
     contactAuthority: { read },
     denialAudit: { record: recordDenial },
+    ...(options.accountRoster ? { accountRoster: options.accountRoster } : {}),
+    ...(options.accountRosterSatisfiesStepUp !== undefined
+      ? { accountRosterSatisfiesStepUp: options.accountRosterSatisfiesStepUp }
+      : {}),
     now: () => new Date('2026-07-16T22:00:00.000Z'),
   });
   return { service, startWebAuthn, consumeGrant, execute, read, recordDenial };
@@ -277,5 +290,83 @@ describe('gateway fleet-auth lifecycle ceremony', () => {
       role: 'member',
       target: expect.objectContaining({ principalId: TARGET_ID }),
     }));
+  });
+
+  describe('account roster step-up opt-in', () => {
+    const ownerEntry = {
+      providerSubjectId: SUBJECT,
+      companionId: COMPANION_ID,
+      role: 'owner' as const,
+    };
+
+    it('lets a rostered owner complete without consuming a WebAuthn grant when opted in', async () => {
+      const { service, consumeGrant, execute } = harness({
+        accountRoster: [ownerEntry],
+        accountRosterSatisfiesStepUp: true,
+      });
+      const result = await service.complete({
+        token: 'session-token',
+        requestOrigin: ORIGIN,
+        jitGrantId: randomUUID(),
+        request: bindingRequest(),
+      });
+      expect(consumeGrant).not.toHaveBeenCalled();
+      expect(execute).toHaveBeenCalledOnce();
+      expect(result.action).toBe('binding.activate');
+    });
+
+    it.each([
+      ['the opt-in is absent', { accountRoster: [ownerEntry] }],
+      ['the opt-in is explicitly off', {
+        accountRoster: [ownerEntry],
+        accountRosterSatisfiesStepUp: false,
+      }],
+      ['the session subject is not rostered', {
+        accountRoster: [{ ...ownerEntry, providerSubjectId: '999999999999999999' }],
+        accountRosterSatisfiesStepUp: true,
+      }],
+      ['the roster entry names a different companion', {
+        accountRoster: [{ ...ownerEntry, companionId: '00000000-0000-4000-8000-0000000000ff' }],
+        accountRosterSatisfiesStepUp: true,
+      }],
+      ['the rostered role is below owner', {
+        accountRoster: [{ ...ownerEntry, role: 'admin' as const }],
+        accountRosterSatisfiesStepUp: true,
+      }],
+    ] as const)('still consumes WebAuthn strong assurance when %s', async (_label, options) => {
+      const { service, consumeGrant } = harness({ ...options });
+      await service.complete({
+        token: 'session-token',
+        requestOrigin: ORIGIN,
+        jitGrantId: randomUUID(),
+        request: bindingRequest(),
+      });
+      expect(consumeGrant).toHaveBeenCalledOnce();
+    });
+
+    it('fails closed when strong assurance is required and the grant is not webauthn_uv', async () => {
+      const { service, consumeGrant, execute, recordDenial } = harness({
+        accountRoster: [{ ...ownerEntry, providerSubjectId: '999999999999999999' }],
+        accountRosterSatisfiesStepUp: true,
+      });
+      consumeGrant.mockResolvedValueOnce({
+        grantId: randomUUID(),
+        principalId: ACTOR_ID,
+        browserSessionId: SESSION_ID,
+        assurance: 'oauth' as never,
+        credentialFloorGeneration: 2,
+        expiresAt: new Date('2026-07-16T23:00:00.000Z'),
+      });
+      await expect(service.complete({
+        token: 'session-token',
+        requestOrigin: ORIGIN,
+        jitGrantId: randomUUID(),
+        request: bindingRequest(),
+      })).rejects.toMatchObject({ code: 'lifecycle_denied' });
+      expect(execute).not.toHaveBeenCalled();
+      expect(recordDenial).toHaveBeenCalledWith(expect.objectContaining({
+        reasonCode: 'strong_assurance_binding_changed',
+      }));
+    });
   });
 });

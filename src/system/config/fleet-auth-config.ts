@@ -55,6 +55,43 @@ export const FLEET_AUTH_ROLES = ['owner', 'admin', 'member', 'guest'] as const;
 export type FleetAuthRole = typeof FLEET_AUTH_ROLES[number];
 
 /**
+ * Operator-authored, admin-unconditional role assertion. A Discord-authenticated
+ * session whose token-verified subject matches an entry is granted the entry's
+ * role for the entry's companion directly from this owner file, bypassing the
+ * nested principal/binding/grant/child-authority consistency gauntlet. Subjects
+ * NOT in the roster keep the full gauntlet unchanged.
+ */
+export interface FleetAuthAccountRosterEntry {
+  providerSubjectId: string;
+  companionId: string;
+  role: FleetAuthRole;
+}
+
+/**
+ * Exact-match roster lookup. Returns an entry only when the provider is the
+ * real Discord provider, the subject is a well-formed snowflake string that
+ * strictly equals a rostered subject, and the companion matches exactly.
+ * Never matches on missing/null subjects; never partial-matches.
+ */
+export function findFleetAuthAccountRosterEntry(
+  accountRoster: readonly FleetAuthAccountRosterEntry[] | undefined,
+  provider: string | null | undefined,
+  providerSubjectId: string | null | undefined,
+  companionId: string,
+): FleetAuthAccountRosterEntry | undefined {
+  if (!accountRoster || accountRoster.length === 0) return undefined;
+  if (provider !== 'discord') return undefined;
+  if (typeof providerSubjectId !== 'string'
+    || !DISCORD_SNOWFLAKE_PATTERN.test(providerSubjectId)) {
+    return undefined;
+  }
+  if (typeof companionId !== 'string' || !isRfc4122Uuid(companionId)) return undefined;
+  return accountRoster.find(entry => (
+    entry.providerSubjectId === providerSubjectId && entry.companionId === companionId
+  ));
+}
+
+/**
  * Stable action vocabulary accepted by the persistence/config substrate.
  * Role evaluation is implemented by opl1.5; this owner file can only disable
  * members of this closed vocabulary and therefore cannot widen that policy.
@@ -187,6 +224,13 @@ export interface FleetAuthConfig {
     companionId: string;
     requiredRoleIds: string[];
   }>;
+  /** Optional admin-unconditional roster. Absent means no roster bypass exists. */
+  accountRoster?: FleetAuthAccountRosterEntry[];
+  /**
+   * Explicit opt-in: a rostered owner also satisfies webauthn_uv-class step-up
+   * for lifecycle ceremonies. Default off; invalid without a non-empty roster.
+   */
+  accountRosterSatisfiesStepUp?: boolean;
 }
 
 export interface FleetAuthVerifierConfig {
@@ -549,9 +593,32 @@ function parseMappings(value: unknown): FleetAuthConfig['discordEvidenceMappings
   });
 }
 
+function parseAccountRoster(value: unknown): FleetAuthAccountRosterEntry[] {
+  if (!Array.isArray(value)) fail('accountRoster must be an array');
+  const knownRoles = new Set<string>(FLEET_AUTH_ROLES);
+  const seen = new Set<string>();
+  return value.map((entry, index): FleetAuthAccountRosterEntry => {
+    const field = `accountRoster[${index}]`;
+    const record = requireRecord(entry, field);
+    requireExactKeys(record, ['providerSubjectId', 'companionId', 'role'], field);
+    const providerSubjectId = parseSnowflake(record.providerSubjectId, `${field}.providerSubjectId`);
+    const companionId = requireString(record.companionId, `${field}.companionId`);
+    if (!isRfc4122Uuid(companionId)) fail(`${field}.companionId must be a lowercase RFC-4122 UUID`);
+    if (typeof record.role !== 'string' || !knownRoles.has(record.role)) {
+      fail(`${field}.role must be one of ${FLEET_AUTH_ROLES.join(', ')}`);
+    }
+    const identity = `${providerSubjectId} ${companionId}`;
+    if (seen.has(identity)) {
+      fail(`duplicate accountRoster entry for subject and companion at ${field}`);
+    }
+    seen.add(identity);
+    return { providerSubjectId, companionId, role: record.role as FleetAuthRole };
+  });
+}
+
 export function validateFleetAuthConfig(value: unknown, sourcePath: string): FleetAuthConfig {
   const root = requireRecord(value, 'root');
-  requireExactKeys(root, [
+  const requiredRootKeys = [
     'schemaVersion',
     'activationGeneration',
     'canonicalOrigin',
@@ -564,8 +631,29 @@ export function validateFleetAuthConfig(value: unknown, sourcePath: string): Fle
     'ttls',
     'rolePolicy',
     'discordEvidenceMappings',
-  ], 'root');
+  ] as const;
+  assertNoUnknownKeys(
+    root,
+    [...requiredRootKeys, 'accountRoster', 'accountRosterSatisfiesStepUp'],
+    'root',
+    { errorPrefix: ERROR_PREFIX },
+  );
+  for (const key of requiredRootKeys) {
+    if (!Object.hasOwn(root, key)) fail(`root.${key} is required`);
+  }
   if (root.schemaVersion !== 1) fail('schemaVersion must be 1');
+
+  const accountRoster = Object.hasOwn(root, 'accountRoster')
+    ? parseAccountRoster(root.accountRoster)
+    : undefined;
+  if (Object.hasOwn(root, 'accountRosterSatisfiesStepUp')
+    && typeof root.accountRosterSatisfiesStepUp !== 'boolean') {
+    fail('accountRosterSatisfiesStepUp must be a boolean');
+  }
+  const accountRosterSatisfiesStepUp = root.accountRosterSatisfiesStepUp === true;
+  if (accountRosterSatisfiesStepUp && (!accountRoster || accountRoster.length === 0)) {
+    fail('accountRosterSatisfiesStepUp requires a non-empty accountRoster');
+  }
 
   const provider = requireRecord(root.provider, 'provider');
   requireExactKeys(provider, ['kind', 'clientId', 'scopes', 'clientSecretRef', 'tokenCustody'], 'provider');
@@ -644,6 +732,10 @@ export function validateFleetAuthConfig(value: unknown, sourcePath: string): Fle
     ttls: parseTtls(root.ttls),
     rolePolicy: parseRolePolicy(root.rolePolicy),
     discordEvidenceMappings,
+    ...(accountRoster !== undefined ? { accountRoster } : {}),
+    ...(Object.hasOwn(root, 'accountRosterSatisfiesStepUp')
+      ? { accountRosterSatisfiesStepUp }
+      : {}),
   };
 }
 

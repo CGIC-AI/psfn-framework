@@ -1,5 +1,7 @@
 import {
   FLEET_AUTH_ACTIONS,
+  findFleetAuthAccountRosterEntry,
+  type FleetAuthAccountRosterEntry,
   type FleetAuthAction,
   type FleetAuthConfig,
   type FleetAuthRole,
@@ -447,13 +449,100 @@ export function evaluateFleetAuthorizationSessionSnapshot(input: {
   return { decision: 'allow', session, subject };
 }
 
+/**
+ * Admin-unconditional roster path (operator decision, 2026-07-20).
+ *
+ * Grants the roster role directly from fleet-auth.json when — and only when —
+ * the request rides an AUTHENTICATED fleet browser session (its token digest
+ * matched exactly one stored session row minted by the real Discord OAuth
+ * flow) that is unrevoked, unreplaced, and unexpired, and the session's
+ * token-verified Discord subject exactly matches a roster entry for exactly
+ * the requested companion. It deliberately bypasses the principal/provider
+ * lifecycle states and the version/generation/epoch consistency gauntlet —
+ * those are the layers that repeatedly locked the operator out.
+ *
+ * It never denies: any non-match returns undefined so non-rostered subjects
+ * flow through the unchanged full gauntlet. Discord-evidence-gated requests
+ * also fall through — the roster does not vouch for guild evidence.
+ */
+export function evaluateAccountRosterAuthorization(input: {
+  request: FleetAuthorizationRequest;
+  snapshot: FleetAuthorizationSnapshot;
+  accountRoster: readonly FleetAuthAccountRosterEntry[] | undefined;
+  disabledActionsByRole: FleetAuthConfig['rolePolicy']['disabledActionsByRole'];
+  now: Date;
+}): Extract<FleetAuthorizationEvaluation, { decision: 'allow' }> | undefined {
+  const { request, snapshot, accountRoster, now } = input;
+  if (!accountRoster || accountRoster.length === 0) return undefined;
+  if (request.discordEvidence !== undefined) return undefined;
+  if (snapshot.sessions.length !== 1) return undefined;
+  const session = snapshot.sessions[0]!;
+  if (session.audience !== 'fleet') return undefined;
+  if (session.revokedAt !== null) return undefined;
+  if (session.replacedBy !== null) return undefined;
+  if (session.idleExpiresAt.getTime() <= now.getTime()
+    || session.absoluteExpiresAt.getTime() <= now.getTime()) return undefined;
+  const entry = findFleetAuthAccountRosterEntry(
+    accountRoster,
+    session.provider,
+    session.providerSubjectId,
+    request.companionId,
+  );
+  if (!entry) return undefined;
+  if (session.providerSubjectId !== entry.providerSubjectId) return undefined;
+  if (!fleetAuthRoleAllowsAction(entry.role, request.action)
+    || input.disabledActionsByRole[entry.role].includes(request.action)) {
+    return undefined;
+  }
+  return {
+    decision: 'allow',
+    facts: {
+      principalId: session.principalId,
+      providerSubjectId: entry.providerSubjectId,
+      companionId: entry.companionId,
+      contact: {
+        bindingId: `roster-binding-${entry.companionId}`,
+        contactId: `roster-contact-${entry.providerSubjectId}`,
+        bindingVersion: session.bindingVersion,
+      },
+      operator: {
+        grantId: `roster-grant-${entry.companionId}`,
+        role: entry.role,
+        grantVersion: session.grantVersion,
+      },
+      session: {
+        recordId: session.recordId,
+        audience: 'fleet',
+        assurance: session.assurance,
+        provider: 'discord',
+        providerSubjectId: entry.providerSubjectId,
+        authnVersion: session.authnVersion,
+        authzVersion: session.authzVersion,
+        bindingVersion: session.bindingVersion,
+        grantVersion: session.grantVersion,
+        policyVersion: session.policyVersion,
+      },
+      authority: { ...snapshot.authority },
+    },
+  };
+}
+
 export function evaluateFleetAuthorizationSnapshot(input: {
   request: FleetAuthorizationRequest;
   snapshot: FleetAuthorizationSnapshot;
   disabledActionsByRole: FleetAuthConfig['rolePolicy']['disabledActionsByRole'];
   now: Date;
+  accountRoster?: readonly FleetAuthAccountRosterEntry[];
 }): FleetAuthorizationEvaluation {
   const { request, snapshot, now } = input;
+  const rosterEvaluation = evaluateAccountRosterAuthorization({
+    request,
+    snapshot,
+    accountRoster: input.accountRoster,
+    disabledActionsByRole: input.disabledActionsByRole,
+    now,
+  });
+  if (rosterEvaluation) return rosterEvaluation;
   const sessionEvaluation = evaluateFleetAuthorizationSessionSnapshot({ snapshot, now });
   if (sessionEvaluation.decision === 'deny') return sessionEvaluation;
   const { session, subject } = sessionEvaluation;

@@ -100,6 +100,17 @@ export interface TurnSessionContextSnapshot {
   roomWindowFilteredEntryCount?: number;
   historySummaryText?: string;
   historySummaryEntryCount?: number;
+  /**
+   * Channel bonding (psfn-framework-vrmf): foreign entries interleaved into
+   * `recentEntries` from bonded member channels. Foreign entries carry a
+   * `channelBond` metadata marker and NEGATIVE ids (namespaced out of the
+   * target channel's id space). Absent when no bond was active.
+   */
+  bondedEntryCount?: number;
+  /** Bonded member channels that contributed interleaved entries. */
+  bondedMemberChannelIds?: string[];
+  /** Lowest-common privacy the active bond resolved to. */
+  bondedEffectivePrivacy?: string;
   compactionSummaryTexts: string[];
   focusKnowledgeTexts: string[];
   continuityEntries: SessionEntry[];

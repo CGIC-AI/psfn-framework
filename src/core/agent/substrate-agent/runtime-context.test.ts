@@ -1055,6 +1055,63 @@ describe('runtime subject identity', () => {
       continuitySubjectKey: 'contact-alex',
       continuityFallbackKeys: ['discord-user-1'],
     });
+    // No bonded identities -> no bond opt-in on the turn (default off).
+    expect(authorContext.channelBond).toBeUndefined();
+  });
+
+  it('activates the channel bond only when the current identity platform is bonded (psfn-framework-vrmf)', async () => {
+    const makeStore = (channels: Array<{ channel: string; userId: string; privacyLevel: string; bonded?: boolean }>) => ({
+      resolveChannelIdentity: () => ({
+        id: 'contact-alex',
+        displayName: 'Alex',
+        trustLevel: 'primary',
+        relationshipType: 'partner',
+        channels,
+        firstSeen: '2026-03-17T12:00:00Z',
+        lastSeen: '2026-03-17T12:00:00Z',
+      }),
+      getConversationChannelPrivacy: () => undefined,
+      updateLastSeen: () => undefined,
+      recordChannelActivity: () => undefined,
+      getEmotionalTimeSeries: () => [],
+    }) as never;
+    const resolve = (channels: Array<{ channel: string; userId: string; privacyLevel: string; bonded?: boolean }>) =>
+      resolveAuthorContext({
+        message: makeMessage({
+          channelId: 'discord:dm:alex',
+          channelType: 'discord',
+          authorId: 'discord-user-1',
+          authorName: 'Alex',
+        }),
+        contactStore: makeStore(channels),
+        logger: { warn: () => undefined, debug: () => undefined },
+        companionIdentityKey: DEFAULT_COMPANION_ID,
+        companionDisplayName: 'Companion',
+      });
+
+    // Explicitly bonded discord + telegram identities: current discord turn opts in.
+    const bonded = await resolve([
+      { channel: 'discord', userId: 'discord-user-1', privacyLevel: 'private', bonded: true },
+      { channel: 'telegram', userId: 'tg-777', privacyLevel: 'private', bonded: true },
+      { channel: 'api', userId: 'mobile', privacyLevel: 'private' },
+    ]);
+    expect(bonded.channelBond).toEqual({
+      bondedPlatforms: ['discord', 'telegram'],
+      trustLevel: 'primary',
+    });
+
+    // Only OTHER platforms bonded: the unbonded current surface never joins.
+    const currentUnbonded = await resolve([
+      { channel: 'discord', userId: 'discord-user-1', privacyLevel: 'private' },
+      { channel: 'telegram', userId: 'tg-777', privacyLevel: 'private', bonded: true },
+    ]);
+    expect(currentUnbonded.channelBond).toBeUndefined();
+
+    // No bonded flags at all: default off.
+    const noneBonded = await resolve([
+      { channel: 'discord', userId: 'discord-user-1', privacyLevel: 'private' },
+    ]);
+    expect(noneBonded.channelBond).toBeUndefined();
   });
 
   it('resolves a companion-lane peer as an ordinary contact and marks it machine-intelligence (W6)', async () => {

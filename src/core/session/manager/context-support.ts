@@ -28,6 +28,8 @@ import {
 import {
   filterSupersededTemporalWakeupRefreshers,
 } from '../session-lane-metadata.js';
+import { parseChannelBondEntryMarker } from '../channel-bond.js';
+import { INTAKE_FIREWALL_NOTICE_TEMPLATES } from '../../cogsec/intake-firewall-notice-templates.js';
 import { formatActiveDateTimeCompact, formatActiveWeekdayShort } from '../../../shared/time/active-timezone.js';
 
 const ARTIFACT_IMAGE_TOOL_NAMES = new Set(['selfie_create', 'generate_image']);
@@ -368,6 +370,21 @@ export function entriesToMessages(
         authorName: attribution.authorName,
         channelId: entry.originChannelId ?? entry.channelId,
       });
+    }
+    // Channel bonding (psfn-framework-vrmf): interleaved foreign entries are
+    // annotated with their source channel. The companion's own turns stay
+    // unannotated — a model that reads its past speech prefixed with source
+    // tags mimics the prefix into new replies (same live-leak class as the
+    // temporal stamps, psfn-framework-2x37.10); the source channels of its
+    // interleaved replies are carried by the surrounding annotated turns.
+    // When the prompt_assembly sink gate has WITHHELD this entry's content
+    // (content replaced by the firewall placeholder), the source-channel is
+    // suppressed too: a gated entry must disclose nothing about its origin,
+    // not even `[via <channel>]` on the placeholder.
+    const bondMarker = parseChannelBondEntryMarker(entry.metadata);
+    const contentWithheldByIntakeGate = entry.content === INTAKE_FIREWALL_NOTICE_TEMPLATES.withheldContent;
+    if (bondMarker && role !== 'assistant' && !contentWithheldByIntakeGate) {
+      content = `[via ${bondMarker.sourceChannelId}] ${content}`;
     }
     if (includeTrustTags) {
       if (isUntrustedVisibility(visibility)) {

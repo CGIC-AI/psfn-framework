@@ -68,6 +68,12 @@ interface ConversationChannelDeletePayload {
   channelId?: string;
 }
 
+interface ChannelBondingUpdate {
+  channel: string;
+  userId: string;
+  bonded: boolean;
+}
+
 interface ContactUpdatePayload {
   displayName?: string;
   nickname?: string;
@@ -77,6 +83,8 @@ interface ContactUpdatePayload {
   timezone?: unknown;
   isMachineIntelligence?: boolean;
   channelPrivacy?: ChannelPrivacyUpdate[];
+  /** Channel-bonding opt-in per linked channel identity (psfn-framework-vrmf). */
+  channelBonding?: ChannelBondingUpdate[];
   addChannel?: AddChannelLink;
 }
 
@@ -778,6 +786,29 @@ export class AdminContactsDataService implements AdminContactsService {
         if (!updated) {
           const target = normalizedChannelId ?? normalizedUserId ?? 'unknown';
           return { ok: false, message: `Unable to update privacy for ${normalizedChannel}:${target}` };
+        }
+      }
+    }
+
+    // Apply channel-bonding opt-in updates (psfn-framework-vrmf)
+    if (Array.isArray(payload.channelBonding)) {
+      for (const cb of payload.channelBonding) {
+        const normalizedChannel = typeof cb.channel === 'string' ? cb.channel.trim() : '';
+        const normalizedUserId = typeof cb.userId === 'string' ? cb.userId.trim() : '';
+        if (!normalizedChannel || !normalizedUserId) {
+          return { ok: false, message: 'channelBonding entries require channel and userId' };
+        }
+        if (typeof cb.bonded !== 'boolean') {
+          return { ok: false, message: 'channelBonding.bonded must be a boolean' };
+        }
+        if (!await contactStore.setChannelBonding(
+          contactId,
+          normalizedChannel,
+          normalizedUserId,
+          cb.bonded,
+          actor,
+        )) {
+          return { ok: false, message: `Unable to update bonding for ${normalizedChannel}:${normalizedUserId}` };
         }
       }
     }

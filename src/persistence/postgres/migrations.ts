@@ -717,12 +717,15 @@ export const POSTGRES_CONTACT_MIGRATIONS = [
     channel TEXT NOT NULL,
     channel_user_id TEXT NOT NULL,
     privacy_level TEXT NOT NULL DEFAULT 'invite_only',
+    bonded BOOLEAN NOT NULL DEFAULT FALSE,
     first_seen TEXT NOT NULL,
     last_seen TEXT NOT NULL,
     PRIMARY KEY (channel, channel_user_id)
   );
   `,
   `CREATE INDEX IF NOT EXISTS idx_contact_channel_ids_contact ON contact_channel_ids(contact_id);`,
+  // Channel bonding opt-in flag per contact channel identity (psfn-framework-vrmf).
+  `ALTER TABLE contact_channel_ids ADD COLUMN IF NOT EXISTS bonded BOOLEAN NOT NULL DEFAULT FALSE;`,
   `
   CREATE TABLE IF NOT EXISTS contact_channel_activity (
     contact_id TEXT NOT NULL REFERENCES contacts(id) ON DELETE CASCADE,

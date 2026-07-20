@@ -33,6 +33,11 @@ const IMAGE_ATTACHMENT_CLAIM_PATTERNS = [
   },
 ] as const;
 
+const IMAGE_ATTACHMENT_MARKER_REMOVAL_PATTERNS = [
+  /[\t ]?(?:\*{1,3}|_{1,3})\s*(?:image|photo|selfie)\s+(?:is\s+)?attached\s*(?:\*{1,3}|_{1,3})(?=\s|$)/giu,
+  /[\t ]?\[(?:image|photo|selfie)\s+(?:is\s+)?attached\](?=\s|$)/giu,
+] as const;
+
 export const MISSING_IMAGE_ATTACHMENT_CORRECTION =
   'I could not attach an image because no image tool completed successfully this turn. '
   + 'I need to call selfie_create or generate_image before saying an image is attached.';
@@ -65,7 +70,10 @@ export function healMissingImageAttachmentClaim(responseText: string): string {
         claim => claim.healing === 'marker' && claim.pattern.test(healedUnit),
       );
       if (!markerClaim) break;
-      healedUnit = healedUnit.replace(markerClaim.pattern, '').replace(/^[\t ]+/u, '');
+      healedUnit = IMAGE_ATTACHMENT_MARKER_REMOVAL_PATTERNS.reduce(
+        (text, pattern) => text.replace(pattern, ''),
+        healedUnit,
+      ).replace(/^[\t ]+/u, '');
       removedClaim = true;
     }
 
@@ -79,6 +87,7 @@ export function healMissingImageAttachmentClaim(responseText: string): string {
   });
 
   const healedResponse = healedUnits.map(unit => unit.responseText).join('');
+  if (hasImageAttachmentClaim(healedResponse)) return '';
   if (healedResponse.trim().length === 0) return '';
   const lastHealedUnit = healedUnits.at(-1);
   return lastHealedUnit?.removedEntireUnit === true ? healedResponse.trimEnd() : healedResponse;

@@ -99,6 +99,30 @@ describe('healMissingImageAttachmentClaim', () => {
     )).toBe('Fresh selfie, exactly like you asked for.');
   });
 
+  it.each([
+    ['*image attached* here you go *photo attached*', 'here you go'],
+    ['[image attached] enjoy [photo attached]', 'enjoy'],
+    ['*image attached* here [photo attached] you go', 'here you go'],
+  ])('removes every same-line marker while preserving intervening prose: %s', (
+    responseText,
+    expected,
+  ) => {
+    expect(healMissingImageAttachmentClaim(responseText)).toBe(expected);
+  });
+
+  it('removes every same-line marker while preserving trailing newline prose', () => {
+    expect(healMissingImageAttachmentClaim(
+      '*image attached* love you *photo attached*\nMore prose here.',
+    )).toBe('love you\nMore prose here.');
+  });
+
+  it('fails closed when a detected claim cannot be healed within a sentence unit', () => {
+    const responseText = '*image\nattached*';
+
+    expect(rejectsMissingImageAttachmentClaim({ responseText, attachmentCount: 0 })).toBe(true);
+    expect(healMissingImageAttachmentClaim(responseText)).toBe('');
+  });
+
   it('leaves replies without a detected claim byte-for-byte unchanged', () => {
     const responseText = '  I could not attach an image.\nThe written concept is still ready.  ';
 

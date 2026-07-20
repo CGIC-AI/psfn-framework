@@ -607,6 +607,7 @@ function createRuntime(params: {
     assertSelfModelRuntimeConfigured: vi.fn(),
     observeEmotionState: vi.fn(async () => null),
     getEmotionAppraisalChain: vi.fn(() => []),
+    getActiveConcernCount: vi.fn(() => 0),
     computeInternalStateForTurn: vi.fn(() => TEST_INTERNAL_STATE),
     computeMetacognitiveFlagsForTurn: vi.fn(() => []),
     triggerEmotionAppraisal: vi.fn(async () => undefined),
@@ -3678,6 +3679,11 @@ describe('handleMessageForTurn observer eval sidecar seam', () => {
         snapshot: TEST_EMOTION_SNAPSHOT,
         appraisalEntryCount: 0,
       },
+      coherenceContext: {
+        recentMirrorNoteCount: 0,
+        timeGapMs: null,
+        activeConcernCount: 0,
+      },
       metadata: {
         trustLevel: 'regular',
         speakerRole: 'user',
@@ -5859,6 +5865,10 @@ describe('handleMessageForTurn pre-response concurrency', () => {
   it('threads temporal retrieval mode through active memory refresh scheduling', async () => {
     const eventBus = new EventBus();
     const refreshActiveMemoryContext = vi.fn(async () => null);
+    const rolledOutSessionBoundary = {
+      sessionId: 'ch1',
+      beforeMs: Date.parse('2026-07-17T12:00:00.000Z'),
+    };
     const buildContext = vi.fn(async () => ({
       systemPrompt: 'System prompt',
       messages: [],
@@ -5866,7 +5876,18 @@ describe('handleMessageForTurn pre-response concurrency', () => {
     }));
     const runtime = createRuntime({
       eventBus,
-      sessionManager: {} as SessionManager,
+      sessionManager: {
+        captureTurnSessionContext: vi.fn(async (input: { channelId: string }) => ({
+          channelId: input.channelId,
+          recentEntries: [],
+          sourceEntryCount: 12,
+          rolledOutSessionBoundary,
+          compactionSummaryTexts: [],
+          focusKnowledgeTexts: [],
+          continuityEntries: [],
+          versionPointer: 'rolled-out-session-context',
+        })),
+      } as unknown as SessionManager,
       buildContext,
       scheduleAutoCompactionBetweenTurns: vi.fn(async () => undefined),
       awaitPendingAutoCompaction: vi.fn(async () => undefined),
@@ -5886,6 +5907,8 @@ describe('handleMessageForTurn pre-response concurrency', () => {
     expect(refreshActiveMemoryContext).toHaveBeenCalledWith(expect.objectContaining({
       contextText: 'what time is it?',
       channelId: 'ch1',
+      sessionChannelId: 'ch1',
+      rolledOutSessionBoundary,
       trustLevel: 'regular',
       channelMeta: {},
       canonicalContactId: 'contact-1',

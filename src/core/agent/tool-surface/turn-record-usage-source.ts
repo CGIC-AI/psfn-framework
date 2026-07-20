@@ -20,6 +20,7 @@ import { resolveModelUsageRange } from '../../../shared/telemetry/model-usage-ra
 import type { TurnRecord } from '../../../shared/contracts/runtime.js';
 import { isCanonicalFirstPartyToolName } from './registry.js';
 import type { ToolUsageStat } from './usage-ranking.js';
+import { resolveToolCallOutcome } from '../../../shared/contracts/tool-call-outcome.js';
 
 /** Window the evaluator aggregates over. `custom` is excluded (no explicit bounds). */
 export type ToolUsageWindow = Exclude<ModelUsageRange, 'custom'>;
@@ -96,7 +97,9 @@ interface MutableToolCounts {
 /**
  * Build a durable tool-usage aggregate from turn records. One bounded read per
  * channel (newest-first), filtered to the resolved window, counting each
- * canonical tool call as a success (default) or failure (`isError === true`).
+ * canonical tool call by its stable outcome. Only executed successes and
+ * execution failures feed the success/failure ranking; rejections and skips
+ * remain invocations without inflating runtime-failure counts.
  */
 export function createTurnRecordToolUsageSource(
   deps: TurnRecordToolUsageSourceDeps,
@@ -155,8 +158,10 @@ export function createTurnRecordToolUsageSource(
             toolCallsCounted += 1;
             const counts = perTool.get(toolName) ?? { invocations: 0, successes: 0, failures: 0 };
             counts.invocations += 1;
-            if (toolCall.isError === true) counts.failures += 1;
-            else counts.successes += 1;
+            const outcome = resolveToolCallOutcome(toolCall)
+              ?? (toolCall.isError === true ? 'execution_failure' : 'success');
+            if (outcome === 'execution_failure') counts.failures += 1;
+            if (outcome === 'success') counts.successes += 1;
             perTool.set(toolName, counts);
           }
         }

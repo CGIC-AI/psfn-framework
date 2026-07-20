@@ -113,7 +113,7 @@ const postgresContactSharedOperations: PostgresContactOperationMap = {
     const identities = await queryRows<ContactIdentityRow>(
       this.pool,
       `
-        SELECT contact_id, channel, channel_user_id, privacy_level, first_seen, last_seen
+        SELECT contact_id, channel, channel_user_id, privacy_level, bonded, first_seen, last_seen
         FROM contact_channel_ids
         WHERE contact_id = $1
         ORDER BY channel ASC, channel_user_id ASC

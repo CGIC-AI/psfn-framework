@@ -13,6 +13,8 @@ import { toErrorMessage } from '../../shared/utils/errors.js';
 import { createComponentLogger } from '../../shared/logger.js';
 import {
   CHANNEL_TYPES,
+  isToolCallErrorOutcome,
+  isToolCallOutcome,
   type ChannelType,
   type ParentTurnContinuationStop,
   type TurnID,
@@ -396,14 +398,32 @@ function parseTurnRecordToolCalls(value: unknown): TurnRecordToolCall[] {
 
     const toolName = parseRequiredString(entry.toolName, `toolCalls[${index}].toolName`);
     const toolCallId = entry.toolCallId;
+    const outcome = entry.outcome;
     const isError = entry.isError;
+    const resultText = entry.resultText;
+    if (outcome !== undefined && !isToolCallOutcome(outcome)) {
+      throw new Error(`TurnRecord field "toolCalls[${index}].outcome" is unsupported`);
+    }
+    if (
+      outcome !== undefined
+      && typeof isError === 'boolean'
+      && isError !== isToolCallErrorOutcome(outcome)
+    ) {
+      throw new Error(`TurnRecord fields "toolCalls[${index}].outcome" and "isError" conflict`);
+    }
 
     return {
       toolName,
       ...(typeof toolCallId === 'string' && toolCallId.trim().length > 0
         ? { toolCallId: toolCallId.trim() }
         : {}),
-      ...(typeof isError === 'boolean' ? { isError } : {}),
+      ...(outcome !== undefined ? { outcome } : {}),
+      ...(outcome !== undefined
+        ? { isError: isToolCallErrorOutcome(outcome) }
+        : typeof isError === 'boolean'
+          ? { isError }
+          : {}),
+      ...(typeof resultText === 'string' && resultText.length > 0 ? { resultText } : {}),
     };
   });
 }

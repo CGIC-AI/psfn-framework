@@ -142,6 +142,7 @@ describe('completed system-owner fleet migration owner evolution', () => {
       'trust-policy',
       'backup',
       'intake-policy',
+      'partner-affect-shadow',
     ]) {
       copyFileSync(join(seedDir, `${ownerFile}.seed.json`), join(systemDataDir, `${ownerFile}.json`));
     }

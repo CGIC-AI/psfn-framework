@@ -51,6 +51,10 @@ export const CONTINUITY_TOOL_CONTRACTS = {
     actions: [
       action('write', ['text', 'type'], ['importance', 'emotional_valence', 'confidence', 'tags', 'sensitivity', 'formation_vad']),
       action('search', ['query'], ['limit']),
+      action('get', ['episode_id'], ['limit', 'channel_id', 'trust_level', 'channel_visibility', 'canonical_contact_id'], {
+        id: 'get',
+        rule: 'expands the exact visible episode into journal-current source turns plus visible arc and thread siblings',
+      }),
       action('shared_background', ['contact_a', 'contact_b']),
       action('census', [], ['contact_id', 'scope_kind', 'scope_id', 'scope_tag', 'include_archived', 'channel_id', 'trust_level', 'channel_visibility', 'canonical_contact_id']),
       action('exists', ['query'], ['contact_id', 'scope_kind', 'scope_id', 'scope_tag', 'include_archived', 'channel_id', 'trust_level', 'channel_visibility', 'canonical_contact_id']),
@@ -61,9 +65,9 @@ export const CONTINUITY_TOOL_CONTRACTS = {
       action('delete', ['memory_id'], ['reason']),
       action('restore', ['delete_id']),
     ],
-    output: 'It returns exact memory, event, delete, or provenance identifiers instead of changing unrelated records silently.',
-    guidance: 'Do not use durable memory as a scratch file, journal, transcript index, or reference wiki.',
-    example: { action: 'search', query: 'the bakery we discussed', limit: 5 },
+    output: 'It returns exact memory, episode-turn, event, delete, or provenance identifiers instead of changing unrelated records silently.',
+    guidance: 'Use get only with an exact episode ID already surfaced by episodic retrieval. Do not use durable memory as a scratch file, journal, transcript index, or reference wiki.',
+    example: { action: 'get', episode_id: 'episode-id-from-a-landmark', limit: 8 },
   },
   scratchpad: {
     purpose: 'Keep temporary working notes and excerpts that may expire after the current day.',

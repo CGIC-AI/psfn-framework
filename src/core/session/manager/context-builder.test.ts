@@ -392,6 +392,10 @@ describe('orientation context surface wiring', () => {
 
   it('threads orientation telemetry into a dedicated runtime prompt section', () => {
     const builderSource = readFileSync(resolve('src/core/session/manager/context-builder.ts'), 'utf-8');
+    const continuityMetadataSource = readFileSync(
+      resolve('src/core/session/manager/continuity-metadata-block.ts'),
+      'utf-8',
+    );
     const manifestSource = readFileSync(resolve('src/shared/contracts/context-manifest-contracts.ts'), 'utf-8');
 
     expect(builderSource).toContain('buildOrientationNoteTelemetry');
@@ -399,12 +403,90 @@ describe('orientation context surface wiring', () => {
     expect(builderSource).toContain('captureTurnSessionContext');
     expect(builderSource).toContain('buildContinuityAnchorLines({');
     expect(builderSource).toContain('<continuity_anchor authority="companion_context"');
-    expect(builderSource).toContain('<cross_channel_continuity authority="retrieved_context"');
+    expect(builderSource).toContain('buildContinuityMetadataBlock(');
+    expect(continuityMetadataSource).toContain('<cross_channel_continuity authority="retrieved_context"');
     expect(builderSource).toContain("id: 'session.orientation'");
     expect(builderSource).toContain("id: 'session.cogsec_notices'");
     expect(builderSource).toContain("id: 'wake_orientation'");
     expect(manifestSource).toContain("| 'orientation'");
     expect(manifestSource).toContain("| 'cogsec_notices'");
+  });
+
+  it('renders cross-channel continuity as linked-channel metadata without message content', async () => {
+    const continuityEntries: SessionEntry[] = [
+      {
+        id: 1,
+        channelId: 'discord:linked-room',
+        originChannelId: 'discord:linked-room',
+        role: 'user',
+        content: 'PRIVATE_PARTNER_TEXT_MUST_NOT_RENDER',
+        authorId: 'contact-1',
+        timestamp: 1_700_000_000_000,
+        channelVisibility: 'private',
+      },
+      {
+        id: 2,
+        channelId: 'discord:linked-room',
+        originChannelId: 'discord:linked-room',
+        role: 'assistant',
+        content: 'PRIVATE_COMPANION_TEXT_MUST_NOT_RENDER',
+        timestamp: 1_700_000_001_000,
+        channelVisibility: 'private',
+      },
+      {
+        id: 3,
+        channelId: 'telegram:linked-chat',
+        originChannelId: 'telegram:linked-chat',
+        role: 'system',
+        content: 'PRIVATE_SYSTEM_TEXT_MUST_NOT_RENDER',
+        timestamp: 1_700_000_002_000,
+        channelVisibility: 'private',
+      },
+    ];
+    const context = await buildSessionContext({
+      channelId: 'api:main',
+      systemPrompt: 'System prompt.',
+      coreMemoryBlock: '',
+      memoriesBlock: '',
+      userId: 'contact-1',
+      continuityFallbackUserIds: [],
+      store: {
+        getRecent: () => [],
+        getCompactionSummaries: () => [],
+      } as never,
+      config: makeConfig(),
+      eventBus: null,
+      promptRegistry: null,
+      preCompactionExtractionHandler: null,
+      crossChannelContinuity: { getMerged: () => continuityEntries },
+      wakeReturnArtifacts: [],
+      turnSessionContext: {
+        channelId: 'api:main',
+        recentEntries: [],
+        sourceEntryCount: 0,
+        compactionSummaryTexts: [],
+        focusKnowledgeTexts: [],
+        continuityEntries,
+        versionPointer: 'test-continuity-metadata',
+      },
+    });
+
+    const continuitySection = context.systemPromptSections.find(
+      section => section.id === 'cross_channel_continuity',
+    );
+    expect(continuitySection?.content).toContain('<linked_channel_count>2</linked_channel_count>');
+    expect(continuitySection?.content).toContain('<channel_id>discord:linked-room</channel_id>');
+    expect(continuitySection?.content).toContain('<channel_id>telegram:linked-chat</channel_id>');
+    expect(continuitySection?.content).toContain('<last_cross_channel_message_at_iso>');
+    expect(continuitySection?.content).toContain('<message_count>2</message_count>');
+    expect(continuitySection?.content).toContain('<partner_message_count>1</partner_message_count>');
+    expect(continuitySection?.content).toContain('<companion_message_count>1</companion_message_count>');
+    expect(continuitySection?.content).not.toContain('PRIVATE_PARTNER_TEXT_MUST_NOT_RENDER');
+    expect(continuitySection?.content).not.toContain('PRIVATE_COMPANION_TEXT_MUST_NOT_RENDER');
+    expect(continuitySection?.content).not.toContain('PRIVATE_SYSTEM_TEXT_MUST_NOT_RENDER');
+    expect(continuitySection?.content).not.toContain('<item');
+    expect(continuitySection?.content).not.toContain('<speaker>');
+    expect(continuitySection?.content).not.toContain('<text>');
   });
 
   it('includes relevant safe CogSec notices without sealed refs or dirty text', async () => {
@@ -658,6 +740,17 @@ describe('orientation context surface wiring', () => {
       });
 
       expect(spanBound.entries.some(entry => entry.content === 'outside-old-01')).toBe(false);
+      expect(spanBound.rolledOutBeforeMs).toBe(currentAt - (36 * hourMs));
+      const entirelyRetained = collectRecentEntriesWithinHistorySpan({
+        store: {
+          getRecent: (_channelId: string, limit: number) => allEntries.slice(-10).slice(-limit),
+        },
+        channelId: 'api:main',
+        estimatedCount: 5,
+        maxHistorySpanMs: 36 * hourMs,
+        nowMs: currentAt,
+      });
+      expect(entirelyRetained.rolledOutBeforeMs).toBeUndefined();
 
       const complete = vi.fn<LLMProviderPort['complete']>().mockImplementation(async (context, purpose, options) => {
         expect(purpose).toBe('background');
@@ -712,6 +805,88 @@ describe('orientation context surface wiring', () => {
       });
       expect(assembled.messages[0]?.provenance?.sourceSpanCount).toBe(assembled.summarizedEntryCount);
       expect(assembled.messages.some(message => message.content.includes('m10xxxxx'))).toBe(true);
+    } finally {
+      tokenTestUtils.resetTokenizerState();
+    }
+  });
+
+  it('supersedes older time-of-day refreshers before history summarization and assembly', async () => {
+    tokenTestUtils.setTokenizerFactory(() => ({
+      encode: (text: string) => ({ length: text.length }),
+    }));
+    try {
+      const refresher = (id: number, label: string, timestamp: number): SessionEntry => ({
+        id,
+        channelId: 'api:main',
+        role: 'system',
+        content: `[Time-of-day refresher] ${label} frame.`,
+        authorId: 'system',
+        authorName: 'System',
+        timestamp,
+        metadata: JSON.stringify({
+          sessionLane: {
+            schemaVersion: 1,
+            kind: 'system_note',
+            source: 'temporal_wakeup_refresher',
+          },
+        }),
+      });
+      const conversational = (id: number): SessionEntry => ({
+        id,
+        channelId: 'api:main',
+        role: id % 2 === 0 ? 'user' : 'assistant',
+        content: `Conversation ${id} ${'context '.repeat(10)}`,
+        ...(id % 2 === 0
+          ? { authorId: 'u1', authorName: 'User' }
+          : { authorName: 'Companion' }),
+        timestamp: 1_700_000_000_000 + (id * 60_000),
+      });
+      const entries = [
+        refresher(1, 'First', 1_700_000_000_000),
+        conversational(2),
+        refresher(3, 'Second', 1_700_000_120_000),
+        conversational(4),
+        refresher(5, 'Third', 1_700_000_240_000),
+        conversational(6),
+        conversational(7),
+        conversational(8),
+        conversational(9),
+        conversational(10),
+        conversational(11),
+        // Append order, not a corrected wall clock, defines the latest firing.
+        refresher(12, 'Latest', 1_699_999_940_000),
+      ];
+      const complete = vi.fn<LLMProviderPort['complete']>().mockImplementation(async (context) => {
+        const summarySource = context.messages[0]?.content ?? '';
+        expect(summarySource).not.toContain('First frame.');
+        expect(summarySource).not.toContain('Second frame.');
+        expect(summarySource).not.toContain('Third frame.');
+        return {
+          content: 'The conversation remained coherent.',
+          model: 'test',
+          inputTokens: 0,
+          outputTokens: 0,
+          toolCalls: [],
+          stopReason: 'end_turn',
+        };
+      });
+
+      const assembled = await assembleSessionHistoryForContextWithLlmSummary({
+        entries,
+        channelVisibility: 'private',
+        renderGroupUserAttribution: false,
+        tokenBudget: 600,
+        channelId: 'api:main',
+        llmProvider: makeSummaryProvider(complete),
+        promptRegistry: null,
+      });
+
+      expect(complete).toHaveBeenCalledTimes(1);
+      const rendered = assembled.messages.map(message => message.content).join('\n');
+      expect(rendered.match(/Latest frame\./gu)).toHaveLength(1);
+      expect(rendered).not.toContain('First frame.');
+      expect(rendered).not.toContain('Second frame.');
+      expect(rendered).not.toContain('Third frame.');
     } finally {
       tokenTestUtils.resetTokenizerState();
     }

@@ -9,6 +9,7 @@ import { BACKUP_FILE_NAME } from './backup-config.js';
 import { CAPABILITY_TIER_FILE_NAME } from './capability-tier-config.js';
 import { CHARGE_POLICY_FILE_NAME } from './charge-policy-config.js';
 import { INTAKE_POLICY_FILE_NAME } from './intake-policy-config.js';
+import { PARTNER_AFFECT_SHADOW_FILE_NAME } from './partner-affect-shadow-config.js';
 import { MODELS_FILE_NAME } from './models-config.js';
 import { PROVIDERS_FILE_NAME } from './providers-config.js';
 import { SCHEDULER_FILE_NAME } from './scheduler-config.js';
@@ -42,6 +43,7 @@ export type SettingsSubsystemId =
   | 'skills'
   | 'trustPolicy'
   | 'intakePolicy'
+  | 'partnerAffectShadow'
   | 'backup'
   | 'channels';
 
@@ -168,6 +170,12 @@ export const SETTINGS_SUBSYSTEMS: Record<SettingsSubsystemId, SettingsContractSu
     ownerFile: INTAKE_POLICY_FILE_NAME,
     mode: 'raw_only',
     scope: ownerFileScope(INTAKE_POLICY_FILE_NAME),
+  },
+  partnerAffectShadow: {
+    id: 'partnerAffectShadow',
+    ownerFile: PARTNER_AFFECT_SHADOW_FILE_NAME,
+    mode: 'raw_only',
+    scope: ownerFileScope(PARTNER_AFFECT_SHADOW_FILE_NAME),
   },
   backup: {
     id: 'backup',

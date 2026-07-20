@@ -30,6 +30,7 @@ const startupOwnerSeeds = [
   ['backup.seed.json', 'backup.json'],
   ['skills.seed.json', 'skills.json'],
   ['intake-policy.seed.json', 'intake-policy.json'],
+  ['partner-affect-shadow.seed.json', 'partner-affect-shadow.json'],
 ] as const;
 
 /**

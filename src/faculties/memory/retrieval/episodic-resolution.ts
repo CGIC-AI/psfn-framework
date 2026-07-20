@@ -2,6 +2,7 @@ import type { ChannelDisclosureContext } from '../../../system/trust/policy.js';
 import type { TrustLevel } from '../../../system/trust/types.js';
 import type { MemoryRetrievalPolicy } from '../../../system/config/memory-retrieval-policy.js';
 import type { MemoryScopeQuery } from '../types.js';
+import type { RolledOutSessionBoundary } from '../../../core/session/rolled-out-session-boundary.js';
 import {
   cloneEpisodicRetrievalChain,
   retrieveEpisodicChains,
@@ -19,6 +20,7 @@ export async function resolveEpisodicChains(input: {
   request: {
     contextText: string;
     channelId: string;
+    rolledOutSessionBoundary?: RolledOutSessionBoundary;
     trustLevel: TrustLevel;
     channelDisclosure: ChannelDisclosureContext;
     canonicalContactId?: string;

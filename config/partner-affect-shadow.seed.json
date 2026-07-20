@@ -1,0 +1,22 @@
+{
+  "enabled": false,
+  "partnerContactId": null,
+  "staleAfterMs": 86400000,
+  "evidenceWindowMs": 259200000,
+  "minConfidence": 0.35,
+  "minIndependentFamilies": 2,
+  "conflictValueTolerance": 0.25,
+  "allowedSignalFamilies": [
+    "self_report",
+    "conversation",
+    "sleep",
+    "activity",
+    "presence",
+    "interaction_cadence",
+    "schedule_context"
+  ],
+  "directions": {},
+  "sources": [],
+  "maxRetainedObservations": 5000,
+  "policyRevision": "shadow-v1"
+}

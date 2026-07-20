@@ -163,6 +163,7 @@ import {
 } from './substrate-agent/runtime-context.js';
 import { SituatedEmanationTracker } from './substrate-agent/runtime-context-sections/situated-emanation.js';
 import { createVirtualRoomFollower, type VirtualRoomFollower } from './virtual-room-follow.js';
+import { installContextCoherenceMonitor } from './context-coherence-monitor.js';
 import { EmotionSelfModelRuntime } from './substrate-agent/emotion-self-model-runtime.js';
 import {
   handleMessageForTurn,
@@ -688,6 +689,10 @@ export class SubstrateAgent {
         this.agent.state.model as { contextWindow?: unknown } | undefined,
       ),
       companionId: this.config.companionId,
+    });
+    installContextCoherenceMonitor({
+      eventBus: this.eventBus,
+      getRecentSessionEntries: (channelId, limit) => this.sessionManager.getRecentMessages(channelId, limit),
     });
     this.toolRuntimeFacade = new ToolRuntimeFacade({
       config: this.config,

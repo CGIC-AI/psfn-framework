@@ -17,6 +17,8 @@ import type {
 } from './persistence.js';
 import type { ObserverLeverSnapshotInput } from './levers.js';
 import type { ObserverEvalInputPayload } from './types.js';
+import type { ContextCoherenceEvent } from '../../../shared/contracts/context-coherence.js';
+import { createTurnId } from '../../turns/id.js';
 
 describe('createObserverEvalSidecarRuntimeFromConfig', () => {
   it('keeps the observer detached when the sidecar is disabled', () => {
@@ -87,6 +89,26 @@ describe('createObserverEvalSidecarRuntimeFromConfig', () => {
     }, {})).toThrow(
       'observerEvalSidecar.persistence requires an explicit PostgreSQL database URL',
     );
+  });
+
+  it('fails closed when observer levers are enabled without the coherence event bus', () => {
+    expect(() => createObserverEvalSidecarRuntimeFromConfig({
+      observerEvalSidecar: {
+        ...createDefaultObserverEvalSidecarSettings(),
+        enabled: true,
+        adapter: {
+          kind: 'emosim_server',
+          serverUrl: 'http://127.0.0.1:9',
+          sessionLabel: 'observer-test',
+          agentName: 'observer',
+          includeWorldState: false,
+        },
+        levers: {
+          ...createDefaultObserverEvalSidecarLeverSettings(),
+          enabled: true,
+        },
+      },
+    }, {})).toThrow('observerEvalSidecar.levers requires the context-coherence event bus');
   });
 
   it('maps test persona deployment targets to the persistence deployment label', () => {
@@ -211,6 +233,78 @@ describe('ObserverEvalLeverStage', () => {
     });
     expect(errored).toBeDefined();
   });
+
+  it('joins fired rumination_watch telemetry to the context-coherence event stream', async () => {
+    const persistence = new FakeLeverPersistence();
+    const coherenceEvents: ContextCoherenceEvent[] = [];
+    const settings = createDefaultObserverEvalSidecarLeverSettings();
+    const stage = new ObserverEvalLeverStage({
+      settings: {
+        ...settings,
+        enabled: true,
+        wouldMessage: { ...settings.wouldMessage, enabled: false },
+        wouldCheckIn: { ...settings.wouldCheckIn, enabled: false },
+        wouldRest: { ...settings.wouldRest, enabled: false },
+        ruminationWatch: { ...settings.ruminationWatch, enabled: true },
+      },
+      persistence,
+      sidecarId: 'sidecar-test',
+      retentionDays: 14,
+      emitContextCoherence: event => {
+        coherenceEvents.push(event);
+        return Promise.resolve();
+      },
+    });
+    const snapshot: ObserverLeverSnapshotInput = {
+      t: 0,
+      mood: { valence: -0.2, arousal: 0.2 },
+      dominant: 'Sadness',
+      emotions: { Sadness: 0.5 },
+      drives: {},
+    };
+    const coherenceContext = {
+      channelId: 'api:test',
+      turnId: createTurnId(),
+      requestId: 'request-rumination',
+      sessionContext: {
+        recentMirrorNoteCount: 2,
+        timeGapMs: 60_000,
+        activeConcernCount: 3,
+      },
+    } as const;
+
+    await stage.evaluateObservation({
+      runId: 'run-1',
+      observationId: 'obs-rumination-1',
+      snapshot,
+      observedAtMs: NOW,
+      coherenceContext,
+    });
+    await stage.evaluateObservation({
+      runId: 'run-1',
+      observationId: 'obs-rumination-2',
+      snapshot,
+      observedAtMs: NOW + 45 * 60_000,
+      coherenceContext,
+    });
+
+    expect(coherenceEvents).toEqual([expect.objectContaining({
+      id: 'obs-rumination-2:concern_rumination',
+      signal: 'concern_rumination',
+      source: 'observer_eval',
+      channelId: 'api:test',
+      turnId: coherenceContext.turnId,
+      requestId: 'request-rumination',
+      detail: 'rumination_watch',
+      context: {
+        recentMirrorNoteCount: 2,
+        timeGapMs: 60_000,
+        activeConcernCount: 3,
+      },
+      eligibleForEmotionAppraisal: false,
+      eligibleForMemoryCandidacy: false,
+    })]);
+  });
 });
 
 function makeObservationError(recoverable: boolean) {
@@ -247,6 +341,11 @@ function makeObserverInput(): ObserverEvalInputPayload {
         confidence: 0.8,
       },
       appraisalEntryCount: 1,
+    },
+    coherenceContext: {
+      recentMirrorNoteCount: 0,
+      timeGapMs: null,
+      activeConcernCount: 0,
     },
     metadata: {
       trustLevel: 'regular',

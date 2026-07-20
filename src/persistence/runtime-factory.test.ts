@@ -37,6 +37,8 @@ const runtimeFactoryMocks = vi.hoisted(() => ({
   connectPostgresSocialPotStore: vi.fn(async () => runtimeFactoryMocks.postgresSocialPotStore),
   postgresSpeakingArbiterStore: { kind: 'postgres-speaking-arbiter-store' },
   connectPostgresSpeakingArbiterStore: vi.fn(async () => runtimeFactoryMocks.postgresSpeakingArbiterStore),
+  postgresPartnerAffectShadowStore: { kind: 'postgres-partner-affect-shadow-store' },
+  connectPostgresPartnerAffectShadowStore: vi.fn(async () => runtimeFactoryMocks.postgresPartnerAffectShadowStore),
   bootstrapPool: { end: vi.fn(async () => undefined) },
   createPostgresPool: vi.fn(() => runtimeFactoryMocks.bootstrapPool),
   ensurePostgresSchemaExists: vi.fn(async () => undefined),
@@ -125,6 +127,12 @@ vi.mock('./postgres/speaking-arbiter-store.js', () => ({
   },
 }));
 
+vi.mock('./postgres/partner-affect-shadow-store.js', () => ({
+  PostgresPartnerAffectShadowStore: {
+    connect: runtimeFactoryMocks.connectPostgresPartnerAffectShadowStore,
+  },
+}));
+
 vi.mock('./postgres.js', () => ({
   createPostgresPool: runtimeFactoryMocks.createPostgresPool,
   ensurePostgresSchemaExists: runtimeFactoryMocks.ensurePostgresSchemaExists,
@@ -148,6 +156,7 @@ beforeEach(() => {
   runtimeFactoryMocks.connectPostgresCompanionPresenceStore.mockClear();
   runtimeFactoryMocks.connectPostgresSocialPotStore.mockClear();
   runtimeFactoryMocks.connectPostgresSpeakingArbiterStore.mockClear();
+  runtimeFactoryMocks.connectPostgresPartnerAffectShadowStore.mockClear();
   runtimeFactoryMocks.createReflectionMetacognitionJournalStore.mockClear();
   runtimeFactoryMocks.connectPostgresInternalStateStore.mockClear();
   runtimeFactoryMocks.connectPostgresParticipantTrendStore.mockClear();
@@ -257,6 +266,7 @@ describe('createAgentPersistenceRuntime', () => {
       participantTrendStore: runtimeFactoryMocks.postgresParticipantTrendStore,
       scheduledPromptStore: runtimeFactoryMocks.postgresScheduledPromptStore,
       backgroundWorkStore: runtimeFactoryMocks.postgresBackgroundWorkStore,
+      partnerAffectShadowStore: runtimeFactoryMocks.postgresPartnerAffectShadowStore,
       introspectionLandmarkStore: expect.any(Object),
       weightedThoughtStore: undefined,
     });

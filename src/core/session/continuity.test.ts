@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { UserContinuityStore, parseContinuityEntryProvenance } from './continuity.js';
 import { SessionStore } from '../../persistence/sessions/store.js';
 import { SessionManager } from './manager.js';
+import { createUserContinuityPort } from './cross-channel-continuity-port.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import { DEFAULT_COMPANION_ID } from '../identity/companion-naming.js';
 import * as journalUtils from '../../persistence/journals/journal-utils.js';
@@ -34,6 +35,11 @@ function makeConfig(overrides?: Partial<SubstrateConfig>): SubstrateConfig {
     },
     ...overrides,
   };
+}
+
+function wireTestContinuity(manager: SessionManager, store: UserContinuityStore): void {
+  manager.continuityStore = store;
+  manager.crossChannelContinuity = createUserContinuityPort(store, () => true);
 }
 
 describe('UserContinuityStore', () => {
@@ -593,7 +599,7 @@ describe('SessionManager with continuity', () => {
 
   it('records user messages to both session and continuity store', () => {
     const mgr = new SessionManager(sessionStore, config);
-    mgr.continuityStore = continuityStore;
+    wireTestContinuity(mgr, continuityStore);
 
     mgr.recordUserMessage('ch1', 'Hello', 'user1', 'Alice');
 
@@ -608,7 +614,7 @@ describe('SessionManager with continuity', () => {
 
   it('records assistant messages to continuity store when forUserId is given', () => {
     const mgr = new SessionManager(sessionStore, config);
-    mgr.continuityStore = continuityStore;
+    wireTestContinuity(mgr, continuityStore);
 
     mgr.recordAssistantMessage('ch1', 'Hi there', 'user1');
 
@@ -623,7 +629,7 @@ describe('SessionManager with continuity', () => {
 
   it('does not record assistant messages to continuity when no forUserId', () => {
     const mgr = new SessionManager(sessionStore, config);
-    mgr.continuityStore = continuityStore;
+    wireTestContinuity(mgr, continuityStore);
 
     mgr.recordAssistantMessage('ch1', 'Hi there');
 
@@ -634,9 +640,9 @@ describe('SessionManager with continuity', () => {
     // (there's no userId to look up, so nothing recorded)
   });
 
-  it('buildContext includes cross-channel continuity in system prompt', async () => {
+  it('buildContext includes cross-channel linkage metadata without duplicating message content', async () => {
     const mgr = new SessionManager(sessionStore, config);
-    mgr.continuityStore = continuityStore;
+    wireTestContinuity(mgr, continuityStore);
 
     // Simulate activity in channel 1 (private — api: prefix)
     mgr.recordUserMessage('api:ch1', 'I like cats', 'user1', 'Alice');
@@ -649,8 +655,10 @@ describe('SessionManager with continuity', () => {
     const ctx = await mgr.buildContext('sillytavern:ch2', 'System prompt', '', undefined, 'user1');
 
     expect(ctx.systemPrompt).toContain('<cross_channel_continuity authority="retrieved_context"');
-    expect(ctx.systemPrompt).toContain('I like cats');
-    expect(ctx.systemPrompt).toContain('Me too!');
+    expect(ctx.systemPrompt).toContain('<channel_id>api:ch1</channel_id>');
+    expect(ctx.systemPrompt).toContain('<message_count>2</message_count>');
+    expect(ctx.systemPrompt).not.toContain('I like cats');
+    expect(ctx.systemPrompt).not.toContain('Me too!');
     // Should NOT contain the ch2 message in the continuity block (it's already in local)
     // but the ch2 entry will be in the continuity store, excluded by channelId
     expect(ctx.systemPrompt).not.toContain('<source>sillytavern:ch2</source>');
@@ -658,7 +666,7 @@ describe('SessionManager with continuity', () => {
 
   it('buildContext includes lower-sensitivity invite_only continuity in private channels', async () => {
     const mgr = new SessionManager(sessionStore, config);
-    mgr.continuityStore = continuityStore;
+    wireTestContinuity(mgr, continuityStore);
 
     mgr.recordUserMessage('1234567890', 'Guild follow-up', 'user1', 'Alice');
     mgr.recordAssistantMessage('1234567890', 'Guild response', 'user1');
@@ -667,14 +675,15 @@ describe('SessionManager with continuity', () => {
     const ctx = await mgr.buildContext('api:private-main', 'System prompt', '', undefined, 'user1');
 
     expect(ctx.systemPrompt).toContain('<cross_channel_continuity authority="retrieved_context"');
-    expect(ctx.systemPrompt).toContain('Guild follow-up');
-    expect(ctx.systemPrompt).toContain('Guild response');
-    expect(ctx.systemPrompt).not.toContain('<source>api:private-main</source>');
+    expect(ctx.systemPrompt).toContain('<channel_id>1234567890</channel_id>');
+    expect(ctx.systemPrompt).not.toContain('Guild follow-up');
+    expect(ctx.systemPrompt).not.toContain('Guild response');
+    expect(ctx.systemPrompt).not.toContain('<channel_id>api:private-main</channel_id>');
   });
 
   it('keeps heartbeat journals out of prompt-facing cross-channel continuity', async () => {
     const mgr = new SessionManager(sessionStore, config);
-    mgr.continuityStore = continuityStore;
+    wireTestContinuity(mgr, continuityStore);
     mgr.characterName = 'Companion';
 
     const heartbeatEntryId = mgr.recordAssistantMessage(
@@ -701,7 +710,7 @@ describe('SessionManager with continuity', () => {
 
   it('includes reflection continuity and orientation for bound reflection channels', async () => {
     const mgr = new SessionManager(sessionStore, config);
-    mgr.continuityStore = continuityStore;
+    wireTestContinuity(mgr, continuityStore);
     mgr.characterName = 'Companion';
     const previousAt = 1_700_000_000_000;
     const currentAt = previousAt + (4 * 60 * 60 * 1000);
@@ -795,7 +804,7 @@ describe('SessionManager with continuity', () => {
 
   it('buildContext works without userId (no continuity injection)', async () => {
     const mgr = new SessionManager(sessionStore, config);
-    mgr.continuityStore = continuityStore;
+    wireTestContinuity(mgr, continuityStore);
 
     // Add some continuity data
     continuityStore.append('user1', {
@@ -815,7 +824,7 @@ describe('SessionManager with continuity', () => {
 
   it('does not duplicate messages from current channel in continuity block', async () => {
     const mgr = new SessionManager(sessionStore, config);
-    mgr.continuityStore = continuityStore;
+    wireTestContinuity(mgr, continuityStore);
 
     // Record messages in api:ch1 only (private channel)
     mgr.recordUserMessage('api:ch1', 'Message in ch1', 'user1', 'Alice');
@@ -828,7 +837,7 @@ describe('SessionManager with continuity', () => {
 
   it('does not duplicate legacy continuity entries missing originChannelId', async () => {
     const mgr = new SessionManager(sessionStore, config);
-    mgr.continuityStore = continuityStore;
+    wireTestContinuity(mgr, continuityStore);
 
     continuityStore.append('user1', {
       channelId: 'api:ch1',
@@ -846,7 +855,7 @@ describe('SessionManager with continuity', () => {
 
   it('records Discord DM messages as private visibility via isDirectMessage flag', () => {
     const mgr = new SessionManager(sessionStore, config);
-    mgr.continuityStore = continuityStore;
+    wireTestContinuity(mgr, continuityStore);
 
     // Simulate Discord DM: numeric channelId + isDirectMessage=true
     mgr.recordUserMessage('1234567890', 'Hello from DM', 'user1', 'Alice', true);
@@ -858,7 +867,7 @@ describe('SessionManager with continuity', () => {
 
   it('records Discord guild messages as invite_only visibility', () => {
     const mgr = new SessionManager(sessionStore, config);
-    mgr.continuityStore = continuityStore;
+    wireTestContinuity(mgr, continuityStore);
 
     // Simulate Discord guild: numeric channelId + isDirectMessage=false
     mgr.recordUserMessage('1234567890', 'Hello from guild', 'user1', 'Alice', false);
@@ -870,7 +879,7 @@ describe('SessionManager with continuity', () => {
 
   it('records explicit channel privacy overrides into continuity visibility', () => {
     const mgr = new SessionManager(sessionStore, config);
-    mgr.continuityStore = continuityStore;
+    wireTestContinuity(mgr, continuityStore);
 
     // E3.3: adapters declare ChannelPrivacy only; the explicit 'public'
     // hint overrides the 'api:' private-prefix derived default.
@@ -891,7 +900,7 @@ describe('SessionManager with continuity', () => {
 
   it('stamps broadcast-prefix channels with the public privacy projection', () => {
     const mgr = new SessionManager(sessionStore, config);
-    mgr.continuityStore = continuityStore;
+    wireTestContinuity(mgr, continuityStore);
 
     // E3.3 broadcast split: a broadcast surface is channelPrivacy 'public'
     // plus the envelope flag; stored visibility stamps carry the privacy.
@@ -904,7 +913,7 @@ describe('SessionManager with continuity', () => {
 
   it('records assistant DM response as private visibility', () => {
     const mgr = new SessionManager(sessionStore, config);
-    mgr.continuityStore = continuityStore;
+    wireTestContinuity(mgr, continuityStore);
 
     mgr.recordAssistantMessage('1234567890', 'DM reply', 'user1', true);
 
@@ -915,7 +924,7 @@ describe('SessionManager with continuity', () => {
 
   it('buildContext for Discord DM includes private continuity from API channels', async () => {
     const mgr = new SessionManager(sessionStore, config);
-    mgr.continuityStore = continuityStore;
+    wireTestContinuity(mgr, continuityStore);
 
     mgr.recordUserMessage('api:ch1', 'Private API context', 'user1', 'Alice');
 
@@ -938,12 +947,13 @@ describe('SessionManager with continuity', () => {
     );
 
     expect(ctx.systemPrompt).toContain('<cross_channel_continuity authority="retrieved_context"');
-    expect(ctx.systemPrompt).toContain('Private API context');
+    expect(ctx.systemPrompt).toContain('<channel_id>api:ch1</channel_id>');
+    expect(ctx.systemPrompt).not.toContain('Private API context');
   });
 
   it('buildContext for Discord guild excludes private continuity from API channels', async () => {
     const mgr = new SessionManager(sessionStore, config);
-    mgr.continuityStore = continuityStore;
+    wireTestContinuity(mgr, continuityStore);
 
     mgr.recordUserMessage('api:ch1', 'Private API context', 'user1', 'Alice');
 
@@ -969,9 +979,9 @@ describe('SessionManager with continuity', () => {
     expect(ctx.systemPrompt).not.toContain('Private API context');
   });
 
-  it('includes channel origin labels in continuity block', async () => {
+  it('includes linked channel ids in continuity metadata', async () => {
     const mgr = new SessionManager(sessionStore, config);
-    mgr.continuityStore = continuityStore;
+    wireTestContinuity(mgr, continuityStore);
 
     // Use private-pattern channels so visibility filtering allows sharing
     mgr.recordUserMessage('api:dm-channel', 'Secret stuff', 'user1', 'Alice');
@@ -988,7 +998,9 @@ describe('SessionManager with continuity', () => {
     });
     const ctx = await mgr.buildContext('api:ch3', 'System prompt', '', undefined, 'user1');
 
-    expect(ctx.systemPrompt).toContain('<source>api:dm-channel</source>');
-    expect(ctx.systemPrompt).toContain('<source>api:other-channel</source>');
+    expect(ctx.systemPrompt).toContain('<channel_id>api:dm-channel</channel_id>');
+    expect(ctx.systemPrompt).toContain('<channel_id>api:other-channel</channel_id>');
+    expect(ctx.systemPrompt).not.toContain('Secret stuff');
+    expect(ctx.systemPrompt).not.toContain('Other talk');
   });
 });

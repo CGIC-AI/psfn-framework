@@ -12,6 +12,7 @@ import type { LLMProviderPort } from '../agent/contracts.js';
 import {
   createDisabledCrossChannelContinuityPort,
   createMissingCrossChannelContinuityPort,
+  createUserContinuityPort,
 } from './cross-channel-continuity-port.js';
 import {
   COMPACTION_SUMMARY_PROMPT_KEY,
@@ -89,6 +90,11 @@ function makeConfig(overrides?: Partial<SubstrateConfig>): SubstrateConfig {
     },
     ...overrides,
   };
+}
+
+function wireTestContinuity(manager: SessionManager, store: UserContinuityStore): void {
+  manager.continuityStore = store;
+  manager.crossChannelContinuity = createUserContinuityPort(store, () => true);
 }
 
 function makeMockLLM(): LLMProviderPort {
@@ -460,7 +466,7 @@ describe('SessionManager', () => {
     const currentAt = Date.parse('2026-06-11T08:30:00-04:00');
     const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(currentAt);
     const continuityStore = new UserContinuityStore(join(dir, 'continuity-orientation'));
-    mgr.continuityStore = continuityStore;
+    wireTestContinuity(mgr, continuityStore);
 
     try {
       store.append({
@@ -567,8 +573,9 @@ describe('SessionManager', () => {
       });
       const continuitySection = ctx.systemPromptSections.find(section => section.id === 'cross_channel_continuity');
       expect(continuitySection?.content).toContain('<cross_channel_continuity authority="retrieved_context"');
-      expect(continuitySection?.content).toContain('<source>api:side</source>');
-      expect(continuitySection?.content).toContain('<text>The visibility audit is still open in the side thread.</text>');
+      expect(continuitySection?.content).toContain('<channel_id>api:side</channel_id>');
+      expect(continuitySection?.content).toContain('<message_count>1</message_count>');
+      expect(continuitySection?.content).not.toContain('The visibility audit is still open in the side thread.');
       expect(continuitySection?.provenance).toMatchObject({
         kind: 'projection',
         safeAsPartnerSpeech: false,
@@ -585,7 +592,7 @@ describe('SessionManager', () => {
     const currentAt = previousAt + (4 * 60 * 60 * 1000);
     const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(currentAt);
     const continuityStore = new UserContinuityStore(join(dir, 'continuity-reflection'));
-    mgr.continuityStore = continuityStore;
+    wireTestContinuity(mgr, continuityStore);
 
     try {
       continuityStore.append('u1', {
@@ -658,7 +665,8 @@ describe('SessionManager', () => {
       expect(orientationSection?.content).toContain('Earlier reflection summary');
       const continuitySection = ctx.systemPromptSections.find(section => section.id === 'cross_channel_continuity');
       expect(continuitySection?.content).toContain('<cross_channel_continuity authority="retrieved_context"');
-      expect(continuitySection?.content).toContain('Earlier reflection summary');
+      expect(continuitySection?.content).toContain('<channel_id>internal:reflection:whisper</channel_id>');
+      expect(continuitySection?.content).not.toContain('Earlier reflection summary');
     } finally {
       nowSpy.mockRestore();
     }
@@ -739,7 +747,7 @@ describe('SessionManager', () => {
     const config = makeConfig({ dataDir: dir });
     const mgr = new SessionManager(store, config);
     const continuityStore = new UserContinuityStore(join(dir, 'continuity-public-filter'));
-    mgr.continuityStore = continuityStore;
+    wireTestContinuity(mgr, continuityStore);
     const previousAt = 1_700_000_000_000;
     const currentAt = previousAt + (4 * 60 * 60 * 1000);
     const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(currentAt);
@@ -2152,6 +2160,10 @@ describe('SessionManager', () => {
       });
       expect(liveContext.manifest?.budgets.sessionHistory.actualCount).toBe(liveContext.messages.length);
       expect(snapshotContext.messages).toEqual(liveContext.messages);
+      expect(snapshot.rolledOutSessionBoundary).toEqual({
+        sessionId: 'ch-span-window',
+        beforeMs: currentAt - (36 * hourMs),
+      });
     } finally {
       nowSpy.mockRestore();
     }
@@ -2549,7 +2561,7 @@ describe('SessionManager', () => {
     const config = makeConfig();
     const mgr = new SessionManager(store, config);
     const continuityStore = new UserContinuityStore(dir);
-    mgr.continuityStore = continuityStore;
+    wireTestContinuity(mgr, continuityStore);
 
     continuityStore.append('contact-canonical-1', {
       channelId: 'api:origin-1',
@@ -2590,18 +2602,19 @@ describe('SessionManager', () => {
       ['legacy-discord-id'],
     );
 
-    expect(ctx.systemPrompt).toContain('Canonical continuity message');
-    expect(ctx.systemPrompt).toContain('Legacy continuity message');
-    expect(ctx.systemPrompt).toContain('<source>api:origin-1</source>');
-    expect(ctx.systemPrompt).toContain('<source>api:origin-2</source>');
-    expect(ctx.systemPrompt).toContain('<source>api:origin-3</source>');
+    expect(ctx.systemPrompt).not.toContain('Canonical continuity message');
+    expect(ctx.systemPrompt).not.toContain('Legacy continuity message');
+    expect(ctx.systemPrompt).toContain('<linked_channel_count>3</linked_channel_count>');
+    expect(ctx.systemPrompt).toContain('<channel_id>api:origin-1</channel_id>');
+    expect(ctx.systemPrompt).toContain('<channel_id>api:origin-2</channel_id>');
+    expect(ctx.systemPrompt).toContain('<channel_id>api:origin-3</channel_id>');
   });
 
   it('buildContext reuses a captured turn snapshot when live session state drifts', async () => {
     const config = makeConfig();
     const mgr = new SessionManager(store, config);
     const continuityStore = new UserContinuityStore(join(dir, 'continuity-snapshot'));
-    mgr.continuityStore = continuityStore;
+    wireTestContinuity(mgr, continuityStore);
 
     mgr.recordUserMessage('api:main', 'snapshot message', 'u1', 'User');
     mgr.recordAssistantMessage('api:main', 'snapshot reply');
@@ -2631,7 +2644,9 @@ describe('SessionManager', () => {
     expect(ctx.messages.some(message => message.content.includes('snapshot message'))).toBe(true);
     expect(ctx.messages.some(message => message.content.includes('snapshot reply'))).toBe(true);
     expect(ctx.messages.some(message => message.content.includes('late drift'))).toBe(false);
-    expect(ctx.systemPrompt).toContain('snapshot continuity');
+    expect(ctx.systemPrompt).toContain('<channel_id>api:side</channel_id>');
+    expect(ctx.systemPrompt).toContain('<message_count>1</message_count>');
+    expect(ctx.systemPrompt).not.toContain('snapshot continuity');
     expect(ctx.systemPrompt).not.toContain('late continuity');
   });
 
@@ -2640,6 +2655,10 @@ describe('SessionManager', () => {
       sessionMirrorEnabled: true,
       sessionMirrorMaxChars: 80,
       sessionMirrorActiveWindowMs: 60_000,
+      sessionMirrorChannelOverrides: {
+        'api:source': true,
+        'api:target': true,
+      },
     });
     const mgr = new SessionManager(store, config);
     mgr.continuityStore = new UserContinuityStore(dir);
@@ -2682,6 +2701,10 @@ describe('SessionManager', () => {
     const config = makeConfig({
       sessionMirrorEnabled: true,
       sessionMirrorActiveWindowMs: 60_000,
+      sessionMirrorChannelOverrides: {
+        'api:source': true,
+        'api:target': true,
+      },
     });
     const mgr = new SessionManager(store, config);
     mgr.continuityStore = new UserContinuityStore(dir);
@@ -2714,6 +2737,10 @@ describe('SessionManager', () => {
     const config = makeConfig({
       sessionMirrorEnabled: true,
       sessionMirrorActiveWindowMs: 60_000,
+      sessionMirrorChannelOverrides: {
+        '1234567890': true,
+        'api:target': true,
+      },
     });
     const mgr = new SessionManager(store, config);
     mgr.continuityStore = new UserContinuityStore(dir);
@@ -2744,10 +2771,14 @@ describe('SessionManager', () => {
     expect(mirrors[0].content).toContain('Semi-private mirror candidate');
   });
 
-  it('supports global and per-channel mirror toggles', () => {
+  it('requires explicit channel-pair opt-in and respects global and per-channel mirror toggles', () => {
     const disabledConfig = makeConfig({
       sessionMirrorEnabled: false,
       sessionMirrorActiveWindowMs: 60_000,
+      sessionMirrorChannelOverrides: {
+        'api:source': true,
+        'api:target': true,
+      },
     });
     const disabledStore = new SessionStore(join(dir, 'mirrors-disabled'));
     const globallyDisabled = new SessionManager(disabledStore, disabledConfig);
@@ -2772,9 +2803,66 @@ describe('SessionManager', () => {
     );
     expect(disabledStore.getRecent('api:target', 10).some(entry => entry.metadata?.includes('"type":"mirror"'))).toBe(false);
 
+    const unconfiguredStore = new SessionStore(join(dir, 'mirrors-unconfigured'));
+    const unconfigured = new SessionManager(unconfiguredStore, makeConfig({
+      sessionMirrorEnabled: true,
+      sessionMirrorChannelOverrides: {},
+      sessionMirrorActiveWindowMs: 60_000,
+    }));
+    unconfigured.continuityStore = new UserContinuityStore(join(dir, 'mirrors-unconfigured'));
+
+    unconfigured.recordUserMessage(
+      'api:target',
+      'bootstrap',
+      'discord-user-1',
+      'Alice',
+      undefined,
+      'contact-1',
+      { trustLevel: 'primary' },
+    );
+    unconfigured.recordAssistantMessage(
+      'api:test-source',
+      'unconfigured test-channel message',
+      'discord-user-1',
+      undefined,
+      'contact-1',
+      { trustLevel: 'primary' },
+    );
+    expect(unconfiguredStore.getRecent('api:target', 10).some(entry => entry.metadata?.includes('"type":"mirror"'))).toBe(false);
+
+    const oneSidedStore = new SessionStore(join(dir, 'mirrors-one-sided'));
+    const oneSided = new SessionManager(oneSidedStore, makeConfig({
+      sessionMirrorEnabled: true,
+      sessionMirrorChannelOverrides: { 'api:target': true },
+      sessionMirrorActiveWindowMs: 60_000,
+    }));
+    oneSided.continuityStore = new UserContinuityStore(join(dir, 'mirrors-one-sided'));
+
+    oneSided.recordUserMessage(
+      'api:target',
+      'bootstrap',
+      'discord-user-1',
+      'Alice',
+      undefined,
+      'contact-1',
+      { trustLevel: 'primary' },
+    );
+    oneSided.recordAssistantMessage(
+      'api:source',
+      'source is not allowlisted',
+      'discord-user-1',
+      undefined,
+      'contact-1',
+      { trustLevel: 'primary' },
+    );
+    expect(oneSidedStore.getRecent('api:target', 10).some(entry => entry.metadata?.includes('"type":"mirror"'))).toBe(false);
+
     const overrideConfig = makeConfig({
       sessionMirrorEnabled: true,
-      sessionMirrorChannelOverrides: { 'api:target': false },
+      sessionMirrorChannelOverrides: {
+        'api:source': true,
+        'api:target': false,
+      },
       sessionMirrorActiveWindowMs: 60_000,
     });
     const overrideStore = new SessionStore(join(dir, 'mirrors-overrides'));
@@ -3925,12 +4013,12 @@ describe('SessionManager', () => {
     expect(call.systemPrompt).toMatch(/Summarize at \d{4}-\d{2}-\d{2}T/);
   });
 
-  it('uses character name in continuity block instead of hardcoded label', async () => {
+  it('omits configured character and participant labels from continuity metadata', async () => {
     const config = makeConfig();
     const continuityDir = join(dir, 'continuity');
     const continuityStore = new UserContinuityStore(continuityDir);
     const mgr = new SessionManager(store, config);
-    mgr.continuityStore = continuityStore;
+    wireTestContinuity(mgr, continuityStore);
     mgr.characterName = 'TestBot';
 
     // Use api: prefix channels which are classified as 'private' and share continuity
@@ -3959,17 +4047,20 @@ describe('SessionManager', () => {
     const ctx = await mgr.buildContext('api:main', 'Sys', '', undefined, 'user1');
     const systemPrompt = ctx.systemPrompt;
 
-    // The continuity block should use the configured character name, not 'PSFN'
-    expect(systemPrompt).toContain('TestBot');
+    expect(systemPrompt).toContain('<channel_id>api:other</channel_id>');
+    expect(systemPrompt).not.toContain('TestBot');
+    expect(systemPrompt).not.toContain('Alice');
+    expect(systemPrompt).not.toContain('I helped with something.');
+    expect(systemPrompt).not.toContain('Thanks!');
     expect(systemPrompt).not.toContain('PSFN');
   });
 
-  it('falls back to "Assistant" when characterName is not set', async () => {
+  it('does not synthesize an assistant speaker in continuity metadata', async () => {
     const config = makeConfig();
     const continuityDir = join(dir, 'continuity');
     const continuityStore = new UserContinuityStore(continuityDir);
     const mgr = new SessionManager(store, config);
-    mgr.continuityStore = continuityStore;
+    wireTestContinuity(mgr, continuityStore);
     // characterName is NOT set
 
     // Use api: prefix channels which are classified as 'private' and share continuity
@@ -3987,17 +4078,18 @@ describe('SessionManager', () => {
 
     const ctx = await mgr.buildContext('api:main', 'Sys', '', undefined, 'user1');
 
-    // With no characterName set, should fall back to 'Assistant'
-    expect(ctx.systemPrompt).toContain('Assistant');
+    expect(ctx.systemPrompt).toContain('<channel_id>api:other</channel_id>');
+    expect(ctx.systemPrompt).not.toContain('Assistant');
+    expect(ctx.systemPrompt).not.toContain('I helped with something.');
     expect(ctx.systemPrompt).not.toContain('PSFN');
   });
 
-  it('uses configured companion identity before generic assistant labels', async () => {
+  it('omits configured companion identity from continuity metadata', async () => {
     const config = makeConfig({ characterName: 'ConfigBot' });
     const continuityDir = join(dir, 'continuity');
     const continuityStore = new UserContinuityStore(continuityDir);
     const mgr = new SessionManager(store, config);
-    mgr.continuityStore = continuityStore;
+    wireTestContinuity(mgr, continuityStore);
 
     continuityStore.append('user1', {
       channelId: 'api:other',
@@ -4013,8 +4105,10 @@ describe('SessionManager', () => {
 
     const ctx = await mgr.buildContext('api:main', 'Sys', '', undefined, 'user1');
 
-    expect(ctx.systemPrompt).toContain('ConfigBot');
+    expect(ctx.systemPrompt).toContain('<channel_id>api:other</channel_id>');
+    expect(ctx.systemPrompt).not.toContain('ConfigBot');
     expect(ctx.systemPrompt).not.toContain('Assistant');
+    expect(ctx.systemPrompt).not.toContain('I helped with something.');
   });
 });
 

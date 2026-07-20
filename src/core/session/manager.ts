@@ -366,7 +366,7 @@ export class SessionManager {
   set continuityStore(store: UserContinuityStore | null) {
     this.continuityStoreRef = store;
     this.crossChannelContinuity = store
-      ? createUserContinuityPort(store)
+      ? createUserContinuityPort(store, () => false)
       : createMissingCrossChannelContinuityPort();
   }
 
@@ -1363,6 +1363,8 @@ export class SessionManager {
     /** Optional LLM provider for foreground history-budget summarization. */
     llmProvider?: LLMProviderPort;
     excludeSessionEntryId?: number;
+    /** Channel bonding opt-in for the turn. */
+    channelBond?: import('./channel-bond.js').TurnChannelBondInput;
   }): Promise<TurnSessionContextSnapshot> {
     return await this.withResolvedSessionOwner(input.channelId, async (resolvedChannelId) => {
     const sourceChannelId = this.resolveSourceChannelId(resolvedChannelId);
@@ -1410,6 +1412,7 @@ export class SessionManager {
       ...(input.excludeSessionEntryId !== undefined
         ? { excludeSessionEntryId: input.excludeSessionEntryId }
         : {}),
+      ...(input.channelBond ? { channelBond: input.channelBond } : {}),
     });
     });
   }
@@ -1427,6 +1430,7 @@ export class SessionManager {
     turnBudgetCharacteristics?: ContextBudgetTurnCharacteristics,
     conversationScope?: ConversationScope,
     excludeSessionEntryId?: number,
+    channelBond?: import('./channel-bond.js').TurnChannelBondInput,
   ): Promise<LLMContext> {
     return await this.withResolvedSessionOwner(channelId, async (resolvedChannelId) => {
     const sourceChannelId = this.resolveSourceChannelId(resolvedChannelId);
@@ -1456,6 +1460,7 @@ export class SessionManager {
         turnBudgetCharacteristics,
         llmProvider,
         ...(excludeSessionEntryId !== undefined ? { excludeSessionEntryId } : {}),
+        ...(channelBond ? { channelBond } : {}),
       });
     const coreMemoryBlock = this.coreMemoryProvider
       ? this.coreMemoryProvider.formatForContext(

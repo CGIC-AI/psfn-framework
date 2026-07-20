@@ -274,6 +274,39 @@ logic). Re-expressed over the new names with the default policy:
 Same relative ordering as before (`broadcast` behaved identically to `public`; as a flag
 it inherits the `public` row).
 
+## Channel bonding (psfn-framework-vrmf)
+
+Explicitly opted-in contact channel identities form a **bonded set** that operates as
+one logical conversation: at context assembly the bonded members' session logs are
+interleaved by timestamp into the current channel's timeline, each foreign message
+annotated with its source channel (`[via telegram:...]`; the companion's own turns stay
+unannotated — same mimicry guard as the temporal stamps). Physical logs stay split per
+channel; the bond is only the read-time merge (`src/core/session/channel-bond.ts`,
+joined in `captureTurnSessionContext`).
+
+Configuration is the `bonded` flag per linked channel identity on the contact record
+(`contact_channel_ids.bonded`, Garden contacts page → "Bonded" checkbox, audited as
+`channel_bond`). Bonding is never inferred; a turn participates only when the current
+identity platform is itself flagged, and group scopes never bond.
+
+Privacy composes with the envelope, lowest-common wins:
+
+- the bond's **effective privacy is the most restrictive member** (all-private except
+  one invite-only ⇒ the bond operates invite-only);
+- a foreign entry crosses only if its source disclosure flows into BOTH the effective
+  bond disclosure and the current channel's disclosure (the continuity-direction table
+  above, applied twice), plus the trust/memory policy gate at the source's disclosure
+  ceiling;
+- member privacy is read strictly from the member log's persisted visibility labels — a
+  member with NO determinable label on any of its entries disables the whole bond (fail
+  closed, the bond never widens anything it cannot prove safe), and any individual entry
+  whose own visibility cannot be determined is skipped rather than crossed;
+- entry metadata (intake-screening taint/provenance) rides along unmodified, so the
+  prompt-assembly sink gate applies to bonded foreign entries exactly as to native ones.
+
+Dynamic privacy for voice devices (biometric presence detection adjusting effective
+privacy) is explicitly LATER — see the bead's future-state note.
+
 ## Delivery guidance rule (charter)
 
 The substrate may carry **length/delivery** knobs — "don't yap"-class guidance such as

@@ -14,6 +14,7 @@ import type { ConversationScope } from '../../core/session/conversation-scope.js
 import type { TurnRetrievalQueryEmbedding } from '../../shared/retrieval-query-embedding.js';
 import type { ArtifactSensitivitySource } from '../../shared/contracts/artifact-sensitivity.js';
 import type { DisclosureMemorySource } from '../../core/cogsec/disclosure/generation-lineage.js';
+import type { RolledOutSessionBoundary } from '../../core/session/rolled-out-session-boundary.js';
 
 export type ActiveMemoryRefreshStatus = 'ready' | 'refreshing' | 'degraded';
 
@@ -21,6 +22,8 @@ export interface ActiveMemoryContextRequest {
   contextText: string;
   channelId: string;
   sessionChannelId?: string;
+  /** Logical-session-bound cutoff when older entries were excluded from the live tail. */
+  rolledOutSessionBoundary?: RolledOutSessionBoundary;
   trustLevel?: TrustLevel;
   channelMeta?: ChannelMeta;
   canonicalContactId?: string;

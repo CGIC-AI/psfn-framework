@@ -800,7 +800,11 @@
       <div class="rounded-xl border border-bark-200 bg-bark-50 p-4">
         <div class="flex flex-wrap items-center justify-between gap-2">
           <h3 class="font-medium text-shadow-900">Tool Call Sequence</h3>
-          <span class="text-sm text-shadow-600">{toolInvocations(turn).length} call{toolInvocations(turn).length === 1 ? '' : 's'}</span>
+          <span class="text-sm text-shadow-600">
+            {promptLoom.toolActivity.runtimeFailureCount} runtime failure{promptLoom.toolActivity.runtimeFailureCount === 1 ? '' : 's'}
+            · {promptLoom.toolActivity.outcomeCounts.duplicate_skip} duplicate skip{promptLoom.toolActivity.outcomeCounts.duplicate_skip === 1 ? '' : 's'}
+            · {promptLoom.toolActivity.outcomeCounts.dependency_skip} dependency skip{promptLoom.toolActivity.outcomeCounts.dependency_skip === 1 ? '' : 's'}
+          </span>
         </div>
         <p class="mt-1 text-xs text-shadow-600">Tool calls the model issued this turn, in order, with inputs and results/errors.</p>
         {#if toolInvocations(turn).length === 0}
@@ -814,14 +818,16 @@
                   <span class="font-mono text-sm font-medium text-shadow-900">{call.toolName}</span>
                   <span
                     class={`rounded-full border px-2 py-0.5 text-xs font-medium ${
-                      call.resultStatus === 'error'
+                      call.resultStatus === 'execution_failure'
                         ? 'border-wilt-300 bg-wilt-50 text-wilt-700'
-                        : call.resultStatus === 'ok'
+                        : call.resultStatus === 'success'
                           ? 'border-moss-300 bg-moss-50 text-moss-700'
+                          : call.resultStatus === 'validation_rejection' || call.resultStatus === 'policy_denial'
+                            ? 'border-gold-300 bg-gold-50 text-shadow-800'
                           : 'border-bark-300 bg-bark-100 text-shadow-600'
                     }`}
                   >
-                    {call.resultStatus}
+                    {humanizeToken(call.resultStatus)}
                   </span>
                   {#if call.toolCallId}
                     <span class="font-mono text-xs text-shadow-500">{truncateValue(call.toolCallId, 24)}</span>
@@ -837,7 +843,7 @@
                   maxHeightClass="max-h-48"
                 />
                 <PromptMonitorTextBlock
-                  title={call.resultStatus === 'error' ? 'Tool Error' : 'Tool Result'}
+                  title={call.resultStatus === 'success' ? 'Tool Result' : 'Tool Outcome'}
                   value={call.resultText}
                   emptyText={call.resultStatus === 'pending' ? 'No result observed for this call.' : 'No result text recorded.'}
                   maxHeightClass="max-h-48"

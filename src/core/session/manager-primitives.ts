@@ -174,6 +174,12 @@ export interface BudgetedRecentEntries {
 export interface SpanBoundRecentEntries extends BudgetedRecentEntries {
   cutoffTimestamp: number;
   /**
+   * The active history cutoff when at least one valid conversational entry
+   * fell before it. Memory retrieval uses this boundary to keep a compact
+   * episodic breadcrumb for content that just left the live chat window.
+   */
+  rolledOutBeforeMs?: number;
+  /**
    * Highest entry id the store returned for the raw tail window, before any
    * lane/span filtering. A caller that just recorded an entry can compare its
    * id against this to detect a stale store read (psfn-framework-hgw3.1).
@@ -480,6 +486,15 @@ export function collectRecentEntriesWithinHistorySpan(params: {
         entries: inRange,
         sourceCount: recent.length,
         cutoffTimestamp,
+        ...(visibleRecent.some(entry => (
+          Number.isFinite(entry.timestamp)
+          && entry.timestamp > 0
+          && entry.timestamp < cutoffTimestamp
+          && isConversationalDialogueEntry(entry)
+          && !inRange.includes(entry)
+        ))
+          ? { rolledOutBeforeMs: cutoffTimestamp }
+          : {}),
         ...(storeWindowMaxEntryId !== undefined ? { storeWindowMaxEntryId } : {}),
       };
     }

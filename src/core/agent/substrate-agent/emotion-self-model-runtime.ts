@@ -340,6 +340,12 @@ export class EmotionSelfModelRuntime {
     return this.currentSituatedLocation;
   }
 
+  /** Content-free count for observer/coherence telemetry; null means the provider is unwired. */
+  getActiveConcernCount(canonicalContactKey?: string): number | null {
+    if (!this.getActiveConcernProvider()) return null;
+    return this.resolveInternalStateActiveConcerns(canonicalContactKey).length;
+  }
+
   async computeInternalStateForTurn(input: {
     message: SubstrateMessage;
     responseText: string;

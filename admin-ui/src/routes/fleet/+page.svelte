@@ -40,7 +40,7 @@
     controller = null;
   });
 
-  function availabilityLabel(value: string): string {
+  function displayLabel(value: string): string {
     return `${value.slice(0, 1).toUpperCase()}${value.slice(1)}`;
   }
 
@@ -50,6 +50,13 @@
     if (value === 'offline') return 'bg-wilt-50 text-wilt-700 border-wilt-200';
     return 'bg-bark-100 text-shadow-600 border-bark-300';
   }
+
+  function postureClass(value: string): string {
+    if (value === 'clear') return 'text-moss-700';
+    if (value === 'pressured') return 'text-gold-700';
+    return 'text-wilt-700';
+  }
+
 </script>
 
 <svelte:head>
@@ -68,7 +75,8 @@
         </h1>
         <p class="mt-2 max-w-2xl text-sm text-shadow-600">
           Choose a companion to open their server-authorized Garden. This view
-          contains only bounded connection health for companions your session may reach.
+          contains bounded connection health and redacted welfare posture for
+          companions your session may reach.
         </p>
       </div>
       {#if projection}
@@ -107,7 +115,7 @@
         aria-label="Authorized companions"
       >
         {#each projection.companions as companion (companion.companionId)}
-          <article class="card-garden flex min-h-52 flex-col p-5">
+          <article class="card-garden flex min-h-64 flex-col p-5">
             <div class="flex items-start justify-between gap-3">
               <div class="min-w-0">
                 <h2 class="truncate font-serif text-xl font-semibold text-shadow-900">
@@ -120,11 +128,43 @@
               <span
                 class={`shrink-0 rounded-full border px-2.5 py-1 text-xs font-medium ${availabilityClass(companion.availability)}`}
               >
-                {availabilityLabel(companion.availability)}
+                {displayLabel(companion.availability)}
               </span>
             </div>
 
-            <div class="mt-auto pt-7">
+            <div class="mt-5 border-t border-bark-200 pt-4">
+              {#if companion.posture.status === 'unavailable'}
+                <p class="text-sm font-medium text-shadow-600">Posture unavailable</p>
+                <p class="mt-1 text-xs text-shadow-500">
+                  No bounded charge or fatigue report has arrived.
+                </p>
+              {:else}
+                <div class="grid grid-cols-2 gap-3 text-sm">
+                  <div>
+                    <p class="text-xs uppercase tracking-wide text-shadow-500">Charge</p>
+                    <p class={`mt-1 font-medium ${postureClass(companion.posture.charge.state)}`}>
+                      {displayLabel(companion.posture.charge.state)}
+                      · {companion.posture.charge.utilizationPercent}%
+                    </p>
+                  </div>
+                  <div>
+                    <p class="text-xs uppercase tracking-wide text-shadow-500">Fatigue</p>
+                    <p class={`mt-1 font-medium ${postureClass(companion.posture.fatigue.state)}`}>
+                      {displayLabel(companion.posture.fatigue.state)}
+                      · {companion.posture.fatigue.utilizationPercent}%
+                    </p>
+                  </div>
+                </div>
+                <p
+                  class={`mt-3 text-xs ${companion.posture.status === 'stale' ? 'font-medium text-wilt-700' : 'text-shadow-500'}`}
+                >
+                  {companion.posture.status === 'stale' ? 'Stale report' : 'Posture updated'}
+                  · {new Date(companion.posture.updatedAt).toLocaleString()}
+                </p>
+              {/if}
+            </div>
+
+            <div class="mt-auto pt-6">
               {#if !companion.gardenPath}
                 <p class="text-sm text-shadow-500">Garden access unavailable.</p>
               {:else if companion.availability === 'offline' || companion.availability === 'unknown'}

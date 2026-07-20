@@ -1028,7 +1028,7 @@ authorization and redaction contracts.
 - Backups are encrypted at rest. `backup.json` declares `encryption.mode: "required"` and an env key reference; the actual key material stays in `PSFN_BACKUP_ENCRYPTION_KEY` or another configured env secret. Startup fails closed when the key is missing.
 - Under the PostgreSQL runtime backend the scheduled backup stages a `pg_dump` custom-format archive (requires `pg_dump`/`pg_restore` on PATH) plus session JSONL, memory mutation ledger, and character-card files; the scheduler refuses to start without a database backup source.
 - The scheduled backup also stages the full companion-data file tree (journals, generated media/selfies, vault notes, prompt and card history, scratchpad) into `companion-tree/` with a per-file sha256 manifest; the walk is exhaustive except for sessions (captured separately), backup targets, and repair snapshots, so new companion-authored file classes can never silently fall out of scope.
-- System-data JSON owner files are staged into `system-config/` with a per-file sha256 manifest. This includes `settings.json`, `models.json`, `providers.json`, `channels.json`, `backup.json`, `trust-policy.json`, and `intake-policy.json` when present. `.env`, generated systemd env files, and raw provider/channel secrets are not copied by this system-config snapshot. `capability-tier.json`, `scheduler.json`, `charge-policy.json`, and `skills.json` are per-companion owner files rooted at `companionDataDir`, so they are captured by the exhaustive `companion-tree` slice above, not this cluster-global system-config slice.
+- System-data JSON owner files are staged into `system-config/` with a per-file sha256 manifest. This includes `settings.json`, `models.json`, `providers.json`, `channels.json`, `backup.json`, `trust-policy.json`, `intake-policy.json`, and `partner-affect-shadow.json` when present. `.env`, generated systemd env files, and raw provider/channel secrets are not copied by this system-config snapshot. `capability-tier.json`, `scheduler.json`, `charge-policy.json`, and `skills.json` are per-companion owner files rooted at `companionDataDir`, so they are captured by the exhaustive `companion-tree` slice above, not this cluster-global system-config slice.
 - Helm deployments also stage `helm-recovery/`: the recovery-safe deployable files from the repo-owned `deploy/helm/psfn` chart plus a versioned descriptor containing release name, namespace, Helm revision, an exact chart-content digest, and the effective agent/gateway/Garden image references. Documentation files, live Helm values, rendered manifests, Kubernetes Secret objects, and secret material are deliberately excluded. Real YAML parsing rejects secret-bearing values regardless of quoting, inline-map, or snake-case syntax; unsupported overlays, packed/opaque subcharts, special files, and source/destination overlap fail closed before capture writes anything. The chart has a per-file sha256 manifest and is verified before encryption and again by `verify:backup-restore`.
 - Every snapshot contains `backup-contents.json`, which records whether Helm recovery is `required` or `absent`. In production this marker is inside the authenticated encrypted payload, so deleting the entire Helm subtree cannot make a Kubernetes backup masquerade as a non-Kubernetes backup. Restore operators still re-provision credentials and review deployment-specific overrides rather than replaying stale secrets.
 - The configured Personal Workspace is staged separately into `workspace-tree/` with its own sha256 manifest. This covers its docs, downloads, images, journal/scratchpad files, authored skills/modules, experiments, and canonical `knowledge/wiki/` store. In fleet mode, each companion slice contains only that companion's Personal Workspace; the cluster artifact contains only the governed Shared Companion Workspace. Group mode captures the complete `workspaces/` parent in its one family artifact. Runtime roots, backup targets, VCS metadata, dependency directories, caches, and temp directories are excluded and recorded in the manifest.
@@ -1164,6 +1164,34 @@ trust, or emotion state. Cards resolve through
 memory supersession (supersede-not-delete, audited evolution links) through the
 normal memory store. Tune thresholds under `driftDetection` in
 `intake-policy.json`.
+
+### Partner Affect shadow observations
+
+The Partner Affect observation foundation ([design](partner-affect.md), slice
+1) is policy-owned by `partner-affect-shadow.json` (cluster-global, seeded
+from `config/partner-affect-shadow.seed.json`). The subsystem ships disabled
+and partner-unbound; enabling it requires an exact canonical partner contact
+id — the owner file fails validation otherwise. All mutable policy lives in
+the owner file: staleness and evidence windows, minimum confidence, the
+independent-family quorum, conflict tolerance, allowed Signal Families,
+per-metric directions, the authorized-source consent registry (source-level
+opt-in/revocation), and the shadow retention cap.
+
+Shadow-only invariant: accepted/suppressed observations and the derived
+estimate are recorded for inspection and never feed prompts, emotion
+appraisal, memory candidacy, scheduling, notifications, or world actions (a
+source-tree isolation test enforces the import boundary). Observations enter
+through `POST /v1/telemetry` with eventType
+`external.telemetry.partner_affect.observation`; payloads are screened at the
+API door and again by the fail-closed observation guard (whitelisted scalar
+summary fields only — raw coordinates, biometric streams, message bodies, and
+purchase line items are rejected and never stored). Garden exposes the raw
+policy editor under Settings and two read-only inspection endpoints:
+`GET /api/admin/partner-affect/shadow` (policy summary + deterministic
+estimate with per-family freshness/coverage/missingness/conflicts) and
+`GET /api/admin/partner-affect/observations` (recent accepted and suppressed
+records, structural reason codes only), both gated by the contacts-read
+authority.
 
 ### Canary egress events
 

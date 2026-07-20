@@ -390,6 +390,15 @@ test('buildPromptMonitorTurns sanitizes uncloneable prompt loom data without dro
         }, {}) as unknown as AdminSessionTurnData['record']['toolCalls'][number],
       ],
       toolResults: [],
+      outcomeCounts: {
+        success: 0,
+        execution_failure: 0,
+        validation_rejection: 0,
+        policy_denial: 0,
+        duplicate_skip: 0,
+        dependency_skip: 0,
+      },
+      runtimeFailureCount: 0,
     },
   };
 

@@ -38,6 +38,14 @@ export interface ContactChannelLink extends ContactChannelIdentity {
    * column is a later cleanup bead.
    */
   privacyLevel: ChannelPrivacyLevel;
+  /**
+   * Channel bonding opt-in: when true, this channel
+   * identity participates in the contact's bonded set — bonded channels
+   * operate as one logical conversation at the lowest-common privacy of the
+   * set. Explicit operator configuration only (Garden contacts page); never
+   * inferred. Absent/false = unbonded (default).
+   */
+  bonded?: boolean;
   firstSeen?: string;
   lastSeen?: string;
 }
@@ -147,6 +155,7 @@ export const CONTACT_MUTATION_AUDIT_FIELDS = [
   'timezone',
   'relationship_type',
   'channel_privacy',
+  'channel_bond',
   'channel_link',
   'conversation_channel',
 ] as const;

@@ -270,6 +270,21 @@ function methodFrames(conn: MockConnection, method: string): any[] {
   return conn.sent.filter((msg: any) => msg.method === method);
 }
 
+function fleetPosture(updatedAt: number, utilizationPercent: number) {
+  return {
+    schemaVersion: 1,
+    updatedAt,
+    charge: {
+      state: utilizationPercent >= 100 ? 'exhausted' : 'pressured',
+      utilizationPercent,
+    },
+    fatigue: {
+      state: utilizationPercent >= 100 ? 'exhausted' : 'clear',
+      utilizationPercent,
+    },
+  };
+}
+
 function makeChannelMessage(channelType: 'discord' | 'telegram' | 'api' | 'terminal') {
   return {
     id: `msg-${channelType}-1`,
@@ -622,6 +637,56 @@ describe('GatewayServer single-companion parity (flag off)', () => {
 });
 
 describe('GatewayServer multi-companion identify (flag on)', () => {
+  it('validates and attributes posture by authenticated connection across reconnects', async () => {
+    const { server, connect } = await setupServer({
+      ...createMinimalOptions(),
+      multiCompanion: multiCompanion({}),
+    });
+    const connA = await connect();
+    const connB = await connect();
+    await identifyAgent(connA, '11111111-1111-4111-8111-111111111111', 1);
+    await identifyAgent(connB, '22222222-2222-4222-8222-222222222222', 2);
+    const now = Date.now();
+
+    expect((await invokeRpc(connA, 3, 'gateway.client.health', {
+      posture: fleetPosture(now, 25),
+    })).result).toEqual({ success: true });
+    expect((await invokeRpc(connB, 4, 'gateway.client.health', {
+      posture: fleetPosture(now, 100),
+    })).result).toEqual({ success: true });
+
+    const initial = server.getFleetConnectionSnapshot(now);
+    expect(initial.connections.find(connection => (
+      connection.companionId === '11111111-1111-4111-8111-111111111111'
+    ))?.posture?.charge.utilizationPercent).toBe(25);
+    expect(initial.connections.find(connection => (
+      connection.companionId === '22222222-2222-4222-8222-222222222222'
+    ))?.posture?.charge.utilizationPercent).toBe(100);
+
+    const spoof = await invokeRpc(connA, 5, 'gateway.client.health', {
+      companionId: '11111111-1111-4111-8111-111111111111',
+      posture: fleetPosture(now, 100),
+    });
+    expect(spoof.error?.message).toMatch(/accepts only/i);
+    expect(server.getFleetConnectionSnapshot(now).connections.find(connection => (
+      connection.companionId === '11111111-1111-4111-8111-111111111111'
+    ))?.posture?.charge.utilizationPercent).toBe(25);
+
+    connA._emitClose();
+    await new Promise(resolve => setTimeout(resolve, 5));
+    const replacementA = await connect();
+    await identifyAgent(replacementA, '11111111-1111-4111-8111-111111111111', 6);
+    expect(server.getFleetConnectionSnapshot(now).connections.find(connection => (
+      connection.companionId === '11111111-1111-4111-8111-111111111111'
+    ))?.posture).toBeUndefined();
+    expect((await invokeRpc(replacementA, 7, 'gateway.client.health', {
+      posture: fleetPosture(now, 50),
+    })).result).toEqual({ success: true });
+    expect(server.getFleetConnectionSnapshot(now).connections.find(connection => (
+      connection.companionId === '11111111-1111-4111-8111-111111111111'
+    ))?.posture?.charge.utilizationPercent).toBe(50);
+  });
+
   it('refreshes only the sending companion from an unaudited transport heartbeat', async () => {
     const auditAppend = vi.fn(async () => 30);
     const { server, connect } = await setupServer({

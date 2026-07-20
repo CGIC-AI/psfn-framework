@@ -22,6 +22,10 @@ import type { IntrospectionTurnSensitivityDecision } from '../../../faculties/in
 import { resolveMessagePlaceId } from './message-location.js';
 import type { TurnSessionIdentity } from './turn-execution/contracts.js';
 import type { DisclosureToolResultSource } from '../../cogsec/disclosure/generation-lineage.js';
+import {
+  isToolCallErrorOutcome,
+  isToolCallOutcome,
+} from '../../../shared/contracts/tool-call-outcome.js';
 
 const INTERNAL_SHARD_SOURCE_PARAM = '__psfnShardSource';
 const REASONING_PLACEHOLDER_VALUES = new Set(['none', 'null', 'n/a', 'na', 'nil', 'undefined']);
@@ -273,13 +277,18 @@ export function recordToolObservations(input: {
   const disclosureSources: DisclosureToolResultSource[] = [];
   for (const entry of input.turnMessages) {
     if (!isToolResultAgentMessage(entry)) continue;
+    const outcome = resolveToolResultMessageOutcome(entry);
     const result = input.sessionManager.recordToolObservation(
       input.turnSessionIdentity.logicalSessionId,
       {
         toolName: entry.toolName,
         content: extractToolResultText(entry),
         ...(entry.toolCallId ? { toolCallId: entry.toolCallId } : {}),
-        ...(typeof entry.isError === 'boolean' ? { isError: entry.isError } : {}),
+        ...(outcome
+          ? { outcome, isError: isToolCallErrorOutcome(outcome) }
+          : typeof entry.isError === 'boolean'
+            ? { isError: entry.isError }
+            : {}),
       },
       input.message.isDirectMessage,
       {
@@ -558,8 +567,13 @@ function buildTurnToolCalls(turnMessages: AgentMessage[]): TurnRecordToolCall[] 
     if (!isToolResultAgentMessage(entry)) continue;
     const target = toolCallsById.get(entry.toolCallId);
     const resultText = extractToolResultText(entry).trim();
+    const outcome = resolveToolResultMessageOutcome(entry);
     const toolResultFields = {
-      ...(typeof entry.isError === 'boolean' ? { isError: entry.isError } : {}),
+      ...(outcome
+        ? { outcome, isError: isToolCallErrorOutcome(outcome) }
+        : typeof entry.isError === 'boolean'
+          ? { isError: entry.isError }
+          : {}),
       ...(resultText ? { resultText } : {}),
       ...(entry.details !== undefined ? { details: cloneUnknownValue(entry.details) } : {}),
     };
@@ -586,6 +600,11 @@ function buildTurnToolCalls(turnMessages: AgentMessage[]): TurnRecordToolCall[] 
     });
   }
   return toolCalls;
+}
+
+function resolveToolResultMessageOutcome(entry: ToolResultMessage) {
+  const outcome = (entry as ToolResultMessage & { outcome?: unknown }).outcome;
+  return isToolCallOutcome(outcome) ? outcome : undefined;
 }
 
 type AssistantToolCall = Extract<AssistantMessage['content'][number], { type: 'toolCall' }>;

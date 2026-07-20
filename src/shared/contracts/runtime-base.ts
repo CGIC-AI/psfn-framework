@@ -7,6 +7,7 @@ import type { TurnID } from './turn-contracts.js';
 import type { ChannelType } from './channel-types.js';
 import type { InternalState, MetacognitiveFlag } from './self-model-contracts.js';
 import type { ModelContextBudgetConfig } from '../context-budget-contracts.js';
+import type { ToolCallOutcome } from './tool-call-outcome.js';
 import type {
   ChargePolicyRuntimeLane,
   ChargePolicySurface,
@@ -67,6 +68,9 @@ export interface TurnRecordMessage {
 export interface TurnRecordToolCall {
   toolName: string;
   toolCallId?: string;
+  /** Stable bounded result category; absent only on legacy or still-pending calls. */
+  outcome?: ToolCallOutcome;
+  /** Compatibility projection derived from outcome for legacy consumers. */
   isError?: boolean;
   provenanceRefs?: string[];
   /** Normalized input arguments the model issued for this tool call. */

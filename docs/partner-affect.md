@@ -1,10 +1,14 @@
 # Partner Affect Estimation
 
-> Status: target core design, pre-implementation, 2026-07-18.
+> Status: target core design, 2026-07-18. Slice 1 (contracts and shadow
+> observations, section 19) shipped 2026-07-19: Signal Observation contracts,
+> the fail-closed observation guard, exact-partner binding, the
+> `partner-affect-shadow.json` owner file, Postgres shadow persistence, and
+> the Garden inspection surface. All outputs remain shadow-only.
 >
-> This document defines intended behavior. PSFN does not yet ship the composite
-> estimate, support-posture state machine, or affect-advisory ICP message
-> described here.
+> The rest of this document defines intended behavior. PSFN does not yet ship
+> the composite estimate, support-posture state machine, or affect-advisory
+> ICP message described here.
 
 ## 1. Purpose
 

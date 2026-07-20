@@ -32,6 +32,7 @@ export const SYSTEM_CONFIG_OWNER_FILES = [
   'backup.json',
   'trust-policy.json',
   'intake-policy.json',
+  'partner-affect-shadow.json',
   'fleet-auth.json',
 ] as const;
 

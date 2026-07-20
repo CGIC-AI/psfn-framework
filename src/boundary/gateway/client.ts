@@ -234,6 +234,7 @@ import {
   parseTurnPerformanceEvent,
   type TurnPerformanceEvent,
 } from '../../shared/telemetry/turn-performance.js';
+import type { FleetCompanionPostureSummary } from '../../shared/telemetry/fleet-posture.js';
 
 const DEFAULT_VOICE_STREAM_QUEUE_SIZE = 32;
 const DEFAULT_VOICE_STREAM_OVERFLOW_POLICY: QueueOverflowPolicy = 'error';
@@ -488,6 +489,8 @@ export class GatewayClient implements
   private readonly sessionIntegrityRpcTimeoutMs: number;
   private readonly keepaliveIntervalMs: number;
   private keepaliveTimer: ReturnType<typeof setInterval> | null = null;
+  private fleetPostureProvider: (() => FleetCompanionPostureSummary) | null = null;
+  private fleetPostureReportInFlight = false;
   private sessionIntegrityWorker: Worker | null = null;
   private sessionIntegrityRequestCounter = 0;
   private sessionIntegrityVerifyCache = new Map<string, JournalIntegrityVerificationResult>();
@@ -632,6 +635,32 @@ export class GatewayClient implements
       ...(this.companionId ? { companionId: this.companionId } : {}),
       ...(this.companionAuthToken ? { authToken: this.companionAuthToken } : {}),
     });
+  }
+
+  /**
+   * Attach the agent-owned deterministic welfare posture after its charge and
+   * fatigue runtimes are ready. The initial report is acknowledged so invalid
+   * wiring fails startup instead of silently leaving a fabricated healthy view.
+   */
+  async startFleetPostureReporting(
+    provider: () => FleetCompanionPostureSummary,
+  ): Promise<void> {
+    if (!this.companionId) {
+      throw new Error('Fleet posture reporting requires a configured companionId');
+    }
+    if (this.fleetPostureProvider) {
+      throw new Error('Fleet posture reporting is already configured');
+    }
+    this.fleetPostureProvider = provider;
+    this.fleetPostureReportInFlight = true;
+    try {
+      await this.publishFleetPosture();
+    } catch (error) {
+      this.fleetPostureProvider = null;
+      throw error;
+    } finally {
+      this.fleetPostureReportInFlight = false;
+    }
   }
 
   /**
@@ -1722,6 +1751,32 @@ export class GatewayClient implements
     if (!this.conn.sendHeartbeat()) {
       log.debug('Gateway transport heartbeat failed; closing connection');
       this.conn.destroy();
+      return;
+    }
+    if (this.fleetPostureProvider && !this.fleetPostureReportInFlight) {
+      this.fleetPostureReportInFlight = true;
+      void this.publishFleetPosture()
+        .catch((error: unknown) => {
+          log.error('Fleet posture health report failed', {
+            error: error instanceof Error ? error.message : String(error),
+          });
+        })
+        .finally(() => {
+          this.fleetPostureReportInFlight = false;
+        });
+    }
+  }
+
+  private async publishFleetPosture(): Promise<void> {
+    const provider = this.fleetPostureProvider;
+    if (!provider) return;
+    const result = await this.rpcInstance.request('gateway.client.health', {
+      posture: provider(),
+    });
+    if (!isRecord(result)
+      || result.success !== true
+      || Object.keys(result).length !== 1) {
+      throw new Error('Gateway returned an invalid fleet posture acknowledgement');
     }
   }
 
@@ -2211,6 +2266,7 @@ export class GatewayClient implements
     }
     this.closedNotified = true;
     this.stopKeepalive();
+    this.fleetPostureProvider = null;
     this.inlineImageReferenceHints.clear();
     for (const handler of this.connectionCloseHandlers) {
       try {

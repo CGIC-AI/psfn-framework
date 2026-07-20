@@ -752,6 +752,32 @@ describe('Postgres contact store behavior', () => {
       expect(entries[1].newValue).toContain('"userId":"privacy-user"');
     });
 
+    it('sets and audits the channel-bonding opt-in flag on a linked identity', async () => {
+      const contact = await store.upsert({ displayName: 'Bonding Target' });
+      expect(await store.linkChannelIdentity(contact.id, 'discord', 'bond-user', { privacyLevel: 'private' })).toBe('linked');
+
+      // Default off: a fresh identity link is never bonded.
+      expect((await store.getById(contact.id))?.channels?.find(link => link.userId === 'bond-user')?.bonded)
+        .not.toBe(true);
+
+      expect(await store.setChannelBonding(contact.id, 'discord', 'bond-user', true, 'admin:api')).toBe(true);
+      expect((await store.getById(contact.id))?.channels?.find(link => link.userId === 'bond-user')?.bonded)
+        .toBe(true);
+
+      // No identity link -> never created implicitly.
+      expect(await store.setChannelBonding(contact.id, 'telegram', 'missing-user', true, 'admin:api')).toBe(false);
+
+      expect(await store.setChannelBonding(contact.id, 'discord', 'bond-user', false, 'admin:api')).toBe(true);
+      expect((await store.getById(contact.id))?.channels?.find(link => link.userId === 'bond-user')?.bonded)
+        .not.toBe(true);
+
+      const entries = await store.listMutationAuditEntries({ contactId: contact.id, field: 'channel_bond', limit: 10 });
+      expect(entries).toHaveLength(2);
+      expect(entries[1]).toMatchObject({ contactId: contact.id, actor: 'admin:api', field: 'channel_bond' });
+      expect(entries[1].oldValue).toContain('"bonded":false');
+      expect(entries[1].newValue).toContain('"bonded":true');
+    });
+
     it('records channel unlink mutations', async () => {
       const contact = await store.upsert({ displayName: 'Link Audit Target' });
 

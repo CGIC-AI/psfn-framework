@@ -12,6 +12,10 @@ import type {
   CompanionToolActivityPayload,
 } from '../../../shared/contracts/companion-relay.js';
 import {
+  isToolCallOutcome,
+  type ToolCallOutcome,
+} from '../../../shared/contracts/tool-call-outcome.js';
+import {
   COMPANION_TOOL_ACTIVITY_PHASES,
   type CompanionToolActivityPhase,
 } from '../../../shared/contracts/companion-relay.js';
@@ -373,10 +377,15 @@ export function parseCompanionRelayPublishParams(params: unknown): CompanionRela
       throw new Error('companion.event.publish: invalid tool activity phase');
     }
     const detail = optionalString(payload, 'detail', 200);
+    const outcome = optionalString(payload, 'outcome', 32);
+    if (outcome !== undefined && !isToolCallOutcome(outcome)) {
+      throw new Error('companion.event.publish: invalid tool activity outcome');
+    }
     const parsed: CompanionToolActivityPayload = {
       id: requireString(payload, 'id', 160),
       tool: requireString(payload, 'tool', 120),
       phase: phase as CompanionToolActivityPhase,
+      ...(outcome !== undefined ? { outcome: outcome as ToolCallOutcome } : {}),
       ...(detail !== undefined ? { detail } : {}),
       timestamp: requireIsoTimestamp(payload, 'timestamp'),
     };

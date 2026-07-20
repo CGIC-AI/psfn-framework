@@ -55,6 +55,7 @@ import type { AdminPlacesService } from './services/places-service.js';
 import type { AdminEnrollmentService } from './services/enrollment-service.js';
 import type { AdminGraphProposalsService } from './services/graph-proposals-service.js';
 import type { AdminSubsystemHealthService } from './services/subsystem-health-service.js';
+import type { AdminPartnerAffectShadowService } from './services/partner-affect-shadow-service.js';
 import type { AdminToolConformanceService } from './services/tool-conformance-service.js';
 import type { AdminSharedWorkspaceService } from './services/shared-workspace-service.js';
 import type { AdminPrivacyBreakGlassService } from './services/privacy-break-glass-service.js';
@@ -211,6 +212,8 @@ export interface GardenAdminDomainServices {
   graphProposals?: AdminGraphProposalsService | null;
   concerns?: AdminConcernService | null;
   subsystemHealth?: AdminSubsystemHealthService | null;
+  /** Shadow-only Partner Affect inspection surface (docs/partner-affect.md slice 1). */
+  partnerAffectShadow?: AdminPartnerAffectShadowService | null;
   toolConformance?: AdminToolConformanceService | null;
   icpAutonomy?: AdminIcpAutonomyService | null;
   /** Fleet Command room-state and arbitration telemetry (jp36.8.1). */

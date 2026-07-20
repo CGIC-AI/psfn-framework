@@ -16,6 +16,7 @@ import {
   parsePersistedTurnSnapshotEventData,
 } from './turn-snapshot-parser';
 import { projectTurnSnapshotPrompt } from '../../../../src/shared/contracts/prompt-projection.js';
+import { countToolCallOutcomes } from '../../../../src/shared/contracts/tool-call-outcome.js';
 
 export const PROMPT_MONITOR_STAGE_ORDER = [
   'trust',
@@ -493,6 +494,7 @@ function hasToolResultPayload(toolCall: AdminSessionTurnData['record']['toolCall
   const record = toolCall as unknown as Record<string, unknown>;
   return typeof record.resultText === 'string'
     || typeof record.isError === 'boolean'
+    || record.outcome !== undefined
     || record.details !== undefined;
 }
 
@@ -511,6 +513,7 @@ function buildPromptLoomFromTurn(turn: PromptMonitorTurn): AdminPromptLoomData {
   const renderedChatOutput = response?.content ?? turn.record?.assistantMessage?.content ?? null;
   const historicalHits = collectHistoricalSnapshotHits(snapshot);
   const toolCalls = turn.record?.toolCalls ?? [];
+  const toolOutcomeCounts = countToolCallOutcomes(toolCalls);
   return {
     source: 'turn_snapshot',
     snapshotCapturedAt: snapshot?.capturedAt ?? null,
@@ -580,6 +583,8 @@ function buildPromptLoomFromTurn(turn: PromptMonitorTurn): AdminPromptLoomData {
       toolResults: toolCalls
         .filter(hasToolResultPayload)
         .map(toolCall => cloneJsonSafe(toolCall)),
+      outcomeCounts: toolOutcomeCounts,
+      runtimeFailureCount: toolOutcomeCounts.execution_failure,
     },
   };
 }

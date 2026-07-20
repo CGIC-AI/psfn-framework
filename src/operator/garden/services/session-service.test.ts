@@ -1208,7 +1208,7 @@ describe('AdminSessionDataService', () => {
       channelVisibility: 'private',
     });
 
-    const continuityPort = createUserContinuityPort(continuityStore);
+    const continuityPort = createUserContinuityPort(continuityStore, () => true);
     expect(continuityPort.getMerged({
       canonicalUserId: 'canonical-contact-1',
       limit: 10,
@@ -1242,7 +1242,7 @@ describe('AdminSessionDataService', () => {
       },
     });
 
-    const continuityPort = createUserContinuityPort(continuityStore);
+    const continuityPort = createUserContinuityPort(continuityStore, () => true);
     expect(continuityPort.getMerged({
       canonicalUserId: 'canonical-contact-1',
       limit: 10,

@@ -29,6 +29,8 @@ import { buildAdminOverviewRoutes } from './routes/overview-routes.js';
 import { buildAdminPromptRoutes } from './routes/prompt-routes.js';
 import { buildAdminSchedulerRoutes } from './routes/scheduler-routes.js';
 import { buildAdminSubsystemHealthRoutes } from './routes/subsystem-health-routes.js';
+import { buildAdminPartnerAffectShadowRoutes } from './routes/partner-affect-shadow-routes.js';
+import type { AdminPartnerAffectShadowService } from './services/partner-affect-shadow-service.js';
 import { buildAdminToolConformanceRoutes } from './routes/tool-conformance-routes.js';
 import { buildAdminIcpAutonomyRoutes } from './routes/icp-autonomy-routes.js';
 import { buildAdminRoomArbiterRoutes } from './routes/room-arbiter-routes.js';
@@ -316,6 +318,7 @@ export function buildAdminApiRoutes(options: {
   graphProposalsService?: AdminGraphProposalsService | null;
   concernService?: AdminConcernService | null;
   subsystemHealthService?: AdminSubsystemHealthService | null;
+  partnerAffectShadowService?: AdminPartnerAffectShadowService | null;
   toolConformanceService?: AdminToolConformanceService | null;
   icpAutonomyService?: AdminIcpAutonomyService | null;
   roomArbiterService?: AdminRoomArbiterService | null;
@@ -374,6 +377,7 @@ export function buildAdminApiRoutes(options: {
     graphProposalsService,
     concernService,
     subsystemHealthService,
+    partnerAffectShadowService,
     toolConformanceService,
     icpAutonomyService,
     roomArbiterService,
@@ -925,6 +929,7 @@ export function buildAdminApiRoutes(options: {
     ...buildAdminPromptRoutes({ promptsService, withBody }),
     ...buildAdminSchedulerRoutes({ scheduler, withBody }),
     ...buildAdminSubsystemHealthRoutes({ subsystemHealth: subsystemHealthService }),
+    ...buildAdminPartnerAffectShadowRoutes({ partnerAffectShadow: partnerAffectShadowService }),
     ...buildAdminToolConformanceRoutes({ toolConformance: toolConformanceService, withBody }),
     ...(icpAutonomyService
       ? buildAdminIcpAutonomyRoutes({

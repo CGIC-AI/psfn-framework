@@ -3,11 +3,29 @@ import { createComponentLogger } from '../../../shared/logger.js';
 import { toErrorMessage } from '../../../shared/utils/errors.js';
 import { redactToolActivity } from './redaction.js';
 import type { CompanionRelayPublishParams } from './relay.js';
+import type { ToolCallOutcome } from '../../../shared/contracts/tool-call-outcome.js';
 
 const log = createComponentLogger('CompanionEventForwarder');
 
 export interface CompanionEventPublishPort {
   publishCompanionEvent(params: CompanionRelayPublishParams): void;
+}
+
+function projectToolActivityPhase(
+  outcome: ToolCallOutcome,
+): 'completed' | 'failed' | 'rejected' | 'skipped' {
+  switch (outcome) {
+    case 'success':
+      return 'completed';
+    case 'execution_failure':
+      return 'failed';
+    case 'validation_rejection':
+    case 'policy_denial':
+      return 'rejected';
+    case 'duplicate_skip':
+    case 'dependency_skip':
+      return 'skipped';
+  }
 }
 
 /**
@@ -47,13 +65,14 @@ export function attachCompanionEventForwarder(options: {
         ...(channelId ? { channelId } : {}),
       });
     }),
-    options.eventBus.on('agent.tool.end', ({ channelId, toolCallId, toolName, isError }) => {
+    options.eventBus.on('agent.tool.end', ({ channelId, toolCallId, toolName, outcome }) => {
       publish({
         kind: 'tool.activity',
         payload: redactToolActivity({
           toolCallId,
           toolName,
-          phase: isError ? 'failed' : 'completed',
+          phase: projectToolActivityPhase(outcome),
+          outcome,
           timestampMs: Date.now(),
         }),
         ...(channelId ? { channelId } : {}),

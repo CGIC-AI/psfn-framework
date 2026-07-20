@@ -650,7 +650,7 @@
     },
     {
       "path": "src/channels/backplane/places-mermaid.ts",
-      "contains": "%% PSFN world map — sites, places, affordances, and bound satellites.",
+      "contains": "%% PSFN world map \u2014 sites, places, affordances, and bound satellites.",
       "reason": "The generated operator-facing Mermaid artifact retains its explicit product title.",
       "pattern": "identity-proper-name"
     },
@@ -1978,6 +1978,12 @@
       "path": "src/test-support/postgres-test-harness.ts",
       "contains": "psfn-postgres-clients-",
       "reason": "PostgreSQL test harness uses a project-scoped mkdtemp prefix for its per-run client-binary staging directory, consistent with its established project-scoped test artifact namespace.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/persistence/postgres/partner-affect-shadow-store.ts",
+      "contains": "applicationName: 'psfn-partner-affect-shadow'",
+      "reason": "Postgres application_name for the partner-affect shadow store follows the established psfn-* connection naming used by every other runtime store adapter.",
       "pattern": "identity-legacy-slug"
     },
     {

@@ -1523,6 +1523,7 @@ describe('AdminServer JSON API routes', () => {
       channelId: 'api-session',
       toolCallId: 'contact-1',
       toolName: 'contact',
+      outcome: 'success',
       isError: false,
       turnId: 'turn-contact-1',
       requestId: 'request-contact-1',
@@ -1531,6 +1532,7 @@ describe('AdminServer JSON API routes', () => {
       channelId: 'api-session',
       toolCallId: 'notify-1',
       toolName: 'notify',
+      outcome: 'execution_failure',
       isError: true,
       errorMessage: 'notify: failure (503 Service Unavailable).',
     });
@@ -3745,7 +3747,7 @@ describe('AdminServer JSON API routes', () => {
     };
     expect(snapshotPayload.immutableBlocks).toHaveLength(4);
     expect(snapshotPayload.immutableBlocks.every(block => block.editable === false)).toBe(true);
-    expect(snapshotPayload.preview.text).toContain('<immutable_human_safety_amendments>');
+    expect(snapshotPayload.preview.text).toContain('<constitution>');
     expect(snapshotPayload.preview.text).not.toContain('[Immutable Human-Safety Amendments]');
     expect(snapshotPayload.preview.text).not.toContain('You are {{char}}.');
     expect(snapshotPayload.mutableLayers).toEqual([]);

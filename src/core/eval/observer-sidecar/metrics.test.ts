@@ -285,6 +285,11 @@ function makeObserverInput(): ObserverEvalInputPayload {
       }),
       appraisalEntryCount: 1,
     },
+    coherenceContext: {
+      recentMirrorNoteCount: 0,
+      timeGapMs: null,
+      activeConcernCount: 0,
+    },
     metadata: {
       trustLevel: 'regular',
       speakerRole: 'user',

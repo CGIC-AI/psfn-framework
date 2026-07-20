@@ -2,6 +2,13 @@ import { validateToolArguments } from '@mariozechner/pi-ai';
 import type { AgentMessage, AgentTool, AgentToolResult } from '../../boundary/pi-agent/index.js';
 import type { AssistantMessage, ToolCall, ToolResultMessage } from '@mariozechner/pi-ai';
 import type { ScheduledAgentEvent } from './agent-loop-events.js';
+import type { ToolCallOutcome } from '../../shared/contracts/runtime.js';
+import {
+  classifyExecutedToolCallOutcome,
+  DUPLICATE_TOOL_CALL_SKIP_RESULT,
+  isToolCallErrorOutcome,
+  SEQUENTIAL_DEPENDENCY_SKIP_RESULT,
+} from '../../shared/contracts/tool-call-outcome.js';
 import { isInternalWhisperMessage, isSystemNoteMessage } from './messages.js';
 import type { ToolConcurrencyMeta, WirableTool } from './tool-wiring-validator.js';
 import {
@@ -202,14 +209,19 @@ export async function executeToolCallsWithScheduler(
       const remainingDescriptors = descriptors.slice(index);
       if (remainingDescriptors.length > 0) {
         const resultText = batchResults.haltReasonText
-          ?? 'Skipped because an earlier sequential tool call failed. Read the tool result and retry only the needed follow-up call.';
+          ?? SEQUENTIAL_DEPENDENCY_SKIP_RESULT;
         options.onTelemetry?.('agent.tools.scheduler.skipped', {
           reason: 'prior_tool_error',
           skippedCount: remainingDescriptors.length,
           skippedTools: remainingDescriptors.map((entry: ToolCallDescriptor) => entry.toolCall.name),
         });
         for (const descriptor of remainingDescriptors) {
-          results.push(skipToolCall(descriptor.toolCall, context.stream, resultText));
+          results.push(skipToolCall(
+            descriptor.toolCall,
+            context.stream,
+            resultText,
+            'dependency_skip',
+          ));
         }
       }
       break;
@@ -224,7 +236,12 @@ export async function executeToolCallsWithScheduler(
         skippedTools: remainingDescriptors.map((entry: ToolCallDescriptor) => entry.toolCall.name),
       });
       for (const descriptor of remainingDescriptors) {
-        results.push(skipToolCall(descriptor.toolCall, context.stream, attribution.resultText));
+        results.push(skipToolCall(
+          descriptor.toolCall,
+          context.stream,
+          attribution.resultText,
+          'dependency_skip',
+        ));
       }
       break;
     }
@@ -250,7 +267,7 @@ async function executeSequentialBatch(
       return {
         toolResults: results,
         haltRemaining: true,
-        haltReasonText: 'Skipped because an earlier sequential tool call failed. Read the tool result and retry only the needed follow-up call.',
+        haltReasonText: SEQUENTIAL_DEPENDENCY_SKIP_RESULT,
       };
     }
 
@@ -310,6 +327,7 @@ async function executeSingleToolCall(
         toolCall,
         context.stream,
         `Internal tool status: skipped repeated malformed ${toolCall.name}${repeatedMalformed.action ? ` action=${repeatedMalformed.action}` : ''} call because required field(s) are still missing: ${repeatedMalformed.missingRequirement}. Use one minimal valid JSON call with all required fields before retrying. This is not a user-facing message.`,
+        'validation_rejection',
       );
     }
     if (guard.inFlightSignatures.has(signature)) {
@@ -321,6 +339,7 @@ async function executeSingleToolCall(
         toolCall,
         context.stream,
         'Internal tool status: skipped duplicate tool call because the same tool/action/input is already in flight. This is not a user-facing message.',
+        'duplicate_skip',
       );
     }
     if (guard.successfulSignatures.has(signature)) {
@@ -331,7 +350,8 @@ async function executeSingleToolCall(
       return skipToolCall(
         toolCall,
         context.stream,
-        'Internal tool status: skipped duplicate tool call because the same tool/action/input already succeeded this turn. This is not a user-facing message.',
+        DUPLICATE_TOOL_CALL_SKIP_RESULT,
+        'duplicate_skip',
       );
     }
     const failures = guard.failureCountsBySignature.get(signature) ?? 0;
@@ -345,6 +365,7 @@ async function executeSingleToolCall(
         toolCall,
         context.stream,
         `Internal tool status: ${toolCall.name} is degraded for this action/input after ${failures} failed attempts this turn. Stop retrying it for now and notify the operator if it affects the conversation. This is not a user-facing message.`,
+        'dependency_skip',
       );
     }
     guard.inFlightSignatures.add(signature);
@@ -359,6 +380,7 @@ async function executeSingleToolCall(
 
   let result: AgentToolResult<unknown> | undefined;
   let isError = false;
+  let outcome: ToolCallOutcome = 'success';
   let cancelled = false;
   // Validate-and-reprompt (psfn-framework-b0yl.3): a recoverable tool-call
   // defect (unknown/retired name, malformed non-object arguments, or
@@ -387,7 +409,11 @@ async function executeSingleToolCall(
           partialResult,
         });
       });
-      isError = toolResultDetailsFlagError(result);
+      outcome = classifyExecutedToolCallOutcome({
+        details: result.details,
+        isError: toolResultDetailsFlagError(result),
+      });
+      isError = isToolCallErrorOutcome(outcome);
     }
   } catch (error) {
     if (isToolValidationFailureError(error)) {
@@ -403,6 +429,7 @@ async function executeSingleToolCall(
         details: {},
       };
       isError = true;
+      outcome = 'execution_failure';
     }
   }
 
@@ -428,6 +455,7 @@ async function executeSingleToolCall(
       details: {},
     };
     isError = true;
+    outcome = 'validation_rejection';
   }
 
   if (!result) {
@@ -468,15 +496,17 @@ async function executeSingleToolCall(
     toolName: toolCall.name,
     result,
     isError,
+    outcome,
   });
 
-  const toolResultMessage: ToolResultMessage = {
+  const toolResultMessage: ToolResultMessage & { outcome: ToolCallOutcome } = {
     role: 'toolResult',
     toolCallId: toolCall.id,
     toolName: toolCall.name,
     content: result.content,
     details: result.details,
     isError,
+    outcome,
     timestamp: Date.now(),
   };
   context.stream.push({ type: 'message_start', message: toolResultMessage });
@@ -488,6 +518,7 @@ function skipToolCall(
   toolCall: ToolCall,
   stream: { push: (event: ScheduledAgentEvent) => void },
   reasonText: string,
+  outcome: Extract<ToolCallOutcome, 'validation_rejection' | 'duplicate_skip' | 'dependency_skip'>,
 ): ToolResultMessage {
   const result = {
     content: [{ type: 'text' as const, text: reasonText }],
@@ -505,15 +536,17 @@ function skipToolCall(
     toolName: toolCall.name,
     result,
     isError: true,
+    outcome,
   });
 
-  const toolResultMessage: ToolResultMessage = {
+  const toolResultMessage: ToolResultMessage & { outcome: ToolCallOutcome } = {
     role: 'toolResult',
     toolCallId: toolCall.id,
     toolName: toolCall.name,
     content: result.content,
     details: {},
     isError: true,
+    outcome,
     timestamp: Date.now(),
   };
   stream.push({ type: 'message_start', message: toolResultMessage });

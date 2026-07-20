@@ -1666,6 +1666,48 @@
       "value": "16"
     },
     {
+      "file": "src/core/emotion/partner-affect/observation-guard.ts",
+      "name": "MAX_CONSENT_REF_LENGTH",
+      "value": "128",
+      "note": "Fail-closed structural cap of the partner-affect observation contract (anti-smuggling invariant, docs/partner-affect.md 6.3); deliberately not operator-mutable policy."
+    },
+    {
+      "file": "src/core/emotion/partner-affect/observation-guard.ts",
+      "name": "MAX_ID_LENGTH",
+      "value": "128",
+      "note": "Fail-closed structural cap of the partner-affect observation contract (anti-smuggling invariant, docs/partner-affect.md 6.3); deliberately not operator-mutable policy."
+    },
+    {
+      "file": "src/core/emotion/partner-affect/observation-guard.ts",
+      "name": "MAX_METRIC_NAME_LENGTH",
+      "value": "64",
+      "note": "Fail-closed structural cap of the partner-affect observation contract (anti-smuggling invariant, docs/partner-affect.md 6.3); deliberately not operator-mutable policy."
+    },
+    {
+      "file": "src/core/emotion/partner-affect/observation-guard.ts",
+      "name": "MAX_PROCESSING_REVISION_LENGTH",
+      "value": "64",
+      "note": "Fail-closed structural cap of the partner-affect observation contract (anti-smuggling invariant, docs/partner-affect.md 6.3); deliberately not operator-mutable policy."
+    },
+    {
+      "file": "src/core/emotion/partner-affect/observation-guard.ts",
+      "name": "MAX_PROVENANCE_ENTRIES",
+      "value": "8",
+      "note": "Fail-closed structural cap of the partner-affect observation contract (anti-smuggling invariant, docs/partner-affect.md 6.3); deliberately not operator-mutable policy."
+    },
+    {
+      "file": "src/core/emotion/partner-affect/observation-guard.ts",
+      "name": "MAX_PROVENANCE_TEXT_LENGTH",
+      "value": "128",
+      "note": "Fail-closed token cap preventing free-text telemetry provenance smuggling; a protocol security bound, not operator tuning."
+    },
+    {
+      "file": "src/core/emotion/partner-affect/observation-guard.ts",
+      "name": "MAX_UNIT_LENGTH",
+      "value": "32",
+      "note": "Fail-closed structural cap of the partner-affect observation contract (anti-smuggling invariant, docs/partner-affect.md 6.3); deliberately not operator-mutable policy."
+    },
+    {
       "file": "src/core/emotion/telemetry-validation.ts",
       "name": "DEFAULT_MIN_CONFIDENCE",
       "value": "0.35"
@@ -2320,6 +2362,12 @@
       "file": "src/core/self-model/state.ts",
       "name": "MAX_SALIENT_ENTITY_LENGTH",
       "value": "48"
+    },
+    {
+      "file": "src/core/session/channel-bond.ts",
+      "name": "CHANNEL_BOND_MEMBER_ENTRY_LIMIT",
+      "value": "40",
+      "note": "Code-owned safety cap limiting per-member cross-channel context amplification; deliberately not an operator policy threshold."
     },
     {
       "file": "src/core/session/compression-guideline.ts",
@@ -2977,9 +3025,10 @@
       "note": "Code-owned bounded-memory safety valve for pathological out-of-order extraction coverage without bridging gaps."
     },
     {
-      "file": "src/faculties/memory/extraction/orchestrator.ts",
+      "file": "src/faculties/memory/extraction/llm-pass.ts",
       "name": "EXTRACTION_CHUNK_LLM_CONCURRENCY",
-      "value": "2"
+      "value": "2",
+      "note": "Code-owned concurrency guard bounding provider burst load during extraction; moved with the implementation from orchestrator.ts."
     },
     {
       "file": "src/faculties/memory/extraction/preference.ts",
@@ -3609,6 +3658,24 @@
       "value": "1_000"
     },
     {
+      "file": "src/operator/garden/services/partner-affect-shadow-service.ts",
+      "name": "DEFAULT_OBSERVATION_LIST_LIMIT",
+      "value": "100",
+      "note": "Bounded read-surface page limit for the shadow inspection store; structural API bound, not estimation policy (which is JSON-owned in partner-affect-shadow.json)."
+    },
+    {
+      "file": "src/operator/garden/services/partner-affect-shadow-service.ts",
+      "name": "ESTIMATE_EVIDENCE_FETCH_LIMIT",
+      "value": "1_000",
+      "note": "Bounded read-surface page limit for the shadow inspection store; structural API bound, not estimation policy (which is JSON-owned in partner-affect-shadow.json)."
+    },
+    {
+      "file": "src/operator/garden/services/partner-affect-shadow-service.ts",
+      "name": "MAX_OBSERVATION_LIST_LIMIT",
+      "value": "500",
+      "note": "Bounded read-surface page limit for the shadow inspection store; structural API bound, not estimation policy (which is JSON-owned in partner-affect-shadow.json)."
+    },
+    {
       "file": "src/operator/garden/services/room-arbiter-service.ts",
       "name": "ADMIN_ARBITER_LIMIT",
       "value": "100",
@@ -3798,6 +3865,18 @@
       "file": "src/persistence/postgres/model-usage-store.ts",
       "name": "MAX_TOP_N",
       "value": "100"
+    },
+    {
+      "file": "src/persistence/postgres/partner-affect-shadow-store.ts",
+      "name": "DEFAULT_PARTNER_AFFECT_SHADOW_LIST_LIMIT",
+      "value": "200",
+      "note": "Bounded read-surface page limit for the shadow inspection store; structural API bound, not estimation policy (which is JSON-owned in partner-affect-shadow.json)."
+    },
+    {
+      "file": "src/persistence/postgres/partner-affect-shadow-store.ts",
+      "name": "MAX_PARTNER_AFFECT_SHADOW_LIST_LIMIT",
+      "value": "1_000",
+      "note": "Bounded read-surface page limit for the shadow inspection store; structural API bound, not estimation policy (which is JSON-owned in partner-affect-shadow.json)."
     },
     {
       "file": "src/persistence/postgres/scheduled-prompt-store.ts",
@@ -4247,6 +4326,24 @@
       "file": "src/shared/telemetry/fatigue-ledger.ts",
       "name": "MAX_EVENT_LIMIT",
       "value": "2_000"
+    },
+    {
+      "file": "src/shared/telemetry/fleet-posture.ts",
+      "name": "FLEET_POSTURE_MAX_SERIALIZED_BYTES",
+      "value": "512",
+      "note": "Code-owned wire-protocol and denial-of-service bound; mutable settings must not widen accepted agent health envelopes."
+    },
+    {
+      "file": "src/shared/telemetry/fleet-posture.ts",
+      "name": "FLEET_POSTURE_STALE_TIMEOUT_MS",
+      "value": "90_000",
+      "note": "Code-owned wire freshness bound coupled to the gateway keepalive protocol; mutable settings must not extend acceptance of stale companion health."
+    },
+    {
+      "file": "src/shared/telemetry/fleet-posture.ts",
+      "name": "POSTURE_PERCENT_MAX",
+      "value": "100",
+      "note": "Code-owned percentage invariant used to validate the redacted fleet posture wire contract."
     },
     {
       "file": "src/shared/telemetry/model-usage-attribution.ts",

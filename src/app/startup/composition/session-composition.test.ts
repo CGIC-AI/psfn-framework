@@ -172,6 +172,62 @@ describe('session runtime composition transcript projection wiring', () => {
     await expect(composition.sessionManager.searchByKeywords('anything', 5)).resolves.toEqual([]);
   });
 
+  it('filters merged continuity through the exact channels.json registry', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'psfn-session-composition-continuity-registry-'));
+    dirs.push(root);
+    const companionDataDir = join(root, 'companion-data');
+    const composition = await composeSessionRuntimeAsync({
+      config: {
+        companionDataDir,
+        dataDir: companionDataDir,
+        persistenceBackend: 'postgres',
+      } as any,
+      postgresDatabaseUrl: 'postgres://postgres:secret@localhost:5432/psfn_test',
+      enableContinuity: true,
+      continuityChannelIds: ['discord:configured-room'],
+    });
+    const continuityStore = composition.continuityStore!;
+    continuityStore.append('contact-1', {
+      channelId: 'discord:configured-room',
+      originChannelId: 'discord:configured-room',
+      role: 'user',
+      content: 'Configured room entry',
+      timestamp: 1_700_000_000_000,
+      channelVisibility: 'private',
+    });
+    continuityStore.append('contact-1', {
+      channelId: 'api:head-pat-smoke',
+      originChannelId: 'api:head-pat-smoke',
+      role: 'assistant',
+      content: 'Smoke entry',
+      timestamp: 1_700_000_001_000,
+      channelVisibility: 'private',
+    });
+
+    expect(composition.sessionManager.crossChannelContinuity.getMerged({
+      canonicalUserId: 'contact-1',
+      fallbackUserIds: [],
+      limit: 10,
+      channelId: 'api:current',
+    }).map(entry => entry.content)).toEqual(['Configured room entry']);
+  });
+
+  it('fails closed when continuity is enabled without a channels.json registry', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'psfn-session-composition-continuity-missing-registry-'));
+    dirs.push(root);
+    const companionDataDir = join(root, 'companion-data');
+
+    await expect(composeSessionRuntimeAsync({
+      config: {
+        companionDataDir,
+        dataDir: companionDataDir,
+        persistenceBackend: 'postgres',
+      } as any,
+      postgresDatabaseUrl: 'postgres://postgres:secret@localhost:5432/psfn_test',
+      enableContinuity: true,
+    })).rejects.toThrow('requires configured channels.json channel ids');
+  });
+
   it('composes postgres memory store without creating a legacy sqlite database', async () => {
     const root = mkdtempSync(join(tmpdir(), 'psfn-memory-composition-postgres-'));
     dirs.push(root);

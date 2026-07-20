@@ -46,6 +46,8 @@
 
   // Channel privacy edits (tracked per identity or conversation-channel key)
   let channelPrivacyEdits = $state<Record<string, ChannelPrivacyLevel>>({});
+  // Channel-bonding opt-in per linked identity.
+  let channelBondingEdits = $state<Record<string, boolean>>({});
 
   // Add channel form
   let showAddChannel = $state(false);
@@ -317,8 +319,10 @@
     newChannelPrivacy = 'private';
     // Initialize channel privacy edits from contact.channels
     channelPrivacyEdits = {};
+    channelBondingEdits = {};
     for (const ch of contact.channels ?? []) {
       channelPrivacyEdits[contactChannelKey(ch)] = ch.privacyLevel as ChannelPrivacyLevel;
+      channelBondingEdits[contactChannelKey(ch)] = ch.bonded === true;
     }
     for (const ch of getChannels(contact.id)) {
       const key = conversationChannelKey(ch);
@@ -330,6 +334,7 @@
   function cancelEdit() {
     editingContactId = null;
     channelPrivacyEdits = {};
+    channelBondingEdits = {};
   }
 
   async function saveEdit(contactId: string) {
@@ -379,6 +384,18 @@
         patch.channelPrivacy = privacyChanges;
       }
 
+      // Collect channel-bonding opt-in changes on linked identities.
+      const bondingChanges: Array<{ channel: string; userId: string; bonded: boolean }> = [];
+      for (const ch of contact.channels ?? []) {
+        const next = channelBondingEdits[contactChannelKey(ch)];
+        if (next !== undefined && next !== (ch.bonded === true)) {
+          bondingChanges.push({ channel: ch.channel, userId: ch.userId, bonded: next });
+        }
+      }
+      if (bondingChanges.length > 0) {
+        patch.channelBonding = bondingChanges;
+      }
+
       // Add new channel link if filled in
       if (showAddChannel && newChannelName.trim() && newChannelUserId.trim()) {
         patch.addChannel = {
@@ -392,6 +409,7 @@
         flash(true, 'No changes to save');
         editingContactId = null;
         channelPrivacyEdits = {};
+        channelBondingEdits = {};
         return;
       }
 
@@ -400,6 +418,7 @@
         data = await listContacts();
         editingContactId = null;
         channelPrivacyEdits = {};
+        channelBondingEdits = {};
         flash(true, result.message || 'Contact updated');
       } else {
         flash(false, result.message || 'Update failed');
@@ -1176,6 +1195,18 @@
                             <option value={pl}>{pl.replace('_', ' ')}</option>
                           {/each}
                         </select>
+                        <label class="flex items-center gap-1 text-xs text-shadow-700"
+                          title="Cross-channel capable: bonded identities operate as one logical conversation at the lowest-common privacy of the bonded set">
+                          <input
+                            type="checkbox"
+                            checked={channelBondingEdits[key] ?? ch.bonded === true}
+                            onchange={(e) => {
+                              channelBondingEdits[key] = (e.target as HTMLInputElement).checked;
+                            }}
+                            class="rounded border-bark-300 text-moss-500 focus:ring-gold-300"
+                          />
+                          Bonded
+                        </label>
                         <button onclick={() => handleUnlink(contact.id, ch.channel, ch.userId)}
                           disabled={saving}
                           class="text-xs px-2 py-0.5 rounded border border-wilt-300 text-wilt-600

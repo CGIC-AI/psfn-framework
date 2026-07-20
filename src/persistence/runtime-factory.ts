@@ -53,6 +53,8 @@ import {
   planPostgresTenantAccess,
 } from './postgres/tenancy.js';
 import { IntrospectionLandmarkPostgresStore } from '../faculties/introspection/postgres-store.js';
+import { PostgresPartnerAffectShadowStore } from './postgres/partner-affect-shadow-store.js';
+import type { PartnerAffectShadowStorePort } from '../core/emotion/partner-affect/shadow-store-port.js';
 import { PostgresBackgroundWorkStore } from './postgres/background-work-store.js';
 import type { BackgroundWorkStorePort } from '../core/agent/background-work/store-port.js';
 import type { ContactLifecycleGatewayPort } from '../core/contacts/contact-lifecycle-gateway-port.js';
@@ -79,6 +81,12 @@ export interface AgentPersistenceRuntime {
   scheduledPromptStore: ScheduledPromptStorePort;
   introspectionLandmarkStore: IntrospectionLandmarkPostgresStore;
   backgroundWorkStore: BackgroundWorkStorePort;
+  /**
+   * Shadow-only Partner Affect observation store (docs/partner-affect.md
+   * slice 1). Written by the shadow ingest bridge; read only by the Garden
+   * inspection surface. Never behavioral authority.
+   */
+  partnerAffectShadowStore: PartnerAffectShadowStorePort;
   /**
    * Shared-schema cross-companion presence store (sprint 10, W5a). Present
    * ONLY when multi-companion mode is enabled; flag-off never touches the
@@ -243,6 +251,7 @@ export async function createAgentPersistenceRuntime(
     scheduledPromptStore: await PostgresScheduledPromptStore.connect(databaseUrl, { schema, role: tenantRole }),
     introspectionLandmarkStore: await IntrospectionLandmarkPostgresStore.connect(databaseUrl, { schema, role: tenantRole }),
     backgroundWorkStore: await PostgresBackgroundWorkStore.connect(databaseUrl, { schema, role: tenantRole }),
+    partnerAffectShadowStore: await PostgresPartnerAffectShadowStore.connect(databaseUrl, { schema, role: tenantRole }),
     ...(companionPresenceStore ? { companionPresenceStore } : {}),
     ...(icpInitiationCandidateStore ? { icpInitiationCandidateStore } : {}),
     ...(socialPotStore ? { socialPotStore } : {}),

@@ -11,6 +11,7 @@ import type {
   CompanionToolActivityPayload,
   CompanionToolActivityPhase,
 } from '../../../shared/contracts/companion-relay.js';
+import type { ToolCallOutcome } from '../../../shared/contracts/tool-call-outcome.js';
 import type {
   ApprovalAttribution,
   ApprovalGrantMode,
@@ -218,7 +219,8 @@ export function redactApprovalResolved(input: {
 }
 
 /**
- * Tool lifecycle → redacted activity. Only the tool name and phase survive.
+ * Tool lifecycle → redacted activity. Only the tool name, phase, and stable
+ * outcome survive.
  * Error messages, arguments, results, and shard identifiers are dropped:
  * `detail` is intentionally never populated from runtime data.
  */
@@ -226,12 +228,14 @@ export function redactToolActivity(input: {
   toolCallId: string;
   toolName: string;
   phase: CompanionToolActivityPhase;
+  outcome?: ToolCallOutcome;
   timestampMs: number;
 }): CompanionToolActivityPayload {
   return {
     id: requireId(input.toolCallId, 'tool call id'),
     tool: clampText(input.toolName, MAX_TOOL_NAME_LENGTH) || 'unknown_tool',
     phase: input.phase,
+    ...(input.outcome ? { outcome: input.outcome } : {}),
     timestamp: toIsoTimestamp(input.timestampMs),
   };
 }

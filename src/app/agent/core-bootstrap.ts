@@ -58,6 +58,8 @@ export interface BootstrappedAgentCoreRuntime {
 
 export interface BootstrapAgentCoreRuntimeOptions {
   config: CoreSubstrateConfig;
+  /** Exact channels.json context-envelope registry ids allowed into merged continuity. */
+  continuityChannelIds: readonly string[];
   /** Database credential kept outside the secret-sanitized core config. */
   postgresDatabaseUrl: string;
   pathSnapshot: RuntimePathSnapshot;
@@ -140,6 +142,7 @@ export async function bootstrapAgentCoreRuntime(
 
   const coreRuntime = await buildAgentCoreRuntime({
     config,
+    continuityChannelIds: options.continuityChannelIds,
     postgresDatabaseUrl,
     pathSnapshot,
     eventBus,

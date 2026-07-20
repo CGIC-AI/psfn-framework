@@ -1,5 +1,24 @@
 import { describe, expect, it } from 'vitest';
-import { normalizeSandboxDebugLogKey } from './sandbox-execution-port.js';
+import {
+  normalizeSandboxDebugLogKey,
+  withChildProcessSandboxExecutionPort,
+} from './sandbox-execution-port.js';
+
+describe('withChildProcessSandboxExecutionPort', () => {
+  it('starts on supported Node versions while blocking network globals in the VM', async () => {
+    const port = withChildProcessSandboxExecutionPort(null);
+    const result = await port.executeCode({
+      code: 'FINAL(JSON.stringify({ fetch: typeof fetch, WebSocket: typeof WebSocket }))',
+      timeoutMs: 1_000,
+      initialLocals: {},
+      helperNames: [],
+      hostHelpers: {},
+    });
+
+    expect(result.error).toBeNull();
+    expect(result.finalAnswer).toBe('{"fetch":"undefined","WebSocket":"undefined"}');
+  });
+});
 
 describe('normalizeSandboxDebugLogKey', () => {
   it('passes through well-formed keys unchanged', () => {

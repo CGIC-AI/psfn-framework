@@ -157,6 +157,12 @@
       "pattern": "identity-legacy-slug"
     },
     {
+      "path": "admin-ui/src/routes/primer/+page.svelte",
+      "contains": "github.com/CGIC-AI/psfn-framework/blob/main/docs/",
+      "reason": "Operator Guide links use the canonical project repository path for maintained documentation; this project identifier is not a companion identity default.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
       "path": "scripts/check-dependency-cycles.mjs",
       "contains": "PSFN-",
       "reason": "Project bead IDs use the PSFN prefix in remediation guidance.",

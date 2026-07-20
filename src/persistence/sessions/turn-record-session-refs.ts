@@ -157,7 +157,7 @@ export interface TurnRecordMessageWithheld {
   turnId: string;
 }
 
-/** Sink for top-level user/assistant message withholding (bead psfn-framework-sm9l). */
+/** Sink for top-level user/assistant message withholding (bead sm9l). */
 export type TurnRecordMessageWithheldSink = (event: TurnRecordMessageWithheld) => void;
 
 export type TurnRecordContinuityWithheldReason = ContinuityEntryWithheldReason;
@@ -748,9 +748,8 @@ function buildWithheldWireBody(caseChannelId: string): Record<string, unknown> {
  * Redaction-gate the rendered views of a turn against the CURRENT L0 journal, in
  * a single range read shared by both surfaces:
  *
- *  - top-level `userMessage` / `assistantMessage` (bead
- *    psfn-framework-sm9l): each frozen copy is masked when its `sessionEntryId`
- *    resolves absent/redacted.
+ *  - top-level `userMessage` / `assistantMessage` (bead sm9l): each frozen
+ *    copy is masked when its `sessionEntryId` resolves absent/redacted.
  *
  *  - `plan.messages` (the Loom conversation): each entry-backed message carries
  *    `provenance.sourceEntryIds`. If ANY backing entry is now absent from L0

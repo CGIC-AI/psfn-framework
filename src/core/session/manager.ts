@@ -351,7 +351,7 @@ export class SessionManager {
   set continuityStore(store: UserContinuityStore | null) {
     this.continuityStoreRef = store;
     this.crossChannelContinuity = store
-      ? createUserContinuityPort(store)
+      ? createUserContinuityPort(store, () => false)
       : createMissingCrossChannelContinuityPort();
   }
 

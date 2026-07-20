@@ -127,6 +127,8 @@ const log = createComponentLogger('AgentCoreRuntime');
 
 export interface AgentCoreRuntimeOptions {
   config: CoreSubstrateConfig;
+  /** Exact channels.json context-envelope registry ids allowed into merged continuity. */
+  continuityChannelIds: readonly string[];
   /** Database credential kept outside the secret-sanitized core config. */
   postgresDatabaseUrl: string;
   pathSnapshot: RuntimePathSnapshot;
@@ -245,6 +247,7 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
     postgresDatabaseUrl,
     eventBus,
     enableContinuity: true,
+    continuityChannelIds: options.continuityChannelIds,
     promptRegistry,
     sessionIntegrityProvider: gateway.createSessionIntegrityProvider(),
   });

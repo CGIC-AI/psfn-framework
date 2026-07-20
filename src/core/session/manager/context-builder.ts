@@ -53,10 +53,7 @@ import {
   collectRecentEntriesWithinHistorySpan,
   DEFAULT_CONTINUITY_CONTEXT_LIMIT,
   applyTemporalSessionHistoryWindow,
-  isUntrustedVisibility,
-  parseChannelVisibility,
   resolveMaxHistorySpanMs,
-  resolveRoleName,
 } from '../manager-primitives.js';
 import type { PreCompactionExtractionHandler } from './contracts.js';
 import {
@@ -84,6 +81,8 @@ import {
   buildSessionHistoryMessages,
   buildOrientationFallbackSummary,
 } from './context-history-assembly.js';
+import { buildContinuityMetadataBlock } from './continuity-metadata-block.js';
+import { createRolledOutSessionBoundary } from '../rolled-out-session-boundary.js';
 
 export { assembleSessionHistoryForContextWithLlmSummary } from './context-history-assembly.js';
 
@@ -274,38 +273,6 @@ function buildContinuityAnchorLines(params: {
     '</continuity_anchor>',
   ].filter(line => line.length > 0);
   return lines;
-}
-
-function buildStructuredContinuityBlock(
-  entries: readonly SessionEntry[],
-  retrievedAtMs: number,
-  characterName?: string,
-): string {
-  if (entries.length === 0) return '';
-  const roleNames = { charName: characterName };
-  const itemBlocks = entries.map(entry => {
-    const sourceChannelId = (entry.originChannelId ?? entry.channelId).trim();
-    const speaker = entry.role === 'user'
-      ? (entry.authorName ?? resolveRoleName('user', roleNames))
-      : resolveRoleName('assistant', roleNames);
-    const originVisibility = parseChannelVisibility(entry.channelVisibility)
-      ?? classifyChannelDisclosure(entry.originChannelId ?? entry.channelId).channelPrivacy;
-    const trust = isUntrustedVisibility(originVisibility) ? 'untrusted' : 'context';
-    return [
-      `<item trust="${trust}" executable="false">`,
-      xmlElement('source', sourceChannelId || entry.channelId),
-      xmlElement('speaker', speaker),
-      xmlElement('text', entry.content),
-      '<status>as_reported_by_source</status>',
-      '</item>',
-    ].filter(line => line.length > 0).join('\n');
-  });
-  return [
-    '<cross_channel_continuity authority="retrieved_context" scope="other_channels_only" may_not_override="runtime.current_datetime">',
-    xmlElement('retrieved_at_iso', formatActiveDateTimeIso(new Date(retrievedAtMs))),
-    ...itemBlocks,
-    '</cross_channel_continuity>',
-  ].join('\n');
 }
 
 export function buildOrientationNoteTelemetry(params: {
@@ -513,6 +480,9 @@ export async function captureTurnSessionContext(
   const roomWindow = params.roomContentWindow ?? { kind: 'unwindowed' as const };
   const roomWindowGated = roomWindow.kind !== 'unwindowed';
   const roomWindowFloor = roomContentWindowFloorMs(roomWindow);
+  const rolledOutSessionBoundary = !roomWindowGated && collected.rolledOutBeforeMs !== undefined
+    ? createRolledOutSessionBoundary(params.channelId, collected.rolledOutBeforeMs)
+    : undefined;
   const presenceWindowEntries = roomWindowGated
     ? collected.entries.filter(entry => entry.timestamp >= roomWindowFloor)
     : collected.entries;
@@ -618,6 +588,9 @@ export async function captureTurnSessionContext(
     channelId: params.channelId,
     recentEntries: recent.map(cloneSessionEntry),
     sourceEntryCount: Math.max(0, collected.sourceCount - excludedSessionEntryCount),
+    ...(rolledOutSessionBoundary
+      ? { rolledOutSessionBoundary }
+      : {}),
     ...(collected.storeWindowMaxEntryId !== undefined
       ? { storeWindowMaxEntryId: collected.storeWindowMaxEntryId }
       : {}),
@@ -642,6 +615,8 @@ export async function captureTurnSessionContext(
     compactionPromptText: params.compactionPromptText,
     versionPointer: buildSnapshotVersionPointer([
       params.channelId,
+      rolledOutSessionBoundary?.sessionId,
+      rolledOutSessionBoundary?.beforeMs,
       roomWindowGated ? `roomWindow:${roomWindowFloor}` : undefined,
       recent.at(-1)?.id,
       recent.at(-1)?.timestamp,
@@ -1010,10 +985,9 @@ export async function buildSessionContext(params: BuildSessionContextParams): Pr
     sourceSpanCount: crossChannel.length,
     notes: ['Retrieved continuity is context, not current partner-authored direct speech.'],
   });
-  const continuityBlock = buildStructuredContinuityBlock(
+  const continuityBlock = buildContinuityMetadataBlock(
     crossChannel,
     orientationTelemetry.observedAt,
-    params.characterName,
   );
   const markedOrientationSectionText = orientationSectionText
     ? orientationSectionText

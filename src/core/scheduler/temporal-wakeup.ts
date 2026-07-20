@@ -44,6 +44,11 @@ import {
 } from '../intention/proactive-time-gate.js';
 import type { StartupSessionMetadata } from '../session/manager.js';
 import { isInternalSessionId } from '../session/session-id.js';
+import {
+  parseSessionLaneMetadata,
+  TEMPORAL_WAKEUP_MORNING_NOTE_SOURCE,
+  TEMPORAL_WAKEUP_REFRESHER_NOTE_SOURCE,
+} from '../session/session-lane-metadata.js';
 import type { SessionEntry } from '../session/types.js';
 import type { Scheduler } from './scheduler.js';
 import {
@@ -74,8 +79,10 @@ export const TEMPORAL_WAKEUP_MORNING_TASK_NAME = 'Temporal Wake-Up (Morning)';
 export const TEMPORAL_WAKEUP_REFRESHER_TASK_ID = 'temporal-wakeup:idle-refresher';
 export const TEMPORAL_WAKEUP_REFRESHER_TASK_NAME = 'Temporal Wake-Up (Idle Refresher)';
 
-export const TEMPORAL_WAKEUP_MORNING_NOTE_SOURCE = 'temporal_wakeup_morning';
-export const TEMPORAL_WAKEUP_REFRESHER_NOTE_SOURCE = 'temporal_wakeup_refresher';
+export {
+  TEMPORAL_WAKEUP_MORNING_NOTE_SOURCE,
+  TEMPORAL_WAKEUP_REFRESHER_NOTE_SOURCE,
+} from '../session/session-lane-metadata.js';
 
 const WAKEUP_NOTE_SOURCES: ReadonlySet<string> = new Set([
   TEMPORAL_WAKEUP_MORNING_NOTE_SOURCE,
@@ -97,17 +104,8 @@ function parseWakeupNoteTimestamp(
   entry: SessionEntry,
   sources: ReadonlySet<string>,
 ): number | null {
-  if (entry.role !== 'system' || !entry.metadata) return null;
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(entry.metadata);
-  } catch {
-    return null;
-  }
-  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return null;
-  const lane = (parsed as { sessionLane?: unknown }).sessionLane;
-  if (typeof lane !== 'object' || lane === null || Array.isArray(lane)) return null;
-  const source = (lane as { source?: unknown }).source;
+  if (entry.role !== 'system') return null;
+  const source = parseSessionLaneMetadata(entry)?.source;
   return typeof source === 'string' && sources.has(source) ? entry.timestamp : null;
 }
 

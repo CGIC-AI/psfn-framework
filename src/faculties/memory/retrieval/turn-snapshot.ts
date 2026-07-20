@@ -54,10 +54,12 @@ import type {
   RetrievalQueryEmbeddingProvenance,
   TurnRetrievalQueryEmbedding,
 } from '../../../shared/retrieval-query-embedding.js';
+import type { RolledOutSessionBoundary } from '../../../core/session/rolled-out-session-boundary.js';
 
 export interface CaptureTurnMemorySnapshotInput {
   contextText: string;
   channelId: string;
+  rolledOutSessionBoundary?: RolledOutSessionBoundary;
   trustLevel?: TrustLevel;
   channelMeta?: ChannelMeta;
   canonicalContactId?: string;
@@ -109,6 +111,7 @@ export interface CaptureTurnMemorySnapshotDeps {
   resolveEpisodicChains(input: {
     contextText: string;
     channelId: string;
+    rolledOutSessionBoundary?: RolledOutSessionBoundary;
     trustLevel: TrustLevel;
     channelDisclosure: ReturnType<typeof classifyChannelDisclosure>;
     canonicalContactId?: string;
@@ -127,6 +130,7 @@ export async function captureTurnMemorySnapshot(
   const {
     contextText,
     channelId,
+    rolledOutSessionBoundary,
     trustLevel,
     channelMeta,
     canonicalContactId,
@@ -256,6 +260,7 @@ export async function captureTurnMemorySnapshot(
   const episodicChains = deps.filterQuarantinedEpisodicChains(await deps.resolveEpisodicChains({
     contextText,
     channelId,
+    ...(rolledOutSessionBoundary ? { rolledOutSessionBoundary } : {}),
     trustLevel: effectiveTrust,
     channelDisclosure,
     canonicalContactId,

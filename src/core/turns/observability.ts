@@ -10,6 +10,10 @@ import {
 } from '../../faculties/memory/retrieval/episodic.js';
 import type { SessionContinuityArtifact } from '../session/continuity-artifacts.js';
 import type { SessionEntry } from '../session/types.js';
+import {
+  cloneRolledOutSessionBoundary,
+  type RolledOutSessionBoundary,
+} from '../session/rolled-out-session-boundary.js';
 import type {
   FatigueEnforcementMetadata,
   TurnToolContextSnapshot,
@@ -49,6 +53,7 @@ export interface TurnSessionContextSnapshotRecord {
   recentEntries: SessionEntry[];
   autoCompactionEligible?: boolean;
   sourceEntryCount?: number;
+  rolledOutSessionBoundary?: RolledOutSessionBoundary;
   historySummaryText?: string;
   historySummaryEntryCount?: number;
   compactionSummaryTexts: string[];
@@ -280,6 +285,13 @@ export function sanitizeTurnSnapshot(snapshot: TurnSnapshot): TurnSnapshotRecord
           ...(snapshot.sessionContext.sourceEntryCount !== undefined
             ? { sourceEntryCount: snapshot.sessionContext.sourceEntryCount }
             : {}),
+          ...(snapshot.sessionContext.rolledOutSessionBoundary
+            ? {
+                rolledOutSessionBoundary: cloneRolledOutSessionBoundary(
+                  snapshot.sessionContext.rolledOutSessionBoundary,
+                ),
+              }
+            : {}),
           ...(snapshot.sessionContext.historySummaryText
             ? { historySummaryText: snapshot.sessionContext.historySummaryText }
             : {}),
@@ -411,6 +423,13 @@ export function cloneTurnSnapshotRecord(snapshot: TurnSnapshotRecord): TurnSnaps
             : {}),
           ...(snapshot.sessionContext.sourceEntryCount !== undefined
             ? { sourceEntryCount: snapshot.sessionContext.sourceEntryCount }
+            : {}),
+          ...(snapshot.sessionContext.rolledOutSessionBoundary
+            ? {
+                rolledOutSessionBoundary: cloneRolledOutSessionBoundary(
+                  snapshot.sessionContext.rolledOutSessionBoundary,
+                ),
+              }
             : {}),
           ...(snapshot.sessionContext.historySummaryText
             ? { historySummaryText: snapshot.sessionContext.historySummaryText }

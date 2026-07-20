@@ -128,6 +128,8 @@ export interface SessionCompositionOptions {
   eventBus?: EventBus;
   sessionsDir?: string;
   enableContinuity?: boolean;
+  /** Exact channels.json registry ids eligible for cross-channel continuity. */
+  continuityChannelIds?: readonly string[];
   promptRegistry?: PromptRegistryStatePort | null;
   sessionIntegrityProvider?: SessionIntegrityProvider | null;
   /**
@@ -199,8 +201,15 @@ function createSessionComposition(
 
   let continuityStore: UserContinuityStore | null = null;
   if (options.enableContinuity) {
+    if (!options.continuityChannelIds) {
+      throw new Error('Enabled cross-channel continuity requires configured channels.json channel ids');
+    }
+    const continuityChannelIds = new Set(options.continuityChannelIds);
     continuityStore = new UserContinuityStore(resolveContinuityDir(companionDataDir));
-    sessionManager.crossChannelContinuity = createUserContinuityPort(continuityStore);
+    sessionManager.crossChannelContinuity = createUserContinuityPort(
+      continuityStore,
+      channelId => continuityChannelIds.has(channelId),
+    );
   } else {
     sessionManager.crossChannelContinuity = createDisabledCrossChannelContinuityPort();
   }

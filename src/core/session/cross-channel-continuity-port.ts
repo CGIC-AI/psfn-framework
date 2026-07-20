@@ -39,6 +39,8 @@ export interface CrossChannelContinuityPort {
   getHealth(): CrossChannelContinuityHealth;
 }
 
+export type LinkedContinuityChannelEligibility = (channelId: string) => boolean;
+
 export function parseCrossChannelContinuityProvenance(
   metadata?: string,
 ): ContinuityEntryProvenance | null {
@@ -209,6 +211,7 @@ export function createDisabledCrossChannelContinuityPort(): CrossChannelContinui
 
 export function createUserContinuityPort(
   continuityStore: UserContinuityStore | null,
+  isChannelEligible: LinkedContinuityChannelEligibility,
 ): CrossChannelContinuityPort {
   if (!continuityStore) {
     return createMissingCrossChannelContinuityPort();
@@ -226,6 +229,7 @@ export function createUserContinuityPort(
         fallbackUserIds: params.fallbackUserIds,
         channelId: params.channelId,
         channelMeta: params.channelMeta,
+        isChannelEligible,
       }).filter(entry => resolveValidatedCrossChannelContinuityProvenance(entry, params.channelId) !== null);
     },
     getActiveChannels(continuityUserId, query) {

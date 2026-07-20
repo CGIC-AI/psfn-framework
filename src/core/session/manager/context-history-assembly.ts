@@ -10,6 +10,7 @@ import { SESSION_HISTORY_MIN_MESSAGES } from '../../../shared/context-budget.js'
 import type { PromptRegistryStatePort } from '../../identity/prompt-state-port.js';
 import type { ChannelPrivacy } from '../../../system/trust/context-envelope.js';
 import type { SessionEntry } from '../types.js';
+import { filterSupersededTemporalWakeupRefreshers } from '../session-lane-metadata.js';
 import {
   buildRecentSessionSummaryFallbackText,
   isUntrustedVisibility,
@@ -87,10 +88,14 @@ export async function assembleSessionHistoryForContextWithLlmSummary(params: {
   verbatimEntries: SessionEntry[];
   messages: ContextMessage[];
 }> {
-  const directAssembly = assembleVerbatimSessionHistory(params);
+  const projectedParams = {
+    ...params,
+    entries: filterSupersededTemporalWakeupRefreshers(params.entries),
+  };
+  const directAssembly = assembleVerbatimSessionHistory(projectedParams);
   if (directAssembly) return directAssembly;
 
-  const candidate = selectHistorySummaryCandidate(params);
+  const candidate = selectHistorySummaryCandidate(projectedParams);
   if (candidate) {
     const generatedSummaryText = await summarizeRecentSessionEntries({
       channelId: params.channelId,
@@ -104,21 +109,21 @@ export async function assembleSessionHistoryForContextWithLlmSummary(params: {
     const fittedGeneratedSummaryText = fitHistorySummaryTextToBudget({
       summaryText: generatedSummaryText,
       candidate,
-      channelVisibility: params.channelVisibility,
-      renderGroupUserAttribution: params.renderGroupUserAttribution,
-      tokenBudget: params.tokenBudget,
+      channelVisibility: projectedParams.channelVisibility,
+      renderGroupUserAttribution: projectedParams.renderGroupUserAttribution,
+      tokenBudget: projectedParams.tokenBudget,
     });
     if (fittedGeneratedSummaryText) {
       return buildHistoryAssemblyFromSummary({
         summaryText: fittedGeneratedSummaryText,
         candidate,
-        channelVisibility: params.channelVisibility,
-        renderGroupUserAttribution: params.renderGroupUserAttribution,
+        channelVisibility: projectedParams.channelVisibility,
+        renderGroupUserAttribution: projectedParams.renderGroupUserAttribution,
       });
     }
   }
 
-  return assembleTrimmedSessionHistory(params);
+  return assembleTrimmedSessionHistory(projectedParams);
 }
 
 interface HistorySummaryCandidate {

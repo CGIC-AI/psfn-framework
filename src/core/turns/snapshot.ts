@@ -10,6 +10,7 @@ import type {
 } from '../../faculties/memory/types.js';
 import type { EpisodicRetrievalChain } from '../../faculties/memory/retrieval/episodic.js';
 import type { SessionEntry } from '../session/types.js';
+import type { RolledOutSessionBoundary } from '../session/rolled-out-session-boundary.js';
 import type { SessionContinuityArtifact } from '../session/continuity-artifacts.js';
 import type { IdleGapTexture } from '../scheduler/time-texture.js';
 import type {
@@ -80,6 +81,8 @@ export interface TurnSessionContextSnapshot {
   autoCompactionEligible?: boolean;
   /** Entries collected from the store before windowing/summarization. */
   sourceEntryCount?: number;
+  /** Logical-session-bound cutoff when older entries were excluded. */
+  rolledOutSessionBoundary?: RolledOutSessionBoundary;
   /**
    * Highest entry id the store served in the raw capture window, before
    * exclusion/windowing/summarization. A turn that just recorded entry N must

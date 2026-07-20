@@ -19,6 +19,28 @@ function makeEntry(overrides: Partial<SessionEntry>): SessionEntry {
   };
 }
 
+function makeRefresherEntry(
+  id: number,
+  content: string,
+  timestamp: number,
+): SessionEntry {
+  return makeEntry({
+    id,
+    role: 'system',
+    content,
+    authorId: 'system',
+    authorName: 'System',
+    timestamp,
+    metadata: JSON.stringify({
+      sessionLane: {
+        schemaVersion: 1,
+        kind: 'system_note',
+        source: 'temporal_wakeup_refresher',
+      },
+    }),
+  });
+}
+
 // 1_700_000_000_000 ms epoch = 2023-11-14T22:13:20Z, rendered under the pinned
 // UTC timezone below as the minute-resolution stamp 'Tue 11-14-23 22:13'.
 const BASE_STAMP = '[Tue 11-14-23 22:13]';
@@ -210,6 +232,22 @@ describe('entriesToMessages', () => {
     expect(messages[0]?.role).toBe('system');
     expect(messages[0]?.content.startsWith(`${BASE_STAMP} `)).toBe(true);
     expect(messages[0]?.content).toContain('[Temporal wake]');
+  });
+
+  it('renders only the latest time-of-day refresher note after four firings', () => {
+    const messages = entriesToMessages([
+      makeRefresherEntry(1, '[Time-of-day refresher] First frame.', 1_700_000_000_000),
+      makeRefresherEntry(2, '[Time-of-day refresher] Second frame.', 1_700_000_060_000),
+      makeRefresherEntry(3, '[Time-of-day refresher] Third frame.', 1_700_000_120_000),
+      // The fourth append remains latest even if the wall clock stepped back.
+      makeRefresherEntry(4, '[Time-of-day refresher] Latest frame.', 1_699_999_940_000),
+    ], 'private');
+
+    expect(messages).toHaveLength(1);
+    expect(messages[0]?.content).toContain('[Time-of-day refresher] Latest frame.');
+    expect(messages[0]?.content).not.toContain('First frame.');
+    expect(messages[0]?.content).not.toContain('Second frame.');
+    expect(messages[0]?.content).not.toContain('Third frame.');
   });
 
   it('never stamps assistant turns, even with valid timestamps', () => {
@@ -413,5 +451,88 @@ describe('entriesToMessages', () => {
     expect(messages).toHaveLength(2);
     expect(messages[0].content).toBe('no epoch recorded');
     expect(messages[1].content).toBe('zero epoch reply');
+  });
+
+  it('interleaves an appended mirror note by its source timestamp', () => {
+    const messages = entriesToMessages([
+      makeEntry({
+        id: 1,
+        role: 'user',
+        content: 'message before the mirror source event',
+        authorId: 'user-1',
+        authorName: 'PrimaryUser',
+        timestamp: 1_700_000_000_000,
+      }),
+      makeEntry({
+        id: 2,
+        role: 'assistant',
+        content: 'message after the mirror source event',
+        timestamp: 1_700_000_120_000,
+      }),
+      makeEntry({
+        id: 3,
+        role: 'system',
+        content: 'Partner [from satellite:room]: mirrored note',
+        authorId: 'session-mirror',
+        authorName: 'Session Mirror',
+        timestamp: 1_700_000_060_000,
+        originChannelId: 'satellite:room',
+        channelVisibility: 'private',
+        metadata: JSON.stringify({
+          type: 'mirror',
+          sourceChannelId: 'satellite:room',
+          sourceRole: 'user',
+          sourceAuthorName: 'Partner',
+          sourceVisibility: 'private',
+          trustLevel: 'primary',
+          mirroredAt: 1_700_000_060_000,
+          truncated: false,
+        }),
+      }),
+    ], 'private');
+
+    expect(messages.map(message => ({
+      role: message.role,
+      content: message.content,
+    }))).toMatchInlineSnapshot(`
+      [
+        {
+          "content": "[Tue 11-14-23 22:13] message before the mirror source event",
+          "role": "user",
+        },
+        {
+          "content": "[Tue 11-14-23 22:14] [Mirror note from satellite:room] Partner [from satellite:room]: mirrored note",
+          "role": "system",
+        },
+        {
+          "content": "message after the mirror source event",
+          "role": "assistant",
+        },
+      ]
+    `);
+  });
+
+  it('preserves append order for ordinary entries when their timestamps move backward', () => {
+    const messages = entriesToMessages([
+      makeEntry({
+        id: 1,
+        role: 'user',
+        content: 'first appended turn',
+        authorId: 'user-1',
+        authorName: 'PrimaryUser',
+        timestamp: 1_700_000_120_000,
+      }),
+      makeEntry({
+        id: 2,
+        role: 'assistant',
+        content: 'second appended turn after a clock correction',
+        timestamp: 1_700_000_060_000,
+      }),
+    ], 'private');
+
+    expect(messages.map(message => message.content)).toEqual([
+      '[Tue 11-14-23 22:15] first appended turn',
+      'second appended turn after a clock correction',
+    ]);
   });
 });

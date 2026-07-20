@@ -54,6 +54,22 @@ describe('companion Garden browser scope', () => {
     expect(getCompanionCacheScope(pathname)).toBe(COMPANION_A);
   });
 
+  it('keeps rejecting malformed data pathnames at the fleet scoping boundary', () => {
+    const pathname = `/companions/${COMPANION_A}/garden/charge-budget`;
+    for (const invalid of [
+      '//api/admin/model-usage',
+      '/api//admin/model-usage',
+      '/api/admin/../model-usage',
+      '/api/admin/%2Fmodel-usage',
+      '/api/admin/model-usage?redirect=%2Fadmin',
+      '/api/admin/model-usage#fragment',
+      String.raw`/api\admin\model-usage`,
+    ]) {
+      expect(() => scopeGardenDataPath(invalid, pathname))
+        .toThrow(/one canonical root-absolute path/u);
+    }
+  });
+
   it('retains direct single-companion paths but rejects data calls from /fleet', () => {
     expect(scopeGardenPath('/settings', '/settings')).toBe('/settings');
     expect(scopeGardenDataPath('/api/admin/settings', '/settings'))

@@ -7,6 +7,7 @@ import type {
   ModelUsageBreakdown,
   ModelUsageDimensionTimeBucket,
 } from '../../../../../src/shared/telemetry/model-usage.js';
+import { serializeModelUsageQuery } from './model-usage-query';
 
 export type AdminModelUsageData = ModelUsageData;
 export type AdminModelUsageQuery = ModelUsageQuery;
@@ -43,7 +44,7 @@ export function getModelUsage(query: AdminModelUsageQuery = {}): Promise<AdminMo
 }
 
 export function buildModelUsagePath(query: AdminModelUsageQuery = {}): string {
-  const suffix = modelUsageSearchParams(query).toString();
+  const suffix = serializeModelUsageQuery(modelUsageSearchParams(query));
   return `/api/admin/model-usage${suffix ? `?${suffix}` : ''}`;
 }
 
@@ -53,7 +54,7 @@ export function buildModelUsageExportPath(
 ): string {
   const params = modelUsageSearchParams(query);
   params.set('format', format);
-  return `/api/admin/model-usage/export?${params.toString()}`;
+  return `/api/admin/model-usage/export?${serializeModelUsageQuery(params)}`;
 }
 
 export const getModelUsageExportUrl = buildModelUsageExportPath;

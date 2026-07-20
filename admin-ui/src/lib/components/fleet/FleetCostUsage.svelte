@@ -43,6 +43,7 @@
   let refreshing = $state(false);
   let errorMessage = $state('');
   let loadGeneration = 0;
+  let controller: AbortController | null = null;
 
   const authorizedGardenPath = $derived(
     projection ? selectFleetCostGardenPath(projection.companions) : null,
@@ -99,6 +100,9 @@
 
   async function loadUsage(state: AccountingQueryState, replaceUrl: boolean): Promise<void> {
     const generation = ++loadGeneration;
+    controller?.abort();
+    const request = new AbortController();
+    controller = request;
     errorMessage = '';
     refreshing = data !== null;
     if (data === null) loading = true;
@@ -107,16 +111,21 @@
       if (replaceUrl) updateUrl(state);
       const result = mode === 'garden'
         ? await getFleetModelUsage(query)
-        : await getAuthorizedFleetModelUsage(requireAuthorizedGardenPath(), query);
-      if (generation !== loadGeneration) return;
+        : await getAuthorizedFleetModelUsage(
+            requireAuthorizedGardenPath(),
+            query,
+            request.signal,
+          );
+      if (request.signal.aborted || generation !== loadGeneration) return;
       appliedState = cloneState(state);
       data = result;
     } catch (error) {
-      if (generation !== loadGeneration) return;
+      if (request.signal.aborted || generation !== loadGeneration) return;
       errorMessage = error instanceof Error
         ? error.message
         : 'Fleet cost telemetry is temporarily unavailable.';
     } finally {
+      if (controller === request) controller = null;
       if (generation === loadGeneration) {
         loading = false;
         refreshing = false;
@@ -158,6 +167,8 @@
     if (mode === 'garden') void loadCompanionNames();
     return () => {
       loadGeneration += 1;
+      controller?.abort();
+      controller = null;
     };
   });
 </script>

@@ -8,6 +8,7 @@ import {
   projectArtifactReference,
   type CompanionOwnedVisibility,
 } from './personal-projects.js';
+import { freeTimeWorkspaceContextFromVisibility } from '../../core/scheduler/free-time-workspace-resolver.js';
 
 describe('personal projects in the existing wiki tier', () => {
   let root: string;
@@ -336,5 +337,94 @@ describe('personal projects in the existing wiki tier', () => {
     expect(report.malformedProjects.some(entry => entry.id === 'project.broken')).toBe(true);
     expect(report.scannedProjects).toBe(0);
     expect(report.quarantinedArtifacts).toBe(0);
+  });
+
+  // ── psfn-framework-jp36.2.2.2: free-time privacy migration (S11.4) ──
+
+  it('contains public free-time projects to primary_contact idempotently with stable counts', () => {
+    const library = new PersonalProjectLibrary(store, () => new Date(nowMs));
+
+    // A public free-time project (net-new governed capability it predates) plus
+    // two projects already at a private posture that must stay untouched.
+    writeLegacyProject('public-essay', 'public', [
+      legacyArtifact('generated-image:essay-1'),
+      legacyArtifact('generated-image:essay-2'),
+    ]);
+    writeLegacyProject('self-garden', 'self', []);
+    writeLegacyProject('partner-poem', 'primary_contact', []);
+
+    // Dry run reports the plan and writes nothing.
+    const dry = library.migrateFreeTimeVisibility({ dryRun: true });
+    expect(dry).toMatchObject({
+      dryRun: true,
+      scannedProjects: 3,
+      containedProjects: 1,
+      alreadyPrivateProjects: 2,
+    });
+    expect(dry.entries).toEqual([{ projectRef: 'project:public-essay', from: 'public', to: 'primary_contact' }]);
+    // Writes nothing: the public project is still public on disk after a dry run.
+    expect(library.getProject('project:public-essay').visibility).toBe('public');
+
+    // Apply: only the public project is narrowed to primary_contact.
+    const applied = library.migrateFreeTimeVisibility({ dryRun: false });
+    expect(applied.containedProjects).toBe(1);
+    expect(applied.alreadyPrivateProjects).toBe(2);
+
+    const contained = library.getProject('project:public-essay');
+    expect(contained.visibility).toBe('primary_contact');
+    // Turn/artifact content is preserved — only visibility metadata flipped.
+    expect(contained.artifacts.map(artifact => artifact.ref)).toEqual([
+      'generated-image:essay-1',
+      'generated-image:essay-2',
+    ]);
+    // Already-private projects are untouched.
+    expect(library.getProject('project:self-garden').visibility).toBe('self');
+    expect(library.getProject('project:partner-poem').visibility).toBe('primary_contact');
+
+    // Every project now maps to a PRIVATE work context (nothing public remains).
+    for (const project of library.listProjects()) {
+      expect(freeTimeWorkspaceContextFromVisibility(project.visibility).kind).toBe('private');
+    }
+
+    // Idempotent: a second apply contains nothing and the counts are stable.
+    const again = library.migrateFreeTimeVisibility({ dryRun: false });
+    expect(again.containedProjects).toBe(0);
+    expect(again.alreadyPrivateProjects).toBe(3);
+    expect(again.entries).toHaveLength(0);
+  });
+
+  it('preserves partner return eligibility: a contained project still maps to a partner-anchored context', () => {
+    const library = new PersonalProjectLibrary(store, () => new Date(nowMs));
+    writeLegacyProject('shared-article', 'public', []);
+    library.migrateFreeTimeVisibility({ dryRun: false });
+
+    const contained = library.getProject('project:shared-article');
+    // With the highest-trust partner resolved, the contained project yields a
+    // private context anchored to that partner DM — eligible return preserved.
+    expect(freeTimeWorkspaceContextFromVisibility(contained.visibility, { primaryContactId: 'contact:partner' }))
+      .toEqual({ kind: 'private', returnTarget: { contactId: 'contact:partner' } });
+  });
+
+  it('reports a malformed manifest during the free-time migration instead of rewriting it', () => {
+    store.upsert({
+      id: 'project.broken-ft',
+      title: 'Project: Broken FT',
+      body: JSON.stringify({ schemaVersion: 1, kind: 'not_a_project' }),
+      tags: ['psfn:personal-project', 'project:broken-ft', 'project-status:active'],
+      sourceClass: 'companion_authored_note',
+      sensitivity: 'intimate',
+      updatedBy: 'test',
+    });
+    writeLegacyProject('ok-public', 'public', []);
+    const library = new PersonalProjectLibrary(store, () => new Date(nowMs));
+
+    const report = library.migrateFreeTimeVisibility({ dryRun: true });
+    expect(report.malformedProjects.some(entry => entry.id === 'project.broken-ft')).toBe(true);
+    // The malformed doc is neither scanned nor contained; the valid one is planned.
+    expect(report.scannedProjects).toBe(1);
+    expect(report.containedProjects).toBe(1);
+    // The malformed doc is left exactly as-is (never rewritten).
+    const brokenAfter = store.get('project.broken-ft');
+    expect(brokenAfter?.body).toContain('not_a_project');
   });
 });

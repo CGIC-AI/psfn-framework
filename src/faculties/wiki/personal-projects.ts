@@ -63,6 +63,32 @@ export interface LegacyArtifactQuarantineReport {
 
 const QUARANTINE_REPORT_SAMPLE_LIMIT = 50;
 
+export interface FreeTimeVisibilityMigrationEntry {
+  projectRef: string;
+  from: CompanionOwnedVisibility;
+  to: CompanionOwnedVisibility;
+}
+
+/**
+ * Result of the one-time free-time privacy migration (adjudication S11.4,
+ * psfn-framework-jp36.2.2.2). Counts are stable across re-runs — once every
+ * `public` free-time project has been contained to `primary_contact`, a
+ * subsequent run contains nothing.
+ */
+export interface FreeTimeVisibilityMigrationReport {
+  dryRun: boolean;
+  scannedProjects: number;
+  /** Projects whose `public` visibility was contained to `primary_contact`. */
+  containedProjects: number;
+  /** Projects already at a private posture (`self` or `primary_contact`), left untouched. */
+  alreadyPrivateProjects: number;
+  malformedProjects: Array<{ id: string; error: string }>;
+  /** Bounded sample of the contained projects (first N). */
+  entries: FreeTimeVisibilityMigrationEntry[];
+}
+
+const FREE_TIME_MIGRATION_SAMPLE_LIMIT = 50;
+
 const PROJECT_TAGS = ['psfn:personal-project'] satisfies readonly string[];
 const WARDROBE_TAGS = ['psfn:named-look'] satisfies readonly string[];
 
@@ -413,6 +439,80 @@ export class PersonalProjectLibrary {
       alreadyClassifiedArtifacts,
       quarantinedArtifacts,
       quarantinedProjects,
+      malformedProjects,
+      entries,
+    };
+  }
+
+  /**
+   * One-time, idempotent free-time privacy migration (adjudication S11.4,
+   * psfn-framework-jp36.2.2.2). Existing free-time history is flipped to private:
+   * a pre-existing `public` project visibility predates the governed publication
+   * flow (public/broadcast reach is net-new capability), so it is CONTAINED to
+   * `primary_contact` — a strict narrowing from public to the single
+   * highest-trust partner. This is "to private" (no autonomous public egress
+   * remains, {@link freeTimeWorkspaceContextFromVisibility} maps the result to a
+   * private work context) while preserving partner eligibility: the partner is
+   * the highest-trust contact and still receives an eligible return note from
+   * the work (§10.6/§10.8). `self` and `primary_contact` projects are already
+   * private and are left untouched.
+   *
+   * The migration flips ONLY the existing `visibility` metadata field (never turn
+   * content); a genuinely malformed manifest is reported and skipped, never
+   * rewritten (fail closed on unexpected shapes). Idempotent: once contained, a
+   * project carries no `public` visibility, so a re-run contains nothing and the
+   * counts are stable.
+   */
+  migrateFreeTimeVisibility(options: { dryRun: boolean }): FreeTimeVisibilityMigrationReport {
+    const entries: FreeTimeVisibilityMigrationEntry[] = [];
+    const malformedProjects: Array<{ id: string; error: string }> = [];
+    let scannedProjects = 0;
+    let containedProjects = 0;
+    let alreadyPrivateProjects = 0;
+
+    for (const entry of this.store.list().filter(candidate => hasTag(candidate, PROJECT_TAGS[0]))) {
+      const document = this.store.get(entry.id);
+      if (!document) throw new Error(`project manifest disappeared during free-time migration scan: ${entry.id}`);
+
+      // Validate up front; a genuinely malformed manifest is reported and
+      // skipped rather than rewritten or silently dropped (fail closed).
+      let manifest: PersonalProjectManifest;
+      try {
+        manifest = parsePersonalProjectDocument(document);
+      } catch (error) {
+        malformedProjects.push({ id: document.id, error: toErrorMessage(error) });
+        continue;
+      }
+
+      scannedProjects += 1;
+      if (manifest.visibility !== 'public') {
+        alreadyPrivateProjects += 1;
+        continue;
+      }
+
+      containedProjects += 1;
+      if (entries.length < FREE_TIME_MIGRATION_SAMPLE_LIMIT) {
+        entries.push({ projectRef: manifest.ref, from: 'public', to: 'primary_contact' });
+      }
+      if (options.dryRun) continue;
+
+      // Narrow public → primary_contact (contained-private, partner-eligible).
+      // persistProject recomputes the disclosure sensitivity floor from the new
+      // visibility; existing artifacts keep their own metadata (non-goal: do not
+      // rewrite artifact lineage — that is quarantineLegacyArtifacts' job).
+      const contained: PersonalProjectManifest = {
+        ...manifest,
+        visibility: 'primary_contact',
+        updatedAt: this.now().toISOString(),
+      };
+      this.persistProject(contained);
+    }
+
+    return {
+      dryRun: options.dryRun,
+      scannedProjects,
+      containedProjects,
+      alreadyPrivateProjects,
       malformedProjects,
       entries,
     };

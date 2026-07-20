@@ -62,6 +62,8 @@ import { FREE_TIME_CHANNEL_PREFIX } from '../session/session-id.js';
 import type { SessionEntry } from '../session/types.js';
 import type { Scheduler } from './scheduler.js';
 import { conversationalEntryFromSessionMetadata } from './session-metadata-preflight.js';
+import type { FreeTimeChooserOutcome } from './free-time-chooser.js';
+import type { FreeTimeWorkspace } from './free-time-workspace-resolver.js';
 
 const log = createComponentLogger('FreeTime');
 
@@ -247,6 +249,28 @@ export function buildFreeTimeFramingPrompt(input: {
   ].join('\n\n');
 }
 
+/**
+ * A short, safe framing line for a companion-chosen workspace (jp36.2.1.2). The
+ * chooser already resolved the workspace facts; the block opens on the chosen
+ * activity rather than an LRU auto-select. Project bodies are loaded by her own
+ * tools during the block, not preloaded here (bible §10.2).
+ */
+export function buildChosenWorkspaceFraming(
+  workspace: FreeTimeWorkspace,
+  label: string,
+): string {
+  const context = workspace.workContext.kind;
+  const scope = context === 'private'
+    ? 'This is your own private time.'
+    : context === 'room'
+      ? 'This work is for an ordinary room you already keep.'
+      : 'This is publication work you already own.';
+  return [
+    `You chose: ${label}.`,
+    scope,
+  ].join('\n');
+}
+
 export function buildFreeTimeContinuationPrompt(): string {
   return [
     '[Free time — still yours]',
@@ -267,7 +291,14 @@ export type FreeTimeBlockEndReason =
   | 'loafed'
   | 'companion_stopped'
   | 'turns_exhausted'
-  | 'charge_budget_exhausted';
+  | 'charge_budget_exhausted'
+  // The companion chose rest at the chooser (bible §10.2): the block ends with
+  // no free-time turn — the chooser's single model call is the only spend.
+  | 'rested'
+  // A prior rest silenced this quiet period; the block never prompted (§10.2
+  // silence persistence). Distinct from `rested` so telemetry can tell a fresh
+  // rest from a suppressed re-check.
+  | 'rest_suppressed';
 
 export interface FreeTimeBlockResult {
   lane: FreeTimeLane;
@@ -418,6 +449,20 @@ export interface FreeTimeRuntimeOptions {
   resolveWorkspaceChannelId?: () => string;
   /** Resume one active personal project from the existing personal-wiki tier. */
   loadProjectContext?: () => Promise<string | null>;
+  /**
+   * Companion free-time chooser (bible §10.2, jp36.2.1.2). When wired, it
+   * SUPERSEDES the LRU `loadProjectContext` auto-select: the companion picks
+   * rest / private wander / resume / create through one cheap background call.
+   * Rest or a silence-suppressed re-check ends the block with no free-time turn;
+   * a chosen workspace drives the block's framing. Fails closed to rest on any
+   * error, so it can never force a workspace. When absent, legacy behavior
+   * (LRU project context) applies unchanged. The lane→continuity-session merge
+   * that consumes the chosen `workspace.sessionId` is the sibling jp36.2.2.
+   */
+  chooseWorkspace?: (input: {
+    lane: FreeTimeLane;
+    nowMs: number;
+  }) => Promise<FreeTimeChooserOutcome>;
   /** Optional recorder for the Garden read surface (recent blocks + spend). */
   recordBlock?: (record: FreeTimeBlockRecord) => void;
   now?: () => number;
@@ -654,41 +699,102 @@ function makeLaneHandler(
       return;
     }
 
+    // ── Companion chooser (jp36.2.1.2) ──
+    // When wired, the chooser supersedes the LRU auto-select: the companion
+    // picks rest / private wander / resume / create through ONE cheap background
+    // call. It is only reached once the deterministic gate has opened, so a
+    // silenced re-check is rare (the min-block interval usually holds first) —
+    // but silence persistence is the authoritative "not again this quiet period"
+    // guard regardless of interval config.
+    let chosen: FreeTimeChooserOutcome | undefined;
+    if (options.chooseWorkspace) {
+      chosen = await options.chooseWorkspace({ lane, nowMs });
+    }
+
     // Resolve the continuity workspace ONLY now that a block is committed to
-    // spend, so an eventual resolver is never invoked on skipped ticks. Both
-    // lanes call the same resolver, so both converge on the same session.
+    // spend, so an eventual resolver is never invoked on gate-skipped ticks.
+    // Both lanes call the same resolver, so both converge on the same session.
     const channelId = resolveWorkspaceChannelId();
 
-    const projectContext = options.loadProjectContext
-      ? await options.loadProjectContext()
-      : null;
-    const framingPrompt = buildFreeTimeFramingPrompt({
-      seedText: options.config.seedText,
-      projectContext,
-    });
-
-    const result = await options.runBlock({
-      lane,
-      run: (readSpentChargeUnits) => runFreeTimeBlock({
-        lane,
-        channelId,
-        maxTurns: options.config.budget.maxTurns,
-        maxChargeUnits: options.config.budget.maxChargeUnits,
-        framingPrompt,
-        readSpentChargeUnits,
-        invokeTurn: ({ turnIndex, content }) => options.invokeTurn({
+    if (chosen?.kind === 'suppressed') {
+      // A prior rest silences this quiet period: no prompt, no spend, no note.
+      // Advance the min-block interval so the deterministic gate also holds, and
+      // record only a lightweight block event (no channel note / recordBlock) so
+      // repeated suppressed re-checks cannot spam the internal transcript.
+      state.lastBlockAtMs = nowMs;
+      if (options.eventBus) {
+        void options.eventBus.emit(FREE_TIME_BLOCK_EVENT, {
           lane,
           channelId,
-          audience: 'self',
-          turnIndex,
-          content,
+          turnsUsed: 0,
+          activity: false,
+          endReason: 'rest_suppressed',
+          spentChargeUnits: 0,
+          maxChargeUnits: options.config.budget.maxChargeUnits,
+          maxTurns: options.config.budget.maxTurns,
+          startedAtMs: nowMs,
+          endedAtMs: nowMs,
+          returnSurfaced: false,
+          timestamp: nowMs,
+        });
+      }
+      log.debug('Free-time block suppressed by rest-window silence', { lane });
+      return;
+    }
+
+    let result: FreeTimeBlockResult;
+    if (chosen?.kind === 'rest') {
+      // Rest is a first-class outcome (bible §6.7/§10.2): the block ends here
+      // with NO free-time turn. The chooser's single call is the only spend;
+      // there is no second model call.
+      log.debug('Free-time block ended at chooser (rest)', { lane, reason: chosen.reason });
+      result = {
+        lane,
+        channelId,
+        turnsUsed: 0,
+        activity: false,
+        endReason: 'rested',
+        spentChargeUnits: 0,
+        startedAtMs: nowMs,
+        endedAtMs: nowMs,
+      };
+    } else {
+      const projectContext = chosen?.kind === 'workspace'
+        ? buildChosenWorkspaceFraming(chosen.workspace, chosen.label)
+        : (options.loadProjectContext ? await options.loadProjectContext() : null);
+      const framingPrompt = buildFreeTimeFramingPrompt({
+        seedText: options.config.seedText,
+        projectContext,
+      });
+
+      result = await options.runBlock({
+        lane,
+        run: (readSpentChargeUnits) => runFreeTimeBlock({
+          lane,
+          channelId,
+          maxTurns: options.config.budget.maxTurns,
+          maxChargeUnits: options.config.budget.maxChargeUnits,
+          framingPrompt,
+          readSpentChargeUnits,
+          invokeTurn: ({ turnIndex, content }) => options.invokeTurn({
+            lane,
+            channelId,
+            audience: 'self',
+            turnIndex,
+            content,
+          }),
+          now,
         }),
-        now,
-      }),
-    });
+      });
+    }
 
     state.lastBlockAtMs = result.endedAtMs;
-    state.blocksToday += 1;
+    // A rest outcome consumed a free-time opportunity but not a full block; it
+    // does not draw down the daily block budget (silence persistence, not the
+    // day cap, prevents re-prompting this period).
+    if (result.endReason !== 'rested') {
+      state.blocksToday += 1;
+    }
 
     // Provenance marker on the internal transcript (inspectable, tagged).
     options.sessionManager.appendSystemNote(

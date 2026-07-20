@@ -47,6 +47,7 @@ describe('startup owner-file loaders', () => {
     'backup.json',
     'skills.json',
     'intake-policy.json',
+    'partner-affect-shadow.json',
   ] as const;
 
   afterEach(() => {

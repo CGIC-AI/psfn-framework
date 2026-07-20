@@ -1115,6 +1115,8 @@ export class AdminSettingsDataService implements AdminSettingsService {
           return JSON.stringify(this.deps.configStore.loadTrustPolicy(), null, 2);
         case 'intake-policy':
           return JSON.stringify(this.deps.configStore.loadIntakePolicy(), null, 2);
+        case 'partner-affect-shadow':
+          return JSON.stringify(this.deps.configStore.loadPartnerAffectShadow(), null, 2);
         case 'capabilities':
           return JSON.stringify(this.deps.configStore.loadCapabilityTier(), null, 2);
         case 'charge-policy':
@@ -1251,6 +1253,10 @@ export class AdminSettingsDataService implements AdminSettingsService {
         case 'intake-policy': {
           this.deps.configStore.saveIntakePolicy(parsed);
           return { ok: true, message: 'intake-policy.json saved' };
+        }
+        case 'partner-affect-shadow': {
+          this.deps.configStore.savePartnerAffectShadow(parsed);
+          return { ok: true, message: 'partner-affect-shadow.json saved' };
         }
         default:
           return { ok: false, message: `Unknown settings subsystem: ${key}` };

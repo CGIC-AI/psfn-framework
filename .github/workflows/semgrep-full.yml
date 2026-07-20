@@ -1,0 +1,42 @@
+name: Semgrep Full Scan
+
+on:
+  schedule:
+    - cron: "17 7 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: semgrep-full-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  semgrep:
+    name: Semgrep full repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Check out exact revision
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.sha }}
+
+      - name: Test committed Semgrep rules
+        run: bash scripts/ci/run-semgrep.sh test
+
+      - name: Scan full repository
+        env:
+          SEMGREP_SARIF_OUTPUT: semgrep.sarif
+        run: bash scripts/ci/run-semgrep.sh full
+
+      - name: Retain Semgrep SARIF
+        if: always() && hashFiles('semgrep.sarif') != ''
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: semgrep-full-sarif-${{ github.run_id }}-${{ github.run_attempt }}
+          path: semgrep.sarif
+          if-no-files-found: error
+          retention-days: 30

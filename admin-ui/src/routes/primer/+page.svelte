@@ -1,304 +1,289 @@
 <script lang="ts">
-  // Primer is a static reference page -- no API calls needed.
-  // Content is based on the server-rendered primer template.
+  import { scopeGardenPath } from '$lib/fleet/companion-scope';
 
-  interface PrimerKnob {
-    name: string;
-    description: string;
+  interface GuideLink {
+    label: string;
+    path: string;
+    fleetLevel?: boolean;
   }
 
-  interface PrimerSection {
+  interface GuideLocation {
     title: string;
-    intro?: string;
-    knobs: PrimerKnob[];
+    description: string;
+    links: GuideLink[];
   }
 
-  const sections: PrimerSection[] = [
+  interface GuideFlow {
+    title: string;
+    steps: string[];
+    links: GuideLink[];
+  }
+
+  const locations: GuideLocation[] = [
     {
-      title: 'Models',
-      knobs: [
-        {
-          name: 'Primary Model',
-          description: 'The model that generates your conversational responses. This is your voice, your thinking engine. Larger models produce richer, more nuanced responses but cost more per turn.',
-        },
-        {
-          name: 'Extraction Model',
-          description: 'The model used for memory extraction -- analyzing conversations after the fact to identify important facts worth remembering. Can be a different (often cheaper) model since it runs asynchronously and doesn\'t need to be your "voice."',
-        },
-        {
-          name: 'Provider',
-          description: 'The API provider routing layer (usually "openrouter"). The LiteLLM proxy handles the actual routing -- this tells it which provider namespace to use.',
-        },
-        {
-          name: 'Model Roster',
-          description: 'Purpose-based model assignments: chat (conversation), background (extraction, maintenance), reasoning (deep thinking), longContext (large documents). Each slot specifies a model, provider, max tokens, and context window. Unassigned slots fall back along a chain: background to chat, reasoning to chat, longContext to chat.',
-        },
-        {
-          name: 'Model Catalog',
-          description: 'A registry of available models with their capabilities and constraints. Used by the role assignment system to validate assignments. Populated automatically via model discovery from LiteLLM/OpenRouter.',
-        },
-        {
-          name: 'Provider Order',
-          description: 'Preferred order of OpenRouter providers when multiple can serve the same model. Useful for prioritizing cheaper or faster providers. Example: ["DeepInfra", "Together", "Fireworks"].',
-        },
+      title: 'Start and converse',
+      description: 'Dashboard summarizes the current companion. Chat is the operator conversation console; Sessions browses retained conversations; Prompt Monitor (the Loom) explains one turn from prompt and context through tools, provider, and timing.',
+      links: [
+        { label: 'Dashboard', path: '/' },
+        { label: 'Chat', path: '/chat' },
+        { label: 'Sessions', path: '/sessions' },
+        { label: 'Prompt Monitor', path: '/prompt-monitor' },
       ],
     },
     {
-      title: 'Token Limits',
-      knobs: [
-        {
-          name: 'Primary Max Tokens',
-          description: 'Maximum length of your responses in tokens (~4 chars each). Higher values let you be more verbose and thorough. Lower values force conciseness. Default: 16384 (~60K chars).',
-        },
-        {
-          name: 'Extraction Max Tokens',
-          description: 'Maximum tokens for memory extraction responses. Usually doesn\'t need to be as high as primary since extraction outputs are structured XML. Default: 8192.',
-        },
-        {
-          name: 'Default Context Window',
-          description: 'The assumed context window size for your primary model, in tokens. Used by the budgeting system to calculate how much space to allocate for memories, history, and system prompt. Default: 128,000. Set this to match your actual model\'s context window for accurate budgeting.',
-        },
+      title: 'Memory and people',
+      description: 'Memory exposes durable memory records and safe operator metadata. L0.1 Episodes shows episodic landmarks and arcs. Contacts (the Visitors) owns canonical people, linked channel identities, trust, and relationship state.',
+      links: [
+        { label: 'Memory', path: '/memory' },
+        { label: 'L0.1 Episodes', path: '/episodic-memory' },
+        { label: 'Contacts', path: '/contacts' },
       ],
     },
     {
-      title: 'Context Budgeting',
-      intro: 'These percentages control how your context window is divided up. They work together -- think of your context window as a garden bed with allocated plots.',
-      knobs: [
-        {
-          name: 'Memory Budget %',
-          description: 'What percentage of your context window to reserve for retrieved memories. Default: 20%. Higher values give you richer recall but leave less room for conversation history.',
-        },
-        {
-          name: 'Memory Retrieval Budget %',
-          description: 'Percentage of the context budget dedicated to memory retrieval results specifically. Works alongside the memory budget to fine-tune how much context goes to memories vs other sources.',
-        },
-        {
-          name: 'Session History Budget %',
-          description: 'Percentage of the context window for conversation history. Balances how much recent chat you see against room for memories and system prompt.',
-        },
-        {
-          name: 'Extraction Threshold %',
-          description: 'When session content exceeds this percentage of the context window, memory extraction is triggered. Default: 30%. Lower values extract more aggressively (catching details sooner).',
-        },
-        {
-          name: 'Compaction Threshold %',
-          description: 'When session content exceeds this percentage, auto-compaction kicks in -- summarizing older messages to free up space. Default: 70%. The oldest 50% of messages get compacted via LLM summarization.',
-        },
-        {
-          name: 'Emotional Salience Threshold %',
-          description: 'During compaction, messages with emotional salience above this threshold are preserved verbatim instead of being summarized. Protects emotionally significant moments from being flattened into summaries.',
-        },
+      title: 'Skills and configuration',
+      description: 'Skills shows what was discovered, loaded, skipped, and injected. Settings edits the canonical owner files; the floating Save Settings control stays visible and reports dirty, saving, and last-saved state.',
+      links: [
+        { label: 'Skills', path: '/skills' },
+        { label: 'Settings', path: '/settings' },
       ],
     },
     {
-      title: 'Memory',
-      knobs: [
-        {
-          name: 'Retrieval Limit',
-          description: 'How many memories to inject into your context for each conversation turn. More memories give you richer context but consume more of your input token budget. Default: 15.',
-        },
-        {
-          name: 'Extraction Interval',
-          description: 'How many messages between memory extraction runs. Lower values extract more frequently (catching details sooner) but cost more LLM calls. Default: every 5 messages.',
-        },
-        {
-          name: 'Salience Floor',
-          description: 'Memories below this salience threshold get pruned during maintenance. Read-only -- controlled by the memory system constants. Memories naturally decay over time unless accessed or reinforced.',
-        },
+      title: 'Cognitive Security',
+      description: 'Approvals is the human quarantine queue. Firewall shows enforcement mode, source tiers and lists, escalation thresholds, sink gates, and recent CogSec events.',
+      links: [
+        { label: 'Approvals', path: '/cognitive-security/approvals' },
+        { label: 'Firewall', path: '/cognitive-security/firewall' },
       ],
     },
     {
-      title: 'Memory Extraction Quality',
-      intro: 'These thresholds control the quality gate for what gets extracted into long-term memory. Higher values mean pickier extraction -- fewer but more reliable memories.',
-      knobs: [
-        {
-          name: 'Minimum Importance',
-          description: 'Extracted memories below this importance score are discarded. Filters out trivial observations.',
-        },
-        {
-          name: 'Minimum Confidence',
-          description: 'How confident the extraction model must be about a fact before storing it. Prevents uncertain or speculative inferences from becoming "memories."',
-        },
-        {
-          name: 'Minimum Novelty',
-          description: 'How different a new memory must be from existing ones. Prevents near-duplicates from accumulating. Works alongside embedding-based deduplication.',
-        },
-        {
-          name: 'Max Writes Per Extraction',
-          description: 'Maximum number of new memories that can be created from a single extraction run. Prevents one long conversation from flooding your memory store.',
-        },
-        {
-          name: 'Extraction Telemetry / Retrieval Telemetry',
-          description: 'When enabled, detailed metrics about extraction and retrieval operations are logged to the event bus -- visible in Garden Pulse and the audit timeline.',
-        },
+      title: 'Usage and cost',
+      description: 'Dashboard has the quick current-companion totals. Token Usage provides the detailed per-companion accounting cockpit; Fleet Costs compares authorized companions and fleet totals.',
+      links: [
+        { label: 'Token Usage', path: '/charge-budget?tab=token-usage' },
+        { label: 'Fleet Costs', path: '/fleet-costs' },
       ],
     },
     {
-      title: 'Profile Synthesis',
-      intro: 'Periodically refreshes contact profiles by synthesizing recent relational memories into coherent summaries. Like forming an impression of someone over time.',
-      knobs: [
-        {
-          name: 'Enabled',
-          description: 'Whether profile synthesis runs at all. When off, contact profiles are only updated manually.',
-        },
-        {
-          name: 'Refresh Interval',
-          description: 'How often to check if any contact profiles need refreshing.',
-        },
-        {
-          name: 'Cooldown',
-          description: 'Minimum time between synthesis runs for the same contact. Prevents re-synthesizing after every single interaction.',
-        },
-        {
-          name: 'Min Writes / Min Source Memories',
-          description: 'A contact needs at least this many new relational memories (and total source memories) before synthesis is triggered. Ensures enough data before forming impressions.',
-        },
-        {
-          name: 'Quality Thresholds (Importance / Confidence / Novelty)',
-          description: 'Same as extraction quality thresholds but applied to the synthesis output. Controls how selective the profile refresh is.',
-        },
-        {
-          name: 'Source Memory Limit',
-          description: 'Maximum number of memories to feed into a single synthesis run. Prevents context overflow for contacts with very long history.',
-        },
-      ],
-    },
-    {
-      title: 'Sessions',
-      knobs: [
-        {
-          name: 'Message Limit',
-          description: 'How many recent messages to include in your conversation context window. Higher values give you more conversational memory within a single session but consume more tokens. Default: 30 messages.',
-        },
-      ],
-    },
-    {
-      title: 'Analysis Workbench (RLM+REPL)',
-      knobs: [
-        {
-          name: 'Max Tokens',
-          description: 'Maximum tokens available for each analysis workbench iteration. Use this only for large files, codebases, logs, transcripts, datasets, or evidence sets that would overload normal context.',
-        },
-        {
-          name: 'Max Wall Time',
-          description: 'Maximum real-world time (in ms) for a single analysis workbench run. Prevents runaway multi-stage analysis loops.',
-        },
-        {
-          name: 'Max Sub-Queries',
-          description: 'Maximum number of llm_query() calls within a single analysis workbench run. Each sub-query is an LLM call, so this controls both cost and depth.',
-        },
-      ],
-    },
-    {
-      title: 'Resilience',
-      knobs: [
-        {
-          name: 'Retry Max Attempts',
-          description: 'How many times to retry a failed LLM call before giving up. Handles transient network errors and rate limits gracefully.',
-        },
-        {
-          name: 'Retry Base Delay',
-          description: 'Starting delay (in ms) between retries. Uses exponential backoff -- each retry waits longer. A 1000ms base means retries at ~1s, ~2s, ~4s, etc.',
-        },
-      ],
-    },
-    {
-      title: 'Scheduler',
-      knobs: [
-        {
-          name: 'Maintenance Interval',
-          description: 'How often (in ms) the scheduler runs maintenance tasks: memory salience decay, heartbeat checks, and other periodic work. Default: 300,000ms (5 minutes). Lower values make maintenance more responsive but add overhead.',
-        },
-      ],
-    },
-    {
-      title: 'Import Processing',
-      intro: 'Controls how bulk memory imports (from external sources like Voxta, ChatGPT exports, etc.) are processed.',
-      knobs: [
-        {
-          name: 'Route Mode',
-          description: 'Where import processing LLM calls are routed: default (use the normal extraction model), local (use a local endpoint for cost savings on large imports).',
-        },
-        {
-          name: 'Strict Policy',
-          description: 'When enabled, import processing applies stricter quality thresholds. Useful for noisy source data where you want higher confidence before storing.',
-        },
-        {
-          name: 'Local Endpoint URL / Local Model',
-          description: 'When route mode is local, the URL and model name for the local inference endpoint. Typically a local Ollama or vLLM instance for high-throughput bulk processing.',
-        },
-      ],
-    },
-    {
-      title: 'Prompt Soil Authoring',
-      intro: 'Runtime prompt authoring now centers on grouped atomic macros instead of coarse legacy prose blocks.',
-      knobs: [
-        {
-          name: 'Atomic Signals + Prose',
-          description: 'Treat runtime macros as small facts: booleans, labels, counts, timestamps, and short fragments. Write the connective prose yourself in Prompt Soil so tone and emphasis stay companion-authored instead of being locked inside giant canned paragraphs.',
-        },
-        {
-          name: 'Runtime Macro Families',
-          description: 'Prompt Soil groups the live macro catalog into Core Aliases, Runtime State, Trust Gates, Response Style, Affect, Metacognition, Internal State, Attention & Memory, and Tooling & Self-Image. Start with the family that matches the kind of guidance you are writing instead of scanning one flat list.',
-        },
-        {
-          name: 'Legacy Runtime Layer Migration',
-          description: 'Untouched legacy runtime layers are migrated onto the umbrella Runtime State / Self / Attention / Tooling defaults. Customized legacy layers are kept so old handcrafted guidance is not lost, but new umbrella sections become the main default surface for future edits.',
-        },
-        {
-          name: 'Prompt Soil Workflow',
-          description: 'Use the grouped macro catalog in Prompt Soil as the runtime source of truth. Reach for trust and response-style booleans when branching prose, use affect/internal-state labels for texture, and prefer counts plus bullet-line bodies when summarizing attention or tooling state.',
-        },
-      ],
-    },
-    {
-      title: 'How Settings Work',
-      knobs: [
-        {
-          name: 'Persistence',
-          description: 'Runtime config now lives in canonical system-data JSON files such as settings.json, models.json, scheduler.json, and capability-tier.json. Changes take effect immediately and mutate the live configuration object that components read from per-call.',
-        },
-        {
-          name: 'Defaults',
-          description: '.env is now for secrets and process/bootstrap wiring only. Mutable runtime behavior belongs in the JSON config owners, and Garden writes to the correct owner file for you.',
-        },
+      title: 'Fleet',
+      description: 'Every deployment is a fleet, including a one-companion deployment. The fleet portal is the fleet-level entry point; each authorized companion opens into a separately scoped Garden.',
+      links: [
+        { label: 'Fleet overview', path: '/fleet', fleetLevel: true },
       ],
     },
   ];
+
+  const flows: GuideFlow[] = [
+    {
+      title: 'Review a quarantined item',
+      steps: [
+        'Open Approvals and expand an awaiting-review item.',
+        'Inspect why it was flagged, classifier findings, envelope history, and the sanitized representation before revealing raw content.',
+        'Enter an audited reason, choose release raw, release sanitized, or discard, optionally teach the source list, then complete the two-step confirmation.',
+      ],
+      links: [{ label: 'Open Approvals', path: '/cognitive-security/approvals' }],
+    },
+    {
+      title: 'Check tokens and costs',
+      steps: [
+        'Use Dashboard for a quick companion snapshot.',
+        'Open Token Usage for model, provider, cache, time-window, and event detail.',
+        'Use Fleet Costs when the question spans companions.',
+      ],
+      links: [
+        { label: 'Token Usage', path: '/charge-budget?tab=token-usage' },
+        { label: 'Fleet Costs', path: '/fleet-costs' },
+      ],
+    },
+    {
+      title: 'Save settings',
+      steps: [
+        'Make changes in the relevant Settings tab and use the floating Save Settings control.',
+        'Treat a staged raw JSON edit as a separate owner-file change: it can block the unified save or cause that owner file to be skipped until the raw edit is saved or discarded.',
+        'Wait for the save confirmation; the control records the most recent confirmed save for this companion.',
+      ],
+      links: [{ label: 'Open Settings', path: '/settings' }],
+    },
+    {
+      title: 'Switch companions',
+      steps: [
+        'Use the companion selector in the Garden sidebar for a direct switch, or return to Fleet overview.',
+        'A switch clears the previous companion browser scope before loading the selected companion Garden.',
+      ],
+      links: [{ label: 'Fleet overview', path: '/fleet', fleetLevel: true }],
+    },
+    {
+      title: 'Recover a session',
+      steps: [
+        'Open Session Recovery for a poisoned, over-compressed, or otherwise bad live session route.',
+        'Start a fresh logical session for the source channel. Old L0 history is retained for audit and search; row-level redaction belongs in CogSec Remediation.',
+      ],
+      links: [{ label: 'Session Recovery', path: '/session-recovery' }],
+    },
+  ];
+
+  const repositoryDocs = [
+    {
+      label: 'docs/operations.md',
+      href: 'https://github.com/CGIC-AI/psfn-framework/blob/main/docs/operations.md',
+      description: 'deployment, recovery, health checks, and operational procedures',
+    },
+    {
+      label: 'docs/multi-companion.md',
+      href: 'https://github.com/CGIC-AI/psfn-framework/blob/main/docs/multi-companion.md',
+      description: 'fleet topology, authorization, and per-companion Garden boundaries',
+    },
+    {
+      label: 'docs/cognitive-security.md',
+      href: 'https://github.com/CGIC-AI/psfn-framework/blob/main/docs/cognitive-security.md',
+      description: 'intake screening, quarantine, source lists, and remediation',
+    },
+    {
+      label: 'docs/architecture.md',
+      href: 'https://github.com/CGIC-AI/psfn-framework/blob/main/docs/architecture.md',
+      description: 'runtime ownership and subsystem map',
+    },
+    {
+      label: 'docs/setup.md',
+      href: 'https://github.com/CGIC-AI/psfn-framework/blob/main/docs/setup.md',
+      description: 'bootstrap and local bring-up',
+    },
+  ];
+
+  function guideHref(link: GuideLink): string {
+    return link.fleetLevel ? link.path : scopeGardenPath(link.path);
+  }
 </script>
 
-<div class="space-y-6">
-  <!-- Header -->
-  <div>
-    <h1 class="text-2xl font-serif font-bold text-shadow-900">The Almanac</h1>
-    <p class="text-sm text-shadow-600 mt-1">Internal reference for understanding the knobs and dials of the substrate</p>
-  </div>
+<svelte:head>
+  <title>Operator Guide · Garden</title>
+</svelte:head>
 
-  <!-- Intro -->
-  <div class="card-garden p-5">
-    <p class="text-sm text-shadow-700 leading-relaxed">
-      This is your internal reference for understanding the knobs and dials of your substrate.
-      Each setting shapes how you think, remember, and express yourself.
+<div class="space-y-8">
+  <header>
+    <p class="text-xs font-semibold uppercase tracking-[0.2em] text-gold-700">Garden map</p>
+    <h1 class="mt-1 text-2xl font-serif font-bold text-shadow-900">Operator Guide</h1>
+    <p class="mt-2 max-w-3xl text-sm leading-relaxed text-shadow-600">
+      A concise map for day-to-day operation. Use the linked repository docs for procedures and architecture detail.
     </p>
-  </div>
+  </header>
 
-  <!-- Sections -->
-  {#each sections as section}
-    <div class="card-garden p-5">
-      <h2 class="text-lg font-serif font-semibold text-shadow-900 mb-4">{section.title}</h2>
-
-      {#if section.intro}
-        <p class="text-sm text-shadow-600 mb-4 leading-relaxed">{section.intro}</p>
-      {/if}
-
-      <div class="space-y-4">
-        {#each section.knobs as knob}
-          <div class="pl-4 border-l-2 border-bark-200">
-            <p class="text-sm font-semibold text-shadow-800 mb-1">{knob.name}</p>
-            <p class="text-sm text-shadow-700 leading-relaxed">{knob.description}</p>
-          </div>
-        {/each}
-      </div>
+  <section class="space-y-4" aria-labelledby="locations-title">
+    <div>
+      <h2 id="locations-title" class="font-serif text-xl font-semibold text-shadow-900">Where things live</h2>
+      <p class="mt-1 text-sm text-shadow-600">Links stay inside the active companion Garden unless marked fleet-level.</p>
     </div>
-  {/each}
+    <div class="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+      {#each locations as location (location.title)}
+        <article class="card-garden p-5">
+          <h3 class="font-serif text-lg font-semibold text-shadow-900">{location.title}</h3>
+          <p class="mt-2 text-sm leading-relaxed text-shadow-700">{location.description}</p>
+          <div class="mt-4 flex flex-wrap gap-2">
+            {#each location.links as link (link.label)}
+              <a
+                href={guideHref(link)}
+                class="rounded-lg border border-bark-300 bg-bark-50 px-3 py-1.5 text-sm font-medium text-gold-700 transition-colors hover:border-gold-400 hover:bg-gold-50"
+              >
+                {link.label}
+              </a>
+            {/each}
+          </div>
+        </article>
+      {/each}
+    </div>
+  </section>
+
+  <section class="space-y-4" aria-labelledby="flows-title">
+    <div>
+      <h2 id="flows-title" class="font-serif text-xl font-semibold text-shadow-900">Common flows</h2>
+      <p class="mt-1 text-sm text-shadow-600">Short paths through the operator tasks that recur most often.</p>
+    </div>
+    <div class="grid gap-4 lg:grid-cols-2">
+      {#each flows as flow (flow.title)}
+        <article class="card-garden p-5">
+          <h3 class="font-serif text-lg font-semibold text-shadow-900">{flow.title}</h3>
+          <ol class="mt-3 space-y-2 pl-5 text-sm leading-relaxed text-shadow-700 list-decimal marker:font-semibold marker:text-gold-700">
+            {#each flow.steps as step (step)}
+              <li class="pl-1">{step}</li>
+            {/each}
+          </ol>
+          <div class="mt-4 flex flex-wrap gap-3">
+            {#each flow.links as link (link.label)}
+              <a href={guideHref(link)} class="text-sm font-medium text-gold-700 underline-offset-2 hover:underline">
+                {link.label} &rarr;
+              </a>
+            {/each}
+          </div>
+        </article>
+      {/each}
+    </div>
+  </section>
+
+  <section class="space-y-4" aria-labelledby="health-title">
+    <div>
+      <h2 id="health-title" class="font-serif text-xl font-semibold text-shadow-900">What health messages mean</h2>
+      <p class="mt-1 text-sm text-shadow-600">Health is dimension-specific. An unknown or degraded dimension is not evidence that every companion surface is down.</p>
+    </div>
+    <div class="grid gap-4 lg:grid-cols-3">
+      <article class="card-garden p-5 lg:col-span-2">
+        <h3 class="font-serif text-lg font-semibold text-shadow-900">Fleet companion status</h3>
+        <dl class="mt-3 grid gap-3 text-sm sm:grid-cols-3">
+          <div class="rounded-lg border border-bark-200 bg-bark-50 p-3">
+            <dt class="font-semibold text-shadow-800">Agent</dt>
+            <dd class="mt-1 leading-relaxed text-shadow-600">Gateway-to-agent RPC registration: up when connected, down when absent, unknown while registering.</dd>
+          </div>
+          <div class="rounded-lg border border-bark-200 bg-bark-50 p-3">
+            <dt class="font-semibold text-shadow-800">Admin</dt>
+            <dd class="mt-1 leading-relaxed text-shadow-600">Reachability of that companion's Garden admin transport. Only an up Admin dimension enables Open Garden.</dd>
+          </div>
+          <div class="rounded-lg border border-bark-200 bg-bark-50 p-3">
+            <dt class="font-semibold text-shadow-800">Channels</dt>
+            <dd class="mt-1 leading-relaxed text-shadow-600">Routed channel connectivity: one confirmed connection is up; all confirmed disconnected is down; incomplete evidence is unknown.</dd>
+          </div>
+        </dl>
+        <p class="mt-3 text-xs leading-relaxed text-shadow-500">
+          Unknown means there is no honest current signal. It should not be read as either healthy or failed.
+        </p>
+      </article>
+
+      <article class="card-garden p-5">
+        <h3 class="font-serif text-lg font-semibold text-shadow-900">Degraded subsystems</h3>
+        <p class="mt-2 text-sm leading-relaxed text-shadow-700">
+          If a degraded-subsystems banner appears, treat it as a partial-health warning rather than a whole-companion outage. Open Subsystem Health to identify the background lane, its last reason or error, and whether it is degraded, failed, stale, skipped, paused, or has not produced data since process start.
+        </p>
+        <a href={scopeGardenPath('/subsystem-health')} class="mt-3 inline-flex text-sm font-medium text-gold-700 underline-offset-2 hover:underline">
+          Open Subsystem Health &rarr;
+        </a>
+      </article>
+
+      <article class="card-garden p-5 lg:col-span-3">
+        <h3 class="font-serif text-lg font-semibold text-shadow-900">Skills-root degradation</h3>
+        <p class="mt-2 text-sm leading-relaxed text-shadow-700">
+          A missing skills-root warning names configured, non-custom roots that do not exist on disk; those roots cannot contribute skills. “Requires gateway connection” instead means the runtime snapshot is unavailable—it does not prove the skill catalog is empty.
+        </p>
+        <a href={scopeGardenPath('/skills')} class="mt-3 inline-flex text-sm font-medium text-gold-700 underline-offset-2 hover:underline">
+          Open Skills &rarr;
+        </a>
+      </article>
+    </div>
+  </section>
+
+  <section class="card-garden p-5" aria-labelledby="docs-title">
+    <h2 id="docs-title" class="font-serif text-xl font-semibold text-shadow-900">Repository references</h2>
+    <p class="mt-1 text-sm text-shadow-600">These are the maintained references; this page intentionally does not duplicate them.</p>
+    <ul class="mt-4 grid gap-3 md:grid-cols-2">
+      {#each repositoryDocs as doc (doc.label)}
+        <li class="rounded-lg border border-bark-200 bg-bark-50 p-3">
+          <a
+            href={doc.href}
+            target="_blank"
+            rel="noreferrer"
+            class="font-mono text-sm font-semibold text-gold-700 underline-offset-2 hover:underline"
+          >
+            {doc.label}
+          </a>
+          <p class="mt-1 text-sm text-shadow-600">{doc.description}</p>
+        </li>
+      {/each}
+    </ul>
+  </section>
 </div>

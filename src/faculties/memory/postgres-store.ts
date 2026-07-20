@@ -790,6 +790,9 @@ class PostgresMemoryStore implements MemoryStorePort {
   }
 
   async updateMemory(id: string, updates: MemoryStoreUpdatePatch): Promise<void> {
+    if (updates.text !== undefined && updates.embedding === undefined) {
+      throw new Error('Memory text updates require a replacement embedding');
+    }
     const update = async (): Promise<void> => {
       const rows = await this.queryWrite<MemoryRow>(`
         SELECT ${MEMORY_SUBJECT_SELECT_COLUMNS}

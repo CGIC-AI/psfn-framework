@@ -39,6 +39,9 @@ export const POSTGRES_MEMORY_MIGRATIONS = [
     delete_reason TEXT,
     authorization_revision BIGINT NOT NULL DEFAULT 1,
     subject_evidence_digest TEXT,
+    search_vector TSVECTOR GENERATED ALWAYS AS (
+      to_tsvector('simple', coalesce(text, ''))
+    ) STORED,
     embedding VECTOR
   );
   `,
@@ -63,6 +66,7 @@ export const POSTGRES_MEMORY_MIGRATIONS = [
   `ALTER TABLE l2_memories ADD COLUMN IF NOT EXISTS delete_reason TEXT;`,
   `ALTER TABLE l2_memories ADD COLUMN IF NOT EXISTS authorization_revision BIGINT NOT NULL DEFAULT 1;`,
   `ALTER TABLE l2_memories ADD COLUMN IF NOT EXISTS subject_evidence_digest TEXT;`,
+  `ALTER TABLE l2_memories ADD COLUMN IF NOT EXISTS search_vector TSVECTOR GENERATED ALWAYS AS (to_tsvector('simple', coalesce(text, ''))) STORED;`,
   `ALTER TABLE l2_memories DROP CONSTRAINT IF EXISTS l2_memories_subject_evidence_digest_check;`,
   `ALTER TABLE l2_memories ADD CONSTRAINT l2_memories_subject_evidence_digest_check CHECK (subject_evidence_digest IS NULL OR subject_evidence_digest ~ '^[a-f0-9]{64}$');`,
   `
@@ -98,6 +102,7 @@ export const POSTGRES_MEMORY_MIGRATIONS = [
   `CREATE INDEX IF NOT EXISTS idx_l2_memories_source_type ON l2_memories(source_type, extracted_at DESC);`,
   `CREATE INDEX IF NOT EXISTS idx_l2_memories_scope_ref ON l2_memories(scope_ref_kind, scope_ref_id);`,
   `CREATE INDEX IF NOT EXISTS idx_l2_memories_embedding_present ON l2_memories(id) WHERE embedding IS NOT NULL;`,
+  `CREATE INDEX IF NOT EXISTS idx_l2_memories_search_vector ON l2_memories USING GIN (search_vector);`,
   `CREATE INDEX IF NOT EXISTS idx_l2_memories_tags_gin ON l2_memories USING GIN (tags);`,
   `CREATE INDEX IF NOT EXISTS idx_l2_memories_scope_tags_gin ON l2_memories USING GIN (scope_tags);`,
   `CREATE INDEX IF NOT EXISTS idx_l2_memories_provenance_refs_gin ON l2_memories USING GIN (provenance_refs);`,

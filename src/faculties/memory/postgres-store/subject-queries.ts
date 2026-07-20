@@ -146,8 +146,11 @@ function buildSelector(
       const query = selector.query.trim();
       if (!query) throw new Error('Authorized memory text search requires a query');
       values.push(query);
-      where.push(`POSITION(lower($${values.length}) IN lower(memory.text)) > 0`);
-      similaritySql = '1::double precision';
+      const textQuerySql = `plainto_tsquery('simple', $${values.length})`;
+      where.push(`memory.search_vector @@ ${textQuerySql}`);
+      similaritySql = `ts_rank_cd(memory.search_vector, ${textQuerySql})::double precision`;
+      orderBy = `${similaritySql} DESC, memory.salience DESC, memory.extracted_at DESC`;
+      pageOrderBy = 'similarity DESC, salience DESC, extracted_at DESC, id DESC';
       limit = clampLimit(selector.limit, 50, 1, 500);
       offset = clampLimit(selector.offset, 0, 0, 100_000);
       break;

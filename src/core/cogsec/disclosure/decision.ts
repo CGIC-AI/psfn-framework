@@ -241,8 +241,15 @@ export function destinationPermitted(
   const ids = mergeSourceIds(constraints, destination.kind);
   if (ids === null) return false;
   if (ids === UNRESTRICTED) return true;
-  const targetId = destination.kind === 'contact_dm' ? destination.contactId : destination.channelId;
-  return ids.includes(targetId);
+  // `publication` is id-free: a scoped id list for it is anomalous, so deny
+  // rather than match (fail closed). Also lets TS narrow the id-bearing kinds.
+  const targetId =
+    destination.kind === 'contact_dm'
+      ? destination.contactId
+      : destination.kind === 'publication'
+        ? null
+        : destination.channelId;
+  return targetId !== null && ids.includes(targetId);
 }
 
 /**

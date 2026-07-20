@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { EventBus } from '../../shared/event-bus.js';
@@ -54,6 +54,29 @@ describe('workspace hook loader', () => {
     expect(result.loaded).toEqual([]);
     expect(result.rejected).toEqual([]);
     expect(registry.list()).toEqual([]);
+  });
+
+  it('rejects a symlinked hooks root instead of loading external handlers', async () => {
+    const externalWorkspacePath = mkdtempSync(join(tmpdir(), 'vvf2-hooks-external-'));
+    try {
+      writeHook(externalWorkspacePath, 'external', [
+        'name: external',
+        'events:',
+        '  - system.ready',
+        'handler: handler.mjs',
+      ].join('\n'));
+      symlinkSync(join(externalWorkspacePath, 'hooks'), join(workspacePath, 'hooks'), 'dir');
+
+      const registry = new HookRegistry();
+      const result = await loadWorkspaceHooks({ workspacePath, registry });
+
+      expect(result.rootExists).toBe(false);
+      expect(result.loaded).toEqual([]);
+      expect(result.rejected).toEqual([]);
+      expect(registry.list()).toEqual([]);
+    } finally {
+      rmSync(externalWorkspacePath, { recursive: true, force: true });
+    }
   });
 
   it('requires an explicit workspacePath', async () => {
@@ -207,7 +230,7 @@ describe('workspace hook loader', () => {
     ].join('\n'));
     const result = await loadWorkspaceHooks({ workspacePath, registry: new HookRegistry() });
     expect(result.rejected[0]).toMatchObject({ kind: 'unsupported_invocation', name: 'sync-hook' });
-    expect(result.rejected[0]!.reason).toContain('psfn-framework-7ym.3');
+    expect(result.rejected[0]!.reason).toContain('bead 7ym.3');
   });
 
   it('keeps the first hook and rejects later duplicates by name', async () => {

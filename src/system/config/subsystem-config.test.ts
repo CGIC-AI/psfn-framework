@@ -19,6 +19,7 @@ import {
 } from './providers-config.js';
 import {
   DEFAULT_ICP_AUTONOMY_SCHEDULER_CONFIG,
+  DEFAULT_SOCIAL_AUTONOMY_CONFIG,
   SCHEDULER_FILE_NAME,
   loadSchedulerConfig,
   saveSchedulerConfig,
@@ -461,6 +462,7 @@ describe('subsystem config round-trip', () => {
           relevanceFloor: 0.05,
         },
       },
+      socialAutonomy: DEFAULT_SOCIAL_AUTONOMY_CONFIG,
       icpAutonomy: DEFAULT_ICP_AUTONOMY_SCHEDULER_CONFIG,
     };
 

@@ -14,6 +14,9 @@
  * and Garden/config can own overrides (matches the participation-appraiser
  * settings pattern).
  */
+import { isRecord } from '../../shared/utils/types.js';
+import { assertNoUnknownKeys, assertPositiveInteger } from './validators.js';
+
 export interface FreeTimeChooserSettings {
   /** Master switch. When false the chooser fails closed to `rest`. */
   enabled: boolean;
@@ -49,5 +52,87 @@ export function createDefaultFreeTimeChooserSettings(): FreeTimeChooserSettings 
     projectListCap: 8,
     projectMetadataChars: 120,
     silencePersistenceMinutes: 180,
+  };
+}
+
+// ── Owner-file parser (jp36.8.2) ─────────────────────────────────────────────
+// Fail-closed parser homing the free-time chooser tunables (incl. the rest /
+// silence-persistence window) in scheduler.json (Garden-editable via the raw
+// owner-file editor). Defaults come from the factory above so a config that
+// omits the block is byte-identical to the pre-owner-file behavior. Bounds live
+// inside the function body to satisfy the hardcoded-settings gate.
+
+const FREE_TIME_CHOOSER_ERROR_PREFIX = 'Invalid free-time chooser config';
+
+function chooserBoolean(value: unknown, fieldPath: string): boolean {
+  if (typeof value !== 'boolean') {
+    throw new Error(`${FREE_TIME_CHOOSER_ERROR_PREFIX}: ${fieldPath} must be a boolean`);
+  }
+  return value;
+}
+
+function chooserPositiveInteger(value: unknown, fieldPath: string): number {
+  return assertPositiveInteger(value, fieldPath, {
+    min: 1,
+    message: ({ fieldLabel }) => `${FREE_TIME_CHOOSER_ERROR_PREFIX}: ${fieldLabel} must be a finite integer >= 1`,
+  });
+}
+
+function chooserNonNegativeInteger(value: unknown, fieldPath: string): number {
+  if (typeof value !== 'number' || !Number.isFinite(value) || !Number.isInteger(value) || value < 0) {
+    throw new Error(`${FREE_TIME_CHOOSER_ERROR_PREFIX}: ${fieldPath} must be a finite integer >= 0`);
+  }
+  return value;
+}
+
+export function parseFreeTimeChooserSettings(
+  raw: unknown,
+  fieldPath: string,
+): FreeTimeChooserSettings {
+  const defaults = createDefaultFreeTimeChooserSettings();
+  if (raw === undefined) {
+    return defaults;
+  }
+  if (!isRecord(raw)) {
+    throw new Error(`${FREE_TIME_CHOOSER_ERROR_PREFIX}: ${fieldPath} must be an object`);
+  }
+  assertNoUnknownKeys(
+    raw,
+    [
+      'enabled',
+      'chooserDeadlineMs',
+      'chooserMaxOutputTokens',
+      'projectListCap',
+      'projectMetadataChars',
+      'silencePersistenceMinutes',
+    ],
+    fieldPath,
+    { errorPrefix: FREE_TIME_CHOOSER_ERROR_PREFIX },
+  );
+  return {
+    enabled: chooserBoolean(raw.enabled ?? defaults.enabled, `${fieldPath}.enabled`),
+    chooserDeadlineMs: chooserPositiveInteger(
+      raw.chooserDeadlineMs ?? defaults.chooserDeadlineMs,
+      `${fieldPath}.chooserDeadlineMs`,
+    ),
+    chooserMaxOutputTokens: chooserPositiveInteger(
+      raw.chooserMaxOutputTokens ?? defaults.chooserMaxOutputTokens,
+      `${fieldPath}.chooserMaxOutputTokens`,
+    ),
+    // 0 is a valid "no resumable projects in the menu" state (the consumer
+    // clamps with Math.max(0, ...)).
+    projectListCap: chooserNonNegativeInteger(
+      raw.projectListCap ?? defaults.projectListCap,
+      `${fieldPath}.projectListCap`,
+    ),
+    projectMetadataChars: chooserPositiveInteger(
+      raw.projectMetadataChars ?? defaults.projectMetadataChars,
+      `${fieldPath}.projectMetadataChars`,
+    ),
+    // 0 disables silence persistence (the consumer clamps with Math.max(0, ...)).
+    silencePersistenceMinutes: chooserNonNegativeInteger(
+      raw.silencePersistenceMinutes ?? defaults.silencePersistenceMinutes,
+      `${fieldPath}.silencePersistenceMinutes`,
+    ),
   };
 }

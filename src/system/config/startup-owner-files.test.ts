@@ -9,6 +9,7 @@ import { loadTrustPolicyConfig, saveTrustPolicyConfig } from './trust-policy-con
 import {
   DEFAULT_BACKGROUND_WORK_TUNING,
   DEFAULT_ICP_AUTONOMY_SCHEDULER_CONFIG,
+  DEFAULT_SOCIAL_AUTONOMY_CONFIG,
   saveSchedulerConfig,
 } from './scheduler-config.js';
 import { loadCapabilityTierConfig, saveCapabilityTierConfig } from './capability-tier-config.js';
@@ -337,6 +338,7 @@ describe('startup owner-file loaders', () => {
           relevanceFloor: 0.05,
         },
       },
+      socialAutonomy: DEFAULT_SOCIAL_AUTONOMY_CONFIG,
       icpAutonomy: DEFAULT_ICP_AUTONOMY_SCHEDULER_CONFIG,
     };
     saveSchedulerConfig(rootDir, scheduler);

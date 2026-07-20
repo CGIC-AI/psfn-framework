@@ -114,7 +114,6 @@ import { readRoomEpisodePressureFromLedger } from '../../core/agent/fatigue/room
 import { createAgentLoopEgressReplySender } from './egress-reply-sender.js';
 import {
   createDefaultEgressLeasePhaseSettings,
-  createDefaultReservationPhaseSettings,
 } from '../../system/config/participation-config.js';
 import { JsonGroupMemoryWatermarkStore } from '../../faculties/memory/extraction/group-ranges.js';
 import { createNoopSatelliteRoutingPort } from '../../core/agent/satellite-adapter-port.js';
@@ -1319,6 +1318,9 @@ async function main(): Promise<void> {
         focusHint: project.nextStep,
       })),
     companionName: card.data.name,
+    // Free-time chooser tunables (incl. the rest / silence-persistence window)
+    // are owned by scheduler.json socialAutonomy.freeTimeChooser (jp36.8.2).
+    settings: schedulerConfig.socialAutonomy.freeTimeChooser,
     ...(config.companionId ? { companionId: config.companionId } : {}),
   });
   registerFreeTimeTasks({
@@ -1438,6 +1440,9 @@ async function main(): Promise<void> {
     contextReader: sessionStore,
     companionNames: [card.data.name],
     companionAuthorIds: config.discordBotId ? [config.discordBotId] : [],
+    // Passive-name gate tunables are owned by scheduler.json
+    // socialAutonomy.passiveNameCandidate (jp36.8.2).
+    settings: schedulerConfig.socialAutonomy.passiveNameCandidate,
   });
 
   // Cheap, tool-less participation appraiser (bible §8.2, jp36.3.3). Consumes the
@@ -1448,6 +1453,9 @@ async function main(): Promise<void> {
   const participationAppraiser = new ParticipationAppraiser({
     llmProvider,
     companionName: card.data.name,
+    // Appraiser bounds are owned by scheduler.json socialAutonomy.appraiser
+    // (jp36.8.2).
+    settings: schedulerConfig.socialAutonomy.appraiser,
     ...(config.companionId ? { companionId: config.companionId } : {}),
   });
 
@@ -1496,7 +1504,10 @@ async function main(): Promise<void> {
       companionId: config.companionId,
       icpPrecedence: speakingIcpPrecedence,
       config: {
-        ...createDefaultReservationPhaseSettings(),
+        // Reservation-phase tunables (reservationTtlMs, minReserveDrawUnits) are
+        // owned by scheduler.json socialAutonomy.reservationPhase (jp36.8.2); the
+        // pot / breaker / wrap-up fields still come from the charge-policy ledger.
+        ...schedulerConfig.socialAutonomy.reservationPhase,
         socialPot: config.chargePolicy.fatigue.socialPot,
         roomEpisodeCircuitBreaker:
           config.chargePolicy.fatigue.socialRegulation.roomEpisodeCircuitBreaker,
@@ -1514,7 +1525,16 @@ async function main(): Promise<void> {
   // is unchanged and nothing is sent. The room-episode pressure gate reads the
   // ONE reconciled ledger-derived source (jp36.5.4 seam) — never the arbiter
   // store's raw pressure scalar, which stays a write-only projection.
-  const egressLeaseSettings = createDefaultEgressLeasePhaseSettings();
+  // Egress-lease TUNABLES (leaseTtlMs, egressDrawUnits, minReplyConfidence) are
+  // owned by scheduler.json socialAutonomy.egressLease (jp36.8.2). The `enabled`
+  // flag is DELIBERATELY not owner-file-exposed and stays code-pinned to the
+  // fail-closed default (false): promoting an observed candidate to a real
+  // autonomous send is blocked until qgqw.3 (P1), so no config path may enable
+  // it. Merging the tunables over the code default preserves enabled === false.
+  const egressLeaseSettings = {
+    ...createDefaultEgressLeasePhaseSettings(),
+    ...schedulerConfig.socialAutonomy.egressLease,
+  };
   const egressLeasePhase = (
     egressLeaseSettings.enabled
     && config.multiCompanion === true

@@ -101,19 +101,19 @@ describe('fleet costs helpers', () => {
     )).toBeNull();
   });
 
-  it('uses an available authorized Garden as the signed fleet-cost parent', () => {
+  it('uses an agent-connected authorized Garden as the signed fleet-cost parent', () => {
     expect(selectFleetCostGardenPath([
       {
         companionId: COMPANION_A,
         displayName: 'Offline',
-        availability: 'offline',
+        health: { agentRpc: 'down', adminTransport: 'unknown', channels: 'unknown' },
         posture: { status: 'unavailable' },
         gardenPath: `/companions/${COMPANION_A}/garden`,
       },
       {
         companionId: COMPANION_B,
         displayName: 'Online',
-        availability: 'online',
+        health: { agentRpc: 'up', adminTransport: 'unknown', channels: 'unknown' },
         posture: { status: 'unavailable' },
         gardenPath: `/companions/${COMPANION_B}/garden`,
       },

@@ -926,6 +926,7 @@ describe('Postgres schema tenancy plumbing', () => {
           { version: 6, name: 'icp-fatigue-turn-reservations' },
           { version: 7, name: 'icp-fatigue-delivery-fence' },
           { version: 9, name: 'companion-social-pot' },
+          { version: 10, name: 'speaking-arbiter' },
         ]);
 
         const sharedTables = await pool.query<{ table_name: string }>(
@@ -940,6 +941,10 @@ describe('Postgres schema tenancy plumbing', () => {
           'icp_fatigue_turn_reservations',
           'icp_initiation_permits',
           'shared_schema_migrations',
+          'speaking_egress_leases',
+          'speaking_episode_participation',
+          'speaking_reservations',
+          'speaking_room_episodes',
         ]);
 
         // Idempotent: re-running does not duplicate the ledger row.
@@ -947,7 +952,7 @@ describe('Postgres schema tenancy plumbing', () => {
         const versionAgain = await pool.query<{ count: string }>(
           `SELECT COUNT(*)::text AS count FROM shared.shared_schema_migrations`,
         );
-        expect(versionAgain.rows[0]?.count).toBe('7');
+        expect(versionAgain.rows[0]?.count).toBe('8');
       } finally {
         await pool.end();
       }

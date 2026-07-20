@@ -1042,6 +1042,7 @@ async function main(): Promise<void> {
       await coreRuntime.closeWikiRuntime();
       await persistenceRuntime.icpInitiationCandidateStore?.close();
       await persistenceRuntime.socialPotStore?.close();
+      await persistenceRuntime.speakingArbiterStore?.close();
       await persistenceRuntime.backgroundWorkStore.close();
       await persistenceRuntime.introspectionLandmarkStore.close();
     },

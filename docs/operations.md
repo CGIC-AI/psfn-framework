@@ -1125,6 +1125,25 @@ gates, quarantine lifecycle, and the companion-wellbeing language contract —
 is in [`docs/cognitive-security.md`](./cognitive-security.md); this section is
 the operator quick reference.
 
+### Intake-policy schema v1 → v2
+
+Schema v2 adds the required `skill_write` sink. Runtime startup does not fill
+it from defaults and will reject schema v1. With app processes stopped, run
+the repo-owned migration against the exact system owner root, inspect the
+plan, apply it, and run canonical preflight:
+
+```bash
+npm run migrate:intake-policy-owner -- --data-dir "$SYSTEM_DATA_DIR"
+npm run migrate:intake-policy-owner -- --data-dir "$SYSTEM_DATA_DIR" --apply
+npm run preflight:startup-owner-files
+```
+
+The migration preserves all existing policy values, adds only
+`sinkGates.sinks.skill_write`, bumps `schemaVersion` to 2, validates the full
+candidate, and publishes it with a durable atomic replacement. A v1 file that
+already carries `skill_write`, an incomplete sink map, or a changed file
+identity fails closed instead of being guessed at.
+
 ### Mode flip (shadow → enforce)
 
 `intake-policy.json` `mode` is `off` / `shadow` / `enforce`; the seed ships

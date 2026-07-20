@@ -9,9 +9,11 @@ import {
 } from '../../shared/contracts/intake-envelope.js';
 import {
   INTAKE_POLICY_FILE_NAME,
+  INTAKE_POLICY_SCHEMA_VERSION,
   INTAKE_POLICY_SEED_FILE_NAME,
   INTAKE_SOURCE_LIST_NAMES,
   applyIntakeSourceListMutation,
+  createSkillWriteSinkRule,
   injectionScoreThresholdForTier,
   normalizeIntakePersonPattern,
   normalizeIntakeSitePattern,
@@ -52,7 +54,7 @@ describe('intake policy owner file', () => {
 
   it('validates the distributed seed and covers every source class', () => {
     const policy = seedPolicy();
-    expect(policy.schemaVersion).toBe(1);
+    expect(policy.schemaVersion).toBe(INTAKE_POLICY_SCHEMA_VERSION);
     expect(policy.mode).toBe('shadow');
     expect(Object.keys(policy.sourceRiskTiers).sort()).toEqual([...INTAKE_SOURCE_CLASSES].sort());
     expect(policy.quarantine.itemTtlHours).toBeGreaterThanOrEqual(1);
@@ -170,8 +172,8 @@ describe('intake policy owner file', () => {
 
   it('rejects invalid config on save (never writes a broken owner file)', () => {
     const dataDir = makeDataDir();
-    expect(() => saveIntakePolicyConfig(dataDir, { schemaVersion: 2 }))
-      .toThrow(/schemaVersion must be 1/);
+    expect(() => saveIntakePolicyConfig(dataDir, { schemaVersion: 3 }))
+      .toThrow(/schemaVersion must be 2/);
     expect(() => loadIntakePolicyConfig(dataDir)).toThrow(/Missing required JSON owner file/);
   });
 
@@ -516,6 +518,8 @@ describe('intake policy owner file', () => {
     expect(policy.sinkGates.sinks.persona_mutation.maxSourceRiskTier).toBe('standard');
     expect(policy.sinkGates.sinks.trust_mutation.maxSourceRiskTier).toBe('standard');
     expect(policy.sinkGates.sinks.prompt_assembly.maxSourceRiskTier).toBe('hostile');
+    expect(policy.sinkGates.sinks.skill_write).toEqual(createSkillWriteSinkRule());
+    expect(policy.sinkGates.sinks.skill_write.unscreened).toBe('deny');
     // Trifecta: hard for public/untrusted sources, soft for trusted sources.
     expect(Object.keys(policy.sinkGates.trifecta.enforcementByTier).sort())
       .toEqual([...INTAKE_SOURCE_RISK_TIERS].sort());
@@ -536,6 +540,17 @@ describe('intake policy owner file', () => {
       { ...policy, sinkGates: { ...policy.sinkGates, sinks: partialSinks } },
       INTAKE_POLICY_FILE_NAME,
     )).toThrow(/sinkGates\.sinks\.memory_write is required/);
+
+    const { skill_write: _skillSink, ...withoutSkillWrite } = policy.sinkGates.sinks;
+    expect(() => validateIntakePolicy(
+      { ...policy, sinkGates: { ...policy.sinkGates, sinks: withoutSkillWrite } },
+      INTAKE_POLICY_FILE_NAME,
+    )).toThrow(/sinkGates\.sinks\.skill_write is required/);
+
+    expect(() => validateIntakePolicy(
+      { ...policy, schemaVersion: 1 },
+      INTAKE_POLICY_FILE_NAME,
+    )).toThrow(/explicit migrate:intake-policy-owner command/);
 
     expect(() => validateIntakePolicy(
       {

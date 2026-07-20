@@ -85,8 +85,9 @@ L2.5 vision screener (per inbound image; WIRED via intake.screen_image RPC;
         |
         v
 L4   sink gates (the actual security boundary; src/core/cogsec/intake/)
-     prompt_assembly | memory_write | wiki_write | persona_mutation |
-     trust_mutation | tool_egress (+ lethal-trifecta assessment)
+     prompt_assembly | memory_write | wiki_write | skill_write |
+     persona_mutation | trust_mutation | tool_egress
+     (+ lethal-trifecta assessment)
         |                                   |
         v                                   v
    companion context / stores        quarantine store (held items)
@@ -378,7 +379,7 @@ the Discord voice turn runtime), not through file-ingest.
 ## Sink Gates and the Lethal Trifecta
 
 `src/core/cogsec/intake/sink-gates.ts` is Layer 4 — the actual security
-boundary. Six consequential sinks check envelope state/labels through this
+boundary. Seven consequential sinks check envelope state/labels through this
 one module before consuming content. Verified enforcement points:
 
 | Sink | Gate call site |
@@ -386,6 +387,7 @@ one module before consuming content. Verified enforcement points:
 | `prompt_assembly` | `src/core/session/intake-sink-gating.ts` via `src/core/session/manager/context-builder.ts` (denied entries render as the fixed withheld placeholder) |
 | `memory_write` | `src/faculties/memory/writer.ts`, `src/faculties/memory/extraction/orchestrator.ts` |
 | `wiki_write` | `src/faculties/wiki/tools.ts` |
+| `skill_write` | `src/faculties/skills/tools.ts` via `src/faculties/skills/runtime-wiring.ts` (strict screening covers the prompt-index description and SKILL.md body before create/update) |
 | `persona_mutation` | `src/core/identity/prompt-tools.ts` |
 | `trust_mutation` | `src/core/contacts/tools.ts` |
 | `tool_egress` (trifecta) | `src/core/agent/substrate-agent.ts` (`assessEgressTrifecta`) |
@@ -396,10 +398,11 @@ Structural rules (never configurable):
   state is not sink-consumable is denied everywhere.
 - **Inform vs instruct**: tier-N content may *inform* but never *instruct*
   higher-tier state mutation. The per-sink `maxSourceRiskTier` cap encodes
-  it — the seed lets `hostile` content inform the prompt but caps
-  `persona_mutation` and `trust_mutation` at `standard`, so nothing sourced
-  from the web, a document, an image, or a tool result can drive persona or
-  trust changes.
+  it — the seed lets `hostile` content inform the prompt, caps `skill_write`
+  at `untrusted`, and caps `persona_mutation` and `trust_mutation` at
+  `standard`. Managed skill text is re-screened at strict scope and evaluated
+  together with every active-turn envelope, so one held/denied influence
+  vetoes the write in enforce mode.
 - **Lethal trifecta** (Willison): untrusted content + private data + egress
   never meet in one uncontrolled path. `evaluateEgressTrifecta` applies
   per-tier strength from `sinkGates.trifecta.enforcementByTier`: `hard`
@@ -410,9 +413,10 @@ Structural rules (never configurable):
 
 Content reaching a gated sink **without** an envelope (legacy paths that
 predate stamping) resolves per the sink's explicit `unscreened` policy
-default. The seed maps every sink to `allow` — a deliberate rollout posture
-(see Known Gaps); there is no implicit default, and the owner-file validator
-requires every sink to map one.
+default. The seed keeps the six pre-existing sinks at `allow` as a deliberate
+rollout posture (see Known Gaps), while the new prompt-bearing `skill_write`
+sink is explicitly `deny`; there is no implicit default, and the owner-file
+validator requires every sink to map one.
 
 Mode semantics mirror screening: `shadow` evaluates and audits every gate but
 always allows; `enforce` honors verdicts fail-closed; `off` constructs no
@@ -777,7 +781,7 @@ already suspect, so an L3 failure always holds the item (enforce mode).
 
 ### `sinkGates`
 
-Per sink (`sinks.<sink>`), all six sinks required:
+Per sink (`sinks.<sink>`), all seven sinks required:
 
 | Knob | What it does |
 | --- | --- |
@@ -786,13 +790,16 @@ Per sink (`sinks.<sink>`), all six sinks required:
 | `unscreened` | Enforce-mode action (`allow`/`deny`) for content reaching the sink without an envelope. Explicit — no implicit fail-open. |
 
 Seed values: `prompt_assembly`, `memory_write`, `wiki_write`, and
-`tool_egress` cap at `hostile` (inform sinks); `persona_mutation` and
-`trust_mutation` cap at `standard`. `memory_write`/`wiki_write` deny the
-full quarantine-family label list; `persona_mutation`/`trust_mutation` deny
-that list plus `injection/invisible_text`; `tool_egress` denies
-`exfil/canary_leak`; `prompt_assembly` denies none (state-machine rules
-already hide quarantined content). Every sink's `unscreened` seed default is
-`allow` (rollout posture — see Known Gaps).
+`tool_egress` cap at `hostile` (inform sinks); `skill_write` caps at
+`untrusted`; `persona_mutation` and `trust_mutation` cap at `standard`.
+`memory_write`/`wiki_write` deny the quarantine-family label list;
+`skill_write` denies injection, exfiltration, secret, executable,
+persona/policy-mutation, and poisoning labels; `persona_mutation`/
+`trust_mutation` deny their mutation list plus `injection/invisible_text`;
+`tool_egress` denies `exfil/canary_leak`; `prompt_assembly` denies none
+(state-machine rules already hide quarantined content). The six pre-existing
+sinks retain an `allow` unscreened rollout posture; `skill_write` is
+explicitly `deny`.
 
 | Knob | Seed default | What it does |
 | --- | --- | --- |
@@ -928,11 +935,12 @@ Documented deliberately; do not let the layer diagram imply otherwise.
   the envelope state machine, the audit trail, and the flywheel — but there
   is no path that re-delivers the released content into the companion's
   conversation. Today the operator relays it out of band.
-- **Unscreened sink defaults are `allow` in the seed.** Legacy paths that
-  predate envelope stamping pass the sink gates in enforce mode until each
-  sink's `unscreened` default is flipped to `deny`. This is an explicit
-  rollout posture knob, not an oversight — flip per sink once you trust the
-  stamping coverage of your deployment's surfaces.
+- **The six legacy unscreened sink defaults are `allow` in the seed.** Paths
+  that predate envelope stamping pass those sink gates in enforce mode until
+  each sink's `unscreened` default is flipped to `deny`. This is an explicit
+  rollout posture knob, not an oversight. `skill_write` is excluded from this
+  gap: its seed default is `deny`, and managed writes receive a new strict
+  screening envelope before the gate evaluates active-turn provenance.
 - **L1 is fail-open-advisory by design.** A scanner exception is recorded
   and visible but does not hold the item; the structural guarantees live in
   the envelope states and sink gates, not in L1.

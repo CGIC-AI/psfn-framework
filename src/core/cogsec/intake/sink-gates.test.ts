@@ -107,6 +107,28 @@ describe('evaluateSinkAccess (htm9.3)', () => {
     expect(evaluateSinkAccess(policy, 'trust_mutation', [released]).allowed).toBe(false);
   });
 
+  it('treats skill_write as a prompt-bearing mutation with an untrusted tier cap', () => {
+    const policy = makePolicy('enforce');
+    expect(evaluateSinkAccess(policy, 'skill_write', [
+      makeSnapshot({ sourceRiskTier: 'untrusted' }),
+    ]).allowed).toBe(true);
+
+    const hostile = evaluateSinkAccess(policy, 'skill_write', [
+      makeSnapshot({ sourceRiskTier: 'hostile' }),
+    ]);
+    expect(hostile.allowed).toBe(false);
+    expect(hostile.reason).toContain("exceeds sink cap 'untrusted'");
+
+    const executable = evaluateSinkAccess(policy, 'skill_write', [
+      makeSnapshot({
+        state: 'human_released',
+        riskLabels: ['execution/executable_instruction'],
+      }),
+    ]);
+    expect(executable.allowed).toBe(false);
+    expect(executable.reason).toContain('execution/executable_instruction');
+  });
+
   it('denies released content carrying sink-denied risk labels at memory_write but not prompt_assembly', () => {
     const policy = makePolicy('enforce');
     const labeled = makeSnapshot({
@@ -143,6 +165,11 @@ describe('evaluateSinkAccess (htm9.3)', () => {
     const denied = evaluateSinkAccess(denyPolicy, 'memory_write', []);
     expect(denied.verdict).toBe('deny');
     expect(denied.allowed).toBe(false);
+
+    const skillWrite = evaluateSinkAccess(allowPolicy, 'skill_write', []);
+    expect(skillWrite.unscreened).toBe(true);
+    expect(skillWrite.verdict).toBe('deny');
+    expect(skillWrite.allowed).toBe(false);
 
     // Fail-open for unscreened content is acceptable ONLY in shadow mode.
     const shadowDenyPolicy = makePolicy('shadow', (raw) => {

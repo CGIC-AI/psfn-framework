@@ -135,10 +135,11 @@ See [`docs/memory.md`](./memory.md) for the memory contract.
   the agent process runs an L1-only screening service for in-process surfaces
   (`src/app/agent/main.ts`). Inbound images are screened through the
   `intake.screen_image` gateway RPC.
-- Six sink gates (`src/core/cogsec/intake/sink-gates.ts`,
+- Seven sink gates (`src/core/cogsec/intake/sink-gates.ts`,
   `src/core/session/intake-sink-gating.ts`) consume envelope state/labels,
-  including a lethal-trifecta assessment on tool egress; a per-session canary
-  token (`src/core/cogsec/canary/`) plants an egress tripwire at the gateway.
+  including strict managed-skill write screening and a lethal-trifecta
+  assessment on tool egress; a per-session canary token
+  (`src/core/cogsec/canary/`) plants an egress tripwire at the gateway.
 - Quarantined items are held in a durable store and resolve only through the
   Garden Cognitive Security queue with a server-side double-confirm release.
 - Rollout mode is owned by `intake-policy.json` (`off`/`shadow`/`enforce`;

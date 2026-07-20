@@ -5,6 +5,10 @@ import { textResult, textResultWithError } from '../../core/tools/results.js';
 import type { SkillsRuntime } from './runtime.js';
 import type { SkillOwnership, SkillSource } from './types.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
+import type { IntakeEnvelopeSnapshot } from '../../shared/contracts/intake-envelope.js';
+import type { IntakeScreeningService } from '../../core/cogsec/intake/screening.js';
+import type { IntakeSinkGate } from '../../core/cogsec/intake/sink-gates.js';
+import { INTAKE_FIREWALL_NOTICE_TEMPLATES } from '../../core/cogsec/intake-firewall-notice-templates.js';
 
 const SKILL_TOOL_ACTION_NAMES = [
   'list',
@@ -50,6 +54,81 @@ interface SkillToolParams extends SkillListParams {
   category?: string;
   content?: string;
   description?: string;
+}
+
+export interface SkillWriteIntakeRuntime {
+  getIntakeSinkGate: () => IntakeSinkGate | null;
+  getIntakeScreening: () => IntakeScreeningService | null;
+  getActiveTurnIntakeEnvelopes: () => readonly IntakeEnvelopeSnapshot[];
+}
+
+interface ScreenedSkillWrite {
+  allowed: boolean;
+  content: string;
+  description?: string;
+}
+
+async function screenSkillWrite(
+  action: 'create' | 'update',
+  input: {
+    content: string;
+    description?: string;
+  },
+  intake: SkillWriteIntakeRuntime | undefined,
+): Promise<ScreenedSkillWrite> {
+  if (!intake) {
+    return { allowed: true, ...input };
+  }
+
+  const gate = intake.getIntakeSinkGate();
+  const screening = intake.getIntakeScreening();
+  if (!gate) {
+    if (screening) {
+      throw new Error('Skill write intake screening is wired without the canonical sink gate');
+    }
+    return { allowed: true, ...input };
+  }
+
+  if (!screening) {
+    const unscreenedDecision = gate.evaluate('skill_write', [], {
+      tool: 'skill',
+      action,
+      screening: 'unavailable',
+    });
+    return { allowed: unscreenedDecision.allowed, ...input };
+  }
+
+  const screenedContent = await screening.screen(input.content, {
+    sourceClass: 'tool_output',
+    origin: { ref: `tool:skill:${action}:content` },
+    scope: 'strict',
+  });
+  const screenedDescription = input.description !== undefined
+    ? await screening.screen(input.description, {
+      sourceClass: 'tool_output',
+      origin: { ref: `tool:skill:${action}:description` },
+      scope: 'strict',
+    })
+    : null;
+  const activeTurnEnvelopes = intake.getActiveTurnIntakeEnvelopes();
+  const proposedContentEnvelopes = [
+    ...activeTurnEnvelopes,
+    screenedContent.snapshot,
+    ...(screenedDescription ? [screenedDescription.snapshot] : []),
+  ];
+  const decision = gate.evaluate('skill_write', proposedContentEnvelopes, {
+    tool: 'skill',
+    action,
+    activeTurnEnvelopeCount: activeTurnEnvelopes.length,
+    screenedFieldCount: screenedDescription ? 2 : 1,
+  });
+  return {
+    allowed: decision.allowed,
+    content: screenedContent.effectiveText,
+    ...(screenedDescription
+      ? { description: screenedDescription.effectiveText }
+      : {}),
+  };
 }
 
 function normalizeSkillAction(params: SkillToolParams): SkillToolAction {
@@ -298,7 +377,10 @@ function buildSkillViewPayload(runtime: SkillsRuntime, name: string): Record<str
   };
 }
 
-export function createSkillTool(runtime: SkillsRuntime): SubstrateAgentTool {
+export function createSkillTool(
+  runtime: SkillsRuntime,
+  intake?: SkillWriteIntakeRuntime,
+): SubstrateAgentTool {
   return {
     name: 'skill',
     label: 'skill',
@@ -376,11 +458,22 @@ export function createSkillTool(runtime: SkillsRuntime): SubstrateAgentTool {
               return textResultWithError('skill action=create requires non-empty content.', true);
             }
 
+            const screened = await screenSkillWrite('create', {
+              content,
+              ...(params.description !== undefined
+                ? { description: params.description }
+                : {}),
+            }, intake);
+            if (!screened.allowed) {
+              return textResult(INTAKE_FIREWALL_NOTICE_TEMPLATES.sinkHeld);
+            }
             const created = runtime.getStore().create({
               name,
               category,
-              description: params.description,
-              content,
+              ...(screened.description !== undefined
+                ? { description: screened.description }
+                : {}),
+              content: screened.content,
             });
             runtime.invalidate();
 
@@ -405,10 +498,21 @@ export function createSkillTool(runtime: SkillsRuntime): SubstrateAgentTool {
               return textResultWithError('skill action=update requires non-empty content.', true);
             }
 
+            const screened = await screenSkillWrite('update', {
+              content,
+              ...(params.description !== undefined
+                ? { description: params.description }
+                : {}),
+            }, intake);
+            if (!screened.allowed) {
+              return textResult(INTAKE_FIREWALL_NOTICE_TEMPLATES.sinkHeld);
+            }
             const updated = runtime.getStore().update({
               name,
-              description: params.description,
-              content,
+              ...(screened.description !== undefined
+                ? { description: screened.description }
+                : {}),
+              content: screened.content,
             });
             runtime.invalidate();
 

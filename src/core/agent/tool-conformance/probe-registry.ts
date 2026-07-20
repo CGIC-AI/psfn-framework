@@ -90,6 +90,11 @@ export const TOOL_CONFORMANCE_PROBE_REGISTRY: Readonly<Record<string, ToolProbeS
   notify: { kind: 'schema_only' },
   generate_image: { kind: 'schema_only' },
   selfie_create: { kind: 'schema_only' },
+  // publication submits/revises share candidates onto the operator approval queue
+  // (mutating, gated by human approval) and its status read requires a live,
+  // wired approval-queue port that fails closed in partial runtimes — no hermetic
+  // read-only probe exists, so validate schema only.
+  publication: { kind: 'schema_only' },
   subagent: { kind: 'schema_only' },
   vault: { kind: 'schema_only' },
   beads: { kind: 'schema_only' },
@@ -394,6 +399,16 @@ export const TOOL_CONFORMANCE_ACTION_REGISTRY:
     generate: SCHEMA_ASSERT,
     edit: SCHEMA_ASSERT,
     analyze: SCHEMA_ASSERT,
+  },
+  publication: {
+    // submit/revise enqueue a fresh share candidate onto the operator approval
+    // queue — mutations, gated by human approval, never hermetically invocable.
+    submit: SCHEMA_ASSERT,
+    revise: SCHEMA_ASSERT,
+    // status is conceptually read-only but requires a live, wired approval-queue
+    // port; the tool fails closed when that port is unwired (partial runtimes),
+    // so no safe hermetic read exists — assert schema only.
+    status: SCHEMA_ASSERT,
   },
   subagent: {
     spawn: SCHEMA_ASSERT,

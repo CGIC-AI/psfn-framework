@@ -50,8 +50,20 @@ class MemoryOutbox implements OutreachOutboxStore {
     return this.records.find(record => record.dedupeKey === dedupeKey && this.hasTerminal(dedupeKey));
   }
 
+  getLatest(dedupeKey: string): OutreachOutboxRecord | undefined {
+    return this.records.findLast(record => record.dedupeKey === dedupeKey);
+  }
+
   getIcpDeliveredCompletion(): OutreachOutboxRecord | undefined {
     return undefined;
+  }
+
+  countSentSince(input: { sinceMs: number; reasonPrefix?: string }): number {
+    return this.records.filter(record => (
+      record.phase === 'sent'
+      && record.recordedAt >= input.sinceMs
+      && (input.reasonPrefix === undefined || (record.reason ?? '').startsWith(input.reasonPrefix))
+    )).length;
   }
 
   listRecent(limit = 25): OutreachOutboxRecord[] {

@@ -1259,13 +1259,13 @@ describe('discord multi-account config (multi-companion W1-P2)', () => {
 
       expect(resolveDiscordCompanionView(config.discord, '22222222-2222-4222-8222-222222222222')).toEqual({
         accountId: 'acct-b',
-        heartbeatChannelId: '222',
+        heartbeatChannel: { channelId: '222', channelType: 'discord' },
         allowedBotUserIds: ['999'],
         groupMemory: { channelOverrides: {} },
       });
       // Companion without a bot account: inert defaults, not an error.
       expect(resolveDiscordCompanionView(config.discord, '33333333-3333-4333-8333-333333333333')).toEqual({
-        heartbeatChannelId: '',
+        heartbeatChannel: null,
         allowedBotUserIds: [],
         groupMemory: { channelOverrides: {} },
       });
@@ -1278,7 +1278,7 @@ describe('discord multi-account config (multi-companion W1-P2)', () => {
       const config = loadRuntimeChannelsConfig(dataDir, {});
       // Single-account shape: identical projection regardless of companionId.
       expect(resolveDiscordCompanionView(config.discord, undefined)).toEqual({
-        heartbeatChannelId: '111',
+        heartbeatChannel: { channelId: '111', channelType: 'discord' },
         allowedBotUserIds: ['555'],
         groupMemory: { channelOverrides: {} },
       });

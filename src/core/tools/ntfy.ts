@@ -392,6 +392,40 @@ function buildContextBlockReason(): string | null {
     : `internal channel (${requestChannelId || 'unknown'})`;
 }
 
+function buildExternalSendContextBlockReason(): string | null {
+  const requestContext = getRequestContext();
+  if (!requestContext) {
+    return 'unknown request context';
+  }
+
+  const requestChannelId = typeof requestContext.channelId === 'string'
+    ? requestContext.channelId.trim()
+    : '';
+  if (requestContext.callType === 'scheduled') {
+    return 'scheduled execution context';
+  }
+  if (requestChannelId.startsWith('internal:')) {
+    return `internal channel (${requestChannelId})`;
+  }
+  if (!requestChannelId) {
+    return 'unknown request channel';
+  }
+  if (requestContext.callType !== 'chat') {
+    return `non-chat execution context (${requestContext.callType || 'unknown'})`;
+  }
+  if (requestContext.requesterProvenance !== 'human') {
+    return requestContext.requesterProvenance
+      ? `non-human requester provenance (${requestContext.requesterProvenance})`
+      : 'unknown requester provenance';
+  }
+  if (requestContext.requestAudience !== 'external'
+    && requestContext.requestAudience !== 'primary_contact') {
+    return `unknown or non-external request audience (${requestContext.requestAudience || 'unknown'})`;
+  }
+
+  return null;
+}
+
 function buildNotifyToolRequest(params: NotifyToolParams): NotifyRequest {
   switch (params.action) {
     case 'brief':
@@ -752,7 +786,7 @@ export function createNotifyTool(
       }
 
       if (action === 'send') {
-        const blockedContext = buildContextBlockReason();
+        const blockedContext = buildExternalSendContextBlockReason();
         if (blockedContext) {
           return textResultWithError(
             `notify: blocked (send is not allowed from ${blockedContext}).`,

@@ -167,14 +167,112 @@ describe('notify tool', () => {
       channelSender: sender,
     }));
 
-    const result = await tool.execute('call-9', {
+    const result = await runWithRequestContext(
+      {
+        callType: 'chat',
+        channelId: 'discord:ops-room',
+        purpose: 'agent.turn.prompt',
+        requesterProvenance: 'human',
+        requestAudience: 'external',
+      },
+      async () => tool.execute('call-9', {
+        action: 'send',
+        message: 'Background task completed.',
+        delivery_channel: 'discord',
+        delivery_target: 'discord:ops-room',
+      }),
+    );
+
+    expect(resultText(result as any)).toContain('notify: send sent via discord');
+  });
+
+  it('fails closed when external send has no request context', async () => {
+    const notifier: NotificationPort = {
+      notify: vi.fn(),
+    };
+    const discordSend = vi.fn().mockResolvedValue(undefined);
+    const sender = createGatewayDiscordNotifySender({ discordSend });
+    const tool = createNotifyTool(createNotifyDispatcher({
+      briefNotifier: notifier,
+      channelSender: sender,
+    }));
+
+    const result = await tool.execute('call-10', {
       action: 'send',
-      message: 'Background task completed.',
+      message: 'Missing provenance.',
       delivery_channel: 'discord',
       delivery_target: 'discord:ops-room',
     });
 
-    expect(resultText(result as any)).toContain('notify: send sent via discord');
+    expect(resultText(result as any)).toContain('notify: blocked');
+    expect(resultText(result as any)).toContain('unknown request context');
+    expect((result.details as any).isError).toBe(true);
+    expect(discordSend).not.toHaveBeenCalled();
+  });
+
+  it('fails closed when external send has unknown requester provenance', async () => {
+    const notifier: NotificationPort = {
+      notify: vi.fn(),
+    };
+    const discordSend = vi.fn().mockResolvedValue(undefined);
+    const sender = createGatewayDiscordNotifySender({ discordSend });
+    const tool = createNotifyTool(createNotifyDispatcher({
+      briefNotifier: notifier,
+      channelSender: sender,
+    }));
+
+    const result = await runWithRequestContext(
+      {
+        callType: 'chat',
+        channelId: 'discord:ops-room',
+        purpose: 'agent.turn.prompt',
+        requestAudience: 'external',
+      },
+      async () => tool.execute('call-11', {
+        action: 'send',
+        message: 'Unknown requester.',
+        delivery_channel: 'discord',
+        delivery_target: 'discord:ops-room',
+      }),
+    );
+
+    expect(resultText(result as any)).toContain('notify: blocked');
+    expect(resultText(result as any)).toContain('unknown requester provenance');
+    expect((result.details as any).isError).toBe(true);
+    expect(discordSend).not.toHaveBeenCalled();
+  });
+
+  it('blocks external send from a non-human requester on an external chat channel', async () => {
+    const notifier: NotificationPort = {
+      notify: vi.fn(),
+    };
+    const discordSend = vi.fn().mockResolvedValue(undefined);
+    const sender = createGatewayDiscordNotifySender({ discordSend });
+    const tool = createNotifyTool(createNotifyDispatcher({
+      briefNotifier: notifier,
+      channelSender: sender,
+    }));
+
+    const result = await runWithRequestContext(
+      {
+        callType: 'chat',
+        channelId: 'discord:ops-room',
+        purpose: 'agent.turn.prompt',
+        requesterProvenance: 'system',
+        requestAudience: 'external',
+      },
+      async () => tool.execute('call-12', {
+        action: 'send',
+        message: 'System-injected outbound.',
+        delivery_channel: 'discord',
+        delivery_target: 'discord:ops-room',
+      }),
+    );
+
+    expect(resultText(result as any)).toContain('notify: blocked');
+    expect(resultText(result as any)).toContain('non-human requester provenance (system)');
+    expect((result.details as any).isError).toBe(true);
+    expect(discordSend).not.toHaveBeenCalled();
   });
 
   it('blocks external send from an internal-origin turn to prevent raw outbound bleed', async () => {
@@ -190,11 +288,13 @@ describe('notify tool', () => {
 
     const result = await runWithRequestContext(
       {
-        callType: 'conversational',
+        callType: 'chat',
         channelId: 'internal:free-time',
         purpose: 'agent.turn.prompt',
+        requesterProvenance: 'self_directed',
+        requestAudience: 'self',
       },
-      async () => tool.execute('call-10', {
+      async () => tool.execute('call-13', {
         action: 'send',
         message: 'Sneaking a message out.',
         delivery_channel: 'discord',
@@ -224,8 +324,10 @@ describe('notify tool', () => {
         callType: 'scheduled',
         channelId: 'discord:ops-room',
         purpose: 'agent.turn.prompt',
+        requesterProvenance: 'system',
+        requestAudience: 'external',
       },
-      async () => tool.execute('call-11', {
+      async () => tool.execute('call-14', {
         action: 'send',
         message: 'Sneaking a message out.',
         delivery_channel: 'discord',

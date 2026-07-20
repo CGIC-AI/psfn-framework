@@ -551,6 +551,11 @@ function loadConfigForMode(mode: LoadConfigMode, env: NodeJS.ProcessEnv = proces
     ...(materializeEnvBackedSecrets
       ? { falApiKey: resolveOptionalEnvCredential(credentialVault, 'FAL_API_KEY', env) }
       : {}),
+    imageProvider: undefined,
+    imageFalCreateModel: undefined,
+    imageFalEditModel: undefined,
+    imageSelfieEditModel: undefined,
+    modelPurposeSelection: undefined,
     imageWorkflows: {},
     ...(echoTtsModel ? { echoTtsModel } : {}),
     retryMaxAttempts: DEFAULT_RETRY_MAX_ATTEMPTS,

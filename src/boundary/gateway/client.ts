@@ -13,7 +13,7 @@ import type {
 import type { EmbeddingProviderPort } from '../../shared/contracts/embedding-provider.js';
 import { toWorkSpecWireParams } from '../../primitives/llm/work-spec-wire.js';
 import { CHANNEL_TYPES } from '../../shared/contracts/runtime.js';
-import type { Attachment, CompletionPurpose, CorrelationMetadata, LLMContext, LLMModelHint, LLMResponse, ModelBudgetBlockedEvent, StreamCallbacks, SubstrateMessage } from '../../shared/contracts/runtime.js';
+import type { Attachment, CompletionPurpose, CorrelationMetadata, LLMContext, LLMModelHint, LLMResponse, ModelBudgetBlockedEvent, ModelPurposeSelection, StreamCallbacks, SubstrateMessage } from '../../shared/contracts/runtime.js';
 import type {
   GatewayRpcConnection,
   GatewayRpcEndpoint,
@@ -207,7 +207,13 @@ import { GatewayInlineImageReferenceHints } from './inline-image-reference-hints
 import {
   normalizeModelHint,
   OPTIONAL_MODEL_HINT_NORMALIZATION,
+  resolveModelSelectionSlotForPurpose,
 } from '../../primitives/llm/model-hint-routing.js';
+import {
+  toCompletionRoutingPurpose,
+  toStreamRoutingPurpose,
+  type RoutingPurpose,
+} from '../../primitives/llm/routing.js';
 import { parseModelBudgetBlockedEvent } from '../../shared/contracts/model-budget.js';
 import { parseIcpConversationCostBreakerEvent } from '../../shared/contracts/icp-conversation-cost.js';
 import { IcpConversationCostBreakerError } from '../../primitives/llm/icp-conversation-cost-breaker.js';
@@ -289,6 +295,14 @@ export interface GatewayClientOptions extends OptionalCompanionRoutingBinding {
   /** Role-bound proof exposed only to the isolated session-integrity worker. */
   sessionIntegrityAuthToken?: string;
   onModelBudgetBlocked?: (event: ModelBudgetBlockedEvent) => void;
+  /**
+   * 23pp per-companion model selection: canonical purpose → models.json
+   * registry entry id, resolved from the companion's effective settings
+   * (settings.json + settings.overlay.json) and validated at agent startup.
+   * Injected as the wire `slotKey` when a call carries no explicit model hint;
+   * the gateway re-validates it fail-closed against its own registry.
+   */
+  modelPurposeSelection?: ModelPurposeSelection;
 }
 
 function modelBudgetBlockedEventFromError(error: unknown): ModelBudgetBlockedEvent | undefined {
@@ -484,6 +498,7 @@ export class GatewayClient implements
   private readonly sessionIntegrityAuthToken?: string;
   private readonly inlineImageReferenceHints = new GatewayInlineImageReferenceHints();
   private readonly onModelBudgetBlocked?: (event: ModelBudgetBlockedEvent) => void;
+  private readonly modelPurposeSelection?: ModelPurposeSelection;
   private readonly shardWorkloadRegistrationIds =
     new WeakMap<AuthenticatedShardWorkloadHandle, string>();
 
@@ -516,6 +531,9 @@ export class GatewayClient implements
     this.sessionIntegrityRpcTimeoutMs = options.sessionIntegrityRpcTimeoutMs ?? DEFAULT_SESSION_INTEGRITY_RPC_TIMEOUT_MS;
     this.keepaliveIntervalMs = options.keepaliveIntervalMs ?? DEFAULT_GATEWAY_KEEPALIVE_INTERVAL_MS;
     this.onModelBudgetBlocked = options.onModelBudgetBlocked;
+    if (options.modelPurposeSelection !== undefined) {
+      this.modelPurposeSelection = { ...options.modelPurposeSelection };
+    }
 
     if (!Number.isInteger(this.voiceStreamQueueSize) || this.voiceStreamQueueSize <= 0) {
       throw new Error(`voiceStreamQueueSize must be a positive integer, got ${this.voiceStreamQueueSize}`);
@@ -616,6 +634,23 @@ export class GatewayClient implements
     });
   }
 
+  /**
+   * 23pp: the model-selection slot key to transport for a call, or undefined.
+   * An explicit hint slot key is forwarded as-is; an explicit hint model
+   * suppresses injection entirely (per-request overrides beat the companion
+   * default); otherwise the companion's configured selection for the call's
+   * routing lane applies. Slot validity is enforced fail-closed at agent
+   * startup AND again by the gateway's registry when the call is served.
+   */
+  private resolveSelectionSlotKeyForCall(
+    modelHint: LLMModelHint | undefined,
+    routingPurpose: RoutingPurpose,
+  ): string | undefined {
+    if (modelHint?.slotKey) return modelHint.slotKey;
+    if (modelHint?.model) return undefined;
+    return resolveModelSelectionSlotForPurpose(this.modelPurposeSelection, routingPurpose);
+  }
+
   // ── LLMProviderPort interface ──
 
   async stream(
@@ -645,6 +680,14 @@ export class GatewayClient implements
     const qualifiedHint = hintedModel ? parseProviderQualifiedModel(hintedModel) : null;
     const model = qualifiedHint?.model ?? hintedModel ?? '';
     const provider = (hintedProvider ?? qualifiedHint?.provider ?? '').trim().toLowerCase();
+    // 23pp per-companion model selection: transport the companion's configured
+    // slot key for the lane this streamed call routes to (interactive chat
+    // unless a work spec declares a background purpose). Explicit model hints
+    // take precedence; the gateway re-validates the slot fail-closed.
+    const selectionSlotKey = this.resolveSelectionSlotKeyForCall(
+      modelHint,
+      toStreamRoutingPurpose(options?.workSpec?.purpose),
+    );
 
     // Register chunk handler before sending the RPC so no chunks are missed
     if (callbacks?.onText) {
@@ -663,6 +706,7 @@ export class GatewayClient implements
         model,  // gateway resolves roster defaults when hint fields are unset
         provider,
         ...usageCorrelation,
+        ...(selectionSlotKey !== undefined ? { slotKey: selectionSlotKey } : {}),
         ...(modelHint?.pin !== undefined ? { pin: modelHint.pin } : {}),
         messages: referencedMessages.messages,
         systemPrompt: context.systemPrompt,
@@ -765,6 +809,13 @@ export class GatewayClient implements
     const qualifiedHint = hintedModel ? parseProviderQualifiedModel(hintedModel) : null;
     const model = qualifiedHint?.model ?? hintedModel ?? '';
     const provider = (hintedProvider ?? qualifiedHint?.provider ?? '').trim().toLowerCase();
+    // 23pp per-companion model selection: transport the companion's configured
+    // slot key for the lane this completion routes to. Explicit model hints
+    // take precedence; the gateway re-validates the slot fail-closed.
+    const selectionSlotKey = this.resolveSelectionSlotKeyForCall(
+      modelHint,
+      toCompletionRoutingPurpose(purpose),
+    );
 
     const referencedMessages = this.inlineImageReferenceHints.referenceMessages(
       context.messages,
@@ -774,6 +825,7 @@ export class GatewayClient implements
       model,
       provider,
       ...usageCorrelation,
+      ...(selectionSlotKey !== undefined ? { slotKey: selectionSlotKey } : {}),
       ...(modelHint?.pin !== undefined ? { pin: modelHint.pin } : {}),
       messages: referencedMessages.messages,
       systemPrompt: context.systemPrompt,

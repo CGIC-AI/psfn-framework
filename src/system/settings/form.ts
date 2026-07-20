@@ -21,6 +21,11 @@ import {
   normalizeEditableSettings,
 } from './schema.js';
 import {
+  normalizeFalCreateModelSetting,
+  normalizeFalEditModelSetting,
+  normalizeImageProviderSetting,
+} from '../../primitives/images/types.js';
+import {
   COMPACTION_THRESHOLD_PCT_RANGE,
   EXTRACTION_THRESHOLD_PCT_RANGE,
   MOOD_CONGRUENCE_WEIGHT_RANGE,
@@ -419,6 +424,49 @@ export function parseSettingsForm(
       const endpointUrl = comfyUiBaseUrlRaw.trim();
       settings.comfyUiBaseUrl = endpointUrl;
       validateHttpUrl('comfyUiBaseUrl', endpointUrl);
+    }
+
+    const imageProviderRaw = params.get('imageProvider');
+    if (imageProviderRaw !== null) {
+      try {
+        settings.imageProvider = normalizeImageProviderSetting(imageProviderRaw);
+      } catch (error) {
+        errors.push(error instanceof Error ? error.message : 'imageProvider is invalid');
+      }
+    }
+
+    const imageFalCreateModelRaw = params.get('imageFalCreateModel');
+    if (imageFalCreateModelRaw !== null) {
+      try {
+        settings.imageFalCreateModel = normalizeFalCreateModelSetting(
+          imageFalCreateModelRaw,
+        );
+      } catch (error) {
+        errors.push(error instanceof Error ? error.message : 'imageFalCreateModel is invalid');
+      }
+    }
+
+    const imageFalEditModelRaw = params.get('imageFalEditModel');
+    if (imageFalEditModelRaw !== null) {
+      try {
+        settings.imageFalEditModel = normalizeFalEditModelSetting(
+          imageFalEditModelRaw,
+        );
+      } catch (error) {
+        errors.push(error instanceof Error ? error.message : 'imageFalEditModel is invalid');
+      }
+    }
+
+    const imageSelfieEditModelRaw = params.get('imageSelfieEditModel');
+    if (imageSelfieEditModelRaw !== null) {
+      try {
+        settings.imageSelfieEditModel = normalizeFalEditModelSetting(
+          imageSelfieEditModelRaw,
+          'imageSelfieEditModel',
+        );
+      } catch (error) {
+        errors.push(error instanceof Error ? error.message : 'imageSelfieEditModel is invalid');
+      }
     }
 
     const uiThemeIdRaw = params.get('uiThemeId');

@@ -378,6 +378,11 @@ describe('loadConfig path defaults', () => {
     expect(config.deepgramListenEndpoint).toBeUndefined();
     expect(config.elevenLabsModelId).toBeUndefined();
     expect(config.elevenLabsEndpointBase).toBeUndefined();
+    expect(config.imageProvider).toBeUndefined();
+    expect(config.imageFalCreateModel).toBeUndefined();
+    expect(config.imageFalEditModel).toBeUndefined();
+    expect(config.imageSelfieEditModel).toBeUndefined();
+    expect(config.modelPurposeSelection).toBeUndefined();
     expect(config.openRouterModelsApiUrl).toBeUndefined();
     expect(config.embeddingProvider).toBeUndefined();
     expect(config.embeddingModel).toBeUndefined();

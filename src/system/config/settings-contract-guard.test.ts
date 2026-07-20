@@ -90,6 +90,68 @@ describe('settings contract guard', () => {
     expect(contractData.fields.sessionHistoryBudgetPct.scope).toBe('global');
   });
 
+  it('publishes per-companion image defaults with catalog-backed enum metadata', () => {
+    const contractData = buildSettingsContractData();
+
+    expect(contractData.fields.imageProvider).toEqual({
+      key: 'imageProvider',
+      ownerSubsystem: 'runtime',
+      ownerFile: 'settings.json',
+      type: 'enum',
+      scope: 'perCompanion',
+      enumValues: ['fal', 'comfyui'],
+    });
+    expect(contractData.fields.imageFalCreateModel).toMatchObject({
+      type: 'enum',
+      scope: 'perCompanion',
+      enumValues: expect.arrayContaining(['xai/grok-imagine-image']),
+    });
+    expect(contractData.fields.imageFalEditModel).toMatchObject({
+      type: 'enum',
+      scope: 'perCompanion',
+      enumValues: expect.arrayContaining(['xai/grok-imagine-image/quality/edit']),
+    });
+    expect(contractData.fields.imageSelfieEditModel).toMatchObject({
+      type: 'enum',
+      scope: 'perCompanion',
+      enumValues: expect.arrayContaining(['xai/grok-imagine-image/quality/edit']),
+    });
+    for (const key of [
+      'imageProvider',
+      'imageFalCreateModel',
+      'imageFalEditModel',
+      'imageSelfieEditModel',
+    ]) {
+      expect(SETTINGS_GARDEN_ADVANCED_SECTION_FIELDS.channels).toContain(key);
+    }
+  });
+
+  it('publishes per-companion LLM/vision lane model selection (23pp)', () => {
+    const contractData = buildSettingsContractData();
+
+    expect(contractData.fields.modelPurposeSelection).toEqual({
+      key: 'modelPurposeSelection',
+      ownerSubsystem: 'runtime',
+      ownerFile: 'settings.json',
+      type: 'object',
+      scope: 'perCompanion',
+    });
+    expect(SETTINGS_GARDEN_ADVANCED_SECTION_FIELDS.llm).toContain('modelPurposeSelection');
+
+    // MoA model choices ride the same per-companion selection rule.
+    expect(contractData.fields.moaReferenceModels.scope).toBe('perCompanion');
+    expect(contractData.fields.moaAggregatorModel.scope).toBe('perCompanion');
+    // MoA enablement/limits stay global.
+    expect(contractData.fields.moaEnabled.scope).toBe('global');
+
+    // The catalog and its projections stay models.json-owned and global.
+    expect(contractData.fields.modelCatalog.scope).toBe('global');
+    expect(contractData.fields.modelCatalog.ownerFile).toBe('models.json');
+    // Embedding identity stays global: dimensions are baked into shared pgvector schemas.
+    expect(contractData.fields.embeddingModel.scope).toBe('global');
+    expect(contractData.fields.embeddingDims.scope).toBe('global');
+  });
+
   it('keeps the Garden tunable-setting inventory aligned to backend owner metadata', () => {
     const contractData = buildSettingsContractData();
     const inventory = listGardenSettingsTunableFieldCoverage();

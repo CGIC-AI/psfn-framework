@@ -52,6 +52,7 @@ import { createComponentLogger } from '../../../shared/logger.js';
 import {
   normalizeModelHint,
   OPTIONAL_MODEL_HINT_NORMALIZATION,
+  UnknownModelSelectionSlotError,
 } from '../../../primitives/llm/model-hint-routing.js';
 
 const log = createComponentLogger('GatewayLLM');
@@ -87,6 +88,16 @@ export async function exposeModelCallGateBlocks<T>(operation: () => Promise<T>):
         error.message,
         GatewayErrors.MODEL_CALL_PREEMPTED,
         toModelCallPreemptedErrorData(error),
+      );
+    }
+    if (error instanceof UnknownModelSelectionSlotError) {
+      // 23pp: keep the actionable fail-closed message (valid slot ids + which
+      // owner file to fix) intact across the RPC boundary instead of letting
+      // json-rpc-2.0 flatten it to a generic -32603.
+      throw new JSONRPCErrorException(
+        error.message,
+        GatewayErrors.UNKNOWN_MODEL_SELECTION_SLOT,
+        { slotKey: error.slotKey },
       );
     }
     throw error;

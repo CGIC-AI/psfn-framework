@@ -87,6 +87,32 @@ describe('run charge rolling window', () => {
     });
   });
 
+  it('can record a policy-owned zero-cost surface without consuming quota', async () => {
+    const events: RunChargeEvent[] = [];
+    const snapshot = await runWithChargeContext({
+      chargePolicy: makeChargePolicy(),
+      eventBus: makeEventBus(events),
+      lane: 'interactive',
+      runId: 'root-zero-cost',
+    }, async () => {
+      const event = chargeSurface('localImageGeneration', { recordZeroCost: true });
+      return { event, snapshot: getRunChargeSnapshot() };
+    });
+
+    expect(snapshot.event).toMatchObject({
+      surface: 'localImageGeneration',
+      amount: 0,
+    });
+    expect(snapshot.snapshot?.spentByLane.interactive).toBeUndefined();
+    expect(snapshot.snapshot?.quotaSpentByLane.interactive).toBeUndefined();
+    expect(events).toEqual([
+      expect.objectContaining({
+        surface: 'localImageGeneration',
+        amount: 0,
+      }),
+    ]);
+  });
+
   it('shares the rolling 24-hour lane budget across separate root invocations', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(NOW_MS);

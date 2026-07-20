@@ -79,6 +79,8 @@ export interface RunChargeChargeInput {
   eventBus?: Pick<EventBus, 'emit'> | null;
   lane?: ChargePolicyRuntimeLane;
   parentRunId?: string;
+  /** Emit attribution for a policy-owned zero-cost surface without consuming quota. */
+  recordZeroCost?: boolean;
   rootRunId?: string;
   runId?: string;
 }
@@ -381,7 +383,7 @@ export function inspectChargeSurface(
   }
 
   const amount = normalizePositiveNumber(input.amount ?? chargePolicy.surfaceCosts[surface]);
-  if (amount === 0) {
+  if (amount === 0 && input.recordZeroCost !== true) {
     return null;
   }
 

@@ -3,6 +3,9 @@
   import {
     getChannelEnvelopeData,
     saveChannelEnvelopeLabel,
+    getChannelDemotionNotice,
+    demoteChannelToPublic,
+    type ChannelDemotionNotice,
     type ChannelEnvelopeData,
     type ChannelEnvelopeLabel,
     type ChannelEnvelopeRow,
@@ -26,6 +29,12 @@
   let formContactTracking = $state<ContactTrackingMode>('auto');
   let formNeedsReview = $state(false);
   let showForm = $state(false);
+
+  // Demotion (invite-only -> public) click-to-accept flow (jp36.6.2)
+  let demotionNotice = $state<ChannelDemotionNotice | null>(null);
+  let demotionChannelId = $state<string | null>(null);
+  let demotionAcknowledged = $state(false);
+  let demotionLoading = $state(false);
 
   const SOURCE_LABELS: Record<ChannelEnvelopeRow['source'], string> = {
     channel_label: 'channel-owned',
@@ -139,6 +148,49 @@
     }
   }
 
+  async function startDemotion(row: ChannelEnvelopeRow): Promise<void> {
+    saveError = '';
+    saveMessage = '';
+    demotionAcknowledged = false;
+    demotionNotice = null;
+    demotionChannelId = row.channelId;
+    demotionLoading = true;
+    try {
+      demotionNotice = await getChannelDemotionNotice(row.channelId);
+    } catch (e) {
+      saveError = e instanceof Error ? e.message : 'Failed to load demotion notice';
+      demotionChannelId = null;
+    } finally {
+      demotionLoading = false;
+    }
+  }
+
+  function cancelDemotion(): void {
+    demotionNotice = null;
+    demotionChannelId = null;
+    demotionAcknowledged = false;
+  }
+
+  async function acceptDemotion(): Promise<void> {
+    if (!demotionNotice || !demotionAcknowledged) return;
+    saving = true;
+    saveError = '';
+    saveMessage = '';
+    try {
+      const result = await demoteChannelToPublic(
+        demotionNotice.channelId,
+        demotionNotice.noticeVersion,
+      );
+      data = result.data;
+      saveMessage = result.message;
+      cancelDemotion();
+    } catch (e) {
+      saveError = e instanceof Error ? e.message : 'Failed to demote channel';
+    } finally {
+      saving = false;
+    }
+  }
+
   onMount(() => {
     void loadData();
   });
@@ -184,6 +236,49 @@
   {#if saveError}
     <div class="card-garden p-3 border-l-4 border-l-wilt-400">
       <p class="text-sm text-shadow-800">{saveError}</p>
+    </div>
+  {/if}
+
+  <!-- Demotion (invite-only -> public) click-to-accept notice (jp36.6.2) -->
+  {#if demotionNotice}
+    <div class="card-garden p-5 space-y-4 border-l-4 border-l-petal-400">
+      <h2 class="text-base font-serif font-semibold text-shadow-900">
+        Demote <code class="font-mono">{demotionNotice.channelId}</code>: invite-only &rarr; public
+      </h2>
+      {#if demotionNotice.demotable}
+        <p class="text-sm text-shadow-800 leading-relaxed">{demotionNotice.notice}</p>
+        <p class="text-xs text-shadow-500">Notice version {demotionNotice.noticeVersion}</p>
+        <label class="flex items-start gap-2 text-sm text-shadow-800">
+          <input type="checkbox" bind:checked={demotionAcknowledged} class="mt-1" />
+          <span>I accept: this starts a fresh disclosure epoch and prior material is not retroactively declassified.</span>
+        </label>
+        <div class="flex gap-2">
+          <button
+            onclick={acceptDemotion}
+            disabled={saving || !demotionAcknowledged}
+            class="text-sm px-4 py-1.5 rounded-lg bg-petal-200 text-shadow-900 hover:bg-petal-300
+                   transition-colors disabled:opacity-50 font-medium"
+          >
+            {saving ? 'Applying...' : 'Accept and demote'}
+          </button>
+          <button
+            onclick={cancelDemotion}
+            disabled={saving}
+            class="text-sm px-4 py-1.5 rounded-lg border border-bark-300 text-shadow-600
+                   hover:bg-bark-100 transition-colors disabled:opacity-50 font-medium"
+          >
+            Cancel
+          </button>
+        </div>
+      {:else}
+        <p class="text-sm text-shadow-800">{demotionNotice.reason ?? 'This channel cannot be demoted.'}</p>
+        <button
+          onclick={cancelDemotion}
+          class="text-sm px-4 py-1.5 rounded-lg border border-bark-300 text-shadow-600 hover:bg-bark-100 font-medium"
+        >
+          Close
+        </button>
+      {/if}
     </div>
   {/if}
 
@@ -332,6 +427,16 @@
                         Confirm reviewed
                       </button>
                     {/if}
+                    {#if row.privacy === 'invite_only' && !row.broadcast}
+                      <button
+                        onclick={() => startDemotion(row)}
+                        disabled={saving || demotionLoading}
+                        title="Demote invite-only -> public (click-to-accept: starts a fresh disclosure epoch)"
+                        class="text-xs px-2 py-1 rounded border border-petal-300 text-petal-500 hover:bg-petal-100 disabled:opacity-50"
+                      >
+                        Demote to public
+                      </button>
+                    {/if}
                     {#if row.hasLabel}
                       <button
                         onclick={() => removeLabel(row)}
@@ -378,6 +483,32 @@
           {/each}
         </ul>
       </div>
+    </div>
+
+    <!-- Classification epoch boundaries (jp36.6.2 demotion audit) -->
+    <div class="card-garden p-5">
+      <h2 class="text-base font-serif font-semibold text-shadow-900 mb-2">
+        Classification epochs (invite-only &rarr; public demotions)
+      </h2>
+      {#if data.epochs.length === 0}
+        <p class="text-sm text-shadow-600">
+          No demotions recorded. Accepting an invite-only &rarr; public demotion stamps an
+          operator-signed epoch boundary here; material generated before that boundary keeps the
+          invite-only ceiling.
+        </p>
+      {:else}
+        <ul class="text-sm text-shadow-700 space-y-1">
+          {#each data.epochs as epoch (epoch.channelId + epoch.at)}
+            <li>
+              <code class="font-mono">{epoch.channelId}</code>
+              &mdash; {epoch.from} &rarr; {epoch.to}
+              at <span class="text-shadow-500">{epoch.at}</span>
+              by {epoch.acceptedBy}
+              <span class="text-shadow-400">(notice {epoch.noticeVersion})</span>
+            </li>
+          {/each}
+        </ul>
+      {/if}
     </div>
   {/if}
 </div>

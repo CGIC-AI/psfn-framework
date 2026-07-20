@@ -255,6 +255,8 @@ const fixedRoutes: readonly RouteTuple[] = [
   ['POST', '/api/admin/wiki/shared-world-proposals/cleanup'],
   ['GET', '/api/admin/wishlist'],
   [['GET', 'POST'], '/api/admin/channels/context-envelope'],
+  ['GET', '/api/admin/channels/context-envelope/demotion-notice'],
+  ['POST', '/api/admin/channels/context-envelope/demote'],
   [['GET', 'PATCH', 'POST'], '/api/admin/chat/bootstrap'], ['GET', '/api/admin/chat/model-room/bootstrap'],
   ['GET', '/api/admin/intake/drift-reviews'], ['GET', '/api/admin/intake/policy'],
   ['GET', '/api/admin/intake/quarantine'], [['GET', 'POST'], '/api/admin/intake/source-lists'],

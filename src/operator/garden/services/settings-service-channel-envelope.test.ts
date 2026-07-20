@@ -6,6 +6,10 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { createOwnerFileConfigStore } from '../../../system/config/config-store.js';
 import type { SubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
+import {
+  DEMOTION_EPOCH_NOTICE,
+  DEMOTION_EPOCH_NOTICE_VERSION,
+} from '../../../system/trust/context-envelope.js';
 import { AdminSettingsDataService } from './settings-service.js';
 
 let tempDir: string | null = null;
@@ -96,32 +100,23 @@ describe('AdminSettingsDataService channel envelope surface', () => {
     expect(data.broadcastPrefixes).toContain('twitter:');
   });
 
-  it('surfaces the operator_confirmed source in the Garden channel view (jp36.6)', () => {
+  it('write-gates operator_confirmed: the label editor cannot set it (jp36.6.2)', () => {
     const root = makeTempDir();
     const service = buildService(root);
 
-    // The Garden demotion flow (jp36.6.2) writes an operator-confirmed label;
-    // this bead only requires the source to round-trip through the owner file
-    // and appear on the channel row for audit.
-    const saved = service.saveChannelEnvelopeLabel('room:confirmed', {
+    // jp36.6.1 review gate: the operator_confirmed marker must NOT be settable
+    // through the generic label editor — only the click-to-accept demotion flow.
+    const rejected = service.saveChannelEnvelopeLabel('room:confirmed', {
       privacy: 'public',
       classificationSource: 'operator_confirmed',
     });
-    expect(saved.ok).toBe(true);
+    expect(rejected.ok).toBe(false);
+    expect(rejected.message).toMatch(/classificationSource/);
+    expect(rejected.message).toMatch(/demotion flow/);
 
-    const written = JSON.parse(readFileSync(join(root, 'channels.json'), 'utf8'));
-    expect(written.contextEnvelope.channels['room:confirmed']).toEqual({
-      privacy: 'public',
-      classificationSource: 'operator_confirmed',
-    });
-
-    const row = service.getChannelEnvelopeData().channels[0];
-    expect(row).toMatchObject({
-      channelId: 'room:confirmed',
-      privacy: 'public',
-      source: 'operator_confirmed',
-      hasLabel: true,
-    });
+    // Nothing was written for that channel.
+    const data = service.getChannelEnvelopeData();
+    expect(data.channels.find(row => row.channelId === 'room:confirmed')).toBeUndefined();
   });
 
   it('upserts and removes channel labels through the validated owner-file path', () => {
@@ -195,5 +190,144 @@ describe('AdminSettingsDataService channel envelope surface', () => {
       'room:keep': { privacy: 'public' },
       'room:added': { privacy: 'invite_only' },
     });
+  });
+});
+
+describe('AdminSettingsDataService invite-only -> public demotion flow (jp36.6.2)', () => {
+  it('serves the click-to-accept notice and marks an invite-only channel demotable', () => {
+    const root = makeTempDir();
+    const service = buildService(root);
+
+    // Unlabeled non-DM channel resolves to the invite_only derived default.
+    const notice = service.getChannelDemotionNotice('discord:group-room');
+    expect(notice).toMatchObject({
+      channelId: 'discord:group-room',
+      currentPrivacy: 'invite_only',
+      from: 'invite_only',
+      to: 'public',
+      demotable: true,
+      noticeVersion: DEMOTION_EPOCH_NOTICE_VERSION,
+    });
+    // All four load-bearing statements from the bible §9.3 spec are present.
+    expect(notice.notice).toBe(DEMOTION_EPOCH_NOTICE);
+    expect(notice.notice).toMatch(/fresh disclosure epoch/i);
+    expect(notice.notice).toMatch(/no longer be auto-shared/i);
+    expect(notice.notice).toMatch(/human-in-the-loop egress review/i);
+    expect(notice.notice).toMatch(/only content generated after you accept/i);
+  });
+
+  it('reports non-demotable for a channel that is already public', () => {
+    const root = makeTempDir();
+    writeFileSync(join(root, 'channels.json'), JSON.stringify({
+      contextEnvelope: { channels: { 'room:already-public': { privacy: 'public' } } },
+    }, null, 2));
+    const service = buildService(root);
+
+    const notice = service.getChannelDemotionNotice('room:already-public');
+    expect(notice.demotable).toBe(false);
+    expect(notice.reason).toMatch(/not invite-only/i);
+  });
+
+  it('blocks demotion without an acknowledged notice version (fail closed)', () => {
+    const root = makeTempDir();
+    const service = buildService(root);
+
+    const missing = service.acceptChannelDemotion({
+      channelId: 'discord:group-room',
+      acknowledgedNoticeVersion: undefined,
+    });
+    expect(missing.ok).toBe(false);
+    expect(missing.message).toMatch(/blocked/i);
+
+    const wrong = service.acceptChannelDemotion({
+      channelId: 'discord:group-room',
+      acknowledgedNoticeVersion: 'not-the-version',
+    });
+    expect(wrong.ok).toBe(false);
+    expect(wrong.message).toMatch(/blocked/i);
+
+    // No label and no epoch were written.
+    const data = service.getChannelEnvelopeData();
+    expect(data.channels.find(row => row.channelId === 'discord:group-room')).toBeUndefined();
+    expect(data.epochs).toEqual([]);
+  });
+
+  it('stamps operator_confirmed and records an epoch on acceptance', () => {
+    const root = makeTempDir();
+    const service = buildService(root);
+
+    const before = Date.now();
+    const result = service.acceptChannelDemotion({
+      channelId: 'discord:group-room',
+      acknowledgedNoticeVersion: DEMOTION_EPOCH_NOTICE_VERSION,
+      actor: 'operator:alice',
+    });
+    expect(result.ok).toBe(true);
+    expect(result.epoch).toMatchObject({
+      channelId: 'discord:group-room',
+      from: 'invite_only',
+      to: 'public',
+      acceptedBy: 'operator:alice',
+      noticeVersion: DEMOTION_EPOCH_NOTICE_VERSION,
+    });
+    expect(Date.parse(result.epoch!.at)).toBeGreaterThanOrEqual(before);
+
+    // Owner file now carries the confirmed public label AND the epoch record.
+    const written = JSON.parse(readFileSync(join(root, 'channels.json'), 'utf8'));
+    expect(written.contextEnvelope.channels['discord:group-room']).toEqual({
+      privacy: 'public',
+      classificationSource: 'operator_confirmed',
+    });
+    expect(written.contextEnvelope.classificationEpochs).toHaveLength(1);
+    expect(written.contextEnvelope.classificationEpochs[0]).toMatchObject({
+      channelId: 'discord:group-room',
+      from: 'invite_only',
+      to: 'public',
+    });
+
+    // The resolved row now reports the operator decision, and the epoch is queryable.
+    const data = service.getChannelEnvelopeData();
+    const row = data.channels.find(r => r.channelId === 'discord:group-room');
+    expect(row).toMatchObject({ privacy: 'public', source: 'operator_confirmed' });
+    expect(data.epochs).toHaveLength(1);
+  });
+
+  it('preserves contactTracking from the pre-demotion label and drops needsReview', () => {
+    const root = makeTempDir();
+    writeFileSync(join(root, 'channels.json'), JSON.stringify({
+      contextEnvelope: {
+        channels: {
+          'room:seeded': { privacy: 'invite_only', contactTracking: 'approval', needsReview: true },
+        },
+      },
+    }, null, 2));
+    const service = buildService(root);
+
+    const result = service.acceptChannelDemotion({
+      channelId: 'room:seeded',
+      acknowledgedNoticeVersion: DEMOTION_EPOCH_NOTICE_VERSION,
+    });
+    expect(result.ok).toBe(true);
+
+    const written = JSON.parse(readFileSync(join(root, 'channels.json'), 'utf8'));
+    expect(written.contextEnvelope.channels['room:seeded']).toEqual({
+      privacy: 'public',
+      classificationSource: 'operator_confirmed',
+      contactTracking: 'approval',
+    });
+  });
+
+  it('rejects a hand-authored operator_confirmed label with no matching epoch (owner-file invariant)', () => {
+    const root = makeTempDir();
+    // Simulate a raw owner-file edit asserting confirmation without the flow.
+    writeFileSync(join(root, 'channels.json'), JSON.stringify({
+      contextEnvelope: {
+        channels: { 'room:forged': { privacy: 'public', classificationSource: 'operator_confirmed' } },
+      },
+    }, null, 2));
+    const service = buildService(root);
+
+    // Any read that parses the section fails closed.
+    expect(() => service.getChannelEnvelopeData()).toThrow(/matching classificationEpochs record/);
   });
 });

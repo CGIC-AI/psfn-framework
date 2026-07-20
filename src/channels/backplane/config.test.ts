@@ -838,7 +838,74 @@ describe('loadRuntimeChannelsConfig', () => {
     const dataDir = mkdtempSync(join(tmpdir(), 'psfn-channel-config-'));
     try {
       const config = loadRuntimeChannelsConfig(dataDir, {});
-      expect(config.contextEnvelope).toEqual({ channels: {} });
+      expect(config.contextEnvelope).toEqual({ channels: {}, classificationEpochs: [] });
+    } finally {
+      rmSync(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  it('parses and validates classificationEpochs, gating operator_confirmed labels (jp36.6.2)', () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'psfn-channel-config-'));
+    try {
+      // A confirmed public label WITHOUT a matching epoch is rejected fail-closed
+      // (write-gate: the operator_confirmed marker must be backed by an epoch).
+      writeFileSync(join(dataDir, 'channels.json'), JSON.stringify({
+        contextEnvelope: {
+          channels: { 'room:x': { privacy: 'public', classificationSource: 'operator_confirmed' } },
+        },
+      }));
+      expect(() => loadRuntimeChannelsConfig(dataDir, {}))
+        .toThrow(/matching classificationEpochs record/);
+
+      // With the matching operator-signed epoch it loads and carries both.
+      writeFileSync(join(dataDir, 'channels.json'), JSON.stringify({
+        contextEnvelope: {
+          channels: { 'room:x': { privacy: 'public', classificationSource: 'operator_confirmed' } },
+          classificationEpochs: [{
+            channelId: 'room:x',
+            from: 'invite_only',
+            to: 'public',
+            at: '2026-07-19T12:00:00.000Z',
+            acceptedBy: 'operator',
+            noticeVersion: '2026-07-19.1',
+          }],
+        },
+      }));
+      const config = loadRuntimeChannelsConfig(dataDir, {});
+      expect(config.contextEnvelope.classificationEpochs).toHaveLength(1);
+      expect(config.contextEnvelope.channels['room:x'].classificationSource).toBe('operator_confirmed');
+
+      // A malformed epoch (public -> invite_only is not a valid epoch) fails closed.
+      writeFileSync(join(dataDir, 'channels.json'), JSON.stringify({
+        contextEnvelope: {
+          channels: {},
+          classificationEpochs: [{
+            channelId: 'room:x',
+            from: 'public',
+            to: 'invite_only',
+            at: '2026-07-19T12:00:00.000Z',
+            acceptedBy: 'operator',
+            noticeVersion: '2026-07-19.1',
+          }],
+        },
+      }));
+      expect(() => loadRuntimeChannelsConfig(dataDir, {})).toThrow(/from must be 'invite_only'/);
+
+      // An unknown notice version fails closed.
+      writeFileSync(join(dataDir, 'channels.json'), JSON.stringify({
+        contextEnvelope: {
+          channels: {},
+          classificationEpochs: [{
+            channelId: 'room:x',
+            from: 'invite_only',
+            to: 'public',
+            at: '2026-07-19T12:00:00.000Z',
+            acceptedBy: 'operator',
+            noticeVersion: 'bogus',
+          }],
+        },
+      }));
+      expect(() => loadRuntimeChannelsConfig(dataDir, {})).toThrow(/noticeVersion/);
     } finally {
       rmSync(dataDir, { recursive: true, force: true });
     }

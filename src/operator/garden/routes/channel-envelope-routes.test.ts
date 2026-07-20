@@ -45,6 +45,7 @@ const SAMPLE_DATA: AdminChannelEnvelopeData = {
   prefixOverrides: {},
   privatePrefixes: ['internal:'],
   broadcastPrefixes: ['twitter:'],
+  epochs: [],
 };
 
 async function invokeRoute(
@@ -133,5 +134,106 @@ describe('admin channel context-envelope routes', () => {
   it('rejects invalid JSON payloads', async () => {
     const result = await invokeRoute({}, 'POST', '{not json');
     expect(result.statusCode).toBe(400);
+  });
+});
+
+async function invokeRouteAt(
+  service: Partial<AdminSettingsService>,
+  method: 'GET' | 'POST',
+  path: string,
+  body: unknown,
+): Promise<{ statusCode: number; body: unknown }> {
+  const withBody: AdminBodyReader = (_req, _res, cb) => {
+    cb(typeof body === 'string' ? body : JSON.stringify(body));
+  };
+  const routes = buildAdminChannelEnvelopeRoutes({
+    settingsService: service as AdminSettingsService,
+    withBody,
+  });
+  // Match on the pathname only (route matchers ignore the query string).
+  const pathname = path.split('?')[0];
+  const route = routes.find(candidate => candidate.method === method && candidate.match(pathname));
+  if (!route) {
+    throw new Error(`Route not found: ${method} ${pathname}`);
+  }
+  const params = route.match(pathname) ?? {};
+  const res = new CapturingResponse();
+  route.handle(
+    { headers: { host: 'garden.local' }, url: path } as IncomingMessage,
+    res as unknown as ServerResponse,
+    params,
+  );
+  await res.done;
+  return { statusCode: res.statusCode, body: JSON.parse(res.body) as unknown };
+}
+
+describe('admin channel demotion routes (jp36.6.2)', () => {
+  it('serves the demotion notice for the requested channel', async () => {
+    const getChannelDemotionNotice = vi.fn().mockReturnValue({
+      channelId: 'room:friends',
+      currentPrivacy: 'invite_only',
+      from: 'invite_only',
+      to: 'public',
+      demotable: true,
+      notice: 'notice text',
+      noticeVersion: '2026-07-19.1',
+    });
+    const result = await invokeRouteAt(
+      { getChannelDemotionNotice },
+      'GET',
+      '/api/admin/channels/context-envelope/demotion-notice?channelId=room:friends',
+      undefined,
+    );
+    expect(result.statusCode).toBe(200);
+    expect(getChannelDemotionNotice).toHaveBeenCalledWith('room:friends');
+    expect(result.body).toMatchObject({ demotable: true, noticeVersion: '2026-07-19.1' });
+  });
+
+  it('accepts a demotion and returns the epoch + refreshed view', async () => {
+    const acceptChannelDemotion = vi.fn().mockReturnValue({
+      ok: true,
+      message: 'demoted',
+      epoch: { channelId: 'room:friends', from: 'invite_only', to: 'public', at: '2026-07-19T00:00:00.000Z', acceptedBy: 'operator', noticeVersion: '2026-07-19.1' },
+      data: SAMPLE_DATA,
+    });
+    const result = await invokeRouteAt(
+      { acceptChannelDemotion, getChannelEnvelopeData: () => SAMPLE_DATA },
+      'POST',
+      '/api/admin/channels/context-envelope/demote',
+      { channelId: 'room:friends', acknowledgedNoticeVersion: '2026-07-19.1' },
+    );
+    expect(result.statusCode).toBe(200);
+    expect(acceptChannelDemotion).toHaveBeenCalledWith({
+      channelId: 'room:friends',
+      acknowledgedNoticeVersion: '2026-07-19.1',
+    });
+    expect(result.body).toMatchObject({ ok: true, epoch: { to: 'public' } });
+  });
+
+  it('returns 400 when the service blocks an unacknowledged demotion', async () => {
+    const acceptChannelDemotion = vi.fn().mockReturnValue({
+      ok: false,
+      message: 'Demotion blocked: operator must acknowledge the current demotion notice',
+    });
+    const result = await invokeRouteAt(
+      { acceptChannelDemotion },
+      'POST',
+      '/api/admin/channels/context-envelope/demote',
+      { channelId: 'room:friends' },
+    );
+    expect(result.statusCode).toBe(400);
+    expect((result.body as { error: string }).error).toMatch(/blocked/i);
+  });
+
+  it('rejects a demote payload with no channelId fail-closed', async () => {
+    const acceptChannelDemotion = vi.fn();
+    const result = await invokeRouteAt(
+      { acceptChannelDemotion },
+      'POST',
+      '/api/admin/channels/context-envelope/demote',
+      { acknowledgedNoticeVersion: '2026-07-19.1' },
+    );
+    expect(result.statusCode).toBe(400);
+    expect(acceptChannelDemotion).not.toHaveBeenCalled();
   });
 });

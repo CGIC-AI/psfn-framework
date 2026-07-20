@@ -235,6 +235,9 @@ export type {
   AdminIntakeSourceListMutationInput,
   AdminChannelEnvelopeRow,
   AdminChannelEnvelopeData,
+  AdminChannelDemotionNotice,
+  AdminChannelDemotionAcceptInput,
+  AdminChannelDemotionResult,
 } from './types/settings.js';
 
 export type {

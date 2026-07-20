@@ -200,6 +200,75 @@ describe('SleeptimeMemoryAgent', () => {
     });
   });
 
+  it('does not infer sleeptime actions for testing sessions', () => {
+    const sessionManager = {
+      resolveSessionChannelId: vi.fn((channelId: string) => channelId),
+      getRecentMessages: vi.fn().mockReturnValue([]),
+      listRecentSessions: vi.fn().mockReturnValue([
+        {
+          channelId: 'terminal:testing:rest-window-probe',
+          channelType: 'terminal',
+          messageCount: 10,
+          lastActivityAt: Date.parse('2026-03-16T01:00:00.000Z'),
+          lastRole: 'user',
+        },
+      ]),
+    };
+    const agent = new SleeptimeMemoryAgent(makeAgentOptions({
+      sessionManager,
+      restWindow: nightRestWindow(),
+    }));
+
+    expect(agent.inferIdlePostTurnActions({
+      nowMs: Date.parse('2026-03-16T03:30:00.000Z'),
+    })).toEqual([]);
+  });
+
+  it('skips queued testing-session work before transcript, durable memory, orientation, wiki, dream, or arc activity', async () => {
+    const llmProvider = makeLLMProvider('{}');
+    const sessionManager = {
+      resolveSessionChannelId: vi.fn((channelId: string) => channelId),
+      getRecentMessages: vi.fn().mockReturnValue([{
+        id: 1,
+        channelId: 'terminal:testing:queued-rest-window-probe',
+        role: 'user' as const,
+        content: 'This fixture must never become durable memory.',
+        timestamp: Date.now(),
+      }]),
+    };
+    const coreMemoryStore = makeCoreMemoryStore();
+    const memoryWriter = { write: vi.fn() };
+    const sleepConsolidator = { run: vi.fn() };
+    const arcWeaver = { run: vi.fn() };
+    const dreamMeaningPass = { run: vi.fn() };
+    const sleeptimeWikiPass = { run: vi.fn() };
+    const agent = new SleeptimeMemoryAgent(makeAgentOptions({
+      llmProvider,
+      sessionManager,
+      coreMemoryStore,
+      memoryWriter,
+      sleepConsolidator,
+      arcWeaver,
+      dreamMeaningPass,
+      sleeptimeWikiPass,
+    }));
+
+    await agent.execute(makeSleeptimeAction({
+      channelId: 'terminal:testing:queued-rest-window-probe',
+      payload: { sessionId: 'terminal:testing:queued-rest-window-probe' },
+    }));
+
+    expect(sessionManager.getRecentMessages).not.toHaveBeenCalled();
+    expect(sleepConsolidator.run).not.toHaveBeenCalled();
+    expect(arcWeaver.run).not.toHaveBeenCalled();
+    expect(dreamMeaningPass.run).not.toHaveBeenCalled();
+    expect(sleeptimeWikiPass.run).not.toHaveBeenCalled();
+    expect(llmProvider.complete).not.toHaveBeenCalled();
+    expect(coreMemoryStore.getSnapshot).not.toHaveBeenCalled();
+    expect(coreMemoryStore.rethink).not.toHaveBeenCalled();
+    expect(memoryWriter.write).not.toHaveBeenCalled();
+  });
+
   it('does not infer idle actions for sessions active inside the window', () => {
     const sessionManager = {
       resolveSessionChannelId: vi.fn((channelId: string) => channelId),

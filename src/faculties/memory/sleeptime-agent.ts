@@ -16,6 +16,7 @@ import type { InferredPostTurnAction, PostTurnActionCandidate } from '../../shar
 import { createComponentLogger } from '../../shared/logger.js';
 import type { SessionEntry } from '../../core/session/types.js';
 import type { SessionManager } from '../../core/session/manager.js';
+import { isTestingSessionId } from '../../core/session/session-id.js';
 import {
   DEFAULT_ORIENTATION_REWRITE_GATE,
   type EpisodicProcessingRestWindowConfig,
@@ -514,6 +515,7 @@ export class SleeptimeMemoryAgent {
 	    for (const session of this.sessionManager.listRecentSessions(limit)) {
 	      const sessionId = this.sessionManager.resolveSessionChannelId(session.channelId);
 	      if (sessionId.startsWith('internal:')) continue;
+	      if (isTestingSessionId(sessionId)) continue;
 	      if (this.sessionManager.isSessionRetiredOrQuarantined?.(sessionId)) continue;
 	      const lastUserActivityAtMs = session.lastActivityAt;
       const restWindowDecision = evaluateRestWindowEligibility({
@@ -539,6 +541,13 @@ export class SleeptimeMemoryAgent {
 
 	  async execute(action: Pick<InferredPostTurnAction, 'id' | 'channelId' | 'sourceMessageId' | 'payload'>): Promise<void> {
 	    const sessionId = this.resolveActionSessionId(action);
+	    if (isTestingSessionId(sessionId)) {
+	      log.info('Skipping sleeptime run for testing session', {
+	        sessionId,
+	        actionId: action.id,
+	      });
+	      return;
+	    }
 	    if (this.sessionManager.isSessionRetiredOrQuarantined?.(sessionId)) {
 	      log.info('Skipping sleeptime run for retired session', {
 	        sessionId,

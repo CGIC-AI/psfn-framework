@@ -62,6 +62,7 @@ import {
 } from '../../persistence/layout.js';
 import { provisionFleetWorkspaces } from '../../persistence/workspaces/provisioning.js';
 import { migrateLegacyWorkspaceForFleet } from '../../persistence/workspaces/legacy-workspace-migration.js';
+import { logLegacyWorkspaceMigrationResult } from './legacy-workspace-migration-logging.js';
 import { ContactBlockListStore } from '../../core/cogsec/contact-block-list.js';
 import { CogSecEventStore } from '../../core/cogsec/events.js';
 import { createGatewayContactBlockGate } from '../../boundary/gateway/contact-block-gate.js';
@@ -325,14 +326,7 @@ async function main(): Promise<void> {
       legacyWorkspacePath: process.env.WORKSPACE_PATH,
       env: process.env,
     });
-    if (legacyWorkspaceMigration.reason === 'same_directory_identity') {
-      log.info('Legacy WORKSPACE_PATH already identifies a canonical Personal Workspace; migration not needed', {
-        companionId: legacyWorkspaceMigration.companionId,
-        sourcePath: legacyWorkspaceMigration.sourcePath,
-        destinationPath: legacyWorkspaceMigration.destinationPath,
-        decision: 'same_directory_identity',
-      });
-    }
+    logLegacyWorkspaceMigrationResult(log, legacyWorkspaceMigration);
     provisionFleetWorkspaces(config.companionFleet);
   } else {
     ensurePersonalFilesLayout(bootstrap.workspaceRoot);

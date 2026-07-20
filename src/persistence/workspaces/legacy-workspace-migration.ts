@@ -244,16 +244,18 @@ export function migrateLegacyWorkspaceForFleet(options: {
   const receiptPath = join(migrationDir, 'legacy-workspace.json');
   if (existsSync(receiptPath)) {
     const receipt = parseReceipt(receiptPath);
+    if (sourceExists || requestedCompanionId || requestedDigest) {
+      if (!requestedCompanionId) {
+        throw new Error(
+          `${LEGACY_WORKSPACE_COMPANION_ID_ENV} remains required to validate a completed migration receipt`,
+        );
+      }
+      const expectedSha256 = requireDigest(requestedDigest);
+      if (requestedCompanionId !== receipt.companionId || expectedSha256 !== receipt.sourceSha256) {
+        throw new Error('Legacy workspace migration receipt conflicts with the requested migration identity');
+      }
+    }
     const companion = options.fleet.companions.find(entry => entry.companionId === receipt.companionId);
-    if (!requestedCompanionId) {
-      throw new Error(
-        `${LEGACY_WORKSPACE_COMPANION_ID_ENV} remains required to validate a completed migration receipt`,
-      );
-    }
-    const expectedSha256 = requireDigest(requestedDigest);
-    if (requestedCompanionId !== receipt.companionId || expectedSha256 !== receipt.sourceSha256) {
-      throw new Error('Legacy workspace migration receipt conflicts with the requested migration identity');
-    }
     if (!companion) {
       throw new Error('Legacy workspace migration receipt no longer matches its migration identity');
     }

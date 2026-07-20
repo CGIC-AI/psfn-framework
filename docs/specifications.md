@@ -152,7 +152,9 @@ Supported until beta:
   A completed migration is validated by the immutable receipt's internally
   consistent entry manifest and configured source, destination, companion, and
   approved digest identity; the mutable live Personal Workspace tree is not
-  re-hashed after completion.
+  re-hashed after completion. Once the retained legacy source is deliberately
+  removed, the receipt and canonical destination still validate without the
+  migration env inputs; partial env configuration remains an error.
   Remove this startup migration and both env inputs before beta after every live
   installation has a verified receipt.
 

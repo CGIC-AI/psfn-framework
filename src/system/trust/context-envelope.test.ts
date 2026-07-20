@@ -20,6 +20,8 @@ import {
   normalizeChannelPrivacy,
   validateAudienceScopeThresholds,
   validateChannelEnvelopeLabel,
+  validateChannelClassificationEpoch,
+  DEMOTION_EPOCH_NOTICE_VERSION,
 } from './context-envelope.js';
 import { decodeStoredChannelVisibility } from './types.js';
 
@@ -239,6 +241,44 @@ describe('channel envelope labels (channels.json contract)', () => {
       { broadcast: false, classificationSource: 'operator_confirmed' },
       'label',
     )).toThrow(/without a tier-1 classification/);
+  });
+});
+
+describe('validateChannelClassificationEpoch (jp36.6.2 demotion epoch record)', () => {
+  const valid = {
+    channelId: 'room:x',
+    from: 'invite_only',
+    to: 'public',
+    at: '2026-07-19T12:00:00.000Z',
+    acceptedBy: 'operator',
+    noticeVersion: DEMOTION_EPOCH_NOTICE_VERSION,
+  };
+
+  it('accepts a well-formed invite-only -> public epoch', () => {
+    expect(validateChannelClassificationEpoch(valid, 'epoch')).toEqual(valid);
+  });
+
+  it('rejects any transition other than invite-only -> public', () => {
+    expect(() => validateChannelClassificationEpoch({ ...valid, from: 'public' }, 'epoch'))
+      .toThrow(/from must be 'invite_only'/);
+    expect(() => validateChannelClassificationEpoch({ ...valid, to: 'invite_only' }, 'epoch'))
+      .toThrow(/to must be 'public'/);
+  });
+
+  it('fails closed on a missing/invalid timestamp, actor, channelId, or notice version', () => {
+    expect(() => validateChannelClassificationEpoch({ ...valid, at: 'not-a-date' }, 'epoch'))
+      .toThrow(/ISO-8601/);
+    expect(() => validateChannelClassificationEpoch({ ...valid, acceptedBy: '' }, 'epoch'))
+      .toThrow(/acceptedBy/);
+    expect(() => validateChannelClassificationEpoch({ ...valid, channelId: '  ' }, 'epoch'))
+      .toThrow(/channelId/);
+    expect(() => validateChannelClassificationEpoch({ ...valid, noticeVersion: 'v0' }, 'epoch'))
+      .toThrow(/noticeVersion/);
+  });
+
+  it('rejects unsupported keys', () => {
+    expect(() => validateChannelClassificationEpoch({ ...valid, extra: 1 }, 'epoch'))
+      .toThrow(/unsupported keys/);
   });
 });
 

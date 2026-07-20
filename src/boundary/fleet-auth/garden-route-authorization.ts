@@ -152,13 +152,17 @@ const routeAuthorizationGroups: readonly RouteAuthorizationGroup[] = [
       ...ids('GET', [
         '/api/admin/rooms', '/api/admin/rooms/:channelId/roster',
         '/api/admin/channels/context-envelope',
+        '/api/admin/channels/context-envelope/demotion-notice',
       ]),
       ...pageIds(['/rooms']),
     ],
   },
   {
     action: 'channels.manage', area: 'channels',
-    routeIds: ids('POST', ['/api/admin/channels/context-envelope']),
+    routeIds: ids('POST', [
+      '/api/admin/channels/context-envelope',
+      '/api/admin/channels/context-envelope/demote',
+    ]),
     assurance: 'webauthn_uv', confirmation: 'explicit',
   },
   {

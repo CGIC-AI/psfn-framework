@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type { ContactStorePort } from '../../../core/contacts/contact-store-port.js';
+import type { Contact } from '../../../core/contacts/types.js';
 import type { ConcernStorePort } from '../../../core/intention/concern-store-port.js';
 import type { EventBus } from '../../../shared/event-bus.js';
 import { sessionEntryToMessage } from '../../../core/agent/messages.js';
@@ -77,6 +78,11 @@ import {
   resolveConfiguredCompanionDataDir,
 } from '../../../persistence/layout.js';
 import type { SubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
+import { assertGardenRequestCompanionScope } from '../garden-companion-scope.js';
+import type {
+  FleetGardenRequestContext,
+  GardenRequestContext,
+} from '../garden-request-context.js';
 import { getLinkedContactForSession } from './contact-session-linker.js';
 import {
   AdminSessionTurnObservabilityStore,
@@ -94,6 +100,7 @@ export const DEFAULT_ADMIN_SESSION_MESSAGE_PAGE_LIMIT = 100;
 export const MAX_ADMIN_SESSION_MESSAGE_PAGE_LIMIT = 200;
 export const DEFAULT_ADMIN_SESSION_SEARCH_LIMIT = 25;
 export const MAX_ADMIN_SESSION_SEARCH_LIMIT = 100;
+const FLEET_SESSION_BOUNDARY_MESSAGE = 'Fleet session access requires a subject-bound session projection';
 const COGSEC_SAFE_SUMMARY = 'Operator-selected unsafe instruction-like content was sealed and removed from active cognition.';
 const COGSEC_CASE_ID_PATTERN = /^cogsec_[A-Za-z0-9_-]+$/u;
 const COGSEC_CASE_TYPES: ReadonlySet<CogSecCaseType> = new Set([
@@ -519,11 +526,109 @@ export class AdminSessionDataService implements AdminSessionService {
     });
   }
 
-  async listSessions(): Promise<AdminSessionListData> {
+  /**
+   * Subject-bound session projection (88u3). Resolves and validates the
+   * fleet request context for the session read paths:
+   *
+   * - the admitted companion target must match this service's bound
+   *   companion (Invariant 11, docs/garden-control-plane.md) — a context
+   *   created for companion A can never be applied to companion B's stores;
+   * - the route must carry an explicit request-local subject relation; and
+   * - the actor must carry a non-empty authenticated contact binding.
+   *
+   * Returns `null` for legacy/public contexts (single-companion Garden
+   * behavior is unchanged) and throws fail-closed for any fleet context that
+   * cannot be subject-bound. Role never widens visibility.
+   */
+  private subjectBoundFleetContext(
+    context: GardenRequestContext | undefined,
+  ): FleetGardenRequestContext | null {
+    if (!context || context.kind !== 'fleet_principal') return null;
+    assertGardenRequestCompanionScope(context, this.deps.config?.companionId);
+    if (
+      context.resource.area !== 'sessions'
+      || (context.subjectRelation !== 'self' && context.subjectRelation !== 'self_or_co_subject')
+    ) {
+      throw new Error(FLEET_SESSION_BOUNDARY_MESSAGE);
+    }
+    if (!context.actor.contactId.trim()) {
+      throw new Error('Fleet session access requires an authenticated contact binding');
+    }
+    return context;
+  }
+
+  /**
+   * Operations on the unpartitioned session surfaces (route recovery, CogSec
+   * remediation) that have no subject-bound projection. They stay fail closed
+   * for fleet principals even if a dispatch-level gate is bypassed.
+   */
+  private denyUnpartitionedFleetAccess(context: GardenRequestContext | undefined): void {
+    if (context?.kind === 'fleet_principal') {
+      throw new Error(FLEET_SESSION_BOUNDARY_MESSAGE);
+    }
+  }
+
+  private async resolveLinkedContactForRow(row: AdminSessionListRow, contacts: Contact[]) {
+    return await getLinkedContactForSession({
+      sessionId: row.sessionId,
+      channelId: row.channelId,
+      contacts,
+      sessionStore: this.deps.sessionStore,
+      contactStore: this.deps.contactStore,
+    });
+  }
+
+  /**
+   * The rows a fleet principal may see: sessions whose resolved linked
+   * contact IS the principal's authenticated contact binding. Sessions with
+   * no resolvable linked contact (rooms, system lanes, ambiguous attribution)
+   * are excluded fail-closed.
+   */
+  private async listSubjectBoundSessionRows(
+    fleet: FleetGardenRequestContext,
+  ): Promise<AdminSessionListRow[]> {
+    const contacts = this.deps.contactStore ? await this.deps.contactStore.listAll() : [];
+    if (contacts.length === 0) return [];
+    const rows: AdminSessionListRow[] = [];
+    for (const row of this.listSessionRows()) {
+      const linkedContact = await this.resolveLinkedContactForRow(row, contacts);
+      if (linkedContact?.id === fleet.actor.contactId) rows.push(row);
+    }
+    return rows;
+  }
+
+  /**
+   * Fail-closed visibility gate for single-session fleet reads. A session
+   * outside the principal's subject binding surfaces as not-found on purpose:
+   * a fleet principal must not learn whether another subject's session
+   * exists.
+   */
+  private async assertSubjectBoundSessionVisible(
+    fleet: FleetGardenRequestContext | null,
+    sessionId: string,
+  ): Promise<void> {
+    if (!fleet) return;
+    const row = this.listSessionRows().find(candidate => candidate.sessionId === sessionId);
+    if (!row) throw new AdminSessionNotFoundError(sessionId);
+    const contacts = this.deps.contactStore ? await this.deps.contactStore.listAll() : [];
+    const linkedContact = contacts.length > 0
+      ? await this.resolveLinkedContactForRow(row, contacts)
+      : undefined;
+    if (!linkedContact || linkedContact.id !== fleet.actor.contactId) {
+      throw new AdminSessionNotFoundError(sessionId);
+    }
+  }
+
+  async listSessions(context?: GardenRequestContext): Promise<AdminSessionListData> {
+    const fleet = this.subjectBoundFleetContext(context);
+    if (fleet) {
+      return { channels: await this.listSubjectBoundSessionRows(fleet) };
+    }
     return { channels: this.listSessionRows() };
   }
 
-  async getSessionDetail(sessionId: string): Promise<AdminSessionDetailData> {
+  async getSessionDetail(sessionId: string, context?: GardenRequestContext): Promise<AdminSessionDetailData> {
+    const fleet = this.subjectBoundFleetContext(context);
     const channel = this.listSessionRows().find(candidate => candidate.sessionId === sessionId);
     if (!channel) throw new AdminSessionNotFoundError(sessionId);
 
@@ -535,6 +640,9 @@ export class AdminSessionDataService implements AdminSessionService {
       sessionStore: this.deps.sessionStore,
       contactStore: this.deps.contactStore,
     });
+    if (fleet && linkedContact?.id !== fleet.actor.contactId) {
+      throw new AdminSessionNotFoundError(sessionId);
+    }
     return {
       channel: linkedContact
         ? {
@@ -546,14 +654,19 @@ export class AdminSessionDataService implements AdminSessionService {
     };
   }
 
-  async listSessionRoutes(): Promise<AdminSessionRouteListData> {
+  async listSessionRoutes(context?: GardenRequestContext): Promise<AdminSessionRouteListData> {
+    this.denyUnpartitionedFleetAccess(context);
     return {
       routes: this.deps.sessionManager.listSessionRoutes(),
       channels: this.listSessionRows(),
     };
   }
 
-  async resetSourceChannelSession(input: AdminSessionRouteResetInput): Promise<AdminSessionRouteResetData> {
+  async resetSourceChannelSession(
+    input: AdminSessionRouteResetInput,
+    context?: GardenRequestContext,
+  ): Promise<AdminSessionRouteResetData> {
+    this.denyUnpartitionedFleetAccess(context);
     const result = this.deps.sessionManager.resetSourceChannelSession(input);
     return {
       ok: true,
@@ -566,7 +679,8 @@ export class AdminSessionDataService implements AdminSessionService {
     };
   }
 
-  async listCogSecEvents(): Promise<AdminCogSecEventListData> {
+  async listCogSecEvents(context?: GardenRequestContext): Promise<AdminCogSecEventListData> {
+    this.denyUnpartitionedFleetAccess(context);
     const eventStore = this.requireCogSecEventStore();
     return {
       events: listOperatorVisibleCogSecEvents(eventStore.listEvents()),
@@ -575,7 +689,9 @@ export class AdminSessionDataService implements AdminSessionService {
 
   async previewCogSecRemediation(
     input: AdminCogSecRemediationInput,
+    context?: GardenRequestContext,
   ): Promise<AdminCogSecRemediationPreviewData> {
+    this.denyUnpartitionedFleetAccess(context);
     const eventStore = this.requireCogSecEventStore();
     const draft = this.buildCogSecDraft(input);
     const preview = await this.buildCogSecPreviewFromDraft(draft);
@@ -593,7 +709,9 @@ export class AdminSessionDataService implements AdminSessionService {
 
   async applyCogSecRemediation(
     input: AdminCogSecRemediationInput,
+    context?: GardenRequestContext,
   ): Promise<AdminCogSecRemediationApplyData> {
+    this.denyUnpartitionedFleetAccess(context);
     const eventStore = this.requireCogSecEventStore();
     const forensicArchive = this.requireCogSecForensicArchive();
     const draft = this.buildCogSecDraft(input);
@@ -703,7 +821,9 @@ export class AdminSessionDataService implements AdminSessionService {
     sessionId: string,
     query: string,
     limit?: number,
+    context?: GardenRequestContext,
   ): Promise<AdminSessionSearchData> {
+    await this.assertSubjectBoundSessionVisible(this.subjectBoundFleetContext(context), sessionId);
     const boundedLimit = normalizeSearchLimit(limit);
     const normalizedQuery = query.trim();
     const hits = normalizedQuery
@@ -738,7 +858,9 @@ export class AdminSessionDataService implements AdminSessionService {
   async getSessionMessagesForAdminRead(
     sessionId: string,
     options: AdminSessionMessagePaginationOptions = {},
+    context?: GardenRequestContext,
   ): Promise<AdminSessionMessagesData> {
+    await this.assertSubjectBoundSessionVisible(this.subjectBoundFleetContext(context), sessionId);
     const beforeId = normalizeBeforeId(options.beforeId);
     if (beforeId !== null) {
       return await this.getSessionMessages(sessionId, options);
@@ -759,7 +881,9 @@ export class AdminSessionDataService implements AdminSessionService {
   async getSessionMessages(
     sessionId: string,
     options: AdminSessionMessagePaginationOptions = {},
+    context?: GardenRequestContext,
   ): Promise<AdminSessionMessagesData> {
+    await this.assertSubjectBoundSessionVisible(this.subjectBoundFleetContext(context), sessionId);
     return await this.buildSessionMessages(sessionId, options);
   }
 
@@ -958,7 +1082,12 @@ export class AdminSessionDataService implements AdminSessionService {
    * unknown one) fails closed with AdminSessionTurnNotFoundError so the route
    * can answer 404 rather than silently returning an empty turn.
    */
-  async getSessionTurnDetail(sessionId: string, turnId: string): Promise<AdminSessionTurnDetailData> {
+  async getSessionTurnDetail(
+    sessionId: string,
+    turnId: string,
+    context?: GardenRequestContext,
+  ): Promise<AdminSessionTurnDetailData> {
+    await this.assertSubjectBoundSessionVisible(this.subjectBoundFleetContext(context), sessionId);
     const normalizedTurnId = turnId.trim();
     if (!normalizedTurnId) {
       throw new AdminSessionTurnNotFoundError(sessionId, turnId);

@@ -169,15 +169,25 @@ const routeAuthorizationGroups: readonly RouteAuthorizationGroup[] = [
     assurance: 'webauthn_uv', confirmation: 'explicit',
   },
   {
+    // Subject-bound session reads (88u3): fleet principals reach these only
+    // through the subject-bound session projection, which scopes every row to
+    // the requester's authenticated contact binding. Role never widens
+    // visibility, mirroring the memory subject projection.
     action: 'sessions.read', area: 'sessions', routeIds: [
       ...ids('GET', [
         '/api/admin/sessions', '/api/admin/sessions/:channelId',
         '/api/admin/sessions/:channelId/detail', '/api/admin/sessions/:channelId/search',
-        '/api/admin/sessions/:channelId/turns/:turnId', '/api/admin/session-routes',
-        '/api/admin/session-routes/cogsec/events',
+        '/api/admin/sessions/:channelId/turns/:turnId',
       ]),
       ...pageIds(['/sessions']),
-    ],
+    ], subjectRelation: 'self_or_co_subject',
+  },
+  {
+    // Session route-recovery and CogSec readers stay on the unpartitioned
+    // session service and remain fail-closed for fleet principals.
+    action: 'sessions.read', area: 'sessions', routeIds: ids('GET', [
+      '/api/admin/session-routes', '/api/admin/session-routes/cogsec/events',
+    ]),
   },
   {
     action: 'sessions.repair', area: 'sessions', routeIds: ids('POST', [

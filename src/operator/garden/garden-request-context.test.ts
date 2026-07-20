@@ -36,15 +36,17 @@ function context(
   contactId: string,
   overrides: Partial<Pick<FleetGardenRequestContext, 'action' | 'subjectRelation' | 'expiresAt'>> & {
     routeId?: string;
+    area?: 'memory' | 'sessions';
     pathParams?: Readonly<Record<string, string>>;
     assurance?: FleetGardenRequestContext['actor']['sessionAssurance'];
     role?: FleetGardenRequestContext['actor']['role'];
   } = {},
 ): FleetGardenRequestContext {
+  const area = overrides.area ?? 'memory';
   const authorization = Object.freeze({
     action: overrides.action ?? 'memory.read.self',
     baseRole: 'member' as const,
-    resource: Object.freeze({ scope: 'personal_workspace' as const, area: 'memory' as const }),
+    resource: Object.freeze({ scope: 'personal_workspace' as const, area }),
     subjectRelation: overrides.subjectRelation ?? 'self_or_co_subject',
     requirements: Object.freeze({
       assurance: 'oauth' as const,
@@ -87,7 +89,7 @@ function context(
     resource: Object.freeze({
       routeId: overrides.routeId ?? 'GET /api/admin/memory',
       scope: 'personal_workspace',
-      area: 'memory',
+      area,
       companionId: '11111111-1111-4111-8111-111111111111',
       pathParams: Object.freeze({ ...(overrides.pathParams ?? {}) }),
       query: Object.freeze({}),
@@ -153,6 +155,93 @@ describe('request-bound Garden principal isolation', () => {
     expect(() => service.forRequest(context('principal-a', 'contact-a', {
       subjectRelation: 'current_companion',
     }))).toThrow(/exact request-local subject relation/u);
+  });
+
+  it('admits only subject-bound session routes to the session projection', () => {
+    const subjectBoundList = context('principal-a', 'contact-a', {
+      action: 'sessions.read', area: 'sessions',
+      subjectRelation: 'self_or_co_subject',
+      routeId: 'GET /api/admin/sessions',
+    });
+    expect(gardenRequestServiceBoundaryDenial(subjectBoundList)).toBeNull();
+
+    const subjectBoundTurn = context('principal-a', 'contact-a', {
+      action: 'sessions.read', area: 'sessions',
+      subjectRelation: 'self_or_co_subject',
+      routeId: 'GET /api/admin/sessions/:channelId/turns/:turnId',
+      pathParams: { channelId: 'api:session-1', turnId: 'turn-1' },
+    });
+    expect(gardenRequestServiceBoundaryDenial(subjectBoundTurn)).toBeNull();
+
+    // A projected route id without an explicit request-local subject relation
+    // must never reach the session service.
+    const wrongRelation = context('principal-a', 'contact-a', {
+      action: 'sessions.read', area: 'sessions',
+      subjectRelation: 'current_companion',
+      routeId: 'GET /api/admin/sessions',
+    });
+    expect(gardenRequestServiceBoundaryDenial(wrongRelation)).toMatch(/subject-bound/u);
+
+    // Route recovery, CogSec, and session-recovery surfaces stay fail closed.
+    const routeRecovery = context('principal-a', 'contact-a', {
+      action: 'sessions.read', area: 'sessions',
+      subjectRelation: 'current_companion',
+      routeId: 'GET /api/admin/session-routes',
+    });
+    expect(gardenRequestServiceBoundaryDenial(routeRecovery)).toMatch(/subject-bound/u);
+
+    const cogsecApply = context('principal-a', 'contact-a', {
+      action: 'sessions.repair', area: 'sessions',
+      subjectRelation: 'self_or_co_subject',
+      routeId: 'POST /api/admin/session-routes/cogsec/apply',
+      assurance: 'webauthn_uv',
+    });
+    expect(gardenRequestServiceBoundaryDenial(cogsecApply)).toMatch(/subject-bound/u);
+
+    const recoveryPage = context('principal-a', 'contact-a', {
+      action: 'recovery.begin', area: 'sessions',
+      subjectRelation: 'none',
+      routeId: 'GET /session-recovery',
+    });
+    expect(gardenRequestServiceBoundaryDenial(recoveryPage)).toMatch(/subject-bound/u);
+  });
+
+  it('admits subject-authorized episodic routes while group memory stays denied', () => {
+    const episodicList = context('principal-a', 'contact-a', {
+      routeId: 'GET /api/admin/episodic-memory/episodes',
+    });
+    expect(gardenRequestServiceBoundaryDenial(episodicList)).toBeNull();
+
+    const episodicDetail = context('principal-a', 'contact-a', {
+      routeId: 'GET /api/admin/episodic-memory/episodes/:id',
+      pathParams: { id: 'episode-1' },
+    });
+    expect(gardenRequestServiceBoundaryDenial(episodicDetail)).toBeNull();
+
+    const episodicPage = context('principal-a', 'contact-a', {
+      routeId: 'GET /episodic-memory',
+    });
+    expect(gardenRequestServiceBoundaryDenial(episodicPage)).toBeNull();
+
+    const episodicWithoutSubject = context('principal-a', 'contact-a', {
+      subjectRelation: 'none',
+      routeId: 'GET /api/admin/episodic-memory/episodes',
+    });
+    expect(gardenRequestServiceBoundaryDenial(episodicWithoutSubject))
+      .toMatch(/subject-authorized/u);
+
+    const groupMemory = context('principal-a', 'contact-a', {
+      routeId: 'GET /api/admin/group-memory',
+    });
+    expect(gardenRequestServiceBoundaryDenial(groupMemory)).toMatch(/subject-authorized/u);
+
+    const shardReview = context('principal-a', 'contact-a', {
+      action: 'memory.manage',
+      routeId: 'POST /api/admin/shards/:shardId/review',
+      pathParams: { shardId: 'shard-1' },
+      assurance: 'webauthn_uv',
+    });
+    expect(gardenRequestServiceBoundaryDenial(shardReview)).toMatch(/subject-authorized/u);
   });
 
   it('admits only the declared privacy break-glass memory routes to their gated service', () => {

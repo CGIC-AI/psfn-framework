@@ -30,7 +30,7 @@ function apiClient(env) {
       headers: {
         accept: "application/vnd.github+json",
         authorization: `Bearer ${token}`,
-        "user-agent": "psfn-pr-labels",
+        "user-agent": "repository-pr-labels",
         "x-github-api-version": "2022-11-28",
         ...options.headers,
       },

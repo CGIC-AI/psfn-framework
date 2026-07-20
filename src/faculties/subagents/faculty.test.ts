@@ -1177,3 +1177,347 @@ describe('subagent work spec seam (mmo9.7.7)', () => {
     expect(memoryCallOptions?.workSpec).toBeUndefined();
   });
 });
+
+describe('SubagentFaculty memory-write governance (c7d)', () => {
+  let root: string;
+  let eventBus: EventBus;
+  let sessionStore: SessionStore;
+
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), 'psfn-subagent-memgov-'));
+    eventBus = new EventBus();
+    sessionStore = new SessionStore(root);
+    mockSubagentContent = 'subagent response';
+    mockSubagentError = null;
+    mockSubagentDelayMs = 0;
+    mockFirstPromptTools = [];
+    promptSpy.mockClear();
+    resetCompletionHandoffDedupeForTests();
+  });
+
+  afterEach(() => {
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  function makeMemoryCatalogTool() {
+    const execute = vi.fn(async () => ({
+      content: [{ type: 'text' as const, text: 'memory ok' }],
+      details: {},
+    }));
+    const tool = {
+      name: 'memory',
+      description: 'canonical memory surface',
+      parameters: {},
+      execute,
+    } as AgentTool<any>;
+    return { tool, execute };
+  }
+
+  function makeGovernanceDeps() {
+    const memory = makeMemoryCatalogTool();
+    const memoryDelete = makeCatalogTool('memory_delete', 'memory.delete');
+    const auditTrail = { append: vi.fn() };
+    const recordPendingMemoryCandidates = vi.fn(async () => ({}));
+    const rawProvider = {
+      retrieve: vi.fn(async () => 'retrieved context'),
+      getActiveMemoryContext: vi.fn(() => null),
+      refreshActiveMemoryContext: vi.fn(async () => null),
+      write: vi.fn(async () => {
+        throw new Error('raw provider write must never be reachable from a subagent loop');
+      }),
+    };
+    return { memory, memoryDelete, auditTrail, recordPendingMemoryCandidates, rawProvider };
+  }
+
+  function makeGovernedFaculty(deps: ReturnType<typeof makeGovernanceDeps>) {
+    return new SubagentFaculty({
+      eventBus,
+      llmProvider: mockLLM(),
+      sessionStore,
+      embeddingService: null,
+      memoryProvider: deps.rawProvider as never,
+      config: TEST_CONFIG,
+      parentSystemPrompt: 'test prompt',
+      toolCatalogProvider: () => ({
+        core: [deps.memory.tool, deps.memoryDelete.tool],
+        extended: [],
+      }),
+      auditTrail: deps.auditTrail,
+      foldReviewController: { recordPendingMemoryCandidates: deps.recordPendingMemoryCandidates },
+    });
+  }
+
+  it('default toolset carries no memory write: governed wrapper injected, delete surfaces blocked', async () => {
+    const deps = makeGovernanceDeps();
+    const faculty = makeGovernedFaculty(deps);
+
+    await faculty.execute({
+      name: 'pdf-reader',
+      task: 'read and summarize the pdf',
+      workSpec: buildSubagentWorkSpec(),
+    });
+
+    const injectedNames = mockFirstPromptTools.map(tool => tool.name);
+    expect(injectedNames).toContain('memory');
+    expect(injectedNames).not.toContain('memory_delete');
+    const injectedMemory = mockFirstPromptTools.find(tool => tool.name === 'memory')!;
+    expect(injectedMemory).not.toBe(deps.memory.tool);
+
+    // The live provider is never handed to the loop raw.
+    expect(deps.auditTrail.append).toHaveBeenCalledWith(
+      'subagent.memory.provider.facade',
+      expect.objectContaining({ subagentId: expect.stringMatching(/^subagent-/) }),
+    );
+
+    // Reads pass through; writes are opt-in and denied by default.
+    await injectedMemory.execute('call-read', { action: 'search', query: 'q' }, undefined);
+    expect(deps.memory.execute).toHaveBeenCalledTimes(1);
+    const denied = await injectedMemory.execute('call-write', {
+      action: 'write', text: 'routine note', type: 'procedural',
+    }, undefined);
+    expect((denied.details as { isError?: boolean }).isError).toBe(true);
+    expect(deps.memory.execute).toHaveBeenCalledTimes(1);
+    expect(deps.recordPendingMemoryCandidates).not.toHaveBeenCalled();
+  });
+
+  it('opt-in memory.write passes procedural writes stamped and stages restricted classes', async () => {
+    const deps = makeGovernanceDeps();
+    const faculty = makeGovernedFaculty(deps);
+
+    const result = await faculty.execute({
+      name: 'note-taker',
+      task: 'record procedure learnings',
+      capabilities: ['general', 'memory.write'],
+      workSpec: buildSubagentWorkSpec(),
+    });
+    const injectedMemory = mockFirstPromptTools.find(tool => tool.name === 'memory')!;
+
+    const direct = await injectedMemory.execute('call-proc', {
+      action: 'write', text: 'the export runs before the sync', type: 'procedural',
+    }, undefined);
+    expect((direct.details as { isError?: boolean }).isError).toBeUndefined();
+    expect(deps.memory.execute).toHaveBeenCalledTimes(1);
+    expect(deps.memory.execute.mock.calls[0]?.[1]).toMatchObject({
+      __psfnShardSource: `subagent:${result.subagentId}`,
+    });
+
+    const staged = await injectedMemory.execute('call-emo', {
+      action: 'write', text: 'this loss clearly still hurts them', type: 'emotional',
+    }, undefined);
+    expect(deps.memory.execute).toHaveBeenCalledTimes(1);
+    expect((staged.details as { mutationWorkflow?: string }).mutationWorkflow).toBe('fold_review_only');
+    expect(deps.recordPendingMemoryCandidates).toHaveBeenCalledTimes(1);
+    const stagedInput = deps.recordPendingMemoryCandidates.mock.calls[0]?.[0] as unknown as {
+      shardId: string;
+      lineage: { shardId: string; kind: string };
+      outputs: unknown[];
+    };
+    expect(stagedInput.shardId).toBe(result.subagentId);
+    expect(stagedInput.lineage.shardId).toBe(result.subagentId);
+    expect(stagedInput.outputs).toHaveLength(1);
+    expect(deps.auditTrail.append).toHaveBeenCalledWith(
+      'subagent.memory.write.staged',
+      expect.objectContaining({ subagentId: result.subagentId }),
+    );
+  });
+
+  it('elevated spawn writes restricted memory directly with spawn-time audit; delete stays denied', async () => {
+    const deps = makeGovernanceDeps();
+    const faculty = makeGovernedFaculty(deps);
+
+    const result = await faculty.execute({
+      name: 'sleeptime-maintenance',
+      task: 'consolidate emotional memory',
+      memoryWriteElevation: { reason: 'sleeptime emotional-memory maintenance lane' },
+      workSpec: buildSubagentWorkSpec(),
+    });
+
+    expect(deps.auditTrail.append).toHaveBeenCalledWith(
+      'subagent.memory.elevation.granted',
+      expect.objectContaining({
+        subagentId: result.subagentId,
+        reason: 'sleeptime emotional-memory maintenance lane',
+      }),
+    );
+    expect(deps.auditTrail.append).toHaveBeenCalledWith(
+      'subagent.execute.start',
+      expect.objectContaining({ memoryWritePolicy: 'elevated' }),
+    );
+
+    const injectedMemory = mockFirstPromptTools.find(tool => tool.name === 'memory')!;
+    const direct = await injectedMemory.execute('call-emo', {
+      action: 'write', text: 'the grief settled into something gentler', type: 'emotional',
+    }, undefined);
+    expect((direct.details as { isError?: boolean }).isError).toBeUndefined();
+    expect(deps.memory.execute).toHaveBeenCalledTimes(1);
+    expect(deps.memory.execute.mock.calls[0]?.[1]).toMatchObject({
+      __psfnShardSource: `subagent:${result.subagentId}`,
+    });
+    expect(deps.recordPendingMemoryCandidates).not.toHaveBeenCalled();
+
+    const denied = await injectedMemory.execute('call-del', {
+      action: 'delete', memory_id: 'mem-1',
+    }, undefined);
+    expect((denied.details as { isError?: boolean }).isError).toBe(true);
+    expect(deps.memory.execute).toHaveBeenCalledTimes(1);
+  });
+
+  it('fails a spawn closed on a blank elevation reason', async () => {
+    const deps = makeGovernanceDeps();
+    const faculty = makeGovernedFaculty(deps);
+
+    await expect(faculty.spawn({
+      name: 'bad-elevation',
+      task: 'attempt elevation without a reason',
+      memoryWriteElevation: { reason: '   ' },
+      workSpec: buildSubagentWorkSpec(),
+    })).rejects.toThrow(/non-empty reason/);
+    expect(faculty.getActiveCount()).toBe(0);
+  });
+
+  it('fails an elevated spawn before registration when no audit trail is wired', async () => {
+    const deps = makeGovernanceDeps();
+    const faculty = new SubagentFaculty({
+      eventBus,
+      llmProvider: mockLLM(),
+      sessionStore,
+      embeddingService: null,
+      memoryProvider: deps.rawProvider as never,
+      config: TEST_CONFIG,
+      parentSystemPrompt: 'test prompt',
+      toolCatalogProvider: () => ({
+        core: [deps.memory.tool, deps.memoryDelete.tool],
+        extended: [],
+      }),
+      foldReviewController: { recordPendingMemoryCandidates: deps.recordPendingMemoryCandidates },
+    });
+
+    await expect(faculty.spawn({
+      name: 'unaudited-elevation',
+      task: 'attempt elevated memory maintenance without an audit sink',
+      memoryWriteElevation: { reason: 'sleeptime emotional-memory maintenance lane' },
+      workSpec: buildSubagentWorkSpec(),
+    })).rejects.toThrow(/audit trail/i);
+    expect(faculty.getActiveCount()).toBe(0);
+    expect(faculty.getRecentTasks()).toHaveLength(0);
+    expect(promptSpy).not.toHaveBeenCalled();
+  });
+});
+
+describe('SubagentFaculty core-authoritative tool governance (p0le)', () => {
+  let root: string;
+  let eventBus: EventBus;
+  let sessionStore: SessionStore;
+
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), 'psfn-subagent-toolgov-'));
+    eventBus = new EventBus();
+    sessionStore = new SessionStore(root);
+    mockSubagentContent = 'subagent response';
+    mockSubagentError = null;
+    mockSubagentDelayMs = 0;
+    mockFirstPromptTools = [];
+    promptSpy.mockClear();
+    resetCompletionHandoffDedupeForTests();
+  });
+
+  afterEach(() => {
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  function makeGovernanceCatalog() {
+    const names = [
+      'orient', 'identity', 'north_star', 'contact',
+      'journal', 'wiki', 'skill', 'vault', 'scratchpad',
+    ] as const;
+    const tools = Object.fromEntries(
+      names.map(name => [name, makeCatalogTool(name, 'identity.read')]),
+    ) as Record<(typeof names)[number], ReturnType<typeof makeCatalogTool>>;
+    const auditTrail = { append: vi.fn() };
+    const faculty = new SubagentFaculty({
+      eventBus,
+      llmProvider: mockLLM(),
+      sessionStore,
+      embeddingService: null,
+      memoryProvider: null,
+      config: TEST_CONFIG,
+      parentSystemPrompt: 'test prompt',
+      toolCatalogProvider: () => ({
+        core: names.map(name => tools[name].tool),
+        extended: [],
+      }),
+      auditTrail,
+    });
+    return { tools, auditTrail, faculty };
+  }
+
+  it('blocks identity, north_star, and contact at injection; wraps the multiplexed surfaces; leaves scratchpad raw', async () => {
+    const { tools, faculty } = makeGovernanceCatalog();
+
+    await faculty.execute({
+      name: 'default-worker',
+      task: 'summarize the report',
+      workSpec: buildSubagentWorkSpec(),
+    });
+
+    const injectedNames = mockFirstPromptTools.map(tool => tool.name);
+    expect(injectedNames).not.toContain('identity');
+    expect(injectedNames).not.toContain('north_star');
+    expect(injectedNames).not.toContain('contact');
+
+    for (const name of ['orient', 'journal', 'wiki', 'skill', 'vault'] as const) {
+      const injected = mockFirstPromptTools.find(tool => tool.name === name);
+      expect(injected, name).toBeDefined();
+      expect(injected, name).not.toBe(tools[name].tool);
+    }
+
+    // scratchpad is bounded ephemeral working memory and stays ungoverned:
+    // its mutations reach the parent-catalog tool directly.
+    const scratchpad = mockFirstPromptTools.find(tool => tool.name === 'scratchpad')!;
+    await scratchpad.execute('call-pad', { action: 'add', content: 'working note' }, undefined);
+    expect(tools.scratchpad.execute).toHaveBeenCalledTimes(1);
+  });
+
+  it('default-tier subagent cannot mutate any core-authoritative store (reads still pass)', async () => {
+    const { tools, auditTrail, faculty } = makeGovernanceCatalog();
+
+    const result = await faculty.execute({
+      name: 'default-worker',
+      task: 'summarize the report',
+      workSpec: buildSubagentWorkSpec(),
+    });
+
+    const find = (name: string) => mockFirstPromptTools.find(tool => tool.name === name)!;
+
+    // Reads pass through to the parent-catalog tool.
+    await find('orient').execute('call-1', { action: 'values_list' }, undefined);
+    expect(tools.orient.execute).toHaveBeenCalledTimes(1);
+
+    // Every reproduced escalation from the bead is denied and audit-trailed.
+    const deniedCalls: Array<[string, Record<string, unknown>]> = [
+      ['orient', { action: 'introspection_consent_set', enabled: false }],
+      ['orient', { action: 'values_update', values: 'rewritten', version: 1 }],
+      ['orient', { action: 'create_concern', content: 'planted concern' }],
+      ['journal', { action: 'write', path: 'p', content: 'x' }],
+      ['wiki', { action: 'write', title: 't', body: 'b' }],
+      ['skill', { action: 'update', name: 's', content: 'x' }],
+      ['vault', { action: 'write', name: 'n', content: 'x' }],
+    ];
+    for (const [name, params] of deniedCalls) {
+      const denied = await find(name).execute('call-denied', params, undefined);
+      expect((denied.details as { isError?: boolean }).isError, `${name} ${String(params.action)}`).toBe(true);
+      expect(auditTrail.append).toHaveBeenCalledWith('subagent.tool.mutation.denied', expect.objectContaining({
+        subagentId: result.subagentId,
+        subagentName: 'default-worker',
+        toolName: name,
+        action: params.action,
+        reason: 'mutation_not_permitted',
+      }));
+    }
+    expect(tools.orient.execute).toHaveBeenCalledTimes(1);
+    expect(tools.journal.execute).not.toHaveBeenCalled();
+    expect(tools.wiki.execute).not.toHaveBeenCalled();
+    expect(tools.skill.execute).not.toHaveBeenCalled();
+    expect(tools.vault.execute).not.toHaveBeenCalled();
+  });
+});

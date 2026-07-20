@@ -66,17 +66,10 @@ import {
   countIntentionAppraisalArtifacts,
   entriesToMessages,
 } from './context-support.js';
-import { runAutoCompaction, shouldCompact, summarizeRecentSessionEntries } from './compaction-service.js';
-import {
-  DEFAULT_TEMPORAL_WAKEUP_CONFIG,
-  type TemporalWakeupWakeSummaryConfig,
-} from '../../../system/config/scheduler-config.js';
+import { runAutoCompaction, shouldCompact } from './compaction-service.js';
 import { MASKED_TOOL_OBSERVATION_CONTENT } from '../tool-observation.js';
 import { applyFocusCompactionRanges, type FocusCompactionRange } from '../focus-knowledge.js';
 import { buildPromptSectionTelemetryList } from '../../identity/prompt-sections.js';
-import { formatActiveDateTimeIso } from '../../../shared/time/active-timezone.js';
-import { escapeXmlText } from '../../../shared/utils/escaping.js';
-import { classifyIdleGapTexture, type IdleGapTexture } from '../../scheduler/time-texture.js';
 import type { CogSecEvent } from '../../cogsec/events.js';
 import {
   buildCogSecEventNoticeBlock,
@@ -85,7 +78,6 @@ import {
 import {
   assembleSessionHistoryForContextWithLlmSummary,
   buildSessionHistoryMessages,
-  buildOrientationFallbackSummary,
 } from './context-history-assembly.js';
 import { buildContinuityMetadataBlock } from './continuity-metadata-block.js';
 import { createRolledOutSessionBoundary } from '../rolled-out-session-boundary.js';
@@ -95,8 +87,6 @@ export { assembleSessionHistoryForContextWithLlmSummary } from './context-histor
 const log = createComponentLogger('ContextBuilder');
 const INTERNAL_REFLECTION_CHANNEL_PREFIX = 'internal:reflection:';
 const INTERNAL_HEARTBEAT_CHANNEL = 'internal:heartbeat';
-export const DEFAULT_ORIENTATION_IDLE_THRESHOLD_MS = 2 * 60 * 60 * 1000;
-const ORIENTATION_SUMMARY_MAX_CHARS = 180;
 
 export function isInternalHeartbeatChannel(channelId: string): boolean {
   return channelId === INTERNAL_HEARTBEAT_CHANNEL;
@@ -126,68 +116,6 @@ export function filterContinuityEntriesForChannel(
   ));
 }
 
-export function getOrientationRecentActivityEntries(params: {
-  channelId: string;
-  userId?: string;
-  channelMeta?: ChannelMeta;
-  continuityFallbackUserIds: string[];
-  store: SessionStore;
-  config: SubstrateConfig;
-  crossChannelContinuity: CrossChannelContinuityPort;
-}): SessionEntry[] {
-  const recentEntries = params.store.getRecent(params.channelId, 6);
-  if (!isInternalReflectionChannel(params.channelId) || !params.userId) {
-    return recentEntries;
-  }
-
-  const reflectionProbeChannelId = `${params.channelId}:__orientation_probe__`;
-  const continuityEntries = params.crossChannelContinuity.getMerged({
-    canonicalUserId: params.userId,
-    limit: Math.max(params.config.continuityMessageLimit ?? DEFAULT_CONTINUITY_CONTEXT_LIMIT, 6),
-    fallbackUserIds: params.continuityFallbackUserIds,
-    channelId: reflectionProbeChannelId,
-    channelMeta: params.channelMeta,
-  });
-  const sameChannelEntries = continuityEntries.filter(
-    entry => (entry.originChannelId ?? entry.channelId) === params.channelId,
-  );
-  if (sameChannelEntries.length === 0) {
-    return recentEntries;
-  }
-  return sameChannelEntries.slice(-6);
-}
-
-export type OrientationNoteReason =
-  | 'idle_gap_exceeded'
-  | 'below_threshold'
-  | 'no_previous_activity'
-  | 'internal_channel';
-
-export interface OrientationNoteTelemetry {
-  fired: boolean;
-  reason: OrientationNoteReason;
-  observedAt: number;
-  idleThresholdMs: number;
-  lastActivityAt?: number;
-  idleGapMs?: number;
-  noteText?: string;
-  sessionSummary?: string;
-  continuitySummary?: string;
-  lastUserMessage?: string;
-  timeTexture?: IdleGapTexture;
-  sourceCounts: {
-    session: number;
-    continuity: number;
-    focusKnowledge: number;
-  };
-}
-
-function compactPromptText(value: string, maxChars = ORIENTATION_SUMMARY_MAX_CHARS): string {
-  const normalized = value.replace(/\s+/g, ' ').trim();
-  if (normalized.length <= maxChars) return normalized;
-  return `${normalized.slice(0, maxChars - 3)}...`;
-}
-
 function shouldRenderSessionHistoryUserAttribution(
   channelVisibility: ChannelPrivacy,
   channelMeta?: ChannelMeta,
@@ -195,224 +123,6 @@ function shouldRenderSessionHistoryUserAttribution(
   if (channelMeta?.isDirectMessage === true) return false;
   if (channelMeta?.isDirectMessage === false) return true;
   return channelVisibility === 'public';
-}
-
-function formatIdleGap(idleGapMs: number): string {
-  const normalized = Math.max(0, Math.floor(idleGapMs));
-  const totalMinutes = Math.max(0, Math.floor(normalized / 60_000));
-  if (totalMinutes < 60) {
-    return `${totalMinutes} minute${totalMinutes === 1 ? '' : 's'}`;
-  }
-  const hours = Math.floor(totalMinutes / 60);
-  const minutes = totalMinutes % 60;
-  if (hours < 24) {
-    return minutes > 0
-      ? `${hours} hour${hours === 1 ? '' : 's'} ${minutes} minute${minutes === 1 ? '' : 's'}`
-      : `${hours} hour${hours === 1 ? '' : 's'}`;
-  }
-  const days = Math.floor(hours / 24);
-  const remainingHours = hours % 24;
-  return remainingHours > 0
-    ? `${days} day${days === 1 ? '' : 's'} ${remainingHours} hour${remainingHours === 1 ? '' : 's'}`
-    : `${days} day${days === 1 ? '' : 's'}`;
-}
-
-function formatIsoDuration(durationMs: number): string {
-  const totalSeconds = Math.max(0, Math.floor(durationMs / 1000));
-  const days = Math.floor(totalSeconds / 86_400);
-  const hours = Math.floor((totalSeconds % 86_400) / 3600);
-  const minutes = Math.floor((totalSeconds % 3600) / 60);
-  const seconds = totalSeconds % 60;
-  const datePart = days > 0 ? `${days}D` : '';
-  const timeParts = [
-    hours > 0 ? `${hours}H` : '',
-    minutes > 0 || (hours > 0 && seconds > 0) ? `${minutes}M` : '',
-    seconds > 0 || (days === 0 && hours === 0 && minutes === 0) ? `${seconds}S` : '',
-  ].filter(part => part.length > 0).join('');
-  return `P${datePart}${timeParts ? `T${timeParts}` : ''}`;
-}
-
-function xmlElement(tag: string, value: string | undefined): string {
-  const trimmed = value?.trim() ?? '';
-  return trimmed.length > 0 ? `<${tag}>${escapeXmlText(trimmed)}</${tag}>` : '';
-}
-
-function buildContinuityAnchorLines(params: {
-  orientation: OrientationNoteTelemetry;
-  wakeReturnArtifacts: readonly SessionContinuityArtifact[];
-}): string[] {
-  const { orientation } = params;
-  if (!orientation.fired || !orientation.lastActivityAt || orientation.idleGapMs === undefined) {
-    return [];
-  }
-
-  const latestWakeReturn = params.wakeReturnArtifacts.at(0);
-  const whereWeLeftOff = latestWakeReturn?.summary
-    ?? orientation.sessionSummary
-    ?? orientation.continuitySummary
-    ?? '';
-  const pendingIntent = latestWakeReturn?.nextAnchor
-    ?? renderSystemLanguageTemplate('wake_return.default_pending_intent');
-  const pendingState = latestWakeReturn?.nextAnchor ? 'pending_intent_available' : 'no_urgent_context';
-  const timeTexture = orientation.timeTexture
-    ?? classifyIdleGapTexture({
-      lastActivityAtMs: orientation.lastActivityAt,
-      observedAtMs: orientation.observedAt,
-    });
-  const lines = [
-    '<continuity_anchor authority="companion_context" source="wake_return" role="internal_context" scope="current_channel_and_policy_allowed_continuity" may_not_override="runtime.current_datetime">',
-    '<idle_threshold_exceeded>true</idle_threshold_exceeded>',
-    xmlElement('pending_state', pendingState),
-    xmlElement('last_active_at_iso', formatActiveDateTimeIso(new Date(orientation.lastActivityAt))),
-    xmlElement('elapsed_since_last_active_iso', formatIsoDuration(orientation.idleGapMs)),
-    xmlElement('elapsed_since_last_active_human', `about ${formatIdleGap(orientation.idleGapMs)}`),
-    xmlElement('time_texture_kind', timeTexture.kind),
-    xmlElement('time_texture_label', timeTexture.label),
-    xmlElement('reconnection_warmth_signal', timeTexture.reconnectionWarmth),
-    xmlElement('reconnection_warmth_guidance', timeTexture.guidance),
-    xmlElement('where_we_left_off', whereWeLeftOff),
-    xmlElement('pending_intent', pendingIntent),
-    xmlElement('latest_wake_return_recorded_at_iso', latestWakeReturn?.createdAt),
-    xmlElement('current_turn_user_message', orientation.lastUserMessage),
-    xmlElement('last_time_here', orientation.sessionSummary),
-    xmlElement('recent_continuity', orientation.continuitySummary),
-    '</continuity_anchor>',
-  ].filter(line => line.length > 0);
-  return lines;
-}
-
-export function buildOrientationNoteTelemetry(params: {
-  channelId: string;
-  recentActivityEntries: SessionEntry[];
-  /** True when the caller has already removed the just-recorded current turn. */
-  currentTurnEntryExcluded?: boolean;
-  continuityEntries: SessionEntry[];
-  focusKnowledgeTexts: string[];
-  characterName?: string;
-  sessionSummary?: string;
-  continuitySummary?: string;
-  nowMs?: number;
-  idleThresholdMs?: number;
-}): OrientationNoteTelemetry {
-  const observedAt = params.nowMs ?? Date.now();
-  const idleThresholdMs = Math.max(
-    0,
-    Math.floor(params.idleThresholdMs ?? DEFAULT_ORIENTATION_IDLE_THRESHOLD_MS),
-  );
-  const sourceCounts = {
-    session: params.recentActivityEntries.filter(entry => entry.role === 'user' || entry.role === 'assistant').length,
-    continuity: params.continuityEntries.filter(entry => entry.role === 'user' || entry.role === 'assistant').length,
-    focusKnowledge: params.focusKnowledgeTexts.filter(text => text.trim().length > 0).length,
-  };
-
-  if (isInternalHeartbeatChannel(params.channelId)) {
-    return {
-      fired: false,
-      reason: 'internal_channel',
-      observedAt,
-      idleThresholdMs,
-      sourceCounts,
-    };
-  }
-
-  const relevantRecentEntries = params.recentActivityEntries.filter(
-    entry => entry.role === 'user' || entry.role === 'assistant',
-  );
-  const minimumEntryCount = params.currentTurnEntryExcluded ? 1 : 2;
-  if (relevantRecentEntries.length < minimumEntryCount) {
-    return {
-      fired: false,
-      reason: 'no_previous_activity',
-      observedAt,
-      idleThresholdMs,
-      sourceCounts,
-    };
-  }
-
-  const priorEntries = params.currentTurnEntryExcluded
-    ? relevantRecentEntries
-    : relevantRecentEntries.slice(0, -1);
-  const lastActivityAt = priorEntries.at(-1)?.timestamp;
-  if (!lastActivityAt || !Number.isFinite(lastActivityAt) || lastActivityAt <= 0) {
-    return {
-      fired: false,
-      reason: 'no_previous_activity',
-      observedAt,
-      idleThresholdMs,
-      sourceCounts,
-    };
-  }
-
-  const idleGapMs = Math.max(0, observedAt - lastActivityAt);
-  const timeTexture = classifyIdleGapTexture({
-    lastActivityAtMs: lastActivityAt,
-    observedAtMs: observedAt,
-  });
-  if (idleGapMs < idleThresholdMs) {
-    return {
-      fired: false,
-      reason: 'below_threshold',
-      observedAt,
-      idleThresholdMs,
-      lastActivityAt,
-      idleGapMs,
-      timeTexture,
-      sourceCounts,
-    };
-  }
-
-  const sessionSummary = params.sessionSummary !== undefined
-    ? params.sessionSummary.trim()
-    : buildOrientationFallbackSummary(priorEntries, params.characterName);
-  const continuitySummary = params.continuitySummary !== undefined
-    ? params.continuitySummary.trim()
-    : buildOrientationFallbackSummary(params.continuityEntries, params.characterName);
-  let lastUserMessage: string | undefined;
-  // When capture already removed the current entry, the last user message is
-  // historical context. Do not relabel it as the current turn in the wake
-  // orientation block; the actual current turn is supplied separately.
-  if (!params.currentTurnEntryExcluded) {
-    for (let index = relevantRecentEntries.length - 1; index >= 0; index -= 1) {
-      const entry = relevantRecentEntries[index];
-      if (entry.role === 'user') {
-        lastUserMessage = entry.content;
-        break;
-      }
-    }
-  }
-
-  const noteParts = [
-    renderSystemLanguageTemplate('wake_return.header'),
-    renderSystemLanguageTemplate('wake_return.elapsed', {
-      elapsed: formatIdleGap(idleGapMs),
-    }),
-    `Time texture: ${timeTexture.label}; reconnection warmth signal is ${timeTexture.reconnectionWarmth}.`,
-  ];
-  if (sessionSummary) {
-    noteParts.push(renderSystemLanguageTemplate('wake_return.last_time_here', {
-      summary: sessionSummary,
-    }));
-  }
-  if (continuitySummary) {
-    noteParts.push(renderSystemLanguageTemplate('wake_return.recent_continuity', {
-      summary: continuitySummary,
-    }));
-  }
-
-  return {
-    fired: true,
-    reason: 'idle_gap_exceeded',
-    observedAt,
-    idleThresholdMs,
-    lastActivityAt,
-    idleGapMs,
-    timeTexture,
-    noteText: noteParts.join('\n').trim(),
-    sessionSummary,
-    continuitySummary,
-    ...(lastUserMessage ? { lastUserMessage: compactPromptText(lastUserMessage) } : {}),
-    sourceCounts,
-  };
 }
 
 export interface CaptureTurnSessionContextParams {
@@ -426,8 +136,6 @@ export interface CaptureTurnSessionContextParams {
   config: SubstrateConfig;
   /** Compaction-boundary-scoped store: recent entries + compaction summaries. */
   store: SessionStore;
-  /** Raw session store used for the orientation recent-activity scan. */
-  activityStore: SessionStore;
   crossChannelContinuity: CrossChannelContinuityPort;
   focusCompactionRanges: FocusCompactionRange[];
   focusKnowledgeTexts: string[];
@@ -448,8 +156,8 @@ export interface CaptureTurnSessionContextParams {
    * Presence-windowed room content gate (bead s10rm). Absent or
    * `unwindowed` keeps every surface byte-identical; `windowed`/`closed`
    * restricts EVERY served room surface (history entries, compaction
-   * summaries, orientation scan, wake-return artifacts, room-origin
-   * continuity) to the recipient's current presence window.
+   * summaries, wake-return artifacts, room-origin continuity) to the
+   * recipient's current presence window.
    */
   roomContentWindow?: RoomContentWindow;
 }
@@ -457,9 +165,9 @@ export interface CaptureTurnSessionContextParams {
 /**
  * The single session-context derivation for a turn (E2.2).
  *
- * This is the ONE place session history, continuity, focus knowledge,
- * compaction summaries, and the orientation note are derived for a context
- * build. The turn pipeline captures once (pre-turn, feeding the retrieval
+ * This is the ONE place session history, continuity, focus knowledge, and
+ * compaction summaries are derived for a context build. The turn pipeline
+ * captures once (pre-turn, feeding the retrieval
  * query and the persisted PromptPlan turn snapshot) and buildSessionContext
  * consumes the captured snapshot; direct callers capture through
  * SessionManager.buildContext, which performs this capture inline. The former
@@ -581,42 +289,12 @@ export async function captureTurnSessionContext(
       || entry.timestamp >= roomWindowFloor
     ))
     : rawContinuityEntries;
-  const orientationContinuityEntries = filterContinuityEntriesForChannel(
-    params.sourceChannelId,
-    continuityEntries,
-  );
-  const rawOrientationRecentActivityEntries = getOrientationRecentActivityEntries({
-    channelId: params.channelId,
-    userId: params.userId,
-    channelMeta: params.channelMeta,
-    continuityFallbackUserIds: params.continuityFallbackUserIds ?? [],
-    store: params.activityStore,
-    config: params.config,
-    crossChannelContinuity: params.crossChannelContinuity,
-  });
-  const priorOrientationRecentActivityEntries = params.excludeSessionEntryId === undefined
-    ? rawOrientationRecentActivityEntries
-    : rawOrientationRecentActivityEntries.filter(entry => entry.id !== params.excludeSessionEntryId);
-  // The orientation scan reads the raw store and its summaries feed the wake
-  // note — pre-window entries must not be summarized back into the room.
-  const orientationRecentActivityEntries = roomWindowGated
-    ? priorOrientationRecentActivityEntries.filter(entry => entry.timestamp >= roomWindowFloor)
-    : priorOrientationRecentActivityEntries;
   // A compaction summary minted in an earlier presence window summarizes
   // content from that window; gate on its creation time.
   const compactionSummaryTexts = params.store
     .getCompactionSummaries(params.channelId)
     .filter(summary => !roomWindowGated || summary.createdAt >= roomWindowFloor)
     .map(summary => summary.summary);
-  const orientation = buildOrientationNoteTelemetry({
-    channelId: params.channelId,
-    recentActivityEntries: orientationRecentActivityEntries,
-    currentTurnEntryExcluded: params.excludeSessionEntryId !== undefined,
-    continuityEntries: orientationContinuityEntries,
-    focusKnowledgeTexts: effectiveFocusKnowledgeTexts,
-    characterName: params.characterName,
-  });
-
   return {
     channelId: params.channelId,
     recentEntries: recent.map(cloneSessionEntry),
@@ -650,7 +328,6 @@ export async function captureTurnSessionContext(
     focusKnowledgeTexts: [...effectiveFocusKnowledgeTexts],
     continuityEntries: continuityEntries.map(cloneSessionEntry),
     wakeReturnArtifacts: effectiveWakeReturnArtifacts.map(cloneSessionContinuityArtifact),
-    orientation,
     intentionAppraisalArtifactCount,
     compactionPromptText: params.compactionPromptText,
     versionPointer: buildSnapshotVersionPointer([
@@ -675,12 +352,6 @@ export async function captureTurnSessionContext(
       effectiveWakeReturnArtifacts.at(0)?.summary,
       effectiveWakeReturnArtifacts.at(0)?.nextAnchor,
       params.compactionPromptText,
-      orientation.fired ? 'orientation:fired' : `orientation:${orientation.reason}`,
-      orientation.idleGapMs,
-      orientation.lastActivityAt,
-      orientation.noteText,
-      orientation.timeTexture?.kind,
-      orientation.timeTexture?.reconnectionWarmth,
     ]),
   };
 }
@@ -707,8 +378,6 @@ interface BuildSessionContextParams {
     compressedContext: string;
     capturedAt: number;
   }) => void;
-  crossChannelContinuity: CrossChannelContinuityPort;
-  wakeReturnArtifacts: readonly SessionContinuityArtifact[];
   /** Character name from identity card (e.g. 'Companion'). Used for display labels. */
   characterName?: string;
   /**
@@ -722,7 +391,6 @@ interface BuildSessionContextParams {
   memoryManifestSeed?: ContextManifestMemorySeed;
   turnBudgetCharacteristics?: ContextBudgetTurnCharacteristics;
   compactionMode?: 'deferred' | 'foreground';
-  recentSummaryMode?: 'deferred' | 'foreground';
   pendingCompaction?: boolean;
   cogSecEvents?: readonly CogSecEvent[];
   /**
@@ -732,12 +400,6 @@ interface BuildSessionContextParams {
    * placeholder. Null/absent = firewall off, byte-identical behavior.
    */
   intakeSinkGate?: IntakeSinkGate | null;
-  /**
-   * JSON-owned wake summary budgets and continuity entry floor
-   * (scheduler.json temporalWakeup.wakeSummary). Falls back to the validated
-   * scheduler defaults when composition has not threaded scheduler config.
-   */
-  wakeSummaryConfig?: TemporalWakeupWakeSummaryConfig;
 }
 
 export async function buildSessionContext(params: BuildSessionContextParams): Promise<LLMContext> {
@@ -842,11 +504,6 @@ export async function buildSessionContext(params: BuildSessionContextParams): Pr
     entriesToMessages(recent, channelVisibility, false, false, renderGroupUserAttribution),
   );
   const compactionMode = params.compactionMode ?? 'deferred';
-  const recentSummaryMode = params.recentSummaryMode
-    ?? (params.llmProvider ? 'foreground' : 'deferred');
-  const foregroundRecentSummaryProvider = recentSummaryMode === 'foreground'
-    ? params.llmProvider
-    : undefined;
   const compactionCheck = shouldCompact({
     recent: ownChannelRecent,
     channelVisibility,
@@ -933,105 +590,6 @@ export async function buildSessionContext(params: BuildSessionContextParams): Pr
   // Cross-channel continuity: include recent activity from other channels
   const rawCrossChannel = params.turnSessionContext.continuityEntries.map(cloneSessionEntry);
   const crossChannel = filterContinuityEntriesForChannel(sourceChannelId, rawCrossChannel);
-  const recentActivityEntries = getOrientationRecentActivityEntries({
-    channelId: params.channelId,
-    userId: params.userId,
-    channelMeta: params.channelMeta,
-    continuityFallbackUserIds: params.continuityFallbackUserIds,
-    store: params.store,
-    config: params.config,
-    crossChannelContinuity: params.crossChannelContinuity,
-  });
-  let computedOrientationTelemetry = buildOrientationNoteTelemetry({
-    channelId: params.channelId,
-    recentActivityEntries,
-    continuityEntries: crossChannel,
-    focusKnowledgeTexts,
-    characterName: params.characterName,
-  });
-  // Internal reflection turns recompute orientation live (they reflect on the
-  // room, not on the internal transport channel the snapshot was keyed to).
-  const shouldUseSnapshotOrientation = !isInternalReflectionChannel(params.channelId);
-  if (!shouldUseSnapshotOrientation && computedOrientationTelemetry.fired) {
-    const wakeSummaryConfig = params.wakeSummaryConfig ?? DEFAULT_TEMPORAL_WAKEUP_CONFIG.wakeSummary;
-    const latestWakeReturnSummary = params.wakeReturnArtifacts.at(0)?.summary.trim();
-    const relevantRecentEntries = recentActivityEntries.filter(
-      entry => entry.role === 'user' || entry.role === 'assistant',
-    );
-    const priorRecentEntries = relevantRecentEntries.slice(0, -1);
-    // The session side inherits the >1 relevant-entry check from the fired
-    // gate; the cross-channel continuity side needs its own floor so a single
-    // trivial cross-channel message does not trigger an LLM summary. The floor
-    // gates only the LLM call: without a foreground provider the summarizer's
-    // deterministic fallback is free and stays available.
-    const conversationalContinuityEntries = crossChannel.filter(
-      entry => entry.role === 'user' || entry.role === 'assistant',
-    );
-    const skipContinuityLlmSummary = foregroundRecentSummaryProvider !== undefined
-      && conversationalContinuityEntries.length < wakeSummaryConfig.continuityMinEntries;
-    if (skipContinuityLlmSummary) {
-      log.info('Skipping wake_continuity LLM summary below continuity entry floor', {
-        channelId: params.channelId,
-        continuityEntryCount: conversationalContinuityEntries.length,
-        continuityMinEntries: wakeSummaryConfig.continuityMinEntries,
-      });
-    }
-    const [sessionSummary, continuitySummary] = await Promise.all([
-      latestWakeReturnSummary
-        ? Promise.resolve(latestWakeReturnSummary)
-        : summarizeRecentSessionEntries({
-          channelId: params.channelId,
-          entries: priorRecentEntries,
-          characterName: params.characterName,
-          llmProvider: foregroundRecentSummaryProvider,
-          promptRegistry: params.promptRegistry,
-          maxTokens: wakeSummaryConfig.sessionSummaryMaxTokens,
-          purpose: 'wake_session',
-        }),
-      skipContinuityLlmSummary
-        ? Promise.resolve('')
-        : summarizeRecentSessionEntries({
-          channelId: params.channelId,
-          entries: crossChannel,
-          characterName: params.characterName,
-          llmProvider: foregroundRecentSummaryProvider,
-          promptRegistry: params.promptRegistry,
-          maxTokens: wakeSummaryConfig.continuitySummaryMaxTokens,
-          purpose: 'wake_continuity',
-        }),
-    ]);
-    computedOrientationTelemetry = buildOrientationNoteTelemetry({
-      channelId: params.channelId,
-      recentActivityEntries,
-      continuityEntries: crossChannel,
-      focusKnowledgeTexts,
-      characterName: params.characterName,
-      sessionSummary,
-      continuitySummary,
-    });
-  }
-  const orientationTelemetry = shouldUseSnapshotOrientation
-    ? (params.turnSessionContext.orientation ?? computedOrientationTelemetry)
-    : computedOrientationTelemetry;
-
-  const orientationSectionText = buildContinuityAnchorLines({
-    orientation: orientationTelemetry,
-    wakeReturnArtifacts: params.wakeReturnArtifacts,
-  }).join('\n');
-  const orientationProvenance = buildAuthenticityProvenance({
-    kind: 'system_note',
-    sourceAuthor: 'system',
-    transformedBy: 'runtime',
-    wording: 'derived',
-    directSpeech: false,
-    detailLoss: 'possible',
-    emotionalTexture: 'may_be_flattened',
-    safeAsPartnerSpeech: false,
-    sourceSpanCount: orientationTelemetry.sourceCounts.session
-      + orientationTelemetry.sourceCounts.continuity
-      + orientationTelemetry.sourceCounts.focusKnowledge,
-    notes: [DERIVED_DETAIL_LOSS_NOTE, DERIVED_EMOTIONAL_TEXTURE_NOTE],
-  });
   const continuityProvenance = buildAuthenticityProvenance({
     kind: 'projection',
     sourceAuthor: 'mixed',
@@ -1046,11 +604,8 @@ export async function buildSessionContext(params: BuildSessionContextParams): Pr
   });
   const continuityBlock = buildContinuityMetadataBlock(
     crossChannel,
-    orientationTelemetry.observedAt,
+    Date.now(),
   );
-  const markedOrientationSectionText = orientationSectionText
-    ? orientationSectionText
-    : '';
   const continuitySectionText = continuityBlock
     ? continuityBlock
     : '';
@@ -1083,10 +638,6 @@ export async function buildSessionContext(params: BuildSessionContextParams): Pr
     {
       id: 'session.focus_knowledge' as PromptRuntimeSystemPromptBlockId,
       content: focusKnowledgeSectionText,
-    },
-    {
-      id: 'session.orientation' as PromptRuntimeSystemPromptBlockId,
-      content: markedOrientationSectionText,
     },
     {
       id: 'session.continuity' as PromptRuntimeSystemPromptBlockId,
@@ -1234,7 +785,6 @@ export async function buildSessionContext(params: BuildSessionContextParams): Pr
           section: 'compaction_summary',
           tokenCount: countTokens(compactionSummarySectionText) + countTokens(focusKnowledgeSectionText),
         },
-        { section: 'orientation', tokenCount: countTokens(markedOrientationSectionText) },
         { section: 'continuity', tokenCount: countTokens(continuitySectionText) },
         { section: 'cogsec_notices', tokenCount: countTokens(cogSecNoticeSectionText) },
         { section: 'session_history', tokenCount: sessionMessageTokenCount },
@@ -1304,12 +854,6 @@ export async function buildSessionContext(params: BuildSessionContextParams): Pr
         sourceSpanCount: focusKnowledgeTexts.length || undefined,
         notes: [DERIVED_DETAIL_LOSS_NOTE, DERIVED_EMOTIONAL_TEXTURE_NOTE],
       }),
-    },
-    {
-      id: 'wake_orientation',
-      title: 'Wake Orientation',
-      content: markedOrientationSectionText,
-      provenance: orientationProvenance,
     },
     {
       id: 'cross_channel_continuity',

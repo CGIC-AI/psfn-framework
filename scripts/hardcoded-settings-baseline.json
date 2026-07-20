@@ -2515,16 +2515,6 @@
       "value": "128"
     },
     {
-      "file": "src/core/session/manager/context-builder.ts",
-      "name": "DEFAULT_ORIENTATION_IDLE_THRESHOLD_MS",
-      "value": "2 * 60 * 60 * 1000"
-    },
-    {
-      "file": "src/core/session/manager/context-builder.ts",
-      "name": "ORIENTATION_SUMMARY_MAX_CHARS",
-      "value": "180"
-    },
-    {
       "file": "src/core/session/manager/context-history-assembly.ts",
       "name": "MIN_HISTORY_SUMMARY_TOKEN_BUDGET",
       "value": "32"

@@ -708,7 +708,7 @@ describe('SessionManager with continuity', () => {
     expect(ctx.systemPrompt).not.toContain('Earlier heartbeat summary');
   });
 
-  it('includes reflection continuity and orientation for bound reflection channels', async () => {
+  it('includes bound reflection continuity without the retired orientation block', async () => {
     const mgr = new SessionManager(sessionStore, config);
     wireTestContinuity(mgr, continuityStore);
     mgr.characterName = 'Companion';
@@ -776,10 +776,8 @@ describe('SessionManager with continuity', () => {
         DEFAULT_COMPANION_ID,
       );
 
-      expect(ctx.systemPrompt).toContain('<continuity_anchor authority="companion_context"');
-      expect(ctx.systemPrompt).toContain('<last_time_here>');
-      expect(ctx.systemPrompt).toContain('Recovery mattered most.');
-      expect(ctx.systemPrompt).toContain('<recent_continuity>');
+      expect(ctx.systemPrompt).not.toContain('<continuity_anchor');
+      expect(ctx.systemPrompt).not.toContain('<last_time_here>');
       expect(ctx.systemPrompt).toContain('<cross_channel_continuity authority="retrieved_context"');
       expect(ctx.systemPrompt).toContain('Earlier reflection summary');
       expect(ctx.systemPrompt).toContain('The API thread still needs recovery notes.');

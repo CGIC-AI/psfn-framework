@@ -7,7 +7,6 @@ import type { SubstrateConfig } from '../../../system/config/runtime-config-cont
 import type { CogSecEvent } from '../../cogsec/events.js';
 import {
   assembleSessionHistoryForContextWithLlmSummary,
-  buildOrientationNoteTelemetry,
   buildSessionContext,
   captureTurnSessionContext,
 } from './context-builder.js';
@@ -147,8 +146,6 @@ describe('orientation context surface wiring', () => {
       eventBus: null,
       promptRegistry: null,
       preCompactionExtractionHandler: null,
-      crossChannelContinuity: { getMerged: () => [] },
-      wakeReturnArtifacts: [],
       turnSessionContext: {
         channelId: 'api:main',
         recentEntries,
@@ -274,7 +271,7 @@ describe('orientation context surface wiring', () => {
     expect(snapshot.recentEntries.map(entry => entry.id)).not.toContain(43);
   });
 
-  it('measures orientation from the latest prior activity after excluding the current turn', async () => {
+  it('does not capture retired orientation telemetry after excluding the current turn', async () => {
     const nowMs = Date.now();
     const latestPriorActivityAt = nowMs - (4 * 60 * 60 * 1000);
     const currentContent = 'CURRENT_ORIENTATION_ENTRY_MUST_BE_EXCLUDED';
@@ -323,74 +320,11 @@ describe('orientation context surface wiring', () => {
       excludeSessionEntryId: 23,
     });
 
-    expect(snapshot.orientation).toMatchObject({
-      fired: true,
-      reason: 'idle_gap_exceeded',
-      lastActivityAt: latestPriorActivityAt,
-    });
-    expect(snapshot.orientation?.lastUserMessage).toBeUndefined();
-    expect(snapshot.orientation?.idleGapMs).toBeGreaterThanOrEqual(4 * 60 * 60 * 1000);
+    expect(snapshot.orientation).toBeUndefined();
     expect(JSON.stringify(snapshot)).not.toContain(currentContent);
   });
 
-  it('can orient from one prior intentional-no-reply user turn without relabeling it as current', async () => {
-    const priorActivityAt = 1_710_000_000_000;
-    const observedAt = priorActivityAt + (4 * 60 * 60 * 1000);
-    const orientation = buildOrientationNoteTelemetry({
-      channelId: 'api:main',
-      recentActivityEntries: [{
-        id: 31,
-        channelId: 'api:main',
-        role: 'user',
-        content: 'A prior turn that intentionally received no reply.',
-        timestamp: priorActivityAt,
-      }],
-      currentTurnEntryExcluded: true,
-      continuityEntries: [],
-      focusKnowledgeTexts: [],
-      nowMs: observedAt,
-    });
-
-    expect(orientation).toMatchObject({
-      fired: true,
-      reason: 'idle_gap_exceeded',
-      lastActivityAt: priorActivityAt,
-      idleGapMs: observedAt - priorActivityAt,
-    });
-    expect(orientation.lastUserMessage).toBeUndefined();
-
-    const context = await buildSessionContext({
-      channelId: 'api:main',
-      systemPrompt: 'System prompt.',
-      coreMemoryBlock: '',
-      memoriesBlock: '',
-      userId: 'u1',
-      continuityFallbackUserIds: [],
-      store: {
-        getRecent: () => [],
-        getCompactionSummaries: () => [],
-      } as never,
-      config: makeConfig(),
-      eventBus: null,
-      promptRegistry: null,
-      preCompactionExtractionHandler: null,
-      crossChannelContinuity: { getMerged: () => [] },
-      wakeReturnArtifacts: [],
-      turnSessionContext: {
-        channelId: 'api:main',
-        recentEntries: [],
-        sourceEntryCount: 1,
-        compactionSummaryTexts: [],
-        focusKnowledgeTexts: [],
-        continuityEntries: [],
-        orientation,
-        versionPointer: 'test-intentional-no-reply-orientation',
-      },
-    });
-    expect(context.systemPrompt).not.toContain('<current_turn_user_message>');
-  });
-
-  it('threads orientation telemetry into a dedicated runtime prompt section', () => {
+  it('does not assemble the retired wake-orientation prompt block', () => {
     const builderSource = readFileSync(resolve('src/core/session/manager/context-builder.ts'), 'utf-8');
     const continuityMetadataSource = readFileSync(
       resolve('src/core/session/manager/continuity-metadata-block.ts'),
@@ -398,16 +332,14 @@ describe('orientation context surface wiring', () => {
     );
     const manifestSource = readFileSync(resolve('src/shared/contracts/context-manifest-contracts.ts'), 'utf-8');
 
-    expect(builderSource).toContain('buildOrientationNoteTelemetry');
-    expect(builderSource).toContain('!isInternalReflectionChannel(params.channelId)');
     expect(builderSource).toContain('captureTurnSessionContext');
-    expect(builderSource).toContain('buildContinuityAnchorLines({');
-    expect(builderSource).toContain('<continuity_anchor authority="companion_context"');
+    expect(builderSource).not.toContain('buildContinuityAnchorLines');
+    expect(builderSource).not.toContain('<continuity_anchor authority="companion_context"');
     expect(builderSource).toContain('buildContinuityMetadataBlock(');
     expect(continuityMetadataSource).toContain('<cross_channel_continuity authority="retrieved_context"');
-    expect(builderSource).toContain("id: 'session.orientation'");
+    expect(builderSource).not.toContain("id: 'session.orientation'");
     expect(builderSource).toContain("id: 'session.cogsec_notices'");
-    expect(builderSource).toContain("id: 'wake_orientation'");
+    expect(builderSource).not.toContain("id: 'wake_orientation'");
     expect(manifestSource).toContain("| 'orientation'");
     expect(manifestSource).toContain("| 'cogsec_notices'");
   });
@@ -518,10 +450,6 @@ describe('orientation context surface wiring', () => {
       eventBus: null,
       promptRegistry: null,
       preCompactionExtractionHandler: null,
-      crossChannelContinuity: {
-        getMerged: () => [],
-      },
-      wakeReturnArtifacts: [],
       characterName: 'Companion',
       turnSessionContext: {
         channelId: 'logical-session-1',
@@ -555,66 +483,6 @@ describe('orientation context surface wiring', () => {
       wording: 'redacted',
       safeAsPartnerSpeech: false,
     });
-  });
-
-  it('keeps heartbeat internal while allowing reflection orientation telemetry', () => {
-    const previousAt = 1_700_000_000_000;
-    const currentAt = previousAt + (4 * 60 * 60 * 1000);
-    const recentReflectionEntries = [
-      {
-        id: 1,
-        channelId: 'internal:reflection:daily',
-        role: 'user' as const,
-        content: 'Reflect on the last week.',
-        timestamp: previousAt,
-        originChannelId: 'internal:reflection:daily',
-      },
-      {
-        id: 2,
-        channelId: 'internal:reflection:daily',
-        role: 'assistant' as const,
-        content: 'Last week centered on recovery.',
-        timestamp: currentAt,
-        originChannelId: 'internal:reflection:daily',
-      },
-    ];
-    const continuityEntries = [
-      {
-        id: 3,
-        channelId: 'api:main',
-        role: 'assistant' as const,
-        content: 'The API thread still needs the recovery notes.',
-        timestamp: currentAt - 1_000,
-        originChannelId: 'api:main',
-      },
-    ];
-
-    const heartbeatTelemetry = buildOrientationNoteTelemetry({
-      channelId: 'internal:heartbeat',
-      recentActivityEntries: recentReflectionEntries,
-      continuityEntries,
-      focusKnowledgeTexts: [],
-      nowMs: currentAt,
-    });
-    expect(heartbeatTelemetry).toMatchObject({
-      fired: false,
-      reason: 'internal_channel',
-    });
-
-    const reflectionTelemetry = buildOrientationNoteTelemetry({
-      channelId: 'internal:reflection:daily',
-      recentActivityEntries: recentReflectionEntries,
-      continuityEntries,
-      focusKnowledgeTexts: [],
-      continuitySummary: 'The API thread still needs the recovery notes.',
-      nowMs: currentAt,
-    });
-    expect(reflectionTelemetry).toMatchObject({
-      fired: true,
-      reason: 'idle_gap_exceeded',
-      continuitySummary: expect.stringContaining('The API thread still needs the recovery notes.'),
-    });
-    expect(reflectionTelemetry.noteText).toContain('Welcome back');
   });
 
   it('uses the LLM recent-summary service for older in-window history while keeping a verbatim tail', async () => {
@@ -892,7 +760,7 @@ describe('orientation context surface wiring', () => {
     }
   });
 
-  it('uses the same recent-summary service for wake orientation summaries', async () => {
+  it('does not invoke the retired wake-orientation summary lanes', async () => {
     const now = Date.now();
     const hourMs = 60 * 60 * 1000;
     const recentEntries: SessionEntry[] = [
@@ -977,10 +845,6 @@ describe('orientation context surface wiring', () => {
       eventBus: null,
       promptRegistry: null,
       preCompactionExtractionHandler: null,
-      crossChannelContinuity: {
-        getMerged: () => continuityEntries,
-      },
-      wakeReturnArtifacts: [],
       characterName: 'Companion',
       turnSessionContext: {
         channelId: 'internal:reflection:daily',
@@ -991,151 +855,14 @@ describe('orientation context surface wiring', () => {
         continuityEntries,
         versionPointer: 'test-snapshot',
       },
-      recentSummaryMode: 'foreground',
     });
 
     const originStages = complete.mock.calls.map((call) => call[2]?.correlation?.originStage);
-    expect(originStages).toContain('session.recent.summary.wake_session');
-    expect(originStages).toContain('session.recent.summary.wake_continuity');
-    expect(ctx.systemPrompt).toContain('Before the pause, Vega and Companion chose the shared summary service');
-    expect(ctx.systemPrompt).toContain('The side channel was waiting on prompt registry review.');
-    expect(ctx.systemPrompt).not.toContain('Before the break we chose the shared summary service. /');
-  });
-});
-
-// ── wake_continuity floor + config-owned wake budgets (psfn-framework-67ka) ──
-
-describe('wake_continuity entry floor', () => {
-  const hourMs = 60 * 60 * 1000;
-
-  function makeWakeFixtures(now: number): {
-    recentEntries: SessionEntry[];
-    continuityEntries: SessionEntry[];
-  } {
-    return {
-      recentEntries: [
-        {
-          id: 1,
-          channelId: 'api:main',
-          role: 'user',
-          content: 'Before the break we chose the shared summary service.',
-          authorId: 'u1',
-          authorName: 'Vega',
-          timestamp: now - (5 * hourMs),
-        },
-        {
-          id: 2,
-          channelId: 'api:main',
-          role: 'assistant',
-          content: 'I queued the prompt registry and context-builder tests.',
-          authorName: 'Companion',
-          timestamp: now - (4 * hourMs),
-        },
-        {
-          id: 3,
-          channelId: 'api:main',
-          role: 'user',
-          content: 'I am back.',
-          authorId: 'u1',
-          authorName: 'Vega',
-          timestamp: now,
-        },
-      ],
-      continuityEntries: [
-        {
-          id: 10,
-          channelId: 'api:side',
-          originChannelId: 'api:side',
-          role: 'assistant',
-          content: 'The side channel is waiting on prompt registry review.',
-          authorName: 'Companion',
-          timestamp: now - (2 * hourMs),
-        },
-      ],
-    };
-  }
-
-  async function buildWakeContext(params: {
-    complete: ReturnType<typeof vi.fn<LLMProviderPort['complete']>>;
-    wakeSummaryConfig?: {
-      sessionSummaryMaxTokens: number;
-      continuitySummaryMaxTokens: number;
-      continuityMinEntries: number;
-    };
-  }): Promise<void> {
-    const now = Date.now();
-    const { recentEntries, continuityEntries } = makeWakeFixtures(now);
-    await buildSessionContext({
-      channelId: 'internal:reflection:daily',
-      systemPrompt: 'System prompt.',
-      coreMemoryBlock: '',
-      memoriesBlock: '',
-      llmProvider: makeSummaryProvider(params.complete),
-      userId: 'u1',
-      continuityFallbackUserIds: [],
-      store: {
-        getRecent: (_channelId: string, _limit: number) => recentEntries,
-        getCompactionSummaries: () => [],
-      } as never,
-      config: makeConfig(),
-      eventBus: null,
-      promptRegistry: null,
-      preCompactionExtractionHandler: null,
-      crossChannelContinuity: {
-        getMerged: () => continuityEntries,
-      },
-      wakeReturnArtifacts: [],
-      characterName: 'Companion',
-      turnSessionContext: {
-        channelId: 'internal:reflection:daily',
-        recentEntries,
-        sourceEntryCount: recentEntries.length,
-        compactionSummaryTexts: [],
-        focusKnowledgeTexts: [],
-        continuityEntries,
-        versionPointer: 'test-snapshot',
-      },
-      recentSummaryMode: 'foreground',
-      ...(params.wakeSummaryConfig ? { wakeSummaryConfig: params.wakeSummaryConfig } : {}),
-    });
-  }
-
-  function makeWakeComplete(): ReturnType<typeof vi.fn<LLMProviderPort['complete']>> {
-    return vi.fn<LLMProviderPort['complete']>().mockImplementation(async () => ({
-      content: 'Summary text.',
-      model: 'test',
-      inputTokens: 0,
-      outputTokens: 0,
-      toolCalls: [],
-      stopReason: 'end_turn',
-    }));
-  }
-
-  it('skips the wake_continuity LLM call when continuity entries are below the default floor', async () => {
-    const complete = makeWakeComplete();
-    await buildWakeContext({ complete });
-
-    // One conversational continuity entry < default floor (2): the
-    // wake_session lane still fires; the wake_continuity lane must not.
-    const originStages = complete.mock.calls.map((call) => call[2]?.correlation?.originStage);
-    expect(originStages).toContain('session.recent.summary.wake_session');
+    expect(originStages).not.toContain('session.recent.summary.wake_session');
     expect(originStages).not.toContain('session.recent.summary.wake_continuity');
-  });
-
-  it('reads the continuity floor and wake budgets from config-owned wakeSummary settings', async () => {
-    const complete = makeWakeComplete();
-    await buildWakeContext({
-      complete,
-      wakeSummaryConfig: {
-        sessionSummaryMaxTokens: 96,
-        continuitySummaryMaxTokens: 80,
-        continuityMinEntries: 1,
-      },
-    });
-
-    // Floor lowered to 1 by config: both wake lanes fire again.
-    const originStages = complete.mock.calls.map((call) => call[2]?.correlation?.originStage);
-    expect(originStages).toContain('session.recent.summary.wake_session');
-    expect(originStages).toContain('session.recent.summary.wake_continuity');
+    // Live cross-channel rendering is metadata-only (u8iv strip-content): the
+    // side channel's message text never reaches the live system prompt.
+    expect(ctx.systemPrompt).not.toContain('The side channel is waiting on prompt registry review.');
+    expect(ctx.systemPrompt).not.toContain('<continuity_anchor');
   });
 });

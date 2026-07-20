@@ -1,10 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type { AgentResponse, LLMContext, TurnRecord } from '../../shared/contracts/runtime.js';
 import type { SessionRestartBehavior, SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
-import {
-  DEFAULT_TEMPORAL_WAKEUP_CONFIG,
-  type TemporalWakeupWakeSummaryConfig,
-} from '../../system/config/scheduler-config.js';
 import type { MemoryScopeQuery } from '../../faculties/memory/types.js';
 import type { LLMProviderPort } from '../agent/contracts.js';
 import type {
@@ -100,7 +96,6 @@ import type {
 } from './manager/contracts.js';
 import { runAutoCompaction } from './manager/compaction-service.js';
 import type { TurnSessionContextSnapshot } from '../turns/snapshot.js';
-import { cloneSessionContinuityArtifact } from '../turns/snapshot.js';
 import {
   buildToolObservationMetadata,
   normalizeToolObservation,
@@ -308,13 +303,6 @@ export class SessionManager {
   crossChannelContinuity: CrossChannelContinuityPort = createMissingCrossChannelContinuityPort();
   /** Character name from identity card (e.g. 'Companion'). Used for display labels in context. */
   characterName: string | undefined;
-  /**
-   * JSON-owned wake summary budgets and continuity entry floor (scheduler.json
-   * temporalWakeup.wakeSummary). Composition assigns the loaded scheduler
-   * config; the initial value mirrors the validated scheduler defaults.
-   */
-  wakeSummaryConfig: TemporalWakeupWakeSummaryConfig = { ...DEFAULT_TEMPORAL_WAKEUP_CONFIG.wakeSummary };
-
   constructor(
     store: SessionStore,
     config: SubstrateConfig,
@@ -1405,7 +1393,6 @@ export class SessionManager {
       store: tailReadStore
         ? createCompactionBoundaryStore(createIcpDeliveryProjectionStore(tailReadStore))
         : this.compactionBoundaryStore,
-      activityStore: tailReadStore ?? this.store,
       crossChannelContinuity: this.crossChannelContinuity,
       focusCompactionRanges: this.getFocusCompactionRanges(resolvedChannelId),
       focusKnowledgeTexts: this.getFocusKnowledgeTexts(resolvedChannelId),
@@ -1480,8 +1467,6 @@ export class SessionManager {
       ?? getDefaultPromptText(COMPACTION_SUMMARY_PROMPT_KEY);
     const compactionPromptText = sessionContext.compactionPromptText
       ?? this.resolveCompactionPromptText(baseCompactionPrompt);
-    const wakeReturnArtifacts = (sessionContext.wakeReturnArtifacts ?? [])
-      .map(cloneSessionContinuityArtifact);
     return buildSessionContext({
       channelId: resolvedChannelId,
       sourceChannelId,
@@ -1506,8 +1491,6 @@ export class SessionManager {
           capturedAt,
         });
       },
-      crossChannelContinuity: this.crossChannelContinuity,
-      wakeReturnArtifacts,
       characterName: this.resolveContextCharacterName(),
       turnSessionContext: sessionContext,
       ...(excludeSessionEntryId !== undefined ? { excludeSessionEntryId } : {}),
@@ -1515,7 +1498,6 @@ export class SessionManager {
       turnBudgetCharacteristics,
       compactionMode: 'deferred',
       pendingCompaction: this.pendingAutoCompactions.has(resolvedChannelId),
-      wakeSummaryConfig: this.wakeSummaryConfig,
       intakeSinkGate: this.intakeSinkGate,
     });
     });

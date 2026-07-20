@@ -581,19 +581,6 @@ function resolveSummarySourceSpeaker(entry: SessionEntry, characterName?: string
   return resolveHistorySummarySpeaker(entry, characterName);
 }
 
-function collectToolFailureAggregateLines(entries: readonly SessionEntry[]): string[] {
-  const toolFailures = new Map<string, ToolFailureAggregate>();
-  for (const entry of entries) {
-    if (isNonConversationalSessionEntry(entry)) continue;
-    if (entry.role !== 'tool') continue;
-    const failureSummary = resolveToolHistorySummary(entry);
-    if (failureSummary) {
-      aggregateToolFailure(toolFailures, failureSummary);
-    }
-  }
-  return [...toolFailures.values()].map(formatToolFailureAggregate);
-}
-
 export function buildSessionSummarySourceBlock(params: {
   entries: readonly SessionEntry[];
   characterName?: string;
@@ -708,7 +695,10 @@ export function buildRecentSessionSummaryFallbackText(params: {
     }
   }
 
-  const failureBlock = collectToolFailureAggregateLines(params.entries).slice(-2);
+  const failureBlock = buildSessionSummarySourceBlock({
+    entries: params.entries,
+    characterName: params.characterName,
+  }).split('\n').filter(line => line.includes('failed ')).slice(-2);
   if (failureBlock.length === 0) return '';
   const compressedFailureSummary = [
     ...headerLines,

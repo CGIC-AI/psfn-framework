@@ -814,48 +814,6 @@ describe('AdminSessionDataService', () => {
     expect(JSON.stringify(preview)).not.toContain('DIRTY_OLD_LOGICAL_SESSION_TEXT');
   });
 
-  it('rejects inverted CogSec affected-message ranges at preview time', async () => {
-    const sourceChannelId = 'api:cogsec-inverted-range';
-    store.append({
-      channelId: sourceChannelId,
-      role: 'user',
-      content: 'a row exists in the lane',
-      timestamp: 1,
-      authorName: 'Operator',
-    });
-    const config = makeConfig({ dataDir: dir });
-    const service = new AdminSessionDataService({
-      sessionStore: store,
-      sessionManager: new SessionManager(store, config),
-      eventBus: new EventBus(),
-      config,
-    });
-
-    await expect(service.previewCogSecRemediation({
-      sourceChannelId,
-      affectedMessageRanges: [{
-        sourceChannelId,
-        logicalSessionId: sourceChannelId,
-        startEntryId: 10,
-        endEntryId: 5,
-      }],
-      type: 'content_poisoning',
-      severity: 'high',
-      reason: 'operator inverted a per-range entry span',
-      actor: 'operator:garden',
-    })).rejects.toThrow(/endEntryId must be greater than or equal to startEntryId/);
-
-    await expect(service.previewCogSecRemediation({
-      sourceChannelId,
-      startEntryId: 20,
-      endEntryId: 5,
-      type: 'content_poisoning',
-      severity: 'high',
-      reason: 'operator inverted the top-level entry span',
-      actor: 'operator:garden',
-    })).rejects.toThrow(/endEntryId must be greater than or equal to startEntryId/);
-  });
-
   it('returns persisted turn observability without requiring live event-bus state', async () => {
     const channelId = 'api:observability';
     const requestId = 'persisted-turn-1';

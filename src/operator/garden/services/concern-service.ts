@@ -12,6 +12,7 @@ import type {
   AdminConcernMutationResult,
   AdminConcernService,
 } from './types.js';
+import type { ReflectionJournalStore } from '../../../persistence/journals/reflection-journal.js';
 
 function operatorEvidenceRef(ref: string | undefined): ActiveConcernEvidenceRef[] | undefined {
   const normalized = typeof ref === 'string' ? ref.trim() : '';
@@ -34,11 +35,27 @@ function mutationResult(concern: ActiveConcern | null, missingMessage: string): 
 }
 
 export class AdminConcernDataService implements AdminConcernService {
-  constructor(private readonly concernStore: ConcernStorePort) {}
+  constructor(
+    private readonly concernStore: ConcernStorePort,
+    private readonly concernArcJournal?: Pick<ReflectionJournalStore, 'listConcernArcs'>,
+  ) {}
 
   async listConcerns(options: ActiveConcernListOptions = {}): Promise<AdminConcernListData> {
     return {
       concerns: await this.concernStore.list(options),
+    };
+  }
+
+  async listConcernArcs(
+    concernId: string,
+    options: { provenanceRef?: string; limit?: number } = {},
+  ) {
+    return {
+      arcs: this.concernArcJournal?.listConcernArcs({
+        concernId,
+        ...(options.provenanceRef ? { provenanceRef: options.provenanceRef } : {}),
+        ...(options.limit ? { limit: options.limit } : {}),
+      }) ?? [],
     };
   }
 

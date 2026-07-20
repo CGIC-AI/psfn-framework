@@ -58,6 +58,8 @@ import type { ScheduledTask } from '../../core/scheduler/types.js';
 import { createTurnId } from '../../core/turns/id.js';
 import { registerStreamingSttProvider } from '../../primitives/voice/connectors/stt/index.js';
 import { registerStreamingTtsProvider } from '../../primitives/voice/connectors/tts/index.js';
+import { ReflectionJournalStore } from '../../persistence/journals/reflection-journal.js';
+import { resolveConcernResolutionArcJournalPath } from '../../persistence/layout.js';
 
 function request(
   port: number,
@@ -875,6 +877,28 @@ describe('AdminServer JSON API routes', () => {
       priority: 'high',
       expiresAt: '2026-06-29T18:00:00.000Z',
     });
+    new ReflectionJournalStore(resolveConcernResolutionArcJournalPath(tempDir)).appendOnce(
+      'concern-arc-generation-garden-1',
+      {
+        templateId: 'concern_arc',
+        templateName: 'Concern Arc',
+        prompt: 'PRIVATE PROMPT TEXT',
+        reflection: 'PRIVATE REFLECTION TEXT',
+        channelId: 'internal:concern-resolution',
+        mode: 'agent',
+        createdAt: '2026-06-29T11:00:00.000Z',
+        substrateBoundary: 'concern-resolution-arc',
+        substrateProvenanceRefs: [`concern:${active.id}`, 'decision:garden-1'],
+        concernArc: {
+          concernId: active.id,
+          resolutionGenerationId: 'generation-garden-1',
+          formationVAD: { valence: -0.2, arousal: 0.4, dominance: -0.1 },
+          resolutionVAD: { valence: 0.3, arousal: 0.1, dominance: 0.2 },
+          reliefDelta: { valence: 0.5, arousal: -0.3, dominance: 0.3 },
+          source: 'decision',
+        },
+      },
+    );
     await concernStore.create({
       text: 'Resolve stale hydration reminder',
       status: 'watching',
@@ -889,6 +913,26 @@ describe('AdminServer JSON API routes', () => {
         expect.objectContaining({ id: active.id, text: 'Inspect medication reminder pressure' }),
         expect.objectContaining({ text: 'Resolve stale hydration reminder' }),
       ],
+    });
+
+    const arcs = await request(
+      port,
+      'GET',
+      `/api/admin/concerns/${encodeURIComponent(active.id)}/arcs?provenanceRef=${encodeURIComponent('decision:garden-1')}`,
+      undefined,
+      authHeaders,
+    );
+    expect(arcs.status).toBe(200);
+    expect(arcs.body).not.toContain('PRIVATE PROMPT TEXT');
+    expect(arcs.body).not.toContain('PRIVATE REFLECTION TEXT');
+    expect(JSON.parse(arcs.body)).toEqual({
+      arcs: [expect.objectContaining({
+        arc: expect.objectContaining({
+          concernId: active.id,
+          resolutionGenerationId: 'generation-garden-1',
+        }),
+        provenanceRefs: [`concern:${active.id}`, 'decision:garden-1'],
+      })],
     });
 
     const sweep = await request(

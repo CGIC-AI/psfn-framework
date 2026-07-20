@@ -44,6 +44,7 @@ import {
   resolveConfiguredSystemDataDir,
   resolveChargeLedgerPath,
   resolveCogSecEventsPath,
+  resolveConcernResolutionArcJournalPath,
   resolveDriftReviewCardsPath,
   resolveFatigueLedgerPath,
   resolveHumanAttentionLedgerPath,
@@ -256,6 +257,9 @@ export function createInProcessGardenAdminContract(
   );
   const reflectionJournal = new ReflectionJournalStore(
     resolveReflectionJournalPath(companionDataDir),
+  );
+  const concernResolutionArcJournal = new ReflectionJournalStore(
+    resolveConcernResolutionArcJournalPath(companionDataDir),
   );
   const northStarStore = new NorthStarStore(resolveNorthStarPath(companionDataDir));
   const chargeLedger = options.chargeLedger
@@ -582,7 +586,7 @@ export function createInProcessGardenAdminContract(
       })
       : null,
     concerns: options.concernStore
-      ? new AdminConcernDataService(options.concernStore)
+      ? new AdminConcernDataService(options.concernStore, concernResolutionArcJournal)
       : null,
     settings: settingsService,
     sharedWorkspace: options.config.sharedWorkspacePath

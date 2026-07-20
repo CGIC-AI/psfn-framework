@@ -166,6 +166,26 @@ export function buildAdminConcernRoutes(options: {
   return [
     {
       method: 'GET',
+      match: paramWithSuffix('/api/admin/concerns/', 'concernId', '/arcs'),
+      handle: (req, res, { concernId }) => {
+        if (!concernService?.listConcernArcs) {
+          sendJson(res, 503, { error: 'Concern arc query backend unavailable' });
+          return;
+        }
+        const url = parseRequestUrl(req, `/api/admin/concerns/${concernId}/arcs`);
+        const limit = parsePositiveIntegerQuery(url.searchParams.get('limit'));
+        const provenanceRef = url.searchParams.get('provenanceRef')?.trim() || undefined;
+        concernService.listConcernArcs(concernId, {
+          ...(limit ? { limit } : {}),
+          ...(provenanceRef ? { provenanceRef } : {}),
+        }).then(
+          payload => sendJson(res, 200, payload, ADMIN_DYNAMIC_JSON_HEADERS),
+          error => sendJson(res, 500, { error: toSanitizedMessage(error, 'Failed to list concern arcs') }),
+        );
+      },
+    },
+    {
+      method: 'GET',
       match: exactPath('/api/admin/concerns'),
       handle: (req, res) => {
         if (!concernService) {

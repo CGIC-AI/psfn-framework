@@ -194,9 +194,15 @@ these process-wiring env vars come into play (documented in full in
 - `PSFN_MULTI_COMPANION` — topology opt-in. When on, a system-owned
   `companions.json` fleet manifest is required; when off, `companions.json` must
   be absent. Both mismatches fail closed at startup.
-- `PSFN_FLEET_AUTH` — required with local multi-companion startup. The one
-  fleet Garden accepts companion-bound Fleet Auth capabilities; the launcher
-  rejects a fleet topology that would fall back to shared admin-token authority.
+- `PSFN_FLEET_AUTH` — launcher topology hint, required with local
+  multi-companion startup. The one fleet Garden accepts companion-bound Fleet
+  Auth capabilities; the launcher rejects a fleet topology that would fall back
+  to shared admin-token authority. Runtime enablement itself is decided solely
+  by the presence of the system-owned `fleet-auth.json`: when that file is
+  present, fleet auth is enabled and the flag cannot disable it (setting it to
+  `0` only produces a loud startup warning); when the file is absent and the
+  flag is set to `1`, startup refuses (fail closed) rather than starting
+  without authentication.
   Fleet Auth is fleet-shaped even when the fleet contains one companion: a
   legacy single-companion deployment must enable the fleet topology and add a
   system-owned `companions.json` with exactly one entry. That entry supplies a
@@ -305,8 +311,9 @@ npm run agent:docker:continuous # Continuous/dev profile (isolated internal netw
 
 ### Fleet-authenticated browser origin
 
-When the system-owned `fleet-auth.json` is present and `PSFN_FLEET_AUTH=1`, do
-not publish `ADMIN_HOST`/`ADMIN_PORT` as a browser endpoint. Terminate HTTPS at
+When the system-owned `fleet-auth.json` is present (file presence is the
+single source of truth for fleet-auth enablement), do not publish
+`ADMIN_HOST`/`ADMIN_PORT` as a browser endpoint. Terminate HTTPS at
 the exact `canonicalOrigin`, route the full origin to the gateway API listener,
 and open `/fleet`. This is the authenticated bounded overview in the Garden
 bundle. A direct TLS listener must receive no forwarding headers. A single

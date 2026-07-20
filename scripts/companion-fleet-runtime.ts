@@ -10,7 +10,7 @@ import {
   FleetGardenTargetRegistry,
 } from '../src/operator/garden/fleet-garden-target-registry.js';
 import { resolveAdminTransportMode } from '../src/operator/garden/transport-paths.js';
-import { isFleetAuthEnabled } from '../src/system/config/fleet-auth-config.js';
+import { readFleetAuthEnvFlag } from '../src/system/config/fleet-auth-config.js';
 
 export interface ConfiguredLocalCompanionFleetRuntime {
   readonly fleet: ResolvedCompanionsFleetConfig;
@@ -59,7 +59,8 @@ export function resolveConfiguredLocalCompanionFleetRuntime(
 ): ConfiguredLocalCompanionFleetRuntime | null {
   const fleet = resolveConfiguredCompanionFleet(env);
   if (!fleet) return null;
-  if (!isFleetAuthEnabled(env)) {
+  const fleetAuthFlag = readFleetAuthEnvFlag(env);
+  if (fleetAuthFlag.kind !== 'set' || !fleetAuthFlag.value) {
     throw new Error(
       'Multi-companion local startup requires PSFN_FLEET_AUTH=1 for the one fleet Garden',
     );

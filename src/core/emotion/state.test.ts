@@ -2,6 +2,26 @@ import { describe, expect, it } from 'vitest';
 import { EmotionState } from './state.js';
 
 describe('EmotionState', () => {
+  it('applies one signed concern-resolution delta per stable generation', () => {
+    const state = new EmotionState();
+
+    expect(state.applyConcernResolutionDelta('generation-1', {
+      valence: -0.4,
+      arousal: 0.3,
+      dominance: -0.2,
+    })).toBe(true);
+    expect(state.applyConcernResolutionDelta('generation-1', {
+      valence: -0.4,
+      arousal: 0.3,
+      dominance: -0.2,
+    })).toBe(false);
+    expect(state.getState().vad).toEqual({
+      valence: -0.4,
+      arousal: 0.3,
+      dominance: -0.2,
+    });
+  });
+
   it('applies exponential decay to VAD and discrete emotions', () => {
     const state = EmotionState.deserialize({
       vad: { valence: 1, arousal: 1, dominance: 1 },

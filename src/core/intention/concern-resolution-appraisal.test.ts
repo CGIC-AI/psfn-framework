@@ -24,6 +24,7 @@ function concernFixture(overrides: Partial<ActiveConcern> = {}): ActiveConcern {
     resolvedAt: '2026-06-29T12:00:00.000Z',
     formationVAD: { valence: -0.4, arousal: 0.6, dominance: -0.2 },
     resolutionVAD: { valence: 0.3, arousal: 0.1, dominance: 0.2 },
+    resolutionGenerationId: 'generation-1',
     ...overrides,
   };
 }
@@ -60,6 +61,7 @@ describe('buildConcernResolutionAppraisalEvent', () => {
     expect(event).not.toBeNull();
     expect(event).toMatchObject({
       concernId: 'concern-1',
+      resolutionGenerationId: 'generation-1',
       source: 'decision',
       formationVad: { valence: -0.4, arousal: 0.6, dominance: -0.2 },
       resolutionVad: { valence: 0.3, arousal: 0.1, dominance: 0.2 },
@@ -130,5 +132,17 @@ describe('emitConcernResolutionAppraisal', () => {
       source: 'decision',
     });
     expect(emitted).toBe(false);
+  });
+
+  it('surfaces a required resolution consumer failure so the durable resolution can be retried', async () => {
+    const eventBus = new EventBus();
+    eventBus.on('intention.concern.resolution_appraisal', () => {
+      throw new Error('journal unavailable');
+    });
+
+    await expect(emitConcernResolutionAppraisal(eventBus, {
+      concern: concernFixture(),
+      source: 'decision',
+    })).rejects.toThrow(/journal unavailable/);
   });
 });

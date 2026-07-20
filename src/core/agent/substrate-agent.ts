@@ -104,7 +104,7 @@ import {
 import type { AdaptiveToolRuntimeState } from './adaptive-tools-telemetry.js';
 import type { RuntimeToolCatalogSnapshot } from './tool-catalog.js';
 import { createTurnId } from '../turns/id.js';
-import { EmotionState } from '../emotion/state.js';
+import { EmotionState, type VADVector } from '../emotion/state.js';
 import type { EmotionObserver } from '../emotion/observer.js';
 import { EmotionAppraisal, type EmotionAppraisalEntry } from '../emotion/appraisal.js';
 import type { ActiveConcernContextProvider } from '../intention/concern-store-port.js';
@@ -1358,6 +1358,19 @@ export class SubstrateAgent {
   getCurrentInternalState(): InternalState | null {
     if (!this.currentInternalState) return null;
     return cloneInternalState(this.currentInternalState);
+  }
+
+  /** Route one immutable concern-resolution appraisal into the scoped state. */
+  applyConcernResolutionDelta(
+    contactId: string | undefined,
+    generationId: string,
+    delta: VADVector,
+  ): 'applied' | 'duplicate' | 'deferred' | 'unavailable' {
+    return this.emotionSelfModelRuntime.applyConcernResolutionDelta(
+      contactId,
+      generationId,
+      delta,
+    );
   }
 
   getCurrentInternalStateSnapshotRef(): string | null {

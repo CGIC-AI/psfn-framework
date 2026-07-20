@@ -7,6 +7,9 @@ import { isRecord } from '../../shared/utils/types.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
 import type { WikiDocumentListEntry, WikiStorePort } from './types.js';
 import {
+  CURRENT_PROJECT_SCHEMA_VERSION,
+  deriveContinuitySessionRef,
+  deriveProjectReturnPolicy,
   normalizeProjectEntityId,
   parseNamedWardrobeLookDocument,
   parsePersonalProjectDocument,
@@ -16,9 +19,13 @@ import {
   type PersonalProjectArtifact,
   type PersonalProjectManifest,
   type PersonalProjectStatus,
+  type PersonalProjectWorkContext,
   type ResolvedWardrobeLook,
 } from './personal-project-contracts.js';
 export {
+  CURRENT_PROJECT_SCHEMA_VERSION,
+  deriveContinuitySessionRef,
+  deriveProjectReturnPolicy,
   parseNamedWardrobeLookDocument,
   parsePersonalProjectDocument,
 } from './personal-project-contracts.js';
@@ -27,8 +34,12 @@ export type {
   NamedWardrobeLook,
   PersonalProjectArtifact,
   PersonalProjectManifest,
+  PersonalProjectReturnPolicy,
   PersonalProjectStatus,
+  PersonalProjectWorkContext,
   ProjectArtifactShareState,
+  ProjectContactDmTarget,
+  ProjectPublicationMode,
   ResolvedWardrobeLook,
 } from './personal-project-contracts.js';
 
@@ -62,6 +73,28 @@ export interface LegacyArtifactQuarantineReport {
 }
 
 const QUARANTINE_REPORT_SAMPLE_LIMIT = 50;
+
+/**
+ * Result of the one-time, idempotent personal-project manifest v1 → v2 migration
+ * (psfn-framework-jp36.2.4). v1 manifests carried no durable work context; they
+ * upgrade explicitly to a private work context (settled decision 16, bible §5.5)
+ * with a runtime-derived continuity session id and return policy. Re-running is a
+ * no-op once every manifest is v2 (stable counts). Malformed documents are
+ * reported, never rewritten.
+ */
+export interface ProjectManifestV2MigrationReport {
+  dryRun: boolean;
+  scannedProjects: number;
+  /** Manifests already at the current schema version (left untouched). */
+  alreadyCurrent: number;
+  /** v1 manifests upgraded to v2 (in a dry run, that WOULD be upgraded). */
+  migratedProjects: number;
+  malformedProjects: Array<{ id: string; error: string }>;
+  /** Bounded sample of the migrated project ids (first N). */
+  entries: string[];
+}
+
+const MIGRATION_REPORT_SAMPLE_LIMIT = 50;
 
 const PROJECT_TAGS = ['psfn:personal-project'] satisfies readonly string[];
 const WARDROBE_TAGS = ['psfn:named-look'] satisfies readonly string[];
@@ -199,19 +232,27 @@ export class PersonalProjectLibrary {
     title: string;
     nextStep: string;
     visibility?: CompanionOwnedVisibility;
+    workContext?: PersonalProjectWorkContext;
   }): Promise<PersonalProjectManifest> {
     const title = requiredProjectText(input.title, 'project title');
     const id = normalizeProjectEntityId(input.id ?? slugFromName(title), 'project id');
     if (this.store.get(projectDocId(id))) throw new Error(`personal project already exists: project:${id}`);
     const timestamp = this.now().toISOString();
+    // Default to a private work context (bible §10.1: an unspecified project is
+    // companion-self space). The continuity session id and return policy are
+    // runtime-derived from the work context, never model-supplied (bible §6.2).
+    const workContext: PersonalProjectWorkContext = input.workContext ?? { kind: 'private' };
     const project: PersonalProjectManifest = {
-      schemaVersion: 1,
+      schemaVersion: CURRENT_PROJECT_SCHEMA_VERSION,
       kind: 'personal_project',
       id,
       ref: `project:${id}`,
       title,
       status: 'active',
       visibility: input.visibility ?? 'self',
+      workContext,
+      continuitySessionRef: deriveContinuitySessionRef(id, workContext),
+      returnPolicy: deriveProjectReturnPolicy(workContext),
       nextStep: requiredProjectText(input.nextStep, 'project nextStep'),
       artifacts: [],
       resumeCount: 0,
@@ -413,6 +454,63 @@ export class PersonalProjectLibrary {
       alreadyClassifiedArtifacts,
       quarantinedArtifacts,
       quarantinedProjects,
+      malformedProjects,
+      entries,
+    };
+  }
+
+  /**
+   * One-time, idempotent migration of personal-project manifests from schema v1
+   * to v2 (psfn-framework-jp36.2.4, bible §10.5). A v1 manifest has no durable
+   * work context; `parsePersonalProjectDocument` already upgrades it in memory to
+   * a private work context on read (so resume works before this runs), and this
+   * migration makes that upgrade durable on disk. Manifests already at the
+   * current schema version are left untouched, so re-running is a no-op with
+   * stable counts. Malformed documents are reported, never rewritten.
+   */
+  migrateManifestsToV2(options: { dryRun: boolean }): ProjectManifestV2MigrationReport {
+    const entries: string[] = [];
+    const malformedProjects: Array<{ id: string; error: string }> = [];
+    let scannedProjects = 0;
+    let alreadyCurrent = 0;
+    let migratedProjects = 0;
+
+    for (const entry of this.store.list().filter(candidate => hasTag(candidate, PROJECT_TAGS[0]))) {
+      const document = this.store.get(entry.id);
+      if (!document) throw new Error(`project manifest disappeared during v2 migration scan: ${entry.id}`);
+
+      // Read the raw stored schema version as the source of truth for whether the
+      // document needs migrating (the parsed manifest is always v2-shaped).
+      let rawVersion: unknown;
+      let manifest: PersonalProjectManifest;
+      try {
+        const rawBody: unknown = JSON.parse(document.body);
+        if (!isRecord(rawBody)) throw new Error('project body is not a JSON object');
+        rawVersion = rawBody.schemaVersion;
+        manifest = parsePersonalProjectDocument(document);
+      } catch (error) {
+        malformedProjects.push({ id: document.id, error: toErrorMessage(error) });
+        continue;
+      }
+
+      scannedProjects += 1;
+      if (rawVersion === CURRENT_PROJECT_SCHEMA_VERSION) {
+        alreadyCurrent += 1;
+        continue;
+      }
+      migratedProjects += 1;
+      if (entries.length < MIGRATION_REPORT_SAMPLE_LIMIT) entries.push(manifest.ref);
+      if (options.dryRun) continue;
+      // Persist the already-upgraded manifest verbatim — a format migration, not
+      // an activity, so timestamps are preserved.
+      this.persistProject(manifest);
+    }
+
+    return {
+      dryRun: options.dryRun,
+      scannedProjects,
+      alreadyCurrent,
+      migratedProjects,
       malformedProjects,
       entries,
     };

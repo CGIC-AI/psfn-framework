@@ -28,7 +28,9 @@ import { registerFreeTimeTasks } from '../../core/scheduler/free-time.js';
 import {
   FreeTimeWorkspaceResolver,
   type FreeTimeProjectRecord,
+  type FreeTimeWorkspaceContext,
 } from '../../core/scheduler/free-time-workspace-resolver.js';
+import type { PersonalProjectWorkContext } from '../../faculties/wiki/personal-projects.js';
 import {
   FreeTimeChooser,
   createFreeTimeRoomChannelResolver,
@@ -1241,13 +1243,53 @@ async function main(): Promise<void> {
     }),
     getVisibilityDisclosureCeiling,
   );
+  // Map a manifest-v2 durable work context (faculties/wiki) onto the resolver's
+  // structurally-identical FreeTimeWorkspaceContext (jp36.2.4 seam). Explicit
+  // per-kind reconstruction keeps optional fields honest under
+  // exactOptionalPropertyTypes and localizes the cross-module shape coupling.
+  const toFreeTimeWorkspaceContext = (
+    workContext: PersonalProjectWorkContext,
+  ): FreeTimeWorkspaceContext => {
+    switch (workContext.kind) {
+      case 'private':
+        return workContext.returnTarget
+          ? { kind: 'private', returnTarget: workContext.returnTarget }
+          : { kind: 'private' };
+      case 'room':
+        return { kind: 'room', channelId: workContext.channelId };
+      case 'publication':
+        return workContext.surfaceRef
+          ? { kind: 'publication', mode: workContext.mode, surfaceRef: workContext.surfaceRef }
+          : { kind: 'publication', mode: workContext.mode };
+      default: {
+        const unknown = workContext as { kind?: unknown };
+        throw new Error(`unknown personal-project work-context kind: ${String(unknown.kind)}`);
+      }
+    }
+  };
+  const workContextLabel = (workContext: PersonalProjectWorkContext): string => {
+    switch (workContext.kind) {
+      case 'private':
+        return 'private';
+      case 'room':
+        return 'room';
+      case 'publication':
+        return workContext.mode === 'public_clean' ? 'publication' : 'publication review draft';
+      default:
+        return 'private';
+    }
+  };
   const freeTimeResolver = new FreeTimeWorkspaceResolver({
     projectDirectory: (projectRef: string): FreeTimeProjectRecord | null => {
       const normalizedRef = projectRef.startsWith('project:') ? projectRef : `project:${projectRef}`;
       const match = personalProjects.listProjects().find(project => project.ref === normalizedRef);
-      // Unknown ref → null so the resolver fails closed on it; v1 projects
-      // resume as private work context (manifest-v2 binding is jp36.2.4).
-      return match ? { projectRef: match.ref, workspace: { kind: 'private' } } : null;
+      // Unknown ref → null so the resolver fails closed on it. A known project
+      // serves its durable manifest-v2 work context (jp36.2.4); v1 manifests were
+      // upgraded to a private context on read, so resume inherits without a
+      // reclassification prompt (bible §10.1/§10.5).
+      return match
+        ? { projectRef: match.ref, workspace: toFreeTimeWorkspaceContext(match.workContext) }
+        : null;
     },
     roomChannelResolver: freeTimeRoomChannelResolver,
   });
@@ -1261,7 +1303,7 @@ async function main(): Promise<void> {
       .map(project => ({
         projectRef: project.ref,
         title: project.title,
-        workContextLabel: 'private',
+        workContextLabel: workContextLabel(project.workContext),
         focusHint: project.nextStep,
       })),
     companionName: card.data.name,

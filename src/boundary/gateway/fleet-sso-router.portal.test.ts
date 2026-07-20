@@ -176,6 +176,13 @@ describe('unified-origin fleet portal routing', () => {
     expect(login.status).toBe(200);
     expect(login.body).toBe(fleet.body);
 
+    const authenticatedLogin = await request(harness.port, '/fleet/login', {
+      session: SESSION_TOKEN,
+    });
+    expect(authenticatedLogin.status).toBe(200);
+    expect(authenticatedLogin.body).toBe(fleet.body);
+    expect(harness.resolveProjection).not.toHaveBeenCalled();
+
     const api = await request(harness.port, '/v1/fleet/portal');
     expect(api.status).toBe(401);
     expect(api.body).toBe('{"error":{"type":"fleet_portal_denied"}}');
@@ -252,12 +259,21 @@ describe('unified-origin fleet portal routing', () => {
       expect(denied.status).toBe(400);
     }
     for (const input of [
-      { path: '/v1/fleet/portal/', session: SESSION_TOKEN },
-      { path: '/v1/fleet/portal?return_to=%2Fcompanions', session: SESSION_TOKEN },
-      { path: '/v1/fleet/portal', method: 'POST', session: SESSION_TOKEN },
+      { path: '/v1/fleet/portal/', session: SESSION_TOKEN, expectedStatus: 404 },
+      {
+        path: '/v1/fleet/portal?return_to=%2Fcompanions',
+        session: SESSION_TOKEN,
+        expectedStatus: 400,
+      },
+      {
+        path: '/v1/fleet/portal',
+        method: 'POST',
+        session: SESSION_TOKEN,
+        expectedStatus: 404,
+      },
     ]) {
       const denied = await request(harness.port, input.path, input);
-      expect(denied.status).toBe(404);
+      expect(denied.status).toBe(input.expectedStatus);
     }
     expect(harness.resolveProjection).not.toHaveBeenCalled();
   });

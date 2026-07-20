@@ -18,12 +18,19 @@ function stateWithRelationships(relationships: unknown): Record<string, unknown>
 }
 
 describe('parseEmoSimDirectedRelationshipReading', () => {
-  it('reads the companion outgoing directed relationship, excluding the anchor', () => {
+  it('reads a verbatim real emo_sim flat-shape relationship (regression fixture)', () => {
+    // Byte-for-byte the wire shape emitted by statemashine.py: a FLAT map keyed
+    // "<source>-><target>" NAMES, with `from`/`to` uids and a `feelings` map.
     const reading = parseEmoSimDirectedRelationshipReading(
       stateWithRelationships({
-        [AGENT]: {
-          [ANCHOR]: { liking: 0.9, trust: 0.9, dominance: 0, familiarity: 0.9 },
-          pierre: { liking: 0.6, trust: 0.4, dominance: -0.2, familiarity: 0.5, emotions: { Love: 0.3, Fear: -0.1 } },
+        [`${AGENT}->pierre`]: {
+          from: 'uid-companion',
+          to: 'uid-pierre',
+          liking: 0.6,
+          trust: 0.4,
+          dominance: -0.2,
+          familiarity: 0.5,
+          feelings: { Love: 0.3 },
         },
       }),
       { agentName: AGENT, excludeTargets: [ANCHOR] },
@@ -37,13 +44,40 @@ describe('parseEmoSimDirectedRelationshipReading', () => {
     expect(reading?.topEmotionShift).toEqual({ label: 'Love', delta: 0.3 });
   });
 
+  it('reads the companion outgoing directed relationship, excluding the anchor', () => {
+    const reading = parseEmoSimDirectedRelationshipReading(
+      stateWithRelationships({
+        [`${AGENT}->${ANCHOR}`]: { liking: 0.9, trust: 0.9, dominance: 0, familiarity: 0.9 },
+        [`${AGENT}->pierre`]: { liking: 0.6, trust: 0.4, dominance: -0.2, familiarity: 0.5, feelings: { Love: 0.3, Fear: -0.1 } },
+      }),
+      { agentName: AGENT, excludeTargets: [ANCHOR] },
+    );
+    expect(reading).not.toBeNull();
+    expect(reading?.sampleCount).toBe(1);
+    expect(reading?.liking).toBeCloseTo(0.6);
+    expect(reading?.trust).toBeCloseTo(0.4);
+    expect(reading?.dominance).toBeCloseTo(-0.2);
+    expect(reading?.familiarity).toBeCloseTo(0.5);
+    expect(reading?.topEmotionShift).toEqual({ label: 'Love', delta: 0.3 });
+  });
+
+  it('ignores relationships whose source is not the companion', () => {
+    const reading = parseEmoSimDirectedRelationshipReading(
+      stateWithRelationships({
+        [`pierre->${AGENT}`]: { liking: 0.9, trust: 0.9 },
+        [`${AGENT}->pierre`]: { liking: 0.6 },
+      }),
+      { agentName: AGENT, excludeTargets: [ANCHOR] },
+    );
+    expect(reading?.sampleCount).toBe(1);
+    expect(reading?.liking).toBeCloseTo(0.6);
+  });
+
   it('averages over multiple real targets', () => {
     const reading = parseEmoSimDirectedRelationshipReading(
       stateWithRelationships({
-        [AGENT]: {
-          a: { liking: 0.2 },
-          b: { liking: 0.8 },
-        },
+        [`${AGENT}->a`]: { liking: 0.2 },
+        [`${AGENT}->b`]: { liking: 0.8 },
       }),
       { agentName: AGENT },
     );
@@ -54,7 +88,7 @@ describe('parseEmoSimDirectedRelationshipReading', () => {
 
   it('returns null when only the excluded anchor has a relationship (HEAD reality)', () => {
     const reading = parseEmoSimDirectedRelationshipReading(
-      stateWithRelationships({ [AGENT]: { [ANCHOR]: { liking: 0.9, trust: 0.9 } } }),
+      stateWithRelationships({ [`${AGENT}->${ANCHOR}`]: { liking: 0.9, trust: 0.9 } }),
       { agentName: AGENT, excludeTargets: [ANCHOR] },
     );
     expect(reading).toBeNull();
@@ -64,10 +98,13 @@ describe('parseEmoSimDirectedRelationshipReading', () => {
     expect(parseEmoSimDirectedRelationshipReading(stateWithRelationships({}), { agentName: AGENT })).toBeNull();
     expect(parseEmoSimDirectedRelationshipReading({ t: 1 }, { agentName: AGENT })).toBeNull();
     expect(parseEmoSimDirectedRelationshipReading(stateWithRelationships('nope'), { agentName: AGENT })).toBeNull();
+    // Key without the `->` separator is not-understood -> skipped.
     expect(parseEmoSimDirectedRelationshipReading(stateWithRelationships({ [AGENT]: [1, 2] }), { agentName: AGENT })).toBeNull();
+    // Well-formed key but non-record value -> skipped.
+    expect(parseEmoSimDirectedRelationshipReading(stateWithRelationships({ [`${AGENT}->x`]: [1, 2] }), { agentName: AGENT })).toBeNull();
     // Present target but no numeric dimensions -> no contributing data.
     expect(parseEmoSimDirectedRelationshipReading(
-      stateWithRelationships({ [AGENT]: { x: { note: 'hi' } } }),
+      stateWithRelationships({ [`${AGENT}->x`]: { note: 'hi' } }),
       { agentName: AGENT },
     )).toBeNull();
   });
@@ -75,7 +112,7 @@ describe('parseEmoSimDirectedRelationshipReading', () => {
   it('never throws on hostile input', () => {
     expect(() => parseEmoSimDirectedRelationshipReading(null, { agentName: AGENT })).not.toThrow();
     expect(() => parseEmoSimDirectedRelationshipReading(
-      stateWithRelationships({ [AGENT]: { x: { liking: Number.NaN } } }),
+      stateWithRelationships({ [`${AGENT}->x`]: { liking: Number.NaN } }),
       { agentName: AGENT },
     )).not.toThrow();
   });

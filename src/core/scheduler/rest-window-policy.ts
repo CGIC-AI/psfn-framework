@@ -12,7 +12,7 @@
 // backend is introduced (jp36.2 non-goal). A durable adapter can replace the
 // default without touching the chooser.
 
-import type { FreeTimeLane } from './free-time.js';
+import type { FreeTimeLane } from './free-time-lane.js';
 
 /** A recorded silence decision that suppresses re-prompting from `nowMs`. */
 export interface RestWindowSilenceInput {

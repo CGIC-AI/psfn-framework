@@ -63,6 +63,7 @@ import type { SessionEntry } from '../session/types.js';
 import type { Scheduler } from './scheduler.js';
 import { conversationalEntryFromSessionMetadata } from './session-metadata-preflight.js';
 import type { FreeTimeChooserOutcome } from './free-time-chooser.js';
+import type { FreeTimeLane } from './free-time-lane.js';
 import type { FreeTimeWorkspace } from './free-time-workspace-resolver.js';
 import type { DisclosureDestination, DisclosureLineage } from '../cogsec/disclosure/index.js';
 import { projectReturnNoteEvidence } from './return-note-projection.js';
@@ -99,7 +100,7 @@ const MINUTE_MS = 60_000;
 /** A finite sentinel for "no prior activity / no prior block" gate inputs. */
 const NO_PRIOR_SENTINEL_MINUTES = 10 ** 9;
 
-export type FreeTimeLane = 'quiet_hours' | 'idle';
+export type { FreeTimeLane } from './free-time-lane.js';
 
 /**
  * Resolve the internal channel/session id for a free-time block from a chosen

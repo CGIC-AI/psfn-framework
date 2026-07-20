@@ -39,7 +39,7 @@ import {
   normalizeProjectEntityId,
   type CompanionOwnedVisibility,
 } from '../../faculties/wiki/personal-project-contracts.js';
-import { FREE_TIME_CHANNEL_PREFIX } from './free-time.js';
+import { FREE_TIME_CHANNEL_PREFIX } from '../session/session-id.js';
 
 // ── Shared vocabulary ──
 

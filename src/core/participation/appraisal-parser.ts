@@ -3,6 +3,7 @@ import {
   type ParticipationAction,
   type ParticipationAppraisal,
 } from './types.js';
+import { isRecord } from '../../shared/utils/types.js';
 
 /**
  * Strict parser for the participation appraiser's ternary output contract
@@ -56,10 +57,6 @@ export function parseParticipationAppraisal(raw: string): ParticipationAppraisal
   }
 
   return { action, reasonCode, confidence };
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 /**

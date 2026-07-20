@@ -45,7 +45,7 @@ import {
   type FreeTimeRoomChannelResolver,
   type FreeTimeWorkspace,
 } from './free-time-workspace-resolver.js';
-import type { FreeTimeLane } from './free-time.js';
+import type { FreeTimeLane } from './free-time-lane.js';
 import type { RestWindowPolicyPort } from './rest-window-policy.js';
 
 // ── Menu vocabulary ──

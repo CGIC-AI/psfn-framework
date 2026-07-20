@@ -315,6 +315,7 @@ describe('system-owner fleet migration', () => {
       'trust-policy',
       'backup',
       'intake-policy',
+      'partner-affect-shadow',
     ]) {
       copyFileSync(
         join(seedDir, `${ownerFile}.seed.json`),

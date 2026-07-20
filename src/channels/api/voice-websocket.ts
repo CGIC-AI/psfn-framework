@@ -13,7 +13,7 @@ import {
   isExpectedApiToken,
   principalFromApiKeyToken,
   INSECURE_LOCAL_API_PRINCIPAL,
-  type ApiAuthPrincipal,
+  type UnscopedApiAuthPrincipal,
 } from '../backplane/http/auth.js';
 
 const log = createComponentLogger('ApiVoiceWebSocket');
@@ -34,7 +34,7 @@ export interface WebSocketVoiceSession {
 
 export interface VoiceWebSocketRuntimeContext {
   request: IncomingMessage;
-  principal: ApiAuthPrincipal;
+  principal: Readonly<UnscopedApiAuthPrincipal>;
 }
 
 export interface VoiceWebSocketRuntime {
@@ -314,7 +314,7 @@ export class ApiVoiceWebSocketAdapter {
     });
   }
 
-  private resolvePrincipal(req: IncomingMessage): ApiAuthPrincipal | null {
+  private resolvePrincipal(req: IncomingMessage): Readonly<UnscopedApiAuthPrincipal> | null {
     if (!this.apiKey) {
       return INSECURE_LOCAL_API_PRINCIPAL;
     }
@@ -336,7 +336,11 @@ export class ApiVoiceWebSocketAdapter {
     return principalFromApiKeyToken(this.apiKey);
   }
 
-  private attachSocket(ws: WebSocket, req: IncomingMessage, principal: ApiAuthPrincipal): void {
+  private attachSocket(
+    ws: WebSocket,
+    req: IncomingMessage,
+    principal: Readonly<UnscopedApiAuthPrincipal>,
+  ): void {
     const connection = createVoiceConnection(`api-voice-${randomUUID()}`, ws);
     const detachRuntime = this.runtime.attach(connection, { request: req, principal });
 

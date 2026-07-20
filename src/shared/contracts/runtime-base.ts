@@ -1638,7 +1638,12 @@ export interface ObserverEvalSidecarLeverSettings {
   };
   wouldRest: {
     enabled: boolean;
-    sleepPressureThreshold: number;
+    /**
+     * would_rest reads only mood arousal. drives.sleepPressure is deliberately
+     * excluded per the oth4 operator ruling (physiological drives must not
+     * drive behavior); the former sleepPressureThreshold key was removed and is
+     * rejected fail-closed by the settings normalizer.
+     */
     arousalThreshold: number;
     sustainMs: number;
   };

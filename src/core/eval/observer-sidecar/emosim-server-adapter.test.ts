@@ -14,6 +14,8 @@ import {
 } from './emosim-adapter.js';
 import {
   createEmoSimServerRunner,
+  DEFAULT_EMOSIM_AFTER_TICK_DELAY_MS,
+  EMOSIM_MIN_READ_CADENCE_MS,
   EMOSIM_SERVER_ANCHOR_NPC_NAME,
   EmoSimServerRunner,
 } from './emosim-server-adapter.js';
@@ -281,12 +283,76 @@ describe('EmoSim server adapter', () => {
       sessionLabel: '  ',
       agentName: AGENT_NAME,
     })).toThrow('sessionLabel must be a non-empty string');
+    // 1 Hz floor: sub-second read cadence is rejected (no sub-second polling).
+    expect(() => createEmoSimServerRunner({
+      serverUrl: 'http://emosim.test:17342',
+      sessionLabel: SESSION_LABEL,
+      agentName: AGENT_NAME,
+      afterTickDelayMs: 750,
+    })).toThrow('afterTickDelayMs must be an integer between 1000 and 60000');
+    // A supra-1s cadence is accepted (e.g. 1500ms).
     expect(() => createEmoSimServerRunner({
       serverUrl: 'http://emosim.test:17342',
       sessionLabel: SESSION_LABEL,
       agentName: AGENT_NAME,
       afterTickDelayMs: 1_500,
-    })).toThrow('afterTickDelayMs must be an integer between 1 and 999');
+    })).not.toThrow();
+  });
+
+  it('reads at 1 Hz by default: the afterTick delay is not sub-second', async () => {
+    const server = new FakeEmoSimServer();
+    const delays: number[] = [];
+    const runner = new EmoSimServerRunner({
+      serverUrl: 'http://emosim.test:17342',
+      sessionLabel: SESSION_LABEL,
+      agentName: AGENT_NAME,
+      fetchImpl: server.fetch,
+      sleep: async (ms: number) => {
+        delays.push(ms);
+      },
+    });
+
+    const result = await runEmoSimProjectedStimulus(makeInput(), { runner });
+    expect(result.ok).toBe(true);
+    // Exactly one inter-read sleep, floored at the 1 Hz cadence.
+    expect(delays).toEqual([EMOSIM_MIN_READ_CADENCE_MS]);
+    expect(EMOSIM_MIN_READ_CADENCE_MS).toBe(1000);
+    expect(DEFAULT_EMOSIM_AFTER_TICK_DELAY_MS).toBe(EMOSIM_MIN_READ_CADENCE_MS);
+  });
+
+  it('records disableDrives as a queryable degradation instead of silently dropping it', async () => {
+    const server = new FakeEmoSimServer();
+    const runner = makeRunner(server);
+
+    const input = makeInput();
+    expect(input.deterministic.disableDrives).toBe(true);
+
+    const result = await runEmoSimProjectedStimulus(input, { runner });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    const degradations = result.output.runtime.deterministicDegradations;
+    expect(degradations).toHaveLength(1);
+    expect(degradations[0]).toMatchObject({
+      option: 'deterministic.disableDrives',
+      requested: true,
+      honored: false,
+      reason: 'unsupported-by-server',
+    });
+    expect(degradations[0]?.detail).toContain('no drives-disable control');
+  });
+
+  it('emits no degradation when no unsupported deterministic option is requested', async () => {
+    const server = new FakeEmoSimServer();
+    const runner = makeRunner(server);
+
+    const input = makeInput();
+    input.deterministic.disableDrives = false;
+
+    const result = await runEmoSimProjectedStimulus(input, { runner });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.output.runtime.deterministicDegradations).toEqual([]);
   });
 });
 

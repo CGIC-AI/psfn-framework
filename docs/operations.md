@@ -1030,6 +1030,44 @@ prompts, private reasoning, or chain-of-thought. Investigation links go to the
 ordinary Sessions, Charge / Budget, and Models pages, which retain their own
 authorization and redaction contracts.
 
+## emo-sim Observer-Eval Sidecar
+
+The observer-eval sidecar wraps the external `emo_sim` engine as a bounded
+affect accumulator. It is TRACKING-ONLY: lever events and observations are
+non-authoritative telemetry read by the Garden admin surface; nothing in the
+live companion loop consumes them.
+
+Build pin (fail closed). `emo_sim` lives in a separate repo, so it cannot be
+pinned by a submodule ref here. `docker/Dockerfile.emosim` pins the build to an
+exact upstream commit via `ARG EXPECTED_EMOSIM_SHA` and a `verify` stage that
+reads the build context's own git SHA (`COPY .git` → `git rev-parse HEAD`) and
+refuses the build on any mismatch, empty SHA, or missing `.git`. There is no
+unpinned path. The verified SHA is baked into the image at
+`/app/EMOSIM_PINNED_SHA` as provenance. The comparison logic is unit-tested in
+`docker/emosim-verify-sha.sh`; to move the pin, change the ARG default in-repo
+(reviewed like any other change) and rebuild against a matching checkout.
+
+Read cadence. The adapter samples the server at 1 Hz
+(`EMOSIM_MIN_READ_CADENCE_MS`); there is no sub-second polling regardless of the
+emo_sim internal tick rate. The server ticks fast on its own wall clock, so at
+least one tick always lands between the two per-observation reads.
+
+Physiological-drive exclusion. Per the oth4 operator ruling, physiological
+drives (hunger, thirst, sleep_pressure) saturate without real physiological
+inputs and MUST NOT drive behavior. They are excluded from every lever and
+affect read: `would_rest` reads only mood arousal (never `drives.sleepPressure`;
+the old `wouldRest.sleepPressureThreshold` config key is removed and rejected
+fail-closed by the settings normalizer), and `would_message` reads social need
+and attachment-family dominance only. Drive values are still recorded in the
+snapshot for observability; recording is not consuming.
+
+Deterministic degradations. The `emo_sim` server API cannot honor
+`deterministic.disableDrives` (requested by the projection). Rather than
+silently drop it, the adapter records a structured degradation on every
+observation under `runtime.deterministicDegradations` (option, requested value,
+`honored: false`, reason, human detail) so downstream consumers can see the
+corpus condition (drives keep accumulating across the shared session).
+
 ## Backups And Integrity
 
 - Backup cadence and retention live in `backup.json` and `scheduler.json`.

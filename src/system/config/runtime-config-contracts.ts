@@ -78,7 +78,6 @@ export function createDefaultObserverEvalSidecarLeverSettings(): NonNullable<Obs
     },
     wouldRest: {
       enabled: true,
-      sleepPressureThreshold: 0.8,
       arousalThreshold: 0.8,
       sustainMs: 1_800_000,
     },

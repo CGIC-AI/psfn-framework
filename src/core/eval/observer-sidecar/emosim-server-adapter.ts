@@ -17,10 +17,12 @@
  *   token to configure, so none is silently defaulted here.
  * - afterTick semantics: the server ticks continuously, so afterStimulus is
  *   the immediate post-event read and afterTick is a re-read taken after a
- *   short fixed delay (DEFAULT_EMOSIM_AFTER_TICK_DELAY_MS < 1s) so at least
- *   one server tick (default 2 Hz) can land between the two reads. The
- *   procedure is fixed and cheap; wall-clock decay between reads is expected
- *   signal in server mode, not noise.
+ *   fixed 1 Hz delay (DEFAULT_EMOSIM_AFTER_TICK_DELAY_MS, floored at
+ *   EMOSIM_MIN_READ_CADENCE_MS = 1000ms). Per the oth4 operator ruling the
+ *   adapter reads at 1 Hz — no sub-second polling regardless of the emo_sim
+ *   internal tick rate — so at least one server tick always lands between the
+ *   two reads. The procedure is fixed and cheap; wall-clock decay between reads
+ *   is expected signal in server mode, not noise.
  */
 import { toErrorMessage } from '../../../shared/utils/errors.js';
 import { isRecord } from '../../../shared/utils/types.js';
@@ -36,6 +38,7 @@ import {
   EMOSIM_SNAPSHOT_FORMAT,
   EMOSIM_WORLD_SNAPSHOT_FORMAT,
   EmoSimSidecarUnavailableError,
+  describeUnsupportedDeterministicOptions,
   type EmoSimAdapterInput,
   type EmoSimEmotionName,
   type EmoSimEmotionSpecMetadata,
@@ -46,7 +49,17 @@ import {
 /** Neutral anchor NPC required because emo_sim sessions need >= 1 NPC. */
 export const EMOSIM_SERVER_ANCHOR_NPC_NAME = 'baseline-anchor' as const;
 export const EMOSIM_SERVER_ANCHOR_NPC_ARCHETYPE = 'serene_sage' as const;
-export const DEFAULT_EMOSIM_AFTER_TICK_DELAY_MS = 750;
+/**
+ * Minimum spacing between the two session reads. Operator ruling (oth4): the
+ * adapter reads at 1 Hz — no sub-second polling regardless of the emo_sim
+ * internal tick rate. The server ticks fast on its own wall clock; PSFN samples
+ * it once per second, so at least one tick always lands between afterStimulus
+ * and afterTick without hammering the API.
+ */
+export const EMOSIM_MIN_READ_CADENCE_MS = 1000;
+/** Ceiling on the afterTick spacing so a misconfig cannot stall the pipeline. */
+export const EMOSIM_MAX_READ_CADENCE_MS = 60_000;
+export const DEFAULT_EMOSIM_AFTER_TICK_DELAY_MS = EMOSIM_MIN_READ_CADENCE_MS;
 
 const SERVER_DRIVE_KEYS = Object.freeze([
   'hunger',
@@ -68,7 +81,11 @@ export interface EmoSimServerRunnerOptions {
   agentName: string;
   /** Per-HTTP-request timeout. */
   timeoutMs?: number;
-  /** Delay before the afterTick re-read; must stay below 1s. */
+  /**
+   * Delay before the afterTick re-read. Floored at 1 Hz
+   * (EMOSIM_MIN_READ_CADENCE_MS): no sub-second polling regardless of the
+   * emo_sim internal tick rate (oth4 operator ruling).
+   */
   afterTickDelayMs?: number;
   /** Test seams. */
   fetchImpl?: typeof fetch;
@@ -103,7 +120,8 @@ export class EmoSimServerRunner implements EmoSimRunner {
     this.afterTickDelayMs = normalizeTimeout(
       options.afterTickDelayMs ?? DEFAULT_EMOSIM_AFTER_TICK_DELAY_MS,
       'afterTickDelayMs',
-      999,
+      EMOSIM_MAX_READ_CADENCE_MS,
+      EMOSIM_MIN_READ_CADENCE_MS,
     );
     this.fetchImpl = options.fetchImpl ?? fetch;
     this.sleep = options.sleep ?? ((ms: number) => new Promise((resolve) => setTimeout(resolve, ms)));
@@ -146,6 +164,11 @@ export class EmoSimServerRunner implements EmoSimRunner {
           agentName: this.agentName,
         },
         emotionSpecs: bootstrap.emotionSpecs,
+        // Deterministic options the server cannot honor are recorded here, not
+        // silently dropped. disableDrives (set by projection.ts) has no server
+        // control, so it degrades to "drives keep accumulating" — a queryable
+        // corpus condition rather than a hidden fallback.
+        deterministicDegradations: describeUnsupportedDeterministicOptions(input.deterministic),
       },
       input,
       stimulus: input.stimulus,
@@ -491,9 +514,9 @@ function requireNonEmpty(value: string, label: string): string {
   return trimmed;
 }
 
-function normalizeTimeout(value: number, label: string, max: number): number {
-  if (!Number.isInteger(value) || value < 1 || value > max) {
-    throw new Error(`EmoSim server runner ${label} must be an integer between 1 and ${max}`);
+function normalizeTimeout(value: number, label: string, max: number, min = 1): number {
+  if (!Number.isInteger(value) || value < min || value > max) {
+    throw new Error(`EmoSim server runner ${label} must be an integer between ${min} and ${max}`);
   }
   return value;
 }

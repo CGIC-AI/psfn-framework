@@ -550,6 +550,21 @@ describe('settings', () => {
           levers: 'watch-everything',
         } as any,
       })).toThrow(/observerEvalSidecar\.levers/);
+
+      // Removed physiological-drive threshold: fail closed (no silently-ignored
+      // config) — would_rest reads mood.arousal only after the oth4 ruling.
+      expect(() => normalizeEditableSettings({
+        observerEvalSidecar: {
+          ...base,
+          levers: {
+            ...createDefaultObserverEvalSidecarLeverSettings(),
+            wouldRest: {
+              ...createDefaultObserverEvalSidecarLeverSettings().wouldRest,
+              sleepPressureThreshold: 0.8,
+            },
+          },
+        } as any,
+      })).toThrow(/observerEvalSidecar\.levers\.wouldRest\.sleepPressureThreshold/);
     });
 
     it('rejects enabled levers without observer sidecar persistence', () => {

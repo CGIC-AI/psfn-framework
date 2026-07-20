@@ -67,6 +67,7 @@
     "wiki:import": "tsx src/app/maintenance/import-wiki.ts",
     "projects:quarantine-legacy-artifacts": "tsx src/app/maintenance/quarantine-legacy-project-artifacts.ts",
     "projects:migrate-free-time-visibility": "tsx src/app/maintenance/migrate-free-time-visibility.ts",
+    "projects:migrate-manifests-v2": "tsx src/app/maintenance/migrate-project-manifests-v2.ts",
     "e2e": "tsx src/app/e2e/e2e-test.ts",
     "e2e:voice": "tsx src/app/e2e/e2e-voice-roundtrip.ts",
     "e2e:kube-self-update": "PSFN_K3D_E2E=1 vitest run src/app/e2e/kube-self-update-e2e.test.ts",

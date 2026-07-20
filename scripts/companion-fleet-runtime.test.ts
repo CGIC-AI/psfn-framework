@@ -70,7 +70,7 @@ describe('local companion fleet runtime', () => {
   it('rejects local network transport before any launch plan is emitted', () => {
     expect(() => resolveConfiguredLocalCompanionFleetRuntime(fleetEnv({
       ADMIN_TRANSPORT_MODE: 'network',
-    }))).toThrow(/local startup requires ADMIN_TRANSPORT_MODE=socket/u);
+    }))).toThrow(/Local startup requires ADMIN_TRANSPORT_MODE=socket/u);
   });
 
   it('rejects a fleet Garden without Fleet Auth before any launch plan is emitted', () => {

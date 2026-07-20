@@ -5,6 +5,7 @@
     "boundary/sandbox/capabilities/contracts.ts -> core/tools/analysis-workbench/types.ts",
     "core/agent/active-emanation-state.ts -> core/agent/presence-metadata.ts",
     "core/session/context-manifest.ts -> faculties/memory/withheld-summary.ts -> system/trust/policy.ts -> shared/contracts/runtime.ts",
+    "core/session/manager.ts -> core/session/manager/captured-session-owner.ts",
     "faculties/shards/manager.ts -> faculties/shards/port.ts"
   ]
 }

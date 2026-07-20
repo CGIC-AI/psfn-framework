@@ -12,12 +12,15 @@ function isSupportedIanaTimezone(timezone: string): boolean {
  * guard without decoding any other query field or malformed timezone.
  */
 export function serializeModelUsageQuery(params: URLSearchParams): string {
-  const serialized = params.toString();
-  const timezone = params.get('timezone');
-  if (!timezone?.includes('/') || !isSupportedIanaTimezone(timezone)) return serialized;
-  const encodedTimezone = new URLSearchParams({ timezone }).toString();
-  return serialized.replace(
-    encodedTimezone,
-    encodedTimezone.replaceAll('%2F', '/'),
-  );
+  return Array.from(params.entries(), ([key, value]) => {
+    const encodedEntry = new URLSearchParams([[key, value]]).toString();
+    if (
+      key !== 'timezone'
+      || !value.includes('/')
+      || !isSupportedIanaTimezone(value)
+    ) {
+      return encodedEntry;
+    }
+    return encodedEntry.replaceAll('%2F', '/');
+  }).join('&');
 }

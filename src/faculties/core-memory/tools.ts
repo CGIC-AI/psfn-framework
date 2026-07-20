@@ -222,8 +222,8 @@ export function createOrientTool(
       })),
       text: Type.Optional(Type.String({
         description:
-          'Block text for append or replace actions, or concern text for action=create_concern. '
-          + 'Create a concern in the same turn when deciding to follow up later, ask again tomorrow, reach out tonight, or track a short-term open thread.',
+          'Block text for append or replace actions, or open-thread text for action=create_concern. '
+          + 'Use action=create_concern in the same turn to note something to revisit when deciding to follow up later, ask again tomorrow, or reach out tonight.',
       })),
       separator: Type.Optional(
         Type.String({
@@ -259,34 +259,34 @@ export function createOrientTool(
       priority: Type.Optional(Type.Unsafe<ActiveConcernPriority>({
         type: 'string',
         enum: [...ACTIVE_CONCERN_PRIORITIES],
-        description: 'Concern priority for action=create_concern.',
+        description: 'Relative priority metadata for the open thread noted with action=create_concern; prefer salience for how present it should be.',
       })),
       status: Type.Optional(Type.Unsafe<ActiveConcernStatus>({
         type: 'string',
         enum: [...ACTIVE_CONCERN_STATUSES],
-        description: 'Concern lifecycle status for action=create_concern or action=transition_concern.',
+        description: 'Open-thread lifecycle status for action=create_concern or action=transition_concern.',
       })),
       salience: Type.Optional(Type.Number({
         minimum: 0,
         maximum: 1,
-        description: 'Concern salience for action=create_concern or action=transition_concern.',
+        description: 'How present the open thread should be, from 0 to 1, for action=create_concern or action=transition_concern.',
       })),
       sensitivity: Type.Optional(Type.Unsafe<ActiveConcernSensitivity>({
         type: 'string',
         enum: [...ACTIVE_CONCERN_SENSITIVITIES],
-        description: 'Concern sensitivity metadata for action=create_concern.',
+        description: 'Sensitivity metadata for the open thread noted with action=create_concern.',
       })),
       owner: Type.Optional(Type.Unsafe<ActiveConcernOwner>({
         type: 'string',
         enum: [...ACTIVE_CONCERN_OWNERS],
-        description: 'Concern lifecycle owner for action=create_concern.',
+        description: 'Lifecycle owner for the open thread noted with action=create_concern.',
       })),
       evidenceRefs: Type.Optional(Type.Array(CONCERN_EVIDENCE_REF_SCHEMA, {
         maxItems: 20,
-        description: 'Safe evidence references for concern creation, resolution, or transition. Do not include raw sensitive content.',
+        description: 'Safe evidence references for open-thread creation, resolution, or transition. Do not include raw sensitive content.',
       })),
       reopenResolved: Type.Optional(Type.Boolean({
-        description: 'For action=create_concern, true only when new evidence should reopen a matching terminal concern.',
+        description: 'For action=create_concern, true only when new evidence should reopen a matching terminal open thread.',
       })),
       nextReviewAt: Type.Optional(Type.String({
         minLength: 1,
@@ -297,24 +297,24 @@ export function createOrientTool(
       })),
       contactId: Type.Optional(Type.String({
         minLength: 1,
-        description: 'Optional concern contact scope for action=create_concern or action=list_concerns.',
+        description: 'Optional contact scope for open threads used by action=create_concern or action=list_concerns.',
       })),
       source: Type.Optional(Type.Union([
         Type.Literal('appraisal'),
         Type.Literal('agent'),
         Type.Literal('heartbeat'),
       ], {
-        description: 'Concern creation source for action=create_concern.',
+        description: 'Creation source for the open thread noted with action=create_concern.',
       })),
       includeResolved: Type.Optional(Type.Boolean({
-        description: 'Include resolved concerns for action=list_concerns.',
+        description: 'Include resolved open threads for action=list_concerns.',
       })),
       includeExpired: Type.Optional(Type.Boolean({
-        description: 'Include expired concerns for action=list_concerns.',
+        description: 'Include expired open threads for action=list_concerns.',
       })),
       concernId: Type.Optional(Type.String({
         minLength: 1,
-        description: 'Used for action=resolve_concern. Copy the exact concern.id from create_concern or list_concerns.',
+        description: 'Used for action=resolve_concern. Copy the exact open-thread id returned by create_concern or list_concerns.',
       })),
       concernIds: Type.Optional(Type.Array(Type.String({
         minLength: 1,

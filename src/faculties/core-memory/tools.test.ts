@@ -151,7 +151,21 @@ describe('orient tool', () => {
     });
 
     expect(tool.description).toBe(CANONICAL_TOOL_SURFACE_DESCRIPTIONS.orient);
-    expect((tool.parameters as any).properties.text.description).toContain('Create a concern in the same turn');
+  });
+
+  it('keeps model-facing orient prose gentle while preserving lifecycle action names', () => {
+    const tool = createOrientTool({
+      append: vi.fn(),
+      replace: vi.fn(),
+      rethink: vi.fn(),
+    });
+    const renderedToolSurface = `${tool.description}\n${JSON.stringify(tool.parameters)}`;
+
+    expect(renderedToolSurface).not.toMatch(/\b(?:concerns?|worr(?:y|ies|ied))\b/i);
+    expect(renderedToolSurface).toContain('create_concern');
+    expect(renderedToolSurface).toContain('list_concerns');
+    expect(renderedToolSurface).toContain('resolve_concern');
+    expect(renderedToolSurface).toContain('transition_concern');
   });
 
   it('appends to the requested orientation block', async () => {

@@ -93,6 +93,20 @@ function makeCatalogTool(name: string, requirement: CapabilityRequirementInput) 
   return { tool, execute };
 }
 
+function makeUnannotatedCatalogTool(name: string) {
+  const execute = vi.fn(async () => ({
+    content: [{ type: 'text' as const, text: `${name} ok` }],
+    details: { toolName: name },
+  }));
+  const tool = {
+    name,
+    description: `${name} test tool`,
+    parameters: {},
+    execute,
+  } as AgentTool<any>;
+  return { tool, execute };
+}
+
 function createEntry(
   id: string,
   rank: number,
@@ -354,33 +368,47 @@ describe('SubagentFaculty', () => {
   it.each<{
     tier: CapabilityTier;
     callable: string[];
+    grantedCapabilities: string[];
   }>([
     {
       tier: 'nursery',
       callable: ['core_identity_read', 'extended_git_read'],
+      grantedCapabilities: ['identity.read', 'git.read', 'issue.read'],
     },
     {
       tier: 'apprentice',
       callable: [
         'core_identity_read',
-        'core_issue_write',
         'extended_git_read',
         'extended_world_read',
+      ],
+      grantedCapabilities: [
+        'identity.read',
+        'internal.read',
+        'git.read',
+        'issue.read',
+        'world.read',
       ],
     },
     {
       tier: 'autonomous',
       callable: [
         'core_identity_read',
-        'core_issue_write',
         'extended_git_read',
         'extended_world_read',
-        'extended_companion_notify',
+      ],
+      grantedCapabilities: [
+        'identity.read',
+        'internal.read',
+        'git.read',
+        'issue.read',
+        'world.read',
       ],
     },
-  ])('assembles the full non-recursive catalog on the first $tier turn and capability-gates calls', async ({
+  ])('assembles the full non-recursive catalog with the general read posture on the first $tier turn', async ({
     tier,
     callable,
+    grantedCapabilities,
   }) => {
     const definitions = [
       { scope: 'core' as const, name: 'core_identity_read', requirement: 'identity.read' as const },
@@ -425,7 +453,9 @@ describe('SubagentFaculty', () => {
     expect([...firstTurnTools.keys()]).toEqual(expect.arrayContaining(catalogNames));
     expect(mockFirstPromptTools.map(tool => tool.name)).not.toContain('subagent');
     expect(auditTrail.append).toHaveBeenCalledWith('subagent.tools.injected', expect.objectContaining({
-      tier,
+      tier: 'custom',
+      parentTier: tier,
+      grantedCapabilities,
       tools: catalogNames,
     }));
 
@@ -437,6 +467,156 @@ describe('SubagentFaculty', () => {
       expect(definition.execute).toHaveBeenCalledTimes(authorized ? 1 : 0);
     }
     expect(blockedRecursive.execute).not.toHaveBeenCalled();
+  });
+
+  it('denies mutating and egress tools to a default general child of an autonomous parent', async () => {
+    const definitions = [
+      {
+        name: 'notify',
+        params: { action: 'send', delivery_channel: 'discord', content: 'outbound' },
+        requirement: 'external.discord' as const,
+        ...makeUnannotatedCatalogTool('notify'),
+      },
+      {
+        name: 'system',
+        params: { action: 'restart' },
+        requirement: 'lifecycle.restart' as const,
+        ...makeUnannotatedCatalogTool('system'),
+      },
+      {
+        name: 'schedule',
+        params: {
+          action: 'schedule_prompt',
+          name: 'deferred prompt',
+          prompt: 'Run this later.',
+          delay_minutes: 5,
+        },
+        requirement: 'identity.write.runtime' as const,
+        ...makeCatalogTool(
+          'schedule',
+          params => params.action === 'schedule_prompt'
+            ? 'identity.write.runtime'
+            : 'identity.read',
+        ),
+      },
+      {
+        name: 'fs',
+        params: { action: 'write', path: 'journal.md', content: 'mutation' },
+        requirement: 'git.write' as const,
+        ...makeUnannotatedCatalogTool('fs'),
+      },
+      {
+        name: 'beads',
+        params: { action: 'create', title: 'Child-created work' },
+        requirement: 'issue.write' as const,
+        ...makeUnannotatedCatalogTool('beads'),
+      },
+    ];
+    const faculty = new SubagentFaculty({
+      eventBus,
+      llmProvider: mockLLM(),
+      sessionStore,
+      embeddingService: null,
+      memoryProvider: null,
+      config: { ...TEST_CONFIG, capabilityTier: 'autonomous' },
+      parentSystemPrompt: 'test prompt',
+      toolCatalogProvider: () => ({
+        core: definitions.map(definition => definition.tool),
+        extended: [],
+      }),
+    });
+
+    await faculty.execute({
+      name: 'general-child',
+      task: 'inspect without mutating',
+      workSpec: buildSubagentWorkSpec(),
+    });
+
+    const installedByName = new Map(mockFirstPromptTools.map(tool => [tool.name, tool] as const));
+    for (const definition of definitions) {
+      const result = await installedByName.get(definition.name)!.execute(
+        `call-${definition.name}`,
+        definition.params,
+      );
+      expect(result.details).toMatchObject({
+        isError: true,
+        capabilityDenied: true,
+        missingTokens: [definition.requirement],
+      });
+      expect(definition.execute).not.toHaveBeenCalled();
+    }
+  });
+
+  it('grants an explicitly requested tool capability only when the parent grants it', async () => {
+    const writableFs = makeUnannotatedCatalogTool('fs');
+    const writableBeads = makeUnannotatedCatalogTool('beads');
+    const snapshotParentCapabilityGrant = vi.fn(() => Object.freeze({
+      tier: 'custom' as const,
+      customTokens: Object.freeze(['identity.read', 'git.write'] as const),
+      grantedTokens: Object.freeze(['identity.read', 'git.write'] as const),
+    }));
+    const faculty = new SubagentFaculty({
+      eventBus,
+      llmProvider: mockLLM(),
+      sessionStore,
+      embeddingService: null,
+      memoryProvider: null,
+      config: { ...TEST_CONFIG, capabilityTier: 'custom' },
+      parentSystemPrompt: 'test prompt',
+      snapshotParentCapabilityGrant,
+      toolCatalogProvider: () => ({
+        core: [writableFs.tool, writableBeads.tool],
+        extended: [],
+      }),
+    });
+
+    await faculty.execute({
+      name: 'repo-writer',
+      task: 'apply one requested patch',
+      capabilities: ['general', 'git.write'],
+      workSpec: buildSubagentWorkSpec(),
+    });
+
+    const installedByName = new Map(mockFirstPromptTools.map(tool => [tool.name, tool] as const));
+    const fsResult = await installedByName.get('fs')!.execute(
+      'call-fs-write',
+      { action: 'write', path: 'report.md', content: 'bounded output' },
+    );
+    expect(fsResult.details).toEqual({ toolName: 'fs' });
+    expect(writableFs.execute).toHaveBeenCalledTimes(1);
+
+    const beadsResult = await installedByName.get('beads')!.execute(
+      'call-beads-create',
+      { action: 'create', title: 'Unrequested mutation' },
+    );
+    expect(beadsResult.details).toMatchObject({
+      capabilityDenied: true,
+      missingTokens: ['issue.write'],
+    });
+    expect(writableBeads.execute).not.toHaveBeenCalled();
+    expect(snapshotParentCapabilityGrant).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects a child request for an explicit capability the parent does not grant', async () => {
+    const faculty = new SubagentFaculty({
+      eventBus,
+      llmProvider: mockLLM(),
+      sessionStore,
+      embeddingService: null,
+      memoryProvider: null,
+      config: { ...TEST_CONFIG, capabilityTier: 'apprentice' },
+      parentSystemPrompt: 'test prompt',
+    });
+
+    await expect(faculty.execute({
+      name: 'overreaching-writer',
+      task: 'write outside the parent grant',
+      capabilities: ['general', 'git.write'],
+      workSpec: buildSubagentWorkSpec(),
+    })).rejects.toThrow(/git\.write.*parent/i);
+    expect(promptSpy).not.toHaveBeenCalled();
+    expect(faculty.getActiveCount()).toBe(0);
+    expect(faculty.getRecentTasks()).toHaveLength(0);
   });
 
   it('caps explicit multi-turn subagent requests at the shared agent loop ceiling', async () => {

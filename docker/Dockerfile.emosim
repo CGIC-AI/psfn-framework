@@ -45,7 +45,7 @@
 # recovery with wall-clock downtime catch-up). /state is a PVC in k8s.
 
 # --- verify stage: fail-closed pin check against the context checkout ---------
-FROM python:3.12-slim AS verify
+FROM python:3.12.13-slim@sha256:57cd7c3a7a273101a6485ba99423ee568157882804b1124b4dd04266317710de AS verify
 
 # Pinned emo_sim upstream commit. Fail-closed default; override only for a
 # deliberate, reviewed bump.
@@ -82,7 +82,7 @@ RUN set -eu; \
     echo "emosim pin: OK (pinned ${EXPECTED_EMOSIM_SHA})"
 
 # --- runtime stage ------------------------------------------------------------
-FROM python:3.12-slim
+FROM python:3.12.13-slim@sha256:57cd7c3a7a273101a6485ba99423ee568157882804b1124b4dd04266317710de
 
 RUN groupadd --gid 999 emosim \
     && useradd --uid 999 --gid 999 --create-home --home-dir /home/emosim emosim \

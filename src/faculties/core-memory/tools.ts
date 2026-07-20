@@ -11,6 +11,7 @@ import {
   ACTIVE_CONCERN_SENSITIVITIES,
   ACTIVE_CONCERN_STATUSES,
   isConcernTerminalStatus,
+  type ActiveConcern,
   type ActiveConcernEvidenceRef,
   type ActiveConcernOwner,
   type ActiveConcernPriority,
@@ -89,7 +90,7 @@ export interface OrientToolOptions {
    * VAD as resolutionVAD (symmetric to formation capture). Undefined when no
    * current state is available — no fabrication (charter 8.3).
    */
-  resolutionVadProvider?: () => ActiveConcernVAD | undefined;
+  resolutionVadProvider?: (concern: ActiveConcern) => ActiveConcernVAD | undefined;
   /** Event bus for the resolution-as-appraisal relief-delta event (vw3w.1). */
   eventBus?: EventBus | null;
 }
@@ -511,10 +512,13 @@ export function createOrientTool(
             }, null, 2), true);
           }
           const concernStore = requireConcernStore(options.concernStore);
-          const resolutionVAD = options.resolutionVadProvider?.();
           const resolved = [];
           const missing = [];
           for (const concernId of uniqueConcernIds) {
+            const beforeResolution = await concernStore.getById(concernId);
+            const resolutionVAD = beforeResolution
+              ? options.resolutionVadProvider?.(beforeResolution)
+              : undefined;
             const concern = await concernStore.resolveConcern(concernId, {
               outcome: params.outcome,
               evidenceRefs: params.evidenceRefs,
@@ -560,12 +564,14 @@ export function createOrientTool(
           const concernStore = requireConcernStore(options.concernStore);
           // vw3w.1: a transition into a terminal status is also a resolution —
           // capture the live VAD so the arc is complete on this path too.
-          const transitionResolutionVAD = isConcernTerminalStatus(params.status)
-            ? options.resolutionVadProvider?.()
-            : undefined;
           const transitioned = [];
           const missing = [];
           for (const concernId of uniqueConcernIds) {
+            const beforeTransition = await concernStore.getById(concernId);
+            const transitionResolutionVAD = isConcernTerminalStatus(params.status)
+              && beforeTransition
+              ? options.resolutionVadProvider?.(beforeTransition)
+              : undefined;
             const concern = await concernStore.transitionConcernStatus(concernId, {
               status: params.status,
               outcome: params.outcome,

@@ -52,18 +52,59 @@ export interface GroomConcernSetOptions {
    * formation. Returns undefined when no current state is available — the arc
    * is then persisted without a resolution snapshot (no fabrication).
    */
-  resolutionVadProvider?: () => ActiveConcernVAD | undefined;
+  resolutionVadProvider?: (concern: ActiveConcern, asOf: string) => ActiveConcernVAD | undefined;
+}
+
+interface ConcernResolutionState {
+  emotional: {
+    vad: ActiveConcernVAD;
+    telemetry: {
+      status: 'trusted' | 'uncertain' | 'suppressed';
+      observedAtMs: number | null;
+      staleAfterMs: number;
+    };
+  };
+  relational: { contactId: string | null };
+}
+
+/**
+ * Resolve a background-safe VAD only when the latest internal state belongs to
+ * this concern's DM contact and remains inside its own telemetry freshness
+ * window. Global concerns and missing/untrusted/future snapshots are omitted.
+ */
+export function resolveCurrentInternalStateConcernVAD(
+  concern: Pick<ActiveConcern, 'id' | 'contactId'>,
+  state: ConcernResolutionState | null | undefined,
+  asOf: string,
+): ActiveConcernVAD | undefined {
+  if (!state || !concern.contactId || state.relational.contactId !== concern.contactId) {
+    return undefined;
+  }
+  const { telemetry, vad } = state.emotional;
+  const asOfMs = Date.parse(asOf);
+  const observedAtMs = telemetry.observedAtMs;
+  if (
+    telemetry.status !== 'trusted'
+    || observedAtMs === null
+    || !Number.isFinite(asOfMs)
+    || observedAtMs > asOfMs
+    || asOfMs - observedAtMs > telemetry.staleAfterMs
+  ) {
+    return undefined;
+  }
+  return { valence: vad.valence, arousal: vad.arousal, dominance: vad.dominance };
 }
 
 export async function groomConcernSet(options: GroomConcernSetOptions): Promise<ConcernGroomingResult> {
   const asOf = normalizeAsOf(options.asOf);
-  const resolutionVAD = options.resolutionVadProvider?.();
   const staleResolved = await options.concernStore.resolveStaleConcerns({
     asOf,
     limit: 200,
     evidenceRefs: [{ kind: 'runtime', ref: `concern-grooming:stale:${asOf}` }],
     outcome: STALE_RESOLUTION_OUTCOME,
-    ...(resolutionVAD ? { resolutionVAD } : {}),
+    ...(options.resolutionVadProvider
+      ? { resolutionVADProvider: options.resolutionVadProvider }
+      : {}),
   });
 
   const maxActiveConcerns = normalizeMaxActiveConcerns(options.maxActiveConcerns);
@@ -80,6 +121,7 @@ export async function groomConcernSet(options: GroomConcernSetOptions): Promise<
   const overflow = activeAfterStale.filter(concern => !keptIds.has(concern.id));
   const capResolved: ActiveConcern[] = [];
   for (const concern of overflow) {
+    const resolutionVAD = options.resolutionVadProvider?.(concern, asOf);
     const resolved = await options.concernStore.resolveConcern(concern.id, {
       outcome: CAP_RESOLUTION_OUTCOME,
       resolvedAt: asOf,
@@ -163,7 +205,7 @@ export interface RegisterConcernGroomingOperationOptions {
   routeDispatcher?: ConcernRouteDispatcher;
   routeTarget?: ConcernRouteTarget;
   /** Live emotional VAD provider for resolution-as-appraisal (vw3w.1). */
-  resolutionVadProvider?: () => ActiveConcernVAD | undefined;
+  resolutionVadProvider?: (concern: ActiveConcern, asOf: string) => ActiveConcernVAD | undefined;
 }
 
 async function executeConcernGrooming(

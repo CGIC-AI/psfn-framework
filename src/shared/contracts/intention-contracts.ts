@@ -83,6 +83,8 @@ export interface ActiveConcern {
    * fabricated — charter 8.3).
    */
   resolutionVAD?: ActiveConcernVAD;
+  /** Stable identity for one active-to-terminal lifecycle generation. */
+  resolutionGenerationId?: string;
   lastReviewedAt?: string;
   nextReviewAt?: string;
   mergedFromIds?: string[];

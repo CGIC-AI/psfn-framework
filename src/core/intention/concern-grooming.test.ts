@@ -4,7 +4,11 @@ import { createEligibilityGate } from '../../system/capabilities/eligibility.js'
 import { BackgroundMaintenanceRegistry } from '../scheduler/background-maintenance.js';
 import { Scheduler } from '../scheduler/scheduler.js';
 import { createTestPostgresIntentionPorts } from '../../test-support/postgres-intention-ports.js';
-import { groomConcernSet, registerConcernGroomingOperation } from './concern-grooming.js';
+import {
+  groomConcernSet,
+  registerConcernGroomingOperation,
+  resolveCurrentInternalStateConcernVAD,
+} from './concern-grooming.js';
 
 function makeStore() {
   let counter = 0;
@@ -23,6 +27,49 @@ const activeGroomingTexts = [
 ];
 
 describe('concern grooming', () => {
+  it('only uses a fresh emotional snapshot from the concern contact scope', () => {
+    const concern = {
+      id: 'concern-a',
+      contactId: 'contact-a',
+    };
+    const state = {
+      emotional: {
+        vad: { valence: 0.3, arousal: -0.2, dominance: 0.1 },
+        telemetry: {
+          status: 'trusted',
+          observedAtMs: Date.parse('2026-06-29T11:55:00.000Z'),
+          staleAfterMs: 10 * 60_000,
+        },
+      },
+      relational: { contactId: 'contact-a' },
+    };
+
+    expect(resolveCurrentInternalStateConcernVAD(
+      concern,
+      state,
+      '2026-06-29T12:00:00.000Z',
+    )).toEqual({ valence: 0.3, arousal: -0.2, dominance: 0.1 });
+    expect(resolveCurrentInternalStateConcernVAD(
+      { ...concern, contactId: 'contact-b' },
+      state,
+      '2026-06-29T12:00:00.000Z',
+    )).toBeUndefined();
+    expect(resolveCurrentInternalStateConcernVAD(
+      concern,
+      {
+        ...state,
+        emotional: {
+          ...state.emotional,
+          telemetry: {
+            ...state.emotional.telemetry,
+            observedAtMs: Date.parse('2026-06-29T11:40:00.000Z'),
+          },
+        },
+      },
+      '2026-06-29T12:00:00.000Z',
+    )).toBeUndefined();
+  });
+
   it('resolves stale concerns and trims active overflow as maintenance', async () => {
     const concernStore = makeStore();
     for (const [i, text] of activeGroomingTexts.entries()) {
@@ -150,5 +197,36 @@ describe('concern grooming', () => {
     expect(appraisals[0].reliefDelta.valence).toBeCloseTo(0.7, 10);
     expect(appraisals[0].reliefDelta.arousal).toBeCloseTo(-0.3, 10);
     expect(appraisals[0].reliefDelta.dominance).toBeCloseTo(0.3, 10);
+  });
+
+  it('requests a scoped resolution VAD separately for each retired concern', async () => {
+    const concernStore = makeStore();
+    const contactA = await concernStore.create({
+      text: 'Expired contact A concern',
+      contactId: 'contact-a',
+      createdAt: '2026-06-28T10:00:00.000Z',
+      expiresAt: '2026-06-29T11:00:00.000Z',
+    });
+    const contactB = await concernStore.create({
+      text: 'Expired contact B concern',
+      contactId: 'contact-b',
+      createdAt: '2026-06-28T10:00:00.000Z',
+      expiresAt: '2026-06-29T11:00:00.000Z',
+    });
+
+    await groomConcernSet({
+      concernStore,
+      asOf: '2026-06-29T12:00:00.000Z',
+      resolutionVadProvider: concern => concern.contactId === 'contact-a'
+        ? { valence: 0.4, arousal: 0.1, dominance: 0.2 }
+        : undefined,
+    });
+
+    expect((await concernStore.getById(contactA.id))?.resolutionVAD).toEqual({
+      valence: 0.4,
+      arousal: 0.1,
+      dominance: 0.2,
+    });
+    expect((await concernStore.getById(contactB.id))?.resolutionVAD).toBeUndefined();
   });
 });

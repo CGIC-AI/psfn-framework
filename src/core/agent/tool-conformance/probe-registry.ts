@@ -395,6 +395,7 @@ export const TOOL_CONFORMANCE_ACTION_REGISTRY:
     send: SCHEMA_ASSERT,
     consider: SCHEMA_ASSERT,
     approval_request: SCHEMA_ASSERT,
+    clarify: SCHEMA_ASSERT,
   },
   generate_image: {
     generate: SCHEMA_ASSERT,

@@ -27,7 +27,12 @@ import type { TurnRecord } from '../../../shared/contracts/runtime.js';
 import type { ContactStorePort } from '../../../core/contacts/contact-store-port.js';
 import type { Contact } from '../../../core/contacts/types.js';
 import type { ConcernStorePort } from '../../../core/intention/concern-store-port.js';
-import { AdminSessionDataService, AdminSessionTurnNotFoundError } from './session-service.js';
+import {
+  AdminSessionDataService,
+  AdminSessionNotFoundError,
+  AdminSessionTurnNotFoundError,
+} from './session-service.js';
+import type { FleetGardenRequestContext } from '../garden-request-context.js';
 import {
   buildSubsystemOutputRef,
   buildTurnSubsystemProjectionRef,
@@ -1672,5 +1677,239 @@ describe('AdminSessionDataService', () => {
       expect(details.sessionId).toBe(channel.sessionId);
       expect(details.channelId).toBe(channelId);
     }
+  });
+});
+
+describe('subject-bound session projection (88u3)', () => {
+  const COMPANION_ID = '11111111-1111-4111-8111-111111111111';
+  let dir: string;
+  let store: SessionStore;
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'admin-session-subject-'));
+    store = new SessionStore(dir);
+  });
+
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  function fleetSessionContext(overrides: {
+    contactId: string;
+    companionId?: string;
+    routeId?: string;
+    subjectRelation?: FleetGardenRequestContext['subjectRelation'];
+    role?: FleetGardenRequestContext['actor']['role'];
+  }): FleetGardenRequestContext {
+    const subjectRelation = overrides.subjectRelation ?? 'self_or_co_subject';
+    const authorization = Object.freeze({
+      action: 'sessions.read' as const,
+      baseRole: 'member' as const,
+      resource: Object.freeze({ scope: 'personal_workspace' as const, area: 'sessions' as const }),
+      subjectRelation,
+      requirements: Object.freeze({
+        assurance: 'oauth' as const,
+        confirmation: 'none' as const,
+        approvals: Object.freeze([]),
+      }),
+      publicAccess: 'never' as const,
+      recoveryAccess: 'forbidden' as const,
+    });
+    return Object.freeze({
+      kind: 'fleet_principal' as const,
+      requestId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      decisionId: 'cccccccc-dddd-4ddd-8ddd-dddddddddddd',
+      authorizationEventId: 'event-principal-a',
+      resolvedAt: '2030-01-01T00:00:00.000Z',
+      versions: Object.freeze({
+        authorityGeneration: 1,
+        globalAuthEpoch: 1,
+        sessionAuthnVersion: 1,
+        sessionAuthzVersion: 1,
+        bindingVersion: 1,
+        grantVersion: 1,
+        policyVersion: 1,
+      }),
+      issuedAt: 1,
+      expiresAt: 2,
+      actor: Object.freeze({
+        kind: 'fleet_principal' as const,
+        principalId: 'principal-a',
+        provider: 'discord' as const,
+        providerSubjectId: 'provider-principal-a',
+        contactId: overrides.contactId,
+        contactBindingId: 'binding-principal-a',
+        role: overrides.role ?? 'member',
+        operatorGrantId: 'grant-principal-a',
+        sessionRecordId: 'session-principal-a',
+        sessionAssurance: 'oauth' as const,
+      }),
+      action: 'sessions.read' as const,
+      resource: Object.freeze({
+        routeId: overrides.routeId ?? 'GET /api/admin/sessions',
+        scope: 'personal_workspace' as const,
+        area: 'sessions' as const,
+        companionId: overrides.companionId ?? COMPANION_ID,
+        pathParams: Object.freeze({}),
+        query: Object.freeze({}),
+      }),
+      subjectRelation,
+      authorization,
+    });
+  }
+
+  function makeContact(id: string): Contact {
+    return {
+      id,
+      displayName: `Contact ${id}`,
+      trustLevel: 'trusted',
+      relationshipType: 'friend',
+      firstSeen: '2026-01-01T00:00:00.000Z',
+      lastSeen: '2026-01-01T00:00:00.000Z',
+    } as Contact;
+  }
+
+  function makeSubjectFixture() {
+    const contactA = makeContact('contact-a');
+    const contactB = makeContact('contact-b');
+    const contactsByIdentity = new Map<string, Contact>([
+      ['discord:user-a', contactA],
+      ['discord:user-b', contactB],
+    ]);
+    const contactStore = {
+      listAll: vi.fn(async () => [contactA, contactB]),
+      getByChannelIdentity: vi.fn(async (channel: string, userId: string) => (
+        contactsByIdentity.get(`${channel}:${userId}`)
+      )),
+    } as unknown as ContactStorePort;
+
+    store.append({
+      channelId: 'discord:111111111111111111',
+      role: 'user',
+      content: 'private message from subject A',
+      timestamp: 1_700_000_000_001,
+      authorId: 'user-a',
+    });
+    store.append({
+      channelId: 'discord:222222222222222222',
+      role: 'user',
+      content: 'private message from subject B',
+      timestamp: 1_700_000_000_002,
+      authorId: 'user-b',
+    });
+
+    const service = new AdminSessionDataService({
+      sessionStore: store,
+      sessionManager: new SessionManager(store, makeConfig({ dataDir: dir })),
+      eventBus: new EventBus(),
+      contactStore,
+      config: makeConfig({ dataDir: dir, companionId: COMPANION_ID }),
+    });
+    return { service, contactA, contactB };
+  }
+
+  it('lists only the sessions linked to the fleet subject contact', async () => {
+    const { service } = makeSubjectFixture();
+
+    const fleetList = await service.listSessions(fleetSessionContext({ contactId: 'contact-a' }));
+    expect(fleetList.channels.map(channel => channel.channelId))
+      .toEqual(['discord:111111111111111111']);
+
+    // Legacy operator context keeps the unpartitioned single-companion view.
+    const legacyList = await service.listSessions();
+    expect(legacyList.channels).toHaveLength(2);
+  });
+
+  it('surfaces another subject session as not found across every fleet read path', async () => {
+    const { service } = makeSubjectFixture();
+    const context = fleetSessionContext({ contactId: 'contact-a' });
+    const foreignSessionId = 'discord:222222222222222222';
+
+    await expect(service.getSessionDetail(foreignSessionId, context))
+      .rejects.toBeInstanceOf(AdminSessionNotFoundError);
+    await expect(service.getSessionMessages(foreignSessionId, {}, context))
+      .rejects.toBeInstanceOf(AdminSessionNotFoundError);
+    await expect(service.getSessionMessagesForAdminRead(foreignSessionId, {}, context))
+      .rejects.toBeInstanceOf(AdminSessionNotFoundError);
+    await expect(service.searchSessionMessages(foreignSessionId, 'private', 10, context))
+      .rejects.toBeInstanceOf(AdminSessionNotFoundError);
+    await expect(service.getSessionTurnDetail(foreignSessionId, 'turn-1', context))
+      .rejects.toBeInstanceOf(AdminSessionNotFoundError);
+  });
+
+  it('serves the subject own session transcript without leaking other subjects', async () => {
+    const { service } = makeSubjectFixture();
+    const context = fleetSessionContext({ contactId: 'contact-a' });
+
+    const detail = await service.getSessionDetail('discord:111111111111111111', context);
+    expect(detail.channel.linkedContactId).toBe('contact-a');
+
+    const messages = await service.getSessionMessages('discord:111111111111111111', {}, context);
+    expect(messages.messages.map(message => message.content))
+      .toEqual(['private message from subject A']);
+    expect(JSON.stringify(messages)).not.toContain('subject B');
+  });
+
+  it('does not let an owner role widen session visibility beyond the subject', async () => {
+    const { service } = makeSubjectFixture();
+    const owner = fleetSessionContext({ contactId: 'contact-a', role: 'owner' });
+
+    const listed = await service.listSessions(owner);
+    expect(listed.channels.map(channel => channel.channelId))
+      .toEqual(['discord:111111111111111111']);
+    await expect(service.getSessionMessages('discord:222222222222222222', {}, owner))
+      .rejects.toBeInstanceOf(AdminSessionNotFoundError);
+  });
+
+  it('fails closed when the request companion does not match the bound companion', async () => {
+    const { service } = makeSubjectFixture();
+    const crossCompanion = fleetSessionContext({
+      contactId: 'contact-a',
+      companionId: '22222222-2222-4222-8222-222222222222',
+    });
+
+    await expect(service.listSessions(crossCompanion))
+      .rejects.toThrow(/companion/u);
+    await expect(service.getSessionMessages('discord:111111111111111111', {}, crossCompanion))
+      .rejects.toThrow(/companion/u);
+  });
+
+  it('fails closed without an explicit request-local subject relation', async () => {
+    const { service } = makeSubjectFixture();
+    const wrongRelation = fleetSessionContext({
+      contactId: 'contact-a',
+      subjectRelation: 'current_companion',
+    });
+
+    await expect(service.listSessions(wrongRelation))
+      .rejects.toThrow(/subject-bound session projection/u);
+  });
+
+  it('keeps unpartitioned session surfaces fail closed for fleet principals', async () => {
+    const { service } = makeSubjectFixture();
+    const context = fleetSessionContext({ contactId: 'contact-a' });
+
+    await expect(service.listSessionRoutes(context))
+      .rejects.toThrow(/subject-bound session projection/u);
+    await expect(service.listCogSecEvents(context))
+      .rejects.toThrow(/subject-bound session projection/u);
+    await expect(service.resetSourceChannelSession({
+      sourceChannelId: 'discord:111111111111111111',
+      reason: 'test',
+    }, context)).rejects.toThrow(/subject-bound session projection/u);
+    await expect(service.previewCogSecRemediation({
+      sourceChannelId: 'discord:111111111111111111',
+      reason: 'test',
+      type: 'prompt_injection',
+      severity: 'high',
+      messageIds: [1],
+    }, context)).rejects.toThrow(/subject-bound session projection/u);
+    await expect(service.applyCogSecRemediation({
+      sourceChannelId: 'discord:111111111111111111',
+      reason: 'test',
+      type: 'prompt_injection',
+      severity: 'high',
+      messageIds: [1],
+    }, context)).rejects.toThrow(/subject-bound session projection/u);
   });
 });

@@ -218,20 +218,74 @@ export function requireCompanionBoundFleetGardenContext(
 }
 
 /**
+ * Session routes served through the subject-bound session projection (88u3).
+ * Every id listed here MUST be handled by a session service that scopes rows
+ * to the request's authenticated `actor.contactId`; anything else in the
+ * sessions area (route recovery, CogSec remediation, session-recovery pages)
+ * stays on the unpartitioned service and remains fail closed.
+ */
+const SUBJECT_BOUND_SESSION_ROUTE_IDS: ReadonlySet<string> = new Set([
+  'GET /api/admin/sessions',
+  'GET /api/admin/sessions/:channelId',
+  'GET /api/admin/sessions/:channelId/detail',
+  'GET /api/admin/sessions/:channelId/search',
+  'GET /api/admin/sessions/:channelId/turns/:turnId',
+  'GET /sessions',
+  'HEAD /sessions',
+]);
+
+/**
+ * Episodic-memory reads served through the subject-authorized episodic store
+ * (88u3): the episodic admin service filters every episode, arc, and thread to
+ * the request's authenticated `actor.contactId` via `participantContactIds`.
+ */
+const SUBJECT_AUTHORIZED_EPISODIC_ROUTE_ID_PREFIX = 'GET /api/admin/episodic-memory/';
+const SUBJECT_AUTHORIZED_EPISODIC_ROUTE_IDS: ReadonlySet<string> = new Set([
+  'GET /api/admin/episodic-memory/episodes',
+  'GET /api/admin/episodic-memory/threads',
+  'GET /episodic-memory',
+  'HEAD /episodic-memory',
+]);
+
+/**
+ * A request-local subject relation is the explicit selector the projected
+ * services key their row scoping on; `current_companion`/`none` routes carry
+ * no subject and must never reach a subject-scoped service.
+ */
+function hasExplicitSubjectRelation(context: GardenRequestContext): boolean {
+  return context.subjectRelation === 'self' || context.subjectRelation === 'self_or_co_subject';
+}
+
+function isSubjectBoundSessionRoute(context: GardenRequestContext): boolean {
+  return SUBJECT_BOUND_SESSION_ROUTE_IDS.has(context.resource.routeId)
+    && hasExplicitSubjectRelation(context);
+}
+
+function isSubjectAuthorizedEpisodicRoute(context: GardenRequestContext): boolean {
+  if (!hasExplicitSubjectRelation(context)) return false;
+  return SUBJECT_AUTHORIZED_EPISODIC_ROUTE_IDS.has(context.resource.routeId)
+    || context.resource.routeId.startsWith(SUBJECT_AUTHORIZED_EPISODIC_ROUTE_ID_PREFIX);
+}
+
+/**
  * Legacy services that still expose unpartitioned session or alternate-memory
  * stores are not safe to call for a fleet principal. They remain fail closed
- * until their own subject selectors are explicit.
+ * until their own subject selectors are explicit. Session reads and episodic
+ * memory pass only through their subject-scoped projections (88u3); route
+ * recovery, CogSec remediation, group memory, and shard review stay denied.
  */
 export function gardenRequestServiceBoundaryDenial(
   context: GardenRequestContext,
 ): string | null {
   if (context.kind !== 'fleet_principal') return null;
   if (context.resource.area === 'sessions') {
+    if (isSubjectBoundSessionRoute(context)) return null;
     return 'Fleet session access requires a subject-bound session projection';
   }
   if (context.resource.area === 'memory'
     && !context.resource.routeId.includes('/api/admin/memory')
     && !context.resource.routeId.endsWith(' /memory')
+    && !isSubjectAuthorizedEpisodicRoute(context)
     && privacyBreakGlassResourceKindForRoute(context.resource.routeId) !== 'memory') {
     return 'Fleet memory access requires the subject-authorized memory service';
   }

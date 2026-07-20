@@ -489,7 +489,6 @@ export function evaluateAccountRosterAuthorization(input: {
     request.companionId,
   );
   if (!entry) return undefined;
-  if (session.providerSubjectId !== entry.providerSubjectId) return undefined;
   if (!fleetAuthRoleAllowsAction(entry.role, request.action)
     || input.disabledActionsByRole[entry.role].includes(request.action)) {
     return undefined;

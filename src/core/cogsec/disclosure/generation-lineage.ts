@@ -82,6 +82,13 @@ export interface DisclosureMemorySource {
   readonly subjectContactId?: string;
   /** Channel the memory was formed in (PurrMemory.provenance.channelId). */
   readonly sourceChannelId?: string;
+  /**
+   * The classification epoch the source channel was at when the memory was
+   * formed (jp36.6.3). Stamps the room constraint so the memory is auto-eligible
+   * to that room only while the room remains at that epoch; absent ⇒ epoch
+   * UNKNOWN (fail closed against an epoch-tracked destination).
+   */
+  readonly sourceChannelEpoch?: number;
   readonly provenanceRefs?: readonly string[];
 }
 
@@ -174,14 +181,40 @@ export function assertScopedDisclosureConstraints(
 }
 
 /**
+ * Coerce an admitted classification epoch: a finite number stamps the
+ * per-channel `channelEpochs` entry so the decision layer's epoch gate (jp36.6.3)
+ * can deny prior-epoch content; anything else is UNKNOWN (undefined), which fails
+ * closed against an epoch-tracked destination and is inert against an untracked
+ * one. The epoch is a system/operator fact captured at admission — never a
+ * model-asserted value.
+ */
+function normalizeAdmittedEpoch(epoch: number | undefined): number | undefined {
+  return typeof epoch === 'number' && Number.isFinite(epoch) ? epoch : undefined;
+}
+
+function scopedRoomConstraint(
+  kind: 'invite_only_room' | 'public_room',
+  channelId: string,
+  epoch: number | undefined,
+): DisclosureDestinationConstraint {
+  const admitted = normalizeAdmittedEpoch(epoch);
+  return admitted !== undefined
+    ? { kind, channelIds: [channelId], channelEpochs: { [channelId]: admitted } }
+    : { kind, channelIds: [channelId] };
+}
+
+/**
  * Derive a scoped room destination for a source channel, gated by the channel's
  * disclosure ceiling. Returns `null` for private channels (no outward room),
  * for a blank channel id, or when the source sensitivity exceeds the channel's
- * ceiling. Never returns an unscoped constraint.
+ * ceiling. Never returns an unscoped constraint. When the admitting caller knows
+ * the channel's classification epoch (jp36.6.3) it is stamped so the content is
+ * auto-eligible to the room only while the room remains at that epoch.
  */
 function sourceChannelRoomConstraint(
   channelId: string | undefined,
   sensitivity: SensitivityLevel,
+  channelEpoch?: number,
 ): DisclosureDestinationConstraint | null {
   const id = channelId?.trim();
   if (!id) return null;
@@ -189,8 +222,8 @@ function sourceChannelRoomConstraint(
   // A memory more sensitive than the channel may disclose can never flow back to
   // that room automatically.
   if (!sensitivityAtMost(sensitivity, getVisibilityDisclosureCeiling(disclosure))) return null;
-  if (disclosure.channelPrivacy === 'invite_only') return { kind: 'invite_only_room', channelIds: [id] };
-  if (disclosure.channelPrivacy === 'public') return { kind: 'public_room', channelIds: [id] };
+  if (disclosure.channelPrivacy === 'invite_only') return scopedRoomConstraint('invite_only_room', id, channelEpoch);
+  if (disclosure.channelPrivacy === 'public') return scopedRoomConstraint('public_room', id, channelEpoch);
   return null;
 }
 
@@ -207,6 +240,7 @@ function sourceChannelRoomConstraint(
  */
 export function sessionHistoryDisclosureContribution(
   scope: ConversationScope,
+  options?: { readonly channelEpoch?: number },
 ): DisclosureSourceContribution {
   const sensitivity = getVisibilityDisclosureCeiling(scope.envelope);
   const permittedDestinations: DisclosureDestinationConstraint[] = [];
@@ -219,9 +253,9 @@ export function sessionHistoryDisclosureContribution(
       subjectContactIds.push(contactId);
     }
   } else if (scope.envelope.channelPrivacy === 'invite_only') {
-    permittedDestinations.push({ kind: 'invite_only_room', channelIds: [scope.channelId] });
+    permittedDestinations.push(scopedRoomConstraint('invite_only_room', scope.channelId, options?.channelEpoch));
   } else if (scope.envelope.channelPrivacy === 'public') {
-    permittedDestinations.push({ kind: 'public_room', channelIds: [scope.channelId] });
+    permittedDestinations.push(scopedRoomConstraint('public_room', scope.channelId, options?.channelEpoch));
   }
 
   assertScopedDisclosureConstraints(permittedDestinations, `session:${scope.key}`);
@@ -256,7 +290,11 @@ export function memoryDisclosureContribution(
     subjectContactIds.push(subjectContactId);
   }
 
-  const roomConstraint = sourceChannelRoomConstraint(source.sourceChannelId, source.sensitivity);
+  const roomConstraint = sourceChannelRoomConstraint(
+    source.sourceChannelId,
+    source.sensitivity,
+    source.sourceChannelEpoch,
+  );
   if (roomConstraint) permittedDestinations.push(roomConstraint);
 
   assertScopedDisclosureConstraints(permittedDestinations, source.ref);
@@ -364,12 +402,23 @@ export function toolResultDisclosureContribution(
 export function buildGenerationDisclosureLineage(input: {
   context: GenerationDisclosureContext;
   conversationScope: ConversationScope;
+  /**
+   * Current classification epoch of the conversation's channel (jp36.6.3), when
+   * epoch-tracked. Stamps the session-history room constraint so this turn's own
+   * content stays auto-eligible to the room only while the room remains at this
+   * epoch. Absent ⇒ epoch UNKNOWN for the session channel (fail closed against an
+   * epoch-tracked destination, inert against an untracked one).
+   */
+  conversationChannelEpoch?: number;
   memorySources: readonly DisclosureMemorySource[];
   wikiSources?: readonly DisclosureWikiSource[];
   toolResultSources?: readonly DisclosureToolResultSource[];
 }): DisclosureLineage {
   let lineage = beginDisclosureAccumulation(input.context);
-  lineage = accumulateDisclosureSource(lineage, sessionHistoryDisclosureContribution(input.conversationScope));
+  lineage = accumulateDisclosureSource(
+    lineage,
+    sessionHistoryDisclosureContribution(input.conversationScope, { channelEpoch: input.conversationChannelEpoch }),
+  );
   for (const source of input.memorySources) {
     lineage = accumulateDisclosureSource(lineage, memoryDisclosureContribution(source));
   }

@@ -119,7 +119,8 @@ under the env var name its account references.
 
 ### Unified fleet human origin
 
-With `PSFN_FLEET_AUTH=1`, the gateway is the only browser origin. Open the
+With fleet auth enabled (system-owned `fleet-auth.json` present; file presence
+is the single source of truth), the gateway is the only browser origin. Open the
 exact HTTPS `canonicalOrigin` from `fleet-auth.json` at `/fleet`; unauthenticated
 browser requests are sent through the gateway-owned OAuth login. Authorized
 Garden routes are `/companions/<companion-uuid>/garden/...`. The optional static

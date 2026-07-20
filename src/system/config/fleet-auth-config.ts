@@ -739,16 +739,24 @@ export function validateFleetAuthConfig(value: unknown, sourcePath: string): Fle
   };
 }
 
-export function isFleetAuthEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+export type FleetAuthEnvFlagState =
+  | { kind: 'unset' }
+  | { kind: 'set'; value: boolean }
+  | { kind: 'invalid'; raw: string };
+
+/**
+ * Read the deprecated {@link FLEET_AUTH_ENV_VAR} env flag without deciding
+ * enablement. Presence of {@link FLEET_AUTH_FILE_NAME} is the single source of
+ * truth for whether fleet auth is enabled ({@link resolveFleetAuthOwnerFile});
+ * the flag survives only as a launcher topology hint and as a fail-closed
+ * cross-check when it requests fleet auth that has no configuration to load.
+ */
+export function readFleetAuthEnvFlag(env: NodeJS.ProcessEnv = process.env): FleetAuthEnvFlagState {
   const raw = env[FLEET_AUTH_ENV_VAR];
-  if (!raw?.trim()) return false;
+  if (!raw?.trim()) return { kind: 'unset' };
   const parsed = parseBooleanEnv(raw);
-  if (parsed === undefined) {
-    throw new Error(
-      `Invalid ${FLEET_AUTH_ENV_VAR}=${JSON.stringify(raw)}. Expected a boolean flag.`,
-    );
-  }
-  return parsed;
+  if (parsed === undefined) return { kind: 'invalid', raw };
+  return { kind: 'set', value: parsed };
 }
 
 export function fleetAuthFilePath(dataDir: string): string {
@@ -769,24 +777,66 @@ export function saveFleetAuthConfig(dataDir: string, value: unknown): FleetAuthC
   return validated;
 }
 
+/**
+ * Resolve the fleet-auth runtime projection. Presence of
+ * {@link FLEET_AUTH_FILE_NAME} is the single source of truth for enablement:
+ *
+ * - file present, flag unset or truthy → fleet auth enabled;
+ * - file present, flag falsy or invalid → fleet auth STAYS ENABLED (the secure
+ *   direction wins) and a loud startup warning reports the ignored flag — a
+ *   lone env flip must never crash the gateway or downgrade authentication;
+ * - file absent, flag truthy → fail closed: the flag requests fleet auth that
+ *   has no configuration, and starting without auth is never an acceptable
+ *   fallback;
+ * - file absent, flag unset or falsy → non-fleet mode.
+ */
 export function resolveFleetAuthOwnerFile(options: {
   dataDir: string;
-  enabled: boolean;
   processMode: 'gateway' | 'agent' | 'operator';
   seedDir?: string;
+  /** Source consulted for the deprecated env-flag cross-check. */
+  env?: NodeJS.ProcessEnv;
+  /** Startup-verification override: treat the env flag as exactly this value. */
+  envFlagOverride?: boolean;
+  /** Startup warning sink; defaults to console.warn. Warnings never change enablement. */
+  warn?: (message: string) => void;
 }): FleetAuthRuntimeProjection | undefined {
   const path = fleetAuthFilePath(options.dataDir);
   const present = existsSync(path);
-  if (!options.enabled) {
-    if (present) {
+  const flag: FleetAuthEnvFlagState = options.envFlagOverride === undefined
+    ? readFleetAuthEnvFlag(options.env)
+    : { kind: 'set', value: options.envFlagOverride };
+  if (!present) {
+    if (flag.kind === 'set' && flag.value) {
       throw new Error(
-        `${FLEET_AUTH_FILE_NAME} is present at ${path} but ${FLEET_AUTH_ENV_VAR} is not enabled`,
+        `${FLEET_AUTH_ENV_VAR} requests fleet auth but ${FLEET_AUTH_FILE_NAME} is missing at ${path}. `
+        + 'Starting without authentication is never an acceptable fallback (fail closed). '
+        + `Provision ${FLEET_AUTH_FILE_NAME} or unset ${FLEET_AUTH_ENV_VAR}.`,
+      );
+    }
+    if (flag.kind === 'invalid') {
+      throw new Error(
+        `Invalid ${FLEET_AUTH_ENV_VAR}=${JSON.stringify(flag.raw)}. Expected a boolean flag.`,
       );
     }
     return undefined;
   }
-  if (!present) {
-    throw new Error(`${FLEET_AUTH_ENV_VAR} is enabled but ${FLEET_AUTH_FILE_NAME} is missing at ${path}`);
+  const warn = options.warn ?? ((message: string) => console.warn(message));
+  if (flag.kind === 'set' && !flag.value) {
+    warn(
+      `[fleet-auth] IGNORING ${FLEET_AUTH_ENV_VAR}=0: ${FLEET_AUTH_FILE_NAME} is present at ${path} `
+      + 'and file presence is the single source of truth, so fleet auth REMAINS ENABLED. '
+      + `The ${FLEET_AUTH_ENV_VAR} flag is deprecated and cannot disable fleet auth; a lone `
+      + 'environment flip must never crash the gateway or downgrade authentication. '
+      + `To disable fleet auth deliberately, remove ${FLEET_AUTH_FILE_NAME}.`,
+    );
+  } else if (flag.kind === 'invalid') {
+    warn(
+      `[fleet-auth] IGNORING invalid ${FLEET_AUTH_ENV_VAR}=${JSON.stringify(flag.raw)}: `
+      + `${FLEET_AUTH_FILE_NAME} is present at ${path} and file presence is the single source `
+      + 'of truth, so fleet auth REMAINS ENABLED. Unset the deprecated '
+      + `${FLEET_AUTH_ENV_VAR} flag.`,
+    );
   }
   const config = loadFleetAuthConfig(options.dataDir, options.seedDir);
   if (options.processMode === 'gateway') {

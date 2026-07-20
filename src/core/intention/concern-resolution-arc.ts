@@ -196,7 +196,7 @@ export async function reconcileConcernResolutionArcs(input: {
 }): Promise<number> {
   let reconciled = 0;
   let offset = 0;
-  while (true) {
+  for (;;) {
     const concerns = await input.concernStore.list({
       includeResolved: true,
       includeExpired: true,

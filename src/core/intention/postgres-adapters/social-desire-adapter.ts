@@ -209,7 +209,7 @@ export class PostgresSocialDesireStore implements SocialDesireStorePortBackend {
         `SELECT ${SELECT_COLUMNS} FROM social_desires WHERE contact_id = $1 FOR UPDATE`,
         [contactId],
       );
-      const row = desireResult.rows[0];
+      const row = desireResult.rows.at(0);
       if (!row) {
         await client.query('COMMIT');
         this.cache.delete(contactId);
@@ -230,12 +230,12 @@ export class PostgresSocialDesireStore implements SocialDesireStorePortBackend {
         `,
         [settlementId, contactId, input.disposition, new Date(input.nowMs).toISOString()],
       );
-      if (!markerResult.rows[0]) {
+      if (!markerResult.rows.at(0)) {
         const existingResult = await client.query<{ contact_id: string; disposition: string }>(
           `SELECT contact_id, disposition FROM social_desire_settlements WHERE settlement_id = $1`,
           [settlementId],
         );
-        const existing = existingResult.rows[0];
+        const existing = existingResult.rows.at(0);
         if (!existing || existing.contact_id !== contactId || existing.disposition !== input.disposition) {
           throw new Error(`Social desire settlement "${settlementId}" was replayed with conflicting provenance`);
         }
@@ -281,7 +281,7 @@ export class PostgresSocialDesireStore implements SocialDesireStorePortBackend {
           JSON.stringify(settled.reinforcedConcernIds),
         ],
       );
-      const persistedRow = updateResult.rows[0];
+      const persistedRow = updateResult.rows.at(0);
       if (!persistedRow) {
         throw new Error(`Failed to settle social desire for contact "${contactId}"`);
       }

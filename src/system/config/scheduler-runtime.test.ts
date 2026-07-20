@@ -8,6 +8,7 @@ import {
   DEFAULT_ICP_AUTONOMY_SCHEDULER_CONFIG,
   DEFAULT_TEMPORAL_WAKEUP_CONFIG,
   DEFAULT_WEIGHTED_THOUGHT_OUTREACH_CONFIG,
+  DEFAULT_SOCIAL_DESIRE_CONFIG,
 } from './scheduler-config.js';
 import { createDefaultSocialAutonomyConfig } from './scheduler-config.js';
 import { resolveRuntimeSchedulerConfig } from './scheduler-runtime.js';
@@ -153,6 +154,7 @@ describe('resolveRuntimeSchedulerConfig', () => {
         temporalWakeup: DEFAULT_TEMPORAL_WAKEUP_CONFIG,
         freeTime: DEFAULT_FREE_TIME_CONFIG,
         weightedThoughtOutreach: DEFAULT_WEIGHTED_THOUGHT_OUTREACH_CONFIG,
+        socialDesire: DEFAULT_SOCIAL_DESIRE_CONFIG,
         icpAutonomy: DEFAULT_ICP_AUTONOMY_SCHEDULER_CONFIG,
         backgroundWork: DEFAULT_BACKGROUND_WORK_TUNING,
         socialAutonomy: createDefaultSocialAutonomyConfig(),
@@ -223,6 +225,7 @@ describe('resolveRuntimeSchedulerConfig', () => {
         temporalWakeup: DEFAULT_TEMPORAL_WAKEUP_CONFIG,
         freeTime: DEFAULT_FREE_TIME_CONFIG,
         weightedThoughtOutreach: DEFAULT_WEIGHTED_THOUGHT_OUTREACH_CONFIG,
+        socialDesire: DEFAULT_SOCIAL_DESIRE_CONFIG,
         icpAutonomy: DEFAULT_ICP_AUTONOMY_SCHEDULER_CONFIG,
         backgroundWork: DEFAULT_BACKGROUND_WORK_TUNING,
         socialAutonomy: createDefaultSocialAutonomyConfig(),

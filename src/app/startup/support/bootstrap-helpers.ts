@@ -349,6 +349,25 @@ export function hydrateCanonicalStartupConfig(
         relevanceFloor: persistedScheduler.weightedThoughtOutreach.lifecycle.relevanceFloor,
       },
     },
+    socialDesire: {
+      enabled: persistedScheduler.socialDesire.enabled,
+      lifecycle: {
+        ...persistedScheduler.socialDesire.lifecycle,
+        decay: { ...persistedScheduler.socialDesire.lifecycle.decay },
+        coolingOff: { ...persistedScheduler.socialDesire.lifecycle.coolingOff },
+        tiers: {
+          acquaintance: { ...persistedScheduler.socialDesire.lifecycle.tiers.acquaintance },
+          friend: { ...persistedScheduler.socialDesire.lifecycle.tiers.friend },
+          family: { ...persistedScheduler.socialDesire.lifecycle.tiers.family },
+          partner: { ...persistedScheduler.socialDesire.lifecycle.tiers.partner },
+          ai_companion: { ...persistedScheduler.socialDesire.lifecycle.tiers.ai_companion },
+        },
+      },
+      outreach: {
+        ...persistedScheduler.socialDesire.outreach,
+        budget: { ...persistedScheduler.socialDesire.outreach.budget },
+      },
+    },
     icpAutonomy: {
       enabled: persistedScheduler.icpAutonomy.enabled,
       candidate: { ...persistedScheduler.icpAutonomy.candidate },

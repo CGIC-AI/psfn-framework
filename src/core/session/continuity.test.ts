@@ -39,7 +39,7 @@ function makeConfig(overrides?: Partial<SubstrateConfig>): SubstrateConfig {
 
 function wireTestContinuity(manager: SessionManager, store: UserContinuityStore): void {
   manager.continuityStore = store;
-  manager.crossChannelContinuity = createUserContinuityPort(store, () => true);
+  manager.crossChannelContinuity = createUserContinuityPort(store, () => [], () => true);
 }
 
 describe('UserContinuityStore', () => {
@@ -779,8 +779,10 @@ describe('SessionManager with continuity', () => {
       expect(ctx.systemPrompt).not.toContain('<continuity_anchor');
       expect(ctx.systemPrompt).not.toContain('<last_time_here>');
       expect(ctx.systemPrompt).toContain('<cross_channel_continuity authority="retrieved_context"');
-      expect(ctx.systemPrompt).toContain('Earlier reflection summary');
-      expect(ctx.systemPrompt).toContain('The API thread still needs recovery notes.');
+      // Live cross-channel rendering is metadata-only (u8iv strip-content); message
+      // text never appears in the live system prompt.
+      expect(ctx.systemPrompt).not.toContain('Earlier reflection summary');
+      expect(ctx.systemPrompt).not.toContain('The API thread still needs recovery notes.');
       expect(ctx.systemPrompt).not.toContain('<source>internal:reflection:daily</source>');
       expect(ctx.systemPrompt).not.toContain('Earlier heartbeat summary');
     } finally {

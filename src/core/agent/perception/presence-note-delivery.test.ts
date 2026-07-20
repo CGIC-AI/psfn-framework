@@ -216,7 +216,7 @@ describe('createPerceptionNoteDeliverer — presence detected/cleared', () => {
   it('delivers a neutral location observation without movement authority', () => {
     const sink = { appendContextSystemNote: vi.fn() };
 
-    createPerceptionNoteDeliverer(sink).handlePerceptionEvent(locationEvent());
+    void createPerceptionNoteDeliverer(sink).handlePerceptionEvent(locationEvent());
 
     expect(sink.appendContextSystemNote).toHaveBeenCalledWith(
       'satellite-observation:sat.kitchen',

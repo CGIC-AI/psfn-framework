@@ -40,6 +40,9 @@ childProcess.execSync(userCommand);
 execSync('git status --short');
 
 // ok: psfn.security.nonliteral-child-process-exec
+execSync(`git status --short`);
+
+// ok: psfn.security.nonliteral-child-process-exec
 execFile('git', ['status', '--short']);
 
 // ruleid: psfn.security.disabled-tls-verification
@@ -50,6 +53,9 @@ const verifiedTls = { rejectUnauthorized: true };
 
 // ruleid: psfn.security.disabled-tls-verification
 process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
+
+// ruleid: psfn.security.disabled-tls-verification
+process.env['NODE_TLS_REJECT_UNAUTHORIZED'] = '0';
 
 void insecureTls;
 void verifiedTls;

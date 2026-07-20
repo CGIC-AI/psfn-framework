@@ -396,7 +396,7 @@ export function buildConcernCandidateReviewPrompt(
       'Treat these as soft follow-up candidates for a short-time attention list.',
       'Use create for a near-term thread, merge when an existing thread fits, defer when more context would help, reject when it is noise, and route when it belongs in a north star, project, reminder, schedule, introspection, or another substrate.',
       'Keep some candidates internal-only when external contact is not clearly appropriate.',
-      'Concern approval is separate from outbound delivery.',
+      'Selecting an open thread is separate from outbound delivery.',
     ],
     outputShape: {
       decisions: [{
@@ -404,7 +404,7 @@ export function buildConcernCandidateReviewPrompt(
         action: 'create | merge | defer | reject | route',
         reason: 'short rationale',
         priority: 'high | medium | low',
-        targetConcernId: 'optional existing concern id',
+        targetOpenThreadId: 'optional existing open-thread id',
         routeTarget: 'north_star | project | reminder | schedule | introspection | other',
         dueAt: 'optional ISO timestamp',
       }],
@@ -452,8 +452,8 @@ export function parseConcernCandidateReviewResponse(
       ? compactText(item.reason, 240)
       : `review selected ${action}`;
     const priority = normalizeReviewPriority(item.priority);
-    const targetConcernId = typeof item.targetConcernId === 'string' && item.targetConcernId.trim()
-      ? item.targetConcernId.trim()
+    const targetConcernId = typeof item.targetOpenThreadId === 'string' && item.targetOpenThreadId.trim()
+      ? item.targetOpenThreadId.trim()
       : undefined;
     const routeTarget = normalizeRouteTarget(item.routeTarget);
     const dueAt = normalizeOptionalIso(item.dueAt);
@@ -625,7 +625,7 @@ async function applyConcernCandidateDecision(input: {
             action: 'merge',
             status: 'blocked',
             routeTarget: 'other',
-            reason: `target concern ${input.decision.targetConcernId} was not available for merge`,
+            reason: `target open thread ${input.decision.targetConcernId} was not available for merge`,
           };
         }
         if (input.candidate.durableConcernId
@@ -666,7 +666,7 @@ async function applyConcernCandidateDecision(input: {
             action: 'create',
             status: 'blocked',
             routeTarget: 'other',
-            reason: `active concern cap ${MAX_ACTIVE_CONCERNS} reached; candidate kept out of active concerns`,
+            reason: `open-thread cap ${MAX_ACTIVE_CONCERNS} reached; candidate was not added`,
           };
         }
         let concern: ActiveConcern | null;
@@ -696,7 +696,7 @@ async function applyConcernCandidateDecision(input: {
             action: 'create',
             status: 'blocked',
             routeTarget: 'other',
-            reason: `active concern cap ${MAX_ACTIVE_CONCERNS} reached; candidate kept out of active concerns`,
+            reason: `open-thread cap ${MAX_ACTIVE_CONCERNS} reached; candidate was not added`,
           };
         }
         if (!concern) {
@@ -717,7 +717,7 @@ async function applyConcernCandidateDecision(input: {
           action: input.decision.action,
           status: 'blocked',
           routeTarget: 'other',
-          reason: `active concern cap ${MAX_ACTIVE_CONCERNS} reached; candidate kept out of active concerns`,
+          reason: `open-thread cap ${MAX_ACTIVE_CONCERNS} reached; candidate was not added`,
         };
       }
       return await createConcernFromCandidate({
@@ -761,7 +761,7 @@ async function createConcernFromCandidate(input: {
         action: input.decision.action,
         status: 'blocked',
         routeTarget: 'other',
-        reason: `active concern cap ${MAX_ACTIVE_CONCERNS} reached; candidate kept out of active concerns`,
+        reason: `open-thread cap ${MAX_ACTIVE_CONCERNS} reached; candidate was not added`,
       };
     }
     throw error;

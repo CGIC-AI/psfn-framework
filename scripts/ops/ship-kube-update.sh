@@ -149,7 +149,6 @@ if [[ ${#SELECTED[@]} -gt 0 ]]; then
   [[ -n "$NEW_HASH" ]] || { echo "FAIL: image carries no contract hash" >&2; exit 1; }
   docker run --rm --platform "$PLATFORM" --entrypoint sh "${IMAGE_NAME}:${TAG}" -c \
     "grep -q toolCallBlocksByIndex /app/node_modules/@mariozechner/pi-ai/dist/providers/openai-completions.js \
-     && test -f /app/config/concern-softening.json \
      && test -f /app/config/intake-l1-rules.json \
      && test -f /app/deploy/helm/psfn/Chart.yaml \
      && test -f /app/deploy/helm/psfn/recovery-chart.sha256 \

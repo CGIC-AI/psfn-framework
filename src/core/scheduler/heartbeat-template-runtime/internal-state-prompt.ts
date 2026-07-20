@@ -1,4 +1,5 @@
 import type { ReflectionTemplate } from '../heartbeat-policy.js';
+import { buildActiveConcernsRuntimeData } from '../../intention/concerns.js';
 import {
   buildInternalStateSnapshotRef,
   cloneInternalState,
@@ -123,17 +124,15 @@ export function formatInternalStateContextBlock(
   }
 
   const state = context.internalState;
-  const concerns = state.attention.activeConcerns
-    .slice(0, 12)
-    .map((concern) => {
-      const expiresAt = Number.isNaN(Date.parse(concern.expiresAt))
-        ? ''
-        : `; revisit before ${new Date(concern.expiresAt).toISOString()}`;
-      return `- ${concern.priority} priority from ${concern.source}: ${truncateForReflectionEvidence(concern.text)}${expiresAt}`;
-    });
-  const concernSection = concerns.length > 0
-    ? concerns.join('\n')
-    : '- no active concerns are exposed right now.';
+  const openThreads = buildActiveConcernsRuntimeData(state.attention.activeConcerns);
+  const openThreadSection = openThreads.topLines.length > 0
+    ? [
+      ...openThreads.topLines,
+      ...(openThreads.omittedCount > 0
+        ? [`- ${openThreads.omittedCount} additional lower-salience thread${openThreads.omittedCount === 1 ? '' : 's'} omitted.`]
+        : []),
+    ].join('\n')
+    : '- no open threads are present in this snapshot.';
   const followUps = (state.attention.pendingFollowUps ?? [])
     .slice(0, 6)
     .map((followUp) => {
@@ -200,8 +199,8 @@ export function formatInternalStateContextBlock(
     relationalClues.map(line => `- ${line}`).join('\n'),
     '[Recent Metacognitive Flags]',
     metacognitiveSection,
-    '[Active Concerns]',
-    concernSection,
+    '[Open Threads]',
+    openThreadSection,
     '[Pending Follow-Ups]',
     followUpSection,
     '[Care Reminders]',

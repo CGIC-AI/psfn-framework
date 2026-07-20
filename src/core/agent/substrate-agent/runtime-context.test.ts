@@ -1,7 +1,4 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { mkdtempSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
 import { DEFAULT_COMPANION_ID } from '../../identity/companion-naming.js';
 import { injectPromptRuntimeTokens, resolvePromptMacroManifestEntry } from '../../identity/prompt-runtime.js';
 import { TurnPromptVariableNamespace } from '../../identity/prompt-variable-namespace.js';
@@ -37,9 +34,6 @@ import { makeTestFatiguePolicyConfig } from '../../../test-support/charge-policy
 import { classifyChannelDisclosure } from '../../../system/trust/policy.js';
 import { normalizeChannelPrivacy } from '../../../system/trust/context-envelope.js';
 import {
-  resetConcernSofteningConfigCacheForTests,
-} from '../../intention/concern-softening.js';
-import {
   NO_CAPABILITY_REQUIREMENT,
   withCapabilityRequirement,
 } from '../../../system/capabilities/requirements.js';
@@ -49,19 +43,7 @@ import { createCompanionId } from '../../../shared/routing/companion-id.js';
 
 const FLEET_COMPANION_ID = '11111111-1111-4111-8111-111111111111';
 
-const originalConfigDir = process.env.CONFIG_DIR;
-const tempConfigDirs: string[] = [];
-
 afterEach(() => {
-  for (const dir of tempConfigDirs.splice(0)) {
-    rmSync(dir, { recursive: true, force: true });
-  }
-  if (originalConfigDir === undefined) {
-    delete process.env.CONFIG_DIR;
-  } else {
-    process.env.CONFIG_DIR = originalConfigDir;
-  }
-  resetConcernSofteningConfigCacheForTests();
   resetRunChargeRollingWindowForTests();
 });
 
@@ -215,23 +197,6 @@ const TEST_CHARGE_POLICY = {
   },
   fatigue: makeTestFatiguePolicyConfig(),
 };
-
-function makeRuntimeContextConcern(text = 'Check the missing concern config path.') {
-  return {
-    id: 'concern-config-1',
-    text,
-    priority: 'high' as const,
-    source: 'agent' as const,
-    status: 'active' as const,
-    createdAt: '2026-02-01T10:00:00.000Z',
-    expiresAt: '2026-02-01T11:00:00.000Z',
-    salience: 0.5,
-    sensitivity: 'personal' as const,
-    owner: 'companion' as const,
-    evidenceRefs: [],
-    resolutionEvidenceRefs: [],
-  };
-}
 
 function healthySubsystem(meta: Record<string, unknown> = { checkLatencyMs: 8 }): ApiHealthSubsystemStatus {
   return {
@@ -448,22 +413,6 @@ describe('active concerns runtime data resolution', () => {
     );
   });
 
-  it('does not swallow static concern-softening config load failures', () => {
-    const missingConfigDir = mkdtempSync(join(tmpdir(), 'psfn-runtime-context-missing-config-'));
-    tempConfigDirs.push(missingConfigDir);
-    process.env.CONFIG_DIR = missingConfigDir;
-    resetConcernSofteningConfigCacheForTests();
-    const logger = { warn: vi.fn(), debug: vi.fn() };
-
-    expect(() => resolveActiveConcernsRuntimeData({
-      activeConcernProvider: {
-        getActiveConcerns: () => [makeRuntimeContextConcern()],
-      },
-      canonicalContactKey: 'contact-alex',
-      logger,
-    })).toThrow(/concern-softening\.json|ENOENT/);
-    expect(logger.warn).not.toHaveBeenCalled();
-  });
 });
 
 describe('runtime subject identity', () => {
@@ -624,7 +573,7 @@ describe('runtime subject identity', () => {
       channelId: 'discord:group:townsquare',
       roomName: 'Town Square',
     });
-    const variables = buildDynamicPromptTemplateVariables(withConversationScope({
+    const { variables } = buildRuntimePromptOutputs({
       ...buildMinimalRuntimeContextInput(),
       message: makeMessage({ channelId: 'internal:reflection:whisper', channelType: 'terminal' }),
       resolvedUserName: 'Companion',
@@ -632,7 +581,7 @@ describe('runtime subject identity', () => {
       subjectIdentityKey: DEFAULT_COMPANION_ID,
       taskKind: 'reflection',
       conversationScope: roomScope,
-    }));
+    });
 
     expect(variables.runtime_speaking_with_name).toBe('');
     expect(variables.runtime_speaking_with_trust_level).toBe('');
@@ -1840,7 +1789,7 @@ describe('runtime subject identity', () => {
   });
 
   it('exposes granular runtime prompt variables for editable prompt-owned phrasing', () => {
-    const variables = buildDynamicPromptTemplateVariables(withConversationScope({
+    const { variables } = buildRuntimePromptOutputs({
       message: makeMessage({
         channelId: 'discord:dm:alex',
         channelType: 'discord_text',
@@ -1869,7 +1818,7 @@ describe('runtime subject identity', () => {
       behavioralNotesBlock: '',
       lastMessageReceivedAtMs: new Date('2026-03-16T09:15:00Z').getTime(),
       config: {},
-    }));
+    });
 
     expect(variables.runtime_current_datetime_iso).toBe('2026-03-18T09:30:00.000-04:00');
     expect(variables.runtime_current_today).toBe('2026-03-18');
@@ -2208,7 +2157,7 @@ describe('runtime subject identity', () => {
         summary: 'Latest summary',
       },
     ] as const;
-    const variables = buildDynamicPromptTemplateVariables(withConversationScope({
+    const { variables, rendered } = buildRuntimePromptOutputs({
       message: makeMessage({
         channelId: 'api:test',
         channelType: 'api',
@@ -2283,13 +2232,17 @@ describe('runtime subject identity', () => {
       ].join('\n'),
       emotionAppraisalChain,
       config: {},
-    }));
+    });
 
     expect(variables.runtime_concerns_count).toBe('3');
     expect(variables.runtime_concerns_top_priorities).toBe('high, low');
     expect(variables.runtime_concerns_omitted_count).toBe('1');
     expect(variables.runtime_concerns_top_lines).toContain('medication reminder logistics');
     expect(variables.runtime_concerns_top_lines).toContain('sleep schedule drift');
+    expect(rendered).toContain('<open_threads>');
+    expect(rendered).toContain('These are simply things that may be worth revisiting if they fit the moment.');
+    expect(rendered).toContain('1 additional lower-salience thread omitted.');
+    expect(rendered).not.toMatch(/\b(?:concerns?|worr(?:y|ies|ied))\b/i);
     expect(variables.runtime_behavioral_notes_count).toBe('2');
     expect(variables.runtime_skills_count).toBe('2');
     expect(variables.runtime_extended_tools_total).toBe('3');

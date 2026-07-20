@@ -47,6 +47,7 @@ import {
 } from '../../../../faculties/memory/retrieval/access-scope.js';
 import type { ArtifactSensitivitySource } from '../../../../shared/contracts/artifact-sensitivity.js';
 import type { TurnExecutionRuntime, TurnSessionIdentity } from './contracts.js';
+import { deriveContextCoherenceSessionContext } from '../../context-coherence-session-context.js';
 
 const log = createComponentLogger('SubstrateAgent');
 const MEMORY_RETRIEVAL_RECENT_ENTRY_LIMIT = 6;
@@ -821,6 +822,12 @@ export async function computePreTurnState(input: {
   );
   const emotionAppraisalChain = runtime.emotionSelfModelRuntime.getEmotionAppraisalChain(emotionSessionId);
   const turnSnapshotCapturedAt = Date.now();
+  const coherenceEntries = runtime.sessionManager.getRecentMessages(message.channelId, 24);
+  const coherenceContext = deriveContextCoherenceSessionContext(
+    coherenceEntries,
+    message.timestamp.getTime(),
+    runtime.emotionSelfModelRuntime.getActiveConcernCount(authorContext.canonicalContactKey),
+  );
   const observerEvalLifecycleState = await dispatchObserverEvalTurn({
     sidecarRuntime: runtime.observerEvalSidecar,
     logger: log,
@@ -844,6 +851,7 @@ export async function computePreTurnState(input: {
         snapshot: emotionSnapshot,
         appraisalEntryCount: emotionAppraisalChain.length,
       },
+      coherenceContext,
       metadata: {
         trustLevel,
         speakerRole: authorContext.speakerRole,

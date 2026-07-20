@@ -1,4 +1,7 @@
 import { createComponentLogger } from '../../../shared/logger.js';
+import type { EventBus } from '../../../shared/event-bus.js';
+import type { ContextCoherenceEvent } from '../../../shared/contracts/context-coherence.js';
+import type { TurnID } from '../../../shared/contracts/runtime.js';
 import type { ObserverEvalSidecarLeverSettings } from '../../../shared/contracts/runtime.js';
 import { createDefaultObserverEvalSidecarSettings } from '../../../system/config/runtime-config-contracts.js';
 import type { SubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
@@ -42,7 +45,7 @@ const OBSERVER_EVAL_LEVER_MIN_RETENTION_DAYS = 90;
 
 export function createObserverEvalSidecarRuntimeFromConfig(
   config: Pick<SubstrateConfig, 'observerEvalSidecar' | 'persistenceBackend'>,
-  dependencies: { postgresDatabaseUrl?: string },
+  dependencies: { postgresDatabaseUrl?: string; eventBus?: EventBus },
 ): ObserverEvalSidecarRuntime {
   const settings = structuredClone(
     config.observerEvalSidecar ?? createDefaultObserverEvalSidecarSettings(),
@@ -55,13 +58,14 @@ export function createObserverEvalSidecarRuntimeFromConfig(
 
   return {
     config: settings,
-    observer: createObserverEvalSidecarPort(settings, persistence),
+    observer: createObserverEvalSidecarPort(settings, persistence, dependencies.eventBus),
   };
 }
 
 function createObserverEvalSidecarPort(
   settings: ObserverEvalSidecarConfig,
   persistence: ObserverEvalSidecarPersistencePort | null,
+  eventBus: EventBus | undefined,
 ): ObserverEvalSidecarPort | null {
   if (settings.enabled !== true || settings.adapter?.kind !== 'emosim_server') {
     return null;
@@ -77,10 +81,16 @@ function createObserverEvalSidecarPort(
       'observerEvalSidecar.adapter requires serverUrl, sessionLabel, and agentName for kind=emosim_server',
     );
   }
+  if (settings.levers?.enabled === true && !eventBus) {
+    throw new Error('observerEvalSidecar.levers requires the context-coherence event bus');
+  }
 
   return new EmoSimObserverEvalSidecar({
     config: settings,
     persistence,
+    ...(eventBus
+      ? { emitContextCoherence: event => eventBus.emit('context.coherence.detected', event) }
+      : {}),
     // One runner per sidecar: it caches the contract check and the persistent
     // session bootstrap across observations.
     runner: createEmoSimServerRunner({
@@ -118,6 +128,7 @@ interface EmoSimObserverEvalSidecarOptions {
   config: ObserverEvalSidecarConfig;
   persistence: ObserverEvalSidecarPersistencePort | null;
   runner: EmoSimRunner;
+  emitContextCoherence?: (event: ContextCoherenceEvent) => Promise<void>;
 }
 
 class EmoSimObserverEvalSidecar implements ObserverEvalSidecarPort {
@@ -139,6 +150,9 @@ class EmoSimObserverEvalSidecar implements ObserverEvalSidecarPort {
       persistence: options.persistence,
       sidecarId: options.config.sidecarId ?? OBSERVER_EVAL_RUN_PREFIX,
       retentionDays: options.config.persistence?.retentionDays ?? 14,
+      ...(options.emitContextCoherence
+        ? { emitContextCoherence: options.emitContextCoherence }
+        : {}),
     });
   }
 
@@ -181,6 +195,12 @@ class EmoSimObserverEvalSidecar implements ObserverEvalSidecarPort {
         observationId,
         snapshot: toObserverLeverSnapshot(emosim?.ok ? emosim.output : undefined),
         observedAtMs: Date.now(),
+        coherenceContext: {
+          channelId: rawInput.turn.channelId,
+          turnId: rawInput.turn.turnId,
+          requestId: rawInput.turn.requestId,
+          sessionContext: rawInput.coherenceContext,
+        },
       });
     }
 
@@ -331,6 +351,14 @@ interface ObserverEvalLeverStageOptions {
   persistence: ObserverEvalSidecarLeverPersistencePort;
   sidecarId: string;
   retentionDays: number;
+  emitContextCoherence?: (event: ContextCoherenceEvent) => Promise<void>;
+}
+
+interface ObserverEvalCoherenceContext {
+  channelId: string;
+  turnId: TurnID;
+  requestId: string;
+  sessionContext: ContextCoherenceEvent['context'];
 }
 
 function createObserverEvalLeverStage(input: {
@@ -338,6 +366,7 @@ function createObserverEvalLeverStage(input: {
   persistence: ObserverEvalSidecarPersistencePort | null;
   sidecarId: string;
   retentionDays: number;
+  emitContextCoherence?: (event: ContextCoherenceEvent) => Promise<void>;
 }): ObserverEvalLeverStage | null {
   if (input.settings?.enabled !== true) {
     return null;
@@ -352,6 +381,9 @@ function createObserverEvalLeverStage(input: {
     persistence: input.persistence,
     sidecarId: input.sidecarId,
     retentionDays: input.retentionDays,
+    ...(input.emitContextCoherence
+      ? { emitContextCoherence: input.emitContextCoherence }
+      : {}),
   });
 }
 
@@ -383,6 +415,7 @@ export class ObserverEvalLeverStage {
     observationId: string;
     snapshot: ObserverLeverSnapshotInput | null;
     observedAtMs: number;
+    coherenceContext?: ObserverEvalCoherenceContext;
   }): Promise<void> {
     try {
       const tracker = await this.ensureTracker();
@@ -404,6 +437,28 @@ export class ObserverEvalLeverStage {
           cooldown: event.cooldown,
           retention: this.makeLeverRetention(event.firedAtMs),
         });
+        if (
+          event.lever === 'rumination_watch'
+          && input.coherenceContext
+          && this.options.emitContextCoherence
+        ) {
+          await this.options.emitContextCoherence({
+            schemaVersion: 1,
+            id: `${input.observationId}:concern_rumination`,
+            signal: 'concern_rumination',
+            source: 'observer_eval',
+            timestamp: event.firedAtMs,
+            channelId: input.coherenceContext.channelId,
+            turnId: input.coherenceContext.turnId,
+            requestId: input.coherenceContext.requestId,
+            detail: 'rumination_watch',
+            groundTruth: false,
+            context: { ...input.coherenceContext.sessionContext },
+            correlations: [],
+            eligibleForEmotionAppraisal: false,
+            eligibleForMemoryCandidacy: false,
+          });
+        }
       }
       await this.persistTrackerState(tracker, evaluation, input.observedAtMs);
       await this.options.persistence.pruneExpiredLeverEvents(input.observedAtMs);

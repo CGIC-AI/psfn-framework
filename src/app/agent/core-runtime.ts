@@ -239,6 +239,7 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
   const gatewayOps = createGatewayOpsPortFromClient(gateway);
   const observerEvalSidecar = createObserverEvalSidecarRuntimeFromConfig(config, {
     postgresDatabaseUrl,
+    eventBus,
   });
   const sessionComposition = await composeSessionRuntimeAsync({
     config,

@@ -44,6 +44,11 @@ function makeObserverInput(
       snapshot: structuredClone(EMOTION_SNAPSHOT),
       appraisalEntryCount: 2,
     },
+    coherenceContext: {
+      recentMirrorNoteCount: 0,
+      timeGapMs: null,
+      activeConcernCount: 0,
+    },
     metadata: {
       trustLevel: 'regular',
       speakerRole: 'user',

@@ -1020,19 +1020,16 @@ export class AdminSessionDataService implements AdminSessionService {
   }
 
   /**
-   * Scrub the turn snapshot's memory candidate lists for a fleet read. This
-   * covers both ref-resolved candidates (repopulated from the live memory
-   * store) and legacy fat records with embedded memories: every item must
-   * pass the viewer subject-classification check. Categories with no clean
-   * per-item attribution (contact profile artifact, episodic chains) are
+   * Scrub one turn snapshot's memory candidate lists for a fleet read. Every
+   * item must pass the viewer subject-classification check. Categories with no
+   * clean per-item attribution (contact profile artifact, episodic chains) are
    * dropped entirely for fleet reads.
    */
-  private async scrubTurnDataForFleetViewer(
-    turn: AdminSessionTurnData,
+  private async scrubSnapshotForFleetViewer(
+    snapshot: NonNullable<AdminSessionTurnData['snapshot']>,
     isViewerMemory: (memoryId: string) => Promise<boolean>,
-  ): Promise<AdminSessionTurnData> {
-    const snapshot = turn.snapshot;
-    if (!snapshot?.memory) return turn;
+  ): Promise<NonNullable<AdminSessionTurnData['snapshot']>> {
+    if (!snapshot.memory) return snapshot;
     const filterObserved = async <T extends { id: string }>(items: readonly T[]): Promise<T[]> => {
       const decisions = await Promise.all(items.map(item => isViewerMemory(item.id)));
       return items.filter((_, index) => decisions[index] === true);
@@ -1049,7 +1046,37 @@ export class AdminSessionDataService implements AdminSessionService {
       lexicalCandidates: await filterObserved(snapshot.memory.lexicalCandidates),
       proactiveCandidates: await filterObserved(snapshot.memory.proactiveCandidates),
     };
-    return { ...turn, snapshot: { ...snapshot, memory: scrubbedMemory } };
+    return { ...snapshot, memory: scrubbedMemory };
+  }
+
+  /**
+   * Fleet turn data carries a projected snapshot and the persisted record that
+   * supplied it. Scrub both copies: filtering only the projection leaves the
+   * same foreign memory payload reachable through
+   * `record.observability.snapshot`.
+   */
+  private async scrubTurnDataForFleetViewer(
+    turn: AdminSessionTurnData,
+    isViewerMemory: (memoryId: string) => Promise<boolean>,
+  ): Promise<AdminSessionTurnData> {
+    const [snapshot, recordSnapshot] = await Promise.all([
+      turn.snapshot
+        ? this.scrubSnapshotForFleetViewer(turn.snapshot, isViewerMemory)
+        : Promise.resolve(null),
+      turn.record.observability?.snapshot
+        ? this.scrubSnapshotForFleetViewer(turn.record.observability.snapshot, isViewerMemory)
+        : Promise.resolve(undefined),
+    ]);
+    const record = recordSnapshot
+      ? {
+          ...turn.record,
+          observability: {
+            ...turn.record.observability!,
+            snapshot: recordSnapshot,
+          },
+        }
+      : turn.record;
+    return { ...turn, record, snapshot };
   }
 
   private async buildResolvedTurnData(

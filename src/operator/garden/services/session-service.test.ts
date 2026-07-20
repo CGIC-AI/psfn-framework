@@ -1953,6 +1953,29 @@ describe('subject-bound session projection (88u3)', () => {
       .rejects.toBeInstanceOf(AdminSessionNotFoundError);
   });
 
+  it('keeps a stably bound session with an unattributed participant invisible', async () => {
+    const { service, contactA } = makeSubjectFixture();
+    const roomChannelId = 'discord:room:unattributed';
+    contactA.conversationChannels = [{
+      channel: 'discord',
+      channelId: roomChannelId,
+      firstSeen: '2026-01-01T00:00:00.000Z',
+      lastSeen: '2026-01-01T00:00:00.000Z',
+    }];
+    store.append({
+      channelId: roomChannelId,
+      role: 'user',
+      content: 'participant identity was not captured',
+      timestamp: 1_700_000_000_003,
+    });
+
+    const context = fleetSessionContext({ contactId: 'contact-a' });
+    const listed = await service.listSessions(context);
+    expect(listed.channels.map(channel => channel.channelId)).toEqual(['discord:dm:1111']);
+    await expect(service.getSessionMessages(roomChannelId, {}, context))
+      .rejects.toBeInstanceOf(AdminSessionNotFoundError);
+  });
+
   it('forwards the request context on the cursor-page read path', async () => {
     const { service } = makeSubjectFixture();
     const context = fleetSessionContext({
@@ -2132,11 +2155,15 @@ describe('subject-bound session projection (88u3)', () => {
     expect(detail.turn.snapshot?.memory?.semanticCandidates.map(memory => memory.id))
       .toEqual(['memory-own']);
     expect(detail.turn.snapshot?.memory?.proactiveCandidates).toEqual([]);
+    expect(detail.turn.record.observability?.snapshot?.memory?.semanticCandidates.map(memory => memory.id))
+      .toEqual(['memory-own']);
+    expect(detail.turn.record.observability?.snapshot?.memory?.proactiveCandidates).toEqual([]);
     expect(JSON.stringify(detail)).not.toContain('FOREIGN_SUBJECT_SECRET');
 
     // The legacy operator read stays unfiltered.
     const legacy = await service.getSessionTurnDetail(channelId, turnId);
     expect(legacy.turn.promptLoom?.subsystemOutputs.memoryWrites).toHaveLength(2);
     expect(legacy.turn.snapshot?.memory?.semanticCandidates).toHaveLength(2);
+    expect(legacy.turn.record.observability?.snapshot?.memory?.semanticCandidates).toHaveLength(2);
   });
 });

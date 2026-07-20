@@ -207,21 +207,26 @@ describe('request-bound Garden principal isolation', () => {
   });
 
   it('admits subject-authorized episodic routes while group memory stays denied', () => {
-    const episodicList = context('principal-a', 'contact-a', {
-      routeId: 'GET /api/admin/episodic-memory/episodes',
-    });
-    expect(gardenRequestServiceBoundaryDenial(episodicList)).toBeNull();
+    const episodicRouteIds = [
+      'GET /api/admin/episodic-memory/episodes',
+      'GET /api/admin/episodic-memory/episodes/:id',
+      'GET /api/admin/episodic-memory/episodes/:id/arcs',
+      'GET /api/admin/episodic-memory/episodes/:id/provenance',
+      'GET /api/admin/episodic-memory/threads',
+      'GET /api/admin/episodic-memory/threads/:threadId',
+      'GET /episodic-memory',
+      'HEAD /episodic-memory',
+    ];
+    for (const routeId of episodicRouteIds) {
+      expect(gardenRequestServiceBoundaryDenial(context('principal-a', 'contact-a', { routeId })))
+        .toBeNull();
+    }
 
-    const episodicDetail = context('principal-a', 'contact-a', {
-      routeId: 'GET /api/admin/episodic-memory/episodes/:id',
-      pathParams: { id: 'episode-1' },
+    const undeclaredEpisodicRoute = context('principal-a', 'contact-a', {
+      routeId: 'GET /api/admin/episodic-memory/future-unscoped-view',
     });
-    expect(gardenRequestServiceBoundaryDenial(episodicDetail)).toBeNull();
-
-    const episodicPage = context('principal-a', 'contact-a', {
-      routeId: 'GET /episodic-memory',
-    });
-    expect(gardenRequestServiceBoundaryDenial(episodicPage)).toBeNull();
+    expect(gardenRequestServiceBoundaryDenial(undeclaredEpisodicRoute))
+      .toMatch(/subject-authorized/u);
 
     const episodicWithoutSubject = context('principal-a', 'contact-a', {
       subjectRelation: 'none',

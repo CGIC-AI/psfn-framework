@@ -344,7 +344,7 @@ export class PostgresFleetAuthBrokerStore implements FleetAuthBrokerStore {
         SET replaced_by = $2, revoked_at = $3
         WHERE record_id = $1
       `, [current.record_id, nextRecordId, input.now]);
-      await this.fenceSessionDependents(client, current.record_id, input.now);
+      await this.fenceSessionDependents(client, [current.record_id], input.now);
       await client.query('COMMIT');
       return next;
     } catch (error) {
@@ -421,7 +421,7 @@ export class PostgresFleetAuthBrokerStore implements FleetAuthBrokerStore {
         SET revoked_at = $2
         WHERE record_id = $1
       `, [current.record_id, input.now]);
-      await this.fenceSessionDependents(client, current.record_id, input.now);
+      await this.fenceSessionDependents(client, [current.record_id], input.now);
       await client.query('COMMIT');
     } catch (error) {
       await client.query('ROLLBACK').catch(() => undefined);
@@ -707,6 +707,23 @@ export class PostgresFleetAuthBrokerStore implements FleetAuthBrokerStore {
       input.absoluteExpiresAt,
       input.now,
     ]);
+    const superseded = await client.query<{ record_id: string }>(`
+      UPDATE ${FLEET_AUTH_SCHEMA_NAME}.browser_sessions
+      SET replaced_by = $3, revoked_at = $4
+      WHERE principal_id = $1
+        AND audience = $2
+        AND record_id <> $3
+        AND revoked_at IS NULL
+        AND replaced_by IS NULL
+      RETURNING record_id
+    `, [
+      input.principal.principal_id,
+      input.audience,
+      recordId,
+      input.now,
+    ]);
+    const supersededIds = superseded.rows.map(row => row.record_id);
+    await this.fenceSessionDependents(client, supersededIds, input.now);
     return {
       recordId,
       principalId: input.principal.principal_id,
@@ -720,19 +737,20 @@ export class PostgresFleetAuthBrokerStore implements FleetAuthBrokerStore {
 
   private async fenceSessionDependents(
     client: PoolClient,
-    sessionId: string,
+    sessionIds: readonly string[],
     now: Date,
   ): Promise<void> {
+    if (sessionIds.length === 0) return;
     await client.query(`
       UPDATE ${FLEET_AUTH_SCHEMA_NAME}.step_up_challenges
       SET status = CASE WHEN status = 'pending' THEN 'revoked' ELSE status END
-      WHERE browser_session_id = $1
-    `, [sessionId]);
+      WHERE browser_session_id = ANY($1::uuid[])
+    `, [sessionIds]);
     await client.query(`
       UPDATE ${FLEET_AUTH_SCHEMA_NAME}.jit_authorization_grants
       SET revoked_at = COALESCE(revoked_at, $2)
-      WHERE browser_session_id = $1
-    `, [sessionId, now]);
+      WHERE browser_session_id = ANY($1::uuid[])
+    `, [sessionIds, now]);
   }
 
   private async fenceDiscordReauthenticationSessions(input: {

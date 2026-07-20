@@ -1,3 +1,7 @@
+import {
+  FLEET_AUTH_FLOOR_RESOURCE_TOMBSTONED_FUNCTION_NAME,
+} from './authority-floor-read-sql.js';
+
 export const FLEET_AUTH_RECONCILE_FUNCTION_NAME =
   'fleet_auth.reconcile_authority_floor';
 export const FLEET_AUTH_RECONCILE_FUNCTION_ARG_TYPES =
@@ -25,6 +29,11 @@ AS $$
 DECLARE
   current_state fleet_auth.authority_state%ROWTYPE;
   floor_advanced BOOLEAN;
+  owner_principal_ids UUID[] := ARRAY[]::UUID[];
+  owner_companion_ids UUID[] := ARRAY[]::UUID[];
+  owner_provider_subject_ids TEXT[] := ARRAY[]::TEXT[];
+  owner_binding_ids UUID[] := ARRAY[]::UUID[];
+  owner_grant_ids UUID[] := ARRAY[]::UUID[];
 BEGIN
   IF p_authority_lineage_id !~ '^[0-9a-f]{64}$'
     OR p_authority_generation < 1
@@ -70,27 +79,114 @@ BEGIN
     RETURN;
   END IF;
 
+  SELECT COALESCE(array_agg(DISTINCT principal.principal_id), ARRAY[]::UUID[]),
+         COALESCE(array_agg(DISTINCT companion.companion_id), ARRAY[]::UUID[]),
+         COALESCE(array_agg(DISTINCT role_grant.grant_id), ARRAY[]::UUID[])
+  INTO owner_principal_ids, owner_companion_ids, owner_grant_ids
+  FROM fleet_auth.human_principals AS principal
+  JOIN fleet_auth.principal_role_grants AS role_grant
+    ON role_grant.principal_id = principal.principal_id
+  JOIN fleet_auth.companion_authority_state AS companion
+    ON companion.companion_id = role_grant.companion_id
+  WHERE principal.status = 'active'
+    AND principal.restore_state = 'live'
+    AND principal.authority_generation = current_state.authority_generation
+    AND role_grant.role = 'owner'
+    AND role_grant.lifecycle = 'active'
+    AND role_grant.restore_state = 'live'
+    AND role_grant.version = principal.grant_version
+    AND role_grant.authority_generation = current_state.authority_generation
+    AND companion.lifecycle = 'active'
+    AND companion.restore_state = 'live'
+    AND companion.authority_generation = current_state.authority_generation
+    AND NOT ${FLEET_AUTH_FLOOR_RESOURCE_TOMBSTONED_FUNCTION_NAME}(
+      'principal', principal.principal_id::text
+    )
+    AND NOT ${FLEET_AUTH_FLOOR_RESOURCE_TOMBSTONED_FUNCTION_NAME}(
+      'role_grant', role_grant.grant_id::text
+    )
+    AND NOT ${FLEET_AUTH_FLOOR_RESOURCE_TOMBSTONED_FUNCTION_NAME}(
+      'companion', companion.companion_id::text
+    );
+
+  SELECT COALESCE(
+    array_agg(DISTINCT subject.provider || ':' || subject.subject_id),
+    ARRAY[]::TEXT[]
+  )
+  INTO owner_provider_subject_ids
+  FROM fleet_auth.provider_subjects AS subject
+  WHERE subject.principal_id = ANY(owner_principal_ids)
+    AND subject.state = 'active'
+    AND subject.restore_state = 'live'
+    AND subject.authority_generation = current_state.authority_generation
+    AND NOT ${FLEET_AUTH_FLOOR_RESOURCE_TOMBSTONED_FUNCTION_NAME}(
+      'provider_subject', subject.provider || ':' || subject.subject_id
+    );
+
+  SELECT COALESCE(array_agg(DISTINCT binding.binding_id), ARRAY[]::UUID[])
+  INTO owner_binding_ids
+  FROM fleet_auth.principal_contact_bindings AS binding
+  JOIN fleet_auth.principal_role_grants AS role_grant
+    ON role_grant.principal_id = binding.principal_id
+   AND role_grant.companion_id = binding.companion_id
+  JOIN fleet_auth.human_principals AS principal
+    ON principal.principal_id = binding.principal_id
+  WHERE role_grant.grant_id = ANY(owner_grant_ids)
+    AND binding.state = 'active'
+    AND binding.restore_state = 'live'
+    AND binding.version = principal.binding_version
+    AND binding.authority_generation = current_state.authority_generation
+    AND NOT ${FLEET_AUTH_FLOOR_RESOURCE_TOMBSTONED_FUNCTION_NAME}(
+      'contact_binding', binding.binding_id::text
+    );
+
   UPDATE fleet_auth.human_principals
   SET status = CASE WHEN status = 'revoked' THEN status ELSE 'quarantined' END,
-      restore_state = 'quarantined', updated_at = clock_timestamp();
+      restore_state = 'quarantined', updated_at = clock_timestamp()
+  WHERE principal_id <> ALL(owner_principal_ids);
   UPDATE fleet_auth.companion_authority_state
   SET lifecycle = CASE WHEN lifecycle = 'removed' THEN lifecycle ELSE 'quarantined' END,
-      restore_state = 'quarantined', updated_at = clock_timestamp();
+      restore_state = 'quarantined', updated_at = clock_timestamp()
+  WHERE companion_id <> ALL(owner_companion_ids);
   UPDATE fleet_auth.provider_subjects
   SET state = CASE WHEN state = 'revoked' THEN state ELSE 'quarantined' END,
-      restore_state = 'quarantined', updated_at = clock_timestamp();
+      restore_state = 'quarantined', updated_at = clock_timestamp()
+  WHERE provider || ':' || subject_id <> ALL(owner_provider_subject_ids);
   UPDATE fleet_auth.principal_contact_bindings
   SET state = CASE WHEN state = 'revoked' THEN state ELSE 'quarantined' END,
-      restore_state = 'quarantined', updated_at = clock_timestamp();
+      restore_state = 'quarantined', updated_at = clock_timestamp()
+  WHERE binding_id <> ALL(owner_binding_ids);
   UPDATE fleet_auth.principal_role_grants
   SET lifecycle = CASE WHEN lifecycle = 'revoked' THEN lifecycle ELSE 'quarantined' END,
-      restore_state = 'quarantined', updated_at = clock_timestamp();
+      restore_state = 'quarantined', updated_at = clock_timestamp()
+  WHERE grant_id <> ALL(owner_grant_ids);
   UPDATE fleet_auth.passkey_credentials
   SET state = CASE WHEN state = 'revoked' THEN state ELSE 'quarantined' END,
       restore_state = 'quarantined', updated_at = clock_timestamp();
   UPDATE fleet_auth.contact_authority_intents
   SET state = 'quarantined', restore_state = 'quarantined',
       updated_at = clock_timestamp();
+
+  UPDATE fleet_auth.human_principals
+  SET authority_generation = p_authority_generation,
+      updated_at = clock_timestamp()
+  WHERE principal_id = ANY(owner_principal_ids);
+  UPDATE fleet_auth.companion_authority_state
+  SET authority_generation = p_authority_generation,
+      updated_at = clock_timestamp()
+  WHERE companion_id = ANY(owner_companion_ids);
+  UPDATE fleet_auth.provider_subjects
+  SET authority_generation = p_authority_generation,
+      updated_at = clock_timestamp()
+  WHERE provider || ':' || subject_id = ANY(owner_provider_subject_ids);
+  UPDATE fleet_auth.principal_contact_bindings
+  SET authority_generation = p_authority_generation,
+      updated_at = clock_timestamp()
+  WHERE binding_id = ANY(owner_binding_ids);
+  UPDATE fleet_auth.principal_role_grants
+  SET authority_generation = p_authority_generation,
+      updated_at = clock_timestamp()
+  WHERE grant_id = ANY(owner_grant_ids);
 
   DELETE FROM fleet_auth.jit_authorization_grants;
   DELETE FROM fleet_auth.step_up_challenges;

@@ -1773,8 +1773,10 @@ describe('fleet_auth Postgres authority boundary', () => {
     // owner (migration role) authors this fixture ceremony instead.
     const migration = createPostgresPool(db.migrationUrl, { max: 1 });
     const principalId = randomUUID();
+    const ownerPrincipalId = randomUUID();
     const sessionId = randomUUID();
     const companionId = randomUUID();
+    const ownerCompanionId = randomUUID();
     const floorRoot = mkdtempSync(join(tmpdir(), 'psfn-fleet-auth-reenable-'));
     chmodSync(floorRoot, 0o700);
     try {
@@ -1797,6 +1799,56 @@ describe('fleet_auth Postgres authority boundary', () => {
           (provider, subject_id, principal_id, state, authority_generation)
          VALUES ('discord', '123456789012345678', $1, 'active', 1)`,
         [principalId],
+      );
+      await migration.query(
+        `INSERT INTO ${FLEET_AUTH_SCHEMA_NAME}.companion_authority_state
+          (companion_id, lifecycle, authority_generation)
+         VALUES ($1, 'active', 1)`,
+        [companionId],
+      );
+      await runtime.query(
+        `INSERT INTO ${FLEET_AUTH_SCHEMA_NAME}.principal_contact_bindings
+          (binding_id, principal_id, companion_id, contact_id, state,
+           verification_provenance, authority_generation)
+         VALUES ($1, $2, $3, 'member-contact', 'active', '{"kind":"verified"}', 1)`,
+        [randomUUID(), principalId, companionId],
+      );
+      await runtime.query(
+        `INSERT INTO ${FLEET_AUTH_SCHEMA_NAME}.principal_role_grants
+          (grant_id, principal_id, companion_id, role, lifecycle, authority_generation)
+         VALUES ($1, $2, $3, 'member', 'active', 1)`,
+        [randomUUID(), principalId, companionId],
+      );
+      await runtime.query(
+        `INSERT INTO ${FLEET_AUTH_SCHEMA_NAME}.human_principals
+          (principal_id, status, authority_generation)
+         VALUES ($1, 'active', 1)`,
+        [ownerPrincipalId],
+      );
+      await runtime.query(
+        `INSERT INTO ${FLEET_AUTH_SCHEMA_NAME}.provider_subjects
+          (provider, subject_id, principal_id, state, authority_generation)
+         VALUES ('discord', '223456789012345678', $1, 'active', 1)`,
+        [ownerPrincipalId],
+      );
+      await migration.query(
+        `INSERT INTO ${FLEET_AUTH_SCHEMA_NAME}.companion_authority_state
+          (companion_id, lifecycle, authority_generation)
+         VALUES ($1, 'active', 1)`,
+        [ownerCompanionId],
+      );
+      await runtime.query(
+        `INSERT INTO ${FLEET_AUTH_SCHEMA_NAME}.principal_contact_bindings
+          (binding_id, principal_id, companion_id, contact_id, state,
+           verification_provenance, authority_generation)
+         VALUES ($1, $2, $3, 'owner-contact', 'active', '{"kind":"verified"}', 1)`,
+        [randomUUID(), ownerPrincipalId, ownerCompanionId],
+      );
+      await runtime.query(
+        `INSERT INTO ${FLEET_AUTH_SCHEMA_NAME}.principal_role_grants
+          (grant_id, principal_id, companion_id, role, lifecycle, authority_generation)
+         VALUES ($1, $2, $3, 'owner', 'active', 1)`,
+        [randomUUID(), ownerPrincipalId, ownerCompanionId],
       );
       await runtime.query(
         `INSERT INTO ${FLEET_AUTH_SCHEMA_NAME}.browser_sessions
@@ -1904,12 +1956,113 @@ describe('fleet_auth Postgres authority boundary', () => {
         global_auth_epoch: '2',
         activation_generation: '1',
       });
-      const principal = await runtime.query<{ status: string; restore_state: string }>(
-        `SELECT status, restore_state FROM ${FLEET_AUTH_SCHEMA_NAME}.human_principals
-         WHERE principal_id = $1`,
-        [principalId],
-      );
-      expect(principal.rows[0]).toEqual({ status: 'quarantined', restore_state: 'quarantined' });
+      const regularAuthority = await runtime.query<{
+        principal_status: string;
+        principal_restore_state: string;
+        provider_state: string;
+        provider_restore_state: string;
+        companion_lifecycle: string;
+        companion_restore_state: string;
+        binding_state: string;
+        binding_restore_state: string;
+        grant_lifecycle: string;
+        grant_restore_state: string;
+      }>(`
+        SELECT principal.status AS principal_status,
+               principal.restore_state AS principal_restore_state,
+               subject.state AS provider_state,
+               subject.restore_state AS provider_restore_state,
+               companion.lifecycle AS companion_lifecycle,
+               companion.restore_state AS companion_restore_state,
+               binding.state AS binding_state,
+               binding.restore_state AS binding_restore_state,
+               role_grant.lifecycle AS grant_lifecycle,
+               role_grant.restore_state AS grant_restore_state
+        FROM ${FLEET_AUTH_SCHEMA_NAME}.human_principals AS principal
+        JOIN ${FLEET_AUTH_SCHEMA_NAME}.provider_subjects AS subject
+          ON subject.principal_id = principal.principal_id
+        JOIN ${FLEET_AUTH_SCHEMA_NAME}.principal_contact_bindings AS binding
+          ON binding.principal_id = principal.principal_id
+        JOIN ${FLEET_AUTH_SCHEMA_NAME}.principal_role_grants AS role_grant
+          ON role_grant.principal_id = principal.principal_id
+         AND role_grant.companion_id = binding.companion_id
+        JOIN ${FLEET_AUTH_SCHEMA_NAME}.companion_authority_state AS companion
+          ON companion.companion_id = role_grant.companion_id
+        WHERE principal.principal_id = $1
+      `, [principalId]);
+      expect(regularAuthority.rows[0]).toEqual({
+        principal_status: 'quarantined',
+        principal_restore_state: 'quarantined',
+        provider_state: 'quarantined',
+        provider_restore_state: 'quarantined',
+        companion_lifecycle: 'quarantined',
+        companion_restore_state: 'quarantined',
+        binding_state: 'quarantined',
+        binding_restore_state: 'quarantined',
+        grant_lifecycle: 'quarantined',
+        grant_restore_state: 'quarantined',
+      });
+      const ownerAuthority = await runtime.query<{
+        principal_status: string;
+        principal_restore_state: string;
+        principal_generation: string;
+        provider_state: string;
+        provider_restore_state: string;
+        provider_generation: string;
+        companion_lifecycle: string;
+        companion_restore_state: string;
+        companion_generation: string;
+        binding_state: string;
+        binding_restore_state: string;
+        binding_generation: string;
+        grant_lifecycle: string;
+        grant_restore_state: string;
+        grant_generation: string;
+      }>(`
+        SELECT principal.status AS principal_status,
+               principal.restore_state AS principal_restore_state,
+               principal.authority_generation::text AS principal_generation,
+               subject.state AS provider_state,
+               subject.restore_state AS provider_restore_state,
+               subject.authority_generation::text AS provider_generation,
+               companion.lifecycle AS companion_lifecycle,
+               companion.restore_state AS companion_restore_state,
+               companion.authority_generation::text AS companion_generation,
+               binding.state AS binding_state,
+               binding.restore_state AS binding_restore_state,
+               binding.authority_generation::text AS binding_generation,
+               role_grant.lifecycle AS grant_lifecycle,
+               role_grant.restore_state AS grant_restore_state,
+               role_grant.authority_generation::text AS grant_generation
+        FROM ${FLEET_AUTH_SCHEMA_NAME}.human_principals AS principal
+        JOIN ${FLEET_AUTH_SCHEMA_NAME}.provider_subjects AS subject
+          ON subject.principal_id = principal.principal_id
+        JOIN ${FLEET_AUTH_SCHEMA_NAME}.principal_contact_bindings AS binding
+          ON binding.principal_id = principal.principal_id
+        JOIN ${FLEET_AUTH_SCHEMA_NAME}.principal_role_grants AS role_grant
+          ON role_grant.principal_id = principal.principal_id
+         AND role_grant.companion_id = binding.companion_id
+        JOIN ${FLEET_AUTH_SCHEMA_NAME}.companion_authority_state AS companion
+          ON companion.companion_id = role_grant.companion_id
+        WHERE principal.principal_id = $1
+      `, [ownerPrincipalId]);
+      expect(ownerAuthority.rows[0]).toEqual({
+        principal_status: 'active',
+        principal_restore_state: 'live',
+        principal_generation: '2',
+        provider_state: 'active',
+        provider_restore_state: 'live',
+        provider_generation: '2',
+        companion_lifecycle: 'active',
+        companion_restore_state: 'live',
+        companion_generation: '2',
+        binding_state: 'active',
+        binding_restore_state: 'live',
+        binding_generation: '2',
+        grant_lifecycle: 'active',
+        grant_restore_state: 'live',
+        grant_generation: '2',
+      });
       const ephemeralCounts = await runtime.query<{ table_name: string; count: string }>(
         `SELECT table_name, count
          FROM (VALUES

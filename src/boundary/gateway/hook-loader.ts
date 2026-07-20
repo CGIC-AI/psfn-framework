@@ -3,7 +3,6 @@ import {
   lstatSync,
   readdirSync,
   readFileSync,
-  statSync,
 } from 'node:fs';
 import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -20,7 +19,7 @@ import {
 } from './hook-registry.js';
 
 /**
- * Workspace hook loader (bead psfn-framework-vvf.2): scans
+ * Workspace hook loader (bead vvf.2): scans
  * `WORKSPACE_PATH/hooks/` for `HOOK.yaml` manifests plus their handler
  * modules and registers validated hooks with the {@link HookRegistry},
  * mirroring the skills-faculty loader conventions
@@ -219,7 +218,7 @@ function parseManifest(raw: unknown, relativePath: string): ParsedHookManifest {
       throw new ManifestValidationError(
         'unsupported_invocation',
         `${relativePath}: invocation "sync_decision" is not supported yet `
-          + '(synchronous pre-tool hooks land with psfn-framework-7ym.3)',
+          + '(synchronous pre-tool hooks land with bead 7ym.3)',
         name,
       );
     }
@@ -361,7 +360,7 @@ export async function loadWorkspaceHooks(
   const importModule = options.importModule ?? defaultImportModule;
   const rootPath = resolve(workspacePath, HOOKS_DIRECTORY_NAME);
 
-  const rootExists = existsSync(rootPath) && statSync(rootPath).isDirectory();
+  const rootExists = existsSync(rootPath) && lstatSync(rootPath).isDirectory();
   if (!rootExists) {
     log.debug('No workspace hooks directory; operator hook system idle', { rootPath });
     return { rootPath, rootExists: false, loaded: [], rejected: [] };

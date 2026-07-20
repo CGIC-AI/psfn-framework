@@ -690,7 +690,7 @@ export interface OperatorHookRuntime {
 }
 
 /**
- * Operator-extensible hook runtime (bead psfn-framework-vvf.2): scans
+ * Operator-extensible hook runtime (bead vvf.2): scans
  * `<workspacePath>/hooks/` for HOOK.yaml + handler definitions, registers the
  * valid ones, and attaches the async fire-and-forget lifecycle consumer to
  * the agent-process EventBus. Invalid hook definitions are rejected with a

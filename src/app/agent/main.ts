@@ -717,7 +717,7 @@ async function main(): Promise<void> {
     shardWorkloadRegistry: gateway,
   });
 
-  // Operator-extensible lifecycle hooks (psfn-framework-vvf.2): workspace
+  // Operator-extensible lifecycle hooks (bead vvf.2): workspace
   // HOOK.yaml definitions attach to the agent-process bus, fire-and-forget.
   // Bad hook files reject with a logged reason; startup never blocks on them.
   const operatorHookRuntime = await wireOperatorHookRuntime({

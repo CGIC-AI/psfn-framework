@@ -4,7 +4,7 @@ import { toErrorMessage } from '../../shared/utils/errors.js';
 
 /**
  * Operator-extensible hook registry (Hermes hooks.py pattern, bead
- * psfn-framework-vvf.2).
+ * vvf.2).
  *
  * TRUST MODEL
  * Hooks are operator-authored code loaded from the companion's Personal
@@ -28,7 +28,7 @@ import { toErrorMessage } from '../../shared/utils/errors.js';
  *
  * INVOCATION MODES
  * The registration model and matcher are invocation-agnostic so the future
- * synchronous pre_tool_use decision path (psfn-framework-7ym.3 /
+ * synchronous pre_tool_use decision path (bead 7ym.3 /
  * 7ym.3.1) can reuse them:
  *  - `async_lifecycle` (this bead, the only executed mode): declared
  *    lifecycle events map to EventBus subscriptions restricted to the
@@ -206,7 +206,7 @@ const TRAILING_WILDCARD_SUFFIX = '.*';
  * Invocation-agnostic name matcher over dot-separated subjects. Used by the
  * async lifecycle path to expand manifest event patterns against the
  * subscribable-event allowlist; designed for reuse by the future sync
- * pre_tool_use path over tool names/aliases (psfn-framework-7ym.3.1).
+ * pre_tool_use path over tool names/aliases (bead 7ym.3.1).
  *
  * Grammar (fail-closed — anything else is invalid):
  *  - exact subject name: `agent.tool.end`
@@ -326,7 +326,7 @@ export interface AsyncLifecycleHookRegistration extends HookRegistrationBase {
 
 /**
  * Registration-model placeholder for the synchronous pre_tool_use decision
- * path (psfn-framework-7ym.3.1). The registry accepts and lists these so the
+ * path (bead 7ym.3.1). The registry accepts and lists these so the
  * sync path can reuse the same registration/matcher model, but this module
  * provides NO execution path for them and the workspace loader rejects
  * manifests requesting the mode until that bead lands.

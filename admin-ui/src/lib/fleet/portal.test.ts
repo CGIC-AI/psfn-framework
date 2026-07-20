@@ -160,6 +160,26 @@ describe('Garden fleet portal client', () => {
     expect(location.assign).not.toHaveBeenCalled();
   });
 
+  it('canonicalizes a nonstandard fetch rejection from a canceled fleet probe', async () => {
+    const location = { assign: vi.fn() };
+    vi.stubGlobal('window', { location });
+    const controller = new AbortController();
+    vi.stubGlobal('fetch', vi.fn((_url: string, init?: RequestInit) => new Promise<Response>(
+      (_resolve, reject) => {
+        init?.signal?.addEventListener('abort', () => {
+          reject(new DOMException('signal aborted without reason', 'NetworkError'));
+        });
+      },
+    )));
+
+    const request = fetchFleetPortalProjection(controller.signal);
+    controller.abort();
+
+    const error = await request.catch((reason: unknown) => reason);
+    expect(isAbortError(error, controller.signal)).toBe(true);
+    expect(location.assign).not.toHaveBeenCalled();
+  });
+
   it('redirects only a non-aborted fleet 401 to login', async () => {
     const location = { assign: vi.fn() };
     vi.stubGlobal('window', { location });

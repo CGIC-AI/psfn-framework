@@ -137,12 +137,18 @@ export function parseFleetPortalProjection(value: unknown): FleetPortalProjectio
 }
 
 export async function fetchFleetPortalProjection(signal?: AbortSignal): Promise<FleetPortalProjection> {
-  const response = await fetch('/v1/fleet/portal', {
-    cache: 'no-store',
-    credentials: 'include',
-    headers: { Accept: 'application/json' },
-    ...(signal ? { signal } : {}),
-  });
+  let response: Response;
+  try {
+    response = await fetch('/v1/fleet/portal', {
+      cache: 'no-store',
+      credentials: 'include',
+      headers: { Accept: 'application/json' },
+      ...(signal ? { signal } : {}),
+    });
+  } catch (error) {
+    if (signal) throwIfAborted(signal);
+    throw error;
+  }
   if (signal) throwIfAborted(signal);
   if (response.status === 401) {
     if (typeof window !== 'undefined') window.location.assign('/fleet/login');

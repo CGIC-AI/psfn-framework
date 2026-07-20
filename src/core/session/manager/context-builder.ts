@@ -82,6 +82,7 @@ import {
   buildOrientationFallbackSummary,
 } from './context-history-assembly.js';
 import { buildContinuityMetadataBlock } from './continuity-metadata-block.js';
+import { createRolledOutSessionBoundary } from '../rolled-out-session-boundary.js';
 
 export { assembleSessionHistoryForContextWithLlmSummary } from './context-history-assembly.js';
 
@@ -479,6 +480,9 @@ export async function captureTurnSessionContext(
   const roomWindow = params.roomContentWindow ?? { kind: 'unwindowed' as const };
   const roomWindowGated = roomWindow.kind !== 'unwindowed';
   const roomWindowFloor = roomContentWindowFloorMs(roomWindow);
+  const rolledOutSessionBoundary = !roomWindowGated && collected.rolledOutBeforeMs !== undefined
+    ? createRolledOutSessionBoundary(params.channelId, collected.rolledOutBeforeMs)
+    : undefined;
   const presenceWindowEntries = roomWindowGated
     ? collected.entries.filter(entry => entry.timestamp >= roomWindowFloor)
     : collected.entries;
@@ -584,6 +588,9 @@ export async function captureTurnSessionContext(
     channelId: params.channelId,
     recentEntries: recent.map(cloneSessionEntry),
     sourceEntryCount: Math.max(0, collected.sourceCount - excludedSessionEntryCount),
+    ...(rolledOutSessionBoundary
+      ? { rolledOutSessionBoundary }
+      : {}),
     ...(collected.storeWindowMaxEntryId !== undefined
       ? { storeWindowMaxEntryId: collected.storeWindowMaxEntryId }
       : {}),
@@ -608,6 +615,8 @@ export async function captureTurnSessionContext(
     compactionPromptText: params.compactionPromptText,
     versionPointer: buildSnapshotVersionPointer([
       params.channelId,
+      rolledOutSessionBoundary?.sessionId,
+      rolledOutSessionBoundary?.beforeMs,
       roomWindowGated ? `roomWindow:${roomWindowFloor}` : undefined,
       recent.at(-1)?.id,
       recent.at(-1)?.timestamp,

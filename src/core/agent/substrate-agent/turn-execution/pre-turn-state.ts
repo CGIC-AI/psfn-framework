@@ -719,6 +719,9 @@ export async function computePreTurnState(input: {
     contextText: memoryRetrievalContextText,
     channelId: message.channelId,
     sessionChannelId,
+    ...(sessionContextSnapshot.rolledOutSessionBoundary
+      ? { rolledOutSessionBoundary: sessionContextSnapshot.rolledOutSessionBoundary }
+      : {}),
     trustLevel,
     channelMeta,
     conversationScope,

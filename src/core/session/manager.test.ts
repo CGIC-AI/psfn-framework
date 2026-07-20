@@ -2100,6 +2100,10 @@ describe('SessionManager', () => {
       });
       expect(liveContext.manifest?.budgets.sessionHistory.actualCount).toBe(liveContext.messages.length);
       expect(snapshotContext.messages).toEqual(liveContext.messages);
+      expect(snapshot.rolledOutSessionBoundary).toEqual({
+        sessionId: 'ch-span-window',
+        beforeMs: currentAt - (36 * hourMs),
+      });
     } finally {
       nowSpy.mockRestore();
     }

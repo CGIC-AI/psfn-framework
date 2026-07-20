@@ -99,8 +99,8 @@ describe('SessionManager private-room presence window (psfn-framework-s10rm)', (
     // Room conversation before this companion joined would never be delivered
     // to it — but its OWN persisted session from an EARLIER visit looks the
     // same to the serving path, which is exactly what this gate covers.
-    appendRoomMessage(store, 'earlier-window secret plan', T(60_000));
-    appendRoomMessage(store, 'earlier-window reply', T(55_000), 'assistant');
+    appendRoomMessage(store, 'earlier-window secret plan', NOW - (48 * 60 * 60 * 1000));
+    appendRoomMessage(store, 'earlier-window reply', NOW - (47 * 60 * 60 * 1000), 'assistant');
     const floor = T(30_000);
     appendRoomMessage(store, 'post-join greeting', T(20_000));
     appendRoomMessage(store, 'post-join reply', T(10_000), 'assistant');
@@ -114,6 +114,7 @@ describe('SessionManager private-room presence window (psfn-framework-s10rm)', (
     ]);
     expect(snapshot.roomWindowFloorMs).toBe(floor);
     expect(snapshot.roomWindowFilteredEntryCount).toBe(2);
+    expect(snapshot.rolledOutSessionBoundary).toBeUndefined();
 
     const context = await mgr.buildContext(ROOM, 'SYS', '', undefined, undefined, undefined, [], snapshot);
     const rendered = JSON.stringify(context.messages) + context.systemPrompt;

@@ -740,6 +740,17 @@ describe('orientation context surface wiring', () => {
       });
 
       expect(spanBound.entries.some(entry => entry.content === 'outside-old-01')).toBe(false);
+      expect(spanBound.rolledOutBeforeMs).toBe(currentAt - (36 * hourMs));
+      const entirelyRetained = collectRecentEntriesWithinHistorySpan({
+        store: {
+          getRecent: (_channelId: string, limit: number) => allEntries.slice(-10).slice(-limit),
+        },
+        channelId: 'api:main',
+        estimatedCount: 5,
+        maxHistorySpanMs: 36 * hourMs,
+        nowMs: currentAt,
+      });
+      expect(entirelyRetained.rolledOutBeforeMs).toBeUndefined();
 
       const complete = vi.fn<LLMProviderPort['complete']>().mockImplementation(async (context, purpose, options) => {
         expect(purpose).toBe('background');

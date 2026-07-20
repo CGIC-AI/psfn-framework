@@ -18,10 +18,21 @@ import type {
   EpisodicStorePort,
 } from '../episodic/store-port.js';
 import type { MemoryScopeQuery } from '../types.js';
+import type { RolledOutSessionBoundary } from '../../../core/session/rolled-out-session-boundary.js';
+import {
+  mergePreferredBreadcrumbs,
+  retrieveRolledOutBreadcrumbs,
+} from './rolled-out-breadcrumbs.js';
+import {
+  cloneEpisode,
+  cloneEpisodeArc,
+} from './episodic-cloning.js';
+
+export { cloneEpisodicRetrievalChain } from './episodic-cloning.js';
 
 export type EpisodicRetrievalStore = Pick<
   EpisodicStorePort,
-  'listEpisodes' | 'getEpisode' | 'listEpisodeArcsForEpisode'
+  'listEpisodes' | 'searchByTime' | 'getEpisode' | 'listEpisodeArcsForEpisode'
 >;
 
 export type EpisodicArcMembershipStore = Pick<
@@ -54,6 +65,7 @@ export interface EpisodicTimelineEntry {
 export interface EpisodicRetrievalInput {
   contextText: string;
   channelId: string;
+  rolledOutSessionBoundary?: RolledOutSessionBoundary;
   trustLevel: TrustLevel;
   channelDisclosure: ChannelDisclosureContext;
   canonicalContactId?: string;
@@ -157,10 +169,6 @@ export async function retrieveEpisodicChains(
 ): Promise<EpisodicRetrievalChain[]> {
   const queryTokens = tokenizeQuery(input.contextText);
   const normalizedQuery = normalizeSearchText(input.contextText);
-  if (queryTokens.length === 0 && !input.scopeQuery) {
-    return [];
-  }
-
   const episodicPolicy = resolveMemoryRetrievalPolicy(input.memoryRetrievalPolicy).episodic;
   const maxChains = normalizePositiveInteger(input.maxChains, episodicPolicy.maxChains);
   const maxDepth = normalizeNonNegativeInteger(input.maxDepth, episodicPolicy.maxDepth);
@@ -168,6 +176,16 @@ export async function retrieveEpisodicChains(
     input.maxEpisodesPerChain,
     episodicPolicy.maxEpisodesPerChain,
   );
+  const rolledOutBreadcrumbs = await retrieveRolledOutBreadcrumbs({
+    store,
+    boundary: input.rolledOutSessionBoundary,
+    maxChains,
+    scanLimit: normalizePositiveInteger(input.scanLimit, episodicPolicy.scanLimit),
+    isVisible: episode => isEpisodeVisibleForTurn(episode, input),
+  });
+  if (queryTokens.length === 0 && !input.scopeQuery) {
+    return rolledOutBreadcrumbs;
+  }
   const episodes = (await store.listEpisodes({
     limit: normalizePositiveInteger(input.scanLimit, episodicPolicy.scanLimit),
   })).map(cloneEpisode);
@@ -210,10 +228,11 @@ export async function retrieveEpisodicChains(
     if (chains.length >= maxChains) break;
   }
 
-  return chains.sort((left, right) => {
+  const rankedChains = chains.sort((left, right) => {
     if (right.score !== left.score) return right.score - left.score;
     return left.rootEpisodeId.localeCompare(right.rootEpisodeId);
   });
+  return mergePreferredBreadcrumbs(rolledOutBreadcrumbs, rankedChains, maxChains);
 }
 
 export async function retrieveEpisodicTimeline(
@@ -355,16 +374,6 @@ export async function listEpisodeArcMemberships(
     members.sort(compareEpisodesChronological);
     return { arc, members };
   });
-}
-
-export function cloneEpisodicRetrievalChain(chain: EpisodicRetrievalChain): EpisodicRetrievalChain {
-  return {
-    rootEpisodeId: chain.rootEpisodeId,
-    episodes: chain.episodes.map(cloneEpisode),
-    arcs: chain.arcs.map(cloneEpisodeArc),
-    score: chain.score,
-    matchedTerms: [...chain.matchedTerms],
-  };
 }
 
 export function countEpisodicChainEpisodes(chains: readonly EpisodicRetrievalChain[]): number {
@@ -744,30 +753,4 @@ function collectExplicitProvenance(refs: readonly EpisodeProvenanceRef[], out: S
   for (const ref of refs) {
     out.add(`${ref.kind}:${ref.refId}`);
   }
-}
-
-function cloneEpisode(episode: Episode): Episode {
-  return {
-    ...episode,
-    participantContactIds: [...episode.participantContactIds],
-    salience: { ...episode.salience },
-    affect: {
-      ...episode.affect,
-      labels: [...episode.affect.labels],
-    },
-    themes: [...episode.themes],
-    spanRefs: episode.spanRefs.map(ref => ({ ...ref })),
-    artifactRefs: episode.artifactRefs.map(ref => ({ ...ref })),
-    provenanceRefs: episode.provenanceRefs.map(ref => ({ ...ref })),
-  };
-}
-
-function cloneEpisodeArc(arc: EpisodeArc): EpisodeArc {
-  return {
-    ...arc,
-    themes: [...arc.themes],
-    spanRefs: arc.spanRefs.map(ref => ({ ...ref })),
-    artifactRefs: arc.artifactRefs.map(ref => ({ ...ref })),
-    provenanceRefs: arc.provenanceRefs.map(ref => ({ ...ref })),
-  };
 }

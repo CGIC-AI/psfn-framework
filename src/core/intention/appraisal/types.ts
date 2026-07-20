@@ -9,7 +9,7 @@ import type {
   ChannelType,
   SubstrateMessage,
 } from '../../../shared/contracts/runtime.js';
-import type { ActiveConcernStatus } from '../concerns.js';
+import type { ActiveConcernStatus, ActiveConcernVAD } from '../concerns.js';
 import type { IcpConversationCorrelation } from '../../../shared/contracts/icp-autonomy.js';
 
 export const DEFAULT_APPRAISAL_FREQUENCY = 3;
@@ -68,6 +68,13 @@ export interface ActiveConcernSnapshot {
   dueAt?: number;
   resolvedAt?: number;
   priority?: IntentionDecisionPriority | number;
+  /**
+   * Emotional-arc snapshots carried into the resolved-concern prompt block
+   * (vw3w.2). Populated only for recently-resolved concerns; each is present
+   * only when it was actually captured (no fabrication, charter 8.4).
+   */
+  formationVAD?: ActiveConcernVAD;
+  resolutionVAD?: ActiveConcernVAD;
 }
 
 export interface ActiveCareReminderSnapshot {

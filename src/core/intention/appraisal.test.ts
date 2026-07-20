@@ -431,6 +431,17 @@ describe('IntentionAppraisal', () => {
         status: 'resolved',
         resolvedAt: Date.parse('2026-03-10T15:45:00.000Z'),
         priority: 'medium',
+        // vw3w.2: full emotional arc — both VADs captured.
+        formationVAD: { valence: -0.4, arousal: 0.6, dominance: -0.3 },
+        resolutionVAD: { valence: 0.4, arousal: -0.3, dominance: 0.3 },
+      }, {
+        id: 'resolved-2',
+        title: 'Half-captured arc',
+        status: 'resolved',
+        resolvedAt: Date.parse('2026-03-10T15:46:00.000Z'),
+        priority: 'low',
+        // Only formation captured — resolution half must not be fabricated.
+        formationVAD: { valence: -0.4, arousal: 0.6, dominance: -0.3 },
       }],
     });
 
@@ -445,6 +456,17 @@ describe('IntentionAppraisal', () => {
       priority: 'medium',
     });
     expect(promptPayload.recentlyResolvedConcerns?.[0]?.resolvedAt).toBeTypeOf('string');
+    // vw3w.2: the arc is rendered as prose (charter 8.6), not a score wall.
+    const fullArc = promptPayload.recentlyResolvedConcerns?.[0]?.emotionalArc;
+    expect(fullArc).toBeTypeOf('string');
+    expect(fullArc as string).toContain('resolving it, that settled to');
+    expect(fullArc as string).not.toMatch(/-?0\.\d/);
+    // No raw VAD triples leak into the prompt payload.
+    expect(promptPayload.recentlyResolvedConcerns?.[0]?.formationVAD).toBeUndefined();
+    expect(promptPayload.recentlyResolvedConcerns?.[0]?.resolutionVAD).toBeUndefined();
+    // Formation-only concern surfaces just the formation half, no fabricated resolution.
+    const partialArc = promptPayload.recentlyResolvedConcerns?.[1]?.emotionalArc;
+    expect(partialArc).toBe('When it formed this sat heavy, activated, and less agentic.');
   });
 
   it('includes active durable care reminders in the appraisal prompt', async () => {

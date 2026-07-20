@@ -682,6 +682,16 @@ export function resolveDiscrepancyJournalPath(dataDir: string): string {
   return join(resolveReflectionNotesDir(dataDir), 'discrepancies.jsonl');
 }
 
+/**
+ * Dedicated journal for concern-resolution emotional arcs (vw3w.2). Kept
+ * separate from the reflection journal so arc entries never leak into the
+ * heartbeat reflection-substrate prompt (which reads journal.jsonl); the arc
+ * surfaces to the companion through the resolved-concern appraisal block.
+ */
+export function resolveConcernResolutionArcJournalPath(dataDir: string): string {
+  return join(resolveReflectionNotesDir(dataDir), 'concern-arcs.jsonl');
+}
+
 export function resolveReflectionMetacognitionDir(dataDir: string): string {
   return join(resolveReflectionNotesDir(dataDir), 'metacognition');
 }

@@ -218,3 +218,83 @@ describe('ReflectionJournalStore', () => {
     })).toThrow('Reflection journal metacognitiveFlags[0].flag must be a non-empty string');
   });
 });
+
+describe('ReflectionJournalStore concernArc telemetry (vw3w.2)', () => {
+  let tempDir: string;
+  let filePath: string;
+  let store: ReflectionJournalStore;
+
+  beforeEach(() => {
+    tempDir = mkdtempSync(join(tmpdir(), 'reflection-journal-arc-'));
+    filePath = join(tempDir, 'concern-arcs.jsonl');
+    store = new ReflectionJournalStore(filePath);
+  });
+
+  afterEach(() => {
+    rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  const baseArcInput = () => ({
+    templateId: 'concern_arc',
+    templateName: 'Concern Arc',
+    prompt: 'Resolved concern: rollback follow-up',
+    reflection: 'When it formed this sat heavy; resolving it, that settled to lifted.',
+    channelId: 'internal:concern-resolution',
+    mode: 'agent' as const,
+    substrateBoundary: 'concern-resolution-arc',
+    substrateProvenanceRefs: ['concern:concern-1'],
+  });
+
+  it('round-trips a structured concern arc through append and listRecent', () => {
+    store.append({
+      ...baseArcInput(),
+      concernArc: {
+        concernId: 'concern-1',
+        formationVAD: { valence: -0.4, arousal: 0.6, dominance: -0.2 },
+        resolutionVAD: { valence: 0.3, arousal: 0.1, dominance: 0.2 },
+        reliefDelta: { valence: 0.7, arousal: -0.5, dominance: 0.4 },
+        source: 'decision',
+        durationMs: 7_200_000,
+        finalSalience: 0.42,
+      },
+    });
+    const entries = store.listRecent({ limit: 5 });
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.telemetry?.concernArc).toEqual({
+      concernId: 'concern-1',
+      formationVAD: { valence: -0.4, arousal: 0.6, dominance: -0.2 },
+      resolutionVAD: { valence: 0.3, arousal: 0.1, dominance: 0.2 },
+      reliefDelta: { valence: 0.7, arousal: -0.5, dominance: 0.4 },
+      source: 'decision',
+      durationMs: 7_200_000,
+      finalSalience: 0.42,
+    });
+    expect(entries[0]?.substrateProvenanceRefs).toEqual(['concern:concern-1']);
+  });
+
+  it('fails closed on a non-finite VAD axis', () => {
+    expect(() => store.append({
+      ...baseArcInput(),
+      concernArc: {
+        concernId: 'concern-1',
+        formationVAD: { valence: Number.NaN, arousal: 0.6, dominance: -0.2 },
+        resolutionVAD: { valence: 0.3, arousal: 0.1, dominance: 0.2 },
+        reliefDelta: { valence: 0.7, arousal: -0.5, dominance: 0.4 },
+        source: 'decision',
+      },
+    })).toThrow('Reflection journal concernArc.formationVAD.valence must be a finite number');
+  });
+
+  it('fails closed on a missing concernId', () => {
+    expect(() => store.append({
+      ...baseArcInput(),
+      concernArc: {
+        concernId: '  ',
+        formationVAD: { valence: -0.4, arousal: 0.6, dominance: -0.2 },
+        resolutionVAD: { valence: 0.3, arousal: 0.1, dominance: 0.2 },
+        reliefDelta: { valence: 0.7, arousal: -0.5, dominance: 0.4 },
+        source: 'decision',
+      },
+    })).toThrow('Reflection journal concernArc requires a non-empty concernId');
+  });
+});

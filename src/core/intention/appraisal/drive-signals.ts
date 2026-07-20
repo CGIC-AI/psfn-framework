@@ -1,6 +1,7 @@
 import { resolveActiveTimezone } from '../../../shared/time/active-timezone.js';
 import { evaluatePendingFollowUpWakeState } from '../pending-follow-ups.js';
 import { isBackgroundAppraisalChannel } from './classification.js';
+import { describeConcernEmotionalArc } from './concern-arc-prose.js';
 import { formatPromptTimestamp } from './formatting.js';
 import type {
   AppraisalPersonaContext,
@@ -82,6 +83,13 @@ export function buildAppraisalPromptPayload(input: {
   });
   const promptRecentlyResolvedConcerns = normalized.recentlyResolvedConcerns.map((concern) => {
     const resolvedAtLabel = formatPromptTimestamp(concern.resolvedAt);
+    // vw3w.2: render the captured emotional arc as prose (charter 8.6 — no score
+    // wall) so a resolved concern reads as lived experience. Present only when a
+    // VAD was actually captured; a half-captured arc surfaces just its half.
+    const emotionalArc = describeConcernEmotionalArc({
+      ...(concern.formationVAD ? { formationVAD: concern.formationVAD } : {}),
+      ...(concern.resolutionVAD ? { resolutionVAD: concern.resolutionVAD } : {}),
+    });
     return {
       ...(concern.id ? { id: concern.id } : {}),
       ...(concern.title ? { title: concern.title } : {}),
@@ -89,6 +97,7 @@ export function buildAppraisalPromptPayload(input: {
       ...(concern.status ? { status: concern.status } : {}),
       ...(concern.priority !== undefined ? { priority: concern.priority } : {}),
       ...(resolvedAtLabel ? { resolvedAt: resolvedAtLabel } : {}),
+      ...(emotionalArc ? { emotionalArc } : {}),
     };
   });
   const promptPendingFollowUps = (normalized.internalState?.attention.pendingFollowUps ?? []).map((followUp) => {

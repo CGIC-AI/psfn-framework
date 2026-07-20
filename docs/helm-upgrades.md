@@ -446,10 +446,15 @@ PSFN_REMOTE_DIR="$REMOTE_DIR" npm run ship:kube -- \
 ```
 
 Until the bundled-skill assertion is incorporated into that script, run it
-against the built image before shipping:
+against the built image before shipping. This check intentionally uses the bare
+`psfn-framework:${TARGET_TAG}` tag produced by the immediately preceding
+`ship:kube -- --dry-run`; it is not the `localhost/` tag from the local k3d
+path. If changing paths, rerun the ship dry run or explicitly retag the
+inspected local image first. `--pull=never` prevents an absent bare tag from
+falling through to a registry pull:
 
 ```bash
-docker run --rm --entrypoint test \
+docker run --rm --pull=never --entrypoint test \
   "psfn-framework:${TARGET_TAG}" \
   -f /app/skills/conversation/SKILL.md
 ```

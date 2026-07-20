@@ -20,7 +20,7 @@ import {
 } from '../../../core/identity/prompt-runtime.js';
 import {
   IMMUTABLE_HUMAN_SAFETY_AMENDMENTS,
-  buildImmutableHumanSafetySection,
+  buildCompanionConstitutionSection,
 } from '../../../core/identity/prompt-composer.js';
 import type {
   PromptLayerMetadataUpdate,
@@ -344,7 +344,7 @@ export class AdminPromptsServiceContext {
     mutableLayers: readonly Pick<AdminConstitutionMutableLayer, 'content' | 'enabled'>[],
     companionLayer: AdminConstitutionCompanionLayer | null,
   ): AdminConstitutionSnapshotData['preview'] {
-    const sections: string[] = [buildImmutableHumanSafetySection()];
+    const sections: string[] = [buildCompanionConstitutionSection()];
 
     if (companionLayer?.content.trim()) {
       sections.push(companionLayer.content.trim());

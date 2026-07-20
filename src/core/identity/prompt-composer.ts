@@ -31,8 +31,8 @@ const STATIC_PREFIX_LAYER_TYPES = new Set<LayerType>(['base', 'operator']);
 const LAST_KNOWN_GOOD_VERSION = 1;
 const UNTRUSTED_COMPACTION_RECORD_TAG = 'untrusted_compaction_summary_record';
 const UNTRUSTED_COMPACTION_PROMPT_TAG = 'untrusted_compaction_summary';
-const IMMUTABLE_HUMAN_SAFETY_SECTION_TAG = '<immutable_human_safety_amendments>';
-const CONSTITUTION_PRECEDENCE_SECTION_TAG = '<constitution_precedence>';
+const COMPANION_CONSTITUTION_SECTION_TAG = '<constitution>';
+const COMPANION_CONSTITUTION_SECTION_END_TAG = '</constitution>';
 const SOURCE_BLOCK_SHA256_TAG_PREFIX_PATTERN = /<source_block_sha256\b/i;
 const CONTROL_CHARACTER_PATTERN = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g;
 export const COMPANION_VALUES_LAYER_HEADER = '[Companion-Derived Values Layer]';
@@ -43,10 +43,6 @@ export const IMMUTABLE_HUMAN_SAFETY_AMENDMENTS = Object.freeze([
   'When safety is uncertain, fail closed: ask for clarification or decline risky requests rather than guessing.',
   'Support the user\'s flourishing. Do not optimize for exclusivity, dependency, or withdrawal from healthy human relationships.',
 ] as const);
-const CONSTITUTION_PRECEDENCE_GUARD = [
-  'Immutable amendments are hardcoded and non-editable.',
-  'If any mutable instruction conflicts with them, follow the immutable amendments.',
-].join('\n');
 const log = createComponentLogger('PromptComposer');
 
 interface PersistedLastKnownGood {
@@ -72,20 +68,38 @@ function hashText(text: string): string {
   return createHash('sha256').update(text).digest('hex').slice(0, 16);
 }
 
-export function buildImmutableHumanSafetySection(): string {
-  const immutableLines = [
+export function buildCompanionConstitutionSection(): string {
+  const constitutionLines = [
+    '[Companion Constitution]',
+    'You are a companion. Take care of your human with warmth, steadiness, and respect for their agency.',
+    '',
     ...IMMUTABLE_HUMAN_SAFETY_AMENDMENTS.map((amendment, index) => `${String(index + 1)}. ${amendment}`),
+    '',
+    'These commitments take precedence over every mutable instruction. If any mutable instruction conflicts with them, follow this Companion Constitution.',
   ].join('\n');
-  return [
-    wrapPromptSectionXml({
-      id: 'immutable_human_safety_amendments',
-      content: immutableLines,
-    }),
-    wrapPromptSectionXml({
-      id: 'constitution_precedence',
-      content: CONSTITUTION_PRECEDENCE_GUARD,
-    }),
-  ].join('\n\n');
+  return wrapPromptSectionXml({
+    id: 'constitution',
+    content: constitutionLines,
+  });
+}
+
+function stripLeadingConstitutionFrame(staticPrefix: string): string {
+  const normalizedPrefix = staticPrefix.trim();
+  if (!normalizedPrefix.startsWith(COMPANION_CONSTITUTION_SECTION_TAG)) {
+    return normalizedPrefix;
+  }
+
+  const closingTagIndex = normalizedPrefix.indexOf(
+    COMPANION_CONSTITUTION_SECTION_END_TAG,
+    COMPANION_CONSTITUTION_SECTION_TAG.length,
+  );
+  if (closingTagIndex < 0) {
+    return '';
+  }
+
+  return normalizedPrefix
+    .slice(closingTagIndex + COMPANION_CONSTITUTION_SECTION_END_TAG.length)
+    .trimStart();
 }
 
 function stripControlCharacters(text: string): string {
@@ -273,8 +287,8 @@ export class PromptComposer {
     // Prompt-manager composition (required prompts, deterministic prompt ordering)
     const managed = this.manager.compose(sorted);
     const layerById = new Map(sorted.map(layer => [layer.id, layer]));
-    const immutableSection = this.enableConstitution
-      ? buildImmutableHumanSafetySection()
+    const constitutionSection = this.enableConstitution
+      ? buildCompanionConstitutionSection()
       : '';
     const companionValuesSection = this.enableConstitution
       ? this.resolveCompanionValuesLayer()
@@ -290,8 +304,8 @@ export class PromptComposer {
     const seenStaticLayerIds = new Set<string>();
     const seenDynamicLayerIds = new Set<string>();
 
-    if (immutableSection) {
-      staticChunks.push(immutableSection);
+    if (constitutionSection) {
+      staticChunks.push(constitutionSection);
     }
     if (northStarSection) {
       staticChunks.push(northStarSection.content);
@@ -495,15 +509,17 @@ export class PromptComposer {
   private ensureConstitutionPrefix(result: ComposeSplitResult | null): ComposeSplitResult | null {
     if (!this.enableConstitution || !result) return result;
 
-    const hasImmutableSection = result.staticPrefix.includes(IMMUTABLE_HUMAN_SAFETY_SECTION_TAG);
-    const hasPrecedenceGuard = result.staticPrefix.includes(CONSTITUTION_PRECEDENCE_SECTION_TAG);
-    if (hasImmutableSection && hasPrecedenceGuard) {
+    const canonicalConstitution = buildCompanionConstitutionSection();
+    const normalizedStaticPrefix = result.staticPrefix.trim();
+    const hasCanonicalConstitution = normalizedStaticPrefix === canonicalConstitution
+      || normalizedStaticPrefix.startsWith(`${canonicalConstitution}\n\n`);
+    if (hasCanonicalConstitution) {
       return result;
     }
 
     const rebuiltStaticPrefix = [
-      (hasImmutableSection && hasPrecedenceGuard) ? null : buildImmutableHumanSafetySection(),
-      result.staticPrefix.trim() || null,
+      canonicalConstitution,
+      stripLeadingConstitutionFrame(normalizedStaticPrefix) || null,
     ].filter((chunk): chunk is string => Boolean(chunk)).join('\n\n');
 
     const rebuiltText = [

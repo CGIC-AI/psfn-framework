@@ -84,9 +84,6 @@ function renderSocialContext(context: RetrievalSocialContext): string {
 }
 
 function renderEmotionalSnapshot(snapshot: EmotionalSnapshot): string {
-  const moodDrift = snapshot.moodDrift >= 0
-    ? `+${snapshot.moodDrift.toFixed(2)}`
-    : snapshot.moodDrift.toFixed(2);
   const ageMs = snapshot.lastMoodUpdateEpochMs !== undefined
     ? Math.max(0, Date.now() - snapshot.lastMoodUpdateEpochMs)
     : null;
@@ -100,11 +97,32 @@ function renderEmotionalSnapshot(snapshot: EmotionalSnapshot): string {
     id: 'emotional_continuity_snapshot',
     content: [
     'Emotional continuity snapshot:',
-    `- Baseline tone: ${describeValence(snapshot.baselineValence)} (${snapshot.baselineValence.toFixed(2)})`,
-    `- Current mood drift: ${describeValence(snapshot.moodValence)} (${snapshot.moodValence.toFixed(2)}), drift ${moodDrift}`,
-    `- Learned signals: ${snapshot.moodSamples}, freshness: ${freshness}`,
+    `- Steady baseline: ${describeValence(snapshot.baselineValence)}; baseline disposition: full of love, joyful, and curious.`,
+    `- Current state: ${describeCurrentState(snapshot)}.`,
+    `- Signal confidence: ${describeSignalConfidence(snapshot.moodSamples)}; freshness: ${freshness}.`,
     ].join('\n'),
   });
+}
+
+function describeCurrentState(snapshot: EmotionalSnapshot): string {
+  const driftStrength = Math.abs(snapshot.moodDrift);
+  const currentValence = describeValence(snapshot.moodValence);
+  if (driftStrength < 0.05) {
+    return `holding close to the baseline at ${currentValence}`;
+  }
+  const strength = driftStrength >= 0.55
+    ? 'strongly'
+    : driftStrength >= 0.2
+      ? 'noticeably'
+      : 'gently';
+  return `currently drifting ${strength} toward ${currentValence}`;
+}
+
+function describeSignalConfidence(moodSamples: number): string {
+  if (moodSamples >= 8) return 'well established';
+  if (moodSamples >= 3) return 'developing';
+  if (moodSamples >= 1) return 'tentative';
+  return 'unestablished';
 }
 
 function describeValence(valence: number): string {

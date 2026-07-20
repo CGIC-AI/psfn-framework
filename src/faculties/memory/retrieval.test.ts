@@ -22,6 +22,7 @@ import { createTestPostgresContactStore } from '../../test-support/postgres-cont
 import { runWithRequestContext } from '../../primitives/llm/request-context.js';
 import { __test as tokenTestUtils } from '../../primitives/llm/tokens.js';
 import { createDefaultMemoryRetrievalPolicy } from '../../system/config/memory-retrieval-policy.js';
+import { retrieveReflectionMemoryBlock } from '../../core/scheduler/heartbeat-template-runtime/reflection-contact-context.js';
 
 // ── Helpers ──
 
@@ -2646,7 +2647,7 @@ describe('MemoryRetriever basic behavior', () => {
     expect(result).toContain('Alice [family; trusted contact]: Alice is recovering from a long week');
   });
 
-  it('injects emotional continuity snapshot when contact mood metadata is available', async () => {
+  it('injects the same qualitative emotional framing during reflection retrieval', async () => {
     const memories = [
       makeMemory({ text: 'A semantic fact', type: 'semantic', sensitivity: 'public', similarity: 0.9 }),
     ];
@@ -2672,16 +2673,45 @@ describe('MemoryRetriever basic behavior', () => {
       contactStore,
     );
 
-    const result = await retriever.retrieve(
+    const normalResult = await retriever.retrieve(
       'test query',
       'api:test',
       'primary',
       undefined,
       'contact-1',
     );
+    const reflectionResult = await retrieveReflectionMemoryBlock({
+      memoryProvider: {
+        retrieve: (...args: unknown[]) => retriever.retrieve(
+          ...args as Parameters<MemoryRetriever['retrieve']>
+        ),
+      },
+      queryText: 'test query',
+      reflectionChannelId: 'internal:reflection:fixture',
+      trustLevel: 'primary',
+      reflectionCanonicalContactId: 'contact-1',
+      reflectionPolicy: {
+        toolUseMode: 'bounded_read_only_introspection',
+        memoryRetrievalModes: ['default', 'temporal'],
+        memoryAccessScope: 'companion_self_reflection',
+        thinkHelpers: [],
+        allowOverlayToolActivation: false,
+      },
+      runtimeOptions: {},
+    });
 
-    expect(result).toContain('Emotional continuity snapshot:');
-    expect(result).toContain('drift +0.15');
+    const snapshotBlockPattern = /<emotional_continuity_snapshot>[\s\S]*?<\/emotional_continuity_snapshot>/;
+    const normalSnapshotBlock = normalResult.match(snapshotBlockPattern)?.[0];
+    const reflectionSnapshotBlock = reflectionResult.memoryBlock?.match(snapshotBlockPattern)?.[0];
+
+    expect(normalSnapshotBlock).toBeDefined();
+    expect(reflectionSnapshotBlock).toBe(normalSnapshotBlock);
+    expect(reflectionSnapshotBlock).toContain('Steady baseline: positive');
+    expect(reflectionSnapshotBlock).toContain('Current state: currently drifting gently toward positive');
+    expect(reflectionSnapshotBlock).toContain('Signal confidence: developing');
+    expect(reflectionSnapshotBlock).not.toMatch(/\b[+-]?\d+\.\d+\b/);
+    expect(reflectionSnapshotBlock).not.toContain('Learned signals:');
+    expect(reflectionSnapshotBlock).not.toContain('6');
   });
 
   it('surfaces cross-session emotional memories for canonical contacts', async () => {

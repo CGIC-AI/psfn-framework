@@ -217,6 +217,43 @@
       "relevanceFloor": 0.05
     }
   },
+  "socialDesire": {
+    "enabled": false,
+    "lifecycle": {
+      "baseGain": 0.15,
+      "pressureCap": 3,
+      "actionThreshold": 1,
+      "pressureFloor": 0.05,
+      "decay": {
+        "warmHalflifeMs": 259200000,
+        "repairHalflifeMs": 345600000
+      },
+      "coolingOff": {
+        "warmMs": 3600000,
+        "repairMs": 43200000
+      },
+      "releaseFactor": 0.25,
+      "dampeningFactor": 0.5,
+      "concernReinforcementGain": 0.3,
+      "maxReinforcedConcernIds": 16,
+      "tiers": {
+        "acquaintance": { "gainMultiplier": 0.5, "tickGapMs": 86400000 },
+        "friend": { "gainMultiplier": 1, "tickGapMs": 28800000 },
+        "family": { "gainMultiplier": 1.4, "tickGapMs": 14400000 },
+        "partner": { "gainMultiplier": 2, "tickGapMs": 7200000 },
+        "ai_companion": { "gainMultiplier": 1, "tickGapMs": 28800000 }
+      }
+    },
+    "outreach": {
+      "checkIntervalMs": 1800000,
+      "maxConsentMomentsPerRun": 1,
+      "consentTtlMs": 1800000,
+      "budget": {
+        "maxSendsPerWindow": 2,
+        "windowMs": 86400000
+      }
+    }
+  },
   "icpAutonomy": {
     "enabled": false,
     "candidate": {

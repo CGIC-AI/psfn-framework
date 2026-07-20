@@ -57,9 +57,9 @@ export REMOTE_DIR=<absolute-remote-staging-directory>
 case "$REMOTE_DIR" in /*) ;; *) echo "REMOTE_DIR must be absolute" >&2; exit 1 ;; esac
 ```
 
-Do not continue from a dirty checkout. `scripts/ops/ship-kube-update.sh`
-enforces this because its image is built from `git archive HEAD`; uncommitted
-files are never part of the artifact.
+Do not continue from a dirty checkout. `scripts/ops/ship-kube-update.sh` builds
+its image from `git archive HEAD`, so uncommitted files are never part of the
+artifact — but it does not error on a dirty tree; verify `git status` yourself.
 
 ### 2. Discover live authority before changing it
 
@@ -686,8 +686,9 @@ An upgrade is not complete until every check below is green, in order.
 
    Confirm Postgres/pgvector and Redis pods are Ready, every expected schema
    exists, owner migration receipts are complete, and owner modes remain
-   `999:999 664`. Run `npm run preflight:startup-owner-files` in the mounted
-   maintenance environment one final time.
+   `999:999 664`. Run `node /app/dist/preflight-startup-owner-files.js` in the mounted
+   maintenance Pod one final time (the npm-script form needs dev tooling the
+   production image does not carry; see step 6).
 
 The checked-in `scripts/ops/validate-kube-rollout.sh` still probes a fixed
 `psfn-agent` Deployment and is therefore supplemental on this branch, not a

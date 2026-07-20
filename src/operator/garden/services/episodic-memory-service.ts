@@ -7,6 +7,8 @@ import {
 import type {
   EpisodicStorePort,
 } from '../../../faculties/memory/episodic/store-port.js';
+import { createSubjectAuthorizedEpisodicStore } from '../../../faculties/memory/episodic/subject-authorized-store.js';
+import type { GardenRequestContext } from '../garden-request-context.js';
 import type {
   AdminEpisodicEpisodeDetailData,
   AdminEpisodicEpisodeListData,
@@ -130,7 +132,37 @@ function averageSalience(episodes: readonly Episode[]): number {
 export class AdminEpisodicMemoryDataService implements AdminEpisodicMemoryService {
   constructor(private readonly store: AdminEpisodicStore) {}
 
-  async listEpisodes(params?: URLSearchParams): Promise<AdminEpisodicEpisodeListData> {
+  /**
+   * Subject-authorized episodic projection (88u3). For a fleet principal,
+   * every read is delegated to a service instance over the
+   * subject-authorized episodic store, which admits only episodes whose
+   * explicitly attributed participants include the request's authenticated
+   * contact binding (and arcs whose endpoints are both visible). Mirrors the
+   * memory service's request-local subject scoping: the subject comes from
+   * the signed capability's contact binding, never request parameters, and
+   * role never widens visibility. Legacy/public contexts keep the
+   * unpartitioned single-companion behavior unchanged. Fails closed for any
+   * fleet context without an exact request-local subject relation.
+   */
+  private subjectProjection(
+    context: GardenRequestContext | undefined,
+  ): AdminEpisodicMemoryDataService | null {
+    if (!context || context.kind !== 'fleet_principal') return null;
+    if (context.resource.area !== 'memory'
+      || (context.subjectRelation !== 'self' && context.subjectRelation !== 'self_or_co_subject')) {
+      throw new Error('Garden memory access requires an exact request-local subject relation');
+    }
+    return new AdminEpisodicMemoryDataService(createSubjectAuthorizedEpisodicStore(this.store, {
+      viewerContactId: context.actor.contactId,
+    }));
+  }
+
+  async listEpisodes(
+    params?: URLSearchParams,
+    context?: GardenRequestContext,
+  ): Promise<AdminEpisodicEpisodeListData> {
+    const projected = this.subjectProjection(context);
+    if (projected) return await projected.listEpisodes(params);
     const limit = parsePositiveInteger(
       params?.get('limit'),
       DEFAULT_EPISODE_LIST_LIMIT,
@@ -166,7 +198,12 @@ export class AdminEpisodicMemoryDataService implements AdminEpisodicMemoryServic
     };
   }
 
-  async getEpisodeDetail(id: string): Promise<AdminEpisodicEpisodeDetailData | null> {
+  async getEpisodeDetail(
+    id: string,
+    context?: GardenRequestContext,
+  ): Promise<AdminEpisodicEpisodeDetailData | null> {
+    const projected = this.subjectProjection(context);
+    if (projected) return await projected.getEpisodeDetail(id);
     const episode = await this.store.getEpisode(id);
     if (!episode) return null;
     const provenance = this.toProvenanceData(episode);
@@ -181,7 +218,12 @@ export class AdminEpisodicMemoryDataService implements AdminEpisodicMemoryServic
     };
   }
 
-  async getEpisodeProvenance(id: string): Promise<AdminEpisodicEpisodeProvenanceData | null> {
+  async getEpisodeProvenance(
+    id: string,
+    context?: GardenRequestContext,
+  ): Promise<AdminEpisodicEpisodeProvenanceData | null> {
+    const projected = this.subjectProjection(context);
+    if (projected) return await projected.getEpisodeProvenance(id);
     const episode = await this.store.getEpisode(id);
     return episode ? this.toProvenanceData(episode) : null;
   }
@@ -189,7 +231,10 @@ export class AdminEpisodicMemoryDataService implements AdminEpisodicMemoryServic
   async listEpisodeArcs(
     id: string,
     params?: URLSearchParams,
+    context?: GardenRequestContext,
   ): Promise<{ episodeId: string; relatedArcs: AdminEpisodicRelatedArcView[] } | null> {
+    const projected = this.subjectProjection(context);
+    if (projected) return await projected.listEpisodeArcs(id, params);
     if (!(await this.store.getEpisode(id))) return null;
     const direction = parseArcDirection(params?.get('direction'));
     const arcKind = parseArcKind(params?.get('arcKind'));
@@ -205,7 +250,12 @@ export class AdminEpisodicMemoryDataService implements AdminEpisodicMemoryServic
     };
   }
 
-  async listThreads(params?: URLSearchParams): Promise<AdminEpisodicThreadListData> {
+  async listThreads(
+    params?: URLSearchParams,
+    context?: GardenRequestContext,
+  ): Promise<AdminEpisodicThreadListData> {
+    const projected = this.subjectProjection(context);
+    if (projected) return await projected.listThreads(params);
     const limit = parsePositiveInteger(
       params?.get('limit'),
       MAX_EPISODIC_SCAN_LIMIT,
@@ -217,7 +267,12 @@ export class AdminEpisodicMemoryDataService implements AdminEpisodicMemoryServic
     return { threads };
   }
 
-  async getThreadDetail(threadId: string): Promise<AdminEpisodicThreadDetailData | null> {
+  async getThreadDetail(
+    threadId: string,
+    context?: GardenRequestContext,
+  ): Promise<AdminEpisodicThreadDetailData | null> {
+    const projected = this.subjectProjection(context);
+    if (projected) return await projected.getThreadDetail(threadId);
     const normalizedThreadId = threadId.trim();
     if (!normalizedThreadId) return null;
 

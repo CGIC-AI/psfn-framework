@@ -5,6 +5,7 @@ import type {
   EpisodeProvenanceRef,
   EpisodeSpanRef,
 } from '../../../../shared/contracts/episodic-memory.js';
+import type { GardenRequestContext } from '../../garden-request-context.js';
 
 export interface AdminEpisodicEpisodeListData {
   episodes: Episode[];
@@ -65,13 +66,14 @@ export interface AdminEpisodicThreadDetailData {
 }
 
 export interface AdminEpisodicMemoryService {
-  listEpisodes(params?: URLSearchParams): Promise<AdminEpisodicEpisodeListData>;
-  getEpisodeDetail(id: string): Promise<AdminEpisodicEpisodeDetailData | null>;
-  getEpisodeProvenance(id: string): Promise<AdminEpisodicEpisodeProvenanceData | null>;
+  listEpisodes(params?: URLSearchParams, context?: GardenRequestContext): Promise<AdminEpisodicEpisodeListData>;
+  getEpisodeDetail(id: string, context?: GardenRequestContext): Promise<AdminEpisodicEpisodeDetailData | null>;
+  getEpisodeProvenance(id: string, context?: GardenRequestContext): Promise<AdminEpisodicEpisodeProvenanceData | null>;
   listEpisodeArcs(
     id: string,
     params?: URLSearchParams,
+    context?: GardenRequestContext,
   ): Promise<{ episodeId: string; relatedArcs: AdminEpisodicRelatedArcView[] } | null>;
-  listThreads(params?: URLSearchParams): Promise<AdminEpisodicThreadListData>;
-  getThreadDetail(threadId: string): Promise<AdminEpisodicThreadDetailData | null>;
+  listThreads(params?: URLSearchParams, context?: GardenRequestContext): Promise<AdminEpisodicThreadListData>;
+  getThreadDetail(threadId: string, context?: GardenRequestContext): Promise<AdminEpisodicThreadDetailData | null>;
 }

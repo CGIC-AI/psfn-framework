@@ -242,6 +242,7 @@ export class DiscordVoiceRuntime {
   init(): void {
     if (!this.enabled) return;
 
+    // eslint-disable-next-line @typescript-eslint/no-misused-promises -- Callback API intentionally receives this Promise-returning lifecycle handler.
     this.client.on(Events.VoiceStateUpdate, this.onVoiceStateUpdate);
     this.client.on(Events.ClientReady, this.onClientReady);
     log.info('Discord voice runtime enabled', {
@@ -261,6 +262,7 @@ export class DiscordVoiceRuntime {
   async stop(): Promise<void> {
     if (!this.enabled) return;
 
+    // eslint-disable-next-line @typescript-eslint/no-misused-promises -- Callback API intentionally receives this Promise-returning lifecycle handler.
     this.client.off(Events.VoiceStateUpdate, this.onVoiceStateUpdate);
     this.client.off(Events.ClientReady, this.onClientReady);
     await this.leaveChannel('shutdown');

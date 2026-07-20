@@ -23,7 +23,7 @@ describe('PipelineTask', () => {
   it('completes when executor resolves', async () => {
     const task = new PipelineTask(async () => {});
 
-    task.start();
+    void task.start();
     await task.wait();
 
     expect(task.snapshot.state).toBe('completed');
@@ -41,7 +41,7 @@ describe('PipelineTask', () => {
       });
     });
 
-    task.start();
+    void task.start();
     await task.stop('shutdown');
 
     expect(task.snapshot.state).toBe('stopped');
@@ -64,7 +64,7 @@ describe('PipelineTask', () => {
       await release.promise;
     });
 
-    task.start();
+    void task.start();
 
     const stopPromise = task.stop('graceful-stop');
     const cancelPromise = task.cancel('barge-in');
@@ -81,7 +81,7 @@ describe('PipelineTask', () => {
       throw new Error('boom');
     });
 
-    task.start();
+    void task.start();
     await task.wait();
 
     expect(task.snapshot.state).toBe('failed');

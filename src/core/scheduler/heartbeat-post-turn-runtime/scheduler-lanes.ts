@@ -118,7 +118,7 @@ export function createSchedulerOwnedPostTurnLanes(
       ...(telemetryEventBus
         ? {
           onGateEvent: (event: DeterministicGateEvent): void => {
-            telemetryEventBus.emit('memory.orientation_rewrite.gate', event);
+            void telemetryEventBus.emit('memory.orientation_rewrite.gate', event);
           },
         }
         : {}),

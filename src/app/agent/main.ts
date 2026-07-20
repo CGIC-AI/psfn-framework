@@ -230,6 +230,7 @@ async function main(): Promise<void> {
   });
   let shuttingDown = false;
   let stopFn: () => Promise<void> = async () => {};
+  // eslint-disable-next-line @typescript-eslint/no-misused-promises -- Callback API intentionally receives this Promise-returning lifecycle handler.
   const unregisterGatewayDisconnect = gateway.onDisconnect(async (event) => {
     if (shuttingDown) return;
     shuttingDown = true;

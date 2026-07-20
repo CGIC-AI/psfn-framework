@@ -685,7 +685,7 @@ describe('GatewayClient streaming', () => {
     });
   });
 
-  it('normalizes all 12 model-hint fields on llm.chat RPC requests', async () => {
+  it('normalizes all 12 model-hint fields on llm.chat RPC requests', () => {
     void client.stream(
       {
         systemPrompt: 'test',
@@ -764,7 +764,7 @@ describe('GatewayClient streaming', () => {
     await expect(completion).resolves.toMatchObject({ content: 'done' });
   });
 
-  it('preserves caller-owned accounting identity on llm.chat RPC requests', async () => {
+  it('preserves caller-owned accounting identity on llm.chat RPC requests', () => {
     void client.stream(
       {
         systemPrompt: 'test',

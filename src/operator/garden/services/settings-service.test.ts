@@ -700,7 +700,7 @@ describe('AdminSettingsDataService', () => {
     });
   });
 
-  it('round-trips models through the raw editor path via the injected config store port', async () => {
+  it('round-trips models through the raw editor path via the injected config store port', () => {
     const root = makeTempDir();
     const refreshModelsSpy = vi.fn();
     const config = buildConfig(root, {

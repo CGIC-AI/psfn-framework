@@ -53,7 +53,7 @@ function readText(result: { content: Array<{ text?: string }> }): string {
 }
 
 describe('executeSystemReadAction', () => {
-  it('returns a single key value', async () => {
+  it('returns a single key value', () => {
     const result = executeSystemReadAction(makeConfig(), {
       key: 'analysisWorkbenchMaxSubQueries',
     });
@@ -65,7 +65,7 @@ describe('executeSystemReadAction', () => {
     expect(result.details.isError).toBeUndefined();
   });
 
-  it('returns discoverable key list mode', async () => {
+  it('returns discoverable key list mode', () => {
     const result = executeSystemReadAction(makeConfig(), { list: true });
     const payload = JSON.parse(readText(result));
 
@@ -74,7 +74,7 @@ describe('executeSystemReadAction', () => {
     expect(payload.keys).not.toContain('discordToken');
   });
 
-  it('returns subset for keys mode', async () => {
+  it('returns subset for keys mode', () => {
     const result = executeSystemReadAction(makeConfig(), {
       keys: ['primaryModel', 'retryMaxAttempts'],
     });
@@ -86,7 +86,7 @@ describe('executeSystemReadAction', () => {
     expect(payload.settings.discordToken).toBeUndefined();
   });
 
-  it('returns clear error for unknown keys', async () => {
+  it('returns clear error for unknown keys', () => {
     const result = executeSystemReadAction(makeConfig(), {
       key: 'discordToken',
     });

@@ -84,7 +84,7 @@ describe('heartbeat post-turn lane split (E5.2)', () => {
     const llmProvider = { stream: vi.fn(), complete: vi.fn() };
     const inferers: PostTurnActionInferer[] = [];
 
-    wireHeartbeatRuntime(
+    void wireHeartbeatRuntime(
       { registerTool: vi.fn() },
       scheduler,
       {

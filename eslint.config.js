@@ -64,7 +64,13 @@ export default [
       },
     },
     rules: {
+      '@typescript-eslint/no-floating-promises': 'error',
+      '@typescript-eslint/no-misused-promises': 'error',
       '@typescript-eslint/no-unnecessary-condition': 'error',
+      // require-await deliberately not enabled: 3,291 findings on adoption
+      // (2026-07-19), nearly all Promise-returning interface conformance where
+      // removing async would change public API shapes. Enabling it would need
+      // a suppression on every one. See psfn-framework-9j6.
     },
   },
   {

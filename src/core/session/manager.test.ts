@@ -348,7 +348,7 @@ describe('SessionManager', () => {
     expect(enqueue).toHaveBeenCalledOnce();
   });
 
-  it('authorship guard re-tags internal-origin messages submitted as user speech', async () => {
+  it('authorship guard re-tags internal-origin messages submitted as user speech', () => {
     const config = makeConfig();
     const eventBus = new EventBus();
     const guardEvents: Array<{ reason: string; authorId: string }> = [];
@@ -373,7 +373,7 @@ describe('SessionManager', () => {
     ]);
   });
 
-  it('authorship guard leaves genuine partner messages untouched', async () => {
+  it('authorship guard leaves genuine partner messages untouched', () => {
     const config = makeConfig();
     const eventBus = new EventBus();
     const guardEvents: string[] = [];
@@ -2406,7 +2406,7 @@ describe('SessionManager', () => {
     expect(reflectionContext.manifest?.budgets.memoryRetrieval.budgetPct).toBe(8);
   });
 
-  it('ignores legacy hard session limits and keeps budget-based whole messages', async () => {
+  it('ignores legacy hard session limits and keeps budget-based whole messages', () => {
     tokenTestUtils.setTokenizerFactory(() => ({
       encode: (text: string) => ({ length: text.length }),
     }));
@@ -3304,7 +3304,7 @@ describe('SessionManager', () => {
     expect(callOrder).toEqual(['flush', 'summary']);
   });
 
-  it('preserves refusal and boundary entries as tagged compaction elements', async () => {
+  it('preserves refusal and boundary entries as tagged compaction elements', () => {
     const config = makeConfig({ compactionThresholdPct: 70 });
     const mgr = new SessionManager(store, config);
 
@@ -3349,7 +3349,7 @@ describe('SessionManager', () => {
     expect(ctx.systemPrompt).not.toContain(freshEmotionalMoment);
   });
 
-  it('preserves high-salience emotional entries verbatim during compaction', async () => {
+  it('preserves high-salience emotional entries verbatim during compaction', () => {
     const config = makeConfig({ compactionThresholdPct: 70, compactionEmotionalSalienceThresholdPct: 70 });
     const mgr = new SessionManager(store, config);
     const emotionalMoment = [
@@ -3375,7 +3375,7 @@ describe('SessionManager', () => {
     expect(preserved).toContain(emotionalMoment);
   });
 
-  it('honors configurable emotional salience thresholds', async () => {
+  it('honors configurable emotional salience thresholds', () => {
     const moderateEmotionalMoment = 'I feel sad and anxious about this situation right now.';
     const highThresholdStore = new SessionStore(join(dir, 'high-threshold'));
     const lowThresholdStore = new SessionStore(join(dir, 'low-threshold'));

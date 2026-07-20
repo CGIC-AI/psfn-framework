@@ -1802,6 +1802,112 @@ describe('GatewayServer', () => {
       expect(conn.conn.destroyed).toBe(true);
       await expect(server.requestAgent('test', {})).rejects.toThrow('No agent connected');
     });
+
+    it('disconnects malformed peers while audit persistence remains pending', async () => {
+      let settleAudit: ((auditId: number) => void) | undefined;
+      const auditAppend = vi.fn(() => new Promise<number>((resolve) => {
+        settleAudit = resolve;
+      }));
+      const auditComplete = vi.fn();
+      const { server, conn } = await setupServerConnection({
+        ...createMinimalOptions(),
+        auditStore: createMockAuditStore({
+          append: auditAppend,
+          complete: auditComplete,
+        }),
+      });
+
+      conn._emitFrameError({
+        message: 'Malformed NDJSON frame received',
+        preview: '{"jsonrpc":"2.0","bad":',
+      });
+
+      expect(auditAppend).toHaveBeenCalledOnce();
+      expect(settleAudit).toEqual(expect.any(Function));
+      expect(auditComplete).not.toHaveBeenCalled();
+      expect(conn.conn.destroyed).toBe(true);
+      await expect(server.requestAgent('test', {})).rejects.toThrow('No agent connected');
+    });
+
+    it('fails closed on malformed NDJSON frames when audit append rejects', async () => {
+      const auditAppend = vi.fn().mockRejectedValue(new Error('audit append unavailable'));
+      const { server, conn } = await setupServerConnection({
+        ...createMinimalOptions(),
+        auditStore: createMockAuditStore({
+          append: auditAppend,
+        }),
+      });
+      const unhandledRejections: unknown[] = [];
+      const onUnhandledRejection = (reason: unknown): void => {
+        unhandledRejections.push(reason);
+      };
+      process.on('unhandledRejection', onUnhandledRejection);
+
+      try {
+        conn._emitFrameError({
+          message: 'Malformed NDJSON frame received',
+          preview: '{"jsonrpc":"2.0","bad":',
+        });
+        await new Promise(resolve => setTimeout(resolve, 20));
+
+        expect(auditAppend).toHaveBeenCalledWith({
+          method: 'gateway.ipc.frame.invalid',
+          decision: 'DENY',
+          params: expect.objectContaining({
+            frameKind: 'ndjson',
+          }),
+        });
+        expect(conn.conn.destroyed).toBe(true);
+        await expect(server.requestAgent('test', {})).rejects.toThrow('No agent connected');
+        expect(unhandledRejections).toEqual([]);
+      } finally {
+        process.off('unhandledRejection', onUnhandledRejection);
+      }
+    });
+
+    it('fails closed on malformed JSON-RPC frames when audit completion rejects', async () => {
+      const auditAppend = vi.fn().mockResolvedValue(333);
+      const auditComplete = vi.fn().mockRejectedValue(new Error('audit completion unavailable'));
+      const { server, conn } = await setupServerConnection({
+        ...createMinimalOptions(),
+        auditStore: createMockAuditStore({
+          append: auditAppend,
+          complete: auditComplete,
+        }),
+      });
+      const unhandledRejections: unknown[] = [];
+      const onUnhandledRejection = (reason: unknown): void => {
+        unhandledRejections.push(reason);
+      };
+      process.on('unhandledRejection', onUnhandledRejection);
+
+      try {
+        conn._emit({
+          jsonrpc: '2.0',
+          id: 78,
+          method: 42,
+        });
+        await new Promise(resolve => setTimeout(resolve, 20));
+
+        expect(auditAppend).toHaveBeenCalledWith({
+          method: 'gateway.ipc.frame.invalid',
+          decision: 'DENY',
+          params: expect.objectContaining({
+            frameKind: 'jsonrpc',
+          }),
+        });
+        expect(auditComplete).toHaveBeenCalledWith(
+          333,
+          expect.any(Number),
+          expect.stringContaining('method'),
+        );
+        expect(conn.conn.destroyed).toBe(true);
+        await expect(server.requestAgent('test', {})).rejects.toThrow('No agent connected');
+        expect(unhandledRejections).toEqual([]);
+      } finally {
+        process.off('unhandledRejection', onUnhandledRejection);
+      }
+    });
   });
 
   describe('notify.ntfy', () => {

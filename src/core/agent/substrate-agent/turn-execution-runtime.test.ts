@@ -1123,6 +1123,7 @@ describe('handleMessageForTurn generated media delivery', () => {
         workspacePath: companionDataDir,
       },
     });
+    // eslint-disable-next-line @typescript-eslint/no-misused-promises -- Callback API intentionally preserves its Promise-returning lifecycle contract.
     (runtime.agent.prompt as ReturnType<typeof vi.fn>).mockImplementationOnce(async (promptMessage: { content: string }) => {
       (runtime.agent.state.messages as any[]).push({ role: 'user', content: promptMessage.content });
       (runtime.agent.state.messages as any[]).push({
@@ -1332,6 +1333,7 @@ describe('handleMessageForTurn generated media delivery', () => {
         workspacePath: companionDataDir,
       },
     });
+    // eslint-disable-next-line @typescript-eslint/no-misused-promises -- Callback API intentionally preserves its Promise-returning lifecycle contract.
     (runtime.agent.prompt as ReturnType<typeof vi.fn>).mockImplementationOnce(async (promptMessage: { content: string }) => {
       notePendingPaidDeliverable({
         surface: 'paidImageGeneration',
@@ -1430,6 +1432,7 @@ describe('handleMessageForTurn generated media delivery', () => {
         workspacePath: companionDataDir,
       },
     });
+    // eslint-disable-next-line @typescript-eslint/no-misused-promises -- Callback API intentionally preserves its Promise-returning lifecycle contract.
     (runtime.agent.prompt as ReturnType<typeof vi.fn>).mockImplementationOnce(async (promptMessage: { content: string }) => {
       (runtime.agent.state.messages as any[]).push({ role: 'user', content: promptMessage.content });
       (runtime.agent.state.messages as any[]).push({
@@ -2985,6 +2988,7 @@ describe('handleMessageForTurn fatigue enforcement', () => {
     }));
     const { runtime } = createFatigueRuntime({ fatigueBudget, buildContext });
     const modelAuthoredText = 'I can wrap this thought up from here.';
+    // eslint-disable-next-line @typescript-eslint/no-misused-promises -- Callback API intentionally preserves its Promise-returning lifecycle contract.
     (runtime.agent.prompt as ReturnType<typeof vi.fn>).mockImplementationOnce(async (promptMessage: { content: string }) => {
       (runtime.agent.state.messages as any[]).push({ role: 'user', content: promptMessage.content });
       (runtime.agent.state.messages as any[]).push({ role: 'assistant', content: modelAuthoredText });

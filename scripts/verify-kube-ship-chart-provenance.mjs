@@ -14,6 +14,20 @@ import { fileURLToPath } from 'node:url';
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const shipScriptPath = join(repoRoot, 'scripts/ops/ship-kube-update.sh');
 const shipScript = readFileSync(shipScriptPath, 'utf-8');
+const agentDockerfilePath = join(repoRoot, 'docker/Dockerfile.agent');
+const agentDockerfile = readFileSync(agentDockerfilePath, 'utf-8');
+const globalSkillManifestGate = 'find /app/skills -type f -name SKILL.md -print -quit | grep -q .';
+for (const [surface, text] of [
+  ['docker/Dockerfile.agent', agentDockerfile],
+  ['scripts/ops/ship-kube-update.sh', shipScript],
+]) {
+  if (!text.includes(globalSkillManifestGate)) {
+    throw new Error(`${surface} must require at least one bundled global SKILL.md manifest`);
+  }
+  if (text.includes('/app/skills/conversation/SKILL.md')) {
+    throw new Error(`${surface} must not bind the global skills gate to one named skill`);
+  }
+}
 const provenanceGuard = 'git diff --quiet "$LIVE_AGENT_COMMIT" HEAD -- deploy/helm/psfn';
 const forceAgent = 'SELECTED+=(agent)';
 const guardIndex = shipScript.indexOf(provenanceGuard);

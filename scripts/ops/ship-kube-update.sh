@@ -150,7 +150,7 @@ if [[ ${#SELECTED[@]} -gt 0 ]]; then
   docker run --rm --platform "$PLATFORM" --entrypoint sh "${IMAGE_NAME}:${TAG}" -c \
     "grep -q toolCallBlocksByIndex /app/node_modules/@mariozechner/pi-ai/dist/providers/openai-completions.js \
      && test -f /app/config/intake-l1-rules.json \
-     && test -f /app/skills/conversation/SKILL.md \
+     && find /app/skills -type f -name SKILL.md -print -quit | grep -q . \
      && test -f /app/deploy/helm/psfn/Chart.yaml \
      && test -f /app/deploy/helm/psfn/recovery-chart.sha256 \
      && command -v bd >/dev/null && command -v rg >/dev/null" \

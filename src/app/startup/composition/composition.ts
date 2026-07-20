@@ -70,6 +70,11 @@ import {
 } from '../../../faculties/shards/port.js';
 import { SubagentFaculty } from '../../../faculties/subagents/faculty.js';
 import { createSubagentTool } from '../../../faculties/subagents/tools.js';
+import { HookRegistry } from '../../../boundary/gateway/hook-registry.js';
+import {
+  loadWorkspaceHooks,
+  type WorkspaceHookLoadResult,
+} from '../../../boundary/gateway/hook-loader.js';
 import { createAnalysisWorkbenchTool } from '../../../core/tools/analysis-workbench/tools.js';
 import { CoreMemoryStore } from '../../../faculties/core-memory/store.js';
 import { createOrientTool } from '../../../faculties/core-memory/tools.js';
@@ -671,4 +676,36 @@ export function wireShardAndThinkRuntime(options: ToolRuntimeOptions): ShardExec
   }));
 
   return shardExecutionPort;
+}
+
+export interface OperatorHookRuntimeOptions {
+  eventBus: EventBus;
+  /** The companion's Personal Workspace root (WORKSPACE_PATH). */
+  workspacePath: string;
+}
+
+export interface OperatorHookRuntime {
+  hookRegistry: HookRegistry;
+  hookLoadResult: WorkspaceHookLoadResult;
+}
+
+/**
+ * Operator-extensible hook runtime (bead psfn-framework-vvf.2): scans
+ * `<workspacePath>/hooks/` for HOOK.yaml + handler definitions, registers the
+ * valid ones, and attaches the async fire-and-forget lifecycle consumer to
+ * the agent-process EventBus. Invalid hook definitions are rejected with a
+ * logged reason and never crash startup; an absent hooks directory is a
+ * clean no-op. See src/boundary/gateway/hook-registry.ts for the trust model
+ * and payload-redaction posture.
+ */
+export async function wireOperatorHookRuntime(
+  options: OperatorHookRuntimeOptions,
+): Promise<OperatorHookRuntime> {
+  const hookRegistry = new HookRegistry();
+  const hookLoadResult = await loadWorkspaceHooks({
+    workspacePath: options.workspacePath,
+    registry: hookRegistry,
+  });
+  hookRegistry.attachLifecycleConsumer(options.eventBus);
+  return { hookRegistry, hookLoadResult };
 }

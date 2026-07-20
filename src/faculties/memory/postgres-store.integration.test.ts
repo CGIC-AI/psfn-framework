@@ -14,6 +14,9 @@ import type { MemorySubjectQueryAuthorization } from '../../shared/contracts/mem
 import { createPostgresContactStore } from '../../core/contacts/postgres-adapter.js';
 import { persistMemorySubjectProjection } from './postgres-store/subject-projection.js';
 import { createSubjectAuthorizedMemoryStore } from './subject-authorized-store.js';
+import { MemoryWriter } from './writer.js';
+import type { EmbeddingProviderPort } from '../../shared/contracts/embedding-provider.js';
+import { MemoryRetriever } from './retrieval.js';
 import { describeMemorySubjectMutationContract } from '../../test-support/memory-subject-mutation-contract.js';
 
 const INTEGRATION_TIMEOUT_MS = 120_000;
@@ -152,6 +155,87 @@ describeMemorySubjectMutationContract(
 );
 
 describe('postgres memory store integration', () => {
+  it('makes patched text immediately retrievable through new semantic and lexical projections', async () => {
+    await withMemoryDatabase(async (pool) => {
+      const store = await createPostgresMemoryStoreFromPool(pool, 4);
+      const oldText = 'obsolete amber baseline memory';
+      const patchedText = 'shakedown probe cobalt thunderstamp 7749 [PATCHED]';
+      const oldEmbedding = new Float32Array([1, 0, 0, 0]);
+      const patchedEmbedding = new Float32Array([0, 1, 0, 0]);
+      const embeddingCalls: string[] = [];
+      const embedText = async (text: string): Promise<Float32Array> => {
+        embeddingCalls.push(text);
+        if (text === patchedText || text === 'patched memory query') return patchedEmbedding;
+        if (text === oldText || text === 'original memory query') return oldEmbedding;
+        throw new Error(`Unexpected embedding input: ${text}`);
+      };
+      const embeddings: EmbeddingProviderPort = {
+        dims: 4,
+        embed: embedText,
+        embedBatch: async (texts) => await Promise.all(texts.map(embedText)),
+      };
+      const memory = makeMemory({
+        id: 'patched-retrieval-projection',
+        text: oldText,
+        // A renderable sensitivity: 'low' is not a valid SensitivityLevel and
+        // the trust ceiling withholds it from the context block under every
+        // trust tier, which would mask the retrieval-projection assertion.
+        sensitivity: 'public',
+        provenance: { subjectContactId: 'contact-a' },
+      });
+      await store.insertMemory(memory, oldEmbedding);
+      const authorizedStore = createSubjectAuthorizedMemoryStore(store, {
+        viewerContactId: 'contact-a',
+      });
+      const writer = new MemoryWriter(authorizedStore, embeddings);
+      const retriever = new MemoryRetriever(authorizedStore, embeddings, {
+        retrievalThreshold: 0.99,
+        telemetryEnabled: false,
+        contextWindow: 32_000,
+      });
+      const retrievalRequest = {
+        contextText: 'patched memory query',
+        channelId: 'api:patched-memory-regression',
+        trustLevel: 'primary' as const,
+      };
+
+      const beforePatch = await retriever.refreshActiveMemoryContext(retrievalRequest);
+      expect(beforePatch?.contextBlock ?? '').not.toContain(memory.text);
+
+      await writer.patchMemory({
+        memoryId: memory.id,
+        text: patchedText,
+        reason: 'integration regression',
+      });
+
+      await expect(authorizedStore.searchByEmbedding(patchedEmbedding, 0.99, 10))
+        .resolves.toEqual([expect.objectContaining({ id: memory.id, text: patchedText })]);
+      await expect(authorizedStore.searchByEmbedding(oldEmbedding, 0.99, 10))
+        .resolves.toEqual([]);
+      await expect(authorizedStore.searchByText('cobalt patched', 10))
+        .resolves.toEqual([expect.objectContaining({ id: memory.id, text: patchedText })]);
+
+      const afterPatch = await retriever.refreshActiveMemoryContext(retrievalRequest);
+      expect(afterPatch?.contextBlock).toContain(patchedText);
+      expect(afterPatch?.selectedMemoryIds).toContain(memory.id);
+
+      const deleted = await authorizedStore.softDeleteMemory(memory.id, {
+        deletedBy: 'integration:test',
+        reason: 'restore projection regression',
+      });
+      expect(deleted).not.toBeNull();
+      const embeddingCallCountBeforeRestore = embeddingCalls.length;
+      await expect(authorizedStore.undoSoftDelete(deleted!.deleteId, {
+        restoredBy: 'integration:test',
+      })).resolves.not.toBeNull();
+      expect(embeddingCalls).toHaveLength(embeddingCallCountBeforeRestore);
+      await expect(authorizedStore.searchByEmbedding(patchedEmbedding, 0.99, 10))
+        .resolves.toEqual([expect.objectContaining({ id: memory.id, text: patchedText })]);
+      await expect(authorizedStore.searchByText('cobalt patched', 10))
+        .resolves.toEqual([expect.objectContaining({ id: memory.id, text: patchedText })]);
+    });
+  }, INTEGRATION_TIMEOUT_MS);
+
   it('keeps the forward schema insert-compatible with the pre-anchor rollback writer', async () => {
     await withMemoryDatabase(async (pool) => {
       await ensurePostgresSchema(pool, POSTGRES_MEMORY_MIGRATIONS);
@@ -567,7 +651,10 @@ describe('postgres memory store integration', () => {
         selector: { kind: 'detail', memoryId: input.id },
       })).total).toBe(1);
 
-      await store.updateMemory(input.id, { text: 'revision changed' });
+      await store.updateMemory(input.id, {
+        text: 'revision changed',
+        embedding: new Float32Array([0.1, 0.9, 0.1, 0.1]),
+      });
       expect(await store.queryAuthorizedMemorySubjects({
         authorization: subjectAuthorization('contact-a', 'detail', { grantBindings }),
         selector: { kind: 'detail', memoryId: input.id },
@@ -635,7 +722,11 @@ describe('postgres memory store integration', () => {
       expect(await store.mutateAuthorizedMemorySubjects({
         authorization: subjectAuthorization('contact-a', 'update'),
         memoryIds: ['bulk-a'],
-        updates: { sensitivity: 'confidential', text: 'authorized update' },
+        updates: {
+          sensitivity: 'confidential',
+          text: 'authorized update',
+          embedding: new Float32Array([0.1, 0.9, 0.1, 0.1]),
+        },
       })).toBe(1);
       expect(await store.getById('bulk-a')).toMatchObject({
         sensitivity: 'confidential',

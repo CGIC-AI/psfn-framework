@@ -667,6 +667,23 @@ afterEach(() => {
 });
 
 describe('postgres memory store unit coverage', () => {
+  it('rejects text mutations that would retain the previous embedding', async () => {
+    const pool = new FakeMemoryPool();
+    const originalEmbedding = new Float32Array([1, 0, 0, 0]);
+    const memory = makeMemory('patch-requires-embedding', 'Original memory text');
+    pool.memories.set(memory.id, makeMemoryRow(memory, '[1,0,0,0]'));
+    postgresMocks.activePool = pool;
+    const store = await createPostgresMemoryStore('postgres://unused', 4);
+
+    await expect(store.updateMemory(memory.id, {
+      text: 'Patched memory text',
+    })).rejects.toThrow('Memory text updates require a replacement embedding');
+
+    expect((await store.getById(memory.id))?.text).toBe(memory.text);
+    await expect(store.searchByEmbedding(originalEmbedding, 0.99, 10))
+      .resolves.toEqual([expect.objectContaining({ id: memory.id, text: memory.text })]);
+  });
+
   it('paginates lexical augmentation across deterministic Postgres extracted-at ordering', async () => {
     const pool = new FakeMemoryPool();
     const baseExtractedAt = 1_800_000_000_000;
@@ -804,6 +821,12 @@ describe('postgres memory store unit coverage', () => {
     expect(migrationSql).toContain("CREATE EXTENSION vector WITH SCHEMA %I");
     expect(migrationSql).toContain('expected public or extensions');
     expect(migrationSql).toContain('embedding VECTOR');
+    expect(migrationSql).toContain(
+      "search_vector TSVECTOR GENERATED ALWAYS AS (to_tsvector('simple', coalesce(text, ''))) STORED",
+    );
+    expect(migrationSql).toContain(
+      'CREATE INDEX IF NOT EXISTS idx_l2_memories_search_vector ON l2_memories USING GIN (search_vector)',
+    );
     expect(migrationSql).toContain("source_type TEXT NOT NULL DEFAULT 'unknown'");
     expect(migrationSql).toContain("provenance_json JSONB NOT NULL DEFAULT '{}'::jsonb");
     expect(migrationSql).toContain(

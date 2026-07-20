@@ -1551,6 +1551,24 @@ describe('MemoryWriter', () => {
       }));
     });
 
+    it('does not persist patched text when embedding fails', async () => {
+      const existing = makeExistingMemory({
+        id: 'memory-patch-embedding-failure',
+        text: 'Old text',
+      });
+      store.getById.mockReturnValue(existing);
+      vi.mocked(embeddings.embed).mockRejectedValueOnce(new Error('embedding provider unavailable'));
+
+      await expect(writer.patchMemory({
+        memoryId: existing.id,
+        text: 'New corrected text',
+      })).rejects.toThrow('embedding provider unavailable');
+
+      expect(store.runInTransaction).not.toHaveBeenCalled();
+      expect(store.updateMemory).not.toHaveBeenCalled();
+      expect(store.recordPatchEvent).not.toHaveBeenCalled();
+    });
+
     it('rejects CogSec-risk in-place text patches before embedding', async () => {
       const existing = makeExistingMemory({
         id: 'memory-patch-3',

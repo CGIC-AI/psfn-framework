@@ -693,6 +693,168 @@ describe('speaking arbiter store integration', () => {
     },
     INTEGRATION_TIMEOUT_MS,
   );
+
+  it(
+    'binds the funding charge to the granted lease and it survives a restart (charge fencing)',
+    async () => {
+      const databaseUrl = await freshDatabaseUrl();
+      const leaseId = randomUUID();
+      const first = await PostgresSpeakingArbiterStore.connect(databaseUrl);
+      try {
+        const reservation = await store_reserve(first, 'evt-charge', COMPANION_A, 1_000);
+        const acquired = await first.acquireEgressLease({
+          leaseId,
+          reservationId: reservation.reservation.reservationId,
+          channelId: CHANNEL,
+          nowMs: 1_100,
+          expiresAtMs: 1_100 + TTL_MS,
+          chargedUnits: 4,
+        });
+        expect(acquired.outcome).toBe('acquired');
+        // The drawn units are on the lease snapshot the caller gets back.
+        expect(acquired.lease?.chargedUnits).toBe(4);
+
+        // Idempotent replay must NOT re-apply a draw: the first grant's charge is
+        // authoritative even if a retry passes a different amount.
+        const replay = await first.acquireEgressLease({
+          leaseId,
+          reservationId: reservation.reservation.reservationId,
+          channelId: CHANNEL,
+          nowMs: 1_150,
+          expiresAtMs: 1_150 + TTL_MS,
+          chargedUnits: 999,
+        });
+        expect(replay.outcome).toBe('acquired');
+        expect(replay.lease?.chargedUnits).toBe(4);
+      } finally {
+        await first.close();
+      }
+
+      // Restart: the charge is still bound to the held lease, so a reboot-time
+      // reconciler can see exactly what this turn drew (no phantom, no leak).
+      const restarted = await PostgresSpeakingArbiterStore.connect(databaseUrl);
+      try {
+        const row = await readLeaseChargeRow(databaseUrl, leaseId);
+        expect(row).not.toBeNull();
+        expect(row?.status).toBe('held');
+        expect(row?.chargedUnits).toBe(4);
+      } finally {
+        await restarted.close();
+      }
+    },
+    INTEGRATION_TIMEOUT_MS,
+  );
+
+  it(
+    'keeps the charge on a crashed never-delivered lease reconcilable after reclaim (exactly-once, no phantom)',
+    async () => {
+      const databaseUrl = await freshDatabaseUrl();
+      const store = await PostgresSpeakingArbiterStore.connect(databaseUrl);
+      try {
+        const reservationA = await store.reserve({
+          reservationId: randomUUID(),
+          channelId: CHANNEL,
+          triggerEventId: 'evt-charge-crash',
+          companionId: COMPANION_A,
+          nowMs: 1_000,
+          expiresAtMs: 1_000 + TTL_MS,
+        });
+        const reservationB = await store.reserve({
+          reservationId: randomUUID(),
+          channelId: CHANNEL,
+          triggerEventId: 'evt-charge-crash',
+          companionId: COMPANION_B,
+          nowMs: 1_000,
+          expiresAtMs: 1_000 + TTL_MS,
+        });
+
+        // A draws 4 units, acquires with a short deadline, then crashes before
+        // delivery — its charge is now bound to the lease it never completed.
+        const leaseAId = randomUUID();
+        const acquireA = await store.acquireEgressLease({
+          leaseId: leaseAId,
+          reservationId: reservationA.reservation.reservationId,
+          channelId: CHANNEL,
+          nowMs: 2_000,
+          expiresAtMs: 2_000 + 5_000,
+          chargedUnits: 4,
+        });
+        expect(acquireA.outcome).toBe('acquired');
+
+        // After A's deadline, B draws 6 and reclaims the never-delivered event.
+        const acquireB = await store.acquireEgressLease({
+          leaseId: randomUUID(),
+          reservationId: reservationB.reservation.reservationId,
+          channelId: CHANNEL,
+          nowMs: 2_000 + 5_000,
+          expiresAtMs: 2_000 + 5_000 + TTL_MS,
+          chargedUnits: 6,
+        });
+        expect(acquireB.outcome).toBe('acquired');
+        expect(acquireB.lease?.fencingToken).toBe(2);
+        await store.completeEgressLease({
+          leaseId: acquireB.lease?.leaseId ?? '',
+          channelId: CHANNEL,
+          fencingToken: acquireB.lease?.fencingToken ?? 0,
+          completion: 'delivered',
+          nowMs: 2_000 + 6_000,
+          pressureDelta: 1,
+        });
+
+        // Exactly one send across the crash + reclaim.
+        expect(await countSpeechTerminalLeases(databaseUrl, 'evt-charge-crash')).toBe(1);
+
+        // A's crashed lease is `expired` but still carries its 4 units — the
+        // refundable amount a reconciler credits back (charge did not reach the
+        // room). B's delivered lease keeps its 6 units — a permanent, real charge.
+        const aRow = await readLeaseChargeRow(databaseUrl, leaseAId);
+        expect(aRow?.status).toBe('expired');
+        expect(aRow?.chargedUnits).toBe(4);
+        const bRow = await readLeaseChargeRow(databaseUrl, acquireB.lease?.leaseId ?? '');
+        expect(bRow?.status).toBe('delivered');
+        expect(bRow?.chargedUnits).toBe(6);
+      } finally {
+        await store.close();
+      }
+    },
+    INTEGRATION_TIMEOUT_MS,
+  );
+
+  it(
+    'a kill between charge and acquire leaves no lease: clean release, no orphan (residual pot micro-leak is the sender lane)',
+    async () => {
+      const databaseUrl = await freshDatabaseUrl();
+      const store = await PostgresSpeakingArbiterStore.connect(databaseUrl);
+      try {
+        // The phase draws the pot (step 5) and would then acquire the lease
+        // (step 6). We reserve but NEVER acquire — the exact "kill between charge
+        // and send" shape: the process died after the draw, before the lease
+        // existed. There is therefore no lease row to reclaim.
+        await store.reserve({
+          reservationId: randomUUID(),
+          channelId: CHANNEL,
+          triggerEventId: 'evt-charge-preacquire',
+          companionId: COMPANION_A,
+          nowMs: 1_000,
+          expiresAtMs: 1_000 + 5_000,
+        });
+
+        // On restart the watchdog sweeps: the reservation lapses to a clean
+        // release and NO orphaned lease exists for the event.
+        const swept = await store.sweepExpired({ channelId: CHANNEL, nowMs: 100_000 });
+        expect(swept.expiredReservations).toBeGreaterThanOrEqual(1);
+        expect(await countLeases(databaseUrl, 'evt-charge-preacquire')).toBe(0);
+        expect(await countSpeechTerminalLeases(databaseUrl, 'evt-charge-preacquire')).toBe(0);
+        // NB: the pot units drawn at step 5 are NOT recoverable from the arbiter
+        // here — there is no lease to carry them. That irreducible two-store
+        // micro-window is the bounded, machine-lane refund-or-tolerate decision
+        // owned by the egress-sender hardening lane (qgqw.3), not the store fence.
+      } finally {
+        await store.close();
+      }
+    },
+    INTEGRATION_TIMEOUT_MS,
+  );
 });
 
 async function store_reserve(
@@ -732,6 +894,55 @@ async function countSpeechTerminalLeases(
        FROM speaking_egress_leases
        WHERE channel_id = $1 AND trigger_event_id = $2
          AND status IN ('delivered', 'overridden')`,
+      [CHANNEL, triggerEventId],
+    );
+    return Number(result.rows.at(0)?.n ?? 0);
+  } finally {
+    await pool.end();
+  }
+}
+
+/**
+ * Read the durable `status` and `charged_units` of a single lease straight from
+ * the table (independent pool, committed rows), so a crash-recovery test can
+ * prove the fatigue charge stays bound to the fenced lease across reclaim and
+ * restart — the ground truth no store method paraphrases (jp36.5.3).
+ */
+async function readLeaseChargeRow(
+  databaseUrl: string,
+  leaseId: string,
+): Promise<{ status: string; chargedUnits: number } | null> {
+  const pool = createPostgresPool(databaseUrl, {
+    applicationName: 'speaking-arbiter-test-probe',
+    allowExitOnIdle: true,
+    schema: SHARED_SCHEMA_NAME,
+  });
+  try {
+    const result = await pool.query<{ status: string; charged_units: string | number }>(
+      `SELECT status, charged_units
+       FROM speaking_egress_leases
+       WHERE lease_id = $1`,
+      [leaseId],
+    );
+    const row = result.rows.at(0);
+    return row ? { status: row.status, chargedUnits: Number(row.charged_units) } : null;
+  } finally {
+    await pool.end();
+  }
+}
+
+/** Count all leases (any status) for a trigger event — orphan-lease detection. */
+async function countLeases(databaseUrl: string, triggerEventId: string): Promise<number> {
+  const pool = createPostgresPool(databaseUrl, {
+    applicationName: 'speaking-arbiter-test-probe',
+    allowExitOnIdle: true,
+    schema: SHARED_SCHEMA_NAME,
+  });
+  try {
+    const result = await pool.query<{ n: string | number }>(
+      `SELECT COUNT(*)::int AS n
+       FROM speaking_egress_leases
+       WHERE channel_id = $1 AND trigger_event_id = $2`,
       [CHANNEL, triggerEventId],
     );
     return Number(result.rows.at(0)?.n ?? 0);

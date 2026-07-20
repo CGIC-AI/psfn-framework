@@ -927,6 +927,7 @@ describe('Postgres schema tenancy plumbing', () => {
           { version: 7, name: 'icp-fatigue-delivery-fence' },
           { version: 9, name: 'companion-social-pot' },
           { version: 10, name: 'speaking-arbiter' },
+          { version: 11, name: 'speaking-arbiter-charge-association' },
         ]);
 
         const sharedTables = await pool.query<{ table_name: string }>(
@@ -952,7 +953,7 @@ describe('Postgres schema tenancy plumbing', () => {
         const versionAgain = await pool.query<{ count: string }>(
           `SELECT COUNT(*)::text AS count FROM shared.shared_schema_migrations`,
         );
-        expect(versionAgain.rows[0]?.count).toBe('8');
+        expect(versionAgain.rows[0]?.count).toBe('9');
       } finally {
         await pool.end();
       }

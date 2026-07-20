@@ -69,6 +69,7 @@ function makeLease(overrides: Partial<SpeakingEgressLeaseSnapshot> = {}): Speaki
     companionId: COMPANION_A,
     episodeId: 'episode-1',
     fencingToken: 1,
+    chargedUnits: 0,
     acquiredAtMs: 10_000,
     expiresAtMs: 70_000,
     status: 'held',
@@ -279,6 +280,12 @@ describe('SpeakingEgressLeasePhase.grantReply — happy path', () => {
     expect(decision.outcome).toBe('delivered');
     expect(pot.draw).toHaveBeenCalledOnce();
     expect(store.acquireEgressLease).toHaveBeenCalledOnce();
+    // Crash-recovery charge fencing (jp36.5.3): the units actually drawn are
+    // threaded into the lease so the charge is bound to the durable, fenced,
+    // correlation-keyed record — never an untracked balance decrement.
+    expect(store.acquireEgressLease).toHaveBeenCalledWith(
+      expect.objectContaining({ chargedUnits: 1 }),
+    );
     expect(sender.deliver).toHaveBeenCalledOnce();
     // The lease is completed `delivered` with the pressure projection (single source).
     expect(store.completeEgressLease).toHaveBeenCalledWith(

@@ -2844,6 +2844,33 @@ export const POSTGRES_SHARED_MIGRATIONS: readonly string[] = [
   VALUES (10, 'speaking-arbiter')
   ON CONFLICT (version) DO NOTHING;
   `,
+  // Version 11 (sprint 11, jp36.5.3): crash-recovery charge fencing for
+  // autonomous non-ICP initiations (design bible §8.5 "crash-recovery fencing";
+  // review R2 crash bullet). Bind the fatigue funding draw to the durable,
+  // correlation-keyed, fenced egress lease so the charge is part of the SAME
+  // recovery model as ICP's reservation fence (`IcpConversationCorrelation`):
+  // the pot is a running-balance store with no per-turn row, so a draw taken
+  // before delivery was previously untracked and leaked on a crash. Recording
+  // the drawn units on the lease makes that charge reconcilable after a gateway
+  // reboot (the winning/crashed holder's lease carries what it drew). Additive
+  // (ADD COLUMN IF NOT EXISTS + idempotent constraint, mirroring the breaker
+  // state migration above) so it applies to both fresh and already-provisioned
+  // shared schemas on the idempotent chain. The charge stays permanent on a
+  // speech-terminal (delivered/overridden) lease and is refundable off a
+  // reclaimed never-delivered lease; the refund policy/wiring that consumes this
+  // column is the egress-sender hardening lane (qgqw.3), out of scope here.
+  `ALTER TABLE speaking_egress_leases
+    ADD COLUMN IF NOT EXISTS charged_units DOUBLE PRECISION NOT NULL DEFAULT 0;`,
+  `ALTER TABLE speaking_egress_leases
+    DROP CONSTRAINT IF EXISTS speaking_egress_leases_charged_units_check;`,
+  `ALTER TABLE speaking_egress_leases
+    ADD CONSTRAINT speaking_egress_leases_charged_units_check
+    CHECK (charged_units >= 0);`,
+  `
+  INSERT INTO shared_schema_migrations (version, name)
+  VALUES (11, 'speaking-arbiter-charge-association')
+  ON CONFLICT (version) DO NOTHING;
+  `,
 ];
 
 // Version 3 (sprint 10, s10f9): shared-world wiki chunk projection. A

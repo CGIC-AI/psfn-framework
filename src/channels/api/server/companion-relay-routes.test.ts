@@ -9,7 +9,6 @@ import { ApiServer } from '../server.js';
 import type { SubstrateAgent } from '../../../core/agent/substrate-agent.js';
 import type { SessionManager } from '../../../core/session/manager.js';
 import type { SubstrateMessage } from '../../../shared/contracts/runtime.js';
-import { DEFAULT_COMPANION_ID } from '../../../core/identity/companion-naming.js';
 import { deriveApiKeyPrincipalId } from '../../backplane/http/auth.js';
 import { parseSatelliteRegistryConfig } from '../../backplane/satellite-registry.js';
 import { CompanionEventRelay } from '../../backplane/companion-relay/relay.js';
@@ -28,6 +27,7 @@ const HUB_PRINCIPAL_ID = deriveApiKeyPrincipalId(API_KEY);
 const AUTH = { Authorization: `Bearer ${API_KEY}` };
 const HUB_QUERY = 'satelliteId=hub-node&endpointId=hub-endpoint&claimType=satellite-hub';
 const WAIT_TIMEOUT_MS = 2_000;
+const DEFAULT_COMPANION_ID = '11111111-1111-4111-8111-111111111111';
 
 function endpointFixture(overrides: Record<string, unknown>): Record<string, unknown> {
   return {

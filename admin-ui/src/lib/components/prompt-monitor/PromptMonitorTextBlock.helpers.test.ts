@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import test from 'node:test';
+import { test } from 'vitest';
 import { writePromptMonitorClipboard } from './PromptMonitorTextBlock.helpers';
 
 test('clipboard helper writes the complete text without normalization', async () => {

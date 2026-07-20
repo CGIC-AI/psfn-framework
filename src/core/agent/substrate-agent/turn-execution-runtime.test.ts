@@ -4299,13 +4299,15 @@ describe('handleMessageForTurn compaction scheduling', () => {
       .toEqual(new Set([turnStartLogicalSessionId, futureRoute.newLogicalSessionId]));
   });
 
-  it('keeps prompt history and background handoffs on the admitted API owner across an active-context switch', async () => {
+  it.each(['api', 'terminal'] as const)(
+    'keeps prompt history and background handoffs on the admitted %s owner across an active-context switch',
+    async (channelKind) => {
     const dataDir = makeTempDir();
     const eventBus = new EventBus();
     const { runtime, sessionManager } = createPersistenceBackedRuntime(dataDir, eventBus);
-    const sourceChannelId = 'api:physical-source';
-    const admittedOwner = 'api:admitted-owner';
-    const futureOwner = 'api:future-owner';
+    const sourceChannelId = `${channelKind}:physical-source`;
+    const admittedOwner = `${channelKind}:admitted-owner`;
+    const futureOwner = `${channelKind}:future-owner`;
     sessionManager.recordUserMessage(admittedOwner, 'admitted prompt history', 'user-a', 'User');
     sessionManager.recordUserMessage(futureOwner, 'future prompt history', 'user-b', 'User');
     sessionManager.setActiveContextSession(admittedOwner);
@@ -4338,9 +4340,9 @@ describe('handleMessageForTurn compaction scheduling', () => {
       });
     });
 
-    const inFlight = handleMessageForTurn(runtime, createMessage('msg-owner-switch', {
+    const inFlight = handleMessageForTurn(runtime, createMessage(`msg-owner-switch-${channelKind}`, {
       channelId: sourceChannelId,
-      channelType: 'api',
+      channelType: channelKind,
     }));
     await authorResolutionStarted.promise;
     sessionManager.setActiveContextSession(futureOwner);
@@ -4358,7 +4360,8 @@ describe('handleMessageForTurn compaction scheduling', () => {
         }),
       ]),
     );
-  });
+    },
+  );
 
   it('keeps a distinct Wyoming observability session out of durable turn ownership', async () => {
     const dataDir = makeTempDir();

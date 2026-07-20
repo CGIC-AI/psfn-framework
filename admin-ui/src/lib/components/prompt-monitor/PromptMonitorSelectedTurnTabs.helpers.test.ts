@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import test from 'node:test';
+import { test } from 'vitest';
 import { selectedTurnTabs } from './PromptMonitorSelectedTurnTabs.helpers';
 
 test('selected-turn navigation keeps four operational views plus preserved diagnostics', () => {

@@ -67,9 +67,13 @@ function renderExtractionXml(promptText: string): string {
   const normalizedPromptText = promptText.toLowerCase();
   const companionMarker = normalizedPromptText.includes("i'm certification a's")
     || normalizedPromptText.includes('you are certification a.')
+    || normalizedPromptText.includes("i'm artemis's")
+    || normalizedPromptText.includes('you are artemis.')
     ? 'A'
     : normalizedPromptText.includes("i'm certification b's")
       || normalizedPromptText.includes('you are certification b.')
+      || normalizedPromptText.includes("i'm mica's")
+      || normalizedPromptText.includes('you are mica.')
       ? 'B'
       : 'unknown';
   return [

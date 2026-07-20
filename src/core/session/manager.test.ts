@@ -1474,6 +1474,30 @@ describe('SessionManager', () => {
     expect(context.messages.some(message => message.content.includes('continued assistant turn'))).toBe(true);
   });
 
+  it.each(['api', 'terminal'] as const)(
+    'preserves an exact testing-marked %s owner without changing ordinary active-context routing',
+    (channelKind) => {
+      const mgr = new SessionManager(store, makeConfig());
+      const activeOwner = `${channelKind}:production-owner`;
+      const testingOwner = `${channelKind}:principal:testing:rollout-probe`;
+      const ordinarySource = `${channelKind}:ordinary-source`;
+      mgr.setActiveContextSession(activeOwner);
+
+      expect(mgr.resolveSessionChannelId(testingOwner)).toBe(testingOwner);
+      expect(mgr.resolveSessionChannelId(ordinarySource)).toBe(activeOwner);
+
+      mgr.recordUserMessage(testingOwner, 'isolated harness turn', 'u1', 'User');
+      mgr.recordUserMessage(ordinarySource, 'continued production turn', 'u1', 'User');
+
+      expect(store.getRecent(testingOwner, 1)).toEqual([
+        expect.objectContaining({ channelId: testingOwner, content: 'isolated harness turn' }),
+      ]);
+      expect(store.getRecent(activeOwner, 1)).toEqual([
+        expect.objectContaining({ channelId: activeOwner, content: 'continued production turn' }),
+      ]);
+    },
+  );
+
   it('keeps explicit turn writes on a captured API owner after the active context changes', () => {
     const config = makeConfig();
     const mgr = new SessionManager(store, config);
@@ -1705,6 +1729,42 @@ describe('SessionManager', () => {
     });
 
     const context = await mgr.buildContext(`${channelKind}:physical-ingress`, 'System', '');
+
+    expect(context.messages.some(message => message.content.includes('admitted owner history'))).toBe(true);
+    expect(context.messages.some(message => message.content.includes('future owner history'))).toBe(false);
+    },
+  );
+
+  it.each(['api', 'terminal'] as const)(
+    'keeps a physical %s ingress on its admitted owner when context capture pauses across an active-context switch',
+    async (channelKind) => {
+    const mgr = new SessionManager(store, makeConfig());
+    const admittedOwner = `${channelKind}:admitted-owner`;
+    const futureOwner = `${channelKind}:future-owner`;
+    mgr.recordUserMessage(admittedOwner, 'admitted owner history', 'user-a', 'User');
+    mgr.recordUserMessage(futureOwner, 'future owner history', 'user-b', 'User');
+    mgr.setActiveContextSession(admittedOwner);
+
+    let markCaptureStarted!: () => void;
+    const captureStarted = new Promise<void>((resolve) => { markCaptureStarted = resolve; });
+    let releaseCapture!: () => void;
+    const captureRelease = new Promise<void>((resolve) => { releaseCapture = resolve; });
+    const captureTurnSessionContext = mgr.captureTurnSessionContext.bind(mgr);
+    vi.spyOn(mgr, 'captureTurnSessionContext').mockImplementationOnce(async (input) => {
+      markCaptureStarted();
+      await captureRelease;
+      return await captureTurnSessionContext(input);
+    });
+
+    const contextPromise = mgr.buildContext(
+      `${channelKind}:physical-ingress`,
+      'System',
+      '',
+    );
+    await captureStarted;
+    mgr.setActiveContextSession(futureOwner);
+    releaseCapture();
+    const context = await contextPromise;
 
     expect(context.messages.some(message => message.content.includes('admitted owner history'))).toBe(true);
     expect(context.messages.some(message => message.content.includes('future owner history'))).toBe(false);

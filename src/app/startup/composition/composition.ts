@@ -631,6 +631,7 @@ export function wireShardAndThinkRuntime(options: ToolRuntimeOptions): ShardExec
     toolCatalogProvider: () => options.agentLoop.getToolCatalog(),
     auditTrail: options.shardAuditTrail ?? undefined,
     runtimeMode: options.runtimeMode,
+    snapshotParentCapabilityGrant: options.snapshotParentCapabilityGrant,
     // c7d: restricted-class subagent memory candidates stage through the same
     // fold-review queue the shard runtime uses (no parallel review system).
     foldReviewController,

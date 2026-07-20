@@ -168,6 +168,56 @@ describe('ActiveConcernStore', () => {
     expect(active[0].text).toBe('Still active');
   });
 
+  it('persists resolutionVAD when resolving a concern (symmetric to formationVAD)', async () => {
+    const created = await store.create({
+      text: 'Resolve with a captured VAD snapshot',
+      formationVAD: { valence: -0.4, arousal: 0.6, dominance: -0.2 },
+    });
+
+    const resolved = await store.resolveConcern(created.id, {
+      outcome: 'Handled',
+      resolutionVAD: { valence: 0.3, arousal: 0.1, dominance: 0.2 },
+    });
+    expect(resolved?.resolvedAt).toBeDefined();
+    expect(resolved?.formationVAD).toEqual({ valence: -0.4, arousal: 0.6, dominance: -0.2 });
+    expect(resolved?.resolutionVAD).toEqual({ valence: 0.3, arousal: 0.1, dominance: 0.2 });
+
+    const reloaded = await store.getById(created.id);
+    expect(reloaded?.resolutionVAD).toEqual({ valence: 0.3, arousal: 0.1, dominance: 0.2 });
+  });
+
+  it('captures resolutionVAD on a terminal transition and clears it on reopen', async () => {
+    const created = await store.create({
+      text: 'Terminal transition captures resolution VAD',
+      formationVAD: { valence: 0.1, arousal: 0.2, dominance: 0.3 },
+    });
+
+    const dismissed = await store.transitionConcernStatus(created.id, {
+      status: 'dismissed',
+      outcome: 'No longer relevant',
+      evidenceRefs: [{ kind: 'runtime', ref: 'test:dismiss' }],
+      resolutionVAD: { valence: -0.2, arousal: -0.1, dominance: 0.0 },
+    });
+    expect(dismissed?.resolutionVAD).toEqual({ valence: -0.2, arousal: -0.1, dominance: 0.0 });
+
+    const reopened = await store.transitionConcernStatus(created.id, {
+      status: 'active',
+      evidenceRefs: [{ kind: 'runtime', ref: 'test:reopen' }],
+    });
+    expect(reopened?.status).toBe('active');
+    expect(reopened?.resolutionVAD).toBeUndefined();
+  });
+
+  it('does not fabricate a resolutionVAD when none is provided', async () => {
+    const created = await store.create({
+      text: 'Resolve without a VAD snapshot',
+      formationVAD: { valence: 0.1, arousal: 0.2, dominance: 0.3 },
+    });
+    const resolved = await store.resolveConcern(created.id, { outcome: 'Handled' });
+    expect(resolved?.resolvedAt).toBeDefined();
+    expect(resolved?.resolutionVAD).toBeUndefined();
+  });
+
   it('rejects invalid lifecycle transitions fail-closed', async () => {
     const created = await store.create({
       text: 'Suppress this source.',

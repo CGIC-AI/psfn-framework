@@ -75,6 +75,14 @@ export interface ActiveConcern {
   resolutionOutcome?: string;
   contactId?: string;
   formationVAD?: ActiveConcernVAD;
+  /**
+   * VAD captured at the moment the concern resolved — the symmetric counterpart
+   * to formationVAD. Snapshotted from the live internal emotional state by the
+   * resolving path (decision or grooming). Absent on concerns that resolved
+   * before this capture existed or when no current VAD was available (never
+   * fabricated — charter 8.3).
+   */
+  resolutionVAD?: ActiveConcernVAD;
   lastReviewedAt?: string;
   nextReviewAt?: string;
   mergedFromIds?: string[];

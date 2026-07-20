@@ -55,13 +55,14 @@ import {
   scoreConcernSimilarity,
   serializeConcernEvidenceRefs,
   serializeFormationVAD,
+  serializeResolutionVAD,
   serializeStringList,
 } from './shared.js';
 
 const ACTIVE_CONCERN_SELECT_COLUMNS = `
   id, text, priority, source, status, created_at, expires_at,
   salience, sensitivity, owner, evidence_refs, resolution_evidence_refs,
-  resolved_at, resolution_outcome, contact_id, formation_vad,
+  resolved_at, resolution_outcome, contact_id, formation_vad, resolution_vad,
   last_reviewed_at, next_review_at, merged_from_ids, split_from_id,
   origin_icp_root_initiation_id, candidate_review_snapshot
 `;
@@ -495,6 +496,7 @@ export class PostgresActiveConcernStore implements ConcernStorePortBackend {
           salience = $7,
           evidence_refs = $8::jsonb,
           resolution_evidence_refs = $9::jsonb,
+          resolution_vad = $10::jsonb,
           candidate_review_snapshot = CASE
             WHEN $2 = 'candidate' THEN candidate_review_snapshot
             ELSE NULL
@@ -512,6 +514,7 @@ export class PostgresActiveConcernStore implements ConcernStorePortBackend {
         salience,
         serializeConcernEvidenceRefs(updatedEvidenceRefs),
         serializeConcernEvidenceRefs(updatedResolutionEvidenceRefs),
+        terminal ? serializeResolutionVAD(options.resolutionVAD) : null,
       ],
     );
     if (!row) {
@@ -534,6 +537,7 @@ export class PostgresActiveConcernStore implements ConcernStorePortBackend {
       ...(options.outcome ? { outcome: options.outcome } : {}),
       ...(options.resolvedAt ? { transitionedAt: options.resolvedAt } : {}),
       ...(options.evidenceRefs ? { evidenceRefs: options.evidenceRefs, resolutionEvidenceRefs: options.evidenceRefs } : {}),
+      ...(options.resolutionVAD ? { resolutionVAD: options.resolutionVAD } : {}),
     });
   }
 
@@ -563,6 +567,7 @@ export class PostgresActiveConcernStore implements ConcernStorePortBackend {
         transitionedAt: asOf,
         outcome: options.outcome ?? 'Resolved as stale after review window elapsed.',
         ...(options.evidenceRefs ? { evidenceRefs: options.evidenceRefs, resolutionEvidenceRefs: options.evidenceRefs } : {}),
+        ...(options.resolutionVAD ? { resolutionVAD: options.resolutionVAD } : {}),
       });
       if (next) {
         resolved.push(next);

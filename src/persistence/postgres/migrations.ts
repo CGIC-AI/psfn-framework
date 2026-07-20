@@ -858,6 +858,7 @@ export const POSTGRES_INTENTION_MIGRATIONS = [
     resolution_outcome TEXT,
     contact_id TEXT,
     formation_vad JSONB,
+    resolution_vad JSONB,
     last_reviewed_at TEXT,
     next_review_at TEXT,
     merged_from_ids JSONB NOT NULL DEFAULT '[]'::jsonb,
@@ -884,6 +885,7 @@ export const POSTGRES_INTENTION_MIGRATIONS = [
   `ALTER TABLE active_concerns ADD COLUMN IF NOT EXISTS split_from_id TEXT;`,
   `ALTER TABLE active_concerns ADD COLUMN IF NOT EXISTS origin_icp_root_initiation_id UUID;`,
   `ALTER TABLE active_concerns ADD COLUMN IF NOT EXISTS candidate_review_snapshot JSONB;`,
+  `ALTER TABLE active_concerns ADD COLUMN IF NOT EXISTS resolution_vad JSONB;`,
   `
   UPDATE active_concerns
   SET status = 'resolved'

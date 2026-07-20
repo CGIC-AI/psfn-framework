@@ -71,6 +71,8 @@ export interface ActiveConcernResolveOptions {
   outcome?: string;
   resolvedAt?: string;
   evidenceRefs?: readonly ActiveConcernEvidenceRef[];
+  /** VAD snapshot captured at resolution time (symmetric to formationVAD). */
+  resolutionVAD?: ActiveConcernVAD;
 }
 
 export interface ActiveConcernTransitionOptions {
@@ -82,6 +84,8 @@ export interface ActiveConcernTransitionOptions {
   nextReviewAt?: string;
   clearNextReview?: boolean;
   salience?: number;
+  /** VAD snapshot captured when transitioning into a terminal status. */
+  resolutionVAD?: ActiveConcernVAD;
 }
 
 export interface ActiveConcernStaleResolutionOptions {
@@ -90,6 +94,8 @@ export interface ActiveConcernStaleResolutionOptions {
   statuses?: readonly ActiveConcernStatus[];
   limit?: number;
   evidenceRefs?: readonly ActiveConcernEvidenceRef[];
+  /** VAD snapshot captured when the grooming pass resolves stale concerns. */
+  resolutionVAD?: ActiveConcernVAD;
 }
 
 export interface ActiveConcernRecentResolutionOptions {
@@ -137,6 +143,7 @@ export interface ActiveConcernRow {
   resolution_outcome: string | null;
   contact_id: string | null;
   formation_vad: string | null;
+  resolution_vad: string | null;
   last_reviewed_at: string | null;
   next_review_at: string | null;
   merged_from_ids: string | null;
@@ -527,6 +534,17 @@ export function normalizeFormationVAD(
   };
 }
 
+export function normalizeResolutionVAD(
+  value: ActiveConcernVAD | undefined,
+): ActiveConcernVAD | undefined {
+  if (!value) return undefined;
+  return {
+    valence: normalizeSignedUnit(value.valence, 'resolutionVAD.valence'),
+    arousal: normalizeSignedUnit(value.arousal, 'resolutionVAD.arousal'),
+    dominance: normalizeSignedUnit(value.dominance, 'resolutionVAD.dominance'),
+  };
+}
+
 export function clampListLimit(limit: number | undefined): number {
   return clampIntentionListLimit(limit, DEFAULT_LIST_LIMIT);
 }
@@ -602,16 +620,21 @@ export function serializeFormationVAD(value: ActiveConcernVAD | undefined): stri
   return JSON.stringify(value);
 }
 
-function parseFormationVAD(raw: string | null): ActiveConcernVAD | undefined {
+export function serializeResolutionVAD(value: ActiveConcernVAD | undefined): string | null {
+  if (!value) return null;
+  return JSON.stringify(value);
+}
+
+function parseConcernVAD(raw: string | null, fieldName: string): ActiveConcernVAD | undefined {
   if (!raw) return undefined;
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw);
   } catch (error) {
-    throw new Error(`Invalid active concern formation_vad JSON: ${String(error)}`);
+    throw new Error(`Invalid active concern ${fieldName} JSON: ${String(error)}`);
   }
   if (!parsed || typeof parsed !== 'object') {
-    throw new Error('Invalid active concern formation_vad payload');
+    throw new Error(`Invalid active concern ${fieldName} payload`);
   }
   const candidate = parsed as Partial<ActiveConcernVAD>;
   if (
@@ -619,13 +642,21 @@ function parseFormationVAD(raw: string | null): ActiveConcernVAD | undefined {
     || typeof candidate.arousal !== 'number'
     || typeof candidate.dominance !== 'number'
   ) {
-    throw new Error('Invalid active concern formation_vad fields');
+    throw new Error(`Invalid active concern ${fieldName} fields`);
   }
   return normalizeFormationVAD({
     valence: candidate.valence,
     arousal: candidate.arousal,
     dominance: candidate.dominance,
   });
+}
+
+function parseFormationVAD(raw: string | null): ActiveConcernVAD | undefined {
+  return parseConcernVAD(raw, 'formation_vad');
+}
+
+function parseResolutionVAD(raw: string | null): ActiveConcernVAD | undefined {
+  return parseConcernVAD(raw, 'resolution_vad');
 }
 
 function mapPriority(priority: string): ActiveConcernPriority {
@@ -667,6 +698,7 @@ export function mapRow(row: ActiveConcernRow): ActiveConcern {
     : normalizeOptionalText(row.resolution_outcome, MAX_CONCERN_RESOLUTION_CHARS);
   const contactId = row.contact_id === null ? undefined : normalizeOptionalId(row.contact_id);
   const formationVAD = parseFormationVAD(row.formation_vad);
+  const resolutionVAD = parseResolutionVAD(row.resolution_vad);
   const lastReviewedAt = row.last_reviewed_at === null
     ? undefined
     : normalizeIsoTimestamp(row.last_reviewed_at, 'last_reviewed_at');
@@ -696,6 +728,7 @@ export function mapRow(row: ActiveConcernRow): ActiveConcern {
     ...(resolutionOutcome ? { resolutionOutcome } : {}),
     ...(contactId ? { contactId } : {}),
     ...(formationVAD ? { formationVAD } : {}),
+    ...(resolutionVAD ? { resolutionVAD } : {}),
     ...(lastReviewedAt ? { lastReviewedAt } : {}),
     ...(nextReviewAt ? { nextReviewAt } : {}),
     ...(mergedFromIds.length > 0 ? { mergedFromIds } : {}),

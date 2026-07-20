@@ -20,7 +20,7 @@ one with the cert-manager sidecar (`src/app/cert-manager/`).
   therefore *must* come from a CA you own.
 - **A private CA also closes the server side.** When the gateway's server
   certificate chains to your own CA, satellites pin exactly one root and a
-  compromised public CA cannot mint a certificate your fleet trusts.
+  compromised public CA cannot mint a certificate your cluster trusts.
 - **Key custody.** The sidecar's CA key never leaves its state directory
   (mode 0600, never served by any endpoint). Issued private keys are returned
   exactly once in the API response and are not persisted — except for

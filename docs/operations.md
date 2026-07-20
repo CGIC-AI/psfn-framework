@@ -5,7 +5,7 @@ This is the operator-facing runtime guide for the current repo-owned deployment 
 Last updated: 2026-07-18.
 
 Before touching a Helm release, read the canonical
-[Helm Fleet Upgrade Guide](./helm-upgrades.md). It is the short, mandatory
+[Helm Cluster Upgrade Guide](./helm-upgrades.md). It is the short, mandatory
 upgrade brief; this document holds the detailed subsystem and recovery
 procedures it links to.
 
@@ -22,16 +22,16 @@ npm run agent:docker:continuous # Continuous/dev profile (isolated internal netw
 ```
 
 - `split` is the standard gateway + agent + operator launcher.
-- `split` loads `.env` in the launcher/gateway boundary, then starts agents and operators from separate explicit allowlists. Operators do not reload `.env`; the fleet Garden receives only its approved database URL plus Garden/runtime wiring, while provider and channel credential status reaches it only as redacted booleans over the admin transport.
+- `split` loads `.env` in the launcher/gateway boundary, then starts agents and operators from separate explicit allowlists. Operators do not reload `.env`; the cluster Garden receives only its approved database URL plus Garden/runtime wiring, while provider and channel credential status reaches it only as redacted booleans over the admin transport.
 - `yolo` keeps the split runtime but broadens gateway `fs.read` scope across the codebase.
 - `operator` runs only the Garden operator surface when you want it separate from the launcher.
 - `agent:docker` is the production profile (`network_mode: "none"`).
 - `agent:docker:continuous` is the continuous/dev profile on an isolated internal network.
 - Use `npm run verify:agent-docker-isolation` after changing compose files or operator docs.
 
-## Multi-Companion Fleet Operations
+## Multi-Companion Cluster Operations
 
-Multi-companion is a topology derived from the mandatory `companions.json` fleet
+Multi-companion is a topology derived from the mandatory `companions.json` cluster
 manifest: N agent processes behind one gateway when the manifest has more than
 one entry. A one-entry manifest is a single-companion deployment and is
 byte-identical to the old single-companion behavior. The full model is in
@@ -43,9 +43,9 @@ requires `PSFN_FLEET_AUTH=1`.
 
 ### Supervisor launcher
 
-`npm run split` (`scripts/start-gateway-agent.sh`) resolves the fleet and, when
+`npm run split` (`scripts/start-gateway-agent.sh`) resolves the cluster and, when
 the manifest enumerates more than one companion, enters supervisor mode: it spawns one agent process
-per companion and exactly one fleet Garden process on the normal fleet-level
+per companion and exactly one cluster Garden process on the normal cluster-level
 `ADMIN_PORT`. `gardenPort` is retired from `companions.json`; any remaining
 entry fails validation instead of activating a compatibility path. Preview the
 redacted spawn plan with:
@@ -63,8 +63,8 @@ canonical companion IDs. Endpoint collisions fail before process launch. After
 starting all N agents, the supervisor waits deterministically until every
 planned socket is listening; an agent exit or missing endpoint aborts without
 starting Garden. Only then does it start the one Garden. The supervisor is
-shared-fate: if any supervised process exits, the whole fleet is torn down.
-The fleet Garden receives `POSTGRES_DATABASE_URL` for its approved direct
+shared-fate: if any supervised process exits, the whole cluster is torn down.
+The cluster Garden receives `POSTGRES_DATABASE_URL` for its approved direct
 database services. Those services are instantiated per registered companion,
 and the authenticated request target must match the selected service binding
 before a query can run.
@@ -75,12 +75,12 @@ session-integrity worker in both single- and multi-companion topologies. These
 proofs are not printed by `--dry-run` and are never passed to Garden operators.
 
 The plan derives one canonical Personal Workspace per companion beneath
-`<runtime-root>/workspaces/personal/<uuid>`. It provisions the fleet layout
+`<runtime-root>/workspaces/personal/<uuid>`. It provisions the cluster layout
 before process startup and refuses missing, overlapping, symlink-escaping, or
 tuple-mismatched roots. The shared root is Garden-governed and is never exported
 as `WORKSPACE_PATH`.
 
-The local fleet Garden uses socket admin transport only; network
+The local cluster Garden uses socket admin transport only; network
 admin-transport mode is rejected fail-closed under the supervisor.
 
 Local topology rollback is revision-based, not a live compatibility switch.
@@ -117,9 +117,9 @@ credential vault) at load; an inline `token` field is rejected, and an
 unresolved/empty token fails closed. Add each companion's bot token to `.env`
 under the env var name its account references.
 
-### Unified fleet human origin
+### Unified cluster human origin
 
-With fleet auth enabled (system-owned `fleet-auth.json` present; file presence
+With cluster auth enabled (system-owned `fleet-auth.json` present; file presence
 is the single source of truth), the gateway is the only browser origin. Open the
 exact HTTPS `canonicalOrigin` from `fleet-auth.json` at `/fleet`; unauthenticated
 browser requests are sent through the gateway-owned OAuth login. Authorized
@@ -128,7 +128,7 @@ Companion UI is `/companion-ui/` and is bound by the server to one registered
 companion. The old direct Garden host/port is not a browser edge in this mode.
 The same compiled Garden bundle renders the `/fleet` overview; its
 `/v1/fleet/portal` request returns only the current principal's bounded
-authorized projection. The retired raw fleet-status listener and
+authorized projection. The retired raw cluster-status listener and
 `/fleet/status.json` route are absent.
 
 `fleet-auth.json` accepts an optional admin-unconditional `accountRoster`
@@ -148,11 +148,11 @@ for lifecycle ceremonies.
 For every Garden request, the gateway resolves the live OPL1.5 session/contact/
 grant/policy context for the companion encoded in the path. Only then does it
 mint and durably consume a short-lived, exact request capability and connect to
-the one fleet Garden, which verifies the binding before selecting that
+the one cluster Garden, which verifies the binding before selecting that
 companion's registered agent transport. Unknown companions, authorization
 denial, stale or revoked sessions, and missing upstream registrations all
 return the same 404 before an agent connection, so the edge does not enumerate
-the fleet.
+the cluster.
 Browser cookies, bearer credentials, forwarding metadata, and caller-supplied
 capability assertions are stripped. Garden verifies the signed method, target,
 action, authorization digest, body length, request id, decision id, audience,
@@ -167,25 +167,25 @@ There are two admitted HTTPS-origin shapes:
   direct-TLS metadata, or mismatched callback origins fail closed. Restrict the
   gateway listener to that proxy independently with NetworkPolicy/firewall.
 
-The local fleet launcher uses loopback Garden upstreams. Any non-loopback
+The local cluster launcher uses loopback Garden upstreams. Any non-loopback
 `FLEET_SSO_GARDEN_HOST` requires the complete `FLEET_SSO_GARDEN_TLS_*` tuple;
 the gateway validates the Garden SPIFFE URI and Garden validates the gateway
 SPIFFE URI. Partial TLS configuration aborts startup. In Helm, set
 `fleetAuth.enabled=true`, enable `ingress.gateway.tls`, and name an existing
-browser-trusted TLS Secret. Fleet auth also requires `networkPolicy.enabled=true`,
+browser-trusted TLS Secret. Cluster auth also requires `networkPolicy.enabled=true`,
 `hostPorts.gatewayApi.enabled=false`, and the exact root
 `ingress.gateway.path=/` with `pathType=Prefix`; any other combination fails
 rendering rather than creating a second or incomplete browser edge. The chart
 renders that gateway as the sole browser Ingress, cert-manager identities for
 gateway-to-Garden mTLS, and NetworkPolicy allowing Garden and the optional
-Companion UI only from gateway pods. It has no raw fleet-status listener;
+Companion UI only from gateway pods. It has no raw cluster-status listener;
 the raw status listener remains a separately managed loopback-only operator
 surface.
 
 Rollback keeps the same edge invariant. Capture the current values, certificate
-Secrets, and fleet owner backup before changing the flag. A fleet-on rollback
+Secrets, and cluster owner backup before changing the flag. A cluster-on rollback
 may target only a revision that still has the unified router and sole-gateway
-Ingress. To disable fleet auth, first render and inspect the feature-off chart:
+Ingress. To disable cluster auth, first render and inspect the feature-off chart:
 Garden returns to `ADMIN_TOKEN` authentication and may use its normal direct
 Ingress (`ingress.garden.enabled`) or single-node hostPort
 (`hostPorts.garden.enabled`). SSO is the shared multi-admin identity and
@@ -197,7 +197,7 @@ Garden exposure for the selected topology, and a revoked session before
 declaring recovery. Run `helm lint deploy/helm/psfn` and
 `npm run verify:helm-chart` on the exact rollback values before applying them.
 
-### Fleet backups
+### Cluster backups
 
 See "Backups And Integrity" below for the per-companion-slice / cluster-artifact
 / group-mode model and the deterministic leader-election rule.
@@ -262,16 +262,16 @@ Use `--dry-run` first. Keep authoritative env and runtime wiring in the deployed
 
 ### Helm upgrade for per-companion scheduler and capability owners
 
-Before this per-release Helm procedure, inspect the fleet-wide owner boundary.
+Before this per-release Helm procedure, inspect the cluster-wide owner boundary.
 If `charge-policy.json` or `skills.json` is still under `SYSTEM_DATA_DIR`, stop
 every release and complete the digest-approved
-[`migrate:system-owner-fleet`](#existing-split-fleets-with-shared-per-companion-owners)
+[`migrate:system-owner-fleet`](#existing-split-clusters-with-shared-per-companion-owners)
 procedure once across every exact root in `companions.json`. The chart mounts
 only one companion root per release, so its init container cannot perform that
-fleet-wide fan-out and intentionally refuses to treat seed files as a
+cluster-wide fan-out and intentionally refuses to treat seed files as a
 migration. Run the command from a repo-owned maintenance environment where the
 system-data PVC and every manifest companion-data PVC are mounted at their
-production paths. Do not start any individual Helm upgrade until the fleet
+production paths. Do not start any individual Helm upgrade until the cluster
 preflight passes with `bootstrap.seedOwnerFiles=false`.
 
 Releases created before the per-companion ownership cutover have
@@ -352,7 +352,7 @@ Before upgrading each release:
    ```
 
    This completes the scheduler/capability Helm routing and scheduler-schema
-   boundaries. The separate charge/skills fleet transaction above must already
+   boundaries. The separate charge/skills cluster transaction above must already
    be complete. Do not manually rewrite the live scheduler or run an off-chart
    workaround. Apply the Helm upgrade once to every release/companion root.
 
@@ -662,13 +662,13 @@ one-member installation set used by a default single-companion Helm release:
   exact bytes being fanned out. In multi-companion mode it fans each approved
   source to every companion enumerated in `companions.json`. In the default
   topology it binds the explicit `COMPANION_ID` and `COMPANION_DATA_DIR` as the
-  one destination without inventing a fleet manifest. It retires the source
+  one destination without inventing a cluster manifest. It retires the source
   only after all destinations verify. Digests only — the command carries no
   secrets.
 - **Helm pre-upgrade hook** —
   `deploy/helm/psfn/templates/owner-migration-upgrade.yaml`, gated by
   `ownerMigration.enabled`. It runs as a `pre-upgrade` Job that first snapshots
-  the whole fleet, then runs the same compiled `--apply` migration with the
+  the whole cluster, then runs the same compiled `--apply` migration with the
   bound `--approve` digests, then runs packaged per-companion readiness probes;
   Helm admits the new revision only after every probe passes. Missing claims,
   wrong paths, image-digest failures, shared-companion claims, or an omitted
@@ -676,7 +676,7 @@ one-member installation set used by a default single-companion Helm release:
 - **Receipts** — the durable schema-v4 receipt lands at
   `SYSTEM_DATA_DIR/migrations/system-owner-fleet-reroot.json`; retired sources
   move into receipt-owned quarantine directories under `SYSTEM_DATA_DIR`, and
-  the whole-fleet snapshot lands under the backups area (`BACKUP_ROOT_DIR`). The
+  the whole-cluster snapshot lands under the backups area (`BACKUP_ROOT_DIR`). The
   receipt is what makes the migration crash-recoverable and idempotent on retry.
 
 The supported scope and beta-removal condition are recorded in
@@ -684,7 +684,7 @@ The supported scope and beta-removal condition are recorded in
 procedure — snapshot, plan, approve, apply, and post-migration preflight —
 follows.
 
-### Existing split fleets with shared per-companion owners
+### Existing split clusters with shared per-companion owners
 
 Installations created before per-companion owner-file rooting may still have
 `charge-policy.json` or `skills.json` under `SYSTEM_DATA_DIR`. Scheduler and
@@ -704,7 +704,7 @@ npm run migrate:system-owner-fleet
 
 The snapshot command writes one cluster/system tree plus one
 `companions/<companion-id>/...` tree for every manifest root. Each tree has a
-per-file digest manifest, and the fleet manifest binds those manifests by
+per-file digest manifest, and the cluster manifest binds those manifests by
 SHA-256. Any excluded or special file fails capture; a partial family is
 removed and cannot be used as rollback evidence.
 
@@ -725,7 +725,7 @@ the system, backup, and every companion PVC. Topology is derived from
 `companions.json` presence, not a flag (`PSFN_MULTI_COMPANION` is retired): a
 single-companion release lists its one identity and root, and when no
 `companions.json` exists yet the migrator synthesizes the one-entry migration
-fleet from the environment without persisting a manifest (the chart provisions
+cluster from the environment without persisting a manifest (the chart provisions
 the runtime `companions.json` separately). A multi-companion installation uses
 the same canonical paths as the already-present `companions.json` and lists
 every entry. The hook
@@ -767,20 +767,20 @@ remove them before this alpha migration support is retired. If interrupted,
 repeat the exact apply command: only an identity-bound partial copy that is an
 exact prefix of the approved source is resumed. An unbound copy is durably
 superseded under a new receipt-recorded identifier and preserved for operator
-inspection. Unknown artifacts, replacements, changed sources, a changed fleet,
+inspection. Unknown artifacts, replacements, changed sources, a changed cluster,
 pre-existing destinations, or destination tampering are hard conflicts; the
 tool never deletes the evidence or chooses a winner. After
 completion, run
 `npm run preflight:startup-owner-files` in the target runtime environment before
-restarting the fleet. The runtime preflight validates global owners at
+restarting the cluster. The runtime preflight validates global owners at
 `SYSTEM_DATA_DIR` once and every per-companion owner at each exact root resolved
 from `companions.json`; an owner in another companion root or a system-root
 decoy cannot satisfy the check. `npm run verify:startup-owner-files` is the
 separate repository gate: it validates distributed seeds in a disposable,
 explicit split-root fixture and is never called by the launcher.
 
-Rollback is a whole-fleet restore boundary. If an old release must be restored
-after charge/skills fan-out, stop every fleet process and provision a fresh,
+Rollback is a whole-cluster restore boundary. If an old release must be restored
+after charge/skills fan-out, stop every cluster process and provision a fresh,
 empty system-data PVC plus one fresh, empty companion-data PVC for every
 manifest entry. Mount them beneath one fresh runtime root using the original
 relative paths, then rehearse/perform the verified restore:
@@ -809,18 +809,18 @@ The live alpha migration boundary is defined in [`docs/specifications.md`](./spe
 - Use `npm run migrate:persistence-layout` for legacy shared-root data. Do not keep the old shared root mounted as a runtime fallback after cutover.
 - Use `npm run migrate:system-owner-fleet` only for the receipt-bearing alpha
   fan-out of registered per-companion owner files left in a current split
-  fleet's system root. Do not point the single-companion persistence cutover at
+  cluster's system root. Do not point the single-companion persistence cutover at
   `SYSTEM_DATA_DIR` and do not retain a shared fallback reader.
 - Use `npm run migrate:scheduler-owner -- --data-dir <exact-companion-data-dir>`
   only as an explicit one-companion alpha owner-shape migration. The standard
   launcher never runs it, and the command refuses to infer a system, shared, or
   companion root. Run it separately for each intended companion, then run the
-  runtime startup-owner preflight before restarting the fleet.
+  runtime startup-owner preflight before restarting the cluster.
 - Use continuous/local `DATA_DIR` only for local development and smoke testing. Production must use split roots and fail closed on shared-root or partial split-root wiring.
 - Keep `WORKSPACE_PATH` as one companion's Personal Workspace. It must not
   overlap runtime data roots; live Purrsephone personal files live under
   repo-root `purrsephone/`, while active config, databases, sessions, telemetry,
-  and identity artifacts remain under runtime data. In a current fleet this is
+  and identity artifacts remain under runtime data. In a current cluster this is
   not yet a per-companion isolation boundary; see the workspace warning above.
 - Treat owner-file drift warnings as cleanup signals, not as permission to keep `.env` as mutable config authority.
 - Review config, startup, persistence, and tool-surface changes against the live boundary. If a compatibility path is not named there, reject it, make it fail closed, or track it for beta removal before expanding it.
@@ -862,7 +862,7 @@ session by its exact channel-index key:
 npm run session:purge -- --session 'api:<principal>:testing:kube-rollout-validation-20260719'
 ```
 
-For a multi-companion fleet, select the manifest-owned companion explicitly:
+For a multi-companion cluster, select the manifest-owned companion explicitly:
 
 ```bash
 npm run session:purge -- \
@@ -874,7 +874,7 @@ The command accepts no wildcards. It stages the complete journal chain and
 channel-index removal for rollback, clears that companion and session's exact
 Redis tail-key family when Redis is configured, then removes the channel's
 message and drift projection rows in one PostgreSQL transaction. In split-root
-deployments it resolves journals from the companion data root. In fleet mode
+deployments it resolves journals from the companion data root. In cluster mode
 it resolves both that root and the non-public PostgreSQL schema from
 `companions.json`; missing or ambiguous companion/schema selection fails
 closed. When Redis is not configured the report says
@@ -888,7 +888,7 @@ the target and backup.
 
 ### Optional Redis session tail cache
 
-Deployments with Redis can enable a bounded hot session tail (settings.json `sessionTailCache: { enabled, maxEntriesPerChannel }`, default disabled). Every session append writes through to one Redis ZSET per companion, channel, and epoch (`psfn:session-tail:<companionId>:<channelKey>:e<epoch>`, score = entry id, GC TTL, trimmed to the bound), and turn-context captures read the recent window from that shared tail — so agent, gateway, and garden see ONE consistent recent view instead of three per-process file caches. Keys are scoped by `COMPANION_ID`, so a fleet sharing one Redis never crosses tails between companions. JSONL journals remain the source of truth and the HMAC chain is untouched: tail rows carry no `_hmac` fields, and on any id overlap the journal copy wins — tail rows are only accepted for ids newer than the journal read (cross-process gap-fill). Journal rewrites (CogSec tombstones, turn redaction, compaction invalidation/regeneration, post-repair reloads) bump a per-channel epoch key (`psfn:session-tail-epoch:<companionId>:<channelKey>`) before AND after the rewrite (the second bump is exception-safe: it runs even when a post-rewrite step throws), which fences every pre-rewrite row away from every process; a failed epoch bump fails the rewrite loudly (redaction is fail-closed). Tail writers bind to the epoch captured with their data, so a delayed write can only land under an already-superseded key, and readers re-check the epoch after the range read, treating any change as a miss. Reads validate id contiguity across the window (non-message journal entries appear as explicit id-gap placeholders), and any hole, duplicate, or tail missing the just-recorded entry is treated as a miss (journal read + repopulate). The Redis connection reuses the shared env wiring (`PSFN_REDIS_URL` and related TLS/credential vars, forwarded to the agent by the split launcher); enabling the tail with Redis unavailable fails startup, while a runtime Redis outage degrades loudly (rate-limited warns) to journal reads without dropping turns.
+Deployments with Redis can enable a bounded hot session tail (settings.json `sessionTailCache: { enabled, maxEntriesPerChannel }`, default disabled). Every session append writes through to one Redis ZSET per companion, channel, and epoch (`psfn:session-tail:<companionId>:<channelKey>:e<epoch>`, score = entry id, GC TTL, trimmed to the bound), and turn-context captures read the recent window from that shared tail — so agent, gateway, and garden see ONE consistent recent view instead of three per-process file caches. Keys are scoped by `COMPANION_ID`, so a cluster sharing one Redis never crosses tails between companions. JSONL journals remain the source of truth and the HMAC chain is untouched: tail rows carry no `_hmac` fields, and on any id overlap the journal copy wins — tail rows are only accepted for ids newer than the journal read (cross-process gap-fill). Journal rewrites (CogSec tombstones, turn redaction, compaction invalidation/regeneration, post-repair reloads) bump a per-channel epoch key (`psfn:session-tail-epoch:<companionId>:<channelKey>`) before AND after the rewrite (the second bump is exception-safe: it runs even when a post-rewrite step throws), which fences every pre-rewrite row away from every process; a failed epoch bump fails the rewrite loudly (redaction is fail-closed). Tail writers bind to the epoch captured with their data, so a delayed write can only land under an already-superseded key, and readers re-check the epoch after the range read, treating any change as a miss. Reads validate id contiguity across the window (non-message journal entries appear as explicit id-gap placeholders), and any hole, duplicate, or tail missing the just-recorded entry is treated as a miss (journal read + repopulate). The Redis connection reuses the shared env wiring (`PSFN_REDIS_URL` and related TLS/credential vars, forwarded to the agent by the split launcher); enabling the tail with Redis unavailable fails startup, while a runtime Redis outage degrades loudly (rate-limited warns) to journal reads without dropping turns.
 
 ## Group-Room Memory Operations
 
@@ -982,7 +982,7 @@ Fatigue evaluation is always wired and always runs, but it only ever SPENDS on m
 ### Operating same-cluster autonomous initiation
 
 Autonomous initiation is disabled in the shipped seed. Enable it only after the
-fleet identities, canonical machine-intelligence contacts, bilateral trust,
+cluster identities, canonical machine-intelligence contacts, bilateral trust,
 ordinary companion channels, and fatigue/charge policy are ready:
 
 1. Edit `scheduler.json > icpAutonomy` through the canonical Settings owner-file
@@ -1046,13 +1046,13 @@ authorization and redaction contracts.
 - System-data JSON owner files are staged into `system-config/` with a per-file sha256 manifest. This includes `settings.json`, `models.json`, `providers.json`, `channels.json`, `backup.json`, `trust-policy.json`, `intake-policy.json`, and `partner-affect-shadow.json` when present. `.env`, generated systemd env files, and raw provider/channel secrets are not copied by this system-config snapshot. `capability-tier.json`, `scheduler.json`, `charge-policy.json`, and `skills.json` are per-companion owner files rooted at `companionDataDir`, so they are captured by the exhaustive `companion-tree` slice above, not this cluster-global system-config slice.
 - Helm deployments also stage `helm-recovery/`: the recovery-safe deployable files from the repo-owned `deploy/helm/psfn` chart plus a versioned descriptor containing release name, namespace, Helm revision, an exact chart-content digest, and the effective agent/gateway/Garden image references. Documentation files, live Helm values, rendered manifests, Kubernetes Secret objects, and secret material are deliberately excluded. Real YAML parsing rejects secret-bearing values regardless of quoting, inline-map, or snake-case syntax; unsupported overlays, packed/opaque subcharts, special files, and source/destination overlap fail closed before capture writes anything. The chart has a per-file sha256 manifest and is verified before encryption and again by `verify:backup-restore`.
 - Every snapshot contains `backup-contents.json`, which records whether Helm recovery is `required` or `absent`. In production this marker is inside the authenticated encrypted payload, so deleting the entire Helm subtree cannot make a Kubernetes backup masquerade as a non-Kubernetes backup. Restore operators still re-provision credentials and review deployment-specific overrides rather than replaying stale secrets.
-- The configured Personal Workspace is staged separately into `workspace-tree/` with its own sha256 manifest. This covers its docs, downloads, images, journal/scratchpad files, authored skills/modules, experiments, and canonical `knowledge/wiki/` store. In fleet mode, each companion slice contains only that companion's Personal Workspace; the cluster artifact contains only the governed Shared Companion Workspace. Group mode captures the complete `workspaces/` parent in its one family artifact. Runtime roots, backup targets, VCS metadata, dependency directories, caches, and temp directories are excluded and recorded in the manifest.
+- The configured Personal Workspace is staged separately into `workspace-tree/` with its own sha256 manifest. This covers its docs, downloads, images, journal/scratchpad files, authored skills/modules, experiments, and canonical `knowledge/wiki/` store. In cluster mode, each companion slice contains only that companion's Personal Workspace; the cluster artifact contains only the governed Shared Companion Workspace. Group mode captures the complete `workspaces/` parent in its one family artifact. Runtime roots, backup targets, VCS metadata, dependency directories, caches, and temp directories are excluded and recorded in the manifest.
 - Workspace backup fails closed if `WORKSPACE_PATH` overlaps runtime data roots, logs, temp, backup output, the mirror target, or other protected runtime paths. Keep personal wiki/reference documents under `WORKSPACE_PATH/knowledge/wiki/`; do not rely on the external Obsidian bridge for canonical storage or backup coverage.
 - With `verifyRestore` enabled, every scheduled cycle verifies the plaintext staging area before encryption: it restores the dump into a dedicated scratch database (`<dbname>_restore_verify`, derived from the runtime database URL) and asserts schema, pgvector functionality on restored vectors, critical-table presence, and that tables populated at the source restored non-empty. One-time setup: `CREATE DATABASE <dbname>_restore_verify OWNER <runtime-role>` and `CREATE EXTENSION vector` in it as superuser (the extension survives wipes; user tables/sequences/views are dropped each run). The dump archive table of contents is also checked via `pg_restore --list`; companion-tree, workspace-tree, system-config, backup-contents, and Helm manifests are re-verified; and the L0 session-archive snapshot must parse as JSONL.
 - After verification, the retained backup set contains `encrypted-backup.json` plus `snapshot.tar.gz.enc`; the plaintext staging directory is removed. Mirrors receive the encrypted package, not the plaintext tree.
 - `npm run verify:backup-restore -- --backup-dir <snapshot> --postgres-restore-url <scratch-url> [--postgres-source-url <url>]` decrypts encrypted backup sets using the manifest key reference and runs the same fidelity verification (the decant rehearsal).
 - A failed scheduled backup logs an error and emits a `backup.failed` event on the runtime event bus.
-- Under the multi-companion topology, backups are per-companion by default: each companion is captured as its own slice (its own `postgresSchema` dump, companion-data tree, and Personal Workspace) so a single companion can be moved to another cluster as a slice. A separate `cluster` artifact captures the shared-world schema (`shared`), system-data owner files, the Shared Companion Workspace, and the Helm recovery bundle when applicable; Helm files and peer Personal Workspaces never leak into companion slices. Enabling `groupMode` (`backup.json`, env override `BACKUP_GROUP_MODE`) instead collapses the fleet into one whole-database family artifact containing the complete workspace family and system-level bundle. Exactly one process runs the fleet backup cycle: the leader is deterministic — the first companion in `companions.json` order (`isFleetBackupLeader`, `src/persistence/backups/fleet-scheduler.ts`), no distributed lock — and followers register no backup lane. Partial failure (`FleetBackupPartialFailureError`) is recorded and re-thrown, never swallowed. Destination-aware restore helpers in `src/persistence/backups/fleet-restore.ts` restore exactly one companion, cluster, or group scope after verifying the backup manifests and reject existing or overlapping destination roots rather than merging them.
+- Under the multi-companion topology, backups are per-companion by default: each companion is captured as its own slice (its own `postgresSchema` dump, companion-data tree, and Personal Workspace) so a single companion can be moved to another cluster as a slice. A separate `cluster` artifact captures the shared-world schema (`shared`), system-data owner files, the Shared Companion Workspace, and the Helm recovery bundle when applicable; Helm files and peer Personal Workspaces never leak into companion slices. Enabling `groupMode` (`backup.json`, env override `BACKUP_GROUP_MODE`) instead collapses the cluster into one whole-database family artifact containing the complete workspace family and system-level bundle. Exactly one process runs the cluster backup cycle: the leader is deterministic — the first companion in `companions.json` order (`isFleetBackupLeader`, `src/persistence/backups/fleet-scheduler.ts`), no distributed lock — and followers register no backup lane. Partial failure (`FleetBackupPartialFailureError`) is recorded and re-thrown, never swallowed. Destination-aware restore helpers in `src/persistence/backups/fleet-restore.ts` restore exactly one companion, cluster, or group scope after verifying the backup manifests and reject existing or overlapping destination roots rather than merging them.
 - Startup validates the PostgreSQL schema, pgvector availability, and configured embedding dimensions; there is no alternate database integrity path.
 - Embedding-dimension mismatches are surfaced at startup.
 - Use this verification when backup behavior changes:

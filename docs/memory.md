@@ -104,7 +104,7 @@ byte-identical to a pre-scope document. The non-personal scope is
 across the companions on a cluster.
 
 - **Personal wiki is per-companion and companion-writable.** It lives under
-  that companion's canonical `WORKSPACE_PATH/knowledge/wiki/`; fleet launcher
+  that companion's canonical `WORKSPACE_PATH/knowledge/wiki/`; cluster launcher
   and gateway policy bind the same isolated root to the authenticated companion.
 - **Shared-world wiki is operator-owned.** Companions read the shared scope and
   *propose* entries through the normal wiki pass; they never write it directly.

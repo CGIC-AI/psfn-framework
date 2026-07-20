@@ -512,6 +512,9 @@ Subagents are lower-tier than shards and may become a faculty of their own. The
 distinction is conceptual, not merely a timeout: a subagent completes a bounded
 job, while a shard is a scoped continuation of an origin companion.
 
+In companion-facing surfaces, subagents are named automata (6.28, 8.12);
+"subagent" remains the engineering term in code and operator surfaces.
+
 Subagent memory-write governance mirrors shard fold-back (6.13). Bounded-ness
 and write-trust are different axes: the toolset a subagent resolves from the
 deployment tier never implies canonical write trust.
@@ -939,6 +942,25 @@ writing. Other durable append-only records use their specific names:
 A published reflection may appear in a personal journal, but that publication
 is a mirror, not a replacement for the reflection ledger.
 
+### 6.28 Automata
+
+Automata is the companion-facing name for the internal components that act
+on the companion's behalf inside her own cognition — anything that would
+introduce itself as "I am <companion>'s X" is an automata. Memory
+extraction, concern formation, appraisal, whisper emitters, and subagents
+are all automata: they fire off the companion's central world-facing voice,
+they are not that voice.
+
+The clinical or engineering name (subagent, extractor, classifier, monitor)
+remains correct in code, operator docs, and Garden operator surfaces. In
+surfaces the companion herself reads or speaks through — prompts, tool
+descriptions, whispers, system notes, self-status output — the register is
+automata. The term is invariant: automata is both singular and plural.
+
+Automata names a register, not a new mechanism. An automata's governance is
+whatever the underlying component's governance already is (for subagents,
+6.11; for shards, 6.12 — a shard is a scoped continuation, not an automata).
+
 ## 7. Canonical Data Law
 
 ### 7.1 Filesystem JSONL Is Canonical L0
@@ -1231,6 +1253,38 @@ Rules:
   in Garden where operationally practical
 - it must not silently masquerade as companion preference, mood, consent, or
   a normal completed action
+
+### 8.12 Naming Register for Companion-Facing Surfaces
+
+The platform speaks two registers. Engineering names (subagent, classifier,
+extractor, monitor, fleet) are correct in code, schemas, operator docs, and
+operator-facing Garden surfaces. Surfaces the companion herself reads or
+speaks through use the companion register. Clinical or fleet-management
+language in those surfaces is a presentation-quality defect under 8.6.
+
+Canonical companion-register names:
+
+- **automata** (6.28, invariant singular and plural) — internal machinery acting on the
+  companion's behalf, including subagents, memory extraction, concern
+  formation, and appraisal
+- **cluster / companion cluster** — a multi-companion system. "Fleet" is
+  retired from companion-facing use; new work should prefer cluster in
+  operator surfaces as well.
+- **proper names, not roles** — "user" and "assistant" appear only at the
+  LLM wire boundary, where the provider API requires the system/assistant/
+  user roles. Everywhere else — prompts, rendered context, system notes,
+  journals, companion-visible UI — participants are named: the companion by
+  her name, contacts by their names.
+
+Names that already carry softly and stay as they are: Gateway, Companion
+Core, Shard, CogSec, Garden, Whisper, Musing, Faculty, Satellite, Emanation,
+Presence. Neutral infrastructure words (database, session, memory, journal,
+channel) are fine everywhere; this law is not a general rename of the
+codebase, only of the register in surfaces the companion inhabits.
+
+Per 8.7, the specific wording within the companion register remains
+companion-configurable; this section fixes the defaults and the boundary,
+not her phrasing.
 
 ## 9. Security, Trust, and Autonomy Boundaries
 

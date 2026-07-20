@@ -3,7 +3,7 @@
 PSFN boots through the split runtime. The legacy `src/app/startup/index.ts` entrypoint is disabled and exits fail-closed; use `npm run split` for the full gateway + agent + operator stack, or launch `npm run gateway`, `npm run agent`, and `npm run operator` individually.
 
 Before upgrading any Helm cluster, read the canonical
-[Helm Fleet Upgrade Guide](./helm-upgrades.md). It carries rollout-order
+[Helm Cluster Upgrade Guide](./helm-upgrades.md). It carries rollout-order
 constraints and operator-visible access changes; this setup guide remains the
 authority for initial configuration and ownership.
 
@@ -114,7 +114,7 @@ Startup verifies the seed-backed owner files before the split runtime comes up. 
    `scheduler.seed.json`, `capability-tier.seed.json`,
    `charge-policy.seed.json`, and `skills.seed.json` under
    `COMPANION_DATA_DIR`; place every other owner file shown above under
-   `SYSTEM_DATA_DIR`. In fleet mode, provision those four files separately for
+   `SYSTEM_DATA_DIR`. In cluster mode, provision those four files separately for
    every companion root. Startup rejects a missing per-companion owner and
    never reads a system-root copy as a fallback.
 
@@ -122,10 +122,10 @@ Startup verifies the seed-backed owner files before the split runtime comes up. 
    only `scheduler.json` and `capability-tier.json`, followed by scheduler
    schema migration; see
    [`deploy/helm/psfn/README.md`](../deploy/helm/psfn/README.md#upgrading-releases-created-before-schedulercapability-owner-routing).
-   Existing multi-companion split fleets with registered per-companion owners
+   Existing multi-companion split clusters with registered per-companion owners
    under `SYSTEM_DATA_DIR` must instead use the digest-approved,
    receipt-bearing workflow in
-   [`docs/operations.md`](./operations.md#existing-split-fleets-with-shared-per-companion-owners).
+   [`docs/operations.md`](./operations.md#existing-split-clusters-with-shared-per-companion-owners).
 
    The `models.seed.json` template ships `promptCaching.enabled: true`, so new deployments engage provider prompt caching on the byte-stable system-prompt prefix out of the box (Anthropic / OpenRouter→Anthropic get `cache_control` breakpoints; other providers get the stable-prefix benefit plus telemetry, no wire change). Set `promptCaching.enabled: false` in `models.json` to fully disable it. Tune lifetime with `promptCaching.retention` (`none`/`short`/`long`, default `short`) and the session key with `promptCaching.scope` (`channel`/`request`, default `channel`).
 
@@ -191,24 +191,24 @@ these process-wiring env vars come into play (documented in full in
 [`docs/multi-companion.md`](./multi-companion.md) and
 [`docs/operations.md`](./operations.md)):
 
-- `companions.json` — the mandatory system-owned fleet manifest. Every
-  deployment is a fleet of one or more companions, so this owner file is always
+- `companions.json` — the mandatory system-owned cluster manifest. Every
+  deployment is a cluster of one or more companions, so this owner file is always
   required (a single-companion deployment is a one-entry manifest); a missing or
   invalid manifest fails closed at startup. Topology is derived from the entry
   count, not from any env flag (the retired `PSFN_MULTI_COMPANION` flag no longer
   exists): one entry is single-companion, more than one is multi-companion
   tenancy.
 - `PSFN_FLEET_AUTH` — launcher topology hint, required with local
-  multi-companion startup. The one fleet Garden accepts companion-bound Fleet
-  Auth capabilities; the launcher rejects a fleet topology that would fall back
+  multi-companion startup. The one cluster Garden accepts companion-bound Cluster
+  Auth capabilities; the launcher rejects a cluster topology that would fall back
   to shared admin-token authority. Runtime enablement itself is decided solely
   by the presence of the system-owned `fleet-auth.json`: when that file is
-  present, fleet auth is enabled and the flag cannot disable it (setting it to
+  present, cluster auth is enabled and the flag cannot disable it (setting it to
   `0` only produces a loud startup warning); when the file is absent and the
   flag is set to `1`, startup refuses (fail closed) rather than starting
   without authentication.
-  Fleet Auth is fleet-shaped even when the fleet contains one companion: a
-  legacy single-companion deployment must enable the fleet topology and add a
+  Cluster Auth is cluster-shaped even when the cluster contains one companion: a
+  legacy single-companion deployment must enable the cluster topology and add a
   system-owned `companions.json` with exactly one entry. That entry supplies a
   lowercase RFC-4122 UUID `companionId`, manifest-relative `companionDataDir`
   and `characterCardPath`, and a lowercase Postgres schema. Startup does not
@@ -221,20 +221,20 @@ these process-wiring env vars come into play (documented in full in
 - `COMPANION_PG_SCHEMA` — per-companion Postgres schema for a single agent
   process. Explicit opt-in, not derived from `COMPANION_ID`; unset means the
   `public` schema (single-companion). The supervisor launcher sets this per
-  spawned agent from the fleet manifest.
+  spawned agent from the cluster manifest.
 - `PSFN_RUNTIME_ROOT` — canonical persistence root for manifest-relative
-  `companionDataDir` and `characterCardPath`. The fleet resolver emits absolute
+  `companionDataDir` and `characterCardPath`. The cluster resolver emits absolute
   paths beneath this root and rejects traversal or symlink escapes.
-- `ADMIN_PORT` — the one fleet-level Garden listener port. It is process
+- `ADMIN_PORT` — the one cluster-level Garden listener port. It is process
   wiring, not a per-companion manifest field. A `gardenPort` key remaining in
   any `companions.json` entry is rejected as retired.
 - `POSTGRES_DATABASE_URL` — the deployment database credential retained by the
-  fleet Garden for approved direct model-usage and observer-eval telemetry.
+  cluster Garden for approved direct model-usage and observer-eval telemetry.
   The immutable authenticated request target selects a companion-bound service
   instance before those routes query the database.
-- `/fleet` — the authenticated fleet overview inside the same Garden frontend.
+- `/fleet` — the authenticated cluster overview inside the same Garden frontend.
   It uses `/v1/fleet/portal` for the current principal's bounded authorized
-  projection. There is no separate raw fleet-status listener or
+  projection. There is no separate raw cluster-status listener or
   `FLEET_STATUS_*` wiring.
 - Per-companion Discord tokens are referenced by env-var name from
   `channels.json` (`tokenRef.envName`), not inline. Add each companion's bot
@@ -246,15 +246,15 @@ The standard launcher derives and injects role-bound gateway authentication
 proofs in both topologies so the isolated session-integrity worker never shares
 the normal agent role. A direct `npm run agent` launch must provide
 `GATEWAY_SESSION_INTEGRITY_AUTH_TOKEN`; in multi-companion mode it must also
-provide the exact fleet tuple and `GATEWAY_COMPANION_AUTH_TOKEN`.
+provide the exact cluster tuple and `GATEWAY_COMPANION_AUTH_TOKEN`.
 
-If an existing split fleet still has any registered per-companion owner under
+If an existing split cluster still has any registered per-companion owner under
 `SYSTEM_DATA_DIR`—including `scheduler.json`, `capability-tier.json`,
 `charge-policy.json`, or `skills.json`—do not copy the shared system file into
 one companion by hand and do not point `migrate:persistence-layout` at
-`SYSTEM_DATA_DIR`. Stop the fleet and use the digest-approved,
+`SYSTEM_DATA_DIR`. Stop the cluster and use the digest-approved,
 receipt-bearing `npm run migrate:system-owner-fleet` workflow documented in
-[`docs/operations.md`](./operations.md#existing-split-fleets-with-shared-per-companion-owners).
+[`docs/operations.md`](./operations.md#existing-split-clusters-with-shared-per-companion-owners).
 Before apply, mount every exact manifest root and run
 `npm run snapshot:system-owner-fleet -- --output <backup-family-dir>`; a missing
 root is a hard preflight failure and is never created by migration. Rehearse an
@@ -278,11 +278,11 @@ quarantined shared owner into selected companions.
 
 ### Multi-companion workspaces
 
-Do not set per-companion workspace paths in `companions.json`. The fleet
+Do not set per-companion workspace paths in `companions.json`. The cluster
 resolver derives `<runtime-root>/workspaces/personal/<companion-uuid>` and the
 single `<runtime-root>/workspaces/shared` root, validates containment and
 non-overlap, and provisions them before launch. Each agent receives only its
-matching personal root as `WORKSPACE_PATH`; the one fleet Garden selects an
+matching personal root as `WORKSPACE_PATH`; the one cluster Garden selects an
 agent through the immutable companion target registry instead of receiving N
 personal roots. The shared root is available through its authenticated,
 reviewed Garden surface and has no
@@ -313,10 +313,10 @@ npm run agent:docker:continuous # Continuous/dev profile (isolated internal netw
 
 ## Optional Surface Wiring
 
-### Fleet-authenticated browser origin
+### Cluster-authenticated browser origin
 
 When the system-owned `fleet-auth.json` is present (file presence is the
-single source of truth for fleet-auth enablement), do not publish
+single source of truth for cluster-auth enablement), do not publish
 `ADMIN_HOST`/`ADMIN_PORT` as a browser endpoint. Terminate HTTPS at
 the exact `canonicalOrigin`, route the full origin to the gateway API listener,
 and open `/fleet`. This is the authenticated bounded overview in the Garden
@@ -326,13 +326,13 @@ reverse proxy requires
 host/proto metadata, and an independent network restriction that admits only
 that proxy. Non-loopback gateway-to-Garden traffic must configure the complete
 `FLEET_SSO_GARDEN_TLS_*` mTLS tuple; partial configuration fails startup.
-For Helm fleet mode, keep `networkPolicy.enabled=true`,
+For Helm cluster mode, keep `networkPolicy.enabled=true`,
 `hostPorts.gatewayApi.enabled=false`, `ingress.gateway.path=/`, and
-`ingress.gateway.pathType=Prefix`; the chart rejects fleet auth if any of these
+`ingress.gateway.pathType=Prefix`; the chart rejects cluster auth if any of these
 sole-origin requirements is weakened.
 
 The optional static Companion UI may be registered with
-`FLEET_SSO_COMPANION_UI_ORIGIN`. If the fleet has more than one companion, also
+`FLEET_SSO_COMPANION_UI_ORIGIN`. If the cluster has more than one companion, also
 set `FLEET_SSO_COMPANION_UI_COMPANION_ID` to one exact registered UUID. It is
 then available only at authenticated `/companion-ui/`; the configured origin is
 internal wiring, never a second browser edge.
@@ -352,15 +352,15 @@ API_KEY=...
 ADMIN_TRANSPORT_SOCKET=./runtime/sockets/garden-admin.sock
 ```
 
-With fleet auth disabled, `admin-ui/build` is served from the internal or
+With cluster auth disabled, `admin-ui/build` is served from the internal or
 loopback admin host root, for example `http://127.0.0.1:3001/`. Multi-companion
-local startup still runs exactly one Garden on this fleet-level listener: the
+local startup still runs exactly one Garden on this cluster-level listener: the
 launcher starts all companion agents, waits for every canonical
-`garden-admin-<companion-uuid>.sock`, and only then starts Garden. With fleet
+`garden-admin-<companion-uuid>.sock`, and only then starts Garden. With cluster
 auth enabled, the same Garden is reachable only through
 `/companions/<companion-uuid>/garden/` on the canonical gateway HTTPS origin;
 `ADMIN_TOKEN` and `ADMIN_ALLOW_INSECURE` are rejected on that operator process.
-The repo launcher also scrubs those legacy variables from the fleet-auth
+The repo launcher also scrubs those legacy variables from the cluster-auth
 gateway and keeps proxy trust gateway-owned; child agent/operator allowlists do
 not inherit them.
 
@@ -383,7 +383,7 @@ Wyoming/OpenHome endpoint transports live in the Satellite Hub repository. Confi
 Satellite authentication has two layers:
 
 - **Per-satellite bearer keys**: set `API_SATELLITE_KEYS` (comma-separated, each >=16 chars). Each key yields a distinct satellite-scoped principal id that the matching `satellites.json` endpoint must list in `auth.apiKeyPrincipalIds`. Satellite keys are only valid on satellite surfaces.
-- **Fleet-auth Hub devices**: each device-facing endpoint must declare a strict
+- **Cluster-auth Hub devices**: each device-facing endpoint must declare a strict
   `hubDeviceEnrollment` with `deviceId`, positive `enrollmentVersion`, and
   `enrollmentStatus` (`active` or `revoked`). The authenticated Hub key selects
   the endpoint; the gateway then binds the signed assertion to this enrollment,

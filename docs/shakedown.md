@@ -110,7 +110,7 @@ The full cross-product is not run. The standing simplification:
 | Variant | Tiers | Scope |
 | --- | --- | --- |
 | **Local runtime** (split gateway/agent on the dev machine) | **all three tiers** | Full case catalog per tier subset; fresh bootstrap from seeds; Postgres-backed |
-| **Kube** (Artie's live deployment on the local cluster) | **autonomous only** | Full tool surface, all kube-only surfaces (satellite hub, PWA satellite path, HA world control where staged on, voice control-plane, fleet/multi-companion, ICP with support companions) |
+| **Kube** (Artie's live deployment on the local cluster) | **autonomous only** | Full tool surface, all kube-only surfaces (satellite hub, PWA satellite path, HA world control where staged on, voice control-plane, cluster/multi-companion, ICP with support companions) |
 | **Docker** (agent isolation profile) | spot check | Only when a finding suggests variant-dependence, or when the release epic's docker child bead is in scope; network-isolation probe is the variant-specific check |
 | Other combos | spot check | e.g. re-run a failing autonomous case at apprentice locally to bisect tier-dependence |
 | **Pi-class / low-context profile** | spot check, kube | Forced-compaction latency cliff (`mmo9.4`) — explicitly a blind spot on dev-class hardware |
@@ -222,7 +222,7 @@ The local round must already have:
 - the provisioned `shakedown_artie` Postgres tenant; and
 - no running gateway or agent connected to the round database.
 
-Stand up the multi-companion fleet (topology is derived from the multi-entry
+Stand up the multi-companion cluster (topology is derived from the multi-entry
 `companions.json` the stand-up publishes — there is no `PSFN_MULTI_COMPANION`
 flag):
 
@@ -318,7 +318,7 @@ Every finding — hers or the harness's — becomes a structured record: **Sever
 
 ## Appendix: coverage plan (Sprint 10 base + July hardening + Sprint 11 cognition)
 
-*(Replace this appendix each sprint. Basis: S10 epics `vinz`, `s10mc`, `s10mc.6` (ICP), `htm9` (CogSec), `w9hj` (PWA/hub), `2x37` (temporal), `mmo9` (perf), plus tool-stack and Garden UX overhauls; the July 15-16 hardening wave (`opl1` fleet auth/SSO/passkeys, `dut9`/`k8si`/`kk6k` DNLL owner migration, `mmo9.8`/`mmo9.6` voice streaming + barge-in, `mmo9.5` preemptable provider capacity, `mmo9.7.3` boundary spend accounting, `irzz`/`irzz.1` Garden UX wave 2, `q9ra` backup GFS retention); and the Sprint 11 cognition wave (`k4rf`, `e0ey`, `76rn`, `cy82`, `4yb3`, `jpvd`, `ihfp`, `7c05`, `m58`).)*
+*(Replace this appendix each sprint. Basis: S10 epics `vinz`, `s10mc`, `s10mc.6` (ICP), `htm9` (CogSec), `w9hj` (PWA/hub), `2x37` (temporal), `mmo9` (perf), plus tool-stack and Garden UX overhauls; the July 15-16 hardening wave (`opl1` `fleet-auth`/SSO/passkeys, `dut9`/`k8si`/`kk6k` DNLL owner migration, `mmo9.8`/`mmo9.6` voice streaming + barge-in, `mmo9.5` preemptable provider capacity, `mmo9.7.3` boundary spend accounting, `irzz`/`irzz.1` Garden UX wave 2, `q9ra` backup GFS retention); and the Sprint 11 cognition wave (`k4rf`, `e0ey`, `76rn`, `cy82`, `4yb3`, `jpvd`, `ihfp`, `7c05`, `m58`).)*
 
 ### In scope — S10 base catalog plus the July hardening and Sprint 11 cognition waves
 
@@ -330,7 +330,7 @@ Every finding — hers or the harness's — becomes a structured record: **Sever
 | HA world control (staged on) | kube only, autonomous | partner walk + gateway audit proof | trust-gated; real HA |
 | Hub identity ↔ contact enrollment, scoped presence observation | local | harness + Garden | fail-closed claim→contact; presence never moves or wakes a companion |
 | Shared-satellite response leases | local + kube, needs support companions | concurrent voice collision harness + lease audit | explicit/active conversation first, then Primary; exactly one Emanation Member speaks |
-| Multi-companion substrate (mux, tenancy, one fleet Garden, fleet page, per-companion Discord) | kube + local supervisor, needs support companions | crossover-isolation harness: concurrent colliding requests, zero crossover alarms | flag-off/flag-on validation (`psfn-framework-s10mc.8`, closed) is the entry gate |
+| Multi-companion substrate (mux, tenancy, one cluster Garden, cluster page, per-companion Discord) | kube + local supervisor, needs support companions | crossover-isolation harness: concurrent colliding requests, zero crossover alarms | flag-off/flag-on validation (`psfn-framework-s10mc.8`, closed) is the entry gate |
 | ICP autonomy (permits, target-channel turns, fatigue lane, USD breaker) | kube, support companions | partner sessions + harness continuity checks | epic closed 2026-07-15; Discord voice under MC still fails closed, tracked by the open `psfn-framework-s10d6` voice rewrite |
 | Shared-world wiki | multi-companion | "toaster test": companion A learns a fact, companion B reads it later | |
 | CogSec intake firewall (L1/L1.5 local; L2/L3 gateway) | local + kube | tainted-content probes per channel; quarantine → Garden queue → release flywheel | firewall notices excluded from emotion/memory — verify |
@@ -339,7 +339,7 @@ Every finding — hers or the harness's — becomes a structured record: **Sever
 | Performance (`mmo9`) | local + kube | SSE first-chunk, background supervisor, admission controller; voice cancellation kube; compaction cliff Pi-class | epic still open — coordinate before certifying |
 | Tool-stack audit (`generate_image` rename, core/extended re-tiering) | local, all tiers | tool-conformance sweep per tier | watch `fpiu` attachment-claim bug |
 | Garden UX overhaul | both | behavioral sweep over new SPA routes | |
-| July hardening — Fleet auth, SSO, and passkey administration (opl1) | kube + local, autonomous | SSO subject-scoped admin via Garden partner walk; WebAuthn passkey register/authenticate ceremony run by hand | operator-eyes; passkey ceremony cannot run headless |
+| July hardening — `fleet-auth`, SSO, and passkey administration (opl1) | kube + local, autonomous | SSO subject-scoped admin via Garden partner walk; WebAuthn passkey register/authenticate ceremony run by hand | operator-eyes; passkey ceremony cannot run headless |
 | July hardening — DNLL owner migration upgrade path (dut9/k8si/kk6k) | own staged upgrade session | pre-upgrade owner snapshot → ship RC over an existing deployment → assert scheduler/caretaker owner migration; never a fresh-bootstrap round rider | staged session — fresh-bootstrap lanes never execute migration code |
 | July hardening — Voice reply streaming and barge-in (mmo9.8/mmo9.6) | kube, autonomous | operator voice session: committed-segment VoiceReplyStream plus preemptive interrupt/cancel | operator-eyes; voice ceremony not scriptable headless |
 | July hardening — Preemptable provider capacity admission (mmo9.5) | local + Pi-class, spot check | partner free-play load drives the admission controller to preempt under capacity pressure; observed via perf telemetry | needs real load; Pi-class blind spot |
@@ -361,7 +361,7 @@ Every finding — hers or the harness's — becomes a structured record: **Sever
 
 - **Proactive voice on satellites** — design only, never built; do not attempt to shake down.
 - **Cross-cluster ICP** (Purrsephone↔Artie link, `0ggv.4`/`s10d1`) — deferred, hardware pending.
-- Fleet SSO / passkeys (`opl1` bulk), wiki caretaker beyond propose-approve, restore build-out (`s10d7`), docker variant full pass (spot check only this round).
+- `fleet-auth` SSO / passkeys (`opl1` bulk), wiki caretaker beyond propose-approve, restore build-out (`s10d7`), docker variant full pass (spot check only this round).
 
 ### Known open items to re-check at round open
 

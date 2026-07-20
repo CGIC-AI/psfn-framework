@@ -120,7 +120,7 @@ databases, L0/session state, telemetry, backups, active identity artifacts, and
 system/default skill config belong in `DATA_DIR` or split system/companion
 runtime roots.
 
-In the multi-companion runtime, the fleet launcher derives and validates one
+In the multi-companion runtime, the cluster launcher derives and validates one
 Personal Workspace per companion beneath the runtime root, injects only that
 root as the process `WORKSPACE_PATH`, and exposes the separate Shared Companion
 Workspace through its governed Garden surface. Do not add manifest path

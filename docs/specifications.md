@@ -26,18 +26,18 @@ Last updated: 2026-07-14.
 - `src/app/startup/index.ts` is disabled and exits fail-closed.
 - `npm run split` and `npm run yolo` are the intended launchers for day-to-day runtime use.
 
-### Fleet human and operator surfaces
+### Cluster human and operator surfaces
 
-- The canonical HTTPS origin's `/fleet` route is the fleet overview inside the
+- The canonical HTTPS origin's `/fleet` route is the cluster overview inside the
   same compiled Garden frontend used for companion administration.
-- `/fleet` and `/v1/fleet/portal` require a live gateway fleet session and
+- `/fleet` and `/v1/fleet/portal` require a live gateway cluster session and
   expose only the current principal's bounded authorized projection.
 - Authorized companion navigation always uses
   `/companions/<companion-uuid>/garden/...`; the immutable URL target is the
   sole browser authority for page, API, download, and WebSocket traffic.
-- The former unauthenticated raw fleet-status listener and its
+- The former unauthenticated raw cluster-status listener and its
   `FLEET_STATUS_PORT` / `FLEET_STATUS_HOST` wiring are retired. The public
-  origin does not expose `/fleet/status.json` or complete fleet-operational
+  origin does not expose `/fleet/status.json` or complete cluster-operational
   metadata.
 
 ## Live Alpha Migration Boundary
@@ -48,7 +48,7 @@ Supported until beta:
 
 - Continuous/local shared-root layout through `DATA_DIR`. This is for local development and smoke testing only; production mode forbids shared-root operation.
 - Split-root persistence cutover through `npm run migrate:persistence-layout` and the installer `--migrate-data` path. The cutover tooling may read legacy shared roots, write manifests, and run existing intra-root cleanup, but production startup should stop until the plan is clean.
-- Explicit system-owner fleet re-rooting through
+- Explicit system-owner cluster re-rooting through
   `npm run migrate:system-owner-fleet`. This one-time operator command may read
   only legacy `charge-policy.json` and `skills.json` left at
   `SYSTEM_DATA_DIR`, fan their exact approved bytes to the explicit
@@ -65,7 +65,7 @@ Supported until beta:
   prefix. An unbound crash remnant is preserved and durably superseded under a
   new recorded identifier, while unknown or replaced artifacts fail closed.
   Retries must match the receipt, its pinned directory identities, and the
-  unchanged fleet. A Helm deployment may invoke the same compiled command only
+  unchanged cluster. A Helm deployment may invoke the same compiled command only
   through the explicit `ownerMigration` pre-upgrade hook: the rollout must set
   `required=true`, disable bootstrap seeding, bind every source digest, mount
   the exact system and backup claims plus either the one explicit
@@ -79,7 +79,7 @@ Supported until beta:
   remains deployed. Validate this path with `npm run verify:helm-chart` and
   `npm run e2e:kube-owner-upgrade`. Remove the command, Helm hook, packaged
   probe, and receipt reader before beta after
-  every split fleet has a completed receipt (or a plan proving no system-root
+  every split cluster has a completed receipt (or a plan proving no system-root
   per-companion owners remain).
 - Explicit scheduler owner-shape migration through
   `npm run migrate:scheduler-owner -- --data-dir <exact-companion-data-dir>`.
@@ -226,7 +226,7 @@ explicitly published collaboration artifacts and common reference material. The
 shared-world wiki remains a narrower, site-scoped operator-owned knowledge
 surface—not a general shared filesystem.
 
-Fleet wiring deterministically derives personal roots from the runtime root and
+Cluster wiring deterministically derives personal roots from the runtime root and
 companion UUID, provisions them before process startup, and injects exactly one
 resolved Personal Workspace into each agent and Garden. The authenticated
 gateway connection selects the same root for filesystem, shell, image, beads,
@@ -312,7 +312,7 @@ Both gateway and agent startup run canonical hydration through `hydrateCanonical
   excluded. Audited local controls are
   revision-checked candidate cancellation, operator DND, and one-way live
   emergency disable plus persisted owner disable.
-- Not shipped: cross-cluster communication, fleet-wide/cross-companion control,
+- Not shipped: cross-cluster communication, cluster-wide/cross-companion control,
   message puppeteering, private transcript/reasoning inspection, and any Garden
   exposure of chain-of-thought.
 

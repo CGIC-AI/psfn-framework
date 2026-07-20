@@ -61,10 +61,10 @@ maturation tier.
 A runtime may have zero or one Productivity Companion:
 
 - a single-companion runtime may designate its one companion;
-- a fleet may designate exactly one companion across the fleet;
-- enabling two Productivity Companions in the same fleet must fail closed;
+- a cluster may designate exactly one companion across the cluster;
+- enabling two Productivity Companions in the same cluster must fail closed;
 - other companions do not gain access to Pack state, sensitive connectors, or
-  the Partner Operating Model merely because they share a fleet.
+  the Partner Operating Model merely because they share a cluster.
 
 The invariant applies to Pack ownership, not to ordinary core care. Other
 companions may still remember birthdays, hold their own concerns, use their
@@ -161,7 +161,7 @@ belong in the optional Pack.
 
 Calendar capability is therefore core-capable but policy-scoped. A companion
 does not gain access to the partner's real calendar simply because the
-interface exists. In a fleet, human-calendar write authority may still be
+interface exists. In a cluster, human-calendar write authority may still be
 restricted to the Productivity Companion.
 
 The existing canonical [`schedule`](tool-surface.md#canonical-schedule-surface)
@@ -842,7 +842,7 @@ observation delivery are persisted through the gateway audit store.
 No companion is fabricated as having chosen to speak when it did not.
 
 Shared-device support must preserve the single-Productivity-Companion
-invariant, companion rest, and fleet privacy.
+invariant, companion rest, and cluster privacy.
 
 ## 12. Goals, Projects, and Routines
 
@@ -1116,8 +1116,8 @@ become an alternate backend or credential authority.
 ### 17.1 Canonical owner
 
 The target design requires one canonical `productivity.json` owner in the
-system/fleet-owned config domain because designation cardinality is a
-fleet-wide invariant.
+system/cluster-owned config domain because designation cardinality is a
+cluster-wide invariant.
 
 It is expected to own:
 
@@ -1137,7 +1137,7 @@ workspace/data-root contracts. No environment variable or browser field may
 override Productivity Companion identity.
 
 Adding this owner requires the full owner-file contract: loader, validator,
-startup checks, Garden exposure, backup/restore, tests, and fleet cardinality
+startup checks, Garden exposure, backup/restore, tests, and cluster cardinality
 validation. A partially configured enabled Pack fails closed.
 
 ### 17.2 Capabilities
@@ -1272,9 +1272,9 @@ These scenarios are acceptance probes for future design and implementation.
    PDF or Obsidian reference.
 5. The Pack does not ingest the entire research archive to answer the request.
 
-### 19.9 Fleet isolation
+### 19.9 Cluster isolation
 
-1. A fleet contains ten companions.
+1. A cluster contains ten companions.
 2. Exactly one is designated Productivity Companion.
 3. Another companion attempts to query Pack Tasks or financial state.
 4. The request fails closed and is audited.
@@ -1303,7 +1303,7 @@ Implementation should proceed as vertical slices that produce a usable loop.
 
 ### Slice 1: Captured conversation to reviewed Task
 
-- add Pack owner and fleet designation validation;
+- add Pack owner and cluster designation validation;
 - add focused Postgres store and canonical domain contracts;
 - ingest one finalized Omi/vault conversation idempotently;
 - evaluate the deterministic summary/deep-read gate;
@@ -1418,7 +1418,7 @@ Current code seams to inspect first:
 The initial Productivity Pack does not:
 
 - become required companion core;
-- create more than one Productivity Companion per runtime/fleet;
+- create more than one Productivity Companion per runtime/cluster;
 - become a multi-user or multi-tenant SaaS;
 - replace companion concerns, pending follow-ups, care reminders, North Stars,
   or companion-owned personal projects;
@@ -1485,4 +1485,4 @@ The Pack succeeds when:
   or producing competing speech;
 - sensitive sources remain optional, isolated, and truthful;
 - one designated companion can provide deep assistance without spreading the
-  partner's private operational life across the fleet.
+  partner's private operational life across the cluster.

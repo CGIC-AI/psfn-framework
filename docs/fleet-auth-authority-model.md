@@ -1,6 +1,8 @@
-# Fleet Auth Authority Model
+# `fleet-auth` Authority Model
 
-Fleet Auth is a consistency model, not a single role lookup. For a database-backed
+> **Terminology:** Per charter §8.12 (2026-07-20) the multi-companion system is a **companion cluster**. "Fleet" persists only in code identifiers (the `fleet-auth` subsystem, `fleet-auth.json`, etc.) pending a staged engineering rename.
+
+The `fleet-auth` subsystem is a consistency model, not a single role lookup. For a database-backed
 principal to authorize a companion request, seven projections must describe the
 same current authority:
 
@@ -31,7 +33,7 @@ same current authority:
    floor. The copied values and derived generation must all remain current when
    the session is used.
 
-Child assertion authorization requires exactly one matching fleet session,
+Child assertion authorization requires exactly one matching cluster session,
 provider subject, contact binding, and role grant for the requested companion.
 It also requires exact parent-decision and authority values. A stale or
 duplicate row does not degrade to weaker authorization: it produces
@@ -47,7 +49,7 @@ reconciliation advances the global epoch and deletes existing sessions.
 Advancing either generation or epoch therefore invalidates prior sessions,
 after which the next login creates a session from the new values.
 
-Routine fleet login now enforces the exact-one-session invariant at creation.
+Routine cluster login now enforces the exact-one-session invariant at creation.
 In the same transaction that inserts a replacement, the broker atomically
 supersedes every active session for the same principal and audience, revokes
 its pending step-up challenges and JIT grants, and leaves exactly the new

@@ -186,7 +186,7 @@ stream, artifact previews, and approval decisions:
 
 Notes:
 
-- Fleet-auth device turns additionally require a server-owned
+- `fleet-auth` device turns additionally require a server-owned
   `hubDeviceEnrollment` on the exact device-facing endpoint, for example
   `{"deviceId":"office-device","enrollmentVersion":7,"enrollmentStatus":"active"}`.
   Register a distinct endpoint for each enrolled device relayed by the Hub.

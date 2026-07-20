@@ -206,7 +206,7 @@ the multi-companion flag.
   `composeRoomContentWindowPorts`. Ordinary Discord voice is thus the test
   substrate for future virtual-environment Locations (design bible §17/§20.5).
 
-Multi-companion topology, fleet operations, and the shared-world wiki are
+Multi-companion topology, cluster operations, and the shared-world wiki are
 documented in [`docs/multi-companion.md`](./multi-companion.md).
 
 ## Reading live behavior

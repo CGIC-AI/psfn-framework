@@ -1,23 +1,23 @@
-# Fleet-scoped Garden control plane
+# Cluster-scoped Garden control plane
 
 Status: implemented in the repository, 2026-07-18 (approved architecture
 direction 2026-07-17; delivered by the `psfn-framework-mus2` epic), pending an
 operator-managed live cutover. The code and Helm topology define one
-fleet-scoped Garden and retire per-companion Garden processes, `gardenPort`,
-and the raw fleet-status listener, but this implementation wave did not mutate
+cluster-scoped Garden and retire per-companion Garden processes, `gardenPort`,
+and the raw cluster-status listener, but this implementation wave did not mutate
 the live k3s deployment. The migration section below is the required cutover
 and rollback plan, not evidence that the rollout already happened.
 
 ## Decision
 
-Run one Garden control plane for the fleet. Its UI contains both the fleet view
+Run one Garden control plane for the cluster. Its UI contains both the cluster view
 and a companion switcher. Selecting a companion opens that companion's ordinary
 Garden pages. Selecting one of the companion's shards opens a limited shard
 sub-view inside the same Garden.
 
-Do not deploy a Garden process or container per companion or per shard. A fleet
+Do not deploy a Garden process or container per companion or per shard. A cluster
 of roughly a dozen companions should still have one Garden deployment, not
-roughly a dozen Gardens plus a separately deployed fleet view.
+roughly a dozen Gardens plus a separately deployed cluster view.
 
 The consolidation shares the pane, not authority or ownership:
 
@@ -29,7 +29,7 @@ The consolidation shares the pane, not authority or ownership:
   selects an agent transport;
 - the selected companion's agent remains the adapter for its runtime and
   canonical owner files;
-- a shard is always nested under its parent companion and never becomes a fleet
+- a shard is always nested under its parent companion and never becomes a cluster
   target, Garden deployment, owner-file root, port, certificate, or PVC.
 
 The UI switcher is navigation only. It is never an authorization seam.
@@ -40,7 +40,7 @@ The design extends the live contracts rather than creating a parallel control
 plane.
 
 - `src/boundary/gateway/fleet-sso-router.ts` already parses
-  `/companions/<companionId>/garden/...`, resolves live Fleet Auth context for
+  `/companions/<companionId>/garden/...`, resolves live Cluster Auth context for
   that companion and action, and signs an exact request capability.
 - `src/operator/garden/garden-admission.ts` already verifies method, path,
   query, body, action, audience, companion, authority versions, and replay
@@ -55,7 +55,7 @@ plane.
   `src/system/config/settings-contract-guard.ts` already keep owner-file
   selection and validation on the companion side of the admin transport.
 - `src/boundary/gateway/fleet-portal-projection.ts` already projects only the
-  companions the current Fleet Auth session may see.
+  companions the current Cluster Auth session may see.
 - `src/operator/garden/services/shard-fold-review-service.ts` and
   `src/faculties/shards/manager.ts` already expose a parent-owned shard review
   and lifecycle seam.
@@ -68,11 +68,11 @@ is too shallow.
 
 ## Invariants
 
-1. There is one fleet Garden process and one fleet view.
-2. One admin call has one explicit companion target. There is no fleet-wide
+1. There is one cluster Garden process and one cluster view.
+2. One admin call has one explicit companion target. There is no cluster-wide
    mutation call and no process-global mutable `currentCompanion`.
 3. Companion selection comes from the canonical route and must match the signed
-   capability, Fleet Auth context, child capability, selected transport, and
+   capability, Cluster Auth context, child capability, selected transport, and
    agent identity.
 4. Unknown, malformed, stale, removed, or unauthorized selections fail closed
    before an agent call. They must not reveal whether a companion exists.
@@ -89,9 +89,9 @@ is too shallow.
 9. The Garden receives no provider, channel, model-provider, shell,
    companion-auth, or Personal Workspace credentials merely because it can
    switch companions.
-10. Fleet Auth remains the browser authentication and authorization authority.
+10. Cluster Auth remains the browser authentication and authorization authority.
     Consolidation must not recreate the retired shared-admin-token topology for
-    a fleet-enabled deployment.
+    a cluster-enabled deployment.
 11. Garden services that already read or write the database directly keep that
     access (operator decision 2026-07-17: rerouting existing reads through
     agent transports is not worth the rework). In exchange, every database
@@ -121,8 +121,8 @@ Keep the existing companion-scoped public root:
 ```
 
 `/fleet` is the entry to the same Garden application. It renders the authorized
-fleet overview and switcher; it is not a second application or deployment. The
-switcher roster comes from the gateway's authenticated fleet portal projection,
+cluster overview and switcher; it is not a second application or deployment. The
+switcher roster comes from the gateway's authenticated cluster portal projection,
 which returns only companions for which the session has an active binding and
 eligible Garden access. The projection remains a gateway-owned authorization
 view even though the Garden UI renders it.
@@ -137,7 +137,7 @@ non-enumerating authorizer:
   resolves to the manifest label else the `companionId` (no character-card reads
   at request time; see [multi-companion.md](./multi-companion.md)). The active
   companion is expressed only by which `websocketPath` the app opens.
-- `GET /v1/fleet-auth/approvals` — the fleet-wide pending-approval view:
+- `GET /v1/fleet-auth/approvals` — the cluster-wide pending-approval view:
   redacted `{ companionId, companionDisplayName, id, title, requestedAt,
   expiresAt?, status }` entries, so an approval for companion X surfaces (with
   attribution) even while the human talks to companion Y. Ownership is joined
@@ -146,7 +146,7 @@ non-enumerating authorizer:
   never mis-attributed, non-enumerating). Redaction reuses the companion-relay
   approval whitelist — raw tool params never appear.
 
-The app never enumerates the raw fleet manifest; both endpoints are filtered to
+The app never enumerates the raw cluster manifest; both endpoints are filtered to
 the session's authorized companions.
 
 The selected companion stays in the URL for page routes, API calls, downloads,
@@ -161,7 +161,7 @@ IndexedDB keys, polling state, event buffers, and dedupe keys that can contain
 companion data must include the companion ID. The UI must not render prior
 companion data while the new selection is loading or denied.
 
-Static content-hashed assets may remain fleet-shared. HTML bootstrap and all
+Static content-hashed assets may remain cluster-shared. HTML bootstrap and all
 data-bearing responses remain `no-store` or companion-keyed as appropriate.
 
 ## Server-side authorization and routing
@@ -169,16 +169,16 @@ data-bearing responses remain `no-store` or companion-keyed as appropriate.
 Every HTTP request and WebSocket upgrade follows the same sequence:
 
 1. The gateway parses the canonical outer path and validates the selected
-   companion ID against the fleet manifest.
+   companion ID against the cluster manifest.
 2. It compiles the route declaration, including method, canonical inner path,
-   query policy, body digest, Fleet Auth action, and selected companion.
+   query policy, body digest, Cluster Auth action, and selected companion.
 3. It resolves the live session/contact/binding/grant/policy context for that
    exact companion and action. The switcher cannot satisfy this step.
 4. It signs and consumes a short-lived operator request capability whose target
    and audience are bound to that companion.
 5. It forwards the companion-scoped internal route and capability over the one
    gateway-to-Garden mTLS connection.
-6. The fleet Garden parses the same companion from the internal route, compiles
+6. The cluster Garden parses the same companion from the internal route, compiles
    the same inner target, verifies the capability and replay context, and
    requires equality across route target, signed target, audience, and
    authenticated context.
@@ -212,7 +212,7 @@ caller-controlled authority header as a shortcut.
 Authorization infrastructure errors remain errors. They are not treated as an
 empty allowlist or a reason to retry against another target.
 
-## Fleet Garden module
+## Cluster Garden module
 
 The external interface should stay small:
 
@@ -225,7 +225,7 @@ interface FleetGardenControlPlane {
 ```
 
 The implementation owns an immutable `FleetGardenTargetRegistry`, built once
-from the validated `companions.json` fleet. A registry entry contains only
+from the validated `companions.json` cluster. A registry entry contains only
 trusted routing material:
 
 - canonical companion ID;
@@ -245,8 +245,8 @@ isolation tests. Both adapters receive an immutable admitted target; neither
 chooses a companion.
 
 The current single-companion `GardenOperatorSurface` can remain the
-single-companion adapter while multi-companion mode instantiates the fleet
-module. Do not layer a fleet router over N long-lived
+single-companion adapter while multi-companion mode instantiates the cluster
+module. Do not layer a cluster router over N long-lived
 `GardenOperatorSurface` instances: that would preserve the deployment and
 mutable-config complexity this decision removes.
 
@@ -280,13 +280,13 @@ file, prior revision/digest, resulting revision/digest, and decision in the
 existing audit path without recording secrets. A request cannot name an
 alternate owner path.
 
-## Fleet view consolidation
+## Cluster view consolidation
 
-The fleet portal and fleet-status presentation are folded into the one Garden
+The cluster portal and cluster-status presentation are folded into the one Garden
 UI:
 
 - keep `GatewayFleetPortalProjection` as the authorized roster source;
-- add the authorized connection-health fields needed by the existing fleet
+- add the authorized connection-health fields needed by the existing cluster
   status presentation without exposing ports, internal origins, sockets, or
   companions the principal cannot access;
 - render the overview and companion switcher from the Garden bundle;
@@ -296,7 +296,7 @@ UI:
 
 The separately served HTML/JSON status page and its `FLEET_STATUS_PORT` /
 `FLEET_STATUS_HOST` listener are retired. There is no separately deployed
-"fleet manager Garden." The gateway may retain a narrow internal
+"cluster manager Garden." The gateway may retain a narrow internal
 projection module because it owns connection state, but presentation belongs to
 the single Garden.
 
@@ -308,7 +308,7 @@ The authenticated view remains least-authority and non-enumerating.
 The companion's Shards page becomes a parent-scoped tree:
 
 ```text
-Fleet
+Cluster
 └── Companion
     └── Shards
         └── Shard detail and limited overrides
@@ -317,7 +317,7 @@ Fleet
 All shard routes carry both the parent companion from the canonical Garden root
 and a shard ID. The parent agent resolves the shard record and proves that its
 lineage names that companion before returning status, telemetry, fold review,
-or override state. A shard never enters the fleet target registry.
+or override state. A shard never enters the cluster target registry.
 
 The shard detail page shows a read-only inherited configuration snapshot with
 the parent source and revision. The initial mutable allowlist is deliberately
@@ -356,33 +356,33 @@ No shard causes creation of:
 
 ### Local supervisor
 
-`scripts/start-gateway-agent.sh` continues to spawn one agent per fleet entry,
-then starts one fleet Garden after the complete target registry can be built.
-The fleet Garden derives every socket endpoint from the validated companion ID
+`scripts/start-gateway-agent.sh` continues to spawn one agent per cluster entry,
+then starts one cluster Garden after the complete target registry can be built.
+The cluster Garden derives every socket endpoint from the validated companion ID
 using `resolveCompanionAdminTransportSocketPath`; it does not accept manifest
 path overrides or a delimiter-packed endpoint env variable.
 
 `companions.json` does not assign a Garden port per companion; a `gardenPort`
-key fails config validation closed. One fleet-level Garden listener uses the
+key fails config validation closed. One cluster-level Garden listener uses the
 normal process-wiring port. The launcher plan therefore carries no `gardenPort`,
-and a missing/colliding agent-admin endpoint fails the fleet Garden startup.
+and a missing/colliding agent-admin endpoint fails the cluster Garden startup.
 
 ### Kubernetes / Helm
 
-The fleet topology renders:
+The cluster topology renders:
 
 - one gateway;
 - N companion agent workloads and their authenticated admin endpoints;
 - one Garden Deployment and Service;
 - no per-companion or per-shard Garden Deployment/Service.
 
-The Garden identity is fleet-scoped. Gateway-to-Garden and Garden-to-agent
+The Garden identity is cluster-scoped. Gateway-to-Garden and Garden-to-agent
 connections use mTLS/SPIFFE, with the selected companion additionally bound by
 the request capability. NetworkPolicy allows the gateway to reach only the
-fleet Garden listener and allows the Garden to reach only registered agent
+cluster Garden listener and allows the Garden to reach only registered agent
 admin endpoints and the narrow gateway child-assertion/confirmation interface.
 
-The Garden pod mounts its image, required fleet/system configuration,
+The Garden pod mounts its image, required cluster/system configuration,
 certificates, logs/tmp as needed, and no provider/channel secrets. It retains
 the database credential its existing services already use for direct reads and
 writes (invariant 11), with every direct route dispatched through a
@@ -402,34 +402,34 @@ owner files and companion state stay in place. An operator performs the
 following cutover only after discovering the live k3s authority and preserving
 the deployed values and rollback revision:
 
-1. Land the fleet target registry, companion-bound admission, selected
+1. Land the cluster target registry, companion-bound admission, selected
    transport routing, UI URL builder, and tests while the old topology remains
    authoritative.
-2. Deploy the fleet Garden dark: no browser route and no mutations. Probe every
+2. Deploy the cluster Garden dark: no browser route and no mutations. Probe every
    registered companion transport and verify identity equality.
 3. Render and inspect the Helm/supervisor plan: exactly one Garden, no direct
-   Garden Ingress in Fleet Auth mode, complete target registry, and restrictive
+   Garden Ingress in Cluster Auth mode, complete target registry, and restrictive
    network policy.
 4. Switch the gateway's companion routes atomically from N Garden origins to
-   the one fleet Garden origin. The canonical public URLs do not change.
+   the one cluster Garden origin. The canonical public URLs do not change.
 5. Validate parallel reads and bounded mutations against at least two
    companions, one denied companion, one unavailable companion, WebSocket
    switching, and one parent-owned shard.
 6. Disable the per-companion Garden processes and remove their Services,
-   certificates, per-entry ports, and the raw fleet-status listener. Remove,
+   certificates, per-entry ports, and the raw cluster-status listener. Remove,
    rather than preserve, the retired launcher and manifest fields.
 7. Record the deployed revision and verification evidence, then update this
    status only after the rollout topology is confirmed as the live authority.
 
 There is no dual-write period and no copied owner state. During the dark stage,
-the fleet Garden is probe-only. After the future gateway cutover, old Gardens
+the cluster Garden is probe-only. After the future gateway cutover, old Gardens
 must not receive admin traffic.
 
 ### Pinned rollback procedure
 
 Rollback is a whole-deployment revision pin, never a mixed topology:
 
-1. Identify the last known-good revision that predates the fleet-Garden
+1. Identify the last known-good revision that predates the cluster-Garden
    cutover: `helm history <release>` in Kubernetes, or the pinned prior
    image/commit for the local supervisor launcher.
 2. Roll the entire release back to that revision (`helm rollback <release>
@@ -441,7 +441,7 @@ Rollback is a whole-deployment revision pin, never a mixed topology:
    dual-write period or copied owner state, rollback reverses no data and
    merges nothing. Canonical owner files are the same files in both
    topologies.
-4. A rollback must still preserve the one-browser-origin Fleet Auth boundary;
+4. A rollback must still preserve the one-browser-origin Cluster Auth boundary;
    it must not expose direct Garden ports or fall back to one shared admin
    token.
 5. Re-run the deployment verification (`npm run verify:helm-chart`, rollout
@@ -465,7 +465,7 @@ Implementation is not complete until the integrated branch proves:
   companion target and enforced at the admin dispatch chokepoint; a request
   for companion A cannot read or write companion B's data;
 - switching clears or companion-keys all browser state;
-- the authorized fleet projection omits inaccessible companions and internal
+- the authorized cluster projection omits inaccessible companions and internal
   topology;
 - shard lookup enforces parent lineage, inherited fields remain read-only, and
   model/budget overrides cannot widen parent authority;
@@ -482,16 +482,16 @@ implementation sequence is integrated.
 ## Non-goals
 
 - Changing companion-data ownership, owner-file formats, or settings scopes.
-- Adding a fleet-wide mutation interface or a cross-companion management tier.
+- Adding a cluster-wide mutation interface or a cross-companion management tier.
 - Allowing one companion selection to authorize another.
 - Mounting a general shared filesystem or adding manifest path overrides.
 - Giving the Garden provider, channel, shell, or companion-agent credentials
   beyond its approved request-scoped database access.
-- Giving shards full Garden pages, full settings editors, independent Fleet
+- Giving shards full Garden pages, full settings editors, independent Cluster
   Auth identities, or durable owner files.
 - Expanding shard overrides beyond the approved model and budget controls.
 - Exposing private transcripts, model reasoning, cross-companion private state,
-  or the raw full-roster fleet-status payload.
+  or the raw full-roster cluster-status payload.
 - Keeping legacy per-companion Garden readers or topology shims after cutover.
 
 ## Implementation sequence
@@ -500,15 +500,15 @@ The implementation work is filed as `psfn-framework-mus2`, with the sibling
 shard-tier and approval-routing contracts named as dependencies rather than
 re-designed here.
 
-1. Deepen fleet Garden admission and target routing.
-2. Convert the operator surface from one fixed proxy to the immutable fleet
+1. Deepen cluster Garden admission and target routing.
+2. Convert the operator surface from one fixed proxy to the immutable cluster
    target registry.
-3. Move fleet view and companion switching into the Garden bundle with
+3. Move cluster view and companion switching into the Garden bundle with
    companion-keyed client state.
 4. Add parent-scoped shard snapshot and limited override routes using the shard
    tier, budget, and approval contracts.
-5. Replace per-companion local supervisor wiring with one fleet Garden.
-6. Replace per-companion Helm Garden resources with one fleet deployment,
+5. Replace per-companion local supervisor wiring with one cluster Garden.
+6. Replace per-companion Helm Garden resources with one cluster deployment,
    identity, Service, and policy.
-7. Cut over, certify the integrated topology, retire legacy fleet-status and
+7. Cut over, certify the integrated topology, retire legacy cluster-status and
    per-companion Garden surfaces, and document rollback.

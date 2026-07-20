@@ -95,7 +95,7 @@ than creating an exception to it.
   boundaries of intimate observation.
 - Law 34 requires provenance and taint to survive consequential cognitive
   sinks.
-- Law 35 forbids implicit sharing across a fleet.
+- Law 35 forbids implicit sharing across a cluster.
 - Law 36 favors contextual, reversible guidance over arbitrary limits.
 
 The system succeeds when companionship becomes more attentive without making
@@ -341,14 +341,14 @@ Two invariants apply in every posture:
 A companion's ordinary style remains theirs. The posture constrains unsafe
 registers; it does not replace their judgment with a message template.
 
-## 11. Fleet Routing and ICP
+## 11. Cluster Routing and ICP
 
 ### 11.1 Local estimates
 
 Each companion maintains only the Partner Affect Estimate it is authorized to
 hold from sources it is authorized to see.
 
-There is no implicit fleet-global affect state. Hosting several companions
+There is no implicit cluster-global affect state. Hosting several companions
 does not give every companion the partner's telemetry.
 
 ### 11.2 Affect Advisory
@@ -478,7 +478,7 @@ the revoked sensitive content itself.
 | Sensitive fact becomes a taunt | Consumption-as-evidence-only invariant |
 | Companion is summoned from rest | Availability and attention gate |
 | Productivity Companion overreaches | Advisory-only ICP; responder retains judgment |
-| Advisory leaks to the fleet | Exact recipient, partner binding, and capability checks |
+| Advisory leaks to the cluster | Exact recipient, partner binding, and capability checks |
 | Sensor disable becomes coercive | Immediate revocation and no automatic revert |
 | System optimizes for being needed | Success measures support utility and reduced burden, not engagement |
 | Model invents a narrative | Deterministic state authority and advisory-only model pass |
@@ -524,7 +524,7 @@ Measure:
    in approach helpful.
 6. **Intervention burden** — interruptions, notifications, and environmental
    actions per posture.
-7. **Fleet handoff quality** — accepted, declined, stale, duplicate, and
+7. **Cluster handoff quality** — accepted, declined, stale, duplicate, and
    misrouted advisories.
 8. **Dependence check** — whether the design supports healthy relationships
    and reduces unnecessary system engagement.
@@ -591,7 +591,7 @@ general multi-recipient observation policy.
 - constrain interaction registers;
 - keep environmental action disabled.
 
-### Slice 4: Fleet advisory
+### Slice 4: Cluster advisory
 
 - add the typed Affect Advisory;
 - enforce exact sender, recipient, partner, consent, and capability scope;

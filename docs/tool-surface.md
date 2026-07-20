@@ -254,12 +254,12 @@ surface. Runtime lifecycle and settings stay on `system`.
 - `availability_read` explains the effective lease source and whether a live operator override prevents companion mutation
 - `availability_publish` writes one bounded, expiring, revision-checked lease for this authenticated companion
 - `availability_clear` requires the current revision and fails closed against stale revisions or authoritative overrides
-- `availability_list_peers` reads only canonical machine-intelligence contacts already present in the local contact store; it never enumerates the gateway fleet
+- `availability_list_peers` reads only canonical machine-intelligence contacts already present in the local contact store; it never enumerates the gateway cluster
 
 Peer listings contain only contact identity plus coarse connection, eligibility,
 state, source, expiry, revision, and typed reason codes. They omit private
 candidate text, provenance internals, permits, conversation content, and raw
-fleet discovery. Listing is blocked during ICP-correlated turns. Read/list
+cluster discovery. Listing is blocked during ICP-correlated turns. Read/list
 actions require `internal.read`; publish/clear require `external.companion`.
 
 ## Canonical Skill Surface

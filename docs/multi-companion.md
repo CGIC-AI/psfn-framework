@@ -3,14 +3,19 @@
 Last updated: 2026-07-14.
 
 This is the canonical page for running more than one companion on a single PSFN
-cluster: the topology, the mandatory fleet manifest, and the fleet operations
+cluster: the topology, the mandatory cluster manifest, and the cluster operations
 that ride on top of it. It documents only what is wired in the branch;
 forward-looking items are marked as future.
 
-Every deployment is a fleet enumerated by a mandatory `companions.json`
+Every deployment is a companion cluster enumerated by a mandatory `companions.json`
 manifest. A single-companion deployment is a one-entry manifest and is inert —
 byte-identically so — with respect to the multi-companion machinery here (which
 activates only when the manifest has more than one entry).
+
+> **Terminology:** Per charter §8.12 (2026-07-20) the multi-companion system is a
+> **companion cluster**. The term "fleet" persists only in code identifiers
+> (`fleet-auth`, `resolveCompanionFleet`, `/v1/fleet/portal`, etc.) pending a
+> staged engineering rename.
 
 ## Topology
 
@@ -25,18 +30,18 @@ activates only when the manifest has more than one entry).
   identity selects exactly one deterministic Personal Workspace. Shell
   interpreters are denied until an OS-mediated filesystem sandbox exists;
   other allowlisted commands retain the existing cwd and argument-path checks.
-- **Companion ID is a UUID.** The fleet keys on lowercase RFC-4122 UUIDs
+- **Companion ID is a UUID.** The cluster keys on lowercase RFC-4122 UUIDs
   (`src/system/config/companions-config.ts`, `COMPANION_ID_PATTERN`).
-- **Peers, not shards.** A fleet companion is independently rooted. A shard is
-  a bounded derived runtime of one origin companion and does not become a fleet
+- **Peers, not shards.** A cluster companion is independently rooted. A shard is
+  a bounded derived runtime of one origin companion and does not become a cluster
   entry or peer identity.
 
-## The fleet manifest
+## The cluster manifest
 
-Every PSFN deployment is a fleet of one or more companions: the system-owned
+Every PSFN deployment is a cluster of one or more companions: the system-owned
 `companions.json` owner file is **mandatory**, and the topology is derived from
 its contents rather than a flag. A single-companion deployment is simply a
-one-entry manifest ("a fleet of one"); multi-companion tenancy is a manifest
+one-entry manifest ("a cluster of one"); multi-companion tenancy is a manifest
 with more than one entry. The `PSFN_MULTI_COMPANION` env flag has been retired.
 
 - Owner file: `companions.json` (registered in
@@ -46,7 +51,7 @@ with more than one entry. The `PSFN_MULTI_COMPANION` env flag has been retired.
   - `companions.json` missing or invalid → refuse to start with an actionable error
   - one-entry manifest → single-companion topology (`config.multiCompanion` is
     `false`, byte-identical to the old single-companion behavior: no tenant
-    schema/role binding, no fleet supervisor, no fleet-auth requirement)
+    schema/role binding, no cluster supervisor, no fleet-auth requirement)
   - multi-entry manifest → multi-companion tenancy (`config.multiCompanion` is
     `true`)
 
@@ -55,7 +60,7 @@ carries exactly:
 
 | Field | Meaning | Validation |
 |---|---|---|
-| `companionId` | UUID identifying the companion across the fleet | lowercase RFC-4122 UUID |
+| `companionId` | UUID identifying the companion across the cluster | lowercase RFC-4122 UUID |
 | `companionDataDir` | companion's data root, relative to the canonical persistence root (`PSFN_RUNTIME_ROOT`, or the selected layout's runtime root) | relative path, may not escape the root |
 | `characterCardPath` | companion's character card, relative to the same canonical persistence root | relative path, may not escape the root |
 | `postgresSchema` | Postgres schema owning this companion's tenant tables | lowercase identifier, ≤63 chars, no `pg_` prefix |
@@ -63,7 +68,7 @@ carries exactly:
 | `avatarRef` | optional opaque avatar reference for the roster (display-only) | non-empty string, ≤512 chars, no control characters |
 
 `displayName` and `avatarRef` are surfaced **only** through the authenticated
-fleet portal roster (`GET /v1/fleet-auth/companions`; see
+cluster portal roster (`GET /v1/fleet-auth/companions`; see
 [garden-control-plane.md](./garden-control-plane.md)). They are never routing
 keys or authorization inputs. The roster's display name resolves as
 `displayName` when present, otherwise the `companionId` — no character-card file
@@ -77,21 +82,21 @@ ancestors are resolved and an escape outside that root is rejected. Each agent
 startup then binds `COMPANION_ID`, both paths, `COMPANION_PG_SCHEMA`, and the
 per-companion admin socket back to that one manifest entry; an unknown ID or any
 drift refuses startup before persistence or character-card loading. The one
-fleet Garden receives the complete registry without inheriting any companion's
+cluster Garden receives the complete registry without inheriting any companion's
 identity, Personal Workspace, or database schema.
 
 **What is NOT in `companions.json`:** per-companion Discord tokens,
 model/settings selections, or a mutable personal workspace path. Discord identity +
 channel→companion routing live in `channels.json`; the per-companion Postgres
 schema for a single agent process is sourced from the `COMPANION_PG_SCHEMA` env
-var. The manifest owns identity, data location, and tenant schema. The fleet
+var. The manifest owns identity, data location, and tenant schema. The cluster
 Garden listener is configured once through `ADMIN_PORT`; the runtime
 deterministically derives `workspaces/personal/<companionId>` from the validated
 runtime root rather than accepting another path override.
 
 ## Per-companion settings overlay
 
-The single-release fleet shares one `settings.json` on the system-data root, so
+The single-release cluster shares one `settings.json` on the system-data root, so
 every setting is cluster-global by default. A companion can override a scoped
 whitelist of keys with an **optional** `settings.overlay.json` in its own
 `companionDataDir` (`src/system/config/settings-overlay.ts`).
@@ -108,7 +113,7 @@ whitelist of keys with an **optional** `settings.overlay.json` in its own
   falls back to global settings for a broken overlay.
 - **Deep-merged, re-validated.** Whitelisted keys are deep-merged over the global
   runtime settings (nested objects merge; arrays/scalars replace) and the result
-  is re-validated through the existing settings normalizer. This is how two fleet
+  is re-validated through the existing settings normalizer. This is how two cluster
   companions hold, e.g., different `observerEvalSidecar.adapter.sessionLabel`
   values (fixing the shared emo_sim session) or different `activeTimezone` clocks.
 - **Absent overlay = byte-identical** to today's global-only behavior. The merge
@@ -127,7 +132,7 @@ startup closed (no fallback to a shared file), the settings contract marks the
 `scheduler.json` is relocated the same way (dnll.3): each companion's circadian
 configuration — heartbeat/tick cadence, the episodic rest window,
 `temporalWakeup.morningWake.localTime`, `freeTime`, and `sleepConsolidation` — is
-loaded from its own `companionDataDir/scheduler.json`, so two fleet companions
+loaded from its own `companionDataDir/scheduler.json`, so two cluster companions
 can hold distinct wake/rest schedules under one release. A missing per-companion
 scheduler file fails startup closed, the settings contract marks the `scheduler`
 subsystem `perCompanion`, and the file rides the `companion-tree` backup slice,
@@ -144,7 +149,7 @@ unmarked copies fail closed instead of choosing an owner silently. See the
 [Helm upgrade runbook](./operations.md#helm-upgrade-for-per-companion-scheduler-and-capability-owners).
 
 Separately, the Garden admin surface owns several per-companion state files that
-must resolve under `companionDataDir` to match the runtime and avoid fleet
+must resolve under `companionDataDir` to match the runtime and avoid cluster
 collisions (`src/operator/garden/local-admin-contract.ts`,
 `src/operator/garden/services/scheduler-service.ts`): `garden-audit-history.jsonl`,
 the Garden-side `heartbeat-policy.json` (already runtime-rooted under companion
@@ -181,16 +186,16 @@ extra `shared` schema for cross-companion world data.
   `companion_presence` (co-presence) and the shared-world wiki chunks. It is
   provisioned advisory-lock-serialized (`src/persistence/postgres/shared-schema.ts`)
   so N concurrently-starting agents are safe. In single-companion topology (a
-  one-entry fleet) the shared schema is never created or touched.
+  one-entry cluster) the shared schema is never created or touched.
 - Migrations run per schema: `runPostgresMigrations(pool, statements, { schema })`.
   Omitting `schema` is byte-identical to single-companion behavior.
 
 ## Launcher: supervisor mode
 
 `scripts/start-gateway-agent.sh` grows a supervisor mode that reads the resolved
-fleet and spawns one agent process per companion.
+cluster and spawns one agent process per companion.
 
-- Fleet plan: `npm run resolve:companion-fleet`
+- Cluster plan: `npm run resolve:companion-fleet`
   (`scripts/resolve-companion-fleet.ts`) reuses `resolveCompanionFleet` and emits
   an internal tab-delimited spawn plan, one line per companion:
   `companionId, companionDataDir, characterCardPath, postgresSchema,
@@ -206,23 +211,23 @@ fleet and spawns one agent process per companion.
   the role-bound gateway proofs from the plan. The proofs are derived from the
   gateway session keyring and companion ID; they are passed only to the agent and its
   isolated session-integrity worker and are omitted from dry-run output.
-  The single-companion (one-entry fleet) launcher derives the same role
+  The single-companion (one-entry cluster) launcher derives the same role
   separation for its isolated worker even though normal agent methods retain
   local-socket trust in single-companion topology.
 - `--dry-run` (or `PSFN_SUPERVISOR_DRY_RUN=1`) resolves and prints the spawn
   plan without creating workspace directories. The real launcher acquires its
   socket-scoped lock before migration or provisioning, so a rejected concurrent
   launcher cannot mutate workspace state.
-- Shared fate: any supervised process exit tears down the whole fleet.
+- Shared fate: any supervised process exit tears down the whole cluster.
 
 Gateway registration is authenticated in multi-companion mode. The gateway
-accepts only IDs present in the resolved fleet and verifies a role-bound HMAC
+accepts only IDs present in the resolved cluster and verifies a role-bound HMAC
 proof before routing any request. General agent RPC methods and the two
 session-integrity signing methods have disjoint role policies in both
 topologies; selecting the internal role always requires its proof.
 
 Network admin-transport mode is rejected fail-closed under the supervisor. Each
-agent must listen on its canonical local socket so the one fleet Garden can use
+agent must listen on its canonical local socket so the one cluster Garden can use
 the validated target registry.
 
 ## Workspace scopes: runtime contract
@@ -258,7 +263,7 @@ The target layout is:
   files, and shared material must never auto-load as an executable skill or
   module merely because it is visible.
 
-Fleet workspace wiring derives this layout from the canonical runtime root and
+Cluster workspace wiring derives this layout from the canonical runtime root and
 the companion UUIDs in `companions.json`; workspace paths are not mutable
 manifest fields. The launcher provisions every root before starting a process,
 then injects only `workspaces/personal/<uuid>` as that process's
@@ -267,7 +272,7 @@ roots fail startup.
 
 The Shared Companion Workspace is published through authenticated Garden
 routes, not through an environment variable or normal companion filesystem
-tools. Publication identities come only from the immutable Fleet principal
+tools. Publication identities come only from the immutable Cluster principal
 context signed into the exact Garden request capability; JSON/header identity
 assertions and reusable shared-workspace credentials are rejected. Proposal,
 CogSec, and independent-review steps each require their exact route-bound
@@ -345,9 +350,9 @@ not generic `api` traffic.
   `scheduled_prompts` / follow-up tables' `channel_type` CHECK constraints omit
   it.
 
-## One fleet Garden frontend
+## One cluster Garden frontend
 
-- **One Garden for the fleet.** The supervisor starts every companion agent,
+- **One Garden for the cluster.** The supervisor starts every companion agent,
   waits for all canonical `garden-admin-<companionId>.sock` listeners, probes
   every target, and then starts exactly one operator process on `ADMIN_PORT`.
   The operator routes companion-scoped requests through the immutable
@@ -356,20 +361,20 @@ not generic `api` traffic.
   identity, Personal Workspace, database schema, gateway proof, provider,
   or channel credentials. It receives the deployment database URL solely for
   the approved direct Garden services; authenticated request dispatch selects a
-  companion-bound service instance before any database access. Fleet Auth and
+  companion-bound service instance before any database access. Cluster Auth and
   `GATEWAY_OPERATOR_API_BASE_URL` are required for this topology. Credential
   status in Settings is a boolean-only snapshot queried from the gateway over
   the authenticated admin path.
-- **Gateway fleet overview.** The canonical HTTPS origin serves the same
+- **Gateway cluster overview.** The canonical HTTPS origin serves the same
   compiled Garden bundle at `/fleet` and at each authorized
   `/companions/<companion-uuid>/garden/...` path. `/v1/fleet/portal` returns
   only the signed-in principal's bounded companion projection; it does not
   expose ports, timestamps, violation counts, raw reasons, or topology.
   Companion selection is encoded in the immutable URL and is reauthorized on
   every page, API, download, and WebSocket request. The former raw
-  fleet-status listener and `/fleet/status.json` route are retired.
+  cluster-status listener and `/fleet/status.json` route are retired.
 
-## Fleet backups
+## Cluster backups
 
 Backups are per-companion by default, with an optional whole-family artifact.
 
@@ -381,10 +386,10 @@ Backups are per-companion by default, with an optional whole-family artifact.
   schema (`shared`), system-data owner files, and the Shared Companion Workspace
   — the data that belongs to the cluster rather than to any one companion.
 - **Group mode.** With `groupMode` enabled (`backup.json`, env override
-  `BACKUP_GROUP_MODE`) the fleet collapses into one whole-database family
+  `BACKUP_GROUP_MODE`) the cluster collapses into one whole-database family
   artifact, including the complete workspace family, instead of per-companion
   slices.
-- **Leader election is deterministic.** Exactly one process runs the fleet backup
+- **Leader election is deterministic.** Exactly one process runs the cluster backup
   cycle: the leader is `fleet.companions[0].companionId`
   (`isFleetBackupLeader`, `src/persistence/backups/fleet-scheduler.ts`) — first
   entry in `companions.json` order, no distributed lock. Followers register no
@@ -396,7 +401,7 @@ Backups are per-companion by default, with an optional whole-family artifact.
 `src/persistence/backups/fleet-restore.ts` restores exactly one selected scope:
 a companion slice into explicit companion-data + Personal Workspace
 destinations, the cluster artifact into explicit system-data + Shared Workspace
-destinations, or a group artifact into explicit whole-fleet roots. Every tree is
+destinations, or a group artifact into explicit whole-cluster roots. Every tree is
 hash-verified before restore, existing destinations are rejected (never merged
 or overwritten), and the matching Postgres dump is restored with owner/ACL
 replay disabled.
@@ -414,7 +419,7 @@ Multi-companion layers on top of the single-companion locations/world surface
   `CompanionPresenceRuntime` / `CompanionPresenceTurnPort`) as emanation or a
   deliberate `move` changes. It is the durable authority behind "who else is
   here," and entering a place where another companion is present emits a
-  co-location event. Wired only under multi-companion topology (a multi-entry fleet).
+  co-location event. Wired only under multi-companion topology (a multi-entry cluster).
 - **Companion channels.** Same-cluster companion↔companion conversation runs
   through the normal turn pipeline as ordinary channels
   (`src/shared/contracts/companion-channels.ts`): a many-to-many room
@@ -476,8 +481,8 @@ notes but are not wired in this branch:
   one cluster).
 - A "management" capability tier acting on other companions' settings.
 - Cross-companion message composition/puppeteering, private-reasoning or
-  transcript inspection, and fleet-wide autonomy controls. The shipped Garden
+  transcript inspection, and cluster-wide autonomy controls. The shipped Garden
   surface is local, control-plane-only, and deliberately cannot become these.
 - Voice subsystem rewrite.
-- Additional bounded fleet-overview posture indicators, subject to the same
+- Additional bounded cluster-overview posture indicators, subject to the same
   authorization and privacy constraints as the current projection.

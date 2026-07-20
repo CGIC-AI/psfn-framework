@@ -1,4 +1,4 @@
-# Helm Fleet Upgrade Guide
+# Helm Cluster Upgrade Guide
 
 Read this document before changing any PSFN Helm release, including production
 and local validation clusters. It is the canonical upgrade brief: it calls out
@@ -56,11 +56,11 @@ env variable is retired):
 
 - A single-companion release lists its one existing companion-data PVC. When no
   `companions.json` is present yet, the migrator synthesizes the one-entry
-  migration fleet from the environment (`COMPANION_ID` plus the split roots) and
+  migration cluster from the environment (`COMPANION_ID` plus the split roots) and
   binds that explicit `companionId`. The migrator does not persist
   `companions.json`; the runtime manifest is provisioned separately (see
-  [Provision the always-fleet manifest for existing single-companion
-  installs](#provision-the-always-fleet-manifest-for-existing-single-companion-installs)).
+  [Provision the always-cluster manifest for existing single-companion
+  installs](#provision-the-always-cluster-manifest-for-existing-single-companion-installs)).
 - A multi-companion installation lists every companion from the already-present
   `companions.json`, with a distinct existing claim and canonical mount path for
   each. Omitting a companion or reusing a claim/path fails rendering or
@@ -137,11 +137,11 @@ the gateway-first rule without letting an old agent read the new owner layout:
 Do not leave the one-time migration enabled in saved values. The receipt and
 quarantined legacy sources remain as recovery evidence. The complete snapshot,
 approval, receipt, retry, and restore procedure is in
-[Existing split fleets with shared per-companion owners](./operations.md#existing-split-fleets-with-shared-per-companion-owners).
+[Existing split clusters with shared per-companion owners](./operations.md#existing-split-clusters-with-shared-per-companion-owners).
 
-### Provision the always-fleet manifest for existing single-companion installs
+### Provision the always-cluster manifest for existing single-companion installs
 
-Every PSFN deployment is now a fleet of one or more companions enumerated by the
+Every PSFN deployment is now a cluster of one or more companions enumerated by the
 mandatory system-owned `companions.json` manifest. Topology is derived from the
 manifest entry count — one entry is the single-companion shape, more than one is
 multi-companion tenancy — and the `PSFN_MULTI_COMPANION` env flag is retired.
@@ -150,7 +150,7 @@ Runtime startup (`load-config`) fails closed with an actionable error if
 single-companion install created before the manifest existed has no
 `companions.json` and would refuse to start after the runtime upgrade.
 
-The chart closes this gap automatically. For the single-companion (non-fleet)
+The chart closes this gap automatically. For the single-companion (non-cluster)
 topology, the `seed-runtime-files` init container provisions a deterministic
 one-entry manifest into `system-data` when absent, derived from this release's
 own `runtime.companionId` and the canonical single-companion layout. This is
@@ -160,7 +160,7 @@ independently of `bootstrap.seedOwnerFiles`. Because it runs in the init
 container before any runtime process loads config, an existing single-companion
 install migrates simply by rolling this chart with the fixed image: the
 upgrade's init writes `companions.json` onto the existing `system-data` PVC, and
-the app then boots as a one-entry fleet — byte-identical to the old
+the app then boots as a one-entry cluster — byte-identical to the old
 single-companion behavior.
 
 The write is idempotent and fail-closed:
@@ -216,7 +216,7 @@ keyed off the id value:
   integrity HMAC does not bind the companion id.
 - Redis `psfn:session-tail:<companionId>:…` keys embed the old id but are
   rebuildable caches; the journal is the source of truth.
-- Keep `fleet.enabled=false`. Enabling fleet mode switches the data dir to the
+- Keep `fleet.enabled=false`. Enabling cluster mode switches the data dir to the
   UUID-derived `<runtimeRoot>/companions/<uuid>` path and orphans the existing
   companion data.
 
@@ -256,7 +256,7 @@ bound to owner files, not to the runtime id. If the deployment's receipt at
 `SYSTEM_DATA_DIR/migrations/system-owner-fleet-reroot.json` already reports
 `status: completed`, do not re-run or re-enable the hook for the id change —
 a receipt written by a maintenance-pod run may record a generic maintenance
-companion id in its fleet entry, and that is expected. If the owner files have
+companion id in its cluster entry, and that is expected. If the owner files have
 not been migrated yet, run that section first, using the new UUID as the
 migration's `companionId`.
 
@@ -339,7 +339,7 @@ in the application image and must not be carried into another cluster.
 4. Inspect the chart delta and render with the captured values. Do not use
    `--reuse-values` across a changed chart.
 5. Complete any required owner migration before starting per-release upgrades.
-   The current fleet-wide and per-release procedures are in
+   The current cluster-wide and per-release procedures are in
    [Helm upgrade for per-companion owners](./operations.md#helm-upgrade-for-per-companion-scheduler-and-capability-owners).
 6. Build or pull one exact, non-floating image reference. Verify its revision
    label matches the source commit.
@@ -370,7 +370,7 @@ in the application image and must not be carried into another cluster.
 
 ## Failure and recovery boundaries
 
-- Do not repair owner failures by enabling seeds, copying one fleet-wide owner
+- Do not repair owner failures by enabling seeds, copying one cluster-wide owner
   into a selected companion, adding fallback readers, or editing PVC JSON by
   hand. Follow the fail-closed migration procedure linked above.
 - A gateway-first welfare skew is an expected degradation to FIFO, not a reason

@@ -210,7 +210,7 @@ The path contract is defined in `src/persistence/layout.ts` and summarized in [`
 
 ## Multi-Companion Topology
 
-Every deployment is a fleet of one or more companions, enumerated by a mandatory
+Every deployment is a cluster of one or more companions, enumerated by a mandatory
 system-owned `companions.json` manifest. The default topology is one gateway,
 one agent process, one Companion Core, and one companion — a one-entry manifest.
 A multi-companion topology (a manifest with more than one entry) runs N agent
@@ -218,19 +218,19 @@ processes behind the one gateway, each running a peer Companion Core. Each
 companion has its own companion ID, data dir, character card, and Postgres
 schema, all connecting to the single gateway over the existing socket protocol.
 Topology is derived from the manifest entry count (there is no
-`PSFN_MULTI_COMPANION` flag); a one-entry fleet is byte-identical to the old
+`PSFN_MULTI_COMPANION` flag); a one-entry cluster is byte-identical to the old
 single-companion behavior.
 
 Tenancy is schema-per-companion (`config.postgresSchema` pins each agent's
 Postgres `search_path`) plus one `shared` schema for cross-companion world data.
-Operability uses one authenticated Garden frontend for the fleet overview and
+Operability uses one authenticated Garden frontend for the cluster overview and
 authorized companion administration. The public canonical HTTPS origin serves
 that bundle at `/fleet` and at
 `/companions/<companion-uuid>/garden/...`; `/v1/fleet/portal` supplies only the
 current principal's bounded projection. Per-companion operator processes remain
-private upstreams behind the gateway. The former raw fleet-status listener is
+private upstreams behind the gateway. The former raw cluster-status listener is
 retired, and `/fleet/status.json` is not a browser surface. The full topology,
-flag/manifest contract, launcher supervisor mode, and fleet operations are
+flag/manifest contract, launcher supervisor mode, and cluster operations are
 documented in
 [`docs/multi-companion.md`](./multi-companion.md).
 

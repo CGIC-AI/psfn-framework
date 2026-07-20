@@ -154,6 +154,10 @@ export class EmotionSelfModelRuntime {
   private globalBaselineSeeded = false;
   // Directional carry-over modifiers keyed by the receiving DM scope key.
   private readonly carryOverModifiers = new Map<string, EmotionCarryOverModifier>();
+  private readonly pendingConcernResolutionDeltas = new Map<
+    string,
+    Map<string, VADVector>
+  >();
   // The scope processed by the most recent observation (drives switch detection).
   private lastObservedScope: ConversationScope | null = null;
   // Absorbs the wired EmotionState into the first scope so single-scope callers
@@ -275,6 +279,12 @@ export class EmotionSelfModelRuntime {
     }
     const scopeKey = conversationScope?.key ?? sessionChannelId;
     const entry = this.getOrHydrateScopedState(scopeKey, sessionChannelId, capturedSessionReads);
+    if (conversationScope?.kind === 'dm') {
+      this.applyPendingConcernResolutionDeltas(
+        conversationScope.contact.contactId,
+        entry.state,
+      );
+    }
 
     // Arm the directional carry-over modifier BEFORE observing: it reads the
     // (unchanged) previous group scope's transient VAD, so ordering is safe.
@@ -656,6 +666,40 @@ export class EmotionSelfModelRuntime {
   /** Current companion-global mood baseline (test/telemetry surface). */
   getGlobalMoodBaseline(): VADVector {
     return { ...this.globalMoodBaseline };
+  }
+
+  /** Apply a concern-resolution appraisal only to its currently active DM scope. */
+  applyConcernResolutionDelta(
+    contactId: string | undefined,
+    generationId: string,
+    delta: VADVector,
+  ): 'applied' | 'duplicate' | 'deferred' | 'unavailable' {
+    if (!contactId) return 'unavailable';
+    const scope = this.lastObservedScope;
+    if (!scope || scope.kind !== 'dm' || scope.contact.contactId !== contactId) {
+      const pending = this.pendingConcernResolutionDeltas.get(contactId) ?? new Map();
+      if (pending.has(generationId)) return 'duplicate';
+      pending.set(generationId, { ...delta });
+      this.pendingConcernResolutionDeltas.set(contactId, pending);
+      return 'deferred';
+    }
+    const entry = this.scopedStates.get(scope.key);
+    if (!entry) return 'unavailable';
+    if (!entry.state.applyConcernResolutionDelta(generationId, delta)) return 'duplicate';
+    const now = Date.now();
+    entry.updatedAtMs = now;
+    this.emotionStateUpdatedAtMs = now;
+    this.updateGlobalMoodBaseline(entry.state.getState().mood);
+    return 'applied';
+  }
+
+  private applyPendingConcernResolutionDeltas(contactId: string, state: EmotionState): void {
+    const pending = this.pendingConcernResolutionDeltas.get(contactId);
+    if (!pending) return;
+    for (const [generationId, delta] of pending) {
+      state.applyConcernResolutionDelta(generationId, delta);
+    }
+    this.pendingConcernResolutionDeltas.delete(contactId);
   }
 
   /**

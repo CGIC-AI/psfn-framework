@@ -94,7 +94,10 @@ import {
   resolveShareCapsuleCustodyPath,
 } from '../../persistence/layout.js';
 import { ReflectionJournalStore } from '../../persistence/journals/reflection-journal.js';
-import { createConcernResolutionArcRecorder } from '../../core/intention/concern-resolution-arc.js';
+import {
+  createConcernResolutionArcRecorder,
+  reconcileConcernResolutionArcs,
+} from '../../core/intention/concern-resolution-arc.js';
 import {
   createCapsuleCustodyService,
   createShareCapsuleCustodyStore,
@@ -640,13 +643,20 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
   const concernResolutionArcJournal = new ReflectionJournalStore(
     resolveConcernResolutionArcJournalPath(pathSnapshot.companionDataDir),
   );
-  eventBus.on(
-    'intention.concern.resolution_appraisal',
-    createConcernResolutionArcRecorder({
-      concernStore: intentionRuntime.concernStore,
-      journal: concernResolutionArcJournal,
-    }),
-  );
+  const concernResolutionArcRecorder = createConcernResolutionArcRecorder({
+    concernStore: intentionRuntime.concernStore,
+    journal: concernResolutionArcJournal,
+    emotionSink: {
+      applyConcernResolutionDelta: (concern, generationId, delta) => (
+        agentLoop.applyConcernResolutionDelta(concern.contactId, generationId, delta)
+      ),
+    },
+  });
+  eventBus.on('intention.concern.resolution_appraisal', concernResolutionArcRecorder);
+  await reconcileConcernResolutionArcs({
+    concernStore: intentionRuntime.concernStore,
+    recorder: concernResolutionArcRecorder,
+  });
   wireSelfModelRuntime(agentLoop);
   const intentionAppraisalHooks = createIntentionAppraisalHooks(
     intentionRuntime.concernStore,

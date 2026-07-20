@@ -250,6 +250,7 @@ describe('ReflectionJournalStore concernArc telemetry (vw3w.2)', () => {
       ...baseArcInput(),
       concernArc: {
         concernId: 'concern-1',
+        resolutionGenerationId: 'generation-1',
         formationVAD: { valence: -0.4, arousal: 0.6, dominance: -0.2 },
         resolutionVAD: { valence: 0.3, arousal: 0.1, dominance: 0.2 },
         reliefDelta: { valence: 0.7, arousal: -0.5, dominance: 0.4 },
@@ -262,6 +263,7 @@ describe('ReflectionJournalStore concernArc telemetry (vw3w.2)', () => {
     expect(entries).toHaveLength(1);
     expect(entries[0]?.telemetry?.concernArc).toEqual({
       concernId: 'concern-1',
+      resolutionGenerationId: 'generation-1',
       formationVAD: { valence: -0.4, arousal: 0.6, dominance: -0.2 },
       resolutionVAD: { valence: 0.3, arousal: 0.1, dominance: 0.2 },
       reliefDelta: { valence: 0.7, arousal: -0.5, dominance: 0.4 },
@@ -277,6 +279,7 @@ describe('ReflectionJournalStore concernArc telemetry (vw3w.2)', () => {
       ...baseArcInput(),
       concernArc: {
         concernId: 'concern-1',
+        resolutionGenerationId: 'generation-1',
         formationVAD: { valence: Number.NaN, arousal: 0.6, dominance: -0.2 },
         resolutionVAD: { valence: 0.3, arousal: 0.1, dominance: 0.2 },
         reliefDelta: { valence: 0.7, arousal: -0.5, dominance: 0.4 },
@@ -290,11 +293,54 @@ describe('ReflectionJournalStore concernArc telemetry (vw3w.2)', () => {
       ...baseArcInput(),
       concernArc: {
         concernId: '  ',
+        resolutionGenerationId: 'generation-1',
         formationVAD: { valence: -0.4, arousal: 0.6, dominance: -0.2 },
         resolutionVAD: { valence: 0.3, arousal: 0.1, dominance: 0.2 },
         reliefDelta: { valence: 0.7, arousal: -0.5, dominance: 0.4 },
         source: 'decision',
       },
     })).toThrow('Reflection journal concernArc requires a non-empty concernId');
+  });
+
+  it('queries structured arcs by concern and provenance without exposing prompt prose', () => {
+    store.append({
+      ...baseArcInput(),
+      concernArc: {
+        concernId: 'concern-1',
+        resolutionGenerationId: 'generation-1',
+        formationVAD: { valence: -0.4, arousal: 0.6, dominance: -0.2 },
+        resolutionVAD: { valence: 0.3, arousal: 0.1, dominance: 0.2 },
+        reliefDelta: { valence: 0.7, arousal: -0.5, dominance: 0.4 },
+        source: 'decision',
+      },
+    });
+    store.append({
+      ...baseArcInput(),
+      substrateProvenanceRefs: ['concern:concern-2', 'decision:decision-2'],
+      concernArc: {
+        concernId: 'concern-2',
+        resolutionGenerationId: 'generation-2',
+        formationVAD: { valence: 0.1, arousal: 0.2, dominance: 0.3 },
+        resolutionVAD: { valence: 0.2, arousal: 0.1, dominance: 0.4 },
+        reliefDelta: { valence: 0.1, arousal: -0.1, dominance: 0.1 },
+        source: 'decision',
+      },
+    });
+
+    const byConcern = store.listConcernArcs({ concernId: 'concern-1', limit: 10 });
+    expect(byConcern).toHaveLength(1);
+    expect(byConcern[0]).toMatchObject({
+      arc: { concernId: 'concern-1', resolutionGenerationId: 'generation-1' },
+      provenanceRefs: ['concern:concern-1'],
+    });
+    expect(byConcern[0]).not.toHaveProperty('prompt');
+    expect(byConcern[0]).not.toHaveProperty('reflection');
+
+    expect(store.listConcernArcs({
+      provenanceRef: 'decision:decision-2',
+      limit: 10,
+    })).toEqual([
+      expect.objectContaining({ arc: expect.objectContaining({ concernId: 'concern-2' }) }),
+    ]);
   });
 });

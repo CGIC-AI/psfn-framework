@@ -45,6 +45,7 @@ export type ReflectionConcernArcSource = 'decision' | 'grooming_stale' | 'groomi
  */
 export interface ReflectionConcernArc {
   concernId: string;
+  resolutionGenerationId: string;
   formationVAD: ReflectionJournalVAD;
   resolutionVAD: ReflectionJournalVAD;
   reliefDelta: ReflectionJournalVAD;
@@ -95,6 +96,19 @@ export interface ReflectionJournalListOptions {
   limit?: number;
 }
 
+export interface ReflectionConcernArcListOptions extends ReflectionJournalListOptions {
+  concernId?: string;
+  provenanceRef?: string;
+}
+
+export interface ReflectionConcernArcRecord {
+  entryId: string;
+  createdAt: string;
+  substrateBoundary?: string;
+  provenanceRefs: string[];
+  arc: ReflectionConcernArc;
+}
+
 function normalizeConcernArcVAD(value: unknown, field: string): ReflectionJournalVAD {
   if (!value || typeof value !== 'object') {
     throw new Error(`Reflection journal concernArc.${field} must be a VAD object`);
@@ -120,6 +134,12 @@ function normalizeConcernArc(value: ReflectionConcernArc | undefined): Reflectio
   if (!concernId) {
     throw new Error('Reflection journal concernArc requires a non-empty concernId');
   }
+  const resolutionGenerationId = typeof value.resolutionGenerationId === 'string'
+    ? value.resolutionGenerationId.trim()
+    : '';
+  if (!resolutionGenerationId) {
+    throw new Error('Reflection journal concernArc requires a non-empty resolutionGenerationId');
+  }
   // Widened to string: this is a fail-closed validator for persisted/untrusted
   // input, so the runtime check must not be elided by the static union type.
   const source = value.source as string;
@@ -136,6 +156,7 @@ function normalizeConcernArc(value: ReflectionConcernArc | undefined): Reflectio
   }
   return {
     concernId,
+    resolutionGenerationId,
     formationVAD: normalizeConcernArcVAD(value.formationVAD, 'formationVAD'),
     resolutionVAD: normalizeConcernArcVAD(value.resolutionVAD, 'resolutionVAD'),
     reliefDelta: normalizeConcernArcVAD(value.reliefDelta, 'reliefDelta'),
@@ -271,11 +292,40 @@ export class ReflectionJournalStore {
   }
 
   append(input: ReflectionJournalEntryInput): ReflectionJournalEntry {
+    return this.appendWithId(input, undefined);
+  }
+
+  hasEntry(id: string): boolean {
+    const normalizedId = id.trim();
+    if (!normalizedId) return false;
+    return readJsonLines(this.filePath, normalizePersistedReflectionEntry).entries
+      .some(entry => entry.id === normalizedId);
+  }
+
+  appendOnce(id: string, input: ReflectionJournalEntryInput): {
+    entry: ReflectionJournalEntry;
+    appended: boolean;
+  } {
+    const normalizedId = id.trim();
+    if (!normalizedId) {
+      throw new Error('Reflection journal appendOnce id must be non-empty');
+    }
+    const existing = readJsonLines(this.filePath, normalizePersistedReflectionEntry).entries
+      .find(entry => entry.id === normalizedId);
+    if (existing) return { entry: existing, appended: false };
+    return { entry: this.appendWithId(input, normalizedId), appended: true };
+  }
+
+  private appendWithId(
+    input: ReflectionJournalEntryInput,
+    stableId: string | undefined,
+  ): ReflectionJournalEntry {
     const telemetry = normalizeReflectionTelemetry(input);
     const substrateBoundary = input.substrateBoundary?.trim();
     const substrateProvenanceRefs = normalizeProvenanceRefs(input.substrateProvenanceRefs);
     const entry: ReflectionJournalEntry = {
-      id: `reflection-${Date.now()}-${Math.floor(Math.random() * 1_000_000).toString().padStart(6, '0')}`,
+      id: stableId
+        ?? `reflection-${Date.now()}-${Math.floor(Math.random() * 1_000_000).toString().padStart(6, '0')}`,
       templateId: normalizeTemplateId(input.templateId),
       templateName: normalizeTemplateName(input.templateName),
       prompt: input.prompt.trim(),
@@ -315,5 +365,38 @@ export class ReflectionJournalStore {
         return right.id.localeCompare(left.id);
       })
       .slice(0, limitRaw);
+  }
+
+  listConcernArcs(options: ReflectionConcernArcListOptions = {}): ReflectionConcernArcRecord[] {
+    const limit = options.limit ?? 20;
+    if (!Number.isInteger(limit) || limit < 1) {
+      throw new Error('Reflection journal listConcernArcs limit must be a positive integer');
+    }
+    const concernId = options.concernId?.trim();
+    const provenanceRef = options.provenanceRef?.trim();
+    return readJsonLines(this.filePath, normalizePersistedReflectionEntry).entries
+      .flatMap((entry): ReflectionConcernArcRecord[] => {
+        let arc: ReflectionConcernArc | undefined;
+        try {
+          arc = normalizeConcernArc(entry.telemetry?.concernArc);
+        } catch {
+          return [];
+        }
+        if (!arc || (concernId && arc.concernId !== concernId)) return [];
+        const provenanceRefs = entry.substrateProvenanceRefs ?? [];
+        if (provenanceRef && !provenanceRefs.includes(provenanceRef)) return [];
+        return [{
+          entryId: entry.id,
+          createdAt: entry.createdAt,
+          ...(entry.substrateBoundary ? { substrateBoundary: entry.substrateBoundary } : {}),
+          provenanceRefs: [...provenanceRefs],
+          arc,
+        }];
+      })
+      .sort((left, right) => (
+        Date.parse(right.createdAt) - Date.parse(left.createdAt)
+        || right.entryId.localeCompare(left.entryId)
+      ))
+      .slice(0, limit);
   }
 }

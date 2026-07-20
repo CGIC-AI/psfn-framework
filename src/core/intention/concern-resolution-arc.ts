@@ -5,6 +5,7 @@ import type {
 } from '../../persistence/journals/reflection-journal.js';
 import { describeConcernEmotionalArc } from './appraisal/concern-arc-prose.js';
 import {
+  buildConcernResolutionAppraisalEvent,
   computeConcernReliefDelta,
   type ConcernResolutionAppraisalEvent,
 } from './concern-resolution-appraisal.js';
@@ -38,7 +39,17 @@ const ARC_SUBSTRATE_BOUNDARY = 'concern-resolution-arc';
 const ARC_PROMPT_MAX_CHARS = 200;
 
 export interface ConcernArcJournalSink {
-  append(input: ReflectionJournalEntryInput): unknown;
+  hasEntry(id: string): boolean;
+  appendOnce(id: string, input: ReflectionJournalEntryInput): unknown;
+}
+
+export interface ConcernResolutionEmotionSink {
+  applyConcernResolutionDelta(
+    concern: ActiveConcern,
+    generationId: string,
+    delta: ConcernResolutionAppraisalEvent['reliefDelta'],
+  ): 'applied' | 'duplicate' | 'deferred' | 'unavailable'
+    | Promise<'applied' | 'duplicate' | 'deferred' | 'unavailable'>;
 }
 
 export interface ConcernArcConcernSource {
@@ -65,13 +76,13 @@ function truncateConcernText(text: string): string {
  * incomplete (missing either VAD snapshot). Pure — no I/O.
  */
 export function buildConcernResolutionArcEntry(input: {
-  concern: Pick<ActiveConcern, 'id' | 'text' | 'salience' | 'createdAt' | 'resolvedAt' | 'formationVAD' | 'resolutionVAD'>;
+  concern: Pick<ActiveConcern, 'id' | 'text' | 'salience' | 'createdAt' | 'resolvedAt' | 'formationVAD' | 'resolutionVAD' | 'resolutionGenerationId'>;
   source: ReflectionConcernArcSource;
   now?: () => number;
 }): ReflectionJournalEntryInput | null {
   const { concern, source } = input;
   const { formationVAD, resolutionVAD } = concern;
-  if (!formationVAD || !resolutionVAD) {
+  if (!formationVAD || !resolutionVAD || !concern.resolutionGenerationId) {
     return null;
   }
   const arcProse = describeConcernEmotionalArc({ formationVAD, resolutionVAD });
@@ -94,6 +105,7 @@ export function buildConcernResolutionArcEntry(input: {
     substrateProvenanceRefs: [`concern:${concern.id}`],
     concernArc: {
       concernId: concern.id,
+      resolutionGenerationId: concern.resolutionGenerationId,
       formationVAD: { ...formationVAD },
       resolutionVAD: { ...resolutionVAD },
       reliefDelta: computeConcernReliefDelta(formationVAD, resolutionVAD),
@@ -107,6 +119,7 @@ export function buildConcernResolutionArcEntry(input: {
 export interface ConcernResolutionArcRecorderDeps {
   concernStore: ConcernArcConcernSource;
   journal: ConcernArcJournalSink;
+  emotionSink?: ConcernResolutionEmotionSink;
   now?: () => number;
   logger?: Pick<ReturnType<typeof createComponentLogger>, 'warn' | 'debug'>;
 }
@@ -134,6 +147,15 @@ export function createConcernResolutionArcRecorder(
       });
       return;
     }
+    if (concern.resolutionGenerationId !== event.resolutionGenerationId) {
+      log.warn('Concern resolution arc skipped: resolution generation is no longer current', {
+        concernId: event.concernId,
+        source: event.source,
+      });
+      return;
+    }
+    const journalEntryId = `concern-arc-${event.resolutionGenerationId}`;
+    if (deps.journal.hasEntry(journalEntryId)) return;
     const entry = buildConcernResolutionArcEntry({
       concern,
       source: event.source,
@@ -146,10 +168,60 @@ export function createConcernResolutionArcRecorder(
       });
       return;
     }
-    deps.journal.append(entry);
+    await deps.emotionSink?.applyConcernResolutionDelta(
+      concern,
+      event.resolutionGenerationId,
+      event.reliefDelta,
+    );
+    await deps.journal.appendOnce(journalEntryId, entry);
     log.debug('Recorded concern resolution arc', {
       concernId: event.concernId,
       source: event.source,
     });
   };
+}
+
+/** Replay persisted terminal generations that never reached the durable arc. */
+export async function reconcileConcernResolutionArcs(input: {
+  concernStore: ConcernArcConcernSource & {
+    list(options: {
+      includeResolved: boolean;
+      includeExpired: boolean;
+      limit: number;
+      offset: number;
+    }): Promise<ActiveConcern[]>;
+  };
+  recorder: (event: ConcernResolutionAppraisalEvent) => Promise<void>;
+  now?: () => number;
+}): Promise<number> {
+  let reconciled = 0;
+  let offset = 0;
+  while (true) {
+    const concerns = await input.concernStore.list({
+      includeResolved: true,
+      includeExpired: true,
+      limit: 200,
+      offset,
+    });
+    for (const concern of concerns) {
+      const event = buildConcernResolutionAppraisalEvent({
+        concern,
+        source: resolveReconciledArcSource(concern),
+        ...(input.now ? { now: input.now } : {}),
+      });
+      if (!event) continue;
+      await input.recorder(event);
+      reconciled += 1;
+    }
+    if (concerns.length < 200) break;
+    offset += concerns.length;
+  }
+  return reconciled;
+}
+
+function resolveReconciledArcSource(concern: ActiveConcern): ReflectionConcernArcSource {
+  const refs = concern.resolutionEvidenceRefs.map(ref => ref.ref);
+  if (refs.some(ref => ref.startsWith('concern-grooming:stale:'))) return 'grooming_stale';
+  if (refs.some(ref => ref.startsWith('concern-grooming:cap:'))) return 'grooming_cap';
+  return 'decision';
 }

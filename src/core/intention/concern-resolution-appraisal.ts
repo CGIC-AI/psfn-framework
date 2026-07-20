@@ -21,6 +21,7 @@ export type ConcernResolutionAppraisalSource = 'decision' | 'grooming_stale' | '
 
 export interface ConcernResolutionAppraisalEvent {
   concernId: string;
+  resolutionGenerationId: string;
   source: ConcernResolutionAppraisalSource;
   formationVad: ActiveConcernVAD;
   resolutionVad: ActiveConcernVAD;
@@ -49,16 +50,17 @@ export function computeConcernReliefDelta(
  * code path.
  */
 export function buildConcernResolutionAppraisalEvent(input: {
-  concern: Pick<ActiveConcern, 'id' | 'formationVAD' | 'resolutionVAD' | 'resolvedAt'>;
+  concern: Pick<ActiveConcern, 'id' | 'formationVAD' | 'resolutionVAD' | 'resolvedAt' | 'resolutionGenerationId'>;
   source: ConcernResolutionAppraisalSource;
   now?: () => number;
 }): ConcernResolutionAppraisalEvent | null {
-  const { formationVAD, resolutionVAD } = input.concern;
-  if (!formationVAD || !resolutionVAD) {
+  const { formationVAD, resolutionVAD, resolutionGenerationId } = input.concern;
+  if (!formationVAD || !resolutionVAD || !resolutionGenerationId) {
     return null;
   }
   return {
     concernId: input.concern.id,
+    resolutionGenerationId,
     source: input.source,
     formationVad: { ...formationVAD },
     resolutionVad: { ...resolutionVAD },
@@ -77,7 +79,7 @@ export function buildConcernResolutionAppraisalEvent(input: {
 export async function emitConcernResolutionAppraisal(
   eventBus: EventBus | null | undefined,
   input: {
-    concern: Pick<ActiveConcern, 'id' | 'formationVAD' | 'resolutionVAD' | 'resolvedAt'>;
+    concern: Pick<ActiveConcern, 'id' | 'formationVAD' | 'resolutionVAD' | 'resolvedAt' | 'resolutionGenerationId'>;
     source: ConcernResolutionAppraisalSource;
     now?: () => number;
   },
@@ -89,6 +91,6 @@ export async function emitConcernResolutionAppraisal(
   if (!event) {
     return false;
   }
-  await eventBus.emit('intention.concern.resolution_appraisal', event);
+  await eventBus.emitRequired('intention.concern.resolution_appraisal', event);
   return true;
 }

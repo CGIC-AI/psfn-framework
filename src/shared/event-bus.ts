@@ -746,6 +746,8 @@ export interface EventMap {
   // integration (sibling work) rather than mutating emotion state directly.
   'intention.concern.resolution_appraisal': {
     concernId: string;
+    /** Stable identity of this active-to-terminal concern generation. */
+    resolutionGenerationId: string;
     /** Which resolve path produced the appraisal. */
     source: 'decision' | 'grooming_stale' | 'grooming_cap';
     formationVad: { valence: number; arousal: number; dominance: number };
@@ -1416,6 +1418,44 @@ export class EventBus {
       if (result.status === 'rejected') {
         log.error(`Handler error on "${event}": ${result.reason}`);
       }
+    }
+  }
+
+  /**
+   * Deliver a required domain event and surface every consumer failure to the
+   * caller. Normal telemetry continues to use {@link emit}, whose isolation
+   * contract intentionally logs and swallows subscriber errors.
+   */
+  async emitRequired<E extends EventName>(event: E, data: EventMap[E]): Promise<void> {
+    const guards = this.guards.get(event);
+    if (guards) {
+      for (const guard of guards) {
+        if (!await guard(data)) {
+          throw new Error(`Required event "${event}" was rejected by a guard`);
+        }
+      }
+    }
+
+    const entries = this.handlers.get(event);
+    if (!entries || entries.length === 0) {
+      throw new Error(`Required event "${event}" has no registered consumers`);
+    }
+    const snapshot = [...entries];
+    const toRemove: HandlerEntry[] = [];
+    const results = await Promise.allSettled(snapshot.map(async (entry) => {
+      if (entry.once) toRemove.push(entry);
+      await entry.handler(data);
+    }));
+    for (const entry of toRemove) {
+      const index = entries.indexOf(entry);
+      if (index !== -1) entries.splice(index, 1);
+    }
+    const failures = results
+      .filter((result): result is PromiseRejectedResult => result.status === 'rejected')
+      .map(result => result.reason);
+    if (failures.length === 1) throw failures[0];
+    if (failures.length > 1) {
+      throw new AggregateError(failures, `Required event "${event}" failed in ${failures.length} consumers`);
     }
   }
 

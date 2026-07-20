@@ -51,6 +51,7 @@ export class EmotionState {
   private readonly moodAlpha: number;
   private readonly confidenceAlpha: number;
   private readonly defaultObservationConfidence: number;
+  private readonly appliedConcernResolutionGenerations = new Set<string>();
 
   constructor(config: EmotionStateConfig = {}, initialState?: Partial<EmotionStateSnapshot>) {
     this.vadHalfLifeSeconds = {
@@ -105,6 +106,20 @@ export class EmotionState {
       discrete: Object.fromEntries(discreteEntries),
       confidence: this.confidence,
     };
+  }
+
+  /** Apply a signed resolution appraisal once for its immutable generation. */
+  applyConcernResolutionDelta(generationId: string, delta: VADVector): boolean {
+    const normalizedGenerationId = generationId.trim();
+    if (!normalizedGenerationId) {
+      throw new Error('Concern resolution generation id must be non-empty');
+    }
+    if (this.appliedConcernResolutionGenerations.has(normalizedGenerationId)) {
+      return false;
+    }
+    this.update({ vad: delta, confidence: 1 }, 0);
+    this.appliedConcernResolutionGenerations.add(normalizedGenerationId);
+    return true;
   }
 
   serialize(): EmotionStateSnapshot {

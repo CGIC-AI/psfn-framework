@@ -62,6 +62,38 @@ afterEach(() => {
 });
 
 describe('scoped emotion runtime (E1.5)', () => {
+  it('feeds one signed concern-resolution delta into the matching scope for the next appraisal snapshot', async () => {
+    vi.spyOn(Date, 'now').mockReturnValue(FIXED_NOW);
+    const runtime = makeRuntime(makeSessionManager(() => []));
+    await runtime.observeEmotionState('hello', 'chanA', dmMember);
+
+    expect(runtime.applyConcernResolutionDelta(
+      'contactA',
+      'generation-1',
+      { valence: -0.4, arousal: 0.3, dominance: -0.2 },
+    )).toBe('applied');
+    expect(runtime.applyConcernResolutionDelta(
+      'contactA',
+      'generation-1',
+      { valence: -0.4, arousal: 0.3, dominance: -0.2 },
+    )).toBe('duplicate');
+    expect(runtime.applyConcernResolutionDelta(
+      'contactB',
+      'generation-2',
+      { valence: 1, arousal: 1, dominance: 1 },
+    )).toBe('deferred');
+
+    const nextSnapshot = await runtime.observeEmotionState('hello', 'chanA', dmMember);
+    expect(nextSnapshot?.vad.valence).toBeCloseTo(-0.4, 5);
+    expect(nextSnapshot?.vad.arousal).toBeCloseTo(0.34, 5);
+    expect(nextSnapshot?.vad.dominance).toBeCloseTo(-0.2, 5);
+
+    const deferredSnapshot = await runtime.observeEmotionState('hello', 'chanB', dmNonMember);
+    expect(deferredSnapshot?.vad.valence).toBeCloseTo(1, 5);
+    expect(deferredSnapshot?.vad.arousal).toBeCloseTo(1, 5);
+    expect(deferredSnapshot?.vad.dominance).toBeCloseTo(1, 5);
+  });
+
   it('treats an explicitly supplied empty appraisal snapshot as authoritative', async () => {
     const getRecentMessages = vi.fn().mockReturnValue([{
       id: 9,

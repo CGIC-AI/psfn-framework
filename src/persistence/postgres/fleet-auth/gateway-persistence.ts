@@ -757,6 +757,10 @@ export async function initializeGatewayFleetAuthPersistence(options: {
           denialAudit: {
             record: input => auditLifecycleCeremonyDenial(pool, input),
           },
+          ...(config.accountRoster ? { accountRoster: config.accountRoster } : {}),
+          ...(config.accountRosterSatisfiesStepUp !== undefined
+            ? { accountRosterSatisfiesStepUp: config.accountRosterSatisfiesStepUp }
+            : {}),
         });
       },
       ...(discordEvidence ? { discordEvidence } : {}),

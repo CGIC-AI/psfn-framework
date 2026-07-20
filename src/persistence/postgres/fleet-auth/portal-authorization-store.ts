@@ -1,6 +1,7 @@
 import { createHmac, randomUUID } from 'node:crypto';
 import type { Pool, PoolClient } from 'pg';
 import {
+  evaluateAccountRosterAuthorization,
   evaluateFleetAuthorizationSessionSnapshot,
   evaluateFleetAuthorizationSnapshot,
   type FleetAuthorizationDenialReason,
@@ -14,7 +15,11 @@ import {
 } from '../../../boundary/gateway/fleet-portal-authorization.js';
 import { fleetAuthRoleAllowsAction } from '../../../boundary/fleet-auth/role-action-policy.js';
 import { isRecord, isRfc4122Uuid } from '../../../shared/utils/types.js';
-import type { FleetAuthConfig, FleetAuthRole } from '../../../system/config/fleet-auth-config.js';
+import type {
+  FleetAuthAccountRosterEntry,
+  FleetAuthConfig,
+  FleetAuthRole,
+} from '../../../system/config/fleet-auth-config.js';
 import { FLEET_AUTH_FLOOR_RESOURCE_TOMBSTONED_FUNCTION_NAME } from './authority-floor-read-sql.js';
 import { FLEET_AUTH_LOCK_AUTHORITY_STATE_FUNCTION_NAME } from './authority-state-lock-sql.js';
 import { FLEET_AUTH_LOCK_COMPANION_AUTHORITY_FUNCTION_NAME } from './companion-authority-lock-sql.js';
@@ -98,6 +103,7 @@ implements FleetPortalAuthorizationBatchStore {
   private readonly pool: Pool;
   private readonly sessionPepper: string;
   private readonly disabledActionsByRole: FleetAuthConfig['rolePolicy']['disabledActionsByRole'];
+  private readonly accountRoster: readonly FleetAuthAccountRosterEntry[];
   private readonly knownCompanionIds: readonly string[];
   private readonly providerRevocationAuthority: ProviderRevocationAuthorityPort;
   private readonly now: () => Date;
@@ -113,6 +119,14 @@ implements FleetPortalAuthorizationBatchStore {
       || new Set(knownCompanionIds).size !== knownCompanionIds.length) {
       throw new Error('Fleet portal authorization requires 1-256 unique RFC-4122 companions');
     }
+    const knownCompanionIdSet = new Set(knownCompanionIds);
+    for (const entry of options.config.accountRoster ?? []) {
+      if (!knownCompanionIdSet.has(entry.companionId)) {
+        throw new Error(
+          `Fleet auth accountRoster references unknown companion ${entry.companionId}`,
+        );
+      }
+    }
     this.pool = options.pool;
     this.sessionPepper = options.sessionPepper;
     this.disabledActionsByRole = {
@@ -121,6 +135,9 @@ implements FleetPortalAuthorizationBatchStore {
       member: [...options.config.rolePolicy.disabledActionsByRole.member],
       guest: [...options.config.rolePolicy.disabledActionsByRole.guest],
     };
+    this.accountRoster = Object.freeze(
+      (options.config.accountRoster ?? []).map(entry => Object.freeze({ ...entry })),
+    );
     this.knownCompanionIds = Object.freeze(knownCompanionIds);
     this.providerRevocationAuthority = options.providerRevocationAuthority;
     this.now = options.now ?? (() => new Date());
@@ -139,13 +156,30 @@ implements FleetPortalAuthorizationBatchStore {
         snapshot: representative.snapshot,
         now: resolvedAt,
       });
+      // Admin-unconditional roster fallback: when the shared session gauntlet
+      // or the authority-generation gate denies, a session whose token-verified
+      // Discord subject is rostered still resolves — but strictly to its
+      // rostered companions. Non-rostered sessions keep the unchanged denial.
+      const rosterCompanions = this.rosterAuthorizedCompanions(
+        snapshots,
+        request.sessionToken,
+        resolvedAt,
+      );
+      const generationCurrent = this.providerRevocationAuthority
+        .sessionAuthorityGenerationIsCurrent(
+          representative.snapshot.authority.authorityGeneration,
+        );
       let decision: FleetPortalAuthorizationBatchStoreDecision;
-      if (sessionEvaluation.decision === 'deny') {
-        decision = sessionEvaluation;
-      } else if (!this.providerRevocationAuthority.sessionAuthorityGenerationIsCurrent(
-        representative.snapshot.authority.authorityGeneration,
-      )) {
-        decision = { decision: 'deny', reasonCode: 'authority_generation_stale' };
+      let rosterFallback = false;
+      if (sessionEvaluation.decision === 'deny' || !generationCurrent) {
+        if (rosterCompanions.length > 0) {
+          rosterFallback = true;
+          decision = { decision: 'allow', companions: rosterCompanions };
+        } else {
+          decision = sessionEvaluation.decision === 'deny'
+            ? sessionEvaluation
+            : { decision: 'deny', reasonCode: 'authority_generation_stale' };
+        }
       } else {
         decision = { decision: 'allow', companions: this.authorizedCompanions(
           snapshots,
@@ -156,7 +190,9 @@ implements FleetPortalAuthorizationBatchStore {
       await this.insertAudit(client, {
         decision: decision.decision,
         reasonCode: decision.decision === 'allow'
-          ? 'portal_projection_allowed'
+          ? rosterFallback
+            ? 'roster_portal_projection_allowed'
+            : 'portal_projection_allowed'
           : decision.reasonCode,
         principalId: sessionEvaluation.decision === 'allow'
           ? sessionEvaluation.session.principalId
@@ -166,9 +202,20 @@ implements FleetPortalAuthorizationBatchStore {
       });
       await client.query('COMMIT');
       if (decision.decision === 'deny') return decision;
-      if (!this.providerRevocationAuthority.sessionAuthorityGenerationIsCurrent(
-        representative.snapshot.authority.authorityGeneration,
-      )) {
+      if (!rosterFallback
+        && !this.providerRevocationAuthority.sessionAuthorityGenerationIsCurrent(
+          representative.snapshot.authority.authorityGeneration,
+        )) {
+        if (rosterCompanions.length > 0) {
+          // The generation went stale post-commit: degrade to the rostered
+          // companions only instead of locking the rostered admin out.
+          return {
+            decision: 'allow',
+            companions: Object.freeze(
+              rosterCompanions.map(companion => Object.freeze(companion)),
+            ),
+          };
+        }
         await this.recordPostCommitAuthorityDenial(
           client,
           sessionEvaluation.decision === 'allow'
@@ -216,15 +263,53 @@ implements FleetPortalAuthorizationBatchStore {
         snapshot,
         disabledActionsByRole: this.disabledActionsByRole,
         now: resolvedAt,
+        accountRoster: this.accountRoster,
       });
       if (evaluation.decision === 'deny') return [];
       const role = evaluation.facts.operator.role;
-      return [{
-        companionId,
-        gardenLinkEligible: fleetAuthRoleAllowsAction(role, 'garden.read')
-          && !this.disabledActionsByRole[role].includes('garden.read'),
-      }];
+      return [this.projectCompanion(companionId, role)];
     });
+  }
+
+  /**
+   * Roster-only projection used when the shared session gauntlet or the
+   * authority-generation gate denies the batch. Each companion is admitted
+   * solely through the admin-unconditional roster evaluation, so a denied
+   * non-rostered session can never widen back into the full companion list.
+   */
+  private rosterAuthorizedCompanions(
+    snapshots: readonly PortalSnapshot[],
+    sessionToken: string,
+    resolvedAt: Date,
+  ): Extract<FleetPortalAuthorizationBatchStoreDecision, { decision: 'allow' }>['companions'] {
+    if (this.accountRoster.length === 0) return [];
+    return snapshots.flatMap(({ companionId, snapshot }) => {
+      const evaluation = evaluateAccountRosterAuthorization({
+        request: {
+          sessionToken,
+          audience: 'fleet',
+          companionId,
+          action: 'companion.read',
+        },
+        snapshot,
+        accountRoster: this.accountRoster,
+        disabledActionsByRole: this.disabledActionsByRole,
+        now: resolvedAt,
+      });
+      if (!evaluation) return [];
+      return [this.projectCompanion(companionId, evaluation.facts.operator.role)];
+    });
+  }
+
+  private projectCompanion(
+    companionId: string,
+    role: FleetAuthRole,
+  ): { companionId: string; gardenLinkEligible: boolean } {
+    return {
+      companionId,
+      gardenLinkEligible: fleetAuthRoleAllowsAction(role, 'garden.read')
+        && !this.disabledActionsByRole[role].includes('garden.read'),
+    };
   }
 
   private async loadSnapshots(client: PoolClient, sessionToken: string): Promise<PortalSnapshot[]> {

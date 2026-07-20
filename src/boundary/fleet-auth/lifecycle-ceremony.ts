@@ -5,7 +5,12 @@ import type {
 } from '../../shared/contracts/contact-authority-snapshot.js';
 import { createCompanionId } from '../../shared/routing/companion-id.js';
 import { assertNoUnknownKeys, isRecord, isRfc4122Uuid } from '../../shared/utils/types.js';
-import type { FleetAuthAction, FleetAuthRole } from '../../system/config/fleet-auth-config.js';
+import {
+  findFleetAuthAccountRosterEntry,
+  type FleetAuthAccountRosterEntry,
+  type FleetAuthAction,
+  type FleetAuthRole,
+} from '../../system/config/fleet-auth-config.js';
 import type {
   FleetAuthLifecycleResult,
   PrincipalAuthorityClaim,
@@ -378,6 +383,7 @@ function completePathFor(request: FleetAuthLifecycleCeremonyRequest): string {
 
 export class GatewayFleetAuthLifecycleCeremonyService {
   private readonly origin: string;
+  private readonly stepUpRoster: readonly FleetAuthAccountRosterEntry[];
 
   constructor(private readonly options: {
     pool: Pool;
@@ -387,6 +393,10 @@ export class GatewayFleetAuthLifecycleCeremonyService {
     jitStepUp: Pick<FleetJitStepUpCoordinator, 'startWebAuthn' | 'consumeGrant'>;
     contactAuthority: FleetContactAuthorityPort;
     denialAudit: FleetLifecycleCeremonyDenialAuditPort;
+    /** Admin-unconditional roster; consulted only when the opt-in below is set. */
+    accountRoster?: readonly FleetAuthAccountRosterEntry[];
+    /** Explicit owner-file opt-in: a rostered OWNER satisfies webauthn_uv step-up. */
+    accountRosterSatisfiesStepUp?: boolean;
     now?: () => Date;
   }) {
     const origin = new URL(options.canonicalOrigin);
@@ -394,6 +404,25 @@ export class GatewayFleetAuthLifecycleCeremonyService {
       throw new FleetAuthLifecycleCeremonyError('invalid_request', 'Lifecycle origin is invalid');
     }
     this.origin = origin.origin;
+    this.stepUpRoster = options.accountRosterSatisfiesStepUp === true
+      ? Object.freeze((options.accountRoster ?? []).map(entry => Object.freeze({ ...entry })))
+      : Object.freeze([]);
+  }
+
+  /**
+   * True only when the explicit opt-in is on AND the session's token-verified
+   * Discord subject is rostered as OWNER for exactly this companion. Default
+   * (opt-in absent or false) is an empty roster, so this always returns false
+   * and the WebAuthn step-up path below stays byte-for-byte unchanged.
+   */
+  private rosterSatisfiesStepUp(providerSubjectId: string, companionId: string): boolean {
+    const entry = findFleetAuthAccountRosterEntry(
+      this.stepUpRoster,
+      'discord',
+      providerSubjectId,
+      companionId,
+    );
+    return entry !== undefined && entry.role === 'owner';
   }
 
   async startStrongAssurance(input: {
@@ -478,26 +507,28 @@ export class GatewayFleetAuthLifecycleCeremonyService {
         );
       }
     }
-    let grant: Awaited<ReturnType<FleetJitStepUpCoordinator['consumeGrant']>>;
-    try {
-      grant = await this.options.jitStepUp.consumeGrant({
-        grantId: input.jitGrantId,
-        token: input.token,
-        requestOrigin: input.requestOrigin,
-        binding: this.binding(request),
-      });
-    } catch (error) {
-      await this.auditDenial(request, 'strong_assurance_denied');
-      throw error;
-    }
-    if (grant.assurance !== 'webauthn_uv'
-      || grant.principalId !== session.principal_id
-      || grant.browserSessionId !== session.record_id) {
-      await this.auditDenial(request, 'strong_assurance_binding_changed');
-      throw new FleetAuthLifecycleCeremonyError(
-        'lifecycle_denied',
-        'Lifecycle strong assurance binding changed',
-      );
+    if (!this.rosterSatisfiesStepUp(session.provider_subject_id, request.companionId)) {
+      let grant: Awaited<ReturnType<FleetJitStepUpCoordinator['consumeGrant']>>;
+      try {
+        grant = await this.options.jitStepUp.consumeGrant({
+          grantId: input.jitGrantId,
+          token: input.token,
+          requestOrigin: input.requestOrigin,
+          binding: this.binding(request),
+        });
+      } catch (error) {
+        await this.auditDenial(request, 'strong_assurance_denied');
+        throw error;
+      }
+      if (grant.assurance !== 'webauthn_uv'
+        || grant.principalId !== session.principal_id
+        || grant.browserSessionId !== session.record_id) {
+        await this.auditDenial(request, 'strong_assurance_binding_changed');
+        throw new FleetAuthLifecycleCeremonyError(
+          'lifecycle_denied',
+          'Lifecycle strong assurance binding changed',
+        );
+      }
     }
     const actor = claim(session);
     const base = {

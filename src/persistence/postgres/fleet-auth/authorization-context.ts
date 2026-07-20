@@ -16,6 +16,14 @@ export function createPostgresFleetAuthorizationContextResolver(options: {
   providerRevocationAuthority: ProviderRevocationAuthorityPort;
   now?: () => Date;
 }): GatewayFleetAuthorizationContextResolver {
+  const knownCompanionIds = new Set(options.knownCompanionIds);
+  for (const entry of options.config.accountRoster ?? []) {
+    if (!knownCompanionIds.has(entry.companionId)) {
+      throw new Error(
+        `Fleet auth accountRoster references unknown companion ${entry.companionId}`,
+      );
+    }
+  }
   return new GatewayFleetAuthorizationContextResolver(
     new PostgresFleetAuthorizationContextStore({
       pool: options.pool,

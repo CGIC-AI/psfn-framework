@@ -30,6 +30,11 @@ export interface ProactiveOutboundDispatcherOptions {
   eventBus?: EventBus | null;
 }
 
+/** Canonical content that policy evaluates, consent binds, and the sender sees. */
+export function normalizeProactiveOutboundContent(content: string): string {
+  return stripLeadingHistoryStamps(content.trim()).trim();
+}
+
 /**
  * Policy-gated companion-authored outbound dispatch (proactive outreach,
  * sprint-9 1xb.1 / rsgg.6). Internal whisper follow-ups stay internal; this
@@ -54,7 +59,7 @@ export class ProactiveOutboundDispatcher {
     // Outreach drafts are model-authored outside the turn-execution seam, so
     // the mimicked-history-stamp fail-safe (psfn-framework-2x37.10) applies
     // here before any external send.
-    const content = stripLeadingHistoryStamps(input.content.trim()).trim();
+    const content = normalizeProactiveOutboundContent(input.content);
     const blocked = async (
       reason: string,
       retryAfterMs?: number,

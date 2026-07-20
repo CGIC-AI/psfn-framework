@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { SessionStore } from '../../persistence/sessions/store.js';
-import { UserContinuityStore } from './continuity.js';
+import { parseContinuityEntryProvenance, UserContinuityStore } from './continuity.js';
 import { SessionManager } from './manager.js';
 import { EventBus } from '../../shared/event-bus.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
@@ -14,6 +14,7 @@ import {
   createMissingCrossChannelContinuityPort,
   createUserContinuityPort,
 } from './cross-channel-continuity-port.js';
+import { REDACTED_SESSION_ENTRY_PLACEHOLDER } from './continuity-redaction.js';
 import {
   COMPACTION_SUMMARY_PROMPT_KEY,
   EXTRACTION_PROMPT_KEY,
@@ -49,6 +50,12 @@ import {
   fingerprintBackgroundWorkTurnRecord,
   type MemoryExtractionBackgroundPayload,
 } from '../agent/background-work/types.js';
+import { CogSecEventStore } from '../cogsec/events.js';
+import { CogSecForensicArchive } from '../cogsec/forensic-archive.js';
+import {
+  resolveCogSecEventsPath,
+  resolveCogSecForensicArchiveDir,
+} from '../../persistence/layout.js';
 
 // Assembled history lines carry '[MM-DD-YY HH:mm] ' provenance stamps derived
 // from live clocks; strip them so content assertions stay deterministic.
@@ -485,7 +492,7 @@ describe('SessionManager', () => {
         authorName: 'User',
         timestamp: currentAt,
       });
-      continuityStore.append('u1', {
+      const sideEntryId = store.append({
         channelId: 'api:side',
         originChannelId: 'api:side',
         role: 'assistant',
@@ -493,6 +500,14 @@ describe('SessionManager', () => {
         timestamp: currentAt - 1_000,
         channelVisibility: 'private',
       });
+      continuityStore.append('u1', {
+        channelId: 'api:side',
+        originChannelId: 'api:side',
+        role: 'assistant',
+        content: 'The visibility audit is still open in the side thread.',
+        timestamp: currentAt - 1_000,
+        channelVisibility: 'private',
+      }, sideEntryId);
       (mgr as unknown as {
         focusKnowledgeStore: {
           append: (input: {
@@ -603,14 +618,14 @@ describe('SessionManager', () => {
         authorId: 'u1',
         authorName: 'User',
         timestamp: previousAt,
-      });
+      }, undefined, 'non_persistent');
       continuityStore.append('u1', {
         channelId: 'internal:reflection:daily',
         originChannelId: 'internal:reflection:daily',
         role: 'assistant',
         content: 'Recovery mattered most.',
         timestamp: previousAt + 1,
-      });
+      }, undefined, 'non_persistent');
       continuityStore.append('u1', {
         channelId: 'internal:reflection:daily',
         originChannelId: 'internal:reflection:daily',
@@ -619,21 +634,21 @@ describe('SessionManager', () => {
         authorId: 'u1',
         authorName: 'User',
         timestamp: currentAt,
-      });
+      }, undefined, 'non_persistent');
       continuityStore.append('u1', {
         channelId: 'internal:reflection:whisper',
         originChannelId: 'internal:reflection:whisper',
         role: 'assistant',
         content: 'Earlier reflection summary',
         timestamp: currentAt - 500,
-      });
+      }, undefined, 'non_persistent');
       continuityStore.append('u1', {
         channelId: 'internal:heartbeat',
         originChannelId: 'internal:heartbeat',
         role: 'assistant',
         content: 'Heartbeat should stay hidden',
         timestamp: currentAt - 250,
-      });
+      }, undefined, 'non_persistent');
 
       const snapshot = await mgr.captureTurnSessionContext({ channelId: 'internal:reflection:daily', userId: 'u1' });
       expect(snapshot.orientation).toMatchObject({
@@ -2518,6 +2533,103 @@ describe('SessionManager', () => {
     expect(mgr.continuityStore.count('contact-canonical-1')).toBe(1);
   });
 
+  it('stamps continuity copies with their immutable source L0 entry ids', () => {
+    const config = makeConfig();
+    const mgr = new SessionManager(store, config);
+    mgr.continuityStore = new UserContinuityStore(join(dir, 'continuity-source-refs'));
+
+    const userEntryId = mgr.recordUserMessage(
+      'api:source',
+      'Partner text',
+      'partner-1',
+      'Partner',
+      true,
+      'partner-1',
+    );
+    const assistantEntryId = mgr.recordAssistantMessage(
+      'api:source',
+      'Companion text',
+      'partner-1',
+      true,
+      'partner-1',
+    );
+    const systemEntryId = mgr.recordSystemMessage(
+      'api:source',
+      'System text',
+      'system:test',
+      'System',
+      true,
+      'partner-1',
+    );
+
+    const continuity = mgr.continuityStore.getRecent('partner-1', 10);
+    expect(continuity.map(item => parseContinuityEntryProvenance(item.metadata)?.sourceEntryId))
+      .toEqual([userEntryId, assistantEntryId, systemEntryId]);
+  });
+
+  it('withholds tombstoned origin content before live cross-channel context assembly', async () => {
+    const config = makeConfig({ dataDir: dir });
+    const mgr = new SessionManager(store, config);
+    mgr.continuityStore = new UserContinuityStore(join(dir, 'continuity-live-redaction'));
+    const originChannelId = 'api:continuity-origin';
+    const consumerChannelId = 'api:continuity-consumer';
+    const secret = 'LIVE_CROSS_CHANNEL_SECRET';
+    const sourceEntryId = mgr.recordUserMessage(
+      originChannelId,
+      secret,
+      'partner-1',
+      'Partner',
+      true,
+      'partner-1',
+    );
+    expect(sourceEntryId).not.toBeNull();
+    mgr.recordUserMessage(
+      consumerChannelId,
+      'Current turn',
+      'partner-1',
+      'Partner',
+      true,
+      'partner-1',
+    );
+
+    const before = await mgr.buildContext(
+      consumerChannelId,
+      'System',
+      '',
+      undefined,
+      'partner-1',
+    );
+    expect(before.systemPrompt).toContain(secret);
+
+    const caseId = 'cogsec_20260719T000000Z_live_continuity';
+    const eventStore = new CogSecEventStore(resolveCogSecEventsPath(dir));
+    const forensicArchive = new CogSecForensicArchive(resolveCogSecForensicArchiveDir(dir));
+    eventStore.createEvent({
+      caseId,
+      type: 'content_poisoning',
+      severity: 'high',
+      sourceChannelId: originChannelId,
+      safeAgentSummary: 'sealed and removed from active cognition',
+    });
+    await store.applyCogSecTombstones({
+      channelId: originChannelId,
+      caseId,
+      eventStore,
+      forensicArchive,
+      messageIds: [sourceEntryId!],
+    });
+
+    const after = await mgr.buildContext(
+      consumerChannelId,
+      'System',
+      '',
+      undefined,
+      'partner-1',
+    );
+    expect(after.systemPrompt).not.toContain(secret);
+    expect(after.systemPrompt).toContain(REDACTED_SESSION_ENTRY_PLACEHOLDER);
+  });
+
   it('reports missing wiring until continuity is explicitly configured', () => {
     const config = makeConfig();
     const mgr = new SessionManager(store, config);
@@ -2563,7 +2675,7 @@ describe('SessionManager', () => {
     const continuityStore = new UserContinuityStore(dir);
     wireTestContinuity(mgr, continuityStore);
 
-    continuityStore.append('contact-canonical-1', {
+    const canonicalSourceEntryId = store.append({
       channelId: 'api:origin-1',
       role: 'user',
       content: 'Canonical continuity message',
@@ -2573,8 +2685,18 @@ describe('SessionManager', () => {
       originChannelId: 'api:origin-1',
       channelVisibility: 'private',
     });
+    continuityStore.append('contact-canonical-1', {
+      channelId: 'api:origin-1',
+      role: 'user',
+      content: 'Canonical continuity message',
+      authorId: 'contact-canonical-1',
+      authorName: 'Canonical',
+      timestamp: 1000,
+      originChannelId: 'api:origin-1',
+      channelVisibility: 'private',
+    }, canonicalSourceEntryId);
 
-    continuityStore.append('legacy-discord-id', {
+    const legacySourceEntryId = store.append({
       channelId: 'api:origin-2',
       role: 'assistant',
       content: 'Legacy continuity message',
@@ -2583,12 +2705,27 @@ describe('SessionManager', () => {
       channelVisibility: 'private',
     });
     continuityStore.append('legacy-discord-id', {
+      channelId: 'api:origin-2',
+      role: 'assistant',
+      content: 'Legacy continuity message',
+      timestamp: 2000,
+      originChannelId: 'api:origin-2',
+      channelVisibility: 'private',
+    }, legacySourceEntryId);
+    const fallbackSourceEntryId = store.append({
       channelId: 'api:origin-3',
       role: 'assistant',
       content: 'Fallback channel attribution message',
       timestamp: 3000,
       channelVisibility: 'private',
     });
+    continuityStore.append('legacy-discord-id', {
+      channelId: 'api:origin-3',
+      role: 'assistant',
+      content: 'Fallback channel attribution message',
+      timestamp: 3000,
+      channelVisibility: 'private',
+    }, fallbackSourceEntryId);
 
     mgr.recordUserMessage('api:current', 'Current turn', 'legacy-discord-id', 'User');
 
@@ -2618,7 +2755,7 @@ describe('SessionManager', () => {
 
     mgr.recordUserMessage('api:main', 'snapshot message', 'u1', 'User');
     mgr.recordAssistantMessage('api:main', 'snapshot reply');
-    continuityStore.append('user1', {
+    const snapshotSourceEntryId = store.append({
       channelId: 'api:side',
       originChannelId: 'api:side',
       role: 'assistant',
@@ -2626,11 +2763,19 @@ describe('SessionManager', () => {
       timestamp: 1_700_000_000_000,
       channelVisibility: 'private',
     });
+    continuityStore.append('user1', {
+      channelId: 'api:side',
+      originChannelId: 'api:side',
+      role: 'assistant',
+      content: 'snapshot continuity',
+      timestamp: 1_700_000_000_000,
+      channelVisibility: 'private',
+    }, snapshotSourceEntryId);
 
     const snapshot = await mgr.captureTurnSessionContext({ channelId: 'api:main', userId: 'user1' });
 
     mgr.recordAssistantMessage('api:main', 'late drift');
-    continuityStore.append('user1', {
+    const lateSourceEntryId = store.append({
       channelId: 'api:side',
       originChannelId: 'api:side',
       role: 'assistant',
@@ -2638,6 +2783,14 @@ describe('SessionManager', () => {
       timestamp: 1_700_000_000_100,
       channelVisibility: 'private',
     });
+    continuityStore.append('user1', {
+      channelId: 'api:side',
+      originChannelId: 'api:side',
+      role: 'assistant',
+      content: 'late continuity',
+      timestamp: 1_700_000_000_100,
+      channelVisibility: 'private',
+    }, lateSourceEntryId);
 
     const ctx = await mgr.buildContext('api:main', 'Sys', '', undefined, 'user1', undefined, [], snapshot);
 

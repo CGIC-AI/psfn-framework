@@ -2,6 +2,11 @@ import { isRecord, toRecordView } from '../../shared/utils/types.js';
 import type { SessionEntry } from '../../core/session/types.js';
 import type { TurnRecord } from '../../shared/contracts/runtime.js';
 import { isCogSecTombstoneContent, isCogSecInvalidatedSummaryContent } from '../../core/cogsec/tombstones.js';
+import {
+  REDACTED_SESSION_ENTRY_PLACEHOLDER,
+  resolveContinuityEntryContent,
+  type ContinuityEntryWithheldReason,
+} from '../../core/session/continuity-redaction.js';
 import { restoreSnapshotSection } from './turn-record-snapshot-view.js';
 
 /**
@@ -15,11 +20,10 @@ import { restoreSnapshotSection } from './turn-record-snapshot-view.js';
  * record: the old verbatim text was resurrected on read.
  *
  * Scope: this module deduplicates `sessionContext.recentEntries` — the raw L0
- * window in the TURN'S OWN channel. `continuityEntries` is deliberately left
- * inline: continuity spans OTHER channels' journals that the reading store is
- * not guaranteed to be able to re-read (a continuity entry can originate in a
- * session that is never loaded here), so id-range reconstruction would silently
- * drop it. Its dedup is a separate follow-up.
+ * window in the TURN'S OWN channel. `continuityEntries` stays inline because
+ * each item belongs to a different secondary continuity index, but its frozen
+ * content is redaction-gated against the immutable origin L0 reference stamped
+ * into continuity provenance (bead psfn-framework-ervg).
  *
  * This module replaces the verbatim `recentEntries` array with L0 entry-id
  * references and reconstructs it from the journal at the persistence read
@@ -40,15 +44,12 @@ import { restoreSnapshotSection } from './turn-record-snapshot-view.js';
  *   `plan.messages` history AND the current turn's own partner entry (see
  *   gateRenderedViews).
  *
- * Redaction-scope caveat (bead psfn-framework-eb14): the read-time gating in this
- * module is keyed to THIS turn-channel's L0 id-space. CROSS-CHANNEL continuity
- * content — which a wire body's `system` block (and other continuity surfaces)
- * can embed — originates in other channels' journals, carries no `plan.messages`
- * provenance, and is therefore NOT gated here. Same-channel entry-backed content
- * (including the current turn after bead eb14) IS gated; cross-channel continuity
- * is a separate leak tracked coherently across all continuity surfaces by
- * follow-up bead psfn-framework-ervg. Claims below about "can NEVER be
- * resurrected" are scoped to same-channel entry-backed content.
+ * Cross-channel continuity is resolved through the same range-reader seam using
+ * each continuity row's source session + source L0 id. Legacy rows without that
+ * immutable id, malformed refs, absent/redacted source entries, identity
+ * mismatches, and resolver errors all heal to a redaction notice rather than
+ * serving frozen content. The same decision masks persisted Loom prompt views
+ * and withholds captured provider wire bodies.
  *
  * Redaction-safety invariant: verbatim `SessionEntry.content` is stored ONLY for
  * entries that have no resolvable positive L0 id (a "divergence delta" — e.g. a
@@ -84,7 +85,7 @@ export const RECENT_ENTRIES_REF_FIELD = 'recentEntriesRef';
 export const SESSION_ENTRIES_REF_VERSION = 1 as const;
 
 /** Placeholder shown in the rendered view for a message whose backing L0 entry was redacted or removed. */
-export const REDACTED_MESSAGE_PLACEHOLDER = '[redacted: source entry removed from the session journal]';
+export const REDACTED_MESSAGE_PLACEHOLDER = REDACTED_SESSION_ENTRY_PLACEHOLDER;
 
 /**
  * Discriminant stamped on a captured provider wire body that has been withheld
@@ -148,6 +149,31 @@ export interface TurnRecordWireBodyWithheld {
 /** Sink for {@link TurnRecordWireBodyWithheld} events; wired to store telemetry. */
 export type TurnRecordWireBodyWithheldSink = (event: TurnRecordWireBodyWithheld) => void;
 
+/** Top-level frozen turn-message copy withheld after its backing L0 row changed. */
+export interface TurnRecordMessageWithheld {
+  channelId: string;
+  entryId: number;
+  surface: 'userMessage' | 'assistantMessage';
+  turnId: string;
+}
+
+/** Sink for top-level user/assistant message withholding (bead psfn-framework-sm9l). */
+export type TurnRecordMessageWithheldSink = (event: TurnRecordMessageWithheld) => void;
+
+export type TurnRecordContinuityWithheldReason = ContinuityEntryWithheldReason;
+
+/** Cross-channel continuity copy withheld at the turn-record read boundary. */
+export interface TurnRecordContinuityWithheld {
+  channelId: string;
+  sourceChannelId: string;
+  sourceEntryId?: number;
+  reason: TurnRecordContinuityWithheldReason;
+  turnId: string;
+}
+
+/** Sink for cross-channel continuity heal-withhold events (bead psfn-framework-ervg). */
+export type TurnRecordContinuityWithheldSink = (event: TurnRecordContinuityWithheld) => void;
+
 /**
  * Outcome of the `recentEntries` L0 resolution pass. `windowRedactionDetected`
  * is true when ANY id-backed entry in the record's recentEntries window resolved
@@ -160,6 +186,11 @@ export type TurnRecordWireBodyWithheldSink = (event: TurnRecordWireBodyWithheld)
 interface RecentEntriesResolution {
   record: TurnRecord;
   windowRedactionDetected: boolean;
+}
+
+interface ContinuityEntriesResolution {
+  record: TurnRecord;
+  redactionDetected: boolean;
 }
 
 interface RecentEntryDelta {
@@ -385,7 +416,48 @@ function gateInlineRecentEntries(
   };
 }
 
-// ── rendered-view redaction gating (plan.messages + captured wire body) ───────
+// ── cross-channel continuity redaction gating ───────────────────────────────
+
+/**
+ * Replace frozen cross-channel continuity content with the origin journal's
+ * current truth. Reads are grouped into one inclusive range per source session,
+ * bounded by the persisted continuity array. Any state that cannot prove a
+ * live, identity-matching source row heals to the standard redaction notice;
+ * resolver failures never block the turn-record read and never expose plaintext.
+ */
+function resolveContinuityEntries(
+  record: TurnRecord,
+  resolve: SessionEntryRangeResolver,
+  onWithheld?: TurnRecordContinuityWithheldSink,
+): ContinuityEntriesResolution {
+  const sessionContext = readSessionContext(record);
+  const inline = sessionContext?.continuityEntries;
+  if (!sessionContext || !Array.isArray(inline) || inline.length === 0) {
+    return { record, redactionDetected: false };
+  }
+
+  const resolution = resolveContinuityEntryContent(
+    inline as SessionEntry[],
+    resolve,
+  );
+  for (const withheld of resolution.withheld) {
+    onWithheld?.({
+      channelId: record.channelId,
+      ...withheld,
+      turnId: record.turnId,
+    });
+  }
+
+  return {
+    record: withSessionContext(record, {
+      ...sessionContext,
+      continuityEntries: resolution.entries,
+    }),
+    redactionDetected: resolution.withheld.length > 0,
+  };
+}
+
+// ── rendered-view redaction gating ──────────────────────────────────────────
 
 function readPlanMessages(record: TurnRecord): Record<string, unknown>[] | undefined {
   const snapshot = record.observability?.snapshot;
@@ -453,6 +525,214 @@ function withCapturedWirePayload(record: TurnRecord, captured: Record<string, un
   };
 }
 
+/**
+ * Mask snapshot duplicates consumed by Garden/telemetry after the canonical
+ * top-level turn messages are withheld. Modern records normally derive provider
+ * messages from the plan, but legacy/divergent records can retain an embedded
+ * copy, so any suppressed prompt input masks those message bodies too.
+ */
+function withTurnMessageSnapshotViewsWithheld(
+  record: TurnRecord,
+  userSuppressed: boolean,
+  assistantSuppressed: boolean,
+  promptInputSuppressed: boolean,
+): TurnRecord {
+  const observability = record.observability;
+  const snapshot = observability?.snapshot;
+  const promptContext = snapshot && isRecord(snapshot.promptContext)
+    ? toRecordView(snapshot.promptContext)
+    : undefined;
+  if (!observability || !snapshot || !promptContext) return record;
+
+  let changed = false;
+  const next = { ...promptContext };
+  if (userSuppressed && typeof promptContext.currentTurnInput === 'string') {
+    next.currentTurnInput = REDACTED_MESSAGE_PLACEHOLDER;
+    changed = true;
+  }
+  if (assistantSuppressed && isRecord(promptContext.response)) {
+    next.response = {
+      ...promptContext.response,
+      content: REDACTED_MESSAGE_PLACEHOLDER,
+    };
+    changed = true;
+  }
+  if (promptInputSuppressed) {
+    if (Array.isArray(promptContext.messages)) {
+      next.messages = promptContext.messages.map(value => (
+        isRecord(value)
+          ? { ...value, content: REDACTED_MESSAGE_PLACEHOLDER }
+          : value
+      ));
+      changed = true;
+    }
+    if (typeof promptContext.assembledPrompt === 'string') {
+      next.assembledPrompt = REDACTED_MESSAGE_PLACEHOLDER;
+      changed = true;
+    }
+    const providerObservability = isRecord(promptContext.providerObservability)
+      ? promptContext.providerObservability
+      : undefined;
+    if (providerObservability && Array.isArray(providerObservability.providerWireMessages)) {
+      next.providerObservability = {
+        ...providerObservability,
+        providerWireMessages: providerObservability.providerWireMessages.map(value => (
+          isRecord(value) && value.source === 'message'
+            ? { ...value, content: REDACTED_MESSAGE_PLACEHOLDER }
+            : value
+        )),
+      };
+      changed = true;
+    }
+  }
+  if (!changed) return record;
+  return {
+    ...record,
+    observability: {
+      ...observability,
+      snapshot: {
+        ...snapshot,
+        promptContext: restoreSnapshotSection(next),
+      },
+    },
+  };
+}
+
+function isContinuityPromptBlockId(id: unknown): boolean {
+  return id === 'session.continuity'
+    || id === 'cross_channel_continuity'
+    || id === 'session.orientation'
+    || id === 'wake_orientation';
+}
+
+/**
+ * Mask persisted, Loom-visible prompt projections that froze the continuity
+ * block. The raw captured body is handled separately below; these replacements
+ * cover the PromptPlan, final-system section telemetry, embedded legacy provider
+ * wire messages, and legacy monolithic prompt strings.
+ */
+function withContinuityPromptViewsWithheld(record: TurnRecord): TurnRecord {
+  const observability = record.observability;
+  const snapshot = observability?.snapshot;
+  if (!observability || !snapshot) return record;
+
+  const snapshotView = toRecordView(snapshot);
+  const plan = isRecord(snapshotView.plan) ? snapshotView.plan : undefined;
+  const promptContext = isRecord(snapshotView.promptContext)
+    ? snapshotView.promptContext
+    : undefined;
+  const sessionContext = isRecord(snapshotView.sessionContext)
+    ? snapshotView.sessionContext
+    : undefined;
+  let changed = false;
+  let nextPlan = plan;
+  let nextPromptContext = promptContext;
+  let nextSessionContext = sessionContext;
+
+  if (plan && Array.isArray(plan.blocks)) {
+    const blocks = plan.blocks.map((value) => {
+      if (!isRecord(value) || !isContinuityPromptBlockId(value.id)) return value;
+      changed = true;
+      return { ...value, renderedText: REDACTED_MESSAGE_PLACEHOLDER };
+    });
+    nextPlan = { ...plan, blocks };
+  }
+
+  if (promptContext) {
+    let promptContextChanged = false;
+    const next = { ...promptContext };
+    if (Array.isArray(promptContext.finalSystemSections)) {
+      next.finalSystemSections = promptContext.finalSystemSections.map((value) => {
+        if (!isRecord(value)
+          || !isContinuityPromptBlockId(value.id)
+          && value.id !== 'final_system_prompt') {
+          return value;
+        }
+        promptContextChanged = true;
+        return {
+          ...value,
+          content: REDACTED_MESSAGE_PLACEHOLDER,
+          charCount: REDACTED_MESSAGE_PLACEHOLDER.length,
+          tokenCount: 0,
+        };
+      });
+    }
+
+    const providerObservability = isRecord(promptContext.providerObservability)
+      ? promptContext.providerObservability
+      : undefined;
+    if (providerObservability && Array.isArray(providerObservability.providerWireMessages)) {
+      const providerWireMessages = providerObservability.providerWireMessages.map((value) => {
+        if (!isRecord(value)
+          || value.source !== 'system_prompt'
+          && value.role !== 'system'
+          && value.role !== 'developer'
+          && value.role !== 'system_instruction') {
+          return value;
+        }
+        promptContextChanged = true;
+        return { ...value, content: REDACTED_MESSAGE_PLACEHOLDER };
+      });
+      next.providerObservability = {
+        ...providerObservability,
+        providerWireMessages,
+      };
+    }
+
+    // Pre-PromptPlan snapshots may carry monolithic prompt strings. Partial
+    // reconstruction is impossible, so withhold the complete string.
+    for (const field of ['finalSystemPrompt', 'assembledPrompt'] as const) {
+      if (typeof promptContext[field] === 'string') {
+        next[field] = REDACTED_MESSAGE_PLACEHOLDER;
+        promptContextChanged = true;
+      }
+    }
+    if (promptContextChanged) {
+      changed = true;
+      nextPromptContext = next;
+    }
+  }
+
+  if (sessionContext && isRecord(sessionContext.orientation)) {
+    const orientation = { ...sessionContext.orientation };
+    let orientationChanged = false;
+    for (const field of [
+      'noteText',
+      'sessionSummary',
+      'continuitySummary',
+      'lastUserMessage',
+      'openThreadSummary',
+    ] as const) {
+      if (typeof orientation[field] === 'string') {
+        orientation[field] = REDACTED_MESSAGE_PLACEHOLDER;
+        orientationChanged = true;
+      }
+    }
+    if (orientationChanged) {
+      changed = true;
+      nextSessionContext = { ...sessionContext, orientation };
+    }
+  }
+
+  if (!changed) return record;
+  return {
+    ...record,
+    observability: {
+      ...observability,
+      snapshot: {
+        ...snapshot,
+        ...(nextPlan ? { plan: restoreSnapshotSection(nextPlan) } : {}),
+        ...(nextPromptContext
+          ? { promptContext: restoreSnapshotSection(nextPromptContext) }
+          : {}),
+        ...(nextSessionContext
+          ? { sessionContext: restoreSnapshotSection(nextSessionContext) }
+          : {}),
+      },
+    },
+  };
+}
+
 /** Structured replacement for a withheld captured wire body. */
 function buildWithheldWireBody(caseChannelId: string): Record<string, unknown> {
   return {
@@ -467,6 +747,10 @@ function buildWithheldWireBody(caseChannelId: string): Record<string, unknown> {
 /**
  * Redaction-gate the rendered views of a turn against the CURRENT L0 journal, in
  * a single range read shared by both surfaces:
+ *
+ *  - top-level `userMessage` / `assistantMessage` (bead
+ *    psfn-framework-sm9l): each frozen copy is masked when its `sessionEntryId`
+ *    resolves absent/redacted.
  *
  *  - `plan.messages` (the Loom conversation): each entry-backed message carries
  *    `provenance.sourceEntryIds`. If ANY backing entry is now absent from L0
@@ -498,6 +782,9 @@ function buildWithheldWireBody(caseChannelId: string): Record<string, unknown> {
  *      (c) the `recentEntries` L0 window showed any redaction/absence
  *          (`windowRedactionDetected`, threaded from the recentEntries pass —
  *          belt-and-suspenders over (a) for the same-channel history window).
+ *      (d) a cross-channel continuity entry could not be proven live against
+ *          its origin L0 journal (`continuityRedactionDetected`, bead
+ *          psfn-framework-ervg).
  *    This gate runs even when `plan.messages` is empty: a body whose only
  *    entry-backed content is the current turn (or an empty-history first turn
  *    whose partner entry is later redacted) must still be gated. Only a record
@@ -511,21 +798,17 @@ function buildWithheldWireBody(caseChannelId: string): Record<string, unknown> {
  * `onWireBodyWithheld`, if provided, is invoked once per record whose body is
  * withheld.
  *
- * SCOPE (bead psfn-framework-eb14, blocker-2 carve-out → follow-up
- * psfn-framework-ervg): this gate covers SAME-CHANNEL, entry-backed content —
- * `plan.messages` history and the current turn's own partner entry, both keyed to
- * this channel's L0 id-space. It does NOT gate CROSS-CHANNEL continuity content
- * that a wire body's `system` block can embed: continuity spans other channels'
- * journals whose origin id-space is not readable here, carries no
- * `plan.messages` provenance, and so escapes every id-keyed check below. That
- * leak across all continuity surfaces is tracked coherently by
- * psfn-framework-ervg and is deliberately out of scope for this pass.
+ * Same-channel ids share one bounded range read. Cross-channel continuity was
+ * already resolved by `resolveContinuityEntries`; its suppression signal joins
+ * the whole-body withhold key here.
  */
 function gateRenderedViews(
   record: TurnRecord,
   resolve: SessionEntryRangeResolver,
   windowRedactionDetected: boolean,
+  continuityRedactionDetected: boolean,
   onWireBodyWithheld?: TurnRecordWireBodyWithheldSink,
+  onMessageWithheld?: TurnRecordMessageWithheldSink,
 ): TurnRecord {
   const messages = readPlanMessages(record);
   const sessionContext = readSessionContext(record);
@@ -538,6 +821,9 @@ function gateRenderedViews(
   // provenance PLUS the current turn's own partner entry (the body's final user
   // message, which plan.messages structurally excludes).
   const currentTurnPartnerEntryId = readCurrentTurnPartnerEntryId(record);
+  const assistantEntryId = isValidL0Id(record.assistantMessage?.sessionEntryId)
+    ? record.assistantMessage.sessionEntryId
+    : undefined;
   const allIds = new Set<number>();
   if (messages) {
     for (const message of messages) {
@@ -545,13 +831,14 @@ function gateRenderedViews(
     }
   }
   if (currentTurnPartnerEntryId !== undefined) allIds.add(currentTurnPartnerEntryId);
+  if (assistantEntryId !== undefined) allIds.add(assistantEntryId);
 
-  // Nothing entry-backed AND no redaction signalled by the recentEntries window
+  // Nothing entry-backed AND no redaction signalled by either persisted window
   // ⇒ nothing L0-redactable is embedded in either the rendered view or the
-  // captured wire body (only synthetic/summary/continuity content), so both pass
-  // through untouched. (Cross-channel continuity leaks are out of scope here —
-  // see psfn-framework-ervg.)
-  if (allIds.size === 0 && !windowRedactionDetected) return record;
+  // captured wire body (only synthetic/summary content), so both pass through.
+  if (allIds.size === 0 && !windowRedactionDetected && !continuityRedactionDetected) {
+    return record;
+  }
 
   const live = new Map<number, SessionEntry>();
   if (allIds.size > 0) {
@@ -587,12 +874,46 @@ function gateRenderedViews(
   // body in any of those cases would resurrect the exact plaintext L0 removed.
   const currentTurnSuppressed = currentTurnPartnerEntryId !== undefined
     && isSuppressedId(currentTurnPartnerEntryId);
-  const withholdWireBody = anyPlanSuppressed || currentTurnSuppressed || windowRedactionDetected;
+  const assistantSuppressed = assistantEntryId !== undefined
+    && isSuppressedId(assistantEntryId);
+  const withholdWireBody = anyPlanSuppressed
+    || currentTurnSuppressed
+    || windowRedactionDetected
+    || continuityRedactionDetected;
 
   let next = record;
 
+  const topLevelMessages: Array<{
+    entryId: number | undefined;
+    surface: TurnRecordMessageWithheld['surface'];
+  }> = [
+    { entryId: currentTurnPartnerEntryId, surface: 'userMessage' },
+    { entryId: assistantEntryId, surface: 'assistantMessage' },
+  ];
+  for (const { entryId, surface } of topLevelMessages) {
+    if (entryId === undefined || !isSuppressedId(entryId)) continue;
+    const message = next[surface];
+    if (!message) continue;
+    next = {
+      ...next,
+      [surface]: { ...message, content: REDACTED_MESSAGE_PLACEHOLDER },
+    };
+    onMessageWithheld?.({
+      channelId,
+      entryId,
+      surface,
+      turnId: record.turnId,
+    });
+  }
+  next = withTurnMessageSnapshotViewsWithheld(
+    next,
+    currentTurnSuppressed,
+    assistantSuppressed,
+    anyPlanSuppressed || currentTurnSuppressed,
+  );
+
   if (anyPlanSuppressed && messages) {
-    const observability = record.observability!;
+    const observability = next.observability!;
     const snapshot = observability.snapshot!;
     const plan = toRecordView(snapshot.plan!);
     next = {
@@ -636,9 +957,10 @@ export function slimTurnRecordSessionEntriesForAppend(record: TurnRecord): TurnR
 /**
  * Read-side resolution applied at the SessionManager store boundary: reconstruct
  * (ref-backed) or redaction-gate (pre-9ree inline) `recentEntries` from L0 and
- * redaction-gate the rendered views (`plan.messages` and the captured provider
- * wire body), making the diet transparent to every consumer above persistence
- * (Garden Loom, session-turn observability, introspection auditing).
+ * redaction-gate every frozen rendered view (top-level messages,
+ * `plan.messages`, cross-channel continuity prompt projections, and captured
+ * provider wire body), making the diet transparent to every consumer above
+ * persistence (Garden Loom, session-turn observability, introspection auditing).
  * `onHealDrop`, if provided, is invoked for each id-backed `recentEntries` item
  * dropped because its L0 entry is absent on re-read; `onWireBodyWithheld`, if
  * provided, is invoked once per record whose captured wire body is withheld
@@ -649,7 +971,20 @@ export function resolveTurnRecordSessionEntries(
   resolve: SessionEntryRangeResolver,
   onHealDrop?: TurnRecordHealDropSink,
   onWireBodyWithheld?: TurnRecordWireBodyWithheldSink,
+  onMessageWithheld?: TurnRecordMessageWithheldSink,
+  onContinuityWithheld?: TurnRecordContinuityWithheldSink,
 ): TurnRecord {
   const { record: resolved, windowRedactionDetected } = resolveRecentEntries(record, resolve, onHealDrop);
-  return gateRenderedViews(resolved, resolve, windowRedactionDetected, onWireBodyWithheld);
+  const continuity = resolveContinuityEntries(resolved, resolve, onContinuityWithheld);
+  const continuityGated = continuity.redactionDetected
+    ? withContinuityPromptViewsWithheld(continuity.record)
+    : continuity.record;
+  return gateRenderedViews(
+    continuityGated,
+    resolve,
+    windowRedactionDetected,
+    continuity.redactionDetected,
+    onWireBodyWithheld,
+    onMessageWithheld,
+  );
 }

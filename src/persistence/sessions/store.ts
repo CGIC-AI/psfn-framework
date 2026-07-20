@@ -51,6 +51,8 @@ import { createFilesystemTurnRecordStorePort } from './turn-records.js';
 import {
   slimTurnRecordSessionEntriesForAppend,
   resolveTurnRecordSessionEntries,
+  type TurnRecordContinuityWithheld,
+  type TurnRecordMessageWithheld,
   type TurnRecordRecentEntryHealDrop,
   type TurnRecordWireBodyWithheld,
 } from './turn-record-session-refs.js';
@@ -149,6 +151,24 @@ function emitWireBodyWithheld(event: TurnRecordWireBodyWithheld): void {
   log.info('turn_record_wire_body_withheld', {
     ...event,
     wireBodiesWithheldThisProcess: wireBodyWithheldCount,
+  });
+}
+
+let turnMessageWithheldCount = 0;
+function emitTurnMessageWithheld(event: TurnRecordMessageWithheld): void {
+  turnMessageWithheldCount += 1;
+  log.info('turn_record_message_withheld', {
+    ...event,
+    messagesWithheldThisProcess: turnMessageWithheldCount,
+  });
+}
+
+let continuityWithheldCount = 0;
+function emitContinuityWithheld(event: TurnRecordContinuityWithheld): void {
+  continuityWithheldCount += 1;
+  log.info('turn_record_continuity_withheld', {
+    ...event,
+    continuityEntriesWithheldThisProcess: continuityWithheldCount,
   });
 }
 
@@ -1276,6 +1296,8 @@ export class SessionStore implements TranscriptSearchPort {
       (channelId, minId, maxId) => this.getEntriesInRange(channelId, minId, maxId),
       emitRecentEntryHealDrop,
       emitWireBodyWithheld,
+      emitTurnMessageWithheld,
+      emitContinuityWithheld,
     );
   }
   findTurnRecord(channelId: string, turnId: string): TurnRecord | null {

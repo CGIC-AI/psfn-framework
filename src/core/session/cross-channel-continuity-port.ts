@@ -5,11 +5,16 @@ import type { ContinuityEntryProvenance, UserContinuityStore } from './continuit
 import { parseContinuityEntryProvenance } from './continuity.js';
 import { getMergedContinuity } from './manager/context-support.js';
 import { parseChannelVisibility } from './manager-primitives.js';
+import {
+  resolveContinuityEntryContent,
+  type ContinuityEntryRangeResolver,
+} from './continuity-redaction.js';
 import type { SessionEntry } from './types.js';
 import type {
   CrossChannelContinuityPort,
   LinkedContinuityChannelEligibility,
 } from './cross-channel-continuity-contract.js';
+import { createComponentLogger } from '../../shared/logger.js';
 
 export type {
   CrossChannelContinuityAppendRequest,
@@ -19,6 +24,11 @@ export type {
   CrossChannelContinuityStatus,
   LinkedContinuityChannelEligibility,
 } from './cross-channel-continuity-contract.js';
+
+const log = createComponentLogger('CrossChannelContinuity');
+let continuitySourceWithheldCount = 0;
+
+export type CrossChannelContinuitySourceResolver = ContinuityEntryRangeResolver;
 
 export function parseCrossChannelContinuityProvenance(
   metadata?: string,
@@ -190,6 +200,7 @@ export function createDisabledCrossChannelContinuityPort(): CrossChannelContinui
 
 export function createUserContinuityPort(
   continuityStore: UserContinuityStore | null,
+  resolveSourceEntries: CrossChannelContinuitySourceResolver,
   isChannelEligible: LinkedContinuityChannelEligibility,
 ): CrossChannelContinuityPort {
   if (!continuityStore) {
@@ -198,10 +209,15 @@ export function createUserContinuityPort(
 
   return {
     append(request) {
-      return continuityStore.append(request.continuityUserId, request.entry);
+      return continuityStore.append(
+        request.continuityUserId,
+        request.entry,
+        request.sourceEntryId,
+        request.sourcePersistence,
+      );
     },
     getMerged(params) {
-      return getMergedContinuity({
+      const validated = getMergedContinuity({
         continuityStore,
         canonicalUserId: params.canonicalUserId,
         limit: params.limit,
@@ -210,6 +226,16 @@ export function createUserContinuityPort(
         channelMeta: params.channelMeta,
         isChannelEligible,
       }).filter(entry => resolveValidatedCrossChannelContinuityProvenance(entry, params.channelId) !== null);
+      const resolution = resolveContinuityEntryContent(validated, resolveSourceEntries);
+      for (const withheld of resolution.withheld) {
+        continuitySourceWithheldCount += 1;
+        log.info('cross_channel_continuity_source_withheld', {
+          currentChannelId: params.channelId,
+          ...withheld,
+          continuityEntriesWithheldThisProcess: continuitySourceWithheldCount,
+        });
+      }
+      return resolution.entries;
     },
     getActiveChannels(continuityUserId, query) {
       return continuityStore.getActiveChannels(continuityUserId, query);

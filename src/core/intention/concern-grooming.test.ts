@@ -98,4 +98,57 @@ describe('concern grooming', () => {
       capResolvedCount: 0,
     });
   });
+
+  it('captures resolutionVAD and emits a resolution appraisal on grooming resolves', async () => {
+    const eventBus = new EventBus();
+    const scheduler = new Scheduler(eventBus, { tickIntervalMs: 100, heartbeatIntervalMs: 1_000 });
+    const concernStore = makeStore();
+    const appraisals: Array<{
+      concernId: string;
+      source: string;
+      reliefDelta: { valence: number; arousal: number; dominance: number };
+    }> = [];
+    eventBus.on('intention.concern.resolution_appraisal', event => {
+      appraisals.push(event as (typeof appraisals)[number]);
+    });
+
+    const stale = await concernStore.create({
+      text: 'Stale concern with a formation snapshot',
+      createdAt: '2026-06-28T10:00:00.000Z',
+      expiresAt: '2026-06-29T11:00:00.000Z',
+      formationVAD: { valence: -0.5, arousal: 0.4, dominance: -0.3 },
+    });
+
+    const backgroundMaintenance = new BackgroundMaintenanceRegistry({
+      scheduler,
+      eligibilityGate: createEligibilityGate(() => ({
+        getTier: () => 'autonomous',
+        getGrantedTokens: () => new Set(),
+        has: () => true,
+      })),
+      intervalMs: 3_600_000,
+    });
+    registerConcernGroomingOperation({
+      backgroundMaintenance,
+      concernStore,
+      eventBus,
+      maxActiveConcerns: 7,
+      resolutionVadProvider: () => ({ valence: 0.2, arousal: 0.1, dominance: 0.0 }),
+    });
+
+    await scheduler.getTask('background-maintenance')?.handler();
+
+    // Persistence: the resolved row carries the captured resolution snapshot.
+    const reloaded = await concernStore.getById(stale.id);
+    expect(reloaded?.status).toBe('resolved');
+    expect(reloaded?.resolutionVAD).toEqual({ valence: 0.2, arousal: 0.1, dominance: 0.0 });
+
+    // Emission: a relief-delta appraisal is observed for the grooming resolve.
+    expect(appraisals).toHaveLength(1);
+    expect(appraisals[0].concernId).toBe(stale.id);
+    expect(appraisals[0].source).toBe('grooming_stale');
+    expect(appraisals[0].reliefDelta.valence).toBeCloseTo(0.7, 10);
+    expect(appraisals[0].reliefDelta.arousal).toBeCloseTo(-0.3, 10);
+    expect(appraisals[0].reliefDelta.dominance).toBeCloseTo(0.3, 10);
+  });
 });

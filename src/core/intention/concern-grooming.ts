@@ -12,7 +12,9 @@ import {
   MAX_ACTIVE_CONCERNS,
   isConcernAttentionStatus,
   type ActiveConcern,
+  type ActiveConcernVAD,
 } from './concerns.js';
+import { emitConcernResolutionAppraisal } from './concern-resolution-appraisal.js';
 
 const CONCERN_GROOMING_OPERATION_ID = 'concern-grooming';
 const CONCERN_GROOMING_TASK_NAME = 'Concern Grooming';
@@ -44,15 +46,24 @@ export interface GroomConcernSetOptions {
   routeDispatcher?: ConcernRouteDispatcher;
   /** Target substrate for retired concerns; defaults to introspection. */
   routeTarget?: ConcernRouteTarget;
+  /**
+   * Live emotional VAD provider (vw3w.1). Grooming resolves off-turn, so it
+   * reads the current VAD here to snapshot resolutionVAD symmetrically with
+   * formation. Returns undefined when no current state is available — the arc
+   * is then persisted without a resolution snapshot (no fabrication).
+   */
+  resolutionVadProvider?: () => ActiveConcernVAD | undefined;
 }
 
 export async function groomConcernSet(options: GroomConcernSetOptions): Promise<ConcernGroomingResult> {
   const asOf = normalizeAsOf(options.asOf);
+  const resolutionVAD = options.resolutionVadProvider?.();
   const staleResolved = await options.concernStore.resolveStaleConcerns({
     asOf,
     limit: 200,
     evidenceRefs: [{ kind: 'runtime', ref: `concern-grooming:stale:${asOf}` }],
     outcome: STALE_RESOLUTION_OUTCOME,
+    ...(resolutionVAD ? { resolutionVAD } : {}),
   });
 
   const maxActiveConcerns = normalizeMaxActiveConcerns(options.maxActiveConcerns);
@@ -73,6 +84,7 @@ export async function groomConcernSet(options: GroomConcernSetOptions): Promise<
       outcome: CAP_RESOLUTION_OUTCOME,
       resolvedAt: asOf,
       evidenceRefs: [{ kind: 'runtime', ref: `concern-grooming:cap:${asOf}` }],
+      ...(resolutionVAD ? { resolutionVAD } : {}),
     });
     if (resolved) capResolved.push(resolved);
   }
@@ -150,12 +162,19 @@ export interface RegisterConcernGroomingOperationOptions {
   maxActiveConcerns: number;
   routeDispatcher?: ConcernRouteDispatcher;
   routeTarget?: ConcernRouteTarget;
+  /** Live emotional VAD provider for resolution-as-appraisal (vw3w.1). */
+  resolutionVadProvider?: () => ActiveConcernVAD | undefined;
 }
 
 async function executeConcernGrooming(
   options: Pick<
     RegisterConcernGroomingOperationOptions,
-    'concernStore' | 'eventBus' | 'maxActiveConcerns' | 'routeDispatcher' | 'routeTarget'
+    | 'concernStore'
+    | 'eventBus'
+    | 'maxActiveConcerns'
+    | 'routeDispatcher'
+    | 'routeTarget'
+    | 'resolutionVadProvider'
   >,
 ): Promise<void> {
   const result = await groomConcernSet({
@@ -163,7 +182,17 @@ async function executeConcernGrooming(
     maxActiveConcerns: options.maxActiveConcerns,
     ...(options.routeDispatcher ? { routeDispatcher: options.routeDispatcher } : {}),
     ...(options.routeTarget ? { routeTarget: options.routeTarget } : {}),
+    ...(options.resolutionVadProvider ? { resolutionVadProvider: options.resolutionVadProvider } : {}),
   });
+  // Resolution-as-appraisal (vw3w.1): each resolved concern that carries both a
+  // formation and a resolution VAD emits a relief-delta appraisal. No-op when
+  // the arc is incomplete; persistence already recorded resolution_vad.
+  for (const concern of result.staleResolved) {
+    await emitConcernResolutionAppraisal(options.eventBus, { concern, source: 'grooming_stale' });
+  }
+  for (const concern of result.capResolved) {
+    await emitConcernResolutionAppraisal(options.eventBus, { concern, source: 'grooming_cap' });
+  }
   const routedCount = result.routeOutcomes.filter(o => o.disposition === 'routed').length;
   const blockedRouteCount = result.routeOutcomes.filter(o => o.disposition === 'blocked').length;
   await options.eventBus?.emit('intention.concern.groomed', {

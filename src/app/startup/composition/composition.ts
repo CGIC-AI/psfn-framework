@@ -433,6 +433,8 @@ export interface CoreMemoryRuntimeOptions {
   concernStore?: ConcernStorePort | null;
   introspectionConsentStore?: IntrospectionConsentStore | null;
   introspectionTurnSensitivityDecisions?: IntrospectionTurnSensitivityDecisions | null;
+  /** Event bus for the concern resolution-as-appraisal relief-delta event (vw3w.1). */
+  eventBus?: EventBus | null;
 }
 
 export function wireCoreMemoryRuntime(options: CoreMemoryRuntimeOptions): CoreMemoryStorePort {
@@ -449,6 +451,15 @@ export function wireCoreMemoryRuntime(options: CoreMemoryRuntimeOptions): CoreMe
     concernStore: options.concernStore ?? null,
     introspectionConsentStore: options.introspectionConsentStore ?? null,
     introspectionTurnSensitivityDecisions: options.introspectionTurnSensitivityDecisions ?? null,
+    eventBus: options.eventBus ?? null,
+    // Resolution-as-appraisal (vw3w.1): snapshot the agent's live VAD when the
+    // companion decides to resolve/terminally-transition a concern.
+    resolutionVadProvider: () => {
+      const vad = options.agentLoop.getCurrentInternalState()?.emotional.vad;
+      return vad
+        ? { valence: vad.valence, arousal: vad.arousal, dominance: vad.dominance }
+        : undefined;
+    },
   }));
   return store;
 }

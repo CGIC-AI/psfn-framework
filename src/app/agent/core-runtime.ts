@@ -628,6 +628,7 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
     concernStore: intentionRuntime.concernStore,
     introspectionConsentStore,
     introspectionTurnSensitivityDecisions,
+    eventBus,
   });
   wireSelfModelRuntime(agentLoop);
   const intentionAppraisalHooks = createIntentionAppraisalHooks(

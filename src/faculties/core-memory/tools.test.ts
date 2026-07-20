@@ -6,6 +6,7 @@ import {
   createOrientTool,
 } from './tools.js';
 import { runWithRequestContext } from '../../primitives/llm/request-context.js';
+import { EventBus } from '../../shared/event-bus.js';
 import type { ActiveConcern } from '../../core/intention/concerns.js';
 import type { ConcernStorePort } from '../../core/intention/concern-store-port.js';
 import { ValuesJournalStore } from '../values/store.js';
@@ -104,6 +105,7 @@ function createFakeConcernStore(): ConcernStorePort {
         resolvedAt: options.resolvedAt ?? new Date().toISOString(),
         ...(options.outcome ? { resolutionOutcome: options.outcome } : {}),
         resolutionEvidenceRefs: [...(options.evidenceRefs ?? [])],
+        ...(options.resolutionVAD ? { resolutionVAD: options.resolutionVAD } : {}),
       };
       concerns.set(id, resolved);
       return { ...resolved };
@@ -122,8 +124,12 @@ function createFakeConcernStore(): ConcernStorePort {
           ? [...concern.resolutionEvidenceRefs, ...(options.resolutionEvidenceRefs ?? options.evidenceRefs ?? [])]
           : concern.resolutionEvidenceRefs,
         ...((options.status === 'resolved' || options.status === 'dismissed' || options.status === 'suppressed')
-          ? { resolvedAt: options.transitionedAt ?? new Date().toISOString(), ...(options.outcome ? { resolutionOutcome: options.outcome } : {}) }
-          : { resolvedAt: undefined, resolutionOutcome: undefined }),
+          ? {
+            resolvedAt: options.transitionedAt ?? new Date().toISOString(),
+            ...(options.outcome ? { resolutionOutcome: options.outcome } : {}),
+            ...(options.resolutionVAD ? { resolutionVAD: options.resolutionVAD } : {}),
+          }
+          : { resolvedAt: undefined, resolutionOutcome: undefined, resolutionVAD: undefined }),
       };
       concerns.set(id, transitioned);
       return { ...transitioned };
@@ -531,6 +537,58 @@ describe('orient tool', () => {
     expect(resolvedPayload.resolved).toBe(1);
     expect(resolvedPayload.missing).toEqual([]);
     expect(resolvedPayload.concerns[0]?.resolutionOutcome).toBe('Handled in orient.');
+  });
+
+  it('captures resolutionVAD and emits a resolution appraisal when the decision resolves a concern', async () => {
+    const concernStore = createFakeConcernStore();
+    const eventBus = new EventBus();
+    const appraisals: Array<{
+      concernId: string;
+      source: string;
+      reliefDelta: { valence: number; arousal: number; dominance: number };
+    }> = [];
+    eventBus.on('intention.concern.resolution_appraisal', event => {
+      appraisals.push(event as (typeof appraisals)[number]);
+    });
+
+    const tool = createOrientTool({
+      append: vi.fn(),
+      replace: vi.fn(),
+      rethink: vi.fn(),
+    }, {
+      concernStore,
+      eventBus,
+      resolutionVadProvider: () => ({ valence: 0.4, arousal: -0.1, dominance: 0.2 }),
+    });
+
+    const created = await concernStore.create({
+      text: 'Decision-path resolution capture',
+      formationVAD: { valence: -0.3, arousal: 0.5, dominance: -0.1 },
+    });
+
+    const resolvedResult = await tool.execute('call-concern-resolve-vad', {
+      action: 'resolve_concern',
+      concernId: created.id,
+      outcome: 'Resolved by decision.',
+    });
+    const resolvedPayload = JSON.parse(resultText(resolvedResult)) as {
+      resolved: number;
+      concerns: Array<{ resolutionVAD?: { valence: number; arousal: number; dominance: number } }>;
+    };
+
+    expect(resolvedPayload.resolved).toBe(1);
+    expect(resolvedPayload.concerns[0]?.resolutionVAD).toEqual({
+      valence: 0.4,
+      arousal: -0.1,
+      dominance: 0.2,
+    });
+
+    expect(appraisals).toHaveLength(1);
+    expect(appraisals[0].concernId).toBe(created.id);
+    expect(appraisals[0].source).toBe('decision');
+    expect(appraisals[0].reliefDelta.valence).toBeCloseTo(0.7, 10);
+    expect(appraisals[0].reliefDelta.arousal).toBeCloseTo(-0.6, 10);
+    expect(appraisals[0].reliefDelta.dominance).toBeCloseTo(0.3, 10);
   });
 
   it('routes concern status transitions through orient', async () => {

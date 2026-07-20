@@ -390,6 +390,14 @@ export function buildAgentSchedulerRuntime(
         companionDataDir: options.pathSnapshot.companionDataDir,
         eventBus: options.eventBus,
       }),
+      // Resolution-as-appraisal (vw3w.1): grooming resolves off-turn, so it
+      // reads the agent's live internal VAD to snapshot resolutionVAD.
+      resolutionVadProvider: () => {
+        const vad = options.agentLoop.getCurrentInternalState()?.emotional.vad;
+        return vad
+          ? { valence: vad.valence, arousal: vad.arousal, dominance: vad.dominance }
+          : undefined;
+      },
     });
   }
 

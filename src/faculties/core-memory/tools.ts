@@ -10,13 +10,17 @@ import {
   ACTIVE_CONCERN_PRIORITIES,
   ACTIVE_CONCERN_SENSITIVITIES,
   ACTIVE_CONCERN_STATUSES,
+  isConcernTerminalStatus,
   type ActiveConcernEvidenceRef,
   type ActiveConcernOwner,
   type ActiveConcernPriority,
   type ActiveConcernSensitivity,
   type ActiveConcernStatus,
+  type ActiveConcernVAD,
 } from '../../core/intention/concerns.js';
+import { emitConcernResolutionAppraisal } from '../../core/intention/concern-resolution-appraisal.js';
 import type { ConcernStorePort } from '../../core/intention/concern-store-port.js';
+import type { EventBus } from '../../shared/event-bus.js';
 import {
   executeCreateConcernAction,
   executeListConcernsAction,
@@ -79,6 +83,15 @@ export interface OrientToolOptions {
   concernStore?: ConcernStorePort | null;
   introspectionConsentStore?: IntrospectionConsentStore | null;
   introspectionTurnSensitivityDecisions?: IntrospectionTurnSensitivityDecisions | null;
+  /**
+   * Live emotional VAD provider (vw3w.1). When the companion decides to resolve
+   * or transition a concern into a terminal status, this snapshots the current
+   * VAD as resolutionVAD (symmetric to formation capture). Undefined when no
+   * current state is available — no fabrication (charter 8.3).
+   */
+  resolutionVadProvider?: () => ActiveConcernVAD | undefined;
+  /** Event bus for the resolution-as-appraisal relief-delta event (vw3w.1). */
+  eventBus?: EventBus | null;
 }
 
 interface OrientToolParams extends ValuesListParams {
@@ -498,15 +511,21 @@ export function createOrientTool(
             }, null, 2), true);
           }
           const concernStore = requireConcernStore(options.concernStore);
+          const resolutionVAD = options.resolutionVadProvider?.();
           const resolved = [];
           const missing = [];
           for (const concernId of uniqueConcernIds) {
             const concern = await concernStore.resolveConcern(concernId, {
               outcome: params.outcome,
               evidenceRefs: params.evidenceRefs,
+              ...(resolutionVAD ? { resolutionVAD } : {}),
             });
             if (concern) {
               resolved.push(concern);
+              await emitConcernResolutionAppraisal(options.eventBus, {
+                concern,
+                source: 'decision',
+              });
             } else {
               missing.push(concernId);
             }
@@ -539,6 +558,11 @@ export function createOrientTool(
             }, null, 2), true);
           }
           const concernStore = requireConcernStore(options.concernStore);
+          // vw3w.1: a transition into a terminal status is also a resolution —
+          // capture the live VAD so the arc is complete on this path too.
+          const transitionResolutionVAD = isConcernTerminalStatus(params.status)
+            ? options.resolutionVadProvider?.()
+            : undefined;
           const transitioned = [];
           const missing = [];
           for (const concernId of uniqueConcernIds) {
@@ -550,9 +574,16 @@ export function createOrientTool(
               nextReviewAt: params.nextReviewAt,
               clearNextReview: params.clearNextReview,
               salience: params.salience,
+              ...(transitionResolutionVAD ? { resolutionVAD: transitionResolutionVAD } : {}),
             });
             if (concern) {
               transitioned.push(concern);
+              if (isConcernTerminalStatus(concern.status)) {
+                await emitConcernResolutionAppraisal(options.eventBus, {
+                  concern,
+                  source: 'decision',
+                });
+              }
             } else {
               missing.push(concernId);
             }

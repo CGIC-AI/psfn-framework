@@ -32,6 +32,7 @@ import type { SessionManager } from '../session/manager.js';
 import type { CoreMemoryStore } from '../../faculties/core-memory/store.js';
 import type { EmotionStateSnapshot } from '../emotion/state.js';
 import type { ContactStorePort } from '../contacts/contact-store-port.js';
+import type { DyadRelationshipAdvisoryProvider } from '../../shared/contracts/dyad-relationship-advisory.js';
 import type {
   ActiveConcernSnapshot,
   IntentionActionDecision,
@@ -226,6 +227,14 @@ export interface HeartbeatRuntimeOptions {
   > | null;
   episodicDiagnosticsStore?: Pick<EpisodicStorePort, 'getMaintenanceDiagnostics'> | null;
   episodicProcessingRestWindow?: EpisodicProcessingRestWindowConfig;
+  /**
+   * Read-only advisory over the emo_sim affect model's directed relationship
+   * reading (oth4.6). Fed into the nightly contact trust/relationship review as
+   * ADVISORY context the companion weighs — never an automatic promoter/demoter
+   * and it mutates no state. Absent ⇒ the review omits the signal (the sidecar
+   * is disabled, has no persistence, or exposes no companion agent name).
+   */
+  dyadRelationshipAdvisoryProvider?: DyadRelationshipAdvisoryProvider | null;
   /**
    * Slow-poisoning drift-velocity review lane (htm9.14): pre-bound evidence
    * reads, the operator review-card store, the intake-policy `driftDetection`

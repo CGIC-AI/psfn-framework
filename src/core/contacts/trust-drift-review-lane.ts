@@ -1,5 +1,10 @@
 import { createComponentLogger } from '../../shared/logger.js';
 import type { InferredPostTurnAction, PostTurnActionCandidate } from '../../shared/contracts/runtime.js';
+import type {
+  DyadRelationshipAdvisory,
+  DyadRelationshipAdvisoryProvider,
+} from '../../shared/contracts/dyad-relationship-advisory.js';
+import { toErrorMessage } from '../../shared/utils/errors.js';
 import { evaluateRestWindowEligibility } from '../scheduler/rest-window.js';
 import type { EpisodicProcessingRestWindowConfig } from '../../system/config/scheduler-config.js';
 import type { ContactStorePort } from './contact-store-port.js';
@@ -54,6 +59,14 @@ export interface ContactTrustDriftReviewLaneOptions {
   restWindow: EpisodicProcessingRestWindowConfig;
   /** Delivers the composed review to the companion (heartbeat followUp). Required. */
   deliverReview: (review: ContactTrustDriftReviewDelivery) => void;
+  /**
+   * Optional read-only advisory over the emo_sim affect model's directed
+   * relationship reading. Purely advisory context the companion weighs — it
+   * never mutates trust or relationship state (the review store surface here
+   * has no mutators). Absent/unavailable/no-data degrades to omission; an
+   * infrastructure failure is logged and the review still delivers without it.
+   */
+  dyadAdvisoryProvider?: DyadRelationshipAdvisoryProvider | null;
   now?: () => number;
 }
 
@@ -82,6 +95,7 @@ function formatSignalsJson(
 export function composeTrustDriftReviewContent(
   trustCandidates: readonly ContactTrustDriftReviewCandidate[],
   relationshipCandidates: readonly ContactRelationshipProgressionReviewCandidate[] = [],
+  dyadAdvisory: DyadRelationshipAdvisory | null = null,
 ): string {
   const lines: string[] = [
     'Daily contact trust and relationship review. The nightly scan derived behavior signals',
@@ -122,6 +136,16 @@ export function composeTrustDriftReviewContent(
       );
     });
   }
+  if (dyadAdvisory) {
+    lines.push(
+      '',
+      'Background relational read (advisory only — inferred by the emo_sim affect model from your',
+      'recent interactions, not a self-report; it changes nothing and is not a reason to move anyone',
+      'by itself):',
+      `   ${dyadAdvisory.prose}`,
+      '   Weigh it as one more signal alongside your own judgment.',
+    );
+  }
   lines.push(
     '',
     'To hold any suggestion, do nothing; the scan can surface it again while evidence supports it.',
@@ -134,6 +158,7 @@ export class ContactTrustDriftReviewLane {
   private readonly contactStore: ContactTrustDriftReviewStore;
   private readonly restWindow: EpisodicProcessingRestWindowConfig;
   private readonly deliverReview: (review: ContactTrustDriftReviewDelivery) => void;
+  private readonly dyadAdvisoryProvider: DyadRelationshipAdvisoryProvider | null;
   private readonly now: () => number;
 
   constructor(options: ContactTrustDriftReviewLaneOptions) {
@@ -154,6 +179,7 @@ export class ContactTrustDriftReviewLane {
     this.contactStore = options.contactStore;
     this.restWindow = options.restWindow;
     this.deliverReview = options.deliverReview;
+    this.dyadAdvisoryProvider = options.dyadAdvisoryProvider ?? null;
     this.now = options.now ?? (() => Date.now());
   }
 
@@ -220,8 +246,14 @@ export class ContactTrustDriftReviewLane {
         ...trustCandidates.map(candidate => candidate.contactId),
         ...relationshipCandidates.map(candidate => candidate.contactId),
       ]);
+      // Advisory context only. Fail SOFT at the companion boundary: a missing
+      // provider, no data, or an infrastructure failure all omit the signal
+      // rather than blocking or breaking the review. The provider already logs
+      // (and throws) infrastructure failures; we log the resulting omission so
+      // no degradation is silent.
+      const dyadAdvisory = await this.resolveDyadAdvisory(action.id);
       this.deliverReview({
-        content: composeTrustDriftReviewContent(trustCandidates, relationshipCandidates),
+        content: composeTrustDriftReviewContent(trustCandidates, relationshipCandidates, dyadAdvisory),
         candidateCount: candidateContactIds.size,
       });
     }
@@ -240,6 +272,28 @@ export class ContactTrustDriftReviewLane {
       trustCandidates: trustCandidates.length,
       relationshipCandidates: relationshipCandidates.length,
     });
+  }
+
+  /**
+   * Read the advisory dyad reading, fail-soft. Returns null (omit the signal)
+   * on no provider, no data, or any infrastructure failure — the review must
+   * still deliver. Infrastructure failures are surfaced by the provider's own
+   * logger and re-logged here as an explicit omission (never silently
+   * swallowed). This path is read-only: it touches no trust/relationship state.
+   */
+  private async resolveDyadAdvisory(
+    actionId: string,
+  ): Promise<DyadRelationshipAdvisory | null> {
+    if (!this.dyadAdvisoryProvider) return null;
+    try {
+      return await this.dyadAdvisoryProvider.describeLatestDirectedRelationship();
+    } catch (error) {
+      log.info('Omitting emo_sim dyad advisory from trust-drift review (read unavailable)', {
+        actionId,
+        error: toErrorMessage(error),
+      });
+      return null;
+    }
   }
 
   private async hasRunOn(localDay: string, timeZone: string): Promise<boolean> {

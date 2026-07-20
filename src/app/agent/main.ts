@@ -97,6 +97,8 @@ import {
 } from '../../faculties/memory/social-graph/proposals.js';
 import { createContactTrackingGate } from '../../core/contacts/tracking-gate.js';
 import { rehydratePersistedInternalState } from '../../core/self-model/internal-state-persistence.js';
+import { createPostgresObserverEvalSidecarStore } from '../../core/eval/observer-sidecar/persistence.js';
+import { createEmoSimDyadRelationshipAdvisoryProvider } from '../../core/eval/observer-sidecar/dyad-relationship.js';
 import { ModuleLoader } from '../../system/modules/loader.js';
 import { DEFAULT_GATEWAY_TOOL_METADATA_COVERAGE } from '../../core/agent/tool-wiring-validator.js';
 import { registerGatewayMessageHandlers } from './gateway-message-handlers.js';
@@ -1736,6 +1738,31 @@ async function main(): Promise<void> {
     }
   }
 
+  // ── emo_sim directed-relationship advisory (oth4.6) ──
+  // Read-only ADVISORY over the observer-sidecar's persisted emo_sim affect
+  // model, fed into the nightly contact trust/relationship review as one more
+  // signal the companion weighs. It never mutates trust or relationship state.
+  // Wired only when the sidecar is active, persists observations, and exposes a
+  // companion agent name; otherwise the review simply omits the signal. The
+  // Postgres store here is the SAME memoized instance the sidecar writes to.
+  const dyadEmosimAgentName = observerEvalSidecar.config?.adapter?.agentName?.trim();
+  const dyadRelationshipAdvisoryProvider =
+    observerEvalSidecar.observer
+    && observerEvalSidecar.config?.persistence?.enabled === true
+    && dyadEmosimAgentName
+      ? createEmoSimDyadRelationshipAdvisoryProvider({
+        getLatestObservation: () =>
+          createPostgresObserverEvalSidecarStore(postgresDatabaseUrl).getLatestObservation(),
+      })
+      : null;
+  if (!dyadRelationshipAdvisoryProvider) {
+    log.info('emo_sim dyad relationship advisory not wired for trust-drift review', {
+      sidecarActive: Boolean(observerEvalSidecar.observer),
+      persistenceEnabled: observerEvalSidecar.config?.persistence?.enabled === true,
+      hasAgentName: Boolean(dyadEmosimAgentName),
+    });
+  }
+
   // Heartbeat reflections — policy-driven multi-template reflection system
   await wireHeartbeatRuntime(
     agentLoop,
@@ -1781,6 +1808,7 @@ async function main(): Promise<void> {
       postTurnActions,
       backgroundMaintenance,
       episodicProcessingRestWindow: schedulerConfig.episodicProcessing,
+      ...(dyadRelationshipAdvisoryProvider ? { dyadRelationshipAdvisoryProvider } : {}),
       driftVelocityReview,
       secondArrowReview,
       orientationRewriteGate: schedulerConfig.orientationRewrite,

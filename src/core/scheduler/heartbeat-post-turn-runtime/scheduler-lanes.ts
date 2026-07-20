@@ -219,6 +219,9 @@ export function createSchedulerOwnedPostTurnLanes(
     ? new ContactTrustDriftReviewLane({
       contactStore: driftReviewStore,
       restWindow: runtimeOptions.episodicProcessingRestWindow,
+      ...(runtimeOptions.dyadRelationshipAdvisoryProvider
+        ? { dyadAdvisoryProvider: runtimeOptions.dyadRelationshipAdvisoryProvider }
+        : {}),
       deliverReview: (review) => {
         agentLoop.followUp?.({
           id: `contact-drift-review:${Date.now()}`,

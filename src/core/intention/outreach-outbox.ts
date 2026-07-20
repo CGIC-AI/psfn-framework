@@ -54,8 +54,16 @@ export interface OutreachOutboxStore {
   append(input: OutreachOutboxAppendInput): OutreachOutboxRecord;
   hasTerminal(dedupeKey: string): boolean;
   getTerminal(dedupeKey: string): OutreachOutboxRecord | undefined;
+  getLatest(dedupeKey: string): OutreachOutboxRecord | undefined;
   getIcpDeliveredCompletion(pendingFollowUpId: string): OutreachOutboxRecord | undefined;
   listRecent(limit?: number): OutreachOutboxRecord[];
+  /**
+   * Durable count of 'sent' records at or after `sinceMs`, optionally filtered
+   * by a reason prefix (e.g. 'social_desire' for the desire-outreach rate
+   * budget, bead oth4.2). Counting from this ledger keeps budget enforcement
+   * at the dispatch layer and restart-proof.
+   */
+  countSentSince(input: { sinceMs: number; reasonPrefix?: string }): number;
 }
 
 const TERMINAL_PHASES = new Set<OutreachOutboxPhase>(['sent', 'blocked', 'failed', 'skipped']);
@@ -141,10 +149,12 @@ function deliveredIcpPendingFollowUpId(record: OutreachOutboxRecord): string | u
 export function createFileOutreachOutboxStore(path: string): OutreachOutboxStore {
   const records: OutreachOutboxRecord[] = [];
   const terminalByDedupeKey = new Map<string, OutreachOutboxRecord>();
+  const latestByDedupeKey = new Map<string, OutreachOutboxRecord>();
   const icpDeliveredByPendingFollowUpId = new Map<string, OutreachOutboxRecord>();
 
   const remember = (record: OutreachOutboxRecord): void => {
     records.push(record);
+    latestByDedupeKey.set(record.dedupeKey, record);
     if (TERMINAL_PHASES.has(record.phase)) {
       terminalByDedupeKey.set(record.dedupeKey, record);
     }
@@ -187,6 +197,10 @@ export function createFileOutreachOutboxStore(path: string): OutreachOutboxStore
       const record = terminalByDedupeKey.get(dedupeKey.trim());
       return record ? { ...record, ...(record.metadata ? { metadata: { ...record.metadata } } : {}) } : undefined;
     },
+    getLatest(dedupeKey) {
+      const record = latestByDedupeKey.get(dedupeKey.trim());
+      return record ? { ...record, ...(record.metadata ? { metadata: { ...record.metadata } } : {}) } : undefined;
+    },
     getIcpDeliveredCompletion(pendingFollowUpId) {
       const record = icpDeliveredByPendingFollowUpId.get(pendingFollowUpId.trim());
       return record ? { ...record, ...(record.metadata ? { metadata: { ...record.metadata } } : {}) } : undefined;
@@ -196,6 +210,15 @@ export function createFileOutreachOutboxStore(path: string): OutreachOutboxStore
         .slice(Math.max(0, records.length - Math.max(0, Math.floor(limit))))
         .reverse()
         .map(record => ({ ...record, ...(record.metadata ? { metadata: { ...record.metadata } } : {}) }));
+    },
+    countSentSince({ sinceMs, reasonPrefix }) {
+      let count = 0;
+      for (const record of records) {
+        if (record.phase !== 'sent' || record.recordedAt < sinceMs) continue;
+        if (reasonPrefix !== undefined && !(record.reason ?? '').startsWith(reasonPrefix)) continue;
+        count += 1;
+      }
+      return count;
     },
   };
 }

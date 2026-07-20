@@ -10,6 +10,7 @@ import type {
   SubstrateMessage,
 } from '../../../shared/contracts/runtime.js';
 import type { ActiveConcernStatus, ActiveConcernVAD } from '../concerns.js';
+import type { SocialDesireOrientation } from '../social-desire.js';
 import type { IcpConversationCorrelation } from '../../../shared/contracts/icp-autonomy.js';
 
 export const DEFAULT_APPRAISAL_FREQUENCY = 3;
@@ -187,6 +188,20 @@ export interface IntentionFollowUpActionPayload {
   originIcpRootInitiationId?: string;
 }
 
+/**
+ * Consented social-desire provenance (bead oth4.2). Presence alone grants
+ * nothing: the outbound gate verifies the consentId against the live
+ * single-use consent ledger and the desire record before accepting it, so a
+ * fabricated block always fails closed.
+ */
+export interface IntentionOutboundSocialDesireProvenance {
+  /** Desire record id (contactId — desires coalesce one-per-contact). */
+  contactId: string;
+  /** Single-use consent minted by the companion's consent moment. */
+  consentId: string;
+  orientation: SocialDesireOrientation;
+}
+
 export interface IntentionOutboundMessageActionPayload {
   channelId: string;
   channelType: ChannelType;
@@ -195,6 +210,8 @@ export interface IntentionOutboundMessageActionPayload {
   pendingFollowUpId?: string;
   concernIds?: string[];
   requiresActiveConcern?: boolean;
+  /** Consented social-desire provenance (verified live at the outbound gate). */
+  socialDesire?: IntentionOutboundSocialDesireProvenance;
   /** Preserve an originating ICP root so peer-derived intentions cannot recurse. */
   originIcpRootInitiationId?: string;
 }

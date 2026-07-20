@@ -476,6 +476,15 @@ export const CANONICAL_FIRST_PARTY_TOOL_SURFACES: readonly CanonicalToolSurfaceE
     retiredAliases: [],
   },
   {
+    name: 'publication',
+    domain: 'self_expression',
+    exposure: 'core',
+    description: CANONICAL_TOOL_SURFACE_DESCRIPTIONS.publication,
+    actions: ['submit', 'revise', 'status'],
+    capabilityMetadata: { kind: 'action_aware', source: CAPABILITIES_REQUIREMENTS },
+    retiredAliases: [],
+  },
+  {
     name: 'subagent',
     domain: 'subagents',
     exposure: 'core',

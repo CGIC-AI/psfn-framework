@@ -976,6 +976,18 @@ export class SubstrateAgent {
     this.toolRuntimeFacade.registerTool(tool, category);
   }
 
+  /**
+   * Live per-turn outbound disclosure lineage (bible §9.2), or undefined outside
+   * a folded turn. Read-only accessor so runtime-authority consumers (the
+   * jp36.7.3 companion publication tool) can derive a share candidate's
+   * effective sensitivity, provenance, and subject contacts from the runtime's
+   * folded lineage at tool-invocation time — the model never self-asserts that
+   * disclosure metadata. Undefined ⇒ fail closed (no attestable provenance).
+   */
+  getCurrentTurnDisclosureLineage(): DisclosureLineage | undefined {
+    return this.currentTurnDisclosureLineage;
+  }
+
   getPromotedExtendedToolsLimit(): number {
     return this.toolRuntimeFacade.getPromotedExtendedToolsLimit();
   }

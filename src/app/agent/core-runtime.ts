@@ -95,6 +95,7 @@ import {
   createCapsuleCustodyService,
   createShareCapsuleCustodyStore,
 } from '../../core/cogsec/disclosure/index.js';
+import { createPublicationTool } from '../../core/cogsec/disclosure/publication-tool.js';
 import { IntrospectionConsentStore } from '../../faculties/introspection/consent-store.js';
 import { IntrospectionTurnSensitivityDecisions } from '../../faculties/introspection/turn-sensitivity.js';
 import { ContactBlockListStore } from '../../core/cogsec/contact-block-list.js';
@@ -330,6 +331,18 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
     store: createShareCapsuleCustodyStore(resolveShareCapsuleCustodyPath(pathSnapshot.companionDataDir)),
     approvalQueue: cardProposalQueue,
   });
+  // jp36.7.3: companion-owned publication edit-loop tool. Reads the live custody
+  // handle, the same approval queue, and the per-turn disclosure lineage lazily
+  // at tool-invocation time; fails closed when any is absent. The model supplies
+  // only authored content — sensitivity/provenance/audience are runtime-derived.
+  agentLoop.registerTool(
+    createPublicationTool({
+      getCustody: () => agentLoop.shareCapsuleCustody,
+      getApprovalQueue: () => agentLoop.artifactApprovalQueue,
+      getDisclosureLineage: () => agentLoop.getCurrentTurnDisclosureLineage(),
+    }),
+    'core',
+  );
   agentLoop.artifactApprovalNotifier = operatorNotifier;
   agentLoop.shareApprovedArtifacts = async (attachments, destination) => {
     if (destination.channelType !== 'discord') {

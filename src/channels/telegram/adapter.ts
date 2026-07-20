@@ -13,6 +13,14 @@ import type {
   OutboundContext,
 } from '../backplane/types.js';
 import type { SubstrateMessage } from '../../shared/contracts/runtime.js';
+import type {
+  ClarifyDeliverResult,
+  PendingClarification,
+} from '../../boundary/gateway/protocol.js';
+import {
+  formatClarificationPrompt,
+  parseClarificationReply,
+} from './clarification.js';
 import type { IntakeEnvelopeSnapshot } from '../../shared/contracts/intake-envelope.js';
 import type { IntakeScreeningService } from '../../core/cogsec/intake/screening.js';
 import type { EventBus } from '../../shared/event-bus.js';
@@ -317,6 +325,11 @@ export class TelegramAdapter implements ChannelAdapterPort {
   private readonly longRunningToolStatus: LongRunningToolStatusTracker;
   private longRunningStatusMessages = new Map<string, TelegramStatusMessageRef>();
   private streamResponses = new Map<string, TelegramStreamResponseState>();
+  /**
+   * vvf.5.2: per-chat one-shot waiter for a pending clarification's reply. The
+   * next plain-text message from the chat resolves it (consumed, not turned).
+   */
+  private readonly pendingClarifyReplies = new Map<string, (reply: string) => void>();
 
   constructor(
     telegramConfig: TelegramChannelConfig,
@@ -350,6 +363,11 @@ export class TelegramAdapter implements ChannelAdapterPort {
       sendMedia: async (ctx: OutboundContext, media: MediaAttachment): Promise<void> => {
         await this.sendMediaInternal(ctx, media);
       },
+      deliverClarification: async (
+        clarification: PendingClarification,
+        target: string,
+        timeoutMs: number,
+      ): Promise<ClarifyDeliverResult> => this.deliverClarificationInternal(clarification, target, timeoutMs),
     };
     this.gateway = this;
     this.security = {
@@ -749,6 +767,18 @@ export class TelegramAdapter implements ChannelAdapterPort {
       });
       if (typeof rewritten === 'string' && rewritten.trim().length > 0) {
         content = rewritten.trim();
+      }
+    }
+
+    // vvf.5.2: a plain-text reply while a clarification is pending for this chat
+    // is the answer to that clarification, not a new turn. Consume it here so it
+    // never double-processes as a turn; commands are left to route normally.
+    if (!command && contentText) {
+      const clarifyWaiter = this.pendingClarifyReplies.get(chatId);
+      if (clarifyWaiter) {
+        this.pendingClarifyReplies.delete(chatId);
+        clarifyWaiter(contentText);
+        return;
       }
     }
 
@@ -1226,6 +1256,74 @@ export class TelegramAdapter implements ChannelAdapterPort {
       };
       this.recordMessagePointer(this.toSubstrateMessageId(target.chatId, sent.message_id), pointer);
     }
+  }
+
+  /**
+   * vvf.5.2: present a clarification as a numbered list and await the plain-text
+   * reply. Resolves with a selection verified against the delivered choices;
+   * timeout, an unrecognized reply, or an out-of-range number all fail closed as
+   * a `pending` no-answer (never a fabricated choice, never a silent drop).
+   */
+  private async deliverClarificationInternal(
+    clarification: PendingClarification,
+    target: string,
+    timeoutMs: number,
+  ): Promise<ClarifyDeliverResult> {
+    const parsed = this.parseChannelId(target);
+    if (!parsed) {
+      throw new Error(`Telegram clarify target is not a valid channel id: ${target}`);
+    }
+    await this.sendTextInternal({ channelId: target }, formatClarificationPrompt(clarification));
+
+    const noAnswer: ClarifyDeliverResult = { status: 'pending', channel: 'telegram', target };
+    const reply = await this.awaitClarifyReply(parsed.chatId, timeoutMs);
+    if (reply === null) {
+      return noAnswer;
+    }
+    const index = parseClarificationReply(clarification, reply);
+    if (index === null) {
+      return noAnswer;
+    }
+    return {
+      status: 'resolved',
+      channel: 'telegram',
+      target,
+      selection: {
+        clarificationId: clarification.id,
+        selectedIndex: index,
+        selectedChoice: clarification.choices[index]!,
+      },
+    };
+  }
+
+  /**
+   * Register a one-shot reply waiter for a chat, resolving with the next
+   * plain-text reply or `null` after `timeoutMs`. If a clarification is already
+   * pending for the chat it is retired as a no-answer to avoid a leaked waiter.
+   */
+  private awaitClarifyReply(chatId: string, timeoutMs: number): Promise<string | null> {
+    const superseded = this.pendingClarifyReplies.get(chatId);
+    if (superseded) {
+      this.pendingClarifyReplies.delete(chatId);
+      superseded('');
+    }
+    return new Promise<string | null>((resolve) => {
+      let timer: ReturnType<typeof setTimeout>;
+      const handler = (reply: string): void => {
+        clearTimeout(timer);
+        if (this.pendingClarifyReplies.get(chatId) === handler) {
+          this.pendingClarifyReplies.delete(chatId);
+        }
+        resolve(reply);
+      };
+      timer = setTimeout(() => {
+        if (this.pendingClarifyReplies.get(chatId) === handler) {
+          this.pendingClarifyReplies.delete(chatId);
+        }
+        resolve(null);
+      }, timeoutMs);
+      this.pendingClarifyReplies.set(chatId, handler);
+    });
   }
 
   private async sendMediaInternal(ctx: OutboundContext, media: MediaAttachment): Promise<void> {

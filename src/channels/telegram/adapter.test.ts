@@ -930,3 +930,106 @@ describe('TelegramAdapter', () => {
     }
   });
 });
+
+describe('TelegramAdapter clarify delivery', () => {
+  const clarification = {
+    id: 'clar-1',
+    question: 'Tea or coffee?',
+    choices: ['Tea', 'Coffee', 'Water'],
+  };
+
+  function replyUpdate(text: string) {
+    return {
+      update_id: 99,
+      message: {
+        message_id: 77,
+        date: 1_700_000_000,
+        text,
+        chat: { id: 111, type: 'private' as const },
+        from: { id: 42, is_bot: false, username: 'dm_user' },
+      },
+    };
+  }
+
+  async function waitForPendingClarify(adapter: TelegramAdapter): Promise<void> {
+    for (let i = 0; i < 200; i++) {
+      if ((adapter as any).pendingClarifyReplies.has('111')) return;
+      await new Promise((r) => setTimeout(r, 1));
+    }
+    throw new Error('clarify waiter was never registered');
+  }
+
+  it('renders a numbered list and resolves a numeric reply to a verified selection', async () => {
+    const { fetchImpl, calls } = makeFetchMock({
+      sendChatAction: () => true,
+      sendMessage: () => ({ message_id: 900 }),
+    });
+    const handled: SubstrateMessage[] = [];
+    const adapter = new TelegramAdapter(makeConfig(), new EventBus(), { fetchImpl });
+    adapter.onMessage(async (message) => {
+      handled.push(message);
+      return okResponse(message.channelId);
+    });
+
+    const delivery = adapter.outbound.deliverClarification!(clarification, 'telegram:111', 1000);
+    await waitForPendingClarify(adapter);
+    await (adapter as any).handleUpdate(replyUpdate('2'));
+    const result = await delivery;
+
+    expect(result).toEqual({
+      status: 'resolved',
+      channel: 'telegram',
+      target: 'telegram:111',
+      selection: { clarificationId: 'clar-1', selectedIndex: 1, selectedChoice: 'Coffee' },
+    });
+    // The reply is consumed as the answer, never processed as a new turn.
+    expect(handled).toHaveLength(0);
+    const prompt = calls.find((c) => c.method === 'sendMessage');
+    expect(prompt?.body.text).toContain('1. Tea');
+    expect(prompt?.body.text).toContain('2. Coffee');
+  });
+
+  it('resolves an exact-text reply', async () => {
+    const { fetchImpl } = makeFetchMock({ sendMessage: () => ({ message_id: 901 }) });
+    const adapter = new TelegramAdapter(makeConfig(), new EventBus(), { fetchImpl });
+    adapter.onMessage(async (message) => okResponse(message.channelId));
+
+    const delivery = adapter.outbound.deliverClarification!(clarification, 'telegram:111', 1000);
+    await waitForPendingClarify(adapter);
+    await (adapter as any).handleUpdate(replyUpdate('water'));
+    const result = await delivery;
+
+    expect(result.status).toBe('resolved');
+    expect(result.selection).toEqual({ clarificationId: 'clar-1', selectedIndex: 2, selectedChoice: 'Water' });
+  });
+
+  it('fails closed to a no-answer on timeout', async () => {
+    const { fetchImpl } = makeFetchMock({ sendMessage: () => ({ message_id: 902 }) });
+    const adapter = new TelegramAdapter(makeConfig(), new EventBus(), { fetchImpl });
+    adapter.onMessage(async (message) => okResponse(message.channelId));
+
+    const result = await adapter.outbound.deliverClarification!(clarification, 'telegram:111', 20);
+
+    expect(result).toEqual({ status: 'pending', channel: 'telegram', target: 'telegram:111' });
+    expect(result.selection).toBeUndefined();
+  });
+
+  it('fails closed on a malformed / out-of-range reply (no fabricated selection)', async () => {
+    const { fetchImpl } = makeFetchMock({ sendMessage: () => ({ message_id: 903 }) });
+    const handled: SubstrateMessage[] = [];
+    const adapter = new TelegramAdapter(makeConfig(), new EventBus(), { fetchImpl });
+    adapter.onMessage(async (message) => {
+      handled.push(message);
+      return okResponse(message.channelId);
+    });
+
+    const delivery = adapter.outbound.deliverClarification!(clarification, 'telegram:111', 1000);
+    await waitForPendingClarify(adapter);
+    await (adapter as any).handleUpdate(replyUpdate('banana'));
+    const result = await delivery;
+
+    expect(result.status).toBe('pending');
+    expect(result.selection).toBeUndefined();
+    expect(handled).toHaveLength(0);
+  });
+});

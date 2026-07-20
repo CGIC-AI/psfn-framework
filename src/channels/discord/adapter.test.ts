@@ -2193,6 +2193,7 @@ describe('DiscordAdapter status visibility', () => {
           channelId,
           toolCallId: 'analysis-call-1',
           toolName: 'analysis_workbench',
+          outcome: 'success',
           isError: false,
         });
         return {

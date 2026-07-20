@@ -423,6 +423,32 @@ describe('parseCompanionRelayPublishParams', () => {
       kind: 'tool.activity',
       payload: { id: 'x', tool: 't', phase: 'sideways', timestamp: new Date().toISOString() },
     })).toThrow(/phase/);
+    expect(() => parseCompanionRelayPublishParams({
+      kind: 'tool.activity',
+      payload: {
+        id: 'x',
+        tool: 't',
+        phase: 'skipped',
+        outcome: 'made_up',
+        timestamp: new Date().toISOString(),
+      },
+    })).toThrow(/outcome/);
+  });
+
+  it('preserves an explicit stable outcome for non-executed activity', () => {
+    expect(parseCompanionRelayPublishParams({
+      kind: 'tool.activity',
+      payload: {
+        id: 'call-skip',
+        tool: 'shell',
+        phase: 'skipped',
+        outcome: 'duplicate_skip',
+        timestamp: new Date(6).toISOString(),
+      },
+    }).payload).toMatchObject({
+      phase: 'skipped',
+      outcome: 'duplicate_skip',
+    });
   });
 
   it('reconstructs payloads field-by-field, dropping smuggled extras', () => {

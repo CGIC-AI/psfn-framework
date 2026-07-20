@@ -47,6 +47,7 @@ import {
 } from '../../../../faculties/memory/retrieval/access-scope.js';
 import type { ArtifactSensitivitySource } from '../../../../shared/contracts/artifact-sensitivity.js';
 import type { TurnExecutionRuntime, TurnSessionIdentity } from './contracts.js';
+import { deriveContextCoherenceSessionContext } from '../../context-coherence-session-context.js';
 
 const log = createComponentLogger('SubstrateAgent');
 const MEMORY_RETRIEVAL_RECENT_ENTRY_LIMIT = 6;
@@ -680,6 +681,11 @@ export async function computePreTurnState(input: {
       continuityFallbackUserIds: authorContext.continuityFallbackKeys,
       turnBudgetCharacteristics,
       ...(currentSessionEntryId !== null ? { excludeSessionEntryId: currentSessionEntryId } : {}),
+      // Channel bonding is a 1:1 continuity surface:
+      // a group room never joins a bond, so a group scope drops the opt-in.
+      ...(authorContext.channelBond && conversationScope.kind !== 'group'
+        ? { channelBond: authorContext.channelBond }
+        : {}),
     })
   );
   const sessionContextSnapshot = await healStaleCapturedSessionWindow({
@@ -719,6 +725,9 @@ export async function computePreTurnState(input: {
     contextText: memoryRetrievalContextText,
     channelId: message.channelId,
     sessionChannelId,
+    ...(sessionContextSnapshot.rolledOutSessionBoundary
+      ? { rolledOutSessionBoundary: sessionContextSnapshot.rolledOutSessionBoundary }
+      : {}),
     trustLevel,
     channelMeta,
     conversationScope,
@@ -821,6 +830,12 @@ export async function computePreTurnState(input: {
   );
   const emotionAppraisalChain = runtime.emotionSelfModelRuntime.getEmotionAppraisalChain(emotionSessionId);
   const turnSnapshotCapturedAt = Date.now();
+  const coherenceEntries = runtime.sessionManager.getRecentMessages(message.channelId, 24);
+  const coherenceContext = deriveContextCoherenceSessionContext(
+    coherenceEntries,
+    message.timestamp.getTime(),
+    runtime.emotionSelfModelRuntime.getActiveConcernCount(authorContext.canonicalContactKey),
+  );
   const observerEvalLifecycleState = await dispatchObserverEvalTurn({
     sidecarRuntime: runtime.observerEvalSidecar,
     logger: log,
@@ -844,6 +859,7 @@ export async function computePreTurnState(input: {
         snapshot: emotionSnapshot,
         appraisalEntryCount: emotionAppraisalChain.length,
       },
+      coherenceContext,
       metadata: {
         trustLevel,
         speakerRole: authorContext.speakerRole,

@@ -10,6 +10,7 @@ import {
   POSTGRES_MODEL_USAGE_MIGRATIONS,
   POSTGRES_SHARED_MIGRATIONS,
   POSTGRES_SHARED_WIKI_MIGRATIONS,
+  POSTGRES_PARTNER_AFFECT_SHADOW_MIGRATIONS,
 } from './migrations.js';
 import { MODEL_USAGE_RUNTIME_LANE_CLASSES } from '../../shared/telemetry/model-usage-attribution.js';
 import { RUNTIME_LANE_CLASSES } from '../../shared/contracts/runtime-lanes.js';
@@ -341,5 +342,40 @@ describe('Postgres live schema migrations', () => {
     for (const laneClass of Object.values(RUNTIME_LANE_CLASSES)) {
       expect(checkValues.has(laneClass)).toBe(true);
     }
+  });
+});
+
+describe('Partner affect shadow migrations (docs/partner-affect.md slice 1)', () => {
+  it('creates the shadow observation table with the (source_id, observation_id) idempotency key', () => {
+    const sql = migrationSql(POSTGRES_PARTNER_AFFECT_SHADOW_MIGRATIONS);
+
+    expect(sql).toContain('CREATE TABLE IF NOT EXISTS partner_affect_shadow_observations');
+    expect(sql).toContain('UNIQUE (source_id, observation_id)');
+    // Provenance is bounded jsonb handles only — never raw source content.
+    expect(sql).toContain("CHECK (jsonb_typeof(provenance_json) = 'array')");
+    expect(sql).toContain('octet_length(provenance_json::text) <= 16384');
+    // Quality fields are range-checked in the schema itself (fail closed).
+    expect(sql).toContain('CHECK (coverage >= 0 AND coverage <= 1)');
+    expect(sql).toContain('CHECK (confidence >= 0 AND confidence <= 1)');
+    expect(sql).toContain('CHECK (missingness >= 0 AND missingness <= 1)');
+    expect(sql).toContain("CHECK (direction IN ('higher_supports_need', 'lower_supports_need', 'unknown'))");
+    expect(sql).toContain("CHECK (assertion IN ('partner_asserted', 'model_inferred', 'sensor_summary', 'unverified'))");
+    expect(sql).toContain('idx_partner_affect_shadow_obs_partner_observed');
+  });
+
+  it('creates the structural suppression audit table without content columns and scoped to a partner', () => {
+    const sql = migrationSql(POSTGRES_PARTNER_AFFECT_SHADOW_MIGRATIONS);
+
+    expect(sql).toContain('CREATE TABLE IF NOT EXISTS partner_affect_shadow_suppressions');
+    expect(sql).toContain("CHECK (jsonb_typeof(reasons_json) = 'array')");
+    expect(sql).toContain('octet_length(detail) <= 4096');
+    // Suppression rows carry the bound partner so the audit can be scoped and
+    // survives a re-bind without leaking a prior partner's rows.
+    expect(sql).toContain('partner_contact_id TEXT');
+    expect(sql).toContain('idx_partner_affect_shadow_suppressions_received');
+    expect(sql).toContain('ON partner_affect_shadow_suppressions(partner_contact_id, received_at_ms DESC, id DESC)');
+    // Structural facts only: the table stores routing identity and reasons,
+    // never a payload/value column that could retain rejected content.
+    expect(sql).not.toContain('payload');
   });
 });

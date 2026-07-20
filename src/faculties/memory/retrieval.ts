@@ -180,6 +180,7 @@ import type {
   RetrievalTelemetry,
   ScoredMemory,
 } from './retrieval/types.js';
+import type { RolledOutSessionBoundary } from '../../core/session/rolled-out-session-boundary.js';
 const log = createComponentLogger('Retrieval');
 
 type RetrievalIntegrityErrorStage =
@@ -534,6 +535,7 @@ export class MemoryRetriever implements MemoryProvider {
             }
             : undefined,
           roomVisibility,
+          request.rolledOutSessionBoundary,
         )
         : undefined;
 
@@ -665,7 +667,11 @@ export class MemoryRetriever implements MemoryProvider {
       accessPolicyHash,
       roomVisibility,
       fingerprint: {
-        contextHash: createHash('sha256').update(request.contextText, 'utf8').digest('hex'),
+        contextHash: createHash('sha256').update(JSON.stringify({
+          contextText: request.contextText,
+          sessionChannelId: request.sessionChannelId?.trim() || null,
+          rolledOutSessionBoundary: request.rolledOutSessionBoundary ?? null,
+        }), 'utf8').digest('hex'),
         corpusVersion,
         accessPolicyHash,
       },
@@ -773,12 +779,14 @@ export class MemoryRetriever implements MemoryProvider {
       companionId: string;
     },
     roomVisibility?: RetrievalRoomVisibilityContext,
+    rolledOutSessionBoundary?: RolledOutSessionBoundary,
   ): Promise<TurnMemorySnapshot> {
     const productMemoryStore = this.productMemoryStore(canonicalContactId);
     return captureTurnMemorySnapshotWithDeps(
       {
         contextText,
         channelId,
+        ...(rolledOutSessionBoundary ? { rolledOutSessionBoundary } : {}),
         trustLevel,
         channelMeta,
         canonicalContactId,
@@ -1685,6 +1693,7 @@ export class MemoryRetriever implements MemoryProvider {
   private async resolveEpisodicChains(input: {
     contextText: string;
     channelId: string;
+    rolledOutSessionBoundary?: RolledOutSessionBoundary;
     trustLevel: TrustLevel;
     channelDisclosure: ReturnType<typeof classifyChannelDisclosure>;
     canonicalContactId?: string;

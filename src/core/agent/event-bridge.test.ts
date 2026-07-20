@@ -377,6 +377,7 @@ describe('createEventBridge', () => {
       channelId: 'test-channel',
       toolCallId: 'call-1',
       toolName: 'analysis_workbench',
+      outcome: 'success',
       isError: false,
       callType: 'tool',
       purpose: 'tool_execution',
@@ -406,8 +407,34 @@ describe('createEventBridge', () => {
       channelId: 'test-channel',
       toolCallId: 'call-soft-error',
       toolName: 'notify',
+      outcome: 'execution_failure',
       isError: true,
       errorMessage: 'notify: failure (ntfy request failed: 503).',
+    });
+  });
+
+  it('forwards explicit skip outcomes while retaining compatibility isError', async () => {
+    const bridge = createEventBridge(agent, eventBus);
+    const events: any[] = [];
+    eventBus.on('agent.tool.end', (data) => { events.push(data); });
+
+    bridge.setChannel('test-channel');
+    emitAgentEvent({
+      type: 'tool_execution_end',
+      toolCallId: 'call-duplicate',
+      toolName: 'fs',
+      result: {
+        content: [{ type: 'text', text: 'duplicate skipped' }],
+        details: {},
+      },
+      outcome: 'duplicate_skip',
+      isError: true,
+    });
+
+    await new Promise(r => setTimeout(r, 10));
+    expect(events[0]).toMatchObject({
+      outcome: 'duplicate_skip',
+      isError: true,
     });
   });
 

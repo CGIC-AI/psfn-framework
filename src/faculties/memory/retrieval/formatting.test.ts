@@ -113,7 +113,50 @@ function buildScoredMemoryFixture(): ScoredMemory {
 }
 
 describe('renderPromptBlock companion-facing rendering contract', () => {
-  it('renders episodic landmark chains without raw span, artifact, or provenance identifiers', () => {
+  it('frames the current emotional state against a steady baseline without raw telemetry', () => {
+    const rendered = renderPromptBlock(undefined, [], {
+      emotionalSnapshot: {
+        baselineValence: 0.28,
+        moodValence: 0.62,
+        moodDrift: 0.34,
+        moodSamples: 9,
+        lastMoodUpdateEpochMs: Date.now(),
+      },
+    });
+
+    expect(rendered).toContain(
+      '- Steady baseline: positive; baseline disposition: warm, steady, and curious.',
+    );
+    expect(rendered).toContain(
+      '- Current state: currently drifting noticeably toward strongly positive.',
+    );
+    expect(rendered).toContain('- Signal confidence: well established; freshness: active-session.');
+    expect(rendered).not.toMatch(/\b[+-]?\d+\.\d+\b/);
+    expect(rendered).not.toContain('Learned signals:');
+    expect(rendered).not.toContain('9');
+  });
+
+  it('derives the baseline disposition from the baseline valence so it cannot self-contradict (cf5y)', () => {
+    const rendered = renderPromptBlock(undefined, [], {
+      emotionalSnapshot: {
+        baselineValence: -0.62,
+        moodValence: -0.5,
+        moodDrift: 0.02,
+        moodSamples: 4,
+        lastMoodUpdateEpochMs: Date.now(),
+      },
+    });
+
+    // A negative baseline must never render the old hardcoded positive clause.
+    expect(rendered).not.toContain('full of love, joyful, and curious');
+    expect(rendered).toContain(
+      '- Steady baseline: strongly negative; baseline disposition: heavy, withdrawn, and tender.',
+    );
+    // Still qualitative — no raw telemetry floats leak.
+    expect(rendered).not.toMatch(/\b[+-]?\d+\.\d+\b/);
+  });
+
+  it('renders exact episode ids for tool drilldown without leaking span, artifact, or provenance identifiers', () => {
     const rendered = renderPromptBlock(undefined, [], {
       episodicChains: [buildEpisodicChainFixture()],
     });
@@ -121,8 +164,8 @@ describe('renderPromptBlock companion-facing rendering contract', () => {
     expect(rendered).toContain('Late-night debugging of the voice pipeline');
     expect(rendered).toContain('Landmark:');
     expectNoIdentifierLeaks(rendered);
-    expect(rendered).not.toContain(EPISODE_A_ID);
-    expect(rendered).not.toContain(EPISODE_B_ID);
+    expect(rendered).toContain(`Episode ${EPISODE_A_ID}:`);
+    expect(rendered).toContain(`Episode ${EPISODE_B_ID}:`);
   });
 
   it('describes arc links by episode title instead of episode id', () => {

@@ -113,6 +113,11 @@ export interface ContextManifestSessionSummary {
   roomWindowFilteredEntryCount?: number;
   compactedEntryCount: number;
   intentionAppraisalArtifactCount?: number;
+  /**
+   * Foreign entries interleaved from bonded member channels
+   * Absent when no channel bond is active.
+   */
+  bondedEntryCount?: number;
   finalEntryCount: number;
   finalMessageCount: number;
   historySummaryEntryCount: number;

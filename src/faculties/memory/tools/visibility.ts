@@ -77,7 +77,7 @@ type TimelineVisibilityResult =
   }
   | { ok: false; error: string };
 
-export type MemoryVisibilityAction = 'timeline' | 'census' | 'exists' | 'shared_background';
+export type MemoryVisibilityAction = 'timeline' | 'get' | 'census' | 'exists' | 'shared_background';
 
 type MemoryScopeFilterParams = {
   contact_id?: unknown;
@@ -177,15 +177,36 @@ export function resolveMemoryVisibility(
   action: MemoryVisibilityAction,
 ): TimelineVisibilityResult {
   const requestContext = getRequestContext();
-  const channelId = normalizeOptionalToolString(params.channel_id)
-    ?? normalizeOptionalToolString(params.channelId)
-    ?? normalizeOptionalToolString(requestContext?.channelId);
+  // Authorization inputs — the channel the read is authorized against, the
+  // viewer trust level, and the channel privacy — are ingress-owned facts, just
+  // like the memory subject below. Whenever a request context exists (ALWAYS the
+  // case inside a model-driven turn, where the runtime installs it at ingress),
+  // these come from the context ALONE; model-supplied tool arguments must never
+  // widen or re-authorize the read. A model that emits `channel_id`/`trust_level`/
+  // `channel_visibility` cannot override the viewer's real channel/trust, so it
+  // can neither drill into another channel's verbatim transcript (action=get) nor
+  // enumerate another channel's episode metadata (action=timeline/census/exists).
+  //
+  // Model-supplied arguments are honored ONLY when there is no request context at
+  // all — i.e. a trusted, context-free caller such as the admin/post-rollout
+  // tool-conformance sweep, which runs outside any turn (see
+  // core/agent/tool-conformance/probe-registry.ts). A model can never reach that
+  // branch, because model tool calls always execute within a turn's context.
+  const hasRequestContext = requestContext !== undefined;
+  const channelId = hasRequestContext
+    ? normalizeOptionalToolString(requestContext.channelId)
+    : normalizeOptionalToolString(params.channel_id)
+      ?? normalizeOptionalToolString(params.channelId);
   const trustLevelResult = normalizeTimelineTrustLevel(
-    params.trust_level ?? params.trustLevel ?? requestContext?.viewerTrustLevel,
+    hasRequestContext
+      ? requestContext.viewerTrustLevel
+      : (params.trust_level ?? params.trustLevel),
     action,
   );
   const visibilityResult = normalizeTimelineChannelVisibility(
-    params.channel_visibility ?? params.channelVisibility ?? requestContext?.viewerChannelPrivacy,
+    hasRequestContext
+      ? requestContext.viewerChannelPrivacy
+      : (params.channel_visibility ?? params.channelVisibility),
     action,
   );
   // Contact identity is an ingress-owned authorization fact. Tool arguments

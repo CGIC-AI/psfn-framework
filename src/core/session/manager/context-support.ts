@@ -25,6 +25,11 @@ import {
   isNonConversationalSessionEntry,
   wrapUntrustedContext,
 } from '../manager-primitives.js';
+import {
+  filterSupersededTemporalWakeupRefreshers,
+} from '../session-lane-metadata.js';
+import { parseChannelBondEntryMarker } from '../channel-bond.js';
+import { INTAKE_FIREWALL_NOTICE_TEMPLATES } from '../../cogsec/intake-firewall-notice-templates.js';
 import { formatActiveDateTimeCompact, formatActiveWeekdayShort } from '../../../shared/time/active-timezone.js';
 
 const ARTIFACT_IMAGE_TOOL_NAMES = new Set(['selfie_create', 'generate_image']);
@@ -68,6 +73,52 @@ function continuityEntryKey(entry: SessionEntry): string {
     entry.authorId ?? '',
     entry.content,
   ].join('|');
+}
+
+function compareSessionEntriesChronologically(left: SessionEntry, right: SessionEntry): number {
+  const timestampDelta = left.timestamp - right.timestamp;
+  if (timestampDelta !== 0) return timestampDelta;
+  return left.id - right.id;
+}
+
+function interleaveMirrorEntriesChronologically(entries: readonly SessionEntry[]): SessionEntry[] {
+  const appendOrderedEntries: SessionEntry[] = [];
+  const mirrors: SessionEntry[] = [];
+
+  for (const entry of entries) {
+    const hasSortableTimestamp = Number.isFinite(entry.timestamp) && entry.timestamp > 0;
+    if (hasSortableTimestamp && parseMirrorMetadata(entry.metadata)) {
+      mirrors.push(entry);
+    } else {
+      appendOrderedEntries.push(entry);
+    }
+  }
+
+  if (mirrors.length === 0) return [...entries];
+
+  const mirrorsByInsertionPoint = Array.from(
+    { length: appendOrderedEntries.length + 1 },
+    (): SessionEntry[] => [],
+  );
+  mirrors.sort(compareSessionEntriesChronologically);
+  for (const mirror of mirrors) {
+    const firstLaterEntryIndex = appendOrderedEntries.findIndex(entry => (
+      Number.isFinite(entry.timestamp)
+      && entry.timestamp > 0
+      && entry.timestamp > mirror.timestamp
+    ));
+    const insertionPoint = firstLaterEntryIndex < 0
+      ? appendOrderedEntries.length
+      : firstLaterEntryIndex;
+    mirrorsByInsertionPoint[insertionPoint].push(mirror);
+  }
+
+  const interleaved: SessionEntry[] = [];
+  for (let index = 0; index < appendOrderedEntries.length; index += 1) {
+    interleaved.push(...mirrorsByInsertionPoint[index], appendOrderedEntries[index]);
+  }
+  interleaved.push(...mirrorsByInsertionPoint[appendOrderedEntries.length]);
+  return interleaved;
 }
 
 function directUserProvenance(entry: SessionEntry): ContextMessage['provenance'] {
@@ -220,6 +271,7 @@ export function getMergedContinuity(params: {
   fallbackUserIds: string[];
   channelId: string;
   channelMeta?: ChannelMeta;
+  isChannelEligible: (channelId: string) => boolean;
 }): SessionEntry[] {
   if (!params.continuityStore || !params.canonicalUserId) return [];
 
@@ -232,15 +284,19 @@ export function getMergedContinuity(params: {
   const seen = new Set<string>();
 
   for (const candidateUserId of candidateUserIds) {
+    // Apply liveness before the caller's result limit. A retired/test channel
+    // burst at the tail must not hide an older entry from a linked channel.
     const entries = params.continuityStore.getRecent(
       candidateUserId,
-      params.limit,
+      params.continuityStore.count(candidateUserId),
       params.channelId,
       params.channelId,
       params.channelMeta,
     );
 
     for (const entry of entries) {
+      const sourceChannelId = entry.originChannelId ?? entry.channelId;
+      if (!params.isChannelEligible(sourceChannelId)) continue;
       const key = continuityEntryKey(entry);
       if (seen.has(key)) continue;
       seen.add(key);
@@ -248,11 +304,7 @@ export function getMergedContinuity(params: {
     }
   }
 
-  merged.sort((a, b) => {
-    const timestampDelta = a.timestamp - b.timestamp;
-    if (timestampDelta !== 0) return timestampDelta;
-    return a.id - b.id;
-  });
+  merged.sort(compareSessionEntriesChronologically);
 
   if (merged.length <= params.limit) return merged;
   return merged.slice(-params.limit);
@@ -270,7 +322,10 @@ export function entriesToMessages(
     stampLabel?: string;
   }> = [];
 
-  for (const entry of entries) {
+  const renderEntries = interleaveMirrorEntriesChronologically(
+    filterSupersededTemporalWakeupRefreshers(entries),
+  );
+  for (const entry of renderEntries) {
     if (isNonConversationalSessionEntry(entry)) {
       continue;
     }
@@ -315,6 +370,21 @@ export function entriesToMessages(
         authorName: attribution.authorName,
         channelId: entry.originChannelId ?? entry.channelId,
       });
+    }
+    // Channel bonding: interleaved foreign entries are
+    // annotated with their source channel. The companion's own turns stay
+    // unannotated — a model that reads its past speech prefixed with source
+    // tags mimics the prefix into new replies (same live-leak class as the
+    // temporal stamps, psfn-framework-2x37.10); the source channels of its
+    // interleaved replies are carried by the surrounding annotated turns.
+    // When the prompt_assembly sink gate has WITHHELD this entry's content
+    // (content replaced by the firewall placeholder), the source-channel is
+    // suppressed too: a gated entry must disclose nothing about its origin,
+    // not even `[via <channel>]` on the placeholder.
+    const bondMarker = parseChannelBondEntryMarker(entry.metadata);
+    const contentWithheldByIntakeGate = entry.content === INTAKE_FIREWALL_NOTICE_TEMPLATES.withheldContent;
+    if (bondMarker && role !== 'assistant' && !contentWithheldByIntakeGate) {
+      content = `[via ${bondMarker.sourceChannelId}] ${content}`;
     }
     if (includeTrustTags) {
       if (isUntrustedVisibility(visibility)) {

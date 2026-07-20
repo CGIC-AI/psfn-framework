@@ -180,6 +180,41 @@ describe('AdminContactsDataService', () => {
     expect((await contactStore.getById(contact.id))?.timezone).toBeUndefined();
   });
 
+  it('applies channel-bonding opt-in updates per linked identity', async () => {
+    const { contactStore, service } = await createServiceHarness();
+    const contact = await contactStore.upsert({ displayName: 'Bonded Partner' });
+    await contactStore.linkChannelIdentity(contact.id, 'discord', 'bond-user', { privacyLevel: 'private' });
+
+    const bondedResult = await service.updateContact(contact.id, JSON.stringify({
+      channelBonding: [{ channel: 'discord', userId: 'bond-user', bonded: true }],
+    }));
+    expect(bondedResult.ok).toBe(true);
+    expect(bondedResult.contact?.channels?.find(link => link.userId === 'bond-user')?.bonded).toBe(true);
+
+    const unbondedResult = await service.updateContact(contact.id, JSON.stringify({
+      channelBonding: [{ channel: 'discord', userId: 'bond-user', bonded: false }],
+    }));
+    expect(unbondedResult.ok).toBe(true);
+    expect(unbondedResult.contact?.channels?.find(link => link.userId === 'bond-user')?.bonded).not.toBe(true);
+  });
+
+  it('rejects channel-bonding updates for unknown identities and malformed payloads', async () => {
+    const { contactStore, service } = await createServiceHarness();
+    const contact = await contactStore.upsert({ displayName: 'Bonded Partner' });
+
+    await expect(service.updateContact(contact.id, JSON.stringify({
+      channelBonding: [{ channel: 'discord', userId: 'never-linked', bonded: true }],
+    }))).resolves.toEqual({ ok: false, message: 'Unable to update bonding for discord:never-linked' });
+
+    await expect(service.updateContact(contact.id, JSON.stringify({
+      channelBonding: [{ channel: 'discord', userId: '', bonded: true }],
+    }))).resolves.toEqual({ ok: false, message: 'channelBonding entries require channel and userId' });
+
+    await expect(service.updateContact(contact.id, JSON.stringify({
+      channelBonding: [{ channel: 'discord', userId: 'x', bonded: 'yes' }],
+    }))).resolves.toEqual({ ok: false, message: 'channelBonding.bonded must be a boolean' });
+  });
+
   it('includes social graph inspector data for linked and mention-only contacts', async () => {
     const { contactStore, service, profiles } = await createServiceHarness();
     const owner = await contactStore.upsert({ displayName: 'Owner', trustLevel: 'trusted', relationshipType: 'friend' });

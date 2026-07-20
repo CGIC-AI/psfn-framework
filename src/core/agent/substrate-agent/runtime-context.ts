@@ -20,11 +20,12 @@ import {
   type ChannelMeta,
 } from '../../../system/trust/policy.js';
 import type { ContactStorePort } from '../../contacts/contact-store-port.js';
-import type { Contact } from '../../contacts/types.js';
+import type { Contact, ContactChannelIdentity } from '../../contacts/types.js';
 import type { ContactTrackingGate } from '../../contacts/tracking-gate.js';
 import { normalizeIdentity } from '../../contacts/store/identity-utils.js';
 import type { ScratchpadProvider } from '../contracts.js';
 import type { SessionEntry } from '../../session/types.js';
+import type { TurnChannelBondInput } from '../../session/channel-bond.js';
 import type { SessionActorKind } from '../../session/turn-provenance.js';
 import {
   createGroupConversationScope,
@@ -146,6 +147,12 @@ export interface ResolvedAuthorContext {
   // conversation-channel privacy is provenance evidence only and must never
   // reach ChannelMeta.privacyLevel / classifyChannel (docs/context-envelope.md).
   continuityFallbackKeys: string[];
+  /**
+   * Channel bonding opt-in. Present only when the current turn's exact
+   * identity carries the contact's explicit `bonded`
+   * flag; absent = no bond, byte-identical unbonded behavior.
+   */
+  channelBond?: TurnChannelBondInput;
 }
 
 function isInternalJournalChannel(channelId: string): boolean {
@@ -988,6 +995,22 @@ export async function resolveAuthorContext(input: {
     }
 
     const actorKind = resolveUserActorKind(input.message, contact);
+    // Channel bonding: opt-in is the explicit `bonded`
+    // flag on the contact's channel identities. The bond activates for this
+    // turn only when the CURRENT exact identity is itself bonded — an
+    // alternate account on the same platform never inherits the opt-in.
+    const currentIdentity = normalizeIdentity(channel, input.message.authorId);
+    const bondedIdentities: ContactChannelIdentity[] =
+      (contact.channels ?? [])
+        .filter(link => link.bonded === true)
+        .map(link => normalizeIdentity(link.channel, link.userId));
+    const channelBond: TurnChannelBondInput | undefined =
+      bondedIdentities.some(identity => (
+        identity.channel === currentIdentity.channel
+        && identity.userId === currentIdentity.userId
+      ))
+        ? { currentIdentity, bondedIdentities, trustLevel: contact.trustLevel }
+        : undefined;
     return {
       trustLevel: contact.trustLevel,
       speakerRole: 'user',
@@ -1005,6 +1028,7 @@ export async function resolveAuthorContext(input: {
       continuityFallbackKeys: canonicalContactKey
         ? collectContinuityFallbackKeys(input.message.authorId, canonicalContactKey, contact)
         : [],
+      ...(channelBond ? { channelBond } : {}),
     };
   } catch (error) {
     input.logger.warn('Failed to resolve contact identity for trust/context routing', {

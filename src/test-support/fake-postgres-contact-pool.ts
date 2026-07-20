@@ -191,7 +191,7 @@ export class FakePostgresPool {
       return result(row ? [{ trust_level: row.trust_level, trust_version: row.trust_version ?? '0' }] : []);
     }
 
-    if (normalized.startsWith('select contact_id, channel, channel_user_id, privacy_level, first_seen, last_seen from contact_channel_ids where contact_id = $1 order by channel asc, channel_user_id asc')) {
+    if (normalized.startsWith('select contact_id, channel, channel_user_id, privacy_level, bonded, first_seen, last_seen from contact_channel_ids where contact_id = $1 order by channel asc, channel_user_id asc')) {
       const contactId = String(values[0] ?? '');
       const rows = [...this.contactChannelIds.values()].filter(row => row.contact_id === contactId);
       rows.sort((left, right) => left.channel.localeCompare(right.channel) || left.channel_user_id.localeCompare(right.channel_user_id));
@@ -766,6 +766,15 @@ export class FakePostgresPool {
 
     if (normalized.startsWith('insert into contact_maintenance_watermarks (processor, last_run_at)')) {
       this.contactMaintenanceWatermarks.set(String(values[0] ?? ''), String(values[1] ?? ''));
+      return result();
+    }
+
+    if (normalized.startsWith('update contact_channel_ids set bonded = $1, last_seen = $2 where contact_id = $3 and channel = $4 and channel_user_id = $5')) {
+      const row = this.contactChannelIds.get(this.contactKey(String(values[3] ?? ''), String(values[4] ?? '')));
+      if (row && row.contact_id === String(values[2] ?? '')) {
+        row.bonded = Boolean(values[0]);
+        row.last_seen = String(values[1] ?? row.last_seen);
+      }
       return result();
     }
 

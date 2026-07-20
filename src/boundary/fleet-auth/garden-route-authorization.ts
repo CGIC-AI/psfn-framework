@@ -229,6 +229,10 @@ const routeAuthorizationGroups: readonly RouteAuthorizationGroup[] = [
   {
     action: 'contacts.read', area: 'contacts', routeIds: [
       ...ids('GET', ['/api/admin/contacts', '/api/admin/contacts/:id']),
+      // Partner Affect shadow inspection (docs/partner-affect.md slice 1):
+      // sensitive relational data about the bound partner contact, so it is
+      // gated with the contact-read authority rather than diagnostics.
+      ...ids('GET', ['/api/admin/partner-affect/shadow', '/api/admin/partner-affect/observations']),
       ...pageIds(['/contacts']),
     ],
   },

@@ -126,7 +126,7 @@ export class AdminAdaptiveToolsDataService implements AdminAdaptiveToolsService 
       toolName,
       toolCallId,
       channelId,
-      isError,
+      outcome,
       errorMessage,
       turnId,
       requestId,
@@ -140,12 +140,13 @@ export class AdminAdaptiveToolsDataService implements AdminAdaptiveToolsService 
         toolCallId,
         channelId,
         ...(action ? { action } : {}),
-        status: isError ? 'error' : 'ok',
+        outcome,
+        status: outcome === 'success' ? 'ok' : 'error',
         timestamp: Date.now(),
         ...(turnId ? { turnId } : {}),
         ...(requestId ? { requestId } : {}),
       });
-      if (isError && errorMessage?.trim()) {
+      if (outcome === 'execution_failure' && errorMessage?.trim()) {
         this.pushFailure({
           toolName,
           channelId,

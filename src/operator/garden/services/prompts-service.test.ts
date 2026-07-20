@@ -299,7 +299,7 @@ describe('AdminPromptsDataService', () => {
     expect(nonNullSnapshot.immutableBlocks.map(block => block.editable)).toEqual([false, false, false, false]);
     expect(nonNullSnapshot.companionLayer?.editable).toBe(false);
     expect(nonNullSnapshot.mutableLayers).toHaveLength(0);
-    expect(nonNullSnapshot.preview.text).toContain('<immutable_human_safety_amendments>');
+    expect(nonNullSnapshot.preview.text).toContain('<constitution>');
     expect(nonNullSnapshot.preview.text).not.toContain('operator constitution content');
     expect(nonNullSnapshot.preview.text).not.toContain('seeded foundation');
   });

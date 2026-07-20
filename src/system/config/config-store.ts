@@ -17,6 +17,11 @@ import {
 } from './settings-overlay.js';
 import type { BackupJsonConfig } from './backup-config.js';
 import { loadBackupConfig, saveBackupConfig } from './backup-config.js';
+import type { PartnerAffectShadowPolicy } from '../../shared/contracts/partner-affect.js';
+import {
+  loadPartnerAffectShadowConfig,
+  savePartnerAffectShadowConfig,
+} from './partner-affect-shadow-config.js';
 import type { CapabilityTierConfig } from './capability-tier-config.js';
 import {
   loadCapabilityTierConfig,
@@ -101,6 +106,8 @@ export interface ConfigStorePort {
   saveTrustPolicy(nextConfig: unknown): TrustPolicyConfig;
   loadIntakePolicy(): IntakePolicyConfig;
   saveIntakePolicy(nextConfig: unknown): IntakePolicyConfig;
+  loadPartnerAffectShadow(): PartnerAffectShadowPolicy;
+  savePartnerAffectShadow(nextConfig: unknown): PartnerAffectShadowPolicy;
   /** Read-only system owner. Garden must never turn this into a raw editor. */
   loadFleetAuthOwnerFile(): FleetAuthConfig | null;
   loadStartupRuntimeSettings(): Pick<StartupOwnerFileState, 'runtimeSettings' | 'settingsDomains'>;
@@ -180,6 +187,8 @@ export function createOwnerFileConfigStore(
     saveTrustPolicy: (nextConfig) => saveTrustPolicyConfig(options.dataDir, nextConfig),
     loadIntakePolicy: () => loadIntakePolicyConfig(options.dataDir, loadOptions),
     saveIntakePolicy: (nextConfig) => saveIntakePolicyConfig(options.dataDir, nextConfig),
+    loadPartnerAffectShadow: () => loadPartnerAffectShadowConfig(options.dataDir, loadOptions),
+    savePartnerAffectShadow: (nextConfig) => savePartnerAffectShadowConfig(options.dataDir, nextConfig),
     loadFleetAuthOwnerFile: () => (
       existsSync(fleetAuthFilePath(options.dataDir))
         ? loadFleetAuthConfig(options.dataDir, options.seedDir)

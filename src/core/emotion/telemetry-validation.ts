@@ -293,6 +293,18 @@ function inferSourceFromProvenance(
   return normalizeSource(provenance[0].source);
 }
 
+/**
+ * Shared provenance normalizer. Exported so sibling telemetry guards (e.g. the
+ * partner-affect shadow observation guard) reuse the exact same provenance
+ * primitives instead of growing parallel validation code.
+ */
+export function normalizeEmotionTelemetryProvenance(
+  value: unknown,
+  fieldName: string,
+): EmotionTelemetryProvenance[] {
+  return normalizeProvenance(value, fieldName);
+}
+
 function normalizeProvenance(
   value: unknown,
   fieldName: string,

@@ -257,6 +257,7 @@ describe('settings contract guard', () => {
       { rawEditorKey: 'intake-policy', subsystemId: 'intakePolicy', ownerFile: 'intake-policy.json' },
       { rawEditorKey: 'capabilities', subsystemId: 'capabilities', ownerFile: 'capability-tier.json' },
       { rawEditorKey: 'charge-policy', subsystemId: 'chargePolicy', ownerFile: 'charge-policy.json' },
+      { rawEditorKey: 'partner-affect-shadow', subsystemId: 'partnerAffectShadow', ownerFile: 'partner-affect-shadow.json' },
       { rawEditorKey: 'backup', subsystemId: 'backup', ownerFile: 'backup.json' },
     ]);
 

@@ -70,6 +70,10 @@ import {
 } from '../../../primitives/images/attachment-claim-guard.js';
 import { stripLeadingHistoryStamps } from '../../../shared/utils/history-stamp-hygiene.js';
 import {
+  rejectsUnconfirmedToolExecutionClaim,
+  UNCONFIRMED_TOOL_EXECUTION_CORRECTION,
+} from '../tool-outcome-claim-guard.js';
+import {
   invokeAgentForTurn,
   type AgentInvocationMutableState,
   type AgentInvocationResult,
@@ -1188,6 +1192,24 @@ export async function handleMessageForTurn(
         turnId,
         requestId,
         ...runtime.withCorrelationPurpose(turnCorrelationBase, 'agent.image_attachment_claim.rejected'),
+      });
+    }
+
+    if (rejectsUnconfirmedToolExecutionClaim({
+      responseText: safeResponseText,
+      turnMessages,
+    })) {
+      safeResponseText = UNCONFIRMED_TOOL_EXECUTION_CORRECTION;
+      log.warn('Rejected assistant execution-success claim without a successful tool outcome', {
+        channelId: message.channelId,
+        turnId,
+        requestId,
+      });
+      runtime.emitTelemetry('agent.tool_execution_claim.rejected', {
+        channelId: message.channelId,
+        turnId,
+        requestId,
+        ...runtime.withCorrelationPurpose(turnCorrelationBase, 'agent.tool_execution_claim.rejected'),
       });
     }
 

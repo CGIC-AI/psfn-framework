@@ -56,6 +56,11 @@ import {
   type ResolvedCompanionsFleetConfig,
 } from './companions-config.js';
 import {
+  loadPartnerAffectShadowConfig,
+  PARTNER_AFFECT_SHADOW_FILE_NAME,
+  PARTNER_AFFECT_SHADOW_SEED_FILE_NAME,
+} from './partner-affect-shadow-config.js';
+import {
   loadIntakePolicyConfig,
   type IntakePolicyConfig,
   INTAKE_POLICY_FILE_NAME,
@@ -299,6 +304,15 @@ function systemOwnerFileChecks(
       dataPath: join(options.dataDir, INTAKE_POLICY_FILE_NAME),
       seedPath: join(seedDir, INTAKE_POLICY_SEED_FILE_NAME),
       run: () => loadStartupIntakePolicyOwnerFile(options.dataDir, options.seedDir),
+    },
+    {
+      label: 'partner-affect-shadow',
+      dataPath: join(options.dataDir, PARTNER_AFFECT_SHADOW_FILE_NAME),
+      seedPath: join(seedDir, PARTNER_AFFECT_SHADOW_SEED_FILE_NAME),
+      run: () => loadPartnerAffectShadowConfig(
+        options.dataDir,
+        options.seedDir ? { seedDir: options.seedDir } : undefined,
+      ),
     },
     {
       label: 'fleet-auth',

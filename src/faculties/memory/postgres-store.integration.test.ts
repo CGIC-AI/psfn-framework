@@ -14,6 +14,7 @@ import type { MemorySubjectQueryAuthorization } from '../../shared/contracts/mem
 import { createPostgresContactStore } from '../../core/contacts/postgres-adapter.js';
 import { persistMemorySubjectProjection } from './postgres-store/subject-projection.js';
 import { createSubjectAuthorizedMemoryStore } from './subject-authorized-store.js';
+import { describeMemorySubjectMutationContract } from '../../test-support/memory-subject-mutation-contract.js';
 
 const INTEGRATION_TIMEOUT_MS = 120_000;
 const DEFAULT_EMBEDDING = new Float32Array([0.9, 0.1, 0.1, 0.1]);
@@ -141,6 +142,14 @@ async function seedMemoryRow(pool: Pool, memory: PurrMemory, embedding: readonly
     `[${embedding.join(',')}]`,
   ]);
 }
+
+describeMemorySubjectMutationContract(
+  'PostgreSQL',
+  async run => await withMemoryDatabase(async pool => (
+    await run(await createPostgresMemoryStoreFromPool(pool, 4))
+  )),
+  INTEGRATION_TIMEOUT_MS,
+);
 
 describe('postgres memory store integration', () => {
   it('classifies inserts atomically and keeps idempotent retries on the same revision', async () => {

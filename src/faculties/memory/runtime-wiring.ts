@@ -3,6 +3,10 @@ import type { ContactStorePort } from '../../core/contacts/contact-store-port.js
 import type { MemoryRetrievalPolicy } from '../../system/config/memory-retrieval-policy.js';
 import type { MemoryStorePort } from './memory-store-port.js';
 import type { EpisodicTimelineStore } from './retrieval/episodic.js';
+import type {
+  EpisodeDrilldownSessionReader,
+  EpisodeDrilldownStore,
+} from './retrieval/episode-drilldown.js';
 import type { MemoryWriter } from './writer.js';
 import { createSharedBackgroundProvider } from './retrieval/shared-background.js';
 import {
@@ -19,7 +23,8 @@ export function registerMemoryTools(
   options: {
     writer: MemoryWriter;
     memoryStore: MemoryStorePort;
-    episodicStore?: EpisodicTimelineStore | null;
+    episodicStore?: (EpisodicTimelineStore & EpisodeDrilldownStore) | null;
+    sessionReader?: EpisodeDrilldownSessionReader | null;
     contactStore?: ContactStorePort | null;
     /**
      * Live retrieval policy authority (zet.2) so the `action=timeline` tool
@@ -37,6 +42,7 @@ export function registerMemoryTools(
     : null;
   target.registerTool(createMemoryTool(options.writer, options.memoryStore, {
     episodicStore: options.episodicStore ?? null,
+    sessionReader: options.sessionReader ?? null,
     sharedBackgroundProvider,
     ...(options.memoryRetrievalPolicy !== undefined
       ? { memoryRetrievalPolicy: options.memoryRetrievalPolicy }

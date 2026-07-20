@@ -218,6 +218,18 @@ export interface ContactStorePort {
     privacyLevel: ChannelPrivacyLevel,
     actor?: string,
   ): Awaitable<boolean>;
+  /**
+   * Sets the channel-bonding opt-in flag on a linked channel identity
+   * Returns false when the contact or identity link
+   * does not exist — bonding is never created implicitly.
+   */
+  setChannelBonding(
+    contactId: string,
+    channel: ContactChannel,
+    channelUserId: string,
+    bonded: boolean,
+    actor?: string,
+  ): Awaitable<boolean>;
   setConversationChannelPrivacy(
     contactId: string,
     channel: ContactChannel,

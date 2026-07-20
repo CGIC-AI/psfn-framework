@@ -8,6 +8,7 @@ import type {
   RuntimeServiceHealth,
   RuntimeServiceHealthStatus,
 } from '../../../tool-health/types.js';
+import type { ToolCallOutcome } from '../../../../shared/contracts/tool-call-outcome.js';
 
 export type AdminAdaptiveToolTelemetryEvent =
   | {
@@ -33,6 +34,8 @@ export interface AdminToolInvocationEvent {
   toolCallId: string;
   channelId: string;
   action?: string;
+  outcome: ToolCallOutcome;
+  /** Compatibility roll-up for existing clients; outcome is authoritative. */
   status: 'ok' | 'error';
   timestamp: number;
   turnId?: string;

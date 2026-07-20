@@ -121,6 +121,8 @@ import {
 } from './session-activity.js';
 import { loadIntakePolicyConfig } from '../../system/config/intake-policy-config.js';
 import { maybeCreateIntakeScreeningService } from '../../core/cogsec/intake/screening.js';
+import { loadPartnerAffectShadowConfig } from '../../system/config/partner-affect-shadow-config.js';
+import { createPartnerAffectShadowIngestBridge } from '../../core/emotion/partner-affect/shadow-ingest-bridge.js';
 import { createIntakeQuarantineStore } from '../../core/cogsec/intake/quarantine-store.js';
 import { createDriftReviewCardStore } from '../../core/cogsec/drift/drift-review-card-store.js';
 import { createDriftVelocityEvidencePort } from '../../core/cogsec/drift/drift-evidence-adapters.js';
@@ -157,6 +159,7 @@ import { prepareAgentStartupContext } from './startup-context.js';
 import { AgentApiBackend } from '../../channels/api/agent-backend.js';
 import { resolveActiveHealthProbeConfig } from '../../channels/api/active-health-probe.js';
 import { buildExternalChannelProfiles, resolveDiscordCompanionView } from '../../channels/backplane/config.js';
+import { createAgentFleetPostureProvider } from './fleet-posture.js';
 
 const log = createComponentLogger('Agent');
 ensureActiveTimezone();
@@ -362,6 +365,7 @@ async function main(): Promise<void> {
     safeguardSurfaces,
   } = await bootstrapAgentCoreRuntime({
     config: coreConfig,
+    continuityChannelIds: Object.keys(channelsConfig.contextEnvelope.channels),
     postgresDatabaseUrl,
     pathSnapshot,
     eventBus,
@@ -482,6 +486,24 @@ async function main(): Promise<void> {
   if (sessionManager.intakeScreening) {
     log.info('Intake screening wired to session tool observations', {
       mode: sessionManager.intakeScreening.mode,
+    });
+  }
+
+  // ── Partner Affect shadow observation foundation (docs/partner-affect.md
+  // slice 1) ── Shadow-only: the bridge records accepted/suppressed Signal
+  // Observations for Garden inspection and emits structural counters. It has
+  // no path into prompts, appraisal, memory, scheduling, or world actions,
+  // and stays fully inert unless the JSON owner file enables it with an
+  // exact canonical partner binding.
+  const partnerAffectShadowPolicy = loadPartnerAffectShadowConfig(pathSnapshot.systemDataDir);
+  const partnerAffectShadowBridge = createPartnerAffectShadowIngestBridge({
+    eventBus,
+    policy: partnerAffectShadowPolicy,
+    store: persistenceRuntime.partnerAffectShadowStore,
+  });
+  if (partnerAffectShadowBridge.active) {
+    log.info('Partner affect shadow observation bridge active (shadow-only)', {
+      policyRevision: partnerAffectShadowPolicy.policyRevision,
     });
   }
 
@@ -806,6 +828,7 @@ async function main(): Promise<void> {
     writer: toolMemoryWriter,
     memoryStore: toolMemoryStore,
     episodicStore,
+    sessionReader: sessionStore,
     contactStore,
     // Same config authority the MemoryWriter and retrieval faculty resolve
     // from, so the action=timeline tool path honors operator-set timeline
@@ -922,6 +945,16 @@ async function main(): Promise<void> {
     resolveChargeLedgerPath(pathSnapshot.companionDataDir),
     eventBus,
   );
+  if (config.multiCompanion === true) {
+    if (!config.chargePolicy) {
+      throw new Error('Multi-companion fleet posture requires chargePolicy');
+    }
+    await gateway.startFleetPostureReporting(createAgentFleetPostureProvider({
+      companionId: resolveCoreCompanionIdFromConfig(config),
+      chargePolicy: config.chargePolicy,
+      fatigueHistory: coreRuntime.fatigueLedger,
+    }));
+  }
   agentLoop.setDurableChargeRecorder(
     event => chargeLedger.commitChargeEvent(event).outcome,
     event => chargeLedger.probeChargeEvent(event),
@@ -996,6 +1029,7 @@ async function main(): Promise<void> {
     scheduler,
     schedulerConfig,
     icpInitiationCandidateStore: persistenceRuntime.icpInitiationCandidateStore,
+    partnerAffectShadowStore: persistenceRuntime.partnerAffectShadowStore,
     icpRuntimeEnablement,
     postTurnActions,
     outreachOutbox,
@@ -1046,11 +1080,13 @@ async function main(): Promise<void> {
       }
     },
     closeDatabase: async () => {
+      partnerAffectShadowBridge.unsubscribe();
       await persistenceRuntime.contactLifecycleRecovery?.stop();
       await coreRuntime.closeWikiRuntime();
       await persistenceRuntime.icpInitiationCandidateStore?.close();
       await persistenceRuntime.backgroundWorkStore.close();
       await persistenceRuntime.introspectionLandmarkStore.close();
+      await persistenceRuntime.partnerAffectShadowStore.close();
     },
     scheduler,
     moduleLoader,

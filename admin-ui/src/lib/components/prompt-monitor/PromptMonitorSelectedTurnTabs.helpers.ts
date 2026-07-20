@@ -4,6 +4,8 @@ import {
   type PromptPlanBlockDiffEntry,
 } from '$lib/events/prompt-monitor';
 import type { AdminPromptPlanBlock } from '$lib/types';
+import type { ToolCallOutcome } from '../../../../../src/shared/contracts/tool-call-outcome.js';
+import { resolveToolCallOutcome } from '../../../../../src/shared/contracts/tool-call-outcome.js';
 
 export type SelectedTurnTab =
   | 'summary'
@@ -103,7 +105,7 @@ export interface ToolInvocationView {
   toolName: string;
   toolCallId?: string;
   argumentsJson: string | null;
-  resultStatus: 'ok' | 'error' | 'pending';
+  resultStatus: ToolCallOutcome | 'pending';
   resultText?: string;
   rationale?: string;
   provenanceRefs?: string[];
@@ -111,22 +113,21 @@ export interface ToolInvocationView {
 
 export function toolInvocations(currentTurn: PromptMonitorTurn): ToolInvocationView[] {
   const calls = currentTurn.record?.toolCalls ?? [];
-  return calls.map((call, index) => ({
-    sequence: index + 1,
-    toolName: call.toolName,
-    ...(call.toolCallId ? { toolCallId: call.toolCallId } : {}),
-    argumentsJson: call.arguments ? JSON.stringify(call.arguments, null, 2) : null,
-    resultStatus: call.isError === true
-      ? 'error'
-      : (call.resultText !== undefined || call.details !== undefined || call.isError === false)
-        ? 'ok'
-        : 'pending',
-    ...(call.resultText ? { resultText: call.resultText } : {}),
-    ...(call.rationale ? { rationale: call.rationale } : {}),
-    ...(call.provenanceRefs && call.provenanceRefs.length > 0
-      ? { provenanceRefs: call.provenanceRefs }
-      : {}),
-  }));
+  return calls.map((call, index) => {
+    const outcome = resolveToolCallOutcome(call);
+    return {
+      sequence: index + 1,
+      toolName: call.toolName,
+      ...(call.toolCallId ? { toolCallId: call.toolCallId } : {}),
+      argumentsJson: call.arguments ? JSON.stringify(call.arguments, null, 2) : null,
+      resultStatus: outcome ?? 'pending',
+      ...(call.resultText ? { resultText: call.resultText } : {}),
+      ...(call.rationale ? { rationale: call.rationale } : {}),
+      ...(call.provenanceRefs && call.provenanceRefs.length > 0
+        ? { provenanceRefs: call.provenanceRefs }
+        : {}),
+    };
+  });
 }
 
 export function metricTone(value: number | null, warningThreshold: number): string {

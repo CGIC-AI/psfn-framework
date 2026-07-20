@@ -632,10 +632,12 @@
                       <code class="text-sm font-medium text-shadow-900">
                         {invocation.toolName}{invocation.action ? `:${invocation.action}` : ''}
                       </code>
-                      <span class={invocation.status === 'ok'
+                      <span class={invocation.outcome === 'success'
                         ? 'rounded-full bg-moss-100 px-2 py-0.5 text-xs font-semibold text-moss-700'
-                        : 'rounded-full bg-wilt-100 px-2 py-0.5 text-xs font-semibold text-wilt-700'}>
-                        {invocation.status}
+                        : invocation.outcome === 'execution_failure'
+                          ? 'rounded-full bg-wilt-100 px-2 py-0.5 text-xs font-semibold text-wilt-700'
+                          : 'rounded-full bg-gold-100 px-2 py-0.5 text-xs font-semibold text-shadow-700'}>
+                        {invocation.outcome.replaceAll('_', ' ')}
                       </span>
                     </div>
                     <p class="mt-2 text-sm text-shadow-600">{invocation.channelId}</p>

@@ -1,0 +1,443 @@
+import { describe, expect, it } from 'vitest';
+import {
+  derivePartnerAffectAssertionBasis,
+  guardPartnerAffectObservation,
+} from './observation-guard.js';
+import type { PartnerAffectShadowPolicy } from '../../../shared/contracts/partner-affect.js';
+
+const NOW_MS = 1_800_000_000_000;
+const PARTNER_ID = 'contact-partner-1';
+
+function testPolicy(overrides: Partial<PartnerAffectShadowPolicy> = {}): PartnerAffectShadowPolicy {
+  return {
+    enabled: true,
+    partnerContactId: PARTNER_ID,
+    staleAfterMs: 24 * 60 * 60_000,
+    evidenceWindowMs: 72 * 60 * 60_000,
+    minConfidence: 0.35,
+    minIndependentFamilies: 2,
+    conflictValueTolerance: 0.25,
+    allowedSignalFamilies: ['self_report', 'conversation', 'sleep', 'activity', 'presence'],
+    directions: { 'sleep.total_sleep_hours': 'lower_supports_need' },
+    sources: [
+      {
+        sourceId: 'edge-sleep-1',
+        families: ['sleep', 'activity'],
+        apiKeyPrincipalIds: ['api-key-fixture-shared'],
+        metrics: [
+          {
+            family: 'sleep',
+            metricName: 'total_sleep_hours',
+            unit: 'hours',
+            minValue: 0,
+            maxValue: 24,
+          },
+          {
+            family: 'activity',
+            metricName: 'step_count',
+            unit: 'count',
+            minValue: 0,
+          },
+        ],
+        consentRef: 'consent-sleep-2026-01',
+        sensitivity: 'relational_sensitive',
+        revoked: false,
+      },
+      {
+        sourceId: 'revoked-source',
+        families: ['activity'],
+        apiKeyPrincipalIds: ['api-key-revoked'],
+        metrics: [{
+          family: 'activity',
+          metricName: 'step_count',
+          unit: 'count',
+          minValue: 0,
+        }],
+        consentRef: 'consent-activity-2025-12',
+        sensitivity: 'relational_sensitive',
+        revoked: true,
+      },
+    ],
+    maxRetainedObservations: 500,
+    policyRevision: 'shadow-test-v1',
+    ...overrides,
+  };
+}
+
+function validPayload(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    observationId: 'obs-001',
+    sourceId: 'edge-sleep-1',
+    partnerContactId: PARTNER_ID,
+    signalFamily: 'sleep',
+    metricName: 'total_sleep_hours',
+    value: 7.4,
+    unit: 'hours',
+    windowStartMs: NOW_MS - 10 * 60 * 60_000,
+    windowEndMs: NOW_MS - 60_000,
+    coverage: 0.9,
+    confidence: 0.8,
+    provenance: [{ source: 'runtime_state', observedAtMs: NOW_MS - 60_000 }],
+    processingRevision: 'adapter-v3',
+    ...overrides,
+  };
+}
+
+function guard(
+  payload: Record<string, unknown>,
+  policy: PartnerAffectShadowPolicy = testPolicy(),
+) {
+  return guardPartnerAffectObservation({
+    candidate: { payload, receivedAtMs: NOW_MS },
+    policy,
+    nowMs: NOW_MS,
+  });
+}
+
+describe('guardPartnerAffectObservation', () => {
+  it('accepts a well-formed observation and normalizes every contract field', () => {
+    const decision = guard(validPayload());
+    expect(decision.status).toBe('accepted');
+    if (decision.status !== 'accepted') return;
+    const observation = decision.observation;
+    expect(observation.observationKey).toBe('edge-sleep-1:obs-001');
+    expect(observation.partnerContactId).toBe(PARTNER_ID);
+    expect(observation.signalFamily).toBe('sleep');
+    expect(observation.metricName).toBe('total_sleep_hours');
+    expect(observation.value).toBe(7.4);
+    expect(observation.unit).toBe('hours');
+    // Direction comes from partner-specific policy, never the source payload.
+    expect(observation.direction).toBe('lower_supports_need');
+    // Consent and sensitivity are stamped from the authorized-source registry.
+    expect(observation.consentRef).toBe('consent-sleep-2026-01');
+    expect(observation.sensitivity).toBe('relational_sensitive');
+    // Missingness defaults to 1 - coverage and stays explicit.
+    expect(observation.missingness).toBeCloseTo(0.1, 4);
+    expect(observation.observedAtMs).toBe(NOW_MS - 60_000);
+    expect(observation.assertion).toBe('sensor_summary');
+    expect(observation.processingRevision).toBe('adapter-v3');
+    expect(observation.provenance).toHaveLength(1);
+  });
+
+  it('marks model/classifier provenance as model_inferred, never partner-asserted', () => {
+    const decision = guard(validPayload({
+      provenance: [{ source: 'self_report', classifier: 'affect-cls-v2' }],
+    }));
+    expect(decision.status).toBe('accepted');
+    if (decision.status !== 'accepted') return;
+    expect(decision.observation.assertion).toBe('model_inferred');
+  });
+
+  it('never stamps partner_asserted on an unverifiable self-declared self_report', () => {
+    // Runtime cannot verify a self-declared source over telemetry, so a bare
+    // self_report degrades to `unverified`, never `partner_asserted`.
+    expect(derivePartnerAffectAssertionBasis([{ source: 'self_report' }])).toBe('unverified');
+    expect(derivePartnerAffectAssertionBasis([{ source: 'self_report', model: 'm' }])).toBe('model_inferred');
+    expect(derivePartnerAffectAssertionBasis([{ source: 'self_report', classifier: 'c' }])).toBe('model_inferred');
+    expect(derivePartnerAffectAssertionBasis([{ source: 'runtime_state' }])).toBe('sensor_summary');
+  });
+
+  it('records a self_report-sourced observation as unverified, not partner_asserted', () => {
+    const decision = guard(validPayload({
+      sourceId: 'edge-selfreport-1',
+      provenance: [{ source: 'self_report' }],
+    }), testPolicy({
+      sources: [{
+        sourceId: 'edge-selfreport-1',
+        families: ['sleep'],
+        apiKeyPrincipalIds: ['api-key-self-report'],
+        metrics: [{
+          family: 'sleep',
+          metricName: 'total_sleep_hours',
+          unit: 'hours',
+          minValue: 0,
+          maxValue: 24,
+        }],
+        consentRef: 'consent-sr',
+        sensitivity: 'relational_sensitive',
+        revoked: false,
+      }],
+    }));
+    expect(decision.status).toBe('accepted');
+    if (decision.status !== 'accepted') return;
+    expect(decision.observation.assertion).toBe('unverified');
+  });
+
+  it('suppresses over-long or charset-violating provenance handle strings (accepted-store leak vector)', () => {
+    // Attack: smuggle raw diary/GPS/PII text through a whitelisted free-text
+    // provenance field, under the API door's 2048-char strip. The guard must
+    // reject it — internal/gateway emitters bypass that door entirely.
+    for (const field of ['model', 'classifier', 'provenanceRef'] as const) {
+      const withSpaces = guard(validPayload({
+        provenance: [{ source: 'runtime_state', [field]: 'went to 52.1N 4.3E and felt awful about the $340 purchase' }],
+      }));
+      expect(withSpaces.status).toBe('suppressed');
+      if (withSpaces.status === 'suppressed') {
+        expect(withSpaces.suppressed.reasons).toContain('raw_sensitive_payload');
+        // Structural detail only; the raw smuggled text is never echoed.
+        expect(JSON.stringify(withSpaces.suppressed)).not.toContain('felt awful');
+        expect(JSON.stringify(withSpaces.suppressed)).not.toContain('52.1N');
+      }
+
+      const overLong = guard(validPayload({
+        provenance: [{ source: 'runtime_state', [field]: 'a'.repeat(200) }],
+      }));
+      expect(overLong.status).toBe('suppressed');
+      if (overLong.status === 'suppressed') {
+        expect(overLong.suppressed.reasons).toContain('raw_sensitive_payload');
+      }
+    }
+  });
+
+  it('emits a structural code, never the raw value, for unsupported source/modality (audit leak vector)', () => {
+    // Attack: the shared normalizer throws an error message that inlines the
+    // raw rejected value; that message must never become suppression detail.
+    const badSource = guard(validPayload({
+      provenance: [{ source: 'secret diary entry the audit must not echo' }],
+    }));
+    expect(badSource.status).toBe('suppressed');
+    if (badSource.status === 'suppressed') {
+      expect(badSource.suppressed.reasons).toContain('malformed_observation');
+      expect(badSource.suppressed.detail).toContain('provenance source is not a supported telemetry source');
+      expect(badSource.suppressed.detail).not.toContain('secret diary');
+    }
+
+    const badModality = guard(validPayload({
+      provenance: [{ source: 'runtime_state', modality: 'GPS 52.1N 4.3E raw fix' }],
+    }));
+    expect(badModality.status).toBe('suppressed');
+    if (badModality.status === 'suppressed') {
+      expect(badModality.suppressed.reasons).toContain('malformed_observation');
+      expect(badModality.suppressed.detail).toContain('provenance modality is not supported');
+      expect(badModality.suppressed.detail).not.toContain('52.1N');
+    }
+  });
+
+  it('accepts well-formed token-shaped provenance handles', () => {
+    const decision = guard(validPayload({
+      provenance: [{ source: 'runtime_state', model: 'gpt-4o', classifier: 'affect-cls-v2', provenanceRef: 'urn:prov:abc-123' }],
+    }));
+    expect(decision.status).toBe('accepted');
+  });
+
+  it('stamps the bound partner on the suppression record, not the payload-named contact', () => {
+    const decision = guard(validPayload({ partnerContactId: 'contact-housemate-2' }));
+    expect(decision.status).toBe('suppressed');
+    if (decision.status !== 'suppressed') return;
+    expect(decision.suppressed.partnerContactId).toBe(PARTNER_ID);
+  });
+
+  it('fails closed on non-whitelisted payload keys (raw-sensitive smuggling)', () => {
+    for (const extra of [
+      { gpsLatitude: 52.1, gpsLongitude: 4.3 },
+      { heartRateSeries: [61, 62, 64, 66, 70, 72, 75, 71] },
+      { messageBody: 'private text the estimator must never see' },
+      { lineItems: [{ sku: 'x', price: 12 }] },
+    ]) {
+      const decision = guard(validPayload(extra));
+      expect(decision.status).toBe('suppressed');
+      if (decision.status !== 'suppressed') return;
+      expect(decision.suppressed.reasons).toContain('raw_sensitive_payload');
+      // The suppressed audit record never echoes the offending content.
+      const serialized = JSON.stringify(decision.suppressed);
+      expect(serialized).not.toContain('gpsLatitude');
+      expect(serialized).not.toContain('private text');
+      expect(serialized).not.toContain('sku');
+    }
+  });
+
+  it('suppresses a token-shaped scalar that is not an authorized source metric', () => {
+    const decision = guard(validPayload({
+      metricName: 'gps_latitude',
+      value: 52.1,
+      unit: 'degrees',
+    }));
+    expect(decision.status).toBe('suppressed');
+    if (decision.status !== 'suppressed') return;
+    expect(decision.suppressed.reasons).toContain('raw_sensitive_payload');
+    expect(decision.suppressed.detail).not.toContain('gps_latitude');
+  });
+
+  it.each([
+    [{ unit: 'minutes' }, 'metric unit does not match'],
+    [{ value: 25 }, 'metric value is outside'],
+    [{ value: -1 }, 'metric value is outside'],
+  ])('enforces the authorized metric unit and range for %j', (overrides, detail) => {
+    const decision = guard(validPayload(overrides));
+    expect(decision.status).toBe('suppressed');
+    if (decision.status !== 'suppressed') return;
+    expect(decision.suppressed.reasons).toContain('raw_sensitive_payload');
+    expect(decision.suppressed.detail).toContain(detail);
+  });
+
+  it('fails closed on provenance entries with unexpected keys', () => {
+    const decision = guard(validPayload({
+      provenance: [{ source: 'runtime_state', faceVector: [0.1, 0.2] }],
+    }));
+    expect(decision.status).toBe('suppressed');
+    if (decision.status !== 'suppressed') return;
+    expect(decision.suppressed.reasons).toContain('raw_sensitive_payload');
+  });
+
+  it('suppresses observations naming a different contact as wrong_partner', () => {
+    const decision = guard(validPayload({ partnerContactId: 'contact-housemate-2' }));
+    expect(decision.status).toBe('suppressed');
+    if (decision.status !== 'suppressed') return;
+    expect(decision.suppressed.reasons).toContain('wrong_partner');
+  });
+
+  it('suppresses when no canonical partner is bound', () => {
+    const decision = guard(validPayload(), testPolicy({ enabled: false, partnerContactId: null }));
+    expect(decision.status).toBe('suppressed');
+    if (decision.status !== 'suppressed') return;
+    expect(decision.suppressed.reasons).toEqual(
+      expect.arrayContaining(['partner_unbound', 'shadow_disabled']),
+    );
+  });
+
+  it('suppresses stale observations with an explicit reason', () => {
+    const staleMs = NOW_MS - 25 * 60 * 60_000;
+    const decision = guard(validPayload({
+      windowStartMs: staleMs - 60_000,
+      windowEndMs: staleMs,
+      observedAtMs: staleMs,
+    }));
+    expect(decision.status).toBe('suppressed');
+    if (decision.status !== 'suppressed') return;
+    expect(decision.suppressed.reasons).toContain('stale_observation');
+  });
+
+  it('suppresses future-dated observations beyond clock skew', () => {
+    const future = NOW_MS + 10 * 60_000;
+    const decision = guard(validPayload({
+      windowStartMs: future - 60_000,
+      windowEndMs: future,
+      observedAtMs: future,
+    }));
+    expect(decision.status).toBe('suppressed');
+    if (decision.status !== 'suppressed') return;
+    expect(decision.suppressed.reasons).toContain('future_observation');
+  });
+
+  it('suppresses inverted observation windows', () => {
+    const decision = guard(validPayload({
+      windowStartMs: NOW_MS,
+      windowEndMs: NOW_MS - 60_000,
+    }));
+    expect(decision.status).toBe('suppressed');
+    if (decision.status !== 'suppressed') return;
+    expect(decision.suppressed.reasons).toContain('invalid_window');
+  });
+
+  it('suppresses low-confidence observations against the policy floor', () => {
+    const decision = guard(validPayload({ confidence: 0.1 }));
+    expect(decision.status).toBe('suppressed');
+    if (decision.status !== 'suppressed') return;
+    expect(decision.suppressed.reasons).toContain('low_confidence');
+  });
+
+  it('suppresses unregistered, revoked, and non-consented sources', () => {
+    const unregistered = guard(validPayload({ sourceId: 'never-registered' }));
+    expect(unregistered.status).toBe('suppressed');
+    if (unregistered.status === 'suppressed') {
+      expect(unregistered.suppressed.reasons).toContain('unregistered_source');
+    }
+
+    const revoked = guard(validPayload({ sourceId: 'revoked-source', signalFamily: 'activity' }));
+    expect(revoked.status).toBe('suppressed');
+    if (revoked.status === 'suppressed') {
+      expect(revoked.suppressed.reasons).toContain('revoked_source');
+    }
+
+    const wrongFamily = guard(validPayload({ signalFamily: 'presence' }));
+    expect(wrongFamily.status).toBe('suppressed');
+    if (wrongFamily.status === 'suppressed') {
+      expect(wrongFamily.suppressed.reasons).toContain('family_not_consented');
+    }
+  });
+
+  it('suppresses families outside policy and unknown families', () => {
+    const notAllowed = guard(
+      validPayload({ signalFamily: 'personal_operations' }),
+      testPolicy({
+        sources: [{
+          sourceId: 'edge-sleep-1',
+          families: ['personal_operations'],
+          apiKeyPrincipalIds: ['api-key-fixture-shared'],
+          metrics: [{
+            family: 'personal_operations',
+            metricName: 'total_sleep_hours',
+            unit: 'hours',
+          }],
+          consentRef: 'consent-ops',
+          sensitivity: 'relational_sensitive',
+          revoked: false,
+        }],
+      }),
+    );
+    expect(notAllowed.status).toBe('suppressed');
+    if (notAllowed.status === 'suppressed') {
+      expect(notAllowed.suppressed.reasons).toContain('family_not_allowed');
+    }
+
+    const unknown = guard(validPayload({ signalFamily: 'astrology' }));
+    expect(unknown.status).toBe('suppressed');
+    if (unknown.status === 'suppressed') {
+      expect(unknown.suppressed.reasons).toContain('unknown_signal_family');
+    }
+  });
+
+  it('suppresses consentRef mismatches against the registry', () => {
+    const decision = guard(validPayload({ consentRef: 'consent-forged' }));
+    expect(decision.status).toBe('suppressed');
+    if (decision.status !== 'suppressed') return;
+    expect(decision.suppressed.reasons).toContain('consent_mismatch');
+  });
+
+  it('requires non-empty concrete provenance', () => {
+    const missing = guard(validPayload({ provenance: [] }));
+    expect(missing.status).toBe('suppressed');
+    if (missing.status === 'suppressed') {
+      expect(missing.suppressed.reasons).toContain('missing_provenance');
+    }
+
+    const vague = guard(validPayload({ provenance: [{ source: 'unknown' }] }));
+    expect(vague.status).toBe('suppressed');
+    if (vague.status === 'suppressed') {
+      expect(vague.suppressed.reasons).toContain('missing_provenance');
+    }
+  });
+
+  it('rejects non-scalar values and out-of-range quality fields as malformed', () => {
+    for (const bad of [
+      { value: [1, 2, 3] },
+      { value: 'seven' },
+      { value: Number.NaN },
+      { coverage: 1.4 },
+      { confidence: -0.1 },
+      { metricName: 'x'.repeat(200) },
+      { unit: 'contains spaces and a very long smuggled sentence' },
+    ]) {
+      const decision = guard(validPayload(bad));
+      expect(decision.status).toBe('suppressed');
+      if (decision.status !== 'suppressed') return;
+      expect(decision.suppressed.reasons).toContain('malformed_observation');
+    }
+  });
+
+  it('collects every applicable suppression reason for the explanation record', () => {
+    const decision = guard(validPayload({
+      partnerContactId: 'someone-else',
+      confidence: 0.05,
+      extraBlob: { anything: true },
+    }));
+    expect(decision.status).toBe('suppressed');
+    if (decision.status !== 'suppressed') return;
+    expect(decision.suppressed.reasons).toEqual(
+      expect.arrayContaining(['wrong_partner', 'low_confidence', 'raw_sensitive_payload']),
+    );
+    expect(decision.suppressed.observationKey).toBe('edge-sleep-1:obs-001');
+    expect(decision.suppressed.sourceId).toBe('edge-sleep-1');
+    expect(decision.suppressed.signalFamily).toBe('sleep');
+  });
+});

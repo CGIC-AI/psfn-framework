@@ -28,6 +28,7 @@ import type {
   TurnRecord,
 } from '../../../shared/contracts/runtime.js';
 import { projectTurnSnapshotPrompt } from '../../../shared/contracts/prompt-projection.js';
+import { countToolCallOutcomes } from '../../../shared/contracts/tool-call-outcome.js';
 import type { MemoryStorePort } from '../../../faculties/memory/memory-store-port.js';
 import type { ConcernStorePort } from '../../../core/intention/concern-store-port.js';
 import type { ContactStorePort } from '../../../core/contacts/contact-store-port.js';
@@ -226,6 +227,7 @@ function hasToolResultPayload(toolCall: TurnRecord['toolCalls'][number]): boolea
   const record = toolCall as unknown as Record<string, unknown>;
   return typeof record.resultText === 'string'
     || typeof record.isError === 'boolean'
+    || record.outcome !== undefined
     || record.details !== undefined;
 }
 
@@ -393,6 +395,7 @@ export function buildPromptLoomData(
   const historicalHits = collectHistoricalSnapshotHits(snapshot, finalSystemSections);
   const projection = projectTurnSnapshotPrompt(snapshot);
   const promptStrings = projection.strings;
+  const toolOutcomeCounts = countToolCallOutcomes(record.toolCalls);
   return {
     source: 'turn_snapshot',
     snapshotCapturedAt: snapshot?.capturedAt ?? null,
@@ -442,6 +445,8 @@ export function buildPromptLoomData(
       toolResults: record.toolCalls
         .filter(hasToolResultPayload)
         .map(toolCall => cloneUnknownValue(toolCall)),
+      outcomeCounts: toolOutcomeCounts,
+      runtimeFailureCount: toolOutcomeCounts.execution_failure,
     },
   };
 }

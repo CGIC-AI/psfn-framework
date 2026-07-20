@@ -22,7 +22,7 @@ export function isSessionMirroringGloballyEnabled(config: SubstrateConfig): bool
 
 export function isSessionMirroringEnabledForChannel(config: SubstrateConfig, channelId: string): boolean {
   const overrides = config.sessionMirrorChannelOverrides;
-  if (!overrides) return true;
+  if (!overrides) return false;
 
   const exact = overrides[channelId];
   if (typeof exact === 'boolean') return exact;
@@ -44,7 +44,7 @@ export function isSessionMirroringEnabledForChannel(config: SubstrateConfig, cha
     if (channelId.startsWith(candidatePrefix)) return value;
   }
 
-  return true;
+  return false;
 }
 
 export function mirrorMessageToActiveSessions(params: {

@@ -41,13 +41,16 @@ export function parseClarificationCustomId(
   customId: string,
   clarification: PendingClarification,
 ): number | null {
-  const parts = customId.split(CLARIFY_CUSTOM_ID_SEPARATOR);
-  if (parts.length !== 3) return null;
-  const [prefix, clarificationId, rawIndex] = parts;
-  if (prefix !== CLARIFY_CUSTOM_ID_PREFIX) return null;
+  const wirePrefix = `${CLARIFY_CUSTOM_ID_PREFIX}${CLARIFY_CUSTOM_ID_SEPARATOR}`;
+  if (!customId.startsWith(wirePrefix)) return null;
+  const payload = customId.slice(wirePrefix.length);
+  const indexSeparator = payload.lastIndexOf(CLARIFY_CUSTOM_ID_SEPARATOR);
+  if (indexSeparator <= 0) return null;
+  const clarificationId = payload.slice(0, indexSeparator);
+  const rawIndex = payload.slice(indexSeparator + 1);
   if (clarificationId !== clarification.id) return null;
-  if (!/^\d+$/.test(rawIndex!)) return null;
-  const index = Number.parseInt(rawIndex!, 10);
+  if (!/^\d+$/.test(rawIndex)) return null;
+  const index = Number.parseInt(rawIndex, 10);
   if (!Number.isInteger(index) || index < 0 || index >= clarification.choices.length) return null;
   return index;
 }

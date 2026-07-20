@@ -56,6 +56,18 @@ describe('discord clarification rendering', () => {
     expect('clarify:clar-1:2'.startsWith(clarificationCustomIdPrefix('clar-1'))).toBe(true);
     expect('clarify:other:2'.startsWith(clarificationCustomIdPrefix('clar-1'))).toBe(false);
   });
+
+  it('round-trips clarification ids containing the wire separator', () => {
+    const colonIdClarification: PendingClarification = {
+      ...clarification,
+      id: 'clar:session:1',
+    };
+    const customId = buildClarificationCustomId(colonIdClarification.id, 2);
+
+    expect(customId).toBe('clarify:clar:session:1:2');
+    expect(parseClarificationCustomId(customId, colonIdClarification)).toBe(2);
+    expect(customId.startsWith(clarificationCustomIdPrefix(colonIdClarification.id))).toBe(true);
+  });
 });
 
 function fakeChannel(handle: DiscordClarifyMessageHandle): DiscordClarifyChannel {

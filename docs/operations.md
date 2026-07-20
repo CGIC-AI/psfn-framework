@@ -1055,6 +1055,47 @@ observation under `runtime.deterministicDegradations` (option, requested value,
 `honored: false`, reason, human detail) so downstream consumers can see the
 corpus condition (drives keep accumulating across the shared session).
 
+Mood-free event appraisal (projection v3). The observer projection composes an
+event appraisal from the PSFN emotion state and hands it to emo-sim, which then
+tilts affect with its OWN accumulated mood. v2 also folded PSFN accumulated mood
+(EMA) into the projected event signal (valence, self_norm, attachment), so mood
+inertia was applied twice — softening clearly-negative inputs net-positive under
+a positive-mood (Love) basin. v3 removes the mood component from the projected
+EVENT appraisal (the turn's own VAD, discrete labels, and safe metadata only);
+accumulated mood is applied exactly once, downstream in emo-sim. Coefficients are
+NOT rescaled to compensate. The change is recorded so corpora are distinguishable:
+the projection version string moves `appraisal-projection.v2` → `.v3` (schema
+1 → 2), and every observer-derived projection carries a structured
+`projectedAppraisal.appraisalAdjustments` record (`mood-free-event-appraisal`,
+reason `double-mood-inertia`, affected dimensions) plus a mood-free caveat — the
+same never-silently-applied pattern as the deterministic degradations above.
+
+Calibration suites. The old single confidence-weighted divergence score and its
+aligned/watch/divergent band (the `0.18 / 0.42` thresholds) are LEGACY: they
+collapse unrelated concepts into one number and hide the real failure modes.
+They are retained for back-compat of persisted rows and the Garden surface but
+are not extended (see `OBSERVER_EVAL_LEGACY_DIVERGENCE_NOTE`). Calibration is now
+three independent, separately-runnable suites under
+`src/core/eval/observer-sidecar/calibration/`, each with documented pass criteria:
+
+- event-direction — a clearly-positive/negative input projects a mood-free event
+  appraisal of the correct sign (0 sign inversions; mood-invariant). This encodes
+  the v2-window shapes (the dense positive sweep and the fourteen-negatives-under-
+  a-positive-basin case) and fails on a mood-contaminated projection.
+- mood-trajectory — the EMA-mood trajectory over a projected mood-free event
+  stream trends the expected direction (a sustained negative run seeded from a
+  positive basin trends down). The EMA is a documented calibration reference, not
+  emo_sim's internal accumulator.
+- outreach-timing — the `would_message` shadow lever fires when, and only when,
+  the modeled social/attachment pressure has crossed threshold and been sustained,
+  driven through the real `ObserverLeverTracker`.
+
+The suites run over synthetic fixtures, not live corpus data. They prove the
+PSFN-side projection/timing LOGIC; the end-to-end agreement figures on real inputs
+(e.g. the negative-direction rate, the live emo_sim mood trajectory, live fire
+counts) must be re-baselined operator-side on a clean v2 window with physiological
+drives disabled, and cannot be proven from fixtures.
+
 ## Backups And Integrity
 
 - Backup cadence and retention live in `backup.json` and `scheduler.json`.

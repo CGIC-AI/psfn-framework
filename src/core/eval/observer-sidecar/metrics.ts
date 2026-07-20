@@ -11,6 +11,25 @@ export const OBSERVER_EVAL_COMPARISON_METRICS_VERSION =
   'psfn.observer-sidecar.comparison-metrics.v1' as const;
 export const OBSERVER_EVAL_COMPARISON_METRICS_SCHEMA_VERSION = 1 as const;
 
+/**
+ * LEGACY (psfn-framework-oth4.4). The single confidence-weighted divergence
+ * score and its aligned/watch/divergent band (the 0.18 / 0.42 thresholds in
+ * `resolveAgreementBand`) collapse several unrelated concepts — VAD distance,
+ * family confusion, intensity direction, decay pattern — into one number, which
+ * the oth4 operator audit found compares mismatched concepts and hides the real
+ * failure modes (e.g. clearly-negative inputs softened net-positive).
+ *
+ * It is RETAINED for back-compat of persisted rows and the Garden admin surface,
+ * NOT extended. Calibration is now done by three independent, separately-runnable
+ * suites under `./calibration/` — event-direction, EMA-mood trajectory, and
+ * outreach-timing — each with its own documented pass criteria. Do not add new
+ * thresholds or gates on the divergence band; add or adjust a calibration suite
+ * instead.
+ */
+export const OBSERVER_EVAL_LEGACY_DIVERGENCE_NOTE: string =
+  'Legacy single divergence score (oth4.4): retained for back-compat only; superseded by the '
+  + 'event-direction, mood-trajectory, and outreach-timing calibration suites. Do not gate on it.';
+
 const MAX_VAD_DISTANCE = Math.sqrt(8);
 const LOW_PROJECTION_CONFIDENCE_THRESHOLD = 0.45;
 const EVIDENCE_LIMITATION_REASONS: ReadonlySet<ObserverEvalMetricReasonCode> = new Set([
@@ -451,6 +470,12 @@ function resolveMetricsStatus(
   return 'available';
 }
 
+/**
+ * LEGACY band (oth4.4). The 0.18 / 0.42 thresholds are the retired single-score
+ * comparison; see OBSERVER_EVAL_LEGACY_DIVERGENCE_NOTE. Kept only so persisted
+ * rows and the Garden surface keep rendering; do not tune these or add new
+ * thresholds — use the ./calibration suites instead.
+ */
 function resolveAgreementBand(score: number | null): ObserverEvalAgreementBand {
   if (score === null) return 'unavailable';
   if (score < 0.18) return 'aligned';

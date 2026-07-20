@@ -10,6 +10,8 @@ import {
   OBSERVER_APPRAISAL_PROJECTION_CAVEAT,
   OBSERVER_APPRAISAL_PROJECTION_VERSION,
   OBSERVER_ATTACHMENT_NEUTRAL_PRIOR_CAVEAT,
+  OBSERVER_MOOD_FREE_EVENT_APPRAISAL_ADJUSTMENT,
+  OBSERVER_MOOD_FREE_EVENT_APPRAISAL_CAVEAT,
   OBSERVER_SAFETY_NEUTRAL_PRIOR_CAVEAT,
   projectObserverEvalToEmoSim,
   type ObserverAppraisalProjectionFailure,
@@ -36,8 +38,8 @@ describe('observer sidecar appraisal projection', () => {
     const result = projectObserverEvalToEmoSim(withRawLeakFields(makeObserverInput()));
 
     expectSuccess(result);
-    expect(result.schemaVersion).toBe(1);
-    expect(result.projectionVersion).toBe('psfn.observer-sidecar.appraisal-projection.v2');
+    expect(result.schemaVersion).toBe(2);
+    expect(result.projectionVersion).toBe('psfn.observer-sidecar.appraisal-projection.v3');
     expect(result.source).toBe('observer-derived');
     expect(result.projectedAppraisal.dimensions).toEqual(result.adapterInput.stimulus.appraisal);
     expect(Object.keys(result.projectedAppraisal.dimensions)).toEqual([...EMOSIM_APPRAISAL_DIMS]);
@@ -173,14 +175,81 @@ describe('observer sidecar appraisal projection', () => {
     );
   });
 
-  it('emits the v2 projection version on every projection surface', () => {
-    expect(OBSERVER_APPRAISAL_PROJECTION_VERSION).toBe('psfn.observer-sidecar.appraisal-projection.v2');
+  it('emits the v3 projection version on every projection surface', () => {
+    expect(OBSERVER_APPRAISAL_PROJECTION_VERSION).toBe('psfn.observer-sidecar.appraisal-projection.v3');
 
     const result = projectObserverEvalToEmoSim(makeObserverInput());
     expectSuccess(result);
     expect(result.projectionVersion).toBe(OBSERVER_APPRAISAL_PROJECTION_VERSION);
     expect(result.projectedAppraisal.projectionVersion).toBe(OBSERVER_APPRAISAL_PROJECTION_VERSION);
     expect(result.adapterInput.stimulus.projection.source).toBe(OBSERVER_APPRAISAL_PROJECTION_VERSION);
+  });
+
+  it('projects a mood-free event appraisal: accumulated mood does not tilt the event valence', () => {
+    // A clearly-negative event (negative VAD valence, sadness/fear discrete) under
+    // a strongly positive accumulated mood basin (the "Love" basin) must still
+    // project a NEGATIVE event valence. v2 folded mood.valence into the event
+    // signal, which flipped modest negatives net-positive here.
+    const negativeEvent = (moodValence: number): EmotionStateSnapshot => ({
+      vad: { valence: -0.35, arousal: 0.4, dominance: -0.15 },
+      mood: { valence: moodValence, arousal: 0.2, dominance: 0.1 },
+      discrete: { sadness: 0.55, disappointment: 0.4 },
+      confidence: 0.8,
+    });
+
+    const underPositiveBasin = projectLiveContextSnapshot(negativeEvent(0.9));
+    const underNegativeBasin = projectLiveContextSnapshot(negativeEvent(-0.9));
+    const underNeutralBasin = projectLiveContextSnapshot(negativeEvent(0));
+
+    expectSuccess(underPositiveBasin);
+    expectSuccess(underNegativeBasin);
+    expectSuccess(underNeutralBasin);
+
+    // Event direction is negative regardless of accumulated mood.
+    expect(underPositiveBasin.projectedAppraisal.dimensions.valence).toBeLessThan(0);
+    expect(underNegativeBasin.projectedAppraisal.dimensions.valence).toBeLessThan(0);
+
+    // And the projected valence is mood-INVARIANT: the three mood basins produce
+    // an identical event valence. A non-zero spread would mean mood leaked back in.
+    expect(underPositiveBasin.projectedAppraisal.dimensions.valence).toBe(
+      underNegativeBasin.projectedAppraisal.dimensions.valence,
+    );
+    expect(underPositiveBasin.projectedAppraisal.dimensions.valence).toBe(
+      underNeutralBasin.projectedAppraisal.dimensions.valence,
+    );
+    // self_norm and attachment are likewise mood-invariant.
+    expect(underPositiveBasin.projectedAppraisal.dimensions.self_norm).toBe(
+      underNegativeBasin.projectedAppraisal.dimensions.self_norm,
+    );
+    expect(underPositiveBasin.projectedAppraisal.dimensions.attachment).toBe(
+      underNegativeBasin.projectedAppraisal.dimensions.attachment,
+    );
+  });
+
+  it('records the mood-free-event-appraisal adjustment on observer-derived projections and documents it', () => {
+    const observerDerived = projectObserverEvalToEmoSim(makeObserverInput());
+    expectSuccess(observerDerived);
+    expect(observerDerived.projectedAppraisal.appraisalAdjustments).toEqual([
+      OBSERVER_MOOD_FREE_EVENT_APPRAISAL_ADJUSTMENT,
+    ]);
+    expect(OBSERVER_MOOD_FREE_EVENT_APPRAISAL_ADJUSTMENT.affectedDimensions).toEqual([
+      'valence',
+      'self_norm',
+      'attachment',
+    ]);
+    expect(observerDerived.caveats).toContain(OBSERVER_MOOD_FREE_EVENT_APPRAISAL_CAVEAT);
+    for (const dimension of ['valence', 'self_norm', 'attachment'] as const) {
+      expect(observerDerived.projectedAppraisal.dimensionProvenance[dimension].caveats).toContain(
+        OBSERVER_MOOD_FREE_EVENT_APPRAISAL_CAVEAT,
+      );
+    }
+
+    // Direct-fixture appraisals bypass heuristic composition, so no adjustment applies.
+    const directFixture = projectObserverEvalToEmoSim(makeObserverInput(), {
+      directFixtureAppraisal: { appraisal: makeFixtureAppraisal() },
+    });
+    expectSuccess(directFixture);
+    expect(directFixture.projectedAppraisal.appraisalAdjustments).toEqual([]);
   });
 
   it('projects a neutral snapshot to midpoint attachment, safety, and agency_other despite intimate static context', () => {

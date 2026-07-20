@@ -33,6 +33,7 @@ import {
   AdminSessionTurnNotFoundError,
 } from './session-service.js';
 import type { FleetGardenRequestContext } from '../garden-request-context.js';
+import { createCompanionId } from '../../../shared/routing/companion-id.js';
 import {
   buildSubsystemOutputRef,
   buildTurnSubsystemProjectionRef,
@@ -1803,7 +1804,7 @@ describe('subject-bound session projection (88u3)', () => {
       sessionManager: new SessionManager(store, makeConfig({ dataDir: dir })),
       eventBus: new EventBus(),
       contactStore,
-      config: makeConfig({ dataDir: dir, companionId: COMPANION_ID }),
+      config: makeConfig({ dataDir: dir, companionId: createCompanionId(COMPANION_ID) }),
     });
     return { service, contactA, contactB };
   }

@@ -1,7 +1,6 @@
 import { createHash } from 'node:crypto';
 import type { LLMProviderPort } from '../../../core/agent/contracts.js';
 import type { SessionEntry } from '../../../core/session/types.js';
-import { resolveSessionEntryTurnContext } from '../../../core/session/turn-provenance.js';
 import { createComponentLogger } from '../../../shared/logger.js';
 import type {
   Episode,
@@ -30,6 +29,7 @@ import {
 } from './synthesis/consolidation.js';
 import { proposeTopicSegments, type TopicSegment } from './topic-segmentation.js';
 import type { PersonaPreamblePort } from '../../../core/identity/persona-preamble.js';
+import { resolveEpisodeSessionEntryTurnId } from './turn-reference.js';
 
 const log = createComponentLogger('EpisodicSynthesis');
 
@@ -241,11 +241,7 @@ function isConversational(entry: SessionEntry): boolean {
 }
 
 function getTurnId(entry: SessionEntry): string {
-  try {
-    return resolveSessionEntryTurnContext(entry).turnId;
-  } catch {
-    return `session-entry:${entry.channelId}:${entry.id}`;
-  }
+  return resolveEpisodeSessionEntryTurnId(entry);
 }
 
 /**

@@ -597,7 +597,7 @@ function isRelatedEpisodeUseful(
   );
 }
 
-function isEpisodeVisibleForTurn(episode: Episode, input: EpisodicRetrievalInput): boolean {
+export function isEpisodeVisibleForTurn(episode: Episode, input: EpisodicRetrievalInput): boolean {
   if (episode.channelId === input.channelId) {
     return true;
   }

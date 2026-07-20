@@ -38,6 +38,12 @@ import {
   type EpisodicTimelineStore,
 } from './retrieval/episodic.js';
 import {
+  formatEpisodeDrilldown,
+  retrieveEpisodeDrilldown,
+  type EpisodeDrilldownSessionReader,
+  type EpisodeDrilldownStore,
+} from './retrieval/episode-drilldown.js';
+import {
   resolveMemoryRetrievalPolicy,
   type MemoryRetrievalPolicy,
 } from '../../system/config/memory-retrieval-policy.js';
@@ -70,6 +76,7 @@ const MEMORY_TIMELINE_MAX_LIMIT = 20;
 const MEMORY_TOOL_ACTIONS = [
   'write',
   'search',
+  'get',
   'shared_background',
   'census',
   'exists',
@@ -82,6 +89,10 @@ const MEMORY_TOOL_ACTIONS = [
 ] as const;
 const SHARED_BACKGROUND_TOOL_LIMIT_DEFAULT = 12;
 const SHARED_BACKGROUND_TOOL_LIMIT_MAX = 25;
+const MEMORY_EPISODE_GET_LIMITS = {
+  defaultSiblings: 12,
+  maxSiblings: 25,
+} as const;
 type MemoryToolAction = (typeof MEMORY_TOOL_ACTIONS)[number];
 
 function errorMessage(error: unknown): string {
@@ -272,7 +283,8 @@ export interface MemoryWriteToolOptions {
 }
 
 export interface MemoryToolOptions extends MemoryWriteToolOptions {
-  episodicStore?: EpisodicTimelineStore | null;
+  episodicStore?: (EpisodicTimelineStore & EpisodeDrilldownStore) | null;
+  sessionReader?: EpisodeDrilldownSessionReader | null;
   /**
    * Shared-background provider (E4.5) backing `action=shared_background`. When
    * absent the action fails closed with an explicit not-configured error.
@@ -297,6 +309,7 @@ interface MemoryToolParams {
   tags?: string;
   sensitivity?: SensitivityLevel;
   query?: string;
+  episode_id?: string;
   limit?: number;
   contact_id?: string;
   contactId?: string;
@@ -808,7 +821,7 @@ export function createMemoryTool(
       action: Type.Unsafe<MemoryToolAction>({
         type: 'string',
         enum: [...MEMORY_TOOL_ACTIONS],
-        description: 'One of: write, search, shared_background, census, exists, timeline, import, patch, redact, delete, restore.',
+        description: 'One of: write, search, get, shared_background, census, exists, timeline, import, patch, redact, delete, restore.',
       }),
       text: Type.Optional(
         Type.String({ description: 'Required for action=write. The memory text to store.' }),
@@ -835,9 +848,14 @@ export function createMemoryTool(
       query: Type.Optional(
         Type.String({ description: 'Required for action=search or action=exists. Lexical memory topic query.' }),
       ),
+      episode_id: Type.Optional(
+        Type.String({
+          description: 'Required for action=get. Exact episode ID from an episodic landmark or timeline result.',
+        }),
+      ),
       limit: Type.Optional(
         Type.Number({
-          description: `Optional result limit for action=search or action=timeline. Search: ${MEMORY_SEARCH_DEFAULT_LIMIT}-${MEMORY_SEARCH_MAX_LIMIT}; timeline: ${MEMORY_TIMELINE_DEFAULT_LIMIT}-${MEMORY_TIMELINE_MAX_LIMIT}.`,
+          description: `Optional result limit for action=search, action=get sibling expansion, or action=timeline. Search: ${MEMORY_SEARCH_DEFAULT_LIMIT}-${MEMORY_SEARCH_MAX_LIMIT}; episode siblings: ${MEMORY_EPISODE_GET_LIMITS.defaultSiblings}-${MEMORY_EPISODE_GET_LIMITS.maxSiblings}; timeline: ${MEMORY_TIMELINE_DEFAULT_LIMIT}-${MEMORY_TIMELINE_MAX_LIMIT}.`,
         }),
       ),
       contact_id: Type.Optional(
@@ -869,24 +887,24 @@ export function createMemoryTool(
         Type.String({ description: 'For action=timeline, inclusive range end as YYYY-MM-DD or ISO-8601 timestamp with timezone.' }),
       ),
       channel_id: Type.Optional(
-        Type.String({ description: 'For action=census, action=exists, or action=timeline, current channel id. Usually supplied by runtime context.' }),
+        Type.String({ description: 'For action=get, action=census, action=exists, or action=timeline, current channel id. Usually supplied by runtime context.' }),
       ),
       trust_level: Type.Optional(
         Type.Unsafe<TrustLevel>({
           type: 'string',
           enum: [...TRUST_LEVELS],
-          description: 'For action=census, action=exists, or action=timeline, current viewer trust level. Usually supplied by runtime context.',
+          description: 'For action=get, action=census, action=exists, or action=timeline, current viewer trust level. Usually supplied by runtime context.',
         }),
       ),
       channel_visibility: Type.Optional(
         Type.Unsafe<ChannelPrivacy>({
           type: 'string',
           enum: [...CHANNEL_PRIVACY_VALUES],
-          description: 'For action=census, action=exists, or action=timeline, current channel visibility. Usually supplied by runtime context.',
+          description: 'For action=get, action=census, action=exists, or action=timeline, current channel visibility. Usually supplied by runtime context.',
         }),
       ),
       canonical_contact_id: Type.Optional(
-        Type.String({ description: 'For action=census, action=exists, or action=timeline, optional canonical contact id for trusted cross-channel continuity.' }),
+        Type.String({ description: 'For action=get, action=census, action=exists, or action=timeline, optional canonical contact id for trusted cross-channel continuity. Runtime ingress remains authoritative.' }),
       ),
       contact_a: Type.Optional(
         Type.String({ description: 'Required for action=shared_background. First contact id of the pair to find shared background for.' }),
@@ -1027,6 +1045,50 @@ export function createMemoryTool(
               sensitivity: memory.sensitivity,
               similarity: memory.similarity,
             }))));
+          }
+
+          case 'get': {
+            if (!options.episodicStore || !options.sessionReader) {
+              return textResultWithError(
+                'Error: episodic store and session reader are required for action=get',
+                true,
+              );
+            }
+            const episodeId = normalizedParams.episode_id?.trim();
+            if (!episodeId) {
+              return textResultWithError('Error: episode_id is required for action=get', true);
+            }
+            const visibility = resolveMemoryVisibility(normalizedParams, 'get');
+            if (!visibility.ok) {
+              return textResultWithError(visibility.error, true);
+            }
+            const siblingLimit = normalizedParams.limit === undefined
+              ? MEMORY_EPISODE_GET_LIMITS.defaultSiblings
+              : clampInt(normalizedParams.limit, 1, MEMORY_EPISODE_GET_LIMITS.maxSiblings);
+            const result = await retrieveEpisodeDrilldown(
+              options.episodicStore,
+              options.sessionReader,
+              {
+                episodeId,
+                channelId: visibility.channelId,
+                trustLevel: visibility.trustLevel,
+                channelDisclosure: {
+                  channelPrivacy: visibility.channelVisibility,
+                  broadcast: visibility.broadcast,
+                },
+                ...(visibility.canonicalContactId
+                  ? { canonicalContactId: visibility.canonicalContactId }
+                  : {}),
+                siblingLimit,
+              },
+            );
+            if (!result) {
+              return textResultWithError(
+                `Episode not found or not visible: ${episodeId}`,
+                true,
+              );
+            }
+            return textResult(formatEpisodeDrilldown(result));
           }
 
           case 'shared_background': {

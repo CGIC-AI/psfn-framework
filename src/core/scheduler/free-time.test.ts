@@ -552,7 +552,7 @@ describe('registerFreeTimeTasks', () => {
     expect(invokeTurn.mock.calls[0]?.[0].content).toContain('render the opening scene');
   });
 
-  it('surfaces a "while you were away" note on the partner session after an ACTIVE block', async () => {
+  it('keeps an unanchored "while you were away" note on the private internal workspace', async () => {
     let nowMs = Date.parse('2026-06-11T06:00:00.000Z');
     const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => nowMs);
     try {
@@ -570,7 +570,8 @@ describe('registerFreeTimeTasks', () => {
 
       expect(sessionManager.appendContextSystemNote).toHaveBeenCalledTimes(1);
       const [channelId, note, source] = sessionManager.appendContextSystemNote.mock.calls[0];
-      expect(channelId).toBe('api:main'); // partner session, NOT the internal channel
+      expect(channelId.startsWith(FREE_TIME_CHANNEL_PREFIX)).toBe(true);
+      expect(channelId).not.toBe('api:main');
       expect(source).toBe(FREE_TIME_RETURN_NOTE_SOURCE);
       expect(note).toContain('While you were away');
     } finally {
@@ -652,7 +653,8 @@ describe('registerFreeTimeTasks', () => {
       expect(summarizeActivity).not.toHaveBeenCalled();
       expect(sessionManager.appendContextSystemNote).toHaveBeenCalledTimes(1);
       const [channelId, note] = sessionManager.appendContextSystemNote.mock.calls[0];
-      expect(channelId).toBe('api:main'); // private/self, NOT contact A's DM
+      expect(channelId.startsWith(FREE_TIME_CHANNEL_PREFIX)).toBe(true);
+      expect(channelId).not.toBe('api:main');
       expect(note).toContain('While you were away');
       expect(note).not.toContain('Here is what I got up to');
       expect(note).not.toContain('contact B');
@@ -1115,16 +1117,18 @@ async function runActiveWorkspaceBlock(input: {
 }
 
 describe('workspace-resolved return-note routing', () => {
-  it('private_self workspace → full-fidelity content note on the private/self session', async () => {
+  it('private_self workspace → full-fidelity content note on its internal session', async () => {
     const workspace = resolveFreeTimeWorkspace({ kind: 'private_wander' }, routingDeps());
     expect(workspace.returnPolicy).toEqual({ kind: 'private_self' });
-    const { appendContextSystemNote } = await runActiveWorkspaceBlock({
+    const { appendContextSystemNote, invokeTurn } = await runActiveWorkspaceBlock({
       workspace,
       transcript: [entry({ id: 10, role: 'assistant', timestamp: 1, content: 'a private poem' })],
     });
     expect(appendContextSystemNote).toHaveBeenCalledTimes(1);
     const [channelId, note, source] = appendContextSystemNote.mock.calls[0];
-    expect(channelId).toBe('api:main'); // private/self surface
+    expect(channelId).toBe(invokeTurn.mock.calls[0]?.[0].channelId);
+    expect(channelId.startsWith(FREE_TIME_CHANNEL_PREFIX)).toBe(true);
+    expect(channelId).not.toBe('api:main');
     expect(source).toBe(FREE_TIME_RETURN_NOTE_SOURCE);
     expect(note).toContain('Here is what I got up to: a private poem');
   });
@@ -1154,7 +1158,7 @@ describe('workspace-resolved return-note routing', () => {
       { kind: 'private_wander', returnTarget: { contactId: 'contact-a' } },
       routingDeps(),
     );
-    const { appendContextSystemNote, summarizeActivity } = await runActiveWorkspaceBlock({
+    const { appendContextSystemNote, summarizeActivity, invokeTurn } = await runActiveWorkspaceBlock({
       workspace,
       transcript: [entry({ id: 10, role: 'assistant', timestamp: 1, content: 'made for contact A' })],
       configure: (runtime) => {
@@ -1162,10 +1166,13 @@ describe('workspace-resolved return-note routing', () => {
         runtime.resolveEntryDisclosureLineage = () => disclosureLineage({ ref: 'mem:a', permittedContactId: 'contact-a' });
       },
     });
-    // Never a wrong-destination append: content-free note on the private/self session.
+    // Never a wrong-destination append: content-free note on the internal
+    // private/self session.
     expect(summarizeActivity).not.toHaveBeenCalled();
     const [channelId, note] = appendContextSystemNote.mock.calls[0];
-    expect(channelId).toBe('api:main');
+    expect(channelId).toBe(invokeTurn.mock.calls[0]?.[0].channelId);
+    expect(channelId.startsWith(FREE_TIME_CHANNEL_PREFIX)).toBe(true);
+    expect(channelId).not.toBe('api:main');
     expect(note).not.toContain('Here is what I got up to');
     expect(note).not.toContain('contact A');
   });

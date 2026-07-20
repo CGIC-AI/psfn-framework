@@ -1,6 +1,54 @@
 {
   "entries": [
     {
+      "path": "src/app/maintenance/migrate-free-time-visibility.ts",
+      "contains": "psfn-framework-jp36",
+      "reason": "Implementation comment cites the project bead that owns the one-time free-time visibility migration.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/app/maintenance/migrate-project-manifests-v2.ts",
+      "contains": "psfn-framework-jp36",
+      "reason": "Implementation comment cites the project bead that owns the personal-project manifest migration.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/app/maintenance/quarantine-legacy-project-artifacts.ts",
+      "contains": "psfn-framework-jp36",
+      "reason": "Implementation comment cites the project bead that owns legacy artifact quarantine.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/faculties/wiki/personal-projects.ts",
+      "contains": "psfn-framework-jp36",
+      "reason": "Implementation comments cite the project beads that own the social-autonomy project migrations.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/faculties/wiki/personal-projects.ts",
+      "contains": "psfn:personal-project",
+      "reason": "Personal-project wiki documents retain their stable project-scoped storage tag across upgrades.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/faculties/wiki/tools.ts",
+      "contains": "psfn-framework-jp36",
+      "reason": "Implementation comment cites the project bead that owns the runtime-derived project-lineage write guard.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/persistence/postgres/speaking-arbiter-admin-store.ts",
+      "contains": "psfn-speaking-arbiter-admin-projection",
+      "reason": "The Postgres application name is a stable project-scoped operational identifier used for database observability.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/system/config/companions-config.ts",
+      "contains": "PSFN",
+      "reason": "Fleet-manifest validation errors name the framework topology and do not provide a companion identity or persona default.",
+      "pattern": "identity-proper-name"
+    },
+    {
       "path": "src/operator/garden/transport-client.ts",
       "contains": "x-psfn-fleet-model-usage-",
       "reason": "Fleet model-usage fan-out uses stable project-scoped internal header names that browser-facing proxy paths cannot add.",

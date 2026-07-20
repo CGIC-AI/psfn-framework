@@ -48,6 +48,7 @@ import { currentChannelClassificationEpoch } from '../../system/trust/runtime-cl
 import {
   composeEgressDisclosureDecision,
   deriveDisclosureDestination,
+  isDisclosureSocialEgressInvocation,
   type CapsuleCustodyService,
   type DisclosureLineage,
 } from '../cogsec/disclosure/index.js';
@@ -904,6 +905,10 @@ export class SubstrateAgent {
           sinkReason,
           lineage: this.currentTurnDisclosureLineage,
           destination,
+          requiresDisclosureDestination: isDisclosureSocialEgressInvocation({
+            method: toolName,
+            params,
+          }),
         });
         if (composed.disclosureEvaluated) {
           log.debug('Egress disclosure destination check', {

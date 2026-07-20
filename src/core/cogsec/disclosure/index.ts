@@ -31,6 +31,7 @@ export {
   DISCLOSURE_SOCIAL_EGRESS_METHODS,
   composeEgressDisclosureDecision,
   deriveDisclosureDestination,
+  isDisclosureSocialEgressInvocation,
   isDisclosureSocialEgressMethod,
   type ChannelDisclosureResolver,
   type ComposedEgressDisclosureDecision,

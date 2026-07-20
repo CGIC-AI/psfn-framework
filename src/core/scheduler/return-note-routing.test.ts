@@ -9,7 +9,7 @@ import {
 
 function ports(overrides: Partial<ReturnNoteRoutingPorts> = {}): ReturnNoteRoutingPorts {
   return {
-    privateSelfSessionId: 'api:main',
+    privateSelfSessionId: 'internal:free-time:private',
     workspaceSessionId: 'internal:free-time:private',
     ...overrides,
   };
@@ -63,7 +63,7 @@ describe('routeReturnNote', () => {
   it('routes companion_self to the private-self session with content allowed', () => {
     const route = routeReturnNote({ kind: 'companion_self' }, ports());
     expect(route).toMatchObject({
-      targetSessionId: 'api:main',
+      targetSessionId: 'internal:free-time:private',
       isPublicationState: false,
       contentAllowed: true,
     });
@@ -86,7 +86,7 @@ describe('routeReturnNote', () => {
       ports({ resolveContactDmSessionId: () => null }),
     );
     // Never a wrong-destination append: falls back to private/self, content-free.
-    expect(route.targetSessionId).toBe('api:main');
+    expect(route.targetSessionId).toBe('internal:free-time:private');
     expect(route.destination).toEqual({ kind: 'companion_self' });
     expect(route.contentAllowed).toBe(false);
     expect(route.isPublicationState).toBe(false);
@@ -94,7 +94,7 @@ describe('routeReturnNote', () => {
 
   it('COLLAPSES a contact_dm when NO resolver port is wired', () => {
     const route = routeReturnNote({ kind: 'contact_dm', contactId: 'contact-a' }, ports());
-    expect(route.targetSessionId).toBe('api:main');
+    expect(route.targetSessionId).toBe('internal:free-time:private');
     expect(route.contentAllowed).toBe(false);
   });
 
@@ -113,7 +113,7 @@ describe('routeReturnNote', () => {
 
   it('COLLAPSES a room destination with an empty channel id to private/self', () => {
     const route = routeReturnNote({ kind: 'invite_only_room', channelId: '   ' }, ports());
-    expect(route.targetSessionId).toBe('api:main');
+    expect(route.targetSessionId).toBe('internal:free-time:private');
     expect(route.contentAllowed).toBe(false);
     expect(route.destination).toEqual({ kind: 'companion_self' });
   });

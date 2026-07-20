@@ -119,6 +119,44 @@ describe('AdminSettingsDataService channel envelope surface', () => {
     expect(data.channels.find(row => row.channelId === 'room:confirmed')).toBeUndefined();
   });
 
+  it('blocks generic non-public → public edits and preserves prior confirmation authority', () => {
+    const root = makeTempDir();
+    const service = buildService(root);
+
+    expect(service.saveChannelEnvelopeLabel('room:friends', {
+      privacy: 'invite_only',
+      contactTracking: 'auto',
+    }).ok).toBe(true);
+
+    const bypass = service.saveChannelEnvelopeLabel('room:friends', {
+      privacy: 'public',
+      contactTracking: 'auto',
+    });
+    expect(bypass.ok).toBe(false);
+    expect(bypass.message).toMatch(/click-to-accept/i);
+    expect(bypass.message).toMatch(/fresh disclosure epoch/i);
+
+    const accepted = service.acceptChannelDemotion({
+      channelId: 'room:friends',
+      acknowledgedNoticeVersion: DEMOTION_EPOCH_NOTICE_VERSION,
+    });
+    expect(accepted.ok).toBe(true);
+
+    const edited = service.saveChannelEnvelopeLabel('room:friends', {
+      privacy: 'public',
+      contactTracking: 'approval',
+    });
+    expect(edited.ok).toBe(true);
+
+    const written = JSON.parse(readFileSync(join(root, 'channels.json'), 'utf8'));
+    expect(written.contextEnvelope.channels['room:friends']).toEqual({
+      privacy: 'public',
+      contactTracking: 'approval',
+      classificationSource: 'operator_confirmed',
+    });
+    expect(written.contextEnvelope.classificationEpochs).toHaveLength(1);
+  });
+
   it('upserts and removes channel labels through the validated owner-file path', () => {
     const root = makeTempDir();
     const service = buildService(root);

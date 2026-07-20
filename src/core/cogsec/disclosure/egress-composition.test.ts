@@ -7,6 +7,7 @@ import {
 import {
   composeEgressDisclosureDecision,
   deriveDisclosureDestination,
+  isDisclosureSocialEgressInvocation,
   isDisclosureSocialEgressMethod,
 } from './egress-composition.js';
 import type {
@@ -65,8 +66,34 @@ describe('deriveDisclosureDestination', () => {
     expect(isDisclosureSocialEgressMethod('discord.send')).toBe(true);
     expect(isDisclosureSocialEgressMethod('discord.sendMedia')).toBe(true);
     expect(isDisclosureSocialEgressMethod('discord.sendReaction')).toBe(true);
+    expect(isDisclosureSocialEgressMethod('notify')).toBe(true);
     expect(isDisclosureSocialEgressMethod('web.fetch')).toBe(false);
     expect(isDisclosureSocialEgressMethod('notify.ntfy')).toBe(false);
+  });
+
+  it('recognizes only the live Discord-send shape of the consolidated notify tool', () => {
+    expect(isDisclosureSocialEgressInvocation({
+      method: 'notify',
+      params: {
+        action: 'send',
+        target_kind: 'external',
+        delivery_channel: 'discord',
+        delivery_target: 'inv-9',
+      },
+    })).toBe(true);
+    expect(isDisclosureSocialEgressInvocation({
+      method: 'notify',
+      params: {
+        action: 'send',
+        target_kind: 'external',
+        delivery_channel: 'email',
+        delivery_target: 'operator@example.test',
+      },
+    })).toBe(false);
+    expect(isDisclosureSocialEgressInvocation({
+      method: 'notify',
+      params: { action: 'brief', message: 'operator update' },
+    })).toBe(false);
   });
 
   it('derives a contact DM destination from a contactId param', () => {
@@ -89,6 +116,19 @@ describe('deriveDisclosureDestination', () => {
     expect(deriveDisclosureDestination({
       method: 'discord.sendReaction', params: { channelId: 'bcast-9' }, resolveChannel,
     })).toEqual({ kind: 'public_room', channelId: 'bcast-9' });
+  });
+
+  it('derives the live notify Discord delivery_target as the room destination', () => {
+    expect(deriveDisclosureDestination({
+      method: 'notify',
+      params: {
+        action: 'send',
+        target_kind: 'external',
+        delivery_channel: 'discord',
+        delivery_target: 'inv-9',
+      },
+      resolveChannel,
+    })).toEqual({ kind: 'invite_only_room', channelId: 'inv-9' });
   });
 
   it('stamps the channel current epoch onto a room destination when the resolver tracks one (jp36.6.3)', () => {
@@ -146,6 +186,21 @@ describe('composeEgressDisclosureDecision', () => {
     });
     expect(composed.allowed).toBe(true);
     expect(composed.disclosureEvaluated).toBe(false);
+  });
+
+  it('denies a known social send when its destination cannot be resolved', () => {
+    const composed = composeEgressDisclosureDecision({
+      sinkAllowed: true,
+      lineage: lineageFrom(dmContribution('contact-1', 'personal')),
+      destination: null,
+      requiresDisclosureDestination: true,
+    });
+    expect(composed).toMatchObject({
+      allowed: false,
+      outcome: 'non_shareable',
+      disclosureEvaluated: true,
+    });
+    expect(composed.reason).toContain('could not be resolved');
   });
 
   it('permits a restricted lineage to its eligible DM', () => {

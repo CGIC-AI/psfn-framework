@@ -627,7 +627,7 @@ function buildPublicationStateNote(): string {
  */
 async function surfaceReturnNote(
   options: FreeTimeRuntimeOptions,
-  partnerSessionId: string,
+  privateSelfSessionId: string,
   freeTimeChannel: string,
   result: FreeTimeBlockResult,
   routing?: { returnPolicy: FreeTimeReturnPolicy; disclosureCeiling?: DisclosureDestination },
@@ -652,7 +652,7 @@ async function surfaceReturnNote(
   // Route AND destination from the same source: `route.destination` feeds the
   // projection content gate; `route.targetSessionId` is the append target.
   const route = routeReturnNote(requestedDestination, {
-    privateSelfSessionId: partnerSessionId,
+    privateSelfSessionId,
     workspaceSessionId: freeTimeChannel,
     ...(options.resolveContactDmSessionId
       ? { resolveContactDmSessionId: options.resolveContactDmSessionId }
@@ -721,7 +721,7 @@ async function surfaceReturnNote(
   // projection collapse, or an empty summary — is a content-free note that keeps
   // to the companion's own private-self session, never the outward destination.
   const deliverContent = summary.length > 0 && !projectionCollapsed && route.contentAllowed;
-  const targetSessionId = deliverContent ? route.targetSessionId : partnerSessionId;
+  const targetSessionId = deliverContent ? route.targetSessionId : privateSelfSessionId;
 
   log.debug('Free-time return-note routed', {
     channelId: freeTimeChannel,
@@ -962,7 +962,7 @@ function makeLaneHandler(
       : undefined;
     let returnSurfaced = false;
     try {
-      returnSurfaced = await surfaceReturnNote(options, sessionId, channelId, result, returnRouting);
+      returnSurfaced = await surfaceReturnNote(options, channelId, channelId, result, returnRouting);
     } catch (error) {
       log.error('Free-time return-surfacing failed; block outcome stands', {
         lane,

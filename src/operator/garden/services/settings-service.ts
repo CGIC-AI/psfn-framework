@@ -1160,7 +1160,8 @@ export class AdminSettingsDataService implements AdminSettingsService {
    * decision marker `classificationSource: 'operator_confirmed'` — that marker
    * is only writable through the click-to-accept demotion flow
    * (acceptChannelDemotion), which stamps it atomically with an operator-signed
-   * epoch record. A label carrying it here is rejected fail-closed.
+   * epoch record. A label carrying it here is rejected fail-closed, and this
+   * generic path cannot change any non-public channel to public/broadcast.
    */
   saveChannelEnvelopeLabel(channelIdRaw: string, label: unknown): ConfigUpdateResult {
     const channelId = channelIdRaw.trim();
@@ -1193,10 +1194,41 @@ export class AdminSettingsDataService implements AdminSettingsService {
         }
         delete nextChannels[channelId];
       } else {
-        nextChannels[channelId] = validateChannelEnvelopeLabel(
+        const validatedLabel = validateChannelEnvelopeLabel(
           label,
           `contextEnvelope.channels.${channelId}`,
         );
+        const existingLabel = Object.hasOwn(section.channels, channelId)
+          ? section.channels[channelId]
+          : undefined;
+        const currentClassification = resolveChannelEnvelopeClassification(
+          channelId,
+          undefined,
+          {
+            ...(existingLabel ? { label: existingLabel } : {}),
+            trustPolicy: this.deps.configStore.loadTrustPolicy(),
+          },
+        );
+        const requestedPublic = validatedLabel.privacy === 'public'
+          || validatedLabel.broadcast === true;
+        const currentlyPublic = currentClassification.privacy === 'public'
+          || currentClassification.broadcast;
+        if (requestedPublic && !currentlyPublic) {
+          return {
+            ok: false,
+            message: `Channel '${channelId}' cannot change from ${currentClassification.privacy} `
+              + 'to public through the generic label editor; use the click-to-accept '
+              + 'invite-only → public demotion flow so a fresh disclosure epoch is recorded',
+          };
+        }
+
+        // Editing other fields on an already confirmed public channel must not
+        // silently erase the operator decision marker. The caller cannot author
+        // this field, but the service preserves the existing authority fact.
+        nextChannels[channelId] = existingLabel?.classificationSource === 'operator_confirmed'
+          && requestedPublic
+          ? { ...validatedLabel, classificationSource: 'operator_confirmed' }
+          : validatedLabel;
       }
 
       const nextRoot = this.buildNextChannelsRoot(

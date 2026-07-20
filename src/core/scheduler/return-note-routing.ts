@@ -16,8 +16,8 @@
 //
 // Fail-closed posture (charter / AGENTS.md, bible §20.4):
 //
-//   - `private_self`      → the companion's own private-self session; full
-//     fidelity is allowed (companion-self is the private sink).
+//   - `private_self`      → the companion's internal workspace session; full
+//     fidelity is allowed because it never enters a human/contact session.
 //   - `contact_dm`        → resolve `contactId` → that contact's DM session
 //     (never address a private channel id directly). An UNRESOLVABLE contact
 //     collapses to a content-free private/self note — NEVER a wrong-destination
@@ -79,11 +79,11 @@ export type ContactDmSessionResolver = (contactId: string) => string | null;
 
 export interface ReturnNoteRoutingPorts {
   /**
-   * The companion's private-self return surface — the session a private/self or
-   * fail-closed content-free note is appended to. In the single-partner runtime
-   * this is the default eligible session; a multi-human deployment resolves the
-   * primary contact's DM (jp36.2.4). Never a room or an arbitrary admin (bible
-   * §10.8 multi-human rule).
+   * The companion's private-self return surface — the INTERNAL workspace
+   * session a private/self or fail-closed content-free note is appended to.
+   * It is never a human DM, room, arbitrary admin, or "latest session"; outward
+   * delivery requires an exact contact/room route (bible §10.8 multi-human
+   * rule).
    */
   readonly privateSelfSessionId: string;
   /**

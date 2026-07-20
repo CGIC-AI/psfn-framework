@@ -30,21 +30,47 @@ import type {
 } from './contracts.js';
 
 /**
- * Outbound gateway/tool methods that carry a self-generated, disclosure-bearing
- * payload to a SOCIAL destination (a specific contact, room, or the publication
- * surface). This is a strict subset of the canary egress method set: web fetch
- * and operator/companion notifications egress data but are not disclosure to a
- * social audience, so they are absent — their existing sink/trifecta gate is the
- * correct and only control.
+ * Outbound gateway/tool methods that can carry a self-generated,
+ * disclosure-bearing payload to a SOCIAL destination (a specific contact,
+ * room, or the publication surface). `notify` is included because it is the
+ * model-facing route to Discord; {@link isDisclosureSocialEgressInvocation}
+ * narrows it to the external Discord-send action so operator briefs, email, and
+ * companion handoffs retain their existing sink/trifecta controls.
  */
 export const DISCLOSURE_SOCIAL_EGRESS_METHODS: ReadonlySet<string> = new Set([
   'discord.send',
   'discord.sendMedia',
   'discord.sendReaction',
+  'notify',
 ]);
 
 export function isDisclosureSocialEgressMethod(method: string): boolean {
   return DISCLOSURE_SOCIAL_EGRESS_METHODS.has(method);
+}
+
+/**
+ * Whether this exact invocation attempts disclosure-bearing social egress.
+ *
+ * `notify` is the model-facing consolidated tool used for live Discord sends;
+ * the gateway RPC method (`discord.send`) is below the capability gate and is
+ * therefore never the method name observed by the disclosure guard. Email,
+ * operator briefs, approvals, and companion handoffs remain governed by their
+ * existing sink gates and are not Discord-room disclosure invocations.
+ */
+export function isDisclosureSocialEgressInvocation(input: {
+  method: string;
+  params: unknown;
+}): boolean {
+  if (input.method !== 'notify') {
+    return isDisclosureSocialEgressMethod(input.method);
+  }
+  if (!input.params || typeof input.params !== 'object' || Array.isArray(input.params)) {
+    return false;
+  }
+  const record = input.params as Record<string, unknown>;
+  return record.action === 'send'
+    && record.target_kind !== 'companion'
+    && record.delivery_channel === 'discord';
 }
 
 /**
@@ -85,16 +111,18 @@ export function deriveDisclosureDestination(input: {
   params: unknown;
   resolveChannel: ChannelDisclosureResolver;
 }): DisclosureDestination | null {
-  if (!isDisclosureSocialEgressMethod(input.method)) return null;
+  if (!isDisclosureSocialEgressInvocation(input)) return null;
   const { params } = input;
   if (!params || typeof params !== 'object' || Array.isArray(params)) return null;
   const record = params as Record<string, unknown>;
 
-  const rawContactId = record.contactId;
+  const rawContactId = input.method === 'notify' ? undefined : record.contactId;
   const contactId = typeof rawContactId === 'string' ? rawContactId.trim() : '';
   if (contactId) return { kind: 'contact_dm', contactId };
 
-  const rawChannelId = record.channelId;
+  const rawChannelId = input.method === 'notify'
+    ? record.delivery_target
+    : record.channelId;
   const channelId = typeof rawChannelId === 'string' ? rawChannelId.trim() : '';
   if (!channelId) return null;
 
@@ -150,6 +178,12 @@ export function composeEgressDisclosureDecision(input: {
   lineage: DisclosureLineage | undefined;
   /** Outward destination derived from the invocation; null ⇒ disclosure check does not apply. */
   destination: DisclosureDestination | null;
+  /**
+   * True when the invocation is known to be disclosure-bearing social egress.
+   * Such an invocation with no resolvable destination fails closed instead of
+   * falling through to the generic sink-gate allow.
+   */
+  requiresDisclosureDestination?: boolean;
 }): ComposedEgressDisclosureDecision {
   // Compose, do not bypass: a denied sink gate stays denied regardless of any
   // disclosure decision.
@@ -166,6 +200,15 @@ export function composeEgressDisclosureDecision(input: {
   // No disclosure-bearing social destination: the existing sink gate's allow
   // stands untouched.
   if (!input.destination) {
+    if (input.requiresDisclosureDestination) {
+      return {
+        allowed: false,
+        outcome: 'non_shareable',
+        destination: null,
+        disclosureEvaluated: true,
+        reason: 'fail closed: disclosure-bearing social egress destination could not be resolved',
+      };
+    }
     return {
       allowed: true,
       outcome: 'auto_shareable',

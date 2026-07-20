@@ -25,6 +25,9 @@ import {
   isNonConversationalSessionEntry,
   wrapUntrustedContext,
 } from '../manager-primitives.js';
+import {
+  filterSupersededTemporalWakeupRefreshers,
+} from '../session-lane-metadata.js';
 import { formatActiveDateTimeCompact, formatActiveWeekdayShort } from '../../../shared/time/active-timezone.js';
 
 const ARTIFACT_IMAGE_TOOL_NAMES = new Set(['selfie_create', 'generate_image']);
@@ -270,7 +273,7 @@ export function entriesToMessages(
     stampLabel?: string;
   }> = [];
 
-  for (const entry of entries) {
+  for (const entry of filterSupersededTemporalWakeupRefreshers(entries)) {
     if (isNonConversationalSessionEntry(entry)) {
       continue;
     }

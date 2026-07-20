@@ -717,6 +717,88 @@ describe('orientation context surface wiring', () => {
     }
   });
 
+  it('supersedes older time-of-day refreshers before history summarization and assembly', async () => {
+    tokenTestUtils.setTokenizerFactory(() => ({
+      encode: (text: string) => ({ length: text.length }),
+    }));
+    try {
+      const refresher = (id: number, label: string, timestamp: number): SessionEntry => ({
+        id,
+        channelId: 'api:main',
+        role: 'system',
+        content: `[Time-of-day refresher] ${label} frame.`,
+        authorId: 'system',
+        authorName: 'System',
+        timestamp,
+        metadata: JSON.stringify({
+          sessionLane: {
+            schemaVersion: 1,
+            kind: 'system_note',
+            source: 'temporal_wakeup_refresher',
+          },
+        }),
+      });
+      const conversational = (id: number): SessionEntry => ({
+        id,
+        channelId: 'api:main',
+        role: id % 2 === 0 ? 'user' : 'assistant',
+        content: `Conversation ${id} ${'context '.repeat(10)}`,
+        ...(id % 2 === 0
+          ? { authorId: 'u1', authorName: 'User' }
+          : { authorName: 'Companion' }),
+        timestamp: 1_700_000_000_000 + (id * 60_000),
+      });
+      const entries = [
+        refresher(1, 'First', 1_700_000_000_000),
+        conversational(2),
+        refresher(3, 'Second', 1_700_000_120_000),
+        conversational(4),
+        refresher(5, 'Third', 1_700_000_240_000),
+        conversational(6),
+        conversational(7),
+        conversational(8),
+        conversational(9),
+        conversational(10),
+        conversational(11),
+        // Append order, not a corrected wall clock, defines the latest firing.
+        refresher(12, 'Latest', 1_699_999_940_000),
+      ];
+      const complete = vi.fn<LLMProviderPort['complete']>().mockImplementation(async (context) => {
+        const summarySource = context.messages[0]?.content ?? '';
+        expect(summarySource).not.toContain('First frame.');
+        expect(summarySource).not.toContain('Second frame.');
+        expect(summarySource).not.toContain('Third frame.');
+        return {
+          content: 'The conversation remained coherent.',
+          model: 'test',
+          inputTokens: 0,
+          outputTokens: 0,
+          toolCalls: [],
+          stopReason: 'end_turn',
+        };
+      });
+
+      const assembled = await assembleSessionHistoryForContextWithLlmSummary({
+        entries,
+        channelVisibility: 'private',
+        renderGroupUserAttribution: false,
+        tokenBudget: 600,
+        channelId: 'api:main',
+        llmProvider: makeSummaryProvider(complete),
+        promptRegistry: null,
+      });
+
+      expect(complete).toHaveBeenCalledTimes(1);
+      const rendered = assembled.messages.map(message => message.content).join('\n');
+      expect(rendered.match(/Latest frame\./gu)).toHaveLength(1);
+      expect(rendered).not.toContain('First frame.');
+      expect(rendered).not.toContain('Second frame.');
+      expect(rendered).not.toContain('Third frame.');
+    } finally {
+      tokenTestUtils.resetTokenizerState();
+    }
+  });
+
   it('uses the same recent-summary service for wake orientation summaries', async () => {
     const now = Date.now();
     const hourMs = 60 * 60 * 1000;

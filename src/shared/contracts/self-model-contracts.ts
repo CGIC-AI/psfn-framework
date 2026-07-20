@@ -1,5 +1,6 @@
 import type {
   AcacSnapshot,
+  EmotionDiscrepancy,
   EmotionTelemetryValidation,
   VADVector,
 } from './emotion-contracts.js';
@@ -45,6 +46,17 @@ export interface InternalState {
     discreteEmotions: Record<string, number>;
     confidence: number;
     telemetry: EmotionTelemetryValidation;
+    /**
+     * Cross-family emotional divergences for the turn (031.11.1): VAD valence vs
+     * discrete labels, momentary VAD vs mood, ACAC self-report vs classifier.
+     * Surfaced honestly and never forced coherent (charter §8.3). Empty when
+     * nothing diverges or when the emotion telemetry is not trusted. Downstream
+     * consumers (mixed-state reflection, journaling — sibling 031.11.2) read
+     * this; it is not a promotion of any signal to canonical truth. Optional for
+     * backward compatibility with persisted state written before it existed;
+     * computeState always populates it (empty when nothing diverges).
+     */
+    discrepancies?: EmotionDiscrepancy[];
     acac?: AcacSnapshot;
   };
   cognitive: {

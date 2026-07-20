@@ -65,11 +65,10 @@ describe('EmoSim server adapter', () => {
 
   it('attaches the companion directed relationship reading, excluding the anchor', async () => {
     const server = new FakeEmoSimServer();
+    // Real emo_sim flat wire shape: keyed "<source>-><target>" NAMES.
     server.relationships = {
-      [AGENT_NAME]: {
-        [EMOSIM_SERVER_ANCHOR_NPC_NAME]: { liking: 0.9, trust: 0.9, familiarity: 0.9 },
-        pierre: { liking: 0.6, trust: 0.4, familiarity: 0.5 },
-      },
+      [`${AGENT_NAME}->${EMOSIM_SERVER_ANCHOR_NPC_NAME}`]: { liking: 0.9, trust: 0.9, familiarity: 0.9 },
+      [`${AGENT_NAME}->pierre`]: { liking: 0.6, trust: 0.4, familiarity: 0.5, feelings: { Love: 0.3 } },
     };
     const runner = makeRunner(server);
 
@@ -84,7 +83,7 @@ describe('EmoSim server adapter', () => {
   });
 
   it('omits the relationship reading when only the anchor is present (HEAD reality) or it is empty', async () => {
-    for (const relationships of [{}, { [AGENT_NAME]: { [EMOSIM_SERVER_ANCHOR_NPC_NAME]: { liking: 0.9 } } }]) {
+    for (const relationships of [{}, { [`${AGENT_NAME}->${EMOSIM_SERVER_ANCHOR_NPC_NAME}`]: { liking: 0.9 } }]) {
       const server = new FakeEmoSimServer();
       server.relationships = relationships;
       const result = await runEmoSimProjectedStimulus(makeInput(), { runner: makeRunner(server) });

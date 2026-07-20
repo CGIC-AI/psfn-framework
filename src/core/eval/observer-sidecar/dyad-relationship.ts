@@ -3,10 +3,14 @@
  *
  * The pinned emo_sim server (`emo_sim/server.py#http-api.v1`, SHA
  * 5bb571d4cec42f6d178f70f529b52640a46018b5) exposes a top-level `relationships`
- * map in the `?full=1` session snapshot. This module reads the companion
- * agent's OUTGOING directed relationships (source = the companion) — liking /
- * trust / dominance / familiarity, plus any emotion delta — from that map and
- * renders them as a companion-readable ADVISORY prose reading.
+ * map in the `?full=1` session snapshot. That map is FLAT: each key is the two
+ * participant NAMES joined by the literal `->` separator (`"<source>-><target>"`,
+ * statemashine.py) and each value is a record carrying `from`/`to` participant
+ * uids, the directed `liking` / `trust` / `dominance` / `familiarity`
+ * dimensions, and a `feelings` emotion-delta map (top emotions). This module
+ * reads the companion agent's OUTGOING directed relationships (source name = the
+ * companion) from that map and renders them as a companion-readable ADVISORY
+ * prose reading.
  *
  * Two hard constraints from the oth4 adjudication and repo working rules:
  *
@@ -15,15 +19,16 @@
  *    review, provenance-marked as classifier-adjacent inference (twa0), never
  *    an automatic promoter/demoter.
  *
- * 2. Fail-closed on malformed, fail-soft to omission. The exact inner shape of
- *    emo_sim's relationship records is NOT vendored in this repo (emo_sim ships
- *    in a separate repo). The parser therefore reads the documented dimensions
- *    defensively and returns `null` on anything it cannot understand — it never
- *    throws into the sidecar observation and never fabricates a neutral reading
- *    (charter 8.5). At the pinned HEAD the only session peer is the synthetic
- *    `baseline-anchor` NPC, so the companion's real directed relationships are
- *    empty and this correctly degrades to no signal until emo_sim carries real
- *    dyad data (e.g. after the oth4.5 per-contact upstream work).
+ * 2. Fail-closed on malformed, fail-soft to omission. The parser reads the
+ *    documented dimensions defensively and returns `null` on anything it cannot
+ *    understand (a key without the `->` separator, a non-record value, no numeric
+ *    dimension) — it never throws into the sidecar observation and never
+ *    fabricates a neutral reading (charter 8.5). At the pinned HEAD the synthetic
+ *    `baseline-anchor` NPC is the ONLY other agent in the session, so the only
+ *    directed relationship the companion can have is toward that anchor — which
+ *    the caller excludes as a session artifact. Real dyads therefore appear only
+ *    once upstream per-contact work (e.g. oth4.5) seeds the companion's actual
+ *    contacts as session agents; until then this correctly degrades to no signal.
  */
 import type { EmotionTelemetryProvenance } from '../../../shared/contracts/emotion-contracts.js';
 import type { DyadRelationshipAdvisory } from '../../../shared/contracts/dyad-relationship-advisory.js';
@@ -51,7 +56,10 @@ const LIKING_KEYS = ['liking', 'like', 'affection'] as const;
 const TRUST_KEYS = ['trust', 'trusting'] as const;
 const DOMINANCE_KEYS = ['dominance', 'dominant', 'power'] as const;
 const FAMILIARITY_KEYS = ['familiarity', 'familiar', 'closeness'] as const;
-const EMOTION_MAP_KEYS = ['emotions', 'emotion_deltas', 'emotionDeltas', 'kicks'] as const;
+const EMOTION_MAP_KEYS = ['feelings', 'emotions', 'emotion_deltas', 'emotionDeltas', 'kicks'] as const;
+
+/** Literal separator joining source and target NAMES in an emo_sim relationship key. */
+const RELATIONSHIP_KEY_SEPARATOR = '->' as const;
 
 /**
  * Aggregate outward directed-relationship reading for one source agent. Means
@@ -84,6 +92,13 @@ export interface ParseDirectedRelationshipOptions {
  * emo_sim `?full=1` session snapshot. Returns `null` on absent OR malformed
  * data — never throws. A non-null result means at least one real target
  * carried at least one of the four documented dimensions.
+ *
+ * The pinned emo_sim server (statemashine.py) emits `relationships` as a FLAT
+ * map keyed by the two participant NAMES joined by the literal `->` separator
+ * (`"<source>-><target>"`), each value a record carrying `from`/`to` uids, the
+ * four directed dimensions, and a `feelings` emotion-delta map. This reads the
+ * entries whose SOURCE name is the companion, excludes the configured target
+ * names (e.g. the synthetic anchor NPC), and averages the dimensions present.
  */
 export function parseEmoSimDirectedRelationshipReading(
   rawSessionState: unknown,
@@ -93,11 +108,6 @@ export function parseEmoSimDirectedRelationshipReading(
   const relationships = rawSessionState.relationships;
   if (!isRecord(relationships)) return null;
 
-  const bySource = relationships[options.agentName];
-  // Supported shape: relationships[source][target] = { liking, trust, ... }.
-  // Anything else (flat keys, arrays, scalars) is treated as not-understood.
-  if (!isRecord(bySource)) return null;
-
   const exclude = new Set(options.excludeTargets ?? []);
   const liking: number[] = [];
   const trust: number[] = [];
@@ -106,8 +116,12 @@ export function parseEmoSimDirectedRelationshipReading(
   let topEmotionShift: { label: string; delta: number } | null = null;
   let contributingTargets = 0;
 
-  for (const [target, record] of Object.entries(bySource)) {
-    if (exclude.has(target)) continue;
+  for (const [key, record] of Object.entries(relationships)) {
+    const dyad = splitRelationshipKey(key);
+    // Not-understood key shape (no `->` separator, empty source/target): skip.
+    if (dyad === null) continue;
+    if (dyad.source !== options.agentName) continue;
+    if (exclude.has(dyad.target)) continue;
     if (!isRecord(record)) continue;
     const l = readFirstFinite(record, LIKING_KEYS);
     const t = readFirstFinite(record, TRUST_KEYS);
@@ -269,6 +283,22 @@ function resolveObservedAtMs(emosim: EmoSimAdapterRunResult): number | null {
   const observedAt = emosim.output.input.deterministic.observedAt;
   const parsed = Date.parse(observedAt);
   return Number.isFinite(parsed) ? parsed : null;
+}
+
+/**
+ * Split an emo_sim relationship key `"<source>-><target>"` into its two
+ * participant NAMES. Returns `null` for any key lacking the `->` separator or
+ * with an empty source/target — those are not-understood and skipped. Splits on
+ * the FIRST separator so a target name is preserved intact even in the (unlikely)
+ * event it embeds the separator sequence.
+ */
+function splitRelationshipKey(key: string): { source: string; target: string } | null {
+  const at = key.indexOf(RELATIONSHIP_KEY_SEPARATOR);
+  if (at < 0) return null;
+  const source = key.slice(0, at);
+  const target = key.slice(at + RELATIONSHIP_KEY_SEPARATOR.length);
+  if (source.length === 0 || target.length === 0) return null;
+  return { source, target };
 }
 
 function readFirstFinite(record: Record<string, unknown>, keys: readonly string[]): number | null {

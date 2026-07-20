@@ -59,7 +59,7 @@ function compareArcRecency(left: EpisodeArc, right: EpisodeArc): number {
   return left.id.localeCompare(right.id);
 }
 
-function makeStore(episodes: readonly Episode[], arcs: readonly Episode[]) {
+function makeStore(episodes: readonly Episode[], arcs: readonly EpisodeArc[]) {
   const byEpisodeId = new Map(episodes.map(episode => [episode.id, episode]));
   const filterForEpisode = (
     episodeId: string,

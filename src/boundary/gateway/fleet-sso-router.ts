@@ -76,6 +76,10 @@ import {
   GatewayFleetModelUsageHttpRoutes,
 } from './fleet-model-usage-http-routes.js';
 import type { FleetModelUsageProjectionPort } from './fleet-model-usage-projection.js';
+import {
+  GatewayFleetLoginLanding,
+  type FleetBreakGlassLoginRegistration,
+} from './fleet-login-landing.js';
 
 const SESSION_COOKIE_NAME = '__Host-psfn_session';
 const MAX_PROXY_BODY_BYTES = 1_048_576;
@@ -150,6 +154,7 @@ export interface GatewayFleetSsoRouterOptions extends FleetSsoTrustedOriginOptio
     readonly companionId: CompanionId;
     readonly origin: URL;
   };
+  readonly breakGlassLogin?: FleetBreakGlassLoginRegistration;
   readonly nowSeconds?: () => number;
 }
 
@@ -428,6 +433,7 @@ function requestOptions(
 export class GatewayFleetSsoRouter {
   private readonly upstreams: ReadonlyMap<string, FleetSsoGardenUpstream>;
   private readonly portalRoutes: GatewayFleetPortalHttpRoutes;
+  private readonly loginLanding: GatewayFleetLoginLanding;
   private gardenChatHandler: FleetGardenChatHandler | null = null;
   private readonly modelUsageRoutes: GatewayFleetModelUsageHttpRoutes;
 
@@ -443,6 +449,7 @@ export class GatewayFleetSsoRouter {
       projection: options.portalProjection,
       ui: options.portalUi ?? new FleetGardenUiAssets(),
     });
+    this.loginLanding = new GatewayFleetLoginLanding(options.breakGlassLogin);
     this.modelUsageRoutes = new GatewayFleetModelUsageHttpRoutes({
       projection: options.modelUsageProjection,
     });
@@ -513,12 +520,7 @@ export class GatewayFleetSsoRouter {
       const { rawPath, rawQuery } = parseOuterPath(request.url ?? '/');
       if (rawPath === FLEET_LOGIN_PATH) {
         if (request.method !== 'GET' || rawQuery) throw new FleetSsoRequestError(404, 'Resource not found');
-        response.writeHead(303, {
-          'Cache-Control': 'no-store',
-          Location: '/v1/fleet-auth/login?return_to=%2Ffleet',
-          'Referrer-Policy': 'no-referrer',
-        });
-        response.end();
+        this.loginLanding.send(response);
         return;
       }
       if (rawPath === COMPANION_UI_PREFIX || rawPath.startsWith(`${COMPANION_UI_PREFIX}/`)) {
@@ -528,12 +530,7 @@ export class GatewayFleetSsoRouter {
       const sessionToken = readOpaqueSessionCookie(request);
       if (!sessionToken) {
         if (request.method === 'GET' && (rawPath === FLEET_PATH || rawPath === `${FLEET_PATH}/`)) {
-          response.writeHead(303, {
-            'Cache-Control': 'no-store',
-            Location: FLEET_LOGIN_PATH,
-            'Referrer-Policy': 'no-referrer',
-          });
-          response.end();
+          this.loginLanding.send(response);
           return;
         }
         if (rawPath.startsWith(FLEET_PORTAL_API_PATH)) {

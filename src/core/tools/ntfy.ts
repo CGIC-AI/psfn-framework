@@ -5,6 +5,8 @@ import type { AgentToolResult } from '../../boundary/pi-agent/index.js';
 import type { SubstrateAgentTool } from '../../boundary/pi-agent/index.js';
 import type {
   ClarificationSelection,
+  ClarifyDeliverParams,
+  ClarifyDeliverResult,
   NotifyNtfyParams,
   NotifyNtfyResult,
   PendingClarification,
@@ -40,6 +42,13 @@ const DEFAULT_NTFY_DEBOUNCE_MS = 60_000;
 const DEFAULT_APPROVAL_REQUEST_PRIORITY = 4;
 const CLARIFY_MIN_CHOICES = 2;
 const CLARIFY_MAX_CHOICES = 5;
+/**
+ * Upper bound the interactive channel waits for the person to answer a
+ * clarification before reporting a structured no-answer. The clarify tool call
+ * blocks the emitting turn for this window, so it is bounded rather than
+ * open-ended.
+ */
+const CLARIFY_DELIVERY_TIMEOUT_MS = 120_000;
 const CLARIFY_MAX_QUESTION_LENGTH = 1_000;
 const CLARIFY_MAX_CHOICE_LENGTH = 200;
 const COMPANION_NOTIFY_BRIEF_SENDER = Object.freeze({
@@ -351,23 +360,17 @@ class DefaultNotifyDispatcher implements NotifyDispatcher {
     const clarification = validateClarifyRequest(request);
     const result = await this.clarificationPort.deliver(clarification);
 
-    if (result.status === 'resolved') {
-      const selection = result.selection;
-      if (!selection) {
-        throw new Error('clarify resolution is missing the selected choice');
-      }
-      if (selection.clarificationId !== clarification.id) {
-        throw new Error('clarify resolution references a different clarification');
-      }
-      if (
-        !Number.isInteger(selection.selectedIndex)
-        || selection.selectedIndex < 0
-        || selection.selectedIndex >= clarification.choices.length
-        || clarification.choices[selection.selectedIndex] !== selection.selectedChoice
-      ) {
-        throw new Error('clarify resolution does not match a delivered choice');
-      }
-    }
+    // A selection may only plumb its chosen text back into the turn when the
+    // channel reports `resolved` AND the selection verifies against the
+    // runtime-owned choices. Deriving the spread solely from this verified
+    // value closes the latent trap where a channel returning
+    // `{ status: 'pending', selection }` could leak an unverified choice into
+    // the turn: verification and the spread now share one gate (resolved +
+    // verified), instead of verification being gated on status while the spread
+    // fired on any truthy selection.
+    const verifiedSelection = result.status === 'resolved'
+      ? verifyResolvedClarificationSelection(clarification, result.selection)
+      : undefined;
 
     return {
       action: 'clarify',
@@ -377,10 +380,10 @@ class DefaultNotifyDispatcher implements NotifyDispatcher {
         status: result.status,
         channel: result.channel,
         target: result.target,
-        ...(result.selection
+        ...(verifiedSelection
           ? {
-              selectedChoice: result.selection.selectedChoice,
-              selectedIndex: result.selection.selectedIndex,
+              selectedChoice: verifiedSelection.selectedChoice,
+              selectedIndex: verifiedSelection.selectedIndex,
             }
           : {}),
       },
@@ -620,6 +623,35 @@ export function validateClarifyRequest(request: NotifyClarifyRequest): PendingCl
   };
 }
 
+/**
+ * Verify a channel-reported clarification selection against the runtime-owned
+ * {@link PendingClarification} before its text is allowed into the turn. Fails
+ * closed (throws) on a missing selection, an id mismatch, an out-of-range index,
+ * or a chosen text that does not exactly equal the delivered choice at that
+ * index. Only ever called for a `resolved` delivery; the runtime never trusts a
+ * selection the channel did not resolve.
+ */
+export function verifyResolvedClarificationSelection(
+  clarification: PendingClarification,
+  selection: ClarificationSelection | undefined,
+): ClarificationSelection {
+  if (!selection) {
+    throw new Error('clarify resolution is missing the selected choice');
+  }
+  if (selection.clarificationId !== clarification.id) {
+    throw new Error('clarify resolution references a different clarification');
+  }
+  if (
+    !Number.isInteger(selection.selectedIndex)
+    || selection.selectedIndex < 0
+    || selection.selectedIndex >= clarification.choices.length
+    || clarification.choices[selection.selectedIndex] !== selection.selectedChoice
+  ) {
+    throw new Error('clarify resolution does not match a delivered choice');
+  }
+  return selection;
+}
+
 function formatNotifyToolSuccess(result: NotifyDispatchResult): string {
   switch (result.action) {
     case 'brief':
@@ -810,6 +842,62 @@ export function createGatewayDiscordNotifySender(
 
 export function createNotifyDispatcher(options: NotifyDispatcherOptions): NotifyDispatcher {
   return new DefaultNotifyDispatcher(options);
+}
+
+interface ClarificationChannelRoute {
+  channel: 'discord' | 'telegram';
+  target: string;
+}
+
+/**
+ * Resolve the current turn's channel id to the interactive channel that can
+ * render clarify choices. Returns null (clarify unsupported here → fail closed)
+ * for internal/scheduled contexts, Discord voice, and any non-interactive
+ * surface (api, terminal, companion, …). Discord text channels are raw numeric
+ * snowflakes (optionally `<snowflake>:<threadId>`); Telegram uses a `telegram:`
+ * prefix.
+ */
+export function resolveClarificationChannelRoute(channelId: string): ClarificationChannelRoute | null {
+  const trimmed = channelId.trim();
+  if (!trimmed) return null;
+  if (trimmed.startsWith('internal:')) return null;
+  if (trimmed.startsWith('telegram:')) return { channel: 'telegram', target: trimmed };
+  if (trimmed.startsWith('discord-voice:')) return null;
+  if (/^\d+(?::\d+)?$/.test(trimmed)) return { channel: 'discord', target: trimmed };
+  return null;
+}
+
+/**
+ * Agent-side clarification port that routes a structured clarification to the
+ * live interactive channel of the current turn and delivers it through the
+ * gateway (Discord buttons / Telegram numbered list). Fails closed when the turn
+ * has no interactive channel or the active channel cannot present choices, so a
+ * clarify is never silently dropped or fabricated.
+ */
+export function createGatewayClarificationPort(
+  gateway: { clarifyDeliver(params: ClarifyDeliverParams): Promise<ClarifyDeliverResult> },
+): ClarificationDeliveryPort {
+  return {
+    deliver: async (clarification: PendingClarification): Promise<ClarificationDeliveryResult> => {
+      const requestContext = getRequestContext();
+      const channelId = typeof requestContext?.channelId === 'string'
+        ? requestContext.channelId.trim()
+        : '';
+      if (!channelId) {
+        throw new Error('clarify has no active interactive channel in this turn');
+      }
+      const route = resolveClarificationChannelRoute(channelId);
+      if (!route) {
+        throw new Error(`clarify is not supported on channel "${channelId}"`);
+      }
+      return await gateway.clarifyDeliver({
+        channel: route.channel,
+        target: route.target,
+        clarification,
+        timeoutMs: CLARIFY_DELIVERY_TIMEOUT_MS,
+      });
+    },
+  };
 }
 
 export function createHttpNotificationPort(options: HttpNtfyNotifierOptions): NotificationPort {

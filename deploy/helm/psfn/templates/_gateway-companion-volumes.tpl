@@ -31,3 +31,34 @@ and writable CogSec state submount share it.
 {{- end }}
 {{- end }}
 {{- end -}}
+
+{{/*
+Gateway Personal Workspace mounts.
+
+The gateway executes workspace-scoped boundary tools (fs/git/shell sandbox)
+for every registered companion, so fleet mode binds every follower
+companion's workspace PVC writable at the canonical
+resolveCompanionWorkspaceLayout path
+<runtimeRoot>/workspaces/personal/<companionId>. The first companion keeps
+the common "workspace" volume and mount (validations pin
+runtime.workspacePath and persistence.workspace.existingClaim to the first
+entry's canonical workspace), so the non-fleet render is unchanged.
+*/}}
+{{- define "psfn.gatewayAdditionalWorkspaceVolumeMounts" -}}
+{{- range $index, $companion := .Values.fleet.companions }}
+{{- if gt $index 0 }}
+- name: {{ printf "gateway-workspace-%d" $index }}
+  mountPath: {{ printf "%s/workspaces/personal/%s" $.Values.fleet.runtimeRoot $companion.companionId }}
+{{- end }}
+{{- end }}
+{{- end -}}
+
+{{- define "psfn.gatewayAdditionalWorkspaceVolumes" -}}
+{{- range $index, $companion := .Values.fleet.companions }}
+{{- if gt $index 0 }}
+- name: {{ printf "gateway-workspace-%d" $index }}
+  persistentVolumeClaim:
+    claimName: {{ $companion.workspaceClaim }}
+{{- end }}
+{{- end }}
+{{- end -}}

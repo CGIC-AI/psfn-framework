@@ -90,6 +90,14 @@ fleet:
   #     sessionIntegrityKey: session-integrity-token
   #     companionAuthKey: companion-auth-token
   #
+  # Entry order is authoritative: the FIRST entry is the primary/canonical
+  # companion. The shared gateway and fleet Garden processes assume its
+  # identity (runtime.companionId, runtime.companionDataDir,
+  # runtime.workspacePath, and the persistence.* existingClaims must all name
+  # the first entry; rendering fails closed otherwise), and it is the fleet
+  # backup leader (isFleetBackupLeader). Every later entry is a follower with
+  # its own agent Deployment, admin Service, certificates, and PVC claims.
+  #
   # Paths and network identities are deliberately not configurable per entry.
   # They are derived exactly as the runtime does:
   #   companion data: <runtimeRoot>/companions/<companionId>
@@ -567,6 +575,23 @@ fleetAuth:
   # Optional exact server-owned binding for /companion-ui/. It may be omitted
   # only when the canonical companion fleet contains exactly one companion.
   companionUiCompanionId: ""
+  # Gateway credential env for the fleet-auth.json credential references.
+  # The owner file names every Fleet Auth credential as
+  # { kind: env, envName: FLEET_AUTH_* } (provider.clientSecretRef and each
+  # credentials.*Ref); the gateway fails closed at startup when a referenced
+  # env var is unset. List every env-kind reference here so the chart owns
+  # the wiring (never kubectl set env). Each entry supplies an uppercase env
+  # name plus exactly one of a Secret reference (secretRef.name +
+  # secretRef.key) or a plain non-secret value (e.g. a filesystem root).
+  # References resolved from the credential vault instead of env need no
+  # entry.
+  credentialEnv: []
+  # - name: FLEET_AUTH_SESSION_PEPPER
+  #   secretRef:
+  #     name: psfn-fleet-auth
+  #     key: session-pepper
+  # - name: FLEET_AUTH_AUTHORITY_FLOOR_ROOT
+  #   value: /runtime/system-data/fleet-auth/authority-floor
 
 networkPolicy:
   enabled: true

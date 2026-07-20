@@ -111,6 +111,9 @@ spec:
               value: {{ include "psfn.spiffeGarden" . | quote }}
             - name: FLEET_SSO_GARDEN_TLS_SERVER_NAME
               value: {{ include "psfn.gardenSsoServerName" . | quote }}
+            {{- if .Values.fleetAuth.credentialEnv }}
+            {{- include "psfn.fleetAuthCredentialEnv" . | nindent 12 }}
+            {{- end }}
             {{- if .Values.companionUiTest.enabled }}
             - name: FLEET_SSO_COMPANION_UI_ORIGIN
               value: {{ printf "http://%s:%v" (include "psfn.companionUiTestServiceName" .) .Values.ports.companionUiTest | quote }}
@@ -188,6 +191,9 @@ spec:
               subPath: state
             - name: workspace
               mountPath: {{ .Values.runtime.workspacePath }}
+            {{- if .Values.fleet.enabled }}
+            {{- include "psfn.gatewayAdditionalWorkspaceVolumeMounts" . | nindent 12 }}
+            {{- end }}
             - name: runtime
               mountPath: {{ .Values.runtime.logsDir }}
               subPath: logs
@@ -210,6 +216,9 @@ spec:
       volumes:
         {{- include "psfn.commonVolumes" . | nindent 8 }}
         {{- include "psfn.gatewayAdditionalCompanionDataVolumes" . | nindent 8 }}
+        {{- if .Values.fleet.enabled }}
+        {{- include "psfn.gatewayAdditionalWorkspaceVolumes" . | nindent 8 }}
+        {{- end }}
         - name: gateway-rpc-tls
           secret:
             secretName: {{ include "psfn.gatewayRpcCertSecretName" . }}

@@ -1055,6 +1055,84 @@ assertRenderFails(
   'fleet agent image tag must be pinned and must not be latest/main/main-latest',
 );
 
+// Fleet Auth credential env: fleet-auth.json references every credential as
+// { kind: env, envName: FLEET_AUTH_* } and the gateway fails closed when a
+// referenced env var is unset, so the chart must own the wiring (uzmj).
+const fleetCredentialEnvArgs = [
+  ...fleetGardenRenderArgs(),
+  '--set-string', 'fleetAuth.credentialEnv[0].name=FLEET_AUTH_SESSION_PEPPER',
+  '--set-string', 'fleetAuth.credentialEnv[0].secretRef.name=psfn-fleet-auth',
+  '--set-string', 'fleetAuth.credentialEnv[0].secretRef.key=session-pepper',
+  '--set-string', 'fleetAuth.credentialEnv[1].name=FLEET_AUTH_AUTHORITY_FLOOR_ROOT',
+  '--set-string', 'fleetAuth.credentialEnv[1].value=/runtime/system-data/fleet-auth/authority-floor',
+];
+const fleetCredentialEnvRendered = render(fleetCredentialEnvArgs);
+const fleetCredentialGatewayEnv = findParsedDocumentByKindName(
+  fleetCredentialEnvRendered,
+  'Deployment',
+  'psfn-gateway',
+)?.spec?.template?.spec?.containers?.[0]?.env ?? [];
+const fleetCredentialPepper = fleetCredentialGatewayEnv
+  .find(entry => entry.name === 'FLEET_AUTH_SESSION_PEPPER');
+if (fleetCredentialPepper?.valueFrom?.secretKeyRef?.name !== 'psfn-fleet-auth'
+  || fleetCredentialPepper?.valueFrom?.secretKeyRef?.key !== 'session-pepper') {
+  throw new Error('fleet gateway must bind FLEET_AUTH_SESSION_PEPPER from the named Secret key');
+}
+const fleetCredentialFloor = fleetCredentialGatewayEnv
+  .find(entry => entry.name === 'FLEET_AUTH_AUTHORITY_FLOOR_ROOT');
+if (fleetCredentialFloor?.value !== '/runtime/system-data/fleet-auth/authority-floor') {
+  throw new Error('fleet gateway must bind the plain-value FLEET_AUTH_AUTHORITY_FLOOR_ROOT env');
+}
+const fleetCredentialAgentEnv = findParsedDocumentByKindName(
+  fleetCredentialEnvRendered,
+  'Deployment',
+  `psfn-agent-${fleetGardenCompanions[0].companionId}`,
+)?.spec?.template?.spec?.containers?.[0]?.env ?? [];
+if (fleetCredentialAgentEnv.some(entry => entry.name?.startsWith('FLEET_AUTH_'))) {
+  throw new Error('Fleet Auth credential env is gateway-only and must never reach agent pods');
+}
+assertRenderFails(
+  [
+    '--set-string', 'fleetAuth.credentialEnv[0].name=FLEET_AUTH_SESSION_PEPPER',
+    '--set-string', 'fleetAuth.credentialEnv[0].secretRef.name=psfn-fleet-auth',
+    '--set-string', 'fleetAuth.credentialEnv[0].secretRef.key=session-pepper',
+  ],
+  'fleetAuth.credentialEnv requires fleetAuth.enabled=true',
+);
+assertRenderFails(
+  [
+    ...fleetCredentialEnvArgs,
+    '--set-string', 'fleetAuth.credentialEnv[2].name=lowercase-name',
+    '--set-string', 'fleetAuth.credentialEnv[2].secretRef.name=psfn-fleet-auth',
+    '--set-string', 'fleetAuth.credentialEnv[2].secretRef.key=other',
+  ],
+  'fleetAuth.credentialEnv[2].name must match',
+);
+assertRenderFails(
+  [
+    ...fleetCredentialEnvArgs,
+    '--set-string', 'fleetAuth.credentialEnv[2].name=FLEET_AUTH_SESSION_PEPPER',
+    '--set-string', 'fleetAuth.credentialEnv[2].secretRef.name=psfn-fleet-auth',
+    '--set-string', 'fleetAuth.credentialEnv[2].secretRef.key=other',
+  ],
+  'fleetAuth.credentialEnv name is duplicated: FLEET_AUTH_SESSION_PEPPER',
+);
+assertRenderFails(
+  [
+    ...fleetCredentialEnvArgs,
+    '--set-string', 'fleetAuth.credentialEnv[2].name=FLEET_AUTH_RECOVERY_CREDENTIAL',
+  ],
+  'requires exactly one of a Secret reference or a plain value',
+);
+assertRenderFails(
+  [
+    ...fleetCredentialEnvArgs,
+    '--set-string', 'fleetAuth.credentialEnv[2].name=FLEET_AUTH_RECOVERY_CREDENTIAL',
+    '--set-string', 'fleetAuth.credentialEnv[2].secretRef.name=psfn-fleet-auth',
+  ],
+  'requires both secretRef.name and secretRef.key',
+);
+
 const internalOnlyGardenRendered = render([
   '--set', 'ingress.garden.enabled=false',
 ]);

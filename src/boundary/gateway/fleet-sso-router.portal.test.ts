@@ -65,7 +65,9 @@ describe('unified-origin fleet portal routing', () => {
     })));
   });
 
-  async function start(): Promise<{
+  async function start(options: {
+    breakGlassLogin?: { loginPath: string };
+  } = {}): Promise<{
     port: number;
     resolveProjection: ReturnType<typeof vi.fn>;
     resolveModelUsageProjection: ReturnType<typeof vi.fn>;
@@ -127,8 +129,20 @@ describe('unified-origin fleet portal routing', () => {
       verifier,
       replay: { consume: async input => ({ outcome: 'consumed', result: input.consumeResult }) },
       portalProjection: { resolve: resolveProjection },
+      portalUi: {
+        isEnabled: () => true,
+        servePage: (_request, response) => {
+          response.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+          response.end('<!doctype html><title>Authenticated fleet portal</title>');
+        },
+        serveAsset: (_path, _request, response) => {
+          response.writeHead(200, { 'Content-Type': 'text/javascript; charset=utf-8' });
+          response.end('export{}');
+        },
+      },
       modelUsageProjection: { resolve: resolveModelUsageProjection },
       upstreams: [{ companionId: COMPANION_ID, origin: new URL('http://127.0.0.1:3211') }],
+      ...options,
     });
     const server = createServer((incoming, response) => { void router.handle(incoming, response); });
     servers.push(server);
@@ -140,7 +154,7 @@ describe('unified-origin fleet portal routing', () => {
     };
   }
 
-  it('uses only the fixed login return and authenticates both portal surfaces', async () => {
+  it('renders the login landing without fleet disclosure and authenticates both portal surfaces', async () => {
     const harness = await start();
     expect(harness.router.matches('/v1/fleet/portal')).toBe(true);
     expect(harness.router.matches('/v1/fleet/portal/')).toBe(true);
@@ -148,12 +162,19 @@ describe('unified-origin fleet portal routing', () => {
     expect(harness.router.matches('/fleet/status.json')).toBe(false);
 
     const fleet = await request(harness.port, '/fleet');
-    expect(fleet.status).toBe(303);
-    expect(fleet.headers.location).toBe('/fleet/login');
+    expect(fleet.status).toBe(200);
+    expect(fleet.headers.location).toBeUndefined();
+    expect(fleet.headers['cache-control']).toBe('no-store');
+    expect(fleet.headers['content-security-policy']).toContain("default-src 'none'");
+    expect(fleet.body).toContain('PSFN');
+    expect(fleet.body).toContain('Login with Discord');
+    expect(fleet.body).toContain('href="/v1/fleet-auth/login?return_to=%2Ffleet"');
+    expect(fleet.body).not.toMatch(/Emergency administrator login|companion|version/iu);
+    expect(harness.resolveProjection).not.toHaveBeenCalled();
 
     const login = await request(harness.port, '/fleet/login');
-    expect(login.status).toBe(303);
-    expect(login.headers.location).toBe('/v1/fleet-auth/login?return_to=%2Ffleet');
+    expect(login.status).toBe(200);
+    expect(login.body).toBe(fleet.body);
 
     const api = await request(harness.port, '/v1/fleet/portal');
     expect(api.status).toBe(401);
@@ -167,6 +188,13 @@ describe('unified-origin fleet portal routing', () => {
     expect(modelUsage.body).toBe('{"error":{"type":"fleet_model_usage_denied"}}');
     expect(harness.resolveModelUsageProjection).not.toHaveBeenCalled();
 
+    const authenticatedPortal = await request(harness.port, '/fleet', {
+      session: SESSION_TOKEN,
+    });
+    expect(authenticatedPortal.status).toBe(200);
+    expect(authenticatedPortal.body).toContain('Authenticated fleet portal');
+    expect(harness.resolveProjection).toHaveBeenCalledOnce();
+
     const rawStatus = await request(harness.port, '/fleet/status.json', {
       session: SESSION_TOKEN,
     });
@@ -177,7 +205,7 @@ describe('unified-origin fleet portal routing', () => {
       session: SESSION_TOKEN,
     });
     expect(authenticated.status).toBe(200);
-    expect(harness.resolveProjection).toHaveBeenCalledOnce();
+    expect(harness.resolveProjection).toHaveBeenCalledTimes(2);
 
     const authenticatedUsage = await request(
       harness.port,
@@ -196,16 +224,40 @@ describe('unified-origin fleet portal routing', () => {
     });
   });
 
+  it('renders the break-glass entry only for an explicit login registration', async () => {
+    const harness = await start({
+      breakGlassLogin: { loginPath: '/v1/fleet-auth/emergency-login' },
+    });
+    const login = await request(harness.port, '/fleet/login');
+
+    expect(login.status).toBe(200);
+    expect(login.body).toContain(
+      'href="/v1/fleet-auth/emergency-login">Emergency administrator login</a>',
+    );
+    await expect(start({
+      breakGlassLogin: { loginPath: 'https://attacker.example.test/login' },
+    })).rejects.toThrow('requires a strict same-origin path');
+  });
+
   it('rejects cross-origin reads, aliases, and mutations before portal projection', async () => {
     const harness = await start();
+    for (const path of [
+      '/fleet',
+      '/fleet/login',
+      '/v1/fleet/portal',
+    ]) {
+      const denied = await request(harness.port, path, {
+        origin: 'https://attacker.example.test',
+      });
+      expect(denied.status).toBe(400);
+    }
     for (const input of [
-      { path: '/v1/fleet/portal', origin: 'https://attacker.example.test' },
       { path: '/v1/fleet/portal/', session: SESSION_TOKEN },
       { path: '/v1/fleet/portal?return_to=%2Fcompanions', session: SESSION_TOKEN },
       { path: '/v1/fleet/portal', method: 'POST', session: SESSION_TOKEN },
     ]) {
       const denied = await request(harness.port, input.path, input);
-      expect([400, 404]).toContain(denied.status);
+      expect(denied.status).toBe(404);
     }
     expect(harness.resolveProjection).not.toHaveBeenCalled();
   });

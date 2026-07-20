@@ -4,6 +4,10 @@ import {
   createHttpNotificationPortFromEnv,
   createNotifyDispatcher,
   createNotifyTool,
+  validateClarifyRequest,
+  type ClarificationDeliveryPort,
+  type ClarificationDeliveryResult,
+  type PendingClarification,
 } from './ntfy.js';
 import type { NotificationPort } from '../../boundary/gateway/notification-port.js';
 import { ExternalCommunicationRateLimiter } from '../../system/capabilities/safeguards.js';
@@ -412,6 +416,156 @@ describe('notify tool', () => {
     } finally {
       vi.unstubAllGlobals();
     }
+  });
+
+  it('presents a structured clarification through the channel seam and returns pending state', async () => {
+    const notifier: NotificationPort = { notify: vi.fn() };
+    let presented: PendingClarification | undefined;
+    const clarificationPort: ClarificationDeliveryPort = {
+      deliver: vi.fn(async (clarification: PendingClarification): Promise<ClarificationDeliveryResult> => {
+        presented = clarification;
+        return { status: 'pending', channel: 'telegram', target: 'chat:42' };
+      }),
+    };
+    const tool = createNotifyTool(createNotifyDispatcher({
+      briefNotifier: notifier,
+      clarificationPort,
+    }));
+
+    const result = await tool.execute('call-clarify-1', {
+      action: 'clarify',
+      question: '  Which draft should I send?  ',
+      choices: ['The warm one', 'The concise one'],
+    });
+
+    expect(resultText(result as any)).toContain('notify: clarify shared on telegram');
+    expect(resultText(result as any)).toContain('waiting for a choice');
+    expect((result.details as any).isError).toBeUndefined();
+    // Channel-agnostic seam: the renderer receives a typed, normalized clarification.
+    expect(presented).toBeDefined();
+    expect(presented?.question).toBe('Which draft should I send?');
+    expect(presented?.choices).toEqual(['The warm one', 'The concise one']);
+    expect(typeof presented?.id).toBe('string');
+    expect(presented?.id.length).toBeGreaterThan(0);
+  });
+
+  it('plumbs a resolved selection back into the turn', async () => {
+    const notifier: NotificationPort = { notify: vi.fn() };
+    const clarificationPort: ClarificationDeliveryPort = {
+      deliver: async (clarification: PendingClarification): Promise<ClarificationDeliveryResult> => ({
+        status: 'resolved',
+        channel: 'discord',
+        target: 'discord:room',
+        selection: {
+          clarificationId: clarification.id,
+          selectedIndex: 1,
+          selectedChoice: clarification.choices[1]!,
+        },
+      }),
+    };
+    const tool = createNotifyTool(createNotifyDispatcher({
+      briefNotifier: notifier,
+      clarificationPort,
+    }));
+
+    const result = await tool.execute('call-clarify-2', {
+      action: 'clarify',
+      question: 'Tea or coffee?',
+      choices: ['Tea', 'Coffee'],
+    });
+
+    expect(resultText(result as any)).toContain('notify: clarify answered');
+    expect(resultText(result as any)).toContain('chose "Coffee"');
+    expect((result.details as any).isError).toBeUndefined();
+  });
+
+  it('fails closed when a resolved selection does not match a delivered choice', async () => {
+    const notifier: NotificationPort = { notify: vi.fn() };
+    const clarificationPort: ClarificationDeliveryPort = {
+      deliver: async (clarification: PendingClarification): Promise<ClarificationDeliveryResult> => ({
+        status: 'resolved',
+        channel: 'discord',
+        target: 'discord:room',
+        selection: {
+          clarificationId: clarification.id,
+          selectedIndex: 0,
+          selectedChoice: 'Something the companion never offered',
+        },
+      }),
+    };
+    const tool = createNotifyTool(createNotifyDispatcher({
+      briefNotifier: notifier,
+      clarificationPort,
+    }));
+
+    const result = await tool.execute('call-clarify-3', {
+      action: 'clarify',
+      question: 'Tea or coffee?',
+      choices: ['Tea', 'Coffee'],
+    });
+
+    expect(resultText(result as any)).toContain('notify: failure');
+    expect(resultText(result as any)).toContain('does not match a delivered choice');
+    expect((result.details as any).isError).toBe(true);
+  });
+
+  it('fails closed when clarify has no interactive channel wired', async () => {
+    const notifier: NotificationPort = { notify: vi.fn() };
+    const tool = createNotifyTool(createNotifyDispatcher({ briefNotifier: notifier }));
+
+    const result = await tool.execute('call-clarify-4', {
+      action: 'clarify',
+      question: 'Which one?',
+      choices: ['A', 'B'],
+    });
+
+    expect(resultText(result as any)).toContain('notify: failure');
+    expect(resultText(result as any)).toContain('no interactive channel is wired');
+    expect((result.details as any).isError).toBe(true);
+  });
+
+  it('blocks clarify from scheduled/internal contexts with no live human', async () => {
+    const clarificationPort: ClarificationDeliveryPort = {
+      deliver: vi.fn(),
+    };
+    const tool = createNotifyTool(createNotifyDispatcher({
+      briefNotifier: { notify: vi.fn() },
+      clarificationPort,
+    }));
+
+    const result = await runWithRequestContext(
+      { callType: 'scheduled', channelId: 'internal:reflection:whisper', purpose: 'agent.turn.prompt' },
+      async () => tool.execute('call-clarify-5', {
+        action: 'clarify',
+        question: 'Which one?',
+        choices: ['A', 'B'],
+      }),
+    );
+
+    expect(resultText(result as any)).toContain('notify: blocked');
+    expect(resultText(result as any)).toContain('clarify is not allowed');
+    expect((result.details as any).isError).toBe(true);
+    expect(clarificationPort.deliver).not.toHaveBeenCalled();
+  });
+
+  it('rejects malformed clarify questions and choice sets (fail closed)', () => {
+    expect(() => validateClarifyRequest({ action: 'clarify', question: '   ', choices: ['A', 'B'] }))
+      .toThrow('question is required');
+    expect(() => validateClarifyRequest({ action: 'clarify', question: 'Q', choices: ['only one'] }))
+      .toThrow('at least 2 choices');
+    expect(() => validateClarifyRequest({ action: 'clarify', question: 'Q', choices: ['A', 'B', 'C', 'D', 'E', 'F'] }))
+      .toThrow('at most 5 choices');
+    expect(() => validateClarifyRequest({ action: 'clarify', question: 'Q', choices: ['A', '  '] }))
+      .toThrow('every choice must be a non-empty string');
+    expect(() => validateClarifyRequest({ action: 'clarify', question: 'Q', choices: ['Same', 'Same'] }))
+      .toThrow('choices must be distinct');
+    expect(() => validateClarifyRequest({ action: 'clarify', question: 'Q', choices: ['A', 'X'.repeat(201)] }))
+      .toThrow('at most 200 characters');
+    // Normalizes trimmed input and mints a stable id + distinct-choice contract.
+    const normalized = validateClarifyRequest({ action: 'clarify', question: '  Q  ', choices: [' A ', 'B'] });
+    expect(normalized.question).toBe('Q');
+    expect(normalized.choices).toEqual(['A', 'B']);
+    expect(normalized.id.length).toBeGreaterThan(0);
   });
 
   it('fails closed when the sender provenance does not match the sender kind', async () => {

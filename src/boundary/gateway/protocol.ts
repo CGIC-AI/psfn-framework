@@ -490,6 +490,36 @@ export interface NotifyNtfyParams {
   sender: NotificationSenderMetadata;
 }
 
+/**
+ * A structured clarification the companion raises when she needs the person to
+ * pick among a few concrete options rather than continue open-ended.
+ *
+ * This is the channel-agnostic seam the channel layer consumes: a renderer
+ * presents `question` plus the ordered `choices`, and a later selection returns
+ * as a {@link ClarificationSelection}. Like a notify approval_request, it is a
+ * pure outbound structured notification — the answer arrives out-of-band, not by
+ * resuming the emitting turn.
+ */
+export interface PendingClarification {
+  /** Runtime-generated id that binds a delivered clarification to its answer. */
+  readonly id: string;
+  /** The short question the companion needs answered. */
+  readonly question: string;
+  /** The ordered, distinct options to choose between. */
+  readonly choices: readonly string[];
+}
+
+/**
+ * The structured answer that flows back when the person picks a choice for a
+ * {@link PendingClarification}. `selectedIndex` indexes into the delivered
+ * `choices`; `selectedChoice` is the resolved text at that index.
+ */
+export interface ClarificationSelection {
+  readonly clarificationId: string;
+  readonly selectedIndex: number;
+  readonly selectedChoice: string;
+}
+
 export interface SessionHmacSignParams {
   entry: JournalEntry;
   previousHmac: string | null;

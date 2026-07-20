@@ -1,8 +1,14 @@
+import { randomUUID } from 'node:crypto';
 import { Type } from '@sinclair/typebox';
 import { CANONICAL_TOOL_SURFACE_DESCRIPTIONS } from '../agent/tool-surface/descriptions.js';
 import type { AgentToolResult } from '../../boundary/pi-agent/index.js';
 import type { SubstrateAgentTool } from '../../boundary/pi-agent/index.js';
-import type { NotifyNtfyParams, NotifyNtfyResult } from '../../boundary/gateway/protocol.js';
+import type {
+  ClarificationSelection,
+  NotifyNtfyParams,
+  NotifyNtfyResult,
+  PendingClarification,
+} from '../../boundary/gateway/protocol.js';
 import type { WirableTool } from '../agent/tool-wiring-validator.js';
 import type {
   ExternalCommunicationChannel,
@@ -32,6 +38,10 @@ import { executeCompanionCandidateConsider } from './notify-companion-candidate.
 const DEFAULT_NTFY_TIMEOUT_MS = 8_000;
 const DEFAULT_NTFY_DEBOUNCE_MS = 60_000;
 const DEFAULT_APPROVAL_REQUEST_PRIORITY = 4;
+const CLARIFY_MIN_CHOICES = 2;
+const CLARIFY_MAX_CHOICES = 5;
+const CLARIFY_MAX_QUESTION_LENGTH = 1_000;
+const CLARIFY_MAX_CHOICE_LENGTH = 200;
 const COMPANION_NOTIFY_BRIEF_SENDER = Object.freeze({
   kind: 'companion',
   provenance: 'companion.notify.brief',
@@ -43,10 +53,36 @@ const SYSTEM_APPROVAL_REQUEST_SENDER = Object.freeze({
 
 export type { NotificationPort } from '../../boundary/gateway/notification-port.js';
 
-export type NotifyAction = 'brief' | 'send' | 'approval_request';
+export type NotifyAction = 'brief' | 'send' | 'approval_request' | 'clarify';
 export type NotifyDeliveryChannel = 'discord' | 'email';
 export type NotifyDelivery = 'ntfy' | NotifyDeliveryChannel;
 export type NtfyNotifier = NotificationPort;
+
+export type { PendingClarification, ClarificationSelection } from '../../boundary/gateway/protocol.js';
+
+/**
+ * Channel-agnostic delivery seam for a structured clarification.
+ *
+ * The channel layer (sibling work) implements this port to render the ordered
+ * choices — Discord buttons, a Telegram numbered list, etc. — and reports back
+ * whether the clarification is still pending an answer or already resolved with
+ * a {@link ClarificationSelection}. Keeping the seam abstract lets the notify
+ * tool remain channel-agnostic and fail closed when no interactive channel is
+ * wired.
+ */
+export interface ClarificationDeliveryResult {
+  readonly status: 'pending' | 'resolved';
+  /** Channel-agnostic label for where the clarification was delivered (e.g. discord, telegram). */
+  readonly channel: string;
+  /** The delivery destination within that channel. */
+  readonly target: string;
+  /** Present only when the channel resolved the choice synchronously. */
+  readonly selection?: ClarificationSelection;
+}
+
+export interface ClarificationDeliveryPort {
+  deliver(clarification: PendingClarification): Promise<ClarificationDeliveryResult>;
+}
 
 export interface NotifyChannelSender {
   send(params: {
@@ -87,17 +123,36 @@ export interface NotifyApprovalRequest {
   request: NotifyApprovalRequestInput;
 }
 
+export interface NotifyClarifyRequest {
+  action: 'clarify';
+  question: string;
+  choices: string[];
+}
+
 export type NotifyRequest =
   | NotifyBriefRequest
   | NotifySendRequest
-  | NotifyApprovalRequest;
+  | NotifyApprovalRequest
+  | NotifyClarifyRequest;
+
+/** Structured outcome of a clarify dispatch, carried back into the turn. */
+export interface ClarificationDispatchOutcome {
+  id: string;
+  status: 'pending' | 'resolved';
+  channel: string;
+  target: string;
+  selectedChoice?: string;
+  selectedIndex?: number;
+}
 
 export interface NotifyDispatchResult {
   status: 'sent' | 'debounced';
   action: NotifyAction;
-  delivery: NotifyDelivery;
-  target: string;
+  /** Present for ntfy/discord/email deliveries; clarify reports its channel via {@link NotifyDispatchResult.clarification}. */
+  delivery?: NotifyDelivery;
+  target?: string;
   messageId?: string;
+  clarification?: ClarificationDispatchOutcome;
 }
 
 export interface NotifyDispatcher {
@@ -121,6 +176,12 @@ export interface NotifyDispatcherOptions {
   operatorNtfyTopic?: string;
   rateLimiter?: ExternalCommunicationRateLimiter;
   defaultBudgetChannel?: ExternalCommunicationChannel;
+  /**
+   * Channel seam that renders a structured clarification and reports its
+   * pending/resolved state. Left unwired until an interactive channel provides
+   * it (sibling channel-rendering work); clarify fails closed without it.
+   */
+  clarificationPort?: ClarificationDeliveryPort;
 }
 
 interface NotifyToolParams {
@@ -143,6 +204,8 @@ interface NotifyToolParams {
   approval_reason?: string;
   approval_expires_at?: number;
   review_path?: string;
+  question?: string;
+  choices?: string[];
 }
 
 class HttpNtfyNotifier implements NotificationPort {
@@ -253,6 +316,7 @@ class DefaultNotifyDispatcher implements NotifyDispatcher {
   private readonly operatorNtfyTopic?: string;
   private readonly rateLimiter?: ExternalCommunicationRateLimiter;
   private readonly defaultBudgetChannel: ExternalCommunicationChannel;
+  private readonly clarificationPort?: ClarificationDeliveryPort;
 
   constructor(options: NotifyDispatcherOptions) {
     this.briefNotifier = options.briefNotifier;
@@ -261,6 +325,7 @@ class DefaultNotifyDispatcher implements NotifyDispatcher {
     this.operatorNtfyTopic = options.operatorNtfyTopic?.trim() || undefined;
     this.rateLimiter = options.rateLimiter;
     this.defaultBudgetChannel = options.defaultBudgetChannel ?? 'discord';
+    this.clarificationPort = options.clarificationPort;
   }
 
   async dispatch(request: NotifyRequest): Promise<NotifyDispatchResult> {
@@ -271,9 +336,55 @@ class DefaultNotifyDispatcher implements NotifyDispatcher {
         return await this.sendOutbound(request);
       case 'approval_request':
         return await this.sendApprovalRequest(request.request);
+      case 'clarify':
+        return await this.requestClarification(request);
       default:
         throw new Error(`unsupported notify action: ${String((request as { action?: unknown }).action)}`);
     }
+  }
+
+  private async requestClarification(request: NotifyClarifyRequest): Promise<NotifyDispatchResult> {
+    if (!this.clarificationPort) {
+      throw new Error('clarify is not available: no interactive channel is wired to present choices');
+    }
+
+    const clarification = validateClarifyRequest(request);
+    const result = await this.clarificationPort.deliver(clarification);
+
+    if (result.status === 'resolved') {
+      const selection = result.selection;
+      if (!selection) {
+        throw new Error('clarify resolution is missing the selected choice');
+      }
+      if (selection.clarificationId !== clarification.id) {
+        throw new Error('clarify resolution references a different clarification');
+      }
+      if (
+        !Number.isInteger(selection.selectedIndex)
+        || selection.selectedIndex < 0
+        || selection.selectedIndex >= clarification.choices.length
+        || clarification.choices[selection.selectedIndex] !== selection.selectedChoice
+      ) {
+        throw new Error('clarify resolution does not match a delivered choice');
+      }
+    }
+
+    return {
+      action: 'clarify',
+      status: 'sent',
+      clarification: {
+        id: clarification.id,
+        status: result.status,
+        channel: result.channel,
+        target: result.target,
+        ...(result.selection
+          ? {
+              selectedChoice: result.selection.selectedChoice,
+              selectedIndex: result.selection.selectedIndex,
+            }
+          : {}),
+      },
+    };
   }
 
   private async sendBrief(request: NotifyBriefRequest): Promise<NotifyDispatchResult> {
@@ -457,9 +568,56 @@ function buildNotifyToolRequest(params: NotifyToolParams): NotifyRequest {
           reviewPath: params.review_path,
         },
       };
+    case 'clarify':
+      return {
+        action: 'clarify',
+        question: params.question ?? '',
+        choices: params.choices ?? [],
+      };
     default:
       throw new Error(`unsupported notify action: ${String(params.action)}`);
   }
+}
+
+/**
+ * Validate and normalize a clarify request, failing closed on any malformed
+ * question or choice set. Returns the runtime-owned {@link PendingClarification}
+ * (with a generated id) that the channel layer will present.
+ */
+export function validateClarifyRequest(request: NotifyClarifyRequest): PendingClarification {
+  const question = request.question.trim();
+  if (!question) {
+    throw new Error('question is required');
+  }
+  if (question.length > CLARIFY_MAX_QUESTION_LENGTH) {
+    throw new Error(`question must be at most ${CLARIFY_MAX_QUESTION_LENGTH} characters`);
+  }
+
+  if (!Array.isArray(request.choices)) {
+    throw new Error('choices must be a list of options');
+  }
+  const choices = request.choices.map((choice) => (typeof choice === 'string' ? choice.trim() : ''));
+  if (choices.some((choice) => !choice)) {
+    throw new Error('every choice must be a non-empty string');
+  }
+  if (choices.length < CLARIFY_MIN_CHOICES) {
+    throw new Error(`clarify needs at least ${CLARIFY_MIN_CHOICES} choices`);
+  }
+  if (choices.length > CLARIFY_MAX_CHOICES) {
+    throw new Error(`clarify allows at most ${CLARIFY_MAX_CHOICES} choices`);
+  }
+  if (choices.some((choice) => choice.length > CLARIFY_MAX_CHOICE_LENGTH)) {
+    throw new Error(`each choice must be at most ${CLARIFY_MAX_CHOICE_LENGTH} characters`);
+  }
+  if (new Set(choices).size !== choices.length) {
+    throw new Error('choices must be distinct');
+  }
+
+  return {
+    id: randomUUID(),
+    question,
+    choices,
+  };
 }
 
 function formatNotifyToolSuccess(result: NotifyDispatchResult): string {
@@ -474,6 +632,13 @@ function formatNotifyToolSuccess(result: NotifyDispatchResult): string {
       return result.status === 'debounced'
         ? `notify: approval_request debounced for "${result.target}".`
         : `notify: approval_request sent via ${result.delivery} to "${result.target}".`;
+    case 'clarify': {
+      const outcome = result.clarification;
+      if (outcome?.status === 'resolved' && outcome.selectedChoice) {
+        return `notify: clarify answered — chose "${outcome.selectedChoice}".`;
+      }
+      return `notify: clarify shared on ${outcome?.channel ?? 'the conversation'}; waiting for a choice.`;
+    }
     default:
       return 'notify: success.';
   }
@@ -485,6 +650,7 @@ function normalizeAction(value: string): NotifyAction {
       return 'brief';
     case 'send':
     case 'approval_request':
+    case 'clarify':
       return value.trim() as NotifyAction;
     default:
       throw new Error(`unsupported notify action: ${value}`);
@@ -735,6 +901,22 @@ const notifyToolParameters = Type.Union([
       description: 'Optional admin review path. Default: /confirmations.',
     })),
   }, { additionalProperties: false }),
+  Type.Object({
+    action: Type.Literal('clarify'),
+    question: Type.String({
+      minLength: 1,
+      maxLength: CLARIFY_MAX_QUESTION_LENGTH,
+      description: 'The short question you need the person to answer.',
+    }),
+    choices: Type.Array(
+      Type.String({ minLength: 1, maxLength: CLARIFY_MAX_CHOICE_LENGTH }),
+      {
+        minItems: CLARIFY_MIN_CHOICES,
+        maxItems: CLARIFY_MAX_CHOICES,
+        description: 'The distinct options to choose between (2 to 5).',
+      },
+    ),
+  }, { additionalProperties: false }),
 ]);
 
 export function createNotifyTool(
@@ -765,11 +947,11 @@ export function createNotifyTool(
         return textResultWithError(`notify: failure (${toErrorMessage(error)}).`, true);
       }
 
-      if (action === 'brief') {
+      if (action === 'brief' || action === 'clarify') {
         const blockedContext = buildContextBlockReason();
         if (blockedContext) {
           return textResultWithError(
-            `notify: blocked (brief is not allowed from ${blockedContext}).`,
+            `notify: blocked (${action} is not allowed from ${blockedContext}).`,
             true,
           );
         }
@@ -844,6 +1026,8 @@ export function createNotifyTool(
       case 'consider':
         return 'external.companion';
       case 'approval_request':
+        return 'external.web';
+      case 'clarify':
         return 'external.web';
       default:
         return ['external.web', 'external.discord', 'external.email'] as const;

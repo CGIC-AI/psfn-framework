@@ -54,7 +54,6 @@ const CHILD_PROCESS_DENIED_CAPABILITIES = [
 ] as const;
 const CHILD_PROCESS_NODE_ARGS = [
   '--permission',
-  '--no-experimental-fetch',
   '--no-experimental-websocket',
   '--disable-proto=throw',
   '--disallow-code-generation-from-strings',

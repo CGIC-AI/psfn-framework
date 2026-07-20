@@ -1,0 +1,113 @@
+rules:
+  - id: psfn.security.dynamic-code-execution
+    message: >-
+      Dynamic code execution bypasses normal capability boundaries. Use a
+      structured parser or an existing sandbox boundary.
+    severity: ERROR
+    languages: [typescript, javascript]
+    metadata:
+      category: security
+      confidence: high
+    pattern-either:
+      - pattern: eval(...)
+      - pattern: new Function(...)
+
+  - id: psfn.security.shell-true
+    message: >-
+      shell: true introduces a command-interpreter boundary. Use spawn,
+      execFile, or their synchronous variants with an argument array.
+    severity: ERROR
+    languages: [typescript, javascript]
+    metadata:
+      category: security
+      confidence: high
+    pattern: "$FUNCTION(..., { ..., shell: true, ... }, ...)"
+
+  - id: psfn.security.nonliteral-child-process-exec
+    message: >-
+      A non-literal command reaches exec/execSync. Use execFile or spawn with a
+      fixed executable and an argument array.
+    severity: ERROR
+    languages: [typescript, javascript]
+    metadata:
+      category: security
+      confidence: high
+    paths:
+      exclude:
+        # Legacy GitOps validates and shell-escapes every interpolated value.
+        # Keep the exemption narrow so new dynamic shell execution still fails.
+        - /src/boundary/integrations/git/ops.ts
+    patterns:
+      - pattern-either:
+          - patterns:
+              - pattern-inside: |
+                  import { ..., exec, ... } from 'node:child_process';
+                  ...
+              - pattern: exec($COMMAND, ...)
+          - patterns:
+              - pattern-inside: |
+                  import { ..., execSync, ... } from 'node:child_process';
+                  ...
+              - pattern: execSync($COMMAND, ...)
+          - patterns:
+              - pattern-inside: |
+                  import * as $CHILD_PROCESS from 'node:child_process';
+                  ...
+              - pattern: $CHILD_PROCESS.exec($COMMAND, ...)
+          - patterns:
+              - pattern-inside: |
+                  import * as $CHILD_PROCESS from 'node:child_process';
+                  ...
+              - pattern: $CHILD_PROCESS.execSync($COMMAND, ...)
+      - metavariable-regex:
+          metavariable: $COMMAND
+          regex: ^(?!["'`]).+
+
+  - id: psfn.security.disabled-tls-verification
+    message: >-
+      TLS peer verification is disabled. Keep verification enabled or route the
+      exceptional protocol through a reviewed boundary.
+    severity: ERROR
+    languages: [typescript, javascript]
+    metadata:
+      category: security
+      confidence: high
+    paths:
+      exclude:
+        # This mTLS server requests the peer certificate and performs its
+        # authorization in the authenticated application protocol.
+        - /src/channels/api/server/http.ts
+        # This operator probe deliberately measures unsupported PQC negotiation.
+        - /scripts/probe-node-pqc.mjs
+    pattern-either:
+      - pattern: "{ ..., rejectUnauthorized: false, ... }"
+      - pattern: process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0"
+      - pattern: process.env["NODE_TLS_REJECT_UNAUTHORIZED"] = "0"
+
+  - id: psfn.security.react-raw-html
+    message: >-
+      dangerouslySetInnerHTML can turn untrusted content into script execution.
+      Use normal escaped rendering or a reviewed sanitizer.
+    severity: ERROR
+    languages: [typescript, javascript]
+    metadata:
+      category: security
+      confidence: high
+    pattern-either:
+      - pattern: "<$TAG ... dangerouslySetInnerHTML={{ __html: $HTML }} ... />"
+      - pattern: "<$TAG ... dangerouslySetInnerHTML={{ __html: $HTML }} ...>...</$TAG>"
+
+  - id: psfn.security.svelte-raw-html
+    message: >-
+      Svelte raw HTML bypasses escaping. Use normal escaped rendering or a
+      reviewed sanitizer.
+    severity: ERROR
+    languages: [generic]
+    metadata:
+      category: security
+      confidence: high
+    paths:
+      include:
+        - "*.svelte"
+        - "**/*.svelte"
+    pattern-regex: \{@html\s+[^}]+\}

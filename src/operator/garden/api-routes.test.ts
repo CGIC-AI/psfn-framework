@@ -47,6 +47,7 @@ import { loadSettings } from '../../system/settings.js';
 import { saveCapabilityTierConfig } from '../../system/config/capability-tier-config.js';
 import { loadModelsConfig, saveModelsConfig } from '../../system/config/models-config.js';
 import { loadSchedulerConfig, saveSchedulerConfig } from '../../system/config/scheduler-config.js';
+import { COMPANION_SETTINGS_OVERLAY_FILE_NAME } from '../../system/config/settings-overlay.js';
 import { loadSkillsConfig, saveSkillsConfig } from '../../system/config/skills-config.js';
 import { saveTrustPolicyConfig } from '../../system/config/trust-policy-config.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
@@ -4092,11 +4093,24 @@ describe('AdminServer JSON API routes', () => {
     expect(afterPayload.config.capabilityTier).toBeUndefined();
     expect(afterPayload.editors).toEqual(beforePayload.editors);
 
+    const {
+      moaReferenceModels,
+      moaAggregatorModel,
+      ...globalPatch
+    } = patch;
     const persistedSettings = JSON.parse(readFileSync(join(tempDir, 'settings.json'), 'utf8')) as Record<string, unknown>;
-    expect(persistedSettings).toEqual(expect.objectContaining(patch));
+    expect(persistedSettings).toEqual(expect.objectContaining(globalPatch));
+    expect(persistedSettings.moaReferenceModels).toBeUndefined();
+    expect(persistedSettings.moaAggregatorModel).toBeUndefined();
     expect(persistedSettings.primaryModel).toBeUndefined();
     expect(persistedSettings.backgroundMaintenanceIntervalMs).toBeUndefined();
     expect(persistedSettings.capabilityTier).toBeUndefined();
+    expect(JSON.parse(
+      readFileSync(join(tempDir, COMPANION_SETTINGS_OVERLAY_FILE_NAME), 'utf8'),
+    )).toEqual({
+      moaReferenceModels,
+      moaAggregatorModel,
+    });
   });
 
   it('keeps /api/admin/settings PATCH reachable through the canonical JSON handler', async () => {
@@ -4551,7 +4565,20 @@ describe('AdminServer JSON API routes', () => {
     expect(payload.editors.skills).toEqual(expectedSkills);
     expect(payload.editors.trustPolicy).toEqual(expectedTrustPolicy);
     expect(payload.editors.capabilities).toEqual(expectedCapabilities);
-    expect(loadSettings(tempDir)).toEqual(expect.objectContaining(runtimePatch));
+    const {
+      moaReferenceModels,
+      moaAggregatorModel,
+      ...globalRuntimePatch
+    } = runtimePatch;
+    expect(loadSettings(tempDir)).toEqual(expect.objectContaining(globalRuntimePatch));
+    expect(loadSettings(tempDir).moaReferenceModels).toBeUndefined();
+    expect(loadSettings(tempDir).moaAggregatorModel).toBeUndefined();
+    expect(JSON.parse(
+      readFileSync(join(tempDir, COMPANION_SETTINGS_OVERLAY_FILE_NAME), 'utf8'),
+    )).toEqual({
+      moaReferenceModels,
+      moaAggregatorModel,
+    });
     expect(refreshModelsSpy).toHaveBeenCalledTimes(0);
     expect(refreshCapabilitiesSpy).toHaveBeenCalledTimes(0);
   });

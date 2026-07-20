@@ -68,7 +68,6 @@ import {
 import {
   FLEET_AUTH_FILE_NAME,
   FLEET_AUTH_SEED_FILE_NAME,
-  isFleetAuthEnabled,
   resolveFleetAuthOwnerFile,
 } from './fleet-auth-config.js';
 import { PER_COMPANION_OWNER_FILES } from './settings-contract.js';
@@ -87,7 +86,11 @@ export interface StartupOwnerFileLoadOptions {
   companionDataDir?: string;
   seedDir?: string;
   defaultContextWindow?: number;
-  /** Optional fleet-auth topology flag; strict flag/file matrix when omitted. */
+  /**
+   * Optional fleet-auth env-flag override consulted only for the deprecated
+   * cross-check; presence of fleet-auth.json remains the single source of
+   * truth for enablement.
+   */
   fleetAuth?: boolean;
 }
 
@@ -311,7 +314,7 @@ function systemOwnerFileChecks(
       seedPath: join(seedDir, FLEET_AUTH_SEED_FILE_NAME),
       run: () => resolveFleetAuthOwnerFile({
         dataDir: options.dataDir,
-        enabled: options.fleetAuth ?? isFleetAuthEnabled(),
+        envFlagOverride: options.fleetAuth,
         processMode: 'gateway',
         seedDir: options.seedDir,
       }),

@@ -14,8 +14,8 @@ import { createStaticCredentialVault } from '../../boundary/custody/credential-v
 import {
   FLEET_AUTH_ENV_VAR,
   FLEET_AUTH_FILE_NAME,
-  isFleetAuthEnabled,
   projectFleetAuthGardenMetadata,
+  readFleetAuthEnvFlag,
   resolveFleetAuthOwnerFile,
   resolveGatewayFleetAuthSecrets,
   validateFleetAuthConfig,
@@ -135,19 +135,106 @@ describe('fleet-auth owner-file configuration', () => {
     writeFileSync(join(dataDir, FLEET_AUTH_FILE_NAME), `${JSON.stringify(config, null, 2)}\n`);
   }
 
-  it('keeps flag-off/file-absent mode inert and rejects either mismatch', () => {
+  it('stays in non-fleet mode when the file is absent and refuses a flag that requests fleet auth', () => {
     const dataDir = makeRoot();
-    expect(isFleetAuthEnabled({})).toBe(false);
-    expect(resolveFleetAuthOwnerFile({ dataDir, enabled: false, processMode: 'agent' }))
-      .toBeUndefined();
-    expect(() => resolveFleetAuthOwnerFile({ dataDir, enabled: true, processMode: 'gateway' }))
-      .toThrow(/enabled but .*fleet-auth\.json.*missing/i);
+    expect(readFleetAuthEnvFlag({})).toEqual({ kind: 'unset' });
+    expect(readFleetAuthEnvFlag({ [FLEET_AUTH_ENV_VAR]: '1' })).toEqual({ kind: 'set', value: true });
+    expect(readFleetAuthEnvFlag({ [FLEET_AUTH_ENV_VAR]: 'perhaps' }))
+      .toEqual({ kind: 'invalid', raw: 'perhaps' });
 
+    // File absent + flag unset or explicitly off → non-fleet mode.
+    expect(resolveFleetAuthOwnerFile({ dataDir, env: {}, processMode: 'agent' }))
+      .toBeUndefined();
+    expect(resolveFleetAuthOwnerFile({
+      dataDir,
+      env: { [FLEET_AUTH_ENV_VAR]: '0' },
+      processMode: 'agent',
+    })).toBeUndefined();
+
+    // File absent + flag on → fail closed: never silently start without auth.
+    expect(() => resolveFleetAuthOwnerFile({
+      dataDir,
+      env: { [FLEET_AUTH_ENV_VAR]: '1' },
+      processMode: 'gateway',
+    })).toThrow(/PSFN_FLEET_AUTH requests fleet auth but .*fleet-auth\.json.*missing/i);
+    expect(() => resolveFleetAuthOwnerFile({
+      dataDir,
+      envFlagOverride: true,
+      processMode: 'gateway',
+    })).toThrow(/fail closed/i);
+
+    // File absent + unparseable flag → fail closed on the ambiguous request.
+    expect(() => resolveFleetAuthOwnerFile({
+      dataDir,
+      env: { [FLEET_AUTH_ENV_VAR]: 'perhaps' },
+      processMode: 'gateway',
+    })).toThrow(/Invalid PSFN_FLEET_AUTH/);
+  });
+
+  it('treats file presence as the single source of truth and never lets the flag disable fleet auth', () => {
+    const dataDir = makeRoot();
     writeConfig(dataDir, validConfig(publicKeyPem, hubPublicKeyPem));
-    expect(() => resolveFleetAuthOwnerFile({ dataDir, enabled: false, processMode: 'agent' }))
-      .toThrow(/present.*PSFN_FLEET_AUTH.*not enabled/i);
-    expect(() => isFleetAuthEnabled({ [FLEET_AUTH_ENV_VAR]: 'perhaps' }))
-      .toThrow(/Invalid PSFN_FLEET_AUTH/);
+
+    // File present + flag unset or on → enabled, no warning.
+    const silentWarnings: string[] = [];
+    const unset = resolveFleetAuthOwnerFile({
+      dataDir,
+      env: {},
+      processMode: 'gateway',
+      warn: message => silentWarnings.push(message),
+    });
+    const flagOn = resolveFleetAuthOwnerFile({
+      dataDir,
+      env: { [FLEET_AUTH_ENV_VAR]: '1' },
+      processMode: 'gateway',
+      warn: message => silentWarnings.push(message),
+    });
+    expect(unset?.kind).toBe('gateway');
+    expect(flagOn?.kind).toBe('gateway');
+    expect(silentWarnings).toEqual([]);
+
+    // File present + flag explicitly off → STAYS ENABLED with a loud warning.
+    // The secure direction wins; a lone env flip must neither crash the
+    // gateway nor downgrade auth (this was the bidirectional-trap crashloop).
+    const warnings: string[] = [];
+    const flagOff = resolveFleetAuthOwnerFile({
+      dataDir,
+      env: { [FLEET_AUTH_ENV_VAR]: '0' },
+      processMode: 'gateway',
+      warn: message => warnings.push(message),
+    });
+    expect(flagOff?.kind).toBe('gateway');
+    expect(flagOff && 'config' in flagOff ? flagOff.config.schemaVersion : null).toBe(1);
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toMatch(/IGNORING PSFN_FLEET_AUTH=0/);
+    expect(warnings[0]).toMatch(/REMAINS ENABLED/);
+    expect(warnings[0]).toMatch(/deprecated/i);
+    expect(warnings[0]).toMatch(/single source of truth/i);
+
+    // Same via the startup-verification override path.
+    const overrideWarnings: string[] = [];
+    const overriddenOff = resolveFleetAuthOwnerFile({
+      dataDir,
+      envFlagOverride: false,
+      processMode: 'gateway',
+      warn: message => overrideWarnings.push(message),
+    });
+    expect(overriddenOff?.kind).toBe('gateway');
+    expect(overrideWarnings).toHaveLength(1);
+    expect(overrideWarnings[0]).toMatch(/REMAINS ENABLED/);
+
+    // File present + unparseable flag → enabled with a loud warning; no crash.
+    const invalidWarnings: string[] = [];
+    const invalid = resolveFleetAuthOwnerFile({
+      dataDir,
+      env: { [FLEET_AUTH_ENV_VAR]: 'perhaps' },
+      processMode: 'gateway',
+      warn: message => invalidWarnings.push(message),
+    });
+    expect(invalid?.kind).toBe('gateway');
+    expect(invalidWarnings).toHaveLength(1);
+    expect(invalidWarnings[0]).toMatch(/IGNORING invalid PSFN_FLEET_AUTH/);
+    expect(invalidWarnings[0]).toMatch(/REMAINS ENABLED/);
   });
 
   it('projects the full config only to the gateway and public verifier material elsewhere', () => {
@@ -155,9 +242,9 @@ describe('fleet-auth owner-file configuration', () => {
     const config = validConfig(publicKeyPem, hubPublicKeyPem);
     writeConfig(dataDir, config);
 
-    const gateway = resolveFleetAuthOwnerFile({ dataDir, enabled: true, processMode: 'gateway' });
-    const agent = resolveFleetAuthOwnerFile({ dataDir, enabled: true, processMode: 'agent' });
-    const operator = resolveFleetAuthOwnerFile({ dataDir, enabled: true, processMode: 'operator' });
+    const gateway = resolveFleetAuthOwnerFile({ dataDir, env: {}, processMode: 'gateway' });
+    const agent = resolveFleetAuthOwnerFile({ dataDir, env: {}, processMode: 'agent' });
+    const operator = resolveFleetAuthOwnerFile({ dataDir, env: {}, processMode: 'operator' });
 
     expect(gateway?.kind).toBe('gateway');
     expect(gateway && 'config' in gateway ? gateway.config.credentials.runtimeDatabaseUrlRef : null)
@@ -576,7 +663,7 @@ describe('fleet-auth owner-file configuration', () => {
     writeFileSync(join(dataDir, FLEET_AUTH_FILE_NAME), raw);
     expect(() => resolveFleetAuthOwnerFile({
       dataDir,
-      enabled: true,
+      env: {},
       processMode: 'gateway',
     })).toThrow(/replace-before-enable.*must be replaced/i);
 

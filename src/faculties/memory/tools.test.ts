@@ -969,6 +969,51 @@ describe('createMemoryTool', () => {
     }));
   });
 
+  it('preserves structured subagent provenance for unified writes and imports', async () => {
+    const store = mockUnifiedStore();
+    const tool = createMemoryTool(
+      writer as unknown as MemoryWriter,
+      store as unknown as MemoryStorePort,
+    );
+
+    const subagentWrite = {
+      action: 'write' as const,
+      text: 'Subagent procedural write',
+      type: 'procedural' as const,
+      __psfnShardSource: 'subagent:subagent-42',
+    };
+    const subagentImport = {
+      action: 'import' as const,
+      records: [{ text: 'Subagent semantic import', type: 'semantic' as const }],
+      __psfnShardSource: 'subagent:subagent-42',
+    };
+    await tool.execute('memory-call-subagent-write', subagentWrite);
+    await tool.execute('memory-call-subagent-import', subagentImport);
+
+    expect(writer.write).toHaveBeenCalledWith(expect.objectContaining({
+      sourceRef: 'source:subagent:subagent-42|tool:memory|action:write|invocation:memory-call-subagent-write',
+      sourceType: 'subagent',
+      provenance: {
+        toolName: 'memory',
+        toolCallId: 'memory-call-subagent-write',
+        subagentId: 'subagent-42',
+        actor: 'subagent',
+      },
+    }));
+    expect(writer.importBatch).toHaveBeenCalledWith([
+      expect.objectContaining({
+        sourceRef: 'source:subagent:subagent-42|tool:memory|action:import|import_source:import|invocation:memory-call-subagent-import',
+        sourceType: 'subagent',
+        provenance: {
+          toolName: 'memory',
+          toolCallId: 'memory-call-subagent-import',
+          subagentId: 'subagent-42',
+          actor: 'subagent',
+        },
+      }),
+    ]);
+  });
+
   it('fails closed on invalid or incomplete actions', async () => {
     const store = mockUnifiedStore();
     const tool = createMemoryTool(writer as unknown as MemoryWriter, store as unknown as MemoryStorePort);

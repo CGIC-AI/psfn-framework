@@ -685,7 +685,7 @@ describe('GatewayClient streaming', () => {
     });
   });
 
-  it('normalizes all 12 model-hint fields on llm.chat RPC requests', async () => {
+  it('normalizes all 12 model-hint fields on llm.chat RPC requests', () => {
     void client.stream(
       {
         systemPrompt: 'test',
@@ -764,7 +764,7 @@ describe('GatewayClient streaming', () => {
     await expect(completion).resolves.toMatchObject({ content: 'done' });
   });
 
-  it('preserves caller-owned accounting identity on llm.chat RPC requests', async () => {
+  it('preserves caller-owned accounting identity on llm.chat RPC requests', () => {
     void client.stream(
       {
         systemPrompt: 'test',
@@ -1237,6 +1237,112 @@ describe('GatewayClient streaming', () => {
       result: { embeddings: [[0.1, 0.2]] },
     });
     await expect(batchPromise).resolves.toHaveLength(1);
+  });
+});
+
+describe('GatewayClient per-companion model selection transport (23pp)', () => {
+  const selection = {
+    chat: 'big-brain-opus',
+    background: 'economy-worker',
+    vision: 'vision-flash',
+    longContext: 'long-haul',
+  } as const;
+
+  function makeSelectionClient() {
+    const conn = createMockConnection();
+    const client = new GatewayClient(conn.conn, 1024, { modelPurposeSelection: selection });
+    return { conn, client };
+  }
+
+  function respond(conn: ReturnType<typeof createMockConnection>, index = 0): void {
+    const request = conn.sent[index] as { id: number };
+    conn._emit({
+      jsonrpc: '2.0',
+      id: request.id,
+      result: {
+        content: 'ok',
+        toolCalls: [],
+        model: 'served-model',
+        inputTokens: 1,
+        outputTokens: 1,
+        stopReason: 'stop',
+      },
+    });
+  }
+
+  it('transports the chat selection slot on an interactive streamed turn', async () => {
+    const { conn, client } = makeSelectionClient();
+    const promise = client.stream({
+      systemPrompt: 'system',
+      messages: [],
+      correlation: { turnId: 't1', callType: 'chat', purpose: 'chat' },
+    });
+    const request = conn.sent[0] as { method: string; params: Record<string, unknown> };
+    expect(request.method).toBe('llm.chat');
+    expect(request.params.slotKey).toBe('big-brain-opus');
+    respond(conn);
+    await promise;
+  });
+
+  it('routes a non-streamed chat-purpose completion to the background selection (lane parity with LLMClient)', async () => {
+    const { conn, client } = makeSelectionClient();
+    const promise = client.complete({ systemPrompt: 'system', messages: [] }, 'chat');
+    const request = conn.sent[0] as { method: string; params: Record<string, unknown> };
+    expect(request.method).toBe('llm.complete');
+    expect(request.params.slotKey).toBe('economy-worker');
+    respond(conn);
+    await promise;
+  });
+
+  it('transports the vision selection slot for vision completions', async () => {
+    const { conn, client } = makeSelectionClient();
+    const promise = client.complete({ systemPrompt: 'system', messages: [] }, 'vision');
+    const request = conn.sent[0] as { params: Record<string, unknown> };
+    expect(request.params.slotKey).toBe('vision-flash');
+    respond(conn);
+    await promise;
+  });
+
+  it('resolves the context lane through longContext before background', async () => {
+    const { conn, client } = makeSelectionClient();
+    const promise = client.complete({ systemPrompt: 'system', messages: [] }, 'context');
+    const request = conn.sent[0] as { params: Record<string, unknown> };
+    expect(request.params.slotKey).toBe('long-haul');
+    respond(conn);
+    await promise;
+  });
+
+  it('suppresses the selection when the caller pins an explicit model hint', async () => {
+    const { conn, client } = makeSelectionClient();
+    const promise = client.complete({
+      systemPrompt: 'system',
+      messages: [],
+      modelHint: { model: 'openrouter:explicit/override' },
+    }, 'vision');
+    const request = conn.sent[0] as { params: Record<string, unknown> };
+    expect(request.params.slotKey).toBeUndefined();
+    expect(request.params.model).toBe('explicit/override');
+    respond(conn);
+    await promise;
+  });
+
+  it('omits slotKey for lanes without a selection', async () => {
+    const { conn, client } = makeSelectionClient();
+    const promise = client.complete({ systemPrompt: 'system', messages: [] }, 'memory');
+    const request = conn.sent[0] as { params: Record<string, unknown> };
+    expect(request.params.slotKey).toBeUndefined();
+    respond(conn);
+    await promise;
+  });
+
+  it('omits slotKey entirely when the client has no selection (byte-identical default)', async () => {
+    const conn = createMockConnection();
+    const client = new GatewayClient(conn.conn, 1024);
+    const promise = client.complete({ systemPrompt: 'system', messages: [] }, 'chat');
+    const request = conn.sent[0] as { params: Record<string, unknown> };
+    expect('slotKey' in request.params).toBe(false);
+    respond(conn);
+    await promise;
   });
 });
 

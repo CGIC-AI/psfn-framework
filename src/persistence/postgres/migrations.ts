@@ -1,27 +1,5 @@
 import { POSTGRES_CONTACT_LIFECYCLE_MIGRATIONS } from './contact-lifecycle-migrations.js';
-
-const POSTGRES_VECTOR_EXTENSION_MIGRATION = `
-  DO $$
-  DECLARE
-    target_schema TEXT := CASE WHEN current_schema() = 'public' THEN 'public' ELSE 'extensions' END;
-    installed_schema TEXT;
-  BEGIN
-    SELECT namespace.nspname INTO installed_schema
-    FROM pg_extension extension
-    JOIN pg_namespace namespace ON namespace.oid = extension.extnamespace
-    WHERE extension.extname = 'vector';
-
-    IF target_schema = 'extensions' AND to_regnamespace('extensions') IS NULL THEN
-      RAISE EXCEPTION 'Tenant migrations require the explicitly provisioned extensions schema';
-    END IF;
-    IF installed_schema IS NULL THEN
-      EXECUTE format('CREATE EXTENSION vector WITH SCHEMA %I', target_schema);
-    ELSIF installed_schema <> target_schema THEN
-      RAISE EXCEPTION 'pgvector is installed in schema %, expected %', installed_schema, target_schema;
-    END IF;
-  END
-  $$;
-`;
+import { POSTGRES_VECTOR_EXTENSION_MIGRATION } from './vector-extension-migration.js';
 
 export const POSTGRES_MEMORY_MIGRATIONS = [
   // Tenant search paths exclude public. Deployment provisioning creates the

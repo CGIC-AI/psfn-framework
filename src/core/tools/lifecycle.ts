@@ -357,6 +357,7 @@ async function executeRestartAction(
 
   // Schedule clean shutdown + exit after returning the tool result
   // Use setImmediate so the tool result gets back to the LLM first
+  // eslint-disable-next-line @typescript-eslint/no-misused-promises -- Callback API intentionally receives this Promise-returning lifecycle handler.
   setImmediate(async () => {
     const restartCommandReady = await completeDurableShutdownForRestart(
       restartPlan,
@@ -425,6 +426,7 @@ async function executeRebuildAction(
   await notifier.notifyPreRestart(fullReason);
 
   // Schedule build + shutdown after tool result returns
+  // eslint-disable-next-line @typescript-eslint/no-misused-promises -- Callback API intentionally receives this Promise-returning lifecycle handler.
   setImmediate(async () => {
     try {
       log.info('Running configured rebuild command...');

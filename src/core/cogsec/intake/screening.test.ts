@@ -149,7 +149,7 @@ describe('intake screening service (htm9.2)', () => {
     expect(result.action).toBe('quarantine');
   });
 
-  it('screenSync works L1-only and fails closed when an async scorer is configured', async () => {
+  it('screenSync works L1-only and fails closed when an async scorer is configured', () => {
     const l1Only = makeService('enforce');
     const syncResult = l1Only.screenSync(HOSTILE_TEXT, screenInput);
     expect(syncResult.action).toBe('quarantine');

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { loadBackupConfig } from '../../../system/config/backup-config.js';
@@ -9,6 +9,7 @@ import { loadModelsConfig } from '../../../system/config/models-config.js';
 import { loadProvidersConfig } from '../../../system/config/providers-config.js';
 import { loadSchedulerConfig } from '../../../system/config/scheduler-config.js';
 import { createOwnerFileConfigStore } from '../../../system/config/config-store.js';
+import { loadCompanionSettingsOverlay } from '../../../system/config/settings-overlay.js';
 import { createDefaultGroupMemorySettings } from '../../../system/config/group-memory-config.js';
 import { createDefaultMemoryRetrievalPolicy } from '../../../system/config/memory-retrieval-policy.js';
 import { loadSettings } from '../../../system/settings.js';
@@ -260,6 +261,10 @@ describe('AdminSettingsDataService', () => {
       telegramAuthorizedUsers: '123456,654321',
       promotedExtendedTools: ['obsidian_append_note', 'analysis_workbench'],
       chatApiBaseUrl: 'http://127.0.0.1:3000/api',
+      imageProvider: 'fal',
+      imageFalCreateModel: 'fal-ai/nano-banana-2',
+      imageFalEditModel: 'xai/grok-imagine-image/quality/edit',
+      imageSelfieEditModel: 'xai/grok-imagine-image/quality/edit',
       moaEnabled: true,
       moaReferenceModels: ['openai/gpt-4.1-mini', 'anthropic/claude-3.7-sonnet'],
       moaAggregatorModel: 'openai/gpt-4.1',
@@ -290,7 +295,223 @@ describe('AdminSettingsDataService', () => {
     expect(settingsData.config).toEqual(expect.objectContaining(payload));
 
     const persistedSettings = loadSettings(root);
-    expect(persistedSettings).toEqual(expect.objectContaining(payload));
+    const {
+      imageProvider,
+      imageFalCreateModel,
+      imageFalEditModel,
+      imageSelfieEditModel,
+      moaReferenceModels,
+      moaAggregatorModel,
+      ...globalPayload
+    } = payload;
+    expect(persistedSettings).toEqual(expect.objectContaining(globalPayload));
+    expect(persistedSettings.imageProvider).toBeUndefined();
+    expect(persistedSettings.imageFalCreateModel).toBeUndefined();
+    expect(persistedSettings.imageFalEditModel).toBeUndefined();
+    expect(persistedSettings.imageSelfieEditModel).toBeUndefined();
+    expect(loadCompanionSettingsOverlay(root)).toEqual(expect.objectContaining({
+      imageProvider,
+      imageFalCreateModel,
+      imageFalEditModel,
+      imageSelfieEditModel,
+      moaReferenceModels,
+      moaAggregatorModel,
+    }));
+  });
+
+  it('rejects unsupported image provider and model settings without persisting them', () => {
+    const root = makeTempDir();
+    const service = buildService(buildConfig(root));
+
+    const result = service.updateSettings(JSON.stringify({
+      imageProvider: 'unknown-provider',
+      imageFalCreateModel: 'not-in-the-catalog',
+      imageFalEditModel: 'also-not-in-the-catalog',
+      imageSelfieEditModel: 'still-not-in-the-catalog',
+    }));
+
+    expect(result.ok).toBe(false);
+    expect(result.validationErrors).toEqual(expect.arrayContaining([
+      expect.objectContaining({ field: 'imageProvider', code: 'invalid_enum' }),
+      expect.objectContaining({ field: 'imageFalCreateModel', code: 'invalid_enum' }),
+      expect.objectContaining({ field: 'imageFalEditModel', code: 'invalid_enum' }),
+      expect.objectContaining({ field: 'imageSelfieEditModel', code: 'invalid_enum' }),
+    ]));
+    const persisted = loadSettings(root);
+    expect(persisted.imageProvider).toBeUndefined();
+    expect(persisted.imageFalCreateModel).toBeUndefined();
+    expect(persisted.imageFalEditModel).toBeUndefined();
+    expect(persisted.imageSelfieEditModel).toBeUndefined();
+  });
+
+  it('persists model purpose selections that resolve against the live models.json registry (23pp)', () => {
+    const root = makeTempDir();
+    const service = buildService(buildConfig(root));
+
+    const result = service.updateSettings(JSON.stringify({
+      modelPurposeSelection: { chat: 'extraction', vision: 'primary' },
+    }));
+
+    expect(result.ok).toBe(true);
+    const persisted = loadSettings(root);
+    expect(persisted.modelPurposeSelection).toBeUndefined();
+    expect(loadCompanionSettingsOverlay(root)?.modelPurposeSelection).toEqual({
+      chat: 'extraction',
+      vision: 'primary',
+    });
+  });
+
+  it('rejects model purpose selections referencing unknown registry slots without persisting them (23pp)', () => {
+    const root = makeTempDir();
+    const service = buildService(buildConfig(root));
+
+    const result = service.updateSettings(JSON.stringify({
+      modelPurposeSelection: { chat: 'not-a-registry-slot' },
+    }));
+
+    expect(result.ok).toBe(false);
+    expect(result.validationErrors).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        field: 'modelPurposeSelection',
+        code: 'invalid_object',
+        message: expect.stringContaining('not-a-registry-slot'),
+      }),
+    ]));
+    expect(loadSettings(root).modelPurposeSelection).toBeUndefined();
+  });
+
+  it('rejects model purpose selections with unknown purpose keys (23pp)', () => {
+    const root = makeTempDir();
+    const service = buildService(buildConfig(root));
+
+    const result = service.updateSettings(JSON.stringify({
+      modelPurposeSelection: { bigBrain: 'primary' },
+    }));
+
+    expect(result.ok).toBe(false);
+    expect(result.validationErrors).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        field: 'modelPurposeSelection',
+        code: 'invalid_object',
+        message: expect.stringContaining('unknown model purpose'),
+      }),
+    ]));
+  });
+
+  it('writes per-companion image selections to the selected overlay without mutating the fleet-global owner', () => {
+    const root = makeTempDir();
+    const companionA = join(root, 'companions', 'a');
+    const companionB = join(root, 'companions', 'b');
+    mkdirSync(companionA, { recursive: true });
+    mkdirSync(companionB, { recursive: true });
+    const config = {
+      ...buildConfig(root),
+      companionDataDir: companionA,
+    } satisfies SubstrateConfig;
+    const service = new AdminSettingsDataService({
+      config,
+      configStore: createOwnerFileConfigStore({
+        dataDir: root,
+        companionDataDir: companionA,
+        defaultContextWindow: config.defaultContextWindow,
+      }),
+    });
+    const globalSettingsBefore = readFileSync(join(root, 'settings.json'), 'utf8');
+
+    expect(service.updateSettings(JSON.stringify({
+      imageProvider: 'comfyui',
+      imageFalCreateModel: 'xai/grok-imagine-image',
+      imageFalEditModel: 'xai/grok-imagine-image/quality/edit',
+      imageSelfieEditModel: 'xai/grok-imagine-image/quality/edit',
+    })).ok).toBe(true);
+
+    expect(readFileSync(join(root, 'settings.json'), 'utf8')).toBe(globalSettingsBefore);
+    expect(loadSettings(root)).not.toEqual(expect.objectContaining({
+      imageProvider: expect.anything(),
+      imageFalCreateModel: expect.anything(),
+      imageFalEditModel: expect.anything(),
+      imageSelfieEditModel: expect.anything(),
+    }));
+    expect(loadCompanionSettingsOverlay(companionA)).toEqual({
+      imageProvider: 'comfyui',
+      imageFalCreateModel: 'xai/grok-imagine-image',
+      imageFalEditModel: 'xai/grok-imagine-image/quality/edit',
+      imageSelfieEditModel: 'xai/grok-imagine-image/quality/edit',
+    });
+    expect(loadCompanionSettingsOverlay(companionB)).toBeUndefined();
+    expect(config).toMatchObject({
+      imageProvider: 'comfyui',
+      imageFalCreateModel: 'xai/grok-imagine-image',
+      imageFalEditModel: 'xai/grok-imagine-image/quality/edit',
+      imageSelfieEditModel: 'xai/grok-imagine-image/quality/edit',
+    });
+  });
+
+  it('deep-merges and clears companion model selections without mutating siblings or global settings', () => {
+    const root = makeTempDir();
+    const companionA = join(root, 'companions', 'a');
+    const companionB = join(root, 'companions', 'b');
+    mkdirSync(companionA, { recursive: true });
+    mkdirSync(companionB, { recursive: true });
+    writeFileSync(
+      join(companionA, 'settings.overlay.json'),
+      JSON.stringify({
+        modelPurposeSelection: {
+          chat: 'primary',
+          vision: 'primary',
+        },
+        moaReferenceModels: ['openrouter:old/reference'],
+        moaAggregatorModel: 'openrouter:old/aggregator',
+      }),
+      'utf8',
+    );
+    const config = {
+      ...buildConfig(root),
+      companionDataDir: companionA,
+    } satisfies SubstrateConfig;
+    const service = new AdminSettingsDataService({
+      config,
+      configStore: createOwnerFileConfigStore({
+        dataDir: root,
+        companionDataDir: companionA,
+        defaultContextWindow: config.defaultContextWindow,
+      }),
+    });
+    const globalSettingsBefore = readFileSync(join(root, 'settings.json'), 'utf8');
+
+    expect(service.updateSettings(JSON.stringify({
+      modelPurposeSelection: { chat: 'extraction' },
+      moaReferenceModels: ['openrouter:new/reference'],
+      moaAggregatorModel: 'openrouter:new/aggregator',
+    })).ok).toBe(true);
+
+    expect(readFileSync(join(root, 'settings.json'), 'utf8')).toBe(globalSettingsBefore);
+    expect(loadCompanionSettingsOverlay(companionA)).toEqual({
+      modelPurposeSelection: {
+        chat: 'extraction',
+        vision: 'primary',
+      },
+      moaReferenceModels: ['openrouter:new/reference'],
+      moaAggregatorModel: 'openrouter:new/aggregator',
+    });
+    expect(loadCompanionSettingsOverlay(companionB)).toBeUndefined();
+
+    expect(service.updateSettings(JSON.stringify({
+      modelPurposeSelection: null,
+      moaReferenceModels: [],
+      moaAggregatorModel: null,
+    })).ok).toBe(true);
+
+    expect(readFileSync(join(root, 'settings.json'), 'utf8')).toBe(globalSettingsBefore);
+    expect(loadCompanionSettingsOverlay(companionA)).toEqual({
+      modelPurposeSelection: null,
+      moaReferenceModels: [],
+      moaAggregatorModel: null,
+    });
+    expect(loadCompanionSettingsOverlay(companionB)).toBeUndefined();
+    expect(config.modelPurposeSelection).toBeUndefined();
+    expect(config.moaReferenceModels).toBeUndefined();
+    expect(config.moaAggregatorModel).toBeUndefined();
   });
 
   it('reports local API and admin auth status from runtime config instead of direct env reads', async () => {
@@ -700,7 +921,7 @@ describe('AdminSettingsDataService', () => {
     });
   });
 
-  it('round-trips models through the raw editor path via the injected config store port', async () => {
+  it('round-trips models through the raw editor path via the injected config store port', () => {
     const root = makeTempDir();
     const refreshModelsSpy = vi.fn();
     const config = buildConfig(root, {

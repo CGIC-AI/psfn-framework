@@ -1,7 +1,7 @@
 /**
  * Unified human-in-the-loop approval envelope (bead psfn-framework-ct0v).
  *
- * PSFN has several subsystems that need to route a "please decide, human"
+ * The runtime has several subsystems that need to route a "please decide, human"
  * request to the person's device: the gateway confirmation gate (tool /
  * information-access escalation and expensive-usage sign-off), shard capability
  * fold review, the Cognitive Security intake-quarantine queue, and broadcast

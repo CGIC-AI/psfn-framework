@@ -28,7 +28,7 @@ export function agentLoopWithScheduler(
   continuationFuse = new ParentTurnContinuationFuse(),
 ) {
   const stream = createAgentStream();
-  (async () => {
+  void (async () => {
     const newMessages = [...prompts];
     try {
       const currentContext: LiveToolAgentContext = {
@@ -73,7 +73,7 @@ export function agentLoopContinueWithScheduler(
     throw new Error('Cannot continue from message role: assistant');
   }
   const stream = createAgentStream();
-  (async () => {
+  void (async () => {
     const newMessages: AgentMessage[] = [];
     try {
       const currentContext: LiveToolAgentContext = { ...context };

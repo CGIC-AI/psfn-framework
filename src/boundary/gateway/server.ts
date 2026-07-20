@@ -1551,53 +1551,59 @@ export class GatewayServer {
       this.transitionConnectionState(conn, 'ready', 'rpc_registered');
     }
 
-    conn.on('frameError', async (error: unknown) => {
+    conn.on('frameError', (error: unknown) => {
       const frameError = normalizeNdjsonFrameError(error);
-      await this.handleMalformedFrame(conn, 'ndjson', frameError.reason, frameError.preview);
+      this.handleMalformedFrame(conn, 'ndjson', frameError.reason, frameError.preview);
     });
 
     conn.on('heartbeat', () => {
       this.touchConnectionHealthcheck(conn);
     });
 
-    conn.onMessage(async (message) => {
-      if (!this.connections.has(conn)) {
-        return;
-      }
-      this.touchConnectionHealthcheck(conn);
-      const validationError = validateJsonRpcFrame(message);
-      if (validationError) {
-        await this.handleMalformedFrame(
-          conn,
-          'jsonrpc',
-          validationError,
-          summarizeFramePreview(message),
-        );
-        return;
-      }
-      const verdict = this.enforceCompanionFrameIdentity(conn, message as Record<string, unknown>);
-      if (verdict !== 'pass') {
-        return;
-      }
-      if ((message as Record<string, unknown>).method !== 'gateway.client.identify') {
-        this.transitionConnectionState(conn, 'ready', 'rpc_message_received');
-      }
-      const releaseInFlightHealthcheck = this.beginInFlightHealthcheck(conn);
-      // json-rpc-2.0 receiveAndSend() payload param is typed as `any`; message is parsed JSON
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      try {
-        await serverAndClient.receiveAndSend(message as any);
-      } catch (error) {
-        const messageText = toErrorMessage(error);
-        await this.handleMalformedFrame(
-          conn,
-          'jsonrpc',
-          `JSON-RPC receive/send failed: ${messageText}`,
-          summarizeFramePreview(message),
-        );
-      } finally {
-        releaseInFlightHealthcheck();
-      }
+    conn.onMessage((message) => {
+      void (async (): Promise<void> => {
+        if (!this.connections.has(conn)) {
+          return;
+        }
+        this.touchConnectionHealthcheck(conn);
+        const validationError = validateJsonRpcFrame(message);
+        if (validationError) {
+          this.handleMalformedFrame(
+            conn,
+            'jsonrpc',
+            validationError,
+            summarizeFramePreview(message),
+          );
+          return;
+        }
+        const verdict = this.enforceCompanionFrameIdentity(conn, message as Record<string, unknown>);
+        if (verdict !== 'pass') {
+          return;
+        }
+        if ((message as Record<string, unknown>).method !== 'gateway.client.identify') {
+          this.transitionConnectionState(conn, 'ready', 'rpc_message_received');
+        }
+        const releaseInFlightHealthcheck = this.beginInFlightHealthcheck(conn);
+        // json-rpc-2.0 receiveAndSend() payload param is typed as `any`; message is parsed JSON
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        try {
+          await serverAndClient.receiveAndSend(message as any);
+        } catch (error) {
+          const messageText = toErrorMessage(error);
+          this.handleMalformedFrame(
+            conn,
+            'jsonrpc',
+            `JSON-RPC receive/send failed: ${messageText}`,
+            summarizeFramePreview(message),
+          );
+        } finally {
+          releaseInFlightHealthcheck();
+        }
+      })().catch((handlingError: unknown) => {
+        log.error('Gateway connection message handling failed', {
+          error: toErrorMessage(handlingError),
+        });
+      });
     });
 
     conn.on('close', () => {
@@ -2142,12 +2148,12 @@ export class GatewayServer {
     }
   }
 
-  private async handleMalformedFrame(
+  private handleMalformedFrame(
     conn: GatewayRpcConnection,
     frameKind: MalformedFrameKind,
     reason: string,
     preview?: string,
-  ): Promise<void> {
+  ): void {
     if (!this.connectionStatuses.has(conn)) {
       return;
     }
@@ -2158,8 +2164,16 @@ export class GatewayServer {
       reason,
       ...(preview ? { preview } : {}),
     };
-    const auditId = await this.audit(INVALID_FRAME_AUDIT_METHOD, 'DENY', params);
-    await this.auditComplete(auditId, startedAt, reason);
+    void (async (): Promise<void> => {
+      const auditId = await this.audit(INVALID_FRAME_AUDIT_METHOD, 'DENY', params);
+      await this.auditComplete(auditId, startedAt, reason);
+    })().catch((auditError: unknown) => {
+      log.error('Malformed IPC frame audit persistence failed after disconnecting peer fail closed', {
+        ...params,
+        error: toErrorMessage(auditError),
+      });
+    });
+
     log.error('Malformed IPC frame received; disconnecting agent connection', params);
     this.transitionConnectionState(conn, 'degraded', 'malformed_frame', reason);
     this.transitionConnectionState(conn, 'offline', 'malformed_frame', reason);

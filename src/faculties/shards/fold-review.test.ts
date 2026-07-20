@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -167,5 +167,59 @@ describe('ShardFoldReviewController', () => {
         'fold_review_memory_promotion_unavailable',
       ]),
     });
+  });
+
+  it('preserves structured subagent origin when an approved staged candidate reaches the memory writer', async () => {
+    dir = mkdtempSync(join(tmpdir(), 'psfn-fold-review-'));
+    const storePath = join(dir, 'state', 'shard-fold-reviews.json');
+    const subagentId = 'subagent-review-1';
+    const lineage = buildLineage(subagentId);
+    const write = vi.fn(async () => ({
+      action: 'created' as const,
+      memory: { id: 'memory-from-subagent' },
+    }));
+    const controller = new ShardFoldReviewController(storePath, { write } as never);
+    const stagedOutputs = resolveStagedShardMemoryOutputs(
+      { channelId: `subagent:${subagentId}`, task: 'summarize childhood document', lineage },
+      'memory',
+      'memory-call-subagent-stage',
+      {
+        action: 'write',
+        text: "The document recounts the operator's childhood.",
+        type: 'emotional',
+      },
+    );
+    Object.assign(stagedOutputs[0]!.provenance, {
+      workerKind: 'subagent',
+      subagentId,
+    });
+
+    await controller.recordPendingMemoryCandidates({
+      shardId: subagentId,
+      channelId: `subagent:${subagentId}`,
+      task: 'summarize childhood document',
+      lineage,
+      outputs: stagedOutputs,
+    });
+    await controller.resolveFoldReview({
+      shardId: subagentId,
+      decision: 'approve',
+      actor: 'operator:test',
+    });
+
+    expect(write).toHaveBeenCalledWith(expect.objectContaining({
+      sourceRef: `source:subagent:${subagentId}|tool:memory|invocation:memory-call-subagent-stage|fold_review:approved`,
+      sourceType: 'subagent',
+      provenance: expect.objectContaining({
+        channelId: `subagent:${subagentId}`,
+        subagentId,
+        actor: 'subagent',
+        reason: 'subagent_fold_review_approved',
+      }),
+      provenanceRefs: expect.arrayContaining([
+        `subagent_output:${stagedOutputs[0]!.outputId}`,
+        `subagent_lineage:${subagentId}`,
+      ]),
+    }));
   });
 });

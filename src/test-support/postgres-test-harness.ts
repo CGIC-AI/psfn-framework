@@ -28,7 +28,7 @@ export interface PostgresTestHarness {
   readonly adminDatabaseUrl: string;
   readonly clientBinaries: PostgresTestClientBinaries;
   readonly image: string;
-  createDatabase(): Promise<PostgresTestDatabase>;
+  createDatabase(options?: PostgresTestDatabaseOptions): Promise<PostgresTestDatabase>;
   stop(): Promise<void>;
 }
 
@@ -40,6 +40,15 @@ export interface PostgresTestClientBinaries {
 
 export interface PostgresTestHarnessOptions {
   image?: string;
+}
+
+export interface PostgresTestDatabaseOptions {
+  /**
+   * Mirrors the tenancy provisioner's dedicated extension-schema bootstrap.
+   * Disable only when a test explicitly exercises the unprovisioned legacy
+   * database layout.
+   */
+  provisionExtensionSchema?: boolean;
 }
 
 function runDocker(args: string[]): string {
@@ -174,12 +183,16 @@ export async function startPostgresTestHarness(options: PostgresTestHarnessOptio
     adminDatabaseUrl,
     clientBinaries,
     image,
-    async createDatabase(): Promise<PostgresTestDatabase> {
+    async createDatabase(
+      databaseOptions: PostgresTestDatabaseOptions = {},
+    ): Promise<PostgresTestDatabase> {
       const databaseName = `psfn_${randomUUID().replaceAll('-', '')}`;
       await adminPool.query(`CREATE DATABASE ${quoteIdentifier(databaseName)}`);
       const databaseUrl = resolveDatabaseUrl(adminDatabaseUrl, databaseName);
       await waitForDatabaseReady(databaseUrl);
-      await provisionTestDatabase(databaseUrl);
+      if (databaseOptions.provisionExtensionSchema !== false) {
+        await provisionTestDatabase(databaseUrl);
+      }
       return {
         databaseName,
         databaseUrl,

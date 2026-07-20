@@ -156,7 +156,7 @@ describe('presence-note composers — prompt-injection sanitization (S10 cogsec 
 describe('createPerceptionNoteDeliverer — resolved presences', () => {
   it('delivers a known-arrival note naming the contact + place on the session channel', () => {
     const { sink, calls } = noteSink();
-    createPerceptionNoteDeliverer(sink).handleResolvedPresence(knownPresence());
+    void createPerceptionNoteDeliverer(sink).handleResolvedPresence(knownPresence());
     expect(calls).toEqual([[
       'satellite:office:session-1',
       '[Presence] Partner just entered the Office.',
@@ -166,7 +166,7 @@ describe('createPerceptionNoteDeliverer — resolved presences', () => {
 
   it('delivers a generic note for an anonymous presence, never a fabricated name', () => {
     const { sink, calls } = noteSink();
-    createPerceptionNoteDeliverer(sink).handleResolvedPresence(anonymousPresence());
+    void createPerceptionNoteDeliverer(sink).handleResolvedPresence(anonymousPresence());
     expect(calls).toEqual([[
       'satellite:office:session-1',
       '[Presence] Someone is present in the Office.',
@@ -177,7 +177,7 @@ describe('createPerceptionNoteDeliverer — resolved presences', () => {
 
   it('resolves the place display name carried on the event', () => {
     const { sink, calls } = noteSink();
-    createPerceptionNoteDeliverer(sink).handleResolvedPresence(
+    void createPerceptionNoteDeliverer(sink).handleResolvedPresence(
       knownPresence({ placeDisplayName: 'Living Area' }),
     );
     expect(calls[0][1]).toBe('[Presence] Partner just entered the Living Area.');
@@ -185,7 +185,7 @@ describe('createPerceptionNoteDeliverer — resolved presences', () => {
 
   it('delivers nothing when the presence has no session channel scope', () => {
     const { sink, calls } = noteSink();
-    createPerceptionNoteDeliverer(sink).handleResolvedPresence(
+    void createPerceptionNoteDeliverer(sink).handleResolvedPresence(
       knownPresence({ channelId: undefined }),
     );
     expect(calls).toEqual([]);
@@ -195,7 +195,7 @@ describe('createPerceptionNoteDeliverer — resolved presences', () => {
 describe('createPerceptionNoteDeliverer — presence detected/cleared', () => {
   it('delivers a generic presence note on detected', () => {
     const { sink, calls } = noteSink();
-    createPerceptionNoteDeliverer(sink).handlePerceptionEvent(presenceEvent());
+    void createPerceptionNoteDeliverer(sink).handlePerceptionEvent(presenceEvent());
     expect(calls).toEqual([[
       'satellite:kitchen:session-1',
       '[Presence] Someone is present in the Kitchen.',
@@ -206,8 +206,8 @@ describe('createPerceptionNoteDeliverer — presence detected/cleared', () => {
   it('delivers a departure note on cleared after a prior detected', () => {
     const { sink, calls } = noteSink();
     const deliverer = createPerceptionNoteDeliverer(sink);
-    deliverer.handlePerceptionEvent(presenceEvent());
-    deliverer.handlePerceptionEvent(presenceEvent({ action: 'cleared', eventId: 'evt.presence.2' }));
+    void deliverer.handlePerceptionEvent(presenceEvent());
+    void deliverer.handlePerceptionEvent(presenceEvent({ action: 'cleared', eventId: 'evt.presence.2' }));
     expect(calls).toHaveLength(2);
     expect(calls[1]).toEqual([
       'satellite:kitchen:session-1',
@@ -218,7 +218,7 @@ describe('createPerceptionNoteDeliverer — presence detected/cleared', () => {
 
   it('delivers nothing for a cleared event without a prior detect', () => {
     const { sink, calls } = noteSink();
-    createPerceptionNoteDeliverer(sink).handlePerceptionEvent(
+    void createPerceptionNoteDeliverer(sink).handlePerceptionEvent(
       presenceEvent({ action: 'cleared' }),
     );
     expect(calls).toEqual([]);
@@ -227,17 +227,17 @@ describe('createPerceptionNoteDeliverer — presence detected/cleared', () => {
   it('de-dups a flapping sensor: repeated detected while occupied is silent', () => {
     const { sink, calls } = noteSink();
     const deliverer = createPerceptionNoteDeliverer(sink);
-    deliverer.handlePerceptionEvent(presenceEvent());
-    deliverer.handlePerceptionEvent(presenceEvent({ eventId: 'evt.presence.dup' }));
+    void deliverer.handlePerceptionEvent(presenceEvent());
+    void deliverer.handlePerceptionEvent(presenceEvent({ eventId: 'evt.presence.dup' }));
     expect(calls).toHaveLength(1);
   });
 
   it('re-announces after a clear closes the occupancy cycle', () => {
     const { sink, calls } = noteSink();
     const deliverer = createPerceptionNoteDeliverer(sink);
-    deliverer.handlePerceptionEvent(presenceEvent());
-    deliverer.handlePerceptionEvent(presenceEvent({ action: 'cleared', eventId: 'c1' }));
-    deliverer.handlePerceptionEvent(presenceEvent({ eventId: 'd2' }));
+    void deliverer.handlePerceptionEvent(presenceEvent());
+    void deliverer.handlePerceptionEvent(presenceEvent({ action: 'cleared', eventId: 'c1' }));
+    void deliverer.handlePerceptionEvent(presenceEvent({ eventId: 'd2' }));
     expect(calls.map(call => call[1])).toEqual([
       '[Presence] Someone is present in the Kitchen.',
       '[Presence] The Kitchen is now empty.',
@@ -249,8 +249,8 @@ describe('createPerceptionNoteDeliverer — presence detected/cleared', () => {
     const { sink, calls } = noteSink();
     const deliverer = createPerceptionNoteDeliverer(sink);
     // identity claim arrives on the office channel; then presence clears there.
-    deliverer.handleResolvedPresence(knownPresence());
-    deliverer.handlePerceptionEvent(
+    void deliverer.handleResolvedPresence(knownPresence());
+    void deliverer.handlePerceptionEvent(
       presenceEvent({
         action: 'cleared',
         channelId: 'satellite:office:session-1',
@@ -266,13 +266,13 @@ describe('createPerceptionNoteDeliverer — presence detected/cleared', () => {
 
   it('ignores identity-claim events on the passthrough seam (handled via resolved sink)', () => {
     const { sink, calls } = noteSink();
-    createPerceptionNoteDeliverer(sink).handlePerceptionEvent(identityClaimEvent());
+    void createPerceptionNoteDeliverer(sink).handlePerceptionEvent(identityClaimEvent());
     expect(calls).toEqual([]);
   });
 
   it('delivers nothing when a presence event has no session channel scope', () => {
     const { sink, calls } = noteSink();
-    createPerceptionNoteDeliverer(sink).handlePerceptionEvent(
+    void createPerceptionNoteDeliverer(sink).handlePerceptionEvent(
       presenceEvent({ channelId: undefined }),
     );
     expect(calls).toEqual([]);

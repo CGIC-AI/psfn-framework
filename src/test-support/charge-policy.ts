@@ -118,6 +118,30 @@ export function makeTestFatiguePolicyConfig(): FatiguePolicyConfig {
         explicitPeerInvitation: true,
       },
     },
+    humanAttention: {
+      enabled: true,
+      windowMs: 10 * 60_000,
+      boundaryCooldownMs: 30 * 60_000,
+      trustThresholds: {
+        public: 3,
+        regular: 6,
+        trusted: 12,
+        primary: 20,
+      },
+      relationshipToleranceBonus: {
+        stranger: 0,
+        acquaintance: 1,
+        friend: 3,
+        family: 4,
+        partner: 6,
+        ai_companion: 0,
+      },
+      channelWeights: {
+        directMessage: 1,
+        directMention: 2,
+        ambientGroupMessage: 0,
+      },
+    },
   };
 }
 

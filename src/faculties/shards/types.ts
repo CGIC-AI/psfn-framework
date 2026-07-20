@@ -68,6 +68,8 @@ export interface ShardTaggedOutputProvenance {
   source: ShardTaggedOutputSource;
   sourceToolName?: string;
   toolCallId?: string;
+  workerKind?: 'shard' | 'subagent';
+  subagentId?: string;
   lineage: ShardResultLineageEnvelope;
   tags: string[];
 }

@@ -9,6 +9,7 @@ import { resolveRuntimeSchedulerConfig } from './scheduler-runtime.js';
 import { loadCapabilityTierConfig } from './capability-tier-config.js';
 import { loadChargePolicyConfig } from './charge-policy-config.js';
 import { resolveEffectiveRuntimeSettings } from './settings-overlay.js';
+import { assertModelPurposeSelectionResolvable } from './model-selection-config.js';
 import { resolveConfiguredCompanionDataDir } from '../../persistence/layout.js';
 
 export function hydrateJsonBackedRuntimeConfig(
@@ -35,6 +36,9 @@ export function hydrateJsonBackedRuntimeConfig(
     defaultContextWindow: config.defaultContextWindow,
   });
   applySettings(config, modelsConfig);
+  // 23pp: every per-companion model selection must resolve to an enabled
+  // models.json registry entry — fail closed at startup, never at first call.
+  assertModelPurposeSelectionResolvable(config);
   applyProvidersRuntimeConfig(config, loadProvidersConfig(dataDir, loadOptions));
 
   // scheduler.json is a per-companion owner file (dnll.3): root it at the

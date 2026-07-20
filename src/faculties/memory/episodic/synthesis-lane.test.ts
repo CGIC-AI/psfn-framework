@@ -347,6 +347,36 @@ describe('EpisodeSynthesisLane', () => {
     });
   });
 
+  it('rejects testing sessions at turn, timer, and execution boundaries', async () => {
+    const sessionId = 'discord:testing:episode-harness';
+    const harness = makeHarness({ entries: mentionEntries(12) });
+    harness.sessionManager.resolveSessionChannelId.mockReturnValue(sessionId);
+
+    expect(harness.lane.noteTurn({
+      id: 'testing-turn',
+      channelId: sessionId,
+      channelType: 'discord',
+    })).toBeNull();
+    expect(harness.lane.inferTimerActions()).toEqual([]);
+    await harness.lane.execute({
+      ...timerAction(),
+      channelId: sessionId,
+      payload: {
+        ...timerAction().payload,
+        sessionId,
+        sourceChannelId: sessionId,
+      },
+    });
+
+    expect(harness.synthesizer.run).not.toHaveBeenCalled();
+    expect(harness.watermarkStore.getProcessingWatermark).not.toHaveBeenCalled();
+    expect(harness.gateEvents[0]).toMatchObject({
+      sessionId,
+      outcome: 'skipped',
+      reason: 'testing_session',
+    });
+  });
+
   it('writes deterministic behavioral summaries from high-confidence synthesis arcs', async () => {
     const memoryWriter = { write: vi.fn().mockResolvedValue({ action: 'created' }) };
     const harness = makeHarness({

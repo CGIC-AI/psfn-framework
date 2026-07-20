@@ -1379,6 +1379,11 @@ describe('hydrateCanonicalStartupConfig', () => {
     saveSettings(systemDataDir, {
       activeTimezone: 'UTC',
       uiThemeId: 'default',
+      imageProvider: 'fal',
+      imageFalCreateModel: 'xai/grok-imagine-image',
+      imageFalEditModel: 'xai/grok-imagine-image/quality/edit',
+      imageSelfieEditModel: 'fal-ai/nano-banana-2/edit',
+      modelPurposeSelection: { chat: 'primary', background: 'extraction' },
       observerEvalSidecar: globalSidecar,
     });
 
@@ -1389,6 +1394,9 @@ describe('hydrateCanonicalStartupConfig', () => {
       JSON.stringify({
         activeTimezone: 'Europe/Berlin',
         uiThemeId: 'dusk',
+        imageProvider: 'comfyui',
+        imageSelfieEditModel: 'xai/grok-imagine-image/quality/edit',
+        modelPurposeSelection: { chat: 'kimi-k2.5' },
         observerEvalSidecar: { adapter: { sessionLabel: 'psfn-purrsephone' } },
       }),
       'utf-8',
@@ -1406,11 +1414,51 @@ describe('hydrateCanonicalStartupConfig', () => {
 
     expect(config.activeTimezone).toBe('Europe/Berlin');
     expect(config.uiThemeId).toBe('dusk');
+    expect(config.imageProvider).toBe('comfyui');
+    expect(config.imageFalCreateModel).toBe('xai/grok-imagine-image');
+    expect(config.imageFalEditModel).toBe('xai/grok-imagine-image/quality/edit');
+    expect(config.imageSelfieEditModel).toBe('xai/grok-imagine-image/quality/edit');
+    // 23pp: the companion's chat selection overrides the global one; the
+    // untouched background selection deep-merges through from settings.json,
+    // and both validated against the seeded models.json registry.
+    expect(config.modelPurposeSelection).toEqual({
+      chat: 'kimi-k2.5',
+      background: 'extraction',
+    });
     // Nested deep-merge: only sessionLabel changes; global sidecar fields survive.
     expect(config.observerEvalSidecar?.enabled).toBe(true);
     expect(config.observerEvalSidecar?.adapter.serverUrl).toBe('http://emosim.test:17342');
     expect(config.observerEvalSidecar?.adapter.agentName).toBe('fleet');
     expect(config.observerEvalSidecar?.adapter.sessionLabel).toBe('psfn-purrsephone');
+  });
+
+  it('fails closed when a companion overlay selects a model slot missing from models.json (23pp)', () => {
+    const rootDir = mkdtempSync(join(tmpdir(), 'psfn-startup-hydration-overlay-badslot-'));
+    const systemDataDir = join(rootDir, 'system-data');
+    const companionDataDir = join(rootDir, 'companion-data');
+    const legacyDataDir = join(rootDir, 'legacy-data-empty');
+    mkdirSync(systemDataDir, { recursive: true });
+    mkdirSync(companionDataDir, { recursive: true });
+    mkdirSync(legacyDataDir, { recursive: true });
+    tempDirs.push(rootDir);
+    writeHydrationOwnerExamples(systemDataDir, companionDataDir);
+
+    saveSettings(systemDataDir, { activeTimezone: 'UTC' });
+    writeFileSync(
+      join(companionDataDir, 'settings.overlay.json'),
+      JSON.stringify({ modelPurposeSelection: { vision: 'not-a-registry-slot' } }),
+      'utf-8',
+    );
+
+    const config = makeStartupHydrationConfig(systemDataDir, companionDataDir);
+    expect(() => hydrateCanonicalStartupConfig(config, {
+      env: {
+        ...process.env,
+        CONFIG_DIR: './config',
+        PSFN_RUNTIME_LAYOUT_MODE: 'continuous',
+        DATA_DIR: legacyDataDir,
+      },
+    })).toThrow(/modelPurposeSelection\.vision.*"not-a-registry-slot"/s);
   });
 
   it('is byte-identical to the global settings when no overlay is present (dnll.1)', () => {

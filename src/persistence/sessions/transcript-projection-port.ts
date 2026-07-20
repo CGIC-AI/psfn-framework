@@ -31,6 +31,11 @@ export interface TranscriptProjectionPort {
   markProjectionDrift(channelId: string, reason?: string): void;
   clearProjectionDrift(channelId: string): void;
   listProjectionDrift(): TranscriptProjectionDrift[];
+  /**
+   * Maintenance-only destructive boundary. Implementations must remove both
+   * message and drift rows for exactly one channel in one transaction.
+   */
+  purgeChannel?(channelId: string): Promise<void>;
   flushPendingWrites?(): Promise<void>;
 }
 

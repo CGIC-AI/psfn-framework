@@ -105,7 +105,7 @@ describe('SessionStore turn-record session-entry diet (psfn-framework-9ree)', ()
     // No plan.messages here so the ONLY copy of the bodies is recentEntries;
     // proving they vanish from the turn-record file proves the dedup.
     const record = buildTurnRecord(channelId, entries, []);
-    store.appendTurnRecord(record);
+    void store.appendTurnRecord(record);
 
     const persisted = readTurnRecordFile(dir);
     expect(persisted).toContain('recentEntriesRef');
@@ -135,7 +135,7 @@ describe('SessionStore turn-record session-entry diet (psfn-framework-9ree)', ()
     const phantom: SessionEntry = { id: 9_999, channelId, role: 'user', content: 'REDACTED SECRET', timestamp: 4_000 };
     const captured = [...entries, phantom];
     const record = buildTurnRecord(channelId, captured, captured.map(message));
-    store.appendTurnRecord(record);
+    void store.appendTurnRecord(record);
 
     // recentEntries never carries the phantom body verbatim — only its id.
     const persisted = readTurnRecordFile(dir);
@@ -325,7 +325,7 @@ describe('SessionStore captured wire-body CogSec gating (psfn-framework-eb14)', 
       messages: entries.map(entry => ({ role: entry.role, content: entry.content })),
     };
     const record = buildWireTurnRecord(channelId, entries, entries.map(message), wireBody);
-    store.appendTurnRecord(record);
+    void store.appendTurnRecord(record);
 
     // Before any redaction: the raw body is served verbatim (the 80f6 contract).
     const before = store.getRecentTurnRecords(channelId, 10);
@@ -401,7 +401,7 @@ describe('SessionStore captured wire-body CogSec gating (psfn-framework-eb14)', 
     const record = buildWireTurnRecord(channelId, history, history.map(message), wireBody, {
       currentTurnPartnerEntryId: currentId,
     });
-    store.appendTurnRecord(record);
+    void store.appendTurnRecord(record);
 
     // Before redaction: the current-turn line is served verbatim (80f6 contract).
     const before = store.getRecentTurnRecords(channelId, 10);
@@ -458,7 +458,7 @@ describe('SessionStore captured wire-body CogSec gating (psfn-framework-eb14)', 
     const entries = store.getRecent(channelId, 10);
     // Empty plan.messages, but the recentEntries window + wire body carry the entry.
     const wireBody = { model: 'test/model', messages: entries.map(entry => ({ role: entry.role, content: entry.content })) };
-    store.appendTurnRecord(buildWireTurnRecord(channelId, entries, [], wireBody));
+    void store.appendTurnRecord(buildWireTurnRecord(channelId, entries, [], wireBody));
 
     // Before redaction: empty plan.messages, body served verbatim.
     const before = store.getRecentTurnRecords(channelId, 10);
@@ -489,7 +489,7 @@ describe('SessionStore captured wire-body CogSec gating (psfn-framework-eb14)', 
     store.append({ channelId, role: 'user', content: 'ordinary partner line', timestamp: 1_000 });
     const entries = store.getRecent(channelId, 10);
     const wireBody = { model: 'test/model', messages: entries.map(e => ({ role: e.role, content: e.content })) };
-    store.appendTurnRecord(buildWireTurnRecord(channelId, entries, entries.map(message), wireBody));
+    void store.appendTurnRecord(buildWireTurnRecord(channelId, entries, entries.map(message), wireBody));
 
     const read = store.getRecentTurnRecords(channelId, 10);
     // No redaction ⇒ byte-identical body, no withhold marker.

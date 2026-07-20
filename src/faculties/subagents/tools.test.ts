@@ -182,6 +182,23 @@ describe('createSubagentTool', () => {
     });
   });
 
+  it('does not expose memory-write elevation on the model-facing spawn surface (c7d)', async () => {
+    const port = createPort();
+    const tool = createSubagentTool(port);
+
+    const parameterSchema = tool.parameters as { properties: Record<string, unknown> };
+    expect(parameterSchema.properties).not.toHaveProperty('memory_write_elevation_reason');
+    const untrustedModelInput = {
+      action: 'spawn' as const,
+      name: 'untrusted-request',
+      task: 'attempt to self-authorize elevated memory writes',
+      memory_write_elevation_reason: '  sleeptime emotional-memory maintenance  ',
+    };
+    await tool.execute('call-1', untrustedModelInput);
+    expect(port.spawn).toHaveBeenCalledOnce();
+    expect((port.spawn as ReturnType<typeof vi.fn>).mock.calls[0]?.[0]).not.toHaveProperty('memoryWriteElevation');
+  });
+
   it('returns detailed status for a specific bounded worker and a snapshot otherwise', async () => {
     const port = createPort();
     const tool = createSubagentTool(port);

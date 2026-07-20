@@ -32,6 +32,7 @@ import type { LLMResponse } from '../../shared/contracts/runtime.js';
 import { createTurnId } from '../../core/turns/id.js';
 import { makeTestFatiguePolicyConfig } from '../../test-support/charge-policy.js';
 import { resetCompletionHandoffDedupeForTests } from '../../core/agent/completion-handoff.js';
+import type { CompletionHandoffRecord } from '../../shared/contracts/completion-handoff.js';
 import { createCompressionGuidelineEvolution } from '../../core/session/compression-guideline-evolution.js';
 import { createEligibilityGate } from '../../system/capabilities/eligibility.js';
 import {
@@ -446,6 +447,14 @@ describe('ShardManager', () => {
 
   it('spawns a shard and returns result', async () => {
     mockShardContent = 'Hello from shard';
+    const lifecycleEvents: Array<{
+      handoff: CompletionHandoffRecord;
+      targetChannelId?: string;
+      noticeBuffered: boolean;
+    }> = [];
+    eventBus.on('agent.completion_handoff', event => {
+      lifecycleEvents.push(event);
+    });
     const manager = createTestShardManager({
       eventBus,
       llmProvider: mockLLM(),
@@ -463,6 +472,11 @@ describe('ShardManager', () => {
     expect(result.turns).toBe(1);
     expect(result.durationMs).toBeGreaterThanOrEqual(0);
     expect(result.shardId).toMatch(/^shard-/);
+    expect(lifecycleEvents.map(event => event.handoff.status))
+      .toEqual(['started', 'progress', 'completed']);
+    expect(lifecycleEvents.every(event => (
+      event.targetChannelId === undefined && event.noticeBuffered === false
+    ))).toBe(true);
     expect(result.lineage).toEqual(expect.objectContaining({
       schemaVersion: 2,
       kind: 'spawn',
@@ -554,6 +568,26 @@ describe('ShardManager', () => {
     }));
   });
 
+  it('releases shard state when the started lifecycle handoff cannot be accepted', async () => {
+    eventBus.guard('agent.completion_handoff', () => {
+      throw new Error('lifecycle sink unavailable');
+    });
+    const manager = createTestShardManager({
+      eventBus,
+      llmProvider: mockLLM(),
+      sessionStore,
+      embeddingService: null,
+      memoryProvider: null,
+      config: TEST_CONFIG,
+      parentSystemPrompt: 'You are a helpful assistant.',
+    });
+
+    await expect(manager.spawn({ name: 'handoff-failure', task: 'Do something' }))
+      .rejects.toThrow('lifecycle sink unavailable');
+    expect(manager.getActiveCount()).toBe(0);
+    expect(manager.getActiveShards()).toHaveLength(0);
+  });
+
   it('rejects multi-companion shard construction without a Postgres lifecycle', () => {
     expect(() => createTestShardManager({
       eventBus,
@@ -607,8 +641,9 @@ describe('ShardManager', () => {
       status: 'completed',
       summary: 'Shard found the answer.',
     });
-    expect(events).toHaveLength(1);
-    expect(events[0]).toMatchObject({
+    expect(events.map(event => (event as { handoff: CompletionHandoffRecord }).handoff.status))
+      .toEqual(['started', 'progress', 'completed']);
+    expect(events.at(-1)).toMatchObject({
       noticeBuffered: true,
       handoff: expect.objectContaining({
         source: 'shard',
@@ -2312,6 +2347,24 @@ describe('ShardManager', () => {
         durationMs: 8,
       },
     } as any);
+    const lifecycleEvents: Array<{
+      handoff: CompletionHandoffRecord;
+      targetChannelId?: string;
+      noticeBuffered: boolean;
+    }> = [];
+    eventBus.on('agent.completion_handoff', event => {
+      lifecycleEvents.push(event);
+    });
+    let foldAttempts = 0;
+    eventBus.guard('agent.completion_handoff', event => {
+      if (event.handoff.status === 'folded_back') {
+        foldAttempts += 1;
+        if (foldAttempts === 1) {
+          throw new Error('folded-back lifecycle sink unavailable');
+        }
+      }
+      return true;
+    });
 
     try {
       const manager = createTestShardManager({
@@ -2327,6 +2380,16 @@ describe('ShardManager', () => {
 
       const result = await manager.spawn({ name: 'artifact-review', task: 'emit an image artifact' });
       const review = await manager.getFoldReview(result.shardId);
+      await expect(manager.resolveFoldReview({
+        shardId: result.shardId,
+        decision: 'approve',
+        actor: 'operator',
+      })).rejects.toThrow('folded-back lifecycle sink unavailable');
+      const approved = await manager.resolveFoldReview({
+        shardId: result.shardId,
+        decision: 'approve',
+        actor: 'operator',
+      });
 
       expect(review).toMatchObject({
         shardId: result.shardId,
@@ -2342,6 +2405,23 @@ describe('ShardManager', () => {
         ],
       });
       expect(review?.blockingReasons).toContain('artifact_output_pending_merge_review');
+      expect(approved?.reviewState).toBe('approved');
+      expect(lifecycleEvents.at(-1)).toMatchObject({
+        noticeBuffered: false,
+        handoff: {
+          source: 'shard',
+          status: 'folded_back',
+          task: { shardId: result.shardId },
+        },
+      });
+      expect(lifecycleEvents.at(-1)?.targetChannelId).toBeUndefined();
+      await manager.resolveFoldReview({
+        shardId: result.shardId,
+        decision: 'approve',
+        actor: 'operator',
+      });
+      expect(lifecycleEvents.filter(event => event.handoff.status === 'folded_back'))
+        .toHaveLength(1);
     } finally {
       handleMessageSpy.mockRestore();
     }

@@ -14,121 +14,50 @@ import {
   EXTRACTION_PROMPT_KEY,
   getDefaultPromptText,
 } from '../../../core/identity/prompt-registry.js';
-import { injectPromptRuntimeTokens } from '../../../core/identity/prompt-runtime.js';
 import type { PersonaPreamblePort } from '../../../core/identity/persona-preamble.js';
 import { classifyChannelDisclosure } from '../../../system/trust/policy.js';
 import { decodeStoredChannelVisibility } from '../../../system/trust/types.js';
 import type { ChannelPrivacy } from '../../../system/trust/context-envelope.js';
-import { extractBoundaryFactsFromEntries } from '../boundary-log.js';
-import { extractExplicitPreferenceFactsFromEntries } from './preference.js';
 import type { MemoryStorePort } from '../memory-store-port.js';
 import type { ExtractedFact } from '../types.js';
-import { MemoryWritePolicyError, type WriteResult } from '../writer.js';
-import { parseFactsXml } from './parser.js';
+import type { WriteResult } from '../writer.js';
 import { ExtractionDrainRequeueError } from './drain-signal.js';
+import { executeAcceptedFactWrites } from './write-execution.js';
+import { runExtractionSideEffects } from './side-effects.js';
 import {
-  buildExtractionEntryChunks,
-  formatExtractionTranscript,
-  isExtractionTranscriptEntry,
-  mergeExtractedFactGroups,
-} from './chunk-compose.js';
-import {
-  buildExtractionNamingGuidance,
-  normalizeExtractedFactParticipantNames,
-  type ExtractionParticipantNames,
-} from './naming.js';
-import {
-  buildExperientialSelfDirectedExtractionGuidance,
-  normalizeExperientialSelfDirectedFact,
-} from './self-directed.js';
+  executeExtractionLlmPass,
+  formatExistingFactsSection,
+} from './llm-pass.js';
+import { normalizeAndMergeExtractedFacts } from './fact-normalization.js';
+import { buildAcceptedFactCandidates } from './fact-acceptance.js';
+import { createEmptyRejectionBreakdown } from './rejection-breakdown.js';
+import type { ExtractionParticipantNames } from './naming.js';
 import {
   buildSpeakerRoutingContext,
-  resolveFactRouting,
   type ExtractionFactRouting,
   type ExtractionSourceSpeaker,
-  type FactRoutingDecision,
 } from './speaker-routing.js';
 import type { GroupMemoryWriteCapSettings } from '../../../system/config/group-memory-config.js';
+import { selectExtractionWriteCandidates } from './write-selection.js';
 import {
-  selectGroupMemoryWriteCandidates,
-} from './group-write-caps.js';
-import {
-  applyChannelImportanceCaps,
   buildExtractionSourceRef,
-  compareAcceptedFactCandidates,
-  computeFactValueScore,
-  evaluateFactAcceptance,
   evaluateExtractionPreLlmGate,
 } from './signals.js';
-import { evaluateCogSecMemoryCandidacy } from '../../../core/cogsec/memory-candidacy.js';
-import { isNonConversationalSessionEntry } from '../../../core/session/manager-primitives.js';
-import {
-  INTAKE_SCREENING_METADATA_KEY,
-  parseIntakeScreeningMetadata,
-} from '../../../core/session/intake-screening-metadata.js';
-import type { IntakeEnvelopeSnapshot } from '../../../shared/contracts/intake-envelope.js';
 import type {
-  AcceptedFactCandidate,
   AcceptedFactWrite,
   ExtractionEndTelemetry,
   ExtractionGateConfig,
   ExtractionRejectionReason,
   ExtractionTriggerReason,
-  GroupMemoryWriteCapSkip,
   ConcernCandidateExtractionSink,
 } from './types.js';
-import { RECOVERY_CONTEXT_MESSAGE_LIMIT } from './types.js';
 import type { ExtractionSessionReader } from './session-port.js';
+import { ExtractionIntegrityError } from './integrity-error.js';
+import { selectExtractionRecentEntries } from './recovered-entries.js';
+
+export { ExtractionIntegrityError, type ExtractionIntegrityErrorContext } from './integrity-error.js';
 
 const log = createComponentLogger('Extraction');
-const EXTRACTION_CHUNK_LLM_CONCURRENCY = 2;
-
-type ExtractionIntegrityErrorStage = 'orchestration' | 'fact_processing';
-type RoutedAcceptedFactCandidate = AcceptedFactCandidate & {
-  routing: Extract<FactRoutingDecision, { status: 'route' }>;
-};
-
-export interface ExtractionIntegrityErrorContext {
-  stage: ExtractionIntegrityErrorStage;
-  channelId: string;
-  triggerReason: ExtractionTriggerReason;
-  turnId?: TurnID;
-  factIndex?: number;
-  factType?: ExtractedFact['type'];
-  sourceRef?: string;
-}
-
-export class ExtractionIntegrityError extends Error {
-  readonly context: ExtractionIntegrityErrorContext;
-  readonly cause: unknown;
-
-  constructor(message: string, context: ExtractionIntegrityErrorContext, cause: unknown) {
-    super(message);
-    this.name = 'ExtractionIntegrityError';
-    this.context = context;
-    this.cause = cause;
-  }
-}
-
-function extractionRejectionReasonForWritePolicy(
-  error: MemoryWritePolicyError,
-): ExtractionRejectionReason {
-  return error.reason === 'novelty_below_threshold'
-    ? 'low_novelty'
-    : 'low_importance';
-}
-
-function createEmptyRejectionBreakdown(): Record<ExtractionRejectionReason, number> {
-  return {
-    low_importance: 0,
-    low_confidence: 0,
-    low_novelty: 0,
-    low_signal: 0,
-    cogsec_risk: 0,
-    ambiguous_speaker: 0,
-    write_cap: 0,
-  };
-}
 
 function requireExperientialCompanionName(value: string | undefined): string {
   const companionName = value?.trim();
@@ -166,73 +95,6 @@ export function resolveExtractionChannelVisibility(
     }
   }
   return resolved ?? classifyChannelDisclosure(channelId).channelPrivacy;
-}
-
-// ── Intake sink-gate index (htm9.3) ──
-//
-// Maps session-entry ids to the intake-envelope snapshots persisted on their
-// `intakeScreening` metadata, so each extracted fact can be gated at the
-// memory_write sink against the envelopes covering its SOURCE entries
-// (fact.attribution.sourceMessageIds) instead of re-deriving risk. Malformed
-// metadata is unknowable screening state: it is tracked and fails closed in
-// enforce mode.
-
-interface ExtractionIntakeGateIndex {
-  envelopesByEntryId: Map<number, readonly IntakeEnvelopeSnapshot[]>;
-  malformedEntryIds: Set<number>;
-  allEnvelopes: IntakeEnvelopeSnapshot[];
-}
-
-function buildExtractionIntakeGateIndex(
-  entries: readonly SessionEntry[],
-  channelId: string,
-): ExtractionIntakeGateIndex {
-  const index: ExtractionIntakeGateIndex = {
-    envelopesByEntryId: new Map(),
-    malformedEntryIds: new Set(),
-    allEnvelopes: [],
-  };
-  const marker = `"${INTAKE_SCREENING_METADATA_KEY}"`;
-  for (const entry of entries) {
-    if (!entry.metadata || !entry.metadata.includes(marker)) continue;
-    try {
-      const screening = parseIntakeScreeningMetadata(entry.metadata);
-      if (!screening) continue;
-      index.envelopesByEntryId.set(entry.id, screening.envelopes);
-      index.allEnvelopes.push(...screening.envelopes);
-    } catch (error) {
-      log.error('Malformed intake screening metadata on extraction source entry; treated as gate-denied in enforce mode', {
-        channelId,
-        entryId: entry.id,
-        error: error instanceof Error ? error.message : String(error),
-      });
-      index.malformedEntryIds.add(entry.id);
-    }
-  }
-  return index;
-}
-
-function resolveFactIntakeEnvelopes(
-  index: ExtractionIntakeGateIndex,
-  fact: ExtractedFact,
-): { envelopes: readonly IntakeEnvelopeSnapshot[]; coversMalformedEntry: boolean } {
-  const sourceIds = fact.attribution?.sourceMessageIds;
-  if (sourceIds && sourceIds.length > 0) {
-    const envelopes: IntakeEnvelopeSnapshot[] = [];
-    let coversMalformedEntry = false;
-    for (const id of sourceIds) {
-      envelopes.push(...(index.envelopesByEntryId.get(id) ?? []));
-      if (index.malformedEntryIds.has(id)) coversMalformedEntry = true;
-    }
-    return { envelopes, coversMalformedEntry };
-  }
-  // An unattributed fact may derive from any entry in the window: it inherits
-  // every envelope in the window (fail closed — derivation never launders
-  // provenance away).
-  return {
-    envelopes: index.allEnvelopes,
-    coversMalformedEntry: index.malformedEntryIds.size > 0,
-  };
 }
 
 export interface ExtractionRunOptions {
@@ -326,14 +188,11 @@ export async function runExtractionOrchestration(
 ): Promise<MemoryExtractionOutputs> {
   let resolvedTurnId: TurnID | undefined = options.turnId;
   try {
-    const recoveredEntries = (options.recoveredEntries !== undefined
-      ? options.recoveredEntries
-      : options.sessionManager.getRecentMessages(options.channelId, 10)
-    )
-      .filter(entry => !isNonConversationalSessionEntry(entry));
-    const recentEntries = options.groupWriteCaps
-      ? recoveredEntries
-      : recoveredEntries.slice(-RECOVERY_CONTEXT_MESSAGE_LIMIT);
+    const recentEntries = selectExtractionRecentEntries({
+      recoveredEntries: options.recoveredEntries,
+      fetchLiveHistory: () => options.sessionManager.getRecentMessages(options.channelId, 10),
+      groupRecoveredRange: Boolean(options.groupWriteCaps),
+    });
     const experientialSelfDirected = isExperientialSelfDirectedSessionId(options.channelId);
     // A reflection may have a grounding contact, but its first-person
     // experiential output is companion-owned. Never let that grounding contact
@@ -385,7 +244,7 @@ export async function runExtractionOrchestration(
         deduplicatedCount: 0,
         supersededCount: 0,
         rejectionBreakdown: createEmptyRejectionBreakdown(),
-        compositionalMode: options.useCompositionalExtraction ? 'chunk_compose' : 'legacy',
+        compositionalMode: options.useCompositionalExtraction ? 'chunk_compose' : 'single_pass',
         chunkCount: 0,
         mergedFactCount: 0,
         crossChunkDeduplicatedCount: 0,
@@ -398,14 +257,14 @@ export async function runExtractionOrchestration(
       return emptyExtractionOutputs();
     }
 
-	    const sourceRef = buildExtractionSourceRef(
-	      options.channelId,
-	      recentEntries,
-	      channelVisibility,
-	      options.triggerReason,
-	      turnId,
-	      options.sourceSessionId,
-	    );
+    const sourceRef = buildExtractionSourceRef(
+      options.channelId,
+      recentEntries,
+      channelVisibility,
+      options.triggerReason,
+      turnId,
+      options.sourceSessionId,
+    );
     const coveredUpToMessageId = options.resolveCoveredUpToMessageId(options.channelId, recentEntries);
     const participantNames = options.resolveParticipantNames?.(recentEntries, canonicalContactId) ?? {};
     const experientialCompanionName = experientialSelfDirected
@@ -422,156 +281,37 @@ export async function runExtractionOrchestration(
 
     const existing = await options.memoryStore.getMemoriesByChannel(options.channelId, 30);
     const noveltyCorpus = existing.map(m => m.text);
-    const existingFacts = existing
-      .map(m => `- [${m.type}] ${m.text}`)
-      .join('\n') || '(none yet)';
 
     const extractionPrompt = options.promptRegistry?.getPrompt(EXTRACTION_PROMPT_KEY)
       ?? getDefaultPromptText(EXTRACTION_PROMPT_KEY);
-    const transcriptEntries = recentEntries.filter(isExtractionTranscriptEntry);
-    const entryChunks = options.useCompositionalExtraction
-      ? buildExtractionEntryChunks(transcriptEntries)
-      : [transcriptEntries];
-    const compositionalMode = options.useCompositionalExtraction ? 'chunk_compose' : 'legacy';
-    const parsedFactGroups = await mapWithConcurrency(
-      entryChunks,
-      EXTRACTION_CHUNK_LLM_CONCURRENCY,
-      async (chunkEntries, index): Promise<ExtractedFact[]> => {
-        const renderedPrompt = injectPromptRuntimeTokens(extractionPrompt)
-          .replace('{existing_facts}', existingFacts)
-          .replace('{recent_messages}', formatExtractionTranscript(chunkEntries, {
-            charName: participantNames.companionName ?? options.sessionManager.characterName,
-            userName: participantNames.userName,
-          }));
-        const namingGuidance = buildExtractionNamingGuidance(participantNames);
-        const selfDirectedGuidance = experientialCompanionName
-          ? buildExperientialSelfDirectedExtractionGuidance(experientialCompanionName)
-          : undefined;
-        const taskPrompt = [renderedPrompt, namingGuidance, selfDirectedGuidance]
-          .filter((section): section is string => Boolean(section))
-          .join('\n\n');
-        // E6.1: soft persona framing precedes the strict task instructions and
-        // JSON schema; the schema/format sections stay byte-identical.
-        const prompt = options.personaPreamble
-          ? options.personaPreamble.prepend('memory_extraction', taskPrompt)
-          : taskPrompt;
-        const chunkRequestId = entryChunks.length > 1
-          ? `${requestId}:chunk:${index + 1}`
-          : requestId;
-
-        const response = await completeWithWorkSpec(
-          options.llmClient,
-          {
-            systemPrompt: prompt,
-            messages: [{ role: 'user', content: 'Extract facts from the conversation above.' }],
-          },
-          buildLLMWorkSpec({
-            purpose: 'extraction',
-            durable: true,
-            ...(options.preemptionProtected
-              ? {
-                  preemptionProtected: true,
-                  ...(options.welfareGrantJobId
-                    ? { welfareGrantJobId: options.welfareGrantJobId }
-                    : {}),
-                }
-              : {}),
-            correlation: {
-              requestId: chunkRequestId,
-              ...(turnId ? { turnId } : {}),
-              channelId: options.channelId,
-              callType: 'memory',
-              purpose: 'memory.extraction',
-              ...(options.icpCorrelation
-                ? {
-                    icpCorrelation: deriveChildIcpConversationCostCorrelation(
-                      options.icpCorrelation,
-                      {
-                        requestId: chunkRequestId,
-                        costPurpose: 'extraction',
-                        costOriginStage: 'post_turn',
-                      },
-                    ),
-                  }
-                : {}),
-            },
-          }),
-        );
-
-        return parseFactsXml(response.content);
+    const compositionalMode = options.useCompositionalExtraction ? 'chunk_compose' : 'single_pass';
+    const llmPass = await executeExtractionLlmPass({
+      recentEntries,
+      useCompositionalExtraction: options.useCompositionalExtraction,
+      promptContext: {
+        extractionPrompt,
+        existingFacts: formatExistingFactsSection(existing),
+        participantNames,
+        characterName: options.sessionManager.characterName,
+        experientialCompanionName,
+        personaPreamble: options.personaPreamble,
       },
-    );
-    const rawParsedFactCount = parsedFactGroups
-      .reduce((total, group) => total + group.length, 0);
-    const mergedParsedFacts = mergeExtractedFactGroups(parsedFactGroups);
-    const crossChunkDeduplicatedCount = Math.max(0, rawParsedFactCount - mergedParsedFacts.length);
-    const parsedFacts: ExtractedFact[] = [];
-    let participantNameHygieneRejectedCount = 0;
-    for (const [index, fact] of mergedParsedFacts.entries()) {
-      const normalized = normalizeExtractedFactParticipantNames(fact, participantNames);
-      if (!normalized.accepted) {
-        participantNameHygieneRejectedCount++;
-        if (options.telemetryEnabled) {
-          log.debug('Rejected extracted fact due to participant name hygiene', {
-            channelId: options.channelId,
-            triggerReason: options.triggerReason,
-            factIndex: index,
-            factType: fact.type,
-            reason: normalized.reason,
-          });
-        }
-        continue;
-      }
-      if (experientialCompanionName) {
-        const selfDirected = normalizeExperientialSelfDirectedFact({
-          fact: normalized.fact,
-          entries: recentEntries,
-          companionName: experientialCompanionName,
-        });
-        if (!selfDirected.accepted) {
-          participantNameHygieneRejectedCount++;
-          if (options.telemetryEnabled) {
-            log.debug('Rejected ungrounded experiential self-memory fact', {
-              channelId: options.channelId,
-              triggerReason: options.triggerReason,
-              factIndex: index,
-              factType: fact.type,
-              reason: selfDirected.reason,
-            });
-          }
-          continue;
-        }
-        parsedFacts.push(selfDirected.fact);
-      } else {
-        parsedFacts.push(normalized.fact);
-      }
-    }
-    const inferredBoundaryFacts = experientialSelfDirected
-      ? []
-      : extractBoundaryFactsFromEntries(recentEntries, parsedFacts);
-    const inferredPreferenceFacts = experientialSelfDirected
-      ? []
-      : extractExplicitPreferenceFactsFromEntries(recentEntries, {
-        fallbackSubjectName: participantNames.userName,
-      });
-    const adjustFactForWrite = options.adjustFactForWrite ?? ((fact: ExtractedFact) => fact);
-    const facts = mergeExtractedFactGroups([parsedFacts, inferredBoundaryFacts, inferredPreferenceFacts])
-      .map(fact => applyChannelImportanceCaps(adjustFactForWrite(fact), channelVisibility));
-
-    if (inferredBoundaryFacts.length > 0 && options.telemetryEnabled) {
-      log.info('Detected refusal-boundary facts from conversation transcript', {
-        channelId: options.channelId,
-        triggerReason: options.triggerReason,
-        inferredCount: inferredBoundaryFacts.length,
-      });
-    }
-    if (inferredPreferenceFacts.length > 0 && options.telemetryEnabled) {
-      log.info('Detected explicit preference facts from conversation transcript', {
-        channelId: options.channelId,
-        triggerReason: options.triggerReason,
-        inferredCount: inferredPreferenceFacts.length,
-      });
-    }
+      requestId,
+      completeChunk: createExtractionChunkCompleter(options, turnId),
+    });
+    const { mergedParsedFacts, crossChunkDeduplicatedCount } = llmPass;
+    const normalization = normalizeAndMergeExtractedFacts({
+      mergedParsedFacts,
+      recentEntries,
+      participantNames,
+      experientialCompanionName,
+      channelVisibility,
+      adjustFactForWrite: options.adjustFactForWrite ?? ((fact: ExtractedFact) => fact),
+      channelId: options.channelId,
+      triggerReason: options.triggerReason,
+      telemetryEnabled: options.telemetryEnabled,
+    });
+    const { facts, participantNameHygieneRejectedCount } = normalization;
 
     if (!options.isAcceptingExtractions()) {
       // u5bv.11: a durable, receipt-bound run (assertEffectAllowed present) that
@@ -606,331 +346,75 @@ export async function runExtractionOrchestration(
           low_signal: participantNameHygieneRejectedCount,
         },
         compositionalMode,
-        chunkCount: entryChunks.length,
+        chunkCount: llmPass.chunkCount,
         mergedFactCount: mergedParsedFacts.length,
         crossChunkDeduplicatedCount,
-        boundaryFactCount: inferredBoundaryFacts.length,
+        boundaryFactCount: normalization.boundaryFactCount,
       });
       return emptyExtractionOutputs();
     }
 
-    const rejectionBreakdown: Record<ExtractionRejectionReason, number> = createEmptyRejectionBreakdown();
-    rejectionBreakdown.low_signal = participantNameHygieneRejectedCount;
+    const acceptance = buildAcceptedFactCandidates({
+      facts,
+      recentEntries,
+      existingMemoryTexts: noveltyCorpus,
+      gateConfig: options.gateConfig,
+      intakeSinkGate: options.sessionManager.intakeSinkGate,
+      experientialCompanionName,
+      speakerRouting,
+      canonicalContactId,
+      companionNames: [
+        ...new Set([
+          participantNames.companionName,
+          options.sessionManager.characterName,
+        ].filter((name): name is string => Boolean(name))),
+      ],
+      channelId: options.channelId,
+      triggerReason: options.triggerReason,
+      telemetryEnabled: options.telemetryEnabled,
+    });
+    const { acceptedCandidates, ambiguousSpeakerSkippedCount, ambiguousSpeakerSkipReasons } = acceptance;
+    const rejectionBreakdown = acceptance.rejectionBreakdown;
+    rejectionBreakdown.low_signal += participantNameHygieneRejectedCount;
 
-    let ambiguousSpeakerSkippedCount = 0;
-    const ambiguousSpeakerSkipReasons: Record<string, number> = {};
-    const acceptedCandidates: RoutedAcceptedFactCandidate[] = [];
-    // htm9.3: memory_write sink gate over the upstream intake envelopes.
-    const intakeSinkGate = options.sessionManager.intakeSinkGate;
-    const intakeGateIndex = intakeSinkGate
-      ? buildExtractionIntakeGateIndex(recentEntries, options.channelId)
-      : null;
-    for (const [index, fact] of facts.entries()) {
-      const decision = evaluateFactAcceptance(fact, noveltyCorpus, options.gateConfig);
-      if (!decision.accepted) {
-        if (decision.reason) rejectionBreakdown[decision.reason]++;
-        if (options.telemetryEnabled) {
-          log.debug('Rejected extracted fact', {
-            channelId: options.channelId,
-            reason: decision.reason,
-            novelty: decision.novelty,
-            minNovelty: options.gateConfig.minNovelty,
-            importance: fact.importance,
-            minImportance: options.gateConfig.minImportance,
-            confidence: fact.confidence,
-            minConfidence: options.gateConfig.minConfidence,
-          });
-        }
-        continue;
-      }
+    const selection = selectExtractionWriteCandidates({
+      acceptedCandidates,
+      maxWrites: options.maxWrites,
+      groupWriteCaps: options.groupWriteCaps,
+      groupWriteCapContext: options.groupWriteCapContext,
+      channelId: options.channelId,
+      telemetryEnabled: options.telemetryEnabled,
+    });
+    const { selectedCandidates, writeCapSkips } = selection;
+    rejectionBreakdown.write_cap += selection.writeCapSkippedCount;
 
-      let intakeGateDecision;
-      if (intakeSinkGate && intakeGateIndex) {
-        const factIntake = resolveFactIntakeEnvelopes(intakeGateIndex, fact);
-        if (factIntake.coversMalformedEntry && intakeSinkGate.mode === 'enforce') {
-          // Unknowable screening state on a source entry fails closed.
-          rejectionBreakdown.cogsec_risk++;
-          log.warn('Rejected extracted fact: source entry carries malformed intake screening metadata', {
-            channelId: options.channelId,
-            triggerReason: options.triggerReason,
-            factIndex: index,
-            factType: fact.type,
-          });
-          continue;
-        }
-        intakeGateDecision = intakeSinkGate.evaluate('memory_write', factIntake.envelopes, {
-          channelId: options.channelId,
-          triggerReason: options.triggerReason,
-          factIndex: index,
-          factType: fact.type,
-        });
-      }
-
-      const cogSecCandidacy = evaluateCogSecMemoryCandidacy({
-        text: fact.text,
-        type: fact.type,
-        tags: fact.tags,
-        ...(intakeGateDecision ? { intakeGateDecision } : {}),
-      });
-      if (cogSecCandidacy.disposition !== 'allow') {
-        rejectionBreakdown.cogsec_risk++;
-        if (options.telemetryEnabled) {
-          log.info('Rejected extracted fact by CogSec memory candidacy gate', {
-            channelId: options.channelId,
-            triggerReason: options.triggerReason,
-            factIndex: index,
-            factType: fact.type,
-            riskClass: cogSecCandidacy.riskClass,
-            disposition: cogSecCandidacy.disposition,
-            reasonCodes: cogSecCandidacy.reasonCodes,
-          });
-        }
-        continue;
-      }
-
-      let routing: FactRoutingDecision;
-      if (experientialCompanionName) {
-        const selfDirected = normalizeExperientialSelfDirectedFact({
-          fact,
-          entries: recentEntries,
-          companionName: experientialCompanionName,
-        });
-        if (!selfDirected.accepted) {
-          rejectionBreakdown.low_signal++;
-          continue;
-        }
-        routing = selfDirected.routing;
-      } else {
-        if (!speakerRouting) {
-          throw new Error('Speaker routing context is required for conversational extraction');
-        }
-        routing = resolveFactRouting(
-          fact,
-          speakerRouting,
-          canonicalContactId,
-          {
-            companionNames: [
-              ...new Set([
-                participantNames.companionName,
-                options.sessionManager.characterName,
-              ].filter((name): name is string => Boolean(name))),
-            ],
-          },
-        );
-      }
-      if (routing.status === 'skip') {
-        ambiguousSpeakerSkippedCount++;
-        ambiguousSpeakerSkipReasons[routing.reason] =
-          (ambiguousSpeakerSkipReasons[routing.reason] ?? 0) + 1;
-        rejectionBreakdown.ambiguous_speaker++;
-        if (options.telemetryEnabled) {
-          log.debug('Skipped extracted fact due to ambiguous group-room speaker ownership', {
-            channelId: options.channelId,
-            triggerReason: options.triggerReason,
-            factIndex: index,
-            factType: fact.type,
-            routingReason: routing.reason,
-            triggerContactId: canonicalContactId,
-            sourceSpeakerName: routing.sourceSpeakerName,
-            speakerCount: speakerRouting?.speakers.length ?? 0,
-          });
-        }
-        continue;
-      }
-
-      acceptedCandidates.push({
-        fact,
-        routing,
-        novelty: decision.novelty,
-        valueScore: computeFactValueScore(fact, decision.novelty),
-        index,
-      });
-      noveltyCorpus.push(fact.text);
+    const writeExecution = await executeAcceptedFactWrites({
+      selectedCandidates,
+      sourceRef,
+      canonicalContactId,
+      channelId: options.channelId,
+      triggerReason: options.triggerReason,
+      turnId,
+      telemetryEnabled: options.telemetryEnabled,
+      isAcceptingExtractions: options.isAcceptingExtractions,
+      processFact: options.processFact,
+    });
+    for (const [reason, count] of Object.entries(writeExecution.writePolicyRejections)) {
+      rejectionBreakdown[reason as ExtractionRejectionReason] += count;
     }
-
-    let selectedCandidates: RoutedAcceptedFactCandidate[];
-    let writeCapSkips: GroupMemoryWriteCapSkip[] = [];
-    if (options.groupWriteCaps) {
-      const selection = selectGroupMemoryWriteCandidates({
-        candidates: acceptedCandidates,
-        settings: options.groupWriteCaps,
-        ...(options.groupWriteCapContext?.backfill !== undefined
-          ? { backfill: options.groupWriteCapContext.backfill }
-          : {}),
-        ...(options.groupWriteCapContext?.recentTimeWindowWriteCount !== undefined
-          ? {
-            recentTimeWindowWriteCount:
-              options.groupWriteCapContext.recentTimeWindowWriteCount,
-          }
-          : {}),
-      });
-      selectedCandidates = selection.selectedCandidates;
-      writeCapSkips = selection.telemetry.skips;
-      rejectionBreakdown.write_cap += selection.telemetry.skippedCount;
-      if (selection.telemetry.skippedCount > 0 && options.telemetryEnabled) {
-        log.debug('Skipped extracted facts due to group write caps', {
-          channelId: options.channelId,
-          skippedByCap: selection.telemetry.skippedCount,
-          acceptedBeforeCap: selection.telemetry.candidateCount,
-          selectedAfterCap: selection.telemetry.selectedCount,
-          effectiveMaxWrites: selection.telemetry.effectiveMaxWrites,
-          writeCapSkips,
-        });
-      }
-    } else {
-      const rankedCandidates = acceptedCandidates
-        .slice()
-        .sort(compareAcceptedFactCandidates);
-      selectedCandidates = rankedCandidates.slice(0, options.maxWrites);
-      const skippedByCap = rankedCandidates.length - selectedCandidates.length;
-      if (skippedByCap > 0) {
-        rejectionBreakdown.write_cap += skippedByCap;
-        if (options.telemetryEnabled) {
-          log.debug('Skipped extracted facts due to write cap', {
-            channelId: options.channelId,
-            maxWrites: options.maxWrites,
-            skippedByCap,
-            acceptedBeforeCap: rankedCandidates.length,
-          });
-        }
-      }
-    }
-
-    let acceptedCount = 0;
-    let writeCount = 0;
-    let deduplicatedCount = 0;
-    let supersededCount = 0;
-    let routedFactCount = 0;
-    const acceptedWrites: AcceptedFactWrite[] = [];
-    const durableMemoryIds = new Set<string>();
-    const acceptedFactsForConcernCandidates: ExtractedFact[] = [];
-    const acceptedFactsByContact = new Map<string | undefined, ExtractedFact[]>();
-    const routedContactIds = new Set<string>();
-    const sourceSpeakerNames = new Set<string>();
-
-	    for (const candidate of selectedCandidates) {
-	      if (!options.isAcceptingExtractions()) {
-	        log.debug('Stopping fact writes after extraction route changed or extractor stopped', {
-	          channelId: options.channelId,
-	          remainingCandidateCount: selectedCandidates.length - acceptedCount,
-	          triggerReason: options.triggerReason,
-	        });
-	        break;
-	      }
-	      const { fact } = candidate;
-	      const { routing } = candidate;
-
-      const routingTelemetry: ExtractionFactRouting = {
-        ...(canonicalContactId ? { triggerContactId: canonicalContactId } : {}),
-        ...(routing.contactId ? { routedContactId: routing.contactId } : {}),
-        ...(routing.sourceContactId ? { sourceContactId: routing.sourceContactId } : {}),
-        ...(routing.sourceAuthorId ? { sourceAuthorId: routing.sourceAuthorId } : {}),
-        ...(routing.sourceSpeakerName ? { sourceSpeakerName: routing.sourceSpeakerName } : {}),
-        ...(routing.subjectContactId ? { subjectContactId: routing.subjectContactId } : {}),
-        ...(routing.subjectName ? { subjectName: routing.subjectName } : {}),
-        ...(routing.addressMode ? { addressMode: routing.addressMode } : {}),
-        ...(routing.scopeRef ? { scopeRef: routing.scopeRef } : {}),
-        ...(routing.scopeTags ? { scopeTags: routing.scopeTags } : {}),
-        ...(routing.sourceMessageIds ? { sourceMessageIds: routing.sourceMessageIds } : {}),
-        ...(routing.sourceSpanStartMessageId
-          ? { sourceSpanStartMessageId: routing.sourceSpanStartMessageId }
-          : {}),
-        ...(routing.sourceSpanEndMessageId
-          ? { sourceSpanEndMessageId: routing.sourceSpanEndMessageId }
-          : {}),
-        routingReason: routing.reason,
-      };
-
-      try {
-        const result = await options.processFact(fact, sourceRef, routing.contactId, routingTelemetry);
-        durableMemoryIds.add(result.memory.id);
-        for (const supersededMemoryId of result.supersededMemoryIds ?? []) {
-          durableMemoryIds.add(supersededMemoryId);
-        }
-        acceptedCount++;
-        const routedToDifferentContact = Boolean(
-          routing.contactId
-            && canonicalContactId
-            && routing.contactId !== canonicalContactId,
-        );
-        if (routedToDifferentContact) routedFactCount++;
-        if (routing.contactId) routedContactIds.add(routing.contactId);
-        if (routing.sourceSpeakerName) sourceSpeakerNames.add(routing.sourceSpeakerName);
-        appendAcceptedFactForContact(acceptedFactsByContact, routing.contactId, fact);
-        acceptedFactsForConcernCandidates.push(fact);
-
-        switch (result.action) {
-          case 'created':
-          case 'updated':
-          case 'negated':
-          case 'conflict':
-            writeCount++;
-            acceptedWrites.push({
-              memoryId: result.memory.id,
-              importance: fact.importance,
-              confidence: fact.confidence,
-              ...(routing.contactId ? { contactId: routing.contactId } : {}),
-              ...(routing.sourceContactId ? { sourceContactId: routing.sourceContactId } : {}),
-              ...(routing.subjectContactId ? { subjectContactId: routing.subjectContactId } : {}),
-              ...(canonicalContactId ? { triggerContactId: canonicalContactId } : {}),
-              ...(routing.sourceSpeakerName ? { sourceSpeakerName: routing.sourceSpeakerName } : {}),
-              ...(routing.scopeRef ? { scopeRef: routing.scopeRef } : {}),
-            });
-            break;
-          case 'superseded':
-            writeCount++;
-            supersededCount++;
-            acceptedWrites.push({
-              memoryId: result.memory.id,
-              importance: fact.importance,
-              confidence: fact.confidence,
-              ...(routing.contactId ? { contactId: routing.contactId } : {}),
-              ...(routing.sourceContactId ? { sourceContactId: routing.sourceContactId } : {}),
-              ...(routing.subjectContactId ? { subjectContactId: routing.subjectContactId } : {}),
-              ...(canonicalContactId ? { triggerContactId: canonicalContactId } : {}),
-              ...(routing.sourceSpeakerName ? { sourceSpeakerName: routing.sourceSpeakerName } : {}),
-              ...(routing.scopeRef ? { scopeRef: routing.scopeRef } : {}),
-            });
-            break;
-          case 'deduplicated':
-            deduplicatedCount++;
-            break;
-        }
-      } catch (error) {
-        if (error instanceof MemoryWritePolicyError) {
-          const reason = extractionRejectionReasonForWritePolicy(error);
-          rejectionBreakdown[reason]++;
-          if (options.telemetryEnabled) {
-            log.info('Skipped extracted fact rejected by memory write policy', {
-              channelId: options.channelId,
-              triggerReason: options.triggerReason,
-              factIndex: candidate.index,
-              factType: fact.type,
-              reason: error.reason,
-              sensitivity: error.sensitivity,
-              salience: error.salience,
-              minSalience: error.minSalience,
-              novelty: error.novelty,
-              minNovelty: error.minNovelty,
-            });
-          }
-          continue;
-        }
-        throw new ExtractionIntegrityError(
-          `Failed to process extracted fact at index ${candidate.index}`,
-          {
-            stage: 'fact_processing',
-            channelId: options.channelId,
-            triggerReason: options.triggerReason,
-            ...(turnId ? { turnId } : {}),
-            factIndex: candidate.index,
-            factType: fact.type,
-            sourceRef,
-          },
-          error,
-        );
-      }
-    }
+    const {
+      acceptedCount,
+      writeCount,
+      deduplicatedCount,
+      supersededCount,
+      routedFactCount,
+      acceptedWrites,
+      durableMemoryIds,
+      acceptedFactsForConcernCandidates,
+      acceptedFactsByContact,
+      routedContactIds,
+      sourceSpeakerNames,
+    } = writeExecution;
 
     const rejectedCount = facts.length - acceptedCount + participantNameHygieneRejectedCount;
     const telemetry: ExtractionEndTelemetry = {
@@ -956,10 +440,10 @@ export async function runExtractionOrchestration(
         : {}),
       ...(writeCapSkips.length > 0 ? { writeCapSkips } : {}),
       compositionalMode,
-      chunkCount: entryChunks.length,
+      chunkCount: llmPass.chunkCount,
       mergedFactCount: mergedParsedFacts.length,
       crossChunkDeduplicatedCount,
-      boundaryFactCount: inferredBoundaryFacts.length,
+      boundaryFactCount: normalization.boundaryFactCount,
     };
 
     if (options.telemetryEnabled) {
@@ -968,62 +452,26 @@ export async function runExtractionOrchestration(
     await options.assertEffectAllowed?.();
     options.recordExtractionMarker(options.channelId, coveredUpToMessageId);
     await options.emitExtractionEnd(telemetry);
-    const concernIds: string[] = [];
-    if (options.emitConcernCandidates) {
-      await options.assertEffectAllowed?.();
-      const emittedConcernIds = await options.emitConcernCandidates({
-        channelId: options.channelId,
-        triggerReason: options.triggerReason,
-        ...(canonicalContactId ? { canonicalContactId } : {}),
-        ...(turnId ? { turnId } : {}),
-        sourceRef,
-        recentEntries,
-        acceptedFacts: acceptedFactsForConcernCandidates,
-        acceptedWrites,
-        relatedMemories: existing.map(memory => ({
-          id: memory.id,
-          type: memory.type,
-          text: memory.text,
-          importance: memory.importance,
-          confidence: memory.confidence,
-          salience: memory.salience,
-          sourceRef: memory.sourceRef,
-        })),
-      });
-      concernIds.push(...(emittedConcernIds ?? []));
-    }
-    const contactIds: string[] = [];
-    const emotionalFactGroups = acceptedFactsByContact.size > 0
-      ? acceptedFactsByContact
-      : new Map<string | undefined, ExtractedFact[]>([[canonicalContactId, []]]);
-    for (const [sourceContactId, acceptedFacts] of emotionalFactGroups.entries()) {
-      await options.assertEffectAllowed?.();
-      // Awaited (not fire-and-forget) so this durable child settles before the
-      // parent effect receipt is applied and its fence releases (u5bv.6 AC3).
-      const mutatedContactId = await options.maybePersistEmotionalState(
-        sourceContactId,
-        acceptedFacts,
-        recentEntries,
-      );
-      if (mutatedContactId) contactIds.push(mutatedContactId);
-    }
-
-    const refreshGroups = groupAcceptedWritesByContact(acceptedWrites, canonicalContactId);
-    for (const [contactId, writes] of refreshGroups.entries()) {
-      await options.assertEffectAllowed?.();
-      // Awaited for the same reason: no detached durable child may outlive the
-      // parent receipt. The profile write is an idempotent upsert by contact id.
-      await options.maybeRefreshContactProfile(
-        options.channelId,
-        options.triggerReason,
-        contactId,
-        writes,
-      );
-    }
+    const sideEffects = await runExtractionSideEffects({
+      channelId: options.channelId,
+      triggerReason: options.triggerReason,
+      canonicalContactId,
+      turnId,
+      sourceRef,
+      recentEntries,
+      existingMemories: existing,
+      acceptedFactsForConcernCandidates,
+      acceptedWrites,
+      acceptedFactsByContact,
+      emitConcernCandidates: options.emitConcernCandidates,
+      maybePersistEmotionalState: options.maybePersistEmotionalState,
+      maybeRefreshContactProfile: options.maybeRefreshContactProfile,
+      assertEffectAllowed: options.assertEffectAllowed,
+    });
     return {
       memoryIds: [...durableMemoryIds],
-      concernIds: [...new Set(concernIds)],
-      contactIds: [...new Set(contactIds)],
+      concernIds: [...new Set(sideEffects.concernIds)],
+      contactIds: [...new Set(sideEffects.contactIds)],
     };
   } catch (error) {
     // A durable drain requeue is an intentional retryable control signal, not an
@@ -1055,82 +503,56 @@ function toErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-async function mapWithConcurrency<T, U>(
-  items: readonly T[],
-  concurrency: number,
-  mapper: (item: T, index: number) => Promise<U>,
-): Promise<U[]> {
-  const results = new Array<U>(items.length);
-  let nextIndex = 0;
-  let firstError: unknown;
-  const workerCount = Math.min(Math.max(1, Math.floor(concurrency)), items.length);
-
-  async function worker(): Promise<void> {
-    while (nextIndex < items.length && firstError === undefined) {
-      const index = nextIndex;
-      nextIndex += 1;
-      try {
-        results[index] = await mapper(items[index], index);
-      } catch (error) {
-        firstError ??= error;
-      }
-    }
-  }
-
-  await Promise.all(Array.from({ length: workerCount }, () => worker()));
-  if (firstError !== undefined) throw firstError;
-  return results;
+/**
+ * Builds the per-chunk model-call port handed to the LLM pass stage. Kept in
+ * this module so the durable work-spec construction (including the sanctioned
+ * preemptionProtected / welfareGrantJobId welfare forwarding) stays on the
+ * enforcement-scanned path.
+ */
+function createExtractionChunkCompleter(
+  options: ExtractionRunOptions,
+  turnId: TurnID | undefined,
+): (prompt: string, chunkRequestId: string) => Promise<string> {
+  return async (prompt, chunkRequestId) => {
+    const response = await completeWithWorkSpec(
+      options.llmClient,
+      {
+        systemPrompt: prompt,
+        messages: [{ role: 'user', content: 'Extract facts from the conversation above.' }],
+      },
+      buildLLMWorkSpec({
+        purpose: 'extraction',
+        durable: true,
+        ...(options.preemptionProtected
+          ? {
+              preemptionProtected: true,
+              ...(options.welfareGrantJobId
+                ? { welfareGrantJobId: options.welfareGrantJobId }
+                : {}),
+            }
+          : {}),
+        correlation: {
+          requestId: chunkRequestId,
+          ...(turnId ? { turnId } : {}),
+          channelId: options.channelId,
+          callType: 'memory',
+          purpose: 'memory.extraction',
+          ...(options.icpCorrelation
+            ? {
+                icpCorrelation: deriveChildIcpConversationCostCorrelation(
+                  options.icpCorrelation,
+                  {
+                    requestId: chunkRequestId,
+                    costPurpose: 'extraction',
+                    costOriginStage: 'post_turn',
+                  },
+                ),
+              }
+            : {}),
+        },
+      }),
+    );
+    return response.content;
+  };
 }
 
-function appendAcceptedFactForContact(
-  groups: Map<string | undefined, ExtractedFact[]>,
-  contactId: string | undefined,
-  fact: ExtractedFact,
-): void {
-  const existing = groups.get(contactId);
-  if (existing) {
-    existing.push(fact);
-    return;
-  }
-  groups.set(contactId, [fact]);
-}
-
-function groupAcceptedWritesByContact(
-  writes: readonly AcceptedFactWrite[],
-  fallbackContactId: string | undefined,
-): Map<string | undefined, AcceptedFactWrite[]> {
-  const groups = new Map<string | undefined, AcceptedFactWrite[]>();
-  if (writes.length === 0) {
-    groups.set(fallbackContactId, []);
-    return groups;
-  }
-
-  for (const write of writes) {
-    const contactIds = resolveProfileRefreshContactIds(write, fallbackContactId);
-    for (const contactId of contactIds) {
-      const profileWrite = write.contactId === contactId
-        ? write
-        : { ...write, contactId };
-      const existing = groups.get(contactId);
-      if (existing) {
-        existing.push(profileWrite);
-        continue;
-      }
-      groups.set(contactId, [profileWrite]);
-    }
-  }
-  return groups;
-}
-
-function resolveProfileRefreshContactIds(
-  write: AcceptedFactWrite,
-  fallbackContactId: string | undefined,
-): string[] {
-  const contactIds = new Set<string>();
-  if (write.contactId) contactIds.add(write.contactId);
-  if (write.subjectContactId) contactIds.add(write.subjectContactId);
-  if (contactIds.size === 0 && !write.scopeRef && fallbackContactId) {
-    contactIds.add(fallbackContactId);
-  }
-  return [...contactIds];
-}

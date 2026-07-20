@@ -127,6 +127,7 @@ import {
   getCapturedSessionOwner,
   runWithCapturedSessionOwner,
 } from './manager/captured-session-owner.js';
+import { isTestingSessionId } from './session-id.js';
 import {
   resolveCompressionFailureLogPath,
   resolveCompressionGuidelinePath,
@@ -456,6 +457,7 @@ export class SessionManager {
     }
     const routedSessionId = this.sessionRouteStore.resolve(channelId);
     if (routedSessionId) return routedSessionId;
+    if (isTestingSessionId(channelId)) return channelId;
     if (!this.activeContextSessionId) return channelId;
     if (!this.shouldOverrideSessionContext(channelId)) return channelId;
     return this.activeContextSessionId;

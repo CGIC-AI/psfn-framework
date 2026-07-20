@@ -81,6 +81,7 @@ export interface StartOptionalAdminTransportServerOptions {
     | 'memoryExtractor'
     | 'intentionRuntime'
     | 'toolConformanceRunner'
+    | 'humanAttentionLedger'
   >;
 }
 
@@ -136,6 +137,7 @@ export async function startOptionalAdminTransportServer(
     shardManager: options.shardManager,
     eventBus: options.eventBus,
     chargeLedger: options.chargeLedger,
+    humanAttentionLedger: options.coreRuntime.humanAttentionLedger,
     contactStore: options.coreRuntime.contactStore,
     pendingContactApprovals: options.pendingContactApprovals ?? null,
     socialGraphProposals: options.socialGraphProposals ?? null,

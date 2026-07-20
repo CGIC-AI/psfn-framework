@@ -139,7 +139,10 @@ const routeAuthorizationGroups: readonly RouteAuthorizationGroup[] = [
     ],
   },
   {
-    action: 'garden.read', area: 'companion', routeIds: ids('GET', ['/api/admin/dashboard', '/api/admin/dashboard/analysis-workbench-traces']),
+    action: 'garden.read', area: 'companion', routeIds: [
+      ...ids('GET', ['/api/admin/dashboard', '/api/admin/dashboard/analysis-workbench-traces']),
+      ...pageIds(['/analysis-workbench']),
+    ],
   },
   {
     action: 'diagnostics.read', area: 'diagnostics', routeIds: [
@@ -187,7 +190,7 @@ const routeAuthorizationGroups: readonly RouteAuthorizationGroup[] = [
       ]),
       ...pageIds([
         '/cognitive-security/approvals', '/cognitive-security/drift',
-        '/cognitive-security/firewall', '/cognitive-security/remediation',
+        '/cognitive-security/firewall', '/cognitive-security/remediation', '/concerns',
       ]),
     ],
   },

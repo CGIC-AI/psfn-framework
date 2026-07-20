@@ -43,6 +43,10 @@ export interface GardenSettingsTunableFieldCoverage {
 
 export const SETTINGS_GARDEN_FIELD_EXPOSURE = {
   modelCatalog: { sectionId: 'models', surface: 'custom', editorId: 'models' },
+  // 23pp per-companion model selection: runtime-owned (settings.json/overlay),
+  // so it lives in the generic 'llm' advanced section rather than the custom
+  // models.json editor — the catalog is global; the selection is not.
+  modelPurposeSelection: { sectionId: 'llm', surface: 'advanced' },
   sessionHistoryBudgetPct: { sectionId: 'budget', surface: 'advanced' },
   memoryRetrievalBudgetPct: { sectionId: 'budget', surface: 'advanced' },
   moodCongruenceWeight: { sectionId: 'budget', surface: 'advanced' },
@@ -170,6 +174,10 @@ export const SETTINGS_GARDEN_FIELD_EXPOSURE = {
   promotedExtendedTools: { sectionId: 'channels', surface: 'advanced' },
   chatApiBaseUrl: { sectionId: 'channels', surface: 'advanced' },
   comfyUiBaseUrl: { sectionId: 'channels', surface: 'advanced' },
+  imageProvider: { sectionId: 'channels', surface: 'advanced' },
+  imageFalCreateModel: { sectionId: 'channels', surface: 'advanced' },
+  imageFalEditModel: { sectionId: 'channels', surface: 'advanced' },
+  imageSelfieEditModel: { sectionId: 'channels', surface: 'advanced' },
   imageWorkflows: { sectionId: 'channels', surface: 'advanced' },
   imageFalTimeoutMs: { sectionId: 'channels', surface: 'advanced' },
   imageFalPollIntervalMs: { sectionId: 'channels', surface: 'advanced' },

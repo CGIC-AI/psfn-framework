@@ -129,7 +129,7 @@ export interface GroupBackfillExtractionOptions {
 type MemoryExtractorRunOptions =
   Pick<ExtractionRunOptions, 'groupWriteCaps' | 'groupWriteCapContext'>
   & {
-    forceLegacyExtraction?: boolean;
+    forceSinglePassExtraction?: boolean;
     reflectionSource?: FinalReflectionExtractionInput;
   };
 
@@ -458,7 +458,7 @@ export class MemoryExtractor {
         groupWriteCapContext: {
           backfill: true,
         },
-        forceLegacyExtraction: true,
+        forceSinglePassExtraction: true,
       },
     );
     return !reusedInFlight;
@@ -693,7 +693,7 @@ export class MemoryExtractor {
         ? { groupWriteCapContext: groupOptions.groupWriteCapContext }
         : {}),
       telemetryEnabled: this.isTelemetryEnabled(),
-      useCompositionalExtraction: groupOptions?.forceLegacyExtraction
+      useCompositionalExtraction: groupOptions?.forceSinglePassExtraction
         ? false
         : this.shouldUseCompositionalExtraction(channelId),
       isAcceptingExtractions: () => (

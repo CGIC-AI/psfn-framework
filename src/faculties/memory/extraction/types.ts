@@ -79,7 +79,7 @@ export interface ExtractionEndTelemetry {
   ambiguousSpeakerSkippedCount?: number;
   ambiguousSpeakerSkipReasons?: Record<string, number>;
   writeCapSkips?: GroupMemoryWriteCapSkip[];
-  compositionalMode: 'legacy' | 'chunk_compose';
+  compositionalMode: 'single_pass' | 'chunk_compose';
   chunkCount: number;
   mergedFactCount: number;
   crossChunkDeduplicatedCount: number;

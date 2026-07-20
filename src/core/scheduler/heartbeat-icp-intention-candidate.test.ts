@@ -185,6 +185,7 @@ function wire(
     await pendingFollowUpStore.dampen?.(pendingFollowUpId, { dampeningReason })
   ) != null);
   const postTurnActions: PostTurnActionRuntime = {
+    enqueue: vi.fn(() => 'queued'),
     registerHandler: vi.fn((actionKind: string, handler: PostTurnActionHandler) => {
       handlers.set(actionKind, handler);
       return () => undefined;

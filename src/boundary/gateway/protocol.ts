@@ -165,6 +165,12 @@ export interface LLMChatParams extends GatewayCorrelationParams {
   model: string;
   provider: string;
   pin?: boolean;
+  /**
+   * 23pp per-companion model selection: models.json registry entry id chosen
+   * by the calling companion's settings overlay. Resolved fail-closed against
+   * the gateway's registry; explicit model/provider fields take precedence.
+   */
+  slotKey?: string;
   messages: GatewayLLMMessage[];
   systemPrompt: string;
   /** PromptPlan cachePlan boundaries for systemPrompt (E2.4); hash-verified before use. */
@@ -195,6 +201,12 @@ export interface LLMCompleteParams extends GatewayCorrelationParams {
   model: string;
   provider: string;
   pin?: boolean;
+  /**
+   * 23pp per-companion model selection: models.json registry entry id chosen
+   * by the calling companion's settings overlay. Resolved fail-closed against
+   * the gateway's registry; explicit model/provider fields take precedence.
+   */
+  slotKey?: string;
   messages: GatewayLLMMessage[];
   systemPrompt: string;
   /** PromptPlan cachePlan boundaries for systemPrompt (E2.4); hash-verified before use. */
@@ -1161,4 +1173,10 @@ export const GatewayErrors = {
    * at the boundary before any provider I/O — fail closed.
    */
   INVALID_WORK_SPEC: -32019,
+  /**
+   * 23pp: a per-companion model selection slot key did not resolve to an
+   * enabled models.json registry entry. Rejected at the boundary before any
+   * provider I/O — fail closed, never silently substituted.
+   */
+  UNKNOWN_MODEL_SELECTION_SLOT: -32020,
 } as const;

@@ -31,6 +31,7 @@ import { createTurnId, deriveDeterministicTurnId, parseTurnId } from '../../turn
 import { parseIcpConversationCorrelation } from '../../../shared/contracts/icp-autonomy.js';
 import type { TurnSnapshot } from '../../turns/snapshot.js';
 import type { IcpFatigueReservationOutcome } from '../fatigue/regulation-reservation.js';
+import type { HumanAttentionPressureEvent } from '../fatigue/human-attention-pressure.js';
 import {
   attachRecordedFatigueEvent,
   evaluateFatigueForTurn,
@@ -197,6 +198,41 @@ function evaluateRuntimeFatigue(input: {
     }),
     timestampMs: input.timestampMs,
     correlation: input.runtime.withCorrelationPurpose(input.turnCorrelationBase, 'agent.fatigue.evaluate'),
+  });
+}
+
+function evaluateHumanAttentionPressure(input: {
+  runtime: TurnExecutionRuntime;
+  message: SubstrateMessage;
+  turnSessionIdentity: TurnSessionIdentity;
+  authorContext: ResolvedAuthorContext;
+  timestampMs: number;
+  turnId: string;
+}): HumanAttentionPressureEvent | null {
+  if (!input.runtime.humanAttentionPressure || input.authorContext.actorKind !== 'human') {
+    return null;
+  }
+  const contactId = input.authorContext.canonicalContactKey
+    ?? input.authorContext.subjectIdentityKey
+    ?? input.message.authorId.trim();
+  if (!contactId) {
+    return null;
+  }
+  const channelContext = input.message.isDirectMessage === true
+    ? 'direct_message'
+    : input.message.routing?.responseMode === 'respond'
+      ? 'direct_mention'
+      : 'ambient_group_message';
+  return input.runtime.humanAttentionPressure.evaluate({
+    localCompanionId: resolveCompanionIdFromConfig(input.runtime.config),
+    contactId,
+    channelId: input.turnSessionIdentity.sourceChannelId,
+    trustLevel: input.authorContext.trustLevel,
+    relationshipType: input.authorContext.relationshipType ?? 'stranger',
+    channelContext,
+    timestampMs: input.timestampMs,
+    sourceMessageId: input.message.id,
+    turnId: input.turnId,
   });
 }
 
@@ -568,6 +604,7 @@ export async function handleMessageForTurn(
   let internalStateSnapshotRef: string | undefined;
   let persistedUserMessageContent: string | undefined;
   let fatigueDecision: FatigueTurnDecision | null = null;
+  let humanAttentionPressure: HumanAttentionPressureEvent | null = null;
   let durableFatigueReservation: NonNullable<SubstrateMessage['routing']>['icpCorrelation'] | null = null;
   let recoveredFatigueReservationOutcome: IcpFatigueReservationOutcome | null = null;
   let durableDeliveryFinalized = false;
@@ -634,6 +671,16 @@ export async function handleMessageForTurn(
           explicitPeerInvitation,
           turnCorrelationBase,
           timestampMs: startTime,
+        });
+    humanAttentionPressure = recoveredResponse
+      ? null
+      : evaluateHumanAttentionPressure({
+          runtime,
+          message,
+          turnSessionIdentity,
+          authorContext,
+          timestampMs: startTime,
+          turnId,
         });
     if (fatigueDecision) {
       if (message.routing?.icpCorrelation) {
@@ -814,6 +861,7 @@ export async function handleMessageForTurn(
       currentSessionEntryId: userSessionEntryId,
       memoryManifestSeed: preTurnState.memoryManifestSeed ?? observability.getMemoryManifestSeed(),
       ...(fatigueDecision ? { fatigue: fatigueDecision.metadata } : {}),
+      ...(humanAttentionPressure ? { humanAttentionPressure } : {}),
       ...(canaryToken ? { canaryToken } : {}),
       getRetrievalProvenanceRefs: observability.getRetrievalProvenanceRefs,
       getObservedTurnRetrievals: observability.getObservedTurnRetrievals,

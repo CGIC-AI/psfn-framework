@@ -42,6 +42,7 @@ import { FallbackRunner, NonRecoverableFallbackError } from './fallback.js';
 import type { ImportPolicyAuditRecord, RoutingCandidate, RoutingPurpose } from './routing.js';
 import {
   evaluateImportPolicy,
+  toCompletionRoutingPurpose,
 } from './routing.js';
 import {
   applyModelAgnosticPromptCache,
@@ -2003,28 +2004,9 @@ export class LLMClient {
   }
 
   private toRoutingPurpose(purpose: CompletionPurpose): RoutingPurpose {
-    if (purpose === 'reasoning') {
-      return 'reasoning';
-    }
-    if (purpose === 'import_processing') {
-      return 'import_processing';
-    }
-    if (purpose === 'memory') {
-      return 'memory';
-    }
-    if (purpose === 'context') {
-      return 'context';
-    }
-    if (purpose === 'extraction') {
-      return 'extraction';
-    }
-    if (purpose === 'summary') {
-      return 'summary';
-    }
-    if (purpose === 'vision') {
-      return 'vision';
-    }
-    return 'background';
+    // 23pp: single shared mapping — the agent-side gateway client resolves
+    // per-companion model selection against the same lane this router serves.
+    return toCompletionRoutingPurpose(purpose);
   }
 
   private toEligibilityPurpose(purpose: RoutingPurpose): string {

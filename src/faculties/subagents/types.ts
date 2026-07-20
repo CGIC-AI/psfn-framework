@@ -42,6 +42,14 @@ export interface SubagentExecutionRequest {
   maxTurns?: number;
   capabilities?: readonly string[];
   requiredCapabilities?: readonly string[];
+  /**
+   * c7d — explicit per-spawn memory-write elevation for introspection and
+   * memory-maintenance lanes that operate on emotional memory by design.
+   * Grants direct, provenance-stamped, audit-trailed canonical memory writes
+   * (including the restricted emotional/relational/boundary classes); never
+   * grants delete. A blank reason fails the spawn closed.
+   */
+  memoryWriteElevation?: { reason: string };
   executionChannelId?: string;
   message?: SubstrateMessage;
   sourceContext?: SubagentExecutionSourceContext;

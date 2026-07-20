@@ -29,6 +29,10 @@ async function recordImageProviderAttempt(
   const sourceToolName = params.sourceToolName?.trim();
   const imageCount = result?.images.length ?? params.numImages ?? 1;
   const inputImageCount = 'imageUrls' in params ? params.imageUrls.length : 0;
+  const requestedProvider = params.provider
+    ?? (params.model ? 'fal' : params.settingsDefaults?.provider)
+    ?? 'auto';
+  const requestedModel = params.model ?? params.settingsDefaults?.model ?? 'default';
   const metadata: Record<string, unknown> = {
     mode,
     promptChars: params.prompt.length,
@@ -85,8 +89,8 @@ async function recordImageProviderAttempt(
     },
     provider: providerAttempt.provider,
     model: providerAttempt.model,
-    requestedProvider: params.provider ?? 'auto',
-    requestedModel: params.model ?? 'default',
+    requestedProvider,
+    requestedModel,
     inputTokens: 0,
     outputTokens: 0,
     cacheReadTokens: 0,

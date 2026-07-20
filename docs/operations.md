@@ -824,6 +824,49 @@ Operational rules:
 - Use `npm run session:repair:transcript-projection` to rebuild the searchable transcript projection from authoritative JSONL L0 after drift, backend migration, or recovery work.
 - The repair utility accepts `--data-dir` and `--sessions-dir` overrides and targets the configured PostgreSQL session projection backend through the port layer.
 
+### Testing-session lifecycle
+
+Harnesses must name ephemeral channels with the reserved
+`<existing-channel-prefix>:testing:<name>` namespace. For an API harness, set
+`x-session-id` to a value such as
+`testing:kube-rollout-validation-20260719`; its stored channel id becomes
+`api:<principal>:testing:kube-rollout-validation-20260719`. The marker
+preserves ordinary channel-type inference while explicitly excluding the
+session from temporal wake/refresher targeting, near-turn maintenance, and
+episodic synthesis, plus the sleeptime stack (consolidation, arcs, dreams,
+wiki updates, orientation rewrites, and durable memory writes).
+
+When testing is complete, stop the owning companion workloads and purge each
+session by its exact channel-index key:
+
+```bash
+npm run session:purge -- --session 'api:<principal>:testing:kube-rollout-validation-20260719'
+```
+
+For a multi-companion fleet, select the manifest-owned companion explicitly:
+
+```bash
+npm run session:purge -- \
+  --companion-id '<companion-uuid>' \
+  --session 'api:<principal>:testing:kube-rollout-validation-20260719'
+```
+
+The command accepts no wildcards. It stages the complete journal chain and
+channel-index removal for rollback, clears that companion and session's exact
+Redis tail-key family when Redis is configured, then removes the channel's
+message and drift projection rows in one PostgreSQL transaction. In split-root
+deployments it resolves journals from the companion data root. In fleet mode
+it resolves both that root and the non-public PostgreSQL schema from
+`companions.json`; missing or ambiguous companion/schema selection fails
+closed. When Redis is not configured the report says
+`no tail cache configured`. A configured but unreachable Redis aborts and
+rolls the staged journals/index back rather than reporting a clean purge.
+
+The command refuses ordinary sessions. An exceptional non-testing purge requires
+`--force-non-testing` and an interactive confirmation in which the operator
+types the exact id; use that escape hatch only after independently verifying
+the target and backup.
+
 ### Optional Redis session tail cache
 
 Deployments with Redis can enable a bounded hot session tail (settings.json `sessionTailCache: { enabled, maxEntriesPerChannel }`, default disabled). Every session append writes through to one Redis ZSET per companion, channel, and epoch (`psfn:session-tail:<companionId>:<channelKey>:e<epoch>`, score = entry id, GC TTL, trimmed to the bound), and turn-context captures read the recent window from that shared tail — so agent, gateway, and garden see ONE consistent recent view instead of three per-process file caches. Keys are scoped by `COMPANION_ID`, so a fleet sharing one Redis never crosses tails between companions. JSONL journals remain the source of truth and the HMAC chain is untouched: tail rows carry no `_hmac` fields, and on any id overlap the journal copy wins — tail rows are only accepted for ids newer than the journal read (cross-process gap-fill). Journal rewrites (CogSec tombstones, turn redaction, compaction invalidation/regeneration, post-repair reloads) bump a per-channel epoch key (`psfn:session-tail-epoch:<companionId>:<channelKey>`) before AND after the rewrite (the second bump is exception-safe: it runs even when a post-rewrite step throws), which fences every pre-rewrite row away from every process; a failed epoch bump fails the rewrite loudly (redaction is fail-closed). Tail writers bind to the epoch captured with their data, so a delayed write can only land under an already-superseded key, and readers re-check the epoch after the range read, treating any change as a miss. Reads validate id contiguity across the window (non-message journal entries appear as explicit id-gap placeholders), and any hole, duplicate, or tail missing the just-recorded entry is treated as a miss (journal read + repopulate). The Redis connection reuses the shared env wiring (`PSFN_REDIS_URL` and related TLS/credential vars, forwarded to the agent by the split launcher); enabling the tail with Redis unavailable fails startup, while a runtime Redis outage degrades loudly (rate-limited warns) to journal reads without dropping turns.

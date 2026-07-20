@@ -13,6 +13,12 @@ Non-goals:
 - [ ] `ci-required` passed
 - [ ] Commits are coherent and ready for rebase merge
 
+## Labels
+
+- [ ] Apply exactly one `kind:*` label
+- [ ] Apply `severity:*` for defects and `risk:*` for review depth
+- `system:*` and `size:*` labels are maintained automatically
+
 ## Change budget
 
 - [ ] This PR is at or below the normal target: 12 files, 800 changed lines, 5 commits

@@ -1,0 +1,128 @@
+{
+  "version": 1,
+  "managedPrefixes": ["system:", "size:"],
+  "lineCountExclusions": [
+    ".beads/issues.jsonl",
+    "admin-ui/package-lock.json",
+    "companion-ui/package-lock.json",
+    "package-lock.json"
+  ],
+  "sizes": [
+    { "label": "size:XS", "maximum": 50 },
+    { "label": "size:S", "maximum": 200 },
+    { "label": "size:M", "maximum": 500 },
+    { "label": "size:L", "maximum": 800 },
+    { "label": "size:XL", "maximum": null }
+  ],
+  "systems": [
+    {
+      "label": "system:memory",
+      "patterns": [
+        "^src/faculties/(?:core-)?memory(?:/|\\.)",
+        "^docs/memory\\.md$"
+      ]
+    },
+    {
+      "label": "system:session",
+      "patterns": ["^src/core/session/", "^src/persistence/sessions/"]
+    },
+    {
+      "label": "system:scheduler",
+      "patterns": [
+        "^src/core/scheduler/",
+        "^src/system/config/(?:scheduler|charge-policy)"
+      ]
+    },
+    {
+      "label": "system:garden",
+      "patterns": ["^admin-ui/", "^src/operator/garden/"]
+    },
+    {
+      "label": "system:helm-ops",
+      "patterns": [
+        "^(?:deploy|deployment|docker)/",
+        "^scripts/ops/",
+        "^docs/operations\\.md$"
+      ]
+    },
+    {
+      "label": "system:agent-tooling",
+      "patterns": [
+        "^\\.github/",
+        "^scripts/ci/",
+        "^(?:AGENTS|CLAUDE)\\.md$",
+        "^src/core/tools/",
+        "^src/faculties/subagents/"
+      ]
+    },
+    {
+      "label": "system:metacog",
+      "patterns": [
+        "^src/core/self-model/metacognition",
+        "^src/core/intention/concern",
+        "^src/persistence/reflections/",
+        "reflection-(?:journal|metacognition|substrate)"
+      ]
+    },
+    {
+      "label": "system:emotion",
+      "patterns": ["^src/core/emotion/", "emotion-scoping"]
+    },
+    { "label": "system:channels", "patterns": ["^src/channels/"] },
+    {
+      "label": "system:cogsec",
+      "patterns": [
+        "^src/core/cogsec/",
+        "cogsec",
+        "^docs/adversarial-review-and-bugfixing-practices\\.md$"
+      ]
+    },
+    { "label": "system:persistence", "patterns": ["^src/persistence/"] },
+    {
+      "label": "system:voice",
+      "patterns": ["^src/primitives/voice/", "(?:^|/)voice(?:-|/|\\.)"]
+    },
+    {
+      "label": "system:world",
+      "patterns": [
+        "^src/boundary/integrations/world/",
+        "^worlds/",
+        "^docs/world"
+      ]
+    },
+    {
+      "label": "system:docs",
+      "patterns": ["^docs/", "^(?:README|CHANGELOG|CONTRIBUTING)\\.md$"]
+    },
+    { "label": "system:fleet-auth", "patterns": ["fleet-auth", "fleet-sso"] },
+    { "label": "system:companion-ui", "patterns": ["^companion-ui/"] },
+    {
+      "label": "system:icp",
+      "patterns": ["(?:^|/)icp(?:-|/|\\.)", "^docs/icp"]
+    },
+    {
+      "label": "system:shards",
+      "patterns": ["^src/faculties/shards/", "(?:^|/)shard(?:-|/|\\.)"]
+    },
+    {
+      "label": "system:prompts",
+      "patterns": [
+        "^prompts/",
+        "^src/system/prompts/",
+        "(?:^|/)prompt(?:-|/|\\.)",
+        "^docs/prompt"
+      ]
+    },
+    {
+      "label": "system:testing",
+      "patterns": [
+        "^shakedown/",
+        "^src/test-support/",
+        "^test-fixtures/",
+        "^type-tests/",
+        "^vitest(?:\\.|-)",
+        "^scripts/.*\\.test\\."
+      ]
+    }
+  ]
+}

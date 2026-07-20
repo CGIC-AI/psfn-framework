@@ -69,6 +69,11 @@ const log = createComponentLogger('Discord');
 const rateLimitedDebugLog = createRateLimitedLogEmitter({ windowMs: 60_000 });
 
 const TYPING_INTERVAL_MS = 9_000;
+// Consecutive sendTyping failures tolerated on a channel before the typing
+// interval is disabled (mirrors the Hermes stream-consumer flood-control
+// strike limit). A single successful send resets the count; the next inbound
+// message re-arms typing from a clean slate.
+const TYPING_FAILURE_STRIKE_LIMIT = 3;
 const MAX_DISCORD_LENGTH = 2000;
 const STARTUP_BACKFILL_LIMIT = 100;
 const BACKFILL_DEDUP_WINDOW = 500;
@@ -210,6 +215,7 @@ export class DiscordAdapter implements ChannelAdapterPort {
   private lockStartedAt = new Map<string, number>();
   private lockContention = new Map<string, number>();
   private lockPolicy = new Map<string, TurnContentionPolicy>();
+  private typingStrikes = new Map<string, number>();
   private listeningWindows = new Map<string, number>();
   private voice: DiscordVoiceRuntime;
   private statusMessages = new Map<string, Message>();
@@ -391,6 +397,7 @@ export class DiscordAdapter implements ChannelAdapterPort {
     this.longRunningToolStatus.dispose();
     await this.clearAllStatusMessages();
     this.listeningWindows.clear();
+    this.typingStrikes.clear();
     await this.voice.stop();
     await this.client.destroy();
   }
@@ -796,6 +803,9 @@ export class DiscordAdapter implements ChannelAdapterPort {
       }).catch(() => undefined);
     } finally {
       clearInterval(typingInterval);
+      // Drop strike accounting for this channel so the map cannot leak entries
+      // for channels that are no longer being typed into.
+      this.typingStrikes.delete(channelId);
       this.processing.delete(channelId);
       const lockHeldMs = Math.max(0, Date.now() - lockStartMs);
       const releasePolicy = this.lockPolicy.get(channelId) ?? lockPolicy;
@@ -1120,21 +1130,66 @@ export class DiscordAdapter implements ChannelAdapterPort {
   private startTyping(msg: Message): ReturnType<typeof setInterval> {
     const channel = msg.channel;
     const channelId = msg.channelId;
-    if ('sendTyping' in channel) {
-      (channel as TextChannel).sendTyping().catch((error: unknown) => {
-        this.logTypingFailure(channelId, 'initial', error);
-      });
-    }
-    return setInterval(() => {
-      if ('sendTyping' in channel) {
-        (channel as TextChannel).sendTyping().catch((error: unknown) => {
-          this.logTypingFailure(channelId, 'interval', error);
-        });
-      }
-    }, TYPING_INTERVAL_MS);
+    // A fresh inbound turn re-arms typing from a clean slate: any strike
+    // accounting left over from a previously disabled interval on this channel
+    // is dropped so the indicator gets a new chance.
+    this.typingStrikes.delete(channelId);
+
+    let typingInterval: ReturnType<typeof setInterval>;
+    const sendTyping = (phase: 'initial' | 'interval'): void => {
+      if (!('sendTyping' in channel)) return;
+      (channel as TextChannel).sendTyping().then(
+        () => this.resetTypingStrikes(channelId),
+        (error: unknown) => this.recordTypingFailure(channelId, phase, error, typingInterval),
+      );
+    };
+
+    sendTyping('initial');
+    typingInterval = setInterval(() => sendTyping('interval'), TYPING_INTERVAL_MS);
+    return typingInterval;
   }
 
-  private logTypingFailure(channelId: string, phase: 'initial' | 'interval', error: unknown): void {
+  private resetTypingStrikes(channelId: string): void {
+    this.typingStrikes.delete(channelId);
+  }
+
+  private recordTypingFailure(
+    channelId: string,
+    phase: 'initial' | 'interval',
+    error: unknown,
+    typingInterval: ReturnType<typeof setInterval>,
+  ): void {
+    const strikes = (this.typingStrikes.get(channelId) ?? 0) + 1;
+    this.typingStrikes.set(channelId, strikes);
+
+    if (strikes < TYPING_FAILURE_STRIKE_LIMIT) {
+      // Below the strike limit: surface the failure via the existing
+      // rate-limited debug path without disabling the indicator.
+      this.logTypingFailure(channelId, phase, error);
+      return;
+    }
+
+    if (strikes === TYPING_FAILURE_STRIKE_LIMIT) {
+      // Strike limit reached: stop this channel's typing interval and warn
+      // exactly once. The next inbound message re-arms typing via startTyping.
+      clearInterval(typingInterval);
+      log.warn('Disabling Discord typing indicator after consecutive send failures', {
+        channelId,
+        phase,
+        strikes,
+        strikeLimit: TYPING_FAILURE_STRIKE_LIMIT,
+        error: toErrorMessage(error),
+      });
+    }
+    // strikes > limit: interval already cleared; a late in-flight rejection must
+    // not re-warn, so stay quiet.
+  }
+
+  private logTypingFailure(
+    channelId: string,
+    phase: 'initial' | 'interval' | 'status',
+    error: unknown,
+  ): void {
     const errorMessage = toErrorMessage(error);
     rateLimitedDebugLog(
       `discord.sendTyping.${phase}:${channelId}:${errorMessage}`,
@@ -1254,8 +1309,11 @@ export class DiscordAdapter implements ChannelAdapterPort {
       if ('sendTyping' in channel) {
         await (channel as TextChannel).sendTyping();
       }
-    } catch {
-      // Ignore typing errors (permissions/network/transient fetch failures)
+    } catch (error) {
+      // One-shot status nudge (compaction/retry). There is no interval to
+      // disable here, but surface the failure via the rate-limited path rather
+      // than swallowing it silently.
+      this.logTypingFailure(channelId, 'status', error);
     }
   }
 

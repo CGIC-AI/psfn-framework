@@ -11,6 +11,10 @@ import {
   setRuntimeChannelEnvelopeLabels,
 } from '../../system/trust/runtime-channel-labels.js';
 import { createCompanionId } from '../../shared/routing/companion-id.js';
+import {
+  clearDiagnosticLogRingBufferForTests,
+  getRecentDiagnosticLogRecords,
+} from '../../shared/logger.js';
 
 const discordMock = vi.hoisted(() => {
   return {
@@ -2824,5 +2828,174 @@ describe('DiscordAdapter reaction surface (jp36.3.1.2)', () => {
     const adapter = new DiscordAdapter(makeConfig(), new EventBus());
     const surface = listReactions(adapter, channelId);
     expect(surface?.custom).toEqual([]);
+  });
+});
+
+describe('DiscordAdapter typing flood control (psfn-framework-vvf.4)', () => {
+  // Kept in sync with the adapter module constants; there is no export for them.
+  const TYPING_INTERVAL_MS = 9_000;
+  const STRIKE_LIMIT = 3;
+
+  function makeTypingChannel(shouldReject: () => boolean) {
+    const sendTyping = vi.fn(async () => {
+      if (shouldReject()) throw new Error('Missing Permissions');
+    });
+    return { isTextBased: () => true, sendTyping };
+  }
+
+  function disableWarnCount(): number {
+    return getRecentDiagnosticLogRecords().filter(
+      (record) =>
+        record.level === 'warn' &&
+        record.message.includes('Disabling Discord typing indicator'),
+    ).length;
+  }
+
+  beforeEach(() => {
+    discordMock.channelsById.clear();
+    discordMock.createdClients.length = 0;
+    clearDiagnosticLogRingBufferForTests();
+  });
+
+  it('disables the typing interval and warns once after the strike limit of consecutive failures', async () => {
+    vi.useFakeTimers();
+    try {
+      const adapter = new DiscordAdapter(makeConfig(), new EventBus());
+      const channel = makeTypingChannel(() => true);
+      const msg = { channel, channelId: 'ch-strike' } as any;
+
+      (adapter as any).startTyping(msg);
+      // initial send (strike 1) + first interval tick (strike 2)
+      await vi.advanceTimersByTimeAsync(TYPING_INTERVAL_MS);
+      // second interval tick (strike 3) -> disable
+      await vi.advanceTimersByTimeAsync(TYPING_INTERVAL_MS);
+
+      expect(channel.sendTyping).toHaveBeenCalledTimes(STRIKE_LIMIT);
+      expect(disableWarnCount()).toBe(1);
+
+      // Interval was cleared: further time advances trigger no more sends and no
+      // additional warning (warn exactly once).
+      await vi.advanceTimersByTimeAsync(TYPING_INTERVAL_MS * 5);
+      expect(channel.sendTyping).toHaveBeenCalledTimes(STRIKE_LIMIT);
+      expect(disableWarnCount()).toBe(1);
+      expect((adapter as any).typingStrikes.get('ch-strike')).toBe(STRIKE_LIMIT);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('resets the strike count on a successful send so the interval is never disabled', async () => {
+    vi.useFakeTimers();
+    try {
+      const adapter = new DiscordAdapter(makeConfig(), new EventBus());
+      // Two failures then a success, repeating: without the reset a run of two
+      // failures would eventually accumulate to the strike limit, but each
+      // interleaved success brings the counter back to zero so it never trips.
+      let call = 0;
+      const channel = makeTypingChannel(() => {
+        call += 1;
+        return call % STRIKE_LIMIT !== 0; // calls 1,2 reject; call 3 succeeds; repeat
+      });
+      const msg = { channel, channelId: 'ch-reset' } as any;
+
+      (adapter as any).startTyping(msg);
+      await vi.advanceTimersByTimeAsync(TYPING_INTERVAL_MS * 8);
+
+      // Interval stayed armed: sends kept firing well past the strike limit.
+      expect(channel.sendTyping.mock.calls.length).toBeGreaterThan(STRIKE_LIMIT);
+      expect(disableWarnCount()).toBe(0);
+      // Successes keep the counter capped below the limit; it is never disabled.
+      expect((adapter as any).typingStrikes.get('ch-reset') ?? 0).toBeLessThan(STRIKE_LIMIT);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not disable the interval for fewer consecutive failures than the strike limit', async () => {
+    vi.useFakeTimers();
+    try {
+      const adapter = new DiscordAdapter(makeConfig(), new EventBus());
+      // Reject only the first two sends (strikes 1 and 2), then succeed.
+      let call = 0;
+      const channel = makeTypingChannel(() => {
+        call += 1;
+        return call <= STRIKE_LIMIT - 1;
+      });
+      const msg = { channel, channelId: 'ch-below' } as any;
+
+      (adapter as any).startTyping(msg);
+      // initial + one interval tick => exactly two consecutive failures.
+      await vi.advanceTimersByTimeAsync(TYPING_INTERVAL_MS);
+      expect((adapter as any).typingStrikes.get('ch-below')).toBe(STRIKE_LIMIT - 1);
+      expect(disableWarnCount()).toBe(0);
+
+      // The next tick succeeds and clears the count; the interval was never
+      // disabled, so sends continue.
+      await vi.advanceTimersByTimeAsync(TYPING_INTERVAL_MS);
+      expect((adapter as any).typingStrikes.has('ch-below')).toBe(false);
+      const callsAfterReset = channel.sendTyping.mock.calls.length;
+      await vi.advanceTimersByTimeAsync(TYPING_INTERVAL_MS);
+      expect(channel.sendTyping.mock.calls.length).toBeGreaterThan(callsAfterReset);
+      expect(disableWarnCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('re-arms typing fresh on the next message after a channel was disabled', async () => {
+    vi.useFakeTimers();
+    try {
+      const adapter = new DiscordAdapter(makeConfig(), new EventBus());
+      const channelId = 'ch-rearm';
+
+      // First turn: always fails, trips the strike limit and disables typing.
+      const failing = makeTypingChannel(() => true);
+      const failingInterval = (adapter as any).startTyping({ channel: failing, channelId } as any);
+      await vi.advanceTimersByTimeAsync(TYPING_INTERVAL_MS * 2);
+      expect(disableWarnCount()).toBe(1);
+      expect((adapter as any).typingStrikes.get(channelId)).toBe(STRIKE_LIMIT);
+      // The disabled interval must not keep firing.
+      const failingCallsAtDisable = failing.sendTyping.mock.calls.length;
+
+      // Next inbound message re-arms from a clean slate on a now-healthy channel.
+      const healthy = makeTypingChannel(() => false);
+      (adapter as any).startTyping({ channel: healthy, channelId } as any);
+      expect((adapter as any).typingStrikes.has(channelId)).toBe(false);
+
+      await vi.advanceTimersByTimeAsync(TYPING_INTERVAL_MS * 3);
+      expect(healthy.sendTyping.mock.calls.length).toBeGreaterThan(0);
+      // Old disabled interval stayed dead; no second warning was emitted.
+      expect(failing.sendTyping.mock.calls.length).toBe(failingCallsAtDisable);
+      expect(disableWarnCount()).toBe(1);
+
+      clearInterval(failingInterval);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not leak strike entries after a turn completes', async () => {
+    const eventBus = new EventBus();
+    const adapter = new DiscordAdapter(makeConfig(), eventBus);
+    await adapter.init();
+    const channelId = 'ch-leak';
+    const interactive = makeInteractiveTextChannel();
+    // Typing fails during the turn, recording a strike, but the turn otherwise
+    // completes normally; the finally cleanup must drop the strike entry.
+    interactive.channel.sendTyping = vi.fn(async () => {
+      throw new Error('Missing Permissions');
+    });
+    discordMock.channelsById.set(channelId, interactive.channel);
+    adapter.onMessage(async () => ({
+      content: 'reply',
+      channelId,
+      metadata: { model: 'test', inputTokens: 0, outputTokens: 0, durationMs: 1 },
+    }));
+
+    await (adapter as any).onDiscordMessage(
+      makeDiscordIncomingMessage(channelId, interactive.channel),
+    );
+
+    expect((adapter as any).typingStrikes.size).toBe(0);
   });
 });

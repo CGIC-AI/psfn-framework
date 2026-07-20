@@ -23,6 +23,7 @@ import { createMemoryAppCache } from '../../shared/cache/memory-cache.js';
 import type { AppCache } from '../../shared/cache/types.js';
 import { RUNTIME_LAYOUT_MODE, resolveRuntimeLayoutMode } from '../../persistence/layout.js';
 import type { SessionManager } from '../session/manager.js';
+import type { CapturedSessionReads } from '../session/manager/captured-session-owner.js';
 import type { ConversationScope } from '../session/conversation-scope.js';
 import { formatAttributedSystemContent } from '../session/entry-attribution.js';
 import {
@@ -1687,6 +1688,7 @@ export class SubstrateAgent {
           currentUserRuntimeProfile,
           conversationScope,
           participantRelationshipEdges,
+          capturedSessionReads,
         ) => this.buildDynamicPromptTemplateVariables(
           turnMessage,
           resolvedUserName,
@@ -1705,6 +1707,7 @@ export class SubstrateAgent {
           currentUserRuntimeProfile,
           conversationScope,
           participantRelationshipEdges,
+          capturedSessionReads,
         ),
         setCurrentSelfModelState: (state, snapshotRef, metacognitiveFlags) => {
           this.currentInternalState = state;
@@ -1948,8 +1951,13 @@ export class SubstrateAgent {
     currentUserRuntimeProfile: UserRuntimeProfile | undefined,
     conversationScope: ConversationScope,
     participantRelationshipEdges: readonly ParticipantRelationshipEdgeInput[],
+    capturedSessionReads: CapturedSessionReads,
   ): Record<string, string> {
-    const recentMessages = this.sessionManager.getRecentMessages(message.channelId, 32);
+    // Owner-bound read: this builder runs inside the admitted turn's captured
+    // session scope, where the raw SessionManager.getRecentMessages fails closed
+    // (assertMutableSessionReadAllowed). Read through the facade so recent
+    // history is scoped to the turn owner, not whatever session is active-context.
+    const recentMessages = capturedSessionReads.getRecentMessages(32);
     const latestPriorMessage = [...recentMessages]
       .reverse()
       .find((entry, index) => {

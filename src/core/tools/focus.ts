@@ -8,7 +8,7 @@ import { toErrorMessage } from '../../shared/utils/errors.js';
 import { deriveChildIcpConversationCostCorrelation } from '../../shared/contracts/icp-autonomy.js';
 
 export interface FocusSessionManager {
-  getActiveContextSession(): string | null;
+  getActiveContextSessionForTool(): string | null;
   startFocusSession(channelId: string, scope: string): {
     focusId: string;
     channelId: string;
@@ -83,7 +83,7 @@ function resolveTargetChannelId(
     return requestChannelId.trim();
   }
 
-  const active = sessionManager.getActiveContextSession();
+  const active = sessionManager.getActiveContextSessionForTool();
   if (typeof active === 'string' && active.trim().length > 0) {
     return active.trim();
   }

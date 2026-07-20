@@ -104,6 +104,19 @@ function getCapturedSessionOwner(
   };
 }
 
+/**
+ * Read the captured owner bound to `manager` for the current async scope, or
+ * null when no admitted turn is active for this manager. Exposed so owner-bound
+ * resolvers (e.g. SessionManager.resolveSessionChannelId) can fail closed on
+ * mutable active-context resolution instead of silently leaking a different
+ * session's identity into a captured scope.
+ */
+export function getCapturedSessionOwnerIdentity(
+  manager: object,
+): CapturedSessionOwnerIdentity | null {
+  return getCapturedSessionOwner(manager);
+}
+
 export function assertNoCapturedSessionOwner(
   manager: object,
   callSite: string,

@@ -1092,6 +1092,7 @@ export async function handleMessageForTurn(
           toolCallCount: turnUsage.toolCalls,
           sessionChannelId: emotionSessionId,
           conversationScope,
+          capturedSessionReads: sessionReads,
         });
     internalStateSnapshotRef = recoveredResponse?.metadata.internalStateSnapshotRef
       ?? buildInternalStateSnapshotRef(internalState);
@@ -1103,6 +1104,7 @@ export async function handleMessageForTurn(
           toolCallCount: turnUsage.toolCalls,
           sessionChannelId: emotionSessionId,
           retrievalProvenanceRefs,
+          capturedSessionReads: sessionReads,
         });
     runtime.setCurrentSelfModelState(
       internalState,

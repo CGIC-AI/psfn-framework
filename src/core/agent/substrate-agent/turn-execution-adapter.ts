@@ -30,6 +30,7 @@ import type { InternalState } from '../../self-model/state.js';
 import type { MetacognitiveFlag } from '../../self-model/metacognition.js';
 import type { ContextBudgetTurnCharacteristics } from '../../../shared/context-budget.js';
 import type { ConversationScopeSpeaker } from '../../session/conversation-scope.js';
+import type { CapturedSessionReads } from '../../session/manager/captured-session-owner.js';
 import type { ImageVisionReviewer } from '../../../primitives/images/types.js';
 import type { VisionIntakeImageScreenerPort } from './vision-attachments.js';
 import type { ObserverEvalSidecarRuntime } from '../../eval/observer-sidecar/types.js';
@@ -97,6 +98,7 @@ interface TurnExecutionAdapterCallbacks {
     currentUserRuntimeProfile: UserRuntimeProfile | undefined,
     conversationScope: import('../../session/conversation-scope.js').ConversationScope,
     participantRelationshipEdges: readonly ParticipantRelationshipEdgeInput[],
+    capturedSessionReads: CapturedSessionReads,
   ) => Record<string, string>;
   setCurrentSelfModelState: (
     state: InternalState,
@@ -364,6 +366,7 @@ export function createTurnExecutionRuntimeAdapter(
       currentUserRuntimeProfile,
       conversationScope,
       participantRelationshipEdges,
+      capturedSessionReads,
     ) => options.callbacks.buildDynamicPromptTemplateVariables(
       message,
       resolvedUserName,
@@ -382,6 +385,7 @@ export function createTurnExecutionRuntimeAdapter(
       currentUserRuntimeProfile,
       conversationScope,
       participantRelationshipEdges,
+      capturedSessionReads,
     ),
     setCurrentSelfModelState: (
       state,

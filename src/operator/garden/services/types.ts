@@ -97,6 +97,16 @@ export type {
 } from './types/icp-autonomy.js';
 
 export type {
+  AdminEgressLeaseView,
+  AdminParticipationView,
+  AdminReservationView,
+  AdminRoomArbiterData,
+  AdminRoomArbiterReasonCount,
+  AdminRoomArbiterService,
+  AdminRoomEpisodeView,
+} from './types/room-arbiter.js';
+
+export type {
   AdminMemoryContactSummary,
   AdminMemoryBodyRedaction,
   AdminMemoryView,

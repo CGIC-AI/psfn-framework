@@ -1344,3 +1344,121 @@ describe('SubagentFaculty memory-write governance (c7d)', () => {
     expect(promptSpy).not.toHaveBeenCalled();
   });
 });
+
+describe('SubagentFaculty core-authoritative tool governance (p0le)', () => {
+  let root: string;
+  let eventBus: EventBus;
+  let sessionStore: SessionStore;
+
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), 'psfn-subagent-toolgov-'));
+    eventBus = new EventBus();
+    sessionStore = new SessionStore(root);
+    mockSubagentContent = 'subagent response';
+    mockSubagentError = null;
+    mockSubagentDelayMs = 0;
+    mockFirstPromptTools = [];
+    promptSpy.mockClear();
+    resetCompletionHandoffDedupeForTests();
+  });
+
+  afterEach(() => {
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  function makeGovernanceCatalog() {
+    const names = [
+      'orient', 'identity', 'north_star', 'contact',
+      'journal', 'wiki', 'skill', 'vault', 'scratchpad',
+    ] as const;
+    const tools = Object.fromEntries(
+      names.map(name => [name, makeCatalogTool(name, 'identity.read')]),
+    ) as Record<(typeof names)[number], ReturnType<typeof makeCatalogTool>>;
+    const auditTrail = { append: vi.fn() };
+    const faculty = new SubagentFaculty({
+      eventBus,
+      llmProvider: mockLLM(),
+      sessionStore,
+      embeddingService: null,
+      memoryProvider: null,
+      config: TEST_CONFIG,
+      parentSystemPrompt: 'test prompt',
+      toolCatalogProvider: () => ({
+        core: names.map(name => tools[name].tool),
+        extended: [],
+      }),
+      auditTrail,
+    });
+    return { tools, auditTrail, faculty };
+  }
+
+  it('blocks identity, north_star, and contact at injection; wraps the multiplexed surfaces; leaves scratchpad raw', async () => {
+    const { tools, faculty } = makeGovernanceCatalog();
+
+    await faculty.execute({
+      name: 'default-worker',
+      task: 'summarize the report',
+      workSpec: buildSubagentWorkSpec(),
+    });
+
+    const injectedNames = mockFirstPromptTools.map(tool => tool.name);
+    expect(injectedNames).not.toContain('identity');
+    expect(injectedNames).not.toContain('north_star');
+    expect(injectedNames).not.toContain('contact');
+
+    for (const name of ['orient', 'journal', 'wiki', 'skill', 'vault'] as const) {
+      const injected = mockFirstPromptTools.find(tool => tool.name === name);
+      expect(injected, name).toBeDefined();
+      expect(injected, name).not.toBe(tools[name].tool);
+    }
+
+    // scratchpad is bounded ephemeral working memory and stays ungoverned:
+    // its mutations reach the parent-catalog tool directly.
+    const scratchpad = mockFirstPromptTools.find(tool => tool.name === 'scratchpad')!;
+    await scratchpad.execute('call-pad', { action: 'add', content: 'working note' }, undefined);
+    expect(tools.scratchpad.execute).toHaveBeenCalledTimes(1);
+  });
+
+  it('default-tier subagent cannot mutate any core-authoritative store (reads still pass)', async () => {
+    const { tools, auditTrail, faculty } = makeGovernanceCatalog();
+
+    const result = await faculty.execute({
+      name: 'default-worker',
+      task: 'summarize the report',
+      workSpec: buildSubagentWorkSpec(),
+    });
+
+    const find = (name: string) => mockFirstPromptTools.find(tool => tool.name === name)!;
+
+    // Reads pass through to the parent-catalog tool.
+    await find('orient').execute('call-1', { action: 'values_list' }, undefined);
+    expect(tools.orient.execute).toHaveBeenCalledTimes(1);
+
+    // Every reproduced escalation from the bead is denied and audit-trailed.
+    const deniedCalls: Array<[string, Record<string, unknown>]> = [
+      ['orient', { action: 'introspection_consent_set', enabled: false }],
+      ['orient', { action: 'values_update', values: 'rewritten', version: 1 }],
+      ['orient', { action: 'create_concern', content: 'planted concern' }],
+      ['journal', { action: 'write', path: 'p', content: 'x' }],
+      ['wiki', { action: 'write', title: 't', body: 'b' }],
+      ['skill', { action: 'update', name: 's', content: 'x' }],
+      ['vault', { action: 'write', name: 'n', content: 'x' }],
+    ];
+    for (const [name, params] of deniedCalls) {
+      const denied = await find(name).execute('call-denied', params, undefined);
+      expect((denied.details as { isError?: boolean }).isError, `${name} ${String(params.action)}`).toBe(true);
+      expect(auditTrail.append).toHaveBeenCalledWith('subagent.tool.mutation.denied', expect.objectContaining({
+        subagentId: result.subagentId,
+        subagentName: 'default-worker',
+        toolName: name,
+        action: params.action,
+        reason: 'mutation_not_permitted',
+      }));
+    }
+    expect(tools.orient.execute).toHaveBeenCalledTimes(1);
+    expect(tools.journal.execute).not.toHaveBeenCalled();
+    expect(tools.wiki.execute).not.toHaveBeenCalled();
+    expect(tools.skill.execute).not.toHaveBeenCalled();
+    expect(tools.vault.execute).not.toHaveBeenCalled();
+  });
+});

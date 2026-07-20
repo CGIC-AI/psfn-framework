@@ -48,6 +48,10 @@ import {
   type SubagentFoldReviewPort,
   type SubagentMemoryWritePolicy,
 } from './memory-governance.js';
+import {
+  GOVERNED_SUBAGENT_TOOL_POLICIES,
+  createGovernedSubagentTool,
+} from './tool-governance.js';
 import type { SubagentControlPort } from './port.js';
 import { SubagentTaskRegistry } from './task-registry.js';
 import { buildSubagentWorkSpec, createSubagentWorkSpecProvider } from './work-spec.js';
@@ -84,6 +88,14 @@ const BLOCKED_SUBAGENT_TOOL_NAMES = new Set([
   'shard',
   'load_tools',
   'toolset',
+  // p0le: identity/purpose truth (prompt layers, persona, north-star intents)
+  // has no task-scoped use in a bounded child; the trust surface joins its
+  // already-blocked split aliases (contact_*) — the canonical `contact` tool
+  // multiplexes set_trust/set_relationship/link_identity/block, and the
+  // pre-existing list blocked even the split reads.
+  'identity',
+  'north_star',
+  'contact',
   'contact_list',
   'contact_lookup',
   'contact_note',
@@ -1238,13 +1250,30 @@ export class SubagentFaculty implements SubagentControlPort {
         availableByName.set(
           tool.name,
           // c7d: the canonical memory surface only reaches a subagent loop
-          // behind the write-governance wrapper.
-          tool.name === 'memory' ? this.governMemoryTool(tool, handle) : tool,
+          // behind the write-governance wrapper. p0le: the remaining
+          // core-authoritative multiplexed surfaces only reach it behind the
+          // read-only governance wrapper.
+          tool.name === 'memory'
+            ? this.governMemoryTool(tool, handle)
+            : this.governCoreAuthoritativeTool(tool, handle),
         );
       }
     }
 
     return [...availableByName.values()];
+  }
+
+  private governCoreAuthoritativeTool(
+    tool: AgentTool<any>,
+    handle: ActiveSubagentHandle,
+  ): AgentTool<any> {
+    const policy = GOVERNED_SUBAGENT_TOOL_POLICIES.get(tool.name);
+    if (!policy) return tool;
+    return createGovernedSubagentTool(tool, policy, {
+      subagentId: handle.subagentId,
+      subagentName: handle.request.name,
+      auditTrail: this.auditTrail,
+    });
   }
 
   private governMemoryTool(tool: AgentTool<any>, handle: ActiveSubagentHandle): AgentTool<any> {

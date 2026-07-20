@@ -1,3 +1,6 @@
+import { isRecord } from '../../shared/utils/types.js';
+import { assertNoUnknownKeys, assertPositiveInteger } from './validators.js';
+
 /**
  * Deterministic pre-gate configuration for room-participation candidate
  * creation (free-time social autonomy, bible §8.1/§8.4, adjudication S5/S7).
@@ -236,5 +239,267 @@ export function createDefaultEgressLeasePhaseSettings(): EgressLeasePhaseSetting
     leaseTtlMs: 60 * 1000,
     egressDrawUnits: 1,
     minReplyConfidence: 0.5,
+  };
+}
+
+/**
+ * Owner-file-exposed egress-lease tunables (jp36.8.2). The `enabled` flag is
+ * DELIBERATELY excluded from the owner-file surface: promoting an observed
+ * candidate to a real autonomous send is code-pinned OFF and no enablement
+ * override may exist until qgqw.3 (P1) lands. The tunables below are safe to
+ * expose because they only shape a send that the code-pinned flag still gates.
+ */
+export type EgressLeaseTunables = Omit<EgressLeasePhaseSettings, 'enabled'>;
+
+export function createDefaultEgressLeaseTunables(): EgressLeaseTunables {
+  const { enabled: _enabled, ...tunables } = createDefaultEgressLeasePhaseSettings();
+  return tunables;
+}
+
+// ── Owner-file parsers (jp36.8.2) ────────────────────────────────────────────
+// Fail-closed parsers that give the participation tunables canonical
+// scheduler.json homes (Garden-editable via the raw owner-file editor). Every
+// default is sourced from the createDefault* factories above so a config that
+// omits a knob is byte-identical to the pre-owner-file behavior. Numeric bounds
+// live inside these function bodies (never module-level tuning constants) so the
+// hardcoded-settings gate stays satisfied.
+
+const PARTICIPATION_ERROR_PREFIX = 'Invalid participation config';
+
+function participationRecord(value: unknown, fieldPath: string): Record<string, unknown> {
+  if (!isRecord(value)) {
+    throw new Error(`${PARTICIPATION_ERROR_PREFIX}: ${fieldPath} must be an object`);
+  }
+  return value;
+}
+
+function participationBoolean(value: unknown, fieldPath: string): boolean {
+  if (typeof value !== 'boolean') {
+    throw new Error(`${PARTICIPATION_ERROR_PREFIX}: ${fieldPath} must be a boolean`);
+  }
+  return value;
+}
+
+function participationPositiveInteger(value: unknown, fieldPath: string): number {
+  return assertPositiveInteger(value, fieldPath, {
+    min: 1,
+    message: ({ fieldLabel }) => `${PARTICIPATION_ERROR_PREFIX}: ${fieldLabel} must be a finite integer >= 1`,
+  });
+}
+
+function participationNonNegativeInteger(value: unknown, fieldPath: string): number {
+  if (typeof value !== 'number' || !Number.isFinite(value) || !Number.isInteger(value) || value < 0) {
+    throw new Error(`${PARTICIPATION_ERROR_PREFIX}: ${fieldPath} must be a finite integer >= 0`);
+  }
+  return value;
+}
+
+function participationFiniteInteger(value: unknown, fieldPath: string): number {
+  if (typeof value !== 'number' || !Number.isFinite(value) || !Number.isInteger(value)) {
+    throw new Error(`${PARTICIPATION_ERROR_PREFIX}: ${fieldPath} must be a finite integer`);
+  }
+  return value;
+}
+
+function participationPositiveNumber(value: unknown, fieldPath: string): number {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) {
+    throw new Error(`${PARTICIPATION_ERROR_PREFIX}: ${fieldPath} must be a finite number > 0`);
+  }
+  return value;
+}
+
+function participationNonNegativeNumber(value: unknown, fieldPath: string): number {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) {
+    throw new Error(`${PARTICIPATION_ERROR_PREFIX}: ${fieldPath} must be a finite number >= 0`);
+  }
+  return value;
+}
+
+function participationUnitInterval(value: unknown, fieldPath: string): number {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0 || value > 1) {
+    throw new Error(`${PARTICIPATION_ERROR_PREFIX}: ${fieldPath} must be a finite number between 0 and 1`);
+  }
+  return value;
+}
+
+function participationAutonomyLevel(value: unknown, fieldPath: string): ParticipationAutonomyLevel {
+  if (
+    typeof value !== 'string'
+    || !(PARTICIPATION_AUTONOMY_LEVELS as readonly string[]).includes(value)
+  ) {
+    throw new Error(
+      `${PARTICIPATION_ERROR_PREFIX}: ${fieldPath} must be one of `
+      + `${PARTICIPATION_AUTONOMY_LEVELS.map(level => `"${level}"`).join(', ')}`,
+    );
+  }
+  return value as ParticipationAutonomyLevel;
+}
+
+function participationChannelAutonomyLevels(
+  value: unknown,
+  fieldPath: string,
+): Record<string, ParticipationAutonomyLevel> {
+  const record = participationRecord(value, fieldPath);
+  const parsed: Record<string, ParticipationAutonomyLevel> = {};
+  for (const [channelId, level] of Object.entries(record)) {
+    parsed[channelId] = participationAutonomyLevel(level, `${fieldPath}.${channelId}`);
+  }
+  return parsed;
+}
+
+export function parsePassiveNameCandidateSettings(
+  raw: unknown,
+  fieldPath: string,
+): PassiveNameCandidateSettings {
+  const defaults = createDefaultPassiveNameCandidateSettings();
+  if (raw === undefined) {
+    return defaults;
+  }
+  const record = participationRecord(raw, fieldPath);
+  assertNoUnknownKeys(
+    record,
+    [
+      'enabled',
+      'defaultAutonomyLevel',
+      'channelAutonomyLevels',
+      'precedingContextMessages',
+      'stalenessMs',
+      'dedupeHistoryPerChannel',
+      'debounceWindowMs',
+    ],
+    fieldPath,
+    { errorPrefix: PARTICIPATION_ERROR_PREFIX },
+  );
+  return {
+    enabled: participationBoolean(record.enabled ?? defaults.enabled, `${fieldPath}.enabled`),
+    defaultAutonomyLevel: participationAutonomyLevel(
+      record.defaultAutonomyLevel ?? defaults.defaultAutonomyLevel,
+      `${fieldPath}.defaultAutonomyLevel`,
+    ),
+    channelAutonomyLevels: participationChannelAutonomyLevels(
+      record.channelAutonomyLevels ?? defaults.channelAutonomyLevels,
+      `${fieldPath}.channelAutonomyLevels`,
+    ),
+    precedingContextMessages: participationNonNegativeInteger(
+      record.precedingContextMessages ?? defaults.precedingContextMessages,
+      `${fieldPath}.precedingContextMessages`,
+    ),
+    stalenessMs: participationPositiveInteger(
+      record.stalenessMs ?? defaults.stalenessMs,
+      `${fieldPath}.stalenessMs`,
+    ),
+    dedupeHistoryPerChannel: participationPositiveInteger(
+      record.dedupeHistoryPerChannel ?? defaults.dedupeHistoryPerChannel,
+      `${fieldPath}.dedupeHistoryPerChannel`,
+    ),
+    // Non-positive disables debounce entirely (see the field doc), so a finite
+    // integer — including <= 0 — is accepted here.
+    debounceWindowMs: participationFiniteInteger(
+      record.debounceWindowMs ?? defaults.debounceWindowMs,
+      `${fieldPath}.debounceWindowMs`,
+    ),
+  };
+}
+
+export function parseParticipationAppraiserSettings(
+  raw: unknown,
+  fieldPath: string,
+): ParticipationAppraiserSettings {
+  const defaults = createDefaultParticipationAppraiserSettings();
+  if (raw === undefined) {
+    return defaults;
+  }
+  const record = participationRecord(raw, fieldPath);
+  assertNoUnknownKeys(
+    record,
+    [
+      'enabled',
+      'appraisalDeadlineMs',
+      'appraisalMaxOutputTokens',
+      'transcriptMessageCap',
+      'transcriptMessageChars',
+    ],
+    fieldPath,
+    { errorPrefix: PARTICIPATION_ERROR_PREFIX },
+  );
+  return {
+    enabled: participationBoolean(record.enabled ?? defaults.enabled, `${fieldPath}.enabled`),
+    appraisalDeadlineMs: participationPositiveInteger(
+      record.appraisalDeadlineMs ?? defaults.appraisalDeadlineMs,
+      `${fieldPath}.appraisalDeadlineMs`,
+    ),
+    appraisalMaxOutputTokens: participationPositiveInteger(
+      record.appraisalMaxOutputTokens ?? defaults.appraisalMaxOutputTokens,
+      `${fieldPath}.appraisalMaxOutputTokens`,
+    ),
+    transcriptMessageCap: participationPositiveInteger(
+      record.transcriptMessageCap ?? defaults.transcriptMessageCap,
+      `${fieldPath}.transcriptMessageCap`,
+    ),
+    transcriptMessageChars: participationPositiveInteger(
+      record.transcriptMessageChars ?? defaults.transcriptMessageChars,
+      `${fieldPath}.transcriptMessageChars`,
+    ),
+  };
+}
+
+export function parseReservationPhaseSettings(
+  raw: unknown,
+  fieldPath: string,
+): ReservationPhaseSettings {
+  const defaults = createDefaultReservationPhaseSettings();
+  if (raw === undefined) {
+    return defaults;
+  }
+  const record = participationRecord(raw, fieldPath);
+  assertNoUnknownKeys(
+    record,
+    ['reservationTtlMs', 'minReserveDrawUnits'],
+    fieldPath,
+    { errorPrefix: PARTICIPATION_ERROR_PREFIX },
+  );
+  return {
+    reservationTtlMs: participationPositiveInteger(
+      record.reservationTtlMs ?? defaults.reservationTtlMs,
+      `${fieldPath}.reservationTtlMs`,
+    ),
+    minReserveDrawUnits: participationNonNegativeNumber(
+      record.minReserveDrawUnits ?? defaults.minReserveDrawUnits,
+      `${fieldPath}.minReserveDrawUnits`,
+    ),
+  };
+}
+
+export function parseEgressLeaseTunables(
+  raw: unknown,
+  fieldPath: string,
+): EgressLeaseTunables {
+  const defaults = createDefaultEgressLeaseTunables();
+  if (raw === undefined) {
+    return defaults;
+  }
+  const record = participationRecord(raw, fieldPath);
+  // `enabled` is intentionally NOT accepted here — it stays code-pinned false
+  // until qgqw.3 (P1). Listing it as an unknown key keeps the fail-closed guard
+  // from silently letting an operator flip on autonomous egress via config.
+  assertNoUnknownKeys(
+    record,
+    ['leaseTtlMs', 'egressDrawUnits', 'minReplyConfidence'],
+    fieldPath,
+    { errorPrefix: PARTICIPATION_ERROR_PREFIX },
+  );
+  return {
+    leaseTtlMs: participationPositiveInteger(
+      record.leaseTtlMs ?? defaults.leaseTtlMs,
+      `${fieldPath}.leaseTtlMs`,
+    ),
+    egressDrawUnits: participationPositiveNumber(
+      record.egressDrawUnits ?? defaults.egressDrawUnits,
+      `${fieldPath}.egressDrawUnits`,
+    ),
+    minReplyConfidence: participationUnitInterval(
+      record.minReplyConfidence ?? defaults.minReplyConfidence,
+      `${fieldPath}.minReplyConfidence`,
+    ),
   };
 }

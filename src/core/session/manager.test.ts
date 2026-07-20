@@ -1474,6 +1474,30 @@ describe('SessionManager', () => {
     expect(context.messages.some(message => message.content.includes('continued assistant turn'))).toBe(true);
   });
 
+  it.each(['api', 'terminal'] as const)(
+    'preserves an exact testing-marked %s owner without changing ordinary active-context routing',
+    (channelKind) => {
+      const mgr = new SessionManager(store, makeConfig());
+      const activeOwner = `${channelKind}:production-owner`;
+      const testingOwner = `${channelKind}:principal:testing:rollout-probe`;
+      const ordinarySource = `${channelKind}:ordinary-source`;
+      mgr.setActiveContextSession(activeOwner);
+
+      expect(mgr.resolveSessionChannelId(testingOwner)).toBe(testingOwner);
+      expect(mgr.resolveSessionChannelId(ordinarySource)).toBe(activeOwner);
+
+      mgr.recordUserMessage(testingOwner, 'isolated harness turn', 'u1', 'User');
+      mgr.recordUserMessage(ordinarySource, 'continued production turn', 'u1', 'User');
+
+      expect(store.getRecent(testingOwner, 1)).toEqual([
+        expect.objectContaining({ channelId: testingOwner, content: 'isolated harness turn' }),
+      ]);
+      expect(store.getRecent(activeOwner, 1)).toEqual([
+        expect.objectContaining({ channelId: activeOwner, content: 'continued production turn' }),
+      ]);
+    },
+  );
+
   it('keeps explicit turn writes on a captured API owner after the active context changes', () => {
     const config = makeConfig();
     const mgr = new SessionManager(store, config);

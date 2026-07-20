@@ -2,7 +2,6 @@ import '../../shared/utils/load-dotenv.js';
 import { createInterface } from 'node:readline/promises';
 import { stdin, stdout } from 'node:process';
 import { isTestingSessionId } from '../../core/session/session-id.js';
-import { createDefaultPostgresSessionAdapters } from '../../persistence/sessions/postgres-adapters.js';
 import { RedisSessionTailCache } from '../../persistence/sessions/redis-session-tail-cache.js';
 import {
   purgeTestingSession,
@@ -27,6 +26,7 @@ import {
   resolveTestingSessionPurgeTarget,
   TestingSessionPurgeCompanionResolutionError,
 } from './testing-session-purge-target.js';
+import { createTestingSessionPurgePostgresAdapters } from './testing-session-purge-postgres.js';
 
 interface CliOptions {
   companionId?: string;
@@ -138,9 +138,11 @@ export function runTestingSessionPurgeCli(
         throw new Error('Session purge requires config.postgresDatabaseUrl');
       }
       const target = resolveTestingSessionPurgeTarget(runtime, options);
-      const adapters = await createDefaultPostgresSessionAdapters(databaseUrl, {
+      const adapters = await createTestingSessionPurgePostgresAdapters({
+        databaseUrl,
+        multiCompanion: runtime.config.multiCompanion === true,
+        postgresSchema: target.postgresSchema,
         sessionsDir: target.sessionsDir,
-        schema: target.postgresSchema,
       });
       const projection = adapters.transcriptProjection;
       if (typeof projection.purgeChannel !== 'function') {

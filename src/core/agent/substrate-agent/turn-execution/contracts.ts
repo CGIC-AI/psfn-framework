@@ -48,6 +48,7 @@ import type {
   WikiRetrievalPort,
 } from '../../contracts.js';
 import type { FatigueBudgetPort } from '../../fatigue/fatigue-budget.js';
+import type { HumanAttentionPressurePort } from '../../fatigue/human-attention-pressure.js';
 import type { IcpFatigueRegulationReservationPort } from '../../fatigue/regulation-reservation.js';
 import type { AdaptiveToolRuntimeState } from '../../adaptive-tools-telemetry.js';
 import type { EmotionSelfModelRuntime } from '../emotion-self-model-runtime.js';
@@ -79,6 +80,7 @@ export interface TurnExecutionRuntime {
   durableChargeRecorder?: DurableRunChargeRecorder | null;
   durableChargeProbe?: DurableRunChargeProbe | null;
   fatigueBudget?: FatigueBudgetPort | null;
+  humanAttentionPressure?: HumanAttentionPressurePort | null;
   fatigueRegulationReservations?: IcpFatigueRegulationReservationPort | null;
   satellitePresence: SatellitePresencePort;
   /**

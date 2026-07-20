@@ -135,16 +135,31 @@ describe('AdminChargeLedgerDataService', () => {
     const fatigueLedger = {
       getData: vi.fn(() => makeFatigueData()),
     };
+    const humanAttentionLedger = {
+      getData: vi.fn(() => ({
+        aggregates: {
+          eventCount: 3,
+          boundaryAlertCount: 1,
+          byDecision: [{ key: 'boundary_alert', eventCount: 1 }],
+          byContact: [{ key: 'human-a', eventCount: 3 }],
+          byChannel: [{ key: 'group-a', eventCount: 3 }],
+        },
+        events: [],
+      })),
+    };
+    const fatiguePolicy = makeTestFatiguePolicyConfig();
     const service = new AdminChargeLedgerDataService(
       chargeLedger as unknown as RunChargeLedger,
       fatigueLedger,
-      makeTestFatiguePolicyConfig(),
+      fatiguePolicy,
+      humanAttentionLedger,
     );
 
     const data = await service.getChargeLedgerData({ limit: 20, runId: 'run-a' });
 
     expect(chargeLedger.getData).toHaveBeenCalledWith({ limit: 20, runId: 'run-a' });
     expect(fatigueLedger.getData).toHaveBeenCalledWith({ limit: 20, runId: 'run-a' });
+    expect(humanAttentionLedger.getData).toHaveBeenCalledWith({ limit: 20 });
     expect(data.fatigue?.aggregates.byDecision).toEqual([
       { key: 'charged', amount: 1, eventCount: 1 },
       { key: 'overcharge', amount: 1, eventCount: 1 },
@@ -166,5 +181,10 @@ describe('AdminChargeLedgerDataService', () => {
       unansweredInitiationAfterMs: 15 * 60_000,
       marginalChargeUnits: 1,
     }));
+    expect(data.humanAttention?.aggregates).toMatchObject({
+      eventCount: 3,
+      boundaryAlertCount: 1,
+    });
+    expect(data.humanAttentionPolicy).toEqual(fatiguePolicy.humanAttention);
   });
 });

@@ -27,6 +27,7 @@ import { resolveAutonomousModelCallLane } from '../../primitives/llm/model-call-
 import { COMPANION_PRIVATE_BACKGROUND_PURPOSE } from '../../shared/contracts/runtime.js';
 import { AGENT_LOOP_MAX_ASSISTANT_STEPS_PER_RUN } from '../../core/agent/turn-limits.js';
 import { resetCompletionHandoffDedupeForTests } from '../../core/agent/completion-handoff.js';
+import type { CompletionHandoffRecord } from '../../shared/contracts/completion-handoff.js';
 import {
   withCapabilityRequirement,
   type CapabilityRequirementInput,
@@ -237,6 +238,14 @@ describe('SubagentFaculty', () => {
 
   it('executes bounded subagent tasks with an independent registry and lifecycle', async () => {
     mockSubagentContent = 'task completed';
+    const lifecycleEvents: Array<{
+      handoff: CompletionHandoffRecord;
+      targetChannelId?: string;
+      noticeBuffered: boolean;
+    }> = [];
+    eventBus.on('agent.completion_handoff', event => {
+      lifecycleEvents.push(event);
+    });
     const faculty = new SubagentFaculty({
       eventBus,
       llmProvider: mockLLM(),
@@ -281,6 +290,38 @@ describe('SubagentFaculty', () => {
     });
     expect(entries[0]?.content).toBe('[SYSTEM: SubagentTask] inspect runtime state');
     expect(entries[1]?.content).toBe('task completed');
+    expect(lifecycleEvents.map(event => event.handoff.status))
+      .toEqual(['started', 'progress', 'completed']);
+    expect(lifecycleEvents.every(event => (
+      event.targetChannelId === undefined && event.noticeBuffered === false
+    ))).toBe(true);
+  });
+
+  it('preserves a completed result when its terminal lifecycle sink rejects', async () => {
+    eventBus.guard('agent.completion_handoff', event => {
+      if (event.handoff.status === 'completed') {
+        throw new Error('terminal lifecycle sink unavailable');
+      }
+      return true;
+    });
+    const faculty = new SubagentFaculty({
+      eventBus,
+      llmProvider: mockLLM(),
+      sessionStore,
+      embeddingService: null,
+      memoryProvider: null,
+      config: TEST_CONFIG,
+      parentSystemPrompt: 'test prompt',
+    });
+
+    const result = await faculty.execute({
+      name: 'terminal-handoff-failure',
+      task: 'finish despite notification infrastructure failure',
+      workSpec: buildSubagentWorkSpec(),
+    });
+
+    expect(result.outcome).toBe('completed');
+    expect(faculty.getActiveCount()).toBe(0);
   });
 
   it('spawns a subagent whose context correlation carries companion_private (d8vq.4)', async () => {
@@ -559,8 +600,9 @@ describe('SubagentFaculty', () => {
     const notices = completionNotices.peek('api:parent');
     expect(notices).toHaveLength(1);
     expect(notices[0]).toMatchObject({ status: 'completed' });
-    expect(events).toHaveLength(1);
-    expect(events[0]).toMatchObject({
+    expect(events.map(event => (event as { handoff: CompletionHandoffRecord }).handoff.status))
+      .toEqual(['started', 'progress', 'completed']);
+    expect(events.at(-1)).toMatchObject({
       noticeBuffered: true,
       handoff: expect.objectContaining({
         source: 'subagent',
@@ -613,6 +655,10 @@ describe('SubagentFaculty', () => {
   // catch path reads the hoisted accumulators, so tokens/turns and the last
   // completed turn's checkpoint survive rather than being zeroed.
   it('preserves the accumulated partial when cancel aborts an in-flight turn', async () => {
+    const handoffs: Array<{ handoff: CompletionHandoffRecord }> = [];
+    eventBus.on('agent.completion_handoff', event => {
+      handoffs.push(event);
+    });
     const faculty = new SubagentFaculty({
       eventBus,
       llmProvider: mockLLM(),
@@ -674,6 +720,10 @@ describe('SubagentFaculty', () => {
     });
     expect(result.partial?.latestCheckpoint.model).not.toBe('');
     expect(result.partial?.remainingBudget.remainingTurns).toBe(2);
+    expect(handoffs.at(-1)?.handoff).toMatchObject({
+      status: 'cancelled',
+      result: { partial: true },
+    });
   });
 
   it('emits blocked handoff when subagent spawn policy rejects required capabilities', async () => {
@@ -905,6 +955,10 @@ describe('SubagentFaculty', () => {
   // `blocked` outcome (never masquerading as completed) with a partial record.
   it('reports a blocked outcome with a partial record when execution throws', async () => {
     mockSubagentError = new Error('worker crashed');
+    const handoffs: Array<{ handoff: CompletionHandoffRecord }> = [];
+    eventBus.on('agent.completion_handoff', event => {
+      handoffs.push(event);
+    });
     const faculty = new SubagentFaculty({
       eventBus,
       llmProvider: mockLLM(),
@@ -920,6 +974,10 @@ describe('SubagentFaculty', () => {
       task: 'do work that fails',
       maxTurns: 3,
       workSpec: buildSubagentWorkSpec(),
+      sourceContext: {
+        channelId: 'api:parent',
+        requestId: 'msg-crasher',
+      },
     });
     const result = await faculty.wait(task.subagentId);
 
@@ -934,6 +992,7 @@ describe('SubagentFaculty', () => {
     });
     // No turns ran, so the full turn budget remains.
     expect(result.partial?.remainingBudget.remainingTurns).toBe(3);
+    expect(handoffs.map(event => event.handoff.status)).toEqual(['started', 'blocked']);
 
     // execute() surfaces the honest non-completed outcome as a throw.
     await expect(faculty.execute({

@@ -52,6 +52,10 @@ import type { TurnRetrievalTelemetryRecord } from '../../../turns/observability.
 import { detectTurnObservabilityWarnings } from '../../../turns/observability-warnings.js';
 import type { TurnSnapshot } from '../../../turns/snapshot.js';
 import { buildFatiguePromptAlert } from '../../fatigue/runtime-enforcement.js';
+import {
+  buildHumanAttentionBoundaryAlert,
+  type HumanAttentionPressureEvent,
+} from '../../fatigue/human-attention-pressure.js';
 import type { ResolvedAuthorContext, UserRuntimeProfile } from '../runtime-context.js';
 import { renderBackgroundCompletionsBlock } from '../../completion-notices.js';
 import { renderCanaryPromptMarker } from '../../../cogsec/canary/canary-token.js';
@@ -179,6 +183,7 @@ export async function assembleTurnPrompt(input: {
   currentSessionEntryId: number | null;
   memoryManifestSeed: ContextManifestMemorySeed | undefined;
   fatigue?: FatigueEnforcementMetadata;
+  humanAttentionPressure?: HumanAttentionPressureEvent;
   getRetrievalProvenanceRefs: () => string[];
   getObservedTurnRetrievals: () => TurnRetrievalTelemetryRecord[];
   observability: Pick<TurnExecutionObservability, 'emitObservedTurnStage' | 'emitTurnSnapshotInBackground'>;
@@ -210,6 +215,7 @@ export async function assembleTurnPrompt(input: {
     currentSessionEntryId,
     memoryManifestSeed,
     fatigue,
+    humanAttentionPressure,
     canaryToken,
     getRetrievalProvenanceRefs,
     getObservedTurnRetrievals,
@@ -321,6 +327,7 @@ export async function assembleTurnPrompt(input: {
   const runtimeContextWithFatigue = [
     runtimeContext,
     buildFatiguePromptAlert(fatigue),
+    buildHumanAttentionBoundaryAlert(humanAttentionPressure),
   ].map(section => section.trim()).filter(Boolean).join('\n\n');
   // Per-section dynamic suffix render (E2.5 no-silent-leak invariant): a
   // required section with an unresolved macro fails the turn loudly; an

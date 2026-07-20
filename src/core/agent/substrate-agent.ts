@@ -161,6 +161,7 @@ import {
   type TurnDeliveryLifecycle,
 } from './substrate-agent/turn-execution-runtime.js';
 import type { TurnSessionIdentity } from './substrate-agent/turn-execution/contracts.js';
+import type { HumanAttentionPressurePort } from './fatigue/human-attention-pressure.js';
 import { createTurnExecutionRuntimeAdapter } from './substrate-agent/turn-execution-adapter.js';
 import { parseTurnRecordBackgroundWorkHandoff } from './background-work/types.js';
 import type { BackgroundWorkRuntimeTuning } from './background-work/config.js';
@@ -245,6 +246,7 @@ export interface SubstrateAgentOptions {
   selfModelRuntime?: SelfModelRuntimeWiring;
   observerEvalSidecar?: ObserverEvalSidecarRuntime;
   fatigueBudget?: FatigueBudgetPort | null;
+  humanAttentionPressure?: HumanAttentionPressurePort | null;
   fatigueRegulationReservations?: IcpFatigueRegulationReservationPort | null;
   streamTransport?: SubstrateStreamTransport;
   appCache?: AppCache;
@@ -340,6 +342,7 @@ export class SubstrateAgent {
   private selfModelRuntimeRequired = false;
   private readonly emotionSelfModelRuntime: EmotionSelfModelRuntime;
   private readonly fatigueBudget: FatigueBudgetPort | null;
+  private readonly humanAttentionPressure: HumanAttentionPressurePort | null;
   private readonly fatigueRegulationReservations: IcpFatigueRegulationReservationPort | null;
   private durableChargeRecorder: DurableRunChargeRecorder | null = null;
   private durableChargeProbe: DurableRunChargeProbe | null = null;
@@ -570,6 +573,7 @@ export class SubstrateAgent {
     this.selfModelRuntimeRequired = options.selfModelRuntime?.requireWiring ?? false;
     this.observerEvalSidecar = options.observerEvalSidecar ?? null;
     this.fatigueBudget = options.fatigueBudget ?? null;
+    this.humanAttentionPressure = options.humanAttentionPressure ?? null;
     this.fatigueRegulationReservations = options.fatigueRegulationReservations ?? null;
     this.contactTrackingGate = options.contactTrackingGate ?? null;
     this.placesRegistryConfig = options.placesRegistryConfig;
@@ -1508,6 +1512,7 @@ export class SubstrateAgent {
       durableChargeRecorder: this.durableChargeRecorder,
       durableChargeProbe: this.durableChargeProbe,
       fatigueBudget: this.fatigueBudget,
+      humanAttentionPressure: this.humanAttentionPressure,
       fatigueRegulationReservations: this.fatigueRegulationReservations,
       satellitePresence: this.satellitePresencePort,
       companionPresence: this.companionPresence,

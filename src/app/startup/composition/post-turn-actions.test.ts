@@ -1057,6 +1057,36 @@ describe('wirePostTurnActionRuntime', () => {
     }
   });
 
+  it('fails a direct enqueue before exposing work when queue persistence fails', () => {
+    const tempDir = mkdtempSync(join(tmpdir(), 'psfn-post-turn-enqueue-failure-'));
+    const nonDirectoryParent = join(tempDir, 'not-a-directory');
+    const persistencePath = join(nonDirectoryParent, 'queue.json');
+    writeFileSync(nonDirectoryParent, 'occupied', 'utf-8');
+
+    try {
+      const eventBus = new EventBus();
+      const scheduler = new Scheduler(eventBus, {
+        tickIntervalMs: 100,
+        heartbeatIntervalMs: 1_000,
+      });
+      const runtime = wirePostTurnActionRuntime({
+        eventBus,
+        scheduler,
+        agentLoop: { waitForIdle: vi.fn().mockResolvedValue(undefined) },
+        persistencePath,
+      });
+
+      expect(() => runtime.enqueue(makeAction({
+        id: 'durable-enqueue',
+        dedupeKey: 'durable:enqueue',
+      }))).toThrow();
+      expect(runtime.listQueued()).toHaveLength(0);
+      expect(runtime.getStatus().persistence.lastPersistError).toBeTruthy();
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it('executes restored companion outreach through the real handler with an empty adaptive overlay cache', async () => {
     const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(1_700_000_250_000);
     const tempDir = mkdtempSync(join(tmpdir(), 'psfn-post-turn-outreach-restart-'));

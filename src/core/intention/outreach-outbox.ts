@@ -5,7 +5,14 @@ import { appendJsonLine, readJsonLines } from '../../persistence/jsonl.js';
 
 const log = createComponentLogger('OutreachOutbox');
 
-export type OutreachOutboxPhase = 'queued' | 'scheduled' | 'sent' | 'blocked' | 'failed' | 'skipped';
+export type OutreachOutboxPhase =
+  | 'queued'
+  | 'scheduled'
+  | 'dispatching'
+  | 'sent'
+  | 'blocked'
+  | 'failed'
+  | 'skipped';
 export type OutreachOutboxTerminalPhase = Extract<OutreachOutboxPhase, 'sent' | 'blocked' | 'failed' | 'skipped'>;
 
 export interface OutreachOutboxRecord {
@@ -79,7 +86,10 @@ function normalizeRecord(value: unknown): OutreachOutboxRecord | null {
   const recordedAt = normalizePositiveNumber(value.recordedAt);
   if (
     !phase
-    || !TERMINAL_PHASES.has(phase as OutreachOutboxPhase) && phase !== 'queued' && phase !== 'scheduled'
+    || !TERMINAL_PHASES.has(phase as OutreachOutboxPhase)
+      && phase !== 'queued'
+      && phase !== 'scheduled'
+      && phase !== 'dispatching'
     || !actionId
     || !dedupeKey
     || !channelId

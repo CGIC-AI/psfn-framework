@@ -1,9 +1,15 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { test } from 'vitest';
 import {
   formatLastSavedAt,
   resolveFloatingSaveControlState,
 } from './floating-save';
+
+const componentSource = readFileSync(
+  new URL('./FloatingSettingsSave.svelte', import.meta.url),
+  'utf8',
+);
 
 test('floating save control is neutral and disabled when settings are clean', () => {
   assert.deepEqual(
@@ -66,4 +72,9 @@ test('last-saved formatting covers empty, recent, minute, hour, and day states',
 test('future timestamps are treated as just saved despite clock skew', () => {
   const now = Date.UTC(2026, 6, 20, 16, 0, 0);
   assert.equal(formatLastSavedAt(now + 10_000, now), 'Last saved just now');
+});
+
+test('floating status announces the complete message and refreshes within 15 seconds', () => {
+  assert.match(componentSource, /aria-live="polite"\s+aria-atomic="true"/);
+  assert.match(componentSource, /setInterval\(\(\) => \{[\s\S]*?\}, 15_000\)/);
 });

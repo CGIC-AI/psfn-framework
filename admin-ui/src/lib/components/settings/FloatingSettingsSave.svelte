@@ -32,7 +32,7 @@
   onMount(() => {
     clockTimer = setInterval(() => {
       nowMs = Date.now();
-    }, 30_000);
+    }, 15_000);
   });
 
   onDestroy(() => {
@@ -51,6 +51,7 @@
       class="max-w-28 text-right text-xs font-medium leading-tight
         {control.tone === 'clean' ? 'text-shadow-500' : 'text-gold-700'}"
       aria-live="polite"
+      aria-atomic="true"
     >
       {lastSavedText}
     </span>

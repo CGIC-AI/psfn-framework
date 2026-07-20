@@ -89,6 +89,7 @@ describe('hydrateJsonBackedRuntimeConfig', () => {
       imageFalCreateModel: 'fal-ai/nano-banana-2',
       imageFalEditModel: 'xai/grok-imagine-image/quality/edit',
       imageSelfieEditModel: 'fal-ai/nano-banana-2/edit',
+      modelPurposeSelection: { chat: 'extraction' },
     }), 'utf8');
     writeFileSync(join(dataDir, 'models.json'), JSON.stringify({
       schemaVersion: 1,
@@ -221,6 +222,17 @@ describe('hydrateJsonBackedRuntimeConfig', () => {
     expect(config.imageFalCreateModel).toBe('fal-ai/nano-banana-2');
     expect(config.imageFalEditModel).toBe('xai/grok-imagine-image/quality/edit');
     expect(config.imageSelfieEditModel).toBe('fal-ai/nano-banana-2/edit');
+    // 23pp: selection referencing a valid models.json slot survives hydration.
+    expect(config.modelPurposeSelection).toEqual({ chat: 'extraction' });
     expect(config.chargePolicy?.surfaceCosts.shardLaunch).toBe(7);
+
+    // 23pp fail-closed: a selection referencing an unknown models.json slot
+    // stops hydration with an actionable message.
+    writeFileSync(join(dataDir, 'settings.json'), JSON.stringify({
+      modelPurposeSelection: { vision: 'no-such-slot' },
+    }), 'utf8');
+    expect(() => hydrateJsonBackedRuntimeConfig(loadConfig(), { seedDir: 'config' })).toThrow(
+      /modelPurposeSelection\.vision.*"no-such-slot".*primary, extraction/s,
+    );
   });
 });

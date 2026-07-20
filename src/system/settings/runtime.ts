@@ -24,6 +24,7 @@ import {
   normalizeImageProviderSetting,
   normalizeImageWorkflowSettings,
 } from '../../primitives/images/types.js';
+import { normalizeModelPurposeSelectionSetting } from '../config/model-selection-config.js';
 import {
   resolveMemoryRetrievalBudgetPct,
   resolveSessionHistoryBudgetPct,
@@ -389,6 +390,9 @@ function getWebAndGardenSettingsSnapshot(config: SubstrateConfig) {
     imageFalCreateModel: config.imageFalCreateModel ?? null,
     imageFalEditModel: config.imageFalEditModel ?? null,
     imageSelfieEditModel: config.imageSelfieEditModel ?? null,
+    modelPurposeSelection: config.modelPurposeSelection
+      ? { ...config.modelPurposeSelection }
+      : null,
     imageWorkflows: cloneImageWorkflowSettings(config.imageWorkflows),
     activeTimezone: config.activeTimezone ?? resolveActiveTimezone(),
     uiThemeId: toNonEmptyString(config.uiThemeId) ?? DEFAULT_UI_THEME_ID,
@@ -411,6 +415,7 @@ function getWebAndGardenSettingsSnapshot(config: SubstrateConfig) {
     | 'imageFalCreateModel'
     | 'imageFalEditModel'
     | 'imageSelfieEditModel'
+    | 'modelPurposeSelection'
     | 'imageWorkflows'
     | 'activeTimezone'
     | 'uiThemeId'
@@ -839,6 +844,11 @@ function applyWebAndGardenSettings(
     config.imageSelfieEditModel = normalizeFalEditModelSetting(
       settings.imageSelfieEditModel,
       'imageSelfieEditModel',
+    );
+  }
+  if ('modelPurposeSelection' in settings) {
+    config.modelPurposeSelection = normalizeModelPurposeSelectionSetting(
+      settings.modelPurposeSelection,
     );
   }
   if ('imageWorkflows' in settings) {

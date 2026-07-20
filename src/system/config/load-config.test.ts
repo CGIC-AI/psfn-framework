@@ -382,6 +382,7 @@ describe('loadConfig path defaults', () => {
     expect(config.imageFalCreateModel).toBeUndefined();
     expect(config.imageFalEditModel).toBeUndefined();
     expect(config.imageSelfieEditModel).toBeUndefined();
+    expect(config.modelPurposeSelection).toBeUndefined();
     expect(config.openRouterModelsApiUrl).toBeUndefined();
     expect(config.embeddingProvider).toBeUndefined();
     expect(config.embeddingModel).toBeUndefined();

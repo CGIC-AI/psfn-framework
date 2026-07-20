@@ -15,6 +15,7 @@ import {
   normalizeImageProviderSetting,
   normalizeImageWorkflowSettings,
 } from '../../primitives/images/types.js';
+import { normalizeModelPurposeSelectionSetting } from '../config/model-selection-config.js';
 import {
   MEMORY_RETRIEVAL_BUDGET_PCT_RANGE,
   SESSION_HISTORY_BUDGET_PCT_RANGE,
@@ -647,6 +648,11 @@ function normalizeEndpointAndGardenSettings(
     normalized.imageSelfieEditModel = normalizeFalEditModelSetting(
       settings.imageSelfieEditModel,
       'imageSelfieEditModel',
+    );
+  }
+  if ('modelPurposeSelection' in settings) {
+    normalized.modelPurposeSelection = normalizeModelPurposeSelectionSetting(
+      settings.modelPurposeSelection,
     );
   }
   if ('imageWorkflows' in settings) {

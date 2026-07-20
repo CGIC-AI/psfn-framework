@@ -1,5 +1,6 @@
 import type {
   CanonicalModelPurpose,
+  CompletionPurpose,
   ImportProcessingRouteMode,
   ModelRegistryCostMetadata,
   ModelRegistryEntry,
@@ -12,6 +13,51 @@ import type {
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 
 export type RoutingPurpose = CanonicalModelPurpose | 'context';
+
+/**
+ * Canonical CompletionPurpose → RoutingPurpose mapping for non-streamed
+ * completions. Extracted from LLMClient.toRoutingPurpose (23pp) so the
+ * agent-side gateway client and the serving-side LLMClient can never drift:
+ * both must agree on which routing lane a completion purpose lands in for
+ * per-companion model selection to target the same lane the router serves.
+ * NOTE: non-streamed `chat`-purpose completions deliberately route to the
+ * `background` lane (pre-existing behavior); streamed chat turns route `chat`
+ * via {@link toStreamRoutingPurpose}.
+ */
+export function toCompletionRoutingPurpose(purpose: CompletionPurpose): RoutingPurpose {
+  if (purpose === 'reasoning') {
+    return 'reasoning';
+  }
+  if (purpose === 'import_processing') {
+    return 'import_processing';
+  }
+  if (purpose === 'memory') {
+    return 'memory';
+  }
+  if (purpose === 'context') {
+    return 'context';
+  }
+  if (purpose === 'extraction') {
+    return 'extraction';
+  }
+  if (purpose === 'summary') {
+    return 'summary';
+  }
+  if (purpose === 'vision') {
+    return 'vision';
+  }
+  return 'background';
+}
+
+/**
+ * RoutingPurpose for a streamed call: the interactive chat turn (no work-spec
+ * purpose, or an explicit `chat` purpose) routes `chat`; work-spec-declared
+ * background streams route exactly like their completion purpose.
+ */
+export function toStreamRoutingPurpose(purpose: CompletionPurpose | undefined): RoutingPurpose {
+  const streamPurpose: CompletionPurpose = purpose ?? 'chat';
+  return streamPurpose === 'chat' ? 'chat' : toCompletionRoutingPurpose(streamPurpose);
+}
 export type ImportPolicyRejectionReason = 'strict_requires_openrouter_zdr';
 
 export interface RoutingCandidate {

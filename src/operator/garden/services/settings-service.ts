@@ -38,6 +38,10 @@ import {
   normalizeImageWorkflowSettings,
 } from '../../../primitives/images/types.js';
 import {
+  assertModelPurposeSelectionResolvable,
+  normalizeModelPurposeSelectionSetting,
+} from '../../../system/config/model-selection-config.js';
+import {
   normalizeMemoryRetrievalPolicy,
   resolveMemoryRetrievalPolicy,
   resolveMemorySalienceFloor,
@@ -670,6 +674,47 @@ export class AdminSettingsDataService implements AdminSettingsService {
     }
   }
 
+  /**
+   * 23pp: validate a `modelPurposeSelection` write fail-closed — structural
+   * shape via the shared normalizer, then every slot key against the LIVE
+   * models.json registry so an unknown/disabled selection is rejected at the
+   * admin boundary with the valid slot ids, never persisted to break startup.
+   */
+  private validateModelPurposeSelectionField(
+    payload: Record<string, unknown>,
+    errors: SettingsValidationError[],
+  ): void {
+    if (!('modelPurposeSelection' in payload)) return;
+    let normalized;
+    try {
+      normalized = normalizeModelPurposeSelectionSetting(payload.modelPurposeSelection);
+    } catch (error) {
+      this.pushFieldError(
+        errors,
+        'modelPurposeSelection',
+        error instanceof Error ? error.message : 'modelPurposeSelection is invalid',
+        'invalid_object',
+      );
+      return;
+    }
+    if (!normalized) return;
+    try {
+      assertModelPurposeSelectionResolvable({
+        modelPurposeSelection: normalized,
+        ...(this.deps.config.modelRegistry
+          ? { modelRegistry: this.deps.config.modelRegistry }
+          : {}),
+      });
+    } catch (error) {
+      this.pushFieldError(
+        errors,
+        'modelPurposeSelection',
+        error instanceof Error ? error.message : 'modelPurposeSelection references an unknown model slot',
+        'invalid_object',
+      );
+    }
+  }
+
   private validateModelCatalogRouting(
     payload: Record<string, unknown>,
     errors: SettingsValidationError[],
@@ -781,6 +826,7 @@ export class AdminSettingsDataService implements AdminSettingsService {
     this.validateHttpUrlField(payload, 'comfyUiBaseUrl', errors);
     this.validateCompositionalPolicyField(payload, errors);
     this.validateImageWorkflowsField(payload, errors);
+    this.validateModelPurposeSelectionField(payload, errors);
     this.validateModelCatalogRouting(payload, errors);
     this.validateNumberRangeField(payload, 'moodCongruenceWeight', MOOD_CONGRUENCE_WEIGHT_RANGE, errors);
     if ('memoryRetrievalPolicy' in payload) {

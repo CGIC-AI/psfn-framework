@@ -322,6 +322,56 @@ describe('AdminSettingsDataService', () => {
     expect(persisted.imageSelfieEditModel).toBeUndefined();
   });
 
+  it('persists model purpose selections that resolve against the live models.json registry (23pp)', () => {
+    const root = makeTempDir();
+    const service = buildService(buildConfig(root));
+
+    const result = service.updateSettings(JSON.stringify({
+      modelPurposeSelection: { chat: 'extraction', vision: 'primary' },
+    }));
+
+    expect(result.ok).toBe(true);
+    const persisted = loadSettings(root);
+    expect(persisted.modelPurposeSelection).toEqual({ chat: 'extraction', vision: 'primary' });
+  });
+
+  it('rejects model purpose selections referencing unknown registry slots without persisting them (23pp)', () => {
+    const root = makeTempDir();
+    const service = buildService(buildConfig(root));
+
+    const result = service.updateSettings(JSON.stringify({
+      modelPurposeSelection: { chat: 'not-a-registry-slot' },
+    }));
+
+    expect(result.ok).toBe(false);
+    expect(result.validationErrors).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        field: 'modelPurposeSelection',
+        code: 'invalid_object',
+        message: expect.stringContaining('not-a-registry-slot'),
+      }),
+    ]));
+    expect(loadSettings(root).modelPurposeSelection).toBeUndefined();
+  });
+
+  it('rejects model purpose selections with unknown purpose keys (23pp)', () => {
+    const root = makeTempDir();
+    const service = buildService(buildConfig(root));
+
+    const result = service.updateSettings(JSON.stringify({
+      modelPurposeSelection: { bigBrain: 'primary' },
+    }));
+
+    expect(result.ok).toBe(false);
+    expect(result.validationErrors).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        field: 'modelPurposeSelection',
+        code: 'invalid_object',
+        message: expect.stringContaining('unknown model purpose'),
+      }),
+    ]));
+  });
+
   it('reports local API and admin auth status from runtime config instead of direct env reads', async () => {
     const root = makeTempDir();
     const config = {

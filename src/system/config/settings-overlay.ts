@@ -38,9 +38,13 @@ export const COMPANION_SETTINGS_OVERLAY_FILE_NAME = 'settings.overlay.json';
  * activeTimezone (seam 3), voice* (seam 6), observerEvalSidecar (seam 1),
  * emotionScoping (seam 9), plus uiThemeId and discordTrigger* per the bead.
  *
- * Every entry is a runtime-owned key (see RUNTIME_SETTINGS_KEYS); no model,
- * scheduler, or capability-tier key is overlay-eligible. Keep this the single
- * source of truth — the settings contract derives its per-key scope from it.
+ * Every entry is a runtime-owned key (see RUNTIME_SETTINGS_KEYS); no scheduler
+ * or capability-tier key is overlay-eligible, and the models.json-owned keys
+ * (modelCatalog/modelRegistry/modelRoster/...) stay global — model SELECTION is
+ * per-companion via the runtime-owned `modelPurposeSelection` key (23pp) while
+ * the catalog and provider credentials remain gateway-global. Keep this the
+ * single source of truth — the settings contract derives its per-key scope
+ * from it.
  */
 export const COMPANION_SETTINGS_OVERLAY_WHITELIST = [
   'activeTimezone',
@@ -68,6 +72,14 @@ export const COMPANION_SETTINGS_OVERLAY_WHITELIST = [
   'imageFalCreateModel',
   'imageFalEditModel',
   'imageSelfieEditModel',
+  // LLM/vision lane model selection (23pp): purpose → models.json slot key.
+  // The models.json catalog/registry and all provider keys stay gateway-global;
+  // only WHICH catalog model leads each lane is companion character config.
+  'modelPurposeSelection',
+  // MoA deliberation model choices ride the same rule: selection per-companion,
+  // provider credentials and endpoints gateway-global. moaEnabled/limits stay global.
+  'moaReferenceModels',
+  'moaAggregatorModel',
   // discordTrigger*
   'discordTriggerWords',
   'discordTriggerReactions',

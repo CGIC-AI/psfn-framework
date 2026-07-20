@@ -1,4 +1,4 @@
-import type { CanonicalModelRegistry, ImportProcessingRouteMode, ModelCatalogEntry, ModelPurpose, ModelRoleAssignments, ModelSlot, ObserverEvalSidecarSettings } from '../../shared/contracts/runtime.js';
+import type { CanonicalModelRegistry, ImportProcessingRouteMode, ModelCatalogEntry, ModelPurpose, ModelPurposeSelection, ModelRoleAssignments, ModelSlot, ObserverEvalSidecarSettings } from '../../shared/contracts/runtime.js';
 import type { GroupMemorySettings } from '../config/group-memory-config.js';
 import type { EmotionScopingSettings } from '../config/emotion-scoping-config.js';
 import type { MemoryRetrievalPolicy } from '../config/memory-retrieval-policy.js';
@@ -122,6 +122,13 @@ export interface EditableSettings {
   modelCatalog?: Record<string, ModelCatalogEntry>;
   modelRoleAssignments?: ModelRoleAssignments;
   modelRoster?: Partial<Record<ModelPurpose, ModelSlot>>;
+  /**
+   * Per-companion model selection (23pp): canonical purpose → models.json slot
+   * key. Runtime-owned (settings.json / settings.overlay.json); the catalog
+   * itself stays models.json-owned and gateway-global. Selected slots lead the
+   * lane's routing chain; unset purposes keep registry-primary routing.
+   */
+  modelPurposeSelection?: ModelPurposeSelection;
   sessionHistoryBudgetPct?: number;
   memoryRetrievalBudgetPct?: number;
   moodCongruenceWeight?: number;
@@ -294,6 +301,7 @@ export const RUNTIME_SETTINGS_KEYS = [
   'extractionModel',
   'extractionProvider',
   'extractionMaxTokens',
+  'modelPurposeSelection',
   'sessionHistoryBudgetPct',
   'memoryRetrievalBudgetPct',
   'moodCongruenceWeight',
@@ -457,6 +465,7 @@ export type RuntimeSettingValue =
   | LifecycleKubernetesSettings
   | VoiceReplySegmenterSettings
   | ImageWorkflowSettings
+  | ModelPurposeSelection
   | Record<string, boolean>
   | Partial<Record<'nursery' | 'apprentice' | 'autonomous' | 'custom', string[]>>
   | { enabled: boolean; siteAllowlist?: string[]; satelliteAllowlist?: string[] };

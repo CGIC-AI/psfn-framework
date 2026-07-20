@@ -30,6 +30,7 @@ import type {
   ImportProcessingRouteMode,
   ModelCatalogEntry,
   ModelPurpose,
+  ModelPurposeSelection,
   ModelRoleAssignments,
   ModelSlot,
   ObserverEvalSidecarSettings,
@@ -254,6 +255,12 @@ export interface SubstrateConfig {
   modelCatalog?: Record<string, ModelCatalogEntry>;
   modelRoleAssignments?: ModelRoleAssignments;
   modelRegistry?: CanonicalModelRegistry;
+  /**
+   * Per-companion model selection (23pp): canonical purpose → models.json slot
+   * key from the companion's effective runtime settings. Validated fail-closed
+   * against the registry after models hydration; leads the lane's routing chain.
+   */
+  modelPurposeSelection?: ModelPurposeSelection;
   providerRegistry?: CanonicalProviderRegistry;
   credentialVault?: CredentialVaultPort;
   litellmBaseUrl?: string;

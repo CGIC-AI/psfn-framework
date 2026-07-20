@@ -320,11 +320,19 @@ async function main(): Promise<void> {
     mkdirSync(dirname(bootstrap.gatewayRpcEndpoint.socketPath), { recursive: true });
   }
   if (config.companionFleet) {
-    migrateLegacyWorkspaceForFleet({
+    const legacyWorkspaceMigration = migrateLegacyWorkspaceForFleet({
       fleet: config.companionFleet,
       legacyWorkspacePath: process.env.WORKSPACE_PATH,
       env: process.env,
     });
+    if (legacyWorkspaceMigration.reason === 'same_directory_identity') {
+      log.info('Legacy WORKSPACE_PATH already identifies a canonical Personal Workspace; migration not needed', {
+        companionId: legacyWorkspaceMigration.companionId,
+        sourcePath: legacyWorkspaceMigration.sourcePath,
+        destinationPath: legacyWorkspaceMigration.destinationPath,
+        decision: 'same_directory_identity',
+      });
+    }
     provisionFleetWorkspaces(config.companionFleet);
   } else {
     ensurePersonalFilesLayout(bootstrap.workspaceRoot);

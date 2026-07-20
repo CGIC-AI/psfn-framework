@@ -126,8 +126,8 @@ export function resolveGatewayMultiCompanionConfig(
       `satellites.json declares shared-device routing for [${sharedSatellites
         .map(satellite => satellite.satelliteId)
         .join(', ')}] but this is a single-companion (one-entry companions.json) deployment. Add the `
-      + 'companions to companions.json or remove the companionId fields — single-companion mode must '
-      + 'not silently ignore satellite ownership.',
+      + 'companions to companions.json or remove the sharedDevice declarations — single-companion '
+      + 'mode must not silently ignore shared-device authority.',
     );
   }
 

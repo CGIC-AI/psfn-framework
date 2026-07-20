@@ -53,6 +53,7 @@ const ALLOWED_IMPORTERS: ReadonlySet<string> = new Set([
   'src/operator/garden/api-routes.ts',
   'src/operator/garden/routes/partner-affect-shadow-routes.ts',
   'src/operator/garden/services/partner-affect-shadow-service.ts',
+  'src/operator/garden/services/partner-affect-shadow-service.test.ts',
 ]);
 
 /**

@@ -10,7 +10,7 @@ const OBSERVATIONS_PATH = '/api/admin/partner-affect/observations';
 
 /**
  * Read-only Partner Affect shadow inspection routes (docs/partner-affect.md
- * slice 1, psfn-framework-qeid). Surfaces the deterministic shadow estimate
+ * slice 1). Surfaces the deterministic shadow estimate
  * (per-family freshness, coverage, missingness, conflicts) and recent
  * accepted/suppressed observation records for evaluation. When no service is
  * wired the routes are honest about the absence rather than fabricating an

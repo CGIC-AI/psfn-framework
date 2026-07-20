@@ -189,7 +189,7 @@ describe('createPartnerAffectShadowIngestBridge', () => {
   });
 
   it('emits a store_error counter when persistence fails instead of swallowing it silently', async () => {
-    const { eventBus, store, counters } = createHarness();
+    const { store, counters } = createHarness();
     const warn = vi.fn();
     // Re-create with a logger spy to assert the failure is surfaced.
     const eventBus2 = new EventBus();

@@ -122,13 +122,13 @@
     },
     {
       "file": "src/boundary/gateway/attachment-materialization.ts",
-      "name": "MAX_GATEWAY_ATTACHMENT_BYTES",
-      "value": "25 * 1024 * 1024"
+      "name": "MAX_GATEWAY_ATTACHMENTS",
+      "value": "10"
     },
     {
       "file": "src/boundary/gateway/attachment-materialization.ts",
-      "name": "MAX_GATEWAY_ATTACHMENTS",
-      "value": "10"
+      "name": "MAX_GATEWAY_ATTACHMENT_BYTES",
+      "value": "25 * 1024 * 1024"
     },
     {
       "file": "src/boundary/gateway/bootstrap-input.ts",
@@ -646,13 +646,13 @@
     },
     {
       "file": "src/boundary/sandbox/capabilities/shell.ts",
-      "name": "MAX_ARG_LENGTH",
-      "value": "4096"
+      "name": "MAX_ARGS",
+      "value": "64"
     },
     {
       "file": "src/boundary/sandbox/capabilities/shell.ts",
-      "name": "MAX_ARGS",
-      "value": "64"
+      "name": "MAX_ARG_LENGTH",
+      "value": "4096"
     },
     {
       "file": "src/boundary/sandbox/capabilities/shell.ts",
@@ -1062,13 +1062,13 @@
     },
     {
       "file": "src/channels/discord/attachments.ts",
-      "name": "DISCORD_MAX_IMAGE_ATTACHMENT_BYTES",
-      "value": "8 * 1024 * 1024"
+      "name": "DISCORD_MAX_IMAGE_ATTACHMENTS_PER_MESSAGE",
+      "value": "4"
     },
     {
       "file": "src/channels/discord/attachments.ts",
-      "name": "DISCORD_MAX_IMAGE_ATTACHMENTS_PER_MESSAGE",
-      "value": "4"
+      "name": "DISCORD_MAX_IMAGE_ATTACHMENT_BYTES",
+      "value": "8 * 1024 * 1024"
     },
     {
       "file": "src/channels/discord/voice-types.ts",
@@ -1149,13 +1149,13 @@
     },
     {
       "file": "src/core/agent/completion-notices.ts",
-      "name": "MAX_NOTICE_SUMMARY_CHARS",
-      "value": "160"
+      "name": "MAX_NOTICES_PER_CHANNEL",
+      "value": "8"
     },
     {
       "file": "src/core/agent/completion-notices.ts",
-      "name": "MAX_NOTICES_PER_CHANNEL",
-      "value": "8"
+      "name": "MAX_NOTICE_SUMMARY_CHARS",
+      "value": "160"
     },
     {
       "file": "src/core/agent/fatigue/adaptive-tuning.ts",
@@ -1499,13 +1499,13 @@
     },
     {
       "file": "src/core/contacts/pending-contact-approvals.ts",
-      "name": "DEFAULT_MAX_PREVIEW_LENGTH",
-      "value": "160"
+      "name": "DEFAULT_MAX_PREVIEWS",
+      "value": "3"
     },
     {
       "file": "src/core/contacts/pending-contact-approvals.ts",
-      "name": "DEFAULT_MAX_PREVIEWS",
-      "value": "3"
+      "name": "DEFAULT_MAX_PREVIEW_LENGTH",
+      "value": "160"
     },
     {
       "file": "src/core/contacts/relationship-tools.ts",
@@ -1634,6 +1634,42 @@
       "file": "src/core/emotion/participant-trends.ts",
       "name": "DISCRETE_LABEL_CAP",
       "value": "16"
+    },
+    {
+      "file": "src/core/emotion/partner-affect/observation-guard.ts",
+      "name": "MAX_CONSENT_REF_LENGTH",
+      "value": "128",
+      "note": "Fail-closed structural cap of the partner-affect observation contract (anti-smuggling invariant, docs/partner-affect.md 6.3); deliberately not operator-mutable policy."
+    },
+    {
+      "file": "src/core/emotion/partner-affect/observation-guard.ts",
+      "name": "MAX_ID_LENGTH",
+      "value": "128",
+      "note": "Fail-closed structural cap of the partner-affect observation contract (anti-smuggling invariant, docs/partner-affect.md 6.3); deliberately not operator-mutable policy."
+    },
+    {
+      "file": "src/core/emotion/partner-affect/observation-guard.ts",
+      "name": "MAX_METRIC_NAME_LENGTH",
+      "value": "64",
+      "note": "Fail-closed structural cap of the partner-affect observation contract (anti-smuggling invariant, docs/partner-affect.md 6.3); deliberately not operator-mutable policy."
+    },
+    {
+      "file": "src/core/emotion/partner-affect/observation-guard.ts",
+      "name": "MAX_PROCESSING_REVISION_LENGTH",
+      "value": "64",
+      "note": "Fail-closed structural cap of the partner-affect observation contract (anti-smuggling invariant, docs/partner-affect.md 6.3); deliberately not operator-mutable policy."
+    },
+    {
+      "file": "src/core/emotion/partner-affect/observation-guard.ts",
+      "name": "MAX_PROVENANCE_ENTRIES",
+      "value": "8",
+      "note": "Fail-closed structural cap of the partner-affect observation contract (anti-smuggling invariant, docs/partner-affect.md 6.3); deliberately not operator-mutable policy."
+    },
+    {
+      "file": "src/core/emotion/partner-affect/observation-guard.ts",
+      "name": "MAX_UNIT_LENGTH",
+      "value": "32",
+      "note": "Fail-closed structural cap of the partner-affect observation contract (anti-smuggling invariant, docs/partner-affect.md 6.3); deliberately not operator-mutable policy."
     },
     {
       "file": "src/core/emotion/telemetry-validation.ts",
@@ -1922,13 +1958,13 @@
     },
     {
       "file": "src/core/intention/concerns.ts",
-      "name": "MAX_ACTIVE_CONCERN_LIFETIME_MS",
-      "value": "7 * 24 * 60 * 60 * 1000"
+      "name": "MAX_ACTIVE_CONCERNS",
+      "value": "7"
     },
     {
       "file": "src/core/intention/concerns.ts",
-      "name": "MAX_ACTIVE_CONCERNS",
-      "value": "7"
+      "name": "MAX_ACTIVE_CONCERN_LIFETIME_MS",
+      "value": "7 * 24 * 60 * 60 * 1000"
     },
     {
       "file": "src/core/intention/concerns.ts",
@@ -2388,18 +2424,13 @@
     },
     {
       "file": "src/core/session/manager-primitives.ts",
-      "name": "MAX_FALLBACK_RECENT_SUMMARY_ITEM_CHARS",
-      "value": "140"
-    },
-    {
-      "file": "src/core/session/manager-primitives.ts",
       "name": "MAX_FALLBACK_RECENT_SUMMARY_ITEMS",
       "value": "4"
     },
     {
       "file": "src/core/session/manager-primitives.ts",
-      "name": "MAX_HISTORY_SUMMARY_ITEM_CHARS",
-      "value": "160"
+      "name": "MAX_FALLBACK_RECENT_SUMMARY_ITEM_CHARS",
+      "value": "140"
     },
     {
       "file": "src/core/session/manager-primitives.ts",
@@ -2408,18 +2439,23 @@
     },
     {
       "file": "src/core/session/manager-primitives.ts",
+      "name": "MAX_HISTORY_SUMMARY_ITEM_CHARS",
+      "value": "160"
+    },
+    {
+      "file": "src/core/session/manager-primitives.ts",
       "name": "MAX_PRESERVED_EMOTIONAL_ENTRIES",
       "value": "6"
     },
     {
       "file": "src/core/session/manager-primitives.ts",
-      "name": "MAX_PRESERVED_SAFETY_TAG_CONTENT_CHARS",
-      "value": "240"
+      "name": "MAX_PRESERVED_SAFETY_TAGS",
+      "value": "8"
     },
     {
       "file": "src/core/session/manager-primitives.ts",
-      "name": "MAX_PRESERVED_SAFETY_TAGS",
-      "value": "8"
+      "name": "MAX_PRESERVED_SAFETY_TAG_CONTENT_CHARS",
+      "value": "240"
     },
     {
       "file": "src/core/session/manager-primitives.ts",
@@ -2688,13 +2724,13 @@
     },
     {
       "file": "src/faculties/introspection/consent-store.ts",
-      "name": "MAX_CHANNEL_ID_LENGTH",
-      "value": "240"
+      "name": "MAX_CHANNEL_IDS",
+      "value": "64"
     },
     {
       "file": "src/faculties/introspection/consent-store.ts",
-      "name": "MAX_CHANNEL_IDS",
-      "value": "64"
+      "name": "MAX_CHANNEL_ID_LENGTH",
+      "value": "240"
     },
     {
       "file": "src/faculties/introspection/consent-store.ts",
@@ -3058,13 +3094,13 @@
     },
     {
       "file": "src/faculties/memory/near-turn-memory-lane.ts",
-      "name": "MAX_STALE_REVIEW_SCAN",
-      "value": "50"
+      "name": "MAX_STALE_REVIEWS_PER_RUN",
+      "value": "3"
     },
     {
       "file": "src/faculties/memory/near-turn-memory-lane.ts",
-      "name": "MAX_STALE_REVIEWS_PER_RUN",
-      "value": "3"
+      "name": "MAX_STALE_REVIEW_SCAN",
+      "value": "50"
     },
     {
       "file": "src/faculties/memory/postgres-store.ts",
@@ -3529,13 +3565,13 @@
     },
     {
       "file": "src/operator/garden/services/images-service.ts",
-      "name": "MAX_GALLERY_TAG_CHARS",
-      "value": "64"
+      "name": "MAX_GALLERY_TAGS",
+      "value": "32"
     },
     {
       "file": "src/operator/garden/services/images-service.ts",
-      "name": "MAX_GALLERY_TAGS",
-      "value": "32"
+      "name": "MAX_GALLERY_TAG_CHARS",
+      "value": "64"
     },
     {
       "file": "src/operator/garden/services/intake-quarantine-service.ts",
@@ -3561,6 +3597,24 @@
       "file": "src/operator/garden/services/observer-eval-sidecar-service.ts",
       "name": "MAX_PAGE_LIMIT",
       "value": "1_000"
+    },
+    {
+      "file": "src/operator/garden/services/partner-affect-shadow-service.ts",
+      "name": "DEFAULT_OBSERVATION_LIST_LIMIT",
+      "value": "100",
+      "note": "Bounded read-surface page limit for the shadow inspection store; structural API bound, not estimation policy (which is JSON-owned in partner-affect-shadow.json)."
+    },
+    {
+      "file": "src/operator/garden/services/partner-affect-shadow-service.ts",
+      "name": "ESTIMATE_EVIDENCE_FETCH_LIMIT",
+      "value": "1_000",
+      "note": "Bounded read-surface page limit for the shadow inspection store; structural API bound, not estimation policy (which is JSON-owned in partner-affect-shadow.json)."
+    },
+    {
+      "file": "src/operator/garden/services/partner-affect-shadow-service.ts",
+      "name": "MAX_OBSERVATION_LIST_LIMIT",
+      "value": "500",
+      "note": "Bounded read-surface page limit for the shadow inspection store; structural API bound, not estimation policy (which is JSON-owned in partner-affect-shadow.json)."
     },
     {
       "file": "src/operator/garden/services/session-service.ts",
@@ -3746,6 +3800,18 @@
       "file": "src/persistence/postgres/model-usage-store.ts",
       "name": "MAX_TOP_N",
       "value": "100"
+    },
+    {
+      "file": "src/persistence/postgres/partner-affect-shadow-store.ts",
+      "name": "DEFAULT_PARTNER_AFFECT_SHADOW_LIST_LIMIT",
+      "value": "200",
+      "note": "Bounded read-surface page limit for the shadow inspection store; structural API bound, not estimation policy (which is JSON-owned in partner-affect-shadow.json)."
+    },
+    {
+      "file": "src/persistence/postgres/partner-affect-shadow-store.ts",
+      "name": "MAX_PARTNER_AFFECT_SHADOW_LIST_LIMIT",
+      "value": "1_000",
+      "note": "Bounded read-surface page limit for the shadow inspection store; structural API bound, not estimation policy (which is JSON-owned in partner-affect-shadow.json)."
     },
     {
       "file": "src/persistence/postgres/scheduled-prompt-store.ts",
@@ -4077,6 +4143,11 @@
     },
     {
       "file": "src/shared/contracts/intake-envelope.ts",
+      "name": "MAX_EXTRACTED_FIELDS",
+      "value": "64"
+    },
+    {
+      "file": "src/shared/contracts/intake-envelope.ts",
       "name": "MAX_EXTRACTED_FIELD_KEY_CHARS",
       "value": "128"
     },
@@ -4084,11 +4155,6 @@
       "file": "src/shared/contracts/intake-envelope.ts",
       "name": "MAX_EXTRACTED_FIELD_VALUE_CHARS",
       "value": "4096"
-    },
-    {
-      "file": "src/shared/contracts/intake-envelope.ts",
-      "name": "MAX_EXTRACTED_FIELDS",
-      "value": "64"
     },
     {
       "file": "src/shared/contracts/intake-envelope.ts",

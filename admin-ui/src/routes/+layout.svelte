@@ -405,9 +405,9 @@
           </select>
           <a
             href="/fleet"
-            class="mt-2 inline-flex text-xs font-medium text-gold-700 hover:text-gold-800"
+            class="mt-3 inline-flex w-full items-center justify-center rounded-lg border border-gold-300 bg-gold-50 px-3 py-2 text-sm font-semibold text-gold-800 transition-colors hover:border-gold-400 hover:bg-gold-100"
           >
-            Fleet overview
+            Fleet Overview
           </a>
           {#if fleetProjectionError}
             <p class="mt-1 text-[0.68rem] text-wilt-600">{fleetProjectionError}</p>

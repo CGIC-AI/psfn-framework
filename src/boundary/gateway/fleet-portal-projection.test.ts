@@ -79,18 +79,19 @@ describe('gateway fleet portal projection', () => {
         },
       ],
       source: { getFleetConnectionSnapshot },
+      channelHealth: { healthOf: () => 'up' },
       now: () => GENERATED_AT,
     });
 
     const result = await projection.resolve({ sessionToken: SESSION_TOKEN });
     expect(result).toEqual({
-      schemaVersion: 1,
+      schemaVersion: 2,
       generatedAt: GENERATED_AT.toISOString(),
       session: { state: 'authenticated' },
       companions: [{
         companionId: COMPANION_A,
         displayName: COMPANION_A,
-        availability: 'online',
+        health: { agentRpc: 'up', adminTransport: 'unknown', channels: 'up' },
         posture: { status: 'unavailable' },
         gardenPath: `/companions/${COMPANION_A}/garden`,
       }],
@@ -153,8 +154,14 @@ describe('gateway fleet portal projection', () => {
 
     await expect(projection.resolve({ sessionToken: SESSION_TOKEN })).resolves.toMatchObject({
       companions: [
-        { companionId: COMPANION_A, availability: 'online' },
-        { companionId: COMPANION_D, availability: 'degraded' },
+        {
+          companionId: COMPANION_A,
+          health: { agentRpc: 'up', adminTransport: 'unknown', channels: 'unknown' },
+        },
+        {
+          companionId: COMPANION_D,
+          health: { agentRpc: 'up', adminTransport: 'unknown', channels: 'unknown' },
+        },
       ],
     });
     const result = await projection.resolve({ sessionToken: SESSION_TOKEN });

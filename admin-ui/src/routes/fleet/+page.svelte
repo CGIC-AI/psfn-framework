@@ -1,11 +1,15 @@
 <script lang="ts">
   import { onDestroy, onMount } from 'svelte';
   import {
+    fetchFleetCardDetails,
     fetchFleetPortalProjection,
+    resolveFleetCardHealth,
+    type FleetCardDetails,
     type FleetPortalProjection,
   } from '$lib/fleet/portal';
 
   let projection = $state<FleetPortalProjection | null>(null);
+  let cardDetails = $state<Record<string, FleetCardDetails>>({});
   let loading = $state(true);
   let errorMessage = $state('');
   let controller: AbortController | null = null;
@@ -17,10 +21,16 @@
     loading = true;
     errorMessage = '';
     projection = null;
+    cardDetails = {};
     try {
       const result = await fetchFleetPortalProjection(request.signal);
       if (controller !== request) return;
       projection = result;
+      const details = await Promise.all(result.companions.map(async companion => (
+        [companion.companionId, await fetchFleetCardDetails(companion, request.signal)] as const
+      )));
+      if (controller !== request) return;
+      cardDetails = Object.fromEntries(details);
     } catch (error) {
       if (request.signal.aborted || controller !== request) return;
       errorMessage = error instanceof Error
@@ -44,11 +54,23 @@
     return `${value.slice(0, 1).toUpperCase()}${value.slice(1)}`;
   }
 
-  function availabilityClass(value: string): string {
-    if (value === 'online') return 'bg-moss-50 text-moss-700 border-moss-200';
-    if (value === 'degraded') return 'bg-gold-50 text-gold-700 border-gold-200';
-    if (value === 'offline') return 'bg-wilt-50 text-wilt-700 border-wilt-200';
+  function healthClass(value: string): string {
+    if (value === 'up') return 'bg-moss-50 text-moss-700 border-moss-200';
+    if (value === 'down') return 'bg-wilt-50 text-wilt-700 border-wilt-200';
     return 'bg-bark-100 text-shadow-600 border-bark-300';
+  }
+
+  function companionInitial(displayName: string): string {
+    return displayName.trim().slice(0, 1).toUpperCase() || '?';
+  }
+
+  function discardBrokenAvatar(companionId: string): void {
+    const details = cardDetails[companionId];
+    if (!details?.avatarUrl) return;
+    cardDetails = {
+      ...cardDetails,
+      [companionId]: { adminTransport: details.adminTransport },
+    };
   }
 
   function postureClass(value: string): string {
@@ -75,7 +97,7 @@
         </h1>
         <p class="mt-2 max-w-2xl text-sm text-shadow-600">
           Choose a companion to open their server-authorized Garden. This view
-          contains bounded connection health and redacted welfare posture for
+          separates agent, Garden transport, and channel health, with redacted welfare posture for
           companions your session may reach.
         </p>
       </div>
@@ -116,7 +138,24 @@
       >
         {#each projection.companions as companion (companion.companionId)}
           <article class="card-garden flex min-h-64 flex-col p-5">
-            <div class="flex items-start justify-between gap-3">
+            {@const details = cardDetails[companion.companionId]}
+            {@const health = resolveFleetCardHealth(companion, details)}
+            <div class="flex items-start gap-3">
+              {#if details?.avatarUrl}
+                <img
+                  src={details.avatarUrl}
+                  alt=""
+                  class="h-14 w-14 shrink-0 rounded-xl border border-bark-200 object-cover"
+                  onerror={() => discardBrokenAvatar(companion.companionId)}
+                />
+              {:else}
+                <div
+                  class="flex h-14 w-14 shrink-0 items-center justify-center rounded-xl border border-bark-200 bg-bark-100 font-serif text-xl font-semibold text-gold-700"
+                  aria-hidden="true"
+                >
+                  {companionInitial(companion.displayName)}
+                </div>
+              {/if}
               <div class="min-w-0">
                 <h2 class="truncate font-serif text-xl font-semibold text-shadow-900">
                   {companion.displayName}
@@ -125,14 +164,21 @@
                   {companion.companionId}
                 </p>
               </div>
-              <span
-                class={`shrink-0 rounded-full border px-2.5 py-1 text-xs font-medium ${availabilityClass(companion.availability)}`}
-              >
-                {displayLabel(companion.availability)}
+            </div>
+
+            <div class="mt-4 flex flex-wrap gap-2 border-t border-bark-200 pt-4" aria-label="Companion health">
+              <span class={`rounded-full border px-2.5 py-1 text-xs font-medium ${healthClass(health.agentRpc)}`}>
+                Agent {displayLabel(health.agentRpc)}
+              </span>
+              <span class={`rounded-full border px-2.5 py-1 text-xs font-medium ${healthClass(health.adminTransport)}`}>
+                Admin {health.adminTransport === 'down' ? 'Unreachable' : displayLabel(health.adminTransport)}
+              </span>
+              <span class={`rounded-full border px-2.5 py-1 text-xs font-medium ${healthClass(health.channels)}`}>
+                Channels {displayLabel(health.channels)}
               </span>
             </div>
 
-            <div class="mt-5 border-t border-bark-200 pt-4">
+            <div class="mt-4 border-t border-bark-200 pt-4">
               {#if companion.posture.status === 'unavailable'}
                 <p class="text-sm font-medium text-shadow-600">Posture unavailable</p>
                 <p class="mt-1 text-xs text-shadow-500">
@@ -167,12 +213,14 @@
             <div class="mt-auto pt-6">
               {#if !companion.gardenPath}
                 <p class="text-sm text-shadow-500">Garden access unavailable.</p>
-              {:else if companion.availability === 'offline' || companion.availability === 'unknown'}
+              {:else if health.adminTransport !== 'up'}
                 <span
                   class="inline-flex cursor-not-allowed rounded-lg border border-bark-300 px-4 py-2 text-sm font-medium text-shadow-500"
                   aria-disabled="true"
                 >
-                  {companion.availability === 'offline' ? 'Garden is offline' : 'Garden is not ready'}
+                  {health.adminTransport === 'down'
+                    ? 'Admin transport unreachable'
+                    : 'Garden reachability unknown'}
                 </span>
               {:else}
                 <a

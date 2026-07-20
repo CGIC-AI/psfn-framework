@@ -41,6 +41,7 @@ import {
   registerProcessErrorHandlers,
 } from '../startup/support/signal-shutdown.js';
 import { resolveGatewayApiSurfaceBindings, startOptionalGatewayApiServer } from './api-surface.js';
+import { createGatewayFleetPortalChannelHealthSource } from './fleet-portal-composition.js';
 import { loadSatelliteRegistryConfig } from '../../channels/backplane/satellite-registry.js';
 import { assertSatellitePlaceBindings, loadPlacesRegistryConfig } from '../../channels/backplane/places-registry.js';
 import { GatewayCompanionChannelLane } from '../../boundary/gateway/companion-channels.js';
@@ -371,6 +372,37 @@ async function main(): Promise<void> {
     dims: privilegedServices.embeddingProvider.dims,
   });
   const { discord, telegram } = channelSurfaces;
+  const primaryDiscordCompanionId = bootstrap.channelsConfig.discord.companionId
+    ?? (config.companionFleet?.companions.length === 1
+      ? config.companionFleet.companions[0]?.companionId
+      : undefined);
+  const fleetPortalChannelHealthEntries: Array<{
+    companionId: string;
+    isConnected: () => boolean | undefined;
+  }> = channelSurfaces.discordAccounts?.map(account => ({
+    companionId: account.companionId,
+    isConnected: () => account.adapter.isConnected(),
+  })) ?? (primaryDiscordCompanionId
+    ? [{
+        companionId: primaryDiscordCompanionId,
+        isConnected: () => discord.isConnected(),
+      }]
+    : []);
+  const telegramCompanionId = bootstrap.channelsConfig.telegram.companionId
+    ?? (config.companionFleet?.companions.length === 1
+      ? config.companionFleet.companions[0]?.companionId
+      : undefined);
+  if (telegram && telegramCompanionId) {
+    fleetPortalChannelHealthEntries.push({
+      companionId: telegramCompanionId,
+      // Telegram currently exposes lifecycle state but no honest live
+      // connectivity probe. Preserve that missing signal as unknown.
+      isConnected: () => undefined,
+    });
+  }
+  const fleetPortalChannelHealth = createGatewayFleetPortalChannelHealthSource(
+    fleetPortalChannelHealthEntries,
+  );
   const discordEvidenceLifecycle = fleetAuthPersistence?.discordEvidenceLifecycle;
   if (channelSurfaces.discordAccounts && discordEvidenceLifecycle) {
     for (const account of channelSurfaces.discordAccounts) {
@@ -380,18 +412,12 @@ async function main(): Promise<void> {
         account.adapter.discordEvidence,
       );
     }
-  } else if (discordEvidenceLifecycle) {
-    const singleCompanionId = bootstrap.channelsConfig.discord.companionId
-      ?? (config.companionFleet?.companions.length === 1
-        ? config.companionFleet.companions.at(0)?.companionId
-        : undefined);
-    if (singleCompanionId) {
-      discordEvidenceObservers.register(singleCompanionId, discord.discordEvidence);
-      discordEvidenceLifecycle.registerCompanionEventSource(
-        singleCompanionId,
-        discord.discordEvidence,
-      );
-    }
+  } else if (discordEvidenceLifecycle && primaryDiscordCompanionId) {
+    discordEvidenceObservers.register(primaryDiscordCompanionId, discord.discordEvidence);
+    discordEvidenceLifecycle.registerCompanionEventSource(
+      primaryDiscordCompanionId,
+      discord.discordEvidence,
+    );
   }
 
   log.info('Gateway audit persistence backend', {
@@ -602,6 +628,7 @@ async function main(): Promise<void> {
     eligibilityGate,
     gateway,
     channelsConfig: bootstrap.channelsConfig,
+    fleetPortalChannelHealth,
     satelliteRegistryProvider: () => loadSatelliteRegistryConfig(
       startupHydration.pathSnapshot.systemDataDir,
     ),

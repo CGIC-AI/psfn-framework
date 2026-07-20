@@ -16,11 +16,12 @@ import {
   type FleetFatiguePosture,
 } from '../../shared/telemetry/fleet-posture.js';
 
-const FLEET_PORTAL_PROTOCOL = Object.freeze({
-  schemaVersion: 1 as const,
+const FLEET_PORTAL_PROJECTION_PROTOCOL = Object.freeze({
+  schemaVersion: 2 as const,
   maxCompanions: 256,
   maxSerializedBytes: 65_536,
 });
+const FLEET_PORTAL_ROSTER_SCHEMA_VERSION = 1 as const;
 
 export const FLEET_PORTAL_RESPONSE_HEADERS: Readonly<Record<string, string>> = Object.freeze({
   'Cache-Control': 'no-store',
@@ -29,7 +30,7 @@ export const FLEET_PORTAL_RESPONSE_HEADERS: Readonly<Record<string, string>> = O
   'X-Content-Type-Options': 'nosniff',
 });
 
-export type FleetPortalAvailability = 'online' | 'degraded' | 'offline' | 'unknown';
+export type FleetPortalHealthStatus = 'up' | 'down' | 'unknown';
 export type FleetPortalPostureStatus = 'available' | 'stale' | 'unavailable';
 
 export type FleetPortalPosture =
@@ -50,14 +51,19 @@ export type FleetPortalPosture =
 export interface FleetPortalCompanionProjection {
   readonly companionId: string;
   readonly displayName: string;
-  readonly availability: FleetPortalAvailability;
+  readonly health: Readonly<{
+    readonly agentRpc: FleetPortalHealthStatus;
+    /** Refined by an authorized companion Garden probe in the browser. */
+    readonly adminTransport: FleetPortalHealthStatus;
+    readonly channels: FleetPortalHealthStatus;
+  }>;
   readonly posture: FleetPortalPosture;
   readonly gardenPath?: string;
   readonly avatarRef?: string;
 }
 
 export interface FleetPortalProjection {
-  readonly schemaVersion: 1;
+  readonly schemaVersion: 2;
   readonly generatedAt: string;
   readonly session: Readonly<{ state: 'authenticated' }>;
   readonly companions: readonly FleetPortalCompanionProjection[];
@@ -86,6 +92,10 @@ export interface FleetPortalConnectionSnapshotSource {
   getFleetConnectionSnapshot(): GatewayFleetConnectionSnapshot;
 }
 
+export interface FleetPortalChannelHealthSource {
+  healthOf(companionId: string): FleetPortalHealthStatus;
+}
+
 export interface GatewayFleetPortalProjectionOptions {
   readonly authorizer: FleetPortalAuthorizationBatchPort;
   readonly fleet: readonly Pick<
@@ -93,6 +103,7 @@ export interface GatewayFleetPortalProjectionOptions {
   'companionId' | 'displayName' | 'avatarRef'
   >[];
   readonly source: FleetPortalConnectionSnapshotSource;
+  readonly channelHealth?: FleetPortalChannelHealthSource;
   readonly now?: () => Date;
 }
 
@@ -107,11 +118,12 @@ function parseProjectionRequest(input: unknown): { sessionToken: string } {
   return { sessionToken: input.sessionToken };
 }
 
-function availability(connection: GatewayFleetCompanionConnection | undefined): FleetPortalAvailability {
-  if (!connection) return 'offline';
+function agentRpcHealth(
+  connection: GatewayFleetCompanionConnection | undefined,
+): FleetPortalHealthStatus {
+  if (!connection) return 'down';
   if (connection.state === 'registering') return 'unknown';
-  if (connection.state === 'ready' && connection.health === 'healthy') return 'online';
-  return 'degraded';
+  return 'up';
 }
 
 function posture(
@@ -161,7 +173,8 @@ export class GatewayFleetPortalProjection {
   private readonly now: () => Date;
 
   constructor(private readonly options: GatewayFleetPortalProjectionOptions) {
-    if (options.fleet.length === 0 || options.fleet.length > FLEET_PORTAL_PROTOCOL.maxCompanions) {
+    if (options.fleet.length === 0
+      || options.fleet.length > FLEET_PORTAL_PROJECTION_PROTOCOL.maxCompanions) {
       throw new Error('Fleet portal projection requires a bounded non-empty manifest');
     }
     const fleet = new Map<string, ProjectionManifestEntry>();
@@ -208,7 +221,13 @@ export class GatewayFleetPortalProjection {
       companions.push(Object.freeze({
         companionId: manifest.companionId,
         displayName: manifest.displayName?.trim() || manifest.companionId,
-        availability: availability(connection),
+        health: Object.freeze({
+          agentRpc: agentRpcHealth(connection),
+          // The gateway does not own the per-companion Garden transport. Do
+          // not infer this dimension from the independent agent RPC link.
+          adminTransport: 'unknown',
+          channels: this.options.channelHealth?.healthOf(manifest.companionId) ?? 'unknown',
+        }),
         posture: posture(connection, now.getTime()),
         gardenPath,
         ...(manifest.avatarRef !== undefined ? { avatarRef: manifest.avatarRef } : {}),
@@ -216,7 +235,7 @@ export class GatewayFleetPortalProjection {
     }
     companions.sort((left, right) => left.companionId.localeCompare(right.companionId));
     return Object.freeze({
-      schemaVersion: FLEET_PORTAL_PROTOCOL.schemaVersion,
+      schemaVersion: FLEET_PORTAL_PROJECTION_PROTOCOL.schemaVersion,
       generatedAt: now.toISOString(),
       session: Object.freeze({ state: 'authenticated' as const }),
       companions: Object.freeze(companions),
@@ -253,7 +272,7 @@ export class GatewayFleetPortalProjection {
     }
     companions.sort((left, right) => left.companionId.localeCompare(right.companionId));
     return Object.freeze({
-      schemaVersion: FLEET_PORTAL_PROTOCOL.schemaVersion,
+      schemaVersion: FLEET_PORTAL_ROSTER_SCHEMA_VERSION,
       companions: Object.freeze(companions),
     });
   }
@@ -279,7 +298,7 @@ export class GatewayFleetPortalProjection {
 
 export function serializeFleetPortalProjection(projection: FleetPortalProjection): Buffer {
   const serialized = Buffer.from(JSON.stringify(projection), 'utf8');
-  if (serialized.byteLength > FLEET_PORTAL_PROTOCOL.maxSerializedBytes) {
+  if (serialized.byteLength > FLEET_PORTAL_PROJECTION_PROTOCOL.maxSerializedBytes) {
     throw new Error('Fleet portal projection exceeds its protocol byte bound');
   }
   return serialized;

@@ -1,8 +1,11 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import {
+  fetchFleetCardDetails,
   fetchFleetPortalProjection,
   parseFleetPortalProjection,
+  resolveFleetCardHealth,
+  selectFirstReferenceAvatar,
 } from './portal';
 
 const COMPANION_A = '11111111-1111-4111-8111-111111111111';
@@ -15,13 +18,13 @@ afterEach(() => {
 describe('Garden fleet portal client', () => {
   it('accepts only the bounded authorized status contract', () => {
     expect(parseFleetPortalProjection({
-      schemaVersion: 1,
+      schemaVersion: 2,
       generatedAt: '2026-07-18T12:00:00.000Z',
       session: { state: 'authenticated' },
       companions: [{
         companionId: COMPANION_A,
         displayName: 'Canopy',
-        availability: 'online',
+        health: { agentRpc: 'up', adminTransport: 'unknown', channels: 'up' },
         posture: {
           status: 'available',
           updatedAt: '2026-07-18T11:59:00.000Z',
@@ -39,13 +42,13 @@ describe('Garden fleet portal client', () => {
       { recentViolationCount: 1 },
     ]) {
       expect(() => parseFleetPortalProjection({
-        schemaVersion: 1,
+        schemaVersion: 2,
         generatedAt: '2026-07-18T12:00:00.000Z',
         session: { state: 'authenticated' },
         companions: [{
           companionId: COMPANION_A,
           displayName: 'Canopy',
-          availability: 'online',
+          health: { agentRpc: 'up', adminTransport: 'unknown', channels: 'up' },
           posture: { status: 'unavailable' },
           gardenPath: `/companions/${COMPANION_A}/garden`,
           ...widened,
@@ -56,7 +59,7 @@ describe('Garden fleet portal client', () => {
 
   it('rejects non-canonical, colliding, and oversized rosters', () => {
     const base = {
-      schemaVersion: 1,
+      schemaVersion: 2,
       generatedAt: '2026-07-18T12:00:00.000Z',
       session: { state: 'authenticated' },
     };
@@ -65,7 +68,7 @@ describe('Garden fleet portal client', () => {
       companions: [{
         companionId: COMPANION_A,
         displayName: 'Canopy',
-        availability: 'online',
+        health: { agentRpc: 'up', adminTransport: 'unknown', channels: 'up' },
         posture: { status: 'unavailable' },
         gardenPath: `/companions/${COMPANION_B}/garden`,
       }],
@@ -76,13 +79,13 @@ describe('Garden fleet portal client', () => {
         {
           companionId: COMPANION_A,
           displayName: 'Canopy',
-          availability: 'online',
+          health: { agentRpc: 'up', adminTransport: 'unknown', channels: 'up' },
           posture: { status: 'unavailable' },
         },
         {
           companionId: COMPANION_A,
           displayName: 'Duplicate',
-          availability: 'offline',
+          health: { agentRpc: 'down', adminTransport: 'unknown', channels: 'unknown' },
           posture: { status: 'unavailable' },
         },
       ],
@@ -91,7 +94,7 @@ describe('Garden fleet portal client', () => {
 
   it('accepts stale/unavailable posture and rejects widened or uncapped metrics', () => {
     const base = {
-      schemaVersion: 1,
+      schemaVersion: 2,
       generatedAt: '2026-07-18T12:00:00.000Z',
       session: { state: 'authenticated' },
     };
@@ -100,7 +103,7 @@ describe('Garden fleet portal client', () => {
       companions: [{
         companionId: COMPANION_A,
         displayName: 'Canopy',
-        availability: 'degraded',
+        health: { agentRpc: 'up', adminTransport: 'unknown', channels: 'down' },
         posture: {
           status: 'stale',
           updatedAt: '2026-07-18T11:00:00.000Z',
@@ -114,7 +117,7 @@ describe('Garden fleet portal client', () => {
       companions: [{
         companionId: COMPANION_A,
         displayName: 'Canopy',
-        availability: 'online',
+        health: { agentRpc: 'up', adminTransport: 'unknown', channels: 'up' },
         posture: {
           status: 'available',
           updatedAt: '2026-07-18T12:00:00.000Z',
@@ -128,7 +131,7 @@ describe('Garden fleet portal client', () => {
 
   it('loads the cookie-authenticated no-store fleet projection', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
-      schemaVersion: 1,
+      schemaVersion: 2,
       generatedAt: '2026-07-18T12:00:00.000Z',
       session: { state: 'authenticated' },
       companions: [],
@@ -155,5 +158,76 @@ describe('Garden fleet portal client', () => {
     ]) {
       expect(source).toContain(required);
     }
+  });
+
+  it('keeps agent, admin transport, and channels independent and fail-closed', () => {
+    const companion = parseFleetPortalProjection({
+      schemaVersion: 2,
+      generatedAt: '2026-07-18T12:00:00.000Z',
+      session: { state: 'authenticated' },
+      companions: [{
+        companionId: COMPANION_A,
+        displayName: 'Canopy',
+        health: { agentRpc: 'up', adminTransport: 'unknown', channels: 'up' },
+        posture: { status: 'unavailable' },
+        gardenPath: `/companions/${COMPANION_A}/garden`,
+      }],
+    }).companions[0]!;
+
+    expect(resolveFleetCardHealth(companion, { adminTransport: 'down' })).toEqual({
+      agentRpc: 'up',
+      adminTransport: 'down',
+      channels: 'up',
+    });
+    expect(resolveFleetCardHealth({
+      ...companion,
+      health: { agentRpc: 'unknown', adminTransport: 'unknown', channels: 'unknown' },
+    })).toEqual({
+      agentRpc: 'unknown',
+      adminTransport: 'unknown',
+      channels: 'unknown',
+    });
+  });
+
+  it('selects the first reference image and falls back when none exists', () => {
+    const gardenPath = `/companions/${COMPANION_A}/garden`;
+    expect(selectFirstReferenceAvatar([
+      { id: 'first reference' },
+      { id: 'second-reference' },
+    ], gardenPath)).toBe(
+      `${gardenPath}/api/admin/image-references/first%20reference/blob`,
+    );
+    expect(selectFirstReferenceAvatar([], gardenPath)).toBeUndefined();
+  });
+
+  it('uses authorized reference-image routes for avatar and admin health', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
+      references: [{ id: 'ref-1' }, { id: 'ref-2' }],
+    }), { status: 200, headers: { 'content-type': 'application/json' } })));
+    const companion = {
+      companionId: COMPANION_A,
+      displayName: 'Canopy',
+      health: {
+        agentRpc: 'up' as const,
+        adminTransport: 'unknown' as const,
+        channels: 'up' as const,
+      },
+      posture: { status: 'unavailable' as const },
+      gardenPath: `/companions/${COMPANION_A}/garden`,
+    };
+
+    await expect(fetchFleetCardDetails(companion)).resolves.toEqual({
+      adminTransport: 'up',
+      avatarUrl: `${companion.gardenPath}/api/admin/image-references/ref-1/blob`,
+    });
+    expect(fetch).toHaveBeenCalledWith(
+      `${companion.gardenPath}/api/admin/image-references`,
+      expect.objectContaining({ credentials: 'include', cache: 'no-store' }),
+    );
+
+    vi.mocked(fetch).mockResolvedValueOnce(new Response(null, { status: 503 }));
+    await expect(fetchFleetCardDetails(companion)).resolves.toEqual({
+      adminTransport: 'down',
+    });
   });
 });

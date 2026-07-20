@@ -44,6 +44,7 @@ import type {
 } from './types.js';
 import type { ArtifactSensitivitySource } from '../../../shared/contracts/artifact-sensitivity.js';
 import type { DisclosureMemorySource } from '../../../core/cogsec/disclosure/generation-lineage.js';
+import { channelClassificationEpochAsOf } from '../../../system/trust/runtime-classification-epochs.js';
 
 function collectArtifactSensitivitySources(input: {
   selectedForPrompt: readonly ScoredMemory[];
@@ -78,11 +79,21 @@ function collectDisclosureMemorySources(input: {
     const ref = `memory:${memory.id}`;
     const subjectContactId = memory.contactId?.trim() || memory.provenance?.subjectContactId?.trim();
     const sourceChannelId = memory.provenance?.channelId?.trim();
+    // jp36.6.4: stamp the classification epoch the source channel was at WHEN THE
+    // MEMORY WAS FORMED (extractedAt), NOT the current epoch — a memory formed
+    // before a channel's invite-only → public demotion keeps its old (lower or
+    // absent) epoch and is denied auto-share to the since-demoted room by
+    // jp36.6.3's gate. Untracked-as-of-formation channels resolve to undefined and
+    // the field is omitted, matching the pre-epoch behavior byte-for-byte.
+    const sourceChannelEpoch = sourceChannelId
+      ? channelClassificationEpochAsOf(sourceChannelId, new Date(memory.extractedAt))
+      : undefined;
     byRef.set(ref, {
       ref,
       sensitivity: memory.sensitivity,
       ...(subjectContactId ? { subjectContactId } : {}),
       ...(sourceChannelId ? { sourceChannelId } : {}),
+      ...(sourceChannelEpoch !== undefined ? { sourceChannelEpoch } : {}),
       ...(memory.provenanceRefs && memory.provenanceRefs.length > 0
         ? { provenanceRefs: [...memory.provenanceRefs] }
         : {}),

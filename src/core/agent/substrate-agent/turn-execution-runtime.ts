@@ -16,6 +16,7 @@ import {
   type InternalState,
 } from '../../self-model/state.js';
 import type { ChannelMeta } from '../../../system/trust/policy.js';
+import { currentChannelClassificationEpoch } from '../../../system/trust/runtime-classification-epochs.js';
 import type {
   AgentResponse,
   CorrelationMetadata,
@@ -1068,6 +1069,11 @@ export async function handleMessageForTurn(
         classifiedAt: new Date().toISOString(),
       },
       conversationScope,
+      // jp36.6.4: this turn's own session content is admitted under the
+      // conversation channel's CURRENT epoch, so it stays auto-eligible to the
+      // room only while the room remains at that epoch. Untracked channels resolve
+      // to undefined and the epoch gate stays inert (byte-identical).
+      conversationChannelEpoch: currentChannelClassificationEpoch(conversationScope.channelId),
       memorySources: preTurnState.disclosureMemorySources,
       wikiSources: preTurnState.disclosureWikiSources,
       toolResultSources: toolResultDisclosureSources,

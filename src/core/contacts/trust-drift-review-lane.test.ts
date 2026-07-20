@@ -1,12 +1,29 @@
 import { describe, it, expect, vi } from 'vitest';
 import type { Contact } from './types.js';
 import type { EmotionalTimeSeriesPoint } from './store/emotional-baseline.js';
+import type {
+  DyadRelationshipAdvisory,
+  DyadRelationshipAdvisoryProvider,
+} from '../../shared/contracts/dyad-relationship-advisory.js';
+import { DyadRelationshipAdvisoryUnavailableError } from '../../shared/contracts/dyad-relationship-advisory.js';
 import {
   CONTACT_TRUST_DRIFT_REVIEW_ACTION_KIND,
   CONTACT_TRUST_DRIFT_REVIEW_PROCESSOR,
   ContactTrustDriftReviewLane,
   type ContactTrustDriftReviewStore,
 } from './trust-drift-review-lane.js';
+
+const ADVISORY: DyadRelationshipAdvisory = {
+  prose: 'Your background affect model reads warmth as clearly warm.',
+  provenance: { source: 'classifier_inferred', classifier: 'emo_sim' },
+  observedAtMs: 1_000,
+};
+
+function advisoryProvider(
+  impl: () => Promise<DyadRelationshipAdvisory | null>,
+): DyadRelationshipAdvisoryProvider {
+  return { describeLatestDirectedRelationship: impl };
+}
 
 // Rest window: 02:00-05:00 UTC. "Inside" and "outside" instants below are
 // fixed epochs on 2026-07-07.
@@ -276,5 +293,104 @@ describe('execute', () => {
       now: () => INSIDE_WINDOW_MS,
     });
     await expect(lane.execute({ id: 'action-4', payload: {} })).rejects.toThrow(/watermark/);
+  });
+});
+
+describe('emo_sim dyad advisory (oth4.6)', () => {
+  function promotableStore() {
+    return fakeStore({
+      contacts: [fixtureContact({ id: 'promotable', trustLevel: 'public' })],
+      timeSeriesByContact: { promotable: PROMOTABLE_SERIES },
+      verifiedLinksByContact: { promotable: 1 },
+    });
+  }
+
+  it('includes the advisory prose, marked advisory, when the provider returns a reading', async () => {
+    const deliverReview = vi.fn();
+    const lane = new ContactTrustDriftReviewLane({
+      contactStore: promotableStore(),
+      restWindow: REST_WINDOW,
+      deliverReview,
+      dyadAdvisoryProvider: advisoryProvider(() => Promise.resolve(ADVISORY)),
+      now: () => INSIDE_WINDOW_MS,
+    });
+
+    await lane.execute({ id: 'advisory-present', payload: {} });
+
+    const review = deliverReview.mock.calls[0]?.[0] as { content: string; candidateCount: number };
+    expect(review.content).toContain(ADVISORY.prose);
+    expect(review.content).toContain('advisory only');
+    expect(review.content).toContain('not a self-report');
+    expect(review.content).toContain('changes nothing');
+    // The advisory adds NO candidate — it is not a promoter/demoter.
+    expect(review.candidateCount).toBe(1);
+  });
+
+  it('omits the advisory (fail-soft) and still delivers when the provider throws unavailable', async () => {
+    const deliverReview = vi.fn();
+    const store = promotableStore();
+    const lane = new ContactTrustDriftReviewLane({
+      contactStore: store,
+      restWindow: REST_WINDOW,
+      deliverReview,
+      dyadAdvisoryProvider: advisoryProvider(() =>
+        Promise.reject(new DyadRelationshipAdvisoryUnavailableError('store down'))),
+      now: () => INSIDE_WINDOW_MS,
+    });
+
+    await lane.execute({ id: 'advisory-down', payload: {} });
+
+    expect(deliverReview).toHaveBeenCalledTimes(1);
+    const review = deliverReview.mock.calls[0]?.[0] as { content: string };
+    expect(review.content).not.toContain('Background relational read');
+    expect(review.content).toContain('promotable');
+    // The review's own candidate scan still advanced normally.
+    expect(store.watermarks.get(CONTACT_TRUST_DRIFT_REVIEW_PROCESSOR)).toBe(
+      new Date(INSIDE_WINDOW_MS).toISOString(),
+    );
+  });
+
+  it('omits the advisory when the provider returns null (no data)', async () => {
+    const deliverReview = vi.fn();
+    const lane = new ContactTrustDriftReviewLane({
+      contactStore: promotableStore(),
+      restWindow: REST_WINDOW,
+      deliverReview,
+      dyadAdvisoryProvider: advisoryProvider(() => Promise.resolve(null)),
+      now: () => INSIDE_WINDOW_MS,
+    });
+
+    await lane.execute({ id: 'advisory-null', payload: {} });
+
+    const review = deliverReview.mock.calls[0]?.[0] as { content: string };
+    expect(review.content).not.toContain('Background relational read');
+  });
+
+  it('never reads the advisory when there are no candidates (no review, no promotion pressure)', async () => {
+    const deliverReview = vi.fn();
+    const describeLatestDirectedRelationship = vi.fn(() => Promise.resolve(ADVISORY));
+    const lane = new ContactTrustDriftReviewLane({
+      contactStore: fakeStore({ contacts: [fixtureContact({ id: 'quiet', trustLevel: 'public' })] }),
+      restWindow: REST_WINDOW,
+      deliverReview,
+      dyadAdvisoryProvider: { describeLatestDirectedRelationship },
+      now: () => INSIDE_WINDOW_MS,
+    });
+
+    await lane.execute({ id: 'no-candidates', payload: {} });
+
+    expect(deliverReview).not.toHaveBeenCalled();
+    expect(describeLatestDirectedRelationship).not.toHaveBeenCalled();
+  });
+
+  it('is read-only: the advisory path exposes no trust/relationship mutators to the lane', () => {
+    // The review store surface is structurally read-only (no setTrustLevel /
+    // compareAndSetRelationshipType). This compile-time + shape assertion guards
+    // that the advisory feature did not widen it.
+    const store = promotableStore();
+    const mutatorNames = ['setTrustLevel', 'compareAndSetRelationshipType', 'applyLowTierTrustDriftSuggestion'];
+    for (const name of mutatorNames) {
+      expect((store as unknown as Record<string, unknown>)[name]).toBeUndefined();
+    }
   });
 });

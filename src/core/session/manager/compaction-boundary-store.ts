@@ -5,11 +5,7 @@ import {
 } from '../../identity/prompt-composer.js';
 import type { SessionEntry } from '../types.js';
 
-const INTERNAL_REFLECTION_CHANNEL_PREFIX = 'internal:reflection:';
-
-export function shouldPersistSessionChannel(channelId: string): boolean {
-  return !channelId.startsWith(INTERNAL_REFLECTION_CHANNEL_PREFIX);
-}
+export { shouldPersistSessionChannel } from '../session-channel-persistence.js';
 
 export function createCompactionBoundaryStore(store: SessionStore): SessionStore {
   return new Proxy(store, {

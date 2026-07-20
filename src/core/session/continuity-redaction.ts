@@ -2,7 +2,7 @@ import { isCogSecInvalidatedSummaryContent, isCogSecTombstoneContent } from '../
 import { isRecord, toRecordView } from '../../shared/utils/types.js';
 import { parseContinuityEntryProvenance } from './continuity-provenance.js';
 import type { SessionEntry } from './types.js';
-import { shouldPersistSessionChannel } from './manager/compaction-boundary-store.js';
+import { shouldPersistSessionChannel } from './session-channel-persistence.js';
 
 export const REDACTED_SESSION_ENTRY_PLACEHOLDER =
   '[redacted: source entry removed from the session journal]';

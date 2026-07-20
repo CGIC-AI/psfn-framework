@@ -23,8 +23,10 @@ import {
   type IntentionDecisionActionOptions,
   type IntentionFollowUpActionPayload,
   type IntentionOutboundMessageActionPayload,
+  type IntentionOutboundSocialDesireProvenance,
   type IntentionReminderActionPayload,
 } from './types.js';
+import { SOCIAL_DESIRE_ORIENTATIONS, type SocialDesireOrientation } from '../social-desire.js';
 import {
   hashString,
   isRecord,
@@ -304,6 +306,24 @@ export function normalizeIntentionFollowUpActionPayload(payload: unknown): Inten
   };
 }
 
+function normalizeSocialDesireProvenance(
+  value: unknown,
+): IntentionOutboundSocialDesireProvenance | null {
+  if (!isRecord(value)) return null;
+  const contactId = typeof value.contactId === 'string' ? value.contactId.trim() : '';
+  const consentId = typeof value.consentId === 'string' ? value.consentId.trim() : '';
+  const orientation = value.orientation;
+  if (
+    !contactId
+    || !isRfc4122Uuid(consentId)
+    || typeof orientation !== 'string'
+    || !SOCIAL_DESIRE_ORIENTATIONS.includes(orientation as SocialDesireOrientation)
+  ) {
+    return null;
+  }
+  return { contactId, consentId, orientation: orientation as SocialDesireOrientation };
+}
+
 export function normalizeIntentionOutboundMessageActionPayload(
   payload: unknown,
 ): IntentionOutboundMessageActionPayload | null {
@@ -329,6 +349,14 @@ export function normalizeIntentionOutboundMessageActionPayload(
       || !isRfc4122Uuid(originIcpRootInitiationId))) {
     return null;
   }
+  // A present-but-malformed social-desire block invalidates the whole payload
+  // (fail closed) rather than silently dropping the provenance claim.
+  let socialDesire: IntentionOutboundSocialDesireProvenance | undefined;
+  if (payload.socialDesire !== undefined) {
+    const normalized = normalizeSocialDesireProvenance(payload.socialDesire);
+    if (!normalized) return null;
+    socialDesire = normalized;
+  }
   return {
     channelId,
     channelType: channelType as ChannelType,
@@ -337,6 +365,7 @@ export function normalizeIntentionOutboundMessageActionPayload(
     ...(pendingFollowUpId ? { pendingFollowUpId } : {}),
     ...(concernIds.length > 0 ? { concernIds } : {}),
     ...(requiresActiveConcern ? { requiresActiveConcern } : {}),
+    ...(socialDesire ? { socialDesire } : {}),
     ...(typeof originIcpRootInitiationId === 'string'
       ? { originIcpRootInitiationId }
       : {}),

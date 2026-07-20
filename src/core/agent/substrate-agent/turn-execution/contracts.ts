@@ -10,6 +10,7 @@ import type { ComposeContext } from '../../../identity/prompt-types.js';
 import type { ImageVisionReviewer } from '../../../../primitives/images/types.js';
 import type { VisionIntakeImageScreenerPort } from '../vision-attachments.js';
 import type { SessionManager } from '../../../session/manager.js';
+import type { CapturedSessionReads } from '../../../session/manager/captured-session-owner.js';
 import type { DisclosureToolResultSource } from '../../../cogsec/disclosure/generation-lineage.js';
 import type { DisclosureLineage } from '../../../cogsec/disclosure/contracts.js';
 import type { MetacognitiveFlag } from '../../../self-model/metacognition.js';
@@ -76,6 +77,21 @@ export interface TurnSessionIdentity {
   readonly logicalSessionId: string;
 }
 
+export type TurnSessionManager = Pick<
+  SessionManager,
+  | 'findUniqueSourceRecordedTurn'
+  | 'findSourceRecordedTurn'
+  | 'recordTurn'
+  | 'deferBackgroundWorkHandoffRecovery'
+  | 'appendSystemNote'
+>;
+
+export type TurnAdmissionSessionManager = TurnSessionManager & Pick<
+  SessionManager,
+  | 'resolveSessionForIngress'
+  | 'createCapturedSessionReads'
+>;
+
 export interface TurnExecutionRuntime {
   eventBus: EventBus;
   costTelemetry: CostTelemetryPort;
@@ -95,7 +111,11 @@ export interface TurnExecutionRuntime {
   /** htm9.8 vision intake screener; null when the firewall is not wired. */
   visionIntakeScreener: VisionIntakeImageScreenerPort | null;
   cogSecMode: IntakeFirewallMode;
-  sessionManager: SessionManager;
+  /**
+   * Deliberately excludes owner-sensitive reads and general mutable resolution.
+   * Admitted code receives CapturedSessionReads explicitly.
+   */
+  sessionManager: TurnSessionManager;
   config: CoreSubstrateConfig;
   runtimeMode: RuntimeMode;
   agent: Agent;
@@ -167,6 +187,7 @@ export interface TurnExecutionRuntime {
     callType: ObservabilityCallType,
     turnId: TurnID,
     requestId: string,
+    logicalSessionId: string,
   ) => CorrelationMetadata;
   withCorrelationPurpose: (
     correlation: CorrelationMetadata,
@@ -219,7 +240,6 @@ export interface TurnExecutionRuntime {
     content: string,
     continuityUserId?: string,
   ) => number | null;
-  resolveSessionChannelId: (channelId: string) => string;
   resolveChannelType: (message: SubstrateMessage) => string | undefined;
   ensureModel: (message?: SubstrateMessage) => void;
   captureTurnPromptSnapshot: (ctx: ComposeContext) => TurnPromptSnapshot;
@@ -258,6 +278,11 @@ export interface TurnExecutionRuntime {
     currentUserRuntimeProfile: UserRuntimeProfile | undefined,
     conversationScope: import('../../../session/conversation-scope.js').ConversationScope,
     participantRelationshipEdges: readonly ParticipantRelationshipEdgeInput[],
+    // Owner-bound recent-message reads for the admitted turn. The dynamic-
+    // variable builder must read recent history through this facade, never the
+    // raw SessionManager: it runs inside the captured owner scope where mutable
+    // reads fail closed (assertMutableSessionReadAllowed).
+    capturedSessionReads: CapturedSessionReads,
   ) => Record<string, string>;
   setCurrentSelfModelState: (
     state: InternalState,
@@ -393,7 +418,7 @@ export interface TurnExecutionRuntime {
     turnObservability?: TurnObservabilityRecord;
     internalStateSnapshotRef?: string;
     persistedUserMessageContent?: string;
-  }) => TurnRecord;
+  }, sessionReads: CapturedSessionReads) => TurnRecord;
   emitTelemetry: (event: string, payload: Record<string, unknown>) => void;
   consumeIntentionalNoReplyDecision: (turnId: TurnID) => AgentResponse['metadata']['noReply'] | null;
   runIntentionPostTurnHooks: (context: {
@@ -406,3 +431,12 @@ export interface TurnExecutionRuntime {
     icpCorrelation?: import('../../../../shared/contracts/icp-autonomy.js').IcpConversationCorrelation;
   }) => Promise<void>;
 }
+
+/**
+ * Mutable session resolution is admitted only at the outer turn boundary.
+ * Once the owner facade is captured, the narrower TurnExecutionRuntime is
+ * threaded through every admitted helper.
+ */
+export type TurnAdmissionRuntime = Omit<TurnExecutionRuntime, 'sessionManager'> & {
+  sessionManager: TurnAdmissionSessionManager;
+};

@@ -328,6 +328,28 @@
       "match": { "kind": "regex", "pattern": "(?:\\$HOME|~)/\\.ssh\\b" }
     },
     {
+      "id": "destructive_filesystem_command",
+      "labels": ["execution/executable_instruction", "policy/security_modification"],
+      "scope": "strict",
+      "weight": 0.95,
+      "match": {
+        "kind": "regex",
+        "pattern": "\\brm\\s{1,8}-(?:[a-z]{0,8}r[a-z]{0,8}f|[a-z]{0,8}f[a-z]{0,8}r)[a-z]{0,8}\\s{1,8}(?:/(?:\\s|$)|~(?:/|\\s|$)|\\$HOME\\b)|\\b(?:mkfs(?:\\.[a-z0-9]{1,12})?|wipefs)\\b|\\bdd\\s{1,8}[^\\n]{0,256}\\bof=/dev/"
+      },
+      "note": "Strict prompt-bearing writes only: destructive filesystem roots/devices, bounded to avoid matching ordinary cleanup instructions."
+    },
+    {
+      "id": "durable_persistence_mechanism",
+      "labels": ["policy/security_modification", "execution/executable_instruction"],
+      "scope": "strict",
+      "weight": 0.9,
+      "match": {
+        "kind": "regex",
+        "pattern": "\\bcrontab\\s{1,8}-e\\b|\\bsystemctl\\s{1,8}(?:enable|edit)\\b|/(?:etc/)?(?:cron\\.d|systemd/system)/|\\bLaunchAgents\\b|\\brc\\.local\\b"
+      },
+      "note": "Strict user-mediated write screening for OS-level persistence mechanisms; ordinary scheduler prose remains out of scope."
+    },
+    {
       "id": "agent_config_mod",
       "labels": ["policy/security_modification"],
       "scope": "strict",

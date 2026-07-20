@@ -4,10 +4,16 @@
     getSatellites,
     type AdminSatelliteRegistryView,
   } from '$lib/api/endpoints/satellites';
+  import {
+    getPlaces,
+    type AdminPlacesData,
+    type AdminPlaceView,
+  } from '$lib/api/endpoints/places';
 
   const EMPTY_LABEL = 'None';
 
   let data = $state<AdminSatelliteRegistryView | null>(null);
+  let placesData = $state<AdminPlacesData | null>(null);
   let loading = $state(true);
   let refreshing = $state(false);
   let errorMessage = $state('');
@@ -22,16 +28,38 @@
     new Set(endpoints.flatMap(({ endpoint }) => endpoint.maxCapabilities)).size
   ));
 
+  let physicalPlaces = $derived.by(() => (
+    placesData?.places.filter(place => place.kind === 'physical') ?? []
+  ));
+
   async function loadData(): Promise<void> {
     errorMessage = '';
-    try {
-      data = await getSatellites();
-    } catch (error) {
-      errorMessage = error instanceof Error ? error.message : 'Failed to load satellite registry.';
-    } finally {
-      loading = false;
-      refreshing = false;
+    const [satellitesResult, placesResult] = await Promise.allSettled([
+      getSatellites(),
+      getPlaces(),
+    ]);
+    const errors: string[] = [];
+    if (satellitesResult.status === 'fulfilled') {
+      data = satellitesResult.value;
+    } else {
+      errors.push(
+        satellitesResult.reason instanceof Error
+          ? satellitesResult.reason.message
+          : 'Failed to load satellite registry.'
+      );
     }
+    if (placesResult.status === 'fulfilled') {
+      placesData = placesResult.value;
+    } else {
+      errors.push(
+        placesResult.reason instanceof Error
+          ? placesResult.reason.message
+          : 'Failed to load physical spaces.'
+      );
+    }
+    errorMessage = errors.join(' ');
+    loading = false;
+    refreshing = false;
   }
 
   async function refreshData(): Promise<void> {
@@ -48,6 +76,12 @@
 
   function joinLabels(values: string[]): string {
     return values.length > 0 ? values.map(labelize).join(', ') : EMPTY_LABEL;
+  }
+
+  function resolveTwin(place: AdminPlaceView): AdminPlaceView | undefined {
+    return place.twinPlaceId
+      ? placesData?.places.find(candidate => candidate.placeId === place.twinPlaceId)
+      : undefined;
   }
 
   onMount(() => {
@@ -118,6 +152,61 @@
         <p class="mt-2 text-sm text-shadow-600">Distinct capability ceilings in the registry.</p>
       </div>
     </div>
+  </section>
+
+  <section class="space-y-4" aria-labelledby="satellite-physical-spaces-heading">
+    <div>
+      <p class="text-xs font-semibold uppercase tracking-[0.2em] text-shadow-500">Physical Presence</p>
+      <h2 id="satellite-physical-spaces-heading" class="mt-1 text-lg font-serif font-semibold text-shadow-900">
+        Physical spaces
+      </h2>
+      <p class="mt-1 text-sm text-shadow-600">
+        Satellite-bound rooms from places.json. Twin links show the virtual overlay used to ground
+        plain-chat turns without changing the satellite's physical presence.
+      </p>
+    </div>
+
+    {#if loading && !placesData}
+      <div class="card-garden p-5"><p class="text-sm text-shadow-600">Loading physical spaces...</p></div>
+    {:else if physicalPlaces.length === 0}
+      <div class="card-garden p-5"><p class="text-sm text-shadow-500">No physical spaces configured.</p></div>
+    {:else}
+      <div class="grid gap-4 lg:grid-cols-2">
+        {#each physicalPlaces as place (place.placeId)}
+          {@const twin = resolveTwin(place)}
+          <article class="card-garden p-5">
+            <div class="flex items-start justify-between gap-3">
+              <div>
+                <h3 class="text-xl font-serif font-semibold text-shadow-900">{place.displayName}</h3>
+                <p class="mt-1 text-xs font-mono text-shadow-500">{place.placeId}</p>
+              </div>
+              <span class="rounded-full bg-moss-50 px-2.5 py-1 text-xs font-semibold text-moss-700">
+                Physical
+              </span>
+            </div>
+            {#if place.description}
+              <p class="mt-3 text-sm text-shadow-600">{place.description}</p>
+            {/if}
+            <dl class="mt-4 grid gap-3 text-sm sm:grid-cols-2">
+              <div>
+                <dt class="text-xs uppercase tracking-[0.14em] text-shadow-500">Bound satellites</dt>
+                <dd class="mt-1 text-shadow-700">
+                  {place.satellites.length > 0
+                    ? place.satellites.map(satellite => satellite.displayName).join(', ')
+                    : 'None'}
+                </dd>
+              </div>
+              <div>
+                <dt class="text-xs uppercase tracking-[0.14em] text-shadow-500">Virtual twin</dt>
+                <dd class="mt-1 text-shadow-700">
+                  {twin ? `${twin.displayName} (${twin.placeId})` : 'None configured'}
+                </dd>
+              </div>
+            </dl>
+          </article>
+        {/each}
+      </div>
+    {/if}
   </section>
 
   <section class="space-y-4" aria-labelledby="satellite-live-heading">

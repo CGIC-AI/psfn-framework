@@ -16,7 +16,14 @@ import type { SatelliteRegistryConfig } from '../../shared/contracts/satellite-r
 import type { SubstrateMessage } from '../../shared/contracts/runtime.js';
 import { deriveCompanionAuthToken } from './companion-auth.js';
 import { EventBus } from '../../shared/event-bus.js';
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync, existsSync } from 'node:fs';
+import {
+  existsSync,
+  mkdtempSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { CapabilityRuntime } from '../../system/capabilities/runtime.js';
@@ -138,6 +145,30 @@ function createMinimalOptions(): GatewayServerOptions {
     wyomingShardRouting: TEST_WYOMING_SHARD_ROUTING,
     eventBus: new EventBus(),
     approvalParentLabelProvider: (companionId) => `Test ${companionId}`,
+  };
+}
+
+function withSharedSatelliteEligibility(
+  options: GatewayServerOptions,
+): GatewayServerOptions {
+  return {
+    ...options,
+    icpAutonomyStore: {
+      getAvailability: vi.fn(async (companionId: string) => ({
+        companionId,
+        state: 'available',
+        issuedAtMs: Date.now() - 1_000,
+        expiresAtMs: Date.now() + 60_000,
+        source: 'companion',
+        revision: 1,
+      })),
+    } as any,
+    icpInitiationPolicyAuthority: {
+      resolve: vi.fn(),
+      authorizeHandoff: vi.fn(),
+      runAuthorizedHandoff: vi.fn(),
+    } as any,
+    sharedSatelliteQuietHoursAllows: () => true,
   };
 }
 
@@ -297,10 +328,11 @@ function makeChannelMessage(channelType: 'discord' | 'telegram' | 'api' | 'termi
   } as any;
 }
 
-function makeSatelliteVoiceMessage(satelliteId: string, companionId?: string) {
+function makeSatelliteVoiceMessage(satelliteId: string, primaryCompanionId?: string) {
   const message = makeChannelMessage('api');
   message.routing = {
     source: 'satellite',
+    canonicalContactId: 'contact-partner',
     satellite: {
       schemaVersion: 1,
       satelliteId,
@@ -311,7 +343,16 @@ function makeSatelliteVoiceMessage(satelliteId: string, companionId?: string) {
       sessionId: `session-${satelliteId}`,
       mobility: 'mobile',
       promptChannelType: 'voice',
-      ...(companionId ? { companionId } : {}),
+      ...(primaryCompanionId
+        ? {
+            sharedDevice: {
+              primaryCompanionId,
+              observationRecipients: [],
+              emanationMemberIds: [primaryCompanionId],
+              responseLease: { durationMs: 5_000, activeConversationTtlMs: 60_000 },
+            },
+          }
+        : {}),
       capabilities: {
         advertised: ['audio_input'],
         registryMax: ['audio_input'],
@@ -328,6 +369,14 @@ function makeSatelliteVoiceMessage(satelliteId: string, companionId?: string) {
 function voiceStreamResponder(routed: { messages: any[] }) {
   return (msg: any, emit: (response: unknown) => void) => {
     if (!msg.id || typeof msg.method !== 'string') return;
+    if (msg.method === 'satellite.response.eligibility') {
+      emit({
+        jsonrpc: '2.0',
+        id: msg.id,
+        result: { fatigueAllows: true },
+      });
+      return;
+    }
     if (msg.method === 'voice.transcript.begin' || msg.method === 'voice.transcript.chunk') {
       if (msg.method === 'voice.transcript.begin') {
         routed.messages.push(msg.params.message);
@@ -489,7 +538,7 @@ describe('resolveGatewayMultiCompanionConfig', () => {
     }, channels, EMPTY_SATELLITE_REGISTRY)).toThrow(/absent from companions\.json/);
   });
 
-  it('fails closed when satellites.json binds a satellite to a companion outside the fleet', () => {
+  it('fails closed when a shared satellite names a companion outside the fleet', () => {
     expect(() => resolveGatewayMultiCompanionConfig({
       multiCompanion: true,
       companionFleet: resolvedFleet(['11111111-1111-4111-8111-111111111111']),
@@ -500,10 +549,31 @@ describe('resolveGatewayMultiCompanionConfig', () => {
         satelliteId: 'sat-app',
         displayName: 'Satellite App',
         mobility: 'mobile',
-        companionId: '22222222-2222-4222-8222-222222222222',
+        sharedDevice: {
+          primaryCompanionId: '22222222-2222-4222-8222-222222222222',
+          observationRecipients: [],
+          emanationMemberIds: ['22222222-2222-4222-8222-222222222222'],
+          responseLease: { durationMs: 5_000, activeConversationTtlMs: 60_000 },
+        },
         endpoints: [],
       }],
     })).toThrow(/satellites\.json.*absent from companions\.json/);
+  });
+
+  it('fails closed when an enabled fleet satellite omits shared-device authority', () => {
+    expect(() => resolveGatewayMultiCompanionConfig({
+      multiCompanion: true,
+      companionFleet: resolvedFleet(['11111111-1111-4111-8111-111111111111']),
+    }, baseChannels(), {
+      schemaVersion: 1,
+      enabled: true,
+      satellites: [{
+        satelliteId: 'sat-ungoverned',
+        displayName: 'Ungoverned',
+        mobility: 'static',
+        endpoints: [],
+      }],
+    })).toThrow(/requires sharedDevice authority/);
   });
 
   it('does not silently ignore satellite ownership for a single-companion deployment', () => {
@@ -514,7 +584,12 @@ describe('resolveGatewayMultiCompanionConfig', () => {
         satelliteId: 'sat-app',
         displayName: 'Satellite App',
         mobility: 'mobile',
-        companionId: '11111111-1111-4111-8111-111111111111',
+        sharedDevice: {
+          primaryCompanionId: '11111111-1111-4111-8111-111111111111',
+          observationRecipients: [],
+          emanationMemberIds: ['11111111-1111-4111-8111-111111111111'],
+          responseLease: { durationMs: 5_000, activeConversationTtlMs: 60_000 },
+        },
         endpoints: [],
       }],
     })).toThrow(/single-companion \(one-entry companions\.json\) deployment/);
@@ -860,6 +935,60 @@ describe('GatewayServer multi-companion identify (flag on)', () => {
         path: join(personalB, 'intrusion.txt'),
         content: 'nope',
       })).error).toBeDefined();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('denies filesystem writes and edits to every authenticated companion managed skills root', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'psfn-gateway-skills-protection-'));
+    const companionA = '11111111-1111-4111-8111-111111111111';
+    const companionB = '22222222-2222-4222-8222-222222222222';
+    const personalA = join(root, 'personal', companionA);
+    const personalB = join(root, 'personal', companionB);
+    for (const workspacePath of [personalA, personalB]) {
+      mkdirSync(join(workspacePath, 'skills', 'x'), { recursive: true });
+      writeFileSync(join(workspacePath, 'skills', 'x', 'SKILL.md'), 'before');
+    }
+    try {
+      const routing = multiCompanion({});
+      routing.personalWorkspaceByCompanionId = {
+        [companionA]: personalA,
+        [companionB]: personalB,
+        '33333333-3333-4333-8333-333333333333': join(
+          root,
+          'personal',
+          '33333333-3333-4333-8333-333333333333',
+        ),
+      };
+      const baseOptions = createMinimalOptions();
+      const { connect } = await setupServer({
+        ...baseOptions,
+        policyConfig: {
+          ...baseOptions.policyConfig,
+          protectedWritePaths: ['/workspace/skills'],
+        },
+        multiCompanion: routing,
+        capabilityTierProvider: () => 'autonomous',
+      });
+      const connA = await connect();
+      const connB = await connect();
+      await identifyAgent(connA, companionA, 1);
+      await identifyAgent(connB, companionB, 2);
+
+      for (const [conn, workspacePath] of [[connA, personalA], [connB, personalB]] as const) {
+        const skillPath = join(workspacePath, 'skills', 'x', 'SKILL.md');
+        expect((await invokeRpc(conn, 3, 'fs.write', {
+          path: skillPath,
+          content: 'hostile',
+        })).error?.code).toBe(GatewayErrors.POLICY_DENIED);
+        expect((await invokeRpc(conn, 4, 'fs.edit', {
+          path: skillPath,
+          oldText: 'before',
+          newText: 'hostile',
+        })).error?.code).toBe(GatewayErrors.POLICY_DENIED);
+        expect(readFileSync(skillPath, 'utf8')).toBe('before');
+      }
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -1341,10 +1470,12 @@ describe('GatewayServer multi-companion routing (flag on)', () => {
     expect(methodFrames(connB, 'voice.transcript.begin')).toHaveLength(1);
   });
 
-  it('routes multi-companion satellite voice only to the companion bound to that satellite', async () => {
+  it('routes a shared satellite voice lease only to its Primary', async () => {
     const routed = { messages: new Array<SubstrateMessage>() };
+    const auditAppend = vi.fn(async () => 1);
     const { server, connect } = await setupServer({
-      ...createMinimalOptions(),
+      ...withSharedSatelliteEligibility(createMinimalOptions()),
+      auditStore: createMockAuditStore({ append: auditAppend }),
       multiCompanion: multiCompanion({ api: '11111111-1111-4111-8111-111111111111' }),
     });
     const connA = await connect();
@@ -1359,9 +1490,28 @@ describe('GatewayServer multi-companion routing (flag on)', () => {
     expect(methodFrames(connA, 'voice.transcript.begin')).toHaveLength(0);
     expect(methodFrames(connB, 'voice.transcript.begin')).toHaveLength(1);
     expect(routed.messages[0]?.routing?.gateway?.companionId).toBe('22222222-2222-4222-8222-222222222222');
+    await vi.waitFor(() => {
+      expect(auditAppend).toHaveBeenCalledWith(expect.objectContaining({
+        method: 'satellite.response.lease',
+        decision: 'ALLOW',
+      }));
+    });
+
+    await server.recordSharedSatelliteObservationAudit({
+      satelliteId: 'sat-app',
+      companionId: '22222222-2222-4222-8222-222222222222',
+      scope: 'presence',
+      eventId: 'event-1',
+      timestamp: 1_000,
+    });
+    expect(auditAppend).toHaveBeenCalledWith({
+      method: 'satellite.observation.delivered',
+      decision: 'ALLOW',
+      params: expect.objectContaining({ eventId: 'event-1' }),
+    });
   });
 
-  it('fails closed when multi-companion satellite voice has no companion binding', async () => {
+  it('fails closed when multi-companion satellite voice has no shared-device policy', async () => {
     const { server, connect } = await setupServer({
       ...createMinimalOptions(),
       multiCompanion: multiCompanion({ api: '11111111-1111-4111-8111-111111111111' }),
@@ -1369,7 +1519,7 @@ describe('GatewayServer multi-companion routing (flag on)', () => {
     const connA = await connect();
     await identifyAgent(connA, '11111111-1111-4111-8111-111111111111', 1);
     await expect(server.requestAgentVoiceStream(makeSatelliteVoiceMessage('sat-unbound')))
-      .rejects.toThrow(/satellite "sat-unbound" has no companion binding/i);
+      .rejects.toThrow(/satellite "sat-unbound" has no shared-device policy/i);
     expect(methodFrames(connA, 'voice.transcript.begin')).toHaveLength(0);
   });
 

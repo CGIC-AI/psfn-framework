@@ -1,8 +1,8 @@
 // ── Dual-presence classification + mindspace twin default (vinz.29) ──
 // Pins decisions 9-13: per-turn device-origin classification (satellite origin
 // = physical emanation; plain chat = mindspace), and the situated fallback
-// chain on mindspace turns (deliberate virtual move → twin of the durable
-// last-known physical room → active physical emanation). Fixtures are neutral;
+// chain on mindspace turns (deliberate virtual move → session assertion twin →
+// twin of the durable last-known physical room). Fixtures are neutral;
 // any character-facing mindspace name is companion-data, never committed here.
 
 import { describe, expect, it } from 'vitest';
@@ -43,6 +43,14 @@ const REGISTRY: PlacesRegistryConfig = {
       mirrorsPlaceId: 'place.bedroom',
       affordances: [],
     },
+    {
+      placeId: 'place.office-twin',
+      siteId: 'site.mindspace',
+      displayName: 'Office (Twin)',
+      kind: 'virtual',
+      mirrorsPlaceId: 'place.office',
+      affordances: [],
+    },
   ],
 };
 
@@ -77,22 +85,21 @@ describe('classifyTurnPresenceMode', () => {
     expect(classifyTurnPresenceMode(message)).toBe('physical');
   });
 
-  it('classifies wyoming (voice endpoint) routing as physical emanation', () => {
+  it('classifies structured wyoming voice-endpoint routing as physical emanation', () => {
     expect(classifyTurnPresenceMode(makeMessage({ wyoming: { satelliteId: 'sat.1' } }))).toBe('physical');
-    expect(classifyTurnPresenceMode(makeMessage({ source: 'wyoming' }))).toBe('physical');
   });
 
-  it('classifies a satellite routing source as physical emanation', () => {
-    expect(classifyTurnPresenceMode(makeMessage({ source: 'satellite' }))).toBe('physical');
-  });
-
-  it('classifies satellite/embodiment presence claims as physical emanation', () => {
+  it('does not let source strings or physical presence hints override a chat origin', () => {
+    expect(classifyTurnPresenceMode(makeMessage({ source: 'satellite' }))).toBe('mindspace');
+    expect(classifyTurnPresenceMode(makeMessage({ source: 'wyoming' }))).toBe('mindspace');
     expect(classifyTurnPresenceMode(makeMessage({
+      source: 'discord',
       presence: { kind: 'satellite', satelliteId: 'sat.1', companionId: 'c1' },
-    }))).toBe('physical');
+    }))).toBe('mindspace');
     expect(classifyTurnPresenceMode(makeMessage({
+      source: 'api',
       presence: { kind: 'embodiment', embodimentId: 'emb.1', companionId: 'c1' },
-    }))).toBe('physical');
+    }))).toBe('mindspace');
   });
 
   it('classifies plain chat origins (discord/telegram/api, no routing) as mindspace', () => {
@@ -126,13 +133,45 @@ describe('resolveTurnSituatedFallbackPlaceId', () => {
     })).toBe('place.office-twin-elsewhere');
   });
 
-  it('keeps the physical emanation fallback when no twin is configured (legacy parity)', () => {
+  it('lets a session-scoped narrative assertion override the mirrored default', () => {
     expect(resolveTurnSituatedFallbackPlaceId({
       message: makeMessage({ source: 'discord' }),
       placesRegistry: REGISTRY,
-      emanationPlaceId: 'place.office',
-      durableLocation: physicalDurableLocation('place.office'),
-    })).toBe('place.office');
+      sessionOverridePhysicalPlaceId: 'place.office',
+      emanationPlaceId: 'place.bedroom',
+      durableLocation: physicalDurableLocation(),
+    })).toBe('place.office-twin');
+  });
+
+  it('keeps a deliberate virtual move above a session narrative override', () => {
+    expect(resolveTurnSituatedFallbackPlaceId({
+      message: makeMessage({ source: 'discord' }),
+      placesRegistry: REGISTRY,
+      virtualMovePlaceId: 'place.office-twin-elsewhere',
+      sessionOverridePhysicalPlaceId: 'place.office',
+      durableLocation: physicalDurableLocation(),
+    })).toBe('place.office-twin-elsewhere');
+  });
+
+  it('ignores a virtual move for a physical-origin turn and keeps the physical fallback', () => {
+    expect(resolveTurnSituatedFallbackPlaceId({
+      message: makeMessage({
+        satellite: { placeId: 'place.bedroom' } as unknown as NonNullable<SubstrateMessage['routing']>['satellite'],
+      }),
+      placesRegistry: REGISTRY,
+      virtualMovePlaceId: 'place.office-twin-elsewhere',
+      emanationPlaceId: 'place.bedroom',
+      durableLocation: physicalDurableLocation(),
+    })).toBe('place.bedroom');
+  });
+
+  it('does not present a physical emanation as the place of a plain-chat turn when no twin exists', () => {
+    expect(resolveTurnSituatedFallbackPlaceId({
+      message: makeMessage({ source: 'discord' }),
+      placesRegistry: REGISTRY,
+      emanationPlaceId: 'place.unmapped',
+      durableLocation: physicalDurableLocation('place.unmapped'),
+    })).toBeUndefined();
   });
 
   it('never twins a virtual or presence-hint-only durable location', () => {

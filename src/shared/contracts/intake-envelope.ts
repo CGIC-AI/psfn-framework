@@ -158,6 +158,7 @@ export const INTAKE_SINKS = [
   'prompt_assembly',
   'memory_write',
   'wiki_write',
+  'skill_write',
   'persona_mutation',
   'trust_mutation',
   'tool_egress',

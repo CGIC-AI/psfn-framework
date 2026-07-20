@@ -13,7 +13,6 @@ import {
   type StartupConfigHydrationResult,
 } from './bootstrap-helpers.js';
 import { RUNTIME_LAYOUT_MODE } from '../../../persistence/layout.js';
-import { verifyConcernSofteningStartupConfig } from '../../../core/intention/concern-softening.js';
 
 export interface StartupPreflightLogger {
   warn(message: string, meta?: Record<string, unknown>): void;
@@ -37,18 +36,6 @@ export interface ResolveStartupLifecycleOptions {
 export interface ResolveStartupPreflightOptions extends StartupConfigHydrationOptions {
   entrypoint: RuntimeEntrypoint;
   logger?: StartupPreflightLogger;
-}
-
-function assertStaticStartupConfigs(env: NodeJS.ProcessEnv): void {
-  const concernSofteningResult = verifyConcernSofteningStartupConfig({
-    configDir: env.CONFIG_DIR,
-  });
-  if (concernSofteningResult.ok) return;
-
-  throw new Error([
-    'Static startup config validation failed:',
-    ...concernSofteningResult.errors.map(error => `- ${error}`),
-  ].join('\n'));
 }
 
 export function resolveStartupLifecycleBundle(
@@ -80,7 +67,6 @@ export function resolveStartupPreflightBundle(
       { keys: ignoredMutableEnvKeys },
     );
   }
-  assertStaticStartupConfigs(env);
   const startupHydration = hydrateCanonicalStartupConfig(config, {
     env,
     secretAuthority: options.secretAuthority,

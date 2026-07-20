@@ -214,6 +214,7 @@ function createSessionComposition(
     continuityStore = new UserContinuityStore(resolveContinuityDir(companionDataDir));
     sessionManager.crossChannelContinuity = createUserContinuityPort(
       continuityStore,
+      (channelId, minId, maxId) => sessionStore.getEntriesInRange(channelId, minId, maxId),
       channelId => continuityChannelIds.has(channelId),
     );
   } else {

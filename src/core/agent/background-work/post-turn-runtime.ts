@@ -2,6 +2,7 @@ import type { AgentMessage } from '../../../boundary/pi-agent/index.js';
 import type { LLMProviderPort, MemoryExtractor } from '../contracts.js';
 import type { AgentResponse, SubstrateMessage, TurnRecord } from '../../../shared/contracts/runtime.js';
 import type { SessionManager } from '../../session/manager.js';
+import type { CapturedSessionReads } from '../../session/manager/captured-session-owner.js';
 import type {
   IntentionPostTurnHookContext,
   IntentionPostTurnHookRunOptions,
@@ -25,8 +26,22 @@ import { buildSubsystemOutputRef } from '../../../shared/contracts/subsystem-out
 
 const SOURCE_RECORD_GRACE_MS = 60_000;
 
+export type PostTurnBackgroundSessionManager = Pick<
+  SessionManager,
+  | 'createCapturedSessionReads'
+  | 'isSourceRecordedTurnEligible'
+  | 'findSourceRecordedTurn'
+  | 'withStableRecordedTurnEligibilitySnapshot'
+  | 'withSourceRecordedTurnEligibilityFence'
+>;
+
+type AdmittedPostTurnBackgroundSessionManager = Omit<
+  PostTurnBackgroundSessionManager,
+  'createCapturedSessionReads'
+>;
+
 export interface PostTurnBackgroundRuntimeDependencies {
-  sessionManager: SessionManager;
+  sessionManager: PostTurnBackgroundSessionManager;
   llmProvider: LLMProviderPort;
   getMemoryExtractor: () => MemoryExtractor | null;
   runIntentionPostTurnHooks: (
@@ -39,10 +54,17 @@ export interface PostTurnBackgroundRuntimeDependencies {
   now?: () => number;
 }
 
+type AdmittedPostTurnBackgroundRuntimeDependencies = Omit<
+  PostTurnBackgroundRuntimeDependencies,
+  'sessionManager'
+> & {
+  sessionManager: AdmittedPostTurnBackgroundSessionManager;
+};
+
 function requireCanonicalTurnRecord(
   source: BackgroundWorkSourceRef,
   jobCreatedAtMs: number,
-  dependencies: PostTurnBackgroundRuntimeDependencies,
+  dependencies: AdmittedPostTurnBackgroundRuntimeDependencies,
 ): TurnRecord {
   if (!dependencies.sessionManager.isSourceRecordedTurnEligible(
     source.channelId,
@@ -141,9 +163,11 @@ function requireMaxSessionEntryId(source: BackgroundWorkSourceRef): number {
 
 async function withStableConsumedSnapshot<T>(
   input: BackgroundWorkExecutionInput,
-  dependencies: PostTurnBackgroundRuntimeDependencies,
-  readSnapshot: () => ReturnType<SessionManager['getRecentMessagesAtOrBefore']>,
-  operation: (entries: ReturnType<SessionManager['getRecentMessagesAtOrBefore']>) => Promise<T>,
+  dependencies: AdmittedPostTurnBackgroundRuntimeDependencies,
+  readSnapshot: () => ReturnType<CapturedSessionReads['getRecentMessagesAtOrBefore']>,
+  operation: (
+    entries: ReturnType<CapturedSessionReads['getRecentMessagesAtOrBefore']>
+  ) => Promise<T>,
 ): Promise<T> {
   try {
     return await dependencies.sessionManager.withStableRecordedTurnEligibilitySnapshot(
@@ -169,7 +193,7 @@ async function withStableConsumedSnapshot<T>(
  * so require the max boundary id rather than every id recorded on the job.
  */
 function requireSourceSessionEntry(
-  entries: ReturnType<SessionManager['getRecentMessagesAtOrBefore']>,
+  entries: ReturnType<CapturedSessionReads['getRecentMessagesAtOrBefore']>,
   requiredSessionEntryId: number,
 ): void {
   if (!entries.some(entry => entry.id === requiredSessionEntryId)) {
@@ -194,8 +218,15 @@ export async function executePostTurnBackgroundWork(
   input: BackgroundWorkExecutionInput,
   dependencies: PostTurnBackgroundRuntimeDependencies,
 ): Promise<void> {
+  const sessionReads = dependencies.sessionManager.createCapturedSessionReads({
+    logicalSessionId: input.payload.source.logicalSessionId,
+    sourceChannelId: input.payload.source.channelId,
+  });
+  const admittedDependencies: AdmittedPostTurnBackgroundRuntimeDependencies = dependencies;
   try {
-    await runPostTurnBackgroundWork(input, dependencies);
+    await sessionReads.run(async () => {
+      await runPostTurnBackgroundWork(input, admittedDependencies, sessionReads);
+    });
   } catch (error) {
     if (error instanceof Error && error.name === 'ModelCallPreemptedError') {
       throw new BackgroundWorkDeferredError(
@@ -209,7 +240,8 @@ export async function executePostTurnBackgroundWork(
 
 async function runPostTurnBackgroundWork(
   input: BackgroundWorkExecutionInput,
-  dependencies: PostTurnBackgroundRuntimeDependencies,
+  dependencies: AdmittedPostTurnBackgroundRuntimeDependencies,
+  sessionReads: CapturedSessionReads,
 ): Promise<void> {
   const { payload, job } = input;
   if (payload.kind === 'memory_extraction') {
@@ -226,8 +258,7 @@ async function runPostTurnBackgroundWork(
     await withStableConsumedSnapshot(
       input,
       dependencies,
-      () => dependencies.sessionManager.getRecentMessagesAtOrBefore(
-        payload.source.logicalSessionId,
+      () => sessionReads.getRecentMessagesAtOrBefore(
         maxSessionEntryId,
         snapshotLimit,
       ),
@@ -294,8 +325,7 @@ async function runPostTurnBackgroundWork(
       input,
       dependencies,
       () => selectEmotionAppraisalSourceEntries(
-        dependencies.sessionManager.getRecentMessagesAtOrBefore(
-          payload.source.logicalSessionId,
+        sessionReads.getRecentMessagesAtOrBefore(
           maxSessionEntryId,
           10,
         ),
@@ -331,7 +361,6 @@ async function runPostTurnBackgroundWork(
     const maxSessionEntryId = requireMaxSessionEntryId(payload.source);
     const snapshotAt = new Date();
     const captureParams = {
-      channelId: payload.source.logicalSessionId,
       adaptiveProfile: payload.adaptiveProfile,
       turnBudgetCharacteristics: payload.turnBudgetCharacteristics,
       maxSessionEntryId,
@@ -340,14 +369,13 @@ async function runPostTurnBackgroundWork(
     await withStableConsumedSnapshot(
       input,
       dependencies,
-      () => dependencies.sessionManager.captureAutoCompactionRecentEntries(captureParams),
+      () => sessionReads.captureAutoCompactionRecentEntries(captureParams),
       async (recentEntries) => {
         await input.effects.assertOwned();
         requireCanonicalTurnRecord(payload.source, job.createdAtMs, dependencies);
         requireSourceSessionEntry(recentEntries, maxSessionEntryId);
         await input.effects.run('auto-compaction', async (assertOwned) => {
-          await dependencies.sessionManager.scheduleAutoCompactionBetweenTurns({
-            channelId: payload.source.logicalSessionId,
+          await sessionReads.scheduleAutoCompactionBetweenTurns({
             systemPromptTokenCount: payload.systemPromptTokenCount,
             memoriesTokenCount: payload.memoriesTokenCount,
             adaptiveProfile: payload.adaptiveProfile,

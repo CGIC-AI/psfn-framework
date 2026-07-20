@@ -249,6 +249,52 @@ describe('session tool list/resume actions', () => {
     expect(payload.sessions[1].isActive).toBe(true);
   });
 
+  // Regression guard: session tools may be invoked by the model mid-turn, i.e.
+  // inside the admitted turn's captured-owner scope. getActiveContextSession is
+  // mutable-read tripwired and throws there; the tool now resolves the owner via
+  // the owner-aware getActiveContextSessionForTool, so the mutable active context
+  // can never leak a different session's identity into the turn.
+  it('session_list runs mid-turn under a captured owner and reports the owner, not the mutable active context', async () => {
+    store.append({
+      channelId: 'api:owner-session',
+      role: 'user',
+      content: 'owner latest',
+      authorId: 'u1',
+      authorName: 'Owner',
+      timestamp: 3_000,
+    });
+    store.append({
+      channelId: 'api:other-session',
+      role: 'assistant',
+      content: 'other session',
+      timestamp: 1_000,
+    });
+
+    // The mutable active context points at a DIFFERENT api session than the
+    // turn owner.
+    manager.setActiveContextSession('api:other-session');
+
+    const tool = makeTool();
+    const sessionReads = manager.createCapturedSessionReads({
+      logicalSessionId: 'api:owner-session',
+      sourceChannelId: 'api:owner-session',
+    });
+
+    // Simulate the model invoking session_list mid-turn inside the admitted
+    // owner scope. Pre-migration this threw at the mutable-read tripwire.
+    const result = await sessionReads.run(
+      () => tool.execute('list-captured', { action: 'list', limit: 10 }),
+    );
+    const payload = JSON.parse(toolText(result)) as {
+      activeSessionId: string | null;
+      sessions: Array<{ sessionId: string; isActive: boolean }>;
+    };
+
+    expect(payload.activeSessionId).toBe('api:owner-session');
+    expect(payload.sessions.find(s => s.sessionId === 'api:owner-session')?.isActive).toBe(true);
+    expect(payload.sessions.find(s => s.sessionId === 'api:other-session')?.isActive).toBe(false);
+  });
+
   it('session_resume rejects unknown session IDs', async () => {
     const tool = makeTool();
     const result = await tool.execute('resume-1', { action: 'resume', sessionId: 'api:missing' });

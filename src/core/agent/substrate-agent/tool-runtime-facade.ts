@@ -9,6 +9,7 @@ import type {
   ObservabilityCallType,
   SubstrateMessage,
 } from '../../../shared/contracts/runtime.js';
+import type { IntakeEnvelopeSnapshot } from '../../../shared/contracts/intake-envelope.js';
 import { isRecord } from '../../../shared/utils/types.js';
 import type { SubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
 import { textResultWithError } from '../../tools/results.js';
@@ -550,6 +551,14 @@ export class ToolRuntimeFacade {
 
   getActiveTurnTools(): readonly AgentTool<any>[] {
     return this.resolveOwnedTurnTools() ?? [...this.agent.state.tools];
+  }
+
+  /**
+   * Intake provenance owned by the exact async-local turn context. Reading it
+   * here avoids cross-turn leakage when ordinary turns overlap.
+   */
+  getActiveTurnIntakeEnvelopes(): readonly IntakeEnvelopeSnapshot[] {
+    return this.toolTurnContext.getStore()?.message.routing?.intakeEnvelopes ?? [];
   }
 
   setToolsetMemoryWriter(getMemoryWriter: () => Pick<MemoryWriter, 'write'> | undefined): void {

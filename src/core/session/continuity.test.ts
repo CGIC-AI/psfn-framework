@@ -39,7 +39,7 @@ function makeConfig(overrides?: Partial<SubstrateConfig>): SubstrateConfig {
 
 function wireTestContinuity(manager: SessionManager, store: UserContinuityStore): void {
   manager.continuityStore = store;
-  manager.crossChannelContinuity = createUserContinuityPort(store, () => true);
+  manager.crossChannelContinuity = createUserContinuityPort(store, () => [], () => true);
 }
 
 describe('UserContinuityStore', () => {
@@ -708,7 +708,7 @@ describe('SessionManager with continuity', () => {
     expect(ctx.systemPrompt).not.toContain('Earlier heartbeat summary');
   });
 
-  it('includes reflection continuity and orientation for bound reflection channels', async () => {
+  it('includes bound reflection continuity without the retired orientation block', async () => {
     const mgr = new SessionManager(sessionStore, config);
     wireTestContinuity(mgr, continuityStore);
     mgr.characterName = 'Companion';
@@ -776,13 +776,13 @@ describe('SessionManager with continuity', () => {
         DEFAULT_COMPANION_ID,
       );
 
-      expect(ctx.systemPrompt).toContain('<continuity_anchor authority="companion_context"');
-      expect(ctx.systemPrompt).toContain('<last_time_here>');
-      expect(ctx.systemPrompt).toContain('Recovery mattered most.');
-      expect(ctx.systemPrompt).toContain('<recent_continuity>');
+      expect(ctx.systemPrompt).not.toContain('<continuity_anchor');
+      expect(ctx.systemPrompt).not.toContain('<last_time_here>');
       expect(ctx.systemPrompt).toContain('<cross_channel_continuity authority="retrieved_context"');
-      expect(ctx.systemPrompt).toContain('Earlier reflection summary');
-      expect(ctx.systemPrompt).toContain('The API thread still needs recovery notes.');
+      // Live cross-channel rendering is metadata-only (u8iv strip-content); message
+      // text never appears in the live system prompt.
+      expect(ctx.systemPrompt).not.toContain('Earlier reflection summary');
+      expect(ctx.systemPrompt).not.toContain('The API thread still needs recovery notes.');
       expect(ctx.systemPrompt).not.toContain('<source>internal:reflection:daily</source>');
       expect(ctx.systemPrompt).not.toContain('Earlier heartbeat summary');
     } finally {

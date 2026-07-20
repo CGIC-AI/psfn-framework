@@ -10,6 +10,8 @@ export default defineConfig({
     'migrate-scheduler-owner': 'src/app/maintenance/migrate-scheduler-owner.ts',
     'migrate-required-settings-blocks':
       'src/app/maintenance/migrate-required-settings-blocks.ts',
+    'migrate-intake-policy-owner':
+      'src/app/maintenance/migrate-intake-policy-owner.ts',
     'create-passkey-ceremony': 'src/app/maintenance/create-passkey-ceremony.ts',
     'create-account-reapproval-ceremony':
       'src/app/maintenance/create-account-reapproval-ceremony.ts',

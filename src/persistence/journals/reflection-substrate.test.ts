@@ -236,6 +236,10 @@ describe('reflection substrate stores', () => {
       memoryBlock: '[Retrieved Memory]\n- contact-scoped recollection',
       activeConcerns: [
         { id: 'concern-1', text: 'Clarify the recovery timeline', priority: 'high', source: 'appraisal', expiresAt: '2026-04-01T12:00:00.000Z' },
+        { id: 'concern-2', text: 'Revisit the travel dates', priority: 'medium', source: 'memory' },
+        { id: 'concern-3', text: 'Check the garden plan', priority: 'low', source: 'agent' },
+        { id: 'concern-4', text: 'Fourth thread should be omitted', priority: 'low', source: 'agent' },
+        { id: 'concern-5', text: 'Fifth thread should be omitted', priority: 'low', source: 'agent' },
       ],
       pendingFollowUps: [
         { id: 'follow-up-1', content: 'Check in about the recovery plan', priority: 'medium', timing: 'soon', dueAt: '2026-04-01T09:00:00.000Z', wakeConditions: ['next_user_turn'] },
@@ -246,13 +250,17 @@ describe('reflection substrate stores', () => {
     expect(bundle.relational).toContain('[Reflection Contact Evidence]');
     expect(bundle.relational).toContain('Current contact: Ari; trust scope trusted.');
     expect(bundle.relational).toContain('Recent contact status: active.');
-    expect(REFLECTION_CONTEXT_GUIDANCE_VERSION).toBe(3);
+    expect(REFLECTION_CONTEXT_GUIDANCE_VERSION).toBe(4);
     expect(bundle.relational).not.toContain('contact_id:');
     expect(bundle.relational).not.toContain('last_seen_delta_seconds:');
     expect(bundle.relational).toContain('I wanted to follow up on yesterday.');
     expect(bundle.relational).toContain('Purrsephone: I am here and tracking that thread.');
     expect(bundle.relational).not.toContain('Assistant: I am here and tracking that thread.');
     expect(bundle.relational).toContain('Clarify the recovery timeline');
+    expect(bundle.relational).toContain('[Open Threads]');
+    expect(bundle.relational).toContain('2 additional lower-salience threads omitted.');
+    expect(bundle.relational).not.toContain('Fourth thread should be omitted');
+    expect(bundle.relational).not.toMatch(/\b(?:concerns?|worr(?:y|ies|ied))\b/i);
     expect(bundle.relational).toContain('Check in about the recovery plan');
     expect(bundle.relational).not.toContain('stale silence');
     expect(bundle.relational).not.toContain('silence or absence framing');

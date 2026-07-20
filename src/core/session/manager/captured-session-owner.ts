@@ -1,56 +1,331 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 
+import type { MemoryScopeQuery } from '../../../faculties/memory/types.js';
+import type { SessionEntry } from '../types.js';
+import type { ConversationScope, ConversationScopeSpeaker } from '../conversation-scope.js';
+import type {
+  AutoCompactionBetweenTurnsParams,
+  AutoCompactionRecentEntriesCaptureParams,
+  SessionManager,
+} from '../manager.js';
+
 export interface CapturedSessionOwnerIdentity {
-  logicalSessionId: string;
-  sourceChannelId?: string;
+  readonly logicalSessionId: string;
+  readonly sourceChannelId: string;
 }
 
 interface CapturedSessionOwnerContext extends CapturedSessionOwnerIdentity {
   manager: object;
 }
 
+type Tail<T extends readonly unknown[]> = T extends readonly [unknown, ...infer Rest]
+  ? Rest
+  : never;
+
+type CaptureTurnSessionContextInput = Omit<
+  Parameters<SessionManager['captureTurnSessionContext']>[0],
+  'channelId'
+>;
+
+type ResolveConversationScopeInput = Omit<
+  Parameters<SessionManager['resolveConversationScope']>[0],
+  'channelId'
+>;
+
+type CapturedAutoCompactionParams = Omit<AutoCompactionBetweenTurnsParams, 'channelId'>;
+
+type CapturedAutoCompactionRecentEntriesParams = Omit<
+  AutoCompactionRecentEntriesCaptureParams,
+  'channelId'
+>;
+
+export interface CapturedSessionReadOperations {
+  buildContext: (
+    ...args: Tail<Parameters<SessionManager['buildContext']>>
+  ) => ReturnType<SessionManager['buildContext']>;
+  captureTurnSessionContext: (
+    input: CaptureTurnSessionContextInput,
+  ) => ReturnType<SessionManager['captureTurnSessionContext']>;
+  getRecentMessages: (limit?: number) => SessionEntry[];
+  getRecentMessagesAtOrBefore: (
+    maxEntryId: number,
+    limit: number,
+  ) => SessionEntry[];
+  getRoleEnvelopeRefsForEntries: (
+    sessionEntryIds: readonly number[],
+  ) => string[];
+  scheduleAutoCompactionBetweenTurns: (
+    params: CapturedAutoCompactionParams,
+  ) => Promise<void>;
+  captureAutoCompactionRecentEntries: (
+    params: CapturedAutoCompactionRecentEntriesParams,
+  ) => SessionEntry[];
+  hasPendingAutoCompaction: () => boolean;
+  getActiveFocusMemoryScopeQuery: () => MemoryScopeQuery | null;
+  getRecentConversationSpeakers: () => ConversationScopeSpeaker[];
+  resolveConversationScope: (input: ResolveConversationScopeInput) => ConversationScope;
+  reconcileSessionChannelFromDisk: (
+  ) => ReturnType<SessionManager['reconcileSessionChannelFromDisk']>;
+}
+
+interface CapturedSessionReadsFactoryResult {
+  owner: CapturedSessionOwnerIdentity;
+  operations: CapturedSessionReadOperations;
+}
+
+type CapturedSessionReadsFactory = (
+  channelId: string,
+) => CapturedSessionReadsFactoryResult;
+
 const capturedSessionOwnerStorage = new AsyncLocalStorage<CapturedSessionOwnerContext>();
 
-export function getCapturedSessionOwner(
+function normalizeCapturedSessionOwner(
+  identity: CapturedSessionOwnerIdentity,
+): CapturedSessionOwnerIdentity {
+  const logicalSessionId = identity.logicalSessionId.trim();
+  const sourceChannelId = identity.sourceChannelId.trim();
+  if (!logicalSessionId) {
+    throw new Error('Captured session owner must not be empty');
+  }
+  if (!sourceChannelId) {
+    throw new Error('Captured session physical source must not be empty');
+  }
+  return Object.freeze({ logicalSessionId, sourceChannelId });
+}
+
+function getCapturedSessionOwner(
   manager: object,
 ): CapturedSessionOwnerIdentity | null {
   const context = capturedSessionOwnerStorage.getStore();
   if (context?.manager !== manager) return null;
   return {
     logicalSessionId: context.logicalSessionId,
-    ...(context.sourceChannelId ? { sourceChannelId: context.sourceChannelId } : {}),
+    sourceChannelId: context.sourceChannelId,
   };
 }
 
-export function runWithCapturedSessionOwner<T>(
+/**
+ * Read the captured owner bound to `manager` for the current async scope, or
+ * null when no admitted turn is active for this manager. Exposed so owner-bound
+ * resolvers (e.g. SessionManager.resolveSessionChannelId) can fail closed on
+ * mutable active-context resolution instead of silently leaking a different
+ * session's identity into a captured scope.
+ */
+export function getCapturedSessionOwnerIdentity(
+  manager: object,
+): CapturedSessionOwnerIdentity | null {
+  return getCapturedSessionOwner(manager);
+}
+
+export function assertNoCapturedSessionOwner(
+  manager: object,
+  callSite: string,
+): void {
+  const owner = getCapturedSessionOwner(manager);
+  if (!owner) return;
+  throw new Error(
+    `${callSite} cannot run during an admitted turn owned by `
+    + `"${owner.logicalSessionId}"; use CapturedSessionReads or `
+    + 'resolveForeignSessionForTurn(reason, channelId, operation)',
+  );
+}
+
+function assertCapturedSessionOwner(
+  manager: object,
+  expected: CapturedSessionOwnerIdentity,
+  callSite: string,
+): void {
+  const owner = getCapturedSessionOwner(manager);
+  if (!owner) {
+    throw new Error(
+      `${callSite} lost its admitted-turn session scope for `
+      + `"${expected.logicalSessionId}"`,
+    );
+  }
+  if (owner.logicalSessionId !== expected.logicalSessionId
+    || owner.sourceChannelId !== expected.sourceChannelId) {
+    throw new Error(
+      `${callSite} expected admitted owner "${expected.logicalSessionId}" `
+      + `from "${expected.sourceChannelId}" but the active owner is `
+      + `"${owner.logicalSessionId}" from "${owner.sourceChannelId}"`,
+    );
+  }
+}
+
+function runCapturedSessionOwnerScope<T>(
+  manager: object,
+  identity: CapturedSessionOwnerIdentity,
+  operation: () => T,
+  allowOwnerChange: boolean,
+): T {
+  const normalized = normalizeCapturedSessionOwner(identity);
+  const currentOwner = capturedSessionOwnerStorage.getStore();
+  const ownerChanges = currentOwner?.manager === manager
+    && (currentOwner.logicalSessionId !== normalized.logicalSessionId
+      || currentOwner.sourceChannelId !== normalized.sourceChannelId);
+  if (ownerChanges && !allowOwnerChange) {
+    throw new Error(
+      `CapturedSessionReads.run expected owner "${currentOwner.logicalSessionId}" `
+      + `from "${currentOwner.sourceChannelId}" but nested work requested `
+      + `"${normalized.logicalSessionId}" from "${normalized.sourceChannelId}"`,
+    );
+  }
+  return capturedSessionOwnerStorage.run({
+    manager,
+    ...normalized,
+  }, operation);
+}
+
+function runWithCapturedSessionOwner<T>(
   manager: object,
   identity: CapturedSessionOwnerIdentity,
   operation: () => T,
 ): T {
-  const logicalSessionId = identity.logicalSessionId.trim();
-  const sourceChannelId = identity.sourceChannelId?.trim();
-  if (!logicalSessionId) {
-    throw new Error('Captured session owner must not be empty');
+  return runCapturedSessionOwnerScope(manager, identity, operation, false);
+}
+
+function runWithForeignCapturedSessionOwner<T>(
+  manager: object,
+  identity: CapturedSessionOwnerIdentity,
+  reason: string,
+  operation: () => T,
+): T {
+  if (!reason.trim()) {
+    throw new Error('Foreign captured-session scope requires a non-empty audit reason');
   }
-  if (identity.sourceChannelId !== undefined && !sourceChannelId) {
-    throw new Error('Captured session physical source must not be empty');
+  return runCapturedSessionOwnerScope(manager, identity, operation, true);
+}
+
+/**
+ * Explicit admitted-turn session read surface.
+ *
+ * The owner is captured in the value, so owner-bound operations deliberately
+ * omit channelId. ALS is only a secondary lifetime/context-loss tripwire: it
+ * never changes which session an operation reads.
+ */
+export class CapturedSessionReads {
+  readonly owner: CapturedSessionOwnerIdentity;
+  private readonly manager: object;
+  private readonly operations: CapturedSessionReadOperations;
+  private readonly createForChannel: CapturedSessionReadsFactory;
+
+  constructor(
+    manager: object,
+    owner: CapturedSessionOwnerIdentity,
+    operations: CapturedSessionReadOperations,
+    createForChannel: CapturedSessionReadsFactory,
+  ) {
+    this.manager = manager;
+    this.owner = normalizeCapturedSessionOwner(owner);
+    this.operations = operations;
+    this.createForChannel = createForChannel;
   }
-  const currentOwner = capturedSessionOwnerStorage.getStore();
-  if (currentOwner?.manager === manager
-    && (currentOwner.logicalSessionId !== logicalSessionId
-      || (sourceChannelId !== undefined
-        && currentOwner.sourceChannelId !== undefined
-        && currentOwner.sourceChannelId !== sourceChannelId))) {
-    throw new Error(
-      `Captured session owner mismatch: active owner is "${currentOwner.logicalSessionId}" `
-      + `but nested work requested "${logicalSessionId}"`,
+
+  run<T>(operation: () => T): T {
+    return runWithCapturedSessionOwner(this.manager, this.owner, operation);
+  }
+
+  private assertScope(callSite: string): void {
+    assertCapturedSessionOwner(this.manager, this.owner, callSite);
+  }
+
+  buildContext(
+    ...args: Tail<Parameters<SessionManager['buildContext']>>
+  ): ReturnType<SessionManager['buildContext']> {
+    this.assertScope('CapturedSessionReads.buildContext');
+    return this.operations.buildContext(...args);
+  }
+
+  captureTurnSessionContext(
+    input: CaptureTurnSessionContextInput,
+  ): ReturnType<SessionManager['captureTurnSessionContext']> {
+    this.assertScope('CapturedSessionReads.captureTurnSessionContext');
+    return this.operations.captureTurnSessionContext(input);
+  }
+
+  getRecentMessages(limit?: number): SessionEntry[] {
+    this.assertScope('CapturedSessionReads.getRecentMessages');
+    return this.operations.getRecentMessages(limit);
+  }
+
+  getRecentMessagesAtOrBefore(maxEntryId: number, limit: number): SessionEntry[] {
+    this.assertScope('CapturedSessionReads.getRecentMessagesAtOrBefore');
+    return this.operations.getRecentMessagesAtOrBefore(maxEntryId, limit);
+  }
+
+  getRoleEnvelopeRefsForEntries(sessionEntryIds: readonly number[]): string[] {
+    this.assertScope('CapturedSessionReads.getRoleEnvelopeRefsForEntries');
+    return this.operations.getRoleEnvelopeRefsForEntries(sessionEntryIds);
+  }
+
+  scheduleAutoCompactionBetweenTurns(params: CapturedAutoCompactionParams): Promise<void> {
+    this.assertScope('CapturedSessionReads.scheduleAutoCompactionBetweenTurns');
+    return this.operations.scheduleAutoCompactionBetweenTurns(params);
+  }
+
+  captureAutoCompactionRecentEntries(
+    params: CapturedAutoCompactionRecentEntriesParams,
+  ): SessionEntry[] {
+    this.assertScope('CapturedSessionReads.captureAutoCompactionRecentEntries');
+    return this.operations.captureAutoCompactionRecentEntries(params);
+  }
+
+  hasPendingAutoCompaction(): boolean {
+    this.assertScope('CapturedSessionReads.hasPendingAutoCompaction');
+    return this.operations.hasPendingAutoCompaction();
+  }
+
+  getActiveFocusMemoryScopeQuery(): MemoryScopeQuery | null {
+    this.assertScope('CapturedSessionReads.getActiveFocusMemoryScopeQuery');
+    return this.operations.getActiveFocusMemoryScopeQuery();
+  }
+
+  getRecentConversationSpeakers(): ConversationScopeSpeaker[] {
+    this.assertScope('CapturedSessionReads.getRecentConversationSpeakers');
+    return this.operations.getRecentConversationSpeakers();
+  }
+
+  resolveConversationScope(input: ResolveConversationScopeInput): ConversationScope {
+    this.assertScope('CapturedSessionReads.resolveConversationScope');
+    return this.operations.resolveConversationScope(input);
+  }
+
+  reconcileSessionChannelFromDisk(
+  ): ReturnType<SessionManager['reconcileSessionChannelFromDisk']> {
+    this.assertScope('CapturedSessionReads.reconcileSessionChannelFromDisk');
+    return this.operations.reconcileSessionChannelFromDisk();
+  }
+
+  resolveForeignSessionForTurn<T>(
+    reason: string,
+    channelId: string,
+    operation: (reads: CapturedSessionReads) => T,
+  ): T {
+    this.assertScope('CapturedSessionReads.resolveForeignSessionForTurn');
+    const normalizedReason = reason.trim();
+    if (!normalizedReason) {
+      throw new Error(
+        'CapturedSessionReads.resolveForeignSessionForTurn requires a non-empty audit reason',
+      );
+    }
+    const normalizedChannelId = channelId.trim();
+    if (!normalizedChannelId) {
+      throw new Error(
+        'CapturedSessionReads.resolveForeignSessionForTurn requires a non-empty channelId',
+      );
+    }
+    const foreign = this.createForChannel(normalizedChannelId);
+    const foreignReads = new CapturedSessionReads(
+      this.manager,
+      foreign.owner,
+      foreign.operations,
+      this.createForChannel,
+    );
+    return runWithForeignCapturedSessionOwner(
+      this.manager,
+      foreignReads.owner,
+      normalizedReason,
+      () => operation(foreignReads),
     );
   }
-  const effectiveSourceChannelId = sourceChannelId
-    ?? (currentOwner?.manager === manager ? currentOwner.sourceChannelId : undefined);
-  return capturedSessionOwnerStorage.run({
-    manager,
-    logicalSessionId,
-    ...(effectiveSourceChannelId ? { sourceChannelId: effectiveSourceChannelId } : {}),
-  }, operation);
 }

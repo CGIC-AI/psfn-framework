@@ -521,6 +521,39 @@ describe('CompanionPresenceRuntime — mindspace fallback (vinz.29)', () => {
     expect(emit).not.toHaveBeenCalled();
   });
 
+  it('never applies a virtual fallback to an unbound physical-origin turn', async () => {
+    const store = new FakePresenceStore();
+    const { bus } = makeEventBus();
+    const runtime = makeRuntime(store, bus);
+
+    await runtime.observeTurnPlace({
+      ...makeMessage(),
+      routing: {
+        satellite: {
+          placeId: undefined,
+        } as unknown as NonNullable<SubstrateMessage['routing']>['satellite'],
+      },
+    }, 'place.living-room-twin');
+
+    expect(store.upsertCalls).toEqual([]);
+  });
+
+  it('does not write a physical presence hint carried by a plain-chat turn', async () => {
+    const store = new FakePresenceStore();
+    const { bus } = makeEventBus();
+    const runtime = makeRuntime(store, bus);
+
+    await runtime.observeTurnPlace({
+      ...makeMessage(),
+      routing: {
+        source: 'discord',
+        presence: { kind: 'embodiment', embodimentId: 'emb.1', companionId: 'c1' },
+      },
+    });
+
+    expect(store.upsertCalls).toEqual([]);
+  });
+
   it("the turn's own satellite binding outranks the mindspace fallback", async () => {
     const store = new FakePresenceStore();
     const { bus } = makeEventBus();

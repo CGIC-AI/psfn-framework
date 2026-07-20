@@ -11,6 +11,8 @@ import type {
   ApiTelemetryIngestRpcResult,
   ApiShardOwnerRpcParams,
   ApiShardOwnerRpcResult,
+  SatelliteResponseEligibilityRpcParams,
+  SatelliteResponseEligibilityRpcResult,
 } from '../../channels/api/types.js';
 import type {
   VoiceHandleMessageResult,
@@ -42,6 +44,9 @@ export interface ReverseGatewayMethodRuntime {
   handleShardOwner(params: ApiShardOwnerRpcParams): Promise<ApiShardOwnerRpcResult>;
   handleApiTelemetryIngest(params: ApiTelemetryIngestRpcParams): Promise<ApiTelemetryIngestRpcResult>;
   handleApiHealth(): Promise<ApiHealthRpcResult>;
+  handleSatelliteResponseEligibility(
+    params: SatelliteResponseEligibilityRpcParams,
+  ): Promise<SatelliteResponseEligibilityRpcResult>;
   handleTurnPerformance(params: unknown): Promise<unknown>;
   handleContactAuthoritySnapshot(
     params: ContactAuthoritySnapshotRequest,
@@ -115,6 +120,12 @@ const reverseDescriptors: Array<ReverseGatewayMethodDescriptor<any, unknown>> = 
   {
     names: ['api.health'],
     handler: (_params: Record<string, never>, runtime) => runtime.handleApiHealth(),
+  },
+  {
+    names: ['satellite.response.eligibility'],
+    handler: (params: SatelliteResponseEligibilityRpcParams, runtime) => (
+      runtime.handleSatelliteResponseEligibility(params)
+    ),
   },
   {
     names: ['telemetry.turn.performance'],

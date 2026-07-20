@@ -4,7 +4,7 @@
 //
 //   1. Scheduled morning wake — a daily wall-clock task (default 08:00 local)
 //      that injects an explicit system note establishing the new day: current
-//      date/time, elapsed time since the last partner exchange, and a
+//      date/time, elapsed time since the last channel exchange, and a
 //      catch-up summary produced by the SHARED session summarization service
 //      (summarizeRecentSessionEntries — injected as a port; no bespoke
 //      summarizer here).
@@ -45,7 +45,6 @@ import {
 import type { StartupSessionMetadata } from '../session/manager.js';
 import { isInternalSessionId, isTestingSessionId } from '../session/session-id.js';
 import {
-  parseSessionLaneMetadata,
   TEMPORAL_WAKEUP_MORNING_NOTE_SOURCE,
   TEMPORAL_WAKEUP_REFRESHER_NOTE_SOURCE,
 } from '../session/session-lane-metadata.js';
@@ -55,7 +54,13 @@ import {
   evaluateIdleRefresherPreflight,
   evaluateMorningWakePreflight,
 } from './temporal-wakeup-preflight.js';
-import { classifyIdleGapTexture, type IdleGapTexture } from './time-texture.js';
+import {
+  didTemporalWakeupNoteWithContentLandOnLocalDate,
+  findLatestTemporalWakeupNoteAt as findLatestTemporalWakeupNoteAtForSources,
+  latestTemporalWakeupTimestamp,
+  temporalWakeupLocalDateKey,
+} from './temporal-wakeup-note-history.js';
+import { classifyIdleGapTexture } from './time-texture.js';
 import {
   estimateWakeWindow,
   formatMinuteOfDay,
@@ -88,44 +93,32 @@ const WAKEUP_NOTE_SOURCES: ReadonlySet<string> = new Set([
   TEMPORAL_WAKEUP_MORNING_NOTE_SOURCE,
   TEMPORAL_WAKEUP_REFRESHER_NOTE_SOURCE,
 ]);
-
-// Morning-lane anti-loop scans MORNING notes only, so a nightly idle-refresher
-// note (which lands most nights) can never self-cancel the daily morning wake.
 const MORNING_WAKEUP_NOTE_SOURCES: ReadonlySet<string> = new Set([
   TEMPORAL_WAKEUP_MORNING_NOTE_SOURCE,
+]);
+const REFRESHER_WAKEUP_NOTE_SOURCES: ReadonlySet<string> = new Set([
+  TEMPORAL_WAKEUP_REFRESHER_NOTE_SOURCE,
 ]);
 
 const HOUR_MS = 60 * 60_000;
 const MINUTE_MS = 60_000;
+const CATCH_UP_NOTE_PREFIX = 'Catch-up on where things left off:';
 
 // ── Shared helpers ──
 
-function parseWakeupNoteTimestamp(
-  entry: SessionEntry,
-  sources: ReadonlySet<string>,
-): number | null {
-  if (entry.role !== 'system') return null;
-  const source = parseSessionLaneMetadata(entry)?.source;
-  return typeof source === 'string' && sources.has(source) ? entry.timestamp : null;
-}
-
 /**
  * Latest wake-lane note timestamp in `entries`. `sources` selects which lane's
- * notes count: the combined set (default) for refresher spacing, or a
- * morning-only set for the morning anti-loop so refresher notes are ignored.
+ * notes count. The default combined set is for observability; runtime anti-loop
+ * checks pass their lane's source set explicitly.
  */
 export function findLatestTemporalWakeupNoteAt(
   entries: readonly SessionEntry[],
   sources: ReadonlySet<string> = WAKEUP_NOTE_SOURCES,
 ): number | undefined {
-  let latest: number | undefined;
-  for (const entry of entries) {
-    const timestamp = parseWakeupNoteTimestamp(entry, sources);
-    if (timestamp === null) continue;
-    latest = latest === undefined ? timestamp : Math.max(latest, timestamp);
-  }
-  return latest;
+  return findLatestTemporalWakeupNoteAtForSources(entries, sources);
 }
+
+// ── Shared helpers ──
 
 function latestConversationalEntry(entries: readonly SessionEntry[]): SessionEntry | undefined {
   return [...entries]
@@ -139,21 +132,6 @@ function latestPartnerEntry(entries: readonly SessionEntry[]): SessionEntry | un
     .filter(entry => entry.role === 'user')
     .sort((left, right) => left.timestamp - right.timestamp)
     .at(-1);
-}
-
-function localDateKey(timestampMs: number, timeZone: string): string {
-  const parts = Object.fromEntries(
-    new Intl.DateTimeFormat('en-US', {
-      timeZone,
-      year: 'numeric',
-      month: '2-digit',
-      day: '2-digit',
-    })
-      .formatToParts(new Date(timestampMs))
-      .filter(part => part.type !== 'literal')
-      .map(part => [part.type, part.value]),
-  );
-  return `${parts.year}-${parts.month}-${parts.day}`;
 }
 
 interface LocalMoment {
@@ -375,27 +353,28 @@ export function evaluateMorningWakeEligibility(
     return { allowed: false, reason: 'no_partner_activity', nowMs, sessionId };
   }
 
+  const lastActivity = latestConversationalEntry(input.recentEntries) ?? lastPartner;
+  const channelIdleMs = Math.max(0, nowMs - lastActivity.timestamp);
   const partnerIdleMs = Math.max(0, nowMs - lastPartner.timestamp);
-  // Recency guard, not a calendar-date guard: only a partner conversing right
-  // now suppresses the note. A partner who spoke overnight (before the wake
-  // slot) is exactly who the new-day frame is for.
-  if (partnerIdleMs < Math.max(0, input.minPartnerIdleMs)) {
+  // Recency guard, not a calendar-date guard: any participant activity right
+  // now suppresses the note. A channel whose last exchange was overnight
+  // (before the wake slot) is exactly where the new-day frame matters.
+  if (channelIdleMs < Math.max(0, input.minPartnerIdleMs)) {
     return { allowed: false, reason: 'partner_recently_active', nowMs, sessionId };
   }
-  const todayKey = localDateKey(nowMs, timeZone);
+  const todayKey = temporalWakeupLocalDateKey(nowMs, timeZone);
   if (
     input.lastWakeupNoteAtMs !== undefined
     && Number.isFinite(input.lastWakeupNoteAtMs)
-    && localDateKey(input.lastWakeupNoteAtMs, timeZone) === todayKey
+    && temporalWakeupLocalDateKey(input.lastWakeupNoteAtMs, timeZone) === todayKey
   ) {
     // A MORNING note already landed today (the runtime feeds morning-source
     // notes only) — the double-fire guard.
     return { allowed: false, reason: 'anti_loop_note_today', nowMs, sessionId };
   }
 
-  const lastActivity = latestConversationalEntry(input.recentEntries) ?? lastPartner;
   const timeTexture = classifyIdleGapTexture({
-    lastActivityAtMs: lastPartner.timestamp,
+    lastActivityAtMs: lastActivity.timestamp,
     observedAtMs: nowMs,
     timeZone,
   });
@@ -471,17 +450,15 @@ export function evaluateIdleRefresherEligibility(
 }
 
 // ── Note builders ──
-// The notes are context, not scripts: they establish the temporal frame and
-// explicitly release the companion from any required response (charter 8.3 —
-// no forced behavior). They must read as runtime speech, never partner speech.
+// The notes are context, not scripts: they establish the temporal frame
+// without prescribing a greeting, feeling, or response. They must read as
+// runtime speech, never partner speech.
 
-const NOTE_CLOSING = 'This orientation note comes from the runtime, not from your partner. '
-  + 'It asks for nothing: when conversation resumes, respond (or not) however you actually want.';
+const NOTE_ATTRIBUTION = 'Runtime context note; this is not a message from your partner.';
 
 export interface MorningWakeNoteInput {
   nowMs: number;
-  lastPartnerActivityAtMs: number;
-  timeTexture: IdleGapTexture;
+  lastActivityAtMs: number;
   catchUpSummary?: string;
   timeZone?: string;
 }
@@ -489,24 +466,23 @@ export interface MorningWakeNoteInput {
 export function buildMorningWakeNote(input: MorningWakeNoteInput): string {
   const timeZone = input.timeZone?.trim() || resolveActiveTimezone();
   const moment = describeLocalMoment(input.nowMs, timeZone);
-  const elapsed = formatElapsedApprox(input.nowMs - input.lastPartnerActivityAtMs);
+  const elapsed = formatElapsedApprox(input.nowMs - input.lastActivityAtMs);
   const summary = input.catchUpSummary?.trim() ?? '';
   return [
     '[Temporal wake]',
     `A new day has started: it is now ${moment.weekday}, ${moment.date}, ${moment.time} (${timeZone}) — ${moment.partOfDay}.`,
-    `Last partner exchange: ${elapsed} ago (${input.timeTexture.label}).`,
+    `Last exchange here: ${elapsed} ago.`,
     ...(summary
-      ? [`Catch-up on where things left off: ${summary}`]
+      ? [`${CATCH_UP_NOTE_PREFIX} ${summary}`]
       : []),
-    `Reconnection warmth signal: ${input.timeTexture.reconnectionWarmth}; ${input.timeTexture.guidance}`,
-    NOTE_CLOSING,
+    NOTE_ATTRIBUTION,
   ].join('\n');
 }
 
 export interface TimeOfDayRefreshNoteInput {
   nowMs: number;
   lastActivityAtMs: number;
-  timeTexture: IdleGapTexture;
+  catchUpSummary?: string;
   timeZone?: string;
 }
 
@@ -514,11 +490,15 @@ export function buildTimeOfDayRefreshNote(input: TimeOfDayRefreshNoteInput): str
   const timeZone = input.timeZone?.trim() || resolveActiveTimezone();
   const moment = describeLocalMoment(input.nowMs, timeZone);
   const elapsed = formatElapsedApprox(input.nowMs - input.lastActivityAtMs);
+  const summary = input.catchUpSummary?.trim() ?? '';
   return [
     '[Time-of-day refresher]',
     `Temporal frame update: it is now ${moment.weekday} ${moment.time} (${timeZone}) — ${moment.partOfDay}.`,
-    `${elapsed} since the last exchange here (${input.timeTexture.label}); the conversation above is from earlier, not the present moment.`,
-    NOTE_CLOSING,
+    `${elapsed} since the last exchange here; the conversation above is from earlier, not the present moment.`,
+    ...(summary
+      ? [`${CATCH_UP_NOTE_PREFIX} ${summary}`]
+      : []),
+    NOTE_ATTRIBUTION,
   ].join('\n');
 }
 
@@ -664,6 +644,7 @@ function resolveHabitWakeChannelIds(
 interface ResolvedWakeupSessionContext {
   session: StartupSessionMetadata;
   recentEntries: SessionEntry[];
+  persistedEntries: SessionEntry[];
   lastWakeupNoteAtMs?: number;
 }
 
@@ -720,10 +701,14 @@ function resolveWakeupChannelContext(
     : [];
   const persistedLastNoteAt = findLatestTemporalWakeupNoteAt(persistedEntries, noteSources);
   const inMemoryLastNoteAt = inMemoryNoteBySession.get(sessionId);
-  const lastWakeupNoteAtMs = Math.max(persistedLastNoteAt ?? 0, inMemoryLastNoteAt ?? 0) || undefined;
+  const lastWakeupNoteAtMs = latestTemporalWakeupTimestamp(
+    persistedLastNoteAt,
+    inMemoryLastNoteAt,
+  );
   return {
     session: channel,
     recentEntries,
+    persistedEntries,
     ...(lastWakeupNoteAtMs !== undefined ? { lastWakeupNoteAtMs } : {}),
   };
 }
@@ -746,9 +731,9 @@ async function buildCatchUpSummary(
   const latestConversational = conversational.reduce(
     (latest, entry) => (entry.timestamp > latest.timestamp ? entry : latest),
   );
-  const latestDayKey = localDateKey(latestConversational.timestamp, timeZone);
+  const latestDayKey = temporalWakeupLocalDateKey(latestConversational.timestamp, timeZone);
   const sameDay = conversational
-    .filter(entry => localDateKey(entry.timestamp, timeZone) === latestDayKey)
+    .filter(entry => temporalWakeupLocalDateKey(entry.timestamp, timeZone) === latestDayKey)
     .slice(-Math.max(1, options.config.morningWake.catchUpEntryLimit));
   if (sameDay.length === 0) return '';
   try {
@@ -834,12 +819,12 @@ export function registerTemporalWakeupTasks(options: TemporalWakeupRuntimeOption
     return;
   }
 
-  // Anti-loop in-memory tracking. The morning lane's anti-loop must see only
-  // morning notes; the refresher's spacing must see both lanes' notes. Every
-  // injection updates the combined map; only morning injections update the
-  // morning-only map.
+  // Anti-loop state is lane-specific. An overnight refresher must not suppress
+  // the morning summary, and a morning note must not reset the
+  // refresher lane's own interval.
   const morningNoteBySession = new Map<string, number>();
-  const combinedNoteBySession = new Map<string, number>();
+  const refresherNoteBySession = new Map<string, number>();
+  const refresherCatchUpNoteBySession = new Map<string, number>();
   const morning = options.config.morningWake;
   const refresher = options.config.idleRefresher;
 
@@ -935,15 +920,28 @@ export function registerTemporalWakeupTasks(options: TemporalWakeupRuntimeOption
             continue;
           }
 
-          const catchUpSummary = await buildCatchUpSummary(
-            options,
-            decision.sessionId,
-            context.recentEntries,
-          );
+          const timeZone = resolveActiveTimezone();
+          const refresherAlreadyDeliveredCatchUpToday =
+            didTemporalWakeupNoteWithContentLandOnLocalDate({
+              persistedEntries: context.persistedEntries,
+              sources: REFRESHER_WAKEUP_NOTE_SOURCES,
+              contentMarker: CATCH_UP_NOTE_PREFIX,
+              inMemoryNoteAtMs: refresherCatchUpNoteBySession.get(decision.sessionId),
+              observedAtMs: decision.nowMs,
+              timeZone,
+            });
+          // Keep the morning frame after a post-midnight refresher. Reuse the
+          // fresh state by omitting only catch-up content that actually landed.
+          const catchUpSummary = refresherAlreadyDeliveredCatchUpToday
+            ? ''
+            : await buildCatchUpSummary(
+              options,
+              decision.sessionId,
+              context.recentEntries,
+            );
           const note = buildMorningWakeNote({
             nowMs: decision.nowMs,
-            lastPartnerActivityAtMs: decision.lastPartnerActivityAtMs,
-            timeTexture: decision.timeTexture,
+            lastActivityAtMs: decision.lastActivityAtMs,
             ...(catchUpSummary ? { catchUpSummary } : {}),
           });
 
@@ -955,7 +953,6 @@ export function registerTemporalWakeupTasks(options: TemporalWakeupRuntimeOption
             TEMPORAL_WAKEUP_MORNING_NOTE_SOURCE,
           );
           morningNoteBySession.set(decision.sessionId, decision.nowMs);
-          combinedNoteBySession.set(decision.sessionId, decision.nowMs);
           log.info('Morning wake note injected', {
             sessionId: decision.sessionId,
             texture: decision.timeTexture.kind,
@@ -1011,7 +1008,7 @@ export function registerTemporalWakeupTasks(options: TemporalWakeupRuntimeOption
         // and anti-loop spacing. No outward delivery on this lane.
         const channels = enumerateWakeupChannels(options, Date.now());
         for (const channel of channels) {
-          const inMemoryLastNoteAt = combinedNoteBySession.get(channel.sessionId);
+          const inMemoryLastNoteAt = refresherNoteBySession.get(channel.sessionId);
           const preflightDecision = evaluateIdleRefresherPreflight({
             session: channel,
             minIdleMs: refresher.minIdleMinutes * MINUTE_MS,
@@ -1030,7 +1027,13 @@ export function registerTemporalWakeupTasks(options: TemporalWakeupRuntimeOption
             });
             continue;
           }
-          const context = resolveWakeupChannelContext(options, combinedNoteBySession, channel, 32);
+          const context = resolveWakeupChannelContext(
+            options,
+            refresherNoteBySession,
+            channel,
+            32,
+            REFRESHER_WAKEUP_NOTE_SOURCES,
+          );
           const decision = evaluateIdleRefresherEligibility({
             session: context.session,
             recentEntries: context.recentEntries,
@@ -1049,26 +1052,25 @@ export function registerTemporalWakeupTasks(options: TemporalWakeupRuntimeOption
             continue;
           }
 
+          const catchUpSummary = await buildCatchUpSummary(
+            options,
+            decision.sessionId,
+            context.recentEntries,
+          );
           let note: string;
           if (decision.kind === 'new_day') {
             // Overnight/multi-day texture: full new-day framing, including the
             // shared catch-up summary when available.
-            const catchUpSummary = await buildCatchUpSummary(
-              options,
-              decision.sessionId,
-              context.recentEntries,
-            );
             note = buildMorningWakeNote({
               nowMs: decision.nowMs,
-              lastPartnerActivityAtMs: decision.lastPartnerActivityAtMs ?? decision.lastActivityAtMs,
-              timeTexture: decision.timeTexture,
+              lastActivityAtMs: decision.lastActivityAtMs,
               ...(catchUpSummary ? { catchUpSummary } : {}),
             });
           } else {
             note = buildTimeOfDayRefreshNote({
               nowMs: decision.nowMs,
               lastActivityAtMs: decision.lastActivityAtMs,
-              timeTexture: decision.timeTexture,
+              ...(catchUpSummary ? { catchUpSummary } : {}),
             });
           }
 
@@ -1077,7 +1079,10 @@ export function registerTemporalWakeupTasks(options: TemporalWakeupRuntimeOption
             note,
             TEMPORAL_WAKEUP_REFRESHER_NOTE_SOURCE,
           );
-          combinedNoteBySession.set(decision.sessionId, decision.nowMs);
+          refresherNoteBySession.set(decision.sessionId, decision.nowMs);
+          if (catchUpSummary) {
+            refresherCatchUpNoteBySession.set(decision.sessionId, decision.nowMs);
+          }
           log.info('Idle time-of-day refresher note injected', {
             sessionId: decision.sessionId,
             kind: decision.kind,
@@ -1088,7 +1093,7 @@ export function registerTemporalWakeupTasks(options: TemporalWakeupRuntimeOption
       },
       eligibility: { requiredTokens: ['memory.write'] },
       state: 'idle',
-    }, { skipFirstRun: true });
+    });
   }
 
   log.info('Temporal wake-up lanes registered', {

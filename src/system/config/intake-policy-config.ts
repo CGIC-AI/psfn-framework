@@ -24,6 +24,7 @@ import { isRecord } from '../../shared/utils/types.js';
 
 export const INTAKE_POLICY_FILE_NAME = 'intake-policy.json';
 export const INTAKE_POLICY_SEED_FILE_NAME = 'intake-policy.seed.json';
+export const INTAKE_POLICY_SCHEMA_VERSION = 2 as const;
 
 /**
  * Firewall rollout mode:
@@ -511,6 +512,37 @@ export interface IntakeSinkRuleConfig {
   unscreened: IntakeUnscreenedSinkAction;
 }
 
+/**
+ * Canonical policy introduced with intake-policy schema v2 for durable,
+ * prompt-bearing managed skill writes. Kept here so the explicit v1 -> v2
+ * owner migration and its tests cannot drift from the runtime contract.
+ */
+export function createSkillWriteSinkRule(): IntakeSinkRuleConfig {
+  return {
+    maxSourceRiskTier: 'untrusted',
+    denyRiskLabels: [
+      'injection/override_attempt',
+      'injection/indirect',
+      'injection/encoded_smuggling',
+      'injection/invisible_text',
+      'injection/role_confusion',
+      'injection/jailbreak_marker',
+      'persona/mutation_attempt',
+      'policy/security_modification',
+      'execution/executable_instruction',
+      'exfil/canary_leak',
+      'exfil/unknown_link',
+      'exfil/prompt_disclosure',
+      'secrets/api_key',
+      'secrets/credential_material',
+      'poisoning/memory_write_pressure',
+      'poisoning/trust_grooming',
+      'poisoning/source_drift',
+    ],
+    unscreened: 'deny',
+  };
+}
+
 export interface IntakeSinkGatesPolicyConfig {
   /** Every consequential sink must be mapped explicitly — no implicit defaults. */
   sinks: Record<IntakeSink, IntakeSinkRuleConfig>;
@@ -629,7 +661,7 @@ export interface IntakeSecondArrowPolicyConfig {
 }
 
 export interface IntakePolicyConfig {
-  schemaVersion: 1;
+  schemaVersion: typeof INTAKE_POLICY_SCHEMA_VERSION;
   mode: IntakeFirewallMode;
   /**
    * Risk tier per source class. Every class must be mapped explicitly —
@@ -1321,15 +1353,21 @@ export function validateIntakePolicy(raw: unknown, sourcePath: string): IntakePo
   if (unknownKeys.length > 0) {
     throw invalid(sourcePath, `has unsupported keys: ${unknownKeys.join(', ')}`);
   }
-  if (raw.schemaVersion !== 1) {
-    throw invalid(sourcePath, 'schemaVersion must be 1');
+  if (raw.schemaVersion !== INTAKE_POLICY_SCHEMA_VERSION) {
+    const migrationGuidance = raw.schemaVersion === 1
+      ? '; schemaVersion 1 owners require the explicit migrate:intake-policy-owner command'
+      : '';
+    throw invalid(
+      sourcePath,
+      `schemaVersion must be ${String(INTAKE_POLICY_SCHEMA_VERSION)}${migrationGuidance}`,
+    );
   }
   const mode = raw.mode;
   if (typeof mode !== 'string' || !(INTAKE_FIREWALL_MODES as readonly string[]).includes(mode)) {
     throw invalid(sourcePath, `mode must be one of: ${INTAKE_FIREWALL_MODES.join(', ')}`);
   }
   return {
-    schemaVersion: 1,
+    schemaVersion: INTAKE_POLICY_SCHEMA_VERSION,
     mode: mode as IntakeFirewallMode,
     sourceRiskTiers: validateSourceRiskTiers(raw.sourceRiskTiers, sourcePath),
     sourceLists: validateSourceLists(raw.sourceLists, sourcePath),

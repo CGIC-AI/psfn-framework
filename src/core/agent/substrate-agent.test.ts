@@ -8,7 +8,10 @@ import type { SubstrateConfig } from '../../system/config/runtime-config-contrac
 import type { MemoryProvider, MemoryExtractor, LLMProviderPort } from './substrate-agent.js';
 import { SubstrateAgent as RuntimeSubstrateAgent } from './substrate-agent.js';
 import { EventBus } from '../../shared/event-bus.js';
+import type { ContextCoherenceEvent } from '../../shared/contracts/context-coherence.js';
 import type { SessionManager } from '../session/manager.js';
+import { SessionManager as RuntimeSessionManager } from '../session/manager.js';
+import { SessionStore } from '../../persistence/sessions/store.js';
 import { resolveConversationScopeFromMetadata } from '../session/conversation-scope.js';
 import {
   resetRuntimeChannelEnvelopeLabels,
@@ -370,6 +373,46 @@ function makeMessage(overrides?: Partial<SubstrateMessage>): SubstrateMessage {
   };
 }
 
+// Faithful stand-in for CapturedSessionReads: owner-bound methods delegate to
+// the mock SessionManager's fixture spies (prepending the resolved owner channel
+// where the raw method takes one), so a full turn reads the fixture data through
+// the facade exactly as the real captured-owner scope does. `run` executes the
+// operation directly — the mock manager does not enforce the mutable-read
+// tripwire, so no ALS scope is needed.
+function makeMockCapturedSessionReads(
+  owner: { logicalSessionId: string; sourceChannelId: string },
+  manager: Record<string, any>,
+): any {
+  return {
+    owner,
+    run: <T>(operation: () => T): T => operation(),
+    buildContext: (...args: unknown[]) => manager.buildContext(owner.logicalSessionId, ...args),
+    captureTurnSessionContext: (input: Record<string, unknown> = {}) =>
+      manager.captureTurnSessionContext({ channelId: owner.logicalSessionId, ...input }),
+    getRecentMessages: (limit?: number) => manager.getRecentMessages(owner.logicalSessionId, limit),
+    getRecentMessagesAtOrBefore: (maxEntryId: number, limit: number) =>
+      manager.getRecentMessagesAtOrBefore?.(owner.logicalSessionId, maxEntryId, limit) ?? [],
+    getRoleEnvelopeRefsForEntries: (sessionEntryIds: readonly number[]) =>
+      manager.getRoleEnvelopeRefsForEntries(owner.logicalSessionId, sessionEntryIds),
+    scheduleAutoCompactionBetweenTurns: (params: Record<string, unknown> = {}) =>
+      manager.scheduleAutoCompactionBetweenTurns({ channelId: owner.logicalSessionId, ...params }),
+    captureAutoCompactionRecentEntries: (params: Record<string, unknown> = {}) =>
+      manager.captureAutoCompactionRecentEntries?.({ channelId: owner.logicalSessionId, ...params }) ?? [],
+    hasPendingAutoCompaction: () => manager.hasPendingAutoCompaction(owner.logicalSessionId),
+    getActiveFocusMemoryScopeQuery: () => manager.getActiveFocusMemoryScopeQuery(owner.logicalSessionId),
+    getRecentConversationSpeakers: () => manager.getRecentConversationSpeakers(owner.logicalSessionId),
+    resolveConversationScope: (input: Record<string, unknown> = {}) =>
+      manager.resolveConversationScope({ channelId: owner.logicalSessionId, ...input }),
+    reconcileSessionChannelFromDisk: async () =>
+      manager.reconcileSessionChannelFromDisk?.(owner.logicalSessionId),
+    resolveForeignSessionForTurn: <T>(_reason: string, channelId: string, operation: (reads: any) => T): T =>
+      operation(makeMockCapturedSessionReads(
+        { logicalSessionId: manager.resolveSessionChannelId(channelId), sourceChannelId: channelId },
+        manager,
+      )),
+  };
+}
+
 function makeMockSessionManager(): SessionManager {
   let activeContextSessionId: string | null = null;
   const resolveSessionChannelId = vi.fn((channelId: string) => {
@@ -386,7 +429,7 @@ function makeMockSessionManager(): SessionManager {
     activeContextSessionId = normalized ? normalized : null;
   });
   const getActiveContextSession = vi.fn(() => activeContextSessionId);
-  return {
+  const manager = {
     recordUserMessage: vi.fn().mockReturnValue(101),
     recordToolObservation: vi.fn().mockReturnValue({ entryId: 102, intakeSnapshot: null }),
     recordAssistantMessage: vi.fn().mockReturnValue(102),
@@ -408,6 +451,10 @@ function makeMockSessionManager(): SessionManager {
       focusKnowledgeTexts: [],
       continuityEntries: [],
       versionPointer: 'mock-session-context',
+      // The fixture window is always current, so the stale-window heal never
+      // fires a spurious second capture (matches a real capture that includes
+      // the just-recorded turn).
+      storeWindowMaxEntryId: Number.MAX_SAFE_INTEGER,
     })),
     buildContext: vi.fn<any>().mockResolvedValue({
       systemPrompt: TEST_SYSTEM_PROMPT,
@@ -434,8 +481,18 @@ function makeMockSessionManager(): SessionManager {
     getActiveFocusMemoryScopeQuery: vi.fn().mockReturnValue(null),
     setActiveContextSession,
     getActiveContextSession,
+    // Ingress resolves the mutable active context exactly once, then hands the
+    // admitted turn an owner-bound CapturedSessionReads facade (guard is not
+    // enforced in the mock, but the shape and single-resolution contract match).
+    resolveSessionForIngress: vi.fn((channelId: string) => resolveSessionChannelId(channelId)),
+    getMessageCount: vi.fn().mockReturnValue(0),
     continuityStore: null,
-  } as unknown as SessionManager;
+  } as Record<string, any>;
+  manager.createCapturedSessionReads = vi.fn(
+    (identity: { logicalSessionId: string; sourceChannelId: string }) =>
+      makeMockCapturedSessionReads(identity, manager),
+  );
+  return manager as unknown as SessionManager;
 }
 
 function makeMockLLMProvider(): LLMProviderPort {
@@ -550,6 +607,127 @@ function makeActiveMemorySnapshot(overrides: Record<string, unknown> = {}): any 
 }
 
 // ── Tests ──
+
+// B1 regression guard (mock-blindness closer): every handleMessage test below
+// uses makeMockSessionManager, whose getRecentMessages is an ungated vi.fn and
+// whose createCapturedSessionReads is absent — so none exercise the real
+// captured-owner guard. This drives a full turn with a REAL SessionManager:
+// prompt assembly runs buildDynamicPromptTemplateVariables INSIDE the admitted
+// turn's captured-owner scope. Before the fix that method (and the pre/post-turn
+// self-model reads) read recent history through the raw SessionManager, which
+// now fails closed under any captured owner (assertMutableSessionReadAllowed) —
+// so the turn threw at prompt assembly. It must instead read owner-bound recent
+// history through the threaded CapturedSessionReads and complete. Placed first
+// so it runs before the pre-existing (branch-level) broken mock-manager turn
+// tests, whose failures otherwise leak global agent-runtime state.
+describe('SubstrateAgent real-SessionManager turn (B1 regression)', () => {
+  beforeEach(() => {
+    process.env.LITELLM_BASE_URL = 'http://localhost:4000/v1';
+  });
+
+  it('assembles the prompt through the captured facade during a real-SessionManager turn', async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'psfn-b1-real-turn-'));
+    try {
+      const config = makeConfig({
+        dataDir,
+        databasePath: join(dataDir, 'test.db'),
+      });
+      const store = new SessionStore(dataDir);
+      const sessionManager = new RuntimeSessionManager(store, config);
+      // Seed prior conversation so the owner-bound getRecentMessages(32) has real
+      // entries to derive latestPriorMessage from during prompt assembly.
+      sessionManager.recordUserMessage('test-channel', 'earlier question', 'user-1', 'TestUser');
+      sessionManager.recordAssistantMessage('test-channel', 'earlier reply');
+
+      const agent = new SubstrateAgent(
+        new EventBus(),
+        makeMockLLMProvider(),
+        sessionManager,
+        'test',
+        config,
+      );
+
+      const response = await agent.handleMessage(makeMessage({ content: 'a new question' }));
+      expect(typeof response.content).toBe('string');
+      expect(response.content.length).toBeGreaterThan(0);
+      // The turn ran end-to-end through prompt assembly and durably recorded the
+      // new user+assistant turn on the owner session (2 seeded + 2 this turn).
+      expect(sessionManager.getMessageCount('test-channel')).toBeGreaterThanOrEqual(4);
+    } finally {
+      rmSync(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  it('emits coherence telemetry from the admitted owner inside the captured turn scope', async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'psfn-coherence-owner-turn-'));
+    try {
+      const config = makeConfig({
+        dataDir,
+        databasePath: join(dataDir, 'test.db'),
+      });
+      const store = new SessionStore(dataDir);
+      const sessionManager = new RuntimeSessionManager(store, config);
+      const eventBus = new EventBus();
+      const sourceChannelId = 'api:source';
+      const admittedOwnerId = 'api:admitted-owner';
+      const now = Date.now();
+      sessionManager.setActiveContextSession(admittedOwnerId);
+      store.append({
+        channelId: admittedOwnerId,
+        role: 'system',
+        content: 'Owner mirror note.',
+        authorId: 'session-mirror',
+        timestamp: now - 30_000,
+      });
+      store.append({
+        channelId: sourceChannelId,
+        role: 'system',
+        content: 'Source mirror decoy one.',
+        authorId: 'session-mirror',
+        timestamp: now - 20_000,
+      });
+      store.append({
+        channelId: sourceChannelId,
+        role: 'system',
+        content: 'Source mirror decoy two.',
+        authorId: 'session-mirror',
+        timestamp: now - 10_000,
+      });
+      const coherenceEvents: ContextCoherenceEvent[] = [];
+      eventBus.on('context.coherence.detected', event => {
+        coherenceEvents.push(event);
+      });
+      const agent = new SubstrateAgent(
+        eventBus,
+        makeMockLLMProvider(),
+        sessionManager,
+        'test',
+        config,
+      );
+      mockAssistantResponse('Can you remind me which thread we were in?');
+
+      await agent.handleMessage(makeMessage({
+        channelId: sourceChannelId,
+        channelType: 'api',
+        content: 'Continue.',
+        timestamp: new Date(now),
+      }));
+
+      expect(coherenceEvents).toHaveLength(1);
+      expect(coherenceEvents[0]).toMatchObject({
+        signal: 'confusion_ask',
+        source: 'turn_end',
+        channelId: sourceChannelId,
+        sessionId: admittedOwnerId,
+        context: {
+          recentMirrorNoteCount: 1,
+        },
+      });
+    } finally {
+      rmSync(dataDir, { recursive: true, force: true });
+    }
+  });
+});
 
 describe('SubstrateAgent construction', () => {
   beforeEach(() => {
@@ -2326,6 +2504,8 @@ describe('SubstrateAgent.handleMessage', () => {
       continuityEntries: [],
       compactionPromptText: 'Compaction prompt snapshot',
       versionPointer: 'session-snapshot-v1',
+      // Up-to-date window: the stale-window heal must not fire a second capture.
+      storeWindowMaxEntryId: Number.MAX_SAFE_INTEGER,
     });
 
     const mockMemory = {

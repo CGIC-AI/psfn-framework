@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "sites": [
     { "siteId": "test_home", "displayName": "Test Home", "kind": "physical" },
-    { "siteId": "test_latent", "displayName": "Test Latent Space", "kind": "virtual" },
+    { "siteId": "test_mindspace", "displayName": "Test Mindspace", "kind": "virtual" },
     { "siteId": "test_grove", "displayName": "Test Grove (VR)", "kind": "virtual" }
   ],
   "places": [
@@ -12,7 +12,7 @@
       "displayName": "Test Office",
       "kind": "physical",
       "haAreaId": "office",
-      "description": "Satellite-active test room (presence + face). Twinned as 'latent_office'.",
+      "description": "Satellite-active test room (presence + face) with an authored virtual twin.",
       "affordances": [
         { "affordanceId": "office_presence", "role": "perceiver", "kind": "presence", "backend": "satellite", "displayName": "Office Presence (mmwave)" },
         { "affordanceId": "office_face", "role": "perceiver", "kind": "camera", "backend": "satellite", "displayName": "Office Face Detection" },
@@ -26,7 +26,7 @@
       "displayName": "Test Kitchen",
       "kind": "physical",
       "haAreaId": "kitchen",
-      "description": "Satellite-active test room. Twinned as 'latent_kitchen'.",
+      "description": "Satellite-active test room with an authored virtual twin.",
       "affordances": [
         { "affordanceId": "kitchen_presence", "role": "perceiver", "kind": "presence", "backend": "ha", "displayName": "Kitchen Presence", "entityId": "binary_sensor.test_kitchen_mmwave" },
         { "affordanceId": "kitchen_lights", "role": "effector", "kind": "light", "backend": "ha", "displayName": "Kitchen Lights", "entityId": "light.test_kitchen", "control": ["on", "off"] },
@@ -46,18 +46,20 @@
       ]
     },
     {
-      "placeId": "latent_office",
-      "siteId": "test_latent",
-      "displayName": "Office (latent)",
+      "placeId": "office_overlay",
+      "siteId": "test_mindspace",
+      "displayName": "Office Overlay",
       "kind": "virtual",
-      "description": "Virtual twin of physical placeId 'office' — exercises the latent_* twin badge.",
+      "mirrorsPlaceId": "office",
+      "description": "Virtual twin of physical placeId 'office' — exercises the authored twin link.",
       "affordances": []
     },
     {
-      "placeId": "latent_kitchen",
-      "siteId": "test_latent",
-      "displayName": "Kitchen (latent)",
+      "placeId": "kitchen_overlay",
+      "siteId": "test_mindspace",
+      "displayName": "Kitchen Overlay",
       "kind": "virtual",
+      "mirrorsPlaceId": "kitchen",
       "description": "Virtual twin of physical placeId 'kitchen', marked private — exercises the room-privacy rendering path.",
       "privacy": "private",
       "affordances": []

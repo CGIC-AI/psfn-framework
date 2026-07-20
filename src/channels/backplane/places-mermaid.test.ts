@@ -180,11 +180,16 @@ describe('renderPlacesMermaid', () => {
     const withoutTwin = renderPlacesMermaid(SAMPLE_REGISTRY);
     expect(withoutTwin).not.toContain('-.->|twin|');
 
-    // Inject a forward-compatible twin field (vinz.29 `twinOf`) defensively.
+    // The canonical owner-file field is mirrorsPlaceId.
     const twinned = structuredClone(SAMPLE_REGISTRY);
-    (twinned.places[1] as unknown as Record<string, unknown>).twinOf = 'living_room';
+    twinned.places[1]!.mirrorsPlaceId = 'living_room';
     const withTwin = renderPlacesMermaid(twinned);
     expect(withTwin).toContain('-.->|twin|');
+
+    // Retired/unknown aliases never create an inferred overlap.
+    const retiredAlias = structuredClone(SAMPLE_REGISTRY);
+    (retiredAlias.places[1] as unknown as Record<string, unknown>).twinOf = 'living_room';
+    expect(renderPlacesMermaid(retiredAlias)).not.toContain('-.->|twin|');
 
     // A twin field pointing at a non-existent place renders no link.
     const dangling = structuredClone(SAMPLE_REGISTRY);

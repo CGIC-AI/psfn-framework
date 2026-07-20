@@ -1,10 +1,12 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { SessionEntry } from '../../core/session/types.js';
+import { buildContinuityEntryMetadata } from '../../core/session/continuity-provenance.js';
 import type { TurnRecord } from '../../shared/contracts/runtime.js';
 import { buildCogSecTombstoneContent } from '../../core/cogsec/tombstones.js';
 import {
   RECENT_ENTRIES_REF_FIELD,
   REDACTED_MESSAGE_PLACEHOLDER,
+  WITHHELD_WIRE_BODY_MARKER,
   slimTurnRecordSessionEntriesForAppend,
   resolveTurnRecordSessionEntries,
   type SessionEntryRangeResolver,
@@ -17,7 +19,10 @@ function entry(id: number, content: string, channelId = 'ch:a', role: SessionEnt
 interface RecordShape {
   sessionContext?: Record<string, unknown>;
   plan?: Record<string, unknown>;
+  promptContext?: Record<string, unknown>;
   channelId?: string;
+  userMessage?: TurnRecord['userMessage'];
+  assistantMessage?: TurnRecord['assistantMessage'];
 }
 
 function buildRecord(shape: RecordShape): TurnRecord {
@@ -29,6 +34,7 @@ function buildRecord(shape: RecordShape): TurnRecord {
     trustLevel: 'regular',
     ...(shape.sessionContext ? { sessionContext: shape.sessionContext } : {}),
     ...(shape.plan ? { plan: shape.plan } : {}),
+    ...(shape.promptContext ? { promptContext: shape.promptContext } : {}),
   };
   return {
     schemaVersion: 1,
@@ -39,7 +45,8 @@ function buildRecord(shape: RecordShape): TurnRecord {
     startedAt: 1,
     completedAt: 2,
     status: 'completed',
-    userMessage: { role: 'user', content: 'x', timestamp: 1 },
+    userMessage: shape.userMessage ?? { role: 'user', content: 'x', timestamp: 1 },
+    ...(shape.assistantMessage ? { assistantMessage: shape.assistantMessage } : {}),
     toolCalls: [],
     extractedMemoryIds: [],
     concernDeltaRefs: [],
@@ -57,6 +64,39 @@ function sessionContext(record: TurnRecord): Record<string, unknown> {
 function planMessages(record: TurnRecord): Array<Record<string, unknown>> {
   const plan = (record.observability!.snapshot as unknown as Record<string, unknown>).plan as Record<string, unknown>;
   return plan.messages as Array<Record<string, unknown>>;
+}
+
+function continuityEntry(params: {
+  continuityId?: number;
+  sourceEntryId?: number;
+  sourceSessionId?: string;
+  sourceChannelId?: string;
+  content: string;
+  role?: SessionEntry['role'];
+  timestamp?: number;
+}): SessionEntry {
+  const sourceSessionId = params.sourceSessionId ?? 'session:origin';
+  const sourceChannelId = params.sourceChannelId ?? 'ch:origin';
+  const role = params.role ?? 'user';
+  const timestamp = params.timestamp ?? 10_000;
+  return {
+    id: params.continuityId ?? 1,
+    channelId: sourceSessionId,
+    originChannelId: sourceChannelId,
+    role,
+    content: params.content,
+    timestamp,
+    metadata: buildContinuityEntryMetadata({
+      continuityUserId: 'partner-1',
+      sourceChannelId,
+      sourceVisibility: 'private',
+      sourceRole: role,
+      recordedAt: timestamp,
+      ...(params.sourceEntryId !== undefined
+        ? { sourceEntryId: params.sourceEntryId }
+        : {}),
+    }),
+  };
 }
 
 /** Resolver over an in-memory L0: `${channelId}:${id}` → entry, inclusive-range filtered. */
@@ -240,6 +280,295 @@ describe('turn-record session-entry diet (psfn-framework-9ree)', () => {
     const record = buildRecord({ sessionContext: { channelId: 'ch:a', continuityEntries: continuity } });
     const slim = slimTurnRecordSessionEntriesForAppend(record);
     expect(sessionContext(slim).continuityEntries).toEqual(continuity);
+  });
+
+  describe('top-level turn-message redaction gating (psfn-framework-sm9l)', () => {
+    it('symmetrically masks userMessage and assistantMessage frozen copies', () => {
+      const marker = buildCogSecTombstoneContent('cogsec_turn_messages');
+      const record = buildRecord({
+        channelId: 'ch:a',
+        sessionContext: { channelId: 'ch:a' },
+        userMessage: {
+          role: 'user',
+          content: 'SECRET partner copy',
+          timestamp: 1,
+          sessionEntryId: 11,
+        },
+        assistantMessage: {
+          role: 'assistant',
+          content: 'SECRET companion copy',
+          timestamp: 2,
+          sessionEntryId: 12,
+        },
+        promptContext: {
+          currentTurnInput: 'SECRET partner copy',
+          response: { content: 'SECRET companion copy' },
+          messages: [{ role: 'user', content: 'SECRET partner copy' }],
+          assembledPrompt: 'SECRET partner copy',
+          providerObservability: {
+            providerWireMessages: [{
+              role: 'user',
+              source: 'message',
+              content: 'SECRET partner copy',
+            }],
+          },
+        },
+      });
+      const withheld: unknown[] = [];
+
+      const resolved = resolveTurnRecordSessionEntries(
+        record,
+        resolverFor([entry(11, marker)]),
+        undefined,
+        undefined,
+        event => withheld.push(event),
+      );
+
+      expect(resolved.userMessage.content).toBe(REDACTED_MESSAGE_PLACEHOLDER);
+      expect(resolved.assistantMessage?.content).toBe(REDACTED_MESSAGE_PLACEHOLDER);
+      expect(JSON.stringify(resolved)).not.toContain('SECRET partner copy');
+      expect(JSON.stringify(resolved)).not.toContain('SECRET companion copy');
+      const promptContext = (resolved.observability?.snapshot as unknown as {
+        promptContext: {
+          currentTurnInput: string;
+          response: { content: string };
+          messages: Array<{ content: string }>;
+          assembledPrompt: string;
+          providerObservability: { providerWireMessages: Array<{ content: string }> };
+        };
+      }).promptContext;
+      expect(promptContext.currentTurnInput).toBe(REDACTED_MESSAGE_PLACEHOLDER);
+      expect(promptContext.response.content).toBe(REDACTED_MESSAGE_PLACEHOLDER);
+      expect(promptContext.messages[0]?.content).toBe(REDACTED_MESSAGE_PLACEHOLDER);
+      expect(promptContext.assembledPrompt).toBe(REDACTED_MESSAGE_PLACEHOLDER);
+      expect(promptContext.providerObservability.providerWireMessages[0]?.content)
+        .toBe(REDACTED_MESSAGE_PLACEHOLDER);
+      expect(withheld).toEqual([
+        {
+          channelId: 'ch:a',
+          entryId: 11,
+          surface: 'userMessage',
+          turnId: 'turn-1',
+        },
+        {
+          channelId: 'ch:a',
+          entryId: 12,
+          surface: 'assistantMessage',
+          turnId: 'turn-1',
+        },
+      ]);
+    });
+
+    it('keeps both top-level copies when their backing L0 entries remain live', () => {
+      const record = buildRecord({
+        channelId: 'ch:a',
+        sessionContext: { channelId: 'ch:a' },
+        userMessage: { role: 'user', content: 'partner live', timestamp: 1, sessionEntryId: 11 },
+        assistantMessage: {
+          role: 'assistant',
+          content: 'companion live',
+          timestamp: 2,
+          sessionEntryId: 12,
+        },
+      });
+
+      const resolved = resolveTurnRecordSessionEntries(
+        record,
+        resolverFor([entry(11, 'partner live'), entry(12, 'companion live', 'ch:a', 'assistant')]),
+      );
+
+      expect(resolved.userMessage.content).toBe('partner live');
+      expect(resolved.assistantMessage?.content).toBe('companion live');
+    });
+  });
+
+  describe('cross-channel continuity redaction gating (psfn-framework-ervg)', () => {
+    it('replaces a live frozen continuity copy with origin L0 current truth', () => {
+      const frozen = continuityEntry({
+        sourceEntryId: 77,
+        content: 'stale frozen text',
+      });
+      const current: SessionEntry = {
+        ...frozen,
+        id: 77,
+        content: 'journal-current text',
+        metadata: undefined,
+      };
+      const record = buildRecord({
+        channelId: 'ch:consumer',
+        sessionContext: { channelId: 'ch:consumer', continuityEntries: [frozen] },
+      });
+
+      const resolved = resolveTurnRecordSessionEntries(record, resolverFor([current]));
+      const continuity = sessionContext(resolved).continuityEntries as SessionEntry[];
+      expect(continuity[0]?.content).toBe('journal-current text');
+      expect(JSON.stringify(resolved)).not.toContain('stale frozen text');
+    });
+
+    it('scrubs continuity from every persisted Loom and provider surface after origin redaction', () => {
+      const secret = 'CROSS_CHANNEL_SECRET';
+      const frozen = continuityEntry({ sourceEntryId: 77, content: secret });
+      const marker = buildCogSecTombstoneContent('cogsec_cross_channel');
+      const redactedSource: SessionEntry = {
+        ...frozen,
+        id: 77,
+        content: marker,
+        metadata: undefined,
+      };
+      const record = buildRecord({
+        channelId: 'ch:consumer',
+        sessionContext: {
+          channelId: 'ch:consumer',
+          continuityEntries: [frozen],
+          orientation: {
+            noteText: `Recent continuity: ${secret}`,
+            sessionSummary: `Earlier: ${secret}`,
+            continuitySummary: secret,
+            lastUserMessage: secret,
+          },
+        },
+        plan: {
+          blocks: [
+            {
+              id: 'session.orientation',
+              layer: 'session',
+              renderedText: `<recent_continuity>${secret}</recent_continuity>`,
+            },
+            {
+              id: 'session.continuity',
+              layer: 'session',
+              renderedText: `<text>${secret}</text>`,
+            },
+          ],
+          messages: [],
+        },
+        promptContext: {
+          finalSystemSections: [
+            {
+              id: 'wake_orientation',
+              content: `<recent_continuity>${secret}</recent_continuity>`,
+              charCount: secret.length,
+              tokenCount: 1,
+            },
+            {
+              id: 'cross_channel_continuity',
+              content: `<text>${secret}</text>`,
+              charCount: secret.length,
+              tokenCount: 1,
+            },
+          ],
+          providerObservability: {
+            providerWireMessages: [{
+              role: 'system',
+              source: 'system_prompt',
+              content: `<text>${secret}</text>`,
+            }],
+            capturedWirePayload: {
+              api: 'openai-completions',
+              model: 'test',
+              byteLength: 100,
+              toolCount: 0,
+              body: { messages: [{ role: 'system', content: `<text>${secret}</text>` }] },
+            },
+          },
+        },
+      });
+      const withheld: unknown[] = [];
+
+      const resolved = resolveTurnRecordSessionEntries(
+        record,
+        resolverFor([redactedSource]),
+        undefined,
+        undefined,
+        undefined,
+        event => withheld.push(event),
+      );
+      const snapshot = resolved.observability?.snapshot as unknown as Record<string, unknown>;
+      const plan = snapshot.plan as { blocks: Array<{ renderedText: string }> };
+      const promptContext = snapshot.promptContext as {
+        finalSystemSections: Array<{ content: string }>;
+        providerObservability: {
+          providerWireMessages: Array<{ content: string }>;
+          capturedWirePayload: { body: unknown };
+        };
+      };
+
+      expect((sessionContext(resolved).continuityEntries as SessionEntry[])[0]?.content)
+        .toBe(REDACTED_MESSAGE_PLACEHOLDER);
+      expect(plan.blocks.map(block => block.renderedText))
+        .toEqual([REDACTED_MESSAGE_PLACEHOLDER, REDACTED_MESSAGE_PLACEHOLDER]);
+      expect(promptContext.finalSystemSections.map(section => section.content))
+        .toEqual([REDACTED_MESSAGE_PLACEHOLDER, REDACTED_MESSAGE_PLACEHOLDER]);
+      expect(promptContext.providerObservability.providerWireMessages[0]?.content)
+        .toBe(REDACTED_MESSAGE_PLACEHOLDER);
+      expect(promptContext.providerObservability.capturedWirePayload.body)
+        .toMatchObject({ withheld: WITHHELD_WIRE_BODY_MARKER });
+      expect(JSON.stringify(resolved)).not.toContain(secret);
+      expect(sessionContext(resolved).orientation).toMatchObject({
+        noteText: REDACTED_MESSAGE_PLACEHOLDER,
+        sessionSummary: REDACTED_MESSAGE_PLACEHOLDER,
+        continuitySummary: REDACTED_MESSAGE_PLACEHOLDER,
+        lastUserMessage: REDACTED_MESSAGE_PLACEHOLDER,
+      });
+      expect(withheld).toEqual([{
+        channelId: 'ch:consumer',
+        sourceChannelId: 'session:origin',
+        sourceEntryId: 77,
+        reason: 'source_redacted',
+        turnId: 'turn-1',
+      }]);
+    });
+
+    it('fails closed to a redaction notice without blocking on resolver errors or legacy missing refs', () => {
+      const resolverErrorSecret = continuityEntry({
+        sourceEntryId: 77,
+        content: 'RESOLVER_ERROR_SECRET',
+      });
+      const legacySecret = continuityEntry({ content: 'LEGACY_SECRET' });
+      const forgedNonPersistent = continuityEntry({ content: 'FORGED_ATTESTATION_SECRET' });
+      forgedNonPersistent.metadata = buildContinuityEntryMetadata({
+        continuityUserId: 'partner-1',
+        sourceChannelId: 'ch:origin',
+        sourceVisibility: 'private',
+        sourceRole: 'user',
+        recordedAt: forgedNonPersistent.timestamp,
+        sourcePersistence: 'non_persistent',
+      });
+      const record = buildRecord({
+        channelId: 'ch:consumer',
+        sessionContext: {
+          channelId: 'ch:consumer',
+          continuityEntries: [resolverErrorSecret, legacySecret, forgedNonPersistent],
+        },
+      });
+      const withheld: unknown[] = [];
+
+      const resolved = resolveTurnRecordSessionEntries(
+        record,
+        () => {
+          throw new Error('origin journal temporarily unreadable');
+        },
+        undefined,
+        undefined,
+        undefined,
+        event => withheld.push(event),
+      );
+
+      expect((sessionContext(resolved).continuityEntries as SessionEntry[]).map(item => item.content))
+        .toEqual([
+          REDACTED_MESSAGE_PLACEHOLDER,
+          REDACTED_MESSAGE_PLACEHOLDER,
+          REDACTED_MESSAGE_PLACEHOLDER,
+        ]);
+      expect(JSON.stringify(resolved)).not.toContain('RESOLVER_ERROR_SECRET');
+      expect(JSON.stringify(resolved)).not.toContain('LEGACY_SECRET');
+      expect(JSON.stringify(resolved)).not.toContain('FORGED_ATTESTATION_SECRET');
+      expect(withheld).toEqual([
+        expect.objectContaining({ reason: 'resolver_error', sourceEntryId: 77 }),
+        expect.objectContaining({ reason: 'missing_source_ref' }),
+        expect.objectContaining({ reason: 'missing_source_ref' }),
+      ]);
+    });
   });
 
   describe('plan.messages redaction gating', () => {

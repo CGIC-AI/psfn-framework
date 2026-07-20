@@ -6,7 +6,7 @@
 import { mkdirSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { sanitizeChannelId } from '../../persistence/sessions/store.js';
-import type { SessionEntry, SessionEntryRole } from './types.js';
+import type { SessionEntry } from './types.js';
 import {
   classifyChannelDisclosure,
   visibilitiesShareContinuity,
@@ -20,6 +20,13 @@ import {
   journalToSessionEntry,
   readJournalFile,
 } from '../../persistence/journals/journal-utils.js';
+import {
+  buildContinuityEntryMetadata,
+} from './continuity-provenance.js';
+export {
+  parseContinuityEntryProvenance,
+  type ContinuityEntryProvenance,
+} from './continuity-provenance.js';
 
 /** Default cap for continuity entries per user. */
 const DEFAULT_CONTINUITY_LIMIT = 20;
@@ -29,16 +36,6 @@ interface UserCache {
   entries: SessionEntry[];
   nextId: number;
   filePath: string;
-}
-
-export interface ContinuityEntryProvenance {
-  kind: 'continuity';
-  continuityUserId: string;
-  sourceChannelId: string;
-  /** Stored-value decode: ChannelPrivacy (legacy 'broadcast' decodes to 'public'). */
-  sourceVisibility: ChannelPrivacy;
-  sourceRole: SessionEntryRole;
-  recordedAt: number;
 }
 
 export interface ActiveContinuityChannel {
@@ -51,90 +48,6 @@ export interface ActiveChannelQuery {
   excludeChannelId?: string;
   withinMs?: number;
   nowMs?: number;
-}
-
-function parseMetadataObject(metadata?: string): Record<string, unknown> | null {
-  if (!metadata) return null;
-
-  try {
-    const parsed: unknown = JSON.parse(metadata);
-    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-      return null;
-    }
-    return parsed as Record<string, unknown>;
-  } catch {
-    return null;
-  }
-}
-
-export function parseContinuityEntryProvenance(metadata?: string): ContinuityEntryProvenance | null {
-  const parsed = parseMetadataObject(metadata);
-  if (!parsed) return null;
-
-  const continuity = parsed.continuity;
-  if (!continuity || typeof continuity !== 'object' || Array.isArray(continuity)) {
-    return null;
-  }
-
-  const provenance = continuity as Record<string, unknown>;
-  const kind = provenance.kind;
-  const continuityUserId = provenance.continuityUserId;
-  const sourceChannelId = provenance.sourceChannelId;
-  // Continuity provenance is persisted; decode legacy 'semi_private' records.
-  const sourceVisibility = decodeStoredChannelVisibility(provenance.sourceVisibility);
-  const sourceRole = provenance.sourceRole;
-  const recordedAt = provenance.recordedAt;
-
-  if (
-    kind !== 'continuity'
-    || typeof continuityUserId !== 'string'
-    || typeof sourceChannelId !== 'string'
-    || sourceVisibility === undefined
-    || sourceRole !== 'user'
-    && sourceRole !== 'assistant'
-    && sourceRole !== 'system'
-    || typeof recordedAt !== 'number'
-    || !Number.isFinite(recordedAt)
-  ) {
-    return null;
-  }
-
-  return {
-    kind,
-    continuityUserId,
-    sourceChannelId,
-    sourceVisibility,
-    sourceRole,
-    recordedAt,
-  };
-}
-
-function buildContinuityEntryMetadata(params: {
-  continuityUserId: string;
-  sourceChannelId: string;
-  sourceVisibility: ChannelPrivacy;
-  sourceRole: SessionEntryRole;
-  recordedAt: number;
-  existingMetadata?: string;
-}): string {
-  const continuity: ContinuityEntryProvenance = {
-    kind: 'continuity',
-    continuityUserId: params.continuityUserId,
-    sourceChannelId: params.sourceChannelId,
-    sourceVisibility: params.sourceVisibility,
-    sourceRole: params.sourceRole,
-    recordedAt: params.recordedAt,
-  };
-
-  const parsed = parseMetadataObject(params.existingMetadata);
-  if (!parsed) {
-    return JSON.stringify({ continuity });
-  }
-
-  return JSON.stringify({
-    ...parsed,
-    continuity,
-  });
 }
 
 export class UserContinuityStore {
@@ -179,7 +92,12 @@ export class UserContinuityStore {
    * Automatically caps at maxEntries — oldest entries are evicted from memory
    * (but remain in the JSONL file on disk for audit purposes).
    */
-  append(userId: string, entry: Omit<SessionEntry, 'id'>): number {
+  append(
+    userId: string,
+    entry: Omit<SessionEntry, 'id'>,
+    sourceEntryId?: number,
+    sourcePersistence?: 'l0' | 'non_persistent',
+  ): number {
     const cache = this.ensureUser(userId);
     const id = cache.nextId;
 
@@ -193,6 +111,8 @@ export class UserContinuityStore {
           ?? classifyChannelDisclosure(entry.originChannelId ?? entry.channelId).channelPrivacy,
         sourceRole: entry.role,
         recordedAt: entry.timestamp,
+        ...(sourcePersistence !== undefined ? { sourcePersistence } : {}),
+        ...(sourceEntryId !== undefined ? { sourceEntryId } : {}),
         existingMetadata: entry.metadata,
       }),
     };

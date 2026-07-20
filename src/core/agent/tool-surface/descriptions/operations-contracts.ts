@@ -75,7 +75,7 @@ export const OPERATIONS_TOOL_CONTRACTS = {
       action('run_template', ['template_id'], ['send_to_discord', 'defer_if_busy']),
       action('schedule_prompt', ['name', 'prompt'], [], { id: 'schedule_prompt', requiredAnyOf: [['delay_minutes'], ['run_at']], rule: 'supply exactly one timing field' }),
     ],
-    output: 'It returns durable identifiers or run state and does not replace untimed orient concerns.',
+    output: 'It returns durable identifiers or run state and does not replace untimed open threads managed through orient.',
     guidance: 'Do not invent registry-category verbs; only the concrete actions above are callable.',
     example: { action: 'schedule_prompt', name: 'check seedlings', prompt: 'Review the greenhouse notes.', delay_minutes: 60 },
   },
@@ -87,7 +87,7 @@ export const OPERATIONS_TOOL_CONTRACTS = {
       action('delete', ['item_id']), action('reorder', ['item_ids']),
     ],
     output: 'It returns exact item IDs and ordered state.',
-    guidance: 'Do not use it for current concerns or persona changes; use orient or identity.',
+    guidance: 'Do not use it for current open threads or persona changes; use orient or identity.',
     example: { action: 'create', title: 'Protect time for art', content: 'Keep a weekly block for self-directed drawing.' },
   },
   beads: {

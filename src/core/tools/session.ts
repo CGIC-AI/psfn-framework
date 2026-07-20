@@ -88,7 +88,7 @@ SessionManager,
   | 'listRecentSessions'
   | 'getSessionActivity'
   | 'setActiveContextSession'
-  | 'getActiveContextSession'
+  | 'getActiveContextSessionForTool'
   | 'recordSessionContinuityArtifact'
 >;
 
@@ -187,7 +187,7 @@ function buildListPayload(
   dataDir: string,
   limit: number,
 ): Record<string, unknown> {
-  const activeSessionId = manager.getActiveContextSession()
+  const activeSessionId = manager.getActiveContextSessionForTool()
     ?? readLastActiveSession(dataDir)?.sessionId
     ?? null;
   const sessions = manager.listRecentSessions(limit).map((session) => ({
@@ -282,7 +282,7 @@ function normalizeWakeReturnSessionId(
   const explicitSessionId = normalizeSessionId(rawSessionId);
   if (explicitSessionId) return explicitSessionId;
 
-  const activeSessionId = manager.getActiveContextSession()
+  const activeSessionId = manager.getActiveContextSessionForTool()
     ?? readLastActiveSession(dataDir)?.sessionId
     ?? null;
   if (!activeSessionId) {
@@ -383,7 +383,7 @@ async function executeSessionResumeAction(
     return textResultWithError(`Session not found: ${requestedSessionId}`, true);
   }
 
-  const previousSessionId = manager.getActiveContextSession()
+  const previousSessionId = manager.getActiveContextSessionForTool()
     ?? readLastActiveSession(options.dataDir)?.sessionId
     ?? null;
   manager.setActiveContextSession(target.sessionId);

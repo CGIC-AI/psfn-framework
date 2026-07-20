@@ -13,6 +13,12 @@ import type {
   ApiTelemetryIngestRpcResult,
 } from './types.js';
 import { monotonicEpochNowMs } from '../../shared/telemetry/turn-performance.js';
+import type { SatelliteRegistryProvider } from '../../shared/contracts/satellite-registry.js';
+import { resolveSharedSatelliteObservationDeliveries } from '../../shared/telemetry/sensor-ingest-port.js';
+import {
+  hasSatelliteClaimHeaders,
+  resolveSatelliteClaim,
+} from '../backplane/satellite-registry.js';
 
 const DEFAULT_GATEWAY_CHAT_REQUEST_TIMEOUT_MS = 95_000;
 const GATEWAY_CHAT_REQUEST_TIMEOUT_BUFFER_MS = 5_000;
@@ -20,19 +26,33 @@ const AGENT_CHAT_TURN_TIMEOUT_HEADROOM_MS = 1_000;
 
 export interface GatewayApiRuntimeOptions {
   chatRequestTimeoutMs?: number;
+  satelliteRegistryProvider?: SatelliteRegistryProvider;
+  observationAudit?: (event: {
+    satelliteId: string;
+    companionId: string;
+    scope: string;
+    eventId: string;
+    timestamp: number;
+  }) => Promise<void>;
+  now?: () => number;
 }
 
 export class GatewayApiRuntime implements ApiServerRuntime {
   private requestCounter = 0;
   private readonly chatRequestTimeoutMs: number;
+  private readonly options: GatewayApiRuntimeOptions;
 
   constructor(
     private readonly gateway: Pick<
       GatewayServer,
       'requestAgent' | 'requestCompanionAgent' | 'subscribeApiStream'
-    >,
+    > & Partial<Pick<
+      GatewayServer,
+      'requestSharedSatelliteChatCompletion' | 'cancelSharedSatelliteChatCompletion'
+    >>,
     options: GatewayApiRuntimeOptions = {},
   ) {
+    this.options = options;
     this.chatRequestTimeoutMs = normalizeGatewayChatRequestTimeoutMs(
       options.chatRequestTimeoutMs,
       DEFAULT_GATEWAY_CHAT_REQUEST_TIMEOUT_MS,
@@ -48,6 +68,40 @@ export class GatewayApiRuntime implements ApiServerRuntime {
   }
 
   async handleTelemetryIngest(event: ExternalTelemetryEvent): Promise<ApiTelemetryIngestRpcResult> {
+    const registry = this.options.satelliteRegistryProvider?.();
+    const deliveries = registry
+      ? resolveSharedSatelliteObservationDeliveries({ event, registry })
+      : null;
+    if (deliveries !== null) {
+      if (deliveries.length === 0) {
+        return {
+          ok: true,
+          response: {
+            ok: true,
+            id: event.id,
+            acceptedEventType: event.eventType,
+          },
+        };
+      }
+      const results = await Promise.all(deliveries.map(async (delivery) => {
+        const result = await this.gateway.requestCompanionAgent<ApiTelemetryIngestRpcResult>(
+          delivery.companionId,
+          'api.telemetry.ingest',
+          { event: delivery.event },
+        );
+        if (result.ok) {
+          await this.options.observationAudit?.({
+            satelliteId: String(delivery.event.payload.satelliteId),
+            companionId: delivery.companionId,
+            scope: delivery.scope,
+            eventId: delivery.event.id,
+            timestamp: this.options.now?.() ?? Date.now(),
+          });
+        }
+        return result;
+      }));
+      return results.find(result => !result.ok) ?? results[0]!;
+    }
     return await this.gateway.requestAgent<ApiTelemetryIngestRpcResult>('api.telemetry.ingest', { event });
   }
 
@@ -60,10 +114,61 @@ export class GatewayApiRuntime implements ApiServerRuntime {
       : () => {};
 
     let cancelled = false;
+    const registry = this.options.satelliteRegistryProvider?.();
+    const satelliteClaim = hasSatelliteClaimHeaders(input.headers)
+      ? resolveSatelliteClaim({
+          headers: input.headers,
+          principal: input.principal,
+          registry,
+          ...(input.clientCert ? { clientCert: input.clientCert } : {}),
+        })
+      : undefined;
+    if (satelliteClaim && !satelliteClaim.ok) {
+      unsubscribe();
+      return {
+        ok: false,
+        error: {
+          status: satelliteClaim.status,
+          type: satelliteClaim.type,
+          message: satelliteClaim.message,
+        },
+      };
+    }
     const requestAgent = async <T>(
       method: string,
       params: unknown,
     ): Promise<T> => {
+      const sharedSatellite = satelliteClaim?.ok
+        && satelliteClaim.value.satellite.sharedDevice
+        ? {
+            ...satelliteClaim.value.satellite,
+            sharedDevice: satelliteClaim.value.satellite.sharedDevice,
+          }
+        : undefined;
+      if (sharedSatellite && method === 'api.chat.completion') {
+        if (!this.gateway.requestSharedSatelliteChatCompletion) {
+          throw new Error('Shared-satellite chat arbitration is not configured');
+        }
+        return await this.gateway.requestSharedSatelliteChatCompletion({
+          satellite: sharedSatellite,
+          canonicalContactId: satelliteClaim.value.canonicalContactId,
+          channelId: satelliteClaim.value.channelId,
+          params: params as Parameters<
+            GatewayServer['requestSharedSatelliteChatCompletion']
+          >[0]['params'],
+          timeoutMs: this.chatRequestTimeoutMs,
+        }) as T;
+      }
+      if (sharedSatellite && method === 'api.chat.cancel') {
+        if (!this.gateway.cancelSharedSatelliteChatCompletion) {
+          return { cancelled: false } as T;
+        }
+        return await this.gateway.cancelSharedSatelliteChatCompletion(
+          requestId,
+          params,
+          this.chatRequestTimeoutMs,
+        ) as T;
+      }
       if (!input.companionId) {
         return await this.gateway.requestAgent<T>(
           method,

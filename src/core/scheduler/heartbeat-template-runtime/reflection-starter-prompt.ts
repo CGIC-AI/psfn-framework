@@ -17,7 +17,7 @@ const REFLECTION_STARTER_SHAPE = Object.freeze({
 
 // The starter block precedes every default daily/weekly self-elicitation and is
 // therefore part of the governed reflection instrument (R6).
-export const REFLECTION_STARTER_PROMPT_VERSION = 1;
+export const REFLECTION_STARTER_PROMPT_VERSION = 2;
 
 export interface ReflectionStarterPromptInput {
   templateId: string;
@@ -105,11 +105,11 @@ function formatHighSignalClues(context: ReflectionInternalStateContext | null): 
     );
   }
 
-  const concern = [...state.attention.activeConcerns]
+  const openThread = [...state.attention.activeConcerns]
     .sort((left, right) => right.salience - left.salience)
     .at(0);
-  if (concern) {
-    clues.push(`A currently salient thread: ${truncateStarterLine(concern.text)}`);
+  if (openThread) {
+    clues.push(`Something that may be worth revisiting: ${truncateStarterLine(openThread.text)}`);
   }
 
   const followUp = state.attention.pendingFollowUps?.[0];

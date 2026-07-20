@@ -1,9 +1,10 @@
 // ── Cognition Intake Firewall: sink gates (htm9.3) ──
 //
 // Layer 4 of the intake firewall — the actual security boundary. Every
-// consequential sink (prompt assembly, memory write, wiki write, persona
-// mutation, trust mutation, tool egress) checks intake-envelope state/labels
-// through this ONE module before consuming content. Policy lives in
+// consequential sink (prompt assembly, memory write, wiki write, managed
+// skill write, persona mutation, trust mutation, tool egress) checks
+// intake-envelope state/labels through this ONE module before consuming
+// content. Policy lives in
 // intake-policy.json (`sinkGates` section); this module only interprets it.
 //
 // STRUCTURAL RULES (not policy — never configurable):

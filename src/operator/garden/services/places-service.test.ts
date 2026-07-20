@@ -21,10 +21,10 @@ const ENDPOINT = {
     channelPrivacy: 'private',
   },
   maxCapabilities: ['text'],
+  telemetryScopes: ['presence'],
 };
 
 const COMPANION_A = createCompanionId('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa');
-const COMPANION_B = createCompanionId('bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb');
 const NO_COMPANIONS = [];
 
 const SATELLITES = {
@@ -36,6 +36,12 @@ const SATELLITES = {
       displayName: 'Kitchen Hub',
       mobility: 'static',
       placeId: 'place-kitchen',
+      sharedDevice: {
+        primaryCompanionId: COMPANION_A,
+        observationRecipients: [{ companionId: COMPANION_A, scopes: ['presence'] }],
+        emanationMemberIds: [COMPANION_A],
+        responseLease: { durationMs: 5_000, activeConversationTtlMs: 60_000 },
+      },
       endpoints: [ENDPOINT],
     },
     {
@@ -49,7 +55,10 @@ const SATELLITES = {
 
 const PLACES = {
   schemaVersion: 1,
-  sites: [{ siteId: 'site-home', displayName: 'Home', kind: 'physical' }],
+  sites: [
+    { siteId: 'site-home', displayName: 'Home', kind: 'physical' },
+    { siteId: 'site-overlay', displayName: 'Home Overlay', kind: 'virtual' },
+  ],
   places: [
     {
       placeId: 'place-kitchen',
@@ -62,6 +71,14 @@ const PLACES = {
       ],
     },
     { placeId: 'place-living', siteId: 'site-home', displayName: 'Living Room', kind: 'physical', affordances: [] },
+    {
+      placeId: 'place-kitchen-overlay',
+      siteId: 'site-overlay',
+      displayName: 'Kitchen Overlay',
+      kind: 'virtual',
+      mirrorsPlaceId: 'place-kitchen',
+      affordances: [],
+    },
   ],
 };
 
@@ -73,7 +90,11 @@ function seed(satellites: unknown = SATELLITES, places: unknown = PLACES): void 
 }
 
 function readSatellites(): {
-  satellites: Array<{ satelliteId: string; placeId?: string; companionId?: string }>;
+  satellites: Array<{
+    satelliteId: string;
+    placeId?: string;
+    sharedDevice?: { primaryCompanionId: string };
+  }>;
 } {
   return JSON.parse(readFileSync(join(dataDir, 'satellites.json'), 'utf8'));
 }
@@ -129,10 +150,18 @@ describe('AdminPlacesService', () => {
   it('joins places, affordances, and bound satellites', async () => {
     seed();
     const data = await createAdminPlacesService({ dataDir, fleetCompanionIds: NO_COMPANIONS }).listPlaces();
-    expect(data.places.map(p => p.placeId)).toEqual(['place-kitchen', 'place-living']);
+    expect(data.places.map(p => p.placeId)).toEqual([
+      'place-kitchen',
+      'place-living',
+      'place-kitchen-overlay',
+    ]);
     const kitchen = data.places.find(p => p.placeId === 'place-kitchen')!;
     expect(kitchen.affordances.map(a => a.affordanceId)).toEqual(['aff-light', 'aff-presence']);
     expect(kitchen.satellites.map(s => s.satelliteId)).toEqual(['sat-kitchen']);
+    expect(kitchen.twinPlaceId).toBe('place-kitchen-overlay');
+    const overlay = data.places.find(p => p.placeId === 'place-kitchen-overlay')!;
+    expect(overlay.mirrorsPlaceId).toBe('place-kitchen');
+    expect(overlay.twinPlaceId).toBe('place-kitchen');
     expect(data.unboundSatellites.map(s => s.satelliteId)).toEqual(['sat-roamer']);
     expect(data.danglingSatellites).toEqual([]);
   });
@@ -180,26 +209,27 @@ describe('AdminPlacesService', () => {
       .rejects.toThrow(/unknown satellite/);
   });
 
-  it('rejects a second companion binding to an occupied satellite and preserves the owner file', async () => {
-    seed({
-      ...SATELLITES,
-      satellites: SATELLITES.satellites.map((satellite) => (
-        satellite.satelliteId === 'sat-kitchen'
-          ? { ...satellite, companionId: COMPANION_A }
-          : satellite
-      )),
-    });
-    const before = readFileSync(join(dataDir, 'satellites.json'), 'utf8');
+  it('fails closed when re-binding a satellite to a virtual place', async () => {
+    seed();
+    await expect(createAdminPlacesService({ dataDir, fleetCompanionIds: NO_COMPANIONS })
+      .rebindSatellite({ satelliteId: 'sat-roamer', placeId: 'place-kitchen-overlay' }))
+      .rejects.toThrow(/must be physical/u);
+  });
+
+  it('preserves the governed shared-device policy while changing only placeId', async () => {
+    seed();
     const service = createAdminPlacesService({
       dataDir,
-      fleetCompanionIds: [COMPANION_A, COMPANION_B],
+      fleetCompanionIds: [COMPANION_A],
     });
 
-    await expect(service.rebindSatellite({
+    await service.rebindSatellite({
       satelliteId: 'sat-kitchen',
-      companionId: COMPANION_B,
-    })).rejects.toThrow(/already bound.*explicitly unbind/i);
-    expect(readFileSync(join(dataDir, 'satellites.json'), 'utf8')).toBe(before);
+      placeId: 'place-living',
+    });
+    expect(readSatellites().satellites.find(
+      satellite => satellite.satelliteId === 'sat-kitchen',
+    )?.sharedDevice?.primaryCompanionId).toBe(COMPANION_A);
   });
 });
 
@@ -213,7 +243,7 @@ describe('buildAdminPlacesRoutes', () => {
     const res = await invokeRoute(routes, 'GET', '/api/admin/places');
     expect(res.status).toBe(200);
     expect(res.headers['Cache-Control']).toBe('no-store');
-    expect(JSON.parse(res.body).places).toHaveLength(2);
+    expect(JSON.parse(res.body).places).toHaveLength(3);
   });
 
   it('re-binds via PATCH /api/admin/places/satellites/:satelliteId/binding', async () => {
@@ -232,7 +262,7 @@ describe('buildAdminPlacesRoutes', () => {
     expect(JSON.parse(res.body).placeId).toBe('place-living');
   });
 
-  it('binds an unoccupied satellite to a fleet companion via PATCH', async () => {
+  it('rejects the retired companionId binding field via PATCH', async () => {
     seed();
     const routes = buildAdminPlacesRoutes({
       placesService: createAdminPlacesService({
@@ -248,11 +278,8 @@ describe('buildAdminPlacesRoutes', () => {
       JSON.stringify({ companionId: COMPANION_A }),
     );
 
-    expect(res.status).toBe(200);
-    expect(JSON.parse(res.body).companionId).toBe(COMPANION_A);
-    expect(readSatellites().satellites.find(
-      satellite => satellite.satelliteId === 'sat-roamer',
-    )?.companionId).toBe(COMPANION_A);
+    expect(res.status).toBe(400);
+    expect(JSON.parse(res.body).error).toMatch(/unknown key.*companionId/i);
   });
 
   it('rejects a PATCH re-bind to an unknown place with 400', async () => {

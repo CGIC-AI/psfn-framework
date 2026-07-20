@@ -72,6 +72,8 @@ import type {
   ApiTelemetryIngestRpcResult,
   ApiShardOwnerRpcParams,
   ApiShardOwnerRpcResult,
+  SatelliteResponseEligibilityRpcParams,
+  SatelliteResponseEligibilityRpcResult,
 } from '../../channels/api/types.js';
 import type { SessionIntegrityProvider } from '../../persistence/sessions/store.js';
 import type { VisionIntakeImageScreenResult } from './intake/vision-screener.js';
@@ -478,6 +480,9 @@ export class GatewayClient implements
   private shardOwnerHandler: ((params: ApiShardOwnerRpcParams) => Promise<ApiShardOwnerRpcResult>) | null = null;
   private apiTelemetryIngestHandler: ((params: ApiTelemetryIngestRpcParams) => Promise<ApiTelemetryIngestRpcResult>) | null = null;
   private apiHealthHandler: (() => Promise<ApiHealthRpcResult>) | null = null;
+  private satelliteResponseEligibilityHandler: ((
+    params: SatelliteResponseEligibilityRpcParams,
+  ) => Promise<SatelliteResponseEligibilityRpcResult>) | null = null;
   private turnPerformanceHandler: ((event: TurnPerformanceEvent) => Promise<void>) | null = null;
   private contactAuthoritySnapshotHandler: ((
     params: ContactAuthoritySnapshotRequest,
@@ -1818,6 +1823,13 @@ export class GatewayClient implements
     this.registerReverseMethods();
   }
 
+  onSatelliteResponseEligibility(handler: (
+    params: SatelliteResponseEligibilityRpcParams,
+  ) => Promise<SatelliteResponseEligibilityRpcResult>): void {
+    this.satelliteResponseEligibilityHandler = handler;
+    this.registerReverseMethods();
+  }
+
   onTurnPerformance(handler: (event: TurnPerformanceEvent) => Promise<void>): void {
     this.turnPerformanceHandler = handler;
     this.registerReverseMethods();
@@ -1869,6 +1881,9 @@ export class GatewayClient implements
       handleShardOwner: (params) => this.handleShardOwner(params),
       handleApiTelemetryIngest: (params) => this.handleApiTelemetryIngest(params),
       handleApiHealth: () => this.handleApiHealth(),
+      handleSatelliteResponseEligibility: params => (
+        this.handleSatelliteResponseEligibility(params)
+      ),
       handleTurnPerformance: (params) => this.handleTurnPerformance(params),
       handleContactAuthoritySnapshot: (params) => this.handleContactAuthoritySnapshot(params),
     });
@@ -1901,6 +1916,7 @@ export class GatewayClient implements
       ...(response.attachments ? { attachments: response.attachments } : {}),
       model: response.metadata.model,
       durationMs: response.metadata.durationMs,
+      ...(response.metadata.noReply ? { disposition: 'decline' as const } : {}),
     } satisfies VoiceHandleMessageResult;
   }
 
@@ -1954,6 +1970,15 @@ export class GatewayClient implements
       throw new Error('No api.health handler registered');
     }
     return await this.apiHealthHandler();
+  }
+
+  private async handleSatelliteResponseEligibility(
+    params: SatelliteResponseEligibilityRpcParams,
+  ): Promise<SatelliteResponseEligibilityRpcResult> {
+    if (!this.satelliteResponseEligibilityHandler) {
+      throw new Error('No satellite.response.eligibility handler registered');
+    }
+    return await this.satelliteResponseEligibilityHandler(params);
   }
 
   private async handleTurnPerformance(params: unknown): Promise<TurnPerformanceIngestResult> {

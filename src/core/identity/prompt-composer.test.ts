@@ -14,6 +14,7 @@ import {
   ensureTemporalRulesPromptLayer,
   TEMPORAL_RULES_LAYER_CONTENT,
   TEMPORAL_RULES_LAYER_IDENTIFIER,
+  TEMPORAL_RULES_LAYER_VERSION,
 } from './temporal-rules-layer.js';
 import { ValuesJournalStore } from '../../faculties/values/store.js';
 import { NorthStarStore } from '../../faculties/north-star/store.js';
@@ -173,9 +174,46 @@ describe('PromptComposer', () => {
       expect(result.staticLayerIds).toContain(base.id);
       expect(result.staticLayerIds).toContain(operator.id);
       expect(result.staticLayerIds).toContain(temporalLayer?.id);
-      expect(result.dynamicSuffix).not.toContain('<temporal_rules>');
-      expect(result.staticPrefix.indexOf('OPERATOR')).toBeLessThan(result.staticPrefix.indexOf('<temporal_rules>'));
+      expect(result.dynamicSuffix).not.toContain('<temporal_rules');
+      expect(result.staticPrefix.indexOf('OPERATOR')).toBeLessThan(result.staticPrefix.indexOf('<temporal_rules'));
       expect(result.staticPrefix).toContain('Treat runtime.current_datetime as the canonical source');
+      expect(TEMPORAL_RULES_LAYER_CONTENT).toContain(
+        `<temporal_rules version="${TEMPORAL_RULES_LAYER_VERSION}">`,
+      );
+      expect(TEMPORAL_RULES_LAYER_CONTENT).toContain('chat-format temporal system notes');
+      expect(TEMPORAL_RULES_LAYER_CONTENT).toContain('cross_channel_continuity');
+      expect(TEMPORAL_RULES_LAYER_CONTENT).not.toContain('continuity_anchor');
+      expect(TEMPORAL_RULES_LAYER_CONTENT).not.toContain('wake_orientation');
+    });
+
+    it('migrates a persisted v1 temporal-rules layer away from retired block names', () => {
+      const oldContent = [
+        '<temporal_rules>',
+        '<rule>Treat runtime.current_datetime as the canonical source for the current date and time.</rule>',
+        '<rule>Use continuity_anchor or wake_orientation as idle-gap context; it can help with continuity, but it should not change the current date or time.</rule>',
+        '<rule>Use cross_channel_continuity as retrieved context from other channels; it can add background, but it should not change the current date or time.</rule>',
+        '<rule>When words like now, today, tomorrow, yesterday, earlier, later, still, already, just, since, or ago matter, resolve them from runtime.current_datetime or explicit pinned temporal resolutions rather than memory alone.</rule>',
+        '<rule>When making a temporal claim, ground it in runtime.current_datetime, continuity_anchor, wake_orientation, cross_channel_continuity, or an explicit pinned temporal resolution.</rule>',
+        '</temporal_rules>',
+      ].join('\n');
+      const persisted = store.create({
+        type: 'operator',
+        name: 'Temporal Grounding Rules',
+        identifier: TEMPORAL_RULES_LAYER_IDENTIFIER,
+        role: 'system',
+        promptOrder: 990,
+        priority: 990,
+        content: oldContent,
+        updatedBy: 'system',
+      });
+
+      ensureTemporalRulesPromptLayer(store);
+
+      const migrated = store.getById(persisted.id);
+      expect(migrated?.content).toBe(TEMPORAL_RULES_LAYER_CONTENT);
+      expect(migrated?.content).not.toContain('continuity_anchor');
+      expect(migrated?.content).not.toContain('wake_orientation');
+      expect(migrated?.version).toBe(TEMPORAL_RULES_LAYER_VERSION);
     });
 
     it('keeps customized temporal rules content while normalizing layer metadata', () => {

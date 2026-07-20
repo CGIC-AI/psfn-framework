@@ -9,6 +9,11 @@ import { getVisionToolRequestContext } from '../../../primitives/images/request-
 import { buildFocusMemoryScopeQuery } from '../../session/focus-knowledge.js';
 import { resolveConversationScopeFromMetadata } from '../../session/conversation-scope.js';
 import { SessionManager } from '../../session/manager.js';
+import {
+  CapturedSessionReads,
+  type CapturedSessionOwnerIdentity,
+  type CapturedSessionReadOperations,
+} from '../../session/manager/captured-session-owner.js';
 import { SessionStore, type SessionStoreOptions } from '../../../persistence/sessions/store.js';
 import {
   getPromptPlanBlockText,
@@ -49,7 +54,10 @@ import {
 } from '../fatigue/fatigue-budget.js';
 import type { IcpFatigueRegulationReservationPort } from '../fatigue/regulation-reservation.js';
 import type { HumanAttentionPressurePort } from '../fatigue/human-attention-pressure.js';
-import type { TurnExecutionRuntime } from './turn-execution-runtime.js';
+import type {
+  TurnAdmissionRuntime,
+  TurnExecutionRuntime,
+} from './turn-execution-runtime.js';
 import { handleMessageForTurn } from './turn-execution-runtime.js';
 import { PromptCacheTurnRuntime } from './turn-execution/prompt-cache-runtime.js';
 import { CompletionNoticeBuffer } from '../completion-notices.js';
@@ -613,6 +621,112 @@ function createRuntime(params: {
     triggerEmotionAppraisal: vi.fn(async () => undefined),
     ...params.emotionSelfModelRuntimeOverrides,
   };
+  const sessionManager = {
+    buildContext: params.buildContext,
+    captureTurnSessionContext: vi.fn(async (input: { channelId: string }) => ({
+      channelId: input.channelId,
+      recentEntries: [],
+      sourceEntryCount: 0,
+      compactionSummaryTexts: [],
+      focusKnowledgeTexts: [],
+      continuityEntries: [],
+      versionPointer: 'mock-session-context',
+    })),
+    recordTurn: vi.fn(),
+    hasRecordedTurn: vi.fn(() => false),
+    findRecordedTurn: vi.fn(() => null),
+    findSourceRecordedTurn: vi.fn(() => null),
+    findUniqueSourceRecordedTurn: vi.fn(() => null),
+    resolveSessionForIngress: vi.fn((channelId: string) => channelId),
+    appendSystemNote: vi.fn(),
+    awaitPendingAutoCompaction: params.awaitPendingAutoCompaction,
+    hasPendingAutoCompaction: params.hasPendingAutoCompaction ?? vi.fn(() => false),
+    scheduleAutoCompactionBetweenTurns: params.scheduleAutoCompactionBetweenTurns,
+    getActiveFocusMemoryScopeQuery: vi.fn(() => null),
+    getRecentMessages: vi.fn(() => []),
+    getRecentMessagesAtOrBefore: vi.fn(() => []),
+    getRoleEnvelopeRefsForEntries: vi.fn(() => []),
+    captureAutoCompactionRecentEntries: vi.fn(() => []),
+    reconcileSessionChannelFromDisk: vi.fn(async () => null),
+    getRecentConversationSpeakers: vi.fn(() => []),
+    resolveConversationScope: vi.fn((input: {
+      channelId: string;
+      channelMeta?: { isDirectMessage?: boolean };
+      userId?: string;
+      contact?: { contactId: string; displayName?: string };
+    }) => resolveConversationScopeFromMetadata({
+      channelId: input.channelId,
+      isDirectMessage: input.channelMeta?.isDirectMessage,
+      ...(input.contact ? { contact: input.contact } : {}),
+      ...(input.userId ? { participantId: input.userId } : {}),
+    })),
+    createCapturedSessionReads: vi.fn((
+      _owner: CapturedSessionOwnerIdentity,
+    ): CapturedSessionReads => {
+      throw new Error('Captured session reads factory is not initialized');
+    }),
+    ...params.sessionManager,
+  };
+  const createMockCapturedSessionReadOperations = (
+    owner: CapturedSessionOwnerIdentity,
+  ): CapturedSessionReadOperations => ({
+    buildContext: (...args) => sessionManager.buildContext(owner.logicalSessionId, ...args),
+    captureTurnSessionContext: (input) => sessionManager.captureTurnSessionContext({
+      ...input,
+      channelId: owner.logicalSessionId,
+    }),
+    getRecentMessages: (limit) => sessionManager.getRecentMessages(owner.logicalSessionId, limit),
+    getRecentMessagesAtOrBefore: (maxEntryId, limit) => (
+      sessionManager.getRecentMessagesAtOrBefore(owner.logicalSessionId, maxEntryId, limit)
+    ),
+    getRoleEnvelopeRefsForEntries: (entryIds) => (
+      sessionManager.getRoleEnvelopeRefsForEntries(owner.logicalSessionId, entryIds)
+    ),
+    scheduleAutoCompactionBetweenTurns: (input) => (
+      sessionManager.scheduleAutoCompactionBetweenTurns({
+        ...input,
+        channelId: owner.logicalSessionId,
+      })
+    ),
+    captureAutoCompactionRecentEntries: (input) => (
+      sessionManager.captureAutoCompactionRecentEntries({
+        ...input,
+        channelId: owner.logicalSessionId,
+      })
+    ),
+    hasPendingAutoCompaction: () => sessionManager.hasPendingAutoCompaction(owner.logicalSessionId),
+    getActiveFocusMemoryScopeQuery: () => (
+      sessionManager.getActiveFocusMemoryScopeQuery(owner.logicalSessionId)
+    ),
+    getRecentConversationSpeakers: () => (
+      sessionManager.getRecentConversationSpeakers(owner.logicalSessionId)
+    ),
+    resolveConversationScope: (input) => sessionManager.resolveConversationScope({
+      ...input,
+      channelId: owner.logicalSessionId,
+    }),
+    reconcileSessionChannelFromDisk: () => (
+      sessionManager.reconcileSessionChannelFromDisk(owner.logicalSessionId)
+    ),
+  });
+  const createMockCapturedSessionReads = (
+    owner: CapturedSessionOwnerIdentity,
+  ): CapturedSessionReads => new CapturedSessionReads(
+    sessionManager,
+    owner,
+    createMockCapturedSessionReadOperations(owner),
+    channelId => {
+      const foreignOwner = {
+        logicalSessionId: channelId,
+        sourceChannelId: channelId,
+      };
+      return {
+        owner: foreignOwner,
+        operations: createMockCapturedSessionReadOperations(foreignOwner),
+      };
+    },
+  );
+  sessionManager.createCapturedSessionReads = vi.fn(createMockCapturedSessionReads);
   const runtime = {
     eventBus: params.eventBus,
     costTelemetry: createEventBusCostTelemetryPort(params.eventBus),
@@ -628,43 +742,7 @@ function createRuntime(params: {
     },
     imageVisionReviewer: params.imageVisionReviewer ?? null,
     cogSecMode: params.cogSecMode ?? 'enforce',
-    sessionManager: {
-      buildContext: params.buildContext,
-      captureTurnSessionContext: vi.fn(async (input: { channelId: string }) => ({
-        channelId: input.channelId,
-        recentEntries: [],
-        sourceEntryCount: 0,
-        compactionSummaryTexts: [],
-        focusKnowledgeTexts: [],
-        continuityEntries: [],
-        versionPointer: 'mock-session-context',
-      })),
-      recordTurn: vi.fn(),
-      hasRecordedTurn: vi.fn(() => false),
-      findRecordedTurn: vi.fn(() => null),
-      findSourceRecordedTurn: vi.fn(() => null),
-      findUniqueSourceRecordedTurn: vi.fn(() => null),
-      resolveSessionChannelId: vi.fn((channelId: string) => channelId),
-      appendSystemNote: vi.fn(),
-      awaitPendingAutoCompaction: params.awaitPendingAutoCompaction,
-      hasPendingAutoCompaction: params.hasPendingAutoCompaction ?? vi.fn(() => false),
-      scheduleAutoCompactionBetweenTurns: params.scheduleAutoCompactionBetweenTurns,
-      getActiveFocusMemoryScopeQuery: vi.fn(() => null),
-      getRecentMessages: vi.fn(() => []),
-      getRecentConversationSpeakers: vi.fn(() => []),
-      resolveConversationScope: vi.fn((input: {
-        channelId: string;
-        channelMeta?: { isDirectMessage?: boolean };
-        userId?: string;
-        contact?: { contactId: string; displayName?: string };
-      }) => resolveConversationScopeFromMetadata({
-        channelId: input.channelId,
-        isDirectMessage: input.channelMeta?.isDirectMessage,
-        ...(input.contact ? { contact: input.contact } : {}),
-        ...(input.userId ? { participantId: input.userId } : {}),
-      })),
-      ...(params.sessionManager as Record<string, unknown>),
-    } as unknown as SessionManager,
+    sessionManager,
     config: {
       primaryModel: 'test-model',
       primaryProvider: 'test',
@@ -725,13 +803,13 @@ function createRuntime(params: {
     resolveTaskKind: vi.fn(() => undefined),
     buildTurnBudgetCharacteristics: params.buildTurnBudgetCharacteristics ?? vi.fn(() => ({ mode: 'default' })),
     resolveTurnCallType: vi.fn(() => 'chat'),
-    buildTurnCorrelation: vi.fn((message, callType, turnId, requestId) => ({
+    buildTurnCorrelation: vi.fn((message, callType, turnId, requestId, logicalSessionId) => ({
       callType,
       purpose: 'agent.turn',
       turnId,
       requestId,
       channelId: message.channelId,
-      sessionId: message.channelId,
+      sessionId: logicalSessionId,
     })),
     withCorrelationPurpose: vi.fn((correlation, purpose) => ({ ...correlation, purpose })),
     countResolvableSpeakerContacts: vi.fn(async () => 0),
@@ -755,7 +833,6 @@ function createRuntime(params: {
     })),
     recordUserMessage: params.recordUserMessage,
     recordSystemMessage: params.recordSystemMessage ?? vi.fn(() => null),
-    resolveSessionChannelId: vi.fn((channelId: string) => channelId),
     resolveChannelType: vi.fn(() => 'api'),
     ensureModel: vi.fn(),
     captureTurnPromptSnapshot: vi.fn(() => ({})),
@@ -843,7 +920,7 @@ function createRuntime(params: {
     emitTelemetry: vi.fn(),
     consumeIntentionalNoReplyDecision: params.consumeIntentionalNoReplyDecision ?? vi.fn(() => null),
     runIntentionPostTurnHooks: vi.fn(async () => undefined),
-  } as unknown as TurnExecutionRuntime;
+  } as unknown as TurnAdmissionRuntime;
 
   return runtime;
 }
@@ -949,7 +1026,7 @@ describe('handleMessageForTurn intentional no-reply', () => {
       response: expect.objectContaining({
         metadata: expect.objectContaining({ noReply }),
       }),
-    }));
+    }), expect.anything());
   });
 
   it('demotes a no-reply issued after a user-facing reply was authored and delivers the reply', async () => {
@@ -1061,7 +1138,7 @@ describe('handleMessageForTurn outbound reply hygiene', () => {
     expect(recordAssistantMessage.mock.calls[0]?.[4]).toBe(quoted);
   });
 
-  it('rejects an image-attachment claim when no attachment exists this turn', async () => {
+  it('heals an image-attachment claim without replacing the rest of the reply', async () => {
     const eventBus = new EventBus();
     const buildContext = vi.fn(async () => ({
       systemPrompt: 'System prompt',
@@ -1086,16 +1163,86 @@ describe('handleMessageForTurn outbound reply hygiene', () => {
 
     const response = await handleMessageForTurn(runtime, createMessage('msg-false-image-claim'));
 
-    const correction = 'I could not attach an image because no image tool completed successfully this turn. '
-      + 'I need to call selfie_create or generate_image before saying an image is attached.';
-    expect(response.content).toBe(correction);
+    const healedReply = 'Fresh selfie, exactly like you asked for.';
+    expect(response.content).toBe(healedReply);
+    expect(response.content).not.toContain('I could not attach an image');
     expect(response.attachments).toBeUndefined();
-    expect(recordAssistantMessage.mock.calls[0]?.[4]).toBe(correction);
+    expect(recordAssistantMessage.mock.calls[0]?.[4]).toBe(healedReply);
     expect(runtime.emitTelemetry).toHaveBeenCalledWith(
       'agent.image_attachment_claim.rejected',
       expect.objectContaining({
         channelId: 'ch1',
         requestId: 'msg-false-image-claim',
+      }),
+    );
+  });
+
+  it('never delivers either marker from a same-line two-marker reply', async () => {
+    const eventBus = new EventBus();
+    const buildContext = vi.fn(async () => ({
+      systemPrompt: 'System prompt',
+      messages: [],
+      manifest: makeContextManifestFixture(),
+    }));
+    const recordAssistantMessage = vi.fn(() => 2);
+    const runtime = createRuntime({
+      eventBus,
+      sessionManager: {
+        buildContext,
+      } as unknown as SessionManager,
+      buildContext,
+      scheduleAutoCompactionBetweenTurns: vi.fn(async () => undefined),
+      awaitPendingAutoCompaction: vi.fn(async () => undefined),
+      recordUserMessage: vi.fn(() => 1),
+      recordAssistantMessage,
+    });
+    runtime.extractResponseText = vi.fn(
+      () => '*image attached* here you go [photo attached]',
+    );
+
+    const response = await handleMessageForTurn(runtime, createMessage('msg-two-false-image-claims'));
+
+    expect(response.content).not.toMatch(/(?:image|photo) attached/iu);
+    expect([
+      'here you go',
+      'I could not attach an image because no image tool completed successfully this turn. '
+        + 'I need to call selfie_create or generate_image before saying an image is attached.',
+    ]).toContain(response.content);
+    expect(recordAssistantMessage.mock.calls[0]?.[4]).toBe(response.content);
+  });
+
+  it('uses the correction only when removing the claim leaves no reply', async () => {
+    const eventBus = new EventBus();
+    const buildContext = vi.fn(async () => ({
+      systemPrompt: 'System prompt',
+      messages: [],
+      manifest: makeContextManifestFixture(),
+    }));
+    const recordAssistantMessage = vi.fn(() => 2);
+    const runtime = createRuntime({
+      eventBus,
+      sessionManager: {
+        buildContext,
+      } as unknown as SessionManager,
+      buildContext,
+      scheduleAutoCompactionBetweenTurns: vi.fn(async () => undefined),
+      awaitPendingAutoCompaction: vi.fn(async () => undefined),
+      recordUserMessage: vi.fn(() => 1),
+      recordAssistantMessage,
+    });
+    runtime.extractResponseText = vi.fn(() => 'Your selfie is attached below.');
+
+    const response = await handleMessageForTurn(runtime, createMessage('msg-only-false-image-claim'));
+
+    const correction = 'I could not attach an image because no image tool completed successfully this turn. '
+      + 'I need to call selfie_create or generate_image before saying an image is attached.';
+    expect(response.content).toBe(correction);
+    expect(recordAssistantMessage.mock.calls[0]?.[4]).toBe(correction);
+    expect(runtime.emitTelemetry).toHaveBeenCalledWith(
+      'agent.image_attachment_claim.rejected',
+      expect.objectContaining({
+        channelId: 'ch1',
+        requestId: 'msg-only-false-image-claim',
       }),
     );
   });
@@ -1203,7 +1350,7 @@ describe('handleMessageForTurn generated media delivery', () => {
           toolName: 'media',
         }),
       ]),
-    }));
+    }), expect.anything());
     expect(emitSpy).toHaveBeenCalledWith('agent.turn.end', expect.objectContaining({
       response: expect.objectContaining({
         attachments: [expectedAttachment],
@@ -1359,10 +1506,10 @@ describe('handleMessageForTurn generated media delivery', () => {
       (runtime.agent.state.messages as any[]).push({ role: 'user', content: promptMessage.content });
       (runtime.agent.state.messages as any[]).push({
         role: 'assistant',
-        content: 'Here is the recovered image.',
+        content: 'Your selfie is attached below.',
       });
     });
-    runtime.extractResponseText = vi.fn(() => 'Here is the recovered image.');
+    runtime.extractResponseText = vi.fn(() => 'Your selfie is attached below.');
 
     const response = await handleMessageForTurn(runtime, createMessage('msg-missed-tool-result'));
 
@@ -1372,8 +1519,12 @@ describe('handleMessageForTurn generated media delivery', () => {
       name: 'missed-transcript-purr.png',
       localPath,
     };
-    expect(response.content).toBe('Here is the recovered image.');
+    expect(response.content).toBe('Your selfie is attached below.');
     expect(response.attachments).toEqual([expectedAttachment]);
+    expect(runtime.emitTelemetry).not.toHaveBeenCalledWith(
+      'agent.image_attachment_claim.rejected',
+      expect.anything(),
+    );
     expect(runtime.recordToolObservations).toHaveBeenCalledWith(
       expect.objectContaining({ id: 'msg-missed-tool-result' }),
       expect.objectContaining({ sourceChannelId: 'ch1', logicalSessionId: 'ch1' }),
@@ -1397,7 +1548,7 @@ describe('handleMessageForTurn generated media delivery', () => {
           toolName: 'selfie_create',
         }),
       ]),
-    }));
+    }), expect.anything());
   });
 
   it('drops a paid deliverable and emits no attachments when the turn ends in intentional no-reply', async () => {
@@ -4167,16 +4318,19 @@ describe('handleMessageForTurn compaction scheduling', () => {
     });
     const turnStartLogicalSessionId = reset.newLogicalSessionId;
     runtime.sessionManager = sessionManager;
-    runtime.resolveSessionChannelId = (channelId: string) => (
-      sessionManager.resolveSessionChannelId(channelId)
-    );
-    runtime.buildTurnCorrelation = (message, callType, turnId, requestId) => ({
+    runtime.buildTurnCorrelation = (
+      message,
+      callType,
+      turnId,
+      requestId,
+      logicalSessionId,
+    ) => ({
       callType,
       purpose: 'agent.turn',
       turnId,
       requestId,
       channelId: message.channelId,
-      sessionId: sessionManager.resolveSessionChannelId(message.channelId),
+      sessionId: logicalSessionId,
     });
     runtime.memoryExtractor = {
       maybeExtract: vi.fn(async () => undefined),
@@ -4224,16 +4378,19 @@ describe('handleMessageForTurn compaction scheduling', () => {
       sessionManager: futureSessionManager,
     } = createPersistenceBackedRuntime(dataDir, eventBus);
     futureRuntime.sessionManager = futureSessionManager;
-    futureRuntime.resolveSessionChannelId = channelId => (
-      futureSessionManager.resolveSessionChannelId(channelId)
-    );
-    futureRuntime.buildTurnCorrelation = (turnMessage, callType, turnId, requestId) => ({
+    futureRuntime.buildTurnCorrelation = (
+      turnMessage,
+      callType,
+      turnId,
+      requestId,
+      logicalSessionId,
+    ) => ({
       callType,
       purpose: 'agent.turn',
       turnId,
       requestId,
       channelId: turnMessage.channelId,
-      sessionId: futureSessionManager.resolveSessionChannelId(turnMessage.channelId),
+      sessionId: logicalSessionId,
     });
     futureRuntime.agent.prompt = vi.fn(async (promptMessage: { content: string }) => {
       (futureRuntime.agent.state.messages as any[]).push({ role: 'user', content: promptMessage.content });
@@ -4318,15 +4475,21 @@ describe('handleMessageForTurn compaction scheduling', () => {
     sessionManager.recordUserMessage(admittedOwner, 'admitted prompt history', 'user-a', 'User');
     sessionManager.recordUserMessage(futureOwner, 'future prompt history', 'user-b', 'User');
     sessionManager.setActiveContextSession(admittedOwner);
+    const ingressResolution = vi.spyOn(sessionManager, 'resolveSessionForIngress');
     runtime.sessionManager = sessionManager;
-    runtime.resolveSessionChannelId = channelId => sessionManager.resolveSessionChannelId(channelId);
-    runtime.buildTurnCorrelation = (message, callType, turnId, requestId) => ({
+    runtime.buildTurnCorrelation = (
+      message,
+      callType,
+      turnId,
+      requestId,
+      logicalSessionId,
+    ) => ({
       callType,
       purpose: 'agent.turn',
       turnId,
       requestId,
       channelId: message.channelId,
-      sessionId: sessionManager.resolveSessionChannelId(message.channelId),
+      sessionId: logicalSessionId,
     });
     const authorResolutionStarted = createDeferred<void>();
     const releaseAuthorResolution = createDeferred<void>();
@@ -4358,6 +4521,8 @@ describe('handleMessageForTurn compaction scheduling', () => {
 
     expect(observedPromptHistory).toContain('admitted prompt history');
     expect(observedPromptHistory).not.toContain('future prompt history');
+    expect(ingressResolution).toHaveBeenCalledTimes(1);
+    expect(ingressResolution).toHaveBeenCalledWith(sourceChannelId);
     expect(runtime.enqueuePostTurnBackgroundWork).toHaveBeenCalledWith(
       expect.arrayContaining([
         expect.objectContaining({
@@ -4383,7 +4548,6 @@ describe('handleMessageForTurn compaction scheduling', () => {
     const sourceChannelId = 'api:wyoming:office';
     const observabilitySessionId = 'wyoming-observability:office';
     runtime.sessionManager = sessionManager;
-    runtime.resolveSessionChannelId = channelId => sessionManager.resolveSessionChannelId(channelId);
     runtime.buildTurnCorrelation = turnSupportRuntime.buildTurnCorrelation.bind(turnSupportRuntime);
     runtime.agent.prompt = vi.fn(async (promptMessage: { content: string }) => {
       (runtime.agent.state.messages as any[]).push({ role: 'user', content: promptMessage.content });
@@ -4460,16 +4624,19 @@ describe('handleMessageForTurn compaction scheduling', () => {
     runtime.sessionManager = sessionManager;
     runtime.config.companionId = localCompanionId;
     runtime.enqueuePostTurnBackgroundWork = enqueuePostTurnBackgroundWork;
-    runtime.resolveSessionChannelId = (sourceChannelId: string) => (
-      sessionManager.resolveSessionChannelId(sourceChannelId)
-    );
-    runtime.buildTurnCorrelation = (message, callType, turnId, requestId) => ({
+    runtime.buildTurnCorrelation = (
+      message,
+      callType,
+      turnId,
+      requestId,
+      capturedLogicalSessionId,
+    ) => ({
       callType,
       purpose: 'agent.turn',
       turnId,
       requestId,
       channelId: message.channelId,
-      sessionId: sessionManager.resolveSessionChannelId(message.channelId),
+      sessionId: capturedLogicalSessionId,
     });
     runtime.resolveAuthorContext = vi.fn(() => machineIntelligenceAuthorContext({
       canonicalContactKey: correlation.peerContactId,
@@ -5301,7 +5468,7 @@ describe('handleMessageForTurn compaction scheduling', () => {
     const recordedInput = buildTurnRecordMock.mock.calls[0]?.[0] as { turnSnapshot?: Record<string, unknown> };
     const promptContext = recordedInput.turnSnapshot?.promptContext as Record<string, unknown> | undefined;
     const currentDatetimeAnchor = [
-      '<runtime.current_datetime authority="canonical" overrides="memory,conversation_history,continuity_anchor,wake_orientation,cross_channel_continuity">',
+      '<runtime.current_datetime authority="canonical" overrides="memory,conversation_history,cross_channel_continuity">',
       '<iso>2026-03-18T09:30:00.000-04:00</iso>',
       '<timezone>America/New_York</timezone>',
       '<weekday>Wednesday</weekday>',
@@ -5649,7 +5816,7 @@ describe('handleMessageForTurn failure persistence', () => {
         expect.objectContaining({ role: 'assistant' }),
         expect.objectContaining({ role: 'toolResult', toolName: 'memory_write' }),
       ]),
-    }));
+    }), expect.anything());
     expect(runtime.sessionManager.recordTurn).toHaveBeenCalledWith(expect.objectContaining({
       status: 'failed',
     }));
@@ -5738,7 +5905,7 @@ describe('handleMessageForTurn failure persistence', () => {
     expect(buildTurnRecord).toHaveBeenCalledWith(expect.objectContaining({
       status: 'failed',
       continuationStop: expectedStop,
-    }));
+    }), expect.anything());
     expect(runtime.sessionManager.recordTurn).toHaveBeenCalledWith(expect.objectContaining({
       status: 'failed',
       continuationStop: expectedStop,

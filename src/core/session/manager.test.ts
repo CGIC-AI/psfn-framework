@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { SessionStore } from '../../persistence/sessions/store.js';
-import { UserContinuityStore } from './continuity.js';
+import { parseContinuityEntryProvenance, UserContinuityStore } from './continuity.js';
 import { SessionManager } from './manager.js';
 import { EventBus } from '../../shared/event-bus.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
@@ -14,6 +14,7 @@ import {
   createMissingCrossChannelContinuityPort,
   createUserContinuityPort,
 } from './cross-channel-continuity-port.js';
+import { REDACTED_SESSION_ENTRY_PLACEHOLDER } from './continuity-redaction.js';
 import {
   COMPACTION_SUMMARY_PROMPT_KEY,
   EXTRACTION_PROMPT_KEY,
@@ -49,6 +50,12 @@ import {
   fingerprintBackgroundWorkTurnRecord,
   type MemoryExtractionBackgroundPayload,
 } from '../agent/background-work/types.js';
+import { CogSecEventStore } from '../cogsec/events.js';
+import { CogSecForensicArchive } from '../cogsec/forensic-archive.js';
+import {
+  resolveCogSecEventsPath,
+  resolveCogSecForensicArchiveDir,
+} from '../../persistence/layout.js';
 
 // Assembled history lines carry '[MM-DD-YY HH:mm] ' provenance stamps derived
 // from live clocks; strip them so content assertions stay deterministic.
@@ -94,7 +101,7 @@ function makeConfig(overrides?: Partial<SubstrateConfig>): SubstrateConfig {
 
 function wireTestContinuity(manager: SessionManager, store: UserContinuityStore): void {
   manager.continuityStore = store;
-  manager.crossChannelContinuity = createUserContinuityPort(store, () => true);
+  manager.crossChannelContinuity = createUserContinuityPort(store, () => [], () => true);
 }
 
 function makeMockLLM(): LLMProviderPort {
@@ -459,7 +466,7 @@ describe('SessionManager', () => {
     ].join('\n'));
   });
 
-  it('adds a wake orientation note after a meaningful idle gap and captures telemetry', async () => {
+  it('does not add wake orientation after a meaningful idle gap', async () => {
     const config = makeConfig({ dataDir: dir });
     const mgr = new SessionManager(store, config);
     const previousAt = Date.parse('2026-06-10T23:30:00-04:00');
@@ -485,7 +492,7 @@ describe('SessionManager', () => {
         authorName: 'User',
         timestamp: currentAt,
       });
-      continuityStore.append('u1', {
+      const sideEntryId = store.append({
         channelId: 'api:side',
         originChannelId: 'api:side',
         role: 'assistant',
@@ -493,6 +500,14 @@ describe('SessionManager', () => {
         timestamp: currentAt - 1_000,
         channelVisibility: 'private',
       });
+      continuityStore.append('u1', {
+        channelId: 'api:side',
+        originChannelId: 'api:side',
+        role: 'assistant',
+        content: 'The visibility audit is still open in the side thread.',
+        timestamp: currentAt - 1_000,
+        channelVisibility: 'private',
+      }, sideEntryId);
       (mgr as unknown as {
         focusKnowledgeStore: {
           append: (input: {
@@ -523,47 +538,18 @@ describe('SessionManager', () => {
       });
 
       const snapshot = await mgr.captureTurnSessionContext({ channelId: 'api:main', userId: 'u1' });
-      expect(snapshot.orientation).toMatchObject({
-        fired: true,
-        reason: 'idle_gap_exceeded',
-        idleGapMs: currentAt - previousAt,
-        idleThresholdMs: expect.any(Number),
-        sourceCounts: {
-          focusKnowledge: 1,
-        },
-      });
-      expect(snapshot.orientation?.noteText).toContain('Welcome back');
-      expect(snapshot.orientation?.noteText).toContain('Last time here');
-      expect(snapshot.orientation?.noteText).toContain('Recent continuity');
-      expect(snapshot.orientation?.noteText).not.toContain('Open threads');
-      expect(snapshot.orientation?.lastUserMessage).toBe('Please keep the visibility work focused.');
+      expect(snapshot.orientation).toBeUndefined();
 
       const ctx = await mgr.buildContext('api:main', 'System prompt', '', undefined, 'u1', undefined, [], snapshot);
-      expect(ctx.systemPrompt).toContain('<continuity_anchor authority="companion_context"');
-      expect(ctx.systemPrompt).toContain('role="internal_context"');
-      expect(ctx.systemPrompt).toContain('<elapsed_since_last_active_human>about 9 hours</elapsed_since_last_active_human>');
-      expect(ctx.systemPrompt).toContain('<time_texture_kind>overnight</time_texture_kind>');
-      expect(ctx.systemPrompt).toContain('<time_texture_label>overnight gap</time_texture_label>');
-      expect(ctx.systemPrompt).toContain('<reconnection_warmth_signal>medium</reconnection_warmth_signal>');
-      expect(ctx.systemPrompt).toContain('do not treat it as a requirement to perform affection');
-      expect(ctx.systemPrompt).toContain('<current_turn_user_message>Please keep the visibility work focused.</current_turn_user_message>');
-      expect(ctx.systemPrompt).toContain('<where_we_left_off>Visibility audit paused with prompt ordering still in progress.</where_we_left_off>');
-      expect(ctx.systemPrompt).toContain('<pending_state>pending_intent_available</pending_state>');
-      expect(ctx.systemPrompt).toContain('<pending_intent>Resume by checking the remaining prompt-order runtime tests.</pending_intent>');
-      expect(ctx.systemPrompt).toContain('<recent_continuity>');
-      expect(ctx.systemPrompt).toContain('The visibility audit is still open in the side thread.');
+      expect(ctx.systemPrompt).not.toContain('<continuity_anchor');
+      expect(ctx.systemPrompt).not.toContain('<time_texture_');
+      expect(ctx.systemPrompt).not.toContain('<reconnection_warmth_');
+      expect(ctx.systemPrompt).not.toContain('perform affection');
+      // Live cross-channel rendering is metadata-only (u8iv strip-content).
+      expect(ctx.systemPrompt).not.toContain('The visibility audit is still open in the side thread.');
       expect(ctx.systemPrompt).not.toContain('Open threads');
-      expect(ctx.systemPrompt.indexOf('<continuity_anchor')).toBeLessThan(
-        ctx.systemPrompt.indexOf('<cross_channel_continuity'),
-      );
       const orientationSection = ctx.systemPromptSections.find(section => section.id === 'wake_orientation');
-      expect(orientationSection?.content).toContain('<continuity_anchor authority="companion_context"');
-      expect(orientationSection?.content).toContain('<recent_continuity>');
-      expect(orientationSection?.content).toContain('The visibility audit is still open in the side thread.');
-      expect(orientationSection?.provenance).toMatchObject({
-        kind: 'system_note',
-        safeAsPartnerSpeech: false,
-      });
+      expect(orientationSection).toBeUndefined();
       const focusSection = ctx.systemPromptSections.find(section => section.id === 'focus_knowledge');
       expect(focusSection?.content).not.toContain('kind="extraction_artifact"');
       expect(focusSection?.content).toContain('[Prompt visibility] Keep the prompt stack visible and sortable.');
@@ -585,7 +571,7 @@ describe('SessionManager', () => {
     }
   });
 
-  it('captures reflection-channel orientation from contact-bound continuity snapshots', async () => {
+  it('keeps contact-bound reflection continuity without orientation telemetry', async () => {
     const config = makeConfig({ dataDir: dir });
     const mgr = new SessionManager(store, config);
     const previousAt = 1_700_000_000_000;
@@ -603,14 +589,14 @@ describe('SessionManager', () => {
         authorId: 'u1',
         authorName: 'User',
         timestamp: previousAt,
-      });
+      }, undefined, 'non_persistent');
       continuityStore.append('u1', {
         channelId: 'internal:reflection:daily',
         originChannelId: 'internal:reflection:daily',
         role: 'assistant',
         content: 'Recovery mattered most.',
         timestamp: previousAt + 1,
-      });
+      }, undefined, 'non_persistent');
       continuityStore.append('u1', {
         channelId: 'internal:reflection:daily',
         originChannelId: 'internal:reflection:daily',
@@ -619,32 +605,24 @@ describe('SessionManager', () => {
         authorId: 'u1',
         authorName: 'User',
         timestamp: currentAt,
-      });
+      }, undefined, 'non_persistent');
       continuityStore.append('u1', {
         channelId: 'internal:reflection:whisper',
         originChannelId: 'internal:reflection:whisper',
         role: 'assistant',
         content: 'Earlier reflection summary',
         timestamp: currentAt - 500,
-      });
+      }, undefined, 'non_persistent');
       continuityStore.append('u1', {
         channelId: 'internal:heartbeat',
         originChannelId: 'internal:heartbeat',
         role: 'assistant',
         content: 'Heartbeat should stay hidden',
         timestamp: currentAt - 250,
-      });
+      }, undefined, 'non_persistent');
 
       const snapshot = await mgr.captureTurnSessionContext({ channelId: 'internal:reflection:daily', userId: 'u1' });
-      expect(snapshot.orientation).toMatchObject({
-        fired: true,
-        reason: 'idle_gap_exceeded',
-        idleThresholdMs: expect.any(Number),
-      });
-      expect(snapshot.orientation?.noteText).toContain('Welcome back');
-      expect(snapshot.orientation?.noteText).toContain('Recovery mattered most.');
-      expect(snapshot.orientation?.noteText).toContain('Earlier reflection summary');
-      expect(snapshot.orientation?.noteText).not.toContain('Heartbeat should stay hidden');
+      expect(snapshot.orientation).toBeUndefined();
 
       const ctx = await mgr.buildContext(
         'internal:reflection:daily',
@@ -656,13 +634,13 @@ describe('SessionManager', () => {
         [],
         snapshot,
       );
-      expect(ctx.systemPrompt).toContain('<continuity_anchor authority="companion_context"');
+      expect(ctx.systemPrompt).not.toContain('<continuity_anchor');
       expect(ctx.systemPrompt).toContain('<cross_channel_continuity authority="retrieved_context"');
-      expect(ctx.systemPrompt).toContain('Earlier reflection summary');
+      // Live cross-channel rendering is metadata-only (u8iv strip-content).
+      expect(ctx.systemPrompt).not.toContain('Earlier reflection summary');
       expect(ctx.systemPrompt).not.toContain('Heartbeat should stay hidden');
       const orientationSection = ctx.systemPromptSections.find(section => section.id === 'wake_orientation');
-      expect(orientationSection?.content).toContain('<continuity_anchor authority="companion_context"');
-      expect(orientationSection?.content).toContain('Earlier reflection summary');
+      expect(orientationSection).toBeUndefined();
       const continuitySection = ctx.systemPromptSections.find(section => section.id === 'cross_channel_continuity');
       expect(continuitySection?.content).toContain('<cross_channel_continuity authority="retrieved_context"');
       expect(continuitySection?.content).toContain('<channel_id>internal:reflection:whisper</channel_id>');
@@ -672,7 +650,7 @@ describe('SessionManager', () => {
     }
   });
 
-  it('skips the wake orientation note when the idle gap is below threshold', async () => {
+  it('does not capture orientation telemetry for a short idle gap', async () => {
     const config = makeConfig();
     const mgr = new SessionManager(store, config);
     const previousAt = 1_700_000_000_000;
@@ -698,13 +676,7 @@ describe('SessionManager', () => {
       });
 
       const snapshot = await mgr.captureTurnSessionContext({ channelId: 'ch1', userId: 'u1' });
-      expect(snapshot.orientation).toMatchObject({
-        fired: false,
-        reason: 'below_threshold',
-        idleGapMs: currentAt - previousAt,
-        idleThresholdMs: expect.any(Number),
-      });
-      expect(snapshot.orientation?.noteText).toBeUndefined();
+      expect(snapshot.orientation).toBeUndefined();
 
       const ctx = await mgr.buildContext('ch1', 'System prompt', '', undefined, 'u1', undefined, [], snapshot);
       expect(ctx.systemPrompt).not.toContain('<continuity_anchor');
@@ -730,10 +702,7 @@ describe('SessionManager', () => {
       });
 
       const snapshot = await mgr.captureTurnSessionContext({ channelId: 'api:new', userId: 'u1' });
-      expect(snapshot.orientation).toMatchObject({
-        fired: false,
-        reason: 'no_previous_activity',
-      });
+      expect(snapshot.orientation).toBeUndefined();
 
       const ctx = await mgr.buildContext('api:new', 'System prompt', '', undefined, 'u1', undefined, [], snapshot);
       expect(ctx.systemPrompt).not.toContain('<continuity_anchor');
@@ -743,7 +712,7 @@ describe('SessionManager', () => {
     }
   });
 
-  it('omits privacy-filtered continuity from the wake-return anchor in public contexts', async () => {
+  it('omits privacy-filtered continuity from public contexts without a wake-return anchor', async () => {
     const config = makeConfig({ dataDir: dir });
     const mgr = new SessionManager(store, config);
     const continuityStore = new UserContinuityStore(join(dir, 'continuity-public-filter'));
@@ -780,17 +749,12 @@ describe('SessionManager', () => {
 
       const publicMeta = { privacyLevel: 'public' as const };
       const snapshot = await mgr.captureTurnSessionContext({ channelId: 'api:public', userId: 'u1', channelMeta: publicMeta });
-      expect(snapshot.orientation).toMatchObject({
-        fired: true,
-        reason: 'idle_gap_exceeded',
-      });
+      expect(snapshot.orientation).toBeUndefined();
 
       const ctx = await mgr.buildContext('api:public', 'System prompt', '', undefined, 'u1', publicMeta, [], snapshot);
-      expect(ctx.systemPrompt).toContain('<continuity_anchor authority="companion_context"');
-      expect(ctx.systemPrompt).toContain('<pending_state>no_urgent_context</pending_state>');
-      expect(ctx.systemPrompt).toContain('No urgent follow-up or pending intent found');
+      expect(ctx.systemPrompt).not.toContain('<continuity_anchor');
+      expect(ctx.systemPrompt).not.toContain('<pending_state>');
       expect(ctx.systemPrompt).not.toContain('WITHHELD private deployment secret');
-      expect(ctx.systemPrompt).not.toContain('<recent_continuity>');
       expect(ctx.systemPrompt).not.toContain('<cross_channel_continuity');
     } finally {
       nowSpy.mockRestore();
@@ -1595,16 +1559,19 @@ describe('SessionManager', () => {
     mgr.recordAssistantMessage(futureOwner, 'future envelope history');
     mgr.setActiveContextSession(futureOwner);
 
-    await mgr.withCapturedSessionOwner(capturedOwner, async () => {
-      const snapshot = await mgr.captureTurnSessionContext({ channelId: physicalSource });
+    const sessionReads = mgr.createCapturedSessionReads({
+      logicalSessionId: capturedOwner,
+      sourceChannelId: physicalSource,
+    });
+    await sessionReads.run(async () => {
+      const snapshot = await sessionReads.captureTurnSessionContext({});
       expect(snapshot.channelId).toBe(capturedOwner);
       expect(snapshot.recentEntries.map(entry => entry.content)).toEqual([
         'captured prompt history',
         'captured envelope history',
       ]);
 
-      const context = await mgr.buildContext(
-        physicalSource,
+      const context = await sessionReads.buildContext(
         'System',
         '',
         undefined,
@@ -1615,23 +1582,174 @@ describe('SessionManager', () => {
       );
       expect(context.messages.some(message => message.content.includes('captured prompt history'))).toBe(true);
       expect(context.messages.some(message => message.content.includes('future prompt history'))).toBe(false);
-      expect(mgr.getRecentMessagesAtOrBefore(
-        physicalSource,
+      expect(sessionReads.getRecentMessagesAtOrBefore(
         capturedEnvelopeEntryId!,
         10,
       ).map(entry => entry.content)).toEqual([
         'captured prompt history',
         'captured envelope history',
       ]);
-      expect(mgr.getRoleEnvelopeRefsForEntries(
-        physicalSource,
+      expect(sessionReads.getRoleEnvelopeRefsForEntries(
         [capturedEnvelopeEntryId!],
       )).toEqual(['turn_record_summary:env_captured_owner']);
-    }, physicalSource);
-    await expect(mgr.withCapturedSessionOwner(
-      capturedOwner,
-      async () => await mgr.captureTurnSessionContext({ channelId: futureOwner }),
-    )).rejects.toThrow('Captured session owner mismatch');
+      expect(() => mgr.resolveSessionForIngress(futureOwner)).toThrow(
+        'SessionManager.resolveSessionForIngress cannot run during an admitted turn',
+      );
+    });
+  });
+
+  it('fails at the facade method when admitted-turn context is lost', async () => {
+    const mgr = new SessionManager(store, makeConfig());
+    const sessionReads = mgr.createCapturedSessionReads({
+      logicalSessionId: 'api:captured-owner',
+      sourceChannelId: 'api:physical-source',
+    });
+
+    expect(() => sessionReads.captureTurnSessionContext({})).toThrow(
+      'CapturedSessionReads.captureTurnSessionContext lost its admitted-turn session scope',
+    );
+  });
+
+  it('allows an audited foreign-session read and then restores the admitted owner', () => {
+    const mgr = new SessionManager(store, makeConfig());
+    const admittedOwner = 'discord:admitted-owner';
+    const foreignOwner = 'discord:foreign-owner';
+    mgr.recordUserMessage(admittedOwner, 'admitted history', 'user-a', 'User');
+    mgr.recordUserMessage(foreignOwner, 'foreign history', 'user-b', 'User');
+    const sessionReads = mgr.createCapturedSessionReads({
+      logicalSessionId: admittedOwner,
+      sourceChannelId: admittedOwner,
+    });
+
+    sessionReads.run(() => {
+      const foreignMessages = sessionReads.resolveForeignSessionForTurn(
+        'inspect explicitly linked room',
+        foreignOwner,
+        foreignReads => foreignReads.getRecentMessages(10),
+      );
+
+      expect(foreignMessages.map(entry => entry.content)).toEqual(['foreign history']);
+      expect(sessionReads.getRecentMessages(10).map(entry => entry.content)).toEqual([
+        'admitted history',
+      ]);
+    });
+  });
+
+  // B2 closure property (test 3): resolveSessionChannelId is a public mutable
+  // resolver reachable from inside captured scopes. Under a captured owner it
+  // must resolve the owner's own channel to the owner and fail closed on any
+  // other override-eligible channel, so the mutable active context can never
+  // leak a different session's identity into an admitted turn.
+  it('fails closed when in-scope resolveSessionChannelId targets a non-owner api session', () => {
+    const mgr = new SessionManager(store, makeConfig());
+    const capturedOwner = 'api:captured-owner';
+    const otherApiSession = 'api:other-session';
+    // Mutable active context points at a different api session.
+    mgr.setActiveContextSession(otherApiSession);
+    const sessionReads = mgr.createCapturedSessionReads({
+      logicalSessionId: capturedOwner,
+      sourceChannelId: capturedOwner,
+    });
+
+    sessionReads.run(() => {
+      // The owner's own channel resolves to itself, never the active context.
+      expect(mgr.resolveSessionChannelId(capturedOwner)).toBe(capturedOwner);
+      // A different override-eligible channel throws at the call site instead of
+      // silently inheriting activeContextSessionId (the wrong-session leak).
+      expect(() => mgr.resolveSessionChannelId(otherApiSession)).toThrow(
+        'cannot apply mutable active-context resolution',
+      );
+    });
+
+    // Outside the captured scope the mutable resolver behaves normally again.
+    expect(mgr.resolveSessionChannelId(otherApiSession)).toBe(otherApiSession);
+  });
+
+  // B2 (test 2, mock-blindness closer): the background MemoryExtractor runs
+  // inside the source turn's captured owner scope. Every prior extraction test
+  // wires a mock SessionManager, so none exercised the real resolveSessionChannelId
+  // under capture. Here a REAL SessionManager + REAL MemoryExtractor extract for
+  // session A while activeContextSessionId points at a different api session B.
+  // Pre-fix the extractor re-resolved A through the mutable resolver and got B,
+  // attributing A's facts to B (the 9syj.9 wrong-session bug). Post-fix the
+  // owner-aware resolver keeps attribution on A.
+  it('attributes background extraction to the captured owner, not the mutable active context', async () => {
+    const mgr = new SessionManager(store, makeConfig());
+    const eventBus = new EventBus();
+    const sessionA = 'api:session-a';
+    const sessionB = 'api:session-b';
+
+    for (let i = 0; i < 6; i += 1) {
+      mgr.recordUserMessage(sessionA, `Session A turn ${i}: planning a Kyoto trip in April`, 'user-a', 'User');
+      mgr.recordAssistantMessage(sessionA, `Session A reply ${i}: that sounds wonderful`);
+    }
+    const recoveredEntries = store.getRecent(sessionA, 64);
+
+    // The mutable active context points at a DIFFERENT api session (B).
+    mgr.setActiveContextSession(sessionB);
+
+    const extractionLLM = {
+      stream: vi.fn(),
+      complete: vi.fn().mockResolvedValue({
+        content: [
+          '<response>',
+          '<fact>',
+          '<text>User is planning a Kyoto trip in April</text>',
+          '<type>semantic</type>',
+          '<importance>0.9</importance>',
+          '<emotional_valence>0.1</emotional_valence>',
+          '<confidence>0.9</confidence>',
+          '</fact>',
+          '</response>',
+        ].join('\n'),
+        model: 'test-model',
+        inputTokens: 10,
+        outputTokens: 10,
+        toolCalls: [],
+        stopReason: 'end_turn',
+      }),
+    } as unknown as LLMProviderPort;
+    const memoryStore = new InMemoryMemoryStore().asPort();
+    const embeddingService = {
+      embed: vi.fn().mockResolvedValue(new Float32Array(8)),
+      embedBatch: vi.fn(),
+      dims: 8,
+    } as any;
+    const extractor = new MemoryExtractor(
+      extractionLLM,
+      mgr,
+      memoryStore,
+      embeddingService,
+      eventBus,
+      makeConfig(),
+    );
+    // Spy the fact-write sink: its arg[1] is the extraction source ref (carries
+    // the session token) and arg[5] is extractionSourceSessionId. Both encode
+    // which session A's facts get attributed to.
+    const processFactSpy = vi.fn(async () => ({ action: 'created', memory: { id: 'memory:kyoto' } }));
+    (extractor as any).processFact = processFactSpy;
+
+    const sessionReads = mgr.createCapturedSessionReads({
+      logicalSessionId: sessionA,
+      sourceChannelId: sessionA,
+    });
+    await sessionReads.run(async () => {
+      await extractor.maybeExtract(
+        sessionA,
+        undefined,
+        createTurnId(Date.now()),
+        undefined,
+        undefined,
+        undefined,
+        recoveredEntries,
+      );
+    });
+
+    expect(processFactSpy).toHaveBeenCalled();
+    const firstCall = processFactSpy.mock.calls[0] as unknown[];
+    expect(firstCall[5]).toBe(sessionA);
+    expect(firstCall[1]).toContain(`session:${sessionA}`);
+    expect(firstCall[1]).not.toContain(sessionB);
   });
 
   it('keeps stable background reads and compaction on the captured API owner', async () => {
@@ -1669,22 +1787,27 @@ describe('SessionManager', () => {
     mgr.setActiveContextSession(futureOwner);
     const llmProvider = makeMockLLM();
 
-    await mgr.withStableRecordedTurnEligibilitySnapshot(
-      capturedOwner,
-      [sourceRecord.turnId],
-      () => mgr.getRecentMessagesAtOrBefore(capturedOwner, maxCapturedEntryId, 10),
-      async (entries) => {
-        expect(entries.every(entry => entry.channelId === capturedOwner)).toBe(true);
-        await mgr.scheduleAutoCompactionBetweenTurns({
-          channelId: capturedOwner,
-          systemPrompt: '',
-          memoriesBlock: '',
-          llmProvider,
-          capturedRecentEntries: entries,
-          throwOnFailure: true,
-        });
-      },
-    );
+    const sessionReads = mgr.createCapturedSessionReads({
+      logicalSessionId: capturedOwner,
+      sourceChannelId: sourceRecord.channelId,
+    });
+    await sessionReads.run(async () => {
+      await mgr.withStableRecordedTurnEligibilitySnapshot(
+        capturedOwner,
+        [sourceRecord.turnId],
+        () => sessionReads.getRecentMessagesAtOrBefore(maxCapturedEntryId, 10),
+        async (entries) => {
+          expect(entries.every(entry => entry.channelId === capturedOwner)).toBe(true);
+          await sessionReads.scheduleAutoCompactionBetweenTurns({
+            systemPrompt: '',
+            memoriesBlock: '',
+            llmProvider,
+            capturedRecentEntries: entries,
+            throwOnFailure: true,
+          });
+        },
+      );
+    });
 
     expect(llmProvider.complete).toHaveBeenCalledTimes(1);
     expect(fencedStore.getCompactionSummaries(capturedOwner)).toHaveLength(1);
@@ -1710,10 +1833,12 @@ describe('SessionManager', () => {
     });
     mgr.recordUserMessage(sourceChannelId, 'future route history', 'user-b', 'User');
 
-    const snapshot = await mgr.withCapturedSessionOwner(
-      admittedRoute.newLogicalSessionId,
-      async () => await mgr.captureTurnSessionContext({ channelId: sourceChannelId }),
+    const sessionReads = mgr.createCapturedSessionReads({
+      logicalSessionId: admittedRoute.newLogicalSessionId,
       sourceChannelId,
+    });
+    const snapshot = await sessionReads.run(
+      async () => await sessionReads.captureTurnSessionContext({}),
     );
 
     expect(snapshot.channelId).toBe(admittedRoute.newLogicalSessionId);
@@ -1753,26 +1878,19 @@ describe('SessionManager', () => {
     mgr.recordUserMessage(futureOwner, 'future owner history', 'user-b', 'User');
     mgr.setActiveContextSession(admittedOwner);
 
-    let markCaptureStarted!: () => void;
-    const captureStarted = new Promise<void>((resolve) => { markCaptureStarted = resolve; });
-    let releaseCapture!: () => void;
-    const captureRelease = new Promise<void>((resolve) => { releaseCapture = resolve; });
-    const captureTurnSessionContext = mgr.captureTurnSessionContext.bind(mgr);
-    vi.spyOn(mgr, 'captureTurnSessionContext').mockImplementationOnce(async (input) => {
-      markCaptureStarted();
-      await captureRelease;
-      return await captureTurnSessionContext(input);
+    // The owner is captured once at buildContext entry; an active-context
+    // switch that lands mid-capture (here, during the tail-window fetch) must
+    // not retarget the in-flight capture onto the newly-active session.
+    vi.spyOn(store, 'fetchSessionTailWindow').mockImplementationOnce(async () => {
+      mgr.setActiveContextSession(futureOwner);
+      return null;
     });
 
-    const contextPromise = mgr.buildContext(
+    const context = await mgr.buildContext(
       `${channelKind}:physical-ingress`,
       'System',
       '',
     );
-    await captureStarted;
-    mgr.setActiveContextSession(futureOwner);
-    releaseCapture();
-    const context = await contextPromise;
 
     expect(context.messages.some(message => message.content.includes('admitted owner history'))).toBe(true);
     expect(context.messages.some(message => message.content.includes('future owner history'))).toBe(false);
@@ -2518,6 +2636,109 @@ describe('SessionManager', () => {
     expect(mgr.continuityStore.count('contact-canonical-1')).toBe(1);
   });
 
+  it('stamps continuity copies with their immutable source L0 entry ids', () => {
+    const config = makeConfig();
+    const mgr = new SessionManager(store, config);
+    mgr.continuityStore = new UserContinuityStore(join(dir, 'continuity-source-refs'));
+
+    const userEntryId = mgr.recordUserMessage(
+      'api:source',
+      'Partner text',
+      'partner-1',
+      'Partner',
+      true,
+      'partner-1',
+    );
+    const assistantEntryId = mgr.recordAssistantMessage(
+      'api:source',
+      'Companion text',
+      'partner-1',
+      true,
+      'partner-1',
+    );
+    const systemEntryId = mgr.recordSystemMessage(
+      'api:source',
+      'System text',
+      'system:test',
+      'System',
+      true,
+      'partner-1',
+    );
+
+    const continuity = mgr.continuityStore.getRecent('partner-1', 10);
+    expect(continuity.map(item => parseContinuityEntryProvenance(item.metadata)?.sourceEntryId))
+      .toEqual([userEntryId, assistantEntryId, systemEntryId]);
+  });
+
+  it('withholds tombstoned origin content before live cross-channel context assembly', async () => {
+    const config = makeConfig({ dataDir: dir });
+    const mgr = new SessionManager(store, config);
+    wireTestContinuity(mgr, new UserContinuityStore(join(dir, 'continuity-live-redaction')));
+    const originChannelId = 'api:continuity-origin';
+    const consumerChannelId = 'api:continuity-consumer';
+    const secret = 'LIVE_CROSS_CHANNEL_SECRET';
+    const sourceEntryId = mgr.recordUserMessage(
+      originChannelId,
+      secret,
+      'partner-1',
+      'Partner',
+      true,
+      'partner-1',
+    );
+    expect(sourceEntryId).not.toBeNull();
+    mgr.recordUserMessage(
+      consumerChannelId,
+      'Current turn',
+      'partner-1',
+      'Partner',
+      true,
+      'partner-1',
+    );
+
+    const before = await mgr.buildContext(
+      consumerChannelId,
+      'System',
+      '',
+      undefined,
+      'partner-1',
+    );
+    // Live cross-channel rendering is metadata-only (u8iv strip-content): the
+    // origin's message text never reaches the live system prompt, even before
+    // any tombstone. Persisted-surface scrubbing is covered separately.
+    expect(before.systemPrompt).not.toContain(secret);
+    expect(before.systemPrompt).toContain('<cross_channel_continuity authority="retrieved_context"');
+
+    const caseId = 'cogsec_20260719T000000Z_live_continuity';
+    const eventStore = new CogSecEventStore(resolveCogSecEventsPath(dir));
+    const forensicArchive = new CogSecForensicArchive(resolveCogSecForensicArchiveDir(dir));
+    eventStore.createEvent({
+      caseId,
+      type: 'content_poisoning',
+      severity: 'high',
+      sourceChannelId: originChannelId,
+      safeAgentSummary: 'sealed and removed from active cognition',
+    });
+    await store.applyCogSecTombstones({
+      channelId: originChannelId,
+      caseId,
+      eventStore,
+      forensicArchive,
+      messageIds: [sourceEntryId!],
+    });
+
+    const after = await mgr.buildContext(
+      consumerChannelId,
+      'System',
+      '',
+      undefined,
+      'partner-1',
+    );
+    expect(after.systemPrompt).not.toContain(secret);
+    // Metadata-only live rendering never emits message text — redacted or not —
+    // so the placeholder does not surface in the live prompt either.
+    expect(after.systemPrompt).not.toContain(REDACTED_SESSION_ENTRY_PLACEHOLDER);
+  });
+
   it('reports missing wiring until continuity is explicitly configured', () => {
     const config = makeConfig();
     const mgr = new SessionManager(store, config);
@@ -2563,7 +2784,7 @@ describe('SessionManager', () => {
     const continuityStore = new UserContinuityStore(dir);
     wireTestContinuity(mgr, continuityStore);
 
-    continuityStore.append('contact-canonical-1', {
+    const canonicalSourceEntryId = store.append({
       channelId: 'api:origin-1',
       role: 'user',
       content: 'Canonical continuity message',
@@ -2573,8 +2794,18 @@ describe('SessionManager', () => {
       originChannelId: 'api:origin-1',
       channelVisibility: 'private',
     });
+    continuityStore.append('contact-canonical-1', {
+      channelId: 'api:origin-1',
+      role: 'user',
+      content: 'Canonical continuity message',
+      authorId: 'contact-canonical-1',
+      authorName: 'Canonical',
+      timestamp: 1000,
+      originChannelId: 'api:origin-1',
+      channelVisibility: 'private',
+    }, canonicalSourceEntryId);
 
-    continuityStore.append('legacy-discord-id', {
+    const legacySourceEntryId = store.append({
       channelId: 'api:origin-2',
       role: 'assistant',
       content: 'Legacy continuity message',
@@ -2583,12 +2814,27 @@ describe('SessionManager', () => {
       channelVisibility: 'private',
     });
     continuityStore.append('legacy-discord-id', {
+      channelId: 'api:origin-2',
+      role: 'assistant',
+      content: 'Legacy continuity message',
+      timestamp: 2000,
+      originChannelId: 'api:origin-2',
+      channelVisibility: 'private',
+    }, legacySourceEntryId);
+    const fallbackSourceEntryId = store.append({
       channelId: 'api:origin-3',
       role: 'assistant',
       content: 'Fallback channel attribution message',
       timestamp: 3000,
       channelVisibility: 'private',
     });
+    continuityStore.append('legacy-discord-id', {
+      channelId: 'api:origin-3',
+      role: 'assistant',
+      content: 'Fallback channel attribution message',
+      timestamp: 3000,
+      channelVisibility: 'private',
+    }, fallbackSourceEntryId);
 
     mgr.recordUserMessage('api:current', 'Current turn', 'legacy-discord-id', 'User');
 
@@ -2618,7 +2864,7 @@ describe('SessionManager', () => {
 
     mgr.recordUserMessage('api:main', 'snapshot message', 'u1', 'User');
     mgr.recordAssistantMessage('api:main', 'snapshot reply');
-    continuityStore.append('user1', {
+    const snapshotSourceEntryId = store.append({
       channelId: 'api:side',
       originChannelId: 'api:side',
       role: 'assistant',
@@ -2626,11 +2872,19 @@ describe('SessionManager', () => {
       timestamp: 1_700_000_000_000,
       channelVisibility: 'private',
     });
+    continuityStore.append('user1', {
+      channelId: 'api:side',
+      originChannelId: 'api:side',
+      role: 'assistant',
+      content: 'snapshot continuity',
+      timestamp: 1_700_000_000_000,
+      channelVisibility: 'private',
+    }, snapshotSourceEntryId);
 
     const snapshot = await mgr.captureTurnSessionContext({ channelId: 'api:main', userId: 'user1' });
 
     mgr.recordAssistantMessage('api:main', 'late drift');
-    continuityStore.append('user1', {
+    const lateSourceEntryId = store.append({
       channelId: 'api:side',
       originChannelId: 'api:side',
       role: 'assistant',
@@ -2638,6 +2892,14 @@ describe('SessionManager', () => {
       timestamp: 1_700_000_000_100,
       channelVisibility: 'private',
     });
+    continuityStore.append('user1', {
+      channelId: 'api:side',
+      originChannelId: 'api:side',
+      role: 'assistant',
+      content: 'late continuity',
+      timestamp: 1_700_000_000_100,
+      channelVisibility: 'private',
+    }, lateSourceEntryId);
 
     const ctx = await mgr.buildContext('api:main', 'Sys', '', undefined, 'user1', undefined, [], snapshot);
 

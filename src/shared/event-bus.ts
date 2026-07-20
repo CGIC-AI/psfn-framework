@@ -961,27 +961,39 @@ export interface EventMap {
     since: string;
     timestamp: number;
   };
-  // Presence-driven automatic movement (sprint 10, vinz.20/vinz.21 —
-  // "conversation follows you"). Emitted exactly once per APPLIED auto-move so
-  // an operator can always see WHY the companion moved: `physical_presence` =
-  // a resolved, trusted identity claim at a satellite-bound place pulled the
-  // emanation there; `virtual_activity` = trusted partner activity in a
-  // place-bound virtual room pulled the companion's virtual presence there.
-  // Suppressed/no-op decisions (anonymous, untrusted, stale, debounced,
-  // already present) never emit — only real movement is announced.
+  // Deliberate virtual-room continuity only. Physical presence observations
+  // never emit this event and therefore cannot move an emanation or control a
+  // room. Trusted activity in a place-bound virtual room may still update the
+  // separate virtual overlay.
   'presence.emanation.follow': {
-    trigger: 'physical_presence' | 'virtual_activity';
+    trigger: 'virtual_activity';
     /** Contact whose presence/activity the companion followed. */
     contactId: string;
-    /** Satellite that sensed the presence (physical trigger only). */
-    satelliteId?: string;
-    /** Channel whose activity pulled the move (virtual trigger only). */
+    /** Channel whose activity pulled the virtual move. */
     channelId?: string;
     fromPlaceId?: string;
     toPlaceId: string;
     siteId: string;
     kind: PlaceKind;
     timestamp: number;
+  };
+  /** Content-free shared-device observation delivery audit. */
+  'satellite.observation.delivered': {
+    satelliteId: string;
+    companionId: string;
+    scope: string;
+    eventId: string;
+    timestamp: number;
+  };
+  /** Content-free shared-device speech lease transition audit. */
+  'satellite.response.lease': {
+    action: 'acquired' | 'declined' | 'no_op' | 'timed_out' | 'released' | 'speech';
+    satelliteId: string;
+    companionId: string;
+    leaseId: string;
+    priority: 'explicit_address' | 'active_conversation' | 'primary' | 'emanation_member';
+    timestamp: number;
+    reason?: string;
   };
   'intention.outbound.dispatched': { actionId: string; channelId: string; channelType: string; contentLength?: number; timestamp: number };
   'intention.outbound.blocked': { actionId: string; channelId: string; channelType: string; reason?: string; timestamp: number };

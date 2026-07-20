@@ -23,6 +23,7 @@ import { createMemoryAppCache } from '../../shared/cache/memory-cache.js';
 import type { AppCache } from '../../shared/cache/types.js';
 import { RUNTIME_LAYOUT_MODE, resolveRuntimeLayoutMode } from '../../persistence/layout.js';
 import type { SessionManager } from '../session/manager.js';
+import type { CapturedSessionReads } from '../session/manager/captured-session-owner.js';
 import type { ConversationScope } from '../session/conversation-scope.js';
 import { formatAttributedSystemContent } from '../session/entry-attribution.js';
 import {
@@ -147,6 +148,7 @@ import {
 import { resolveSituatedPlaceRef } from './substrate-agent/runtime-context-sections/situated-presence.js';
 import { resolveTurnSituatedFallbackPlaceId } from './substrate-agent/runtime-context-sections/turn-presence-mode.js';
 import type { CompanionPresenceTurnPort } from './companion-presence-runtime.js';
+import { SessionPresenceOverrideState } from './session-presence-override.js';
 import {
   buildBehavioralNotesContextBlock as buildBehavioralNotesContextBlockForTurn,
   buildDynamicPromptTemplateVariables as buildDynamicPromptTemplateVariablesForTurn,
@@ -457,11 +459,12 @@ export class SubstrateAgent {
 
   // Places soft-registry (S10) — undefined behaves as an empty registry
   private readonly placesRegistryConfig: PlacesRegistryConfig | undefined;
+  /** Validated per-logical-session narrative location assertions (vinz.29). */
+  private readonly sessionPresenceOverrideState: SessionPresenceOverrideState;
 
   // Handoff-aware active-emanation tracker (S10 B2) — remembers the companion's
-  // current situated place so placeless turns (Discord/Telegram) still
-  // foreground the room it is emanating into. In-memory per process; durable
-  // persistence is bead .7's concern.
+  // current physical room and any deliberate virtual move. Plain-chat turns
+  // consume its physical room only through the authored twin mapping.
   private readonly situatedEmanationTracker = new SituatedEmanationTracker();
 
   // Virtual-activity presence follow (vinz.21): pulls the companion's virtual
@@ -481,6 +484,16 @@ export class SubstrateAgent {
   }
 
   /**
+   * Set or clear a partner-asserted physical location for the logical session
+   * owning `channelId`. This is the deterministic intake seam; free-text
+   * extraction is intentionally not performed in the turn path.
+   */
+  setSessionPresenceOverride(channelId: string, physicalPlaceId: string | null): void {
+    const logicalSessionId = this.sessionManager.resolveSessionChannelId(channelId);
+    this.sessionPresenceOverrideState.set(logicalSessionId, physicalPlaceId);
+  }
+
+  /**
    * The companion's current situated place, as the situated block foregrounds
    * it on a placeless turn (deliberate virtual move, else active emanation).
    * Serves the world tool's deictic defaults (perceive/list without placeId).
@@ -490,60 +503,27 @@ export class SubstrateAgent {
   }
 
   /**
-   * The current PHYSICAL emanation's place (ignoring any virtual-move
-   * overlay). The presence-follow controller (vinz.20) compares a resolved
-   * presence claim's place against this to decide whether a handoff is a
-   * real move or a repeat detection.
-   */
-  resolveCurrentEmanationPlaceId(): string | undefined {
-    return this.situatedEmanationTracker.snapshot()?.placeId;
-  }
-
-  /**
-   * Presence-driven emanation handoff (conversation-follows-you, vinz.20):
-   * apply the LOCAL side of an auto-follow. Drives the same tracker
-   * transition a place-bearing satellite turn performs (establish the new
-   * emanation place, supersede any virtual-move overlay) and confirms the
-   * durable situated location so the vinz.29 mindspace-twin default follows
-   * the move. Trust/freshness/debounce gating and the shared presence write
-   * live in the controller (`createPresenceFollowSink`); this seam only
-   * applies an already-approved handoff.
-   */
-  applyEmanationFollowHandoff(input: {
-    placeId: string;
-    siteId: string;
-    placeDisplayName: string;
-  }): void {
-    this.situatedEmanationTracker.handoffToPlace(input.placeId);
-    this.emotionSelfModelRuntime.confirmSituatedLocation({
-      placeId: input.placeId,
-      siteId: input.siteId,
-      label: input.placeDisplayName.trim() || input.placeId,
-      kind: 'physical',
-      updatedAt: new Date().toISOString(),
-    });
-  }
-
-  /**
    * Dual-presence situated fallback for a turn (vinz.29, decisions 9-13): the
    * place foregrounded when the turn carries no place binding of its own.
    * Physical-origin turns keep the legacy chain (deliberate virtual move →
-   * active emanation); mindspace turns (plain chat) default to the TWIN of the
-   * durable last-known physical room, still outranked by a deliberate virtual
-   * move. Single seam for the situated block, co-presence read, wiki
+   * active emanation); mindspace turns (plain chat) use a session assertion's
+   * twin, then the durable last-known physical room's twin, still outranked by
+   * a deliberate virtual move. Single seam for the situated block, co-presence read, wiki
    * shared-world scope, and the mindspace presence write — they must all agree
    * on where the companion is.
    */
   resolveSituatedFallbackPlaceIdForTurn(message: SubstrateMessage): string | undefined {
+    const logicalSessionId = this.sessionManager.resolveSessionChannelId(message.channelId);
+    const virtualMovePlaceId = this.situatedEmanationTracker.resolveVirtualMovePlaceId();
+    const sessionOverridePhysicalPlaceId = this.sessionPresenceOverrideState
+      .resolvePhysicalPlaceId(logicalSessionId);
+    const emanationPlaceId = this.situatedEmanationTracker.snapshot()?.placeId;
     return resolveTurnSituatedFallbackPlaceId({
       message,
       ...(this.placesRegistryConfig ? { placesRegistry: this.placesRegistryConfig } : {}),
-      ...(this.situatedEmanationTracker.resolveVirtualMovePlaceId()
-        ? { virtualMovePlaceId: this.situatedEmanationTracker.resolveVirtualMovePlaceId() }
-        : {}),
-      ...(this.situatedEmanationTracker.snapshot()?.placeId
-        ? { emanationPlaceId: this.situatedEmanationTracker.snapshot()?.placeId }
-        : {}),
+      ...(virtualMovePlaceId ? { virtualMovePlaceId } : {}),
+      ...(sessionOverridePhysicalPlaceId ? { sessionOverridePhysicalPlaceId } : {}),
+      ...(emanationPlaceId ? { emanationPlaceId } : {}),
       durableLocation: this.emotionSelfModelRuntime.getCurrentSituatedLocation(),
     });
   }
@@ -599,6 +579,7 @@ export class SubstrateAgent {
     this.fatigueRegulationReservations = options.fatigueRegulationReservations ?? null;
     this.contactTrackingGate = options.contactTrackingGate ?? null;
     this.placesRegistryConfig = options.placesRegistryConfig;
+    this.sessionPresenceOverrideState = new SessionPresenceOverrideState(this.placesRegistryConfig);
     this.virtualRoomFollower = createVirtualRoomFollower({
       ...(this.placesRegistryConfig ? { placesRegistry: this.placesRegistryConfig } : {}),
       getCompanionPresence: () => this.companionPresence,
@@ -693,7 +674,7 @@ export class SubstrateAgent {
     });
     installContextCoherenceMonitor({
       eventBus: this.eventBus,
-      getRecentSessionEntries: (channelId, limit) => this.sessionManager.getRecentMessages(channelId, limit),
+      getRecentSessionEntries: (channelId, limit) => this.sessionManager.getRecentSessionEntries(channelId, limit),
     });
     this.toolRuntimeFacade = new ToolRuntimeFacade({
       config: this.config,
@@ -863,7 +844,7 @@ export class SubstrateAgent {
     return {
       evaluate: ({ toolName, requiredTokens, params }) => {
         if (!requiredTokens.some(isEgressCapabilityToken)) return null;
-        const envelopes = this.currentTurnIntakeEnvelopes;
+        const envelopes = this.getActiveTurnIntakeEnvelopes();
         const access = gate.evaluate('tool_egress', envelopes, { toolName });
         let sinkAllowed = access.allowed;
         let sinkReason = access.reason;
@@ -1040,6 +1021,14 @@ export class SubstrateAgent {
 
   getActiveTurnTools(): readonly AgentTool<any>[] {
     return this.toolRuntimeFacade.getActiveTurnTools();
+  }
+
+  /**
+   * Intake envelopes for the exact async-local tool turn. Empty outside a
+   * turn; safe when ordinary turns overlap.
+   */
+  getActiveTurnIntakeEnvelopes(): readonly IntakeEnvelopeSnapshot[] {
+    return this.toolRuntimeFacade.getActiveTurnIntakeEnvelopes();
   }
 
   getToolCatalogSnapshot(): RuntimeToolCatalogSnapshot {
@@ -1699,6 +1688,7 @@ export class SubstrateAgent {
           currentUserRuntimeProfile,
           conversationScope,
           participantRelationshipEdges,
+          capturedSessionReads,
         ) => this.buildDynamicPromptTemplateVariables(
           turnMessage,
           resolvedUserName,
@@ -1717,6 +1707,7 @@ export class SubstrateAgent {
           currentUserRuntimeProfile,
           conversationScope,
           participantRelationshipEdges,
+          capturedSessionReads,
         ),
         setCurrentSelfModelState: (state, snapshotRef, metacognitiveFlags) => {
           this.currentInternalState = state;
@@ -1960,8 +1951,13 @@ export class SubstrateAgent {
     currentUserRuntimeProfile: UserRuntimeProfile | undefined,
     conversationScope: ConversationScope,
     participantRelationshipEdges: readonly ParticipantRelationshipEdgeInput[],
+    capturedSessionReads: CapturedSessionReads,
   ): Record<string, string> {
-    const recentMessages = this.sessionManager.getRecentMessages(message.channelId, 32);
+    // Owner-bound read: this builder runs inside the admitted turn's captured
+    // session scope, where the raw SessionManager.getRecentMessages fails closed
+    // (assertMutableSessionReadAllowed). Read through the facade so recent
+    // history is scoped to the turn owner, not whatever session is active-context.
+    const recentMessages = capturedSessionReads.getRecentMessages(32);
     const latestPriorMessage = [...recentMessages]
       .reverse()
       .find((entry, index) => {
@@ -2059,8 +2055,8 @@ export class SubstrateAgent {
     const situatedFallbackPlaceId = this.resolveSituatedFallbackPlaceIdForTurn(message);
     // Co-presence (W5a): resolved against the SAME place resolution the
     // situated block performs — turn place first, then the dual-presence
-    // fallback (deliberate virtual move, mindspace twin, or physical
-    // emanation) — so "Also here:" agrees with the rendered "Here:" on
+    // fallback (deliberate virtual move, session/default twin, or a
+    // physical-origin emanation fallback) — so "Also here:" agrees with the rendered "Here:" on
     // placeless turns too; null companionPresence (flag-off) yields no
     // coPresent input and byte-identical rendering.
     const situatedPlace = this.companionPresence

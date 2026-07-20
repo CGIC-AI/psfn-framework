@@ -9,6 +9,10 @@ import type { SessionEntry } from './types.js';
 export interface CrossChannelContinuityAppendRequest {
   continuityUserId: string;
   entry: Omit<SessionEntry, 'id'>;
+  /** Immutable id of `entry` in its source session's L0 journal. */
+  sourceEntryId?: number;
+  /** Explicit attestation for sources that intentionally have no L0 journal. */
+  sourcePersistence?: 'non_persistent';
 }
 
 export interface CrossChannelContinuityQuery {

@@ -80,7 +80,6 @@ COPY --from=build /app/dist/ ./dist/
 COPY --from=build /app/contract-hash.txt ./contract-hash.txt
 COPY --from=build /app/admin-ui/build/ ./admin-ui/build/
 COPY config/*.seed.json ./config/
-COPY config/concern-softening.json ./config/concern-softening.json
 COPY config/intake-l1-rules.json ./config/intake-l1-rules.json
 COPY deploy/helm/psfn/ ./deploy/helm/psfn/
 COPY scripts/ops/ ./scripts/ops/

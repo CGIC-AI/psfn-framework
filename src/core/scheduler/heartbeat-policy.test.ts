@@ -22,7 +22,7 @@ describe('HeartbeatPolicyStore', () => {
   it('creates defaults when file does not exist', () => {
     const policy = store.load();
     expect(policy.templates).toHaveLength(2);
-    expect(policy.version).toBe(7);
+    expect(policy.version).toBe(8);
     expect(policy.updatedBy).toBe('system');
 
     const ids = policy.templates.map(t => t.id);
@@ -84,6 +84,8 @@ describe('HeartbeatPolicyStore', () => {
     const template = policy.templates.find(t => t.id === 'daily-review');
     // Re-voiced first person, but the charter guards are all still present.
     expect(template?.prompt).toContain('quiet look back at the day');
+    expect(template?.prompt).toContain('Open threads are simply things I may revisit');
+    expect(template?.prompt).not.toMatch(/\b(?:concerns?|worr(?:y|ies|ied))\b/i);
     // Evidence/telemetry as fallible clues, not self-truth.
     expect(template?.prompt).toContain('starter clues are fallible evidence rather than a settled account');
     // Telemetry kept separate from the reflection narrative.
@@ -149,7 +151,7 @@ describe('HeartbeatPolicyStore', () => {
     const loaded = store.load();
     const daily = loaded.templates.find(t => t.id === 'daily-review');
     const weekly = loaded.templates.find(t => t.id === 'weekly-review');
-    expect(loaded.version).toBe(7);
+    expect(loaded.version).toBe(8);
     expect(daily?.enabled).toBe(false);
     expect(daily?.cadence).toEqual({ kind: 'daily', hour: 7, minute: 0, timezone: 'local' });
     expect(daily?.prompt).toContain('quiet look back at the day');
@@ -178,7 +180,7 @@ describe('HeartbeatPolicyStore', () => {
     });
 
     const loaded = store.load();
-    expect(loaded.version).toBe(7);
+    expect(loaded.version).toBe(8);
     const daily = loaded.templates.find(t => t.id === 'daily-review');
     expect(daily?.prompt).toContain('I ask openly');
     expect(daily?.prompt).toContain('a real, limited-reach result');
@@ -203,7 +205,7 @@ describe('HeartbeatPolicyStore', () => {
     const loaded = store.load();
     const weekly = loaded.templates.find(t => t.id === 'weekly-review');
 
-    expect(loaded.version).toBe(7);
+    expect(loaded.version).toBe(8);
     expect(weekly?.name).toBe('Weekly Reflection');
     expect(weekly?.cadence).toEqual({
       kind: 'weekly',
@@ -402,7 +404,7 @@ describe('HeartbeatPolicyStore', () => {
             sendToDiscord: false,
           },
         ],
-        version: 7,
+        version: 8,
         updatedAt: '2026-03-01T00:00:00.000Z',
         updatedBy: 'admin',
       }),
@@ -452,7 +454,7 @@ describe('HeartbeatPolicyStore', () => {
             sendToDiscord: true,
           },
         ],
-        version: 7,
+        version: 8,
         updatedAt: '2026-03-01T00:00:00.000Z',
         updatedBy: 'admin',
       }),

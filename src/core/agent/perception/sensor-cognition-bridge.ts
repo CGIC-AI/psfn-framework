@@ -52,7 +52,7 @@ const IDENTITY_CLAIM_WHITELISTED_KEYS: ReadonlySet<string> = new Set([
 ]);
 const IDENTITY_CLAIM_MAX_DEPTH = 4;
 
-type PerceptionScope = 'presence' | 'face';
+type PerceptionScope = 'presence' | 'face' | 'location';
 
 interface ResolvedTelemetryOrigin {
   satellite: SatelliteConfig;
@@ -94,9 +94,16 @@ export interface IdentityClaimPerceptionEvent extends PerceptionEventBase {
   claimSource: 'face';
 }
 
+export interface LocationPerceptionEvent extends PerceptionEventBase {
+  kind: 'location';
+  action: 'observed';
+  scope: 'location';
+}
+
 export type PerceptionEvent =
   | PresencePerceptionEvent
-  | IdentityClaimPerceptionEvent;
+  | IdentityClaimPerceptionEvent
+  | LocationPerceptionEvent;
 
 export interface PerceptionEventSink {
   handlePerceptionEvent(event: PerceptionEvent): void | Promise<void>;
@@ -180,7 +187,9 @@ function readRecord(record: Record<string, unknown>, keys: readonly string[]): R
 
 function normalizeScope(scope: string | undefined): PerceptionScope | undefined {
   const normalized = scope?.trim();
-  return normalized === 'presence' || normalized === 'face' ? normalized : undefined;
+  return normalized === 'presence' || normalized === 'face' || normalized === 'location'
+    ? normalized
+    : undefined;
 }
 
 function buildRegistryIndexes(input: {
@@ -394,6 +403,30 @@ function normalizePresenceEvent(
   };
 }
 
+function normalizeLocationEvent(
+  event: ExternalTelemetryEvent,
+  origin: ResolvedTelemetryOrigin,
+): PerceptionNormalizationResult {
+  return {
+    ok: true,
+    event: {
+      kind: 'location',
+      action: 'observed',
+      eventId: event.id,
+      rawEventType: event.eventType,
+      source: event.source,
+      occurredAt: event.occurredAt,
+      receivedAt: event.receivedAt,
+      scope: 'location',
+      satelliteId: origin.satelliteId,
+      siteId: origin.siteId,
+      placeId: origin.placeId,
+      placeDisplayName: origin.place.displayName,
+      ...(origin.channelId ? { channelId: origin.channelId } : {}),
+    },
+  };
+}
+
 function normalizeIdentityClaimShape(
   payload: Record<string, unknown>,
 ): { hubIdentityId: string; confidence: number } | undefined {
@@ -496,6 +529,9 @@ export function normalizeExternalTelemetryToPerceptionEvent(input: {
 
   if (scope === 'presence') {
     return normalizePresenceEvent(event, scope, origin);
+  }
+  if (scope === 'location') {
+    return normalizeLocationEvent(event, origin);
   }
   if (looksLikeIdentityClaim(event)) {
     return normalizeIdentityClaimEvent(event, scope, origin);

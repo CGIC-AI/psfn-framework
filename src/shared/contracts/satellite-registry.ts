@@ -51,6 +51,35 @@ export const SATELLITE_TELEMETRY_SCOPES = [
 
 export type SatelliteTelemetryScope = typeof SATELLITE_TELEMETRY_SCOPES[number];
 
+/**
+ * A companion may receive only the exact normalized telemetry scopes listed
+ * here. Observation authority is deliberately separate from speech authority.
+ */
+export interface SatelliteObservationRecipient {
+  companionId: CompanionId;
+  scopes: SatelliteTelemetryScope[];
+}
+
+export interface SatelliteResponseLeasePolicy {
+  /** Bounded opportunity to produce one response before authority expires. */
+  durationMs: number;
+  /** How long a successful speaker remains the active-conversation owner. */
+  activeConversationTtlMs: number;
+}
+
+/**
+ * Governed authority split for one physical device. The three roles are not
+ * interchangeable: observations never grant speech, movement, world control,
+ * or historical room access.
+ */
+export interface SatelliteSharedDevicePolicy {
+  primaryCompanionId: CompanionId;
+  observationRecipients: SatelliteObservationRecipient[];
+  /** Ordered allowlist; primary must be first. */
+  emanationMemberIds: CompanionId[];
+  responseLease: SatelliteResponseLeasePolicy;
+}
+
 export type SatelliteMobility = 'static' | 'portable' | 'mobile' | 'unknown';
 
 export type SatelliteAuthMode = 'api_key' | 'mtls';
@@ -237,6 +266,32 @@ export function satelliteAdmitsAuthenticatedOrigin(
   });
 }
 
+/**
+ * Bind an authenticated telemetry principal to one endpoint that both admits
+ * the credential and grants the submitted scope. Authority from two different
+ * endpoints must never be combined.
+ */
+export function satelliteAdmitsAuthenticatedTelemetryScope(
+  satellite: SatelliteConfig,
+  auth: SatelliteTelemetryAuthContext,
+  scope: SatelliteTelemetryScope,
+): boolean {
+  if (auth.principalMode !== 'api_key') return false;
+  return satellite.endpoints.some((endpoint) => {
+    if (!endpoint.telemetryScopes.includes(scope)) return false;
+    if (!satelliteEndpointAdmitsApiKeyPrincipal(endpoint.auth, {
+      id: auth.principalId,
+      satelliteScoped: auth.satelliteScoped,
+    })) {
+      return false;
+    }
+    if (endpoint.auth.mode === 'mtls') {
+      return satelliteClientCertMatchesBinding(endpoint.auth, auth.clientCert).ok;
+    }
+    return true;
+  });
+}
+
 export interface SatelliteDefaultIdentityConfig {
   authorId: string;
   authorName: string;
@@ -306,18 +361,16 @@ export interface SatelliteConfig {
    * (see `assertSatellitePlaceBindings`).
    */
   placeId?: string;
-  /**
-   * Fleet companion that owns every endpoint/app surface on this satellite.
-   * A satellite has at most one owner; changing an occupied binding requires
-   * an explicit unbind first.
-   */
-  companionId?: CompanionId;
+  /** Required authority split when this device is shared by a companion fleet. */
+  sharedDevice?: SatelliteSharedDevicePolicy;
   endpoints: SatelliteEndpointConfig[];
 }
 
 export interface SatelliteRegistryConfig {
   schemaVersion: 1;
   enabled: boolean;
+  /** Fleet-wide singleton designated by the owner file, never inferred. */
+  productivityCompanionId?: CompanionId;
   satellites: SatelliteConfig[];
 }
 
@@ -354,13 +407,14 @@ export interface AdminSatelliteView {
   displayName: string;
   mobility: SatelliteMobility;
   staticLocationLabel?: string;
-  companionId?: CompanionId;
+  sharedDevice?: SatelliteSharedDevicePolicy;
   endpoints: AdminSatelliteEndpointView[];
 }
 
 export interface AdminSatelliteRegistryView {
   schemaVersion: 1;
   enabled: boolean;
+  productivityCompanionId?: CompanionId;
   satelliteCount: number;
   endpointCount: number;
   liveObservationStatus: 'not_implemented';
@@ -388,8 +442,10 @@ export interface SatelliteRoutingMetadata {
   staticLocationLabel?: string;
   /** Static place binding carried onto the turn (see `SatelliteConfig.placeId`). */
   placeId?: string;
-  /** satellites.json-owned companion route for this authenticated endpoint. */
-  companionId?: CompanionId;
+  /** satellites.json-owned shared-device authorities for this endpoint. */
+  sharedDevice?: SatelliteSharedDevicePolicy;
+  /** Authenticated hub interpretation of an explicit partner address. */
+  addressedCompanionId?: CompanionId;
   capabilities: SatelliteClaimCapabilityResolution;
   telemetryScopes: SatelliteTelemetryScope[];
   auth: {
@@ -409,6 +465,7 @@ export interface SatelliteConfigPullHeaderContract {
   threadId: string;
   capabilities: string;
   telemetryScopes: string;
+  addressedCompanionId: string;
 }
 
 export interface SatelliteConfigPullSessionContract {
@@ -434,6 +491,7 @@ export interface SatelliteConfigPullResponse {
     displayName: string;
     mobility: SatelliteMobility;
     staticLocationLabel?: string;
+    sharedDevice?: SatelliteSharedDevicePolicy;
   };
   endpoint: {
     endpointId: string;

@@ -1,6 +1,97 @@
 import { describe, expect, it, vi } from 'vitest';
 import { GatewayApiRuntime, computeGatewayChatRequestTimeoutMs } from './gateway-runtime.js';
 import type { ApiRuntimeChatRequest } from './types.js';
+import { createCompanionId } from '../../shared/routing/companion-id.js';
+import type { SatelliteRegistryConfig } from '../../shared/contracts/satellite-registry.js';
+import type { ExternalTelemetryEvent } from '../../shared/event-bus.js';
+
+const TELEMETRY_COMPANION = createCompanionId('11111111-1111-4111-8111-111111111111');
+
+function createTelemetryRegistry(options: {
+  enabled?: boolean;
+  sharedDevice?: boolean;
+} = {}): SatelliteRegistryConfig {
+  const enabled = options.enabled ?? true;
+  const sharedDevice = options.sharedDevice ?? true;
+  return {
+    schemaVersion: 1,
+    enabled,
+    satellites: [{
+      satelliteId: 'sat-1',
+      displayName: 'Kitchen',
+      mobility: 'static',
+      ...(sharedDevice
+        ? {
+            sharedDevice: {
+              primaryCompanionId: TELEMETRY_COMPANION,
+              observationRecipients: [{
+                companionId: TELEMETRY_COMPANION,
+                scopes: ['presence'],
+              }],
+              emanationMemberIds: [TELEMETRY_COMPANION],
+              responseLease: { durationMs: 5_000, activeConversationTtlMs: 60_000 },
+            },
+          }
+        : {}),
+      endpoints: [{
+        endpointId: 'sensor',
+        displayName: 'Sensor',
+        claimTypes: ['telemetry'],
+        promptChannelType: 'api',
+        auth: { mode: 'api_key', apiKeyPrincipalIds: ['sensor-key'] },
+        defaultIdentity: {
+          authorId: 'sensor',
+          authorName: 'Sensor',
+          canonicalContactId: 'contact-partner',
+          channelPrivacy: 'private',
+        },
+        maxCapabilities: ['telemetry', 'presence'],
+        telemetryScopes: ['presence'],
+      }],
+    }],
+  };
+}
+
+function createTelemetryEvent(
+  overrides: Partial<ExternalTelemetryEvent> = {},
+): ExternalTelemetryEvent {
+  return {
+    id: 'event-1',
+    source: 'sat-1',
+    eventType: 'external.telemetry.status',
+    payload: { satelliteId: 'sat-1', present: true },
+    occurredAt: '2026-07-19T12:00:00.000Z',
+    receivedAt: '2026-07-19T12:00:01.000Z',
+    nonce: 'nonce-12345678',
+    scope: 'presence',
+    auth: {
+      principalId: 'sensor-key',
+      principalMode: 'api_key',
+      satelliteScoped: false,
+    },
+    ...overrides,
+  };
+}
+
+function createTelemetryRuntime(registry: SatelliteRegistryConfig) {
+  const requestAgent = vi.fn(async () => ({
+    ok: true as const,
+    response: {
+      ok: true as const,
+      id: 'event-1',
+      acceptedEventType: 'external.telemetry.status',
+    },
+  }));
+  const requestCompanionAgent = vi.fn();
+  const runtime = new GatewayApiRuntime({
+    requestAgent,
+    requestCompanionAgent,
+    subscribeApiStream: vi.fn(() => () => {}),
+  }, {
+    satelliteRegistryProvider: () => registry,
+  });
+  return { requestAgent, requestCompanionAgent, runtime };
+}
 
 function createChatRequest(): ApiRuntimeChatRequest {
   return {
@@ -15,6 +106,181 @@ function createChatRequest(): ApiRuntimeChatRequest {
 }
 
 describe('GatewayApiRuntime', () => {
+  it('routes normalized shared-satellite observations to exact recipients, never the generic agent', async () => {
+    const primary = createCompanionId('11111111-1111-4111-8111-111111111111');
+    const productivity = createCompanionId('22222222-2222-4222-8222-222222222222');
+    const requestAgent = vi.fn();
+    const observationAudit = vi.fn(async () => undefined);
+    const requestCompanionAgent = vi.fn(async () => ({
+      ok: true as const,
+      response: {
+        ok: true as const,
+        id: 'event-1',
+        acceptedEventType: 'external.telemetry.status',
+      },
+    }));
+    const runtime = new GatewayApiRuntime({
+      requestAgent,
+      requestCompanionAgent,
+      subscribeApiStream: vi.fn(() => () => {}),
+    }, {
+      satelliteRegistryProvider: () => ({
+        schemaVersion: 1,
+        enabled: true,
+        productivityCompanionId: productivity,
+        satellites: [{
+          satelliteId: 'sat-1',
+          displayName: 'Kitchen',
+          mobility: 'static',
+          placeId: 'kitchen',
+          sharedDevice: {
+            primaryCompanionId: primary,
+            observationRecipients: [
+              { companionId: primary, scopes: ['presence'] },
+              { companionId: productivity, scopes: ['presence'] },
+            ],
+            emanationMemberIds: [primary],
+            responseLease: { durationMs: 5_000, activeConversationTtlMs: 60_000 },
+          },
+          endpoints: [{
+            endpointId: 'sensor',
+            displayName: 'Sensor',
+            claimTypes: ['telemetry'],
+            promptChannelType: 'api',
+            auth: { mode: 'api_key', apiKeyPrincipalIds: ['sensor-key'] },
+            defaultIdentity: {
+              authorId: 'sensor',
+              authorName: 'Sensor',
+              canonicalContactId: 'contact-partner',
+              channelPrivacy: 'private',
+            },
+            maxCapabilities: ['telemetry', 'presence'],
+            telemetryScopes: ['presence'],
+          }],
+        }],
+      }),
+      observationAudit,
+      now: () => 1_000,
+    });
+
+    await runtime.handleTelemetryIngest({
+      id: 'event-1',
+      source: 'sat-1',
+      eventType: 'external.telemetry.status',
+      payload: { satelliteId: 'sat-1', present: true, rawRoomDetail: 'strip me' },
+      occurredAt: '2026-07-19T12:00:00.000Z',
+      receivedAt: '2026-07-19T12:00:01.000Z',
+      nonce: 'nonce-12345678',
+      scope: 'presence',
+      auth: {
+        principalId: 'sensor-key',
+        principalMode: 'api_key',
+        satelliteScoped: false,
+      },
+    });
+
+    expect(requestAgent).not.toHaveBeenCalled();
+    expect(requestCompanionAgent).toHaveBeenCalledTimes(2);
+    expect(requestCompanionAgent).toHaveBeenNthCalledWith(
+      2,
+      productivity,
+      'api.telemetry.ingest',
+      {
+        event: expect.objectContaining({
+          payload: { satelliteId: 'sat-1', placeId: 'kitchen', present: true },
+        }),
+      },
+    );
+    expect(observationAudit).toHaveBeenCalledTimes(2);
+    expect(observationAudit).toHaveBeenNthCalledWith(2, {
+      satelliteId: 'sat-1',
+      companionId: productivity,
+      scope: 'presence',
+      eventId: 'event-1',
+      timestamp: 1_000,
+    });
+  });
+
+  it('routes telemetry generically when the satellite registry is disabled', async () => {
+    const { requestAgent, requestCompanionAgent, runtime } = createTelemetryRuntime(
+      createTelemetryRegistry({ enabled: false }),
+    );
+    const telemetryEvent = createTelemetryEvent();
+
+    await runtime.handleTelemetryIngest(telemetryEvent);
+
+    expect(requestAgent).toHaveBeenCalledWith('api.telemetry.ingest', { event: telemetryEvent });
+    expect(requestCompanionAgent).not.toHaveBeenCalled();
+  });
+
+  it('routes registered non-shared satellite presence telemetry generically', async () => {
+    const { requestAgent, requestCompanionAgent, runtime } = createTelemetryRuntime(
+      createTelemetryRegistry({ sharedDevice: false }),
+    );
+    const telemetryEvent = createTelemetryEvent();
+
+    await runtime.handleTelemetryIngest(telemetryEvent);
+
+    expect(requestAgent).toHaveBeenCalledWith('api.telemetry.ingest', { event: telemetryEvent });
+    expect(requestCompanionAgent).not.toHaveBeenCalled();
+  });
+
+  it('acknowledges and drops unauthenticated non-shared observations', async () => {
+    const telemetryEvent = createTelemetryEvent({ auth: undefined });
+    const { requestAgent, requestCompanionAgent, runtime } = createTelemetryRuntime(
+      createTelemetryRegistry({ sharedDevice: false }),
+    );
+
+    const result = await runtime.handleTelemetryIngest(telemetryEvent);
+
+    expect(result).toMatchObject({ ok: true, response: { id: 'event-1' } });
+    expect(requestAgent).not.toHaveBeenCalled();
+    expect(requestCompanionAgent).not.toHaveBeenCalled();
+  });
+
+  it('acknowledges and drops non-admitted non-shared observations', async () => {
+    const nonSharedRegistry = createTelemetryRegistry({ sharedDevice: false });
+    nonSharedRegistry.satellites[0].endpoints[0].telemetryScopes = ['location'];
+    const telemetryEvent = createTelemetryEvent();
+    const { requestAgent, requestCompanionAgent, runtime } = createTelemetryRuntime(
+      nonSharedRegistry,
+    );
+
+    const result = await runtime.handleTelemetryIngest(telemetryEvent);
+
+    expect(result).toMatchObject({ ok: true, response: { id: 'event-1' } });
+    expect(requestAgent).not.toHaveBeenCalled();
+    expect(requestCompanionAgent).not.toHaveBeenCalled();
+  });
+
+  it.each(['health', 'battery'])('routes registered satellite %s telemetry generically', async (scope) => {
+    const { requestAgent, requestCompanionAgent, runtime } = createTelemetryRuntime(
+      createTelemetryRegistry(),
+    );
+    const telemetryEvent = createTelemetryEvent({ scope });
+
+    await runtime.handleTelemetryIngest(telemetryEvent);
+
+    expect(requestAgent).toHaveBeenCalledWith('api.telemetry.ingest', { event: telemetryEvent });
+    expect(requestCompanionAgent).not.toHaveBeenCalled();
+  });
+
+  it('acknowledges and drops spoofed unknown-satellite presence telemetry', async () => {
+    const { requestAgent, requestCompanionAgent, runtime } = createTelemetryRuntime(
+      createTelemetryRegistry(),
+    );
+    const telemetryEvent = createTelemetryEvent({
+      source: 'sat-unknown',
+      payload: { satelliteId: 'sat-unknown', present: true },
+    });
+
+    const result = await runtime.handleTelemetryIngest(telemetryEvent);
+
+    expect(result).toMatchObject({ ok: true, response: { id: 'event-1' } });
+    expect(requestAgent).not.toHaveBeenCalled();
+    expect(requestCompanionAgent).not.toHaveBeenCalled();
+  });
+
   it('routes an admitted fleet chat request to the exact companion', async () => {
     const requestAgent = vi.fn();
     const requestCompanionAgent = vi.fn(async () => ({
@@ -50,6 +316,85 @@ describe('GatewayApiRuntime', () => {
         request: expect.objectContaining({ model: 'test-model' }),
       }),
       95_000,
+    );
+  });
+
+  it('routes authenticated satellite HTTP chat through shared response arbitration', async () => {
+    const primary = createCompanionId('11111111-1111-4111-8111-111111111111');
+    const requestAgent = vi.fn();
+    const requestCompanionAgent = vi.fn();
+    const requestSharedSatelliteChatCompletion = vi.fn(async () => ({
+      ok: true as const,
+      response: {
+        content: 'leased response',
+        channelId: 'satellite:voice:session-1',
+        inputTokens: 2,
+        outputTokens: 2,
+      },
+    }));
+    const runtime = new GatewayApiRuntime({
+      requestAgent,
+      requestCompanionAgent,
+      requestSharedSatelliteChatCompletion,
+      cancelSharedSatelliteChatCompletion: vi.fn(),
+      subscribeApiStream: vi.fn(() => () => {}),
+    }, {
+      satelliteRegistryProvider: () => ({
+        schemaVersion: 1,
+        enabled: true,
+        satellites: [{
+          satelliteId: 'sat-1',
+          displayName: 'Kitchen',
+          mobility: 'static',
+          sharedDevice: {
+            primaryCompanionId: primary,
+            observationRecipients: [],
+            emanationMemberIds: [primary],
+            responseLease: { durationMs: 5_000, activeConversationTtlMs: 60_000 },
+          },
+          endpoints: [{
+            endpointId: 'voice',
+            displayName: 'Voice',
+            claimTypes: ['voice'],
+            promptChannelType: 'api',
+            auth: { mode: 'api_key', apiKeyPrincipalIds: ['sensor-key'] },
+            defaultIdentity: {
+              authorId: 'partner',
+              authorName: 'Partner',
+              canonicalContactId: 'contact-partner',
+              channelPrivacy: 'private',
+            },
+            maxCapabilities: ['audio_input', 'audio_output'],
+            telemetryScopes: [],
+          }],
+        }],
+      }),
+    });
+
+    const result = await runtime.handleChatCompletion({
+      ...createChatRequest(),
+      request: { ...createChatRequest().request, stream: false },
+      principal: { id: 'sensor-key', mode: 'api_key' },
+      headers: {
+        'x-psfn-satellite-claim-type': 'voice',
+        'x-psfn-satellite-id': 'sat-1',
+        'x-psfn-satellite-endpoint-id': 'voice',
+        'x-psfn-satellite-session-id': 'session-1',
+      },
+    });
+
+    expect(result).toMatchObject({ ok: true, response: { content: 'leased response' } });
+    expect(requestAgent).not.toHaveBeenCalled();
+    expect(requestCompanionAgent).not.toHaveBeenCalled();
+    expect(requestSharedSatelliteChatCompletion).toHaveBeenCalledWith(
+      expect.objectContaining({
+        canonicalContactId: 'contact-partner',
+        channelId: 'satellite:voice:session-1',
+        satellite: expect.objectContaining({
+          satelliteId: 'sat-1',
+          sharedDevice: expect.objectContaining({ primaryCompanionId: primary }),
+        }),
+      }),
     );
   });
 

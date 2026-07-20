@@ -8,7 +8,7 @@ const PERSONA_FIELDS = [
 
 export const CONTINUITY_TOOL_CONTRACTS = {
   orient: {
-    purpose: 'Maintain scoped continuity blocks, values, concerns, and explicit introspection consent choices.',
+    purpose: 'Maintain scoped continuity blocks, values, open threads, and explicit introspection consent choices.',
     actions: [
       action('append', ['block', 'text'], ['separator']),
       action('replace', ['block', 'text']),
@@ -43,7 +43,7 @@ export const CONTINUITY_TOOL_CONTRACTS = {
       action('cancel_stage', ['stage_id'], ['reason']),
     ],
     output: 'It returns layer, diff, revision, persona, or staged-change state and never bypasses safeguards.',
-    guidance: 'Do not use identity for current concerns or long-horizon intent; use orient or north_star.',
+    guidance: 'Do not use identity for current open threads or long-horizon intent; use orient or north_star.',
     example: { action: 'diff_layer', layer_id: 'runtime', version: 2 },
   },
   memory: {

@@ -26,7 +26,9 @@ const ISO_DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 // out-of-scope/descriptive framing.
 // v3 (kb9j): contact guidance no longer names or forecloses a silence/absence
 // topic; the curated starter and downstream guardrail carry the useful signal.
-export const REFLECTION_CONTEXT_GUIDANCE_VERSION = 3;
+// v4 (189d): short-lived attention items present as optional open threads,
+// capped to the same three-item view used by the live system prompt.
+export const REFLECTION_CONTEXT_GUIDANCE_VERSION = 4;
 
 export type ReflectionExecutionSource =
   | 'manual'
@@ -399,22 +401,31 @@ function formatRecentSessionTailBlock(
   };
 }
 
-function formatActiveConcernsBlock(
+function formatOpenThreadsBlock(
   concerns: readonly ReflectionContactActiveConcern[] | undefined,
 ): string | undefined {
   if (!concerns || concerns.length === 0) return undefined;
 
   const lines = [
-    '[Active Concerns]',
-    'Treat these as soft threads to revisit, not as a global alarm state.',
+    '[Open Threads]',
+    'These are simply things that may be worth revisiting if they fit what surfaces.',
   ];
 
-  for (const concern of concerns.slice(0, 8)) {
+  const formattedThreads = concerns.flatMap((concern) => {
     const priority = concern.priority ?? 'medium';
     const text = truncateReflectionText(concern.text ?? '', 180);
-    if (!text) continue;
+    if (!text) return [];
     const expiresAt = formatOptionalDateTime(concern.expiresAt);
-    lines.push(`- [${priority}${concern.source ? `|${concern.source}` : ''}] ${text}${expiresAt !== 'unknown' ? ` (revisit before ${expiresAt})` : ''}`);
+    const details = [
+      `${priority} salience`,
+      ...(expiresAt !== 'unknown' ? [`available through ${expiresAt}`] : []),
+    ];
+    return [`- ${text} (${details.join('; ')})`];
+  });
+  lines.push(...formattedThreads.slice(0, 3));
+  const omittedCount = Math.max(0, formattedThreads.length - 3);
+  if (omittedCount > 0) {
+    lines.push(`- ${omittedCount} additional lower-salience thread${omittedCount === 1 ? '' : 's'} omitted.`);
   }
 
   return lines.length > 2 ? lines.join('\n') : undefined;
@@ -571,9 +582,9 @@ export function assembleReflectionContactContextBundle(
     recentSessionBlock.provenanceRefs.forEach(ref => provenanceRefs.add(ref));
   }
 
-  const activeConcernsBlock = formatActiveConcernsBlock(input.activeConcerns);
-  if (activeConcernsBlock) {
-    relationalSections.push(activeConcernsBlock);
+  const openThreadsBlock = formatOpenThreadsBlock(input.activeConcerns);
+  if (openThreadsBlock) {
+    relationalSections.push(openThreadsBlock);
   }
 
   const pendingFollowUpsBlock = formatPendingFollowUpsBlock(input.pendingFollowUps);

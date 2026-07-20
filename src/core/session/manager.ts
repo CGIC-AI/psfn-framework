@@ -1,10 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type { AgentResponse, LLMContext, TurnRecord } from '../../shared/contracts/runtime.js';
 import type { SessionRestartBehavior, SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
-import {
-  DEFAULT_TEMPORAL_WAKEUP_CONFIG,
-  type TemporalWakeupWakeSummaryConfig,
-} from '../../system/config/scheduler-config.js';
 import type { MemoryScopeQuery } from '../../faculties/memory/types.js';
 import type { LLMProviderPort } from '../agent/contracts.js';
 import type {
@@ -100,7 +96,6 @@ import type {
 } from './manager/contracts.js';
 import { runAutoCompaction } from './manager/compaction-service.js';
 import type { TurnSessionContextSnapshot } from '../turns/snapshot.js';
-import { cloneSessionContinuityArtifact } from '../turns/snapshot.js';
 import {
   buildToolObservationMetadata,
   normalizeToolObservation,
@@ -125,8 +120,11 @@ import {
 } from './manager/focus-session-runtime.js';
 import { BackgroundWorkHandoffRecovery } from './manager/background-work-handoff-recovery.js';
 import {
-  getCapturedSessionOwner,
-  runWithCapturedSessionOwner,
+  assertNoCapturedSessionOwner,
+  CapturedSessionReads,
+  getCapturedSessionOwnerIdentity,
+  type CapturedSessionOwnerIdentity,
+  type CapturedSessionReadOperations,
 } from './manager/captured-session-owner.js';
 import { isTestingSessionId } from './session-id.js';
 import {
@@ -247,6 +245,19 @@ export type AutoCompactionRecentEntriesCaptureParams = Pick<
   now?: Date;
 };
 
+export interface TurnSessionContextCaptureParams {
+  channelId: string;
+  userId?: string;
+  channelMeta?: ChannelMeta;
+  continuityFallbackUserIds?: string[];
+  turnBudgetCharacteristics?: ContextBudgetTurnCharacteristics;
+  /** Optional LLM provider for foreground history-budget summarization. */
+  llmProvider?: LLMProviderPort;
+  excludeSessionEntryId?: number;
+  /** Channel bonding opt-in for the turn. */
+  channelBond?: import('./channel-bond.js').TurnChannelBondInput;
+}
+
 function resolveCompactionTokenCount(input: {
   count?: number;
   text?: string;
@@ -308,13 +319,6 @@ export class SessionManager {
   crossChannelContinuity: CrossChannelContinuityPort = createMissingCrossChannelContinuityPort();
   /** Character name from identity card (e.g. 'Companion'). Used for display labels in context. */
   characterName: string | undefined;
-  /**
-   * JSON-owned wake summary budgets and continuity entry floor (scheduler.json
-   * temporalWakeup.wakeSummary). Composition assigns the loaded scheduler
-   * config; the initial value mirrors the validated scheduler defaults.
-   */
-  wakeSummaryConfig: TemporalWakeupWakeSummaryConfig = { ...DEFAULT_TEMPORAL_WAKEUP_CONFIG.wakeSummary };
-
   constructor(
     store: SessionStore,
     config: SubstrateConfig,
@@ -366,7 +370,11 @@ export class SessionManager {
   set continuityStore(store: UserContinuityStore | null) {
     this.continuityStoreRef = store;
     this.crossChannelContinuity = store
-      ? createUserContinuityPort(store, () => false)
+      ? createUserContinuityPort(
+        store,
+        (channelId, minId, maxId) => this.store.getEntriesInRange(channelId, minId, maxId),
+        () => false,
+      )
       : createMissingCrossChannelContinuityPort();
   }
 
@@ -382,31 +390,8 @@ export class SessionManager {
     return channelId.startsWith('api:') || channelId.startsWith('terminal:');
   }
 
-  /**
-   * Bind admitted-turn and durable background reads to an already-canonical
-   * logical owner. Nested work may reuse that owner but cannot replace it.
-   */
-  withCapturedSessionOwner<T>(
-    logicalSessionId: string,
-    operation: () => T,
-    sourceChannelId?: string,
-  ): T {
-    return runWithCapturedSessionOwner(
-      this,
-      { logicalSessionId, ...(sourceChannelId ? { sourceChannelId } : {}) },
-      operation,
-    );
-  }
-
-  private withResolvedSessionOwner<T>(
-    channelId: string,
-    operation: (resolvedChannelId: string) => T,
-  ): T {
-    const resolvedChannelId = this.resolveSessionChannelId(channelId);
-    return this.withCapturedSessionOwner(
-      resolvedChannelId,
-      () => operation(resolvedChannelId),
-    );
+  private assertMutableSessionReadAllowed(callSite: string): void {
+    assertNoCapturedSessionOwner(this, callSite);
   }
 
   private resolveOriginChannelId(channelId: string, resolvedChannelId: string): string | undefined {
@@ -449,32 +434,131 @@ export class SessionManager {
     return this.sessionRouteStore.resolveSourceChannelId(channelId);
   }
 
+  /**
+   * Mutable active-context resolution is an ingress operation. Admitted work
+   * receives CapturedSessionReads instead and cannot call this through its
+   * narrowed turn-runtime contract.
+   */
+  resolveSessionForIngress(channelId: string): string {
+    assertNoCapturedSessionOwner(this, 'SessionManager.resolveSessionForIngress');
+    return this.resolveSessionChannelId(channelId);
+  }
+
   resolveSessionChannelId(channelId: string): string {
-    const capturedOwner = getCapturedSessionOwner(this);
-    if (capturedOwner) {
-      const normalizedChannelId = channelId.trim();
-      if (!normalizedChannelId) {
-        throw new Error('Captured session read channel must not be empty');
-      }
-      if (normalizedChannelId === capturedOwner.logicalSessionId
-        || normalizedChannelId === capturedOwner.sourceChannelId) {
-        return capturedOwner.logicalSessionId;
-      }
-      const routedSessionId = this.sessionRouteStore.resolve(normalizedChannelId);
-      if (routedSessionId === capturedOwner.logicalSessionId) {
-        return capturedOwner.logicalSessionId;
-      }
-      throw new Error(
-        `Captured session owner mismatch: active owner is "${capturedOwner.logicalSessionId}" `
-        + `but session resolution requested "${normalizedChannelId}"`,
-      );
-    }
     const routedSessionId = this.sessionRouteStore.resolve(channelId);
     if (routedSessionId) return routedSessionId;
+    // Deterministic session-route resolution is scope-independent and returns
+    // above. Mutable active-context resolution is not: under an admitted turn
+    // the captured owner is the ONLY authoritative logical session, so applying
+    // `activeContextSessionId` here would silently attribute the owner's work to
+    // whatever session happens to be active-context (the 9syj.9 wrong-session
+    // bug). Fail closed instead — the owner channel resolves to itself, any
+    // other override-eligible channel throws at the call site, and only
+    // resolveSessionForIngress and the CapturedSessionReads escape hatch reach
+    // mutable resolution under a captured owner.
+    const capturedOwner = getCapturedSessionOwnerIdentity(this);
+    if (capturedOwner) {
+      if (
+        channelId === capturedOwner.logicalSessionId
+        || channelId === capturedOwner.sourceChannelId
+      ) {
+        return capturedOwner.logicalSessionId;
+      }
+      if (this.shouldOverrideSessionContext(channelId)) {
+        throw new Error(
+          'SessionManager.resolveSessionChannelId cannot apply mutable '
+          + `active-context resolution for "${channelId}" during an admitted `
+          + `turn owned by "${capturedOwner.logicalSessionId}"; resolve through `
+          + 'CapturedSessionReads (owner-bound) or '
+          + 'resolveForeignSessionForTurn(reason, channelId, operation)',
+        );
+      }
+      return channelId;
+    }
     if (isTestingSessionId(channelId)) return channelId;
     if (!this.activeContextSessionId) return channelId;
     if (!this.shouldOverrideSessionContext(channelId)) return channelId;
     return this.activeContextSessionId;
+  }
+
+  /**
+   * Capture an owner-bound read capability at admission or rehydrate one from
+   * a durable payload's source.logicalSessionId + source channel.
+   */
+  createCapturedSessionReads(identity: CapturedSessionOwnerIdentity): CapturedSessionReads {
+    assertNoCapturedSessionOwner(this, 'SessionManager.createCapturedSessionReads');
+    return this.createCapturedSessionReadsInternal(identity);
+  }
+
+  private createCapturedSessionReadsInternal(
+    identity: CapturedSessionOwnerIdentity,
+  ): CapturedSessionReads {
+    const logicalSessionId = identity.logicalSessionId.trim();
+    const sourceChannelId = identity.sourceChannelId.trim();
+    const owner = { logicalSessionId, sourceChannelId };
+    const operations = this.createCapturedSessionReadOperations(owner);
+    return new CapturedSessionReads(
+      this,
+      owner,
+      operations,
+      (channelId) => {
+        const foreignOwner = {
+          logicalSessionId: this.resolveSessionChannelId(channelId),
+          sourceChannelId: channelId,
+        };
+        return {
+          owner: foreignOwner,
+          operations: this.createCapturedSessionReadOperations(foreignOwner),
+        };
+      },
+    );
+  }
+
+  private createCapturedSessionReadOperations(
+    owner: CapturedSessionOwnerIdentity,
+  ): CapturedSessionReadOperations {
+    const { logicalSessionId, sourceChannelId } = owner;
+    return {
+      buildContext: (...args) => this.buildContextForResolvedChannel(
+        logicalSessionId,
+        sourceChannelId,
+        ...args,
+      ),
+      captureTurnSessionContext: (input) => this.captureTurnSessionContextForResolvedChannel(
+        logicalSessionId,
+        sourceChannelId,
+        input,
+      ),
+      getRecentMessages: (limit) => this.getRecentMessagesForResolvedChannel(
+        logicalSessionId,
+        limit,
+      ),
+      getRecentMessagesAtOrBefore: (maxEntryId, limit) => (
+        this.getRecentMessagesAtOrBeforeForResolvedChannel(logicalSessionId, maxEntryId, limit)
+      ),
+      getRoleEnvelopeRefsForEntries: (sessionEntryIds) => (
+        this.getRoleEnvelopeRefsForEntriesForResolvedChannel(logicalSessionId, sessionEntryIds)
+      ),
+      scheduleAutoCompactionBetweenTurns: (params) => (
+        this.scheduleAutoCompactionBetweenTurnsForResolvedChannel(logicalSessionId, params)
+      ),
+      captureAutoCompactionRecentEntries: (params) => (
+        this.captureAutoCompactionRecentEntriesForResolvedChannel(logicalSessionId, params)
+      ),
+      hasPendingAutoCompaction: () => this.pendingAutoCompactions.has(logicalSessionId),
+      getActiveFocusMemoryScopeQuery: () => (
+        this.focusSessionRuntime.getActiveFocusMemoryScopeQueryForResolvedChannel(logicalSessionId)
+      ),
+      getRecentConversationSpeakers: () => (
+        this.scanRecentConversationSpeakers(logicalSessionId)
+      ),
+      resolveConversationScope: (input) => (
+        this.resolveConversationScopeForResolvedChannel(logicalSessionId, input)
+      ),
+      reconcileSessionChannelFromDisk: async () => (
+        await this.store.reloadChannelFromDisk(logicalSessionId)
+      ),
+    };
   }
 
   listSessionRoutes(): SourceChannelSessionRoute[] {
@@ -524,6 +608,22 @@ export class SessionManager {
   }
 
   getActiveContextSession(): string | null {
+    this.assertMutableSessionReadAllowed('SessionManager.getActiveContextSession');
+    return this.activeContextSessionId;
+  }
+
+  /**
+   * The turn's current logical session as an agent tool should see it. Inside an
+   * admitted turn the captured owner is authoritative; outside a turn it is the
+   * mutable active context. Unlike getActiveContextSession this is owner-aware
+   * and does NOT trip the mutable-read guard, so a tool handler the model may
+   * invoke mid-turn (inside the captured owner scope) resolves the owner's own
+   * session instead of throwing. The mutable active context can never leak into
+   * a captured turn through this path.
+   */
+  getActiveContextSessionForTool(): string | null {
+    const capturedOwner = getCapturedSessionOwnerIdentity(this);
+    if (capturedOwner) return capturedOwner.logicalSessionId;
     return this.activeContextSessionId;
   }
 
@@ -538,6 +638,7 @@ export class SessionManager {
    * atomically regardless of foreground turns (welfare: never abandoned).
    */
   hasPendingAutoCompaction(channelId: string): boolean {
+    this.assertMutableSessionReadAllowed('SessionManager.hasPendingAutoCompaction');
     const resolvedChannelId = this.resolveSessionChannelId(channelId);
     return this.pendingAutoCompactions.has(resolvedChannelId);
   }
@@ -611,6 +712,7 @@ export class SessionManager {
   }
 
   getActiveFocusMemoryScopeQuery(channelId: string): MemoryScopeQuery | null {
+    this.assertMutableSessionReadAllowed('SessionManager.getActiveFocusMemoryScopeQuery');
     return this.focusSessionRuntime.getActiveFocusMemoryScopeQuery(channelId);
   }
 
@@ -725,6 +827,7 @@ export class SessionManager {
       if (continuityKey) {
         this.crossChannelContinuity.append({
           continuityUserId: continuityKey,
+          sourcePersistence: 'non_persistent',
           entry: {
             channelId: resolvedChannelId,
             role: entryRole,
@@ -756,6 +859,7 @@ export class SessionManager {
     if (continuityKey) {
       this.crossChannelContinuity.append({
         continuityUserId: continuityKey,
+        sourceEntryId: entryId,
         entry: {
           channelId: resolvedChannelId,
           role: entryRole,
@@ -819,6 +923,7 @@ export class SessionManager {
       if (continuityKey) {
         this.crossChannelContinuity.append({
           continuityUserId: continuityKey,
+          sourcePersistence: 'non_persistent',
           entry: {
             channelId: resolvedChannelId,
             role: 'assistant',
@@ -846,6 +951,7 @@ export class SessionManager {
     if (continuityKey) {
       this.crossChannelContinuity.append({
         continuityUserId: continuityKey,
+        sourceEntryId: entryId,
         entry: {
           channelId: resolvedChannelId,
           role: 'assistant',
@@ -916,6 +1022,7 @@ export class SessionManager {
     if (continuityKey) {
       this.crossChannelContinuity.append({
         continuityUserId: continuityKey,
+        sourceEntryId: entryId,
         entry: {
           channelId: resolvedChannelId,
           role: 'system',
@@ -934,7 +1041,20 @@ export class SessionManager {
   }
 
   scheduleAutoCompactionBetweenTurns(params: AutoCompactionBetweenTurnsParams): Promise<void> {
-    return this.withResolvedSessionOwner(params.channelId, (resolvedChannelId) => {
+    this.assertMutableSessionReadAllowed(
+      'SessionManager.scheduleAutoCompactionBetweenTurns',
+    );
+    const { channelId, ...capturedParams } = params;
+    return this.scheduleAutoCompactionBetweenTurnsForResolvedChannel(
+      this.resolveSessionChannelId(channelId),
+      capturedParams,
+    );
+  }
+
+  private scheduleAutoCompactionBetweenTurnsForResolvedChannel(
+    resolvedChannelId: string,
+    params: Omit<AutoCompactionBetweenTurnsParams, 'channelId'>,
+  ): Promise<void> {
     if (!shouldPersistSessionChannel(resolvedChannelId)) {
       return Promise.resolve();
     }
@@ -954,8 +1074,7 @@ export class SessionManager {
         );
         const recent = params.capturedRecentEntries !== undefined
           ? [...params.capturedRecentEntries]
-          : this.captureAutoCompactionRecentEntries({
-              channelId: resolvedChannelId,
+          : this.captureAutoCompactionRecentEntriesForResolvedChannel(resolvedChannelId, {
               adaptiveProfile,
               ...(params.turnBudgetCharacteristics
                 ? { turnBudgetCharacteristics: params.turnBudgetCharacteristics }
@@ -1021,13 +1140,25 @@ export class SessionManager {
 
     this.pendingAutoCompactions.set(resolvedChannelId, next);
     return next;
-    });
   }
 
   captureAutoCompactionRecentEntries(
     params: AutoCompactionRecentEntriesCaptureParams,
   ): SessionEntry[] {
-    return this.withResolvedSessionOwner(params.channelId, (resolvedChannelId) => {
+    this.assertMutableSessionReadAllowed(
+      'SessionManager.captureAutoCompactionRecentEntries',
+    );
+    const { channelId, ...capturedParams } = params;
+    return this.captureAutoCompactionRecentEntriesForResolvedChannel(
+      this.resolveSessionChannelId(channelId),
+      capturedParams,
+    );
+  }
+
+  private captureAutoCompactionRecentEntriesForResolvedChannel(
+    resolvedChannelId: string,
+    params: Omit<AutoCompactionRecentEntriesCaptureParams, 'channelId'>,
+  ): SessionEntry[] {
     const adaptiveProfile = params.adaptiveProfile ?? resolveAdaptiveContextBudgetProfile(
       this.config,
       params.turnBudgetCharacteristics,
@@ -1075,7 +1206,6 @@ export class SessionManager {
       recent,
       this.config.observationMaskingWindow ?? DEFAULT_OBSERVATION_MASKING_WINDOW,
     ).entries;
-    });
   }
 
   recordToolObservation(
@@ -1229,14 +1359,11 @@ export class SessionManager {
     readSnapshot: () => SessionEntry[],
     operation: (entries: readonly SessionEntry[]) => Promise<T>,
   ): Promise<T> {
-    return await this.withCapturedSessionOwner(
+    return await this.store.withStableTurnRecordEligibilitySnapshot(
       logicalSessionId,
-      async () => await this.store.withStableTurnRecordEligibilitySnapshot(
-        logicalSessionId,
-        requiredTurnIds,
-        readSnapshot,
-        operation,
-      ),
+      requiredTurnIds,
+      readSnapshot,
+      operation,
     );
   }
 
@@ -1273,7 +1400,17 @@ export class SessionManager {
   }
 
   getRoleEnvelopeRefsForEntries(channelId: string, sessionEntryIds: readonly number[]): string[] {
-    const resolvedChannelId = this.resolveSessionChannelId(channelId);
+    this.assertMutableSessionReadAllowed('SessionManager.getRoleEnvelopeRefsForEntries');
+    return this.getRoleEnvelopeRefsForEntriesForResolvedChannel(
+      this.resolveSessionChannelId(channelId),
+      sessionEntryIds,
+    );
+  }
+
+  private getRoleEnvelopeRefsForEntriesForResolvedChannel(
+    resolvedChannelId: string,
+    sessionEntryIds: readonly number[],
+  ): string[] {
     const refs: string[] = [];
     const requestedEntryIds: number[] = [];
     const seenEntryIds = new Set<number>();
@@ -1344,6 +1481,7 @@ export class SessionManager {
   async reconcileSessionChannelFromDisk(
     channelId: string,
   ): Promise<{ maxEntryId: number; lastMessageEntryId: number | null } | null> {
+    this.assertMutableSessionReadAllowed('SessionManager.reconcileSessionChannelFromDisk');
     return await this.store.reloadChannelFromDisk(this.resolveSessionChannelId(channelId));
   }
 
@@ -1354,20 +1492,24 @@ export class SessionManager {
    * PromptPlan); buildContext captures inline for direct callers. There is no
    * parallel live re-derivation (E2.2).
    */
-  async captureTurnSessionContext(input: {
-    channelId: string;
-    userId?: string;
-    channelMeta?: ChannelMeta;
-    continuityFallbackUserIds?: string[];
-    turnBudgetCharacteristics?: ContextBudgetTurnCharacteristics;
-    /** Optional LLM provider for foreground history-budget summarization. */
-    llmProvider?: LLMProviderPort;
-    excludeSessionEntryId?: number;
-    /** Channel bonding opt-in for the turn. */
-    channelBond?: import('./channel-bond.js').TurnChannelBondInput;
-  }): Promise<TurnSessionContextSnapshot> {
-    return await this.withResolvedSessionOwner(input.channelId, async (resolvedChannelId) => {
-    const sourceChannelId = this.resolveSourceChannelId(resolvedChannelId);
+  async captureTurnSessionContext(
+    input: TurnSessionContextCaptureParams,
+  ): Promise<TurnSessionContextSnapshot> {
+    this.assertMutableSessionReadAllowed('SessionManager.captureTurnSessionContext');
+    const resolvedChannelId = this.resolveSessionChannelId(input.channelId);
+    const { channelId: _channelId, ...capturedInput } = input;
+    return await this.captureTurnSessionContextForResolvedChannel(
+      resolvedChannelId,
+      this.resolveSourceChannelId(resolvedChannelId),
+      capturedInput,
+    );
+  }
+
+  private async captureTurnSessionContextForResolvedChannel(
+    resolvedChannelId: string,
+    sourceChannelId: string,
+    input: Omit<TurnSessionContextCaptureParams, 'channelId'>,
+  ): Promise<TurnSessionContextSnapshot> {
     const baseCompactionPrompt = this.promptRegistry?.getPrompt(COMPACTION_SUMMARY_PROMPT_KEY)
       ?? getDefaultPromptText(COMPACTION_SUMMARY_PROMPT_KEY);
     // Shared hot tail (psfn-framework-hgw3.5): when the tail cache is enabled
@@ -1396,7 +1538,6 @@ export class SessionManager {
       store: tailReadStore
         ? createCompactionBoundaryStore(createIcpDeliveryProjectionStore(tailReadStore))
         : this.compactionBoundaryStore,
-      activityStore: tailReadStore ?? this.store,
       crossChannelContinuity: this.crossChannelContinuity,
       focusCompactionRanges: this.getFocusCompactionRanges(resolvedChannelId),
       focusKnowledgeTexts: this.getFocusKnowledgeTexts(resolvedChannelId),
@@ -1413,7 +1554,6 @@ export class SessionManager {
         ? { excludeSessionEntryId: input.excludeSessionEntryId }
         : {}),
       ...(input.channelBond ? { channelBond: input.channelBond } : {}),
-    });
     });
   }
 
@@ -1432,8 +1572,42 @@ export class SessionManager {
     excludeSessionEntryId?: number,
     channelBond?: import('./channel-bond.js').TurnChannelBondInput,
   ): Promise<LLMContext> {
-    return await this.withResolvedSessionOwner(channelId, async (resolvedChannelId) => {
-    const sourceChannelId = this.resolveSourceChannelId(resolvedChannelId);
+    this.assertMutableSessionReadAllowed('SessionManager.buildContext');
+    const resolvedChannelId = this.resolveSessionChannelId(channelId);
+    return await this.buildContextForResolvedChannel(
+      resolvedChannelId,
+      this.resolveSourceChannelId(resolvedChannelId),
+      systemPrompt,
+      memoriesBlock,
+      llmProvider,
+      userId,
+      channelMeta,
+      continuityFallbackUserIds,
+      turnSessionContext,
+      memoryManifestSeed,
+      turnBudgetCharacteristics,
+      conversationScope,
+      excludeSessionEntryId,
+      channelBond,
+    );
+  }
+
+  private async buildContextForResolvedChannel(
+    resolvedChannelId: string,
+    sourceChannelId: string,
+    systemPrompt: string,
+    memoriesBlock: string,
+    llmProvider?: LLMProviderPort,
+    userId?: string,
+    channelMeta?: ChannelMeta,
+    continuityFallbackUserIds: string[] = [],
+    turnSessionContext?: TurnSessionContextSnapshot,
+    memoryManifestSeed?: ContextManifestMemorySeed,
+    turnBudgetCharacteristics?: ContextBudgetTurnCharacteristics,
+    conversationScope?: ConversationScope,
+    excludeSessionEntryId?: number,
+    channelBond?: import('./channel-bond.js').TurnChannelBondInput,
+  ): Promise<LLMContext> {
     if (conversationScope && conversationScope.channelId !== resolvedChannelId) {
       throw new Error(
         `ConversationScope channel mismatch: scope is bound to "${conversationScope.channelId}" `
@@ -1452,8 +1626,10 @@ export class SessionManager {
     // pre-turn (the one persisted in the PromptPlan turn snapshot); direct
     // callers capture inline through the same function.
     const sessionContext = turnSessionContext
-      ?? await this.captureTurnSessionContext({
-        channelId: resolvedChannelId,
+      ?? await this.captureTurnSessionContextForResolvedChannel(
+        resolvedChannelId,
+        sourceChannelId,
+        {
         userId,
         channelMeta,
         continuityFallbackUserIds,
@@ -1461,7 +1637,8 @@ export class SessionManager {
         llmProvider,
         ...(excludeSessionEntryId !== undefined ? { excludeSessionEntryId } : {}),
         ...(channelBond ? { channelBond } : {}),
-      });
+        },
+      );
     const coreMemoryBlock = this.coreMemoryProvider
       ? this.coreMemoryProvider.formatForContext(
         this.buildCoreMemoryFormatContext(scope),
@@ -1471,8 +1648,6 @@ export class SessionManager {
       ?? getDefaultPromptText(COMPACTION_SUMMARY_PROMPT_KEY);
     const compactionPromptText = sessionContext.compactionPromptText
       ?? this.resolveCompactionPromptText(baseCompactionPrompt);
-    const wakeReturnArtifacts = (sessionContext.wakeReturnArtifacts ?? [])
-      .map(cloneSessionContinuityArtifact);
     return buildSessionContext({
       channelId: resolvedChannelId,
       sourceChannelId,
@@ -1497,8 +1672,6 @@ export class SessionManager {
           capturedAt,
         });
       },
-      crossChannelContinuity: this.crossChannelContinuity,
-      wakeReturnArtifacts,
       characterName: this.resolveContextCharacterName(),
       turnSessionContext: sessionContext,
       ...(excludeSessionEntryId !== undefined ? { excludeSessionEntryId } : {}),
@@ -1506,9 +1679,7 @@ export class SessionManager {
       turnBudgetCharacteristics,
       compactionMode: 'deferred',
       pendingCompaction: this.pendingAutoCompactions.has(resolvedChannelId),
-      wakeSummaryConfig: this.wakeSummaryConfig,
       intakeSinkGate: this.intakeSinkGate,
-    });
     });
   }
 
@@ -1723,6 +1894,7 @@ export class SessionManager {
      */
     resolvedSpeakerContactCount?: number;
   }): ConversationScope {
+    this.assertMutableSessionReadAllowed('SessionManager.resolveConversationScope');
     return this.resolveConversationScopeForResolvedChannel(
       this.resolveSessionChannelId(input.channelId),
       input,
@@ -1760,6 +1932,7 @@ export class SessionManager {
    * resolveConversationScope (E3.3 envelope derivation).
    */
   getRecentConversationSpeakers(channelId: string): ConversationScopeSpeaker[] {
+    this.assertMutableSessionReadAllowed('SessionManager.getRecentConversationSpeakers');
     return this.scanRecentConversationSpeakers(this.resolveSessionChannelId(channelId));
   }
 
@@ -1918,7 +2091,17 @@ export class SessionManager {
   }
 
   getRecentMessages(channelId: string, limit?: number): SessionEntry[] {
-    const resolvedChannelId = this.resolveSessionChannelId(channelId);
+    this.assertMutableSessionReadAllowed('SessionManager.getRecentMessages');
+    return this.getRecentMessagesForResolvedChannel(
+      this.resolveSessionChannelId(channelId),
+      limit,
+    );
+  }
+
+  private getRecentMessagesForResolvedChannel(
+    resolvedChannelId: string,
+    limit?: number,
+  ): SessionEntry[] {
     if (limit !== undefined) {
       return this.deliveryProjectionStore.getRecent(resolvedChannelId, limit)
         .filter(entry => !isNonConversationalSessionEntry(entry));
@@ -1938,13 +2121,25 @@ export class SessionManager {
     maxEntryId: number,
     limit: number,
   ): SessionEntry[] {
+    this.assertMutableSessionReadAllowed('SessionManager.getRecentMessagesAtOrBefore');
+    return this.getRecentMessagesAtOrBeforeForResolvedChannel(
+      this.resolveSessionChannelId(channelId),
+      maxEntryId,
+      limit,
+    );
+  }
+
+  private getRecentMessagesAtOrBeforeForResolvedChannel(
+    resolvedChannelId: string,
+    maxEntryId: number,
+    limit: number,
+  ): SessionEntry[] {
     if (!Number.isSafeInteger(maxEntryId) || maxEntryId < 1) {
       throw new Error('maxEntryId must be a positive safe integer');
     }
     if (!Number.isSafeInteger(limit) || limit < 1) {
       throw new Error('limit must be a positive safe integer');
     }
-    const resolvedChannelId = this.resolveSessionChannelId(channelId);
     return this.deliveryProjectionStore
       .getEntriesBefore(resolvedChannelId, maxEntryId + 1, limit)
       .filter(entry => !isNonConversationalSessionEntry(entry));

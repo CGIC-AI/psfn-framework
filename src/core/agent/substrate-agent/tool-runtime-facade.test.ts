@@ -145,6 +145,54 @@ function makeCandidateMessage() {
 }
 
 describe('ToolRuntimeFacade maintenance core tool policy', () => {
+  it('owns intake provenance in the exact async-local turn context', async () => {
+    const { facade } = createFacade();
+    const firstEnvelope = {
+      envelopeId: 'first-turn-envelope',
+      sourceClass: 'web_fetch',
+      sourceRiskTier: 'untrusted',
+      state: 'released',
+      riskLabels: [],
+      subject: { kind: 'body' },
+    } as const;
+    const secondEnvelope = {
+      ...firstEnvelope,
+      envelopeId: 'second-turn-envelope',
+    } as const;
+    const makeMessage = (
+      id: string,
+      envelope: typeof firstEnvelope | typeof secondEnvelope,
+    ) => ({
+      id,
+      channelId: `api:${id}`,
+      channelType: 'api',
+      authorId: 'primary-user',
+      authorName: 'Primary User',
+      content: 'screened turn',
+      timestamp: new Date('2026-07-15T10:00:00Z'),
+      routing: { intakeEnvelopes: [envelope] },
+    }) as never;
+
+    expect(facade.getActiveTurnIntakeEnvelopes()).toEqual([]);
+    await Promise.all([
+      facade.runWithTurnToolContext(
+        makeMessage('first-intake-turn', firstEnvelope),
+        async () => {
+          await Promise.resolve();
+          expect(facade.getActiveTurnIntakeEnvelopes()).toEqual([firstEnvelope]);
+        },
+      ),
+      facade.runWithTurnToolContext(
+        makeMessage('second-intake-turn', secondEnvelope),
+        async () => {
+          await Promise.resolve();
+          expect(facade.getActiveTurnIntakeEnvelopes()).toEqual([secondEnvelope]);
+        },
+      ),
+    ]);
+    expect(facade.getActiveTurnIntakeEnvelopes()).toEqual([]);
+  });
+
   it('makes an unpinned extended tool callable on the first ordinary turn', async () => {
     const execute = vi.fn(async () => ({
       content: [{ type: 'text', text: 'extended result' }],

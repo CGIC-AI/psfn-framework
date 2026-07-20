@@ -6,6 +6,11 @@
     type RoomSummary,
     type RoomRosterMember,
   } from '$lib/api/endpoints/rooms';
+  import {
+    getPlaces,
+    type AdminPlacesData,
+    type AdminPlaceView,
+  } from '$lib/api/endpoints/places';
   import { pushToast } from '$lib/stores/toast.svelte';
   import { createRosterLoader } from './roster-loader';
 
@@ -15,6 +20,13 @@
   let rooms = $state<RoomSummary[]>([]);
   let roomsLoading = $state(true);
   let roomsError = $state('');
+  let placesData = $state<AdminPlacesData | null>(null);
+  let placesLoading = $state(true);
+  let placesError = $state('');
+
+  let virtualPlaces = $derived.by(() => (
+    placesData?.places.filter((place) => place.kind === 'virtual') ?? []
+  ));
 
   let selected = $state<RoomSummary | null>(null);
   let members = $state<RoomRosterMember[]>([]);
@@ -39,6 +51,28 @@
     } finally {
       roomsLoading = false;
     }
+  }
+
+  async function loadVirtualPlaces() {
+    placesLoading = true;
+    placesError = '';
+    try {
+      placesData = await getPlaces();
+    } catch (e) {
+      placesError = e instanceof Error ? e.message : 'Failed to load virtual spaces';
+    } finally {
+      placesLoading = false;
+    }
+  }
+
+  function resolveTwin(place: AdminPlaceView): AdminPlaceView | undefined {
+    return place.twinPlaceId
+      ? placesData?.places.find((candidate) => candidate.placeId === place.twinPlaceId)
+      : undefined;
+  }
+
+  async function refreshAll() {
+    await Promise.all([loadRooms(), loadVirtualPlaces()]);
   }
 
   // Sequence-guarded: only the latest room/page request may mutate roster
@@ -81,7 +115,9 @@
     }
   }
 
-  onMount(loadRooms);
+  onMount(() => {
+    void refreshAll();
+  });
 </script>
 
 <div class="space-y-6">
@@ -95,15 +131,78 @@
       </p>
     </div>
     <button
-      onclick={loadRooms}
-      disabled={roomsLoading}
+      onclick={refreshAll}
+      disabled={roomsLoading || placesLoading}
       class="text-sm px-3 py-1.5 rounded-lg border border-bark-300
              text-shadow-600 hover:bg-bark-100
              transition-colors disabled:opacity-50 disabled:cursor-not-allowed font-medium"
     >
-      {roomsLoading ? 'Loading...' : 'Refresh'}
+      {roomsLoading || placesLoading ? 'Loading...' : 'Refresh'}
     </button>
   </div>
+
+  <section class="space-y-4" aria-labelledby="virtual-spaces-heading">
+    <div>
+      <p class="text-xs font-semibold uppercase tracking-[0.2em] text-shadow-500">Presence Overlay</p>
+      <h2 id="virtual-spaces-heading" class="mt-1 text-lg font-serif font-semibold text-shadow-900">
+        Virtual spaces
+      </h2>
+      <p class="mt-1 text-sm text-shadow-600">
+        Owner-file rooms available to plain-chat presence. Twin links show the physical room each
+        overlay mirrors; unlinked virtual rooms remain independent destinations.
+      </p>
+    </div>
+
+    {#if placesLoading && !placesData}
+      <div class="card-garden p-6"><p class="text-sm text-shadow-600">Loading virtual spaces...</p></div>
+    {:else if placesError}
+      <div class="card-garden p-6 border-l-4 border-l-wilt-400">
+        <p class="text-sm text-shadow-800">{placesError}</p>
+      </div>
+    {:else if virtualPlaces.length === 0}
+      <div class="card-garden p-6"><p class="text-sm text-shadow-500">No virtual spaces configured.</p></div>
+    {:else}
+      <div class="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+        {#each virtualPlaces as place (place.placeId)}
+          {@const twin = resolveTwin(place)}
+          <article class="card-garden p-5">
+            <div class="flex items-start justify-between gap-3">
+              <div>
+                <h3 class="text-lg font-serif font-semibold text-shadow-900">{place.displayName}</h3>
+                <p class="mt-1 text-xs font-mono text-shadow-500">{place.placeId}</p>
+              </div>
+              <span class="rounded-full bg-petal-50 px-2.5 py-1 text-xs font-semibold text-petal-700">
+                Virtual
+              </span>
+            </div>
+            {#if place.description}
+              <p class="mt-3 text-sm text-shadow-600">{place.description}</p>
+            {/if}
+            <dl class="mt-4 grid gap-3 text-sm">
+              <div>
+                <dt class="text-xs uppercase tracking-[0.14em] text-shadow-500">Site</dt>
+                <dd class="mt-1 font-mono text-shadow-700">{place.siteId}</dd>
+              </div>
+              <div>
+                <dt class="text-xs uppercase tracking-[0.14em] text-shadow-500">Physical twin</dt>
+                <dd class="mt-1 text-shadow-700">
+                  {twin ? `${twin.displayName} (${twin.placeId})` : 'None configured'}
+                </dd>
+              </div>
+            </dl>
+          </article>
+        {/each}
+      </div>
+    {/if}
+  </section>
+
+  <section class="space-y-4" aria-labelledby="conversation-channels-heading">
+    <div>
+      <p class="text-xs font-semibold uppercase tracking-[0.2em] text-shadow-500">Observed Activity</p>
+      <h2 id="conversation-channels-heading" class="mt-1 text-lg font-serif font-semibold text-shadow-900">
+        Conversation channels
+      </h2>
+    </div>
 
   {#if roomsLoading && rooms.length === 0}
     <div class="card-garden p-6">
@@ -222,4 +321,5 @@
       </div>
     </div>
   {/if}
+  </section>
 </div>

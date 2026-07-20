@@ -4,9 +4,17 @@ import {
   buildReflectionStarterPromptBundle,
   REFLECTION_STARTER_PROMPT_VERSION,
 } from './reflection-starter-prompt.js';
+import { formatInternalStateContextBlock } from './internal-state-prompt.js';
 import type { ReflectionInternalStateContext } from './prompt-formatting.js';
 
-function buildInternalStateContext(): ReflectionInternalStateContext {
+function buildInternalStateContext(openThreadCount = 1): ReflectionInternalStateContext {
+  const openThreadTexts = [
+    'Clarify the recovery timeline',
+    'Revisit the travel dates',
+    'Check the garden plan',
+    'Review the reading notes',
+    'Return to the sketch idea',
+  ];
   const internalState = new InternalStateComputer().computeState({
     emotionState: {
       vad: { valence: 0.2, arousal: 0.15, dominance: 0.1 },
@@ -14,20 +22,20 @@ function buildInternalStateContext(): ReflectionInternalStateContext {
       discrete: { curiosity: 0.5, calm: 0.4 },
       confidence: 0.75,
     },
-    activeConcerns: [{
-      id: 'concern-1',
-      text: 'Clarify the recovery timeline',
-      priority: 'high',
-      source: 'appraisal',
-      status: 'active',
+    activeConcerns: Array.from({ length: openThreadCount }, (_, index) => ({
+      id: `concern-${index + 1}`,
+      text: openThreadTexts[index] ?? `Distinct item ${index + 1}`,
+      priority: index === 0 ? 'high' as const : 'medium' as const,
+      source: 'appraisal' as const,
+      status: 'active' as const,
       createdAt: '2026-07-15T08:00:00.000Z',
-      expiresAt: '2026-07-18T08:00:00.000Z',
-      salience: 0.92,
-      sensitivity: 'personal',
-      owner: 'companion',
+      expiresAt: `2026-07-${String(18 + index).padStart(2, '0')}T08:00:00.000Z`,
+      salience: 0.92 - (index * 0.1),
+      sensitivity: 'personal' as const,
+      owner: 'companion' as const,
       evidenceRefs: [],
       resolutionEvidenceRefs: [],
-    }],
+    })),
     trustLevel: 'trusted',
     contactId: 'contact-1',
     sessionMetrics: {
@@ -60,6 +68,7 @@ const CUT_BLOCKS = [
   '[Relational Clues]',
   '[Recent Metacognitive Flags]',
   '[Active Concerns]',
+  '[Open Threads]',
   '[Pending Follow-Ups]',
   '[Care Reminders]',
   '[Reflection Contact Evidence]',
@@ -97,7 +106,7 @@ describe('buildReflectionStarterPromptBundle', () => {
       provenanceRefs: ['memory:event-1', 'internal_state_snapshot:snapshot-1'],
     });
 
-    expect(REFLECTION_STARTER_PROMPT_VERSION).toBe(1);
+    expect(REFLECTION_STARTER_PROMPT_VERSION).toBe(2);
     expect(bundle.self).toContain('[Day Events Starter]');
     expect(bundle.self).toContain('Day event one');
     expect(bundle.self).toContain('Day event three');
@@ -115,6 +124,21 @@ describe('buildReflectionStarterPromptBundle', () => {
       'memory:event-1',
       'internal_state_snapshot:snapshot-1',
     ]);
+  });
+
+  it('presents at most three open threads plus an omitted count in reflection evidence', () => {
+    const block = formatInternalStateContextBlock(buildInternalStateContext(5));
+    expect(block).not.toBeNull();
+    const openThreadSection = block
+      ?.split('[Open Threads]\n')[1]
+      ?.split('\n[Pending Follow-Ups]')[0] ?? '';
+
+    expect(openThreadSection).toContain('Clarify the recovery timeline');
+    expect(openThreadSection).toContain('Check the garden plan');
+    expect(openThreadSection).not.toContain('Review the reading notes');
+    expect(openThreadSection).toContain('2 additional lower-salience threads omitted.');
+    expect(openThreadSection.split('\n')).toHaveLength(4);
+    expect(openThreadSection).not.toMatch(/\b(?:concerns?|worr(?:y|ies|ied))\b/i);
   });
 
   it('builds a compact weekly starter from recent lived-day summaries without enumerating reflection categories', () => {

@@ -1,6 +1,5 @@
 import { formatActiveDateTimeLabel } from '../../shared/time/active-timezone.js';
 import { isRfc4122Uuid } from '../../shared/utils/types.js';
-import { getConcernSofteningConfig } from './concern-softening.js';
 import { clampListLimit as clampIntentionListLimit } from './list-limit.js';
 
 import {
@@ -585,21 +584,6 @@ export function scoreConcernTextSimilarity(left: string, right: string): number 
   return (2 * intersection) / (leftTokens.length + rightTokens.length);
 }
 
-// Concern wording rewrites are operator-tunable data (E2.5 purity rule):
-// config/concern-softening.json owns the rules; the shipped default matches
-// the previous hardcoded behavior byte-for-byte.
-function softenConcernText(value: string): string {
-  const config = getConcernSofteningConfig();
-  let normalized = compactWhitespace(value);
-  for (const rule of config.rewriteRules) {
-    normalized = normalized.replace(rule.pattern, rule.replacement);
-  }
-  if (normalized.length <= config.maxTextChars) {
-    return normalized;
-  }
-  return `${normalized.slice(0, config.maxTextChars - 3)}...`;
-}
-
 function dedupeConcernsForRuntime(concerns: readonly ActiveConcern[]): ActiveConcern[] {
   const selected: ActiveConcern[] = [];
   for (const concern of concerns) {
@@ -774,7 +758,7 @@ export function buildActiveConcernsRuntimeData(
     const expiresAtLabel = Number.isFinite(expiresAtMs)
       ? formatActiveDateTimeLabel(new Date(expiresAtMs))
       : concern.expiresAt;
-    return `- ${softenConcernText(concern.text)} [${concern.priority}; revisit before ${expiresAtLabel}]`;
+    return `- ${compactWhitespace(concern.text)} (${concern.priority} salience; available through ${expiresAtLabel})`;
   });
 
   return {

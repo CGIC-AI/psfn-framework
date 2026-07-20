@@ -27,6 +27,7 @@ function makeTempDir(): string {
     'models.json',
     'providers.json',
     'trust-policy.json',
+    'intake-policy.json',
     'scheduler.json',
     'capability-tier.json',
     'charge-policy.json',
@@ -115,6 +116,37 @@ afterEach(() => {
 });
 
 describe('AdminSettingsDataService', () => {
+  it('exposes skill_write through the typed and raw Garden intake-policy surfaces', () => {
+    const root = makeTempDir();
+    const service = buildService(buildConfig(root));
+
+    expect(service.getIntakePolicyOverview()).toMatchObject({
+      schemaVersion: 2,
+      sinkGates: {
+        sinks: {
+          skill_write: {
+            maxSourceRiskTier: 'untrusted',
+            unscreened: 'deny',
+          },
+        },
+      },
+    });
+
+    const raw = service.getSubConfigJson('intake-policy');
+    expect(raw).not.toBeNull();
+    const missingSkillWrite = JSON.parse(raw!) as {
+      sinkGates: { sinks: Record<string, unknown> };
+    };
+    delete missingSkillWrite.sinkGates.sinks.skill_write;
+    expect(service.saveSubConfigJson(
+      'intake-policy',
+      JSON.stringify(missingSkillWrite),
+    )).toMatchObject({
+      ok: false,
+      message: expect.stringMatching(/sinkGates\.sinks\.skill_write is required/),
+    });
+  });
+
   it('exposes fleet personal/shared workspace posture without an env escape hatch', async () => {
     const root = makeTempDir();
     const service = buildService({

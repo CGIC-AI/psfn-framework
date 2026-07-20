@@ -118,12 +118,12 @@ export function resolveGatewayMultiCompanionConfig(
     );
   }
 
-  const companionBoundSatellites = satelliteRegistryConfig.satellites.filter(
-    satellite => satellite.companionId !== undefined,
+  const sharedSatellites = satelliteRegistryConfig.satellites.filter(
+    satellite => satellite.sharedDevice !== undefined,
   );
-  if (!enabled && companionBoundSatellites.length > 0) {
+  if (!enabled && sharedSatellites.length > 0) {
     throw new Error(
-      `satellites.json declares companionId routing for [${companionBoundSatellites
+      `satellites.json declares shared-device routing for [${sharedSatellites
         .map(satellite => satellite.satelliteId)
         .join(', ')}] but this is a single-companion (one-entry companions.json) deployment. Add the `
       + 'companions to companions.json or remove the companionId fields — single-companion mode must '
@@ -132,6 +132,15 @@ export function resolveGatewayMultiCompanionConfig(
   }
 
   if (enabled) {
+    const ungovernedSatelliteIds = satelliteRegistryConfig.satellites
+      .filter(satellite => satellite.sharedDevice === undefined)
+      .map(satellite => satellite.satelliteId);
+    if (satelliteRegistryConfig.enabled && ungovernedSatelliteIds.length > 0) {
+      throw new Error(
+        `Multi-companion satellites.json requires sharedDevice authority for [${ungovernedSatelliteIds
+          .join(', ')}]`,
+      );
+    }
     for (const [surface, companionId] of Object.entries(channelRouting)) {
       if (!fleetIds.has(companionId)) {
         throw new Error(
@@ -148,14 +157,26 @@ export function resolveGatewayMultiCompanionConfig(
         );
       }
     }
-    for (const satellite of companionBoundSatellites) {
-      if (!satellite.companionId || fleetIds.has(satellite.companionId)) {
-        continue;
-      }
+    if (satelliteRegistryConfig.productivityCompanionId
+      && !fleetIds.has(satelliteRegistryConfig.productivityCompanionId)) {
       throw new Error(
-        `satellites.json routes satellite ${JSON.stringify(satellite.satelliteId)} to companionId `
-        + `${JSON.stringify(satellite.companionId)}, which is absent from companions.json`,
+        'satellites.json productivityCompanionId is absent from companions.json',
       );
+    }
+    for (const satellite of sharedSatellites) {
+      const policy = satellite.sharedDevice!;
+      const governedCompanionIds = new Set([
+        policy.primaryCompanionId,
+        ...policy.emanationMemberIds,
+        ...policy.observationRecipients.map(recipient => recipient.companionId),
+      ]);
+      for (const companionId of governedCompanionIds) {
+        if (fleetIds.has(companionId)) continue;
+        throw new Error(
+          `satellites.json shared device ${JSON.stringify(satellite.satelliteId)} names companionId `
+          + `${JSON.stringify(companionId)}, which is absent from companions.json`,
+        );
+      }
     }
   }
 

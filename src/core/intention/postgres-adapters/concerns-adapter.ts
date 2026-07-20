@@ -655,6 +655,7 @@ export class PostgresActiveConcernStore implements ConcernStorePortBackend {
             evidence_refs = $8::jsonb,
             resolved_at = NULL,
             resolution_outcome = NULL,
+            resolution_vad = NULL,
             last_reviewed_at = $9,
             next_review_at = $10,
             merged_from_ids = $11::jsonb,

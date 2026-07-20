@@ -8,7 +8,7 @@ import {
 import { resolveCompanionIdFromConfig } from '../../identity/companion-runtime.js';
 import { createComponentLogger } from '../../../shared/logger.js';
 import { toErrorMessage } from '../../../shared/utils/errors.js';
-import { runWithCapturedSessionOwner } from '../../session/manager/captured-session-owner.js';
+import type { CapturedSessionReads } from '../../session/manager/captured-session-owner.js';
 import { cloneMetacognitiveFlags } from '../../self-model/metacognition.js';
 import {
   buildInternalStateSnapshotRef,
@@ -108,11 +108,15 @@ import { ParentTurnContinuationBudgetExceededError } from '../turn-limits.js';
 import { parseTurnRecordBackgroundWorkHandoff } from '../background-work/types.js';
 import type { ForegroundWorkLease } from '../background-work/supervisor.js';
 import type {
+  TurnAdmissionRuntime,
   TurnExecutionRuntime,
   TurnSessionIdentity,
 } from './turn-execution/contracts.js';
 
-export type { TurnExecutionRuntime } from './turn-execution/contracts.js';
+export type {
+  TurnAdmissionRuntime,
+  TurnExecutionRuntime,
+} from './turn-execution/contracts.js';
 
 const log = createComponentLogger('SubstrateAgent');
 
@@ -166,6 +170,7 @@ function summarizeFatigue(metadata: FatigueEnforcementMetadata): Record<string, 
 
 function evaluateRuntimeFatigue(input: {
   runtime: TurnExecutionRuntime;
+  sessionReads: CapturedSessionReads;
   message: SubstrateMessage;
   turnSessionIdentity: TurnSessionIdentity;
   authorContext: ResolvedAuthorContext;
@@ -195,10 +200,9 @@ function evaluateRuntimeFatigue(input: {
     taskKind: input.taskKind,
     explicitPeerInvitation: input.explicitPeerInvitation,
     recentHumanParticipation: resolveRecentHumanParticipationForFatigue({
-      runtime: input.runtime,
+      sessionReads: input.sessionReads,
       message: input.message,
       authorContext: input.authorContext,
-      sessionChannelId: input.turnSessionIdentity.logicalSessionId,
       nowMs: input.timestampMs,
       windowMs: fatiguePolicy.overcharge.recentHumanParticipationWindowMs,
     }),
@@ -243,10 +247,9 @@ function evaluateHumanAttentionPressure(input: {
 }
 
 function resolveRecentHumanParticipationForFatigue(input: {
-  runtime: TurnExecutionRuntime;
+  sessionReads: CapturedSessionReads;
   message: SubstrateMessage;
   authorContext: ResolvedAuthorContext;
-  sessionChannelId: string;
   nowMs: number;
   windowMs: number;
 }): FatigueRecentHumanParticipation {
@@ -279,7 +282,7 @@ function resolveRecentHumanParticipationForFatigue(input: {
     });
   }
 
-  for (const entry of input.runtime.sessionManager.getRecentMessages(input.sessionChannelId, 32)) {
+  for (const entry of input.sessionReads.getRecentMessages(32)) {
     if (entry.role !== 'user' || resolveSessionEntryActorKind(entry) !== 'human') {
       continue;
     }
@@ -352,7 +355,7 @@ function buildSuppressedFatigueResponse(input: {
 }
 
 export async function handleMessageForTurn(
-  runtime: TurnExecutionRuntime,
+  runtime: TurnAdmissionRuntime,
   message: SubstrateMessage,
   deliveryLifecycle?: TurnDeliveryLifecycle,
 ): Promise<AgentResponse> {
@@ -436,11 +439,19 @@ export async function handleMessageForTurn(
     ? { retrievalMode: temporalRetrievalMode }
     : undefined;
   const turnCallType = runtime.resolveTurnCallType(message, taskKind);
-  let turnCorrelationBase = runtime.buildTurnCorrelation(message, turnCallType, turnId, requestId);
-  const activeLogicalSessionId = runtime.sessionManager.resolveSessionChannelId(message.channelId).trim();
+  const activeLogicalSessionId = runtime.sessionManager.resolveSessionForIngress(
+    message.channelId,
+  ).trim();
   if (!activeLogicalSessionId) {
     throw new Error('Turn execution requires a logical session id');
   }
+  let turnCorrelationBase = runtime.buildTurnCorrelation(
+    message,
+    turnCallType,
+    turnId,
+    requestId,
+    activeLogicalSessionId,
+  );
   const recoveredSourceRecord = recoveredResponse
     ? runtime.sessionManager.findUniqueSourceRecordedTurn(message.channelId, turnId)
     : null;
@@ -455,7 +466,10 @@ export async function handleMessageForTurn(
     sourceChannelId: message.channelId,
     logicalSessionId,
   });
-  return await runWithCapturedSessionOwner(runtime.sessionManager, turnSessionIdentity, async () => {
+  const sessionReads = runtime.sessionManager.createCapturedSessionReads(turnSessionIdentity);
+  const admittedRuntime: TurnExecutionRuntime = runtime;
+  return await sessionReads.run(async () => {
+  const runtime = admittedRuntime;
   const initialCorrelationSessionId = turnCorrelationBase.sessionId?.trim();
   const wyomingObservabilitySessionId = message.routing?.wyoming?.sessionId?.trim();
   const correlationUsesWyomingSession = Boolean(
@@ -471,7 +485,13 @@ export async function handleMessageForTurn(
     conversationId: turnCorrelationBase.icpCorrelation?.conversationId ?? turnCorrelationSessionId,
   };
   const rebuildTurnCorrelation = (): CorrelationMetadata => {
-    const rebuilt = runtime.buildTurnCorrelation(message, turnCallType, turnId, requestId);
+    const rebuilt = runtime.buildTurnCorrelation(
+      message,
+      turnCallType,
+      turnId,
+      requestId,
+      turnCorrelationSessionId,
+    );
     return {
       ...rebuilt,
       sessionId: turnCorrelationSessionId,
@@ -509,9 +529,7 @@ export async function handleMessageForTurn(
   assertForegroundWorkOwned(foregroundLease);
   try {
   const startTime = Date.now();
-  const focusMemoryScopeQuery = runtime.sessionManager.getActiveFocusMemoryScopeQuery(
-    turnSessionIdentity.logicalSessionId,
-  );
+  const focusMemoryScopeQuery = sessionReads.getActiveFocusMemoryScopeQuery();
   const hasDeferredVisionPersistence = hasVisionTurnInputs(message);
   // A fresh inbound companion correlation is not trusted until it has been
   // bound to the resolved canonical peer below. Keep it out of L0 until that
@@ -531,6 +549,7 @@ export async function handleMessageForTurn(
   });
   const identityState = await prepareTurnIdentityState({
     runtime,
+    sessionReads,
     message,
     turnSessionIdentity,
     turnId,
@@ -668,6 +687,7 @@ export async function handleMessageForTurn(
       ? null
       : evaluateRuntimeFatigue({
           runtime,
+          sessionReads,
           message,
           turnSessionIdentity,
           authorContext,
@@ -778,7 +798,7 @@ export async function handleMessageForTurn(
           retrievals: observability.getObservedTurnRetrievals(),
           ...(observability.getObservedTurnSnapshot() ? { snapshot: observability.getObservedTurnSnapshot() } : {}),
         },
-      });
+      }, sessionReads);
       await runtime.eventBus.emit('agent.turn.end', {
         message,
         response: suppressedResponse,
@@ -794,6 +814,7 @@ export async function handleMessageForTurn(
     const contextAssemblyStartedAt = performance.now();
     const preTurnState = await computePreTurnState({
       runtime,
+      sessionReads,
       message,
       turnSessionIdentity,
       channelType,
@@ -842,6 +863,7 @@ export async function handleMessageForTurn(
     const promptAssemblyStartedAt = performance.now();
     const promptAssembly = await assembleTurnPrompt({
       runtime,
+      sessionReads,
       message,
       turnSessionIdentity,
       channelType,
@@ -1509,6 +1531,7 @@ export async function handleMessageForTurn(
     assertForegroundWorkOwned(foregroundLease);
     await schedulePostTurnWork({
       runtime,
+      sessionReads,
       message,
       turnSessionIdentity,
       response: agentResponse,
@@ -1677,7 +1700,7 @@ export async function handleMessageForTurn(
           ...(observability.getObservedTurnSnapshot() ? { snapshot: observability.getObservedTurnSnapshot() } : {}),
         },
         ...(internalStateSnapshotRef ? { internalStateSnapshotRef } : {}),
-      }));
+      }, sessionReads));
     }
     if (continuationStop) {
       runtime.emitTelemetry('agent.turn.continuation_stopped', {

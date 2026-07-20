@@ -1,7 +1,7 @@
 import type { AgentMessage } from '../../../boundary/pi-agent/index.js';
 import { createComponentLogger } from '../../../shared/logger.js';
 import type { EventBus, EventMap } from '../../../shared/event-bus.js';
-import type { SessionManager } from '../../session/manager.js';
+import type { CapturedSessionReads } from '../../session/manager/captured-session-owner.js';
 import type { TrustLevel } from '../../../system/trust/types.js';
 import type { DisclosureToolResultSource } from '../../cogsec/disclosure/generation-lineage.js';
 import { normalizeChannelPrivacy } from '../../../system/trust/context-envelope.js';
@@ -28,6 +28,7 @@ import {
   recordAssistantMessage as recordAssistantMessageForTurn,
   recordToolObservations as recordToolObservationsForTurn,
   recordUserMessage as recordUserMessageForTurn,
+  type TurnSessionWriteManager,
 } from './turn-records.js';
 import {
   inferPostTurnActions as inferPostTurnActionsForTurn,
@@ -63,7 +64,7 @@ function resolveSessionChannelMeta(message: SubstrateMessage): ChannelMeta | und
 
 export interface TurnSupportRuntimeOptions {
   eventBus: EventBus;
-  sessionManager: SessionManager;
+  sessionManager: TurnSessionWriteManager;
   backgroundWorkSupervisor: BackgroundWorkSupervisor | null;
   backgroundWorkDisabled?: boolean;
   hashPromptText: (text: string) => string;
@@ -75,7 +76,7 @@ export interface TurnSupportRuntimeOptions {
 
 export class TurnSupportRuntime {
   private readonly eventBus: EventBus;
-  private readonly sessionManager: SessionManager;
+  private readonly sessionManager: TurnSessionWriteManager;
   private readonly backgroundWorkSupervisor: BackgroundWorkSupervisor | null;
   private readonly backgroundWorkDisabled: boolean;
   private readonly hashPromptText: (text: string) => string;
@@ -258,16 +259,6 @@ export class TurnSupportRuntime {
     });
   }
 
-  resolveSessionChannelId(channelId: string): string {
-    const resolver = this.sessionManager.resolveSessionChannelId;
-    if (typeof resolver !== 'function') {
-      return channelId;
-    }
-    const resolved = resolver.call(this.sessionManager, channelId);
-    const trimmed = resolved.trim();
-    return trimmed.length > 0 ? trimmed : channelId;
-  }
-
   emitTurnStage(
     message: SubstrateMessage,
     turnStartMs: number,
@@ -303,8 +294,12 @@ export class TurnSupportRuntime {
     callType: ObservabilityCallType,
     turnId: TurnID,
     requestId: string,
+    logicalSessionId: string,
   ): CorrelationMetadata {
-    const resolvedSessionId = this.resolveSessionChannelId(message.channelId);
+    const resolvedSessionId = logicalSessionId.trim();
+    if (!resolvedSessionId) {
+      throw new Error('Turn correlation requires a captured logical session id');
+    }
     const wyomingSessionId = message.routing?.wyoming?.sessionId?.trim();
     const sessionId = resolvedSessionId !== message.channelId
       ? resolvedSessionId
@@ -472,12 +467,15 @@ export class TurnSupportRuntime {
     turnObservability?: TurnObservabilityRecord;
     internalStateSnapshotRef?: string;
     persistedUserMessageContent?: string;
-  }): TurnRecord {
+  }, sessionReads: CapturedSessionReads): TurnRecord {
     if (input.message.channelId !== input.turnSessionIdentity.sourceChannelId) {
       throw new Error('TurnRecord physical source does not match the captured turn identity');
     }
-    const roleEnvelopeRefs = this.sessionManager.getRoleEnvelopeRefsForEntries(
-      input.turnSessionIdentity.logicalSessionId,
+    if (sessionReads.owner.logicalSessionId !== input.turnSessionIdentity.logicalSessionId
+      || sessionReads.owner.sourceChannelId !== input.turnSessionIdentity.sourceChannelId) {
+      throw new Error('TurnRecord session reads do not match the captured turn identity');
+    }
+    const roleEnvelopeRefs = sessionReads.getRoleEnvelopeRefsForEntries(
       [
         ...(input.userSessionEntryId != null ? [input.userSessionEntryId] : []),
         ...(input.assistantSessionEntryId != null ? [input.assistantSessionEntryId] : []),

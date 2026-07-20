@@ -20,7 +20,7 @@ import type { TurnToolSummary } from '../../../faculties/skills/reflection-nudge
 import type { TrustLevel } from '../../../system/trust/types.js';
 import type { EmotionSelfModelRuntime } from './emotion-self-model-runtime.js';
 import type { ParticipantRelationshipEdgeInput, ResolvedAuthorContext, UserRuntimeProfile } from './runtime-context.js';
-import type { TurnExecutionRuntime } from './turn-execution/contracts.js';
+import type { TurnAdmissionRuntime } from './turn-execution/contracts.js';
 import type { PromptCacheTurnRuntime } from './turn-execution/prompt-cache-runtime.js';
 import { CompletionNoticeBuffer } from '../completion-notices.js';
 import type { TurnSupportRuntime } from './turn-support-runtime.js';
@@ -203,7 +203,7 @@ export interface TurnExecutionAdapterOptions {
 
 export function createTurnExecutionRuntimeAdapter(
   options: TurnExecutionAdapterOptions,
-): TurnExecutionRuntime {
+): TurnAdmissionRuntime {
   return {
     eventBus: options.eventBus,
     costTelemetry: options.costTelemetry,
@@ -255,8 +255,15 @@ export function createTurnExecutionRuntimeAdapter(
     buildTurnBudgetCharacteristics: (message, taskKind) => options.callbacks
       .buildTurnBudgetCharacteristics(message, taskKind),
     resolveTurnCallType: (message, taskKind) => options.turnSupportRuntime.resolveTurnCallType(message, taskKind),
-    buildTurnCorrelation: (message, callType, turnId, requestId) => options.turnSupportRuntime
-      .buildTurnCorrelation(message, callType, turnId, requestId),
+    buildTurnCorrelation: (message, callType, turnId, requestId, logicalSessionId) => (
+      options.turnSupportRuntime.buildTurnCorrelation(
+        message,
+        callType,
+        turnId,
+        requestId,
+        logicalSessionId,
+      )
+    ),
     withCorrelationPurpose: (correlation, purpose) => options.turnSupportRuntime.withCorrelationPurpose(correlation, purpose),
     resolveAuthorContext: (message) => options.callbacks.resolveAuthorContext(message),
     countResolvableSpeakerContacts: (message, speakers) => options.callbacks
@@ -309,7 +316,6 @@ export function createTurnExecutionRuntimeAdapter(
         continuityUserId,
       )
     ),
-    resolveSessionChannelId: (channelId) => options.turnSupportRuntime.resolveSessionChannelId(channelId),
     resolveChannelType: (message) => options.callbacks.resolveChannelType(message),
     ensureModel: (message) => options.callbacks.ensureModel(message),
     captureTurnPromptSnapshot: (ctx) => options.callbacks.captureTurnPromptSnapshot(ctx),
@@ -497,7 +503,9 @@ export function createTurnExecutionRuntimeAdapter(
     ),
     buildTurnToolSummary: (turnMessages) => options.turnSupportRuntime.buildTurnToolSummary(turnMessages),
     inferPostTurnActions: (context) => options.turnSupportRuntime.inferPostTurnActions(context),
-    buildTurnRecord: (input) => options.turnSupportRuntime.buildTurnRecord(input),
+    buildTurnRecord: (input, sessionReads) => (
+      options.turnSupportRuntime.buildTurnRecord(input, sessionReads)
+    ),
     emitTelemetry: (eventName, payload) => options.turnSupportRuntime.emitTelemetry(eventName, payload),
     consumeIntentionalNoReplyDecision: (turnId) => options.turnSupportRuntime.consumeIntentionalNoReplyDecision(turnId),
     runIntentionPostTurnHooks: (context) => options.turnSupportRuntime.runIntentionPostTurnHooks(context),

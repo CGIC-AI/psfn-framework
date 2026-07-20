@@ -57,6 +57,7 @@ import {
   rebuildProviderWireMessagesForPrompt,
 } from './prompt-invocation-history.js';
 import type { TurnExecutionRuntime, TurnSessionIdentity } from './contracts.js';
+import type { CapturedSessionReads } from '../../../session/manager/captured-session-owner.js';
 
 const log = createComponentLogger('SubstrateAgent');
 // Covers attachment fetch (with gateway DNS retries) plus the vision model call;
@@ -406,7 +407,7 @@ export async function invokeAgentForTurn(input: {
   runtime: TurnExecutionRuntime;
   message: SubstrateMessage;
   turnSessionIdentity: TurnSessionIdentity;
-  context: Awaited<ReturnType<TurnExecutionRuntime['sessionManager']['buildContext']>>;
+  context: Awaited<ReturnType<CapturedSessionReads['buildContext']>>;
   authoritativeSystemPrompt: string;
   providerSystemPrompt: string;
   piMessages: ReturnType<typeof contextMessagesToPiMessages>;

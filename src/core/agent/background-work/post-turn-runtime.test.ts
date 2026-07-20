@@ -5,6 +5,11 @@ import { describe, expect, it, vi } from 'vitest';
 
 import type { LLMProviderPort, MemoryExtractor } from '../contracts.js';
 import { SessionManager } from '../../session/manager.js';
+import {
+  CapturedSessionReads,
+  type CapturedSessionOwnerIdentity,
+  type CapturedSessionReadOperations,
+} from '../../session/manager/captured-session-owner.js';
 import type { TurnRecord } from '../../../shared/contracts/runtime.js';
 import { SessionStore } from '../../../persistence/sessions/store.js';
 import type { SubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
@@ -20,7 +25,10 @@ import { buildSessionMetadataWithTurn } from '../../session/turn-provenance.js';
 import { MemoryExtractor as RealMemoryExtractor } from '../../../faculties/memory/extraction.js';
 import { createDefaultGroupMemorySettings } from '../../../system/config/group-memory-config.js';
 import { ModelCallPreemptedError } from '../../../primitives/llm/model-call-gate.js';
-import { executePostTurnBackgroundWork } from './post-turn-runtime.js';
+import {
+  executePostTurnBackgroundWork,
+  type PostTurnBackgroundRuntimeDependencies,
+} from './post-turn-runtime.js';
 import type { BackgroundWorkPostTurnTuning } from './config.js';
 import {
   BackgroundWorkDeferredError,
@@ -252,20 +260,58 @@ function makeDependencies(input: {
   const scheduleAutoCompactionBetweenTurns = vi.fn(async () => undefined);
   const getMessageCount = vi.fn(() => (input.liveRecentEntries ?? input.recentEntries ?? []).length);
   const getRecentMessages = vi.fn(() => input.liveRecentEntries ?? input.recentEntries ?? []);
+  const capturedSessionScopeManager = {};
+  const createCapturedSessionReads = vi.fn((
+    owner: CapturedSessionOwnerIdentity,
+  ): CapturedSessionReads => new CapturedSessionReads(
+    capturedSessionScopeManager,
+    owner,
+    {
+      buildContext: () => {
+        throw new Error('Unexpected buildContext call');
+      },
+      captureTurnSessionContext: () => {
+        throw new Error('Unexpected captureTurnSessionContext call');
+      },
+      getRecentMessages: () => getRecentMessages(),
+    getRecentMessagesAtOrBefore: (maxEntryId: number, limit: number) => (
+      getRecentMessagesAtOrBefore(owner.logicalSessionId, maxEntryId, limit)
+    ),
+      getRoleEnvelopeRefsForEntries: () => [],
+    captureAutoCompactionRecentEntries: (
+      params: Omit<Parameters<SessionManager['captureAutoCompactionRecentEntries']>[0], 'channelId'>,
+    ) => captureAutoCompactionRecentEntries({
+      ...params,
+      channelId: owner.logicalSessionId,
+    }),
+    scheduleAutoCompactionBetweenTurns: (
+      params: Omit<Parameters<SessionManager['scheduleAutoCompactionBetweenTurns']>[0], 'channelId'>,
+    ) => scheduleAutoCompactionBetweenTurns({
+      ...params,
+      channelId: owner.logicalSessionId,
+    }),
+      hasPendingAutoCompaction: () => false,
+      getActiveFocusMemoryScopeQuery: () => null,
+      getRecentConversationSpeakers: () => [],
+      resolveConversationScope: () => {
+        throw new Error('Unexpected resolveConversationScope call');
+      },
+      reconcileSessionChannelFromDisk: async () => null,
+    } satisfies CapturedSessionReadOperations,
+    () => {
+      throw new Error('Unexpected foreign-session read');
+    },
+  ));
+  const backgroundSessionManager = {
+    createCapturedSessionReads,
+    findSourceRecordedTurn,
+    isSourceRecordedTurnEligible,
+    withSourceRecordedTurnEligibilityFence,
+    withStableRecordedTurnEligibilitySnapshot,
+  } satisfies PostTurnBackgroundRuntimeDependencies['sessionManager'];
   return {
     dependencies: {
-      sessionManager: {
-        findSourceRecordedTurn,
-        isSourceRecordedTurnEligible,
-        withSourceRecordedTurnEligibilityFence,
-        getRecentMessagesAtOrBefore,
-        withStableRecordedTurnEligibilitySnapshot,
-        captureAutoCompactionRecentEntries,
-        scheduleAutoCompactionBetweenTurns,
-        getMessageCount,
-        getRecentMessages,
-        characterName: 'Purrsephone',
-      } as unknown as SessionManager,
+      sessionManager: backgroundSessionManager,
       llmProvider: {} as LLMProviderPort,
       getMemoryExtractor: () => ({
         maybeExtract,

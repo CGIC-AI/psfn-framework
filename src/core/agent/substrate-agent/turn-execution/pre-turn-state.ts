@@ -47,6 +47,7 @@ import {
   COMPANION_SELF_CREATION_RETRIEVAL_PURPOSE,
 } from '../../../../faculties/memory/retrieval/access-scope.js';
 import type { ArtifactSensitivitySource } from '../../../../shared/contracts/artifact-sensitivity.js';
+import type { CapturedSessionReads } from '../../../session/manager/captured-session-owner.js';
 import type {
   DisclosureMemorySource,
   DisclosureWikiSource,
@@ -264,6 +265,7 @@ function resolveWikiTurnDegradedReason(
 
 export async function prepareTurnIdentityState(input: {
   runtime: TurnExecutionRuntime;
+  sessionReads: CapturedSessionReads;
   message: SubstrateMessage;
   turnSessionIdentity: TurnSessionIdentity;
   turnId: TurnID;
@@ -275,6 +277,7 @@ export async function prepareTurnIdentityState(input: {
 }): Promise<PreparedTurnIdentityState> {
   const {
     runtime,
+    sessionReads,
     message,
     turnSessionIdentity,
     turnId,
@@ -406,7 +409,7 @@ export async function prepareTurnIdentityState(input: {
   // knowingly reflects the pre-compaction form. Do NOT reintroduce a bounded
   // wait here — that is a partial cliff plus nondeterminism; LLM admission /
   // deadline is mmo9.5, not this bead (Law 12.4: no second budget system).
-  const compactionPending = runtime.sessionManager.hasPendingAutoCompaction(message.channelId);
+  const compactionPending = sessionReads.hasPendingAutoCompaction();
   observability.emitPerformanceStage('compaction_wait', {
     durationMs: 0,
     ...(compactionPending
@@ -465,33 +468,37 @@ export async function prepareTurnIdentityState(input: {
   // the single scope resolution so ConversationScope.envelope is derived at
   // ingress. Group reflection turns fail closed (no contact lookups through
   // the internal transport channel).
-  const scopeChannelId = reflectionScopeHint?.kind === 'group'
-    ? reflectionScopeHint.roomId
-    : turnSessionIdentity.logicalSessionId;
-  const recentSpeakers = runtime.sessionManager.getRecentConversationSpeakers(scopeChannelId);
-  const resolvedSpeakerContactCount = reflectionScopeHint?.kind === 'group'
-    ? undefined
-    : await runtime.countResolvableSpeakerContacts(message, recentSpeakers);
-  const conversationScope = reflectionScopeHint?.kind === 'group'
-    ? runtime.sessionManager.resolveConversationScope({
-      channelId: reflectionScopeHint.roomId,
+  let conversationScope: ConversationScope;
+  if (reflectionScopeHint?.kind === 'group') {
+    conversationScope = sessionReads.resolveForeignSessionForTurn(
+      'reflection group conversation scope',
+      reflectionScopeHint.roomId,
+      (reads) => {
+        const recentSpeakers = reads.getRecentConversationSpeakers();
+        return reads.resolveConversationScope({ recentSpeakers });
+      },
+    );
+  } else {
+    const recentSpeakers = sessionReads.getRecentConversationSpeakers();
+    const resolvedSpeakerContactCount = await runtime.countResolvableSpeakerContacts(
+      message,
       recentSpeakers,
-    })
-    : runtime.sessionManager.resolveConversationScope({
-      channelId: turnSessionIdentity.logicalSessionId,
+    );
+    conversationScope = sessionReads.resolveConversationScope({
       channelMeta,
       recentSpeakers,
-      ...(resolvedSpeakerContactCount !== undefined ? { resolvedSpeakerContactCount } : {}),
+      resolvedSpeakerContactCount,
       ...(continuitySubjectKey ? { userId: continuitySubjectKey } : {}),
       ...(canonicalContactMayBind && authorContext.canonicalContactKey
         ? {
-          contact: {
-            contactId: authorContext.canonicalContactKey,
-            displayName: authorContext.resolvedUserName,
-          },
-        }
+            contact: {
+              contactId: authorContext.canonicalContactKey,
+              displayName: authorContext.resolvedUserName,
+            },
+          }
         : {}),
     });
+  }
 
   const requesterProvenance = resolveRequesterProvenance(authorContext, message);
   let requestAudience: RequestAudience | undefined;
@@ -636,6 +643,7 @@ export async function healStaleCapturedSessionWindow(input: {
 
 export async function computePreTurnState(input: {
   runtime: TurnExecutionRuntime;
+  sessionReads: CapturedSessionReads;
   message: SubstrateMessage;
   turnSessionIdentity: TurnSessionIdentity;
   channelType: string | undefined;
@@ -659,6 +667,7 @@ export async function computePreTurnState(input: {
 }): Promise<PreTurnComputationResult> {
   const {
     runtime,
+    sessionReads,
     message,
     turnSessionIdentity,
     channelType,
@@ -687,8 +696,7 @@ export async function computePreTurnState(input: {
   // it feeds the retrieval query, the live context build (assembleTurnPrompt
   // passes it to buildContext), and the persisted PromptPlan turn snapshot.
   const captureSessionContext = (): Promise<TurnSessionContextSnapshot> => (
-    runtime.sessionManager.captureTurnSessionContext({
-      channelId: turnSessionIdentity.logicalSessionId,
+    sessionReads.captureTurnSessionContext({
       userId: input.continuitySubjectKey,
       channelMeta,
       continuityFallbackUserIds: authorContext.continuityFallbackKeys,
@@ -707,7 +715,11 @@ export async function computePreTurnState(input: {
     channelId: turnSessionIdentity.logicalSessionId,
     turnId,
     requestId,
-    sessionManager: runtime.sessionManager,
+    sessionManager: {
+      reconcileSessionChannelFromDisk: async () => (
+        await sessionReads.reconcileSessionChannelFromDisk()
+      ),
+    },
     recapture: captureSessionContext,
     emitTelemetry: (event, payload) => runtime.emitTelemetry(event, payload),
   });
@@ -840,10 +852,13 @@ export async function computePreTurnState(input: {
     // authorId) keys the per-participant trend line inside a group room. Only
     // this author's own trend moves; idle participants are never touched.
     authorContext.canonicalContactKey ?? message.authorId,
+    // Owner-bound reads: first-use scope hydration must read session metadata
+    // through the captured facade during the admitted turn.
+    sessionReads,
   );
   const emotionAppraisalChain = runtime.emotionSelfModelRuntime.getEmotionAppraisalChain(emotionSessionId);
   const turnSnapshotCapturedAt = Date.now();
-  const coherenceEntries = runtime.sessionManager.getRecentMessages(message.channelId, 24);
+  const coherenceEntries = sessionReads.getRecentMessages(24);
   const coherenceContext = deriveContextCoherenceSessionContext(
     coherenceEntries,
     message.timestamp.getTime(),
@@ -916,6 +931,7 @@ export async function computePreTurnState(input: {
     toolCallCount: 0,
     sessionChannelId: emotionSessionId,
     conversationScope,
+    capturedSessionReads: sessionReads,
   });
   const memoryContextBlock = bypassMemoryForVisionTurn
     ? ''

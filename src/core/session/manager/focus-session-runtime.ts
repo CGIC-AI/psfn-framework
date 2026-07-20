@@ -123,7 +123,15 @@ export class FocusSessionRuntime {
   }
 
   getActiveFocusMemoryScopeQuery(channelId: string): MemoryScopeQuery | null {
-    const active = this.getActiveFocusSession(channelId);
+    return this.getActiveFocusMemoryScopeQueryForResolvedChannel(
+      this.resolveFocusChannelId(channelId),
+    );
+  }
+
+  getActiveFocusMemoryScopeQueryForResolvedChannel(
+    resolvedChannelId: string,
+  ): MemoryScopeQuery | null {
+    const active = this.activeFocusSessions.get(resolvedChannelId);
     if (!active) return null;
     return buildFocusMemoryScopeQuery(active.scope);
   }

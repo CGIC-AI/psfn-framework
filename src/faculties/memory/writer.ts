@@ -17,6 +17,7 @@ import type {
   MemoryRedactionOperation,
   MemoryRetentionClass,
   MemoryFormationVAD,
+  MemoryEmotionalTexture,
   MemoryScopeRef,
   MemorySourceType,
   MemoryProvenance,
@@ -30,6 +31,7 @@ import {
   VALID_MEMORY_TYPES,
   isDurableMemory,
   normalizeFormationVAD,
+  normalizeEmotionalTexture,
   normalizeMemoryTags,
   resolveConsentRedactionBehavior,
 } from './types.js';
@@ -85,6 +87,13 @@ export interface MemoryWriteOptions {
   salience?: number;         // default to importance when omitted
   emotionalValence?: number; // default 0
   formationVAD?: MemoryFormationVAD;
+  /**
+   * Multi-signal emotional texture (031.11.1): the discrete-emotion
+   * distribution + emotion confidence at formation, retained alongside the
+   * scalar valence/VAD so a mixed emotional state is not compressed to a single
+   * dominant tag. Optional; omitted when no emotion snapshot is available.
+   */
+  emotionalTexture?: MemoryEmotionalTexture;
   confidence?: number;       // default 0.8
   tags?: string[];
   sourceRef?: string;        // default 'tool:memory_write'
@@ -402,6 +411,7 @@ export class MemoryWriter {
       salience,
       emotionalValence = 0,
       formationVAD,
+      emotionalTexture,
       confidence = 0.8,
       tags = [],
       sourceRef,
@@ -433,6 +443,7 @@ export class MemoryWriter {
       ? undefined
       : normalizeConsentFlags(consentFlags);
     const normalizedFormationVAD = normalizeFormationVAD(formationVAD);
+    const normalizedEmotionalTexture = normalizeEmotionalTexture(emotionalTexture);
     const normalizedSource = normalizeSourceContext({
       sourceRef,
       sourceType,
@@ -655,6 +666,7 @@ export class MemoryWriter {
       confidence,
       emotionalValence,
       formationVAD: normalizedFormationVAD,
+      ...(normalizedEmotionalTexture ? { emotionalTexture: normalizedEmotionalTexture } : {}),
       salience: targetSalience,
       sourceRef: normalizedSourceRef,
       sourceType: normalizedSource.sourceType,
@@ -723,6 +735,7 @@ export class MemoryWriter {
       salience,
       emotionalValence = 0,
       formationVAD,
+      emotionalTexture,
       confidence = 0.8,
       tags = [],
       sourceRef,
@@ -750,6 +763,7 @@ export class MemoryWriter {
       retentionClass,
     });
     const normalizedFormationVAD = normalizeFormationVAD(formationVAD);
+    const normalizedEmotionalTexture = normalizeEmotionalTexture(emotionalTexture);
     const normalizedSource = normalizeSourceContext({
       sourceRef,
       sourceType,
@@ -837,6 +851,7 @@ export class MemoryWriter {
       confidence,
       emotionalValence,
       formationVAD: normalizedFormationVAD,
+      ...(normalizedEmotionalTexture ? { emotionalTexture: normalizedEmotionalTexture } : {}),
       salience: targetSalience,
       sourceRef: normalizedSourceRef,
       sourceType: normalizedSource.sourceType,

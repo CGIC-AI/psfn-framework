@@ -67,6 +67,21 @@ export interface MemoryFormationVAD {
   arousal: number;
   dominance: number;
 }
+/**
+ * Multi-signal emotional texture captured at memory formation
+ * (psfn-framework-031.11.1). `formationVAD` already retains the VAD vector and
+ * `emotionalValence` the dominant scalar; this preserves the rest of the mixed
+ * state that was otherwise compressed away — the full discrete-emotion
+ * distribution and the emotion confidence — so an emotional memory can stay
+ * legible as a mixed state instead of collapsing to a single dominant tag.
+ * Optional: absent on memories formed without an emotion snapshot.
+ */
+export interface MemoryEmotionalTexture {
+  /** Discrete emotion distribution (label -> [0,1] score). */
+  discrete: Record<string, number>;
+  /** Emotion-signal confidence [0,1] at formation. */
+  confidence: number;
+}
 export interface MemoryProvenance {
   channelId?: string;
   turnId?: string;
@@ -248,6 +263,7 @@ export interface PurrMemory {
   confidence: number;
   emotionalValence: number;
   formationVAD?: MemoryFormationVAD;
+  emotionalTexture?: MemoryEmotionalTexture;
   salience: number;
   /** Epoch at which the stored salience snapshot was calculated. */
   salienceDecayAnchorAt?: number;
@@ -652,6 +668,27 @@ export function normalizeFormationVAD(
     arousal: clampSigned(value.arousal ?? 0),
     dominance: clampSigned(value.dominance ?? 0),
   };
+}
+
+export function normalizeEmotionalTexture(
+  value: MemoryEmotionalTexture | undefined,
+): MemoryEmotionalTexture | undefined {
+  if (!value || typeof value !== 'object') return undefined;
+  const rawDiscrete = (value as { discrete?: unknown }).discrete;
+  const discrete: Record<string, number> = {};
+  if (rawDiscrete && typeof rawDiscrete === 'object' && !Array.isArray(rawDiscrete)) {
+    for (const [rawLabel, rawScore] of Object.entries(rawDiscrete as Record<string, unknown>)) {
+      const label = rawLabel.trim().toLowerCase();
+      if (!label) continue;
+      if (typeof rawScore !== 'number' || !Number.isFinite(rawScore)) continue;
+      const score = clampUnit(rawScore);
+      if (score > 0) discrete[label] = score;
+    }
+  }
+  const confidence = clampUnit((value as { confidence?: unknown }).confidence, 0);
+  // Nothing meaningful captured -> omit the field rather than storing an empty husk.
+  if (Object.keys(discrete).length === 0 && confidence <= 0) return undefined;
+  return { discrete, confidence };
 }
 
 export function getSensitivityWriteThreshold(sensitivity: SensitivityLevel): SensitivityWriteThreshold {

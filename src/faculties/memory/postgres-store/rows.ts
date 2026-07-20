@@ -1,10 +1,12 @@
 import {
   inferMemorySourceTypeFromSourceRef,
   normalizeConsentFlags,
+  normalizeEmotionalTexture,
   normalizeFormationVAD,
   normalizeMemoryProvenance,
   normalizeMemoryScopeRef,
   normalizeMemorySourceType,
+  type MemoryEmotionalTexture,
   type PurrMemory,
 } from '../types.js';
 
@@ -18,6 +20,7 @@ export interface MemoryRow {
   confidence: PgNumeric;
   emotional_valence: PgNumeric;
   formation_vad: unknown;
+  emotional_texture: unknown;
   salience: PgNumeric;
   salience_decay_anchor_at: PgNumeric;
   source_ref: string;
@@ -213,6 +216,17 @@ function decodeFormationVAD(value: unknown): PurrMemory['formationVAD'] {
   });
 }
 
+function decodeEmotionalTexture(value: unknown): MemoryEmotionalTexture | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const candidate = value as { discrete?: unknown; confidence?: unknown };
+  return normalizeEmotionalTexture({
+    discrete: (candidate.discrete && typeof candidate.discrete === 'object' && !Array.isArray(candidate.discrete)
+      ? candidate.discrete
+      : {}) as Record<string, number>,
+    confidence: typeof candidate.confidence === 'number' ? candidate.confidence : 0,
+  });
+}
+
 export function encodeEmbeddingLiteral(embedding: Float32Array): string {
   return `[${Array.from(embedding, value => Number(value)).join(',')}]`;
 }
@@ -249,6 +263,7 @@ export function toMemoryRow(memory: PurrMemory, embedding?: Float32Array): Memor
     confidence: memory.confidence,
     emotional_valence: memory.emotionalValence,
     formation_vad: memory.formationVAD ?? null,
+    emotional_texture: memory.emotionalTexture ?? null,
     salience: memory.salience,
     salience_decay_anchor_at: memory.salienceDecayAnchorAt ?? memory.lastAccessed,
     source_ref: memory.sourceRef,
@@ -296,6 +311,7 @@ export function fromMemoryRow(row: MemoryRow): PurrMemory {
     confidence: parsePgNumber(row.confidence, 'confidence'),
     emotionalValence: parsePgNumber(row.emotional_valence, 'emotional_valence'),
     formationVAD: decodeFormationVAD(row.formation_vad),
+    emotionalTexture: decodeEmotionalTexture(row.emotional_texture),
     salience: parsePgNumber(row.salience, 'salience'),
     salienceDecayAnchorAt: parsePgNumber(row.salience_decay_anchor_at, 'salience_decay_anchor_at'),
     sourceRef: row.source_ref,

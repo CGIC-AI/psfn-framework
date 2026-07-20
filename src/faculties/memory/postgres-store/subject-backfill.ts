@@ -95,7 +95,7 @@ export async function backfillMemorySubjectClassifications(
 
   const rows = await client.query<BackfillMemoryRow>(`
     SELECT
-      id, text, type, importance, confidence, emotional_valence, formation_vad,
+      id, text, type, importance, confidence, emotional_valence, formation_vad, emotional_texture,
       salience, salience_decay_anchor_at, source_ref, source_type, provenance_json,
       extracted_at, last_accessed, access_count, superseded_by, tags,
       scope_ref_kind, scope_ref_id, scope_ref_label, scope_tags, provenance_refs,

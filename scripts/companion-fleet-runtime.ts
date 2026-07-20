@@ -60,6 +60,11 @@ export function resolveConfiguredLocalCompanionFleetRuntime(
   const fleet = resolveConfiguredCompanionFleet(env);
   if (!fleet) return null;
   const fleetAuthFlag = readFleetAuthEnvFlag(env);
+  if (fleetAuthFlag.kind === 'invalid') {
+    throw new Error(
+      `Invalid PSFN_FLEET_AUTH=${JSON.stringify(fleetAuthFlag.raw)}. Expected a boolean flag.`,
+    );
+  }
   if (fleetAuthFlag.kind !== 'set' || !fleetAuthFlag.value) {
     throw new Error(
       'Multi-companion local startup requires PSFN_FLEET_AUTH=1 for the one fleet Garden',

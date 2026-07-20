@@ -14,6 +14,12 @@ import { SessionStore } from '../../../persistence/sessions/store.js';
 import { createFilesystemSessionArchivePort } from '../../../persistence/journals/journal/port.js';
 import { createInMemoryTranscriptProjection } from '../../../test-support/in-memory-transcript-projection.js';
 import { createTurnId } from '../../../core/turns/id.js';
+import { CogSecEventStore } from '../../../core/cogsec/events.js';
+import { CogSecForensicArchive } from '../../../core/cogsec/forensic-archive.js';
+import {
+  resolveCogSecEventsPath,
+  resolveCogSecForensicArchiveDir,
+} from '../../../persistence/layout.js';
 import type { SubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
 import type { MemoryStorePort } from '../../../faculties/memory/memory-store-port.js';
 import type { PurrMemory } from '../../../faculties/memory/types.js';
@@ -1208,7 +1214,7 @@ describe('AdminSessionDataService', () => {
       channelVisibility: 'private',
     });
 
-    const continuityPort = createUserContinuityPort(continuityStore, () => true);
+    const continuityPort = createUserContinuityPort(continuityStore, () => [], () => true);
     expect(continuityPort.getMerged({
       canonicalUserId: 'canonical-contact-1',
       limit: 10,
@@ -1242,7 +1248,7 @@ describe('AdminSessionDataService', () => {
       },
     });
 
-    const continuityPort = createUserContinuityPort(continuityStore, () => true);
+    const continuityPort = createUserContinuityPort(continuityStore, () => [], () => true);
     expect(continuityPort.getMerged({
       canonicalUserId: 'canonical-contact-1',
       limit: 10,
@@ -1251,18 +1257,28 @@ describe('AdminSessionDataService', () => {
     })).toEqual([]);
   });
 
-  it('surfaces continuity provenance for cross-channel inspection', async () => {
+  it('keeps continuity provenance while withholding origin-redacted content', async () => {
     const continuityStore = new UserContinuityStore(join(dir, 'continuity'));
+    const continuitySecret = 'Cross-channel continuity note';
+    const sourceEntryId = store.append({
+      channelId: 'discord:dm',
+      role: 'assistant',
+      content: continuitySecret,
+      authorId: 'scheduler',
+      authorName: 'Scheduler',
+      timestamp: 1_700_000_200_000,
+      channelVisibility: 'private',
+    });
     continuityStore.append('canonical-contact-1', {
       channelId: 'discord:dm',
       role: 'assistant',
-      content: 'Cross-channel continuity note',
+      content: continuitySecret,
       authorId: 'scheduler',
       authorName: 'Scheduler',
       timestamp: 1_700_000_200_000,
       originChannelId: 'discord:dm',
       channelVisibility: 'private',
-    });
+    }, sourceEntryId);
 
     store.append({
       channelId: 'api:session-1',
@@ -1331,8 +1347,30 @@ describe('AdminSessionDataService', () => {
 
     const continuityEntryId = continuityEntry!.id;
     expect(continuityEntryId).toBeDefined();
+    const caseId = 'cogsec_20260719T000000Z_loom_continuity';
+    const companionRoot = join(dir, 'companion-data');
+    const eventStore = new CogSecEventStore(resolveCogSecEventsPath(companionRoot));
+    const forensicArchive = new CogSecForensicArchive(resolveCogSecForensicArchiveDir(companionRoot));
+    eventStore.createEvent({
+      caseId,
+      type: 'content_poisoning',
+      severity: 'high',
+      sourceChannelId: 'discord:dm',
+      safeAgentSummary: 'sealed and removed from active cognition',
+    });
+    await store.applyCogSecTombstones({
+      channelId: 'discord:dm',
+      caseId,
+      eventStore,
+      forensicArchive,
+      messageIds: [sourceEntryId],
+    });
+
     const result = await service.getSessionMessages('api:session-1');
     expect(result.turns).toHaveLength(1);
+    expect(result.turns[0]?.snapshot?.sessionContext?.continuityEntries[0]?.content)
+      .toBe('[redacted: source entry removed from the session journal]');
+    expect(JSON.stringify(result)).not.toContain(continuitySecret);
     expect(result.turns[0]?.continuityProvenance).toEqual([
       expect.objectContaining({
         turnId,

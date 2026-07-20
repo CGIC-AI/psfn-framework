@@ -3,6 +3,7 @@ import { mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import type { SessionEntry } from '../../core/session/types.js';
+import { buildContinuityEntryMetadata } from '../../core/session/continuity-provenance.js';
 import type { TurnRecord } from '../../shared/contracts/runtime.js';
 import { createTurnId } from '../../core/turns/id.js';
 import { SessionStore } from './store.js';
@@ -10,8 +11,13 @@ import {
   REDACTED_MESSAGE_PLACEHOLDER,
   WITHHELD_WIRE_BODY_MARKER,
 } from './turn-record-session-refs.js';
-import { buildPromptLoomData } from '../../operator/garden/services/session-turn-observability.js';
+import {
+  AdminSessionTurnObservabilityStore,
+  buildPromptLoomData,
+} from '../../operator/garden/services/session-turn-observability.js';
 import type { AdminTurnSnapshotData } from '../../operator/garden/services/types.js';
+import { EventBus } from '../../shared/event-bus.js';
+import { createTurnRecordIntrospectionSource } from '../../faculties/introspection/source.js';
 import { CogSecEventStore } from '../../core/cogsec/events.js';
 import { CogSecForensicArchive } from '../../core/cogsec/forensic-archive.js';
 import {
@@ -84,8 +90,23 @@ function buildTurnRecord(
         channelId,
         capturedAt: 1,
         trustLevel: 'regular',
-        sessionContext: { channelId, recentEntries },
-        plan: { messages },
+        sessionContext: {
+          channelId,
+          recentEntries,
+          compactionSummaryTexts: [],
+          focusKnowledgeTexts: [],
+          continuityEntries: [],
+          versionPointer: 'test/session',
+        },
+        plan: {
+          schemaVersion: 1,
+          blocks: [],
+          variables: {},
+          messages,
+          toolDefinitions: [],
+          cachePlan: { staticBoundary: 0, sessionStableBoundary: 0 },
+          scope: {},
+        },
       },
     },
   } as unknown as TurnRecord;
@@ -227,6 +248,135 @@ describe('SessionStore turn-record session-entry diet (psfn-framework-9ree)', ()
   });
 });
 
+describe('SessionStore top-level turn-message CogSec gating (psfn-framework-sm9l)', () => {
+  it('serves redaction notices through introspection, Garden buildTurnData, and every store read exit', async () => {
+    const dir = makeDir();
+    const companionRoot = join(dir, 'companion-data');
+    const store = new SessionStore(dir);
+    const channelId = 'discord:public-redaction';
+    const partnerSecret = 'TOP_LEVEL_PARTNER_SECRET';
+    const companionSecret = 'TOP_LEVEL_COMPANION_SECRET';
+    const userEntryId = store.append({
+      channelId,
+      role: 'user',
+      content: partnerSecret,
+      timestamp: 1_000,
+    });
+    const assistantEntryId = store.append({
+      channelId,
+      role: 'assistant',
+      content: companionSecret,
+      timestamp: 2_000,
+    });
+    const entries = store.getRecent(channelId, 10);
+    const record = buildTurnRecord(channelId, entries, entries.map(message));
+    record.userMessage = {
+      role: 'user',
+      content: partnerSecret,
+      timestamp: 1_000,
+      sessionEntryId: userEntryId,
+    };
+    record.assistantMessage = {
+      role: 'assistant',
+      content: companionSecret,
+      timestamp: 2_000,
+      sessionEntryId: assistantEntryId,
+    };
+    const recordSnapshot = record.observability!.snapshot! as unknown as Record<string, unknown>;
+    recordSnapshot.promptContext = {
+      currentTurnInput: partnerSecret,
+      response: { content: companionSecret },
+    };
+    record.auditPrivacy = {
+      schemaVersion: 1,
+      contentMode: 'verbatim_public',
+      channelPrivacy: 'public',
+      contentSensitivity: 'non_intimate',
+      contentSensitivityActor: {
+        kind: 'companion',
+        turnId: record.turnId,
+        requestId: record.requestId,
+      },
+      reason: 'explicit_public_non_dm',
+    };
+    await store.appendTurnRecord(record);
+
+    const caseId = 'cogsec_20260719T000000Z_turn_messages';
+    const eventStore = new CogSecEventStore(resolveCogSecEventsPath(companionRoot));
+    const forensicArchive = new CogSecForensicArchive(resolveCogSecForensicArchiveDir(companionRoot));
+    eventStore.createEvent({
+      caseId,
+      type: 'content_poisoning',
+      severity: 'high',
+      sourceChannelId: channelId,
+      safeAgentSummary: 'sealed and removed from active cognition',
+    });
+    await store.applyCogSecTombstones({
+      channelId,
+      caseId,
+      eventStore,
+      forensicArchive,
+      messageIds: [userEntryId, assistantEntryId],
+    });
+
+    const recent = store.getRecentTurnRecords(channelId, 10);
+    const found = store.findTurnRecord(channelId, record.turnId);
+    const sourceRecent = store.getRecentSourceTurnRecords(channelId, 10);
+    const sourceFound = store.findSourceTurnRecord(channelId, channelId, record.turnId);
+    const uniqueSource = store.findUniqueSourceTurnRecord(channelId, record.turnId);
+    for (const candidate of [
+      recent[0],
+      found,
+      sourceRecent[0],
+      sourceFound,
+      uniqueSource,
+    ]) {
+      expect(candidate?.userMessage.content).toBe(REDACTED_MESSAGE_PLACEHOLDER);
+      expect(candidate?.assistantMessage?.content).toBe(REDACTED_MESSAGE_PLACEHOLDER);
+      expect(JSON.stringify(candidate)).not.toContain(partnerSecret);
+      expect(JSON.stringify(candidate)).not.toContain(companionSecret);
+    }
+
+    const introspection = createTurnRecordIntrospectionSource({
+      listRecentSessions: () => [{ sessionId: channelId, sourceChannelId: channelId }],
+      getRecentTurnRecords: (sourceChannelId, limit, offset) => (
+        store.getRecentSourceTurnRecords(sourceChannelId, limit, offset)
+      ),
+      isSessionRetiredOrQuarantined: () => false,
+      isSourceTurnRecordEligible: (sourceChannelId, ownerSessionId, turnId) => (
+        store.isSourceTurnRecordEligible(sourceChannelId, ownerSessionId, turnId)
+      ),
+    });
+    const introspectionCandidates = introspection.listCandidates({
+      allowedPublicChannelIds: [channelId],
+      recentSessionLimit: 10,
+      recentTurnLimit: 10,
+      maxSourceChars: 1_000,
+    });
+    expect(JSON.stringify(introspectionCandidates)).not.toContain(partnerSecret);
+    expect(JSON.stringify(introspectionCandidates)).not.toContain(companionSecret);
+    expect(introspectionCandidates[0]).toMatchObject({
+      publicStimulus: REDACTED_MESSAGE_PLACEHOLDER,
+      actualReply: REDACTED_MESSAGE_PLACEHOLDER,
+    });
+
+    const garden = new AdminSessionTurnObservabilityStore({ eventBus: new EventBus() });
+    const gardenTurn = garden.buildTurnData(recent[0]!);
+    expect(gardenTurn.record.userMessage.content).toBe(REDACTED_MESSAGE_PLACEHOLDER);
+    expect(gardenTurn.record.assistantMessage?.content).toBe(REDACTED_MESSAGE_PLACEHOLDER);
+    expect(gardenTurn.promptLoom.memoryCapture.input.userMessage?.content)
+      .toBe(REDACTED_MESSAGE_PLACEHOLDER);
+    expect(gardenTurn.promptLoom.memoryCapture.input.assistantMessage?.content)
+      .toBe(REDACTED_MESSAGE_PLACEHOLDER);
+    expect(gardenTurn.promptLoom.memoryCapture.input.currentTurnInput)
+      .toBe(REDACTED_MESSAGE_PLACEHOLDER);
+    expect(gardenTurn.promptLoom.providerResult.renderedChatOutput)
+      .toBe(REDACTED_MESSAGE_PLACEHOLDER);
+    expect(JSON.stringify(gardenTurn)).not.toContain(partnerSecret);
+    expect(JSON.stringify(gardenTurn)).not.toContain(companionSecret);
+  });
+});
+
 // ── captured wire-body CogSec gating (bead psfn-framework-eb14) ────────────────
 
 /** Build a turn record whose snapshot carries a captured provider wire body
@@ -255,7 +405,15 @@ function buildWireTurnRecord(
   const snapshot = record.observability!.snapshot! as unknown as Record<string, unknown>;
   // Give the plan an (empty) blocks array so the Loom system-section derivation
   // has something to iterate; the raw-wire panel we assert on is independent.
-  snapshot.plan = { messages, blocks: [], toolDefinitions: [] };
+  snapshot.plan = {
+    schemaVersion: 1,
+    messages,
+    blocks: [],
+    variables: {},
+    toolDefinitions: [],
+    cachePlan: { staticBoundary: 0, sessionStableBoundary: 0 },
+    scope: {},
+  };
   if (options?.currentTurnPartnerEntryId !== undefined) {
     (record.userMessage as { sessionEntryId?: number; content: string }).sessionEntryId
       = options.currentTurnPartnerEntryId;
@@ -480,6 +638,138 @@ describe('SessionStore captured wire-body CogSec gating (psfn-framework-eb14)', 
     const read = store.getRecentTurnRecords(channelId, 10);
     expect(JSON.stringify(read)).not.toContain('my SECRET windowed line');
     expect(capturedBody(read[0]!)).toMatchObject({ withheld: WITHHELD_WIRE_BODY_MARKER });
+  });
+
+  it('scrubs origin-redacted cross-channel content from body.system, continuity entries, and Loom projections', async () => {
+    const dir = makeDir();
+    const companionRoot = join(dir, 'companion-data');
+    const store = new SessionStore(dir);
+    const originChannelId = 'api:continuity-origin';
+    const consumerChannelId = 'api:continuity-consumer';
+    const secret = 'CROSS_CHANNEL_WIRE_SECRET';
+    const timestamp = 1_700_000_000_000;
+    const sourceEntryId = store.append({
+      channelId: originChannelId,
+      role: 'user',
+      content: secret,
+      authorId: 'partner-1',
+      authorName: 'Partner',
+      timestamp,
+      channelVisibility: 'private',
+    });
+    store.append({
+      channelId: consumerChannelId,
+      role: 'user',
+      content: 'current consumer turn',
+      timestamp: timestamp + 1,
+      channelVisibility: 'private',
+    });
+    const continuityEntry: SessionEntry = {
+      id: 1,
+      channelId: originChannelId,
+      originChannelId,
+      role: 'user',
+      content: secret,
+      authorId: 'partner-1',
+      authorName: 'Partner',
+      timestamp,
+      channelVisibility: 'private',
+      metadata: buildContinuityEntryMetadata({
+        continuityUserId: 'partner-1',
+        sourceChannelId: originChannelId,
+        sourceVisibility: 'private',
+        sourceRole: 'user',
+        recordedAt: timestamp,
+        sourceEntryId,
+      }),
+    };
+    const wireBody = {
+      model: 'test/model',
+      system: `<cross_channel_continuity><text>${secret}</text></cross_channel_continuity>`,
+      messages: [{ role: 'user', content: 'current consumer turn' }],
+    };
+    const record = buildWireTurnRecord(consumerChannelId, [], [], wireBody);
+    const snapshot = record.observability!.snapshot! as unknown as Record<string, unknown>;
+    snapshot.sessionContext = {
+      channelId: consumerChannelId,
+      recentEntries: [],
+      compactionSummaryTexts: [],
+      focusKnowledgeTexts: [],
+      continuityEntries: [continuityEntry],
+      versionPointer: 'test/continuity',
+    };
+    snapshot.plan = {
+      schemaVersion: 1,
+      messages: [],
+      toolDefinitions: [],
+      variables: {},
+      cachePlan: { staticBoundary: 0, sessionStableBoundary: 0 },
+      scope: {},
+      blocks: [{
+        id: 'session.continuity',
+        layer: 'session',
+        renderedText: `<cross_channel_continuity><text>${secret}</text></cross_channel_continuity>`,
+      }],
+    };
+    const promptContext = snapshot.promptContext as {
+      finalSystemSections?: unknown[];
+    };
+    promptContext.finalSystemSections = [{
+      id: 'cross_channel_continuity',
+      title: 'Cross-Channel Continuity',
+      content: `<cross_channel_continuity><text>${secret}</text></cross_channel_continuity>`,
+      charCount: secret.length,
+      tokenCount: 1,
+    }];
+    await store.appendTurnRecord(record);
+
+    const before = store.getRecentTurnRecords(consumerChannelId, 10);
+    expect(JSON.stringify(before)).toContain(secret);
+
+    const caseId = 'cogsec_20260719T000000Z_cross_channel';
+    const eventStore = new CogSecEventStore(resolveCogSecEventsPath(companionRoot));
+    const forensicArchive = new CogSecForensicArchive(resolveCogSecForensicArchiveDir(companionRoot));
+    eventStore.createEvent({
+      caseId,
+      type: 'content_poisoning',
+      severity: 'high',
+      sourceChannelId: originChannelId,
+      safeAgentSummary: 'sealed and removed from active cognition',
+    });
+    await store.applyCogSecTombstones({
+      channelId: originChannelId,
+      caseId,
+      eventStore,
+      forensicArchive,
+      messageIds: [sourceEntryId],
+    });
+
+    const recent = store.getRecentTurnRecords(consumerChannelId, 10);
+    const found = store.findTurnRecord(consumerChannelId, record.turnId);
+    const sourceRecent = store.getRecentSourceTurnRecords(consumerChannelId, 10);
+    for (const candidate of [recent[0], found, sourceRecent[0]]) {
+      expect(JSON.stringify(candidate)).not.toContain(secret);
+      const candidateSnapshot = candidate?.observability?.snapshot as unknown as {
+        sessionContext: { continuityEntries: SessionEntry[] };
+      };
+      expect(candidateSnapshot.sessionContext.continuityEntries[0]?.content)
+        .toBe(REDACTED_MESSAGE_PLACEHOLDER);
+      expect(capturedBody(candidate!)).toMatchObject({
+        withheld: WITHHELD_WIRE_BODY_MARKER,
+      });
+    }
+
+    const gardenStore = new AdminSessionTurnObservabilityStore({ eventBus: new EventBus() });
+    const gardenTurn = gardenStore.buildTurnData(recent[0]!);
+    const loom = buildPromptLoomData(
+      recent[0]!,
+      recent[0]!.observability!.snapshot as unknown as AdminTurnSnapshotData,
+    );
+    expect(JSON.stringify(gardenTurn)).not.toContain(secret);
+    expect(JSON.stringify(loom)).not.toContain(secret);
+    expect(loom.providerWire.capturedWirePayload?.body).toMatchObject({
+      withheld: WITHHELD_WIRE_BODY_MARKER,
+    });
   });
 
   it('serves the captured wire body verbatim while all embedded L0 entries remain live', () => {

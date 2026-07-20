@@ -366,7 +366,11 @@ export class SessionManager {
   set continuityStore(store: UserContinuityStore | null) {
     this.continuityStoreRef = store;
     this.crossChannelContinuity = store
-      ? createUserContinuityPort(store, () => false)
+      ? createUserContinuityPort(
+        store,
+        (channelId, minId, maxId) => this.store.getEntriesInRange(channelId, minId, maxId),
+        () => false,
+      )
       : createMissingCrossChannelContinuityPort();
   }
 
@@ -725,6 +729,7 @@ export class SessionManager {
       if (continuityKey) {
         this.crossChannelContinuity.append({
           continuityUserId: continuityKey,
+          sourcePersistence: 'non_persistent',
           entry: {
             channelId: resolvedChannelId,
             role: entryRole,
@@ -756,6 +761,7 @@ export class SessionManager {
     if (continuityKey) {
       this.crossChannelContinuity.append({
         continuityUserId: continuityKey,
+        sourceEntryId: entryId,
         entry: {
           channelId: resolvedChannelId,
           role: entryRole,
@@ -819,6 +825,7 @@ export class SessionManager {
       if (continuityKey) {
         this.crossChannelContinuity.append({
           continuityUserId: continuityKey,
+          sourcePersistence: 'non_persistent',
           entry: {
             channelId: resolvedChannelId,
             role: 'assistant',
@@ -846,6 +853,7 @@ export class SessionManager {
     if (continuityKey) {
       this.crossChannelContinuity.append({
         continuityUserId: continuityKey,
+        sourceEntryId: entryId,
         entry: {
           channelId: resolvedChannelId,
           role: 'assistant',
@@ -916,6 +924,7 @@ export class SessionManager {
     if (continuityKey) {
       this.crossChannelContinuity.append({
         continuityUserId: continuityKey,
+        sourceEntryId: entryId,
         entry: {
           channelId: resolvedChannelId,
           role: 'system',

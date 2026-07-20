@@ -41,7 +41,6 @@ import {
 import {
   resolveAdaptiveContextBudgetProfile,
   resolveSessionHistoryBudget,
-  type AdaptiveContextBudgetProfile,
   type ContextBudgetTurnCharacteristics,
 } from '../../shared/context-budget.js';
 import {
@@ -159,6 +158,12 @@ import {
   type RoomContentWindow,
   type RoomContentWindowPort,
 } from './room-content-window.js';
+import type {
+  AutoCompactionBetweenTurnsParams,
+  AutoCompactionRecentEntriesCaptureParams,
+  SessionManagerTypeSurface,
+  TurnSessionContextCaptureParams,
+} from './manager/session-manager-type-surface.js';
 
 export type {
   FocusSessionCompletionResult,
@@ -168,6 +173,9 @@ export type {
   ImportedHistoryBootstrapResult,
   PreCompactionExtractionContext,
   PreCompactionExtractionHandler,
+  AutoCompactionBetweenTurnsParams,
+  AutoCompactionRecentEntriesCaptureParams,
+  TurnSessionContextCaptureParams,
 };
 
 const log = createComponentLogger('SessionManager');
@@ -217,47 +225,6 @@ export interface RecordToolObservationResult {
   intakeSnapshot: IntakeEnvelopeSnapshot | null;
 }
 
-export interface AutoCompactionBetweenTurnsParams {
-  channelId: string;
-  systemPrompt?: string;
-  memoriesBlock?: string;
-  /** Durable jobs persist counts and hashes, never a second prompt/content copy. */
-  systemPromptTokenCount?: number;
-  memoriesTokenCount?: number;
-  adaptiveProfile?: AdaptiveContextBudgetProfile;
-  llmProvider: LLMProviderPort;
-  userId?: string;
-  channelMeta?: ChannelMeta;
-  compactionPromptText?: string;
-  turnBudgetCharacteristics?: ContextBudgetTurnCharacteristics;
-  icpCorrelation?: IcpConversationCorrelation;
-  throwOnFailure?: boolean;
-  assertEffectAllowed?: () => Promise<void>;
-  /** Exact source-bounded input captured and rechecked under TurnRecord fences; empty is authoritative. */
-  capturedRecentEntries?: readonly SessionEntry[];
-}
-
-export type AutoCompactionRecentEntriesCaptureParams = Pick<
-  AutoCompactionBetweenTurnsParams,
-  'channelId' | 'adaptiveProfile' | 'turnBudgetCharacteristics'
-> & {
-  maxSessionEntryId?: number;
-  now?: Date;
-};
-
-export interface TurnSessionContextCaptureParams {
-  channelId: string;
-  userId?: string;
-  channelMeta?: ChannelMeta;
-  continuityFallbackUserIds?: string[];
-  turnBudgetCharacteristics?: ContextBudgetTurnCharacteristics;
-  /** Optional LLM provider for foreground history-budget summarization. */
-  llmProvider?: LLMProviderPort;
-  excludeSessionEntryId?: number;
-  /** Channel bonding opt-in for the turn. */
-  channelBond?: import('./channel-bond.js').TurnChannelBondInput;
-}
-
 function resolveCompactionTokenCount(input: {
   count?: number;
   text?: string;
@@ -275,7 +242,7 @@ function resolveCompactionTokenCount(input: {
   return countTokens(input.text);
 }
 
-export class SessionManager {
+export class SessionManager implements SessionManagerTypeSurface {
   private store: SessionStore;
   private transcriptSearch: TranscriptSearchPort;
   private deliveryProjectionStore: SessionStore;

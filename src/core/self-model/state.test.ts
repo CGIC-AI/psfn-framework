@@ -165,6 +165,61 @@ describe('InternalStateComputer', () => {
     });
   });
 
+  it('attaches a cross-family discrepancy to the emotional block (low valence + high love)', () => {
+    const state = new InternalStateComputer().computeState({
+      emotionState: {
+        vad: { valence: -0.5, arousal: 0.2, dominance: 0 },
+        mood: { valence: -0.4, arousal: 0.1, dominance: 0 },
+        discrete: { love: 0.7 },
+        confidence: 0.85,
+      },
+      activeConcerns: [],
+      trustLevel: 'regular',
+      sessionMetrics: {
+        userMessageText: 'hi',
+        responseText: 'hello',
+        toolCallCount: 0,
+        recentTurnCount: 1,
+      },
+    });
+
+    const kinds = (state.emotional.discrepancies ?? []).map(d => d.kind);
+    expect(kinds).toContain('valence_vs_discrete');
+    const split = state.emotional.discrepancies?.find(d => d.kind === 'valence_vs_discrete');
+    expect(split?.sides.find(s => s.family === 'discrete_affect')?.label).toBe('love');
+  });
+
+  it('suppresses discrepancies when the emotion telemetry is suppressed', () => {
+    const state = new InternalStateComputer().computeState({
+      emotionState: {
+        vad: { valence: -0.5, arousal: 0.2, dominance: 0 },
+        mood: { valence: -0.4, arousal: 0.1, dominance: 0 },
+        discrete: { love: 0.7 },
+        confidence: 0.2,
+      },
+      // High confidence floor forces low_confidence -> suppressed status.
+      emotionTelemetry: {
+        source: 'classifier_inferred',
+        observedAtMs: 0,
+        nowMs: 0,
+        minConfidence: 0.9,
+        trustedConfidence: 0.95,
+        provenance: [{ source: 'classifier_inferred', modality: 'text', provenanceRef: 'test' }],
+      },
+      activeConcerns: [],
+      trustLevel: 'regular',
+      sessionMetrics: {
+        userMessageText: 'hi',
+        responseText: 'hello',
+        toolCallCount: 0,
+        recentTurnCount: 1,
+      },
+    });
+
+    expect(state.emotional.telemetry.status).toBe('suppressed');
+    expect(state.emotional.discrepancies).toEqual([]);
+  });
+
   it('produces stable serialization and snapshot ref regardless of input ordering', () => {
     const computer = new InternalStateComputer();
     const first = computer.computeState({

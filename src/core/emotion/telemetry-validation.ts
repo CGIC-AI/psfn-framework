@@ -85,6 +85,21 @@ const NEGATIVE_DISCRETE_LABELS = new Set([
 
 const DISCRETE_CONFLICT_THRESHOLD = 0.35;
 
+export type DiscreteAffectPolarity = 'positive' | 'negative' | 'neutral';
+
+/**
+ * Shared discrete-label polarity classifier. Exported so the cross-family
+ * divergence detector (src/core/emotion/discrepancy.ts) reuses the exact same
+ * positive/negative label taxonomy the intra-discrete conflict detector uses,
+ * instead of growing a parallel copy.
+ */
+export function discreteAffectPolarity(label: string): DiscreteAffectPolarity {
+  const normalized = label.trim().toLowerCase();
+  if (POSITIVE_DISCRETE_LABELS.has(normalized)) return 'positive';
+  if (NEGATIVE_DISCRETE_LABELS.has(normalized)) return 'negative';
+  return 'neutral';
+}
+
 export function validateEmotionTelemetry(
   snapshot: EmotionStateSnapshot | null | undefined,
   input: EmotionTelemetryValidationInput = {},

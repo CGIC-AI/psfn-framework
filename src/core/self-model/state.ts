@@ -6,10 +6,18 @@ import { normalizeAcacSnapshot, type AcacSnapshot } from '../emotion/acac.js';
 import type { EmotionStateSnapshot } from '../emotion/state.js';
 import {
   cloneEmotionTelemetryValidation,
+  normalizeEmotionTelemetryProvenance,
   validateEmotionTelemetry,
   type EmotionTelemetryValidation,
   type EmotionTelemetryValidationInput,
 } from '../emotion/telemetry-validation.js';
+import { detectEmotionDiscrepancies } from '../emotion/discrepancy.js';
+import {
+  EMOTION_DISCREPANCY_FAMILIES,
+  EMOTION_DISCREPANCY_KINDS,
+  type EmotionDiscrepancy,
+  type EmotionDiscrepancySide,
+} from '../../shared/contracts/emotion-contracts.js';
 import {
   ACTIVE_CONCERN_OWNERS,
   ACTIVE_CONCERN_PRIORITIES,
@@ -209,6 +217,16 @@ export class InternalStateComputer {
       normalized.emotionTelemetry,
     );
     const emotionState = emotionTelemetry.snapshot;
+    // Cross-family divergence (031.11.1). Detected from the RAW snapshot so a
+    // trusted signal's discrete distribution is intact; gated on the telemetry
+    // validation status inside the detector so a divergence built on a
+    // suppressed signal is itself suppressed. ACAC self-report participates when
+    // present. Surfaced, never forced coherent (charter §8.3).
+    const discrepancies = detectEmotionDiscrepancies({
+      snapshot: normalized.emotionState,
+      validation: emotionTelemetry.validation,
+      ...(normalized.acac ? { acac: normalized.acac } : {}),
+    });
     const certaintyLevel = resolveCertaintyLevel(
       emotionState,
       normalized.sessionMetrics.userMessageText,
@@ -228,6 +246,7 @@ export class InternalStateComputer {
         discreteEmotions: { ...emotionState.discrete },
         confidence: emotionState.confidence,
         telemetry: emotionTelemetry.validation,
+        discrepancies,
         ...(normalized.acac ? { acac: normalized.acac } : {}),
       },
       cognitive: {
@@ -848,6 +867,12 @@ function normalizeInternalState(state: InternalState): InternalState {
       telemetry: emotionalTelemetry === undefined
         ? deriveLegacyEmotionTelemetry(state)
         : cloneEmotionTelemetryValidation(emotionalTelemetry, 'emotional.telemetry'),
+      // `discrepancies` is a newer field (031.11.1): persisted state written
+      // before it existed omits it. Absence normalizes to an empty list — no
+      // divergence recorded — matching the tolerant defaults used elsewhere.
+      discrepancies: normalizeEmotionDiscrepancies(
+        (state.emotional as { discrepancies?: unknown }).discrepancies,
+      ),
       ...(state.emotional.acac === undefined
         ? {}
         : { acac: normalizeAcacSnapshot(state.emotional.acac, 'InternalState emotional.acac') }),
@@ -936,6 +961,51 @@ function deriveLegacyEmotionTelemetry(state: InternalState): EmotionTelemetryVal
       provenanceRef: 'internal-state:emotion:legacy',
     }],
   }).validation;
+}
+
+function normalizeEmotionDiscrepancies(value: unknown): EmotionDiscrepancy[] {
+  if (value === undefined || value === null) return [];
+  if (!Array.isArray(value)) {
+    throw new Error('InternalState emotional.discrepancies must be an array');
+  }
+  return value.map((entry, index) => normalizeEmotionDiscrepancy(entry, index));
+}
+
+function normalizeEmotionDiscrepancy(value: unknown, index: number): EmotionDiscrepancy {
+  const prefix = `emotional.discrepancies[${String(index)}]`;
+  if (!isRecord(value)) {
+    throw new Error(`InternalState field "${prefix}" must be an object`);
+  }
+  if (!EMOTION_DISCREPANCY_KINDS.includes(value.kind as EmotionDiscrepancy['kind'])) {
+    throw new Error(`InternalState field "${prefix}.kind" has unsupported kind "${String(value.kind)}"`);
+  }
+  if (!Array.isArray(value.sides) || value.sides.length !== 2) {
+    throw new Error(`InternalState field "${prefix}.sides" must be a 2-element array`);
+  }
+  return {
+    kind: value.kind as EmotionDiscrepancy['kind'],
+    magnitude: parseUnit(value.magnitude, `${prefix}.magnitude`),
+    sides: [
+      normalizeEmotionDiscrepancySide(value.sides[0], `${prefix}.sides[0]`),
+      normalizeEmotionDiscrepancySide(value.sides[1], `${prefix}.sides[1]`),
+    ],
+  };
+}
+
+function normalizeEmotionDiscrepancySide(value: unknown, fieldName: string): EmotionDiscrepancySide {
+  if (!isRecord(value)) {
+    throw new Error(`InternalState field "${fieldName}" must be an object`);
+  }
+  if (!EMOTION_DISCREPANCY_FAMILIES.includes(value.family as EmotionDiscrepancySide['family'])) {
+    throw new Error(`InternalState field "${fieldName}.family" has unsupported family "${String(value.family)}"`);
+  }
+  return {
+    family: value.family as EmotionDiscrepancySide['family'],
+    label: normalizeIdentifier(value.label as string, `${fieldName}.label`),
+    value: parseSigned(value.value, `${fieldName}.value`),
+    confidence: parseUnit(value.confidence, `${fieldName}.confidence`),
+    provenance: normalizeEmotionTelemetryProvenance(value.provenance, `${fieldName}.provenance`),
+  };
 }
 
 function normalizeDiscreteEmotions(value: Record<string, number>): Record<string, number> {

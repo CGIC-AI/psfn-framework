@@ -71,6 +71,7 @@ import type { CharacterCardVersionStore } from '../../core/identity/card-version
 import { createPersonaPreambleService, type PersonaPreamblePort } from '../../core/identity/persona-preamble.js';
 import type { SubstrateAgent } from '../../core/agent/substrate-agent.js';
 import type { IcpFatigueRegulationReservationPort } from '../../core/agent/fatigue/regulation-reservation.js';
+import type { IcpTurnFenceReader } from '../../core/icp/speaking-precedence-resolver.js';
 import { PostgresIcpFatigueRegulationReservationStore } from '../../persistence/postgres/icp-fatigue-regulation-reservation-store.js';
 import type { ContactTrackingGate } from '../../core/contacts/tracking-gate.js';
 import {
@@ -189,6 +190,14 @@ export interface AgentCoreRuntime {
   fatigueBudget: FatigueBudgetComposition['fatigueBudget'];
   fatigueLedger: FatigueBudgetComposition['fatigueLedger'];
   fatigueRegulationReservations?: IcpFatigueRegulationReservationPort;
+  /**
+   * Read-only ICP turn-fence peek for the speaking arbiter's ICP-over-social
+   * precedence gate (jp36.5.2.1). Same Postgres fatigue store instance as
+   * {@link fatigueRegulationReservations}, exposed through the narrow read port
+   * so the shared reservation port stays untouched. Present only in the
+   * multi-companion runtime.
+   */
+  icpTurnFenceReader?: IcpTurnFenceReader;
   toolConformanceRunner: ToolConformanceRunner;
   sharedWorldWikiCaretaker: SharedWorldWikiCaretakerService | null;
   closeWikiRuntime: () => Promise<void>;
@@ -626,6 +635,9 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
     fatigueBudget: fatigueRuntime.fatigueBudget,
     fatigueLedger: fatigueRuntime.fatigueLedger,
     ...(fatigueRegulationReservations ? { fatigueRegulationReservations } : {}),
+    ...(fatigueRegulationReservations
+      ? { icpTurnFenceReader: fatigueRegulationReservations }
+      : {}),
     toolConformanceRunner,
     sharedWorldWikiCaretaker: wikiRuntime.sharedWorldCaretaker,
     closeWikiRuntime: wikiRuntime.close,

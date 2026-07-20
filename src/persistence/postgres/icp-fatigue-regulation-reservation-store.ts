@@ -371,6 +371,34 @@ export class PostgresIcpFatigueRegulationReservationStore implements IcpFatigueR
     }
   }
 
+  /**
+   * Read-only fence-liveness peek for the speaking arbiter's ICP-over-social
+   * precedence gate (jp36.5.2.1): is a durable ICP turn fence — a `pending`,
+   * not-yet-finalized turn reservation — currently live for this companion as
+   * the local (turn-producing) side? Pure read: it never inserts, updates, or
+   * takes an advisory lease. A `pending` row whose owning database session has
+   * died is reclaimable but still counts as fenced here; briefly over-blocking a
+   * social turn on a transient orphan is the fail-closed direction (social must
+   * not race an in-flight ICP turn). No wall clock participates — reclaim is
+   * lease-based, matching {@link reserve}.
+   */
+  async isTurnFenced(scope: { companionId: string }): Promise<boolean> {
+    const companionId = requireCompanionId(scope.companionId, "fence.companionId");
+    const result = await withPostgresClient(this.pool, async (client) =>
+      await client.query<{ fenced: boolean }>(
+        `
+        SELECT EXISTS(
+          SELECT 1
+          FROM icp_fatigue_turn_reservations
+          WHERE local_companion_id = $1 AND outcome = 'pending'
+        ) AS fenced
+      `,
+        [companionId],
+      ),
+    );
+    return result.rows.at(0)?.fenced === true;
+  }
+
   async readInitiationPressure(
     input: IcpInitiationPressureInput,
   ): Promise<IcpInitiationPressureSnapshot> {

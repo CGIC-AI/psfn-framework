@@ -104,8 +104,12 @@ import { OutboundReplyDeduper } from '../../system/lifecycle/outbound-reply-dedu
 import { ObservedGroupMemoryScheduler } from '../../faculties/memory/extraction/group-observed-scheduler.js';
 import { PassiveNameCandidateBuilder } from '../../core/participation/passive-name-candidate.js';
 import { ParticipationAppraiser } from '../../core/participation/appraiser.js';
-import { SpeakingReservationPhase } from '../../core/agent/arbiter/reservation-phase.js';
+import {
+  SpeakingReservationPhase,
+  type IcpSocialPrecedenceResolver,
+} from '../../core/agent/arbiter/reservation-phase.js';
 import { SpeakingEgressLeasePhase } from '../../core/agent/arbiter/egress-lease-phase.js';
+import { createIcpSpeakingPrecedenceResolver } from '../../core/icp/speaking-precedence-resolver.js';
 import { readRoomEpisodePressureFromLedger } from '../../core/agent/fatigue/room-episode-pressure.js';
 import { createAgentLoopEgressReplySender } from './egress-reply-sender.js';
 import {
@@ -1447,13 +1451,38 @@ async function main(): Promise<void> {
     ...(config.companionId ? { companionId: config.companionId } : {}),
   });
 
+  // ICP-over-social precedence transport (jp36.5.2.1): the arbiter's reservation
+  // gate consumes LIVE ICP signals — the companion's own availability lease (via
+  // the gateway-RPC broker read) and its in-flight ICP turn fence (a `pending`
+  // turn reservation in the shared fatigue store) — so an in-flight ICP turn or
+  // a declared busy/resting/DND yields the social turn (§8.5: ICP dominates on
+  // any conflict or race). Any signal-source error propagates and the
+  // reservation phase fails closed to a suppressing `gate_error`. When the ICP
+  // fleet surfaces are absent (single-companion / no contacts) there is no ICP
+  // authority to contend, so precedence admits.
+  const speakingIcpPrecedence: IcpSocialPrecedenceResolver =
+    config.companionId && coreRuntime.icpAutonomyRuntime && coreRuntime.icpTurnFenceReader
+      ? createIcpSpeakingPrecedenceResolver({
+        companionId: config.companionId,
+        availability: coreRuntime.icpAutonomyRuntime,
+        turnFence: coreRuntime.icpTurnFenceReader,
+        // The ICP continuation-lane hard stop has no clean companion-scope read
+        // yet: it is per-relationship, per-conversation, and needs the per-turn
+        // policy limit. The shared-economy budget it guards is already enforced
+        // by the reservation phase's social-pot funding gate, so a dedicated
+        // continuation-exhaustion read is deferred (jp36.5.2.1 handoff). This
+        // never fabricates an exhausted signal.
+        continuationFatigue: { isContinuationExhausted: async () => false },
+      })
+      : { resolve: () => ({ icpTurnFenced: false, icpFatigueExhausted: false }) };
+
   // Speaking-arbiter reservation phase (bible §8.5/§12.2, §6.10, jp36.5.1.2):
   // deterministic gate that runs BEFORE the appraiser's model call. Constructed
   // only when the gateway-owned arbiter store and social pot are present (the
   // multi-companion runtime) and a charge policy funds the economy. ICP-over-
-  // social precedence consumes the pre-5.2 seam (no live ICP contention until
-  // the ICP transport lands, jp36.5.2); the decayed room-episode pressure gate
-  // is opt-in behind the jp36.5.4 single-source seam and is not wired here.
+  // social precedence consumes the live ICP transport above (jp36.5.2.1); the
+  // decayed room-episode pressure gate is opt-in behind the jp36.5.4
+  // single-source seam and is not wired here.
   const reservationPhase = (
     config.multiCompanion === true
     && persistenceRuntime.speakingArbiterStore
@@ -1465,12 +1494,7 @@ async function main(): Promise<void> {
       store: persistenceRuntime.speakingArbiterStore,
       socialPot: persistenceRuntime.socialPotStore,
       companionId: config.companionId,
-      // Pre-5.2 seam: no live ICP contention. This is an explicit, documented
-      // default (not a swallowed error) — the ICP transport (jp36.5.2) injects
-      // the live availability/fence/exhaustion signals when it lands.
-      icpPrecedence: {
-        resolve: () => ({ icpTurnFenced: false, icpFatigueExhausted: false }),
-      },
+      icpPrecedence: speakingIcpPrecedence,
       config: {
         ...createDefaultReservationPhaseSettings(),
         socialPot: config.chargePolicy.fatigue.socialPot,

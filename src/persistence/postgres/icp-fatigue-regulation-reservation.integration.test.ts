@@ -775,4 +775,61 @@ describe("Postgres ICP fatigue regulation reservations", () => {
     },
     TIMEOUT_MS,
   );
+
+  it(
+    "isTurnFenced reports a live pending turn for the local companion only, and clears on finalize",
+    async () => {
+      if (!harness)
+        throw new Error("Postgres integration harness is unavailable");
+      const databaseUrl = (await harness.createDatabase()).databaseUrl;
+      const episodes = await PostgresIcpSharedAutonomyStore.connect(databaseUrl, {
+        knownCompanionIds: [A, B],
+      });
+      const store =
+        await PostgresIcpFatigueRegulationReservationStore.connect(databaseUrl);
+      try {
+        await episodes.createEpisode({
+          conversationId: DM_CONVERSATION,
+          channelId: DM,
+          participantCompanionIds: [A, B],
+          rootInitiationId: ROOT,
+          initiatedByCompanionId: A,
+          initiationSource: "foreground",
+          provenanceRef: "icp-prov:11111111-1111-4111-8111-111111111111",
+          openedAtMs: 1_000,
+          lastActivityAtMs: 1_000,
+          status: "invited",
+          revision: 1,
+        });
+        const turn = correlation({
+          conversationId: DM_CONVERSATION,
+          channelId: DM,
+          turnId: "77777777-7777-7777-8777-777777777774",
+        });
+
+        // No pending turn: neither companion is fenced.
+        expect(await store.isTurnFenced({ companionId: A })).toBe(false);
+        expect(await store.isTurnFenced({ companionId: B })).toBe(false);
+
+        // A live pending reservation fences the local (turn-producing) companion
+        // A, but not the peer B.
+        expect((await store.reserve(reservationInput(turn))).outcome).toBe("reserved");
+        expect(await store.isTurnFenced({ companionId: A })).toBe(true);
+        expect(await store.isTurnFenced({ companionId: B })).toBe(false);
+
+        // Finalizing the turn (delivered) clears the fence.
+        await store.prepareDelivery({ correlation: turn, fatigue: finalizationFatigue(turn) });
+        await store.finalize({
+          correlation: turn,
+          outcome: "delivered",
+          finalizedAtMs: 11_000,
+          fatigue: finalizationFatigue(turn),
+        });
+        expect(await store.isTurnFenced({ companionId: A })).toBe(false);
+      } finally {
+        await Promise.all([episodes.close(), store.close()]);
+      }
+    },
+    TIMEOUT_MS,
+  );
 });

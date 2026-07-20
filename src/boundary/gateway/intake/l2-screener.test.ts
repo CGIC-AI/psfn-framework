@@ -41,7 +41,7 @@ function testPolicy(): IntakePolicyConfig {
   return validateIntakePolicy(
     {
       ...seed,
-      schemaVersion: 1,
+      schemaVersion: 2,
       mode: 'enforce',
       sourceRiskTiers: {
         operator: 'trusted',

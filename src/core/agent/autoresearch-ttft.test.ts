@@ -89,8 +89,47 @@ function makeMessage(index: number): SubstrateMessage {
   };
 }
 
-function makeMockSessionManager(): SessionManager {
+// Minimal captured-owner facade mirroring substrate-agent.test.ts's
+// makeMockCapturedSessionReads: `run` executes directly (no ALS tripwire in
+// the mock) and reads delegate to the mocked manager under the owner session.
+function makeMockCapturedSessionReads(
+  owner: { logicalSessionId: string; sourceChannelId: string },
+  manager: Record<string, any>,
+): any {
   return {
+    owner,
+    run: <T>(operation: () => T): T => operation(),
+    buildContext: (...args: unknown[]) => manager.buildContext(owner.logicalSessionId, ...args),
+    captureTurnSessionContext: (input: Record<string, unknown> = {}) =>
+      manager.captureTurnSessionContext({ channelId: owner.logicalSessionId, ...input }),
+    getRecentMessages: (limit?: number) => manager.getRecentMessages(owner.logicalSessionId, limit),
+    getRecentMessagesAtOrBefore: () => [],
+    getRoleEnvelopeRefsForEntries: (sessionEntryIds: readonly number[]) =>
+      manager.getRoleEnvelopeRefsForEntries(owner.logicalSessionId, sessionEntryIds),
+    scheduleAutoCompactionBetweenTurns: (params: Record<string, unknown> = {}) =>
+      manager.scheduleAutoCompactionBetweenTurns({ channelId: owner.logicalSessionId, ...params }),
+    captureAutoCompactionRecentEntries: () => [],
+    hasPendingAutoCompaction: () => manager.hasPendingAutoCompaction(owner.logicalSessionId),
+    getActiveFocusMemoryScopeQuery: () => manager.getActiveFocusMemoryScopeQuery(owner.logicalSessionId),
+    getRecentConversationSpeakers: () => manager.getRecentConversationSpeakers(owner.logicalSessionId),
+    resolveConversationScope: (input: Record<string, unknown> = {}) =>
+      manager.resolveConversationScope({ channelId: owner.logicalSessionId, ...input }),
+    reconcileSessionChannelFromDisk: async () => undefined,
+    resolveForeignSessionForTurn: <T>(_reason: string, channelId: string, operation: (reads: any) => T): T =>
+      operation(makeMockCapturedSessionReads(
+        { logicalSessionId: channelId, sourceChannelId: channelId },
+        manager,
+      )),
+  };
+}
+
+function makeMockSessionManager(): SessionManager {
+  const managerRef: Record<string, any> = {};
+  return Object.assign(managerRef, {
+    createCapturedSessionReads: vi.fn(
+      (identity: { logicalSessionId: string; sourceChannelId: string }) =>
+        makeMockCapturedSessionReads(identity, managerRef),
+    ),
     recordUserMessage: vi.fn().mockReturnValue(101),
     recordToolObservation: vi.fn().mockReturnValue({ entryId: 102, intakeSnapshot: null }),
     recordAssistantMessage: vi.fn().mockReturnValue(103),
@@ -119,6 +158,7 @@ function makeMockSessionManager(): SessionManager {
     getRecentMessages: vi.fn().mockReturnValue([]),
     getRoleEnvelopeRefsForEntries: vi.fn().mockReturnValue([]),
     resolveSessionChannelId: vi.fn((channelId: string) => channelId),
+    resolveSessionForIngress: vi.fn((channelId: string) => channelId),
     getRecentConversationSpeakers: () => [],
     resolveConversationScope: vi.fn((input: {
       channelId: string;
@@ -135,7 +175,7 @@ function makeMockSessionManager(): SessionManager {
     setActiveContextSession: vi.fn(),
     getActiveContextSession: vi.fn().mockReturnValue(null),
     continuityStore: null,
-  } as unknown as SessionManager;
+  }) as unknown as SessionManager;
 }
 
 function makeStreamingResponse(): LLMResponse {

@@ -21,7 +21,25 @@ import type {
 import type { CompletionHandoffRecord } from './contracts/completion-handoff.js';
 import type { PlaceKind } from './contracts/places-registry.js';
 import type { SatelliteTelemetryAuthContext } from './contracts/satellite-registry.js';
-import type { IcpInitiationCandidateStatus } from './contracts/icp-autonomy.js';
+import type { IcpAvailabilityState, IcpInitiationCandidateStatus } from './contracts/icp-autonomy.js';
+import type {
+  ParticipationAction,
+  ParticipationCandidateTrigger,
+  ParticipationSuppressionReason,
+} from '../core/participation/types.js';
+import type {
+  ReservationGateBlockReason,
+  ReservationGateErrorStage,
+} from '../core/agent/arbiter/reservation-phase.js';
+import type {
+  EgressLeaseErrorStage,
+  EgressLeaseOutcome,
+} from '../core/agent/arbiter/egress-lease-phase.js';
+import type {
+  AcquireEgressLeaseDeclineReason,
+  RoomEpisodeBreakerState,
+} from '../core/agent/arbiter/speaking-arbiter-store-port.js';
+import type { SocialPotEnforcementOutcome } from '../core/agent/fatigue/social-pot-enforcement.js';
 import type { IcpConversationCostBreakerEvent } from './telemetry/model-usage.js';
 import type { TurnPerformanceEvent } from './telemetry/turn-performance.js';
 import type {
@@ -111,6 +129,91 @@ export interface ParticipationAppraisalEvent {
   reasonCode: string;
   confidence: number;
   failClosed: boolean;
+  timestamp: number;
+}
+
+/**
+ * Passive-name / direct-mention participation candidate lifecycle (bible §8.2,
+ * §19; jp36.8.3). Content-free companion telemetry: the deterministic-gate
+ * outcome plus ids/enums/counts only — never the matched name string, the
+ * triggering message text, or preceding-room content (only its count). Mirrors
+ * the richer `participation.candidate.*` audit trail, which retains the forensic
+ * error text this bus event deliberately omits (§19 do-not-log list).
+ */
+export interface ParticipationCandidateEvent {
+  channelId: string;
+  /** The room message that produced (or would have produced) the candidate. */
+  sourceMessageId: string;
+  outcome: 'created' | 'suppressed' | 'error';
+  /** created/suppressed only: the deterministic trigger class. */
+  trigger?: ParticipationCandidateTrigger;
+  /** created only: the match was an explicit direct address, not a bare name. */
+  matchedDirectAddress?: boolean;
+  /** created only: count of preceding-context messages (never their content). */
+  precedingContextCount?: number;
+  /** suppressed only: why the deterministic gate dropped the candidate. */
+  suppressionReason?: ParticipationSuppressionReason;
+  timestamp: number;
+}
+
+/**
+ * Speaking-reservation lifecycle before/after appraisal (bible §8.5/§12.2,
+ * §19; jp36.5.1.2). Content-free: gate reason, opaque reservation/episode ids,
+ * and the settlement enum — no room text. Mirrors the
+ * `participation.reservation.*` audit trail (which additionally keeps forensic
+ * error text this event omits per the §19 do-not-log list).
+ */
+export interface ParticipationReservationEvent {
+  channelId: string;
+  sourceMessageId: string;
+  trigger: ParticipationCandidateTrigger;
+  outcome: 'gated' | 'reserved' | 'settled' | 'error';
+  /** gated only: which deterministic gate blocked the reservation. */
+  blockedBy?: ReservationGateBlockReason;
+  /** gated + `icp_availability` only: the specific non-open availability state. */
+  availabilityState?: Exclude<IcpAvailabilityState, 'available' | 'open_to_chat'>;
+  /** gated + `gate_error` only: the stage that failed. */
+  errorStage?: ReservationGateErrorStage;
+  /** reserved/settled/error: the opaque reservation id. */
+  reservationId?: string;
+  /** reserved only: the opaque room-episode id the reservation joined. */
+  episodeId?: string;
+  /** reserved only: a durable reservation already existed for this room event. */
+  replayed?: boolean;
+  /** settled only: the appraised action the reservation settled against. */
+  action?: ParticipationAction;
+  /** settled only: whether the reservation was released or retained for egress. */
+  settlement?: 'released' | 'retained';
+  timestamp: number;
+}
+
+/**
+ * Exclusive egress-lease result for a retained react/reply reservation (bible
+ * §8.5, §19; jp36.5.1.3). Content-free: the terminal lease outcome plus the
+ * Law-36 breaker state, social-pot draw outcome, fairness yield target (opaque
+ * companion id), and error stage — never the generated reply or trigger text.
+ * Mirrors the `participation.egress.*` audit trail.
+ */
+export interface ParticipationEgressEvent {
+  channelId: string;
+  sourceMessageId: string;
+  trigger: ParticipationCandidateTrigger;
+  reservationId: string;
+  outcome: 'settled' | 'error';
+  /** settled only: the appraised action handed to the egress phase. */
+  action?: ParticipationAction;
+  /** settled only: the terminal egress-lease outcome. */
+  leaseOutcome?: EgressLeaseOutcome;
+  /** settled only: an acquire decline reason (held / already delivered). */
+  declineReason?: AcquireEgressLeaseDeclineReason;
+  /** settled only: the social-pot enforcement outcome for the turn's draw. */
+  drawOutcome?: SocialPotEnforcementOutcome;
+  /** settled only: the Law-36 room-episode breaker state at the decision. */
+  breakerState?: RoomEpisodeBreakerState;
+  /** settled + `yielded_speak_least` only: the opaque winner companion id. */
+  yieldedTo?: string;
+  /** settled + `gate_error` only: the stage that failed. */
+  errorStage?: EgressLeaseErrorStage;
   timestamp: number;
 }
 
@@ -355,6 +458,15 @@ export interface EventMap {
   // Participation appraiser outcome (bible §8.2): the tool-less ternary decision
   // over a datamarked summons, emitted per created candidate on the observe path.
   'participation.appraisal': ParticipationAppraisalEvent;
+  // Participation lifecycle telemetry (bible §19, jp36.8.3): the passive-name
+  // candidate gate, the two-phase speaking reservation, and the exclusive
+  // egress lease, each promoted from the audit-only trail to a typed,
+  // content-free bus event the Fleet Command telemetry views consume. Payloads
+  // carry ids/enums/counts only — the §19 do-not-log list (room/DM/journal text,
+  // matched name strings, forensic error text) stays on the audit trail alone.
+  'participation.candidate': ParticipationCandidateEvent;
+  'participation.reservation': ParticipationReservationEvent;
+  'participation.egress': ParticipationEgressEvent;
   //   - reflection template novelty: cadence-fired heartbeat reflection
   //     templates, gated on new scope entries since the template's last
   //     reflection run. Manual run_template invocations bypass the gate.

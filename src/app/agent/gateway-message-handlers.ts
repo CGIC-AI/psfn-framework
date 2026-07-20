@@ -478,6 +478,16 @@ export function registerGatewayMessageHandlers(
         ...(decision.availabilityState ? { availabilityState: decision.availabilityState } : {}),
         ...(decision.errorStage ? { errorStage: decision.errorStage } : {}),
       });
+      await eventBus.emit('participation.reservation', {
+        channelId: candidate.channelId,
+        sourceMessageId: candidate.sourceMessageId,
+        trigger: candidate.trigger,
+        outcome: 'gated',
+        blockedBy: decision.blockedBy,
+        ...(decision.availabilityState ? { availabilityState: decision.availabilityState } : {}),
+        ...(decision.errorStage ? { errorStage: decision.errorStage } : {}),
+        timestamp: nowMonotonicMs(),
+      });
       // Gated: the candidate never reaches the appraiser's model call.
       return;
     }
@@ -488,6 +498,16 @@ export function registerGatewayMessageHandlers(
       reservationId: decision.reservation.reservationId,
       episodeId: decision.reservation.episodeId,
       replayed: decision.replayed,
+    });
+    await eventBus.emit('participation.reservation', {
+      channelId: candidate.channelId,
+      sourceMessageId: candidate.sourceMessageId,
+      trigger: candidate.trigger,
+      outcome: 'reserved',
+      reservationId: decision.reservation.reservationId,
+      episodeId: decision.reservation.episodeId,
+      replayed: decision.replayed,
+      timestamp: nowMonotonicMs(),
     });
 
     const result = participationAppraiser
@@ -511,6 +531,16 @@ export function registerGatewayMessageHandlers(
         action,
         settlement,
       });
+      await eventBus.emit('participation.reservation', {
+        channelId: candidate.channelId,
+        sourceMessageId: candidate.sourceMessageId,
+        trigger: candidate.trigger,
+        outcome: 'settled',
+        reservationId: decision.reservation.reservationId,
+        action,
+        settlement,
+        timestamp: nowMonotonicMs(),
+      });
     } catch (releaseError) {
       // A failed release never wedges the room — the reservation is TTL-swept.
       const errorText = toErrorMessage(releaseError);
@@ -525,6 +555,16 @@ export function registerGatewayMessageHandlers(
         trigger: candidate.trigger,
         reservationId: decision.reservation.reservationId,
         error: errorText,
+      });
+      // Content-free bus event: the forensic error text stays on the audit trail
+      // (§19 do-not-log list); the bus carries only the failed-outcome shape.
+      await eventBus.emit('participation.reservation', {
+        channelId: candidate.channelId,
+        sourceMessageId: candidate.sourceMessageId,
+        trigger: candidate.trigger,
+        outcome: 'error',
+        reservationId: decision.reservation.reservationId,
+        timestamp: nowMonotonicMs(),
       });
       return;
     }
@@ -579,6 +619,23 @@ export function registerGatewayMessageHandlers(
           : {}),
         ...(egressDecision.errorStage ? { errorStage: egressDecision.errorStage } : {}),
       });
+      await eventBus.emit('participation.egress', {
+        channelId: candidate.channelId,
+        sourceMessageId: candidate.sourceMessageId,
+        trigger: candidate.trigger,
+        reservationId: decision.reservation.reservationId,
+        outcome: 'settled',
+        action: result.appraisal.action,
+        leaseOutcome: egressDecision.outcome,
+        ...(egressDecision.declineReason ? { declineReason: egressDecision.declineReason } : {}),
+        ...(egressDecision.drawOutcome ? { drawOutcome: egressDecision.drawOutcome } : {}),
+        ...(egressDecision.breakerState ? { breakerState: egressDecision.breakerState } : {}),
+        ...(egressDecision.speakLeastWinner
+          ? { yieldedTo: egressDecision.speakLeastWinner }
+          : {}),
+        ...(egressDecision.errorStage ? { errorStage: egressDecision.errorStage } : {}),
+        timestamp: nowMonotonicMs(),
+      });
     } catch (egressError) {
       // Belt-and-braces: the egress phase is designed to fail closed internally;
       // this guard ensures nothing here can break message observation.
@@ -594,6 +651,16 @@ export function registerGatewayMessageHandlers(
         trigger: candidate.trigger,
         reservationId: decision.reservation.reservationId,
         error: errorText,
+      });
+      // Content-free bus event: the forensic error text stays on the audit trail
+      // (§19 do-not-log list); the bus carries only the failed-outcome shape.
+      await eventBus.emit('participation.egress', {
+        channelId: candidate.channelId,
+        sourceMessageId: candidate.sourceMessageId,
+        trigger: candidate.trigger,
+        reservationId: decision.reservation.reservationId,
+        outcome: 'error',
+        timestamp: nowMonotonicMs(),
       });
     }
   };
@@ -1090,6 +1157,15 @@ export function registerGatewayMessageHandlers(
                 matchedDirectAddress: candidate.matchedDirectAddress,
                 precedingContextCount: candidate.precedingContext.length,
               });
+              await eventBus.emit('participation.candidate', {
+                channelId: candidate.channelId,
+                sourceMessageId: candidate.sourceMessageId,
+                outcome: 'created',
+                trigger: candidate.trigger,
+                matchedDirectAddress: candidate.matchedDirectAddress,
+                precedingContextCount: candidate.precedingContext.length,
+                timestamp: nowMonotonicMs(),
+              });
               if (reservationPhase) {
                 // Deterministic gate + reservation before appraisal (§8.5/§6.10):
                 // a gated candidate never reaches the model call, and a reserved
@@ -1105,6 +1181,14 @@ export function registerGatewayMessageHandlers(
                 reason: decision.reason,
                 ...(decision.trigger ? { trigger: decision.trigger } : {}),
               });
+              await eventBus.emit('participation.candidate', {
+                channelId: decision.channelId,
+                sourceMessageId: decision.sourceMessageId,
+                outcome: 'suppressed',
+                suppressionReason: decision.reason,
+                ...(decision.trigger ? { trigger: decision.trigger } : {}),
+                timestamp: nowMonotonicMs(),
+              });
             }
           } catch (candidateError) {
             const errorText = toErrorMessage(candidateError);
@@ -1117,6 +1201,14 @@ export function registerGatewayMessageHandlers(
               channelId: message.channelId,
               messageId: message.id,
               error: errorText,
+            });
+            // Content-free bus event: the forensic error text stays on the audit
+            // trail (§19 do-not-log list); the bus carries only the failed shape.
+            await eventBus.emit('participation.candidate', {
+              channelId: message.channelId,
+              sourceMessageId: message.id,
+              outcome: 'error',
+              timestamp: nowMonotonicMs(),
             });
           }
         }

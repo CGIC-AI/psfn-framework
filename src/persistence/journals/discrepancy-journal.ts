@@ -1,5 +1,5 @@
 // ── Emotional Discrepancy Journal ──
-// psfn-framework-031.11.2 (child 2/2 of 031.11).
+// Bead 031.11.2 (child 2/2 of 031.11).
 //
 // A durable, queryable record of the cross-family emotional divergences
 // (031.11.1) that were surfaced to a reflection. Each entry carries every

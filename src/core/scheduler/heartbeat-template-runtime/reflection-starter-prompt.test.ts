@@ -202,6 +202,35 @@ describe('buildReflectionStarterPromptBundle', () => {
     expect(mixedStateLine).not.toMatch(/[0-9]/);
   });
 
+  it('caps the combined clue section at two mixed-state notes plus two high-signal clues', () => {
+    const context = buildMixedStateContext();
+    const [discrepancy] = context.internalState.emotional.discrepancies ?? [];
+    expect(discrepancy).toBeDefined();
+    context.internalState.emotional.discrepancies = [
+      discrepancy!,
+      { ...discrepancy!, magnitude: Math.max(0, discrepancy!.magnitude - 0.1) },
+      { ...discrepancy!, magnitude: Math.max(0, discrepancy!.magnitude - 0.2) },
+    ];
+    context.internalState.attention.activeConcerns = (
+      buildInternalStateContext().internalState.attention.activeConcerns
+    );
+
+    const bundle = buildReflectionStarterPromptBundle({
+      templateId: 'daily-review',
+      internalStateContext: context,
+      retrievedMemoryBlock: '- [episodic] A single day event',
+      recentSessionMessages: [],
+      recentDailyJournalEntries: [],
+      provenanceRefs: [],
+    });
+
+    const clueSection = bundle.self.split('[High-Signal Starter Clues]\n')[1] ?? '';
+    expect(clueSection.split('\n').filter(line => line.startsWith('- '))).toHaveLength(4);
+    expect(clueSection.match(/Signals may be split/g)).toHaveLength(2);
+    expect(clueSection).toContain('Recent affect evidence appears');
+    expect(clueSection).toContain('Something that may be worth revisiting');
+  });
+
   it('omits the mixed-state note when no discrepancy is present', () => {
     const bundle = buildReflectionStarterPromptBundle({
       templateId: 'daily-review',

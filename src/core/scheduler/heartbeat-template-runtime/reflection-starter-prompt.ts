@@ -14,14 +14,23 @@ import type {
   EmotionDiscrepancySide,
 } from '../../../shared/contracts/emotion-contracts.js';
 
-const REFLECTION_STARTER_SHAPE = Object.freeze({
-  eventCount: 3,
-  clueCount: 2,
+const REFLECTION_STARTER_CLUE_SHAPE = Object.freeze({
+  highSignalClueCount: 2,
   // Cap on how many distinct mixed-state notes the starter surfaces. The
   // detector emits at most three cross-family divergences (031.11.1); the two
   // most divergent are enough to make the split legible without flooding a
   // deliberately small starter.
   mixedStateNoteCount: 2,
+});
+
+const REFLECTION_STARTER_SHAPE = Object.freeze({
+  eventCount: 3,
+  ...REFLECTION_STARTER_CLUE_SHAPE,
+  // Mixed-state notes lead the generic high-signal clues, so the rendered
+  // section's combined maximum is the sum of the two independently capped sets.
+  maxCombinedClueCount:
+    REFLECTION_STARTER_CLUE_SHAPE.mixedStateNoteCount
+    + REFLECTION_STARTER_CLUE_SHAPE.highSignalClueCount,
   lineLength: 220,
 });
 
@@ -123,11 +132,11 @@ function formatHighSignalClues(context: ReflectionInternalStateContext | null): 
   }
 
   const followUp = state.attention.pendingFollowUps?.[0];
-  if (clues.length < REFLECTION_STARTER_SHAPE.clueCount && followUp) {
+  if (clues.length < REFLECTION_STARTER_SHAPE.highSignalClueCount && followUp) {
     clues.push(`A near-term open loop: ${truncateStarterLine(followUp.content)}`);
   }
 
-  return clues.slice(0, REFLECTION_STARTER_SHAPE.clueCount);
+  return clues.slice(0, REFLECTION_STARTER_SHAPE.highSignalClueCount);
 }
 
 function humanizeDiscrepancyLabel(label: string): string {
@@ -192,7 +201,10 @@ export function buildReflectionStarterPromptBundle(
   // highest-signal thing the starter can surface, and it must not be crowded out
   // by the generic affect/thread clues below.
   const mixedStateClues = formatMixedStateClues(input.internalStateContext);
-  const clueLines = [...mixedStateClues, ...formatHighSignalClues(input.internalStateContext)];
+  const clueLines = [
+    ...mixedStateClues,
+    ...formatHighSignalClues(input.internalStateContext),
+  ].slice(0, REFLECTION_STARTER_SHAPE.maxCombinedClueCount);
   const eventHeading = input.templateId === 'weekly-review'
     ? '[Week Events Starter]'
     : '[Day Events Starter]';

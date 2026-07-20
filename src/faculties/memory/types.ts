@@ -69,7 +69,7 @@ export interface MemoryFormationVAD {
 }
 /**
  * Multi-signal emotional texture captured at memory formation
- * (psfn-framework-031.11.1). `formationVAD` already retains the VAD vector and
+ * (bead 031.11.1). `formationVAD` already retains the VAD vector and
  * `emotionalValence` the dominant scalar; this preserves the rest of the mixed
  * state that was otherwise compressed away — the full discrete-emotion
  * distribution and the emotion confidence — so an emotional memory can stay

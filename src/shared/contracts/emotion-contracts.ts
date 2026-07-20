@@ -66,7 +66,7 @@ export interface EmotionTelemetryValidation {
 }
 
 /**
- * Cross-family emotional divergence (psfn-framework-031.11.1).
+ * Cross-family emotional divergence (bead 031.11.1).
  *
  * A discrepancy is emotional telemetry from two DIFFERENT families disagreeing
  * — e.g. VAD valence reads negative while a strong positive discrete label

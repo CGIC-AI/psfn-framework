@@ -16,7 +16,14 @@ import type { SatelliteRegistryConfig } from '../../shared/contracts/satellite-r
 import type { SubstrateMessage } from '../../shared/contracts/runtime.js';
 import { deriveCompanionAuthToken } from './companion-auth.js';
 import { EventBus } from '../../shared/event-bus.js';
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync, existsSync } from 'node:fs';
+import {
+  existsSync,
+  mkdtempSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { CapabilityRuntime } from '../../system/capabilities/runtime.js';
@@ -860,6 +867,60 @@ describe('GatewayServer multi-companion identify (flag on)', () => {
         path: join(personalB, 'intrusion.txt'),
         content: 'nope',
       })).error).toBeDefined();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('denies filesystem writes and edits to every authenticated companion managed skills root', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'psfn-gateway-skills-protection-'));
+    const companionA = '11111111-1111-4111-8111-111111111111';
+    const companionB = '22222222-2222-4222-8222-222222222222';
+    const personalA = join(root, 'personal', companionA);
+    const personalB = join(root, 'personal', companionB);
+    for (const workspacePath of [personalA, personalB]) {
+      mkdirSync(join(workspacePath, 'skills', 'x'), { recursive: true });
+      writeFileSync(join(workspacePath, 'skills', 'x', 'SKILL.md'), 'before');
+    }
+    try {
+      const routing = multiCompanion({});
+      routing.personalWorkspaceByCompanionId = {
+        [companionA]: personalA,
+        [companionB]: personalB,
+        '33333333-3333-4333-8333-333333333333': join(
+          root,
+          'personal',
+          '33333333-3333-4333-8333-333333333333',
+        ),
+      };
+      const baseOptions = createMinimalOptions();
+      const { connect } = await setupServer({
+        ...baseOptions,
+        policyConfig: {
+          ...baseOptions.policyConfig,
+          protectedWritePaths: ['/workspace/skills'],
+        },
+        multiCompanion: routing,
+        capabilityTierProvider: () => 'autonomous',
+      });
+      const connA = await connect();
+      const connB = await connect();
+      await identifyAgent(connA, companionA, 1);
+      await identifyAgent(connB, companionB, 2);
+
+      for (const [conn, workspacePath] of [[connA, personalA], [connB, personalB]] as const) {
+        const skillPath = join(workspacePath, 'skills', 'x', 'SKILL.md');
+        expect((await invokeRpc(conn, 3, 'fs.write', {
+          path: skillPath,
+          content: 'hostile',
+        })).error?.code).toBe(GatewayErrors.POLICY_DENIED);
+        expect((await invokeRpc(conn, 4, 'fs.edit', {
+          path: skillPath,
+          oldText: 'before',
+          newText: 'hostile',
+        })).error?.code).toBe(GatewayErrors.POLICY_DENIED);
+        expect(readFileSync(skillPath, 'utf8')).toBe('before');
+      }
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

@@ -11,7 +11,11 @@ import {
 const policyConfig: PolicyConfig = {
   workspacePath: '/app/companion',
   allowedReadPaths: ['/app/identity'],
-  protectedWritePaths: ['/app/companion/state', '/app/companion/companion.json'],
+  protectedWritePaths: [
+    '/app/companion/state',
+    '/app/companion/companion.json',
+    '/app/companion/skills',
+  ],
 };
 
 describe('evaluatePolicy', () => {
@@ -696,6 +700,41 @@ describe('evaluatePolicy', () => {
     )).toBe('DENY');
   });
 
+  it('denies fs.write under the protected managed skills subtree', () => {
+    expect(evaluatePolicy(
+      { method: 'fs.write', params: { path: '/app/companion/skills/x/SKILL.md' } },
+      policyConfig,
+    )).toBe('DENY');
+  });
+
+  it('denies fs.edit under the protected managed skills subtree', () => {
+    expect(evaluatePolicy(
+      {
+        method: 'fs.edit',
+        params: {
+          path: '/app/companion/skills/x/SKILL.md',
+          oldText: 'before',
+          newText: 'after',
+        },
+      },
+      policyConfig,
+    )).toBe('DENY');
+  });
+
+  it('allows fs.read under the protected managed skills subtree', () => {
+    expect(evaluatePolicy(
+      { method: 'fs.read', params: { path: '/app/companion/skills/x/SKILL.md' } },
+      policyConfig,
+    )).toBe('ALLOW');
+  });
+
+  it('still allows fs.write outside the protected managed skills subtree', () => {
+    expect(evaluatePolicy(
+      { method: 'fs.write', params: { path: '/app/companion/notes.txt' } },
+      policyConfig,
+    )).toBe('ALLOW');
+  });
+
   // ── Git methods ──
 
   it('allows git.status (read-only)', () => {
@@ -892,9 +931,13 @@ describe('evaluatePolicy symlink traversal', () => {
   const loopSymlinkA = join(workspace, 'loop-a');
   const loopSymlinkB = join(workspace, 'loop-b');
   const normalFile = join(workspace, 'normal.txt');
+  const managedSkillsTarget = join(workspace, 'managed-skills-target');
+  const managedSkillsLink = join(workspace, 'skills');
+  const managedSkillFile = join(managedSkillsLink, 'x', 'SKILL.md');
 
   const realPolicyConfig: PolicyConfig = {
     workspacePath: workspace,
+    protectedWritePaths: [managedSkillsLink],
   };
 
   beforeAll(() => {
@@ -903,6 +946,8 @@ describe('evaluatePolicy symlink traversal', () => {
     mkdirSync(outsideDir, { recursive: true });
     writeFileSync(outsideFile, 'secret data');
     writeFileSync(normalFile, 'normal data');
+    mkdirSync(join(managedSkillsTarget, 'x'), { recursive: true });
+    writeFileSync(join(managedSkillsTarget, 'x', 'SKILL.md'), 'before');
 
     // Symlink inside workspace pointing to file outside
     symlinkSync(outsideFile, symlinkToOutside);
@@ -913,6 +958,7 @@ describe('evaluatePolicy symlink traversal', () => {
     // Symlink loop: A→B, B→A (causes ELOOP)
     symlinkSync(loopSymlinkB, loopSymlinkA);
     symlinkSync(loopSymlinkA, loopSymlinkB);
+    symlinkSync(managedSkillsTarget, managedSkillsLink);
   });
 
   afterAll(() => {
@@ -929,6 +975,44 @@ describe('evaluatePolicy symlink traversal', () => {
   it('denies fs.write on a symlink inside workspace pointing outside', () => {
     expect(evaluatePolicy(
       { method: 'fs.write', params: { path: symlinkToOutside } },
+      realPolicyConfig,
+    )).toBe('DENY');
+  });
+
+  it('denies fs.edit through the protected managed skills path when its root is a symlink', () => {
+    expect(evaluatePolicy(
+      {
+        method: 'fs.edit',
+        params: {
+          path: managedSkillFile,
+          oldText: 'before',
+          newText: 'after',
+        },
+      },
+      realPolicyConfig,
+    )).toBe('DENY');
+  });
+
+  it('denies fs.write through the canonical target of a protected managed skills symlink', () => {
+    expect(evaluatePolicy(
+      {
+        method: 'fs.write',
+        params: { path: join(managedSkillsTarget, 'x', 'SKILL.md') },
+      },
+      realPolicyConfig,
+    )).toBe('DENY');
+  });
+
+  it('denies fs.edit through the canonical target of a protected managed skills symlink', () => {
+    expect(evaluatePolicy(
+      {
+        method: 'fs.edit',
+        params: {
+          path: join(managedSkillsTarget, 'x', 'SKILL.md'),
+          oldText: 'before',
+          newText: 'after',
+        },
+      },
       realPolicyConfig,
     )).toBe('DENY');
   });

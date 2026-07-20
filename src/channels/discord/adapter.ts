@@ -1,5 +1,8 @@
 import {
+  ComponentType,
   Events,
+  type ButtonBuilder,
+  type ActionRowBuilder,
   type Client,
   type Guild,
   type Message,
@@ -9,6 +12,19 @@ import {
   type TextChannel,
   type User,
 } from 'discord.js';
+import type {
+  ClarifyDeliverResult,
+  PendingClarification,
+} from '../../boundary/gateway/protocol.js';
+import {
+  buildClarificationComponents,
+  clarificationCustomIdPrefix,
+  deliverDiscordClarification,
+  formatClarificationMessage,
+  type DiscordClarifyChannel,
+  type DiscordClarifyInteraction,
+  type DiscordClarifyMessageHandle,
+} from './clarification.js';
 import type { AgentResponse, SubstrateMessage } from '../../shared/contracts/runtime.js';
 import {
   buildReactionSurface,
@@ -261,6 +277,11 @@ export class DiscordAdapter implements ChannelAdapterPort {
       sendReaction: async (ctx: OutboundContext, messageId: string, emoji: string): Promise<void> => {
         await this.sendReactionInternal(ctx, messageId, emoji);
       },
+      deliverClarification: async (
+        clarification: PendingClarification,
+        target: string,
+        timeoutMs: number,
+      ): Promise<ClarifyDeliverResult> => this.deliverClarificationInternal(clarification, target, timeoutMs),
     };
     this.gateway = this;
     this.security = {
@@ -420,6 +441,97 @@ export class DiscordAdapter implements ChannelAdapterPort {
     for (const chunk of chunks) {
       await (channel as TextChannel).send(chunk);
     }
+  }
+
+  /**
+   * vvf.5.2: present a clarification's choices as Discord buttons and await the
+   * click. Binds the live discord.js channel/message to the channel-agnostic
+   * {@link deliverDiscordClarification} orchestration. A missing/non-text target
+   * throws (a real delivery failure the caller surfaces); timeout is handled as
+   * a structured no-answer by the orchestration, never as a fabricated choice.
+   */
+  private async deliverClarificationInternal(
+    clarification: PendingClarification,
+    target: string,
+    timeoutMs: number,
+  ): Promise<ClarifyDeliverResult> {
+    const channel = await this.client.channels.fetch(target);
+    if (!channel?.isTextBased() || !('send' in channel)) {
+      throw new Error(`Discord clarify target is not a sendable text channel: ${target}`);
+    }
+    const textChannel = channel as TextChannel;
+    const clarifyChannel: DiscordClarifyChannel = {
+      present: async (pending: PendingClarification): Promise<DiscordClarifyMessageHandle> => {
+        const components = buildClarificationComponents(pending);
+        const message = await textChannel.send({
+          content: formatClarificationMessage(pending),
+          components,
+        });
+        return this.buildClarifyMessageHandle(message, components, pending);
+      },
+    };
+    return await deliverDiscordClarification(clarifyChannel, clarification, target, timeoutMs);
+  }
+
+  private buildClarifyMessageHandle(
+    message: Message,
+    components: ActionRowBuilder<ButtonBuilder>[],
+    clarification: PendingClarification,
+  ): DiscordClarifyMessageHandle {
+    const disable = async (): Promise<void> => {
+      try {
+        for (const row of components) {
+          for (const button of row.components) {
+            button.setDisabled(true);
+          }
+        }
+        await message.edit({ components });
+      } catch (error) {
+        log.debug('Failed to disable clarify buttons', {
+          clarificationId: clarification.id,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    };
+    return {
+      awaitInteraction: async (timeoutMs: number): Promise<DiscordClarifyInteraction | null> => {
+        try {
+          const interaction = await message.awaitMessageComponent({
+            componentType: ComponentType.Button,
+            time: timeoutMs,
+            filter: (i) => i.customId.startsWith(clarificationCustomIdPrefix(clarification.id)),
+          });
+          return {
+            customId: interaction.customId,
+            acknowledge: async (): Promise<void> => {
+              try {
+                for (const row of components) {
+                  for (const button of row.components) {
+                    button.setDisabled(true);
+                  }
+                }
+                await interaction.update({ components });
+              } catch (error) {
+                log.debug('Failed to acknowledge clarify interaction', {
+                  clarificationId: clarification.id,
+                  error: error instanceof Error ? error.message : String(error),
+                });
+              }
+            },
+          };
+        } catch (error) {
+          // awaitMessageComponent rejects when the window elapses with no click.
+          // That is the structured no-answer path, not an error to propagate; a
+          // genuine transport failure while presenting has already thrown above.
+          log.debug('Clarify awaited no button within the window', {
+            clarificationId: clarification.id,
+            error: error instanceof Error ? error.message : String(error),
+          });
+          return null;
+        }
+      },
+      disable,
+    };
   }
 
   private async sendMediaInternal(ctx: OutboundContext, media: MediaAttachment): Promise<void> {

@@ -2022,6 +2022,7 @@ describe('settings', () => {
       expect(snapshot.imageFalCreateModel).toBeNull();
       expect(snapshot.imageFalEditModel).toBeNull();
       expect(snapshot.imageSelfieEditModel).toBeNull();
+      expect(snapshot.modelPurposeSelection).toBeNull();
       expect(snapshot.webFetchTlsCaCertPaths).toEqual([]);
       expect(snapshot.promotedExtendedTools).toEqual([]);
       expect(snapshot.deepgramModel).toBeNull();
@@ -2221,6 +2222,40 @@ describe('settings', () => {
         imageFalEditModel: 'xai/grok-imagine-image/quality/edit',
         imageSelfieEditModel: 'xai/grok-imagine-image/quality/edit',
       });
+    });
+
+    it('applies and snapshots per-companion model selection (23pp)', () => {
+      const config = makeConfig();
+
+      applySettings(config, {
+        modelPurposeSelection: {
+          chat: 'big-brain-opus',
+          vision: 'vision-flash',
+        },
+      });
+
+      expect(config.modelPurposeSelection).toEqual({
+        chat: 'big-brain-opus',
+        vision: 'vision-flash',
+      });
+      expect(getRuntimeSettingsSnapshot(config)).toMatchObject({
+        modelPurposeSelection: {
+          chat: 'big-brain-opus',
+          vision: 'vision-flash',
+        },
+      });
+
+      // Clearing the setting restores the default routing path.
+      applySettings(config, { modelPurposeSelection: null as never });
+      expect(config.modelPurposeSelection).toBeUndefined();
+      expect(getRuntimeSettingsSnapshot(config).modelPurposeSelection).toBeNull();
+    });
+
+    it('rejects malformed model selection payloads fail-closed', () => {
+      const config = makeConfig();
+      expect(() => applySettings(config, {
+        modelPurposeSelection: { bigBrain: 'x' } as never,
+      })).toThrow(/unknown model purpose "bigBrain"/);
     });
 
     it('reflects configured MoA values in snapshot', () => {

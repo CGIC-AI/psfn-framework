@@ -478,6 +478,48 @@ describe('registerLLMMethods', () => {
     });
   });
 
+  it('forwards a per-companion model selection slotKey into the provider hint (23pp)', async () => {
+    const harness = createHarness();
+
+    await harness.invoke('llm.complete', {
+      model: '',
+      provider: '',
+      slotKey: 'vision-flash',
+      messages: [{ role: 'user', content: 'describe the image' }],
+      systemPrompt: 'system',
+      purpose: 'vision',
+    });
+
+    expect(harness.complete).toHaveBeenCalledTimes(1);
+    const firstCall = harness.complete.mock.calls[0][0];
+    expect(firstCall.modelHint).toEqual({ slotKey: 'vision-flash' });
+  });
+
+  it('exposes an unknown model-selection slot as a typed JSON-RPC error (23pp fail-closed)', async () => {
+    const { UnknownModelSelectionSlotError } = await import(
+      '../../../primitives/llm/model-hint-routing.js'
+    );
+    const failingComplete = vi.fn(async () => {
+      throw new UnknownModelSelectionSlotError('stale-slot', ['primary', 'extraction']);
+    });
+    const harness = createHarness({
+      llmProvider: { complete: failingComplete } as unknown as GatewayMethodRuntime['llmProvider'],
+    });
+
+    await expect(harness.invoke('llm.complete', {
+      model: '',
+      provider: '',
+      slotKey: 'stale-slot',
+      messages: [{ role: 'user', content: 'hi' }],
+      systemPrompt: 'system',
+      purpose: 'chat',
+    })).rejects.toMatchObject({
+      code: GatewayErrors.UNKNOWN_MODEL_SELECTION_SLOT,
+      message: expect.stringContaining('stale-slot'),
+      data: { slotKey: 'stale-slot' },
+    });
+  });
+
   it('routes model discovery through the privileged discovery backend', async () => {
     const harness = createHarness();
 

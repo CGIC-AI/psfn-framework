@@ -29,7 +29,8 @@ import {
   SETTINGS_STRING_ARRAY_FIELDS,
 } from '../../../system/config/settings-contract.js';
 import {
-  COMPANION_IMAGE_SETTINGS_OVERLAY_KEYS,
+  COMPANION_MODEL_SELECTION_SETTINGS_OVERLAY_KEYS,
+  mergeCompanionSettingsOverlayPatch,
 } from '../../../system/config/settings-overlay.js';
 import {
   validateCompositionalPolicyConfig,
@@ -40,6 +41,10 @@ import {
   IMAGE_PROVIDER_VALUES,
   normalizeImageWorkflowSettings,
 } from '../../../primitives/images/types.js';
+import {
+  assertModelPurposeSelectionResolvable,
+  normalizeModelPurposeSelectionSetting,
+} from '../../../system/config/model-selection-config.js';
 import {
   normalizeMemoryRetrievalPolicy,
   resolveMemoryRetrievalPolicy,
@@ -109,14 +114,14 @@ type SettingsMutationResult =
   | { ok: true; refreshedKeys: AdminSettingsDivergence['key'][]; divergences: AdminSettingsDivergence[] }
   | { ok: false; message: string };
 
-function splitCompanionImageSettings(
+function splitCompanionModelSelectionSettings(
   settings: EditableSettings,
 ): { global: EditableSettings; companion: EditableSettings } {
   const global = { ...settings };
   const companion: EditableSettings = {};
   const globalRecord = global as Record<string, unknown>;
   const companionRecord = companion as Record<string, unknown>;
-  for (const key of COMPANION_IMAGE_SETTINGS_OVERLAY_KEYS) {
+  for (const key of COMPANION_MODEL_SELECTION_SETTINGS_OVERLAY_KEYS) {
     if (!Object.hasOwn(globalRecord, key)) continue;
     companionRecord[key] = globalRecord[key];
     delete globalRecord[key];
@@ -227,7 +232,7 @@ export function applyAdminSettingsMutation(options: {
 
   const currentRuntimeSettings = splitSettingsByDomain(configStore.loadRuntimeSettings()).runtime;
   const domainSplit = splitSettingsByDomain(settings);
-  const settingsByScope = splitCompanionImageSettings(domainSplit.runtime);
+  const settingsByScope = splitCompanionModelSelectionSettings(domainSplit.runtime);
 
   const mergedRuntimeSettings = normalizeEditableSettings(
     { ...currentRuntimeSettings, ...settingsByScope.global },
@@ -239,10 +244,12 @@ export function applyAdminSettingsMutation(options: {
   }
   if (Object.keys(settingsByScope.companion).length > 0) {
     const currentOverlay = configStore.loadCompanionSettingsOverlay() ?? {};
-    configStore.saveCompanionSettingsOverlay({
-      ...currentOverlay,
-      ...settingsByScope.companion,
-    });
+    configStore.saveCompanionSettingsOverlay(
+      mergeCompanionSettingsOverlayPatch(
+        currentOverlay,
+        settingsByScope.companion,
+      ),
+    );
   }
   applySettings(config, configStore.loadEffectiveRuntimeSettings());
   invalidatePromptCacheAfterOwnerMutation(config, 'owner-file:settings');
@@ -698,6 +705,47 @@ export class AdminSettingsDataService implements AdminSettingsService {
     }
   }
 
+  /**
+   * 23pp: validate a `modelPurposeSelection` write fail-closed — structural
+   * shape via the shared normalizer, then every slot key against the LIVE
+   * models.json registry so an unknown/disabled selection is rejected at the
+   * admin boundary with the valid slot ids, never persisted to break startup.
+   */
+  private validateModelPurposeSelectionField(
+    payload: Record<string, unknown>,
+    errors: SettingsValidationError[],
+  ): void {
+    if (!('modelPurposeSelection' in payload)) return;
+    let normalized;
+    try {
+      normalized = normalizeModelPurposeSelectionSetting(payload.modelPurposeSelection);
+    } catch (error) {
+      this.pushFieldError(
+        errors,
+        'modelPurposeSelection',
+        error instanceof Error ? error.message : 'modelPurposeSelection is invalid',
+        'invalid_object',
+      );
+      return;
+    }
+    if (!normalized) return;
+    try {
+      assertModelPurposeSelectionResolvable({
+        modelPurposeSelection: normalized,
+        ...(this.deps.config.modelRegistry
+          ? { modelRegistry: this.deps.config.modelRegistry }
+          : {}),
+      });
+    } catch (error) {
+      this.pushFieldError(
+        errors,
+        'modelPurposeSelection',
+        error instanceof Error ? error.message : 'modelPurposeSelection references an unknown model slot',
+        'invalid_object',
+      );
+    }
+  }
+
   private validateModelCatalogRouting(
     payload: Record<string, unknown>,
     errors: SettingsValidationError[],
@@ -809,6 +857,7 @@ export class AdminSettingsDataService implements AdminSettingsService {
     this.validateHttpUrlField(payload, 'comfyUiBaseUrl', errors);
     this.validateCompositionalPolicyField(payload, errors);
     this.validateImageWorkflowsField(payload, errors);
+    this.validateModelPurposeSelectionField(payload, errors);
     this.validateModelCatalogRouting(payload, errors);
     this.validateNumberRangeField(payload, 'moodCongruenceWeight', MOOD_CONGRUENCE_WEIGHT_RANGE, errors);
     if ('memoryRetrievalPolicy' in payload) {

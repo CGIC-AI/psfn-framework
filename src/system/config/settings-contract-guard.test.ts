@@ -126,6 +126,32 @@ describe('settings contract guard', () => {
     }
   });
 
+  it('publishes per-companion LLM/vision lane model selection (23pp)', () => {
+    const contractData = buildSettingsContractData();
+
+    expect(contractData.fields.modelPurposeSelection).toEqual({
+      key: 'modelPurposeSelection',
+      ownerSubsystem: 'runtime',
+      ownerFile: 'settings.json',
+      type: 'object',
+      scope: 'perCompanion',
+    });
+    expect(SETTINGS_GARDEN_ADVANCED_SECTION_FIELDS.llm).toContain('modelPurposeSelection');
+
+    // MoA model choices ride the same per-companion selection rule.
+    expect(contractData.fields.moaReferenceModels.scope).toBe('perCompanion');
+    expect(contractData.fields.moaAggregatorModel.scope).toBe('perCompanion');
+    // MoA enablement/limits stay global.
+    expect(contractData.fields.moaEnabled.scope).toBe('global');
+
+    // The catalog and its projections stay models.json-owned and global.
+    expect(contractData.fields.modelCatalog.scope).toBe('global');
+    expect(contractData.fields.modelCatalog.ownerFile).toBe('models.json');
+    // Embedding identity stays global: dimensions are baked into shared pgvector schemas.
+    expect(contractData.fields.embeddingModel.scope).toBe('global');
+    expect(contractData.fields.embeddingDims.scope).toBe('global');
+  });
+
   it('keeps the Garden tunable-setting inventory aligned to backend owner metadata', () => {
     const contractData = buildSettingsContractData();
     const inventory = listGardenSettingsTunableFieldCoverage();

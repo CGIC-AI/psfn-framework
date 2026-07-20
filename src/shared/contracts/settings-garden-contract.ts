@@ -43,6 +43,10 @@ export interface GardenSettingsTunableFieldCoverage {
 
 export const SETTINGS_GARDEN_FIELD_EXPOSURE = {
   modelCatalog: { sectionId: 'models', surface: 'custom', editorId: 'models' },
+  // 23pp per-companion model selection: runtime-owned (settings.json/overlay),
+  // so it lives in the generic 'llm' advanced section rather than the custom
+  // models.json editor — the catalog is global; the selection is not.
+  modelPurposeSelection: { sectionId: 'llm', surface: 'advanced' },
   sessionHistoryBudgetPct: { sectionId: 'budget', surface: 'advanced' },
   memoryRetrievalBudgetPct: { sectionId: 'budget', surface: 'advanced' },
   moodCongruenceWeight: { sectionId: 'budget', surface: 'advanced' },

@@ -300,6 +300,8 @@ describe('AdminSettingsDataService', () => {
       imageFalCreateModel,
       imageFalEditModel,
       imageSelfieEditModel,
+      moaReferenceModels,
+      moaAggregatorModel,
       ...globalPayload
     } = payload;
     expect(persistedSettings).toEqual(expect.objectContaining(globalPayload));
@@ -312,6 +314,8 @@ describe('AdminSettingsDataService', () => {
       imageFalCreateModel,
       imageFalEditModel,
       imageSelfieEditModel,
+      moaReferenceModels,
+      moaAggregatorModel,
     }));
   });
 
@@ -338,6 +342,60 @@ describe('AdminSettingsDataService', () => {
     expect(persisted.imageFalCreateModel).toBeUndefined();
     expect(persisted.imageFalEditModel).toBeUndefined();
     expect(persisted.imageSelfieEditModel).toBeUndefined();
+  });
+
+  it('persists model purpose selections that resolve against the live models.json registry (23pp)', () => {
+    const root = makeTempDir();
+    const service = buildService(buildConfig(root));
+
+    const result = service.updateSettings(JSON.stringify({
+      modelPurposeSelection: { chat: 'extraction', vision: 'primary' },
+    }));
+
+    expect(result.ok).toBe(true);
+    const persisted = loadSettings(root);
+    expect(persisted.modelPurposeSelection).toBeUndefined();
+    expect(loadCompanionSettingsOverlay(root)?.modelPurposeSelection).toEqual({
+      chat: 'extraction',
+      vision: 'primary',
+    });
+  });
+
+  it('rejects model purpose selections referencing unknown registry slots without persisting them (23pp)', () => {
+    const root = makeTempDir();
+    const service = buildService(buildConfig(root));
+
+    const result = service.updateSettings(JSON.stringify({
+      modelPurposeSelection: { chat: 'not-a-registry-slot' },
+    }));
+
+    expect(result.ok).toBe(false);
+    expect(result.validationErrors).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        field: 'modelPurposeSelection',
+        code: 'invalid_object',
+        message: expect.stringContaining('not-a-registry-slot'),
+      }),
+    ]));
+    expect(loadSettings(root).modelPurposeSelection).toBeUndefined();
+  });
+
+  it('rejects model purpose selections with unknown purpose keys (23pp)', () => {
+    const root = makeTempDir();
+    const service = buildService(buildConfig(root));
+
+    const result = service.updateSettings(JSON.stringify({
+      modelPurposeSelection: { bigBrain: 'primary' },
+    }));
+
+    expect(result.ok).toBe(false);
+    expect(result.validationErrors).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        field: 'modelPurposeSelection',
+        code: 'invalid_object',
+        message: expect.stringContaining('unknown model purpose'),
+      }),
+    ]));
   });
 
   it('writes per-companion image selections to the selected overlay without mutating the fleet-global owner', () => {
@@ -387,6 +445,73 @@ describe('AdminSettingsDataService', () => {
       imageFalEditModel: 'xai/grok-imagine-image/quality/edit',
       imageSelfieEditModel: 'xai/grok-imagine-image/quality/edit',
     });
+  });
+
+  it('deep-merges and clears companion model selections without mutating siblings or global settings', () => {
+    const root = makeTempDir();
+    const companionA = join(root, 'companions', 'a');
+    const companionB = join(root, 'companions', 'b');
+    mkdirSync(companionA, { recursive: true });
+    mkdirSync(companionB, { recursive: true });
+    writeFileSync(
+      join(companionA, 'settings.overlay.json'),
+      JSON.stringify({
+        modelPurposeSelection: {
+          chat: 'primary',
+          vision: 'primary',
+        },
+        moaReferenceModels: ['openrouter:old/reference'],
+        moaAggregatorModel: 'openrouter:old/aggregator',
+      }),
+      'utf8',
+    );
+    const config = {
+      ...buildConfig(root),
+      companionDataDir: companionA,
+    } satisfies SubstrateConfig;
+    const service = new AdminSettingsDataService({
+      config,
+      configStore: createOwnerFileConfigStore({
+        dataDir: root,
+        companionDataDir: companionA,
+        defaultContextWindow: config.defaultContextWindow,
+      }),
+    });
+    const globalSettingsBefore = readFileSync(join(root, 'settings.json'), 'utf8');
+
+    expect(service.updateSettings(JSON.stringify({
+      modelPurposeSelection: { chat: 'extraction' },
+      moaReferenceModels: ['openrouter:new/reference'],
+      moaAggregatorModel: 'openrouter:new/aggregator',
+    })).ok).toBe(true);
+
+    expect(readFileSync(join(root, 'settings.json'), 'utf8')).toBe(globalSettingsBefore);
+    expect(loadCompanionSettingsOverlay(companionA)).toEqual({
+      modelPurposeSelection: {
+        chat: 'extraction',
+        vision: 'primary',
+      },
+      moaReferenceModels: ['openrouter:new/reference'],
+      moaAggregatorModel: 'openrouter:new/aggregator',
+    });
+    expect(loadCompanionSettingsOverlay(companionB)).toBeUndefined();
+
+    expect(service.updateSettings(JSON.stringify({
+      modelPurposeSelection: null,
+      moaReferenceModels: [],
+      moaAggregatorModel: null,
+    })).ok).toBe(true);
+
+    expect(readFileSync(join(root, 'settings.json'), 'utf8')).toBe(globalSettingsBefore);
+    expect(loadCompanionSettingsOverlay(companionA)).toEqual({
+      modelPurposeSelection: null,
+      moaReferenceModels: [],
+      moaAggregatorModel: null,
+    });
+    expect(loadCompanionSettingsOverlay(companionB)).toBeUndefined();
+    expect(config.modelPurposeSelection).toBeUndefined();
+    expect(config.moaReferenceModels).toBeUndefined();
+    expect(config.moaAggregatorModel).toBeUndefined();
   });
 
   it('reports local API and admin auth status from runtime config instead of direct env reads', async () => {

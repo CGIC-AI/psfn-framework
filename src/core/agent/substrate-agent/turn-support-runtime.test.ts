@@ -111,7 +111,11 @@ describe('TurnSupportRuntime role-envelope projections', () => {
       },
     );
 
-    const record = runtime.buildTurnRecord({
+    const sessionReads = sessionManager.createCapturedSessionReads({
+      logicalSessionId: channelId,
+      sourceChannelId: channelId,
+    });
+    const record = sessionReads.run(() => runtime.buildTurnRecord({
       message: {
         id: requestId,
         channelId,
@@ -149,7 +153,7 @@ describe('TurnSupportRuntime role-envelope projections', () => {
       trustLevel: 'regular',
       speakerRole: 'user',
       retrievalProvenanceRefs: [],
-    });
+    }, sessionReads));
 
     expect(record.roleEnvelopeRefs).toEqual(['turn_record_summary:env_runtime_projection_1']);
   });
@@ -258,12 +262,17 @@ describe('TurnSupportRuntime role-envelope projections', () => {
       retrievalProvenanceRefs: [],
     };
 
-    expect(runtime.buildTurnRecord(input).auditPrivacy).toMatchObject({
+    const sessionReads = sessionManager.createCapturedSessionReads(input.turnSessionIdentity);
+    expect(sessionReads.run(
+      () => runtime.buildTurnRecord(input, sessionReads),
+    ).auditPrivacy).toMatchObject({
       contentMode: 'verbatim_public',
       contentSensitivity: 'non_intimate',
       contentSensitivityActor: { kind: 'companion', turnId, requestId },
     });
-    expect(runtime.buildTurnRecord(input).auditPrivacy).toMatchObject({
+    expect(sessionReads.run(
+      () => runtime.buildTurnRecord(input, sessionReads),
+    ).auditPrivacy).toMatchObject({
       contentMode: 'emotional_signal_only',
       contentSensitivity: 'ambiguous',
     });
@@ -292,7 +301,7 @@ describe('TurnSupportRuntime role-envelope projections', () => {
       authorName: 'User',
       content: 'new conversation',
       timestamp: new Date('2026-07-14T00:00:00.000Z'),
-    }, 'chat', createTurnId(), 'root-initiation-message');
+    }, 'chat', createTurnId(), 'root-initiation-message', reset.newLogicalSessionId);
 
     expect(correlation).toMatchObject({
       sessionId: reset.newLogicalSessionId,

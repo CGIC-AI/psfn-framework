@@ -61,6 +61,7 @@ import { renderBackgroundCompletionsBlock } from '../../completion-notices.js';
 import { renderCanaryPromptMarker } from '../../../cogsec/canary/canary-token.js';
 import type { TurnExecutionObservability } from './observability.js';
 import type { TurnExecutionRuntime, TurnSessionIdentity } from './contracts.js';
+import type { CapturedSessionReads } from '../../../session/manager/captured-session-owner.js';
 
 const log = createComponentLogger('SubstrateAgent');
 
@@ -99,7 +100,7 @@ export interface TurnPromptAssemblyResult {
   promptMode: MessagePromptOverrideMode;
   fullPrompt: string;
   contextMessageCount: number;
-  context: Awaited<ReturnType<TurnExecutionRuntime['sessionManager']['buildContext']>>;
+  context: Awaited<ReturnType<CapturedSessionReads['buildContext']>>;
   /** The turn's PromptPlan: the single assembly artifact (E2.2). */
   plan: PromptPlan;
   providerSystemPrompt: string;
@@ -151,6 +152,7 @@ function buildCurrentUserRuntimeProfile(input: {
 
 export async function assembleTurnPrompt(input: {
   runtime: TurnExecutionRuntime;
+  sessionReads: CapturedSessionReads;
   message: SubstrateMessage;
   turnSessionIdentity: TurnSessionIdentity;
   channelType: string | undefined;
@@ -496,8 +498,7 @@ export async function assembleTurnPrompt(input: {
       ...runtime.withCorrelationPurpose(turnCorrelationBase, 'agent.turn.context'),
       ...viewerRequestContext,
     },
-    async () => runtime.sessionManager.buildContext(
-      turnSessionIdentity.logicalSessionId,
+    async () => input.sessionReads.buildContext(
       fullPrompt,
       memoryContextBlock,
       undefined,

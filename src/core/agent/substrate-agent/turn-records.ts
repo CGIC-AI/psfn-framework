@@ -27,6 +27,14 @@ import {
   isToolCallOutcome,
 } from '../../../shared/contracts/tool-call-outcome.js';
 
+export type TurnSessionWriteManager = Pick<
+  SessionManager,
+  | 'recordUserMessage'
+  | 'recordAssistantMessage'
+  | 'recordToolObservation'
+  | 'recordSystemMessage'
+>;
+
 const INTERNAL_SHARD_SOURCE_PARAM = '__psfnShardSource';
 const REASONING_PLACEHOLDER_VALUES = new Set(['none', 'null', 'n/a', 'na', 'nil', 'undefined']);
 const REASONING_CONTAMINATION_PATTERNS = [
@@ -127,7 +135,7 @@ export function resolveTurnRecordAuditPrivacy(
 }
 
 export function recordUserMessage(input: {
-  sessionManager: SessionManager;
+  sessionManager: TurnSessionWriteManager;
   message: SubstrateMessage;
   turnSessionIdentity: TurnSessionIdentity;
   turnId: TurnID;
@@ -182,7 +190,7 @@ export function recordUserMessage(input: {
 }
 
 export function recordAssistantMessage(input: {
-  sessionManager: SessionManager;
+  sessionManager: TurnSessionWriteManager;
   message: SubstrateMessage;
   turnSessionIdentity: TurnSessionIdentity;
   turnId: TurnID;
@@ -266,7 +274,7 @@ export function recordAssistantMessage(input: {
  * snapshot fails closed at the disclosure seam (§9.0/§9.5).
  */
 export function recordToolObservations(input: {
-  sessionManager: SessionManager;
+  sessionManager: TurnSessionWriteManager;
   message: SubstrateMessage;
   turnSessionIdentity: TurnSessionIdentity;
   turnId: TurnID;

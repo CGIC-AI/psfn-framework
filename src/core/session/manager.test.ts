@@ -1557,16 +1557,19 @@ describe('SessionManager', () => {
     mgr.recordAssistantMessage(futureOwner, 'future envelope history');
     mgr.setActiveContextSession(futureOwner);
 
-    await mgr.withCapturedSessionOwner(capturedOwner, async () => {
-      const snapshot = await mgr.captureTurnSessionContext({ channelId: physicalSource });
+    const sessionReads = mgr.createCapturedSessionReads({
+      logicalSessionId: capturedOwner,
+      sourceChannelId: physicalSource,
+    });
+    await sessionReads.run(async () => {
+      const snapshot = await sessionReads.captureTurnSessionContext({});
       expect(snapshot.channelId).toBe(capturedOwner);
       expect(snapshot.recentEntries.map(entry => entry.content)).toEqual([
         'captured prompt history',
         'captured envelope history',
       ]);
 
-      const context = await mgr.buildContext(
-        physicalSource,
+      const context = await sessionReads.buildContext(
         'System',
         '',
         undefined,
@@ -1577,23 +1580,57 @@ describe('SessionManager', () => {
       );
       expect(context.messages.some(message => message.content.includes('captured prompt history'))).toBe(true);
       expect(context.messages.some(message => message.content.includes('future prompt history'))).toBe(false);
-      expect(mgr.getRecentMessagesAtOrBefore(
-        physicalSource,
+      expect(sessionReads.getRecentMessagesAtOrBefore(
         capturedEnvelopeEntryId!,
         10,
       ).map(entry => entry.content)).toEqual([
         'captured prompt history',
         'captured envelope history',
       ]);
-      expect(mgr.getRoleEnvelopeRefsForEntries(
-        physicalSource,
+      expect(sessionReads.getRoleEnvelopeRefsForEntries(
         [capturedEnvelopeEntryId!],
       )).toEqual(['turn_record_summary:env_captured_owner']);
-    }, physicalSource);
-    await expect(mgr.withCapturedSessionOwner(
-      capturedOwner,
-      async () => await mgr.captureTurnSessionContext({ channelId: futureOwner }),
-    )).rejects.toThrow('Captured session owner mismatch');
+      expect(() => mgr.resolveSessionForIngress(futureOwner)).toThrow(
+        'SessionManager.resolveSessionForIngress cannot run during an admitted turn',
+      );
+    });
+  });
+
+  it('fails at the facade method when admitted-turn context is lost', async () => {
+    const mgr = new SessionManager(store, makeConfig());
+    const sessionReads = mgr.createCapturedSessionReads({
+      logicalSessionId: 'api:captured-owner',
+      sourceChannelId: 'api:physical-source',
+    });
+
+    expect(() => sessionReads.captureTurnSessionContext({})).toThrow(
+      'CapturedSessionReads.captureTurnSessionContext lost its admitted-turn session scope',
+    );
+  });
+
+  it('allows an audited foreign-session read and then restores the admitted owner', () => {
+    const mgr = new SessionManager(store, makeConfig());
+    const admittedOwner = 'discord:admitted-owner';
+    const foreignOwner = 'discord:foreign-owner';
+    mgr.recordUserMessage(admittedOwner, 'admitted history', 'user-a', 'User');
+    mgr.recordUserMessage(foreignOwner, 'foreign history', 'user-b', 'User');
+    const sessionReads = mgr.createCapturedSessionReads({
+      logicalSessionId: admittedOwner,
+      sourceChannelId: admittedOwner,
+    });
+
+    sessionReads.run(() => {
+      const foreignMessages = sessionReads.resolveForeignSessionForTurn(
+        'inspect explicitly linked room',
+        foreignOwner,
+        foreignReads => foreignReads.getRecentMessages(10),
+      );
+
+      expect(foreignMessages.map(entry => entry.content)).toEqual(['foreign history']);
+      expect(sessionReads.getRecentMessages(10).map(entry => entry.content)).toEqual([
+        'admitted history',
+      ]);
+    });
   });
 
   it('keeps stable background reads and compaction on the captured API owner', async () => {
@@ -1631,22 +1668,27 @@ describe('SessionManager', () => {
     mgr.setActiveContextSession(futureOwner);
     const llmProvider = makeMockLLM();
 
-    await mgr.withStableRecordedTurnEligibilitySnapshot(
-      capturedOwner,
-      [sourceRecord.turnId],
-      () => mgr.getRecentMessagesAtOrBefore(capturedOwner, maxCapturedEntryId, 10),
-      async (entries) => {
-        expect(entries.every(entry => entry.channelId === capturedOwner)).toBe(true);
-        await mgr.scheduleAutoCompactionBetweenTurns({
-          channelId: capturedOwner,
-          systemPrompt: '',
-          memoriesBlock: '',
-          llmProvider,
-          capturedRecentEntries: entries,
-          throwOnFailure: true,
-        });
-      },
-    );
+    const sessionReads = mgr.createCapturedSessionReads({
+      logicalSessionId: capturedOwner,
+      sourceChannelId: sourceRecord.channelId,
+    });
+    await sessionReads.run(async () => {
+      await mgr.withStableRecordedTurnEligibilitySnapshot(
+        capturedOwner,
+        [sourceRecord.turnId],
+        () => sessionReads.getRecentMessagesAtOrBefore(maxCapturedEntryId, 10),
+        async (entries) => {
+          expect(entries.every(entry => entry.channelId === capturedOwner)).toBe(true);
+          await sessionReads.scheduleAutoCompactionBetweenTurns({
+            systemPrompt: '',
+            memoriesBlock: '',
+            llmProvider,
+            capturedRecentEntries: entries,
+            throwOnFailure: true,
+          });
+        },
+      );
+    });
 
     expect(llmProvider.complete).toHaveBeenCalledTimes(1);
     expect(fencedStore.getCompactionSummaries(capturedOwner)).toHaveLength(1);
@@ -1672,10 +1714,12 @@ describe('SessionManager', () => {
     });
     mgr.recordUserMessage(sourceChannelId, 'future route history', 'user-b', 'User');
 
-    const snapshot = await mgr.withCapturedSessionOwner(
-      admittedRoute.newLogicalSessionId,
-      async () => await mgr.captureTurnSessionContext({ channelId: sourceChannelId }),
+    const sessionReads = mgr.createCapturedSessionReads({
+      logicalSessionId: admittedRoute.newLogicalSessionId,
       sourceChannelId,
+    });
+    const snapshot = await sessionReads.run(
+      async () => await sessionReads.captureTurnSessionContext({}),
     );
 
     expect(snapshot.channelId).toBe(admittedRoute.newLogicalSessionId);

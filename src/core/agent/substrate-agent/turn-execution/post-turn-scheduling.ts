@@ -39,6 +39,7 @@ import {
   type EnqueueBackgroundWorkInput,
 } from '../../background-work/types.js';
 import type { TurnExecutionRuntime, TurnSessionIdentity } from './contracts.js';
+import type { CapturedSessionReads } from '../../../session/manager/captured-session-owner.js';
 
 const log = createComponentLogger('SubstrateAgent');
 
@@ -107,6 +108,7 @@ function createBackgroundWorkInput(input: {
 
 export async function schedulePostTurnWork(input: {
   runtime: TurnExecutionRuntime;
+  sessionReads: CapturedSessionReads;
   message: SubstrateMessage;
   turnSessionIdentity: TurnSessionIdentity;
   response: AgentResponse;
@@ -151,6 +153,7 @@ export async function schedulePostTurnWork(input: {
 }): Promise<void> {
   const {
     runtime,
+    sessionReads,
     message,
     turnSessionIdentity,
     response,
@@ -237,7 +240,7 @@ export async function schedulePostTurnWork(input: {
       ...(observability.getObservedTurnSnapshot() ? { snapshot: observability.getObservedTurnSnapshot() } : {}),
     },
     internalStateSnapshotRef,
-  });
+  }, sessionReads);
 
   await runtime.eventBus.emit('agent.turn.end', {
     message,

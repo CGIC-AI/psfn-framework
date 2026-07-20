@@ -145,26 +145,6 @@
 {{- end -}}
 {{- end -}}
 {{- end -}}
-{{- if .Values.shellExec.enabled -}}
-{{- if lt (len .Values.shellExec.allowlist) 1 -}}
-{{- fail "shellExec.enabled=true requires at least one explicit command in shellExec.allowlist" -}}
-{{- end -}}
-{{- if not .Values.shellExec.path -}}
-{{- fail "shellExec.path must be non-empty when shellExec.enabled=true" -}}
-{{- end -}}
-{{- range .Values.shellExec.allowedCwd -}}
-{{- $workspacePrefix := printf "%s/" (trimSuffix "/" $.Values.runtime.workspacePath) -}}
-{{- if not (or (eq . $.Values.runtime.workspacePath) (hasPrefix $workspacePrefix .)) -}}
-{{- fail "shellExec.allowedCwd entries must remain beneath runtime.workspacePath" -}}
-{{- end -}}
-{{- end -}}
-{{- if or (lt (int .Values.shellExec.defaultTimeoutMs) 1) (lt (int .Values.shellExec.maxTimeoutMs) (int .Values.shellExec.defaultTimeoutMs)) -}}
-{{- fail "shellExec timeout values must be positive and maxTimeoutMs must be at least defaultTimeoutMs" -}}
-{{- end -}}
-{{- if or (lt (int .Values.shellExec.defaultMaxOutputChars) 1) (lt (int .Values.shellExec.maxOutputChars) (int .Values.shellExec.defaultMaxOutputChars)) -}}
-{{- fail "shellExec output caps must be positive and maxOutputChars must be at least defaultMaxOutputChars" -}}
-{{- end -}}
-{{- end -}}
 {{- if and .Values.ownerMigration.required (not .Values.ownerMigration.enabled) -}}
 {{- fail "ownerMigration.required=true requires ownerMigration.enabled=true" -}}
 {{- end -}}

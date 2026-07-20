@@ -101,9 +101,14 @@ describe('fs tool', () => {
     expect(tool.description).toContain('analysis_workbench');
     expect(tool.description).toContain('bounded subagent');
     expect(tool.description).toContain('provenance-bearing excerpts');
-    const maxBytesSchema = (tool.parameters as any).properties.max_bytes;
-    expect(maxBytesSchema.maximum).toBe(20_000);
-    expect(maxBytesSchema.description).toContain('hard cap');
+    expect(tool.parameters).toMatchObject({
+      properties: {
+        max_bytes: {
+          maximum: 20_000,
+          description: expect.stringContaining('hard cap'),
+        },
+      },
+    });
   });
 
   it('retargets broad searches to working folders and skips directories', async () => {

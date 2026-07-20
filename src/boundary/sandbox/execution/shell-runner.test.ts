@@ -160,6 +160,35 @@ describe('executeShellCommandWithPolicy', () => {
       expect(timeout.timedOut).toBe(true);
     });
 
+    it('enforces descendant process, address-space, file, CPU, and fd ceilings', async () => {
+      const { workspace } = workspaceFixture();
+      const result = await executeShellCommandWithPolicy(
+        {
+          command: 'bash',
+          args: [
+            '-lc',
+            'printf "nproc=%s as=%s fsize=%s cpu=%s nofile=%s\\n" '
+              + '"$(ulimit -u)" "$(ulimit -v)" "$(ulimit -f)" "$(ulimit -t)" "$(ulimit -n)"',
+          ],
+          cwd: workspace,
+        },
+        {
+          workspacePath: workspace,
+          policy: {
+            ...enabledPolicy(workspace),
+            maxProcesses: 4,
+            maxAddressSpaceBytes: 128 * 1024 * 1024,
+            maxFileBytes: 1024 * 1024,
+            maxCpuSeconds: 2,
+            maxOpenFiles: 32,
+          },
+        },
+      );
+
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toBe('nproc=4 as=131072 fsize=2048 cpu=2 nofile=32\n');
+    });
+
     it('does not expose a host path through a symlink inside the workspace', async () => {
       const { workspace, outside } = workspaceFixture();
       const link = join(workspace, 'outside-link');

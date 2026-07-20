@@ -846,6 +846,26 @@ for (const [name, value] of [
 }
 assertNotIncludes(agentDeployment, 'LITELLM_BASE_URL', 'agent LiteLLM endpoint env');
 assertNotIncludes(agentDeployment, 'LITELLM_API_KEY', 'agent LiteLLM credential env');
+assertNotIncludes(
+  agentDeployment,
+  'name: SHELL_EXEC_ENABLED',
+  'agent has no local shell policy that could bypass gateway approval and audit',
+);
+assertNotIncludes(
+  gatewayDeployment,
+  'name: SHELL_EXEC_ENABLED',
+  'gateway shell policy is settings-owned rather than environment-owned',
+);
+assertIncludes(
+  gatewayDeployment,
+  'requests:\n              cpu: 100m\n              memory: 2Gi',
+  'gateway cgroup resource requests',
+);
+assertIncludes(
+  gatewayDeployment,
+  'limits:\n              cpu: "2"\n              memory: 4Gi',
+  'gateway cgroup resource limits',
+);
 
 const gardenCredentialBoundaryDeployment = findDocumentByKindName(rendered, 'Deployment', 'psfn-garden');
 assertNotIncludes(

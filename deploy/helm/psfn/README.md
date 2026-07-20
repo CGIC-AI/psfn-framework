@@ -614,27 +614,27 @@ Set `redis.enabled=false` for memory cache mode, or `redis.mode=external` with
 
 ## Sandboxed Companion CLI
 
-The model-facing `shell` tool is disabled by default. An operator may enable a
-bounded CLI for an autonomous companion:
-
-```bash
-helm upgrade --install psfn deploy/helm/psfn \
-  --namespace psfn \
-  --set shellExec.enabled=true \
-  --set 'shellExec.allowlist={bash,rg}'
-```
+The model-facing `shell` tool is disabled by default. Its mutable policy is
+owned by `settings.json`, exposed in Garden's advanced settings, and loaded by
+the gateway. To enable a bounded CLI, set the complete `shellExec` object from
+`config/settings.seed.json`, change `enabled` to `true`, and explicitly list
+the permitted entry commands (for example `["bash", "rg"]`).
 
 The runtime invokes the allowlisted command through the exact-pinned Bubblewrap
 binary. The child receives a cleared environment, no network namespace, a
 read-only `/usr`, fresh `/proc`, `/dev`, and `/tmp`, and only
-`runtime.workspacePath` mounted writable at `/workspace`. `allowedCwd` can
-narrow execution to subdirectories of the Personal Workspace but cannot widen
-it. Timeouts and combined output remain capped by `shellExec` values.
+`runtime.workspacePath` mounted writable at `/workspace`. The working directory
+cannot leave the Personal Workspace. Process count, address space, file size,
+CPU time, open files, wall time, and combined output are capped by the
+settings-owned `shellExec` policy. The gateway container also has CPU and memory
+cgroup limits in the chart.
 
 Enabling `bash` intentionally permits the companion to compose installed image
 commands inside that sandbox. It does not expose system-data, companion-data,
 Kubernetes Secrets, provider credentials, or peer workspaces. Keep
-`envAllowlist` empty unless a specific non-secret variable is required.
+`envAllowlist` empty unless a specific non-secret variable is required. The
+agent does not receive or execute this policy, so `analysis_workbench` cannot
+bypass the gateway confirmation and audit path with a local shell helper.
 
 ## Internal mTLS
 

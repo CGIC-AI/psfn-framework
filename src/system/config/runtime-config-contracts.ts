@@ -17,6 +17,7 @@ import type { SatelliteRegistryConfig } from '../../shared/contracts/satellite-r
 import type { GroupMemorySettings } from './group-memory-config.js';
 import type { EmotionScopingSettings } from './emotion-scoping-config.js';
 import type { MemoryRetrievalPolicy } from './memory-retrieval-policy.js';
+import type { ShellExecSettings } from './shell-exec-config.js';
 import type { RuntimeCompanionId } from '../../shared/routing/companion-id.js';
 import type {
   FleetAuthConfig,
@@ -283,6 +284,8 @@ export interface SubstrateConfig {
   responseStyleOverrides?: ResponseStyleOverrides;
   runtimeHooks?: RuntimeConfigHooks;
   promotedExtendedTools?: string[];
+  /** settings.json-owned gateway shell execution policy and hard limits. */
+  shellExec?: ShellExecSettings;
   capabilityTier?: CapabilityTier;
   compositionalPolicy?: CompositionalPolicyConfig;
   observerEvalSidecar?: ObserverEvalSidecarSettings;

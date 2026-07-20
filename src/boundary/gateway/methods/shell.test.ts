@@ -38,14 +38,14 @@ function createHarness(policyConfig: PolicyConfig): { invoke(params: Record<stri
 describe('registerShellMethods', () => {
   afterEach(() => resetShellCircuitBreakersForTests());
 
-  it('maps the missing OS confinement boundary to a policy denial', async () => {
+  it('maps an execution-policy rejection to a policy denial', async () => {
     const harness = createHarness({
       workspacePath: process.cwd(),
       shellExec: { enabled: true, allowlist: ['printf'], allowedCwd: [process.cwd()] },
     });
-    await expect(harness.invoke({ command: 'printf', args: ['never'] })).rejects.toMatchObject({
+    await expect(harness.invoke({ command: 'bash', args: ['-c', 'printf never'] })).rejects.toMatchObject({
       code: GatewayErrors.POLICY_DENIED,
-      message: expect.stringContaining('no OS-enforced filesystem confinement'),
+      message: expect.stringContaining('command not allowlisted'),
     });
   });
 

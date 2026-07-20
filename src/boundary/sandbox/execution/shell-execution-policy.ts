@@ -3,13 +3,12 @@ import { basename, delimiter, isAbsolute, join, normalize, relative, resolve } f
 import type { ShellExecParams } from '../../gateway/protocol.js';
 import { isInsideAllowedPaths } from '../../gateway/policy.js';
 import type { ShellExecPolicyConfig } from './shell-policy-config.js';
+import { createDefaultShellExecSettings } from '../../../system/config/shell-exec-config.js';
 
-const DEFAULT_TIMEOUT_MS = 5_000;
-const DEFAULT_MAX_TIMEOUT_MS = 30_000;
-const DEFAULT_MAX_OUTPUT_CHARS = 20_000;
-const DEFAULT_MAX_OUTPUT_CHARS_CAP = 100_000;
 const DEFAULT_SANDBOX_BINARY = '/usr/bin/bwrap';
+const DEFAULT_RESOURCE_LIMIT_BINARY = '/usr/bin/prlimit';
 const DEFAULT_SANDBOX_PATH = ['/usr/local/bin', '/usr/bin', '/bin'].join(delimiter);
+const DEFAULT_SHELL_EXEC_SETTINGS = createDefaultShellExecSettings();
 const MAX_COMMAND_LENGTH = 256;
 const MAX_ARGS = 64;
 const MAX_ARG_LENGTH = 4_096;
@@ -37,10 +36,16 @@ export interface ResolvedShellExecution {
   cwd: string;
   sandboxCwd: string;
   sandboxBinaryPath: string;
+  resourceLimitBinaryPath: string;
   sandboxPath: string;
   childEnv: NodeJS.ProcessEnv;
   timeoutMs: number;
   maxOutputChars: number;
+  maxProcesses: number;
+  maxAddressSpaceBytes: number;
+  maxFileBytes: number;
+  maxCpuSeconds: number;
+  maxOpenFiles: number;
 }
 
 export class ShellExecPolicyError extends Error {}
@@ -263,10 +268,10 @@ function buildSandboxChildEnv(
   return childEnv;
 }
 
-function resolveSandboxBinary(): string {
-  const canonical = resolveCanonicalExecutablePath(DEFAULT_SANDBOX_BINARY);
+function resolveRequiredRuntimeBinary(path: string, label: string): string {
+  const canonical = resolveCanonicalExecutablePath(path);
   if (!canonical) {
-    throw new ShellExecPolicyError(`shell.exec sandbox unavailable: ${DEFAULT_SANDBOX_BINARY}`);
+    throw new ShellExecPolicyError(`shell.exec ${label} unavailable: ${path}`);
   }
   return canonical;
 }
@@ -275,22 +280,48 @@ function resolveLimits(
   params: ShellExecParams,
   policy: ShellExecPolicyConfig,
 ): { timeoutMs: number; maxOutputChars: number } {
-  const maxTimeoutMs = normalizePositiveInt(policy.maxTimeoutMs) ?? DEFAULT_MAX_TIMEOUT_MS;
-  const defaultTimeoutMs = normalizePositiveInt(policy.defaultTimeoutMs) ?? DEFAULT_TIMEOUT_MS;
+  const maxTimeoutMs = normalizePositiveInt(policy.maxTimeoutMs)
+    ?? DEFAULT_SHELL_EXEC_SETTINGS.maxTimeoutMs;
+  const defaultTimeoutMs = normalizePositiveInt(policy.defaultTimeoutMs)
+    ?? DEFAULT_SHELL_EXEC_SETTINGS.defaultTimeoutMs;
   const timeoutMs = Math.min(
     normalizePositiveInt(params.timeoutMs) ?? defaultTimeoutMs,
     maxTimeoutMs,
   );
 
   const maxOutputCharsCap = normalizePositiveInt(policy.maxOutputChars)
-    ?? DEFAULT_MAX_OUTPUT_CHARS_CAP;
+    ?? DEFAULT_SHELL_EXEC_SETTINGS.maxOutputChars;
   const defaultMaxOutputChars = normalizePositiveInt(policy.defaultMaxOutputChars)
-    ?? DEFAULT_MAX_OUTPUT_CHARS;
+    ?? DEFAULT_SHELL_EXEC_SETTINGS.defaultMaxOutputChars;
   const maxOutputChars = Math.min(
     normalizePositiveInt(params.maxOutputChars) ?? defaultMaxOutputChars,
     maxOutputCharsCap,
   );
   return { timeoutMs, maxOutputChars };
+}
+
+function resolveResourceLimits(
+  policy: ShellExecPolicyConfig,
+): Pick<
+  ResolvedShellExecution,
+  | 'maxProcesses'
+  | 'maxAddressSpaceBytes'
+  | 'maxFileBytes'
+  | 'maxCpuSeconds'
+  | 'maxOpenFiles'
+> {
+  return {
+    maxProcesses: normalizePositiveInt(policy.maxProcesses)
+      ?? DEFAULT_SHELL_EXEC_SETTINGS.maxProcesses,
+    maxAddressSpaceBytes: normalizePositiveInt(policy.maxAddressSpaceBytes)
+      ?? DEFAULT_SHELL_EXEC_SETTINGS.maxAddressSpaceBytes,
+    maxFileBytes: normalizePositiveInt(policy.maxFileBytes)
+      ?? DEFAULT_SHELL_EXEC_SETTINGS.maxFileBytes,
+    maxCpuSeconds: normalizePositiveInt(policy.maxCpuSeconds)
+      ?? DEFAULT_SHELL_EXEC_SETTINGS.maxCpuSeconds,
+    maxOpenFiles: normalizePositiveInt(policy.maxOpenFiles)
+      ?? DEFAULT_SHELL_EXEC_SETTINGS.maxOpenFiles,
+  };
 }
 
 export function resolveShellExecution(
@@ -308,7 +339,7 @@ export function resolveShellExecution(
     resolve(normalize(options.workspacePath)),
     'shell.exec Personal Workspace',
   );
-  const sandboxPath = options.policy.pathOverride ?? DEFAULT_SANDBOX_PATH;
+  const sandboxPath = DEFAULT_SANDBOX_PATH;
   const command = typeof params.command === 'string' ? params.command.trim() : '';
   const executableCommand = resolveAllowedCommandExecutable(
     command,
@@ -339,9 +370,14 @@ export function resolveShellExecution(
     workspacePath,
     cwd,
     sandboxCwd,
-    sandboxBinaryPath: resolveSandboxBinary(),
+    sandboxBinaryPath: resolveRequiredRuntimeBinary(DEFAULT_SANDBOX_BINARY, 'sandbox'),
+    resourceLimitBinaryPath: resolveRequiredRuntimeBinary(
+      DEFAULT_RESOURCE_LIMIT_BINARY,
+      'resource limiter',
+    ),
     sandboxPath,
     childEnv,
     ...limits,
+    ...resolveResourceLimits(options.policy),
   };
 }

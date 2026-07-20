@@ -25,7 +25,8 @@
     TrustLevel,
     ChannelPrivacyLevel,
   } from '$lib/types';
-  import { RELATIONSHIP_TYPES, CHANNEL_PRIVACY_LEVELS } from '$lib/types';
+  import { RELATIONSHIP_TYPES, CHANNEL_PRIVACY_LEVELS, TRUST_LEVELS } from '$lib/types';
+  import { scopeGardenPath } from '$lib/fleet/companion-scope';
 
   let data = $state<AdminContactListData | null>(null);
   let loading = $state(true);
@@ -41,6 +42,7 @@
   let editTrustLevel = $state<TrustLevel>('regular');
   let editRelationshipType = $state<RelationshipType>('acquaintance');
   let editNotes = $state('');
+  let editIsMachine = $state(false);
 
   // Channel privacy edits (tracked per identity or conversation-channel key)
   let channelPrivacyEdits = $state<Record<string, ChannelPrivacyLevel>>({});
@@ -65,8 +67,6 @@
   // Merge contact
   let mergeSourceId = $state('');
 
-  const TRUST_LEVELS: TrustLevel[] = ['primary', 'trusted', 'regular', 'public'];
-
   const KNOWN_CHANNEL_TYPES = [
     'discord',
     'telegram',
@@ -88,7 +88,6 @@
     private:      { bg: 'background-color: #4A7C59', text: 'color: white', label: 'Private' },
     invite_only: { bg: 'background-color: #8B7355', text: 'color: white', label: 'Invite-Only' },
     public:       { bg: 'background-color: #4A5C8B', text: 'color: white', label: 'Public' },
-    broadcast:    { bg: 'background-color: #C44569', text: 'color: white', label: 'Broadcast' },
   };
 
   const VERIFICATION_STATUS: Record<string, { cls: string; label: string }> = {
@@ -123,8 +122,6 @@
   }
 
   function contactDisplayName(contact: Contact): string {
-    const profile = data?.profileMap[contact.id];
-    if (profile?.displayName && profile.displayName.trim().length > 0) return profile.displayName;
     return contact.displayName;
   }
 
@@ -313,6 +310,7 @@
     editTrustLevel = contact.trustLevel as TrustLevel;
     editRelationshipType = contact.relationshipType as RelationshipType;
     editNotes = contact.notes ?? '';
+    editIsMachine = contact.isMachineIntelligence === true;
     showAddChannel = false;
     newChannelName = '';
     newChannelUserId = '';
@@ -355,6 +353,9 @@
       }
       if (editNotes !== (contact.notes ?? '')) {
         patch.notes = editNotes;
+      }
+      if (editIsMachine !== (contact.isMachineIntelligence === true)) {
+        patch.isMachineIntelligence = editIsMachine;
       }
 
       // Collect channel privacy changes from both linked identities and observed channels.
@@ -840,8 +841,16 @@
 
           <!-- Relationship + Activity -->
           <div class="text-sm space-y-1">
-            <p class="text-shadow-700">
+            <p class="text-shadow-700 flex flex-wrap items-center gap-2">
               <span class="font-medium text-shadow-800">{formatRelType(contact.relationshipType)}</span>
+              <span
+                class="inline-flex items-center rounded-full border px-2 py-0.5 text-xs font-semibold {contact.isMachineIntelligence ? 'border-moss-300 bg-moss-50 text-moss-800' : 'border-bark-300 bg-bark-100 text-shadow-700'}"
+                title={contact.isMachineIntelligence
+                  ? 'Machine intelligence (auto-detected from channel provenance or set by operator)'
+                  : 'Human contact'}
+              >
+                {contact.isMachineIntelligence ? 'Companion' : 'Human'}
+              </span>
             </p>
             <div class="flex items-center gap-4 text-shadow-600">
               <span>First: {formatDate(contact.firstSeen)}</span>
@@ -1012,7 +1021,7 @@
               <div class="flex items-center gap-3 text-sm text-shadow-600">
                 <span class="inline-flex items-center gap-1">
                   <span class="inline-block w-1.5 h-1.5 rounded-full bg-gold-400"></span>
-                  {profile.memoryCount} memories
+                  {profile.sourceMemoryIds.length} memories
                 </span>
                 {#if profile.updatedAt}
                   <span>Updated {formatTimestamp(profile.updatedAt)}</span>
@@ -1027,7 +1036,7 @@
                   <div class="mt-1 flex flex-wrap gap-1">
                     {#each profile.sourceMemoryIds as memId}
                       <a
-                        href="/memory?id={encodeURIComponent(memId)}"
+                        href={scopeGardenPath(`/memory?id=${encodeURIComponent(memId)}`)}
                         class="text-sm bg-bark-200 px-1.5 py-0.5 rounded text-gold-700
                                hover:bg-gold-100 hover:text-gold-800 transition-colors font-mono break-all"
                         title="View memory {memId}"
@@ -1123,6 +1132,28 @@
                          focus:outline-none focus:ring-2 focus:ring-gold-300 focus:border-gold-400"
                   placeholder="Notes about this contact..."
                 ></textarea>
+              </div>
+
+              <!-- Human / Companion marker -->
+              <div class="flex items-center justify-between gap-3 rounded-lg border border-bark-300 bg-bark-50 px-3 py-2.5">
+                <div>
+                  <p class="text-sm font-medium text-shadow-800">Machine intelligence</p>
+                  <p class="text-xs text-shadow-600">
+                    Marks this contact as a companion/agent rather than a human. Channel-detected values are preserved unless changed here.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={editIsMachine}
+                  aria-label="Machine intelligence"
+                  onclick={() => (editIsMachine = !editIsMachine)}
+                  class="relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors {editIsMachine ? 'bg-moss-500' : 'bg-bark-300'}"
+                >
+                  <span
+                    class="inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform {editIsMachine ? 'translate-x-6' : 'translate-x-1'}"
+                  ></span>
+                </button>
               </div>
 
               <!-- Channel Privacy Editing -->

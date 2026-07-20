@@ -2,7 +2,7 @@
 
 import type { TurnPerformanceSnapshot } from '../../shared/telemetry/turn-performance.js';
 
-export type DashboardCostWindow = 'today' | 'week' | 'month';
+export type DashboardCostWindow = 'today' | 'week' | 'month' | 'quarter';
 
 export interface DashboardCostWindowUsage {
   calls: number;
@@ -15,6 +15,12 @@ export interface DashboardCostWindowUsage {
   totalTokens: number;
   providerCostUsd: number;
   estimatedCostUsd: number;
+  effectiveCostUsd: number;
+}
+
+export interface DashboardModelUsageSparklinePoint {
+  startMs: number;
+  totalTokens: number;
   effectiveCostUsd: number;
 }
 
@@ -33,6 +39,7 @@ export interface DashboardModelUsageFreshness {
 export interface DashboardModelUsageProjection {
   selected: DashboardCostWindow;
   usage: DashboardCostWindowUsage | null;
+  sparkline: DashboardModelUsageSparklinePoint[];
   freshness: DashboardModelUsageFreshness;
 }
 

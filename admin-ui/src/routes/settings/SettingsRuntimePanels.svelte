@@ -2,6 +2,7 @@
   import { setContext } from 'svelte';
   import SettingFieldLabel from '$lib/components/settings/SettingFieldLabel.svelte';
   import SettingsCollapsibleSection from '$lib/components/settings/SettingsCollapsibleSection.svelte';
+  import DurationInput from '$lib/components/settings/DurationInput.svelte';
   import { settingsSimpleSectionAnchorId } from '$lib/components/settings/navigation';
   import {
     SETTINGS_FIELD_ERRORS_CONTEXT,
@@ -77,8 +78,8 @@
         <p class="text-sm text-shadow-500 mt-1">Maximum retry attempts (0-10)</p>
       </div>
       <div>
-        <SettingFieldLabel label="Retry Base Delay (ms)" keys="retryBaseDelayMs" forId={settingControlId('retryBaseDelayMs')} class={labelClass} />
-        <input id={settingControlId('retryBaseDelayMs')} type="number" min="500" max="30000" step="100" bind:value={retryBaseDelayMs} class={inputClass} />
+        <SettingFieldLabel label="Retry Base Delay" keys="retryBaseDelayMs" forId={settingControlId('retryBaseDelayMs')} class={labelClass} />
+        <DurationInput id={settingControlId('retryBaseDelayMs')} min={500} max={30000} bind:value={retryBaseDelayMs} class={inputClass} />
         <p class="text-sm text-shadow-500 mt-1">Base delay between retries (500-30,000ms)</p>
       </div>
     </div>

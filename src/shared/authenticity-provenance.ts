@@ -6,7 +6,7 @@ import type {
   AuthenticitySourceAuthor,
   AuthenticityTransformer,
   AuthenticityWording,
-} from './contracts/runtime.js';
+} from './contracts/runtime-base.js';
 
 export const DERIVED_DETAIL_LOSS_NOTE = 'Derived context; exact details may be lost.';
 export const DERIVED_EMOTIONAL_TEXTURE_NOTE = 'Emotional texture may be flattened by summarization or retrieval.';

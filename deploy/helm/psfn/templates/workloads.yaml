@@ -180,9 +180,7 @@ spec:
           volumeMounts:
             - name: system-data
               mountPath: {{ .Values.runtime.systemDataDir }}
-            - name: companion-data
-              mountPath: {{ .Values.runtime.companionDataDir }}
-              readOnly: true
+            {{- include "psfn.gatewayCompanionDataVolumeMounts" . | nindent 12 }}
             # Gateway owns CogSec quarantine/event writes under state while
             # the rest of companion-data remains read-only.
             - name: companion-data
@@ -211,6 +209,7 @@ spec:
             {{- end }}
       volumes:
         {{- include "psfn.commonVolumes" . | nindent 8 }}
+        {{- include "psfn.gatewayAdditionalCompanionDataVolumes" . | nindent 8 }}
         - name: gateway-rpc-tls
           secret:
             secretName: {{ include "psfn.gatewayRpcCertSecretName" . }}
@@ -220,6 +219,7 @@ spec:
             secretName: {{ include "psfn.gatewaySsoClientCertSecretName" . }}
         {{- end }}
 ---
+{{- if not .Values.fleet.enabled }}
 apiVersion: v1
 kind: Service
 metadata:
@@ -417,6 +417,7 @@ spec:
         - name: admin-transport-tls
           secret:
             secretName: {{ include "psfn.agentAdminCertSecretName" . }}
+{{- end }}
 ---
 apiVersion: v1
 kind: Service
@@ -460,7 +461,11 @@ spec:
         {{- toYaml . | nindent 8 }}
       {{- end }}
       initContainers:
+        {{- if .Values.fleet.enabled }}
+        {{- include "psfn.waitForPostgresInitContainer" (dict "root" . "image" .Values.workloads.garden.image) | nindent 8 }}
+        {{- else }}
         {{- include "psfn.seedInitContainer" . | nindent 8 }}
+        {{- end }}
       containers:
         - name: garden
           image: {{ include "psfn.image" (dict "root" . "image" .Values.workloads.garden.image) | quote }}
@@ -479,7 +484,12 @@ spec:
               {{- end }}
               {{- end }}
           env:
+            {{- if .Values.fleet.enabled }}
+            {{- include "psfn.fleetGardenEnv" . | nindent 12 }}
+            {{- include "psfn.postgresDatabaseUrlFileEnv" . | nindent 12 }}
+            {{- else }}
             {{- include "psfn.commonEnv" . | nindent 12 }}
+            {{- end }}
             - name: ADMIN_HOST
               value: 0.0.0.0
             - name: ADMIN_PORT
@@ -519,9 +529,74 @@ spec:
               value: {{ printf "%s/admin-transport/tls.key" .Values.certificates.mountBasePath | quote }}
             - name: ADMIN_TRANSPORT_TLS_EXPECTED_PEER_SPIFFE_URI
               value: {{ include "psfn.spiffeAgent" . | quote }}
+            {{- if .Values.fleet.enabled }}
+            - name: FLEET_GARDEN_TARGET_IDS
+              value: {{ include "psfn.fleetCompanionIds" . | quote }}
+            - name: FLEET_GARDEN_ADMIN_SERVICE_BASE
+              value: {{ include "psfn.agentAdminServiceName" . | quote }}
+            - name: FLEET_GARDEN_ADMIN_DNS_SUFFIX
+              value: {{ printf ".%s.svc" .Release.Namespace | quote }}
+            {{- end }}
           readinessProbe:
+            {{- if .Values.fleet.enabled }}
+            exec:
+              command:
+                - node
+                - -e
+                - |
+                  const fs = require('node:fs');
+                  const https = require('node:https');
+                  const net = require('node:net');
+                  const tls = require('node:tls');
+                  const credentials = {
+                    ca: fs.readFileSync(process.env.ADMIN_TRANSPORT_TLS_CA_PATH),
+                    cert: fs.readFileSync(process.env.ADMIN_TRANSPORT_TLS_CERT_PATH),
+                    key: fs.readFileSync(process.env.ADMIN_TRANSPORT_TLS_KEY_PATH),
+                  };
+                  const localListener = new Promise((resolve, reject) => {
+                    const socket = net.connect(Number(process.env.ADMIN_PORT), '127.0.0.1');
+                    socket.setTimeout(8000);
+                    socket.once('connect', () => {
+                      socket.destroy();
+                      resolve();
+                    });
+                    socket.once('timeout', () => socket.destroy(new Error('Fleet Garden listener timed out')));
+                    socket.once('error', reject);
+                  });
+                  const targetIds = process.env.FLEET_GARDEN_TARGET_IDS.split(',').filter(Boolean);
+                  const targetChecks = targetIds.map(companionId => new Promise((resolve, reject) => {
+                    const host = `${process.env.FLEET_GARDEN_ADMIN_SERVICE_BASE}-${companionId}${process.env.FLEET_GARDEN_ADMIN_DNS_SUFFIX}`;
+                    const request = https.get({
+                      host,
+                      port: Number({{ .Values.ports.agentAdmin }}),
+                      path: '/api/admin/__transport_probe__',
+                      servername: host,
+                      ...credentials,
+                      checkServerIdentity: (serverName, certificate) => {
+                        const dnsError = tls.checkServerIdentity(serverName, certificate);
+                        if (dnsError) return dnsError;
+                        const expected = `URI:spiffe://{{ .Values.certificates.trustDomain }}/psfn/agent/${companionId}`;
+                        const identities = (certificate.subjectaltname || '').split(', ');
+                        return identities.includes(expected)
+                          ? undefined
+                          : new Error(`${companionId} certificate lacks ${expected}`);
+                      },
+                      timeout: 8000,
+                    }, response => {
+                      response.resume();
+                      if (response.statusCode === 200) resolve();
+                      else reject(new Error(`${companionId} returned ${response.statusCode}`));
+                    });
+                    request.once('timeout', () => request.destroy(new Error(`${companionId} timed out`)));
+                    request.once('error', reject);
+                  }));
+                  Promise.all([localListener, ...targetChecks])
+                    .then(() => process.exit(0))
+                    .catch(() => process.exit(1));
+            {{- else }}
             tcpSocket:
               port: {{ ternary "https-garden" "http-garden" .Values.fleetAuth.enabled }}
+            {{- end }}
             initialDelaySeconds: 10
             periodSeconds: 10
           livenessProbe:
@@ -532,6 +607,20 @@ spec:
           resources:
             {{- toYaml .Values.workloads.garden.resources | nindent 12 }}
           volumeMounts:
+            {{- if .Values.fleet.enabled }}
+            - name: postgres-database-url
+              mountPath: /var/run/secrets/psfn-postgres
+              readOnly: true
+            - name: system-data
+              mountPath: {{ .Values.runtime.systemDataDir }}
+              readOnly: true
+            - name: runtime
+              mountPath: {{ .Values.runtime.logsDir }}
+              subPath: logs
+            - name: runtime
+              mountPath: {{ .Values.runtime.tempDir }}
+              subPath: tmp
+            {{- else }}
             - name: system-data
               mountPath: {{ .Values.runtime.systemDataDir }}
             - name: companion-data
@@ -543,6 +632,7 @@ spec:
               mountPath: {{ .Values.runtime.tempDir }}
               subPath: tmp
             {{- include "psfn.repositoryCheckoutVolumeMount" . | nindent 12 }}
+            {{- end }}
             - name: admin-transport-client-tls
               mountPath: {{ printf "%s/admin-transport" .Values.certificates.mountBasePath }}
               readOnly: true
@@ -552,7 +642,22 @@ spec:
               readOnly: true
             {{- end }}
       volumes:
+        {{- if .Values.fleet.enabled }}
+        - name: postgres-database-url
+          secret:
+            secretName: {{ include "psfn.databaseUrlSecretName" . }}
+            items:
+              - key: {{ include "psfn.databaseUrlSecretKey" . }}
+                path: database-url
+        - name: system-data
+          persistentVolumeClaim:
+            claimName: {{ include "psfn.systemDataClaimName" . }}
+        - name: runtime
+          persistentVolumeClaim:
+            claimName: {{ include "psfn.runtimeClaimName" . }}
+        {{- else }}
         {{- include "psfn.commonVolumes" . | nindent 8 }}
+        {{- end }}
         - name: admin-transport-client-tls
           secret:
             secretName: {{ include "psfn.gardenAdminClientCertSecretName" . }}

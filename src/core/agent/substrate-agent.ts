@@ -21,6 +21,7 @@ import {
 } from '../../shared/telemetry/run-charge.js';
 import { createMemoryAppCache } from '../../shared/cache/memory-cache.js';
 import type { AppCache } from '../../shared/cache/types.js';
+import { RUNTIME_LAYOUT_MODE, resolveRuntimeLayoutMode } from '../../persistence/layout.js';
 import type { SessionManager } from '../session/manager.js';
 import type { ConversationScope } from '../session/conversation-scope.js';
 import { formatAttributedSystemContent } from '../session/entry-attribution.js';
@@ -160,6 +161,7 @@ import {
   type TurnDeliveryLifecycle,
 } from './substrate-agent/turn-execution-runtime.js';
 import type { TurnSessionIdentity } from './substrate-agent/turn-execution/contracts.js';
+import type { HumanAttentionPressurePort } from './fatigue/human-attention-pressure.js';
 import { createTurnExecutionRuntimeAdapter } from './substrate-agent/turn-execution-adapter.js';
 import { parseTurnRecordBackgroundWorkHandoff } from './background-work/types.js';
 import type { BackgroundWorkRuntimeTuning } from './background-work/config.js';
@@ -244,6 +246,7 @@ export interface SubstrateAgentOptions {
   selfModelRuntime?: SelfModelRuntimeWiring;
   observerEvalSidecar?: ObserverEvalSidecarRuntime;
   fatigueBudget?: FatigueBudgetPort | null;
+  humanAttentionPressure?: HumanAttentionPressurePort | null;
   fatigueRegulationReservations?: IcpFatigueRegulationReservationPort | null;
   streamTransport?: SubstrateStreamTransport;
   appCache?: AppCache;
@@ -259,6 +262,11 @@ export interface SubstrateAgentOptions {
   backgroundWorkTuning?: BackgroundWorkRuntimeTuning;
   /** Explicitly omit post-turn jobs for ephemeral/test agents with no durable owner. */
   backgroundWorkDisabled?: boolean;
+  /**
+   * Transport-only policy for a denied capability whose privileged boundary
+   * performs the real grant. It never changes the advertised/granted tokens.
+   */
+  allowCapabilityDeniedTransport?: import('../../system/capabilities/gate.js').CapabilityDeniedTransportPolicy;
   /** Anti-starvation welfare policy (mmo9.7.4), owner-file backed (scheduler.json). */
   backgroundWorkWelfare?: Partial<BackgroundWorkWelfarePolicy>;
 }
@@ -307,6 +315,17 @@ export class SubstrateAgent {
   private bridge: EventBridge;
   private channelRegistry: ChannelPromptRegistryPort = new Map();
   private capabilityRuntime: CapabilityRuntime | null = null;
+  /**
+   * Explicit injected capability access (mus2.1). When set, it is the single
+   * authority for tool gates, prompt tool availability, and audit fields —
+   * taking precedence over any disk-backed CapabilityRuntime and over the
+   * tier-name default path. This is the seam a derived immutable shard access
+   * uses so a `custom` grant governs the agent without an owner file.
+   */
+  private explicitCapabilityAccess: CapabilityAccess | null = null;
+  private readonly allowCapabilityDeniedTransport:
+    | import('../../system/capabilities/gate.js').CapabilityDeniedTransportPolicy
+    | undefined;
   private gatedToolCache = new WeakMap<AgentTool<any>, AgentTool<any>>();
   private readonly appCache: AppCache;
   private reflectionNudge = new ReflectionNudgeTracker();
@@ -323,6 +342,7 @@ export class SubstrateAgent {
   private selfModelRuntimeRequired = false;
   private readonly emotionSelfModelRuntime: EmotionSelfModelRuntime;
   private readonly fatigueBudget: FatigueBudgetPort | null;
+  private readonly humanAttentionPressure: HumanAttentionPressurePort | null;
   private readonly fatigueRegulationReservations: IcpFatigueRegulationReservationPort | null;
   private durableChargeRecorder: DurableRunChargeRecorder | null = null;
   private durableChargeProbe: DurableRunChargeProbe | null = null;
@@ -548,10 +568,12 @@ export class SubstrateAgent {
       ?? (() => fallbackPromptVariables);
     this.config = config;
     this.runtimeMode = options.runtimeMode ?? 'gateway';
+    this.allowCapabilityDeniedTransport = options.allowCapabilityDeniedTransport;
     this.appCache = options.appCache ?? createMemoryAppCache({ name: 'substrate-agent-prompt-cache' });
     this.selfModelRuntimeRequired = options.selfModelRuntime?.requireWiring ?? false;
     this.observerEvalSidecar = options.observerEvalSidecar ?? null;
     this.fatigueBudget = options.fatigueBudget ?? null;
+    this.humanAttentionPressure = options.humanAttentionPressure ?? null;
     this.fatigueRegulationReservations = options.fatigueRegulationReservations ?? null;
     this.contactTrackingGate = options.contactTrackingGate ?? null;
     this.placesRegistryConfig = options.placesRegistryConfig;
@@ -689,13 +711,19 @@ export class SubstrateAgent {
     this.registerTool(this.toolRuntimeFacade.createToolSearchTool(), 'core');
     this.registerTool(this.toolRuntimeFacade.createToolsetTool(), 'core');
 
-    // Eagerly try to resolve the model, but don't throw if it fails
-    // (e.g. in tests with fake model names). Deferred to handleMessage if needed.
+    // Eagerly resolve the model. Continuous/test runtimes may defer a failed
+    // resolution until the first turn, while production startup fails closed.
     try {
-      this.refreshModelFromConfig('startup');
-    } catch (err) {
-      // Model will be resolved lazily on first handleMessage
-      log.debug('Deferred model resolution at startup', { error: String(err) });
+      this.refreshModelFromConfig('startup', undefined, 'propagate');
+    } catch (error) {
+      log.warn('Model resolution failed at startup', { error: toErrorMessage(error) });
+      const layoutMode = resolveRuntimeLayoutMode({
+        mode: process.env.PSFN_RUNTIME_LAYOUT_MODE,
+        nodeEnv: process.env.NODE_ENV,
+      });
+      if (layoutMode === RUNTIME_LAYOUT_MODE.PRODUCTION) {
+        throw error;
+      }
     }
   }
 
@@ -737,6 +765,13 @@ export class SubstrateAgent {
   }
 
   private refreshCapabilityRuntime(): void {
+    if (this.explicitCapabilityAccess) {
+      // Explicit access is an immutable launch artifact: it never re-reads
+      // disk, and owner-file churn must not widen or narrow it (mus2.1).
+      this.config.capabilityTier = this.explicitCapabilityAccess.getTier();
+      return;
+    }
+
     if (this.capabilityRuntime) {
       const refreshed = this.capabilityRuntime.refreshFromDisk();
       this.config.capabilityTier = refreshed.tier;
@@ -751,6 +786,7 @@ export class SubstrateAgent {
   }
 
   private resolveCapabilityAccess(): CapabilityAccess {
+    if (this.explicitCapabilityAccess) return this.explicitCapabilityAccess;
     if (this.capabilityRuntime) return this.capabilityRuntime;
 
     const tier = this.resolveCapabilityTier();
@@ -777,6 +813,7 @@ export class SubstrateAgent {
         tool,
         () => this.resolveCapabilityAccess(),
         () => this.buildEgressToolGuard(),
+        this.allowCapabilityDeniedTransport,
       );
       this.gatedToolCache.set(tool, wrapped);
       return wrapped;
@@ -858,6 +895,7 @@ export class SubstrateAgent {
   private refreshModelFromConfig(
     reason: 'startup' | 'turn-start' | 'settings-update',
     message?: SubstrateMessage,
+    resolutionFailurePolicy: 'retain-current' | 'propagate' = 'retain-current',
   ): void {
     const nextState = refreshModelFromConfigForRuntime({
       reason,
@@ -867,6 +905,7 @@ export class SubstrateAgent {
         modelSignature: this.modelSignature,
       },
       message,
+      resolutionFailurePolicy,
       setAgentModel: model => { this.agent.state.model = model; },
       getCurrentModelId: () => this.agent.state.model.id,
       logger: log,
@@ -946,6 +985,20 @@ export class SubstrateAgent {
 
   setCapabilityRuntime(runtime: CapabilityRuntime | null): void {
     this.capabilityRuntime = runtime;
+    this.gatedToolCache = new WeakMap<AgentTool<any>, AgentTool<any>>();
+    this.refreshCapabilityRuntime();
+  }
+
+  /**
+   * Inject an explicit capability access (mus2.1), e.g. an immutable derived
+   * shard access from `deriveShardCapabilityGrant`. While set, it governs tool
+   * gates, prompt tool availability, and audit tier fields, and it takes
+   * precedence over any disk-backed CapabilityRuntime — a shard agent must not
+   * re-resolve authority from an owner file or a tier name. Pass `null` to
+   * remove it and fall back to the runtime/tier resolution order.
+   */
+  setCapabilityAccess(access: CapabilityAccess | null): void {
+    this.explicitCapabilityAccess = access;
     this.gatedToolCache = new WeakMap<AgentTool<any>, AgentTool<any>>();
     this.refreshCapabilityRuntime();
   }
@@ -1459,6 +1512,7 @@ export class SubstrateAgent {
       durableChargeRecorder: this.durableChargeRecorder,
       durableChargeProbe: this.durableChargeProbe,
       fatigueBudget: this.fatigueBudget,
+      humanAttentionPressure: this.humanAttentionPressure,
       fatigueRegulationReservations: this.fatigueRegulationReservations,
       satellitePresence: this.satellitePresencePort,
       companionPresence: this.companionPresence,
@@ -1848,6 +1902,11 @@ export class SubstrateAgent {
       this.internalStateContinuityGapRenderCount += 1;
     }
 
+    // One access resolution feeds BOTH the advertised tier and the advertised
+    // token set (mus2.1): the prompt tool guide and the capability tool gates
+    // must agree on the same grant, including an injected custom shard access.
+    const capabilityAccess = this.resolveCapabilityAccess();
+
     return buildDynamicPromptTemplateVariablesForTurn({
       message,
       conversationScope,
@@ -1865,7 +1924,8 @@ export class SubstrateAgent {
       metacognitiveFlags,
       emotionAppraisalChain,
       modelId: this.agent.state.model.id,
-      capabilityTier: this.resolveCapabilityAccess().getTier(),
+      capabilityTier: capabilityAccess.getTier(),
+      capabilityGrantedTokens: capabilityAccess.getGrantedTokens(),
       activeToolCounts,
       extendedTools,
       coreToolNames,

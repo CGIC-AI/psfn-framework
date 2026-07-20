@@ -74,6 +74,7 @@ function isCompanionPrivate(memory: PurrMemory): boolean {
   return memory.sourceType === 'reflection'
     || memory.sourceType === 'heartbeat'
     || memory.sourceType === 'shard'
+    || memory.sourceType === 'subagent'
     || memory.scopeRef?.kind === 'system'
     || memory.scopeRef?.kind === 'shard';
 }

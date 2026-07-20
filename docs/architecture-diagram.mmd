@@ -1,24 +1,29 @@
 flowchart TB
-  %% Current PSFN runtime topology. Last updated 2026-06-29.
+  %% Current PSFN runtime topology. Last updated 2026-07-19.
 
   subgraph External["External surfaces"]
     DISCORD["Discord text/voice"]
     TELEGRAM["Telegram"]
     API["OpenAI-compatible API"]
-    VOICE["WebSocket voice / Satellite Hub"]
+    VOICE["API voice websocket"]
+    COMPANION_UI["Companion UI portal\nprimary-user PWA: roster, approvals,\nembodiment handoff, WS actions"]
+    SAT_HUB["Satellite Hub (external repo)\nsatellites + PWA, HA world control\nevent-bus relay"]
     GARDEN_BROWSER["Garden browser"]
   end
 
   subgraph Gateway["Gateway process - src/app/gateway/main.ts"]
     GW_RPC["GatewayServer\nNDJSON JSON-RPC socket"]
     LLM["LLM + embedding clients\nprovider secrets stay here"]
-    POLICY["Gateway policy\nURL/SSRF/fs/shell/git/web/media"]
-    CHANNELS["Channel adapters\nDiscord, Telegram, API, voice, Satellite Hub claims"]
+    POLICY["Gateway policy\nURL/SSRF/fs/shell/git/web/media,\nper-companion capability tiers"]
+    CHANNELS["Channel adapters + backplane\nDiscord, Telegram, API, voice, companion-ui;\nsatellite/places registries, hub claims"]
     HOST_TOOLS["Privileged host tools\nfs, repo, shell, web, vault, beads, media"]
+    FLEET_AUTH["Fleet auth + portal\npasskeys, Ed25519 hop capabilities, replay guard,\nSSO router, portal projection, Companion UI WS broker"]
+    INTAKE_GW["Intake firewall screening\nL0 envelope, L1 scanners, L1.5 ONNX classifier,\nL2/L3 LLM screeners, L2.5 vision"]
   end
 
   subgraph Operator["Operator process - src/app/operator/main.ts"]
-    GARDEN_HTTP["Garden HTTP/UI\n/, /memory, /settings, /api/admin/*"]
+    GARDEN_HTTP["Garden HTTP/UI\n/login, /garden, /api/admin/*\nCogSec approvals, cost analytics,\nshard directory + chat"]
+    FLEET_CP["Fleet Garden control plane\ncompanions/{id}/garden/* admission\nimmutable target registry, capability admission"]
     ADMIN_PROXY["Private admin transport proxy"]
   end
 
@@ -30,14 +35,16 @@ flowchart TB
     SCHED["Scheduler\nheartbeat, reflection, backups, rest-window work"]
     IDENTITY["Identity + prompt stack\ncharacter card, layers, north star"]
     TOOLS["Model-facing tools\ntool_search, toolset, memory, orient, wiki, journal, subagent"]
-    WORKERS["Subagent + shard internals\nbounded workers, fold-back review"]
+    WORKERS["Subagent + shard internals\ndigest-bound launch, TTL approval grants,\nbounded workers, fold-back review, ICP delivery"]
+    SINK_GATES["Intake firewall agent side\nL1 in-process screening + L4 sink gates\nprompt/memory/wiki/persona/trust/tool egress"]
     ADMIN_PRIVATE["Private admin surface"]
   end
 
   subgraph Storage["Persistence and owner roots"]
-    PG[("PostgreSQL 16+/17 + pgvector\nruntime state")]
+    PG[("PostgreSQL 16+/17 + pgvector\nruntime state, fleet-auth, model usage/cost")]
     JSONL[("Session JSONL\ncanonical L0 archive")]
-    OWNER[("JSON owner files\nsettings/models/providers/scheduler/capability/trust/charge/backup/skills/channels")]
+    OWNER[("JSON owner files\nsettings/models/providers/scheduler/capability/trust/charge/backup/skills/channels/intake-policy")]
+    QUARANTINE[("Intake quarantine store\ncompanion-data/state/intake-quarantine.json")]
     WORKSPACE[("WORKSPACE_PATH\npersonal files, wiki, generated media, authored skills")]
     BACKUPS[("Encrypted backups\npg_dump + companion tree + workspace + system config")]
   end
@@ -46,15 +53,28 @@ flowchart TB
   TELEGRAM --> CHANNELS
   API --> CHANNELS
   VOICE --> CHANNELS
+  COMPANION_UI -- "WS actions + approvals\npasskey / hop capabilities" --> FLEET_AUTH
+  SAT_HUB <-- "satellite turns / presence in,\nevent-bus relay out" --> CHANNELS
+  SAT_HUB -- "hub device assertions" --> FLEET_AUTH
   GARDEN_BROWSER --> GARDEN_HTTP
+  GARDEN_BROWSER -- "Fleet SSO\ncompanions/{id}/garden/*" --> FLEET_AUTH
 
   CHANNELS --> GW_RPC
   HOST_TOOLS --> POLICY
+  FLEET_AUTH -- "companion-ui channel" --> CHANNELS
+  FLEET_AUTH -- "companion-scoped\nGarden requests" --> FLEET_CP
+  CHANNELS -- "untrusted inbound\nweb, documents, images, transcripts" --> INTAKE_GW
+  HOST_TOOLS -- "web fetch/search content" --> INTAKE_GW
+  INTAKE_GW -- "released / sanitized" --> GW_RPC
+  INTAKE_GW -- "quarantine / block holds" --> QUARANTINE
   GW_RPC <--> AGENT_LOOP
   AGENT_LOOP --> LLM
   AGENT_LOOP --> POLICY
   GARDEN_HTTP --> ADMIN_PROXY
+  GARDEN_HTTP -- "companion-scoped routes" --> FLEET_CP
+  FLEET_CP -- "per-companion admin transports\nfan-out: this + sibling companions,\nfleet usage/cost aggregation" --> ADMIN_PROXY
   ADMIN_PROXY <--> ADMIN_PRIVATE
+  GARDEN_HTTP -- "double-confirm\nrelease / discard" --> QUARANTINE
 
   AGENT_LOOP --> SESSION
   AGENT_LOOP --> MEMORY
@@ -63,6 +83,9 @@ flowchart TB
   AGENT_LOOP --> IDENTITY
   AGENT_LOOP --> TOOLS
   AGENT_LOOP --> WORKERS
+  AGENT_LOOP --> SINK_GATES
+  SINK_GATES -- "gated writes" --> MEMORY
+  SINK_GATES -- "holds" --> QUARANTINE
 
   MEMORY --> PG
   EPISODIC --> PG

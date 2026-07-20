@@ -9,13 +9,9 @@ import {
   type ActiveConcernOwner,
   type ActiveConcernSensitivity,
 } from '../concerns.js';
-import {
-  normalizeOptionalIcpRootInitiationId,
-  type PendingFollowUp,
-  type PendingFollowUpWakeCondition,
-} from '../pending-follow-ups.js';
-import type { BehavioralPatternSample, BehavioralStrategySummary } from '../patterns.js';
+import { normalizeOptionalIcpRootInitiationId } from '../pending-follow-up-normalization.js';
 import { CHANNEL_TYPES as RUNTIME_CHANNEL_TYPES, type ChannelType } from '../../../shared/contracts/runtime.js';
+export { clampListLimit, MAX_LIST_LIMIT } from '../list-limit.js';
 
 export interface ActiveConcernRow {
   id: string;
@@ -98,6 +94,7 @@ export const PENDING_FOLLOW_UP_WAKE_CONDITIONS = [
   'background_recheck',
   'sustained_negative_mood',
 ] as const;
+type SharedPendingFollowUpWakeCondition = typeof PENDING_FOLLOW_UP_WAKE_CONDITIONS[number];
 export const CHANNEL_TYPES = RUNTIME_CHANNEL_TYPES;
 export const BEHAVIORAL_RESPONSE_STRATEGIES = [
   'empathy',
@@ -122,7 +119,6 @@ export const MAX_RESPONSE_EXCERPT_CHARS = 240;
 export const MAX_PROMOTION_MEMORY_ID_CHARS = 128;
 export const DEFAULT_CONCERN_LIST_LIMIT = 32;
 export const DEFAULT_PENDING_LIST_LIMIT = 32;
-export const MAX_LIST_LIMIT = 200;
 export const DEFAULT_RECENT_RESOLUTION_WINDOW_MS = 6 * 60 * 60 * 1000;
 export const DEFAULT_RECENT_RESOLUTION_LIMIT = 8;
 export const DEFAULT_BEHAVIORAL_LIST_LIMIT = 50;
@@ -225,22 +221,22 @@ export function normalizeTiming(value: string): 'immediate' | 'soon' | 'schedule
   return value as 'immediate' | 'soon' | 'scheduled';
 }
 
-export function normalizeWakeCondition(value: string): PendingFollowUpWakeCondition {
-  if (!PENDING_FOLLOW_UP_WAKE_CONDITIONS.includes(value as PendingFollowUpWakeCondition)) {
+export function normalizeWakeCondition(value: string): SharedPendingFollowUpWakeCondition {
+  if (!PENDING_FOLLOW_UP_WAKE_CONDITIONS.includes(value as SharedPendingFollowUpWakeCondition)) {
     throw new Error(`Unsupported pending follow-up wake condition: ${value}`);
   }
-  return value as PendingFollowUpWakeCondition;
+  return value as SharedPendingFollowUpWakeCondition;
 }
 
 export function normalizeWakeConditions(
-  value: readonly PendingFollowUpWakeCondition[] | undefined,
-): PendingFollowUpWakeCondition[] | undefined {
+  value: readonly SharedPendingFollowUpWakeCondition[] | undefined,
+): SharedPendingFollowUpWakeCondition[] | undefined {
   if (value === undefined) {
     return undefined;
   }
   const normalized = [...new Set(
     value
-      .filter((condition): condition is PendingFollowUpWakeCondition => typeof condition === 'string')
+      .filter((condition): condition is SharedPendingFollowUpWakeCondition => typeof condition === 'string')
       .map(condition => normalizeWakeCondition(condition)),
   )];
   if (normalized.length === 0) {
@@ -250,7 +246,7 @@ export function normalizeWakeConditions(
 }
 
 export function encodeWakeConditions(
-  value: readonly PendingFollowUpWakeCondition[] | undefined,
+  value: readonly SharedPendingFollowUpWakeCondition[] | undefined,
 ): string | null {
   const normalized = normalizeWakeConditions(value);
   return normalized ? JSON.stringify(normalized) : null;
@@ -259,7 +255,7 @@ export function encodeWakeConditions(
 export function decodeWakeConditions(
   value: string | null,
   fieldName: string,
-): PendingFollowUpWakeCondition[] | undefined {
+): SharedPendingFollowUpWakeCondition[] | undefined {
   if (value === null) {
     return undefined;
   }
@@ -272,7 +268,7 @@ export function decodeWakeConditions(
   if (!Array.isArray(parsed)) {
     throw new Error(`Field "${fieldName}" must be a JSON array`);
   }
-  return normalizeWakeConditions(parsed as PendingFollowUpWakeCondition[]);
+  return normalizeWakeConditions(parsed as SharedPendingFollowUpWakeCondition[]);
 }
 
 export function normalizeChannelType(value: string): ChannelType {
@@ -295,13 +291,6 @@ export function normalizeOutcomeScore(value: number): number {
     throw new Error(`Behavioral pattern outcome must be finite, received ${String(value)}`);
   }
   return Math.max(-1, Math.min(1, value));
-}
-
-export function clampListLimit(limit: number | undefined, fallback: number): number {
-  if (limit === undefined || !Number.isFinite(limit)) return fallback;
-  const floored = Math.floor(limit);
-  if (floored < 1) return 1;
-  return Math.min(floored, MAX_LIST_LIMIT);
 }
 
 export function clampSummaryLimit(limit: number | undefined): number {
@@ -484,7 +473,7 @@ export function mapActiveConcernRow(row: ActiveConcernRow): ActiveConcern {
   };
 }
 
-export function mapPendingFollowUpRow(row: PendingFollowUpRow): PendingFollowUp {
+export function mapPendingFollowUpRow(row: PendingFollowUpRow) {
   const dueAt = row.due_at === null ? undefined : normalizeIsoTimestamp(row.due_at, 'due_at');
   const contactId = row.contact_id === null ? undefined : normalizeContactId(row.contact_id);
   const sourceMessageId = row.source_message_id === null ? undefined : normalizeContactId(row.source_message_id);
@@ -534,7 +523,7 @@ export function mapPendingFollowUpRow(row: PendingFollowUpRow): PendingFollowUp 
   };
 }
 
-export function mapBehavioralPatternRow(row: BehavioralPatternRow): BehavioralPatternSample {
+export function mapBehavioralPatternRow(row: BehavioralPatternRow) {
   const outcomeScore = row.outcome_score === null ? undefined : normalizeOutcomeScore(row.outcome_score);
   const outcomeObservedAt = row.outcome_observed_at === null
     ? undefined
@@ -561,7 +550,7 @@ export function mapBehavioralPatternRow(row: BehavioralPatternRow): BehavioralPa
   };
 }
 
-export function mapBehavioralStrategySummaryRow(row: BehavioralPatternSummaryRow): BehavioralStrategySummary {
+export function mapBehavioralStrategySummaryRow(row: BehavioralPatternSummaryRow) {
   const lastOutcomeAt = row.last_outcome_at === null ? undefined : normalizeIsoTimestamp(row.last_outcome_at, 'last_outcome_at');
   return {
     strategy: normalizeStrategy(row.strategy),
@@ -658,7 +647,9 @@ export function formatSigned(value: number): string {
   return normalized >= 0 ? `+${fixed}` : fixed;
 }
 
-export function toBehavioralNote(summary: BehavioralStrategySummary): string {
+export function toBehavioralNote(
+  summary: ReturnType<typeof mapBehavioralStrategySummaryRow>,
+): string {
   const positiveRate = summary.resolvedCount > 0
     ? Math.round((summary.positiveCount / summary.resolvedCount) * 100)
     : 0;

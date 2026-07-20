@@ -28,6 +28,7 @@ import {
 import { renderFinalPromptSection } from '../../identity/prompt-runtime.js';
 import { getDefaultRuntimePromptSections } from '../../identity/runtime-prompt-layers.js';
 import { resolveConversationScopeFromMetadata } from '../conversation-scope.js';
+import { resolveTierCapabilityTokens } from '../../../system/capabilities/tiers.js';
 import {
   classifyGroupMemoryChannel,
   type GroupMemoryClassification,
@@ -410,6 +411,7 @@ const BASE_DYNAMIC_INPUT = {
   now: FIXTURE_NOW,
   modelId: 'test-model',
   capabilityTier: 'autonomous' as const,
+  capabilityGrantedTokens: new Set(resolveTierCapabilityTokens('autonomous')),
   activeToolCounts: { core: 0, extended: 0, total: 0 },
   extendedTools: [] as never[],
   coreToolNames: new Set<string>(),

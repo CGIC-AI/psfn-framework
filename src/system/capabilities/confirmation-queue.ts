@@ -1,6 +1,10 @@
 import { randomUUID } from 'node:crypto';
 import { isRecord } from '../../shared/utils/types.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
+import type {
+  ApprovalAttribution,
+  ApprovalSourceSystem,
+} from '../../shared/contracts/approval-envelope.js';
 
 export const DEFAULT_CONFIRMATION_EXPIRY_MS = 24 * 60 * 60 * 1000;
 
@@ -15,6 +19,46 @@ export interface ConfirmationResolverIdentity {
 
 export interface ConfirmationExecutionContext {
   resolver?: ConfirmationResolverIdentity;
+}
+
+export interface ConfirmedApprovalExecution {
+  readonly approvalId: string;
+  readonly decision: Extract<ConfirmationDecision, 'approve' | 'modify'>;
+  readonly resolver?: ConfirmationResolverIdentity;
+}
+
+/**
+ * Runtime proof that an executor is running inside this queue's one terminal
+ * approve/modify dispatch. A structural object or captured context is not
+ * authority: records exist only for the duration of the executor call.
+ */
+const confirmedApprovalExecutions =
+  new WeakMap<ConfirmationExecutionContext, ConfirmedApprovalExecution>();
+
+export function readConfirmedApprovalExecution(
+  context: ConfirmationExecutionContext,
+  approvalId: string,
+): ConfirmedApprovalExecution {
+  const confirmed = confirmedApprovalExecutions.get(context);
+  if (!confirmed || confirmed.approvalId !== approvalId) {
+    throw new Error('Confirmation execution is not backed by the resolved approval');
+  }
+  return {
+    approvalId: confirmed.approvalId,
+    decision: confirmed.decision,
+    ...(confirmed.resolver ? { resolver: { ...confirmed.resolver } } : {}),
+  };
+}
+
+/**
+ * Immutable server-derived approval ownership. `companionId` is the parent
+ * routing/authorization key; `shardId` is provenance only. Approval surfaces
+ * must scope by this record rather than by browser fields or presentation
+ * attribution.
+ */
+export interface ConfirmationApprovalOwner {
+  companionId: string;
+  shardId?: string;
 }
 
 /**
@@ -49,6 +93,16 @@ export interface ConfirmationQueueEntry {
   resolutionAuthority?: ConfirmationResolutionAuthority;
   requestedAt: number;
   expiresAt: number;
+  /**
+   * Unified-approval-envelope provenance (bead psfn-framework-13sk / ct0v).
+   * Optional and immutable: additive metadata the enqueuer resolved server-side
+   * (e.g. the gateway confirmation gate). Ordinary entries omit both fields and
+   * behave exactly as before. `attribution.parentId`, when present, MUST equal
+   * the authenticated owner — the emission observer enforces that fail-closed.
+   */
+  sourceSystem?: ApprovalSourceSystem;
+  attribution?: ApprovalAttribution;
+  approvalOwner?: ConfirmationApprovalOwner;
 }
 
 export interface ConfirmationQueueHistoryEntry extends Partial<ConfirmationQueueEntry> {
@@ -71,6 +125,11 @@ export interface ConfirmationQueueRequest {
   companionReason: string;
   resolutionAuthority?: ConfirmationResolutionAuthority;
   expiresInMs?: number;
+  /** Optional unified-envelope provenance; see {@link ConfirmationQueueEntry}. */
+  sourceSystem?: ApprovalSourceSystem;
+  attribution?: ApprovalAttribution;
+  /** Optional trusted owner; approval boundaries must derive and validate it. */
+  approvalOwner?: ConfirmationApprovalOwner;
 }
 
 export interface ConfirmationResolveRequest {
@@ -101,13 +160,22 @@ export interface ConfirmationQueueResolutionOutcome {
   entry: ConfirmationQueueEntry;
 }
 
+export type ConfirmationQueueTerminalOutcome =
+  ConfirmationQueueResolutionOutcome & {
+    status: 'denied' | 'expired';
+    executed: false;
+  };
+
 /**
  * Lifecycle observer for the confirmation queue — the single choke point for
  * approval enqueue/resolve/expiry (w9hj.1 companion relay emission seam).
- * Callbacks run synchronously inside queue operations and MUST NOT throw;
- * wire asynchronous work (event-bus emission) behind them.
+ * `beforeTerminalized` is a synchronous commit guard: it MAY throw, in which
+ * case the queue retains the pending entry and emits no resolution. The other
+ * callbacks MUST NOT throw; wire asynchronous work (event-bus emission)
+ * behind them.
  */
 export interface ConfirmationQueueObserver {
+  beforeTerminalized?(outcome: ConfirmationQueueTerminalOutcome): void;
   onEnqueued?(entry: ConfirmationQueueEntry): void;
   onResolved?(outcome: ConfirmationQueueResolutionOutcome): void;
 }
@@ -128,6 +196,22 @@ type ConfirmationExecutor = (
 interface PendingEntry {
   entry: ConfirmationQueueEntry;
   execute: ConfirmationExecutor;
+}
+
+function cloneAttribution(input: ApprovalAttribution): ApprovalAttribution {
+  return {
+    parentLabel: input.parentLabel,
+    parentId: input.parentId,
+    ...(input.shardLabel !== undefined ? { shardLabel: input.shardLabel } : {}),
+    ...(input.shardId !== undefined ? { shardId: input.shardId } : {}),
+  };
+}
+
+function cloneApprovalOwner(input: ConfirmationApprovalOwner): ConfirmationApprovalOwner {
+  return {
+    companionId: input.companionId,
+    ...(input.shardId !== undefined ? { shardId: input.shardId } : {}),
+  };
 }
 
 function cloneRecord(input: Record<string, unknown>): Record<string, unknown> {
@@ -169,6 +253,13 @@ export class ConfirmationQueue {
     });
   }
 
+  private guardTerminalResolution(outcome: ConfirmationQueueTerminalOutcome): void {
+    this.observer?.beforeTerminalized?.({
+      ...outcome,
+      entry: this.snapshot(outcome.entry),
+    });
+  }
+
   enqueue(
     request: ConfirmationQueueRequest,
     execute: ConfirmationExecutor,
@@ -188,6 +279,11 @@ export class ConfirmationQueue {
         : {}),
       requestedAt,
       expiresAt: requestedAt + expiresInMs,
+      ...(request.sourceSystem ? { sourceSystem: request.sourceSystem } : {}),
+      ...(request.attribution ? { attribution: cloneAttribution(request.attribution) } : {}),
+      ...(request.approvalOwner
+        ? { approvalOwner: cloneApprovalOwner(request.approvalOwner) }
+        : {}),
     };
     this.pending.set(entry.id, { entry, execute });
     this.observer?.onEnqueued?.(this.snapshot(entry));
@@ -218,6 +314,17 @@ export class ConfirmationQueue {
     return found ? this.snapshot(found.entry) : null;
   }
 
+  /**
+   * Reads only the immutable owner needed to authorize a resolution. Unlike
+   * `getPending`, this does not expire first: the subsequent `resolve` call
+   * remains responsible for returning the precise `expired` outcome.
+   */
+  getApprovalOwner(id: string): ConfirmationApprovalOwner | null {
+    const found = this.pending.get(id)?.entry.approvalOwner
+      ?? this.history.find(entry => entry.id === id)?.approvalOwner;
+    return found ? cloneApprovalOwner(found) : null;
+  }
+
   async resolve(
     request: ConfirmationResolveRequest,
     resolver?: ConfirmationResolverIdentity,
@@ -235,6 +342,16 @@ export class ConfirmationQueue {
 
     const now = this.now();
     if (pending.entry.expiresAt <= now) {
+      const outcome: ConfirmationQueueTerminalOutcome = {
+        id: request.id,
+        status: 'expired',
+        resolvedAt: now,
+        executed: false,
+        decision: request.decision,
+        ...(resolver ? { resolver } : {}),
+        entry: pending.entry,
+      };
+      this.guardTerminalResolution(outcome);
       this.pending.delete(request.id);
       this.history.push(this.snapshotHistory({
         ...pending.entry,
@@ -245,15 +362,7 @@ export class ConfirmationQueue {
         message: 'Confirmation request expired before resolution.',
         ...(resolver ? { resolver } : {}),
       }));
-      this.notifyResolved({
-        id: request.id,
-        status: 'expired',
-        resolvedAt: now,
-        executed: false,
-        decision: request.decision,
-        ...(resolver ? { resolver } : {}),
-        entry: pending.entry,
-      });
+      this.notifyResolved(outcome);
       this.expirePending();
       return {
         id: request.id,
@@ -273,6 +382,16 @@ export class ConfirmationQueue {
     }
 
     if (request.decision === 'deny') {
+      const outcome: ConfirmationQueueTerminalOutcome = {
+        id: request.id,
+        status: 'denied',
+        resolvedAt: now,
+        executed: false,
+        decision: request.decision,
+        ...(resolver ? { resolver } : {}),
+        entry: pending.entry,
+      };
+      this.guardTerminalResolution(outcome);
       this.pending.delete(request.id);
       this.history.push(this.snapshotHistory({
         ...pending.entry,
@@ -283,15 +402,7 @@ export class ConfirmationQueue {
         message: 'Action denied by operator.',
         ...(resolver ? { resolver } : {}),
       }));
-      this.notifyResolved({
-        id: request.id,
-        status: 'denied',
-        resolvedAt: now,
-        executed: false,
-        decision: request.decision,
-        ...(resolver ? { resolver } : {}),
-        entry: pending.entry,
-      });
+      this.notifyResolved(outcome);
       return {
         id: request.id,
         status: 'denied',
@@ -327,10 +438,16 @@ export class ConfirmationQueue {
     });
     this.pending.delete(request.id);
 
+    const executionContext: ConfirmationExecutionContext = {
+      ...(resolver ? { resolver } : {}),
+    };
+    confirmedApprovalExecutions.set(executionContext, {
+      approvalId: runEntry.id,
+      decision: request.decision,
+      ...(resolver ? { resolver: { ...resolver } } : {}),
+    });
     try {
-      await pending.execute(nextParams, runEntry, {
-        ...(resolver ? { resolver } : {}),
-      });
+      await pending.execute(nextParams, runEntry, executionContext);
       const resolvedAt = this.now();
       const status = request.decision === 'modify' ? 'modified' : 'approved';
       this.history.push(this.snapshotHistory({
@@ -391,6 +508,8 @@ export class ConfirmationQueue {
         message: toErrorMessage(error),
         executed,
       };
+    } finally {
+      confirmedApprovalExecutions.delete(executionContext);
     }
   }
 
@@ -399,6 +518,14 @@ export class ConfirmationQueue {
     let expired = 0;
     for (const [id, pending] of this.pending) {
       if (pending.entry.expiresAt <= now) {
+        const outcome: ConfirmationQueueTerminalOutcome = {
+          id,
+          status: 'expired',
+          resolvedAt: now,
+          executed: false,
+          entry: pending.entry,
+        };
+        this.guardTerminalResolution(outcome);
         this.pending.delete(id);
         this.history.push(this.snapshotHistory({
           ...pending.entry,
@@ -407,13 +534,7 @@ export class ConfirmationQueue {
           executed: false,
           message: 'Confirmation request expired before resolution.',
         }));
-        this.notifyResolved({
-          id,
-          status: 'expired',
-          resolvedAt: now,
-          executed: false,
-          entry: pending.entry,
-        });
+        this.notifyResolved(outcome);
         expired += 1;
       }
     }
@@ -424,6 +545,10 @@ export class ConfirmationQueue {
     return {
       ...entry,
       params: cloneRecord(entry.params),
+      ...(entry.attribution ? { attribution: cloneAttribution(entry.attribution) } : {}),
+      ...(entry.approvalOwner
+        ? { approvalOwner: cloneApprovalOwner(entry.approvalOwner) }
+        : {}),
     };
   }
 
@@ -432,6 +557,10 @@ export class ConfirmationQueue {
       ...entry,
       ...(entry.params ? { params: cloneRecord(entry.params) } : {}),
       ...(entry.appliedParams ? { appliedParams: cloneRecord(entry.appliedParams) } : {}),
+      ...(entry.attribution ? { attribution: cloneAttribution(entry.attribution) } : {}),
+      ...(entry.approvalOwner
+        ? { approvalOwner: cloneApprovalOwner(entry.approvalOwner) }
+        : {}),
     };
   }
 }

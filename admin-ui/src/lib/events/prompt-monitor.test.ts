@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import test from 'node:test';
+import { test } from 'vitest';
 import type { TurnID } from '../../../../src/shared/contracts/runtime.js';
 import { buildPromptLoomData } from '../../../../src/operator/garden/services/session-turn-observability.js';
 import type {

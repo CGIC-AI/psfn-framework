@@ -8,6 +8,7 @@ import {
 } from './fleet-authorization-context.js';
 import {
   compileCompanionUiAction,
+  companionUiShardSelector,
   type CompanionUiPhysicalCapabilityCeiling,
   type CompiledCompanionUiAction,
 } from '../fleet-auth/companion-ui-action.js';
@@ -98,6 +99,10 @@ export class GatewayCompanionUiActionBroker {
     signer: GatewayRequestCapabilitySigner;
     childAssertions: GatewayFleetAuthChildAssertionBroker;
     dispatch: CompanionUiAgentDispatchPort;
+    approvalOwner: Readonly<{ ownerOf(id: string): string | undefined }>;
+    shardDeployment?: Readonly<{
+      ownerOfLiveShard(shardId: string, parentCompanionId: CompanionId): Promise<string | undefined>;
+    }>;
   }) {}
 
   async execute(input: CompanionUiActionBrokerInput): Promise<unknown> {
@@ -118,6 +123,22 @@ export class GatewayCompanionUiActionBroker {
     }
     if (compiled.frame.resource === 'confirmations.resolve' && context.operator.role === 'guest') {
       throw new CompanionUiActionDeniedError();
+    }
+    if (compiled.frame.resource === 'confirmations.resolve') {
+      const body = compiled.frame.body as Readonly<{ id: string }>;
+      if (this.options.approvalOwner.ownerOf(body.id) !== context.companionId) {
+        throw new CompanionUiActionDeniedError();
+      }
+    }
+    const shardId = companionUiShardSelector(compiled.frame);
+    if (shardId) {
+      const storedOwner = await this.options.shardDeployment?.ownerOfLiveShard(
+        shardId,
+        context.companionId,
+      );
+      if (storedOwner !== context.companionId) {
+        throw new CompanionUiActionDeniedError();
+      }
     }
     const versions = authorityVersions(context);
     const parentRequestId = randomUUID();

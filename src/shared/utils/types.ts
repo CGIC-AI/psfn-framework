@@ -14,6 +14,28 @@ export function isRfc4122Uuid(value: unknown): value is string {
   return typeof value === 'string' && RFC_4122_UUID_PATTERN.test(value);
 }
 
+/** Fail closed unless every required key is present and every key is allowlisted. */
+export function hasExactKeys(
+  value: Record<string, unknown>,
+  required: readonly string[],
+  optional: readonly string[] = [],
+): boolean {
+  const allowed = new Set([...required, ...optional]);
+  return required.every(key => Object.hasOwn(value, key))
+    && Object.keys(value).every(key => allowed.has(key));
+}
+
+/** Bounded non-empty string guard for strict external protocol parsing. */
+export function isBoundedString(
+  value: unknown,
+  maximum = 65_536,
+  minimum = 1,
+): value is string {
+  return typeof value === 'string'
+    && value.length >= minimum
+    && value.length <= maximum;
+}
+
 /** Canonical UTC ISO-8601 timestamp with millisecond precision. */
 export function isCanonicalIsoTimestamp(value: unknown): value is string {
   if (typeof value !== 'string') return false;
@@ -62,4 +84,22 @@ export function normalizeStringArray(
   }
 
   return [...unique];
+}
+
+/**
+ * Audited widening seam (bead psfn-framework-aylm.5): view an already-typed
+ * plain-data object as a `Record<string, unknown>` for structural walking —
+ * e.g. redaction digests over a validated decision union, strict re-parsing
+ * of a caller-typed candidate, or persisted-snapshot surgery.
+ *
+ * This is the type-erasing direction only: property names and types are
+ * forgotten and every read comes back as `unknown`, so the view cannot
+ * manufacture trust. A caller that needs a typed value back must go through
+ * its own validated (or explicitly documented) narrowing seam. It replaces
+ * scattered `x as unknown as Record<string, unknown>` casts; keep call sites
+ * to plain JSON-ish data (no class instances whose behavior the record view
+ * would hide).
+ */
+export function toRecordView(value: object): Record<string, unknown> {
+  return value as Record<string, unknown>;
 }

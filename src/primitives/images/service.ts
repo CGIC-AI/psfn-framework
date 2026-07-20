@@ -1,11 +1,13 @@
-import { randomUUID } from 'node:crypto';
 import { mkdir, writeFile } from 'node:fs/promises';
-import { basename, extname, join } from 'node:path';
+import { join } from 'node:path';
 import { ComfyUiImageClient } from './comfyui.js';
 import { FalImageClient, isFalContentPolicyError, isTransientFalError } from './fal.js';
 import {
   DEFAULT_FAL_CREATE_MODEL_CHAIN,
   DEFAULT_FAL_EDIT_MODEL_CHAIN,
+  normalizeFalCreateModelSetting,
+  normalizeFalEditModelSetting,
+  normalizeImageProviderSetting,
   type FalCreateModel,
   type FalEditModel,
 } from './types.js';
@@ -26,6 +28,7 @@ import type {
   ImageResultAsset,
   ImageRuntimeConfig,
 } from './types.js';
+import { buildImageFileName } from './file-naming.js';
 
 const log = createComponentLogger('ImageService');
 const FAL_TRANSIENT_ATTEMPTS = 2;
@@ -79,43 +82,6 @@ function hasWorkflowForMode(
   return Boolean(config.imageWorkflows?.comfyUi?.[mode]?.workflow);
 }
 
-function inferExtension(url: string, contentType: string | undefined): string {
-  const normalizedType = (contentType ?? '').trim().toLowerCase();
-  if (normalizedType.startsWith('image/png')) return '.png';
-  if (normalizedType.startsWith('image/jpeg')) return '.jpg';
-  if (normalizedType.startsWith('image/webp')) return '.webp';
-  if (normalizedType.startsWith('image/gif')) return '.gif';
-  if (normalizedType.startsWith('image/bmp')) return '.bmp';
-  if (normalizedType.startsWith('image/tiff')) return '.tiff';
-
-  try {
-    const candidate = extname(new URL(url).pathname).trim().toLowerCase();
-    if (candidate) {
-      return candidate;
-    }
-  } catch {
-    // Fall through to default extension.
-  }
-
-  return '.png';
-}
-
-function sanitizeFileStem(value: string): string {
-  return value.replace(/[^A-Za-z0-9._-]+/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '') || 'image';
-}
-
-function deriveFileStem(asset: ImageResultAsset, requestId: string | undefined, index: number): string {
-  const fromAsset = asset.fileName?.trim();
-  if (fromAsset) {
-    const name = basename(fromAsset, extname(fromAsset));
-    return sanitizeFileStem(name);
-  }
-  if (requestId) {
-    return sanitizeFileStem(`${requestId}-${index + 1}`);
-  }
-  return `image-${index + 1}`;
-}
-
 function resolveConfiguredCompanionDataDirOrNull(config: ImageRuntimeConfig): string | null {
   const rawConfig = config as Record<string, unknown>;
   const hasExplicitCompanionDir = typeof rawConfig.companionDataDir === 'string' && rawConfig.companionDataDir.trim().length > 0;
@@ -133,24 +99,34 @@ function resolveConfiguredCompanionDataDirOrNull(config: ImageRuntimeConfig): st
 function resolveFalFallbackModelChain(
   mode: 'create',
   params: ImageCreateParams,
-  provider: ImageCreateParams['provider'],
+  requestedProvider: ImageCreateParams['provider'],
+  configuredModel: FalCreateModel | undefined,
 ): readonly (FalCreateModel | undefined)[];
 function resolveFalFallbackModelChain(
   mode: 'edit',
   params: ImageEditParams,
-  provider: ImageEditParams['provider'],
+  requestedProvider: ImageEditParams['provider'],
+  configuredModel: FalEditModel | undefined,
 ): readonly (FalEditModel | undefined)[];
 function resolveFalFallbackModelChain(
   mode: ImageMode,
   params: ImageCreateParams | ImageEditParams,
-  provider: ImageCreateParams['provider'] | ImageEditParams['provider'],
+  requestedProvider: ImageCreateParams['provider'] | ImageEditParams['provider'],
+  configuredModel: FalCreateModel | FalEditModel | undefined,
 ): readonly (FalCreateModel | FalEditModel | undefined)[] {
-  if (params.model || provider !== 'auto') {
+  if (params.model) {
     return [params.model];
   }
-  return mode === 'create'
+  const defaultChain = mode === 'create'
     ? DEFAULT_FAL_CREATE_MODEL_CHAIN
     : DEFAULT_FAL_EDIT_MODEL_CHAIN;
+  if (configuredModel) {
+    return [configuredModel];
+  }
+  if (requestedProvider !== undefined && requestedProvider !== 'auto') {
+    return [undefined];
+  }
+  return defaultChain;
 }
 
 function applyFalModel(
@@ -173,6 +149,41 @@ function applyFalModel(
     return { ...(params as ImageCreateParams), model: model as FalCreateModel };
   }
   return { ...(params as ImageEditParams), model: model as FalEditModel };
+}
+
+function resolveSettingsProvider(
+  params: ImageCreateParams | ImageEditParams,
+  config: ImageRuntimeConfig,
+): ImageRuntimeConfig['imageProvider'] {
+  const value = params.settingsDefaults?.provider ?? config.imageProvider;
+  return value === undefined
+    ? undefined
+    : normalizeImageProviderSetting(value, 'settingsDefaults.provider');
+}
+
+function resolveSettingsModel(
+  mode: 'create',
+  params: ImageCreateParams,
+  config: ImageRuntimeConfig,
+): FalCreateModel | undefined;
+function resolveSettingsModel(
+  mode: 'edit',
+  params: ImageEditParams,
+  config: ImageRuntimeConfig,
+): FalEditModel | undefined;
+function resolveSettingsModel(
+  mode: ImageMode,
+  params: ImageCreateParams | ImageEditParams,
+  config: ImageRuntimeConfig,
+): FalCreateModel | FalEditModel | undefined {
+  const value = params.settingsDefaults?.model
+    ?? (mode === 'create' ? config.imageFalCreateModel : config.imageFalEditModel);
+  if (value === undefined) {
+    return undefined;
+  }
+  return mode === 'create'
+    ? normalizeFalCreateModelSetting(value, 'settingsDefaults.model')
+    : normalizeFalEditModelSetting(value, 'settingsDefaults.model');
 }
 
 function buildGeneratedImageMetadata(
@@ -241,7 +252,14 @@ export class ImageService implements ImageOperations {
       this.config.credentialVault,
       'FAL_API_KEY',
     );
-    const provider = params.provider ?? 'auto';
+    // An explicit Fal catalog model is itself an explicit provider selection
+    // when provider is omitted. It must not be discarded by a configured
+    // ComfyUI default.
+    const requestedProvider = params.provider ?? (params.model ? 'fal' : undefined);
+    const provider = requestedProvider ?? resolveSettingsProvider(params, this.config) ?? 'auto';
+    const configuredModel = mode === 'create'
+      ? resolveSettingsModel('create', params as ImageCreateParams, this.config)
+      : resolveSettingsModel('edit', params as ImageEditParams, this.config);
     if (provider === 'comfyui') {
       const result = mode === 'create'
         ? await this.runComfy('create', params as ImageCreateParams, context)
@@ -263,8 +281,8 @@ export class ImageService implements ImageOperations {
       // Owner-file backed polling limits ride the runtime config (zet.7).
       const falClient = new FalImageClient(falApiKey, this.fetchImpl, this.config);
       const result = mode === 'create'
-        ? await this.runFal('create', params as ImageCreateParams, provider, falClient, context)
-        : await this.runFal('edit', params as ImageEditParams, provider, falClient, context);
+        ? await this.runFal('create', params as ImageCreateParams, requestedProvider, configuredModel as FalCreateModel | undefined, falClient, context)
+        : await this.runFal('edit', params as ImageEditParams, requestedProvider, configuredModel as FalEditModel | undefined, falClient, context);
       return await this.persistGeneratedImages(result, params);
     } catch (error) {
       if (
@@ -285,27 +303,40 @@ export class ImageService implements ImageOperations {
   private async runFal(
     mode: 'create',
     params: ImageCreateParams,
-    provider: ImageCreateParams['provider'],
+    requestedProvider: ImageCreateParams['provider'],
+    configuredModel: FalCreateModel | undefined,
     falClient: FalImageClient,
     context: ImageRunContext,
   ): Promise<ImageGenerationResult>;
   private async runFal(
     mode: 'edit',
     params: ImageEditParams,
-    provider: ImageEditParams['provider'],
+    requestedProvider: ImageEditParams['provider'],
+    configuredModel: FalEditModel | undefined,
     falClient: FalImageClient,
     context: ImageRunContext,
   ): Promise<ImageGenerationResult>;
   private async runFal(
     mode: ImageMode,
     params: ImageCreateParams | ImageEditParams,
-    provider: ImageCreateParams['provider'] | ImageEditParams['provider'],
+    requestedProvider: ImageCreateParams['provider'] | ImageEditParams['provider'],
+    configuredModel: FalCreateModel | FalEditModel | undefined,
     falClient: FalImageClient,
     context: ImageRunContext,
   ): Promise<ImageGenerationResult> {
     const modelChain = mode === 'create'
-      ? resolveFalFallbackModelChain('create', params as ImageCreateParams, provider)
-      : resolveFalFallbackModelChain('edit', params as ImageEditParams, provider);
+      ? resolveFalFallbackModelChain(
+          'create',
+          params as ImageCreateParams,
+          requestedProvider,
+          configuredModel as FalCreateModel | undefined,
+        )
+      : resolveFalFallbackModelChain(
+          'edit',
+          params as ImageEditParams,
+          requestedProvider,
+          configuredModel as FalEditModel | undefined,
+        );
     let lastError: unknown;
     for (let modelIndex = 0; modelIndex < modelChain.length; modelIndex += 1) {
       const model = modelChain[modelIndex];
@@ -522,9 +553,7 @@ export class ImageService implements ImageOperations {
         return asset;
       }
 
-      const extension = inferExtension(asset.url, asset.contentType);
-      const fileStem = deriveFileStem(asset, result.requestId, index);
-      const fileName = `${fileStem}-${randomUUID().slice(0, 8)}${extension}`;
+      const fileName = buildImageFileName(asset, result.requestId, index);
       const localPath = join(storageDir, fileName);
 
       try {

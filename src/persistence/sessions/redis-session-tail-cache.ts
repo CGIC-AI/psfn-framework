@@ -46,6 +46,24 @@ export const SESSION_TAIL_EPOCH_KEY_PREFIX = 'psfn:session-tail-epoch:';
  * fencing does that); it only garbage-collects abandoned epoch keys.
  */
 export const SESSION_TAIL_KEY_TTL_MS = 7 * 24 * 60 * 60 * 1_000;
+const REDIS_PURGE_LIMITS = {
+  scanCount: 100,
+  deleteBatchSize: 100,
+} as const;
+
+function escapeRedisGlobLiteral(value: string): string {
+  return value.replace(/[\\*?[\]]/gu, '\\$&');
+}
+
+function normalizeScannedKeys(item: string | readonly string[]): string[] {
+  const keys = typeof item === 'string' ? [item] : item;
+  for (const key of keys) {
+    if (typeof key !== 'string') {
+      throw new Error('Redis session tail SCAN returned a non-string key');
+    }
+  }
+  return keys;
+}
 
 export interface RedisSessionTailCacheOptions {
   client: RedisClientLike;
@@ -168,6 +186,40 @@ export class RedisSessionTailCache implements SessionTailCachePort {
 
   async invalidateChannel(channelKey: string, epoch: number): Promise<void> {
     await this.send(['DEL', this.buildTailKey(channelKey, epoch)]);
+  }
+
+  /**
+   * Maintenance-only exact-session purge. The sole wildcard is the epoch
+   * suffix beneath this companion + channel key family; every SCAN result is
+   * revalidated before deletion so no neighboring session or companion key
+   * can be removed.
+   */
+  async purgeChannelKeyFamily(channelKey: string): Promise<number> {
+    await this.ensureConnected();
+    const exactTailPrefix = this.buildTailKey(channelKey, 0).slice(0, -1);
+    const match = `${escapeRedisGlobLiteral(exactTailPrefix)}*`;
+    const epochKey = this.buildEpochKey(channelKey);
+    const keys = new Set<string>([epochKey]);
+    for await (const item of this.client.scanIterator({
+      MATCH: match,
+      COUNT: REDIS_PURGE_LIMITS.scanCount,
+    })) {
+      for (const key of normalizeScannedKeys(item)) {
+        const suffix = key.startsWith(exactTailPrefix)
+          ? key.slice(exactTailPrefix.length)
+          : '';
+        if (/^\d+$/u.test(suffix)) keys.add(key);
+      }
+    }
+
+    let removed = 0;
+    const pending = [...keys];
+    for (let offset = 0; offset < pending.length; offset += REDIS_PURGE_LIMITS.deleteBatchSize) {
+      removed += await this.client.del(
+        ...pending.slice(offset, offset + REDIS_PURGE_LIMITS.deleteBatchSize),
+      );
+    }
+    return removed;
   }
 
   async bumpEpoch(channelKey: string): Promise<number> {

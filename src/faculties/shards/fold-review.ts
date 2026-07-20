@@ -1,5 +1,6 @@
 import { isRecord } from '../../shared/utils/types.js';
 import { clampSigned, clampUnit } from '../../shared/utils/numeric.js';
+import { uniqueStrings } from '../../shared/utils/strings.js';
 import { existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import type { SensitivityLevel, MemoryType, MemoryProvenance } from '../memory/types.js';
@@ -238,18 +239,6 @@ function cloneLineage(lineage: ShardResultLineageEnvelope): ShardResultLineageEn
     ...(lineage.satelliteRouting ? { satelliteRouting: { ...lineage.satelliteRouting } } : {}),
     sourceMessage: { ...lineage.sourceMessage },
   };
-}
-
-function uniqueStrings(values: readonly string[]): string[] {
-  const seen = new Set<string>();
-  const out: string[] = [];
-  for (const value of values) {
-    const normalized = value.trim();
-    if (!normalized || seen.has(normalized)) continue;
-    seen.add(normalized);
-    out.push(normalized);
-  }
-  return out;
 }
 
 function buildMemoryItemBlockingReasons(output: ShardTaggedOutput): string[] {
@@ -564,13 +553,24 @@ function buildMemoryWriteOptions(
     return null;
   }
 
+  const isSubagentOrigin = item.output.provenance.workerKind === 'subagent';
+  const subagentId = item.output.provenance.subagentId?.trim();
+  if (isSubagentOrigin && (!subagentId || subagentId !== record.shardId)) {
+    return null;
+  }
+  const originId = isSubagentOrigin ? subagentId : record.shardId;
+  if (!originId) {
+    return null;
+  }
+  const originKind = isSubagentOrigin ? 'subagent' : 'shard';
   const provenance: MemoryProvenance = {
     channelId: record.channelId,
-    shardId: record.shardId,
+    ...(isSubagentOrigin
+      ? { subagentId: originId, actor: 'subagent' as const }
+      : { shardId: originId, actor: 'operator' as const }),
     toolName: item.output.provenance.sourceToolName,
     toolCallId: item.output.provenance.toolCallId,
-    actor: 'operator',
-    reason: note ?? 'shard_fold_review_approved',
+    reason: note ?? `${originKind}_fold_review_approved`,
   };
 
   return {
@@ -583,17 +583,17 @@ function buildMemoryWriteOptions(
     sensitivity: item.candidate.sensitivity,
     extractedAt: item.output.createdAt,
     sourceRef: [
-      `source:shard:${record.shardId}`,
+      `source:${originKind}:${originId}`,
       item.output.provenance.sourceToolName ? `tool:${item.output.provenance.sourceToolName}` : null,
       item.output.provenance.toolCallId ? `invocation:${item.output.provenance.toolCallId}` : null,
       'fold_review:approved',
     ].filter((part): part is string => Boolean(part)).join('|'),
-    sourceType: 'shard',
+    sourceType: originKind,
     provenance,
     provenanceRefs: uniqueStrings([
       `review:${record.validationPath}`,
-      `shard_output:${item.output.outputId}`,
-      `shard_lineage:${record.lineage.shardId}`,
+      `${originKind}_output:${item.output.outputId}`,
+      `${originKind}_lineage:${record.lineage.shardId}`,
     ]),
   };
 }

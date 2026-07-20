@@ -18,6 +18,7 @@ export function Composer({
   controller,
   onSendText,
   onStopGeneration,
+  targetLabel,
 }: {
   canSend: boolean;
   voiceStopActive: boolean;
@@ -25,6 +26,7 @@ export function Composer({
   controller: ComposerController;
   onSendText: (text: string) => void;
   onStopGeneration: () => void;
+  targetLabel?: string;
 }) {
   function submit(event?: FormEvent<HTMLFormElement>) {
     event?.preventDefault();
@@ -82,10 +84,10 @@ export function Composer({
         value={controller.input}
         onChange={(event) => controller.setInput(event.target.value)}
         onKeyDown={handleKeyDown}
-        placeholder="Message your companion..."
+        placeholder={targetLabel ? `Message shard ${targetLabel}...` : 'Message your companion...'}
         rows={1}
         disabled={!canSend}
-        aria-label="Message your companion"
+        aria-label={targetLabel ? `Message shard ${targetLabel}` : 'Message your companion'}
       />
       <div className="mic-control">
         <button

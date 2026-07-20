@@ -24,13 +24,13 @@ function singleCompanionEnv(overrides: NodeJS.ProcessEnv = {}): NodeJS.ProcessEn
     PSFN_RUNTIME_LAYOUT_MODE: 'production',
     PSFN_RUNTIME_ROOT: root,
     SYSTEM_DATA_DIR: join(root, 'system-data'),
-    COMPANION_DATA_DIR: join(root, 'companions', 'companion'),
+    COMPANION_DATA_DIR: join(root, 'companions', '11111111-1111-4111-8111-111111111111'),
     WORKSPACE_PATH: join(root, 'workspace'),
     PSFN_LOGS_DIR: join(root, 'logs'),
     PSFN_TEMP_DIR: join(root, 'tmp'),
     BACKUP_ROOT_DIR: join(root, 'backups'),
     DATA_DIR: '',
-    COMPANION_ID: 'companion',
+    COMPANION_ID: '11111111-1111-4111-8111-111111111111',
     PSFN_MULTI_COMPANION: 'false',
     ...overrides,
   };
@@ -47,7 +47,7 @@ describe('resolveSystemOwnerFleetContext', () => {
 
     expect(fleet.companions).toHaveLength(1);
     expect(fleet.companions[0]).toMatchObject({
-      companionId: 'companion',
+      companionId: '11111111-1111-4111-8111-111111111111',
       companionDataDir: layout.companionDataDir,
       characterCardPath: join(layout.companionDataDir, 'companion.json'),
       postgresSchema: 'public',
@@ -57,7 +57,7 @@ describe('resolveSystemOwnerFleetContext', () => {
   it('requires an explicit identity for a single-companion migration', () => {
     const env = singleCompanionEnv({ COMPANION_ID: '' });
     expect(() => resolveSystemOwnerFleetContext(env)).toThrow(
-      'COMPANION_ID for single-companion system-owner migration must be a non-empty string',
+      'COMPANION_ID for single-companion system-owner migration must be a lowercase RFC-4122 UUID',
     );
   });
 

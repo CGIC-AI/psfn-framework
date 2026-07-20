@@ -12,6 +12,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseAllDocuments } from 'yaml';
+import { verifyFleetGatewayCompanionMountContract } from './verify-helm-fleet-gateway-mounts.mjs';
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const chartDir = resolve(repoRoot, 'deploy/helm/psfn');
@@ -164,11 +165,15 @@ function renderOwnerMigrationFixture(rootDir, seedOwnerFiles) {
   const containerSettingsMigrationCommand =
     'node /app/dist/migrate-required-settings-blocks.js';
   const testMigrationCommand = [
-    resolve(repoRoot, 'node_modules/.bin/tsx'),
+    process.execPath,
+    '--import',
+    'tsx',
     resolve(repoRoot, 'src/app/maintenance/migrate-scheduler-owner.ts'),
   ].join(' ');
   const testSettingsMigrationCommand = [
-    resolve(repoRoot, 'node_modules/.bin/tsx'),
+    process.execPath,
+    '--import',
+    'tsx',
     resolve(repoRoot, 'src/app/maintenance/migrate-required-settings-blocks.ts'),
   ].join(' ');
   return {
@@ -214,6 +219,52 @@ function ownerMigrationRenderArgs(companions = [
     '--set-string', 'persistence.workspace.existingClaim=owner-workspace',
     '--set-string', 'persistence.runtime.existingClaim=owner-runtime',
     '--set', 'persistence.modelCache.enabled=false',
+  ];
+}
+
+const fleetGardenCompanions = [
+  {
+    companionId: '11111111-1111-4111-8111-111111111111',
+    postgresSchema: 'companion_a',
+    companionDataClaim: 'companion-a-data',
+    workspaceClaim: 'companion-a-workspace',
+    authSecret: {
+      name: 'companion-a-auth',
+      sessionIntegrityKey: 'session-integrity-token',
+      companionAuthKey: 'companion-auth-token',
+    },
+  },
+  {
+    companionId: '22222222-2222-4222-8222-222222222222',
+    postgresSchema: 'companion_b',
+    companionDataClaim: 'companion-b-data',
+    workspaceClaim: 'companion-b-workspace',
+    authSecret: {
+      name: 'companion-b-auth',
+      sessionIntegrityKey: 'session-integrity-token',
+      companionAuthKey: 'companion-auth-token',
+    },
+  },
+];
+
+function fleetGardenRenderArgs(companions = fleetGardenCompanions) {
+  const first = companions[0];
+  return [
+    '--set', 'fleet.enabled=true',
+    '--set-json', `fleet.companions=${JSON.stringify(companions)}`,
+    '--set', 'fleetAuth.enabled=true',
+    '--set', 'ingress.gateway.tls.enabled=true',
+    '--set-string', 'ingress.gateway.tls.secretName=fleet-gateway-tls',
+    '--set-string', `runtime.companionId=${first?.companionId ?? ''}`,
+    '--set-string', `runtime.companionDataDir=/runtime/companions/${first?.companionId ?? ''}`,
+    '--set-string', `runtime.characterCardPath=/runtime/companions/${first?.companionId ?? ''}/companion.json`,
+    '--set-string', `runtime.workspacePath=/runtime/workspaces/personal/${first?.companionId ?? ''}`,
+    '--set-string', 'runtime.systemDataDir=/runtime/system-data',
+    '--set-string', 'runtime.logsDir=/runtime/logs',
+    '--set-string', 'runtime.tempDir=/runtime/tmp',
+    '--set-string', 'runtime.backupsDir=/runtime/backups',
+    '--set-string', `persistence.companionData.existingClaim=${first?.companionDataClaim ?? ''}`,
+    '--set-string', `persistence.workspace.existingClaim=${first?.workspaceClaim ?? ''}`,
   ];
 }
 
@@ -331,9 +382,9 @@ for (const probe of ownerUpgradeJob.spec.template.spec.containers) {
 
 const singleOwnerUpgradeRendered = render(ownerMigrationRenderArgs([
   {
-    companionId: 'companion',
+    companionId: '11111111-1111-4111-8111-111111111111',
     claimName: 'owner-one',
-    mountPath: '/runtime/companions/companion',
+    mountPath: '/runtime/companions/11111111-1111-4111-8111-111111111111',
     expectedIdentitySha256: '1'.repeat(64),
   },
 ], false));
@@ -353,7 +404,7 @@ const singleOwnerEnv = new Map(
 if (singleOwnerEnv.get('PSFN_MULTI_COMPANION') !== 'false') {
   throw new Error('single-companion ownerMigration must not impersonate multi-companion topology');
 }
-if (singleOwnerEnv.get('COMPANION_ID') !== 'companion') {
+if (singleOwnerEnv.get('COMPANION_ID') !== '11111111-1111-4111-8111-111111111111') {
   throw new Error('single-companion ownerMigration did not bind its explicit companion identity');
 }
 if (singleOwnerUpgradeJob.spec.template.spec.containers.length !== 1) {
@@ -430,9 +481,9 @@ assertRenderFails(
 );
 
 for (const spiffe of [
-  'spiffe://cluster.local/psfn/gateway/companion',
-  'spiffe://cluster.local/psfn/agent/companion',
-  'spiffe://cluster.local/psfn/garden/companion',
+  'spiffe://cluster.local/psfn/gateway/11111111-1111-4111-8111-111111111111',
+  'spiffe://cluster.local/psfn/agent/11111111-1111-4111-8111-111111111111',
+  'spiffe://cluster.local/psfn/garden/11111111-1111-4111-8111-111111111111',
 ]) {
   assertIncludes(rendered, spiffe, 'SPIFFE URI SAN contract');
 }
@@ -785,6 +836,225 @@ const defaultGardenIngress = findDocumentByKindName(rendered, 'Ingress', 'psfn-g
 assertIncludes(defaultGardenIngress, 'host: "psfn-garden.local"', 'default Garden Ingress host');
 assertIncludes(defaultGardenIngress, 'name: http-garden', 'default Garden Ingress service port');
 assertNotIncludes(gardenDeployment, 'hostPort:', 'default fleet-off Garden hostPort');
+
+const fleetGardenRendered = render(fleetGardenRenderArgs());
+const fleetGardenDocuments = parseAllDocuments(fleetGardenRendered)
+  .map(document => document.toJS())
+  .filter(Boolean);
+const fleetGardenDeployments = fleetGardenDocuments.filter(document => document.kind === 'Deployment');
+const fleetGardenServices = fleetGardenDocuments.filter(document => document.kind === 'Service');
+const renderedGardens = fleetGardenDeployments.filter(document => document.metadata?.name === 'psfn-garden');
+if (renderedGardens.length !== 1) {
+  throw new Error(`fleet render must contain exactly one Garden Deployment, got ${renderedGardens.length}`);
+}
+const renderedGardenServices = fleetGardenServices.filter(document => document.metadata?.name === 'psfn-garden');
+if (renderedGardenServices.length !== 1) {
+  throw new Error(`fleet render must contain exactly one Garden Service, got ${renderedGardenServices.length}`);
+}
+const shardGardens = fleetGardenDocuments.filter(document => (
+  /garden/u.test(document.metadata?.name ?? '') && /shard/u.test(document.metadata?.name ?? '')
+));
+if (shardGardens.length !== 0) {
+  throw new Error(`fleet render must contain zero shard Gardens, got ${shardGardens.length}`);
+}
+const fleetAgentDeployments = fleetGardenDeployments.filter(document => (
+  document.spec?.template?.metadata?.labels?.['psfn.io/fleet-target'] === 'registered'
+));
+if (fleetAgentDeployments.length !== fleetGardenCompanions.length) {
+  throw new Error(
+    `fleet render must contain one agent Deployment per target, got ${fleetAgentDeployments.length}`,
+  );
+}
+if (findDocumentByKindName(fleetGardenRendered, 'Deployment', 'psfn-agent')) {
+  throw new Error('fleet render must not contain the legacy unsuffixed agent Deployment');
+}
+if (findDocumentByKindName(fleetGardenRendered, 'Service', 'psfn-agent-admin')) {
+  throw new Error('fleet render must not contain the legacy unsuffixed agent admin Service');
+}
+for (const companion of fleetGardenCompanions) {
+  const suffix = companion.companionId;
+  const agentDeploymentName = `psfn-agent-${suffix}`;
+  const agentServiceName = `psfn-agent-admin-${suffix}`;
+  const agentDeployment = findDocumentByKindName(
+    fleetGardenRendered,
+    'Deployment',
+    agentDeploymentName,
+  );
+  const agentService = findDocumentByKindName(fleetGardenRendered, 'Service', agentServiceName);
+  if (!agentDeployment) throw new Error(`fleet render missing ${agentDeploymentName}`);
+  if (!agentService) throw new Error(`fleet render missing ${agentServiceName}`);
+  assertIncludes(agentDeployment, `value: "${suffix}"`, `${agentDeploymentName} companion identity`);
+  assertIncludes(
+    agentDeployment,
+    `value: "${companion.postgresSchema}"`,
+    `${agentDeploymentName} companion schema identity`,
+  );
+  assertIncludes(
+    agentDeployment,
+    `value: "spiffe://cluster.local/psfn/garden/fleet"`,
+    `${agentDeploymentName} fleet Garden peer identity`,
+  );
+  assertIncludes(
+    agentService,
+    `psfn.io/companion-id: ${suffix}`,
+    `${agentServiceName} exact target selector`,
+  );
+  assertIncludes(
+    fleetGardenRendered,
+    `spiffe://cluster.local/psfn/agent/${suffix}`,
+    `${agentDeploymentName} exact SPIFFE identity`,
+  );
+  assertIncludes(
+    fleetGardenRendered,
+    `name: psfn-agent-admin-${suffix}`,
+    `${agentDeploymentName} target-bound admin certificate`,
+  );
+}
+const fleetGardenDeployment = renderedGardens[0];
+const fleetGardenYaml = findDocumentByKindName(fleetGardenRendered, 'Deployment', 'psfn-garden');
+const fleetGatewayDeployment = fleetGardenDeployments
+  .find(document => document.metadata?.name === 'psfn-gateway');
+verifyFleetGatewayCompanionMountContract({
+  deployment: fleetGatewayDeployment,
+  companions: fleetGardenCompanions,
+  assertRenderFails,
+  renderArgs: fleetGardenRenderArgs,
+});
+for (const [deployment, name] of [
+  [fleetGatewayDeployment, 'gateway'],
+  [fleetGardenDeployment, 'Garden'],
+]) {
+  const container = deployment?.spec?.template?.spec?.containers?.[0];
+  const schema = container?.env?.find(entry => entry.name === 'COMPANION_PG_SCHEMA')?.value;
+  if (schema !== fleetGardenCompanions[0].postgresSchema) {
+    throw new Error(`fleet ${name} runtime schema identity is ${schema ?? 'missing'}`);
+  }
+}
+assertIncludes(
+  fleetGardenYaml,
+  'name: GATEWAY_OPERATOR_API_BASE_URL',
+  'fleet Garden gateway child-assertion and confirmation endpoint',
+);
+assertIncludes(
+  fleetGardenRendered,
+  'spiffe://cluster.local/psfn/garden/fleet',
+  'fleet-scoped Garden identity',
+);
+assertIncludes(
+  fleetGardenYaml,
+  "path: '/api/admin/__transport_probe__'",
+  'fleet Garden readiness performs an authorized transport probe',
+);
+assertIncludes(
+  fleetGardenYaml,
+  'URI:spiffe://cluster.local/psfn/agent/${companionId}',
+  'fleet Garden readiness validates each exact target SPIFFE identity',
+);
+assertIncludes(
+  fleetGardenYaml,
+  `value: "${fleetGardenCompanions.map(companion => companion.companionId).join(',')}"`,
+  'fleet Garden readiness includes the complete target registry',
+);
+const fleetGardenContainer = fleetGardenDeployment.spec?.template?.spec?.containers
+  ?.find(container => container.name === 'garden');
+const fleetGardenVolumeNames = new Set(
+  (fleetGardenDeployment.spec?.template?.spec?.volumes ?? []).map(volume => volume.name),
+);
+for (const forbiddenVolume of [
+  'companion-data',
+  'workspace',
+]) {
+  if (fleetGardenVolumeNames.has(forbiddenVolume)) {
+    throw new Error(`fleet Garden must not receive ${forbiddenVolume} volume`);
+  }
+}
+if (!fleetGardenVolumeNames.has('postgres-database-url')) {
+  throw new Error('fleet Garden must mount the postgres-database-url Secret volume');
+}
+const fleetGardenSecretEnv = (fleetGardenContainer?.env ?? [])
+  .filter(entry => entry.valueFrom?.secretKeyRef)
+  .map(entry => entry.name);
+if (fleetGardenSecretEnv.length !== 0) {
+  throw new Error(
+    `fleet Garden database credential must use the mounted Secret file, got secret env ${fleetGardenSecretEnv.join(', ')}`,
+  );
+}
+assertIncludes(
+  fleetGardenYaml,
+  'name: POSTGRES_DATABASE_URL_FILE',
+  'fleet Garden Postgres credential file env',
+);
+assertIncludes(
+  fleetGardenYaml,
+  'value: "/var/run/secrets/psfn-postgres/database-url"',
+  'fleet Garden Postgres credential file path',
+);
+assertIncludes(
+  fleetGardenYaml,
+  'secretName: psfn-postgres',
+  'fleet Garden Postgres credential Secret',
+);
+assertIncludes(fleetGardenYaml, 'key: postgres-database-url', 'fleet Garden Postgres credential key');
+assertIncludes(fleetGardenYaml, 'name: wait-for-postgres', 'fleet Garden Postgres startup wait');
+assertIncludes(
+  fleetGardenYaml,
+  'pg_isready -d "$(cat "$POSTGRES_DATABASE_URL_FILE")"',
+  'fleet Garden Postgres startup readiness command',
+);
+const fleetGardenPolicy = findDocumentByKindName(
+  fleetGardenRendered,
+  'NetworkPolicy',
+  'psfn-garden',
+);
+const fleetAgentPolicy = fleetGardenDocuments.find(document => (
+  document.kind === 'NetworkPolicy' && document.metadata?.name === 'psfn-agent'
+));
+const agentAdminIngressPeers = fleetAgentPolicy?.spec?.ingress?.[0]?.from ?? [];
+const agentAdminIngressComponents = agentAdminIngressPeers.map(peer => (
+  peer.podSelector?.matchLabels?.['app.kubernetes.io/component']
+));
+if (agentAdminIngressComponents.includes('gateway')) {
+  throw new Error('fleet Gateway must not have a direct network path to agent admin ports');
+}
+if (!agentAdminIngressComponents.includes('garden')) {
+  throw new Error('fleet Garden must retain its registered agent admin network path');
+}
+for (const companion of fleetGardenCompanions) {
+  assertIncludes(
+    fleetGardenPolicy,
+    `- ${companion.companionId}`,
+    `fleet Garden policy registered target ${companion.companionId}`,
+  );
+}
+assertIncludes(fleetGardenPolicy, 'component: postgres', 'fleet Garden Postgres egress');
+const fleetPostgresPolicy = findDocumentByKindName(
+  fleetGardenRendered,
+  'NetworkPolicy',
+  'psfn-postgres',
+);
+assertIncludes(fleetPostgresPolicy, 'component: garden', 'Postgres ingress from fleet Garden');
+assertRenderFails(
+  fleetGardenRenderArgs([]),
+  'fleet.enabled=true requires at least two registered companions',
+);
+assertRenderFails(
+  fleetGardenRenderArgs([fleetGardenCompanions[0], fleetGardenCompanions[0]]),
+  `fleet companionId is duplicated: ${fleetGardenCompanions[0].companionId}`,
+);
+assertRenderFails(
+  fleetGardenRenderArgs([
+    fleetGardenCompanions[0],
+    {
+      ...fleetGardenCompanions[1],
+      authSecret: { ...fleetGardenCompanions[1].authSecret, name: '' },
+    },
+  ]),
+  'fleet.companions[1].authSecret.name is required',
+);
+assertRenderFails(
+  [...fleetGardenRenderArgs(), '--set-string', 'psfnAppImage.tag=latest'],
+  'fleet agent image tag must be pinned and must not be latest/main/main-latest',
+);
 
 const internalOnlyGardenRendered = render([
   '--set', 'ingress.garden.enabled=false',
@@ -1441,7 +1711,11 @@ assertIncludes(hubDeployment, 'secretName: psfn-satellite-hub-client-tls', 'sate
 
 const hubClientCert = findDocumentByKindName(hubRendered, 'Certificate', 'psfn-satellite-hub-client');
 assertIncludes(hubClientCert, 'secretName: psfn-satellite-hub-client-tls', 'satellite hub client Certificate secret');
-assertIncludes(hubClientCert, 'spiffe://cluster.local/psfn/satellite-hub/companion', 'satellite hub client Certificate SPIFFE URI');
+assertIncludes(
+  hubClientCert,
+  'spiffe://cluster.local/psfn/satellite-hub/11111111-1111-4111-8111-111111111111',
+  'satellite hub client Certificate SPIFFE URI',
+);
 assertIncludes(hubClientCert, 'renewBefore:', 'satellite hub client Certificate renewal');
 
 const piHubOverlayRendered = render([
@@ -1750,7 +2024,10 @@ assertIncludes(
   'Gateway SSO SPIFFE SAN',
 );
 assertRenderFails(
-  ['--set', 'fleetAuth.enabled=true'],
+  [
+    '--set', 'fleetAuth.enabled=true',
+    '--set-string', 'runtime.companionId=companion',
+  ],
   'fleetAuth.enabled=true requires runtime.companionId to be one lowercase RFC4122 UUID',
 );
 assertRenderFails(

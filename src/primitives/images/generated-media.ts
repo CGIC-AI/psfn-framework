@@ -1,7 +1,6 @@
 import { isRecord } from '../../shared/utils/types.js';
-import { randomUUID } from 'node:crypto';
 import { mkdir, readFile, realpath, writeFile } from 'node:fs/promises';
-import { basename, extname, join } from 'node:path';
+import { basename, join } from 'node:path';
 import type { AgentMessage } from '../../boundary/pi-agent/index.js';
 import type { Attachment } from '../../shared/contracts/runtime.js';
 import { createComponentLogger } from '../../shared/logger.js';
@@ -23,6 +22,11 @@ import {
   type ArtifactSensitivityClassification,
   type ArtifactSensitivitySource,
 } from '../../shared/contracts/artifact-sensitivity.js';
+import {
+  buildImageFileName,
+  deriveImageFileStem,
+  inferImageExtension,
+} from './file-naming.js';
 
 const log = createComponentLogger('ImageGeneratedMedia');
 // Live tool names first; retired names ('media', 'image_create', 'image_edit')
@@ -223,43 +227,6 @@ function resolveImageResultFromDetails(details: unknown): ImageGenerationResult 
   return normalizeImageGenerationResult((details as ImageToolResultDetails).imageResult);
 }
 
-function inferExtension(url: string, contentType: string | undefined): string {
-  const normalizedType = (contentType ?? '').trim().toLowerCase();
-  if (normalizedType.startsWith('image/png')) return '.png';
-  if (normalizedType.startsWith('image/jpeg')) return '.jpg';
-  if (normalizedType.startsWith('image/webp')) return '.webp';
-  if (normalizedType.startsWith('image/gif')) return '.gif';
-  if (normalizedType.startsWith('image/bmp')) return '.bmp';
-  if (normalizedType.startsWith('image/tiff')) return '.tiff';
-
-  try {
-    const candidate = extname(new URL(url).pathname).trim().toLowerCase();
-    if (candidate) {
-      return candidate;
-    }
-  } catch {
-    // Fall through to default extension.
-  }
-
-  return '.png';
-}
-
-function sanitizeFileStem(value: string): string {
-  return value.replace(/[^A-Za-z0-9._-]+/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '') || 'image';
-}
-
-function deriveFileStem(asset: ImageResultAsset, requestId: string | undefined, index: number): string {
-  const fromAsset = asset.fileName?.trim();
-  if (fromAsset) {
-    const name = basename(fromAsset, extname(fromAsset));
-    return sanitizeFileStem(name);
-  }
-  if (requestId) {
-    return sanitizeFileStem(`${requestId}-${index + 1}`);
-  }
-  return `image-${index + 1}`;
-}
-
 function resolveAttachmentName(storedPath: string, asset: ImageResultAsset): string {
   const fileName = asset.fileName?.trim();
   if (fileName) return basename(fileName);
@@ -274,8 +241,8 @@ async function persistImageAsset(params: {
   fetchImpl: typeof fetch;
 }): Promise<Attachment> {
   const { asset, requestId, index, storageDir, fetchImpl } = params;
-  const extension = inferExtension(asset.url, asset.contentType);
-  const fileStem = deriveFileStem(asset, requestId, index);
+  const extension = inferImageExtension(asset.url, asset.contentType);
+  const fileStem = deriveImageFileStem(asset, requestId, index);
   const existingLocalPath = asset.localPath?.trim();
   if (existingLocalPath) {
     return {
@@ -285,7 +252,7 @@ async function persistImageAsset(params: {
       localPath: existingLocalPath,
     };
   }
-  const fileName = `${fileStem}-${randomUUID().slice(0, 8)}${extension}`;
+  const fileName = buildImageFileName(asset, requestId, index);
   const storedPath = join(storageDir, fileName);
 
   try {

@@ -16,6 +16,7 @@ import { EventBus } from '../../shared/event-bus.js';
 import type { GatewayAuditStorePort } from './audit-port.js';
 import { deriveCompanionAuthToken } from './companion-auth.js';
 import { KubeSelfManagementController } from '../../system/lifecycle/kube-self-management.js';
+import { createCompanionId } from '../../shared/routing/companion-id.js';
 
 // Mock the transport module to avoid real socket operations
 vi.mock('./transport.js', () => ({
@@ -108,6 +109,7 @@ async function setupServerConnection(
 function createMinimalOptions(): GatewayServerOptions {
   return {
     socketPath: '/tmp/test.sock',
+    companionId: createCompanionId('11111111-1111-4111-8111-111111111111'),
     llmProvider: {
       stream: vi.fn().mockResolvedValue({
         content: 'test',
@@ -137,6 +139,7 @@ function createMinimalOptions(): GatewayServerOptions {
     sessionHmacKeyring: TEST_SESSION_HMAC_KEYRING,
     wyomingShardRouting: TEST_WYOMING_SHARD_ROUTING,
     eventBus: new EventBus(),
+    approvalParentLabelProvider: () => 'Test Companion',
   };
 }
 
@@ -214,7 +217,7 @@ async function identifySessionIntegrityConnection(
   id: number,
   keyring: SessionHmacKeyring = TEST_SESSION_HMAC_KEYRING,
 ): Promise<void> {
-  const companionId = 'single-companion';
+  const companionId = '11111111-1111-4111-8111-111111111111';
   const response = await invokeRpc(conn, id, 'gateway.client.identify', {
     role: 'internal_session_integrity',
     companionId,
@@ -1230,7 +1233,7 @@ describe('GatewayServer', () => {
       const routing = (routedMessage?.routing as Record<string, unknown> | undefined)?.wyoming as Record<string, unknown>;
       expect(gateway).toEqual({
         schemaVersion: 1,
-        companionId: 'companion',
+        companionId: '11111111-1111-4111-8111-111111111111',
       });
       expect(routing).toMatchObject({
         connectionId: 'conn-hallway',
@@ -1311,7 +1314,7 @@ describe('GatewayServer', () => {
       const routing = (routedMessage?.routing as Record<string, unknown> | undefined)?.wyoming as Record<string, unknown>;
       expect(gateway).toEqual({
         schemaVersion: 1,
-        companionId: 'companion',
+        companionId: '11111111-1111-4111-8111-111111111111',
       });
       expect(routing.shardDelegation).toEqual({
         eligible: true,
@@ -1579,7 +1582,7 @@ describe('GatewayServer', () => {
       onConnectionCb!(internalConn.conn);
       const missingProofResponse = await invokeRpc(internalConn, 300, 'gateway.client.identify', {
         role: 'internal_session_integrity',
-        companionId: 'single-companion',
+        companionId: '11111111-1111-4111-8111-111111111111',
       });
       expect(missingProofResponse.error).toMatchObject({
         code: GatewayErrors.COMPANION_AUTH_FAILED,
@@ -1587,9 +1590,9 @@ describe('GatewayServer', () => {
 
       const identifyResponse = await invokeRpc(internalConn, 301, 'gateway.client.identify', {
         role: 'internal_session_integrity',
-        companionId: 'single-companion',
+        companionId: '11111111-1111-4111-8111-111111111111',
         authToken: deriveCompanionAuthToken(
-          'single-companion',
+          '11111111-1111-4111-8111-111111111111',
           'internal_session_integrity',
           TEST_SESSION_HMAC_KEYRING,
         ),
@@ -1597,7 +1600,7 @@ describe('GatewayServer', () => {
       expect(identifyResponse.result).toEqual({
         success: true,
         role: 'internal_session_integrity',
-        companionId: 'single-companion',
+        companionId: '11111111-1111-4111-8111-111111111111',
       });
 
       const agentConn = createMockConnection();
@@ -1798,6 +1801,112 @@ describe('GatewayServer', () => {
       );
       expect(conn.conn.destroyed).toBe(true);
       await expect(server.requestAgent('test', {})).rejects.toThrow('No agent connected');
+    });
+
+    it('disconnects malformed peers while audit persistence remains pending', async () => {
+      let settleAudit: ((auditId: number) => void) | undefined;
+      const auditAppend = vi.fn(() => new Promise<number>((resolve) => {
+        settleAudit = resolve;
+      }));
+      const auditComplete = vi.fn();
+      const { server, conn } = await setupServerConnection({
+        ...createMinimalOptions(),
+        auditStore: createMockAuditStore({
+          append: auditAppend,
+          complete: auditComplete,
+        }),
+      });
+
+      conn._emitFrameError({
+        message: 'Malformed NDJSON frame received',
+        preview: '{"jsonrpc":"2.0","bad":',
+      });
+
+      expect(auditAppend).toHaveBeenCalledOnce();
+      expect(settleAudit).toEqual(expect.any(Function));
+      expect(auditComplete).not.toHaveBeenCalled();
+      expect(conn.conn.destroyed).toBe(true);
+      await expect(server.requestAgent('test', {})).rejects.toThrow('No agent connected');
+    });
+
+    it('fails closed on malformed NDJSON frames when audit append rejects', async () => {
+      const auditAppend = vi.fn().mockRejectedValue(new Error('audit append unavailable'));
+      const { server, conn } = await setupServerConnection({
+        ...createMinimalOptions(),
+        auditStore: createMockAuditStore({
+          append: auditAppend,
+        }),
+      });
+      const unhandledRejections: unknown[] = [];
+      const onUnhandledRejection = (reason: unknown): void => {
+        unhandledRejections.push(reason);
+      };
+      process.on('unhandledRejection', onUnhandledRejection);
+
+      try {
+        conn._emitFrameError({
+          message: 'Malformed NDJSON frame received',
+          preview: '{"jsonrpc":"2.0","bad":',
+        });
+        await new Promise(resolve => setTimeout(resolve, 20));
+
+        expect(auditAppend).toHaveBeenCalledWith({
+          method: 'gateway.ipc.frame.invalid',
+          decision: 'DENY',
+          params: expect.objectContaining({
+            frameKind: 'ndjson',
+          }),
+        });
+        expect(conn.conn.destroyed).toBe(true);
+        await expect(server.requestAgent('test', {})).rejects.toThrow('No agent connected');
+        expect(unhandledRejections).toEqual([]);
+      } finally {
+        process.off('unhandledRejection', onUnhandledRejection);
+      }
+    });
+
+    it('fails closed on malformed JSON-RPC frames when audit completion rejects', async () => {
+      const auditAppend = vi.fn().mockResolvedValue(333);
+      const auditComplete = vi.fn().mockRejectedValue(new Error('audit completion unavailable'));
+      const { server, conn } = await setupServerConnection({
+        ...createMinimalOptions(),
+        auditStore: createMockAuditStore({
+          append: auditAppend,
+          complete: auditComplete,
+        }),
+      });
+      const unhandledRejections: unknown[] = [];
+      const onUnhandledRejection = (reason: unknown): void => {
+        unhandledRejections.push(reason);
+      };
+      process.on('unhandledRejection', onUnhandledRejection);
+
+      try {
+        conn._emit({
+          jsonrpc: '2.0',
+          id: 78,
+          method: 42,
+        });
+        await new Promise(resolve => setTimeout(resolve, 20));
+
+        expect(auditAppend).toHaveBeenCalledWith({
+          method: 'gateway.ipc.frame.invalid',
+          decision: 'DENY',
+          params: expect.objectContaining({
+            frameKind: 'jsonrpc',
+          }),
+        });
+        expect(auditComplete).toHaveBeenCalledWith(
+          333,
+          expect.any(Number),
+          expect.stringContaining('method'),
+        );
+        expect(conn.conn.destroyed).toBe(true);
+        await expect(server.requestAgent('test', {})).rejects.toThrow('No agent connected');
+        expect(unhandledRejections).toEqual([]);
+      } finally {
+        process.off('unhandledRejection', onUnhandledRejection);
+      }
     });
   });
 

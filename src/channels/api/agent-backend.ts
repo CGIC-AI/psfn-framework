@@ -31,6 +31,8 @@ import type {
   ApiChatCompletionCancelRpcResult,
   ApiChatCompletionRpcParams,
   ApiChatCompletionRpcResult,
+  ApiCompanionUiShardActionRpcParams,
+  ApiCompanionUiShardActionRpcResult,
   ApiHealthRpcResult,
   ApiRpcFailure,
   ApiRpcHeaders,
@@ -39,6 +41,8 @@ import type {
   ApiServerHealthChecks,
   ApiTelemetryIngestRpcParams,
   ApiTelemetryIngestRpcResult,
+  ApiShardOwnerRpcParams,
+  ApiShardOwnerRpcResult,
   ChatCompletionRequest,
   TelemetryIngestResponse,
 } from './types.js';
@@ -79,8 +83,11 @@ import type { RequestCapabilityVerifier } from '../../boundary/fleet-auth/reques
 import {
   companionUiPromptContent,
   compileCompanionUiAction,
+  type CompiledCompanionUiAction,
 } from '../../boundary/fleet-auth/companion-ui-action.js';
 import { resolveSatelliteClaim } from '../backplane/satellite-registry.js';
+import type { ShardDirectoryPort } from '../../shared/contracts/shard-directory.js';
+import { classifyCompanionUiShardActionFailure } from './companion-ui-shard-action-error.js';
 
 const log = createComponentLogger('AgentApiBackend');
 
@@ -177,6 +184,7 @@ export interface AgentApiBackendConfig {
   documentIngest?: ApiDocumentIngestConfig | null;
   /** Agent-side verifier for linked gateway child assertions. */
   requestCapabilityVerifier?: RequestCapabilityVerifier;
+  shardDirectory?: ShardDirectoryPort;
 }
 
 export class AgentApiBackend {
@@ -194,6 +202,7 @@ export class AgentApiBackend {
   private readonly documentIngest: ApiDocumentIngestConfig | null;
   private readonly onStreamDelta?: (requestId: string, text: string) => void | Promise<void>;
   private readonly requestCapabilityVerifier?: RequestCapabilityVerifier;
+  private readonly shardDirectory: ShardDirectoryPort | null;
   private readonly channelTurnLock = new FifoChannelLock();
   private readonly processingChannels = new Set<string>();
   private readonly activeRequests = new Map<string, ActiveRequestState>();
@@ -217,6 +226,7 @@ export class AgentApiBackend {
     this.documentIngest = config.documentIngest ?? null;
     this.onStreamDelta = config.onStreamDelta;
     this.requestCapabilityVerifier = config.requestCapabilityVerifier;
+    this.shardDirectory = config.shardDirectory ?? null;
     this.unregisterSchedulerHealthcheck = this.eventBus.on('schedule.healthcheck', ({ timestamp }) => {
       if (Number.isFinite(timestamp) && timestamp > 0) {
         this.lastSchedulerHealthcheckAtMs = Math.floor(timestamp);
@@ -336,6 +346,77 @@ export class AgentApiBackend {
         ? (text) => this.onStreamDelta?.(params.requestId, text)
         : undefined,
     });
+  }
+
+  handleShardOwner(params: ApiShardOwnerRpcParams): ApiShardOwnerRpcResult {
+    if (!this.shardDirectory || !this.companionId) return {};
+    const owner = this.shardDirectory.ownerOfLiveShard(params.shardId);
+    return owner === this.companionId ? { parentCompanionId: owner } : {};
+  }
+
+  async handleCompanionUiShardAction(
+    params: ApiCompanionUiShardActionRpcParams,
+  ): Promise<ApiCompanionUiShardActionRpcResult> {
+    try {
+      if (!this.shardDirectory || !this.companionId
+        || !isHubDevicePrincipalSnapshot(params.hubDevicePrincipal)
+        || !isHubDeviceAttachmentSnapshot(params.hubDeviceAttachment)
+        || !sameHubDevicePrincipal(
+          params.hubDeviceAttachment.deviceActor.principal,
+          params.hubDevicePrincipal,
+        )
+        || params.hubDeviceAttachment.actor.kind !== 'human'
+        || params.hubDeviceAttachment.actor.companionId !== this.companionId
+        || params.hubDeviceAttachment.channel.companionId !== this.companionId
+        || params.hubDevicePrincipal.companionId !== this.companionId) {
+        throw new Error('shard action attachment denied');
+      }
+      const compiled = this.compileVerifiedCompanionUiCapability(params);
+      const parentCompanionId = this.companionId as CompanionId;
+      const body = compiled.frame.body as Record<string, unknown>;
+      switch (compiled.frame.resource) {
+        case 'shards.list':
+          return { ok: true, response: this.shardDirectory.listShards(parentCompanionId) };
+        case 'shards.history':
+          return {
+            ok: true,
+            response: this.shardDirectory.readShardChatHistory(
+              parentCompanionId,
+              String(body.shardId),
+            ),
+          };
+        case 'shards.interact':
+          return {
+            ok: true,
+            response: await this.shardDirectory.sendShardChat({
+              parentCompanionId,
+              shardId: String(body.shardId),
+              requestId: compiled.frame.requestId,
+              content: String(body.content),
+              attachment: params.hubDeviceAttachment,
+            }),
+          };
+        case 'shards.interrupt':
+          return {
+            ok: true,
+            response: this.shardDirectory.interruptShardChat({
+              parentCompanionId,
+              shardId: String(body.shardId),
+              interactionId: String(body.interactionId),
+            }),
+          };
+        default:
+          throw new Error('non-shard Companion UI action');
+      }
+    } catch (error) {
+      const failure = classifyCompanionUiShardActionFailure(error);
+      log.warn(failure.logMessage, {
+        requestId: params.requestId,
+        resource: params.companionUiCapability.frame.resource,
+        error: toErrorMessage(failure.logError),
+      });
+      return this.fail(failure.status, failure.type, failure.message);
+    }
   }
 
   async runChatCompletion(input: ApiRuntimeChatRequest): Promise<ApiChatCompletionRpcResult> {
@@ -1217,30 +1298,11 @@ export class AgentApiBackend {
       return this.fail(403, 'companion_ui_capability_denied', 'Companion UI child capability was denied');
     }
     try {
-      const rawBody = Buffer.from(capability.rawBodyBase64Url, 'base64url');
-      if (rawBody.toString('base64url') !== capability.rawBodyBase64Url) throw new Error('non-canonical body');
-      const satellite = resolveSatelliteClaim({
-        headers: params.headers,
+      const compiled = this.compileVerifiedCompanionUiCapability({
         principal: params.principal,
-        registry: this.satelliteRegistry,
+        headers: params.headers,
         ...(params.clientCert ? { clientCert: params.clientCert } : {}),
-      });
-      if (!satellite.ok) throw new Error('satellite authority denied');
-      const compiled = compileCompanionUiAction(
-        rawBody,
-        this.companionId as CompanionId,
-        {
-          capabilities: satellite.value.satellite.capabilities.effective,
-          telemetryScopes: satellite.value.satellite.telemetryScopes,
-        },
-      );
-      this.requestCapabilityVerifier.verifyAgent({
-        token: capability.token,
-        target: compiled.target,
-        requestId: capability.requestId,
-        decisionId: capability.decisionId,
-        versions: capability.versions,
-        parent: capability.parent,
+        companionUiCapability: capability,
       });
       if (compiled.frame.resource !== 'conversation.interact'
         && compiled.frame.resource !== 'conversation.audio'
@@ -1261,6 +1323,66 @@ export class AgentApiBackend {
       return this.fail(403, 'companion_ui_capability_denied', 'Companion UI child capability was denied');
     }
     return undefined;
+  }
+
+  private compileVerifiedCompanionUiCapability(params: Readonly<{
+    principal: ApiAuthPrincipal;
+    headers: ApiRpcHeaders;
+    clientCert?: SatelliteClientCertIdentity;
+    companionUiCapability: NonNullable<ApiChatCompletionRpcParams['companionUiCapability']>;
+    hubDevicePrincipal?: HubDevicePrincipalSnapshot;
+    hubDeviceAttachment?: HubDeviceAttachmentSnapshot;
+  }>): CompiledCompanionUiAction {
+    if (!this.requestCapabilityVerifier || !this.companionId) {
+      throw new Error('Companion UI verifier unavailable');
+    }
+    const capability = params.companionUiCapability;
+    const rawBody = Buffer.from(capability.rawBodyBase64Url, 'base64url');
+    if (rawBody.toString('base64url') !== capability.rawBodyBase64Url) {
+      throw new Error('non-canonical body');
+    }
+    const satellite = resolveSatelliteClaim({
+      headers: params.headers,
+      principal: params.principal,
+      registry: this.satelliteRegistry,
+      ...(params.clientCert ? { clientCert: params.clientCert } : {}),
+    });
+    if (!satellite.ok) throw new Error('satellite authority denied');
+    if (params.hubDevicePrincipal || params.hubDeviceAttachment) {
+      const principal = params.hubDevicePrincipal;
+      const attachment = params.hubDeviceAttachment;
+      const enrollment = this.satelliteRegistry?.satellites
+        .find(candidate => candidate.satelliteId === satellite.value.satellite.satelliteId)
+        ?.endpoints.find(
+          candidate => candidate.endpointId === satellite.value.satellite.endpointId,
+        )?.hubDeviceEnrollment;
+      if (!principal || !attachment || !enrollment
+        || enrollment.enrollmentStatus !== 'active'
+        || principal.deviceId !== enrollment.deviceId
+        || principal.enrollmentVersion !== enrollment.enrollmentVersion
+        || principal.sessionId !== satellite.value.satellite.sessionId
+        || principal.placeId !== satellite.value.satellite.placeId
+        || !sameHubDevicePrincipal(attachment.deviceActor.principal, principal)) {
+        throw new Error('hub-device authority changed');
+      }
+    }
+    const compiled = compileCompanionUiAction(
+      rawBody,
+      this.companionId as CompanionId,
+      {
+        capabilities: satellite.value.satellite.capabilities.effective,
+        telemetryScopes: satellite.value.satellite.telemetryScopes,
+      },
+    );
+    this.requestCapabilityVerifier.verifyAgent({
+      token: capability.token,
+      target: compiled.target,
+      requestId: capability.requestId,
+      decisionId: capability.decisionId,
+      versions: capability.versions,
+      parent: capability.parent,
+    });
+    return compiled;
   }
 
   private buildSubstrateMessage(params: {
@@ -1407,9 +1529,27 @@ export class AgentApiBackend {
         };
       }
       channelId = hubDeviceAttachment.channel.id;
+      // 8ora: a validated hub-device attachment is the server-side proof that
+      // this turn originated from the companion-ui PWA (relayed through the
+      // satellite hub). Classify it as the first-class `companion-ui` channel
+      // here — origin is decided by the authenticated attachment, never by a
+      // client-supplied X-PSFN-Channel-Type header (the hub is a read-only
+      // vendored dependency and cannot send new headers this wave). If a future
+      // hub revision emits a signed channel-type claim, it could replace this
+      // attachment-derived classification without changing the downstream stamp.
+      channelType = 'companion-ui';
+      source = 'companion-ui';
+      // Server-authored privacy for the 1:1 human↔companion surface. Sourced
+      // from the operator-owned companionUi profile (channels.json), defaulting
+      // to `private`; browser-supplied privacy headers are forbidden upstream.
+      claimedChannelPrivacy = this.externalChannelProfiles['companion-ui']?.channelPrivacy ?? 'private';
       if (hubDeviceAttachment.actor.kind === 'human') {
         authorId = hubDeviceAttachment.actor.principalId;
         authorName = 'Authenticated fleet human';
+        // A Discord-SSO'd human binds to their existing canonical contact via
+        // the attachment's validated contact binding — never minted as a new
+        // person or an api principal. `isHubDeviceAttachmentSnapshot` (checked
+        // above) guarantees a non-empty contactId, so this is fail-closed.
         hubDeviceCanonicalContactId = hubDeviceAttachment.actor.contact.contactId;
       } else {
         authorId = `hub-device-guest:${hubDevicePrincipal.deviceId}`;

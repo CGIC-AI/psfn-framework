@@ -3,6 +3,7 @@
 // so it can be used as a drop-in replacement for direct clients.
 
 import { JSONRPCServer, JSONRPCClient, JSONRPCServerAndClient, JSONRPCErrorException } from 'json-rpc-2.0';
+import { randomUUID } from 'node:crypto';
 import { Worker } from 'node:worker_threads';
 import type {
   LLMProviderPort,
@@ -12,7 +13,7 @@ import type {
 import type { EmbeddingProviderPort } from '../../shared/contracts/embedding-provider.js';
 import { toWorkSpecWireParams } from '../../primitives/llm/work-spec-wire.js';
 import { CHANNEL_TYPES } from '../../shared/contracts/runtime.js';
-import type { Attachment, CompletionPurpose, CorrelationMetadata, LLMContext, LLMModelHint, LLMResponse, ModelBudgetBlockedEvent, StreamCallbacks, SubstrateMessage } from '../../shared/contracts/runtime.js';
+import type { Attachment, CompletionPurpose, CorrelationMetadata, LLMContext, LLMModelHint, LLMResponse, ModelBudgetBlockedEvent, ModelPurposeSelection, StreamCallbacks, SubstrateMessage } from '../../shared/contracts/runtime.js';
 import type {
   GatewayRpcConnection,
   GatewayRpcEndpoint,
@@ -23,6 +24,7 @@ import {
   createWebSocketRpcClient,
 } from './transport.js';
 import { createComponentLogger } from '../../shared/logger.js';
+import { abortError } from '../../shared/utils/errors.js';
 import { getActiveCanaryToken, CANARY_CARRIER_PARAM_KEY } from '../../core/cogsec/canary/canary-token.js';
 import { isEgressCanaryMethod } from '../../core/cogsec/canary/egress-scan.js';
 import { BoundedQueue, QueueOverflowError, type QueueOverflowPolicy } from './backpressure.js';
@@ -63,9 +65,13 @@ import type {
   ApiChatCompletionCancelRpcResult,
   ApiChatCompletionRpcParams,
   ApiChatCompletionRpcResult,
+  ApiCompanionUiShardActionRpcParams,
+  ApiCompanionUiShardActionRpcResult,
   ApiHealthRpcResult,
   ApiTelemetryIngestRpcParams,
   ApiTelemetryIngestRpcResult,
+  ApiShardOwnerRpcParams,
+  ApiShardOwnerRpcResult,
 } from '../../channels/api/types.js';
 import type { SessionIntegrityProvider } from '../../persistence/sessions/store.js';
 import type { VisionIntakeImageScreenResult } from './intake/vision-screener.js';
@@ -106,6 +112,7 @@ import type {
   ShellExecResult,
   ShardBackendRequestParams,
   ShardBackendRequestResult,
+  ShardWorkloadRegisterResult,
   FsReadResult,
   FsWriteResult,
   FsListResult,
@@ -169,6 +176,11 @@ import type {
   GatewayCorrelationParams,
   ContactLifecycleExecuteResult,
 } from './protocol.js';
+import type {
+  AuthenticatedShardWorkloadHandle,
+  ShardWorkloadLifecyclePort,
+  ShardWorkloadRegistrationInput,
+} from '../../system/capabilities/shard-approval-grant-contracts.js';
 import type { ContactAuthorityLifecycleRequest } from '../../shared/contracts/contact-authority-lifecycle.js';
 import { parseContactAuthorityLifecycleResult } from '../../shared/contracts/contact-authority-lifecycle.js';
 import type {
@@ -192,6 +204,16 @@ import {
 } from './session-integrity-worker-source.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
 import { GatewayInlineImageReferenceHints } from './inline-image-reference-hints.js';
+import {
+  normalizeModelHint,
+  OPTIONAL_MODEL_HINT_NORMALIZATION,
+  resolveModelSelectionSlotForPurpose,
+} from '../../primitives/llm/model-hint-routing.js';
+import {
+  toCompletionRoutingPurpose,
+  toStreamRoutingPurpose,
+  type RoutingPurpose,
+} from '../../primitives/llm/routing.js';
 import { parseModelBudgetBlockedEvent } from '../../shared/contracts/model-budget.js';
 import { parseIcpConversationCostBreakerEvent } from '../../shared/contracts/icp-conversation-cost.js';
 import { IcpConversationCostBreakerError } from '../../primitives/llm/icp-conversation-cost-breaker.js';
@@ -273,6 +295,14 @@ export interface GatewayClientOptions extends OptionalCompanionRoutingBinding {
   /** Role-bound proof exposed only to the isolated session-integrity worker. */
   sessionIntegrityAuthToken?: string;
   onModelBudgetBlocked?: (event: ModelBudgetBlockedEvent) => void;
+  /**
+   * 23pp per-companion model selection: canonical purpose → models.json
+   * registry entry id, resolved from the companion's effective settings
+   * (settings.json + settings.overlay.json) and validated at agent startup.
+   * Injected as the wire `slotKey` when a call carries no explicit model hint;
+   * the gateway re-validates it fail-closed against its own registry.
+   */
+  modelPurposeSelection?: ModelPurposeSelection;
 }
 
 function modelBudgetBlockedEventFromError(error: unknown): ModelBudgetBlockedEvent | undefined {
@@ -418,7 +448,11 @@ export interface GatewayConnectionCloseEvent {
   error?: Error;
 }
 
-export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, GatewayModelDiscoveryTransport {
+export class GatewayClient implements
+  LLMProviderPort,
+  EmbeddingProviderPort,
+  GatewayModelDiscoveryTransport,
+  ShardWorkloadLifecyclePort {
   private rpcInstance: JSONRPCServerAndClient;
   private conn: GatewayRpcConnection;
   private embeddingDims: number;
@@ -437,6 +471,10 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
   private handleMessageHandler: MessageHandler | null = null;
   private apiChatCompletionHandler: ((params: ApiChatCompletionRpcParams) => Promise<ApiChatCompletionRpcResult>) | null = null;
   private apiChatCancelHandler: ((params: ApiChatCompletionCancelRpcParams) => Promise<ApiChatCompletionCancelRpcResult>) | null = null;
+  private companionUiShardActionHandler: ((
+    params: ApiCompanionUiShardActionRpcParams,
+  ) => Promise<ApiCompanionUiShardActionRpcResult>) | null = null;
+  private shardOwnerHandler: ((params: ApiShardOwnerRpcParams) => Promise<ApiShardOwnerRpcResult>) | null = null;
   private apiTelemetryIngestHandler: ((params: ApiTelemetryIngestRpcParams) => Promise<ApiTelemetryIngestRpcResult>) | null = null;
   private apiHealthHandler: (() => Promise<ApiHealthRpcResult>) | null = null;
   private turnPerformanceHandler: ((event: TurnPerformanceEvent) => Promise<void>) | null = null;
@@ -460,6 +498,9 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
   private readonly sessionIntegrityAuthToken?: string;
   private readonly inlineImageReferenceHints = new GatewayInlineImageReferenceHints();
   private readonly onModelBudgetBlocked?: (event: ModelBudgetBlockedEvent) => void;
+  private readonly modelPurposeSelection?: ModelPurposeSelection;
+  private readonly shardWorkloadRegistrationIds =
+    new WeakMap<AuthenticatedShardWorkloadHandle, string>();
 
   constructor(conn: GatewayRpcConnection, embeddingDims: number, options: GatewayClientOptions = {}) {
     this.conn = conn;
@@ -490,6 +531,9 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
     this.sessionIntegrityRpcTimeoutMs = options.sessionIntegrityRpcTimeoutMs ?? DEFAULT_SESSION_INTEGRITY_RPC_TIMEOUT_MS;
     this.keepaliveIntervalMs = options.keepaliveIntervalMs ?? DEFAULT_GATEWAY_KEEPALIVE_INTERVAL_MS;
     this.onModelBudgetBlocked = options.onModelBudgetBlocked;
+    if (options.modelPurposeSelection !== undefined) {
+      this.modelPurposeSelection = { ...options.modelPurposeSelection };
+    }
 
     if (!Number.isInteger(this.voiceStreamQueueSize) || this.voiceStreamQueueSize <= 0) {
       throw new Error(`voiceStreamQueueSize must be a positive integer, got ${this.voiceStreamQueueSize}`);
@@ -533,7 +577,11 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
       // Everything else: responses to our requests + incoming RPC requests from gateway
       // json-rpc-2.0 receiveAndSend() payload param is typed as `any`
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      this.rpcInstance.receiveAndSend(msg as any);
+      void this.rpcInstance.receiveAndSend(msg as any).catch((error: unknown) => {
+        const normalized = error instanceof Error ? error : new Error(String(error));
+        log.error('Gateway RPC dispatch failed', { error: normalized.message });
+        this.emitConnectionClose({ source: 'error', error: normalized });
+      });
     });
 
     this.conn.on('close', () => {
@@ -586,6 +634,23 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
     });
   }
 
+  /**
+   * 23pp: the model-selection slot key to transport for a call, or undefined.
+   * An explicit hint slot key is forwarded as-is; an explicit hint model
+   * suppresses injection entirely (per-request overrides beat the companion
+   * default); otherwise the companion's configured selection for the call's
+   * routing lane applies. Slot validity is enforced fail-closed at agent
+   * startup AND again by the gateway's registry when the call is served.
+   */
+  private resolveSelectionSlotKeyForCall(
+    modelHint: LLMModelHint | undefined,
+    routingPurpose: RoutingPurpose,
+  ): string | undefined {
+    if (modelHint?.slotKey) return modelHint.slotKey;
+    if (modelHint?.model) return undefined;
+    return resolveModelSelectionSlotForPurpose(this.modelPurposeSelection, routingPurpose);
+  }
+
   // ── LLMProviderPort interface ──
 
   async stream(
@@ -609,12 +674,20 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
       callType,
       purpose,
     });
-    const modelHint = normalizeGatewayModelHint(context.modelHint);
+    const modelHint = normalizeModelHint(context.modelHint, OPTIONAL_MODEL_HINT_NORMALIZATION);
     const hintedModel = normalizeCorrelationText(modelHint?.model);
     const hintedProvider = normalizeCorrelationText(modelHint?.provider);
     const qualifiedHint = hintedModel ? parseProviderQualifiedModel(hintedModel) : null;
     const model = qualifiedHint?.model ?? hintedModel ?? '';
     const provider = (hintedProvider ?? qualifiedHint?.provider ?? '').trim().toLowerCase();
+    // 23pp per-companion model selection: transport the companion's configured
+    // slot key for the lane this streamed call routes to (interactive chat
+    // unless a work spec declares a background purpose). Explicit model hints
+    // take precedence; the gateway re-validates the slot fail-closed.
+    const selectionSlotKey = this.resolveSelectionSlotKeyForCall(
+      modelHint,
+      toStreamRoutingPurpose(options?.workSpec?.purpose),
+    );
 
     // Register chunk handler before sending the RPC so no chunks are missed
     if (callbacks?.onText) {
@@ -633,6 +706,7 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
         model,  // gateway resolves roster defaults when hint fields are unset
         provider,
         ...usageCorrelation,
+        ...(selectionSlotKey !== undefined ? { slotKey: selectionSlotKey } : {}),
         ...(modelHint?.pin !== undefined ? { pin: modelHint.pin } : {}),
         messages: referencedMessages.messages,
         systemPrompt: context.systemPrompt,
@@ -735,6 +809,13 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
     const qualifiedHint = hintedModel ? parseProviderQualifiedModel(hintedModel) : null;
     const model = qualifiedHint?.model ?? hintedModel ?? '';
     const provider = (hintedProvider ?? qualifiedHint?.provider ?? '').trim().toLowerCase();
+    // 23pp per-companion model selection: transport the companion's configured
+    // slot key for the lane this completion routes to. Explicit model hints
+    // take precedence; the gateway re-validates the slot fail-closed.
+    const selectionSlotKey = this.resolveSelectionSlotKeyForCall(
+      modelHint,
+      toCompletionRoutingPurpose(purpose),
+    );
 
     const referencedMessages = this.inlineImageReferenceHints.referenceMessages(
       context.messages,
@@ -744,6 +825,7 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
       model,
       provider,
       ...usageCorrelation,
+      ...(selectionSlotKey !== undefined ? { slotKey: selectionSlotKey } : {}),
       ...(modelHint?.pin !== undefined ? { pin: modelHint.pin } : {}),
       messages: referencedMessages.messages,
       systemPrompt: context.systemPrompt,
@@ -1170,6 +1252,87 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
     return await this.rpcInstance.request('shard.backend.request', params) as ShardBackendRequestResult;
   }
 
+  async registerWorkload(
+    input: ShardWorkloadRegistrationInput,
+  ): Promise<AuthenticatedShardWorkloadHandle> {
+    if (this.companionId && input.parentCompanionId !== this.companionId) {
+      throw new Error(
+        'Shard workload parent does not match the GatewayClient authenticated companion',
+      );
+    }
+    const registrationId = randomUUID();
+    let result: ShardWorkloadRegisterResult;
+    try {
+      result = await this.rpcInstance.request('shard.workload.register', {
+        registrationId,
+        shardId: input.shardId,
+        ...(input.shardLabel ? { shardLabel: input.shardLabel } : {}),
+        channelIds: [...input.channelIds],
+        ownerVersion: input.capabilityGrant.ownerVersion,
+        grantDigest: input.capabilityGrant.grantDigest,
+      }) as ShardWorkloadRegisterResult;
+    } catch (registrationError) {
+      try {
+        await this.confirmShardWorkloadEnded(registrationId);
+      } catch (cleanupError) {
+        this.conn.destroy();
+        throw new AggregateError(
+          [registrationError, cleanupError],
+          'Shard workload registration failed and gateway cleanup could not be confirmed',
+        );
+      }
+      throw registrationError;
+    }
+    if (result.registrationId !== registrationId
+      || typeof result.workloadGeneration !== 'string'
+      || !result.workloadGeneration.trim()) {
+      const invalidResultError = new Error(
+        'Gateway returned an invalid shard workload registration result',
+      );
+      try {
+        await this.confirmShardWorkloadEnded(registrationId);
+      } catch (cleanupError) {
+        this.conn.destroy();
+        throw new AggregateError(
+          [invalidResultError, cleanupError],
+          'Gateway returned an invalid shard workload registration result and cleanup failed',
+        );
+      }
+      throw invalidResultError;
+    }
+    const handle = Object.freeze({
+      kind: 'authenticated-shard-workload' as const,
+    }) as AuthenticatedShardWorkloadHandle;
+    this.shardWorkloadRegistrationIds.set(handle, registrationId);
+    return handle;
+  }
+
+  async endWorkload(handle: AuthenticatedShardWorkloadHandle): Promise<void> {
+    const registrationId = this.shardWorkloadRegistrationIds.get(handle);
+    if (!registrationId) {
+      throw new Error('Cannot end an unknown gateway shard workload handle');
+    }
+    try {
+      await this.confirmShardWorkloadEnded(registrationId);
+    } catch (error) {
+      // Revocation is security-sensitive. If its acknowledgement is missing,
+      // tear down the authenticated connection so the gateway releases every
+      // connection-scoped lease rather than retaining ambiguous authority.
+      this.conn.destroy();
+      throw error;
+    }
+    this.shardWorkloadRegistrationIds.delete(handle);
+  }
+
+  private async confirmShardWorkloadEnded(registrationId: string): Promise<void> {
+    const result = await this.rpcInstance.request('shard.workload.end', {
+      registrationId,
+    }) as unknown;
+    if (!isRecord(result) || typeof result.ended !== 'boolean') {
+      throw new Error('Gateway returned an invalid shard workload revocation result');
+    }
+  }
+
   async vaultWrite(
     name: string,
     content: string,
@@ -1491,7 +1654,7 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
     }
 
     if (signal.aborted) {
-      throw createAbortError(signal.reason);
+      throw abortError(signal.reason);
     }
 
     return await new Promise<T>((resolve, reject) => {
@@ -1509,7 +1672,7 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
       };
 
       const onAbort = () => {
-        finalize('reject', createAbortError(signal.reason));
+        finalize('reject', abortError(signal.reason));
       };
 
       signal.addEventListener('abort', onAbort, { once: true });
@@ -1578,6 +1741,18 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
     this.registerReverseMethods();
   }
 
+  onCompanionUiShardAction(handler: (
+    params: ApiCompanionUiShardActionRpcParams,
+  ) => Promise<ApiCompanionUiShardActionRpcResult>): void {
+    this.companionUiShardActionHandler = handler;
+    this.registerReverseMethods();
+  }
+
+  onShardOwner(handler: (params: ApiShardOwnerRpcParams) => Promise<ApiShardOwnerRpcResult>): void {
+    this.shardOwnerHandler = handler;
+    this.registerReverseMethods();
+  }
+
   onApiTelemetryIngest(handler: (params: ApiTelemetryIngestRpcParams) => Promise<ApiTelemetryIngestRpcResult>): void {
     this.apiTelemetryIngestHandler = handler;
     this.registerReverseMethods();
@@ -1635,6 +1810,8 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
       handleVoiceStreamCancel: (params) => this.handleVoiceStreamCancel(params),
       handleApiChatCompletion: (params) => this.handleApiChatCompletion(params),
       handleApiChatCancel: (params) => this.handleApiChatCancel(params),
+      handleCompanionUiShardAction: (params) => this.handleCompanionUiShardAction(params),
+      handleShardOwner: (params) => this.handleShardOwner(params),
       handleApiTelemetryIngest: (params) => this.handleApiTelemetryIngest(params),
       handleApiHealth: () => this.handleApiHealth(),
       handleTurnPerformance: (params) => this.handleTurnPerformance(params),
@@ -1688,6 +1865,24 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
       throw new Error('No api.chat.cancel handler registered');
     }
     return await this.apiChatCancelHandler(params);
+  }
+
+  private async handleCompanionUiShardAction(
+    params: ApiCompanionUiShardActionRpcParams,
+  ): Promise<ApiCompanionUiShardActionRpcResult> {
+    if (!this.companionUiShardActionHandler) {
+      throw new Error('No api.companion-ui.shard.action handler registered');
+    }
+    return await this.companionUiShardActionHandler(params);
+  }
+
+  private async handleShardOwner(
+    params: ApiShardOwnerRpcParams,
+  ): Promise<ApiShardOwnerRpcResult> {
+    if (!this.shardOwnerHandler) {
+      throw new Error('No shard.directory.owner handler registered');
+    }
+    return await this.shardOwnerHandler(params);
   }
 
   private async handleApiTelemetryIngest(
@@ -2167,106 +2362,15 @@ function parseProviderQualifiedModel(value: string): { provider: string; model: 
   return { provider, model };
 }
 
-function normalizeGatewayModelHint(modelHint: LLMModelHint | undefined): LLMModelHint | undefined {
-  if (!modelHint) return undefined;
-  const model = normalizeCorrelationText(modelHint.model);
-  const provider = normalizeCorrelationText(modelHint.provider)?.toLowerCase();
-  const pin = typeof modelHint.pin === 'boolean' ? modelHint.pin : undefined;
-  const maxTokens = toPositiveInteger(modelHint.maxTokens);
-  const contextWindow = toPositiveInteger(modelHint.contextWindow);
-  const thinkingEnabled = typeof modelHint.thinkingEnabled === 'boolean'
-    ? modelHint.thinkingEnabled
-    : undefined;
-  const thinkingEffort = toThinkingEffort(modelHint.thinkingEffort);
-  const temperature = toFiniteNumber(modelHint.temperature);
-  const topP = toUnitInterval(modelHint.topP);
-  const topK = toPositiveInteger(modelHint.topK);
-  const frequencyPenalty = toFiniteNumber(modelHint.frequencyPenalty);
-  const repetitionPenalty = toFiniteNumber(modelHint.repetitionPenalty);
-  if (
-    !model
-    && !provider
-    && pin === undefined
-    && maxTokens === undefined
-    && contextWindow === undefined
-    && thinkingEnabled === undefined
-    && thinkingEffort === undefined
-    && temperature === undefined
-    && topP === undefined
-    && topK === undefined
-    && frequencyPenalty === undefined
-    && repetitionPenalty === undefined
-  ) {
-    return undefined;
-  }
-  return {
-    ...(model ? { model } : {}),
-    ...(provider ? { provider } : {}),
-    ...(pin !== undefined ? { pin } : {}),
-    ...(maxTokens !== undefined ? { maxTokens } : {}),
-    ...(contextWindow !== undefined ? { contextWindow } : {}),
-    ...(thinkingEnabled !== undefined ? { thinkingEnabled } : {}),
-    ...(thinkingEffort !== undefined ? { thinkingEffort } : {}),
-    ...(temperature !== undefined ? { temperature } : {}),
-    ...(topP !== undefined ? { topP } : {}),
-    ...(topK !== undefined ? { topK } : {}),
-    ...(frequencyPenalty !== undefined ? { frequencyPenalty } : {}),
-    ...(repetitionPenalty !== undefined ? { repetitionPenalty } : {}),
-  };
-}
-
 function mergeGatewayModelHints(
   contextHint: LLMModelHint | undefined,
   optionHint: LLMModelHint | undefined,
 ): LLMModelHint | undefined {
-  const normalizedContext = normalizeGatewayModelHint(contextHint);
-  const normalizedOption = normalizeGatewayModelHint(optionHint);
+  const normalizedContext = normalizeModelHint(contextHint, OPTIONAL_MODEL_HINT_NORMALIZATION);
+  const normalizedOption = normalizeModelHint(optionHint, OPTIONAL_MODEL_HINT_NORMALIZATION);
   if (!normalizedContext && !normalizedOption) return undefined;
   return {
     ...(normalizedContext ?? {}),
     ...(normalizedOption ?? {}),
   };
-}
-
-function toFiniteNumber(value: unknown): number | undefined {
-  if (typeof value !== 'number' || !Number.isFinite(value)) return undefined;
-  return value;
-}
-
-function toPositiveInteger(value: unknown): number | undefined {
-  const numeric = toFiniteNumber(value);
-  if (numeric === undefined || numeric <= 0) return undefined;
-  return Math.floor(numeric);
-}
-
-function toUnitInterval(value: unknown): number | undefined {
-  const numeric = toFiniteNumber(value);
-  if (numeric === undefined || numeric < 0 || numeric > 1) return undefined;
-  return numeric;
-}
-
-function toThinkingEffort(value: unknown): LLMModelHint['thinkingEffort'] | undefined {
-  switch (value) {
-    case 'minimal':
-    case 'low':
-    case 'medium':
-    case 'high':
-    case 'xhigh':
-      return value;
-    default:
-      return undefined;
-  }
-}
-
-function createAbortError(reason?: unknown): Error {
-  if (reason instanceof Error) {
-    reason.name = reason.name || 'AbortError';
-    return reason;
-  }
-  const message = typeof reason === 'string' && reason.trim().length > 0
-    ? reason
-    : 'Request aborted';
-  const error = new Error(message);
-  error.name = 'AbortError';
-  return error;
 }

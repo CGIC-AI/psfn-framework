@@ -185,7 +185,12 @@ describe('Prompt Layer Tools', () => {
     });
 
     it('lists all layers with their details', async () => {
-      store.create({ type: 'base', name: 'Base', content: 'base content' });
+      store.create({
+        type: 'base',
+        name: 'Base',
+        content: 'base content',
+        identifier: 'main',
+      });
       store.create({ type: 'runtime', name: 'Runtime', content: 'runtime content', priority: 5 });
       store.create({ type: 'channel', name: 'Discord', content: 'discord', channelType: 'discord_text' });
 
@@ -221,7 +226,12 @@ describe('Prompt Layer Tools', () => {
 
   describe('identity action=get_layer', () => {
     it('allows reading base/operator layers at all tiers', async () => {
-      const baseLayer = store.create({ type: 'base', name: 'Test Base', content: 'You are helpful.' });
+      const baseLayer = store.create({
+        type: 'base',
+        name: 'Test Base',
+        content: 'You are helpful.',
+        identifier: 'main',
+      });
       const operatorLayer = store.create({ type: 'operator', name: 'Operator', content: 'Run safely.' });
       const tiers: CapabilityTier[] = ['nursery', 'apprentice', 'autonomous'];
 
@@ -243,7 +253,12 @@ describe('Prompt Layer Tools', () => {
     });
 
     it('handles prefix match', async () => {
-      const layer = store.create({ type: 'base', name: 'Test', content: 'content' });
+      const layer = store.create({
+        type: 'base',
+        name: 'Test',
+        content: 'content',
+        identifier: 'main',
+      });
       const prefix = layer.id.slice(0, 8);
 
       const tool = identityTool('nursery');

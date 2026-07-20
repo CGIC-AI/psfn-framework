@@ -281,7 +281,7 @@ export function toMemoryRow(memory: PurrMemory, embedding?: Float32Array): Memor
 export function fromMemoryRow(row: MemoryRow): PurrMemory {
   const scopeRef = row.scope_ref_kind && row.scope_ref_id
     ? normalizeMemoryScopeRef({
-      kind: row.scope_ref_kind as any,
+      kind: row.scope_ref_kind,
       id: row.scope_ref_id,
       ...(row.scope_ref_label ? { label: row.scope_ref_label } : {}),
     })

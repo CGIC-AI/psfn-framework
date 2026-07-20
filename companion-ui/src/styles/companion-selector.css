@@ -1,0 +1,161 @@
+.companions-button {
+  left: calc(max(1rem, env(safe-area-inset-left)) + 116px);
+  color: var(--color-gold-deep);
+}
+
+.companion-selector-hint {
+  margin: 0 0 0.85rem;
+  color: var(--color-muted);
+  font-size: 0.86rem;
+  line-height: 1.4;
+}
+
+.companion-grid {
+  display: grid;
+  gap: 0.8rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.companion-grid > li {
+  display: grid;
+  gap: 0.55rem;
+}
+
+.companion-tile {
+  width: 100%;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.72rem;
+  padding: 0.72rem;
+  border-color: rgba(143, 187, 232, 0.34);
+  background: rgba(255, 253, 248, 0.72);
+  text-align: left;
+}
+
+.companion-tile.active {
+  border-color: rgba(201, 163, 90, 0.58);
+  background: rgba(255, 248, 226, 0.88);
+  box-shadow: 0 8px 24px rgba(72, 52, 24, 0.1);
+}
+
+.companion-avatar-wrap {
+  position: relative;
+  display: grid;
+  place-items: center;
+}
+
+.companion-avatar {
+  width: 52px;
+  height: 52px;
+  border: 1px solid rgba(201, 163, 90, 0.38);
+  border-radius: 50%;
+  object-fit: cover;
+  background: rgba(234, 244, 255, 0.72);
+}
+
+.companion-avatar-initial {
+  display: grid;
+  place-items: center;
+  color: #335d8b;
+  font-family: var(--font-serif);
+  font-size: 1.2rem;
+  font-weight: 700;
+}
+
+.companion-approval-badge {
+  position: absolute;
+  top: -0.28rem;
+  right: -0.28rem;
+  min-width: 1.28rem;
+  height: 1.28rem;
+  display: grid;
+  place-items: center;
+  padding: 0 0.28rem;
+  border: 2px solid var(--color-surface);
+  border-radius: 999px;
+  background: var(--color-error);
+  color: white;
+  font-size: 0.68rem;
+  font-weight: 800;
+}
+
+.companion-name {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--color-ink);
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.companion-active-tag {
+  color: var(--color-gold-deep);
+  font-size: 0.68rem;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.shard-directory {
+  display: grid;
+  gap: 0.45rem;
+  margin: 0.65rem 0 0 1rem;
+  padding-left: 0.75rem;
+  border-left: 1px solid color-mix(in srgb, var(--accent, #9b7ac6) 38%, transparent);
+}
+
+.shard-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 0.2rem 0.6rem;
+  width: 100%;
+  padding: 0.55rem 0.65rem;
+  border: 1px solid transparent;
+  border-radius: 0.7rem;
+  background: color-mix(in srgb, var(--surface, #201b29) 88%, transparent);
+  color: inherit;
+  text-align: left;
+}
+
+.shard-row.active {
+  border-color: var(--accent, #9b7ac6);
+}
+
+.shard-row:disabled {
+  opacity: 0.58;
+}
+
+.shard-row-label {
+  font-weight: 650;
+}
+
+.shard-availability {
+  font-size: 0.72rem;
+  text-transform: capitalize;
+}
+
+.shard-availability.available {
+  color: #78d6a4;
+}
+
+.shard-availability.starting,
+.shard-availability.degraded {
+  color: #e2bd78;
+}
+
+.shard-purpose,
+.shard-empty {
+  grid-column: 1 / -1;
+  margin: 0;
+  color: var(--text-muted, #aaa1b4);
+  font-size: 0.78rem;
+  line-height: 1.35;
+}
+
+.companion-grid .approval-toast {
+  width: 100%;
+  box-shadow: none;
+}

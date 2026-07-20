@@ -30,6 +30,32 @@ import type { IcpConversationCorrelation } from '../../../shared/contracts/icp-a
 import type { KubeSelfManagementController } from '../../../system/lifecycle/kube-self-management.js';
 import type { GatewayContactLifecycleAuthorityPort } from '../contact-lifecycle-authority.js';
 import type { CapabilityTier } from '../../../system/config/runtime-config-contracts.js';
+import type { CapabilityGrantSnapshot } from '../../../system/capabilities/access.js';
+import type { ShardCapabilityAccess } from '../../../system/capabilities/shard-derivation.js';
+import type { AuthenticatedShardWorkloadHandle } from '../../../system/capabilities/shard-approval-grant-contracts.js';
+import type {
+  ShardBackendRequestBackend,
+  ShardBackendRequestResult,
+} from '../protocol.js';
+
+/**
+ * Gateway-created authority passed to a shard backend executor only after the
+ * manager assertions match an atomic authenticated-parent snapshot.
+ */
+export interface AuthorizedShardBackendLaunchContext {
+  readonly backend: ShardBackendRequestBackend;
+  readonly shardId: string;
+  readonly name: string;
+  readonly parentCompanionId: string;
+  readonly parentTier: CapabilityTier;
+  readonly ownerVersion: string;
+  readonly grantDigest: string;
+  readonly access: ShardCapabilityAccess;
+}
+
+export type ShardBackendExecutor = (
+  context: AuthorizedShardBackendLaunchContext,
+) => Promise<ShardBackendRequestResult>;
 
 export interface GatewayMethodRuntime {
   target: JSONRPCServerAndClient;
@@ -69,11 +95,34 @@ export interface GatewayMethodRuntime {
   /**
    * Authoritative capability tier resolved from the gateway's own
    * CapabilityRuntime (never the caller-declared value). Gateway methods that
-   * gate on tier (e.g. autonomous-only shard backends) MUST consult this
-   * instead of trusting RPC params. Absent ⇒ the tier cannot be resolved and
-   * tier-gated privileges must be refused (fail closed).
+   * still gate on tier MUST consult this instead of trusting RPC params.
+   * Absent ⇒ the tier cannot be resolved and tier-gated privileges must be
+   * refused (fail closed). Shard backend admission uses the atomic grant
+   * snapshot provider below.
    */
   capabilityTierProvider?: () => CapabilityTier;
+  /**
+   * One atomic, connection-bound snapshot of the authenticated companion's
+   * authoritative capability owner. Missing or throwing providers fail closed.
+   */
+  capabilityGrantSnapshotProvider?: () => CapabilityGrantSnapshot;
+  /**
+   * Optional backend executor. It receives only a gateway-authorized immutable
+   * context, never caller-declared capability authority.
+   */
+  shardBackendExecutor?: ShardBackendExecutor;
+  /**
+   * 2h6q.3: server-owned per-dispatch shard lineage resolution for gated
+   * methods. Maps a runtime-stamped correlation channel id to the current
+   * authenticated shard workload registered by the shard runtime. The channel
+   * id is only a lookup key into server-owned registration state — every
+   * authority value comes from the registration. A recognizably
+   * shard-originated channel that cannot be resolved to a live workload of
+   * the connection's authenticated companion MUST throw (fail closed).
+   */
+  resolveShardWorkloadForChannel?: (
+    channelId: string | undefined,
+  ) => { workload: AuthenticatedShardWorkloadHandle } | undefined;
   /** Authenticated companion bound to the connection serving this RPC. */
   authenticatedCompanionId(): string | undefined;
   /**

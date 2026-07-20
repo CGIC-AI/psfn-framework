@@ -1,13 +1,18 @@
 import '../../shared/utils/load-dotenv.js';
 import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { loadConfig } from '../../system/config/load-config.js';
 import {
   resolveConfiguredCompanionDataDir,
   resolveCoreMemoryPath,
 } from '../../persistence/layout.js';
 import { auditCoreMemoryScopes } from '../../faculties/core-memory/scope-audit.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
+import {
+  bootstrapMaintenanceRuntime,
+  isMaintenanceCliEntrypoint,
+  parseCommonMaintenanceArgs,
+  runMaintenanceCli,
+} from './cli-harness.js';
 
 interface CliOptions {
   filePath?: string;
@@ -28,45 +33,29 @@ function printUsage(): void {
   console.log('  -h, --help      Show this help message.');
 }
 
-function parseArgs(argv: string[]): CliOptions {
-  const options: CliOptions = { json: false, showHelp: false };
-  for (let i = 0; i < argv.length; i += 1) {
-    const arg = argv[i];
-    if (arg === '--help' || arg === '-h') {
-      options.showHelp = true;
-      continue;
-    }
-    if (arg === '--json') {
-      options.json = true;
-      continue;
-    }
-    if (arg === '--file') {
-      const value = argv[i + 1];
-      if (!value) throw new Error(`Missing value for ${arg}`);
-      options.filePath = value;
-      i += 1;
-      continue;
-    }
-    throw new Error(`Unknown argument: ${arg}`);
-  }
-  return options;
+function parseArgs(argv: readonly string[]): CliOptions {
+  return parseCommonMaintenanceArgs<CliOptions>(argv, {
+    initial: { json: false, showHelp: false },
+    extraFlags: {
+      '--json': ({ options }) => {
+        options.json = true;
+      },
+      '--file': ({ options, readValue }) => {
+        options.filePath = readValue();
+      },
+    },
+  });
 }
 
-function resolveCoreMemoryFilePath(override?: string): string {
+async function resolveCoreMemoryFilePath(override?: string): Promise<string> {
   if (override) return resolve(override);
-  const config = loadConfig();
+  const { config } = await bootstrapMaintenanceRuntime({ hydrateSecrets: false });
   const companionDataDir = resolveConfiguredCompanionDataDir(config);
   return resolveCoreMemoryPath(companionDataDir);
 }
 
-function main(): void {
-  const options = parseArgs(process.argv.slice(2));
-  if (options.showHelp) {
-    printUsage();
-    return;
-  }
-
-  const filePath = resolveCoreMemoryFilePath(options.filePath);
+async function run(options: CliOptions): Promise<void> {
+  const filePath = await resolveCoreMemoryFilePath(options.filePath);
   if (!existsSync(filePath)) {
     console.log(`No core-memory file at ${filePath}; nothing to audit.`);
     return;
@@ -107,9 +96,11 @@ function main(): void {
   process.exitCode = 1;
 }
 
-try {
-  main();
-} catch (error) {
-  console.error(`Core-memory scope audit failed: ${toErrorMessage(error)}`);
-  process.exit(1);
+if (isMaintenanceCliEntrypoint(import.meta.url)) {
+  void runMaintenanceCli({
+    label: 'Core-memory scope audit',
+    parseArgs,
+    printUsage,
+    run,
+  });
 }

@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 import {
   assertCompanionAdminTransportIsolation,
   assertCompanionAdminTransportSocketPath,
+  assertFleetGardenAdminTransportEndpointIdentity,
+  resolveFleetGardenNetworkClientEndpoint,
   resolveCompanionAdminTransportSocketPath,
   resolveAdminTransportClientEndpoint,
   resolveAdminTransportMode,
@@ -106,6 +108,51 @@ describe('Garden admin transport endpoint resolution', () => {
       certPath: TLS_FILE_ENV.ADMIN_TRANSPORT_TLS_CERT_PATH,
       keyPath: TLS_FILE_ENV.ADMIN_TRANSPORT_TLS_KEY_PATH,
       expectedPeerSpiffeUri: AGENT_SPIFFE_URI,
+    });
+  });
+
+  it('binds a fleet network peer SPIFFE identity to the selected companion', () => {
+    const companionId = '11111111-1111-4111-8111-111111111111';
+    const endpoint = resolveAdminTransportClientEndpoint({
+      ADMIN_TRANSPORT_MODE: 'network',
+      ADMIN_TRANSPORT_URL: 'https://agent-admin.default.svc.cluster.local:10055',
+      ...TLS_FILE_ENV,
+      ADMIN_TRANSPORT_TLS_EXPECTED_PEER_SPIFFE_URI:
+        `spiffe://cluster.local/psfn/agent/${companionId}`,
+    });
+    expect(() => assertFleetGardenAdminTransportEndpointIdentity(companionId, endpoint))
+      .not.toThrow();
+    expect(() => assertFleetGardenAdminTransportEndpointIdentity(
+      '22222222-2222-4222-8222-222222222222',
+      endpoint,
+    )).toThrow(/SPIFFE identity does not match companion/u);
+  });
+
+  it('derives one network service and SPIFFE identity per fleet companion', () => {
+    const companionId = '11111111-1111-4111-8111-111111111111';
+    expect(resolveFleetGardenNetworkClientEndpoint(companionId, {
+      ADMIN_TRANSPORT_MODE: 'network',
+      ADMIN_TRANSPORT_URL: 'https://agent-admin.default.svc.cluster.local:10055',
+      ADMIN_TRANSPORT_TIMEOUT_MS: '2500',
+      ...TLS_FILE_ENV,
+      ADMIN_TRANSPORT_TLS_EXPECTED_PEER_SPIFFE_URI:
+        'spiffe://cluster.local/psfn/agent/companion',
+    })).toEqual({
+      mode: 'network',
+      httpUrl: new URL(
+        `https://agent-admin-${companionId}.default.svc.cluster.local:10055`,
+      ),
+      wsUrl: new URL(
+        `wss://agent-admin-${companionId}.default.svc.cluster.local:10055`,
+      ),
+      timeoutMs: 2500,
+      peerAuthMode: 'mtls-spiffe',
+      tls: {
+        caPath: TLS_FILE_ENV.ADMIN_TRANSPORT_TLS_CA_PATH,
+        certPath: TLS_FILE_ENV.ADMIN_TRANSPORT_TLS_CERT_PATH,
+        keyPath: TLS_FILE_ENV.ADMIN_TRANSPORT_TLS_KEY_PATH,
+        expectedPeerSpiffeUri: `spiffe://cluster.local/psfn/agent/${companionId}`,
+      },
     });
   });
 

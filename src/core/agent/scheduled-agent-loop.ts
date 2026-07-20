@@ -1,5 +1,6 @@
-import { EventStream, type AssistantMessage } from '@mariozechner/pi-ai';
+import { EventStream, type AssistantMessage, type ToolCall, type ToolResultMessage } from '@mariozechner/pi-ai';
 import type { AgentContext, AgentLoopConfig, AgentMessage, AgentTool, StreamFn } from '../../boundary/pi-agent/index.js';
+import type { AgentLoopErrorEvent, ScheduledAgentEvent } from './agent-loop-events.js';
 import type { LLMSystemPromptCacheBoundaries } from '../../shared/contracts/runtime.js';
 import {
   createToolCallExecutionGuard,
@@ -10,12 +11,6 @@ import {
   AGENT_LOOP_ASSISTANT_STEP_CHECK_IN_AT,
   ParentTurnContinuationFuse,
 } from './turn-limits.js';
-
-type AgentLoopErrorEvent = {
-  type: 'agent_error';
-  error: Error;
-  messages: AgentMessage[];
-};
 
 type LiveToolAgentContext = AgentContext & {
   getTools?: () => AgentTool<any>[] | undefined;
@@ -33,7 +28,7 @@ export function agentLoopWithScheduler(
   continuationFuse = new ParentTurnContinuationFuse(),
 ) {
   const stream = createAgentStream();
-  (async () => {
+  void (async () => {
     const newMessages = [...prompts];
     try {
       const currentContext: LiveToolAgentContext = {
@@ -78,7 +73,7 @@ export function agentLoopContinueWithScheduler(
     throw new Error('Cannot continue from message role: assistant');
   }
   const stream = createAgentStream();
-  (async () => {
+  void (async () => {
     const newMessages: AgentMessage[] = [];
     try {
       const currentContext: LiveToolAgentContext = { ...context };
@@ -102,9 +97,9 @@ export function agentLoopContinueWithScheduler(
 }
 
 function createAgentStream() {
-  return new EventStream(
-    (event: any) => event.type === 'agent_end',
-    (event: any) => (event.type === 'agent_end' ? event.messages : []),
+  return new EventStream<ScheduledAgentEvent, AgentMessage[]>(
+    (event) => event.type === 'agent_end',
+    (event) => (event.type === 'agent_end' ? event.messages : []),
   );
 }
 
@@ -164,9 +159,9 @@ async function runLoop(
         return;
       }
 
-      const toolCalls = message.content.filter((content: any) => content.type === 'toolCall');
+      const toolCalls = message.content.filter((content): content is ToolCall => content.type === 'toolCall');
       hasMoreToolCalls = toolCalls.length > 0;
-      const toolResults: any[] = [];
+      const toolResults: ToolResultMessage[] = [];
       if (hasMoreToolCalls) {
         const toolExecution = await executeToolCallsWithScheduler(
           () => resolveCurrentTools(currentContext),

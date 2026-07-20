@@ -5,10 +5,10 @@ import {
   IcpOutstandingInvitationConflictError,
   IcpPermitRevocationConflictError,
   type IcpAutonomyInvalidationFence,
-  IcpPermitConsumptionInput,
-  IcpPermitConsumptionResult,
-  IcpSharedAutonomyStorePort,
-  IcpConversationTransitionInput,
+  type IcpPermitConsumptionInput,
+  type IcpPermitConsumptionResult,
+  type IcpSharedAutonomyStorePort,
+  type IcpConversationTransitionInput,
 } from '../../core/icp/autonomy-store-ports.js';
 import {
   ICP_AUTONOMY_REASON_CODES,

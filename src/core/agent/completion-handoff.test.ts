@@ -119,6 +119,33 @@ describe('completion handoff emitter', () => {
     expect(events[0]?.noticeBuffered).toBe(false);
   });
 
+  it('does not burn the dedupe key when a critical lifecycle guard rejects emission', async () => {
+    const eventBus = new EventBus();
+    let attempts = 0;
+    eventBus.guard('agent.completion_handoff', () => {
+      attempts += 1;
+      if (attempts === 1) {
+        throw new Error('durable lifecycle sink unavailable');
+      }
+      return true;
+    });
+    const handoff = buildCompletionHandoff({
+      source: 'subagent',
+      taskId: 'guard-retry',
+      subagentId: 'guard-retry',
+      status: 'completed',
+      resultSummary: 'Finished.',
+      partialResult: false,
+      dedupeKey: 'guard-retry-dedupe',
+    });
+
+    await expect(emitCompletionHandoff({ eventBus, handoff }))
+      .rejects.toThrow('durable lifecycle sink unavailable');
+    await expect(emitCompletionHandoff({ eventBus, handoff }))
+      .resolves.toMatchObject({ emitted: true });
+    expect(attempts).toBe(2);
+  });
+
   it('guards duplicate handoffs by dedupe key', async () => {
     const eventBus = new EventBus();
     const handoff = buildCompletionHandoff({

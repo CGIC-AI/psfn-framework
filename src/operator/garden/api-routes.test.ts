@@ -456,6 +456,8 @@ const testConfig: SubstrateConfig = {
   },
 };
 
+const TEST_COMPANION_ID = '11111111-1111-4111-8111-111111111111';
+
 const testCard: CharacterCardV2 = {
   spec: 'chara_card_v2',
   spec_version: '2.0',
@@ -635,6 +637,11 @@ describe('AdminServer JSON API routes', () => {
       new MemoryWriter(memoryStorePort, testEmbeddingService),
     );
     shardManager = new ShardManager({
+      snapshotParentCapabilityGrant: () => ({
+        tier: 'custom',
+        customTokens: ['shard.spawn'],
+        grantedTokens: ['shard.spawn'],
+      }),
       eventBus,
       llmProvider: mockLlmProvider,
       sessionStore,
@@ -928,14 +935,14 @@ describe('AdminServer JSON API routes', () => {
     const shardId = 'shard-admin-review-1';
     const lineage = buildShardLineageEnvelope({
       kind: 'spawn',
-      coreCompanionId: 'test-companion',
+      coreCompanionId: TEST_COMPANION_ID,
       shardId,
       shardChannelId: `shard:${shardId}`,
       sourceMessage: {
         id: shardId,
         channelId: `shard:${shardId}`,
         channelType: 'api',
-        authorId: 'test-companion',
+        authorId: TEST_COMPANION_ID,
         authorName: 'ApiTestBot',
         timestamp: new Date(1_710_000_000_000),
       },
@@ -1017,14 +1024,14 @@ describe('AdminServer JSON API routes', () => {
     const approveShardId = 'shard-admin-review-approve';
     const approveLineage = buildShardLineageEnvelope({
       kind: 'spawn',
-      coreCompanionId: 'test-companion',
+      coreCompanionId: TEST_COMPANION_ID,
       shardId: approveShardId,
       shardChannelId: `shard:${approveShardId}`,
       sourceMessage: {
         id: approveShardId,
         channelId: `shard:${approveShardId}`,
         channelType: 'api',
-        authorId: 'test-companion',
+        authorId: TEST_COMPANION_ID,
         authorName: 'ApiTestBot',
         timestamp: new Date(1_710_000_000_100),
       },
@@ -1080,14 +1087,14 @@ describe('AdminServer JSON API routes', () => {
     const denyShardId = 'shard-admin-review-deny';
     const denyLineage = buildShardLineageEnvelope({
       kind: 'spawn',
-      coreCompanionId: 'test-companion',
+      coreCompanionId: TEST_COMPANION_ID,
       shardId: denyShardId,
       shardChannelId: `shard:${denyShardId}`,
       sourceMessage: {
         id: denyShardId,
         channelId: `shard:${denyShardId}`,
         channelType: 'api',
-        authorId: 'test-companion',
+        authorId: TEST_COMPANION_ID,
         authorName: 'ApiTestBot',
         timestamp: new Date(1_710_000_000_200),
       },
@@ -1139,7 +1146,7 @@ describe('AdminServer JSON API routes', () => {
   });
 
   it('returns no-store dashboard responses and visibly unavailable durable usage without Postgres', async () => {
-    const res = await request(port, 'GET', '/api/admin/dashboard?costWindow=week', undefined, authHeaders);
+    const res = await request(port, 'GET', '/api/admin/dashboard?costWindow=quarter', undefined, authHeaders);
 
     expect(res.status).toBe(200);
     expect(res.headers['cache-control']).toBe('no-store');
@@ -1157,7 +1164,7 @@ describe('AdminServer JSON API routes', () => {
       };
     };
     expect(payload.stats.modelUsage).toMatchObject({
-      selected: 'week',
+      selected: 'quarter',
       usage: null,
       freshness: {
         state: 'unavailable',
@@ -1236,7 +1243,9 @@ describe('AdminServer JSON API routes', () => {
     expect(res.status).toBe(400);
     expect(res.headers['cache-control']).toBe('no-store');
     const payload = JSON.parse(res.body) as { error: string };
-    expect(payload.error).toContain('Invalid costWindow query parameter');
+    expect(payload.error).toBe(
+      'Invalid costWindow query parameter. Expected today, week, month, or quarter.',
+    );
   });
 
   it('includes cadence fields for recurring tasks in /api/admin/scheduler', async () => {
@@ -2708,7 +2717,7 @@ describe('AdminServer JSON API routes', () => {
       timestamp: Date.now() + 1,
       channelVisibility: 'direct',
     });
-    sessionManager.recordTurn({
+    void sessionManager.recordTurn({
       schemaVersion: 1,
       turnId,
       requestId: 'api-session-turn-1',

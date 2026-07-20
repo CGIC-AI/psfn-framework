@@ -22,7 +22,10 @@ export function parseTurnId(value: unknown, fieldName = 'turnId'): TurnID | null
   return normalized as TurnID;
 }
 
-export function backfillLegacyTurnId(seed: string): TurnID {
+/**
+ * Derives a stable turn ID: the same seed always produces the same byte-identical ID.
+ */
+export function deriveDeterministicTurnId(seed: string): TurnID {
   const digest = createHash('sha256').update(seed).digest('hex');
   const part1 = digest.slice(0, 8);
   const part2 = digest.slice(8, 12);
@@ -30,4 +33,12 @@ export function backfillLegacyTurnId(seed: string): TurnID {
   const part4 = `a${digest.slice(15, 18)}`;
   const part5 = digest.slice(18, 30);
   return `${part1}-${part2}-${part3}-${part4}-${part5}` as TurnID;
+}
+
+/**
+ * Backfills turn IDs only when reading pre-turnId on-disk journal or session data.
+ * The same legacy seed always produces the same byte-identical ID.
+ */
+export function backfillLegacyTurnId(seed: string): TurnID {
+  return deriveDeterministicTurnId(seed);
 }

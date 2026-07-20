@@ -78,7 +78,7 @@ export function ToastLayer({
   );
 }
 
-function ApprovalCard({
+export function ApprovalCard({
   request,
   onDecision,
 }: {
@@ -86,13 +86,36 @@ function ApprovalCard({
   onDecision: (id: string, decision: 'approve' | 'deny') => void;
 }) {
   const pending = request.status === 'pending';
+  const attribution = approvalAttributionLabel(request);
+  const grant = approvalGrantModeLabel(request);
+  const details = approvalDetailRows(request);
   return (
     <article className={`context-toast approval-toast ${request.status}`}>
       <LockKeyhole aria-hidden />
       <div>
-        <strong>Approval Request</strong>
+        <strong>{attribution ?? 'Approval Request'}</strong>
         <p>{request.title}</p>
         <p>{request.redactedContext}</p>
+        <p className="approval-timing">
+          Requested <time dateTime={request.requestedAt}>{formatApprovalTimestamp(request.requestedAt)}</time>
+          {request.expiresAt && (
+            <>
+              {' · Expires '}
+              <time dateTime={request.expiresAt}>{formatApprovalTimestamp(request.expiresAt)}</time>
+            </>
+          )}
+        </p>
+        {details.length > 0 && (
+          <dl className="approval-details">
+            {details.map((row) => (
+              <div key={row.label} className="approval-detail">
+                <dt>{row.label}</dt>
+                <dd>{row.value}</dd>
+              </div>
+            ))}
+          </dl>
+        )}
+        {grant !== null && <p className="approval-grant">{grant}</p>}
         {pending ? (
           <>
             {request.expiresInSeconds !== null && (
@@ -117,6 +140,47 @@ function ApprovalCard({
       </div>
     </article>
   );
+}
+
+/** "Parent · Shard" heading when server-resolved attribution is present. */
+function approvalAttributionLabel(request: ApprovalRequestView): string | null {
+  const attribution = request.attribution;
+  if (!attribution) return null;
+  return attribution.shardLabel
+    ? `${attribution.parentLabel} · ${attribution.shardLabel}`
+    : attribution.parentLabel;
+}
+
+/** Exact server-offered grant mode; never client-invented. */
+function approvalGrantModeLabel(request: ApprovalRequestView): string | null {
+  const grant = request.grantMode;
+  if (!grant) return null;
+  return grant.kind === 'once'
+    ? 'Grants one-time access'
+    : `Grants access for ${grant.ttlSeconds}s`;
+}
+
+/** Redacted action/scope/reason/source rows, in stable order. */
+function approvalDetailRows(request: ApprovalRequestView): Array<{ label: string; value: string }> {
+  const rows: Array<{ label: string; value: string }> = [];
+  if (request.attribution) {
+    rows.push({ label: 'Parent ID', value: request.attribution.parentId });
+    if (request.attribution.shardId) {
+      rows.push({ label: 'Shard ID', value: request.attribution.shardId });
+    }
+  }
+  if (request.action) rows.push({ label: 'Action', value: request.action });
+  if (request.scope) rows.push({ label: 'Scope', value: request.scope });
+  if (request.reason) rows.push({ label: 'Reason', value: request.reason });
+  if (request.sourceSystem) rows.push({ label: 'Source', value: request.sourceSystem });
+  return rows;
+}
+
+function formatApprovalTimestamp(timestamp: string): string {
+  return new Intl.DateTimeFormat(undefined, {
+    dateStyle: 'medium',
+    timeStyle: 'short',
+  }).format(Date.parse(timestamp));
 }
 
 function ArtifactCard({

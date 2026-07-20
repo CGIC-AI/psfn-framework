@@ -43,7 +43,7 @@ import {
   type ProactiveQuietHoursConfig,
 } from '../intention/proactive-time-gate.js';
 import type { StartupSessionMetadata } from '../session/manager.js';
-import { isInternalSessionId } from '../session/session-id.js';
+import { isInternalSessionId, isTestingSessionId } from '../session/session-id.js';
 import type { SessionEntry } from '../session/types.js';
 import type { Scheduler } from './scheduler.js';
 import {
@@ -650,15 +650,16 @@ function resolveHabitWakeChannelIds(
 ): string[] {
   const latestId = sessionManager
     .resolveStartupSessionMetadata('reuse_latest_session')?.sessionId;
+  const eligibleLatestId = latestId && !isTestingSessionId(latestId) ? latestId : undefined;
   if (!sessionManager.listRecentlyActiveChannels) {
-    return latestId ? [latestId] : [];
+    return eligibleLatestId ? [eligibleLatestId] : [];
   }
   const lookbackMs = Math.max(0, morning.habit.extendedWindowDays) * 24 * HOUR_MS;
   const ids = new Set<string>();
   for (const channel of sessionManager.listRecentlyActiveChannels({ lookbackMs, nowMs })) {
-    if (channel.sessionId) ids.add(channel.sessionId);
+    if (channel.sessionId && !isTestingSessionId(channel.sessionId)) ids.add(channel.sessionId);
   }
-  if (latestId) ids.add(latestId);
+  if (eligibleLatestId) ids.add(eligibleLatestId);
   return [...ids];
 }
 
@@ -686,11 +687,17 @@ function enumerateWakeupChannels(
 ): StartupSessionMetadata[] {
   const latest = options.sessionManager.resolveStartupSessionMetadata('reuse_latest_session');
   if (!options.sessionManager.listRecentlyActiveChannels) {
-    return latest ? [latest] : [];
+    return latest && !isTestingSessionId(latest.sessionId) ? [latest] : [];
   }
   const lookbackMs = Math.max(0, options.config.activeChannelLookbackHours) * HOUR_MS;
-  const channels = options.sessionManager.listRecentlyActiveChannels({ lookbackMs, nowMs });
-  if (latest && !channels.some(channel => channel.sessionId === latest.sessionId)) {
+  const channels = options.sessionManager
+    .listRecentlyActiveChannels({ lookbackMs, nowMs })
+    .filter(channel => !isTestingSessionId(channel.sessionId));
+  if (
+    latest
+    && !isTestingSessionId(latest.sessionId)
+    && !channels.some(channel => channel.sessionId === latest.sessionId)
+  ) {
     channels.push(latest);
   }
   return channels;

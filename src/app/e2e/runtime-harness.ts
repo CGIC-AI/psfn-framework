@@ -125,7 +125,7 @@ export function createIsolatedE2ERuntime(
     process.env.PSFN_RUNTIME_LAYOUT_MODE = 'continuous';
     process.env.DATABASE_PATH = databasePath;
     process.env.CHARACTER_CARD_PATH = characterCardPath;
-    process.env.COMPANION_ID = 'e2e-companion';
+    process.env.COMPANION_ID = '11111111-1111-4111-8111-111111111111';
     // Postgres-only runtime persistence requires a URL at config load; e2e
     // runs may override with a real scratch database via the ambient env.
     process.env.POSTGRES_DATABASE_URL ??= 'postgresql://psfn:psfn-local@127.0.0.1:5432/psfn_e2e';

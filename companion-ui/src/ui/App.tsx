@@ -2,6 +2,7 @@ import {
   Menu,
   Heart,
   Settings,
+  Users,
   Wifi,
   WifiOff,
 } from 'lucide-react';
@@ -14,7 +15,11 @@ import {
 } from 'react';
 import { PSFN_SATELLITE_MOBILE_CHAT_APP_NAME } from '../lib/api/auth.js';
 import { CompanionGatewayClient } from '../lib/api/gateway-client.js';
-import { deriveApprovalPanelState, submitApprovalDecision } from '../lib/approvals.js';
+import {
+  hasPendingApprovalExpiry,
+  mergeFleetApprovals,
+  routeFleetApprovalDecision,
+} from '../lib/fleet-approval-routing.js';
 import { deriveArtifactShelfState, readArtifactPreview } from '../lib/artifacts.js';
 import {
   FleetSessionClient,
@@ -32,6 +37,7 @@ import {
 import { deriveOperationalTraces } from '../lib/traces.js';
 import { HeadpatCoalescer } from '../lib/touch-interactions.js';
 import { ActivityDrawer, traceMatchesFilter } from './activity-drawer.js';
+import { CompanionSelectorPage } from './companion-selector.js';
 import { CompanionSprite, deriveSpriteState } from './companion-sprite.js';
 import { Composer } from './composer.js';
 import { useComposerController } from './composer-controller.js';
@@ -48,6 +54,7 @@ import {
 } from './settings-drawer.js';
 import { ThreadView } from './thread-view.js';
 import type { ActivityFilter, OverlayDrawer } from './types.js';
+import { useFleetRouting } from './use-fleet-routing.js';
 import { WishlistDrawer } from './wishlist-drawer.js';
 
 type AccessState = FleetSessionStatus
@@ -81,6 +88,11 @@ export function App() {
   const reconnectAttemptRef = useRef(0);
   const authorityEpochRef = useRef(0);
   const manualDisconnectRef = useRef(false);
+  const fleet = useFleetRouting({
+    accessState: access.state,
+    connect,
+    reportError: setConfigError,
+  });
 
   useEffect(() => {
     const coalescer = new HeadpatCoalescer({
@@ -161,8 +173,11 @@ export function App() {
   );
   const accessPresentation = useMemo(() => presentAccess(access), [access]);
   const hasPendingExpiry = useMemo(
-    () => streamState.approvals.some(entry => entry.status === 'pending' && Boolean(entry.expiresAt)),
-    [streamState.approvals],
+    () => hasPendingApprovalExpiry(
+      streamState,
+      access.state === 'signed_in' ? fleet.approvals : [],
+    ),
+    [access.state, fleet.approvals, streamState],
   );
 
   useEffect(() => {
@@ -176,7 +191,15 @@ export function App() {
     () => traces.filter(trace => traceMatchesFilter(trace, activityFilter)),
     [activityFilter, traces],
   );
-  const approvals = useMemo(() => deriveApprovalPanelState(streamState, now), [streamState, now]);
+  const approvals = useMemo(
+    () => mergeFleetApprovals(
+      streamState,
+      access.state === 'signed_in' ? fleet.approvals : [],
+      now,
+      access.state === 'signed_in' ? fleet.approvalHistory : [],
+    ),
+    [access.state, fleet.approvalHistory, fleet.approvals, now, streamState],
+  );
   const artifacts = useMemo(() => deriveArtifactShelfState(streamState), [streamState]);
   const canSend = (access.state === 'signed_in' || access.state === 'guest')
     && streamState.connection === 'ready';
@@ -204,8 +227,13 @@ export function App() {
       setConfigError(null);
       if (status.state === 'signed_out') {
         clearHumanScopedState();
-      } else if (connectWhenAllowed) {
-        await connect(status.websocketPath, authorityEpoch);
+      } else {
+        await fleet.load(
+          status,
+          authorityEpoch,
+          () => authorityEpoch === authorityEpochRef.current,
+          connectWhenAllowed,
+        );
       }
     } catch (error) {
       if (authorityEpoch !== authorityEpochRef.current) return;
@@ -218,11 +246,11 @@ export function App() {
   async function connect(
     path = websocketPath(access),
     expectedAuthorityEpoch?: number,
-  ) {
-    if (!path) return;
+  ): Promise<boolean> {
+    if (!path) return false;
     const authorityEpoch = expectedAuthorityEpoch ?? authorityEpochRef.current + 1;
     if (expectedAuthorityEpoch === undefined) authorityEpochRef.current = authorityEpoch;
-    if (authorityEpoch !== authorityEpochRef.current) return;
+    if (authorityEpoch !== authorityEpochRef.current) return false;
     manualDisconnectRef.current = false;
     setConnecting(true);
     const oldStore = storeRef.current;
@@ -242,15 +270,19 @@ export function App() {
       if (authorityEpoch !== authorityEpochRef.current) {
         store.destroy();
         store.disconnect();
-        return;
+        return false;
       }
       reconnectAttemptRef.current = 0;
+      if (store.snapshot().session?.canListShards) {
+        store.refreshShards();
+      }
       setConfigError(null);
+      return true;
     } catch (error) {
       if (authorityEpoch !== authorityEpochRef.current) {
         store.destroy();
         store.disconnect();
-        return;
+        return false;
       }
       setStreamState(current => ({
         ...current,
@@ -263,6 +295,7 @@ export function App() {
           cause: error,
         },
       }));
+      return false;
     } finally {
       if (authorityEpoch === authorityEpochRef.current) setConnecting(false);
     }
@@ -276,6 +309,7 @@ export function App() {
     store?.disconnect();
     setConnecting(false);
     setStreamState(createInitialHubStreamState());
+    fleet.clear();
     composer.clearHumanScopedState();
     setTouchError(null);
   }
@@ -342,11 +376,18 @@ export function App() {
     if (canSend) headpatCoalescerRef.current?.tap();
   }
 
-  function decideApproval(id: string, decision: 'approve' | 'deny') {
-    const store = storeRef.current;
-    if (!store || access.state !== 'signed_in') return;
+  async function decideApproval(id: string, decision: 'approve' | 'deny') {
+    if (access.state !== 'signed_in') return;
+    const fleetApproval = fleet.approvals.find(entry => entry.id === id);
     try {
-      submitApprovalDecision(store, streamState, id, decision);
+      await routeFleetApprovalDecision({
+        id,
+        decision,
+        ...(fleetApproval ? { fleetApproval } : {}),
+        activeCompanionId: fleet.activeCompanionIdRef.current,
+        switchCompanion: fleet.select,
+        currentStore: () => storeRef.current,
+      });
     } catch {
       // The transport error event owns user-visible denial state.
     }
@@ -377,6 +418,14 @@ export function App() {
       >
         <Heart aria-hidden />
       </button>
+      <button
+        className="floating-button companions-button"
+        type="button"
+        onClick={() => setOverlay('companions')}
+        aria-label="Choose a companion"
+      >
+        <Users aria-hidden />
+      </button>
 
       <div className="floating-status" aria-label={`Connection ${streamState.connection}`}>
         {connectionTone === 'bad' ? <WifiOff aria-hidden /> : <Wifi aria-hidden />}
@@ -392,7 +441,14 @@ export function App() {
         <span aria-label="Place authority">Place: {streamState.session?.place?.name ?? 'not available'}</span>
       </section>
 
-      <ThreadView streamState={streamState} />
+      <ThreadView
+        streamState={streamState}
+        targetLabel={streamState.session?.activeShardId
+          ? streamState.session.shards?.find(
+              shard => shard.shardId === streamState.session?.activeShardId,
+            )?.label
+          : undefined}
+      />
       {spriteEnabled && (
         <CompanionSprite state={spriteState} animated={spriteAnimations} label={identityLabel} onHeadpat={giveHeadpat} petted={spritePetted} />
       )}
@@ -400,7 +456,7 @@ export function App() {
         approvals={approvals}
         artifacts={artifacts}
         error={streamState.failure?.message ?? touchError ?? configError}
-        onApprovalDecision={decideApproval}
+        onApprovalDecision={(id, decision) => { void decideApproval(id, decision); }}
         onArtifactPreview={previewArtifact}
         stacked={composer.pendingAttachments.length > 0}
         updateReady={updateReady}
@@ -416,12 +472,19 @@ export function App() {
         onSendText={sendUserText}
         onStopGeneration={() => storeRef.current?.interrupt()}
         voiceStopActive={voiceStopActive}
+        targetLabel={streamState.session?.activeShardId
+          ? streamState.session.shards?.find(
+              shard => shard.shardId === streamState.session?.activeShardId,
+            )?.label
+          : undefined}
       />
       {overlay && (
         <OverlayFrame onClose={() => setOverlay(null)} side={overlay === 'activity' ? 'left' : 'right'}>
           {overlay === 'settings' ? (
             <SettingsDrawer
               access={accessPresentation}
+              activeCompanionId={fleet.activeCompanionId}
+              companions={fleet.roster}
               connecting={connecting}
               micMode={composer.micMode}
               spriteAnimations={spriteAnimations}
@@ -440,6 +503,7 @@ export function App() {
                 void logout();
               }}
               onMicModeChange={composer.selectMicMode}
+              onCompanionChange={(companionId) => { void fleet.select(companionId); }}
               onSpriteAnimationsChange={setSpriteAnimations}
               onSpriteEnabledChange={setSpriteEnabled}
               onSwitchUser={() => {
@@ -454,6 +518,30 @@ export function App() {
               onRequestReview={(prompt) => {
                 sendUserText(prompt);
                 setOverlay(null);
+              }}
+            />
+          ) : overlay === 'companions' ? (
+            <CompanionSelectorPage
+              activeShardId={streamState.session?.activeShardId ?? null}
+              activeCompanionId={fleet.activeCompanionId}
+              approvals={approvals}
+              companions={fleet.roster}
+              connecting={connecting}
+              shards={streamState.session?.shards ?? []}
+              onApprovalDecision={(id, decision) => { void decideApproval(id, decision); }}
+              onClose={() => setOverlay(null)}
+              onSelect={(companionId) => {
+                void fleet.select(companionId).then((selected) => {
+                  if (selected) setOverlay(null);
+                });
+              }}
+              onSelectShard={(shardId) => {
+                try {
+                  storeRef.current?.selectShard(shardId);
+                  setOverlay(null);
+                } catch (error) {
+                  setConfigError(error instanceof Error ? error.message : 'Shard selection failed');
+                }
               }}
             />
           ) : (

@@ -178,7 +178,10 @@ function parsePromptCaching(
     reject(`${path}.scope`, 'contains an unsupported value');
   }
   const reason = optionalString(source, 'reason', path);
-  if (reason !== undefined && !['disabled', 'missing_channel_id'].includes(reason)) {
+  if (
+    reason !== undefined
+    && !['disabled', 'missing_channel_id', 'missing_companion_id'].includes(reason)
+  ) {
     reject(`${path}.reason`, 'contains an unsupported value');
   }
   const mechanism = optionalString(source, 'mechanism', path);

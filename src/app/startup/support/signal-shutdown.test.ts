@@ -1,5 +1,9 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { createSignalShutdownHandler, registerProcessErrorHandlers } from './signal-shutdown.js';
+import {
+  createSignalShutdownHandler,
+  installSignalHandlers,
+  registerProcessErrorHandlers,
+} from './signal-shutdown.js';
 import type { ShutdownLogger } from './shutdown-helpers.js';
 
 function createLogger(): ShutdownLogger {
@@ -162,5 +166,37 @@ describe('registerProcessErrorHandlers', () => {
       expect.objectContaining({ error: expect.stringContaining('sync boom') }),
     );
     expect(requestShutdown).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('installSignalHandlers', () => {
+  it('registers byte-preserving signal failure handling', async () => {
+    const logger = createLogger();
+    const shutdown = vi.fn(async () => {
+      throw new Error('shutdown rejected');
+    });
+    const exit = vi.fn();
+    const existingListeners = new Set(process.listeners('SIGINT'));
+
+    installSignalHandlers(shutdown, logger, exit);
+    const listener = process.listeners('SIGINT').find(candidate => !existingListeners.has(candidate));
+    expect(listener).toBeDefined();
+
+    try {
+      listener?.('SIGINT');
+      await vi.waitFor(() => {
+        expect(exit).toHaveBeenCalledWith(1);
+      });
+      expect(shutdown).toHaveBeenCalledWith('SIGINT');
+      expect(logger.error).toHaveBeenCalledWith(
+        'Unhandled SIGINT shutdown error',
+        { error: 'Error: shutdown rejected' },
+      );
+    } finally {
+      if (listener) process.removeListener('SIGINT', listener);
+      const termListeners = process.listeners('SIGTERM');
+      const addedTermListener = termListeners.at(-1);
+      if (addedTermListener) process.removeListener('SIGTERM', addedTermListener);
+    }
   });
 });

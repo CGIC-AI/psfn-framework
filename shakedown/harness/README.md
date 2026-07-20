@@ -75,6 +75,9 @@ secrets.
 
 | Script | Role |
 | --- | --- |
+| `run-shakedown-profile.mjs` | Profile runner: `--profile lite\|full`. `full` reproduces the standard scripted Layer A (matrix sweep + scorecard) with no profile stamp. `lite` runs the manifest's preflight gates, drives the sweep with ~10 stable-id smoke cases at the baseline tier + the capability-gate matrix at all three tiers under a sub-hour deadline (SIGTERM-on-deadline/signal so the sweep's trap restores the tier), then scores with `PSFN_PROFILE=lite`. See `docs/shakedown.md` → "Profiles: lite vs full". |
+| `profiles/lite.manifest.json` | Declarative lite-profile manifest: preflight gates, the smoke case subset (by stable id), required tiers + coverage ids, and the sub-hour deadline. Consumed by both `run-shakedown-profile.mjs` and `shakedown-scorecard.mjs`. |
+| `bootstrap-local.mjs` | One-command local bootstrap: validates protected roots before any write, builds the RC, seeds owner files, imports Artie, launches split runtime, and prints the exact persisted first-turn record. |
 | `live-system-shakedown.mjs` | Tier-tagged case harness. One phase per run; writes a run JSON (tagged with `target`) to `PSFN_SHAKEDOWN_OUTPUT`. |
 | `run-live-shakedown-matrix.sh` | Tier sweep: nursery → apprentice → autonomous, for `local` or `kube` (`PSFN_TARGET`). Captures the pre-sweep tier, restores it on exit (trap) **and verifies the restore** — owner-file diff for local, settings-API re-read for kube — even on SIGINT/SIGTERM, and emits one run JSON per tier. |
 | `tier-conformance-sweep.mjs` | Kube 3-tier **tool-conformance** sweep. Flips the live tier nursery → apprentice → autonomous (reusing `lib/target.mjs`), triggers `POST /api/admin/tool-conformance/run` + `GET …/latest` at each tier, writes `tool-conformance.<tier>.json` per tier, and restores + confirms the pre-sweep tier on any exit (normal / error / SIGINT / SIGTERM). **Tier-insensitive for capability gating** — see the runbook below. |
@@ -82,6 +85,48 @@ secrets.
 | `operator-ui-sweep.mjs` | Garden behavioral sweep (Playwright) — asserts behavior, not HTTP 200s. |
 | `shakedown-scorecard.mjs` | Aggregates run JSONs; enforces the non-green taxonomy and cross-checks the coverage appendix. Exits non-zero if any case is non-green (unwaived) or any appendix surface is uncovered. |
 | `coverage-map.json` | Maps each appendix surface to the case ids that exercise it (or an explicit disposition). Maintained per sprint. |
+
+## Sprint 10 coverage cases
+
+`cases/sprint10.mjs` composes domain-focused modules into the existing catalog;
+it does not fork the harness. The ten cases cover physical and placeless situated presence, virtual
+mindspace and physical precedence, synthetic world telemetry with
+`world list/perceive`, hub enrollment and repeatable presence-follow, API and
+classified-satellite CogSec document quarantine, temporal history rendering
+plus outbound stamp stripping, and incremental SSE first-content
+timing. Each output row carries `tier`, `variants`, `feature`, and `proof`
+metadata. Its verdict comes from the exact persisted TurnRecord and side
+artifacts, never from the assistant's claim.
+
+The physical, placeless, and hub cases require named synthetic satellite
+claims. For each prefix below, set `_CLAIM_TYPE`, `_ID`, `_ENDPOINT_ID`, and
+`_SESSION_ID`; `_CAPABILITIES` and `_TELEMETRY_SCOPES` are optional:
+
+- `PSFN_SHAKEDOWN_PHYSICAL_SATELLITE`
+- `PSFN_SHAKEDOWN_PLACELESS_SATELLITE`
+- `PSFN_SHAKEDOWN_HUB_SATELLITE`
+
+Those claims must match three synthetic entries in the round's canonical
+`satellites.json`: physical (`living_room`), deliberately placeless, and hub
+face telemetry (`kitchen`). The place IDs and labels can be overridden through
+the corresponding `PSFN_SHAKEDOWN_*_PLACE_*` values in the Artie env template.
+The hub probe resets to the physical fixture, creates and revokes its own opaque enrollment,
+then restores the physical place so a rerun starts from the same precondition
+(`PSFN_SHAKEDOWN_HUB_IDENTITY_ID` may override the generated handle). The CogSec
+document cases require the disposable round's `intake-policy.json` mode to be
+`enforce`; shadow mode is intentionally not accepted as quarantine proof. Both
+cases prove the held item through the Garden queue, await the memory and emotion
+background jobs, assert zero hostile/notice leakage, and discard the synthetic
+fixture through Garden's two-step decision path.
+
+The scorecard unions a successful artifact's top-level `coverageCaseIds` with
+successful harness case IDs. This is how the real-process multi-companion support
+artifact and per-tier capability-conformance artifact cover their appendix
+rows without duplicating those runtimes in the chat catalog. Generic external
+artifacts must report `status: "passed"` (or `ok: true`); an unrecognized or
+failed status makes the scorecard red. The real-HA control, shared-wiki toaster
+test, hub/PWA/touch walk, and final Garden UX pass remain explicit manual or
+partner dispositions.
 
 ## Non-green taxonomy (enforced in `shakedown-scorecard.mjs`)
 
@@ -101,9 +146,21 @@ coverage rows are untouched is itself a failure.
 ## Running
 
 Source the env first (two stages, both `set -a`; see `docs/shakedown.md` and
-`shakedown/artie/shakedown.env.template`), then:
+`shakedown/artie/shakedown.env.template`). The bootstrap host must have `psql`
+available for the pre-write disposable-database proof. Then:
 
 ```bash
+# Fresh local lane. PSFN_LIVE_DATA_ROOTS in the sourced round env is mandatory
+# and colon-separated. The env also captures the stage-1 live PostgreSQL URL,
+# names an exact dedicated round database + non-default schema, and disables
+# external channels unless dedicated shakedown accounts are explicitly opted in.
+# A dirty root refuses unless resume is explicit.
+npm run shakedown:bootstrap
+
+# Resume a bootstrap that has a matching .bootstrap-state.json. Immutable
+# completed stages are skipped; runtime readiness and first-turn proof rerun.
+PSFN_SHAKEDOWN_RESUME=1 npm run shakedown:bootstrap
+
 # local tier sweep (writes per-tier run JSONs under $PSFN_MATRIX_DIR)
 PSFN_TARGET=local \
 PSFN_TIER_FILE=$SYSTEM_DATA_DIR/capability-tier.json \
@@ -120,8 +177,8 @@ PSFN_ADMIN_BASE=http://127.0.0.1:10054 \
 PSFN_MATRIX_DIR=$SHAKEDOWN_ROOT/artifacts/matrix \
   shakedown/harness/run-live-shakedown-matrix.sh
 
-# scorecard over the sweep output
-PSFN_SCORECARD_INPUTS="$PSFN_MATRIX_DIR/live-system-shakedown.nursery.json,$PSFN_MATRIX_DIR/live-system-shakedown.apprentice.json,$PSFN_MATRIX_DIR/live-system-shakedown.autonomous.json" \
+# scorecard over the sweep plus external support/conformance/UI proof artifacts
+PSFN_SCORECARD_INPUTS="$PSFN_MATRIX_DIR/live-system-shakedown.nursery.json,$PSFN_MATRIX_DIR/live-system-shakedown.apprentice.json,$PSFN_MATRIX_DIR/live-system-shakedown.autonomous.json,$PSFN_SUPPORT_ARTIFACT,$PSFN_UI_ARTIFACT" \
 PSFN_SCORECARD_JSON=$SHAKEDOWN_ROOT/artifacts/shakedown-scorecard.json \
 PSFN_SCORECARD_MD=$SHAKEDOWN_ROOT/SHAKEDOWN-SCORECARD.md \
   shakedown/harness/shakedown-scorecard.mjs

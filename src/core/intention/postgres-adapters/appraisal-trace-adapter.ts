@@ -26,7 +26,7 @@ import {
   MAX_PENDING_REASON_CHARS,
   MAX_PENDING_SUMMARY_CHARS,
   MAX_PENDING_TEXT_CHARS,
-  PendingFollowUpRow,
+  type PendingFollowUpRow,
   clampListLimit,
   encodeWakeConditions,
   mapPendingFollowUpRow,

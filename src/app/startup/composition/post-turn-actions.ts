@@ -19,6 +19,7 @@ import type {
   PostTurnActionCapability,
   PostTurnActionHandlerResult,
   PostTurnActionExecutionMode,
+  PostTurnActionEnqueueResult,
   PostTurnActionFailureReason,
   PostTurnActionHandler,
   PostTurnActionHandlerOptions,
@@ -66,6 +67,7 @@ export type {
   PostTurnActionAgent,
   PostTurnActionCapability,
   PostTurnActionExecutionMode,
+  PostTurnActionEnqueueResult,
   PostTurnActionFailureReason,
   PostTurnActionHandler,
   PostTurnActionHandlerOptions,
@@ -362,14 +364,14 @@ export function wirePostTurnActionRuntime(
     };
   };
 
-  const persistQueue = (): void => {
+  const persistQueueEntries = (entries: Iterable<DeferredQueueEntry>): void => {
     if (!persistencePath) {
       return;
     }
 
     const serialized = {
       version: PERSISTED_QUEUE_VERSION,
-      entries: [...queue.values()].map((entry) => ({
+      entries: [...entries].map((entry) => ({
         action: entry.action,
         capability: entry.capability,
         runtimeClass: entry.runtimeClass,
@@ -379,10 +381,14 @@ export function wirePostTurnActionRuntime(
       })),
     } satisfies PersistedQueueFile;
 
+    writeJsonAtomic(persistencePath, serialized);
+    lastPersistedAt = Date.now();
+    lastPersistError = undefined;
+  };
+
+  const persistQueue = (): void => {
     try {
-      writeJsonAtomic(persistencePath, serialized);
-      lastPersistedAt = Date.now();
-      lastPersistError = undefined;
+      persistQueueEntries(queue.values());
     } catch (error) {
       lastPersistError = String(error);
       log.error('Failed to persist deferred post-turn action queue', {
@@ -580,6 +586,7 @@ export function wirePostTurnActionRuntime(
       blocker?: { reason: string; error?: string };
       partialResult?: boolean;
       subagentSpawn?: PostTurnActionHandlerResult['subagentSpawn'];
+      lifecycleSequence?: string;
     },
   ): void => {
     const originIds = extractOriginIds(entry.action.payload);
@@ -619,6 +626,7 @@ export function wirePostTurnActionRuntime(
         entry.action.dedupeKey,
         status,
         input.blocker?.reason,
+        input.lifecycleSequence,
       ]),
     };
     // Telemetry/journal record only. Deferred post-turn actions are runtime
@@ -816,11 +824,11 @@ export function wirePostTurnActionRuntime(
     return true;
   };
 
-  const queueAction = (action: InferredPostTurnAction): void => {
+  const queueAction = (action: InferredPostTurnAction): PostTurnActionEnqueueResult => {
     const existing = queue.get(action.dedupeKey);
     if (existing) {
       emitTelemetry('deduplicated', existing);
-      return;
+      return 'deduplicated';
     }
 
     const entry: DeferredQueueEntry = {
@@ -831,26 +839,49 @@ export function wirePostTurnActionRuntime(
       nextRunAt: resolveInitialNextRunAt(action),
       maxRetries: normalizeMaxRetries(action.maxRetries),
     };
-    queue.set(action.dedupeKey, entry);
+    const candidateQueue = new Map(queue);
+    candidateQueue.set(action.dedupeKey, entry);
     const runtimeProfile = resolveRuntimeLaneBudgetProfile(entry.runtimeClass);
-    const sameClassEntries = [...queue.values()]
+    const sameClassEntries = [...candidateQueue.values()]
       .filter((candidate) => candidate.runtimeClass === entry.runtimeClass)
       .sort((left, right) => left.action.inferredAt - right.action.inferredAt || left.nextRunAt - right.nextRunAt);
     const overflow = Math.max(0, sameClassEntries.length - runtimeProfile.maxQueuedActions);
+    const droppedEntries = sameClassEntries.slice(0, overflow);
     if (overflow > 0) {
-      for (const droppedEntry of sameClassEntries.slice(0, overflow)) {
-        queue.delete(droppedEntry.action.dedupeKey);
-        const reason = `Runtime class queue budget exhausted for ${droppedEntry.runtimeClass}`;
-        recordDrop(droppedEntry, reason);
-        emitTelemetry('dropped_budget', droppedEntry, {
-          error: reason,
-        });
+      for (const droppedEntry of droppedEntries) {
+        candidateQueue.delete(droppedEntry.action.dedupeKey);
       }
     }
-    persistQueue();
+    try {
+      // Persist the complete candidate state before making it observable in
+      // memory. A direct producer can therefore retry or recover its durable
+      // intent when this write fails.
+      persistQueueEntries(candidateQueue.values());
+    } catch (error) {
+      lastPersistError = String(error);
+      log.error('Failed to persist deferred post-turn action queue before enqueue', {
+        persistencePath,
+        actionId: action.id,
+        error: lastPersistError,
+      });
+      throw error;
+    }
+    queue.clear();
+    for (const [dedupeKey, candidate] of candidateQueue) {
+      queue.set(dedupeKey, candidate);
+    }
+    for (const droppedEntry of droppedEntries) {
+      const reason = `Runtime class queue budget exhausted for ${droppedEntry.runtimeClass}`;
+      recordDrop(droppedEntry, reason);
+      emitTelemetry('dropped_budget', droppedEntry, {
+        error: reason,
+      });
+    }
     if (queue.has(entry.action.dedupeKey)) {
       emitTelemetry('queued', entry);
+      return 'queued';
     }
+    return 'dropped_budget';
   };
 
   const runNextDueAction = async (
@@ -924,6 +955,12 @@ export function wirePostTurnActionRuntime(
     runningDedupeKeys.add(entry.action.dedupeKey);
     persistQueue();
     emitTelemetry('started', entry);
+    emitCompletionHandoff(entry, 'started', {
+      summary: `Post-turn action "${entry.action.kind}" started.`,
+      validationPerformed: ['post_turn_action_lifecycle_nonterminal', `attempt:${entry.attempt}`],
+      recommendedNextAction: 'Keep the task visible without interrupting the foreground conversation.',
+      lifecycleSequence: `attempt:${entry.attempt}`,
+    });
 
     try {
       const registeredHandlers = [...registrations.values()];
@@ -969,6 +1006,13 @@ export function wirePostTurnActionRuntime(
           nextRetryAt: entry.nextRunAt,
           ...(handlerResult.detail ? { error: handlerResult.detail } : {}),
         });
+        emitCompletionHandoff(entry, 'progress', {
+          summary: `Post-turn action "${entry.action.kind}" is waiting to resume.`,
+          validationPerformed: ['post_turn_action_lifecycle_nonterminal', 'handler_rescheduled'],
+          recommendedNextAction: 'Keep the task visible while the policy-controlled delay elapses.',
+          partialResult: true,
+          lifecycleSequence: `rescheduled:${entry.attempt}:${entry.nextRunAt}`,
+        });
         return true;
       }
       queue.delete(entry.action.dedupeKey);
@@ -1007,6 +1051,13 @@ export function wirePostTurnActionRuntime(
         error: errorText,
         delayMs,
         nextRetryAt: entry.nextRunAt,
+      });
+      emitCompletionHandoff(entry, 'progress', {
+        summary: `Post-turn action "${entry.action.kind}" is scheduled for retry.`,
+        validationPerformed: ['post_turn_action_lifecycle_nonterminal', 'retry_scheduled'],
+        recommendedNextAction: 'Keep the task visible while the bounded retry delay elapses.',
+        partialResult: true,
+        lifecycleSequence: `retry:${entry.attempt}:${entry.nextRunAt}`,
       });
     } finally {
       runningDedupeKeys.delete(entry.action.dedupeKey);
@@ -1327,6 +1378,13 @@ export function wirePostTurnActionRuntime(
   }
 
   return {
+    enqueue(action: InferredPostTurnAction): PostTurnActionEnqueueResult {
+      const normalized = normalizePersistedAction(action);
+      if (!normalized) {
+        throw new Error('Invalid inferred post-turn action payload');
+      }
+      return queueAction(normalized);
+    },
     registerHandler(
       kind: string,
       handler: PostTurnActionHandler,

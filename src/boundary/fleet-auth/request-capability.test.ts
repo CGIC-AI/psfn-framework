@@ -1,6 +1,7 @@
 import { generateKeyPairSync, sign as signBytes } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import { createCompanionId } from '../../shared/routing/companion-id.js';
+import { resolveFleetModelUsageInternalRequestTarget } from '../../shared/telemetry/fleet-model-usage-request.js';
 import { compileGatewayGardenRequestTarget } from './request-capability-target.js';
 import {
   createGatewayRequestCapabilitySigner,
@@ -41,6 +42,10 @@ const AUTH_CONTEXT = Object.freeze({
   sessionAssurance: 'webauthn_uv' as const, authorizationEventId: 'event-a',
   resolvedAt: '2030-01-01T00:00:00.000Z',
 });
+const FLEET_MODEL_USAGE_REQUEST_TARGET = resolveFleetModelUsageInternalRequestTarget(
+  { range: 'week', timezone: 'UTC' },
+  NOW * 1_000,
+);
 
 function target(
   rawTarget = '/api/admin/images/generated?favorite=true&q=cat',
@@ -153,6 +158,54 @@ describe('Ed25519 hop request capabilities', () => {
       notBefore: NOW,
       expiresAt: NOW + 30,
     });
+  });
+
+  it('signs a canonical fleet roster only for the fleet model-usage read', () => {
+    const compiled = target('/api/admin/fleet-model-usage?range=week');
+    const fleetCompanionIds = Object.freeze([COMPANION_ID, OTHER_COMPANION_ID]);
+    const input = {
+      ...binding(compiled),
+      authContext: {
+        ...AUTH_CONTEXT,
+        fleetCompanionIds,
+        fleetModelUsageRequestTarget: FLEET_MODEL_USAGE_REQUEST_TARGET,
+      },
+    };
+    const token = signer().signOperator(input);
+
+    expect(verifier().verifyOperator({
+      token,
+      ...binding(compiled),
+      nowSeconds: NOW,
+    }).authContext).toMatchObject({
+      fleetCompanionIds,
+      fleetModelUsageRequestTarget: FLEET_MODEL_USAGE_REQUEST_TARGET,
+    });
+    expect(() => signer().signOperator({
+      ...binding(target('/api/admin/model-usage?range=week')),
+      authContext: {
+        ...AUTH_CONTEXT,
+        fleetCompanionIds,
+        fleetModelUsageRequestTarget: FLEET_MODEL_USAGE_REQUEST_TARGET,
+      },
+    })).toThrow(/fleet roster is outside/u);
+    expect(() => signer().signOperator({
+      ...binding(compiled),
+      authContext: {
+        ...AUTH_CONTEXT,
+        fleetCompanionIds: [OTHER_COMPANION_ID, COMPANION_ID],
+        fleetModelUsageRequestTarget: FLEET_MODEL_USAGE_REQUEST_TARGET,
+      },
+    })).toThrow(/not canonical/u);
+    expect(() => signer().signOperator({
+      ...binding(compiled),
+      authContext: {
+        ...AUTH_CONTEXT,
+        fleetCompanionIds,
+        fleetModelUsageRequestTarget:
+          '/api/admin/model-usage?range=custom&timezone=UTC&sinceMs=0&untilMs=3600000&bucket=hour&limit=1&topN=100&groupBy=model',
+      },
+    })).toThrow(/does not match the fleet route/u);
   });
 
   it('requires an exact operator parent for agent capabilities and forbids parent/audience crossover', () => {

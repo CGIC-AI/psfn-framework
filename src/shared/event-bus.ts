@@ -11,7 +11,7 @@ import type {
   LLMStreamFirstOutputObservation,
   RunChargeEvent,
   FatigueBudgetEvent,
-} from './contracts/runtime.js';
+} from './contracts/runtime-base.js';
 import type { TurnSnapshot } from '../core/turns/snapshot.js';
 import type { SessionRouteResetMode } from '../core/session/session-routes.js';
 import type {
@@ -19,6 +19,7 @@ import type {
   AdaptiveToolSnapshotTelemetry,
 } from '../core/agent/adaptive-tools-telemetry.js';
 import type { CompletionHandoffRecord } from './contracts/completion-handoff.js';
+import type { HumanAttentionPressureEvent } from '../core/agent/fatigue/human-attention-pressure.js';
 import type { PlaceKind } from './contracts/places-registry.js';
 import type { SatelliteTelemetryAuthContext } from './contracts/satellite-registry.js';
 import type { IcpInitiationCandidateStatus } from './contracts/icp-autonomy.js';
@@ -252,13 +253,7 @@ export interface EventMap {
     noticeBuffered?: boolean;
     timestamp: number;
   } & EventCorrelationFields;
-  'agent.tools.legacy_alias': {
-    timestamp: number;
-    toolName: string;
-    alias: string;
-    canonicalAction: string;
-    migrationSurface: string;
-  } & EventCorrelationFields;
+  'agent.human_attention_pressure': HumanAttentionPressureEvent;
   // Lightweight near-turn memory lane fire-rate telemetry (E5.2). The lane
   // replaced the old turn-based "sleeptime" cadence; heavy passes now run
   // only from the rest-window scheduler task.
@@ -524,7 +519,7 @@ export interface EventMap {
         label?: string;
       }>;
     }>;
-    compositionalMode?: 'legacy' | 'chunk_compose';
+    compositionalMode?: 'single_pass' | 'chunk_compose';
     chunkCount?: number;
     mergedFactCount?: number;
     crossChunkDeduplicatedCount?: number;
@@ -1046,12 +1041,20 @@ export interface EventMap {
   // events fire when generated media is persisted post-turn (agent process);
   // tool activity re-emits on the gateway bus after crossing the RPC boundary.
   'companion.approval.requested': {
+    // Parent owner is ALWAYS the authenticated enqueue owner (routing key).
     companionId: string;
+    // Optional shard provenance: present iff a shard-originated request was
+    // enqueued with authenticated shard lineage. Never an owner, never a peer
+    // companion id. The parent binding above stays the routing/ownership key.
+    shardId?: string;
     payload: CompanionApprovalRequestedPayload;
     timestamp: number;
   };
   'companion.approval.resolved': {
+    // Same authenticated parent owner captured at enqueue for this id.
     companionId: string;
+    // Same immutable shard provenance captured at enqueue for this id.
+    shardId?: string;
     payload: CompanionApprovalResolvedPayload;
     timestamp: number;
   };

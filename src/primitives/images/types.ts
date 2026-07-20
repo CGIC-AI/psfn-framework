@@ -38,6 +38,48 @@ export type ImageProvider = typeof IMAGE_PROVIDER_VALUES[number];
 export type ImageProviderPreference = typeof IMAGE_PROVIDER_PREFERENCE_VALUES[number];
 export type ImageMode = 'create' | 'edit';
 
+function normalizeCatalogModelSetting<TModel extends string>(
+  value: unknown,
+  fieldName: string,
+  supportedModels: readonly TModel[],
+): TModel {
+  if (typeof value !== 'string' || value.trim().length === 0) {
+    throw new Error(`${fieldName} must be a non-empty image model catalog ID`);
+  }
+  const normalized = value.trim();
+  if (!(supportedModels as readonly string[]).includes(normalized)) {
+    throw new Error(
+      `${fieldName} references unsupported image model catalog ID "${normalized}". `
+      + `Valid values: ${supportedModels.join(', ')}`,
+    );
+  }
+  return normalized as TModel;
+}
+
+export function normalizeImageProviderSetting(
+  value: unknown,
+  fieldName = 'imageProvider',
+): ImageProvider {
+  if (typeof value !== 'string' || !(IMAGE_PROVIDER_VALUES as readonly string[]).includes(value)) {
+    throw new Error(`${fieldName} must be one of: ${IMAGE_PROVIDER_VALUES.join(', ')}`);
+  }
+  return value as ImageProvider;
+}
+
+export function normalizeFalCreateModelSetting(
+  value: unknown,
+  fieldName = 'imageFalCreateModel',
+): FalCreateModel {
+  return normalizeCatalogModelSetting(value, fieldName, FAL_CREATE_MODELS);
+}
+
+export function normalizeFalEditModelSetting(
+  value: unknown,
+  fieldName = 'imageFalEditModel',
+): FalEditModel {
+  return normalizeCatalogModelSetting(value, fieldName, FAL_EDIT_MODELS);
+}
+
 export interface ComfyWorkflowTemplate {
   description?: string;
   workflow: Record<string, unknown>;
@@ -54,6 +96,10 @@ export interface ImageRuntimeConfig {
   credentialVault?: CredentialVaultPort;
   falApiKey?: string;
   comfyUiBaseUrl?: string;
+  imageProvider?: ImageProvider;
+  imageFalCreateModel?: FalCreateModel;
+  imageFalEditModel?: FalEditModel;
+  imageSelfieEditModel?: FalEditModel;
   imageWorkflows?: ImageWorkflowSettings;
   webFetchAllowHttp?: boolean;
   webFetchDomainAllowlist?: string[];
@@ -67,6 +113,23 @@ export interface ImageRuntimeConfig {
   imageComfyTimeoutMs?: number;
   /** Poll cadence (ms) for ComfyUI workflow history (owner-file backed, zet.7). */
   imageComfyPollIntervalMs?: number;
+}
+
+export interface ImageOperationSettingsDefaults {
+  provider?: ImageProvider;
+  createModel?: FalCreateModel;
+  editModel?: FalEditModel;
+  selfieEditModel?: FalEditModel;
+}
+
+export interface ImageCreateSettingsDefaults {
+  provider?: ImageProvider;
+  model?: FalCreateModel;
+}
+
+export interface ImageEditSettingsDefaults {
+  provider?: ImageProvider;
+  model?: FalEditModel;
 }
 
 export interface ImageResultAsset {
@@ -104,6 +167,8 @@ export interface ImageCreateParams {
   prompt: string;
   provider?: ImageProviderPreference;
   model?: FalCreateModel;
+  /** Per-companion settings selection carried across the agent→gateway boundary. */
+  settingsDefaults?: ImageCreateSettingsDefaults;
   numImages?: number;
   width?: number;
   height?: number;
@@ -129,6 +194,8 @@ export interface ImageEditParams {
   imageUrls: string[];
   provider?: ImageProviderPreference;
   model?: FalEditModel;
+  /** Per-companion settings selection carried across the agent→gateway boundary. */
+  settingsDefaults?: ImageEditSettingsDefaults;
   numImages?: number;
   width?: number;
   height?: number;

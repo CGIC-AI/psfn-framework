@@ -1,10 +1,15 @@
 import type {
   DashboardCostWindow,
   DashboardCostWindowUsage,
+  DashboardModelUsageSparklinePoint,
 } from '../types.js';
-import type { ModelUsageTotals } from '../../../shared/telemetry/model-usage.js';
+import type {
+  ModelUsageTimeBucket,
+  ModelUsageTotals,
+  ResolvedModelUsageBucket,
+} from '../../../shared/telemetry/model-usage.js';
 
-export const DASHBOARD_COST_WINDOWS: readonly DashboardCostWindow[] = ['today', 'week', 'month'];
+export const DASHBOARD_COST_WINDOWS: readonly DashboardCostWindow[] = ['today', 'week', 'month', 'quarter'];
 export const DASHBOARD_MODEL_USAGE_REFRESH_INTERVAL_MS = 15_000;
 
 const DAY_MS = 86_400_000;
@@ -37,6 +42,26 @@ export function startOfDashboardUtcMonth(nowMs: number): number {
   return Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1);
 }
 
+export function startOfDashboardUtcQuarter(nowMs: number): number {
+  const now = new Date(nowMs);
+  const quarterStartMonth = Math.floor(now.getUTCMonth() / 3) * 3;
+  return Date.UTC(now.getUTCFullYear(), quarterStartMonth, 1);
+}
+
+export function resolveDashboardCostWindowBucket(
+  window: DashboardCostWindow,
+): ResolvedModelUsageBucket {
+  switch (window) {
+    case 'today':
+      return 'hour';
+    case 'week':
+    case 'month':
+      return 'day';
+    case 'quarter':
+      return 'week';
+  }
+}
+
 export function resolveDashboardCostWindowRange(
   window: DashboardCostWindow,
   nowMs: number,
@@ -48,6 +73,8 @@ export function resolveDashboardCostWindowRange(
       return { sinceMs: startOfDashboardUtcWeek(nowMs), untilMs: nowMs + 1 };
     case 'month':
       return { sinceMs: startOfDashboardUtcMonth(nowMs), untilMs: nowMs + 1 };
+    case 'quarter':
+      return { sinceMs: startOfDashboardUtcQuarter(nowMs), untilMs: nowMs + 1 };
   }
 }
 
@@ -67,4 +94,14 @@ export function mapModelUsageTotalsToDashboardUsage(
     estimatedCostUsd: totals.estimatedCostUsd,
     effectiveCostUsd: totals.totalCostUsd,
   };
+}
+
+export function mapModelUsageTimeSeriesToDashboardSparkline(
+  timeSeries: readonly ModelUsageTimeBucket[],
+): DashboardModelUsageSparklinePoint[] {
+  return timeSeries.map(bucket => ({
+    startMs: bucket.startMs,
+    totalTokens: bucket.totalTokens,
+    effectiveCostUsd: bucket.totalCostUsd,
+  }));
 }

@@ -1,4 +1,5 @@
 import { isObjectRecord as isRecord } from '../../../src/shared/utils/types.js';
+import { hasExactKeys } from './protocol/validation.js';
 
 const STATUS_PATH = '/v1/fleet-auth/session/status';
 const CSRF_PATH = '/v1/fleet-auth/session/csrf';
@@ -30,13 +31,15 @@ export class FleetSessionProtocolError extends Error {
   }
 }
 
-function exactKeys(value: Record<string, unknown>, keys: readonly string[]): boolean {
-  const actual = Object.keys(value).sort();
-  const expected = [...keys].sort();
-  return actual.length === expected.length && actual.every((key, index) => key === expected[index]);
-}
-
-function validWebsocketPath(value: unknown): value is string {
+/**
+ * Validates the one canonical Companion UI stream path
+ * (`/companion-ui/companions/<uuid>/ws`). Exported so the roster client
+ * (`fleet-roster.ts`) applies the SAME rule: the active companion is expressed
+ * only by which of these paths the app opens — never by a client-side identity
+ * field. The path is not tied to the signed-in companion, so the app may open
+ * any authorized companion's stream from the roster.
+ */
+export function validWebsocketPath(value: unknown): value is string {
   return typeof value === 'string' && WEBSOCKET_PATH.test(value) && !value.includes('?');
 }
 
@@ -47,7 +50,7 @@ export function parseFleetSessionStatus(value: unknown): FleetSessionStatus {
   }
   if (value.state === 'signed_out') {
     const explicit = value.guestMode === 'explicit';
-    if (!exactKeys(value, explicit
+    if (!hasExactKeys(value, explicit
       ? ['schemaVersion', 'state', 'guestMode', 'websocketPath']
       : ['schemaVersion', 'state', 'guestMode'])
       || (explicit && !validWebsocketPath(value.websocketPath))) {
@@ -61,10 +64,10 @@ export function parseFleetSessionStatus(value: unknown): FleetSessionStatus {
     });
   }
   if (value.state !== 'signed_in'
-    || !exactKeys(value, ['schemaVersion', 'state', 'guestMode', 'websocketPath', 'human'])
+    || !hasExactKeys(value, ['schemaVersion', 'state', 'guestMode', 'websocketPath', 'human'])
     || !validWebsocketPath(value.websocketPath)
     || !isRecord(value.human)
-    || !exactKeys(value.human, ['provider', 'label', 'role'])
+    || !hasExactKeys(value.human, ['provider', 'label', 'role'])
     || value.human.provider !== 'discord'
     || typeof value.human.label !== 'string'
     || value.human.label.length < 1 || value.human.label.length > 80
@@ -131,7 +134,7 @@ export class FleetSessionClient {
       headers: { Accept: 'application/json' },
     });
     const value: unknown = response.ok ? await response.json() : undefined;
-    if (!isRecord(value) || !exactKeys(value, ['csrfToken'])
+    if (!isRecord(value) || !hasExactKeys(value, ['csrfToken'])
       || typeof value.csrfToken !== 'string' || !/^[A-Za-z0-9_-]{43}$/u.test(value.csrfToken)) {
       throw new FleetSessionProtocolError('Fleet logout authorization was unavailable');
     }

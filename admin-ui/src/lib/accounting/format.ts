@@ -22,8 +22,8 @@ export function formatDurationMs(value: number | null | undefined): string {
   return `${(value / 1_000).toFixed(2)} s`;
 }
 
-export function formatPercent(value: number | undefined): string {
-  if (value === undefined || !Number.isFinite(value)) return '0%';
+export function formatPercent(value: number | null | undefined): string {
+  if (value === null || value === undefined || !Number.isFinite(value)) return EMPTY_VALUE;
   return `${value.toFixed(value >= 99.95 ? 0 : 1)}%`;
 }
 

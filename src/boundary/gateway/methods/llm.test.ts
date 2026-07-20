@@ -242,36 +242,36 @@ describe('registerLLMMethods', () => {
     const harness = createHarness();
 
     await harness.invoke('llm.chat', {
-      model: 'openrouter:z-ai/glm-5',
-      provider: 'openrouter',
-      pin: true,
+      model: '  z-ai/glm-5  ',
+      provider: '  OpenRouter  ',
+      pin: false,
       messages: [{ role: 'user', content: 'hello' }],
       systemPrompt: 'system',
-      maxTokens: 321,
-      contextWindow: 99999,
-      thinkingEnabled: true,
-      thinkingEffort: 'high',
+      maxTokens: 321.9,
+      contextWindow: 120_000.8,
+      thinkingEnabled: false,
+      thinkingEffort: 'xhigh',
       temperature: 0.33,
       topP: 0.77,
-      topK: 42,
-      frequencyPenalty: 0.12,
+      topK: 42.7,
+      frequencyPenalty: -0.12,
       repetitionPenalty: 1.03,
     });
 
     expect(harness.stream).toHaveBeenCalledTimes(1);
     const firstCall = harness.stream.mock.calls[0][0];
     expect(firstCall.modelHint).toEqual({
-      model: 'openrouter:z-ai/glm-5',
+      model: 'z-ai/glm-5',
       provider: 'openrouter',
-      pin: true,
+      pin: false,
       maxTokens: 321,
-      contextWindow: 99999,
-      thinkingEnabled: true,
-      thinkingEffort: 'high',
+      contextWindow: 120_000,
+      thinkingEnabled: false,
+      thinkingEffort: 'xhigh',
       temperature: 0.33,
       topP: 0.77,
       topK: 42,
-      frequencyPenalty: 0.12,
+      frequencyPenalty: -0.12,
       repetitionPenalty: 1.03,
     });
   });
@@ -475,6 +475,48 @@ describe('registerLLMMethods', () => {
       topK: 16,
       frequencyPenalty: -0.3,
       repetitionPenalty: 1.2,
+    });
+  });
+
+  it('forwards a per-companion model selection slotKey into the provider hint (23pp)', async () => {
+    const harness = createHarness();
+
+    await harness.invoke('llm.complete', {
+      model: '',
+      provider: '',
+      slotKey: 'vision-flash',
+      messages: [{ role: 'user', content: 'describe the image' }],
+      systemPrompt: 'system',
+      purpose: 'vision',
+    });
+
+    expect(harness.complete).toHaveBeenCalledTimes(1);
+    const firstCall = harness.complete.mock.calls[0][0];
+    expect(firstCall.modelHint).toEqual({ slotKey: 'vision-flash' });
+  });
+
+  it('exposes an unknown model-selection slot as a typed JSON-RPC error (23pp fail-closed)', async () => {
+    const { UnknownModelSelectionSlotError } = await import(
+      '../../../primitives/llm/model-hint-routing.js'
+    );
+    const failingComplete = vi.fn(async () => {
+      throw new UnknownModelSelectionSlotError('stale-slot', ['primary', 'extraction']);
+    });
+    const harness = createHarness({
+      llmProvider: { complete: failingComplete } as unknown as GatewayMethodRuntime['llmProvider'],
+    });
+
+    await expect(harness.invoke('llm.complete', {
+      model: '',
+      provider: '',
+      slotKey: 'stale-slot',
+      messages: [{ role: 'user', content: 'hi' }],
+      systemPrompt: 'system',
+      purpose: 'chat',
+    })).rejects.toMatchObject({
+      code: GatewayErrors.UNKNOWN_MODEL_SELECTION_SLOT,
+      message: expect.stringContaining('stale-slot'),
+      data: { slotKey: 'stale-slot' },
     });
   });
 

@@ -29,3 +29,7 @@ export function pushToast(
 export function removeToast(id: number): void {
   queue = queue.filter((toast) => toast.id !== id);
 }
+
+export function clearToasts(): void {
+  queue = [];
+}

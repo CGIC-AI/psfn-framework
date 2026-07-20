@@ -2,6 +2,7 @@ import { CHANNEL_TYPES, type ChannelType } from '../../shared/contracts/runtime.
 
 const DISCORD_CHANNEL_ID_PATTERN = /^\d{15,22}$/;
 const INTERNAL_REFLECTION_SESSION_PREFIX = 'internal:reflection:';
+export const TESTING_SESSION_NAMESPACE = 'testing';
 const EXPERIENTIAL_SELF_DIRECTED_SESSION_PREFIXES: readonly string[] = [
   'internal:free-time:',
   INTERNAL_REFLECTION_SESSION_PREFIX,
@@ -30,6 +31,21 @@ export function isExperientialSelfDirectedSessionId(sessionId: string): boolean 
 
 export function isInternalReflectionSessionId(sessionId: string): boolean {
   return sessionId.startsWith(INTERNAL_REFLECTION_SESSION_PREFIX);
+}
+
+/**
+ * Test harness sessions reserve a `testing` namespace segment after the
+ * existing channel prefix: `<channel-prefix>:testing:<name>`. This composes
+ * with prefixes that carry routing identity (for example
+ * `api:<principal>:testing:<name>`) without matching ordinary names that
+ * merely contain the word "testing".
+ */
+export function isTestingSessionId(sessionId: string): boolean {
+  const segments = sessionId.split(':');
+  const markerIndex = segments.indexOf(TESTING_SESSION_NAMESPACE);
+  return markerIndex > 0
+    && markerIndex < segments.length - 1
+    && segments[markerIndex + 1]!.trim().length > 0;
 }
 
 export function inferSessionChannelType(sessionId: string): InferredSessionChannelType | undefined {

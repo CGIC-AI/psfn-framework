@@ -11,6 +11,7 @@ import type {
   WorldGetStatesParams,
   WorldOperations,
 } from './ops.js';
+import { getRequestContext } from '../../../primitives/llm/request-context.js';
 
 /**
  * Gateway-backed `WorldOperations`: forwards the agent-side world tool's read
@@ -30,6 +31,16 @@ export class GatewayWorldOps implements WorldOperations {
   }
 
   async callService(params: WorldCallServiceParams): Promise<HomeAssistantCallServiceResult> {
-    return this.homeAssistant.callService(params);
+    // 2h6q.3: stamp server-side lineage from the runtime request context so a
+    // shard-session world-control call reaches the gateway on its shard
+    // channel. The stamp comes from the agent runtime's AsyncLocalStorage
+    // turn correlation (the LLM/tool layer cannot set it), and the gateway
+    // uses it only as a lookup key into server-owned workload registration
+    // state — never as authority.
+    const contextChannelId = getRequestContext()?.channelId?.trim();
+    return this.homeAssistant.callService({
+      ...params,
+      ...(contextChannelId ? { channelId: contextChannelId } : {}),
+    });
   }
 }

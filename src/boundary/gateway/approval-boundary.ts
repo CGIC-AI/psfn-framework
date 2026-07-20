@@ -7,12 +7,23 @@ import type {
   ConfirmationQueueHistoryEntry,
   ConfirmationQueueRequest,
   ConfirmationExecutionContext,
+  ConfirmationApprovalOwner,
   ConfirmationResolverIdentity,
 } from '../../system/capabilities/confirmation-queue.js';
+import type {
+  AuthenticatedShardWorkloadHandle,
+  PreparedShardRequestGrant,
+} from '../../system/capabilities/shard-approval-grants.js';
 import {
+  isShardExceptionalAction,
+  ShardApprovalGrantAuthority,
+} from '../../system/capabilities/shard-approval-grants.js';
+import {
+  ConfirmationExecutionCommittedError,
   ConfirmationQueue,
   DEFAULT_CONFIRMATION_EXPIRY_MS,
 } from '../../system/capabilities/confirmation-queue.js';
+import type { ApprovalAttribution } from '../../shared/contracts/approval-envelope.js';
 import {
   redactApprovalRequested,
   redactApprovalResolved,
@@ -55,6 +66,13 @@ interface ApprovalBoundaryOptions extends ApprovalBoundaryAuditHooks {
    * typed `companion.approval.*` event.
    */
   eventBus: EventBus;
+  /** Canonical presentation label resolved from runtime identity/roster data. */
+  parentLabelProvider?: (companionId: string) => string | undefined;
+  /**
+   * Server-owned shard workload/grant registry. Absence keeps every shard
+   * temporary-grant path disabled.
+   */
+  shardApprovalGrants?: ShardApprovalGrantAuthority;
 }
 
 export interface GatewayConfirmationConfig {
@@ -74,11 +92,57 @@ export interface ApprovalBoundaryGateOptions<P, R> {
   approvalReason?: (params: P) => string;
   /** Connection-scoped policy authority for multi-companion workspace isolation. */
   policyConfigProvider?: () => PolicyConfig;
+  /**
+   * Authenticated server-owned shard workload bound to this dispatch,
+   * resolved per-request from the shard-workload registry (2h6q.3). The
+   * resolver receives the dispatch params only so it can read the
+   * runtime-stamped correlation channel id as a lookup key into server-owned
+   * registration state — params never carry authority, and the resolver MUST
+   * throw (deny) for a recognizably shard-originated dispatch it cannot bind
+   * to a live authenticated workload. A present binding disables autonomous
+   * auto-clear unconditionally. The authority derives the required token from
+   * the trusted method/action; a caller cannot select or substitute a
+   * capability token.
+   */
+  shardApprovalGrant?: (params: P) => {
+    workload: AuthenticatedShardWorkloadHandle;
+  } | undefined;
 }
 
 export interface ApprovalBoundaryService {
   listPendingConfirmations(): ConfirmationQueueEntry[];
   listConfirmationHistory(): ConfirmationQueueHistoryEntry[];
+  /** Pending entries owned by exactly one authenticated parent companion. */
+  listPendingConfirmationsForOwner(companionId: string): ConfirmationQueueEntry[];
+  /**
+   * Read-only owner lookup for a pending/resolved confirmation id (companion
+   * roster wire). Returns the authenticated companion that enqueued the
+   * confirmation, or `undefined` when none is recorded. Used to attribute
+   * approvals in the fleet-wide approvals view; a `undefined` result excludes
+   * the entry (fail closed, never mis-attributed).
+   */
+  ownerOfConfirmation(id: string): string | undefined;
+  /** Immutable parent/shard binding captured from authenticated enqueue lineage. */
+  approvalOwnerOfConfirmation(id: string): ConfirmationApprovalOwner | undefined;
+  /**
+   * Resolve only when the pending record's immutable stored owner matches.
+   * Mismatches are non-enumerating `not_found` outcomes and leave the request
+   * pending.
+   */
+  resolveConfirmationForOwner(
+    companionId: string,
+    params: {
+      id: string;
+      decision: 'approve' | 'deny' | 'modify';
+      modifiedParams?: Record<string, unknown>;
+    },
+    resolver?: ConfirmationResolverIdentity,
+  ): Promise<{
+    id: string;
+    status: 'approved' | 'denied' | 'modified' | 'expired' | 'failed' | 'not_found';
+    message: string;
+    executed: boolean;
+  }>;
   resolveConfirmation(params: { id: string; decision: 'approve' | 'deny' | 'modify'; modifiedParams?: Record<string, unknown> }, resolver?: ConfirmationResolverIdentity): Promise<{
     id: string;
     status: 'approved' | 'denied' | 'modified' | 'expired' | 'failed' | 'not_found';
@@ -87,6 +151,17 @@ export interface ApprovalBoundaryService {
   }>;
   requestExplicitApproval(input: {
     authenticatedCompanionId: string | undefined;
+    /**
+     * Attribution-only seam retained for mus2.3 callers. This boundary validates
+     * shape and owner consistency but cannot authenticate this object by itself;
+     * consequently it MUST NOT confer temporary capability authority. Production
+     * shard grants use `shardGrant.workload`, resolved through the gateway-owned
+     * authenticated-workload registry populated by the agent's lifecycle RPC.
+     */
+    shardLineage?: { shardId: string; shardLabel?: string };
+    shardGrant?: {
+      workload: AuthenticatedShardWorkloadHandle;
+    };
     request: ConfirmationQueueRequest;
     execute: (
       params: Record<string, unknown>,
@@ -102,22 +177,53 @@ const approvalLog = createComponentLogger('ApprovalBoundary');
 export function createGatewayApprovalBoundaryService(
   options: ApprovalBoundaryOptions,
 ): ApprovalBoundaryService {
-  const confirmationOwners = new Map<string, string>();
-  let enqueueOwner: string | undefined;
   const confirmationQueue = new ConfirmationQueue({
     defaultExpiryMs: options.confirmation?.expiryMs ?? DEFAULT_CONFIRMATION_EXPIRY_MS,
     observer: {
+      beforeTerminalized: (outcome) => {
+        // The queue invokes this before deleting the pending entry or appending
+        // terminal history. A failed security audit therefore leaves the
+        // public resolution retryable instead of creating a partial commit.
+        options.shardApprovalGrants?.recordRequestResolution({
+          approvalId: outcome.id,
+          status: outcome.status,
+          ...(outcome.resolver ? { resolver: outcome.resolver } : {}),
+        });
+      },
       onEnqueued: (entry) => {
-        if (!enqueueOwner) {
+        const owner = entry.approvalOwner;
+        if (!owner) {
           approvalLog.error('Refusing to emit ownerless companion.approval.requested', {
             id: entry.id,
           });
           return;
         }
-        confirmationOwners.set(entry.id, enqueueOwner);
+        // Attribution is canonicalized before enqueue (see
+        // resolveEnqueueAttribution) and stamped onto the entry. Grant-bearing
+        // shard identity comes from the opaque workload registry; the parent id
+        // is ALWAYS the authenticated enqueue owner. Re-verify that binding here.
+        const attribution = entry.attribution;
+        if (!attribution) {
+          approvalLog.error('Refusing to emit companion.approval.requested without a canonical parent label', {
+            id: entry.id,
+          });
+          return;
+        }
+        if (attribution.parentId !== owner.companionId
+          || attribution.shardId !== owner.shardId) {
+          approvalLog.error('Refusing to emit companion.approval.requested with mismatched attribution parent', {
+            id: entry.id,
+          });
+          return;
+        }
         options.eventBus.emit('companion.approval.requested', {
-          companionId: enqueueOwner,
-          payload: redactApprovalRequested(entry),
+          companionId: owner.companionId,
+          ...(owner.shardId !== undefined ? { shardId: owner.shardId } : {}),
+          payload: redactApprovalRequested(entry, {
+            sourceSystem: entry.sourceSystem ?? 'tool-access',
+            attribution,
+            grantMode: { kind: 'once' },
+          }),
           timestamp: Date.now(),
         }).catch((error) => {
           approvalLog.error('Failed to emit companion.approval.requested', {
@@ -127,21 +233,22 @@ export function createGatewayApprovalBoundaryService(
         });
       },
       onResolved: (outcome) => {
-        const companionId = confirmationOwners.get(outcome.id);
-        if (!companionId) {
+        const owner = outcome.entry.approvalOwner;
+        if (!owner) {
           approvalLog.error('Refusing to emit ownerless companion.approval.resolved', {
             id: outcome.id,
           });
           return;
         }
-        confirmationOwners.delete(outcome.id);
         options.eventBus.emit('companion.approval.resolved', {
-          companionId,
+          companionId: owner.companionId,
+          ...(owner.shardId !== undefined ? { shardId: owner.shardId } : {}),
           payload: redactApprovalResolved({
             id: outcome.id,
             status: outcome.status,
             resolvedAt: outcome.resolvedAt,
             executed: outcome.executed,
+            ...(owner.shardId !== undefined ? { shardId: owner.shardId } : {}),
           }),
           timestamp: Date.now(),
         }).catch((error) => {
@@ -159,8 +266,47 @@ export function createGatewayApprovalBoundaryService(
     ntfyTopic: options.confirmation?.ntfyTopic?.trim() || undefined,
   };
 
+  /**
+   * Resolve immutable, server-side approval attribution before enqueue and
+   * fail closed on mismatched lineage. The authenticated stable companion id
+   * is the presentation fallback when a cosmetic roster label is absent.
+   */
+  const resolveEnqueueAttribution = (
+    owner: string,
+    shard: { shardId: string; shardLabel?: string } | undefined,
+    supplied: ApprovalAttribution | undefined,
+    method: string,
+  ): ApprovalAttribution => {
+    // Defense-in-depth: a caller-supplied attribution is NEVER authority. It
+    // must exactly match the authenticated lineage or the request is denied.
+    if (supplied) {
+      if (supplied.parentId !== owner) {
+        throw new Error(
+          `Cannot queue ${method}: supplied attribution parent does not match the authenticated owner`,
+        );
+      }
+      const suppliedShardId = supplied.shardId?.trim() || undefined;
+      if (suppliedShardId !== shard?.shardId) {
+        throw new Error(
+          `Cannot queue ${method}: supplied attribution shard does not match the authenticated shard lineage`,
+        );
+      }
+    }
+    const parentLabel = options.parentLabelProvider?.(owner)?.trim() || owner;
+    return {
+      parentId: owner,
+      parentLabel,
+      ...(shard ? { shardId: shard.shardId } : {}),
+      ...(shard?.shardLabel ? { shardLabel: shard.shardLabel } : {}),
+    };
+  };
+
   const requestExplicitApproval = async (input: {
     authenticatedCompanionId: string | undefined;
+    shardLineage?: { shardId: string; shardLabel?: string };
+    shardGrant?: {
+      workload: AuthenticatedShardWorkloadHandle;
+    };
     request: ConfirmationQueueRequest;
     execute: (
       params: Record<string, unknown>,
@@ -173,12 +319,144 @@ export function createGatewayApprovalBoundaryService(
         `Cannot queue ${input.request.method}: requesting connection has no authenticated companion owner`,
       );
     }
-    let queueEntry: ConfirmationQueueEntry;
-    enqueueOwner = input.authenticatedCompanionId;
-    try {
-      queueEntry = confirmationQueue.enqueue(input.request, input.execute);
-    } finally {
-      enqueueOwner = undefined;
+    // Resolve presentation lineage. shardLineage alone is attribution-only and
+    // never grants authority; a temporary grant replaces it with identity read
+    // from the opaque server-owned workload handle.
+    let shard: { shardId: string; shardLabel?: string } | undefined;
+    if (input.shardLineage !== undefined) {
+      const shardId = input.shardLineage.shardId.trim();
+      if (!shardId) {
+        throw new Error(
+          `Cannot queue ${input.request.method}: shard-originated request has no authenticated shard instance id`,
+        );
+      }
+      const shardLabel = input.shardLineage.shardLabel?.trim();
+      shard = { shardId, ...(shardLabel ? { shardLabel } : {}) };
+    }
+    let shardGrantAuthority: ShardApprovalGrantAuthority | undefined;
+    if (input.shardGrant) {
+      const grantAuthority = options.shardApprovalGrants;
+      if (!grantAuthority) {
+        throw new Error(
+          `Cannot queue ${input.request.method}: shard approval grant authority is unavailable`,
+        );
+      }
+      shardGrantAuthority = grantAuthority;
+      const workload = grantAuthority.resolveAuthenticatedWorkload(input.shardGrant.workload);
+      if (workload.parentCompanionId !== input.authenticatedCompanionId) {
+        throw new Error(
+          `Cannot queue ${input.request.method}: shard workload parent does not match the authenticated owner`,
+        );
+      }
+      if (
+        shard
+        && (
+          shard.shardId !== workload.shardId
+          || (shard.shardLabel !== undefined && shard.shardLabel !== workload.shardLabel)
+        )
+      ) {
+        throw new Error(
+          `Cannot queue ${input.request.method}: supplied shard attribution does not match the authenticated workload`,
+        );
+      }
+      shard = {
+        shardId: workload.shardId,
+        ...(workload.shardLabel ? { shardLabel: workload.shardLabel } : {}),
+      };
+    }
+    // Resolve + validate the immutable attribution BEFORE enqueue. A mismatched
+    // parent or shard throws here, so nothing enqueues, emits, or notifies.
+    const attribution = resolveEnqueueAttribution(
+      input.authenticatedCompanionId,
+      shard,
+      input.request.attribution,
+      input.request.method,
+    );
+    const preparedShardGrant: PreparedShardRequestGrant | undefined =
+      input.shardGrant && shardGrantAuthority
+        ? shardGrantAuthority.prepareRequestGrant({
+            workload: input.shardGrant.workload,
+            method: input.request.method,
+            action: input.request.action,
+            scope: input.request.scope,
+            params: input.request.params,
+          })
+        : undefined;
+    const request: ConfirmationQueueRequest = {
+      ...input.request,
+      attribution,
+      approvalOwner: {
+        companionId: input.authenticatedCompanionId,
+        ...(shard ? { shardId: shard.shardId } : {}),
+      },
+      ...(preparedShardGrant ? { resolutionAuthority: 'operator' as const } : {}),
+    };
+    if (input.request.approvalOwner
+      && (input.request.approvalOwner.companionId !== request.approvalOwner.companionId
+        || input.request.approvalOwner.shardId !== request.approvalOwner.shardId)) {
+      throw new Error(
+        `Cannot queue ${input.request.method}: supplied approval owner does not match authenticated lineage`,
+      );
+    }
+    const execute = preparedShardGrant
+      ? async (
+          params: Record<string, unknown>,
+          entry: ConfirmationQueueEntry,
+          context: ConfirmationExecutionContext,
+        ): Promise<unknown> => {
+          const grantAuthority = options.shardApprovalGrants;
+          const shardGrant = input.shardGrant;
+          if (!grantAuthority || !shardGrant) {
+            throw new Error('Shard request grant authority became unavailable before dispatch');
+          }
+          const grant = grantAuthority.activateRequestGrant(preparedShardGrant, context);
+          grantAuthority.consumeRequestGrant({
+            workload: shardGrant.workload,
+            grantId: grant.grantId,
+            approvalId: entry.id,
+            method: entry.method,
+            action: entry.action,
+            scope: entry.scope,
+            params,
+          });
+          let result: unknown;
+          try {
+            result = await input.execute(params, entry, context);
+          } catch (error) {
+            const executionCommitted = error instanceof ConfirmationExecutionCommittedError;
+            try {
+              grantAuthority.recordRequestExecution(
+                grant.grantId,
+                executionCommitted ? 'executed' : 'execution_failed',
+              );
+            } catch (auditError) {
+              if (executionCommitted) {
+                throw new ConfirmationExecutionCommittedError(
+                  'Shard operation committed but its grant execution audit failed',
+                  { cause: auditError },
+                );
+              }
+              throw auditError;
+            }
+            throw error;
+          }
+          try {
+            grantAuthority.recordRequestExecution(grant.grantId, 'executed');
+          } catch (error) {
+            throw new ConfirmationExecutionCommittedError(
+              'Shard operation committed but its grant execution audit failed',
+              { cause: error },
+            );
+          }
+          return result;
+        }
+      : input.execute;
+    const queueEntry = confirmationQueue.enqueue(request, execute);
+    if (preparedShardGrant && shardGrantAuthority) {
+      shardGrantAuthority.bindRequestGrant(preparedShardGrant, {
+        approvalId: queueEntry.id,
+        expiresAt: queueEntry.expiresAt,
+      });
     }
     await notifyOperatorForPendingAction({
       entry: queueEntry,
@@ -193,6 +471,23 @@ export function createGatewayApprovalBoundaryService(
   return {
     listPendingConfirmations: () => confirmationQueue.listPending(),
     listConfirmationHistory: () => confirmationQueue.listHistory(),
+    listPendingConfirmationsForOwner: (companionId: string) => confirmationQueue
+      .listPending()
+      .filter(entry => entry.approvalOwner?.companionId === companionId),
+    ownerOfConfirmation: (id: string) => confirmationQueue.getApprovalOwner(id)?.companionId,
+    approvalOwnerOfConfirmation: (id: string) => confirmationQueue.getApprovalOwner(id),
+    resolveConfirmationForOwner: (companionId, params, resolver) => {
+      const owner = confirmationQueue.getApprovalOwner(params.id);
+      if (owner?.companionId !== companionId) {
+        return Promise.resolve({
+          id: params.id,
+          status: 'not_found' as const,
+          message: 'Confirmation request not found.',
+          executed: false,
+        });
+      }
+      return confirmationQueue.resolve(params, resolver);
+    },
     resolveConfirmation: (params, resolver) => confirmationQueue.resolve(params, resolver),
     requestExplicitApproval,
     gate<P, R>(gateOptions: ApprovalBoundaryGateOptions<P, R>): (params: P) => Promise<R> {
@@ -225,13 +520,41 @@ export function createGatewayApprovalBoundaryService(
           }
 
           const authenticatedCompanionId = gateOptions.authenticatedCompanionId();
+          // 2h6q.3: resolve authenticated shard lineage BEFORE any auto-clear
+          // decision. The resolver throws (deny) when a recognizably
+          // shard-originated dispatch cannot be bound to a live authenticated
+          // workload — including when no grant authority/registry is
+          // configured — so shard lineage can never fall through to the
+          // parent's autonomous authority.
+          const shardApprovalGrant = decision === 'DENY'
+            ? undefined
+            : gateOptions.shardApprovalGrant?.(params);
+          const shardExceptionalAction = shardApprovalGrant !== undefined
+            && isShardExceptionalAction(gateOptions.method, gateOptions.approvalAction);
           if (
-            decision === 'NEEDS_APPROVAL'
-            && options.capabilityTierProvider(authenticatedCompanionId) !== 'autonomous'
+            shardApprovalGrant !== undefined
+            && !shardExceptionalAction
+            && decision === 'NEEDS_APPROVAL'
+          ) {
+            // A shard fence is never auto-cleared, and a shard approval
+            // without an exact-once grant binding is not offered: deny.
+            throw new JSONRPCErrorException(
+              `Shard-originated ${gateOptions.method} is not an eligible shard exceptional action`,
+              GatewayErrors.POLICY_DENIED,
+            );
+          }
+          if (
+            shardExceptionalAction
+            || (
+              decision === 'NEEDS_APPROVAL'
+              && shardApprovalGrant === undefined
+              && options.capabilityTierProvider(authenticatedCompanionId) !== 'autonomous'
+            )
           ) {
             const paramsRecord = params as unknown as Record<string, unknown>;
             const queueEntry = await requestExplicitApproval({
               authenticatedCompanionId,
+              ...(shardApprovalGrant ? { shardGrant: shardApprovalGrant } : {}),
               request: {
                 method: gateOptions.method,
                 action: gateOptions.approvalAction,
@@ -242,6 +565,10 @@ export function createGatewayApprovalBoundaryService(
                   gateOptions.approvalReason?.(params) ?? 'Outside workspace',
                 ),
                 expiresInMs: confirmationConfig.expiryMs,
+                // Gateway confirmation gate is the tool / information-access
+                // escalation surface (psfn-framework-13sk). Attribution is
+                // resolved from the authenticated owner in the emission observer.
+                sourceSystem: 'tool-access',
               },
               execute: async (approvedParams, entry) => executeQueuedAction({
                 method: gateOptions.method,

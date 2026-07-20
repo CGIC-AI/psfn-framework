@@ -49,6 +49,16 @@ describe('Companion UI action target', () => {
     ['conversation.interrupt', 'companion.interact', { interactionId: 'interaction-1' }],
     ['conversation.touch', 'companion.interact', { region: 'head', count: 1, durationMs: 250 }],
     ['conversation.audio', 'companion.interact', { transcript: 'untrusted transcript' }],
+    ['shards.list', 'companion.read', {}],
+    ['shards.history', 'companion.read', { shardId: 'shard-live-1' }],
+    ['shards.interact', 'companion.interact', {
+      shardId: 'shard-live-1',
+      content: 'direct shard text',
+    }],
+    ['shards.interrupt', 'companion.interact', {
+      shardId: 'shard-live-1',
+      interactionId: 'interaction-1',
+    }],
     ['confirmations.list', 'confirmations.read', {}],
     ['confirmations.resolve', 'confirmations.resolve', { id: 'confirmation-1', decision: 'deny' }],
     ['artifact.preview', 'artifacts.read', { id: 'artifact-1' }],
@@ -109,6 +119,26 @@ describe('Companion UI action target', () => {
       companionId,
       { capabilities: ['text'], telemetryScopes: [] },
     )).toThrowError(expect.objectContaining({ code: 'physical_capability_denied' }));
+  });
+
+  it('accepts shardId only as a bounded selector and rejects parent/fallback authority', () => {
+    expect(parseCompanionUiActionFrame(raw(
+      'shards.interact',
+      'companion.interact',
+      { shardId: 'shard-live-1', content: 'hello' },
+    )).body).toEqual({ shardId: 'shard-live-1', content: 'hello' });
+    for (const body of [
+      { shardId: '', content: 'hello' },
+      { shardId: 'shard-live-1', content: 'hello', companionId },
+      { shardId: 'shard-live-1', content: 'hello', fallback: 'parent' },
+      { shardId: '../other-parent', content: 'hello' },
+    ]) {
+      expect(() => parseCompanionUiActionFrame(raw(
+        'shards.interact',
+        'companion.interact',
+        body,
+      ))).toThrow(CompanionUiProtocolError);
+    }
   });
 
   it('binds Companion UI frames into operator and linked agent capabilities', () => {

@@ -43,6 +43,11 @@ import {
   NO_CAPABILITY_REQUIREMENT,
   withCapabilityRequirement,
 } from '../../../system/capabilities/requirements.js';
+import { resolveTierCapabilityTokens } from '../../../system/capabilities/tiers.js';
+import type { CapabilityToken } from '../../../system/capabilities/tokens.js';
+import { createCompanionId } from '../../../shared/routing/companion-id.js';
+
+const FLEET_COMPANION_ID = '11111111-1111-4111-8111-111111111111';
 
 const originalConfigDir = process.env.CONFIG_DIR;
 const tempConfigDirs: string[] = [];
@@ -275,17 +280,22 @@ function makeApiHealthResponse(overrides: {
 
 type DynamicPromptVariablesInput = Parameters<typeof buildDynamicPromptTemplateVariables>[0];
 type DynamicPromptVariablesTestInput =
-  Omit<DynamicPromptVariablesInput, 'conversationScope'>
-  & Partial<Pick<DynamicPromptVariablesInput, 'conversationScope'>>;
+  Omit<DynamicPromptVariablesInput, 'conversationScope' | 'capabilityGrantedTokens'>
+  & Partial<Pick<DynamicPromptVariablesInput, 'conversationScope' | 'capabilityGrantedTokens'>>;
 
 /**
  * Tests simulate turn ingress: unless a case provides an explicit scope, it is
  * resolved from the message metadata with the same shared rule the
- * SessionManager applies (resolveConversationScopeFromMetadata).
+ * SessionManager applies (resolveConversationScopeFromMetadata). Unless a case
+ * injects an explicit granted token set (mus2.1 custom-access cases), the set
+ * defaults to the named tier's tokens, matching the agent's single-resolution
+ * wiring for tier-backed access.
  */
 function withConversationScope(input: DynamicPromptVariablesTestInput): DynamicPromptVariablesInput {
   return {
     ...input,
+    capabilityGrantedTokens: input.capabilityGrantedTokens
+      ?? new Set(resolveTierCapabilityTokens(input.capabilityTier)),
     conversationScope: input.conversationScope ?? resolveConversationScopeFromMetadata({
       channelId: input.message.channelId,
       isDirectMessage: input.message.isDirectMessage,
@@ -1108,6 +1118,51 @@ describe('runtime subject identity', () => {
     });
   });
 
+  it('classifies shard-parent ICP as machine intelligence without registering the shard as a peer contact', async () => {
+    const resolveChannelIdentity = vi.fn(() => {
+      throw new Error('shard instance ids must not enter peer contact resolution');
+    });
+    const authorContext = await resolveAuthorContext({
+      message: makeMessage({
+        channelId: `companion-shard:${FLEET_COMPANION_ID}:shard-live-1`,
+        channelType: 'companion',
+        authorId: 'shard:shard-live-1',
+        authorName: 'Shard',
+        isDirectMessage: true,
+        routing: {
+          source: 'companion',
+          authorIsMachineIntelligence: true,
+          shardParentIcp: {
+            schemaVersion: 1,
+            routingCompanionId: createCompanionId(FLEET_COMPANION_ID),
+            lineage: {
+              parentCompanionId: createCompanionId(FLEET_COMPANION_ID),
+              shardId: 'shard-live-1',
+            },
+            direction: 'shard_to_parent',
+          },
+        },
+      }),
+      contactStore: {
+        resolveChannelIdentity,
+      } as never,
+      logger: { warn: vi.fn(), debug: vi.fn() },
+      companionIdentityKey: FLEET_COMPANION_ID,
+      companionDisplayName: 'Companion',
+    });
+
+    expect(resolveChannelIdentity).not.toHaveBeenCalled();
+    expect(authorContext).toMatchObject({
+      speakerRole: 'user',
+      actorKind: 'machine_intelligence',
+      speakingWithIsMachineIntelligence: true,
+      trustLevel: 'regular',
+      resolvedUserName: 'Shard',
+      continuitySubjectKey: 'shard:shard-live-1',
+    });
+    expect(authorContext.canonicalContactKey).toBeUndefined();
+  });
+
   it.each([
     ['operator override', async () => 'override_preserved' as const],
     ['marker store failure', async () => { throw new Error('marker unavailable'); }],
@@ -1695,6 +1750,25 @@ describe('runtime subject identity', () => {
     expect(block).toContain('additional notes omitted for context budget');
     expect(block).not.toContain(stalePayload);
     expect(block.length).toBeLessThan(2_000);
+  });
+
+  it('warns when scratchpad context injection degrades after a provider failure', () => {
+    const logger = { warn: vi.fn(), debug: vi.fn() };
+
+    expect(buildScratchpadContextBlock({
+      scratchpadProvider: {
+        listScratchpadEntries: () => {
+          throw new Error('scratchpad store unavailable');
+        },
+      },
+      logger,
+    })).toBe('');
+
+    expect(logger.warn).toHaveBeenCalledWith(
+      'Scratchpad context injection skipped due to provider error',
+      { error: 'scratchpad store unavailable' },
+    );
+    expect(logger.debug).not.toHaveBeenCalled();
   });
 
   it('exposes granular runtime prompt variables for editable prompt-owned phrasing', () => {
@@ -2643,6 +2717,61 @@ describe('runtime subject identity', () => {
     expect(renderedRuntimeLayers).toContain('Never claim a tool executed, failed, or was denied unless this turn contains the actual tool call and tool result.');
     expect(renderedRuntimeLayers).toContain('blocked by current tier: external.web');
     expect(renderedRuntimeLayers).not.toContain('<available_extended_count>');
+  });
+
+  it('advertises an explicit custom granted token set instead of treating custom as an empty tier grant (mus2.1)', () => {
+    const message = makeMessage({
+      channelId: 'api:test',
+      channelType: 'api',
+      authorId: 'user-1',
+      authorName: 'User',
+      content: 'Try web and notify.',
+    });
+
+    // A derived shard access is tier `custom` with an explicit token set; the
+    // guide must advertise from that set, not re-resolve the tier name (which
+    // would render every extended tool as blocked).
+    const renderedRuntimeLayers = renderPromptOwnedRuntimeLayers({
+      message,
+      resolvedUserName: 'User',
+      trustLevel: 'regular',
+      channelType: 'api',
+      responseStyle: 'concise',
+      now: new Date('2026-03-17T12:00:00Z'),
+      modelId: 'test-model',
+      contextWindow: 4096,
+      capabilityTier: 'custom',
+      capabilityGrantedTokens: new Set<CapabilityToken>(['external.web']),
+      activeToolCounts: {
+        core: 1,
+        extended: 0,
+        total: 1,
+      },
+      extendedTools: [
+        {
+          name: 'web',
+          description: 'Fetch a web page.',
+          parameters: {} as any,
+          execute: () => { throw new Error('not used'); },
+        } as any,
+        {
+          name: 'notify',
+          description: 'Notify the operator.',
+          parameters: {} as any,
+          execute: () => { throw new Error('not used'); },
+        } as any,
+      ],
+      coreToolNames: new Set<string>(),
+      loadedExtended: new Map(),
+      classifyExtendedToolForTurn: () => 'overlay',
+      promotedExtendedToolNames: new Set(),
+      skillsContext: '',
+      behavioralNotesBlock: '',
+      config: {},
+    });
+
+    expect(renderedRuntimeLayers).toContain('- web: Fetch a web page (call directly; no activation step)');
+    expect(renderedRuntimeLayers).not.toContain('blocked by current tier: external.web');
   });
 });
 

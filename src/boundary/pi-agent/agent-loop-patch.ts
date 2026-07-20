@@ -210,7 +210,7 @@ export function installAgentToolSchedulerPatch(
     }, continuationFuse.limits.maxWallTimeMs);
     wallClockTimer.unref();
 
-    let partial: any = null;
+    let partial: AgentMessage | null = null;
     let terminalStreamError: Error | null = null;
     let sawTerminalStreamError = false;
     try {
@@ -233,8 +233,7 @@ export function installAgentToolSchedulerPatch(
             continuationFuse,
           );
 
-      for await (const rawEvent of stream) {
-        const event = rawEvent as any;
+      for await (const event of stream) {
         switch (event.type) {
           case 'message_start':
           case 'message_update':
@@ -282,7 +281,7 @@ export function installAgentToolSchedulerPatch(
       }
 
       if (partial && partial.role === 'assistant' && partial.content.length > 0) {
-        const onlyEmpty = !partial.content.some((entry: any) => (
+        const onlyEmpty = !partial.content.some((entry) => (
           (entry.type === 'thinking' && entry.thinking.trim().length > 0)
           || (entry.type === 'text' && entry.text.trim().length > 0)
           || (entry.type === 'toolCall' && entry.name.trim().length > 0)

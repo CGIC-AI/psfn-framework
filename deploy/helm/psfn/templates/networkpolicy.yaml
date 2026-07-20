@@ -54,6 +54,9 @@ spec:
         - podSelector:
             matchLabels:
               {{- include "psfn.componentLabels" (dict "root" . "component" "agent") | nindent 14 }}
+              {{- if .Values.fleet.enabled }}
+              psfn.io/fleet-target: registered
+              {{- end }}
       ports:
         - port: {{ .Values.ports.gatewayRpc }}
           protocol: TCP
@@ -158,14 +161,19 @@ spec:
   podSelector:
     matchLabels:
       {{- include "psfn.componentLabels" (dict "root" . "component" "agent") | nindent 6 }}
+      {{- if .Values.fleet.enabled }}
+      psfn.io/fleet-target: registered
+      {{- end }}
   policyTypes:
     - Ingress
     - Egress
   ingress:
     - from:
+        {{- if not .Values.fleet.enabled }}
         - podSelector:
             matchLabels:
               {{- include "psfn.componentLabels" (dict "root" . "component" "gateway") | nindent 14 }}
+        {{- end }}
         - podSelector:
             matchLabels:
               {{- include "psfn.componentLabels" (dict "root" . "component" "garden") | nindent 14 }}
@@ -244,7 +252,7 @@ spec:
       ports:
         - port: {{ .Values.ports.garden }}
           protocol: TCP
-    {{- if and .Values.ingress.enabled .Values.ingress.garden.enabled (not .Values.fleetAuth.enabled) }}
+    {{- if and .Values.ingress.enabled .Values.ingress.garden.enabled (not .Values.fleetAuth.enabled) (not .Values.fleet.enabled) }}
     - from:
         - namespaceSelector:
             matchLabels:
@@ -283,6 +291,18 @@ spec:
         - podSelector:
             matchLabels:
               {{- include "psfn.componentLabels" (dict "root" . "component" "agent") | nindent 14 }}
+              {{- if .Values.fleet.enabled }}
+              psfn.io/fleet-target: registered
+              {{- end }}
+            {{- if .Values.fleet.enabled }}
+            matchExpressions:
+              - key: psfn.io/companion-id
+                operator: In
+                values:
+                  {{- range .Values.fleet.companions }}
+                  - {{ .companionId }}
+                  {{- end }}
+            {{- end }}
       ports:
         - port: {{ .Values.ports.agentAdmin }}
           protocol: TCP
@@ -297,6 +317,15 @@ spec:
       ports:
         - port: {{ .Values.ports.gatewayApi }}
           protocol: TCP
+    {{- if and .Values.postgres.enabled (not .Values.postgres.external.enabled) }}
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- include "psfn.componentLabels" (dict "root" . "component" "postgres") | nindent 14 }}
+      ports:
+        - port: {{ .Values.ports.postgres }}
+          protocol: TCP
+    {{- end }}
 {{- if and .Values.postgres.enabled (not .Values.postgres.external.enabled) }}
 ---
 apiVersion: networking.k8s.io/v1
@@ -319,6 +348,12 @@ spec:
         - podSelector:
             matchLabels:
               {{- include "psfn.componentLabels" (dict "root" . "component" "agent") | nindent 14 }}
+              {{- if .Values.fleet.enabled }}
+              psfn.io/fleet-target: registered
+              {{- end }}
+        - podSelector:
+            matchLabels:
+              {{- include "psfn.componentLabels" (dict "root" . "component" "garden") | nindent 14 }}
       ports:
         - port: {{ .Values.ports.postgres }}
           protocol: TCP
@@ -342,6 +377,9 @@ spec:
         - podSelector:
             matchLabels:
               {{- include "psfn.componentLabels" (dict "root" . "component" "agent") | nindent 14 }}
+              {{- if .Values.fleet.enabled }}
+              psfn.io/fleet-target: registered
+              {{- end }}
       ports:
         - port: {{ .Values.ports.redis }}
           protocol: TCP

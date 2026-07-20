@@ -19,7 +19,11 @@ import { buildFocusMemoryScopeQuery } from '../../core/session/focus-knowledge.j
 import { SubstrateAgent } from '../../core/agent/substrate-agent.js';
 import { resolveInstalledAgentTurnTools } from '../../boundary/pi-agent/agent-loop-patch.js';
 import { AGENT_LOOP_MAX_ASSISTANT_STEPS_PER_RUN } from '../../core/agent/turn-limits.js';
-import { DEFAULT_SHARD_TOOLSET, ShardManager } from './manager.js';
+import {
+  DEFAULT_SHARD_TOOLSET,
+  ShardManager,
+  type ShardManagerDeps,
+} from './manager.js';
 import { ShardFoldReviewController } from './fold-review.js';
 import type { LLMProviderPort, MemoryProvider } from '../../core/agent/contracts.js';
 import type { ChargePolicyConfig } from '../../system/config/charge-policy-config.js';
@@ -28,6 +32,7 @@ import type { LLMResponse } from '../../shared/contracts/runtime.js';
 import { createTurnId } from '../../core/turns/id.js';
 import { makeTestFatiguePolicyConfig } from '../../test-support/charge-policy.js';
 import { resetCompletionHandoffDedupeForTests } from '../../core/agent/completion-handoff.js';
+import type { CompletionHandoffRecord } from '../../shared/contracts/completion-handoff.js';
 import { createCompressionGuidelineEvolution } from '../../core/session/compression-guideline-evolution.js';
 import { createEligibilityGate } from '../../system/capabilities/eligibility.js';
 import {
@@ -37,6 +42,8 @@ import {
 import type { PostgresShardSchemaLifecycle } from '../../persistence/postgres/shard-schema-lifecycle.js';
 import type { PostgresShardSchemaBinding } from '../../persistence/postgres/shard-schema-lifecycle.js';
 import { createCompanionId } from '../../shared/routing/companion-id.js';
+import type { CapabilityGrantSnapshot } from '../../system/capabilities/access.js';
+import { CAPABILITY_TIER_DEFAULTS } from '../../system/capabilities/tiers.js';
 
 // ── Mock pi-agent-core Agent ──
 // We mock Agent.prototype.prompt so it doesn't actually call the LLM.
@@ -46,6 +53,19 @@ let mockShardContent = 'shard response';
 let mockShardContents: string[] = [];
 let mockShardDelayMs = 0;
 let mockShardError: Error | null = null;
+let mockParentCapabilitySnapshot: CapabilityGrantSnapshot;
+const snapshotParentCapabilityGrant = vi.fn(
+  (): CapabilityGrantSnapshot => mockParentCapabilitySnapshot,
+);
+
+function createTestShardManager(
+  deps: Omit<ShardManagerDeps, 'snapshotParentCapabilityGrant'>,
+): ShardManager {
+  return new ShardManager({
+    ...deps,
+    snapshotParentCapabilityGrant,
+  });
+}
 
 function nextMockShardContent(): string {
   return mockShardContents.shift() ?? mockShardContent;
@@ -241,7 +261,7 @@ const TEST_CONFIG: SubstrateConfig = {
   defaultContextWindow: 128_000,
   extractionThresholdPct: 30,
   compactionThresholdPct: 70,
-  companionId: 'companion-test',
+  companionId: '11111111-1111-4111-8111-111111111111',
   characterName: 'Companion',
   modelRoster: {
     chat: { model: 'test-model', provider: 'test', maxTokens: 16384, contextWindow: 128_000 },
@@ -263,6 +283,12 @@ describe('ShardManager', () => {
     mockShardContents = [];
     mockShardDelayMs = 0;
     mockShardError = null;
+    mockParentCapabilitySnapshot = Object.freeze({
+      tier: 'autonomous',
+      customTokens: Object.freeze([]),
+      grantedTokens: Object.freeze([...CAPABILITY_TIER_DEFAULTS.autonomous]),
+    });
+    snapshotParentCapabilityGrant.mockClear();
     promptSpy.mockClear();
     agentRunConfigs.length = 0;
     restoreDefaultPromptMock();
@@ -289,7 +315,7 @@ describe('ShardManager', () => {
       parentSystemPrompt: 'test',
     };
 
-    const fromSettings = new ShardManager({
+    const fromSettings = createTestShardManager({
       ...base,
       config: {
         ...TEST_CONFIG,
@@ -303,7 +329,7 @@ describe('ShardManager', () => {
     expect(fromSettings.heartbeatDisconnectThresholdMs).toBe(90_000);
 
     // Explicit deps override wins over the owner-file value.
-    const explicitOverride = new ShardManager({
+    const explicitOverride = createTestShardManager({
       ...base,
       config: { ...TEST_CONFIG, shardMaxConcurrent: 9 },
       maxConcurrent: 1,
@@ -312,7 +338,10 @@ describe('ShardManager', () => {
 
     // Compiled defaults preserved exactly when the settings are absent:
     // maxConcurrent 5, stale 60s, disconnect = stale x 3.
-    const compiledDefault = new ShardManager({ ...base, config: TEST_CONFIG });
+    const compiledDefault = createTestShardManager({
+      ...base,
+      config: TEST_CONFIG,
+    });
     expect(compiledDefault.maxConcurrentShards).toBe(5);
     expect(compiledDefault.heartbeatStaleThresholdMs).toBe(60_000);
     expect(compiledDefault.heartbeatDisconnectThresholdMs).toBe(180_000);
@@ -376,7 +405,7 @@ describe('ShardManager', () => {
       'Which thread are we on?',
       'Could you remind me what we were discussing?',
     ];
-    const manager = new ShardManager({
+    const manager = createTestShardManager({
       eventBus,
       llmProvider,
       sessionStore,
@@ -418,7 +447,15 @@ describe('ShardManager', () => {
 
   it('spawns a shard and returns result', async () => {
     mockShardContent = 'Hello from shard';
-    const manager = new ShardManager({
+    const lifecycleEvents: Array<{
+      handoff: CompletionHandoffRecord;
+      targetChannelId?: string;
+      noticeBuffered: boolean;
+    }> = [];
+    eventBus.on('agent.completion_handoff', event => {
+      lifecycleEvents.push(event);
+    });
+    const manager = createTestShardManager({
       eventBus,
       llmProvider: mockLLM(),
       sessionStore,
@@ -435,31 +472,37 @@ describe('ShardManager', () => {
     expect(result.turns).toBe(1);
     expect(result.durationMs).toBeGreaterThanOrEqual(0);
     expect(result.shardId).toMatch(/^shard-/);
+    expect(lifecycleEvents.map(event => event.handoff.status))
+      .toEqual(['started', 'progress', 'completed']);
+    expect(lifecycleEvents.every(event => (
+      event.targetChannelId === undefined && event.noticeBuffered === false
+    ))).toBe(true);
     expect(result.lineage).toEqual(expect.objectContaining({
       schemaVersion: 2,
       kind: 'spawn',
-      coreCompanionId: 'companion-test',
-      shardCompanionId: `companion-test::${result.shardId}`,
+      coreCompanionId: '11111111-1111-4111-8111-111111111111',
+      shardCompanionId: `11111111-1111-4111-8111-111111111111::${result.shardId}`,
       shardId: result.shardId,
       shardChannelId: `shard:${result.shardId}`,
       companionProvenance: {
-        parentCompanionId: 'companion-test',
-        shardCompanionId: `companion-test::${result.shardId}`,
+        parentCompanionId: '11111111-1111-4111-8111-111111111111',
+        shardCompanionId: `11111111-1111-4111-8111-111111111111::${result.shardId}`,
       },
       sourceMessage: expect.objectContaining({
         id: result.shardId,
         channelId: `shard:${result.shardId}`,
         channelType: 'api',
-        authorId: 'companion-test',
+        authorId: '11111111-1111-4111-8111-111111111111',
         authorName: 'Companion',
         isDirectMessage: false,
       }),
       }));
   });
 
+
   it('prepares and cleans one lineage-bound Postgres schema for a multi-companion shard', async () => {
     const binding: PostgresShardSchemaBinding = {
-      parentCompanionId: createCompanionId('companion-test'),
+      parentCompanionId: createCompanionId('11111111-1111-4111-8111-111111111111'),
       parentSchema: 'companion_alpha',
       shardId: 'derived-by-test',
       schema: 'companion_alpha_shard_0123456789012345678901234567890123456789',
@@ -493,7 +536,7 @@ describe('ShardManager', () => {
       },
       restore: async () => undefined,
     };
-    const manager = new ShardManager({
+    const manager = createTestShardManager({
       eventBus,
       llmProvider: mockLLM(),
       sessionStore,
@@ -511,7 +554,7 @@ describe('ShardManager', () => {
     const result = await manager.spawn({ name: 'postgres-bound', task: 'Use isolated state' });
 
     expect(derive).toHaveBeenCalledWith(
-      'companion-test',
+      '11111111-1111-4111-8111-111111111111',
       'companion_alpha',
       result.shardId,
     );
@@ -525,8 +568,28 @@ describe('ShardManager', () => {
     }));
   });
 
+  it('releases shard state when the started lifecycle handoff cannot be accepted', async () => {
+    eventBus.guard('agent.completion_handoff', () => {
+      throw new Error('lifecycle sink unavailable');
+    });
+    const manager = createTestShardManager({
+      eventBus,
+      llmProvider: mockLLM(),
+      sessionStore,
+      embeddingService: null,
+      memoryProvider: null,
+      config: TEST_CONFIG,
+      parentSystemPrompt: 'You are a helpful assistant.',
+    });
+
+    await expect(manager.spawn({ name: 'handoff-failure', task: 'Do something' }))
+      .rejects.toThrow('lifecycle sink unavailable');
+    expect(manager.getActiveCount()).toBe(0);
+    expect(manager.getActiveShards()).toHaveLength(0);
+  });
+
   it('rejects multi-companion shard construction without a Postgres lifecycle', () => {
-    expect(() => new ShardManager({
+    expect(() => createTestShardManager({
       eventBus,
       llmProvider: mockLLM(),
       sessionStore,
@@ -548,7 +611,7 @@ describe('ShardManager', () => {
       events.push(event);
     });
     const completionNotices = new CompletionNoticeBuffer();
-    const manager = new ShardManager({
+    const manager = createTestShardManager({
       eventBus,
       llmProvider: mockLLM(),
       sessionStore,
@@ -578,8 +641,9 @@ describe('ShardManager', () => {
       status: 'completed',
       summary: 'Shard found the answer.',
     });
-    expect(events).toHaveLength(1);
-    expect(events[0]).toMatchObject({
+    expect(events.map(event => (event as { handoff: CompletionHandoffRecord }).handoff.status))
+      .toEqual(['started', 'progress', 'completed']);
+    expect(events.at(-1)).toMatchObject({
       noticeBuffered: true,
       handoff: expect.objectContaining({
         source: 'shard',
@@ -592,7 +656,7 @@ describe('ShardManager', () => {
   });
 
   it('caps explicit multi-turn shard requests at the shared agent loop ceiling', async () => {
-    const manager = new ShardManager({
+    const manager = createTestShardManager({
       eventBus,
       llmProvider: mockLLM(),
       sessionStore,
@@ -619,7 +683,7 @@ describe('ShardManager', () => {
       chargeEvents.push(event as unknown as Record<string, unknown>);
     });
 
-    const manager = new ShardManager({
+    const manager = createTestShardManager({
       eventBus,
       llmProvider: mockLLM(),
       sessionStore,
@@ -694,7 +758,7 @@ describe('ShardManager', () => {
 
   it('folds completed shard spend back into the parent without double-counting follow-up spend', async () => {
     mockShardContent = 'fold child charge once';
-    const manager = new ShardManager({
+    const manager = createTestShardManager({
       eventBus,
       llmProvider: mockLLM(),
       sessionStore,
@@ -767,7 +831,7 @@ describe('ShardManager', () => {
       chargeEvents.push(event as unknown as Record<string, unknown>);
     });
 
-    const manager = new ShardManager({
+    const manager = createTestShardManager({
       eventBus,
       llmProvider: mockLLM(),
       sessionStore,
@@ -839,7 +903,7 @@ describe('ShardManager', () => {
     });
 
     try {
-      const manager = new ShardManager({
+      const manager = createTestShardManager({
         eventBus,
         llmProvider: mockLLM(),
         sessionStore,
@@ -860,7 +924,7 @@ describe('ShardManager', () => {
 
   it('uses isolated channelId for session entries', async () => {
     mockShardContent = 'isolated response';
-    const manager = new ShardManager({
+    const manager = createTestShardManager({
       eventBus,
       llmProvider: mockLLM(),
       sessionStore,
@@ -888,7 +952,7 @@ describe('ShardManager', () => {
 
   it('inherits parent system prompt when none specified', async () => {
     const companionPrompt = 'I am Companion.';
-    const manager = new ShardManager({
+    const manager = createTestShardManager({
       eventBus,
       llmProvider: mockLLM(),
       sessionStore,
@@ -909,7 +973,7 @@ describe('ShardManager', () => {
 
   it('uses custom system prompt when provided', async () => {
     const companionPrompt = 'I am Companion.';
-    const manager = new ShardManager({
+    const manager = createTestShardManager({
       eventBus,
       llmProvider: mockLLM(),
       sessionStore,
@@ -952,7 +1016,7 @@ describe('ShardManager', () => {
       });
     });
 
-    const manager = new ShardManager({
+    const manager = createTestShardManager({
       eventBus,
       llmProvider: mockLLM(),
       sessionStore,
@@ -986,7 +1050,7 @@ describe('ShardManager', () => {
       });
     });
 
-    const manager = new ShardManager({
+    const manager = createTestShardManager({
       eventBus,
       llmProvider: mockLLM(),
       sessionStore,
@@ -1016,7 +1080,7 @@ describe('ShardManager', () => {
 
   it('includes usage stats in result', async () => {
     mockShardContent = 'stats test';
-    const manager = new ShardManager({
+    const manager = createTestShardManager({
       eventBus,
       llmProvider: mockLLM(),
       sessionStore,
@@ -1036,7 +1100,7 @@ describe('ShardManager', () => {
 
   it('tracks explicit lifecycle and health metadata for active and completed shards', async () => {
     mockShardDelayMs = 40;
-    const manager = new ShardManager({
+    const manager = createTestShardManager({
       eventBus,
       llmProvider: mockLLM(),
       sessionStore,
@@ -1062,8 +1126,190 @@ describe('ShardManager', () => {
     expect(result.capabilities).toContain('general');
   });
 
+  it('exposes only the exact parent live directory and routes direct chat through the shard ingress', async () => {
+    mockShardDelayMs = 80;
+    mockShardContent = 'bounded shard reply';
+    const parentSessionManager = new SessionManager(sessionStore, TEST_CONFIG, eventBus);
+    parentSessionManager.intakeScreening = {
+      mode: 'enforce',
+      screenSync: vi.fn((text: string) => ({
+        action: text.includes('Bearer')
+          ? 'sanitize'
+          : 'pass',
+        report: {
+          sanitizedText: text.replace(/Bearer\s+\S+/gu, '[REDACTED:credential]'),
+          scannerErrors: [],
+          riskLabels: text.includes('Bearer')
+            ? ['secrets/credential_material']
+            : [],
+        },
+      } as any)),
+    };
+    const deliverOrdinaryIcp = vi.fn(async (
+      request: import('../../shared/contracts/shard-parent-icp.js').ShardParentIcpEnvelope,
+    ) => ({
+      ...request,
+      direction: 'parent_to_shard' as const,
+      content: 'Parent guidance for the live shard',
+    }));
+    const manager = createTestShardManager({
+      eventBus,
+      llmProvider: mockLLM(),
+      sessionStore,
+      sessionManager: parentSessionManager,
+      embeddingService: null,
+      memoryProvider: null,
+      config: TEST_CONFIG,
+      parentSystemPrompt: 'test',
+      shardParentIcpDelivery: { deliverOrdinaryIcp },
+    });
+    const parentCompanionId = createCompanionId('11111111-1111-4111-8111-111111111111');
+    const pending = manager.spawn({
+      name: 'research shard',
+      task: 'Use Bearer eyJprivate against a private partner record',
+      maxTurns: 2,
+    });
+    await new Promise(resolve => setTimeout(resolve, 10));
+    const directory = manager.shardDirectory.listShards(parentCompanionId);
+    expect(directory).toHaveLength(1);
+    expect(directory[0]).toMatchObject({
+      label: 'research shard',
+      purpose: 'Task details withheld',
+    });
+    const shardId = directory[0]!.shardId;
+    expect(manager.shardDirectory.ownerOfLiveShard(shardId)).toBe(parentCompanionId);
+    expect(() => manager.shardDirectory.listShards(
+      createCompanionId('22222222-2222-4222-8222-222222222222'),
+    )).toThrow(/parent binding denied/u);
+    await expect(manager.shardParentIcp.sendShardParentIcp(
+      shardId,
+      'I need parent guidance',
+    )).resolves.toBe('Parent guidance for the live shard');
+    expect(deliverOrdinaryIcp).toHaveBeenCalledTimes(1);
+    expect(deliverOrdinaryIcp).toHaveBeenCalledWith({
+      schemaVersion: 1,
+      routingCompanionId: parentCompanionId,
+      lineage: { parentCompanionId, shardId },
+      direction: 'shard_to_parent',
+      content: 'I need parent guidance',
+    });
+    await expect(manager.shardParentIcp.sendShardParentIcp('foreign-shard', 'do not route'))
+      .rejects.toThrow(/unavailable or foreign/u);
+
+    const attachment = {
+      attachmentId: '11111111-1111-4111-8111-111111111111',
+      disposition: 'created' as const,
+      deviceActor: {
+        kind: 'hub_device' as const,
+        principal: { companionId: parentCompanionId },
+        connectionId: 'connection-1',
+      },
+      actor: {
+        kind: 'human' as const,
+        principalId: 'human-1',
+        companionId: parentCompanionId,
+        providerSubject: { provider: 'discord' as const, subjectId: '123456789012345678' },
+        contact: { bindingId: 'binding-1', contactId: 'contact-1', bindingVersion: 1 },
+        operator: { grantId: 'grant-1', role: 'member' as const, grantVersion: 1 },
+        session: { recordId: 'session-1', authorityGeneration: 1, globalAuthEpoch: 1 },
+      },
+      channel: { source: 'server' as const, id: 'hub-device:test', companionId: parentCompanionId },
+    } as any;
+    const response = await manager.shardDirectory.sendShardChat({
+      parentCompanionId,
+      shardId,
+      requestId: 'direct-1',
+      content: 'Report your bounded finding',
+      attachment,
+    });
+    expect(response).toMatchObject({
+      content: 'bounded shard reply',
+      attribution: { parentCompanionId, shardId },
+    });
+    expect(response.channelId).toBe(`shard:${shardId}:human`);
+    expect(deliverOrdinaryIcp).toHaveBeenCalledTimes(1);
+    expect(manager.shardDirectory.readShardChatHistory(parentCompanionId, shardId)).toMatchObject([
+      { role: 'user', content: 'Report your bounded finding', attribution: { shardId } },
+      { role: 'assistant', content: 'bounded shard reply', attribution: { shardId } },
+    ]);
+    expect(() => manager.shardDirectory.readShardChatHistory(
+      createCompanionId('22222222-2222-4222-8222-222222222222'),
+      shardId,
+    )).toThrow(/parent binding denied/u);
+
+    await pending;
+    expect(manager.shardDirectory.ownerOfLiveShard(shardId)).toBeUndefined();
+    expect(() => manager.shardDirectory.readShardChatHistory(parentCompanionId, shardId))
+      .toThrow(/unavailable/u);
+    await expect(manager.shardParentIcp.sendShardParentIcp(shardId, 'stale delivery'))
+      .rejects.toThrow(/unavailable or foreign/u);
+  });
+
+  it('drops a parent response when the exact shard generation ends while the exchange is pending', async () => {
+    mockShardDelayMs = 300;
+    let releaseResponse!: (
+      response: import('../../shared/contracts/shard-parent-icp.js').ShardParentIcpEnvelope,
+    ) => void;
+    const responsePending = new Promise<
+      import('../../shared/contracts/shard-parent-icp.js').ShardParentIcpEnvelope
+    >((resolve) => {
+      releaseResponse = resolve;
+    });
+    let requestEnvelope:
+      | import('../../shared/contracts/shard-parent-icp.js').ShardParentIcpEnvelope
+      | undefined;
+    const manager = createTestShardManager({
+      eventBus,
+      llmProvider: mockLLM(),
+      sessionStore,
+      embeddingService: null,
+      memoryProvider: null,
+      config: TEST_CONFIG,
+      parentSystemPrompt: 'test',
+      shardParentIcpDelivery: {
+        deliverOrdinaryIcp: async (request) => {
+          requestEnvelope = request;
+          return await responsePending;
+        },
+      },
+    });
+    const shardRun = manager.spawn({ name: 'short lived', task: 'Finish shortly' });
+    await vi.waitFor(() => expect(manager.getActiveShards()).toHaveLength(1));
+    const shardId = manager.getActiveShards()[0]!.id;
+    const exchange = manager.shardParentIcp.sendShardParentIcp(shardId, 'Question');
+
+    await shardRun;
+    expect(requestEnvelope).toBeDefined();
+    releaseResponse({
+      ...requestEnvelope!,
+      direction: 'parent_to_shard',
+      content: 'Late parent response',
+    });
+    await expect(exchange).rejects.toThrow(/generation is no longer live/u);
+  });
+
+  it('fails closed when shard-parent ICP has no policy-governed ordinary ingress', async () => {
+    mockShardDelayMs = 40;
+    const manager = createTestShardManager({
+      eventBus,
+      llmProvider: mockLLM(),
+      sessionStore,
+      embeddingService: null,
+      memoryProvider: null,
+      config: TEST_CONFIG,
+      parentSystemPrompt: 'test',
+    });
+    const pending = manager.spawn({ name: 'bounded', task: 'Bounded work' });
+    await new Promise(resolve => setTimeout(resolve, 10));
+    const [shard] = manager.getActiveShards();
+    expect(shard).toBeDefined();
+    await expect(manager.shardParentIcp.sendShardParentIcp(shard!.id, 'status'))
+      .rejects.toThrow(/no policy-governed ordinary ICP ingress/u);
+    await pending;
+  });
+
   it('fails closed when required shard capabilities are missing', async () => {
-    const manager = new ShardManager({
+    const manager = createTestShardManager({
       eventBus,
       llmProvider: mockLLM(),
       sessionStore,
@@ -1085,7 +1331,7 @@ describe('ShardManager', () => {
 
   it('evicts stale shards from active routing and frees execution slots', async () => {
     mockShardDelayMs = 120;
-    const manager = new ShardManager({
+    const manager = createTestShardManager({
       eventBus,
       llmProvider: mockLLM(),
       sessionStore,
@@ -1116,7 +1362,7 @@ describe('ShardManager', () => {
 
   it('recovers a heartbeat-stale shard when activity resumes before disconnect timeout', async () => {
     mockShardDelayMs = 160;
-    const manager = new ShardManager({
+    const manager = createTestShardManager({
       eventBus,
       llmProvider: mockLLM(),
       sessionStore,
@@ -1156,7 +1402,7 @@ describe('ShardManager', () => {
 
   it('wires memory provider for read access', async () => {
     const memory = mockMemoryProvider();
-    const manager = new ShardManager({
+    const manager = createTestShardManager({
       eventBus,
       llmProvider: mockLLM(),
       sessionStore,
@@ -1197,7 +1443,7 @@ describe('ShardManager', () => {
     });
     const sourceEntriesBefore = sessionStore.getRecent(sourceChannelId, 10);
     const memory = mockMemoryProvider('Remember the staging database migration is still pending.');
-    const manager = new ShardManager({
+    const manager = createTestShardManager({
       eventBus,
       llmProvider: mockLLM(),
       sessionStore,
@@ -1295,7 +1541,7 @@ describe('ShardManager', () => {
     });
     const auditTrail = { append: vi.fn() };
     const syncAuditPath = join(dir, 'audit', 'shard-session-memory-sync-audit.jsonl');
-    const manager = new ShardManager({
+    const manager = createTestShardManager({
       eventBus,
       llmProvider: mockLLM(),
       sessionStore,
@@ -1371,7 +1617,7 @@ describe('ShardManager', () => {
       }),
     });
     const memory = mockMemoryProvider('Scoped memory block.');
-    const manager = new ShardManager({
+    const manager = createTestShardManager({
       eventBus,
       llmProvider: mockLLM(),
       sessionStore,
@@ -1428,7 +1674,7 @@ describe('ShardManager', () => {
     const repoCommit = makeTestTool('repo_commit');
     const spawnSubagent = makeTestTool('spawn_subagent');
 
-    const manager = new ShardManager({
+    const manager = createTestShardManager({
       eventBus,
       llmProvider: mockLLM(),
       sessionStore,
@@ -1455,7 +1701,7 @@ describe('ShardManager', () => {
     const memory = makeTestTool('memory');
     const contact = makeTestTool('contact');
 
-    const manager = new ShardManager({
+    const manager = createTestShardManager({
       eventBus,
       llmProvider: mockLLM(),
       sessionStore,
@@ -1482,7 +1728,7 @@ describe('ShardManager', () => {
     const repoCommit = makeTestTool('repo_commit');
     const promptUpdate = makeTestTool('prompt_layer_update');
 
-    const manager = new ShardManager({
+    const manager = createTestShardManager({
       eventBus,
       llmProvider: mockLLM(),
       sessionStore,
@@ -1511,7 +1757,7 @@ describe('ShardManager', () => {
     const contact = makeTestTool('contact');
     const repoStatus = makeTestTool('repo_status');
 
-    const manager = new ShardManager({
+    const manager = createTestShardManager({
       eventBus,
       llmProvider: mockLLM(),
       sessionStore,
@@ -1560,7 +1806,7 @@ describe('ShardManager', () => {
     const repoCommit = makeTestTool('repo_commit');
     const spawnSubagent = makeTestTool('spawn_subagent');
 
-    const manager = new ShardManager({
+    const manager = createTestShardManager({
       eventBus,
       llmProvider: mockLLM(),
       sessionStore,
@@ -1637,7 +1883,7 @@ describe('ShardManager', () => {
       });
     });
 
-    const alphaManager = new ShardManager({
+    const alphaManager = createTestShardManager({
       eventBus,
       llmProvider: mockLLM(),
       sessionStore,
@@ -1651,7 +1897,7 @@ describe('ShardManager', () => {
       parentSystemPrompt: 'test',
       toolCatalogProvider: () => ({ core: [alphaTool.tool], extended: [] }),
     });
-    const betaManager = new ShardManager({
+    const betaManager = createTestShardManager({
       eventBus,
       llmProvider: mockLLM(),
       sessionStore,
@@ -1700,7 +1946,7 @@ describe('ShardManager', () => {
       join(dir, 'state', 'shard-fold-reviews.json'),
     );
 
-    const manager = new ShardManager({
+    const manager = createTestShardManager({
       eventBus,
       llmProvider: mockLLM(),
       sessionStore,
@@ -1744,8 +1990,8 @@ describe('ShardManager', () => {
             expect.objectContaining({
               source: 'memory_write',
               provenance: expect.objectContaining({
-                coreCompanionId: 'companion-test',
-                shardCompanionId: `companion-test::${result.shardId}`,
+                coreCompanionId: '11111111-1111-4111-8111-111111111111',
+                shardCompanionId: `11111111-1111-4111-8111-111111111111::${result.shardId}`,
                 shardId: result.shardId,
                 source: 'memory_write',
                 sourceToolName: 'memory',
@@ -1760,16 +2006,16 @@ describe('ShardManager', () => {
     const review = await manager.getFoldReview(result.shardId);
     expect(review).toMatchObject({
       lineage: {
-        coreCompanionId: 'companion-test',
-        shardCompanionId: `companion-test::${result.shardId}`,
+        coreCompanionId: '11111111-1111-4111-8111-111111111111',
+        shardCompanionId: `11111111-1111-4111-8111-111111111111::${result.shardId}`,
       },
       memoryItems: [
         expect.objectContaining({
           output: expect.objectContaining({
             source: 'memory_write',
             provenance: expect.objectContaining({
-              coreCompanionId: 'companion-test',
-              shardCompanionId: `companion-test::${result.shardId}`,
+              coreCompanionId: '11111111-1111-4111-8111-111111111111',
+              shardCompanionId: `11111111-1111-4111-8111-111111111111::${result.shardId}`,
             }),
           }),
         }),
@@ -1781,7 +2027,7 @@ describe('ShardManager', () => {
     const memoryTool = makeTestTool('memory');
     const auditTrail = { append: vi.fn() };
 
-    const manager = new ShardManager({
+    const manager = createTestShardManager({
       eventBus,
       llmProvider: mockLLM(),
       sessionStore,
@@ -1858,7 +2104,7 @@ describe('ShardManager', () => {
     const memoryTool = makeTestTool('memory');
     const auditTrail = { append: vi.fn() };
 
-    const manager = new ShardManager({
+    const manager = createTestShardManager({
       eventBus,
       llmProvider: mockLLM(),
       sessionStore,
@@ -1925,7 +2171,7 @@ describe('ShardManager', () => {
       join(dir, 'state', 'shard-fold-reviews.json'),
     );
 
-    const manager = new ShardManager({
+    const manager = createTestShardManager({
       eventBus,
       llmProvider: mockLLM(),
       sessionStore,
@@ -1984,7 +2230,7 @@ describe('ShardManager', () => {
 
   it('returns lineage provenance on shard spawns with explicit source context', async () => {
     mockShardContent = 'lineage response';
-    const manager = new ShardManager({
+    const manager = createTestShardManager({
       eventBus,
       llmProvider: mockLLM(),
       sessionStore,
@@ -2007,13 +2253,13 @@ describe('ShardManager', () => {
     expect(result.lineage).toEqual(expect.objectContaining({
       schemaVersion: 2,
       kind: 'spawn',
-      coreCompanionId: 'companion-test',
-      shardCompanionId: expect.stringMatching(/^companion-test::shard-/),
+      coreCompanionId: '11111111-1111-4111-8111-111111111111',
+      shardCompanionId: expect.stringMatching(/^11111111-1111-4111-8111-111111111111::shard-/),
       shardId: result.shardId,
       shardChannelId: `shard:${result.shardId}`,
       companionProvenance: {
-        parentCompanionId: 'companion-test',
-        shardCompanionId: expect.stringMatching(/^companion-test::shard-/),
+        parentCompanionId: '11111111-1111-4111-8111-111111111111',
+        shardCompanionId: expect.stringMatching(/^11111111-1111-4111-8111-111111111111::shard-/),
       },
       sourceContext: {
         channelId: 'api:source-channel',
@@ -2024,7 +2270,7 @@ describe('ShardManager', () => {
         id: result.shardId,
         channelId: `shard:${result.shardId}`,
         channelType: 'api',
-        authorId: 'companion-test',
+        authorId: '11111111-1111-4111-8111-111111111111',
         authorName: 'Companion',
         isDirectMessage: false,
       }),
@@ -2050,7 +2296,7 @@ describe('ShardManager', () => {
     } as any);
 
     try {
-      const manager = new ShardManager({
+      const manager = createTestShardManager({
         eventBus,
         llmProvider: mockLLM(),
         sessionStore,
@@ -2101,9 +2347,27 @@ describe('ShardManager', () => {
         durationMs: 8,
       },
     } as any);
+    const lifecycleEvents: Array<{
+      handoff: CompletionHandoffRecord;
+      targetChannelId?: string;
+      noticeBuffered: boolean;
+    }> = [];
+    eventBus.on('agent.completion_handoff', event => {
+      lifecycleEvents.push(event);
+    });
+    let foldAttempts = 0;
+    eventBus.guard('agent.completion_handoff', event => {
+      if (event.handoff.status === 'folded_back') {
+        foldAttempts += 1;
+        if (foldAttempts === 1) {
+          throw new Error('folded-back lifecycle sink unavailable');
+        }
+      }
+      return true;
+    });
 
     try {
-      const manager = new ShardManager({
+      const manager = createTestShardManager({
         eventBus,
         llmProvider: mockLLM(),
         sessionStore,
@@ -2116,6 +2380,16 @@ describe('ShardManager', () => {
 
       const result = await manager.spawn({ name: 'artifact-review', task: 'emit an image artifact' });
       const review = await manager.getFoldReview(result.shardId);
+      await expect(manager.resolveFoldReview({
+        shardId: result.shardId,
+        decision: 'approve',
+        actor: 'operator',
+      })).rejects.toThrow('folded-back lifecycle sink unavailable');
+      const approved = await manager.resolveFoldReview({
+        shardId: result.shardId,
+        decision: 'approve',
+        actor: 'operator',
+      });
 
       expect(review).toMatchObject({
         shardId: result.shardId,
@@ -2131,6 +2405,23 @@ describe('ShardManager', () => {
         ],
       });
       expect(review?.blockingReasons).toContain('artifact_output_pending_merge_review');
+      expect(approved?.reviewState).toBe('approved');
+      expect(lifecycleEvents.at(-1)).toMatchObject({
+        noticeBuffered: false,
+        handoff: {
+          source: 'shard',
+          status: 'folded_back',
+          task: { shardId: result.shardId },
+        },
+      });
+      expect(lifecycleEvents.at(-1)?.targetChannelId).toBeUndefined();
+      await manager.resolveFoldReview({
+        shardId: result.shardId,
+        decision: 'approve',
+        actor: 'operator',
+      });
+      expect(lifecycleEvents.filter(event => event.handoff.status === 'folded_back'))
+        .toHaveLength(1);
     } finally {
       handleMessageSpy.mockRestore();
     }
@@ -2154,7 +2445,7 @@ describe('ShardManager', () => {
     } as any);
 
     try {
-      const manager = new ShardManager({
+      const manager = createTestShardManager({
         eventBus,
         llmProvider: mockLLM(),
         sessionStore,
@@ -2172,11 +2463,11 @@ describe('ShardManager', () => {
     }
   });
 
-  it('denies disallowed shard-to-prime memory sync operations and audits the denial', async () => {
+  it('denies destructive memory sync at the derived capability gate before fold policy', async () => {
     const memoryTool = makeTestTool('memory');
     const auditTrail = { append: vi.fn() };
 
-    const manager = new ShardManager({
+    const manager = createTestShardManager({
       eventBus,
       llmProvider: mockLLM(),
       sessionStore,
@@ -2202,11 +2493,26 @@ describe('ShardManager', () => {
       throw new Error('Expected wrapped memory tool to be present');
     }
 
-    await expect(
-      wrappedMemory.execute('redact-call', { action: 'redact', memory_id: 'mem-1' }),
-    ).rejects.toThrow('denied_operation');
+    const denial = await wrappedMemory.execute(
+      'redact-call',
+      { action: 'redact', memory_id: 'mem-1' },
+    ) as {
+      content: Array<{ text: string }>;
+      details: { capabilityDenied: boolean; missingTokens: string[]; tier: string };
+    };
     expect(memoryTool.execute).not.toHaveBeenCalled();
-    expect(auditTrail.append).toHaveBeenCalledWith(
+    expect(denial).toEqual(expect.objectContaining({
+      content: [expect.objectContaining({
+        text: expect.stringContaining('requires memory.delete'),
+      })],
+      details: {
+        capabilityDenied: true,
+        missingTokens: ['memory.delete'],
+        tier: 'custom',
+        isError: true,
+      },
+    }));
+    expect(auditTrail.append).not.toHaveBeenCalledWith(
       'shard.sync.policy',
       expect.objectContaining({
         shardId: result.shardId,
@@ -2222,7 +2528,7 @@ describe('ShardManager', () => {
       append: vi.fn(),
     };
 
-    const manager = new ShardManager({
+    const manager = createTestShardManager({
       eventBus,
       llmProvider: mockLLM(),
       sessionStore,
@@ -2266,7 +2572,7 @@ describe('ShardManager', () => {
 
   it('delegates Wyoming sessions with stable channel continuity', async () => {
     mockShardContent = 'wyoming delegated response';
-    const manager = new ShardManager({
+    const manager = createTestShardManager({
       eventBus,
       llmProvider: mockLLM(),
       sessionStore,
@@ -2297,7 +2603,7 @@ describe('ShardManager', () => {
           kind: 'satellite',
           siteId: 'ha-main',
           satelliteId: 'voice-pe-kitchen',
-          companionId: 'companion-test',
+          companionId: '11111111-1111-4111-8111-111111111111',
         },
       },
     });
@@ -2317,13 +2623,13 @@ describe('ShardManager', () => {
     expect(result.lineage).toEqual(expect.objectContaining({
       schemaVersion: 2,
       kind: 'wyoming',
-      coreCompanionId: 'companion-test',
-      shardCompanionId: expect.stringMatching(/^companion-test::wyoming-shard-/),
+      coreCompanionId: '11111111-1111-4111-8111-111111111111',
+      shardCompanionId: expect.stringMatching(/^11111111-1111-4111-8111-111111111111::wyoming-shard-/),
       shardId: result.shardId,
       shardChannelId: 'api:wyoming:ha-main:voice-pe-kitchen',
       companionProvenance: {
-        parentCompanionId: 'companion-test',
-        shardCompanionId: expect.stringMatching(/^companion-test::wyoming-shard-/),
+        parentCompanionId: '11111111-1111-4111-8111-111111111111',
+        shardCompanionId: expect.stringMatching(/^11111111-1111-4111-8111-111111111111::wyoming-shard-/),
       },
       sourceMessage: expect.objectContaining({
         id: 'wyoming-msg-conn-kitchen-7',
@@ -2344,7 +2650,7 @@ describe('ShardManager', () => {
           kind: 'satellite',
           siteId: 'ha-main',
           satelliteId: 'voice-pe-kitchen',
-          companionId: 'companion-test',
+          companionId: '11111111-1111-4111-8111-111111111111',
         },
       },
     }));
@@ -2364,12 +2670,13 @@ describe('ShardManager', () => {
     expect(handoffEntries).toHaveLength(0);
   });
 
+
   it('audits Wyoming delegation start/end with routing identity context', async () => {
     const auditTrail = {
       append: vi.fn(),
     };
 
-    const manager = new ShardManager({
+    const manager = createTestShardManager({
       eventBus,
       llmProvider: mockLLM(),
       sessionStore,
@@ -2429,7 +2736,7 @@ describe('ShardManager', () => {
   });
 
   it('seeds canonical embodiment context into Wyoming shard launches', async () => {
-    const manager = new ShardManager({
+    const manager = createTestShardManager({
       eventBus,
       llmProvider: mockLLM(),
       sessionStore,
@@ -2477,7 +2784,7 @@ describe('ShardManager', () => {
           embodimentId: 'display',
           siteId: 'ha-main',
           satelliteId: 'voice-pe-launch',
-          companionId: 'companion-test',
+          companionId: '11111111-1111-4111-8111-111111111111',
         },
       },
     });
@@ -2491,7 +2798,7 @@ describe('ShardManager', () => {
           requestId: 'wyoming-msg-conn-launch-1',
           turnId: 'wyoming-turn-conn-launch-session-launch-1',
           embodimentContext: {
-            companionId: 'companion-test',
+            companionId: '11111111-1111-4111-8111-111111111111',
             kind: 'embodiment',
             embodimentId: 'display',
             siteId: 'ha-main',
@@ -2512,8 +2819,8 @@ describe('ShardManager', () => {
       expect.objectContaining({
         schemaVersion: 2,
         kind: 'wyoming',
-        coreCompanionId: 'companion-test',
-        shardCompanionId: expect.stringMatching(/^companion-test::wyoming-shard-/),
+        coreCompanionId: '11111111-1111-4111-8111-111111111111',
+        shardCompanionId: expect.stringMatching(/^11111111-1111-4111-8111-111111111111::wyoming-shard-/),
         sourceMessage: expect.objectContaining({
           id: 'wyoming-msg-conn-launch-1',
           channelId: 'api:wyoming:ha-main:voice-pe-launch',
@@ -2523,8 +2830,19 @@ describe('ShardManager', () => {
         }),
       }),
       expect.objectContaining({
-        companionId: expect.stringMatching(/^companion-test::wyoming-shard-/),
+        companionId: expect.stringMatching(/^11111111-1111-4111-8111-111111111111::wyoming-shard-/),
       }),
+      expect.objectContaining({
+        parent: expect.objectContaining({
+          companionId: '11111111-1111-4111-8111-111111111111',
+          tier: 'autonomous',
+        }),
+        access: expect.objectContaining({
+          grantDigest: expect.any(String),
+          ownerVersion: expect.any(String),
+        }),
+      }),
+      null,
     );
   });
 
@@ -2535,7 +2853,7 @@ describe('ShardManager', () => {
       throw new Error('LLM failed');
     });
 
-    const manager = new ShardManager({
+    const manager = createTestShardManager({
       eventBus,
       llmProvider: mockLLM(),
       sessionStore,

@@ -2,6 +2,7 @@
   import { onMount } from 'svelte';
   import { apiGet } from '$lib/api/client';
   import BoundedList from './BoundedList.svelte';
+  import { scopeGardenPath } from '$lib/fleet/companion-scope';
 
   let { class: className = '' } = $props<{ class?: string }>();
 
@@ -55,7 +56,7 @@
 <div class={`card-garden p-5 ${className}`.trim()}>
   <div class="flex items-center justify-between gap-3 mb-3">
     <h2 class="font-serif text-lg text-shadow-900">Active Concerns</h2>
-    <a href="/cognitive-security/drift" class="text-sm font-medium text-gold-700 hover:text-gold-800">Open Drift Review</a>
+    <a href={scopeGardenPath('/concerns')} class="text-sm font-medium text-gold-700 hover:text-gold-800">Manage Concerns</a>
   </div>
   {#if loading}
     <div class="animate-pulse space-y-2">

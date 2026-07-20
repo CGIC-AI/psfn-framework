@@ -142,7 +142,7 @@ describe('LocalFirstResource', () => {
 
   it('rejects and removes malformed persisted records instead of rendering them', async () => {
     const storage = new MemoryGardenCacheStorage();
-    await storage.write('queue:test', {
+    await storage.write('companion:single-companion:queue:test', {
       schemaVersion: 1,
       savedAt: Date.now(),
       etag: '"bad"',
@@ -156,6 +156,7 @@ describe('LocalFirstResource', () => {
     });
 
     await expect(resource.read()).resolves.toBeNull();
-    await expect(storage.read('queue:test')).resolves.toBeUndefined();
+    await expect(storage.read('companion:single-companion:queue:test'))
+      .resolves.toBeUndefined();
   });
 });

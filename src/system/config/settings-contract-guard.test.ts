@@ -16,6 +16,7 @@ import {
 } from '../../shared/contracts/settings-garden-contract.js';
 import { buildSettingsContractData } from './settings-contract.js';
 import { verifySettingsContractGuard } from './settings-contract-guard.js';
+import { validateCompanionsConfig } from './companions-config.js';
 import { COMPANION_SETTINGS_OVERLAY_WHITELIST } from './settings-overlay.js';
 import { isRecord } from '../../shared/utils/types.js';
 
@@ -34,6 +35,20 @@ describe('settings contract guard', () => {
       ok: true,
       errors: [],
     });
+  });
+
+  it('keeps the fleet Garden listener process-owned and out of companions settings authority', () => {
+    const contractData = buildSettingsContractData();
+    const companionsSeed: unknown = JSON.parse(
+      readFileSync('config/companions.seed.json', 'utf-8'),
+    );
+    const fleet = validateCompanionsConfig(companionsSeed, 'config/companions.seed.json');
+
+    expect(contractData.fields).not.toHaveProperty('gardenPort');
+    expect(contractData.fields).not.toHaveProperty('ADMIN_PORT');
+    for (const companion of fleet.companions) {
+      expect(companion).not.toHaveProperty('gardenPort');
+    }
   });
 
   it('keeps the admin-ui Garden contract shim pinned to the shared canonical module', () => {
@@ -73,6 +88,68 @@ describe('settings contract guard', () => {
     // Representative cluster-global keys stay global.
     expect(contractData.fields.capabilityTier.scope).toBe('global');
     expect(contractData.fields.sessionHistoryBudgetPct.scope).toBe('global');
+  });
+
+  it('publishes per-companion image defaults with catalog-backed enum metadata', () => {
+    const contractData = buildSettingsContractData();
+
+    expect(contractData.fields.imageProvider).toEqual({
+      key: 'imageProvider',
+      ownerSubsystem: 'runtime',
+      ownerFile: 'settings.json',
+      type: 'enum',
+      scope: 'perCompanion',
+      enumValues: ['fal', 'comfyui'],
+    });
+    expect(contractData.fields.imageFalCreateModel).toMatchObject({
+      type: 'enum',
+      scope: 'perCompanion',
+      enumValues: expect.arrayContaining(['xai/grok-imagine-image']),
+    });
+    expect(contractData.fields.imageFalEditModel).toMatchObject({
+      type: 'enum',
+      scope: 'perCompanion',
+      enumValues: expect.arrayContaining(['xai/grok-imagine-image/quality/edit']),
+    });
+    expect(contractData.fields.imageSelfieEditModel).toMatchObject({
+      type: 'enum',
+      scope: 'perCompanion',
+      enumValues: expect.arrayContaining(['xai/grok-imagine-image/quality/edit']),
+    });
+    for (const key of [
+      'imageProvider',
+      'imageFalCreateModel',
+      'imageFalEditModel',
+      'imageSelfieEditModel',
+    ]) {
+      expect(SETTINGS_GARDEN_ADVANCED_SECTION_FIELDS.channels).toContain(key);
+    }
+  });
+
+  it('publishes per-companion LLM/vision lane model selection (23pp)', () => {
+    const contractData = buildSettingsContractData();
+
+    expect(contractData.fields.modelPurposeSelection).toEqual({
+      key: 'modelPurposeSelection',
+      ownerSubsystem: 'runtime',
+      ownerFile: 'settings.json',
+      type: 'object',
+      scope: 'perCompanion',
+    });
+    expect(SETTINGS_GARDEN_ADVANCED_SECTION_FIELDS.llm).toContain('modelPurposeSelection');
+
+    // MoA model choices ride the same per-companion selection rule.
+    expect(contractData.fields.moaReferenceModels.scope).toBe('perCompanion');
+    expect(contractData.fields.moaAggregatorModel.scope).toBe('perCompanion');
+    // MoA enablement/limits stay global.
+    expect(contractData.fields.moaEnabled.scope).toBe('global');
+
+    // The catalog and its projections stay models.json-owned and global.
+    expect(contractData.fields.modelCatalog.scope).toBe('global');
+    expect(contractData.fields.modelCatalog.ownerFile).toBe('models.json');
+    // Embedding identity stays global: dimensions are baked into shared pgvector schemas.
+    expect(contractData.fields.embeddingModel.scope).toBe('global');
+    expect(contractData.fields.embeddingDims.scope).toBe('global');
   });
 
   it('keeps the Garden tunable-setting inventory aligned to backend owner metadata', () => {

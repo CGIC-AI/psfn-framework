@@ -16,7 +16,7 @@ function makeTempDir(): string {
 
 function makeRuntimeConfig(characterCardPath: string, overrides: Partial<SubstrateConfig> = {}): SubstrateConfig {
   const baseConfig: SubstrateConfig = {
-    companionId: 'test-companion',
+    companionId: '11111111-1111-4111-8111-111111111111',
     primaryModel: 'test-primary',
     primaryProvider: 'test-provider',
     extractionModel: 'test-extraction',

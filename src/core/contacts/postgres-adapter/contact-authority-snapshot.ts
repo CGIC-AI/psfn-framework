@@ -1,9 +1,19 @@
-import type { PostgresContactStore } from './store.js';
+import type { Pool } from 'pg';
+import type { ContactStorePort } from '../contact-store-port.js';
 import {
   parseVerifiedDiscordContactAuthoritySnapshot,
   type VerifiedDiscordContactAuthoritySnapshot,
 } from '../../../shared/contracts/contact-authority-snapshot.js';
 import { contactIdentityVerificationDigest } from './contact-lifecycle-snapshot.js';
+
+interface ContactAuthoritySnapshotStore {
+  readonly pool: Pool;
+  readVerifiedDiscordContactAuthority: ContactStorePort['readVerifiedDiscordContactAuthority'];
+}
+
+interface ContactAuthoritySnapshotStoreClass {
+  prototype: ContactAuthoritySnapshotStore;
+}
 
 interface ExactContactAuthorityRow {
   contact_id: string;
@@ -31,7 +41,7 @@ function positiveVersion(value: string, field: string): number {
 }
 
 async function readVerifiedDiscordContactAuthority(
-  this: PostgresContactStore,
+  this: ContactAuthoritySnapshotStore,
   contactId: string,
   providerSubjectId: string,
 ): Promise<VerifiedDiscordContactAuthoritySnapshot | undefined> {
@@ -100,7 +110,7 @@ async function readVerifiedDiscordContactAuthority(
 }
 
 export function installPostgresContactAuthoritySnapshotOperations(
-  Store: typeof PostgresContactStore,
+  Store: ContactAuthoritySnapshotStoreClass,
 ): void {
   Store.prototype.readVerifiedDiscordContactAuthority = readVerifiedDiscordContactAuthority;
 }

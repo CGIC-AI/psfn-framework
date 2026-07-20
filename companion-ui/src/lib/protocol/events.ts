@@ -1,8 +1,7 @@
 /**
- * Legacy direct-Hub event protocol retained for the view-store adapter and
- * exact framing regressions. The shared-display runtime uses the gateway-owned
- * action protocol in api/gateway-protocol.ts and does not emit these client
- * frames.
+ * Canonical Companion UI event messages shared by the Hub and gateway-owned
+ * transports. Action submission uses the gateway protocol; both transports
+ * project inbound events into this one view-store contract.
  *
  * PROVENANCE: This file is a faithful client-side mirror of the hub's
  * authoritative wire types at:
@@ -23,6 +22,18 @@
  *
  * If this file and the hub's protocol.ts drift, the HUB WINS. Re-mirror.
  */
+import type {
+  ApprovalAttribution,
+  ApprovalGrantMode,
+  ApprovalSourceSystem,
+} from '../../../../src/shared/contracts/approval-envelope.js';
+import { COMPANION_APPROVALS_V2_CAPABILITY } from '../../../../src/shared/contracts/companion-relay.js';
+
+export type {
+  ApprovalAttribution,
+  ApprovalGrantMode,
+  ApprovalSourceSystem,
+} from '../../../../src/shared/contracts/approval-envelope.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Client -> Hub
@@ -46,7 +57,10 @@ export type ClientToHubMessage =
 export interface HelloMessage {
   type: 'hello';
   capabilities: SatelliteCapabilities;
+  eventCapabilities: CompanionEventCapability[];
 }
+
+export type CompanionEventCapability = typeof COMPANION_APPROVALS_V2_CAPABILITY;
 
 export interface AudioMessage {
   type: 'audio';
@@ -176,6 +190,7 @@ export interface HelloAckMessage {
   satelliteId: string;
   satelliteName: string;
   capabilities: SatelliteCapabilities;
+  eventCapabilities?: CompanionEventCapability[];
   place?: RuntimePlaceIdentity;
   identity?: RuntimeIdentity;
 }
@@ -261,6 +276,12 @@ export interface PongMessage {
 
 export type ApprovalResolvedStatus = 'approved' | 'denied' | 'expired' | 'blocked';
 
+/**
+ * v1 fields are the original contract. The v2 fields (approvals.v2, server bead
+ * psfn-framework-13sk) are ADDITIVE and OPTIONAL — present only when the server
+ * saw this client advertise `approvals.v2`. The framing parser tolerates unknown
+ * future keys on this message so a newer server never drops the whole frame.
+ */
 export interface ApprovalRequestedMessage {
   type: 'approval.requested';
   data: {
@@ -270,6 +291,13 @@ export interface ApprovalRequestedMessage {
     expiresAt?: string;
     redactedContext: string;
     status: 'pending';
+    // ── v2 (approvals.v2) — additive, optional ──
+    sourceSystem?: ApprovalSourceSystem;
+    attribution?: ApprovalAttribution;
+    action?: string;
+    scope?: string;
+    reason?: string;
+    grantMode?: ApprovalGrantMode;
   };
 }
 

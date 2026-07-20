@@ -7,6 +7,7 @@ import {
   isCanonicalIsoTimestamp,
   isRecord,
   isRfc4122Uuid,
+  toRecordView,
 } from '../../../shared/utils/types.js';
 import { timingSafeStringEqual } from '../../../shared/utils/secret-compare.js';
 import type {
@@ -1095,7 +1096,7 @@ export class FleetAuthAuthorityFloorStore {
     return withCrossProcessWriteLock(this.lockPath, LOCK_OPTIONS, () => {
       const current = this.read();
       // Reuse the strict parser for caller-provided credential metadata.
-      const validated = parsePasskeyCandidate(candidate as unknown as Record<string, unknown>, 'candidate');
+      const validated = parsePasskeyCandidate(toRecordView(candidate), 'candidate');
       if (current.passkeys.credentials.some(entry => entry.credentialIdHash === validated.credentialIdHash)
         || current.passkeys.tombstones.some(entry => entry.credentialIdHash === validated.credentialIdHash)) {
         throw new Error('Passkey credential identity is already present or tombstoned');
@@ -1139,7 +1140,7 @@ export class FleetAuthAuthorityFloorStore {
       ));
       if (priorIndex < 0) throw new Error('Passkey replacement requires an exact current prior credential');
       const replacement = parsePasskeyCandidate(
-        input.replacement as unknown as Record<string, unknown>,
+        toRecordView(input.replacement),
         'replacement',
       );
       if (current.passkeys.credentials.some(entry => entry.credentialIdHash === replacement.credentialIdHash)

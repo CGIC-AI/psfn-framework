@@ -10,7 +10,6 @@
 
 import '../../shared/utils/load-dotenv.js';
 import { loadPlacesRegistryConfig } from '../../channels/backplane/places-registry.js';
-import { loadConfig } from '../../system/config/load-config.js';
 import { resolveConfiguredSystemDataDir } from '../../persistence/layout.js';
 import { SharedWorldWikiStore } from '../../faculties/wiki/store.js';
 import {
@@ -24,7 +23,12 @@ import {
   type SharedWikiProjectionOutcome,
 } from '../../faculties/wiki/shared-pgvector-projection.js';
 import { resolveSharedWikiProjectionContext } from './shared-wiki-projection-context.js';
-import { toErrorMessage } from '../../shared/utils/errors.js';
+import {
+  bootstrapMaintenanceRuntime,
+  isMaintenanceCliEntrypoint,
+  parseCommonMaintenanceArgs,
+  runMaintenanceCli,
+} from './cli-harness.js';
 
 interface CliOptions {
   apply: boolean;
@@ -48,24 +52,24 @@ function printUsage(): void {
   console.log('  -h, --help               Show this help message.');
 }
 
-function requireNext(argv: string[], index: number, arg: string): string {
-  const value = argv[index + 1];
-  if (!value) throw new Error(`Missing value for ${arg}`);
-  return value;
-}
-
-function parseArgs(argv: string[]): CliOptions {
-  const options: CliOptions = { apply: false, json: false, showHelp: false };
-  for (let i = 0; i < argv.length; i += 1) {
-    const arg = argv[i];
-    if (arg === '--help' || arg === '-h') { options.showHelp = true; continue; }
-    if (arg === '--apply') { options.apply = true; continue; }
-    if (arg === '--json') { options.json = true; continue; }
-    if (arg === '--site') { options.siteId = requireNext(argv, i, arg); i += 1; continue; }
-    if (arg === '--system-data-dir') { options.systemDataDir = requireNext(argv, i, arg); i += 1; continue; }
-    throw new Error(`Unknown argument: ${arg}`);
-  }
-  return options;
+function parseArgs(argv: readonly string[]): CliOptions {
+  return parseCommonMaintenanceArgs<CliOptions>(argv, {
+    initial: { apply: false, json: false, showHelp: false },
+    extraFlags: {
+      '--apply': ({ options }) => {
+        options.apply = true;
+      },
+      '--json': ({ options }) => {
+        options.json = true;
+      },
+      '--site': ({ options, readValue }) => {
+        options.siteId = readValue();
+      },
+      '--system-data-dir': ({ options, readValue }) => {
+        options.systemDataDir = readValue();
+      },
+    },
+  });
 }
 
 interface SitePublishResult {
@@ -101,11 +105,8 @@ function printProjection(projection: SharedWikiProjectionOutcome): void {
   console.log(`  projection: FAILED (${projection.error ?? 'unknown'}) — re-run once Postgres is reachable to heal`);
 }
 
-async function main(): Promise<void> {
-  const options = parseArgs(process.argv.slice(2));
-  if (options.showHelp) { printUsage(); return; }
-
-  const config = loadConfig();
+async function run(options: CliOptions): Promise<void> {
+  const { config } = await bootstrapMaintenanceRuntime({ hydrateSecrets: false });
   const systemDataDir = options.systemDataDir?.trim() || resolveConfiguredSystemDataDir(config);
   const registry = loadPlacesRegistryConfig(systemDataDir);
 
@@ -165,7 +166,11 @@ async function main(): Promise<void> {
   for (const result of results) printReport(result);
 }
 
-main().catch((error) => {
-  console.error(`places→wiki publication failed: ${toErrorMessage(error)}`);
-  process.exit(1);
-});
+if (isMaintenanceCliEntrypoint(import.meta.url)) {
+  void runMaintenanceCli({
+    label: 'places→wiki publication',
+    parseArgs,
+    printUsage,
+    run,
+  });
+}

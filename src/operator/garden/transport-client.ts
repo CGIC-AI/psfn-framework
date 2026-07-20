@@ -17,6 +17,7 @@ import type { ConnectionOptions } from 'node:tls';
 import { WebSocket, WebSocketServer, type ClientOptions } from 'ws';
 import { createComponentLogger } from '../../shared/logger.js';
 import { sendText } from '../../channels/backplane/http/primitives.js';
+import { parseFleetModelUsageInternalRequestTarget } from '../../shared/telemetry/fleet-model-usage-request.js';
 import {
   createSpiffeCheckServerIdentity,
   requireMtlsPeerFileConfig,
@@ -30,6 +31,15 @@ import type {
 const log = createComponentLogger('GardenAdminTransportProxy');
 const HEALTH_PROBE_TIMEOUT_MS = 1_500;
 export const HEALTH_PROBE_PATH = '/api/admin/__transport_probe__';
+export const FLEET_MODEL_USAGE_INTERNAL_HEADER = 'x-psfn-fleet-model-usage-query';
+export const FLEET_MODEL_USAGE_PARENT_COMPANION_HEADER =
+  'x-psfn-fleet-model-usage-parent-companion';
+export const FLEET_MODEL_USAGE_PARENT_TARGET_HEADER = 'x-psfn-fleet-model-usage-parent-target';
+const INTERNAL_RESPONSE_BOUNDS = Object.freeze({ jsonBytes: 16 * 1_024 * 1_024 });
+
+export function isFleetModelUsageInternalRequestTarget(requestTarget: string): boolean {
+  return parseFleetModelUsageInternalRequestTarget(requestTarget) !== null;
+}
 
 export interface GardenAdminTransportHealth {
   mode: GardenAdminTransportClientEndpoint['mode'];
@@ -42,6 +52,10 @@ export interface GardenAdminTransportHealth {
 interface TransportProbePayload {
   status?: unknown;
   error?: unknown;
+}
+
+interface ProxyTimeoutRef {
+  value: boolean;
 }
 
 interface TlsRequestOptions {
@@ -326,8 +340,57 @@ export class GardenAdminTransportProxy {
     });
   }
 
+  /**
+   * Bounded request/response read for operator-owned fleet fan-out. The caller
+   * supplies the transport-internal marker; browser proxy paths cannot add it.
+   */
+  requestJson(
+    requestPath: string,
+    headers: IncomingHttpHeaders,
+  ): Promise<unknown> {
+    return new Promise((resolve, reject) => {
+      let settled = false;
+      const finish = (error: Error | null, value?: unknown): void => {
+        if (settled) return;
+        settled = true;
+        if (error) reject(error);
+        else resolve(value);
+      };
+      const request = this.createRequest(requestPath, 'GET', headers, (response) => {
+        const chunks: Buffer[] = [];
+        let bytes = 0;
+        response.on('data', (chunk: Buffer | string) => {
+          const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+          bytes += buffer.byteLength;
+          if (bytes > INTERNAL_RESPONSE_BOUNDS.jsonBytes) {
+            response.destroy(new Error('Fleet model-usage response exceeded the size limit'));
+            return;
+          }
+          chunks.push(buffer);
+        });
+        response.on('error', error => finish(error));
+        response.on('end', () => {
+          const status = response.statusCode ?? 502;
+          if (status < 200 || status >= 300) {
+            finish(new Error(`Fleet model-usage transport returned HTTP ${status}`));
+            return;
+          }
+          try {
+            finish(null, JSON.parse(Buffer.concat(chunks, bytes).toString('utf8')) as unknown);
+          } catch {
+            finish(new Error('Fleet model-usage transport returned invalid JSON'));
+          }
+        });
+      });
+      request.setTimeout(this.endpoint.timeoutMs, () => {
+        request.destroy(new Error(`Fleet model-usage transport timed out after ${this.endpoint.timeoutMs}ms`));
+      });
+      request.on('error', error => finish(error));
+      request.end();
+    });
+  }
+
   proxyApiRequest(req: IncomingMessage, res: ServerResponse): void {
-    let timedOut = false;
     const requestPath = req.url ?? '/';
     const proxyRequest = this.createRequest(
       requestPath,
@@ -347,34 +410,7 @@ export class GardenAdminTransportProxy {
         });
       },
     );
-
-    proxyRequest.setTimeout(this.endpoint.timeoutMs, () => {
-      timedOut = true;
-      proxyRequest.destroy(new Error(`Timed out after ${this.endpoint.timeoutMs}ms`));
-    });
-
-    proxyRequest.on('error', (error) => {
-      log.warn('Garden admin proxy request failed', {
-        path: requestPath,
-        error: String(error),
-      });
-      if (res.writableEnded || res.destroyed) return;
-      if (res.headersSent) {
-        res.destroy(error);
-        return;
-      }
-      sendText(
-        res,
-        502,
-        timedOut
-          ? 'Bad Gateway: admin transport timed out'
-          : 'Bad Gateway: admin transport unavailable',
-      );
-    });
-
-    req.on('aborted', () => {
-      proxyRequest.destroy(new Error('Client request aborted'));
-    });
+    this.attachProxyStreamHandlers(proxyRequest, req, res, requestPath);
 
     req.pipe(proxyRequest);
   }
@@ -391,9 +427,9 @@ export class GardenAdminTransportProxy {
     res: ServerResponse,
     body: Buffer,
     trustedAuthorityHeaders?: Readonly<Record<string, string>>,
+    requestPath = req.url ?? '/',
+    unavailableStatus: 502 | 503 = 502,
   ): void {
-    let timedOut = false;
-    const requestPath = req.url ?? '/';
     const headers = buildProxyHeaders(req.headers, trustedAuthorityHeaders);
     delete headers['transfer-encoding'];
     headers['content-length'] = String(body.byteLength);
@@ -415,34 +451,7 @@ export class GardenAdminTransportProxy {
         });
       },
     );
-
-    proxyRequest.setTimeout(this.endpoint.timeoutMs, () => {
-      timedOut = true;
-      proxyRequest.destroy(new Error(`Timed out after ${this.endpoint.timeoutMs}ms`));
-    });
-
-    proxyRequest.on('error', (error) => {
-      log.warn('Garden admin proxy request failed', {
-        path: requestPath,
-        error: String(error),
-      });
-      if (res.writableEnded || res.destroyed) return;
-      if (res.headersSent) {
-        res.destroy(error);
-        return;
-      }
-      sendText(
-        res,
-        502,
-        timedOut
-          ? 'Bad Gateway: admin transport timed out'
-          : 'Bad Gateway: admin transport unavailable',
-      );
-    });
-
-    req.on('aborted', () => {
-      proxyRequest.destroy(new Error('Client request aborted'));
-    });
+    this.attachProxyStreamHandlers(proxyRequest, req, res, requestPath, unavailableStatus);
 
     proxyRequest.end(body);
   }
@@ -453,9 +462,10 @@ export class GardenAdminTransportProxy {
     head: Buffer,
     trustedAuthorityHeaders?: Readonly<Record<string, string>>,
     expiresAtSeconds?: number,
+    requestPath = '/api/admin/events',
   ): void {
     const upstreamSocket = new WebSocket(
-      this.resolveTelemetryWebSocketUrl(),
+      this.resolveTelemetryWebSocketUrl(requestPath),
       this.buildTelemetryWebSocketOptions(req, trustedAuthorityHeaders),
     );
     let upgraded = false;
@@ -497,6 +507,43 @@ export class GardenAdminTransportProxy {
     });
   }
 
+  private attachProxyStreamHandlers(
+    proxyRequest: ClientRequest,
+    req: IncomingMessage,
+    res: ServerResponse,
+    requestPath: string,
+    unavailableStatus: 502 | 503 = 502,
+  ): ProxyTimeoutRef {
+    const timedOut: ProxyTimeoutRef = { value: false };
+    proxyRequest.setTimeout(this.endpoint.timeoutMs, () => {
+      timedOut.value = true;
+      proxyRequest.destroy(new Error(`Timed out after ${this.endpoint.timeoutMs}ms`));
+    });
+    proxyRequest.on('error', (error) => {
+      log.warn('Garden admin proxy request failed', {
+        path: requestPath,
+        error: String(error),
+      });
+      if (res.writableEnded || res.destroyed) return;
+      if (res.headersSent) {
+        res.destroy(error);
+        return;
+      }
+      const statusLabel = unavailableStatus === 503 ? 'Service Unavailable' : 'Bad Gateway';
+      sendText(
+        res,
+        unavailableStatus,
+        timedOut.value
+          ? `${statusLabel}: admin transport timed out`
+          : `${statusLabel}: admin transport unavailable`,
+      );
+    });
+    req.on('aborted', () => {
+      proxyRequest.destroy(new Error('Client request aborted'));
+    });
+    return timedOut;
+  }
+
   private createRequest(
     requestPath: string,
     method: string | undefined,
@@ -524,11 +571,11 @@ export class GardenAdminTransportProxy {
       : httpRequest(options, callback);
   }
 
-  private resolveTelemetryWebSocketUrl(): string {
+  private resolveTelemetryWebSocketUrl(requestPath: string): string {
     if (this.endpoint.mode === 'socket') {
-      return 'ws://localhost/api/admin/events';
+      return `ws://localhost${normalizeRequestPath(requestPath)}`;
     }
-    return buildNetworkUrl(this.endpoint.wsUrl, '/api/admin/events').toString();
+    return buildNetworkUrl(this.endpoint.wsUrl, requestPath).toString();
   }
 
   private buildTelemetryWebSocketOptions(

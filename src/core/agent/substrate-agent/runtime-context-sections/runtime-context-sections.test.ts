@@ -45,6 +45,7 @@ import {
   resolveAppearanceContextFromTemplateVariables,
 } from './self-presentation.js';
 import { buildSatelliteEndpointContextBlock } from './satellite.js';
+import { resolveTierCapabilityTokens } from '../../../../system/capabilities/tiers.js';
 import {
   NO_CAPABILITY_REQUIREMENT,
   withCapabilityRequirement,
@@ -641,7 +642,7 @@ describe('emotion-appraisal producer', () => {
 describe('tooling producers', () => {
   it('renders every authorized extended tool as directly callable', () => {
     const guide = buildExtendedToolGuide({
-      capabilityTier: 'nursery',
+      grantedTokens: new Set(resolveTierCapabilityTokens('nursery')),
       extendedTools: [
         makeExtendedTool('fresh_tool', 'Does a thing. With details.'),
         makeExtendedTool('loaded_tool', 'Already active. More details.'),

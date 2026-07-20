@@ -1,8 +1,12 @@
 # Fleet-scoped Garden control plane
 
-Status: approved architecture direction, 2026-07-17. This document specifies
-the implementation target; the current per-companion Garden topology remains
-the live behavior until the cutover described below.
+Status: implemented in the repository, 2026-07-18 (approved architecture
+direction 2026-07-17; delivered by the `psfn-framework-mus2` epic), pending an
+operator-managed live cutover. The code and Helm topology define one
+fleet-scoped Garden and retire per-companion Garden processes, `gardenPort`,
+and the raw fleet-status listener, but this implementation wave did not mutate
+the live k3s deployment. The migration section below is the required cutover
+and rollback plan, not evidence that the rollout already happened.
 
 ## Decision
 
@@ -95,8 +99,14 @@ is too shallow.
     companion target: the schema, rows, and writes a Garden service touches are
     derived from the immutable request context of the companion who generated
     the request — never from a process-global selection, a cached prior
-    companion, or an unscoped query. A request for companion A can neither read
-    nor write companion B's data.
+    companion, or an unscoped query. The companion-scope guard
+    (`src/operator/garden/garden-companion-scope.ts`, wired at the admin route
+    dispatch chokepoint) refuses any dispatch whose request companion does not
+    match the service's companion binding. A request for companion A can neither
+    read nor write companion B's data. Observer-eval sidecar persistence remains
+    the existing deployment-global, non-authoritative eval store (the explicit
+    mus2.16 exception); its Garden routes still require an authenticated,
+    companion-bound dispatch, but its rows are not companion-owned data.
 
 ## Public route and switcher contract
 
@@ -116,6 +126,28 @@ switcher roster comes from the gateway's authenticated fleet portal projection,
 which returns only companions for which the session has an active binding and
 eligible Garden access. The projection remains a gateway-owned authorization
 view even though the Garden UI renders it.
+
+The Companion UI app consumes the same projection through two cookie-authed,
+`no-store, private` gateway endpoints (`FleetAuthHttpRoutes`), both backed by
+`GatewayFleetPortalProjection.resolveRoster` and its least-authority,
+non-enumerating authorizer:
+
+- `GET /v1/fleet-auth/companions` — the roster: `{ companionId, displayName,
+  websocketPath, avatarRef? }` per companion the session may reach. `displayName`
+  resolves to the manifest label else the `companionId` (no character-card reads
+  at request time; see [multi-companion.md](./multi-companion.md)). The active
+  companion is expressed only by which `websocketPath` the app opens.
+- `GET /v1/fleet-auth/approvals` — the fleet-wide pending-approval view:
+  redacted `{ companionId, companionDisplayName, id, title, requestedAt,
+  expiresAt?, status }` entries, so an approval for companion X surfaces (with
+  attribution) even while the human talks to companion Y. Ownership is joined
+  from the approval boundary's owner map; entries with no resolvable owner, or
+  an owner outside the session's authorized roster, are excluded (fail closed,
+  never mis-attributed, non-enumerating). Redaction reuses the companion-relay
+  approval whitelist — raw tool params never appear.
+
+The app never enumerates the raw fleet manifest; both endpoints are filtered to
+the session's authorized companions.
 
 The selected companion stays in the URL for page routes, API calls, downloads,
 and WebSockets. The browser client derives request URLs from the current
@@ -250,8 +282,8 @@ alternate owner path.
 
 ## Fleet view consolidation
 
-Fold the current fleet portal and raw fleet-status presentation into the one
-Garden UI:
+The fleet portal and fleet-status presentation are folded into the one Garden
+UI:
 
 - keep `GatewayFleetPortalProjection` as the authorized roster source;
 - add the authorized connection-health fields needed by the existing fleet
@@ -262,9 +294,9 @@ Garden UI:
 - retain gateway ownership of session authentication, live authorization, and
   connection-registry facts.
 
-After parity is proven, retire the separately served HTML/JSON status page and
-its `FLEET_STATUS_PORT` / `FLEET_STATUS_HOST` listener. There is no separately
-deployed "fleet manager Garden." The gateway may retain a narrow internal
+The separately served HTML/JSON status page and its `FLEET_STATUS_PORT` /
+`FLEET_STATUS_HOST` listener are retired. There is no separately deployed
+"fleet manager Garden." The gateway may retain a narrow internal
 projection module because it owns connection state, but presentation belongs to
 the single Garden.
 
@@ -330,10 +362,10 @@ The fleet Garden derives every socket endpoint from the validated companion ID
 using `resolveCompanionAdminTransportSocketPath`; it does not accept manifest
 path overrides or a delimiter-packed endpoint env variable.
 
-`companions.json` stops assigning a Garden port per companion. One fleet-level
-Garden listener uses the normal process-wiring port. The launcher plan therefore
-no longer carries `gardenPort`, and a missing/colliding agent-admin endpoint
-fails the fleet Garden startup.
+`companions.json` does not assign a Garden port per companion; a `gardenPort`
+key fails config validation closed. One fleet-level Garden listener uses the
+normal process-wiring port. The launcher plan therefore carries no `gardenPort`,
+and a missing/colliding agent-admin endpoint fails the fleet Garden startup.
 
 ### Kubernetes / Helm
 
@@ -352,9 +384,10 @@ admin endpoints and the narrow gateway child-assertion/confirmation interface.
 
 The Garden pod mounts its image, required fleet/system configuration,
 certificates, logs/tmp as needed, and no provider/channel secrets. It retains
-the database credentials its existing services already use for direct reads
-and writes (invariant 11), scoped per request to the selected companion. It
-does not require direct writable mounts for every companion-data or Personal
+the database credential its existing services already use for direct reads and
+writes (invariant 11), with every direct route dispatched through a
+companion-bound service table selected from the authenticated request. It does
+not require direct writable mounts for every companion-data or Personal
 Workspace PVC; selected agents remain the adapters to those domains.
 
 Helm health and post-rollout checks probe the one Garden deployment and then
@@ -365,7 +398,9 @@ usable.
 ## Migration and rollback
 
 This is a topology migration, not a data or owner-format migration. Canonical
-owner files and companion state stay in place.
+owner files and companion state stay in place. An operator performs the
+following cutover only after discovering the live k3s authority and preserving
+the deployed values and rollback revision:
 
 1. Land the fleet target registry, companion-bound admission, selected
    transport routing, UI URL builder, and tests while the old topology remains
@@ -383,18 +418,34 @@ owner files and companion state stay in place.
 6. Disable the per-companion Garden processes and remove their Services,
    certificates, per-entry ports, and the raw fleet-status listener. Remove,
    rather than preserve, the retired launcher and manifest fields.
-7. Refresh deployment and operations documentation only after the rollout
-   topology is the live authority.
+7. Record the deployed revision and verification evidence, then update this
+   status only after the rollout topology is confirmed as the live authority.
 
 There is no dual-write period and no copied owner state. During the dark stage,
-the fleet Garden is probe-only. After gateway cutover, old Gardens do not
-receive admin traffic.
+the fleet Garden is probe-only. After the future gateway cutover, old Gardens
+must not receive admin traffic.
 
-Rollback restores the prior gateway upstream map and per-companion Garden
-workloads from the previous pinned deployment revision. Because owner files
-never moved or changed format, rollback does not reverse or merge data. A
-rollback must still preserve the one-browser-origin Fleet Auth boundary; it
-must not expose direct Garden ports or fall back to one shared admin token.
+### Pinned rollback procedure
+
+Rollback is a whole-deployment revision pin, never a mixed topology:
+
+1. Identify the last known-good revision that predates the fleet-Garden
+   cutover: `helm history <release>` in Kubernetes, or the pinned prior
+   image/commit for the local supervisor launcher.
+2. Roll the entire release back to that revision (`helm rollback <release>
+   <revision>`, or restart the supervisor from the pinned prior checkout).
+   This restores the prior gateway upstream map and per-companion Garden
+   workloads together; do not roll back the Garden while leaving the new
+   gateway routing (or vice versa).
+3. Because owner files never moved or changed format, and there was no
+   dual-write period or copied owner state, rollback reverses no data and
+   merges nothing. Canonical owner files are the same files in both
+   topologies.
+4. A rollback must still preserve the one-browser-origin Fleet Auth boundary;
+   it must not expose direct Garden ports or fall back to one shared admin
+   token.
+5. Re-run the deployment verification (`npm run verify:helm-chart`, rollout
+   validation) against the pinned revision before returning traffic.
 
 ## Verification
 
@@ -409,10 +460,10 @@ Implementation is not complete until the integrated branch proves:
 - a selected companion outage does not redirect or fall back to another;
 - owner-file reads and writes hit only the selected canonical owner and retain
   settings-contract validation;
-- direct database reads and writes issued by Garden services touch only the
+- database reads and writes performed for a Garden request touch only the
   selected companion's schema and rows, keyed by the request's authenticated
-  companion target; a request for companion A cannot read or write companion
-  B's data;
+  companion target and enforced at the admin dispatch chokepoint; a request
+  for companion A cannot read or write companion B's data;
 - switching clears or companion-keys all browser state;
 - the authorized fleet projection omits inaccessible companions and internal
   topology;
@@ -434,8 +485,8 @@ implementation sequence is integrated.
 - Adding a fleet-wide mutation interface or a cross-companion management tier.
 - Allowing one companion selection to authorize another.
 - Mounting a general shared filesystem or adding manifest path overrides.
-- Giving the Garden provider, channel, database, shell, or companion-agent
-  credentials.
+- Giving the Garden provider, channel, shell, or companion-agent credentials
+  beyond its approved request-scoped database access.
 - Giving shards full Garden pages, full settings editors, independent Fleet
   Auth identities, or durable owner files.
 - Expanding shard overrides beyond the approved model and budget controls.

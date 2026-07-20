@@ -44,16 +44,24 @@ const COMPANIONS_ERROR_PREFIX = 'Invalid companions config';
 const POSTGRES_SCHEMA_PATTERN = /^[a-z_][a-z0-9_]*$/u;
 const POSTGRES_SCHEMA_MAX_LENGTH = 63;
 
-/** Valid TCP port range for per-companion Garden operator surfaces. */
-const GARDEN_PORT_MIN = 1;
-const GARDEN_PORT_MAX = 65_535;
+/**
+ * Optional roster display identity bounds (sprint-10 companion roster wire).
+ * These fields feed the authenticated fleet portal roster only; they carry no
+ * authority. Kept single-line and bounded so the roster projection stays a
+ * small, non-authority display surface.
+ */
+const DISPLAY_NAME_MAX_LENGTH = 120;
+const AVATAR_REF_MAX_LENGTH = 512;
+// eslint-disable-next-line no-control-regex -- reject control chars in single-line display strings
+const CONTROL_CHAR_PATTERN = /[\u0000-\u001f\u007f]/u;
 
 const COMPANION_ENTRY_KEYS = [
   'companionId',
   'companionDataDir',
   'characterCardPath',
   'postgresSchema',
-  'gardenPort',
+  'displayName',
+  'avatarRef',
 ] as const;
 
 const COMPANIONS_ROOT_KEYS = ['companions'] as const;
@@ -68,14 +76,17 @@ export interface CompanionFleetEntry {
   /** Lowercase Postgres schema owning this companion's tenant tables. */
   postgresSchema: string;
   /**
-   * Optional TCP port for this companion's own Garden operator surface
-   * (sprint-10 W4: one Garden per companion). When present the supervisor
-   * launcher spawns a dedicated operator process listening on this port,
-   * bound to this companion's admin transport socket. When absent, no
-   * operator process is spawned for the companion. Must be unique across
-   * the fleet — port collisions fail closed at validation time.
+   * Optional human-facing roster label. Surfaced ONLY through the
+   * authenticated fleet portal roster; carries no authority and is never a
+   * routing key. When absent the roster falls back to the companionId (no
+   * character-card file reads at request time).
    */
-  gardenPort?: number;
+  displayName?: string;
+  /**
+   * Optional opaque avatar reference for the roster (e.g. an asset key or
+   * URL the client resolves). Display-only; never interpreted server-side.
+   */
+  avatarRef?: string;
 }
 
 export interface CompanionsFleetConfig {
@@ -160,22 +171,26 @@ function requirePostgresSchema(value: unknown, field: string): string {
   return schema;
 }
 
-function requireOptionalGardenPort(value: unknown, field: string): number | undefined {
+function requireBoundedOptionalString(
+  value: unknown,
+  field: string,
+  maxLength: number,
+): string | undefined {
   if (value === undefined) {
     return undefined;
   }
-  if (typeof value !== 'number' || !Number.isInteger(value)) {
+  const text = requireNonEmptyString(value, field);
+  if (text.length > maxLength) {
     throw new Error(
-      `${COMPANIONS_ERROR_PREFIX}: ${field} must be an integer TCP port, got ${JSON.stringify(value)}`,
+      `${COMPANIONS_ERROR_PREFIX}: ${field} must be at most ${maxLength} characters`,
     );
   }
-  if (value < GARDEN_PORT_MIN || value > GARDEN_PORT_MAX) {
+  if (CONTROL_CHAR_PATTERN.test(text)) {
     throw new Error(
-      `${COMPANIONS_ERROR_PREFIX}: ${field} must be between ${GARDEN_PORT_MIN} and ${GARDEN_PORT_MAX}, `
-      + `got ${value}`,
+      `${COMPANIONS_ERROR_PREFIX}: ${field} must not contain control characters`,
     );
   }
-  return value;
+  return text;
 }
 
 function requireRelativePath(value: unknown, field: string): string {
@@ -199,14 +214,30 @@ function validateCompanionEntry(raw: unknown, index: number): CompanionFleetEntr
   if (!isRecord(raw)) {
     throw new Error(`${COMPANIONS_ERROR_PREFIX}: ${label} must be an object`);
   }
+  if (Object.hasOwn(raw, 'gardenPort')) {
+    throw new Error(
+      `${COMPANIONS_ERROR_PREFIX}: ${label}.gardenPort is retired; configure the one fleet `
+      + 'Garden listener with ADMIN_PORT',
+    );
+  }
   assertNoUnknownKeys(raw, COMPANION_ENTRY_KEYS, label, { errorPrefix: COMPANIONS_ERROR_PREFIX });
-  const gardenPort = requireOptionalGardenPort(raw.gardenPort, `${label}.gardenPort`);
+  const displayName = requireBoundedOptionalString(
+    raw.displayName,
+    `${label}.displayName`,
+    DISPLAY_NAME_MAX_LENGTH,
+  );
+  const avatarRef = requireBoundedOptionalString(
+    raw.avatarRef,
+    `${label}.avatarRef`,
+    AVATAR_REF_MAX_LENGTH,
+  );
   return {
     companionId: requireCompanionId(raw.companionId, `${label}.companionId`),
     companionDataDir: requireRelativePath(raw.companionDataDir, `${label}.companionDataDir`),
     characterCardPath: requireRelativePath(raw.characterCardPath, `${label}.characterCardPath`),
     postgresSchema: requirePostgresSchema(raw.postgresSchema, `${label}.postgresSchema`),
-    ...(gardenPort !== undefined ? { gardenPort } : {}),
+    ...(displayName !== undefined ? { displayName } : {}),
+    ...(avatarRef !== undefined ? { avatarRef } : {}),
   };
 }
 
@@ -226,25 +257,6 @@ function assertNoDuplicateField(
       );
     }
     seen.set(value, index);
-  }
-}
-
-function assertNoDuplicateGardenPorts(companions: readonly CompanionFleetEntry[]): void {
-  const seen = new Map<number, number>();
-  for (let index = 0; index < companions.length; index += 1) {
-    const port = companions[index].gardenPort;
-    if (port === undefined) {
-      continue;
-    }
-    const previous = seen.get(port);
-    if (previous !== undefined) {
-      throw new Error(
-        `${COMPANIONS_ERROR_PREFIX}: duplicate gardenPort ${port} `
-        + `in companions[${previous}] and companions[${index}] — each companion's Garden `
-        + 'operator surface must listen on its own port',
-      );
-    }
-    seen.set(port, index);
   }
 }
 
@@ -285,7 +297,6 @@ export function validateCompanionsConfig(raw: unknown, sourcePath: string): Comp
 
   assertNoDuplicateField(companions, (entry) => entry.companionId, 'companionId');
   assertNoDuplicateField(companions, (entry) => entry.postgresSchema, 'postgresSchema');
-  assertNoDuplicateGardenPorts(companions);
   assertNoOverlappingDataDirs(companions);
 
   return { companions };

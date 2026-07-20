@@ -59,24 +59,35 @@ carries exactly:
 | `companionDataDir` | companion's data root, relative to the canonical persistence root (`PSFN_RUNTIME_ROOT`, or the selected layout's runtime root) | relative path, may not escape the root |
 | `characterCardPath` | companion's character card, relative to the same canonical persistence root | relative path, may not escape the root |
 | `postgresSchema` | Postgres schema owning this companion's tenant tables | lowercase identifier, ≤63 chars, no `pg_` prefix |
-| `gardenPort` | optional TCP port for this companion's own Garden operator surface | integer 1–65535, unique across the fleet |
+| `displayName` | optional human-facing roster label (display-only, no authority) | non-empty string, ≤120 chars, no control characters |
+| `avatarRef` | optional opaque avatar reference for the roster (display-only) | non-empty string, ≤512 chars, no control characters |
+
+`displayName` and `avatarRef` are surfaced **only** through the authenticated
+fleet portal roster (`GET /v1/fleet-auth/companions`; see
+[garden-control-plane.md](./garden-control-plane.md)). They are never routing
+keys or authorization inputs. The roster's display name resolves as
+`displayName` when present, otherwise the `companionId` — no character-card file
+is read at request time.
 
 Cross-entry validation rejects duplicate `companionId`, duplicate
-`postgresSchema`, duplicate `gardenPort`, and overlapping `companionDataDir`.
+`postgresSchema`, and overlapping `companionDataDir`.
 Before any process is spawned, the supervisor resolves both path fields to
 canonical absolute strict subpaths of the runtime root. Existing symlink
-ancestors are resolved and an escape outside that root is rejected. Agent and
-operator startup then bind `COMPANION_ID`, both paths, `COMPANION_PG_SCHEMA`,
-and the per-companion admin socket back to that one manifest entry; an unknown
-ID or any drift refuses startup before persistence or character-card loading.
+ancestors are resolved and an escape outside that root is rejected. Each agent
+startup then binds `COMPANION_ID`, both paths, `COMPANION_PG_SCHEMA`, and the
+per-companion admin socket back to that one manifest entry; an unknown ID or any
+drift refuses startup before persistence or character-card loading. The one
+fleet Garden receives the complete registry without inheriting any companion's
+identity, Personal Workspace, or database schema.
 
 **What is NOT in `companions.json`:** per-companion Discord tokens,
 model/settings selections, or a mutable personal workspace path. Discord identity +
 channel→companion routing live in `channels.json`; the per-companion Postgres
 schema for a single agent process is sourced from the `COMPANION_PG_SCHEMA` env
-var. The manifest owns identity, data location, tenant schema, and Garden port;
-the runtime deterministically derives `workspaces/personal/<companionId>` from
-the validated runtime root rather than accepting another path override.
+var. The manifest owns identity, data location, and tenant schema. The fleet
+Garden listener is configured once through `ADMIN_PORT`; the runtime
+deterministically derives `workspaces/personal/<companionId>` from the validated
+runtime root rather than accepting another path override.
 
 ## Per-companion settings overlay
 
@@ -185,16 +196,15 @@ fleet and spawns one agent process per companion.
   `companionId, companionDataDir, characterCardPath, postgresSchema,
   personalWorkspacePath,
   role-bound agent proof, role-bound session-integrity proof,
-  adminTransportSocket, gardenPort` (`gardenPort` is `-` when absent). A
-  single-companion topology prints nothing — the launcher reads empty stdout as
-  "stay in single-agent mode." The admin socket is derived from
+  adminTransportSocket`. A single-companion topology prints nothing — the
+  launcher reads empty stdout as "stay in single-agent mode." The admin socket is derived from
   `resolveCompanionAdminTransportSocketPath`
   (`src/operator/garden/transport-paths.ts`), never by the shell.
 - Per-agent env: each spawned agent gets a scrubbed environment
   (`env -i` from an allowlist) plus `COMPANION_ID`, `COMPANION_DATA_DIR`,
   `CHARACTER_CARD_PATH`, `COMPANION_PG_SCHEMA`, `ADMIN_TRANSPORT_SOCKET`, and
-  `ADMIN_PORT` from the plan. The gateway proofs are derived from the gateway
-  session keyring and companion ID; they are passed only to the agent and its
+  the role-bound gateway proofs from the plan. The proofs are derived from the
+  gateway session keyring and companion ID; they are passed only to the agent and its
   isolated session-integrity worker and are omitted from dry-run output.
   The default single-companion launcher derives the same role separation for
   its isolated worker even though normal agent methods retain local-socket
@@ -211,8 +221,9 @@ proof before routing any request. General agent RPC methods and the two
 session-integrity signing methods have disjoint role policies in both
 topologies; selecting the internal role always requires its proof.
 
-Network admin-transport mode is rejected fail-closed under the supervisor:
-per-companion Gardens currently support socket mode only.
+Network admin-transport mode is rejected fail-closed under the supervisor. Each
+agent must listen on its canonical local socket so the one fleet Garden can use
+the validated target registry.
 
 ## Workspace scopes: runtime contract
 
@@ -290,39 +301,73 @@ Each companion has its own Discord bot identity. Discord accounts in
   companion's inbound/outbound traffic to that companion only
   (`src/boundary/gateway/companion-channels.ts`).
 
-## Gardens: one per companion + a fleet-status page
+## Companion UI channel (`companion-ui`)
 
-- **One Garden per companion.** Each fleet entry with a `gardenPort` gets its own
-  operator process (today's operator-process shape × N), bound to that
-  companion's admin transport socket
-  (`garden-admin-<companionId>.sock`) and listening on its `gardenPort`. The
-  supervisor spawns them; a companion with no `gardenPort` gets no operator
-  process. Auth stays single-operator token; the operator sees everything.
-  Operator processes start from a least-privilege `env -i` allowlist, do not
-  load the repo `.env`, and do not retain gateway, provider, channel, database,
-  or companion-auth credentials. Credential status in Settings is a boolean-only
-  snapshot queried from the gateway over the authenticated admin path.
-- **Gateway fleet-status surface.** A thin, read-only, loopback-only page served
-  by the gateway (`src/boundary/gateway/fleet-status.ts`,
-  `startOptionalFleetStatusServer`), enabled by `FLEET_STATUS_PORT` (host
-  `FLEET_STATUS_HOST`, default `127.0.0.1`). Routes: `GET /` and `GET /fleet`
-  render an HTML overview; `GET /fleet/status.json` returns JSON. It is fed by
-  the gateway connection registry + the fleet roster and shows, per companion:
-  up/down state, health, last-seen and connected timestamps, recent violation
-  count, and a link out to that companion's Garden. Setting `FLEET_STATUS_PORT`
-  while `PSFN_MULTI_COMPANION` is off fails closed; a taken port fails closed
-  (never re-picks).
+The companion-ui PWA reaches the runtime through the satellite hub relay and the
+companion-ui WebSocket (`src/channels/api/companion-ui-websocket.ts` →
+`src/app/gateway/api-surface.ts` action dispatch →
+`gatewayApiRuntime.handleChatCompletion`). Browser turns land as the first-class
+`companion-ui` channel type (`CHANNEL_TYPES`, `src/shared/contracts/runtime.ts`),
+not generic `api` traffic.
 
-  This is a raw operator listener with no browser-session authentication. Its
-  legacy `GET /fleet` alias is not the authenticated `/fleet` portal on the
-  canonical HTTPS origin, and `/fleet/status.json` is never mounted or consumed
-  there. Do not publish or tunnel the raw listener without an independent
-  authentication boundary and private network policy. Remove
-  `FLEET_STATUS_PORT`/`FLEET_STATUS_HOST` from repository-owned runtime wiring
-  and restart the gateway to disable only this listener.
+- **Server-authored classification.** The channel type is stamped in
+  `AgentApiBackend.prepareTurn` (`src/channels/api/agent-backend.ts`) whenever a
+  turn carries a validated hub-device attachment — the authenticated proof that
+  it originated from the PWA. It is **never** claimable via an
+  `X-PSFN-Channel-Type` header: `companion-ui` is deliberately absent from the
+  external-claim allowlist (`external-channel-claim.ts`), so a browser or API
+  client cannot self-mint the trusted channel. The satellite hub is a read-only
+  vendored dependency this wave; if a future hub revision emits a signed
+  channel-type claim it can replace the attachment-derived classification without
+  changing the downstream stamp.
+- **Contact binding.** A Discord-SSO'd human binds to their existing canonical
+  contact via the attachment's validated contact binding
+  (`hubDeviceAttachment.actor.contact.contactId`) — never minted as a new person
+  or an `api` principal. `isHubDeviceAttachmentSnapshot` guarantees a non-empty
+  contact id, so the binding is fail-closed. Guests (`guestMode: 'explicit'`)
+  author as `hub-device-guest:<deviceId>` with no contact.
+- **Channel privacy.** companion-ui is a 1:1 human↔companion surface, so turns
+  carry a non-null `channelPrivacy` (default `private`) sourced from the
+  operator-owned `channels.json > companionUi` section. This clears the
+  observer-eval sidecar privacy gate
+  (`src/core/eval/observer-sidecar/privacy.ts`) instead of failing closed on
+  `missing_channel_privacy_metadata`.
+- **Owner file.** `channels.json > companionUi` owns `{ channelPrivacy }`.
+  Contact identity comes only from the authenticated human attachment; the
+  owner file cannot override it. Unknown keys are rejected on load and save
+  (`src/channels/backplane/config.ts`,
+  `parseCompanionUiSection`). Availability is decided by the fleet-auth/hub-device
+  wiring, not an `enabled` flag. The section is exposed through the raw
+  `channels.json` editor in Garden settings.
+- **Not a scheduling destination.** Like the inter-companion `companion` lane,
+  `companion-ui` is excluded from the schedule-tool reminder/follow-up channel
+  enum (`src/core/scheduler/schedule-tool.ts`): it is a live surface, and the
+  `scheduled_prompts` / follow-up tables' `channel_type` CHECK constraints omit
+  it.
 
-  Not yet surfaced (documented follow-up in the code): fatigue/charge posture and
-  tool-error counts. Do not assume the fleet page shows them today.
+## One fleet Garden frontend
+
+- **One Garden for the fleet.** The supervisor starts every companion agent,
+  waits for all canonical `garden-admin-<companionId>.sock` listeners, probes
+  every target, and then starts exactly one operator process on `ADMIN_PORT`.
+  The operator routes companion-scoped requests through the immutable
+  `FleetGardenTargetRegistry`. It starts from a least-privilege `env -i`
+  allowlist, does not load the repo `.env`, and does not inherit any companion's
+  identity, Personal Workspace, database schema, gateway proof, provider,
+  or channel credentials. It receives the deployment database URL solely for
+  the approved direct Garden services; authenticated request dispatch selects a
+  companion-bound service instance before any database access. Fleet Auth and
+  `GATEWAY_OPERATOR_API_BASE_URL` are required for this topology. Credential
+  status in Settings is a boolean-only snapshot queried from the gateway over
+  the authenticated admin path.
+- **Gateway fleet overview.** The canonical HTTPS origin serves the same
+  compiled Garden bundle at `/fleet` and at each authorized
+  `/companions/<companion-uuid>/garden/...` path. `/v1/fleet/portal` returns
+  only the signed-in principal's bounded companion projection; it does not
+  expose ports, timestamps, violation counts, raw reasons, or topology.
+  Companion selection is encoded in the immutable URL and is reauthorized on
+  every page, API, download, and WebSocket request. The former raw
+  fleet-status listener and `/fleet/status.json` route are retired.
 
 ## Fleet backups
 
@@ -434,4 +479,5 @@ notes but are not wired in this branch:
   transcript inspection, and fleet-wide autonomy controls. The shipped Garden
   surface is local, control-plane-only, and deliberately cannot become these.
 - Voice subsystem rewrite.
-- Fatigue/charge and tool-error metrics on the fleet-status page.
+- Additional bounded fleet-overview posture indicators, subject to the same
+  authorization and privacy constraints as the current projection.

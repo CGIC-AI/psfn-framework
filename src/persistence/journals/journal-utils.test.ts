@@ -198,6 +198,8 @@ describe('journal utils', () => {
 
     const first = readJournalFirstEntry(filePath);
     expect(first).toBeNull();
+    expect(() => readJournalFirstEntry(filePath, { malformedRow: 'throw' }))
+      .toThrow();
   });
 
   it('scans journal metadata with bounded memory', () => {

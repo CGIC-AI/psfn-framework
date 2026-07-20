@@ -134,6 +134,30 @@ const POSTGRES_DATABASE_URL_FILE_ENV = 'POSTGRES_DATABASE_URL_FILE';
 const POSTGRES_DATABASE_URL_FD_ENV = 'POSTGRES_DATABASE_URL_FD';
 type LoadConfigMode = 'gateway' | 'agent' | 'operator';
 
+// The operator/Garden host process resolves the direct database credential
+// optionally: the shell launcher forwards it inline as POSTGRES_DATABASE_URL
+// (trusted host process, same posture as the gateway), while the Kubernetes
+// fleet Garden mounts it as a secret file referenced by POSTGRES_DATABASE_URL_FILE
+// (or _FD). Absence is not fatal here — presence is enforced fail-closed at the
+// point of use (FleetGardenDirectDatabase) and guaranteed by the fleet chart.
+function resolveOperatorDatabaseUrl(env: NodeJS.ProcessEnv): string | undefined {
+  const inlineCredential = parseOptionalStringEnv(env[POSTGRES_DATABASE_URL_ENV]);
+  if (inlineCredential) {
+    return inlineCredential;
+  }
+  const filePath = parseOptionalStringEnv(env[POSTGRES_DATABASE_URL_FILE_ENV]);
+  const descriptor = parseOptionalStringEnv(env[POSTGRES_DATABASE_URL_FD_ENV]);
+  if (!filePath && !descriptor) {
+    return undefined;
+  }
+  return resolveRuntimeCredentialFromEnvironment(env, {
+    description: 'PostgreSQL database URL',
+    inlineEnvName: POSTGRES_DATABASE_URL_ENV,
+    fileEnvName: POSTGRES_DATABASE_URL_FILE_ENV,
+    fdEnvName: POSTGRES_DATABASE_URL_FD_ENV,
+  });
+}
+
 function isNodeTlsVerificationGloballyDisabled(value: string | undefined): boolean {
   return value?.trim() === '0';
 }
@@ -323,13 +347,15 @@ function loadConfigForMode(mode: LoadConfigMode, env: NodeJS.ProcessEnv = proces
     processMode: mode,
     seedDir: parseOptionalStringEnv(env.CONFIG_DIR),
   });
-  const companionId = requireCompanionId(env);
+  const multiCompanion = isMultiCompanionEnabled(env);
+  const companionId = mode === 'operator' && multiCompanion
+    ? undefined
+    : requireCompanionId(env);
   const configuredCompanionDataDir = runtimePathLayout.companionDataDir;
   const configuredCharacterCardPath = env.CHARACTER_CARD_PATH
     ?? `${configuredCompanionDataDir}/${DEFAULT_COMPANION_CARD_FILE_NAME}`;
   const configuredPostgresSchema = parsePostgresSchemaEnv(env.COMPANION_PG_SCHEMA);
 
-  const multiCompanion = isMultiCompanionEnabled(env);
   const rawCompanionFleet = resolveCompanionFleet({
     dataDir,
     multiCompanion,
@@ -344,7 +370,7 @@ function loadConfigForMode(mode: LoadConfigMode, env: NodeJS.ProcessEnv = proces
       { label: 'backupsDir', path: runtimePathLayout.backupsDir },
     ])
     : undefined;
-  const companionRuntimeIdentity = companionFleet
+  const companionRuntimeIdentity = companionFleet && companionId
     ? resolveCompanionRuntimeIdentity({
       fleet: companionFleet,
       companionId,
@@ -352,7 +378,7 @@ function loadConfigForMode(mode: LoadConfigMode, env: NodeJS.ProcessEnv = proces
       characterCardPath: configuredCharacterCardPath,
       postgresSchema: configuredPostgresSchema,
       workspacePath: env.WORKSPACE_PATH,
-      requireWorkspaceBinding: mode !== 'gateway',
+      requireWorkspaceBinding: mode === 'agent',
     })
     : undefined;
   const companionDataDir = companionRuntimeIdentity?.companionDataDir ?? configuredCompanionDataDir;
@@ -386,7 +412,7 @@ function loadConfigForMode(mode: LoadConfigMode, env: NodeJS.ProcessEnv = proces
     })
     : mode === 'gateway'
       ? parseOptionalStringEnv(env[POSTGRES_DATABASE_URL_ENV])
-      : undefined;
+      : resolveOperatorDatabaseUrl(env);
   if (!postgresDatabaseUrl && mode === 'gateway') {
     throw new Error('POSTGRES_DATABASE_URL is required for runtime persistence');
   }
@@ -408,12 +434,17 @@ function loadConfigForMode(mode: LoadConfigMode, env: NodeJS.ProcessEnv = proces
       }
       : {}),
     characterCardPath,
-    companionId,
+    ...(companionId ? { companionId } : {}),
     ...(gatewayCompanionAuthToken ? { gatewayCompanionAuthToken } : {}),
     ...(gatewaySessionIntegrityAuthToken ? { gatewaySessionIntegrityAuthToken } : {}),
     systemDataDir: runtimePathLayout.systemDataDir,
     companionDataDir,
-    workspacePath: companionRuntimeIdentity?.personalWorkspacePath ?? runtimePathLayout.workspacePath,
+    ...(mode === 'operator' && companionFleet
+      ? {}
+      : {
+          workspacePath:
+            companionRuntimeIdentity?.personalWorkspacePath ?? runtimePathLayout.workspacePath,
+        }),
     ...(companionFleet ? { sharedWorkspacePath: companionFleet.sharedWorkspacePath } : {}),
     dataDir,
     databasePath,
@@ -520,6 +551,11 @@ function loadConfigForMode(mode: LoadConfigMode, env: NodeJS.ProcessEnv = proces
     ...(materializeEnvBackedSecrets
       ? { falApiKey: resolveOptionalEnvCredential(credentialVault, 'FAL_API_KEY', env) }
       : {}),
+    imageProvider: undefined,
+    imageFalCreateModel: undefined,
+    imageFalEditModel: undefined,
+    imageSelfieEditModel: undefined,
+    modelPurposeSelection: undefined,
     imageWorkflows: {},
     ...(echoTtsModel ? { echoTtsModel } : {}),
     retryMaxAttempts: DEFAULT_RETRY_MAX_ATTEMPTS,
@@ -570,7 +606,13 @@ export function loadAgentConfig(env: NodeJS.ProcessEnv = process.env): Substrate
 }
 
 export function loadOperatorConfig(env: NodeJS.ProcessEnv = process.env): SubstrateConfig {
-  return sanitizeCoreSubstrateConfig(loadConfigForMode('operator', env)) as SubstrateConfig;
+  const config = loadConfigForMode('operator', env);
+  return {
+    ...sanitizeCoreSubstrateConfig(config),
+    ...(config.postgresDatabaseUrl
+      ? { postgresDatabaseUrl: config.postgresDatabaseUrl }
+      : {}),
+  } as SubstrateConfig;
 }
 
 function parseIntegerEnv(value: string | undefined, fallback: number, min: number): number {

@@ -62,7 +62,11 @@ import type {
   ApiChatCompletionCancelRpcResult,
   ApiChatCompletionRpcParams,
   ApiChatCompletionRpcResult,
+  ApiCompanionUiShardActionRpcParams,
+  ApiCompanionUiShardActionRpcResult,
   ApiHealthRpcResult,
+  ApiShardOwnerRpcParams,
+  ApiShardOwnerRpcResult,
   ApiStreamDeltaNotification,
   ApiTelemetryIngestRpcParams,
   ApiTelemetryIngestRpcResult,
@@ -161,6 +165,12 @@ export interface LLMChatParams extends GatewayCorrelationParams {
   model: string;
   provider: string;
   pin?: boolean;
+  /**
+   * 23pp per-companion model selection: models.json registry entry id chosen
+   * by the calling companion's settings overlay. Resolved fail-closed against
+   * the gateway's registry; explicit model/provider fields take precedence.
+   */
+  slotKey?: string;
   messages: GatewayLLMMessage[];
   systemPrompt: string;
   /** PromptPlan cachePlan boundaries for systemPrompt (E2.4); hash-verified before use. */
@@ -191,6 +201,12 @@ export interface LLMCompleteParams extends GatewayCorrelationParams {
   model: string;
   provider: string;
   pin?: boolean;
+  /**
+   * 23pp per-companion model selection: models.json registry entry id chosen
+   * by the calling companion's settings overlay. Resolved fail-closed against
+   * the gateway's registry; explicit model/provider fields take precedence.
+   */
+  slotKey?: string;
   messages: GatewayLLMMessage[];
   systemPrompt: string;
   /** PromptPlan cachePlan boundaries for systemPrompt (E2.4); hash-verified before use. */
@@ -408,7 +424,34 @@ export interface ShardBackendRequestParams {
   backend: ShardBackendRequestBackend;
   shardId: string;
   name: string;
-  capabilityTier: string;
+  /** Manager-bound assertion; gateway recomputes it from authenticated authority. */
+  ownerVersion: string;
+  /** Manager-bound assertion; gateway recomputes it from authenticated authority. */
+  grantDigest: string;
+}
+
+export interface ShardWorkloadRegisterParams {
+  /** Client-generated idempotency/cleanup key; never carries authority. */
+  registrationId: string;
+  shardId: string;
+  shardLabel?: string;
+  channelIds: string[];
+  /** Agent launch assertions; the gateway independently re-derives both. */
+  ownerVersion: string;
+  grantDigest: string;
+}
+
+export interface ShardWorkloadRegisterResult {
+  registrationId: string;
+  workloadGeneration: string;
+}
+
+export interface ShardWorkloadEndParams {
+  registrationId: string;
+}
+
+export interface ShardWorkloadEndResult {
+  ended: boolean;
 }
 
 export type VaultWriteMode = 'create' | 'append' | 'prepend';
@@ -963,6 +1006,8 @@ export interface GatewayMethods {
   'approval.request': [ApprovalRequestParams, ApprovalResult];
   'notify.ntfy': [NotifyNtfyParams, NotifyNtfyResult];
   'shard.backend.request': [ShardBackendRequestParams, ShardBackendRequestResult];
+  'shard.workload.register': [ShardWorkloadRegisterParams, ShardWorkloadRegisterResult];
+  'shard.workload.end': [ShardWorkloadEndParams, ShardWorkloadEndResult];
   'confirmation.list': [ConfirmationListParams, ConfirmationListResult];
   'confirmation.history': [ConfirmationHistoryListParams, ConfirmationHistoryListResult];
   'confirmation.resolve': [ConfirmationResolveParams, ConfirmationResolveResult];
@@ -1079,6 +1124,11 @@ export interface AgentMethods {
   'voice.transcript.cancel': [VoiceStreamCancelParams, VoiceStreamCancelResult];
   'api.chat.completion': [ApiChatCompletionRpcParams, ApiChatCompletionRpcResult];
   'api.chat.cancel': [ApiChatCompletionCancelRpcParams, ApiChatCompletionCancelRpcResult];
+  'api.companion-ui.shard.action': [
+    ApiCompanionUiShardActionRpcParams,
+    ApiCompanionUiShardActionRpcResult,
+  ];
+  'shard.directory.owner': [ApiShardOwnerRpcParams, ApiShardOwnerRpcResult];
   'api.telemetry.ingest': [ApiTelemetryIngestRpcParams, ApiTelemetryIngestRpcResult];
   'api.health': [Record<string, never>, ApiHealthRpcResult];
   'telemetry.turn.performance': [TurnPerformanceIngestParams, TurnPerformanceIngestResult];
@@ -1123,4 +1173,10 @@ export const GatewayErrors = {
    * at the boundary before any provider I/O — fail closed.
    */
   INVALID_WORK_SPEC: -32019,
+  /**
+   * 23pp: a per-companion model selection slot key did not resolve to an
+   * enabled models.json registry entry. Rejected at the boundary before any
+   * provider I/O — fail closed, never silently substituted.
+   */
+  UNKNOWN_MODEL_SELECTION_SLOT: -32020,
 } as const;

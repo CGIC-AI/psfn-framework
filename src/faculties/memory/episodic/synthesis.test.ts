@@ -815,8 +815,8 @@ describe('EpisodicSynthesizer contextual topic cutting (E5.4)', () => {
           return (id: string) => {
             if (!injected) {
               injected = true;
-              target.createEpisode(decoyEpisode);
-              target.claimEpisodeMessages({
+              void target.createEpisode(decoyEpisode);
+              void target.claimEpisodeMessages({
                 episodeId: decoyEpisode.id,
                 sessionId: SESSION_ID,
                 claims: [{ claimKey: conflictingKey, turnId: turnId(1), channelId: SESSION_ID }],

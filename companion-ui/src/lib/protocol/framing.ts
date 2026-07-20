@@ -1,4 +1,8 @@
-import { isObjectRecord as isRecord } from '../utils/types.js';
+import {
+  hasExactKeys,
+  isBoundedString as boundedString,
+  isObjectRecord as isRecord,
+} from '../../../../src/shared/utils/types.js';
 /**
  * Wire framing for the Companion Cockpit <-> PSFN-Satellite-Hub transport.
  *
@@ -87,13 +91,7 @@ function exactRecord(
   required: readonly string[],
   optional: readonly string[] = [],
 ): Record<string, unknown> | null {
-  if (!isRecord(value) || required.some(key => !Object.hasOwn(value, key))) return null;
-  const allowed = new Set([...required, ...optional]);
-  return Object.keys(value).every(key => allowed.has(key)) ? value : null;
-}
-
-function boundedString(value: unknown, maximum = 65_536): value is string {
-  return typeof value === 'string' && value.length >= 1 && value.length <= maximum;
+  return isRecord(value) && hasExactKeys(value, required, optional) ? value : null;
 }
 
 function optionalBoundedString(value: unknown, maximum = 65_536): boolean {
@@ -140,6 +138,13 @@ function capabilities(value: unknown): boolean {
   });
 }
 
+function eventCapabilities(value: unknown): boolean {
+  return Array.isArray(value)
+    && value.length <= 1
+    && new Set(value).size === value.length
+    && value.every(entry => entry === 'approvals.v2');
+}
+
 function participant(value: unknown, user = false): boolean {
   const record = exactRecord(value, [], user ? ['id', 'name', 'canonicalContactId'] : ['id', 'name']);
   return record !== null
@@ -168,6 +173,41 @@ function dataRecord(payload: unknown, required: readonly string[], optional: rea
   return outer ? exactRecord(outer.data, required, optional) : null;
 }
 
+/**
+ * Like {@link dataRecord} but does NOT reject unknown `data` keys. Used ONLY for
+ * `approval.requested` (approvals.v2): a newer server may add forward-compatible
+ * fields, and the client must keep parsing the frame (known fields validated,
+ * unknown keys tolerated) rather than drop the whole message. Unknown keys are
+ * dropped downstream — the reducer only lifts the known fields into app state.
+ */
+function tolerantDataRecord(payload: unknown, required: readonly string[]): Record<string, unknown> | null {
+  const outer = exactRecord(payload, ['type', 'data']);
+  if (!outer || !isRecord(outer.data)) return null;
+  const data = outer.data;
+  return required.every(key => Object.hasOwn(data, key)) ? data : null;
+}
+
+/** v2 attribution: `{ parentLabel, parentId, shardLabel?, shardId? }`, ids opaque. */
+function approvalAttribution(value: unknown): boolean {
+  if (value === undefined) return true;
+  const record = exactRecord(value, ['parentLabel', 'parentId'], ['shardLabel', 'shardId']);
+  return record !== null
+    && boundedString(record.parentLabel, 256) && boundedString(record.parentId, 256)
+    && optionalBoundedString(record.shardLabel, 256) && optionalBoundedString(record.shardId, 256);
+}
+
+/** v2 grant mode: `{ kind: 'once' }` or `{ kind: 'ttl', ttlSeconds }`. */
+function approvalGrantMode(value: unknown): boolean {
+  if (value === undefined) return true;
+  if (!isRecord(value)) return false;
+  if (value.kind === 'once') return exactRecord(value, ['kind']) !== null;
+  if (value.kind === 'ttl') {
+    const record = exactRecord(value, ['kind', 'ttlSeconds']);
+    return record !== null && nonNegativeInteger(record.ttlSeconds, 31_536_000);
+  }
+  return false;
+}
+
 const STRICT_HUB_VALIDATORS: Record<HubToClientMessage['type'], (payload: unknown) => boolean> = {
   'session.ready': (payload) => {
     const record = exactRecord(payload, [
@@ -182,11 +222,13 @@ const STRICT_HUB_VALIDATORS: Record<HubToClientMessage['type'], (payload: unknow
     const record = exactRecord(payload, [
       'type', 'sessionId', 'channelId', 'deviceId', 'deviceName', 'satelliteId',
       'satelliteName', 'capabilities',
-    ], ['identity', 'place']);
+    ], ['identity', 'place', 'eventCapabilities']);
     return record !== null
       && ['sessionId', 'channelId', 'deviceId', 'deviceName', 'satelliteId', 'satelliteName']
         .every(key => boundedString(record[key], 256))
-      && capabilities(record.capabilities) && identity(record.identity) && place(record.place);
+      && capabilities(record.capabilities)
+      && (record.eventCapabilities === undefined || eventCapabilities(record.eventCapabilities))
+      && identity(record.identity) && place(record.place);
   },
   status: payload => {
     const record = exactRecord(payload, ['type', 'data']);
@@ -243,13 +285,22 @@ const STRICT_HUB_VALIDATORS: Record<HubToClientMessage['type'], (payload: unknow
     return record !== null && boundedString(record.sessionId, 256);
   },
   'approval.requested': payload => {
-    const data = dataRecord(payload, [
+    // Tolerate unknown future keys (approvals.v2 forward-compat); validate the
+    // v1 required fields plus any known optional v1/v2 fields that are present.
+    const data = tolerantDataRecord(payload, [
       'id', 'title', 'requestedAt', 'redactedContext', 'status',
-    ], ['expiresAt']);
+    ]);
     return data !== null && boundedString(data.id, 256) && boundedString(data.title, 512)
       && isoTimestamp(data.requestedAt) && optionalBoundedString(data.expiresAt, 32)
       && (data.expiresAt === undefined || isoTimestamp(data.expiresAt))
-      && boundedString(data.redactedContext, 4096) && data.status === 'pending';
+      && boundedString(data.redactedContext, 4096) && data.status === 'pending'
+      // v2 fields — validated when present, ignored when absent.
+      && optionalBoundedString(data.sourceSystem, 64)
+      && optionalBoundedString(data.action, 512)
+      && optionalBoundedString(data.scope, 1024)
+      && optionalBoundedString(data.reason, 4096)
+      && approvalAttribution(data.attribution)
+      && approvalGrantMode(data.grantMode);
   },
   'approval.resolved': payload => {
     const data = dataRecord(payload, ['id', 'status', 'resolvedAt']);
@@ -286,8 +337,10 @@ const STRICT_HUB_VALIDATORS: Record<HubToClientMessage['type'], (payload: unknow
 
 const STRICT_CLIENT_VALIDATORS: Record<ClientToHubMessage['type'], (payload: unknown) => boolean> = {
   hello: payload => {
-    const record = exactRecord(payload, ['type', 'capabilities']);
-    return record !== null && capabilities(record.capabilities);
+    const record = exactRecord(payload, ['type', 'capabilities', 'eventCapabilities']);
+    return record !== null
+      && capabilities(record.capabilities)
+      && eventCapabilities(record.eventCapabilities);
   },
   audio: payload => {
     const record = exactRecord(payload, ['type', 'audio']);

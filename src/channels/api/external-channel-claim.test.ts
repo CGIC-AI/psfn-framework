@@ -206,6 +206,30 @@ describe('resolveApiTurnIdentity', () => {
     });
   });
 
+  it('rejects a client-supplied companion-ui channel-type header claim (8ora)', () => {
+    // companion-ui is a first-class channel type but is NOT header-claimable:
+    // its origin is proven server-side by the hub-device attachment. A browser/
+    // API client presenting X-PSFN-Channel-Type: companion-ui must be refused so
+    // it cannot self-mint the trusted channel.
+    const result = resolveApiTurnIdentity({
+      headers: {
+        'x-psfn-channel-type': 'companion-ui',
+        'x-psfn-channel-id': 'companion-ui:test:display',
+      },
+      principal: principalFromApiKeyToken('test-secret-key'),
+      defaultChannelId: 'api:principal:session-1',
+      defaultAuthorId: 'principal',
+      defaultAuthorName: 'API Principal',
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      status: 400,
+      type: 'invalid_request',
+      message: 'X-PSFN-Channel-Type must be one of: psfn-amica',
+    });
+  });
+
   it('rejects psfn-amica claims without configured identity metadata or explicit author headers', () => {
     const result = resolveApiTurnIdentity({
       headers: {

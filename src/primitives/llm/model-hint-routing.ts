@@ -1,5 +1,6 @@
 import type {
   LLMModelHint,
+  ModelPurposeSelection,
   ModelRegistryEntry,
   ModelThinkingEffort,
 } from '../../shared/contracts/runtime.js';
@@ -13,6 +14,7 @@ import {
 import {
   applyGlobalPromptCachePolicy,
   resolveGlobalPromptCachePolicy,
+  resolveRoutingCandidateForRegistryEntry,
   resolveRoutingCandidates,
   type RoutingCandidate,
   type RoutingPurpose,
@@ -21,6 +23,16 @@ import {
 const log = createComponentLogger('LLMClient');
 
 export type LLMCompletionModelHint = LLMModelHint;
+
+export interface ModelHintNormalizationOptions {
+  emptyResult?: 'null' | 'undefined';
+  preserveFalsePin?: boolean;
+}
+
+export const OPTIONAL_MODEL_HINT_NORMALIZATION = {
+  emptyResult: 'undefined',
+  preserveFalsePin: true,
+} as const satisfies ModelHintNormalizationOptions;
 
 export class LegacyModelHintError extends Error {
   readonly code = 'legacy_model_hint_unsupported';
@@ -36,12 +48,82 @@ export class LegacyModelHintError extends Error {
   }
 }
 
+/**
+ * 23pp: a per-companion model selection referenced a slot key that is not an
+ * enabled models.json registry entry. Fail closed — the call is rejected with
+ * the valid slot ids rather than silently substituting another model.
+ */
+export class UnknownModelSelectionSlotError extends Error {
+  readonly code = 'unknown_model_selection_slot';
+  readonly slotKey: string;
+
+  constructor(slotKey: string, validSlotKeys: readonly string[]) {
+    super(
+      `Model selection slot "${slotKey}" is not an enabled models.json registry entry. `
+      + `Valid slot keys: ${validSlotKeys.length > 0 ? validSlotKeys.join(', ') : '(none — models.json registry is empty)'}. `
+      + 'Fix the modelPurposeSelection setting (settings.json or the companion settings.overlay.json) '
+      + 'or add the model to the models.json registry.',
+    );
+    this.name = 'UnknownModelSelectionSlotError';
+    this.slotKey = slotKey;
+  }
+}
+
+/**
+ * Resolve which selected slot key applies to a routing purpose. The `context`
+ * routing lane has no direct selection key: it follows its purpose chain
+ * (longContext, then background) so a companion's background/long-context
+ * selection leads context work without leaking the chat selection into it.
+ */
+export function resolveModelSelectionSlotForPurpose(
+  selection: ModelPurposeSelection | undefined,
+  purpose: RoutingPurpose,
+): string | undefined {
+  if (!selection) return undefined;
+  if (purpose === 'context') {
+    return selection.longContext ?? selection.background;
+  }
+  return selection[purpose];
+}
+
+/**
+ * Resolve a selection slot key to its enabled models.json registry entry.
+ * Fail closed: unknown or disabled slot keys throw
+ * {@link UnknownModelSelectionSlotError} with the valid ids.
+ */
+export function resolveEnabledRegistryEntryBySlotKey(
+  config: SubstrateConfig,
+  slotKey: string,
+): ModelRegistryEntry {
+  const registryModels = config.modelRegistry?.models ?? [];
+  const entry = registryModels.find(
+    (candidate) => candidate.enabled !== false && candidate.id === slotKey,
+  );
+  if (!entry) {
+    throw new UnknownModelSelectionSlotError(
+      slotKey,
+      registryModels.filter((candidate) => candidate.enabled !== false).map((candidate) => candidate.id),
+    );
+  }
+  return entry;
+}
+
 export function normalizeModelHint(
   modelHint: LLMCompletionModelHint | undefined,
-): LLMCompletionModelHint | null {
-  if (!modelHint) return null;
+): LLMCompletionModelHint | null;
+export function normalizeModelHint(
+  modelHint: LLMCompletionModelHint | undefined,
+  options: ModelHintNormalizationOptions & { emptyResult: 'undefined' },
+): LLMCompletionModelHint | undefined;
+export function normalizeModelHint(
+  modelHint: LLMCompletionModelHint | undefined,
+  options: ModelHintNormalizationOptions = {},
+): LLMCompletionModelHint | null | undefined {
+  const emptyResult = options.emptyResult === 'undefined' ? undefined : null;
+  if (!modelHint) return emptyResult;
   const rawModel = modelHint.model?.trim();
   const provider = modelHint.provider?.trim().toLowerCase();
+  const slotKey = modelHint.slotKey?.trim();
   const maxTokens = toPositiveInteger(modelHint.maxTokens);
   const contextWindow = toPositiveInteger(modelHint.contextWindow);
   const thinkingEnabled = typeof modelHint.thinkingEnabled === 'boolean'
@@ -53,10 +135,13 @@ export function normalizeModelHint(
   const topK = toPositiveInteger(modelHint.topK);
   const frequencyPenalty = toFiniteNumber(modelHint.frequencyPenalty);
   const repetitionPenalty = toFiniteNumber(modelHint.repetitionPenalty);
-  const pin = modelHint.pin === true ? true : undefined;
+  const pin = modelHint.pin === true || (options.preserveFalsePin && modelHint.pin === false)
+    ? modelHint.pin
+    : undefined;
   if (
     !rawModel
     && !provider
+    && !slotKey
     && pin === undefined
     && maxTokens === undefined
     && contextWindow === undefined
@@ -68,12 +153,13 @@ export function normalizeModelHint(
     && frequencyPenalty === undefined
     && repetitionPenalty === undefined
   ) {
-    return null;
+    return emptyResult;
   }
   return {
     ...(rawModel ? { model: rawModel } : {}),
     ...(provider ? { provider } : {}),
-    ...(pin ? { pin } : {}),
+    ...(slotKey ? { slotKey } : {}),
+    ...(pin !== undefined ? { pin } : {}),
     ...(maxTokens !== undefined ? { maxTokens } : {}),
     ...(contextWindow !== undefined ? { contextWindow } : {}),
     ...(thinkingEnabled !== undefined ? { thinkingEnabled } : {}),
@@ -165,15 +251,20 @@ function resolveModelHintCandidate(
   config: SubstrateConfig,
   modelHint: LLMCompletionModelHint,
   fallbackCandidates: RoutingCandidate[],
+  exactSelection?: {
+    entry: ModelRegistryEntry;
+    candidate: RoutingCandidate;
+  },
 ): RoutingCandidate | null {
-  const baseCandidate = fallbackCandidates.at(0);
+  const baseCandidate = exactSelection?.candidate ?? fallbackCandidates.at(0);
   if (baseCandidate === undefined) return null;
   const hintedModel = modelHint.model?.trim();
   const qualified = hintedModel ? parseProviderQualifiedHint(hintedModel) : null;
 
   let provider = modelHint.provider ?? qualified?.provider ?? baseCandidate.provider;
   let model = qualified?.model ?? hintedModel ?? baseCandidate.model;
-  const registryEntry = findRegistryModelEntry(config, provider, model);
+  const registryEntry = exactSelection?.entry
+    ?? findRegistryModelEntry(config, provider, model);
   // The hinted model's own catalog output cap beats the base candidate's:
   // inheriting a roster default above the target model's maximum is a guaranteed
   // 400 from the provider.
@@ -208,6 +299,7 @@ function resolveModelHintCandidate(
   if (!Number.isFinite(maxTokens) || maxTokens <= 0) return null;
 
   const hinted: RoutingCandidate = {
+    ...(baseCandidate.slotKey ? { slotKey: baseCandidate.slotKey } : {}),
     provider,
     model,
     maxTokens: Math.floor(maxTokens),
@@ -290,22 +382,94 @@ export function resolveCandidates(
 ): RoutingCandidate[] {
   const candidates = resolveRoutingCandidates(config, purpose);
   const normalizedHint = normalizeModelHint(modelHint);
-  if (!normalizedHint) return candidates;
-  ensureNonLegacyModelHint(config, normalizedHint, candidates);
 
-  const hintedCandidate = resolveModelHintCandidate(config, normalizedHint, candidates);
+  // 23pp per-companion model selection: an explicit hint slot key (transported
+  // from the companion's agent) or this process's own configured selection
+  // resolves fail-closed against the models.json registry. The selected model
+  // LEADS the purpose's routing chain (transient-error fallbacks preserved);
+  // explicit model/provider hint fields still take precedence.
+  //
+  // Multi-companion isolation (23pp remediation): a multi-companion gateway
+  // serves MANY companions from ONE config, and whatever modelPurposeSelection
+  // that config hydrated is one companion's character config — substituting it
+  // for a sibling's un-slotted call would silently route the wrong model. In
+  // multiCompanion mode the wire slotKey is therefore the ONLY selection
+  // source; calls without one get registry-primary routing, byte-identical to
+  // pre-selection behavior. Embedded/single-companion processes (config IS the
+  // companion's) keep the config-level fallback.
+  const configSelectionSlotKey = config.multiCompanion === true
+    ? undefined
+    : resolveModelSelectionSlotForPurpose(config.modelPurposeSelection, purpose);
+  const selectionSlotKey = normalizedHint?.slotKey ?? configSelectionSlotKey;
+  let effectiveHint = normalizedHint;
+  let exactSelection: {
+    entry: ModelRegistryEntry;
+    candidate: RoutingCandidate;
+  } | undefined;
+  if (selectionSlotKey !== undefined) {
+    const selectedEntry = resolveEnabledRegistryEntryBySlotKey(config, selectionSlotKey);
+    const localImportRoute = purpose === 'import_processing'
+      && config.importProcessingRouteMode === 'local_endpoint';
+    if (localImportRoute) {
+      // The local import endpoint/model are global infrastructure. Validate the
+      // companion-supplied slot above, then remove only that selection hint so
+      // it cannot redirect private imports to a remote registry provider.
+      const { slotKey: _ignoredSelection, ...explicitHint } = effectiveHint ?? {};
+      effectiveHint = normalizeModelHint(explicitHint);
+    } else if (!effectiveHint?.model) {
+      let selectedCandidate = resolveRoutingCandidateForRegistryEntry(config, selectedEntry);
+      if (!selectedCandidate) {
+        throw new UnknownModelSelectionSlotError(
+          selectionSlotKey,
+          (config.modelRegistry?.models ?? [])
+            .filter((entry) => resolveRoutingCandidateForRegistryEntry(config, entry) !== null)
+            .map((entry) => entry.id),
+        );
+      }
+      if (purpose === 'import_processing') {
+        const importRouteMode = config.importProcessingRouteMode ?? 'background';
+        selectedCandidate = {
+          ...selectedCandidate,
+          importRouteMode,
+          ...(importRouteMode === 'openrouter_zdr' && selectedCandidate.provider === 'openrouter'
+            ? { openRouterZdrOnly: true }
+            : {}),
+        };
+      }
+      exactSelection = {
+        entry: selectedEntry,
+        candidate: selectedCandidate,
+      };
+      effectiveHint = {
+        ...(effectiveHint ?? {}),
+        model: selectedEntry.identity.model,
+        provider: selectedEntry.identity.provider.trim().toLowerCase(),
+      };
+    }
+  }
+
+  if (!effectiveHint) return candidates;
+  ensureNonLegacyModelHint(config, effectiveHint, candidates);
+
+  const hintedCandidate = resolveModelHintCandidate(
+    config,
+    effectiveHint,
+    candidates,
+    exactSelection,
+  );
   if (!hintedCandidate) return candidates;
 
   log.debug('Applying completion model hint', {
     purpose,
-    requestedModel: normalizedHint.model ?? null,
-    requestedProvider: normalizedHint.provider ?? null,
-    pin: normalizedHint.pin ?? false,
+    requestedModel: effectiveHint.model ?? null,
+    requestedProvider: effectiveHint.provider ?? null,
+    selectionSlotKey: selectionSlotKey ?? null,
+    pin: effectiveHint.pin ?? false,
     routedModel: hintedCandidate.model,
     routedProvider: hintedCandidate.provider,
   });
 
-  if (normalizedHint.pin === true) {
+  if (effectiveHint.pin === true) {
     return [hintedCandidate];
   }
 

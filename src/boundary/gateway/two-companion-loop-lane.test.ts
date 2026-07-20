@@ -66,7 +66,7 @@ const TEST_SESSION_HMAC_KEYRING: SessionHmacKeyring = {
 const NOW = Date.parse('2026-07-08T12:00:00Z');
 const FRESH = new Date(NOW - 1_000).toISOString();
 const ROOM_CHANNEL_ID = 'companion-room:living_room';
-const DM_CHANNEL_ID = 'companion-dm:comp-nova:comp-selene';
+const DM_CHANNEL_ID = 'companion-dm:11111111-1111-4111-8111-aaaaaaaaaaaa:22222222-2222-4222-8222-bbbbbbbbbbbb';
 
 const PLACES: PlacesRegistryConfig = {
   schemaVersion: 1,
@@ -167,12 +167,12 @@ function createMockConnection(
 function createServerOptions(lane: GatewayCompanionChannelLane): GatewayServerOptions {
   const multiCompanionConfig: GatewayMultiCompanionConfig = {
     enabled: true,
-    fleetCompanionIds: ['comp-nova', 'comp-selene'],
+    fleetCompanionIds: ['11111111-1111-4111-8111-aaaaaaaaaaaa', '22222222-2222-4222-8222-bbbbbbbbbbbb'],
     channelRouting: {},
     discordAccounts: {},
     personalWorkspaceByCompanionId: {
-      'comp-nova': '/workspace/comp-nova',
-      'comp-selene': '/workspace/comp-selene',
+      '11111111-1111-4111-8111-aaaaaaaaaaaa': '/workspace/11111111-1111-4111-8111-aaaaaaaaaaaa',
+      '22222222-2222-4222-8222-bbbbbbbbbbbb': '/workspace/22222222-2222-4222-8222-bbbbbbbbbbbb',
     },
   };
   return {
@@ -346,11 +346,11 @@ async function setupLoopHarness(): Promise<{
     placesRegistry: PLACES,
     presence: {
       listByPlace: async () => [
-        { companionId: 'comp-nova', updatedAt: FRESH, since: FRESH },
-        { companionId: 'comp-selene', updatedAt: FRESH, since: FRESH },
+        { companionId: '11111111-1111-4111-8111-aaaaaaaaaaaa', updatedAt: FRESH, since: FRESH },
+        { companionId: '22222222-2222-4222-8222-bbbbbbbbbbbb', updatedAt: FRESH, since: FRESH },
       ],
     },
-    fleetCompanionIds: new Set(['comp-nova', 'comp-selene']),
+    fleetCompanionIds: new Set(['11111111-1111-4111-8111-aaaaaaaaaaaa', '22222222-2222-4222-8222-bbbbbbbbbbbb']),
     now: () => NOW,
   });
   const server = new GatewayServer(createServerOptions(lane));
@@ -363,8 +363,8 @@ async function setupLoopHarness(): Promise<{
   server.start();
 
   const config = makeLoopConfig();
-  const nova = new LaneAgent('comp-nova', 'Nova', config);
-  const selene = new LaneAgent('comp-selene', 'Selene', config);
+  const nova = new LaneAgent('11111111-1111-4111-8111-aaaaaaaaaaaa', 'Nova', config);
+  const selene = new LaneAgent('22222222-2222-4222-8222-bbbbbbbbbbbb', 'Selene', config);
   for (const agent of [nova, selene]) {
     agent.attach();
     onConnectionCb!(agent.connection.conn);
@@ -385,8 +385,8 @@ describe('two-companion loop through the real gateway lane (W6 acceptance)', () 
 
     // Selene received Nova's messages, never her own; and vice versa.
     expect(selene.received.length).toBeGreaterThan(0);
-    expect(selene.received.every(message => message.authorId === 'comp-nova')).toBe(true);
-    expect(nova.received.every(message => message.authorId === 'comp-selene')).toBe(true);
+    expect(selene.received.every(message => message.authorId === '11111111-1111-4111-8111-aaaaaaaaaaaa')).toBe(true);
+    expect(nova.received.every(message => message.authorId === '22222222-2222-4222-8222-bbbbbbbbbbbb')).toBe(true);
 
     // Every turn was evaluated on the room channel as a companion-room setting
     // against the peer's machine-intelligence relationship class.

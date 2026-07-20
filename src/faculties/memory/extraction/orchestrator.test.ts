@@ -720,7 +720,7 @@ describe('runExtractionOrchestration chunk concurrency', () => {
 });
 
 describe('runExtractionOrchestration write caps', () => {
-  it('keeps direct extraction on the legacy maxWrites cap when group caps are absent', async () => {
+  it('keeps direct extraction on the single-pass maxWrites cap when group caps are absent', async () => {
     const processFact = vi.fn().mockResolvedValue({
       action: 'created',
       memory: { id: 'mem-direct' },

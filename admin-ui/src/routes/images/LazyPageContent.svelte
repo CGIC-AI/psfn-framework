@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { scopeGardenDataPath } from '$lib/fleet/companion-scope';
   import { onMount } from 'svelte';
   import { listGeneratedImages, updateGeneratedImage } from '$lib/api/endpoints/images';
   import type { GeneratedImageView, GeneratedImagesResponse } from '$lib/api/endpoints/images';
@@ -13,7 +14,12 @@
   let meaningfulOnly = $state(false);
   let tagDrafts = $state<Record<string, string>>({});
   let momentDrafts = $state<Record<string, string>>({});
+  let expandedPrompts = $state<Record<string, boolean>>({});
   let savingIds = $state<Set<string>>(new Set());
+
+  function togglePromptExpanded(id: string): void {
+    expandedPrompts = { ...expandedPrompts, [id]: !expandedPrompts[id] };
+  }
 
   let images = $derived(data?.images ?? []);
 
@@ -225,9 +231,9 @@
     <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
       {#each images as image (image.id)}
         <article class="card-garden overflow-hidden">
-          <a href={image.url} target="_blank" rel="noreferrer" class="block bg-bark-100">
+          <a href={scopeGardenDataPath(image.url)} target="_blank" rel="noreferrer" class="block bg-bark-100">
             <img
-              src={image.url}
+              src={scopeGardenDataPath(image.url)}
               alt={image.prompt || image.fileName}
               class="aspect-[4/3] w-full object-contain"
               loading="lazy"
@@ -266,7 +272,20 @@
             </div>
 
             {#if image.prompt}
-              <p class="line-clamp-3 text-sm leading-relaxed text-shadow-700">{image.prompt}</p>
+              <div>
+                <p
+                  class="text-sm leading-relaxed text-shadow-700"
+                  class:line-clamp-3={!expandedPrompts[image.id]}
+                >{image.prompt}</p>
+                <button
+                  type="button"
+                  aria-expanded={Boolean(expandedPrompts[image.id])}
+                  onclick={() => togglePromptExpanded(image.id)}
+                  class="mt-0.5 text-xs font-medium text-gold-700 hover:text-gold-800 hover:underline"
+                >
+                  {expandedPrompts[image.id] ? 'Show less' : 'Show full prompt'}
+                </button>
+              </div>
             {/if}
 
             {#if image.tags.length > 0}
@@ -355,7 +374,7 @@
               <div class="flex flex-wrap gap-1.5 border-t border-bark-300 pt-3">
                 {#each image.companionNoteRefs as ref}
                   {#if ref.url}
-                    <a href={ref.url} class="rounded-full bg-moss-50 px-2 py-0.5 text-xs font-medium text-moss-800 hover:bg-moss-100">{ref.label || ref.id}</a>
+                    <a href={scopeGardenDataPath(ref.url)} class="rounded-full bg-moss-50 px-2 py-0.5 text-xs font-medium text-moss-800 hover:bg-moss-100">{ref.label || ref.id}</a>
                   {:else}
                     <span class="rounded-full bg-moss-50 px-2 py-0.5 text-xs font-medium text-moss-800">{ref.label || ref.id}</span>
                   {/if}
@@ -368,7 +387,7 @@
               <div class="flex shrink-0 gap-2">
                 {#if image.artifactRefs.find((ref) => ref.kind === 'shared_image' && ref.url)}
                   <a
-                    href={image.artifactRefs.find((ref) => ref.kind === 'shared_image' && ref.url)?.url}
+                    href={scopeGardenDataPath(image.artifactRefs.find((ref) => ref.kind === 'shared_image' && ref.url)?.url ?? image.url)}
                     target="_blank"
                     rel="noreferrer"
                     class="rounded-lg border border-bark-300 px-2.5 py-1 text-xs font-medium text-shadow-700 transition-colors hover:bg-bark-100"
@@ -377,7 +396,7 @@
                   </a>
                 {/if}
                 <a
-                  href={image.url}
+                  href={scopeGardenDataPath(image.url)}
                   target="_blank"
                   rel="noreferrer"
                   class="rounded-lg border border-bark-300 px-2.5 py-1 text-xs font-medium text-shadow-700 transition-colors hover:bg-bark-100"

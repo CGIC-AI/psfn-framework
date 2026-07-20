@@ -1,7 +1,6 @@
 import '../../shared/utils/load-dotenv.js';
 import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { loadConfig } from '../../system/config/load-config.js';
 import {
   resolveConfiguredCompanionDataDir,
   resolvePromptLayersPath,
@@ -14,7 +13,12 @@ import {
   type PromptMacroAuditRegistryInput,
 } from '../../core/identity/prompt-macro-audit.js';
 import { isRecord } from '../../shared/utils/types.js';
-import { toErrorMessage } from '../../shared/utils/errors.js';
+import {
+  bootstrapMaintenanceRuntime,
+  isMaintenanceCliEntrypoint,
+  parseCommonMaintenanceArgs,
+  runMaintenanceCli,
+} from './cli-harness.js';
 
 // CLI wrapper for the E2.5 persisted prompt macro audit (report-only). Reads
 // the raw persisted files directly so the scan itself never triggers store
@@ -78,29 +82,21 @@ function printUsage(): void {
   console.log('  -h, --help          Show this help message.');
 }
 
-function parseArgs(argv: string[]): CliOptions {
-  const options: CliOptions = { json: false, showHelp: false };
-  for (let i = 0; i < argv.length; i += 1) {
-    const arg = argv[i];
-    if (arg === '--help' || arg === '-h') {
-      options.showHelp = true;
-      continue;
-    }
-    if (arg === '--json') {
-      options.json = true;
-      continue;
-    }
-    if (arg === '--layers' || arg === '--registry') {
-      const value = argv[i + 1];
-      if (!value) throw new Error(`Missing value for ${arg}`);
-      if (arg === '--layers') options.layersPath = resolve(value);
-      else options.registryPath = resolve(value);
-      i += 1;
-      continue;
-    }
-    throw new Error(`Unknown argument: ${arg}`);
-  }
-  return options;
+function parseArgs(argv: readonly string[]): CliOptions {
+  return parseCommonMaintenanceArgs<CliOptions>(argv, {
+    initial: { json: false, showHelp: false },
+    extraFlags: {
+      '--json': ({ options }) => {
+        options.json = true;
+      },
+      '--layers': ({ options, readValue }) => {
+        options.layersPath = resolve(readValue());
+      },
+      '--registry': ({ options, readValue }) => {
+        options.registryPath = resolve(readValue());
+      },
+    },
+  });
 }
 
 function formatFinding(finding: PromptMacroAuditFinding): string {
@@ -116,17 +112,11 @@ function formatFinding(finding: PromptMacroAuditFinding): string {
   return lines.join('\n');
 }
 
-function main(): void {
-  const options = parseArgs(process.argv.slice(2));
-  if (options.showHelp) {
-    printUsage();
-    return;
-  }
-
+async function run(options: CliOptions): Promise<void> {
   let layersPath = options.layersPath;
   let registryPath = options.registryPath;
   if (!layersPath || !registryPath) {
-    const config = loadConfig();
+    const { config } = await bootstrapMaintenanceRuntime({ hydrateSecrets: false });
     const companionDataDir = resolveConfiguredCompanionDataDir(config);
     layersPath ??= resolvePromptLayersPath(companionDataDir);
     registryPath ??= resolvePromptRegistryPath(companionDataDir);
@@ -160,9 +150,11 @@ function main(): void {
   }
 }
 
-try {
-  main();
-} catch (error) {
-  console.error(`Prompt macro audit failed: ${toErrorMessage(error)}`);
-  process.exit(1);
+if (isMaintenanceCliEntrypoint(import.meta.url)) {
+  void runMaintenanceCli({
+    label: 'Prompt macro audit',
+    parseArgs,
+    printUsage,
+    run,
+  });
 }

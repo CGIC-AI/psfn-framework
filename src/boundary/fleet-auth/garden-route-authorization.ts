@@ -103,6 +103,10 @@ const routeAuthorizationGroups: readonly RouteAuthorizationGroup[] = [
     ]),
   },
   {
+    action: 'companion.interact', area: 'garden_ui',
+    routeIds: ids('POST', ['/v1/chat/completions']),
+  },
+  {
     action: 'action_pipe.read', area: 'action_pipe', routeIds: [
       ...ids('GET', [
         '/api/admin/action-pipe', '/api/admin/tool-conformance/latest', '/api/admin/tools/adaptive',
@@ -135,7 +139,10 @@ const routeAuthorizationGroups: readonly RouteAuthorizationGroup[] = [
     ],
   },
   {
-    action: 'garden.read', area: 'companion', routeIds: ids('GET', ['/api/admin/dashboard']),
+    action: 'garden.read', area: 'companion', routeIds: [
+      ...ids('GET', ['/api/admin/dashboard', '/api/admin/dashboard/analysis-workbench-traces']),
+      ...pageIds(['/analysis-workbench']),
+    ],
   },
   {
     action: 'diagnostics.read', area: 'diagnostics', routeIds: [
@@ -183,7 +190,7 @@ const routeAuthorizationGroups: readonly RouteAuthorizationGroup[] = [
       ]),
       ...pageIds([
         '/cognitive-security/approvals', '/cognitive-security/drift',
-        '/cognitive-security/firewall', '/cognitive-security/remediation',
+        '/cognitive-security/firewall', '/cognitive-security/remediation', '/concerns',
       ]),
     ],
   },
@@ -345,10 +352,10 @@ const routeAuthorizationGroups: readonly RouteAuthorizationGroup[] = [
   {
     action: 'models.read', area: 'models', routeIds: [
       ...ids('GET', [
-        '/api/admin/model-usage', '/api/admin/model-usage/export',
+        '/api/admin/fleet-model-usage', '/api/admin/model-usage', '/api/admin/model-usage/export',
         '/api/admin/chat/model-room/bootstrap', '/api/admin/models',
       ]),
-      ...pageIds(['/model-room', '/models']),
+      ...pageIds(['/fleet-costs', '/model-room', '/models']),
     ],
   },
   {
@@ -468,9 +475,18 @@ const routeAuthorizationGroups: readonly RouteAuthorizationGroup[] = [
   },
   {
     action: 'audit.read', area: 'audit', routeIds: [
-      ...ids('GET', ['/api/admin/shards', '/api/admin/shards/:shardId']),
-      ...pageIds(['/shards']),
+      ...ids('GET', [
+        '/api/admin/shards',
+        '/api/admin/shards/:shardId',
+        '/api/admin/shards/:shardId/configuration',
+      ]),
+      ...pageIds(['/shards', '/shards/:shardId']),
     ],
+  },
+  {
+    action: 'settings.write', area: 'personal_settings',
+    routeIds: ids('PATCH', ['/api/admin/shards/:shardId/configuration']),
+    assurance: 'webauthn_uv', confirmation: 'explicit',
   },
   {
     action: 'memory.manage', area: 'memory',

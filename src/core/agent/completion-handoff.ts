@@ -155,13 +155,13 @@ export async function emitCompletionHandoff(input: {
     noticeBuffered = true;
   }
 
-  rememberDedupeKey(handoff.dedupeKey);
   await input.eventBus.emit('agent.completion_handoff', {
     handoff,
     ...(targetChannelId ? { targetChannelId } : {}),
     noticeBuffered,
     timestamp: Date.now(),
   });
+  rememberDedupeKey(handoff.dedupeKey);
   return {
     emitted: true,
     handoff,

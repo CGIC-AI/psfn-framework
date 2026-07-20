@@ -1,9 +1,11 @@
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
+import { join } from 'node:path';
 
 import type { SubstrateMessage } from '../../shared/contracts/runtime.js';
 import { resolveChargeLedgerPath, resolveFatigueLedgerPath } from '../../persistence/layout.js';
+import { createPostgresPool } from '../../persistence/postgres.js';
 import { readRunChargeRollingWindowFromLedger } from '../../shared/telemetry/charge-ledger.js';
 import { FatigueLedger } from '../../shared/telemetry/fatigue-ledger.js';
 import { isRecord } from '../../shared/utils/types.js';
@@ -15,6 +17,7 @@ import {
 import {
   CERTIFICATION_COMPANION_A,
   CERTIFICATION_COMPANION_B,
+  CERTIFICATION_DM_CHANNEL,
   CERTIFICATION_PRIVATE_ROOM,
   CERTIFICATION_SCHEMA_A,
   CERTIFICATION_SCHEMA_B,
@@ -34,6 +37,13 @@ const COLLISION_ROUNDS = 4;
 const QUIESCENCE_TIMEOUT_MS = 30_000;
 const QUIESCENCE_WINDOW_MS = 1_000;
 const PROCESS_EXIT_TIMEOUT_MS = 10_000;
+const MULTI_COMPANION_COVERAGE_CASE_IDS = [
+  'multi_companion_crossover_isolation',
+  'icp_durable_turns_restart',
+  // Earned by validateFatigueCloseoutReserve (overcharge reserve provably
+  // fires under continuation evidence), NOT by the room suppression scenario.
+  'icp_fatigue_closeout_reserve',
+] as const;
 
 type CertificationAgent = IcpCertificationProcessHarness['agents'][number];
 
@@ -206,10 +216,13 @@ async function readTurnRecords(
   return { records };
 }
 
-function readFatigueSnapshot(companionDataDir: string): FatigueSnapshot {
+function readFatigueSnapshot(
+  companionDataDir: string,
+  channelId: string = CERTIFICATION_PRIVATE_ROOM,
+): FatigueSnapshot {
   const ledger = new FatigueLedger(resolveFatigueLedgerPath(companionDataDir));
   try {
-    const data = ledger.getData({ channelId: CERTIFICATION_PRIVATE_ROOM, limit: 2_000 });
+    const data = ledger.getData({ channelId, limit: 2_000 });
     return {
       amount: data.aggregates.amount,
       eventCount: data.aggregates.eventCount,
@@ -370,6 +383,21 @@ async function validateCompanionRoom(
     requireInvariant(delta.amount > 0, 'companion_room_fatigue_ledger_did_not_charge');
     requireInvariant(delta.eventCount > 0, 'companion_room_fatigue_event_missing');
     requireInvariant(delta.hardState === 'exhausted', 'companion_room_ledger_not_exhausted');
+    // This unidirectional room exchange (only companion A initiates) is the
+    // suppression-with-zero-overcharge proof. The closeout overcharge reserve
+    // fires only when an already-exhausted companion receives a turn carrying
+    // continuation evidence (icp-fatigue-regulation.ts:158-165). Here the only
+    // continuation-evidence dimension the room path can produce —
+    // explicit_peer_invitation — lands on the recipient's FIRST (initiation)
+    // turn, when it is not yet exhausted; every post-exhaustion turn is a
+    // 'reply' stage carrying no evidence, so it suppresses. Overcharge is
+    // therefore mechanically guaranteed to be zero, and we assert it so the
+    // suppression path stays proven and cannot silently start reserving.
+    // The reserve-fires proof lives in validateFatigueCloseoutReserve.
+    requireInvariant(
+      delta.overchargeEventCount === 0,
+      'companion_room_overcharge_fired_without_continuation_evidence',
+    );
   }
   for (const delta of chargeDeltas) {
     requireInvariant(delta > 0, 'companion_room_run_charge_missing');
@@ -385,6 +413,8 @@ async function validateCompanionRoom(
   const rootTurnsB = turnsB.records.filter(record => (
     record.correlation?.rootInitiationId === rootInitiationId
   ));
+  requireInvariant(rootTurnsA.length > 0, 'companion_room_missing_companion_a_turns');
+  requireInvariant(rootTurnsB.length > 0, 'companion_room_missing_companion_b_turns');
   const suppressionCountA = rootTurnsA.filter(record => (
     record.correlation?.fatigueDecision === 'suppress'
   )).length;
@@ -418,6 +448,58 @@ async function validateCompanionRoom(
     .reduce((sum, count) => sum + count, fleet.unattributedRecentViolationCount);
   requireInvariant(crossoverAlarmCount === 0, 'companion_room_crossover_alarm_detected');
 
+  const [channelBeforeRestartA, channelBeforeRestartB] = await Promise.all([
+    readChannelSnapshot(agentA, CERTIFICATION_PRIVATE_ROOM),
+    readChannelSnapshot(agentB, CERTIFICATION_PRIVATE_ROOM),
+  ]);
+  const [restartedAgentA, restartedAgentB] = await harness.restartAgents();
+  const [
+    turnsAfterRestartA,
+    turnsAfterRestartB,
+    channelAfterRestartA,
+    channelAfterRestartB,
+  ] = await Promise.all([
+    readTurnRecords(restartedAgentA, CERTIFICATION_PRIVATE_ROOM),
+    readTurnRecords(restartedAgentB, CERTIFICATION_PRIVATE_ROOM),
+    readChannelSnapshot(restartedAgentA, CERTIFICATION_PRIVATE_ROOM),
+    readChannelSnapshot(restartedAgentB, CERTIFICATION_PRIVATE_ROOM),
+  ]);
+  const durableRootTurnsA = turnsAfterRestartA.records.filter(record => (
+    record.correlation?.rootInitiationId === rootInitiationId
+  ));
+  const durableRootTurnsB = turnsAfterRestartB.records.filter(record => (
+    record.correlation?.rootInitiationId === rootInitiationId
+  ));
+  requireInvariant(
+    durableRootTurnsA.length === rootTurnsA.length,
+    'companion_room_companion_a_turns_not_durable',
+  );
+  requireInvariant(
+    durableRootTurnsB.length === rootTurnsB.length,
+    'companion_room_companion_b_turns_not_durable',
+  );
+  requireInvariant(
+    channelAfterRestartA.entries.length >= channelBeforeRestartA.entries.length,
+    'companion_room_companion_a_channel_not_durable',
+  );
+  requireInvariant(
+    channelAfterRestartB.entries.length >= channelBeforeRestartB.entries.length,
+    'companion_room_companion_b_channel_not_durable',
+  );
+  const fatigueAfterRestart = fixture.companions.map(companion => (
+    readFatigueSnapshot(companion.companionDataDir)
+  ));
+  requireInvariant(
+    fatigueAfterRestart[0]?.amount === fatigueAfter[0]?.amount
+      && fatigueAfterRestart[0]?.eventCount === fatigueAfter[0]?.eventCount,
+    'companion_room_companion_a_fatigue_not_durable',
+  );
+  requireInvariant(
+    fatigueAfterRestart[1]?.amount === fatigueAfter[1]?.amount
+      && fatigueAfterRestart[1]?.eventCount === fatigueAfter[1]?.eventCount,
+    'companion_room_companion_b_fatigue_not_durable',
+  );
+
   return {
     channelClass: 'companion_room',
     initiationStatus: initiated.status,
@@ -440,6 +522,18 @@ async function validateCompanionRoom(
     },
     modelRequestDelta: modelRequestsAfter - modelRequestsBefore,
     stopReason: 'both_fatigue_ledgers_exhausted_and_model_suppressed',
+    restartDurability: {
+      agentRestartCount: 2,
+      durableTurnCountsByCompanion: {
+        [CERTIFICATION_COMPANION_A]: durableRootTurnsA.length,
+        [CERTIFICATION_COMPANION_B]: durableRootTurnsB.length,
+      },
+      durableChannelEntryCountsByCompanion: {
+        [CERTIFICATION_COMPANION_A]: channelAfterRestartA.entries.length,
+        [CERTIFICATION_COMPANION_B]: channelAfterRestartB.entries.length,
+      },
+      fatigueLedgerPreserved: true,
+    },
     crossoverAlarmCount,
   };
 }
@@ -494,6 +588,165 @@ async function validateFlagOff(
   }
 }
 
+/**
+ * Executable proof that the ICP closeout overcharge RESERVE actually fires.
+ *
+ * The suppression path (validateCompanionRoom) proves that a companion which
+ * exhausts on a turn carrying no continuation evidence stops by suppression
+ * with zero overcharge. This scenario proves the complementary behavior: when
+ * an already-exhausted companion takes a turn that DOES carry genuine
+ * continuation evidence, the bounded overcharge reserve is spent
+ * (icp-fatigue-regulation.ts:158-165) instead of suppressing.
+ *
+ * It drives the production companion-to-companion weighted-thought (DM)
+ * exchange under the `final_reserve` fatigue profile (softLimit=hardLimit=1,
+ * overcharge.enabled, reserveResponses=1). Companion A initiates a real
+ * conversation; the exchange charges to hard exhaustion and takes the bounded
+ * closeout reserve on a turn that still carries continuation evidence. Proof is
+ * read from the authoritative shared reservation store
+ * (`shared.icp_fatigue_turn_reservations`): a finalized decision='overcharge'
+ * row exists ONLY when reserve('overcharge') was taken via the
+ * continuationEvidence-gated branch at icp-fatigue-regulation.ts:163. No
+ * regulation code is stubbed or monkey-patched; the reserve is exercised
+ * through the real reservation store and turn pipeline. This mirrors the
+ * committed process-harness.integration.test.ts closeout assertion and is what
+ * earns the `icp_fatigue_closeout_reserve` coverage id.
+ */
+async function validateFatigueCloseoutReserve(
+  postgres: PostgresTestHarness,
+): Promise<{ evidence: Record<string, unknown>; processIds: number[]; socketRemoved: boolean }> {
+  const { databaseUrl } = await postgres.createDatabase();
+  const fixture = createIcpCertificationFixture({ databaseUrl, fatigueProfile: 'final_reserve' });
+  let harness: IcpCertificationProcessHarness | null = null;
+  try {
+    harness = await startIcpCertificationProcessHarness({ databaseUrl, fixture });
+    const [agentA, agentB] = harness.agents;
+    const ready = await Promise.all(harness.agents.map(agent => agent.ready()));
+    requireInvariant(
+      ready.every(entry => entry.runtimeClass === 'SubstrateAgent'),
+      'closeout_reserve_runtime_not_real',
+    );
+    requireInvariant(
+      ready.every(entry => entry.multiCompanion === true),
+      'closeout_reserve_topology_not_multi',
+    );
+
+    await agentB.publishAvailability('open_to_chat');
+    await waitForModelQuiescence(harness);
+
+    // Replicate the committed integration-test closeout flow. The deferred and
+    // declined weighted-thought attempts and the compaction markers establish
+    // the conversation/session state under which the subsequent consumed
+    // conversation charges to hard exhaustion and then takes the bounded
+    // closeout overcharge reserve on a continuation-evidence-bearing turn
+    // (icp-fatigue-regulation.ts:158-165). We do not assert WHICH turn reaches
+    // the reserve — the finalized decision='overcharge' reservation row read
+    // below is itself the executable proof, because the shared store writes that
+    // row only via the continuationEvidence-gated reserve('overcharge') branch
+    // at icp-fatigue-regulation.ts:163. A single-sided attempt without this flow
+    // only ever suppresses (proven by validateCompanionRoom), so the reserve is
+    // genuinely exercised here rather than assumed.
+    harness.queueConsentDecision('defer');
+    const deferred = await agentA.runWeightedThoughtScheduler();
+    requireInvariant(deferred.status === 'deferred', 'closeout_reserve_defer_not_deferred');
+    harness.queueConsentDecision('decline');
+    const declined = await agentA.runWeightedThoughtScheduler();
+    requireInvariant(declined.status === 'declined', 'closeout_reserve_decline_not_declined');
+    await Promise.all([
+      agentA.appendCompactionMarker(CERTIFICATION_DM_CHANNEL),
+      agentB.appendCompactionMarker(CERTIFICATION_DM_CHANNEL),
+    ]);
+
+    const initiated = await agentA.runWeightedThoughtScheduler();
+    requireInvariant(initiated.status === 'consumed', 'closeout_reserve_initiation_not_consumed');
+    requireInvariant(
+      initiated.deliveryDisposition === 'delivered',
+      'closeout_reserve_initiation_not_delivered',
+    );
+    const rootInitiationId = String(initiated.rootInitiationId ?? '');
+    requireInvariant(rootInitiationId.length > 0, 'closeout_reserve_root_initiation_missing');
+
+    // Let the conversation play fully out to its fatigue stop before reading the
+    // reservation store, so the overcharge reserve has actually been finalized.
+    const suppressionDeadline = Date.now() + QUIESCENCE_TIMEOUT_MS;
+    let conversationSuppressed = false;
+    while (Date.now() < suppressionDeadline && !conversationSuppressed) {
+      for (const agent of harness.agents) {
+        if (await agent.hasCompletedFatigueSuppression(
+          CERTIFICATION_DM_CHANNEL,
+          rootInitiationId,
+        )) {
+          conversationSuppressed = true;
+          break;
+        }
+      }
+      if (!conversationSuppressed) {
+        await new Promise(resolveWait => setTimeout(resolveWait, 25));
+      }
+    }
+    requireInvariant(conversationSuppressed, 'closeout_reserve_conversation_did_not_suppress');
+    await waitForModelQuiescence(harness);
+
+    // The authoritative, channel-agnostic proof: the shared reservation store
+    // only ever holds a decision='overcharge' row when reserve('overcharge') was
+    // taken at icp-fatigue-regulation.ts:163, which is reachable ONLY through the
+    // exhausted-charged branch gated on continuationEvidence.length > 0. A
+    // finalized ('delivered'/'no_reply') overcharge reservation is therefore
+    // executable proof that the closeout reserve fired under continuation
+    // evidence — distinct from the room suppression scenario, which provably
+    // records zero overcharge.
+    const pool = createPostgresPool(databaseUrl, {
+      applicationName: 'multi-companion-runtime-closeout-reserve',
+      max: 1,
+    });
+    let overchargeReservationCount = 0;
+    let chargedReservationCount = 0;
+    try {
+      const reservations = await pool.query<{ decision: string; reservation_count: string }>(`
+        SELECT decision, COUNT(*)::text AS reservation_count
+        FROM shared.icp_fatigue_turn_reservations
+        WHERE outcome IN ('delivered', 'no_reply')
+        GROUP BY decision
+      `);
+      for (const row of reservations.rows) {
+        if (row.decision === 'overcharge') overchargeReservationCount = Number(row.reservation_count);
+        if (row.decision === 'charged') chargedReservationCount = Number(row.reservation_count);
+      }
+    } finally {
+      await pool.end();
+    }
+    requireInvariant(chargedReservationCount > 0, 'closeout_reserve_no_normal_charge');
+    requireInvariant(overchargeReservationCount > 0, 'closeout_reserve_did_not_fire');
+
+    const processIds = harness.agents.map(agent => agent.processId);
+    await harness.stop();
+    harness = null;
+    const running = await waitForProcessesToExit(processIds);
+    requireInvariant(running.length === 0, 'closeout_reserve_agent_process_remained');
+    const socketRemoved = !existsSync(fixture.gatewaySocketPath);
+    requireInvariant(socketRemoved, 'closeout_reserve_gateway_socket_remained');
+
+    return {
+      evidence: {
+        channel: 'companion_dm_weighted_thought',
+        fatigueProfile: 'final_reserve',
+        rootInitiationId,
+        chargedReservationCount,
+        overchargeReservationCount,
+        overchargeReserveFired: true,
+        reservationOutcomeFilter: ['delivered', 'no_reply'],
+      },
+      processIds,
+      socketRemoved,
+    };
+  } finally {
+    await harness?.stop().catch(() => {
+      for (const agent of harness?.agents ?? []) agent.forceStop();
+    });
+    fixture.cleanup();
+  }
+}
+
 async function main(): Promise<Record<string, unknown>> {
   const startedAtMs = Date.now();
   const revision = currentRevision();
@@ -530,6 +783,17 @@ async function main(): Promise<Record<string, unknown>> {
         pathIdentity(companion.companionDataDir),
       ]),
     );
+    const supportFixturePaths = [
+      fixture.companions[1].companionDataDir,
+      fixture.companions[1].workspacePath,
+      join(fixture.runtimeRoot, 'support-companions', 'lumen', 'data'),
+      join(
+        fixture.runtimeRoot,
+        'workspaces',
+        'personal',
+        'c7100000-0000-4000-8000-000000000003',
+      ),
+    ];
 
     await harness.stop();
     harness = null;
@@ -538,8 +802,14 @@ async function main(): Promise<Record<string, unknown>> {
     const multiSocketRemoved = !existsSync(fixture.gatewaySocketPath);
     requireInvariant(multiSocketRemoved, 'multi_gateway_socket_remained');
     fixture.cleanup();
+    const supportFixtureResidueCount = supportFixturePaths.filter(existsSync).length;
+    requireInvariant(
+      supportFixtureResidueCount === 0,
+      'canonical_support_fixture_residue_remained',
+    );
     fixture = null;
 
+    const closeoutReserve = await validateFatigueCloseoutReserve(postgres);
     const flagOff = await validateFlagOff(postgres);
     await postgres.stop();
     postgresStopped = true;
@@ -549,7 +819,9 @@ async function main(): Promise<Record<string, unknown>> {
       event: 'multi_companion_runtime_validation',
       status: 'passed',
       revision,
+      coverageCaseIds: MULTI_COMPANION_COVERAGE_CASE_IDS,
       topology: {
+        fixtureContract: 'shakedown/support/companions.template.json',
         gatewayCount: 1,
         gatewayProcessId: process.pid,
         gatewayTransport: 'unix',
@@ -567,6 +839,7 @@ async function main(): Promise<Record<string, unknown>> {
       },
       collision,
       room,
+      fatigueCloseoutReserve: closeoutReserve.evidence,
       flagOff: flagOff.evidence,
       fixBeadIds: [
         'psfn-framework-1nsp',
@@ -575,10 +848,13 @@ async function main(): Promise<Record<string, unknown>> {
       ],
       teardown: {
         multiAgentProcessesRemaining: 0,
+        closeoutReserveAgentProcessesRemaining: 0,
         singleAgentProcessesRemaining: 0,
         multiGatewaySocketRemoved: multiSocketRemoved,
+        closeoutReserveGatewaySocketRemoved: closeoutReserve.socketRemoved,
         singleGatewaySocketRemoved: flagOff.socketRemoved,
         postgresStopped,
+        supportFixtureResidueCount,
         result: 'clean',
       },
       durationMs: Date.now() - startedAtMs,

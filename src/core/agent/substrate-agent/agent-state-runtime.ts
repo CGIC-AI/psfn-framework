@@ -1,4 +1,4 @@
-import type { AssistantMessage } from '@mariozechner/pi-ai';
+import type { AssistantMessage, TextContent } from '@mariozechner/pi-ai';
 import type { SubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
 
 interface AgentStateRuntimeLogger {
@@ -63,21 +63,21 @@ export function extractResponseText(input: {
   if (typeof content === 'string') return content;
   if (Array.isArray(content)) {
     const textParts = content
-      .filter((block: any) => block.type === 'text')
-      .map((block: any) => block.text)
+      .filter((block): block is TextContent => block.type === 'text')
+      .map((block) => block.text)
       .join('');
     if (!textParts) {
-      const thinkingParts = content.filter((block: any) => block.type === 'thinking');
+      const thinkingParts = content.filter((block) => block.type === 'thinking');
       if (thinkingParts.length) {
         input.logger.warn('Assistant produced thinking but no text content', {
           thinkingBlocks: thinkingParts.length,
-          blockTypes: content.map((block: any) => block.type),
+          blockTypes: content.map((block) => block.type),
           stopReason: input.assistantMessage.stopReason,
           errorMessage: input.assistantMessage.errorMessage ?? null,
         });
       } else {
         input.logger.warn('Assistant message has no text content blocks', {
-          blockTypes: content.map((block: any) => block.type),
+          blockTypes: content.map((block) => block.type),
           stopReason: input.assistantMessage.stopReason,
           errorMessage: input.assistantMessage.errorMessage ?? null,
         });

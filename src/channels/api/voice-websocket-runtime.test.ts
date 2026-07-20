@@ -467,7 +467,7 @@ describe('requestAgentVoiceStream barge-in cancellation (mmo9.6.5 production com
       message: makeVoiceMessage('api-voice-msg-1'),
       options: { signal: controller.signal, timeoutMs: 500 },
       wyomingShardRouting: { enabled: false },
-      companionId: createCompanionId('companion'),
+      companionId: createCompanionId('11111111-1111-4111-8111-111111111111'),
       nextRequestCounter: () => (counter += 1),
     });
     // Prevent an unhandled rejection race before we assert on it below.
@@ -504,7 +504,7 @@ describe('requestAgentVoiceStream barge-in cancellation (mmo9.6.5 production com
       message: makeVoiceMessage('api-voice-msg-2'),
       options: { timeoutMs: 500 },
       wyomingShardRouting: { enabled: false },
-      companionId: createCompanionId('companion'),
+      companionId: createCompanionId('11111111-1111-4111-8111-111111111111'),
       nextRequestCounter: () => (counter += 1),
     });
     expect(followUp.content).toBe('ok');

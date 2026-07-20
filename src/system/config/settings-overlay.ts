@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { writeJsonAtomic } from '../../shared/utils/fs.js';
 import { isRecord } from '../../shared/utils/types.js';
 import {
   normalizeEditableSettings,
@@ -32,15 +33,33 @@ import {
 
 export const COMPANION_SETTINGS_OVERLAY_FILE_NAME = 'settings.overlay.json';
 
+export const COMPANION_IMAGE_SETTINGS_OVERLAY_KEYS = [
+  'imageProvider',
+  'imageFalCreateModel',
+  'imageFalEditModel',
+  'imageSelfieEditModel',
+] as const satisfies readonly RuntimeSettingKey[];
+
+export const COMPANION_MODEL_SELECTION_SETTINGS_OVERLAY_KEYS = [
+  ...COMPANION_IMAGE_SETTINGS_OVERLAY_KEYS,
+  'modelPurposeSelection',
+  'moaReferenceModels',
+  'moaAggregatorModel',
+] as const satisfies readonly RuntimeSettingKey[];
+
 /**
  * The only settings.json keys a per-companion overlay may set. Sourced from the
  * shared-seams audit (§11 of working_docs/fleet-analysis-findings-20260714.md):
  * activeTimezone (seam 3), voice* (seam 6), observerEvalSidecar (seam 1),
  * emotionScoping (seam 9), plus uiThemeId and discordTrigger* per the bead.
  *
- * Every entry is a runtime-owned key (see RUNTIME_SETTINGS_KEYS); no model,
- * scheduler, or capability-tier key is overlay-eligible. Keep this the single
- * source of truth — the settings contract derives its per-key scope from it.
+ * Every entry is a runtime-owned key (see RUNTIME_SETTINGS_KEYS); no scheduler
+ * or capability-tier key is overlay-eligible, and the models.json-owned keys
+ * (modelCatalog/modelRegistry/modelRoster/...) stay global — model SELECTION is
+ * per-companion via the runtime-owned `modelPurposeSelection` key (23pp) while
+ * the catalog and provider credentials remain gateway-global. Keep this the
+ * single source of truth — the settings contract derives its per-key scope
+ * from it.
  */
 export const COMPANION_SETTINGS_OVERLAY_WHITELIST = [
   'activeTimezone',
@@ -63,6 +82,13 @@ export const COMPANION_SETTINGS_OVERLAY_WHITELIST = [
   'deepgramListenEndpoint',
   'elevenLabsModelId',
   'elevenLabsEndpointBase',
+  // Model selection (catalog and credentials remain gateway-global).
+  // LLM/vision lane selection (23pp) is a purpose → models.json slot key.
+  // The models.json catalog/registry and all provider keys stay gateway-global;
+  // only WHICH catalog model leads each lane is companion character config.
+  // MoA deliberation model choices follow the same rule; moaEnabled/limits
+  // remain global.
+  ...COMPANION_MODEL_SELECTION_SETTINGS_OVERLAY_KEYS,
   // discordTrigger*
   'discordTriggerWords',
   'discordTriggerReactions',
@@ -82,6 +108,30 @@ export function isCompanionSettingsOverlayKey(key: string): key is CompanionSett
 
 function isEnoent(error: unknown): boolean {
   return isRecord(error) && error.code === 'ENOENT';
+}
+
+function validateCompanionSettingsOverlay(
+  overlay: unknown,
+  path: string,
+): EditableSettings {
+  if (!isRecord(overlay)) {
+    throw new Error(
+      `Companion settings overlay at ${path} must be a JSON object of whitelisted settings keys.`,
+    );
+  }
+
+  const offendingKeys = Object.keys(overlay).filter(
+    (key) => !COMPANION_SETTINGS_OVERLAY_KEY_SET.has(key),
+  );
+  if (offendingKeys.length > 0) {
+    throw new Error(
+      `Companion settings overlay at ${path} contains non-whitelisted keys: `
+      + `${offendingKeys.join(', ')}. Per-companion overlays may only set `
+      + `${COMPANION_SETTINGS_OVERLAY_WHITELIST.join(', ')}.`,
+    );
+  }
+
+  return overlay as EditableSettings;
 }
 
 /**
@@ -104,6 +154,22 @@ function deepMergeRecords(
     }
   }
   return merged;
+}
+
+/**
+ * Merge a partial Garden mutation into the persisted companion overlay.
+ * Object-valued settings merge recursively so changing one model-purpose lane
+ * does not discard the companion's other lane choices. Arrays and scalar/null
+ * values replace the prior value, allowing an operator to clear a selection.
+ */
+export function mergeCompanionSettingsOverlayPatch(
+  currentOverlay: EditableSettings,
+  patch: EditableSettings,
+): EditableSettings {
+  return deepMergeRecords(
+    currentOverlay as Record<string, unknown>,
+    patch as Record<string, unknown>,
+  ) as EditableSettings;
 }
 
 /**
@@ -132,24 +198,28 @@ export function loadCompanionSettingsOverlay(
     );
   }
 
-  if (!isRecord(parsed)) {
-    throw new Error(
-      `Companion settings overlay at ${path} must be a JSON object of whitelisted settings keys.`,
-    );
-  }
+  return validateCompanionSettingsOverlay(parsed, path);
+}
 
-  const offendingKeys = Object.keys(parsed).filter(
-    (key) => !COMPANION_SETTINGS_OVERLAY_KEY_SET.has(key),
-  );
-  if (offendingKeys.length > 0) {
-    throw new Error(
-      `Companion settings overlay at ${path} contains non-whitelisted keys: `
-      + `${offendingKeys.join(', ')}. Per-companion overlays may only set `
-      + `${COMPANION_SETTINGS_OVERLAY_WHITELIST.join(', ')}.`,
-    );
-  }
-
-  return parsed as EditableSettings;
+/**
+ * Validate and atomically persist one companion's settings overlay.
+ *
+ * Garden mutations use this writer instead of writing per-companion fields
+ * into the fleet-global settings.json owner.
+ */
+export function saveCompanionSettingsOverlay(
+  companionDataDir: string,
+  overlay: EditableSettings,
+  baseRuntimeSettings: EditableSettings,
+): EditableSettings {
+  const path = join(companionDataDir, COMPANION_SETTINGS_OVERLAY_FILE_NAME);
+  const validated = validateCompanionSettingsOverlay(overlay, path);
+  // Overlay objects may intentionally contain partial nested settings. Their
+  // semantic validation therefore happens after merging with the global base,
+  // matching startup hydration.
+  mergeCompanionSettingsOverlay(baseRuntimeSettings, validated);
+  writeJsonAtomic(path, validated);
+  return validated;
 }
 
 /**

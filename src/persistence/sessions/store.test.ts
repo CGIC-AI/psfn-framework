@@ -148,7 +148,7 @@ describe('SessionStore', () => {
 
   it('persists canonical turn records in channel-scoped L0 streams', () => {
     const turnId = createTurnId();
-    store.appendTurnRecord({
+    void store.appendTurnRecord({
       schemaVersion: 1,
       turnId,
       requestId: 'req-turn-record',
@@ -362,7 +362,7 @@ describe('SessionStore', () => {
   it('accepts system-attributed turn records for internal scheduler prompts', () => {
     const turnId = createTurnId();
 
-    store.appendTurnRecord({
+    void store.appendTurnRecord({
       schemaVersion: 1,
       turnId,
       requestId: 'reflection-whisper-1',
@@ -604,7 +604,7 @@ describe('SessionStore', () => {
     const firstTurnId = createTurnId();
     const secondTurnId = createTurnId();
 
-    store.appendTurnRecord({
+    void store.appendTurnRecord({
       schemaVersion: 1,
       turnId: firstTurnId,
       requestId: 'req-1',
@@ -622,7 +622,7 @@ describe('SessionStore', () => {
       versionPointers: { model: 'test/model' },
       provenanceRefs: [],
     });
-    store.appendTurnRecord({
+    void store.appendTurnRecord({
       schemaVersion: 1,
       turnId: secondTurnId,
       requestId: 'req-2',
@@ -678,7 +678,7 @@ describe('SessionStore', () => {
       [redactedTurnId, 'req-redacted', 1_700_000_000_010],
       [visibleTurnId, 'req-visible', 1_700_000_000_110],
     ] as const) {
-      store.appendTurnRecord({
+      void store.appendTurnRecord({
         schemaVersion: 1,
         turnId,
         requestId,
@@ -745,8 +745,8 @@ describe('SessionStore', () => {
       ...buildTurnRecordFixture(sourceChannelId, 2, tombstonedTurnId),
       sessionId: logicalSessionId,
     };
-    store.appendTurnRecord(unique);
-    store.appendTurnRecord(tombstoned);
+    void store.appendTurnRecord(unique);
+    void store.appendTurnRecord(tombstoned);
 
     expect(store.findUniqueSourceTurnRecord(sourceChannelId, uniqueTurnId)).toEqual(unique);
     await store.redactTurn(logicalSessionId, tombstonedTurnId, {
@@ -756,7 +756,7 @@ describe('SessionStore', () => {
     expect(() => store.findUniqueSourceTurnRecord(sourceChannelId, tombstonedTurnId))
       .toThrow('tombstoned, missing its owner, or belongs to another source');
 
-    store.appendTurnRecord(unique);
+    void store.appendTurnRecord(unique);
     expect(() => store.findUniqueSourceTurnRecord(sourceChannelId, uniqueTurnId))
       .toThrow('duplicated and cannot establish a recovery identity');
   });
@@ -778,7 +778,7 @@ describe('SessionStore', () => {
 
     const turnIds = Array.from({ length: 12 }, () => createTurnId());
     turnIds.forEach((turnId, index) => {
-      countingStore.appendTurnRecord(buildTurnRecordFixture(channelId, index, turnId));
+      void countingStore.appendTurnRecord(buildTurnRecordFixture(channelId, index, turnId));
     });
 
     // One tombstoned turn near the tail: a single bounded overscan pass must
@@ -807,8 +807,8 @@ describe('SessionStore', () => {
     const secondTurnId = createTurnId();
     const storeA = new SessionStore(dir);
     storeA.append({ channelId, role: 'user', content: 'seed message', timestamp: 1_000 });
-    storeA.appendTurnRecord(buildTurnRecordFixture(channelId, 0, firstTurnId));
-    storeA.appendTurnRecord(buildTurnRecordFixture(channelId, 1, secondTurnId));
+    void storeA.appendTurnRecord(buildTurnRecordFixture(channelId, 0, firstTurnId));
+    void storeA.appendTurnRecord(buildTurnRecordFixture(channelId, 1, secondTurnId));
 
     // A second process attaches to the same sessions dir and serves a read
     // first, caching "no tombstones" plus the journal fingerprint.
@@ -2290,48 +2290,6 @@ describe('SessionStore', () => {
     expect(store.getLatestSessionByTimestamp()).toBeNull();
   });
 
-  it('backward compat: appends to legacy file (no split-brain)', () => {
-    // Simulate old-format file
-    const oldFilename = 'api-session-1.jsonl';
-    const journalLine = JSON.stringify({
-      type: 'message', id: 1, channelId: 'api:session-1',
-      role: 'user', content: 'Old msg', timestamp: 1000,
-    });
-    writeFileSync(join(dir, oldFilename), journalLine + '\n');
-
-    // Load from legacy, then append
-    const store1 = new SessionStore(dir);
-    store1.append({ channelId: 'api:session-1', role: 'assistant', content: 'New msg', timestamp: 2000 });
-    expect(store1.count('api:session-1')).toBe(2);
-
-    // Reload — must get BOTH messages (not just the new one)
-    const store2 = new SessionStore(dir);
-    const entries = store2.getRecent('api:session-1', 10);
-    expect(entries).toHaveLength(2);
-    expect(entries[0].content).toBe('Old msg');
-    expect(entries[1].content).toBe('New msg');
-  });
-
-  it('backward compat: listChannels reads old-format files', () => {
-    // Simulate an old-format file: colon was replaced with -, slash with _
-    const oldFilename = 'api-session-1.jsonl';
-    const journalLine = JSON.stringify({
-      type: 'message',
-      id: 1,
-      channelId: 'api:session-1',
-      role: 'user',
-      content: 'Old format',
-      timestamp: 1000,
-    });
-    writeFileSync(join(dir, oldFilename), journalLine + '\n');
-
-    const freshStore = new SessionStore(dir);
-    const channels = freshStore.listChannels();
-    const found = channels.find(c => c.channelId === 'api:session-1');
-    expect(found).toBeDefined();
-    expect(found!.messageCount).toBe(1);
-  });
-
   it('falls back to disk scan when channel index is malformed', () => {
     store.append({
       channelId: 'api:fallback-test',
@@ -2350,7 +2308,7 @@ describe('SessionStore', () => {
 
   it('loads valid entries around malformed lines and writes a quarantine sidecar', () => {
     const channelId = 'api:recover-test';
-    const filename = 'api-recover-test.jsonl';
+    const filename = '20240101_api-recover-test_unknown_000001.jsonl';
     const filePath = join(dir, filename);
 
     const raw = [

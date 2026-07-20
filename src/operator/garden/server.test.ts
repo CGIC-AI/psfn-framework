@@ -247,7 +247,9 @@ async function createHarness(options: {
     extractionProvider: 'test',
     discordToken: '',
     discordBotId: '123',
-    companionId: options.fleetAuthEnabled ? FLEET_COMPANION_ID : 'test-companion',
+    companionId: options.fleetAuthEnabled
+      ? FLEET_COMPANION_ID
+      : createCompanionId('11111111-1111-4111-8111-111111111111'),
     gatewaySessionIntegrityAuthToken: `v1.${'b'.repeat(64)}`,
     characterCardPath,
     dataDir: tempDir,
@@ -374,6 +376,11 @@ async function createHarness(options: {
 
   const mockLlmProvider = { stream: vi.fn(), complete: vi.fn() } as unknown as LLMProviderPort;
   const shardManager = new ShardManager({
+    snapshotParentCapabilityGrant: () => ({
+      tier: 'custom',
+      customTokens: ['shard.spawn'],
+      grantedTokens: ['shard.spawn'],
+    }),
     eventBus,
     llmProvider: mockLlmProvider,
     sessionStore,

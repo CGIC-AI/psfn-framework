@@ -2,7 +2,7 @@
 
 This is the operator-facing runtime guide for the current repo-owned deployment model.
 
-Last updated: 2026-07-16.
+Last updated: 2026-07-18.
 
 Before touching a Helm release, read the canonical
 [Helm Fleet Upgrade Guide](./helm-upgrades.md). It is the short, mandatory
@@ -22,7 +22,7 @@ npm run agent:docker:continuous # Continuous/dev profile (isolated internal netw
 ```
 
 - `split` is the standard gateway + agent + operator launcher.
-- `split` loads `.env` in the launcher/gateway boundary, then starts agents and operators from separate explicit allowlists. Operators do not reload `.env`; provider and channel credential status reaches Garden only as redacted booleans over the admin transport.
+- `split` loads `.env` in the launcher/gateway boundary, then starts agents and operators from separate explicit allowlists. Operators do not reload `.env`; the fleet Garden receives only its approved database URL plus Garden/runtime wiring, while provider and channel credential status reaches it only as redacted booleans over the admin transport.
 - `yolo` keeps the split runtime but broadens gateway `fs.read` scope across the codebase.
 - `operator` runs only the Garden operator surface when you want it separate from the launcher.
 - `agent:docker` is the production profile (`network_mode: "none"`).
@@ -35,7 +35,7 @@ Multi-companion is an opt-in topology: N agent processes behind one gateway. It
 is off by default and byte-identical to single-companion when off. The full
 model is in [`docs/multi-companion.md`](./multi-companion.md); this section is
 the operator quick reference. Enabling it requires `PSFN_MULTI_COMPANION=1` in
-`.env` and a system-owned `companions.json` fleet manifest (seed
+`.env`, `PSFN_FLEET_AUTH=1`, and a system-owned `companions.json` fleet manifest (seed
 `config/companions.seed.json`). Both mismatches fail closed at startup: flag on
 with no manifest refuses to start; a manifest present with the flag off refuses
 to start.
@@ -44,8 +44,10 @@ to start.
 
 `npm run split` (`scripts/start-gateway-agent.sh`) resolves the fleet and, when
 multi-companion is enabled, enters supervisor mode: it spawns one agent process
-per companion plus one Garden operator process per companion that declares a
-`gardenPort`. Preview the redacted spawn plan with:
+per companion and exactly one fleet Garden process on the normal fleet-level
+`ADMIN_PORT`. `gardenPort` is retired from `companions.json`; any remaining
+entry fails validation instead of activating a compatibility path. Preview the
+redacted spawn plan with:
 
 ```bash
 scripts/start-gateway-agent.sh --dry-run   # prints the plan; launches nothing
@@ -53,9 +55,18 @@ scripts/start-gateway-agent.sh --dry-run   # prints the plan; launches nothing
 
 Each spawned agent gets a scrubbed environment plus `COMPANION_ID`,
 `COMPANION_DATA_DIR`, `CHARACTER_CARD_PATH`, `COMPANION_PG_SCHEMA`,
-its derived personal `WORKSPACE_PATH`, `ADMIN_TRANSPORT_SOCKET`, and
-`ADMIN_PORT` from the plan. The supervisor is
+its derived personal `WORKSPACE_PATH`, and its registry-derived
+`ADMIN_TRANSPORT_SOCKET`. The plan builds the same immutable target registry as
+Garden, with exact `garden-admin-<companion-uuid>.sock` paths derived from
+canonical companion IDs. Endpoint collisions fail before process launch. After
+starting all N agents, the supervisor waits deterministically until every
+planned socket is listening; an agent exit or missing endpoint aborts without
+starting Garden. Only then does it start the one Garden. The supervisor is
 shared-fate: if any supervised process exits, the whole fleet is torn down.
+The fleet Garden receives `POSTGRES_DATABASE_URL` for its approved direct
+database services. Those services are instantiated per registered companion,
+and the authenticated request target must match the selected service binding
+before a query can run.
 Manifest-relative data/card paths are resolved to absolute strict subpaths of
 `PSFN_RUNTIME_ROOT`; symlink escapes and tuple drift fail before startup. The
 launcher also derives separate role-bound gateway proofs for the agent and its
@@ -68,8 +79,16 @@ before process startup and refuses missing, overlapping, symlink-escaping, or
 tuple-mismatched roots. The shared root is Garden-governed and is never exported
 as `WORKSPACE_PATH`.
 
-Per-companion Gardens use socket admin transport only; network admin-transport
-mode is rejected fail-closed under the supervisor.
+The local fleet Garden uses socket admin transport only; network
+admin-transport mode is rejected fail-closed under the supervisor.
+
+Local topology rollback is revision-based, not a live compatibility switch.
+Stop the launcher, restore the previous pinned revision and its matching
+pre-cutover `companions.json`, then restart and verify the same canonical
+gateway browser origin. Do not add `gardenPort` back to the current schema, run
+old and new Gardens together, expose direct Garden ports, or fall back to one
+shared admin token. Owner files and companion state do not move during this
+rollback.
 
 ### Per-companion Postgres schema
 
@@ -97,37 +116,6 @@ credential vault) at load; an inline `token` field is rejected, and an
 unresolved/empty token fails closed. Add each companion's bot token to `.env`
 under the env var name its account references.
 
-### Loopback fleet-status operator listener
-
-The gateway can serve a raw, read-only fleet-status operator surface when
-`FLEET_STATUS_PORT` is set (host `FLEET_STATUS_HOST`, default `127.0.0.1`):
-
-- `GET /` and `GET /fleet` — HTML overview of the cluster
-- `GET /fleet/status.json` — JSON
-
-This is a separate HTTP listener, not the authenticated fleet portal. Its
-`GET /fleet` route exists only on the configured loopback status port; the
-public HTTPS origin's `/fleet` and `/v1/fleet/portal` routes are gateway-session
-authenticated and expose only the bounded authorized projection. The raw
-listener is never mounted on that public origin.
-
-The status payload intentionally contains the complete fleet roster, Garden
-ports, timestamps, state reasons, and violation counts for local operations.
-It has no browser-session authentication of its own. Do not expose it through
-a public ingress, unauthenticated reverse proxy, or remote tunnel. Any remote
-operator access requires a separate independently authenticated boundary and
-private network policy; the authenticated fleet portal is the normal remote
-human surface and must not consume this raw payload.
-
-The status listener is fed by the gateway connection registry plus the fleet
-roster. Setting `FLEET_STATUS_PORT` while `PSFN_MULTI_COMPANION` is off fails
-closed; a taken port, wildcard/public/ambiguous host, or non-loopback resolved
-address fails closed. Configure its host/port only through repository-owned
-runtime wiring. To roll it back, unset `FLEET_STATUS_PORT` (and
-`FLEET_STATUS_HOST` if present) there and restart the gateway; this does not
-disable the authenticated HTTPS portal. Fatigue/charge posture and tool-error
-counts are a documented follow-up and are not shown today.
-
 ### Unified fleet human origin
 
 With `PSFN_FLEET_AUTH=1`, the gateway is the only browser origin. Open the
@@ -136,13 +124,19 @@ browser requests are sent through the gateway-owned OAuth login. Authorized
 Garden routes are `/companions/<companion-uuid>/garden/...`. The optional static
 Companion UI is `/companion-ui/` and is bound by the server to one registered
 companion. The old direct Garden host/port is not a browser edge in this mode.
+The same compiled Garden bundle renders the `/fleet` overview; its
+`/v1/fleet/portal` request returns only the current principal's bounded
+authorized projection. The retired raw fleet-status listener and
+`/fleet/status.json` route are absent.
 
 For every Garden request, the gateway resolves the live OPL1.5 session/contact/
 grant/policy context for the companion encoded in the path. Only then does it
 mint and durably consume a short-lived, exact request capability and connect to
-that companion's Garden. Unknown companions, authorization denial, stale or
-revoked sessions, and missing upstream registrations all return the same 404
-before an upstream connection, so the edge does not enumerate the fleet.
+the one fleet Garden, which verifies the binding before selecting that
+companion's registered agent transport. Unknown companions, authorization
+denial, stale or revoked sessions, and missing upstream registrations all
+return the same 404 before an agent connection, so the edge does not enumerate
+the fleet.
 Browser cookies, bearer credentials, forwarding metadata, and caller-supplied
 capability assertions are stripped. Garden verifies the signed method, target,
 action, authorization digest, body length, request id, decision id, audience,
@@ -168,7 +162,7 @@ browser-trusted TLS Secret. Fleet auth also requires `networkPolicy.enabled=true
 rendering rather than creating a second or incomplete browser edge. The chart
 renders that gateway as the sole browser Ingress, cert-manager identities for
 gateway-to-Garden mTLS, and NetworkPolicy allowing Garden and the optional
-Companion UI only from gateway pods. It does not inject `FLEET_STATUS_PORT`;
+Companion UI only from gateway pods. It has no raw fleet-status listener;
 the raw status listener remains a separately managed loopback-only operator
 surface.
 
@@ -829,6 +823,49 @@ Operational rules:
 - If projection drift is suspected, repair from the archive before trusting search results or operator views.
 - Use `npm run session:repair:transcript-projection` to rebuild the searchable transcript projection from authoritative JSONL L0 after drift, backend migration, or recovery work.
 - The repair utility accepts `--data-dir` and `--sessions-dir` overrides and targets the configured PostgreSQL session projection backend through the port layer.
+
+### Testing-session lifecycle
+
+Harnesses must name ephemeral channels with the reserved
+`<existing-channel-prefix>:testing:<name>` namespace. For an API harness, set
+`x-session-id` to a value such as
+`testing:kube-rollout-validation-20260719`; its stored channel id becomes
+`api:<principal>:testing:kube-rollout-validation-20260719`. The marker
+preserves ordinary channel-type inference while explicitly excluding the
+session from temporal wake/refresher targeting, near-turn maintenance, and
+episodic synthesis, plus the sleeptime stack (consolidation, arcs, dreams,
+wiki updates, orientation rewrites, and durable memory writes).
+
+When testing is complete, stop the owning companion workloads and purge each
+session by its exact channel-index key:
+
+```bash
+npm run session:purge -- --session 'api:<principal>:testing:kube-rollout-validation-20260719'
+```
+
+For a multi-companion fleet, select the manifest-owned companion explicitly:
+
+```bash
+npm run session:purge -- \
+  --companion-id '<companion-uuid>' \
+  --session 'api:<principal>:testing:kube-rollout-validation-20260719'
+```
+
+The command accepts no wildcards. It stages the complete journal chain and
+channel-index removal for rollback, clears that companion and session's exact
+Redis tail-key family when Redis is configured, then removes the channel's
+message and drift projection rows in one PostgreSQL transaction. In split-root
+deployments it resolves journals from the companion data root. In fleet mode
+it resolves both that root and the non-public PostgreSQL schema from
+`companions.json`; missing or ambiguous companion/schema selection fails
+closed. When Redis is not configured the report says
+`no tail cache configured`. A configured but unreachable Redis aborts and
+rolls the staged journals/index back rather than reporting a clean purge.
+
+The command refuses ordinary sessions. An exceptional non-testing purge requires
+`--force-non-testing` and an interactive confirmation in which the operator
+types the exact id; use that escape hatch only after independently verifying
+the target and backup.
 
 ### Optional Redis session tail cache
 

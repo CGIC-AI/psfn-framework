@@ -110,10 +110,23 @@ export interface EgressToolGuard {
 
 export type EgressToolGuardProvider = () => EgressToolGuard | null;
 
+/**
+ * Narrow transport-only escape hatch for capabilities whose authority lives at
+ * a later privileged boundary. Returning true allows the tool implementation
+ * to submit the request; it does not add the token to CapabilityAccess.
+ */
+export type CapabilityDeniedTransportPolicy = (input: {
+  toolName: string;
+  params: unknown;
+  requiredTokens: readonly CapabilityToken[];
+  missingTokens: readonly CapabilityToken[];
+}) => boolean;
+
 export function gateToolWithCapabilities<T extends AgentTool<any>>(
   tool: T,
   getAccess: CapabilityAccessProvider,
   getEgressGuard?: EgressToolGuardProvider,
+  allowDeniedTransport?: CapabilityDeniedTransportPolicy,
 ): T {
   const gated = {
     ...tool,
@@ -121,10 +134,19 @@ export function gateToolWithCapabilities<T extends AgentTool<any>>(
       toolCallId: string,
       params: unknown,
       signal?: AbortSignal,
-    ): Promise<AgentToolResult<any>> => {
+    ): Promise<AgentToolResult<unknown>> => {
       const access = getAccess();
       const eligibility = evaluateToolCapabilityEligibility(tool, params, access);
-      if (!eligibility.allowed) {
+      const transportAllowed = !eligibility.allowed
+        && !eligibility.undeclared
+        && eligibility.missingTokens.length > 0
+        && allowDeniedTransport?.({
+          toolName: tool.name,
+          params,
+          requiredTokens: eligibility.requiredTokens,
+          missingTokens: eligibility.missingTokens,
+        }) === true;
+      if (!eligibility.allowed && !transportAllowed) {
         if (eligibility.undeclared) {
           return undeclaredResult(tool.name, access.getTier());
         }
@@ -155,9 +177,9 @@ export function gateToolWithCapabilities<T extends AgentTool<any>>(
         }
       }
 
-      // params is unknown from the gated wrapper; tool.execute expects Static<TSchema>
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      return tool.execute(toolCallId, params as any, signal);
+      // params is unknown from the gated wrapper; narrow to the wrapped tool's
+      // own declared param type (Static<TParameters>) rather than erasing it.
+      return tool.execute(toolCallId, params as Parameters<typeof tool.execute>[1], signal);
     },
   } as T;
 

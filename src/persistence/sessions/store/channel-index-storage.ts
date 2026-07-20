@@ -174,14 +174,17 @@ export function deleteChannelIndexEntryIfUnchanged(
   expected: ChannelIndexEntry,
   channelIndexPath: string,
   channelIndex: Map<string, ChannelIndexEntry>,
-): void {
-  withChannelIndexWriteLock(channelIndexPath, () => {
+): boolean {
+  return withChannelIndexWriteLock(channelIndexPath, () => {
     const latest = new Map<string, ChannelIndexEntry>();
     loadChannelIndex(channelIndexPath, latest, { persistMigration: false });
+    let deleted = false;
     if (channelIndexEntryEquals(latest.get(channelId), expected)) {
       latest.delete(channelId);
       writeChannelIndexFile(channelIndexPath, latest);
+      deleted = true;
     }
     replaceLocalIndex(channelIndex, latest);
+    return deleted;
   });
 }

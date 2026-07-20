@@ -60,7 +60,7 @@ describe('hydrateJsonBackedRuntimeConfig', () => {
     };
     writeFileSync(schedulerPath, `${JSON.stringify(scheduler, null, 2)}\n`, 'utf8');
     process.env.DATA_DIR = dataDir;
-    process.env.COMPANION_ID = 'test-companion';
+    process.env.COMPANION_ID = '11111111-1111-4111-8111-111111111111';
     process.env.POSTGRES_DATABASE_URL = 'postgresql://test:test@127.0.0.1:5432/test';
     process.env.CONFIG_DIR = 'config';
 
@@ -85,6 +85,11 @@ describe('hydrateJsonBackedRuntimeConfig', () => {
       analysisWorkbenchMaxTokens: 180000,
       analysisWorkbenchMaxWallTimeMs: 180000,
       analysisWorkbenchMaxSubQueries: 24,
+      imageProvider: 'fal',
+      imageFalCreateModel: 'fal-ai/nano-banana-2',
+      imageFalEditModel: 'xai/grok-imagine-image/quality/edit',
+      imageSelfieEditModel: 'fal-ai/nano-banana-2/edit',
+      modelPurposeSelection: { chat: 'extraction' },
     }), 'utf8');
     writeFileSync(join(dataDir, 'models.json'), JSON.stringify({
       schemaVersion: 1,
@@ -197,7 +202,7 @@ describe('hydrateJsonBackedRuntimeConfig', () => {
     }), 'utf8');
 
     process.env.DATA_DIR = dataDir;
-    process.env.COMPANION_ID = 'test-companion';
+    process.env.COMPANION_ID = '11111111-1111-4111-8111-111111111111';
     process.env.POSTGRES_DATABASE_URL = 'postgresql://test:test@127.0.0.1:5432/test';
     process.env.CONFIG_DIR = 'config';
     process.env.PRIMARY_MODEL = 'env-primary-should-be-ignored';
@@ -213,6 +218,21 @@ describe('hydrateJsonBackedRuntimeConfig', () => {
     expect(config.analysisWorkbenchMaxTokens).toBe(180000);
     expect(config.analysisWorkbenchMaxWallTimeMs).toBe(180000);
     expect(config.analysisWorkbenchMaxSubQueries).toBe(24);
+    expect(config.imageProvider).toBe('fal');
+    expect(config.imageFalCreateModel).toBe('fal-ai/nano-banana-2');
+    expect(config.imageFalEditModel).toBe('xai/grok-imagine-image/quality/edit');
+    expect(config.imageSelfieEditModel).toBe('fal-ai/nano-banana-2/edit');
+    // 23pp: selection referencing a valid models.json slot survives hydration.
+    expect(config.modelPurposeSelection).toEqual({ chat: 'extraction' });
     expect(config.chargePolicy?.surfaceCosts.shardLaunch).toBe(7);
+
+    // 23pp fail-closed: a selection referencing an unknown models.json slot
+    // stops hydration with an actionable message.
+    writeFileSync(join(dataDir, 'settings.json'), JSON.stringify({
+      modelPurposeSelection: { vision: 'no-such-slot' },
+    }), 'utf8');
+    expect(() => hydrateJsonBackedRuntimeConfig(loadConfig(), { seedDir: 'config' })).toThrow(
+      /modelPurposeSelection\.vision.*"no-such-slot".*primary, extraction/s,
+    );
   });
 });

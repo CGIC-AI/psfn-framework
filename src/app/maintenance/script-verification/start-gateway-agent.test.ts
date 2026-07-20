@@ -1,4 +1,5 @@
 import { execFileSync } from 'node:child_process';
+import { generateKeyPairSync } from 'node:crypto';
 import {
   chmodSync,
   copyFileSync,
@@ -30,6 +31,27 @@ const startupOwnerSeeds = [
   ['skills.seed.json', 'skills.json'],
   ['intake-policy.seed.json', 'intake-policy.json'],
 ] as const;
+
+/**
+ * Provision a loadable enabled fleet-auth.json from the canonical seed. The
+ * distributed seed fails closed under an enabled runtime (placeholder key ids
+ * and known-unsafe fixture keys), so swap in fresh, distinct Ed25519 verifier
+ * and hub-assertion keys with real key ids.
+ */
+function writeFleetAuthOwnerFile(systemDataDir: string): void {
+  const exportPublicKey = (): string => generateKeyPairSync('ed25519')
+    .publicKey.export({ type: 'spki', format: 'pem' }).toString();
+  const config = JSON.parse(readFileSync(join(repoRoot, 'config/fleet-auth.seed.json'), 'utf8'));
+  config.verifierKeys[0].kid = '2026-07-primary';
+  config.verifierKeys[0].publicKeyPem = exportPublicKey();
+  config.hubDeviceAssertions.keys[0].kid = 'hub-2026-07';
+  config.hubDeviceAssertions.keys[0].publicKeyPem = exportPublicKey();
+  writeFileSync(
+    join(systemDataDir, 'fleet-auth.json'),
+    `${JSON.stringify(config, null, 2)}\n`,
+    'utf8',
+  );
+}
 
 function seedStartupOwnerRoots(systemDataDir: string, companionDataDirs: readonly string[]): void {
   mkdirSync(systemDataDir, { recursive: true });
@@ -109,7 +131,7 @@ function makeRealPreflightLauncher(): {
           XDG_RUNTIME_DIR: join(workDir, 'run'),
           GATEWAY_SOCKET: join(workDir, 'run', 'gateway.sock'),
           CONFIG_DIR: join(repoRoot, 'config'),
-          COMPANION_ID: 'verification-companion',
+          COMPANION_ID: '11111111-1111-4111-8111-111111111111',
           POSTGRES_DATABASE_URL: 'postgres://verification:verification@127.0.0.1/verification',
           ...env,
         },
@@ -268,9 +290,18 @@ describe('start-gateway-agent launcher supervision', () => {
         },
       ],
     }, null, 2)}\n`, 'utf8');
+    // The consolidated topology requires PSFN_FLEET_AUTH for the one fleet Garden
+    // (docs/garden-control-plane.md), so the gateway startup preflight enforces the
+    // strict fleet-auth flag/file matrix: with the flag enabled the system-owned
+    // fleet-auth.json owner file must be present AND loadable. The distributed
+    // seed is deliberately rejected when enabled (placeholder key ids / known
+    // unsafe fixture keys), so provision a valid owner file built from the seed
+    // with fresh Ed25519 verifier/hub keys and real key ids.
+    writeFleetAuthOwnerFile(systemDataDir);
     try {
       const result = launcher.run({
         PSFN_MULTI_COMPANION: '1',
+        PSFN_FLEET_AUTH: '1',
         PSFN_RUNTIME_ROOT: runtimeRoot,
         SYSTEM_DATA_DIR: systemDataDir,
         COMPANION_DATA_DIR: companionA,
@@ -339,7 +370,7 @@ describe('start-gateway-agent launcher supervision', () => {
       '#!/usr/bin/env bash',
       'case "$1" in',
       '  scripts/resolve-companion-fleet.ts)',
-      `    printf '11111111-1111-4111-8111-111111111111\\t${workDir}/data\\t${workDir}/card.json\\tcompanion_a\\t${workDir}/workspace\\tproof-a\\tproof-b\\t${runtimeDir}/garden.sock\\t-\\n'`,
+      `    printf '11111111-1111-4111-8111-111111111111\\t${workDir}/data\\t${workDir}/card.json\\tcompanion_a\\t${workDir}/workspace\\tproof-a\\tproof-b\\t${runtimeDir}/garden.sock\\n'`,
       '    ;;',
       '  scripts/provision-companion-fleet.ts)',
       `    printf 'provisioned\\n' >> '${markerPath}'`,
@@ -710,7 +741,7 @@ describe('start-gateway-agent launcher supervision', () => {
         env: {
           PATH: process.env.PATH,
           HOME: process.env.HOME,
-          COMPANION_ID: 'operator-probe',
+          COMPANION_ID: '22222222-2222-4222-8222-222222222222',
         },
       });
 
@@ -778,7 +809,6 @@ describe('start-gateway-agent multi-companion supervisor', () => {
         companionDataDir: 'alpha',
         characterCardPath: 'alpha/card.json',
         postgresSchema: 'companion_alpha',
-        gardenPort: 10061,
       },
       {
         companionId: '22222222-2222-4222-8222-222222222222',
@@ -834,26 +864,38 @@ describe('start-gateway-agent multi-companion supervisor', () => {
   it('supervises the fleet with shared-fate shutdown and no silent restart', () => {
     const launcher = readFileSync(join(repoRoot, 'scripts/start-gateway-agent.sh'), 'utf8');
     expect(launcher).toContain(
-      'wait -n "${GATEWAY_PID}" "${AGENT_PIDS[@]}" ${OPERATOR_PIDS[@]+"${OPERATOR_PIDS[@]}"}',
+      'wait -n "${GATEWAY_PID}" "${AGENT_PIDS[@]}" "${OPERATOR_PID}"',
     );
     expect(launcher).toContain('shutting down the whole fleet (shared-fate)');
     // The supervisor path must tear down the whole set, not re-exec/auto-restart.
     expect(launcher).toContain('cleanup_children');
   });
 
-  it('spawns one scrubbed operator per fleet entry with a gardenPort (W4)', () => {
+  it('starts exactly one scrubbed fleet Garden after every agent admin transport is ready', () => {
     const launcher = readFileSync(join(repoRoot, 'scripts/start-gateway-agent.sh'), 'utf8');
-    // Operator spawns run through env -i with the operator allowlist, after the
-    // companion's agent, only when companions.json assigns a gardenPort.
     expect(launcher).toContain(
       'launch_background env -i "${OPERATOR_ENV[@]}" ./node_modules/.bin/tsx src/app/operator/main.ts',
     );
     expect(launcher).toContain('build_operator_env');
-    expect(launcher).toContain('start_companion_operator');
+    expect(launcher).toContain('start_fleet_operator');
+    expect(launcher).not.toContain('start_companion_operator');
     expect(launcher).toContain('export ADMIN_TRANSPORT_SOCKET="${admin_transport_socket}"');
-    expect(launcher).toContain('export ADMIN_PORT="${garden_port}"');
-    expect(launcher.indexOf('start_companion_agent "${companion_id}"')).toBeLessThan(
-      launcher.indexOf('start_companion_operator "${companion_id}"'),
+    expect(launcher).toContain('export ADMIN_PORT="${LAUNCHER_ADMIN_PORT}"');
+    expect(launcher).toContain(
+      'unset COMPANION_ID CHARACTER_CARD_PATH COMPANION_PG_SCHEMA WORKSPACE_PATH',
+    );
+    expect(launcher).toContain('start_fleet_operator\n');
+    expect(launcher.indexOf('\n  prepare_fleet_admin_transports\n')).toBeLessThan(
+      launcher.indexOf('\n  start_companion_agents\n'),
+    );
+    expect(launcher.indexOf('\n  start_companion_agents\n')).toBeLessThan(
+      launcher.indexOf('\n  wait_for_fleet_admin_transports\n'),
+    );
+    expect(launcher.indexOf('\n  wait_for_fleet_admin_transports\n')).toBeLessThan(
+      launcher.indexOf('\n  probe_fleet_admin_transports\n'),
+    );
+    expect(launcher.indexOf('\n  probe_fleet_admin_transports\n')).toBeLessThan(
+      launcher.indexOf('\n  start_fleet_garden\n'),
     );
     // The operator allowlist may carry its own admin auth material but never
     // upstream provider secrets.
@@ -863,13 +905,17 @@ describe('start-gateway-agent multi-companion supervisor', () => {
     );
     expect(operatorAllowlist).toContain('ADMIN_TOKEN \\');
     expect(operatorAllowlist).toContain('PSFN_FLEET_AUTH \\');
+    expect(operatorAllowlist).toContain('POSTGRES_DATABASE_URL \\');
+    expect(launcher).toContain(
+      'if [ "${name}" = "POSTGRES_DATABASE_URL" ] \\\n'
+      + '    && ! psfn_is_truthy_env_value "${PSFN_MULTI_COMPANION:-}"; then',
+    );
     for (const secret of [
       'OPENROUTER_API_KEY',
       'LITELLM_API_KEY',
       'FAL_API_KEY',
       'DISCORD_TOKEN',
       'TELEGRAM_BOT_TOKEN',
-      'POSTGRES_DATABASE_URL',
       'GATEWAY_COMPANION_AUTH_TOKEN',
       'GATEWAY_SESSION_INTEGRITY_AUTH_TOKEN',
       'GATEWAY_SESSION_HMAC_KEY',
@@ -879,6 +925,11 @@ describe('start-gateway-agent multi-companion supervisor', () => {
     expect(launcher).toContain(
       'launch_background env -i "${OPERATOR_ENV[@]}" ./node_modules/.bin/tsx src/app/operator/main.ts',
     );
+    expect(launcher).not.toMatch(/start_fleet_operator "\$\{companion_id\}"/gu);
+    expect(launcher).toContain('refusing to replace non-socket admin transport path');
+    expect(launcher).toContain('agent admin transport missing for ${companion_id}');
+    expect(launcher).toContain('gateway exited before fleet admin transports became ready');
+    expect(launcher).toContain('gateway exited before the fleet Garden could start');
   });
 
   it('keeps the operator entrypoint independent of the repo dotenv and gateway loader', () => {
@@ -898,6 +949,7 @@ describe('start-gateway-agent multi-companion supervisor', () => {
           PATH: process.env.PATH,
           HOME: process.env.HOME,
           PSFN_MULTI_COMPANION: '1',
+          PSFN_FLEET_AUTH: '1',
           PSFN_RUNTIME_ROOT: workDir,
           SYSTEM_DATA_DIR: systemDataDir,
           COMPANION_DATA_DIR: companionDataDir,
@@ -913,12 +965,12 @@ describe('start-gateway-agent multi-companion supervisor', () => {
           + `\t${workDir}/workspaces/personal/11111111-1111-4111-8111-111111111111`
           + `\t${deriveCompanionAuthToken('11111111-1111-4111-8111-111111111111', 'agent', keyring)}`
           + `\t${deriveCompanionAuthToken('11111111-1111-4111-8111-111111111111', 'internal_session_integrity', keyring)}`
-          + `\t${socketDir}/garden-admin-11111111-1111-4111-8111-111111111111.sock\t10061`,
+          + `\t${socketDir}/garden-admin-11111111-1111-4111-8111-111111111111.sock`,
           `22222222-2222-4222-8222-222222222222\t${workDir}/beta\t${workDir}/beta/card.json\tcompanion_beta`
           + `\t${workDir}/workspaces/personal/22222222-2222-4222-8222-222222222222`
           + `\t${deriveCompanionAuthToken('22222222-2222-4222-8222-222222222222', 'agent', keyring)}`
           + `\t${deriveCompanionAuthToken('22222222-2222-4222-8222-222222222222', 'internal_session_integrity', keyring)}`
-          + `\t${socketDir}/garden-admin-22222222-2222-4222-8222-222222222222.sock\t-`,
+          + `\t${socketDir}/garden-admin-22222222-2222-4222-8222-222222222222.sock`,
           '',
         ].join('\n'),
       );
@@ -960,6 +1012,7 @@ describe('start-gateway-agent multi-companion supervisor', () => {
           PATH: process.env.PATH,
           HOME: process.env.HOME,
           PSFN_MULTI_COMPANION: '1',
+          PSFN_FLEET_AUTH: '1',
           PSFN_RUNTIME_ROOT: workDir,
           SYSTEM_DATA_DIR: systemDataDir,
           COMPANION_DATA_DIR: companionDataDir,
@@ -973,7 +1026,7 @@ describe('start-gateway-agent multi-companion supervisor', () => {
     }
     expect(error).toBeDefined();
     expect(String((error as { stderr?: Buffer }).stderr)).toContain(
-      'Multi-companion mode requires ADMIN_TRANSPORT_MODE=socket',
+      'Multi-companion local startup requires ADMIN_TRANSPORT_MODE=socket',
     );
   });
 
@@ -1008,6 +1061,7 @@ describe('start-gateway-agent multi-companion supervisor', () => {
           PATH: process.env.PATH,
           HOME: process.env.HOME,
           PSFN_MULTI_COMPANION: '1',
+          PSFN_FLEET_AUTH: '1',
           SYSTEM_DATA_DIR: systemDataDir,
           COMPANION_DATA_DIR: companionDataDir,
         },
@@ -1058,6 +1112,7 @@ describe('start-gateway-agent multi-companion supervisor', () => {
           HOME: process.env.HOME,
           PSFN_SKIP_DOTENV: 'true',
           PSFN_MULTI_COMPANION: '1',
+          PSFN_FLEET_AUTH: '1',
           PSFN_RUNTIME_ROOT: workDir,
           SYSTEM_DATA_DIR: systemDataDir,
           COMPANION_DATA_DIR: companionDataDir,
@@ -1069,21 +1124,124 @@ describe('start-gateway-agent multi-companion supervisor', () => {
       expect(output).toContain('dry-run spawn plan (2 companion(s))');
       expect(output).toContain('companionId=11111111-1111-4111-8111-111111111111 schema=companion_alpha');
       expect(output).toContain('companionId=22222222-2222-4222-8222-222222222222 schema=companion_beta');
-      // W4: the plan enumerates one operator per companion with a gardenPort,
-      // each bound to its companion's own admin transport socket.
       expect(output).toContain(
-        'operator: companionId=11111111-1111-4111-8111-111111111111 gardenPort=10061',
+        'Garden: one fleet operator port=10054 targets=2',
       );
       expect(output).toContain('garden-admin-11111111-1111-4111-8111-111111111111.sock');
-      expect(output).toContain(
-        'operator: companionId=22222222-2222-4222-8222-222222222222 (none — no gardenPort in companions.json)',
-      );
+      expect(output.match(/Garden: one fleet operator/gu)).toHaveLength(1);
+      expect(output).not.toContain('gardenPort');
       expect(output).not.toContain('starting gateway');
       expect(output).not.toContain('starting agent');
       expect(output).not.toContain('starting operator');
       expect(output).not.toContain('test-session-secret');
       expect(output).not.toMatch(/v1\.[a-f0-9]{64}/u);
       expect(existsSync(join(workDir, 'workspaces'))).toBe(false);
+    } finally {
+      rmSync(workDir, { recursive: true, force: true });
+    }
+  });
+
+  it('runtime starts N agents, waits for every admin socket, then starts exactly one fleet Garden', () => {
+    const workDir = mkdtempSync(join(tmpdir(), 'psfn-fleet-runtime-'));
+    const scriptsDir = join(workDir, 'scripts');
+    const systemDir = join(scriptsDir, 'system');
+    const tsxDir = join(workDir, 'node_modules/.bin');
+    const fakeBinDir = join(workDir, 'fake-bin');
+    const runtimeDir = join(workDir, 'run');
+    const eventsPath = join(workDir, 'events.log');
+    const companionA = '11111111-1111-4111-8111-111111111111';
+    const companionB = '22222222-2222-4222-8222-222222222222';
+    const socketA = join(runtimeDir, `garden-admin-${companionA}.sock`);
+    const socketB = join(runtimeDir, `garden-admin-${companionB}.sock`);
+    mkdirSync(systemDir, { recursive: true });
+    mkdirSync(tsxDir, { recursive: true });
+    mkdirSync(fakeBinDir, { recursive: true });
+    mkdirSync(runtimeDir, { recursive: true });
+    writeFileSync(
+      join(scriptsDir, 'start-gateway-agent.sh'),
+      readFileSync(join(repoRoot, 'scripts/start-gateway-agent.sh'), 'utf8'),
+      { mode: 0o755 },
+    );
+    writeFileSync(join(systemDir, 'runtime-env.sh'), readFileSync(runtimeEnvPath, 'utf8'));
+    writeFileSync(join(tsxDir, 'tsx'), [
+      '#!/usr/bin/env bash',
+      'case "$1" in',
+      '  scripts/resolve-companion-fleet.ts)',
+      '    if [ "${2:-}" = "--probe-ready" ]; then',
+      `      test -S ${JSON.stringify(socketA)} && test -S ${JSON.stringify(socketB)}`,
+      `      printf 'probe\\n' >> ${JSON.stringify(eventsPath)}`,
+      '      exit 0',
+      '    fi',
+      `    printf '${companionA}\\t${workDir}/a\\t${workDir}/a/card.json\\tcompanion_a\\t${workDir}/workspaces/a\\tproof-a\\tsession-a\\t${socketA}\\n'`,
+      `    printf '${companionB}\\t${workDir}/b\\t${workDir}/b/card.json\\tcompanion_b\\t${workDir}/workspaces/b\\tproof-b\\tsession-b\\t${socketB}\\n'`,
+      '    ;;',
+      '  scripts/provision-companion-fleet.ts|scripts/preflight-startup-owner-files.ts) exit 0 ;;',
+      '  src/app/gateway/main.ts)',
+      '    python3 - "$GATEWAY_SOCKET" <<\'PY\'',
+      'import os, socket, sys, time',
+      'path = sys.argv[1]',
+      'os.makedirs(os.path.dirname(path), exist_ok=True)',
+      'server = socket.socket(socket.AF_UNIX)',
+      'server.bind(path)',
+      'server.listen(1)',
+      'time.sleep(30)',
+      'PY',
+      '    ;;',
+      '  src/app/agent/main.ts)',
+      `    printf 'agent:%s\\n' "$COMPANION_ID" >> ${JSON.stringify(eventsPath)}`,
+      '    python3 - "$ADMIN_TRANSPORT_SOCKET" <<\'PY\'',
+      'import os, socket, sys, time',
+      'path = sys.argv[1]',
+      'os.makedirs(os.path.dirname(path), exist_ok=True)',
+      'server = socket.socket(socket.AF_UNIX)',
+      'server.bind(path)',
+      'server.listen(1)',
+      'time.sleep(30)',
+      'PY',
+      '    ;;',
+      '  src/app/operator/main.ts)',
+      `    test -S ${JSON.stringify(socketA)} && test -S ${JSON.stringify(socketB)}`,
+      '    test -z "${COMPANION_ID+x}"',
+      '    test -z "${COMPANION_PG_SCHEMA+x}"',
+      '    test -z "${WORKSPACE_PATH+x}"',
+      `    printf 'garden\\n' >> ${JSON.stringify(eventsPath)}`,
+      '    kill -TERM "$PPID"',
+      '    sleep 2',
+      '    ;;',
+      '  *) exit 97 ;;',
+      'esac',
+    ].join('\n'), { mode: 0o755 });
+    writeFileSync(join(fakeBinDir, 'node'), [
+      '#!/usr/bin/env bash',
+      'if [ "$1" = "-p" ]; then printf "22\\n"; else printf "v22.0.0\\n"; fi',
+    ].join('\n'), { mode: 0o755 });
+
+    try {
+      const output = execFileSync('bash', ['scripts/start-gateway-agent.sh'], {
+        cwd: workDir,
+        encoding: 'utf8',
+        timeout: 15_000,
+        env: {
+          PATH: `${fakeBinDir}:/usr/bin:/bin`,
+          HOME: process.env.HOME,
+          PSFN_SKIP_DOTENV: 'true',
+          PSFN_MULTI_COMPANION: '1',
+          PSFN_FLEET_AUTH: '1',
+          GATEWAY_SOCKET: join(runtimeDir, 'gateway.sock'),
+          POSTGRES_DATABASE_URL: 'postgres://test:test@127.0.0.1/test',
+        },
+      });
+      const events = readFileSync(eventsPath, 'utf8').trim().split('\n');
+      expect(events.filter(event => event.startsWith('agent:')).sort()).toEqual([
+        `agent:${companionA}`,
+        `agent:${companionB}`,
+      ]);
+      expect(events.filter(event => event === 'garden')).toHaveLength(1);
+      expect(events.filter(event => event === 'probe')).toHaveLength(1);
+      expect(events.indexOf('probe')).toBeLessThan(events.indexOf('garden'));
+      expect(events.at(-1)).toBe('garden');
+      expect(output).toContain('all validated agent admin transports are ready');
+      expect(output).toContain('starting one fleet Garden');
     } finally {
       rmSync(workDir, { recursive: true, force: true });
     }
@@ -1102,6 +1260,7 @@ describe('start-gateway-agent multi-companion supervisor', () => {
           HOME: process.env.HOME,
           PSFN_SKIP_DOTENV: 'true',
           PSFN_MULTI_COMPANION: '1',
+          PSFN_FLEET_AUTH: '1',
           SYSTEM_DATA_DIR: systemDataDir,
           COMPANION_DATA_DIR: companionDataDir,
           XDG_RUNTIME_DIR: join(workDir, 'run'),

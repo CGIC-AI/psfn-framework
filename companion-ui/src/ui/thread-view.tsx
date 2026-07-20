@@ -3,7 +3,13 @@ import { useEffect, useRef } from 'react';
 import type { HubStreamState } from '../lib/stream/hub-stream.js';
 import { AvatarMark } from './companion-sprite.js';
 
-export function ThreadView({ streamState }: { streamState: HubStreamState }) {
+export function ThreadView({
+  streamState,
+  targetLabel,
+}: {
+  streamState: HubStreamState;
+  targetLabel?: string;
+}) {
   const threadEndRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
@@ -11,7 +17,15 @@ export function ThreadView({ streamState }: { streamState: HubStreamState }) {
   }, [streamState.messages.length, streamState.liveAssistant?.content]);
 
   return (
-    <section className="thread-viewport" aria-label="Companion chat">
+    <section
+      className="thread-viewport"
+      aria-label={targetLabel ? `Direct shard chat with ${targetLabel}` : 'Companion chat'}
+    >
+      {targetLabel && (
+        <div className="thread-target-banner">
+          Direct shard thread · {targetLabel}
+        </div>
+      )}
       <div className="message-list" aria-live="polite">
         {streamState.messages.length === 0 && !streamState.liveAssistant ? (
           <div className="thread-empty">

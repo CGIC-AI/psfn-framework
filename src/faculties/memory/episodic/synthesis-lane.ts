@@ -2,7 +2,10 @@ import { createComponentLogger } from '../../../shared/logger.js';
 import type { InferredPostTurnAction, PostTurnActionCandidate, SubstrateMessage } from '../../../shared/contracts/runtime.js';
 import type { SessionEntry } from '../../../core/session/types.js';
 import type { SessionManager } from '../../../core/session/manager.js';
-import { isExperientialSelfDirectedSessionId } from '../../../core/session/session-id.js';
+import {
+  isExperientialSelfDirectedSessionId,
+  isTestingSessionId,
+} from '../../../core/session/session-id.js';
 import type { EpisodeSynthesisLaneConfig } from '../../../system/config/scheduler-config.js';
 import type { MemoryWriteOptions, MemoryWriter } from '../writer.js';
 import type { NearTurnMemoryScopeClassifierPort } from '../near-turn-memory-lane.js';
@@ -25,7 +28,8 @@ export type EpisodeSynthesisTrigger = 'timer' | 'turn_threshold';
 export type EpisodeSynthesisSkipReason =
   | 'no_new_messages'
   | 'below_relevance_minimum'
-  | 'session_retired';
+  | 'session_retired'
+  | 'testing_session';
 
 /**
  * Typed gate outcome. Every skip carries a reason so the Garden
@@ -199,6 +203,7 @@ export class EpisodeSynthesisLane {
       return null;
     }
     const sessionId = this.sessionManager.resolveSessionChannelId(message.channelId);
+    if (isTestingSessionId(sessionId)) return null;
     if (this.sessionManager.isSessionRetiredOrQuarantined?.(sessionId)) return null;
     const nextCount = (this.turnCountBySession.get(sessionId) ?? 0) + 1;
     if (nextCount < this.config.turnThreshold) {
@@ -222,6 +227,7 @@ export class EpisodeSynthesisLane {
     const actions: PostTurnActionCandidate[] = [];
     for (const session of this.sessionManager.listRecentSessions(limit)) {
       const sessionId = this.sessionManager.resolveSessionChannelId(session.channelId);
+      if (isTestingSessionId(sessionId)) continue;
       if (sessionId.startsWith('internal:') && !isExperientialSelfDirectedSessionId(sessionId)) continue;
       if (this.sessionManager.isSessionRetiredOrQuarantined?.(sessionId)) continue;
       const channelType = 'channelType' in session
@@ -236,6 +242,19 @@ export class EpisodeSynthesisLane {
   async execute(action: Pick<InferredPostTurnAction, 'id' | 'channelId' | 'sourceMessageId' | 'payload'>): Promise<void> {
     const sessionId = this.resolveActionSessionId(action);
     const trigger = this.resolveActionTrigger(action);
+
+    if (isTestingSessionId(sessionId)) {
+      this.emitGateEvent({
+        sessionId,
+        channelId: sessionId,
+        trigger,
+        outcome: 'skipped',
+        reason: 'testing_session',
+        newEntryCount: 0,
+        relevantTurnCount: 0,
+      });
+      return;
+    }
 
     if (this.sessionManager.isSessionRetiredOrQuarantined?.(sessionId)) {
       this.emitGateEvent({

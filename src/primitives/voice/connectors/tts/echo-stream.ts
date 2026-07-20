@@ -1,10 +1,12 @@
 import type {
-  TtsAudioChunk,
   TtsAudioEncoding,
   TtsSynthesisRequest,
   TtsSynthesisSession,
   StreamingTtsConnector,
 } from './types.js';
+import { combineAbortSignal } from '../../../../shared/utils/abort-signal.js';
+import { abortError, toError } from '../../../../shared/utils/errors.js';
+import { responseBodyToAudioChunks, responseError } from './stream-helpers.js';
 
 const DEFAULT_BASE_URL = 'http://localhost:8001';
 const DEFAULT_VOICE = '11labs-Allison';
@@ -30,16 +32,6 @@ export interface EchoStreamingTtsConfig {
   fetchImpl?: typeof fetch;
 }
 
-function abortError(message: string): Error {
-  const error = new Error(message);
-  error.name = 'AbortError';
-  return error;
-}
-
-function toError(value: unknown): Error {
-  return value instanceof Error ? value : new Error(String(value));
-}
-
 function normalizeRequestError(error: unknown, signal: AbortSignal | undefined, abortMessage: string): Error {
   const normalized = toError(error);
 
@@ -52,30 +44,6 @@ function normalizeRequestError(error: unknown, signal: AbortSignal | undefined, 
   }
 
   return normalized;
-}
-
-async function responseError(prefix: string, response: Response): Promise<Error> {
-  const body = await response.text().catch(() => '');
-  return new Error(`${prefix}: ${response.status} ${response.statusText} ${body.slice(0, 300)}`);
-}
-
-function combineAbortSignal(primary?: AbortSignal, secondary?: AbortSignal): AbortSignal | undefined {
-  if (!primary) return secondary;
-  if (!secondary) return primary;
-
-  const abortSignalAny = (AbortSignal as unknown as {
-    any?: (signals: AbortSignal[]) => AbortSignal;
-  }).any;
-
-  if (abortSignalAny) {
-    return abortSignalAny([primary, secondary]);
-  }
-
-  const controller = new AbortController();
-  const onAbort = () => controller.abort();
-  primary.addEventListener('abort', onAbort, { once: true });
-  secondary.addEventListener('abort', onAbort, { once: true });
-  return controller.signal;
 }
 
 function resolveEncoding(request: TtsSynthesisRequest): TtsAudioEncoding {
@@ -93,60 +61,6 @@ function resolveResponseFormat(request: TtsSynthesisRequest): EchoResponseFormat
     case 'mp3':
     default:
       return 'mp3';
-  }
-}
-
-async function* responseBodyToAudioChunks(
-  body: ReadableStream<Uint8Array>,
-  encoding: TtsAudioEncoding,
-  signal?: AbortSignal,
-): AsyncGenerator<TtsAudioChunk> {
-  const reader = body.getReader();
-  let sequence = 0;
-  let pending: Uint8Array | null = null;
-
-  try {
-    for (;;) {
-      if (signal?.aborted) {
-        throw abortError('Echo streaming TTS aborted');
-      }
-
-      let chunk: ReadableStreamReadResult<Uint8Array>;
-      try {
-        chunk = await reader.read();
-      } catch (error) {
-        throw normalizeRequestError(error, signal, 'Echo streaming TTS aborted');
-      }
-
-      if (chunk.done) break;
-      if (chunk.value.byteLength === 0) continue;
-
-      if (pending) {
-        yield {
-          audio: pending,
-          sequence,
-          isFinal: false,
-          encoding,
-          source: 'stream',
-        };
-        sequence += 1;
-      }
-
-      pending = chunk.value;
-    }
-
-    if (pending) {
-      yield {
-        audio: pending,
-        sequence,
-        isFinal: true,
-        encoding,
-        source: 'stream',
-      };
-    }
-  } finally {
-    await reader.cancel().catch(() => undefined);
-    reader.releaseLock();
   }
 }
 
@@ -197,10 +111,17 @@ export class EchoStreamingTtsConnector implements StreamingTtsConnector {
       }
 
       return {
-        audio: responseBodyToAudioChunks(response.body, encoding, combinedSignal),
+        audio: responseBodyToAudioChunks(
+          response.body,
+          encoding,
+          'stream',
+          combinedSignal,
+          'Echo streaming TTS aborted',
+          error => normalizeRequestError(error, combinedSignal, 'Echo streaming TTS aborted'),
+        ),
         cancel: async (reason?: string): Promise<void> => {
           if (!controller.signal.aborted) {
-            controller.abort(abortError(reason ?? 'cancelled'));
+            controller.abort(abortError(reason ?? 'cancelled', 'Request aborted', true));
           }
         },
       };

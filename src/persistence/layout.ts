@@ -806,6 +806,10 @@ export function resolveFatigueLedgerPath(companionDataDir: string): string {
   return join(resolveCompanionStateDir(companionDataDir), 'fatigue-ledger.jsonl');
 }
 
+export function resolveHumanAttentionLedgerPath(companionDataDir: string): string {
+  return join(resolveCompanionStateDir(companionDataDir), 'human-attention-ledger.jsonl');
+}
+
 export function resolveShardSessionMemorySyncAuditPath(companionDataDir: string): string {
   return join(resolveCompanionStateDir(companionDataDir), 'shard-session-memory-sync-audit.jsonl');
 }
@@ -1005,6 +1009,7 @@ function migrateLegacyCompanionStateLayout(companionDataDir: string): void {
     ['safeguards-audit.jsonl', resolveSafeguardAuditTrailPath(companionDataDir)],
     ['charge-ledger.jsonl', resolveChargeLedgerPath(companionDataDir)],
     ['fatigue-ledger.jsonl', resolveFatigueLedgerPath(companionDataDir)],
+    ['human-attention-ledger.jsonl', resolveHumanAttentionLedgerPath(companionDataDir)],
     ['shard-session-memory-sync-audit.jsonl', resolveShardSessionMemorySyncAuditPath(companionDataDir)],
     ['shard-fold-reviews.json', resolveShardFoldReviewStorePath(companionDataDir)],
     ['session-routes.json', resolveSessionRoutesPath(companionDataDir)],

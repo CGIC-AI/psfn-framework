@@ -32,7 +32,10 @@ describe('loadRuntimeChannelsConfig', () => {
         path: '/telegram/webhook',
       });
       expect(config.psfnAmica).toEqual({ enabled: false });
-      expect(buildExternalChannelProfiles(config)).toEqual({});
+      expect(config.companionUi).toEqual({ channelPrivacy: 'private' });
+      expect(buildExternalChannelProfiles(config)).toEqual({
+        'companion-ui': { channelPrivacy: 'private' },
+      });
     } finally {
       rmSync(dataDir, { recursive: true, force: true });
     }
@@ -147,7 +150,9 @@ describe('loadRuntimeChannelsConfig', () => {
 
       expect(saveChannelsOwnerFile(dataDir, payload)).toEqual(payload);
       expect(loadChannelsOwnerFile(dataDir)).toEqual(payload);
-      expect(buildExternalChannelProfiles(loadRuntimeChannelsConfig(dataDir, {}))).toEqual({});
+      expect(buildExternalChannelProfiles(loadRuntimeChannelsConfig(dataDir, {}))).toEqual({
+        'companion-ui': { channelPrivacy: 'private' },
+      });
     } finally {
       rmSync(dataDir, { recursive: true, force: true });
     }
@@ -240,22 +245,22 @@ describe('loadRuntimeChannelsConfig', () => {
       writeFileSync(join(dataDir, 'channels.json'), JSON.stringify({
         discord: {
           heartbeatChannelId: '1312460007211536394',
-          companionId: ' comp-a ',
+          companionId: ' 11111111-1111-4111-8111-111111111111 ',
         },
         telegram: {
           enabled: false,
-          companionId: 'comp-b',
+          companionId: '22222222-2222-4222-8222-222222222222',
         },
         api: {
-          companionId: 'comp-b',
+          companionId: '22222222-2222-4222-8222-222222222222',
         },
       }));
 
       const config = loadRuntimeChannelsConfig(dataDir, {});
 
-      expect(config.discord.companionId).toBe('comp-a');
-      expect(config.telegram.companionId).toBe('comp-b');
-      expect(config.api).toEqual({ companionId: 'comp-b' });
+      expect(config.discord.companionId).toBe('11111111-1111-4111-8111-111111111111');
+      expect(config.telegram.companionId).toBe('22222222-2222-4222-8222-222222222222');
+      expect(config.api).toEqual({ companionId: '22222222-2222-4222-8222-222222222222' });
     } finally {
       rmSync(dataDir, { recursive: true, force: true });
     }
@@ -296,7 +301,7 @@ describe('loadRuntimeChannelsConfig', () => {
     const dataDir = mkdtempSync(join(tmpdir(), 'psfn-channel-config-'));
     try {
       writeFileSync(join(dataDir, 'channels.json'), JSON.stringify({
-        api: { companionId: 'comp-a', token: 'nope' },
+        api: { companionId: '11111111-1111-4111-8111-111111111111', token: 'nope' },
       }));
       expect(() => loadRuntimeChannelsConfig(dataDir, {}))
         .toThrow('channels.json.api has unsupported keys: token');
@@ -501,6 +506,7 @@ describe('loadRuntimeChannelsConfig', () => {
           canonicalContactId: 'contact-primary-user',
           channelPrivacy: 'invite_only',
         },
+        'companion-ui': { channelPrivacy: 'private' },
       });
     } finally {
       rmSync(dataDir, { recursive: true, force: true });
@@ -525,7 +531,89 @@ describe('loadRuntimeChannelsConfig', () => {
       const config = loadRuntimeChannelsConfig(dataDir, {});
 
       expect(config.psfnAmica.enabled).toBe(false);
-      expect(buildExternalChannelProfiles(config)).toEqual({});
+      expect(buildExternalChannelProfiles(config)).toEqual({
+        'companion-ui': { channelPrivacy: 'private' },
+      });
+    } finally {
+      rmSync(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  it('loads companionUi channel defaults and overrides from channels.json (8ora)', () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'psfn-channel-config-'));
+    try {
+      writeFileSync(join(dataDir, 'channels.json'), JSON.stringify({
+        companionUi: {
+          channelPrivacy: 'invite_only',
+        },
+      }));
+
+      const config = loadRuntimeChannelsConfig(dataDir, {});
+
+      expect(config.companionUi).toEqual({
+        channelPrivacy: 'invite_only',
+      });
+      expect(buildExternalChannelProfiles(config)).toEqual({
+        'companion-ui': {
+          channelPrivacy: 'invite_only',
+        },
+      });
+    } finally {
+      rmSync(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects inert companionUi canonicalContactId config (8ora)', () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'psfn-channel-config-'));
+    try {
+      writeFileSync(join(dataDir, 'channels.json'), JSON.stringify({
+        companionUi: { channelPrivacy: 'private', canonicalContactId: 'contact-fleet-human' },
+      }));
+
+      expect(() => loadRuntimeChannelsConfig(dataDir, {})).toThrow(
+        'channels.json.companionUi has unsupported keys: canonicalContactId',
+      );
+    } finally {
+      rmSync(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects an invalid companionUi.channelPrivacy value (8ora)', () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'psfn-channel-config-'));
+    try {
+      writeFileSync(join(dataDir, 'channels.json'), JSON.stringify({
+        companionUi: { channelPrivacy: 'broadcast' },
+      }));
+
+      expect(() => loadRuntimeChannelsConfig(dataDir, {})).toThrow(
+        'channels.json.companionUi.channelPrivacy must be one of: private, invite_only, public',
+      );
+    } finally {
+      rmSync(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects unknown companionUi keys fail-closed (8ora)', () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'psfn-channel-config-'));
+    try {
+      writeFileSync(join(dataDir, 'channels.json'), JSON.stringify({
+        companionUi: { channelPrivacy: 'private', enabled: true },
+      }));
+
+      expect(() => loadRuntimeChannelsConfig(dataDir, {})).toThrow(
+        'channels.json.companionUi has unsupported keys: enabled',
+      );
+    } finally {
+      rmSync(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects an unknown companionUi key on save fail-closed (8ora)', () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'psfn-channel-config-'));
+    try {
+      expect(() => saveChannelsOwnerFile(dataDir, {
+        companionUi: { channelPrivacy: 'private', foo: 'bar' },
+      })).toThrow('channels.json.companionUi has unsupported keys: foo');
     } finally {
       rmSync(dataDir, { recursive: true, force: true });
     }
@@ -832,12 +920,12 @@ describe('discord multi-account config (multi-companion W1-P2)', () => {
 
   const accountA = {
     accountId: 'acct-a',
-    companionId: 'comp-a',
+    companionId: '11111111-1111-4111-8111-111111111111',
     tokenRef: { kind: 'env', envName: 'DISCORD_TOKEN_A' },
   };
   const accountB = {
     accountId: 'acct-b',
-    companionId: 'comp-b',
+    companionId: '22222222-2222-4222-8222-222222222222',
     tokenRef: { kind: 'env', envName: 'DISCORD_TOKEN_B' },
     heartbeatChannelId: '222',
     allowedBotUserIds: [' 999 '],
@@ -855,7 +943,7 @@ describe('discord multi-account config (multi-companion W1-P2)', () => {
       expect(config.discord.accounts).toEqual([
         {
           accountId: 'acct-a',
-          companionId: 'comp-a',
+          companionId: '11111111-1111-4111-8111-111111111111',
           tokenEnvVar: 'DISCORD_TOKEN_A',
           token: 'token-a',
           heartbeatChannelId: '',
@@ -864,7 +952,7 @@ describe('discord multi-account config (multi-companion W1-P2)', () => {
         },
         {
           accountId: 'acct-b',
-          companionId: 'comp-b',
+          companionId: '22222222-2222-4222-8222-222222222222',
           tokenEnvVar: 'DISCORD_TOKEN_B',
           token: 'token-b',
           heartbeatChannelId: '222',
@@ -899,7 +987,7 @@ describe('discord multi-account config (multi-companion W1-P2)', () => {
     withDataDir((dataDir) => {
       writeFileSync(join(dataDir, 'channels.json'), JSON.stringify({
         discord: {
-          companionId: 'comp-a',
+          companionId: '11111111-1111-4111-8111-111111111111',
           heartbeatChannelId: '111',
           accounts: [accountA],
         },
@@ -919,7 +1007,7 @@ describe('discord multi-account config (multi-companion W1-P2)', () => {
 
   it('rejects an account without a tokenRef', () => {
     withDataDir((dataDir) => {
-      writeAccounts(dataDir, [{ accountId: 'acct-a', companionId: 'comp-a' }]);
+      writeAccounts(dataDir, [{ accountId: 'acct-a', companionId: '11111111-1111-4111-8111-111111111111' }]);
       expect(() => loadRuntimeChannelsConfig(dataDir, {}))
         .toThrow('channels.json.discord.accounts[0].tokenRef must be configured');
     });
@@ -939,9 +1027,9 @@ describe('discord multi-account config (multi-companion W1-P2)', () => {
       expect(() => loadRuntimeChannelsConfig(dataDir, {}))
         .toThrow('duplicate accountId "acct-a"');
 
-      writeAccounts(dataDir, [accountA, { ...accountB, companionId: 'comp-a' }]);
+      writeAccounts(dataDir, [accountA, { ...accountB, companionId: '11111111-1111-4111-8111-111111111111' }]);
       expect(() => loadRuntimeChannelsConfig(dataDir, {}))
-        .toThrow('maps companion "comp-a" to more than one bot account');
+        .toThrow('maps companion "11111111-1111-4111-8111-111111111111" to more than one bot account');
 
       writeAccounts(dataDir, [
         accountA,
@@ -981,7 +1069,7 @@ describe('discord multi-account config (multi-companion W1-P2)', () => {
   it('validates accounts structurally on owner-file save', () => {
     withDataDir((dataDir) => {
       expect(() => saveChannelsOwnerFile(dataDir, {
-        discord: { accounts: [{ accountId: 'acct-a', companionId: 'comp-a' }] },
+        discord: { accounts: [{ accountId: 'acct-a', companionId: '11111111-1111-4111-8111-111111111111' }] },
       })).toThrow('channels.json.discord.accounts[0].tokenRef must be configured');
 
       expect(() => saveChannelsOwnerFile(dataDir, {
@@ -998,14 +1086,14 @@ describe('discord multi-account config (multi-companion W1-P2)', () => {
         DISCORD_TOKEN_B: 'token-b',
       });
 
-      expect(resolveDiscordCompanionView(config.discord, 'comp-b')).toEqual({
+      expect(resolveDiscordCompanionView(config.discord, '22222222-2222-4222-8222-222222222222')).toEqual({
         accountId: 'acct-b',
         heartbeatChannelId: '222',
         allowedBotUserIds: ['999'],
         groupMemory: { channelOverrides: {} },
       });
       // Companion without a bot account: inert defaults, not an error.
-      expect(resolveDiscordCompanionView(config.discord, 'comp-x')).toEqual({
+      expect(resolveDiscordCompanionView(config.discord, '33333333-3333-4333-8333-333333333333')).toEqual({
         heartbeatChannelId: '',
         allowedBotUserIds: [],
         groupMemory: { channelOverrides: {} },

@@ -1,0 +1,48 @@
+{
+  "$schema": "https://unpkg.com/knip@6.23.0/schema.json",
+  "workspaces": {
+    ".": {
+      "entry": [
+        "src/app/startup/index.ts",
+        "src/app/agent/main.ts",
+        "src/app/gateway/main.ts",
+        "src/app/operator/main.ts",
+        "src/app/e2e/contact-lifecycle-certification/agent-process.ts",
+        "src/app/e2e/icp-certification/agent-process.ts",
+        "scripts/**/*.{ts,mjs}",
+        "shakedown/harness/*.mjs"
+      ],
+      "project": [
+        "src/**/*.ts",
+        "scripts/**/*.{ts,mjs}",
+        "shakedown/harness/**/*.{ts,mts,mjs}"
+      ],
+      "ignoreDependencies": [
+        "@snazzah/davey",
+        "sherpa-onnx-node"
+      ]
+    },
+    "admin-ui": {
+      "project": [
+        "src/**/*.{ts,svelte}"
+      ],
+      "ignore": [
+        ".svelte-kit/**"
+      ],
+      "svelte": true
+    },
+    "companion-ui": {
+      "entry": [
+        "index.html",
+        "src/main.tsx",
+        "vite.config.ts",
+        "playwright.config.ts"
+      ],
+      "project": [
+        "src/**/*.{ts,tsx}",
+        "e2e/**/*.{ts,tsx}",
+        "vite/**/*.{ts,tsx}"
+      ]
+    }
+  }
+}

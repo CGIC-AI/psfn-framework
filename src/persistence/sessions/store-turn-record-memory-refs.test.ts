@@ -110,7 +110,7 @@ describe('turn-record retrieved-memory diet (psfn-framework-jsi9)', () => {
     const channelId = 'api:mem-diet';
     store.append({ channelId, role: 'user', content: 'hello', timestamp: 1_000 });
 
-    store.appendTurnRecord(buildTurnRecord(channelId, fullMemory()));
+    void store.appendTurnRecord(buildTurnRecord(channelId, fullMemory()));
 
     const persisted = readTurnRecordFile(dir);
     // Every verbatim memory body is gone from disk...

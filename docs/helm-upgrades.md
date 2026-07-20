@@ -1,8 +1,8 @@
 # Helm Fleet Upgrade Guide
 
-Read this document before changing any PSFN Helm release, including Carlini,
-Pi, and local validation clusters. It is the canonical upgrade brief: it calls
-out ordering constraints and operator-visible changes that are easy to miss.
+Read this document before changing any PSFN Helm release, including production
+and local validation clusters. It is the canonical upgrade brief: it calls out
+ordering constraints and operator-visible changes that are easy to miss.
 Detailed subsystem procedures remain in the linked runbooks.
 
 ## Current upgrade notes
@@ -135,6 +135,78 @@ Do not leave the one-time migration enabled in saved values. The receipt and
 quarantined legacy sources remain as recovery evidence. The complete snapshot,
 approval, receipt, retry, and restore procedure is in
 [Existing split fleets with shared per-companion owners](./operations.md#existing-split-fleets-with-shared-per-companion-owners).
+
+### Upgrade a legacy slug COMPANION_ID to the UUID identity contract
+
+Builds at or after the aylm wave require `COMPANION_ID` to be a lowercase
+RFC-4122 UUID. A deployment still running a legacy slug id fails closed on all
+three app processes at startup:
+
+```text
+Error: COMPANION_ID must be a lowercase RFC-4122 UUID, got "<legacy-slug>"
+```
+
+Nothing in the runtime mints the UUID — the operator generates it
+(`uuidgen | tr 'A-Z' 'a-z'`) and carries it into the release values. For a
+single-companion deployment the switch is data-safe because nothing durable is
+keyed off the id value:
+
+- Postgres stays on the `public` schema (`COMPANION_PG_SCHEMA` is an explicit
+  opt-in, never derived from `COMPANION_ID`).
+- Session journals are channel-keyed under `COMPANION_DATA_DIR` and their
+  integrity HMAC does not bind the companion id.
+- Redis `psfn:session-tail:<companionId>:…` keys embed the old id but are
+  rebuildable caches; the journal is the source of truth.
+- Keep `fleet.enabled=false`. Enabling fleet mode switches the data dir to the
+  UUID-derived `<runtimeRoot>/companions/<uuid>` path and orphans the existing
+  companion data.
+
+The two gateway worker proofs ARE derived from the companion id and must be
+re-derived for the new UUID against the same gateway HMAC keyring:
+
+```bash
+NEW_UUID=$(uuidgen | tr 'A-Z' 'a-z')
+COMPANION_ID="$NEW_UUID" GATEWAY_SESSION_HMAC_KEY=<gateway keyring value> \
+  npm run resolve:single-companion-auth
+# stdout: <agentToken>\t<sessionIntegrityToken>
+```
+
+Update the app secret with the new `GATEWAY_COMPANION_AUTH_TOKEN` (agent
+token) and `GATEWAY_SESSION_INTEGRITY_AUTH_TOKEN` (session-integrity token),
+then upgrade with the new id and image:
+
+```bash
+helm -n <ns> get values <release> -o yaml > live-values.yaml
+helm upgrade <release> deploy/helm/psfn -n <ns> \
+  -f live-values.yaml \
+  --set runtime.companionId="$NEW_UUID" \
+  --set psfnAppImage.tag=<new-tag> \
+  --set psfnAppImage.gitCommit=<new-sha> \
+  --set psfnAppImage.previousGitCommit=<previous-sha>
+```
+
+Never use `--reuse-values` across a chart version change: values blocks new to
+the chart (for example `fleet.*`) are absent from the merged values and
+template rendering fails with a nil-pointer error such as
+`at <.Values.fleet.enabled>: nil pointer evaluating interface {}.enabled`.
+Exporting the live values to a file and passing `-f` merges the new chart
+defaults correctly.
+
+Ordering with the charge/skills owner cutover above: the owner migration is
+bound to owner files, not to the runtime id. If the deployment's receipt at
+`SYSTEM_DATA_DIR/migrations/system-owner-fleet-reroot.json` already reports
+`status: completed`, do not re-run or re-enable the hook for the id change —
+a receipt written by a maintenance-pod run may record a generic maintenance
+companion id in its fleet entry, and that is expected. If the owner files have
+not been migrated yet, run that section first, using the new UUID as the
+migration's `companionId`.
+
+Validate with `scripts/ops/validate-kube-rollout.sh --expect-tag <new-tag>`:
+the UUID fail-closed error must be gone from all three processes, and the
+gateway `/v1/models` companion route must resolve. A simultaneous first
+rollout can show one benign agent restart if it exhausts its gateway RPC
+connect retries before the gateway is ready; it must recover on the next
+start.
 
 ### Choose the Garden administration topology
 

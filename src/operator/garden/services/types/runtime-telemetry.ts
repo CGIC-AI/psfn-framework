@@ -16,6 +16,7 @@ import type {
 } from '../../../../shared/telemetry/model-usage.js';
 import type { FatigueTuningReport } from '../../../../core/agent/fatigue/adaptive-tuning.js';
 import type { FatiguePolicyConfig } from '../../../../shared/contracts/charge-policy.js';
+import type { HumanAttentionPressureLedgerData } from '../../../../core/agent/fatigue/human-attention-ledger.js';
 import type {
   ModelUsageExportFormat,
   SerializedModelUsageExport,
@@ -26,6 +27,8 @@ export interface AdminChargeLedgerService {
     fatigue?: FatigueLedgerData;
     fatigueTuning?: FatigueTuningReport;
     fatigueSocialPolicy?: FatiguePolicyConfig['socialRegulation'];
+    humanAttention?: HumanAttentionPressureLedgerData;
+    humanAttentionPolicy?: FatiguePolicyConfig['humanAttention'];
   }>;
 }
 

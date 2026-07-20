@@ -325,6 +325,20 @@ button:focus-visible {
     calc(164px + env(safe-area-inset-bottom));
 }
 
+.thread-target-banner {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  width: fit-content;
+  margin: 0.5rem auto;
+  padding: 0.35rem 0.7rem;
+  border: 1px solid color-mix(in srgb, var(--accent, #9b7ac6) 45%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--surface, #201b29) 92%, transparent);
+  color: var(--text-muted, #aaa1b4);
+  font-size: 0.78rem;
+}
+
 .message-list {
   height: 100%;
   overflow: auto;
@@ -717,42 +731,6 @@ button:focus-visible {
   justify-content: flex-end;
   gap: 0.4rem;
   margin-top: 0.55rem;
-}
-
-.approval-toast {
-  border-color: rgba(201, 163, 90, 0.5);
-}
-
-.approval-toast > svg {
-  color: var(--color-gold-deep);
-}
-
-.approval-expiry {
-  margin-top: 0.3rem;
-  font-size: 0.78rem;
-  color: var(--color-gold-deep);
-}
-
-.approval-resolution {
-  margin-top: 0.4rem;
-  font-size: 0.82rem;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: var(--color-muted);
-}
-
-.approval-resolution.approved {
-  color: #2f7a45;
-}
-
-.approval-resolution.denied,
-.approval-resolution.blocked {
-  color: var(--color-error);
-}
-
-.approval-resolution.expired {
-  color: var(--color-muted);
 }
 
 .artifact-provenance {

@@ -3,28 +3,31 @@ import type {
   PurrMemory as CanonicalPurrMemory,
   MemoryScopeRef as CanonicalMemoryScopeRef,
 } from '../../../../src/faculties/memory/types.js';
-import type { TurnToolContextSnapshot } from '../../../../src/core/turns/snapshot.js';
+import type {
+  TurnPromptContextSnapshot as CanonicalTurnPromptContextSnapshot,
+  TurnToolContextSnapshot,
+} from '../../../../src/core/turns/snapshot.js';
 import type {
   ObservedMemory as CanonicalObservedMemory,
   ObservedScoredMemory as CanonicalObservedScoredMemory,
-  TurnMemorySnapshotRecord,
-  TurnSessionContextSnapshotRecord,
-  TurnSnapshotRecord,
 } from '../../../../src/core/turns/observability.js';
 import type { AdaptiveToolCatalogSource } from '../../../../src/core/agent/adaptive-tools-telemetry.js';
 import type { PromptPlan } from '../../../../src/core/agent/substrate-agent/turn-execution/prompt-plan.js';
 import type { CapabilityToken } from '../../../../src/system/capabilities/tokens.js';
+import type { SessionEntry as CanonicalSessionEntry } from '../../../../src/core/session/types.js';
 import type {
   RecurringCadence as CanonicalRecurringCadence,
   ScheduledTask as CanonicalScheduledTask,
 } from '../../../../src/core/scheduler/types.js';
 import type { PromptRegistryEntry as CanonicalPromptRegistryEntry } from '../../../../src/core/identity/prompt-registry.js';
+import type { CharacterCardV2 as CanonicalCharacterCardV2 } from '../../../../src/core/identity/types.js';
+import type { CharacterCardHistoryEntry as CanonicalCharacterCardHistoryEntry } from '../../../../src/core/identity/card-versioning.js';
+import type { SessionRoleEnvelopePreview as CanonicalSessionRoleEnvelopePreview } from '../../../../src/core/internal-role-envelopes/projections.js';
 import type {
   PromptRuntimeBlockId,
   PromptRuntimeBlockPlacement,
   PromptRuntimeBlockSchemaClassification,
   PromptRuntimeBlockVisibility,
-  PromptRuntimeEditableBlockId,
 } from '../../../../src/core/identity/prompt-runtime.js';
 import type { PromptLayer } from '../../../../src/core/identity/prompt-types.js';
 import type { RuntimePromptLayerSchemaClassification } from '../../../../src/core/identity/runtime-prompt-layers.js';
@@ -35,9 +38,49 @@ import type { ReflectionJournalEntry } from '../../../../src/persistence/journal
 import type { ReflectionMetacognitionJournalEntry } from '../../../../src/persistence/journals/reflection-metacognition-journal.js';
 import type { ReflectionDailyJournalEntry } from '../../../../src/persistence/journals/reflection-substrate.js';
 import type { ReflectionTemplate } from '../../../../src/core/scheduler/heartbeat-policy.js';
+import {
+  VALID_RELATIONSHIP_TYPES as CANONICAL_RELATIONSHIP_TYPES,
+  type ChannelPrivacyLevel as CanonicalChannelPrivacyLevel,
+  type Contact as CanonicalContact,
+  type ContactChannelIdentity as CanonicalContactChannelIdentity,
+  type ContactChannelLink as CanonicalContactChannelLink,
+  type ContactIdentityLinkVerification as CanonicalContactIdentityLinkVerification,
+  type ContactMutationAuditEntry as CanonicalContactMutationAuditEntry,
+  type RelationshipType as CanonicalRelationshipType,
+  type SocialGraphEntitySource as CanonicalSocialGraphEntitySource,
+  type SocialRelationshipKind as CanonicalSocialRelationshipKind,
+} from '../../../../src/core/contacts/types.js';
+import type { ContactProfileArtifact as CanonicalContactProfileArtifact } from '../../../../src/faculties/memory/memory-store-port.js';
+import type { MemoryWithheldSummary as CanonicalMemoryWithheldSummary } from '../../../../src/faculties/memory/withheld-summary.js';
+import type { ContactConversationChannelView as CanonicalContactConversationChannelView } from '../../../../src/operator/garden/services/contact-session-linker.js';
+import type { SchedulerMutationResult as CanonicalSchedulerMutationResult } from '../../../../src/operator/garden/services/scheduler-service.js';
 import type {
-  AdminSessionListData as CanonicalAdminSessionListData,
-  AdminSessionMessagesData as CanonicalAdminSessionMessagesData,
+  SubsystemHealthSnapshot as CanonicalSubsystemHealthSnapshot,
+  SubsystemLaneEvent as CanonicalSubsystemLaneEvent,
+  SubsystemLaneHealth as CanonicalSubsystemLaneHealth,
+  SubsystemLaneOutcome as CanonicalSubsystemLaneOutcome,
+  SubsystemLaneSource as CanonicalSubsystemLaneSource,
+  SubsystemLaneStatus as CanonicalSubsystemLaneStatus,
+} from '../../../../src/operator/garden/services/subsystem-health-service.js';
+import type { AdminSessionRoleEnvelopePreview as CanonicalAdminSessionRoleEnvelopePreview } from '../../../../src/operator/garden/services/types/continuity.js';
+import type { ContactUpdateResult as CanonicalContactUpdateResult } from '../../../../src/operator/garden/services/types/contacts.js';
+import type {
+  AdminTurnMemorySnapshotData as CanonicalAdminTurnMemorySnapshotData,
+  AdminTurnSessionContextSnapshotData as CanonicalAdminTurnSessionContextSnapshotData,
+  AdminTurnSnapshotData as CanonicalAdminTurnSnapshotData,
+} from '../../../../src/operator/garden/services/types/prompt-loom.js';
+import type { AdminSessionMessageOntologyView as CanonicalAdminSessionMessageOntologyView } from '../../../../src/operator/garden/services/types/sessions.js';
+import type {
+  ChannelInfo as CanonicalChannelInfo,
+  CompactionAuditView as CanonicalCompactionAuditView,
+} from '../../../../src/operator/garden/types.js';
+import type { DiscoveredModel as CanonicalDiscoveredModel } from '../../../../src/primitives/llm/discovery.js';
+import { CHANNEL_PRIVACY_VALUES } from '../../../../src/system/trust/context-envelope.js';
+import {
+  TRUST_LEVELS as CANONICAL_TRUST_LEVELS,
+  type TrustLevel as CanonicalTrustLevel,
+} from '../../../../src/system/trust/types.js';
+import type {
   RuntimePromptUpdateResult as CanonicalRuntimePromptUpdateResult,
 } from '../../../../src/operator/garden/services/types.js';
 import type {
@@ -57,6 +100,7 @@ export type {
   DashboardCostWindowUsage,
   DashboardModelUsageFreshness,
   DashboardModelUsageProjection,
+  DashboardModelUsageSparklinePoint,
   DashboardModelUsageState,
   DashboardSessionContextPressure,
   DashboardStats,
@@ -348,32 +392,13 @@ export interface AdminMemoryScopeMutationResult {
 }
 
 // Sessions
-export type ChannelInfo = CanonicalAdminSessionListData['channels'][number] & {
-  linkedContactId?: string;
-  linkedContactName?: string;
-};
+export type ChannelInfo = CanonicalChannelInfo;
 
-export interface SessionEntry {
-  id: number;
-  channelId?: string;
-  role: string;
-  content: string;
-  authorName?: string;
-  authorId?: string;
-  timestamp?: string | number;
-  toolCalls?: unknown[];
-  originChannelId?: string;
-  channelVisibility?: string;
-  metadata?: string;
-}
+export type SessionEntry = CanonicalSessionEntry;
 
-export type CompactionAuditView = CanonicalAdminSessionMessagesData['compactionAuditViews'][number];
+export type CompactionAuditView = CanonicalCompactionAuditView;
 
-export interface MemoryWithheldSummary {
-  totalCount: number;
-  reasonCounts: Record<string, number>;
-  relevanceBands?: Record<string, number>;
-}
+export type MemoryWithheldSummary = CanonicalMemoryWithheldSummary;
 
 export type AdminObservedMemory = CanonicalObservedMemory;
 
@@ -545,7 +570,11 @@ export interface AdminTurnPromptResponseSnapshotData {
  * AdminTurnSnapshotData.plan for current records; the optional string fields
  * here exist only on historical persisted records that predate the plan.
  */
-export interface AdminTurnPromptContextSnapshotData {
+export type AdminTurnPromptContextSnapshotData = Omit<
+  CanonicalTurnPromptContextSnapshot,
+  'providerObservability'
+> & {
+  providerObservability?: AdminTurnProviderObservabilityData;
   renderedStaticPrefix?: string;
   renderedDynamicSuffix?: string;
   runtimeContext?: string;
@@ -555,14 +584,13 @@ export interface AdminTurnPromptContextSnapshotData {
   finalSystemPrompt?: string;
   messages?: AdminTurnPromptContextMessage[];
   currentTurnInput?: string;
-  providerObservability?: AdminTurnProviderObservabilityData;
   response?: AdminTurnPromptResponseSnapshotData;
   inputSections?: AdminPromptSectionTelemetry[];
   runtimeContextSections?: AdminPromptSectionTelemetry[];
   memoryContextSections?: AdminPromptSectionTelemetry[];
   finalSystemSections?: AdminPromptSectionTelemetry[];
   sectionCacheability?: AdminPromptSectionCacheability[];
-}
+};
 
 export interface AdminTurnToolSchema {
   name: string;
@@ -604,9 +632,9 @@ export interface AdminAdaptiveToolSnapshotData {
 
 export type AdminTurnToolContextSnapshotData = TurnToolContextSnapshot;
 
-export type AdminTurnSessionContextSnapshotData = TurnSessionContextSnapshotRecord;
+export type AdminTurnSessionContextSnapshotData = CanonicalAdminTurnSessionContextSnapshotData;
 
-export type AdminTurnMemorySnapshotData = TurnMemorySnapshotRecord;
+export type AdminTurnMemorySnapshotData = CanonicalAdminTurnMemorySnapshotData;
 
 export interface AdminPromptPlanBlock {
   id: string;
@@ -628,103 +656,32 @@ export interface AdminPromptPlanData {
   scope: PromptPlan['scope'];
 }
 
-export type AdminTurnSnapshotData = Omit<TurnSnapshotRecord, 'promptContext'> & {
+export type AdminTurnSnapshotData = Omit<CanonicalAdminTurnSnapshotData, 'promptContext'> & {
   /** Historical persisted records may carry pre-plan prompt string fields. */
   promptContext?: AdminTurnPromptContextSnapshotData;
 };
 
-export interface SessionRoleEnvelopePreview {
-  schemaVersion: 1;
-  envelopeId: string;
-  internalRole: string;
-  summary: string;
-  sourceStage: string;
-  promotionTarget: string;
-  promotedRef?: string;
-}
+export type SessionRoleEnvelopePreview = CanonicalSessionRoleEnvelopePreview;
 
-export interface AdminSessionRoleEnvelopePreview {
-  sessionEntryId: number;
-  preview: SessionRoleEnvelopePreview;
-}
+export type AdminSessionRoleEnvelopePreview = CanonicalAdminSessionRoleEnvelopePreview;
 
-export interface AdminSessionMessageOntologyView {
-  sessionEntryId: number;
-  transportRole: SessionEntry['role'];
-  promptRole: 'user' | 'assistant' | 'toolResult' | 'custom';
-  semanticType: 'outwardSpeech' | 'toolResult' | 'systemNote' | 'mirror';
-  messageClass: 'outwardSpeech' | 'systemNote' | 'internalWhisper' | 'musing' | 'compaction' | 'continuity' | 'mirror' | null;
-  promptVisibility: 'prompt_visible' | 'operator_only';
-  displayLabel: string;
-}
+export type AdminSessionMessageOntologyView = CanonicalAdminSessionMessageOntologyView;
 
 // Contacts
-export interface ContactChannelIdentity {
-  channel: string;
-  userId: string;
-}
+export type ContactChannelIdentity = CanonicalContactChannelIdentity;
 
-export interface ContactChannelLink extends ContactChannelIdentity {
-  privacyLevel: ChannelPrivacyLevel;
-  firstSeen?: string;
-  lastSeen?: string;
-}
+export type ContactChannelLink = CanonicalContactChannelLink;
 
-export type ChannelPrivacyLevel = 'private' | 'invite_only' | 'public' | 'broadcast';
+export type ChannelPrivacyLevel = CanonicalChannelPrivacyLevel;
 
-export interface Contact {
-  id: string;
-  displayName: string;
-  nickname?: string;
-  discordUserId?: string;
-  trustLevel: string;
-  relationshipType: string;
-  channelIdentities?: ContactChannelIdentity[];
-  channels?: ContactChannelLink[];
-  conversationChannels?: Array<{
-    channel: string;
-    channelId: string;
-    privacyLevel?: ChannelPrivacyLevel;
-    firstSeen: string;
-    lastSeen: string;
-  }>;
-  emotionalBaseline?: Record<string, number>;
-  firstSeen: string;
-  lastSeen: string;
-  notes?: string;
-}
+export type Contact = CanonicalContact;
 
-export interface ContactProfileArtifact {
-  memoryCount: number;
-  displayName?: string;
-  summary?: string;
-  updatedAt?: number;
-  sourceMemoryIds?: string[];
-}
+export type ContactProfileArtifact = CanonicalContactProfileArtifact;
 
-export interface ContactConversationChannelView {
-  channel: string;
-  channelId: string;
-  userId?: string;
-  privacyLevel?: ChannelPrivacyLevel;
-  lastSeen?: string;
-}
+export type ContactConversationChannelView = CanonicalContactConversationChannelView;
 
-export type SocialGraphEntitySource = 'contact' | 'memory' | 'manual' | 'system';
-export type SocialRelationshipKind =
-  | 'partner'
-  | 'family'
-  | 'friend'
-  | 'acquaintance'
-  | 'colleague'
-  | 'parent'
-  | 'child'
-  | 'sibling'
-  | 'caregiver'
-  | 'household'
-  | 'manager'
-  | 'direct_report'
-  | 'other';
+export type SocialGraphEntitySource = CanonicalSocialGraphEntitySource;
+export type SocialRelationshipKind = CanonicalSocialRelationshipKind;
 
 export interface AdminContactSocialGraphEntityView {
   id: string;
@@ -798,82 +755,26 @@ export interface AdminContactListData {
   mutationAuditQuery: unknown;
 }
 
-export interface ContactUpdateResult {
-  ok: boolean;
-  message: string;
-  contact?: Contact;
-  relatedChannels?: ContactConversationChannelView[];
-}
+export type ContactUpdateResult = CanonicalContactUpdateResult;
 
-export type TrustLevel = 'primary' | 'trusted' | 'regular' | 'public';
+export type TrustLevel = CanonicalTrustLevel;
 
-export type RelationshipType = 'partner' | 'family' | 'friend' | 'acquaintance' | 'stranger' | 'ai_companion';
+export type RelationshipType = CanonicalRelationshipType;
 
-export const RELATIONSHIP_TYPES: RelationshipType[] = [
-  'partner', 'family', 'friend', 'acquaintance', 'stranger', 'ai_companion',
-];
+export const TRUST_LEVELS = CANONICAL_TRUST_LEVELS;
 
-export const CHANNEL_PRIVACY_LEVELS: ChannelPrivacyLevel[] = [
-  'private', 'invite_only', 'public', 'broadcast',
-];
+export const RELATIONSHIP_TYPES = CANONICAL_RELATIONSHIP_TYPES;
 
-export interface ContactIdentityLinkVerification {
-  id: string;
-  status: string;
-  sourceChannel: string;
-  sourceUserId: string;
-  targetChannel: string;
-  targetUserId: string;
-  contactId: string;
-  nonce?: string;
-  expiresAt?: string;
-}
+export const CHANNEL_PRIVACY_LEVELS = CHANNEL_PRIVACY_VALUES;
 
-export interface ContactMutationAuditEntry {
-  id: string;
-  contactId: string;
-  field: string;
-  actor: string;
-  oldValue?: string;
-  newValue?: string;
-  timestamp: string;
-}
+export type ContactIdentityLinkVerification = CanonicalContactIdentityLinkVerification;
+
+export type ContactMutationAuditEntry = CanonicalContactMutationAuditEntry;
 
 // Identity
-export interface CharacterCardV2 {
-  spec: string;
-  spec_version: string;
-  data: {
-    name: string;
-    description: string;
-    personality: string;
-    scenario: string;
-    first_mes: string;
-    mes_example: string;
-    system_prompt: string;
-    post_history_instructions: string;
-    tags: string[];
-    creator: string;
-    creator_notes: string;
-    character_version: string;
-    extensions: Record<string, unknown>;
-    [key: string]: unknown;
-  };
-}
+export type CharacterCardV2 = CanonicalCharacterCardV2;
 
-export interface CharacterCardHistoryEntry {
-  version: number;
-  timestamp: string;
-  updatedBy: string;
-  reason?: string;
-  previousChecksum: string;
-  newChecksum: string;
-  previousCard?: CharacterCardV2;
-  newCard?: CharacterCardV2;
-  // Legacy compat -- old API responses used changedBy instead of updatedBy
-  changedBy?: string;
-  checksum?: string;
-}
+export type CharacterCardHistoryEntry = CanonicalCharacterCardHistoryEntry;
 
 export interface AdminIdentityData {
   card: CharacterCardV2;
@@ -890,9 +791,7 @@ export interface PromptDiffResult {
   newContent: string;
 }
 
-export type PromptRegistryEntry = CanonicalPromptRegistryEntry & {
-  content?: string;
-};
+export type PromptRegistryEntry = CanonicalPromptRegistryEntry;
 
 export interface PromptRuntimeBlock {
   id: PromptRuntimeBlockId;
@@ -983,25 +882,10 @@ export interface NorthStarSnapshotData {
   };
 }
 
-export type RuntimePromptUpdateResult = Omit<CanonicalRuntimePromptUpdateResult, 'updated'> & {
-  updated?: Array<PromptRuntimeEditableBlockId | string>;
-};
+export type RuntimePromptUpdateResult = CanonicalRuntimePromptUpdateResult;
 
 // Models
-export interface DiscoveredModel {
-  id: string;
-  description?: string;
-  providerHints?: string[];
-  contextLength?: number;
-  maxCompletionTokens?: number;
-  pricing?: Record<string, string | number | undefined>;
-  supportsVision?: boolean;
-  supportsReasoning?: boolean;
-  zdrAvailable?: boolean;
-  zdrEndpointCount?: number;
-  zdrProviderTags?: string[];
-  zdrProviderNames?: string[];
-}
+export type DiscoveredModel = CanonicalDiscoveredModel;
 
 // Scheduler
 export type SchedulerCadenceTimezone = Extract<CanonicalRecurringCadence, { timezone: 'local' | 'utc' }>['timezone'];
@@ -1013,58 +897,20 @@ export interface AdminSchedulerData {
   reflections: ReflectionTemplate[];
 }
 
-export interface SchedulerMutationResult {
-  ok: boolean;
-  message: string;
-}
+export type SchedulerMutationResult = CanonicalSchedulerMutationResult;
 
 // Subsystem health (background lanes)
-export type SubsystemLaneOutcome = 'ran' | 'skipped' | 'degraded' | 'failed';
+export type SubsystemLaneOutcome = CanonicalSubsystemLaneOutcome;
 
-export type SubsystemLaneStatus =
-  | 'ok'
-  | 'skipped'
-  | 'degraded'
-  | 'failed'
-  | 'stale'
-  | 'paused'
-  | 'never';
+export type SubsystemLaneStatus = CanonicalSubsystemLaneStatus;
 
-export type SubsystemLaneSource = 'event_bus' | 'scheduler';
+export type SubsystemLaneSource = CanonicalSubsystemLaneSource;
 
-export interface SubsystemLaneEvent {
-  at: number;
-  outcome: SubsystemLaneOutcome;
-  reason?: string;
-  error?: string;
-  counts?: Record<string, number>;
-}
+export type SubsystemLaneEvent = CanonicalSubsystemLaneEvent;
 
-export interface SubsystemLaneHealth {
-  id: string;
-  label: string;
-  description: string;
-  source: SubsystemLaneSource;
-  sinceProcessStart: boolean;
-  status: SubsystemLaneStatus;
-  lastEventAt: number | null;
-  lastOutcome: SubsystemLaneOutcome | null;
-  lastReason: string | null;
-  lastError: string | null;
-  counts: Record<string, number>;
-  observedEventCount: number;
-  recent: SubsystemLaneEvent[];
-  intervalMs?: number;
-  lastRunAt?: number | null;
-  nextRunDueAt?: number | null;
-  deniedReason?: string | null;
-}
+export type SubsystemLaneHealth = CanonicalSubsystemLaneHealth;
 
-export interface SubsystemHealthSnapshot {
-  processStartedAt: number;
-  generatedAt: number;
-  lanes: SubsystemLaneHealth[];
-}
+export type SubsystemHealthSnapshot = CanonicalSubsystemHealthSnapshot;
 
 // Skills
 export type SkillRequirements = SkillEntry['requires'];

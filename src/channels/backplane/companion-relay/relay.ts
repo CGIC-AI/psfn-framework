@@ -5,6 +5,8 @@ import type { EventBus } from '../../../shared/event-bus.js';
 import type {
   CompanionArtifactCreatedPayload,
   CompanionArtifactPreviewSource,
+  CompanionApprovalRequestedPayload,
+  CompanionApprovalResolvedPayload,
   CompanionEventEnvelope,
   CompanionEventKind,
   CompanionToolActivityPayload,
@@ -17,6 +19,7 @@ import { createComponentLogger } from '../../../shared/logger.js';
 import { isRecord } from '../../../shared/utils/types.js';
 import { toErrorMessage } from '../../../shared/utils/errors.js';
 import { materializeContainedFileSync } from '../../../shared/utils/contained-file.js';
+import type { ConfirmationApprovalOwner } from '../../../system/capabilities/confirmation-queue.js';
 
 const log = createComponentLogger('CompanionEventRelay');
 
@@ -25,6 +28,8 @@ const MAX_PREVIEW_REGISTRY_ENTRIES = 500;
 const MAX_SUBSCRIBERS = 32;
 
 export interface CompanionEventSubscriber {
+  /** Authenticated companion whose events this subscriber may receive. */
+  companionId: string;
   /** Event kinds this subscriber is scoped to receive. Deny by default. */
   allowedKinds: readonly CompanionEventKind[];
   onEvent(envelope: CompanionEventEnvelope): void;
@@ -43,6 +48,13 @@ export interface CompanionArtifactPreviewEntry {
 
 export interface CompanionEventRelayOptions {
   eventBus: EventBus;
+  /**
+   * Canonical current/historical approval binding lookup. Approval events fail
+   * closed when their queued parent/shard lineage cannot be verified.
+   */
+  approvalBindingOf?: (approvalId: string) => ConfirmationApprovalOwner | undefined;
+  /** Owner used only by the single-companion runtime when an event omits it. */
+  defaultCompanionId?: string;
   /**
    * Absolute directories artifact previews may be served from. Registration
    * of a preview source outside every root is rejected (fail closed). An
@@ -69,6 +81,9 @@ export class CompanionEventRelay {
   private readonly previewRoots: readonly string[];
   private readonly previewRootByCompanionId: Readonly<Record<string, string>> | null;
   private readonly maxPreviewBytes: number;
+  private readonly defaultCompanionId: string | undefined;
+  private readonly approvalBindingOf:
+    ((approvalId: string) => ConfirmationApprovalOwner | undefined) | undefined;
   private readonly unsubscribes: Array<() => void> = [];
 
   constructor(options: CompanionEventRelayOptions) {
@@ -83,27 +98,46 @@ export class CompanionEventRelay {
       ]))
       : null;
     this.maxPreviewBytes = options.maxPreviewBytes ?? DEFAULT_MAX_ARTIFACT_PREVIEW_BYTES;
+    this.defaultCompanionId = options.defaultCompanionId;
+    this.approvalBindingOf = options.approvalBindingOf;
 
     this.unsubscribes.push(
-      options.eventBus.on('companion.approval.requested', ({ payload }) => {
-        this.publish({ kind: 'approval.requested', payload, emittedAt: new Date().toISOString() });
+      options.eventBus.on('companion.approval.requested', ({ payload, companionId, shardId }) => {
+        this.publish(companionId, {
+          kind: 'approval.requested',
+          payload,
+          companionId,
+          ...(shardId !== undefined ? { shardId } : {}),
+          emittedAt: new Date().toISOString(),
+        });
       }),
-      options.eventBus.on('companion.approval.resolved', ({ payload }) => {
-        this.publish({ kind: 'approval.resolved', payload, emittedAt: new Date().toISOString() });
+      options.eventBus.on('companion.approval.resolved', ({ payload, companionId, shardId }) => {
+        this.publish(companionId, {
+          kind: 'approval.resolved',
+          payload,
+          companionId,
+          ...(shardId !== undefined ? { shardId } : {}),
+          emittedAt: new Date().toISOString(),
+        });
       }),
       options.eventBus.on('companion.artifact.created', ({ payload, preview, channelId, companionId }) => {
-        this.registerPreview(payload, preview, companionId);
-        this.publish({
+        const owner = companionId ?? this.defaultCompanionId;
+        this.registerPreview(payload, preview, owner);
+        this.publish(owner, {
           kind: 'artifact.created',
           payload,
+          ...(owner ? { companionId: owner } : {}),
           ...(channelId ? { channelId } : {}),
           emittedAt: new Date().toISOString(),
         });
       }),
-      options.eventBus.on('companion.tool.activity', ({ payload, channelId }) => {
-        this.publish({
+      options.eventBus.on('companion.tool.activity', ({ payload, channelId, companionId }) => {
+        this.publish(companionId ?? this.defaultCompanionId, {
           kind: 'tool.activity',
           payload,
+          ...(companionId ?? this.defaultCompanionId
+            ? { companionId: companionId ?? this.defaultCompanionId }
+            : {}),
           ...(channelId ? { channelId } : {}),
           emittedAt: new Date().toISOString(),
         });
@@ -139,8 +173,20 @@ export class CompanionEventRelay {
     return preview;
   }
 
-  private publish(envelope: CompanionEventEnvelope): void {
+  private publish(companionId: string | undefined, envelope: CompanionEventEnvelope): void {
+    if (!companionId) {
+      log.error('Refusing to publish ownerless companion event', { kind: envelope.kind });
+      return;
+    }
+    if (envelope.companionId !== companionId
+      || !this.approvalRoutingMetadataMatches(envelope)) {
+      log.error('Refusing to publish companion event with mismatched routing metadata', {
+        kind: envelope.kind,
+      });
+      return;
+    }
     for (const subscriber of [...this.subscribers]) {
+      if (subscriber.companionId !== companionId) continue;
       if (!subscriber.allowedKinds.includes(envelope.kind)) continue;
       try {
         subscriber.onEvent(envelope);
@@ -152,6 +198,29 @@ export class CompanionEventRelay {
         this.subscribers.delete(subscriber);
       }
     }
+  }
+
+  private approvalRoutingMetadataMatches(envelope: CompanionEventEnvelope): boolean {
+    if (envelope.kind === 'approval.requested') {
+      const payload = envelope.payload as CompanionApprovalRequestedPayload;
+      const binding = this.approvalBindingOf?.(payload.id);
+      if (!binding
+        || binding.companionId !== envelope.companionId
+        || binding.shardId !== envelope.shardId) {
+        return false;
+      }
+      if (!payload.attribution) return envelope.shardId === undefined;
+      return payload.attribution.parentId === envelope.companionId
+        && payload.attribution.shardId === envelope.shardId;
+    }
+    if (envelope.kind === 'approval.resolved') {
+      const payload = envelope.payload as CompanionApprovalResolvedPayload;
+      const binding = this.approvalBindingOf?.(payload.id);
+      return binding?.companionId === envelope.companionId
+        && binding.shardId === envelope.shardId
+        && payload.shardId === envelope.shardId;
+    }
+    return envelope.shardId === undefined;
   }
 
   private registerPreview(

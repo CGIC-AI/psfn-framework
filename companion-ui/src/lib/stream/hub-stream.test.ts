@@ -9,6 +9,7 @@ import {
   HubStreamStore,
   reduceHubStreamState,
   type HubStreamClientLike,
+  type HubStreamState,
 } from './hub-stream.js';
 
 describe('hub stream reducer', () => {
@@ -50,6 +51,177 @@ describe('hub stream reducer', () => {
       sessionId: 'session-1',
       channelId: 'satellite.endpoint:session-1',
     });
+  });
+
+  it('stores an ordinary v1 approval.requested with no v2 fields', () => {
+    let state = createInitialHubStreamState('2026-06-17T00:00:00.000Z');
+    state = reduceHubStreamState(state, {
+      type: 'hub.inbound',
+      at: '2026-06-17T00:00:01.000Z',
+      event: {
+        message: {
+          type: 'approval.requested',
+          data: {
+            id: 'ap-1',
+            title: 'Write file',
+            requestedAt: '2026-06-17T00:00:01.000Z',
+            redactedContext: 'ctx',
+            status: 'pending',
+          },
+        },
+      },
+    });
+    expect(state.approvals).toHaveLength(1);
+    const entry = state.approvals[0];
+    if (!entry) throw new Error('missing approval entry');
+    expect(entry).toMatchObject({ id: 'ap-1', status: 'pending' });
+    expect(entry.sourceSystem).toBeUndefined();
+    expect(entry.attribution).toBeUndefined();
+    expect(entry.grantMode).toBeUndefined();
+  });
+
+  it('passes v2 attribution/grant fields through and drops unknown future keys', () => {
+    let state = createInitialHubStreamState('2026-06-17T00:00:00.000Z');
+    state = reduceHubStreamState(state, {
+      type: 'hub.inbound',
+      at: '2026-06-17T00:00:01.000Z',
+      event: {
+        message: {
+          type: 'approval.requested',
+          data: {
+            id: 'ap-2',
+            title: 'send email',
+            requestedAt: '2026-06-17T00:00:01.000Z',
+            redactedContext: 'ctx',
+            status: 'pending',
+            sourceSystem: 'shard',
+            attribution: { parentId: 'companion-1', parentLabel: 'Parent', shardId: 'shard-1', shardLabel: 'Shard' },
+            action: 'send email',
+            scope: 'outbound',
+            reason: 'ctx',
+            grantMode: { kind: 'once' },
+            // a tolerated-but-unknown key must not enter store state
+            futureField: 'ignore me',
+          } as never,
+        },
+      },
+    });
+    const entry = state.approvals[0];
+    if (!entry) throw new Error('missing approval entry');
+    expect(entry.sourceSystem).toBe('shard');
+    expect(entry.attribution).toEqual({
+      parentId: 'companion-1',
+      parentLabel: 'Parent',
+      shardId: 'shard-1',
+      shardLabel: 'Shard',
+    });
+    expect(entry.action).toBe('send email');
+    expect(entry.grantMode).toEqual({ kind: 'once' });
+    expect(entry).not.toHaveProperty('futureField');
+  });
+
+  it('does not resurrect a terminal approval when its request frame is replayed', () => {
+    let state = createInitialHubStreamState('2026-06-17T00:00:00.000Z');
+    state = reduceHubStreamState(state, {
+      type: 'hub.inbound',
+      at: '2026-06-17T00:00:01.000Z',
+      event: {
+        message: {
+          type: 'approval.requested',
+          data: {
+            id: 'ap-replay',
+            title: 'Original request',
+            requestedAt: '2026-06-17T00:00:01.000Z',
+            redactedContext: 'Original context',
+            status: 'pending',
+          },
+        },
+      },
+    });
+    state = reduceHubStreamState(state, {
+      type: 'hub.inbound',
+      at: '2026-06-17T00:00:02.000Z',
+      event: {
+        message: {
+          type: 'approval.resolved',
+          data: {
+            id: 'ap-replay',
+            status: 'approved',
+            resolvedAt: '2026-06-17T00:00:02.000Z',
+          },
+        },
+      },
+    });
+    state = reduceHubStreamState(state, {
+      type: 'hub.inbound',
+      at: '2026-06-17T00:00:03.000Z',
+      event: {
+        message: {
+          type: 'approval.requested',
+          data: {
+            id: 'ap-replay',
+            title: 'Replayed request',
+            requestedAt: '2026-06-17T00:00:01.000Z',
+            redactedContext: 'Replayed context',
+            status: 'pending',
+          },
+        },
+      },
+    });
+
+    expect(state.approvals).toEqual([expect.objectContaining({
+      id: 'ap-replay',
+      title: 'Original request',
+      status: 'approved',
+      resolvedAt: '2026-06-17T00:00:02.000Z',
+    })]);
+  });
+
+  it('does not extend or replace a pending approval when its immutable id is replayed', () => {
+    let state = createInitialHubStreamState('2026-06-17T00:00:00.000Z');
+    state = reduceHubStreamState(state, {
+      type: 'hub.inbound',
+      at: '2026-06-17T00:00:01.000Z',
+      event: {
+        message: {
+          type: 'approval.requested',
+          data: {
+            id: 'ap-pending-replay',
+            title: 'Original request',
+            requestedAt: '2026-06-17T00:00:01.000Z',
+            expiresAt: '2026-06-17T00:00:02.000Z',
+            redactedContext: 'Original context',
+            status: 'pending',
+          },
+        },
+      },
+    });
+    state = reduceHubStreamState(state, {
+      type: 'hub.inbound',
+      at: '2026-06-17T00:00:03.000Z',
+      event: {
+        message: {
+          type: 'approval.requested',
+          data: {
+            id: 'ap-pending-replay',
+            title: 'Replacement request',
+            requestedAt: '2026-06-17T00:00:03.000Z',
+            expiresAt: '2026-06-17T01:00:00.000Z',
+            redactedContext: 'Replacement context',
+            status: 'pending',
+          },
+        },
+      },
+    });
+
+    expect(state.approvals).toEqual([expect.objectContaining({
+      id: 'ap-pending-replay',
+      title: 'Original request',
+      requestedAt: '2026-06-17T00:00:01.000Z',
+      expiresAt: '2026-06-17T00:00:02.000Z',
+      redactedContext: 'Original context',
+      status: 'pending',
+    })]);
   });
 
   it('accumulates assistant live deltas and clears them on final text', () => {
@@ -102,7 +274,23 @@ describe('hub stream reducer', () => {
   });
 
   it('surfaces disconnects and failures honestly', () => {
-    let state = createInitialHubStreamState('2026-06-17T00:00:00.000Z');
+    let state: HubStreamState = {
+      ...createInitialHubStreamState('2026-06-17T00:00:00.000Z'),
+      session: { eventCapabilities: ['approvals.v2'] },
+      approvals: [{
+        id: 'approval-1',
+        title: 'Approval',
+        requestedAt: '2026-06-17T00:00:00.000Z',
+        redactedContext: 'Context',
+        status: 'pending' as const,
+      }],
+      approvalResolutions: {
+        'approval-old': {
+          status: 'denied' as const,
+          resolvedAt: '2026-06-17T00:00:00.000Z',
+        },
+      },
+    };
     state = reduceHubStreamState(state, {
       type: 'client.state',
       at: '2026-06-17T00:00:01.000Z',
@@ -110,6 +298,9 @@ describe('hub stream reducer', () => {
     });
 
     expect(state.connection).toBe('disconnected');
+    expect(state.session).toBeNull();
+    expect(state.approvals).toEqual([]);
+    expect(state.approvalResolutions).toEqual({});
 
     state = reduceHubStreamState(state, {
       type: 'client.error',

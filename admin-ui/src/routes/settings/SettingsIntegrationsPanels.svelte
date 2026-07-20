@@ -2,6 +2,7 @@
   import { setContext } from 'svelte';
   import SettingFieldLabel from '$lib/components/settings/SettingFieldLabel.svelte';
   import SettingsCollapsibleSection from '$lib/components/settings/SettingsCollapsibleSection.svelte';
+  import DurationInput from '$lib/components/settings/DurationInput.svelte';
   import { settingsSimpleSectionAnchorId } from '$lib/components/settings/navigation';
   import {
     SETTINGS_FIELD_ERRORS_CONTEXT,
@@ -170,12 +171,12 @@
     </div>
     <div>
       <SettingFieldLabel
-        label="CLI Timeout (ms)"
+        label="CLI Timeout"
         keys="obsidianTimeoutMs"
         forId="obsidianTimeoutMs"
         class="block text-xs font-semibold text-shadow-700 mb-1"
       />
-      <input type="number" id="obsidianTimeoutMs" class="input-garden w-28" bind:value={obsidianTimeoutMs} min={1000} max={30000} step={1000} />
+      <DurationInput id="obsidianTimeoutMs" min={1000} max={30000} bind:value={obsidianTimeoutMs} />
       <p class="text-xs text-shadow-500 mt-0.5">Timeout for CLI commands (1000-30000ms)</p>
     </div>
   </SettingsCollapsibleSection>

@@ -127,6 +127,118 @@ describe('mergeCompanionSettingsOverlay', () => {
     mergedSidecar.adapter.sessionLabel = 'mutated';
     expect(overlaySidecar.adapter.sessionLabel).toBe('a');
   });
+
+  it('overrides per-companion image defaults and falls back to global values', () => {
+    const base: EditableSettings = {
+      imageProvider: 'fal',
+      imageFalCreateModel: 'xai/grok-imagine-image',
+      imageFalEditModel: 'xai/grok-imagine-image/quality/edit',
+      imageSelfieEditModel: 'fal-ai/nano-banana-2/edit',
+    };
+
+    const merged = mergeCompanionSettingsOverlay(base, {
+      imageProvider: 'comfyui',
+      imageSelfieEditModel: 'xai/grok-imagine-image/quality/edit',
+    });
+
+    expect(merged).toMatchObject({
+      imageProvider: 'comfyui',
+      imageFalCreateModel: 'xai/grok-imagine-image',
+      imageFalEditModel: 'xai/grok-imagine-image/quality/edit',
+      imageSelfieEditModel: 'xai/grok-imagine-image/quality/edit',
+    });
+    expect(base.imageProvider).toBe('fal');
+    expect(base.imageSelfieEditModel).toBe('fal-ai/nano-banana-2/edit');
+  });
+
+  it('overrides per-companion model selection and deep-merges purpose keys over globals', () => {
+    const base: EditableSettings = {
+      modelPurposeSelection: {
+        chat: 'chat-primary',
+        vision: 'chat-primary',
+      },
+    };
+
+    const merged = mergeCompanionSettingsOverlay(base, {
+      modelPurposeSelection: { vision: 'vision-flash' },
+    });
+
+    // Deep merge: the companion overrides vision only; the global chat
+    // selection survives; the base object is untouched.
+    expect(merged.modelPurposeSelection).toEqual({
+      chat: 'chat-primary',
+      vision: 'vision-flash',
+    });
+    expect(base.modelPurposeSelection).toEqual({
+      chat: 'chat-primary',
+      vision: 'chat-primary',
+    });
+  });
+
+  it('lets two companions hold divergent model selections over the same base (23pp)', () => {
+    const base: EditableSettings = {};
+    const companionA = makeCompanionDir({
+      modelPurposeSelection: { chat: 'big-brain-opus', vision: 'vision-flash' },
+    });
+    const companionB = makeCompanionDir({
+      modelPurposeSelection: { chat: 'economy-chat' },
+    });
+    const companionC = makeCompanionDir();
+
+    const effectiveA = resolveEffectiveRuntimeSettings(base, companionA);
+    const effectiveB = resolveEffectiveRuntimeSettings(base, companionB);
+    const effectiveC = resolveEffectiveRuntimeSettings(base, companionC);
+
+    expect(effectiveA.modelPurposeSelection).toEqual({
+      chat: 'big-brain-opus',
+      vision: 'vision-flash',
+    });
+    expect(effectiveB.modelPurposeSelection).toEqual({ chat: 'economy-chat' });
+    expect(effectiveA.modelPurposeSelection?.chat).not.toBe(effectiveB.modelPurposeSelection?.chat);
+    // No overlay = byte-identical base (global-only fallback).
+    expect(effectiveC).toBe(base);
+    expect(effectiveC.modelPurposeSelection).toBeUndefined();
+  });
+
+  it('rejects structurally invalid model selection overlays fail-closed', () => {
+    const unknownPurposeDir = makeCompanionDir({
+      modelPurposeSelection: { bigBrain: 'chat-primary' },
+    });
+    expect(() => resolveEffectiveRuntimeSettings({}, unknownPurposeDir)).toThrow(
+      /unknown model purpose "bigBrain"/,
+    );
+
+    const malformedSlotDir = makeCompanionDir({
+      modelPurposeSelection: { chat: 'bad slot/key' },
+    });
+    expect(() => resolveEffectiveRuntimeSettings({}, malformedSlotDir)).toThrow(
+      /characters outside/,
+    );
+  });
+
+  it('accepts per-companion MoA model selections', () => {
+    const dir = makeCompanionDir({
+      moaReferenceModels: ['openrouter:alpha/one', 'openrouter:beta/two'],
+      moaAggregatorModel: 'openrouter:gamma/aggregate',
+    });
+    const effective = resolveEffectiveRuntimeSettings({}, dir);
+    expect(effective.moaReferenceModels).toEqual(['openrouter:alpha/one', 'openrouter:beta/two']);
+    expect(effective.moaAggregatorModel).toBe('openrouter:gamma/aggregate');
+  });
+
+  it('rejects invalid image provider and model overrides fail-closed', () => {
+    const providerDir = makeCompanionDir({ imageProvider: 'unknown-provider' });
+    expect(() => resolveEffectiveRuntimeSettings({}, providerDir)).toThrow(
+      /imageProvider.*fal.*comfyui/,
+    );
+
+    const modelDir = makeCompanionDir({
+      imageFalEditModel: 'not-in-the-image-catalog',
+    });
+    expect(() => resolveEffectiveRuntimeSettings({}, modelDir)).toThrow(
+      /imageFalEditModel.*image model catalog/,
+    );
+  });
 });
 
 describe('resolveEffectiveRuntimeSettings', () => {
@@ -163,6 +275,21 @@ describe('COMPANION_SETTINGS_OVERLAY_WHITELIST', () => {
     expect(isCompanionSettingsOverlayKey('uiThemeId')).toBe(true);
     expect(isCompanionSettingsOverlayKey('voiceTargetGuildId')).toBe(true);
     expect(isCompanionSettingsOverlayKey('discordTriggerReactions')).toBe(true);
+    expect(isCompanionSettingsOverlayKey('imageProvider')).toBe(true);
+    expect(isCompanionSettingsOverlayKey('imageFalCreateModel')).toBe(true);
+    expect(isCompanionSettingsOverlayKey('imageFalEditModel')).toBe(true);
+    expect(isCompanionSettingsOverlayKey('imageSelfieEditModel')).toBe(true);
+    expect(isCompanionSettingsOverlayKey('modelPurposeSelection')).toBe(true);
+    expect(isCompanionSettingsOverlayKey('moaReferenceModels')).toBe(true);
+    expect(isCompanionSettingsOverlayKey('moaAggregatorModel')).toBe(true);
+    // The catalog itself stays models.json-owned and gateway-global.
+    expect(isCompanionSettingsOverlayKey('modelCatalog')).toBe(false);
+    expect(isCompanionSettingsOverlayKey('modelRoleAssignments')).toBe(false);
+    expect(isCompanionSettingsOverlayKey('modelRoster')).toBe(false);
+    expect(isCompanionSettingsOverlayKey('primaryModel')).toBe(false);
+    // Embedding identity is shared pgvector infrastructure — never per-companion.
+    expect(isCompanionSettingsOverlayKey('embeddingModel')).toBe(false);
+    expect(isCompanionSettingsOverlayKey('embeddingDims')).toBe(false);
     // Cluster-global keys are not overlay-eligible.
     expect(isCompanionSettingsOverlayKey('capabilityTier')).toBe(false);
     expect(isCompanionSettingsOverlayKey('sessionHistoryBudgetPct')).toBe(false);

@@ -20,7 +20,6 @@ import { agentLoopWithScheduler } from './scheduled-agent-loop.js';
 import { isTurnId } from '../turns/id.js';
 import { EmotionState } from '../emotion/state.js';
 import { parseSessionEmotionState } from '../emotion/session-metadata.js';
-import { DEFAULT_COMPANION_ID } from '../identity/companion-naming.js';
 import { MESSAGE_CLASSES } from './message-classes.js';
 import {
   notePendingPaidDeliverable,
@@ -36,6 +35,8 @@ import { Scheduler } from '../scheduler/scheduler.js';
 import { wirePostTurnActionRuntime } from '../../app/startup/composition/post-turn-actions.js';
 import { createAgentFacingIcpAutonomyRuntime } from '../icp/agent-facing-autonomy.js';
 import { CapabilityRuntime } from '../../system/capabilities/runtime.js';
+import type { CapabilityAccess } from '../../system/capabilities/access.js';
+import { deriveShardCapabilityGrant } from '../../system/capabilities/shard-derivation.js';
 import { saveCapabilityTierConfig } from '../../system/config/capability-tier-config.js';
 import {
   ExternalCommunicationRateLimiter,
@@ -64,6 +65,7 @@ class SubstrateAgent extends RuntimeSubstrateAgent {
 }
 
 const TEST_COMPANION_NAME = 'Companion';
+const TEST_COMPANION_ID = '11111111-1111-4111-8111-111111111111';
 const TEST_SYSTEM_PROMPT = `You are ${TEST_COMPANION_NAME}.`;
 const TEST_USER_GREETING = `Hello, ${TEST_COMPANION_NAME}!`;
 const TEST_ASSISTANT_RESPONSE = `Mock response from ${TEST_COMPANION_NAME}`;
@@ -253,7 +255,7 @@ function makeConfig(overrides?: Partial<SubstrateConfig>): SubstrateConfig {
     discordToken: '',
     discordBotId: '',
     characterCardPath: '',
-    companionId: DEFAULT_COMPANION_ID,
+    companionId: TEST_COMPANION_ID,
     characterName: TEST_COMPANION_NAME,
     dataDir: './data',
     databasePath: './data/test.db',
@@ -671,6 +673,31 @@ describe('SubstrateAgent construction', () => {
     const refreshedModel = setModelSpy.mock.calls.at(-1)?.[0] as { id: string };
     expect(refreshedModel.id).toBe('openrouter/moonshotai/kimi-k2.5');
     setModelSpy.mockRestore();
+  });
+
+  it('fails startup when the configured chat model cannot resolve in production layout', () => {
+    const originalLayoutMode = process.env.PSFN_RUNTIME_LAYOUT_MODE;
+    const originalNodeEnv = process.env.NODE_ENV;
+    process.env.PSFN_RUNTIME_LAYOUT_MODE = 'production';
+    process.env.NODE_ENV = 'production';
+    const config = makeConfig({
+      modelRegistry: { schemaVersion: 1, models: [] },
+    });
+
+    try {
+      expect(() => new SubstrateAgent(
+        new EventBus(),
+        makeMockLLMProvider(),
+        makeMockSessionManager(),
+        'System prompt',
+        config,
+      )).toThrow("No eligible model configured for purpose 'chat'");
+    } finally {
+      if (originalLayoutMode === undefined) delete process.env.PSFN_RUNTIME_LAYOUT_MODE;
+      else process.env.PSFN_RUNTIME_LAYOUT_MODE = originalLayoutMode;
+      if (originalNodeEnv === undefined) delete process.env.NODE_ENV;
+      else process.env.NODE_ENV = originalNodeEnv;
+    }
   });
 
   it('uses llmProvider stream transport in gateway runtime mode', async () => {
@@ -2640,9 +2667,9 @@ describe('SubstrateAgent.handleMessage', () => {
     }));
 
     expect(sessionManager.recordUserMessage).not.toHaveBeenCalled();
-    expect((sessionManager.recordSystemMessage as any).mock.calls[0][5]).toBe(DEFAULT_COMPANION_ID);
-    expect((sessionManager.buildContext as any).mock.calls[0][4]).toBe(DEFAULT_COMPANION_ID);
-    expect((sessionManager.recordAssistantMessage as any).mock.calls[0][4]).toBe(DEFAULT_COMPANION_ID);
+    expect((sessionManager.recordSystemMessage as any).mock.calls[0][5]).toBe(TEST_COMPANION_ID);
+    expect((sessionManager.buildContext as any).mock.calls[0][4]).toBe(TEST_COMPANION_ID);
+    expect((sessionManager.recordAssistantMessage as any).mock.calls[0][4]).toBe(TEST_COMPANION_ID);
     expect(sessionManager.scheduleAutoCompactionBetweenTurns).not.toHaveBeenCalled();
 
     const prompt = (sessionManager.buildContext as any).mock.calls[0][1] as string;
@@ -6791,5 +6818,108 @@ describe('SubstrateAgent turn cancellation identity (mmo9.6.1)', () => {
 
     gate.release();
     await turn;
+  });
+});
+
+describe('explicit capability access injection (mus2.1)', () => {
+  it('injected immutable custom access governs the capability seam over the disk runtime and tier defaults', () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'psfn-explicit-access-'));
+    try {
+      saveCapabilityTierConfig(dataDir, { tier: 'autonomous', customTokens: [] });
+      const capabilityRuntime = new CapabilityRuntime({ dataDir });
+      const config = makeConfig({
+        dataDir,
+        databasePath: join(dataDir, 'test.db'),
+        capabilityTier: 'autonomous',
+      });
+      const agent = new SubstrateAgent(
+        new EventBus(),
+        makeMockLLMProvider(),
+        makeMockSessionManager(),
+        'System prompt',
+        config,
+      );
+      agent.setCapabilityRuntime(capabilityRuntime);
+
+      const resolveAccess = () => (agent as unknown as {
+        resolveCapabilityAccess(): CapabilityAccess;
+      }).resolveCapabilityAccess();
+      expect(resolveAccess()).toBe(capabilityRuntime);
+
+      const derived = deriveShardCapabilityGrant({
+        companionId: 'companion-parent-1',
+        tier: 'autonomous',
+        customTokens: [],
+      });
+      agent.setCapabilityAccess(derived.access);
+
+      // The same resolution seam feeds tool gates (withCapabilityGates) and
+      // prompt tool availability (buildDynamicPromptTemplateVariables), so an
+      // identical object here means both surfaces see identical tokens.
+      expect(resolveAccess()).toBe(derived.access);
+      expect(config.capabilityTier).toBe('custom');
+      expect([...resolveAccess().getGrantedTokens()]).toEqual([...derived.tokens]);
+      expect(resolveAccess().has('shard.spawn')).toBe(true);
+      // Masked though the autonomous parent holds it: the derived access is
+      // the final authorization boundary, not the parent tier.
+      expect(resolveAccess().has('world.control')).toBe(false);
+      expect(resolveAccess().has('memory.delete')).toBe(false);
+
+      // Owner-file churn plus the refresh hook must not widen, narrow, or
+      // replace an injected launch snapshot (running-shard invariant).
+      saveCapabilityTierConfig(dataDir, { tier: 'nursery', customTokens: [] });
+      config.runtimeHooks?.refreshCapabilities?.();
+      expect(resolveAccess()).toBe(derived.access);
+      expect(config.capabilityTier).toBe('custom');
+      expect(resolveAccess().has('shard.spawn')).toBe(true);
+
+      // Clearing the explicit access restores runtime-backed resolution.
+      agent.setCapabilityAccess(null);
+      expect(resolveAccess()).toBe(capabilityRuntime);
+      expect(config.capabilityTier).toBe('nursery');
+    } finally {
+      rmSync(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  it('explicit custom access works without any disk-backed CapabilityRuntime', () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'psfn-explicit-access-nodisk-'));
+    try {
+      const config = makeConfig({
+        dataDir,
+        databasePath: join(dataDir, 'test.db'),
+        capabilityTier: 'custom',
+      });
+      const agent = new SubstrateAgent(
+        new EventBus(),
+        makeMockLLMProvider(),
+        makeMockSessionManager(),
+        'System prompt',
+        config,
+      );
+      const resolveAccess = () => (agent as unknown as {
+        resolveCapabilityAccess(): CapabilityAccess;
+      }).resolveCapabilityAccess();
+
+      // Without an injected access, the no-runtime `custom` path fails closed
+      // to an empty grant — copying config.capabilityTier is insufficient.
+      expect(resolveAccess().getGrantedTokens().size).toBe(0);
+
+      const derived = deriveShardCapabilityGrant({
+        companionId: 'companion-parent-1',
+        tier: 'custom',
+        customTokens: ['identity.read', 'world.read', 'shard.spawn'],
+      });
+      agent.setCapabilityAccess(derived.access);
+
+      expect(resolveAccess()).toBe(derived.access);
+      expect([...resolveAccess().getGrantedTokens()]).toEqual([
+        'identity.read',
+        'shard.spawn',
+        'world.read',
+      ]);
+    } finally {
+      rmSync(dataDir, { recursive: true, force: true });
+    }
   });
 });

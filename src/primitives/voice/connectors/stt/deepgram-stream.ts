@@ -1,4 +1,5 @@
 import { createComponentLogger } from '../../../../shared/logger.js';
+import { toError } from '../../../../shared/utils/errors.js';
 import type {
   SttStreamConfig,
   SttStreamSession,
@@ -192,10 +193,6 @@ class TranscriptQueue implements AsyncIterable<SttTranscriptChunk> {
       },
     };
   }
-}
-
-function toError(value: unknown): Error {
-  return value instanceof Error ? value : new Error(String(value));
 }
 
 function asFiniteNumber(value: unknown): number | undefined {

@@ -53,6 +53,15 @@ describe('Garden route capability catalogue', () => {
       });
     expect(resolveGardenRouteCapability('PATCH', '/api/admin/settings')?.capability.authorization)
       .toMatchObject({ action: 'settings.write', baseRole: 'admin' });
+    expect(resolveGardenRouteCapability('POST', '/v1/chat/completions')?.capability)
+      .toMatchObject({
+        body: { mode: 'required', maxBytes: 1_048_576 },
+        authorization: {
+          action: 'companion.interact',
+          baseRole: 'guest',
+          resource: { scope: 'garden_surface', area: 'garden_ui' },
+        },
+      });
     expect(resolveGardenRouteCapability('POST', '/api/admin/contacts/contact-a/merge')?.capability.authorization)
       .toMatchObject({
         action: 'contacts.manage',
@@ -137,6 +146,30 @@ describe('Garden route capability catalogue', () => {
     )?.capability.authorization).toMatchObject({
       action: 'privacy.break_glass',
       requirements: { assurance: 'oauth', confirmation: 'explicit' },
+    });
+    expect(resolveGardenRouteCapability(
+      'GET',
+      '/api/admin/shards/shard-a/configuration',
+    )?.capability).toMatchObject({
+      body: { mode: 'forbidden' },
+      authorization: {
+        action: 'audit.read',
+        baseRole: 'admin',
+      },
+    });
+    expect(resolveGardenRouteCapability(
+      'PATCH',
+      '/api/admin/shards/shard-a/configuration',
+    )?.capability).toMatchObject({
+      body: { mode: 'required' },
+      authorization: {
+        action: 'settings.write',
+        baseRole: 'admin',
+        requirements: {
+          assurance: 'webauthn_uv',
+          confirmation: 'explicit',
+        },
+      },
     });
   });
 

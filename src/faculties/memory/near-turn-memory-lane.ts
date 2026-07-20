@@ -4,6 +4,7 @@ import type { SessionManager } from '../../core/session/manager.js';
 import type { NearTurnMemoryCadenceConfig } from '../../system/config/scheduler-config.js';
 import type { MemoryStorePort } from './memory-store-port.js';
 import { buildStaleMemoryReviewInput } from './maintenance-review.js';
+import { isTestingSessionId } from '../../core/session/session-id.js';
 
 const log = createComponentLogger('NearTurnMemoryLane');
 
@@ -148,6 +149,7 @@ export class NearTurnMemoryLane {
     }
 
     const sessionId = this.sessionManager.resolveSessionChannelId(message.channelId);
+    if (isTestingSessionId(sessionId)) return null;
     if (this.sessionManager.isSessionRetiredOrQuarantined?.(sessionId)) return null;
     const nextCount = (this.turnCountBySession.get(sessionId) ?? 0) + 1;
     this.turnCountBySession.set(sessionId, nextCount);
@@ -191,6 +193,13 @@ export class NearTurnMemoryLane {
    */
   async execute(action: Pick<InferredPostTurnAction, 'id' | 'channelId' | 'payload'>): Promise<void> {
     const sessionId = this.resolveActionSessionId(action);
+    if (isTestingSessionId(sessionId)) {
+      log.info('Skipping near-turn memory run for testing session', {
+        sessionId,
+        actionId: action.id,
+      });
+      return;
+    }
     if (this.sessionManager.isSessionRetiredOrQuarantined?.(sessionId)) {
       log.info('Skipping near-turn memory run for retired session', {
         sessionId,

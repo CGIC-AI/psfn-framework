@@ -1,5 +1,8 @@
 import { CapabilityRuntime } from '../../system/capabilities/runtime.js';
-import type { CapabilityAccess } from '../../system/capabilities/access.js';
+import type {
+  CapabilityAccess,
+  CapabilityGrantSnapshot,
+} from '../../system/capabilities/access.js';
 import type { CapabilityTier } from '../../system/config/runtime-config-contracts.js';
 import type { ResolvedCompanionsFleetConfig } from '../../system/config/companions-config.js';
 
@@ -89,6 +92,25 @@ export class GatewayCapabilityTierResolver {
       );
     }
     return this.resolveCompanionRuntime(companionId);
+  }
+
+  /**
+   * Atomic owner grant for security-sensitive companion-scoped admission.
+   * The returned tier, custom tokens, and effective tokens all come from one
+   * validated owner-file read. Multi-companion callers must supply the
+   * authenticated connection identity; there is no gateway-root fallback.
+   */
+  snapshotOwnerGrantStrict(companionId: string | undefined): CapabilityGrantSnapshot {
+    if (!this.multiCompanion) {
+      return this.baseRuntime.snapshotOwnerGrant();
+    }
+    if (!companionId) {
+      throw new Error(
+        'Multi-companion capability grant snapshot requires an authenticated companion identity '
+        + '(fail closed)',
+      );
+    }
+    return this.resolveCompanionRuntime(companionId).snapshotOwnerGrant();
   }
 
   private resolveCompanionRuntime(companionId: string): CapabilityRuntime {

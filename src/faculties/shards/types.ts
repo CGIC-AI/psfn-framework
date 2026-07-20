@@ -6,6 +6,10 @@ import type {
   CompanionId,
   ShardCompanionId,
 } from '../../shared/routing/companion-id.js';
+import type { CapabilityTier } from '../../system/capabilities/tier-types.js';
+import type { CapabilityToken } from '../../system/capabilities/tokens.js';
+import type { SubstrateMessage } from '../../shared/contracts/runtime.js';
+import type { SatelliteRoutingMetadata } from '../../core/agent/satellite-adapter-port.js';
 
 // ── Shard types ──
 // Ephemeral sub-agent instances for parallel task execution.
@@ -64,6 +68,8 @@ export interface ShardTaggedOutputProvenance {
   source: ShardTaggedOutputSource;
   sourceToolName?: string;
   toolCallId?: string;
+  workerKind?: 'shard' | 'subagent';
+  subagentId?: string;
   lineage: ShardResultLineageEnvelope;
   tags: string[];
 }
@@ -105,6 +111,109 @@ export interface ShardRuntimeRecord {
   mergeReview: ShardMergeReview;
 }
 
+/**
+ * Immutable, audit-safe evidence for the capability authority bound to one
+ * shard launch. Routing capability arrays remain separate and cannot alter
+ * these authorization fields.
+ */
+export interface ShardCapabilityGrantEvidence {
+  readonly parentTier: CapabilityTier;
+  readonly derivedTier: 'custom';
+  readonly tokens: readonly CapabilityToken[];
+  readonly ownerVersion: string;
+  readonly grantDigest: string;
+  readonly denialMask: readonly CapabilityToken[];
+  readonly derivationVersion: string;
+}
+
+export interface ShardModelSelection {
+  provider: string;
+  model: string;
+  maxOutputTokens: number;
+  contextWindow?: number;
+}
+
+export interface ShardWorkerBudget {
+  maxTurns: number;
+  maxOutputTokens: number;
+  maxChargeUnits: number;
+}
+
+export interface ShardReadOnlyConfiguration {
+  capabilityTier: {
+    parent: CapabilityTier;
+    effective: 'custom';
+  };
+  trust: {
+    source: 'parent_runtime';
+    mutable: false;
+  };
+  identity: {
+    parentCompanionId: CompanionId;
+    shardCompanionId: ShardCompanionId;
+    mutable: false;
+  };
+  prompts: {
+    source: 'parent_launch_snapshot';
+    mutable: false;
+  };
+  capabilityGrant: ShardCapabilityGrantEvidence;
+}
+
+export interface ShardConfigurationValues {
+  model: ShardModelSelection;
+  workerBudget: ShardWorkerBudget;
+  readOnly: ShardReadOnlyConfiguration;
+}
+
+export interface ShardConfigurationOverrides {
+  model: Pick<ShardModelSelection, 'provider' | 'model'> | null;
+  workerBudget: Partial<ShardWorkerBudget>;
+  readOnly: null;
+}
+
+export interface ShardConfigurationSnapshot {
+  schemaVersion: 1;
+  shardId: string;
+  parentCompanionId: CompanionId;
+  lifecycleState: ShardLifecycleState;
+  health: ShardHealthState;
+  source: {
+    kind: 'parent_launch';
+    companionId: CompanionId;
+    revision: string;
+    capabilityOwnerVersion: string;
+    grantDigest: string;
+    capturedAt: number;
+  };
+  inherited: ShardConfigurationValues;
+  override: ShardConfigurationOverrides;
+  effective: ShardConfigurationValues;
+  allowed: {
+    models: ShardModelSelection[];
+    workerBudget: ShardWorkerBudget;
+  };
+  lineage: ShardResultLineageEnvelope;
+  updatedAt?: number;
+  updatedBy?: string;
+}
+
+export interface ShardConfigurationOverridePatch {
+  model?: Pick<ShardModelSelection, 'provider' | 'model'> | null;
+  workerBudget?: Partial<ShardWorkerBudget> | null;
+}
+
+export type ShardConfigurationMutationResult =
+  | {
+      ok: true;
+      snapshot: ShardConfigurationSnapshot;
+    }
+  | {
+      ok: false;
+      code: 'not_found' | 'invalid_override';
+      message: string;
+    };
+
 export interface ShardConfig {
   name: string;                    // Human-readable label
   task: string;                    // The prompt to send to the shard
@@ -133,8 +242,44 @@ export interface ShardResult {
   failureReason?: string;
   capabilities: string[];
   requiredCapabilities: string[];
+  capabilityGrant: ShardCapabilityGrantEvidence;
   lineage: ShardResultLineageEnvelope;
   artifactReturn?: ArtifactReturnBatch;
 }
 
 export type ShardStatus = 'running' | 'completed' | 'failed';
+
+export interface SatelliteDelegationRequest {
+  message: SubstrateMessage;
+  routing?: SatelliteRoutingMetadata;
+  shardName?: string;
+}
+
+export interface ActiveShard {
+  id: string;
+  name: string;
+  task: string;
+  startedAt: number;
+  channelId: string;
+  state: ShardLifecycleState;
+  stateReason: string;
+  health: ShardHealthState;
+  lastTransitionAt: number;
+  lastHeartbeatAt: number;
+  heartbeatStaleAfterMs: number;
+  heartbeatDisconnectAfterMs: number;
+  capabilities: string[];
+  requiredCapabilities: string[];
+  capabilityGrant: ShardCapabilityGrantEvidence;
+  lineage: ShardResult['lineage'];
+  failureReason?: string;
+}
+
+/**
+ * Ordinary-priority shard->parent ICP delivery. Lives here (not in port.ts)
+ * so the parent ICP runtime can depend on the type without importing the
+ * execution-port module, which reaches back into the manager.
+ */
+export interface ShardParentIcpPort {
+  sendShardParentIcp(shardId: string, content: string): Promise<string>;
+}

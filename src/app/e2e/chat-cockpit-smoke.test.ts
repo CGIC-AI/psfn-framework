@@ -19,6 +19,7 @@ afterEach(() => {
 
 describe('chat-cockpit smoke harness', () => {
   it('writes a JSON report artifact for the split-runtime bootstrap and chat check', async () => {
+    // eslint-disable-next-line @typescript-eslint/no-misused-promises -- Callback API intentionally preserves its Promise-returning lifecycle contract.
     const server = createServer(async (req, res) => {
       const url = new URL(req.url ?? '/', 'http://127.0.0.1');
 

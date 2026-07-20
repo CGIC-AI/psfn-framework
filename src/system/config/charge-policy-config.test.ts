@@ -543,6 +543,83 @@ describe('charge policy config', () => {
           },
         },
       })).toThrow('fatigue.socialRegulation contains unknown keys: dailyMessageQuota');
+
+      const { primary: _primary, ...missingPrimaryThreshold } =
+        defaultSeed.fatigue.humanAttention.trustThresholds;
+      expect(() => saveChargePolicyConfig(dataDir, {
+        ...defaultSeed,
+        fatigue: {
+          ...defaultSeed.fatigue,
+          humanAttention: {
+            ...defaultSeed.fatigue.humanAttention,
+            trustThresholds: missingPrimaryThreshold,
+          },
+        },
+      })).toThrow('fatigue.humanAttention.trustThresholds.primary');
+
+      expect(() => saveChargePolicyConfig(dataDir, {
+        ...defaultSeed,
+        fatigue: {
+          ...defaultSeed.fatigue,
+          humanAttention: {
+            ...defaultSeed.fatigue.humanAttention,
+            trustThresholds: {
+              ...defaultSeed.fatigue.humanAttention.trustThresholds,
+              trusted: 2,
+            },
+          },
+        },
+      })).toThrow('humanAttention trust thresholds must strictly increase');
+
+      expect(() => saveChargePolicyConfig(dataDir, {
+        ...defaultSeed,
+        fatigue: {
+          ...defaultSeed.fatigue,
+          humanAttention: {
+            ...defaultSeed.fatigue.humanAttention,
+            trustThresholds: {
+              public: 3,
+              regular: 6,
+              trusted: 12,
+              primary: 12,
+            },
+          },
+        },
+      })).toThrow('humanAttention trust thresholds must strictly increase');
+
+      expect(() => saveChargePolicyConfig(dataDir, {
+        ...defaultSeed,
+        fatigue: {
+          ...defaultSeed.fatigue,
+          humanAttention: {
+            ...defaultSeed.fatigue.humanAttention,
+            trustThresholds: {
+              public: 1,
+              regular: 2,
+              trusted: 3,
+              primary: 4,
+            },
+            channelWeights: {
+              ...defaultSeed.fatigue.humanAttention.channelWeights,
+              directMention: 4,
+            },
+          },
+        },
+      })).toThrow('primary threshold must exceed every single-message channel weight');
+
+      expect(() => saveChargePolicyConfig(dataDir, {
+        ...defaultSeed,
+        fatigue: {
+          ...defaultSeed.fatigue,
+          humanAttention: {
+            ...defaultSeed.fatigue.humanAttention,
+            channelWeights: {
+              ...defaultSeed.fatigue.humanAttention.channelWeights,
+              directMention: 0,
+            },
+          },
+        },
+      })).toThrow('fatigue.humanAttention.channelWeights.directMention must be a finite number > 0');
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

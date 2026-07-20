@@ -1,6 +1,141 @@
 {{- if not .Values.certificates.enabled -}}
 {{- fail "certificates.enabled must be true because PSFN Kubernetes network transports require mTLS certificates" -}}
 {{- end -}}
+{{- if .Values.fleet.enabled -}}
+{{- if not .Values.fleetAuth.enabled -}}
+{{- fail "fleet.enabled=true requires fleetAuth.enabled=true" -}}
+{{- end -}}
+{{- if not .Values.networkPolicy.enabled -}}
+{{- fail "fleet.enabled=true requires networkPolicy.enabled=true" -}}
+{{- end -}}
+{{- if .Values.bootstrap.seedOwnerFiles -}}
+{{- fail "fleet.enabled=true requires bootstrap.seedOwnerFiles=false; companions.json and owner roots must be pre-provisioned" -}}
+{{- end -}}
+{{- if lt (len .Values.fleet.companions) 2 -}}
+{{- fail "fleet.enabled=true requires at least two registered companions" -}}
+{{- end -}}
+{{- if not (hasPrefix "/" .Values.fleet.runtimeRoot) -}}
+{{- fail "fleet.runtimeRoot must be absolute" -}}
+{{- end -}}
+{{- if ne (trimSuffix "/" .Values.fleet.runtimeRoot) .Values.fleet.runtimeRoot -}}
+{{- fail "fleet.runtimeRoot must not end with /" -}}
+{{- end -}}
+{{- if ne (int .Values.workloads.gateway.replicaCount) 1 -}}
+{{- fail "fleet.enabled=true requires workloads.gateway.replicaCount=1" -}}
+{{- end -}}
+{{- if ne (int .Values.workloads.agent.replicaCount) 1 -}}
+{{- fail "fleet.enabled=true requires workloads.agent.replicaCount=1 for each companion identity" -}}
+{{- end -}}
+{{- if ne (int .Values.workloads.garden.replicaCount) 1 -}}
+{{- fail "fleet.enabled=true requires workloads.garden.replicaCount=1" -}}
+{{- end -}}
+{{- if .Values.hostPorts.garden.enabled -}}
+{{- fail "fleet.enabled=true forbids hostPorts.garden.enabled=true" -}}
+{{- end -}}
+{{- $fleetIds := dict -}}
+{{- $schemas := dict -}}
+{{- $gatewayCompanionClaims := dict -}}
+{{- $workspaceClaims := dict -}}
+{{- $authSecrets := dict -}}
+{{- range $index, $companion := .Values.fleet.companions -}}
+{{- $companionId := $companion.companionId | default "" -}}
+{{- if not (regexMatch "^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$" $companionId) -}}
+{{- fail (printf "fleet.companions[%d].companionId must be one lowercase RFC4122 UUID" $index) -}}
+{{- end -}}
+{{- if hasKey $fleetIds $companionId -}}
+{{- fail (printf "fleet companionId is duplicated: %s" $companionId) -}}
+{{- end -}}
+{{- $_ := set $fleetIds $companionId true -}}
+{{- $serviceName := include "psfn.fleetAgentAdminServiceName" (dict "root" $ "companionId" $companionId) -}}
+{{- $deploymentName := include "psfn.fleetAgentDeploymentName" (dict "root" $ "companionId" $companionId) -}}
+{{- if or (gt (len $serviceName) 63) (not (regexMatch "^[a-z0-9](?:[-a-z0-9]*[a-z0-9])?$" $serviceName)) -}}
+{{- fail (printf "fleet companion %s derives invalid admin Service name %s" $companionId $serviceName) -}}
+{{- end -}}
+{{- if or (gt (len $deploymentName) 63) (not (regexMatch "^[a-z0-9](?:[-a-z0-9]*[a-z0-9])?$" $deploymentName)) -}}
+{{- fail (printf "fleet companion %s derives invalid agent Deployment name %s" $companionId $deploymentName) -}}
+{{- end -}}
+{{- $schema := $companion.postgresSchema | default "" -}}
+{{- if or (gt (len $schema) 63) (not (regexMatch "^[a-z_][a-z0-9_]*$" $schema)) (hasPrefix "pg_" $schema) -}}
+{{- fail (printf "fleet.companions[%d].postgresSchema must be a non-reserved lowercase Postgres identifier" $index) -}}
+{{- end -}}
+{{- if hasKey $schemas $schema -}}
+{{- fail (printf "fleet postgresSchema is duplicated: %s" $schema) -}}
+{{- end -}}
+{{- $_ := set $schemas $schema true -}}
+{{- $companionClaim := $companion.companionDataClaim | default "" -}}
+{{- if not $companionClaim -}}
+{{- fail (printf "fleet.companions[%d].companionDataClaim is required" $index) -}}
+{{- end -}}
+{{- if hasKey $gatewayCompanionClaims $companionClaim -}}
+{{- fail (printf "fleet companionDataClaim is duplicated: %s" $companionClaim) -}}
+{{- end -}}
+{{- $_ := set $gatewayCompanionClaims $companionClaim true -}}
+{{- $workspaceClaim := $companion.workspaceClaim | default "" -}}
+{{- if not $workspaceClaim -}}
+{{- fail (printf "fleet.companions[%d].workspaceClaim is required" $index) -}}
+{{- end -}}
+{{- if hasKey $workspaceClaims $workspaceClaim -}}
+{{- fail (printf "fleet workspaceClaim is duplicated: %s" $workspaceClaim) -}}
+{{- end -}}
+{{- $_ := set $workspaceClaims $workspaceClaim true -}}
+{{- $authSecretName := $companion.authSecret.name | default "" -}}
+{{- if not $authSecretName -}}
+{{- fail (printf "fleet.companions[%d].authSecret.name is required" $index) -}}
+{{- end -}}
+{{- if hasKey $authSecrets $authSecretName -}}
+{{- fail (printf "fleet authSecret.name is duplicated: %s" $authSecretName) -}}
+{{- end -}}
+{{- $_ := set $authSecrets $authSecretName true -}}
+{{- if not ($companion.authSecret.sessionIntegrityKey | default "") -}}
+{{- fail (printf "fleet.companions[%d].authSecret.sessionIntegrityKey is required" $index) -}}
+{{- end -}}
+{{- if not ($companion.authSecret.companionAuthKey | default "") -}}
+{{- fail (printf "fleet.companions[%d].authSecret.companionAuthKey is required" $index) -}}
+{{- end -}}
+{{- end -}}
+{{- $first := index .Values.fleet.companions 0 -}}
+{{- $firstCompanionDir := printf "%s/companions/%s" .Values.fleet.runtimeRoot $first.companionId -}}
+{{- $firstWorkspace := printf "%s/workspaces/personal/%s" .Values.fleet.runtimeRoot $first.companionId -}}
+{{- if ne .Values.runtime.companionId $first.companionId -}}
+{{- fail "fleet runtime.companionId must equal the first registered companion" -}}
+{{- end -}}
+{{- if ne .Values.runtime.systemDataDir (printf "%s/system-data" .Values.fleet.runtimeRoot) -}}
+{{- fail "fleet runtime.systemDataDir must equal <fleet.runtimeRoot>/system-data" -}}
+{{- end -}}
+{{- if ne .Values.runtime.companionDataDir $firstCompanionDir -}}
+{{- fail "fleet runtime.companionDataDir must equal the first canonical companion root" -}}
+{{- end -}}
+{{- if ne .Values.runtime.characterCardPath (printf "%s/companion.json" $firstCompanionDir) -}}
+{{- fail "fleet runtime.characterCardPath must equal the first canonical companion card" -}}
+{{- end -}}
+{{- if ne .Values.runtime.workspacePath $firstWorkspace -}}
+{{- fail "fleet runtime.workspacePath must equal the first canonical Personal Workspace" -}}
+{{- end -}}
+{{- if ne .Values.persistence.companionData.existingClaim $first.companionDataClaim -}}
+{{- fail "fleet persistence.companionData.existingClaim must equal the first companionDataClaim" -}}
+{{- end -}}
+{{- if ne .Values.persistence.workspace.existingClaim $first.workspaceClaim -}}
+{{- fail "fleet persistence.workspace.existingClaim must equal the first workspaceClaim" -}}
+{{- end -}}
+{{- range $workloadName, $image := dict "gateway" .Values.workloads.gateway.image "agent" .Values.workloads.agent.image "garden" .Values.workloads.garden.image -}}
+{{- $tag := default $.Values.psfnAppImage.tag $image.tag -}}
+{{- $digest := default $.Values.psfnAppImage.digest $image.digest -}}
+{{- if and (not $tag) (not $digest) -}}
+{{- fail (printf "fleet %s image requires an exact tag or digest" $workloadName) -}}
+{{- end -}}
+{{- if and $tag (has (lower $tag) (list "latest" "main" "main-latest")) -}}
+{{- fail (printf "fleet %s image tag must be pinned and must not be latest/main/main-latest" $workloadName) -}}
+{{- end -}}
+{{- if and $digest (not (regexMatch "^sha256:[a-f0-9]{64}$" $digest)) -}}
+{{- fail (printf "fleet %s image digest must be sha256:<64 lowercase hex>" $workloadName) -}}
+{{- end -}}
+{{- end -}}
+{{- with .Values.fleetAuth.companionUiCompanionId -}}
+{{- if not (hasKey $fleetIds .) -}}
+{{- fail "fleetAuth.companionUiCompanionId must name a registered fleet companion" -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
 {{- if and .Values.ownerMigration.required (not .Values.ownerMigration.enabled) -}}
 {{- fail "ownerMigration.required=true requires ownerMigration.enabled=true" -}}
 {{- end -}}
@@ -99,6 +234,12 @@ never back a ClusterIssuer. */ -}}
 {{- end -}}
 {{- if and (not .Values.postgres.enabled) (not .Values.postgres.external.enabled) -}}
 {{- fail "postgres.enabled=false requires postgres.external.enabled=true with an existing database URL Secret" -}}
+{{- end -}}
+{{- if and .Values.postgres.enabled (not .Values.postgres.external.enabled) (not .Values.postgres.auth.keys.databaseUrl) -}}
+{{- fail "postgres.auth.keys.databaseUrl is required for runtime database access" -}}
+{{- end -}}
+{{- if and .Values.postgres.external.enabled (not .Values.postgres.external.databaseUrlSecret.key) -}}
+{{- fail "postgres.external.databaseUrlSecret.key is required for runtime database access" -}}
 {{- end -}}
 {{- if and .Values.redis.enabled (not (or (eq .Values.redis.mode "internal") (eq .Values.redis.mode "external"))) -}}
 {{- fail "redis.mode must be internal or external when redis.enabled=true" -}}

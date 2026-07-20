@@ -7,10 +7,17 @@ import {
   FleetAuthBrokerError,
   type GatewayFleetAuthBroker,
 } from '../../../boundary/gateway/fleet-auth-broker.js';
-import { FleetAuthHttpRoutes } from './fleet-auth-routes.js';
+import {
+  FleetAuthHttpRoutes,
+  type FleetAuthApprovalsSource,
+  type FleetAuthRosterSource,
+} from './fleet-auth-routes.js';
 import { FleetAuthorizationDeniedError } from '../../../boundary/gateway/fleet-authorization-context.js';
+import type { ConfirmationQueueEntry } from '../../../system/capabilities/confirmation-queue.js';
 
 const COMPANION_ID = '11111111-1111-4111-8111-111111111111';
+const COMPANION_ID_B = '22222222-2222-4222-8222-222222222222';
+const COMPANION_ID_C = '33333333-3333-4333-8333-333333333333';
 
 interface CapturedResponse {
   statusCode: number;
@@ -491,6 +498,217 @@ describe('gateway-only fleet auth HTTP routes', () => {
         type: 'reauthentication_required',
         message: 'Reauthentication is required',
       },
+    });
+  });
+
+  function pendingEntry(overrides: Partial<ConfirmationQueueEntry> = {}): ConfirmationQueueEntry {
+    return {
+      id: 'confirm-1',
+      method: 'web.fetch',
+      action: 'web.fetch',
+      scope: 'https://example.test/secret-path',
+      params: { url: 'https://example.test/secret-path', apiKey: 'super-secret' },
+      companionReason: 'I need to read the docs.',
+      requestedAt: Date.parse('2026-07-17T10:00:00.000Z'),
+      expiresAt: Date.parse('2026-07-18T10:00:00.000Z'),
+      ...overrides,
+    };
+  }
+
+  function rosterHandler(input: {
+    rosterSource?: FleetAuthRosterSource;
+    approvalsSource?: FleetAuthApprovalsSource;
+  }): FleetAuthHttpRoutes {
+    return new FleetAuthHttpRoutes({
+      broker: {} as unknown as GatewayFleetAuthBroker,
+      canonicalOrigin: 'https://fleet.example.test',
+      callbackPath: '/auth/discord/callback',
+      companionUi: { companionId: COMPANION_ID, guestMode: 'disabled' },
+      ...(input.rosterSource ? { rosterSource: input.rosterSource } : {}),
+      ...(input.approvalsSource ? { approvalsSource: input.approvalsSource } : {}),
+    });
+  }
+
+  const authorizedRoster: FleetAuthRosterSource = {
+    resolveRoster: async () => ({
+      schemaVersion: 1,
+      companions: [
+        {
+          companionId: COMPANION_ID,
+          displayName: 'Flagship',
+          websocketPath: `/companion-ui/companions/${COMPANION_ID}/ws`,
+        },
+        {
+          companionId: COMPANION_ID_B,
+          displayName: 'Aria',
+          websocketPath: `/companion-ui/companions/${COMPANION_ID_B}/ws`,
+          avatarRef: 'avatars/aria.png',
+        },
+      ],
+    }),
+  };
+
+  describe('companion roster route', () => {
+    it('matches only when a roster source is wired', () => {
+      expect(rosterHandler({ rosterSource: authorizedRoster })
+        .matches('GET', '/v1/fleet-auth/companions')).toBe(true);
+      expect(rosterHandler({}).matches('GET', '/v1/fleet-auth/companions')).toBe(false);
+    });
+
+    it('returns the authenticated roster with private no-store caching', async () => {
+      const resolveRoster = vi.fn(authorizedRoster.resolveRoster);
+      const handler = rosterHandler({ rosterSource: { resolveRoster } });
+      const res = response();
+      await handler.handle(
+        request('GET', { cookie: `__Host-psfn_session=${'a'.repeat(43)}` }),
+        res,
+        new URL('https://fleet.example.test/v1/fleet-auth/companions'),
+      );
+      expect(resolveRoster).toHaveBeenCalledWith({ sessionToken: 'a'.repeat(43) });
+      expect(res.statusCode).toBe(200);
+      expect(res.headers.get('cache-control')).toBe('no-store, private');
+      expect(res.headers.get('vary')).toBe('Cookie');
+      expect(JSON.parse(res.body)).toEqual({
+        schemaVersion: 1,
+        companions: [
+          {
+            companionId: COMPANION_ID,
+            displayName: 'Flagship',
+            websocketPath: `/companion-ui/companions/${COMPANION_ID}/ws`,
+          },
+          {
+            companionId: COMPANION_ID_B,
+            displayName: 'Aria',
+            websocketPath: `/companion-ui/companions/${COMPANION_ID_B}/ws`,
+            avatarRef: 'avatars/aria.png',
+          },
+        ],
+      });
+    });
+
+    it('rejects a roster request with a query string', async () => {
+      const handler = rosterHandler({ rosterSource: authorizedRoster });
+      const res = response();
+      await handler.handle(
+        request('GET', { cookie: `__Host-psfn_session=${'a'.repeat(43)}` }),
+        res,
+        new URL('https://fleet.example.test/v1/fleet-auth/companions?companionId=x'),
+      );
+      expect(res.statusCode).toBe(404);
+    });
+
+    it('requires a session cookie', async () => {
+      const handler = rosterHandler({ rosterSource: authorizedRoster });
+      const res = response();
+      await handler.handle(
+        request('GET'),
+        res,
+        new URL('https://fleet.example.test/v1/fleet-auth/companions'),
+      );
+      expect(res.statusCode).toBe(401);
+      expect(res.headers.get('set-cookie')).toBeUndefined();
+    });
+
+    it('clears a stale cookie and fails closed when authorization is denied', async () => {
+      const handler = rosterHandler({
+        rosterSource: {
+          resolveRoster: async () => {
+            throw new FleetAuthorizationDeniedError('session_revoked');
+          },
+        },
+      });
+      const res = response();
+      await handler.handle(
+        request('GET', { cookie: `__Host-psfn_session=${'a'.repeat(43)}` }),
+        res,
+        new URL('https://fleet.example.test/v1/fleet-auth/companions'),
+      );
+      expect(res.statusCode).toBe(401);
+      expect(res.headers.get('set-cookie')).toContain('Max-Age=0');
+      expect(JSON.parse(res.body)).toEqual({
+        error: { type: 'invalid_session', message: 'Session is invalid or expired' },
+      });
+    });
+  });
+
+  describe('fleet-wide approvals route', () => {
+    it('matches only when both roster and approvals sources are wired', () => {
+      expect(rosterHandler({ rosterSource: authorizedRoster, approvalsSource: {
+        listPending: () => [], ownerOfConfirmation: () => undefined,
+      } }).matches('GET', '/v1/fleet-auth/approvals')).toBe(true);
+      expect(rosterHandler({ rosterSource: authorizedRoster })
+        .matches('GET', '/v1/fleet-auth/approvals')).toBe(false);
+    });
+
+    it('attributes approvals, excludes ownerless + unauthorized owners, and drops raw params', async () => {
+      const entries = [
+        pendingEntry({ id: 'confirm-authorized' }),
+        pendingEntry({ id: 'confirm-ownerless' }),
+        pendingEntry({ id: 'confirm-foreign-companion' }),
+      ];
+      const owners: Record<string, string | undefined> = {
+        'confirm-authorized': COMPANION_ID_B,
+        'confirm-ownerless': undefined,
+        // Owner is a real companion but NOT in this session's authorized roster.
+        'confirm-foreign-companion': COMPANION_ID_C,
+      };
+      const approvalsSource: FleetAuthApprovalsSource = {
+        listPending: () => entries,
+        ownerOfConfirmation: (id: string) => owners[id],
+      };
+      const handler = rosterHandler({ rosterSource: authorizedRoster, approvalsSource });
+      const res = response();
+      await handler.handle(
+        request('GET', { cookie: `__Host-psfn_session=${'a'.repeat(43)}` }),
+        res,
+        new URL('https://fleet.example.test/v1/fleet-auth/approvals'),
+      );
+
+      expect(res.statusCode).toBe(200);
+      expect(res.headers.get('cache-control')).toBe('no-store, private');
+      expect(res.headers.get('vary')).toBe('Cookie');
+      expect(JSON.parse(res.body)).toEqual({
+        schemaVersion: 1,
+        approvals: [
+          {
+            companionId: COMPANION_ID_B,
+            companionDisplayName: 'Aria',
+            id: 'confirm-authorized',
+            title: 'web.fetch: https://example.test/secret-path',
+            requestedAt: '2026-07-17T10:00:00.000Z',
+            expiresAt: '2026-07-18T10:00:00.000Z',
+            redactedContext: 'I need to read the docs.',
+            status: 'pending',
+            sourceSystem: 'tool-access',
+            attribution: {
+              parentId: COMPANION_ID_B,
+              parentLabel: 'Aria',
+            },
+            action: 'web.fetch',
+            scope: 'https://example.test/secret-path',
+            reason: 'I need to read the docs.',
+            grantMode: { kind: 'once' },
+          },
+        ],
+      });
+      // Redaction: raw params / secrets never reach the view.
+      expect(res.body).not.toContain('super-secret');
+      expect(res.body).not.toContain('apiKey');
+      expect(res.body).not.toContain(COMPANION_ID_C);
+    });
+
+    it('requires a session cookie for the approvals view', async () => {
+      const handler = rosterHandler({
+        rosterSource: authorizedRoster,
+        approvalsSource: { listPending: () => [], ownerOfConfirmation: () => undefined },
+      });
+      const res = response();
+      await handler.handle(
+        request('GET'),
+        res,
+        new URL('https://fleet.example.test/v1/fleet-auth/approvals'),
+      );
+      expect(res.statusCode).toBe(401);
     });
   });
 

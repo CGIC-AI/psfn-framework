@@ -35,6 +35,7 @@ function makeUsageData(
   return {
     query,
     totals,
+    timeSeries: [],
     byModel: [],
     byPurpose: [],
     byTool: [],
@@ -184,22 +185,36 @@ describe('AdminDashboardDataService', () => {
 
   it('uses the canonical selected-range model-usage query and ignores live event costs', async () => {
     const nowMs = Date.UTC(2026, 6, 14, 5, 0, 0, 0);
+    const weekStartMs = startOfDashboardUtcWeek(nowMs);
     const eventBus = new EventBus();
     const deps = makeBaseDeps(eventBus);
     const modelUsageService: AdminModelUsageService = {
-      getModelUsageData: vi.fn(async query => makeUsageData(query ?? {}, {
-        calls: 4,
-        successfulCalls: 3,
-        failedCalls: 1,
-        inputTokens: 1_000,
-        outputTokens: 200,
-        cacheReadTokens: 600,
-        cacheWriteTokens: 50,
-        totalTokens: 1_850,
-        providerCostUsd: 0.08,
-        estimatedCostUsd: 0.1,
-        totalCostUsd: 0.09,
-      })),
+      getModelUsageData: vi.fn(async query => {
+        const usage = makeUsageData(query ?? {}, {
+          calls: 4,
+          successfulCalls: 3,
+          failedCalls: 1,
+          inputTokens: 1_000,
+          outputTokens: 200,
+          cacheReadTokens: 600,
+          cacheWriteTokens: 50,
+          totalTokens: 1_850,
+          providerCostUsd: 0.08,
+          estimatedCostUsd: 0.1,
+          totalCostUsd: 0.09,
+        });
+        usage.timeSeries = [
+          { ...usage.totals, startMs: weekStartMs, endMs: weekStartMs + 86_400_000 },
+          {
+            ...usage.totals,
+            startMs: weekStartMs + 86_400_000,
+            endMs: weekStartMs + (2 * 86_400_000),
+            totalTokens: 350,
+            totalCostUsd: 0.04,
+          },
+        ];
+        return usage;
+      }),
     };
     const service = new AdminDashboardDataService({
       ...deps,
@@ -227,6 +242,7 @@ describe('AdminDashboardDataService', () => {
     expect(modelUsageService.getModelUsageData).toHaveBeenCalledWith({
       sinceMs: startOfDashboardUtcWeek(nowMs),
       untilMs: nowMs + 1,
+      bucket: 'day',
       limit: 1,
     });
     expect(dashboard.stats.modelUsage).toMatchObject({
@@ -248,6 +264,14 @@ describe('AdminDashboardDataService', () => {
         estimatedCostUsd: 0.1,
         effectiveCostUsd: 0.09,
       },
+      sparkline: [
+        { startMs: weekStartMs, totalTokens: 1_850, effectiveCostUsd: 0.09 },
+        {
+          startMs: weekStartMs + 86_400_000,
+          totalTokens: 350,
+          effectiveCostUsd: 0.04,
+        },
+      ],
     });
     expect(dashboard.stats.transientSessionTelemetry.turnsSinceOperatorStart).toBe(1);
   });
@@ -278,9 +302,15 @@ describe('AdminDashboardDataService', () => {
 
   it('distinguishes unavailable from matching-range stale data after storage failures', async () => {
     const nowMs = Date.UTC(2026, 6, 14, 7, 0, 0, 0);
+    const cachedUsage = makeUsageData({}, { calls: 3, totalTokens: 700, totalCostUsd: 0.07 });
+    cachedUsage.timeSeries = [{
+      ...cachedUsage.totals,
+      startMs: startOfDashboardUtcWeek(nowMs),
+      endMs: nowMs + 1,
+    }];
     const getModelUsageData = vi.fn<AdminModelUsageService['getModelUsageData']>();
     getModelUsageData.mockRejectedValueOnce(new Error('postgres offline'));
-    getModelUsageData.mockResolvedValueOnce(makeUsageData({}, { calls: 3, totalCostUsd: 0.07 }));
+    getModelUsageData.mockResolvedValueOnce(cachedUsage);
     getModelUsageData.mockRejectedValue(new Error('postgres offline again'));
     const service = new AdminDashboardDataService({
       ...makeBaseDeps(), modelUsageService: { getModelUsageData }, now: () => nowMs,
@@ -292,14 +322,17 @@ describe('AdminDashboardDataService', () => {
     const differentRange = await service.getDashboardData({ costWindow: 'month' });
 
     expect(unavailable.stats.modelUsage).toMatchObject({
-      selected: 'today', usage: null, freshness: { state: 'unavailable', refreshedAtMs: null },
+      selected: 'today', usage: null, sparkline: [], freshness: { state: 'unavailable', refreshedAtMs: null },
     });
     expect(fresh.stats.modelUsage.freshness.state).toBe('fresh');
     expect(stale.stats.modelUsage).toMatchObject({
-      selected: 'today', usage: { calls: 3, effectiveCostUsd: 0.07 }, freshness: { state: 'stale' },
+      selected: 'today',
+      usage: { calls: 3, effectiveCostUsd: 0.07 },
+      sparkline: [{ totalTokens: 700, effectiveCostUsd: 0.07 }],
+      freshness: { state: 'stale' },
     });
     expect(differentRange.stats.modelUsage).toMatchObject({
-      selected: 'month', usage: null, freshness: { state: 'unavailable' },
+      selected: 'month', usage: null, sparkline: [], freshness: { state: 'unavailable' },
     });
   });
 
@@ -322,6 +355,11 @@ describe('AdminDashboardDataService', () => {
       costWindow: 'month',
       beforeBoundaryMs: Date.UTC(2026, 6, 31, 23, 59, 59, 999),
       afterBoundaryMs: Date.UTC(2026, 7, 1, 0, 0, 0, 0),
+    },
+    {
+      costWindow: 'quarter',
+      beforeBoundaryMs: Date.UTC(2026, 8, 30, 23, 59, 59, 999),
+      afterBoundaryMs: Date.UTC(2026, 9, 1, 0, 0, 0, 0),
     },
   ])('does not reuse a stale $costWindow snapshot after its UTC boundary rolls over', async ({
     costWindow,

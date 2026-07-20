@@ -357,7 +357,6 @@ const STATIC_TOOL_REQUIREMENTS: Readonly<Record<string, CapabilityRequirement>> 
 // it depends on implementation-specific action semantics. Runtime validation
 // still verifies the actual executable tool carries the annotation.
 const IMPLEMENTATION_ANNOTATED_TOOL_CAPABILITY_POLICIES = new Set([
-  'library',
   'schedule',
   'toolset',
   'wiki',

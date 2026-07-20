@@ -3,7 +3,7 @@ import {
   type CorrelationMetadata,
   type ObservabilityCallType,
   type TelemetryVisibility,
-} from '../contracts/runtime.js';
+} from '../contracts/runtime-base.js';
 import type { IcpConversationCorrelation } from '../contracts/icp-autonomy.js';
 import type { IcpCostBreakerConfig } from '../contracts/charge-policy.js';
 import type {
@@ -339,6 +339,11 @@ export interface ModelUsageTimeBucket extends ModelUsageTotals {
   endMs: number;
 }
 
+/** Sparse per-key totals for one resolved time bucket. */
+export interface ModelUsageDimensionTimeBucket extends ModelUsageTimeBucket {
+  key: string;
+}
+
 export interface ModelUsageGroup {
   dimensions: Partial<Record<ModelUsageGroupDimension, string>>;
   isOther: boolean;
@@ -373,11 +378,20 @@ export interface ModelUsageAttributionCoverage {
   byDimension: Record<ModelUsageGroupDimension, ModelUsageDimensionCoverage>;
 }
 
+export interface ModelUsagePeriodComparison {
+  sinceMs: number;
+  untilMs: number;
+  totals: ModelUsageTotals;
+}
+
 export interface ModelUsageData {
   query: ModelUsageQuery;
   resolvedRange: ModelUsageResolvedRange;
   totals: ModelUsageTotals;
+  previousPeriod?: ModelUsagePeriodComparison;
   timeSeries: ModelUsageTimeBucket[];
+  /** Sparse series for the chart's provider:model key and the query's primary group dimension. */
+  seriesByDimension?: Partial<Record<ModelUsageGroupDimension, ModelUsageDimensionTimeBucket[]>>;
   groups: ModelUsageGroup[];
   eventPage: ModelUsageEventPage;
   byModel: ModelUsageBreakdown[];

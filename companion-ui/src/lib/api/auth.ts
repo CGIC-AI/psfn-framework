@@ -1,4 +1,5 @@
 import type { HelloMessage, SatelliteCapabilities } from '../protocol/events.js';
+import { COMPANION_APPROVALS_V2_CAPABILITY } from '../../../../src/shared/contracts/companion-relay.js';
 
 export const PSFN_SATELLITE_MOBILE_CHAT_APP_NAME = 'PSFN Companion UI';
 
@@ -22,6 +23,7 @@ export function buildSatelliteHello(options: SatelliteHelloOptions = {}): HelloM
   return Object.freeze({
     type: 'hello',
     capabilities: mergeCapabilities(MOBILE_CHAT_APP_CAPABILITIES, options.capabilities),
+    eventCapabilities: [COMPANION_APPROVALS_V2_CAPABILITY],
   });
 }
 

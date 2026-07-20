@@ -15,7 +15,9 @@
   import { resolveSessionContextPressureView } from '$lib/dashboard/session-context-pressure';
   import ActiveConcernsCard from '$lib/components/garden/ActiveConcernsCard.svelte';
   import ContextAllocationWidget from '$lib/components/garden/ContextAllocationWidget.svelte';
+  import Sparkline from '$lib/components/accounting/charts/Sparkline.svelte';
   import type { AdminDashboardData, DashboardCostWindow } from '$lib/types';
+  import { scopeGardenPath } from '$lib/fleet/companion-scope';
 
   let data = $state<AdminDashboardData | null>(null);
   let error = $state('');
@@ -31,6 +33,7 @@
       today: 'today',
       week: 'this week',
       month: 'this month',
+      quarter: 'this quarter',
     };
     return hints[window];
   }
@@ -175,6 +178,8 @@
     {@const stats = data.stats}
     {@const committedCostWindow = costWindowSelection.committed}
     {@const selectedCostWindowUsage = stats.modelUsage.usage}
+    {@const modelUsageTokenTrend = stats.modelUsage.sparkline.map((point) => point.totalTokens)}
+    {@const modelUsageCostTrend = stats.modelUsage.sparkline.map((point) => point.effectiveCostUsd)}
     {@const modelUsageFreshness = stats.modelUsage.freshness}
     {@const transientSessionTelemetry = stats.transientSessionTelemetry}
     {@const llmTtftPercentiles = transientSessionTelemetry.latencyPercentiles.series.find((series) => series.metric === 'llm_ttft' && Object.keys(series.dimensions).length === 0)?.percentiles}
@@ -188,13 +193,13 @@
     </p>
     <!-- Stat cards -->
     <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-      <a href="/memory" class="card-garden p-5 hover:border-gold-400 hover:shadow-md transition-all cursor-pointer block">
+      <a href={scopeGardenPath('/memory')} class="card-garden p-5 hover:border-gold-400 hover:shadow-md transition-all cursor-pointer block">
         <p class="text-sm text-shadow-700 uppercase tracking-wide font-medium">Memories</p>
         <p class="text-2xl font-serif text-shadow-900 mt-1">{stats.memoryTotal.toLocaleString()}</p>
         <p class="text-sm text-shadow-600 mt-1">Avg salience: {(stats.avgSalience * 100).toFixed(0)}%</p>
       </a>
 
-      <a href="/sessions" class="card-garden p-5 hover:border-gold-400 hover:shadow-md transition-all cursor-pointer block">
+      <a href={scopeGardenPath('/sessions')} class="card-garden p-5 hover:border-gold-400 hover:shadow-md transition-all cursor-pointer block">
         <p class="text-sm text-shadow-700 uppercase tracking-wide font-medium">Sessions</p>
         <p class="text-2xl font-serif text-shadow-900 mt-1">{stats.sessionCount}</p>
         <p class="text-sm text-shadow-600 mt-1">
@@ -202,7 +207,7 @@
         </p>
       </a>
 
-      <a href={buildDashboardAccountingPath(committedCostWindow)} class="card-garden p-5 hover:border-gold-400 hover:shadow-md transition-all cursor-pointer block" aria-busy={costWindowLoading || backgroundRefreshLoading}>
+      <a href={scopeGardenPath(buildDashboardAccountingPath(committedCostWindow))} class="card-garden p-5 hover:border-gold-400 hover:shadow-md transition-all cursor-pointer block" aria-busy={costWindowLoading || backgroundRefreshLoading}>
         <p class="text-sm text-shadow-700 uppercase tracking-wide font-medium">Total Tokens <span class="text-shadow-600 normal-case font-normal">({costWindowHint(committedCostWindow)})</span></p>
         {#if selectedCostWindowUsage}
           <p class="text-2xl font-serif text-shadow-900 mt-1">
@@ -211,6 +216,14 @@
           <p class="text-sm text-shadow-600 mt-1">
             {formatTokens(selectedCostWindowUsage.inputTokens)} in / {formatTokens(selectedCostWindowUsage.outputTokens)} out
           </p>
+          <div class="mt-3 text-petal-500">
+            <Sparkline
+              values={modelUsageTokenTrend}
+              width={220}
+              height={36}
+              ariaLabel={`Total token usage trend for ${costWindowHint(committedCostWindow)}`}
+            />
+          </div>
         {:else}
           <p class="text-2xl font-serif text-wilt-600 mt-1">Unavailable</p>
           <p class="text-sm text-wilt-600 mt-1">Durable usage storage could not be read.</p>
@@ -222,7 +235,7 @@
           <p class="text-sm text-shadow-700 uppercase tracking-wide font-medium">
             Model Cost <span class="text-shadow-600 normal-case font-normal">({costWindowHint(committedCostWindow)})</span>
           </p>
-          <a href={buildDashboardAccountingPath(committedCostWindow)} class="text-sm font-medium text-gold-700 hover:text-gold-800 whitespace-nowrap">Analyze</a>
+          <a href={scopeGardenPath(buildDashboardAccountingPath(committedCostWindow))} class="text-sm font-medium text-gold-700 hover:text-gold-800 whitespace-nowrap">Analyze</a>
         </div>
         {#if selectedCostWindowUsage}
           <p class="text-2xl font-serif text-shadow-900 mt-1">
@@ -237,6 +250,16 @@
           </p>
         {:else if selectedCostWindowUsage}
           <p class="text-sm text-shadow-600 mt-1">No durable model usage in this window yet.</p>
+        {/if}
+        {#if selectedCostWindowUsage}
+          <div class="mt-3 text-gold-600">
+            <Sparkline
+              values={modelUsageCostTrend}
+              width={220}
+              height={36}
+              ariaLabel={`Effective model cost trend for ${costWindowHint(committedCostWindow)}`}
+            />
+          </div>
         {/if}
         <p aria-hidden="true" class="text-xs mt-2 {modelUsageFreshness.state === 'fresh' ? 'text-shadow-600' : 'text-wilt-600'}">
           {modelUsageFreshness.state === 'fresh' ? 'Durable canonical usage' : modelUsageFreshness.state}
@@ -269,7 +292,7 @@
     <div class="card-garden p-5">
       <div class="flex items-center justify-between gap-3 mb-3">
         <h2 class="font-serif text-lg text-shadow-900">Tool Status</h2>
-        <a href="/tools" class="text-sm font-medium text-gold-700 hover:text-gold-800">Open Tools</a>
+        <a href={scopeGardenPath('/tools')} class="text-sm font-medium text-gold-700 hover:text-gold-800">Open Tools</a>
       </div>
       {#if stats.toolStatus.length > 0}
         <div class="flex flex-wrap gap-2">
@@ -294,11 +317,11 @@
       <div class="card-garden p-5">
         <div class="flex items-center justify-between gap-3 mb-3">
           <h2 class="font-serif text-lg text-shadow-900">Memory Breakdown</h2>
-          <a href="/memory" class="text-sm font-medium text-gold-700 hover:text-gold-800">Open Memory</a>
+          <a href={scopeGardenPath('/memory')} class="text-sm font-medium text-gold-700 hover:text-gold-800">Open Memory</a>
         </div>
         <div class="space-y-2">
           {#each Object.entries(stats.memoryByType) as [type, count]}
-            <a href="/memory?type={encodeURIComponent(type)}"
+            <a href={scopeGardenPath(`/memory?type=${encodeURIComponent(type)}`)}
               class="flex items-center gap-3 hover:bg-bark-50 rounded-lg px-1 py-0.5 -mx-1 transition-colors cursor-pointer">
               <span class="px-2 py-0.5 text-sm rounded border {memoryTypeColor(type)} min-w-24 text-center">
                 {type}
@@ -319,7 +342,7 @@
       <div class="card-garden p-5" aria-busy={costWindowLoading || backgroundRefreshLoading}>
         <div class="flex items-center justify-between gap-3 mb-3">
           <h2 class="font-serif text-lg text-shadow-900">Token Usage</h2>
-          <a href="/charge-budget" class="text-sm font-medium text-gold-700 hover:text-gold-800">Open Charge / Budget</a>
+          <a href={scopeGardenPath('/charge-budget')} class="text-sm font-medium text-gold-700 hover:text-gold-800">Open Charge / Budget</a>
         </div>
         {#if selectedCostWindowUsage && selectedCostWindowUsage.calls > 0}
           <div class="space-y-4">
@@ -369,7 +392,7 @@
                 {formatOptionalDuration(ttfaPercentiles.p95Ms)} /
                 {formatOptionalDuration(ttfaPercentiles.p99Ms)}.
               {/if}
-              <a href="/charge-budget" class="font-medium text-gold-700 hover:text-gold-800">Charge / Budget</a>.
+              <a href={scopeGardenPath('/charge-budget')} class="font-medium text-gold-700 hover:text-gold-800">Charge / Budget</a>.
             </p>
           </div>
         {:else if selectedCostWindowUsage}
@@ -387,7 +410,10 @@
     <!-- Recent Analysis Workbench Traces -->
     {#if stats.recentAnalysisWorkbenchTraces.length > 0}
       <div class="card-garden p-5">
-        <h2 class="font-serif text-lg text-shadow-900 mb-3">Recent Analysis Workbench Traces</h2>
+        <div class="flex items-center justify-between gap-3 mb-3">
+          <h2 class="font-serif text-lg text-shadow-900">Recent Analysis Workbench Traces</h2>
+          <a href={scopeGardenPath('/analysis-workbench')} class="text-sm font-medium text-gold-700 hover:text-gold-800">View all with steps</a>
+        </div>
         <div class="overflow-x-auto">
           <table class="w-full text-sm">
             <thead>
@@ -419,15 +445,15 @@
 
     <!-- Additional stats -->
     <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
-      <a href="/scheduler" class="card-garden p-5 hover:border-gold-400 hover:shadow-md transition-all cursor-pointer block">
+      <a href={scopeGardenPath('/scheduler')} class="card-garden p-5 hover:border-gold-400 hover:shadow-md transition-all cursor-pointer block">
         <p class="text-sm text-shadow-700 uppercase tracking-wide font-medium">Scheduler Tasks</p>
         <p class="text-2xl font-serif text-shadow-900 mt-1">{stats.schedulerTasks}</p>
       </a>
-      <a href="/shards" class="card-garden p-5 hover:border-gold-400 hover:shadow-md transition-all cursor-pointer block">
+      <a href={scopeGardenPath('/shards')} class="card-garden p-5 hover:border-gold-400 hover:shadow-md transition-all cursor-pointer block">
         <p class="text-sm text-shadow-700 uppercase tracking-wide font-medium">Active Shards</p>
         <p class="text-2xl font-serif text-shadow-900 mt-1">{stats.activeShards}</p>
       </a>
-      <a href="/sessions" class="card-garden p-5 hover:border-gold-400 hover:shadow-md transition-all cursor-pointer block">
+      <a href={scopeGardenPath('/sessions')} class="card-garden p-5 hover:border-gold-400 hover:shadow-md transition-all cursor-pointer block">
         <p class="text-sm text-shadow-700 uppercase tracking-wide font-medium">
           Session Context Pressure <span class="text-shadow-600 normal-case font-normal">(active session)</span>
         </p>
@@ -449,7 +475,7 @@
     <div class="card-garden p-5">
       <div class="flex items-center justify-between gap-3 mb-3">
         <h2 class="font-serif text-lg text-shadow-900">Context Window Allocation</h2>
-        <a href="/settings" class="text-sm font-medium text-gold-700 hover:text-gold-800">Configure in Settings</a>
+        <a href={scopeGardenPath('/settings')} class="text-sm font-medium text-gold-700 hover:text-gold-800">Configure in Settings</a>
       </div>
       <ContextAllocationWidget showVariants={false} />
     </div>

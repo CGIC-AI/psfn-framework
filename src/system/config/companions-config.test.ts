@@ -164,47 +164,64 @@ describe('companions owner-file config', () => {
         .toThrow(/must not escape the persistence root/);
     });
 
-    it('accepts a fleet with per-companion gardenPort values', () => {
-      const fleet = clone(VALID_FLEET);
+    it('rejects the retired per-companion gardenPort key without a compatibility reader', () => {
+      const fleet = clone(VALID_FLEET) as unknown as {
+        companions: Array<Record<string, unknown>>;
+      };
       fleet.companions[0].gardenPort = 10061;
-      fleet.companions[1].gardenPort = 10062;
-      expect(validateCompanionsConfig(fleet, 'companions.json')).toEqual(fleet);
+      expect(() => validateCompanionsConfig(fleet, 'companions.json'))
+        .toThrow(
+          /companions\[0\]\.gardenPort is retired; configure the one fleet Garden listener with ADMIN_PORT/u,
+        );
     });
 
-    it('accepts a fleet where only some companions have a gardenPort', () => {
+    it('accepts optional displayName and avatarRef roster fields', () => {
       const fleet = clone(VALID_FLEET);
-      fleet.companions[0].gardenPort = 10061;
+      fleet.companions[0].displayName = 'Flagship';
+      fleet.companions[1].displayName = 'Aria';
+      fleet.companions[1].avatarRef = 'avatars/aria.png';
       const validated = validateCompanionsConfig(fleet, 'companions.json');
-      expect(validated.companions[0].gardenPort).toBe(10061);
-      expect(validated.companions[1].gardenPort).toBeUndefined();
+      expect(validated.companions[0].displayName).toBe('Flagship');
+      expect(validated.companions[1].avatarRef).toBe('avatars/aria.png');
+      // Absent fields stay absent (no character-card reads, no synthetic default).
+      expect(validated.companions[0]).not.toHaveProperty('avatarRef');
     });
 
-    it('rejects a non-integer gardenPort', () => {
+    it('trims displayName and avatarRef like the other string fields', () => {
       const fleet = clone(VALID_FLEET);
-      (fleet.companions[0] as Record<string, unknown>).gardenPort = '10061';
-      expect(() => validateCompanionsConfig(fleet, 'companions.json'))
-        .toThrow(/gardenPort must be an integer TCP port/);
-      (fleet.companions[0] as Record<string, unknown>).gardenPort = 10061.5;
-      expect(() => validateCompanionsConfig(fleet, 'companions.json'))
-        .toThrow(/gardenPort must be an integer TCP port/);
+      fleet.companions[0].displayName = '  Flagship  ' as string;
+      fleet.companions[0].avatarRef = '  avatars/a.png  ' as string;
+      const validated = validateCompanionsConfig(fleet, 'companions.json');
+      expect(validated.companions[0].displayName).toBe('Flagship');
+      expect(validated.companions[0].avatarRef).toBe('avatars/a.png');
     });
 
-    it('rejects an out-of-range gardenPort', () => {
-      const fleet = clone(VALID_FLEET);
-      fleet.companions[0].gardenPort = 0;
+    it('rejects an empty displayName', () => {
+      const fleet = clone(VALID_FLEET) as unknown as { companions: Record<string, unknown>[] };
+      fleet.companions[0].displayName = '   ';
       expect(() => validateCompanionsConfig(fleet, 'companions.json'))
-        .toThrow(/gardenPort must be between 1 and 65535/);
-      fleet.companions[0].gardenPort = 70_000;
-      expect(() => validateCompanionsConfig(fleet, 'companions.json'))
-        .toThrow(/gardenPort must be between 1 and 65535/);
+        .toThrow(/displayName must be a non-empty string/);
     });
 
-    it('rejects a gardenPort collision across the fleet (fail closed)', () => {
-      const fleet = clone(VALID_FLEET);
-      fleet.companions[0].gardenPort = 10061;
-      fleet.companions[1].gardenPort = 10061;
+    it('rejects a non-string avatarRef', () => {
+      const fleet = clone(VALID_FLEET) as unknown as { companions: Record<string, unknown>[] };
+      fleet.companions[0].avatarRef = 42;
       expect(() => validateCompanionsConfig(fleet, 'companions.json'))
-        .toThrow(/duplicate gardenPort 10061/);
+        .toThrow(/avatarRef must be a string/);
+    });
+
+    it('rejects an over-long displayName', () => {
+      const fleet = clone(VALID_FLEET);
+      fleet.companions[0].displayName = 'x'.repeat(121);
+      expect(() => validateCompanionsConfig(fleet, 'companions.json'))
+        .toThrow(/displayName must be at most 120 characters/);
+    });
+
+    it('rejects control characters in a displayName', () => {
+      const fleet = clone(VALID_FLEET);
+      fleet.companions[0].displayName = 'bad\nname';
+      expect(() => validateCompanionsConfig(fleet, 'companions.json'))
+        .toThrow(/displayName must not contain control characters/);
     });
   });
 

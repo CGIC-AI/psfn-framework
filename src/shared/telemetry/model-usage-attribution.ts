@@ -2,7 +2,7 @@ import {
   CHANNEL_TYPES,
   type ChannelType,
   type ObservabilityCallType,
-} from '../contracts/runtime.js';
+} from '../contracts/runtime-base.js';
 import {
   OBSERVABILITY_CALL_TYPES,
   isObservabilityCallType,

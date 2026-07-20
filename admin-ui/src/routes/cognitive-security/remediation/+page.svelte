@@ -15,6 +15,7 @@
     SESSION_SEARCH_LIMIT,
   } from '$lib/api/endpoints/sessions';
   import ConfirmationModal from '$lib/components/ConfirmationModal.svelte';
+  import { scopeGardenPath } from '$lib/fleet/companion-scope';
   import type {
     AdminCogSecEventListData,
     AdminCogSecRemediationApplyData,
@@ -368,8 +369,8 @@
       <p class="max-w-3xl text-sm text-shadow-700">
         Post-incident cleanup: seal selected companion L0 rows, replace them with tombstones,
         revoke derived cognition, and optionally cut a fresh lane. For a simple fresh lane without
-        redaction, use <a class="underline underline-offset-2" href="/session-recovery">Session Recovery</a>.
-        Pre-incident holds live on the <a class="underline underline-offset-2" href="/cognitive-security/approvals">Approvals</a> queue.
+        redaction, use <a class="underline underline-offset-2" href={scopeGardenPath('/session-recovery')}>Session Recovery</a>.
+        Pre-incident holds live on the <a class="underline underline-offset-2" href={scopeGardenPath('/cognitive-security/approvals')}>Approvals</a> queue.
       </p>
     </header>
 

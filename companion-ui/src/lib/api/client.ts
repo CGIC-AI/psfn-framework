@@ -1,4 +1,4 @@
-import { isObjectRecord as isRecord } from '../utils/types.js';
+import { isObjectRecord as isRecord } from '../../../../src/shared/utils/types.js';
 import type {
   ClientToHubMessage,
   HelloAckMessage,
@@ -18,6 +18,7 @@ import {
   serializeClientToHubMessage,
 } from '../protocol/framing.js';
 import { buildSatelliteHello, type SatelliteHelloOptions } from './auth.js';
+import type { ShardDirectoryEntry } from '../../../../src/shared/contracts/shard-directory.js';
 
 export type SatelliteHubConnectionState =
   | 'idle'
@@ -38,6 +39,10 @@ export interface SatelliteHubSession {
   place?: RuntimePlaceIdentity;
   audioFormat?: string;
   capabilities?: SatelliteCapabilities;
+  eventCapabilities?: readonly string[];
+  shards?: readonly ShardDirectoryEntry[];
+  activeShardId?: string;
+  canListShards?: boolean;
   identity?: RuntimeIdentity;
   lastPingSentAt?: number;
   lastPongAt?: string;
@@ -442,6 +447,9 @@ export class SatelliteHubClient {
     this.session.satelliteId = message.satelliteId;
     this.session.satelliteName = message.satelliteName;
     this.session.capabilities = cloneCapabilities(message.capabilities);
+    this.session.eventCapabilities = message.eventCapabilities
+      ? [...message.eventCapabilities]
+      : undefined;
     this.session.place = message.place ? { ...message.place } : undefined;
     this.session.identity = cloneIdentity(message.identity);
   }
@@ -529,6 +537,7 @@ function cloneHello(message: HelloMessage): HelloMessage {
   return {
     type: 'hello',
     capabilities: cloneCapabilities(message.capabilities) ?? {},
+    eventCapabilities: [...message.eventCapabilities],
   };
 }
 

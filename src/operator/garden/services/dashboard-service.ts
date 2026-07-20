@@ -19,7 +19,9 @@ import type {
 } from './types.js';
 import {
   DASHBOARD_MODEL_USAGE_REFRESH_INTERVAL_MS,
+  mapModelUsageTimeSeriesToDashboardSparkline,
   mapModelUsageTotalsToDashboardUsage,
+  resolveDashboardCostWindowBucket,
   resolveDashboardCostWindowRange,
 } from './dashboard-cost-windows.js';
 import { createComponentLogger } from '../../../shared/logger.js';
@@ -27,6 +29,7 @@ import { TurnPerformanceTracker } from '../../../shared/telemetry/turn-performan
 
 interface CachedDashboardModelUsage {
   usage: NonNullable<DashboardModelUsageProjection['usage']>;
+  sparkline: DashboardModelUsageProjection['sparkline'];
   sinceMs: number;
   refreshedAtMs: number;
   dataThroughMs: number;
@@ -52,6 +55,9 @@ export class AdminDashboardDataService implements AdminDashboardService {
   private ttftSampleCount = 0;
 
   private readonly turnPerformance = new TurnPerformanceTracker();
+
+  private static readonly ANALYSIS_WORKBENCH_TRACE_LIMIT = 50;
+  private static readonly ANALYSIS_WORKBENCH_DASHBOARD_LIMIT = 5;
 
   private analysisWorkbenchTraces: AnalysisWorkbenchTraceView[] = [];
 
@@ -114,8 +120,15 @@ export class AdminDashboardDataService implements AdminDashboardService {
         })),
       };
       this.analysisWorkbenchTraces.unshift(trace);
-      if (this.analysisWorkbenchTraces.length > 5) this.analysisWorkbenchTraces.length = 5;
+      if (this.analysisWorkbenchTraces.length > AdminDashboardDataService.ANALYSIS_WORKBENCH_TRACE_LIMIT) {
+        this.analysisWorkbenchTraces.length = AdminDashboardDataService.ANALYSIS_WORKBENCH_TRACE_LIMIT;
+      }
     });
+  }
+
+  /** Recent REPL traces with full step detail for the workbench drill-down page. */
+  listAnalysisWorkbenchTraces(): AnalysisWorkbenchTraceView[] {
+    return [...this.analysisWorkbenchTraces];
   }
 
   private static normalizeContextUtilization(value: number): number {
@@ -200,6 +213,7 @@ export class AdminDashboardDataService implements AdminDashboardService {
     return {
       selected,
       usage: null,
+      sparkline: [],
       freshness: {
         state: 'unavailable',
         source: 'postgres_model_usage',
@@ -219,6 +233,7 @@ export class AdminDashboardDataService implements AdminDashboardService {
     return {
       selected,
       usage: cached.usage,
+      sparkline: cached.sparkline,
       freshness: {
         state: 'stale',
         source: 'postgres_model_usage',
@@ -244,10 +259,12 @@ export class AdminDashboardDataService implements AdminDashboardService {
     try {
       const data = await this.deps.modelUsageService.getModelUsageData({
         ...range,
+        bucket: resolveDashboardCostWindowBucket(selected),
         limit: 1,
       });
       const snapshot: CachedDashboardModelUsage = {
         usage: mapModelUsageTotalsToDashboardUsage(data.totals),
+        sparkline: mapModelUsageTimeSeriesToDashboardSparkline(data.timeSeries),
         sinceMs: range.sinceMs,
         refreshedAtMs: this.now(),
         dataThroughMs,
@@ -259,6 +276,7 @@ export class AdminDashboardDataService implements AdminDashboardService {
       return {
         selected,
         usage: snapshot.usage,
+        sparkline: snapshot.sparkline,
         freshness: {
           state: 'fresh',
           source: 'postgres_model_usage',
@@ -308,7 +326,10 @@ export class AdminDashboardDataService implements AdminDashboardService {
           activeSessionContextPressure: this.getActiveSessionContextPressure(),
         },
         toolStatus,
-        recentAnalysisWorkbenchTraces: this.analysisWorkbenchTraces,
+        recentAnalysisWorkbenchTraces: this.analysisWorkbenchTraces.slice(
+          0,
+          AdminDashboardDataService.ANALYSIS_WORKBENCH_DASHBOARD_LIMIT,
+        ),
       },
     };
   }

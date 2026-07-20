@@ -8,6 +8,7 @@ export interface SignalShutdownHandlerOptions {
 }
 
 export type SignalShutdownHandler = (signal: string) => Promise<void>;
+export type SignalExit = (code: number) => void;
 
 export interface ProcessErrorHandlerOptions {
   logger: ShutdownLogger;
@@ -96,4 +97,23 @@ export function createSignalShutdownHandler(
       if (shutdownPromise === attempt) shutdownPromise = null;
     }
   };
+}
+
+export function installSignalHandlers(
+  shutdown: SignalShutdownHandler,
+  logger: ShutdownLogger,
+  exit: SignalExit = code => process.exit(code),
+): void {
+  process.on('SIGINT', () => {
+    void shutdown('SIGINT').catch((error) => {
+      logger.error('Unhandled SIGINT shutdown error', { error: String(error) });
+      exit(1);
+    });
+  });
+  process.on('SIGTERM', () => {
+    void shutdown('SIGTERM').catch((error) => {
+      logger.error('Unhandled SIGTERM shutdown error', { error: String(error) });
+      exit(1);
+    });
+  });
 }

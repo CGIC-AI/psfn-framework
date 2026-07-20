@@ -217,7 +217,7 @@ function createHarness(overrides?: {
   };
   const trackSessionActivity = vi.fn();
   const config = overrides?.config ?? ({
-    companionId: 'companion-test',
+    companionId: '11111111-1111-4111-8111-111111111111',
   } as SubstrateConfig);
   const eventBus = overrides?.eventBus ?? new EventBus();
 

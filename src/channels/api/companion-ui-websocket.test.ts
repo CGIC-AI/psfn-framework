@@ -6,11 +6,18 @@ import { WebSocket } from 'ws';
 import { parseSatelliteRegistryConfig } from '../backplane/satellite-registry.js';
 import { deriveApiKeyPrincipalId } from '../backplane/http/auth.js';
 import { CompanionUiWebSocketAdapter } from './companion-ui-websocket.js';
+import { EventBus } from '../../shared/event-bus.js';
+import { CompanionEventRelay } from '../backplane/companion-relay/relay.js';
 
 const companionId = '11111111-1111-4111-8111-111111111111';
 const satelliteKey = 'satellite-key-with-more-than-sixteen-characters';
 const proxyToken = 'trusted-proxy-token-with-more-than-32-characters';
 const certDigest = 'a'.repeat(64);
+const CONFIGURE = Buffer.from(JSON.stringify({
+  schemaVersion: 1,
+  type: 'session.configure',
+  eventCapabilities: ['approvals.v2'],
+}));
 
 class FakeSocket extends EventEmitter {
   destroyed = false;
@@ -58,7 +65,13 @@ function request(overrides: Partial<IncomingMessage> = {}): IncomingMessage {
   } as IncomingMessage;
 }
 
-function fixture(options: { guest?: boolean } = {}) {
+  function fixture(options: { guest?: boolean } = {}) {
+  const eventBus = new EventBus();
+  const eventRelay = new CompanionEventRelay({
+    eventBus,
+    defaultCompanionId: companionId,
+    approvalBindingOf: () => ({ companionId }),
+  });
   const webSocket = new FakeWebSocket();
   const handleUpgrade = vi.fn((_request, _socket, _head, callback) => callback(webSocket));
   const attachment = {
@@ -118,13 +131,14 @@ function fixture(options: { guest?: boolean } = {}) {
           defaultIdentity: {
             authorId: 'legacy', authorName: 'Legacy', canonicalContactId: 'legacy-contact', channelPrivacy: 'private',
           },
-          maxCapabilities: ['text'], telemetryScopes: ['status'],
+          maxCapabilities: ['text'], telemetryScopes: ['status', 'approvals'],
           hubDeviceEnrollment: { deviceId: 'display', enrollmentVersion: 1, enrollmentStatus: 'active' },
         }],
       }],
     }),
     hubDeviceIngress: { admit } as never,
     actionBroker: { execute } as never,
+    eventRelay,
     ...(options.guest ? {
       guestMode: 'explicit' as const,
       guestActionBroker: { execute: guestExecute } as never,
@@ -135,7 +149,7 @@ function fixture(options: { guest?: boolean } = {}) {
       close: (callback: (error?: Error) => void) => callback(),
     }) as never,
   });
-  return { adapter, admit, execute, guestExecute, handleUpgrade, webSocket };
+  return { adapter, admit, eventBus, execute, guestExecute, handleUpgrade, webSocket };
 }
 
 describe('CompanionUiWebSocketAdapter upgrade policy', () => {
@@ -152,6 +166,8 @@ describe('CompanionUiWebSocketAdapter upgrade policy', () => {
       connection: expect.objectContaining({ companionId, deviceId: 'display', sessionId: 'hub-session-1' }),
       human: { kind: 'fleet_browser_session', sessionToken: 's'.repeat(43) },
     }));
+    built.webSocket.emit('message', CONFIGURE, false);
+    await vi.waitFor(() => expect(built.webSocket.sent).toHaveLength(1));
     expect(built.webSocket.sent.map(value => JSON.parse(value))).toEqual([{
       schemaVersion: 1,
       type: 'session.ready',
@@ -159,6 +175,7 @@ describe('CompanionUiWebSocketAdapter upgrade policy', () => {
       place: { id: 'office', label: 'office' },
       capabilities: ['text'],
       telemetryScopes: ['status'],
+      eventCapabilities: [],
     }]);
     expect(built.webSocket.sent[0]).not.toMatch(/sessionId|channelId|human|cookie|credential|assertion/u);
     await built.adapter.stop();
@@ -174,6 +191,8 @@ describe('CompanionUiWebSocketAdapter upgrade policy', () => {
     built.adapter.handleUpgrade(guestRequest, socket as unknown as Duplex, Buffer.alloc(0));
     await vi.waitFor(() => expect(built.handleUpgrade).toHaveBeenCalledOnce());
     expect(built.admit).toHaveBeenCalledWith(expect.objectContaining({ human: { kind: 'guest' } }));
+    built.webSocket.emit('message', CONFIGURE, false);
+    await vi.waitFor(() => expect(built.webSocket.sent).toHaveLength(1));
 
     const body = Buffer.from(JSON.stringify({
       schemaVersion: 1,
@@ -196,6 +215,129 @@ describe('CompanionUiWebSocketAdapter upgrade policy', () => {
     await vi.waitFor(() => expect(built.webSocket.readyState).toBe(WebSocket.CLOSED));
     expect(built.guestExecute).toHaveBeenCalledOnce();
     expect(built.webSocket.closeArgs[0]).toBe(4403);
+    await built.adapter.stop();
+  });
+
+  it('negotiates and forwards complete companion-scoped approval-v2 events', async () => {
+    const built = fixture();
+    const candidate = request();
+    candidate.headers['x-psfn-satellite-telemetry-scopes'] = 'approvals';
+    candidate.rawHeaders = Object.entries(candidate.headers)
+      .flatMap(([name, value]) => [name, String(value)]);
+    const socket = new FakeSocket();
+    built.adapter.handleUpgrade(candidate, socket as unknown as Duplex, Buffer.alloc(0));
+    await vi.waitFor(() => expect(built.handleUpgrade).toHaveBeenCalledOnce());
+    built.webSocket.emit('message', CONFIGURE, false);
+    await vi.waitFor(() => expect(built.webSocket.sent).toHaveLength(1));
+    expect(JSON.parse(built.webSocket.sent[0]!)).toMatchObject({
+      type: 'session.ready',
+      eventCapabilities: ['approvals.v2'],
+    });
+
+    await built.eventBus.emit('companion.approval.requested', {
+      companionId,
+      payload: {
+        id: 'approval-1',
+        title: 'web.fetch: example.test',
+        requestedAt: '2026-07-17T00:00:00.000Z',
+        redactedContext: 'Read documentation',
+        status: 'pending',
+        sourceSystem: 'tool-access',
+        attribution: { parentId: companionId, parentLabel: 'Purrsephone' },
+        action: 'web.fetch',
+        scope: 'example.test',
+        reason: 'Read documentation',
+        grantMode: { kind: 'once' },
+      },
+      timestamp: Date.now(),
+    });
+
+    await vi.waitFor(() => expect(built.webSocket.sent).toHaveLength(2));
+    expect(JSON.parse(built.webSocket.sent[1]!)).toEqual({
+      schemaVersion: 1,
+      type: 'event',
+      event: {
+        type: 'approval.requested',
+        data: expect.objectContaining({
+          id: 'approval-1',
+          sourceSystem: 'tool-access',
+          attribution: { parentId: companionId, parentLabel: 'Purrsephone' },
+          grantMode: { kind: 'once' },
+        }),
+      },
+    });
+    await built.adapter.stop();
+  });
+
+  it('does not expose approval events when the Hub ceiling lacks the approvals scope', async () => {
+    const built = fixture();
+    const socket = new FakeSocket();
+    built.adapter.handleUpgrade(request(), socket as unknown as Duplex, Buffer.alloc(0));
+    await vi.waitFor(() => expect(built.handleUpgrade).toHaveBeenCalledOnce());
+    built.webSocket.emit('message', CONFIGURE, false);
+    await vi.waitFor(() => expect(built.webSocket.sent).toHaveLength(1));
+
+    await built.eventBus.emit('companion.approval.requested', {
+      companionId,
+      payload: {
+        id: 'approval-hidden',
+        title: 'web.fetch: example.test',
+        requestedAt: '2026-07-17T00:00:00.000Z',
+        redactedContext: 'Read documentation',
+        status: 'pending',
+        sourceSystem: 'tool-access',
+        attribution: { parentId: companionId, parentLabel: 'Test Companion' },
+        action: 'web.fetch',
+        scope: 'example.test',
+        reason: 'Read documentation',
+        grantMode: { kind: 'once' },
+      },
+      timestamp: Date.now(),
+    });
+    await new Promise(resolve => setImmediate(resolve));
+
+    expect(built.webSocket.sent).toHaveLength(1);
+    expect(JSON.parse(built.webSocket.sent[0]!)).toMatchObject({
+      type: 'session.ready',
+      eventCapabilities: [],
+    });
+    await built.adapter.stop();
+  });
+
+  it('reauthorizes before each approval event and closes without delivery after revocation', async () => {
+    const built = fixture();
+    const candidate = request();
+    candidate.headers['x-psfn-satellite-telemetry-scopes'] = 'approvals';
+    candidate.rawHeaders = Object.entries(candidate.headers)
+      .flatMap(([name, value]) => [name, String(value)]);
+    const socket = new FakeSocket();
+    built.adapter.handleUpgrade(candidate, socket as unknown as Duplex, Buffer.alloc(0));
+    await vi.waitFor(() => expect(built.handleUpgrade).toHaveBeenCalledOnce());
+    built.webSocket.emit('message', CONFIGURE, false);
+    await vi.waitFor(() => expect(built.webSocket.sent).toHaveLength(1));
+
+    built.admit.mockRejectedValueOnce(new Error('operator grant revoked'));
+    await built.eventBus.emit('companion.approval.requested', {
+      companionId,
+      payload: {
+        id: 'approval-revoked',
+        title: 'web.fetch: example.test',
+        requestedAt: '2026-07-17T00:00:00.000Z',
+        redactedContext: 'Read documentation',
+        status: 'pending',
+        sourceSystem: 'tool-access',
+        attribution: { parentId: companionId, parentLabel: 'Test Companion' },
+        action: 'web.fetch',
+        scope: 'example.test',
+        reason: 'Read documentation',
+        grantMode: { kind: 'once' },
+      },
+      timestamp: Date.now(),
+    });
+
+    await vi.waitFor(() => expect(built.webSocket.readyState).toBe(WebSocket.CLOSED));
+    expect(built.webSocket.closeArgs[0]).toBe(4401);
+    expect(built.webSocket.sent).toHaveLength(1);
     await built.adapter.stop();
   });
 
@@ -223,6 +365,8 @@ describe('CompanionUiWebSocketAdapter upgrade policy', () => {
     const socket = new FakeSocket();
     built.adapter.handleUpgrade(request(), socket as unknown as Duplex, Buffer.alloc(0));
     await vi.waitFor(() => expect(built.handleUpgrade).toHaveBeenCalledOnce());
+    built.webSocket.emit('message', CONFIGURE, false);
+    await vi.waitFor(() => expect(built.webSocket.sent).toHaveLength(1));
     built.admit.mockRejectedValueOnce(new Error('revoked'));
     built.webSocket.emit('message', Buffer.from(JSON.stringify({
       schemaVersion: 1,
@@ -241,6 +385,8 @@ describe('CompanionUiWebSocketAdapter upgrade policy', () => {
     const socket = new FakeSocket();
     built.adapter.handleUpgrade(request(), socket as unknown as Duplex, Buffer.alloc(0));
     await vi.waitFor(() => expect(built.handleUpgrade).toHaveBeenCalledOnce());
+    built.webSocket.emit('message', CONFIGURE, false);
+    await vi.waitFor(() => expect(built.webSocket.sent).toHaveLength(1));
     const body = Buffer.from(JSON.stringify({
       schemaVersion: 1,
       requestId: 'embodiment-handoff-1',

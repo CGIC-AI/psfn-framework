@@ -44,7 +44,7 @@ const phases: readonly CertificationPhase[] = [
       'src/boundary/gateway/companion-ui-primary-embodiment.test.ts',
       'src/channels/api/companion-ui-websocket.test.ts',
       'src/channels/api/server/fleet-auth-recovery-routes.e2e.test.ts',
-      'src/operator/garden/fleet-sso-auth.test.ts',
+      'src/app/e2e/fleet-garden-cutover-certification.integration.test.ts',
       'src/system/config/fleet-auth-legacy-surface-guard.test.ts',
     ],
   },

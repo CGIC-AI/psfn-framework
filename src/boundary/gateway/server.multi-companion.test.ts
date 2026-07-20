@@ -22,6 +22,7 @@ import { tmpdir } from 'node:os';
 import { CapabilityRuntime } from '../../system/capabilities/runtime.js';
 import { GatewayCapabilityTierResolver } from './capability-tier-resolver.js';
 import type { ResolvedCompanionsFleetConfig } from '../../system/config/companions-config.js';
+import { deriveShardCapabilityGrant } from '../../system/capabilities/shard-derivation.js';
 
 // Mock the transport module to avoid real socket operations
 vi.mock('./transport.js', () => ({
@@ -136,6 +137,7 @@ function createMinimalOptions(): GatewayServerOptions {
     sessionHmacKeyring: TEST_SESSION_HMAC_KEYRING,
     wyomingShardRouting: TEST_WYOMING_SHARD_ROUTING,
     eventBus: new EventBus(),
+    approvalParentLabelProvider: (companionId) => `Test ${companionId}`,
   };
 }
 
@@ -238,13 +240,13 @@ function multiCompanion(
 ): GatewayMultiCompanionConfig {
   return {
     enabled: true,
-    fleetCompanionIds: ['comp-a', 'comp-b', 'comp-c'],
+    fleetCompanionIds: ['11111111-1111-4111-8111-111111111111', '22222222-2222-4222-8222-222222222222', '33333333-3333-4333-8333-333333333333'],
     channelRouting,
     discordAccounts,
     personalWorkspaceByCompanionId: {
-      'comp-a': '/workspace/comp-a',
-      'comp-b': '/workspace/comp-b',
-      'comp-c': '/workspace/comp-c',
+      '11111111-1111-4111-8111-111111111111': '/workspace/11111111-1111-4111-8111-111111111111',
+      '22222222-2222-4222-8222-222222222222': '/workspace/22222222-2222-4222-8222-222222222222',
+      '33333333-3333-4333-8333-333333333333': '/workspace/33333333-3333-4333-8333-333333333333',
     },
   };
 }
@@ -375,20 +377,20 @@ describe('resolveGatewayMultiCompanionConfig', () => {
 
   it('builds the routing table from channels.json companionId fields when enabled', () => {
     const channels = baseChannels();
-    channels.discord.companionId = 'comp-a';
-    channels.telegram.companionId = 'comp-b';
-    channels.api.companionId = 'comp-b';
+    channels.discord.companionId = '11111111-1111-4111-8111-111111111111';
+    channels.telegram.companionId = '22222222-2222-4222-8222-222222222222';
+    channels.api.companionId = '22222222-2222-4222-8222-222222222222';
     expect(resolveGatewayMultiCompanionConfig({
       multiCompanion: true,
-      companionFleet: resolvedFleet(['comp-a', 'comp-b']),
+      companionFleet: resolvedFleet(['11111111-1111-4111-8111-111111111111', '22222222-2222-4222-8222-222222222222']),
     }, channels, EMPTY_SATELLITE_REGISTRY)).toEqual({
       enabled: true,
-      fleetCompanionIds: ['comp-a', 'comp-b'],
-      channelRouting: { discord: 'comp-a', telegram: 'comp-b', api: 'comp-b' },
+      fleetCompanionIds: ['11111111-1111-4111-8111-111111111111', '22222222-2222-4222-8222-222222222222'],
+      channelRouting: { discord: '11111111-1111-4111-8111-111111111111', telegram: '22222222-2222-4222-8222-222222222222', api: '22222222-2222-4222-8222-222222222222' },
       discordAccounts: {},
       personalWorkspaceByCompanionId: {
-        'comp-a': '/runtime/workspaces/personal/comp-a',
-        'comp-b': '/runtime/workspaces/personal/comp-b',
+        '11111111-1111-4111-8111-111111111111': '/runtime/workspaces/personal/11111111-1111-4111-8111-111111111111',
+        '22222222-2222-4222-8222-222222222222': '/runtime/workspaces/personal/22222222-2222-4222-8222-222222222222',
       },
       sharedWorkspacePath: '/runtime/workspaces/shared',
     });
@@ -399,7 +401,7 @@ describe('resolveGatewayMultiCompanionConfig', () => {
     channels.discord.accounts = [
       {
         accountId: 'acct-a',
-        companionId: 'comp-a',
+        companionId: '11111111-1111-4111-8111-111111111111',
         tokenEnvVar: 'DISCORD_TOKEN_A',
         token: 'token-a',
         heartbeatChannelId: '',
@@ -408,7 +410,7 @@ describe('resolveGatewayMultiCompanionConfig', () => {
       },
       {
         accountId: 'acct-b',
-        companionId: 'comp-b',
+        companionId: '22222222-2222-4222-8222-222222222222',
         tokenEnvVar: 'DISCORD_TOKEN_B',
         token: 'token-b',
         heartbeatChannelId: '',
@@ -418,15 +420,15 @@ describe('resolveGatewayMultiCompanionConfig', () => {
     ];
     expect(resolveGatewayMultiCompanionConfig({
       multiCompanion: true,
-      companionFleet: resolvedFleet(['comp-a', 'comp-b']),
+      companionFleet: resolvedFleet(['11111111-1111-4111-8111-111111111111', '22222222-2222-4222-8222-222222222222']),
     }, channels, EMPTY_SATELLITE_REGISTRY)).toEqual({
       enabled: true,
-      fleetCompanionIds: ['comp-a', 'comp-b'],
+      fleetCompanionIds: ['11111111-1111-4111-8111-111111111111', '22222222-2222-4222-8222-222222222222'],
       channelRouting: {},
-      discordAccounts: { 'acct-a': 'comp-a', 'acct-b': 'comp-b' },
+      discordAccounts: { 'acct-a': '11111111-1111-4111-8111-111111111111', 'acct-b': '22222222-2222-4222-8222-222222222222' },
       personalWorkspaceByCompanionId: {
-        'comp-a': '/runtime/workspaces/personal/comp-a',
-        'comp-b': '/runtime/workspaces/personal/comp-b',
+        '11111111-1111-4111-8111-111111111111': '/runtime/workspaces/personal/11111111-1111-4111-8111-111111111111',
+        '22222222-2222-4222-8222-222222222222': '/runtime/workspaces/personal/22222222-2222-4222-8222-222222222222',
       },
       sharedWorkspacePath: '/runtime/workspaces/shared',
     });
@@ -434,7 +436,7 @@ describe('resolveGatewayMultiCompanionConfig', () => {
 
   it('fails closed when routing is declared while the flag is off', () => {
     const channels = baseChannels();
-    channels.discord.companionId = 'comp-a';
+    channels.discord.companionId = '11111111-1111-4111-8111-111111111111';
     expect(() => resolveGatewayMultiCompanionConfig({}, channels, EMPTY_SATELLITE_REGISTRY)).toThrow(
       /PSFN_MULTI_COMPANION is not enabled/,
     );
@@ -444,7 +446,7 @@ describe('resolveGatewayMultiCompanionConfig', () => {
     const channels = baseChannels();
     channels.discord.accounts = [{
       accountId: 'acct-a',
-      companionId: 'comp-a',
+      companionId: '11111111-1111-4111-8111-111111111111',
       tokenEnvVar: 'DISCORD_TOKEN_A',
       token: 'token-a',
       heartbeatChannelId: '',
@@ -465,17 +467,17 @@ describe('resolveGatewayMultiCompanionConfig', () => {
 
   it('fails closed when channel routing names a companion outside the fleet', () => {
     const channels = baseChannels();
-    channels.api.companionId = 'comp-b';
+    channels.api.companionId = '22222222-2222-4222-8222-222222222222';
     expect(() => resolveGatewayMultiCompanionConfig({
       multiCompanion: true,
-      companionFleet: resolvedFleet(['comp-a']),
+      companionFleet: resolvedFleet(['11111111-1111-4111-8111-111111111111']),
     }, channels, EMPTY_SATELLITE_REGISTRY)).toThrow(/absent from companions\.json/);
   });
 
   it('fails closed when satellites.json binds a satellite to a companion outside the fleet', () => {
     expect(() => resolveGatewayMultiCompanionConfig({
       multiCompanion: true,
-      companionFleet: resolvedFleet(['comp-a']),
+      companionFleet: resolvedFleet(['11111111-1111-4111-8111-111111111111']),
     }, baseChannels(), {
       schemaVersion: 1,
       enabled: true,
@@ -483,7 +485,7 @@ describe('resolveGatewayMultiCompanionConfig', () => {
         satelliteId: 'sat-app',
         displayName: 'Satellite App',
         mobility: 'mobile',
-        companionId: 'comp-b',
+        companionId: '22222222-2222-4222-8222-222222222222',
         endpoints: [],
       }],
     })).toThrow(/satellites\.json.*absent from companions\.json/);
@@ -497,7 +499,7 @@ describe('resolveGatewayMultiCompanionConfig', () => {
         satelliteId: 'sat-app',
         displayName: 'Satellite App',
         mobility: 'mobile',
-        companionId: 'comp-a',
+        companionId: '11111111-1111-4111-8111-111111111111',
         endpoints: [],
       }],
     })).toThrow(/PSFN_MULTI_COMPANION is not enabled/);
@@ -518,20 +520,20 @@ describe('GatewayServer single-companion parity (flag off)', () => {
     const connA = await connect();
     const connB = await connect();
 
-    const first = await identifyAgent(connA, 'comp-a', 901);
-    const second = await identifyAgent(connB, 'comp-a', 902);
-    expect(first.result).toEqual({ success: true, role: 'agent', companionId: 'comp-a' });
-    expect(second.result).toEqual({ success: true, role: 'agent', companionId: 'comp-a' });
+    const first = await identifyAgent(connA, '11111111-1111-4111-8111-111111111111', 901);
+    const second = await identifyAgent(connB, '11111111-1111-4111-8111-111111111111', 902);
+    expect(first.result).toEqual({ success: true, role: 'agent', companionId: '11111111-1111-4111-8111-111111111111' });
+    expect(second.result).toEqual({ success: true, role: 'agent', companionId: '11111111-1111-4111-8111-111111111111' });
   });
 
   it('keeps satellite voice on the single ready-agent path while the flag is off', async () => {
     const routed = { messages: new Array<SubstrateMessage>() };
     const { server, connect } = await setupServer(createMinimalOptions());
     const conn = await connect(voiceStreamResponder(routed));
-    await identifyAgent(conn, 'comp-a', 903);
+    await identifyAgent(conn, '11111111-1111-4111-8111-111111111111', 903);
 
     await expect(server.requestAgentVoiceStream(
-      makeSatelliteVoiceMessage('sat-single', 'comp-b'),
+      makeSatelliteVoiceMessage('sat-single', '22222222-2222-4222-8222-222222222222'),
     )).resolves.toMatchObject({ content: 'voice response' });
     expect(methodFrames(conn, 'voice.transcript.begin')).toHaveLength(1);
   });
@@ -629,26 +631,26 @@ describe('GatewayServer multi-companion identify (flag on)', () => {
     });
     const connA = await connect();
     const connB = await connect();
-    await identifyAgent(connA, 'comp-a', 1);
-    await identifyAgent(connB, 'comp-b', 2);
+    await identifyAgent(connA, '11111111-1111-4111-8111-111111111111', 1);
+    await identifyAgent(connB, '22222222-2222-4222-8222-222222222222', 2);
     auditAppend.mockClear();
 
     const before = server.getFleetConnectionSnapshot();
-    const beforeA = before.connections.find(connection => connection.companionId === 'comp-a')!;
-    const beforeB = before.connections.find(connection => connection.companionId === 'comp-b')!;
+    const beforeA = before.connections.find(connection => connection.companionId === '11111111-1111-4111-8111-111111111111')!;
+    const beforeB = before.connections.find(connection => connection.companionId === '22222222-2222-4222-8222-222222222222')!;
     await new Promise(resolve => setTimeout(resolve, 5));
     connA._emitHeartbeat();
 
     const after = server.getFleetConnectionSnapshot();
-    const afterA = after.connections.find(connection => connection.companionId === 'comp-a')!;
-    const afterB = after.connections.find(connection => connection.companionId === 'comp-b')!;
+    const afterA = after.connections.find(connection => connection.companionId === '11111111-1111-4111-8111-111111111111')!;
+    const afterB = after.connections.find(connection => connection.companionId === '22222222-2222-4222-8222-222222222222')!;
     expect(afterA.lastSeenAt).toBeGreaterThan(beforeA.lastSeenAt);
     expect(afterB.lastSeenAt).toBe(beforeB.lastSeenAt);
     expect(auditAppend).not.toHaveBeenCalled();
 
     const realRpc = await invokeRpc(connA, 3, 'discord.typing', {
-      channelId: 'comp-a-channel',
-      companionId: 'comp-a',
+      channelId: '11111111-1111-4111-8111-111111111111-channel',
+      companionId: '11111111-1111-4111-8111-111111111111',
     });
     expect(realRpc.result).toEqual({ success: true });
     expect(auditAppend).toHaveBeenCalledWith(expect.objectContaining({
@@ -674,11 +676,11 @@ describe('GatewayServer multi-companion identify (flag on)', () => {
     });
     const connA = await connect();
     const connB = await connect();
-    await identifyAgent(connA, 'comp-a', 1);
-    await identifyAgent(connB, 'comp-b', 2);
+    await identifyAgent(connA, '11111111-1111-4111-8111-111111111111', 1);
+    await identifyAgent(connB, '22222222-2222-4222-8222-222222222222', 2);
 
     const screened = await invokeRpc(connA, 3, 'intake.screen_image', {
-      companionId: 'comp-a',
+      companionId: '11111111-1111-4111-8111-111111111111',
       imageBase64: 'aGVsbG8=',
       mimeType: 'image/png',
       originRef: 'discord:channel:message:attachment:0',
@@ -688,7 +690,7 @@ describe('GatewayServer multi-companion identify (flag on)', () => {
     expect(handle).toEqual(expect.any(String));
 
     const legitimate = await invokeRpc(connA, 4, 'llm.chat', {
-      companionId: 'comp-a',
+      companionId: '11111111-1111-4111-8111-111111111111',
       model: '',
       provider: '',
       systemPrompt: 'system',
@@ -702,7 +704,7 @@ describe('GatewayServer multi-companion identify (flag on)', () => {
     expect(stream).toHaveBeenCalledTimes(1);
 
     const crossover = await invokeRpc(connB, 5, 'llm.chat', {
-      companionId: 'comp-b',
+      companionId: '22222222-2222-4222-8222-222222222222',
       model: '',
       provider: '',
       systemPrompt: 'system',
@@ -732,9 +734,9 @@ describe('GatewayServer multi-companion identify (flag on)', () => {
       multiCompanion: multiCompanion({}),
     });
     const original = await connect();
-    await identifyAgent(original, 'comp-a', 1);
+    await identifyAgent(original, '11111111-1111-4111-8111-111111111111', 1);
     const screened = await invokeRpc(original, 2, 'intake.screen_image', {
-      companionId: 'comp-a',
+      companionId: '11111111-1111-4111-8111-111111111111',
       imageBase64: 'aGVsbG8=',
       mimeType: 'image/png',
       originRef: 'discord:channel:message:attachment:0',
@@ -745,9 +747,9 @@ describe('GatewayServer multi-companion identify (flag on)', () => {
     await new Promise(r => setTimeout(r, 5));
 
     const reconnected = await connect();
-    await identifyAgent(reconnected, 'comp-a', 3);
+    await identifyAgent(reconnected, '11111111-1111-4111-8111-111111111111', 3);
     const afterReconnect = await invokeRpc(reconnected, 4, 'llm.chat', {
-      companionId: 'comp-a',
+      companionId: '11111111-1111-4111-8111-111111111111',
       model: '',
       provider: '',
       systemPrompt: 'system',
@@ -764,8 +766,8 @@ describe('GatewayServer multi-companion identify (flag on)', () => {
 
   it('confines filesystem reads and writes to the authenticated Personal Workspace', async () => {
     const root = mkdtempSync(join(tmpdir(), 'psfn-gateway-workspace-isolation-'));
-    const personalA = join(root, 'personal', 'comp-a');
-    const personalB = join(root, 'personal', 'comp-b');
+    const personalA = join(root, 'personal', '11111111-1111-4111-8111-111111111111');
+    const personalB = join(root, 'personal', '22222222-2222-4222-8222-222222222222');
     mkdirSync(personalA, { recursive: true });
     mkdirSync(personalB, { recursive: true });
     writeFileSync(join(personalA, 'note.txt'), 'alpha');
@@ -773,9 +775,9 @@ describe('GatewayServer multi-companion identify (flag on)', () => {
     try {
       const routing = multiCompanion({});
       routing.personalWorkspaceByCompanionId = {
-        'comp-a': personalA,
-        'comp-b': personalB,
-        'comp-c': join(root, 'personal', 'comp-c'),
+        '11111111-1111-4111-8111-111111111111': personalA,
+        '22222222-2222-4222-8222-222222222222': personalB,
+        '33333333-3333-4333-8333-333333333333': join(root, 'personal', '33333333-3333-4333-8333-333333333333'),
       };
       const { connect } = await setupServer({
         ...createMinimalOptions(),
@@ -783,7 +785,7 @@ describe('GatewayServer multi-companion identify (flag on)', () => {
         capabilityTierProvider: () => 'autonomous',
       });
       const conn = await connect();
-      await identifyAgent(conn, 'comp-a', 1);
+      await identifyAgent(conn, '11111111-1111-4111-8111-111111111111', 1);
 
       expect((await invokeRpc(conn, 2, 'fs.read', { path: 'note.txt' })).result.content)
         .toBe('alpha');
@@ -817,7 +819,7 @@ describe('GatewayServer multi-companion identify (flag on)', () => {
     });
     const conn = await connect();
 
-    const response = await identifyAgent(conn, 'comp-unknown', 2);
+    const response = await identifyAgent(conn, '44444444-4444-4444-8444-444444444444', 2);
     expect(response.error).toMatchObject({ code: GatewayErrors.COMPANION_AUTH_FAILED });
     expect(response.error.message).toContain('active fleet');
   });
@@ -832,11 +834,11 @@ describe('GatewayServer multi-companion identify (flag on)', () => {
 
     const missingResponse = await invokeRpc(missing, 3, 'gateway.client.identify', {
       role: 'agent',
-      companionId: 'comp-a',
+      companionId: '11111111-1111-4111-8111-111111111111',
     });
     const invalidResponse = await invokeRpc(invalid, 4, 'gateway.client.identify', {
       role: 'agent',
-      companionId: 'comp-a',
+      companionId: '11111111-1111-4111-8111-111111111111',
       authToken: 'v1.not-a-valid-token',
     });
 
@@ -854,17 +856,17 @@ describe('GatewayServer multi-companion identify (flag on)', () => {
 
     const workerEscalation = await invokeRpc(workerAsAgent, 6, 'gateway.client.identify', {
       role: 'agent',
-      companionId: 'comp-a',
+      companionId: '11111111-1111-4111-8111-111111111111',
       authToken: deriveCompanionAuthToken(
-        'comp-a',
+        '11111111-1111-4111-8111-111111111111',
         'internal_session_integrity',
         TEST_SESSION_HMAC_KEYRING,
       ),
     });
     const agentEscalation = await invokeRpc(agentAsWorker, 7, 'gateway.client.identify', {
       role: 'internal_session_integrity',
-      companionId: 'comp-a',
-      authToken: deriveCompanionAuthToken('comp-a', 'agent', TEST_SESSION_HMAC_KEYRING),
+      companionId: '11111111-1111-4111-8111-111111111111',
+      authToken: deriveCompanionAuthToken('11111111-1111-4111-8111-111111111111', 'agent', TEST_SESSION_HMAC_KEYRING),
     });
 
     expect(workerEscalation.error).toMatchObject({ code: GatewayErrors.COMPANION_AUTH_FAILED });
@@ -878,8 +880,8 @@ describe('GatewayServer multi-companion identify (flag on)', () => {
     });
     const agent = await connect();
     const worker = await connect();
-    await identifyAgent(agent, 'comp-a', 8);
-    await identifySessionIntegrityWorker(worker, 'comp-a', 9);
+    await identifyAgent(agent, '11111111-1111-4111-8111-111111111111', 8);
+    await identifySessionIntegrityWorker(worker, '11111111-1111-4111-8111-111111111111', 9);
 
     const entry = {
       type: 'message',
@@ -927,7 +929,7 @@ describe('GatewayServer multi-companion identify (flag on)', () => {
       credentialPresence,
     });
     const agent = await connect();
-    await identifyAgent(agent, 'comp-a', 14);
+    await identifyAgent(agent, '11111111-1111-4111-8111-111111111111', 14);
 
     const response = await invokeRpc(agent, 15, 'runtime.credential_presence', {});
 
@@ -940,15 +942,15 @@ describe('GatewayServer multi-companion identify (flag on)', () => {
     const { server, connect } = await setupServer({
       ...createMinimalOptions(),
       auditStore: createMockAuditStore({ append: auditAppend }),
-      multiCompanion: multiCompanion({ discord: 'comp-a' }),
+      multiCompanion: multiCompanion({ discord: '11111111-1111-4111-8111-111111111111' }),
     });
     const connA = await connect();
     const connB = await connect();
 
-    const first = await identifyAgent(connA, 'comp-a', 1);
-    expect(first.result).toMatchObject({ success: true, companionId: 'comp-a' });
+    const first = await identifyAgent(connA, '11111111-1111-4111-8111-111111111111', 1);
+    expect(first.result).toMatchObject({ success: true, companionId: '11111111-1111-4111-8111-111111111111' });
 
-    const second = await identifyAgent(connB, 'comp-a', 2);
+    const second = await identifyAgent(connB, '11111111-1111-4111-8111-111111111111', 2);
     expect(second.error).toBeDefined();
     expect(second.error.message).toContain('duplicate identify rejected');
 
@@ -971,8 +973,8 @@ describe('GatewayServer multi-companion identify (flag on)', () => {
     });
     const conn = await connect();
 
-    await identifyAgent(conn, 'comp-a', 1);
-    const rebind = await identifyAgent(conn, 'comp-b', 2);
+    await identifyAgent(conn, '11111111-1111-4111-8111-111111111111', 1);
+    const rebind = await identifyAgent(conn, '22222222-2222-4222-8222-222222222222', 2);
     expect(rebind.error).toBeDefined();
     expect(rebind.error.message).toContain('cannot change role or companion identity');
   });
@@ -1004,13 +1006,13 @@ describe('GatewayServer multi-companion identify (flag on)', () => {
       multiCompanion: multiCompanion({}),
     });
     const conn = await connect();
-    await identifyAgent(conn, 'comp-a', 1);
+    await identifyAgent(conn, '11111111-1111-4111-8111-111111111111', 1);
 
     conn._emit({
       jsonrpc: '2.0',
       id: 6,
       method: 'llm.complete',
-      params: { companionId: 'comp-b' },
+      params: { companionId: '22222222-2222-4222-8222-222222222222' },
     });
     await new Promise(r => setTimeout(r, 20));
 
@@ -1019,8 +1021,8 @@ describe('GatewayServer multi-companion identify (flag on)', () => {
       method: 'gateway.companion.identity_mismatch',
       decision: 'DENY',
       params: expect.objectContaining({
-        boundCompanionId: 'comp-a',
-        claimedCompanionId: 'comp-b',
+        boundCompanionId: '11111111-1111-4111-8111-111111111111',
+        claimedCompanionId: '22222222-2222-4222-8222-222222222222',
       }),
     }));
     await expect(server.requestAgent('test', {})).rejects.toThrow();
@@ -1039,7 +1041,7 @@ describe('GatewayServer multi-companion identify (flag on)', () => {
       multiCompanion: multiCompanion({}),
     });
     const conn = await connect();
-    await identifyAgent(conn, 'comp-a', 1);
+    await identifyAgent(conn, '11111111-1111-4111-8111-111111111111', 1);
 
     conn._emit({
       jsonrpc: '2.0',
@@ -1053,7 +1055,7 @@ describe('GatewayServer multi-companion identify (flag on)', () => {
     expect(auditAppend).toHaveBeenCalledWith(expect.objectContaining({
       method: 'gateway.companion.identity_claim_invalid',
       decision: 'DENY',
-      params: expect.objectContaining({ boundCompanionId: 'comp-a' }),
+      params: expect.objectContaining({ boundCompanionId: '11111111-1111-4111-8111-111111111111' }),
     }));
   });
 });
@@ -1069,11 +1071,11 @@ describe('GatewayServer multi-companion routing (flag on)', () => {
     });
     const connA = await connect();
     const connB = await connect();
-    await identifyAgent(connA, 'comp-a', 1);
-    await identifyAgent(connB, 'comp-b', 2);
+    await identifyAgent(connA, '11111111-1111-4111-8111-111111111111', 1);
+    await identifyAgent(connB, '22222222-2222-4222-8222-222222222222', 2);
 
     const queued = await invokeRpc(connA, 3, 'fs.write', {
-      path: '/tmp/comp-a-needs-approval.txt',
+      path: '/tmp/11111111-1111-4111-8111-111111111111-needs-approval.txt',
       content: 'held',
     });
 
@@ -1123,8 +1125,8 @@ describe('GatewayServer multi-companion routing (flag on)', () => {
       });
       const connA = await connect();
       const connB = await connect();
-      await identifyAgent(connA, 'comp-a', 1);
-      await identifyAgent(connB, 'comp-b', 2);
+      await identifyAgent(connA, '11111111-1111-4111-8111-111111111111', 1);
+      await identifyAgent(connB, '22222222-2222-4222-8222-222222222222', 2);
 
       const listA = await invokeRpc(connA, 3, 'shared.workspace.list', {});
       const listB = await invokeRpc(connB, 4, 'shared.workspace.list', {});
@@ -1145,7 +1147,7 @@ describe('GatewayServer multi-companion routing (flag on)', () => {
       expect(traversal.error).toBeDefined();
       const identityClaim = await invokeRpc(connB, 7, 'shared.workspace.read', {
         artifactPath: 'world/guide.md',
-        companionId: 'comp-b',
+        companionId: '22222222-2222-4222-8222-222222222222',
       });
       expect(identityClaim.error.message).toContain('identity assertions are forbidden');
       const write = await invokeRpc(connA, 8, 'shared.workspace.write', {
@@ -1165,12 +1167,12 @@ describe('GatewayServer multi-companion routing (flag on)', () => {
   it('delivers inbound channel messages to exactly the routed companion', async () => {
     const { server, connect } = await setupServer({
       ...createMinimalOptions(),
-      multiCompanion: multiCompanion({ discord: 'comp-a' }),
+      multiCompanion: multiCompanion({ discord: '11111111-1111-4111-8111-111111111111' }),
     });
     const connA = await connect();
     const connB = await connect();
-    await identifyAgent(connA, 'comp-a', 1);
-    await identifyAgent(connB, 'comp-b', 2);
+    await identifyAgent(connA, '11111111-1111-4111-8111-111111111111', 1);
+    await identifyAgent(connB, '22222222-2222-4222-8222-222222222222', 2);
 
     server.notifyChannelMessage('discord', 'discord.message', { message: { id: 'm1' } });
 
@@ -1183,10 +1185,10 @@ describe('GatewayServer multi-companion routing (flag on)', () => {
     const { server, connect } = await setupServer({
       ...createMinimalOptions(),
       auditStore: createMockAuditStore({ append: auditAppend }),
-      multiCompanion: multiCompanion({ discord: 'comp-a' }),
+      multiCompanion: multiCompanion({ discord: '11111111-1111-4111-8111-111111111111' }),
     });
     const connA = await connect();
-    await identifyAgent(connA, 'comp-a', 1);
+    await identifyAgent(connA, '11111111-1111-4111-8111-111111111111', 1);
 
     expect(() => server.notifyChannelMessage('telegram', 'telegram.message', {}))
       .toThrow('Multi-companion routing has no companion for channel surface "telegram"');
@@ -1204,10 +1206,10 @@ describe('GatewayServer multi-companion routing (flag on)', () => {
   it('fails closed for channel types without a routing surface', async () => {
     const { server, connect } = await setupServer({
       ...createMinimalOptions(),
-      multiCompanion: multiCompanion({ discord: 'comp-a' }),
+      multiCompanion: multiCompanion({ discord: '11111111-1111-4111-8111-111111111111' }),
     });
     const connA = await connect();
-    await identifyAgent(connA, 'comp-a', 1);
+    await identifyAgent(connA, '11111111-1111-4111-8111-111111111111', 1);
 
     await expect(server.requestAgentVoiceStream(makeChannelMessage('terminal')))
       .rejects.toThrow('cannot map channelType "terminal"');
@@ -1216,12 +1218,12 @@ describe('GatewayServer multi-companion routing (flag on)', () => {
   it('routes requestAgent (api surface) to the api companion, not the first ready agent', async () => {
     const { server, connect } = await setupServer({
       ...createMinimalOptions(),
-      multiCompanion: multiCompanion({ api: 'comp-b' }),
+      multiCompanion: multiCompanion({ api: '22222222-2222-4222-8222-222222222222' }),
     });
     const connA = await connect();
     const connB = await connect();
-    await identifyAgent(connA, 'comp-a', 1);
-    await identifyAgent(connB, 'comp-b', 2);
+    await identifyAgent(connA, '11111111-1111-4111-8111-111111111111', 1);
+    await identifyAgent(connB, '22222222-2222-4222-8222-222222222222', 2);
 
     const requestPromise = server.requestAgent('api.health', {});
     await new Promise(r => setTimeout(r, 10));
@@ -1236,15 +1238,15 @@ describe('GatewayServer multi-companion routing (flag on)', () => {
   it('routes an explicit companion authority read only to that authenticated agent', async () => {
     const { server, connect } = await setupServer({
       ...createMinimalOptions(),
-      multiCompanion: multiCompanion({ api: 'comp-b' }),
+      multiCompanion: multiCompanion({ api: '22222222-2222-4222-8222-222222222222' }),
     });
     const connA = await connect();
     const connB = await connect();
-    await identifyAgent(connA, 'comp-a', 1);
-    await identifyAgent(connB, 'comp-b', 2);
+    await identifyAgent(connA, '11111111-1111-4111-8111-111111111111', 1);
+    await identifyAgent(connB, '22222222-2222-4222-8222-222222222222', 2);
 
     const requestPromise = server.requestCompanionAgent(
-      'comp-a',
+      '11111111-1111-4111-8111-111111111111',
       'contact.authority.snapshot',
       { contactId: 'contact-one', providerSubjectId: '123456789012345679' },
     );
@@ -1261,12 +1263,12 @@ describe('GatewayServer multi-companion routing (flag on)', () => {
     const routed = { messages: [] as any[] };
     const { server, connect } = await setupServer({
       ...createMinimalOptions(),
-      multiCompanion: multiCompanion({ telegram: 'comp-b' }),
+      multiCompanion: multiCompanion({ telegram: '22222222-2222-4222-8222-222222222222' }),
     });
     const connA = await connect();
     const connB = await connect(voiceStreamResponder(routed));
-    await identifyAgent(connA, 'comp-a', 1);
-    await identifyAgent(connB, 'comp-b', 2);
+    await identifyAgent(connA, '11111111-1111-4111-8111-111111111111', 1);
+    await identifyAgent(connB, '22222222-2222-4222-8222-222222222222', 2);
 
     const result = await server.requestAgentVoiceStream(makeChannelMessage('telegram'));
     expect(result.content).toBe('voice response');
@@ -1278,29 +1280,29 @@ describe('GatewayServer multi-companion routing (flag on)', () => {
     const routed = { messages: new Array<SubstrateMessage>() };
     const { server, connect } = await setupServer({
       ...createMinimalOptions(),
-      multiCompanion: multiCompanion({ api: 'comp-a' }),
+      multiCompanion: multiCompanion({ api: '11111111-1111-4111-8111-111111111111' }),
     });
     const connA = await connect();
     const connB = await connect(voiceStreamResponder(routed));
-    await identifyAgent(connA, 'comp-a', 1);
-    await identifyAgent(connB, 'comp-b', 2);
+    await identifyAgent(connA, '11111111-1111-4111-8111-111111111111', 1);
+    await identifyAgent(connB, '22222222-2222-4222-8222-222222222222', 2);
     const result = await server.requestAgentVoiceStream(
-      makeSatelliteVoiceMessage('sat-app', 'comp-b'),
+      makeSatelliteVoiceMessage('sat-app', '22222222-2222-4222-8222-222222222222'),
     );
 
     expect(result.content).toBe('voice response');
     expect(methodFrames(connA, 'voice.transcript.begin')).toHaveLength(0);
     expect(methodFrames(connB, 'voice.transcript.begin')).toHaveLength(1);
-    expect(routed.messages[0]?.routing?.gateway?.companionId).toBe('comp-b');
+    expect(routed.messages[0]?.routing?.gateway?.companionId).toBe('22222222-2222-4222-8222-222222222222');
   });
 
   it('fails closed when multi-companion satellite voice has no companion binding', async () => {
     const { server, connect } = await setupServer({
       ...createMinimalOptions(),
-      multiCompanion: multiCompanion({ api: 'comp-a' }),
+      multiCompanion: multiCompanion({ api: '11111111-1111-4111-8111-111111111111' }),
     });
     const connA = await connect();
-    await identifyAgent(connA, 'comp-a', 1);
+    await identifyAgent(connA, '11111111-1111-4111-8111-111111111111', 1);
     await expect(server.requestAgentVoiceStream(makeSatelliteVoiceMessage('sat-unbound')))
       .rejects.toThrow(/satellite "sat-unbound" has no companion binding/i);
     expect(methodFrames(connA, 'voice.transcript.begin')).toHaveLength(0);
@@ -1309,10 +1311,10 @@ describe('GatewayServer multi-companion routing (flag on)', () => {
   it('fails closed when a satellite voice source is missing authenticated satellite metadata', async () => {
     const { server, connect } = await setupServer({
       ...createMinimalOptions(),
-      multiCompanion: multiCompanion({ api: 'comp-a' }),
+      multiCompanion: multiCompanion({ api: '11111111-1111-4111-8111-111111111111' }),
     });
     const connA = await connect();
-    await identifyAgent(connA, 'comp-a', 1);
+    await identifyAgent(connA, '11111111-1111-4111-8111-111111111111', 1);
     const message = makeChannelMessage('api');
     message.routing = { source: 'satellite' };
 
@@ -1325,12 +1327,12 @@ describe('GatewayServer multi-companion routing (flag on)', () => {
     const routed = { messages: [] as any[] };
     const { server, connect } = await setupServer({
       ...createMinimalOptions(),
-      multiCompanion: multiCompanion({ api: 'comp-b' }),
+      multiCompanion: multiCompanion({ api: '22222222-2222-4222-8222-222222222222' }),
     });
     const connA = await connect();
     const connB = await connect(voiceStreamResponder(routed));
-    await identifyAgent(connA, 'comp-a', 1);
-    await identifyAgent(connB, 'comp-b', 2);
+    await identifyAgent(connA, '11111111-1111-4111-8111-111111111111', 1);
+    await identifyAgent(connB, '22222222-2222-4222-8222-222222222222', 2);
 
     const message = {
       id: 'wyoming-msg-conn-hallway-1',
@@ -1348,7 +1350,7 @@ describe('GatewayServer multi-companion routing (flag on)', () => {
     expect(methodFrames(connA, 'voice.transcript.begin')).toHaveLength(0);
     expect(routed.messages[0]?.routing?.gateway).toEqual({
       schemaVersion: 1,
-      companionId: 'comp-b',
+      companionId: '22222222-2222-4222-8222-222222222222',
     });
   });
 
@@ -1357,18 +1359,18 @@ describe('GatewayServer multi-companion routing (flag on)', () => {
     const { server, connect } = await setupServer({
       ...createMinimalOptions(),
       auditStore: createMockAuditStore({ append: auditAppend }),
-      multiCompanion: multiCompanion({ discord: 'comp-a' }),
+      multiCompanion: multiCompanion({ discord: '11111111-1111-4111-8111-111111111111' }),
     });
     const connA = await connect();
     const connB = await connect();
-    await identifyAgent(connA, 'comp-a', 1);
-    await identifyAgent(connB, 'comp-b', 2);
+    await identifyAgent(connA, '11111111-1111-4111-8111-111111111111', 1);
+    await identifyAgent(connB, '22222222-2222-4222-8222-222222222222', 2);
 
     connA._emitClose();
     await new Promise(r => setTimeout(r, 5));
 
     expect(() => server.notifyChannelMessage('discord', 'discord.message', { message: { id: 'm1' } }))
-      .toThrow('No agent connection for companion "comp-a"');
+      .toThrow('No agent connection for companion "11111111-1111-4111-8111-111111111111"');
     expect(methodFrames(connB, 'discord.message')).toHaveLength(0);
 
     await new Promise(r => setTimeout(r, 10));
@@ -1381,12 +1383,12 @@ describe('GatewayServer multi-companion routing (flag on)', () => {
   it('drops api.stream.delta frames from connections that are not the routed api companion', async () => {
     const { server, connect } = await setupServer({
       ...createMinimalOptions(),
-      multiCompanion: multiCompanion({ api: 'comp-a' }),
+      multiCompanion: multiCompanion({ api: '11111111-1111-4111-8111-111111111111' }),
     });
     const connA = await connect();
     const connB = await connect();
-    await identifyAgent(connA, 'comp-a', 1);
-    await identifyAgent(connB, 'comp-b', 2);
+    await identifyAgent(connA, '11111111-1111-4111-8111-111111111111', 1);
+    await identifyAgent(connB, '22222222-2222-4222-8222-222222222222', 2);
 
     const received: string[] = [];
     server.subscribeApiStream('req-1', (text) => received.push(text));
@@ -1394,7 +1396,7 @@ describe('GatewayServer multi-companion routing (flag on)', () => {
     connB._emit({
       jsonrpc: '2.0',
       method: 'api.stream.delta',
-      params: { requestId: 'req-1', text: 'stolen', companionId: 'comp-b' },
+      params: { requestId: 'req-1', text: 'stolen', companionId: '22222222-2222-4222-8222-222222222222' },
     });
     await new Promise(r => setTimeout(r, 10));
     expect(received).toEqual([]);
@@ -1402,7 +1404,7 @@ describe('GatewayServer multi-companion routing (flag on)', () => {
     connA._emit({
       jsonrpc: '2.0',
       method: 'api.stream.delta',
-      params: { requestId: 'req-1', text: 'legit', companionId: 'comp-a' },
+      params: { requestId: 'req-1', text: 'legit', companionId: '11111111-1111-4111-8111-111111111111' },
     });
     await new Promise(r => setTimeout(r, 10));
     expect(received).toEqual(['legit']);
@@ -1437,10 +1439,10 @@ describe('GatewayServer multi-account discord routing (flag on, W1-P2)', () => {
     const options: GatewayServerOptions = {
       ...createMinimalOptions(),
       discordAccountDocks: new Map([
-        ['comp-a', dockA.dock],
-        ['comp-b', dockB.dock],
+        ['11111111-1111-4111-8111-111111111111', dockA.dock],
+        ['22222222-2222-4222-8222-222222222222', dockB.dock],
       ]),
-      multiCompanion: multiCompanion({}, { 'acct-a': 'comp-a', 'acct-b': 'comp-b' }),
+      multiCompanion: multiCompanion({}, { 'acct-a': '11111111-1111-4111-8111-111111111111', 'acct-b': '22222222-2222-4222-8222-222222222222' }),
     };
     return { options, dockA, dockB };
   }
@@ -1448,8 +1450,8 @@ describe('GatewayServer multi-account discord routing (flag on, W1-P2)', () => {
   it('fails closed at construction when a routed companion has no outbound dock', () => {
     expect(() => new GatewayServer({
       ...createMinimalOptions(),
-      multiCompanion: multiCompanion({}, { 'acct-a': 'comp-a' }),
-    })).toThrow(/missing docks for: comp-a/);
+      multiCompanion: multiCompanion({}, { 'acct-a': '11111111-1111-4111-8111-111111111111' }),
+    })).toThrow(/missing docks for: 11111111-1111-4111-8111-111111111111/);
   });
 
   it('delivers inbound account messages to exactly the routed companion per account', async () => {
@@ -1457,8 +1459,8 @@ describe('GatewayServer multi-account discord routing (flag on, W1-P2)', () => {
     const { server, connect } = await setupServer(options);
     const connA = await connect();
     const connB = await connect();
-    await identifyAgent(connA, 'comp-a', 1);
-    await identifyAgent(connB, 'comp-b', 2);
+    await identifyAgent(connA, '11111111-1111-4111-8111-111111111111', 1);
+    await identifyAgent(connB, '22222222-2222-4222-8222-222222222222', 2);
 
     expect(server.notifyChannelMessage(
       'discord',
@@ -1486,8 +1488,8 @@ describe('GatewayServer multi-account discord routing (flag on, W1-P2)', () => {
     const { server, connect } = await setupServer(options);
     const connA = await connect();
     const connB = await connect();
-    await identifyAgent(connA, 'comp-a', 1);
-    await identifyAgent(connB, 'comp-b', 2);
+    await identifyAgent(connA, '11111111-1111-4111-8111-111111111111', 1);
+    await identifyAgent(connB, '22222222-2222-4222-8222-222222222222', 2);
     const rejectedSend = vi.spyOn(connA.conn, 'send').mockReturnValue(false);
 
     expect(server.notifyChannelMessage(
@@ -1511,7 +1513,7 @@ describe('GatewayServer multi-account discord routing (flag on, W1-P2)', () => {
       auditStore: createMockAuditStore({ append: auditAppend }),
     });
     const connA = await connect();
-    await identifyAgent(connA, 'comp-a', 1);
+    await identifyAgent(connA, '11111111-1111-4111-8111-111111111111', 1);
 
     expect(() => server.notifyChannelMessage('discord', 'discord.message', { message: { id: 'm1' } }))
       .toThrow('Multi-account discord routing requires an accountId');
@@ -1532,7 +1534,7 @@ describe('GatewayServer multi-account discord routing (flag on, W1-P2)', () => {
       auditStore: createMockAuditStore({ append: auditAppend }),
     });
     const connA = await connect();
-    await identifyAgent(connA, 'comp-a', 1);
+    await identifyAgent(connA, '11111111-1111-4111-8111-111111111111', 1);
 
     expect(() => server.notifyChannelMessage('discord', 'discord.message', { message: { id: 'm1' } }, 'acct-x'))
       .toThrow('no companion for discord account "acct-x"');
@@ -1548,10 +1550,10 @@ describe('GatewayServer multi-account discord routing (flag on, W1-P2)', () => {
   it('fails closed when an accountId is supplied but no account routing is configured', async () => {
     const { server, connect } = await setupServer({
       ...createMinimalOptions(),
-      multiCompanion: multiCompanion({ discord: 'comp-a' }),
+      multiCompanion: multiCompanion({ discord: '11111111-1111-4111-8111-111111111111' }),
     });
     const connA = await connect();
-    await identifyAgent(connA, 'comp-a', 1);
+    await identifyAgent(connA, '11111111-1111-4111-8111-111111111111', 1);
 
     expect(() => server.notifyChannelMessage('discord', 'discord.message', { message: { id: 'm1' } }, 'acct-a'))
       .toThrow('No discord account routing configured for account "acct-a"');
@@ -1562,7 +1564,7 @@ describe('GatewayServer multi-account discord routing (flag on, W1-P2)', () => {
     const { options } = createMultiAccountOptions();
     const { server, connect } = await setupServer(options);
     const connA = await connect();
-    await identifyAgent(connA, 'comp-a', 1);
+    await identifyAgent(connA, '11111111-1111-4111-8111-111111111111', 1);
 
     await expect(server.requestAgentVoiceStream(makeChannelMessage('discord')))
       .rejects.toThrow('Multi-account discord routing requires an accountId');
@@ -1573,19 +1575,19 @@ describe('GatewayServer multi-account discord routing (flag on, W1-P2)', () => {
     const { connect } = await setupServer(options);
     const connA = await connect();
     const connB = await connect();
-    await identifyAgent(connA, 'comp-a', 1);
-    await identifyAgent(connB, 'comp-b', 2);
+    await identifyAgent(connA, '11111111-1111-4111-8111-111111111111', 1);
+    await identifyAgent(connB, '22222222-2222-4222-8222-222222222222', 2);
 
     const responseA = await invokeRpc(connA, 10, 'discord.send', {
       channelId: 'ch-1',
       content: 'from companion a',
-      companionId: 'comp-a',
+      companionId: '11111111-1111-4111-8111-111111111111',
     });
     expect(responseA.result).toEqual({ success: true });
     const responseB = await invokeRpc(connB, 11, 'discord.send', {
       channelId: 'ch-1',
       content: 'from companion b',
-      companionId: 'comp-b',
+      companionId: '22222222-2222-4222-8222-222222222222',
     });
     expect(responseB.result).toEqual({ success: true });
 
@@ -1603,12 +1605,12 @@ describe('GatewayServer multi-account discord routing (flag on, W1-P2)', () => {
       auditStore: createMockAuditStore({ append: auditAppend }),
     });
     const connC = await connect();
-    await identifyAgent(connC, 'comp-c', 1);
+    await identifyAgent(connC, '33333333-3333-4333-8333-333333333333', 1);
 
     const response = await invokeRpc(connC, 12, 'discord.send', {
       channelId: 'ch-1',
       content: 'stolen egress',
-      companionId: 'comp-c',
+      companionId: '33333333-3333-4333-8333-333333333333',
     });
     expect(response.error).toBeDefined();
     expect(response.error.message).toContain('has no discord bot account');
@@ -1626,8 +1628,8 @@ describe('GatewayServer multi-account discord routing (flag on, W1-P2)', () => {
     const { options, dockA, dockB } = createMultiAccountOptions();
     const workspaceRoot = mkdtempSync(join(tmpdir(), 'psfn-discord-media-routing-'));
     try {
-      const workspaceA = join(workspaceRoot, 'comp-a');
-      const workspaceB = join(workspaceRoot, 'comp-b');
+      const workspaceA = join(workspaceRoot, '11111111-1111-4111-8111-111111111111');
+      const workspaceB = join(workspaceRoot, '22222222-2222-4222-8222-222222222222');
       mkdirSync(workspaceA);
       mkdirSync(workspaceB);
       const peerPath = join(workspaceA, 'peer.png');
@@ -1637,14 +1639,14 @@ describe('GatewayServer multi-account discord routing (flag on, W1-P2)', () => {
       options.multiCompanion = {
         ...options.multiCompanion!,
         personalWorkspaceByCompanionId: {
-          'comp-a': workspaceA,
-          'comp-b': workspaceB,
-          'comp-c': join(workspaceRoot, 'comp-c'),
+          '11111111-1111-4111-8111-111111111111': workspaceA,
+          '22222222-2222-4222-8222-222222222222': workspaceB,
+          '33333333-3333-4333-8333-333333333333': join(workspaceRoot, '33333333-3333-4333-8333-333333333333'),
         },
       };
       const { connect } = await setupServer(options);
       const connB = await connect();
-      await identifyAgent(connB, 'comp-b', 1);
+      await identifyAgent(connB, '22222222-2222-4222-8222-222222222222', 1);
 
       const response = await invokeRpc(connB, 13, 'discord.sendMedia', {
         channelId: 'ch-2',
@@ -1654,7 +1656,7 @@ describe('GatewayServer multi-account discord routing (flag on, W1-P2)', () => {
           url: 'https://example.test/pic.png',
           localPath: ownPath,
         },
-        companionId: 'comp-b',
+        companionId: '22222222-2222-4222-8222-222222222222',
       });
       expect(response.result).toEqual({ success: true });
       expect(dockB.sendMedia).toHaveBeenCalledWith({ channelId: 'ch-2' }, {
@@ -1672,7 +1674,7 @@ describe('GatewayServer multi-account discord routing (flag on, W1-P2)', () => {
           url: 'https://example.test/peer.png',
           localPath: peerPath,
         },
-        companionId: 'comp-b',
+        companionId: '22222222-2222-4222-8222-222222222222',
       });
       expect(peerResponse.error?.message).toMatch(/outside its authenticated root/);
       expect(dockB.sendMedia).toHaveBeenCalledTimes(1);
@@ -1722,12 +1724,12 @@ describe('GatewayServer multi-companion crossover under concurrent load (flag on
 
     const { connect } = await setupServer({
       ...options,
-      multiCompanion: multiCompanion({ discord: 'comp-a', api: 'comp-b' }),
+      multiCompanion: multiCompanion({ discord: '11111111-1111-4111-8111-111111111111', api: '22222222-2222-4222-8222-222222222222' }),
     });
     const connA = await connect();
     const connB = await connect();
-    await identifyAgent(connA, 'comp-a', 500);
-    await identifyAgent(connB, 'comp-b', 500);
+    await identifyAgent(connA, '11111111-1111-4111-8111-111111111111', 500);
+    await identifyAgent(connB, '22222222-2222-4222-8222-222222222222', 500);
 
     const perAgentRequests = 10;
     // Deliberately reuse the SAME JSON-RPC ids on both connections: correlation
@@ -1740,7 +1742,7 @@ describe('GatewayServer multi-companion crossover under concurrent load (flag on
         params: {
           model: 'test',
           provider: 'test',
-          companionId: 'comp-a',
+          companionId: '11111111-1111-4111-8111-111111111111',
           messages: [{ role: 'user', content: `a-${i}` }],
           systemPrompt: '',
           stream: true,
@@ -1754,7 +1756,7 @@ describe('GatewayServer multi-companion crossover under concurrent load (flag on
         params: {
           model: 'test',
           provider: 'test',
-          companionId: 'comp-b',
+          companionId: '22222222-2222-4222-8222-222222222222',
           messages: [{ role: 'user', content: `b-${i}` }],
           systemPrompt: '',
           stream: true,
@@ -1805,7 +1807,7 @@ describe('GatewayServer multi-companion crossover under concurrent load (flag on
 describe('GatewayServer per-companion capability tier (an52.3)', () => {
   function optionsFor(
     routing: GatewayMultiCompanionConfig,
-    capabilityTierProvider: (companionId?: string) => 'nursery' | 'apprentice' | 'autonomous' | 'custom',
+    resolver: GatewayCapabilityTierResolver,
   ): GatewayServerOptions {
     return {
       ...createMinimalOptions(),
@@ -1816,21 +1818,23 @@ describe('GatewayServer per-companion capability tier (an52.3)', () => {
         shellExec: { enabled: true, allowlist: ['docker', 'kubectl'] },
       },
       multiCompanion: routing,
-      capabilityTierProvider,
+      capabilityTierProvider: companionId => resolver.resolveTier(companionId),
+      capabilityGrantSnapshotProvider: companionId =>
+        resolver.snapshotOwnerGrantStrict(companionId),
     };
   }
 
   function buildTwoCompanionTierFixture(): {
     root: string;
-    routing: GatewayMultiCompanionConfig;
-    capabilityTierProvider: (companionId?: string) => 'nursery' | 'apprentice' | 'autonomous' | 'custom';
+    options: GatewayServerOptions;
+    shardParams(companionId: string, name: string): Record<string, unknown>;
   } {
     const root = mkdtempSync(join(tmpdir(), 'psfn-per-companion-tier-'));
     const dataDirA = join(root, 'companions', 'a');
     const dataDirB = join(root, 'companions', 'b');
     const baseDir = join(root, 'companions', 'gateway-root');
-    const personalA = join(root, 'personal', 'comp-a');
-    const personalB = join(root, 'personal', 'comp-b');
+    const personalA = join(root, 'personal', '11111111-1111-4111-8111-111111111111');
+    const personalB = join(root, 'personal', '22222222-2222-4222-8222-222222222222');
     for (const dir of [dataDirA, dataDirB, baseDir, personalA, personalB]) {
       mkdirSync(dir, { recursive: true });
     }
@@ -1847,14 +1851,14 @@ describe('GatewayServer per-companion capability tier (an52.3)', () => {
       sharedWorkspacePath: join(root, 'workspaces', 'shared'),
       companions: [
         {
-          companionId: 'comp-a',
+          companionId: '11111111-1111-4111-8111-111111111111',
           companionDataDir: dataDirA,
           characterCardPath: join(dataDirA, 'companion.json'),
           postgresSchema: 'companion_a',
           personalWorkspacePath: personalA,
         },
         {
-          companionId: 'comp-b',
+          companionId: '22222222-2222-4222-8222-222222222222',
           companionDataDir: dataDirB,
           characterCardPath: join(dataDirB, 'companion.json'),
           postgresSchema: 'companion_b',
@@ -1871,34 +1875,44 @@ describe('GatewayServer per-companion capability tier (an52.3)', () => {
 
     const routing = multiCompanion({});
     routing.personalWorkspaceByCompanionId = {
-      'comp-a': personalA,
-      'comp-b': personalB,
-      'comp-c': join(root, 'personal', 'comp-c'),
+      '11111111-1111-4111-8111-111111111111': personalA,
+      '22222222-2222-4222-8222-222222222222': personalB,
+      '33333333-3333-4333-8333-333333333333': join(root, 'personal', '33333333-3333-4333-8333-333333333333'),
     };
 
-    return {
-      root,
-      routing,
-      capabilityTierProvider: (companionId) => resolver.resolveTier(companionId),
+    const shardParams = (companionId: string, name: string) => {
+      const snapshot = resolver.snapshotOwnerGrantStrict(companionId);
+      const grant = deriveShardCapabilityGrant({
+        companionId,
+        tier: snapshot.tier,
+        customTokens: snapshot.customTokens,
+      });
+      return {
+        backend: 'container',
+        shardId: `shard-${name}`,
+        name,
+        ownerVersion: grant.ownerVersion,
+        grantDigest: grant.grantDigest,
+      };
     };
+
+    return { root, options: optionsFor(routing, resolver), shardParams };
   }
 
   it('gates shard.backend.request on each companion\'s own tier (A autonomous admitted, B apprentice denied)', async () => {
-    const { root, routing, capabilityTierProvider } = buildTwoCompanionTierFixture();
+    const { root, options, shardParams } = buildTwoCompanionTierFixture();
     try {
-      const { connect } = await setupServer(optionsFor(routing, capabilityTierProvider));
+      const { connect } = await setupServer(options);
       const connA = await connect();
       const connB = await connect();
-      await identifyAgent(connA, 'comp-a', 1);
-      await identifyAgent(connB, 'comp-b', 2);
+      await identifyAgent(connA, '11111111-1111-4111-8111-111111111111', 1);
+      await identifyAgent(connB, '22222222-2222-4222-8222-222222222222', 2);
 
-      const shardParams = (name: string) => ({ backend: 'container', shardId: `shard-${name}`, name });
-
-      const aShard = await invokeRpc(connA, 3, 'shard.backend.request', shardParams('alpha'));
+      const aShard = await invokeRpc(connA, 3, 'shard.backend.request', shardParams('11111111-1111-4111-8111-111111111111', 'alpha'));
       expect(aShard.error).toBeUndefined();
       expect(aShard.result).toMatchObject({ backend: 'container', controller: 'gateway' });
 
-      const bShard = await invokeRpc(connB, 4, 'shard.backend.request', shardParams('beta'));
+      const bShard = await invokeRpc(connB, 4, 'shard.backend.request', shardParams('22222222-2222-4222-8222-222222222222', 'beta'));
       expect(bShard.result).toBeUndefined();
       expect(bShard.error.code).toBe(GatewayErrors.POLICY_DENIED);
       expect(bShard.error.message).toContain('autonomous');
@@ -1908,13 +1922,13 @@ describe('GatewayServer per-companion capability tier (an52.3)', () => {
   });
 
   it('auto-clears autonomous approvals for A but holds apprentice B for operator approval', async () => {
-    const { root, routing, capabilityTierProvider } = buildTwoCompanionTierFixture();
+    const { root, options } = buildTwoCompanionTierFixture();
     try {
-      const { connect } = await setupServer(optionsFor(routing, capabilityTierProvider));
+      const { connect } = await setupServer(options);
       const connA = await connect();
       const connB = await connect();
-      await identifyAgent(connA, 'comp-a', 1);
-      await identifyAgent(connB, 'comp-b', 2);
+      await identifyAgent(connA, '11111111-1111-4111-8111-111111111111', 1);
+      await identifyAgent(connB, '22222222-2222-4222-8222-222222222222', 2);
 
       // A write outside the personal workspace is a NEEDS_APPROVAL policy path.
       // Autonomous A auto-clears the approval gate (its error, if any, is the
@@ -1944,7 +1958,7 @@ describe('GatewayServer per-companion capability tier (an52.3)', () => {
   });
 
   it('injects the authenticated companion identity into LLM eligibility out-of-band from params', async () => {
-    const { root, routing, capabilityTierProvider } = buildTwoCompanionTierFixture();
+    const { root, options } = buildTwoCompanionTierFixture();
     try {
       const llmResponse = {
         content: 'ok',
@@ -1956,11 +1970,10 @@ describe('GatewayServer per-companion capability tier (an52.3)', () => {
       };
       const complete = vi.fn().mockResolvedValue(llmResponse);
       const stream = vi.fn().mockResolvedValue(llmResponse);
-      const options = optionsFor(routing, capabilityTierProvider);
       options.llmProvider = { complete, stream } as any;
       const { connect } = await setupServer(options);
       const connB = await connect();
-      await identifyAgent(connB, 'comp-b', 1);
+      await identifyAgent(connB, '22222222-2222-4222-8222-222222222222', 1);
 
       const baseCompleteParams = {
         model: '',
@@ -1975,18 +1988,18 @@ describe('GatewayServer per-companion capability tier (an52.3)', () => {
       const omitted = await invokeRpc(connB, 2, 'llm.complete', baseCompleteParams);
       expect(omitted.error).toBeUndefined();
       expect(complete).toHaveBeenCalledTimes(1);
-      expect(complete.mock.calls[0][2]).toMatchObject({ eligibilityCompanionId: 'comp-b' });
+      expect(complete.mock.calls[0][2]).toMatchObject({ eligibilityCompanionId: '22222222-2222-4222-8222-222222222222' });
 
       // (b) claim present but telemetryVisibility companion_private (which
       // strips identity from correlation): the out-of-band id survives.
       const companionPrivate = await invokeRpc(connB, 3, 'llm.complete', {
         ...baseCompleteParams,
-        companionId: 'comp-b',
+        companionId: '22222222-2222-4222-8222-222222222222',
         telemetryVisibility: 'companion_private',
       });
       expect(companionPrivate.error).toBeUndefined();
       expect(complete).toHaveBeenCalledTimes(2);
-      expect(complete.mock.calls[1][2]).toMatchObject({ eligibilityCompanionId: 'comp-b' });
+      expect(complete.mock.calls[1][2]).toMatchObject({ eligibilityCompanionId: '22222222-2222-4222-8222-222222222222' });
 
       // Streaming path (llm.chat) carries the same server-injected identity.
       const chat = await invokeRpc(connB, 4, 'llm.chat', {
@@ -1995,26 +2008,23 @@ describe('GatewayServer per-companion capability tier (an52.3)', () => {
       });
       expect(chat.error).toBeUndefined();
       expect(stream).toHaveBeenCalledTimes(1);
-      expect(stream.mock.calls[0][2]).toMatchObject({ eligibilityCompanionId: 'comp-b' });
+      expect(stream.mock.calls[0][2]).toMatchObject({ eligibilityCompanionId: '22222222-2222-4222-8222-222222222222' });
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
   });
 
   it('fails closed when an authenticated companion has no resolvable tier file', async () => {
-    const { root, routing, capabilityTierProvider } = buildTwoCompanionTierFixture();
-    // Remove comp-b's tier file so its CapabilityRuntime construction throws.
+    const { root, options, shardParams } = buildTwoCompanionTierFixture();
+    const boundParams = shardParams('22222222-2222-4222-8222-222222222222', 'beta');
+    // Remove 22222222-2222-4222-8222-222222222222's tier file so its CapabilityRuntime construction throws.
     rmSync(join(root, 'companions', 'b', 'capability-tier.json'), { force: true });
     try {
-      const { connect } = await setupServer(optionsFor(routing, capabilityTierProvider));
+      const { connect } = await setupServer(options);
       const connB = await connect();
-      await identifyAgent(connB, 'comp-b', 1);
+      await identifyAgent(connB, '22222222-2222-4222-8222-222222222222', 1);
 
-      const bShard = await invokeRpc(connB, 2, 'shard.backend.request', {
-        backend: 'container',
-        shardId: 'shard-beta',
-        name: 'beta',
-      });
+      const bShard = await invokeRpc(connB, 2, 'shard.backend.request', boundParams);
       expect(bShard.result).toBeUndefined();
       expect(bShard.error.code).toBe(GatewayErrors.POLICY_DENIED);
     } finally {

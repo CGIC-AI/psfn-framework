@@ -4,7 +4,7 @@ import {
   type FleetAuthConfig,
   type FleetAuthRole,
 } from '../../system/config/fleet-auth-config.js';
-import { isRecord, isRfc4122Uuid } from '../../shared/utils/types.js';
+import { hasExactKeys, isRecord, isRfc4122Uuid } from '../../shared/utils/types.js';
 import { fleetAuthRoleAllowsAction } from '../fleet-auth/role-action-policy.js';
 import type { RequestCapabilityAuthContext } from '../fleet-auth/request-capability.js';
 
@@ -306,12 +306,6 @@ export class GatewayFleetAuthorizationContextResolver {
     }
     return decision.context;
   }
-}
-
-function hasExactKeys(value: Record<string, unknown>, expected: readonly string[]): boolean {
-  const keys = Object.keys(value).sort();
-  return keys.length === expected.length
-    && [...expected].sort().every((key, index) => keys[index] === key);
 }
 
 function isSafeCorrelationId(value: unknown): value is string {

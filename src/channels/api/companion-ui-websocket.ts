@@ -12,8 +12,21 @@ import type { CompanionId } from '../../shared/routing/companion-id.js';
 import { isRfc4122Uuid } from '../../shared/utils/types.js';
 import { createComponentLogger } from '../../shared/logger.js';
 import type { GatewayHubDeviceIngressService } from '../../boundary/fleet-auth/hub-device-ingress.js';
+import type { HubDeviceAttachmentSnapshot } from '../../shared/contracts/hub-device-ingress.js';
 import type { GatewayCompanionUiActionBroker } from '../../boundary/gateway/companion-ui-action-broker.js';
-import { parseCompanionUiActionFrame } from '../../boundary/fleet-auth/companion-ui-action.js';
+import {
+  parseCompanionUiActionFrame,
+  parseCompanionUiSessionConfigureFrame,
+} from '../../boundary/fleet-auth/companion-ui-action.js';
+import {
+  COMPANION_APPROVALS_V2_CAPABILITY,
+  companionEventKindsForScopes,
+  type CompanionApprovalRequestedPayload,
+  type CompanionApprovalResolvedPayload,
+  type CompanionEventEnvelope,
+  type CompanionEventKind,
+} from '../../shared/contracts/companion-relay.js';
+import type { CompanionEventRelay } from '../backplane/companion-relay/relay.js';
 import {
   getBearerToken,
   isExpectedApiToken,
@@ -54,6 +67,7 @@ export interface CompanionUiWebSocketConfig {
   readonly trustedProxyClientCertToken?: string;
   readonly hubDeviceIngress: GatewayHubDeviceIngressService;
   readonly actionBroker: GatewayCompanionUiActionBroker;
+  readonly eventRelay: CompanionEventRelay;
   readonly guestMode?: 'disabled' | 'explicit';
   readonly guestActionBroker?: Readonly<{
     execute(input: Omit<Parameters<GatewayCompanionUiActionBroker['execute']>[0], 'sessionToken'>): Promise<unknown>;
@@ -118,6 +132,61 @@ function rawDataBytes(raw: RawData): Uint8Array {
 
 function sendJson(socket: WebSocket, value: unknown): void {
   if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify(value));
+}
+
+function projectCompanionEventFrame(
+  envelope: CompanionEventEnvelope,
+  eventCapabilities: readonly string[],
+): Readonly<{
+  schemaVersion: 1;
+  type: 'event';
+  event: Readonly<{ type: CompanionEventKind; data: unknown }>;
+}> {
+  if (envelope.kind === 'approval.requested') {
+    if (!eventCapabilities.includes(COMPANION_APPROVALS_V2_CAPABILITY)) {
+      throw new Error('Companion UI approval event requires approvals.v2');
+    }
+    const payload = envelope.payload as CompanionApprovalRequestedPayload;
+    if (!payload.sourceSystem || !payload.attribution || !payload.action
+      || !payload.scope || !payload.reason || !payload.grantMode
+      || payload.attribution.parentId !== envelope.companionId
+      || payload.attribution.shardId !== envelope.shardId) {
+      throw new Error('Companion UI approval event is missing required v2 fields');
+    }
+  } else if (envelope.kind === 'approval.resolved') {
+    const payload = envelope.payload as CompanionApprovalResolvedPayload;
+    if (!envelope.companionId || payload.shardId !== envelope.shardId) {
+      throw new Error('Companion UI approval resolution has mismatched routing metadata');
+    }
+  }
+  return Object.freeze({
+    schemaVersion: 1,
+    type: 'event',
+    event: Object.freeze({ type: envelope.kind, data: envelope.payload }),
+  });
+}
+
+function attachmentAuthorityKey(attachment: HubDeviceAttachmentSnapshot): string {
+  const actor = attachment.actor.kind === 'human'
+    ? {
+        kind: attachment.actor.kind,
+        principalId: attachment.actor.principalId,
+        companionId: attachment.actor.companionId,
+        providerSubject: attachment.actor.providerSubject,
+        contact: attachment.actor.contact,
+        operator: attachment.actor.operator,
+        session: attachment.actor.session,
+      }
+    : {
+        kind: attachment.actor.kind,
+        companionId: attachment.actor.companionId,
+      };
+  return JSON.stringify({
+    attachmentId: attachment.attachmentId,
+    deviceActor: attachment.deviceActor,
+    actor,
+    channel: attachment.channel,
+  });
 }
 
 export class CompanionUiWebSocketAdapter {
@@ -296,11 +365,17 @@ export class CompanionUiWebSocketAdapter {
     this.activeSockets.add(socket);
     let attachment = initialAttachment;
     let closed = false;
+    let configured = false;
+    let unsubscribeEvents: (() => void) | null = null;
+    let eventDelivery = Promise.resolve();
     const seenRequestIds = new Set<string>();
+    const initialAuthorityKey = attachmentAuthorityKey(initialAttachment);
     const close = (code: number, reason: string): void => {
       if (closed) return;
       closed = true;
       clearInterval(watch);
+      unsubscribeEvents?.();
+      unsubscribeEvents = null;
       this.activeSockets.delete(socket);
       if (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING) {
         socket.close(code, reason);
@@ -316,7 +391,7 @@ export class CompanionUiWebSocketAdapter {
       });
       if ((authority.sessionToken && refreshed.attachment.actor.kind !== 'human')
         || (!authority.sessionToken && refreshed.attachment.actor.kind !== 'guest')
-        || refreshed.attachment.attachmentId !== initialAttachment.attachmentId) {
+        || attachmentAuthorityKey(refreshed.attachment) !== initialAuthorityKey) {
         throw new Error('socket authority changed');
       }
       attachment = refreshed.attachment;
@@ -325,14 +400,6 @@ export class CompanionUiWebSocketAdapter {
       void refreshAuthority().catch(() => close(CLOSE.authorityChanged, 'authority changed'));
     }, this.authorityPollMs);
     watch.unref();
-    sendJson(socket, {
-      schemaVersion: 1,
-      type: 'session.ready',
-      device: authority.presentation.device,
-      ...(authority.presentation.place ? { place: authority.presentation.place } : {}),
-      capabilities: authority.physicalCeiling.capabilities,
-      telemetryScopes: authority.physicalCeiling.telemetryScopes,
-    });
     socket.on('message', (raw, isBinary) => {
       if (isBinary) {
         close(CLOSE.denied, 'binary frames denied');
@@ -340,6 +407,45 @@ export class CompanionUiWebSocketAdapter {
       }
       const body = rawDataBytes(raw);
       void (async () => {
+        if (!configured) {
+          parseCompanionUiSessionConfigureFrame(body);
+          configured = true;
+          const eventCapabilities = authority.sessionToken
+            && authority.physicalCeiling.telemetryScopes.includes('approvals')
+            ? [COMPANION_APPROVALS_V2_CAPABILITY] as const
+            : [];
+          if (authority.sessionToken) {
+            unsubscribeEvents = this.config.eventRelay.subscribe({
+              companionId: authority.companionId,
+              allowedKinds: companionEventKindsForScopes(
+                authority.physicalCeiling.telemetryScopes,
+              ),
+              onEvent: (envelope) => {
+                eventDelivery = eventDelivery.then(async () => {
+                  await refreshAuthority();
+                  if (!closed) {
+                    sendJson(
+                      socket,
+                      projectCompanionEventFrame(envelope, eventCapabilities),
+                    );
+                  }
+                }).catch(() => {
+                  close(CLOSE.authorityChanged, 'authority changed');
+                });
+              },
+            });
+          }
+          sendJson(socket, {
+            schemaVersion: 1,
+            type: 'session.ready',
+            device: authority.presentation.device,
+            ...(authority.presentation.place ? { place: authority.presentation.place } : {}),
+            capabilities: authority.physicalCeiling.capabilities,
+            telemetryScopes: authority.physicalCeiling.telemetryScopes,
+            eventCapabilities,
+          });
+          return;
+        }
         const frame = parseCompanionUiActionFrame(body);
         if (seenRequestIds.has(frame.requestId)
           || seenRequestIds.size >= RUNTIME_LIMITS.maxRequestIdsPerSocket) {

@@ -14,8 +14,6 @@ export interface CompanionFleetE2ESummary {
   schemas: string[];
   /** Each companion's UUID, in manifest order. */
   companionIds: string[];
-  /** Declared Garden operator ports (companions without a gardenPort omitted). */
-  gardenPorts: number[];
 }
 
 /**
@@ -28,9 +26,6 @@ export function summarizeCompanionFleet(fleet: CompanionsFleetConfig): Companion
     companionCount: companions.length,
     schemas: companions.map((entry) => entry.postgresSchema),
     companionIds: companions.map((entry) => entry.companionId),
-    gardenPorts: companions.flatMap((entry) =>
-      entry.gardenPort === undefined ? [] : [entry.gardenPort],
-    ),
   };
 }
 

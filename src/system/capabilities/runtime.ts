@@ -6,7 +6,8 @@ import {
   type CapabilityTierConfig,
 } from '../config/capability-tier-config.js';
 import type { CapabilityTier } from '../config/runtime-config-contracts.js';
-import type { CapabilityAccess } from './access.js';
+import type { CapabilityAccess, CapabilityGrantSnapshot } from './access.js';
+import { canonicalizeCapabilityTokens } from './shard-derivation.js';
 import { resolveTierCapabilityTokens } from './tiers.js';
 import type { CapabilityToken } from './tokens.js';
 
@@ -50,6 +51,27 @@ export class CapabilityRuntime implements CapabilityAccess {
   has(token: CapabilityToken): boolean {
     this.ensureFresh();
     return this.grantedTokens.has(token);
+  }
+
+  /**
+   * One atomic authoritative owner snapshot (mus2.1): a single validated disk
+   * read produces the tier, the authoritative custom token list, and the
+   * effective granted tokens together, so the result can never mix two
+   * owner-file versions the way sequenced `getTier()`/`getGrantedTokens()`
+   * calls can. The internal cache is refreshed from that same read.
+   */
+  snapshotOwnerGrant(): CapabilityGrantSnapshot {
+    const loaded = this.refreshFromDisk();
+    const customTokens = canonicalizeCapabilityTokens(loaded.customTokens, 'customTokens');
+    const grantedTokens = canonicalizeCapabilityTokens(
+      resolveTierCapabilityTokens(loaded.tier, loaded.customTokens),
+      `tier "${loaded.tier}" grant`,
+    );
+    return Object.freeze({
+      tier: loaded.tier,
+      customTokens,
+      grantedTokens,
+    });
   }
 
   refreshFromDisk(): CapabilityTierConfig {

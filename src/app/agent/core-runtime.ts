@@ -188,6 +188,8 @@ export interface AgentCoreRuntime {
   sessionTailCache: SessionTailCachePort | null;
   fatigueBudget: FatigueBudgetComposition['fatigueBudget'];
   fatigueLedger: FatigueBudgetComposition['fatigueLedger'];
+  humanAttentionLedger: FatigueBudgetComposition['humanAttentionLedger'];
+  humanAttentionPressure: FatigueBudgetComposition['humanAttentionPressure'];
   fatigueRegulationReservations?: IcpFatigueRegulationReservationPort;
   toolConformanceRunner: ToolConformanceRunner;
   sharedWorldWikiCaretaker: SharedWorldWikiCaretakerService | null;
@@ -307,6 +309,7 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
       }),
     },
     fatigueBudget: fatigueRuntime.fatigueBudget,
+    humanAttentionPressure: fatigueRuntime.humanAttentionPressure,
     ...(fatigueRegulationReservations ? { fatigueRegulationReservations } : {}),
     emotionRuntime,
     observerEvalSidecar,
@@ -433,7 +436,12 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
     binaryFetcher: gateway.webFetchBinary.bind(gateway),
     llmProvider,
   });
-  registerImageTools(agentLoop, new GatewayImageOps(gateway), {
+  registerImageTools(agentLoop, new GatewayImageOps(gateway, () => ({
+    provider: config.imageProvider,
+    createModel: config.imageFalCreateModel,
+    editModel: config.imageFalEditModel,
+    selfieEditModel: config.imageSelfieEditModel,
+  })), {
     gatewayMode: true,
     reviewer: imageVisionReviewer,
     referenceResolver: new ImageReferenceStore(pathSnapshot.companionDataDir),
@@ -625,6 +633,8 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
     sessionTailCache: sessionComposition.sessionTailCache,
     fatigueBudget: fatigueRuntime.fatigueBudget,
     fatigueLedger: fatigueRuntime.fatigueLedger,
+    humanAttentionLedger: fatigueRuntime.humanAttentionLedger,
+    humanAttentionPressure: fatigueRuntime.humanAttentionPressure,
     ...(fatigueRegulationReservations ? { fatigueRegulationReservations } : {}),
     toolConformanceRunner,
     sharedWorldWikiCaretaker: wikiRuntime.sharedWorldCaretaker,

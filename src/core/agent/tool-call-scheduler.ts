@@ -1,6 +1,7 @@
 import { validateToolArguments } from '@mariozechner/pi-ai';
-import type { AgentMessage, AgentTool } from '../../boundary/pi-agent/index.js';
-import type { ToolResultMessage } from '@mariozechner/pi-ai';
+import type { AgentMessage, AgentTool, AgentToolResult } from '../../boundary/pi-agent/index.js';
+import type { AssistantMessage, ToolCall, ToolResultMessage } from '@mariozechner/pi-ai';
+import type { ScheduledAgentEvent } from './agent-loop-events.js';
 import { isInternalWhisperMessage, isSystemNoteMessage } from './messages.js';
 import type { ToolConcurrencyMeta, WirableTool } from './tool-wiring-validator.js';
 import {
@@ -48,7 +49,7 @@ export function createToolCallExecutionGuard(): ToolCallExecutionGuard {
 }
 
 interface ToolCallDescriptor {
-  toolCall: any;
+  toolCall: ToolCall;
   tool: AgentTool<any> | undefined;
   resolveTool: (toolName: string) => AgentTool<any> | undefined;
   resolveAvailableToolNames: () => string[];
@@ -58,7 +59,7 @@ interface ToolCallDescriptor {
 
 interface ToolExecutionContext {
   signal?: AbortSignal;
-  stream: { push: (event: any) => void };
+  stream: { push: (event: ScheduledAgentEvent) => void };
 }
 
 interface MissingArgumentRequirement {
@@ -100,17 +101,18 @@ function normalizeToolParametersForPiAiValidation(parameters: unknown): unknown 
   return normalized;
 }
 
-function hasNonStringDiscordFollowUpChannelId(tool: AgentTool<any>, toolCall: any): boolean {
+function hasNonStringDiscordFollowUpChannelId(tool: AgentTool<any>, toolCall: ToolCall): boolean {
   if (tool.name !== 'schedule') return false;
-  const args = toolCall?.arguments;
+  const args: unknown = toolCall.arguments;
   if (!args || typeof args !== 'object' || Array.isArray(args)) return false;
-  return args.action === 'create_follow_up'
-    && args.channel_type === 'discord'
-    && Object.prototype.hasOwnProperty.call(args, 'channel_id')
-    && typeof args.channel_id !== 'string';
+  const record = args as Record<string, unknown>;
+  return record.action === 'create_follow_up'
+    && record.channel_type === 'discord'
+    && Object.prototype.hasOwnProperty.call(record, 'channel_id')
+    && typeof record.channel_id !== 'string';
 }
 
-function normalizeToolForPiAiValidation(tool: AgentTool<any>, toolCall: any): AgentTool<any> {
+function normalizeToolForPiAiValidation(tool: AgentTool<any>, toolCall: ToolCall): AgentTool<any> {
   // Discord snowflakes exceed Number.MAX_SAFE_INTEGER. Preserve the original
   // TypeBox string check for this one destination boundary so pi-ai cannot
   // stringify an already precision-damaged JavaScript number.
@@ -130,16 +132,16 @@ function toolResultDetailsFlagError(result: { details?: unknown } | undefined): 
 
 export async function executeToolCallsWithScheduler(
   tools: AgentTool<any>[] | (() => AgentTool<any>[] | undefined) | undefined,
-  assistantMessage: any,
+  assistantMessage: AssistantMessage,
   getSteeringMessages: (() => Promise<AgentMessage[]>) | undefined,
   context: ToolExecutionContext,
   options: ToolCallSchedulerOptions,
 ): Promise<ToolExecutionResult> {
-  const toolCalls = assistantMessage.content.filter((content: any) => content.type === 'toolCall');
+  const toolCalls = assistantMessage.content.filter((content): content is ToolCall => content.type === 'toolCall');
   const resolveTools = typeof tools === 'function' ? tools : () => tools;
   const resolveTool = (toolName: string) => resolveTools()?.find((entry) => entry.name === toolName);
   const resolveAvailableToolNames = () => (resolveTools() ?? []).map((entry) => entry.name);
-  const descriptors = toolCalls.map((toolCall: any): ToolCallDescriptor => {
+  const descriptors = toolCalls.map((toolCall): ToolCallDescriptor => {
     const tool = resolveTool(toolCall.name);
     const resolved = resolveToolConcurrencyMetadata(tool);
     return {
@@ -355,7 +357,7 @@ async function executeSingleToolCall(
     args: toolCall.arguments,
   });
 
-  let result: { content: any[]; details: any } | undefined;
+  let result: AgentToolResult<unknown> | undefined;
   let isError = false;
   let cancelled = false;
   // Validate-and-reprompt (psfn-framework-b0yl.3): a recoverable tool-call
@@ -483,8 +485,8 @@ async function executeSingleToolCall(
 }
 
 function skipToolCall(
-  toolCall: any,
-  stream: { push: (event: any) => void },
+  toolCall: ToolCall,
+  stream: { push: (event: ScheduledAgentEvent) => void },
   reasonText: string,
 ): ToolResultMessage {
   const result = {
@@ -519,18 +521,18 @@ function skipToolCall(
   return toolResultMessage;
 }
 
-function buildToolCallSignature(toolCall: any): string {
+function buildToolCallSignature(toolCall: ToolCall): string {
   return `${String(toolCall.name)}:${stableStringify(toolCall.arguments)}`;
 }
 
-function resolveToolCallAction(toolCall: any): string {
-  const args = toolCall?.arguments;
+function resolveToolCallAction(toolCall: ToolCall): string {
+  const args: unknown = toolCall.arguments;
   if (!args || typeof args !== 'object' || Array.isArray(args)) return '';
   const action = (args as Record<string, unknown>).action;
   return typeof action === 'string' ? action.trim() : '';
 }
 
-function buildMalformedActionKey(toolCall: any): string {
+function buildMalformedActionKey(toolCall: ToolCall): string {
   return `${String(toolCall.name)}:${resolveToolCallAction(toolCall)}`;
 }
 
@@ -539,8 +541,8 @@ function hasUsefulArgumentValue(value: unknown): boolean {
   return value !== undefined && value !== null;
 }
 
-function satisfiesRequirement(toolCall: any, requirement: MissingArgumentRequirement): boolean {
-  const args = toolCall?.arguments;
+function satisfiesRequirement(toolCall: ToolCall, requirement: MissingArgumentRequirement): boolean {
+  const args: unknown = toolCall.arguments;
   if (!args || typeof args !== 'object' || Array.isArray(args)) return false;
   const record = args as Record<string, unknown>;
   const checker = (field: string) => hasUsefulArgumentValue(record[field]);
@@ -549,9 +551,9 @@ function satisfiesRequirement(toolCall: any, requirement: MissingArgumentRequire
     : requirement.alternatives.some(checker);
 }
 
-function missingRequirementLabel(toolCall: any, requirement: MissingArgumentRequirement): string {
+function missingRequirementLabel(toolCall: ToolCall, requirement: MissingArgumentRequirement): string {
   if (requirement.mode !== 'all') return requirement.label;
-  const args = toolCall?.arguments;
+  const args: unknown = toolCall.arguments;
   if (!args || typeof args !== 'object' || Array.isArray(args)) return requirement.label;
   const record = args as Record<string, unknown>;
   const missing = requirement.alternatives.filter(field => !hasUsefulArgumentValue(record[field]));
@@ -559,7 +561,7 @@ function missingRequirementLabel(toolCall: any, requirement: MissingArgumentRequ
 }
 
 function resolveRepeatedMalformedArgumentSkip(
-  toolCall: any,
+  toolCall: ToolCall,
   guard: ToolCallExecutionGuard,
 ): { action: string; requirement: MissingArgumentRequirement; missingRequirement: string } | null {
   const requirements = guard.malformedArgumentFailuresByAction.get(buildMalformedActionKey(toolCall));
@@ -623,7 +625,7 @@ function toolResultText(result: { content?: unknown[] }): string {
 
 function recordMalformedArgumentFailure(
   guard: ToolCallExecutionGuard,
-  toolCall: any,
+  toolCall: ToolCall,
   result: { content?: unknown[] },
 ): void {
   const requirement = parseMissingArgumentRequirement(toolResultText(result));

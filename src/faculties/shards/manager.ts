@@ -5,13 +5,11 @@
 import { randomUUID } from 'node:crypto';
 import type { AgentTool } from '../../boundary/pi-agent/index.js';
 import type { CapabilityTier, ShardToolsetConfig, SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
-import { sanitizeCoreSubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import type { SubstrateMessage } from '../../shared/contracts/runtime.js';
 import { resolvePresenceSubjectId } from '../../core/agent/presence-metadata.js';
 import type { EventBus } from '../../shared/event-bus.js';
 import type { LLMProviderPort, MemoryProvider } from '../../core/agent/contracts.js';
 import type { EmbeddingProviderPort } from '../../shared/contracts/embedding-provider.js';
-import { SubstrateAgent } from '../../core/agent/substrate-agent.js';
 import {
   createActiveEmanationSatellitePresencePort,
   type SatellitePresencePort,
@@ -19,17 +17,26 @@ import {
 } from '../../core/agent/satellite-adapter-port.js';
 import type { RuntimeMode } from '../../core/agent/tool-wiring-validator.js';
 import { normalizeCapabilityTier } from '../../system/capabilities/tiers.js';
+import type { DerivedShardCapabilityGrant } from '../../system/capabilities/shard-derivation.js';
+import type {
+  AuthenticatedShardWorkloadHandle,
+  ShardWorkloadLifecyclePort,
+} from '../../system/capabilities/shard-approval-grant-contracts.js';
 import type { SessionStore } from '../../persistence/sessions/store.js';
-import { SessionManager } from '../../core/session/manager.js';
+import type { SessionManager } from '../../core/session/manager.js';
 import type { ShardExecutionPort } from './port.js';
 import { chargeSurface, getRunChargeContext, runWithChargeContext } from '../../shared/telemetry/run-charge.js';
 import type {
+  ActiveShard,
+  SatelliteDelegationRequest,
+  ShardConfigurationMutationResult,
+  ShardConfigurationSnapshot,
   ShardConfig,
-  ShardHealthState,
   ShardLifecycleState,
   ShardResult,
   ShardRuntimeRecord,
 } from './types.js';
+export type { ActiveShard, SatelliteDelegationRequest } from './types.js';
 import { buildShardLineageEnvelope, deriveShardCompanionId } from './result-lineage.js';
 import { getRequestContext } from '../../primitives/llm/request-context.js';
 import { AGENT_LOOP_MAX_ASSISTANT_STEPS_PER_RUN } from '../../core/agent/turn-limits.js';
@@ -64,10 +71,29 @@ import { ShardToolSyncHelper } from './tool-sync.js';
 import type { CompressionGuidelineEvolutionPort } from '../../core/session/compression-guideline-evolution.js';
 import { createComponentLogger } from '../../shared/logger.js';
 import type { CompanionId } from '../../shared/routing/companion-id.js';
+import { LiveShardDirectory } from './directory.js';
+import { createShardAgentRuntime } from './agent-runtime.js';
+import type { PolicyGovernedShardParentIcpDeliveryPort } from '../../shared/contracts/shard-parent-icp.js';
+import { LiveShardParentIcpRuntime } from './parent-icp-runtime.js';
+import {
+  createShardParentIcpTool,
+  SHARD_PARENT_ICP_TOOL_NAME,
+} from './parent-icp-tool.js';
 import type {
   PostgresShardSchemaBinding,
   PostgresShardSchemaLifecycle,
 } from '../../persistence/postgres/shard-schema-lifecycle.js';
+import {
+  cloneShardCapabilityGrantEvidence,
+  resolveShardLaunchCapabilityGrant,
+  toShardCapabilityGrantEvidence,
+  type ParentCapabilityGrantSnapshotProvider,
+} from './launch-capabilities.js';
+import type { ChargePolicyConfig } from '../../shared/contracts/charge-policy.js';
+import {
+  createShardConfigurationControl,
+  ShardConfigurationRegistry,
+} from './configuration-snapshot.js';
 
 const log = createComponentLogger('ShardManager');
 const DEFAULT_MAX_CONCURRENT = 5;
@@ -95,6 +121,7 @@ const BLOCKED_SHARD_TOOL_NAMES = new Set([
   'contact_link_identity',
   'contact_set_channel_privacy',
   'contact_set_machine_intelligence',
+  SHARD_PARENT_ICP_TOOL_NAME,
 ]);
 const APPRENTICE_SHARD_TOOL_EXTRAS = [
 ] as const;
@@ -157,30 +184,26 @@ export interface ShardManagerDeps {
   foldReviewController?: ShardFoldReviewController | null;
   compressionGuidelineEvolution?: CompressionGuidelineEvolutionPort | null;
   shardPostgresLifecycle?: PostgresShardSchemaLifecycle | null;
-}
-
-export interface SatelliteDelegationRequest {
-  message: SubstrateMessage;
-  routing?: SatelliteRoutingMetadata;
-  shardName?: string;
-}
-
-export interface ActiveShard {
-  id: string;
-  name: string;
-  task: string;
-  startedAt: number;
-  channelId: string;
-  state: ShardLifecycleState;
-  stateReason: string;
-  health: ShardHealthState;
-  lastTransitionAt: number;
-  lastHeartbeatAt: number;
-  heartbeatStaleAfterMs: number;
-  heartbeatDisconnectAfterMs: number;
-  capabilities: string[];
-  requiredCapabilities: string[];
-  failureReason?: string;
+  /**
+   * Optional canonical ordinary-ICP ingress. No local or raw transport
+   * fallback is permitted when inner-addressed shard-parent delivery is used.
+   */
+  shardParentIcpDelivery?: PolicyGovernedShardParentIcpDeliveryPort | null;
+  /**
+   * One authoritative capability owner read per launch. Callers must wire
+   * CapabilityRuntime.snapshotOwnerGrant directly; sequenced tier/token
+   * getters are not an atomic snapshot.
+   */
+  snapshotParentCapabilityGrant: ParentCapabilityGrantSnapshotProvider;
+  /**
+   * 2h6q.3: authenticated shard-workload registry. Each launch registers one
+   * workload generation (frozen derived access included) before execution and
+   * ends it on release, so a gateway sharing this registry can authenticate
+   * shard-originated exceptional-action requests. Absent ⇒ shards run without
+   * workload registration and every shard temporary-grant path stays
+   * unavailable (fail closed at the gateway).
+   */
+  workloadRegistry?: ShardWorkloadLifecyclePort;
 }
 
 export class ShardManager implements ShardExecutionPort {
@@ -195,7 +218,11 @@ export class ShardManager implements ShardExecutionPort {
   private heartbeatStaleAfterMs: number;
   private heartbeatDisconnectAfterMs: number;
   private activeShards = new Map<string, ActiveShard>();
+  private workloadHandles = new Map<string, AuthenticatedShardWorkloadHandle>();
+  readonly shardDirectory: LiveShardDirectory;
+  readonly shardParentIcp: LiveShardParentIcpRuntime;
   private activeShardChannels = new Map<string, Set<string>>();
+  private configurationRegistry: ShardConfigurationRegistry;
   private foldReviewController: ShardFoldReviewController | null;
 
   constructor(deps: ShardManagerDeps) {
@@ -216,6 +243,10 @@ export class ShardManager implements ShardExecutionPort {
       this.heartbeatStaleAfterMs * DEFAULT_SHARD_HEARTBEAT_DISCONNECT_MULTIPLIER,
     );
     this.auditTrail = deps.auditTrail ?? null;
+    this.configurationRegistry = new ShardConfigurationRegistry({
+      liveParentConfig: () => this.deps.config,
+      auditTrail: this.auditTrail,
+    });
     this.artifactReturnPort = deps.artifactReturnPort ?? createArtifactReturnPort();
     this.satellitePresencePort = deps.satellitePresencePort ?? createActiveEmanationSatellitePresencePort();
     this.contextPackHelper = new ShardContextPackHelper({
@@ -234,6 +265,16 @@ export class ShardManager implements ShardExecutionPort {
       foldReviewController: this.foldReviewController,
       contextPackHelper: this.contextPackHelper,
     });
+    this.shardDirectory = new LiveShardDirectory({
+      parentCompanionId: () => resolveCoreCompanionIdFromConfig(deps.config),
+      refreshDeployments: () => this.refreshShardHealth(),
+      deployments: () => [...this.activeShards.values()],
+      intakeScreening: deps.sessionManager?.intakeScreening ?? null,
+    });
+    this.shardParentIcp = new LiveShardParentIcpRuntime(
+      this.shardDirectory,
+      deps.shardParentIcpDelivery ?? null,
+    );
     this.installAuditHooks();
   }
 
@@ -254,7 +295,9 @@ export class ShardManager implements ShardExecutionPort {
 
   async spawn(shardConfig: ShardConfig): Promise<ShardResult> {
     const activeChargeContext = getRunChargeContext();
-    const chargePolicy = this.deps.config.chargePolicy ?? activeChargeContext?.chargePolicy;
+    const chargePolicy = cloneShardChargePolicy(
+      this.deps.config.chargePolicy ?? activeChargeContext?.chargePolicy,
+    );
     if (!activeChargeContext && chargePolicy) {
       return runWithChargeContext({
         chargePolicy,
@@ -269,6 +312,10 @@ export class ShardManager implements ShardExecutionPort {
     const channelId = `shard:${shardId}`;
     const coreCompanionId = resolveCoreCompanionIdFromConfig(this.deps.config);
     const coreCompanionName = resolveCompanionNameFromConfig(this.deps.config);
+    const capabilityGrant = resolveShardLaunchCapabilityGrant(
+      coreCompanionId,
+      this.deps.snapshotParentCapabilityGrant,
+    );
     const shardCompanionId = deriveShardCompanionId(coreCompanionId, shardId);
     const shardPostgres = this.resolveShardPostgresBinding(coreCompanionId, shardId);
     const shardRuntimeConfig: SubstrateConfig = {
@@ -312,6 +359,8 @@ export class ShardManager implements ShardExecutionPort {
         baseMessage,
         lineage,
         shardRuntimeConfig,
+        capabilityGrant,
+        chargePolicy,
         shardPostgres,
       )
       : this.executeShard(
@@ -321,6 +370,8 @@ export class ShardManager implements ShardExecutionPort {
         baseMessage,
         lineage,
         shardRuntimeConfig,
+        capabilityGrant,
+        chargePolicy,
       );
     if (chargePolicy) {
       return runWithChargeContext({
@@ -336,7 +387,9 @@ export class ShardManager implements ShardExecutionPort {
 
   async delegateSatelliteSession(request: SatelliteDelegationRequest): Promise<ShardResult> {
     const activeChargeContext = getRunChargeContext();
-    const chargePolicy = this.deps.config.chargePolicy ?? activeChargeContext?.chargePolicy;
+    const chargePolicy = cloneShardChargePolicy(
+      this.deps.config.chargePolicy ?? activeChargeContext?.chargePolicy,
+    );
     if (!activeChargeContext && chargePolicy) {
       return runWithChargeContext({
         chargePolicy,
@@ -355,6 +408,10 @@ export class ShardManager implements ShardExecutionPort {
     const routing = request.routing ?? request.message.routing?.wyoming;
     const shardId = `wyoming-shard-${randomUUID()}`;
     const coreCompanionId = resolveCoreCompanionIdFromConfig(this.deps.config);
+    const capabilityGrant = resolveShardLaunchCapabilityGrant(
+      coreCompanionId,
+      this.deps.snapshotParentCapabilityGrant,
+    );
     const shardCompanionId = deriveShardCompanionId(coreCompanionId, shardId);
     const shardPostgres = this.resolveShardPostgresBinding(coreCompanionId, shardId);
     const shardRuntimeConfig: SubstrateConfig = {
@@ -390,6 +447,7 @@ export class ShardManager implements ShardExecutionPort {
       siteId: routing?.siteId,
       satelliteId: routing?.satelliteId,
       presence: routing?.presence,
+      capabilityGrant: toShardCapabilityGrantEvidence(capabilityGrant),
     });
     const lineage = buildShardLineageEnvelope({
       kind: 'wyoming',
@@ -407,6 +465,8 @@ export class ShardManager implements ShardExecutionPort {
         request.message,
         lineage,
         shardRuntimeConfig,
+        capabilityGrant,
+        chargePolicy,
         shardPostgres,
       )
       : this.executeShard(
@@ -416,6 +476,8 @@ export class ShardManager implements ShardExecutionPort {
         request.message,
         lineage,
         shardRuntimeConfig,
+        capabilityGrant,
+        chargePolicy,
       );
 
     try {
@@ -437,6 +499,7 @@ export class ShardManager implements ShardExecutionPort {
         connectionId: routing?.connectionId,
         sessionId: routing?.sessionId,
         turnId: routing?.turnId,
+        capabilityGrant: toShardCapabilityGrantEvidence(capabilityGrant),
       });
       return result;
     } catch (error) {
@@ -450,6 +513,7 @@ export class ShardManager implements ShardExecutionPort {
         connectionId: routing?.connectionId,
         sessionId: routing?.sessionId,
         turnId: routing?.turnId,
+        capabilityGrant: toShardCapabilityGrantEvidence(capabilityGrant),
       });
       throw error;
     }
@@ -462,6 +526,8 @@ export class ShardManager implements ShardExecutionPort {
     baseMessage: SubstrateMessage,
     lineage: ShardResult['lineage'],
     runtimeConfig: SubstrateConfig,
+    capabilityGrant: DerivedShardCapabilityGrant,
+    shardChargePolicy: ChargePolicyConfig | null,
     shardPostgres?: PostgresShardSchemaBinding,
   ): Promise<ShardResult> {
     this.refreshShardHealth();
@@ -504,7 +570,19 @@ export class ShardManager implements ShardExecutionPort {
       shardConfig.heartbeatDisconnectAfterMs,
       heartbeatStaleAfterMs,
     );
-
+    const capabilityGrantEvidence = toShardCapabilityGrantEvidence(capabilityGrant);
+    const configurationControl = createShardConfigurationControl({
+      shardId,
+      parentCompanionId: lineage.companionProvenance.parentCompanionId,
+      lifecycleState: 'registering',
+      health: 'healthy',
+      capturedAt: startTime,
+      maxTurns,
+      capabilityGrant: capabilityGrantEvidence,
+      lineage,
+      config: this.deps.config,
+      parentSystemPrompt: this.deps.parentSystemPrompt,
+    });
     chargeSurface('shardLaunch', {
       details: {
         shardId,
@@ -514,6 +592,7 @@ export class ShardManager implements ShardExecutionPort {
       },
     });
 
+    this.configurationRegistry.register(configurationControl, shardChargePolicy);
     this.activeCount++;
     this.activeShards.set(shardId, {
       id: shardId,
@@ -530,6 +609,8 @@ export class ShardManager implements ShardExecutionPort {
       heartbeatDisconnectAfterMs,
       capabilities,
       requiredCapabilities,
+      capabilityGrant: capabilityGrantEvidence,
+      lineage,
     });
     this.registerActiveShardChannel(channelId, shardId);
     this.auditTrail?.append('shard.lifecycle.transition', {
@@ -547,10 +628,34 @@ export class ShardManager implements ShardExecutionPort {
       channelId,
       capabilities,
       requiredCapabilities,
+      capabilityGrant: capabilityGrantEvidence,
     });
     let shardPostgresPrepared = false;
     let executionFailure: Error | undefined;
     try {
+      await this.emitShardLifecycleProgressHandoff({
+        shardId,
+        shardConfig,
+        lineage,
+        status: 'started',
+        completedTurns: 0,
+        maxTurns,
+      });
+      // 2h6q.3: register the authenticated workload generation (with its
+      // frozen derived access) before any execution, inside the try so a
+      // registration failure releases the shard instead of leaking it. The
+      // task channel and the direct human-chat lane both address this
+      // workload at the gateway.
+      if (this.deps.workloadRegistry) {
+        const workloadHandle = await this.deps.workloadRegistry.registerWorkload({
+          parentCompanionId: lineage.companionProvenance.parentCompanionId,
+          shardId,
+          shardLabel: shardConfig.name,
+          channelIds: [channelId, `${channelId}:human`],
+          capabilityGrant,
+        });
+        this.workloadHandles.set(shardId, workloadHandle);
+      }
       if (shardPostgres) {
         const lifecycle = this.deps.shardPostgresLifecycle;
         if (!lifecycle) {
@@ -569,42 +674,49 @@ export class ShardManager implements ShardExecutionPort {
         task: shardConfig.task,
         lineage,
       };
-      // Each shard gets its own SessionManager wrapping the shared store
-      const sessionManager = new SessionManager(
-        this.deps.sessionStore,
-        runtimeConfig,
-        this.deps.eventBus,
-      );
-
       const systemPrompt = this.contextPackHelper.resolveSystemPrompt(shardConfig);
-
-      const agentLoop = new SubstrateAgent(
-        this.deps.eventBus,
-        this.deps.llmProvider,
-        sessionManager,
-        systemPrompt,
-        sanitizeCoreSubstrateConfig(runtimeConfig),
-        {
-          runtimeMode: this.deps.runtimeMode,
-          // Shards are ephemeral and intentionally own no durable post-turn lane.
-          backgroundWorkDisabled: true,
-        },
-      );
-
-      // Shards can READ memory but don't extract or archive (ephemeral)
-      if (this.deps.memoryProvider && !shardConfig.contextPack) {
-        agentLoop.memoryProvider = this.deps.memoryProvider;
-      }
-
       // Shards don't recurse or self-escalate: we inject a tier-limited subset only.
       const injectedTools = this.resolveInjectedTools(shardId, shardMemoryReviewContext);
-      for (const tool of injectedTools) {
-        agentLoop.registerTool(tool);
-      }
+      const { agentLoop, sessionManager } = createShardAgentRuntime({
+        eventBus: this.deps.eventBus,
+        llmProvider: this.deps.llmProvider,
+        sessionStore: this.deps.sessionStore,
+        runtimeConfig,
+        systemPrompt,
+        runtimeMode: this.deps.runtimeMode,
+        capabilityAccess: capabilityGrant.access,
+        memoryProvider: this.deps.memoryProvider,
+        exposeMemory: !shardConfig.contextPack,
+        tools: injectedTools,
+      });
+      const chatChannelId = `${channelId}:human`;
+      const chatTools = this.resolveInjectedTools(shardId, {
+        channelId: chatChannelId,
+        task: shardConfig.task,
+        lineage,
+      });
+      const { agentLoop: chatAgentLoop } = createShardAgentRuntime({
+        eventBus: this.deps.eventBus,
+        llmProvider: this.deps.llmProvider,
+        sessionStore: this.deps.sessionStore,
+        runtimeConfig,
+        systemPrompt: `${systemPrompt}\n\nYou are responding in a direct human-to-shard thread. Stay within this shard's assigned remit and do not impersonate the parent companion.`,
+        runtimeMode: this.deps.runtimeMode,
+        capabilityAccess: capabilityGrant.access,
+        memoryProvider: this.deps.memoryProvider,
+        exposeMemory: !shardConfig.contextPack,
+        tools: chatTools,
+      });
+      this.shardDirectory.register(shardId, {
+        agentLoop: chatAgentLoop,
+        channelId: chatChannelId,
+      });
       this.auditTrail?.append('shard.tools.injected', {
         shardId,
-        tier: this.resolveCapabilityTier(),
+        tier: capabilityGrant.access.getTier(),
+        grantedTokens: [...capabilityGrant.tokens],
         tools: injectedTools.map(tool => tool.name),
+        capabilityGrant: capabilityGrantEvidence,
       });
       this.transitionShardState(shardId, 'ready', 'agent_initialized');
       this.touchShardHeartbeat(shardId);
@@ -618,14 +730,33 @@ export class ShardManager implements ShardExecutionPort {
       let turns = 0;
       let artifactReturn: ArtifactReturnBatch | null = null;
 
-      for (let turn = 0; turn < maxTurns; turn++) {
+      for (
+        let turn = 0;
+        turn < this.configurationRegistry.effectiveWorkerBudget(shardId).maxTurns;
+        turn++
+      ) {
         this.refreshShardHealth();
         this.assertShardRoutable(shardId, requiredCapabilities);
         this.touchShardHeartbeat(shardId);
-        const turnMessage = turn === 0 ? baseMessage : {
+        const effectiveConfiguration = this.configurationRegistry.effectiveValues(shardId);
+        const turnMessage: SubstrateMessage = {
           ...baseMessage,
-          id: `${shardId}-turn-${turn}`,
-          content: lastContent,
+          ...(turn > 0 ? {
+            id: `${shardId}-turn-${turn}`,
+            content: lastContent,
+          } : {}),
+          routing: {
+            ...baseMessage.routing,
+            modelOverride: {
+              provider: effectiveConfiguration.model.provider,
+              model: effectiveConfiguration.model.model,
+              maxTokens: effectiveConfiguration.workerBudget.maxOutputTokens,
+              ...(effectiveConfiguration.model.contextWindow !== undefined
+                ? { contextWindow: effectiveConfiguration.model.contextWindow }
+                : {}),
+              purpose: 'chat',
+            },
+          },
         };
 
         const response = await agentLoop.handleMessage(turnMessage);
@@ -690,6 +821,14 @@ export class ShardManager implements ShardExecutionPort {
         lastContent = response.content;
         turns++;
         this.touchShardHeartbeat(shardId);
+        await this.emitShardLifecycleProgressHandoff({
+          shardId,
+          shardConfig,
+          lineage,
+          status: 'progress',
+          completedTurns: turns,
+          maxTurns,
+        });
 
         // Shards are ephemeral and intentionally do not own a durable post-turn
         // worker. For a bounded multi-turn shard, the manager therefore owns
@@ -700,7 +839,9 @@ export class ShardManager implements ShardExecutionPort {
           : null;
         const autoCompactionEligible = recordedTurn?.observability
           ?.snapshot?.sessionContext?.autoCompactionEligible === true;
-        if (turn + 1 < maxTurns && autoCompactionEligible) {
+        const effectiveMaxTurns = this.configurationRegistry
+          .effectiveWorkerBudgetIfAvailable(shardId)?.maxTurns ?? turn + 1;
+        if (turn + 1 < effectiveMaxTurns && autoCompactionEligible) {
           await sessionManager.scheduleAutoCompactionBetweenTurns({
             channelId,
             systemPrompt,
@@ -712,7 +853,7 @@ export class ShardManager implements ShardExecutionPort {
 
         // For a one-turn shard, we break after the first turn.
         // Multi-turn shards continue only if the response suggests more work.
-        if (turn === 0 && maxTurns === 1) break;
+        if (turn === 0 && effectiveMaxTurns === 1) break;
       }
 
       this.transitionShardState(shardId, 'offline', 'completed');
@@ -732,6 +873,7 @@ export class ShardManager implements ShardExecutionPort {
         ...(finishedShard?.failureReason ? { failureReason: finishedShard.failureReason } : {}),
         capabilities: [...capabilities],
         requiredCapabilities: [...requiredCapabilities],
+        capabilityGrant: capabilityGrantEvidence,
         lineage,
         ...(artifactReturn ? { artifactReturn } : {}),
       };
@@ -742,12 +884,20 @@ export class ShardManager implements ShardExecutionPort {
         turns: result.turns,
         lifecycleState: result.lifecycleState,
         health: result.health,
+        capabilityGrant: capabilityGrantEvidence,
       });
-      await this.emitShardCompletionHandoff({
-        shardConfig,
-        channelId,
-        result,
-      });
+      try {
+        await this.emitShardCompletionHandoff({
+          shardConfig,
+          channelId,
+          result,
+        });
+      } catch (handoffError) {
+        log.error('Completed shard lifecycle handoff failed without changing the shard result', {
+          shardId,
+          error: safeEmitCompletionHandoffError(handoffError),
+        });
+      }
       return result;
     } catch (error) {
       const msg = toErrorMessage(error);
@@ -758,42 +908,61 @@ export class ShardManager implements ShardExecutionPort {
         status: 'failed',
         durationMs: Date.now() - startTime,
         error: msg,
+        capabilityGrant: capabilityGrantEvidence,
       });
-      await this.emitShardFailureHandoff({
-        shardId,
-        channelId,
-        shardConfig,
-        lineage,
-        error: msg,
-      });
+      try {
+        await this.emitShardFailureHandoff({
+          shardId,
+          channelId,
+          shardConfig,
+          lineage,
+          error: msg,
+        });
+      } catch (handoffError) {
+        log.error('Failed shard lifecycle handoff could not be recorded', {
+          shardId,
+          error: safeEmitCompletionHandoffError(handoffError),
+        });
+      }
       executionFailure = new Error(
         `Shard "${shardConfig.name}" failed (execution_failed): ${msg}`,
         { cause: error },
       );
       throw executionFailure;
     } finally {
-      this.releaseActiveShard(shardId, channelId);
+      const cleanupErrors: unknown[] = [];
+      try {
+        await this.releaseActiveShard(shardId, channelId);
+      } catch (cleanupError) {
+        cleanupErrors.push(cleanupError);
+      }
       if (shardPostgres && shardPostgresPrepared) {
         const lifecycle = this.deps.shardPostgresLifecycle;
         if (!lifecycle) {
-          throw new Error('Multi-companion shard cleanup lost its Postgres schema lifecycle');
-        }
-        try {
-          const evidence = await lifecycle.cleanup(shardPostgres);
-          this.auditTrail?.append('shard.postgres.cleaned', {
-            shardId,
-            postgresSchema: shardPostgres.schema,
-            droppedObjectCount: evidence.droppedObjectCount,
-          });
-        } catch (cleanupError) {
-          if (executionFailure) {
-            throw new AggregateError(
-              [executionFailure, cleanupError],
-              `Shard "${shardConfig.name}" failed and its Postgres cleanup remains pending`,
-            );
+          cleanupErrors.push(
+            new Error('Multi-companion shard cleanup lost its Postgres schema lifecycle'),
+          );
+        } else {
+          try {
+            const evidence = await lifecycle.cleanup(shardPostgres);
+            this.auditTrail?.append('shard.postgres.cleaned', {
+              shardId,
+              postgresSchema: shardPostgres.schema,
+              droppedObjectCount: evidence.droppedObjectCount,
+            });
+          } catch (cleanupError) {
+            cleanupErrors.push(cleanupError);
           }
-          throw cleanupError;
         }
+      }
+      if (cleanupErrors.length === 1 && !executionFailure) {
+        throw cleanupErrors[0];
+      }
+      if (cleanupErrors.length > 0) {
+        throw new AggregateError(
+          [...(executionFailure ? [executionFailure] : []), ...cleanupErrors],
+          `Shard "${shardConfig.name}" cleanup failed`,
+        );
       }
     }
   }
@@ -825,7 +994,27 @@ export class ShardManager implements ShardExecutionPort {
       ...shard,
       capabilities: [...shard.capabilities],
       requiredCapabilities: [...shard.requiredCapabilities],
+      capabilityGrant: cloneShardCapabilityGrantEvidence(shard.capabilityGrant),
+      lineage: cloneShardLineage(shard.lineage),
     }));
+  }
+
+  getShardConfigurationSnapshot(
+    parentCompanionId: string,
+    shardId: string,
+  ): ShardConfigurationSnapshot | null {
+    this.refreshShardHealth();
+    return this.configurationRegistry.getSnapshot(parentCompanionId, shardId);
+  }
+
+  updateShardConfigurationOverrides(input: {
+    parentCompanionId: string;
+    shardId: string;
+    actor: string;
+    override: unknown;
+  }): ShardConfigurationMutationResult {
+    this.refreshShardHealth();
+    return this.configurationRegistry.update(input);
   }
 
   private async emitShardBlockedHandoff(input: {
@@ -946,17 +1135,57 @@ export class ShardManager implements ShardExecutionPort {
     }, input.shardConfig.sourceContext?.channelId);
   }
 
+  private async emitShardLifecycleProgressHandoff(input: {
+    shardId: string;
+    shardConfig: ShardConfig;
+    lineage: ShardResult['lineage'];
+    status: 'started' | 'progress';
+    completedTurns: number;
+    maxTurns: number;
+  }): Promise<void> {
+    await this.emitShardHandoff({
+      source: 'shard',
+      taskId: input.shardId,
+      taskLabel: input.shardConfig.name,
+      shardId: input.shardId,
+      status: input.status,
+      resultSummary: input.status === 'started'
+        ? `Shard "${input.shardConfig.name}" started.`
+        : `Shard "${input.shardConfig.name}" completed ${input.completedTurns} of ${input.maxTurns} bounded turns.`,
+      outputRefs: [
+        { kind: 'lineage', ref: input.lineage.shardId, label: input.lineage.kind },
+      ],
+      validationPerformed: [
+        'shard_lifecycle_nonterminal',
+        ...(input.status === 'progress' ? [`completed_turns:${input.completedTurns}`] : []),
+      ],
+      partialResult: input.status === 'progress',
+      recommendedNextAction: 'Keep the task visible without interrupting the foreground conversation.',
+      origin: this.originFromShardConfig(input.shardConfig),
+      dedupeKey: buildCompletionHandoffDedupeKey([
+        'shard',
+        input.shardId,
+        input.status,
+        String(input.completedTurns),
+        input.shardConfig.sourceContext?.requestId,
+        input.shardConfig.sourceContext?.turnId,
+      ]),
+    }, input.shardConfig.sourceContext?.channelId, false);
+  }
+
   private async emitShardHandoff(
     handoff: CompletionHandoffInput,
     targetChannelId: string | undefined,
+    bufferNotice = true,
   ): Promise<void> {
-    if (!targetChannelId?.trim()) return;
     try {
       await emitCompletionHandoff({
         eventBus: this.deps.eventBus,
-        targetChannelId,
         handoff,
-        ...(this.deps.completionNotices ? { notices: this.deps.completionNotices } : {}),
+        ...(targetChannelId?.trim() ? { targetChannelId } : {}),
+        ...(bufferNotice && this.deps.completionNotices
+          ? { notices: this.deps.completionNotices }
+          : {}),
       });
     } catch (error) {
       this.auditTrail?.append('shard.completion_handoff.failed', {
@@ -964,6 +1193,7 @@ export class ShardManager implements ShardExecutionPort {
         targetChannelId,
         error: safeEmitCompletionHandoffError(error),
       });
+      throw error;
     }
   }
 
@@ -997,7 +1227,48 @@ export class ShardManager implements ShardExecutionPort {
   }
 
   async resolveFoldReview(params: ShardFoldReviewResolveParams): Promise<ShardFoldReviewRecord | null> {
-    return await this.requireFoldReviewController().resolveFoldReview(params);
+    const controller = this.requireFoldReviewController();
+    const review = await controller.resolveFoldReview(params);
+    if (review?.reviewState === 'approved') {
+      const sourceContext = review.lineage.sourceContext;
+      await this.emitShardHandoff({
+        source: 'shard',
+        taskId: review.shardId,
+        taskLabel: review.task,
+        shardId: review.shardId,
+        status: 'folded_back',
+        resultSummary: 'Approved shard outputs were folded back through operator review.',
+        outputRefs: [
+          { kind: 'fold_review', ref: review.validationPath, label: 'approved' },
+        ],
+        validationPerformed: ['shard_fold_review', 'operator_approved'],
+        partialResult: false,
+        recommendedNextAction: 'Review the approved folded-back outputs and continue in the companion’s own voice.',
+        origin: {
+          ...(sourceContext?.channelId
+            ? { sourceChannelId: sourceContext.channelId }
+            : {}),
+          ...(sourceContext?.requestId
+            ? {
+                requestId: sourceContext.requestId,
+                sourceMessageId: sourceContext.requestId,
+              }
+            : {}),
+          ...(sourceContext?.turnId
+            ? {
+                turnId: sourceContext.turnId,
+                originatingTaskId: sourceContext.turnId,
+              }
+            : {}),
+        },
+        dedupeKey: buildCompletionHandoffDedupeKey([
+          'shard',
+          review.shardId,
+          'folded_back',
+        ]),
+      }, sourceContext?.channelId);
+    }
+    return review;
   }
 
   private resolveHeartbeatStaleAfterMs(value: number | undefined): number {
@@ -1057,7 +1328,12 @@ export class ShardManager implements ShardExecutionPort {
         `Heartbeat stale for ${staleForMs}ms exceeded recovery window `
         + `(${shard.heartbeatDisconnectAfterMs}ms).`;
       this.transitionShardState(shard.id, 'offline', 'heartbeat_timeout', timeoutReason);
-      this.releaseActiveShard(shard.id, shard.channelId);
+      void this.releaseActiveShard(shard.id, shard.channelId).catch((error: unknown) => {
+        log.error('Failed to release heartbeat-evicted shard workload', {
+          shardId: shard.id,
+          error: toErrorMessage(error),
+        });
+      });
       this.auditTrail?.append('shard.health.evict', {
         shardId: shard.id,
         state: 'offline',
@@ -1092,13 +1368,29 @@ export class ShardManager implements ShardExecutionPort {
     }
   }
 
-  private releaseActiveShard(shardId: string, channelId: string): void {
+  private async releaseActiveShard(shardId: string, channelId: string): Promise<void> {
+    // 2h6q.3: end the authenticated workload generation first so no grant can
+    // be prepared or consumed against a shard that is being released.
+    const workloadHandle = this.workloadHandles.get(shardId);
+    let workloadReleaseError: unknown;
+    if (workloadHandle) {
+      try {
+        await this.deps.workloadRegistry?.endWorkload(workloadHandle);
+        this.workloadHandles.delete(shardId);
+      } catch (error) {
+        workloadReleaseError = error;
+      }
+    }
     const deleted = this.activeShards.delete(shardId);
+    this.shardDirectory.release(shardId);
+    this.configurationRegistry.release(shardId);
     this.unregisterActiveShardChannel(channelId, shardId);
     if (!deleted) {
+      if (workloadReleaseError) throw workloadReleaseError;
       return;
     }
     this.activeCount = Math.max(0, this.activeCount - 1);
+    if (workloadReleaseError) throw workloadReleaseError;
   }
 
   private transitionShardState(
@@ -1154,6 +1446,7 @@ export class ShardManager implements ShardExecutionPort {
       health: shard.health,
       ...(failureReason ? { failureReason } : {}),
     });
+    this.configurationRegistry.syncLifecycle(shardId, shard.state, shard.health);
   }
 
   private installAuditHooks(): void {
@@ -1188,10 +1481,9 @@ export class ShardManager implements ShardExecutionPort {
     memoryReviewContext: Pick<ShardRuntimeRecord, 'channelId' | 'task' | 'lineage'>,
   ): AgentTool<any>[] {
     const catalog = this.deps.toolCatalogProvider?.();
-    if (!catalog) return [];
 
     const availableByName = new Map<string, AgentTool<any>>();
-    const available = [...catalog.core, ...catalog.extended];
+    const available = catalog ? [...catalog.core, ...catalog.extended] : [];
     for (const tool of available) {
       if (BLOCKED_SHARD_TOOL_NAMES.has(tool.name)) continue;
       if (!availableByName.has(tool.name)) {
@@ -1207,7 +1499,10 @@ export class ShardManager implements ShardExecutionPort {
         .map(name => availableByName.get(name))
         .filter((tool): tool is AgentTool<any> => tool !== undefined);
 
-    return selected.map(tool => this.toolSyncHelper.wrapShardTool(tool, shardId, memoryReviewContext));
+    return [
+      createShardParentIcpTool(shardId, this.shardParentIcp),
+      ...selected.map(tool => this.toolSyncHelper.wrapShardTool(tool, shardId, memoryReviewContext)),
+    ];
   }
 
   private resolveToolNamesForTier(tier: CapabilityTier): string[] {
@@ -1327,4 +1622,24 @@ function normalizeHeartbeatDisconnectAfterMs(
     return staleAfterMs + 1;
   }
   return normalized;
+}
+
+function cloneShardChargePolicy(
+  chargePolicy: ChargePolicyConfig | undefined,
+): ChargePolicyConfig | null {
+  if (!chargePolicy) return null;
+  return {
+    ...chargePolicy,
+    runChargeQuotaByLane: { ...chargePolicy.runChargeQuotaByLane },
+  };
+}
+
+function cloneShardLineage(lineage: ShardResult['lineage']): ShardResult['lineage'] {
+  return {
+    ...lineage,
+    companionProvenance: { ...lineage.companionProvenance },
+    sourceMessage: { ...lineage.sourceMessage },
+    ...(lineage.sourceContext ? { sourceContext: { ...lineage.sourceContext } } : {}),
+    ...(lineage.satelliteRouting ? { satelliteRouting: { ...lineage.satelliteRouting } } : {}),
+  };
 }

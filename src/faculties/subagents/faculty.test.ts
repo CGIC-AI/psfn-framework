@@ -27,6 +27,7 @@ import { resolveAutonomousModelCallLane } from '../../primitives/llm/model-call-
 import { COMPANION_PRIVATE_BACKGROUND_PURPOSE } from '../../shared/contracts/runtime.js';
 import { AGENT_LOOP_MAX_ASSISTANT_STEPS_PER_RUN } from '../../core/agent/turn-limits.js';
 import { resetCompletionHandoffDedupeForTests } from '../../core/agent/completion-handoff.js';
+import type { CompletionHandoffRecord } from '../../shared/contracts/completion-handoff.js';
 import {
   withCapabilityRequirement,
   type CapabilityRequirementInput,
@@ -89,6 +90,20 @@ function makeCatalogTool(name: string, requirement: CapabilityRequirementInput) 
     parameters: {},
     execute,
   } as AgentTool<any>, requirement);
+  return { tool, execute };
+}
+
+function makeUnannotatedCatalogTool(name: string) {
+  const execute = vi.fn(async () => ({
+    content: [{ type: 'text' as const, text: `${name} ok` }],
+    details: { toolName: name },
+  }));
+  const tool = {
+    name,
+    description: `${name} test tool`,
+    parameters: {},
+    execute,
+  } as AgentTool<any>;
   return { tool, execute };
 }
 
@@ -173,7 +188,7 @@ const TEST_CONFIG: SubstrateConfig = {
   defaultContextWindow: 128_000,
   extractionThresholdPct: 30,
   compactionThresholdPct: 70,
-  companionId: 'companion',
+  companionId: '11111111-1111-4111-8111-111111111111',
   characterName: 'Companion',
   modelRoster: {
     chat: CHAT_SLOT,
@@ -237,6 +252,14 @@ describe('SubagentFaculty', () => {
 
   it('executes bounded subagent tasks with an independent registry and lifecycle', async () => {
     mockSubagentContent = 'task completed';
+    const lifecycleEvents: Array<{
+      handoff: CompletionHandoffRecord;
+      targetChannelId?: string;
+      noticeBuffered: boolean;
+    }> = [];
+    eventBus.on('agent.completion_handoff', event => {
+      lifecycleEvents.push(event);
+    });
     const faculty = new SubagentFaculty({
       eventBus,
       llmProvider: mockLLM(),
@@ -281,6 +304,38 @@ describe('SubagentFaculty', () => {
     });
     expect(entries[0]?.content).toBe('[SYSTEM: SubagentTask] inspect runtime state');
     expect(entries[1]?.content).toBe('task completed');
+    expect(lifecycleEvents.map(event => event.handoff.status))
+      .toEqual(['started', 'progress', 'completed']);
+    expect(lifecycleEvents.every(event => (
+      event.targetChannelId === undefined && event.noticeBuffered === false
+    ))).toBe(true);
+  });
+
+  it('preserves a completed result when its terminal lifecycle sink rejects', async () => {
+    eventBus.guard('agent.completion_handoff', event => {
+      if (event.handoff.status === 'completed') {
+        throw new Error('terminal lifecycle sink unavailable');
+      }
+      return true;
+    });
+    const faculty = new SubagentFaculty({
+      eventBus,
+      llmProvider: mockLLM(),
+      sessionStore,
+      embeddingService: null,
+      memoryProvider: null,
+      config: TEST_CONFIG,
+      parentSystemPrompt: 'test prompt',
+    });
+
+    const result = await faculty.execute({
+      name: 'terminal-handoff-failure',
+      task: 'finish despite notification infrastructure failure',
+      workSpec: buildSubagentWorkSpec(),
+    });
+
+    expect(result.outcome).toBe('completed');
+    expect(faculty.getActiveCount()).toBe(0);
   });
 
   it('spawns a subagent whose context correlation carries companion_private (d8vq.4)', async () => {
@@ -313,33 +368,47 @@ describe('SubagentFaculty', () => {
   it.each<{
     tier: CapabilityTier;
     callable: string[];
+    grantedCapabilities: string[];
   }>([
     {
       tier: 'nursery',
       callable: ['core_identity_read', 'extended_git_read'],
+      grantedCapabilities: ['identity.read', 'git.read', 'issue.read'],
     },
     {
       tier: 'apprentice',
       callable: [
         'core_identity_read',
-        'core_issue_write',
         'extended_git_read',
         'extended_world_read',
+      ],
+      grantedCapabilities: [
+        'identity.read',
+        'internal.read',
+        'git.read',
+        'issue.read',
+        'world.read',
       ],
     },
     {
       tier: 'autonomous',
       callable: [
         'core_identity_read',
-        'core_issue_write',
         'extended_git_read',
         'extended_world_read',
-        'extended_companion_notify',
+      ],
+      grantedCapabilities: [
+        'identity.read',
+        'internal.read',
+        'git.read',
+        'issue.read',
+        'world.read',
       ],
     },
-  ])('assembles the full non-recursive catalog on the first $tier turn and capability-gates calls', async ({
+  ])('assembles the full non-recursive catalog with the general read posture on the first $tier turn', async ({
     tier,
     callable,
+    grantedCapabilities,
   }) => {
     const definitions = [
       { scope: 'core' as const, name: 'core_identity_read', requirement: 'identity.read' as const },
@@ -384,7 +453,9 @@ describe('SubagentFaculty', () => {
     expect([...firstTurnTools.keys()]).toEqual(expect.arrayContaining(catalogNames));
     expect(mockFirstPromptTools.map(tool => tool.name)).not.toContain('subagent');
     expect(auditTrail.append).toHaveBeenCalledWith('subagent.tools.injected', expect.objectContaining({
-      tier,
+      tier: 'custom',
+      parentTier: tier,
+      grantedCapabilities,
       tools: catalogNames,
     }));
 
@@ -396,6 +467,156 @@ describe('SubagentFaculty', () => {
       expect(definition.execute).toHaveBeenCalledTimes(authorized ? 1 : 0);
     }
     expect(blockedRecursive.execute).not.toHaveBeenCalled();
+  });
+
+  it('denies mutating and egress tools to a default general child of an autonomous parent', async () => {
+    const definitions = [
+      {
+        name: 'notify',
+        params: { action: 'send', delivery_channel: 'discord', content: 'outbound' },
+        requirement: 'external.discord' as const,
+        ...makeUnannotatedCatalogTool('notify'),
+      },
+      {
+        name: 'system',
+        params: { action: 'restart' },
+        requirement: 'lifecycle.restart' as const,
+        ...makeUnannotatedCatalogTool('system'),
+      },
+      {
+        name: 'schedule',
+        params: {
+          action: 'schedule_prompt',
+          name: 'deferred prompt',
+          prompt: 'Run this later.',
+          delay_minutes: 5,
+        },
+        requirement: 'identity.write.runtime' as const,
+        ...makeCatalogTool(
+          'schedule',
+          params => params.action === 'schedule_prompt'
+            ? 'identity.write.runtime'
+            : 'identity.read',
+        ),
+      },
+      {
+        name: 'fs',
+        params: { action: 'write', path: 'journal.md', content: 'mutation' },
+        requirement: 'git.write' as const,
+        ...makeUnannotatedCatalogTool('fs'),
+      },
+      {
+        name: 'beads',
+        params: { action: 'create', title: 'Child-created work' },
+        requirement: 'issue.write' as const,
+        ...makeUnannotatedCatalogTool('beads'),
+      },
+    ];
+    const faculty = new SubagentFaculty({
+      eventBus,
+      llmProvider: mockLLM(),
+      sessionStore,
+      embeddingService: null,
+      memoryProvider: null,
+      config: { ...TEST_CONFIG, capabilityTier: 'autonomous' },
+      parentSystemPrompt: 'test prompt',
+      toolCatalogProvider: () => ({
+        core: definitions.map(definition => definition.tool),
+        extended: [],
+      }),
+    });
+
+    await faculty.execute({
+      name: 'general-child',
+      task: 'inspect without mutating',
+      workSpec: buildSubagentWorkSpec(),
+    });
+
+    const installedByName = new Map(mockFirstPromptTools.map(tool => [tool.name, tool] as const));
+    for (const definition of definitions) {
+      const result = await installedByName.get(definition.name)!.execute(
+        `call-${definition.name}`,
+        definition.params,
+      );
+      expect(result.details).toMatchObject({
+        isError: true,
+        capabilityDenied: true,
+        missingTokens: [definition.requirement],
+      });
+      expect(definition.execute).not.toHaveBeenCalled();
+    }
+  });
+
+  it('grants an explicitly requested tool capability only when the parent grants it', async () => {
+    const writableFs = makeUnannotatedCatalogTool('fs');
+    const writableBeads = makeUnannotatedCatalogTool('beads');
+    const snapshotParentCapabilityGrant = vi.fn(() => Object.freeze({
+      tier: 'custom' as const,
+      customTokens: Object.freeze(['identity.read', 'git.write'] as const),
+      grantedTokens: Object.freeze(['identity.read', 'git.write'] as const),
+    }));
+    const faculty = new SubagentFaculty({
+      eventBus,
+      llmProvider: mockLLM(),
+      sessionStore,
+      embeddingService: null,
+      memoryProvider: null,
+      config: { ...TEST_CONFIG, capabilityTier: 'custom' },
+      parentSystemPrompt: 'test prompt',
+      snapshotParentCapabilityGrant,
+      toolCatalogProvider: () => ({
+        core: [writableFs.tool, writableBeads.tool],
+        extended: [],
+      }),
+    });
+
+    await faculty.execute({
+      name: 'repo-writer',
+      task: 'apply one requested patch',
+      capabilities: ['general', 'git.write'],
+      workSpec: buildSubagentWorkSpec(),
+    });
+
+    const installedByName = new Map(mockFirstPromptTools.map(tool => [tool.name, tool] as const));
+    const fsResult = await installedByName.get('fs')!.execute(
+      'call-fs-write',
+      { action: 'write', path: 'report.md', content: 'bounded output' },
+    );
+    expect(fsResult.details).toEqual({ toolName: 'fs' });
+    expect(writableFs.execute).toHaveBeenCalledTimes(1);
+
+    const beadsResult = await installedByName.get('beads')!.execute(
+      'call-beads-create',
+      { action: 'create', title: 'Unrequested mutation' },
+    );
+    expect(beadsResult.details).toMatchObject({
+      capabilityDenied: true,
+      missingTokens: ['issue.write'],
+    });
+    expect(writableBeads.execute).not.toHaveBeenCalled();
+    expect(snapshotParentCapabilityGrant).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects a child request for an explicit capability the parent does not grant', async () => {
+    const faculty = new SubagentFaculty({
+      eventBus,
+      llmProvider: mockLLM(),
+      sessionStore,
+      embeddingService: null,
+      memoryProvider: null,
+      config: { ...TEST_CONFIG, capabilityTier: 'apprentice' },
+      parentSystemPrompt: 'test prompt',
+    });
+
+    await expect(faculty.execute({
+      name: 'overreaching-writer',
+      task: 'write outside the parent grant',
+      capabilities: ['general', 'git.write'],
+      workSpec: buildSubagentWorkSpec(),
+    })).rejects.toThrow(/git\.write.*parent/i);
+    expect(promptSpy).not.toHaveBeenCalled();
+    expect(faculty.getActiveCount()).toBe(0);
+    expect(faculty.getRecentTasks()).toHaveLength(0);
   });
 
   it('caps explicit multi-turn subagent requests at the shared agent loop ceiling', async () => {
@@ -559,8 +780,9 @@ describe('SubagentFaculty', () => {
     const notices = completionNotices.peek('api:parent');
     expect(notices).toHaveLength(1);
     expect(notices[0]).toMatchObject({ status: 'completed' });
-    expect(events).toHaveLength(1);
-    expect(events[0]).toMatchObject({
+    expect(events.map(event => (event as { handoff: CompletionHandoffRecord }).handoff.status))
+      .toEqual(['started', 'progress', 'completed']);
+    expect(events.at(-1)).toMatchObject({
       noticeBuffered: true,
       handoff: expect.objectContaining({
         source: 'subagent',
@@ -613,6 +835,10 @@ describe('SubagentFaculty', () => {
   // catch path reads the hoisted accumulators, so tokens/turns and the last
   // completed turn's checkpoint survive rather than being zeroed.
   it('preserves the accumulated partial when cancel aborts an in-flight turn', async () => {
+    const handoffs: Array<{ handoff: CompletionHandoffRecord }> = [];
+    eventBus.on('agent.completion_handoff', event => {
+      handoffs.push(event);
+    });
     const faculty = new SubagentFaculty({
       eventBus,
       llmProvider: mockLLM(),
@@ -674,6 +900,10 @@ describe('SubagentFaculty', () => {
     });
     expect(result.partial?.latestCheckpoint.model).not.toBe('');
     expect(result.partial?.remainingBudget.remainingTurns).toBe(2);
+    expect(handoffs.at(-1)?.handoff).toMatchObject({
+      status: 'cancelled',
+      result: { partial: true },
+    });
   });
 
   it('emits blocked handoff when subagent spawn policy rejects required capabilities', async () => {
@@ -779,7 +1009,7 @@ describe('SubagentFaculty', () => {
     expect(handoffEntries).toHaveLength(0);
     expect(result.gatewayRouting).toEqual({
       schemaVersion: 1,
-      companionId: 'companion',
+      companionId: '11111111-1111-4111-8111-111111111111',
       subagentAddress: {
         executionPort: 'subagent',
         workerId: result.subagentId,
@@ -800,7 +1030,7 @@ describe('SubagentFaculty', () => {
       expect.objectContaining({
         subagentId: result.subagentId,
         status: 'completed',
-        companionId: 'companion',
+        companionId: '11111111-1111-4111-8111-111111111111',
         connectionId: 'conn-kitchen',
         sessionId: 'session-kitchen',
       }),
@@ -832,10 +1062,10 @@ describe('SubagentFaculty', () => {
         routing: {
           gateway: {
             schemaVersion: 1,
-            companionId: 'companion-alpha',
+            companionId: '11111111-1111-4111-8111-111111111111',
             shard: {
-              coreCompanionId: 'companion-alpha',
-              shardCompanionId: 'companion-alpha/shards/shard-parent',
+              coreCompanionId: '11111111-1111-4111-8111-111111111111',
+              shardCompanionId: '11111111-1111-4111-8111-111111111111/shards/shard-parent',
               shardId: 'shard-parent',
               parentShardId: 'shard-grandparent',
             },
@@ -856,10 +1086,10 @@ describe('SubagentFaculty', () => {
       },
     });
 
-    expect(result.gatewayRouting.companionId).toBe('companion-alpha');
+    expect(result.gatewayRouting.companionId).toBe('11111111-1111-4111-8111-111111111111');
     expect(result.lineage).toEqual({
-      coreCompanionId: 'companion-alpha',
-      shardCompanionId: 'companion-alpha/shards/shard-parent',
+      coreCompanionId: '11111111-1111-4111-8111-111111111111',
+      shardCompanionId: '11111111-1111-4111-8111-111111111111/shards/shard-parent',
       shardId: 'shard-parent',
       creationMode: 'fresh',
       parentShardId: 'shard-grandparent',
@@ -905,6 +1135,10 @@ describe('SubagentFaculty', () => {
   // `blocked` outcome (never masquerading as completed) with a partial record.
   it('reports a blocked outcome with a partial record when execution throws', async () => {
     mockSubagentError = new Error('worker crashed');
+    const handoffs: Array<{ handoff: CompletionHandoffRecord }> = [];
+    eventBus.on('agent.completion_handoff', event => {
+      handoffs.push(event);
+    });
     const faculty = new SubagentFaculty({
       eventBus,
       llmProvider: mockLLM(),
@@ -920,6 +1154,10 @@ describe('SubagentFaculty', () => {
       task: 'do work that fails',
       maxTurns: 3,
       workSpec: buildSubagentWorkSpec(),
+      sourceContext: {
+        channelId: 'api:parent',
+        requestId: 'msg-crasher',
+      },
     });
     const result = await faculty.wait(task.subagentId);
 
@@ -934,6 +1172,7 @@ describe('SubagentFaculty', () => {
     });
     // No turns ran, so the full turn budget remains.
     expect(result.partial?.remainingBudget.remainingTurns).toBe(3);
+    expect(handoffs.map(event => event.handoff.status)).toEqual(['started', 'blocked']);
 
     // execute() surfaces the honest non-completed outcome as a throw.
     await expect(faculty.execute({
@@ -1116,5 +1355,349 @@ describe('subagent work spec seam (mmo9.7.7)', () => {
     await wrapped.complete({ messages: [] } as any, 'memory');
     const memoryCallOptions = (inner.complete as any).mock.calls.at(-1)?.[2];
     expect(memoryCallOptions?.workSpec).toBeUndefined();
+  });
+});
+
+describe('SubagentFaculty memory-write governance (c7d)', () => {
+  let root: string;
+  let eventBus: EventBus;
+  let sessionStore: SessionStore;
+
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), 'psfn-subagent-memgov-'));
+    eventBus = new EventBus();
+    sessionStore = new SessionStore(root);
+    mockSubagentContent = 'subagent response';
+    mockSubagentError = null;
+    mockSubagentDelayMs = 0;
+    mockFirstPromptTools = [];
+    promptSpy.mockClear();
+    resetCompletionHandoffDedupeForTests();
+  });
+
+  afterEach(() => {
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  function makeMemoryCatalogTool() {
+    const execute = vi.fn(async () => ({
+      content: [{ type: 'text' as const, text: 'memory ok' }],
+      details: {},
+    }));
+    const tool = {
+      name: 'memory',
+      description: 'canonical memory surface',
+      parameters: {},
+      execute,
+    } as AgentTool<any>;
+    return { tool, execute };
+  }
+
+  function makeGovernanceDeps() {
+    const memory = makeMemoryCatalogTool();
+    const memoryDelete = makeCatalogTool('memory_delete', 'memory.delete');
+    const auditTrail = { append: vi.fn() };
+    const recordPendingMemoryCandidates = vi.fn(async () => ({}));
+    const rawProvider = {
+      retrieve: vi.fn(async () => 'retrieved context'),
+      getActiveMemoryContext: vi.fn(() => null),
+      refreshActiveMemoryContext: vi.fn(async () => null),
+      write: vi.fn(async () => {
+        throw new Error('raw provider write must never be reachable from a subagent loop');
+      }),
+    };
+    return { memory, memoryDelete, auditTrail, recordPendingMemoryCandidates, rawProvider };
+  }
+
+  function makeGovernedFaculty(deps: ReturnType<typeof makeGovernanceDeps>) {
+    return new SubagentFaculty({
+      eventBus,
+      llmProvider: mockLLM(),
+      sessionStore,
+      embeddingService: null,
+      memoryProvider: deps.rawProvider as never,
+      config: TEST_CONFIG,
+      parentSystemPrompt: 'test prompt',
+      toolCatalogProvider: () => ({
+        core: [deps.memory.tool, deps.memoryDelete.tool],
+        extended: [],
+      }),
+      auditTrail: deps.auditTrail,
+      foldReviewController: { recordPendingMemoryCandidates: deps.recordPendingMemoryCandidates },
+    });
+  }
+
+  it('default toolset carries no memory write: governed wrapper injected, delete surfaces blocked', async () => {
+    const deps = makeGovernanceDeps();
+    const faculty = makeGovernedFaculty(deps);
+
+    await faculty.execute({
+      name: 'pdf-reader',
+      task: 'read and summarize the pdf',
+      workSpec: buildSubagentWorkSpec(),
+    });
+
+    const injectedNames = mockFirstPromptTools.map(tool => tool.name);
+    expect(injectedNames).toContain('memory');
+    expect(injectedNames).not.toContain('memory_delete');
+    const injectedMemory = mockFirstPromptTools.find(tool => tool.name === 'memory')!;
+    expect(injectedMemory).not.toBe(deps.memory.tool);
+
+    // The live provider is never handed to the loop raw.
+    expect(deps.auditTrail.append).toHaveBeenCalledWith(
+      'subagent.memory.provider.facade',
+      expect.objectContaining({ subagentId: expect.stringMatching(/^subagent-/) }),
+    );
+
+    // Reads pass through; writes are opt-in and denied by default.
+    await injectedMemory.execute('call-read', { action: 'search', query: 'q' }, undefined);
+    expect(deps.memory.execute).toHaveBeenCalledTimes(1);
+    const denied = await injectedMemory.execute('call-write', {
+      action: 'write', text: 'routine note', type: 'procedural',
+    }, undefined);
+    expect((denied.details as { isError?: boolean }).isError).toBe(true);
+    expect(deps.memory.execute).toHaveBeenCalledTimes(1);
+    expect(deps.recordPendingMemoryCandidates).not.toHaveBeenCalled();
+  });
+
+  it('opt-in memory.write passes procedural writes stamped and stages restricted classes', async () => {
+    const deps = makeGovernanceDeps();
+    const faculty = makeGovernedFaculty(deps);
+
+    const result = await faculty.execute({
+      name: 'note-taker',
+      task: 'record procedure learnings',
+      capabilities: ['general', 'memory.write'],
+      workSpec: buildSubagentWorkSpec(),
+    });
+    const injectedMemory = mockFirstPromptTools.find(tool => tool.name === 'memory')!;
+
+    const direct = await injectedMemory.execute('call-proc', {
+      action: 'write', text: 'the export runs before the sync', type: 'procedural',
+    }, undefined);
+    expect((direct.details as { isError?: boolean }).isError).toBeUndefined();
+    expect(deps.memory.execute).toHaveBeenCalledTimes(1);
+    expect(deps.memory.execute.mock.calls[0]?.[1]).toMatchObject({
+      __psfnShardSource: `subagent:${result.subagentId}`,
+    });
+
+    const staged = await injectedMemory.execute('call-emo', {
+      action: 'write', text: 'this loss clearly still hurts them', type: 'emotional',
+    }, undefined);
+    expect(deps.memory.execute).toHaveBeenCalledTimes(1);
+    expect((staged.details as { mutationWorkflow?: string }).mutationWorkflow).toBe('fold_review_only');
+    expect(deps.recordPendingMemoryCandidates).toHaveBeenCalledTimes(1);
+    const stagedInput = deps.recordPendingMemoryCandidates.mock.calls[0]?.[0] as unknown as {
+      shardId: string;
+      lineage: { shardId: string; kind: string };
+      outputs: unknown[];
+    };
+    expect(stagedInput.shardId).toBe(result.subagentId);
+    expect(stagedInput.lineage.shardId).toBe(result.subagentId);
+    expect(stagedInput.outputs).toHaveLength(1);
+    expect(deps.auditTrail.append).toHaveBeenCalledWith(
+      'subagent.memory.write.staged',
+      expect.objectContaining({ subagentId: result.subagentId }),
+    );
+  });
+
+  it('elevated spawn writes restricted memory directly with spawn-time audit; delete stays denied', async () => {
+    const deps = makeGovernanceDeps();
+    const faculty = makeGovernedFaculty(deps);
+
+    const result = await faculty.execute({
+      name: 'sleeptime-maintenance',
+      task: 'consolidate emotional memory',
+      memoryWriteElevation: { reason: 'sleeptime emotional-memory maintenance lane' },
+      workSpec: buildSubagentWorkSpec(),
+    });
+
+    expect(deps.auditTrail.append).toHaveBeenCalledWith(
+      'subagent.memory.elevation.granted',
+      expect.objectContaining({
+        subagentId: result.subagentId,
+        reason: 'sleeptime emotional-memory maintenance lane',
+      }),
+    );
+    expect(deps.auditTrail.append).toHaveBeenCalledWith(
+      'subagent.execute.start',
+      expect.objectContaining({ memoryWritePolicy: 'elevated' }),
+    );
+
+    const injectedMemory = mockFirstPromptTools.find(tool => tool.name === 'memory')!;
+    const direct = await injectedMemory.execute('call-emo', {
+      action: 'write', text: 'the grief settled into something gentler', type: 'emotional',
+    }, undefined);
+    expect((direct.details as { isError?: boolean }).isError).toBeUndefined();
+    expect(deps.memory.execute).toHaveBeenCalledTimes(1);
+    expect(deps.memory.execute.mock.calls[0]?.[1]).toMatchObject({
+      __psfnShardSource: `subagent:${result.subagentId}`,
+    });
+    expect(deps.recordPendingMemoryCandidates).not.toHaveBeenCalled();
+
+    const denied = await injectedMemory.execute('call-del', {
+      action: 'delete', memory_id: 'mem-1',
+    }, undefined);
+    expect((denied.details as { isError?: boolean }).isError).toBe(true);
+    expect(deps.memory.execute).toHaveBeenCalledTimes(1);
+  });
+
+  it('fails a spawn closed on a blank elevation reason', async () => {
+    const deps = makeGovernanceDeps();
+    const faculty = makeGovernedFaculty(deps);
+
+    await expect(faculty.spawn({
+      name: 'bad-elevation',
+      task: 'attempt elevation without a reason',
+      memoryWriteElevation: { reason: '   ' },
+      workSpec: buildSubagentWorkSpec(),
+    })).rejects.toThrow(/non-empty reason/);
+    expect(faculty.getActiveCount()).toBe(0);
+  });
+
+  it('fails an elevated spawn before registration when no audit trail is wired', async () => {
+    const deps = makeGovernanceDeps();
+    const faculty = new SubagentFaculty({
+      eventBus,
+      llmProvider: mockLLM(),
+      sessionStore,
+      embeddingService: null,
+      memoryProvider: deps.rawProvider as never,
+      config: TEST_CONFIG,
+      parentSystemPrompt: 'test prompt',
+      toolCatalogProvider: () => ({
+        core: [deps.memory.tool, deps.memoryDelete.tool],
+        extended: [],
+      }),
+      foldReviewController: { recordPendingMemoryCandidates: deps.recordPendingMemoryCandidates },
+    });
+
+    await expect(faculty.spawn({
+      name: 'unaudited-elevation',
+      task: 'attempt elevated memory maintenance without an audit sink',
+      memoryWriteElevation: { reason: 'sleeptime emotional-memory maintenance lane' },
+      workSpec: buildSubagentWorkSpec(),
+    })).rejects.toThrow(/audit trail/i);
+    expect(faculty.getActiveCount()).toBe(0);
+    expect(faculty.getRecentTasks()).toHaveLength(0);
+    expect(promptSpy).not.toHaveBeenCalled();
+  });
+});
+
+describe('SubagentFaculty core-authoritative tool governance (p0le)', () => {
+  let root: string;
+  let eventBus: EventBus;
+  let sessionStore: SessionStore;
+
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), 'psfn-subagent-toolgov-'));
+    eventBus = new EventBus();
+    sessionStore = new SessionStore(root);
+    mockSubagentContent = 'subagent response';
+    mockSubagentError = null;
+    mockSubagentDelayMs = 0;
+    mockFirstPromptTools = [];
+    promptSpy.mockClear();
+    resetCompletionHandoffDedupeForTests();
+  });
+
+  afterEach(() => {
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  function makeGovernanceCatalog() {
+    const names = [
+      'orient', 'identity', 'north_star', 'contact',
+      'journal', 'wiki', 'skill', 'vault', 'scratchpad',
+    ] as const;
+    const tools = Object.fromEntries(
+      names.map(name => [name, makeCatalogTool(name, 'identity.read')]),
+    ) as Record<(typeof names)[number], ReturnType<typeof makeCatalogTool>>;
+    const auditTrail = { append: vi.fn() };
+    const faculty = new SubagentFaculty({
+      eventBus,
+      llmProvider: mockLLM(),
+      sessionStore,
+      embeddingService: null,
+      memoryProvider: null,
+      config: TEST_CONFIG,
+      parentSystemPrompt: 'test prompt',
+      toolCatalogProvider: () => ({
+        core: names.map(name => tools[name].tool),
+        extended: [],
+      }),
+      auditTrail,
+    });
+    return { tools, auditTrail, faculty };
+  }
+
+  it('blocks identity, north_star, and contact at injection; wraps the multiplexed surfaces; leaves scratchpad raw', async () => {
+    const { tools, faculty } = makeGovernanceCatalog();
+
+    await faculty.execute({
+      name: 'default-worker',
+      task: 'summarize the report',
+      workSpec: buildSubagentWorkSpec(),
+    });
+
+    const injectedNames = mockFirstPromptTools.map(tool => tool.name);
+    expect(injectedNames).not.toContain('identity');
+    expect(injectedNames).not.toContain('north_star');
+    expect(injectedNames).not.toContain('contact');
+
+    for (const name of ['orient', 'journal', 'wiki', 'skill', 'vault'] as const) {
+      const injected = mockFirstPromptTools.find(tool => tool.name === name);
+      expect(injected, name).toBeDefined();
+      expect(injected, name).not.toBe(tools[name].tool);
+    }
+
+    // scratchpad is bounded ephemeral working memory and stays ungoverned:
+    // its mutations reach the parent-catalog tool directly.
+    const scratchpad = mockFirstPromptTools.find(tool => tool.name === 'scratchpad')!;
+    await scratchpad.execute('call-pad', { action: 'add', content: 'working note' }, undefined);
+    expect(tools.scratchpad.execute).toHaveBeenCalledTimes(1);
+  });
+
+  it('default-tier subagent cannot mutate any core-authoritative store (reads still pass)', async () => {
+    const { tools, auditTrail, faculty } = makeGovernanceCatalog();
+
+    const result = await faculty.execute({
+      name: 'default-worker',
+      task: 'summarize the report',
+      workSpec: buildSubagentWorkSpec(),
+    });
+
+    const find = (name: string) => mockFirstPromptTools.find(tool => tool.name === name)!;
+
+    // Reads pass through to the parent-catalog tool.
+    await find('orient').execute('call-1', { action: 'values_list' }, undefined);
+    expect(tools.orient.execute).toHaveBeenCalledTimes(1);
+
+    // Every reproduced escalation from the bead is denied and audit-trailed.
+    const deniedCalls: Array<[string, Record<string, unknown>]> = [
+      ['orient', { action: 'introspection_consent_set', enabled: false }],
+      ['orient', { action: 'values_update', values: 'rewritten', version: 1 }],
+      ['orient', { action: 'create_concern', content: 'planted concern' }],
+      ['journal', { action: 'write', path: 'p', content: 'x' }],
+      ['wiki', { action: 'write', title: 't', body: 'b' }],
+      ['skill', { action: 'update', name: 's', content: 'x' }],
+      ['vault', { action: 'write', name: 'n', content: 'x' }],
+    ];
+    for (const [name, params] of deniedCalls) {
+      const denied = await find(name).execute('call-denied', params, undefined);
+      expect((denied.details as { isError?: boolean }).isError, `${name} ${String(params.action)}`).toBe(true);
+      expect(auditTrail.append).toHaveBeenCalledWith('subagent.tool.mutation.denied', expect.objectContaining({
+        subagentId: result.subagentId,
+        subagentName: 'default-worker',
+        toolName: name,
+        action: params.action,
+        reason: 'mutation_not_permitted',
+      }));
+    }
+    expect(tools.orient.execute).toHaveBeenCalledTimes(1);
+    expect(tools.journal.execute).not.toHaveBeenCalled();
+    expect(tools.wiki.execute).not.toHaveBeenCalled();
+    expect(tools.skill.execute).not.toHaveBeenCalled();
+    expect(tools.vault.execute).not.toHaveBeenCalled();
   });
 });

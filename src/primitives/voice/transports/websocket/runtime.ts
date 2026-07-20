@@ -1,4 +1,5 @@
 import { createComponentLogger } from '../../../../shared/logger.js';
+import { toError } from '../../../../shared/utils/errors.js';
 import { classifyVoiceControlIntent, type VoiceControlIntent } from '../../control-intent.js';
 import type { SttStreamSession } from '../../connectors/stt/types.js';
 import type { TtsSynthesisSession } from '../../connectors/tts/types.js';
@@ -72,10 +73,6 @@ class WebSocketVoiceRuntimeError extends Error {
     this.name = 'WebSocketVoiceRuntimeError';
     this.code = code;
   }
-}
-
-function toError(error: unknown): Error {
-  return error instanceof Error ? error : new Error(String(error));
 }
 
 function isAbortLikeError(error: unknown): boolean {

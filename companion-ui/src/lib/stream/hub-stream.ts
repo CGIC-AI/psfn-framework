@@ -8,7 +8,10 @@ import type {
   SatelliteHubStateEvent,
 } from '../api/client.js';
 import type {
+  ApprovalAttribution,
+  ApprovalGrantMode,
   ApprovalResolvedStatus,
+  ApprovalSourceSystem,
   HubToClientMessage,
   ToolActivityPhase,
 } from '../protocol/events.js';
@@ -63,6 +66,19 @@ export interface ApprovalStreamEntry {
   redactedContext: string;
   status: ApprovalEntryStatus;
   resolvedAt?: string;
+  // ── v2 (approvals.v2) — additive, optional; present only for v2 frames ──
+  sourceSystem?: ApprovalSourceSystem;
+  attribution?: ApprovalAttribution;
+  action?: string;
+  scope?: string;
+  reason?: string;
+  grantMode?: ApprovalGrantMode;
+}
+
+/** Terminal approval outcome retained even when its request arrived via a fleet snapshot. */
+export interface ApprovalStreamResolution {
+  status: ApprovalResolvedStatus;
+  resolvedAt: string;
 }
 
 /** Raw accumulated artifact-shelf item from `artifact.created`. */
@@ -108,6 +124,7 @@ export interface HubStreamState {
   events: HubStreamEventLogEntry[];
   failure: HubStreamFailure | null;
   approvals: ApprovalStreamEntry[];
+  approvalResolutions: Record<string, ApprovalStreamResolution>;
   artifacts: ArtifactStreamItem[];
   artifactPreviews: Record<string, ArtifactPreviewStreamState>;
   toolActivity: ToolActivityStreamEntry[];
@@ -135,6 +152,8 @@ export interface HubStreamClientLike {
   sendApprovalDecision(id: string, decision: 'approve' | 'deny'): void;
   sendArtifactPreviewRequest(requestId: string, artifactId: string): void;
   sendTouchInteraction(interaction: TouchInteraction): void;
+  refreshShards?(): void;
+  selectShard?(shardId: string | null): void;
   snapshot(): SatelliteHubSnapshot;
 }
 
@@ -159,6 +178,7 @@ export function createInitialHubStreamState(at = new Date().toISOString()): HubS
     events: [],
     failure: null,
     approvals: [],
+    approvalResolutions: {},
     artifacts: [],
     artifactPreviews: {},
     toolActivity: [],
@@ -174,12 +194,20 @@ export function reduceHubStreamState(
   switch (event.type) {
     case 'client.state':
       return applyConnectionState(state, event.event.current, event.at);
-    case 'client.session':
+    case 'client.session': {
+      const shardSelectionChanged =
+        state.session?.activeShardId !== event.session.activeShardId;
       return {
         ...state,
         session: cloneSession(event.session) ?? null,
+        ...(shardSelectionChanged ? {
+          messages: [],
+          liveAssistant: null,
+          phase: 'idle' as const,
+        } : {}),
         updatedAt: event.at,
       };
+    }
     case 'client.error':
       return {
         ...state,
@@ -276,7 +304,17 @@ export class HubStreamStore {
       liveAssistant: this.state.liveAssistant ? { ...this.state.liveAssistant } : null,
       events: this.state.events.map((entry) => ({ ...entry })),
       failure: this.state.failure ? { ...this.state.failure } : null,
-      approvals: this.state.approvals.map((entry) => ({ ...entry })),
+      approvals: this.state.approvals.map((entry) => ({
+        ...entry,
+        ...(entry.attribution ? { attribution: { ...entry.attribution } } : {}),
+        ...(entry.grantMode ? { grantMode: { ...entry.grantMode } } : {}),
+      })),
+      approvalResolutions: Object.fromEntries(
+        Object.entries(this.state.approvalResolutions).map(([id, resolution]) => [
+          id,
+          { ...resolution },
+        ]),
+      ),
       artifacts: this.state.artifacts.map((item) => ({ ...item })),
       artifactPreviews: cloneArtifactPreviews(this.state.artifactPreviews),
       toolActivity: this.state.toolActivity.map((entry) => ({ ...entry })),
@@ -301,6 +339,17 @@ export class HubStreamStore {
 
   sendTouchInteraction(interaction: TouchInteraction): void {
     this.client.sendTouchInteraction(interaction);
+  }
+
+  refreshShards(): void {
+    this.client.refreshShards?.();
+  }
+
+  selectShard(shardId: string | null): void {
+    if (!this.client.selectShard) {
+      throw new Error('Shard selection is unavailable on this transport');
+    }
+    this.client.selectShard(shardId);
   }
 
   /**
@@ -377,11 +426,19 @@ function applyConnectionState(
 ): HubStreamState {
   const connection = mapClientConnection(connectionState);
   const healthy = connection === 'connecting' || connection === 'connected' || connection === 'ready';
+  const authorityCleared = connection === 'disconnected' || connection === 'failed';
   return {
     ...state,
     connection,
     phase: connection === 'failed' ? 'failed' : state.phase,
     failure: healthy ? null : state.failure,
+    ...(authorityCleared
+      ? {
+          session: null,
+          approvals: [],
+          approvalResolutions: {},
+        }
+      : {}),
     updatedAt: at,
   };
 }
@@ -468,23 +525,47 @@ function applyInboundMessage(
         },
       };
     case 'approval.requested': {
+      // Lift only the known fields into app state — unknown future keys the
+      // framing parser tolerated are dropped here (never enter store state).
+      const { data } = message;
+      const existing = base.approvals.find(entry => entry.id === data.id);
+      if (base.approvalResolutions[data.id] || existing) {
+        return base;
+      }
       const entry: ApprovalStreamEntry = {
-        id: message.data.id,
-        title: message.data.title,
-        requestedAt: message.data.requestedAt,
-        expiresAt: message.data.expiresAt,
-        redactedContext: message.data.redactedContext,
+        id: data.id,
+        title: data.title,
+        requestedAt: data.requestedAt,
+        expiresAt: data.expiresAt,
+        redactedContext: data.redactedContext,
         status: 'pending',
+        ...(data.sourceSystem !== undefined ? { sourceSystem: data.sourceSystem } : {}),
+        ...(data.attribution !== undefined ? { attribution: { ...data.attribution } } : {}),
+        ...(data.action !== undefined ? { action: data.action } : {}),
+        ...(data.scope !== undefined ? { scope: data.scope } : {}),
+        ...(data.reason !== undefined ? { reason: data.reason } : {}),
+        ...(data.grantMode !== undefined ? { grantMode: { ...data.grantMode } } : {}),
       };
       return { ...base, approvals: upsertById(base.approvals, entry) };
     }
     case 'approval.resolved': {
+      const resolution: ApprovalStreamResolution = {
+        status: message.data.status,
+        resolvedAt: message.data.resolvedAt,
+      };
       const approvals = base.approvals.map((entry) =>
         entry.id === message.data.id
-          ? { ...entry, status: message.data.status, resolvedAt: message.data.resolvedAt }
+          ? { ...entry, ...resolution }
           : entry,
       );
-      return { ...base, approvals };
+      return {
+        ...base,
+        approvals,
+        approvalResolutions: {
+          ...base.approvalResolutions,
+          [message.data.id]: resolution,
+        },
+      };
     }
     case 'artifact.created': {
       const item: ArtifactStreamItem = {
@@ -660,6 +741,7 @@ function cloneSession(session: SatelliteHubSession | undefined): SatelliteHubSes
         }
       : undefined,
     place: session.place ? { ...session.place } : undefined,
+    shards: session.shards?.map(entry => ({ ...entry })),
   };
 }
 

@@ -4,7 +4,9 @@
 
 import type { ChannelPrivacy } from './context-envelope.js';
 
-export type TrustLevel = 'primary' | 'trusted' | 'regular' | 'public';
+import type { TrustLevel } from '../../shared/contracts/trust-contracts.js';
+
+export type { TrustLevel } from '../../shared/contracts/trust-contracts.js';
 export type HighTierTrustLevel = Extract<TrustLevel, 'primary' | 'trusted'>;
 export type LowTierTrustLevel = Extract<TrustLevel, 'regular' | 'public'>;
 export type TrustMutationSource = 'manual' | 'behavior_drift' | 'autonomous';

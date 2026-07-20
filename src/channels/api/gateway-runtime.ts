@@ -4,9 +4,11 @@ import type {
   ApiHealthResponse,
   ApiChatCompletionCancelRpcResult,
   ApiChatCompletionRpcResult,
+  ApiCompanionUiShardActionRpcResult,
   ApiHealthRpcResult,
   ApiHealthSubsystemStatus,
   ApiRuntimeChatRequest,
+  ApiCompanionUiShardActionRpcParams,
   ApiServerRuntime,
   ApiTelemetryIngestRpcResult,
 } from './types.js';
@@ -25,7 +27,10 @@ export class GatewayApiRuntime implements ApiServerRuntime {
   private readonly chatRequestTimeoutMs: number;
 
   constructor(
-    private readonly gateway: Pick<GatewayServer, 'requestAgent' | 'subscribeApiStream'>,
+    private readonly gateway: Pick<
+      GatewayServer,
+      'requestAgent' | 'requestCompanionAgent' | 'subscribeApiStream'
+    >,
     options: GatewayApiRuntimeOptions = {},
   ) {
     this.chatRequestTimeoutMs = normalizeGatewayChatRequestTimeoutMs(
@@ -55,11 +60,32 @@ export class GatewayApiRuntime implements ApiServerRuntime {
       : () => {};
 
     let cancelled = false;
+    const requestAgent = async <T>(
+      method: string,
+      params: unknown,
+    ): Promise<T> => {
+      if (!input.companionId) {
+        return await this.gateway.requestAgent<T>(
+          method,
+          params,
+          this.chatRequestTimeoutMs,
+        );
+      }
+      return await this.gateway.requestCompanionAgent<T>(
+        input.companionId,
+        method,
+        params,
+        this.chatRequestTimeoutMs,
+      );
+    };
     const cancel = async (): Promise<ApiChatCompletionCancelRpcResult | undefined> => {
       if (cancelled) return undefined;
       cancelled = true;
       try {
-        return await this.gateway.requestAgent<ApiChatCompletionCancelRpcResult>('api.chat.cancel', { requestId });
+        return await requestAgent<ApiChatCompletionCancelRpcResult>(
+          'api.chat.cancel',
+          { requestId },
+        );
       } catch {
         return undefined;
       }
@@ -86,7 +112,7 @@ export class GatewayApiRuntime implements ApiServerRuntime {
     }
 
     try {
-      return await this.gateway.requestAgent<ApiChatCompletionRpcResult>('api.chat.completion', {
+      return await requestAgent<ApiChatCompletionRpcResult>('api.chat.completion', {
         requestId,
         request: input.request,
         principal: input.principal,
@@ -97,13 +123,26 @@ export class GatewayApiRuntime implements ApiServerRuntime {
         ...(input.companionUiCapability ? { companionUiCapability: input.companionUiCapability } : {}),
         timeoutMs: computeAgentChatTurnTimeoutMs(this.chatRequestTimeoutMs),
         performance: { receivedMonotonicAtMs, receivedTimestampMs },
-      }, this.chatRequestTimeoutMs);
+      });
     } finally {
       if (input.signal) {
         input.signal.removeEventListener('abort', onAbort);
       }
       unsubscribe();
     }
+  }
+
+  async handleCompanionUiShardAction(
+    companionId: string,
+    input: Omit<ApiCompanionUiShardActionRpcParams, 'requestId'>,
+  ): Promise<ApiCompanionUiShardActionRpcResult> {
+    const requestId = `companion-ui-shard-${Date.now()}-${++this.requestCounter}`;
+    return await this.gateway.requestCompanionAgent<ApiCompanionUiShardActionRpcResult>(
+      companionId,
+      'api.companion-ui.shard.action',
+      { ...input, requestId },
+      this.chatRequestTimeoutMs,
+    );
   }
 }
 

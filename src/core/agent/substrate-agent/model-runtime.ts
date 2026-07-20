@@ -122,6 +122,7 @@ interface RefreshModelFromConfigParams {
   config: CoreSubstrateConfig;
   state: ModelRuntimeState;
   message?: SubstrateMessage;
+  resolutionFailurePolicy?: 'retain-current' | 'propagate';
   setAgentModel: (model: Model<any>) => void;
   getCurrentModelId: () => string;
   logger: ModelRuntimeLogger;
@@ -167,6 +168,9 @@ export function refreshModelFromConfig(
     };
   } catch (error) {
     const err = error instanceof Error ? error : new Error(String(error));
+    if (params.resolutionFailurePolicy === 'propagate') {
+      throw err;
+    }
     if (requiresFailClosedWorkerModelResolution(params.message)) {
       params.logger.warn('Worker model refresh failed; aborting turn', {
         reason: params.reason,

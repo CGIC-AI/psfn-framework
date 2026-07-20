@@ -1,9 +1,22 @@
 import { getToken } from '$lib/stores/auth.svelte';
+import {
+  currentCompanionGardenScope,
+  getCompanionCacheScope,
+  isFleetOverviewPath,
+  onCompanionScopeChange,
+  scopeGardenDataPath,
+  scopeGardenPath,
+} from '$lib/fleet/companion-scope';
 import { ApiError } from './errors';
 
 export { ApiError } from './errors';
 
-const API_BASE = '';  // Relative — Vite proxy handles /api/*
+const inFlightRequests = new Map<AbortController, string>();
+
+onCompanionScopeChange(() => {
+  for (const controller of inFlightRequests.keys()) controller.abort();
+  inFlightRequests.clear();
+});
 
 function authHeaders(): Record<string, string> {
   const token = getToken();
@@ -14,7 +27,50 @@ function authHeaders(): Record<string, string> {
 
 function redirectToLogin(): void {
   if (typeof window !== 'undefined') {
-    window.location.href = '/login';
+    window.location.href = scopeGardenPath('/login') === '/login'
+      ? '/login'
+      : '/fleet/login';
+  }
+}
+
+function abortError(): DOMException {
+  return new DOMException('Companion scope changed', 'AbortError');
+}
+
+/**
+ * Fetch one data-bearing Garden resource. The target comes only from the
+ * canonical browser path. Scope switches abort the request, and a response
+ * that races with navigation is rejected before callers can publish it.
+ */
+export async function apiFetch(path: string, init: RequestInit = {}): Promise<Response> {
+  const requestScope = getCompanionCacheScope();
+  const pathname = typeof window === 'undefined' ? '/' : window.location.pathname;
+  let url: string;
+  if (path.startsWith('/')) {
+    url = scopeGardenDataPath(path, pathname);
+  } else {
+    if (currentCompanionGardenScope(pathname) || isFleetOverviewPath(pathname)) {
+      throw new Error('Fleet Garden data endpoints must be same-origin root-absolute paths');
+    }
+    const parsed = new URL(path);
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+      throw new Error('Garden data endpoint must use HTTP or HTTPS');
+    }
+    url = parsed.toString();
+  }
+  const controller = new AbortController();
+  const signal = init.signal
+    ? AbortSignal.any([init.signal, controller.signal])
+    : controller.signal;
+  inFlightRequests.set(controller, requestScope);
+  try {
+    const response = await fetch(url, { ...init, signal });
+    if (requestScope !== getCompanionCacheScope()) {
+      throw abortError();
+    }
+    return response;
+  } finally {
+    inFlightRequests.delete(controller);
   }
 }
 
@@ -71,7 +127,7 @@ export async function apiGet<T>(path: string): Promise<T> {
   // cache via If-None-Match. When the server answers 304 the browser
   // transparently serves the cached body, so polled reads skip re-downloading
   // byte-identical payloads over the WAN while still always seeing fresh data.
-  const res = await fetch(API_BASE + path, {
+  const res = await apiFetch(path, {
     cache: 'no-cache',
     headers: { ...authHeaders(), Accept: 'application/json' },
     credentials: 'include',
@@ -96,7 +152,7 @@ export async function apiGetConditional(
 ): Promise<ApiConditionalGetResult> {
   const headers: Record<string, string> = { ...authHeaders(), Accept: 'application/json' };
   if (etag !== undefined) headers['If-None-Match'] = etag;
-  const res = await fetch(API_BASE + path, {
+  const res = await apiFetch(path, {
     cache: 'no-store',
     headers,
     credentials: 'include',
@@ -115,7 +171,7 @@ export interface ApiDownload {
 }
 
 export async function apiDownload(path: string): Promise<ApiDownload> {
-  const res = await fetch(API_BASE + path, {
+  const res = await apiFetch(path, {
     cache: 'no-store',
     headers: authHeaders(),
     credentials: 'include',
@@ -136,7 +192,7 @@ export async function apiDownload(path: string): Promise<ApiDownload> {
 }
 
 export async function apiPost<T>(path: string, body?: unknown): Promise<T> {
-  const res = await fetch(API_BASE + path, {
+  const res = await apiFetch(path, {
     method: 'POST',
     headers: { ...authHeaders(), 'Content-Type': 'application/json' },
     credentials: 'include',
@@ -150,7 +206,7 @@ export async function apiPostMultipart<T>(
   path: string,
   formData: FormData
 ): Promise<T> {
-  const res = await fetch(API_BASE + path, {
+  const res = await apiFetch(path, {
     method: 'POST',
     headers: authHeaders(),
     credentials: 'include',
@@ -161,7 +217,7 @@ export async function apiPostMultipart<T>(
 }
 
 export async function apiPatch<T>(path: string, body: unknown): Promise<T> {
-  const res = await fetch(API_BASE + path, {
+  const res = await apiFetch(path, {
     method: 'PATCH',
     headers: { ...authHeaders(), 'Content-Type': 'application/json' },
     credentials: 'include',
@@ -172,7 +228,7 @@ export async function apiPatch<T>(path: string, body: unknown): Promise<T> {
 }
 
 export async function apiPut<T>(path: string, body: unknown): Promise<T> {
-  const res = await fetch(API_BASE + path, {
+  const res = await apiFetch(path, {
     method: 'PUT',
     headers: { ...authHeaders(), 'Content-Type': 'application/json' },
     credentials: 'include',
@@ -183,7 +239,7 @@ export async function apiPut<T>(path: string, body: unknown): Promise<T> {
 }
 
 export async function apiDelete<T>(path: string): Promise<T> {
-  const res = await fetch(API_BASE + path, {
+  const res = await apiFetch(path, {
     method: 'DELETE',
     headers: authHeaders(),
     credentials: 'include',
@@ -196,7 +252,7 @@ export async function apiPostForm(
   path: string,
   params: URLSearchParams
 ): Promise<string> {
-  const res = await fetch(API_BASE + path, {
+  const res = await apiFetch(path, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/x-www-form-urlencoded',

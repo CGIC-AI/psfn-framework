@@ -348,7 +348,7 @@ describe('SessionManager', () => {
     expect(enqueue).toHaveBeenCalledOnce();
   });
 
-  it('authorship guard re-tags internal-origin messages submitted as user speech', async () => {
+  it('authorship guard re-tags internal-origin messages submitted as user speech', () => {
     const config = makeConfig();
     const eventBus = new EventBus();
     const guardEvents: Array<{ reason: string; authorId: string }> = [];
@@ -373,7 +373,7 @@ describe('SessionManager', () => {
     ]);
   });
 
-  it('authorship guard leaves genuine partner messages untouched', async () => {
+  it('authorship guard leaves genuine partner messages untouched', () => {
     const config = makeConfig();
     const eventBus = new EventBus();
     const guardEvents: string[] = [];
@@ -1474,6 +1474,30 @@ describe('SessionManager', () => {
     expect(context.messages.some(message => message.content.includes('continued assistant turn'))).toBe(true);
   });
 
+  it.each(['api', 'terminal'] as const)(
+    'preserves an exact testing-marked %s owner without changing ordinary active-context routing',
+    (channelKind) => {
+      const mgr = new SessionManager(store, makeConfig());
+      const activeOwner = `${channelKind}:production-owner`;
+      const testingOwner = `${channelKind}:principal:testing:rollout-probe`;
+      const ordinarySource = `${channelKind}:ordinary-source`;
+      mgr.setActiveContextSession(activeOwner);
+
+      expect(mgr.resolveSessionChannelId(testingOwner)).toBe(testingOwner);
+      expect(mgr.resolveSessionChannelId(ordinarySource)).toBe(activeOwner);
+
+      mgr.recordUserMessage(testingOwner, 'isolated harness turn', 'u1', 'User');
+      mgr.recordUserMessage(ordinarySource, 'continued production turn', 'u1', 'User');
+
+      expect(store.getRecent(testingOwner, 1)).toEqual([
+        expect.objectContaining({ channelId: testingOwner, content: 'isolated harness turn' }),
+      ]);
+      expect(store.getRecent(activeOwner, 1)).toEqual([
+        expect.objectContaining({ channelId: activeOwner, content: 'continued production turn' }),
+      ]);
+    },
+  );
+
   it('keeps explicit turn writes on a captured API owner after the active context changes', () => {
     const config = makeConfig();
     const mgr = new SessionManager(store, config);
@@ -1705,6 +1729,42 @@ describe('SessionManager', () => {
     });
 
     const context = await mgr.buildContext(`${channelKind}:physical-ingress`, 'System', '');
+
+    expect(context.messages.some(message => message.content.includes('admitted owner history'))).toBe(true);
+    expect(context.messages.some(message => message.content.includes('future owner history'))).toBe(false);
+    },
+  );
+
+  it.each(['api', 'terminal'] as const)(
+    'keeps a physical %s ingress on its admitted owner when context capture pauses across an active-context switch',
+    async (channelKind) => {
+    const mgr = new SessionManager(store, makeConfig());
+    const admittedOwner = `${channelKind}:admitted-owner`;
+    const futureOwner = `${channelKind}:future-owner`;
+    mgr.recordUserMessage(admittedOwner, 'admitted owner history', 'user-a', 'User');
+    mgr.recordUserMessage(futureOwner, 'future owner history', 'user-b', 'User');
+    mgr.setActiveContextSession(admittedOwner);
+
+    let markCaptureStarted!: () => void;
+    const captureStarted = new Promise<void>((resolve) => { markCaptureStarted = resolve; });
+    let releaseCapture!: () => void;
+    const captureRelease = new Promise<void>((resolve) => { releaseCapture = resolve; });
+    const captureTurnSessionContext = mgr.captureTurnSessionContext.bind(mgr);
+    vi.spyOn(mgr, 'captureTurnSessionContext').mockImplementationOnce(async (input) => {
+      markCaptureStarted();
+      await captureRelease;
+      return await captureTurnSessionContext(input);
+    });
+
+    const contextPromise = mgr.buildContext(
+      `${channelKind}:physical-ingress`,
+      'System',
+      '',
+    );
+    await captureStarted;
+    mgr.setActiveContextSession(futureOwner);
+    releaseCapture();
+    const context = await contextPromise;
 
     expect(context.messages.some(message => message.content.includes('admitted owner history'))).toBe(true);
     expect(context.messages.some(message => message.content.includes('future owner history'))).toBe(false);
@@ -2406,7 +2466,7 @@ describe('SessionManager', () => {
     expect(reflectionContext.manifest?.budgets.memoryRetrieval.budgetPct).toBe(8);
   });
 
-  it('ignores legacy hard session limits and keeps budget-based whole messages', async () => {
+  it('ignores legacy hard session limits and keeps budget-based whole messages', () => {
     tokenTestUtils.setTokenizerFactory(() => ({
       encode: (text: string) => ({ length: text.length }),
     }));
@@ -3304,7 +3364,7 @@ describe('SessionManager', () => {
     expect(callOrder).toEqual(['flush', 'summary']);
   });
 
-  it('preserves refusal and boundary entries as tagged compaction elements', async () => {
+  it('preserves refusal and boundary entries as tagged compaction elements', () => {
     const config = makeConfig({ compactionThresholdPct: 70 });
     const mgr = new SessionManager(store, config);
 
@@ -3349,7 +3409,7 @@ describe('SessionManager', () => {
     expect(ctx.systemPrompt).not.toContain(freshEmotionalMoment);
   });
 
-  it('preserves high-salience emotional entries verbatim during compaction', async () => {
+  it('preserves high-salience emotional entries verbatim during compaction', () => {
     const config = makeConfig({ compactionThresholdPct: 70, compactionEmotionalSalienceThresholdPct: 70 });
     const mgr = new SessionManager(store, config);
     const emotionalMoment = [
@@ -3375,7 +3435,7 @@ describe('SessionManager', () => {
     expect(preserved).toContain(emotionalMoment);
   });
 
-  it('honors configurable emotional salience thresholds', async () => {
+  it('honors configurable emotional salience thresholds', () => {
     const moderateEmotionalMoment = 'I feel sad and anxious about this situation right now.';
     const highThresholdStore = new SessionStore(join(dir, 'high-threshold'));
     const lowThresholdStore = new SessionStore(join(dir, 'low-threshold'));

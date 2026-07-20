@@ -176,7 +176,7 @@ describe('prepareAgentStartupContext', () => {
     delete process.env.COMPANION_DATA_DIR;
     process.env.WORKSPACE_PATH = workspaceDir;
     process.env.CHARACTER_CARD_PATH = join(systemDataDir, 'purrsephone.json');
-    process.env.COMPANION_ID = 'test-companion';
+    process.env.COMPANION_ID = '11111111-1111-4111-8111-111111111111';
     const postgresCredentialPath = join(rootDir, 'postgres-database-url');
     writeFileSync(
       postgresCredentialPath,

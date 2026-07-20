@@ -1,8 +1,13 @@
 import '../../shared/utils/load-dotenv.js';
 import { join, resolve } from 'node:path';
 import { runSessionRepairScan } from '../../persistence/repair/repair.js';
-import { loadConfig } from '../../system/config/load-config.js';
-import { toErrorMessage } from '../../shared/utils/errors.js';
+import {
+  bootstrapMaintenanceRuntime,
+  isMaintenanceCliEntrypoint,
+  parseCommonMaintenanceArgs,
+  runRepairCli,
+  type MaintenanceRuntime,
+} from './cli-harness.js';
 
 interface CliOptions {
   sessionsDir?: string;
@@ -13,71 +18,81 @@ function printUsage(): void {
   console.log('Usage: npm run session:repair [-- --sessions-dir <path>]');
 }
 
-function parseArgs(argv: string[]): CliOptions {
-  const options: CliOptions = { showHelp: false };
+function parseArgs(argv: readonly string[]): CliOptions {
+  const setSessionsDir = ({ options, readValue }: {
+    options: CliOptions;
+    readValue: () => string;
+  }): void => {
+    options.sessionsDir = readValue();
+  };
+  return parseCommonMaintenanceArgs<CliOptions>(argv, {
+    initial: { showHelp: false },
+    extraFlags: {
+      '--sessions-dir': setSessionsDir,
+      '-d': setSessionsDir,
+    },
+  });
+}
 
-  for (let i = 0; i < argv.length; i++) {
-    const arg = argv[i];
-    if (arg === '--help' || arg === '-h') {
-      options.showHelp = true;
-      continue;
-    }
-    if (arg === '--sessions-dir' || arg === '-d') {
-      const value = argv[i + 1];
-      if (!value) {
-        throw new Error(`Missing value for ${arg}`);
+interface SessionRepairCliDependencies {
+  bootstrap?: () => Promise<Pick<MaintenanceRuntime, 'dataDir'>>;
+  exit?: (code: number) => void;
+  logger?: Pick<Console, 'error' | 'log'>;
+}
+
+export function runSessionRepairCli(
+  argv: readonly string[] = process.argv.slice(2),
+  dependencies: SessionRepairCliDependencies = {},
+): Promise<unknown> {
+  return runRepairCli({
+    argv,
+    bootstrap: dependencies.bootstrap
+      ?? (() => bootstrapMaintenanceRuntime({ hydrateSecrets: false })),
+    exit: dependencies.exit,
+    label: 'Session repair',
+    logger: dependencies.logger,
+    parseArgs,
+    printUsage,
+    resolveKeyring: () => undefined,
+    runRepair: ({ options, runtime }) => {
+      const sessionsDir = resolve(options.sessionsDir ?? join(runtime.dataDir, 'sessions'));
+      return {
+        report: runSessionRepairScan(sessionsDir),
+        sessionsDir,
+      };
+    },
+    reportFields: ({ report, sessionsDir }) => {
+      const lines = [
+        `Session repair scan: ${sessionsDir}`,
+        `Scanned ${report.scannedFiles} JSONL files`,
+      ];
+
+      if (report.scannedFiles === 0) {
+        return [...lines, 'No JSONL files found.'];
       }
-      options.sessionsDir = value;
-      i++;
-      continue;
-    }
-    throw new Error(`Unknown argument: ${arg}`);
-  }
+      if (report.filesWithCorruption.length === 0) {
+        return [...lines, 'No corruption found.'];
+      }
 
-  return options;
+      lines.push('');
+      for (const file of report.filesWithCorruption) {
+        const channelLabel = file.channelId ?? 'unknown';
+        lines.push(`- ${file.filePath}`);
+        lines.push(
+          `  channel=${channelLabel} quarantined=${file.quarantinedEntries} loaded=${file.loadedEntries}`,
+        );
+        lines.push(`  sidecar=${file.quarantinePath}`);
+      }
+      lines.push('');
+      lines.push(
+        `Detected ${report.quarantinedEntries} quarantined lines across ${report.filesWithCorruption.length} files.`,
+      );
+      process.exitCode = 1;
+      return lines;
+    },
+  });
 }
 
-async function main(): Promise<void> {
-  const options = parseArgs(process.argv.slice(2));
-  if (options.showHelp) {
-    printUsage();
-    return;
-  }
-
-  const config = loadConfig();
-  const sessionsDir = resolve(options.sessionsDir ?? join(config.dataDir, 'sessions'));
-  const report = runSessionRepairScan(sessionsDir);
-
-  console.log(`Session repair scan: ${sessionsDir}`);
-  console.log(`Scanned ${report.scannedFiles} JSONL files`);
-
-  if (report.scannedFiles === 0) {
-    console.log('No JSONL files found.');
-    return;
-  }
-
-  if (report.filesWithCorruption.length === 0) {
-    console.log('No corruption found.');
-    return;
-  }
-
-  console.log('');
-  for (const file of report.filesWithCorruption) {
-    const channelLabel = file.channelId ?? 'unknown';
-    console.log(`- ${file.filePath}`);
-    console.log(`  channel=${channelLabel} quarantined=${file.quarantinedEntries} loaded=${file.loadedEntries}`);
-    console.log(`  sidecar=${file.quarantinePath}`);
-  }
-
-  console.log('');
-  console.log(
-    `Detected ${report.quarantinedEntries} quarantined lines across ${report.filesWithCorruption.length} files.`,
-  );
-  process.exitCode = 1;
+if (isMaintenanceCliEntrypoint(import.meta.url)) {
+  void runSessionRepairCli();
 }
-
-main().catch((error) => {
-  const message = toErrorMessage(error);
-  console.error(`Session repair failed: ${message}`);
-  process.exit(1);
-});

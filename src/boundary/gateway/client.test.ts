@@ -15,8 +15,10 @@ import { makeTestChargePolicyConfig } from '../../test-support/charge-policy.js'
 import { createCompanionId } from '../../shared/routing/companion-id.js';
 import { EventBus } from '../../shared/event-bus.js';
 import { TurnPerformanceTracker } from '../../shared/telemetry/turn-performance.js';
+import { CAPABILITY_TOKENS } from '../../system/capabilities/tokens.js';
+import { deriveShardCapabilityGrant } from '../../system/capabilities/shard-derivation.js';
 
-const TEST_COMPANION_ID = createCompanionId('companion');
+const TEST_COMPANION_ID = createCompanionId('11111111-1111-4111-8111-111111111111');
 const TEST_GATEWAY_ROUTING = {
   gateway: { schemaVersion: 1 as const, companionId: TEST_COMPANION_ID },
 };
@@ -105,6 +107,109 @@ function createMockConnection(options: { heartbeatResults?: boolean[] } = {}) {
 function getRpcResponse(sent: unknown[], id: number): any {
   return sent.find((msg: any) => msg.id === id && ('result' in msg || 'error' in msg));
 }
+
+describe('GatewayClient shard workload lifecycle', () => {
+  it('registers and ends one opaque workload lease without sending parent authority', async () => {
+    const conn = createMockConnection();
+    const client = new GatewayClient(conn.conn, 1024, { companionId: TEST_COMPANION_ID });
+    const capabilityGrant = deriveShardCapabilityGrant({
+      companionId: TEST_COMPANION_ID,
+      tier: 'custom',
+      customTokens: [...CAPABILITY_TOKENS],
+    });
+
+    const registering = client.registerWorkload({
+      parentCompanionId: TEST_COMPANION_ID,
+      shardId: 'shard-client-lifecycle',
+      shardLabel: 'Client Lifecycle',
+      channelIds: ['shard:client-lifecycle', 'shard:client-lifecycle:human'],
+      capabilityGrant,
+    });
+    const registerRequest = conn.sent[0] as {
+      id: number;
+      method: string;
+      params: Record<string, unknown>;
+    };
+    expect(registerRequest.method).toBe('shard.workload.register');
+    expect(registerRequest.params).toMatchObject({
+      shardId: 'shard-client-lifecycle',
+      ownerVersion: capabilityGrant.ownerVersion,
+      grantDigest: capabilityGrant.grantDigest,
+    });
+    expect(registerRequest.params).not.toHaveProperty('parentCompanionId');
+    expect(registerRequest.params).not.toHaveProperty('capabilityGrant');
+    conn._emit({
+      jsonrpc: '2.0',
+      id: registerRequest.id,
+      result: {
+        registrationId: registerRequest.params.registrationId,
+        workloadGeneration: 'shard-client-lifecycle#g1-server',
+      },
+    });
+    const handle = await registering;
+
+    const ending = client.endWorkload(handle);
+    const endRequest = conn.sent[1] as {
+      id: number;
+      method: string;
+      params: Record<string, unknown>;
+    };
+    expect(endRequest).toMatchObject({
+      method: 'shard.workload.end',
+      params: { registrationId: registerRequest.params.registrationId },
+    });
+    conn._emit({
+      jsonrpc: '2.0',
+      id: endRequest.id,
+      result: { ended: true },
+    });
+    await ending;
+    await expect(client.endWorkload(handle)).rejects.toThrow(/unknown gateway shard workload/);
+  });
+
+  it('destroys the authenticated connection when workload revocation is unconfirmed', async () => {
+    const conn = createMockConnection();
+    const client = new GatewayClient(conn.conn, 1024, { companionId: TEST_COMPANION_ID });
+    const capabilityGrant = deriveShardCapabilityGrant({
+      companionId: TEST_COMPANION_ID,
+      tier: 'custom',
+      customTokens: [...CAPABILITY_TOKENS],
+    });
+    const registering = client.registerWorkload({
+      parentCompanionId: TEST_COMPANION_ID,
+      shardId: 'shard-client-revocation',
+      channelIds: ['shard:client-revocation'],
+      capabilityGrant,
+    });
+    const registerRequest = conn.sent[0] as {
+      id: number;
+      params: Record<string, unknown>;
+    };
+    conn._emit({
+      jsonrpc: '2.0',
+      id: registerRequest.id,
+      result: {
+        registrationId: registerRequest.params.registrationId,
+        workloadGeneration: 'shard-client-revocation#g1-server',
+      },
+    });
+    const handle = await registering;
+
+    const ending = client.endWorkload(handle);
+    const endRequest = conn.sent[1] as { id: number };
+    conn._emit({
+      jsonrpc: '2.0',
+      id: endRequest.id,
+      error: {
+        code: -32_603,
+        message: 'revocation unavailable',
+      },
+    });
+
+    await expect(ending).rejects.toThrow('revocation unavailable');
+    expect(conn.destroyed).toBe(true);
+  });
+});
 
 describe('GatewayClient streaming', () => {
   let conn: ReturnType<typeof createMockConnection>;
@@ -580,16 +685,24 @@ describe('GatewayClient streaming', () => {
     });
   });
 
-  it('preserves pin hints on llm.chat RPC requests', async () => {
+  it('normalizes all 12 model-hint fields on llm.chat RPC requests', () => {
     void client.stream(
       {
         systemPrompt: 'test',
         messages: [{ role: 'user', content: 'hi' }],
         modelHint: {
-          model: 'openrouter/deepseek/deepseek-v3.2',
-          provider: 'openrouter',
-          pin: true,
-          maxTokens: 128,
+          model: '  z-ai/glm-5  ',
+          provider: '  OpenRouter  ',
+          pin: false,
+          maxTokens: 321.9,
+          contextWindow: 120_000.8,
+          thinkingEnabled: false,
+          thinkingEffort: 'xhigh',
+          temperature: 0.33,
+          topP: 0.77,
+          topK: 42.7,
+          frequencyPenalty: -0.12,
+          repetitionPenalty: 1.03,
         },
       },
       { onText: () => {} },
@@ -597,10 +710,18 @@ describe('GatewayClient streaming', () => {
 
     const req = conn.sent[0] as { params: Record<string, unknown> };
     expect(req.params).toMatchObject({
-      model: 'openrouter/deepseek/deepseek-v3.2',
+      model: 'z-ai/glm-5',
       provider: 'openrouter',
-      pin: true,
-      maxTokens: 128,
+      pin: false,
+      maxTokens: 321,
+      contextWindow: 120_000,
+      thinkingEnabled: false,
+      thinkingEffort: 'xhigh',
+      temperature: 0.33,
+      topP: 0.77,
+      topK: 42,
+      frequencyPenalty: -0.12,
+      repetitionPenalty: 1.03,
     });
   });
 
@@ -643,7 +764,7 @@ describe('GatewayClient streaming', () => {
     await expect(completion).resolves.toMatchObject({ content: 'done' });
   });
 
-  it('preserves caller-owned accounting identity on llm.chat RPC requests', async () => {
+  it('preserves caller-owned accounting identity on llm.chat RPC requests', () => {
     void client.stream(
       {
         systemPrompt: 'test',
@@ -1067,7 +1188,9 @@ describe('GatewayClient streaming', () => {
   });
 
   it('self-stamps tenant and request attribution on gateway embedding calls', async () => {
-    const attributedClient = new GatewayClient(conn.conn, 1024, { companionId: 'companion-a' });
+    const attributedClient = new GatewayClient(conn.conn, 1024, {
+      companionId: '11111111-1111-4111-8111-111111111111',
+    });
     const batchPromise = runWithRequestContext({
       sessionId: 'session-1',
       requestId: 'request-1',
@@ -1092,7 +1215,7 @@ describe('GatewayClient streaming', () => {
     expect(request).toMatchObject({
       method: 'llm.embed',
       params: {
-        companionId: 'companion-a',
+        companionId: '11111111-1111-4111-8111-111111111111',
         sessionId: 'session-1',
         requestId: 'request-1',
         channelId: 'shard:shard-1',
@@ -1117,11 +1240,117 @@ describe('GatewayClient streaming', () => {
   });
 });
 
+describe('GatewayClient per-companion model selection transport (23pp)', () => {
+  const selection = {
+    chat: 'big-brain-opus',
+    background: 'economy-worker',
+    vision: 'vision-flash',
+    longContext: 'long-haul',
+  } as const;
+
+  function makeSelectionClient() {
+    const conn = createMockConnection();
+    const client = new GatewayClient(conn.conn, 1024, { modelPurposeSelection: selection });
+    return { conn, client };
+  }
+
+  function respond(conn: ReturnType<typeof createMockConnection>, index = 0): void {
+    const request = conn.sent[index] as { id: number };
+    conn._emit({
+      jsonrpc: '2.0',
+      id: request.id,
+      result: {
+        content: 'ok',
+        toolCalls: [],
+        model: 'served-model',
+        inputTokens: 1,
+        outputTokens: 1,
+        stopReason: 'stop',
+      },
+    });
+  }
+
+  it('transports the chat selection slot on an interactive streamed turn', async () => {
+    const { conn, client } = makeSelectionClient();
+    const promise = client.stream({
+      systemPrompt: 'system',
+      messages: [],
+      correlation: { turnId: 't1', callType: 'chat', purpose: 'chat' },
+    });
+    const request = conn.sent[0] as { method: string; params: Record<string, unknown> };
+    expect(request.method).toBe('llm.chat');
+    expect(request.params.slotKey).toBe('big-brain-opus');
+    respond(conn);
+    await promise;
+  });
+
+  it('routes a non-streamed chat-purpose completion to the background selection (lane parity with LLMClient)', async () => {
+    const { conn, client } = makeSelectionClient();
+    const promise = client.complete({ systemPrompt: 'system', messages: [] }, 'chat');
+    const request = conn.sent[0] as { method: string; params: Record<string, unknown> };
+    expect(request.method).toBe('llm.complete');
+    expect(request.params.slotKey).toBe('economy-worker');
+    respond(conn);
+    await promise;
+  });
+
+  it('transports the vision selection slot for vision completions', async () => {
+    const { conn, client } = makeSelectionClient();
+    const promise = client.complete({ systemPrompt: 'system', messages: [] }, 'vision');
+    const request = conn.sent[0] as { params: Record<string, unknown> };
+    expect(request.params.slotKey).toBe('vision-flash');
+    respond(conn);
+    await promise;
+  });
+
+  it('resolves the context lane through longContext before background', async () => {
+    const { conn, client } = makeSelectionClient();
+    const promise = client.complete({ systemPrompt: 'system', messages: [] }, 'context');
+    const request = conn.sent[0] as { params: Record<string, unknown> };
+    expect(request.params.slotKey).toBe('long-haul');
+    respond(conn);
+    await promise;
+  });
+
+  it('suppresses the selection when the caller pins an explicit model hint', async () => {
+    const { conn, client } = makeSelectionClient();
+    const promise = client.complete({
+      systemPrompt: 'system',
+      messages: [],
+      modelHint: { model: 'openrouter:explicit/override' },
+    }, 'vision');
+    const request = conn.sent[0] as { params: Record<string, unknown> };
+    expect(request.params.slotKey).toBeUndefined();
+    expect(request.params.model).toBe('explicit/override');
+    respond(conn);
+    await promise;
+  });
+
+  it('omits slotKey for lanes without a selection', async () => {
+    const { conn, client } = makeSelectionClient();
+    const promise = client.complete({ systemPrompt: 'system', messages: [] }, 'memory');
+    const request = conn.sent[0] as { params: Record<string, unknown> };
+    expect(request.params.slotKey).toBeUndefined();
+    respond(conn);
+    await promise;
+  });
+
+  it('omits slotKey entirely when the client has no selection (byte-identical default)', async () => {
+    const conn = createMockConnection();
+    const client = new GatewayClient(conn.conn, 1024);
+    const promise = client.complete({ systemPrompt: 'system', messages: [] }, 'chat');
+    const request = conn.sent[0] as { params: Record<string, unknown> };
+    expect('slotKey' in request.params).toBe(false);
+    respond(conn);
+    await promise;
+  });
+});
+
 describe('GatewayClient authenticated identification', () => {
   it('sends the companion-bound agent proof and keeps the worker proof off the agent frame', async () => {
     const conn = createMockConnection();
     const client = new GatewayClient(conn.conn, 1024, {
-      companionId: 'comp-a',
+      companionId: '11111111-1111-4111-8111-111111111111',
       companionAuthToken: 'v1.agent-proof',
       sessionIntegrityAuthToken: 'v1.worker-proof',
     });
@@ -1136,7 +1365,7 @@ describe('GatewayClient authenticated identification', () => {
       method: 'gateway.client.identify',
       params: {
         role: 'agent',
-        companionId: 'comp-a',
+        companionId: '11111111-1111-4111-8111-111111111111',
         authToken: 'v1.agent-proof',
       },
     });
@@ -1343,7 +1572,7 @@ describe('GatewayClient reverse RPC (onHandleMessage)', () => {
   it('fails closed when reverse-message routing targets another companion', async () => {
     const boundConn = createMockConnection();
     const boundClient = new GatewayClient(boundConn.conn, 1024, {
-      companionId: createCompanionId('companion-alpha'),
+      companionId: createCompanionId('11111111-1111-4111-8111-111111111111'),
     });
     const handler = vi.fn();
     boundClient.onHandleMessage(handler);
@@ -1362,7 +1591,7 @@ describe('GatewayClient reverse RPC (onHandleMessage)', () => {
           content: 'hello voice',
           timestamp: '2025-01-01T00:00:00.000Z',
           routing: {
-            gateway: { schemaVersion: 1, companionId: 'companion-beta' },
+            gateway: { schemaVersion: 1, companionId: '22222222-2222-4222-8222-222222222222' },
           },
         },
       },
@@ -1431,7 +1660,7 @@ describe('GatewayClient reverse RPC (onHandleMessage)', () => {
   it('rejects a cross-companion voice.stream.start before ACK or stream-state creation', async () => {
     const boundConn = createMockConnection();
     const boundClient = new GatewayClient(boundConn.conn, 1024, {
-      companionId: createCompanionId('companion-alpha'),
+      companionId: createCompanionId('11111111-1111-4111-8111-111111111111'),
     });
     boundClient.onHandleMessage(vi.fn());
     const message = {
@@ -1454,7 +1683,7 @@ describe('GatewayClient reverse RPC (onHandleMessage)', () => {
         sequence: 0,
         message: {
           ...message,
-          routing: { gateway: { schemaVersion: 1, companionId: 'companion-beta' } },
+          routing: { gateway: { schemaVersion: 1, companionId: '22222222-2222-4222-8222-222222222222' } },
         },
       },
     });
@@ -1475,7 +1704,7 @@ describe('GatewayClient reverse RPC (onHandleMessage)', () => {
         message: {
           ...message,
           routing: {
-            gateway: { schemaVersion: 1, companionId: 'companion-alpha' },
+            gateway: { schemaVersion: 1, companionId: '11111111-1111-4111-8111-111111111111' },
           },
         },
       },

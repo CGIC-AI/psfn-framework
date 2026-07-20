@@ -179,6 +179,37 @@ describe('registerBeadsMethods', () => {
     );
   });
 
+  it('does not misreport a succeeded action as failed when the success audit write rejects', async () => {
+    queueSpawnResult({
+      stdout: JSON.stringify([{ id: 'PSFN-1', title: 'ready issue' }]),
+    });
+    const harness = createHarness(makePolicy(['ready']));
+    harness.recordAuditEvent.mockRejectedValueOnce(new Error('audit store down'));
+
+    await expect(harness.invoke('beads.ready', { actor: 'agent-main' })).rejects.toMatchObject({
+      message: expect.stringContaining('succeeded but its success audit record could not be persisted'),
+    });
+
+    // The action ran exactly once and no contradictory 'error' audit was recorded.
+    expect(mockedSpawn).toHaveBeenCalledTimes(1);
+    expect(harness.recordAuditEvent).toHaveBeenCalledTimes(1);
+    expect(harness.recordAuditEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        params: expect.objectContaining({ result: 'success' }),
+      }),
+    );
+  });
+
+  it('preserves the bd failure and audit failure when both the action and its error audit reject', async () => {
+    queueSpawnResult({ emitError: new Error('bd exploded') });
+    const harness = createHarness(makePolicy(['ready']));
+    harness.recordAuditEvent.mockRejectedValueOnce(new Error('audit store down'));
+
+    await expect(harness.invoke('beads.ready', { actor: 'agent-main' })).rejects.toMatchObject({
+      message: expect.stringContaining('failed and its audit record could not be persisted'),
+    });
+  });
+
   it('denies disallowed beads action via policy gate', async () => {
     const harness = createHarness(makePolicy(['ready', 'show']));
 

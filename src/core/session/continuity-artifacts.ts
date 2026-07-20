@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { createComponentLogger } from '../../shared/logger.js';
 import { appendJsonLine, readJsonLines } from '../../persistence/jsonl.js';
-import { sanitizeChannelId } from '../../persistence/sessions/store-primitives.js';
+import { sanitizeChannelId } from '../../persistence/sessions/store-file-contracts.js';
 
 const log = createComponentLogger('SessionContinuityArtifacts');
 const CONTINUITY_SUMMARY_MAX_CHARS = 800;

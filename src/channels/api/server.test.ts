@@ -11,7 +11,6 @@ import type { SessionManager } from '../../core/session/manager.js';
 import type { AgentResponse, IntentionalNoReplyMetadata, SubstrateMessage } from '../../shared/contracts/runtime.js';
 import type { ApiServerHealthChecks } from './types.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
-import { DEFAULT_COMPANION_ID } from '../../core/identity/companion-naming.js';
 import {
   deriveApiKeyPrincipalId,
   INSECURE_LOCAL_API_PRINCIPAL_ID,
@@ -30,6 +29,7 @@ import type { SatelliteRegistryConfig } from '../../shared/contracts/satellite-r
 // ── Helpers ──
 
 const WAIT_TIMEOUT_MS = 2_000;
+const DEFAULT_COMPANION_ID = '11111111-1111-4111-8111-111111111111';
 
 const SATELLITE_TEST_REGISTRY = parseSatelliteRegistryConfig({
   schemaVersion: 1,
@@ -539,7 +539,7 @@ describe('ApiServer', () => {
       const body = JSON.parse(res.body);
       expect(body.object).toBe('list');
       expect(body.data).toHaveLength(1);
-      expect(body.data[0].id).toBe('companion');
+      expect(body.data[0].id).toBe(DEFAULT_COMPANION_ID);
       expect(body.data[0].object).toBe('model');
       expect(body.data[0].owned_by).toBe('psfn');
     });
@@ -639,6 +639,7 @@ describe('ApiServer', () => {
       expect(body.subsystems.scheduler.status).toBe('healthy');
       expect(body.continuity.checks.database.status).toBe('healthy');
       expect(body.continuity.checks.gatewayLink.status).toBe('healthy');
+      expect(body.continuity.checks.gatewayLink.meta.agentConnected).toBe(true);
       expect(body.continuity.checks.schedulerHealthcheck.status).toBe('healthy');
       expect(typeof body.subsystems.llm.meta.checkLatencyMs).toBe('number');
       expect(typeof body.subsystems.embeddings.meta.checkLatencyMs).toBe('number');
@@ -3536,7 +3537,7 @@ describe('ApiServer satellite auth hardening (Sprint-10 C1/H4/04-M1)', () => {
     expect(sharedModels.status).toBe(200);
   });
 
-  it('refuses to start with satellite keys colliding with the shared API key (H4, fail closed)', async () => {
+  it('refuses to start with satellite keys colliding with the shared API key (H4, fail closed)', () => {
     expect(() => createApiServer({
       port,
       agentLoop: createMockAgentLoop(eventBus),

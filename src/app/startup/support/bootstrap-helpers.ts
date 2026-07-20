@@ -34,6 +34,7 @@ import {
 } from '../../../persistence/cutover.js';
 import { validateObserverEvalSidecarStartupConfig } from '../../../system/config/observer-eval-sidecar-config.js';
 import { resolveEffectiveRuntimeSettings } from '../../../system/config/settings-overlay.js';
+import { assertModelPurposeSelectionResolvable } from '../../../system/config/model-selection-config.js';
 export type {
   RuntimeVoiceConnectorBinding,
   RuntimeVoiceProviderGate,
@@ -271,6 +272,9 @@ export function hydrateCanonicalStartupConfig(
 
   const modelsLoadResult = configStore.loadStartupModels();
   applySettings(config, modelsLoadResult.config);
+  // 23pp: every per-companion model selection (settings.json + overlay) must
+  // resolve to an enabled models.json registry entry — fail closed at startup.
+  assertModelPurposeSelectionResolvable(config);
   const providersLoadResult = configStore.loadStartupProviders();
   applyProvidersRuntimeConfig(config, providersLoadResult.config);
 

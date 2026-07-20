@@ -4,8 +4,9 @@ PSFN boots through the split runtime. The legacy `src/app/startup/index.ts` entr
 
 Before upgrading any Helm cluster, read the canonical
 [Helm Cluster Upgrade Guide](./helm-upgrades.md). It carries rollout-order
-constraints and operator-visible access changes; this setup guide remains the
-authority for initial configuration and ownership.
+constraints, owner migrations, image import, Cluster Auth validation, and
+recovery boundaries. It is the required procedure; this setup guide remains
+the authority for initial configuration and ownership.
 
 ## Prerequisites
 
@@ -121,7 +122,7 @@ Startup verifies the seed-backed owner files before the split runtime comes up. 
    For existing Helm releases, the chart's guarded automatic cutover covers
    only `scheduler.json` and `capability-tier.json`, followed by scheduler
    schema migration; see
-   [`deploy/helm/psfn/README.md`](../deploy/helm/psfn/README.md#upgrading-releases-created-before-schedulercapability-owner-routing).
+   [`deploy/helm/psfn/README.md`](../deploy/helm/psfn/README.md#upgrading-releases-created-before-per-companion-owner-routing).
    Existing multi-companion split clusters with registered per-companion owners
    under `SYSTEM_DATA_DIR` must instead use the digest-approved,
    receipt-bearing workflow in
@@ -238,6 +239,21 @@ documented in full in
   token to `.env` under the env var name its account references (for example
   `DISCORD_TOKEN_ARIA`); the token secret stays gateway-owned.
 
+The Helm chart uses this topology exclusively: `fleet.enabled=true` renders
+one shared gateway, one shared cluster Garden, and one UUID-addressed agent,
+admin Service, and certificate pair per `fleet.companions` entry. The first
+entry is canonical. `runtime.companionId`, `runtime.companionDataDir`,
+`runtime.characterCardPath`, `runtime.workspacePath`, and the primary
+companion/workspace claims must all name that first entry; chart rendering
+fails closed when the tuple diverges.
+
+Before converting an existing primary, follow
+[Formalize an existing primary as a cluster tenant](./helm-upgrades.md#formalize-an-existing-primary-as-a-cluster-tenant).
+Preserve its existing PVCs, add the matching one-entry `companions.json` and
+`fleet-auth.json`, and reconcile Helm values before the first upgrade. Do not
+retain a non-cluster launcher path and do not move durable data into empty claims
+just to obtain canonical-looking paths.
+
 The standard launcher derives and injects role-bound gateway authentication
 proofs for every cluster agent so the isolated session-integrity worker never
 shares the normal agent role. A direct `npm run agent` launch must provide the
@@ -283,7 +299,7 @@ agent through the immutable companion target registry instead of receiving N
 personal roots. The shared root is available through its authenticated,
 reviewed Garden surface and has no
 environment-variable escape hatch. See
-[`docs/multi-companion.md`](./multi-companion.md#workspace-scopes-current-behavior-and-target-contract).
+[`docs/multi-companion.md`](./multi-companion.md#workspace-scopes-runtime-contract).
 
 The Helm deployment reads the isolated-worker proof from the application
 Secret key named by `secrets.keys.gatewaySessionIntegrityAuthToken` (default
@@ -326,6 +342,13 @@ For Helm cluster mode, keep `networkPolicy.enabled=true`,
 `hostPorts.gatewayApi.enabled=false`, `ingress.gateway.path=/`, and
 `ingress.gateway.pathType=Prefix`; the chart rejects cluster auth if any of these
 sole-origin requirements is weakened.
+
+Treat that Gateway Ingress as durable infrastructure. A production browser
+edge must not depend on a repeating `kubectl port-forward`: pod replacement
+breaks the tunnel and surfaces as an avoidable 502. If the platform cannot
+provide the configured Ingress, add a reviewed chart-owned durable Service
+exposure first. The current gateway Service is `ClusterIP`; do not hand-patch
+it to `NodePort` and leave Helm unaware of the live topology.
 
 The optional static Companion UI may be registered with
 `FLEET_SSO_COMPANION_UI_ORIGIN`. If the cluster has more than one companion, also

@@ -64,6 +64,8 @@ import type { ChannelGroupMemoryConfig } from '../../system/config/group-memory-
 import { createPostgresModelUsageStoreFromConfig } from '../../persistence/postgres/model-usage-store.js';
 import { createPostgresObserverEvalSidecarStore } from '../../core/eval/observer-sidecar/persistence.js';
 import { createOwnerFileConfigStore } from '../../system/config/config-store.js';
+import { AdminPartnerAffectShadowDataService } from './services/partner-affect-shadow-service.js';
+import type { PartnerAffectShadowStorePort } from '../../core/emotion/partner-affect/shadow-store-port.js';
 import {
   createDefaultObserverEvalSidecarSettings,
   sanitizeCoreSubstrateConfig,
@@ -195,6 +197,8 @@ export interface InProcessGardenAdminContractOptions {
   effectiveSchedulerConfig?: import('../../system/config/scheduler-config.js').SchedulerRuntimeConfig;
   icpInitiationCandidateStore?: IcpInitiationCandidateStorePort | null;
   icpAdminProjectionStore?: IcpAdminProjectionStore | null;
+  /** Shadow-only Partner Affect observation store (docs/partner-affect.md slice 1). */
+  partnerAffectShadowStore?: PartnerAffectShadowStorePort | null;
   icpRuntimeEnablement?: IcpAutonomyRuntimeEnablement | null;
   /** Existing gateway-backed Beads create primitive used for explicit wish conversion. */
   wishlistBeadCreator?: AdminWishlistBeadCreatePort;
@@ -314,6 +318,12 @@ export function createInProcessGardenAdminContract(
     eventBus: options.eventBus,
     scheduler: schedulerService,
   });
+  const partnerAffectShadow = options.partnerAffectShadowStore
+    ? new AdminPartnerAffectShadowDataService({
+      store: options.partnerAffectShadowStore,
+      loadPolicy: () => configStore.loadPartnerAffectShadow(),
+    })
+    : null;
   const toolConformance = options.toolConformanceRunner
     ? createAdminToolConformanceService(options.toolConformanceRunner)
     : null;
@@ -593,6 +603,7 @@ export function createInProcessGardenAdminContract(
     }),
     scheduler: schedulerService,
     subsystemHealth,
+    partnerAffectShadow,
     toolConformance,
     icpAutonomy,
     skills: options.skillsRuntime

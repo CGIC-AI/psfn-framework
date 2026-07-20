@@ -205,6 +205,7 @@ export function buildAdminRoutes(deps: AdminRouteDependencies): AdminRoute[] {
       graphProposalsService: deps.services.graphProposals ?? null,
       concernService: deps.services.concerns,
       subsystemHealthService: deps.services.subsystemHealth ?? null,
+      partnerAffectShadowService: deps.services.partnerAffectShadow ?? null,
       toolConformanceService: deps.services.toolConformance ?? null,
       settingsService: deps.services.settings,
       sharedWorkspaceService: deps.services.sharedWorkspace ?? null,

@@ -1007,6 +1007,7 @@ async function main(): Promise<void> {
     scheduler,
     schedulerConfig,
     icpInitiationCandidateStore: persistenceRuntime.icpInitiationCandidateStore,
+    partnerAffectShadowStore: persistenceRuntime.partnerAffectShadowStore,
     icpRuntimeEnablement,
     postTurnActions,
     outreachOutbox,

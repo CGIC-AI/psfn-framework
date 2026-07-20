@@ -35,6 +35,7 @@ import type { IcpInitiationCandidateStorePort } from '../../core/icp/autonomy-st
 import type { IcpAutonomyRuntimeEnablement } from '../../core/icp/runtime-enablement.js';
 import { PostgresIcpAdminProjectionStore } from '../../persistence/postgres/icp-admin-projection-store.js';
 import type { BackgroundWorkStorePort } from '../../core/agent/background-work/store-port.js';
+import type { PartnerAffectShadowStorePort } from '../../core/emotion/partner-affect/shadow-store-port.js';
 
 export interface StartOptionalAdminTransportServerOptions {
   adminPort?: number;
@@ -50,6 +51,8 @@ export interface StartOptionalAdminTransportServerOptions {
   scheduler: Scheduler;
   schedulerConfig: SchedulerRuntimeConfig;
   icpInitiationCandidateStore?: IcpInitiationCandidateStorePort | null;
+  /** Shadow-only Partner Affect observation store (docs/partner-affect.md slice 1). */
+  partnerAffectShadowStore?: PartnerAffectShadowStorePort | null;
   icpRuntimeEnablement: IcpAutonomyRuntimeEnablement;
   postTurnActions: PostTurnActionRuntime;
   outreachOutbox?: OutreachOutboxStore | null;
@@ -126,6 +129,7 @@ export async function startOptionalAdminTransportServer(
     effectiveSchedulerConfig: options.schedulerConfig,
     icpInitiationCandidateStore: options.icpInitiationCandidateStore ?? null,
     icpAdminProjectionStore,
+    partnerAffectShadowStore: options.partnerAffectShadowStore ?? null,
     icpRuntimeEnablement: options.icpRuntimeEnablement,
     postTurnActions: options.postTurnActions,
     outreachOutbox: options.outreachOutbox ?? null,

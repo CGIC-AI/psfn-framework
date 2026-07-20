@@ -198,7 +198,8 @@ const routeAuthorizationGroups: readonly RouteAuthorizationGroup[] = [
   {
     action: 'cogsec.read', area: 'cognitive_security', routeIds: [
       ...ids('GET', [
-        '/api/admin/concerns', '/api/admin/intake/drift-reviews', '/api/admin/intake/policy',
+        '/api/admin/concerns', '/api/admin/concerns/:concernId/arcs',
+        '/api/admin/intake/drift-reviews', '/api/admin/intake/policy',
         '/api/admin/intake/quarantine', '/api/admin/intake/source-lists',
         '/api/admin/intake/drift-reviews/:id', '/api/admin/intake/quarantine/:id',
       ]),

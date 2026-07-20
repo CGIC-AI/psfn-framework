@@ -47,6 +47,12 @@ export interface InMemorySubjectStoreBackend {
   updateMemory(id: string, updates: MemoryStoreUpdatePatch): Awaitable<void>;
 }
 
+export interface InMemorySubjectMutationStoreBackend {
+  getById(id: string): PurrMemory | undefined;
+  runInTransaction<T>(handler: () => T): T;
+  updateMemory(id: string, updates: MemoryStoreUpdatePatch): void;
+}
+
 function actionMatchesSelector(input: MemorySubjectAuthorizedQuery): boolean {
   const { action } = input.authorization;
   switch (input.selector.kind) {
@@ -203,20 +209,40 @@ export async function queryInMemoryAuthorizedSubjects(
 }
 
 export async function mutateInMemoryAuthorizedSubjects(
-  store: InMemorySubjectStoreBackend,
+  store: InMemorySubjectMutationStoreBackend,
   input: MemorySubjectAuthorizedMutation,
 ): Promise<number> {
-  if (input.authorization.action !== 'update' && input.authorization.action !== 'bulk_mutation') {
-    throw new Error(`Memory subject authorization action ${input.authorization.action} does not permit mutation`);
+  const authorization = parseMemorySubjectQueryAuthorization(input.authorization);
+  if (authorization.action !== 'update' && authorization.action !== 'bulk_mutation') {
+    throw new Error('Memory subject authorization action does not permit mutation');
   }
-  let updated = 0;
-  for (const memoryId of input.memoryIds) {
-    const memory = await store.getById(memoryId);
-    if (!memory || memory.deletedAt || !isAuthorized(memory, input.authorization)) continue;
-    await store.updateMemory(memoryId, input.updates);
-    updated += 1;
+  const memoryIds = [...new Set(input.memoryIds.flatMap(id => {
+    const normalized = id.trim();
+    return normalized ? [normalized] : [];
+  }))].sort();
+  if (memoryIds.length === 0) return 0;
+  if (authorization.classifierVersion !== MEMORY_SUBJECT_CLASSIFIER_VERSION) {
+    throw new Error(
+      `Memory subject authorization classifier version ${authorization.classifierVersion} is stale or unsupported`,
+    );
   }
-  return updated;
+  return store.runInTransaction(() => {
+    for (const memoryId of memoryIds) {
+      const memory = store.getById(memoryId);
+      if (
+        !memory
+        || memory.deletedAt
+        || memory.supersededBy
+        || !isAuthorized(memory, authorization)
+      ) {
+        throw new Error('Memory subject authorization denied');
+      }
+    }
+    for (const memoryId of memoryIds) {
+      store.updateMemory(memoryId, input.updates);
+    }
+    return memoryIds.length;
+  });
 }
 
 export async function persistInMemoryAuthorizedSubject(

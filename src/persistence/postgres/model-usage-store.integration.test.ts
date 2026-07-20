@@ -1035,15 +1035,10 @@ describe('PostgresModelUsageStore reconciliation', () => {
       allowExitOnIdle: true,
       max: 1,
     });
-    const recoveryPool = createPostgresPool(databaseUrl, {
-      applicationName: 'model-usage-dashboard-outage-recovery',
-      allowExitOnIdle: true,
-      max: 1,
-    });
     // Terminated idle clients emit pool-level errors outside the awaited query path.
     // Capture those expected outage signals so they cannot become unhandled events.
     const expectedPoolErrors: Error[] = [];
-    for (const pool of [writerPool, unavailablePool, recoveryPool]) {
+    for (const pool of [writerPool, unavailablePool]) {
       pool.on('error', error => expectedPoolErrors.push(error));
     }
     const setDatabaseAvailability = async (available: boolean): Promise<void> => {
@@ -1061,7 +1056,7 @@ describe('PostgresModelUsageStore reconciliation', () => {
     const companionId = 'dashboard-outage-companion';
     const writer = new PostgresModelUsageStore(writerPool, { companionId });
     const unavailableStore = new PostgresModelUsageStore(unavailablePool, { companionId });
-    const recoveryStore = new PostgresModelUsageStore(recoveryPool, { companionId });
+    let recoveryPool: Pool | undefined;
     let activeModelUsageService = new AdminModelUsageDataService(unavailableStore);
     const switchableModelUsageService: AdminModelUsageService = {
       getModelUsageData: query => activeModelUsageService.getModelUsageData(query),
@@ -1118,6 +1113,15 @@ describe('PostgresModelUsageStore reconciliation', () => {
       });
 
       await setDatabaseAvailability(true);
+      // Start the recovery store only after PostgreSQL accepts connections again.
+      // Its eager migration promise must not race the deliberate outage under load.
+      recoveryPool = createPostgresPool(databaseUrl, {
+        applicationName: 'model-usage-dashboard-outage-recovery',
+        allowExitOnIdle: true,
+        max: 1,
+      });
+      recoveryPool.on('error', error => expectedPoolErrors.push(error));
+      const recoveryStore = new PostgresModelUsageStore(recoveryPool, { companionId });
       activeModelUsageService = new AdminModelUsageDataService(recoveryStore);
       const fresh = await dashboard.getDashboardData({ costWindow: 'today' });
       expect(fresh.stats.modelUsage).toMatchObject({
@@ -1140,7 +1144,11 @@ describe('PostgresModelUsageStore reconciliation', () => {
       ))).toBe(true);
     } finally {
       await setDatabaseAvailability(true);
-      await Promise.all([writerPool.end(), unavailablePool.end(), recoveryPool.end()]);
+      await Promise.all([
+        writerPool.end(),
+        unavailablePool.end(),
+        ...(recoveryPool ? [recoveryPool.end()] : []),
+      ]);
       await adminPool.end();
     }
   }, INTEGRATION_TIMEOUT_MS);

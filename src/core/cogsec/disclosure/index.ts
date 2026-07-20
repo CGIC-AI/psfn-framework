@@ -66,3 +66,13 @@ export {
   type ShareCandidateDraft,
   type ShareContent,
 } from './capsule.js';
+export {
+  classifyProvenanceSourceRef,
+  projectPublicationProvenance,
+  type ProvenanceDestinationView,
+  type ProvenanceFieldStatus,
+  type ProvenanceSourceKind,
+  type ProvenanceSourceKindCount,
+  type ProvenanceSourceView,
+  type PublicationProvenanceView,
+} from './publication-provenance.js';

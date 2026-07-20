@@ -1,4 +1,5 @@
 import type { ConfirmationQueueEntry } from '../../../../src/system/capabilities/confirmation-queue.js';
+import type { PublicationProvenanceView } from '../../../../src/core/cogsec/disclosure/publication-provenance.js';
 import type {
   PurrMemory as CanonicalPurrMemory,
   MemoryScopeRef as CanonicalMemoryScopeRef,
@@ -119,6 +120,14 @@ export type {
   ConfirmationQueueEntry,
   ConfirmationResolveResult,
 } from '../../../../src/system/capabilities/confirmation-queue.js';
+export type {
+  ProvenanceDestinationView,
+  ProvenanceFieldStatus,
+  ProvenanceSourceKind,
+  ProvenanceSourceKindCount,
+  ProvenanceSourceView,
+  PublicationProvenanceView,
+} from '../../../../src/core/cogsec/disclosure/publication-provenance.js';
 export type {
   SettingsContractData,
   SettingsContractField,
@@ -931,8 +940,16 @@ export interface AdminSkillsData {
   disabledSkills: string[];
 }
 
+/**
+ * A pending confirmation, additively carrying a content-free disclosure-
+ * provenance view when the entry is a publication/share candidate (jp36.7.2).
+ */
+export type ConfirmationQueueEntryView = ConfirmationQueueEntry & {
+  disclosureProvenance?: PublicationProvenanceView;
+};
+
 export interface AdminConfirmationsData {
-  entries: ConfirmationQueueEntry[];
+  entries: ConfirmationQueueEntryView[];
   available: boolean;
   message?: string;
 }

@@ -4,12 +4,17 @@
     loadConfirmationsLocalFirst,
     resolveConfirmation,
   } from '$lib/api/endpoints/confirmations';
-  import type { ConfirmationQueueEntry, ConfirmationDecision } from '$lib/types';
+  import type {
+    ConfirmationQueueEntryView,
+    ConfirmationDecision,
+    ProvenanceSourceKind,
+    PublicationProvenanceView,
+  } from '$lib/types';
   import { pushToast } from '$lib/stores/toast.svelte';
   import { createGardenQueueRefresh } from '$lib/polling/garden-queue-refresh';
 
   // ── State ──
-  let entries = $state<ConfirmationQueueEntry[]>([]);
+  let entries = $state<ConfirmationQueueEntryView[]>([]);
   let available = $state(true);
   let loading = $state(true);
   let error = $state('');
@@ -41,6 +46,28 @@
     } catch {
       return '{}';
     }
+  }
+
+  // ── Disclosure provenance (jp36.7.2) ──
+  // Content-free labels for the admitted-source kinds a publication candidate
+  // draws from. The provenance view carries refs/ids/counts only — never the
+  // candidate body — so nothing here renders transcript text.
+  const PROVENANCE_KIND_LABELS: Record<ProvenanceSourceKind, string> = {
+    memory: 'Derived memory',
+    conversation: 'Conversation',
+    project: 'Project / wiki',
+    tool: 'Tool result',
+    other: 'Other source',
+  };
+
+  function provenanceKindLabel(kind: ProvenanceSourceKind): string {
+    return PROVENANCE_KIND_LABELS[kind] ?? kind;
+  }
+
+  // Explicit "unknown" wherever provenance could not be resolved — fail closed,
+  // never blank and never fabricated.
+  function sensitivityText(value: PublicationProvenanceView['effectiveSensitivity']): string {
+    return value === 'unknown' ? 'Unknown' : value;
   }
 
   async function loadData() {
@@ -307,6 +334,149 @@
                 <span class="ml-1 text-shadow-800">{entry.companionReason}</span>
               </div>
             </div>
+
+            <!-- Disclosure provenance (publication candidates only) -->
+            {#if entry.disclosureProvenance}
+              {@const prov = entry.disclosureProvenance}
+              <section
+                class="rounded-lg border border-bark-200 bg-bark-50/70 p-4 space-y-3"
+                aria-label="Disclosure provenance"
+                data-testid="disclosure-provenance"
+              >
+                <div class="flex items-center justify-between gap-2">
+                  <h4 class="text-sm font-semibold text-shadow-900">Disclosure provenance</h4>
+                  <span class="inline-block px-2 py-0.5 rounded-full text-xs font-medium bg-moss-100 text-moss-700">
+                    Publication candidate
+                  </span>
+                </div>
+                <p class="text-xs text-shadow-600">
+                  Where this candidate's content came from — derived memories, conversations, and sources.
+                  References and indicators only; no source content is shown here.
+                </p>
+
+                {#if prov.malformed}
+                  <p class="text-sm text-wilt-600 border-l-4 border-l-wilt-400 pl-3">
+                    Provenance metadata is unavailable or malformed for this publication candidate.
+                    Approve only with independent knowledge of what it draws from.
+                  </p>
+                {:else}
+                  <!-- Candidate-level indicators -->
+                  <div class="grid grid-cols-1 md:grid-cols-2 gap-2 text-sm">
+                    <div>
+                      <span class="text-shadow-600">Effective sensitivity:</span>
+                      <span
+                        class="ml-1 font-medium {prov.status.effectiveSensitivity === 'unknown' ? 'text-wilt-600' : 'text-shadow-800'}"
+                      >{sensitivityText(prov.effectiveSensitivity)}</span>
+                    </div>
+                    <div>
+                      <span class="text-shadow-600">Admitted sources:</span>
+                      <span class="ml-1 text-shadow-800">
+                        {prov.status.sources === 'unknown' ? 'Unknown' : prov.sourceCount}
+                      </span>
+                    </div>
+                    {#if prov.candidateId}
+                      <div class="md:col-span-2">
+                        <span class="text-shadow-600">Candidate:</span>
+                        <code class="ml-1 font-mono text-xs text-shadow-800 bg-bark-100 px-1.5 py-0.5 rounded">{prov.candidateId}</code>
+                      </div>
+                    {/if}
+                    {#if prov.contentHash}
+                      <div class="md:col-span-2">
+                        <span class="text-shadow-600">Content hash:</span>
+                        <code class="ml-1 font-mono text-xs text-shadow-500 bg-bark-100 px-1.5 py-0.5 rounded break-all">{prov.contentHash}</code>
+                      </div>
+                    {/if}
+                  </div>
+
+                  {#if prov.hasUnclassifiedSource === true}
+                    <p class="text-xs text-wilt-600 border-l-4 border-l-wilt-400 pl-3">
+                      At least one admitted source lacks usable disclosure lineage (unclassified).
+                    </p>
+                  {/if}
+
+                  <!-- Source-kind rollup -->
+                  {#if prov.sourceKindCounts.length > 0}
+                    <div class="flex flex-wrap gap-1.5">
+                      {#each prov.sourceKindCounts as kindCount (kindCount.kind)}
+                        <span class="inline-block px-2 py-0.5 rounded-full text-xs bg-bark-100 text-shadow-700">
+                          {provenanceKindLabel(kindCount.kind)}: {kindCount.count}
+                        </span>
+                      {/each}
+                    </div>
+                  {/if}
+
+                  <!-- Admitted-source list with sensitivity/subject indicators -->
+                  <div>
+                    <p class="text-xs font-medium text-shadow-700 mb-1">Admitted sources</p>
+                    {#if prov.status.sources === 'unknown'}
+                      <p class="text-sm text-wilt-600">Unknown — source list not provided.</p>
+                    {:else if prov.sources.length === 0}
+                      <p class="text-sm text-shadow-600">No admitted sources recorded.</p>
+                    {:else}
+                      <ul class="space-y-1">
+                        {#each prov.sources as source (source.ref)}
+                          <li class="text-xs flex flex-wrap items-center gap-x-2 gap-y-0.5">
+                            <span class="px-1.5 py-0.5 rounded bg-bark-100 text-shadow-600">{provenanceKindLabel(source.kind)}</span>
+                            <code class="font-mono text-shadow-800 break-all">{source.ref}</code>
+                            <span class="text-shadow-500">·</span>
+                            <span class="{source.sensitivity === 'unknown' ? 'text-wilt-600' : 'text-shadow-700'}">
+                              {source.sensitivity === 'unknown' ? 'sensitivity unknown' : source.sensitivity}
+                            </span>
+                            {#if source.subjectContactIds.length > 0}
+                              <span class="text-shadow-500">·</span>
+                              <span class="text-shadow-700">subjects: {source.subjectContactIds.join(', ')}</span>
+                            {/if}
+                            {#if source.classified === false}
+                              <span class="px-1.5 py-0.5 rounded bg-wilt-100 text-wilt-600">unclassified</span>
+                            {/if}
+                          </li>
+                        {/each}
+                      </ul>
+                    {/if}
+                  </div>
+
+                  <!-- Subject contacts (candidate-level) -->
+                  <div>
+                    <p class="text-xs font-medium text-shadow-700 mb-1">Subjects involved</p>
+                    {#if prov.status.subjectContactIds === 'unknown'}
+                      <p class="text-sm text-wilt-600">Unknown — subject list not provided.</p>
+                    {:else if prov.subjectContactIds.length === 0}
+                      <p class="text-sm text-shadow-600">None recorded.</p>
+                    {:else}
+                      <div class="flex flex-wrap gap-1.5">
+                        {#each prov.subjectContactIds as contactId (contactId)}
+                          <code class="font-mono text-xs px-1.5 py-0.5 rounded bg-bark-100 text-shadow-800">{contactId}</code>
+                        {/each}
+                      </div>
+                    {/if}
+                  </div>
+
+                  <!-- Destinations -->
+                  <div>
+                    <p class="text-xs font-medium text-shadow-700 mb-1">Proposed destinations</p>
+                    {#if prov.status.destinations === 'unknown'}
+                      <p class="text-sm text-wilt-600">Unknown — destinations not provided.</p>
+                    {:else if prov.destinations.length === 0}
+                      <p class="text-sm text-shadow-600">None recorded.</p>
+                    {:else}
+                      <ul class="space-y-1">
+                        {#each prov.destinations as destination, index (index)}
+                          <li class="text-xs flex flex-wrap items-center gap-x-2">
+                            <span class="px-1.5 py-0.5 rounded bg-bark-100 text-shadow-700">{destination.kind}</span>
+                            {#each destination.channelIds as channelId (channelId)}
+                              <code class="font-mono text-shadow-800 break-all">{channelId}</code>
+                            {/each}
+                            {#each destination.contactIds as contactId (contactId)}
+                              <code class="font-mono text-shadow-800 break-all">{contactId}</code>
+                            {/each}
+                          </li>
+                        {/each}
+                      </ul>
+                    {/if}
+                  </div>
+                {/if}
+              </section>
+            {/if}
 
             <!-- Parameters -->
             <div>

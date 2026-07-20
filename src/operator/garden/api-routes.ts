@@ -80,6 +80,11 @@ import type {
   ConfirmationQueueAdminApi,
 } from './admin-contract.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
+import type { ConfirmationQueueEntry } from '../../system/capabilities/confirmation-queue.js';
+import {
+  projectPublicationProvenance,
+  type PublicationProvenanceView,
+} from '../../core/cogsec/disclosure/index.js';
 import type { RuntimeDiagnosticsQuery } from '../../shared/diagnostics/runtime-diagnostics.js';
 import type {
   AdminAuditActionType,
@@ -257,6 +262,28 @@ function parseDiagnosticsQuery(req: IncomingMessage): { ok: true; value: Runtime
       ...(includeFileLogs.value !== undefined ? { includeFileLogs: includeFileLogs.value } : {}),
     },
   };
+}
+
+/**
+ * A pending confirmation as surfaced on the Garden approvals page, additively
+ * carrying a content-free disclosure-provenance view when the entry is a
+ * publication/share candidate (jp36.7.2, bible §10.10). Ordinary confirmations
+ * carry no `disclosureProvenance` and are byte-for-byte unchanged.
+ */
+export type ConfirmationQueueEntryView = ConfirmationQueueEntry & {
+  disclosureProvenance?: PublicationProvenanceView;
+};
+
+/**
+ * Attach the content-free publication-provenance view to a confirmation entry
+ * when it is a publication/share candidate. Fail-closed: a detected candidate
+ * with absent/malformed provenance still carries a `malformed`/`unknown` view so
+ * the operator sees that provenance is missing rather than nothing at all;
+ * non-candidate confirmations pass through untouched.
+ */
+function attachDisclosureProvenance(entry: ConfirmationQueueEntry): ConfirmationQueueEntryView {
+  const disclosureProvenance = projectPublicationProvenance(entry.params);
+  return disclosureProvenance ? { ...entry, disclosureProvenance } : entry;
 }
 
 export function buildAdminApiRoutes(options: {
@@ -1027,7 +1054,7 @@ export function buildAdminApiRoutes(options: {
         confirmationQueueApi.listConfirmationQueue(context).then(
           (result) => {
             sendJson(res, 200, {
-              entries: result.entries,
+              entries: result.entries.map(attachDisclosureProvenance),
               available: true,
             }, ADMIN_POLLED_QUEUE_JSON_HEADERS);
           },

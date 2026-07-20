@@ -797,6 +797,7 @@ export async function startOptionalGatewayApiServer(
     sessionManager: inertSessionManager,
     sensorIngest: inertSensorIngest,
     apiKey: fleetAuthBootstrapOnly ? undefined : env.API_KEY || undefined,
+    testingHarnessPrincipal: options.channelsConfig?.api.testingHarness,
     adminToken: fleetAuthBootstrapOnly ? undefined : env.ADMIN_TOKEN || undefined,
     ...(satelliteApiKeys.length > 0 ? { satelliteApiKeys } : {}),
     ...(trustedProxyClientCertToken ? { trustedProxyClientCertToken } : {}),

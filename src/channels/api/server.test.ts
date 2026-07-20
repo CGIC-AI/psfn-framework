@@ -744,6 +744,42 @@ describe('ApiServer', () => {
   });
 
   describe('POST /v1/chat/completions (non-streaming)', () => {
+    it('pins testing-harness requests with different session headers to one API room', async () => {
+      await server.stop();
+      const observedChannels: string[] = [];
+      server = createApiServer({
+        port,
+        agentLoop: createMockAgentLoop(eventBus, message => {
+          observedChannels.push(message.channelId);
+        }),
+        eventBus,
+        sessionManager: createMockSessionManager(),
+        apiKey: 'shared-api-key-for-test',
+        testingHarnessPrincipal: {
+          principalId: 'testing-harness',
+          apiKey: 'dedicated-testing-harness-key',
+        },
+      });
+      await server.init();
+      await server.start();
+
+      for (const sessionId of ['caller-session-a', 'caller-session-b']) {
+        const res = await request(port, 'POST', '/v1/chat/completions', {
+          model: DEFAULT_COMPANION_ID,
+          messages: [{ role: 'user', content: `Message from ${sessionId}` }],
+        }, {
+          Authorization: 'Bearer dedicated-testing-harness-key',
+          'X-Session-ID': sessionId,
+        });
+        expect(res.status).toBe(200);
+      }
+
+      expect(observedChannels).toEqual([
+        'api:testing-harness',
+        'api:testing-harness',
+      ]);
+    });
+
     it('returns valid OpenAI response shape', async () => {
       const res = await request(port, 'POST', '/v1/chat/completions', {
         model: DEFAULT_COMPANION_ID,

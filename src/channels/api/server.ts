@@ -17,8 +17,13 @@ import type {
 import {
   hasBearerToken,
   hasCookieValue,
+  getBearerToken,
+  isExpectedApiToken,
+  principalFromTestingHarnessCredential,
   validateSatelliteApiKeys,
+  validateTestingHarnessApiPrincipalCredential,
   type ApiAuthPrincipal,
+  type TestingHarnessApiPrincipalCredential,
 } from '../backplane/http/auth.js';
 import {
   deriveClientCertIdentity,
@@ -103,7 +108,11 @@ import {
   type CompanionRelayHttpDeps,
 } from './server/companion-relay-routes.js';
 import { handleCompanionTouchStimulus } from './server/companion-touch-stimulus-route.js';
-import { resolveSatelliteConfigPull } from '../backplane/satellite-registry.js';
+import {
+  hasSatelliteClaimHeaders,
+  resolveSatelliteConfigPull,
+} from '../backplane/satellite-registry.js';
+import { EXTERNAL_CHANNEL_HEADERS } from './external-channel-claim.js';
 import { isRecord, isRfc4122Uuid } from '../../shared/utils/types.js';
 import type {
   ConfirmationResolveRequest,
@@ -417,6 +426,7 @@ export interface ApiServerConfig {
   companionName?: string;
   contactStore?: ContactStorePort;
   apiKey?: string;
+  testingHarnessPrincipal?: TestingHarnessApiPrincipalCredential;
   adminToken?: string;
   modelName?: string;
   requestTimeoutMs?: number;
@@ -506,6 +516,7 @@ export class ApiServer implements ChannelAdapterPort {
   private sessionManager: SessionManager;
   private runtime: ApiServerRuntime | null;
   private apiKey?: string;
+  private testingHarnessPrincipal?: TestingHarnessApiPrincipalCredential;
   private adminToken?: string;
   private satelliteApiKeys: string[];
   private trustedProxyClientCertToken?: string;
@@ -547,8 +558,12 @@ export class ApiServer implements ChannelAdapterPort {
     // keys or collisions with the shared credentials), even when the caller
     // already parsed them from env.
     this.satelliteApiKeys = validateSatelliteApiKeys(config.satelliteApiKeys ?? [], {
-      reservedTokens: [this.apiKey, this.adminToken],
+      reservedTokens: [this.apiKey, this.adminToken, config.testingHarnessPrincipal?.apiKey],
     });
+    this.testingHarnessPrincipal = validateTestingHarnessApiPrincipalCredential(
+      config.testingHarnessPrincipal,
+      { reservedTokens: [this.apiKey, this.adminToken, ...this.satelliteApiKeys] },
+    );
     this.trustedProxyClientCertToken = parseTrustedProxyClientCertToken(config.trustedProxyClientCertToken);
     this.allowInsecureWithoutAuth = config.allowInsecureWithoutAuth === true;
     this.corsAllowedOrigins = normalizeCorsAllowedOrigins(config.corsAllowedOrigins);
@@ -723,7 +738,26 @@ export class ApiServer implements ChannelAdapterPort {
     });
     stripClientCertHeaders(req.headers);
 
-    if (this.fleetAuthBootstrapOnly) {
+    const testingHarnessPrincipal = this.resolveTestingHarnessPrincipal(req);
+    // This credential names one room. Remove caller-selected affinity before
+    // either the direct or gateway/agent backend reads the request headers.
+    if (testingHarnessPrincipal) {
+      if (
+        hasSatelliteClaimHeaders(req.headers)
+        || Object.values(EXTERNAL_CHANNEL_HEADERS).some(name => req.headers[name] !== undefined)
+      ) {
+        sendApiError(
+          res,
+          403,
+          'testing_harness_channel_claim_not_allowed',
+          'The testing-harness principal cannot override its persistent channel identity',
+        );
+        return;
+      }
+      delete req.headers['x-session-id'];
+    }
+
+    if (this.fleetAuthBootstrapOnly && !testingHarnessPrincipal) {
       if (req.method === 'POST' && path === '/v1/chat/completions') {
         void this.handleFleetHubDeviceChat(req, res, clientCert);
         return;
@@ -750,7 +784,7 @@ export class ApiServer implements ChannelAdapterPort {
       this.handleConfirmationOperatorResolve(req, res);
       return;
     }
-    const principal = resolveApiServerRequestPrincipal(req, res, {
+    const principal = testingHarnessPrincipal ?? resolveApiServerRequestPrincipal(req, res, {
       apiKey: this.apiKey,
       adminToken: this.adminToken,
       ...(this.satelliteApiKeys.length > 0 ? { satelliteApiKeys: this.satelliteApiKeys } : {}),
@@ -776,7 +810,6 @@ export class ApiServer implements ChannelAdapterPort {
         return;
       }
     }
-
     if (req.method === 'GET' && path === '/v1/models') {
       handleModelsEndpoint(res, this.modelName);
     } else if (req.method === 'GET' && path === '/v1/identity') {
@@ -796,6 +829,15 @@ export class ApiServer implements ChannelAdapterPort {
       }
       sendApiError(res, 404, 'not_found', `No route for ${req.method} ${path}`);
     }
+  }
+
+  private resolveTestingHarnessPrincipal(req: IncomingMessage): ApiAuthPrincipal | undefined {
+    if (!this.testingHarnessPrincipal) return undefined;
+    const bearerToken = getBearerToken(req);
+    if (!isExpectedApiToken(bearerToken, this.testingHarnessPrincipal.apiKey)) {
+      return undefined;
+    }
+    return principalFromTestingHarnessCredential(this.testingHarnessPrincipal);
   }
 
   private async handleFleetGardenChat(

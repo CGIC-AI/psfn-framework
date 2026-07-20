@@ -830,7 +830,59 @@ Operational rules:
 - Use `npm run session:repair:transcript-projection` to rebuild the searchable transcript projection from authoritative JSONL L0 after drift, backend migration, or recovery work.
 - The repair utility accepts `--data-dir` and `--sessions-dir` overrides and targets the configured PostgreSQL session projection backend through the port layer.
 
-### Testing-session lifecycle
+### Persistent external testing-harness channel
+
+All conversational shakedown, e2e, evaluation, and rollout-smoke traffic that
+enters through the OpenAI-compatible API must use the dedicated
+`testing-harness` principal. Configure it explicitly in the system-owned
+`channels.json`:
+
+```json
+{
+  "api": {
+    "testingHarness": {
+      "principalId": "testing-harness",
+      "tokenRef": {
+        "kind": "env",
+        "envName": "TESTING_HARNESS_API_KEY"
+      }
+    }
+  }
+}
+```
+
+Set `TESTING_HARNESS_API_KEY` in the gateway secret environment to a distinct
+bearer token of at least 16 characters. It must not reuse `API_KEY`,
+`ADMIN_TOKEN`, or a satellite key. A missing owner section, partial section,
+missing credential, weak credential, or credential collision fails closed at
+configuration load or API construction. In Helm deployments, place
+`TESTING_HARNESS_API_KEY` in the operator-managed Secret selected through
+`secrets.existingSecret`; `secrets.keys.testingHarnessApiKey` controls the key
+name.
+
+Requests authenticated by that token resolve to the named API principal and
+always use the durable session key `api:testing-harness`. `X-Session-ID` is
+intentionally ignored for this principal, so independent processes and
+post-restart calls rejoin the same room:
+
+```bash
+curl http://127.0.0.1:10053/v1/chat/completions \
+  -H "Authorization: Bearer $TESTING_HARNESS_API_KEY" \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "model": "companion",
+    "messages": [{"role": "user", "content": "Continue our testing conversation."}]
+  }'
+```
+
+The credential has the normal API surface, including eval/model-room calls, but
+it cannot supply satellite or external-channel identity claims that would escape
+the named room. The room deliberately does **not** use the reserved `:testing:`
+session namespace: it is a real persistent conversation, so normal memory
+extraction and continuity apply. Use a dedicated test companion; do not point
+harness traffic at a partner's companion.
+
+### Ephemeral testing-session lifecycle
 
 Harnesses must name ephemeral channels with the reserved
 `<existing-channel-prefix>:testing:<name>` namespace. For an API harness, set
@@ -868,7 +920,9 @@ closed. When Redis is not configured the report says
 `no tail cache configured`. A configured but unreachable Redis aborts and
 rolls the staged journals/index back rather than reporting a clean purge.
 
-The command refuses ordinary sessions. An exceptional non-testing purge requires
+This ephemeral namespace is for isolated destructive or cleanup-sensitive
+probes only, not conversational shakedown/e2e/eval traffic. The command refuses
+ordinary sessions. An exceptional non-testing purge requires
 `--force-non-testing` and an interactive confirmation in which the operator
 types the exact id; use that escape hatch only after independently verifying
 the target and backup.
@@ -1458,7 +1512,11 @@ npm run test:leak-matrix
 - `npm run test:group-harness` runs the group-chat prompt-shape regression suite (`src/core/session/group-chat-harness/`). It drives the real prompt-assembly and memory-retrieval paths against synthetic multi-human room, DM, and non-member fixtures: room-visibility leak probes, group history attribution, room-scoped core memory, and conversation_state. Known group-chat defects are encoded as `it.fails(...)` expected failures (speaking_with tokens populating on group turns; DM core-memory participant binding following an arbitrary history speaker instead of the canonical contact) and flip to real failures when a fix lands. Reusable assertion helpers live in `group-chat-harness/assertions.ts`.
 - `npm run test:leak-matrix` runs the Context Envelope leak-rate test family (`src/core/session/group-chat-harness/envelope-leak-matrix.test.ts`, E3.6). A documented ~26-row corner matrix (envelope class x sensitivity x trust tier, plus consent/disclosure-boundary/high-intimacy-contact-scope corners) drives the REAL `MemoryRetriever.retrieve` gating pipeline (`evaluateRetrievalAccessDecision` / `evaluateMemoryPolicy`) against synthetic sentinel memories -- not the unit-level gate suite in `src/system/trust/envelope-gating.test.ts` (E3.3), which this suite complements rather than duplicates. Every forbidden corner asserts zero leak of the sentinel text through the assembled output plus the correct withheld reason code (via the label `formatMemoryWithheldReasonLabel` renders); every allowed corner asserts presence, including positive controls for the room->DM-of-member, trust-ceiling, high-intimacy-contact-scope, and consent-granted paths. It reuses the group-chat-harness fixtures and adds a small set of additive fixture variants (a broadcast channel, an anonymous-audience room, and consent-flagged/boundary-tagged/contact-scoped sentinel memories) to `group-chat-harness/fixtures.ts`.
 - `npm run test:prompt-goldens` runs the prompt-shape golden suite (`src/core/session/group-chat-harness/prompt-shape-goldens.test.ts`). Six deterministic golden snapshots under `group-chat-harness/goldens/` freeze the full rendered system prompt plus ordered block list for DM, group, heartbeat, DM-scoped reflection, DM-with-memories, and group-with-withheld-memories turns, and the suite also asserts the frozen static prompt prefix is byte-equal across consecutive turns. A failing golden means the assembled prompt shape changed: never blind re-record. For an intentional shape change, regenerate with `npx vitest run src/core/session/group-chat-harness/prompt-shape-goldens.test.ts -u`, review the golden diff like code, and explain the block-level change in the PR; then run `npm run test:prompt-goldens` twice to prove determinism. The full update procedure is documented in the test file header.
-- `npm run smoke:chat` exercises the split-runtime admin bootstrap and chat completion path; set `PSFN_SMOKE_REPORT_PATH=/tmp/psfn-smoke-report.json` to capture a JSON artifact with the bootstrap, chat, and optional voice checks.
+- `npm run smoke:chat` exercises the split-runtime admin bootstrap and the
+  persistent testing-harness chat room; it requires
+  `TESTING_HARNESS_API_KEY`. Set
+  `PSFN_SMOKE_REPORT_PATH=/tmp/psfn-smoke-report.json` to capture a JSON
+  artifact with the bootstrap, chat, and optional voice checks.
 - `npm run verify:startup-owner-files` validates repository seeds against an
   explicit isolated split-root fixture. `npm run preflight:startup-owner-files`
   validates the real runtime roots and topology without creating fixtures; the

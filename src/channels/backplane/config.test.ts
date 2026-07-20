@@ -177,6 +177,72 @@ describe('loadRuntimeChannelsConfig', () => {
     }
   });
 
+  it('loads an explicitly named testing-harness API principal from channels.json', () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'psfn-channel-config-'));
+    try {
+      writeFileSync(join(dataDir, 'channels.json'), JSON.stringify({
+        api: {
+          testingHarness: {
+            principalId: 'testing-harness',
+            tokenRef: { kind: 'env', envName: 'TESTING_HARNESS_API_KEY' },
+          },
+        },
+      }));
+
+      const config = loadRuntimeChannelsConfig(dataDir, {
+        TESTING_HARNESS_API_KEY: 'dedicated-testing-harness-key',
+      });
+
+      expect(config.api.testingHarness).toEqual({
+        principalId: 'testing-harness',
+        apiKey: 'dedicated-testing-harness-key',
+      });
+    } finally {
+      rmSync(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  it('fails closed on partial or inline testing-harness API principal config', () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'psfn-channel-config-'));
+    try {
+      writeFileSync(join(dataDir, 'channels.json'), JSON.stringify({
+        api: { testingHarness: { principalId: 'testing-harness' } },
+      }));
+      expect(() => loadRuntimeChannelsConfig(dataDir, {})).toThrow(
+        'channels.json.api.testingHarness.tokenRef must be configured',
+      );
+
+      writeFileSync(join(dataDir, 'channels.json'), JSON.stringify({
+        api: {
+          testingHarness: {
+            principalId: 'testing-harness',
+            token: 'inline-secret-is-forbidden',
+            tokenRef: { kind: 'env', envName: 'TESTING_HARNESS_API_KEY' },
+          },
+        },
+      }));
+      expect(() => loadRuntimeChannelsConfig(dataDir, {})).toThrow(
+        'channels.json.api.testingHarness has unsupported keys: token',
+      );
+
+      writeFileSync(join(dataDir, 'channels.json'), JSON.stringify({
+        api: {
+          testingHarness: {
+            principalId: 'another-harness',
+            tokenRef: { kind: 'env', envName: 'TESTING_HARNESS_API_KEY' },
+          },
+        },
+      }));
+      expect(() => loadRuntimeChannelsConfig(dataDir, {
+        TESTING_HARNESS_API_KEY: 'dedicated-testing-harness-key',
+      })).toThrow(
+        'Testing-harness API principal id must be "testing-harness"',
+      );
+    } finally {
+      rmSync(dataDir, { recursive: true, force: true });
+    }
+  });
+
   it('rejects legacy inline telegram secrets in channels.json', () => {
     const dataDir = mkdtempSync(join(tmpdir(), 'psfn-channel-config-'));
     try {

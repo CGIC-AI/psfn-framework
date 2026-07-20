@@ -5,6 +5,7 @@ import { timingSafeStringEqual } from '../../../shared/utils/secret-compare.js';
 const API_KEY_PRINCIPAL_DIGEST_LENGTH = 24;
 const MIN_SATELLITE_API_KEY_LENGTH = 16;
 export const INSECURE_LOCAL_API_PRINCIPAL_ID = 'local-insecure';
+export const TESTING_HARNESS_API_PRINCIPAL_ID = 'testing-harness';
 
 export interface ApiAuthPrincipal {
   id: string;
@@ -14,9 +15,15 @@ export interface ApiAuthPrincipal {
    * (`API_SATELLITE_KEYS`). Satellite-scoped principals are only valid on
    * satellite surfaces and only for endpoints that explicitly list their
    * principal id in `auth.apiKeyPrincipalIds` (Sprint-10 finding H4).
+   * `testing_harness` marks the dedicated persistent external-test room.
    * Absent scope means the shared operator API key / admin token.
    */
-  scope?: 'satellite';
+  scope?: 'satellite' | 'testing_harness';
+}
+
+export interface TestingHarnessApiPrincipalCredential {
+  principalId: string;
+  apiKey: string;
 }
 
 export const INSECURE_LOCAL_API_PRINCIPAL: Readonly<ApiAuthPrincipal> = Object.freeze({
@@ -62,6 +69,48 @@ export function principalFromSatelliteApiKeyToken(apiToken: string): ApiAuthPrin
     mode: 'api_key',
     scope: 'satellite',
   };
+}
+
+export function principalFromTestingHarnessCredential(
+  credential: TestingHarnessApiPrincipalCredential,
+): ApiAuthPrincipal {
+  return {
+    id: credential.principalId,
+    mode: 'api_key',
+    scope: 'testing_harness',
+  };
+}
+
+export function normalizeTestingHarnessApiPrincipalId(value: string): string {
+  const principalId = value.trim();
+  if (principalId !== TESTING_HARNESS_API_PRINCIPAL_ID) {
+    throw new Error(
+      `Testing-harness API principal id must be "${TESTING_HARNESS_API_PRINCIPAL_ID}"`,
+    );
+  }
+  return principalId;
+}
+
+export function validateTestingHarnessApiPrincipalCredential(
+  credential: TestingHarnessApiPrincipalCredential | undefined,
+  options: { reservedTokens?: Array<string | undefined> } = {},
+): TestingHarnessApiPrincipalCredential | undefined {
+  if (!credential) return undefined;
+
+  const principalId = normalizeTestingHarnessApiPrincipalId(credential.principalId);
+  const apiKey = credential.apiKey.trim();
+  if (apiKey.length < 16) {
+    throw new Error('Testing-harness API key must be at least 16 characters');
+  }
+  const reservedTokens = (options.reservedTokens ?? [])
+    .map(token => token?.trim())
+    .filter((token): token is string => Boolean(token));
+  if (reservedTokens.some(token => token === apiKey)) {
+    throw new Error(
+      'Testing-harness API key must not reuse API_KEY, ADMIN_TOKEN, or a satellite API key',
+    );
+  }
+  return { principalId, apiKey };
 }
 
 /**

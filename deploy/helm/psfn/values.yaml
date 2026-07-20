@@ -347,6 +347,7 @@ secrets:
     ntfyToken: ""
   keys:
     apiKey: API_KEY
+    testingHarnessApiKey: TESTING_HARNESS_API_KEY
     adminToken: ADMIN_TOKEN
     gatewaySessionHmacKey: GATEWAY_SESSION_HMAC_KEY
     gatewaySessionIntegrityAuthToken: GATEWAY_SESSION_INTEGRITY_AUTH_TOKEN

@@ -177,6 +177,68 @@ describe('notify tool', () => {
     expect(resultText(result as any)).toContain('notify: send sent via discord');
   });
 
+  it('blocks external send from an internal-origin turn to prevent raw outbound bleed', async () => {
+    const notifier: NotificationPort = {
+      notify: vi.fn(),
+    };
+    const discordSend = vi.fn().mockResolvedValue(undefined);
+    const sender = createGatewayDiscordNotifySender({ discordSend });
+    const tool = createNotifyTool(createNotifyDispatcher({
+      briefNotifier: notifier,
+      channelSender: sender,
+    }));
+
+    const result = await runWithRequestContext(
+      {
+        callType: 'conversational',
+        channelId: 'internal:free-time',
+        purpose: 'agent.turn.prompt',
+      },
+      async () => tool.execute('call-10', {
+        action: 'send',
+        message: 'Sneaking a message out.',
+        delivery_channel: 'discord',
+        delivery_target: 'discord:ops-room',
+      }),
+    );
+
+    expect(resultText(result as any)).toContain('notify: blocked');
+    expect(resultText(result as any)).toContain('internal channel (internal:free-time)');
+    expect((result.details as any).isError).toBe(true);
+    expect(discordSend).not.toHaveBeenCalled();
+  });
+
+  it('blocks external send from a scheduled turn to prevent heartbeat outbound bleed', async () => {
+    const notifier: NotificationPort = {
+      notify: vi.fn(),
+    };
+    const discordSend = vi.fn().mockResolvedValue(undefined);
+    const sender = createGatewayDiscordNotifySender({ discordSend });
+    const tool = createNotifyTool(createNotifyDispatcher({
+      briefNotifier: notifier,
+      channelSender: sender,
+    }));
+
+    const result = await runWithRequestContext(
+      {
+        callType: 'scheduled',
+        channelId: 'discord:ops-room',
+        purpose: 'agent.turn.prompt',
+      },
+      async () => tool.execute('call-11', {
+        action: 'send',
+        message: 'Sneaking a message out.',
+        delivery_channel: 'discord',
+        delivery_target: 'discord:ops-room',
+      }),
+    );
+
+    expect(resultText(result as any)).toContain('notify: blocked');
+    expect(resultText(result as any)).toContain('scheduled execution context');
+    expect((result.details as any).isError).toBe(true);
+    expect(discordSend).not.toHaveBeenCalled();
+  });
+
   it('declares runtime wiring metadata for Garden health derivation', () => {
     const notifier: NotificationPort = {
       notify: vi.fn(),

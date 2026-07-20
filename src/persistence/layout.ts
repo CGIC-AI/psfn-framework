@@ -678,6 +678,10 @@ export function resolveReflectionJournalPath(dataDir: string): string {
   return join(resolveReflectionNotesDir(dataDir), 'journal.jsonl');
 }
 
+export function resolveDiscrepancyJournalPath(dataDir: string): string {
+  return join(resolveReflectionNotesDir(dataDir), 'discrepancies.jsonl');
+}
+
 export function resolveReflectionMetacognitionDir(dataDir: string): string {
   return join(resolveReflectionNotesDir(dataDir), 'metacognition');
 }

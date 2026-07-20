@@ -5,13 +5,23 @@ import type {
 import {
   describeArousal,
   describeSignedValence,
+  describeUnitBand,
   type ReflectionInternalStateContext,
   type ReflectionPromptSectionBundle,
 } from './prompt-formatting.js';
+import type {
+  EmotionDiscrepancy,
+  EmotionDiscrepancySide,
+} from '../../../shared/contracts/emotion-contracts.js';
 
 const REFLECTION_STARTER_SHAPE = Object.freeze({
   eventCount: 3,
   clueCount: 2,
+  // Cap on how many distinct mixed-state notes the starter surfaces. The
+  // detector emits at most three cross-family divergences (031.11.1); the two
+  // most divergent are enough to make the split legible without flooding a
+  // deliberately small starter.
+  mixedStateNoteCount: 2,
   lineLength: 220,
 });
 
@@ -120,11 +130,69 @@ function formatHighSignalClues(context: ReflectionInternalStateContext | null): 
   return clues.slice(0, REFLECTION_STARTER_SHAPE.clueCount);
 }
 
+function humanizeDiscrepancyLabel(label: string): string {
+  return label.replace(/_/g, ' ').trim();
+}
+
+// Prose for one side of a cross-family divergence, drawn only from the b5m.3
+// describe helpers (charter §8.6): the companion sees a band word, never the raw
+// score, id, or provenance ref that produced it.
+function describeDiscrepancySidePhrase(side: EmotionDiscrepancySide): string {
+  switch (side.family) {
+    case 'vad_valence': {
+      const subject = side.label === 'momentary_valence' ? 'the in-the-moment read' : 'valence';
+      return `${subject} reads ${describeSignedValence(side.value)}`;
+    }
+    case 'mood_valence':
+      return `the settled mood reads ${describeSignedValence(side.value)}`;
+    case 'discrete_affect':
+      return `${humanizeDiscrepancyLabel(side.label)} reads ${describeUnitBand(side.value, 'strong', 'present', 'faint')}`;
+    case 'acac_self_report':
+      return `${humanizeDiscrepancyLabel(side.label)} reads ${describeUnitBand(side.value, 'high', 'present', 'low')}`;
+    default:
+      return `${humanizeDiscrepancyLabel(side.label)} reads present`;
+  }
+}
+
+// Render a detected discrepancy as a mixed-state note. Charter §8.3: both sides
+// are presented and neither is resolved into the other — the note names the
+// split and holds it rather than reconciling it.
+function formatMixedStateNoteLine(discrepancy: EmotionDiscrepancy): string {
+  const [first, second] = discrepancy.sides;
+  return truncateStarterLine(
+    `Signals may be split: ${describeDiscrepancySidePhrase(first)} while ${describeDiscrepancySidePhrase(second)}; `
+    + 'this may be a mixed state rather than one coherent feeling, held as-is rather than reconciled. '
+    + 'This is a fallible clue, not a conclusion.',
+  );
+}
+
+// The descriptor is already trusted-only gated at detection (031.11.1 returns an
+// empty array unless the emotion telemetry is trusted), so an empty array is the
+// gate: nothing is surfaced and nothing leaks. Gating is not re-derived here.
+function formatMixedStateClues(context: ReflectionInternalStateContext | null): string[] {
+  if (!context) {
+    return [];
+  }
+  const discrepancies = context.internalState.emotional.discrepancies ?? [];
+  if (discrepancies.length === 0) {
+    return [];
+  }
+  return [...discrepancies]
+    .sort((left, right) => right.magnitude - left.magnitude)
+    .slice(0, REFLECTION_STARTER_SHAPE.mixedStateNoteCount)
+    .map(formatMixedStateNoteLine)
+    .filter(Boolean);
+}
+
 export function buildReflectionStarterPromptBundle(
   input: ReflectionStarterPromptInput,
 ): ReflectionPromptSectionBundle {
   const eventLines = selectEventLines(input);
-  const clueLines = formatHighSignalClues(input.internalStateContext);
+  // Mixed-state notes lead the clues: a split between emotion families is the
+  // highest-signal thing the starter can surface, and it must not be crowded out
+  // by the generic affect/thread clues below.
+  const mixedStateClues = formatMixedStateClues(input.internalStateContext);
+  const clueLines = [...mixedStateClues, ...formatHighSignalClues(input.internalStateContext)];
   const eventHeading = input.templateId === 'weekly-review'
     ? '[Week Events Starter]'
     : '[Day Events Starter]';

@@ -59,6 +59,37 @@ function buildInternalStateContext(openThreadCount = 1): ReflectionInternalState
   };
 }
 
+function buildMixedStateContext(): ReflectionInternalStateContext {
+  // Low valence alongside a strong "love" discrete label: the charter's
+  // canonical head/heart split. Confidence high enough that telemetry validates
+  // as trusted, so the detector surfaces the divergence (031.11.1).
+  const internalState = new InternalStateComputer().computeState({
+    emotionState: {
+      vad: { valence: -0.5, arousal: 0.2, dominance: 0 },
+      mood: { valence: -0.4, arousal: 0.1, dominance: 0 },
+      discrete: { love: 0.8 },
+      confidence: 0.85,
+    },
+    activeConcerns: [],
+    trustLevel: 'trusted',
+    contactId: 'contact-1',
+    sessionMetrics: {
+      userMessageText: 'A hard day, but I still care about them.',
+      responseText: 'Staying close even when it is heavy.',
+      toolCallCount: 0,
+      recentTurnCount: 2,
+      lastSeenDeltaSeconds: 120,
+    },
+  });
+
+  return {
+    internalState,
+    internalStateSnapshotRef: buildInternalStateSnapshotRef(internalState),
+    metacognitiveFlags: [],
+    snapshotSource: 'runtime',
+  };
+}
+
 const CUT_BLOCKS = [
   '[Reflection Self Evidence]',
   '[What this evidence is]',
@@ -139,6 +170,63 @@ describe('buildReflectionStarterPromptBundle', () => {
     expect(openThreadSection).toContain('2 additional lower-salience threads omitted.');
     expect(openThreadSection.split('\n')).toHaveLength(4);
     expect(openThreadSection).not.toMatch(/\b(?:concerns?|worr(?:y|ies|ied))\b/i);
+  });
+
+  it('surfaces a detected discrepancy as a mixed-state note holding both sides without resolving them', () => {
+    const context = buildMixedStateContext();
+    // Guard the fixture: the detector actually found the cross-family split.
+    expect(context.internalState.emotional.discrepancies?.length ?? 0).toBeGreaterThan(0);
+
+    const bundle = buildReflectionStarterPromptBundle({
+      templateId: 'daily-review',
+      internalStateContext: context,
+      retrievedMemoryBlock: '- [episodic] A single day event',
+      recentSessionMessages: [],
+      recentDailyJournalEntries: [],
+      provenanceRefs: [],
+    });
+
+    const mixedStateLine = bundle.self
+      .split('\n')
+      .find(line => line.includes('Signals may be split')) ?? '';
+    expect(mixedStateLine).not.toBe('');
+    // Both sides present in prose (charter §8.6): the low-valence read and the
+    // strong "love" read are both named.
+    expect(mixedStateLine).toContain('valence reads heavy');
+    expect(mixedStateLine).toContain('love reads strong');
+    expect(mixedStateLine).toContain('mixed state');
+    // No forced coherence (charter §8.3): the split is held, not reconciled.
+    expect(mixedStateLine).toContain('held as-is rather than reconciled');
+    expect(mixedStateLine).not.toContain('resolve');
+    // No raw scores leak into the companion-facing prose (charter §8.6).
+    expect(mixedStateLine).not.toMatch(/[0-9]/);
+  });
+
+  it('omits the mixed-state note when no discrepancy is present', () => {
+    const bundle = buildReflectionStarterPromptBundle({
+      templateId: 'daily-review',
+      internalStateContext: buildInternalStateContext(),
+      retrievedMemoryBlock: '- [episodic] A single day event',
+      recentSessionMessages: [],
+      recentDailyJournalEntries: [],
+      provenanceRefs: [],
+    });
+
+    expect(bundle.self).not.toContain('Signals may be split');
+    expect(bundle.self).not.toContain('mixed state');
+  });
+
+  it('omits the mixed-state note when there is no internal-state context at all', () => {
+    const bundle = buildReflectionStarterPromptBundle({
+      templateId: 'daily-review',
+      internalStateContext: null,
+      retrievedMemoryBlock: '- [episodic] A single day event',
+      recentSessionMessages: [],
+      recentDailyJournalEntries: [],
+      provenanceRefs: [],
+    });
+
+    expect(bundle.self).not.toContain('Signals may be split');
   });
 
   it('builds a compact weekly starter from recent lived-day summaries without enumerating reflection categories', () => {

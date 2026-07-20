@@ -26,6 +26,7 @@ import type {
   HeartbeatRuntimeOptions,
 } from './heartbeat-runtime-contracts.js';
 import {
+  resolveDiscrepancyJournalPath,
   resolveHeartbeatPolicyPath,
   resolveLegacyValuesJournalPath,
   resolveReflectionDailyJournalsDir,
@@ -38,6 +39,7 @@ import {
   ReflectionJournalStore,
   type ReflectionJournalEntry,
 } from '../../persistence/journals/reflection-journal.js';
+import { DiscrepancyJournalStore } from '../../persistence/journals/discrepancy-journal.js';
 import { ReflectionMetacognitionJournalStore } from '../../persistence/journals/reflection-metacognition-journal.js';
 import {
   assembleReflectionSubstrateContext,
@@ -166,6 +168,7 @@ export function createHeartbeatTemplateRuntime(
     legacyFilePaths: [resolveLegacyValuesJournalPath(dataDir)],
   });
   const reflectionJournal = new ReflectionJournalStore(resolveReflectionJournalPath(dataDir));
+  const discrepancyJournal = new DiscrepancyJournalStore(resolveDiscrepancyJournalPath(dataDir));
   const reflectionMetacognitionJournal = runtimeOptions.reflectionStore
     ?? new ReflectionMetacognitionJournalStore(resolveReflectionMetacognitionJournalPath(dataDir));
   const reflectionDailyJournal = new ReflectionDailyJournalStore(resolveReflectionDailyJournalsDir(dataDir));
@@ -786,7 +789,9 @@ export function createHeartbeatTemplateRuntime(
       buildInternalStatePromptBundle(internalStateContext),
       reflectionSubstrateContext,
     );
-    const reflectionPromptBundle = template.id === 'daily-review' || template.id === 'weekly-review'
+    const reflectionPromptBundle = template.id === 'daily-review'
+      || template.id === 'weekly-review'
+      || template.id === 'mixed-state-review'
       ? buildReflectionStarterPromptBundle({
         templateId: template.id,
         internalStateContext,
@@ -1077,6 +1082,33 @@ export function createHeartbeatTemplateRuntime(
         log.warn(`Reflection "${template.id}" note journal persistence skipped`, {
           error: String(error),
         });
+      }
+
+      // A cross-family divergence (031.11.1) that was surfaced INTO this
+      // reflection leaves a durable, queryable record with both sides'
+      // provenance and confidence intact (031.11.2). This reads the same
+      // pre-turn context that fed the starter's mixed-state note — not the
+      // post-turn persistence context — so the record is exactly the divergence
+      // the companion saw and reflected on, with the matching snapshot ref. The
+      // descriptor is already trusted-only gated at detection, so a non-empty
+      // array is the signal that a real, trusted mixed state was reflected on.
+      // Charter §8.3: it is journaled verbatim, never resolved.
+      const surfacedDiscrepancies = internalStateContext?.internalState.emotional.discrepancies ?? [];
+      if (internalStateContext && surfacedDiscrepancies.length > 0) {
+        try {
+          discrepancyJournal.append({
+            templateId: template.id,
+            templateName: template.name,
+            channelId: reflectionChannelId,
+            internalStateSnapshotRef: internalStateContext.internalStateSnapshotRef,
+            discrepancies: surfacedDiscrepancies,
+            createdAt: reflectionCreatedAt,
+          });
+        } catch (error) {
+          log.warn(`Reflection "${template.id}" discrepancy journal persistence skipped`, {
+            error: String(error),
+          });
+        }
       }
 
       if (finalReflectionJournalEntry && agentLoop.memoryExtractor?.extractFinalReflection) {

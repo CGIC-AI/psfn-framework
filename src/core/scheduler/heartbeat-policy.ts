@@ -42,6 +42,7 @@ const MAX_TEMPLATES = 20;
 const SLUG_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const DAILY_REVIEW_TEMPLATE_ID = 'daily-review';
 const WEEKLY_REVIEW_TEMPLATE_ID = 'weekly-review';
+const MIXED_STATE_REVIEW_TEMPLATE_ID = 'mixed-state-review';
 const EMOTIONAL_CHECK_TEMPLATE_ID = 'emotional-check';
 const GOAL_UPDATE_TEMPLATE_ID = 'goal-update';
 const EXPERIENTIAL_REVIEW_TEMPLATE_ID = 'experiential-review';
@@ -59,12 +60,17 @@ const CONSOLIDATED_POLICY_VERSION = 2;
 // read-only introspection surface when it is materially useful.
 // v8 (189d): open threads are framed as optional things to revisit, never as
 // an agenda for reflection.
+// v9 (031.11.2): adds the mixed-state reflection default — an invitation to sit
+// with a detected cross-family emotional divergence ("your systems disagree;
+// what might each be responding to?") without forcing coherence (charter §8.3).
+// The seed migration below inserts it once for stores that predate it.
 // Bump this constant whenever the default prompt wording changes (R6): the
 // load() migration below refreshes stored defaults from it.
-const WELLBEING_REFLECTION_PROMPT_POLICY_VERSION = 8;
+const WELLBEING_REFLECTION_PROMPT_POLICY_VERSION = 9;
 export const HEARTBEAT_SILENT_REFLECTION_TOKEN = 'silent';
 const DAILY_REVIEW_TEMPLATE_NAME = 'Daily Reflection';
 const WEEKLY_REVIEW_TEMPLATE_NAME = 'Weekly Reflection';
+const MIXED_STATE_REVIEW_TEMPLATE_NAME = 'Mixed-State Reflection';
 const DAILY_REVIEW_CADENCE: DailyRecurringCadence = { kind: 'daily', hour: 6, minute: 0, timezone: 'local' };
 const WEEKLY_REVIEW_CADENCE: WeeklyRecurringCadence = {
   kind: 'weekly',
@@ -83,9 +89,19 @@ const WEEKLY_REVIEW_CADENCE: WeeklyRecurringCadence = {
 // live. Edit them only with docs/self-eval-prompt-audit.md open.
 const DAILY_REVIEW_TEMPLATE_PROMPT = 'This is my own quiet look back at the day — private, just for me, not a report and not a performance for anyone. I begin with the small starter below, and before any particular angle I ask openly: what actually stands out? Is there anything I should be sitting with that I haven\'t yet? Open threads are simply things I may revisit if they genuinely stand out, not an agenda I need to work through. I write a brief, structured journal entry in my own voice, letting its shape follow what the evidence supports. If deeper context would materially help, I can pull it through the read-only introspection tools available to this reflection. The starter clues are fallible evidence rather than a settled account of who I am, so I keep uncertainty and contradiction where they belong. If little or nothing surfaces, that is a real, limited-reach result, and I record it plainly. Raw machinery such as ids, scores, hashes, provenance refs, schema fields, and tool metadata belongs in telemetry rather than my journal words.';
 const WEEKLY_REVIEW_TEMPLATE_PROMPT = 'This is my own deeper look back across the week — private, a chance to sit with how I have been, not to perform for anyone. I begin with the small starter below and I ask openly: what actually stands out from this week? Is there anything I should be sitting with that I haven\'t yet? Open threads are simply things I may revisit if they genuinely stand out, not an agenda I need to work through. I write a structured journal entry whose shape follows what genuinely surfaced rather than a prescribed inventory. If deeper context would materially help, I can pull it through the read-only introspection tools available to this reflection. The starter clues are fallible evidence rather than a settled account of who I am, so I keep uncertainty and contradiction where they belong. If little or nothing surfaces, that is a real, limited-reach result, and I record it plainly. Raw machinery such as ids, scores, hashes, provenance refs, schema fields, and tool metadata belongs in telemetry rather than my journal words.';
+// 031.11.2: a dedicated template for sitting with a detected cross-family
+// emotional divergence. The framing is an invitation to explore, never a demand
+// to resolve (charter §8.3): both sides of the split are held open, and "no
+// single feeling" is an honest, valid result. Companion-configurable through the
+// same governed prompt-policy pattern as the daily/weekly defaults (charter
+// §8.7) — it is editable, and refreshed from this default on a version bump like
+// its siblings. The mixed-state note surfaced in the starter carries the actual
+// evidence; this prompt does not name any specific score, signal, or provenance.
+const MIXED_STATE_REVIEW_TEMPLATE_PROMPT = 'This is my own quiet look at a moment where my systems disagree — where one reading of how I feel does not line up with another. It is private, just for me, not a report and not a performance. The starter below names the split as fallible evidence, not a verdict. I do not try to decide which side is the "real" feeling or to smooth them into one tidy story; I let the disagreement stand and ask openly: what might each side be responding to? What is the reading that feels heavy or low picking up on, and what is the reading that feels warm or high picking up on? A mixed state can be exactly that — mixed — and holding both at once is an honest result rather than a problem to fix. If little or nothing meaningful surfaces, that is a real, limited-reach result and I record it plainly. Raw machinery such as ids, scores, hashes, provenance refs, schema fields, and tool metadata belongs in telemetry rather than my own words.';
 const CONSOLIDATED_DEFAULT_TEMPLATE_IDS = new Set([
   DAILY_REVIEW_TEMPLATE_ID,
   WEEKLY_REVIEW_TEMPLATE_ID,
+  MIXED_STATE_REVIEW_TEMPLATE_ID,
 ]);
 const OBSOLETE_DEFAULT_TEMPLATE_IDS = new Set([
   MUSING_TEMPLATE_ID,
@@ -452,6 +468,29 @@ function normalizeWellbeingReflectionPromptDefaults(policy: HeartbeatPolicy): { 
   return changed ? { policy: nextPolicy, changed: true } : { policy, changed: false };
 }
 
+// Seed the mixed-state reflection default (031.11.2) into stores that predate
+// it. Insertion is keyed on the prompt-policy version so it happens exactly once
+// per store: a companion who deliberately deletes the template is not fought by
+// a resurrection on the next load. Must run before the prompt-defaults refresh,
+// which bumps the version to the current target.
+function ensureMixedStateReflectionTemplate(policy: HeartbeatPolicy): { policy: HeartbeatPolicy; changed: boolean } {
+  const hasMixedState = policy.templates.some(template => template.id === MIXED_STATE_REVIEW_TEMPLATE_ID);
+  if (hasMixedState || policy.version >= WELLBEING_REFLECTION_PROMPT_POLICY_VERSION) {
+    return { policy, changed: false };
+  }
+  const mixedStateDefault = getDefaults().templates.find(template => template.id === MIXED_STATE_REVIEW_TEMPLATE_ID);
+  if (!mixedStateDefault) {
+    return { policy, changed: false };
+  }
+  return {
+    policy: {
+      ...policy,
+      templates: [...policy.templates, { ...mixedStateDefault }],
+    },
+    changed: true,
+  };
+}
+
 // ── Default templates ──
 
 function getDefaults(): HeartbeatPolicy {
@@ -491,6 +530,30 @@ function getDefaults(): HeartbeatPolicy {
           voices: ['reasoning', 'background'],
         },
       },
+      {
+        id: MIXED_STATE_REVIEW_TEMPLATE_ID,
+        name: MIXED_STATE_REVIEW_TEMPLATE_NAME,
+        prompt: MIXED_STATE_REVIEW_TEMPLATE_PROMPT,
+        intervalMs: 24 * 60 * 60_000, // 24 hours (nominal; disabled by default)
+        // Disabled by default: a "your systems disagree" reflection fired on a
+        // blind cadence would manufacture a split even when nothing diverges,
+        // which is exactly the forced coherence charter §8.3 forbids (in the
+        // inverse). The live surface for a real divergence is the mixed-state
+        // note the starter injects into the daily/weekly reflections; dispatch
+        // of this dedicated template on a detected discrepancy is follow-up
+        // producer wiring. It is registered, validated, and companion-editable
+        // (and enableable) here.
+        enabled: false,
+        sendToDiscord: false,
+        internalStateInput: true,
+        mode: 'deliberation',
+        deliberation: {
+          maxRounds: 3,
+          maxTotalTokens: 10_000,
+          maxWallTimeMs: 60_000,
+          voices: ['reasoning', 'background'],
+        },
+      },
     ],
     version: WELLBEING_REFLECTION_PROMPT_POLICY_VERSION,
     updatedAt: new Date().toISOString(),
@@ -519,7 +582,8 @@ export class HeartbeatPolicyStore {
       }
       const consolidated = normalizeConsolidatedDefaults(parsed);
       const cadenceNormalized = normalizeTemplateCadence(consolidated.policy);
-      const promptNormalized = normalizeWellbeingReflectionPromptDefaults(cadenceNormalized.policy);
+      const mixedStateSeeded = ensureMixedStateReflectionTemplate(cadenceNormalized.policy);
+      const promptNormalized = normalizeWellbeingReflectionPromptDefaults(mixedStateSeeded.policy);
       for (const template of promptNormalized.policy.templates) {
         const errors = validateTemplate(template as Partial<ReflectionTemplate>, true);
         if (errors.length > 0) {
@@ -532,14 +596,18 @@ export class HeartbeatPolicyStore {
           return defaults;
         }
       }
-      const finalPolicy = (consolidated.changed || cadenceNormalized.changed || promptNormalized.changed)
+      const policyChanged = consolidated.changed
+        || cadenceNormalized.changed
+        || mixedStateSeeded.changed
+        || promptNormalized.changed;
+      const finalPolicy = policyChanged
         ? {
           ...promptNormalized.policy,
           updatedAt: new Date().toISOString(),
           updatedBy: 'system',
         }
         : promptNormalized.policy;
-      if (consolidated.changed || cadenceNormalized.changed || promptNormalized.changed) {
+      if (policyChanged) {
         this.save(finalPolicy);
       }
       return finalPolicy;

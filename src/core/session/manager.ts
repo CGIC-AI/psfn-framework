@@ -387,6 +387,9 @@ export class SessionManager {
   }
 
   private shouldOverrideSessionContext(channelId: string): boolean {
+    // The explicitly configured testing-harness principal is a durable API
+    // room, not a transient API request that may inherit mutable UI context.
+    if (channelId === 'api:testing-harness') return false;
     return channelId.startsWith('api:') || channelId.startsWith('terminal:');
   }
 

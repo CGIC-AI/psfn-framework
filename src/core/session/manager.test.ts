@@ -1470,6 +1470,25 @@ describe('SessionManager', () => {
     },
   );
 
+  it('keeps the persistent testing-harness room stable across active context and restart', () => {
+    const harnessRoom = 'api:testing-harness';
+    const firstRuntime = new SessionManager(store, makeConfig());
+    firstRuntime.setActiveContextSession('api:operator-room-a');
+
+    expect(firstRuntime.resolveSessionForIngress(harnessRoom)).toBe(harnessRoom);
+    firstRuntime.recordUserMessage(harnessRoom, 'first harness turn', 'testing-harness', 'Harness');
+
+    const restartedRuntime = new SessionManager(store, makeConfig());
+    restartedRuntime.setActiveContextSession('api:operator-room-b');
+
+    expect(restartedRuntime.resolveSessionForIngress(harnessRoom)).toBe(harnessRoom);
+    restartedRuntime.recordUserMessage(harnessRoom, 'second harness turn', 'testing-harness', 'Harness');
+    expect(store.getRecent(harnessRoom, 2).map(entry => entry.content)).toEqual([
+      'first harness turn',
+      'second harness turn',
+    ]);
+  });
+
   it('keeps explicit turn writes on a captured API owner after the active context changes', () => {
     const config = makeConfig();
     const mgr = new SessionManager(store, config);

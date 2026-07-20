@@ -33,6 +33,10 @@ import {
   normalizeCustomEmojiMeanings,
   type CustomEmojiMeaningsByGuild,
 } from '../shared/reaction-surface.js';
+import {
+  normalizeTestingHarnessApiPrincipalId,
+  type TestingHarnessApiPrincipalCredential,
+} from './http/auth.js';
 
 const log = createComponentLogger('ChannelConfig');
 
@@ -119,6 +123,7 @@ export interface DiscordChannelConfig {
  */
 export interface ApiChannelConfig {
   companionId?: CompanionId;
+  testingHarness?: TestingHarnessApiPrincipalCredential;
 }
 
 export interface ExternalChannelProfileConfig {
@@ -711,6 +716,7 @@ export function saveChannelsOwnerFile(
   // 8ora: validate the companionUi section on save so an unknown key or an
   // invalid privacy level is rejected fail-closed rather than persisted.
   parseCompanionUiSection(scopedRoot);
+  parseApiChannelSection(scopedRoot, {});
   // W1-P2: structural validation of discord.accounts on save (secrets are env
   // resolved at load, so an empty env here only skips token presence checks).
   const discordSection = parseSectionObject(scopedRoot, 'discord');
@@ -746,6 +752,67 @@ function resolveCredentialValue(
   ) ?? '';
 }
 
+function parseApiChannelSection(
+  scopedRoot: Record<string, unknown>,
+  env: NodeJS.ProcessEnv,
+  credentialVault?: CredentialVaultPort,
+): ApiChannelConfig {
+  const apiConfig = parseSectionObject(scopedRoot, 'api') ?? {};
+  const unknownApiKeys = Object.keys(apiConfig)
+    .filter(key => key !== 'companionId' && key !== 'testingHarness');
+  if (unknownApiKeys.length > 0) {
+    throw new Error(`channels.json.api has unsupported keys: ${unknownApiKeys.join(', ')}`);
+  }
+
+  const rawApiCompanionId = parseConfiguredString(
+    apiConfig.companionId,
+    'channels.json.api.companionId',
+  );
+  const companionId = rawApiCompanionId
+    ? createCompanionId(rawApiCompanionId, 'channels.json.api.companionId')
+    : undefined;
+  const testingHarness = parseSectionObject(apiConfig, 'testingHarness');
+  if (!testingHarness) {
+    return { ...(companionId ? { companionId } : {}) };
+  }
+
+  const unknownTestingHarnessKeys = Object.keys(testingHarness)
+    .filter(key => key !== 'principalId' && key !== 'tokenRef');
+  if (unknownTestingHarnessKeys.length > 0) {
+    throw new Error(
+      `channels.json.api.testingHarness has unsupported keys: ${unknownTestingHarnessKeys.join(', ')}`,
+    );
+  }
+  const principalId = parseConfiguredString(
+    testingHarness.principalId,
+    'channels.json.api.testingHarness.principalId',
+  );
+  if (!principalId) {
+    throw new Error('channels.json.api.testingHarness.principalId must be configured');
+  }
+  const normalizedPrincipalId = normalizeTestingHarnessApiPrincipalId(principalId);
+  rejectInlineSecretField(
+    testingHarness,
+    'token',
+    'channels.json.api.testingHarness.tokenRef',
+  );
+  const tokenRef = parseConfiguredCredentialReference(
+    testingHarness.tokenRef,
+    'channels.json.api.testingHarness.tokenRef',
+  );
+  if (!tokenRef) {
+    throw new Error('channels.json.api.testingHarness.tokenRef must be configured');
+  }
+
+  return {
+    ...(companionId ? { companionId } : {}),
+    testingHarness: {
+      principalId: normalizedPrincipalId,
+      apiKey: resolveCredentialValue(tokenRef, env, credentialVault).trim(),
+    },
+  };
+}
+
 export function loadRuntimeChannelsConfig(
   dataDir: string,
   env: NodeJS.ProcessEnv = process.env,
@@ -771,15 +838,7 @@ export function loadRuntimeChannelsConfig(
     env,
     options.credentialVault,
   );
-  const apiConfig = parseSectionObject(scopedRoot, 'api') ?? {};
-  const unknownApiKeys = Object.keys(apiConfig).filter(key => key !== 'companionId');
-  if (unknownApiKeys.length > 0) {
-    throw new Error(`channels.json.api has unsupported keys: ${unknownApiKeys.join(', ')}`);
-  }
-  const rawApiCompanionId = parseConfiguredString(apiConfig.companionId, 'channels.json.api.companionId');
-  const apiCompanionId = rawApiCompanionId
-    ? createCompanionId(rawApiCompanionId, 'channels.json.api.companionId')
-    : undefined;
+  const api = parseApiChannelSection(scopedRoot, env, options.credentialVault);
   const psfnAmicaConfig = parseSectionObject(scopedRoot, 'psfnAmica') ?? {};
   if (Object.keys(psfnAmicaConfig).length > 0 && !Object.hasOwn(psfnAmicaConfig, 'enabled')) {
     throw new Error('channels.json.psfnAmica.enabled must be configured when psfnAmica settings are present');
@@ -923,9 +982,7 @@ export function loadRuntimeChannelsConfig(
       ...(discordCompanionId ? { companionId: discordCompanionId } : {}),
       ...(discordAccounts ? { accounts: discordAccounts } : {}),
     },
-    api: {
-      ...(apiCompanionId ? { companionId: apiCompanionId } : {}),
-    },
+    api,
     psfnAmica: {
       enabled: psfnAmicaEnabled,
       ...(psfnAmicaDefaultIdentity && psfnAmicaEnabled ? { defaultIdentity: psfnAmicaDefaultIdentity } : {}),

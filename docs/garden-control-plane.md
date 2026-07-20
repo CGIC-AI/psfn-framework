@@ -212,6 +212,37 @@ caller-controlled authority header as a shortcut.
 Authorization infrastructure errors remain errors. They are not treated as an
 empty allowlist or a reason to retry against another target.
 
+### Service boundary: subject-scoped projections (88u3)
+
+Beyond route authorization, `gardenRequestServiceBoundaryDenial`
+(`src/operator/garden/garden-request-context.ts`) refuses to run any fleet
+principal's request against a Garden service whose subject selectors are not
+explicit. The projected services key their row scoping on the signed
+capability's contact binding (`actor.contactId`) — never on request
+parameters — and role never widens visibility (an `owner` sees the same rows
+a `member` with the same contact binding would):
+
+- **Sessions** (`GET /api/admin/sessions*`, the `/sessions` page): served by
+  the subject-bound session projection inside `AdminSessionDataService`. A
+  fleet principal sees only sessions whose resolved linked contact is their
+  own contact binding; other subjects' sessions surface as not-found. The
+  service also re-asserts the Invariant 11 companion scope against its bound
+  companion, so a context admitted for companion A can never read companion
+  B's session stores even if a dispatch gate were bypassed.
+- **Memory** (`/api/admin/memory*`, the `/memory` page): served through the
+  subject-authorized memory store (`createSubjectAuthorizedMemoryStore`).
+- **Episodic memory** (`GET /api/admin/episodic-memory/*`, the
+  `/episodic-memory` page): served through the subject-authorized episodic
+  store (`createSubjectAuthorizedEpisodicStore`) — an episode is visible only
+  when the viewer contact is one of its explicitly attributed participants;
+  arcs require both endpoint episodes visible; unattributed episodes are
+  invisible fail-closed.
+
+Everything else in the `sessions` and `memory` areas stays denied for fleet
+principals until it gets its own explicit subject selector: session route
+recovery, CogSec events/remediation, the `/session-recovery` surface, group
+memory diagnostics/backfill, and shard fold review.
+
 ## Cluster Garden module
 
 The external interface should stay small:

@@ -287,9 +287,10 @@ Privacy composes with the envelope, lowest-common wins:
   bond disclosure and the current channel's disclosure (the continuity-direction table
   above, applied twice), plus the trust/memory policy gate at the source's disclosure
   ceiling;
-- member privacy is read strictly from the member log's persisted visibility labels —
-  a member whose privacy cannot be determined disables the whole bond (fail closed, the
-  bond never widens anything it cannot prove safe);
+- member privacy is read strictly from the member log's persisted visibility labels — a
+  member with NO determinable label on any of its entries disables the whole bond (fail
+  closed, the bond never widens anything it cannot prove safe), and any individual entry
+  whose own visibility cannot be determined is skipped rather than crossed;
 - entry metadata (intake-screening taint/provenance) rides along unmodified, so the
   prompt-assembly sink gate applies to bonded foreign entries exactly as to native ones.
 

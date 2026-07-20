@@ -323,8 +323,11 @@ export function resolveBondedSessionTimeline(params: {
         ...entry,
         // Foreign ids are namespaced out of the target channel's id space so
         // id-keyed machinery (current-turn exclusion, leak guard, compaction
-        // coverage) can never bind them to own-channel entries.
-        id: -Math.abs(entry.id),
+        // coverage) can never bind them to own-channel entries. The `- 1` keeps
+        // the id strictly negative even for a source id of 0 (`-0 < 0` is false
+        // in JS), so the "foreign ids are always negative" contract holds for
+        // every source id >= 0, not just BIGSERIAL ids >= 1.
+        id: -Math.abs(entry.id) - 1,
         metadata,
         originChannelId: entry.originChannelId ?? entry.channelId,
       });

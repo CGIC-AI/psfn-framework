@@ -1,9 +1,17 @@
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import type { SubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
 import { buildSessionContext, captureTurnSessionContext } from './context-builder.js';
 import type { CrossChannelContinuityPort } from '../cross-channel-continuity-port.js';
 import type { ActiveContinuityChannel } from '../continuity.js';
-import { parseChannelBondEntryMarker } from '../channel-bond.js';
+import { CHANNEL_BOND_METADATA_KEY, parseChannelBondEntryMarker } from '../channel-bond.js';
+import { createIntakeSinkGate } from '../../cogsec/intake/sink-gates.js';
+import { validateIntakePolicy } from '../../../system/config/intake-policy-config.js';
+import { INTAKE_FIREWALL_NOTICE_TEMPLATES } from '../../cogsec/intake-firewall-notice-templates.js';
+import { buildSessionMetadataWithIntakeScreening } from '../intake-screening-metadata.js';
+import type { IntakeEnvelopeSnapshot } from '../../../shared/contracts/intake-envelope.js';
+import type { TurnSessionContextSnapshot } from '../../turns/snapshot.js';
 import type { SessionEntry } from '../types.js';
 
 const NOW = Date.now();
@@ -142,7 +150,8 @@ describe('captureTurnSessionContext channel bonding', () => {
       'bedroom reply',
     ]);
     const foreign = snapshot.recentEntries.filter(entry => parseChannelBondEntryMarker(entry.metadata));
-    expect(foreign.map(entry => entry.id)).toEqual([-42, -43]);
+    // Foreign ids are namespaced negative with a -1 offset (source 42/43 -> -43/-44).
+    expect(foreign.map(entry => entry.id)).toEqual([-43, -44]);
     expect(snapshot.versionPointer).not.toBe((await capture({ bonded: false })).versionPointer);
   });
 
@@ -256,5 +265,196 @@ describe('buildSessionContext channel bonding', () => {
     const context = await buildFromSnapshot(42);
     const allContent = context.messages.map(message => message.content).join('\n');
     expect(allContent).toContain('bedroom voice');
+  });
+});
+
+// ── psfn-framework-vrmf remediation ──────────────────────────────────────────
+
+function bondMarkerMetadata(sourceChannelId: string, extra?: Record<string, unknown>): string {
+  return JSON.stringify({
+    ...(extra ?? {}),
+    [CHANNEL_BOND_METADATA_KEY]: {
+      kind: 'channel_bond',
+      sourceChannelId,
+      sourceVisibility: 'private',
+    },
+  });
+}
+
+function foreignEntry(id: number, content: string): SessionEntry {
+  return {
+    id: -Math.abs(id) - 1,
+    channelId: TELEGRAM_CHANNEL,
+    role: 'user',
+    content,
+    authorId: 'partner-user',
+    authorName: 'Partner',
+    timestamp: NOW - 200_000 + id,
+    channelVisibility: 'private',
+    originChannelId: TELEGRAM_CHANNEL,
+    metadata: bondMarkerMetadata(TELEGRAM_CHANNEL),
+  };
+}
+
+function ownEntry(id: number, content: string): SessionEntry {
+  return {
+    id,
+    channelId: DM_CHANNEL,
+    role: 'user',
+    content,
+    authorId: 'partner-user',
+    authorName: 'Partner',
+    timestamp: NOW - 500_000 + id,
+    channelVisibility: 'private',
+  };
+}
+
+function snapshotWith(recentEntries: SessionEntry[]): TurnSessionContextSnapshot {
+  return {
+    channelId: DM_CHANNEL,
+    recentEntries,
+    sourceEntryCount: recentEntries.length,
+    bondedEntryCount: recentEntries.filter(entry => parseChannelBondEntryMarker(entry.metadata)).length,
+    compactionSummaryTexts: [],
+    focusKnowledgeTexts: [],
+    continuityEntries: [],
+    versionPointer: 'bond-remediation-test',
+  };
+}
+
+async function buildTrigger(recentEntries: SessionEntry[]) {
+  // Tiny context window so a handful of long entries crosses the 70% threshold.
+  const config = makeConfig({
+    defaultContextWindow: 500,
+    compactionThresholdPct: 70,
+    modelRoster: { chat: { model: 'test-model', provider: 'test', maxTokens: 256, contextWindow: 500 } },
+  });
+  const store = makeStore({ [DM_CHANNEL]: [], [TELEGRAM_CHANNEL]: [] });
+  return await buildSessionContext({
+    channelId: DM_CHANNEL,
+    sourceChannelId: DM_CHANNEL,
+    systemPrompt: 'System prompt.',
+    coreMemoryBlock: '',
+    memoriesBlock: '',
+    userId: 'contact-1',
+    channelMeta: { isDirectMessage: true },
+    continuityFallbackUserIds: [],
+    store,
+    config,
+    eventBus: null,
+    promptRegistry: null,
+    preCompactionExtractionHandler: null,
+    crossChannelContinuity: makePort([]),
+    wakeReturnArtifacts: [],
+    turnSessionContext: snapshotWith(recentEntries),
+  });
+}
+
+describe('buildSessionContext channel bonding compaction accounting (psfn-framework-vrmf)', () => {
+  const LONG = 'This is a deliberately long conversational line meant to consume the tiny history token budget under test. '.repeat(3);
+  const OWN_SHORT = ['a', 'b', 'c', 'd', 'e', 'f'].map((label, index) => ownEntry(index + 1, label));
+
+  it('excludes foreign bonded entries from the compaction trigger accounting', async () => {
+    // 6 short own entries (well under the token threshold) plus 30 long foreign
+    // entries. The foreign entries must NOT count toward the own-channel
+    // compaction trigger, or enabling bonding would compact away own history.
+    const foreign = Array.from({ length: 30 }, (_, index) => foreignEntry(100 + index, `${LONG} #${index}`));
+    const context = await buildTrigger([...OWN_SHORT, ...foreign]);
+    expect(context.manifest.compaction.eligible).toBe(false);
+  });
+
+  it('the same long entries DO trigger compaction when they are own-channel history', async () => {
+    // Control: identical volume of LONG content as own-channel entries crosses
+    // the threshold — proving the trigger is real and only bonding shields it.
+    const ownHeavy = Array.from({ length: 30 }, (_, index) => ownEntry(100 + index, `${LONG} #${index}`));
+    const context = await buildTrigger([...OWN_SHORT, ...ownHeavy]);
+    expect(context.manifest.compaction.eligible).toBe(true);
+  });
+});
+
+describe('buildSessionContext channel bonding + intake sink gate (psfn-framework-vrmf)', () => {
+  function makeEnforceGate() {
+    const seed = JSON.parse(
+      readFileSync(join(process.cwd(), 'config', 'intake-policy.seed.json'), 'utf8'),
+    ) as Record<string, unknown>;
+    return createIntakeSinkGate({
+      policy: validateIntakePolicy({ ...seed, mode: 'enforce' }, 'intake-policy.bond-test'),
+      actor: 'test:bond-sink-gate',
+    });
+  }
+
+  function quarantinedSnapshot(): IntakeEnvelopeSnapshot {
+    return {
+      envelopeId: 'bond-held-envelope-001',
+      sourceClass: 'document',
+      sourceRiskTier: 'untrusted',
+      state: 'quarantined',
+      riskLabels: ['injection/override_attempt'],
+      subject: { kind: 'attachment', index: 0 },
+    };
+  }
+
+  it('suppresses the [via] source annotation when the sink gate withholds a foreign entry', async () => {
+    const screeningMetadata = buildSessionMetadataWithIntakeScreening(
+      bondMarkerMetadata(TELEGRAM_CHANNEL),
+      { mode: 'enforce', withheld: true, envelopes: [quarantinedSnapshot()] },
+    );
+    const foreign: SessionEntry = {
+      ...foreignEntry(7, 'private confession that must be withheld'),
+      metadata: screeningMetadata,
+    };
+    const recentEntries = [ownEntry(1, 'phone text'), foreign];
+    const store = makeStore({ [DM_CHANNEL]: [], [TELEGRAM_CHANNEL]: [] });
+    const context = await buildSessionContext({
+      channelId: DM_CHANNEL,
+      sourceChannelId: DM_CHANNEL,
+      systemPrompt: 'System prompt.',
+      coreMemoryBlock: '',
+      memoriesBlock: '',
+      userId: 'contact-1',
+      channelMeta: { isDirectMessage: true },
+      continuityFallbackUserIds: [],
+      store,
+      config: makeConfig(),
+      eventBus: null,
+      promptRegistry: null,
+      preCompactionExtractionHandler: null,
+      crossChannelContinuity: makePort([]),
+      wakeReturnArtifacts: [],
+      turnSessionContext: snapshotWith(recentEntries),
+      intakeSinkGate: makeEnforceGate(),
+    });
+    const allContent = context.messages.map(message => message.content).join('\n');
+    // Content is withheld and its source channel is NOT disclosed.
+    expect(allContent).toContain(INTAKE_FIREWALL_NOTICE_TEMPLATES.withheldContent);
+    expect(allContent).not.toContain('private confession');
+    expect(allContent).not.toContain(`[via ${TELEGRAM_CHANNEL}]`);
+  });
+
+  it('still annotates a non-withheld foreign entry with its source channel', async () => {
+    const foreign = foreignEntry(8, 'ordinary bonded message');
+    const recentEntries = [ownEntry(1, 'phone text'), foreign];
+    const store = makeStore({ [DM_CHANNEL]: [], [TELEGRAM_CHANNEL]: [] });
+    const context = await buildSessionContext({
+      channelId: DM_CHANNEL,
+      sourceChannelId: DM_CHANNEL,
+      systemPrompt: 'System prompt.',
+      coreMemoryBlock: '',
+      memoriesBlock: '',
+      userId: 'contact-1',
+      channelMeta: { isDirectMessage: true },
+      continuityFallbackUserIds: [],
+      store,
+      config: makeConfig(),
+      eventBus: null,
+      promptRegistry: null,
+      preCompactionExtractionHandler: null,
+      crossChannelContinuity: makePort([]),
+      wakeReturnArtifacts: [],
+      turnSessionContext: snapshotWith(recentEntries),
+      intakeSinkGate: makeEnforceGate(),
+    });
+    const allContent = context.messages.map(message => message.content).join('\n');
+    expect(allContent).toContain(`[via ${TELEGRAM_CHANNEL}] ordinary bonded message`);
   });
 });

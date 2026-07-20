@@ -180,6 +180,21 @@ describe('resolveBondedSessionTimeline', () => {
     expect(own.map(entry => entry.id)).toEqual([1, 2]);
   });
 
+  it('namespaces a source id of 0 to a strictly-negative foreign id (id contract holds for ids >= 0)', () => {
+    const result = resolveTimeline({
+      ownEntries: [makeEntry({ id: 1, channelId: 'discord:100' })],
+      crossChannelContinuity: makePort([activeChannel('telegram:777')]),
+      store: makeStore({
+        'telegram:777': [makeEntry({ id: 0, channelId: 'telegram:777', content: 'zero-id message' })],
+      }),
+    });
+    const foreign = result?.entries.filter(entry => parseChannelBondEntryMarker(entry.metadata)) ?? [];
+    expect(foreign).toHaveLength(1);
+    // `-0 < 0` is false in JS; the -1 offset keeps the id strictly negative.
+    expect(foreign[0].id).toBeLessThan(0);
+    expect(Object.is(foreign[0].id, -0)).toBe(false);
+  });
+
   it('returns null when the current channel platform is not part of the bonded set', () => {
     const result = resolveTimeline({
       bond: { bondedPlatforms: ['telegram'], trustLevel: 'primary' },

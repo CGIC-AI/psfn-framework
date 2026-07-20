@@ -840,6 +840,17 @@ export async function buildSessionContext(params: BuildSessionContextParams): Pr
     sourceSpanCount: memoryIncludedCount || undefined,
     notes: [DERIVED_DETAIL_LOSS_NOTE, DERIVED_EMOTIONAL_TEXTURE_NOTE],
   });
+  // Channel bonding: foreign bonded entries carry namespaced negative ids and
+  // are never compacted (compaction coverage is keyed on own-channel ids). The
+  // compaction TRIGGER and the compactor must both run on own-channel entries
+  // only — otherwise up to 40 pulled-in foreign entries inflate the token total,
+  // force foreground compaction, and summarize away the user's OWN DM history
+  // while the foreign entries bypass compaction entirely (net: enabling bonding
+  // degrades own history). The bond marker is authoritative for this split.
+  const bondedForeignRecent = recent.filter(entry => isBondedForeignEntry(entry));
+  const ownChannelRecent = bondedForeignRecent.length > 0
+    ? recent.filter(entry => !isBondedForeignEntry(entry))
+    : recent;
   const baseSystemTokenCount = countTokens(params.systemPrompt);
   const hasCoreMemorySection = params.coreMemoryBlock.trim().length > 0;
   const coreMemorySectionText = hasCoreMemorySection
@@ -862,7 +873,7 @@ export async function buildSessionContext(params: BuildSessionContextParams): Pr
     ? params.llmProvider
     : undefined;
   const compactionCheck = shouldCompact({
-    recent,
+    recent: ownChannelRecent,
     channelVisibility,
     systemTokens,
     config: params.config,
@@ -879,17 +890,13 @@ export async function buildSessionContext(params: BuildSessionContextParams): Pr
 
   // Explicit foreground compaction remains available for callers that opt into it.
   if (params.llmProvider && compactionMode === 'foreground') {
-    // Channel bonding: compaction coverage is keyed on own-channel entry ids
-    // (coveredUpTo). Bonded foreign entries carry negative, other-channel ids
-    // and must never reach the compactor; they are re-interleaved afterwards.
-    const bondedForeignRecent = recent.filter(entry => entry.id < 0 && isBondedForeignEntry(entry));
-    const ownCompactableRecent = bondedForeignRecent.length > 0
-      ? recent.filter(entry => !(entry.id < 0 && isBondedForeignEntry(entry)))
-      : recent;
-    const preCompactionEntryCount = ownCompactableRecent.length;
+    // Bonded foreign entries never reach the compactor (compaction coverage is
+    // keyed on own-channel ids); they are re-interleaved afterwards. Uses the
+    // same own/foreign split that gated the compaction trigger above.
+    const preCompactionEntryCount = ownChannelRecent.length;
     const result = await runAutoCompaction({
       channelId: params.channelId,
-      recent: ownCompactableRecent,
+      recent: ownChannelRecent,
       channelVisibility,
       systemTokens,
       compactionPromptText: params.compactionPromptText ?? params.turnSessionContext.compactionPromptText,
@@ -1138,7 +1145,7 @@ export async function buildSessionContext(params: BuildSessionContextParams): Pr
   // Bonded foreign entries are not own-channel source entries; keep the
   // trim accounting scoped to the channel's own log.
   const bondedEntryCount = (params.turnSessionContext.bondedEntryCount ?? 0) > 0
-    ? recent.filter(entry => entry.id < 0 && isBondedForeignEntry(entry)).length
+    ? recent.filter(entry => isBondedForeignEntry(entry)).length
     : 0;
   const trimmedEntryCount = Math.max(
     0,

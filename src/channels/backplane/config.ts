@@ -18,7 +18,9 @@ import {
 } from '../../system/trust/context-envelope.js';
 import {
   validateChannelEnvelopeLabel,
+  validateChannelClassificationEpoch,
   type ChannelEnvelopeLabel,
+  type ChannelClassificationEpoch,
 } from '../../system/trust/context-envelope.js';
 import type { ChannelType } from '../../shared/contracts/runtime.js';
 import { createCompanionId, type CompanionId } from '../../shared/routing/companion-id.js';
@@ -27,6 +29,10 @@ import {
   normalizeChannelGroupMemoryConfig,
   type ChannelGroupMemoryConfig,
 } from '../../system/config/group-memory-config.js';
+import {
+  normalizeCustomEmojiMeanings,
+  type CustomEmojiMeaningsByGuild,
+} from '../shared/reaction-surface.js';
 
 const log = createComponentLogger('ChannelConfig');
 
@@ -79,12 +85,24 @@ export interface DiscordAccountConfig {
   heartbeatChannelId: string;
   allowedBotUserIds: string[];
   groupMemory: ChannelGroupMemoryConfig;
+  /**
+   * jp36.3.1.2: per-guild custom-emoji one-line meanings, keyed by guild id.
+   * Guild-custom emojis are only surfaced to the companion when they carry a
+   * meaning here; unknown custom emojis are excluded.
+   */
+  customEmojiMeanings?: CustomEmojiMeaningsByGuild;
 }
 
 export interface DiscordChannelConfig {
   heartbeatChannelId: string;
   allowedBotUserIds: string[];
   groupMemory: ChannelGroupMemoryConfig;
+  /**
+   * jp36.3.1.2: per-guild custom-emoji one-line meanings, keyed by guild id.
+   * Guild-custom emojis are only surfaced to the companion when they carry a
+   * meaning here; unknown custom emojis are excluded.
+   */
+  customEmojiMeanings?: CustomEmojiMeaningsByGuild;
   /** Multi-companion (sprint-10 W1): companion that owns this channel account. */
   companionId?: CompanionId;
   /**
@@ -140,6 +158,14 @@ export interface CompanionUiChannelConfig {
 export interface ChannelContextEnvelopeConfig {
   /** Exact channel-id keyed envelope labels. */
   channels: Record<string, ChannelEnvelopeLabel>;
+  /**
+   * Operator-signed invite-only → public classification-epoch boundaries
+   * (jp36.6). Append-only audit records written by the Garden click-to-accept
+   * demotion flow; a channel label carrying
+   * `classificationSource: 'operator_confirmed'` is rejected fail-closed unless
+   * a matching epoch record authorizes it.
+   */
+  classificationEpochs: ChannelClassificationEpoch[];
 }
 
 export interface RuntimeChannelsConfig {
@@ -221,7 +247,7 @@ export function parseCompanionUiSection(
 }
 
 export function createDefaultChannelContextEnvelopeConfig(): ChannelContextEnvelopeConfig {
-  return { channels: {} };
+  return { channels: {}, classificationEpochs: [] };
 }
 
 /**
@@ -235,29 +261,67 @@ export function parseContextEnvelopeSection(
   const section = parseSectionObject(scopedRoot, 'contextEnvelope');
   if (!section) return createDefaultChannelContextEnvelopeConfig();
 
-  const unknownKeys = Object.keys(section).filter(key => key !== 'channels');
+  const supportedKeys = ['channels', 'classificationEpochs'];
+  const unknownKeys = Object.keys(section).filter(key => !supportedKeys.includes(key));
   if (unknownKeys.length > 0) {
     throw new Error(`channels.json.contextEnvelope has unsupported keys: ${unknownKeys.join(', ')}`);
   }
 
+  const channels: Record<string, ChannelEnvelopeLabel> = {};
   const channelsRaw = section.channels;
-  if (channelsRaw === undefined) return createDefaultChannelContextEnvelopeConfig();
-  if (!isRecord(channelsRaw)) {
-    throw new Error('channels.json.contextEnvelope.channels must be an object');
+  if (channelsRaw !== undefined) {
+    if (!isRecord(channelsRaw)) {
+      throw new Error('channels.json.contextEnvelope.channels must be an object');
+    }
+    for (const [rawChannelId, rawLabel] of Object.entries(channelsRaw)) {
+      const channelId = rawChannelId.trim();
+      if (!channelId) {
+        throw new Error('channels.json.contextEnvelope.channels keys must be non-empty channel ids');
+      }
+      channels[channelId] = validateChannelEnvelopeLabel(
+        rawLabel,
+        `channels.json.contextEnvelope.channels.${rawChannelId}`,
+      );
+    }
   }
 
-  const channels: Record<string, ChannelEnvelopeLabel> = {};
-  for (const [rawChannelId, rawLabel] of Object.entries(channelsRaw)) {
-    const channelId = rawChannelId.trim();
-    if (!channelId) {
-      throw new Error('channels.json.contextEnvelope.channels keys must be non-empty channel ids');
+  // Room-classification epochs (jp36.6): operator-signed invite-only → public
+  // demotion boundaries. Validate the array fail-closed.
+  const classificationEpochs: ChannelClassificationEpoch[] = [];
+  const epochsRaw = section.classificationEpochs;
+  if (epochsRaw !== undefined) {
+    if (!Array.isArray(epochsRaw)) {
+      throw new Error('channels.json.contextEnvelope.classificationEpochs must be an array');
     }
-    channels[channelId] = validateChannelEnvelopeLabel(
-      rawLabel,
-      `channels.json.contextEnvelope.channels.${rawChannelId}`,
-    );
+    epochsRaw.forEach((rawEpoch, index) => {
+      classificationEpochs.push(
+        validateChannelClassificationEpoch(
+          rawEpoch,
+          `channels.json.contextEnvelope.classificationEpochs[${index}]`,
+        ),
+      );
+    });
   }
-  return { channels };
+
+  // Write-gate (jp36.6.2): `classificationSource: 'operator_confirmed'` is an
+  // operator DECISION that later authority logic (jp36.6.3) trusts. It is only
+  // legitimate when backed by an operator-signed epoch record, so a confirmed
+  // label without a matching invite-only → public epoch for its channel is
+  // rejected fail-closed. This closes the hole where any owner-file author could
+  // self-assert confirmation: the marker can only be written together with the
+  // epoch record the click-to-accept demotion flow produces.
+  const epochChannelIds = new Set(classificationEpochs.map(epoch => epoch.channelId));
+  for (const [channelId, label] of Object.entries(channels)) {
+    if (label.classificationSource === 'operator_confirmed' && !epochChannelIds.has(channelId)) {
+      throw new Error(
+        `channels.json.contextEnvelope.channels.${channelId} sets classificationSource `
+        + "'operator_confirmed' without a matching classificationEpochs record; the operator "
+        + 'marker is only writable through the Garden click-to-accept demotion flow',
+      );
+    }
+  }
+
+  return { channels, classificationEpochs };
 }
 
 function parseBoolean(value: unknown): boolean | undefined {
@@ -432,6 +496,7 @@ const DISCORD_ACCOUNT_ALLOWED_KEYS = new Set([
   'heartbeatChannelId',
   'allowedBotUserIds',
   'groupMemory',
+  'customEmojiMeanings',
 ]);
 
 /**
@@ -524,6 +589,14 @@ function parseDiscordAccountsSection(
         ?? [],
       groupMemory: normalizeChannelGroupMemoryConfig(entry.groupMemory, `${fieldName}.groupMemory`)
         ?? createDefaultChannelGroupMemoryConfig(),
+      ...(Object.hasOwn(entry, 'customEmojiMeanings')
+        ? {
+          customEmojiMeanings: normalizeCustomEmojiMeanings(
+            entry.customEmojiMeanings,
+            `${fieldName}.customEmojiMeanings`,
+          ),
+        }
+        : {}),
     });
   });
 
@@ -839,6 +912,14 @@ export function loadRuntimeChannelsConfig(
         discordConfig.groupMemory,
         'channels.json.discord.groupMemory',
       ) ?? createDefaultChannelGroupMemoryConfig(),
+      ...(Object.hasOwn(discordConfig, 'customEmojiMeanings')
+        ? {
+          customEmojiMeanings: normalizeCustomEmojiMeanings(
+            discordConfig.customEmojiMeanings,
+            'channels.json.discord.customEmojiMeanings',
+          ),
+        }
+        : {}),
       ...(discordCompanionId ? { companionId: discordCompanionId } : {}),
       ...(discordAccounts ? { accounts: discordAccounts } : {}),
     },

@@ -15,6 +15,7 @@ const OWNER_FILE_SEEDS = [
   ['backup.seed.json', 'backup.json'],
   ['skills.seed.json', 'skills.json'],
   ['intake-policy.seed.json', 'intake-policy.json'],
+  ['companions.seed.json', 'companions.json'],
 ] as const;
 
 const seedDir = resolve(process.env.CONFIG_DIR?.trim() || 'config');
@@ -37,7 +38,6 @@ try {
     companionDataDir,
     seedDir,
     defaultContextWindow: 128_000,
-    multiCompanion: false,
     fleetAuth: false,
   });
   if (!result.ok) {

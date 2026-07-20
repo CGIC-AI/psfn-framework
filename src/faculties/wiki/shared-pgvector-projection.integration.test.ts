@@ -140,6 +140,9 @@ describe('shared_wiki_chunks shared-schema integration (s10f9)', () => {
           { version: 6, name: 'icp-fatigue-turn-reservations' },
           { version: 7, name: 'icp-fatigue-delivery-fence' },
           { version: 8, name: 'shared-wiki-caretaker-proposals' },
+          { version: 9, name: 'companion-social-pot' },
+          { version: 10, name: 'speaking-arbiter' },
+          { version: 11, name: 'speaking-arbiter-charge-association' },
         ]);
 
         // Idempotent re-provisioning (advisory-lock serialized).
@@ -147,7 +150,7 @@ describe('shared_wiki_chunks shared-schema integration (s10f9)', () => {
         const ledgerAgain = await pool.query<{ count: string }>(
           `SELECT COUNT(*)::text AS count FROM shared.shared_schema_migrations`,
         );
-        expect(ledgerAgain.rows[0]?.count).toBe('8');
+        expect(ledgerAgain.rows[0]?.count).toBe('11');
       } finally {
         await pool.end();
         await store.close();

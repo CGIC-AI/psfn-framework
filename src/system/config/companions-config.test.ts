@@ -11,8 +11,6 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import {
   COMPANIONS_FILE_NAME,
-  MULTI_COMPANION_ENV_VAR,
-  isMultiCompanionEnabled,
   loadCompanionsConfig,
   resolveCompanionFleet,
   resolveCompanionFleetPaths,
@@ -239,35 +237,30 @@ describe('companions owner-file config', () => {
     });
   });
 
-  describe('resolveCompanionFleet (fail-closed both ways)', () => {
-    it('returns undefined when flag off and file absent (default topology)', () => {
+  describe('resolveCompanionFleet (manifest always required)', () => {
+    it('refuses to start when the manifest is missing', () => {
       const dataDir = makeDataDir();
-      expect(resolveCompanionFleet({ dataDir, multiCompanion: false })).toBeUndefined();
+      expect(() => resolveCompanionFleet({ dataDir }))
+        .toThrow(/fleet manifest is required but missing/);
     });
 
-    it('refuses to start when flag on but file missing', () => {
-      const dataDir = makeDataDir();
-      expect(() => resolveCompanionFleet({ dataDir, multiCompanion: true }))
-        .toThrow(/is enabled but the fleet manifest is missing/);
-    });
-
-    it('refuses to start when flag off but file present', () => {
+    it('returns the validated fleet when the manifest is valid', () => {
       const dataDir = makeDataDir();
       writeCompanionsFile(dataDir, VALID_FLEET);
-      expect(() => resolveCompanionFleet({ dataDir, multiCompanion: false }))
-        .toThrow(/present at .* but PSFN_MULTI_COMPANION is not enabled/);
+      expect(resolveCompanionFleet({ dataDir })).toEqual(VALID_FLEET);
     });
 
-    it('returns the validated fleet when flag on and file valid', () => {
+    it('returns a one-entry fleet (single-companion is a fleet of one)', () => {
       const dataDir = makeDataDir();
-      writeCompanionsFile(dataDir, VALID_FLEET);
-      expect(resolveCompanionFleet({ dataDir, multiCompanion: true })).toEqual(VALID_FLEET);
+      const oneEntry: CompanionsFleetConfig = { companions: [VALID_FLEET.companions[0]] };
+      writeCompanionsFile(dataDir, oneEntry);
+      expect(resolveCompanionFleet({ dataDir })).toEqual(oneEntry);
     });
 
-    it('fails closed when flag on and file invalid', () => {
+    it('fails closed when the manifest is invalid', () => {
       const dataDir = makeDataDir();
       writeCompanionsFile(dataDir, { companions: [{ companionId: 'bad' }] });
-      expect(() => resolveCompanionFleet({ dataDir, multiCompanion: true }))
+      expect(() => resolveCompanionFleet({ dataDir }))
         .toThrow(/Invalid companions config/);
     });
   });
@@ -377,26 +370,6 @@ describe('companions owner-file config', () => {
         .toThrow(/WORKSPACE_PATH/);
       expect(() => resolveCompanionRuntimeIdentity({ ...valid, workspacePath: undefined }))
         .toThrow(/WORKSPACE_PATH/);
-    });
-  });
-
-  describe('isMultiCompanionEnabled', () => {
-    it('defaults off when unset or empty', () => {
-      expect(isMultiCompanionEnabled({})).toBe(false);
-      expect(isMultiCompanionEnabled({ [MULTI_COMPANION_ENV_VAR]: '   ' })).toBe(false);
-    });
-
-    it('parses truthy and falsy flag values', () => {
-      expect(isMultiCompanionEnabled({ [MULTI_COMPANION_ENV_VAR]: '1' })).toBe(true);
-      expect(isMultiCompanionEnabled({ [MULTI_COMPANION_ENV_VAR]: 'true' })).toBe(true);
-      expect(isMultiCompanionEnabled({ [MULTI_COMPANION_ENV_VAR]: 'on' })).toBe(true);
-      expect(isMultiCompanionEnabled({ [MULTI_COMPANION_ENV_VAR]: '0' })).toBe(false);
-      expect(isMultiCompanionEnabled({ [MULTI_COMPANION_ENV_VAR]: 'false' })).toBe(false);
-    });
-
-    it('fails closed on an unparseable flag value', () => {
-      expect(() => isMultiCompanionEnabled({ [MULTI_COMPANION_ENV_VAR]: 'maybe' }))
-        .toThrow(/Invalid PSFN_MULTI_COMPANION/);
     });
   });
 });

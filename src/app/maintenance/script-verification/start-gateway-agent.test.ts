@@ -67,6 +67,21 @@ function seedStartupOwnerRoots(systemDataDir: string, companionDataDirs: readonl
       copyFileSync(join(repoRoot, 'config', seedFile), join(root, ownerFile));
     }
   }
+  // The companions.json fleet manifest is mandatory. Seed a one-entry
+  // (single-companion) manifest by default; fleet tests overwrite it with a
+  // multi-entry manifest after calling this helper.
+  writeFileSync(
+    join(systemDataDir, 'companions.json'),
+    `${JSON.stringify({
+      companions: [{
+        companionId: '11111111-1111-4111-8111-111111111111',
+        companionDataDir: 'companion',
+        characterCardPath: 'companion/companion.json',
+        postgresSchema: 'public',
+      }],
+    }, null, 2)}\n`,
+    'utf8',
+  );
 }
 
 function makeRealPreflightLauncher(): {
@@ -301,7 +316,6 @@ describe('start-gateway-agent launcher supervision', () => {
     writeFleetAuthOwnerFile(systemDataDir);
     try {
       const result = launcher.run({
-        PSFN_MULTI_COMPANION: '1',
         PSFN_FLEET_AUTH: '1',
         PSFN_RUNTIME_ROOT: runtimeRoot,
         SYSTEM_DATA_DIR: systemDataDir,
@@ -390,7 +404,7 @@ describe('start-gateway-agent launcher supervision', () => {
     try {
       const output = execFileSync('bash', ['-lc', [
         'set -euo pipefail',
-        'export PSFN_SKIP_DOTENV=true PSFN_MULTI_COMPANION=1',
+        'export PSFN_SKIP_DOTENV=true',
         `export PATH=${JSON.stringify(`${fakeBinDir}:/usr/bin:/bin`)}`,
         `export GATEWAY_SOCKET=${JSON.stringify(join(runtimeDir, 'gateway.sock'))}`,
         './scripts/start-gateway-agent.sh >first.out 2>&1 &',
@@ -440,6 +454,7 @@ describe('start-gateway-agent launcher supervision', () => {
         'case "$1" in',
         '  src/app/maintenance/migrate-scheduler-owner.ts) exit 97 ;;',
         '  scripts/preflight-startup-owner-files.ts) exit 0 ;;',
+        '  scripts/resolve-companion-fleet.ts) exit 0 ;;',
         '  scripts/resolve-single-companion-auth.ts) printf "v1.agent-proof\\tv1.worker-proof\\n"; exit 0 ;;',
         '  *) sleep 30 ;;',
         'esac',
@@ -615,6 +630,7 @@ describe('start-gateway-agent launcher supervision', () => {
         'case "$1" in',
         '  src/app/maintenance/migrate-scheduler-owner.ts) exit 97 ;;',
         '  scripts/preflight-startup-owner-files.ts) exit 0 ;;',
+        '  scripts/resolve-companion-fleet.ts) exit 0 ;;',
         `  scripts/resolve-single-companion-auth.ts) printf "v1.${'a'.repeat(64)}\\tv1.${'b'.repeat(64)}\\n"; exit 0 ;;`,
         '  src/app/gateway/main.ts)',
         '    python3 - "$GATEWAY_SOCKET" <<\'PY\'',
@@ -719,6 +735,17 @@ describe('start-gateway-agent launcher supervision', () => {
       'DISCORD_TOKEN=sentinel-discord',
       'POSTGRES_DATABASE_URL=postgres://sentinel@localhost/db',
     ].join('\n'), 'utf8');
+    // loadOperatorConfig requires the mandatory companions.json manifest at the
+    // resolved systemDataDir (default './data' relative to cwd).
+    mkdirSync(join(workDir, 'data'), { recursive: true });
+    writeFileSync(join(workDir, 'data', 'companions.json'), `${JSON.stringify({
+      companions: [{
+        companionId: '22222222-2222-4222-8222-222222222222',
+        companionDataDir: 'companion',
+        characterCardPath: 'companion/companion.json',
+        postgresSchema: 'public',
+      }],
+    })}\n`, 'utf8');
     const loaderPath = join(repoRoot, 'src/system/config/load-config.ts');
     try {
       const output = execFileSync(join(repoRoot, 'node_modules/.bin/tsx'), [
@@ -820,14 +847,26 @@ describe('start-gateway-agent multi-companion supervisor', () => {
     ],
   });
 
-  it('keeps the single-companion process topology when the flag is absent', () => {
+  const oneCompanionFleet = JSON.stringify({
+    companions: [
+      {
+        companionId: '11111111-1111-4111-8111-111111111111',
+        companionDataDir: 'alpha',
+        characterCardPath: 'alpha/card.json',
+        postgresSchema: 'public',
+      },
+    ],
+  });
+
+  it('keeps the single-companion process topology for a one-entry fleet', () => {
     const launcher = readFileSync(join(repoRoot, 'scripts/start-gateway-agent.sh'), 'utf8');
-    // The helper is only invoked when the topology flag is present at all.
-    expect(launcher).toContain('if [ -z "${PSFN_MULTI_COMPANION:-}" ]; then');
-    // Supervisor branch never runs unless the flag resolved a fleet.
+    // The fleet helper is always invoked (companions.json is mandatory); a
+    // one-entry fleet yields empty output so SUPERVISOR_MODE stays 0.
+    expect(launcher).toContain('resolve_companion_fleet');
+    // Supervisor branch never runs unless the helper resolved a multi-entry fleet.
     expect(launcher).toContain('if [ "${SUPERVISOR_MODE}" -eq 1 ]; then');
-    // The normal topology still derives a separate proof for its isolated
-    // session-integrity worker before either child receives scrubbed env.
+    // The single-companion topology still derives a separate proof for its
+    // isolated session-integrity worker before either child receives scrubbed env.
     expect(launcher).toContain('scripts/resolve-single-companion-auth.ts');
     expect(launcher).toContain('resolve_single_companion_auth');
   });
@@ -850,12 +889,13 @@ describe('start-gateway-agent multi-companion supervisor', () => {
     expect(launcher).toContain('./node_modules/.bin/tsx scripts/provision-companion-fleet.ts');
   });
 
-  it('passes the companion-scoped and topology env through the scrubbed allowlist', () => {
+  it('passes the companion-scoped env through the scrubbed allowlist', () => {
     const launcher = readFileSync(join(repoRoot, 'scripts/start-gateway-agent.sh'), 'utf8');
     expect(launcher).toContain('COMPANION_PG_SCHEMA \\');
     expect(launcher).toContain('GATEWAY_COMPANION_AUTH_TOKEN \\');
     expect(launcher).toContain('GATEWAY_SESSION_INTEGRITY_AUTH_TOKEN \\');
-    expect(launcher).toContain('PSFN_MULTI_COMPANION \\');
+    // The retired PSFN_MULTI_COMPANION flag must not appear in any allowlist.
+    expect(launcher).not.toContain('PSFN_MULTI_COMPANION');
     expect(launcher).toContain('export COMPANION_ID="${companion_id}"');
     expect(launcher).toContain('export COMPANION_DATA_DIR="${companion_data_dir}"');
     expect(launcher).toContain('export CHARACTER_CARD_PATH="${character_card_path}"');
@@ -909,7 +949,7 @@ describe('start-gateway-agent multi-companion supervisor', () => {
     expect(operatorAllowlist).toContain('POSTGRES_DATABASE_URL \\');
     expect(launcher).toContain(
       'if [ "${name}" = "POSTGRES_DATABASE_URL" ] \\\n'
-      + '    && ! psfn_is_truthy_env_value "${PSFN_MULTI_COMPANION:-}"; then',
+      + '    && [ "${SUPERVISOR_MODE}" -ne 1 ]; then',
     );
     for (const secret of [
       'OPENROUTER_API_KEY',
@@ -949,7 +989,6 @@ describe('start-gateway-agent multi-companion supervisor', () => {
         env: {
           PATH: process.env.PATH,
           HOME: process.env.HOME,
-          PSFN_MULTI_COMPANION: '1',
           PSFN_FLEET_AUTH: '1',
           PSFN_RUNTIME_ROOT: workDir,
           SYSTEM_DATA_DIR: systemDataDir,
@@ -1012,7 +1051,6 @@ describe('start-gateway-agent multi-companion supervisor', () => {
         env: {
           PATH: process.env.PATH,
           HOME: process.env.HOME,
-          PSFN_MULTI_COMPANION: '1',
           PSFN_FLEET_AUTH: '1',
           PSFN_RUNTIME_ROOT: workDir,
           SYSTEM_DATA_DIR: systemDataDir,
@@ -1031,8 +1069,8 @@ describe('start-gateway-agent multi-companion supervisor', () => {
     );
   });
 
-  it('prints nothing for single-companion topology (empty fleet signal)', () => {
-    const { workDir, systemDataDir, companionDataDir } = makeFleetWorkspace(undefined);
+  it('prints nothing for single-companion topology (one-entry fleet)', () => {
+    const { workDir, systemDataDir, companionDataDir } = makeFleetWorkspace(oneCompanionFleet);
     try {
       const output = execFileSync(tsxBin, ['scripts/resolve-companion-fleet.ts'], {
         cwd: repoRoot,
@@ -1050,7 +1088,7 @@ describe('start-gateway-agent multi-companion supervisor', () => {
     }
   });
 
-  it('fails closed when the flag is on but companions.json is missing', () => {
+  it('fails closed when companions.json is missing (manifest is mandatory)', () => {
     const { workDir, systemDataDir, companionDataDir } = makeFleetWorkspace(undefined);
     let error: unknown;
     try {
@@ -1061,7 +1099,6 @@ describe('start-gateway-agent multi-companion supervisor', () => {
         env: {
           PATH: process.env.PATH,
           HOME: process.env.HOME,
-          PSFN_MULTI_COMPANION: '1',
           PSFN_FLEET_AUTH: '1',
           SYSTEM_DATA_DIR: systemDataDir,
           COMPANION_DATA_DIR: companionDataDir,
@@ -1073,32 +1110,8 @@ describe('start-gateway-agent multi-companion supervisor', () => {
       rmSync(workDir, { recursive: true, force: true });
     }
     expect(error).toBeDefined();
-    expect(String((error as { stderr?: Buffer }).stderr)).toContain('the fleet manifest is missing');
-  });
-
-  it('fails closed when companions.json is present but the flag is off', () => {
-    const { workDir, systemDataDir, companionDataDir } = makeFleetWorkspace(twoCompanionFleet);
-    let error: unknown;
-    try {
-      execFileSync(tsxBin, ['scripts/resolve-companion-fleet.ts'], {
-        cwd: repoRoot,
-        encoding: 'utf8',
-        stdio: 'pipe',
-        env: {
-          PATH: process.env.PATH,
-          HOME: process.env.HOME,
-          SYSTEM_DATA_DIR: systemDataDir,
-          COMPANION_DATA_DIR: companionDataDir,
-        },
-      });
-    } catch (caught) {
-      error = caught;
-    } finally {
-      rmSync(workDir, { recursive: true, force: true });
-    }
-    expect(error).toBeDefined();
     expect(String((error as { stderr?: Buffer }).stderr)).toContain(
-      'A fleet manifest is present',
+      'fleet manifest is required but missing',
     );
   });
 
@@ -1112,7 +1125,6 @@ describe('start-gateway-agent multi-companion supervisor', () => {
           PATH: process.env.PATH,
           HOME: process.env.HOME,
           PSFN_SKIP_DOTENV: 'true',
-          PSFN_MULTI_COMPANION: '1',
           PSFN_FLEET_AUTH: '1',
           PSFN_RUNTIME_ROOT: workDir,
           SYSTEM_DATA_DIR: systemDataDir,
@@ -1226,7 +1238,6 @@ describe('start-gateway-agent multi-companion supervisor', () => {
           PATH: `${fakeBinDir}:/usr/bin:/bin`,
           HOME: process.env.HOME,
           PSFN_SKIP_DOTENV: 'true',
-          PSFN_MULTI_COMPANION: '1',
           PSFN_FLEET_AUTH: '1',
           GATEWAY_SOCKET: join(runtimeDir, 'gateway.sock'),
           POSTGRES_DATABASE_URL: 'postgres://test:test@127.0.0.1/test',
@@ -1260,7 +1271,6 @@ describe('start-gateway-agent multi-companion supervisor', () => {
           PATH: process.env.PATH,
           HOME: process.env.HOME,
           PSFN_SKIP_DOTENV: 'true',
-          PSFN_MULTI_COMPANION: '1',
           PSFN_FLEET_AUTH: '1',
           SYSTEM_DATA_DIR: systemDataDir,
           COMPANION_DATA_DIR: companionDataDir,

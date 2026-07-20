@@ -135,7 +135,8 @@ channels are byte-identical to pre-gate behavior.
         "broadcast": false,             // optional boolean
         "contactTracking": "auto",     // auto | approval | role_gated
         "deliveryStyle": "concise",    // optional (E3.3): concise | expressive
-        "needsReview": false            // optional; migration-seeded review flag (E3.2)
+        "needsReview": false,           // optional; migration-seeded review flag (E3.2)
+        "classificationSource": "operator_confirmed" // optional (jp36.6); records an operator decision
       }
     }
   }
@@ -151,6 +152,15 @@ channels are byte-identical to pre-gate behavior.
   classification). Delivery only; persona/tone prose remains forbidden (charter rule).
 - `needsReview` (E3.2) marks a migration-seeded fail-closed label awaiting operator
   confirmation. It renders as a Garden warning badge and never changes gating.
+- `classificationSource` (jp36.6) records operator-decision provenance for the label's
+  classification. Only `operator_confirmed` is persistable — it is written by the
+  invite-only → public click-to-accept demotion flow (design bible §9.3) and upgrades the
+  resolved envelope `source` from `channel_label` to `operator_confirmed` so policy and
+  Garden can distinguish a derived default from an operator DECISION for audit. It is a
+  provenance refinement of the tier-1 channel label (never a new precedence tier) and is
+  rejected fail-closed unless paired with a tier-1 classification (`privacy` or
+  `broadcast: true`); the computed sources (`channel_label`, `operator_override`,
+  `derived_default`) are never persisted on a label.
 - Validated at load (`loadRuntimeChannelsConfig` → `parseContextEnvelopeSection`) AND
   on every owner-file save (`saveChannelsOwnerFile` re-validates fail-closed).
 - **Consumed since E3.2**: startup publishes the labels

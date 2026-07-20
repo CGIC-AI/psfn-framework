@@ -5,6 +5,7 @@ import { resolveCompanionStateDir } from '../../persistence/layout.js';
 import { loadConfig } from '../../system/config/load-config.js';
 import { hydrateJsonBackedRuntimeConfig } from '../../system/config/runtime-config.js';
 import { PER_COMPANION_OWNER_FILES } from '../../system/config/settings-contract.js';
+import { COMPANIONS_FILE_NAME } from '../../system/config/companions-config.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import { createBootstrapStarterCard } from '../../core/identity/loader.js';
 
@@ -152,6 +153,24 @@ export function createIsolatedE2ERuntime(
     writeFileSync(
       characterCardPath,
       `${JSON.stringify(createBootstrapStarterCard('E2E Companion'), null, 2)}\n`,
+      'utf8',
+    );
+    // The companions.json fleet manifest is mandatory for every deployment.
+    // A single-companion e2e run is a one-entry fleet ("a fleet of one"), which
+    // load-config treats identically to the old single-companion topology
+    // (multiCompanion=false, no tenant schema binding).
+    writeFileSync(
+      join(systemDataDir, COMPANIONS_FILE_NAME),
+      `${JSON.stringify({
+        companions: [
+          {
+            companionId: process.env.COMPANION_ID,
+            companionDataDir: 'companion-data',
+            characterCardPath: 'companion-data/companion.json',
+            postgresSchema: 'public',
+          },
+        ],
+      }, null, 2)}\n`,
       'utf8',
     );
 

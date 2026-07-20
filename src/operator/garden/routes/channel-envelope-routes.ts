@@ -6,6 +6,7 @@
 
 import { sendJson } from '../../../channels/backplane/http/primitives.js';
 import { parseAdminJsonBody } from '../request-body.js';
+import { parseRequestUrl } from '../request-url.js';
 import { exactPath } from '../route-matchers.js';
 import { isRecord } from '../../../shared/utils/types.js';
 import type { AdminSettingsService } from '../services/types.js';
@@ -14,6 +15,8 @@ import { toSanitizedMessage } from './shared.js';
 import type { AdminApiRoute, AdminAuditTimelineAppender, AdminBodyReader } from './types.js';
 
 const ADMIN_CHANNEL_ENVELOPE_API_PATH = '/api/admin/channels/context-envelope';
+const ADMIN_CHANNEL_DEMOTION_NOTICE_API_PATH = '/api/admin/channels/context-envelope/demotion-notice';
+const ADMIN_CHANNEL_DEMOTE_API_PATH = '/api/admin/channels/context-envelope/demote';
 
 export function buildAdminChannelEnvelopeRoutes(options: {
   settingsService: AdminSettingsService;
@@ -94,6 +97,81 @@ export function buildAdminChannelEnvelopeRoutes(options: {
             ok: true,
             message: result.message,
             data: settingsService.getChannelEnvelopeData(),
+          });
+        });
+      },
+    },
+    // ── Room-classification demotion flow (jp36.6.2) ──
+    // Read the click-to-accept notice + demotable status for a channel.
+    {
+      method: 'GET',
+      match: exactPath(ADMIN_CHANNEL_DEMOTION_NOTICE_API_PATH),
+      handle: (req, res) => {
+        try {
+          const url = parseRequestUrl(req, ADMIN_CHANNEL_DEMOTION_NOTICE_API_PATH);
+          const channelId = url.searchParams.get('channelId') ?? '';
+          sendJson(res, 200, settingsService.getChannelDemotionNotice(channelId));
+        } catch (error) {
+          sendJson(res, 500, { error: String(error) });
+        }
+      },
+    },
+    // Accept an invite-only → public demotion. Fail-closed: without an
+    // acknowledged notice version the demotion is blocked, and only this path
+    // stamps `classificationSource: 'operator_confirmed'` (+ the epoch record).
+    {
+      method: 'POST',
+      match: exactPath(ADMIN_CHANNEL_DEMOTE_API_PATH),
+      handle: (req, res) => {
+        withBody(req, res, (body) => {
+          const parsed = parseAdminJsonBody(body);
+          if (!parsed.ok) {
+            appendChannelEnvelopeMutationAudit(
+              'denied',
+              'Operator channel demotion failed: invalid JSON payload.',
+            );
+            sendJson(res, 400, { error: parsed.error });
+            return;
+          }
+          if (!isRecord(parsed.value) || typeof parsed.value.channelId !== 'string') {
+            appendChannelEnvelopeMutationAudit(
+              'denied',
+              'Operator channel demotion failed: missing channelId.',
+            );
+            sendJson(res, 400, { error: 'Body must be a JSON object with a string channelId' });
+            return;
+          }
+
+          const channelId = parsed.value.channelId;
+          const result = settingsService.acceptChannelDemotion({
+            channelId,
+            acknowledgedNoticeVersion: parsed.value.acknowledgedNoticeVersion,
+            ...(typeof parsed.value.actor === 'string' ? { actor: parsed.value.actor } : {}),
+          });
+          if (!result.ok) {
+            appendChannelEnvelopeMutationAudit(
+              'denied',
+              'Operator channel demotion (invite-only → public) blocked.',
+              [
+                `channelId=${channelId}`,
+                `message=${toSanitizedMessage(result.message, 'channel demotion blocked')}`,
+              ],
+            );
+            sendJson(res, 400, { error: result.message });
+            return;
+          }
+
+          appendChannelEnvelopeMutationAudit(
+            'allowed',
+            'Operator accepted an invite-only → public channel demotion via '
+              + '/api/admin/channels/context-envelope/demote; fresh disclosure epoch recorded.',
+            [`channelId=${channelId}`, `epochAt=${result.epoch?.at ?? 'unknown'}`],
+          );
+          sendJson(res, 200, {
+            ok: true,
+            message: result.message,
+            epoch: result.epoch,
+            data: result.data ?? settingsService.getChannelEnvelopeData(),
           });
         });
       },

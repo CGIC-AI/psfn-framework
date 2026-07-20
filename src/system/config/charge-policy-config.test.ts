@@ -214,6 +214,12 @@ describe('charge policy config', () => {
         seed.fatigue.channelSettingLimits.busy_human_group.maxHardCap,
       );
       expect(seed.fatigue.overcharge.reserveResponses).toBe(2);
+      expect(seed.fatigue.socialPot.capUnits).toBeGreaterThan(0);
+      expect(seed.fatigue.socialPot.perChannelDrawFraction).toBeGreaterThan(0);
+      expect(seed.fatigue.socialPot.perChannelDrawFraction).toBeLessThanOrEqual(1);
+      expect(seed.fatigue.socialPot.regenerationUnitsPerTick).toBeLessThanOrEqual(
+        seed.fatigue.socialPot.capUnits,
+      );
       expect(seed.icpCostBreaker).toEqual({ enabled: false });
     } finally {
       rmSync(root, { recursive: true, force: true });
@@ -620,6 +626,73 @@ describe('charge policy config', () => {
           },
         },
       })).toThrow('fatigue.humanAttention.channelWeights.directMention must be a finite number > 0');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('fails closed on malformed social-pot values', () => {
+    const root = mkdtempSync(join(tmpdir(), 'charge-policy-invalid-social-pot-'));
+    const dataDir = join(root, 'data');
+    mkdirSync(dataDir, { recursive: true });
+
+    try {
+      const defaultSeed = getDefaultSeedPolicy();
+
+      expect(() => saveChargePolicyConfig(dataDir, {
+        ...defaultSeed,
+        fatigue: {
+          ...defaultSeed.fatigue,
+          socialPot: {
+            ...defaultSeed.fatigue.socialPot,
+            capUnits: 0,
+          },
+        },
+      })).toThrow('fatigue.socialPot.capUnits must be a finite number > 0');
+
+      expect(() => saveChargePolicyConfig(dataDir, {
+        ...defaultSeed,
+        fatigue: {
+          ...defaultSeed.fatigue,
+          socialPot: {
+            ...defaultSeed.fatigue.socialPot,
+            perChannelDrawFraction: 1.5,
+          },
+        },
+      })).toThrow('fatigue.socialPot.perChannelDrawFraction must be <= 1');
+
+      expect(() => saveChargePolicyConfig(dataDir, {
+        ...defaultSeed,
+        fatigue: {
+          ...defaultSeed.fatigue,
+          socialPot: {
+            ...defaultSeed.fatigue.socialPot,
+            regenerationUnitsPerTick: defaultSeed.fatigue.socialPot.capUnits + 1,
+          },
+        },
+      })).toThrow(/fatigue\.socialPot\.regenerationUnitsPerTick must be <= .*fatigue\.socialPot\.capUnits/);
+
+      expect(() => saveChargePolicyConfig(dataDir, {
+        ...defaultSeed,
+        fatigue: {
+          ...defaultSeed.fatigue,
+          socialPot: {
+            ...defaultSeed.fatigue.socialPot,
+            regenerationTickMs: 1.5,
+          },
+        },
+      })).toThrow('fatigue.socialPot.regenerationTickMs must be a finite integer > 0');
+
+      expect(() => saveChargePolicyConfig(dataDir, {
+        ...defaultSeed,
+        fatigue: {
+          ...defaultSeed.fatigue,
+          socialPot: {
+            ...defaultSeed.fatigue.socialPot,
+            surchargePerRoom: 3,
+          },
+        },
+      })).toThrow('fatigue.socialPot contains unknown keys: surchargePerRoom');
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

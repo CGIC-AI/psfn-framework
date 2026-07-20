@@ -39,6 +39,24 @@ describe('hydrateJsonBackedRuntimeConfig', () => {
     );
   }
 
+  // The companions.json manifest is mandatory. A one-entry manifest is the
+  // single-companion topology (multiCompanion=false), which loadConfig treats
+  // identically to the old single-companion behavior.
+  function writeSingleCompanionManifest(dataDir: string): void {
+    writeFileSync(
+      join(dataDir, 'companions.json'),
+      `${JSON.stringify({
+        companions: [{
+          companionId: '11111111-1111-4111-8111-111111111111',
+          companionDataDir: 'companion',
+          characterCardPath: 'companion/companion.json',
+          postgresSchema: 'public',
+        }],
+      })}\n`,
+      'utf8',
+    );
+  }
+
   it('still validates the scheduler owner even though no scheduler field is projected onto config', () => {
     const dataDir = mkdtempSync(join(tmpdir(), 'psfn-runtime-config-scheduler-validation-'));
     TEMP_DIRS.push(dataDir);
@@ -52,6 +70,7 @@ describe('hydrateJsonBackedRuntimeConfig', () => {
     ]) {
       copyOwnerExample(dataDir, ownerFile);
     }
+    writeSingleCompanionManifest(dataDir);
     const schedulerPath = join(dataDir, 'scheduler.json');
     const scheduler = JSON.parse(readFileSync(schedulerPath, 'utf8')) as Record<string, unknown>;
     scheduler.backgroundMaintenance = {
@@ -80,6 +99,7 @@ describe('hydrateJsonBackedRuntimeConfig', () => {
     ]) {
       copyOwnerExample(dataDir, ownerFile);
     }
+    writeSingleCompanionManifest(dataDir);
 
     writeFileSync(join(dataDir, 'settings.json'), JSON.stringify({
       analysisWorkbenchMaxTokens: 180000,

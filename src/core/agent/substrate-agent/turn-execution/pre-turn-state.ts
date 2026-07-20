@@ -41,11 +41,16 @@ import type { TurnExecutionObservability } from './observability.js';
 import type { TurnRetrievalQueryEmbedding } from '../../../../shared/retrieval-query-embedding.js';
 import { resolveCompanionIdFromConfig } from '../../../identity/companion-runtime.js';
 import type { SessionActorKind } from '../../../session/turn-provenance.js';
+import { FREE_TIME_CHANNEL_PREFIX } from '../../../session/session-id.js';
 import { runWithRequestContext } from '../../../../primitives/llm/request-context.js';
 import {
   COMPANION_SELF_CREATION_RETRIEVAL_PURPOSE,
 } from '../../../../faculties/memory/retrieval/access-scope.js';
 import type { ArtifactSensitivitySource } from '../../../../shared/contracts/artifact-sensitivity.js';
+import type {
+  DisclosureMemorySource,
+  DisclosureWikiSource,
+} from '../../../cogsec/disclosure/generation-lineage.js';
 import type { TurnExecutionRuntime, TurnSessionIdentity } from './contracts.js';
 import { deriveContextCoherenceSessionContext } from '../../context-coherence-session-context.js';
 
@@ -103,6 +108,8 @@ export interface PreTurnComputationResult {
   memoryContextBlock: string;
   memoryContextChars: number;
   artifactSensitivitySources: ArtifactSensitivitySource[];
+  /** Content-free outbound-disclosure facts for admitted memories (bible §9.2, jp36.1.1.2). */
+  disclosureMemorySources: DisclosureMemorySource[];
   memoryManifestSeed?: ContextManifestMemorySeed;
   /**
    * E8.3: supplemental wiki RAG block. Empty unless wiki retrieval is wired,
@@ -110,6 +117,12 @@ export interface PreTurnComputationResult {
    * and assembled into the prompt AFTER memory context, never displacing it.
    */
   wikiContextBlock: string;
+  /**
+   * jp36.1.1.3: content-free outbound-disclosure facts for every wiki document
+   * rendered into `wikiContextBlock`, folded into the generation disclosure
+   * lineage at the turn seam (bible §9.2 item 3).
+   */
+  disclosureWikiSources: DisclosureWikiSource[];
   scratchpadBlock: string;
 }
 
@@ -484,8 +497,8 @@ export async function prepareTurnIdentityState(input: {
   let requestAudience: RequestAudience | undefined;
   if (
     requesterProvenance === 'self_directed'
-    && message.channelId.startsWith('internal:free-time:')
-    && message.channelId.length > 'internal:free-time:'.length
+    && message.channelId.startsWith(FREE_TIME_CHANNEL_PREFIX)
+    && message.channelId.length > FREE_TIME_CHANNEL_PREFIX.length
   ) {
     requestAudience = 'self';
   } else if (
@@ -1015,8 +1028,10 @@ export async function computePreTurnState(input: {
     memoryContextBlock,
     memoryContextChars,
     artifactSensitivitySources: activeMemoryContext?.artifactSensitivitySources?.map(source => ({ ...source })) ?? [],
+    disclosureMemorySources: activeMemoryContext?.disclosureMemorySources?.map(source => ({ ...source })) ?? [],
     ...(activeMemoryContext?.manifestSeed ? { memoryManifestSeed: activeMemoryContext.manifestSeed } : {}),
     wikiContextBlock,
+    disclosureWikiSources: wikiContext?.disclosureWikiSources?.map(source => ({ ...source })) ?? [],
     scratchpadBlock,
   };
 }

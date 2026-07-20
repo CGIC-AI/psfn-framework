@@ -34,6 +34,7 @@ describe('constructed Garden route authorization', () => {
       subsystemHealthService: service,
       toolConformanceService: service,
       icpAutonomyService: service,
+      roomArbiterService: service,
       settingsService: service,
       sharedWorkspaceService: service,
       intakeQuarantineService: service,

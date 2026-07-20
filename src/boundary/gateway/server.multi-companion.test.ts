@@ -449,15 +449,15 @@ describe('resolveGatewayMultiCompanionConfig', () => {
     });
   });
 
-  it('fails closed when routing is declared while the flag is off', () => {
+  it('fails closed when routing is declared for a single-companion deployment', () => {
     const channels = baseChannels();
     channels.discord.companionId = '11111111-1111-4111-8111-111111111111';
     expect(() => resolveGatewayMultiCompanionConfig({}, channels, EMPTY_SATELLITE_REGISTRY)).toThrow(
-      /PSFN_MULTI_COMPANION is not enabled/,
+      /single-companion \(one-entry companions\.json\) deployment/,
     );
   });
 
-  it('fails closed when discord.accounts is declared while the flag is off', () => {
+  it('fails closed when discord.accounts is declared for a single-companion deployment', () => {
     const channels = baseChannels();
     channels.discord.accounts = [{
       accountId: 'acct-a',
@@ -469,7 +469,7 @@ describe('resolveGatewayMultiCompanionConfig', () => {
       groupMemory: { channelOverrides: {} } as any,
     }];
     expect(() => resolveGatewayMultiCompanionConfig({}, channels, EMPTY_SATELLITE_REGISTRY)).toThrow(
-      /discord\.accounts \[acct-a\] but PSFN_MULTI_COMPANION is not enabled/,
+      /discord\.accounts \[acct-a\] but this is a single-companion/,
     );
   });
 
@@ -506,7 +506,7 @@ describe('resolveGatewayMultiCompanionConfig', () => {
     })).toThrow(/satellites\.json.*absent from companions\.json/);
   });
 
-  it('does not silently ignore satellite ownership while multi-companion mode is off', () => {
+  it('does not silently ignore satellite ownership for a single-companion deployment', () => {
     expect(() => resolveGatewayMultiCompanionConfig({}, baseChannels(), {
       schemaVersion: 1,
       enabled: true,
@@ -517,7 +517,7 @@ describe('resolveGatewayMultiCompanionConfig', () => {
         companionId: '11111111-1111-4111-8111-111111111111',
         endpoints: [],
       }],
-    })).toThrow(/PSFN_MULTI_COMPANION is not enabled/);
+    })).toThrow(/single-companion \(one-entry companions\.json\) deployment/);
   });
 
   it('maps channel types onto routable surfaces fail-closed', () => {

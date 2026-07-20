@@ -193,6 +193,18 @@ the multi-companion flag.
   unknown presence) fails closed to a closed window. Public rooms and ordinary
   Discord/Telegram group channels are never windowed (byte-identical prior
   behavior).
+- **Location-scoped Discord voice channels (jp36.9.3).** A Discord voice channel
+  (`discord-voice:<id>` session channel) is presence-based — only those present
+  while it is live share the context; scrollback does not exist. It rides the
+  same `RoomContentWindowPort` seam, floored on the bot's own voice-channel
+  join: joining opens the window at the join time, leaving closes it, and
+  re-joining opens a fresh window (no prior-visit transcripts). Wired
+  unconditionally (independent of multi-companion mode) in
+  `wireCompanionPresenceContext` via `createVoicePresenceWindowPort` /
+  `registerVoicePresenceWindow` (`src/core/session/voice-presence-window.ts`),
+  composed with the companion-room window through
+  `composeRoomContentWindowPorts`. Ordinary Discord voice is thus the test
+  substrate for future virtual-environment Locations (design bible §17/§20.5).
 
 Multi-companion topology, fleet operations, and the shared-world wiki are
 documented in [`docs/multi-companion.md`](./multi-companion.md).

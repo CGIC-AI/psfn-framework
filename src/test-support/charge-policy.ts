@@ -117,6 +117,25 @@ export function makeTestFatiguePolicyConfig(): FatiguePolicyConfig {
         activeWorkOrResearch: true,
         explicitPeerInvitation: true,
       },
+      roomEpisodePressure: {
+        halfLifeMs: 30 * 60_000,
+        windowMs: 2 * 60 * 60_000,
+        replyPressureUnits: 1,
+        reactionPressureUnits: 0.1,
+        elevatedThreshold: 4,
+        wrapUpThreshold: 8,
+        maxLeaseThresholdBias: 0.3,
+      },
+      roomEpisodeCircuitBreaker: {
+        tripThreshold: 12,
+        resetThreshold: 8,
+      },
+    },
+    socialPot: {
+      capUnits: 24,
+      perChannelDrawFraction: 0.34,
+      regenerationTickMs: 60 * 60_000,
+      regenerationUnitsPerTick: 1,
     },
     humanAttention: {
       enabled: true,

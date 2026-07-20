@@ -1,6 +1,5 @@
 import { resolveRuntimePathLayout } from '../src/persistence/layout.js';
 import {
-  isMultiCompanionEnabled,
   resolveCompanionFleet,
   resolveCompanionFleetPaths,
   type ResolvedCompanionsFleetConfig,
@@ -33,12 +32,16 @@ export function resolveConfiguredCompanionFleet(
     tempDir: env.PSFN_TEMP_DIR,
     backupsDir: env.BACKUP_ROOT_DIR,
   });
+  // The companions.json manifest is mandatory (resolveCompanionFleet fails
+  // closed if it is missing). A one-entry manifest is the single-companion
+  // topology: the shell launcher runs one gateway+agent directly without the
+  // fleet supervisor, so signal that with null. Only a multi-entry fleet needs
+  // the local fleet target registry.
   const rawFleet = resolveCompanionFleet({
     dataDir: runtimePathLayout.systemDataDir,
-    multiCompanion: isMultiCompanionEnabled(env),
     seedDir: env.CONFIG_DIR?.trim() ? env.CONFIG_DIR : undefined,
   });
-  if (!rawFleet) return null;
+  if (rawFleet.companions.length <= 1) return null;
   return resolveCompanionFleetPaths(rawFleet, runtimePathLayout.runtimeRootDir, [
     { label: 'systemDataDir', path: runtimePathLayout.systemDataDir },
     { label: 'companionDataDir', path: runtimePathLayout.companionDataDir },

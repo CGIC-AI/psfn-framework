@@ -30,6 +30,9 @@ import {
   type FatiguePolicyOverchargeConfig,
   type FatiguePolicyResponseBudget,
   type FatiguePolicyStateThresholds,
+  type FatigueRoomEpisodeCircuitBreakerConfig,
+  type FatigueRoomEpisodePressureConfig,
+  type FatigueSocialPotConfig,
   type HumanAttentionPressureConfig,
   type IcpCostBreakerConfig,
 } from '../../shared/contracts/charge-policy.js';
@@ -435,6 +438,95 @@ function parseFatigueOverchargeConfig(
   };
 }
 
+function parseFatigueRoomEpisodePressureConfig(
+  raw: unknown,
+  fieldPath: string,
+): FatigueRoomEpisodePressureConfig {
+  if (!isRecord(raw)) {
+    throw new Error(`Invalid charge policy: ${fieldPath} must be an object`);
+  }
+  assertNoUnknownKeys(raw, [
+    'halfLifeMs',
+    'windowMs',
+    'replyPressureUnits',
+    'reactionPressureUnits',
+    'elevatedThreshold',
+    'wrapUpThreshold',
+    'maxLeaseThresholdBias',
+  ], fieldPath);
+  const halfLifeMs = parsePositiveInteger(raw.halfLifeMs, `${fieldPath}.halfLifeMs`);
+  const windowMs = parsePositiveInteger(raw.windowMs, `${fieldPath}.windowMs`);
+  if (windowMs < halfLifeMs) {
+    throw new Error(`Invalid charge policy: ${fieldPath}.windowMs must be >= ${fieldPath}.halfLifeMs`);
+  }
+  const replyPressureUnits = parsePositiveNumber(
+    raw.replyPressureUnits,
+    `${fieldPath}.replyPressureUnits`,
+  );
+  const reactionPressureUnits = parseNonNegativeNumber(
+    raw.reactionPressureUnits,
+    `${fieldPath}.reactionPressureUnits`,
+  );
+  if (reactionPressureUnits > replyPressureUnits) {
+    throw new Error(
+      `Invalid charge policy: ${fieldPath}.reactionPressureUnits must be <= ${fieldPath}.replyPressureUnits`,
+    );
+  }
+  const elevatedThreshold = parsePositiveNumber(
+    raw.elevatedThreshold,
+    `${fieldPath}.elevatedThreshold`,
+  );
+  const wrapUpThreshold = parsePositiveNumber(
+    raw.wrapUpThreshold,
+    `${fieldPath}.wrapUpThreshold`,
+  );
+  if (wrapUpThreshold <= elevatedThreshold) {
+    throw new Error(
+      `Invalid charge policy: ${fieldPath}.wrapUpThreshold must be > ${fieldPath}.elevatedThreshold`,
+    );
+  }
+  const maxLeaseThresholdBias = parsePositiveNumber(
+    raw.maxLeaseThresholdBias,
+    `${fieldPath}.maxLeaseThresholdBias`,
+  );
+  return {
+    halfLifeMs,
+    windowMs,
+    replyPressureUnits,
+    reactionPressureUnits,
+    elevatedThreshold,
+    wrapUpThreshold,
+    maxLeaseThresholdBias,
+  };
+}
+
+function parseFatigueRoomEpisodeCircuitBreakerConfig(
+  raw: unknown,
+  fieldPath: string,
+  wrapUpThreshold: number,
+): FatigueRoomEpisodeCircuitBreakerConfig {
+  if (!isRecord(raw)) {
+    throw new Error(`Invalid charge policy: ${fieldPath} must be an object`);
+  }
+  assertNoUnknownKeys(raw, ['tripThreshold', 'resetThreshold'], fieldPath);
+  const tripThreshold = parsePositiveNumber(raw.tripThreshold, `${fieldPath}.tripThreshold`);
+  const resetThreshold = parsePositiveNumber(raw.resetThreshold, `${fieldPath}.resetThreshold`);
+  // Law 36 / charter §8.11: the breaker sits above ordinary healthy use — it may
+  // only trip PAST the wrap-up band, so graceful wrap-up is always invited first.
+  if (tripThreshold <= wrapUpThreshold) {
+    throw new Error(
+      `Invalid charge policy: ${fieldPath}.tripThreshold must be > roomEpisodePressure.wrapUpThreshold (${wrapUpThreshold})`,
+    );
+  }
+  // Hysteresis: reset strictly below trip so the breaker cannot flap on jitter.
+  if (resetThreshold >= tripThreshold) {
+    throw new Error(
+      `Invalid charge policy: ${fieldPath}.resetThreshold must be < ${fieldPath}.tripThreshold`,
+    );
+  }
+  return { tripThreshold, resetThreshold };
+}
+
 function parseFatigueSocialRegulationConfig(
   raw: unknown,
   fieldPath: string,
@@ -452,7 +544,18 @@ function parseFatigueSocialRegulationConfig(
     'deferredPressureUnits',
     'unansweredPressureUnits',
     'continuationEvidence',
+    'roomEpisodePressure',
+    'roomEpisodeCircuitBreaker',
   ], fieldPath);
+  const roomEpisodePressure = parseFatigueRoomEpisodePressureConfig(
+    raw.roomEpisodePressure,
+    `${fieldPath}.roomEpisodePressure`,
+  );
+  const roomEpisodeCircuitBreaker = parseFatigueRoomEpisodeCircuitBreakerConfig(
+    raw.roomEpisodeCircuitBreaker,
+    `${fieldPath}.roomEpisodeCircuitBreaker`,
+    roomEpisodePressure.wrapUpThreshold,
+  );
   const relationshipPressureHalfLifeMs = parsePositiveInteger(
     raw.relationshipPressureHalfLifeMs,
     `${fieldPath}.relationshipPressureHalfLifeMs`,
@@ -518,6 +621,56 @@ function parseFatigueSocialRegulationConfig(
         `${fieldPath}.continuationEvidence.explicitPeerInvitation`,
       ),
     },
+    roomEpisodePressure,
+    roomEpisodeCircuitBreaker,
+  };
+}
+
+function parseFatigueSocialPotConfig(
+  raw: unknown,
+  fieldPath: string,
+): FatigueSocialPotConfig {
+  if (!isRecord(raw)) {
+    throw new Error(`Invalid charge policy: ${fieldPath} must be an object`);
+  }
+  assertNoUnknownKeys(
+    raw,
+    [
+      'capUnits',
+      'perChannelDrawFraction',
+      'regenerationTickMs',
+      'regenerationUnitsPerTick',
+    ],
+    fieldPath,
+  );
+  const capUnits = parsePositiveNumber(raw.capUnits, `${fieldPath}.capUnits`);
+  const perChannelDrawFraction = parsePositiveNumber(
+    raw.perChannelDrawFraction,
+    `${fieldPath}.perChannelDrawFraction`,
+  );
+  if (perChannelDrawFraction > 1) {
+    throw new Error(
+      `Invalid charge policy: ${fieldPath}.perChannelDrawFraction must be <= 1`,
+    );
+  }
+  const regenerationTickMs = parsePositiveInteger(
+    raw.regenerationTickMs,
+    `${fieldPath}.regenerationTickMs`,
+  );
+  const regenerationUnitsPerTick = parsePositiveNumber(
+    raw.regenerationUnitsPerTick,
+    `${fieldPath}.regenerationUnitsPerTick`,
+  );
+  if (regenerationUnitsPerTick > capUnits) {
+    throw new Error(
+      `Invalid charge policy: ${fieldPath}.regenerationUnitsPerTick must be <= ${fieldPath}.capUnits`,
+    );
+  }
+  return {
+    capUnits,
+    perChannelDrawFraction,
+    regenerationTickMs,
+    regenerationUnitsPerTick,
   };
 }
 
@@ -620,6 +773,7 @@ function parseFatiguePolicyConfig(
       'stateThresholds',
       'overcharge',
       'socialRegulation',
+      'socialPot',
       'humanAttention',
     ],
     fieldPath,
@@ -659,6 +813,10 @@ function parseFatiguePolicyConfig(
     socialRegulation: parseFatigueSocialRegulationConfig(
       raw.socialRegulation,
       `${fieldPath}.socialRegulation`,
+    ),
+    socialPot: parseFatigueSocialPotConfig(
+      raw.socialPot,
+      `${fieldPath}.socialPot`,
     ),
     humanAttention: parseHumanAttentionPressureConfig(
       raw.humanAttention,

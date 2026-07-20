@@ -40,9 +40,18 @@ import type { VisionIntakeImageScreenerPort } from './substrate-agent/vision-att
 import type { LLMProviderPort, MemoryProvider, MemoryExtractor, ScratchpadProvider, WikiRetrievalPort } from './contracts.js';
 import type { TrustLevel } from '../../system/trust/types.js';
 import {
+  classifyChannelDisclosure,
   resolveChannelResponseStyle,
   type ChannelMeta,
 } from '../../system/trust/policy.js';
+import { currentChannelClassificationEpoch } from '../../system/trust/runtime-classification-epochs.js';
+import {
+  composeEgressDisclosureDecision,
+  deriveDisclosureDestination,
+  isDisclosureSocialEgressInvocation,
+  type CapsuleCustodyService,
+  type DisclosureLineage,
+} from '../cogsec/disclosure/index.js';
 import type { ChannelPromptRegistryPort } from '../../channels/backplane/registry-port.js';
 import type { MessageHandlerOptions } from '../../channels/backplane/types.js';
 import type { PromptComposer } from '../identity/prompt-composer.js';
@@ -172,6 +181,7 @@ import {
 } from './substrate-agent/model-runtime.js';
 import {
   buildTurnBudgetCharacteristics as buildTurnBudgetCharacteristicsForRuntime,
+  resolveAvailableReactions as resolveAvailableReactionsForRuntime,
   resolveChannelType as resolveChannelTypeForRuntime,
   resolveTaskKind as resolveTaskKindForRuntime,
 } from './substrate-agent/channel-routing-runtime.js';
@@ -384,6 +394,10 @@ export class SubstrateAgent {
   // Pluggable memory — null until memory system is wired
   memoryProvider: MemoryProvider | null = null;
   artifactApprovalQueue: ApprovalQueuePort | null = null;
+  // Durable Share Capsule custody riding the same approval queue (jp36.7.1.2).
+  // Consumers (Garden approvals surface jp36.7.2, companion publication tool
+  // jp36.7.3) authorize exact-replay + revoke through this handle; null until wired.
+  shareCapsuleCustody: CapsuleCustodyService | null = null;
   artifactApprovalNotifier: NotificationPort | null = null;
   shareApprovedArtifacts: ((
     attachments: readonly Attachment[],
@@ -406,6 +420,13 @@ export class SubstrateAgent {
    * at tool-invocation time; empty outside a turn.
    */
   private currentTurnIntakeEnvelopes: readonly IntakeEnvelopeSnapshot[] = [];
+  /**
+   * Per-turn outbound disclosure lineage (bible §9.2), set once the generation
+   * context is folded and cleared at turn end. The egress tool guard composes
+   * `assessDisclosure` over this against a derived social destination (jp36.1.3).
+   * Undefined until built — an outward social send with no lineage fails closed.
+   */
+  private currentTurnDisclosureLineage: DisclosureLineage | undefined;
   /**
    * mmo9.6.1: transport-agnostic cancellation identity of the CURRENT active
    * turn (from `message.routing.cancellationId` or the dispatch options).
@@ -840,19 +861,65 @@ export class SubstrateAgent {
     const gate = this.intakeSinkGate;
     if (!gate) return null;
     return {
-      evaluate: ({ toolName, requiredTokens }) => {
+      evaluate: ({ toolName, requiredTokens, params }) => {
         if (!requiredTokens.some(isEgressCapabilityToken)) return null;
         const envelopes = this.currentTurnIntakeEnvelopes;
         const access = gate.evaluate('tool_egress', envelopes, { toolName });
-        if (!access.allowed) {
-          return { allowed: false, noticeText: INTAKE_FIREWALL_NOTICE_TEMPLATES.sinkHeld };
+        let sinkAllowed = access.allowed;
+        let sinkReason = access.reason;
+        if (sinkAllowed) {
+          const trifecta = gate.assessEgressTrifecta({
+            envelopes,
+            privateDataInPath: true,
+            egressDescription: `tool:${toolName}`,
+          });
+          if (!trifecta.allowed) {
+            sinkAllowed = false;
+            sinkReason = trifecta.reason;
+          }
         }
-        const trifecta = gate.assessEgressTrifecta({
-          envelopes,
-          privateDataInPath: true,
-          egressDescription: `tool:${toolName}`,
+
+        // jp36.1.3: compose the outbound disclosure destination check WITH the
+        // existing sink gate — never a parallel path. The disclosure check only
+        // engages for a positively identified outbound social destination and can
+        // only narrow, never widen, the sink gate's verdict. Fail closed: an
+        // outward destination with no per-turn lineage is denied; companion-self
+        // stays eligible via the decision layer.
+        const destination = deriveDisclosureDestination({
+          method: toolName,
+          params,
+          // jp36.6.4: stamp the channel's CURRENT classification epoch onto the
+          // derived room destination so jp36.6.3's epoch gate can deny content
+          // admitted under a prior epoch. Untracked channels return undefined and
+          // the gate stays inert (byte-identical to the pre-epoch runtime).
+          resolveChannel: (channelId) => {
+            const disclosure = classifyChannelDisclosure(channelId);
+            const classificationEpoch = currentChannelClassificationEpoch(channelId);
+            return classificationEpoch !== undefined
+              ? { ...disclosure, classificationEpoch }
+              : disclosure;
+          },
         });
-        if (!trifecta.allowed) {
+        const composed = composeEgressDisclosureDecision({
+          sinkAllowed,
+          sinkReason,
+          lineage: this.currentTurnDisclosureLineage,
+          destination,
+          requiresDisclosureDestination: isDisclosureSocialEgressInvocation({
+            method: toolName,
+            params,
+          }),
+        });
+        if (composed.disclosureEvaluated) {
+          log.debug('Egress disclosure destination check', {
+            toolName,
+            destinationKind: composed.destination?.kind,
+            allowed: composed.allowed,
+            outcome: composed.outcome,
+            reason: composed.reason,
+          });
+        }
+        if (!composed.allowed) {
           return { allowed: false, noticeText: INTAKE_FIREWALL_NOTICE_TEMPLATES.sinkHeld };
         }
         return { allowed: true, noticeText: '' };
@@ -921,6 +988,18 @@ export class SubstrateAgent {
 
   registerTool(tool: AgentTool<any>, category: ToolCategory = 'core'): void {
     this.toolRuntimeFacade.registerTool(tool, category);
+  }
+
+  /**
+   * Live per-turn outbound disclosure lineage (bible §9.2), or undefined outside
+   * a folded turn. Read-only accessor so runtime-authority consumers (the
+   * jp36.7.3 companion publication tool) can derive a share candidate's
+   * effective sensitivity, provenance, and subject contacts from the runtime's
+   * folded lineage at tool-invocation time — the model never self-asserts that
+   * disclosure metadata. Undefined ⇒ fail closed (no attestable provenance).
+   */
+  getCurrentTurnDisclosureLineage(): DisclosureLineage | undefined {
+    return this.currentTurnDisclosureLineage;
   }
 
   getPromotedExtendedToolsLimit(): number {
@@ -1650,6 +1729,9 @@ export class SubstrateAgent {
           }
           this.persistCurrentInternalState();
         },
+        setCurrentTurnDisclosureLineage: (lineage) => {
+          this.currentTurnDisclosureLineage = lineage;
+        },
         buildRuntimeContext: (
           turnMessage,
           resolvedUserName,
@@ -1730,6 +1812,9 @@ export class SubstrateAgent {
       // for the duration of this turn (cleared in finally — never leaks into
       // the next turn).
       this.currentTurnIntakeEnvelopes = message.routing?.intakeEnvelopes ?? [];
+      // Fail closed: no lineage is published until the generation context is
+      // folded this turn, so a social send before then is denied outward.
+      this.currentTurnDisclosureLineage = undefined;
       try {
         if (!this.config.chargePolicy || getRunChargeContext()) {
           return await run();
@@ -1747,6 +1832,7 @@ export class SubstrateAgent {
         }, run);
       } finally {
         this.currentTurnIntakeEnvelopes = [];
+        this.currentTurnDisclosureLineage = undefined;
       }
     });
   }
@@ -1987,6 +2073,10 @@ export class SubstrateAgent {
     const coPresent = situatedPlace
       ? this.companionPresence?.getCoPresent(situatedPlace)
       : undefined;
+    // Curated reaction surface (jp36.3.1.2): resolved from the turn's channel
+    // adapter (standard subset plus guild-custom emojis with a configured
+    // one-line meaning). Undefined on channels that expose no reaction surface.
+    const reactionSurface = resolveAvailableReactionsForRuntime(message, this.channelRegistry);
     return buildRuntimeContextForTurn({
       message,
       ...(conversationScope ? { conversationScope } : {}),
@@ -2021,6 +2111,7 @@ export class SubstrateAgent {
       ...(coPresent && coPresent.length > 0 ? { coPresent } : {}),
       emanationTracker: this.situatedEmanationTracker,
       ...(situatedFallbackPlaceId ? { situatedFallbackPlaceId } : {}),
+      ...(reactionSurface ? { reactionSurface } : {}),
     });
   }
 

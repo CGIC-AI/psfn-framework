@@ -30,6 +30,7 @@ import {
   loadPlacesRegistryConfig,
 } from '../../channels/backplane/places-registry.js';
 import { setRuntimeChannelEnvelopeLabels } from '../../system/trust/runtime-channel-labels.js';
+import { setRuntimeChannelClassificationEpochs } from '../../system/trust/runtime-classification-epochs.js';
 import { CHARGE_POLICY_FILE_NAME } from '../../system/config/charge-policy-config.js';
 import {
   buildRuntimeChannelsConfigOverrides,
@@ -142,8 +143,13 @@ export function prepareAgentStartupContext(input: {
   // E3.2: publish channel-owned Context Envelope labels for classification
   // (channel-owned label > operator override > derived default).
   setRuntimeChannelEnvelopeLabels(channelsConfig.contextEnvelope.channels);
+  // jp36.6.4: publish the persisted classification-epoch records so the egress
+  // disclosure resolver and generation-lineage epoch params enforce the
+  // invite-only → public demotion boundary (bible §9.3).
+  setRuntimeChannelClassificationEpochs(channelsConfig.contextEnvelope.classificationEpochs);
   input.log.info('Loaded channel-owned context envelope labels', {
     labeledChannelCount: Object.keys(channelsConfig.contextEnvelope.channels).length,
+    classificationEpochCount: channelsConfig.contextEnvelope.classificationEpochs.length,
   });
   const satelliteRegistryConfig = loadSatelliteRegistryConfig(pathSnapshot.systemDataDir);
   const placesRegistryConfig = loadPlacesRegistryConfig(pathSnapshot.systemDataDir);

@@ -354,8 +354,22 @@ export function evaluateMemoryPolicy(ctx: PolicyContext): PolicyResult {
 //                              else invite_only
 // E3.3 deleted the transitional 4-value ChannelVisibility projection: the
 // pair IS the classification.
+//
+// Room-classification epochs (jp36.6): a channel-owned label may carry
+// `classificationSource: 'operator_confirmed'`, recording that an operator
+// explicitly confirmed/adjusted this room's {privacy, broadcast} classification
+// (the invite-only → public click-to-accept demotion flow, jp36.6.2). It
+// upgrades the reported source from the default `channel_label` so downstream
+// policy and Garden can distinguish a derived default from an operator
+// DECISION for audit (design bible §9.3). It is not a new precedence tier — a
+// confirmed label still resolves at tier 1 — only a provenance refinement of
+// that tier.
 
-export type ChannelClassificationSource = 'channel_label' | 'operator_override' | 'derived_default';
+export type ChannelClassificationSource =
+  | 'channel_label'
+  | 'operator_confirmed'
+  | 'operator_override'
+  | 'derived_default';
 
 export interface ChannelEnvelopeClassification {
   privacy: ChannelPrivacy;
@@ -405,6 +419,14 @@ export function resolveChannelEnvelopeClassification(
   const { label, trustPolicy } = inputs;
   const contactTracking = label?.contactTracking ?? DEFAULT_CONTACT_TRACKING_MODE;
   const needsReview = label?.needsReview === true;
+  // A channel-owned label resolves at tier 1 as `channel_label`, unless the
+  // operator confirmed its classification (jp36.6), in which case the label
+  // records `operator_confirmed` and the reported source reflects that
+  // decision. Validation (validateChannelEnvelopeLabel) fail-closes any label
+  // carrying `operator_confirmed` without a tier-1 pair (privacy or
+  // broadcast=true), so the marker never survives a fall-through to tiers 2/3.
+  const labelSource: ChannelClassificationSource =
+    label?.classificationSource === 'operator_confirmed' ? 'operator_confirmed' : 'channel_label';
 
   const finalize = (
     pair: { privacy: ChannelPrivacy; broadcast: boolean },
@@ -428,10 +450,10 @@ export function resolveChannelEnvelopeClassification(
     // Contract: a broadcast surface is always channelPrivacy 'public'.
     // (Labels pairing broadcast=true with a non-public privacy are rejected
     // fail-closed at validation.)
-    return finalize({ privacy: 'public', broadcast: true }, 'channel_label');
+    return finalize({ privacy: 'public', broadcast: true }, labelSource);
   }
   if (label?.privacy !== undefined) {
-    return finalize({ privacy: label.privacy, broadcast: false }, 'channel_label');
+    return finalize({ privacy: label.privacy, broadcast: false }, labelSource);
   }
   // A label carrying broadcast=false (without privacy) pins the flag while the
   // privacy value falls through to the next tiers — channel ownership of the

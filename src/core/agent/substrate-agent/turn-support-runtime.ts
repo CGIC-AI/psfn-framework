@@ -3,6 +3,7 @@ import { createComponentLogger } from '../../../shared/logger.js';
 import type { EventBus, EventMap } from '../../../shared/event-bus.js';
 import type { SessionManager } from '../../session/manager.js';
 import type { TrustLevel } from '../../../system/trust/types.js';
+import type { DisclosureToolResultSource } from '../../cogsec/disclosure/generation-lineage.js';
 import { normalizeChannelPrivacy } from '../../../system/trust/context-envelope.js';
 import type { AgentResponse, CorrelationMetadata, InferredPostTurnAction, IntentionalNoReplyMetadata, MessagePromptOverrideMode, ObservabilityCallType, ParentTurnContinuationStop, RuntimeFallbackProvenance, SubstrateMessage, TurnID, TurnRecord, TurnUsage } from '../../../shared/contracts/runtime.js';
 import type { TurnObservabilityRecord } from '../../turns/observability.js';
@@ -432,8 +433,8 @@ export class TurnSupportRuntime {
     requestId: string,
     turnMessages: AgentMessage[],
     trustLevel: TrustLevel,
-  ): void {
-    recordToolObservationsForTurn({
+  ): DisclosureToolResultSource[] {
+    return recordToolObservationsForTurn({
       sessionManager: this.sessionManager,
       message,
       turnSessionIdentity,

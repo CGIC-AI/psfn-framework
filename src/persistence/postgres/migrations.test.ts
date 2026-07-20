@@ -182,6 +182,7 @@ describe('Postgres live schema migrations', () => {
       'icp_conversation_episodes',
       'icp_initiation_permits',
       'icp_fatigue_turn_reservations',
+      'companion_social_pot',
     ]) {
       expect(sharedSql).toContain(`CREATE TABLE IF NOT EXISTS ${table}`);
     }
@@ -189,6 +190,7 @@ describe('Postgres live schema migrations', () => {
     expect(sharedSql).toContain("VALUES (5, 'icp-autonomy-invalidation-fences')");
     expect(sharedSql).toContain("VALUES (6, 'icp-fatigue-turn-reservations')");
     expect(sharedSql).toContain("VALUES (7, 'icp-fatigue-delivery-fence')");
+    expect(sharedSql).toContain("VALUES (9, 'companion-social-pot')");
     expect(sharedSql).toContain("'delivering'");
     expect(sharedSql).toContain('participant_companion_ids UUID[] NOT NULL');
     expect(sharedSql).toContain('UNIQUE (candidate_id)');
@@ -201,6 +203,64 @@ describe('Postgres live schema migrations', () => {
     expect(localSql).toContain('reason_summary TEXT NOT NULL');
     expect(localSql).toContain('continuation_task_kind TEXT');
     expect(localSql).toContain('peer_contact_id TEXT NOT NULL');
+  });
+
+  it('adds the gateway speaking-arbiter state as shared migration 10 (jp36.5.1.1)', () => {
+    const sharedSql = migrationSql(POSTGRES_SHARED_MIGRATIONS);
+
+    for (const table of [
+      'speaking_room_episodes',
+      'speaking_episode_participation',
+      'speaking_reservations',
+      'speaking_egress_leases',
+    ]) {
+      expect(sharedSql).toContain(`CREATE TABLE IF NOT EXISTS ${table}`);
+    }
+    // At most one OPEN room episode per channel: the arbitration context.
+    expect(sharedSql).toContain(
+      'idx_speaking_room_episodes_open_channel',
+    );
+    // The exclusivity fence: at most one HELD egress lease per triggering event —
+    // two companions never both send for one trigger (bible §20.1).
+    expect(sharedSql).toContain('idx_speaking_egress_leases_one_held');
+    expect(sharedSql).toContain("ON speaking_egress_leases (channel_id, trigger_event_id) WHERE status = 'held'");
+    // Dedup: one reservation per (channel, source event, companion) (bible §8.1).
+    expect(sharedSql).toContain('UNIQUE (channel_id, trigger_event_id, companion_id)');
+    // The monotonic fencing token that stops a revived crashed holder double-sending.
+    expect(sharedSql).toContain('UNIQUE (channel_id, trigger_event_id, fencing_token)');
+    expect(sharedSql).toContain('fencing_token BIGINT NOT NULL CHECK (fencing_token >= 1)');
+    // Content-free: no message text ever lands in the shared arbiter state.
+    expect(sharedSql).not.toContain('message_text');
+    // Ledger discipline: tables before the version registration, then version 10.
+    expect(sharedSql.indexOf('CREATE TABLE IF NOT EXISTS speaking_room_episodes')).toBeLessThan(
+      sharedSql.indexOf("VALUES (10, 'speaking-arbiter')"),
+    );
+    expect(sharedSql).toContain("VALUES (10, 'speaking-arbiter')");
+
+    // The base shared chain stays pgvector-free (the arbiter needs no vectors).
+    expect(sharedSql).not.toMatch(/vector/i);
+  });
+
+  it('binds the funding charge to the egress lease as shared migration 11 (jp36.5.3)', () => {
+    const sharedSql = migrationSql(POSTGRES_SHARED_MIGRATIONS);
+
+    // The crash-recovery charge column: the fatigue draw is recorded on the
+    // fenced, correlation-keyed lease so a crash between draw and delivery leaves
+    // the debit reconcilable off the lease instead of leaked.
+    expect(sharedSql).toContain(
+      'ADD COLUMN IF NOT EXISTS charged_units DOUBLE PRECISION NOT NULL DEFAULT 0',
+    );
+    expect(sharedSql).toContain('CHECK (charged_units >= 0)');
+    // Idempotent constraint (re)creation, mirroring the breaker-state migration.
+    expect(sharedSql).toContain(
+      'DROP CONSTRAINT IF EXISTS speaking_egress_leases_charged_units_check',
+    );
+    // Ledger discipline: the column alter precedes its version registration.
+    expect(sharedSql.indexOf('ADD COLUMN IF NOT EXISTS charged_units')).toBeLessThan(
+      sharedSql.indexOf("VALUES (11, 'speaking-arbiter-charge-association')"),
+    );
+    // It extends the existing lease table — no parallel fencing state.
+    expect(sharedSql).toContain('ALTER TABLE speaking_egress_leases');
   });
 
   it('extends the shared ledger with shared_wiki_chunks as versioned migration 3 (s10f9)', () => {

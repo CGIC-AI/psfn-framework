@@ -360,6 +360,7 @@ const IMPLEMENTATION_ANNOTATED_TOOL_CAPABILITY_POLICIES = new Set([
   'schedule',
   'toolset',
   'wiki',
+  'publication',
 ]);
 
 function hasOwn(object: object, key: PropertyKey): boolean {

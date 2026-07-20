@@ -51,7 +51,6 @@ import {
 import {
   COMPANIONS_FILE_NAME,
   COMPANIONS_SEED_FILE_NAME,
-  isMultiCompanionEnabled,
   resolveCompanionFleet,
   type ResolvedCompanionsFleetConfig,
 } from './companions-config.js';
@@ -88,11 +87,6 @@ export interface StartupOwnerFileLoadOptions {
   companionDataDir?: string;
   seedDir?: string;
   defaultContextWindow?: number;
-  /**
-   * Multi-companion topology flag. When omitted the canonical env accessor is
-   * consulted. Controls the fail-closed direction for the companions owner file.
-   */
-  multiCompanion?: boolean;
   /** Optional fleet-auth topology flag; strict flag/file matrix when omitted. */
   fleetAuth?: boolean;
 }
@@ -113,7 +107,7 @@ export interface StartupOwnerFileVerificationResult {
 
 export interface StartupFleetOwnerFileVerificationOptions extends Omit<
   StartupOwnerFileLoadOptions,
-  'companionDataDir' | 'multiCompanion'
+  'companionDataDir'
 > {
   /** Canonically resolved fleet; every entry's exact companion root is checked. */
   fleet: ResolvedCompanionsFleetConfig;
@@ -230,13 +224,11 @@ export function loadStartupChargePolicyOwnerFile(
 }
 
 export function loadStartupCompanionsOwnerFile(
-  options: Pick<StartupOwnerFileLoadOptions, 'dataDir' | 'seedDir' | 'multiCompanion'>,
+  options: Pick<StartupOwnerFileLoadOptions, 'dataDir' | 'seedDir'>,
 ): void {
-  const multiCompanion = options.multiCompanion ?? isMultiCompanionEnabled();
   resolveCompanionFleet({
     dataDir: options.dataDir,
     seedDir: options.seedDir,
-    multiCompanion,
   });
 }
 
@@ -296,7 +288,6 @@ function systemOwnerFileChecks(
       run: () => loadStartupCompanionsOwnerFile({
         dataDir: options.dataDir,
         seedDir: options.seedDir,
-        multiCompanion: options.multiCompanion,
       }),
     },
     {
@@ -471,7 +462,6 @@ export function verifyStartupFleetOwnerFiles(
       seedDir: options.seedDir,
       defaultContextWindow: options.defaultContextWindow,
       fleetAuth: options.fleetAuth,
-      multiCompanion: true,
     }, seedDir),
     ...options.fleet.companions.flatMap(companion => companionOwnerFileChecks({
       companionDataDir: companion.companionDataDir,

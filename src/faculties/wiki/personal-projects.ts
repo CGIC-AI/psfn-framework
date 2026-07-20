@@ -3,8 +3,13 @@ import {
   sensitivityOrd,
   type SensitivityLevel,
 } from '../../system/trust/types.js';
+import { isRecord } from '../../shared/utils/types.js';
+import { toErrorMessage } from '../../shared/utils/errors.js';
 import type { WikiDocumentListEntry, WikiStorePort } from './types.js';
 import {
+  CURRENT_PROJECT_SCHEMA_VERSION,
+  deriveContinuitySessionRef,
+  deriveProjectReturnPolicy,
   normalizeProjectEntityId,
   parseNamedWardrobeLookDocument,
   parsePersonalProjectDocument,
@@ -14,9 +19,13 @@ import {
   type PersonalProjectArtifact,
   type PersonalProjectManifest,
   type PersonalProjectStatus,
+  type PersonalProjectWorkContext,
   type ResolvedWardrobeLook,
 } from './personal-project-contracts.js';
 export {
+  CURRENT_PROJECT_SCHEMA_VERSION,
+  deriveContinuitySessionRef,
+  deriveProjectReturnPolicy,
   parseNamedWardrobeLookDocument,
   parsePersonalProjectDocument,
 } from './personal-project-contracts.js';
@@ -25,14 +34,93 @@ export type {
   NamedWardrobeLook,
   PersonalProjectArtifact,
   PersonalProjectManifest,
+  PersonalProjectReturnPolicy,
   PersonalProjectStatus,
+  PersonalProjectWorkContext,
   ProjectArtifactShareState,
+  ProjectContactDmTarget,
+  ProjectPublicationMode,
   ResolvedWardrobeLook,
 } from './personal-project-contracts.js';
 
 export interface PersonalProjectActivitySink {
   recordProjectActivity(project: PersonalProjectManifest): Promise<void>;
 }
+
+export interface LegacyArtifactQuarantineEntry {
+  projectRef: string;
+  artifactRef: string;
+}
+
+/**
+ * Result of the one-time legacy-artifact quarantine migration
+ * (psfn-framework-jp36.1.2.2). Counts are stable across re-runs — once every
+ * artifact carries a `metadataLineage`, a subsequent run quarantines nothing.
+ */
+export interface LegacyArtifactQuarantineReport {
+  dryRun: boolean;
+  scannedProjects: number;
+  scannedArtifacts: number;
+  /** Artifacts already carrying a lineage marker (runtime_derived or legacy_unverified). */
+  alreadyClassifiedArtifacts: number;
+  /** Artifacts newly marked legacy_unverified and contained to private/self. */
+  quarantinedArtifacts: number;
+  /** Projects that had at least one artifact quarantined. */
+  quarantinedProjects: number;
+  malformedProjects: Array<{ id: string; error: string }>;
+  /** Bounded sample of the quarantined artifacts (first N). */
+  entries: LegacyArtifactQuarantineEntry[];
+}
+
+const QUARANTINE_REPORT_SAMPLE_LIMIT = 50;
+
+export interface FreeTimeVisibilityMigrationEntry {
+  projectRef: string;
+  from: CompanionOwnedVisibility;
+  to: CompanionOwnedVisibility;
+}
+
+/**
+ * Result of the one-time free-time privacy migration (adjudication S11.4,
+ * psfn-framework-jp36.2.2.2). Counts are stable across re-runs — once every
+ * `public` free-time project has been contained to `primary_contact`, a
+ * subsequent run contains nothing.
+ */
+export interface FreeTimeVisibilityMigrationReport {
+  dryRun: boolean;
+  scannedProjects: number;
+  /** Projects whose `public` visibility was contained to `primary_contact`. */
+  containedProjects: number;
+  /** Projects already at a private posture (`self` or `primary_contact`), left untouched. */
+  alreadyPrivateProjects: number;
+  malformedProjects: Array<{ id: string; error: string }>;
+  /** Bounded sample of the contained projects (first N). */
+  entries: FreeTimeVisibilityMigrationEntry[];
+}
+
+const FREE_TIME_MIGRATION_SAMPLE_LIMIT = 50;
+
+/**
+ * Result of the one-time, idempotent personal-project manifest v1 → v2 migration
+ * (psfn-framework-jp36.2.4). v1 manifests carried no durable work context; they
+ * upgrade explicitly to a private work context (settled decision 16, bible §5.5)
+ * with a runtime-derived continuity session id and return policy. Re-running is a
+ * no-op once every manifest is v2 (stable counts). Malformed documents are
+ * reported, never rewritten.
+ */
+export interface ProjectManifestV2MigrationReport {
+  dryRun: boolean;
+  scannedProjects: number;
+  /** Manifests already at the current schema version (left untouched). */
+  alreadyCurrent: number;
+  /** v1 manifests upgraded to v2 (in a dry run, that WOULD be upgraded). */
+  migratedProjects: number;
+  malformedProjects: Array<{ id: string; error: string }>;
+  /** Bounded sample of the migrated project ids (first N). */
+  entries: string[];
+}
+
+const MIGRATION_REPORT_SAMPLE_LIMIT = 50;
 
 const PROJECT_TAGS = ['psfn:personal-project'] satisfies readonly string[];
 const WARDROBE_TAGS = ['psfn:named-look'] satisfies readonly string[];
@@ -56,6 +144,52 @@ function projectDocId(id: string): string {
 
 function wardrobeDocId(id: string): string {
   return `wardrobe.look.${id}`;
+}
+
+/**
+ * Wiki document id namespaces owned exclusively by the runtime-authoritative
+ * personal-project / named-look paths. Derived from {@link projectDocId} /
+ * {@link wardrobeDocId} so they never drift.
+ */
+export const RESERVED_MANAGED_WIKI_DOC_ID_PREFIXES = [
+  projectDocId(''),
+  wardrobeDocId(''),
+] as const;
+
+/** Tags reserved for runtime-managed companion-owned manifests. */
+export const RESERVED_MANAGED_WIKI_TAGS = [PROJECT_TAGS[0], WARDROBE_TAGS[0]] as const;
+
+/**
+ * True when a generic `wiki` write/import would land in the reserved
+ * personal-project / named-look namespace (by resolved document id prefix OR by
+ * a reserved tag). The generic write action is model-controlled — body, id, and
+ * tags all originate from the model — so a write into this namespace could forge
+ * a project manifest whose artifacts assert `metadataLineage: runtime_derived`
+ * (and model-chosen sensitivity/intendedAudience/shareState), which
+ * `parsePersonalProjectDocument` would then read back verbatim and treat as
+ * egress-eligible. That defeats the runtime-metadata-authority derivation
+ * (bible §6.2) and the legacy egress quarantine (§9.5;
+ * psfn-framework-jp36.1.2.3). These manifests are only ever written through the
+ * dedicated project_* / wardrobe_* actions, which derive disclosure metadata
+ * from runtime state and fail closed. Comparison is done on trimmed/lowercased
+ * values to match the store's id/tag normalization.
+ */
+export function isReservedManagedWikiWrite(input: {
+  documentId: string;
+  tags?: readonly string[] | string | undefined;
+}): boolean {
+  const documentId = input.documentId.trim().toLowerCase();
+  if (documentId && RESERVED_MANAGED_WIKI_DOC_ID_PREFIXES.some(prefix => documentId.startsWith(prefix))) {
+    return true;
+  }
+  const rawTags = input.tags === undefined
+    ? []
+    : typeof input.tags === 'string'
+      ? input.tags.split(',')
+      : input.tags;
+  return rawTags
+    .map(tag => tag.trim().toLowerCase())
+    .some(tag => (RESERVED_MANAGED_WIKI_TAGS as readonly string[]).some(reserved => reserved === tag));
 }
 
 function visibilitySensitivity(visibility: CompanionOwnedVisibility): SensitivityLevel {
@@ -124,19 +258,27 @@ export class PersonalProjectLibrary {
     title: string;
     nextStep: string;
     visibility?: CompanionOwnedVisibility;
+    workContext?: PersonalProjectWorkContext;
   }): Promise<PersonalProjectManifest> {
     const title = requiredProjectText(input.title, 'project title');
     const id = normalizeProjectEntityId(input.id ?? slugFromName(title), 'project id');
     if (this.store.get(projectDocId(id))) throw new Error(`personal project already exists: project:${id}`);
     const timestamp = this.now().toISOString();
+    // Default to a private work context (bible §10.1: an unspecified project is
+    // companion-self space). The continuity session id and return policy are
+    // runtime-derived from the work context, never model-supplied (bible §6.2).
+    const workContext: PersonalProjectWorkContext = input.workContext ?? { kind: 'private' };
     const project: PersonalProjectManifest = {
-      schemaVersion: 1,
+      schemaVersion: CURRENT_PROJECT_SCHEMA_VERSION,
       kind: 'personal_project',
       id,
       ref: `project:${id}`,
       title,
       status: 'active',
       visibility: input.visibility ?? 'self',
+      workContext,
+      continuitySessionRef: deriveContinuitySessionRef(id, workContext),
+      returnPolicy: deriveProjectReturnPolicy(workContext),
       nextStep: requiredProjectText(input.nextStep, 'project nextStep'),
       artifacts: [],
       resumeCount: 0,
@@ -171,15 +313,20 @@ export class PersonalProjectLibrary {
     projectRef: string;
     artifactRef: string;
     label: string;
-    sensitivity: SensitivityLevel;
-    intendedAudience?: CompanionOwnedVisibility;
   }): Promise<PersonalProjectManifest> {
     const current = this.getProject(input.projectRef);
     const ref = requiredProjectText(input.artifactRef, 'artifact ref');
     if (current.artifacts.some(artifact => artifact.ref === ref)) {
       throw new Error(`artifact is already linked to ${current.ref}: ${ref}`);
     }
-    const intendedAudience = input.intendedAudience ?? 'self';
+    // Bible §6.2: the runtime, not the model, is authoritative for artifact
+    // sensitivity and permitted audience. Derive both from the project's
+    // runtime-stored visibility (the workspace disclosure floor) rather than
+    // from model-supplied tool arguments (§9.2 item 6). Intended audience fails
+    // closed to `self`; broadening happens only through an explicit
+    // project_share request that still passes the artifact egress gate.
+    const sensitivity = visibilitySensitivity(current.visibility);
+    const intendedAudience: CompanionOwnedVisibility = 'self';
     const updated: PersonalProjectManifest = {
       ...current,
       artifacts: [
@@ -187,9 +334,13 @@ export class PersonalProjectLibrary {
         {
           ref,
           label: requiredProjectText(input.label, 'artifact label'),
-          sensitivity: input.sensitivity,
+          sensitivity,
           intendedAudience,
           shareState: 'private',
+          // Runtime-derived lineage: sensitivity/audience above came from
+          // runtime state, not model assertion, so this artifact is eligible
+          // for the egress gate (bible §6.2, §9.5).
+          metadataLineage: 'runtime_derived',
           addedAt: this.now().toISOString(),
         },
       ],
@@ -209,6 +360,17 @@ export class PersonalProjectLibrary {
     const artifactRef = requiredProjectText(input.artifactRef, 'artifact ref');
     const artifactIndex = current.artifacts.findIndex(artifact => artifact.ref === artifactRef);
     if (artifactIndex < 0) throw new Error(`artifact is not linked to ${current.ref}: ${artifactRef}`);
+    // Bible §9.5: an artifact with unverified legacy disclosure metadata is not
+    // automatically shareable. Fail closed at this egress point — a request to
+    // broaden its audience beyond `self` is rejected until the artifact is
+    // re-grounded (its metadata re-derived by the runtime).
+    const target = current.artifacts[artifactIndex];
+    if (target.metadataLineage === 'legacy_unverified' && input.audience !== 'self') {
+      throw new Error(
+        `${artifactRef} has unverified legacy disclosure metadata (bible §9.5) and must be `
+        + 're-grounded before it can be shared beyond self',
+      );
+    }
     const artifacts = current.artifacts.map((artifact) => {
       if (artifact.ref !== artifactRef) return artifact;
       return {
@@ -224,6 +386,234 @@ export class PersonalProjectLibrary {
     };
     this.persistProject(updated);
     return updated;
+  }
+
+  /**
+   * One-time, idempotent quarantine of pre-existing model-asserted artifact
+   * metadata (psfn-framework-jp36.1.2.2, bible §9.5). Before runtime metadata
+   * authority (§6.2) landed, `project_add_artifact` accepted model-supplied
+   * sensitivity/audience; those persisted values carry no `metadataLineage`
+   * marker. This scan marks every such artifact `legacy_unverified` and
+   * contains it to `private`/`self` so it fails closed at the egress gate until
+   * re-grounded. Artifacts that already carry a lineage marker (runtime-derived
+   * writes, or a prior quarantine run) are left untouched, so re-running is a
+   * no-op with stable counts. Malformed project documents are reported, never
+   * silently skipped, and never rewritten.
+   */
+  quarantineLegacyArtifacts(options: { dryRun: boolean }): LegacyArtifactQuarantineReport {
+    const entries: LegacyArtifactQuarantineEntry[] = [];
+    const malformedProjects: Array<{ id: string; error: string }> = [];
+    let scannedProjects = 0;
+    let scannedArtifacts = 0;
+    let alreadyClassifiedArtifacts = 0;
+    let quarantinedArtifacts = 0;
+    let quarantinedProjects = 0;
+
+    for (const entry of this.store.list().filter(candidate => hasTag(candidate, PROJECT_TAGS[0]))) {
+      const document = this.store.get(entry.id);
+      if (!document) throw new Error(`project manifest disappeared during quarantine scan: ${entry.id}`);
+
+      // Validate the document up front; a genuinely malformed manifest is
+      // reported and skipped rather than rewritten or silently dropped.
+      let manifest: PersonalProjectManifest;
+      let rawArtifacts: unknown[];
+      try {
+        manifest = parsePersonalProjectDocument(document);
+        const rawBody: unknown = JSON.parse(document.body);
+        if (!isRecord(rawBody) || !Array.isArray(rawBody.artifacts)) {
+          throw new Error('project body is not a manifest with an artifacts array');
+        }
+        rawArtifacts = rawBody.artifacts;
+      } catch (error) {
+        malformedProjects.push({ id: document.id, error: toErrorMessage(error) });
+        continue;
+      }
+
+      scannedProjects += 1;
+      // parsePersonalProjectDocument preserves artifact order and never drops
+      // entries on success, so the validated manifest and the raw array align
+      // by index; the raw entry is the source of truth for whether the stored
+      // document carried a lineage marker before this run.
+      const quarantinedIndexes = new Set<number>();
+      manifest.artifacts.forEach((_artifact, index) => {
+        scannedArtifacts += 1;
+        const rawEntry = rawArtifacts[index];
+        const rawLineage = isRecord(rawEntry) ? rawEntry.metadataLineage : undefined;
+        if (rawLineage === 'runtime_derived' || rawLineage === 'legacy_unverified') {
+          alreadyClassifiedArtifacts += 1;
+          return;
+        }
+        quarantinedArtifacts += 1;
+        quarantinedIndexes.add(index);
+        if (entries.length < QUARANTINE_REPORT_SAMPLE_LIMIT) {
+          entries.push({ projectRef: manifest.ref, artifactRef: manifest.artifacts[index].ref });
+        }
+      });
+
+      if (quarantinedIndexes.size === 0) continue;
+      quarantinedProjects += 1;
+      if (options.dryRun) continue;
+
+      const quarantined: PersonalProjectManifest = {
+        ...manifest,
+        artifacts: manifest.artifacts.map((artifact, index) => (
+          quarantinedIndexes.has(index)
+            ? {
+              ...artifact,
+              // Contain to the most private posture and mark the metadata
+              // unverified (§9.5). The asserted sensitivity field is retained
+              // per the parent bug's non-goal (do not remove metadata fields).
+              metadataLineage: 'legacy_unverified',
+              intendedAudience: 'self',
+              shareState: 'private',
+            } satisfies PersonalProjectArtifact
+            : artifact
+        )),
+      };
+      this.persistProject(quarantined);
+    }
+
+    return {
+      dryRun: options.dryRun,
+      scannedProjects,
+      scannedArtifacts,
+      alreadyClassifiedArtifacts,
+      quarantinedArtifacts,
+      quarantinedProjects,
+      malformedProjects,
+      entries,
+    };
+  }
+
+  /**
+   * One-time, idempotent free-time privacy migration (adjudication S11.4,
+   * psfn-framework-jp36.2.2.2). Existing free-time history is flipped to private:
+   * a pre-existing `public` project visibility predates the governed publication
+   * flow (public/broadcast reach is net-new capability), so it is CONTAINED to
+   * `primary_contact` — a strict narrowing from public to the single
+   * highest-trust partner. This is "to private" (no autonomous public egress
+   * remains, {@link freeTimeWorkspaceContextFromVisibility} maps the result to a
+   * private work context) while preserving partner eligibility: the partner is
+   * the highest-trust contact and still receives an eligible return note from
+   * the work (§10.6/§10.8). `self` and `primary_contact` projects are already
+   * private and are left untouched.
+   *
+   * The migration flips ONLY the existing `visibility` metadata field (never turn
+   * content); a genuinely malformed manifest is reported and skipped, never
+   * rewritten (fail closed on unexpected shapes). Idempotent: once contained, a
+   * project carries no `public` visibility, so a re-run contains nothing and the
+   * counts are stable.
+   */
+  migrateFreeTimeVisibility(options: { dryRun: boolean }): FreeTimeVisibilityMigrationReport {
+    const entries: FreeTimeVisibilityMigrationEntry[] = [];
+    const malformedProjects: Array<{ id: string; error: string }> = [];
+    let scannedProjects = 0;
+    let containedProjects = 0;
+    let alreadyPrivateProjects = 0;
+
+    for (const entry of this.store.list().filter(candidate => hasTag(candidate, PROJECT_TAGS[0]))) {
+      const document = this.store.get(entry.id);
+      if (!document) throw new Error(`project manifest disappeared during free-time migration scan: ${entry.id}`);
+
+      // Validate up front; a genuinely malformed manifest is reported and
+      // skipped rather than rewritten or silently dropped (fail closed).
+      let manifest: PersonalProjectManifest;
+      try {
+        manifest = parsePersonalProjectDocument(document);
+      } catch (error) {
+        malformedProjects.push({ id: document.id, error: toErrorMessage(error) });
+        continue;
+      }
+
+      scannedProjects += 1;
+      if (manifest.visibility !== 'public') {
+        alreadyPrivateProjects += 1;
+        continue;
+      }
+
+      containedProjects += 1;
+      if (entries.length < FREE_TIME_MIGRATION_SAMPLE_LIMIT) {
+        entries.push({ projectRef: manifest.ref, from: 'public', to: 'primary_contact' });
+      }
+      if (options.dryRun) continue;
+
+      // Narrow public → primary_contact (contained-private, partner-eligible).
+      // persistProject recomputes the disclosure sensitivity floor from the new
+      // visibility; existing artifacts keep their own metadata (non-goal: do not
+      // rewrite artifact lineage — that is quarantineLegacyArtifacts' job).
+      const contained: PersonalProjectManifest = {
+        ...manifest,
+        visibility: 'primary_contact',
+        updatedAt: this.now().toISOString(),
+      };
+      this.persistProject(contained);
+    }
+
+    return {
+      dryRun: options.dryRun,
+      scannedProjects,
+      containedProjects,
+      alreadyPrivateProjects,
+      malformedProjects,
+      entries,
+    };
+  }
+
+  /**
+   * One-time, idempotent migration of personal-project manifests from schema v1
+   * to v2 (psfn-framework-jp36.2.4, bible §10.5). A v1 manifest has no durable
+   * work context; `parsePersonalProjectDocument` already upgrades it in memory to
+   * a private work context on read (so resume works before this runs), and this
+   * migration makes that upgrade durable on disk. Manifests already at the
+   * current schema version are left untouched, so re-running is a no-op with
+   * stable counts. Malformed documents are reported, never rewritten.
+   */
+  migrateManifestsToV2(options: { dryRun: boolean }): ProjectManifestV2MigrationReport {
+    const entries: string[] = [];
+    const malformedProjects: Array<{ id: string; error: string }> = [];
+    let scannedProjects = 0;
+    let alreadyCurrent = 0;
+    let migratedProjects = 0;
+
+    for (const entry of this.store.list().filter(candidate => hasTag(candidate, PROJECT_TAGS[0]))) {
+      const document = this.store.get(entry.id);
+      if (!document) throw new Error(`project manifest disappeared during v2 migration scan: ${entry.id}`);
+
+      // Read the raw stored schema version as the source of truth for whether the
+      // document needs migrating (the parsed manifest is always v2-shaped).
+      let rawVersion: unknown;
+      let manifest: PersonalProjectManifest;
+      try {
+        const rawBody: unknown = JSON.parse(document.body);
+        if (!isRecord(rawBody)) throw new Error('project body is not a JSON object');
+        rawVersion = rawBody.schemaVersion;
+        manifest = parsePersonalProjectDocument(document);
+      } catch (error) {
+        malformedProjects.push({ id: document.id, error: toErrorMessage(error) });
+        continue;
+      }
+
+      scannedProjects += 1;
+      if (rawVersion === CURRENT_PROJECT_SCHEMA_VERSION) {
+        alreadyCurrent += 1;
+        continue;
+      }
+      migratedProjects += 1;
+      if (entries.length < MIGRATION_REPORT_SAMPLE_LIMIT) entries.push(manifest.ref);
+      if (options.dryRun) continue;
+      // Persist the already-upgraded manifest verbatim — a format migration, not
+      // an activity, so timestamps are preserved.
+      this.persistProject(manifest);
+    }
+
+    return {
+      dryRun: options.dryRun,
+      scannedProjects,
+      alreadyCurrent,
+      migratedProjects,
+      malformedProjects,
+      entries,
+    };
   }
 
   async resumeNextActiveProject(): Promise<{ project: PersonalProjectManifest; context: string } | null> {

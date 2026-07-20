@@ -317,6 +317,51 @@ function detectReasons(params: {
   return [...reasons];
 }
 
+export interface CompanionNameMatch {
+  /**
+   * Any textual name/alias reference to the companion, or a `<@id>` platform
+   * mention anywhere in the message.
+   */
+  mentioned: boolean;
+  /**
+   * The message opens by addressing the companion (a leading `<@id>` mention or
+   * a message that is exactly / starts with a known alias).
+   */
+  directAddress: boolean;
+}
+
+/**
+ * Canonical companion name/alias detector shared by group-memory salience
+ * scoring and passive-name participation candidate creation
+ * (`src/core/participation/`). Both paths run the same alias normalization and
+ * word-boundary matching so what counts as "the companion was named" can never
+ * diverge between memory extraction and room participation. Do not add a second
+ * name-detection path — extend this one.
+ */
+export function detectCompanionNameMatch(
+  content: string,
+  params: {
+    companionNames: readonly string[];
+    companionAuthorIds: readonly string[];
+  },
+): CompanionNameMatch {
+  const normalized = normalizeContent(content);
+  return {
+    mentioned: containsCompanionMention(
+      content,
+      normalized,
+      params.companionNames,
+      params.companionAuthorIds,
+    ),
+    directAddress: isDirectAddress(
+      content,
+      normalized,
+      params.companionNames,
+      params.companionAuthorIds,
+    ),
+  };
+}
+
 function containsCompanionMention(
   content: string,
   normalized: string,

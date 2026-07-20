@@ -66,6 +66,9 @@ import {
   listStreamingTtsProviders,
 } from '../../../primitives/voice/connectors/tts/index.js';
 import type {
+  AdminChannelDemotionAcceptInput,
+  AdminChannelDemotionNotice,
+  AdminChannelDemotionResult,
   AdminChannelEnvelopeData,
   AdminChannelEnvelopeRow,
   AdminIntakeSourceListMutationInput,
@@ -84,7 +87,12 @@ import type {
   SettingsConfigEditors,
 } from './types.js';
 import { parseContextEnvelopeSection } from '../../../channels/backplane/config.js';
-import { validateChannelEnvelopeLabel } from '../../../system/trust/context-envelope.js';
+import {
+  validateChannelEnvelopeLabel,
+  DEMOTION_EPOCH_NOTICE,
+  DEMOTION_EPOCH_NOTICE_VERSION,
+  type ChannelClassificationEpoch,
+} from '../../../system/trust/context-envelope.js';
 import { resolveChannelEnvelopeClassification } from '../../../system/trust/policy.js';
 import type { GatewayCredentialPresenceResult } from '../../../boundary/gateway/protocol.js';
 import { buildEffectiveFleetAuthOwnerProjection } from './fleet-auth-owner-projection.js';
@@ -1099,7 +1107,8 @@ export class AdminSettingsDataService implements AdminSettingsService {
    */
   getChannelEnvelopeData(): AdminChannelEnvelopeData {
     const { scopedRoot } = this.loadChannelsOwnerScopes();
-    const labels = parseContextEnvelopeSection(scopedRoot).channels;
+    const section = parseContextEnvelopeSection(scopedRoot);
+    const labels = section.channels;
     const trustPolicy = this.deps.configStore.loadTrustPolicy();
 
     const channelIds = new Set<string>([
@@ -1129,17 +1138,30 @@ export class AdminSettingsDataService implements AdminSettingsService {
         };
       });
 
+    // Newest epoch first for the Garden audit surface.
+    const epochs = [...section.classificationEpochs].sort(
+      (a, b) => Date.parse(b.at) - Date.parse(a.at),
+    );
+
     return {
       channels,
       prefixOverrides: { ...trustPolicy.channelClassification.visibilityOverrides.prefix },
       privatePrefixes: [...trustPolicy.channelClassification.privatePrefixes],
       broadcastPrefixes: [...trustPolicy.channelClassification.broadcastPrefixes],
+      epochs,
     };
   }
 
   /**
    * Upserts (label object) or removes (null) one channel-owned envelope label
    * through the owner-file path with full fail-closed validation.
+   *
+   * Write-gate (jp36.6.2): this generic editor path MUST NOT set the operator
+   * decision marker `classificationSource: 'operator_confirmed'` — that marker
+   * is only writable through the click-to-accept demotion flow
+   * (acceptChannelDemotion), which stamps it atomically with an operator-signed
+   * epoch record. A label carrying it here is rejected fail-closed, and this
+   * generic path cannot change any non-public channel to public/broadcast.
    */
   saveChannelEnvelopeLabel(channelIdRaw: string, label: unknown): ConfigUpdateResult {
     const channelId = channelIdRaw.trim();
@@ -1147,10 +1169,24 @@ export class AdminSettingsDataService implements AdminSettingsService {
       return { ok: false, message: 'channelId must be a non-empty string' };
     }
 
+    if (
+      label !== null
+      && label !== undefined
+      && typeof label === 'object'
+      && !Array.isArray(label)
+      && 'classificationSource' in (label as Record<string, unknown>)
+    ) {
+      return {
+        ok: false,
+        message: "classificationSource is set only by the invite-only → public demotion flow "
+          + '(acceptChannelDemotion); it cannot be written through the channel label editor',
+      };
+    }
+
     try {
       const { root, scopedRoot, hasWrapper } = this.loadChannelsOwnerScopes();
-      const currentChannels = parseContextEnvelopeSection(scopedRoot).channels;
-      const nextChannels: Record<string, unknown> = { ...currentChannels };
+      const section = parseContextEnvelopeSection(scopedRoot);
+      const nextChannels: Record<string, unknown> = { ...section.channels };
 
       if (label === null || label === undefined) {
         if (!Object.prototype.hasOwnProperty.call(nextChannels, channelId)) {
@@ -1158,19 +1194,50 @@ export class AdminSettingsDataService implements AdminSettingsService {
         }
         delete nextChannels[channelId];
       } else {
-        nextChannels[channelId] = validateChannelEnvelopeLabel(
+        const validatedLabel = validateChannelEnvelopeLabel(
           label,
           `contextEnvelope.channels.${channelId}`,
         );
+        const existingLabel = Object.hasOwn(section.channels, channelId)
+          ? section.channels[channelId]
+          : undefined;
+        const currentClassification = resolveChannelEnvelopeClassification(
+          channelId,
+          undefined,
+          {
+            ...(existingLabel ? { label: existingLabel } : {}),
+            trustPolicy: this.deps.configStore.loadTrustPolicy(),
+          },
+        );
+        const requestedPublic = validatedLabel.privacy === 'public'
+          || validatedLabel.broadcast === true;
+        const currentlyPublic = currentClassification.privacy === 'public'
+          || currentClassification.broadcast;
+        if (requestedPublic && !currentlyPublic) {
+          return {
+            ok: false,
+            message: `Channel '${channelId}' cannot change from ${currentClassification.privacy} `
+              + 'to public through the generic label editor; use the click-to-accept '
+              + 'invite-only → public demotion flow so a fresh disclosure epoch is recorded',
+          };
+        }
+
+        // Editing other fields on an already confirmed public channel must not
+        // silently erase the operator decision marker. The caller cannot author
+        // this field, but the service preserves the existing authority fact.
+        nextChannels[channelId] = existingLabel?.classificationSource === 'operator_confirmed'
+          && requestedPublic
+          ? { ...validatedLabel, classificationSource: 'operator_confirmed' }
+          : validatedLabel;
       }
 
-      const nextScopedRoot: Record<string, unknown> = {
-        ...scopedRoot,
-        contextEnvelope: { channels: nextChannels },
-      };
-      const nextRoot: Record<string, unknown> = hasWrapper
-        ? { ...root, channels: nextScopedRoot }
-        : nextScopedRoot;
+      const nextRoot = this.buildNextChannelsRoot(
+        root,
+        scopedRoot,
+        hasWrapper,
+        nextChannels,
+        section.classificationEpochs,
+      );
       // saveChannelsOwnerFile re-validates the contextEnvelope section fail-closed.
       this.deps.configStore.saveChannelsOwnerFile(nextRoot);
       invalidatePromptCacheAfterOwnerMutation(this.deps.config, 'owner-file:channels');
@@ -1179,6 +1246,147 @@ export class AdminSettingsDataService implements AdminSettingsService {
         message: label === null || label === undefined
           ? `Channel envelope label removed for ${channelId}`
           : `Channel envelope label saved for ${channelId}`,
+      };
+    } catch (error) {
+      return { ok: false, message: toErrorMessage(error) };
+    }
+  }
+
+  /**
+   * Rebuild the channels owner-file root with a fresh contextEnvelope section,
+   * preserving the classification-epoch audit trail. Epochs are omitted from
+   * the persisted section only when empty (keeps existing files unchanged).
+   */
+  private buildNextChannelsRoot(
+    root: Record<string, unknown>,
+    scopedRoot: Record<string, unknown>,
+    hasWrapper: boolean,
+    nextChannels: Record<string, unknown>,
+    epochs: readonly ChannelClassificationEpoch[],
+  ): Record<string, unknown> {
+    const contextEnvelope: Record<string, unknown> = { channels: nextChannels };
+    if (epochs.length > 0) {
+      contextEnvelope.classificationEpochs = epochs.map(epoch => ({ ...epoch }));
+    }
+    const nextScopedRoot: Record<string, unknown> = { ...scopedRoot, contextEnvelope };
+    return hasWrapper ? { ...root, channels: nextScopedRoot } : nextScopedRoot;
+  }
+
+  /**
+   * Resolve the current classification of a channel and the click-to-accept
+   * demotion notice (jp36.6.2). `demotable` is true only when the channel
+   * currently resolves to a non-broadcast invite_only classification — the only
+   * state an invite-only → public demotion applies to.
+   */
+  getChannelDemotionNotice(channelIdRaw: string): AdminChannelDemotionNotice {
+    const channelId = channelIdRaw.trim();
+    const base = {
+      channelId,
+      from: 'invite_only' as const,
+      to: 'public' as const,
+      notice: DEMOTION_EPOCH_NOTICE,
+      noticeVersion: DEMOTION_EPOCH_NOTICE_VERSION,
+    };
+    if (!channelId) {
+      return { ...base, currentPrivacy: 'invite_only', demotable: false, reason: 'channelId must be a non-empty string' };
+    }
+    const { scopedRoot } = this.loadChannelsOwnerScopes();
+    const section = parseContextEnvelopeSection(scopedRoot);
+    const trustPolicy = this.deps.configStore.loadTrustPolicy();
+    const label = Object.hasOwn(section.channels, channelId) ? section.channels[channelId] : undefined;
+    const classification = resolveChannelEnvelopeClassification(channelId, undefined, {
+      ...(label ? { label } : {}),
+      trustPolicy,
+    });
+    const demotable = classification.privacy === 'invite_only' && !classification.broadcast;
+    return {
+      ...base,
+      currentPrivacy: classification.privacy,
+      demotable,
+      ...(demotable
+        ? {}
+        : { reason: `Channel '${channelId}' is not invite-only (currently ${classification.privacy}); only invite-only → public demotions exist` }),
+    };
+  }
+
+  /**
+   * Accept an invite-only → public demotion (jp36.6.2). Blocked fail-closed
+   * unless the operator acknowledges the CURRENT notice version and the channel
+   * currently resolves to invite_only. On success it atomically upserts a
+   * `classificationSource: 'operator_confirmed'` public label AND appends an
+   * operator-signed classification-epoch record. This is the ONLY write path
+   * for the operator_confirmed marker.
+   */
+  acceptChannelDemotion(input: AdminChannelDemotionAcceptInput): AdminChannelDemotionResult {
+    const channelId = input.channelId.trim();
+    if (!channelId) {
+      return { ok: false, message: 'channelId must be a non-empty string' };
+    }
+    // Click-to-accept: the operator must acknowledge the current notice version.
+    if (input.acknowledgedNoticeVersion !== DEMOTION_EPOCH_NOTICE_VERSION) {
+      return {
+        ok: false,
+        message: 'Demotion blocked: operator must acknowledge the current demotion notice '
+          + `(version ${DEMOTION_EPOCH_NOTICE_VERSION}) before invite-only → public is applied`,
+      };
+    }
+    const actor = typeof input.actor === 'string' && input.actor.trim() ? input.actor.trim() : 'operator';
+
+    try {
+      const { root, scopedRoot, hasWrapper } = this.loadChannelsOwnerScopes();
+      const section = parseContextEnvelopeSection(scopedRoot);
+      const trustPolicy = this.deps.configStore.loadTrustPolicy();
+      const currentLabel = Object.hasOwn(section.channels, channelId)
+        ? section.channels[channelId]
+        : undefined;
+      const classification = resolveChannelEnvelopeClassification(channelId, undefined, {
+        ...(currentLabel ? { label: currentLabel } : {}),
+        trustPolicy,
+      });
+      if (classification.privacy !== 'invite_only' || classification.broadcast) {
+        return {
+          ok: false,
+          message: `Channel '${channelId}' is not invite-only (currently ${classification.privacy}); `
+            + 'only invite-only → public demotions exist',
+        };
+      }
+
+      // Confirmed public label: pin the tier-1 public classification and stamp
+      // the operator decision. Preserve contactTracking/deliveryStyle overrides;
+      // drop needsReview (the operator has now confirmed the classification).
+      const nextLabel: Record<string, unknown> = {
+        privacy: 'public',
+        classificationSource: 'operator_confirmed',
+      };
+      if (currentLabel?.contactTracking !== undefined) nextLabel.contactTracking = currentLabel.contactTracking;
+      if (currentLabel?.deliveryStyle !== undefined) nextLabel.deliveryStyle = currentLabel.deliveryStyle;
+
+      const nextChannels: Record<string, unknown> = { ...section.channels };
+      nextChannels[channelId] = validateChannelEnvelopeLabel(
+        nextLabel,
+        `contextEnvelope.channels.${channelId}`,
+      );
+
+      const epoch: ChannelClassificationEpoch = {
+        channelId,
+        from: 'invite_only',
+        to: 'public',
+        at: new Date().toISOString(),
+        acceptedBy: actor,
+        noticeVersion: DEMOTION_EPOCH_NOTICE_VERSION,
+      };
+      const nextEpochs = [...section.classificationEpochs, epoch];
+
+      const nextRoot = this.buildNextChannelsRoot(root, scopedRoot, hasWrapper, nextChannels, nextEpochs);
+      // saveChannelsOwnerFile re-validates fail-closed: the confirmed label is
+      // now backed by the matching epoch record so the write-gate invariant holds.
+      this.deps.configStore.saveChannelsOwnerFile(nextRoot);
+      invalidatePromptCacheAfterOwnerMutation(this.deps.config, 'owner-file:channels');
+      return {
+        ok: true,
+        message: `Channel '${channelId}' demoted invite-only → public; fresh disclosure epoch recorded`,
+        epoch,
+        data: this.getChannelEnvelopeData(),
       };
     } catch (error) {
       return { ok: false, message: toErrorMessage(error) };

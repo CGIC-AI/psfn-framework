@@ -16,7 +16,9 @@ import {
   type CompanionOwnedVisibility,
   type PersonalProjectStatus,
   PersonalProjectLibrary,
+  isReservedManagedWikiWrite,
 } from './personal-projects.js';
+import { normalizeWikiDocumentId } from './store.js';
 import {
   MAX_WISH_CONTEXT_CHARS,
   MAX_WISH_TEXT_CHARS,
@@ -281,7 +283,7 @@ export function createWikiTool(store: WikiStorePort, deps: WikiToolDeps = {}): S
       })),
       sensitivity: Type.Optional(Type.Union(
         VALID_SENSITIVITY_LEVELS.map(level => Type.Literal(level)),
-        { description: 'Privacy sensitivity for the document. Defaults to personal.' },
+        { description: 'Privacy sensitivity for a write/import document. Defaults to personal. Not accepted for project_add_artifact, whose sensitivity is runtime-derived.' },
       )),
       summary: Type.Optional(Type.String({
         minLength: 1,
@@ -322,7 +324,7 @@ export function createWikiTool(store: WikiStorePort, deps: WikiToolDeps = {}): S
       artifact_label: Type.Optional(Type.String({ minLength: 1 })),
       audience: Type.Optional(Type.Union([
         Type.Literal('self'), Type.Literal('primary_contact'), Type.Literal('public'),
-      ], { description: 'Intended artifact audience; actual release remains subject to the artifact egress gate.' })),
+      ], { description: 'Requested share audience for project_share; actual release remains subject to the artifact egress gate. Not accepted for project_add_artifact, whose audience is runtime-derived (fails closed to self).' })),
       look_id: Type.Optional(Type.String({ minLength: 1, description: 'Stable id for wardrobe_save.' })),
       look_ref: Type.Optional(Type.String({ minLength: 1, description: 'Stable wardrobe:<id> reference.' })),
       look_name: Type.Optional(Type.String({ minLength: 1 })),
@@ -382,6 +384,38 @@ export function createWikiTool(store: WikiStorePort, deps: WikiToolDeps = {}): S
           }
           case 'write':
           case 'import': {
+            // Bible §6.2/§9.5 (psfn-framework-jp36.1.2.3): the generic wiki
+            // write/import action is fully model-controlled (id, tags, and body).
+            // It must never create or mutate a runtime-managed personal-project
+            // or named-look manifest — otherwise the model could author a
+            // `project.<id>` document whose artifacts assert
+            // `metadataLineage: runtime_derived` (plus model-chosen
+            // sensitivity/intendedAudience/shareState) and forge egress
+            // eligibility, defeating the runtime-metadata-authority derivation and
+            // the legacy egress quarantine. Reject fail-closed; these manifests
+            // are only ever written through the dedicated project_*/wardrobe_*
+            // actions, which derive disclosure metadata from runtime state.
+            let resolvedDocId = '';
+            try {
+              resolvedDocId = normalizeWikiDocumentId(params.id, params.title);
+            } catch {
+              // An unresolvable id cannot address the reserved namespace by id;
+              // fall back to the raw id for the tag/prefix check and let the
+              // store's own upsert surface the canonical invalid-id error.
+              resolvedDocId = typeof params.id === 'string' ? params.id : '';
+            }
+            if (isReservedManagedWikiWrite({ documentId: resolvedDocId, tags: params.tags })) {
+              return textResultWithError(
+                'wiki '
+                + action
+                + ' cannot create or modify personal-project or named-look manifests '
+                + '(reserved id/tag namespace). Their sensitivity, audience, share state, and '
+                + 'metadata lineage are runtime-derived and fail closed (bible §6.2, §9.5). Use the '
+                + 'dedicated project_* actions (project_create, project_update, project_add_artifact, '
+                + 'project_share) or wardrobe_* actions instead.',
+                true,
+              );
+            }
             const intakeSinkGate = deps.getIntakeSinkGate?.() ?? null;
             if (intakeSinkGate) {
               const gateDecision = intakeSinkGate.evaluate('wiki_write', [], {
@@ -486,13 +520,24 @@ export function createWikiTool(store: WikiStorePort, deps: WikiToolDeps = {}): S
             return textResult(JSON.stringify({ action, project }, null, 2));
           }
           case 'project_add_artifact': {
-            if (!params.sensitivity) throw new Error('sensitivity is required for project_add_artifact');
+            // Bible §6.2: sensitivity and permitted audience are runtime-derived
+            // metadata, never model self-asserted. Reject the old model-supplied
+            // arguments fail-closed instead of silently ignoring them; the write
+            // path derives lineage from the project's runtime state.
+            if (params.sensitivity !== undefined) {
+              throw new Error(
+                'sensitivity is runtime-derived for project_add_artifact and must not be supplied',
+              );
+            }
+            if (params.audience !== undefined) {
+              throw new Error(
+                'audience is runtime-derived for project_add_artifact and must not be supplied',
+              );
+            }
             const project = await requirePersonalProjects(deps).addArtifact({
               projectRef: requireString(params.project_ref, 'project_ref'),
               artifactRef: requireString(params.artifact_ref, 'artifact_ref'),
               label: requireString(params.artifact_label, 'artifact_label'),
-              sensitivity: params.sensitivity,
-              ...(params.audience ? { intendedAudience: params.audience } : {}),
             });
             return textResult(JSON.stringify({ action, project }, null, 2));
           }

@@ -1,5 +1,6 @@
 import type { EditableSettings } from '../../../../system/settings.js';
 import type {
+  ChannelClassificationEpoch,
   ChannelDeliveryStyle,
   ChannelEnvelopeLabel,
   ChannelPrivacy,
@@ -192,6 +193,20 @@ export interface AdminSettingsService {
   saveSubConfigJson(key: string, json: string, context?: import('../../garden-request-context.js').GardenRequestContext): ConfigUpdateResult;
   getChannelEnvelopeData(): AdminChannelEnvelopeData;
   saveChannelEnvelopeLabel(channelId: string, label: unknown): ConfigUpdateResult;
+  /**
+   * Read the invite-only → public click-to-accept demotion notice for a channel
+   * (jp36.6.2). Reports whether the channel is currently demotable so the Garden
+   * UI can gate the accept affordance; the notice text itself is static.
+   */
+  getChannelDemotionNotice(channelId: string): AdminChannelDemotionNotice;
+  /**
+   * Accept the invite-only → public demotion for a channel (jp36.6.2). Blocked
+   * unless the operator acknowledges the current notice version; on success it
+   * atomically stamps `classificationSource: 'operator_confirmed'` and records
+   * the operator-signed classification epoch. This is the ONLY write path for
+   * the operator_confirmed marker.
+   */
+  acceptChannelDemotion(input: AdminChannelDemotionAcceptInput): AdminChannelDemotionResult;
   /** Intake-policy source lists (htm9.13); the htm9.11 Garden tab builds on these. */
   getIntakeSourceLists(context?: import('../../garden-request-context.js').GardenRequestContext): IntakeSourceListsConfig;
   mutateIntakeSourceList(
@@ -234,4 +249,38 @@ export interface AdminChannelEnvelopeData {
   /** Demoted derived-default prefix heuristics (informational; tier 3). */
   privatePrefixes: string[];
   broadcastPrefixes: string[];
+  /**
+   * Operator-signed invite-only → public classification-epoch boundaries
+   * (jp36.6), newest first. Queryable audit surface for the demotion flow.
+   */
+  epochs: ChannelClassificationEpoch[];
+}
+
+/** Click-to-accept demotion notice for a channel (jp36.6.2). */
+export interface AdminChannelDemotionNotice {
+  channelId: string;
+  /** Current resolved classification (must be invite_only to be demotable). */
+  currentPrivacy: ChannelPrivacy;
+  from: 'invite_only';
+  to: 'public';
+  /** True only when the channel currently resolves to invite_only (non-broadcast). */
+  demotable: boolean;
+  /** Human-readable reason when not demotable. */
+  reason?: string;
+  notice: string;
+  noticeVersion: string;
+}
+
+/** Operator acceptance of an invite-only → public demotion (jp36.6.2). */
+export interface AdminChannelDemotionAcceptInput {
+  channelId: string;
+  /** Operator-acknowledged notice version; must match the current version. */
+  acknowledgedNoticeVersion: unknown;
+  /** Actor attribution for the epoch record; defaults to 'operator'. */
+  actor?: string;
+}
+
+export interface AdminChannelDemotionResult extends ConfigUpdateResult {
+  epoch?: ChannelClassificationEpoch;
+  data?: AdminChannelEnvelopeData;
 }

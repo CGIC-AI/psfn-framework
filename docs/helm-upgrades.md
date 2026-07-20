@@ -50,17 +50,21 @@ companion-data PVC. This is a fail-closed owner cutover, not a seed operation:
 keep `bootstrap.seedOwnerFiles=false` and use the digest-approved
 `ownerMigration` hook.
 
-The hook supports both chart topologies:
+The hook supports both chart topologies, and topology is derived from
+`companions.json` presence rather than any flag (the `PSFN_MULTI_COMPANION`
+env variable is retired):
 
-- A single-companion release lists its one existing companion-data PVC. The
-  migration runs with `PSFN_MULTI_COMPANION=false` and binds the explicit
-  `companionId`; a `companions.json` file is neither created nor expected. Set
-  `ownerMigration.multiCompanion=false` explicitly in the migration overlay.
-- A multi-companion installation lists every companion from `companions.json`,
-  with a distinct existing claim and canonical mount path for each. Omitting a
-  companion or reusing a claim/path fails rendering or migration. Set
-  `ownerMigration.multiCompanion=true` even when that manifest currently has
-  only one entry; topology is never inferred from destination count.
+- A single-companion release lists its one existing companion-data PVC. When no
+  `companions.json` is present yet, the migrator synthesizes the one-entry
+  migration fleet from the environment (`COMPANION_ID` plus the split roots) and
+  binds that explicit `companionId`. The migrator does not persist
+  `companions.json`; the runtime manifest is provisioned separately (see
+  [Provision the always-fleet manifest for existing single-companion
+  installs](#provision-the-always-fleet-manifest-for-existing-single-companion-installs)).
+- A multi-companion installation lists every companion from the already-present
+  `companions.json`, with a distinct existing claim and canonical mount path for
+  each. Omitting a companion or reusing a claim/path fails rendering or
+  migration.
 
 For either topology, stop every app process that can read an old owner before
 the pre-upgrade hook runs. Dependencies such as Postgres and Redis stay up:
@@ -94,7 +98,6 @@ bootstrap:
 ownerMigration:
   required: true
   enabled: true
-  multiCompanion: false
   systemDataClaim: <existing-system-data-claim>
   backupsClaim: <existing-backups-or-runtime-claim>
   backupsDir: /backups
@@ -135,6 +138,62 @@ Do not leave the one-time migration enabled in saved values. The receipt and
 quarantined legacy sources remain as recovery evidence. The complete snapshot,
 approval, receipt, retry, and restore procedure is in
 [Existing split fleets with shared per-companion owners](./operations.md#existing-split-fleets-with-shared-per-companion-owners).
+
+### Provision the always-fleet manifest for existing single-companion installs
+
+Every PSFN deployment is now a fleet of one or more companions enumerated by the
+mandatory system-owned `companions.json` manifest. Topology is derived from the
+manifest entry count — one entry is the single-companion shape, more than one is
+multi-companion tenancy — and the `PSFN_MULTI_COMPANION` env flag is retired.
+Runtime startup (`load-config`) fails closed with an actionable error if
+`SYSTEM_DATA_DIR/companions.json` is missing or invalid, so an existing
+single-companion install created before the manifest existed has no
+`companions.json` and would refuse to start after the runtime upgrade.
+
+The chart closes this gap automatically. For the single-companion (non-fleet)
+topology, the `seed-runtime-files` init container provisions a deterministic
+one-entry manifest into `system-data` when absent, derived from this release's
+own `runtime.companionId` and the canonical single-companion layout. This is
+chart-owned topology wiring (like the `mkdir`'d runtime roots and the starter
+`companion.json` card), not mutable runtime policy, so it is provisioned
+independently of `bootstrap.seedOwnerFiles`. Because it runs in the init
+container before any runtime process loads config, an existing single-companion
+install migrates simply by rolling this chart with the fixed image: the
+upgrade's init writes `companions.json` onto the existing `system-data` PVC, and
+the app then boots as a one-entry fleet — byte-identical to the old
+single-companion behavior.
+
+The write is idempotent and fail-closed:
+
+- It only writes when `companions.json` is absent, using an atomic
+  `mktemp`+rename so concurrent gateway/agent/Garden inits cannot race. It never
+  overwrites an operator- or Garden-edited manifest.
+- After the write step, the init container asserts `companions.json` is a
+  regular file and exits non-zero (blocking startup) if it is still missing.
+- Set `bootstrap.provisionSingleCompanionManifest=false` to require an
+  externally provisioned manifest instead. With it disabled, place a valid
+  one-entry `companions.json` on the `system-data` PVC before the upgrade;
+  otherwise the init container fails closed. This is the manual alternative for
+  operators who manage the manifest outside Helm.
+
+No manual step is required for the default (`provisionSingleCompanionManifest=true`)
+path. The migrator that reroots legacy `charge-policy.json`/`skills.json`
+(previous section) still does not persist `companions.json`; the chart owns that
+provisioning. In the multi-companion (`fleet.enabled=true`) topology the manifest
+is always operator-provisioned onto the `system-data` root and the chart never
+writes it; the init container still asserts its presence and fails closed if it
+is missing.
+
+After the upgrade, confirm the manifest landed and the runtime derived the
+single-companion topology:
+
+```bash
+kubectl -n "$NAMESPACE" exec deploy/psfn-agent -- sh -c '
+  test -f /app/system-data/companions.json
+  node -e "process.exit(JSON.parse(require(\"fs\").readFileSync(\"/app/system-data/companions.json\")).companions.length === 1 ? 0 : 1)"
+'
+```
+
 
 ### Upgrade a legacy slug COMPANION_ID to the UUID identity contract
 

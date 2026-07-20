@@ -30,6 +30,7 @@ import {
 import { requireGatewaySessionHmacKeyring } from './session-hmac-env.js';
 import { loadPlacesRegistryConfig } from '../../channels/backplane/places-registry.js';
 import { setRuntimeChannelEnvelopeLabels } from '../../system/trust/runtime-channel-labels.js';
+import { setRuntimeChannelClassificationEpochs } from '../../system/trust/runtime-classification-epochs.js';
 import {
   buildRuntimeChannelsConfigOverrides,
   type StartupConfigHydrationResult,
@@ -416,6 +417,9 @@ export function resolveGatewayBootstrapInput(
   // E3.2: publish channel-owned Context Envelope labels so gateway-side
   // classification consumers see the same precedence as the agent process.
   setRuntimeChannelEnvelopeLabels(channelsConfig.contextEnvelope.channels);
+  // jp36.6.4: publish the persisted classification-epoch records so gateway-side
+  // disclosure enforcement sees the same demotion boundaries as the agent process.
+  setRuntimeChannelClassificationEpochs(channelsConfig.contextEnvelope.classificationEpochs);
 
   const ntfyConfigIncomplete = Boolean(
     (ntfyBaseUrl && !ntfyTopic) || (!ntfyBaseUrl && ntfyTopic),

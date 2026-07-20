@@ -160,6 +160,25 @@ This chart renders one companion per release. Each release's `companion-data`
 PVC is that companion's isolated owner root; do not share a companion-data
 claim across releases.
 
+Every PSFN deployment is a fleet of one or more companions enumerated by the
+mandatory system-owned `companions.json` manifest at `SYSTEM_DATA_DIR/companions.json`;
+topology is derived from the entry count (one entry is single-companion, more
+than one is multi-companion tenancy) and the `PSFN_MULTI_COMPANION` flag is
+retired. For the single-companion (non-fleet) topology, the seed init container
+provisions a deterministic one-entry manifest derived from `runtime.companionId`
+into `system-data` when absent, so a fresh install boots as a one-entry fleet
+and an existing pre-manifest single-companion install migrates simply by rolling
+this chart. This manifest write is chart-owned topology wiring, provisioned
+independently of `bootstrap.seedOwnerFiles`, idempotent (write-when-absent, never
+overwriting an operator/Garden-edited manifest), and followed by a fail-closed
+presence assertion. Set `bootstrap.provisionSingleCompanionManifest=false` to
+require an externally provisioned manifest and fail closed at init when it is
+missing. With `fleet.enabled=true`, `companions.json` is always
+operator-provisioned onto the `system-data` root; the chart never writes it and
+the init container asserts its presence. See
+[`docs/helm-upgrades.md`](../../../docs/helm-upgrades.md#provision-the-always-fleet-manifest-for-existing-single-companion-installs)
+for the existing-install migration procedure.
+
 `bootstrap.seedOwnerFiles` defaults to `false`. With it disabled, absent owner
 files fail closed at startup with the runtime's `loadRequiredJson` error rather
 than silently running on seed defaults — the runtime must not seed itself
@@ -198,13 +217,14 @@ cannot infer or safely perform this fleet transaction.
 For an orchestrated Helm cutover, set `ownerMigration.required=true` and
 `ownerMigration.enabled=true`, provide the exact digest map under
 `ownerMigration.approvals`, and enumerate every companion with its existing PVC
-and canonical `<runtimeRoot>/companions/...` mount path. A default
-single-companion release lists exactly one companion and the hook runs with
-`PSFN_MULTI_COMPANION=false`; set `ownerMigration.multiCompanion=false`, and do
-not create `companions.json`. A multi-companion installation must set
-`ownerMigration.multiCompanion=true` and enumerate every manifest companion,
-even when the manifest currently has one entry. Topology is never inferred from
-the number of destinations. Also set
+and canonical `<runtimeRoot>/companions/...` mount path. Topology is derived from
+`companions.json` presence (the `PSFN_MULTI_COMPANION` flag is retired): a
+single-companion release lists exactly one companion, and when no
+`companions.json` exists yet the migrator synthesizes the one-entry migration
+fleet from the environment. A multi-companion installation lists every companion
+from the already-present `companions.json`. The migrator does not persist the
+runtime `companions.json`; the chart provisions the single-companion manifest
+separately (see [Runtime Layout](#runtime-layout)). Also set
 the chart's normal persistence claims through each `existingClaim` field. The
 pre-upgrade Hook Job captures `snapshotOutputDir`, runs the same compiled
 approval-bound fleet migrator as its next init container, and runs one mandatory

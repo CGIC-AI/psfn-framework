@@ -1103,6 +1103,24 @@
       "note": "Code-owned channel status cadence preserved from the existing Discord and Telegram adapter behavior."
     },
     {
+      "file": "src/channels/shared/reaction-surface.ts",
+      "name": "MAX_GUILDS",
+      "value": "512",
+      "note": "Code-owned DoS guard bounding channels.json customEmojiMeanings owner-file size (jp36.3.1.2), mirroring intake-policy source-list bounds."
+    },
+    {
+      "file": "src/channels/shared/reaction-surface.ts",
+      "name": "MAX_MEANING_CHARS",
+      "value": "200",
+      "note": "Code-owned validation guard capping a one-line custom-emoji meaning length (jp36.3.1.2); error-string-coupled owner-file bound."
+    },
+    {
+      "file": "src/channels/shared/reaction-surface.ts",
+      "name": "MAX_MEANINGS_PER_GUILD",
+      "value": "512",
+      "note": "Code-owned DoS guard bounding per-guild custom-emoji meaning entries in channels.json (jp36.3.1.2), mirroring intake-policy source-list bounds."
+    },
+    {
       "file": "src/channels/telegram/adapter.ts",
       "name": "DEFAULT_LONG_POLL_TIMEOUT_SECONDS",
       "value": "20"
@@ -1367,6 +1385,12 @@
       "file": "src/core/cogsec/canary/egress-scan.ts",
       "name": "MAX_SCANNED_BYTES",
       "value": "4 * 1024 * 1024"
+    },
+    {
+      "file": "src/core/cogsec/disclosure/capsule-custody.ts",
+      "name": "DEFAULT_MAX_ACTIVE_CAPSULES",
+      "value": "3",
+      "note": "Code-owned DEFAULT for the active-capsule queue bound (bible §10.11 'initial cap of three'); already overridable via createShareCapsuleCustodyStore's maxActiveCapsules option. Owned-setting/Garden exposure is deferred to the publication approvals surface (jp36.7.2)."
     },
     {
       "file": "src/core/cogsec/drift/drift-evidence-adapters.ts",
@@ -3353,6 +3377,22 @@
       "value": "200"
     },
     {
+      "file": "src/faculties/wiki/personal-projects.ts",
+      "name": "FREE_TIME_MIGRATION_SAMPLE_LIMIT",
+      "value": "50"
+    },
+    {
+      "file": "src/faculties/wiki/personal-projects.ts",
+      "name": "MIGRATION_REPORT_SAMPLE_LIMIT",
+      "value": "50"
+    },
+    {
+      "file": "src/faculties/wiki/personal-projects.ts",
+      "name": "QUARANTINE_REPORT_SAMPLE_LIMIT",
+      "value": "50",
+      "note": "Code-owned bound on the maintenance CLI quarantine report sample size; output-size guard, not runtime behavior policy."
+    },
+    {
       "file": "src/faculties/wiki/personal-wishlist-contracts.ts",
       "name": "MAX_OPERATOR_RESPONSE_CHARS",
       "value": "4_000",
@@ -3636,6 +3676,12 @@
       "note": "Bounded read-surface page limit for the shadow inspection store; structural API bound, not estimation policy (which is JSON-owned in partner-affect-shadow.json)."
     },
     {
+      "file": "src/operator/garden/services/room-arbiter-service.ts",
+      "name": "ADMIN_ARBITER_LIMIT",
+      "value": "100",
+      "note": "Code-owned bounded read ceiling for the read-only Fleet Command arbiter telemetry projection; a DoS/pagination guard, not an operator-tunable policy (mirrors the ICP admin projection's ADMIN_ICP_LIMIT)."
+    },
+    {
       "file": "src/operator/garden/services/session-service.ts",
       "name": "DEFAULT_ADMIN_SESSION_MESSAGE_PAGE_LIMIT",
       "value": "100"
@@ -3866,6 +3912,12 @@
       "file": "src/persistence/postgres/scheduled-prompt-store.ts",
       "name": "MAX_PROMPT_CHARS",
       "value": "32_000"
+    },
+    {
+      "file": "src/persistence/postgres/speaking-arbiter-admin-store.ts",
+      "name": "MAX_ADMIN_ROWS",
+      "value": "200",
+      "note": "Code-owned hard ceiling on rows returned by the read-only arbiter admin projection; an allocation/DoS guard at the admin read boundary (mirrors the ICP admin projection's MAX_ADMIN_ROWS)."
     },
     {
       "file": "src/persistence/repair/memory-participant-name-repair.ts",

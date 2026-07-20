@@ -1,5 +1,6 @@
 import type { AgentResponse, Attachment, Lifecycle, SubstrateMessage } from '../../shared/contracts/runtime.js';
 import type { EligibilityRequirements } from '../../system/capabilities/eligibility.js';
+import type { ResolvedReactionSurface } from '../shared/reaction-surface.js';
 
 /**
  * mmo9.6.1: in-process turn-control options threaded alongside a dispatched
@@ -52,6 +53,16 @@ export interface ChannelOutboundAdapter {
   textChunkLimit: number;
   sendText(ctx: OutboundContext, text: string): Promise<void>;
   sendMedia?(ctx: OutboundContext, media: MediaAttachment): Promise<void>;
+  /**
+   * jp36.3.1: outbound emoji reaction as a first-class social action
+   * (design bible §8.3 / §13.5). Optional and gated by
+   * {@link ChannelCapabilities.reactions}; a channel that advertises
+   * `reactions: true` must implement this. A failed reaction
+   * (unsupported emoji, missing permission, unresolved target) rejects so
+   * the caller surfaces a visible delivery failure — it is never silently
+   * converted into a text reply.
+   */
+  sendReaction?(ctx: OutboundContext, messageId: string, emoji: string): Promise<void>;
 }
 
 export interface ChannelGatewayAdapter extends Lifecycle {
@@ -77,6 +88,14 @@ export interface ChannelThreadingAdapter {
 export interface ChannelPromptAdapter {
   resolveChannelType(message: SubstrateMessage): string | undefined;
   resolveTaskKind?(message: SubstrateMessage): string | undefined;
+  /**
+   * jp36.3.1.2: curated emoji reaction surface advertised to the companion for
+   * this turn — the standard subset plus any guild-custom emojis carrying a
+   * configured one-line meaning (unknown custom emojis excluded). Optional and
+   * gated by {@link ChannelCapabilities.reactions}; a channel that cannot
+   * resolve a surface returns undefined and the prompt block renders nothing.
+   */
+  listAvailableReactions?(message: SubstrateMessage): ResolvedReactionSurface | undefined;
 }
 
 export interface ChannelAdapterPort extends Lifecycle {
@@ -117,13 +136,13 @@ export type ChannelAdapterFactoryEntry = ChannelAdapterFactoryPort;
 // Lightweight docks for shared call sites that only need a focused channel facet.
 export interface ChannelOutboundDock {
   id: string;
-  outbound: Pick<ChannelOutboundAdapter, 'textChunkLimit' | 'sendText' | 'sendMedia'>;
+  outbound: Pick<ChannelOutboundAdapter, 'textChunkLimit' | 'sendText' | 'sendMedia' | 'sendReaction'>;
 }
 
 export interface ChannelPromptDock {
   id: string;
   capabilities: Pick<ChannelCapabilities, 'promptChannelType'>;
-  prompt?: Pick<ChannelPromptAdapter, 'resolveChannelType' | 'resolveTaskKind'>;
+  prompt?: Pick<ChannelPromptAdapter, 'resolveChannelType' | 'resolveTaskKind' | 'listAvailableReactions'>;
 }
 
 export function asOutboundDock(adapter: ChannelAdapterPort): ChannelOutboundDock {

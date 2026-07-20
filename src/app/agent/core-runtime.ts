@@ -71,6 +71,7 @@ import type { CharacterCardVersionStore } from '../../core/identity/card-version
 import { createPersonaPreambleService, type PersonaPreamblePort } from '../../core/identity/persona-preamble.js';
 import type { SubstrateAgent } from '../../core/agent/substrate-agent.js';
 import type { IcpFatigueRegulationReservationPort } from '../../core/agent/fatigue/regulation-reservation.js';
+import type { IcpTurnFenceReader } from '../../core/icp/speaking-precedence-resolver.js';
 import { PostgresIcpFatigueRegulationReservationStore } from '../../persistence/postgres/icp-fatigue-regulation-reservation-store.js';
 import type { ContactTrackingGate } from '../../core/contacts/tracking-gate.js';
 import {
@@ -89,7 +90,13 @@ import {
   resolveContactBlockListPath,
   resolveIntrospectionConsentLedgerPath,
   resolvePersonalSkillsDir,
+  resolveShareCapsuleCustodyPath,
 } from '../../persistence/layout.js';
+import {
+  createCapsuleCustodyService,
+  createShareCapsuleCustodyStore,
+} from '../../core/cogsec/disclosure/index.js';
+import { createPublicationTool } from '../../core/cogsec/disclosure/publication-tool.js';
 import { IntrospectionConsentStore } from '../../faculties/introspection/consent-store.js';
 import { IntrospectionTurnSensitivityDecisions } from '../../faculties/introspection/turn-sensitivity.js';
 import { ContactBlockListStore } from '../../core/cogsec/contact-block-list.js';
@@ -193,6 +200,14 @@ export interface AgentCoreRuntime {
   humanAttentionLedger: FatigueBudgetComposition['humanAttentionLedger'];
   humanAttentionPressure: FatigueBudgetComposition['humanAttentionPressure'];
   fatigueRegulationReservations?: IcpFatigueRegulationReservationPort;
+  /**
+   * Read-only ICP turn-fence peek for the speaking arbiter's ICP-over-social
+   * precedence gate (jp36.5.2.1). Same Postgres fatigue store instance as
+   * {@link fatigueRegulationReservations}, exposed through the narrow read port
+   * so the shared reservation port stays untouched. Present only in the
+   * multi-companion runtime.
+   */
+  icpTurnFenceReader?: IcpTurnFenceReader;
   toolConformanceRunner: ToolConformanceRunner;
   sharedWorldWikiCaretaker: SharedWorldWikiCaretakerService | null;
   closeWikiRuntime: () => Promise<void>;
@@ -325,6 +340,25 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
     ...(options.placesRegistryConfig ? { placesRegistryConfig: options.placesRegistryConfig } : {}),
   });
   agentLoop.artifactApprovalQueue = cardProposalQueue;
+  // Durable Share Capsule custody (jp36.7.1.2): rides the same approval queue as
+  // artifact egress (no second approval store), backed by a server-side custody
+  // file under companion-data/state. Consumers land in jp36.7.2 / jp36.7.3.
+  agentLoop.shareCapsuleCustody = createCapsuleCustodyService({
+    store: createShareCapsuleCustodyStore(resolveShareCapsuleCustodyPath(pathSnapshot.companionDataDir)),
+    approvalQueue: cardProposalQueue,
+  });
+  // jp36.7.3: companion-owned publication edit-loop tool. Reads the live custody
+  // handle, the same approval queue, and the per-turn disclosure lineage lazily
+  // at tool-invocation time; fails closed when any is absent. The model supplies
+  // only authored content — sensitivity/provenance/audience are runtime-derived.
+  agentLoop.registerTool(
+    createPublicationTool({
+      getCustody: () => agentLoop.shareCapsuleCustody,
+      getApprovalQueue: () => agentLoop.artifactApprovalQueue,
+      getDisclosureLineage: () => agentLoop.getCurrentTurnDisclosureLineage(),
+    }),
+    'core',
+  );
   agentLoop.artifactApprovalNotifier = operatorNotifier;
   agentLoop.shareApprovedArtifacts = async (attachments, destination) => {
     if (destination.channelType !== 'discord') {
@@ -640,6 +674,9 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
     humanAttentionLedger: fatigueRuntime.humanAttentionLedger,
     humanAttentionPressure: fatigueRuntime.humanAttentionPressure,
     ...(fatigueRegulationReservations ? { fatigueRegulationReservations } : {}),
+    ...(fatigueRegulationReservations
+      ? { icpTurnFenceReader: fatigueRegulationReservations }
+      : {}),
     toolConformanceRunner,
     sharedWorldWikiCaretaker: wikiRuntime.sharedWorldCaretaker,
     closeWikiRuntime: wikiRuntime.close,

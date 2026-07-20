@@ -33,6 +33,7 @@ import { buildAdminPartnerAffectShadowRoutes } from './routes/partner-affect-sha
 import type { AdminPartnerAffectShadowService } from './services/partner-affect-shadow-service.js';
 import { buildAdminToolConformanceRoutes } from './routes/tool-conformance-routes.js';
 import { buildAdminIcpAutonomyRoutes } from './routes/icp-autonomy-routes.js';
+import { buildAdminRoomArbiterRoutes } from './routes/room-arbiter-routes.js';
 import { buildAdminSessionRoutes } from './routes/session-routes.js';
 import { ADMIN_DYNAMIC_JSON_HEADERS, ADMIN_POLLED_QUEUE_JSON_HEADERS, toSanitizedMessage } from './routes/shared.js';
 import { buildAdminSettingsRoutes } from './routes/settings-routes.js';
@@ -59,6 +60,7 @@ import type {
   AdminImagesService,
   AdminIdentityService,
   AdminIcpAutonomyService,
+  AdminRoomArbiterService,
   AdminMemoryService,
   AdminModelUsageService,
   AdminPromptsService,
@@ -82,6 +84,11 @@ import type {
   ConfirmationQueueAdminApi,
 } from './admin-contract.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
+import type { ConfirmationQueueEntry } from '../../system/capabilities/confirmation-queue.js';
+import {
+  projectPublicationProvenance,
+  type PublicationProvenanceView,
+} from '../../core/cogsec/disclosure/index.js';
 import type { RuntimeDiagnosticsQuery } from '../../shared/diagnostics/runtime-diagnostics.js';
 import type {
   AdminAuditActionType,
@@ -261,6 +268,28 @@ function parseDiagnosticsQuery(req: IncomingMessage): { ok: true; value: Runtime
   };
 }
 
+/**
+ * A pending confirmation as surfaced on the Garden approvals page, additively
+ * carrying a content-free disclosure-provenance view when the entry is a
+ * publication/share candidate (jp36.7.2, bible §10.10). Ordinary confirmations
+ * carry no `disclosureProvenance` and are byte-for-byte unchanged.
+ */
+export type ConfirmationQueueEntryView = ConfirmationQueueEntry & {
+  disclosureProvenance?: PublicationProvenanceView;
+};
+
+/**
+ * Attach the content-free publication-provenance view to a confirmation entry
+ * when it is a publication/share candidate. Fail-closed: a detected candidate
+ * with absent/malformed provenance still carries a `malformed`/`unknown` view so
+ * the operator sees that provenance is missing rather than nothing at all;
+ * non-candidate confirmations pass through untouched.
+ */
+function attachDisclosureProvenance(entry: ConfirmationQueueEntry): ConfirmationQueueEntryView {
+  const disclosureProvenance = projectPublicationProvenance(entry.params);
+  return disclosureProvenance ? { ...entry, disclosureProvenance } : entry;
+}
+
 export function buildAdminApiRoutes(options: {
   config: SubstrateConfig;
   dashboardService: AdminDashboardService;
@@ -292,6 +321,7 @@ export function buildAdminApiRoutes(options: {
   partnerAffectShadowService?: AdminPartnerAffectShadowService | null;
   toolConformanceService?: AdminToolConformanceService | null;
   icpAutonomyService?: AdminIcpAutonomyService | null;
+  roomArbiterService?: AdminRoomArbiterService | null;
   settingsService: AdminSettingsService;
   sharedWorkspaceService?: AdminSharedWorkspaceService | null;
   /** Intake quarantine approval queue (htm9.11); always wired in production. */
@@ -350,6 +380,7 @@ export function buildAdminApiRoutes(options: {
     partnerAffectShadowService,
     toolConformanceService,
     icpAutonomyService,
+    roomArbiterService,
     settingsService,
     sharedWorkspaceService,
     intakeQuarantineService,
@@ -907,6 +938,9 @@ export function buildAdminApiRoutes(options: {
         withBody,
       })
       : []),
+    ...(roomArbiterService
+      ? buildAdminRoomArbiterRoutes({ service: roomArbiterService })
+      : []),
     // ── Skills ──
     {
       method: 'GET',
@@ -1032,7 +1066,7 @@ export function buildAdminApiRoutes(options: {
         confirmationQueueApi.listConfirmationQueue(context).then(
           (result) => {
             sendJson(res, 200, {
-              entries: result.entries,
+              entries: result.entries.map(attachDisclosureProvenance),
               available: true,
             }, ADMIN_POLLED_QUEUE_JSON_HEADERS);
           },

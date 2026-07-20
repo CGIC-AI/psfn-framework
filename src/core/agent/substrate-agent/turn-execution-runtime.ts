@@ -16,6 +16,7 @@ import {
   type InternalState,
 } from '../../self-model/state.js';
 import type { ChannelMeta } from '../../../system/trust/policy.js';
+import { currentChannelClassificationEpoch } from '../../../system/trust/runtime-classification-epochs.js';
 import type {
   AgentResponse,
   CorrelationMetadata,
@@ -48,6 +49,10 @@ import {
   SessionCanaryRegistry,
   runWithCanaryContext,
 } from '../../cogsec/canary/canary-token.js';
+import {
+  DISCLOSURE_CLASSIFIER_VERSION,
+  buildGenerationDisclosureLineage,
+} from '../../cogsec/disclosure/index.js';
 import {
   mergeChargedImageDeliverableSummaries,
   readGeneratedImageSensitivityClassifications,
@@ -1082,7 +1087,7 @@ export async function handleMessageForTurn(
       metacognitiveFlags,
     );
 
-    runtime.recordToolObservations(
+    const toolResultDisclosureSources = runtime.recordToolObservations(
       message,
       turnSessionIdentity,
       turnId,
@@ -1100,6 +1105,48 @@ export async function handleMessageForTurn(
     const artifactSensitivityClassification = classifyArtifactSensitivity(
       artifactSensitivitySources,
     );
+
+    // jp36.1.1.2/jp36.1.1.3: fold every admitted source (session history, memory
+    // retrieval, wiki/project/journal reads, tool results) into the outbound
+    // disclosure lineage for this generation context (bible §9.2). The
+    // destination-eligibility gate that consumes it at egress is jp36.1.3; here
+    // the lineage is accumulated from the real admitted sources and surfaced for
+    // audit, never used to alter this turn's behavior. Tool-result taint rides
+    // the intake-firewall verdict recordToolObservations just computed, so a
+    // tainted/unscreened tool result fails the whole context closed (§9.0/§9.5).
+    const generationDisclosureLineage = buildGenerationDisclosureLineage({
+      context: {
+        generationContextRef: `turn:${turnId}`,
+        classifierVersion: DISCLOSURE_CLASSIFIER_VERSION,
+        classifiedAt: new Date().toISOString(),
+      },
+      conversationScope,
+      // jp36.6.4: this turn's own session content is admitted under the
+      // conversation channel's CURRENT epoch, so it stays auto-eligible to the
+      // room only while the room remains at that epoch. Untracked channels resolve
+      // to undefined and the epoch gate stays inert (byte-identical).
+      conversationChannelEpoch: currentChannelClassificationEpoch(conversationScope.channelId),
+      memorySources: preTurnState.disclosureMemorySources,
+      wikiSources: preTurnState.disclosureWikiSources,
+      toolResultSources: toolResultDisclosureSources,
+    });
+    log.debug('Disclosure lineage accumulated', {
+      turnId,
+      requestId,
+      generationContextRef: generationDisclosureLineage.generationContextRef,
+      classification: generationDisclosureLineage.classification,
+      effectiveSensitivity: generationDisclosureLineage.effectiveSensitivity,
+      sourceCount: generationDisclosureLineage.sourceCount,
+      wikiSourceCount: preTurnState.disclosureWikiSources.length,
+      toolResultSourceCount: toolResultDisclosureSources.length,
+      hasUnclassifiedSource: generationDisclosureLineage.hasUnclassifiedSource,
+      permittedDestinationKinds: generationDisclosureLineage.permittedDestinations.map(constraint => constraint.kind),
+      subjectContactCount: generationDisclosureLineage.subjectContactIds.length,
+    });
+    // jp36.1.3: publish the folded lineage so the egress tool guard composes the
+    // destination check over it for outbound social sends this turn. Until this
+    // point the guard sees no lineage and fails closed for outward destinations.
+    runtime.setCurrentTurnDisclosureLineage(generationDisclosureLineage);
     let responseAttachments = honorNoReply
       ? []
       : recoveredResponse?.attachments

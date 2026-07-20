@@ -22,6 +22,7 @@ import { createNorthStarTool } from '../../../faculties/north-star/tools.js';
 import { createSkillTool } from '../../../faculties/skills/tools.js';
 import { createSubagentTool } from '../../../faculties/subagents/tools.js';
 import { createWikiTool } from '../../../faculties/wiki/tools.js';
+import { createPublicationTool } from '../../cogsec/disclosure/publication-tool.js';
 import { createGenerateImageTool, createSelfieTool } from '../../../primitives/images/tools.js';
 import { createResponseControlTool } from '../no-reply-tool.js';
 import { createToolSearchTool, createToolsetTool } from '../substrate-agent/adaptive-tools-runtime.js';
@@ -38,6 +39,6 @@ export function createProviderFactoryToolCatalog(): AgentTool<any>[] {
     createSkillTool(inert), createWikiTool(inert), createScheduleTool(inert),
     createNorthStarTool(inert), createBeadsTool(inert), createNotifyTool(inert),
     createGenerateImageTool(inert), createSelfieTool(inert), createSubagentTool(inert),
-    createVaultTool(inert), createJournalTool(inert),
+    createVaultTool(inert), createJournalTool(inert), createPublicationTool(inert),
   ];
 }

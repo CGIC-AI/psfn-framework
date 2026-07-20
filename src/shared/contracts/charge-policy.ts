@@ -179,6 +179,63 @@ export interface FatiguePolicyOverchargeConfig {
   minRecentHumanParticipants: number;
 }
 
+/**
+ * Per-channel aggregate machine-pressure pacing (design bible §12.2, adjudication
+ * decision 8). This is **non-monetary**: it shapes conversation (raises the
+ * autonomous-lease bar, invites wrap-up) but is never spent — the social pot is
+ * money, room-episode pressure is pacing. It is per-channel, so two rooms are
+ * independent, and it is derived from the same durable fatigue ledger rather
+ * than an arbiter-local store. Human-triggered turns contribute zero (they are
+ * never recorded as charged machine turns), preserving the human-uncharged
+ * invariant.
+ */
+export interface FatigueRoomEpisodePressureConfig {
+  /** Continuous decay half-life for aggregate per-channel machine pressure. */
+  halfLifeMs: number;
+  /** Bounded history horizon used to keep per-channel ledger reads finite (>= halfLifeMs). */
+  windowMs: number;
+  /** Pressure contributed by one machine reply before elapsed-time decay. */
+  replyPressureUnits: number;
+  /** Pressure contributed by one machine reaction before decay (near-zero, <= replyPressureUnits). */
+  reactionPressureUnits: number;
+  /** Pressure at which the autonomous-lease confidence bar begins to rise. */
+  elevatedThreshold: number;
+  /** Pressure at which graceful wrap-up is invited (> elevatedThreshold). */
+  wrapUpThreshold: number;
+  /** Maximum additive lease-confidence bias applied at/above the wrap-up threshold. */
+  maxLeaseThresholdBias: number;
+}
+
+/**
+ * Law 36 hard-suppression circuit breaker (charter §8.11 "Soft Guidance Before
+ * Behavioral Circuit Breakers"; design bible §12.2/§20.2 "hard suppression
+ * remains the final safety mechanism"). This is the operational fallback that
+ * sits ABOVE the room-episode pressure ladder: soft pressure raises the lease
+ * bar and invites graceful wrap-up first, and only a runaway room that keeps
+ * flooding *past* the wrap-up band trips the breaker and suppresses the next
+ * autonomous speaking lease. It is proportionate (the narrowest interruption:
+ * one autonomous lease, never human turns, never room history) and its state is
+ * derived from the same decaying pressure, so recovery is automatic.
+ */
+export interface FatigueRoomEpisodeCircuitBreakerConfig {
+  /**
+   * Aggregate room-episode pressure at which the breaker trips and suppresses
+   * the next autonomous lease. Must sit strictly ABOVE
+   * `roomEpisodePressure.wrapUpThreshold` (charter §8.11: a circuit breaker is
+   * set above ordinary healthy use), so graceful wrap-up is always invited
+   * before hard suppression — no abrupt tap-out.
+   */
+  tripThreshold: number;
+  /**
+   * Pressure at or below which a tripped breaker releases into its half-open
+   * probe window, then closes. Must satisfy `0 < resetThreshold < tripThreshold`
+   * so the hysteresis band prevents the breaker from flapping open/closed on
+   * pressure jitter. Recovery follows the continuous pressure decay; no calendar
+   * reset is involved.
+   */
+  resetThreshold: number;
+}
+
 export interface FatigueSocialRegulationConfig {
   /** Recent relationship activity decays continuously instead of resetting at UTC midnight. */
   relationshipPressureHalfLifeMs: number;
@@ -202,6 +259,30 @@ export interface FatigueSocialRegulationConfig {
     activeWorkOrResearch: boolean;
     explicitPeerInvitation: boolean;
   };
+  /** Per-channel aggregate machine-pressure pacing (non-monetary; §12.2). */
+  roomEpisodePressure: FatigueRoomEpisodePressureConfig;
+  /** Law 36 hard-suppression breaker layered above the pressure ladder (§8.11). */
+  roomEpisodeCircuitBreaker: FatigueRoomEpisodeCircuitBreakerConfig;
+}
+
+export interface FatigueSocialPotConfig {
+  /** Full per-companion social pot ceiling, in charge-policy units. */
+  capUnits: number;
+  /**
+   * Bounded fraction (0 < x <= 1) of the pot remaining at draw time that any
+   * one channel may draw (~1/3), so one busy room cannot starve the others.
+   */
+  perChannelDrawFraction: number;
+  /**
+   * Interval between continuous regeneration ticks that replace the daily
+   * reset cliff (hourly).
+   */
+  regenerationTickMs: number;
+  /**
+   * Units credited to the pot per regeneration tick (cap/24), clamped so the
+   * pot never exceeds capUnits.
+   */
+  regenerationUnitsPerTick: number;
 }
 
 /**
@@ -236,6 +317,7 @@ export interface FatiguePolicyConfig {
   stateThresholds: FatiguePolicyStateThresholds;
   overcharge: FatiguePolicyOverchargeConfig;
   socialRegulation: FatigueSocialRegulationConfig;
+  socialPot: FatigueSocialPotConfig;
   humanAttention: HumanAttentionPressureConfig;
 }
 

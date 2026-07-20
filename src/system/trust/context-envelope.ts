@@ -349,7 +349,21 @@ export function deriveScopeContextEnvelope(input: {
  * unambiguously: it received the fail-closed default (invite_only) and the
  * flag keeps it visible (Garden warning badge + migration report line) until
  * the operator confirms or corrects it. The flag never changes gating.
+ *
+ * `classificationSource: 'operator_confirmed'` (jp36.6) records that an
+ * operator explicitly confirmed/adjusted this room's {privacy, broadcast}
+ * classification — the invite-only → public click-to-accept demotion flow
+ * (jp36.6.2). It upgrades the resolved envelope source from the default
+ * `channel_label` to `operator_confirmed` (see ChannelClassificationSource in
+ * policy.ts) so downstream policy and Garden can distinguish a derived default
+ * from an operator DECISION for audit (design bible §9.3). It is a provenance
+ * refinement of the tier-1 channel label, never a new precedence tier, and is
+ * meaningful only paired with a tier-1 classification (a `privacy` value or
+ * `broadcast: true`); a bare confirmation is rejected fail-closed below.
  */
+export const CHANNEL_LABEL_CLASSIFICATION_SOURCES = ['operator_confirmed'] as const;
+export type ChannelLabelClassificationSource = (typeof CHANNEL_LABEL_CLASSIFICATION_SOURCES)[number];
+
 export interface ChannelEnvelopeLabel {
   readonly privacy?: ChannelPrivacy;
   readonly broadcast?: boolean;
@@ -361,6 +375,13 @@ export interface ChannelEnvelopeLabel {
    */
   readonly deliveryStyle?: ChannelDeliveryStyle;
   readonly needsReview?: boolean;
+  /**
+   * Operator-decision provenance for the label's classification (jp36.6).
+   * Only `'operator_confirmed'` is persistable; the other envelope sources
+   * (`channel_label`, `operator_override`, `derived_default`) are computed at
+   * resolution time and never written to a label.
+   */
+  readonly classificationSource?: ChannelLabelClassificationSource;
 }
 
 export function validateChannelEnvelopeLabel(raw: unknown, field: string): ChannelEnvelopeLabel {
@@ -368,7 +389,14 @@ export function validateChannelEnvelopeLabel(raw: unknown, field: string): Chann
     throw new Error(`Invalid channel envelope label: ${field} must be an object`);
   }
   const source = raw as Record<string, unknown>;
-  const supportedKeys = ['privacy', 'broadcast', 'contactTracking', 'deliveryStyle', 'needsReview'];
+  const supportedKeys = [
+    'privacy',
+    'broadcast',
+    'contactTracking',
+    'deliveryStyle',
+    'needsReview',
+    'classificationSource',
+  ];
   const unknownKeys = Object.keys(source).filter(key => !supportedKeys.includes(key));
   if (unknownKeys.length > 0) {
     throw new Error(`Invalid channel envelope label: ${field} has unsupported keys: ${unknownKeys.join(', ')}`);
@@ -383,6 +411,7 @@ export function validateChannelEnvelopeLabel(raw: unknown, field: string): Chann
     contactTracking?: ContactTrackingMode;
     deliveryStyle?: ChannelDeliveryStyle;
     needsReview?: boolean;
+    classificationSource?: ChannelLabelClassificationSource;
   } = {};
 
   if (source.privacy !== undefined) {
@@ -421,6 +450,18 @@ export function validateChannelEnvelopeLabel(raw: unknown, field: string): Chann
     }
     label.needsReview = source.needsReview;
   }
+  if (source.classificationSource !== undefined) {
+    if (
+      typeof source.classificationSource !== 'string'
+      || !(CHANNEL_LABEL_CLASSIFICATION_SOURCES as readonly string[]).includes(source.classificationSource)
+    ) {
+      throw new Error(
+        `Invalid channel envelope label: ${field}.classificationSource must be one of: `
+        + CHANNEL_LABEL_CLASSIFICATION_SOURCES.join(', '),
+      );
+    }
+    label.classificationSource = source.classificationSource as ChannelLabelClassificationSource;
+  }
   // Contract rule (docs/context-envelope.md): a broadcast surface is always
   // channelPrivacy 'public'. Reject contradictory labels fail-closed.
   if (label.broadcast === true && label.privacy !== undefined && label.privacy !== 'public') {
@@ -429,7 +470,143 @@ export function validateChannelEnvelopeLabel(raw: unknown, field: string): Chann
       + "a broadcast surface is always 'public'",
     );
   }
+  // Room-classification epochs (jp36.6): `operator_confirmed` records a
+  // confirmed {privacy, broadcast} classification. It only resolves at tier 1,
+  // so it is meaningless — and rejected fail-closed — unless the label also
+  // pins that classification (a `privacy` value or `broadcast: true`). Without
+  // one, the pair would fall through to an operator override or a derived
+  // default, where the confirmation marker would be silently dropped.
+  if (
+    label.classificationSource === 'operator_confirmed'
+    && label.privacy === undefined
+    && label.broadcast !== true
+  ) {
+    throw new Error(
+      `Invalid channel envelope label: ${field} sets classificationSource 'operator_confirmed' `
+      + "without a tier-1 classification; pair it with a 'privacy' value or 'broadcast: true'",
+    );
+  }
   return label;
+}
+
+// ── Room classification epochs (jp36.6): invite-only → public demotion ──
+
+/**
+ * Version of the click-to-accept demotion notice the operator must acknowledge.
+ * Bump when the notice copy changes so an epoch record proves WHICH notice text
+ * the operator accepted. The demotion flow (jp36.6.2) rejects an acceptance
+ * whose acknowledged version does not match this constant (fail closed).
+ */
+export const DEMOTION_EPOCH_NOTICE_VERSION = '2026-07-19.1';
+
+/**
+ * Click-to-accept notice for the invite-only → public classification demotion
+ * (design bible §9.3 / §18 / settled decision #37). The bible specifies the
+ * REQUIRED CONTENT, not literal copy; this is the ratified wording drafted from
+ * that spec. All four statements are load-bearing:
+ *  1. prior derived/shared-eligible room material can no longer be auto-shared
+ *     at the new (public) level because trust/privacy gates now apply;
+ *  2. accepting starts a FRESH disclosure epoch for this channel;
+ *  3. prior material remains reachable ONLY through human-in-the-loop egress
+ *     review — it is not retroactively declassified;
+ *  4. only content generated AFTER acceptance is public-eligible.
+ */
+export const DEMOTION_EPOCH_NOTICE = [
+  'Demoting this room from invite-only to public starts a fresh disclosure epoch.',
+  'Derived and shared-eligible material generated in this room under the invite-only '
+    + 'ceiling can no longer be auto-shared with the room at the public level, because '
+    + 'trust and privacy gates now apply at that level.',
+  'Everything generated under the old ceiling keeps that ceiling: prior material remains '
+    + 'reachable only through human-in-the-loop egress review and is not retroactively '
+    + 'declassified.',
+  'Only content generated after you accept is public-eligible.',
+].join(' ');
+
+/**
+ * An operator-signed classification-epoch boundary. Written ONLY by the Garden
+ * click-to-accept demotion flow (jp36.6.2) atomically with the confirmed label,
+ * and it is the operator-signed record that authorizes a label's
+ * `classificationSource: 'operator_confirmed'` (parseContextEnvelopeSection
+ * fail-closes any confirmed label lacking a matching epoch). Downstream epoch
+ * enforcement (jp36.6.3) reads `at` as the disclosure-epoch boundary: material
+ * generated before `at` keeps the old (invite-only) ceiling; only content after
+ * `at` is public-eligible.
+ */
+export interface ChannelClassificationEpoch {
+  readonly channelId: string;
+  /** Classification before the demotion. Only invite_only → public is valid. */
+  readonly from: 'invite_only';
+  readonly to: 'public';
+  /** ISO-8601 timestamp of the epoch boundary (acceptance instant). */
+  readonly at: string;
+  /** Operator actor that accepted the notice (audit attribution). */
+  readonly acceptedBy: string;
+  /** Notice version the operator acknowledged (must be a known version). */
+  readonly noticeVersion: string;
+}
+
+const CHANNEL_CLASSIFICATION_EPOCH_KEYS = [
+  'channelId',
+  'from',
+  'to',
+  'at',
+  'acceptedBy',
+  'noticeVersion',
+] as const;
+
+/** Notice versions accepted on load. Add historical versions here, never remove. */
+export const KNOWN_DEMOTION_EPOCH_NOTICE_VERSIONS = [DEMOTION_EPOCH_NOTICE_VERSION] as const;
+
+/**
+ * Fail-closed validator for one persisted classification-epoch record. Only the
+ * invite_only → public demotion is a legal epoch boundary (widening a public
+ * room does not exist and narrowing tightens forward only without an epoch).
+ */
+export function validateChannelClassificationEpoch(raw: unknown, field: string): ChannelClassificationEpoch {
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
+    throw new Error(`Invalid classification epoch: ${field} must be an object`);
+  }
+  const source = raw as Record<string, unknown>;
+  const unknownKeys = Object.keys(source).filter(
+    key => !(CHANNEL_CLASSIFICATION_EPOCH_KEYS as readonly string[]).includes(key),
+  );
+  if (unknownKeys.length > 0) {
+    throw new Error(`Invalid classification epoch: ${field} has unsupported keys: ${unknownKeys.join(', ')}`);
+  }
+
+  const channelId = typeof source.channelId === 'string' ? source.channelId.trim() : '';
+  if (!channelId) {
+    throw new Error(`Invalid classification epoch: ${field}.channelId must be a non-empty string`);
+  }
+  if (source.from !== 'invite_only') {
+    throw new Error(`Invalid classification epoch: ${field}.from must be 'invite_only' (only invite-only → public epochs exist)`);
+  }
+  if (source.to !== 'public') {
+    throw new Error(`Invalid classification epoch: ${field}.to must be 'public' (only invite-only → public epochs exist)`);
+  }
+  if (typeof source.at !== 'string' || Number.isNaN(Date.parse(source.at))) {
+    throw new Error(`Invalid classification epoch: ${field}.at must be an ISO-8601 timestamp`);
+  }
+  if (typeof source.acceptedBy !== 'string' || source.acceptedBy.trim() === '') {
+    throw new Error(`Invalid classification epoch: ${field}.acceptedBy must be a non-empty string`);
+  }
+  if (
+    typeof source.noticeVersion !== 'string'
+    || !(KNOWN_DEMOTION_EPOCH_NOTICE_VERSIONS as readonly string[]).includes(source.noticeVersion)
+  ) {
+    throw new Error(
+      `Invalid classification epoch: ${field}.noticeVersion must be one of: `
+      + KNOWN_DEMOTION_EPOCH_NOTICE_VERSIONS.join(', '),
+    );
+  }
+  return {
+    channelId,
+    from: 'invite_only',
+    to: 'public',
+    at: source.at,
+    acceptedBy: source.acceptedBy,
+    noticeVersion: source.noticeVersion,
+  };
 }
 
 // ── Migration map: retired ChannelVisibility vocabulary → envelope pair ──

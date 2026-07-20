@@ -62,3 +62,27 @@ export function roomContentWindowFloorMs(window: RoomContentWindow): number {
       return Number.POSITIVE_INFINITY;
   }
 }
+
+/**
+ * Compose several ports into one so a single manager slot can serve multiple
+ * independent channel families (e.g. the companion-room window and the
+ * Discord-voice window). The FIRST port whose window is not `unwindowed` wins;
+ * if every port returns `unwindowed`, the composite is `unwindowed`.
+ *
+ * Each port MUST own a disjoint channel family — returning `unwindowed` for any
+ * channel it does not own — so ordering only picks the default and can never
+ * silently override one owner's `closed`/`windowed` verdict with another's.
+ */
+export function composeRoomContentWindowPorts(
+  ports: readonly RoomContentWindowPort[],
+): RoomContentWindowPort {
+  return {
+    resolveWindow(channelId: string): RoomContentWindow {
+      for (const port of ports) {
+        const window = port.resolveWindow(channelId);
+        if (window.kind !== 'unwindowed') return window;
+      }
+      return { kind: 'unwindowed' };
+    },
+  };
+}

@@ -39,6 +39,17 @@ export const AGENCY_TOOL_CONTRACTS = {
     guidance: 'Do not use it for generic image work; use generate_image.',
     example: { prompt: 'A relaxed window-light selfie in a green sweater, eye-level camera' },
   },
+  publication: {
+    purpose: 'Run the companion-owned publication edit loop: author an exact release candidate, read its approval status, and resubmit an edited version. You supply only the content you authored and your reason; the runtime derives all disclosure metadata.',
+    actions: [
+      action('submit', ['body', 'reason'], ['media_refs', 'max_use_count'], { id: 'submit', rule: 'proposes the exact content for human approval; sensitivity, provenance, subject contacts, and destination are runtime-derived and must not be supplied' }),
+      action('revise', ['revises_candidate_id', 'body', 'reason'], ['media_refs', 'max_use_count'], { id: 'revise', rule: 'a fresh candidate that supersedes the prior one; approval binds to the exact edited content' }),
+      action('status', [], [], { id: 'status', rule: 'reads the approval state of your publication candidates' }),
+    ],
+    output: 'It returns the candidate id, content hash, and approval status; it never mints, approves, or revokes an approval, never sends the publication, and rejects any model-supplied sensitivity/provenance/audience/destination.',
+    guidance: 'The human raises concerns about what is shared in conversation and never edits your prose; a denied candidate is your signal to edit and resubmit with action=revise.',
+    example: { action: 'submit', body: 'A short reflection I would like to publish.', reason: 'It captures a thought I want to share publicly.' },
+  },
   subagent: {
     purpose: 'Control bounded short-horizon workers for parallel or isolated tasks.',
     actions: [

@@ -5,6 +5,20 @@ import type { SubstrateConfig } from '../../system/config/runtime-config-contrac
 import type { ShardExecutionPort } from '../../faculties/shards/port.js';
 import type { SatelliteRoutingPort } from '../../core/agent/satellite-adapter-port.js';
 import type { ObservedGroupMemoryScheduleDecision } from '../../faculties/memory/extraction/group-observed-scheduler.js';
+import type {
+  ParticipationAppraisalResult,
+  ParticipationCandidate,
+  PassiveNameCandidateDecision,
+} from '../../core/participation/types.js';
+import type {
+  ReservationDecision,
+  ReservationSignalContext,
+} from '../../core/agent/arbiter/reservation-phase.js';
+import type {
+  EgressLeaseDecision,
+  EgressReplyTrigger,
+} from '../../core/agent/arbiter/egress-lease-phase.js';
+import type { SpeakingReservationSnapshot } from '../../core/agent/arbiter/speaking-arbiter-store-port.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
 import { resolveCompanionIdFromConfig } from '../../core/identity/companion-runtime.js';
 import type { OutboundReplyGuardPort } from '../../system/lifecycle/outbound-reply-dedupe.js';
@@ -227,6 +241,53 @@ export interface ObservedGroupMemorySchedulerPort {
   observeMessage(message: SubstrateMessage): Promise<ObservedGroupMemoryScheduleDecision>;
 }
 
+export interface PassiveNameCandidatePort {
+  build(message: SubstrateMessage): Promise<PassiveNameCandidateDecision>;
+}
+
+export interface ParticipationAppraiserPort {
+  appraise(candidate: ParticipationCandidate): Promise<ParticipationAppraisalResult>;
+}
+
+/**
+ * Deterministic speaking-arbiter reservation phase (bible §8.5/§12.2, §6.10;
+ * jp36.5.1.2). Runs BEFORE the appraiser's model call: a gated candidate never
+ * reaches appraisal, and a reserved candidate's reservation is released on an
+ * `ignore` outcome.
+ */
+export interface ReservationPhasePort {
+  reserve(ctx: ReservationSignalContext): Promise<ReservationDecision>;
+  settleAfterAppraisal(
+    reservation: SpeakingReservationSnapshot,
+    action: ParticipationAppraisalResult['appraisal']['action'],
+    nowMs: number,
+  ): Promise<'released' | 'retained'>;
+  releaseIgnored(reservation: SpeakingReservationSnapshot, nowMs: number): Promise<void>;
+}
+
+/**
+ * Speaking-arbiter egress-lease phase (bible §8.5/§12.2, §18, §20.1;
+ * jp36.5.1.3). Phase 2: the exclusive send-once binding at delivery. When
+ * present, a RETAINED `reply` reservation is handed to {@link grantReply} (the
+ * Law-36 single-probe breaker gate, lease-threshold-bias confidence bar,
+ * speak-least fairness, the real pot draw, then acquire → send → complete); a
+ * RETAINED `react` reservation is handed to {@link releaseReact} for its
+ * explicit non-lease release. Optional and off by default — promoting an
+ * observed candidate to a real autonomous send is opt-in and fail-closed.
+ */
+export interface EgressLeasePhasePort {
+  grantReply(
+    reservation: SpeakingReservationSnapshot,
+    appraisal: Extract<ParticipationAppraisalResult['appraisal'], { action: 'reply' }>,
+    trigger: EgressReplyTrigger,
+    nowMs: number,
+  ): Promise<EgressLeaseDecision>;
+  releaseReact(
+    reservation: SpeakingReservationSnapshot,
+    nowMs: number,
+  ): Promise<EgressLeaseDecision>;
+}
+
 export interface GatewayMessageLogger {
   info(message: string, meta?: Record<string, unknown>): void;
   warn(message: string, meta?: Record<string, unknown>): void;
@@ -244,6 +305,42 @@ export interface GatewayMessageHandlersDeps {
   log: GatewayMessageLogger;
   trackSessionActivity: (message: SubstrateMessage) => void;
   observedGroupMemoryScheduler?: ObservedGroupMemorySchedulerPort;
+  /**
+   * Deterministic passive-name participation candidate gate (bible §8.1). Runs
+   * on observed group-room traffic alongside group-memory scheduling; records
+   * created/suppressed candidates on the safeguard audit trail. Optional so
+   * runtimes without room participation keep working unchanged.
+   */
+  passiveNameCandidateBuilder?: PassiveNameCandidatePort;
+  /**
+   * Cheap tool-less participation appraiser (bible §8.2). When present, each
+   * candidate the passive-name gate creates is appraised on this real observe
+   * path into a ternary (ignore/react/reply); the outcome is recorded on the
+   * safeguard audit trail and the typed event bus. Fails closed to `ignore` on
+   * any error/timeout/malformed output — it never speaks itself, and a `reply`
+   * decision is only routed through the full response path downstream (jp36.5).
+   * Optional so runtimes without room participation keep working unchanged.
+   */
+  participationAppraiser?: ParticipationAppraiserPort;
+  /**
+   * Speaking-arbiter reservation phase (bible §8.5/§12.2, jp36.5.1.2). When
+   * present, each created candidate is deterministically gated and reserved
+   * before appraisal ("peek before the model runs"): a gated candidate never
+   * reaches the appraiser, and a reserved candidate's reservation is released on
+   * an `ignore` outcome. Optional so single-companion runtimes (no gateway
+   * arbiter store) keep the appraiser's existing direct path unchanged.
+   */
+  reservationPhase?: ReservationPhasePort;
+  /**
+   * Speaking-arbiter egress-lease phase (bible §8.5, jp36.5.1.3). When present
+   * (and enabled), a RETAINED `reply`/`react` reservation from the reservation
+   * phase is handed onward here: `reply` binds the exclusive fenced egress lease
+   * and delivers (the real pot draw + Law-36 single-probe breaker gate bind
+   * here), `react` gets its explicit non-lease release. Optional so runtimes
+   * without the arbiter — or with autonomous send disabled — keep the
+   * observe/appraise path unchanged (nothing is sent).
+   */
+  egressLeasePhase?: EgressLeasePhasePort;
   /**
    * Records primary replies delivered to Discord so replay-prone senders (the
    * internal continuation) can detect and suppress a duplicate of
@@ -276,6 +373,10 @@ export function registerGatewayMessageHandlers(
     log,
     trackSessionActivity,
     observedGroupMemoryScheduler,
+    passiveNameCandidateBuilder,
+    participationAppraiser,
+    reservationPhase,
+    egressLeasePhase,
     outboundReplyGuard,
     companionAuthorName,
     eventBus,
@@ -290,6 +391,279 @@ export function registerGatewayMessageHandlers(
   const failedDiscordDeliveries = new DiscordFailedDeliveryCache();
   const inFlightCompanionMessages = new Set<string>();
   const recentCompanionMessages = new Map<string, number>();
+
+  /**
+   * Appraise one created participation candidate into a ternary (bible §8.2) and
+   * record it. Fully fail-closed: it never throws into the observe path and the
+   * appraiser itself fails closed to `ignore` on any error/timeout/malformed
+   * output, so a failure can only ever suppress participation, never invent it.
+   * The decision is recorded on the audit trail and the typed event bus; a
+   * `reply` here is only a request that the downstream arbiter (jp36.5) may
+   * route through the full response path — nothing is sent from here.
+   */
+  const appraiseParticipationCandidate = async (
+    candidate: ParticipationCandidate,
+  ): Promise<ParticipationAppraisalResult | undefined> => {
+    if (!participationAppraiser) {
+      return undefined;
+    }
+    try {
+      const result = await participationAppraiser.appraise(candidate);
+      const { appraisal } = result;
+      safeguardAuditTrail.append('participation.appraisal.completed', {
+        channelId: candidate.channelId,
+        sourceMessageId: candidate.sourceMessageId,
+        trigger: candidate.trigger,
+        action: appraisal.action,
+        reasonCode: appraisal.reasonCode,
+        confidence: appraisal.confidence,
+        failClosed: result.failClosed,
+        ...(result.failClosedReason ? { failClosedReason: result.failClosedReason } : {}),
+      });
+      await eventBus.emit('participation.appraisal', {
+        channelId: candidate.channelId,
+        sourceMessageId: candidate.sourceMessageId,
+        trigger: candidate.trigger,
+        action: appraisal.action,
+        reasonCode: appraisal.reasonCode,
+        confidence: appraisal.confidence,
+        failClosed: result.failClosed,
+        timestamp: nowMonotonicMs(),
+      });
+      return result;
+    } catch (appraiserError) {
+      // The appraiser is designed to fail closed internally; this is a
+      // belt-and-braces guard so nothing here can break message observation.
+      const errorText = toErrorMessage(appraiserError);
+      log.warn('Participation appraiser failed', {
+        channelId: candidate.channelId,
+        messageId: candidate.sourceMessageId,
+        error: errorText,
+      });
+      safeguardAuditTrail.append('participation.appraisal.error', {
+        channelId: candidate.channelId,
+        sourceMessageId: candidate.sourceMessageId,
+        trigger: candidate.trigger,
+        error: errorText,
+      });
+      return undefined;
+    }
+  };
+
+  /**
+   * Gate and reserve one created candidate before appraisal (bible §8.5/§12.2,
+   * jp36.5.1.2), then appraise a reserved candidate and settle its reservation.
+   * A gated candidate never reaches the appraiser (no model spend). A reserved
+   * candidate's reservation is released on an `ignore` outcome (silence is a
+   * valid release, never retried into speech); a `react`/`reply` reservation is
+   * handed to the egress-lease phase (jp36.5.1.3). Fully fail-closed: it never
+   * throws into the observe path.
+   */
+  const reserveAndAppraiseCandidate = async (
+    candidate: ParticipationCandidate,
+    phase: ReservationPhasePort,
+  ): Promise<void> => {
+    const decision = await phase.reserve({
+      channelId: candidate.channelId,
+      triggerEventId: candidate.sourceMessageId,
+      companionId,
+      nowMs: nowMonotonicMs(),
+    });
+    if (decision.outcome === 'gated') {
+      safeguardAuditTrail.append('participation.reservation.gated', {
+        channelId: candidate.channelId,
+        sourceMessageId: candidate.sourceMessageId,
+        trigger: candidate.trigger,
+        blockedBy: decision.blockedBy,
+        ...(decision.availabilityState ? { availabilityState: decision.availabilityState } : {}),
+        ...(decision.errorStage ? { errorStage: decision.errorStage } : {}),
+      });
+      await eventBus.emit('participation.reservation', {
+        channelId: candidate.channelId,
+        sourceMessageId: candidate.sourceMessageId,
+        trigger: candidate.trigger,
+        outcome: 'gated',
+        blockedBy: decision.blockedBy,
+        ...(decision.availabilityState ? { availabilityState: decision.availabilityState } : {}),
+        ...(decision.errorStage ? { errorStage: decision.errorStage } : {}),
+        timestamp: nowMonotonicMs(),
+      });
+      // Gated: the candidate never reaches the appraiser's model call.
+      return;
+    }
+    safeguardAuditTrail.append('participation.reservation.reserved', {
+      channelId: candidate.channelId,
+      sourceMessageId: candidate.sourceMessageId,
+      trigger: candidate.trigger,
+      reservationId: decision.reservation.reservationId,
+      episodeId: decision.reservation.episodeId,
+      replayed: decision.replayed,
+    });
+    await eventBus.emit('participation.reservation', {
+      channelId: candidate.channelId,
+      sourceMessageId: candidate.sourceMessageId,
+      trigger: candidate.trigger,
+      outcome: 'reserved',
+      reservationId: decision.reservation.reservationId,
+      episodeId: decision.reservation.episodeId,
+      replayed: decision.replayed,
+      timestamp: nowMonotonicMs(),
+    });
+
+    const result = participationAppraiser
+      ? await appraiseParticipationCandidate(candidate)
+      : undefined;
+    // No appraiser, or the appraiser's belt-and-braces guard tripped: the
+    // candidate can never become a reply, so release the reservation.
+    const action = result?.appraisal.action ?? 'ignore';
+    let settlement: 'released' | 'retained' = 'released';
+    try {
+      settlement = await phase.settleAfterAppraisal(
+        decision.reservation,
+        action,
+        nowMonotonicMs(),
+      );
+      safeguardAuditTrail.append('participation.reservation.settled', {
+        channelId: candidate.channelId,
+        sourceMessageId: candidate.sourceMessageId,
+        trigger: candidate.trigger,
+        reservationId: decision.reservation.reservationId,
+        action,
+        settlement,
+      });
+      await eventBus.emit('participation.reservation', {
+        channelId: candidate.channelId,
+        sourceMessageId: candidate.sourceMessageId,
+        trigger: candidate.trigger,
+        outcome: 'settled',
+        reservationId: decision.reservation.reservationId,
+        action,
+        settlement,
+        timestamp: nowMonotonicMs(),
+      });
+    } catch (releaseError) {
+      // A failed release never wedges the room — the reservation is TTL-swept.
+      const errorText = toErrorMessage(releaseError);
+      log.warn('Participation reservation settle failed', {
+        channelId: candidate.channelId,
+        messageId: candidate.sourceMessageId,
+        error: errorText,
+      });
+      safeguardAuditTrail.append('participation.reservation.error', {
+        channelId: candidate.channelId,
+        sourceMessageId: candidate.sourceMessageId,
+        trigger: candidate.trigger,
+        reservationId: decision.reservation.reservationId,
+        error: errorText,
+      });
+      // Content-free bus event: the forensic error text stays on the audit trail
+      // (§19 do-not-log list); the bus carries only the failed-outcome shape.
+      await eventBus.emit('participation.reservation', {
+        channelId: candidate.channelId,
+        sourceMessageId: candidate.sourceMessageId,
+        trigger: candidate.trigger,
+        outcome: 'error',
+        reservationId: decision.reservation.reservationId,
+        timestamp: nowMonotonicMs(),
+      });
+      return;
+    }
+
+    // A RETAINED reservation (react/reply) is handed to the exclusive egress-lease
+    // phase (bible §8.5, jp36.5.1.3): a `reply` binds the fenced send-once lease
+    // (the real pot draw + Law-36 single-probe breaker gate bind here) and
+    // delivers; a `react` gets its explicit non-lease release. Fully fail-closed:
+    // it never throws into the observe path. Absent (or disabled) egress phase
+    // keeps the pre-jp36.5.1.3 behavior — nothing is sent.
+    if (settlement !== 'retained' || !egressLeasePhase || !result) {
+      return;
+    }
+    try {
+      let egressDecision: EgressLeaseDecision;
+      if (result.appraisal.action === 'reply') {
+        const trigger: EgressReplyTrigger = {
+          channelId: candidate.channelId,
+          channelType: candidate.channelType,
+          sourceMessageId: candidate.sourceMessageId,
+          authorId: candidate.triggerAuthorId,
+          authorName: candidate.triggerAuthorName,
+          content: candidate.triggerContent,
+          timestampMs: candidate.triggerTimestampMs,
+        };
+        egressDecision = await egressLeasePhase.grantReply(
+          decision.reservation,
+          result.appraisal,
+          trigger,
+          nowMonotonicMs(),
+        );
+      } else if (result.appraisal.action === 'react') {
+        egressDecision = await egressLeasePhase.releaseReact(
+          decision.reservation,
+          nowMonotonicMs(),
+        );
+      } else {
+        return;
+      }
+      safeguardAuditTrail.append('participation.egress.settled', {
+        channelId: candidate.channelId,
+        sourceMessageId: candidate.sourceMessageId,
+        trigger: candidate.trigger,
+        reservationId: decision.reservation.reservationId,
+        action: result.appraisal.action,
+        outcome: egressDecision.outcome,
+        ...(egressDecision.declineReason ? { declineReason: egressDecision.declineReason } : {}),
+        ...(egressDecision.drawOutcome ? { drawOutcome: egressDecision.drawOutcome } : {}),
+        ...(egressDecision.breakerState ? { breakerState: egressDecision.breakerState } : {}),
+        ...(egressDecision.speakLeastWinner
+          ? { yieldedTo: egressDecision.speakLeastWinner }
+          : {}),
+        ...(egressDecision.errorStage ? { errorStage: egressDecision.errorStage } : {}),
+      });
+      await eventBus.emit('participation.egress', {
+        channelId: candidate.channelId,
+        sourceMessageId: candidate.sourceMessageId,
+        trigger: candidate.trigger,
+        reservationId: decision.reservation.reservationId,
+        outcome: 'settled',
+        action: result.appraisal.action,
+        leaseOutcome: egressDecision.outcome,
+        ...(egressDecision.declineReason ? { declineReason: egressDecision.declineReason } : {}),
+        ...(egressDecision.drawOutcome ? { drawOutcome: egressDecision.drawOutcome } : {}),
+        ...(egressDecision.breakerState ? { breakerState: egressDecision.breakerState } : {}),
+        ...(egressDecision.speakLeastWinner
+          ? { yieldedTo: egressDecision.speakLeastWinner }
+          : {}),
+        ...(egressDecision.errorStage ? { errorStage: egressDecision.errorStage } : {}),
+        timestamp: nowMonotonicMs(),
+      });
+    } catch (egressError) {
+      // Belt-and-braces: the egress phase is designed to fail closed internally;
+      // this guard ensures nothing here can break message observation.
+      const errorText = toErrorMessage(egressError);
+      log.warn('Participation egress-lease phase failed', {
+        channelId: candidate.channelId,
+        messageId: candidate.sourceMessageId,
+        error: errorText,
+      });
+      safeguardAuditTrail.append('participation.egress.error', {
+        channelId: candidate.channelId,
+        sourceMessageId: candidate.sourceMessageId,
+        trigger: candidate.trigger,
+        reservationId: decision.reservation.reservationId,
+        error: errorText,
+      });
+      // Content-free bus event: the forensic error text stays on the audit trail
+      // (§19 do-not-log list); the bus carries only the failed-outcome shape.
+      await eventBus.emit('participation.egress', {
+        channelId: candidate.channelId,
+        sourceMessageId: candidate.sourceMessageId,
+        trigger: candidate.trigger,
+        reservationId: decision.reservation.reservationId,
+        outcome: 'error',
+        timestamp: nowMonotonicMs(),
+      });
+    }
+  };
 
   const pruneDuplicateCaches = (now: number): void => {
     const minTimestamp = now - DUPLICATE_MESSAGE_WINDOW_MS;
@@ -767,6 +1141,74 @@ export function registerGatewayMessageHandlers(
               channelId: message.channelId,
               messageId: message.id,
               error: errorText,
+            });
+          }
+        }
+        if (passiveNameCandidateBuilder) {
+          try {
+            const decision = await passiveNameCandidateBuilder.build(message);
+            if (decision.status === 'created') {
+              const { candidate } = decision;
+              safeguardAuditTrail.append('participation.candidate.created', {
+                channelId: candidate.channelId,
+                sourceMessageId: candidate.sourceMessageId,
+                trigger: candidate.trigger,
+                matchedName: candidate.matchedName,
+                matchedDirectAddress: candidate.matchedDirectAddress,
+                precedingContextCount: candidate.precedingContext.length,
+              });
+              await eventBus.emit('participation.candidate', {
+                channelId: candidate.channelId,
+                sourceMessageId: candidate.sourceMessageId,
+                outcome: 'created',
+                trigger: candidate.trigger,
+                matchedDirectAddress: candidate.matchedDirectAddress,
+                precedingContextCount: candidate.precedingContext.length,
+                timestamp: nowMonotonicMs(),
+              });
+              if (reservationPhase) {
+                // Deterministic gate + reservation before appraisal (§8.5/§6.10):
+                // a gated candidate never reaches the model call, and a reserved
+                // candidate's reservation is released on an `ignore` outcome.
+                await reserveAndAppraiseCandidate(candidate, reservationPhase);
+              } else if (participationAppraiser) {
+                await appraiseParticipationCandidate(candidate);
+              }
+            } else {
+              safeguardAuditTrail.append('participation.candidate.suppressed', {
+                channelId: decision.channelId,
+                sourceMessageId: decision.sourceMessageId,
+                reason: decision.reason,
+                ...(decision.trigger ? { trigger: decision.trigger } : {}),
+              });
+              await eventBus.emit('participation.candidate', {
+                channelId: decision.channelId,
+                sourceMessageId: decision.sourceMessageId,
+                outcome: 'suppressed',
+                suppressionReason: decision.reason,
+                ...(decision.trigger ? { trigger: decision.trigger } : {}),
+                timestamp: nowMonotonicMs(),
+              });
+            }
+          } catch (candidateError) {
+            const errorText = toErrorMessage(candidateError);
+            log.warn('Passive-name candidate gate failed', {
+              channelId: message.channelId,
+              messageId: message.id,
+              error: errorText,
+            });
+            safeguardAuditTrail.append('participation.candidate.error', {
+              channelId: message.channelId,
+              messageId: message.id,
+              error: errorText,
+            });
+            // Content-free bus event: the forensic error text stays on the audit
+            // trail (§19 do-not-log list); the bus carries only the failed shape.
+            await eventBus.emit('participation.candidate', {
+              channelId: message.channelId,
+              sourceMessageId: message.id,
+              outcome: 'error',
+              timestamp: nowMonotonicMs(),
             });
           }
         }

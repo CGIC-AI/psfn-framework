@@ -164,6 +164,61 @@ describe('classifyChannelEnvelope precedence', () => {
   });
 });
 
+describe('operator_confirmed classification source (jp36.6 room-classification epochs)', () => {
+  it('reports operator_confirmed when a channel label records the operator decision', () => {
+    setRuntimeChannelEnvelopeLabels({
+      'room:confirmed-public': { privacy: 'public', classificationSource: 'operator_confirmed' },
+    });
+    const envelope = classifyChannelEnvelope('room:confirmed-public');
+    expect(envelope).toMatchObject({
+      privacy: 'public',
+      broadcast: false,
+      source: 'operator_confirmed',
+    });
+    // The confirmation is provenance only — the resolved disclosure pair is
+    // byte-identical to an unconfirmed channel_label with the same privacy.
+    expect(classifyChannelDisclosure('room:confirmed-public')).toEqual(PUBLIC_PAIR);
+  });
+
+  it('keeps operator_confirmed for a confirmed invite-only classification', () => {
+    setRuntimeChannelEnvelopeLabels({
+      'room:confirmed-invite': { privacy: 'invite_only', classificationSource: 'operator_confirmed' },
+    });
+    expect(classifyChannelEnvelope('room:confirmed-invite')).toMatchObject({
+      privacy: 'invite_only',
+      broadcast: false,
+      source: 'operator_confirmed',
+    });
+    expect(classifyChannelDisclosure('room:confirmed-invite')).toEqual(INVITE_ONLY_PAIR);
+  });
+
+  it('carries operator_confirmed through the broadcast split', () => {
+    setRuntimeChannelEnvelopeLabels({
+      'room:confirmed-broadcast': { broadcast: true, classificationSource: 'operator_confirmed' },
+    });
+    expect(classifyChannelEnvelope('room:confirmed-broadcast')).toMatchObject({
+      privacy: 'public',
+      broadcast: true,
+      source: 'operator_confirmed',
+    });
+  });
+
+  it('reports channel_label (not operator_confirmed) for an unconfirmed label', () => {
+    setRuntimeChannelEnvelopeLabels({
+      'room:derived-label': { privacy: 'public' },
+    });
+    expect(classifyChannelEnvelope('room:derived-label').source).toBe('channel_label');
+  });
+
+  it('never reports operator_confirmed for override or derived tiers', () => {
+    setRuntimeTrustPolicy(policyWithOverrides({
+      exact: { 'room:override': { privacy: 'public', broadcast: false } },
+    }));
+    expect(classifyChannelEnvelope('room:override').source).toBe('operator_override');
+    expect(classifyChannelEnvelope('room:unlabeled-derived').source).toBe('derived_default');
+  });
+});
+
 describe('deliveryStyle resolution at classification (E3.3)', () => {
   it('uses the channel-owned deliveryStyle label when present', () => {
     setRuntimeChannelEnvelopeLabels({

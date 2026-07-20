@@ -33,6 +33,10 @@ const runtimeFactoryMocks = vi.hoisted(() => ({
   connectPostgresBackgroundWorkStore: vi.fn(async () => runtimeFactoryMocks.postgresBackgroundWorkStore),
   postgresCompanionPresenceStore: { kind: 'postgres-companion-presence-store' },
   connectPostgresCompanionPresenceStore: vi.fn(async () => runtimeFactoryMocks.postgresCompanionPresenceStore),
+  postgresSocialPotStore: { kind: 'postgres-social-pot-store' },
+  connectPostgresSocialPotStore: vi.fn(async () => runtimeFactoryMocks.postgresSocialPotStore),
+  postgresSpeakingArbiterStore: { kind: 'postgres-speaking-arbiter-store' },
+  connectPostgresSpeakingArbiterStore: vi.fn(async () => runtimeFactoryMocks.postgresSpeakingArbiterStore),
   postgresPartnerAffectShadowStore: { kind: 'postgres-partner-affect-shadow-store' },
   connectPostgresPartnerAffectShadowStore: vi.fn(async () => runtimeFactoryMocks.postgresPartnerAffectShadowStore),
   bootstrapPool: { end: vi.fn(async () => undefined) },
@@ -111,6 +115,18 @@ vi.mock('./postgres/companion-presence-store.js', () => ({
   },
 }));
 
+vi.mock('./postgres/social-pot-store.js', () => ({
+  PostgresSocialPotStore: {
+    connect: runtimeFactoryMocks.connectPostgresSocialPotStore,
+  },
+}));
+
+vi.mock('./postgres/speaking-arbiter-store.js', () => ({
+  PostgresSpeakingArbiterStore: {
+    connect: runtimeFactoryMocks.connectPostgresSpeakingArbiterStore,
+  },
+}));
+
 vi.mock('./postgres/partner-affect-shadow-store.js', () => ({
   PostgresPartnerAffectShadowStore: {
     connect: runtimeFactoryMocks.connectPostgresPartnerAffectShadowStore,
@@ -138,6 +154,8 @@ beforeEach(() => {
   runtimeFactoryMocks.connectPostgresScheduledPromptStore.mockClear();
   runtimeFactoryMocks.connectPostgresBackgroundWorkStore.mockClear();
   runtimeFactoryMocks.connectPostgresCompanionPresenceStore.mockClear();
+  runtimeFactoryMocks.connectPostgresSocialPotStore.mockClear();
+  runtimeFactoryMocks.connectPostgresSpeakingArbiterStore.mockClear();
   runtimeFactoryMocks.connectPostgresPartnerAffectShadowStore.mockClear();
   runtimeFactoryMocks.createReflectionMetacognitionJournalStore.mockClear();
   runtimeFactoryMocks.connectPostgresInternalStateStore.mockClear();
@@ -306,6 +324,10 @@ describe('createAgentPersistenceRuntime', () => {
     // presence store exists.
     expect(runtimeFactoryMocks.connectPostgresCompanionPresenceStore).not.toHaveBeenCalled();
     expect(runtime.companionPresenceStore).toBeUndefined();
+    expect(runtimeFactoryMocks.connectPostgresSocialPotStore).not.toHaveBeenCalled();
+    expect(runtime.socialPotStore).toBeUndefined();
+    expect(runtimeFactoryMocks.connectPostgresSpeakingArbiterStore).not.toHaveBeenCalled();
+    expect(runtime.speakingArbiterStore).toBeUndefined();
   });
 
   it('connects the shared-schema companion presence store only when multi-companion is enabled', async () => {
@@ -341,6 +363,14 @@ describe('createAgentPersistenceRuntime', () => {
       }),
     );
     expect(runtime.companionPresenceStore).toBe(runtimeFactoryMocks.postgresCompanionPresenceStore);
+    expect(runtimeFactoryMocks.connectPostgresSocialPotStore).toHaveBeenCalledWith(
+      'postgres://postgres:secret@localhost:5432/psfn',
+    );
+    expect(runtime.socialPotStore).toBe(runtimeFactoryMocks.postgresSocialPotStore);
+    expect(runtimeFactoryMocks.connectPostgresSpeakingArbiterStore).toHaveBeenCalledWith(
+      'postgres://postgres:secret@localhost:5432/psfn',
+    );
+    expect(runtime.speakingArbiterStore).toBe(runtimeFactoryMocks.postgresSpeakingArbiterStore);
   });
 
   it('threads the configured per-companion schema into every store and provisions it up front', async () => {

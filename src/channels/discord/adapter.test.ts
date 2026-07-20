@@ -15,6 +15,7 @@ import { createCompanionId } from '../../shared/routing/companion-id.js';
 const discordMock = vi.hoisted(() => {
   return {
     channelsById: new Map<string, unknown>(),
+    channelsCacheById: new Map<string, unknown>(),
     createdClients: [] as any[],
   };
 });
@@ -38,6 +39,9 @@ vi.mock('discord.js', () => {
         if (value instanceof Error) throw value;
         return value ?? null;
       }),
+      cache: {
+        get: (channelId: string) => discordMock.channelsCacheById.get(channelId) ?? undefined,
+      },
     };
     user = null;
     isReady = vi.fn(() => false);
@@ -102,6 +106,7 @@ vi.mock('./voice.js', () => {
 });
 
 import { DiscordAdapter } from './adapter.js';
+import { STANDARD_REACTION_SUBSET } from '../shared/reaction-surface.js';
 
 interface MockDiscordMessage {
   id: string;
@@ -485,6 +490,32 @@ function makeInteractiveTextChannel() {
   };
 
   return { channel, sent, sentPayloads, edits, deleted, get typingCalls() { return typingCalls; } };
+}
+
+// jp36.3.1.1: a text channel whose `messages.fetch(id)` resolves a single
+// message exposing a `react` mock, so outbound reaction delivery can be
+// asserted end-to-end (including permission/emoji failures that must surface).
+function makeReactableTextChannel(options?: {
+  reacted?: string[];
+  reactError?: Error;
+  fetchError?: Error;
+  isTextBased?: boolean;
+}) {
+  const reacted = options?.reacted ?? [];
+  const react = vi.fn(async (emoji: string) => {
+    if (options?.reactError) throw options.reactError;
+    reacted.push(emoji);
+    return { emoji };
+  });
+  const messageFetch = vi.fn(async (messageId: string) => {
+    if (options?.fetchError) throw options.fetchError;
+    return { id: messageId, react };
+  });
+  const channel = {
+    isTextBased: () => options?.isTextBased ?? true,
+    messages: { fetch: messageFetch },
+  };
+  return { channel, reacted, react, messageFetch };
 }
 
 function makeDiscordIncomingMessage(
@@ -2445,6 +2476,94 @@ describe('DiscordAdapter status visibility', () => {
   });
 });
 
+describe('DiscordAdapter outbound reactions (jp36.3.1.1)', () => {
+  beforeEach(() => {
+    discordMock.channelsById.clear();
+    discordMock.createdClients.length = 0;
+  });
+
+  it('advertises the reaction capability on the channel adapter', () => {
+    const adapter = new DiscordAdapter(makeConfig(), new EventBus());
+    expect(adapter.capabilities.reactions).toBe(true);
+    expect(typeof adapter.outbound.sendReaction).toBe('function');
+  });
+
+  it('delivers a reaction to the target message through the outbound seam', async () => {
+    const adapter = new DiscordAdapter(makeConfig(), new EventBus());
+    const channelId = 'reaction-channel';
+    const reactable = makeReactableTextChannel();
+    discordMock.channelsById.set(channelId, reactable.channel);
+
+    await adapter.outbound.sendReaction?.({ channelId }, 'msg-42', '👍');
+
+    expect(reactable.messageFetch).toHaveBeenCalledWith('msg-42');
+    expect(reactable.reacted).toEqual(['👍']);
+  });
+
+  it('surfaces a permission/API rejection as a delivery failure (never silent text)', async () => {
+    const adapter = new DiscordAdapter(makeConfig(), new EventBus());
+    const channelId = 'reaction-denied-channel';
+    const reactable = makeReactableTextChannel({
+      reactError: new Error('Missing Permissions'),
+    });
+    discordMock.channelsById.set(channelId, reactable.channel);
+
+    await expect(
+      adapter.outbound.sendReaction?.({ channelId }, 'msg-9', '🚫'),
+    ).rejects.toThrow(/Missing Permissions/);
+  });
+
+  it('surfaces an unresolved target message as a delivery failure', async () => {
+    const adapter = new DiscordAdapter(makeConfig(), new EventBus());
+    const channelId = 'reaction-missing-message';
+    const reactable = makeReactableTextChannel({
+      fetchError: new Error('Unknown Message'),
+    });
+    discordMock.channelsById.set(channelId, reactable.channel);
+
+    await expect(
+      adapter.outbound.sendReaction?.({ channelId }, 'msg-gone', '👀'),
+    ).rejects.toThrow(/Unknown Message/);
+  });
+
+  it('rejects when the target channel is not text-based', async () => {
+    const adapter = new DiscordAdapter(makeConfig(), new EventBus());
+    const channelId = 'reaction-nontext';
+    const reactable = makeReactableTextChannel({ isTextBased: false });
+    discordMock.channelsById.set(channelId, reactable.channel);
+
+    await expect(
+      adapter.outbound.sendReaction?.({ channelId }, 'msg-1', '👍'),
+    ).rejects.toThrow(/not text-based/);
+    expect(reactable.messageFetch).not.toHaveBeenCalled();
+  });
+
+  it('rejects when the target channel cannot be resolved', async () => {
+    const adapter = new DiscordAdapter(makeConfig(), new EventBus());
+    const channelId = 'reaction-unresolved';
+    discordMock.channelsById.set(channelId, null);
+
+    await expect(
+      adapter.outbound.sendReaction?.({ channelId }, 'msg-1', '👍'),
+    ).rejects.toThrow(/not text-based/);
+  });
+
+  it('rejects empty emoji and empty message id inputs (fail closed)', async () => {
+    const adapter = new DiscordAdapter(makeConfig(), new EventBus());
+    const channelId = 'reaction-empty-inputs';
+    const reactable = makeReactableTextChannel();
+    discordMock.channelsById.set(channelId, reactable.channel);
+
+    await expect(
+      adapter.outbound.sendReaction?.({ channelId }, '   ', '👍'),
+    ).rejects.toThrow(/target message id/);
+    await expect(
+      adapter.outbound.sendReaction?.({ channelId }, 'msg-1', '  '),
+    ).rejects.toThrow(/non-empty emoji/);
+    expect(reactable.react).not.toHaveBeenCalled();
+  });
+});
+
 describe('DiscordAdapter multi-account bindings (multi-companion W1-P2)', () => {
   beforeEach(() => {
     discordMock.channelsById.clear();
@@ -2638,5 +2757,72 @@ describe('DiscordAdapter multi-account bindings (multi-companion W1-P2)', () => 
       }),
     );
     expect(handler).not.toHaveBeenCalled();
+  });
+});
+
+describe('DiscordAdapter reaction surface (jp36.3.1.2)', () => {
+  beforeEach(() => {
+    discordMock.channelsById.clear();
+    discordMock.channelsCacheById.clear();
+    discordMock.createdClients.length = 0;
+  });
+
+  function makeGuild(guildId: string, emojis: Array<{
+    name: string | null;
+    id: string;
+    animated?: boolean;
+    available?: boolean;
+  }>) {
+    const cache = new Map(emojis.map(e => [e.id, {
+      name: e.name,
+      id: e.id,
+      animated: e.animated ?? false,
+      available: e.available ?? true,
+    }]));
+    return { id: guildId, emojis: { cache } };
+  }
+
+  function listReactions(adapter: DiscordAdapter, channelId: string) {
+    return adapter.prompt.listAvailableReactions?.(
+      { channelId } as unknown as SubstrateMessage,
+    );
+  }
+
+  it('surfaces the standard subset even with no guild resolved (DM/uncached)', () => {
+    const adapter = new DiscordAdapter(makeConfig(), new EventBus());
+    const surface = listReactions(adapter, 'dm-channel');
+    expect(surface?.standard).toEqual(STANDARD_REACTION_SUBSET);
+    expect(surface?.custom).toEqual([]);
+  });
+
+  it('surfaces guild-custom emoji that carry a configured meaning, excluding unknown ones', () => {
+    const guildId = '900000000000000001';
+    const channelId = 'guild-text-channel';
+    const guild = makeGuild(guildId, [
+      { name: 'blobwave', id: '111' },
+      { name: 'mystery', id: '222' },
+    ]);
+    discordMock.channelsCacheById.set(channelId, { guild });
+
+    const adapter = new DiscordAdapter(makeConfig(), new EventBus(), {
+      customEmojiMeanings: { [guildId]: { blobwave: 'the house greeting meme' } },
+    });
+
+    const surface = listReactions(adapter, channelId);
+    expect(surface?.custom).toEqual([
+      { name: 'blobwave', token: 'blobwave:111', meaning: 'the house greeting meme' },
+    ]);
+    expect(surface?.standard.length).toBeGreaterThan(0);
+  });
+
+  it('excludes all custom emoji when the guild has no configured meanings', () => {
+    const guildId = '900000000000000002';
+    const channelId = 'guild-text-channel-2';
+    const guild = makeGuild(guildId, [{ name: 'blobwave', id: '111' }]);
+    discordMock.channelsCacheById.set(channelId, { guild });
+
+    const adapter = new DiscordAdapter(makeConfig(), new EventBus());
+    const surface = listReactions(adapter, channelId);
+    expect(surface?.custom).toEqual([]);
   });
 });

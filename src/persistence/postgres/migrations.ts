@@ -2414,6 +2414,13 @@ export const POSTGRES_OBSERVER_EVAL_SIDECAR_MIGRATIONS = [
 //   3 — shared_wiki_chunks (s10f9 shared-world wiki projection; SEPARATE
 //       statement list, see POSTGRES_SHARED_WIKI_MIGRATIONS below)
 //   4 — ICP autonomy content-free availability/episode/permit control plane
+//   5 — icp_autonomy_invalidation_fences
+//   6 — icp_fatigue_turn_reservations
+//   7 — icp-fatigue delivery fence
+//   8 — shared_wiki_caretaker proposals (wiki chain; version 8 reserved there)
+//   9 — companion_social_pot (jp36.4.1.1)
+//  10 — speaking arbiter: reservations, egress leases, per-channel room episodes
+//       (jp36.5.1.1 gateway speaking arbiter, two-phase reservation/egress lease)
 export const SHARED_SCHEMA_NAME = 'shared';
 
 export const POSTGRES_SHARED_MIGRATIONS: readonly string[] = [
@@ -2654,6 +2661,204 @@ export const POSTGRES_SHARED_MIGRATIONS: readonly string[] = [
   `
   INSERT INTO shared_schema_migrations (version, name)
   VALUES (7, 'icp-fatigue-delivery-fence')
+  ON CONFLICT (version) DO NOTHING;
+  `,
+  // Version 9 (sprint 11, jp36.4.1.1): per-companion social pot. The durable,
+  // gateway-owned fatigue-economy budget that funds group participation and ICP
+  // continuation (design bible §12.6). Content-free: one row per companion
+  // carrying only a numeric balance and the regeneration tick boundary the
+  // balance reflects. `balance` is DOUBLE PRECISION because continuous
+  // regeneration credits `cap/24` per hourly tick, which need not be integral.
+  // Draw-cap enforcement and ICP-priority ordering are applied by consumers on
+  // top of this state; the store only persists it across restarts.
+  //
+  // Version 8 is reserved by the shared-wiki chain
+  // (`shared-wiki-caretaker-proposals`); both chains register into the one
+  // `shared_schema_migrations` ledger, so this base-chain migration takes the
+  // next free version (9), not 8.
+  `
+  CREATE TABLE IF NOT EXISTS companion_social_pot (
+    companion_id UUID PRIMARY KEY,
+    balance DOUBLE PRECISION NOT NULL CHECK (balance >= 0),
+    last_regen_at_ms BIGINT NOT NULL CHECK (last_regen_at_ms >= 0),
+    revision BIGINT NOT NULL CHECK (revision >= 1)
+  );
+  `,
+  `
+  INSERT INTO shared_schema_migrations (version, name)
+  VALUES (9, 'companion-social-pot')
+  ON CONFLICT (version) DO NOTHING;
+  `,
+  // Version 10 (sprint 11, jp36.5.1.1): gateway speaking-arbiter state. The
+  // durable, gateway-owned substrate for the two-phase reservation → egress-lease
+  // protocol and per-channel room-episode pressure (design bible §8.5, §12.2;
+  // adjudication §3 R2). Content-free: only companion ids, channel ids, opaque
+  // trigger/source-event ids, timestamps, numeric pressure/counters, and lease
+  // fencing tokens — never message text. All arbiter/lease/pressure state lives
+  // here so a gateway reboot loses nothing (pressure, turns, leases survive).
+  //
+  // Per-channel room episodes: at most one OPEN episode per channel (partial
+  // unique index) is the arbitration context. Pressure is a non-monetary pacing
+  // scalar (§12.6 "the pot is money; episode pressure is pacing").
+  `
+  CREATE TABLE IF NOT EXISTS speaking_room_episodes (
+    episode_id UUID PRIMARY KEY,
+    channel_id TEXT NOT NULL,
+    status TEXT NOT NULL CHECK (status IN ('open', 'closed')),
+    pressure DOUBLE PRECISION NOT NULL DEFAULT 0 CHECK (pressure >= 0),
+    consecutive_autonomous_turns INTEGER NOT NULL DEFAULT 0
+      CHECK (consecutive_autonomous_turns >= 0),
+    last_speaker_companion_id UUID,
+    opened_at_ms BIGINT NOT NULL CHECK (opened_at_ms >= 0),
+    last_activity_at_ms BIGINT NOT NULL CHECK (last_activity_at_ms >= opened_at_ms),
+    closed_at_ms BIGINT,
+    revision BIGINT NOT NULL CHECK (revision >= 1),
+    CHECK ((status = 'closed') = (closed_at_ms IS NOT NULL)),
+    CHECK (closed_at_ms IS NULL OR closed_at_ms >= opened_at_ms)
+  );
+  `,
+  // At most one open episode per channel: the live arbitration context.
+  `CREATE UNIQUE INDEX IF NOT EXISTS idx_speaking_room_episodes_open_channel
+    ON speaking_room_episodes (channel_id) WHERE status = 'open';`,
+  `CREATE INDEX IF NOT EXISTS idx_speaking_room_episodes_channel
+    ON speaking_room_episodes (channel_id, status, last_activity_at_ms);`,
+  // Durable Law-36 room-episode circuit-breaker position (charter §8.11; bible
+  // §12.2/§20.2; jp36.5.1.3). The breaker's prior state must survive a gateway
+  // reboot so the single-probe half-open discipline holds across restarts: a
+  // probe is granted ONLY on the fresh open→half_open transition, never on every
+  // half_open evaluation. Additive (ADD COLUMN IF NOT EXISTS) so it applies to
+  // both fresh and already-provisioned shared schemas on the idempotent chain.
+  `ALTER TABLE speaking_room_episodes
+    ADD COLUMN IF NOT EXISTS breaker_state TEXT NOT NULL DEFAULT 'closed';`,
+  `ALTER TABLE speaking_room_episodes
+    DROP CONSTRAINT IF EXISTS speaking_room_episodes_breaker_state_check;`,
+  `ALTER TABLE speaking_room_episodes
+    ADD CONSTRAINT speaking_room_episodes_breaker_state_check
+    CHECK (breaker_state IN ('closed', 'open', 'half_open'));`,
+  // Per-companion speak-least fairness stats within an episode (§8.5 priority #4,
+  // §20.1). Least-recent participation + stable companion tie-break is derived
+  // from these rows deterministically.
+  `
+  CREATE TABLE IF NOT EXISTS speaking_episode_participation (
+    episode_id UUID NOT NULL
+      REFERENCES speaking_room_episodes(episode_id) ON DELETE CASCADE,
+    companion_id UUID NOT NULL,
+    speak_count INTEGER NOT NULL DEFAULT 0 CHECK (speak_count >= 0),
+    last_spoke_at_ms BIGINT,
+    PRIMARY KEY (episode_id, companion_id),
+    CHECK (last_spoke_at_ms IS NULL OR last_spoke_at_ms >= 0)
+  );
+  `,
+  // Phase 1: candidate reservations. Multiple companions may reserve the SAME
+  // triggering event (each independently deciding a reply may be appropriate);
+  // exactly one can later win the egress lease. Dedup is per source event per
+  // companion (bible §8.1) — the unique key below.
+  `
+  CREATE TABLE IF NOT EXISTS speaking_reservations (
+    reservation_id UUID PRIMARY KEY,
+    channel_id TEXT NOT NULL,
+    trigger_event_id TEXT NOT NULL,
+    companion_id UUID NOT NULL,
+    episode_id UUID NOT NULL
+      REFERENCES speaking_room_episodes(episode_id) ON DELETE RESTRICT,
+    status TEXT NOT NULL CHECK (status IN ('reserved', 'released', 'expired')),
+    reason TEXT CHECK (reason IN (
+      'silence', 'ignore', 'model_failure', 'delivered',
+      'delivery_failure', 'expiry', 'superseded', 'urgent_override'
+    )),
+    reserved_at_ms BIGINT NOT NULL CHECK (reserved_at_ms >= 0),
+    expires_at_ms BIGINT NOT NULL CHECK (expires_at_ms > reserved_at_ms),
+    finalized_at_ms BIGINT,
+    revision BIGINT NOT NULL CHECK (revision >= 1),
+    UNIQUE (channel_id, trigger_event_id, companion_id),
+    CONSTRAINT speaking_reservations_lifecycle_check
+      CHECK ((status = 'reserved') = (finalized_at_ms IS NULL)),
+    -- Named to avoid colliding with the column-level reason CHECK, which
+    -- Postgres auto-names speaking_reservations_reason_check.
+    CONSTRAINT speaking_reservations_reason_presence_check
+      CHECK ((status = 'reserved') = (reason IS NULL)),
+    CHECK (finalized_at_ms IS NULL OR finalized_at_ms >= reserved_at_ms)
+  );
+  `,
+  `CREATE INDEX IF NOT EXISTS idx_speaking_reservations_active
+    ON speaking_reservations (channel_id, trigger_event_id, expires_at_ms)
+    WHERE status = 'reserved';`,
+  `CREATE INDEX IF NOT EXISTS idx_speaking_reservations_episode
+    ON speaking_reservations (episode_id, companion_id);`,
+  // Phase 2: exclusive, fenced egress leases. At most one HELD lease per
+  // triggering room event (partial unique index) — two companions never both
+  // send for one trigger (§20.1). fencing_token is monotonically increasing per
+  // (channel, event): a revived crashed holder presenting a stale token is
+  // rejected at completion, so it can never double-send after reclaim.
+  `
+  CREATE TABLE IF NOT EXISTS speaking_egress_leases (
+    lease_id UUID PRIMARY KEY,
+    reservation_id UUID NOT NULL
+      REFERENCES speaking_reservations(reservation_id) ON DELETE RESTRICT,
+    channel_id TEXT NOT NULL,
+    trigger_event_id TEXT NOT NULL,
+    companion_id UUID NOT NULL,
+    episode_id UUID NOT NULL
+      REFERENCES speaking_room_episodes(episode_id) ON DELETE RESTRICT,
+    fencing_token BIGINT NOT NULL CHECK (fencing_token >= 1),
+    status TEXT NOT NULL CHECK (status IN (
+      'held', 'released', 'expired', 'delivered', 'failed', 'overridden'
+    )),
+    reason TEXT CHECK (reason IN (
+      'silence', 'ignore', 'model_failure', 'delivered',
+      'delivery_failure', 'expiry', 'superseded', 'urgent_override'
+    )),
+    acquired_at_ms BIGINT NOT NULL CHECK (acquired_at_ms >= 0),
+    expires_at_ms BIGINT NOT NULL CHECK (expires_at_ms > acquired_at_ms),
+    finalized_at_ms BIGINT,
+    revision BIGINT NOT NULL CHECK (revision >= 1),
+    UNIQUE (channel_id, trigger_event_id, fencing_token),
+    CONSTRAINT speaking_egress_leases_lifecycle_check
+      CHECK ((status = 'held') = (finalized_at_ms IS NULL)),
+    -- Named to avoid colliding with the column-level reason CHECK, which
+    -- Postgres auto-names speaking_egress_leases_reason_check.
+    CONSTRAINT speaking_egress_leases_reason_presence_check
+      CHECK ((status = 'held') = (reason IS NULL)),
+    CHECK (finalized_at_ms IS NULL OR finalized_at_ms >= acquired_at_ms)
+  );
+  `,
+  // The exclusivity fence: only one lease per triggering event may be HELD.
+  `CREATE UNIQUE INDEX IF NOT EXISTS idx_speaking_egress_leases_one_held
+    ON speaking_egress_leases (channel_id, trigger_event_id) WHERE status = 'held';`,
+  `CREATE INDEX IF NOT EXISTS idx_speaking_egress_leases_reservation
+    ON speaking_egress_leases (reservation_id);`,
+  `CREATE INDEX IF NOT EXISTS idx_speaking_egress_leases_held_expiry
+    ON speaking_egress_leases (expires_at_ms) WHERE status = 'held';`,
+  `
+  INSERT INTO shared_schema_migrations (version, name)
+  VALUES (10, 'speaking-arbiter')
+  ON CONFLICT (version) DO NOTHING;
+  `,
+  // Version 11 (sprint 11, jp36.5.3): crash-recovery charge fencing for
+  // autonomous non-ICP initiations (design bible §8.5 "crash-recovery fencing";
+  // review R2 crash bullet). Bind the fatigue funding draw to the durable,
+  // correlation-keyed, fenced egress lease so the charge is part of the SAME
+  // recovery model as ICP's reservation fence (`IcpConversationCorrelation`):
+  // the pot is a running-balance store with no per-turn row, so a draw taken
+  // before delivery was previously untracked and leaked on a crash. Recording
+  // the drawn units on the lease makes that charge reconcilable after a gateway
+  // reboot (the winning/crashed holder's lease carries what it drew). Additive
+  // (ADD COLUMN IF NOT EXISTS + idempotent constraint, mirroring the breaker
+  // state migration above) so it applies to both fresh and already-provisioned
+  // shared schemas on the idempotent chain. The charge stays permanent on a
+  // speech-terminal (delivered/overridden) lease and is refundable off a
+  // reclaimed never-delivered lease; the refund policy/wiring that consumes this
+  // column is the egress-sender hardening lane (qgqw.3), out of scope here.
+  `ALTER TABLE speaking_egress_leases
+    ADD COLUMN IF NOT EXISTS charged_units DOUBLE PRECISION NOT NULL DEFAULT 0;`,
+  `ALTER TABLE speaking_egress_leases
+    DROP CONSTRAINT IF EXISTS speaking_egress_leases_charged_units_check;`,
+  `ALTER TABLE speaking_egress_leases
+    ADD CONSTRAINT speaking_egress_leases_charged_units_check
+    CHECK (charged_units >= 0);`,
+  `
+  INSERT INTO shared_schema_migrations (version, name)
+  VALUES (11, 'speaking-arbiter-charge-association')
   ON CONFLICT (version) DO NOTHING;
   `,
 ];

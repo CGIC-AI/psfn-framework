@@ -137,6 +137,8 @@ import type { IcpInitiationCandidateStorePort } from '../../core/icp/autonomy-st
 import type { IcpAutonomyRuntimeEnablement } from '../../core/icp/runtime-enablement.js';
 import type { IcpAdminProjectionStore } from '../../persistence/postgres/icp-admin-projection-store.js';
 import { AdminIcpAutonomyDataService } from './services/icp-autonomy-service.js';
+import type { SpeakingArbiterAdminStore } from '../../persistence/postgres/speaking-arbiter-admin-store.js';
+import { AdminRoomArbiterDataService } from './services/room-arbiter-service.js';
 import { AdminSharedWorkspaceService } from './services/shared-workspace-service.js';
 import { requireAuditOpaqueIdKeyring } from './audit-opaque-id-keyring.js';
 import type { BackgroundWorkStorePort } from '../../core/agent/background-work/store-port.js';
@@ -203,6 +205,8 @@ export interface InProcessGardenAdminContractOptions {
   /** Shadow-only Partner Affect observation store (docs/partner-affect.md slice 1). */
   partnerAffectShadowStore?: PartnerAffectShadowStorePort | null;
   icpRuntimeEnablement?: IcpAutonomyRuntimeEnablement | null;
+  /** Read-only fleet-wide arbiter projection; null in single-companion mode (jp36.8.1). */
+  speakingArbiterAdminStore?: SpeakingArbiterAdminStore | null;
   /** Existing gateway-backed Beads create primitive used for explicit wish conversion. */
   wishlistBeadCreator?: AdminWishlistBeadCreatePort;
 }
@@ -351,6 +355,9 @@ export function createInProcessGardenAdminContract(
         options.effectiveSchedulerConfig.icpAutonomy.availability.operatorLeaseTtlMs,
     })
     : null;
+  const roomArbiter = new AdminRoomArbiterDataService({
+    arbiterStore: options.speakingArbiterAdminStore ?? null,
+  });
 
   // ── Intake quarantine approval queue (htm9.11 Cognitive Security tab) ──
   // Reads the same companion-data quarantine file the gateway/agent screening
@@ -616,6 +623,7 @@ export function createInProcessGardenAdminContract(
     partnerAffectShadow,
     toolConformance,
     icpAutonomy,
+    roomArbiter,
     skills: options.skillsRuntime
       ? new AdminSkillsDataService(options.skillsRuntime, configStore)
       : null,

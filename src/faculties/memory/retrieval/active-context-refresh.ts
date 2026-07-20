@@ -43,6 +43,8 @@ import type {
   ScoredMemory,
 } from './types.js';
 import type { ArtifactSensitivitySource } from '../../../shared/contracts/artifact-sensitivity.js';
+import type { DisclosureMemorySource } from '../../../core/cogsec/disclosure/generation-lineage.js';
+import { channelClassificationEpochAsOf } from '../../../system/trust/runtime-classification-epochs.js';
 
 function collectArtifactSensitivitySources(input: {
   selectedForPrompt: readonly ScoredMemory[];
@@ -53,6 +55,48 @@ function collectArtifactSensitivitySources(input: {
     byRef.set(`memory:${memory.id}`, {
       ref: `memory:${memory.id}`,
       sensitivity: memory.sensitivity,
+    });
+  };
+  for (const scored of input.selectedForPrompt) {
+    addMemory(scored.memory);
+    for (const link of scored.evolutionChain ?? []) addMemory(link.memory);
+  }
+  for (const memory of input.emotionalContinuityMemories) addMemory(memory);
+  return [...byRef.values()].sort((left, right) => left.ref.localeCompare(right.ref));
+}
+
+// jp36.1.1.2: disclosure lineage seam. Content-free disclosure facts for every
+// memory admitted to the generation context — sensitivity, subject contact, and
+// source channel — so the outbound disclosure accumulator can fold them (bible
+// §9.2 item 2). Parallel to the sensitivity-only artifact provenance above and
+// keyed identically (`memory:<id>`) so both project the same admitted set.
+function collectDisclosureMemorySources(input: {
+  selectedForPrompt: readonly ScoredMemory[];
+  emotionalContinuityMemories: readonly PurrMemory[];
+}): DisclosureMemorySource[] {
+  const byRef = new Map<string, DisclosureMemorySource>();
+  const addMemory = (memory: PurrMemory): void => {
+    const ref = `memory:${memory.id}`;
+    const subjectContactId = memory.contactId?.trim() || memory.provenance?.subjectContactId?.trim();
+    const sourceChannelId = memory.provenance?.channelId?.trim();
+    // jp36.6.4: stamp the classification epoch the source channel was at WHEN THE
+    // MEMORY WAS FORMED (extractedAt), NOT the current epoch — a memory formed
+    // before a channel's invite-only → public demotion keeps its old (lower or
+    // absent) epoch and is denied auto-share to the since-demoted room by
+    // jp36.6.3's gate. Untracked-as-of-formation channels resolve to undefined and
+    // the field is omitted, matching the pre-epoch behavior byte-for-byte.
+    const sourceChannelEpoch = sourceChannelId
+      ? channelClassificationEpochAsOf(sourceChannelId, new Date(memory.extractedAt))
+      : undefined;
+    byRef.set(ref, {
+      ref,
+      sensitivity: memory.sensitivity,
+      ...(subjectContactId ? { subjectContactId } : {}),
+      ...(sourceChannelId ? { sourceChannelId } : {}),
+      ...(sourceChannelEpoch !== undefined ? { sourceChannelEpoch } : {}),
+      ...(memory.provenanceRefs && memory.provenanceRefs.length > 0
+        ? { provenanceRefs: [...memory.provenanceRefs] }
+        : {}),
     });
   };
   for (const scored of input.selectedForPrompt) {
@@ -285,6 +329,10 @@ function applyActiveMemoryContextRefresh(
     selectedForPrompt: selectedForActivePrompt,
     emotionalContinuityMemories,
   });
+  const disclosureMemorySources = collectDisclosureMemorySources({
+    selectedForPrompt: selectedForActivePrompt,
+    emotionalContinuityMemories,
+  });
   const refreshSerial = (existing?.refreshSerial ?? 0) + 1;
   const snapshot: ActiveMemoryContextSnapshot = {
     key: target.identity.key,
@@ -297,6 +345,7 @@ function applyActiveMemoryContextRefresh(
     contextChars: contextBlock.length,
     selectedMemoryIds,
     artifactSensitivitySources,
+    disclosureMemorySources,
     generatedAt: now,
     lastRefreshStartedAt: target.startedAt,
     lastRefreshCompletedAt: now,

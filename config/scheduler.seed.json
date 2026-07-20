@@ -161,6 +161,41 @@
       "summaryMaxTokens": 160
     }
   },
+  "socialAutonomy": {
+    "passiveNameCandidate": {
+      "enabled": true,
+      "defaultAutonomyLevel": "contextual",
+      "channelAutonomyLevels": {},
+      "precedingContextMessages": 6,
+      "stalenessMs": 300000,
+      "dedupeHistoryPerChannel": 256,
+      "debounceWindowMs": 600000
+    },
+    "appraiser": {
+      "enabled": true,
+      "appraisalDeadlineMs": 8000,
+      "appraisalMaxOutputTokens": 200,
+      "transcriptMessageCap": 8,
+      "transcriptMessageChars": 500
+    },
+    "reservationPhase": {
+      "reservationTtlMs": 120000,
+      "minReserveDrawUnits": 1
+    },
+    "egressLease": {
+      "leaseTtlMs": 60000,
+      "egressDrawUnits": 1,
+      "minReplyConfidence": 0.5
+    },
+    "freeTimeChooser": {
+      "enabled": true,
+      "chooserDeadlineMs": 8000,
+      "chooserMaxOutputTokens": 200,
+      "projectListCap": 8,
+      "projectMetadataChars": 120,
+      "silencePersistenceMinutes": 180
+    }
+  },
   "weightedThoughtOutreach": {
     "enabled": false,
     "checkIntervalMs": 1800000,

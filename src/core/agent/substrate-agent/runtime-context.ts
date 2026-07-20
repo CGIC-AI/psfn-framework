@@ -93,6 +93,8 @@ import {
 } from './runtime-context-sections/notes-and-skills.js';
 import { buildSelfPresentationPromptVariables } from './runtime-context-sections/self-presentation.js';
 import { buildSatelliteEndpointContextBlock } from './runtime-context-sections/satellite.js';
+import { buildReactionSurfaceContextBlock } from './runtime-context-sections/reaction-surface.js';
+import type { ResolvedReactionSurface } from '../../../channels/shared/reaction-surface.js';
 import {
   buildSituatedPresenceContextBlock,
   type CoPresentCompanion,
@@ -467,6 +469,13 @@ export function buildRuntimeContext(input: {
    * outranks it. Absent ⇒ tracker fallback (B2 behaviour).
    */
   situatedFallbackPlaceId?: string;
+  /**
+   * Curated emoji reaction surface for this turn (jp36.3.1.2), resolved from
+   * the turn's channel adapter (standard subset plus guild-custom emojis that
+   * carry a configured one-line meaning). Absent on channels that expose no
+   * reaction surface — the block then renders nothing.
+   */
+  reactionSurface?: ResolvedReactionSurface;
 }): string {
   const runtimeContextExtra = (() => {
     const raw = input.templateVariables?.runtime_context_extra;
@@ -486,6 +495,13 @@ export function buildRuntimeContext(input: {
   const satelliteEndpointContext = buildSatelliteEndpointContextBlock(input.message);
   if (satelliteEndpointContext) {
     sections.push(satelliteEndpointContext);
+  }
+  // Curated reaction surface (jp36.3.1.2): advertises the emoji the companion
+  // may react with and what each one signals. Absent on channels with no
+  // reaction surface; renders nothing when the surface is empty.
+  const reactionSurfaceContext = buildReactionSurfaceContextBlock(input.reactionSurface);
+  if (reactionSurfaceContext) {
+    sections.push(reactionSurfaceContext);
   }
   // Situated-presence block (S10 B1): "where am I / what's here / who else is
   // here". First consumer of message.routing.presence + the places registry.

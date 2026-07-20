@@ -107,6 +107,7 @@ import {
   type ToolObservationInput,
 } from './tool-observation.js';
 import { buildSessionMetadataWithIntakeScreening } from './intake-screening-metadata.js';
+import type { IntakeEnvelopeSnapshot } from '../../shared/contracts/intake-envelope.js';
 // Type-only structural port: the session layer never imports cogsec runtime code.
 import type { IntakeScreeningService } from '../cogsec/intake/screening.js';
 import type { IntakeSinkGate } from '../cogsec/intake/sink-gates.js';
@@ -203,6 +204,19 @@ export interface StartupSessionMetadata {
 
 export interface SessionCoreMemoryProvider {
   formatForContext(context?: CoreMemoryFormatContext): string;
+}
+
+/**
+ * Result of recording a tool observation. `entryId` is the persisted session
+ * entry id (or null when the channel is not persisted). `intakeSnapshot` is the
+ * content-free intake-firewall verdict for the tool output (htm9.2), surfaced so
+ * the outbound disclosure seam (jp36.1.1.3) can gate a tool result fail-closed
+ * without re-running the side-effecting `screenSync`; null when the firewall did
+ * not screen the result.
+ */
+export interface RecordToolObservationResult {
+  entryId: number | null;
+  intakeSnapshot: IntakeEnvelopeSnapshot | null;
 }
 
 export interface AutoCompactionBetweenTurnsParams {
@@ -1069,12 +1083,12 @@ export class SessionManager {
     observation: ToolObservationInput,
     isDirectMessage?: boolean,
     options: SessionMessageRecordOptions = {},
-  ): number | null {
+  ): RecordToolObservationResult {
     const { resolvedChannelId, originChannelId, sourceChannelId } = this.resolveSessionWriteTarget(
       channelId,
       options.sourceChannelId,
     );
-    if (!shouldPersistSessionChannel(resolvedChannelId)) return null;
+    if (!shouldPersistSessionChannel(resolvedChannelId)) return { entryId: null, intakeSnapshot: null };
     const meta = options.channelMeta ?? (isDirectMessage != null ? { isDirectMessage } : undefined);
     const channelVisibility = classifyChannelEnvelope(sourceChannelId, meta).privacy;
     const timestamp = Date.now();
@@ -1099,6 +1113,7 @@ export class SessionManager {
     // context assembly, memory extraction, or the emotion-appraisal feed.
     let observationForRecord = observation;
     let metadataBase = envelopeMetadata;
+    let intakeSnapshot: IntakeEnvelopeSnapshot | null = null;
     if (this.intakeScreening) {
       const toolCallSuffix = observation.toolCallId?.trim() ? `:${observation.toolCallId.trim()}` : '';
       const screened = this.intakeScreening.screenSync(observation.content, {
@@ -1110,6 +1125,7 @@ export class SessionManager {
         scope: 'context',
       });
       observationForRecord = { ...observation, content: screened.effectiveText };
+      intakeSnapshot = screened.snapshot;
       metadataBase = buildSessionMetadataWithIntakeScreening(envelopeMetadata, {
         mode: screened.mode,
         withheld: screened.withheld,
@@ -1126,7 +1142,7 @@ export class SessionManager {
       normalizedObservation.metadata,
     );
 
-    return this.store.append({
+    const entryId = this.store.append({
       channelId: resolvedChannelId,
       role: 'tool',
       content: normalizedObservation.content,
@@ -1137,6 +1153,7 @@ export class SessionManager {
       ...(originChannelId ? { originChannelId } : {}),
       metadata,
     });
+    return { entryId, intakeSnapshot };
   }
 
   async recordTurn(record: TurnRecord): Promise<void> {

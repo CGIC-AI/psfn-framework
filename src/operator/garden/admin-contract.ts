@@ -36,6 +36,7 @@ import type {
   AdminImagesService,
   AdminIdentityService,
   AdminIcpAutonomyService,
+  AdminRoomArbiterService,
   AdminMemoryService,
   AdminModelUsageService,
   AdminPromptsService,
@@ -215,6 +216,8 @@ export interface GardenAdminDomainServices {
   partnerAffectShadow?: AdminPartnerAffectShadowService | null;
   toolConformance?: AdminToolConformanceService | null;
   icpAutonomy?: AdminIcpAutonomyService | null;
+  /** Fleet Command room-state and arbitration telemetry (jp36.8.1). */
+  roomArbiter?: AdminRoomArbiterService | null;
   settings: AdminSettingsService;
   sharedWorkspace?: AdminSharedWorkspaceService | null;
   /** Intake quarantine approval queue (htm9.11 Cognitive Security tab). */

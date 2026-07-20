@@ -245,7 +245,6 @@ function finalValues(image, overrides = {}) {
     ownerMigration: {
       required: overrides.required ?? true,
       enabled: overrides.enabled ?? true,
-      multiCompanion: true,
       runtimeRoot: '/runtime',
       systemDataDir: '/runtime/system-data',
       systemDataClaim: claims.liveSystem,

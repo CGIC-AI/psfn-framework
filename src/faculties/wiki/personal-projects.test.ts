@@ -6,7 +6,9 @@ import { WikiStore } from './store.js';
 import {
   PersonalProjectLibrary,
   projectArtifactReference,
+  type CompanionOwnedVisibility,
 } from './personal-projects.js';
+import { freeTimeWorkspaceContextFromVisibility } from '../../core/scheduler/free-time-workspace-resolver.js';
 
 describe('personal projects in the existing wiki tier', () => {
   let root: string;
@@ -38,7 +40,6 @@ describe('personal projects in the existing wiki tier', () => {
       projectRef: created.ref,
       artifactRef: 'generated-image:panel-1',
       label: 'First moonlit panel',
-      sensitivity: 'personal',
     });
 
     const afterRestart = new PersonalProjectLibrary(new WikiStore(root), () => new Date(nowMs));
@@ -66,7 +67,6 @@ describe('personal projects in the existing wiki tier', () => {
       projectRef: project.ref,
       artifactRef: 'generated-image:private-sketch',
       label: 'Private sketch',
-      sensitivity: 'intimate',
     });
     const updated = await library.requestArtifactShare({
       projectRef: project.ref,
@@ -78,6 +78,47 @@ describe('personal projects in the existing wiki tier', () => {
       intendedAudience: 'public',
       shareState: 'requested',
       sensitivity: 'intimate',
+    });
+  });
+
+  it('derives artifact sensitivity and audience from runtime project state, not caller input', async () => {
+    const library = new PersonalProjectLibrary(store, () => new Date(nowMs));
+
+    const selfProject = await library.createProject({
+      id: 'self-project',
+      title: 'Self Project',
+      nextStep: 'Sketch privately.',
+      visibility: 'self',
+    });
+    const selfUpdated = await library.addArtifact({
+      projectRef: selfProject.ref,
+      artifactRef: 'generated-image:self-1',
+      label: 'Private study',
+    });
+    // self visibility → intimate workspace floor; audience fails closed to self.
+    expect(selfUpdated.artifacts[0]).toMatchObject({
+      sensitivity: 'intimate',
+      intendedAudience: 'self',
+      shareState: 'private',
+    });
+
+    const publicProject = await library.createProject({
+      id: 'public-project',
+      title: 'Public Project',
+      nextStep: 'Prepare something to show.',
+      visibility: 'public',
+    });
+    const publicUpdated = await library.addArtifact({
+      projectRef: publicProject.ref,
+      artifactRef: 'generated-image:public-1',
+      label: 'Gallery piece',
+    });
+    // public visibility → public floor; audience STILL fails closed to self —
+    // broadening requires an explicit project_share through the egress gate.
+    expect(publicUpdated.artifacts[0]).toMatchObject({
+      sensitivity: 'public',
+      intendedAudience: 'self',
+      shareState: 'private',
     });
   });
 
@@ -150,5 +191,240 @@ describe('personal projects in the existing wiki tier', () => {
 
     expect(() => library.resolveWardrobeLook('wardrobe:untrusted'))
       .toThrow('not companion-owned wardrobe data');
+  });
+
+  // ── psfn-framework-jp36.1.2.2: legacy artifact metadata quarantine (§9.5) ──
+
+  const writeLegacyProject = (
+    id: string,
+    visibility: CompanionOwnedVisibility,
+    artifacts: Array<Record<string, unknown>>,
+  ): void => {
+    // Simulate a document written before runtime metadata authority landed:
+    // artifacts carry model-asserted sensitivity/audience and NO metadataLineage.
+    store.upsert({
+      id: `project.${id}`,
+      title: `Project: Legacy ${id}`,
+      body: JSON.stringify({
+        schemaVersion: 1,
+        kind: 'personal_project',
+        id,
+        ref: `project:${id}`,
+        title: `Legacy ${id}`,
+        status: 'active',
+        visibility,
+        nextStep: 'keep going',
+        artifacts,
+        resumeCount: 0,
+        createdAt: '2026-07-01T00:00:00.000Z',
+        updatedAt: '2026-07-01T00:00:00.000Z',
+      }),
+      tags: ['psfn:personal-project', `project:${id}`, 'project-status:active'],
+      sourceClass: 'companion_authored_note',
+      sensitivity: 'intimate',
+      updatedBy: 'test',
+    });
+  };
+
+  const legacyArtifact = (ref: string, overrides: Record<string, unknown> = {}): Record<string, unknown> => ({
+    ref,
+    label: `Label ${ref}`,
+    sensitivity: 'public',
+    intendedAudience: 'public',
+    shareState: 'shared',
+    addedAt: '2026-07-01T00:00:00.000Z',
+    ...overrides,
+  });
+
+  it('fails closed reading an artifact with no lineage marker and blocks broadening it at egress', async () => {
+    writeLegacyProject('legacy-read', 'self', [legacyArtifact('generated-image:legacy-1')]);
+    const library = new PersonalProjectLibrary(store, () => new Date(nowMs));
+
+    // §9.5: an unmarked (pre-migration) artifact reads back as legacy_unverified.
+    const parsed = library.getProject('project:legacy-read');
+    expect(parsed.artifacts[0].metadataLineage).toBe('legacy_unverified');
+
+    // Egress fails closed: it cannot be shared beyond self until re-grounded.
+    await expect(library.requestArtifactShare({
+      projectRef: 'project:legacy-read',
+      artifactRef: 'generated-image:legacy-1',
+      audience: 'public',
+    })).rejects.toThrow('re-grounded');
+
+    // A self-scoped request (no broadening) is still permitted.
+    const contained = await library.requestArtifactShare({
+      projectRef: 'project:legacy-read',
+      artifactRef: 'generated-image:legacy-1',
+      audience: 'self',
+    });
+    expect(contained.artifacts[0].shareState).toBe('private');
+  });
+
+  it('quarantines pre-existing model-asserted artifacts idempotently with stable counts', async () => {
+    const library = new PersonalProjectLibrary(store, () => new Date(nowMs));
+
+    // A runtime-derived project (written post-fix) must be left untouched.
+    const clean = await library.createProject({
+      id: 'clean', title: 'Clean', nextStep: 'go', visibility: 'public',
+    });
+    await library.addArtifact({
+      projectRef: clean.ref, artifactRef: 'generated-image:clean-1', label: 'Clean',
+    });
+
+    // A legacy project with two model-asserted artifacts (no lineage marker).
+    writeLegacyProject('legacy', 'self', [
+      legacyArtifact('generated-image:legacy-1'),
+      legacyArtifact('generated-image:legacy-2', {
+        sensitivity: 'personal', intendedAudience: 'self', shareState: 'private',
+      }),
+    ]);
+
+    // Dry run reports the plan and writes nothing.
+    const dry = library.quarantineLegacyArtifacts({ dryRun: true });
+    expect(dry).toMatchObject({
+      dryRun: true,
+      scannedProjects: 2,
+      scannedArtifacts: 3,
+      alreadyClassifiedArtifacts: 1,
+      quarantinedArtifacts: 2,
+      quarantinedProjects: 1,
+    });
+    expect(dry.entries).toHaveLength(2);
+
+    // Apply.
+    const applied = library.quarantineLegacyArtifacts({ dryRun: false });
+    expect(applied.quarantinedArtifacts).toBe(2);
+    expect(applied.quarantinedProjects).toBe(1);
+
+    const legacyAfter = library.getProject('project:legacy');
+    // Contained to private/self and marked unverified; the asserted sensitivity
+    // field is retained (parent bug non-goal: do not remove metadata fields).
+    expect(legacyAfter.artifacts.find(a => a.ref === 'generated-image:legacy-1')).toMatchObject({
+      metadataLineage: 'legacy_unverified',
+      intendedAudience: 'self',
+      shareState: 'private',
+      sensitivity: 'public',
+    });
+
+    // The runtime-derived artifact is untouched and remains egress-eligible.
+    const cleanAfter = library.getProject('project:clean');
+    expect(cleanAfter.artifacts[0].metadataLineage).toBe('runtime_derived');
+    const shared = await library.requestArtifactShare({
+      projectRef: 'project:clean', artifactRef: 'generated-image:clean-1', audience: 'public',
+    });
+    expect(shared.artifacts[0].shareState).toBe('requested');
+
+    // Idempotent: a second apply quarantines nothing.
+    const again = library.quarantineLegacyArtifacts({ dryRun: false });
+    expect(again.quarantinedArtifacts).toBe(0);
+    expect(again.quarantinedProjects).toBe(0);
+    expect(again.alreadyClassifiedArtifacts).toBe(3);
+  });
+
+  it('reports a malformed project document instead of rewriting or silently skipping it', () => {
+    store.upsert({
+      id: 'project.broken',
+      title: 'Project: Broken',
+      body: JSON.stringify({ schemaVersion: 1, kind: 'not_a_project' }),
+      tags: ['psfn:personal-project', 'project:broken', 'project-status:active'],
+      sourceClass: 'companion_authored_note',
+      sensitivity: 'intimate',
+      updatedBy: 'test',
+    });
+    const library = new PersonalProjectLibrary(store);
+
+    const report = library.quarantineLegacyArtifacts({ dryRun: true });
+    expect(report.malformedProjects.some(entry => entry.id === 'project.broken')).toBe(true);
+    expect(report.scannedProjects).toBe(0);
+    expect(report.quarantinedArtifacts).toBe(0);
+  });
+
+  // ── psfn-framework-jp36.2.2.2: free-time privacy migration (S11.4) ──
+
+  it('contains public free-time projects to primary_contact idempotently with stable counts', () => {
+    const library = new PersonalProjectLibrary(store, () => new Date(nowMs));
+
+    // A public free-time project (net-new governed capability it predates) plus
+    // two projects already at a private posture that must stay untouched.
+    writeLegacyProject('public-essay', 'public', [
+      legacyArtifact('generated-image:essay-1'),
+      legacyArtifact('generated-image:essay-2'),
+    ]);
+    writeLegacyProject('self-garden', 'self', []);
+    writeLegacyProject('partner-poem', 'primary_contact', []);
+
+    // Dry run reports the plan and writes nothing.
+    const dry = library.migrateFreeTimeVisibility({ dryRun: true });
+    expect(dry).toMatchObject({
+      dryRun: true,
+      scannedProjects: 3,
+      containedProjects: 1,
+      alreadyPrivateProjects: 2,
+    });
+    expect(dry.entries).toEqual([{ projectRef: 'project:public-essay', from: 'public', to: 'primary_contact' }]);
+    // Writes nothing: the public project is still public on disk after a dry run.
+    expect(library.getProject('project:public-essay').visibility).toBe('public');
+
+    // Apply: only the public project is narrowed to primary_contact.
+    const applied = library.migrateFreeTimeVisibility({ dryRun: false });
+    expect(applied.containedProjects).toBe(1);
+    expect(applied.alreadyPrivateProjects).toBe(2);
+
+    const contained = library.getProject('project:public-essay');
+    expect(contained.visibility).toBe('primary_contact');
+    // Turn/artifact content is preserved — only visibility metadata flipped.
+    expect(contained.artifacts.map(artifact => artifact.ref)).toEqual([
+      'generated-image:essay-1',
+      'generated-image:essay-2',
+    ]);
+    // Already-private projects are untouched.
+    expect(library.getProject('project:self-garden').visibility).toBe('self');
+    expect(library.getProject('project:partner-poem').visibility).toBe('primary_contact');
+
+    // Every project now maps to a PRIVATE work context (nothing public remains).
+    for (const project of library.listProjects()) {
+      expect(freeTimeWorkspaceContextFromVisibility(project.visibility).kind).toBe('private');
+    }
+
+    // Idempotent: a second apply contains nothing and the counts are stable.
+    const again = library.migrateFreeTimeVisibility({ dryRun: false });
+    expect(again.containedProjects).toBe(0);
+    expect(again.alreadyPrivateProjects).toBe(3);
+    expect(again.entries).toHaveLength(0);
+  });
+
+  it('preserves partner return eligibility: a contained project still maps to a partner-anchored context', () => {
+    const library = new PersonalProjectLibrary(store, () => new Date(nowMs));
+    writeLegacyProject('shared-article', 'public', []);
+    library.migrateFreeTimeVisibility({ dryRun: false });
+
+    const contained = library.getProject('project:shared-article');
+    // With the highest-trust partner resolved, the contained project yields a
+    // private context anchored to that partner DM — eligible return preserved.
+    expect(freeTimeWorkspaceContextFromVisibility(contained.visibility, { primaryContactId: 'contact:partner' }))
+      .toEqual({ kind: 'private', returnTarget: { contactId: 'contact:partner' } });
+  });
+
+  it('reports a malformed manifest during the free-time migration instead of rewriting it', () => {
+    store.upsert({
+      id: 'project.broken-ft',
+      title: 'Project: Broken FT',
+      body: JSON.stringify({ schemaVersion: 1, kind: 'not_a_project' }),
+      tags: ['psfn:personal-project', 'project:broken-ft', 'project-status:active'],
+      sourceClass: 'companion_authored_note',
+      sensitivity: 'intimate',
+      updatedBy: 'test',
+    });
+    writeLegacyProject('ok-public', 'public', []);
+    const library = new PersonalProjectLibrary(store, () => new Date(nowMs));
+
+    const report = library.migrateFreeTimeVisibility({ dryRun: true });
+    expect(report.malformedProjects.some(entry => entry.id === 'project.broken-ft')).toBe(true);
+    // The malformed doc is neither scanned nor contained; the valid one is planned.
+    expect(report.scannedProjects).toBe(1);
+    expect(report.containedProjects).toBe(1);
+    // The malformed doc is left exactly as-is (never rewritten).
+    const brokenAfter = store.get('project.broken-ft');
+    expect(brokenAfter?.body).toContain('not_a_project');
   });
 });

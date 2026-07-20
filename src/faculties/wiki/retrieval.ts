@@ -5,6 +5,7 @@ import type { WikiRetrievalRequest } from '../../core/agent/contracts.js';
 import { createComponentLogger } from '../../shared/logger.js';
 import { countTokens } from '../../primitives/llm/tokens.js';
 import type { WikiRetrievalSettings } from '../../shared/context-budget.js';
+import type { DisclosureWikiSource } from '../../core/cogsec/disclosure/generation-lineage.js';
 import type { WikiProjectionPort, WikiSemanticMatch } from './pgvector-projection.js';
 import type { SharedWikiSearchPort } from './shared-pgvector-projection.js';
 import { isSharedWorldScope, resolveReadableWikiScopes, type WikiScope } from './scope.js';
@@ -133,6 +134,36 @@ export interface WikiContextBuildResult {
   block: string;
   tokenCount: number;
   selectedCount: number;
+  /**
+   * jp36.1.1.3: content-free disclosure facts for the documents actually
+   * rendered into the block (not the full candidate set). Wiki world-knowledge
+   * authorizes no outward destination, so each source collapses to companion-self
+   * at the disclosure seam (bible §9.2 item 3).
+   */
+  disclosureWikiSources: DisclosureWikiSource[];
+}
+
+/**
+ * Content-free disclosure source for one rendered wiki document. The wiki store
+ * always persists a valid `SensitivityLevel`, so a served match carries usable
+ * lineage (`classified: true`); scope is a topology axis, not a disclosure
+ * destination, so no outward destination is authorized here.
+ */
+function wikiMatchDisclosureSource(match: WikiSemanticMatch): DisclosureWikiSource {
+  return {
+    ref: `wiki:${match.documentId}`,
+    sensitivity: match.sensitivity,
+    classified: true,
+  };
+}
+
+function collectWikiDisclosureSources(matches: readonly WikiSemanticMatch[]): DisclosureWikiSource[] {
+  const byRef = new Map<string, DisclosureWikiSource>();
+  for (const match of matches) {
+    const source = wikiMatchDisclosureSource(match);
+    if (!byRef.has(source.ref)) byRef.set(source.ref, source);
+  }
+  return [...byRef.values()].sort((left, right) => left.ref.localeCompare(right.ref));
 }
 
 /**
@@ -146,6 +177,7 @@ interface WikiContextComputation {
   block: string;
   tokenCount: number;
   selectedCount: number;
+  disclosureWikiSources: DisclosureWikiSource[];
   contextClass: WikiRetrievalContextClass;
   hardFailed: boolean;
   degradedError?: string;
@@ -169,20 +201,22 @@ export function buildWikiContextBlock(
 ): WikiContextBuildResult {
   const cap = Math.max(0, Math.floor(tokenCap));
   if (cap <= 0 || matches.length === 0) {
-    return { block: '', tokenCount: 0, selectedCount: 0 };
+    return { block: '', tokenCount: 0, selectedCount: 0, disclosureWikiSources: [] };
   }
   const headerTokens = countTokens(WIKI_CONTEXT_BLOCK_HEADER);
   const entries: string[] = [];
-  let selectedCount = 0;
+  // Track the matches ACTUALLY rendered (not the full candidate set) so the
+  // disclosure sources project exactly the documents admitted to the context.
+  const selectedMatches: WikiSemanticMatch[] = [];
   for (const match of matches) {
     const entry = renderMatchEntry(match);
     const candidate = [WIKI_CONTEXT_BLOCK_HEADER, ...entries, entry].join('\n\n');
     if (countTokens(candidate) <= cap) {
       entries.push(entry);
-      selectedCount += 1;
+      selectedMatches.push(match);
       continue;
     }
-    if (selectedCount === 0) {
+    if (selectedMatches.length === 0) {
       // A single entry already exceeds the wiki cap: truncate it by characters
       // so the highest-scoring reference still contributes something bounded.
       const budgetForBody = Math.max(0, cap - headerTokens);
@@ -190,16 +224,21 @@ export function buildWikiContextBlock(
       const truncated = truncateEntryToTokenBudget(entry, budgetForBody);
       if (truncated) {
         entries.push(truncated);
-        selectedCount += 1;
+        selectedMatches.push(match);
       }
     }
     break;
   }
-  if (selectedCount === 0) {
-    return { block: '', tokenCount: 0, selectedCount: 0 };
+  if (selectedMatches.length === 0) {
+    return { block: '', tokenCount: 0, selectedCount: 0, disclosureWikiSources: [] };
   }
   const block = [WIKI_CONTEXT_BLOCK_HEADER, ...entries].join('\n\n');
-  return { block, tokenCount: countTokens(block), selectedCount };
+  return {
+    block,
+    tokenCount: countTokens(block),
+    selectedCount: selectedMatches.length,
+    disclosureWikiSources: collectWikiDisclosureSources(selectedMatches),
+  };
 }
 
 function truncateEntryToTokenBudget(entry: string, tokenBudget: number): string | null {
@@ -364,6 +403,7 @@ export class WikiRetrievalService {
       block: '',
       tokenCount: 0,
       selectedCount: 0,
+      disclosureWikiSources: [],
       generatedAt: 0,
       lastRefreshStartedAt: 0,
       refreshStatus: 'ready',
@@ -421,6 +461,7 @@ export class WikiRetrievalService {
       block: computation.block,
       tokenCount: computation.tokenCount,
       selectedCount: computation.selectedCount,
+      disclosureWikiSources: computation.disclosureWikiSources,
       generatedAt: startedAt,
       lastRefreshStartedAt: startedAt,
       lastRefreshCompletedAt: Date.now(),
@@ -438,6 +479,7 @@ export class WikiRetrievalService {
       block: '',
       tokenCount: 0,
       selectedCount: 0,
+      disclosureWikiSources: [],
       contextClass: plan.contextClass,
       hardFailed: false,
     });
@@ -572,6 +614,7 @@ export class WikiRetrievalService {
       block: built.block,
       tokenCount: built.tokenCount,
       selectedCount: built.selectedCount,
+      disclosureWikiSources: built.disclosureWikiSources,
       contextClass: plan.contextClass,
       hardFailed: false,
     };

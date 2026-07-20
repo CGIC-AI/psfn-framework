@@ -19,6 +19,13 @@ import {
 import { MODEL_FACING_DRIFT_GUARD_RETIRED_TOOL_ALIASES } from '../../core/agent/tool-surface/registry.js';
 import { allowShardRequestScopedCapabilityTransport } from '../../faculties/shards/request-scoped-capability-transport.js';
 import { isRecord } from '../../shared/utils/types.js';
+import {
+  accumulateDisclosureSource,
+  beginDisclosureAccumulation,
+  composeEgressDisclosureDecision,
+  deriveDisclosureDestination,
+  isDisclosureSocialEgressInvocation,
+} from '../../core/cogsec/disclosure/index.js';
 
 function accessForTier(
   tier: CapabilityTier,
@@ -310,6 +317,67 @@ describe('capability tool gating', () => {
     expect(notify.executeSpy).not.toHaveBeenCalled();
     expect((denied.details as any).capabilityDenied).toBe(true);
     expect((denied.content[0] as any).text).toContain(missingToken);
+  });
+
+  it('denies a gated live notify Discord send when disclosure lineage cannot reach the room', async () => {
+    const notify = createTool('notify');
+    const lineage = accumulateDisclosureSource(
+      beginDisclosureAccumulation({
+        generationContextRef: 'turn:notify-gate-regression',
+        classifierVersion: 'test',
+        classifiedAt: '2026-07-20T00:00:00.000Z',
+      }),
+      {
+        ref: 'session:contact-a',
+        sensitivity: 'intimate',
+        permittedDestinations: [{ kind: 'contact_dm', contactIds: ['contact-a'] }],
+        subjectContactIds: ['contact-a'],
+        classified: true,
+      },
+    );
+    const gated = gateToolWithCapabilities(
+      notify.tool,
+      () => accessForTier('custom', ['external.discord']),
+      () => ({
+        evaluate: ({ toolName, params }) => {
+          const destination = deriveDisclosureDestination({
+            method: toolName,
+            params,
+            resolveChannel: () => ({ channelPrivacy: 'invite_only', broadcast: false }),
+          });
+          const decision = composeEgressDisclosureDecision({
+            sinkAllowed: true,
+            lineage,
+            destination,
+            requiresDisclosureDestination: isDisclosureSocialEgressInvocation({
+              method: toolName,
+              params,
+            }),
+          });
+          return decision.allowed
+            ? { allowed: true, noticeText: '' }
+            : { allowed: false, noticeText: 'held by disclosure policy' };
+        },
+      }),
+    );
+
+    const denied = await gated.execute('notify-disclosure-regression', {
+      action: 'send',
+      target_kind: 'external',
+      message: 'private material',
+      delivery_channel: 'discord',
+      delivery_target: 'room-b',
+    });
+
+    expect(notify.executeSpy).not.toHaveBeenCalled();
+    expect(denied).toMatchObject({
+      details: {
+        isError: true,
+        egressGated: true,
+        policyDenied: true,
+        toolName: 'notify',
+      },
+    });
   });
 
   it('fails closed when an executable tool has no capability policy', () => {

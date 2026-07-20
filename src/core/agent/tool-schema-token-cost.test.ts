@@ -72,17 +72,17 @@ describe('full callable catalog schema token cost', () => {
       parameterSchemaHash: sha256(parameterSchemas),
     }).toEqual({
       fixture: 'agent-state-tools-provider-v2',
-      coreTools: 21,
+      coreTools: 22,
       extendedTools: 7,
-      totalTools: 28,
+      totalTools: 29,
       includesLibrary: false,
-      beforeTokens: 15_977,
-      afterTokens: 18_833,
+      beforeTokens: 16_517,
+      afterTokens: 19_373,
       deltaTokens: 2_856,
-      beforeBytes: 75_378,
-      afterBytes: 87_617,
-      providerSchemaHash: 'c936b2298ce2b6ca0cb843aa355060575d0c19652aa496a6d04ec2cca76a82e7',
-      parameterSchemaHash: '484dd6d28fa3d8217b84a544abd3d6b9dda7485af953e06ffae4bd5ee365a8a8',
+      beforeBytes: 77_994,
+      afterBytes: 90_233,
+      providerSchemaHash: 'f764c228cf1f18eacad69d688f69fcd0b475b59a1ef615cda25cfb991aa2614c',
+      parameterSchemaHash: '44f663b27e22bfddd386fde11890c4374b4fb5dc3bcaa9f200736f3f5e6dfaad',
     });
 
     // The additional description tokens affect an uncached request. A stable

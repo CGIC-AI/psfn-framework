@@ -5,10 +5,12 @@ import { describe, expect, it } from 'vitest';
 import {
   DEFAULT_BACKGROUND_WORK_TUNING,
   DEFAULT_FREE_TIME_CONFIG,
+  DEFAULT_SOCIAL_AUTONOMY_CONFIG,
   DEFAULT_TEMPORAL_WAKEUP_CONFIG,
   DEFAULT_WEIGHTED_THOUGHT_OUTREACH_CONFIG,
   loadSchedulerSeedDefaults,
   SCHEDULER_SEED_FILE_NAME,
+  validateSchedulerConfig,
 } from './scheduler-config.js';
 import { assertPositiveInteger } from './validators.js';
 import { DEFAULT_ICP_AUTONOMY_SCHEDULER_CONFIG } from './icp-autonomy-scheduler-config.js';
@@ -283,6 +285,7 @@ describe('scheduler config seed defaults', () => {
         ...config,
         temporalWakeup: DEFAULT_TEMPORAL_WAKEUP_CONFIG,
         freeTime: DEFAULT_FREE_TIME_CONFIG,
+        socialAutonomy: DEFAULT_SOCIAL_AUTONOMY_CONFIG,
         weightedThoughtOutreach: DEFAULT_WEIGHTED_THOUGHT_OUTREACH_CONFIG,
       });
     });
@@ -756,5 +759,112 @@ describe('scheduler config seed defaults', () => {
         );
       });
     });
+  });
+});
+
+describe('social-autonomy owner-file config (jp36.8.2)', () => {
+  it('checks the bundled seed in with the exact code defaults (byte-identical)', () => {
+    expect(loadSchedulerSeedDefaults().socialAutonomy).toEqual(DEFAULT_SOCIAL_AUTONOMY_CONFIG);
+  });
+
+  it('defaults the whole block when socialAutonomy is absent', () => {
+    const config = buildValidSchedulerConfig();
+    expect(config).not.toHaveProperty('socialAutonomy');
+    const validated = validateSchedulerConfig(config, 'test');
+    expect(validated.socialAutonomy).toEqual(DEFAULT_SOCIAL_AUTONOMY_CONFIG);
+  });
+
+  it('applies overrides for each sub-block', () => {
+    const validated = validateSchedulerConfig(
+      {
+        ...buildValidSchedulerConfig(),
+        socialAutonomy: {
+          passiveNameCandidate: {
+            defaultAutonomyLevel: 'directed',
+            channelAutonomyLevels: { 'channel-a': 'social', 'channel-b': 'off' },
+            debounceWindowMs: 0,
+          },
+          appraiser: { appraisalDeadlineMs: 5_000 },
+          reservationPhase: { minReserveDrawUnits: 0 },
+          egressLease: { leaseTtlMs: 30_000, minReplyConfidence: 0 },
+          freeTimeChooser: { silencePersistenceMinutes: 0, projectListCap: 0 },
+        },
+      },
+      'test',
+    );
+    expect(validated.socialAutonomy.passiveNameCandidate.defaultAutonomyLevel).toBe('directed');
+    expect(validated.socialAutonomy.passiveNameCandidate.channelAutonomyLevels).toEqual({
+      'channel-a': 'social',
+      'channel-b': 'off',
+    });
+    // Non-positive debounce is a valid "disable debounce" state.
+    expect(validated.socialAutonomy.passiveNameCandidate.debounceWindowMs).toBe(0);
+    expect(validated.socialAutonomy.appraiser.appraisalDeadlineMs).toBe(5_000);
+    expect(validated.socialAutonomy.reservationPhase.minReserveDrawUnits).toBe(0);
+    expect(validated.socialAutonomy.egressLease.leaseTtlMs).toBe(30_000);
+    expect(validated.socialAutonomy.egressLease.minReplyConfidence).toBe(0);
+    expect(validated.socialAutonomy.freeTimeChooser.silencePersistenceMinutes).toBe(0);
+    expect(validated.socialAutonomy.freeTimeChooser.projectListCap).toBe(0);
+  });
+
+  it('never exposes an egress-lease enablement override (qgqw.3)', () => {
+    expect(DEFAULT_SOCIAL_AUTONOMY_CONFIG.egressLease).not.toHaveProperty('enabled');
+    expect(() =>
+      validateSchedulerConfig(
+        {
+          ...buildValidSchedulerConfig(),
+          socialAutonomy: { egressLease: { enabled: true } },
+        },
+        'test',
+      ),
+    ).toThrow(/socialAutonomy\.egressLease contains unknown keys: enabled/u);
+  });
+
+  it('fails closed on wrong types, unknown keys, and out-of-range values', () => {
+    const cases: Array<[Record<string, unknown>, RegExp]> = [
+      [{ socialAutonomy: 'nope' }, /socialAutonomy must be an object/u],
+      [{ socialAutonomy: { unknownBlock: {} } }, /socialAutonomy contains unknown keys: unknownBlock/u],
+      [
+        { socialAutonomy: { passiveNameCandidate: { enabled: 'yes' } } },
+        /passiveNameCandidate\.enabled must be a boolean/u,
+      ],
+      [
+        { socialAutonomy: { passiveNameCandidate: { defaultAutonomyLevel: 'loud' } } },
+        /passiveNameCandidate\.defaultAutonomyLevel must be one of/u,
+      ],
+      [
+        { socialAutonomy: { passiveNameCandidate: { channelAutonomyLevels: { c: 'loud' } } } },
+        /passiveNameCandidate\.channelAutonomyLevels\.c must be one of/u,
+      ],
+      [
+        { socialAutonomy: { appraiser: { appraisalDeadlineMs: 0 } } },
+        /appraiser\.appraisalDeadlineMs must be a finite integer >= 1/u,
+      ],
+      [
+        { socialAutonomy: { reservationPhase: { minReserveDrawUnits: -1 } } },
+        /reservationPhase\.minReserveDrawUnits must be a finite number >= 0/u,
+      ],
+      [
+        { socialAutonomy: { egressLease: { egressDrawUnits: 0 } } },
+        /egressLease\.egressDrawUnits must be a finite number > 0/u,
+      ],
+      [
+        { socialAutonomy: { egressLease: { minReplyConfidence: 1.5 } } },
+        /egressLease\.minReplyConfidence must be a finite number between 0 and 1/u,
+      ],
+      [
+        { socialAutonomy: { freeTimeChooser: { silencePersistenceMinutes: -5 } } },
+        /freeTimeChooser\.silencePersistenceMinutes must be a finite integer >= 0/u,
+      ],
+      [
+        { socialAutonomy: { freeTimeChooser: { chooserDeadlineMs: 1.5 } } },
+        /freeTimeChooser\.chooserDeadlineMs must be a finite integer >= 1/u,
+      ],
+    ];
+    for (const [override, pattern] of cases) {
+      expect(() =>
+        validateSchedulerConfig({ ...buildValidSchedulerConfig(), ...override }, 'test'),
+      ).toThrow(pattern);
+    }
   });
 });

@@ -191,9 +191,13 @@ these process-wiring env vars come into play (documented in full in
 [`docs/multi-companion.md`](./multi-companion.md) and
 [`docs/operations.md`](./operations.md)):
 
-- `PSFN_MULTI_COMPANION` — topology opt-in. When on, a system-owned
-  `companions.json` fleet manifest is required; when off, `companions.json` must
-  be absent. Both mismatches fail closed at startup.
+- `companions.json` — the mandatory system-owned fleet manifest. Every
+  deployment is a fleet of one or more companions, so this owner file is always
+  required (a single-companion deployment is a one-entry manifest); a missing or
+  invalid manifest fails closed at startup. Topology is derived from the entry
+  count, not from any env flag (the retired `PSFN_MULTI_COMPANION` flag no longer
+  exists): one entry is single-companion, more than one is multi-companion
+  tenancy.
 - `PSFN_FLEET_AUTH` — required with local multi-companion startup. The one
   fleet Garden accepts companion-bound Fleet Auth capabilities; the launcher
   rejects a fleet topology that would fall back to shared admin-token authority.

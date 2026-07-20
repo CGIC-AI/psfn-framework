@@ -34,6 +34,7 @@ import type { SchedulerRuntimeConfig } from '../../system/config/scheduler-confi
 import type { IcpInitiationCandidateStorePort } from '../../core/icp/autonomy-store-ports.js';
 import type { IcpAutonomyRuntimeEnablement } from '../../core/icp/runtime-enablement.js';
 import { PostgresIcpAdminProjectionStore } from '../../persistence/postgres/icp-admin-projection-store.js';
+import { PostgresSpeakingArbiterAdminStore } from '../../persistence/postgres/speaking-arbiter-admin-store.js';
 import type { BackgroundWorkStorePort } from '../../core/agent/background-work/store-port.js';
 import type { PartnerAffectShadowStorePort } from '../../core/emotion/partner-affect/shadow-store-port.js';
 
@@ -116,6 +117,14 @@ export async function startOptionalAdminTransportServer(
       },
     )
     : null;
+  // Fleet Command room-state and arbitration telemetry (jp36.8.1): the arbiter
+  // is gateway-owned and only exists in multi-companion mode, so this read-only
+  // projection is connected under the same gate. Absent → the service reports an
+  // explicit `available: false` empty state, never an error page.
+  const speakingArbiterAdminStore = options.config.multiCompanion === true
+    && options.config.postgresDatabaseUrl
+    ? await PostgresSpeakingArbiterAdminStore.connect(options.config.postgresDatabaseUrl)
+    : null;
   const services = createInProcessGardenAdminContract({
     env,
     apiBaseUrl: env.API_BASE_URL,
@@ -130,6 +139,7 @@ export async function startOptionalAdminTransportServer(
     effectiveSchedulerConfig: options.schedulerConfig,
     icpInitiationCandidateStore: options.icpInitiationCandidateStore ?? null,
     icpAdminProjectionStore,
+    speakingArbiterAdminStore,
     partnerAffectShadowStore: options.partnerAffectShadowStore ?? null,
     icpRuntimeEnablement: options.icpRuntimeEnablement,
     postTurnActions: options.postTurnActions,

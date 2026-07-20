@@ -257,6 +257,8 @@ const fixedRoutes: readonly RouteTuple[] = [
   ['POST', '/api/admin/wiki/shared-world-proposals/cleanup'],
   ['GET', '/api/admin/wishlist'],
   [['GET', 'POST'], '/api/admin/channels/context-envelope'],
+  ['GET', '/api/admin/channels/context-envelope/demotion-notice'],
+  ['POST', '/api/admin/channels/context-envelope/demote'],
   [['GET', 'PATCH', 'POST'], '/api/admin/chat/bootstrap'], ['GET', '/api/admin/chat/model-room/bootstrap'],
   ['GET', '/api/admin/intake/drift-reviews'], ['GET', '/api/admin/intake/policy'],
   ['GET', '/api/admin/intake/quarantine'], [['GET', 'POST'], '/api/admin/intake/source-lists'],
@@ -264,6 +266,7 @@ const fixedRoutes: readonly RouteTuple[] = [
   [['GET', 'PATCH'], '/api/admin/settings'], [['GET', 'POST'], '/api/admin/settings/models'],
   ['GET', '/api/admin/settings/schema'], ['GET', '/api/admin/icp-autonomy'],
   ['POST', '/api/admin/icp-autonomy/do-not-disturb'], ['POST', '/api/admin/icp-autonomy/emergency-disable'],
+  ['GET', '/api/admin/room-arbiter'],
 ];
 
 const dynamicRoutes: readonly RouteTuple[] = [
@@ -323,7 +326,7 @@ export const GARDEN_CLIENT_ROUTES = Object.freeze([
   '/cognitive-security/remediation', '/concerns', '/confirmations', '/contact-approvals', '/contacts',
   '/enrollment', '/evals/emotion-sidecar', '/episodic-memory', '/graph-proposals', '/identity',
   '/fleet-costs', '/images', '/memory', '/model-room', '/models', '/places', '/primer', '/prompt-monitor',
-  '/prompts', '/rooms', '/satellites', '/scheduler', '/session-recovery', '/sessions',
+  '/prompts', '/room-arbiter', '/rooms', '/satellites', '/scheduler', '/session-recovery', '/sessions',
   '/settings', '/shards', '/shards/:shardId', '/skills', '/subsystem-health', '/telemetry', '/theme', '/tools',
   '/values', '/wiki', '/wishlist',
 ] as const);

@@ -21,6 +21,10 @@ import { SessionStore } from '../../persistence/sessions/store.js';
 import { SessionManager } from './manager.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import type { RoomContentWindow, RoomContentWindowPort } from './room-content-window.js';
+import {
+  composeDiscordVoiceChannelId,
+  createVoicePresenceWindowPort,
+} from './voice-presence-window.js';
 import type { LLMProviderPort } from '../agent/contracts.js';
 
 const ROOM = 'companion-room:den';
@@ -259,6 +263,39 @@ describe('SessionManager private-room presence window (psfn-framework-s10rm)', (
 
     expect(captured.map(entry => entry.content)).toEqual(['in-window bounded source']);
     expect(captured.every(entry => entry.id <= sourceEntryId)).toBe(true);
+  });
+
+  it('floors a Discord voice channel to the current join, dropping prior-visit scrollback (jp36.9.3)', async () => {
+    const mgr = new SessionManager(store, makeConfig(dir));
+    const voiceChannel = composeDiscordVoiceChannelId('guild-1');
+    const appendVoice = (content: string, timestamp: number, role: 'user' | 'assistant' = 'user'): void => {
+      store.append({
+        channelId: voiceChannel,
+        role,
+        content,
+        authorId: role === 'user' ? 'speaker' : 'comp-self',
+        authorName: role === 'user' ? 'Speaker' : 'Self',
+        timestamp,
+      });
+    };
+    // A prior voice visit left transcripts persisted in L0.
+    appendVoice('prior-visit utterance', T(120_000));
+    // Current visit: the companion re-joined; the join opens a fresh window.
+    const rejoinMs = T(30_000);
+    appendVoice('current-visit utterance', T(10_000));
+
+    const voicePort = createVoicePresenceWindowPort();
+    voicePort.enter(voiceChannel, rejoinMs);
+    mgr.setRoomContentWindowPort(voicePort);
+
+    const snapshot = await mgr.captureTurnSessionContext({ channelId: voiceChannel });
+    expect(snapshot.recentEntries.map(entry => entry.content)).toEqual(['current-visit utterance']);
+    expect(snapshot.roomWindowFloorMs).toBe(rejoinMs);
+
+    // After leaving, the voice channel serves nothing (no scrollback).
+    voicePort.leave(voiceChannel);
+    const afterLeave = await mgr.captureTurnSessionContext({ channelId: voiceChannel });
+    expect(afterLeave.recentEntries).toEqual([]);
   });
 
   it('leaves non-room channels completely unaffected by a wired port', async () => {

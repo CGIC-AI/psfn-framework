@@ -20,6 +20,8 @@ import {
   normalizeChannelPrivacy,
   validateAudienceScopeThresholds,
   validateChannelEnvelopeLabel,
+  validateChannelClassificationEpoch,
+  DEMOTION_EPOCH_NOTICE_VERSION,
 } from './context-envelope.js';
 import { decodeStoredChannelVisibility } from './types.js';
 
@@ -200,6 +202,83 @@ describe('channel envelope labels (channels.json contract)', () => {
       .toThrow(/always 'public'/);
     expect(validateChannelEnvelopeLabel({ privacy: 'public', broadcast: true }, 'label'))
       .toEqual({ privacy: 'public', broadcast: true });
+  });
+
+  it('validates the operator-confirmed classificationSource field (jp36.6)', () => {
+    expect(validateChannelEnvelopeLabel(
+      { privacy: 'public', classificationSource: 'operator_confirmed' },
+      'label',
+    )).toEqual({ privacy: 'public', classificationSource: 'operator_confirmed' });
+    // Paired with a bare broadcast=true (tier-1 public) is also valid.
+    expect(validateChannelEnvelopeLabel(
+      { broadcast: true, classificationSource: 'operator_confirmed' },
+      'label',
+    )).toEqual({ broadcast: true, classificationSource: 'operator_confirmed' });
+  });
+
+  it('fails closed on unknown classificationSource values (no computed sources persist)', () => {
+    expect(() => validateChannelEnvelopeLabel(
+      { privacy: 'public', classificationSource: 'derived_default' },
+      'label',
+    )).toThrow(/classificationSource/);
+    expect(() => validateChannelEnvelopeLabel(
+      { privacy: 'public', classificationSource: 'channel_label' },
+      'label',
+    )).toThrow(/classificationSource/);
+    expect(() => validateChannelEnvelopeLabel(
+      { privacy: 'public', classificationSource: true },
+      'label',
+    )).toThrow(/classificationSource/);
+  });
+
+  it('rejects operator_confirmed without a tier-1 classification to pin', () => {
+    expect(() => validateChannelEnvelopeLabel(
+      { classificationSource: 'operator_confirmed' },
+      'label',
+    )).toThrow(/without a tier-1 classification/);
+    // broadcast=false pins nothing (privacy falls through), so it is rejected too.
+    expect(() => validateChannelEnvelopeLabel(
+      { broadcast: false, classificationSource: 'operator_confirmed' },
+      'label',
+    )).toThrow(/without a tier-1 classification/);
+  });
+});
+
+describe('validateChannelClassificationEpoch (jp36.6.2 demotion epoch record)', () => {
+  const valid = {
+    channelId: 'room:x',
+    from: 'invite_only',
+    to: 'public',
+    at: '2026-07-19T12:00:00.000Z',
+    acceptedBy: 'operator',
+    noticeVersion: DEMOTION_EPOCH_NOTICE_VERSION,
+  };
+
+  it('accepts a well-formed invite-only -> public epoch', () => {
+    expect(validateChannelClassificationEpoch(valid, 'epoch')).toEqual(valid);
+  });
+
+  it('rejects any transition other than invite-only -> public', () => {
+    expect(() => validateChannelClassificationEpoch({ ...valid, from: 'public' }, 'epoch'))
+      .toThrow(/from must be 'invite_only'/);
+    expect(() => validateChannelClassificationEpoch({ ...valid, to: 'invite_only' }, 'epoch'))
+      .toThrow(/to must be 'public'/);
+  });
+
+  it('fails closed on a missing/invalid timestamp, actor, channelId, or notice version', () => {
+    expect(() => validateChannelClassificationEpoch({ ...valid, at: 'not-a-date' }, 'epoch'))
+      .toThrow(/ISO-8601/);
+    expect(() => validateChannelClassificationEpoch({ ...valid, acceptedBy: '' }, 'epoch'))
+      .toThrow(/acceptedBy/);
+    expect(() => validateChannelClassificationEpoch({ ...valid, channelId: '  ' }, 'epoch'))
+      .toThrow(/channelId/);
+    expect(() => validateChannelClassificationEpoch({ ...valid, noticeVersion: 'v0' }, 'epoch'))
+      .toThrow(/noticeVersion/);
+  });
+
+  it('rejects unsupported keys', () => {
+    expect(() => validateChannelClassificationEpoch({ ...valid, extra: 1 }, 'epoch'))
+      .toThrow(/unsupported keys/);
   });
 });
 

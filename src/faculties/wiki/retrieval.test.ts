@@ -196,6 +196,30 @@ describe('buildWikiContextBlock (own bounded budget)', () => {
     expect(result.selectedCount).toBe(1);
   });
 
+  it('projects content-free disclosure sources for the documents actually rendered (jp36.1.1.3)', () => {
+    const result = buildWikiContextBlock(
+      [makeMatch({ documentId: 'doc-a', sensitivity: 'intimate' })],
+      1000,
+    );
+    // Wiki world-knowledge authorizes no outward destination and rides its
+    // persisted sensitivity; classified because the store always writes one.
+    expect(result.disclosureWikiSources).toEqual([
+      { ref: 'wiki:doc-a', sensitivity: 'intimate', classified: true },
+    ]);
+  });
+
+  it('omits disclosure sources for documents dropped by the budget', () => {
+    const matches = Array.from({ length: 20 }, (_unused, index) => makeMatch({
+      documentId: `doc-${index}`,
+      title: `Doc ${index}`,
+      chunkText: `Reference chunk ${index} `.repeat(40),
+    }));
+    const result = buildWikiContextBlock(matches, 300);
+    // Exactly one disclosure source per rendered document, never the full set.
+    expect(result.disclosureWikiSources).toHaveLength(result.selectedCount);
+    expect(result.disclosureWikiSources.length).toBeLessThan(matches.length);
+  });
+
   it('never exceeds its token cap even when many matches are supplied', () => {
     const matches = Array.from({ length: 20 }, (_unused, index) => makeMatch({
       documentId: `doc-${index}`,
@@ -219,7 +243,7 @@ describe('buildWikiContextBlock (own bounded budget)', () => {
 
   it('returns an empty block for a zero cap', () => {
     const result = buildWikiContextBlock([makeMatch()], 0);
-    expect(result).toEqual({ block: '', tokenCount: 0, selectedCount: 0 });
+    expect(result).toEqual({ block: '', tokenCount: 0, selectedCount: 0, disclosureWikiSources: [] });
   });
 });
 

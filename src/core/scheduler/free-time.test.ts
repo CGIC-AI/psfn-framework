@@ -14,14 +14,29 @@ import type {
 import { HEARTBEAT_SILENT_REFLECTION_TOKEN } from './heartbeat-policy.js';
 import { Scheduler } from './scheduler.js';
 import {
+  accumulateDisclosureSource,
+  beginDisclosureAccumulation,
+  type DisclosureDestinationConstraint,
+  type DisclosureLineage,
+} from '../cogsec/disclosure/index.js';
+import type { ContextEnvelope } from '../../system/trust/context-envelope.js';
+import {
+  resolveFreeTimeWorkspace,
+  type FreeTimeWorkspace,
+  type FreeTimeWorkspaceResolverDeps,
+} from './free-time-workspace-resolver.js';
+import type { FreeTimeChooserOutcome } from './free-time-chooser.js';
+import {
   buildFreeTimeContinuationPrompt,
   buildFreeTimeFramingPrompt,
   evaluateFreeTimeGate,
   evaluateFreeTimeLaneEligibility,
   FREE_TIME_CHANNEL_PREFIX,
+  FREE_TIME_DEFAULT_WORKSPACE_SEGMENT,
   FREE_TIME_IDLE_TASK_ID,
   FREE_TIME_QUIET_HOURS_TASK_ID,
   FREE_TIME_RETURN_NOTE_SOURCE,
+  freeTimeWorkspaceChannelId,
   registerFreeTimeTasks,
   runFreeTimeBlock,
   type FreeTimeRuntimeOptions,
@@ -56,6 +71,31 @@ function entry(overrides: Partial<SessionEntry> & Pick<SessionEntry, 'role' | 't
     content: overrides.content ?? 'hello',
     ...overrides,
   };
+}
+
+/**
+ * Build a single-source disclosure lineage (via the landed accumulator) that
+ * permits exactly one contact's DM at `personal` sensitivity — enough to prove
+ * the return-note projection filters per contact.
+ */
+function disclosureLineage(input: { ref: string; permittedContactId: string }): DisclosureLineage {
+  const permitted: DisclosureDestinationConstraint[] = [
+    { kind: 'contact_dm', contactIds: [input.permittedContactId] },
+  ];
+  return accumulateDisclosureSource(
+    beginDisclosureAccumulation({
+      generationContextRef: `gen:${input.ref}`,
+      classifierVersion: 'test',
+      classifiedAt: '2026-07-20T00:00:00.000Z',
+    }),
+    {
+      ref: input.ref,
+      sensitivity: 'personal',
+      permittedDestinations: permitted,
+      subjectContactIds: [input.permittedContactId],
+      classified: true,
+    },
+  );
 }
 
 // ── Lane eligibility ──
@@ -512,7 +552,7 @@ describe('registerFreeTimeTasks', () => {
     expect(invokeTurn.mock.calls[0]?.[0].content).toContain('render the opening scene');
   });
 
-  it('surfaces a "while you were away" note on the partner session after an ACTIVE block', async () => {
+  it('keeps an unanchored "while you were away" note on the private internal workspace', async () => {
     let nowMs = Date.parse('2026-06-11T06:00:00.000Z');
     const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => nowMs);
     try {
@@ -530,9 +570,94 @@ describe('registerFreeTimeTasks', () => {
 
       expect(sessionManager.appendContextSystemNote).toHaveBeenCalledTimes(1);
       const [channelId, note, source] = sessionManager.appendContextSystemNote.mock.calls[0];
-      expect(channelId).toBe('api:main'); // partner session, NOT the internal channel
+      expect(channelId.startsWith(FREE_TIME_CHANNEL_PREFIX)).toBe(true);
+      expect(channelId).not.toBe('api:main');
       expect(source).toBe(FREE_TIME_RETURN_NOTE_SOURCE);
       expect(note).toContain('While you were away');
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  it('DM-targeted return note summarizes ONLY destination-eligible evidence (multi-contact)', async () => {
+    let nowMs = Date.parse('2026-06-11T06:00:00.000Z');
+    const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => nowMs);
+    try {
+      const { scheduler, sessionManager, runtime } = buildRuntime({
+        turnScript: ['about contact A', HEARTBEAT_SILENT_REFLECTION_TOKEN],
+        freeTimeTranscript: [
+          entry({ id: 10, role: 'assistant', timestamp: nowMs + 10_000, content: 'note about contact A' }),
+          entry({ id: 11, role: 'assistant', timestamp: nowMs + 20_000, content: 'note about contact B' }),
+        ],
+        now: () => nowMs,
+      });
+
+      const summarizeActivity = vi.fn(async (input: { entries: readonly SessionEntry[] }) => {
+        return input.entries.map(e => e.content).join(' | ');
+      });
+      runtime.summarizeActivity = summarizeActivity;
+      runtime.resolveReturnDestination = () => ({ kind: 'contact_dm', contactId: 'contact-a' });
+      runtime.resolveContactDmSessionId = (id) => (id === 'contact-a' ? 'discord:dm-a' : null);
+      const lineages = new Map<number, DisclosureLineage>([
+        [10, disclosureLineage({ ref: 'mem:a', permittedContactId: 'contact-a' })],
+        [11, disclosureLineage({ ref: 'mem:b', permittedContactId: 'contact-b' })],
+      ]);
+      runtime.resolveEntryDisclosureLineage = (e) => lineages.get(e.id);
+
+      registerFreeTimeTasks(runtime);
+      nowMs += 2_000;
+      await scheduler.tick();
+
+      // The summarizer saw ONLY the contact-A entry; contact-B never reached it.
+      expect(summarizeActivity).toHaveBeenCalledTimes(1);
+      const seen = summarizeActivity.mock.calls[0]?.[0].entries ?? [];
+      expect(seen.map(e => e.id)).toEqual([10]);
+      // Route AND destination agree: contact-A eligible content lands in contact-A's
+      // resolved DM session, never the latest eligible partner session.
+      const [channelId, note] = sessionManager.appendContextSystemNote.mock.calls[0];
+      expect(channelId).toBe('discord:dm-a');
+      expect(note).toContain('note about contact A');
+      expect(note).not.toContain('note about contact B');
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  it('collapses to a content-free note when nothing is eligible for the outward destination', async () => {
+    let nowMs = Date.parse('2026-06-11T06:00:00.000Z');
+    const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => nowMs);
+    try {
+      const { scheduler, sessionManager, runtime } = buildRuntime({
+        turnScript: ['about contact B', HEARTBEAT_SILENT_REFLECTION_TOKEN],
+        freeTimeTranscript: [
+          entry({ id: 10, role: 'assistant', timestamp: nowMs + 10_000, content: 'note about contact B' }),
+        ],
+        now: () => nowMs,
+      });
+
+      const summarizeActivity = vi.fn(async () => 'should not be called');
+      runtime.summarizeActivity = summarizeActivity;
+      // Target contact A (DM resolves), but the only evidence belongs to contact B
+      // → projection collapse. The content-free note must land on private/self,
+      // NEVER in contact A's DM.
+      runtime.resolveReturnDestination = () => ({ kind: 'contact_dm', contactId: 'contact-a' });
+      runtime.resolveContactDmSessionId = (id) => (id === 'contact-a' ? 'discord:dm-a' : null);
+      runtime.resolveEntryDisclosureLineage = () =>
+        disclosureLineage({ ref: 'mem:b', permittedContactId: 'contact-b' });
+
+      registerFreeTimeTasks(runtime);
+      nowMs += 2_000;
+      await scheduler.tick();
+
+      // Fail-closed collapse: no summary generated, content-free self note only.
+      expect(summarizeActivity).not.toHaveBeenCalled();
+      expect(sessionManager.appendContextSystemNote).toHaveBeenCalledTimes(1);
+      const [channelId, note] = sessionManager.appendContextSystemNote.mock.calls[0];
+      expect(channelId.startsWith(FREE_TIME_CHANNEL_PREFIX)).toBe(true);
+      expect(channelId).not.toBe('api:main');
+      expect(note).toContain('While you were away');
+      expect(note).not.toContain('Here is what I got up to');
+      expect(note).not.toContain('contact B');
     } finally {
       nowSpy.mockRestore();
     }
@@ -778,5 +903,342 @@ describe('free-time return summary lane', () => {
     expect(block).toContain("purpose: 'free_time_return'");
     expect(block).toContain('schedulerConfig.freeTime.returnNote.summaryMaxTokens');
     expect(block).not.toContain('temporalWakeup.morningWake.catchUpSummaryMaxTokens');
+  });
+});
+
+// ── Lane-independent continuity identity (bible §10.4) ──
+// The scheduler trigger lane (quiet-hours vs idle) must NEVER appear in the
+// free-time transcript identity: both lanes resume the SAME chosen workspace
+// session. These regressions pin that the resolved channel is workspace-keyed,
+// never lane-keyed, and that the optional resolver seam overrides it uniformly.
+
+describe('free-time continuity identity is lane-independent', () => {
+  it('freeTimeWorkspaceChannelId resolves the default continuity session, never a lane', () => {
+    const expectedDefault = `${FREE_TIME_CHANNEL_PREFIX}${FREE_TIME_DEFAULT_WORKSPACE_SEGMENT}`;
+    expect(freeTimeWorkspaceChannelId()).toBe(expectedDefault);
+    expect(freeTimeWorkspaceChannelId()).toBe('internal:free-time:wandering');
+    // Missing / empty / whitespace segment falls back to the shared default.
+    expect(freeTimeWorkspaceChannelId(undefined)).toBe(expectedDefault);
+    expect(freeTimeWorkspaceChannelId(null)).toBe(expectedDefault);
+    expect(freeTimeWorkspaceChannelId('')).toBe(expectedDefault);
+    expect(freeTimeWorkspaceChannelId('   ')).toBe(expectedDefault);
+    // A chosen workspace segment is preserved verbatim under the same prefix.
+    expect(freeTimeWorkspaceChannelId('project:story-panels'))
+      .toBe('internal:free-time:project:story-panels');
+    // The trigger-lane names never leak into the resolved identity.
+    expect(freeTimeWorkspaceChannelId()).not.toContain('quiet-hours');
+    expect(freeTimeWorkspaceChannelId()).not.toContain('idle');
+  });
+
+  async function runLaneBlock(input: {
+    lane: 'quiet_hours' | 'idle';
+    nowMs: number;
+    resolveWorkspaceChannelId?: () => string;
+  }): Promise<{
+    turnChannelId: string;
+    blockNoteChannelId: string;
+    gateChannelIds: string[];
+  }> {
+    const { scheduler, sessionManager, invokeTurn, runtime, eventBus } = buildRuntime({
+      // First-turn stop = valid "loaf": one turn still runs (channel captured),
+      // then the block records its provenance note on the same channel.
+      turnScript: [HEARTBEAT_SILENT_REFLECTION_TOKEN],
+      config: freeTimeConfig({
+        quietHours: { enabled: input.lane === 'quiet_hours', checkIntervalMs: 1_000 },
+        idle: { enabled: input.lane === 'idle', checkIntervalMs: 1_000, minIdleMinutes: 180 },
+      }),
+      now: () => input.nowMs,
+    });
+    if (input.resolveWorkspaceChannelId) {
+      runtime.resolveWorkspaceChannelId = input.resolveWorkspaceChannelId;
+    }
+    const gateChannelIds: string[] = [];
+    eventBus.on('scheduler.free_time.gate', payload => {
+      if (typeof payload.channelId === 'string') gateChannelIds.push(payload.channelId);
+    });
+    registerFreeTimeTasks(runtime);
+
+    const taskId = input.lane === 'quiet_hours'
+      ? FREE_TIME_QUIET_HOURS_TASK_ID
+      : FREE_TIME_IDLE_TASK_ID;
+    const handler = scheduler.getTask(taskId)?.handler;
+    if (!handler) throw new Error(`${input.lane} free-time task was not registered`);
+    await handler();
+
+    expect(invokeTurn).toHaveBeenCalled();
+    expect(sessionManager.appendSystemNote).toHaveBeenCalled();
+    return {
+      turnChannelId: invokeTurn.mock.calls[0]?.[0].channelId as string,
+      blockNoteChannelId: sessionManager.appendSystemNote.mock.calls[0]?.[0] as string,
+      gateChannelIds,
+    };
+  }
+
+  const QUIET_NOW = Date.parse('2026-06-11T06:00:00.000Z'); // inside rest window
+  const IDLE_NOW = Date.parse('2026-06-11T15:00:00.000Z'); // outside rest window
+
+  it('quiet-hours and idle blocks converge on the same default continuity session', async () => {
+    const quiet = await runLaneBlock({ lane: 'quiet_hours', nowMs: QUIET_NOW });
+    const idle = await runLaneBlock({ lane: 'idle', nowMs: IDLE_NOW });
+
+    // Identical, workspace-keyed identity across lanes — the acceptance criterion.
+    expect(quiet.turnChannelId).toBe(idle.turnChannelId);
+    expect(quiet.turnChannelId).toBe(freeTimeWorkspaceChannelId());
+    // Provenance note lands on the same continuity channel, not a lane channel.
+    expect(quiet.blockNoteChannelId).toBe(quiet.turnChannelId);
+    expect(idle.blockNoteChannelId).toBe(idle.turnChannelId);
+    // The old lane-keyed identities are gone.
+    expect(quiet.turnChannelId).not.toBe(`${FREE_TIME_CHANNEL_PREFIX}quiet-hours`);
+    expect(idle.turnChannelId).not.toBe(`${FREE_TIME_CHANNEL_PREFIX}idle`);
+    // Gate telemetry is lane-independent too.
+    expect(quiet.gateChannelIds).toEqual([freeTimeWorkspaceChannelId()]);
+    expect(idle.gateChannelIds).toEqual([freeTimeWorkspaceChannelId()]);
+  });
+
+  it('a resolved workspace overrides the continuity channel identically for both lanes', async () => {
+    const resolveWorkspaceChannelId = () => `${FREE_TIME_CHANNEL_PREFIX}project:story-panels`;
+    const quiet = await runLaneBlock({ lane: 'quiet_hours', nowMs: QUIET_NOW, resolveWorkspaceChannelId });
+    const idle = await runLaneBlock({ lane: 'idle', nowMs: IDLE_NOW, resolveWorkspaceChannelId });
+
+    expect(quiet.turnChannelId).toBe(idle.turnChannelId);
+    expect(quiet.turnChannelId).toBe('internal:free-time:project:story-panels');
+    expect(quiet.blockNoteChannelId).toBe('internal:free-time:project:story-panels');
+    expect(idle.blockNoteChannelId).toBe('internal:free-time:project:story-panels');
+  });
+
+  it('does not invoke the workspace resolver on a gate-skipped tick', async () => {
+    const resolveWorkspaceChannelId = vi.fn(() => `${FREE_TIME_CHANNEL_PREFIX}project:story-panels`);
+    // Recent partner activity closes the gate before any spend decision.
+    const nowMs = Date.parse('2026-06-11T06:00:00.000Z');
+    const { scheduler, sessionManager, invokeTurn, runtime } = buildRuntime({
+      turnScript: ['should not run'],
+      config: freeTimeConfig({
+        quietHours: { enabled: true, checkIntervalMs: 1_000 },
+        idle: { enabled: false, checkIntervalMs: 1_000, minIdleMinutes: 180 },
+      }),
+      now: () => nowMs,
+    });
+    runtime.resolveWorkspaceChannelId = resolveWorkspaceChannelId;
+    sessionManager.resolveStartupSessionMetadata = () => ({
+      sessionId: 'api:main',
+      channelType: 'api',
+      timestamp: nowMs - 30 * 60_000,
+      lastRole: 'user',
+    });
+    registerFreeTimeTasks(runtime);
+
+    const handler = scheduler.getTask(FREE_TIME_QUIET_HOURS_TASK_ID)?.handler;
+    if (!handler) throw new Error('quiet-hours free-time task was not registered');
+    await handler();
+
+    expect(invokeTurn).not.toHaveBeenCalled();
+    expect(resolveWorkspaceChannelId).not.toHaveBeenCalled();
+  });
+});
+
+// ── Workspace-resolved return-note routing (bible §10.8, jp36.2.3.1) ──
+// The return note is routed by the RESOLVED WORKSPACE return policy, never the
+// latest eligible session. The disclosure destination fed to the summarizer
+// projection and the append target are derived from the SAME return policy, so
+// route and destination can never disagree. Unresolvable contact/room and
+// projection collapse fail closed to a content-free private/self note. The note
+// is always an attributed SYSTEM note (never partner speech) and non-initiating.
+
+const ROUTING_INVITE_ENVELOPE: ContextEnvelope = {
+  channelPrivacy: 'invite_only',
+  audienceScope: 'group',
+  audienceKnowledge: 'all_known',
+  broadcast: false,
+};
+
+function routingDeps(overrides: Partial<FreeTimeWorkspaceResolverDeps> = {}): FreeTimeWorkspaceResolverDeps {
+  return { projectDirectory: () => null, roomChannelResolver: () => null, ...overrides };
+}
+
+/** Wrap a resolved workspace in a chooser 'workspace' outcome the runtime consumes. */
+function workspaceOutcome(workspace: FreeTimeWorkspace): FreeTimeChooserOutcome {
+  return {
+    kind: 'workspace',
+    optionId: 'opt-test',
+    label: 'my workspace',
+    choice: { kind: 'private_wander' },
+    workspace,
+  };
+}
+
+/** A room-eligible lineage permitting exactly one room channel at public sensitivity. */
+function roomDisclosureLineage(input: { ref: string; channelId: string }): DisclosureLineage {
+  return accumulateDisclosureSource(
+    beginDisclosureAccumulation({
+      generationContextRef: `gen:${input.ref}`,
+      classifierVersion: 'test',
+      classifiedAt: '2026-07-20T00:00:00.000Z',
+    }),
+    {
+      ref: input.ref,
+      sensitivity: 'public',
+      permittedDestinations: [{ kind: 'invite_only_room', channelIds: [input.channelId] }],
+      subjectContactIds: [],
+      classified: true,
+    },
+  );
+}
+
+async function runActiveWorkspaceBlock(input: {
+  workspace: FreeTimeWorkspace;
+  transcript: SessionEntry[];
+  configure?: (runtime: FreeTimeRuntimeOptions) => void;
+}): Promise<{ appendContextSystemNote: ReturnType<typeof vi.fn>; summarizeActivity: ReturnType<typeof vi.fn>; invokeTurn: ReturnType<typeof vi.fn> }> {
+  let nowMs = Date.parse('2026-06-11T06:00:00.000Z');
+  const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => nowMs);
+  try {
+    const { scheduler, sessionManager, invokeTurn, runtime } = buildRuntime({
+      turnScript: ['I made something.', HEARTBEAT_SILENT_REFLECTION_TOKEN],
+      freeTimeTranscript: input.transcript,
+      now: () => nowMs,
+    });
+    const summarizeActivity = vi.fn(async (args: { entries: readonly SessionEntry[] }) =>
+      args.entries.map(e => e.content).join(' | '));
+    runtime.summarizeActivity = summarizeActivity;
+    runtime.chooseWorkspace = async () => workspaceOutcome(input.workspace);
+    input.configure?.(runtime);
+    registerFreeTimeTasks(runtime);
+
+    nowMs += 2_000;
+    await scheduler.tick();
+    return {
+      appendContextSystemNote: sessionManager.appendContextSystemNote,
+      summarizeActivity,
+      invokeTurn,
+    };
+  } finally {
+    nowSpy.mockRestore();
+  }
+}
+
+describe('workspace-resolved return-note routing', () => {
+  it('private_self workspace → full-fidelity content note on its internal session', async () => {
+    const workspace = resolveFreeTimeWorkspace({ kind: 'private_wander' }, routingDeps());
+    expect(workspace.returnPolicy).toEqual({ kind: 'private_self' });
+    const { appendContextSystemNote, invokeTurn } = await runActiveWorkspaceBlock({
+      workspace,
+      transcript: [entry({ id: 10, role: 'assistant', timestamp: 1, content: 'a private poem' })],
+    });
+    expect(appendContextSystemNote).toHaveBeenCalledTimes(1);
+    const [channelId, note, source] = appendContextSystemNote.mock.calls[0];
+    expect(channelId).toBe(invokeTurn.mock.calls[0]?.[0].channelId);
+    expect(channelId.startsWith(FREE_TIME_CHANNEL_PREFIX)).toBe(true);
+    expect(channelId).not.toBe('api:main');
+    expect(source).toBe(FREE_TIME_RETURN_NOTE_SOURCE);
+    expect(note).toContain('Here is what I got up to: a private poem');
+  });
+
+  it('contact-anchored workspace → content note routed to that contact\'s resolved DM', async () => {
+    const workspace = resolveFreeTimeWorkspace(
+      { kind: 'private_wander', returnTarget: { contactId: 'contact-a' } },
+      routingDeps(),
+    );
+    expect(workspace.returnPolicy).toEqual({ kind: 'contact_dm', contactId: 'contact-a' });
+    const { appendContextSystemNote, summarizeActivity } = await runActiveWorkspaceBlock({
+      workspace,
+      transcript: [entry({ id: 10, role: 'assistant', timestamp: 1, content: 'made for contact A' })],
+      configure: (runtime) => {
+        runtime.resolveContactDmSessionId = (id) => (id === 'contact-a' ? 'discord:dm-a' : null);
+        runtime.resolveEntryDisclosureLineage = () => disclosureLineage({ ref: 'mem:a', permittedContactId: 'contact-a' });
+      },
+    });
+    expect(summarizeActivity).toHaveBeenCalledTimes(1);
+    const [channelId, note] = appendContextSystemNote.mock.calls[0];
+    expect(channelId).toBe('discord:dm-a'); // routed to the contact's DM, not api:main
+    expect(note).toContain('made for contact A');
+  });
+
+  it('contact-anchored workspace with NO DM resolver → fails closed to a content-free private note', async () => {
+    const workspace = resolveFreeTimeWorkspace(
+      { kind: 'private_wander', returnTarget: { contactId: 'contact-a' } },
+      routingDeps(),
+    );
+    const { appendContextSystemNote, summarizeActivity, invokeTurn } = await runActiveWorkspaceBlock({
+      workspace,
+      transcript: [entry({ id: 10, role: 'assistant', timestamp: 1, content: 'made for contact A' })],
+      configure: (runtime) => {
+        // Contact-eligible lineage exists, but the DM cannot be resolved.
+        runtime.resolveEntryDisclosureLineage = () => disclosureLineage({ ref: 'mem:a', permittedContactId: 'contact-a' });
+      },
+    });
+    // Never a wrong-destination append: content-free note on the internal
+    // private/self session.
+    expect(summarizeActivity).not.toHaveBeenCalled();
+    const [channelId, note] = appendContextSystemNote.mock.calls[0];
+    expect(channelId).toBe(invokeTurn.mock.calls[0]?.[0].channelId);
+    expect(channelId.startsWith(FREE_TIME_CHANNEL_PREFIX)).toBe(true);
+    expect(channelId).not.toBe('api:main');
+    expect(note).not.toContain('Here is what I got up to');
+    expect(note).not.toContain('contact A');
+  });
+
+  it('room workspace → room-eligible content note routed into the same room session', async () => {
+    const workspace = resolveFreeTimeWorkspace(
+      { kind: 'create_workspace', projectRef: 'project:mural', workspace: { kind: 'room', channelId: 'discord:room-1' } },
+      routingDeps({ roomChannelResolver: () => ({ envelope: ROUTING_INVITE_ENVELOPE, disclosureCeiling: 'confidential' }) }),
+    );
+    expect(workspace.returnPolicy).toEqual({ kind: 'room', channelId: 'discord:room-1' });
+    expect(workspace.retrievalPolicy.disclosureCeiling).toEqual({ kind: 'invite_only_room', channelId: 'discord:room-1' });
+    const { appendContextSystemNote } = await runActiveWorkspaceBlock({
+      workspace,
+      transcript: [entry({ id: 10, role: 'assistant', timestamp: 1, content: 'mural progress' })],
+      configure: (runtime) => {
+        runtime.resolveEntryDisclosureLineage = () => roomDisclosureLineage({ ref: 'mem:room', channelId: 'discord:room-1' });
+      },
+    });
+    const [channelId, note, source] = appendContextSystemNote.mock.calls[0];
+    expect(channelId).toBe('discord:room-1'); // same room, not api:main
+    expect(source).toBe(FREE_TIME_RETURN_NOTE_SOURCE);
+    expect(note).toContain('mural progress');
+  });
+
+  it('publication workspace → STATE update on the workspace session, no partner disclosure, no content', async () => {
+    const workspace = resolveFreeTimeWorkspace(
+      { kind: 'create_workspace', projectRef: 'project:zine', workspace: { kind: 'publication', mode: 'public_clean' } },
+      routingDeps(),
+    );
+    expect(workspace.returnPolicy).toMatchObject({ kind: 'publication_state', mode: 'public_clean' });
+    const { appendContextSystemNote, summarizeActivity } = await runActiveWorkspaceBlock({
+      workspace,
+      transcript: [entry({ id: 10, role: 'assistant', timestamp: 1, content: 'zine draft detail' })],
+    });
+    expect(summarizeActivity).not.toHaveBeenCalled(); // state, not transcript content
+    const [channelId, note, source] = appendContextSystemNote.mock.calls[0];
+    expect(channelId).not.toBe('api:main'); // no unrelated partner disclosure
+    expect(channelId.startsWith(FREE_TIME_CHANNEL_PREFIX)).toBe(true); // workspace's own session
+    expect(source).toBe(FREE_TIME_RETURN_NOTE_SOURCE);
+    expect(note).toContain('Publication workspace update');
+    expect(note).not.toContain('zine draft detail');
+  });
+
+  it('return note is an attributed SYSTEM note, never partner speech (misattribution guard)', async () => {
+    const workspace = resolveFreeTimeWorkspace({ kind: 'private_wander' }, routingDeps());
+    const { appendContextSystemNote } = await runActiveWorkspaceBlock({
+      workspace,
+      transcript: [entry({ id: 10, role: 'assistant', timestamp: 1, content: 'a quiet sketch' })],
+    });
+    const [, note, source] = appendContextSystemNote.mock.calls[0];
+    // System-note class: the runtime-owned source constant and system framing.
+    expect(source).toBe(FREE_TIME_RETURN_NOTE_SOURCE);
+    expect(note).toContain('This note comes from the runtime, not from you');
+  });
+
+  it('return note is non-initiating: a passive context note, no partner-channel turn', async () => {
+    const workspace = resolveFreeTimeWorkspace({ kind: 'private_wander' }, routingDeps());
+    const { appendContextSystemNote, invokeTurn } = await runActiveWorkspaceBlock({
+      workspace,
+      transcript: [entry({ id: 10, role: 'assistant', timestamp: 1, content: 'a small study' })],
+    });
+    // The note surfaces only as a context note; it never triggers an outbound turn.
+    expect(appendContextSystemNote).toHaveBeenCalledTimes(1);
+    // Every free-time turn ran on the INTERNAL channel only — no partner-channel dispatch.
+    for (const call of invokeTurn.mock.calls) {
+      expect(isInternalSessionId(call[0].channelId)).toBe(true);
+    }
   });
 });

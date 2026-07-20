@@ -131,6 +131,9 @@ export async function loadGatewayChannelSurfaces(
         ),
         intakeScreening: input.intakeScreening,
         allowedBotUserIds: account.allowedBotUserIds,
+        ...(account.customEmojiMeanings
+          ? { customEmojiMeanings: account.customEmojiMeanings }
+          : {}),
         account: {
           accountId: account.accountId,
           companionId: account.companionId,

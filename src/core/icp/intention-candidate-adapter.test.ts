@@ -261,4 +261,76 @@ describe('ICP intention candidate adapter', () => {
     })).resolves.toEqual({ kind: 'blocked', reason: 'ambiguous_contact' });
     expect(submit).not.toHaveBeenCalled();
   });
+
+  // ── Consented social-desire provenance (bead oth4.2) ──
+
+  function socialDesireHarness(input: { desireExists: boolean; storeWired?: boolean } = { desireExists: true }) {
+    const submit = vi.fn().mockResolvedValue({
+      outcome: 'sent',
+      candidateId: ROOT,
+      status: 'consumed',
+    });
+    const adapter = createIcpIntentionCandidateAdapter({
+      sourceRuntime: { submit },
+      peers: {
+        resolveKnownPeer: vi.fn().mockResolvedValue({
+          contactId: 'peer-contact',
+          displayName: 'Peer',
+          peerCompanionId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+        }),
+      },
+      pendingFollowUpStore: { peek: vi.fn() },
+      candidateStore: { getCandidateByPendingFollowUpId: vi.fn().mockResolvedValue(null) },
+      concernStore: { getById: vi.fn() },
+      ...(input.storeWired === false
+        ? {}
+        : {
+            socialDesireStore: {
+              getByContactId: vi.fn().mockResolvedValue(
+                input.desireExists ? { contactId: 'peer-contact' } : null,
+              ),
+            },
+          }),
+      now: () => NOW,
+    });
+    return { adapter, submit };
+  }
+
+  const socialDesirePayload = {
+    channelId: 'companion-dm:aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa:bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+    channelType: 'companion' as const,
+    content: 'I kept thinking about our last talk',
+    reason: 'social_desire:warm',
+    socialDesire: {
+      contactId: 'peer-contact',
+      consentId: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+      orientation: 'warm' as const,
+    },
+  };
+
+  it('submits a consented social desire as an independent intention candidate', async () => {
+    const { adapter, submit } = socialDesireHarness({ desireExists: true });
+    await expect(adapter.submit({ action, payload: socialDesirePayload }))
+      .resolves.toMatchObject({ kind: 'submitted' });
+    expect(submit).toHaveBeenCalledWith(expect.objectContaining({
+      source: 'intention',
+      peerContactId: 'peer-contact',
+      sourceRecordId: action.dedupeKey,
+      cause: { kind: 'independent' },
+    }));
+  });
+
+  it('fails a social desire closed when its durable record no longer exists', async () => {
+    const { adapter, submit } = socialDesireHarness({ desireExists: false });
+    await expect(adapter.submit({ action, payload: socialDesirePayload }))
+      .resolves.toEqual({ kind: 'blocked', reason: 'stale_provenance' });
+    expect(submit).not.toHaveBeenCalled();
+  });
+
+  it('fails a social desire closed when no desire store is wired', async () => {
+    const { adapter, submit } = socialDesireHarness({ desireExists: true, storeWired: false });
+    await expect(adapter.submit({ action, payload: socialDesirePayload }))
+      .resolves.toEqual({ kind: 'blocked', reason: 'stale_provenance' });
+    expect(submit).not.toHaveBeenCalled();
+  });
 });

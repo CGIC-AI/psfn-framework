@@ -7,6 +7,7 @@ import {
   type PendingFollowUp,
 } from '../intention/pending-follow-ups.js';
 import type { PendingFollowUpStorePort } from '../intention/pending-follow-up-store-port.js';
+import type { SocialDesireStorePort } from '../intention/social-desire-store-port.js';
 import {
   CanonicalCompanionPeerValidationError,
   type KnownCompanionPeer,
@@ -65,6 +66,12 @@ export function createIcpIntentionCandidateAdapter(input: {
       pendingFollowUpId: string,
     ): Promise<{ status: IcpInitiationCandidateStatus } | null>;
   };
+  /**
+   * Durable social-desire recheck (bead oth4.2). Required to accept
+   * social-desire provenance on a companion-target action; absent, such
+   * actions fail closed as stale provenance.
+   */
+  socialDesireStore?: Pick<SocialDesireStorePort, 'getByContactId'>;
   now?: () => number;
 }): IcpIntentionCandidateAdapter {
   const now = input.now ?? Date.now;
@@ -94,6 +101,21 @@ export function createIcpIntentionCandidateAdapter(input: {
           return { kind: 'blocked', reason: 'stale_provenance' };
         }
         contactIds.add(contactId);
+      }
+
+      if (payload.socialDesire) {
+        // Consented social desire (bead oth4.2): the desire record IS the
+        // provenance row — recheck it durably at execution time, exactly like
+        // pending follow-ups and concerns above. Consent verification already
+        // happened at the outbound provenance gate.
+        if (!input.socialDesireStore) {
+          return { kind: 'blocked', reason: 'stale_provenance' };
+        }
+        const desire = await input.socialDesireStore.getByContactId(payload.socialDesire.contactId);
+        if (!desire) {
+          return { kind: 'blocked', reason: 'stale_provenance' };
+        }
+        contactIds.add(desire.contactId);
       }
 
       for (const concernId of payload.concernIds ?? []) {

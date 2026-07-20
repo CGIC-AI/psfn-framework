@@ -82,6 +82,25 @@ export function resolveRuntimeSchedulerConfig(
         relevanceFloor: persisted.weightedThoughtOutreach.lifecycle.relevanceFloor,
       },
     },
+    socialDesire: {
+      enabled: persisted.socialDesire.enabled,
+      lifecycle: {
+        ...persisted.socialDesire.lifecycle,
+        decay: { ...persisted.socialDesire.lifecycle.decay },
+        coolingOff: { ...persisted.socialDesire.lifecycle.coolingOff },
+        tiers: {
+          acquaintance: { ...persisted.socialDesire.lifecycle.tiers.acquaintance },
+          friend: { ...persisted.socialDesire.lifecycle.tiers.friend },
+          family: { ...persisted.socialDesire.lifecycle.tiers.family },
+          partner: { ...persisted.socialDesire.lifecycle.tiers.partner },
+          ai_companion: { ...persisted.socialDesire.lifecycle.tiers.ai_companion },
+        },
+      },
+      outreach: {
+        ...persisted.socialDesire.outreach,
+        budget: { ...persisted.socialDesire.outreach.budget },
+      },
+    },
     icpAutonomy: {
       enabled: persisted.icpAutonomy.enabled,
       candidate: { ...persisted.icpAutonomy.candidate },

@@ -702,7 +702,7 @@ export const POSTGRES_CONTACT_MIGRATIONS = [
   );
   `,
   `CREATE INDEX IF NOT EXISTS idx_contact_channel_ids_contact ON contact_channel_ids(contact_id);`,
-  // Channel bonding opt-in flag per contact channel identity (psfn-framework-vrmf).
+  // Channel bonding opt-in flag per contact channel identity.
   `ALTER TABLE contact_channel_ids ADD COLUMN IF NOT EXISTS bonded BOOLEAN NOT NULL DEFAULT FALSE;`,
   `
   CREATE TABLE IF NOT EXISTS contact_channel_activity (

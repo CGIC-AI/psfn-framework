@@ -46,7 +46,7 @@
 
   // Channel privacy edits (tracked per identity or conversation-channel key)
   let channelPrivacyEdits = $state<Record<string, ChannelPrivacyLevel>>({});
-  // Channel-bonding opt-in per linked identity (psfn-framework-vrmf).
+  // Channel-bonding opt-in per linked identity.
   let channelBondingEdits = $state<Record<string, boolean>>({});
 
   // Add channel form
@@ -384,7 +384,7 @@
         patch.channelPrivacy = privacyChanges;
       }
 
-      // Collect channel-bonding opt-in changes on linked identities (psfn-framework-vrmf).
+      // Collect channel-bonding opt-in changes on linked identities.
       const bondingChanges: Array<{ channel: string; userId: string; bonded: boolean }> = [];
       for (const ch of contact.channels ?? []) {
         const next = channelBondingEdits[contactChannelKey(ch)];

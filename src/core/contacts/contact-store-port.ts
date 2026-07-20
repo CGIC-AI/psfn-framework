@@ -220,7 +220,7 @@ export interface ContactStorePort {
   ): Awaitable<boolean>;
   /**
    * Sets the channel-bonding opt-in flag on a linked channel identity
-   * (psfn-framework-vrmf). Returns false when the contact or identity link
+   * Returns false when the contact or identity link
    * does not exist — bonding is never created implicitly.
    */
   setChannelBonding(

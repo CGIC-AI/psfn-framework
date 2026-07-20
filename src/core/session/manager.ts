@@ -1346,7 +1346,7 @@ export class SessionManager {
     /** Optional LLM provider for foreground history-budget summarization. */
     llmProvider?: LLMProviderPort;
     excludeSessionEntryId?: number;
-    /** Channel bonding opt-in for the turn (psfn-framework-vrmf). */
+    /** Channel bonding opt-in for the turn. */
     channelBond?: import('./channel-bond.js').TurnChannelBondInput;
   }): Promise<TurnSessionContextSnapshot> {
     return await this.withResolvedSessionOwner(input.channelId, async (resolvedChannelId) => {

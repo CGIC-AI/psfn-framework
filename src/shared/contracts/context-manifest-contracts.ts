@@ -115,7 +115,7 @@ export interface ContextManifestSessionSummary {
   intentionAppraisalArtifactCount?: number;
   /**
    * Foreign entries interleaved from bonded member channels
-   * (psfn-framework-vrmf). Absent when no channel bond is active.
+   * Absent when no channel bond is active.
    */
   bondedEntryCount?: number;
   finalEntryCount: number;

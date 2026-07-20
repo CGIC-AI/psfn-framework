@@ -6,7 +6,7 @@ import {
 import type {
   EpisodicRetrievalChain,
   EpisodicRetrievalStore,
-} from './episodic.js';
+} from './episodic-types.js';
 
 export async function retrieveRolledOutBreadcrumbs(input: {
   store: EpisodicRetrievalStore;

@@ -39,7 +39,7 @@ export interface ContactChannelLink extends ContactChannelIdentity {
    */
   privacyLevel: ChannelPrivacyLevel;
   /**
-   * Channel bonding opt-in (psfn-framework-vrmf): when true, this channel
+   * Channel bonding opt-in: when true, this channel
    * identity participates in the contact's bonded set — bonded channels
    * operate as one logical conversation at the lowest-common privacy of the
    * set. Explicit operator configuration only (Garden contacts page); never

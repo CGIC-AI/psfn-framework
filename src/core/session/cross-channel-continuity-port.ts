@@ -1,45 +1,24 @@
 import {
   classifyChannelDisclosure,
-  type ChannelMeta,
 } from '../../system/trust/policy.js';
-import type { ActiveChannelQuery, ActiveContinuityChannel, ContinuityEntryProvenance, UserContinuityStore } from './continuity.js';
+import type { ContinuityEntryProvenance, UserContinuityStore } from './continuity.js';
 import { parseContinuityEntryProvenance } from './continuity.js';
 import { getMergedContinuity } from './manager/context-support.js';
 import { parseChannelVisibility } from './manager-primitives.js';
 import type { SessionEntry } from './types.js';
+import type {
+  CrossChannelContinuityPort,
+  LinkedContinuityChannelEligibility,
+} from './cross-channel-continuity-contract.js';
 
-export interface CrossChannelContinuityAppendRequest {
-  continuityUserId: string;
-  entry: Omit<SessionEntry, 'id'>;
-}
-
-export interface CrossChannelContinuityQuery {
-  canonicalUserId: string;
-  limit: number;
-  fallbackUserIds: string[];
-  channelId: string;
-  channelMeta?: ChannelMeta;
-}
-
-export type CrossChannelContinuityStatus = 'wired' | 'disabled' | 'missing_wiring';
-
-export interface CrossChannelContinuityHealth {
-  status: CrossChannelContinuityStatus;
-  detail: string;
-}
-
-export interface CrossChannelContinuityPort {
-  append(request: CrossChannelContinuityAppendRequest): number | null;
-  getMerged(params: CrossChannelContinuityQuery): SessionEntry[];
-  getActiveChannels(
-    continuityUserId: string,
-    query?: ActiveChannelQuery,
-  ): ActiveContinuityChannel[];
-  parseProvenance(metadata?: string): ContinuityEntryProvenance | null;
-  getHealth(): CrossChannelContinuityHealth;
-}
-
-export type LinkedContinuityChannelEligibility = (channelId: string) => boolean;
+export type {
+  CrossChannelContinuityAppendRequest,
+  CrossChannelContinuityHealth,
+  CrossChannelContinuityPort,
+  CrossChannelContinuityQuery,
+  CrossChannelContinuityStatus,
+  LinkedContinuityChannelEligibility,
+} from './cross-channel-continuity-contract.js';
 
 export function parseCrossChannelContinuityProvenance(
   metadata?: string,

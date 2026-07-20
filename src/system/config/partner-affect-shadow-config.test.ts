@@ -37,6 +37,14 @@ function validConfig(overrides: Record<string, unknown> = {}): Record<string, un
     sources: [{
       sourceId: 'edge-sleep-1',
       families: ['sleep'],
+      apiKeyPrincipalIds: ['api-key-fixture-shared'],
+      metrics: [{
+        family: 'sleep',
+        metricName: 'total_sleep_hours',
+        unit: 'hours',
+        minValue: 0,
+        maxValue: 24,
+      }],
       consentRef: 'consent-sleep-2026-01',
       sensitivity: 'relational_sensitive',
       revoked: false,
@@ -99,6 +107,12 @@ describe('validatePartnerAffectShadowConfig', () => {
     const source = {
       sourceId: 'edge-sleep-1',
       families: ['sleep'],
+      apiKeyPrincipalIds: ['api-key-fixture-shared'],
+      metrics: [{
+        family: 'sleep',
+        metricName: 'total_sleep_hours',
+        unit: 'hours',
+      }],
       consentRef: 'consent-a',
       sensitivity: 'relational_sensitive',
       revoked: false,
@@ -107,6 +121,68 @@ describe('validatePartnerAffectShadowConfig', () => {
       validConfig({ sources: [source, source] }),
       'test',
     )).toThrow(/duplicate sourceId/);
+  });
+
+  it.each([
+    [
+      'missing principal bindings',
+      {
+        sourceId: 'edge-sleep-1',
+        families: ['sleep'],
+        apiKeyPrincipalIds: [],
+        metrics: [{ family: 'sleep', metricName: 'total_sleep_hours', unit: 'hours' }],
+        consentRef: 'consent-a',
+        sensitivity: 'relational_sensitive',
+        revoked: false,
+      },
+    ],
+    [
+      'missing metric schema',
+      {
+        sourceId: 'edge-sleep-1',
+        families: ['sleep'],
+        apiKeyPrincipalIds: ['api-key-fixture-shared'],
+        metrics: [],
+        consentRef: 'consent-a',
+        sensitivity: 'relational_sensitive',
+        revoked: false,
+      },
+    ],
+    [
+      'metric outside authorized families',
+      {
+        sourceId: 'edge-sleep-1',
+        families: ['sleep'],
+        apiKeyPrincipalIds: ['api-key-fixture-shared'],
+        metrics: [{ family: 'activity', metricName: 'step_count', unit: 'count' }],
+        consentRef: 'consent-a',
+        sensitivity: 'relational_sensitive',
+        revoked: false,
+      },
+    ],
+    [
+      'inverted metric range',
+      {
+        sourceId: 'edge-sleep-1',
+        families: ['sleep'],
+        apiKeyPrincipalIds: ['api-key-fixture-shared'],
+        metrics: [{
+          family: 'sleep',
+          metricName: 'total_sleep_hours',
+          unit: 'hours',
+          minValue: 24,
+          maxValue: 0,
+        }],
+        consentRef: 'consent-a',
+        sensitivity: 'relational_sensitive',
+        revoked: false,
+      },
+    ],
+  ])('rejects a source authorization with %s', (_case, source) => {
+    expect(() => validatePartnerAffectShadowConfig(
+      validConfig({ sources: [source] }),
+      'test',
+    )).toThrow(/Invalid partner-affect-shadow config/);
   });
 });
 

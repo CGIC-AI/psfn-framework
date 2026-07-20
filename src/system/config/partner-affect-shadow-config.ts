@@ -8,6 +8,7 @@ import {
   isPartnerAffectDirection,
   isPartnerAffectSignalFamily,
   type PartnerAffectDirection,
+  type PartnerAffectMetricAuthorization,
   type PartnerAffectShadowPolicy,
   type PartnerAffectSignalFamily,
   type PartnerAffectSourceAuthorization,
@@ -100,9 +101,67 @@ function validateSource(value: unknown, field: string): PartnerAffectSourceAutho
   if (!Array.isArray(families) || families.length === 0) {
     throw invalid(`${field}.families`, 'a non-empty array of Signal Families', families);
   }
+  const normalizedFamilies = [...new Set(
+    families.map((family, index) => toSignalFamily(family, `${field}.families[${String(index)}]`)),
+  )];
+  const rawPrincipalIds = value.apiKeyPrincipalIds;
+  if (!Array.isArray(rawPrincipalIds) || rawPrincipalIds.length === 0) {
+    throw invalid(`${field}.apiKeyPrincipalIds`, 'a non-empty array of API-key principal ids', rawPrincipalIds);
+  }
+  const apiKeyPrincipalIds = [...new Set(
+    rawPrincipalIds.map((principalId, index) => (
+      toToken(principalId, `${field}.apiKeyPrincipalIds[${String(index)}]`)
+    )),
+  )];
+  const rawMetrics = value.metrics;
+  if (!Array.isArray(rawMetrics) || rawMetrics.length === 0) {
+    throw invalid(`${field}.metrics`, 'a non-empty array of authorized scalar metrics', rawMetrics);
+  }
+  const metrics: PartnerAffectMetricAuthorization[] = rawMetrics.map((rawMetric, index) => {
+    const metricField = `${field}.metrics[${String(index)}]`;
+    if (!isRecord(rawMetric)) {
+      throw invalid(metricField, 'an object', rawMetric);
+    }
+    const family = toSignalFamily(rawMetric.family, `${metricField}.family`);
+    if (!normalizedFamilies.includes(family)) {
+      throw invalid(`${metricField}.family`, 'one of the source-authorized families', family);
+    }
+    const minValue = rawMetric.minValue;
+    const maxValue = rawMetric.maxValue;
+    if (minValue !== undefined && (typeof minValue !== 'number' || !Number.isFinite(minValue))) {
+      throw invalid(`${metricField}.minValue`, 'a finite number when present', minValue);
+    }
+    if (maxValue !== undefined && (typeof maxValue !== 'number' || !Number.isFinite(maxValue))) {
+      throw invalid(`${metricField}.maxValue`, 'a finite number when present', maxValue);
+    }
+    if (
+      typeof minValue === 'number'
+      && typeof maxValue === 'number'
+      && minValue > maxValue
+    ) {
+      throw invalid(metricField, 'a metric whose minValue is no greater than maxValue', rawMetric);
+    }
+    return {
+      family,
+      metricName: toToken(rawMetric.metricName, `${metricField}.metricName`, 64),
+      unit: toToken(rawMetric.unit, `${metricField}.unit`, 32),
+      ...(typeof minValue === 'number' ? { minValue } : {}),
+      ...(typeof maxValue === 'number' ? { maxValue } : {}),
+    };
+  });
+  const metricKeys = new Set<string>();
+  for (const metric of metrics) {
+    const key = `${metric.family}.${metric.metricName}`;
+    if (metricKeys.has(key)) {
+      throw invalid(`${field}.metrics`, 'free of duplicate family/metricName entries', key);
+    }
+    metricKeys.add(key);
+  }
   return {
     sourceId: toToken(value.sourceId, `${field}.sourceId`),
-    families: [...new Set(families.map((family, index) => toSignalFamily(family, `${field}.families[${String(index)}]`)))],
+    families: normalizedFamilies,
+    apiKeyPrincipalIds,
+    metrics,
     consentRef: toToken(value.consentRef, `${field}.consentRef`),
     sensitivity: toToken(value.sensitivity, `${field}.sensitivity`, 64),
     revoked: toBoolean(value.revoked, `${field}.revoked`),

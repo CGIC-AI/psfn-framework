@@ -1059,7 +1059,7 @@ describe('runtime subject identity', () => {
     expect(authorContext.channelBond).toBeUndefined();
   });
 
-  it('activates the channel bond only when the current identity platform is bonded (psfn-framework-vrmf)', async () => {
+  it('activates the channel bond only when the current exact identity is bonded', async () => {
     const makeStore = (channels: Array<{ channel: string; userId: string; privacyLevel: string; bonded?: boolean }>) => ({
       resolveChannelIdentity: () => ({
         id: 'contact-alex',
@@ -1096,9 +1096,20 @@ describe('runtime subject identity', () => {
       { channel: 'api', userId: 'mobile', privacyLevel: 'private' },
     ]);
     expect(bonded.channelBond).toEqual({
-      bondedPlatforms: ['discord', 'telegram'],
+      currentIdentity: { channel: 'discord', userId: 'discord-user-1' },
+      bondedIdentities: [
+        { channel: 'discord', userId: 'discord-user-1' },
+        { channel: 'telegram', userId: 'tg-777' },
+      ],
       trustLevel: 'primary',
     });
+
+    // A different account on the same platform is not the bonded identity.
+    const samePlatformUnbondedAccount = await resolve([
+      { channel: 'discord', userId: 'discord-user-2', privacyLevel: 'private', bonded: true },
+      { channel: 'telegram', userId: 'tg-777', privacyLevel: 'private', bonded: true },
+    ]);
+    expect(samePlatformUnbondedAccount.channelBond).toBeUndefined();
 
     // Only OTHER platforms bonded: the unbonded current surface never joins.
     const currentUnbonded = await resolve([

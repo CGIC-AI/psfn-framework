@@ -29,6 +29,14 @@ function policy(overrides: Partial<PartnerAffectShadowPolicy> = {}): PartnerAffe
       {
         sourceId: 'edge-sleep-1',
         families: ['sleep'],
+        apiKeyPrincipalIds: ['api-key-fixture-shared'],
+        metrics: [{
+          family: 'sleep',
+          metricName: 'total_sleep_hours',
+          unit: 'hours',
+          minValue: 0,
+          maxValue: 24,
+        }],
         consentRef: 'consent-sleep-2026-01',
         sensitivity: 'relational_sensitive',
         revoked: false,
@@ -36,6 +44,14 @@ function policy(overrides: Partial<PartnerAffectShadowPolicy> = {}): PartnerAffe
       {
         sourceId: 'revoked-1',
         families: ['sleep'],
+        apiKeyPrincipalIds: ['api-key-revoked'],
+        metrics: [{
+          family: 'sleep',
+          metricName: 'total_sleep_hours',
+          unit: 'hours',
+          minValue: 0,
+          maxValue: 24,
+        }],
         consentRef: 'consent-old',
         sensitivity: 'relational_sensitive',
         revoked: true,

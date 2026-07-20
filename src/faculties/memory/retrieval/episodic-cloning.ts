@@ -1,5 +1,5 @@
 import type { Episode, EpisodeArc } from '../../../shared/contracts/episodic-memory.js';
-import type { EpisodicRetrievalChain } from './episodic.js';
+import type { EpisodicRetrievalChain } from './episodic-types.js';
 
 export function cloneEpisode(episode: Episode): Episode {
   return {

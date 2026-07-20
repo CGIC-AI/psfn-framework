@@ -245,9 +245,21 @@ export interface PartnerAffectShadowTelemetryEvent {
 export interface PartnerAffectSourceAuthorization {
   sourceId: string;
   families: PartnerAffectSignalFamily[];
+  /** API-key principals permitted to submit observations for this source. */
+  apiKeyPrincipalIds: string[];
+  /** Exact scalar metric schema this source may submit. */
+  metrics: PartnerAffectMetricAuthorization[];
   consentRef: string;
   sensitivity: string;
   revoked: boolean;
+}
+
+export interface PartnerAffectMetricAuthorization {
+  family: PartnerAffectSignalFamily;
+  metricName: string;
+  unit: string;
+  minValue?: number;
+  maxValue?: number;
 }
 
 /** Mutable policy for the shadow observation foundation (JSON-owned). */

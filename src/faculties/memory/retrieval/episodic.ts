@@ -27,13 +27,16 @@ import {
   cloneEpisode,
   cloneEpisodeArc,
 } from './episodic-cloning.js';
+import type {
+  EpisodicRetrievalChain,
+  EpisodicRetrievalStore,
+} from './episodic-types.js';
 
 export { cloneEpisodicRetrievalChain } from './episodic-cloning.js';
-
-export type EpisodicRetrievalStore = Pick<
-  EpisodicStorePort,
-  'listEpisodes' | 'searchByTime' | 'getEpisode' | 'listEpisodeArcsForEpisode'
->;
+export type {
+  EpisodicRetrievalChain,
+  EpisodicRetrievalStore,
+} from './episodic-types.js';
 
 export type EpisodicArcMembershipStore = Pick<
   EpisodicStorePort,
@@ -44,14 +47,6 @@ export type EpisodicTimelineStore = Pick<
   EpisodicStorePort,
   'searchByTime' | 'listEpisodes' | 'getEpisode' | 'listEpisodeArcsForEpisode'
 >;
-
-export interface EpisodicRetrievalChain {
-  rootEpisodeId: string;
-  episodes: Episode[];
-  arcs: EpisodeArc[];
-  score: number;
-  matchedTerms: string[];
-}
 
 export interface EpisodicTimelineEntry {
   episode: Episode;

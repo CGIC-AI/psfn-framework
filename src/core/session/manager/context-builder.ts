@@ -440,7 +440,7 @@ export interface CaptureTurnSessionContextParams {
   /** Exact just-recorded turn entry to remove before merging or summarizing. */
   excludeSessionEntryId?: number;
   /**
-   * Channel bonding opt-in for the turn (psfn-framework-vrmf), resolved from
+   * Channel bonding opt-in for the turn, resolved from
    * the author's contact record. Absent = no bond, byte-identical behavior.
    */
   channelBond?: TurnChannelBondInput;
@@ -525,7 +525,7 @@ export async function captureTurnSessionContext(
     recent,
     params.config.observationMaskingWindow ?? DEFAULT_OBSERVATION_MASKING_WINDOW,
   ).entries;
-  // Channel bonding (psfn-framework-vrmf): interleave bonded member channels'
+  // Channel bonding: interleave bonded member channels'
   // conversational entries into the timeline AFTER the own-channel gates
   // (exclusion, focus compaction, masking) so those id-keyed transforms only
   // ever see own-channel entries. Presence-windowed rooms never bond (the

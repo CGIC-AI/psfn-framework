@@ -83,7 +83,7 @@ interface ContactUpdatePayload {
   timezone?: unknown;
   isMachineIntelligence?: boolean;
   channelPrivacy?: ChannelPrivacyUpdate[];
-  /** Channel-bonding opt-in per linked channel identity (psfn-framework-vrmf). */
+  /** Channel-bonding opt-in per linked channel identity. */
   channelBonding?: ChannelBondingUpdate[];
   addChannel?: AddChannelLink;
 }
@@ -790,7 +790,7 @@ export class AdminContactsDataService implements AdminContactsService {
       }
     }
 
-    // Apply channel-bonding opt-in updates (psfn-framework-vrmf)
+    // Apply channel-bonding opt-in updates.
     if (Array.isArray(payload.channelBonding)) {
       for (const cb of payload.channelBonding) {
         const normalizedChannel = typeof cb.channel === 'string' ? cb.channel.trim() : '';

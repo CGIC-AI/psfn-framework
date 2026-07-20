@@ -156,7 +156,7 @@ describe('renderPromptBlock companion-facing rendering contract', () => {
     expect(rendered).not.toMatch(/\b[+-]?\d+\.\d+\b/);
   });
 
-  it('renders episodic landmark chains without raw span, artifact, or provenance identifiers', () => {
+  it('renders exact episode ids for tool drilldown without leaking span, artifact, or provenance identifiers', () => {
     const rendered = renderPromptBlock(undefined, [], {
       episodicChains: [buildEpisodicChainFixture()],
     });
@@ -164,8 +164,8 @@ describe('renderPromptBlock companion-facing rendering contract', () => {
     expect(rendered).toContain('Late-night debugging of the voice pipeline');
     expect(rendered).toContain('Landmark:');
     expectNoIdentifierLeaks(rendered);
-    expect(rendered).not.toContain(EPISODE_A_ID);
-    expect(rendered).not.toContain(EPISODE_B_ID);
+    expect(rendered).toContain(`Episode ${EPISODE_A_ID}:`);
+    expect(rendered).toContain(`Episode ${EPISODE_B_ID}:`);
   });
 
   it('describes arc links by episode title instead of episode id', () => {

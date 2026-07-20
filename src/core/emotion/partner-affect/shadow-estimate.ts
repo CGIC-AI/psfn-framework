@@ -117,15 +117,22 @@ export function computePartnerAffectShadowEstimate(
     reasons.push('partner_unbound');
   }
   const freshFamilies = families.filter(family => family.freshness === 'fresh');
+  const usableFreshFamilies = freshFamilies.filter(family => (
+    family.coverage > 0
+    && family.missingness < 1
+  ));
   if (freshFamilies.length === 0) {
     reasons.push('no_fresh_evidence');
-  } else if (freshFamilies.length < policy.minIndependentFamilies) {
+  } else if (usableFreshFamilies.length < policy.minIndependentFamilies) {
     reasons.push('insufficient_family_quorum');
   }
   if (freshFamilies.some(family => family.conflict)) {
     reasons.push('conflicting_evidence');
   }
-  if (freshFamilies.length > 0 && freshFamilies.some(family => family.confidence < policy.minConfidence)) {
+  if (
+    usableFreshFamilies.length > 0
+    && usableFreshFamilies.some(family => family.confidence < policy.minConfidence)
+  ) {
     reasons.push('low_confidence_evidence');
   }
 

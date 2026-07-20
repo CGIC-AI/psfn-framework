@@ -23,6 +23,22 @@ function testPolicy(overrides: Partial<PartnerAffectShadowPolicy> = {}): Partner
       {
         sourceId: 'edge-sleep-1',
         families: ['sleep', 'activity'],
+        apiKeyPrincipalIds: ['api-key-fixture-shared'],
+        metrics: [
+          {
+            family: 'sleep',
+            metricName: 'total_sleep_hours',
+            unit: 'hours',
+            minValue: 0,
+            maxValue: 24,
+          },
+          {
+            family: 'activity',
+            metricName: 'step_count',
+            unit: 'count',
+            minValue: 0,
+          },
+        ],
         consentRef: 'consent-sleep-2026-01',
         sensitivity: 'relational_sensitive',
         revoked: false,
@@ -30,6 +46,13 @@ function testPolicy(overrides: Partial<PartnerAffectShadowPolicy> = {}): Partner
       {
         sourceId: 'revoked-source',
         families: ['activity'],
+        apiKeyPrincipalIds: ['api-key-revoked'],
+        metrics: [{
+          family: 'activity',
+          metricName: 'step_count',
+          unit: 'count',
+          minValue: 0,
+        }],
         consentRef: 'consent-activity-2025-12',
         sensitivity: 'relational_sensitive',
         revoked: true,
@@ -122,6 +145,14 @@ describe('guardPartnerAffectObservation', () => {
       sources: [{
         sourceId: 'edge-selfreport-1',
         families: ['sleep'],
+        apiKeyPrincipalIds: ['api-key-self-report'],
+        metrics: [{
+          family: 'sleep',
+          metricName: 'total_sleep_hours',
+          unit: 'hours',
+          minValue: 0,
+          maxValue: 24,
+        }],
         consentRef: 'consent-sr',
         sensitivity: 'relational_sensitive',
         revoked: false,
@@ -213,6 +244,30 @@ describe('guardPartnerAffectObservation', () => {
       expect(serialized).not.toContain('private text');
       expect(serialized).not.toContain('sku');
     }
+  });
+
+  it('suppresses a token-shaped scalar that is not an authorized source metric', () => {
+    const decision = guard(validPayload({
+      metricName: 'gps_latitude',
+      value: 52.1,
+      unit: 'degrees',
+    }));
+    expect(decision.status).toBe('suppressed');
+    if (decision.status !== 'suppressed') return;
+    expect(decision.suppressed.reasons).toContain('raw_sensitive_payload');
+    expect(decision.suppressed.detail).not.toContain('gps_latitude');
+  });
+
+  it.each([
+    [{ unit: 'minutes' }, 'metric unit does not match'],
+    [{ value: 25 }, 'metric value is outside'],
+    [{ value: -1 }, 'metric value is outside'],
+  ])('enforces the authorized metric unit and range for %j', (overrides, detail) => {
+    const decision = guard(validPayload(overrides));
+    expect(decision.status).toBe('suppressed');
+    if (decision.status !== 'suppressed') return;
+    expect(decision.suppressed.reasons).toContain('raw_sensitive_payload');
+    expect(decision.suppressed.detail).toContain(detail);
   });
 
   it('fails closed on provenance entries with unexpected keys', () => {
@@ -308,6 +363,12 @@ describe('guardPartnerAffectObservation', () => {
         sources: [{
           sourceId: 'edge-sleep-1',
           families: ['personal_operations'],
+          apiKeyPrincipalIds: ['api-key-fixture-shared'],
+          metrics: [{
+            family: 'personal_operations',
+            metricName: 'total_sleep_hours',
+            unit: 'hours',
+          }],
           consentRef: 'consent-ops',
           sensitivity: 'relational_sensitive',
           revoked: false,

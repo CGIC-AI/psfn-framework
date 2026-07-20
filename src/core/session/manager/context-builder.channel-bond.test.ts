@@ -133,7 +133,16 @@ async function capture(options: {
       : {}),
     ...(options.bonded === false
       ? {}
-      : { channelBond: { bondedPlatforms: ['discord', 'telegram'], trustLevel: 'primary' } }),
+      : {
+          channelBond: {
+            currentIdentity: { channel: 'discord', userId: 'partner-user' },
+            bondedIdentities: [
+              { channel: 'discord', userId: 'partner-user' },
+              { channel: 'telegram', userId: 'partner-user' },
+            ],
+            trustLevel: 'primary',
+          },
+        }),
   });
 }
 
@@ -201,7 +210,14 @@ describe('captureTurnSessionContext channel bonding', () => {
       wakeReturnArtifacts: [],
       compactionPromptText: 'Summarize history.',
       promptRegistry: null,
-      channelBond: { bondedPlatforms: ['discord', 'telegram'], trustLevel: 'primary' },
+      channelBond: {
+        currentIdentity: { channel: 'discord', userId: 'partner-user' },
+        bondedIdentities: [
+          { channel: 'discord', userId: 'partner-user' },
+          { channel: 'telegram', userId: 'partner-user' },
+        ],
+        trustLevel: 'primary',
+      },
     });
     expect(snapshot.bondedEntryCount).toBeUndefined();
     expect(JSON.stringify(snapshot.recentEntries)).not.toContain('bedroom voice');
@@ -268,7 +284,7 @@ describe('buildSessionContext channel bonding', () => {
   });
 });
 
-// ── psfn-framework-vrmf remediation ──────────────────────────────────────────
+// ── Channel-bonding remediation ──────────────────────────────────────────────
 
 function bondMarkerMetadata(sourceChannelId: string, extra?: Record<string, unknown>): string {
   return JSON.stringify({
@@ -350,7 +366,7 @@ async function buildTrigger(recentEntries: SessionEntry[]) {
   });
 }
 
-describe('buildSessionContext channel bonding compaction accounting (psfn-framework-vrmf)', () => {
+describe('buildSessionContext channel bonding compaction accounting', () => {
   const LONG = 'This is a deliberately long conversational line meant to consume the tiny history token budget under test. '.repeat(3);
   const OWN_SHORT = ['a', 'b', 'c', 'd', 'e', 'f'].map((label, index) => ownEntry(index + 1, label));
 
@@ -372,7 +388,7 @@ describe('buildSessionContext channel bonding compaction accounting (psfn-framew
   });
 });
 
-describe('buildSessionContext channel bonding + intake sink gate (psfn-framework-vrmf)', () => {
+describe('buildSessionContext channel bonding + intake sink gate', () => {
   function makeEnforceGate() {
     const seed = JSON.parse(
       readFileSync(join(process.cwd(), 'config', 'intake-policy.seed.json'), 'utf8'),

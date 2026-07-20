@@ -107,6 +107,33 @@ describe('computePartnerAffectShadowEstimate', () => {
     expect(estimate.reasons).toEqual(['quorum_met']);
   });
 
+  it('keeps a fresh multi-family quorum unknown when every family has zero usable coverage', () => {
+    const estimate = computePartnerAffectShadowEstimate({
+      observations: [
+        observation({
+          observationKey: 'a:zero',
+          coverage: 0,
+          missingness: 1,
+        }),
+        observation({
+          observationKey: 'b:zero',
+          signalFamily: 'conversation',
+          metricName: 'daily_turns',
+          sourceId: 'src-b',
+          unit: 'count',
+          value: 0,
+          coverage: 0,
+          missingness: 1,
+        }),
+      ],
+      policy: policy(),
+      nowMs: NOW_MS,
+    });
+    expect(estimate.status).toBe('unknown');
+    expect(estimate.reasons).toContain('insufficient_family_quorum');
+    expect(estimate.reasons).not.toContain('quorum_met');
+  });
+
   it('degrades stale evidence to unknown instead of treating absence as recovery', () => {
     const staleMs = NOW_MS - 100 * 60 * 60_000;
     const estimate = computePartnerAffectShadowEstimate({

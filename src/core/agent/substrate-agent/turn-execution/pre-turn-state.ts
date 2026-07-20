@@ -681,7 +681,7 @@ export async function computePreTurnState(input: {
       continuityFallbackUserIds: authorContext.continuityFallbackKeys,
       turnBudgetCharacteristics,
       ...(currentSessionEntryId !== null ? { excludeSessionEntryId: currentSessionEntryId } : {}),
-      // Channel bonding (psfn-framework-vrmf) is a 1:1 continuity surface:
+      // Channel bonding is a 1:1 continuity surface:
       // a group room never joins a bond, so a group scope drops the opt-in.
       ...(authorContext.channelBond && conversationScope.kind !== 'group'
         ? { channelBond: authorContext.channelBond }

@@ -371,7 +371,7 @@ export function entriesToMessages(
         channelId: entry.originChannelId ?? entry.channelId,
       });
     }
-    // Channel bonding (psfn-framework-vrmf): interleaved foreign entries are
+    // Channel bonding: interleaved foreign entries are
     // annotated with their source channel. The companion's own turns stay
     // unannotated — a model that reads its past speech prefixed with source
     // tags mimics the prefix into new replies (same live-leak class as the

@@ -28,6 +28,14 @@ function testPolicy(overrides: Partial<PartnerAffectShadowPolicy> = {}): Partner
     sources: [{
       sourceId: 'edge-sleep-1',
       families: ['sleep'],
+      apiKeyPrincipalIds: ['api-key-fixture-shared'],
+      metrics: [{
+        family: 'sleep',
+        metricName: 'total_sleep_hours',
+        unit: 'hours',
+        minValue: 0,
+        maxValue: 24,
+      }],
       consentRef: 'consent-sleep-2026-01',
       sensitivity: 'relational_sensitive',
       revoked: false,
@@ -172,6 +180,23 @@ describe('createPartnerAffectShadowIngestBridge', () => {
     const event = observationEvent();
     delete event.auth;
     await eventBus.emit('external.telemetry.ingested', { event });
+    expect(store.accepted).toHaveLength(0);
+    expect(store.suppressed).toHaveLength(1);
+    expect(store.suppressed[0].reasons).toEqual(['missing_authenticated_origin']);
+    expect(counters[0].counter).toBe('suppressed');
+  });
+
+  it('fails closed when an authenticated API principal is not authorized for the claimed source', async () => {
+    const { eventBus, store, counters } = createHarness();
+    await eventBus.emit('external.telemetry.ingested', {
+      event: observationEvent({}, {
+        auth: {
+          principalId: 'api-key-for-another-source',
+          principalMode: 'api_key',
+          satelliteScoped: false,
+        },
+      }),
+    });
     expect(store.accepted).toHaveLength(0);
     expect(store.suppressed).toHaveLength(1);
     expect(store.suppressed[0].reasons).toEqual(['missing_authenticated_origin']);

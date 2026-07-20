@@ -180,7 +180,7 @@ describe('AdminContactsDataService', () => {
     expect((await contactStore.getById(contact.id))?.timezone).toBeUndefined();
   });
 
-  it('applies channel-bonding opt-in updates per linked identity (psfn-framework-vrmf)', async () => {
+  it('applies channel-bonding opt-in updates per linked identity', async () => {
     const { contactStore, service } = await createServiceHarness();
     const contact = await contactStore.upsert({ displayName: 'Bonded Partner' });
     await contactStore.linkChannelIdentity(contact.id, 'discord', 'bond-user', { privacyLevel: 'private' });

@@ -448,6 +448,37 @@ export function guardPartnerAffectObservation(
       if (signalFamily !== null && !authorization.families.includes(signalFamily)) {
         failures.push({ reason: 'family_not_consented', detail: 'source is not consented for this Signal Family' });
       }
+      if (signalFamily !== null && metricName !== null) {
+        const metricAuthorization = authorization.metrics.find(metric => (
+          metric.family === signalFamily
+          && metric.metricName === metricName
+        ));
+        if (!metricAuthorization) {
+          failures.push({
+            reason: 'raw_sensitive_payload',
+            detail: 'metric is not in the source-authorized scalar schema',
+          });
+        } else {
+          if (unit !== null && unit !== metricAuthorization.unit) {
+            failures.push({
+              reason: 'raw_sensitive_payload',
+              detail: 'metric unit does not match the source-authorized scalar schema',
+            });
+          }
+          if (
+            value !== null
+            && (
+              (metricAuthorization.minValue !== undefined && value < metricAuthorization.minValue)
+              || (metricAuthorization.maxValue !== undefined && value > metricAuthorization.maxValue)
+            )
+          ) {
+            failures.push({
+              reason: 'raw_sensitive_payload',
+              detail: 'metric value is outside the source-authorized scalar range',
+            });
+          }
+        }
+      }
     }
   }
   if (signalFamily !== null && !policy.allowedSignalFamilies.includes(signalFamily)) {

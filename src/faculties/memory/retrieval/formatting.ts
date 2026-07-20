@@ -208,7 +208,7 @@ function renderEpisodicLandmarkChains(chains: readonly EpisodicRetrievalChain[])
         : '';
       const themes = episode.themes.length > 0 ? episode.themes.slice(0, 5).join(', ') : 'none';
       lines.push(
-        `- ${arcPrefix}${compactPromptLine(episode.title, 96)} (${formatEpisodeTimeRange(episode.startedAt, episode.endedAt)}; themes: ${themes})`,
+        `- Episode ${episode.id}: ${arcPrefix}${compactPromptLine(episode.title, 96)} (${formatEpisodeTimeRange(episode.startedAt, episode.endedAt)}; themes: ${themes})`,
       );
       lines.push(`  Landmark: ${compactPromptLine(stripLandmarkTimestampTail(episode.landmark), 260)}`);
     });

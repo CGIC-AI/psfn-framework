@@ -8,7 +8,8 @@ import {
 } from '../../system/trust/policy.js';
 import type { ChannelPrivacy } from '../../system/trust/context-envelope.js';
 import type { TrustLevel } from '../../system/trust/types.js';
-import type { CrossChannelContinuityPort } from './cross-channel-continuity-port.js';
+import type { ContactChannelIdentity } from '../contacts/types.js';
+import type { CrossChannelContinuityPort } from './cross-channel-continuity-contract.js';
 import {
   collectRecentEntriesWithinHistorySpan,
   isNonConversationalSessionEntry,
@@ -19,7 +20,7 @@ import {
 import type { SessionEntry } from './types.js';
 
 /**
- * Channel bonding (psfn-framework-vrmf): explicitly opted-in contact channel
+ * Channel bonding: explicitly opted-in contact channel
  * identities operate as ONE logical conversation. Physical session logs stay
  * split per channel; the bond is a read-time interleave of the bonded
  * members' logs into the current channel's context timeline, ordered by
@@ -43,12 +44,10 @@ export const CHANNEL_BOND_METADATA_KEY = 'channelBond';
 
 /** Turn-scoped bond opt-in resolved from the author's contact record. */
 export interface TurnChannelBondInput {
-  /**
-   * Contact channel-identity platforms (`ContactChannelLink.channel`) whose
-   * identities carry the explicit `bonded` opt-in flag. The current turn's
-   * identity platform is always a member (resolveAuthorContext gates on it).
-   */
-  bondedPlatforms: readonly string[];
+  /** Exact identity that authored the current turn. */
+  currentIdentity: ContactChannelIdentity;
+  /** Exact contact identities carrying the explicit `bonded` opt-in flag. */
+  bondedIdentities: readonly ContactChannelIdentity[];
   /** Trust level of the resolved contact, for memory-policy gating. */
   trustLevel: TrustLevel;
 }
@@ -220,19 +219,38 @@ export function resolveBondedSessionTimeline(params: {
   const continuityUserId = params.continuityUserId?.trim();
   if (!continuityUserId) return null;
 
-  const bondedPlatformKeys = new Set<string>();
-  for (const platform of params.bond.bondedPlatforms) {
-    const key = resolveChannelPlatformKey(platform);
-    if (key) bondedPlatformKeys.add(key);
-  }
-  if (bondedPlatformKeys.size === 0) return null;
+  const currentIdentityChannel = params.bond.currentIdentity.channel.trim().toLowerCase();
+  const currentIdentityUserId = params.bond.currentIdentity.userId.trim();
+  if (!currentIdentityChannel || !currentIdentityUserId) return null;
+  const currentIdentityIsBonded = params.bond.bondedIdentities.some(identity => (
+    identity.channel.trim().toLowerCase() === currentIdentityChannel
+    && identity.userId.trim() === currentIdentityUserId
+  ));
+  if (!currentIdentityIsBonded) return null;
 
-  // The current channel itself must be part of the opted-in set. The author
-  // context already gated on the identity platform; this re-checks against
-  // the physical channel id so an unmatched surface never activates a bond.
+  const bondedUserIdsByPlatform = new Map<string, Set<string>>();
+  for (const identity of params.bond.bondedIdentities) {
+    const platformKey = resolveChannelPlatformKey(identity.channel);
+    const userId = identity.userId.trim();
+    if (!platformKey || !userId) continue;
+    const userIds = bondedUserIdsByPlatform.get(platformKey) ?? new Set<string>();
+    userIds.add(userId);
+    bondedUserIdsByPlatform.set(platformKey, userIds);
+  }
+  if (bondedUserIdsByPlatform.size === 0) return null;
+
+  // The current physical surface must match the exact bonded identity's
+  // platform. A same-platform account cannot activate somebody else's bond.
   const currentPlatformKey = resolveChannelPlatformKey(params.sourceChannelId)
     ?? resolveChannelPlatformKey(params.channelId);
-  if (!currentPlatformKey || !bondedPlatformKeys.has(currentPlatformKey)) return null;
+  const currentIdentityPlatformKey = resolveChannelPlatformKey(currentIdentityChannel);
+  if (
+    !currentPlatformKey
+    || currentIdentityPlatformKey !== currentPlatformKey
+    || !bondedUserIdsByPlatform.get(currentPlatformKey)?.has(currentIdentityUserId)
+  ) {
+    return null;
+  }
 
   const nowMs = params.nowMs ?? Date.now();
   const activeWindowMs = Math.max(1_000, params.activeWindowMs ?? DEFAULT_CHANNEL_BOND_ACTIVE_WINDOW_MS);
@@ -248,7 +266,10 @@ export function resolveBondedSessionTimeline(params: {
   for (const active of activeChannels) {
     if (active.channelId === params.channelId || active.channelId === params.sourceChannelId) continue;
     const platformKey = resolveChannelPlatformKey(active.channelId);
-    if (!platformKey || !bondedPlatformKeys.has(platformKey)) continue;
+    const authorizedUserIds = platformKey
+      ? bondedUserIdsByPlatform.get(platformKey)
+      : undefined;
+    if (!platformKey || !authorizedUserIds) continue;
 
     const collected = collectRecentEntriesWithinHistorySpan({
       store: params.store,
@@ -257,10 +278,25 @@ export function resolveBondedSessionTimeline(params: {
       maxHistorySpanMs: params.maxHistorySpanMs,
       nowMs,
     });
-    const conversational = collected.entries
-      .filter(entry => (entry.role === 'user' || entry.role === 'assistant')
-        && !isNonConversationalSessionEntry(entry))
-      .slice(-memberEntryLimit);
+    const allConversational = collected.entries.filter(entry => (
+      (entry.role === 'user' || entry.role === 'assistant')
+      && !isNonConversationalSessionEntry(entry)
+    ));
+    const memberUserEntries = allConversational.filter(entry => entry.role === 'user');
+    // A physical channel joins only when every user speaker in its retained
+    // history is one of the exact bonded identities for that platform. This
+    // rejects same-platform alternate accounts and mixed group logs. An
+    // assistant-only log cannot prove who the conversation belonged to.
+    if (
+      memberUserEntries.length === 0
+      || memberUserEntries.some(entry => (
+        typeof entry.authorId !== 'string'
+        || !authorizedUserIds.has(entry.authorId.trim())
+      ))
+    ) {
+      continue;
+    }
+    const conversational = allConversational.slice(-memberEntryLimit);
     if (conversational.length === 0) continue;
 
     // Member privacy is determined STRICTLY from the member's own persisted

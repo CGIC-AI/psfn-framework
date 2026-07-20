@@ -122,13 +122,13 @@
     },
     {
       "file": "src/boundary/gateway/attachment-materialization.ts",
-      "name": "MAX_GATEWAY_ATTACHMENTS",
-      "value": "10"
+      "name": "MAX_GATEWAY_ATTACHMENT_BYTES",
+      "value": "25 * 1024 * 1024"
     },
     {
       "file": "src/boundary/gateway/attachment-materialization.ts",
-      "name": "MAX_GATEWAY_ATTACHMENT_BYTES",
-      "value": "25 * 1024 * 1024"
+      "name": "MAX_GATEWAY_ATTACHMENTS",
+      "value": "10"
     },
     {
       "file": "src/boundary/gateway/bootstrap-input.ts",
@@ -646,13 +646,13 @@
     },
     {
       "file": "src/boundary/sandbox/capabilities/shell.ts",
-      "name": "MAX_ARGS",
-      "value": "64"
+      "name": "MAX_ARG_LENGTH",
+      "value": "4096"
     },
     {
       "file": "src/boundary/sandbox/capabilities/shell.ts",
-      "name": "MAX_ARG_LENGTH",
-      "value": "4096"
+      "name": "MAX_ARGS",
+      "value": "64"
     },
     {
       "file": "src/boundary/sandbox/capabilities/shell.ts",
@@ -1062,13 +1062,13 @@
     },
     {
       "file": "src/channels/discord/attachments.ts",
-      "name": "DISCORD_MAX_IMAGE_ATTACHMENTS_PER_MESSAGE",
-      "value": "4"
+      "name": "DISCORD_MAX_IMAGE_ATTACHMENT_BYTES",
+      "value": "8 * 1024 * 1024"
     },
     {
       "file": "src/channels/discord/attachments.ts",
-      "name": "DISCORD_MAX_IMAGE_ATTACHMENT_BYTES",
-      "value": "8 * 1024 * 1024"
+      "name": "DISCORD_MAX_IMAGE_ATTACHMENTS_PER_MESSAGE",
+      "value": "4"
     },
     {
       "file": "src/channels/discord/voice-types.ts",
@@ -1149,13 +1149,13 @@
     },
     {
       "file": "src/core/agent/completion-notices.ts",
-      "name": "MAX_NOTICES_PER_CHANNEL",
-      "value": "8"
+      "name": "MAX_NOTICE_SUMMARY_CHARS",
+      "value": "160"
     },
     {
       "file": "src/core/agent/completion-notices.ts",
-      "name": "MAX_NOTICE_SUMMARY_CHARS",
-      "value": "160"
+      "name": "MAX_NOTICES_PER_CHANNEL",
+      "value": "8"
     },
     {
       "file": "src/core/agent/fatigue/adaptive-tuning.ts",
@@ -1505,13 +1505,13 @@
     },
     {
       "file": "src/core/contacts/pending-contact-approvals.ts",
-      "name": "DEFAULT_MAX_PREVIEWS",
-      "value": "3"
+      "name": "DEFAULT_MAX_PREVIEW_LENGTH",
+      "value": "160"
     },
     {
       "file": "src/core/contacts/pending-contact-approvals.ts",
-      "name": "DEFAULT_MAX_PREVIEW_LENGTH",
-      "value": "160"
+      "name": "DEFAULT_MAX_PREVIEWS",
+      "value": "3"
     },
     {
       "file": "src/core/contacts/relationship-tools.ts",
@@ -1670,6 +1670,12 @@
       "name": "MAX_PROVENANCE_ENTRIES",
       "value": "8",
       "note": "Fail-closed structural cap of the partner-affect observation contract (anti-smuggling invariant, docs/partner-affect.md 6.3); deliberately not operator-mutable policy."
+    },
+    {
+      "file": "src/core/emotion/partner-affect/observation-guard.ts",
+      "name": "MAX_PROVENANCE_TEXT_LENGTH",
+      "value": "128",
+      "note": "Fail-closed token cap preventing free-text telemetry provenance smuggling; a protocol security bound, not operator tuning."
     },
     {
       "file": "src/core/emotion/partner-affect/observation-guard.ts",
@@ -1964,13 +1970,13 @@
     },
     {
       "file": "src/core/intention/concerns.ts",
-      "name": "MAX_ACTIVE_CONCERNS",
-      "value": "7"
+      "name": "MAX_ACTIVE_CONCERN_LIFETIME_MS",
+      "value": "7 * 24 * 60 * 60 * 1000"
     },
     {
       "file": "src/core/intention/concerns.ts",
-      "name": "MAX_ACTIVE_CONCERN_LIFETIME_MS",
-      "value": "7 * 24 * 60 * 60 * 1000"
+      "name": "MAX_ACTIVE_CONCERNS",
+      "value": "7"
     },
     {
       "file": "src/core/intention/concerns.ts",
@@ -2334,6 +2340,12 @@
       "value": "48"
     },
     {
+      "file": "src/core/session/channel-bond.ts",
+      "name": "CHANNEL_BOND_MEMBER_ENTRY_LIMIT",
+      "value": "40",
+      "note": "Code-owned safety cap limiting per-member cross-channel context amplification; deliberately not an operator policy threshold."
+    },
+    {
       "file": "src/core/session/compression-guideline.ts",
       "name": "DEFAULT_FAILURE_REVIEW_LIMIT",
       "value": "25"
@@ -2430,18 +2442,13 @@
     },
     {
       "file": "src/core/session/manager-primitives.ts",
-      "name": "MAX_FALLBACK_RECENT_SUMMARY_ITEMS",
-      "value": "4"
-    },
-    {
-      "file": "src/core/session/manager-primitives.ts",
       "name": "MAX_FALLBACK_RECENT_SUMMARY_ITEM_CHARS",
       "value": "140"
     },
     {
       "file": "src/core/session/manager-primitives.ts",
-      "name": "MAX_HISTORY_SUMMARY_ITEMS",
-      "value": "6"
+      "name": "MAX_FALLBACK_RECENT_SUMMARY_ITEMS",
+      "value": "4"
     },
     {
       "file": "src/core/session/manager-primitives.ts",
@@ -2450,18 +2457,23 @@
     },
     {
       "file": "src/core/session/manager-primitives.ts",
+      "name": "MAX_HISTORY_SUMMARY_ITEMS",
+      "value": "6"
+    },
+    {
+      "file": "src/core/session/manager-primitives.ts",
       "name": "MAX_PRESERVED_EMOTIONAL_ENTRIES",
       "value": "6"
     },
     {
       "file": "src/core/session/manager-primitives.ts",
-      "name": "MAX_PRESERVED_SAFETY_TAGS",
-      "value": "8"
+      "name": "MAX_PRESERVED_SAFETY_TAG_CONTENT_CHARS",
+      "value": "240"
     },
     {
       "file": "src/core/session/manager-primitives.ts",
-      "name": "MAX_PRESERVED_SAFETY_TAG_CONTENT_CHARS",
-      "value": "240"
+      "name": "MAX_PRESERVED_SAFETY_TAGS",
+      "value": "8"
     },
     {
       "file": "src/core/session/manager-primitives.ts",
@@ -2730,13 +2742,13 @@
     },
     {
       "file": "src/faculties/introspection/consent-store.ts",
-      "name": "MAX_CHANNEL_IDS",
-      "value": "64"
+      "name": "MAX_CHANNEL_ID_LENGTH",
+      "value": "240"
     },
     {
       "file": "src/faculties/introspection/consent-store.ts",
-      "name": "MAX_CHANNEL_ID_LENGTH",
-      "value": "240"
+      "name": "MAX_CHANNEL_IDS",
+      "value": "64"
     },
     {
       "file": "src/faculties/introspection/consent-store.ts",
@@ -2989,9 +3001,10 @@
       "note": "Code-owned bounded-memory safety valve for pathological out-of-order extraction coverage without bridging gaps."
     },
     {
-      "file": "src/faculties/memory/extraction/orchestrator.ts",
+      "file": "src/faculties/memory/extraction/llm-pass.ts",
       "name": "EXTRACTION_CHUNK_LLM_CONCURRENCY",
-      "value": "2"
+      "value": "2",
+      "note": "Code-owned concurrency guard bounding provider burst load during extraction; moved with the implementation from orchestrator.ts."
     },
     {
       "file": "src/faculties/memory/extraction/preference.ts",
@@ -3100,13 +3113,13 @@
     },
     {
       "file": "src/faculties/memory/near-turn-memory-lane.ts",
-      "name": "MAX_STALE_REVIEWS_PER_RUN",
-      "value": "3"
+      "name": "MAX_STALE_REVIEW_SCAN",
+      "value": "50"
     },
     {
       "file": "src/faculties/memory/near-turn-memory-lane.ts",
-      "name": "MAX_STALE_REVIEW_SCAN",
-      "value": "50"
+      "name": "MAX_STALE_REVIEWS_PER_RUN",
+      "value": "3"
     },
     {
       "file": "src/faculties/memory/postgres-store.ts",
@@ -3571,13 +3584,13 @@
     },
     {
       "file": "src/operator/garden/services/images-service.ts",
-      "name": "MAX_GALLERY_TAGS",
-      "value": "32"
+      "name": "MAX_GALLERY_TAG_CHARS",
+      "value": "64"
     },
     {
       "file": "src/operator/garden/services/images-service.ts",
-      "name": "MAX_GALLERY_TAG_CHARS",
-      "value": "64"
+      "name": "MAX_GALLERY_TAGS",
+      "value": "32"
     },
     {
       "file": "src/operator/garden/services/intake-quarantine-service.ts",
@@ -4149,11 +4162,6 @@
     },
     {
       "file": "src/shared/contracts/intake-envelope.ts",
-      "name": "MAX_EXTRACTED_FIELDS",
-      "value": "64"
-    },
-    {
-      "file": "src/shared/contracts/intake-envelope.ts",
       "name": "MAX_EXTRACTED_FIELD_KEY_CHARS",
       "value": "128"
     },
@@ -4161,6 +4169,11 @@
       "file": "src/shared/contracts/intake-envelope.ts",
       "name": "MAX_EXTRACTED_FIELD_VALUE_CHARS",
       "value": "4096"
+    },
+    {
+      "file": "src/shared/contracts/intake-envelope.ts",
+      "name": "MAX_EXTRACTED_FIELDS",
+      "value": "64"
     },
     {
       "file": "src/shared/contracts/intake-envelope.ts",

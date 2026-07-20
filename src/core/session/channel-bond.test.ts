@@ -51,7 +51,15 @@ function activeChannel(channelId: string, channelVisibility: ActiveContinuityCha
 
 function resolveTimeline(overrides: Partial<Parameters<typeof resolveBondedSessionTimeline>[0]> = {}) {
   return resolveBondedSessionTimeline({
-    bond: { bondedPlatforms: ['discord', 'telegram', 'api'], trustLevel: 'primary' },
+    bond: {
+      currentIdentity: { channel: 'discord', userId: 'vega-test-user' },
+      bondedIdentities: [
+        { channel: 'discord', userId: 'vega-test-user' },
+        { channel: 'telegram', userId: 'vega-test-user' },
+        { channel: 'api', userId: 'vega-test-user' },
+      ],
+      trustLevel: 'primary',
+    },
     continuityUserId: 'contact-1',
     channelId: 'discord:100',
     sourceChannelId: 'discord:100',
@@ -197,7 +205,11 @@ describe('resolveBondedSessionTimeline', () => {
 
   it('returns null when the current channel platform is not part of the bonded set', () => {
     const result = resolveTimeline({
-      bond: { bondedPlatforms: ['telegram'], trustLevel: 'primary' },
+      bond: {
+        currentIdentity: { channel: 'discord', userId: 'vega-test-user' },
+        bondedIdentities: [{ channel: 'telegram', userId: 'vega-test-user' }],
+        trustLevel: 'primary',
+      },
       crossChannelContinuity: makePort([activeChannel('telegram:777')]),
       store: makeStore({
         'telegram:777': [makeEntry({ id: 7, channelId: 'telegram:777' })],
@@ -218,6 +230,30 @@ describe('resolveBondedSessionTimeline', () => {
         'wyoming:kitchen': [makeEntry({ id: 5, channelId: 'wyoming:kitchen' })],
       }),
     })).toBeNull();
+  });
+
+  it('excludes a same-platform group log containing an unbonded participant', () => {
+    const result = resolveTimeline({
+      crossChannelContinuity: makePort([activeChannel('telegram:group:777')]),
+      store: makeStore({
+        'telegram:group:777': [
+          makeEntry({
+            id: 7,
+            channelId: 'telegram:group:777',
+            authorId: 'vega-test-user',
+            content: 'bonded partner message',
+          }),
+          makeEntry({
+            id: 8,
+            channelId: 'telegram:group:777',
+            authorId: 'unbonded-third-party',
+            content: 'private group participant message',
+          }),
+        ],
+      }),
+    });
+
+    expect(result).toBeNull();
   });
 
   it('fails closed when a member channel privacy cannot be determined', () => {
@@ -286,7 +322,14 @@ describe('resolveBondedSessionTimeline', () => {
     // A 'regular' trust contact cannot carry confidential-ceiling (private
     // source) content across channels; the same shape passes at 'primary'.
     const build = (trustLevel: 'primary' | 'regular') => resolveTimeline({
-      bond: { bondedPlatforms: ['discord', 'telegram'], trustLevel },
+      bond: {
+        currentIdentity: { channel: 'discord', userId: 'vega-test-user' },
+        bondedIdentities: [
+          { channel: 'discord', userId: 'vega-test-user' },
+          { channel: 'telegram', userId: 'vega-test-user' },
+        ],
+        trustLevel,
+      },
       ownEntries: [makeEntry({ id: 1, channelId: 'discord:100' })],
       crossChannelContinuity: makePort([activeChannel('telegram:777')]),
       store: makeStore({

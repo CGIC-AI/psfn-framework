@@ -25,6 +25,7 @@ import { guardPartnerAffectObservation } from './observation-guard.js';
 import type { PartnerAffectShadowStorePort } from './shadow-store-port.js';
 import { createComponentLogger } from '../../../shared/logger.js';
 import { toErrorMessage } from '../../../shared/utils/errors.js';
+import { isRecord } from '../../../shared/utils/types.js';
 
 const log = createComponentLogger('PartnerAffectShadowBridge');
 
@@ -95,17 +96,25 @@ class DefaultPartnerAffectShadowIngestBridge implements PartnerAffectShadowInges
     // Sprint-10 04-M1 posture: telemetry without an authenticated origin
     // context fails closed before any payload interpretation happens.
     let decision: PartnerAffectObservationDecision;
-    if (!event.auth) {
+    const payloadSourceId = isRecord(event.payload) && typeof event.payload.sourceId === 'string'
+      ? event.payload.sourceId.trim()
+      : '';
+    const sourceAuthorization = payloadSourceId
+      ? this.policy.sources.find(source => source.sourceId === payloadSourceId)
+      : undefined;
+    const authenticatedSource = event.auth?.principalMode === 'api_key'
+      && sourceAuthorization?.apiKeyPrincipalIds.includes(event.auth.principalId) === true;
+    if (!authenticatedSource) {
       decision = {
         status: 'suppressed',
         suppressed: {
           schemaVersion: PARTNER_AFFECT_SCHEMA_VERSION,
           observationKey: null,
-          sourceId: null,
+          sourceId: payloadSourceId || null,
           signalFamily: null,
           partnerContactId: this.policy.partnerContactId,
           reasons: ['missing_authenticated_origin'],
-          detail: 'telemetry event lacks an authenticated ingress origin context',
+          detail: 'authenticated ingress principal is not bound to the claimed observation source',
           receivedAtMs,
         },
       };

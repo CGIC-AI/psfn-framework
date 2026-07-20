@@ -71,6 +71,8 @@ jobs:
 
       - run: npm ci
       - run: npm run lint
+        env:
+          NODE_OPTIONS: --max-old-space-size=4096
 
   build:
     name: Build
@@ -93,6 +95,8 @@ jobs:
 
       - run: npm ci
       - run: npm run build
+        env:
+          NODE_OPTIONS: --max-old-space-size=4096
 
   repository:
     name: Repository contracts

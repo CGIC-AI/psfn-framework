@@ -1734,8 +1734,15 @@
     },
     {
       "file": "src/core/eval/observer-sidecar/emosim-server-adapter.ts",
-      "name": "DEFAULT_EMOSIM_AFTER_TICK_DELAY_MS",
-      "value": "750"
+      "name": "EMOSIM_MAX_READ_CADENCE_MS",
+      "note": "Code-owned safety ceiling prevents a misconfigured inter-read delay from stalling the observer evaluation pipeline.",
+      "value": "60_000"
+    },
+    {
+      "file": "src/core/eval/observer-sidecar/emosim-server-adapter.ts",
+      "name": "EMOSIM_MIN_READ_CADENCE_MS",
+      "note": "Operator-mandated 1 Hz protocol floor prevents sub-second observer-sidecar polling regardless of mutable settings.",
+      "value": "1000"
     },
     {
       "file": "src/core/eval/observer-sidecar/metrics.ts",

@@ -23,10 +23,10 @@ import {
 } from './privacy.js';
 import type { ObserverEvalInputPayload } from './types.js';
 
-// v3 (psfn-framework-oth4.4): the projected EVENT appraisal is mood-free.
-// PSFN accumulated mood (EMA) is no longer folded into the outgoing event signal
+// v3 (oth4.4): the projected EVENT appraisal is mood-free.
+// Host accumulated mood (EMA) is no longer folded into the outgoing event signal
 // so that downstream emo-sim applies accumulated mood exactly once instead of
-// twice. v2 double-counted inertia (PSFN projection tilted the event by mood,
+// twice. v2 double-counted inertia (the observer projection tilted the event by mood,
 // then emo-sim tilted the appraisal again with its own accumulated mood), which
 // flipped modest clearly-negative inputs net-positive under a positive-mood
 // (Love) basin. Schema bumped 1 -> 2 for the added appraisalAdjustments record.
@@ -36,7 +36,7 @@ export const OBSERVER_APPRAISAL_PROJECTION_VERSION =
 export const OBSERVER_APPRAISAL_PROJECTION_CAVEAT =
   'Projection is observer-derived eval telemetry, not ground truth and not live companion state.' as const;
 export const OBSERVER_MOOD_FREE_EVENT_APPRAISAL_CAVEAT =
-  'mood-free event appraisal (v3): PSFN accumulated mood (EMA) is excluded from the projected valence, self_norm, and attachment so accumulated mood tilts affect exactly once downstream in emo-sim. v2 folded mood into the event signal, double-counting inertia and softening clearly-negative inputs under a positive-mood basin.' as const;
+  'mood-free event appraisal (v3): host accumulated mood (EMA) is excluded from the projected valence, self_norm, and attachment so accumulated mood tilts affect exactly once downstream in emo-sim. v2 folded mood into the event signal, double-counting inertia and softening clearly-negative inputs under a positive-mood basin.' as const;
 export const OBSERVER_ATTACHMENT_NEUTRAL_PRIOR_CAVEAT =
   'attachment (v2) is derived from per-turn affiliative evidence (love/caring/trust-adjacent labels, warm valence) around a 0.45 neutral prior; static relationship metadata (trust level, direct message, resolved contact) is deliberately excluded because it pinned v1 attachment near 0.8 on every turn.' as const;
 export const OBSERVER_SAFETY_NEUTRAL_PRIOR_CAVEAT =
@@ -97,7 +97,7 @@ export interface ObserverProjectionAppraisalAdjustment {
   adjustment: 'mood-free-event-appraisal';
   applied: boolean;
   reason: ObserverProjectionAppraisalAdjustmentReason;
-  /** The PSFN emotion-state component removed from the event signal. */
+  /** The host emotion-state component removed from the event signal. */
   excludedComponent: 'accumulated-mood-valence';
   /** Appraisal dimensions whose composition dropped the mood component. */
   affectedDimensions: readonly EmoSimAppraisalDimension[];
@@ -112,7 +112,7 @@ export const OBSERVER_MOOD_FREE_EVENT_APPRAISAL_ADJUSTMENT: ObserverProjectionAp
     excludedComponent: 'accumulated-mood-valence',
     affectedDimensions: Object.freeze(['valence', 'self_norm', 'attachment'] as const),
     detail:
-      'v3: PSFN accumulated mood (EMA) is excluded from the projected event valence, self_norm, '
+      'v3: host accumulated mood (EMA) is excluded from the projected event valence, self_norm, '
       + 'and attachment. The event signal now carries only the turn\'s own VAD, discrete labels, and '
       + 'safe metadata; accumulated mood is applied exactly once downstream in emo-sim. v2 folded mood '
       + 'into the event signal, double-counting inertia and flipping modest clearly-negative inputs '
@@ -203,7 +203,7 @@ interface ProjectionSignals {
   snapshot: EmotionStateSnapshot | null;
   hasSnapshot: boolean;
   vad: EmotionStateSnapshot['vad'];
-  // NOTE (v3, double-mood-inertia fix): PSFN accumulated mood (EMA) is
+  // NOTE (v3, double-mood-inertia fix): host accumulated mood (EMA) is
   // deliberately NOT a projection signal. The event appraisal must carry only
   // the turn's own VAD/discrete/metadata so emo-sim applies accumulated mood
   // exactly once. Reintroducing a mood term here re-creates the double count.

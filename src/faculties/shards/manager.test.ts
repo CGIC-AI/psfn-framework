@@ -2469,6 +2469,7 @@ describe('ShardManager', () => {
       channelId: `shard:${result.shardId}`,
       toolCallId: 'call-a',
       toolName: 'memory',
+      outcome: 'success',
       isError: false,
     });
 

@@ -6,6 +6,22 @@ import {
 } from './tool-observation.js';
 
 describe('tool observation context shaping', () => {
+  it('preserves the stable outcome while deriving legacy isError metadata', () => {
+    const observation = normalizeToolObservation({
+      toolName: 'fs',
+      content: 'Duplicate call skipped.',
+      outcome: 'duplicate_skip',
+    });
+
+    expect(observation.metadata).toMatchObject({
+      outcome: 'duplicate_skip',
+      isError: true,
+    });
+    expect(formatToolObservationForContext(observation.content, observation.metadata)).toBe(
+      '[Tool result: fs (duplicate skip)] Duplicate call skipped.',
+    );
+  });
+
   it('keeps concise natural-language tool outcomes inline in context', () => {
     const observation = normalizeToolObservation({
       toolName: 'search_logs',

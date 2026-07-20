@@ -26,6 +26,7 @@ describe('attachCompanionEventForwarder', () => {
       channelId: 'chan-1',
       toolCallId: 'call-1',
       toolName: 'shell',
+      outcome: 'execution_failure',
       isError: true,
       errorMessage: 'ENOENT /companion-data/private/journal.md',
     });
@@ -46,6 +47,30 @@ describe('attachCompanionEventForwarder', () => {
       toolName: 'shell',
     });
     expect(published).toHaveLength(2);
+  });
+
+  it.each([
+    ['validation_rejection', 'rejected'],
+    ['policy_denial', 'rejected'],
+    ['duplicate_skip', 'skipped'],
+    ['dependency_skip', 'skipped'],
+  ] as const)('projects %s separately from execution failures', async (outcome, phase) => {
+    const eventBus = new EventBus();
+    const published: CompanionRelayPublishParams[] = [];
+    const detach = attachCompanionEventForwarder({
+      eventBus,
+      publisher: { publishCompanionEvent: (params) => published.push(params) },
+    });
+
+    await eventBus.emit('agent.tool.end', {
+      toolCallId: `call-${outcome}`,
+      toolName: 'shell',
+      outcome,
+      isError: outcome === 'validation_rejection' || outcome === 'policy_denial',
+    });
+
+    expect(published[0]?.payload).toMatchObject({ phase, outcome });
+    detach();
   });
 
   it('logs instead of throwing when the publisher fails', async () => {

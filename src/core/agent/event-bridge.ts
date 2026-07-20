@@ -12,6 +12,10 @@ import {
   type StreamingHistoryStampStripper,
 } from '../../shared/utils/history-stamp-hygiene.js';
 import { emitTurnPerformance } from '../../shared/telemetry/turn-performance.js';
+import {
+  isToolCallErrorOutcome,
+  resolveToolCallOutcome,
+} from '../../shared/contracts/tool-call-outcome.js';
 
 const log = createComponentLogger('EventBridge');
 
@@ -188,13 +192,20 @@ export function createEventBridge(agent: Agent, eventBus: EventBus): EventBridge
       case 'tool_execution_end': {
         const toolName = event.toolName;
         const reportedError = event.isError || hasToolResultError(event.result);
+        const outcome = resolveToolCallOutcome({
+          outcome: (event as unknown as { outcome?: unknown }).outcome,
+          details: event.result.details,
+          isError: reportedError,
+        }) ?? 'execution_failure';
+        const isError = isToolCallErrorOutcome(outcome);
         const errorMessage = extractToolErrorMessage(event.result);
         eventBus.emit('agent.tool.end', {
           channelId,
           toolCallId: event.toolCallId,
           toolName,
-          isError: reportedError,
-          ...(reportedError && errorMessage ? { errorMessage } : {}),
+          outcome,
+          isError,
+          ...(isError && errorMessage ? { errorMessage } : {}),
           ...(shardId ? { shardId } : {}),
           ...withCorrelation('tool', 'tool_execution'),
         }).catch(err => log.warn('EventBus emit failed', { event: 'agent.tool.end', error: String(err) }));

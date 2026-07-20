@@ -125,12 +125,13 @@ export function attachTerminalDebugObserver(
       });
     }));
 
-    unsubs.push(eventBus.on('agent.tool.end', ({ channelId, toolCallId, toolName, isError }) => {
+    unsubs.push(eventBus.on('agent.tool.end', ({ channelId, toolCallId, toolName, outcome, isError }) => {
       log.debug('Debug tool end', {
         scope: options.scope,
         channelId,
         toolCallId,
         toolName,
+        outcome,
         isError,
       });
     }));

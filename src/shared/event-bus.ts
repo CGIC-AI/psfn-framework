@@ -24,6 +24,7 @@ import type { SatelliteTelemetryAuthContext } from './contracts/satellite-regist
 import type { IcpInitiationCandidateStatus } from './contracts/icp-autonomy.js';
 import type { IcpConversationCostBreakerEvent } from './telemetry/model-usage.js';
 import type { TurnPerformanceEvent } from './telemetry/turn-performance.js';
+import type { ToolCallOutcome } from './contracts/tool-call-outcome.js';
 import type {
   CompanionApprovalRequestedPayload,
   CompanionApprovalResolvedPayload,
@@ -431,6 +432,7 @@ export interface EventMap {
     channelId: string;
     toolCallId: string;
     toolName: string;
+    outcome: ToolCallOutcome;
     isError: boolean;
     errorMessage?: string;
     shardId?: string;

@@ -1,4 +1,9 @@
 import { isRecord } from '../../shared/utils/types.js';
+import type { ToolCallOutcome } from '../../shared/contracts/tool-call-outcome.js';
+import {
+  isToolCallErrorOutcome,
+  isToolCallOutcome,
+} from '../../shared/contracts/tool-call-outcome.js';
 import {
   deriveMaskedToolObservationContextSummary,
   deriveToolObservationContextShape,
@@ -14,6 +19,7 @@ export interface ToolObservationInput {
   toolName: string;
   content: string;
   toolCallId?: string;
+  outcome?: ToolCallOutcome;
   isError?: boolean;
 }
 
@@ -21,6 +27,7 @@ export interface ToolObservationMetadata {
   schemaVersion: 1;
   toolName: string;
   toolCallId?: string;
+  outcome?: ToolCallOutcome;
   isError?: boolean;
   truncated: boolean;
   originalCharLength: number;
@@ -82,6 +89,17 @@ function parseOptionalBooleanField(value: unknown, fieldName: string): boolean |
   return value;
 }
 
+function parseOptionalToolCallOutcomeField(
+  value: unknown,
+  fieldName: string,
+): ToolCallOutcome | undefined {
+  if (value === undefined) return undefined;
+  if (!isToolCallOutcome(value)) {
+    throw new Error(`Tool observation field "${fieldName}" has an unsupported outcome`);
+  }
+  return value;
+}
+
 function parseOptionalContextDisplayModeField(
   value: unknown,
   fieldName: string,
@@ -136,6 +154,9 @@ export function normalizeToolObservation(input: ToolObservationInput): Normalize
   }
 
   const toolCallId = input.toolCallId?.trim();
+  const isError = input.outcome
+    ? isToolCallErrorOutcome(input.outcome)
+    : input.isError;
   const normalizedContent = truncateToolObservationContent(input.content);
   const contextShape = deriveToolObservationContextShape(input.content);
   const maskedContextSummary = deriveMaskedToolObservationContextSummary(input.content);
@@ -145,7 +166,8 @@ export function normalizeToolObservation(input: ToolObservationInput): Normalize
       schemaVersion: TOOL_OBSERVATION_SCHEMA_VERSION,
       toolName,
       ...(toolCallId ? { toolCallId } : {}),
-      ...(input.isError !== undefined ? { isError: input.isError } : {}),
+      ...(input.outcome ? { outcome: input.outcome } : {}),
+      ...(isError !== undefined ? { isError } : {}),
       truncated: normalizedContent.truncated,
       originalCharLength: normalizedContent.originalCharLength,
       contextSummary: contextShape.summary,
@@ -187,7 +209,14 @@ export function parseToolObservationMetadata(metadata: string | undefined): Tool
 
   const toolName = parseRequiredStringField(toolObservation.toolName, 'toolObservation.toolName');
   const toolCallId = parseOptionalStringField(toolObservation.toolCallId, 'toolObservation.toolCallId');
+  const outcome = parseOptionalToolCallOutcomeField(
+    toolObservation.outcome,
+    'toolObservation.outcome',
+  );
   const isError = parseOptionalBooleanField(toolObservation.isError, 'toolObservation.isError');
+  if (outcome && isError !== undefined && isError !== isToolCallErrorOutcome(outcome)) {
+    throw new Error('Tool observation outcome conflicts with isError');
+  }
   const truncated = parseRequiredBooleanField(toolObservation.truncated, 'toolObservation.truncated');
   const originalCharLength = parseRequiredNonNegativeInteger(
     toolObservation.originalCharLength,
@@ -210,7 +239,12 @@ export function parseToolObservationMetadata(metadata: string | undefined): Tool
     schemaVersion: TOOL_OBSERVATION_SCHEMA_VERSION,
     toolName,
     ...(toolCallId ? { toolCallId } : {}),
-    ...(isError !== undefined ? { isError } : {}),
+    ...(outcome ? { outcome } : {}),
+    ...(outcome
+      ? { isError: isToolCallErrorOutcome(outcome) }
+      : isError !== undefined
+        ? { isError }
+        : {}),
     truncated,
     originalCharLength,
     ...(contextSummary ? { contextSummary } : {}),
@@ -223,7 +257,11 @@ export function formatToolObservationForContext(
   content: string,
   metadata: ToolObservationMetadata,
 ): string {
-  const errorSuffix = metadata.isError ? ' (error)' : '';
+  const errorSuffix = metadata.outcome && metadata.outcome !== 'success'
+    ? ` (${metadata.outcome.replaceAll('_', ' ')})`
+    : metadata.isError
+      ? ' (error)'
+      : '';
   const contextText = metadata.contextSummary?.trim();
   const maskedContextText = metadata.maskedContextSummary?.trim();
   if (content === MASKED_TOOL_OBSERVATION_CONTENT) {

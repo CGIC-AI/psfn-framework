@@ -171,7 +171,9 @@ export function gateToolWithCapabilities<T extends AgentTool<any>>(
         });
         if (egressDecision && !egressDecision.allowed) {
           return toTextResult(egressDecision.noticeText, {
+            isError: true,
             egressGated: true,
+            policyDenied: true,
             toolName: tool.name,
           });
         }

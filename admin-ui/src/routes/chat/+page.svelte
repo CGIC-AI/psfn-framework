@@ -36,6 +36,10 @@
     ChannelInfo,
     SessionEntry,
   } from '$lib/types';
+  import {
+    isToolCallOutcome,
+    type ToolCallOutcome,
+  } from '../../../../src/shared/contracts/tool-call-outcome.js';
 
   // ── Message model (unified: companion chat + model-room rounds) ──
   interface ToolCallView {
@@ -44,6 +48,7 @@
     args: string;
     result?: string;
     isError?: boolean;
+    outcome?: ToolCallOutcome;
   }
 
   interface ChatMessage {
@@ -618,9 +623,15 @@ ${context}`;
           const toolCallId = (details.toolCallId || '') as string;
           const toolName = (details.toolName || 'unknown') as string;
           const isError = details.isError === true || details.isError === 'true';
+          const outcome: ToolCallOutcome = isToolCallOutcome(details.outcome)
+            ? details.outcome
+            : isError
+              ? 'execution_failure'
+              : 'success';
+          const outcomeLabel = outcome.replaceAll('_', ' ');
           pendingToolCalls = pendingToolCalls.map(tc =>
             tc.id === toolCallId
-              ? { ...tc, result: `${toolName} completed`, isError }
+              ? { ...tc, result: `${toolName}: ${outcomeLabel}`, isError, outcome }
               : tc
           );
           break;

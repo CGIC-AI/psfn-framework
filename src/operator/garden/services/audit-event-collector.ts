@@ -5,6 +5,7 @@ import type {
   AdminAuditActor,
   AdminAuditDecision,
 } from '../types.js';
+import type { ToolCallOutcome } from '../../../shared/contracts/tool-call-outcome.js';
 
 const AGENT_IDENTITY_EDIT_TOOLS = new Set([
   'prompt_layer_update',
@@ -36,6 +37,28 @@ export interface AuditTimelineAppender {
   ): void;
 }
 
+function toolOutcomeNarrative(
+  companionName: string,
+  toolLabel: string,
+  channelLabel: string,
+  outcome: ToolCallOutcome,
+): string {
+  switch (outcome) {
+    case 'success':
+      return `${companionName} completed tool "${toolLabel}" in ${channelLabel}.`;
+    case 'execution_failure':
+      return `${companionName} attempted tool "${toolLabel}" in ${channelLabel}, but execution failed.`;
+    case 'validation_rejection':
+      return `${companionName}'s tool "${toolLabel}" call in ${channelLabel} was rejected during argument validation.`;
+    case 'policy_denial':
+      return `${companionName}'s tool "${toolLabel}" call in ${channelLabel} was denied by policy.`;
+    case 'duplicate_skip':
+      return `${companionName}'s duplicate tool "${toolLabel}" call in ${channelLabel} was skipped without execution.`;
+    case 'dependency_skip':
+      return `${companionName}'s dependent tool "${toolLabel}" call in ${channelLabel} was skipped without execution.`;
+  }
+}
+
 export function registerAuditTimelineSources(options: {
   eventBus: EventBus;
   activeToolInvocations: Map<string, ActiveToolInvocation>;
@@ -65,7 +88,7 @@ export function registerAuditTimelineSources(options: {
     pendingToolArgs.set(toolCallId, toolArgs);
   });
 
-  eventBus.on('agent.tool.end', ({ toolCallId, toolName, channelId, isError, shardId }) => {
+  eventBus.on('agent.tool.end', ({ toolCallId, toolName, channelId, outcome, shardId }) => {
     const active = activeToolInvocations.get(toolCallId);
     if (active) {
       activeToolInvocations.delete(toolCallId);
@@ -75,18 +98,17 @@ export function registerAuditTimelineSources(options: {
       pendingToolArgs.delete(toolCallId);
     }
     const durationMs = active ? Math.max(0, now() - active.startedAt) : null;
-    const decision: AdminAuditDecision = isError ? 'denied' : 'allowed';
+    const decision: AdminAuditDecision = outcome === 'success' ? 'allowed' : 'denied';
     const toolLabel = active?.toolName ?? toolName;
     const channelLabel = active?.channelId ?? channelId;
     const companionName = resolveCompanionName();
     appendAuditTimelineEntry(
       'tool_invocation',
       decision,
-      isError
-        ? `${companionName} attempted tool "${toolLabel}" in ${channelLabel}, but it failed.`
-        : `${companionName} completed tool "${toolLabel}" in ${channelLabel}.`,
+      toolOutcomeNarrative(companionName, toolLabel, channelLabel, outcome),
       [
         `callId=${toolCallId}`,
+        `outcome=${outcome}`,
         shardId ? `shard=${shardId}` : null,
         durationMs !== null ? `durationMs=${durationMs}` : null,
       ],
@@ -103,7 +125,7 @@ export function registerAuditTimelineSources(options: {
       appendAuditTimelineEntry(
         'identity_edit',
         decision,
-        isError
+        outcome !== 'success'
           ? `${companionName} attempted identity edit via "${identityToolLabel}" in ${channelLabel}, but it failed.`
           : `${companionName} edited identity via "${identityToolLabel}" in ${channelLabel}.`,
         [

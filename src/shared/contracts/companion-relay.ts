@@ -4,6 +4,7 @@ import type {
   ApprovalGrantMode,
   ApprovalSourceSystem,
 } from './approval-envelope.js';
+import type { ToolCallOutcome } from './tool-call-outcome.js';
 
 export type {
   ApprovalAttribution,
@@ -58,6 +59,8 @@ export const COMPANION_TOOL_ACTIVITY_PHASES = [
   'progress',
   'completed',
   'failed',
+  'rejected',
+  'skipped',
 ] as const;
 
 export type CompanionToolActivityPhase = typeof COMPANION_TOOL_ACTIVITY_PHASES[number];
@@ -134,6 +137,7 @@ export interface CompanionToolActivityPayload {
   id: string;
   tool: string;
   phase: CompanionToolActivityPhase;
+  outcome?: ToolCallOutcome;
   detail?: string;
   timestamp: string;
 }

@@ -67,6 +67,7 @@ import { registerWorldTools } from '../../boundary/integrations/world/runtime-wi
 import { GatewayWorldOps } from '../../boundary/integrations/world/gateway-ops.js';
 import { createBehavioralPatternMemoryPromotionHook } from '../../core/intention/patterns.js';
 import {
+  wireOperatorHookRuntime,
   wireShardAndThinkRuntime,
 } from '../startup/composition/composition.js';
 import { buildShellExecPolicyConfig } from '../../boundary/sandbox/execution/shell-policy-config.js';
@@ -714,6 +715,19 @@ async function main(): Promise<void> {
     compressionGuidelineEvolution,
     shardParentIcpDelivery,
     shardWorkloadRegistry: gateway,
+  });
+
+  // Operator-extensible lifecycle hooks (psfn-framework-vvf.2): workspace
+  // HOOK.yaml definitions attach to the agent-process bus, fire-and-forget.
+  // Bad hook files reject with a logged reason; startup never blocks on them.
+  const operatorHookRuntime = await wireOperatorHookRuntime({
+    eventBus,
+    workspacePath: pathSnapshot.workspaceRoot,
+  });
+  log.info('Operator hook runtime wired', {
+    hooksRoot: operatorHookRuntime.hookLoadResult.rootPath,
+    loadedHooks: operatorHookRuntime.hookLoadResult.loaded.map(record => record.name),
+    rejectedHookCount: operatorHookRuntime.hookLoadResult.rejected.length,
   });
 
   // Memory write/import tools — intentional memory creation

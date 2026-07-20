@@ -1368,7 +1368,7 @@ describe('PostgresModelUsageStore reconciliation', () => {
         authorName: 'User',
         content: 'begin the new conversation',
         timestamp: new Date('2026-07-14T00:00:00.000Z'),
-      }, 'chat', createTurnId(), 'root-initiation-1');
+      }, 'chat', createTurnId(), 'root-initiation-1', reset.newLogicalSessionId);
       const store = new PostgresModelUsageStore(pool, { companionId: 'companion-a' });
       const accountedEmbedding = withEmbeddingUsageAccounting({
         kind: 'api' as const,
@@ -1442,7 +1442,7 @@ describe('PostgresModelUsageStore reconciliation', () => {
         authorName: 'Vision User',
         content: 'review these images',
         timestamp: new Date('2026-07-14T00:00:00.000Z'),
-      }, 'chat', createTurnId(), 'vision-root-initiation');
+      }, 'chat', createTurnId(), 'vision-root-initiation', reset.newLogicalSessionId);
       const store = new PostgresModelUsageStore(pool, { companionId: 'companion-a' });
       const providerSurfaces: Array<string | undefined> = [];
       const providerChargeEventIds: Array<string | undefined> = [];

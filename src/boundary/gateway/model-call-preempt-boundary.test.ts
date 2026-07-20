@@ -194,6 +194,13 @@ describe('model-call preemption across the gateway→agent JSON-RPC boundary (mm
       effects: {},
     } as unknown as BackgroundWorkExecutionInput;
     const dependencies = {
+      sessionManager: {
+        // This path throws the reconstructed preemption while resolving the
+        // extractor, before any captured-session read operation is reached.
+        createCapturedSessionReads: () => ({
+          run: async <T>(operation: () => Promise<T>): Promise<T> => await operation(),
+        }),
+      },
       tuning: {
         extractionDrainRequeueDelayMs: 1_000,
         foregroundPreemptionDeferDelayMs: 1_000,

@@ -23,6 +23,7 @@ export interface ContactIdentityRow {
   channel: string;
   channel_user_id: string;
   privacy_level: string | null;
+  bonded?: boolean | null;
   first_seen: string;
   last_seen: string;
   identity_version?: string;

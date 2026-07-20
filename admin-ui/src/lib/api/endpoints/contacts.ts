@@ -24,6 +24,12 @@ export interface ContactUpdatePayload {
     channelId?: string;
     privacyLevel: ChannelPrivacyLevel;
   }>;
+  /** Channel-bonding opt-in per linked channel identity (psfn-framework-vrmf). */
+  channelBonding?: Array<{
+    channel: string;
+    userId: string;
+    bonded: boolean;
+  }>;
   addChannel?: { channel: string; userId: string; privacyLevel: ChannelPrivacyLevel };
 }
 

@@ -58,6 +58,12 @@ import {
   resolveMaxHistorySpanMs,
   resolveRoleName,
 } from '../manager-primitives.js';
+import {
+  isBondedForeignEntry,
+  resolveBondedSessionTimeline,
+  sortBondedTimelineEntries,
+  type TurnChannelBondInput,
+} from '../channel-bond.js';
 import type { PreCompactionExtractionHandler } from './contracts.js';
 import {
   countIntentionAppraisalArtifacts,
@@ -467,6 +473,11 @@ export interface CaptureTurnSessionContextParams {
   /** Exact just-recorded turn entry to remove before merging or summarizing. */
   excludeSessionEntryId?: number;
   /**
+   * Channel bonding opt-in for the turn (psfn-framework-vrmf), resolved from
+   * the author's contact record. Absent = no bond, byte-identical behavior.
+   */
+  channelBond?: TurnChannelBondInput;
+  /**
    * Presence-windowed room content gate (bead s10rm). Absent or
    * `unwindowed` keeps every surface byte-identical; `windowed`/`closed`
    * restricts EVERY served room surface (history entries, compaction
@@ -544,6 +555,28 @@ export async function captureTurnSessionContext(
     recent,
     params.config.observationMaskingWindow ?? DEFAULT_OBSERVATION_MASKING_WINDOW,
   ).entries;
+  // Channel bonding (psfn-framework-vrmf): interleave bonded member channels'
+  // conversational entries into the timeline AFTER the own-channel gates
+  // (exclusion, focus compaction, masking) so those id-keyed transforms only
+  // ever see own-channel entries. Presence-windowed rooms never bond (the
+  // bond is a 1:1 continuity surface; a windowed room gate must not be
+  // widened by foreign timelines). A null resolution changes nothing.
+  const bondedTimeline = params.channelBond && !roomWindowGated
+    ? resolveBondedSessionTimeline({
+      bond: params.channelBond,
+      continuityUserId: params.userId,
+      channelId: params.channelId,
+      sourceChannelId: params.sourceChannelId,
+      channelMeta: params.channelMeta,
+      ownEntries: recent,
+      crossChannelContinuity: params.crossChannelContinuity,
+      store: params.store,
+      maxHistorySpanMs,
+    })
+    : null;
+  if (bondedTimeline) {
+    recent = bondedTimeline.entries;
+  }
   const channelVisibility = classifyChannelDisclosure(params.sourceChannelId, params.channelMeta).channelPrivacy;
   const assembledHistory = await assembleSessionHistoryForContextWithLlmSummary({
     entries: recent,
@@ -633,6 +666,13 @@ export async function captureTurnSessionContext(
     ...(assembledHistory.summarizedEntryCount > 0
       ? { historySummaryEntryCount: assembledHistory.summarizedEntryCount }
       : {}),
+    ...(bondedTimeline
+      ? {
+        bondedEntryCount: bondedTimeline.bondedEntryCount,
+        bondedMemberChannelIds: [...bondedTimeline.memberChannelIds],
+        bondedEffectivePrivacy: bondedTimeline.effectivePrivacy,
+      }
+      : {}),
     compactionSummaryTexts: [...compactionSummaryTexts],
     focusKnowledgeTexts: [...effectiveFocusKnowledgeTexts],
     continuityEntries: continuityEntries.map(cloneSessionEntry),
@@ -643,6 +683,9 @@ export async function captureTurnSessionContext(
     versionPointer: buildSnapshotVersionPointer([
       params.channelId,
       roomWindowGated ? `roomWindow:${roomWindowFloor}` : undefined,
+      bondedTimeline
+        ? `bond:${bondedTimeline.effectivePrivacy}:${bondedTimeline.memberChannelIds.join(',')}:${bondedTimeline.bondedEntryCount}`
+        : undefined,
       recent.at(-1)?.id,
       recent.at(-1)?.timestamp,
       assembledHistory.summaryText,
@@ -836,10 +879,17 @@ export async function buildSessionContext(params: BuildSessionContextParams): Pr
 
   // Explicit foreground compaction remains available for callers that opt into it.
   if (params.llmProvider && compactionMode === 'foreground') {
-    const preCompactionEntryCount = recent.length;
+    // Channel bonding: compaction coverage is keyed on own-channel entry ids
+    // (coveredUpTo). Bonded foreign entries carry negative, other-channel ids
+    // and must never reach the compactor; they are re-interleaved afterwards.
+    const bondedForeignRecent = recent.filter(entry => entry.id < 0 && isBondedForeignEntry(entry));
+    const ownCompactableRecent = bondedForeignRecent.length > 0
+      ? recent.filter(entry => !(entry.id < 0 && isBondedForeignEntry(entry)))
+      : recent;
+    const preCompactionEntryCount = ownCompactableRecent.length;
     const result = await runAutoCompaction({
       channelId: params.channelId,
-      recent,
+      recent: ownCompactableRecent,
       channelVisibility,
       systemTokens,
       compactionPromptText: params.compactionPromptText ?? params.turnSessionContext.compactionPromptText,
@@ -852,7 +902,9 @@ export async function buildSessionContext(params: BuildSessionContextParams): Pr
       onCompactionComplete: params.onCompactionComplete,
       userId: params.userId,
     });
-    recent = result.recent;
+    recent = bondedForeignRecent.length > 0
+      ? sortBondedTimelineEntries([...result.recent, ...bondedForeignRecent])
+      : result.recent;
     if (result.compactionSummaryText) {
       compactionSummaryTexts = [
         ...compactionSummaryTexts,
@@ -868,7 +920,7 @@ export async function buildSessionContext(params: BuildSessionContextParams): Pr
     compactionManifest = {
       triggered: result.compacted,
       compactedEntryCount: result.compacted
-        ? Math.max(0, preCompactionEntryCount - recent.length)
+        ? Math.max(0, preCompactionEntryCount - result.recent.length)
         : 0,
       eligible: compactionCheck.trigger,
       pending: params.pendingCompaction ?? false,
@@ -1083,9 +1135,14 @@ export async function buildSessionContext(params: BuildSessionContextParams): Pr
   );
   const sessionMessageTokenCount = countMessageTokens(messages);
   const roomWindowFilteredEntryCount = params.turnSessionContext.roomWindowFilteredEntryCount;
+  // Bonded foreign entries are not own-channel source entries; keep the
+  // trim accounting scoped to the channel's own log.
+  const bondedEntryCount = (params.turnSessionContext.bondedEntryCount ?? 0) > 0
+    ? recent.filter(entry => entry.id < 0 && isBondedForeignEntry(entry)).length
+    : 0;
   const trimmedEntryCount = Math.max(
     0,
-    sourceEntryCount - recent.length - historySummaryEntryCount
+    sourceEntryCount - (recent.length - bondedEntryCount) - historySummaryEntryCount
       - (roomWindowFilteredEntryCount ?? 0),
   );
   const seededMemoryHardLimit = params.memoryManifestSeed?.retrievalLimitMode === 'hard_limit'
@@ -1103,6 +1160,7 @@ export async function buildSessionContext(params: BuildSessionContextParams): Pr
       maskedEntryCount: masking.maskedCount,
       compactedEntryCount: compactionManifest.compactedEntryCount,
       intentionAppraisalArtifactCount,
+      ...(bondedEntryCount > 0 ? { bondedEntryCount } : {}),
       finalEntryCount: recent.length,
       finalMessageCount: messages.length,
       historySummaryEntryCount,

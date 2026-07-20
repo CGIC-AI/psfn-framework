@@ -25,6 +25,7 @@ import type { ContactTrackingGate } from '../../contacts/tracking-gate.js';
 import { normalizeIdentity } from '../../contacts/store/identity-utils.js';
 import type { ScratchpadProvider } from '../contracts.js';
 import type { SessionEntry } from '../../session/types.js';
+import type { TurnChannelBondInput } from '../../session/channel-bond.js';
 import type { SessionActorKind } from '../../session/turn-provenance.js';
 import {
   createGroupConversationScope,
@@ -146,6 +147,12 @@ export interface ResolvedAuthorContext {
   // conversation-channel privacy is provenance evidence only and must never
   // reach ChannelMeta.privacyLevel / classifyChannel (docs/context-envelope.md).
   continuityFallbackKeys: string[];
+  /**
+   * Channel bonding opt-in (psfn-framework-vrmf). Present only when the
+   * current turn's identity platform carries the contact's explicit `bonded`
+   * flag; absent = no bond, byte-identical unbonded behavior.
+   */
+  channelBond?: TurnChannelBondInput;
 }
 
 function isInternalJournalChannel(channelId: string): boolean {
@@ -988,6 +995,19 @@ export async function resolveAuthorContext(input: {
     }
 
     const actorKind = resolveUserActorKind(input.message, contact);
+    // Channel bonding (psfn-framework-vrmf): opt-in is the explicit `bonded`
+    // flag on the contact's channel identities. The bond activates for this
+    // turn only when the CURRENT identity platform is itself bonded — a
+    // bonded set never pulls an unbonded surface into the merge.
+    const bondedIdentityPlatforms = [...new Set(
+      (contact.channels ?? [])
+        .filter(link => link.bonded === true)
+        .map(link => link.channel),
+    )];
+    const channelBond: TurnChannelBondInput | undefined =
+      bondedIdentityPlatforms.includes(channel)
+        ? { bondedPlatforms: bondedIdentityPlatforms, trustLevel: contact.trustLevel }
+        : undefined;
     return {
       trustLevel: contact.trustLevel,
       speakerRole: 'user',
@@ -1005,6 +1025,7 @@ export async function resolveAuthorContext(input: {
       continuityFallbackKeys: canonicalContactKey
         ? collectContinuityFallbackKeys(input.message.authorId, canonicalContactKey, contact)
         : [],
+      ...(channelBond ? { channelBond } : {}),
     };
   } catch (error) {
     input.logger.warn('Failed to resolve contact identity for trust/context routing', {

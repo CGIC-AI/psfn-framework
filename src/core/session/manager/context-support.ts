@@ -25,6 +25,7 @@ import {
   isNonConversationalSessionEntry,
   wrapUntrustedContext,
 } from '../manager-primitives.js';
+import { parseChannelBondEntryMarker } from '../channel-bond.js';
 import { formatActiveDateTimeCompact, formatActiveWeekdayShort } from '../../../shared/time/active-timezone.js';
 
 const ARTIFACT_IMAGE_TOOL_NAMES = new Set(['selfie_create', 'generate_image']);
@@ -315,6 +316,16 @@ export function entriesToMessages(
         authorName: attribution.authorName,
         channelId: entry.originChannelId ?? entry.channelId,
       });
+    }
+    // Channel bonding (psfn-framework-vrmf): interleaved foreign entries are
+    // annotated with their source channel. The companion's own turns stay
+    // unannotated — a model that reads its past speech prefixed with source
+    // tags mimics the prefix into new replies (same live-leak class as the
+    // temporal stamps, psfn-framework-2x37.10); the source channels of its
+    // interleaved replies are carried by the surrounding annotated turns.
+    const bondMarker = parseChannelBondEntryMarker(entry.metadata);
+    if (bondMarker && role !== 'assistant') {
+      content = `[via ${bondMarker.sourceChannelId}] ${content}`;
     }
     if (includeTrustTags) {
       if (isUntrustedVisibility(visibility)) {

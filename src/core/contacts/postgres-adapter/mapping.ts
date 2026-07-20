@@ -196,6 +196,7 @@ export function rowToContact(row: ContactRow, identities: ContactIdentityRow[], 
       channel: identity.channel,
       userId: identity.channel_user_id,
       privacyLevel: normalizePrivacyLevel(identity.privacy_level as ChannelPrivacyLevel | undefined, identity.channel),
+      ...(identity.bonded === true ? { bonded: true } : {}),
       firstSeen: identity.first_seen,
       lastSeen: identity.last_seen,
     }));

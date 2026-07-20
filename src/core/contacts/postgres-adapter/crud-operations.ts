@@ -950,6 +950,49 @@ const postgresContactCrudOperations: PostgresContactOperationMap = {
     return true;
   },
 
+  async setChannelBonding(
+    contactId: string,
+    channel: ContactChannel,
+    channelUserId: string,
+    bonded: boolean,
+    actor?: string,
+  ): Promise<boolean> {
+    const contact = await this.getById(contactId);
+    if (!contact) return false;
+    const normalizedIdentity = normalizeIdentity(channel, channelUserId);
+    const existingLink = contact.channels?.find(link => (
+      link.channel === normalizedIdentity.channel && link.userId === normalizedIdentity.userId
+    ));
+    if (!existingLink) return false;
+    if ((existingLink.bonded === true) === bonded) return true;
+    await this.pool.query(
+      `
+        UPDATE contact_channel_ids
+        SET bonded = $1,
+            last_seen = $2
+        WHERE contact_id = $3 AND channel = $4 AND channel_user_id = $5
+      `,
+      [bonded, new Date().toISOString(), contactId, normalizedIdentity.channel, normalizedIdentity.userId],
+    );
+    await this.appendMutationAuditEntry(
+      contactId,
+      'channel_bond',
+      JSON.stringify({
+        channel: normalizedIdentity.channel,
+        userId: normalizedIdentity.userId,
+        bonded: existingLink.bonded === true,
+      }),
+      JSON.stringify({
+        channel: normalizedIdentity.channel,
+        userId: normalizedIdentity.userId,
+        bonded,
+      }),
+      actor,
+    );
+    await this.syncContactExports();
+    return true;
+  },
+
   async setConversationChannelPrivacy(
     contactId: string,
     channel: ContactChannel,

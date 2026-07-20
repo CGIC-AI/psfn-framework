@@ -67,7 +67,7 @@ export function selectFleetCostGardenPath(
 ): string | null {
   const reachable = companions.find(companion => (
     companion.gardenPath
-    && (companion.availability === 'online' || companion.availability === 'degraded')
+    && companion.health.agentRpc === 'up'
   ));
   return reachable?.gardenPath
     ?? companions.find(companion => companion.gardenPath)?.gardenPath

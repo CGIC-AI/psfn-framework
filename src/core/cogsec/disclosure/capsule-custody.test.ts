@@ -12,7 +12,10 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { ConfirmationQueue } from '../../../system/capabilities/confirmation-queue.js';
-import { createApprovalQueuePortFromConfirmationQueue } from '../../../system/capabilities/approval-queue-port.js';
+import {
+  createApprovalQueuePortFromConfirmationQueue,
+  type ApprovalQueuePort,
+} from '../../../system/capabilities/approval-queue-port.js';
 import {
   approveShareCandidate,
   buildShareCandidate,
@@ -324,5 +327,108 @@ describe('CapsuleCustodyService — rides the existing approval queue', () => {
       currentEffectiveSensitivity: 'intimate',
     });
     expect(decision).toMatchObject({ authorized: false, code: 'revoked' });
+  });
+});
+
+// ── Integration seam: enqueued params must satisfy the Garden provenance projection ──
+//
+// jp36.7.2 (merged to feat/jp36-social-autonomy, NOT this branch) added
+// `projectPublicationProvenance` to the Garden confirmations route so the
+// operator approves a publication candidate KNOWINGLY (bible §10.10, adjudication
+// R1.3). That projection recognizes a publication candidate ONLY when the
+// confirmation entry's `params` expose it in one of THREE places, in priority
+// order: `params.shareCandidate`, `params.disclosureProvenance`, or the top-level
+// `params` itself carrying the ShareCandidate provenance shape (a numeric
+// `schemaVersion` + string `candidateId`, OR the `provenanceRefs` array +
+// `effectiveSensitivity` + `subjectContactIds` triad). If THIS branch's
+// `proposeShareCandidate` ever enqueues the candidate under some other key, the
+// operator sees NO provenance section and approves blind.
+//
+// The projection module itself lives on the merge target, not here, so this test
+// carries a BLIND COPY of its detection contract (`locateProvenanceSource` /
+// `hasPublicationCandidateShape` from publication-provenance.ts) and asserts the
+// REAL `proposeShareCandidate` output hits it with populated provenance. When the
+// projection lands on the merge target, the seam review can swap this copy for a
+// direct `projectPublicationProvenance` import.
+describe('CapsuleCustodyService — enqueued params satisfy the Garden provenance seam (jp36.7.2)', () => {
+  // Blind copy of publication-provenance.ts `hasPublicationCandidateShape`.
+  const hasPublicationCandidateShape = (value: unknown): value is Record<string, unknown> => {
+    if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
+    const rec = value as Record<string, unknown>;
+    if (typeof rec.schemaVersion === 'number' && typeof rec.candidateId === 'string') return true;
+    return Array.isArray(rec.provenanceRefs) && 'effectiveSensitivity' in rec && 'subjectContactIds' in rec;
+  };
+  // Blind copy of publication-provenance.ts `locateProvenanceSource`.
+  const locateProvenanceSource = (params: unknown): { readonly obj: unknown } | null => {
+    if (typeof params !== 'object' || params === null || Array.isArray(params)) return null;
+    const rec = params as Record<string, unknown>;
+    if ('shareCandidate' in rec) return { obj: rec.shareCandidate };
+    if ('disclosureProvenance' in rec) return { obj: rec.disclosureProvenance };
+    if (hasPublicationCandidateShape(rec)) return { obj: rec };
+    return null;
+  };
+
+  let dir: string;
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'share-capsule-seam-'));
+  });
+
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('the real proposeShareCandidate enqueues params the projection recognizes as a populated publication candidate', () => {
+    // Capture the EXACT params object handed to the approval queue's enqueue().
+    let captured: Record<string, unknown> | undefined;
+    const delegate = createApprovalQueuePortFromConfirmationQueue(
+      new ConfirmationQueue({ now: () => NOW, idFactory: () => 'entry-1' }),
+    );
+    const capturingQueue: ApprovalQueuePort = {
+      enqueue: (request, execute) => {
+        captured = request.params;
+        return delegate.enqueue(request, execute);
+      },
+      listPending: () => delegate.listPending(),
+      listHistory: () => delegate.listHistory(),
+      getPending: (id) => delegate.getPending(id),
+      getApprovalOwner: (id) => delegate.getApprovalOwner(id),
+      resolve: (request, resolver) => delegate.resolve(request, resolver),
+    };
+
+    const cand = candidate();
+    const service = createCapsuleCustodyService({
+      store: createShareCapsuleCustodyStore(join(dir, 'cogsec-share-capsules.json'), { now: () => NOW }),
+      approvalQueue: capturingQueue,
+      now: () => NOW,
+      capsuleIdFactory: () => 'cap-1',
+    });
+    service.proposeShareCandidate({
+      candidate: cand,
+      proposedExpiry: { maxUseCount: 3 },
+      companionReason: 'I want to share this reflection with contact-1.',
+      approvalScope: 'contact_dm:contact-1',
+    });
+
+    expect(captured).toBeDefined();
+
+    // The mandatory integration requirement: the projection MUST find a provenance
+    // carrier (non-null) — otherwise the operator approves with no provenance shown.
+    const located = locateProvenanceSource(captured);
+    expect(located).not.toBeNull();
+
+    // The recognized carrier is the top-level params itself (via the triad marker),
+    // not a wrapped `shareCandidate`/`disclosureProvenance` sub-key.
+    const obj = located?.obj as Record<string, unknown>;
+    expect(obj).toBe(captured);
+
+    // ...and it must carry READABLE, populated provenance (a non-malformed view),
+    // faithfully projecting the candidate's content-free provenance fields.
+    expect(obj.candidateId).toBe(cand.candidateId);
+    expect(obj.contentHash).toBe(cand.contentHash);
+    expect(obj.effectiveSensitivity).toBe(cand.effectiveSensitivity);
+    expect(obj.provenanceRefs).toEqual(cand.provenanceRefs);
+    expect(obj.subjectContactIds).toEqual(cand.subjectContactIds);
+    expect(obj.proposedDestinations).toEqual(cand.proposedDestinations);
   });
 });

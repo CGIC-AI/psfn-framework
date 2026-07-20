@@ -194,7 +194,100 @@ Service exposure before the upgrade. The current chart's gateway Service is
 `kubectl port-forward` retry loop as production ingress. The local k3d helper's
 optional localhost forwards are disposable shakedown convenience only.
 
-### 5. Back up before owner-file or database mutation
+### 5. Build and import one exact image
+
+#### Local k3d
+
+The local helper can recreate a disposable cluster-of-one deployment:
+
+```bash
+scripts/ops/setup-local-artemis-shakedown.sh \
+  --cluster <k3d-cluster> \
+  --namespace "$NAMESPACE" \
+  --release "$RELEASE" \
+  --reset-cluster \
+  --no-port-forward
+```
+
+For an upgrade that must preserve existing PVCs, build and import the target
+without resetting data:
+
+```bash
+docker build --platform linux/amd64 \
+  --label "org.opencontainers.image.revision=${TARGET_SHA}" \
+  -f docker/Dockerfile.agent \
+  -t "localhost/psfn-framework:${TARGET_TAG}" .
+
+docker run --rm --entrypoint sh \
+  "localhost/psfn-framework:${TARGET_TAG}" \
+  -c 'test -f /app/contract-hash.txt \
+    && test -f /app/skills/conversation/SKILL.md \
+    && test -f /app/deploy/helm/psfn/Chart.yaml \
+    && test -f /app/deploy/helm/psfn/recovery-chart.sha256'
+
+k3d image import "localhost/psfn-framework:${TARGET_TAG}" \
+  -c <k3d-cluster>
+```
+
+The bundled-skill assertion is explicit because this branch's
+`ship-kube-update.sh` does not yet contain that check.
+
+#### Remote k3s
+
+Use the repository ship path for its build and dry-run evidence. It probes the
+remote architecture, builds from committed `HEAD`, checks the embedded
+contract/recovery assets, and stops before import or Helm mutation:
+
+```bash
+PSFN_REMOTE_DIR="$REMOTE_DIR" npm run ship:kube -- \
+  --host "$CLUSTER_HOST" \
+  --namespace "$NAMESPACE" \
+  --components all \
+  --dry-run
+```
+
+Until the bundled-skill assertion is incorporated into that script, run it
+against the built image before shipping. This check intentionally uses the bare
+`psfn-framework:${TARGET_TAG}` tag produced by the immediately preceding
+`ship:kube -- --dry-run`; it is not the `localhost/` tag from the local k3d
+path. If changing paths, rerun the ship dry run or explicitly retag the
+inspected local image first. `--pull=never` prevents an absent bare tag from
+falling through to a registry pull:
+
+```bash
+docker run --rm --pull=never --entrypoint test \
+  "psfn-framework:${TARGET_TAG}" \
+  -f /app/skills/conversation/SKILL.md
+```
+
+Do not run the ship script without `--dry-run` on this branch. Its selective
+probes and rollout waits still address a fixed `deploy/psfn-agent`, while the
+chart renders a UUID-suffixed agent Deployment. A full invocation can
+mutate Helm successfully and then fail on that nonexistent rollout target.
+Use the same tag-oriented import sequence manually, then use the label-aware
+gateway/final Helm procedure below:
+
+```bash
+docker save "psfn-framework:${TARGET_TAG}" \
+  | gzip > "/tmp/psfn-${TARGET_SHORT_SHA}.tar.gz"
+scp "/tmp/psfn-${TARGET_SHORT_SHA}.tar.gz" \
+  "${CLUSTER_HOST}:${REMOTE_DIR}/"
+ssh "$CLUSTER_HOST" \
+  "cd '${REMOTE_DIR}' \
+   && gunzip -f psfn-${TARGET_SHORT_SHA}.tar.gz \
+   && sudo k3s ctr images import psfn-${TARGET_SHORT_SHA}.tar \
+   && sudo k3s ctr images tag \
+      docker.io/library/psfn-framework:${TARGET_TAG} \
+      localhost/psfn-framework:${TARGET_TAG} \
+   && rm -f psfn-${TARGET_SHORT_SHA}.tar"
+```
+
+Tar-imported images are tag-addressed. Never set a digest for one: the imported
+containerd record is not the registry digest contract expressed by Helm.
+Clear any inherited `psfnAppImage.digest` and per-workload digest overrides in
+the staged and final upgrades.
+
+### 6. Back up before owner-file or database mutation
 
 Take and verify the normal encrypted cluster backup. Run the scale and
 maintenance-Pod block only when the target diff and owner dry runs show a
@@ -304,7 +397,7 @@ Pod is intentionally cluster-of-one. If the selector finds anything other than
 one agent, stop and use the digest-approved whole-cluster owner migration rather
 than broadening this Pod by hand.
 
-### 6. Upgrade owner-file contracts
+### 7. Upgrade owner-file contracts
 
 The target checkout is the authority for which migrations are required. Review
 the config-contract delta before applying anything:
@@ -392,99 +485,6 @@ validates repository seeds in an isolated fixture.
 Leave the app Deployments at zero after a mutating owner-file maintenance
 window. The target gateway must prove the new owner contract before any agent
 or Garden restarts; step 8 provides the controlled zero-replica gateway path.
-
-### 7. Build and import one exact image
-
-#### Local k3d
-
-The local helper can recreate a disposable cluster-of-one deployment:
-
-```bash
-scripts/ops/setup-local-artemis-shakedown.sh \
-  --cluster <k3d-cluster> \
-  --namespace "$NAMESPACE" \
-  --release "$RELEASE" \
-  --reset-cluster \
-  --no-port-forward
-```
-
-For an upgrade that must preserve existing PVCs, build and import the target
-without resetting data:
-
-```bash
-docker build --platform linux/amd64 \
-  --label "org.opencontainers.image.revision=${TARGET_SHA}" \
-  -f docker/Dockerfile.agent \
-  -t "localhost/psfn-framework:${TARGET_TAG}" .
-
-docker run --rm --entrypoint sh \
-  "localhost/psfn-framework:${TARGET_TAG}" \
-  -c 'test -f /app/contract-hash.txt \
-    && test -f /app/skills/conversation/SKILL.md \
-    && test -f /app/deploy/helm/psfn/Chart.yaml \
-    && test -f /app/deploy/helm/psfn/recovery-chart.sha256'
-
-k3d image import "localhost/psfn-framework:${TARGET_TAG}" \
-  -c <k3d-cluster>
-```
-
-The bundled-skill assertion is explicit because this branch's
-`ship-kube-update.sh` does not yet contain that check.
-
-#### Remote k3s
-
-Use the repository ship path for its build and dry-run evidence. It probes the
-remote architecture, builds from committed `HEAD`, checks the embedded
-contract/recovery assets, and stops before import or Helm mutation:
-
-```bash
-PSFN_REMOTE_DIR="$REMOTE_DIR" npm run ship:kube -- \
-  --host "$CLUSTER_HOST" \
-  --namespace "$NAMESPACE" \
-  --components all \
-  --dry-run
-```
-
-Until the bundled-skill assertion is incorporated into that script, run it
-against the built image before shipping. This check intentionally uses the bare
-`psfn-framework:${TARGET_TAG}` tag produced by the immediately preceding
-`ship:kube -- --dry-run`; it is not the `localhost/` tag from the local k3d
-path. If changing paths, rerun the ship dry run or explicitly retag the
-inspected local image first. `--pull=never` prevents an absent bare tag from
-falling through to a registry pull:
-
-```bash
-docker run --rm --pull=never --entrypoint test \
-  "psfn-framework:${TARGET_TAG}" \
-  -f /app/skills/conversation/SKILL.md
-```
-
-Do not run the ship script without `--dry-run` on this branch. Its selective
-probes and rollout waits still address a fixed `deploy/psfn-agent`, while the
-chart renders a UUID-suffixed agent Deployment. A full invocation can
-mutate Helm successfully and then fail on that nonexistent rollout target.
-Use the same tag-oriented import sequence manually, then use the label-aware
-gateway/final Helm procedure below:
-
-```bash
-docker save "psfn-framework:${TARGET_TAG}" \
-  | gzip > "/tmp/psfn-${TARGET_SHORT_SHA}.tar.gz"
-scp "/tmp/psfn-${TARGET_SHORT_SHA}.tar.gz" \
-  "${CLUSTER_HOST}:${REMOTE_DIR}/"
-ssh "$CLUSTER_HOST" \
-  "cd '${REMOTE_DIR}' \
-   && gunzip -f psfn-${TARGET_SHORT_SHA}.tar.gz \
-   && sudo k3s ctr images import psfn-${TARGET_SHORT_SHA}.tar \
-   && sudo k3s ctr images tag \
-      docker.io/library/psfn-framework:${TARGET_TAG} \
-      localhost/psfn-framework:${TARGET_TAG} \
-   && rm -f psfn-${TARGET_SHORT_SHA}.tar"
-```
-
-Tar-imported images are tag-addressed. Never set a digest for one: the imported
-containerd record is not the registry digest contract expressed by Helm.
-Clear any inherited `psfnAppImage.digest` and per-workload digest overrides in
-the staged and final upgrades.
 
 ### 8. Roll gateway first when the contract changes
 
@@ -693,7 +693,7 @@ An upgrade is not complete until every check below is green, in order.
    exists, owner migration receipts are complete, and owner modes remain
    `999:999 664`. Run `node /app/dist/preflight-startup-owner-files.js` in the mounted
    maintenance Pod one final time (the npm-script form needs dev tooling the
-   production image does not carry; see step 6).
+   production image does not carry; see step 7).
 
 The checked-in `scripts/ops/validate-kube-rollout.sh` still probes a fixed
 `psfn-agent` Deployment and is therefore supplemental on this branch, not a

@@ -157,14 +157,18 @@ The current runtime already exposes a unified model-facing `shell` tool for dire
 
 - Action: `exec`
 
-The surface stays intentionally narrow:
+The surface stays intentionally narrow while still supporting ordinary CLI work:
 
-- commands run without a shell parser; callers must pass explicit `command` and `args`
+- each call is one fresh process; use `command="bash"` with explicit `["-lc", "..."]` args for normal shell syntax
+- the whole Personal Workspace is writable and traversable, including any Git checkout kept inside it; intentional writes
+  persist across calls even though shell process state does not
 - gateway policy projected from `settings.json` remains authoritative for enablement, executable allowlists, cwd bounds, and resource caps
 - confirmation, auditing, and fail-closed denial stay on the underlying `shell.exec` gateway path
 - enabled Linux/k3s commands run inside a Bubblewrap user/mount/PID/network namespace: image binaries are read-only, the
   environment is cleared, networking is absent, only the companion's Personal Workspace is mounted writable, and
   process count, address space, file size, CPU time, open files, wall time, and output are capped
+- the normal wall-time budget is ten minutes and the operator-owned ceiling is one hour, so builds and deliberate CLI
+  exploration do not inherit a conversationally short timeout
 - `shell` remains distinct from `fs` and `repo`; use those primitives for structured workspace and git operations instead of shelling out by default
 - `analysis_workbench` does not receive a local `shell_exec` helper; direct command execution stays on the gateway-audited `shell` surface
 

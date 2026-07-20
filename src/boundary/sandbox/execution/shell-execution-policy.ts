@@ -129,7 +129,7 @@ function resolveAllowedCommandExecutable(
     }
     throw new ShellExecPolicyError(`shell.exec command not executable or not found: ${command}`);
   }
-  if (!isInsideAllowedPaths(canonicalCommand, ['/usr'])) {
+  if (!isInsideAllowedPaths(canonicalCommand, ['/usr', '/usr/local'])) {
     throw new ShellExecPolicyError(
       `shell.exec command must resolve to a read-only image executable: ${command}`,
     );

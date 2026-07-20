@@ -37,6 +37,7 @@ export function buildBubblewrapArgs(request: ResolvedShellExecution): string[] {
   }
   args.push(
     '--ro-bind', '/usr', '/usr',
+    '--ro-bind', '/usr/local', '/usr/local',
     '--symlink', 'usr/bin', '/bin',
     '--symlink', 'usr/lib', '/lib',
     '--symlink', 'usr/lib64', '/lib64',

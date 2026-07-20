@@ -18,12 +18,14 @@ describe('shell exec owner settings', () => {
     })).toMatchObject({
       enabled: true,
       allowlist: ['bash', 'rg'],
-      maxProcesses: 8,
-      maxAddressSpaceBytes: 134_217_728,
+      defaultTimeoutMs: 600_000,
+      maxTimeoutMs: 3_600_000,
+      maxProcesses: 64,
+      maxAddressSpaceBytes: 2_147_483_648,
     });
   });
 
-  it('fails closed for empty enabled allowlists, unknown keys, and unsafe aggregate memory', () => {
+  it('fails closed for empty enabled allowlists, unknown keys, and out-of-range limits', () => {
     expect(() => normalizeShellExecSettings({
       ...createDefaultShellExecSettings(),
       enabled: true,
@@ -35,7 +37,11 @@ describe('shell exec owner settings', () => {
     expect(() => normalizeShellExecSettings({
       ...createDefaultShellExecSettings(),
       maxProcesses: 16,
-      maxAddressSpaceBytes: 512 * 1024 * 1024,
-    })).toThrow('maxProcesses * maxAddressSpaceBytes');
+      maxAddressSpaceBytes: 8 * 1024 * 1024 * 1024,
+    })).toThrow('shellExec.maxAddressSpaceBytes');
+    expect(() => normalizeShellExecSettings({
+      ...createDefaultShellExecSettings(),
+      maxTimeoutMs: 3_600_001,
+    })).toThrow('shellExec.maxTimeoutMs');
   });
 });

@@ -355,6 +355,16 @@ export function hydrateCanonicalStartupConfig(
       permit: { ...persistedScheduler.icpAutonomy.permit },
       availability: { ...persistedScheduler.icpAutonomy.availability },
     },
+    socialAutonomy: {
+      passiveNameCandidate: { ...persistedScheduler.socialAutonomy.passiveNameCandidate },
+      appraiser: { ...persistedScheduler.socialAutonomy.appraiser },
+      reservationPhase: { ...persistedScheduler.socialAutonomy.reservationPhase },
+      egressLease: { ...persistedScheduler.socialAutonomy.egressLease },
+      freeTimeChooser: { ...persistedScheduler.socialAutonomy.freeTimeChooser },
+    },
+    ...(persistedScheduler.toolUsageEvaluator
+      ? { toolUsageEvaluator: { ...persistedScheduler.toolUsageEvaluator } }
+      : {}),
     ...(persistedScheduler.introspectionAudit
       ? { introspectionAudit: { ...persistedScheduler.introspectionAudit } }
       : {}),

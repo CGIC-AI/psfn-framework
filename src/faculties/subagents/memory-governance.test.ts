@@ -128,6 +128,14 @@ describe('isRestrictedSubagentMemoryCandidate', () => {
     expect(isRestrictedSubagentMemoryCandidate('semantic', ['boundary_note'])).toBe(true);
   });
 
+  it('escalates childhood and emotionally significant content even when type and tags claim it is procedural', () => {
+    expect(isRestrictedSubagentMemoryCandidate(
+      'procedural',
+      ['document_summary'],
+      "The PDF recounts the operator's childhood and how losing a parent shaped them.",
+    )).toBe(true);
+  });
+
   it('passes procedural and task-scoped classes without restricted tags', () => {
     expect(isRestrictedSubagentMemoryCandidate('procedural', ['workflow'])).toBe(false);
     expect(isRestrictedSubagentMemoryCandidate('semantic', [])).toBe(false);
@@ -266,6 +274,15 @@ describe('createGovernedSubagentMemoryTool', () => {
     { label: 'relational type', params: { action: 'write', text: 'they grew closer', type: 'relational' } },
     { label: 'boundary type', params: { action: 'write', text: 'never bring this up', type: 'boundary' } },
     { label: 'relational tags on a procedural type', params: { action: 'write', text: 'note about partner', type: 'procedural', tags: 'partner' } },
+    {
+      label: 'childhood content mislabeled as procedural',
+      params: {
+        action: 'write',
+        text: "The PDF recounts the operator's childhood and how losing a parent shaped them.",
+        type: 'procedural',
+        tags: 'document_summary',
+      },
+    },
   ])('stages restricted governed writes for fold review instead of writing ($label)', async ({ params }) => {
     const { tool, execute } = makeMemoryTool();
     const { context, audit, recordPendingMemoryCandidates } = makeContext({ mode: 'governed' });

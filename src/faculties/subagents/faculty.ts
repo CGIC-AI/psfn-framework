@@ -267,6 +267,21 @@ export class SubagentFaculty implements SubagentControlPort {
       ?? `subagent:${subagentId}`;
     const workerExecution = createWorkerExecutionPolicy(SUBAGENT_WORKER_LANE);
     const baseMessage = this.buildBaseMessage(subagentId, executionChannelId, request);
+    if (memoryWritePolicy.mode === 'elevated') {
+      if (!this.auditTrail) {
+        throw new Error(
+          'Subagent memory-write elevation requires an audit trail before the worker can be registered.',
+        );
+      }
+      // Record the trusted programmatic grant before registration. A missing or
+      // throwing audit sink leaves no queued task and no runnable worker.
+      this.auditTrail.append('subagent.memory.elevation.granted', {
+        subagentId,
+        name: request.name,
+        channelId: executionChannelId,
+        reason: memoryWritePolicy.reason,
+      });
+    }
     const task = this.taskRegistry.register({
       subagentId,
       name: request.name,
@@ -299,15 +314,6 @@ export class SubagentFaculty implements SubagentControlPort {
       workerProfileClass: workerExecution.profileClass,
       modelPurpose: workerExecution.modelPurpose,
     });
-    if (memoryWritePolicy.mode === 'elevated') {
-      // c7d: per-spawn elevation is explicit and audit-trailed, never blanket.
-      this.auditTrail?.append('subagent.memory.elevation.granted', {
-        subagentId,
-        name: request.name,
-        channelId: executionChannelId,
-        reason: memoryWritePolicy.reason,
-      });
-    }
     const completion = createDeferred<SubagentResult>();
     const handle: ActiveSubagentHandle = {
       subagentId,

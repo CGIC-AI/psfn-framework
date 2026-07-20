@@ -60,6 +60,14 @@ describe('classifyMemorySubject', () => {
       [],
     ],
     [
+      'companion_private',
+      memory({
+        sourceType: 'subagent',
+        provenance: { subagentId: 'subagent-42', actor: 'subagent' },
+      }),
+      [],
+    ],
+    [
       'unbound_person',
       memory({ provenance: { subjectName: '  A Person  ' } }),
       [],

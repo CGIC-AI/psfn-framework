@@ -55,6 +55,13 @@ const RESTRICTED_MEMORY_TYPES: ReadonlySet<MemoryType> = new Set([
   'boundary',
 ]);
 const BOUNDARY_TAG_HINT = /boundary|consent/;
+const RESTRICTED_CONTENT_HINTS: readonly RegExp[] = [
+  /\bchildhood\b/iu,
+  /\bupbringing\b/iu,
+  /\b(?:grew|growing)\s+up\b/iu,
+  /\b(?:as|when)\s+(?:i|you|they|he|she|the\s+operator|the\s+partner)\s+(?:was|were)\s+(?:an?\s+)?(?:child|kid|teenager)\b/iu,
+  /\b(?:trauma|traumatic|abuse|grief|grieving|bereavement|heartbreak)\b/iu,
+];
 
 export interface SubagentMemoryWriteElevation {
   reason: string;
@@ -121,11 +128,13 @@ export function resolveSubagentMemoryWritePolicy(input: {
 export function isRestrictedSubagentMemoryCandidate(
   type: MemoryType | undefined,
   tags: readonly string[],
+  text = '',
 ): boolean {
   if (!type) return true;
   if (RESTRICTED_MEMORY_TYPES.has(type)) return true;
   if (isEmotionalOrRelationalShardMemory(type, tags)) return true;
-  return tags.some(tag => BOUNDARY_TAG_HINT.test(tag));
+  if (tags.some(tag => BOUNDARY_TAG_HINT.test(tag))) return true;
+  return RESTRICTED_CONTENT_HINTS.some(pattern => pattern.test(text));
 }
 
 /**
@@ -259,7 +268,8 @@ async function executeGovernedMutation(
   if (action === 'write') {
     const type = normalizeMemoryTypeValue(params.type);
     const tags = parseShardMemoryTags(params.tags);
-    if (!isRestrictedSubagentMemoryCandidate(type, tags)) {
+    const text = typeof params.text === 'string' ? params.text : '';
+    if (!isRestrictedSubagentMemoryCandidate(type, tags, text)) {
       return executeStampedMutation(tool, context, toolCallId, action, params, signal);
     }
     return stageForFoldReview(tool, context, toolCallId, action, params);
@@ -290,7 +300,7 @@ function classifyImportRecord(record: unknown): { valid: boolean; restricted: bo
   if (!text || !type) return { valid: false, restricted: true };
   return {
     valid: true,
-    restricted: isRestrictedSubagentMemoryCandidate(type, parseShardMemoryTags(record.tags)),
+    restricted: isRestrictedSubagentMemoryCandidate(type, parseShardMemoryTags(record.tags), text),
   };
 }
 
@@ -358,6 +368,8 @@ async function stageForFoldReview(
   const originTags = [SUBAGENT_ORIGIN_PROVENANCE_TAG, `subagent:${context.subagentId}`];
   for (const output of stagedOutputs) {
     output.provenanceTags.push(...originTags);
+    output.provenance.workerKind = 'subagent';
+    output.provenance.subagentId = context.subagentId;
     output.provenance.tags.push(...originTags);
   }
   try {

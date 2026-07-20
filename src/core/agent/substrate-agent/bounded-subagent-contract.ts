@@ -18,15 +18,6 @@ export interface BoundedSubagentSourceContext {
   embodimentContext?: EmbodimentPresenceMetadata;
 }
 
-/**
- * c7d — explicit per-spawn memory-write elevation (charter 6.11, Law 37).
- * Grants direct restricted-class memory writes to the spawned worker; the
- * reason is mandatory and lands in the audit trail. Never grants delete.
- */
-export interface BoundedSubagentMemoryWriteElevation {
-  reason: string;
-}
-
 export interface BoundedSubagentLaunchRequestInput {
   name: string;
   task: string;
@@ -34,7 +25,6 @@ export interface BoundedSubagentLaunchRequestInput {
   maxTurns?: number;
   capabilities?: readonly string[];
   requiredCapabilities?: readonly string[];
-  memoryWriteElevation?: BoundedSubagentMemoryWriteElevation;
   sourceContext?: BoundedSubagentSourceContext;
 }
 
@@ -45,7 +35,6 @@ export interface BoundedSubagentLaunchRequest {
   maxTurns: number;
   capabilities: string[];
   requiredCapabilities: string[];
-  memoryWriteElevation?: BoundedSubagentMemoryWriteElevation;
   sourceContext?: BoundedSubagentSourceContext;
 }
 
@@ -185,21 +174,11 @@ export function isBoundedSubagentLaunchToolName(
   return toolName === BOUNDED_SUBAGENT_LAUNCH_TOOL_NAME;
 }
 
-function normalizeMemoryWriteElevation(
-  value: BoundedSubagentMemoryWriteElevation | undefined,
-): BoundedSubagentMemoryWriteElevation | undefined {
-  if (!value) {
-    return undefined;
-  }
-  return { reason: normalizeText(value.reason, 'memoryWriteElevation.reason') };
-}
-
 export function normalizeBoundedSubagentLaunchRequest(
   input: BoundedSubagentLaunchRequestInput,
 ): BoundedSubagentLaunchRequest {
   const systemPrompt = normalizeOptionalText(input.systemPrompt);
   const sourceContext = normalizeSourceContext(input.sourceContext);
-  const memoryWriteElevation = normalizeMemoryWriteElevation(input.memoryWriteElevation);
   return {
     name: normalizeText(input.name, 'name'),
     task: normalizeText(input.task, 'task'),
@@ -207,7 +186,6 @@ export function normalizeBoundedSubagentLaunchRequest(
     maxTurns: normalizeMaxTurns(input.maxTurns),
     capabilities: normalizeStringList(input.capabilities),
     requiredCapabilities: normalizeStringList(input.requiredCapabilities),
-    ...(memoryWriteElevation ? { memoryWriteElevation } : {}),
     ...(sourceContext ? { sourceContext } : {}),
   };
 }

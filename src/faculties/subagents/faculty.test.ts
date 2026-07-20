@@ -1315,4 +1315,32 @@ describe('SubagentFaculty memory-write governance (c7d)', () => {
     })).rejects.toThrow(/non-empty reason/);
     expect(faculty.getActiveCount()).toBe(0);
   });
+
+  it('fails an elevated spawn before registration when no audit trail is wired', async () => {
+    const deps = makeGovernanceDeps();
+    const faculty = new SubagentFaculty({
+      eventBus,
+      llmProvider: mockLLM(),
+      sessionStore,
+      embeddingService: null,
+      memoryProvider: deps.rawProvider as never,
+      config: TEST_CONFIG,
+      parentSystemPrompt: 'test prompt',
+      toolCatalogProvider: () => ({
+        core: [deps.memory.tool, deps.memoryDelete.tool],
+        extended: [],
+      }),
+      foldReviewController: { recordPendingMemoryCandidates: deps.recordPendingMemoryCandidates },
+    });
+
+    await expect(faculty.spawn({
+      name: 'unaudited-elevation',
+      task: 'attempt elevated memory maintenance without an audit sink',
+      memoryWriteElevation: { reason: 'sleeptime emotional-memory maintenance lane' },
+      workSpec: buildSubagentWorkSpec(),
+    })).rejects.toThrow(/audit trail/i);
+    expect(faculty.getActiveCount()).toBe(0);
+    expect(faculty.getRecentTasks()).toHaveLength(0);
+    expect(promptSpy).not.toHaveBeenCalled();
+  });
 });

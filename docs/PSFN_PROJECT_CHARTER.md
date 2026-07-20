@@ -152,7 +152,7 @@ These are project law. They are not suggestions.
 34. CogSec must preserve provenance and taint at consequential cognitive sinks; scanners are triage, not the trust boundary.
 35. Personal companion state and workspace are never implicitly shared because an installation hosts a fleet; shared workspace and world data require explicit scope and governance.
 36. Autonomy and resource pacing must prefer weighted, contextual, reversible guidance over arbitrary behavioral limits; non-negotiable safety boundaries remain fail-closed, and operational circuit breakers are exceptional, high-threshold, auditable recovery controls.
-37. Subagent memory writes are procedural and task-scoped by default; emotional, relational, and boundary writes from a subagent context require fold-review staging or an explicit per-spawn, audit-trailed elevation, and memory deletion is never available from a subagent context.
+37. Subagent memory writes are procedural and task-scoped by default; emotional, relational, and boundary writes from a subagent context require fold-review staging or a trusted programmatic per-spawn, audit-trailed elevation, and delete, redact, and restore are never available from a subagent context.
 
 If a proposed change violates one of those, the proposal is wrong even if it appears operationally convenient.
 
@@ -516,16 +516,21 @@ and write-trust are different axes: the toolset a subagent resolves from the
 deployment tier never implies canonical write trust.
 
 - subagent memory writes are procedural and task-scoped by default, opt-in per
-  spawn, and every subagent-originated write carries subagent provenance
+  spawn, and every direct or reviewed subagent-originated write carries a
+  structured subagent origin and subagent identifier through the canonical sink
 - emotional, relational, and boundary L2 writes from a subagent context must
   either stage as provenance-tagged fold-review candidates for origin-side
-  review, or ride an explicit, per-spawn, audit-trailed elevation reserved for
-  lanes that operate on emotional memory by design (introspection and memory
-  maintenance); blanket write trust is forbidden
+  review, or ride an explicit, trusted programmatic per-spawn elevation reserved
+  for lanes that operate on emotional memory by design (introspection and memory
+  maintenance); the elevation requires an audit sink before registration and is
+  never accepted from model-facing spawn input
+- restricted classification considers deterministic content signals as well as
+  declared type and tags; emotionally significant childhood content cannot
+  bypass fold review by claiming a procedural type
 - a write whose memory type cannot be determined is treated as the restricted
   class and fails closed
-- memory deletion is never available from a subagent context, at any tier or
-  elevation
+- delete, redact, and restore are intentionally never available from a subagent
+  context, at any tier or elevation
 
 Core remains authoritative for emotional, relational, identity, values, and
 trust truth; a subagent-staged candidate that survives review remains a

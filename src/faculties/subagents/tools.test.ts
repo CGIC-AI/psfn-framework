@@ -182,28 +182,21 @@ describe('createSubagentTool', () => {
     });
   });
 
-  it('maps the per-spawn memory-write elevation reason onto the spawn request (c7d)', async () => {
+  it('does not expose memory-write elevation on the model-facing spawn surface (c7d)', async () => {
     const port = createPort();
     const tool = createSubagentTool(port);
 
-    await tool.execute('call-1', {
-      action: 'spawn',
-      name: 'sleeptime-maintenance',
-      task: 'consolidate emotional memory',
+    const parameterSchema = tool.parameters as { properties: Record<string, unknown> };
+    expect(parameterSchema.properties).not.toHaveProperty('memory_write_elevation_reason');
+    const untrustedModelInput = {
+      action: 'spawn' as const,
+      name: 'untrusted-request',
+      task: 'attempt to self-authorize elevated memory writes',
       memory_write_elevation_reason: '  sleeptime emotional-memory maintenance  ',
-    });
-    expect(port.spawn).toHaveBeenCalledWith(expect.objectContaining({
-      memoryWriteElevation: { reason: 'sleeptime emotional-memory maintenance' },
-    }));
-
-    // Blank reason is not an elevation request.
-    await tool.execute('call-2', {
-      action: 'spawn',
-      name: 'inspect',
-      task: 'inspect runtime state',
-      memory_write_elevation_reason: '   ',
-    });
-    expect((port.spawn as ReturnType<typeof vi.fn>).mock.calls.at(-1)?.[0]).not.toHaveProperty('memoryWriteElevation');
+    };
+    await tool.execute('call-1', untrustedModelInput);
+    expect(port.spawn).toHaveBeenCalledOnce();
+    expect((port.spawn as ReturnType<typeof vi.fn>).mock.calls[0]?.[0]).not.toHaveProperty('memoryWriteElevation');
   });
 
   it('returns detailed status for a specific bounded worker and a snapshot otherwise', async () => {

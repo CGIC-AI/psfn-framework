@@ -116,21 +116,15 @@ describe('bounded subagent contract', () => {
     })).toThrow('non-empty sourceContext.embodimentContext.embodimentId');
   });
 
-  it('normalizes the per-spawn memory-write elevation and fails closed on a blank reason (c7d)', () => {
-    expect(normalizeBoundedSubagentLaunchRequest({
+  it('does not accept memory-write elevation through the launch-tool input contract (c7d)', () => {
+    const untrustedLaunchInput = {
       name: 'name',
       task: 'task',
       memoryWriteElevation: { reason: '  sleeptime maintenance  ' },
-    }).memoryWriteElevation).toEqual({ reason: 'sleeptime maintenance' });
-    expect(normalizeBoundedSubagentLaunchRequest({
-      name: 'name',
-      task: 'task',
-    })).not.toHaveProperty('memoryWriteElevation');
-    expect(() => normalizeBoundedSubagentLaunchRequest({
-      name: 'name',
-      task: 'task',
-      memoryWriteElevation: { reason: '   ' },
-    })).toThrow('non-empty memoryWriteElevation.reason');
+    };
+    const request = normalizeBoundedSubagentLaunchRequest(untrustedLaunchInput);
+
+    expect(request).not.toHaveProperty('memoryWriteElevation');
   });
 
 });

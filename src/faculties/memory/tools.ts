@@ -14,6 +14,7 @@ import type {
   MemoryRedactionOperation,
   MemoryFormationVAD,
   MemorySourceType,
+  MemoryProvenance,
 } from './types.js';
 import {
   VALID_MEMORY_TYPES,
@@ -62,7 +63,7 @@ export {
   createScratchpadWriteTool,
 } from './tools/scratchpad.js';
 
-const INTERNAL_SHARD_SOURCE_PARAM = '__psfnShardSource';
+const INTERNAL_SOURCE_PARAM = '__psfnShardSource';
 const MEMORY_SEARCH_DEFAULT_LIMIT = 5;
 const MEMORY_SEARCH_MAX_LIMIT = 20;
 const MEMORY_TIMELINE_DEFAULT_LIMIT = 8;
@@ -99,7 +100,7 @@ function clampInt(val: number, min: number, max: number): number {
 }
 
 function extractInternalSource(params: Record<string, unknown>): string | null {
-  const candidate = params[INTERNAL_SHARD_SOURCE_PARAM];
+  const candidate = params[INTERNAL_SOURCE_PARAM];
   if (typeof candidate !== 'string') return null;
   const normalized = candidate.trim();
   return normalized.length > 0 ? normalized : null;
@@ -108,35 +109,58 @@ function extractInternalSource(params: Record<string, unknown>): string | null {
 function buildToolSourceRef(
   toolName: string,
   toolCallId: string,
-  shardSource: string | null,
+  internalSource: string | null,
 ): string {
-  if (!shardSource) return `source:tool:${toolName}|invocation:${toolCallId}`;
-  return `source:${shardSource}|tool:${toolName}|invocation:${toolCallId}`;
+  if (!internalSource) return `source:tool:${toolName}|invocation:${toolCallId}`;
+  return `source:${internalSource}|tool:${toolName}|invocation:${toolCallId}`;
+}
+
+function resolveInternalMemoryOrigin(internalSource: string | null): {
+  sourceType: MemorySourceType;
+  provenance: Pick<MemoryProvenance, 'shardId' | 'subagentId' | 'actor'>;
+} {
+  const shardId = internalSource?.startsWith('shard:')
+    ? internalSource.slice('shard:'.length).trim()
+    : '';
+  if (shardId) {
+    return {
+      sourceType: 'shard',
+      provenance: { shardId, actor: 'shard' },
+    };
+  }
+  const subagentId = internalSource?.startsWith('subagent:')
+    ? internalSource.slice('subagent:'.length).trim()
+    : '';
+  if (subagentId) {
+    return {
+      sourceType: 'subagent',
+      provenance: { subagentId, actor: 'subagent' },
+    };
+  }
+  return {
+    sourceType: 'tool_write',
+    provenance: {},
+  };
 }
 
 function buildToolSourceContext(
   toolName: string,
   toolCallId: string,
-  shardSource: string | null,
+  internalSource: string | null,
 ): {
   sourceRef: string;
   sourceType: MemorySourceType;
-  provenance: {
-    toolName: string;
-    toolCallId: string;
-    shardId?: string;
-    actor?: 'shard';
-  };
+  provenance: MemoryProvenance;
 } {
-  const sourceRef = buildToolSourceRef(toolName, toolCallId, shardSource);
-  const shardId = shardSource?.startsWith('shard:') ? shardSource.slice('shard:'.length) : undefined;
+  const sourceRef = buildToolSourceRef(toolName, toolCallId, internalSource);
+  const origin = resolveInternalMemoryOrigin(internalSource);
   return {
     sourceRef,
-    sourceType: shardId ? 'shard' : 'tool_write',
+    sourceType: origin.sourceType,
     provenance: {
       toolName,
       toolCallId,
-      ...(shardId ? { shardId, actor: 'shard' as const } : {}),
+      ...origin.provenance,
     },
   };
 }
@@ -144,30 +168,25 @@ function buildToolSourceContext(
 function buildUnifiedMemorySourceContext(
   action: Exclude<MemoryToolAction, 'search' | 'timeline'>,
   toolCallId: string,
-  shardSource: string | null,
+  internalSource: string | null,
   qualifiers: string[] = [],
 ): {
   sourceRef: string;
   sourceType: MemorySourceType;
-  provenance: {
-    toolName: string;
-    toolCallId: string;
-    shardId?: string;
-    actor?: 'shard';
-  };
+  provenance: MemoryProvenance;
 } {
-  const base = shardSource
-    ? `source:${shardSource}|tool:memory|action:${action}`
+  const base = internalSource
+    ? `source:${internalSource}|tool:memory|action:${action}`
     : `source:tool:memory|action:${action}`;
   const sourceRef = [base, ...qualifiers.filter(Boolean), `invocation:${toolCallId}`].join('|');
-  const shardId = shardSource?.startsWith('shard:') ? shardSource.slice('shard:'.length) : undefined;
+  const origin = resolveInternalMemoryOrigin(internalSource);
   return {
     sourceRef,
-    sourceType: shardId ? 'shard' : 'tool_write',
+    sourceType: origin.sourceType,
     provenance: {
       toolName: 'memory',
       toolCallId,
-      ...(shardId ? { shardId, actor: 'shard' as const } : {}),
+      ...origin.provenance,
     },
   };
 }

@@ -11,6 +11,7 @@
     rejectDashboardCostWindowSelection,
     resolveDashboardCostWindow,
     shouldPublishDashboardResponse,
+    shouldSurfaceDashboardRequestError,
   } from '$lib/dashboard/cost-window';
   import { resolveSessionContextPressureView } from '$lib/dashboard/session-context-pressure';
   import ActiveConcernsCard from '$lib/components/garden/ActiveConcernsCard.svelte';
@@ -59,7 +60,7 @@
       );
       costWindowRefreshError = '';
     } catch (e) {
-      if (!shouldPublishDashboardResponse(requestId, latestDashboardRequestId)) return;
+      if (!shouldSurfaceDashboardRequestError(e, requestId, latestDashboardRequestId)) return;
       const message = e instanceof Error ? e.message : 'Failed to load dashboard';
       if (mode === 'initial') {
         error = message;

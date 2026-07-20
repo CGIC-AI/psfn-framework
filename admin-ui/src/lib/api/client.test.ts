@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ApiError, apiGet, apiGetConditional, apiPostForm } from './client';
+import { isAbortError } from './abort';
 import { activateCompanionScope } from '$lib/fleet/companion-scope';
 
 const COMPANION_A = '11111111-1111-4111-8111-111111111111';
@@ -79,6 +80,76 @@ describe('admin api client errors', () => {
     await activateCompanionScope(COMPANION_B);
 
     await expect(request).rejects.toMatchObject({ name: 'AbortError' });
+  });
+
+  it('keeps an incoming companion request alive while its scope activates', async () => {
+    const location = {
+      pathname: `/companions/${COMPANION_B}/garden`,
+      href: '',
+    };
+    vi.stubGlobal('window', { location });
+    let resolveRequest = (_response: Response) => {};
+    let requestSignal: AbortSignal | null = null;
+    vi.stubGlobal('fetch', vi.fn((_url: string, init?: RequestInit) => new Promise<Response>(
+      (resolve) => {
+        resolveRequest = resolve;
+        requestSignal = init?.signal ?? null;
+      },
+    )));
+
+    const request = apiGet('/api/admin/dashboard?costWindow=today');
+    await activateCompanionScope(COMPANION_B);
+    resolveRequest(new Response(JSON.stringify({ companion: COMPANION_B }), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    }));
+
+    await expect(request).resolves.toEqual({ companion: COMPANION_B });
+    expect(requestSignal?.aborted).toBe(false);
+  });
+
+  it('classifies an aborted raced response before its 401 can redirect', async () => {
+    const location = {
+      pathname: `/companions/${COMPANION_A}/garden`,
+      href: '',
+    };
+    vi.stubGlobal('window', { location });
+    await activateCompanionScope(COMPANION_A);
+    let resolveRequest = (_response: Response) => {};
+    vi.stubGlobal('fetch', vi.fn(() => new Promise<Response>((resolve) => {
+      resolveRequest = resolve;
+    })));
+
+    const request = apiGet('/api/admin/dashboard');
+    await activateCompanionScope(COMPANION_B);
+    resolveRequest(new Response('{}', { status: 401 }));
+
+    const error = await request.catch((reason: unknown) => reason);
+    expect(isAbortError(error)).toBe(true);
+    expect(location.href).toBe('');
+  });
+
+  it('canonicalizes a nonstandard fetch rejection from an aborted outgoing scope', async () => {
+    const location = {
+      pathname: `/companions/${COMPANION_A}/garden`,
+      href: '',
+    };
+    vi.stubGlobal('window', { location });
+    await activateCompanionScope(COMPANION_A);
+    vi.stubGlobal('fetch', vi.fn((_url: string, init?: RequestInit) => new Promise<Response>(
+      (_resolve, reject) => {
+        init?.signal?.addEventListener('abort', () => {
+          reject(new DOMException('signal aborted without reason', 'NetworkError'));
+        });
+      },
+    )));
+
+    const request = apiGet('/api/admin/dashboard');
+    await activateCompanionScope(COMPANION_B);
+
+    const error = await request.catch((reason: unknown) => reason);
+    expect(isAbortError(error)).toBe(true);
+    expect(location.href).toBe('');
   });
 
   it('sends an explicit ETag and surfaces an unchanged conditional response', async () => {

@@ -7,6 +7,7 @@ import {
   onCompanionScopeChange,
   scopeGardenDataPath,
 } from '$lib/fleet/companion-scope';
+import { isAbortError, throwIfAborted } from '$lib/api/abort';
 
 clearLegacyPersistentAdminToken();
 
@@ -57,6 +58,7 @@ async function probeServerSession(): Promise<boolean> {
       credentials: 'include',
       signal: controller.signal,
     });
+    throwIfAborted(controller.signal);
     if (companionScope !== getCompanionCacheScope()) return false;
     if (res.ok) {
       serverSessionAuthenticated = true;
@@ -66,7 +68,7 @@ async function probeServerSession(): Promise<boolean> {
       authResolved = true;
     }
   } catch (error) {
-    if (!(error instanceof Error && error.name === 'AbortError')) {
+    if (!isAbortError(error, controller.signal)) {
       console.warn(
         'Garden admin session probe failed; authentication remains unresolved.',
         error,

@@ -74,6 +74,23 @@ describe('Garden admin session auth guard', () => {
     expect(shouldRedirectToLogin(auth)).toBe(false);
   });
 
+  it('does not turn a canceled probe with a raced 401 into an auth denial', async () => {
+    let resolveProbe = (_response: Response) => {};
+    const auth = await loadAuthStore(() => new Promise<Response>((resolve) => {
+      resolveProbe = resolve;
+    }));
+    const { activateCompanionScope } = await import('$lib/fleet/companion-scope');
+
+    const authResult = auth.ensureAuthResolved();
+    await activateCompanionScope('11111111-1111-4111-8111-111111111111');
+    resolveProbe(new Response('{}', { status: 401 }));
+
+    await expect(authResult).resolves.toBe(false);
+    expect(auth.isAuthResolved()).toBe(false);
+    expect(auth.isAuthenticated()).toBe(false);
+    expect(shouldRedirectToLogin(auth)).toBe(false);
+  });
+
   it('does not turn a transient server failure into an auth denial', async () => {
     const auth = await loadAuthStore(async () => new Response('{}', { status: 503 }));
 

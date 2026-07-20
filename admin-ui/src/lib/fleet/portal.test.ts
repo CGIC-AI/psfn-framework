@@ -4,6 +4,7 @@ import {
   fetchFleetPortalProjection,
   parseFleetPortalProjection,
 } from './portal';
+import { isAbortError } from '../api/abort';
 
 const COMPANION_A = '11111111-1111-4111-8111-111111111111';
 const COMPANION_B = '22222222-2222-4222-8222-222222222222';
@@ -139,6 +140,33 @@ describe('Garden fleet portal client', () => {
       cache: 'no-store',
       credentials: 'include',
     }));
+  });
+
+  it('does not redirect when a canceled fleet probe races with a 401', async () => {
+    const location = { assign: vi.fn() };
+    vi.stubGlobal('window', { location });
+    const controller = new AbortController();
+    let resolveRequest = (_response: Response) => {};
+    vi.stubGlobal('fetch', vi.fn(() => new Promise<Response>((resolve) => {
+      resolveRequest = resolve;
+    })));
+
+    const request = fetchFleetPortalProjection(controller.signal);
+    controller.abort();
+    resolveRequest(new Response('{}', { status: 401 }));
+
+    const error = await request.catch((reason: unknown) => reason);
+    expect(isAbortError(error, controller.signal)).toBe(true);
+    expect(location.assign).not.toHaveBeenCalled();
+  });
+
+  it('redirects only a non-aborted fleet 401 to login', async () => {
+    const location = { assign: vi.fn() };
+    vi.stubGlobal('window', { location });
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('{}', { status: 401 })));
+
+    await expect(fetchFleetPortalProjection()).rejects.toThrow('Fleet session expired');
+    expect(location.assign).toHaveBeenCalledWith('/fleet/login');
   });
 
   it('renders charge, fatigue, timestamps, stale state, and honest unavailability', () => {

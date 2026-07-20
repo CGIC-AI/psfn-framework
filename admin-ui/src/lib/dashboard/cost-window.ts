@@ -1,6 +1,7 @@
 import type {
   DashboardCostWindow,
 } from '$lib/types';
+import { isAbortError } from '$lib/api/abort';
 
 export const DASHBOARD_COST_WINDOWS: readonly DashboardCostWindow[] = ['today', 'week', 'month', 'quarter'];
 export const DASHBOARD_MODEL_USAGE_POLL_INTERVAL_MS = 15_000;
@@ -71,4 +72,12 @@ export function rejectDashboardCostWindowSelection(
 
 export function shouldPublishDashboardResponse(requestId: number, latestRequestId: number): boolean {
   return requestId === latestRequestId;
+}
+
+export function shouldSurfaceDashboardRequestError(
+  error: unknown,
+  requestId: number,
+  latestRequestId: number,
+): boolean {
+  return shouldPublishDashboardResponse(requestId, latestRequestId) && !isAbortError(error);
 }

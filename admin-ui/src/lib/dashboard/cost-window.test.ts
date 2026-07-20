@@ -12,6 +12,7 @@ import {
   rejectDashboardCostWindowSelection,
   resolveDashboardCostWindow,
   shouldPublishDashboardResponse,
+  shouldSurfaceDashboardRequestError,
 } from './cost-window';
 
 test('resolveDashboardCostWindow fails closed to today for unknown values', () => {
@@ -59,6 +60,19 @@ test('only the latest range request may publish a dashboard response', () => {
   assert.equal(shouldPublishDashboardResponse(2, 2), true);
   assert.equal(shouldPublishDashboardResponse(1, 2), false);
   assert.equal(shouldPublishDashboardResponse(3, 2), false);
+});
+
+test('dashboard scope-switch aborts are stale control flow, not load failures', () => {
+  assert.equal(
+    shouldSurfaceDashboardRequestError(
+      new DOMException('Companion scope changed', 'AbortError'),
+      2,
+      2,
+    ),
+    false,
+  );
+  assert.equal(shouldSurfaceDashboardRequestError(new Error('upstream unavailable'), 2, 2), true);
+  assert.equal(shouldSurfaceDashboardRequestError(new Error('stale request'), 1, 2), false);
 });
 
 test('a deferred range refresh keeps the committed label attached to the visible totals', () => {

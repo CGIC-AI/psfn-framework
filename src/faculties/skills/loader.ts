@@ -536,17 +536,15 @@ export function scanSkillRoots(
     const isDirectory = exists && statSync(directory.absolutePath).isDirectory();
 
     if (!isDirectory) {
+      const message = exists
+        ? `Skills root is not a directory; no skills can load from it: ${directory.absolutePath}`
+        : `Skills root missing; no skills can load from it: ${directory.absolutePath}`;
       if (directory.source !== 'custom') {
-        warnMissingRoot(
-          exists
-            ? `Skills root is not a directory; no skills can load from it: ${directory.absolutePath}`
-            : `Skills root missing; no skills can load from it: ${directory.absolutePath}`,
-          {
-            path: directory.relativePath,
-            absolutePath: directory.absolutePath,
-            source: directory.source,
-          },
-        );
+        warnMissingRoot(message, {
+          path: directory.relativePath,
+          absolutePath: directory.absolutePath,
+          source: directory.source,
+        });
       }
       roots.push({
         path: directory.relativePath,
@@ -555,6 +553,7 @@ export function scanSkillRoots(
         skillCount: 0,
         source: directory.source,
         precedence: directory.precedence,
+        ...(directory.source !== 'custom' ? { message } : {}),
       });
       continue;
     }

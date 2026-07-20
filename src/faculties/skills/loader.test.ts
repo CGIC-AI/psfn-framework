@@ -166,6 +166,7 @@ description: git workflow helpers
         exists: false,
         skillCount: 0,
         source: 'extra',
+        message: `Skills root missing; no skills can load from it: ${join(root, 'vendor/skills')}`,
       });
 
       expect(warnings).toHaveLength(1);

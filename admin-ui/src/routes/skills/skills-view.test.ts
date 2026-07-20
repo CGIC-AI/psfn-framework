@@ -1,0 +1,49 @@
+import { describe, expect, it } from 'vitest';
+import type { SkillRootScan } from '$lib/types';
+import {
+  buildSkillRootViews,
+  formatMissingSkillRoot,
+} from './skills-view';
+
+describe('skills missing-root degradation', () => {
+  it('names the exact missing root while leaving each root independently reportable', () => {
+    const root: SkillRootScan = {
+      path: 'skills',
+      absolutePath: '/app/skills',
+      exists: false,
+      skillCount: 0,
+      source: 'bundled',
+      precedence: 1,
+    };
+
+    expect(formatMissingSkillRoot(root))
+      .toBe('Skills root is missing on disk and cannot contribute skills: /app/skills');
+  });
+
+  it('keeps available roots visible when another root is missing', () => {
+    const roots: SkillRootScan[] = [
+      {
+        path: 'skills',
+        absolutePath: '/app/skills',
+        exists: false,
+        skillCount: 0,
+        source: 'bundled',
+        precedence: 1,
+      },
+      {
+        path: '/runtime/workspaces/personal/companion-a/skills',
+        absolutePath: '/runtime/workspaces/personal/companion-a/skills',
+        exists: true,
+        skillCount: 1,
+        source: 'custom',
+        precedence: 0,
+      },
+    ];
+
+    const views = buildSkillRootViews(roots);
+
+    expect(views).toHaveLength(2);
+    expect(views[0]?.degradationMessage).toContain('/app/skills');
+    expect(views[1]).toEqual({ root: roots[1] });
+  });
+});

@@ -45,6 +45,8 @@ export interface SkillRootScan {
   skillCount: number;
   source: SkillSource;
   precedence: number;
+  /** Per-root degradation detail. Present when a non-managed root is unusable. */
+  message?: string;
 }
 
 export interface SkillFileCandidate {

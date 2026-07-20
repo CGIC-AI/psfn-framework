@@ -1,4 +1,5 @@
 import { POSTGRES_CONTACT_LIFECYCLE_MIGRATIONS } from './contact-lifecycle-migrations.js';
+import { POSTGRES_MODEL_USAGE_ROLLBACK_MIGRATIONS } from './model-usage-rollback-migrations.js';
 
 const POSTGRES_VECTOR_EXTENSION_MIGRATION = `
   DO $$
@@ -37,7 +38,7 @@ export const POSTGRES_MEMORY_MIGRATIONS = [
     emotional_valence DOUBLE PRECISION NOT NULL,
     formation_vad JSONB,
     salience DOUBLE PRECISION NOT NULL,
-    salience_decay_anchor_at BIGINT NOT NULL,
+    salience_decay_anchor_at BIGINT NOT NULL DEFAULT ((EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::bigint),
     source_ref TEXT NOT NULL,
     source_type TEXT NOT NULL DEFAULT 'unknown',
     provenance_json JSONB NOT NULL DEFAULT '{}'::jsonb,
@@ -68,6 +69,7 @@ export const POSTGRES_MEMORY_MIGRATIONS = [
   `ALTER TABLE l2_memories ADD COLUMN IF NOT EXISTS formation_vad JSONB;`,
   `ALTER TABLE l2_memories ADD COLUMN IF NOT EXISTS salience_decay_anchor_at BIGINT;`,
   `UPDATE l2_memories SET salience_decay_anchor_at = last_accessed WHERE salience_decay_anchor_at IS NULL;`,
+  `ALTER TABLE l2_memories ALTER COLUMN salience_decay_anchor_at SET DEFAULT ((EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::bigint);`,
   `ALTER TABLE l2_memories ALTER COLUMN salience_decay_anchor_at SET NOT NULL;`,
   `ALTER TABLE l2_memories ADD COLUMN IF NOT EXISTS scope_ref_kind TEXT;`,
   `ALTER TABLE l2_memories ADD COLUMN IF NOT EXISTS scope_ref_id TEXT;`,
@@ -1905,6 +1907,13 @@ export const POSTGRES_MODEL_USAGE_MIGRATIONS = [
   `,
   `ALTER TABLE model_usage_events VALIDATE CONSTRAINT model_usage_events_attribution_schema_version_check;`,
   `ALTER TABLE model_usage_events ALTER COLUMN event_fingerprint SET NOT NULL;`,
+  // Live-alpha rollback bridge (psfn-framework-6yh6): the pre-attribution
+  // writer explicitly inserts NULL for optional lineage columns and omits the
+  // later event fingerprint. Defaults cannot repair an explicit NULL, so keep
+  // the canonical NOT NULL invariants and normalize only that legacy shape at
+  // the table boundary. Modern writers already provide canonical values and
+  // pass through unchanged.
+  ...POSTGRES_MODEL_USAGE_ROLLBACK_MIGRATIONS,
   `
   DO $$
   BEGIN

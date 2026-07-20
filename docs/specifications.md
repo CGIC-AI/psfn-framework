@@ -28,17 +28,24 @@ Last updated: 2026-07-14.
 
 ### Fleet human and operator surfaces
 
-- The canonical HTTPS origin's `/fleet` route is the fleet overview inside the
-  same compiled Garden frontend used for companion administration.
-- `/fleet` and `/v1/fleet/portal` require a live gateway fleet session and
-  expose only the current principal's bounded authorized projection.
-- Authorized companion navigation always uses
-  `/companions/<companion-uuid>/garden/...`; the immutable URL target is the
-  sole browser authority for page, API, download, and WebSocket traffic.
-- The former unauthenticated raw fleet-status listener and its
-  `FLEET_STATUS_PORT` / `FLEET_STATUS_HOST` wiring are retired. The public
-  origin does not expose `/fleet/status.json` or complete fleet-operational
-  metadata.
+- The canonical HTTPS origin's `/fleet` shell and `/v1/fleet/portal` JSON route
+  require a live gateway fleet session. They expose only the current
+  principal's bounded authorized projection and compile same-origin stateless
+  Garden links.
+- `FLEET_STATUS_PORT` enables a different, optional raw HTTP operator listener.
+  It retains legacy `GET /`, `GET /fleet`, and `GET /fleet/status.json`
+  behavior, exposes complete operational fleet metadata, and has no
+  browser-session authentication. `FLEET_STATUS_HOST` defaults to
+  `127.0.0.1`; wildcard, public, ambiguous, or non-loopback resolved binds fail
+  startup.
+- The raw listener is not mounted on the public authenticated origin and is not
+  a portal data source. It must not be exposed by a public ingress,
+  unauthenticated proxy, or remote tunnel. Remote operator use requires an
+  independent authentication boundary plus private network policy.
+- Live host/port wiring remains repository-owned. Rollback of only the raw
+  status listener removes `FLEET_STATUS_PORT` and `FLEET_STATUS_HOST` from that
+  wiring and restarts the gateway; it does not roll back or disable the
+  authenticated portal.
 
 ## Live Alpha Migration Boundary
 
@@ -103,20 +110,22 @@ Supported until beta:
   marker compatibility before beta after every supported cluster has a
   verified companion-owned target and the old-chart rollback window has been
   retired.
-- Explicit session journal filename migration through
-  `npm run migrate:session-filenames -- --data-dir <exact-companion-data-dir> --apply`.
-  This operator-only command may rename retired L0 session filenames beneath
-  exactly one companion data root and rebuild that root's derived channel
-  index. Runtime startup never invokes the migration; an affected lookup fails
-  closed with the command to run. Validate the boundary with the command E2E,
-  SessionStore filename-boundary tests, and the persistence/sessions suites.
-  Remove the command, legacy filename engine, and lazy runtime detector before
-  beta after every supported companion session root uses readable filenames.
-- Existing companion persistence migrations for legacy continuity files,
-  opaque pre-cutover SQLite database placement, contact `discord_user_id`
-  identity rows, and the `core_memory.json` orientation filename. These flows
-  may preserve or move opaque files but do not open them through a SQLite
-  reader; they are not permission to add new parallel artifact names.
+- Existing companion persistence migrations for legacy continuity files, session channel filenames, opaque pre-cutover SQLite database placement, contact `discord_user_id` identity rows, and the `core_memory.json` orientation filename. These flows may preserve or move opaque files but do not open them through a SQLite reader; they are not permission to add new parallel artifact names.
+- Forward-schema rollback bridges for the live-alpha Postgres memory and model
+  usage tables. `l2_memories.salience_decay_anchor_at` retains a current-time
+  default so an image from before the anchor column can insert a new live
+  memory without weakening the column's `NOT NULL` invariant. The
+  `model_usage_events` insert trigger converts only null or blank attribution
+  fields from the pre-attribution writer to the canonical `unknown` sentinel
+  and derives its missing fingerprint as
+  `legacy:rollback-writer:<event-id>`; all accounting, currency, token,
+  schema-version, and attribution constraints remain enforced. Validate this
+  boundary with the Postgres memory integration test and model-usage migration
+  certification against the exact older insert shapes, plus a bounded live
+  turn proving memory, embedding, chat, and reflection writes after any
+  rollback. Remove both bridges before beta after every deployment has retired
+  images that predate these columns and the supported Helm rollback window no
+  longer includes those writers.
 - Tool-surface migration aliases documented in `docs/tool-surface.md`. They preserve model-facing continuity while unified tools roll out, and should be removed after canonical actions have stable adoption.
 - One-time legacy Personal Workspace assignment during the multi-companion alpha
   cutover. If legacy `WORKSPACE_PATH` contains data, startup stops and prints its

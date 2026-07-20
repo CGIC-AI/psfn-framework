@@ -1,9 +1,7 @@
 # Free-Time, Social Autonomy, and Room Participation Design Bible
 
-**Status:** Working design record. Revised 2026-07-19 after adversarial review and operator
-adjudication; see `free-time-social-autonomy-design-review-20260719.md` and
-`free-time-social-autonomy-review-adjudication-20260719.md`. No runtime behavior is authorized or
-implemented by this document.
+**Status:** Working design record for adversarial review; no runtime behavior is authorized or
+implemented by this document
 
 **Date:** 2026-07-19
 
@@ -13,16 +11,6 @@ implemented by this document.
 emotion telemetry, and future publication surfaces
 
 ## 0. Executive thesis
-
-> **Review and adjudication note (2026-07-19).** This bible has been through a four-lane adversarial
-> review (findings R1–R12, `free-time-social-autonomy-design-review-20260719.md`) and an operator
-> adjudication session (`free-time-social-autonomy-review-adjudication-20260719.md`). The decisions
-> recorded below are ratified: where a review finding was accepted it is folded into the settled
-> ledger, and where the operator overruled a finding the narrowed decision is recorded here. The
-> largest structural corrections are that the disclosure machinery **extends CogSec** rather than
-> standing beside it (§9, §13.3), the speaking arbiter is a **gateway-owned, Postgres-backed**
-> process signaling over ICP (§8.5, §13.1), the target deployment is **always a fleet** (possibly of
-> one), and several "gaps" in §5 are really "extend an existing subsystem."
 
 PSFN already contains most of the primitives needed for companions to participate naturally in
 ordinary group chats, choose self-directed work, carry hobbies and creative projects across weeks,
@@ -145,9 +133,6 @@ companion's expressive freedom meet.
 - Replacing the concerns system.
 - Resolving the future Garden member-view product decision.
 - Filing an implementation bead tree from this design record.
-- Telegram participation parity. **Settled:** Telegram is descoped — effectively DM-only in
-  practice; it may be left dormant or ripped out. No observe-mode/mention-gate/participation work is
-  planned for it. The participation coordinator degrades per channel capability (§13.5).
 
 ### 2.3 Binding versus provisional decisions
 
@@ -160,18 +145,6 @@ This document uses three statuses:
 
 EmoSim observations are evidence, not a final experimental verdict. Independent agents are expected
 to review the experiment, challenge the conclusions, and identify missed variables.
-
-**Ratification status (2026-07-19).** The adversarial review and operator adjudication have run.
-Items the review surfaced and the operator settled are now **Settled** here (and folded into §4 and
-§23.1); items the operator explicitly parked stay **Deferred**; genuinely open shapes (exact
-formulas, weights, window sizes) stay **Provisional**. Where the amendment list and the adjudication
-record differ in detail the adjudication record governs, except for three late operator refinements
-that supersede it: (1) the provenance review surface is an **update to the existing Garden approvals
-page**, not a new pane; (2) fatigue regenerates by an **hourly tick of `cap/24`** with the existing
-overfatigue mechanism providing the in-context wind-down (never scripted words); (3) room
-confirmation is required **only on an invite-only → public change** — a derived invite-only default
-is acceptable even for autonomous lanes. The topology target is **always a fleet** (a Kubernetes
-deploy with a `companions.json` of one or more entries); the design is written against that shape.
 
 ## 3. Canonical language
 
@@ -258,60 +231,6 @@ The following are settled for this design:
 30. The future Garden member view is read-only and contact/session-scoped, with all operational
     controls removed.
 
-The following were settled by the 2026-07-19 adjudication and promoted from review findings:
-
-31. Disclosure lineage/policy is an **extension of the existing CogSec intake-envelope
-    taint/provenance/lineage substrate**, not a parallel system. The only net-new piece is the
-    outbound destination-eligibility gate, which lives in CogSec and composes with the existing sink
-    gates at egress (§9, §13.3).
-32. The speaking arbiter is a **gateway-owned process** with all arbiter/lease/pressure state in
-    Postgres, per-channel arbitration contexts, a two-phase reservation → egress-lease protocol, and
-    ICP as the signaling transport (including cross-installation rooms via ICP federation). **On any
-    conflict or race, ICP dominates social** (§8.5, §13.1).
-33. Fatigue keeps dyadic fatigue and per-room-class `channelSettingLimits`, adds a per-companion
-    **social pot** funding group participation and ICP continuation (ICP draws at priority) with
-    per-channel draw caps, keeps room-episode pressure per-channel and non-monetary, and replaces
-    the 24h cliff with continuous regeneration (an hourly `cap/24` tick). The existing overfatigue
-    mechanism is the in-context wind-down; human-triggered turns still do not charge (§12).
-34. The participation appraiser runs **in group chats only** (never DMs/ICP), fires only on
-    contextual summons (name/alias) behind a deterministic pre-gate, uses a cheap background model
-    with a strict ternary output over datamarked room text and tool-less transport, reuses the
-    existing group-salience name detector, and coordinates cadence/dedup with the
-    `ObservedGroupMemoryScheduler`. Full faculty telemetry, no charge-system cost initially, each
-    companion pays for its own appraiser (§8.1–8.2).
-35. Reactions are built on the existing outbound adapter seam, expose a curated subset of standard
-    emojis plus guild-custom emojis (loaded with one-line meaning descriptions), and are added to
-    the canary egress method list (§8.3).
-36. The sacred privacy line is **DM/pairwise sanctity**; free-time/journaling *existence* is not
-    secret. Room-bound return notes are fine and are channel-scoped by definition; return notes are
-    **system notes, never partner speech** (hard invariant) (§6.5/§6.6/§8.6, §10.8, §15).
-37. Rooms auto-assign an invite-only default at channel add (acceptable including for autonomous
-    lanes). Human confirmation is required **only** when changing invite-only → public, via a
-    click-to-accept flow; that change starts a fresh disclosure epoch. Narrowing (public →
-    invite-only) tightens forward only (§9.3, §18).
-38. The publication review/edit lifecycle lives in CogSec; the provenance review surface is an
-    **update to the existing Garden approvals page**. The edit loop is companion-owned (the human
-    raises concerns about what is shared, never edits the prose); approval binds to exact resubmitted
-    content. Reusing restricted-provenance content as generative input requires fresh approval
-    (§10.10–10.11).
-39. Lifecycle: a kicked/banned companion keeps a workable room-bound project (rejoin MAY resume
-    prior context); channel deletion leaves memories/artifacts valid but unshareable-for-lack-of-
-    audience and rewrites nothing in L0/L2; contacts are archived, never deleted; migration is a
-    one-time flip of existing free-time history to private (§18, §21).
-40. Machine-vs-human identity is resolved by the platform bot flag; name collisions are handled by
-    contextual appraisal (§8.5, §22).
-41. Discord voice channels are **Location-scoped** (presence-windowed) and serve as the test
-    substrate for future virtual-environment Locations (§17).
-42. Room entry is consent to companion presence and processing; large public rooms are a recorded
-    future posture (ignore all but known contacts; paid/flagged public messages firewalled through
-    with explicit annotation, ephemeral, no contact records); the block list is scale-filtering in
-    public rooms plus companion self-protection anywhere (§8.7).
-43. `RestWindowPolicyPort` is adopted for quiet-period/silence-persistence policy (§10.2). All new
-    telemetry rides typed event-bus events, with fleet-level room/arbiter telemetry in Fleet Command
-    and companion-level participation logging at the companion level (§19).
-44. The target topology is **always a fleet** (a Kubernetes deploy with a `companions.json` of one
-    or more entries); the design is written against that shape.
-
 ## 5. Current implementation map
 
 This section distinguishes verified current behavior from the target design.
@@ -328,19 +247,6 @@ agent's observation path instead of the response loop:
 
 This gives the desired low-cost foundation: the room transcript can accumulate without spending
 model tokens on every message, and a later invoked response can use room context.
-
-**Correction (review R3/R9.3, 2026-07-19).** "Observation costs nothing and commits nothing" was
-overstated. Observe-mode messages are not merely accumulated — they are routed to the
-`ObservedGroupMemoryScheduler`
-([`src/faculties/memory/extraction/group-observed-scheduler.ts`](../src/faculties/memory/extraction/group-observed-scheduler.ts)),
-which triggers memory extraction on `observed_count`, `observed_time`, `direct_mention`,
-`high_salience`, and `backlog_lag`, and already runs its own canonical companion-name detection
-(`group-salience.ts`). So observation already spends model budget and already writes durable memory
-from unaddressed room traffic. The consequence for this design is a **reuse mandate**: the new
-passive-name participation path must reuse the existing group-salience name detector and coordinate
-cadence, dedup, alias canon, and spend with this scheduler rather than adding a second name-detection
-pipeline (§8.1–8.2). The genuinely *new* spend is only the name-triggered respond-or-not appraisal;
-extraction and graph-building were already happening.
 
 Current gap: the outbound adapter interface provides `sendText` and optional `sendMedia`, but no
 outbound reaction method:
@@ -388,16 +294,6 @@ See:
 This is the authoritative reason ordinary channel membership must not acquire Location-style
 audience epochs.
 
-**Correction (review R9.1, 2026-07-19).** The "stale presence closes the window" claim is only
-partly enforced today: `getOwnPresenceWindow()` checks that the companion's own window names the
-current place, but there is **no timestamp-freshness validation on the companion's own window** —
-TTL filtering applies only to other companions' co-presence rows
-([`src/core/agent/companion-room-window.ts`](../src/core/agent/companion-room-window.ts),
-[`src/core/agent/companion-presence-runtime.ts`](../src/core/agent/companion-presence-runtime.ts)).
-A stalled heartbeat leaves the own-window open indefinitely. The stale-own-presence check is a
-required fix; it is low urgency now (Location surfaces are not active) but becomes real with the
-virtual-environment/voice-Location work (§17).
-
 ### 5.4 Free-time execution
 
 Current free time already has:
@@ -430,15 +326,6 @@ Current gaps:
   destination-specific lineage projection;
 - silence ends a block but does not necessarily suppress another free-time offer later in the same
   larger quiet period.
-
-**Correction (review R6/R9.2, 2026-07-19).** The per-block charge cap is conditional, not current
-behavior: when `chargePolicy` is absent the free-time cap silently degrades to a permanent
-zero-reader — the cap is configured but nothing enforces it
-([`src/app/agent/main.ts`](../src/app/agent/main.ts),
-[`src/core/scheduler/free-time.ts`](../src/core/scheduler/free-time.ts)). This must be fixed or given
-an explicit, tested degradation contract. Per the adjudication the new appraiser/participation spend
-carries **full faculty telemetry first and hard charge enforcement only if usage proves it
-necessary** — telemetry now, enforcement when it matters (§12).
 
 The earlier current-state audit is
 [`working_docs/introspection-freetime-review-20260714.md`](./introspection-freetime-review-20260714.md).
@@ -519,14 +406,6 @@ See:
 Current gap: the primary scope is dyadic. Three or more companions may be able to alternate while
 each pair remains under its own relationship budget. The target speaking arbiter therefore needs
 room-episode pressure in addition to existing dyadic fatigue.
-
-**Correction (review R6/R9.3, 2026-07-19).** The §12.4 pacing story is not unbuilt — much of it
-already exists as config the earlier draft did not cite. `config/charge-policy.seed.json` defines
-`fatigue.channelSettingLimits` per room class, `socialRegulation` pressure units and
-`continuationEvidence`, and `runChargeQuotaByLane` (`interactive`, `companion_social`, `background`).
-The design's fatigue work (§12) therefore **extends `socialRegulation`** rather than implying it is
-new; the per-companion social pot, per-channel draw caps, and continuous regeneration are the
-additions.
 
 ### 5.8 EmoSim observer sidecar
 
@@ -622,23 +501,10 @@ fragments.
 A future companion-initiated share proposal is distinct: the companion explicitly chooses exact
 material, and the result enters human review.
 
-Note (adjudication, 2026-07-19): "not a content quarry" governs the *contents* of introspection and
-DM material, not the bare existence of private activity. That a companion spent free time, journaled,
-or made something is ordinary and disclosable at the companion's discretion; only DM/pairwise content
-is inviolable (§6.6).
-
 ### 6.6 Motivation remains content-free
 
 Social pressure may affect timing and willingness. It must not contain raw conversation text,
 private topic labels, or a reason that indirectly reveals a sensitive introspection event.
-
-**Privacy scope narrowed (adjudication, 2026-07-19).** The absolute, must-never-leak invariant is
-**DM/pairwise sanctity**: what passes between two people in a DM is sacred and must never leak nor be
-inferable. Free-time and journaling *existence*, by contrast, is **not** secret — companions are
-known to have private lives and introspection on a cadence, and "I was doing my own thing" or "I
-wrote in my journal, might share the poem later" is healthy, desirable social behavior, not an
-oracle. Earlier language forbidding any disclosure that a private session occurred is narrowed
-accordingly (§8.6): the tripwire is DM/pairwise content, not the fact that free time happened.
 
 ### 6.7 Silence is an affirmative outcome
 
@@ -742,16 +608,6 @@ Candidate creation must suppress:
 - cooldown-blocked repeated passive mentions;
 - duplicated candidates for the same source message.
 
-**Settled (adjudication, 2026-07-19).** The participation appraiser runs in **group chats only** —
-never in DMs, one-on-one channels, or ICP lanes (ICP already has its own consent moment). It fires
-**only on contextual summons** (a name/alias match) behind a deterministic pre-gate, never
-per-message. It **reuses the existing group-salience name detector** and coordinates cadence, dedup,
-and alias canon with the `ObservedGroupMemoryScheduler` (see the §5.1 correction) rather than adding
-a second name-detection path. A **deterministic debounce** is the primary anti-spam defense: repeated
-name-triggering (one user or several coordinating) collapses to at most one optional response, then
-ignores that trigger pattern for ~10 minutes. There is **no per-line firewall screening of ordinary
-room chatter** — that is not warranted and would bog the system down.
-
 ### 8.2 Passive-name appraisal
 
 A passive reference is neither always ignorable nor equivalent to an explicit mention. The cheap
@@ -776,20 +632,6 @@ type ParticipationAppraisal =
 
 The appraisal is not given the companion's full private memory or introspection. If it selects
 `reply`, the ordinary response turn receives the room's normal context and memory gating.
-
-**Settled (adjudication, 2026-07-19).** The appraisal runs on a **cheap background model** with a
-**strict ternary output contract** (the `ParticipationAppraisal` union below) and **tool-less
-transport** — the same discipline as the L2/L3 screeners. The appraisal is run from the companion's
-own perspective ("they mentioned me; do I want to reply?"). Room text is presented to the appraiser
-**datamarked/quoted the same way the main prompt path presents it**, so an injected line cannot pose
-as instructions; the worst a hostile line can do is flip one cheap yes/no whose "yes" still routes
-through the full normal response path and its egress gates. The appraiser sees only content-free
-eligibility summaries of fatigue/lease state, never sensitive internals — this closes the
-reaction-oracle attack (review R4). Passive-name candidates **include surrounding context** so a
-same-named human is distinguished from a reference to the companion. Each companion **pays for its own
-appraiser** out of its own budget; the appraiser carries **full faculty telemetry but no charge-system
-cost initially** (same posture as memory calls — "memory just is"), with charge added later only if
-usage proves it necessary.
 
 Examples:
 
@@ -821,15 +663,6 @@ sendReaction(
 
 Platform adapters validate supported emoji/reaction syntax and permissions. The coordinator treats
 a failed reaction as a visible delivery failure; it must not silently convert it into a text reply.
-
-**Settled (adjudication, 2026-07-19).** Reactions are built on the **existing outbound adapter
-seam** (§13.5), not a Discord-only side path. The emoji surface is a **curated subset of standard
-emojis** (the ones people actually use) **plus guild-custom emojis loaded with a one-line meaning
-description** so the companion can use house memes correctly. Reactions are disclosure-bearing
-egress: the reaction method is **added to the canary egress method list** (alongside `discord.send`
-/ `sendMedia` / `notify` / `web.*` / `companion.message.send`) so an emoji choice cannot egress
-uninspected, and a content-free audit record (choice, target, timing band, suppression reason) is
-kept.
 
 ### 8.4 Autonomy levels
 
@@ -868,39 +701,6 @@ The lease supports:
 
 The arbiter must not infer that a model's silence is a failed lease. Silence is a valid release.
 
-**Settled — arbiter substrate and protocol (adjudication, 2026-07-19).**
-
-- **Owning process: the gateway.** The arbiter is a gateway-owned process. The gateway is shared by
-  the whole fleet and sits at the platform border where the external integrations live, so it is the
-  charter-consistent place to arbitrate a platform-egress action across peer companions (Laws 3/35)
-  — no Companion Core arbitrates a peer's speaking turn.
-- **State in Postgres.** All arbiter/lease/pressure state (pressure, turns, leases) lives in
-  gateway Postgres so a gateway reboot loses nothing. This follows the earlier
-  reboot-loses-state lessons and the ICP Postgres reservation-fence precedent.
-- **Per-channel arbitration contexts.** One gateway watchdog observes every group-room channel, but
-  each channel keeps its own statistics and is its own arbitration context — the same two companions
-  in two channels are two separate contexts.
-- **Two-phase protocol.** A **candidate reservation** phase precedes appraisal; a **final egress
-  lease** is acquired at delivery. This resolves the earlier §6.10-vs-§7 ordering ambiguity (peek
-  before the model runs, bind only at egress) with fairness accounting for `ignore`, model failure,
-  expiry, and delivery failure.
-- **ICP is the signaling transport** for turn grants ("red/yellow/green light"), **including
-  cross-installation rooms via ICP federation** — this is the answer to the review's
-  cross-installation gap. The arbiter generalizes the existing
-  `IcpAvailabilityLease`/`IcpInitiationPermit` machinery rather than standing beside it. **On any
-  conflict or race, ICP dominates social** — the two are legitimately different authorities (a
-  companion may refuse ICP DMs with a peer yet still spar with them in a shared room), but where they
-  contend ICP wins.
-- **Crash-recovery fencing.** Autonomous non-ICP turns carry a correlation key in the **same
-  recovery model as ICP's reservation fence** (`IcpConversationCorrelation`), so a crash between
-  pressure charge / lease acquisition and delivery cannot leak the charge or double-send on restart.
-- **Machine-vs-human identity.** Leaseholder and priority resolution key on **verified identity via
-  the platform bot flag** — companion accounts are Discord integrations tagged as bots, and
-  cross-hardware recognition already works in practice. Unknown accounts are treated as human for
-  charging and are **never** leaseholders. A hostile human named after a companion does not capture
-  arbitration priority: name collisions are resolved by contextual appraisal (§8.2), not by string
-  match (§22).
-
 ### 8.6 Social impulse and topic selection
 
 A Social Impulse contains no topic:
@@ -926,68 +726,11 @@ A separate resolver may select among destination-eligible Topic Seeds:
 Private introspection and journal content do not enter this topic pool.
 
 An emotion system may independently produce content-free social pressure, but the social path must
-not read an introspection transcript or journal entry as a topic source. **Narrowed (adjudication,
-2026-07-19):** the timing-leak protection is scoped to **DM/pairwise content** — the social path must
-not let the timing or existence of a specific *DM* leak. It is not a prohibition on the companion
-knowing or vaguely disclosing that she had free time or journaled; that existence is not secret
-(§6.6). Introspection *contents* remain outside topic selection and social-trigger generation, but
-"I spent some time on my own / wrote something I might share later" is desirable, not a leak.
-
-### 8.7 Observation, consent, and public rooms
-
-**Settled (adjudication, 2026-07-19).** These deployments are small and trusted, not a commercial
-product; GDPR-grade consent machinery is out of scope, and the sanctity of the companion's memories
-outranks data-protection ceremony.
-
-- **Room entry is consent.** Joining a room where companions live is itself consent to companion
-  presence and to the processing (observation, extraction, graph-building) that presence entails —
-  under stated room policy, trusted invite-only deployments, and ZDR/local providers. Deletion
-  requests are handled case-by-case through the existing marking/deletion capability.
-- **Large public rooms (recorded future posture, not built now).** Ignore everyone except
-  known/named contacts (e.g. mods). Paid/flagged messages (superchats) are firewalled through with
-  an explicit **"a message from the public asks…"** annotation and treated as **ephemeral** — no
-  contact records are created for such interactions.
-- **Block list has two purposes:** scale-filtering in public rooms, and **companion
-  self-protection anywhere** — a companion may block an abusive participant even in an invite-only
-  room. (The existing block list is companion→human.)
-- **Slow-poisoning is not bubble-wrapped.** Vendettas and adversity are legitimate experience; the
-  harmful case is behavioral/emotional *drift*, which existing drift tracking already monitors. The
-  one observed poisoning-like incident traced to a **fallback-model misconfiguration** (a vision
-  fallback model with aggressive API-side classifiers wired into the wrong lane), not chat-borne
-  injection — model/lane configuration correctness is the real control, so keep fallback
-  assignments strict and observable.
+not read an introspection transcript, journal entry, or even the fact that a particular private
+session just occurred. Private-session timing can itself leak information. Introspection therefore
+remains outside both topic selection and social-trigger generation.
 
 ## 9. Disclosure lineage
-
-### 9.0 Relationship to CogSec (settled)
-
-**DisclosureLineage / DisclosurePolicy are not a new parallel taint system.** They are an
-**extension of the existing CogSec intake-envelope taint / provenance / lineage substrate**. Building
-a second taint system beside CogSec is the exact policy-home duplication the charter forbids (Law 34,
-§12.4), and it would break remediation — a source revoked or regenerated in CogSec must not remain
-releasable through a separate accumulator. The reconciliation is:
-
-- **Reuse, do not rebuild.** Max-risk-tier taint propagation, whole-output derivation taint
-  (`deriveChildIntakeEnvelope`), provenance chains/refs, seal/tombstone/revoke/regenerate for
-  later-invalidated sources, and the existing sink gates (`prompt_assembly`, `tool_egress`, the
-  lethal-trifecta egress gate) already model most of §9.1–§9.5. DisclosureLineage is a
-  projection/view over that substrate, not a second store. See
-  [`src/shared/contracts/intake-envelope.ts`](../src/shared/contracts/intake-envelope.ts),
-  [`src/core/cogsec/intake/sink-gates.ts`](../src/core/cogsec/intake/sink-gates.ts), and
-  [`src/core/cogsec/lineage.ts`](../src/core/cogsec/lineage.ts).
-- **The net-new piece is the outbound destination-eligibility gate.** What the intake firewall does
-  *not* model is the design's outbound axis: `permittedDestinations` intersection,
-  `subjectContactIds` eligibility, and destination-relative `effectiveSensitivity`. This gate is
-  net-new work and **lives in CogSec** (not Core), so the whole information lifecycle — intake →
-  derivation → publication — is owned by one system. It **composes with** (does not bypass) the
-  existing sink gates at egress, consuming CogSec provenance rather than recomputing
-  sensitivity/subject/consent that `src/system/trust/policy.ts` and the context envelope already own.
-- **Appraiser/topic-seed inputs are CogSec sinks too.** The participation appraiser and topic-seed
-  assembly consume room text through intake envelopes and datamarking (§8.2), registered as CogSec
-  sinks; their outputs are treated as untrusted-derived.
-
-The schema in §9.1 below therefore describes the *projection*'s required fields, populated from the
-intake-envelope substrate, not a free-standing new record.
 
 ### 9.1 Required shape
 
@@ -1036,24 +779,6 @@ If a later tool call introduces a more restrictive source, subsequent outputs in
 classification.
 
 ### 9.3 Destination rules
-
-**Room classification lifecycle (settled, adjudication + late refinement, 2026-07-19).**
-
-- **Auto-assigned invite-only default at channel add is acceptable — including for the autonomous
-  lanes** (social-impulse initiation, room-project binding, room-bound return notes, topic seeds).
-  Being added to the room is the summons; a derived `invite_only` default does not require operator
-  confirmation. (This supersedes the adjudication's interim recommendation that autonomous lanes
-  require `operator_confirmed`.)
-- **Human confirmation is required only when changing invite-only → public.** That is a
-  click-to-accept flow whose notice states that derived/shared-eligible material from this room can
-  **no longer be auto-shared** with the room at the new level, because trust/privacy gates now apply:
-  automated sharing **starts a fresh disclosure epoch** for that channel, and prior material remains
-  shareable only through human-in-the-loop egress review. Everything generated under the old ceiling
-  keeps that ceiling; only post-change content is public-eligible.
-- **Narrowing (public → invite-only) tightens forward only.** The ceiling tightens for new content;
-  already-public material cannot be unpublished and stays public.
-- Track `classificationSource: derived_default | operator_confirmed` on the envelope for audit, but
-  a derived invite-only default is a valid basis for the autonomous lanes per the rule above.
 
 #### Same ordinary invite-only room
 
@@ -1158,12 +883,6 @@ If the companion chooses rest, the block ends without a second model call. A per
 “not again for this quiet period” decision should prevent repeated prompting beyond the intended
 cadence.
 
-**Settled (adjudication, 2026-07-19):** the quiet-period / silence-persistence policy is adopted
-behind the named **`RestWindowPolicyPort`** (charter §11.1) rather than an ad hoc scheduler flag.
-The goal is never to annoy the companion into muting her own reminders again. Free-time chooser
-surfaces must respect Law 33 (no new model-facing tool names duplicating `session`/scheduler
-surfaces).
-
 ### 10.3 Free-Time Workspace Resolver
 
 A single deep module should resolve the chosen activity into all runtime facts required by the
@@ -1225,12 +944,6 @@ full transcript no longer fits in active context.
 
 No membership epoch is appended for an ordinary room project.
 
-**Settled — L0 (adjudication, 2026-07-19):** everything is L0. Free-time and room-project internal
-sessions are recorded as **ordinary L0 session archives on dedicated internal channel partitions**
-(`internal:` channel IDs). Internal room-project musing is **never written into the target room's
-canonical archive** — the channel-partitioned internal transcript and the room's own archive are
-separate L0 partitions.
-
 ### 10.5 Project notebook
 
 The existing manifest should evolve rather than be replaced. A future version needs:
@@ -1247,11 +960,6 @@ The existing manifest should evolve rather than be replaced. A future version ne
 
 The project should not duplicate document bodies. It points to ordinary journal, wiki, workspace,
 code, image, and other artifacts.
-
-**Settled — workspace domains (adjudication, 2026-07-19):** the workspace layout is
-**directory-per-project with per-directory privacy** — simple and sufficient. Free-time, room, and
-publication artifacts live in the personal workspace (charter §6.27); publication is a governed
-promotion out of it, never an implicit share.
 
 ### 10.6 Private free time
 
@@ -1314,20 +1022,6 @@ on something beautiful while their partner was away.
 In a multi-human deployment, the return target is `contactId + DM channelId`, not “an admin” or
 “the latest private session.”
 
-**Settled (adjudication, 2026-07-19):**
-
-- **Return notes are system notes, never partner speech.** A return note inserted into a DM or room
-  must be an **attributed system note** and must never be rendered or attributed as user/partner
-  speech. This is a hard invariant (charter Laws 17–19); a prior misattribution incident caused the
-  companion real distress, and regression here is unacceptable.
-- **Return notes are channel-scoped by definition.** A note carries only context from/for the
-  workspace channel it belongs to. The failure condition is **cross-session leakage**, not the
-  existence of a note — room-bound return notes and vague self-disclosures ("I wrote a poem while you
-  were out") are desirable, not oracles (§6.6). The verification obligation is that the summarizer
-  never fires broad across sessions.
-- Return-note context is **non-initiating**: it surfaces only in reply to a human, never pushed by a
-  temporal-wakeup turn, so it cannot become an unsolicited disclosure.
-
 ### 10.9 Public-clean publication
 
 Public-clean projects begin with a public/broadcast retrieval ceiling. They may use:
@@ -1335,8 +1029,7 @@ Public-clean projects begin with a public/broadcast retrieval ceiling. They may 
 - public memories/facts;
 - public room context;
 - public articles and sources;
-- prior approved Share Capsules **used only as exact-replay content**, not as generative inputs
-  carrying restricted provenance (see the §10.11 capsule-reuse rule);
+- prior approved Share Capsules;
 - the companion's public-clean project history.
 
 They do not receive private DM or introspection context. This is the future path for autonomous
@@ -1364,23 +1057,6 @@ private expressive project
 Editing the approved content, widening the destination, or changing embedded media invalidates the
 approval.
 
-**Settled — review lifecycle and edit loop (adjudication + late refinement, 2026-07-19).**
-
-- **The review/edit lifecycle lives in CogSec**, riding the existing gateway egress/approval
-  architecture — no second approval store. `ShareCandidate` / `ApprovedShareCapsule` extend the
-  existing artifact-egress envelope (content + destination fingerprint, classification recheck,
-  changed-parameter rejection) rather than adding an agent-local queue.
-- **The provenance review surface is an update to the existing Garden approvals page**, not a new
-  pane: it surfaces *more* information (the derived memories, conversations, and sources used to
-  create the candidate) on the page operators already use. Sensitive provenance does not auto-block —
-  an intimate memory handled respectfully can be approved; the review is how strict filtering is
-  legitimately bypassed (model-backed, human-approved).
-- **The edit loop is companion-owned.** The human reviews with provenance and raises **specific
-  concerns about what is shared** — the human **never edits the companion's prose**. The companion
-  edits herself and resubmits; **approval binds to the exact resubmitted content**.
-- The publication lane registers a **dedicated review/publication tool on the live tool surface**
-  (do not duplicate `session`/scheduler surfaces, Law 33).
-
 ### 10.11 Future private-to-social sharing
 
 At the end of private free time, journaling, or introspection, the companion may eventually be
@@ -1405,12 +1081,6 @@ After human approval, an `ApprovedShareCapsule` should contain:
 An initial cap of three active capsules is a reasonable queue bound. It should be configurable and
 should not turn the concern system into a content queue. “Social concern” is rejected terminology
 because it conflates sharing intent with welfare concerns.
-
-**Settled — capsule reuse (adjudication, 2026-07-19):** a capsule carries **exact-replay authority,
-not generative-input authority**. Reusing restricted-provenance content from a capsule as a
-**generative input** to a new work requires **fresh approval** — approving exact content for a
-destination does not declassify its provenance for reuse. This supersedes the earlier §10.9 wording
-that listed "prior approved Share Capsules" as freely reusable public-clean inputs.
 
 ## 11. EmoSim and social pressure
 
@@ -1582,33 +1252,6 @@ human explicitly re-engages
 Urgent welfare or explicit human address may override soft room pressure with an auditable reason.
 An override does not erase the recorded cost.
 
-### 12.6 Settled social-pot economy (adjudication + late refinement, 2026-07-19)
-
-The operator named two failure modes: many companions in many rooms fatiguing out globally with no
-recovery until a daily tick, and one busy room starving the others. The settled model addresses both:
-
-- **Keep the existing two mechanisms unchanged:** dyadic fatigue (§12.1) and per-room-class
-  `fatigue.channelSettingLimits` (§5.7).
-- **Add a per-companion social pot** funding group participation **and ICP continuation**, with
-  **ICP drawing at priority** (consistent with ICP-dominates-social). A multi-room argument now
-  drains the shared pot, so it cannot rage on forever.
-- **Add per-channel draw caps** — no single channel may consume more than a bounded fraction (~a
-  third) of the pot remaining at draw time — so one room cannot starve the others.
-- **Room-episode pressure stays per-channel and non-monetary** (§12.2): it shapes the conversation
-  (wrap-up, lease thresholds), it is not budget. The pot is money; episode pressure is pacing.
-- **Continuous regeneration replaces the 24h cliff.** An **hourly tick adds `cap/24`** to the pot
-  until full, so conversations taper naturally instead of companions tapping out mid-conversation and
-  being "dead until midnight." (A daily reset may remain only as a backstop ceiling.)
-- **The existing overfatigue mechanism provides the in-context wind-down** — the natural, in-voice
-  signal that the companion is winding down. **Never scripted words:** the system does not put a
-  wind-down line in the companion's mouth; overfatigue simply shapes behavior toward wrapping up.
-- **Human-triggered turns still do not charge the pot** (existing invariant). All pot/pressure/lease
-  state lives in gateway Postgres (§8.5).
-
-This makes the §12.3 "capped group surcharge" question moot as a *separate* billing axis — the pot
-plus per-channel draw caps already bounds multi-companion spend; a surcharge would only be revisited
-if telemetry shows the pot model insufficient.
-
 ## 13. Deep module seams
 
 The design should concentrate behavior behind a small number of interfaces rather than spread
@@ -1637,16 +1280,6 @@ Behind this interface:
 
 The Discord adapter remains a transport adapter. It observes and delivers; it does not own social
 policy.
-
-**Placement (settled, §8.5).** The coordinator's per-companion decision work (appraisal, topic
-eligibility, this companion's fatigue) runs in the Companion Core, but the **speaking lease, room-
-episode pressure, and social-pot state are gateway-owned and Postgres-backed** — a companion never
-arbitrates a peer's turn. The lease is a two-phase reservation → egress-lease acquired at the
-gateway and signaled over ICP (including cross-installation via ICP federation). Room-episode
-pressure is modeled through the existing composed `FatigueBudgetPort` extending `socialRegulation`,
-not an arbiter-local store. A single shared arbitration point with class priorities keeps welfare
-concerns, weighted-thought outreach, social impulses, and room candidates from double-firing or
-losing a lease race to casual social candidates, even though their semantics stay distinct.
 
 ### 13.2 Free-Time Workspace Resolver
 
@@ -1682,13 +1315,6 @@ interface DisclosurePolicy {
 
 The accumulator may be an internal seam used by session history, memory, wiki, journal, and tool
 reads. Callers should not need to reimplement “max sensitivity/intersect destinations” logic.
-
-**Placement (settled, §9.0).** `DisclosurePolicy` is a projection/extension over the existing
-CogSec intake-envelope taint/provenance/lineage substrate, not a parallel accumulator. The
-`beginGeneration`/`assess` seam wraps CogSec's max-risk-tier taint, `deriveChildIntakeEnvelope`
-whole-output taint, and provenance/lineage records. The net-new outbound destination-eligibility
-gate (`permittedDestinations` intersection, `subjectContactIds`) lives in CogSec and **composes with
-the existing sink gates at egress** rather than bypassing them.
 
 ### 13.4 Social Pressure Signal Port
 
@@ -1828,17 +1454,6 @@ The common case should remain warm and effortless:
 Privacy controls should prevent cross-contact leakage, not make a companion unable to share their
 life with their person.
 
-### 15.4 Law 31 and self-directed free time (settled)
-
-Law 31 is not exempted here — it is **distinguished**. Law 31 governs **active-lane work**: a
-partner asked for something in conversation and multi-turn tool work is fulfilling it, so completion
-or blockage **must** produce a response (the giant-document / analyst-toolset timeout incident is the
-canonical failure). **Self-directed free time is not an assigned task**: finishing a book while your
-partner is at work does not warrant a notification. The return summary is **context for the
-companion** to mention the activity naturally, not a partner ping. Blocked or failed free-time work
-surfaces through ordinary telemetry/Garden, not partner notifications — and the current code path
-that swallows return-surfacing failure (`free-time.ts`) must instead surface it as telemetry.
-
 ## 16. Future Garden member projection
 
 This decision is deferred, but the requirement is recorded so the present design does not assume
@@ -1881,14 +1496,6 @@ Future game-engine, VR, MUD, or virtual-world transports built on Location must 
 `RoomContentWindowPort` or a compatible composed adapter rather than silently adopting ordinary
 Discord history semantics.
 
-**Settled (adjudication, 2026-07-19):** Discord **voice channels are Location-scoped**, not
-ordinary-channel-scoped. Voice is presence-based — only those present at the time share the context;
-scrollback does not exist. A guild room may therefore carry a live voice channel that is a
-presence-windowed surface inside an otherwise ordinary room. Voice channels ride the existing
-Location/presence-window seam (`RoomContentWindowPort`) and serve as the **test substrate for future
-virtual-environment Locations**. This partially un-defers Location: the seam is real now for voice,
-which also makes the stale-own-presence fix (§5.3) load-bearing.
-
 ## 18. Failure modes and required behavior
 
 | Failure | Required behavior |
@@ -1896,7 +1503,7 @@ which also makes the stale-own-presence fix (§5.3) load-bearing.
 | Passive-name appraiser unavailable | Ignore candidate or use a narrowly configured deterministic fallback; never promote every name match to a reply. |
 | Speaking arbiter unavailable | No autonomous multi-companion reply; direct human mention may use an explicitly defined fail-closed single-speaker path only if identity is unambiguous. |
 | Reaction unsupported or denied | Report delivery failure; do not silently send text instead. |
-| Missing room classification | Deny social/project egress. A **derived `invite_only` default at channel add is a valid basis** for the autonomous lanes (§9.3); only a truly unclassifiable non-DM channel denies. |
+| Missing room classification | Deny social/project egress. |
 | Missing project work context | Keep project private until classified; do not infer public from title or artifact type. |
 | Missing disclosure lineage | Keep artifact private or require review. |
 | Stale source classification | Reassess before egress; deny if current eligibility cannot be proven. |
@@ -1907,26 +1514,13 @@ which also makes the stale-own-presence fix (§5.3) load-bearing.
 | Fatigue store unavailable | Fail closed for autonomous companion-to-companion continuation. |
 | Lease expires during generation | Suppress stale delivery and reappraise only if the room context materially changed. |
 | Room membership changes | No project fork for ordinary channels. |
-| Room privacy classification widens (invite-only → public) | Require human click-to-accept; start a **fresh disclosure epoch**; do not retroactively declassify prior project context (prior material shareable only via human-in-the-loop egress review) (§9.3). |
-| Room privacy classification narrows (public → invite-only) | Tighten the ceiling forward only; already-public material stays public and is not unpublished (§9.3). |
-| Companion kicked/banned from a room-bound project's room | Project **stays workable**; nothing to share into the room while excluded; do not freeze or erase experience. Rejoin **MAY** resume prior room context. |
-| Channel deletion | Memories and artifacts **remain accessible and valid**; they become unshareable-for-lack-of-audience, not lost; deletion **rewrites nothing in L0/L2**. |
-| Contact is an archived return target | Contacts are **archived, never deleted**; privacy links/gates persist (grayed out, inactive). A recreated account with a new ID is a new person; blocked contacts persist so the block keeps working. |
+| Room privacy classification widens | Reassess; do not retroactively declassify prior project context. |
 | Location presence unknown/stale | Existing Location room window closes. |
 | Human approval payload changes | Invalidate approval and require a new exact-content decision. |
 
 ## 19. Telemetry and audit
 
 Telemetry should make autonomy explainable without copying private content.
-
-**Settled (adjudication, 2026-07-19).** All new telemetry rides **typed event-bus contracts**
-(charter §6.6), not a new lane. Garden placement follows the fleet topology: **fleet-level
-room/arbiter state and per-room telemetry live in the Fleet Command section**, while
-**companion-specific participation logging lives at the companion level**. New settings get
-**owner-file homes** in the canonical JSON config domain (autonomy levels with
-companion/fleet/room resolution, lease duration/tie-break weights, room-episode pressure formula,
-appraisal window/cooldowns, social-pot cap and draw fraction, capsule queue cap, disclosure
-classifier config); room-level autonomy is shared/world config under Law 35 governance.
 
 Useful content-free events:
 
@@ -2039,17 +1633,6 @@ This is sequencing guidance, not an issue decomposition.
 
 Each stage should extend current primitives rather than create parallel policy paths.
 
-**Settled — migration (adjudication, 2026-07-19).** Migration is a **one-time deterministic flip of
-existing free-time history to private**, then go. There is **no adoption cliff**: in a single-partner
-deployment the partner is the highest-trust contact, so flipping free-time history to private changes
-nothing they can see — the companion still discusses her private work with her partner, and that
-must remain true post-migration. Group sharing is net-new capability, so existing groups lose
-nothing. The two hardcoded transcript lanes and the `self | primary_contact | public` project
-visibilities get a deterministic enum mapping into work contexts; ambiguous records are quarantined
-rather than guessed. The known estate is small enough to run the flip once. (Topology note: the
-next deploy is Kubernetes with a `companions.json` fleet manifest of one-or-more entries, so
-migration runs against the always-fleet shape.)
-
 ## 22. Reviewer attack list
 
 Independent reviewers should try to refute the design with concrete failure scenarios:
@@ -2080,15 +1663,6 @@ Independent reviewers should try to refute the design with concrete failure scen
 20. Can the design preserve the warm single-partner experience while failing closed only on real
     cross-contact ambiguity?
 
-**Resolution notes (adjudication, 2026-07-19).** The identity attacks (#10-adjacent) are addressed
-in §8.5: machine-vs-human identity is resolved by the **platform bot flag** (companion accounts are
-bot-tagged integrations; cross-hardware recognition already works), unknown accounts are charged as
-human and are never leaseholders, and a **hostile human named after a companion cannot capture
-arbitration priority** because name collisions are resolved by **contextual appraisal** (§8.2), not
-string match. The reaction side-channel (#12) is closed by adding reactions to the canary egress set
-and behind the destination check (§8.3). The private-timing oracle (#9) is narrowed to DM/pairwise
-content (§6.6/§8.6).
-
 ## 23. Decision ledger
 
 ### 23.1 Settled
@@ -2111,63 +1685,24 @@ content (§6.6/§8.6).
 - Future deliberate human-reviewed private sharing.
 - Future Garden member view is read-only and contact/session-scoped.
 
-Settled by the 2026-07-19 adjudication (full text in §4 items 31–44):
-
-- Disclosure lineage/policy **extends CogSec**; the net-new outbound destination-eligibility gate
-  lives in CogSec and composes with existing sink gates (§9.0).
-- Speaking arbiter is **gateway-owned, Postgres-backed**, per-channel, two-phase, signaling over
-  ICP (including cross-installation via ICP federation); **ICP dominates social** (§8.5).
-- Fatigue: dyadic + `channelSettingLimits` retained; per-companion **social pot** (ICP at priority)
-  with per-channel draw caps; room-episode pressure non-monetary; **continuous `cap/24` hourly
-  regeneration**; overfatigue is the in-context wind-down (§12.6).
-- Participation appraiser is **group-chat-only**, summons-triggered, cheap ternary, tool-less,
-  datamarked, reusing the group-salience detector and `ObservedGroupMemoryScheduler`; telemetry now,
-  charge later; each companion pays its own (§8.1–8.2).
-- Reactions on the existing seam (standard + guild-custom emojis) and in the canary egress set
-  (§8.3).
-- Privacy: **DM/pairwise sanctity** absolute; free-time/journaling existence not secret; return
-  notes are channel-scoped **system notes, never partner speech** (§6.6, §10.8).
-- Room classification: derived invite-only default valid for autonomous lanes; **confirmation only
-  on invite-only → public** (fresh epoch); narrowing tightens forward only (§9.3).
-- Publication: review lifecycle in CogSec; provenance surfaced on the **existing Garden approvals
-  page**; companion-owned edit loop; capsule reuse as generative input needs fresh approval
-  (§10.10–10.11).
-- Lifecycle: kick keeps the project workable (rejoin may resume); channel deletion keeps
-  memories/artifacts; contacts archived not deleted; migration is a one-time flip to private (§18,
-  §21).
-- Identity by platform **bot flag**; name collisions by contextual appraisal (§8.5, §22).
-- Discord **voice channels are Location-scoped** (§17).
-- Room entry is consent; large-public-room posture recorded; block list dual-purpose (§8.7).
-- `RestWindowPolicyPort` adopted; typed event-bus telemetry with fleet/companion Garden placement;
-  owner-file homes for new settings (§10.2, §19).
-- Target topology is **always a fleet** (Kubernetes, `companions.json` of one-or-more).
-
 ### 23.2 Provisional
 
 - Exact autonomy-level names.
-- Exact Participation Appraisal model/prompt and context-window size. (Scope, cost posture, and
-  tool-less/datamarked discipline are settled — §8.2; only the exact model/prompt/window remain
-  open.)
-- Lease duration and tie-breaking weights. (The two-phase gateway lease *shape* is settled — §8.5.)
-- Room-episode pressure formula. (The mechanism — per-channel, non-monetary — is settled — §12.6.)
-- Exact social-pot cap and per-channel draw fraction, and the exact regeneration constant. (The
-  pot + `cap/24` regeneration *model* is settled — §12.6.)
-- Exact Disclosure Lineage schema and invalidation mechanism, as a projection over the CogSec
-  substrate. (The CogSec-extension placement is settled — §9.0.)
+- Exact Participation Appraisal model/prompt and context-window size.
+- Lease duration and tie-breaking weights.
+- Room-episode pressure formula.
+- Whether a capped multi-companion group surcharge is needed.
+- Exact Disclosure Lineage schema and invalidation mechanism.
 - Markdown sidecar representation.
-- Exact free-time chooser interaction. (Silence persistence behind `RestWindowPolicyPort` is
-  settled — §10.2.)
-- Exact project-manifest version. (The one-time migration approach is settled — §21.)
+- Exact free-time chooser interaction and silence persistence.
+- Exact project-manifest version/migration.
 - EmoSim's suitability as the authoritative Social Pressure Signal source.
 - Social satiation effects for reactions, humans, companions, co-presence, rejection, and silence.
-- Approved Share Capsule queue cap and use/expiry defaults. (The generative-reuse-needs-fresh-
-  approval rule is settled — §10.11.)
+- Approved Share Capsule queue cap and use/expiry defaults.
 
 ### 23.3 Deferred
 
-- EmoSim calibration changes pending experiment review. **Confirmed deferred (adjudication):** the
-  observer sidecar remains **telemetry-only during the tuning period**; the chronic-denial damping
-  question returns only when EmoSim promotion is actually considered.
+- EmoSim calibration changes pending experiment review.
 - External publication adapters.
 - Automatic release policy for public-clean work.
 - Full private-to-social approval workflow.
@@ -2191,10 +1726,6 @@ Settled by the 2026-07-19 adjudication (full text in §4 items 31–44):
 - [`config/charge-policy.seed.json`](../config/charge-policy.seed.json)
 - [`src/core/eval/observer-sidecar/levers.ts`](../src/core/eval/observer-sidecar/levers.ts)
 - [`src/operator/garden/garden-request-context.ts`](../src/operator/garden/garden-request-context.ts)
-- [`src/shared/contracts/intake-envelope.ts`](../src/shared/contracts/intake-envelope.ts)
-- [`src/core/cogsec/intake/sink-gates.ts`](../src/core/cogsec/intake/sink-gates.ts)
-- [`src/core/cogsec/lineage.ts`](../src/core/cogsec/lineage.ts)
-- [`src/faculties/memory/extraction/group-observed-scheduler.ts`](../src/faculties/memory/extraction/group-observed-scheduler.ts)
 - [`docs/context-envelope.md`](../docs/context-envelope.md)
 - [`working_docs/GROUPCHAT_PROMPT_TRUST_FOUNDATION_PLAN_20260701.md`](./GROUPCHAT_PROMPT_TRUST_FOUNDATION_PLAN_20260701.md)
 - [`working_docs/introspection-freetime-review-20260714.md`](./introspection-freetime-review-20260714.md)

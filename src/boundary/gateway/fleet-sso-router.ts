@@ -46,39 +46,29 @@ import {
   privacyBreakGlassResourceKindForRoute,
   privacyBreakGlassSubjectScopeDigest,
 } from '../../shared/contracts/privacy-break-glass.js';
-import { buildGardenCapabilityHeaders } from '../fleet-auth/garden-capability-context.js';
 import { createSpiffeCheckServerIdentity } from '../../shared/net/mtls.js';
 import { createCompanionId, type CompanionId } from '../../shared/routing/companion-id.js';
 import { isRfc4122Uuid } from '../../shared/utils/types.js';
 import { timingSafeStringEqual } from '../../shared/utils/secret-compare.js';
-import {
-  parseFleetModelUsageResourceQuery,
-  resolveFleetModelUsageInternalRequestTarget,
-} from '../../shared/telemetry/fleet-model-usage-request.js';
-import {
-  CompanionScopedGardenRouteError,
-  FLEET_SSO_COMPANION_ROUTE_PREFIX,
-  parseCompanionScopedGardenRoute,
-  parseFleetSsoOuterTarget,
-  type FleetSsoGardenUpstream,
-} from '../fleet-auth/fleet-sso-transport.js';
+import type { FleetSsoGardenUpstream } from '../fleet-auth/fleet-sso-transport.js';
 import {
   FLEET_PORTAL_API_PATH,
   GatewayFleetPortalHttpRoutes,
 } from './fleet-portal-http-routes.js';
 import type { GatewayFleetPortalProjection } from './fleet-portal-projection.js';
 import {
-  FleetGardenUiAssets,
-  type FleetGardenUiAssetsPort,
-} from './fleet-garden-ui-assets.js';
+  FLEET_MODEL_USAGE_API_PATH,
+  GatewayFleetModelUsageHttpRoutes,
+} from './fleet-model-usage-http-routes.js';
+import type { FleetModelUsageProjectionPort } from './fleet-model-usage-projection.js';
 
 const SESSION_COOKIE_NAME = '__Host-psfn_session';
 const MAX_PROXY_BODY_BYTES = 1_048_576;
 const MAX_CAPABILITY_HEADER_BYTES = 65_536;
 const FLEET_PATH = '/fleet';
 const FLEET_LOGIN_PATH = '/fleet/login';
-const FLEET_GARDEN_CHAT_PATH = '/v1/chat/completions';
-const COMPANION_PREFIX = FLEET_SSO_COMPANION_ROUTE_PREFIX;
+const COMPANION_PREFIX = '/companions/';
+const GARDEN_MARKER = '/garden';
 const COMPANION_UI_PREFIX = '/companion-ui';
 export const FLEET_JIT_GRANT_HEADER = 'x-psfn-jit-grant';
 const FORWARDED_HEADERS = Object.freeze([
@@ -137,7 +127,7 @@ export interface GatewayFleetSsoRouterOptions extends FleetSsoTrustedOriginOptio
   readonly verifier: RequestCapabilityVerifier;
   readonly replay: RequestCapabilityReplayPort;
   readonly portalProjection: Pick<GatewayFleetPortalProjection, 'resolve'>;
-  readonly portalUi?: FleetGardenUiAssetsPort;
+  readonly modelUsageProjection: FleetModelUsageProjectionPort;
   readonly jitStepUp?: Pick<FleetJitStepUpCoordinator, 'consumeGrant'>;
   readonly upstreams: readonly FleetSsoGardenUpstream[];
   readonly companionUi?: {
@@ -146,18 +136,6 @@ export interface GatewayFleetSsoRouterOptions extends FleetSsoTrustedOriginOptio
   };
   readonly nowSeconds?: () => number;
 }
-
-export interface FleetGardenChatAdmission {
-  readonly request: IncomingMessage;
-  readonly response: ServerResponse;
-  readonly body: Buffer;
-  readonly companionId: CompanionId;
-  readonly authorization: FleetAuthorizationContext;
-}
-
-export type FleetGardenChatHandler = (
-  admission: FleetGardenChatAdmission,
-) => Promise<void>;
 
 interface ParsedGardenRoute {
   companionId: CompanionId;
@@ -260,57 +238,39 @@ function readOpaqueSessionCookie(request: IncomingMessage): string | undefined {
   return values[0];
 }
 
-/**
- * The gateway and the fleet Garden control plane share one companion-scoped
- * route parser (`parseCompanionScopedGardenRoute`) so both hops bind exactly
- * the same companion selection for the same request bytes. This wrapper only
- * translates shared parse failures into unified-origin protocol errors.
- */
 function parseOuterPath(rawTarget: string): { rawPath: string; rawQuery: string } {
-  try {
-    return parseFleetSsoOuterTarget(rawTarget);
-  } catch (error) {
-    if (error instanceof CompanionScopedGardenRouteError) {
-      throw new FleetSsoRequestError(400, 'Unified-origin request target is invalid');
-    }
-    throw error;
+  if (!rawTarget.startsWith('/') || rawTarget.startsWith('//') || rawTarget.includes('#')
+    || rawTarget.includes('\\') || /%2f|%5c/iu.test(rawTarget)) {
+    throw new FleetSsoRequestError(400, 'Unified-origin request target is invalid');
   }
+  const question = rawTarget.indexOf('?');
+  const rawPath = question < 0 ? rawTarget : rawTarget.slice(0, question);
+  const rawQuery = question < 0 ? '' : rawTarget.slice(question + 1);
+  if (rawQuery.includes('?') || rawPath.includes('//') || /(?:^|\/)\.\.?($|\/)/u.test(rawPath)) {
+    throw new FleetSsoRequestError(400, 'Unified-origin request target is invalid');
+  }
+  return { rawPath, rawQuery };
 }
 
 function parseGardenRoute(rawTarget: string): ParsedGardenRoute | undefined {
-  let route;
-  try {
-    route = parseCompanionScopedGardenRoute(rawTarget);
-  } catch (error) {
-    if (error instanceof CompanionScopedGardenRouteError) {
-      throw new FleetSsoRequestError(
-        error.code === 'not_found' ? 404 : 400,
-        error.code === 'not_found' ? 'Resource not found' : 'Unified-origin request target is invalid',
-      );
-    }
-    throw error;
+  const { rawPath, rawQuery } = parseOuterPath(rawTarget);
+  if (!rawPath.startsWith(COMPANION_PREFIX)) return undefined;
+  const rest = rawPath.slice(COMPANION_PREFIX.length);
+  const slash = rest.indexOf('/');
+  if (slash < 0) throw new FleetSsoRequestError(404, 'Resource not found');
+  const rawCompanionId = rest.slice(0, slash);
+  const afterCompanion = rest.slice(slash);
+  if (!isRfc4122Uuid(rawCompanionId) || !afterCompanion.startsWith(GARDEN_MARKER)
+    || (afterCompanion.length > GARDEN_MARKER.length
+      && afterCompanion[GARDEN_MARKER.length] !== '/')) {
+    throw new FleetSsoRequestError(404, 'Resource not found');
   }
-  if (!route) return undefined;
+  const gardenPath = afterCompanion.slice(GARDEN_MARKER.length) || '/';
   return {
-    companionId: route.companionId,
-    upstreamTarget: route.innerTarget,
-    publicPrefix: route.publicPrefix,
+    companionId: createCompanionId(rawCompanionId, 'unified-origin companionId'),
+    upstreamTarget: rawQuery ? `${gardenPath}?${rawQuery}` : gardenPath,
+    publicPrefix: `${COMPANION_PREFIX}${rawCompanionId}${GARDEN_MARKER}`,
   };
-}
-
-/**
- * The consolidated fleet Garden derives the companion binding from the
- * canonical companion-scoped route (garden-control-plane invariant 3), so
- * fleet upstreams receive the full public target. A single-companion operator
- * surface admits the inner target directly against its fixed companion.
- */
-function upstreamRequestTarget(
-  upstream: FleetSsoGardenUpstream,
-  route: ParsedGardenRoute,
-): string {
-  return upstream.companionScopedTarget
-    ? `${route.publicPrefix}${route.upstreamTarget}`
-    : route.upstreamTarget;
 }
 
 async function readBoundedBody(request: IncomingMessage): Promise<Buffer> {
@@ -422,7 +382,7 @@ function requestOptions(
 export class GatewayFleetSsoRouter {
   private readonly upstreams: ReadonlyMap<string, FleetSsoGardenUpstream>;
   private readonly portalRoutes: GatewayFleetPortalHttpRoutes;
-  private gardenChatHandler: FleetGardenChatHandler | null = null;
+  private readonly modelUsageRoutes: GatewayFleetModelUsageHttpRoutes;
 
   constructor(private readonly options: GatewayFleetSsoRouterOptions) {
     const canonical = new URL(options.canonicalOrigin);
@@ -434,7 +394,9 @@ export class GatewayFleetSsoRouter {
     }
     this.portalRoutes = new GatewayFleetPortalHttpRoutes({
       projection: options.portalProjection,
-      ui: options.portalUi ?? new FleetGardenUiAssets(),
+    });
+    this.modelUsageRoutes = new GatewayFleetModelUsageHttpRoutes({
+      projection: options.modelUsageProjection,
     });
     const entries = options.upstreams.map((upstream) => {
       if (upstream.origin.username || upstream.origin.password || upstream.origin.pathname !== '/'
@@ -471,24 +433,16 @@ export class GatewayFleetSsoRouter {
     try {
       const { rawPath } = parseOuterPath(rawTarget);
       return rawPath === FLEET_PATH || rawPath === `${FLEET_PATH}/`
-        || rawPath.startsWith(`${FLEET_PATH}/_app/`)
-        || rawPath.startsWith('/_app/')
         || rawPath === FLEET_LOGIN_PATH || rawPath.startsWith(FLEET_PORTAL_API_PATH)
+        || rawPath === FLEET_MODEL_USAGE_API_PATH
         || rawPath.startsWith(COMPANION_PREFIX)
         || rawPath === COMPANION_UI_PREFIX || rawPath.startsWith(`${COMPANION_UI_PREFIX}/`);
     } catch {
       return rawTarget.startsWith(FLEET_PATH) || rawTarget.startsWith(FLEET_PORTAL_API_PATH)
-        || rawTarget.startsWith('/_app/')
+        || rawTarget.startsWith(FLEET_MODEL_USAGE_API_PATH)
         || rawTarget.startsWith(COMPANION_PREFIX)
         || rawTarget.startsWith(COMPANION_UI_PREFIX);
     }
-  }
-
-  registerGardenChatHandler(handler: FleetGardenChatHandler): void {
-    if (this.gardenChatHandler) {
-      throw new Error('Fleet SSO Garden chat handler is already registered');
-    }
-    this.gardenChatHandler = handler;
   }
 
   async handle(request: IncomingMessage, response: ServerResponse): Promise<void> {
@@ -528,10 +482,24 @@ export class GatewayFleetSsoRouter {
           this.portalRoutes.sendUnauthenticated(response);
           return;
         }
+        if (rawPath === FLEET_MODEL_USAGE_API_PATH) {
+          this.modelUsageRoutes.sendUnauthenticated(response);
+          return;
+        }
         throw new FleetSsoRequestError(401, 'Authentication required');
       }
       if (this.portalRoutes.matches(rawPath) || rawPath.startsWith(FLEET_PORTAL_API_PATH)) {
         await this.portalRoutes.handle({
+          request,
+          response,
+          sessionToken,
+          rawPath,
+          rawQuery,
+        });
+        return;
+      }
+      if (this.modelUsageRoutes.matches(rawPath)) {
+        await this.modelUsageRoutes.handle({
           request,
           response,
           sessionToken,
@@ -552,20 +520,6 @@ export class GatewayFleetSsoRouter {
         headers: request.headers,
         body,
       });
-      if (route.upstreamTarget === FLEET_GARDEN_CHAT_PATH
-        && request.method === 'POST') {
-        if (!this.gardenChatHandler) {
-          throw new FleetSsoRequestError(503, 'Fleet Garden chat is unavailable');
-        }
-        await this.gardenChatHandler({
-          request,
-          response,
-          body,
-          companionId: route.companionId,
-          authorization: issued.context,
-        });
-        return;
-      }
       await this.proxyHttp(request, response, upstream, route, body, issued);
     } catch (error) {
       if (response.writableEnded || response.destroyed) return;
@@ -640,11 +594,7 @@ export class GatewayFleetSsoRouter {
     method: string;
     headers: IncomingHttpHeaders;
     body: Buffer;
-  }): Promise<{
-    token: string;
-    verified: VerifiedRequestCapability;
-    context: FleetAuthorizationContext;
-  }> {
+  }): Promise<{ token: string; verified: VerifiedRequestCapability }> {
     const targetHeaders = { ...input.headers };
     stripBrowserRequestCapabilityHeaders(targetHeaders);
     const target = compileGatewayGardenRequestTarget({
@@ -737,26 +687,6 @@ export class GatewayFleetSsoRouter {
       }
     }
     const authContext = toRequestCapabilityAuthContext(context);
-    const fleetCompanionIds = target.method === 'GET'
-      && target.canonicalPath === '/api/admin/fleet-model-usage'
-      && target.action === 'models.read'
-      ? await this.resolveFleetModelUsageRoster(
-          input.sessionToken,
-          input.route.companionId,
-          context,
-        )
-      : undefined;
-    let fleetModelUsageRequestTarget: string | undefined;
-    if (fleetCompanionIds) {
-      try {
-        fleetModelUsageRequestTarget = resolveFleetModelUsageInternalRequestTarget(
-          parseFleetModelUsageResourceQuery(target.resource.query),
-          Date.parse(authContext.resolvedAt),
-        );
-      } catch {
-        throw new FleetSsoRequestError(400, 'Invalid fleet model usage query');
-      }
-    }
     const token = this.options.signer.signOperator({
       target,
       requestId,
@@ -766,12 +696,7 @@ export class GatewayFleetSsoRouter {
           ...authContext,
           sessionAssurance: isPrivacyConfirm ? 'break_glass' as const : 'webauthn_uv' as const,
         })
-        : Object.freeze({
-            ...authContext,
-            ...(fleetCompanionIds && fleetModelUsageRequestTarget
-              ? { fleetCompanionIds, fleetModelUsageRequestTarget }
-              : {}),
-          }),
+        : authContext,
       versions,
     });
     if (Buffer.byteLength(token, 'ascii') > MAX_CAPABILITY_HEADER_BYTES) {
@@ -791,38 +716,7 @@ export class GatewayFleetSsoRouter {
     if (replay.outcome !== 'consumed') {
       throw new FleetSsoRequestError(404, 'Resource not found');
     }
-    return { token, verified, context };
-  }
-
-  private async resolveFleetModelUsageRoster(
-    sessionToken: string,
-    selectedCompanionId: CompanionId,
-    selectedContext: FleetAuthorizationContext,
-  ): Promise<readonly string[]> {
-    const resolved = await Promise.all([...this.upstreams.keys()].map(async (companionId) => {
-      const typedCompanionId = createCompanionId(companionId);
-      if (typedCompanionId === selectedCompanionId) return typedCompanionId;
-      try {
-        const context = await this.options.broker.resolveAuthorizationContext({
-          sessionToken,
-          audience: 'fleet',
-          companionId: typedCompanionId,
-          action: 'models.read',
-          correlationId: randomUUID(),
-        });
-        assertAllowedContext(context, typedCompanionId, 'models.read');
-        if (context.principalId !== selectedContext.principalId
-          || context.session.recordId !== selectedContext.session.recordId) {
-          return null;
-        }
-        return typedCompanionId;
-      } catch {
-        return null;
-      }
-    }));
-    return Object.freeze(resolved.flatMap(companionId => (
-      companionId === null ? [] : [companionId]
-    )).sort());
+    return { token, verified };
   }
 
   private proxyHttp(
@@ -833,22 +727,17 @@ export class GatewayFleetSsoRouter {
     body: Buffer,
     issued: { token: string; verified: VerifiedRequestCapability },
   ): Promise<void> {
-    return new Promise<void>((resolve, reject) => {
+    return new Promise((resolve, reject) => {
       const headers = copyRequestHeaders(request.headers);
       headers['content-length'] = String(body.byteLength);
-      // Canonical Garden capability envelope: one token header plus one
-      // canonical context header, exactly what Garden admission consumes.
-      Object.assign(headers, buildGardenCapabilityHeaders({
-        token: issued.token,
-        context: {
-          requestId: issued.verified.requestId,
-          decisionId: issued.verified.decisionId,
-          versions: issued.verified.versions,
-        },
-      }));
+      headers['x-psfn-request-capability'] = issued.token;
+      headers['x-psfn-capability-audience'] = issued.verified.audience;
+      headers['x-psfn-capability-request-id'] = issued.verified.requestId;
+      headers['x-psfn-capability-decision'] = issued.verified.decisionId;
+      headers['x-psfn-capability-jti'] = issued.verified.jti;
       const requestFn = upstream.origin.protocol === 'https:' ? httpsRequest : httpRequest;
       const proxyRequest = requestFn(
-        requestOptions(upstream, request.method ?? 'GET', upstreamRequestTarget(upstream, route), headers),
+        requestOptions(upstream, request.method ?? 'GET', route.upstreamTarget, headers),
         (proxyResponse) => {
           response.writeHead(
             proxyResponse.statusCode ?? 502,
@@ -890,18 +779,14 @@ export class GatewayFleetSsoRouter {
     headers.connection = 'Upgrade';
     headers.upgrade = 'websocket';
     headers['content-length'] = '0';
-    // Canonical Garden capability envelope (see proxyHttp).
-    Object.assign(headers, buildGardenCapabilityHeaders({
-      token: issued.token,
-      context: {
-        requestId: issued.verified.requestId,
-        decisionId: issued.verified.decisionId,
-        versions: issued.verified.versions,
-      },
-    }));
+    headers['x-psfn-request-capability'] = issued.token;
+    headers['x-psfn-capability-audience'] = issued.verified.audience;
+    headers['x-psfn-capability-request-id'] = issued.verified.requestId;
+    headers['x-psfn-capability-decision'] = issued.verified.decisionId;
+    headers['x-psfn-capability-jti'] = issued.verified.jti;
     await new Promise<void>((resolve, reject) => {
       const requestFn = upstream.origin.protocol === 'https:' ? httpsRequest : httpRequest;
-      const proxyRequest = requestFn(requestOptions(upstream, 'GET', upstreamRequestTarget(upstream, route), headers));
+      const proxyRequest = requestFn(requestOptions(upstream, 'GET', route.upstreamTarget, headers));
       proxyRequest.once('upgrade', (proxyResponse, proxySocket, proxyHead) => {
         const rawHeaders: string[] = [];
         for (let index = 0; index < proxyResponse.rawHeaders.length; index += 2) {

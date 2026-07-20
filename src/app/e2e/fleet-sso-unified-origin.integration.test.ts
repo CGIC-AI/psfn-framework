@@ -342,6 +342,30 @@ describe('unified Fleet SSO two-companion process boundary', () => {
           companions: [],
         }),
       },
+      modelUsageProjection: {
+        resolve: async () => ({
+          schemaVersion: 1,
+          generatedAt: new Date(NOW_SECONDS * 1_000).toISOString(),
+          resolvedRange: {
+            range: 'today',
+            timezone: 'UTC',
+            sinceMs: 0,
+            untilMs: NOW_SECONDS * 1_000,
+            bucket: 'hour',
+            boundary: '[sinceMs, untilMs)',
+            calendarWeekStartsOn: 'monday',
+          },
+          combined: {
+            calls: 0,
+            inputTokens: 0,
+            outputTokens: 0,
+            cacheReadTokens: 0,
+            cacheWriteTokens: 0,
+            totalTokens: 0,
+          },
+          companions: [],
+        }),
+      },
       nowSeconds: () => NOW_SECONDS,
     });
     const edge = createServer((request, response) => { void router.handle(request, response); });
@@ -701,6 +725,30 @@ describe('unified Fleet SSO two-companion process boundary', () => {
       verifier,
       replay: { consume: async input => ({ outcome: 'consumed', result: input.consumeResult }) },
       portalProjection,
+      modelUsageProjection: {
+        resolve: async () => ({
+          schemaVersion: 1,
+          generatedAt,
+          resolvedRange: {
+            range: 'today',
+            timezone: 'UTC',
+            sinceMs: 0,
+            untilMs: NOW_SECONDS * 1_000,
+            bucket: 'hour',
+            boundary: '[sinceMs, untilMs)',
+            calendarWeekStartsOn: 'monday',
+          },
+          combined: {
+            calls: 0,
+            inputTokens: 0,
+            outputTokens: 0,
+            cacheReadTokens: 0,
+            cacheWriteTokens: 0,
+            totalTokens: 0,
+          },
+          companions: [],
+        }),
+      },
       nowSeconds: () => NOW_SECONDS,
     });
     const edge = createServer((request, response) => { void router.handle(request, response); });

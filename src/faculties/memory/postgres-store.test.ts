@@ -813,9 +813,10 @@ describe('postgres memory store unit coverage', () => {
       "ALTER TABLE l2_memories ADD COLUMN IF NOT EXISTS provenance_json JSONB NOT NULL DEFAULT '{}'::jsonb;",
     );
     expectMemoryMigrationSqlToContain([
-      'salience_decay_anchor_at BIGINT NOT NULL',
+      'salience_decay_anchor_at BIGINT NOT NULL DEFAULT ((EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::bigint)',
       'ALTER TABLE l2_memories ADD COLUMN IF NOT EXISTS salience_decay_anchor_at BIGINT;',
       'UPDATE l2_memories SET salience_decay_anchor_at = last_accessed WHERE salience_decay_anchor_at IS NULL;',
+      'ALTER TABLE l2_memories ALTER COLUMN salience_decay_anchor_at SET DEFAULT ((EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::bigint);',
       'ALTER TABLE l2_memories ALTER COLUMN salience_decay_anchor_at SET NOT NULL;',
     ]);
     expect(migrationSql).not.toContain('CREATE TABLE IF NOT EXISTS l2_memory_embeddings');

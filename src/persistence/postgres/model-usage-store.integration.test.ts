@@ -79,6 +79,150 @@ async function withStore<T>(handler: (store: PostgresModelUsageStore, pool: Pool
   }
 }
 
+describe('PostgresModelUsageStore fleet token summary', () => {
+  it('returns zero-safe authorized rows and a conserved combined total without widening the allowlist', async () => {
+    if (!harness) throw new Error('Postgres integration harness is unavailable');
+    const database = await harness.createDatabase();
+    const pool = createPostgresPool(database.databaseUrl, {
+      applicationName: 'model-usage-fleet-summary-test',
+      allowExitOnIdle: true,
+      max: 2,
+    });
+    const companionA = '11111111-1111-4111-8111-111111111111';
+    const companionB = '22222222-2222-4222-8222-222222222222';
+    const unauthorizedCompanion = '33333333-3333-4333-8333-333333333333';
+    const zeroUseCompanion = '44444444-4444-4444-8444-444444444444';
+    try {
+      const store = new PostgresModelUsageStore(pool, { fleetAggregation: true });
+      await store.recordUsageEvent({
+        logicalCallId: 'fleet-summary-a',
+        recordedAtMs: Date.parse('2026-07-10T12:00:00.000Z'),
+        status: 'success',
+        callKind: 'chat',
+        attribution: { companionId: companionA, callType: 'chat', purpose: 'chat' },
+        provider: 'litellm',
+        model: 'model-a',
+        inputTokens: 10,
+        outputTokens: 5,
+        cacheReadTokens: 3,
+        cacheWriteTokens: 2,
+      });
+      await store.recordUsageEvent({
+        logicalCallId: 'fleet-summary-b-private',
+        recordedAtMs: Date.parse('2026-07-11T12:00:00.000Z'),
+        status: 'success',
+        callKind: 'completion',
+        telemetryVisibility: 'companion_private',
+        attribution: { companionId: companionB, callType: 'background', purpose: 'background' },
+        provider: 'litellm',
+        model: 'model-b',
+        inputTokens: 20,
+        outputTokens: 7,
+        cacheWriteTokens: 3,
+      });
+      await store.recordUsageEvent({
+        logicalCallId: 'fleet-summary-a-before-custom-range',
+        recordedAtMs: Date.parse('2026-06-15T12:00:00.000Z'),
+        status: 'success',
+        callKind: 'chat',
+        attribution: { companionId: companionA, callType: 'chat', purpose: 'chat' },
+        provider: 'litellm',
+        model: 'model-a',
+        inputTokens: 1,
+        outputTokens: 1,
+      });
+      await store.recordUsageEvent({
+        logicalCallId: 'fleet-summary-unauthorized',
+        recordedAtMs: Date.parse('2026-06-01T12:00:00.000Z'),
+        status: 'success',
+        callKind: 'chat',
+        attribution: {
+          companionId: unauthorizedCompanion,
+          callType: 'chat',
+          purpose: 'chat',
+        },
+        provider: 'litellm',
+        model: 'model-c',
+        inputTokens: 100,
+        outputTokens: 100,
+      });
+
+      const result = await store.getFleetModelUsageSummary({
+        range: 'custom',
+        timezone: 'UTC',
+        sinceMs: Date.parse('2026-07-01T00:00:00.000Z'),
+        untilMs: Date.parse('2026-08-01T00:00:00.000Z'),
+      }, [zeroUseCompanion, companionB, companionA], Date.parse('2026-07-18T16:00:00.000Z'));
+
+      expect(result.companions).toEqual([
+        {
+          companionId: companionA,
+          usage: {
+            calls: 1,
+            inputTokens: 10,
+            outputTokens: 5,
+            cacheReadTokens: 3,
+            cacheWriteTokens: 2,
+            totalTokens: 20,
+          },
+        },
+        {
+          companionId: companionB,
+          usage: {
+            calls: 1,
+            inputTokens: 20,
+            outputTokens: 7,
+            cacheReadTokens: 0,
+            cacheWriteTokens: 3,
+            totalTokens: 30,
+          },
+        },
+        { companionId: zeroUseCompanion, usage: {
+          calls: 0,
+          inputTokens: 0,
+          outputTokens: 0,
+          cacheReadTokens: 0,
+          cacheWriteTokens: 0,
+          totalTokens: 0,
+        } },
+      ]);
+      expect(result.combined).toEqual({
+        calls: 2,
+        inputTokens: 30,
+        outputTokens: 12,
+        cacheReadTokens: 3,
+        cacheWriteTokens: 5,
+        totalTokens: 50,
+      });
+      expect(JSON.stringify(result)).not.toContain(unauthorizedCompanion);
+
+      const implicitCustomRange = await store.getFleetModelUsageSummary({
+        timezone: 'UTC',
+        sinceMs: Date.parse('2026-07-01T00:00:00.000Z'),
+        untilMs: Date.parse('2026-08-01T00:00:00.000Z'),
+      }, [companionA, companionB, zeroUseCompanion], Date.parse('2026-07-18T16:00:00.000Z'));
+      expect(implicitCustomRange.resolvedRange.range).toBe('custom');
+      expect(implicitCustomRange.combined.totalTokens).toBe(50);
+
+      const querySpy = vi.spyOn(pool, 'query');
+      const allRange = await store.getFleetModelUsageSummary(
+        { range: 'all', timezone: 'UTC' },
+        [companionA, companionB, zeroUseCompanion],
+        Date.parse('2026-07-18T16:00:00.000Z'),
+      );
+      const allRangeLedgerReads = querySpy.mock.calls.filter(([statement]) => (
+        typeof statement === 'string' && statement.includes('FROM model_usage_events')
+      ));
+      querySpy.mockRestore();
+      expect(allRangeLedgerReads).toHaveLength(1);
+      expect(allRange.resolvedRange.sinceMs).toBe(Date.parse('2026-06-15T12:00:00.000Z'));
+      expect(allRange.combined.totalTokens).toBe(52);
+    } finally {
+      await pool.end();
+    }
+  }, INTEGRATION_TIMEOUT_MS);
+});
+
 describe('PostgresModelUsageStore private telemetry', () => {
   it('retains aggregate cost while filtering private details and source correlation', async () => {
     await withStore(async (store) => {

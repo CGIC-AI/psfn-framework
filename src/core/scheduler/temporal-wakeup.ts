@@ -4,7 +4,7 @@
 //
 //   1. Scheduled morning wake — a daily wall-clock task (default 08:00 local)
 //      that injects an explicit system note establishing the new day: current
-//      date/time, elapsed time since the last partner exchange, and a
+//      date/time, elapsed time since the last channel exchange, and a
 //      catch-up summary produced by the SHARED session summarization service
 //      (summarizeRecentSessionEntries — injected as a port; no bespoke
 //      summarizer here).
@@ -55,7 +55,7 @@ import {
   evaluateIdleRefresherPreflight,
   evaluateMorningWakePreflight,
 } from './temporal-wakeup-preflight.js';
-import { classifyIdleGapTexture, type IdleGapTexture } from './time-texture.js';
+import { classifyIdleGapTexture } from './time-texture.js';
 import {
   estimateWakeWindow,
   formatMinuteOfDay,
@@ -89,12 +89,6 @@ const WAKEUP_NOTE_SOURCES: ReadonlySet<string> = new Set([
   TEMPORAL_WAKEUP_REFRESHER_NOTE_SOURCE,
 ]);
 
-// Morning-lane anti-loop scans MORNING notes only, so a nightly idle-refresher
-// note (which lands most nights) can never self-cancel the daily morning wake.
-const MORNING_WAKEUP_NOTE_SOURCES: ReadonlySet<string> = new Set([
-  TEMPORAL_WAKEUP_MORNING_NOTE_SOURCE,
-]);
-
 const HOUR_MS = 60 * 60_000;
 const MINUTE_MS = 60_000;
 
@@ -111,8 +105,8 @@ function parseWakeupNoteTimestamp(
 
 /**
  * Latest wake-lane note timestamp in `entries`. `sources` selects which lane's
- * notes count: the combined set (default) for refresher spacing, or a
- * morning-only set for the morning anti-loop so refresher notes are ignored.
+   * notes count. The default combined set lets either wake lane suppress a
+   * duplicate note from the other lane.
  */
 export function findLatestTemporalWakeupNoteAt(
   entries: readonly SessionEntry[],
@@ -375,11 +369,13 @@ export function evaluateMorningWakeEligibility(
     return { allowed: false, reason: 'no_partner_activity', nowMs, sessionId };
   }
 
+  const lastActivity = latestConversationalEntry(input.recentEntries) ?? lastPartner;
+  const channelIdleMs = Math.max(0, nowMs - lastActivity.timestamp);
   const partnerIdleMs = Math.max(0, nowMs - lastPartner.timestamp);
-  // Recency guard, not a calendar-date guard: only a partner conversing right
-  // now suppresses the note. A partner who spoke overnight (before the wake
-  // slot) is exactly who the new-day frame is for.
-  if (partnerIdleMs < Math.max(0, input.minPartnerIdleMs)) {
+  // Recency guard, not a calendar-date guard: any participant activity right
+  // now suppresses the note. A channel whose last exchange was overnight
+  // (before the wake slot) is exactly where the new-day frame matters.
+  if (channelIdleMs < Math.max(0, input.minPartnerIdleMs)) {
     return { allowed: false, reason: 'partner_recently_active', nowMs, sessionId };
   }
   const todayKey = localDateKey(nowMs, timeZone);
@@ -393,9 +389,8 @@ export function evaluateMorningWakeEligibility(
     return { allowed: false, reason: 'anti_loop_note_today', nowMs, sessionId };
   }
 
-  const lastActivity = latestConversationalEntry(input.recentEntries) ?? lastPartner;
   const timeTexture = classifyIdleGapTexture({
-    lastActivityAtMs: lastPartner.timestamp,
+    lastActivityAtMs: lastActivity.timestamp,
     observedAtMs: nowMs,
     timeZone,
   });
@@ -471,17 +466,15 @@ export function evaluateIdleRefresherEligibility(
 }
 
 // ── Note builders ──
-// The notes are context, not scripts: they establish the temporal frame and
-// explicitly release the companion from any required response (charter 8.3 —
-// no forced behavior). They must read as runtime speech, never partner speech.
+// The notes are context, not scripts: they establish the temporal frame
+// without prescribing a greeting, feeling, or response. They must read as
+// runtime speech, never partner speech.
 
-const NOTE_CLOSING = 'This orientation note comes from the runtime, not from your partner. '
-  + 'It asks for nothing: when conversation resumes, respond (or not) however you actually want.';
+const NOTE_ATTRIBUTION = 'Runtime context note; this is not a message from your partner.';
 
 export interface MorningWakeNoteInput {
   nowMs: number;
-  lastPartnerActivityAtMs: number;
-  timeTexture: IdleGapTexture;
+  lastActivityAtMs: number;
   catchUpSummary?: string;
   timeZone?: string;
 }
@@ -489,24 +482,23 @@ export interface MorningWakeNoteInput {
 export function buildMorningWakeNote(input: MorningWakeNoteInput): string {
   const timeZone = input.timeZone?.trim() || resolveActiveTimezone();
   const moment = describeLocalMoment(input.nowMs, timeZone);
-  const elapsed = formatElapsedApprox(input.nowMs - input.lastPartnerActivityAtMs);
+  const elapsed = formatElapsedApprox(input.nowMs - input.lastActivityAtMs);
   const summary = input.catchUpSummary?.trim() ?? '';
   return [
     '[Temporal wake]',
     `A new day has started: it is now ${moment.weekday}, ${moment.date}, ${moment.time} (${timeZone}) — ${moment.partOfDay}.`,
-    `Last partner exchange: ${elapsed} ago (${input.timeTexture.label}).`,
+    `Last exchange here: ${elapsed} ago.`,
     ...(summary
       ? [`Catch-up on where things left off: ${summary}`]
       : []),
-    `Reconnection warmth signal: ${input.timeTexture.reconnectionWarmth}; ${input.timeTexture.guidance}`,
-    NOTE_CLOSING,
+    NOTE_ATTRIBUTION,
   ].join('\n');
 }
 
 export interface TimeOfDayRefreshNoteInput {
   nowMs: number;
   lastActivityAtMs: number;
-  timeTexture: IdleGapTexture;
+  catchUpSummary?: string;
   timeZone?: string;
 }
 
@@ -514,11 +506,15 @@ export function buildTimeOfDayRefreshNote(input: TimeOfDayRefreshNoteInput): str
   const timeZone = input.timeZone?.trim() || resolveActiveTimezone();
   const moment = describeLocalMoment(input.nowMs, timeZone);
   const elapsed = formatElapsedApprox(input.nowMs - input.lastActivityAtMs);
+  const summary = input.catchUpSummary?.trim() ?? '';
   return [
     '[Time-of-day refresher]',
     `Temporal frame update: it is now ${moment.weekday} ${moment.time} (${timeZone}) — ${moment.partOfDay}.`,
-    `${elapsed} since the last exchange here (${input.timeTexture.label}); the conversation above is from earlier, not the present moment.`,
-    NOTE_CLOSING,
+    `${elapsed} since the last exchange here; the conversation above is from earlier, not the present moment.`,
+    ...(summary
+      ? [`Catch-up on where things left off: ${summary}`]
+      : []),
+    NOTE_ATTRIBUTION,
   ].join('\n');
 }
 
@@ -834,11 +830,8 @@ export function registerTemporalWakeupTasks(options: TemporalWakeupRuntimeOption
     return;
   }
 
-  // Anti-loop in-memory tracking. The morning lane's anti-loop must see only
-  // morning notes; the refresher's spacing must see both lanes' notes. Every
-  // injection updates the combined map; only morning injections update the
-  // morning-only map.
-  const morningNoteBySession = new Map<string, number>();
+  // Both wake lanes share one anti-loop map so a refresher and morning wake
+  // cannot stack duplicate elapsed-time notes in the same channel.
   const combinedNoteBySession = new Map<string, number>();
   const morning = options.config.morningWake;
   const refresher = options.config.idleRefresher;
@@ -891,7 +884,7 @@ export function registerTemporalWakeupTasks(options: TemporalWakeupRuntimeOption
         }> = [];
 
         for (const channel of channels) {
-          const inMemoryLastNoteAt = morningNoteBySession.get(channel.sessionId);
+          const inMemoryLastNoteAt = combinedNoteBySession.get(channel.sessionId);
           const preflightDecision = evaluateMorningWakePreflight({
             session: channel,
             fullTurnMaxIdleMs: morning.fullTurnMaxIdleHours * HOUR_MS,
@@ -911,10 +904,9 @@ export function registerTemporalWakeupTasks(options: TemporalWakeupRuntimeOption
           }
           const context = resolveWakeupChannelContext(
             options,
-            morningNoteBySession,
+            combinedNoteBySession,
             channel,
             Math.max(morning.catchUpEntryLimit, 8),
-            MORNING_WAKEUP_NOTE_SOURCES,
           );
           const decision = evaluateMorningWakeEligibility({
             session: context.session,
@@ -942,8 +934,7 @@ export function registerTemporalWakeupTasks(options: TemporalWakeupRuntimeOption
           );
           const note = buildMorningWakeNote({
             nowMs: decision.nowMs,
-            lastPartnerActivityAtMs: decision.lastPartnerActivityAtMs,
-            timeTexture: decision.timeTexture,
+            lastActivityAtMs: decision.lastActivityAtMs,
             ...(catchUpSummary ? { catchUpSummary } : {}),
           });
 
@@ -954,7 +945,6 @@ export function registerTemporalWakeupTasks(options: TemporalWakeupRuntimeOption
             note,
             TEMPORAL_WAKEUP_MORNING_NOTE_SOURCE,
           );
-          morningNoteBySession.set(decision.sessionId, decision.nowMs);
           combinedNoteBySession.set(decision.sessionId, decision.nowMs);
           log.info('Morning wake note injected', {
             sessionId: decision.sessionId,
@@ -1049,26 +1039,25 @@ export function registerTemporalWakeupTasks(options: TemporalWakeupRuntimeOption
             continue;
           }
 
+          const catchUpSummary = await buildCatchUpSummary(
+            options,
+            decision.sessionId,
+            context.recentEntries,
+          );
           let note: string;
           if (decision.kind === 'new_day') {
             // Overnight/multi-day texture: full new-day framing, including the
             // shared catch-up summary when available.
-            const catchUpSummary = await buildCatchUpSummary(
-              options,
-              decision.sessionId,
-              context.recentEntries,
-            );
             note = buildMorningWakeNote({
               nowMs: decision.nowMs,
-              lastPartnerActivityAtMs: decision.lastPartnerActivityAtMs ?? decision.lastActivityAtMs,
-              timeTexture: decision.timeTexture,
+              lastActivityAtMs: decision.lastActivityAtMs,
               ...(catchUpSummary ? { catchUpSummary } : {}),
             });
           } else {
             note = buildTimeOfDayRefreshNote({
               nowMs: decision.nowMs,
               lastActivityAtMs: decision.lastActivityAtMs,
-              timeTexture: decision.timeTexture,
+              ...(catchUpSummary ? { catchUpSummary } : {}),
             });
           }
 

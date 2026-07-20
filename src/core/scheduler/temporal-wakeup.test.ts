@@ -33,7 +33,6 @@ import {
   TEMPORAL_WAKEUP_REFRESHER_TASK_ID,
   type TemporalWakeupSessionManagerPort,
 } from './temporal-wakeup.js';
-import { classifyIdleGapTexture } from './time-texture.js';
 
 const DAY1_EVENING = Date.parse('2026-06-10T21:58:00.000Z');
 const DAY1_NIGHT = Date.parse('2026-06-10T22:00:00.000Z');
@@ -215,24 +214,32 @@ describe('evaluateMorningWakeEligibility', () => {
     })).toMatchObject({ allowed: false, reason: 'anti_loop_note_today' });
   });
 
-  it('fires even when only an idle-refresher note landed overnight (source-filtered anti-loop)', () => {
-    // The runtime feeds the anti-loop a morning-only scan, so a refresher note
-    // timestamped after midnight never self-cancels the daily wake.
+  it('does not stack a morning note after an idle-refresher note landed today', () => {
     const refresherAt = Date.parse('2026-06-11T02:34:00.000Z');
     const persisted = [wakeNoteEntry(refresherAt, TEMPORAL_WAKEUP_REFRESHER_NOTE_SOURCE)];
-    const morningOnly = new Set([TEMPORAL_WAKEUP_MORNING_NOTE_SOURCE]);
-    // Combined scan sees the refresher note; the morning-only scan does not.
-    expect(findLatestTemporalWakeupNoteAt(persisted)).toBe(refresherAt);
-    const morningNoteAt = findLatestTemporalWakeupNoteAt(persisted, morningOnly);
-    expect(morningNoteAt).toBeUndefined();
+    const latestWakeNoteAt = findLatestTemporalWakeupNoteAt(persisted);
+    expect(latestWakeNoteAt).toBe(refresherAt);
     expect(evaluateMorningWakeEligibility({
       session,
       recentEntries: [entry({ role: 'user', timestamp: DAY1_EVENING })],
       fullTurnMaxIdleMs: 72 * 60 * 60_000,
       minPartnerIdleMs: 60 * 60_000,
       nowMs: DAY2_MORNING,
-      ...(morningNoteAt !== undefined ? { lastWakeupNoteAtMs: morningNoteAt } : {}),
-    })).toMatchObject({ allowed: true });
+      ...(latestWakeNoteAt !== undefined ? { lastWakeupNoteAtMs: latestWakeNoteAt } : {}),
+    })).toMatchObject({ allowed: false, reason: 'anti_loop_note_today' });
+  });
+
+  it('uses the latest group-channel message by any participant for morning recency', () => {
+    expect(evaluateMorningWakeEligibility({
+      session,
+      recentEntries: [
+        entry({ role: 'user', authorId: 'participant-a', timestamp: DAY1_EVENING }),
+        entry({ role: 'assistant', timestamp: DAY2_MORNING - 5 * 60_000 }),
+      ],
+      fullTurnMaxIdleMs: 72 * 60 * 60_000,
+      minPartnerIdleMs: 60 * 60_000,
+      nowMs: DAY2_MORNING,
+    })).toMatchObject({ allowed: false, reason: 'partner_recently_active' });
   });
 
   it('requires partner activity and blocks internal/public sessions', () => {
@@ -335,6 +342,28 @@ describe('evaluateIdleRefresherEligibility', () => {
       idleGapMs: lateAfternoon - noon,
     });
   });
+
+  it('measures a group-channel gap from the latest message by any participant', () => {
+    const firstParticipantAt = Date.parse('2026-06-11T09:00:00.000Z');
+    const otherParticipantAt = Date.parse('2026-06-11T11:30:00.000Z');
+    const observedAt = Date.parse('2026-06-11T18:00:00.000Z');
+    const decision = evaluateIdleRefresherEligibility({
+      session,
+      recentEntries: [
+        entry({ role: 'user', authorId: 'participant-a', timestamp: firstParticipantAt }),
+        entry({ role: 'user', authorId: 'participant-b', timestamp: otherParticipantAt }),
+      ],
+      minIdleMs: 4 * 60 * 60_000,
+      minNoteIntervalMs: 0,
+      nowMs: observedAt,
+    });
+
+    expect(decision).toMatchObject({
+      allowed: true,
+      lastActivityAtMs: otherParticipantAt,
+      idleGapMs: observedAt - otherParticipantAt,
+    });
+  });
 });
 
 describe('findLatestTemporalWakeupNoteAt', () => {
@@ -354,16 +383,10 @@ describe('findLatestTemporalWakeupNoteAt', () => {
 });
 
 describe('note builders', () => {
-  it('builds a new-day note with date, elapsed partner gap, and catch-up summary — no scripted greeting', () => {
-    const texture = classifyIdleGapTexture({
-      lastActivityAtMs: DAY1_EVENING,
-      observedAtMs: DAY2_MORNING,
-      timeZone: 'UTC',
-    });
+  it('builds a new-day note with date, elapsed channel gap, and catch-up summary — no scripted greeting', () => {
     const note = buildMorningWakeNote({
       nowMs: DAY2_MORNING,
-      lastPartnerActivityAtMs: DAY1_EVENING,
-      timeTexture: texture,
+      lastActivityAtMs: DAY1_EVENING,
       catchUpSummary: 'You and Ada wrapped up the garden plans before bed.',
       timeZone: 'UTC',
     });
@@ -372,12 +395,13 @@ describe('note builders', () => {
     expect(note).toContain('08:05');
     expect(note).toContain('morning');
     expect(note).toContain('10 hours 7 minutes ago');
-    expect(note).toContain('overnight gap');
     expect(note).toContain('You and Ada wrapped up the garden plans before bed.');
-    expect(note).toContain('respond (or not) however you actually want');
+    expect(note).not.toContain('overnight gap');
+    expect(note).not.toContain('Reconnection warmth');
+    expect(note).not.toContain('perform affection');
     // Context, not a script: the runtime never puts greeting words in play.
     expect(note.toLowerCase()).not.toContain('good morning');
-    expect(note).toContain('not from your partner');
+    expect(note).toContain('not a message from your partner');
   });
 
   it('builds a lighter time-of-day refresh note', () => {
@@ -386,14 +410,14 @@ describe('note builders', () => {
     const note = buildTimeOfDayRefreshNote({
       nowMs,
       lastActivityAtMs: lastAt,
-      timeTexture: classifyIdleGapTexture({ lastActivityAtMs: lastAt, observedAtMs: nowMs, timeZone: 'UTC' }),
       timeZone: 'UTC',
     });
     expect(note).toContain('[Time-of-day refresher]');
     expect(note).toContain('15:30');
     expect(note).toContain('afternoon');
     expect(note).toContain('6 hours 30 minutes');
-    expect(note).toContain('long workday gap');
+    expect(note).not.toContain('long workday gap');
+    expect(note).not.toContain('Reconnection warmth');
     expect(note).not.toContain('Catch-up');
   });
 });
@@ -469,6 +493,37 @@ describe('morning wake lane (simulated clock, real session manager)', () => {
     const notes = mgr.getRecentSessionEntries('api:main', 32)
       .filter(e => findLatestTemporalWakeupNoteAt([e]) !== undefined);
     expect(notes).toHaveLength(1);
+  });
+
+  it('does not stack a morning note after a post-midnight refresher note', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(DAY1_EVENING));
+    mgr.recordUserMessage('api:main', 'wrapping up for the night', 'user-1', 'Ada');
+
+    const refresherAt = Date.parse('2026-06-11T02:34:00.000Z');
+    vi.setSystemTime(new Date(refresherAt));
+    mgr.appendContextSystemNote(
+      'api:main',
+      '[Temporal wake]\nElapsed-time context already refreshed.',
+      TEMPORAL_WAKEUP_REFRESHER_NOTE_SOURCE,
+    );
+
+    const scheduler = new Scheduler(new EventBus(), { tickIntervalMs: 60_000, heartbeatIntervalMs: 1_800_000 });
+    registerTemporalWakeupTasks({
+      scheduler,
+      sessionManager: mgr,
+      config: makeWakeConfig({ refresher: { enabled: false } }),
+    });
+
+    vi.setSystemTime(new Date(DAY2_MORNING));
+    await scheduler.tick();
+
+    const wakeNotes = mgr.getRecentSessionEntries('api:main', 16)
+      .filter(entry => findLatestTemporalWakeupNoteAt([entry]) !== undefined);
+    expect(wakeNotes).toHaveLength(1);
+    expect(JSON.parse(wakeNotes[0]?.metadata ?? '{}')).toMatchObject({
+      sessionLane: { source: TEMPORAL_WAKEUP_REFRESHER_NOTE_SOURCE },
+    });
   });
 
   it('does not reset elapsed-time or ambient idle accounting (wake notes are not partner activity)', async () => {
@@ -1024,6 +1079,7 @@ describe('idle refresher lane', () => {
       },
     };
     const scheduler = new Scheduler(new EventBus(), { tickIntervalMs: 60_000, heartbeatIntervalMs: 1_800_000 });
+    const summarizeCatchUp = vi.fn(async () => 'This morning you left off planning the afternoon errands.');
     registerTemporalWakeupTasks({
       scheduler,
       sessionManager: port,
@@ -1031,6 +1087,7 @@ describe('idle refresher lane', () => {
         morning: { enabled: false },
         refresher: { enabled: true, checkIntervalMs: 900_000, minIdleMinutes: 240, minNoteIntervalMinutes: 240 },
       }),
+      summarizeCatchUp,
     });
 
     // Not idle long enough yet.
@@ -1045,6 +1102,8 @@ describe('idle refresher lane', () => {
     expect(appended[0].source).toBe(TEMPORAL_WAKEUP_REFRESHER_NOTE_SOURCE);
     expect(appended[0].note).toContain('[Time-of-day refresher]');
     expect(appended[0].note).toContain('afternoon');
+    expect(appended[0].note).toContain('This morning you left off planning the afternoon errands.');
+    expect(summarizeCatchUp).toHaveBeenCalledTimes(1);
 
     // Anti-loop: the next check does not stack another note.
     vi.setSystemTime(new Date(afternoonAt + 20 * 60_000));

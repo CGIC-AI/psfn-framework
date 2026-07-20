@@ -4,6 +4,7 @@ import type {
   ModelUsageRange,
 } from '../../../../../src/shared/telemetry/model-usage.js';
 import type { FleetModelUsageData } from '../../../../../src/operator/garden/services/fleet-model-usage-service.js';
+import { serializeModelUsageQuery } from './model-usage-query';
 
 export interface FleetModelUsageQuery {
   range?: Exclude<ModelUsageRange, 'all'>;
@@ -27,7 +28,7 @@ export function buildFleetModelUsagePath(query: FleetModelUsageQuery = {}): stri
     const value = query[field];
     if (value !== undefined) params.set(field, String(value));
   }
-  const suffix = params.toString();
+  const suffix = serializeModelUsageQuery(params);
   return `/api/admin/fleet-model-usage${suffix ? `?${suffix}` : ''}`;
 }
 

@@ -127,16 +127,19 @@ describe('fleet model-usage endpoint', () => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify(
       fleetResponse(),
     ), { status: 200 })));
+    const signal = new AbortController().signal;
 
     await expect(getAuthorizedFleetModelUsage(
       `/companions/${COMPANION_A}/garden`,
       { range: 'week', timezone: 'UTC', bucket: 'day' },
+      signal,
     )).resolves.toMatchObject({ deployment: 'fleet' });
     expect(fetch).toHaveBeenCalledWith(
       `/companions/${COMPANION_A}/garden/api/admin/fleet-model-usage?range=week&timezone=UTC&bucket=day`,
       expect.objectContaining({
         cache: 'no-store',
         credentials: 'include',
+        signal,
       }),
     );
     await expect(getAuthorizedFleetModelUsage('/api/admin', {}))

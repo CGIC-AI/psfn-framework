@@ -329,13 +329,23 @@ describe('Garden fleet portal client', () => {
     expect(fleetPage.indexOf('<FleetUsageSummary {companionNames} />'))
       .toBeLessThan(fleetPage.indexOf('{#if loading}'));
     for (const required of [
-      'getAuthorizedFleetModelUsage(requireAuthorizedGardenPath(), query)',
+      'getAuthorizedFleetModelUsage(',
+      'request.signal',
+      'controller?.abort()',
       'Private usage contributes to fleet',
     ]) {
       expect(usagePanel).toContain(required);
     }
     expect(costResults).toContain('Fleet costs unavailable');
     expect(costResults).toContain('privacy-preserving headline total');
+    expect(costResults).toContain('{@const rowSpendShare = spendShare(row)}');
+    expect(costResults).toContain(
+      '{rowSpendShare === null ? EMPTY_VALUE : formatPercent(rowSpendShare)}',
+    );
+    expect(costResults).not.toContain('formatPercent(spendShare(row)');
+    expect(costResults).toContain(
+      '<span class="text-shadow-600">{companionLabel(row)}</span>',
+    );
     for (const required of [
       'Loading authorized fleet usage…',
       'Fleet usage unavailable',

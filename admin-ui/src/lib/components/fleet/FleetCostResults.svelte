@@ -151,9 +151,13 @@
           {#each sortedRows as row (row.companionId)}
             <tr class:opacity-65={row.status === 'unavailable'}>
               <th scope="row" class="px-4 py-3 text-left font-medium text-shadow-900">
-                <a href={companionCostPath(row.companionId)} class="text-gold-700 hover:text-gold-800 hover:underline">
-                  {companionLabel(row)}
-                </a>
+                {#if row.status === 'available'}
+                  <a href={companionCostPath(row.companionId)} class="text-gold-700 hover:text-gold-800 hover:underline">
+                    {companionLabel(row)}
+                  </a>
+                {:else}
+                  <span class="text-shadow-600">{companionLabel(row)}</span>
+                {/if}
                 <span class="mt-0.5 block font-mono text-[0.68rem] font-normal text-shadow-500">{shortId(row.companionId)}</span>
                 {#if row.status === 'available' && row.topModel}
                   <span class="mt-1 block max-w-64 truncate text-xs font-normal text-shadow-500" title={row.topModel.key}>
@@ -164,13 +168,14 @@
                 {/if}
               </th>
               {#if row.status === 'available'}
+                {@const rowSpendShare = spendShare(row)}
                 <td class="px-4 py-3 text-right tabular-nums text-shadow-700">{formatInteger(row.totals.calls)}</td>
                 <td class="px-4 py-3 text-right tabular-nums text-shadow-700">{formatInteger(row.totals.inputTokens)}</td>
                 <td class="px-4 py-3 text-right tabular-nums text-shadow-700">{formatInteger(row.totals.outputTokens)}</td>
                 <td class="px-4 py-3 text-right tabular-nums text-shadow-700">{formatInteger(row.totals.cacheReadTokens)}</td>
                 <td class="px-4 py-3 text-right font-medium tabular-nums text-gold-700">{formatUsd(row.totals.effectiveCost.totalUsd)}</td>
                 <td class="px-4 py-3 text-right tabular-nums text-shadow-700">
-                  {spendShare(row) === null ? EMPTY_VALUE : formatPercent(spendShare(row) ?? undefined)}
+                  {rowSpendShare === null ? EMPTY_VALUE : formatPercent(rowSpendShare)}
                 </td>
               {:else}
                 <td class="px-4 py-3 text-right text-shadow-400">{EMPTY_VALUE}</td>

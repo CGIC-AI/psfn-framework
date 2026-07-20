@@ -1,9 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
 import { DyadRelationshipAdvisoryUnavailableError } from '../../../shared/contracts/dyad-relationship-advisory.js';
 import type { EmoSimAdapterRunResult } from './emosim-adapter.js';
+import { createEmoSimDyadRelationshipAdvisoryProvider } from './dyad-relationship-advisory-provider.js';
 import {
   EMOSIM_DIRECTED_RELATIONSHIP_FORMAT,
-  createEmoSimDyadRelationshipAdvisoryProvider,
   normalizeEmoSimDirectedRelationshipReading,
   parseEmoSimDirectedRelationshipReading,
   renderDyadRelationshipAdvisory,

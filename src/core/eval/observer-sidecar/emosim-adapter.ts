@@ -1,5 +1,9 @@
 import { toErrorMessage } from '../../../shared/utils/errors.js';
 import { isRecord } from '../../../shared/utils/types.js';
+import {
+  normalizeEmoSimDirectedRelationshipReading,
+  type EmoSimDirectedRelationshipReading,
+} from './dyad-relationship.js';
 
 export const EMOSIM_ADAPTER_INPUT_SCHEMA_VERSION = 1 as const;
 export const EMOSIM_ADAPTER_OUTPUT_SCHEMA_VERSION = 2 as const;
@@ -289,6 +293,13 @@ export interface EmoSimAdapterOutput {
     afterTick: EmoSimEngineSnapshot;
   };
   world?: EmoSimWorldSnapshot;
+  /**
+   * The companion agent's outgoing directed relationship reading from the
+   * afterTick session state (advisory, non-authoritative). Absent when emo_sim
+   * carried no companion-directed relationship data or the payload could not be
+   * understood — never fabricated (charter 8.5).
+   */
+  relationship?: EmoSimDirectedRelationshipReading;
 }
 
 export type EmoSimSidecarUnavailableReason =
@@ -446,6 +457,7 @@ export function parseEmoSimAdapterOutput(value: unknown): EmoSimAdapterOutput {
     'kicks',
     'snapshots',
     'world',
+    'relationship',
   ]);
 
   const output: EmoSimAdapterOutput = {
@@ -464,6 +476,12 @@ export function parseEmoSimAdapterOutput(value: unknown): EmoSimAdapterOutput {
 
   if (record.world !== undefined) {
     output.world = normalizeWorldSnapshot(record.world, 'output.world');
+  }
+  if (record.relationship !== undefined && record.relationship !== null) {
+    output.relationship = normalizeEmoSimDirectedRelationshipReading(
+      record.relationship,
+      'output.relationship',
+    );
   }
   return output;
 }

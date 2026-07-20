@@ -504,6 +504,7 @@ export class SpeakingEgressLeasePhase {
     // 5. Social-pot draw — the REAL draw binds here (§8.5). A refusal releases
     //    the reservation and does NOT send.
     let drawOutcome: SocialPotEnforcementOutcome;
+    let drawnUnits = 0;
     try {
       const decision = await enforceSocialPotDraw(this.socialPot, this.config.socialPot, {
         companionId: this.companionId,
@@ -513,6 +514,7 @@ export class SpeakingEgressLeasePhase {
         nowMs: now,
       });
       drawOutcome = decision.outcome;
+      drawnUnits = decision.drawn;
     } catch {
       return { ...base, outcome: 'gate_error', errorStage: 'social_pot' };
     }
@@ -522,7 +524,10 @@ export class SpeakingEgressLeasePhase {
     }
 
     // 6. Acquire the exclusive fenced lease. A decline (live holder or spent
-    //    event) does NOT retry into speech.
+    //    event) does NOT retry into speech. The units just drawn are recorded on
+    //    the lease so the charge is fenced to the same durable, correlation-keyed
+    //    record as the send — a crash between here and delivery leaves the debit
+    //    reconcilable off the lease rather than leaked (jp36.5.3).
     let lease: SpeakingEgressLeaseSnapshot;
     try {
       const acquired = await this.store.acquireEgressLease({
@@ -531,6 +536,7 @@ export class SpeakingEgressLeasePhase {
         channelId,
         nowMs: now,
         expiresAtMs: now + this.config.leaseTtlMs,
+        chargedUnits: drawnUnits,
       });
       if (acquired.outcome === 'declined' || acquired.lease === null) {
         // For an `already_delivered` decline the store already superseded our

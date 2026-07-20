@@ -23,6 +23,23 @@
  *     holder presenting a stale token is rejected at completion — safety; no
  *     double-send on restart.
  *
+ * ## Crash-recovery correlation key (jp36.5.3)
+ *
+ * Autonomous non-ICP (room/social) initiations are placed in the SAME durable
+ * recovery model as ICP's reservation fence (`IcpConversationCorrelation`). The
+ * arbiter's recovery correlation is the fenced egress lease itself: `(channelId,
+ * triggerEventId)` identifies the triggering room event, and the monotonic
+ * per-event `fencingToken` identifies which attempt owns it. A crash between the
+ * fatigue funding draw and delivery must neither double-send nor leak the charge
+ * (review R2). Double-send is already fenced (send-once on speech-terminal +
+ * stale-token rejection); the charge is bound here via {@link
+ * SpeakingEgressLeaseSnapshot.chargedUnits} — the fatigue units drawn for this
+ * lease, recorded on the lease at acquisition so the debit is part of the same
+ * durable, fenced, correlation-keyed record instead of an untracked balance
+ * decrement on the separate social-pot store. On a speech-terminal completion the
+ * charge is permanent; on a reclaimed never-delivered lease it is the refundable
+ * amount. The refund policy that consumes it is the egress-sender lane (qgqw.3).
+ *
  * The Postgres implementation is the durable authority so a gateway reboot loses
  * nothing (adjudication §3 R2 #2: pressure, turns, leases survive reboot). Policy
  * — which candidate wins the lease (speak-least fairness), lease/reservation
@@ -221,6 +238,16 @@ export interface SpeakingEgressLeaseSnapshot {
   episodeId: string;
   /** Monotonically increasing per (channel, triggerEvent). Stale token => rejected. */
   fencingToken: number;
+  /**
+   * Fatigue units drawn from the social pot for this lease's turn, recorded at
+   * acquisition (jp36.5.3). Binds the funding charge to this durable, fenced,
+   * correlation-keyed record so a crash between draw and delivery does not leak
+   * an untracked debit: a speech-terminal lease keeps it (permanent charge), a
+   * reclaimed never-delivered lease carries it as the refundable amount. `0` when
+   * no charge was bound (e.g. an uncharged/human-triggered turn). The refund
+   * wiring that consumes it lives in the egress-sender lane (qgqw.3).
+   */
+  chargedUnits: number;
   acquiredAtMs: number;
   expiresAtMs: number;
   status: SpeakingEgressLeaseStatus;
@@ -278,6 +305,14 @@ export interface AcquireEgressLeaseInput {
   nowMs: number;
   /** Lease deadline; a crashed holder's lease is reclaimable once it lapses. */
   expiresAtMs: number;
+  /**
+   * Fatigue units already drawn from the social pot for this turn (jp36.5.3),
+   * recorded durably on the granted lease so the charge is fenced to the same
+   * correlation-keyed record as the send. Defaults to 0; must be finite and >= 0.
+   * On an idempotent replay of an already-granted lease the stored value is
+   * authoritative — the first grant's charge wins.
+   */
+  chargedUnits?: number;
 }
 
 /**

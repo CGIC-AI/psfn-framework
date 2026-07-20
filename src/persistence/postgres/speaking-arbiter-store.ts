@@ -59,8 +59,8 @@ const RESERVATION_COLUMNS = `
 
 const LEASE_COLUMNS = `
   lease_id, reservation_id, channel_id, trigger_event_id, companion_id,
-  episode_id, fencing_token, status, reason, acquired_at_ms, expires_at_ms,
-  finalized_at_ms, revision
+  episode_id, fencing_token, charged_units, status, reason, acquired_at_ms,
+  expires_at_ms, finalized_at_ms, revision
 `;
 
 interface EpisodeRow extends QueryResultRow {
@@ -104,6 +104,7 @@ interface LeaseRow extends QueryResultRow {
   companion_id: string;
   episode_id: string;
   fencing_token: string | number;
+  charged_units: string | number;
   status: string;
   reason: string | null;
   acquired_at_ms: string | number;
@@ -470,11 +471,18 @@ export class PostgresSpeakingArbiterStore implements SpeakingArbiterStorePort {
     const channelId = requireIdentifier(input.channelId, 'speakingArbiter.channelId');
     const nowMs = requireTimestamp(input.nowMs, 'speakingArbiter.nowMs');
     const expiresAtMs = requireFutureDeadline(input.expiresAtMs, nowMs, 'speakingArbiter.lease.expiresAtMs');
+    // Fatigue units drawn for this turn, bound to the lease so the charge is
+    // fenced to the same correlation-keyed record as the send (jp36.5.3).
+    const chargedUnits = input.chargedUnits === undefined
+      ? 0
+      : requireNonNegativeFinite(input.chargedUnits, 'speakingArbiter.lease.chargedUnits');
     this.assertOpen();
     return await withPostgresClient(this.pool, async (client) => {
       await this.lockChannel(client, channelId);
 
-      // Idempotent replay: a lease already granted under this id is returned as-is.
+      // Idempotent replay: a lease already granted under this id is returned as-is
+      // (the first grant's `charged_units` is authoritative — the draw is not
+      // re-applied on replay).
       const replay = await client.query<LeaseRow>(
         `SELECT ${LEASE_COLUMNS} FROM speaking_egress_leases WHERE lease_id = $1 FOR UPDATE`,
         [leaseId],
@@ -587,10 +595,10 @@ export class PostgresSpeakingArbiterStore implements SpeakingArbiterStorePort {
       const granted = await client.query<LeaseRow>(
         `INSERT INTO speaking_egress_leases (
            lease_id, reservation_id, channel_id, trigger_event_id, companion_id,
-           episode_id, fencing_token, status, reason, acquired_at_ms, expires_at_ms,
-           finalized_at_ms, revision
+           episode_id, fencing_token, charged_units, status, reason, acquired_at_ms,
+           expires_at_ms, finalized_at_ms, revision
          )
-         VALUES ($1, $2, $3, $4, $5, $6, $7, 'held', NULL, $8, $9, NULL, 1)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'held', NULL, $9, $10, NULL, 1)
          RETURNING ${LEASE_COLUMNS}`,
         [
           leaseId,
@@ -600,6 +608,7 @@ export class PostgresSpeakingArbiterStore implements SpeakingArbiterStorePort {
           reservationRow.companion_id,
           reservationRow.episode_id,
           fencingToken,
+          chargedUnits,
           nowMs,
           expiresAtMs,
         ],
@@ -901,6 +910,7 @@ export class PostgresSpeakingArbiterStore implements SpeakingArbiterStorePort {
       companionId: row.companion_id,
       episodeId: row.episode_id,
       fencingToken: safeInteger(row.fencing_token, 'lease.fencingToken'),
+      chargedUnits: finiteNumber(row.charged_units, 'lease.chargedUnits'),
       status: assertLeaseStatus(row.status),
       reason: assertReason(row.reason),
       acquiredAtMs: safeInteger(row.acquired_at_ms, 'lease.acquiredAtMs'),

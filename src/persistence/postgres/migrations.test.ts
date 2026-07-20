@@ -240,6 +240,28 @@ describe('Postgres live schema migrations', () => {
     expect(sharedSql).not.toMatch(/vector/i);
   });
 
+  it('binds the funding charge to the egress lease as shared migration 11 (jp36.5.3)', () => {
+    const sharedSql = migrationSql(POSTGRES_SHARED_MIGRATIONS);
+
+    // The crash-recovery charge column: the fatigue draw is recorded on the
+    // fenced, correlation-keyed lease so a crash between draw and delivery leaves
+    // the debit reconcilable off the lease instead of leaked.
+    expect(sharedSql).toContain(
+      'ADD COLUMN IF NOT EXISTS charged_units DOUBLE PRECISION NOT NULL DEFAULT 0',
+    );
+    expect(sharedSql).toContain('CHECK (charged_units >= 0)');
+    // Idempotent constraint (re)creation, mirroring the breaker-state migration.
+    expect(sharedSql).toContain(
+      'DROP CONSTRAINT IF EXISTS speaking_egress_leases_charged_units_check',
+    );
+    // Ledger discipline: the column alter precedes its version registration.
+    expect(sharedSql.indexOf('ADD COLUMN IF NOT EXISTS charged_units')).toBeLessThan(
+      sharedSql.indexOf("VALUES (11, 'speaking-arbiter-charge-association')"),
+    );
+    // It extends the existing lease table — no parallel fencing state.
+    expect(sharedSql).toContain('ALTER TABLE speaking_egress_leases');
+  });
+
   it('extends the shared ledger with shared_wiki_chunks as versioned migration 3 (s10f9)', () => {
     const sql = migrationSql(POSTGRES_SHARED_WIKI_MIGRATIONS);
 

@@ -3,6 +3,7 @@ import {
   lstatSync,
   readdirSync,
   readFileSync,
+  type Dirent,
 } from 'node:fs';
 import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -68,6 +69,7 @@ const ALLOWED_HANDLER_EXTENSIONS = ['.mjs', '.cjs', '.js'];
 const log = createComponentLogger('HookLoader');
 
 export type HookRejectionKind =
+  | 'scan_error'
   | 'parse_error'
   | 'invalid_manifest'
   | 'unknown_event'
@@ -105,6 +107,8 @@ export interface LoadWorkspaceHooksOptions {
   registry: HookRegistry;
   /** Override the handler module importer (tests). Defaults to dynamic import. */
   importModule?: (url: string) => Promise<unknown>;
+  /** Override directory reads for deterministic filesystem-failure tests. */
+  readDirectory?: (absolutePath: string) => Dirent[];
 }
 
 function toPosix(path: string): string {
@@ -121,7 +125,14 @@ interface HookManifestCandidate {
  * Walk an existing hooks root for HOOK.yaml files, skipping symlinks —
  * mirrors `walkSkillFiles` in the skills loader.
  */
-function walkHookManifests(rootAbsolutePath: string): HookManifestCandidate[] {
+function defaultReadDirectory(absolutePath: string): Dirent[] {
+  return readdirSync(absolutePath, { withFileTypes: true });
+}
+
+function walkHookManifests(
+  rootAbsolutePath: string,
+  readDirectory: (absolutePath: string) => Dirent[] = defaultReadDirectory,
+): HookManifestCandidate[] {
   const candidates: HookManifestCandidate[] = [];
   const stack = [rootAbsolutePath];
 
@@ -129,7 +140,7 @@ function walkHookManifests(rootAbsolutePath: string): HookManifestCandidate[] {
     const current = stack.pop();
     if (!current) continue;
 
-    const entries = readdirSync(current, { withFileTypes: true });
+    const entries = readDirectory(current);
     for (const entry of entries) {
       const absolutePath = join(current, entry.name);
       if (entry.isSymbolicLink()) continue;
@@ -370,7 +381,21 @@ export async function loadWorkspaceHooks(
   const rejected: HookRejection[] = [];
   const seenNames = new Map<string, string>();
 
-  for (const candidate of walkHookManifests(rootPath)) {
+  let candidates: HookManifestCandidate[] = [];
+  try {
+    candidates = walkHookManifests(
+      rootPath,
+      options.readDirectory ?? defaultReadDirectory,
+    );
+  } catch (error) {
+    rejected.push({
+      kind: 'scan_error',
+      relativePath: '.',
+      reason: `workspace hooks directory scan failed: ${toErrorMessage(error)}`,
+    });
+  }
+
+  for (const candidate of candidates) {
     let manifestName: string | undefined;
     try {
       const document = readFileSync(candidate.manifestAbsolutePath, 'utf-8');

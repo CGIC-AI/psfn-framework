@@ -60,12 +60,18 @@ function signedRequestForTarget(
   companionId: typeof COMPANION_A,
   jti: string,
   innerTarget: string,
+  options: {
+    method?: 'GET' | 'PATCH' | 'POST';
+    body?: Buffer;
+  } = {},
 ): IncomingMessage {
+  const method = options.method ?? 'GET';
+  const body = options.body ?? Buffer.alloc(0);
   const target = compileGatewayGardenRequestTarget({
     rawTarget: innerTarget,
-    method: 'GET',
+    method,
     companionId,
-    body: Buffer.alloc(0),
+    body,
   });
   const requestId = `aaaaaaaa-aaaa-4aaa-8aaa-${jti.padEnd(12, '0').slice(0, 12)}`;
   const decisionId = `bbbbbbbb-bbbb-4bbb-8bbb-${jti.padEnd(12, '0').slice(0, 12)}`;
@@ -95,13 +101,17 @@ function signedRequestForTarget(
     },
     versions: VERSIONS,
   });
-  const request = Readable.from([]) as IncomingMessage;
-  request.method = 'GET';
+  const request = Readable.from(body.byteLength > 0 ? [body] : []) as IncomingMessage;
+  request.method = method;
   request.url = `/companions/${companionId}/garden${innerTarget}`;
-  request.headers = { ...buildGardenCapabilityHeaders({
-    token,
-    context: { requestId, decisionId, versions: VERSIONS },
-  }) };
+  request.headers = {
+    ...buildGardenCapabilityHeaders({
+      token,
+      context: { requestId, decisionId, versions: VERSIONS },
+    }),
+    'content-length': String(body.byteLength),
+    ...(body.byteLength > 0 ? { 'content-type': 'application/json' } : {}),
+  };
   return request;
 }
 
@@ -136,7 +146,136 @@ class CapturingResponse {
   }
 }
 
+interface RoutedFleetRequest {
+  companionId: string;
+  requestPath: string;
+  body: Buffer;
+}
+
+function createFleetProxySurface(routed: RoutedFleetRequest[]): GardenOperatorSurface {
+  const registry = new FleetGardenTargetRegistry([{
+    companionId: COMPANION_A,
+    endpoint: { mode: 'socket', socketPath: '/run/admin-a.sock', timeoutMs: 1_000 },
+  }]);
+  const controlPlane = new FleetGardenControlPlane({
+    registry,
+    verifier: createRequestCapabilityVerifier(verifierConfig),
+    replay: new AtomicRequestCapabilityReplayPort(),
+  });
+  return new GardenOperatorSurface({
+    port: 1,
+    host: '127.0.0.1',
+    config: config(),
+    fleetControlPlane: controlPlane,
+    fleetTransport: {
+      close: callback => callback(),
+      probeAll: async () => undefined,
+      proxyBufferedApiRequest: (target, _req, _res, body, _headers, requestPath) => {
+        routed.push({ companionId: target.companionId, requestPath, body });
+      },
+      handleTelemetryUpgrade: () => {
+        throw new Error('not used');
+      },
+    },
+    fleetChildAssertions: {
+      exchange: async input => ({
+        token: `child-${input.parentVerified.jti}`,
+        context: {
+          requestId: input.parentVerified.requestId,
+          decisionId: input.parentVerified.decisionId,
+          versions: input.parentVerified.versions,
+          parent: {
+            audience: input.parentVerified.audience as `operator:${string}`,
+            requestId: input.parentVerified.requestId,
+            decisionId: input.parentVerified.decisionId,
+            jti: input.parentVerified.jti,
+            targetDigest: input.parentVerified.targetDigest,
+          },
+        },
+      }),
+    },
+  });
+}
+
 describe('GardenOperatorSurface fleet transport routing', () => {
+  it.each([
+    {
+      label: 'wishlist',
+      jti: '1',
+      method: 'GET' as const,
+      innerTarget: '/api/admin/wishlist',
+      body: Buffer.alloc(0),
+    },
+    {
+      label: 'concerns limit',
+      jti: '2',
+      method: 'GET' as const,
+      innerTarget: '/api/admin/concerns?includeResolved=true&limit=100',
+      body: Buffer.alloc(0),
+    },
+    {
+      label: 'settings save',
+      jti: '3',
+      method: 'PATCH' as const,
+      innerTarget: '/api/admin/settings',
+      body: Buffer.from(JSON.stringify({ activeTimezone: 'UTC' })),
+    },
+    {
+      label: 'settings owner-file save',
+      jti: '4',
+      method: 'POST' as const,
+      innerTarget: '/api/admin/settings/providers',
+      body: Buffer.from('configJson=%7B%22schemaVersion%22%3A1%7D'),
+    },
+    {
+      label: 'CogSec Firewall policy',
+      jti: '5',
+      method: 'GET' as const,
+      innerTarget: '/api/admin/intake/policy',
+      body: Buffer.alloc(0),
+    },
+    {
+      label: 'CogSec Firewall source lists',
+      jti: '6',
+      method: 'GET' as const,
+      innerTarget: '/api/admin/intake/source-lists',
+      body: Buffer.alloc(0),
+    },
+    {
+      label: 'drift review',
+      jti: '7',
+      method: 'GET' as const,
+      innerTarget: '/api/admin/intake/drift-reviews',
+      body: Buffer.alloc(0),
+    },
+  ])('routes $label through the companion-scoped Fleet Garden proxy', async ({
+    jti,
+    method,
+    innerTarget,
+    body,
+  }) => {
+    const routed: RoutedFleetRequest[] = [];
+    const surface = createFleetProxySurface(routed);
+    const request = signedRequestForTarget(
+      COMPANION_A,
+      jti,
+      innerTarget,
+      { method, body },
+    );
+
+    await (
+      surface as unknown as {
+        handleFleetRequest(req: IncomingMessage, res: ServerResponse): Promise<void>;
+      }
+    ).handleFleetRequest(request, {} as ServerResponse);
+
+    expect(routed).toEqual([{
+      companionId: COMPANION_A,
+      requestPath: innerTarget,
+      body,
+    }]);
+  });
+
   it('serves approved direct-database routes in Garden with the admitted companion binding', async () => {
     const registry = new FleetGardenTargetRegistry([
       {

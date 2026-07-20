@@ -253,7 +253,7 @@ class PostgresMemoryStore implements MemoryStorePort {
   private async initialize(): Promise<void> {
     const memoryRows = await queryRows<MemoryRow>(this.pool, `
       SELECT
-        id, text, type, importance, confidence, emotional_valence, formation_vad,
+        id, text, type, importance, confidence, emotional_valence, formation_vad, emotional_texture,
         salience, salience_decay_anchor_at, source_ref, source_type, provenance_json, extracted_at, last_accessed,
         access_count, superseded_by,
         tags, scope_ref_kind, scope_ref_id, scope_ref_label, scope_tags, provenance_refs,
@@ -428,9 +428,9 @@ class PostgresMemoryStore implements MemoryStorePort {
         superseded_by, tags,
         scope_ref_kind, scope_ref_id, scope_ref_label, scope_tags, provenance_refs,
         retention_class, sensitivity, consent_flags, contact_id, deleted_at, deleted_by,
-        delete_reason, embedding
+        delete_reason, emotional_texture, embedding
       ) VALUES (
-        $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30::vector
+        $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31::vector
       )
       ON CONFLICT (id) DO UPDATE SET
         text = EXCLUDED.text,
@@ -461,6 +461,7 @@ class PostgresMemoryStore implements MemoryStorePort {
         deleted_at = EXCLUDED.deleted_at,
         deleted_by = EXCLUDED.deleted_by,
         delete_reason = EXCLUDED.delete_reason,
+        emotional_texture = EXCLUDED.emotional_texture,
         embedding = EXCLUDED.embedding
       RETURNING authorization_revision
     `, [
@@ -493,6 +494,7 @@ class PostgresMemoryStore implements MemoryStorePort {
       row.deleted_at,
       row.deleted_by,
       row.delete_reason,
+      serializeJsonValue(row.emotional_texture),
       row.embedding,
     ]);
     const revision = Number(revisions[0]?.authorization_revision);
@@ -730,7 +732,7 @@ class PostgresMemoryStore implements MemoryStorePort {
     const normalizedScopeQuery = normalizeMemoryScopeQuery(scopeQuery);
     const rows = await queryRows<MemoryEmbeddingSearchRow>(this.pool, `
       SELECT
-        id, text, type, importance, confidence, emotional_valence, formation_vad,
+        id, text, type, importance, confidence, emotional_valence, formation_vad, emotional_texture,
         salience, salience_decay_anchor_at, source_ref, source_type, provenance_json, extracted_at, last_accessed,
         access_count, superseded_by,
         tags, scope_ref_kind, scope_ref_id, scope_ref_label, scope_tags, provenance_refs,
@@ -928,7 +930,7 @@ class PostgresMemoryStore implements MemoryStorePort {
     const offsetParam = `$${where.values.length + 2}`;
     const rows = await queryRows<MemoryRow>(this.pool, `
       SELECT
-        id, text, type, importance, confidence, emotional_valence, formation_vad,
+        id, text, type, importance, confidence, emotional_valence, formation_vad, emotional_texture,
         salience, salience_decay_anchor_at, source_ref, source_type, provenance_json, extracted_at, last_accessed,
         access_count, superseded_by,
         tags, scope_ref_kind, scope_ref_id, scope_ref_label, scope_tags, provenance_refs,

@@ -21,7 +21,7 @@ import { normalizeMemoryScopeQuery } from '../types.js';
 
 export const MEMORY_SUBJECT_SELECT_COLUMNS = `
   memory.id, memory.text, memory.type, memory.importance, memory.confidence,
-  memory.emotional_valence, memory.formation_vad, memory.salience,
+  memory.emotional_valence, memory.formation_vad, memory.emotional_texture, memory.salience,
   memory.salience_decay_anchor_at, memory.source_ref, memory.source_type,
   memory.provenance_json, memory.extracted_at, memory.last_accessed,
   memory.access_count, memory.superseded_by, memory.tags,

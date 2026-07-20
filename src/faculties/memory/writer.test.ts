@@ -220,6 +220,53 @@ describe('MemoryWriter', () => {
       });
     });
 
+    it('retains multi-signal emotional texture instead of compressing to a dominant tag (031.11.1)', async () => {
+      const result = await writer.write({
+        text: 'A mixed-state emotional memory',
+        type: 'emotional',
+        emotionalValence: -0.4,
+        formationVAD: { valence: -0.4, arousal: 0.3, dominance: 0.1 },
+        emotionalTexture: {
+          discrete: { love: 0.7, sadness: 0.55, joy: 0 },
+          confidence: 0.82,
+        },
+      });
+
+      // The full discrete distribution + confidence survive alongside the scalar
+      // valence and VAD — the mixed state is not collapsed to one label.
+      expect(result.memory.emotionalTexture).toEqual({
+        discrete: { love: 0.7, sadness: 0.55 },
+        confidence: 0.82,
+      });
+      const [insertedMemory] = store.insertMemory.mock.calls[0];
+      expect(insertedMemory.emotionalTexture).toEqual({
+        discrete: { love: 0.7, sadness: 0.55 },
+        confidence: 0.82,
+      });
+    });
+
+    it('proves the pre-fix compression: a scalar-only write carries no multi-signal texture', async () => {
+      // Before 031.11.1 the only emotional fields were the scalar valence and the
+      // VAD vector — the discrete distribution had nowhere to live. A write that
+      // supplies no texture therefore persists none (the compression that this
+      // bead fixes by making the texture expressible).
+      const result = await writer.write({
+        text: 'An emotional memory written the old way',
+        type: 'emotional',
+        emotionalValence: -0.4,
+      });
+      expect(result.memory.emotionalTexture).toBeUndefined();
+    });
+
+    it('drops a degenerate empty texture rather than storing an empty husk', async () => {
+      const result = await writer.write({
+        text: 'Emotional memory with no real texture',
+        type: 'emotional',
+        emotionalTexture: { discrete: {}, confidence: 0 },
+      });
+      expect(result.memory.emotionalTexture).toBeUndefined();
+    });
+
     it('stamps the originating intake envelope id as a canonical provenance ref (htm9.1)', async () => {
       const result = await writer.write({
         text: 'Fact extracted from a screened web fetch',

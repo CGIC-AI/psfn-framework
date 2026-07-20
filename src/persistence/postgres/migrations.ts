@@ -15,6 +15,7 @@ export const POSTGRES_MEMORY_MIGRATIONS = [
     confidence DOUBLE PRECISION NOT NULL,
     emotional_valence DOUBLE PRECISION NOT NULL,
     formation_vad JSONB,
+    emotional_texture JSONB,
     salience DOUBLE PRECISION NOT NULL,
     salience_decay_anchor_at BIGINT NOT NULL DEFAULT ((EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::bigint),
     source_ref TEXT NOT NULL,
@@ -48,6 +49,10 @@ export const POSTGRES_MEMORY_MIGRATIONS = [
   `ALTER TABLE l2_memories ADD COLUMN IF NOT EXISTS source_type TEXT NOT NULL DEFAULT 'unknown';`,
   `ALTER TABLE l2_memories ADD COLUMN IF NOT EXISTS provenance_json JSONB NOT NULL DEFAULT '{}'::jsonb;`,
   `ALTER TABLE l2_memories ADD COLUMN IF NOT EXISTS formation_vad JSONB;`,
+  // Multi-signal emotional texture (031.11.1): discrete distribution + emotion
+  // confidence retained at formation so mixed states are not compressed to a
+  // single dominant tag. Additive, nullable, backward-safe.
+  `ALTER TABLE l2_memories ADD COLUMN IF NOT EXISTS emotional_texture JSONB;`,
   `ALTER TABLE l2_memories ADD COLUMN IF NOT EXISTS salience_decay_anchor_at BIGINT;`,
   `UPDATE l2_memories SET salience_decay_anchor_at = last_accessed WHERE salience_decay_anchor_at IS NULL;`,
   `ALTER TABLE l2_memories ALTER COLUMN salience_decay_anchor_at SET DEFAULT ((EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::bigint);`,

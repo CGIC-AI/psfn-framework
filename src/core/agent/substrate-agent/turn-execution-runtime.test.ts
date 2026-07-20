@@ -1100,6 +1100,40 @@ describe('handleMessageForTurn outbound reply hygiene', () => {
     );
   });
 
+  it('never delivers either marker from a same-line two-marker reply', async () => {
+    const eventBus = new EventBus();
+    const buildContext = vi.fn(async () => ({
+      systemPrompt: 'System prompt',
+      messages: [],
+      manifest: makeContextManifestFixture(),
+    }));
+    const recordAssistantMessage = vi.fn(() => 2);
+    const runtime = createRuntime({
+      eventBus,
+      sessionManager: {
+        buildContext,
+      } as unknown as SessionManager,
+      buildContext,
+      scheduleAutoCompactionBetweenTurns: vi.fn(async () => undefined),
+      awaitPendingAutoCompaction: vi.fn(async () => undefined),
+      recordUserMessage: vi.fn(() => 1),
+      recordAssistantMessage,
+    });
+    runtime.extractResponseText = vi.fn(
+      () => '*image attached* here you go [photo attached]',
+    );
+
+    const response = await handleMessageForTurn(runtime, createMessage('msg-two-false-image-claims'));
+
+    expect(response.content).not.toMatch(/(?:image|photo) attached/iu);
+    expect([
+      'here you go',
+      'I could not attach an image because no image tool completed successfully this turn. '
+        + 'I need to call selfie_create or generate_image before saying an image is attached.',
+    ]).toContain(response.content);
+    expect(recordAssistantMessage.mock.calls[0]?.[4]).toBe(response.content);
+  });
+
   it('uses the correction only when removing the claim leaves no reply', async () => {
     const eventBus = new EventBus();
     const buildContext = vi.fn(async () => ({

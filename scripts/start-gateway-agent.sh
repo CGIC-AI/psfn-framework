@@ -481,18 +481,10 @@ release_launcher_lock() {
 
 start_gateway() {
   if [ -x "./node_modules/.bin/tsx" ]; then
-    if psfn_is_truthy_env_value "${PSFN_FLEET_AUTH:-}"; then
-      launch_background env -u ADMIN_TOKEN -u ADMIN_ALLOW_INSECURE \
-        ./node_modules/.bin/tsx src/app/gateway/main.ts
-    else
-      launch_background ./node_modules/.bin/tsx src/app/gateway/main.ts
-    fi
+    launch_background env -u ADMIN_TOKEN -u ADMIN_ALLOW_INSECURE \
+      ./node_modules/.bin/tsx src/app/gateway/main.ts
   else
-    if psfn_is_truthy_env_value "${PSFN_FLEET_AUTH:-}"; then
-      launch_background env -u ADMIN_TOKEN -u ADMIN_ALLOW_INSECURE npm run gateway
-    else
-      launch_background npm run gateway
-    fi
+    launch_background env -u ADMIN_TOKEN -u ADMIN_ALLOW_INSECURE npm run gateway
   fi
   GATEWAY_PID="${LAUNCHED_PID}"
 }
@@ -513,11 +505,6 @@ spawn_agent_process() {
     launch_background env -i "${AGENT_ENV[@]}" npm run agent
   fi
   exec {postgres_database_url_fd}<&-
-}
-
-start_agent() {
-  spawn_agent_process
-  AGENT_PID="${LAUNCHED_PID}"
 }
 
 # Export one fleet entry's companion-scoped values into the launcher env so the
@@ -574,24 +561,13 @@ start_fleet_operator() {
   OPERATOR_PID="${LAUNCHED_PID}"
 }
 
-start_operator() {
-  build_operator_env
-  if [ -x "./node_modules/.bin/tsx" ]; then
-    launch_background env -i "${OPERATOR_ENV[@]}" ./node_modules/.bin/tsx src/app/operator/main.ts
-  else
-    launch_background env -i "${OPERATOR_ENV[@]}" npm run operator
-  fi
-  OPERATOR_PID="${LAUNCHED_PID}"
-}
-
 # Resolve the fleet topology via the canonical TS helper. The companions.json
 # manifest is mandatory (every deployment is a fleet of one or more companions),
 # so the helper is always invoked and owns all path resolution and validation
 # (no duplicate logic here). A missing or invalid manifest makes the helper exit
 # non-zero, failing the launcher closed before anything is started.
-# Empty stdout => single-companion topology (a one-entry fleet; SUPERVISOR_MODE
-# stays 0). Non-empty stdout => one tab-delimited companion record per line for
-# a multi-entry fleet.
+# The helper emits one tab-delimited record per companion. One and many entries
+# both use the supervisor path.
 resolve_companion_fleet() {
   local plan_output=""
   if [ -x "./node_modules/.bin/tsx" ]; then
@@ -606,11 +582,6 @@ resolve_companion_fleet() {
     fi
   fi
 
-  if [ -z "${plan_output}" ]; then
-    # One-entry fleet: single-companion topology.
-    return 0
-  fi
-
   SUPERVISOR_MODE=1
   COMPANION_PLAN=()
   local line
@@ -621,50 +592,18 @@ resolve_companion_fleet() {
   done <<< "${plan_output}"
 
   if [ "${#COMPANION_PLAN[@]}" -eq 0 ]; then
-    echo "[${MODE_LABEL}] multi-companion mode resolved an empty fleet; refusing to start" >&2
+    echo "[${MODE_LABEL}] fleet resolver returned an empty fleet; refusing to start" >&2
     exit 1
   fi
 }
 
 provision_companion_fleet() {
-  if [ "${SUPERVISOR_MODE}" -ne 1 ]; then
-    return 0
-  fi
   echo "[supervisor] provisioning fleet workspaces under the launcher lock..."
   if [ -x "./node_modules/.bin/tsx" ]; then
     ./node_modules/.bin/tsx scripts/provision-companion-fleet.ts
   else
     npm run provision:companion-fleet
   fi
-}
-
-resolve_single_companion_auth() {
-  if [ "${SUPERVISOR_MODE}" -eq 1 ]; then
-    return 0
-  fi
-
-  local auth_output=""
-  if [ -x "./node_modules/.bin/tsx" ]; then
-    if ! auth_output="$(./node_modules/.bin/tsx scripts/resolve-single-companion-auth.ts)"; then
-      echo "[${MODE_LABEL}] failed to derive role-bound gateway credentials; refusing to start" >&2
-      exit 1
-    fi
-  else
-    if ! auth_output="$(npm run --silent resolve:single-companion-auth)"; then
-      echo "[${MODE_LABEL}] failed to derive role-bound gateway credentials; refusing to start" >&2
-      exit 1
-    fi
-  fi
-
-  local companion_auth_token=""
-  local session_integrity_auth_token=""
-  IFS=$'\t' read -r companion_auth_token session_integrity_auth_token <<< "${auth_output}"
-  if [ -z "${companion_auth_token}" ] || [ -z "${session_integrity_auth_token}" ]; then
-    echo "[${MODE_LABEL}] gateway credential helper returned an invalid response; refusing to start" >&2
-    exit 1
-  fi
-  export GATEWAY_COMPANION_AUTH_TOKEN="${companion_auth_token}"
-  export GATEWAY_SESSION_INTEGRITY_AUTH_TOKEN="${session_integrity_auth_token}"
 }
 
 print_supervisor_plan() {
@@ -834,15 +773,9 @@ handle_shutdown_signal() {
 }
 
 resolve_companion_fleet
-resolve_single_companion_auth
 
 if [ "${DRY_RUN_MODE}" -eq 1 ]; then
-  if [ "${SUPERVISOR_MODE}" -eq 1 ]; then
-    print_supervisor_plan
-  else
-    echo "[${MODE_LABEL}] dry-run: single-companion topology (gateway + one agent + operator)"
-    echo "[${MODE_LABEL}]   gateway: ${SOCKET_PATH}"
-  fi
+  print_supervisor_plan
   exit 0
 fi
 
@@ -884,44 +817,10 @@ if [ ! -S "${SOCKET_PATH}" ]; then
   echo "[${MODE_LABEL}] warning: gateway socket not detected yet, starting agent anyway"
 fi
 
-if [ "${SUPERVISOR_MODE}" -eq 1 ]; then
-  echo "[supervisor] multi-companion mode: spawning ${#COMPANION_PLAN[@]} agent(s)"
-  prepare_fleet_admin_transports
-  start_companion_agents
-  wait_for_fleet_admin_transports
-  probe_fleet_admin_transports
-  start_fleet_garden
-  supervise_companion_fleet
-fi
-
-echo "[${MODE_LABEL}] starting agent..."
-start_agent
-
-echo "[${MODE_LABEL}] starting operator..."
-start_operator
-
-if psfn_is_truthy_env_value "${PSFN_FLEET_AUTH:-}"; then
-  echo "[${MODE_LABEL}] fleet ui: canonical HTTPS origin from fleet-auth.json (/fleet)"
-else
-  echo "[${MODE_LABEL}] admin ui: http://${ADMIN_HOST}:${ADMIN_PORT}"
-fi
-echo "[${MODE_LABEL}] running (gateway pid=${GATEWAY_PID}, agent pid=${AGENT_PID}, operator pid=${OPERATOR_PID})"
-set +e
-wait -n "${GATEWAY_PID}" "${AGENT_PID}" "${OPERATOR_PID}"
-EXIT_STATUS=$?
-set -e
-
-if [ "${EXIT_STATUS}" -ne "${PSFN_LIFECYCLE_RESTART_EXIT_CODE}" ]; then
-  if wait_for_lifecycle_restart_child 100; then
-    EXIT_STATUS="${PSFN_LIFECYCLE_RESTART_EXIT_CODE}"
-  fi
-fi
-
-if [ "${EXIT_STATUS}" -eq "${PSFN_LIFECYCLE_RESTART_EXIT_CODE}" ]; then
-  echo "[${MODE_LABEL}] lifecycle restart requested; stopping children and re-execing launcher"
-  cleanup_children
-  trap - INT TERM EXIT
-  exec "$0" "$@"
-fi
-
-exit "${EXIT_STATUS}"
+echo "[supervisor] fleet mode: spawning ${#COMPANION_PLAN[@]} agent(s)"
+prepare_fleet_admin_transports
+start_companion_agents
+wait_for_fleet_admin_transports
+probe_fleet_admin_transports
+start_fleet_garden
+supervise_companion_fleet

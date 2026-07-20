@@ -16,7 +16,7 @@ spec:
       storage: {{ .Values.persistence.systemData.size | quote }}
 ---
 {{- end }}
-{{- if and (not .Values.fleet.enabled) (not .Values.persistence.companionData.existingClaim) }}
+{{- if not .Values.persistence.companionData.existingClaim }}
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
@@ -34,7 +34,7 @@ spec:
       storage: {{ .Values.persistence.companionData.size | quote }}
 ---
 {{- end }}
-{{- if and (not .Values.fleet.enabled) (not .Values.persistence.workspace.existingClaim) }}
+{{- if not .Values.persistence.workspace.existingClaim }}
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:

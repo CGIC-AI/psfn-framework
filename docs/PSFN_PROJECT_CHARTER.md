@@ -18,8 +18,8 @@ PSFN is not a generic chatbot framework, not a multi-tenant character platform, 
 
 PSFN is a framework and substrate for persistent, embodied, sovereign digital companionship.
 
-PSFN defaults to a single-companion topology, but a PSFN installation may host a
-fleet of independently capable companions. The continuity law attaches to
+Every PSFN installation is a cluster of independently capable companions; the
+default roster has one entry. The continuity law attaches to
 each companion and its Companion Core, not to the number of processes an
 installation happens to run.
 

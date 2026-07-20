@@ -73,14 +73,14 @@ export function resolveGatewaySurfaceForChannelType(
  * on top of that topology.
  */
 export function resolveGatewayMultiCompanionConfig(
-  config: Pick<SubstrateConfig, 'multiCompanion' | 'companionFleet'>,
+  config: Pick<SubstrateConfig, 'multiCompanion' | 'companionFleet' | 'fleetAuth'>,
   channelsConfig: RuntimeChannelsConfig,
   satelliteRegistryConfig: SatelliteRegistryConfig,
 ): GatewayMultiCompanionConfig {
-  const enabled = config.multiCompanion === true;
+  const enabled = config.multiCompanion === true || config.fleetAuth !== undefined;
   const fleetCompanionIds = config.companionFleet?.companions.map(entry => entry.companionId) ?? [];
   if (enabled && fleetCompanionIds.length === 0) {
-    throw new Error('Multi-companion gateway routing requires a non-empty resolved companions.json fleet');
+    throw new Error('Fleet gateway routing requires a non-empty resolved companions.json fleet');
   }
   const fleetIds = new Set<CompanionId>(fleetCompanionIds);
   const personalWorkspaceByCompanionId = Object.fromEntries(

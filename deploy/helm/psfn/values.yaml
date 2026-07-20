@@ -56,14 +56,14 @@ runtime:
   # temporal prompt signals. settings.json activeTimezone (when set) still wins
   # over this env-level value at runtime.
   timezone: America/New_York
-  systemDataDir: /app/system-data
-  companionDataDir: /app/companion-data
-  workspacePath: /app/workspace
-  logsDir: /app/logs
-  tempDir: /app/tmp
-  backupsDir: /app/backups
+  systemDataDir: /runtime/system-data
+  companionDataDir: /runtime/companions/11111111-1111-4111-8111-111111111111
+  workspacePath: /runtime/workspaces/personal/11111111-1111-4111-8111-111111111111
+  logsDir: /runtime/logs
+  tempDir: /runtime/tmp
+  backupsDir: /runtime/backups
   configDir: /app/config
-  characterCardPath: /app/companion-data/companion.json
+  characterCardPath: /runtime/companions/11111111-1111-4111-8111-111111111111/companion.json
   modelCacheDir: /app/models/transformers
   # Optional path to an authoritative source checkout mounted into the runtime.
   # When set (and a real git checkout is present), self-diagnosis distinguishes
@@ -71,15 +71,27 @@ runtime:
   # Empty means no authoritative checkout is available (reported as unavailable).
   repositoryDir: ""
 
-# Fleet Kubernetes topology. This is an explicit, fail-closed deployment mode:
-# one gateway, one fleet Garden, and one separately addressed agent workload
-# for every registered companion. The system-data PVC must already contain the
+# Fleet Kubernetes topology. This is the only deployment shape: one gateway,
+# one fleet Garden, and one separately addressed agent workload for every
+# registered companion. A deployment with one entry is a fleet of one; adding
+# entries is the only topology change. The system-data PVC must contain the
 # matching canonical companions.json; these values describe workload wiring
 # only and never replace that owner file.
 fleet:
-  enabled: false
+  enabled: true
   runtimeRoot: /runtime
-  companions: []
+  companions:
+    - companionId: 11111111-1111-4111-8111-111111111111
+      postgresSchema: companion_default
+      # Empty on the first entry means the chart-managed release PVC.
+      companionDataClaim: ""
+      workspaceClaim: ""
+      authSecret:
+        # Empty first-entry fields resolve to the chart-managed app Secret and
+        # its configured role-proof keys. Follower entries must be explicit.
+        name: ""
+        sessionIntegrityKey: ""
+        companionAuthKey: ""
   # Fleet entries have this shape:
   # - companionId: 11111111-1111-4111-8111-111111111111
   #   postgresSchema: companion_a
@@ -121,21 +133,6 @@ bootstrap:
   # system-owner fleet migration; this Helm compatibility path does not move them.
   seedOwnerFiles: false
 
-  # Every PSFN deployment is a fleet of one or more companions enumerated by the
-  # mandatory system-owned companions.json manifest; topology is derived from
-  # the entry count, not the retired PSFN_MULTI_COMPANION flag. For the
-  # single-companion (non-fleet) topology, the seed init writes a deterministic
-  # one-entry manifest derived from runtime.companionId into system-data when
-  # absent. This is chart-owned topology wiring (not mutable runtime policy), so
-  # it is provisioned independently of seedOwnerFiles and is how an existing
-  # pre-manifest single-companion install migrates: rolling this chart writes
-  # companions.json on the upgrade's init before any runtime process loads
-  # config. Write-when-absent never overwrites an operator/Garden-edited
-  # manifest. Set false to require an externally provisioned companions.json and
-  # fail closed at init if it is missing. Ignored when fleet.enabled=true, where
-  # companions.json is always operator-provisioned.
-  provisionSingleCompanionManifest: true
-
 # Explicit, one-rollout compatibility boundary for legacy fleets whose
 # charge-policy.json and skills.json still live under system-data. This is
 # disabled after the approval-bound fan-out succeeds. `required` lets a
@@ -147,8 +144,7 @@ ownerMigration:
   # Topology is derived from companions.json presence, not a flag: the migrator
   # loads a pre-provisioned manifest when present and otherwise synthesizes the
   # one-entry migration fleet from the environment (COMPANION_ID + roots). List
-  # exactly one companion for a single-companion install or every manifest entry
-  # for a multi-companion installation under `companions` below.
+  # every manifest entry under `companions` below (one entry for a fleet of one).
   runtimeRoot: /runtime
   systemDataDir: /runtime/system-data
   systemDataClaim: ""
@@ -322,8 +318,7 @@ secrets:
     # Secret instead of persisting it in Helm values.
     gatewaySessionIntegrityAuthToken: ""
     # Distinct role-bound agent proof derived from gatewaySessionHmacKey for
-    # COMPANION_ID. Required by multi-companion agents; optional for the
-    # default single-companion topology.
+    # COMPANION_ID. Required by every agent, including a fleet of one.
     gatewayCompanionAuthToken: ""
     # Dedicated satellite-hub bearer credential (Sprint-10 H4: never reuse the
     # shared API_KEY for satellites). Injected into the hub as PSFN_API_KEY and
@@ -567,11 +562,11 @@ certificates:
   renewBefore: 360h
   mountBasePath: /run/psfn/tls
 
-# Fleet authentication is an explicit topology switch. The canonical
+# Fleet authentication is part of the one Kubernetes topology. The canonical
 # fleet-auth.json owner file remains authoritative for OAuth/session policy;
-# this value only enables the matching process/deployment wiring.
+# this value enables the matching process/deployment wiring.
 fleetAuth:
-  enabled: false
+  enabled: true
   # Optional exact server-owned binding for /companion-ui/. It may be omitted
   # only when the canonical companion fleet contains exactly one companion.
   companionUiCompanionId: ""
@@ -626,14 +621,13 @@ ingress:
     path: /
     pathType: Prefix
     tls:
-      enabled: false
+      enabled: true
       # Existing public/browser-trusted TLS Secret for the exact gateway host.
-      secretName: ""
-  # Normal single-admin Garden browser edge, authenticated by ADMIN_TOKEN.
-  # fleetAuth.enabled=true switches Garden access to the unified gateway route
-  # and suppresses this separate Ingress.
+      secretName: psfn-public-origin-tls
+  # Garden is reached only through the authenticated fleet portal on the
+  # gateway origin. This legacy field remains disabled in the fleet shape.
   garden:
-    enabled: true
+    enabled: false
     host: psfn-garden.local
     path: /
     pathType: Prefix

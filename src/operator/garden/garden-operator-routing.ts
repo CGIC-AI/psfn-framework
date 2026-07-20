@@ -64,8 +64,8 @@ export class GardenOperatorRouting {
       throw new Error('Garden operator fleet transport requires a fleet control plane');
     }
     if (options.fleetControlPlane) {
-      if (options.config.multiCompanion !== true || !options.config.fleetAuthVerifier) {
-        throw new Error('Fleet Garden routing requires multi-companion Fleet Auth configuration');
+      if (!options.config.companionFleet || !options.config.fleetAuthVerifier) {
+        throw new Error('Fleet Garden routing requires a resolved roster and Fleet Auth configuration');
       }
       const fleetTransport = options.fleetTransport
         ?? new FleetGardenAdminTransportProxy(options.fleetControlPlane.targetRegistry());

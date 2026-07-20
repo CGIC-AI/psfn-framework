@@ -11,8 +11,8 @@
 {{- if .Values.bootstrap.seedOwnerFiles -}}
 {{- fail "fleet.enabled=true requires bootstrap.seedOwnerFiles=false; companions.json and owner roots must be pre-provisioned" -}}
 {{- end -}}
-{{- if lt (len .Values.fleet.companions) 2 -}}
-{{- fail "fleet.enabled=true requires at least two registered companions" -}}
+{{- if lt (len .Values.fleet.companions) 1 -}}
+{{- fail "fleet.enabled=true requires at least one registered companion" -}}
 {{- end -}}
 {{- if not (hasPrefix "/" .Values.fleet.runtimeRoot) -}}
 {{- fail "fleet.runtimeRoot must be absolute" -}}
@@ -63,33 +63,42 @@
 {{- end -}}
 {{- $_ := set $schemas $schema true -}}
 {{- $companionClaim := $companion.companionDataClaim | default "" -}}
-{{- if not $companionClaim -}}
+{{- if and (not $companionClaim) (gt $index 0) -}}
 {{- fail (printf "fleet.companions[%d].companionDataClaim is required" $index) -}}
+{{- end -}}
+{{- if not $companionClaim -}}
+{{- $companionClaim = include "psfn.companionDataClaimName" $ -}}
 {{- end -}}
 {{- if hasKey $gatewayCompanionClaims $companionClaim -}}
 {{- fail (printf "fleet companionDataClaim is duplicated: %s" $companionClaim) -}}
 {{- end -}}
 {{- $_ := set $gatewayCompanionClaims $companionClaim true -}}
 {{- $workspaceClaim := $companion.workspaceClaim | default "" -}}
-{{- if not $workspaceClaim -}}
+{{- if and (not $workspaceClaim) (gt $index 0) -}}
 {{- fail (printf "fleet.companions[%d].workspaceClaim is required" $index) -}}
+{{- end -}}
+{{- if not $workspaceClaim -}}
+{{- $workspaceClaim = include "psfn.workspaceClaimName" $ -}}
 {{- end -}}
 {{- if hasKey $workspaceClaims $workspaceClaim -}}
 {{- fail (printf "fleet workspaceClaim is duplicated: %s" $workspaceClaim) -}}
 {{- end -}}
 {{- $_ := set $workspaceClaims $workspaceClaim true -}}
 {{- $authSecretName := $companion.authSecret.name | default "" -}}
-{{- if not $authSecretName -}}
+{{- if and (not $authSecretName) (gt $index 0) -}}
 {{- fail (printf "fleet.companions[%d].authSecret.name is required" $index) -}}
+{{- end -}}
+{{- if not $authSecretName -}}
+{{- $authSecretName = include "psfn.appSecretName" $ -}}
 {{- end -}}
 {{- if hasKey $authSecrets $authSecretName -}}
 {{- fail (printf "fleet authSecret.name is duplicated: %s" $authSecretName) -}}
 {{- end -}}
 {{- $_ := set $authSecrets $authSecretName true -}}
-{{- if not ($companion.authSecret.sessionIntegrityKey | default "") -}}
+{{- if and (not ($companion.authSecret.sessionIntegrityKey | default "")) (gt $index 0) -}}
 {{- fail (printf "fleet.companions[%d].authSecret.sessionIntegrityKey is required" $index) -}}
 {{- end -}}
-{{- if not ($companion.authSecret.companionAuthKey | default "") -}}
+{{- if and (not ($companion.authSecret.companionAuthKey | default "")) (gt $index 0) -}}
 {{- fail (printf "fleet.companions[%d].authSecret.companionAuthKey is required" $index) -}}
 {{- end -}}
 {{- end -}}
@@ -111,11 +120,11 @@
 {{- if ne .Values.runtime.workspacePath $firstWorkspace -}}
 {{- fail "fleet runtime.workspacePath must equal the first canonical Personal Workspace" -}}
 {{- end -}}
-{{- if ne .Values.persistence.companionData.existingClaim $first.companionDataClaim -}}
-{{- fail "fleet persistence.companionData.existingClaim must equal the first companionDataClaim" -}}
+{{- if ne (include "psfn.companionDataClaimName" .) (default (include "psfn.companionDataClaimName" .) $first.companionDataClaim) -}}
+{{- fail "fleet effective companion-data claim must equal the first companionDataClaim" -}}
 {{- end -}}
-{{- if ne .Values.persistence.workspace.existingClaim $first.workspaceClaim -}}
-{{- fail "fleet persistence.workspace.existingClaim must equal the first workspaceClaim" -}}
+{{- if ne (include "psfn.workspaceClaimName" .) (default (include "psfn.workspaceClaimName" .) $first.workspaceClaim) -}}
+{{- fail "fleet effective workspace claim must equal the first workspaceClaim" -}}
 {{- end -}}
 {{- range $workloadName, $image := dict "gateway" .Values.workloads.gateway.image "agent" .Values.workloads.agent.image "garden" .Values.workloads.garden.image -}}
 {{- $tag := default $.Values.psfnAppImage.tag $image.tag -}}

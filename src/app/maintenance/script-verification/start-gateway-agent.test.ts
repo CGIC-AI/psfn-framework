@@ -858,17 +858,13 @@ describe('start-gateway-agent multi-companion supervisor', () => {
     ],
   });
 
-  it('keeps the single-companion process topology for a one-entry fleet', () => {
+  it('uses the fleet supervisor process topology for every roster size', () => {
     const launcher = readFileSync(join(repoRoot, 'scripts/start-gateway-agent.sh'), 'utf8');
-    // The fleet helper is always invoked (companions.json is mandatory); a
-    // one-entry fleet yields empty output so SUPERVISOR_MODE stays 0.
     expect(launcher).toContain('resolve_companion_fleet');
-    // Supervisor branch never runs unless the helper resolved a multi-entry fleet.
-    expect(launcher).toContain('if [ "${SUPERVISOR_MODE}" -eq 1 ]; then');
-    // The single-companion topology still derives a separate proof for its
-    // isolated session-integrity worker before either child receives scrubbed env.
-    expect(launcher).toContain('scripts/resolve-single-companion-auth.ts');
-    expect(launcher).toContain('resolve_single_companion_auth');
+    expect(launcher).toContain('start_companion_agents');
+    expect(launcher).toContain('start_fleet_garden');
+    expect(launcher).not.toContain('resolve_single_companion_auth');
+    expect(launcher).not.toContain('start_agent()');
   });
 
   it('delegates all fleet validation to the canonical TS helper', () => {
@@ -1065,11 +1061,11 @@ describe('start-gateway-agent multi-companion supervisor', () => {
     }
     expect(error).toBeDefined();
     expect(String((error as { stderr?: Buffer }).stderr)).toContain(
-      'Multi-companion local startup requires ADMIN_TRANSPORT_MODE=socket',
+      'Local startup requires ADMIN_TRANSPORT_MODE=socket',
     );
   });
 
-  it('prints nothing for single-companion topology (one-entry fleet)', () => {
+  it('prints one supervisor record for a one-entry fleet', () => {
     const { workDir, systemDataDir, companionDataDir } = makeFleetWorkspace(oneCompanionFleet);
     try {
       const output = execFileSync(tsxBin, ['scripts/resolve-companion-fleet.ts'], {
@@ -1078,11 +1074,22 @@ describe('start-gateway-agent multi-companion supervisor', () => {
         env: {
           PATH: process.env.PATH,
           HOME: process.env.HOME,
+          PSFN_FLEET_AUTH: '1',
+          GATEWAY_SESSION_HMAC_KEY: 'test-session-secret',
           SYSTEM_DATA_DIR: systemDataDir,
           COMPANION_DATA_DIR: companionDataDir,
+          ADMIN_TRANSPORT_SOCKET: join(workDir, 'run', 'garden-admin.sock'),
         },
       });
-      expect(output).toBe('');
+      const keyring = { activeVersion: 'v1', keys: { v1: 'test-session-secret' } };
+      expect(output).toBe(
+        `11111111-1111-4111-8111-111111111111\t${workDir}/alpha\t`
+        + `${workDir}/alpha/card.json\tpublic\t`
+        + `${workDir}/workspaces/personal/11111111-1111-4111-8111-111111111111\t`
+        + `${deriveCompanionAuthToken('11111111-1111-4111-8111-111111111111', 'agent', keyring)}\t`
+        + `${deriveCompanionAuthToken('11111111-1111-4111-8111-111111111111', 'internal_session_integrity', keyring)}\t`
+        + `${workDir}/run/garden-admin-11111111-1111-4111-8111-111111111111.sock\n`,
+      );
     } finally {
       rmSync(workDir, { recursive: true, force: true });
     }

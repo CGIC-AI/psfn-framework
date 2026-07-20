@@ -25,6 +25,21 @@ const recoveryChartDigest = readFileSync(
   'utf8',
 ).trim();
 
+const nonFleetContractRenderArgs = [
+  '--set', 'fleet.enabled=false',
+  '--set', 'fleetAuth.enabled=false',
+  '--set', 'ingress.gateway.tls.enabled=false',
+  '--set-string', 'ingress.gateway.tls.secretName=',
+  '--set', 'ingress.garden.enabled=true',
+  '--set-string', 'runtime.systemDataDir=/app/system-data',
+  '--set-string', 'runtime.companionDataDir=/app/companion-data',
+  '--set-string', 'runtime.workspacePath=/app/workspace',
+  '--set-string', 'runtime.logsDir=/app/logs',
+  '--set-string', 'runtime.tempDir=/app/tmp',
+  '--set-string', 'runtime.backupsDir=/app/backups',
+  '--set-string', 'runtime.characterCardPath=/app/companion-data/companion.json',
+];
+
 function assertRealOwnerUpgradeGate() {
   const gate = readFileSync(ownerUpgradeGatePath, 'utf8');
   assertIncludes(gate, 'installOldRelease(', 'owner-upgrade Helm install');
@@ -39,7 +54,7 @@ function assertRealOwnerUpgradeGate() {
   assertNotIncludes(gate, 'helm-startup-', 'standalone Helm startup Job surrogate');
 }
 
-function render(args = []) {
+function renderHelm(args = []) {
   return execFileSync('helm', [
     'template',
     'psfn',
@@ -55,6 +70,10 @@ function render(args = []) {
   });
 }
 
+function render(args = []) {
+  return renderHelm(['--skip-schema-validation', ...nonFleetContractRenderArgs, ...args]);
+}
+
 function assertRenderFails(args, expectedMessage) {
   try {
     render(args);
@@ -65,6 +84,18 @@ function assertRenderFails(args, expectedMessage) {
   }
 
   throw new Error(`Helm render unexpectedly succeeded: ${args.join(' ')}`);
+}
+
+function assertDefaultFleetRenderFails(args, expectedMessage) {
+  try {
+    renderHelm(args);
+  } catch (error) {
+    const output = `${error.stdout ?? ''}${error.stderr ?? ''}`;
+    assertIncludes(output, expectedMessage, 'default Fleet Helm validation failure');
+    return;
+  }
+
+  throw new Error(`Default Fleet Helm render unexpectedly succeeded: ${args.join(' ')}`);
 }
 
 function assertIncludes(haystack, needle, label) {
@@ -141,8 +172,16 @@ function renderedSeedCommand(rendered) {
 function renderOwnerMigrationFixture(rootDir, seedOwnerFiles) {
   const systemDataDir = join(rootDir, 'system-data');
   const companionDataDir = join(rootDir, 'companion-data');
+  mkdirSync(systemDataDir, { recursive: true });
+  writeFileSync(join(systemDataDir, 'companions.json'), JSON.stringify({
+    companions: [{
+      companionId: '11111111-1111-4111-8111-111111111111',
+      companionDataDir: 'companion-data',
+      characterCardPath: 'companion-data/companion.json',
+      postgresSchema: 'companion_default',
+    }],
+  }));
   if (!seedOwnerFiles) {
-    mkdirSync(systemDataDir, { recursive: true });
     writeFileSync(
       join(systemDataDir, 'settings.json'),
       readFileSync(resolve(repoRoot, 'config/settings.seed.json'), 'utf8'),
@@ -332,6 +371,53 @@ function assertServiceSelectorsDoNotSelectPrefetch(rendered, label) {
 }
 
 const rendered = render();
+const defaultFleetRendered = renderHelm();
+const defaultFleetDocuments = parseAllDocuments(defaultFleetRendered)
+  .map(document => document.toJS())
+  .filter(Boolean);
+const defaultFleetAgents = defaultFleetDocuments.filter(document => (
+  document.kind === 'Deployment'
+  && document.spec?.selector?.matchLabels?.['app.kubernetes.io/component'] === 'agent'
+));
+if (defaultFleetAgents.length !== 1) {
+  throw new Error(`default fleet-of-one render must contain one agent, got ${defaultFleetAgents.length}`);
+}
+if (defaultFleetAgents[0]?.metadata?.name
+  !== 'psfn-agent-11111111-1111-4111-8111-111111111111') {
+  throw new Error('default fleet-of-one render did not use the fleet agent naming contract');
+}
+if (findDocumentByKindName(defaultFleetRendered, 'Deployment', 'psfn-agent')) {
+  throw new Error('default fleet-of-one render must not contain the legacy unbound agent Deployment');
+}
+if (findDocumentByKindName(defaultFleetRendered, 'Ingress', 'psfn-garden')) {
+  throw new Error('default fleet-of-one render must expose Garden only through the gateway portal');
+}
+assertIncludes(
+  findDocumentByKindName(defaultFleetRendered, 'Deployment', 'psfn-garden'),
+  'name: FLEET_GARDEN_TARGET_IDS',
+  'default fleet-of-one Garden target registry',
+);
+assertIncludes(
+  findDocumentByKindName(defaultFleetRendered, 'Deployment', 'psfn-gateway'),
+  'name: PSFN_FLEET_AUTH',
+  'default fleet-of-one gateway authentication wiring',
+);
+assertDefaultFleetRenderFails(
+  [
+    '--set', 'secrets.allowMissingRequired=false',
+    '--set-string', 'secrets.values.gatewaySessionIntegrityAuthToken=verify-session-proof',
+    '--set-string', 'secrets.values.backupEncryptionKey=verify-backup-key',
+  ],
+  'secrets.values.gatewayCompanionAuthToken is required when secrets.allowMissingRequired=false',
+);
+assertDefaultFleetRenderFails(
+  ['--set', 'fleet.enabled=false'],
+  "at '/fleet/enabled': value must be true",
+);
+assertDefaultFleetRenderFails(
+  ['--set', 'fleetAuth.enabled=false'],
+  "at '/fleetAuth/enabled': value must be true",
+);
 
 assertRealOwnerUpgradeGate();
 
@@ -1034,7 +1120,7 @@ const fleetPostgresPolicy = findDocumentByKindName(
 assertIncludes(fleetPostgresPolicy, 'component: garden', 'Postgres ingress from fleet Garden');
 assertRenderFails(
   fleetGardenRenderArgs([]),
-  'fleet.enabled=true requires at least two registered companions',
+  'fleet.enabled=true requires at least one registered companion',
 );
 assertRenderFails(
   fleetGardenRenderArgs([fleetGardenCompanions[0], fleetGardenCompanions[0]]),
@@ -1233,24 +1319,17 @@ assertNotIncludes(
 // Always-fleet deploy shape: every deployment is a fleet of one or more
 // companions enumerated by the mandatory system-owned companions.json manifest;
 // topology is derived from the entry count, not the retired PSFN_MULTI_COMPANION
-// flag. The single-companion (non-fleet) seed init provisions a deterministic
-// one-entry manifest into system-data when absent and fails closed if it is
-// still missing. The manifest write is NOT gated on bootstrap.seedOwnerFiles.
+// flag. The chart never synthesizes or overwrites this owner file.
 const singleCompanionSeedCommand = renderedSeedCommand(rendered);
 assertIncludes(
   singleCompanionSeedCommand,
   'companions_manifest="/app/system-data/companions.json"',
-  'single-companion seed init resolves the companions.json manifest path',
+  'seed init resolves the companions.json manifest path',
 );
-assertIncludes(
+assertNotIncludes(
   singleCompanionSeedCommand,
-  '"companionId":"11111111-1111-4111-8111-111111111111"',
-  'single-companion seed init provisions a one-entry manifest from runtime.companionId',
-);
-assertIncludes(
-  singleCompanionSeedCommand,
-  'if [ ! -e "$companions_manifest" ]; then',
-  'single-companion seed init writes the manifest only when absent',
+  'manifest_tmp=',
+  'seed init must not synthesize companions.json',
 );
 assertIncludes(
   singleCompanionSeedCommand,
@@ -1266,22 +1345,6 @@ const singleCompanionGatewayEnv = new Map(
 if (singleCompanionGatewayEnv.has('PSFN_MULTI_COMPANION')) {
   throw new Error('single-companion gateway must not set the retired PSFN_MULTI_COMPANION env');
 }
-// When single-companion provisioning is disabled, the seed init must not write
-// the manifest but must still fail closed on its absence (externally provisioned).
-const unprovisionedSeedCommand = renderedSeedCommand(
-  render(['--set', 'bootstrap.provisionSingleCompanionManifest=false']),
-);
-assertNotIncludes(
-  unprovisionedSeedCommand,
-  'if [ ! -e "$companions_manifest" ]; then',
-  'provisionSingleCompanionManifest=false omits the manifest write',
-);
-assertIncludes(
-  unprovisionedSeedCommand,
-  'Missing required fleet manifest',
-  'provisionSingleCompanionManifest=false still fails closed on a missing manifest',
-);
-
 const seededRender = render(['--set', 'bootstrap.seedOwnerFiles=true']);
 assertIncludes(
   seededRender,

@@ -344,16 +344,19 @@ function loadConfigForMode(mode: LoadConfigMode, env: NodeJS.ProcessEnv = proces
     seedDir: parseOptionalStringEnv(env.CONFIG_DIR),
   });
   // The fleet manifest is mandatory (every deployment is a fleet of one or
-  // more companions). Topology is derived from the manifest, not a flag: a
-  // manifest with more than one entry is the multi-companion tenancy shape; a
-  // one-entry manifest is the canonical single-companion deployment ("a fleet
-  // of one") and boots identically to the old single-companion topology.
+  // more companions). Entry count still tells domain services whether
+  // cross-companion tenancy exists, but Fleet Auth and the operator always use
+  // the resolved roster: a one-entry deployment must not fall back to the
+  // legacy fixed Garden or unbound gateway transport.
   const rawCompanionFleet = resolveCompanionFleet({
     dataDir,
     seedDir: parseOptionalStringEnv(env.CONFIG_DIR),
   });
   const multiCompanion = rawCompanionFleet.companions.length > 1;
-  const companionId = mode === 'operator' && multiCompanion
+  const usesFleetControlPlane = mode === 'operator'
+    || multiCompanion
+    || fleetAuthProjection !== undefined;
+  const companionId = mode === 'operator' && usesFleetControlPlane
     ? undefined
     : requireCompanionId(env);
   const configuredCompanionDataDir = runtimePathLayout.companionDataDir;
@@ -361,7 +364,7 @@ function loadConfigForMode(mode: LoadConfigMode, env: NodeJS.ProcessEnv = proces
     ?? `${configuredCompanionDataDir}/${DEFAULT_COMPANION_CARD_FILE_NAME}`;
   const configuredPostgresSchema = parsePostgresSchemaEnv(env.COMPANION_PG_SCHEMA);
 
-  const companionFleet = multiCompanion
+  const companionFleet = usesFleetControlPlane
     ? resolveCompanionFleetPaths(rawCompanionFleet, runtimePathLayout.runtimeRootDir, [
       { label: 'systemDataDir', path: runtimePathLayout.systemDataDir },
       { label: 'companionDataDir', path: runtimePathLayout.companionDataDir },
@@ -393,9 +396,9 @@ function loadConfigForMode(mode: LoadConfigMode, env: NodeJS.ProcessEnv = proces
       `${GATEWAY_SESSION_INTEGRITY_AUTH_TOKEN_ENV} is required for the isolated session-integrity role`,
     );
   }
-  if (multiCompanion && mode === 'agent' && !gatewayCompanionAuthToken) {
+  if (usesFleetControlPlane && mode === 'agent' && !gatewayCompanionAuthToken) {
     throw new Error(
-      `${GATEWAY_COMPANION_AUTH_TOKEN_ENV} is required for multi-companion agent authentication`,
+      `${GATEWAY_COMPANION_AUTH_TOKEN_ENV} is required for fleet agent authentication`,
     );
   }
 

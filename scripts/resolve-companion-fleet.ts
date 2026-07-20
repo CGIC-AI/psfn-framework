@@ -1,5 +1,5 @@
 /**
- * Supervisor launcher helper: resolve the validated multi-companion fleet and
+ * Supervisor launcher helper: resolve the validated companion fleet and
  * emit a machine-parseable spawn plan for `scripts/start-gateway-agent.sh`.
  *
  * The launcher sources `.env` into this process's environment before invoking
@@ -17,9 +17,7 @@
  *     fleet); there is no flag-gated single mode.
  *
  * Output contract (stdout):
- *   - Single-companion topology (a one-entry fleet): print NOTHING.
- *     The launcher reads empty stdout as "stay in single-agent mode".
- *   - Multi-companion topology (a multi-entry fleet): one line per companion, fields tab-separated in
+ *   - One line per companion, fields tab-separated in
  *     the order companionId, companionDataDir, characterCardPath, postgresSchema,
  *     personalWorkspacePath, companionAuthToken, sessionIntegrityAuthToken,
  *     adminTransportSocket.
@@ -103,11 +101,6 @@ async function main(): Promise<void> {
   const env = process.env;
 
   const runtime = resolveConfiguredLocalCompanionFleetRuntime(env);
-  if (!runtime) {
-    // Single-companion topology: emit nothing; the launcher keeps its existing
-    // single-agent behavior byte-identically.
-    return;
-  }
   const mode = process.argv[2];
   if (mode === '--probe-ready') {
     await probeFleetAdminTransports(runtime);

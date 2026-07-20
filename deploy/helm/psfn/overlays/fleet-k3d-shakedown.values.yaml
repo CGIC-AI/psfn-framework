@@ -33,7 +33,6 @@ runtime:
   backupsDir: /runtime/backups
 
 fleet:
-  enabled: true
   runtimeRoot: /runtime
   companions:
     # Primary/canonical companion (first entry; backup leader).
@@ -70,7 +69,6 @@ bootstrap:
   seedOwnerFiles: false
 
 fleetAuth:
-  enabled: true
   # Every env-kind credential reference in fleet-auth.json must be supplied
   # here (the gateway fails closed on any unset referenced env var). The
   # names below match config/fleet-auth.seed.json; keep them aligned with the

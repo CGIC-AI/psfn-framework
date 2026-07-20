@@ -5,7 +5,9 @@ Before upgrading an existing release, read the canonical
 component ordering and operator-visible exposure changes; this README remains
 the chart value and topology reference.
 
-This chart renders the first PSFN Kubernetes/k3s topology for one companion:
+This chart renders the PSFN Kubernetes/k3s cluster topology. The default roster
+contains one companion; larger fleets use the same values shape with more
+`fleet.companions` entries:
 
 - gateway Deployment and the sole privileged browser Service/Ingress
 - agent Deployment and internal mTLS Garden admin transport Service
@@ -68,8 +70,8 @@ Default values render with `CHANGE_ME_*` placeholders so `helm lint` and
   The agent also derives its Garden audit opaque-ID key from this proof through
   a one-way, domain-separated transform; it never receives the gateway root key
 - `secrets.values.gatewayCompanionAuthToken` ->
-  `GATEWAY_COMPANION_AUTH_TOKEN`, the distinct role-bound agent proof required
-  by multi-companion agents; it is optional for single-companion installs
+  `GATEWAY_COMPANION_AUTH_TOKEN`, the distinct role-bound proof required by
+  every cluster agent
 - `secrets.values.backupEncryptionKey` -> `PSFN_BACKUP_ENCRYPTION_KEY`, consumed by app workloads
 - provider/channel secrets as needed: `OPENROUTER_API_KEY`, `OPENAI_API_KEY`,
   `LITELLM_API_KEY`, `DISCORD_TOKEN`, `DISCORD_BOT_ID`, `DEEPGRAM_API_KEY`,
@@ -88,19 +90,13 @@ material into ConfigMaps, annotations, labels, or NOTES.
 
 ## Unified Fleet HTTPS Origin
 
-`fleetAuth.enabled=false` is the normal single-admin topology. Garden uses
-`ADMIN_TOKEN`; its direct Ingress is controlled by `ingress.garden.enabled`
-(true by default), and single-node direct access can instead use
-`hostPorts.garden.enabled`. These are operator-selected access mechanisms, not
-SSO substitutes.
-
-For fleet human authentication, provision the canonical `fleet-auth.json`
-owner file and enable the repository-owned topology:
+Every install uses Cluster Auth and the unified gateway origin, including a cluster
+of one. Provision the canonical `fleet-auth.json` owner file and its referenced
+credentials before install:
 
 ```bash
 helm upgrade --install psfn deploy/helm/psfn \
   --namespace psfn \
-  --set fleetAuth.enabled=true \
   --set-string runtime.companionId=<registered-companion-uuid> \
   --set networkPolicy.enabled=true \
   --set hostPorts.gatewayApi.enabled=false \
@@ -130,11 +126,11 @@ for validation and rollback requirements.
 The retired raw fleet-status listener is not present in the chart or exposed by
 Ingress.
 
-## Fleet Topology (multi-companion)
+## Cluster Topology
 
-`fleet.enabled=true` renders the complete multi-companion topology from
-values — a fresh fleet install needs zero hand-created workload, Service,
-certificate, or NetworkPolicy objects. `fleet.companions` is the ordered
+The chart renders the complete cluster topology from values — a fresh install
+needs zero hand-created workload, Service, certificate, or NetworkPolicy
+objects. `fleet.companions` is the ordered
 registry; the FIRST entry is the primary/canonical companion (the shared
 gateway and fleet Garden assume its identity and it is the fleet backup
 leader), every later entry is a follower. Validations fail the render unless
@@ -157,8 +153,7 @@ Per registered companion the chart renders:
 - a gateway-RPC client certificate and an admin-transport server certificate
   whose SANs bind the per-companion Service DNS names and the exact SPIFFE URI
   `spiffe://<trustDomain>/psfn/agent/<companionId>`, issued by the same
-  cert-manager CA flow as the single-companion certificates; each companion
-  pod mounts only its own certificates
+  cert-manager CA flow; each companion pod mounts only its own certificates
 - NetworkPolicy admits: every fleet agent may reach the gateway RPC listener
   (port `ports.gatewayRpc`), and the fleet Garden egress on
   `ports.agentAdmin` targets every registered companion pod
@@ -182,17 +177,18 @@ the top.
 
 ## Runtime Layout
 
-The chart sets the production split-root contract explicitly:
+The default cluster-of-one sets the production split-root contract explicitly
+for companion `11111111-1111-4111-8111-111111111111`:
 
 ```text
-SYSTEM_DATA_DIR=/app/system-data
-COMPANION_DATA_DIR=/app/companion-data
-WORKSPACE_PATH=/app/workspace
-PSFN_LOGS_DIR=/app/logs
-PSFN_TEMP_DIR=/app/tmp
-BACKUP_ROOT_DIR=/app/backups
+SYSTEM_DATA_DIR=/runtime/system-data
+COMPANION_DATA_DIR=/runtime/companions/11111111-1111-4111-8111-111111111111
+WORKSPACE_PATH=/runtime/workspaces/personal/11111111-1111-4111-8111-111111111111
+PSFN_LOGS_DIR=/runtime/logs
+PSFN_TEMP_DIR=/runtime/tmp
+BACKUP_ROOT_DIR=/runtime/backups
 CONFIG_DIR=/app/config
-CHARACTER_CARD_PATH=/app/companion-data/companion.json
+CHARACTER_CARD_PATH=/runtime/companions/11111111-1111-4111-8111-111111111111/companion.json
 ```
 
 `system-data`, `companion-data`, `workspace`, `runtime`, and `model-cache` are
@@ -212,22 +208,14 @@ claim across releases.
 
 Every PSFN deployment is a fleet of one or more companions enumerated by the
 mandatory system-owned `companions.json` manifest at `SYSTEM_DATA_DIR/companions.json`;
-topology is derived from the entry count (one entry is single-companion, more
-than one is multi-companion tenancy) and the `PSFN_MULTI_COMPANION` flag is
-retired. For the single-companion (non-fleet) topology, the seed init container
-provisions a deterministic one-entry manifest derived from `runtime.companionId`
-into `system-data` when absent, so a fresh install boots as a one-entry fleet
-and an existing pre-manifest single-companion install migrates simply by rolling
-this chart. This manifest write is chart-owned topology wiring, provisioned
-independently of `bootstrap.seedOwnerFiles`, idempotent (write-when-absent, never
-overwriting an operator/Garden-edited manifest), and followed by a fail-closed
-presence assertion. Set `bootstrap.provisionSingleCompanionManifest=false` to
-require an externally provisioned manifest and fail closed at init when it is
-missing. With `fleet.enabled=true`, `companions.json` is always
-operator-provisioned onto the `system-data` root; the chart never writes it and
-the init container asserts its presence. See
-[`docs/helm-upgrades.md`](../../../docs/helm-upgrades.md#provision-the-always-fleet-manifest-for-existing-single-companion-installs)
-for the existing-install migration procedure.
+entry count determines only whether cross-companion tenancy is possible. The
+chart never infers or overwrites this owner file; the init container asserts
+its presence. A one-entry install and a larger cluster therefore have the same
+startup boundary. `fleet.enabled` and `fleetAuth.enabled` are fixed to `true`
+by `values.schema.json`; setting either to `false` is rejected before templates
+render. See
+[`docs/helm-upgrades.md`](../../../docs/helm-upgrades.md#formalize-an-existing-primary-as-a-cluster-tenant)
+for the existing-install mapping procedure.
 
 `bootstrap.seedOwnerFiles` defaults to `false`. With it disabled, absent owner
 files fail closed at startup with the runtime's `loadRequiredJson` error rather
@@ -267,14 +255,10 @@ cannot infer or safely perform this fleet transaction.
 For an orchestrated Helm cutover, set `ownerMigration.required=true` and
 `ownerMigration.enabled=true`, provide the exact digest map under
 `ownerMigration.approvals`, and enumerate every companion with its existing PVC
-and canonical `<runtimeRoot>/companions/...` mount path. Topology is derived from
-`companions.json` presence (the `PSFN_MULTI_COMPANION` flag is retired): a
-single-companion release lists exactly one companion, and when no
-`companions.json` exists yet the migrator synthesizes the one-entry migration
-fleet from the environment. A multi-companion installation lists every companion
-from the already-present `companions.json`. The migrator does not persist the
-runtime `companions.json`; the chart provisions the single-companion manifest
-separately (see [Runtime Layout](#runtime-layout)). Also set
+and canonical `<runtimeRoot>/companions/...` mount path. The one cluster
+procedure lists every companion from `companions.json`; a cluster of one lists
+one companion. The migrator does not persist the runtime `companions.json`.
+Also set
 the chart's normal persistence claims through each `existingClaim` field. The
 pre-upgrade Hook Job captures `snapshotOutputDir`, runs the same compiled
 approval-bound fleet migrator as its next init container, and runs one mandatory
@@ -385,10 +369,8 @@ helm upgrade --install "$RELEASE" deploy/helm/psfn \
 
 For scheduler/capability, this upgrade handles owner routing and then scheduler
 schema conversion. The charge/skills installation transaction must already be
-complete: one explicit root for a single-companion release, or every manifest
-root for a multi-companion installation. Do not edit PVC JSON by hand or run a
-separate schema rewrite before Helm. Repeat this command for every
-release/companion root in a multi-release cluster.
+complete for every manifest root. Do not edit PVC JSON by hand or run a
+separate schema rewrite before Helm.
 
 After the Helm upgrade, require all three app rollouts and verify the new owner
 paths and markers:
@@ -494,9 +476,8 @@ old systemd app services must remain stopped to avoid port and Discord login
 conflicts. When `networkPolicy.enabled=true`, set `sourceCIDRs` to the operator
 workstation or trusted subnet that should reach the node-facing port.
 
-Garden hostPort is supported only with `fleetAuth.enabled=false`, where Garden
-authenticates operators with `ADMIN_TOKEN`. With fleet auth enabled, use the
-canonical gateway Garden route instead; Helm rejects a Garden hostPort.
+Garden has no direct hostPort in the cluster topology. Use the canonical gateway
+Garden route; Helm rejects a Garden hostPort.
 
 The Gateway and Garden Deployments use a Recreate strategy so single-node k3s
 rollouts do not deadlock when both the old and new pods need the same hostPort.

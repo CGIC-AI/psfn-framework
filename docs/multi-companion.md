@@ -49,11 +49,10 @@ with more than one entry. The `PSFN_MULTI_COMPANION` env flag has been retired.
 - Resolution + fail-closed contract: `resolveCompanionFleet({ dataDir, seedDir })`
   (`src/system/config/companions-config.ts`):
   - `companions.json` missing or invalid → refuse to start with an actionable error
-  - one-entry manifest → single-companion topology (`config.multiCompanion` is
-    `false`, byte-identical to the old single-companion behavior: no tenant
-    schema/role binding, no cluster supervisor, no fleet-auth requirement)
-  - multi-entry manifest → multi-companion tenancy (`config.multiCompanion` is
-    `true`)
+  - one-entry manifest → one cluster agent, the cluster supervisor, Cluster Auth,
+    the cluster Garden, and an isolated Postgres schema
+  - additional entries → more agents and schemas under those same controls;
+    the values and launch contracts do not change
 
 Each companion entry (`CompanionFleetEntry`, strict — unknown keys rejected)
 carries exactly:
@@ -185,14 +184,13 @@ extra `shared` schema for cross-companion world data.
   (`src/persistence/postgres/migrations.ts`) holds cross-companion world data —
   `companion_presence` (co-presence) and the shared-world wiki chunks. It is
   provisioned advisory-lock-serialized (`src/persistence/postgres/shared-schema.ts`)
-  so N concurrently-starting agents are safe. In single-companion topology (a
-  one-entry cluster) the shared schema is never created or touched.
+  so N concurrently-starting agents are safe.
 - Migrations run per schema: `runPostgresMigrations(pool, statements, { schema })`.
-  Omitting `schema` is byte-identical to single-companion behavior.
+  Every companion store supplies its registered schema.
 
 ## Launcher: supervisor mode
 
-`scripts/start-gateway-agent.sh` grows a supervisor mode that reads the resolved
+`scripts/start-gateway-agent.sh` is a cluster supervisor that reads the resolved
 cluster and spawns one agent process per companion.
 
 - Cluster plan: `npm run resolve:companion-fleet`
@@ -201,8 +199,8 @@ cluster and spawns one agent process per companion.
   `companionId, companionDataDir, characterCardPath, postgresSchema,
   personalWorkspacePath,
   role-bound agent proof, role-bound session-integrity proof,
-  adminTransportSocket`. A single-companion topology prints nothing — the
-  launcher reads empty stdout as "stay in single-agent mode." The admin socket is derived from
+  adminTransportSocket`. A one-entry roster emits one line and follows the same
+  supervisor path as a larger roster. The admin socket is derived from
   `resolveCompanionAdminTransportSocketPath`
   (`src/operator/garden/transport-paths.ts`), never by the shell.
 - Per-agent env: each spawned agent gets a scrubbed environment
@@ -211,16 +209,15 @@ cluster and spawns one agent process per companion.
   the role-bound gateway proofs from the plan. The proofs are derived from the
   gateway session keyring and companion ID; they are passed only to the agent and its
   isolated session-integrity worker and are omitted from dry-run output.
-  The single-companion (one-entry cluster) launcher derives the same role
-  separation for its isolated worker even though normal agent methods retain
-  local-socket trust in single-companion topology.
+  A one-entry cluster derives the same role separation and uses the same bound
+  gateway routing as every other cluster.
 - `--dry-run` (or `PSFN_SUPERVISOR_DRY_RUN=1`) resolves and prints the spawn
   plan without creating workspace directories. The real launcher acquires its
   socket-scoped lock before migration or provisioning, so a rejected concurrent
   launcher cannot mutate workspace state.
 - Shared fate: any supervised process exit tears down the whole cluster.
 
-Gateway registration is authenticated in multi-companion mode. The gateway
+Gateway registration is authenticated for every roster size. The gateway
 accepts only IDs present in the resolved cluster and verifies a role-bound HMAC
 proof before routing any request. General agent RPC methods and the two
 session-integrity signing methods have disjoint role policies in both

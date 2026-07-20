@@ -4,13 +4,18 @@
 {{- $companionId := $companion.companionId -}}
 {{- $companionDataDir := printf "%s/companions/%s" $root.Values.fleet.runtimeRoot $companionId -}}
 {{- $workspacePath := printf "%s/workspaces/personal/%s" $root.Values.fleet.runtimeRoot $companionId -}}
+{{- $companionDataClaim := default (include "psfn.companionDataClaimName" $root) $companion.companionDataClaim -}}
+{{- $workspaceClaim := default (include "psfn.workspaceClaimName" $root) $companion.workspaceClaim -}}
+{{- $authSecretName := default (include "psfn.appSecretName" $root) $companion.authSecret.name -}}
+{{- $sessionIntegrityKey := default $root.Values.secrets.keys.gatewaySessionIntegrityAuthToken $companion.authSecret.sessionIntegrityKey -}}
+{{- $companionAuthKey := default $root.Values.secrets.keys.gatewayCompanionAuthToken $companion.authSecret.companionAuthKey -}}
 {{- $values := deepCopy $root.Values -}}
 {{- $_ := set $values.runtime "companionId" $companionId -}}
 {{- $_ = set $values.runtime "companionDataDir" $companionDataDir -}}
 {{- $_ = set $values.runtime "characterCardPath" (printf "%s/companion.json" $companionDataDir) -}}
 {{- $_ = set $values.runtime "workspacePath" $workspacePath -}}
-{{- $_ = set $values.persistence.companionData "existingClaim" $companion.companionDataClaim -}}
-{{- $_ = set $values.persistence.workspace "existingClaim" $companion.workspaceClaim -}}
+{{- $_ = set $values.persistence.companionData "existingClaim" $companionDataClaim -}}
+{{- $_ = set $values.persistence.workspace "existingClaim" $workspaceClaim -}}
 {{- $ctx := dict "Values" $values "Release" $root.Release "Chart" $root.Chart "Files" $root.Files -}}
 {{- $target := dict "root" $root "companionId" $companionId -}}
 ---
@@ -105,13 +110,13 @@ spec:
             - name: GATEWAY_SESSION_INTEGRITY_AUTH_TOKEN
               valueFrom:
                 secretKeyRef:
-                  name: {{ $companion.authSecret.name }}
-                  key: {{ $companion.authSecret.sessionIntegrityKey }}
+                  name: {{ $authSecretName }}
+                  key: {{ $sessionIntegrityKey }}
             - name: GATEWAY_COMPANION_AUTH_TOKEN
               valueFrom:
                 secretKeyRef:
-                  name: {{ $companion.authSecret.name }}
-                  key: {{ $companion.authSecret.companionAuthKey }}
+                  name: {{ $authSecretName }}
+                  key: {{ $companionAuthKey }}
             - name: GATEWAY_RPC_TLS_CA_PATH
               value: {{ printf "%s/gateway-rpc/ca.crt" $root.Values.certificates.mountBasePath | quote }}
             - name: GATEWAY_RPC_TLS_CERT_PATH

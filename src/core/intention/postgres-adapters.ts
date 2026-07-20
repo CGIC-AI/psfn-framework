@@ -9,6 +9,8 @@ import { createIntentionPostgresPool, ensureIntentionPostgresSchema } from './po
 import { PostgresBehavioralPatternTracker } from './postgres-adapters/intention-record-adapter.js';
 import { PostgresWeightedThoughtStore } from './postgres-adapters/weighted-thoughts-adapter.js';
 import { createWeightedThoughtStorePort } from './weighted-thought-store-port.js';
+import { PostgresSocialDesireStore } from './postgres-adapters/social-desire-adapter.js';
+import { createSocialDesireStorePort } from './social-desire-store-port.js';
 import type { PostgresIntentionPortOptions, PostgresIntentionPorts } from './postgres-adapters/types.js';
 
 export type { PostgresIntentionPortOptions, PostgresIntentionPorts } from './postgres-adapters/types.js';
@@ -21,6 +23,7 @@ function createPostgresIntentionRuntimeState(
   pendingFollowUpBackend: PostgresPendingFollowUpStore;
   behavioralBackend: PostgresBehavioralPatternTracker;
   weightedThoughtBackend: PostgresWeightedThoughtStore;
+  socialDesireBackend: PostgresSocialDesireStore;
   ports: PostgresIntentionPorts;
 } {
   const now = options.now ?? (() => new Date());
@@ -33,16 +36,19 @@ function createPostgresIntentionRuntimeState(
     minimumAverageOutcomeForPromotion: options.minimumAverageOutcomeForPromotion,
   });
   const weightedThoughtBackend = new PostgresWeightedThoughtStore(pool);
+  const socialDesireBackend = new PostgresSocialDesireStore(pool);
   const concernStore = createConcernStorePort(concernBackend);
   const pendingFollowUpStore = createPendingFollowUpStorePort(pendingFollowUpBackend);
   const behavioralPatternTracker = createBehavioralPatternStorePort(behavioralBackend);
   const weightedThoughtStore = createWeightedThoughtStorePort(weightedThoughtBackend);
+  const socialDesireStore = createSocialDesireStorePort(socialDesireBackend);
 
   return {
     concernBackend,
     pendingFollowUpBackend,
     behavioralBackend,
     weightedThoughtBackend,
+    socialDesireBackend,
     ports: {
       concernProvider: {
         getActiveConcerns: (contactId?: string) => concernBackend.snapshotActiveConcerns(contactId),
@@ -59,6 +65,7 @@ function createPostgresIntentionRuntimeState(
       pendingFollowUpStore,
       behavioralPatternTracker,
       weightedThoughtStore,
+      socialDesireStore,
     },
   };
 }
@@ -86,6 +93,7 @@ export async function createPostgresIntentionPorts(
     state.pendingFollowUpBackend.hydrateCache(),
     state.behavioralBackend.hydrateCache(),
     state.weightedThoughtBackend.hydrateCache(),
+    state.socialDesireBackend.hydrateCache(),
   ]);
   return state.ports;
 }

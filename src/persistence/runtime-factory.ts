@@ -15,6 +15,7 @@ import type {
   IntentionRuntimeWiring,
 } from '../core/intention/runtime-wiring.js';
 import type { WeightedThoughtStorePort } from '../core/intention/weighted-thought-store-port.js';
+import type { SocialDesireStorePort } from '../core/intention/social-desire-store-port.js';
 import type {
   PersistenceBackend,
   SubstrateConfig,
@@ -76,6 +77,8 @@ export interface AgentPersistenceRuntime {
   intentionRuntime?: IntentionRuntimeWiring;
   intentionProviders?: IntentionRuntimeProviders;
   weightedThoughtStore?: WeightedThoughtStorePort;
+  /** Per-contact durable social desire store (bead oth4.1); Postgres-backed, hydrated at startup. */
+  socialDesireStore?: SocialDesireStorePort;
   internalStateStore: InternalStateStorePort;
   participantTrendStore: ParticipantTrendStorePort;
   scheduledPromptStore: ScheduledPromptStorePort;
@@ -246,6 +249,7 @@ export async function createAgentPersistenceRuntime(
     intentionRuntime,
     intentionProviders: intentionRuntime,
     weightedThoughtStore: intentionRuntime.weightedThoughtStore,
+    socialDesireStore: intentionRuntime.socialDesireStore,
     internalStateStore: await PostgresInternalStateStore.connect(databaseUrl, { schema, role: tenantRole }),
     participantTrendStore: await PostgresParticipantTrendStore.connect(databaseUrl, { schema, role: tenantRole }),
     scheduledPromptStore: await PostgresScheduledPromptStore.connect(databaseUrl, { schema, role: tenantRole }),

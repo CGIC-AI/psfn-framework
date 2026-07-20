@@ -1047,6 +1047,52 @@ export const POSTGRES_INTENTION_MIGRATIONS = [
   `,
   `CREATE INDEX IF NOT EXISTS idx_weighted_thoughts_active ON weighted_thoughts(nudge_state, accumulated_weight DESC, last_reinforced_at DESC, id);`,
   `CREATE INDEX IF NOT EXISTS idx_weighted_thoughts_contact ON weighted_thoughts(contact_id, nudge_state, accumulated_weight DESC, id);`,
+  // Per-contact durable social desire (epic oth4, bead oth4.1). contact_id is
+  // the PRIMARY KEY so the one-desire-per-contact coalescing invariant is
+  // schema-enforced. Pressure values persist with their anchor timestamp;
+  // decay is computed at read time, so pressure survives restart without a
+  // decay writer (9vi.13 pattern). Accumulation is relationship-tier gated
+  // upstream — stranger/public tiers never produce a row at all.
+  `
+  CREATE TABLE IF NOT EXISTS social_desires (
+    contact_id TEXT PRIMARY KEY,
+    warm_pressure DOUBLE PRECISION NOT NULL DEFAULT 0,
+    repair_pressure DOUBLE PRECISION NOT NULL DEFAULT 0,
+    pressure_anchor_at TEXT NOT NULL,
+    last_warm_felt_at TEXT,
+    last_repair_felt_at TEXT,
+    last_warm_tick_at TEXT,
+    last_repair_tick_at TEXT,
+    tick_count INTEGER NOT NULL DEFAULT 0,
+    absorbed_signal_count INTEGER NOT NULL DEFAULT 0,
+    tier_at_last_tick TEXT NOT NULL,
+    reinforced_concern_ids JSONB NOT NULL DEFAULT '[]'::jsonb,
+    created_at TEXT NOT NULL,
+    CHECK (warm_pressure >= 0),
+    CHECK (repair_pressure >= 0),
+    CHECK (tick_count >= 0),
+    CHECK (absorbed_signal_count >= 0),
+    CHECK (tier_at_last_tick IN ('acquaintance', 'friend', 'family', 'partner', 'ai_companion'))
+  );
+  `,
+  `ALTER TABLE social_desires DROP CONSTRAINT IF EXISTS social_desires_tier_at_last_tick_check;`,
+  `
+  ALTER TABLE social_desires
+    ADD CONSTRAINT social_desires_tier_at_last_tick_check
+    CHECK (tier_at_last_tick IN ('acquaintance', 'friend', 'family', 'partner', 'ai_companion'));
+  `,
+  `
+  CREATE TABLE IF NOT EXISTS social_desire_settlements (
+    settlement_id TEXT PRIMARY KEY,
+    contact_id TEXT NOT NULL,
+    disposition TEXT NOT NULL CHECK (disposition IN ('sent', 'terminal_block')),
+    settled_at TEXT NOT NULL
+  );
+  `,
+  `
+  ALTER TABLE social_desire_settlements
+    DROP CONSTRAINT IF EXISTS social_desire_settlements_contact_id_fkey;
+  `,
   // Companion-local ICP candidate state. The reason summary and peer contact
   // binding are private motivation, so this table belongs in each companion's
   // own schema and must never be copied into the shared control-plane tables.

@@ -1132,6 +1132,14 @@ assertRenderFails(
   ],
   'requires both secretRef.name and secretRef.key',
 );
+assertRenderFails(
+  [
+    ...fleetGardenRenderArgs(),
+    '--set-json',
+    'fleetAuth.credentialEnv=[{"name":"FLEET_AUTH_NULL_VALUE","value":null}]',
+  ],
+  'fleetAuth.credentialEnv[0] (FLEET_AUTH_NULL_VALUE) value must not be empty',
+);
 
 const internalOnlyGardenRendered = render([
   '--set', 'ingress.garden.enabled=false',

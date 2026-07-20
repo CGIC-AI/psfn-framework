@@ -16,11 +16,17 @@ import {
   type ObservedGroupMemorySchedulerPort,
   type ParticipationAppraiserPort,
   type PassiveNameCandidatePort,
+  type ReservationPhasePort,
 } from './gateway-message-handlers.js';
 import type {
   ParticipationAppraisalResult,
   ParticipationCandidate,
 } from '../../core/participation/types.js';
+import type { ReservationDecision } from '../../core/agent/arbiter/reservation-phase.js';
+import type {
+  RoomEpisodeSnapshot,
+  SpeakingReservationSnapshot,
+} from '../../core/agent/arbiter/speaking-arbiter-store-port.js';
 import type {
   CompanionMessageDeliveryFailureNotification,
   CompanionMessageFailureReportParams,
@@ -101,6 +107,7 @@ function createHarness(overrides?: {
   observedGroupMemoryScheduler?: ObservedGroupMemorySchedulerPort;
   passiveNameCandidateBuilder?: PassiveNameCandidatePort;
   participationAppraiser?: ParticipationAppraiserPort;
+  reservationPhase?: ReservationPhasePort;
   discordSend?: (channelId: string, content: string) => Promise<void>;
   discordSendMedia?: (channelId: string, media: Attachment) => Promise<void>;
   companionSend?: (
@@ -247,6 +254,9 @@ function createHarness(overrides?: {
       : {}),
     ...(overrides?.participationAppraiser
       ? { participationAppraiser: overrides.participationAppraiser }
+      : {}),
+    ...(overrides?.reservationPhase
+      ? { reservationPhase: overrides.reservationPhase }
       : {}),
     ...(overrides?.outboundReplyGuard
       ? { outboundReplyGuard: overrides.outboundReplyGuard }
@@ -2113,6 +2123,222 @@ describe('registerGatewayMessageHandlers — participation appraiser wiring (jp3
     expect(harness.safeguardAuditTrail.append).toHaveBeenCalledWith(
       'participation.candidate.suppressed',
       expect.objectContaining({ reason: 'not_group' }),
+    );
+  });
+});
+
+describe('registerGatewayMessageHandlers — reservation phase wiring (jp36.5.1.2)', () => {
+  const CHANNEL = 'discord:general';
+  const SOURCE_MESSAGE_ID = 'discord-observe-reservation-1';
+
+  function makeCandidate(): ParticipationCandidate {
+    return {
+      schemaVersion: 1,
+      channelId: CHANNEL,
+      channelType: 'discord',
+      sourceMessageId: SOURCE_MESSAGE_ID,
+      trigger: 'passive_name',
+      triggerAuthorId: 'human-alice',
+      triggerAuthorName: 'Alice',
+      triggerContent: 'I wonder what Selene thinks',
+      triggerTimestampMs: 1_000_000,
+      matchedName: true,
+      matchedDirectAddress: false,
+      precedingContext: [],
+      createdAtMs: 1_000_001,
+    };
+  }
+
+  function createdBuilder(candidate: ParticipationCandidate): PassiveNameCandidatePort {
+    return { build: vi.fn(async () => ({ status: 'created' as const, candidate })) };
+  }
+
+  function observeMessage() {
+    return makeMessage({
+      id: SOURCE_MESSAGE_ID,
+      channelId: CHANNEL,
+      channelType: 'discord',
+      timestamp: '2026-03-02T02:00:00.000Z',
+      routing: { source: 'discord', responseMode: 'observe' },
+    });
+  }
+
+  function makeReservationSnapshot(): SpeakingReservationSnapshot {
+    return {
+      reservationId: '99999999-9999-4999-8999-999999999999',
+      channelId: CHANNEL,
+      triggerEventId: SOURCE_MESSAGE_ID,
+      companionId: '11111111-1111-4111-8111-111111111111',
+      episodeId: 'episode-1',
+      reservedAtMs: 1_000_100,
+      expiresAtMs: 1_120_100,
+      status: 'reserved',
+      reason: null,
+      finalizedAtMs: null,
+      revision: 1,
+    };
+  }
+
+  function makeEpisodeSnapshot(): RoomEpisodeSnapshot {
+    return {
+      episodeId: 'episode-1',
+      channelId: CHANNEL,
+      status: 'open',
+      pressure: 0,
+      openedAtMs: 1_000_000,
+      lastActivityAtMs: 1_000_100,
+      consecutiveAutonomousTurns: 0,
+      lastSpeakerCompanionId: null,
+      revision: 1,
+      participants: [],
+    };
+  }
+
+  function replyingAppraiser(action: 'ignore' | 'react' | 'reply'): ParticipationAppraiserPort {
+    return {
+      appraise: vi.fn(async (): Promise<ParticipationAppraisalResult> => ({
+        appraisal:
+          action === 'react'
+            ? { action, reasonCode: 'ack', confidence: 0.5, reactionClass: 'acknowledge' }
+            : { action, reasonCode: 'r', confidence: 0.6 },
+        failClosed: false,
+      })),
+    };
+  }
+
+  it('gates a candidate before appraisal so the appraiser model never runs', async () => {
+    const appraiser = replyingAppraiser('reply');
+    const reservationPhase: ReservationPhasePort = {
+      reserve: vi.fn(async (): Promise<ReservationDecision> => ({
+        outcome: 'gated',
+        blockedBy: 'fatigue_pot_insufficient',
+      })),
+      settleAfterAppraisal: vi.fn(),
+      releaseIgnored: vi.fn(),
+    };
+    const harness = createHarness({
+      passiveNameCandidateBuilder: createdBuilder(makeCandidate()),
+      participationAppraiser: appraiser,
+      reservationPhase,
+    });
+
+    await harness.onDiscordMessage(observeMessage());
+
+    // The gate ran with the candidate's room event...
+    expect(reservationPhase.reserve).toHaveBeenCalledWith(
+      expect.objectContaining({ channelId: CHANNEL, triggerEventId: SOURCE_MESSAGE_ID }),
+    );
+    // ...and a gated candidate NEVER reaches the appraiser's model call.
+    expect(appraiser.appraise).not.toHaveBeenCalled();
+    expect(reservationPhase.settleAfterAppraisal).not.toHaveBeenCalled();
+    expect(harness.safeguardAuditTrail.append).toHaveBeenCalledWith(
+      'participation.reservation.gated',
+      expect.objectContaining({
+        channelId: CHANNEL,
+        sourceMessageId: SOURCE_MESSAGE_ID,
+        blockedBy: 'fatigue_pot_insufficient',
+      }),
+    );
+    // Observation itself still ran.
+    expect(harness.agentLoop.observeMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it('reserves, appraises, and releases the reservation on an ignore outcome', async () => {
+    const reservation = makeReservationSnapshot();
+    const appraiser = replyingAppraiser('ignore');
+    const reservationPhase: ReservationPhasePort = {
+      reserve: vi.fn(async (): Promise<ReservationDecision> => ({
+        outcome: 'reserved',
+        reservation,
+        episode: makeEpisodeSnapshot(),
+        replayed: false,
+      })),
+      settleAfterAppraisal: vi.fn(async () => 'released' as const),
+      releaseIgnored: vi.fn(),
+    };
+    const harness = createHarness({
+      passiveNameCandidateBuilder: createdBuilder(makeCandidate()),
+      participationAppraiser: appraiser,
+      reservationPhase,
+    });
+
+    await harness.onDiscordMessage(observeMessage());
+
+    expect(appraiser.appraise).toHaveBeenCalledTimes(1);
+    // The reservation is settled with the ignore action → released.
+    expect(reservationPhase.settleAfterAppraisal).toHaveBeenCalledWith(
+      reservation,
+      'ignore',
+      expect.any(Number),
+    );
+    expect(harness.safeguardAuditTrail.append).toHaveBeenCalledWith(
+      'participation.reservation.reserved',
+      expect.objectContaining({ reservationId: reservation.reservationId, replayed: false }),
+    );
+    expect(harness.safeguardAuditTrail.append).toHaveBeenCalledWith(
+      'participation.reservation.settled',
+      expect.objectContaining({ action: 'ignore', settlement: 'released' }),
+    );
+  });
+
+  it('retains the reservation on a reply outcome (handed to the egress phase)', async () => {
+    const reservation = makeReservationSnapshot();
+    const appraiser = replyingAppraiser('reply');
+    const reservationPhase: ReservationPhasePort = {
+      reserve: vi.fn(async (): Promise<ReservationDecision> => ({
+        outcome: 'reserved',
+        reservation,
+        episode: makeEpisodeSnapshot(),
+        replayed: false,
+      })),
+      settleAfterAppraisal: vi.fn(async () => 'retained' as const),
+      releaseIgnored: vi.fn(),
+    };
+    const harness = createHarness({
+      passiveNameCandidateBuilder: createdBuilder(makeCandidate()),
+      participationAppraiser: appraiser,
+      reservationPhase,
+    });
+
+    await harness.onDiscordMessage(observeMessage());
+
+    expect(reservationPhase.settleAfterAppraisal).toHaveBeenCalledWith(
+      reservation,
+      'reply',
+      expect.any(Number),
+    );
+    expect(harness.safeguardAuditTrail.append).toHaveBeenCalledWith(
+      'participation.reservation.settled',
+      expect.objectContaining({ action: 'reply', settlement: 'retained' }),
+    );
+    // The reservation phase never itself sends — a reply routes downstream.
+    expect(harness.agentLoop.handleMessage).not.toHaveBeenCalled();
+  });
+
+  it('releases a reservation when reserved but no appraiser is wired to promote it', async () => {
+    const reservation = makeReservationSnapshot();
+    const reservationPhase: ReservationPhasePort = {
+      reserve: vi.fn(async (): Promise<ReservationDecision> => ({
+        outcome: 'reserved',
+        reservation,
+        episode: makeEpisodeSnapshot(),
+        replayed: false,
+      })),
+      settleAfterAppraisal: vi.fn(async () => 'released' as const),
+      releaseIgnored: vi.fn(),
+    };
+    const harness = createHarness({
+      passiveNameCandidateBuilder: createdBuilder(makeCandidate()),
+      reservationPhase,
+    });
+
+    await harness.onDiscordMessage(observeMessage());
+
+    // No appraiser → the candidate can never become a reply → released as ignore.
+    expect(reservationPhase.settleAfterAppraisal).toHaveBeenCalledWith(
+      reservation,
+      'ignore',
+      expect.any(Number),
     );
   });
 });

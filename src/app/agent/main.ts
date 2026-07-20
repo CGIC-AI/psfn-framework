@@ -102,6 +102,8 @@ import { OutboundReplyDeduper } from '../../system/lifecycle/outbound-reply-dedu
 import { ObservedGroupMemoryScheduler } from '../../faculties/memory/extraction/group-observed-scheduler.js';
 import { PassiveNameCandidateBuilder } from '../../core/participation/passive-name-candidate.js';
 import { ParticipationAppraiser } from '../../core/participation/appraiser.js';
+import { SpeakingReservationPhase } from '../../core/agent/arbiter/reservation-phase.js';
+import { createDefaultReservationPhaseSettings } from '../../system/config/participation-config.js';
 import { JsonGroupMemoryWatermarkStore } from '../../faculties/memory/extraction/group-ranges.js';
 import { createNoopSatelliteRoutingPort } from '../../core/agent/satellite-adapter-port.js';
 import { createRequestCapabilityVerifier } from '../../boundary/fleet-auth/request-capability.js';
@@ -1397,6 +1399,41 @@ async function main(): Promise<void> {
     ...(config.companionId ? { companionId: config.companionId } : {}),
   });
 
+  // Speaking-arbiter reservation phase (bible §8.5/§12.2, §6.10, jp36.5.1.2):
+  // deterministic gate that runs BEFORE the appraiser's model call. Constructed
+  // only when the gateway-owned arbiter store and social pot are present (the
+  // multi-companion runtime) and a charge policy funds the economy. ICP-over-
+  // social precedence consumes the pre-5.2 seam (no live ICP contention until
+  // the ICP transport lands, jp36.5.2); the decayed room-episode pressure gate
+  // is opt-in behind the jp36.5.4 single-source seam and is not wired here.
+  const reservationPhase = (
+    config.multiCompanion === true
+    && persistenceRuntime.speakingArbiterStore
+    && persistenceRuntime.socialPotStore
+    && config.chargePolicy
+    && config.companionId
+  )
+    ? new SpeakingReservationPhase({
+      store: persistenceRuntime.speakingArbiterStore,
+      socialPot: persistenceRuntime.socialPotStore,
+      companionId: config.companionId,
+      // Pre-5.2 seam: no live ICP contention. This is an explicit, documented
+      // default (not a swallowed error) — the ICP transport (jp36.5.2) injects
+      // the live availability/fence/exhaustion signals when it lands.
+      icpPrecedence: {
+        resolve: () => ({ icpTurnFenced: false, icpFatigueExhausted: false }),
+      },
+      config: {
+        ...createDefaultReservationPhaseSettings(),
+        socialPot: config.chargePolicy.fatigue.socialPot,
+        roomEpisodeCircuitBreaker:
+          config.chargePolicy.fatigue.socialRegulation.roomEpisodeCircuitBreaker,
+        wrapUpThreshold:
+          config.chargePolicy.fatigue.socialRegulation.roomEpisodePressure.wrapUpThreshold,
+      },
+    })
+    : undefined;
+
   // ── Slow-poisoning drift-velocity review lane (htm9.14) ──
   // Deterministic nightly aggregation (zero LLM, zero turn latency) over the
   // per-contact valence series, memory-write rows, quarantine risk labels,
@@ -1552,6 +1589,7 @@ async function main(): Promise<void> {
     observedGroupMemoryScheduler,
     passiveNameCandidateBuilder,
     participationAppraiser,
+    ...(reservationPhase ? { reservationPhase } : {}),
     outboundReplyGuard,
     companionAuthorName: card.data.name,
   });

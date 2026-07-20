@@ -6,12 +6,14 @@ import {
   mkdirSync,
   readFileSync,
   readdirSync,
+  realpathSync,
   renameSync,
   rmSync,
+  statSync,
   unlinkSync,
 } from 'node:fs';
 import { createHash, randomUUID } from 'node:crypto';
-import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
+import { basename, dirname, join, relative, resolve } from 'node:path';
 import type { ResolvedCompanionsFleetConfig } from '../../system/config/companions-config.js';
 import { writeJsonAtomic } from '../../shared/utils/fs.js';
 import { isRecord } from '../../shared/utils/types.js';
@@ -33,6 +35,12 @@ interface MigrationReceipt {
 type LegacyWorkspaceTreeEntry =
   | { kind: 'directory'; path: string }
   | { kind: 'file'; path: string; size: number; sha256: string };
+
+interface WorkspaceDirectoryIdentity {
+  realPath: string;
+  device: string;
+  inode: string;
+}
 
 function requireDigest(value: string | undefined): string {
   const digest = value?.trim() ?? '';
@@ -74,6 +82,16 @@ function inspectTree(root: string): LegacyWorkspaceTreeEntry[] {
   return results;
 }
 
+function hashLegacyWorkspaceEntries(entries: readonly LegacyWorkspaceTreeEntry[]): string {
+  const hash = createHash('sha256');
+  for (const entry of entries) {
+    hash.update(entry.kind === 'directory'
+      ? `d\0${entry.path}\0`
+      : `f\0${entry.path}\0${entry.size}\0${entry.sha256}\0`, 'utf8');
+  }
+  return hash.digest('hex');
+}
+
 /** Deterministic content-and-path digest used for explicit operator approval. */
 export function hashLegacyWorkspaceTree(rootPath: string): string {
   const root = resolve(rootPath);
@@ -81,13 +99,7 @@ export function hashLegacyWorkspaceTree(rootPath: string): string {
   if (rootStat.isSymbolicLink() || !rootStat.isDirectory()) {
     throw new Error(`Legacy workspace migration source must be a real directory: ${root}`);
   }
-  const hash = createHash('sha256');
-  for (const entry of inspectTree(root)) {
-    hash.update(entry.kind === 'directory'
-      ? `d\0${entry.path}\0`
-      : `f\0${entry.path}\0${entry.size}\0${entry.sha256}\0`, 'utf8');
-  }
-  return hash.digest('hex');
+  return hashLegacyWorkspaceEntries(inspectTree(root));
 }
 
 function isTreeEntry(value: unknown): value is LegacyWorkspaceTreeEntry {
@@ -110,34 +122,23 @@ function isTreeEntry(value: unknown): value is LegacyWorkspaceTreeEntry {
       && /^[0-9a-f]{64}$/u.test(value.sha256);
 }
 
-function destinationContainsSourceEntries(
-  destinationPath: string,
-  sourceEntries: readonly LegacyWorkspaceTreeEntry[],
+function readWorkspaceDirectoryIdentity(path: string): WorkspaceDirectoryIdentity | undefined {
+  if (!existsSync(path)) return undefined;
+  const stats = statSync(path, { bigint: true });
+  if (!stats.isDirectory()) return undefined;
+  return {
+    realPath: realpathSync(path),
+    device: stats.dev.toString(),
+    inode: stats.ino.toString(),
+  };
+}
+
+function workspaceDirectoryIdentitiesMatch(
+  source: WorkspaceDirectoryIdentity,
+  destination: WorkspaceDirectoryIdentity,
 ): boolean {
-  if (!existsSync(destinationPath)) return false;
-  const destinationStat = lstatSync(destinationPath);
-  if (destinationStat.isSymbolicLink() || !destinationStat.isDirectory()) return false;
-  for (const entry of sourceEntries) {
-    const entryPath = resolve(destinationPath, entry.path);
-    const relativeEntryPath = relative(destinationPath, entryPath).replace(/\\/g, '/');
-    if (!relativeEntryPath
-      || relativeEntryPath === '..'
-      || relativeEntryPath.startsWith('../')
-      || isAbsolute(relativeEntryPath)
-      || !existsSync(entryPath)) return false;
-    const stat = lstatSync(entryPath);
-    if (stat.isSymbolicLink()) return false;
-    if (entry.kind === 'directory') {
-      if (!stat.isDirectory()) return false;
-      continue;
-    }
-    if (!stat.isFile()
-      || stat.size !== entry.size
-      || createHash('sha256').update(readFileSync(entryPath)).digest('hex') !== entry.sha256) {
-      return false;
-    }
-  }
-  return true;
+  return source.realPath === destination.realPath
+    || (source.device === destination.device && source.inode === destination.inode);
 }
 
 function copyTreeNoOverwrite(source: string, destination: string): void {
@@ -166,6 +167,16 @@ function copyTreeNoOverwrite(source: string, destination: string): void {
 function parseReceipt(path: string): MigrationReceipt {
   const raw: unknown = JSON.parse(readFileSync(path, 'utf8'));
   if (!isRecord(raw)
+    || Object.keys(raw).sort().join(',') !== [
+      'companionId',
+      'destinationPath',
+      'migratedAt',
+      'schemaVersion',
+      'sourceEntries',
+      'sourcePath',
+      'sourceRetained',
+      'sourceSha256',
+    ].join(',')
     || raw.schemaVersion !== 1
     || typeof raw.companionId !== 'string'
     || typeof raw.sourcePath !== 'string'
@@ -177,13 +188,20 @@ function parseReceipt(path: string): MigrationReceipt {
     || raw.sourceRetained !== true) {
     throw new Error(`Malformed legacy workspace migration receipt: ${path}`);
   }
-  return raw as unknown as MigrationReceipt;
+  const receipt = raw as unknown as MigrationReceipt;
+  if (hashLegacyWorkspaceEntries(receipt.sourceEntries) !== receipt.sourceSha256) {
+    throw new Error(`Legacy workspace migration receipt integrity check failed: ${path}`);
+  }
+  return receipt;
 }
 
 export interface LegacyWorkspaceMigrationResult {
   status: 'not_needed' | 'already_migrated' | 'migrated';
+  reason?: 'same_directory_identity';
   sourceSha256?: string;
   companionId?: string;
+  sourcePath?: string;
+  destinationPath?: string;
 }
 
 /**
@@ -199,47 +217,81 @@ export function migrateLegacyWorkspaceForFleet(options: {
   const legacyValue = options.legacyWorkspacePath?.trim();
   if (!legacyValue) return { status: 'not_needed' };
   const sourcePath = resolve(legacyValue);
-  if (!existsSync(sourcePath) || readdirSync(sourcePath).length === 0) {
-    return { status: 'not_needed' };
-  }
-  if (options.fleet.companions.some(entry => resolve(entry.personalWorkspacePath) === sourcePath)) {
-    return { status: 'not_needed' };
+  const sourceExists = existsSync(sourcePath);
+  if (sourceExists) {
+    const sourceIdentity = readWorkspaceDirectoryIdentity(sourcePath);
+    for (const companion of options.fleet.companions) {
+      const destinationPath = resolve(companion.personalWorkspacePath);
+      const destinationIdentity = readWorkspaceDirectoryIdentity(destinationPath);
+      if (sourceIdentity
+        && destinationIdentity
+        && workspaceDirectoryIdentitiesMatch(sourceIdentity, destinationIdentity)) {
+        return {
+          status: 'not_needed',
+          reason: 'same_directory_identity',
+          companionId: companion.companionId,
+          sourcePath,
+          destinationPath,
+        };
+      }
+    }
   }
 
-  const sourceSha256 = hashLegacyWorkspaceTree(sourcePath);
-  const sourceEntries = inspectTree(sourcePath);
   const env = options.env ?? process.env;
-  const companionId = env[LEGACY_WORKSPACE_COMPANION_ID_ENV]?.trim() ?? '';
+  const requestedCompanionId = env[LEGACY_WORKSPACE_COMPANION_ID_ENV]?.trim() ?? '';
+  const requestedDigest = env[LEGACY_WORKSPACE_SHA256_ENV]?.trim() ?? '';
+  const migrationDir = join(options.fleet.workspacesRoot, '.migration');
+  const receiptPath = join(migrationDir, 'legacy-workspace.json');
+  if (existsSync(receiptPath)) {
+    const receipt = parseReceipt(receiptPath);
+    const companion = options.fleet.companions.find(entry => entry.companionId === receipt.companionId);
+    if (!requestedCompanionId) {
+      throw new Error(
+        `${LEGACY_WORKSPACE_COMPANION_ID_ENV} remains required to validate a completed migration receipt`,
+      );
+    }
+    const expectedSha256 = requireDigest(requestedDigest);
+    if (requestedCompanionId !== receipt.companionId || expectedSha256 !== receipt.sourceSha256) {
+      throw new Error('Legacy workspace migration receipt conflicts with the requested migration identity');
+    }
+    if (!companion) {
+      throw new Error('Legacy workspace migration receipt no longer matches its migration identity');
+    }
+    const destinationPath = resolve(companion.personalWorkspacePath);
+    if (resolve(receipt.sourcePath) !== sourcePath
+      || resolve(receipt.destinationPath) !== destinationPath
+      || !readWorkspaceDirectoryIdentity(destinationPath)) {
+      throw new Error('Legacy workspace migration receipt no longer matches its migration identity');
+    }
+    return {
+      status: 'already_migrated',
+      sourceSha256: receipt.sourceSha256,
+      companionId: receipt.companionId,
+      sourcePath,
+      destinationPath,
+    };
+  }
+
+  if (!sourceExists || readdirSync(sourcePath).length === 0) return { status: 'not_needed' };
+  const companionId = requestedCompanionId;
   if (!companionId) {
+    const sourceSha256 = hashLegacyWorkspaceTree(sourcePath);
     throw new Error(
       `Unmigrated legacy WORKSPACE_PATH data exists at ${sourcePath} (sha256 ${sourceSha256}). `
       + `Set ${LEGACY_WORKSPACE_COMPANION_ID_ENV} and ${LEGACY_WORKSPACE_SHA256_ENV} to assign it explicitly.`,
     );
   }
-  const expectedSha256 = requireDigest(env[LEGACY_WORKSPACE_SHA256_ENV]);
-  if (expectedSha256 !== sourceSha256) {
-    throw new Error(
-      `Legacy workspace digest changed: expected ${expectedSha256}, found ${sourceSha256}; refusing migration`,
-    );
-  }
+  const expectedSha256 = requireDigest(requestedDigest);
   const companion = options.fleet.companions.find(entry => entry.companionId === companionId);
   if (!companion) {
     throw new Error(`${LEGACY_WORKSPACE_COMPANION_ID_ENV} does not identify exactly one configured companion`);
   }
   const destinationPath = resolve(companion.personalWorkspacePath);
-  const migrationDir = join(options.fleet.workspacesRoot, '.migration');
-  const receiptPath = join(migrationDir, 'legacy-workspace.json');
-  if (existsSync(receiptPath)) {
-    const receipt = parseReceipt(receiptPath);
-    if (receipt.companionId !== companionId
-      || resolve(receipt.sourcePath) !== sourcePath
-      || resolve(receipt.destinationPath) !== destinationPath
-      || receipt.sourceSha256 !== sourceSha256
-      || JSON.stringify(receipt.sourceEntries) !== JSON.stringify(sourceEntries)
-      || !destinationContainsSourceEntries(destinationPath, receipt.sourceEntries)) {
-      throw new Error('Legacy workspace migration receipt no longer matches its source and destination');
-    }
-    return { status: 'already_migrated', sourceSha256, companionId };
+  const sourceSha256 = hashLegacyWorkspaceTree(sourcePath);
+  if (expectedSha256 !== sourceSha256) {
+    throw new Error(
+      `Legacy workspace digest changed: expected ${expectedSha256}, found ${sourceSha256}; refusing migration`,
+    );
   }
   if (existsSync(destinationPath)) {
     throw new Error(
@@ -250,6 +302,7 @@ export function migrateLegacyWorkspaceForFleet(options: {
   mkdirSync(dirname(destinationPath), { recursive: true });
   mkdirSync(migrationDir, { recursive: true });
   const stagingPath = join(dirname(destinationPath), `.${basename(destinationPath)}.legacy-${randomUUID()}`);
+  const sourceEntries = inspectTree(sourcePath);
   try {
     copyTreeNoOverwrite(sourcePath, stagingPath);
     if (hashLegacyWorkspaceTree(stagingPath) !== sourceSha256) {
@@ -275,5 +328,5 @@ export function migrateLegacyWorkspaceForFleet(options: {
   if (existsSync(join(migrationDir, 'legacy-workspace.pending.json'))) {
     unlinkSync(join(migrationDir, 'legacy-workspace.pending.json'));
   }
-  return { status: 'migrated', sourceSha256, companionId };
+  return { status: 'migrated', sourceSha256, companionId, sourcePath, destinationPath };
 }

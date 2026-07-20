@@ -146,12 +146,15 @@ Supported until beta:
   deterministic tree digest. An operator must select exactly one configured
   companion with `PSFN_LEGACY_WORKSPACE_COMPANION_ID` and approve the exact
   digest with `PSFN_LEGACY_WORKSPACE_SHA256`; migration copies without merging
-  or overwriting and retains the source. Validation is the immutable migration
-  receipt plus exact source-tree integrity and verification that every migrated
-  source entry remains unchanged at the destination; later provisioned Personal
-  Workspace files are allowed. Remove this startup migration
-  and both env inputs before beta after every live installation has a verified
-  receipt.
+  or overwriting and retains the source. If the legacy and canonical paths
+  resolve to the same directory by realpath or device-and-inode identity,
+  startup records an explicit `not_needed` decision without requiring a receipt.
+  A completed migration is validated by the immutable receipt's internally
+  consistent entry manifest and configured source, destination, companion, and
+  approved digest identity; the mutable live Personal Workspace tree is not
+  re-hashed after completion.
+  Remove this startup migration and both env inputs before beta after every live
+  installation has a verified receipt.
 
 Out of boundary:
 

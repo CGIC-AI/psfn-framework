@@ -12,7 +12,11 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createFilesystemTurnRecordStorePort } from '../../../persistence/sessions/turn-records.js';
 import type { TurnRecordStorePort } from '../../../persistence/sessions/turn-record-store-port.js';
-import type { TurnRecord } from '../../../shared/contracts/runtime.js';
+import type { ToolCallOutcome, TurnRecord } from '../../../shared/contracts/runtime.js';
+import {
+  DUPLICATE_TOOL_CALL_SKIP_RESULT,
+  SEQUENTIAL_DEPENDENCY_SKIP_RESULT,
+} from '../../../shared/contracts/tool-call-outcome.js';
 import { createTurnRecordToolUsageSource } from './turn-record-usage-source.js';
 import { createToolUsageEvaluator, type ToolUsageEvaluatorEvent } from './usage-evaluator.js';
 
@@ -20,7 +24,12 @@ const CHANNEL_ID = 'chan-integration';
 
 function buildTurnRecord(input: {
   startedAt: number;
-  tools: Array<{ toolName: string; isError?: boolean }>;
+  tools: Array<{
+    toolName: string;
+    outcome?: ToolCallOutcome;
+    isError?: boolean;
+    resultText?: string;
+  }>;
   requestId: string;
 }): TurnRecord {
   return {
@@ -35,7 +44,9 @@ function buildTurnRecord(input: {
     toolCalls: input.tools.map(tool => ({
       toolName: tool.toolName,
       toolCallId: `${input.requestId}-${tool.toolName}`,
+      ...(tool.outcome ? { outcome: tool.outcome } : {}),
       ...(tool.isError !== undefined ? { isError: tool.isError } : {}),
+      ...(tool.resultText ? { resultText: tool.resultText } : {}),
     })),
     extractedMemoryIds: [],
     concernDeltaRefs: [],
@@ -73,7 +84,21 @@ describe('turn-record tool usage source (durable, real store)', () => {
       startedAt: todayStart + 5,
       requestId: 'req-in-2',
       // Non-canonical must be filtered; repo failure is the correction signal.
-      tools: [{ toolName: 'repo', isError: true }, { toolName: 'definitely_not_a_tool' }],
+      tools: [
+        { toolName: 'repo', outcome: 'execution_failure', isError: true },
+        {
+          toolName: 'repo',
+          isError: true,
+          resultText: DUPLICATE_TOOL_CALL_SKIP_RESULT,
+        },
+        {
+          toolName: 'repo',
+          isError: true,
+          resultText: SEQUENTIAL_DEPENDENCY_SKIP_RESULT,
+        },
+        { toolName: 'repo', outcome: 'policy_denial', isError: true },
+        { toolName: 'definitely_not_a_tool' },
+      ],
     }));
     // Out-of-window record must not count.
     store.appendTurnRecord(buildTurnRecord({
@@ -95,13 +120,13 @@ describe('turn-record tool usage source (durable, real store)', () => {
     expect(aggregate.sourceId).toBe('turn_records');
     // memory: one in-window success (the two out-of-window ones excluded).
     expect(byName.get('memory')).toEqual({ toolName: 'memory', invocations: 1, successes: 1, failures: 0 });
-    // repo: one success + one failure in window.
-    expect(byName.get('repo')).toEqual({ toolName: 'repo', invocations: 2, successes: 1, failures: 1 });
+    // repo: skips/denials remain visible invocations but do not inflate failures.
+    expect(byName.get('repo')).toEqual({ toolName: 'repo', invocations: 5, successes: 1, failures: 1 });
     // Non-canonical excluded.
     expect(byName.has('definitely_not_a_tool')).toBe(false);
     expect(aggregate.toolsWithData).toBe(2);
     expect(aggregate.channelsScanned).toBe(1);
-    expect(aggregate.toolCallsCounted).toBe(3);
+    expect(aggregate.toolCallsCounted).toBe(6);
     expect(aggregate.truncated).toBe(false);
   });
 

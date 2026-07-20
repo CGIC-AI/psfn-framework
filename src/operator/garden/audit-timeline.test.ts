@@ -226,6 +226,7 @@ describe('audit event collector actor attribution', () => {
       toolCallId: 'call-1',
       toolName: 'analysis_workbench',
       channelId: 'discord:general',
+      outcome: 'success',
       isError: false,
     });
 
@@ -269,6 +270,7 @@ describe('audit event collector actor attribution', () => {
       toolCallId: 'call-2',
       toolName: 'identity',
       channelId: 'discord:general',
+      outcome: 'success',
       isError: false,
     });
 
@@ -308,6 +310,7 @@ describe('audit event collector actor attribution', () => {
       toolCallId: 'call-2b',
       toolName: 'identity',
       channelId: 'discord:general',
+      outcome: 'success',
       isError: false,
     });
 

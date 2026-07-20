@@ -4,6 +4,9 @@ import type { AgentTool } from '../../boundary/pi-agent/index.js';
 import type { ToolResultMessage } from '@mariozechner/pi-ai';
 import type { ToolConcurrencyMeta, WirableTool } from './tool-wiring-validator.js';
 import { createToolCallExecutionGuard, executeToolCallsWithScheduler } from './tool-call-scheduler.js';
+import type { ToolCallOutcome } from '../../shared/contracts/tool-call-outcome.js';
+
+type ObservedToolResult = ToolResultMessage & { outcome: ToolCallOutcome };
 
 function makeTool(
   name: string,
@@ -105,6 +108,7 @@ describe('tool-call-scheduler', () => {
 
     expect(result.toolResults).toHaveLength(1);
     expect((result.toolResults[0] as ToolResultMessage).isError).toBe(true);
+    expect((result.toolResults[0] as ObservedToolResult).outcome).toBe('execution_failure');
     expect(streamEvents.find(event => event.type === 'tool_execution_end')).toEqual(
       expect.objectContaining({
         toolName: 'orient',
@@ -397,6 +401,8 @@ describe('tool-call-scheduler', () => {
     expect((result.toolResults[0] as ToolResultMessage).isError).toBe(false);
     expect((result.toolResults[1] as ToolResultMessage).isError).toBe(true);
     expect((result.toolResults[2] as ToolResultMessage).isError).toBe(true);
+    expect((result.toolResults[1] as ObservedToolResult).outcome).toBe('execution_failure');
+    expect((result.toolResults[2] as ObservedToolResult).outcome).toBe('dependency_skip');
     expect((result.toolResults[2] as ToolResultMessage).content).toEqual([
       {
         type: 'text',
@@ -445,7 +451,10 @@ describe('tool-call-scheduler', () => {
     expect(result.toolResults).toHaveLength(3);
     expect((result.toolResults[0] as ToolResultMessage).isError).toBe(false);
     expect((result.toolResults[1] as ToolResultMessage).isError).toBe(true);
+    expect((result.toolResults[0] as ObservedToolResult).outcome).toBe('success');
+    expect((result.toolResults[1] as ObservedToolResult).outcome).toBe('dependency_skip');
     expect((result.toolResults[2] as ToolResultMessage).isError).toBe(true);
+    expect((result.toolResults[2] as ObservedToolResult).outcome).toBe('dependency_skip');
     expect(telemetry).toHaveBeenCalledWith(
       'agent.tools.scheduler.skipped',
       expect.objectContaining({
@@ -574,6 +583,8 @@ describe('tool-call-scheduler', () => {
     expect(result.toolResults).toHaveLength(2);
     expect((result.toolResults[0] as ToolResultMessage).isError).toBe(false);
     expect((result.toolResults[1] as ToolResultMessage).isError).toBe(true);
+    expect((result.toolResults[0] as ObservedToolResult).outcome).toBe('success');
+    expect((result.toolResults[1] as ObservedToolResult).outcome).toBe('duplicate_skip');
     expect((result.toolResults[1] as ToolResultMessage).content).toEqual([
       {
         type: 'text',
@@ -869,6 +880,7 @@ describe('tool-call-scheduler', () => {
     expect(result.toolResults).toHaveLength(1);
     const message = result.toolResults[0] as ToolResultMessage;
     expect(message.isError).toBe(true);
+    expect((message as ObservedToolResult).outcome).toBe('validation_rejection');
     expect(message.content[0]?.text).toContain('"memroy" is not an available tool.');
     expect(message.content[0]?.text).toContain('Did you mean "memory"?');
     expect(telemetry).toHaveBeenCalledWith(
@@ -928,6 +940,7 @@ describe('tool-call-scheduler', () => {
     const message = result.toolResults[0] as ToolResultMessage;
     expect(execute).not.toHaveBeenCalled();
     expect(message.isError).toBe(true);
+    expect((message as ObservedToolResult).outcome).toBe('validation_rejection');
     expect(message.content[0]?.text).toContain('malformed arguments (a JSON string)');
     expect(telemetry).toHaveBeenCalledWith(
       'agent.tools.correction.reprompt',
@@ -952,6 +965,7 @@ describe('tool-call-scheduler', () => {
     const message = result.toolResults[0] as ToolResultMessage;
     expect(execute).not.toHaveBeenCalled();
     expect(message.isError).toBe(true);
+    expect((message as ObservedToolResult).outcome).toBe('validation_rejection');
     expect(message.content[0]?.text).toContain('Validation failed for tool "memory":');
     expect(message.content[0]?.text).toContain('call "memory" again with a complete JSON object');
     expect(telemetry).toHaveBeenCalledWith(
@@ -990,6 +1004,8 @@ describe('tool-call-scheduler', () => {
 
     expect((failed.toolResults[0] as ToolResultMessage).isError).toBe(true);
     expect((recovered.toolResults[0] as ToolResultMessage).isError).toBe(false);
+    expect((failed.toolResults[0] as ObservedToolResult).outcome).toBe('validation_rejection');
+    expect((recovered.toolResults[0] as ObservedToolResult).outcome).toBe('success');
     expect(telemetry).toHaveBeenCalledWith(
       'agent.tools.correction.recovered',
       expect.objectContaining({ toolName: 'memory' }),
@@ -1026,11 +1042,36 @@ describe('tool-call-scheduler', () => {
     );
 
     expect((result.toolResults[0] as ToolResultMessage).isError).toBe(true);
+    expect((result.toolResults[0] as ObservedToolResult).outcome).toBe('execution_failure');
     expect(telemetry).toHaveBeenCalledWith(
       'agent.tools.scheduler.cancelled',
       expect.objectContaining({
         toolName: 'issue_show',
       }),
     );
+  });
+
+  it('keeps policy denials explicit without counting them as execution failures', async () => {
+    const web = makeTool(
+      'web',
+      async () => ({
+        content: [{ type: 'text', text: 'Policy denied this URL.' }],
+        details: { isError: true, errorClass: 'policy_blocked' },
+      }),
+      { concurrency: makeConcurrencyMeta('exclusive') },
+    );
+
+    const result = await executeToolCallsWithScheduler(
+      [web],
+      makeAssistantMessage(['web']),
+      undefined,
+      { stream: { push: () => undefined } },
+      { maxParallelToolCalls: 1 },
+    );
+
+    expect((result.toolResults[0] as ObservedToolResult)).toMatchObject({
+      outcome: 'policy_denial',
+      isError: true,
+    });
   });
 });

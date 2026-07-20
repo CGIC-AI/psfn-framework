@@ -391,6 +391,11 @@ function makeObserverInput(overrides: ObserverInputOverrides = {}): ObserverEval
       snapshot: makeEmotionSnapshot(),
       appraisalEntryCount: 2,
     },
+    coherenceContext: {
+      recentMirrorNoteCount: 0,
+      timeGapMs: null,
+      activeConcernCount: 0,
+    },
     metadata: {
       trustLevel: 'regular',
       speakerRole: 'user',

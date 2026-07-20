@@ -20,6 +20,7 @@ export default defineConfig({
       'src/lib/providers/{editor,registry}.test.ts',
       'src/lib/types/canonical-type-aliases.test.ts',
       'src/lib/stores/auth-storage.test.ts',
+      'src/lib/telemetry/*.test.ts',
       'src/lib/wishlist/view.test.ts',
       'src/routes/autonomy/autonomy-view.test.ts',
       'src/routes/prompts/page-helpers.test.ts',

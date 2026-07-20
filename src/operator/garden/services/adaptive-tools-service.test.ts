@@ -24,6 +24,7 @@ describe('AdminAdaptiveToolsDataService invocation audit', () => {
       channelId: 'discord:dm:lyra',
       toolCallId: 'contact-call-1',
       toolName: 'contact',
+      outcome: 'success',
       isError: false,
       turnId: 'turn-1',
       requestId: 'request-1',
@@ -34,6 +35,7 @@ describe('AdminAdaptiveToolsDataService invocation audit', () => {
       expect.objectContaining({
         toolName: 'contact',
         action: 'lookup',
+        outcome: 'success',
         status: 'ok',
         channelId: 'discord:dm:lyra',
         toolCallId: 'contact-call-1',
@@ -61,6 +63,7 @@ describe('AdminAdaptiveToolsDataService invocation audit', () => {
       channelId: 'api-session',
       toolCallId: 'contact-call-2',
       toolName: 'contact',
+      outcome: 'execution_failure',
       isError: true,
       errorMessage: 'relationship policy denied the write for secret-id',
     });
@@ -70,6 +73,7 @@ describe('AdminAdaptiveToolsDataService invocation audit', () => {
       expect.objectContaining({
         toolName: 'contact',
         action: 'set_relationship',
+        outcome: 'execution_failure',
         status: 'error',
       }),
     ]);
@@ -98,6 +102,7 @@ describe('AdminAdaptiveToolsDataService invocation audit', () => {
       channelId: 'api-session',
       toolCallId: 'malformed-action',
       toolName: 'contact',
+      outcome: 'execution_failure',
       isError: true,
     });
 
@@ -124,6 +129,7 @@ describe('AdminAdaptiveToolsDataService invocation audit', () => {
       channelId: 'api-session',
       toolCallId: 'unknown-action',
       toolName: 'contact',
+      outcome: 'success',
       isError: false,
     });
 
@@ -145,10 +151,10 @@ describe('AdminAdaptiveToolsDataService invocation audit', () => {
       arguments: { action: 'set_relationship' },
     });
     await eventBus.emit('agent.tool.end', {
-      channelId: 'channel-b', toolCallId: 'reused', toolName: 'contact', isError: false,
+      channelId: 'channel-b', toolCallId: 'reused', toolName: 'contact', outcome: 'success', isError: false,
     });
     await eventBus.emit('agent.tool.end', {
-      channelId: 'channel-a', toolCallId: 'reused', toolName: 'contact', isError: false,
+      channelId: 'channel-a', toolCallId: 'reused', toolName: 'contact', outcome: 'success', isError: false,
     });
 
     const data = await service.getAdaptiveToolsData();
@@ -156,5 +162,34 @@ describe('AdminAdaptiveToolsDataService invocation audit', () => {
       expect.objectContaining({ channelId: 'channel-a', action: 'lookup' }),
       expect.objectContaining({ channelId: 'channel-b', action: 'set_relationship' }),
     ]));
+  });
+
+  it('keeps policy denials and skips visible without inflating recent runtime failures', async () => {
+    const eventBus = new EventBus();
+    const service = new AdminAdaptiveToolsDataService({ eventBus });
+
+    await eventBus.emit('agent.tool.end', {
+      channelId: 'api-session',
+      toolCallId: 'web-denied',
+      toolName: 'web',
+      outcome: 'policy_denial',
+      isError: true,
+      errorMessage: 'Policy denied this request.',
+    });
+    await eventBus.emit('agent.tool.end', {
+      channelId: 'api-session',
+      toolCallId: 'fs-duplicate',
+      toolName: 'fs',
+      outcome: 'duplicate_skip',
+      isError: true,
+      errorMessage: 'Duplicate skipped.',
+    });
+
+    const data = await service.getAdaptiveToolsData();
+    expect(data.recentInvocations.map(invocation => invocation.outcome)).toEqual([
+      'policy_denial',
+      'duplicate_skip',
+    ]);
+    expect(data.recentFailures).toEqual([]);
   });
 });

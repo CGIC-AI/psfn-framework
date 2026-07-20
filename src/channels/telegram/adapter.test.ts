@@ -349,6 +349,7 @@ describe('TelegramAdapter', () => {
           channelId: message.channelId,
           toolCallId: 'analysis-call-1',
           toolName: 'analysis_workbench',
+          outcome: 'success',
           isError: false,
         });
         return okResponse(message.channelId);

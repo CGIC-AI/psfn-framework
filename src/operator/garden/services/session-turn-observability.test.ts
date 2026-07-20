@@ -180,6 +180,32 @@ function buildPlanBackedSnapshot(turnId: string, channelId: string): TurnSnapsho
 }
 
 describe('promptLoom renders the PromptPlan (E2.3)', () => {
+  it('reports skips, denials, and runtime failures as separate tool outcomes', () => {
+    const eventBus = new EventBus();
+    const store = new AdminSessionTurnObservabilityStore({ eventBus });
+    const record = minimalRecord('turn-tool-outcomes', 'api:tool-outcomes');
+    record.toolCalls = [
+      { toolName: 'fs', outcome: 'duplicate_skip', isError: true },
+      { toolName: 'memory', outcome: 'dependency_skip', isError: true },
+      { toolName: 'web', outcome: 'policy_denial', isError: true },
+      { toolName: 'wiki', outcome: 'execution_failure', isError: true },
+    ];
+
+    const data = store.buildTurnData(record);
+
+    expect(data.promptLoom?.toolActivity).toMatchObject({
+      outcomeCounts: {
+        success: 0,
+        execution_failure: 1,
+        validation_rejection: 0,
+        policy_denial: 1,
+        duplicate_skip: 1,
+        dependency_skip: 1,
+      },
+      runtimeFailureCount: 1,
+    });
+  });
+
   it('serves the schema-versioned plan itself with full block provenance', async () => {
     const eventBus = new EventBus();
     const store = new AdminSessionTurnObservabilityStore({ eventBus });

@@ -49,6 +49,11 @@ function makeInput(sequence = 1): ObserverEvalInputPayload {
       snapshot: null,
       appraisalEntryCount: 0,
     },
+    coherenceContext: {
+      recentMirrorNoteCount: 0,
+      timeGapMs: null,
+      activeConcernCount: 0,
+    },
     metadata: {
       trustLevel: 'regular',
       speakerRole: 'user',

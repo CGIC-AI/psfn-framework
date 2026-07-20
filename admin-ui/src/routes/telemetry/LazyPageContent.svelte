@@ -4,6 +4,7 @@
   import GardenPageHeader from '$lib/components/garden/GardenPageHeader.svelte';
   import GardenTabBar, { type GardenTabItem } from '$lib/components/garden/GardenTabBar.svelte';
   import AuditSurfaceMap from '$lib/components/telemetry/AuditSurfaceMap.svelte';
+  import ContextCoherenceCard from '$lib/components/telemetry/ContextCoherenceCard.svelte';
   import { getAuditHistory, getAuditHistoryDetail } from '$lib/api/endpoints/audit-history';
   import {
     getEvents,
@@ -526,6 +527,8 @@
   <!-- LIVE EVENTS TAB                               -->
   <!-- ══════════════════════════════════════════════ -->
   {#if activeTab === 'live'}
+    <ContextCoherenceCard events={getEvents()} />
+
     <!-- Controls bar -->
     <div class="card-garden p-4">
       <div class="flex flex-wrap items-center gap-3">

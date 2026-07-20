@@ -7,6 +7,7 @@ import type {
   ToolSchema,
   TurnRecord,
 } from '../../../../shared/contracts/runtime.js';
+import type { ToolCallOutcomeCounts } from '../../../../shared/contracts/tool-call-outcome.js';
 import type { PromptPlan } from '../../../../core/agent/substrate-agent/turn-execution/prompt-plan.js';
 import type {
   ObservedMemory,
@@ -87,6 +88,8 @@ export interface AdminPromptLoomMemoryCaptureData {
 export interface AdminPromptLoomToolActivityData {
   toolCalls: TurnRecord['toolCalls'];
   toolResults: TurnRecord['toolCalls'];
+  outcomeCounts: ToolCallOutcomeCounts;
+  runtimeFailureCount: number;
 }
 
 export type AdminPromptLoomSubsystemOutputStatus = 'resolved' | 'missing' | 'not_resolved';

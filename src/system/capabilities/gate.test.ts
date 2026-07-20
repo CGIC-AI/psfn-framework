@@ -1029,6 +1029,8 @@ describe('egress tool guard (htm9.3)', () => {
     expect(shell.executeSpy).not.toHaveBeenCalled();
     expect((result.content[0] as any).text).toBe('held aside for review');
     expect((result.details as any).egressGated).toBe(true);
+    expect((result.details as any).policyDenied).toBe(true);
+    expect((result.details as any).isError).toBe(true);
     expect(seenTokens[0]).toContain('repl.execute');
   });
 

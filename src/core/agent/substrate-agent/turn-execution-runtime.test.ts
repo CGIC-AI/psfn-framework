@@ -605,6 +605,7 @@ function createRuntime(params: {
     assertSelfModelRuntimeConfigured: vi.fn(),
     observeEmotionState: vi.fn(async () => null),
     getEmotionAppraisalChain: vi.fn(() => []),
+    getActiveConcernCount: vi.fn(() => 0),
     computeInternalStateForTurn: vi.fn(() => TEST_INTERNAL_STATE),
     computeMetacognitiveFlagsForTurn: vi.fn(() => []),
     triggerEmotionAppraisal: vi.fn(async () => undefined),
@@ -3606,6 +3607,11 @@ describe('handleMessageForTurn observer eval sidecar seam', () => {
       emotion: {
         snapshot: TEST_EMOTION_SNAPSHOT,
         appraisalEntryCount: 0,
+      },
+      coherenceContext: {
+        recentMirrorNoteCount: 0,
+        timeGapMs: null,
+        activeConcernCount: 0,
       },
       metadata: {
         trustLevel: 'regular',

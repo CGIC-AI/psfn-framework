@@ -25,6 +25,8 @@ import type { PartnerAffectShadowTelemetryEvent } from './contracts/partner-affe
 import type { IcpInitiationCandidateStatus } from './contracts/icp-autonomy.js';
 import type { IcpConversationCostBreakerEvent } from './telemetry/model-usage.js';
 import type { TurnPerformanceEvent } from './telemetry/turn-performance.js';
+import type { ToolCallOutcome } from './contracts/tool-call-outcome.js';
+import type { ContextCoherenceEvent } from './contracts/context-coherence.js';
 import type {
   CompanionApprovalRequestedPayload,
   CompanionApprovalResolvedPayload,
@@ -157,6 +159,27 @@ export interface EventMap {
   'agent.turn.start': { message: SubstrateMessage } & EventCorrelationFields;
   'agent.turn.snapshot': { snapshot: TurnSnapshot } & EventCorrelationFields;
   'agent.turn.end': { message: SubstrateMessage; response: AgentResponse } & EventCorrelationFields;
+  'session.context.stale_window_heal': {
+    channelId: string;
+    turnId: string;
+    requestId: string;
+    expectedMinEntryId: number;
+    staleWindowMaxEntryId: number | null;
+    reconciledMaxEntryId: number | null;
+    recapturedWindowMaxEntryId: number | null;
+    healed: boolean;
+    timestamp: number;
+  };
+  'session.context.stale_window_heal_failed': {
+    channelId: string;
+    turnId: string;
+    requestId: string;
+    expectedMinEntryId: number;
+    staleWindowMaxEntryId: number | null;
+    error: string;
+    timestamp: number;
+  };
+  'context.coherence.detected': ContextCoherenceEvent;
   /** Content-free terminal event emitted when the parent-turn emergency fuse opens. */
   'agent.turn.continuation_stopped': {
     turnId: string;
@@ -432,6 +455,7 @@ export interface EventMap {
     channelId: string;
     toolCallId: string;
     toolName: string;
+    outcome: ToolCallOutcome;
     isError: boolean;
     errorMessage?: string;
     shardId?: string;

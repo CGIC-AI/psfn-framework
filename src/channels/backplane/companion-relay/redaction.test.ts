@@ -235,19 +235,21 @@ describe('redactApprovalResolved / toCompanionApprovalStatus', () => {
 });
 
 describe('redactToolActivity', () => {
-  it('emits only id, tool, phase, timestamp — never detail from runtime data', () => {
+  it('emits only whitelisted lifecycle fields — never detail from runtime data', () => {
     const payload = redactToolActivity({
       toolCallId: 'call-77',
       toolName: 'analysis_workbench',
       phase: 'failed',
+      outcome: 'execution_failure',
       timestampMs: 1_700_000_002_000,
     });
-    expect(Object.keys(payload).sort()).toEqual(['id', 'phase', 'timestamp', 'tool']);
+    expect(Object.keys(payload).sort()).toEqual(['id', 'outcome', 'phase', 'timestamp', 'tool']);
     expect(payload.detail).toBeUndefined();
     expect(payload).toEqual({
       id: 'call-77',
       tool: 'analysis_workbench',
       phase: 'failed',
+      outcome: 'execution_failure',
       timestamp: new Date(1_700_000_002_000).toISOString(),
     });
   });

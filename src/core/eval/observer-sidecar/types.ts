@@ -14,6 +14,7 @@ import type {
 } from '../../../shared/contracts/runtime.js';
 import type { SensitivityLevel, TrustLevel } from '../../../system/trust/types.js';
 import type { ChannelPrivacy } from '../../../system/trust/context-envelope.js';
+import type { ContextCoherenceSessionContext } from '../../../shared/contracts/context-coherence.js';
 
 export type ObserverEvalReadonly<T> =
   T extends (...args: readonly unknown[]) => unknown
@@ -77,6 +78,8 @@ export interface ObserverEvalInputPayload {
   turn: ObserverEvalTurnIdentity;
   source: ObserverEvalSourceMetadata;
   emotion: ObserverEvalEmotionSnapshot;
+  /** Content-free session counters retained for coherence-event correlation. */
+  coherenceContext: ContextCoherenceSessionContext;
   metadata: ObserverEvalTurnMetadata;
   provenance: ObserverEvalProvenance;
 }

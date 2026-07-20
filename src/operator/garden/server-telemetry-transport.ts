@@ -218,6 +218,7 @@ export class AdminServerTelemetryTransport {
       'external.telemetry.ingested',
       'agent.tools.adaptive.decision',
       'agent.tools.adaptive.snapshot',
+      'context.coherence.detected',
       'wyoming.session.start',
       'wyoming.session.end',
       'wyoming.policy.violation',

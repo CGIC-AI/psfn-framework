@@ -1523,6 +1523,7 @@ describe('AdminServer JSON API routes', () => {
       channelId: 'api-session',
       toolCallId: 'contact-1',
       toolName: 'contact',
+      outcome: 'success',
       isError: false,
       turnId: 'turn-contact-1',
       requestId: 'request-contact-1',
@@ -1531,6 +1532,7 @@ describe('AdminServer JSON API routes', () => {
       channelId: 'api-session',
       toolCallId: 'notify-1',
       toolName: 'notify',
+      outcome: 'execution_failure',
       isError: true,
       errorMessage: 'notify: failure (503 Service Unavailable).',
     });

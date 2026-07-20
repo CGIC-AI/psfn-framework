@@ -88,6 +88,23 @@ export function resolveRuntimeSchedulerConfig(
       permit: { ...persisted.icpAutonomy.permit },
       availability: { ...persisted.icpAutonomy.availability },
     },
+    backgroundWork: {
+      supervisor: { ...persisted.backgroundWork.supervisor },
+      postTurn: { ...persisted.backgroundWork.postTurn },
+    },
+    socialAutonomy: {
+      passiveNameCandidate: { ...persisted.socialAutonomy.passiveNameCandidate },
+      appraiser: { ...persisted.socialAutonomy.appraiser },
+      reservationPhase: { ...persisted.socialAutonomy.reservationPhase },
+      egressLease: { ...persisted.socialAutonomy.egressLease },
+      freeTimeChooser: { ...persisted.socialAutonomy.freeTimeChooser },
+    },
+    ...(persisted.backgroundWorkWelfare
+      ? { backgroundWorkWelfare: { ...persisted.backgroundWorkWelfare } }
+      : {}),
+    ...(persisted.toolUsageEvaluator
+      ? { toolUsageEvaluator: { ...persisted.toolUsageEvaluator } }
+      : {}),
     ...(persisted.introspectionAudit
       ? { introspectionAudit: { ...persisted.introspectionAudit } }
       : {}),

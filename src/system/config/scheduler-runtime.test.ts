@@ -9,6 +9,7 @@ import {
   DEFAULT_TEMPORAL_WAKEUP_CONFIG,
   DEFAULT_WEIGHTED_THOUGHT_OUTREACH_CONFIG,
 } from './scheduler-config.js';
+import { createDefaultSocialAutonomyConfig } from './scheduler-config.js';
 import { resolveRuntimeSchedulerConfig } from './scheduler-runtime.js';
 
 function writeJson(path: string, value: unknown): void {
@@ -153,6 +154,8 @@ describe('resolveRuntimeSchedulerConfig', () => {
         freeTime: DEFAULT_FREE_TIME_CONFIG,
         weightedThoughtOutreach: DEFAULT_WEIGHTED_THOUGHT_OUTREACH_CONFIG,
         icpAutonomy: DEFAULT_ICP_AUTONOMY_SCHEDULER_CONFIG,
+        backgroundWork: DEFAULT_BACKGROUND_WORK_TUNING,
+        socialAutonomy: createDefaultSocialAutonomyConfig(),
       });
     } finally {
       rmSync(root, { recursive: true, force: true });
@@ -221,6 +224,8 @@ describe('resolveRuntimeSchedulerConfig', () => {
         freeTime: DEFAULT_FREE_TIME_CONFIG,
         weightedThoughtOutreach: DEFAULT_WEIGHTED_THOUGHT_OUTREACH_CONFIG,
         icpAutonomy: DEFAULT_ICP_AUTONOMY_SCHEDULER_CONFIG,
+        backgroundWork: DEFAULT_BACKGROUND_WORK_TUNING,
+        socialAutonomy: createDefaultSocialAutonomyConfig(),
       });
     } finally {
       rmSync(root, { recursive: true, force: true });

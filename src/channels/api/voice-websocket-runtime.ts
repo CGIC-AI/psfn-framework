@@ -96,7 +96,7 @@ export function requireVoiceReplySegmenterSettings(
 
 export interface ApiVoiceAssistantTurnInput {
   request: IncomingMessage;
-  principal: ApiAuthPrincipal;
+  principal: VoiceWebSocketRuntimeContext['principal'];
   transportSession: WebSocketVoiceSession;
   sessionId: string;
   transcript: string;

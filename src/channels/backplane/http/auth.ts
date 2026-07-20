@@ -21,12 +21,16 @@ export interface ApiAuthPrincipal {
   scope?: 'satellite' | 'testing_harness';
 }
 
+export type UnscopedApiAuthPrincipal = ApiAuthPrincipal & {
+  scope?: never;
+};
+
 export interface TestingHarnessApiPrincipalCredential {
   principalId: string;
   apiKey: string;
 }
 
-export const INSECURE_LOCAL_API_PRINCIPAL: Readonly<ApiAuthPrincipal> = Object.freeze({
+export const INSECURE_LOCAL_API_PRINCIPAL: Readonly<UnscopedApiAuthPrincipal> = Object.freeze({
   id: INSECURE_LOCAL_API_PRINCIPAL_ID,
   mode: 'insecure_local',
 });
@@ -56,7 +60,7 @@ export function deriveApiKeyPrincipalId(apiToken: string): string {
   return `api-key-${digest.slice(0, API_KEY_PRINCIPAL_DIGEST_LENGTH)}`;
 }
 
-export function principalFromApiKeyToken(apiToken: string): ApiAuthPrincipal {
+export function principalFromApiKeyToken(apiToken: string): UnscopedApiAuthPrincipal {
   return {
     id: deriveApiKeyPrincipalId(apiToken),
     mode: 'api_key',

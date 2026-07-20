@@ -4,6 +4,7 @@ import type { PendingFollowUpContextProvider } from '../pending-follow-ups.js';
 import type { PendingFollowUpStorePort } from '../pending-follow-up-store-port.js';
 import type { BehavioralPatternStorePort } from '../behavioral-pattern-store-port.js';
 import type { WeightedThoughtStorePort } from '../weighted-thought-store-port.js';
+import type { SocialDesireStorePort } from '../social-desire-store-port.js';
 import type {
   BehavioralPatternContextProvider,
   BehavioralPatternPromotionHook,
@@ -17,6 +18,7 @@ export interface PostgresIntentionPorts {
   pendingFollowUpStore: PendingFollowUpStorePort;
   behavioralPatternTracker: BehavioralPatternStorePort;
   weightedThoughtStore: WeightedThoughtStorePort;
+  socialDesireStore: SocialDesireStorePort;
 }
 
 export interface PostgresIntentionPortOptions {

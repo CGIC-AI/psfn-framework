@@ -24,6 +24,18 @@ function expectAddColumn(sql: string, table: string, column: string): void {
 }
 
 describe('Postgres live schema migrations', () => {
+  it('retains social-desire settlement identities across desire deletion and recreation', () => {
+    const sql = migrationSql(POSTGRES_INTENTION_MIGRATIONS);
+
+    expect(sql).toContain('CREATE TABLE IF NOT EXISTS social_desire_settlements');
+    expect(sql).not.toContain(
+      'contact_id TEXT NOT NULL REFERENCES social_desires(contact_id) ON DELETE CASCADE',
+    );
+    expect(sql).toContain(
+      'DROP CONSTRAINT IF EXISTS social_desire_settlements_contact_id_fkey',
+    );
+  });
+
   it('creates a companion-private leased background-work queue with fail-closed states', () => {
     const sql = migrationSql(POSTGRES_BACKGROUND_WORK_MIGRATIONS);
 

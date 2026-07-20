@@ -58,12 +58,21 @@ export const DISCLOSURE_KIND_ID_FIELD: Record<DisclosureDestinationKind, 'channe
  * A concrete outbound target being assessed. Id-bearing kinds carry the exact
  * channel/contact id so the intersected permission set can be checked against
  * the specific destination rather than the class alone.
+ *
+ * Room kinds additionally carry the channel's CURRENT classification epoch
+ * (`currentEpoch`, jp36.6.3) when the channel is epoch-tracked. A room's epoch
+ * increments whenever its classification is widened (invite-only → public); it
+ * is the disclosure boundary (bible §9.3): content admitted under epoch N is
+ * auto-eligible to the room only while the room is still at epoch N. `undefined`
+ * means the channel carries no tracked epoch — the epoch gate then does not
+ * engage and eligibility is exactly the pre-epoch behavior (fail closed on
+ * missing epoch data means "no more permissive than before", never a widening).
  */
 export type DisclosureDestination =
   | { readonly kind: 'companion_self' }
   | { readonly kind: 'contact_dm'; readonly contactId: string }
-  | { readonly kind: 'invite_only_room'; readonly channelId: string }
-  | { readonly kind: 'public_room'; readonly channelId: string }
+  | { readonly kind: 'invite_only_room'; readonly channelId: string; readonly currentEpoch?: number }
+  | { readonly kind: 'public_room'; readonly channelId: string; readonly currentEpoch?: number }
   | { readonly kind: 'publication' };
 
 /**
@@ -79,6 +88,16 @@ export interface DisclosureDestinationConstraint {
   readonly channelIds?: readonly string[];
   /** Scoping for the `contact_dm` kind. */
   readonly contactIds?: readonly string[];
+  /**
+   * Per-channel classification epoch the content was admitted under, keyed by a
+   * channelId that MUST also appear in `channelIds` (jp36.6.3). Only meaningful
+   * for room kinds. A channelId absent from this map has an UNKNOWN admitted
+   * epoch: against an epoch-tracked destination it fails closed (denied auto-
+   * share), against an untracked destination it behaves exactly as pre-epoch.
+   * The map only ever tightens under intersection — an epoch survives merge only
+   * when every source agrees on it; disagreement drops to unknown (fail closed).
+   */
+  readonly channelEpochs?: Readonly<Record<string, number>>;
 }
 
 // ── Classification / decision vocabulary (bible §9.1) ──

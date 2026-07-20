@@ -91,6 +91,24 @@ describe('deriveDisclosureDestination', () => {
     })).toEqual({ kind: 'public_room', channelId: 'bcast-9' });
   });
 
+  it('stamps the channel current epoch onto a room destination when the resolver tracks one (jp36.6.3)', () => {
+    const epochResolver: ChannelDisclosureResolver = (channelId) => {
+      if (channelId === 'pub-tracked') return { channelPrivacy: 'public', broadcast: false, classificationEpoch: 3 };
+      if (channelId === 'inv-tracked') return { channelPrivacy: 'invite_only', broadcast: false, classificationEpoch: 1 };
+      return { channelPrivacy: 'public', broadcast: false };
+    };
+    expect(deriveDisclosureDestination({
+      method: 'discord.send', params: { channelId: 'pub-tracked' }, resolveChannel: epochResolver,
+    })).toEqual({ kind: 'public_room', channelId: 'pub-tracked', currentEpoch: 3 });
+    expect(deriveDisclosureDestination({
+      method: 'discord.send', params: { channelId: 'inv-tracked' }, resolveChannel: epochResolver,
+    })).toEqual({ kind: 'invite_only_room', channelId: 'inv-tracked', currentEpoch: 1 });
+    // Untracked channel: no currentEpoch key at all (pre-epoch behavior).
+    expect(deriveDisclosureDestination({
+      method: 'discord.send', params: { channelId: 'pub-untracked' }, resolveChannel: epochResolver,
+    })).toEqual({ kind: 'public_room', channelId: 'pub-untracked' });
+  });
+
   it('returns null for non-social methods, missing ids, and unresolvable private channels', () => {
     expect(deriveDisclosureDestination({
       method: 'web.fetch', params: { channelId: 'pub-1' }, resolveChannel,
@@ -192,6 +210,29 @@ describe('composeEgressDisclosureDecision', () => {
       destination: { kind: 'companion_self' },
     });
     expect(composed.allowed).toBe(true);
+  });
+
+  it('denies prior-epoch room content at egress once the room opened a fresh epoch (jp36.6.3)', () => {
+    // Content admitted to the public room at epoch 2.
+    const lineage = lineageFrom({
+      ref: 'session:pub-1@2',
+      sensitivity: 'public',
+      permittedDestinations: [{ kind: 'public_room', channelIds: ['pub-1'], channelEpochs: { 'pub-1': 2 } }],
+      subjectContactIds: [],
+      classified: true,
+    });
+    // Same epoch → auto-shareable.
+    expect(composeEgressDisclosureDecision({
+      sinkAllowed: true,
+      lineage,
+      destination: { kind: 'public_room', channelId: 'pub-1', currentEpoch: 2 },
+    })).toMatchObject({ allowed: true, disclosureEvaluated: true });
+    // Room advanced to a fresh epoch → routed to review, not auto-shared.
+    expect(composeEgressDisclosureDecision({
+      sinkAllowed: true,
+      lineage,
+      destination: { kind: 'public_room', channelId: 'pub-1', currentEpoch: 3 },
+    })).toMatchObject({ allowed: false, outcome: 'approval_required', disclosureEvaluated: true });
   });
 
   it('denies a DM to a contact that is not in the intersected permission set', () => {

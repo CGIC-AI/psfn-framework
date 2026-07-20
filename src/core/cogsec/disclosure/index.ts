@@ -9,6 +9,7 @@ export {
   accumulateDisclosureSource,
   assessDisclosure,
   beginDisclosureAccumulation,
+  destinationEpochEligible,
   destinationPermitted,
   intersectDestinationConstraints,
   maxSensitivity,

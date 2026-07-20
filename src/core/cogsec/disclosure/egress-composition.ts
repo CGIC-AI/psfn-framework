@@ -56,6 +56,16 @@ export function isDisclosureSocialEgressMethod(method: string): boolean {
 export type ChannelDisclosureResolver = (channelId: string) => {
   channelPrivacy: string;
   broadcast: boolean;
+  /**
+   * The channel's current classification epoch (jp36.6.3), when the channel is
+   * epoch-tracked. Stamped onto the derived room destination as `currentEpoch`
+   * so the decision layer's epoch gate can deny prior-epoch content. Omitted
+   * (undefined) for channels with no tracked epoch — the epoch gate then does
+   * not engage and eligibility is exactly the pre-epoch behavior. The resolver
+   * owns this value; it is a system/operator fact (an epoch bumps only through
+   * the gated invite-only → public demotion flow), never a model-asserted one.
+   */
+  classificationEpoch?: number;
 };
 
 /**
@@ -89,11 +99,15 @@ export function deriveDisclosureDestination(input: {
   if (!channelId) return null;
 
   const disclosure = input.resolveChannel(channelId);
+  const currentEpoch = typeof disclosure.classificationEpoch === 'number'
+    && Number.isFinite(disclosure.classificationEpoch)
+    ? disclosure.classificationEpoch
+    : undefined;
   if (disclosure.channelPrivacy === 'invite_only') {
-    return { kind: 'invite_only_room', channelId };
+    return { kind: 'invite_only_room', channelId, ...(currentEpoch !== undefined ? { currentEpoch } : {}) };
   }
   if (disclosure.channelPrivacy === 'public' || disclosure.broadcast) {
-    return { kind: 'public_room', channelId };
+    return { kind: 'public_room', channelId, ...(currentEpoch !== undefined ? { currentEpoch } : {}) };
   }
   // A private (non-broadcast) channel is not an outward social room, and no DM
   // contact was resolvable: no outward destination is derivable. Fail closed to

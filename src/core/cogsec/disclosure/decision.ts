@@ -15,6 +15,17 @@
 //                              auto-shareable to an outward destination (§9.5).
 //                              `companion_self` is the private sink and remains
 //                              eligible regardless.
+//   4. epoch disclosure boundary — a room's classification epoch increments when
+//                              it widens (invite-only → public). Content admitted
+//                              under epoch N of a channel is auto-eligible to the
+//                              room only while the room is still at epoch N
+//                              (§9.3). A destination carrying a current epoch is
+//                              auto-eligible only for content whose admitted epoch
+//                              for that channel matches; unknown or mismatched
+//                              epoch fails closed to review (not auto-release).
+//                              A destination with no tracked epoch skips the gate
+//                              entirely — behavior is exactly pre-epoch, so
+//                              absent epoch data is never MORE permissive.
 
 import {
   SENSITIVITY_LEVELS,
@@ -112,11 +123,81 @@ function intersectIdSets(left: IdSet, right: IdSet): IdSet {
   return left.filter(id => rightSet.has(id));
 }
 
-function buildConstraint(kind: DisclosureDestinationKind, ids: IdSet): DisclosureDestinationConstraint {
+// ── Per-channel admitted-epoch merge (rule 4) ────────────────────────────────
+//
+// Epoch scoping is auxiliary to `channelIds`: `channelIds` remains the sole
+// authority for WHICH channels a source permits; `channelEpochs` records, for a
+// channel the source permits, the epoch the content was admitted under there.
+// Merging is deliberately fail-closed:
+//   - WITHIN one source, two constraints of the same kind that disagree on a
+//     channel's epoch collapse that channel to UNKNOWN (drop it from the map).
+//   - ACROSS sources (intersection), an epoch survives only when both sources
+//     record it AND agree; one-sided or disagreeing epochs drop to UNKNOWN.
+// An UNKNOWN admitted epoch is denied against an epoch-tracked destination and
+// ignored against an untracked one — never a widening.
+
+/**
+ * Merge the admitted epochs a single source's constraint list records for one
+ * room kind. Channels with an intra-source epoch disagreement are omitted
+ * (UNKNOWN, fail closed). Only `channelId`-scoped kinds carry epochs.
+ */
+function mergeSourceEpochs(
+  constraints: readonly DisclosureDestinationConstraint[],
+  kind: DisclosureDestinationKind,
+): Map<string, number> {
+  if (DISCLOSURE_KIND_ID_FIELD[kind] !== 'channelId') return new Map();
+  const epochs = new Map<string, number>();
+  const conflicted = new Set<string>();
+  for (const constraint of constraints) {
+    if (constraint.kind !== kind || !constraint.channelEpochs) continue;
+    for (const [id, epoch] of Object.entries(constraint.channelEpochs)) {
+      if (typeof epoch !== 'number' || !Number.isFinite(epoch)) continue;
+      if (conflicted.has(id)) continue;
+      const prior = epochs.get(id);
+      if (prior === undefined) epochs.set(id, epoch);
+      else if (prior !== epoch) { epochs.delete(id); conflicted.add(id); }
+    }
+  }
+  return epochs;
+}
+
+/**
+ * Intersect two already-merged per-source epoch maps: keep a channel's epoch
+ * only when both sides record it and agree. Restricted to `keepIds` when the
+ * surviving id-set is concrete (an UNRESTRICTED id-set carries no epochs).
+ */
+function intersectEpochs(
+  left: Map<string, number>,
+  right: Map<string, number>,
+  keepIds: IdSet,
+): Map<string, number> {
+  const result = new Map<string, number>();
+  const allow = keepIds === UNRESTRICTED ? null : new Set(keepIds);
+  for (const [id, epoch] of left) {
+    if (allow && !allow.has(id)) continue;
+    if (right.get(id) === epoch) result.set(id, epoch);
+  }
+  return result;
+}
+
+function buildConstraint(
+  kind: DisclosureDestinationKind,
+  ids: IdSet,
+  epochs?: Map<string, number>,
+): DisclosureDestinationConstraint {
   const field = DISCLOSURE_KIND_ID_FIELD[kind];
   if (field === null || ids === UNRESTRICTED) return { kind };
   const sorted = [...ids].sort((a, b) => a.localeCompare(b));
-  return field === 'channelId' ? { kind, channelIds: sorted } : { kind, contactIds: sorted };
+  if (field !== 'channelId') return { kind, contactIds: sorted };
+  if (epochs && epochs.size > 0) {
+    const channelEpochs: Record<string, number> = {};
+    for (const id of sorted) {
+      const epoch = epochs.get(id);
+      if (epoch !== undefined) channelEpochs[id] = epoch;
+    }
+    if (Object.keys(channelEpochs).length > 0) return { kind, channelIds: sorted, channelEpochs };
+  }
+  return { kind, channelIds: sorted };
 }
 
 /**
@@ -135,7 +216,12 @@ export function intersectDestinationConstraints(
     if (leftIds === null || rightIds === null) continue;
     const merged = intersectIdSets(leftIds, rightIds);
     if (merged !== UNRESTRICTED && merged.length === 0) continue;
-    result.push(buildConstraint(kind, merged));
+    const mergedEpochs = intersectEpochs(
+      mergeSourceEpochs(left, kind),
+      mergeSourceEpochs(right, kind),
+      merged,
+    );
+    result.push(buildConstraint(kind, merged, mergedEpochs));
   }
   return result;
 }
@@ -143,6 +229,9 @@ export function intersectDestinationConstraints(
 /**
  * Does a concrete destination survive an already-intersected permission set?
  * `companion_self` always passes — it is the private sink, gated by nothing.
+ * This is the kind/id gate ONLY; the epoch disclosure boundary (rule 4) is the
+ * separate `destinationEpochEligible` gate that `assessDisclosure` composes on
+ * top, so this predicate's pre-epoch semantics are unchanged.
  */
 export function destinationPermitted(
   constraints: readonly DisclosureDestinationConstraint[],
@@ -154,6 +243,28 @@ export function destinationPermitted(
   if (ids === UNRESTRICTED) return true;
   const targetId = destination.kind === 'contact_dm' ? destination.contactId : destination.channelId;
   return ids.includes(targetId);
+}
+
+/**
+ * Epoch disclosure-boundary gate (rule 4, bible §9.3). Presumes the kind/id gate
+ * (`destinationPermitted`) already passed. Returns:
+ *   - `true` for non-room destinations (contact_dm, publication, companion_self):
+ *     they carry no room-classification epoch.
+ *   - `true` for a room destination with no tracked `currentEpoch`: the channel
+ *     is not epoch-tracked, so eligibility is exactly the pre-epoch behavior.
+ *   - otherwise `true` ONLY when the content's admitted epoch for that channel is
+ *     known AND equals the destination's current epoch. An unknown admitted epoch
+ *     (content predates or was not stamped for this epoch) or a mismatched one
+ *     (content from a prior epoch of a since-widened room) fails closed.
+ */
+export function destinationEpochEligible(
+  constraints: readonly DisclosureDestinationConstraint[],
+  destination: DisclosureDestination,
+): boolean {
+  if (destination.kind !== 'invite_only_room' && destination.kind !== 'public_room') return true;
+  if (destination.currentEpoch === undefined) return true;
+  const admittedEpoch = mergeSourceEpochs(constraints, destination.kind).get(destination.channelId);
+  return admittedEpoch !== undefined && admittedEpoch === destination.currentEpoch;
 }
 
 // ── Rule 3 + composition: accumulate and assess ──────────────────────────────
@@ -289,6 +400,17 @@ export function assessDisclosure(
       'destination not in the intersected permitted-destination set (§6.3)');
   }
 
+  // Rule 4: epoch disclosure boundary (§9.3). A room whose classification has
+  // changed since the content was admitted opens a fresh disclosure epoch; prior-
+  // epoch material is not auto-eligible and routes to human-in-the-loop egress
+  // review (`approval_required`), never a hard non_shareable — it remains
+  // shareable through review, just not automatically.
+  if (!destinationEpochEligible(lineage.permittedDestinations, destination)) {
+    return decide(false, 'approval_required', destination, effectiveSensitivity,
+      'content admitted under a prior classification epoch is not auto-eligible after the '
+        + "room's classification changed; route to human-in-the-loop egress review (§9.3)");
+  }
+
   const ceiling = DESTINATION_AUTO_SHAREABLE_CEILING[destination.kind];
   if (sensitivityOrd(effectiveSensitivity) > sensitivityOrd(ceiling)) {
     return decide(false, 'approval_required', destination, effectiveSensitivity,
@@ -327,7 +449,7 @@ function normalizeConstraints(
   for (const kind of DISCLOSURE_DESTINATION_KINDS) {
     const ids = mergeSourceIds(constraints, kind);
     if (ids === null) continue;
-    result.push(buildConstraint(kind, ids));
+    result.push(buildConstraint(kind, ids, mergeSourceEpochs(constraints, kind)));
   }
   return result;
 }

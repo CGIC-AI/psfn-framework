@@ -9,6 +9,7 @@ import {
   accumulateDisclosureSource,
   assessDisclosure,
   beginDisclosureAccumulation,
+  destinationEpochEligible,
   destinationPermitted,
   intersectDestinationConstraints,
   maxSensitivity,
@@ -223,6 +224,43 @@ describe('accumulateDisclosureSource: later restrictive source tightens outputs'
     expect(assessDisclosure(lineage, { kind: 'companion_self' }).allowed).toBe(true);
   });
 
+  it('preserves and intersects per-channel admitted epochs (rule 4)', () => {
+    let lineage = beginDisclosureAccumulation(CONTEXT);
+    // First source records the room at epoch 2.
+    lineage = accumulateDisclosureSource(lineage, source({
+      ref: 'room:r1@2',
+      sensitivity: 'public',
+      permittedDestinations: [{ kind: 'public_room', channelIds: ['r1'], channelEpochs: { r1: 2 } }],
+    }));
+    expect(lineage.permittedDestinations).toEqual([
+      { kind: 'public_room', channelIds: ['r1'], channelEpochs: { r1: 2 } },
+    ]);
+    // A second source agreeing on epoch 2 keeps it.
+    lineage = accumulateDisclosureSource(lineage, source({
+      ref: 'room:r1@2b',
+      sensitivity: 'public',
+      permittedDestinations: [{ kind: 'public_room', channelIds: ['r1'], channelEpochs: { r1: 2 } }],
+    }));
+    expect(lineage.permittedDestinations).toEqual([
+      { kind: 'public_room', channelIds: ['r1'], channelEpochs: { r1: 2 } },
+    ]);
+    // A third source disagreeing on the epoch drops it to UNKNOWN (fail closed),
+    // while the channel itself remains permitted.
+    lineage = accumulateDisclosureSource(lineage, source({
+      ref: 'room:r1@3',
+      sensitivity: 'public',
+      permittedDestinations: [{ kind: 'public_room', channelIds: ['r1'], channelEpochs: { r1: 3 } }],
+    }));
+    expect(lineage.permittedDestinations).toEqual([{ kind: 'public_room', channelIds: ['r1'] }]);
+  });
+
+  it('drops the epoch to UNKNOWN when one source records it and another does not', () => {
+    expect(intersectDestinationConstraints(
+      [{ kind: 'public_room', channelIds: ['r1'], channelEpochs: { r1: 2 } }],
+      [{ kind: 'public_room', channelIds: ['r1'] }],
+    )).toEqual([{ kind: 'public_room', channelIds: ['r1'] }]);
+  });
+
   it('accumulates subject contacts, source channels, and provenance refs', () => {
     let lineage = beginDisclosureAccumulation(CONTEXT);
     lineage = accumulateDisclosureSource(lineage, source({
@@ -246,5 +284,108 @@ describe('accumulateDisclosureSource: later restrictive source tightens outputs'
     expect(lineage.sourceCount).toBe(2);
     // contact_dm intersected down to the shared contact c1.
     expect(lineage.permittedDestinations).toEqual([{ kind: 'contact_dm', contactIds: ['c1'] }]);
+  });
+});
+
+// ── Rule 4: epoch disclosure boundary (jp36.6.3) ──────────────────────────────
+
+describe('destinationEpochEligible (rule 4: epoch boundary)', () => {
+  const roomAtEpoch2: DisclosureDestinationConstraint[] = [
+    { kind: 'public_room', channelIds: ['r1'], channelEpochs: { r1: 2 } },
+  ];
+
+  it('is inert for non-room destinations (no room-classification epoch)', () => {
+    expect(destinationEpochEligible(
+      [{ kind: 'contact_dm', contactIds: ['c1'] }],
+      { kind: 'contact_dm', contactId: 'c1' },
+    )).toBe(true);
+    expect(destinationEpochEligible([{ kind: 'publication' }], { kind: 'publication' })).toBe(true);
+    expect(destinationEpochEligible([], { kind: 'companion_self' })).toBe(true);
+  });
+
+  it('skips the gate when the destination channel carries no tracked epoch (pre-epoch behavior)', () => {
+    // No currentEpoch on the destination ⇒ identical to before epochs existed.
+    expect(destinationEpochEligible(roomAtEpoch2, { kind: 'public_room', channelId: 'r1' })).toBe(true);
+    // Even when the content itself carries no admitted epoch.
+    expect(destinationEpochEligible(
+      [{ kind: 'public_room', channelIds: ['r1'] }],
+      { kind: 'public_room', channelId: 'r1' },
+    )).toBe(true);
+  });
+
+  it('permits same-epoch content and denies content from a different epoch', () => {
+    expect(destinationEpochEligible(roomAtEpoch2, { kind: 'public_room', channelId: 'r1', currentEpoch: 2 })).toBe(true);
+    // The room advanced to a fresh epoch (e.g. narrowed then re-widened); prior-
+    // epoch content is no longer auto-eligible.
+    expect(destinationEpochEligible(roomAtEpoch2, { kind: 'public_room', channelId: 'r1', currentEpoch: 3 })).toBe(false);
+  });
+
+  it('fails closed when the admitted epoch is UNKNOWN but the destination is epoch-tracked', () => {
+    // Content carries no channelEpochs for r1, but the destination now tracks an
+    // epoch: cannot prove same-epoch admission ⇒ deny (never a widening).
+    expect(destinationEpochEligible(
+      [{ kind: 'public_room', channelIds: ['r1'] }],
+      { kind: 'public_room', channelId: 'r1', currentEpoch: 2 },
+    )).toBe(false);
+  });
+});
+
+describe('assessDisclosure epoch composition (jp36.6.3)', () => {
+  function publicRoomLineage(channelId: string, admittedEpoch?: number) {
+    const channelEpochs = admittedEpoch !== undefined ? { [channelId]: admittedEpoch } : undefined;
+    return accumulateDisclosureSource(beginDisclosureAccumulation(CONTEXT), source({
+      ref: `room:${channelId}@${admittedEpoch ?? 'none'}`,
+      sensitivity: 'public',
+      permittedDestinations: [{
+        kind: 'public_room',
+        channelIds: [channelId],
+        ...(channelEpochs ? { channelEpochs } : {}),
+      }],
+      sourceChannelId: channelId,
+    }));
+  }
+
+  it('auto-shares post-change content to the same room within its epoch', () => {
+    const lineage = publicRoomLineage('r1', 2);
+    expect(assessDisclosure(lineage, { kind: 'public_room', channelId: 'r1', currentEpoch: 2 })).toMatchObject({
+      allowed: true,
+      outcome: 'auto_shareable',
+    });
+  });
+
+  it('routes prior-epoch content to human review (approval_required, not auto-share)', () => {
+    // Content admitted under public epoch 2; the room later opened a fresh epoch.
+    const lineage = publicRoomLineage('r1', 2);
+    const decision = assessDisclosure(lineage, { kind: 'public_room', channelId: 'r1', currentEpoch: 3 });
+    expect(decision.allowed).toBe(false);
+    expect(decision.outcome).toBe('approval_required');
+    expect(decision.reason).toContain('prior classification epoch');
+  });
+
+  it('fails closed for epoch-unknown content once the destination is epoch-tracked', () => {
+    const lineage = publicRoomLineage('r1', undefined);
+    const decision = assessDisclosure(lineage, { kind: 'public_room', channelId: 'r1', currentEpoch: 4 });
+    expect(decision.allowed).toBe(false);
+    expect(decision.outcome).toBe('approval_required');
+  });
+
+  it('is unchanged from pre-epoch when neither side carries an epoch', () => {
+    const lineage = publicRoomLineage('r1', undefined);
+    expect(assessDisclosure(lineage, { kind: 'public_room', channelId: 'r1' }).allowed).toBe(true);
+  });
+
+  it('denies invite-only-epoch material to the same room after it widens to public', () => {
+    // The headline demotion scenario: content admitted while the room was
+    // invite-only (epoch 1). After widening, the room reclassifies public, so the
+    // egress destination is a public_room — the kind boundary already denies, and
+    // companion-self stays eligible.
+    const lineage = accumulateDisclosureSource(beginDisclosureAccumulation(CONTEXT), source({
+      ref: 'room:r1@invite',
+      sensitivity: 'public',
+      permittedDestinations: [{ kind: 'invite_only_room', channelIds: ['r1'], channelEpochs: { r1: 1 } }],
+      sourceChannelId: 'r1',
+    }));
+    expect(assessDisclosure(lineage, { kind: 'public_room', channelId: 'r1', currentEpoch: 2 }).allowed).toBe(false);
+    expect(assessDisclosure(lineage, { kind: 'companion_self' }).allowed).toBe(true);
   });
 });

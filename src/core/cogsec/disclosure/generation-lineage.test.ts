@@ -424,3 +424,66 @@ describe('buildGenerationDisclosureLineage', () => {
     expect(assessDisclosure(lineage, { kind: 'companion_self' }).allowed).toBe(true);
   });
 });
+
+// ── Population seam: admitted classification epochs (jp36.6.3, §9.3) ───────────
+
+describe('admitted epoch population (jp36.6.3)', () => {
+  it('stamps the session-history room constraint with the conversation channel epoch', () => {
+    const scope = createGroupConversationScope({ channelId: 'discord:room-9', envelope: INVITE_ENVELOPE });
+    const contribution = sessionHistoryDisclosureContribution(scope, { channelEpoch: 4 });
+    expect(contribution.permittedDestinations).toEqual([
+      { kind: 'invite_only_room', channelIds: ['discord:room-9'], channelEpochs: { 'discord:room-9': 4 } },
+    ]);
+    expectAllScoped(contribution.permittedDestinations);
+    // Absent epoch option → no channelEpochs (pre-epoch behavior, unchanged).
+    expect(sessionHistoryDisclosureContribution(scope).permittedDestinations).toEqual([
+      { kind: 'invite_only_room', channelIds: ['discord:room-9'] },
+    ]);
+  });
+
+  it('stamps a memory room constraint with the source channel epoch', () => {
+    // 'discord:room-x' classifies invite_only (default) → ceiling personal.
+    const contribution = memoryDisclosureContribution({
+      ref: 'memory:m-epoch',
+      sensitivity: 'personal',
+      sourceChannelId: 'discord:room-x',
+      sourceChannelEpoch: 7,
+    });
+    expect(contribution.permittedDestinations).toEqual([
+      { kind: 'invite_only_room', channelIds: ['discord:room-x'], channelEpochs: { 'discord:room-x': 7 } },
+    ]);
+    expectAllScoped(contribution.permittedDestinations);
+  });
+
+  it('carries the epoch end-to-end so a room stays auto-shareable only within its epoch', () => {
+    const scope = createGroupConversationScope({ channelId: 'discord:town-square', envelope: PUBLIC_ENVELOPE });
+    const lineage = buildGenerationDisclosureLineage({
+      context: CONTEXT,
+      conversationScope: scope,
+      conversationChannelEpoch: 5,
+      memorySources: [],
+    });
+    expect(lineage.permittedDestinations).toEqual([
+      { kind: 'public_room', channelIds: ['discord:town-square'], channelEpochs: { 'discord:town-square': 5 } },
+    ]);
+    // Same epoch → auto-shareable.
+    expect(assessDisclosure(lineage, { kind: 'public_room', channelId: 'discord:town-square', currentEpoch: 5 }).allowed).toBe(true);
+    // The room opened a fresh epoch → prior-epoch content routes to review.
+    expect(assessDisclosure(lineage, { kind: 'public_room', channelId: 'discord:town-square', currentEpoch: 6 })).toMatchObject({
+      allowed: false,
+      outcome: 'approval_required',
+    });
+    // An untracked destination (no currentEpoch) is unchanged from pre-epoch.
+    expect(assessDisclosure(lineage, { kind: 'public_room', channelId: 'discord:town-square' }).allowed).toBe(true);
+  });
+
+  it('fails closed: epoch-unknown session content is denied once the destination is epoch-tracked', () => {
+    const scope = createGroupConversationScope({ channelId: 'discord:town-square', envelope: PUBLIC_ENVELOPE });
+    // No conversationChannelEpoch supplied → admitted epoch UNKNOWN.
+    const lineage = buildGenerationDisclosureLineage({ context: CONTEXT, conversationScope: scope, memorySources: [] });
+    expect(assessDisclosure(lineage, { kind: 'public_room', channelId: 'discord:town-square', currentEpoch: 2 })).toMatchObject({
+      allowed: false,
+      outcome: 'approval_required',
+    });
+  });
+});

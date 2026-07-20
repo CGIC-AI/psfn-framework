@@ -2444,15 +2444,23 @@ export class GatewayServer {
           input.timeoutMs,
           Math.max(1, lease.expiresAtMs - Date.now()),
         );
-        const raced = await Promise.race([
-          route.client.request('api.chat.completion', params),
-          new Promise<never>((_, reject) =>
-            setTimeout(
-              () => reject(new Error('Shared-satellite chat request timed out')),
-              effectiveTimeoutMs,
-            ),
-          ),
-        ]);
+        let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+        const timeout = new Promise<never>((_, reject) => {
+          timeoutHandle = setTimeout(
+            () => reject(new Error('Shared-satellite chat request timed out')),
+            effectiveTimeoutMs,
+          );
+          timeoutHandle.unref();
+        });
+        let raced: unknown;
+        try {
+          raced = await Promise.race([
+            route.client.request('api.chat.completion', params),
+            timeout,
+          ]);
+        } finally {
+          if (timeoutHandle) clearTimeout(timeoutHandle);
+        }
         // d269: shared-satellite chat replies cross the same reverse-RPC seam;
         // scan before arbitration reads the content.
         const rawResult = await this.inspectAgentReply(

@@ -659,7 +659,7 @@ describe('resolveGatewayMultiCompanionConfig', () => {
   });
 
   it('does not silently ignore satellite ownership for a single-companion deployment', () => {
-    expect(() => resolveGatewayMultiCompanionConfig({}, baseChannels(), {
+    const resolveConfig = () => resolveGatewayMultiCompanionConfig({}, baseChannels(), {
       schemaVersion: 1,
       enabled: true,
       satellites: [{
@@ -674,7 +674,11 @@ describe('resolveGatewayMultiCompanionConfig', () => {
         },
         endpoints: [],
       }],
-    })).toThrow(/single-companion \(one-entry companions\.json\) deployment/);
+    });
+
+    expect(resolveConfig).toThrow(/single-companion \(one-entry companions\.json\) deployment/);
+    expect(resolveConfig).toThrow(/remove the sharedDevice declarations/);
+    expect(resolveConfig).not.toThrow(/remove the companionId fields/);
   });
 
   it('maps channel types onto routable surfaces fail-closed', () => {
@@ -2127,6 +2131,82 @@ describe('GatewayServer multi-companion routing (flag on)', () => {
 
     expect(methodFrames(activeConnection, 'api.chat.completion')).toHaveLength(2);
     expect(methodFrames(primaryConnection, 'api.chat.completion')).toHaveLength(1);
+  });
+
+  it('unrefs and clears each shared-satellite chat attempt timeout when the RPC settles', async () => {
+    const primaryCompanionId = '22222222-2222-4222-8222-222222222222';
+    const { server, connect } = await setupServer({
+      ...withSharedSatelliteEligibility(createMinimalOptions()),
+      multiCompanion: multiCompanion({ api: primaryCompanionId }),
+    });
+    const conn = await connect((message, emit) => {
+      if (!message.id || typeof message.method !== 'string') return;
+      if (message.method === 'satellite.response.eligibility') {
+        emit({
+          jsonrpc: '2.0',
+          id: message.id,
+          result: { fatigueAllows: true },
+        });
+      }
+      if (message.method === 'api.chat.completion') {
+        emit({
+          jsonrpc: '2.0',
+          id: message.id,
+          result: {
+            ok: true,
+            response: {
+              content: 'leased response',
+              channelId: 'satellite:voice:session-sat-app',
+              inputTokens: 2,
+              outputTokens: 2,
+            },
+          },
+        });
+      }
+    });
+    await identifyAgent(conn, primaryCompanionId, 1);
+    const satellite = makeSatelliteVoiceMessage('sat-app', primaryCompanionId)
+      .routing.satellite;
+    const timeoutProbe = setTimeout(() => undefined, 1);
+    const timeoutPrototype = Object.getPrototypeOf(timeoutProbe) as {
+      unref: () => ReturnType<typeof timeoutProbe.unref>;
+    };
+    clearTimeout(timeoutProbe);
+    const unrefSpy = vi.spyOn(timeoutPrototype, 'unref');
+    const setTimeoutSpy = vi.spyOn(globalThis, 'setTimeout');
+    const clearTimeoutSpy = vi.spyOn(globalThis, 'clearTimeout');
+
+    try {
+      const result = await server.requestSharedSatelliteChatCompletion({
+        satellite,
+        canonicalContactId: 'contact-partner',
+        channelId: 'satellite:voice:session-sat-app',
+        params: {
+          requestId: 'shared-chat-cleanup',
+          request: {
+            model: 'test-model',
+            messages: [{ role: 'user', content: 'hello' }],
+          },
+          principal: { id: 'principal-1', mode: 'api_key' },
+          headers: {},
+        },
+        timeoutMs: 250,
+      });
+
+      expect(result).toMatchObject({
+        ok: true,
+        response: { content: 'leased response' },
+      });
+      const chatTimeoutIndex = setTimeoutSpy.mock.calls.findIndex(([, delay]) => delay === 250);
+      expect(chatTimeoutIndex).toBeGreaterThanOrEqual(0);
+      const chatTimeoutHandle = setTimeoutSpy.mock.results[chatTimeoutIndex]?.value;
+      expect(unrefSpy.mock.contexts).toContain(chatTimeoutHandle);
+      expect(clearTimeoutSpy).toHaveBeenCalledWith(chatTimeoutHandle);
+    } finally {
+      clearTimeoutSpy.mockRestore();
+      setTimeoutSpy.mockRestore();
+      unrefSpy.mockRestore();
+    }
   });
 
   it('fails closed when multi-companion satellite voice has no shared-device policy', async () => {

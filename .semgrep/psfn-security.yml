@@ -61,7 +61,7 @@ rules:
               - pattern: $CHILD_PROCESS.execSync($COMMAND, ...)
       - metavariable-regex:
           metavariable: $COMMAND
-          regex: ^(?!["']).+
+          regex: ^(?!["'`]).+
 
   - id: psfn.security.disabled-tls-verification
     message: >-

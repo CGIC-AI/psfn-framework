@@ -268,6 +268,112 @@ afterAll(async () => {
 }, TIMEOUT_MS);
 
 describe('Postgres gateway OAuth/session authority', () => {
+  it('leaves one active session and fences dependents when same-audience logins race', async () => {
+    const { store, runtime, coordinator, migration } = await createStore();
+    try {
+      const firstInput = await authenticate(store, 'superseding-login-initial');
+      const first = await store.createLoginSession({
+        ...firstInput,
+        providerSubjectId: PROVIDER_SUBJECT_ID,
+        providerMetadata: {},
+        audience: 'fleet',
+        now: NOW,
+        idleTtlMs: 1_800_000,
+        absoluteTtlMs: 28_800_000,
+      });
+      const challengeId = randomUUID();
+      const jitGrantId = randomUUID();
+      await runtime.query(`
+        INSERT INTO fleet_auth.step_up_challenges
+          (challenge_id, principal_id, browser_session_id, challenge_digest, kind,
+           action, resource_digest, global_auth_epoch, created_at, expires_at)
+        VALUES ($1, $2, $3, $4, 'webauthn_uv', 'settings.write', $5, 1,
+                $6, $7)
+      `, [
+        challengeId,
+        first.principalId,
+        first.recordId,
+        'a'.repeat(64),
+        'b'.repeat(64),
+        NOW,
+        new Date(NOW.getTime() + 300_000),
+      ]);
+      await runtime.query(`
+        INSERT INTO fleet_auth.jit_authorization_grants
+          (grant_id, principal_id, browser_session_id, companion_id, subject_scope,
+           action, resource_selector, purpose, assurance, memory_revision,
+           classifier_evidence_digest, authz_version, binding_version, grant_version,
+           policy_version, global_auth_epoch, issued_at, expires_at)
+        VALUES ($1, $2, $3, $4, '{}', 'memory.read.self', '{}', 'test',
+                'webauthn_uv', 1, $5, 1, 1, 1, 1, 1, $6, $7)
+      `, [
+        jitGrantId,
+        first.principalId,
+        first.recordId,
+        randomUUID(),
+        'c'.repeat(64),
+        NOW,
+        new Date(NOW.getTime() + 300_000),
+      ]);
+
+      const nextInputs = await Promise.all(Array.from({ length: 3 }, (_, index) => (
+        authenticate(store, `superseding-login-race-${index}`)
+      )));
+      const sessions = [
+        first,
+        ...await Promise.all(nextInputs.map((loginInput, index) => (
+          store.createLoginSession({
+            ...loginInput,
+            providerSubjectId: PROVIDER_SUBJECT_ID,
+            providerMetadata: {},
+            audience: 'fleet',
+            now: new Date(NOW.getTime() + index + 1),
+            idleTtlMs: 1_800_000,
+            absoluteTtlMs: 28_800_000,
+          })
+        ))),
+      ];
+
+      const durable = await runtime.query<{
+        record_id: string;
+        revoked_at: Date | null;
+        replaced_by: string | null;
+      }>(`
+        SELECT record_id, revoked_at, replaced_by
+        FROM fleet_auth.browser_sessions
+        WHERE principal_id = $1 AND audience = 'fleet'
+        ORDER BY created_at, record_id
+      `, [sessions[0]!.principalId]);
+      const active = durable.rows.filter(row => (
+        row.revoked_at === null && row.replaced_by === null
+      ));
+      expect(active).toHaveLength(1);
+      expect(sessions.some(session => session.recordId === active[0]!.record_id)).toBe(true);
+      expect(durable.rows.filter(row => row.record_id !== active[0]!.record_id).every(row => (
+        row.revoked_at !== null && row.replaced_by !== null
+      ))).toBe(true);
+
+      const dependents = await runtime.query<{
+        challenge_status: string;
+        jit_revoked: boolean;
+      }>(`
+        SELECT
+          (SELECT status FROM fleet_auth.step_up_challenges
+           WHERE challenge_id = $1) AS challenge_status,
+          (SELECT revoked_at IS NOT NULL FROM fleet_auth.jit_authorization_grants
+           WHERE grant_id = $2) AS jit_revoked
+      `, [challengeId, jitGrantId]);
+      expect(dependents.rows[0]).toEqual({
+        challenge_status: 'revoked',
+        jit_revoked: true,
+      });
+    } finally {
+      await migration.end();
+      await coordinator.end();
+      await runtime.end();
+    }
+  }, TIMEOUT_MS);
+
   it('produces exact lifecycle OAuth evidence without linking the new provider subject', async () => {
     const { store, runtime, coordinator, migration } = await createStore();
     try {

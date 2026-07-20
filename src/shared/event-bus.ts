@@ -738,6 +738,23 @@ export interface EventMap {
     concernId?: string;
     timestamp: number;
   } & EventCorrelationFields;
+  // Resolution-as-appraisal (vw3w.1): emitted when a concern resolves and both a
+  // formation VAD and a resolution VAD are available. Carries the relief delta
+  // (resolutionVad − formationVad) with NO forced valence sign — resolution may
+  // read as relief, release, or anticlimax (charter 8.3). The symmetric
+  // counterpart to the formation snapshot; feeds downstream appraisal/memory
+  // integration (sibling work) rather than mutating emotion state directly.
+  'intention.concern.resolution_appraisal': {
+    concernId: string;
+    /** Which resolve path produced the appraisal. */
+    source: 'decision' | 'grooming_stale' | 'grooming_cap';
+    formationVad: { valence: number; arousal: number; dominance: number };
+    resolutionVad: { valence: number; arousal: number; dominance: number };
+    /** resolutionVad − formationVad, component-wise. Sign is preserved as-is. */
+    reliefDelta: { valence: number; arousal: number; dominance: number };
+    resolvedAt?: string;
+    timestamp: number;
+  } & EventCorrelationFields;
   'memory.extraction.flush': {
     channelId: string;
     templateId: string;

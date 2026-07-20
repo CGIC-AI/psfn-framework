@@ -64,9 +64,14 @@ import type { Scheduler } from './scheduler.js';
 import { conversationalEntryFromSessionMetadata } from './session-metadata-preflight.js';
 import type { FreeTimeChooserOutcome } from './free-time-chooser.js';
 import type { FreeTimeLane } from './free-time-lane.js';
-import type { FreeTimeWorkspace } from './free-time-workspace-resolver.js';
+import type { FreeTimeReturnPolicy, FreeTimeWorkspace } from './free-time-workspace-resolver.js';
 import type { DisclosureDestination, DisclosureLineage } from '../cogsec/disclosure/index.js';
 import { projectReturnNoteEvidence } from './return-note-projection.js';
+import {
+  returnPolicyToDisclosureDestination,
+  routeReturnNote,
+  type ContactDmSessionResolver,
+} from './return-note-routing.js';
 
 const log = createComponentLogger('FreeTime');
 
@@ -462,6 +467,16 @@ export interface FreeTimeRuntimeOptions {
    */
   resolveEntryDisclosureLineage?: (entry: SessionEntry) => DisclosureLineage | undefined;
   /**
+   * Resolve a contact-anchored return note's `contactId` to that contact's DM
+   * session id (bible §10.8: contact-anchored work returns to that exact DM,
+   * never "an admin" or the latest private session). The routing NEVER addresses
+   * a private channel id directly — it resolves through this seam. ABSENT (or
+   * returning `null`), a contact-anchored note fails closed to a content-free
+   * private/self note rather than a wrong-destination append. Manifest v2
+   * (jp36.2.4) wires the concrete contact→DM resolution.
+   */
+  resolveContactDmSessionId?: ContactDmSessionResolver;
+  /**
    * Resolve the lane-independent continuity session for a free-time block.
    * The scheduler trigger lane (quiet-hours vs idle) MUST NOT determine
    * transcript identity — both lanes resume the SAME chosen workspace session
@@ -582,11 +597,40 @@ function evaluateFreeTimeGatePreflight(input: {
     : null;
 }
 
+/**
+ * Build the publication-STATE return note (bible §10.8 rows 4-5): a workspace
+ * state update that carries NO transcript content and no partner disclosure. It
+ * lands on the workspace's own internal continuity session, never a partner DM.
+ */
+function buildPublicationStateNote(): string {
+  return [
+    '[Publication workspace update]',
+    'During some free time, I made a little progress on a publication project of mine.',
+    'This note comes from the runtime, not from you; mention it or not, however you like.',
+  ].join('\n');
+}
+
+/**
+ * Surface the "while you were away" return note for a completed ACTIVE block,
+ * routed by the RESOLVED WORKSPACE return policy (bible §10.8) rather than the
+ * latest eligible session. The disclosure DESTINATION handed to the summarizer
+ * projection and the append TARGET are derived from the SAME return policy, so a
+ * note bound for one contact's DM is both summarized from and delivered to that
+ * exact DM — route and destination can never disagree.
+ *
+ * Fail-closed (charter / bible §20.4): an unresolvable contact/room, or a
+ * projection collapse (nothing eligible for the outward destination), degrades
+ * to a content-free private/self note — never a wrong-destination append. The
+ * note is always an ATTRIBUTED SYSTEM note (never partner speech, hard
+ * invariant, prior misattribution incident) and is non-initiating (a passive
+ * context note; it surfaces only when a human next replies, never pushed).
+ */
 async function surfaceReturnNote(
   options: FreeTimeRuntimeOptions,
   partnerSessionId: string,
   freeTimeChannel: string,
   result: FreeTimeBlockResult,
+  routing?: { returnPolicy: FreeTimeReturnPolicy; disclosureCeiling?: DisclosureDestination },
 ): Promise<boolean> {
   if (!result.activity) return false;
 
@@ -596,67 +640,111 @@ async function surfaceReturnNote(
   const assistantEntries = transcript.filter(entry => entry.role === 'assistant');
   if (assistantEntries.length === 0) return false;
 
-  // Destination-eligible summarizer projection (jp36.2.3.2, bible §15.2/§10.8):
-  // filter the block's evidence to only what the return note's DESTINATION may
-  // lawfully receive BEFORE any summary is generated. Absent a resolved
-  // destination, the note keeps the full-fidelity private/self form. The
-  // projection rides the landed CogSec disclosure decision layer (jp36.1) — no
-  // parallel classification here.
-  const destination: DisclosureDestination =
-    options.resolveReturnDestination?.() ?? { kind: 'companion_self' };
-  const projection = projectReturnNoteEvidence({
-    evidence: assistantEntries.map(entry => ({
-      entry,
-      lineage: options.resolveEntryDisclosureLineage?.(entry),
-    })),
-    destination,
+  // The note's disclosure destination comes from the resolved workspace return
+  // policy (the FreeTimeReturnPolicy → DisclosureDestination mapping this bead
+  // owns). Absent a chosen workspace (legacy / chooser unwired), the optional
+  // `resolveReturnDestination` seam supplies it, defaulting to the private-self
+  // sink so there is no regression while richer workspaces land.
+  const requestedDestination: DisclosureDestination = routing
+    ? returnPolicyToDisclosureDestination(routing.returnPolicy, routing.disclosureCeiling)
+    : (options.resolveReturnDestination?.() ?? { kind: 'companion_self' });
+
+  // Route AND destination from the same source: `route.destination` feeds the
+  // projection content gate; `route.targetSessionId` is the append target.
+  const route = routeReturnNote(requestedDestination, {
+    privateSelfSessionId: partnerSessionId,
+    workspaceSessionId: freeTimeChannel,
+    ...(options.resolveContactDmSessionId
+      ? { resolveContactDmSessionId: options.resolveContactDmSessionId }
+      : {}),
   });
 
-  // Only `content` mode may summarize a transcript, and only from the
-  // destination-eligible subset. `state_only` (publication) and
-  // `collapsed_private` (fail-closed collapse: nothing was eligible for the
-  // requested outward destination) carry NO transcript content — the note stays
-  // a content-free "spent some time on my own" self-disclosure.
+  // Publication: a STATE update on the workspace's own session — no transcript
+  // content, no partner disclosure (bible §10.8). Short-circuit before any
+  // summarization so a broad private transcript can never reach it.
+  if (route.isPublicationState) {
+    log.debug('Free-time return-note routed to publication state update', {
+      workspaceChannelId: freeTimeChannel,
+      targetSessionId: route.targetSessionId,
+      requestedDestinationKind: requestedDestination.kind,
+      reason: route.reason,
+    });
+    options.sessionManager.appendContextSystemNote(
+      route.targetSessionId,
+      buildPublicationStateNote(),
+      FREE_TIME_RETURN_NOTE_SOURCE,
+    );
+    return true;
+  }
+
+  // Destination-eligible summarizer projection (jp36.2.3.2, bible §15.2/§10.8):
+  // filter the block's evidence to only what the note's DESTINATION may lawfully
+  // receive BEFORE any summary is generated. Only run when an outward target was
+  // actually resolved (`contentAllowed`) and a summarizer is wired; otherwise the
+  // note stays a content-free "spent some time on my own" self-disclosure. The
+  // projection rides the landed CogSec disclosure decision layer (jp36.1) — no
+  // parallel classification here.
   let summary = '';
-  if (
-    projection.mode === 'content'
-    && projection.eligibleEntries.length > 0
-    && options.summarizeActivity
-  ) {
-    try {
-      summary = (await options.summarizeActivity({
-        channelId: freeTimeChannel,
-        entries: projection.eligibleEntries,
-      })).trim();
-    } catch (error) {
-      // The summary is an enrichment; its failure must not block the return
-      // note. Surfaced via warn, never swallowed silently.
-      log.warn('Free-time activity summary failed; surfacing note without it', {
-        channelId: freeTimeChannel,
-        error: String(error),
-      });
+  let projectionCollapsed = false;
+  let projectionMode: string = 'content_free';
+  let eligibleCount = 0;
+  if (route.contentAllowed && options.summarizeActivity) {
+    const projection = projectReturnNoteEvidence({
+      evidence: assistantEntries.map(entry => ({
+        entry,
+        lineage: options.resolveEntryDisclosureLineage?.(entry),
+      })),
+      destination: route.destination,
+    });
+    projectionCollapsed = projection.collapsed;
+    projectionMode = projection.mode;
+    eligibleCount = projection.eligibleEntries.length;
+    if (projection.mode === 'content' && projection.eligibleEntries.length > 0) {
+      try {
+        summary = (await options.summarizeActivity({
+          channelId: freeTimeChannel,
+          entries: projection.eligibleEntries,
+        })).trim();
+      } catch (error) {
+        // The summary is an enrichment; its failure must not block the return
+        // note. Surfaced via warn, never swallowed silently.
+        log.warn('Free-time activity summary failed; surfacing note without it', {
+          channelId: freeTimeChannel,
+          error: String(error),
+        });
+      }
     }
   }
 
-  log.debug('Free-time return-note projection resolved', {
+  // Deliver eligible content to the resolved outward/self target ONLY when a real
+  // summary survived the projection. Any other outcome — unresolvable target,
+  // projection collapse, or an empty summary — is a content-free note that keeps
+  // to the companion's own private-self session, never the outward destination.
+  const deliverContent = summary.length > 0 && !projectionCollapsed && route.contentAllowed;
+  const targetSessionId = deliverContent ? route.targetSessionId : partnerSessionId;
+
+  log.debug('Free-time return-note routed', {
     channelId: freeTimeChannel,
-    requestedDestinationKind: destination.kind,
-    mode: projection.mode,
-    collapsed: projection.collapsed,
-    eligibleEntries: projection.eligibleEntries.length,
+    requestedDestinationKind: requestedDestination.kind,
+    routedDestinationKind: route.destination.kind,
+    targetSessionId,
+    deliverContent,
+    projectionMode,
+    projectionCollapsed,
+    eligibleEntries: eligibleCount,
     totalAssistantEntries: assistantEntries.length,
-    reason: projection.reason,
+    reason: route.reason,
   });
 
   const note = [
     '[While you were away]',
     'During some free time, I spent a little while on my own.',
-    ...(summary ? [`Here is what I got up to: ${summary}`] : []),
+    ...(deliverContent ? [`Here is what I got up to: ${summary}`] : []),
     'This note comes from the runtime, not from you; mention it or not, however you like.',
   ].join('\n');
 
   options.sessionManager.appendContextSystemNote(
-    partnerSessionId,
+    targetSessionId,
     note,
     FREE_TIME_RETURN_NOTE_SOURCE,
   );
@@ -862,9 +950,19 @@ function makeLaneHandler(
       FREE_TIME_BLOCK_NOTE_SOURCE,
     );
 
+    // Route the return note by the RESOLVED WORKSPACE return policy (bible §10.8),
+    // never the trigger lane or the latest eligible session. A chosen workspace
+    // carries its own return policy + disclosure ceiling; absent one (chooser
+    // unwired / legacy), routing falls back to the private-self seam.
+    const returnRouting = chosen?.kind === 'workspace'
+      ? {
+        returnPolicy: chosen.workspace.returnPolicy,
+        disclosureCeiling: chosen.workspace.retrievalPolicy.disclosureCeiling,
+      }
+      : undefined;
     let returnSurfaced = false;
     try {
-      returnSurfaced = await surfaceReturnNote(options, sessionId, channelId, result);
+      returnSurfaced = await surfaceReturnNote(options, sessionId, channelId, result, returnRouting);
     } catch (error) {
       log.error('Free-time return-surfacing failed; block outcome stands', {
         lane,

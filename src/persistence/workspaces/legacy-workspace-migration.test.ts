@@ -184,6 +184,34 @@ describe('legacy personal workspace migration', () => {
     })).toThrow(/receipt no longer matches its migration identity/);
   });
 
+  it('validates a completed receipt without migration env after the legacy source is retired', () => {
+    const { legacy, fleet } = fixture();
+    const digest = hashLegacyWorkspaceTree(legacy);
+    const destinationPath = fleet.companions[0].personalWorkspacePath;
+    expect(migrateLegacyWorkspaceForFleet({
+      fleet,
+      legacyWorkspacePath: legacy,
+      env: {
+        [LEGACY_WORKSPACE_COMPANION_ID_ENV]: FIRST_ID,
+        [LEGACY_WORKSPACE_SHA256_ENV]: digest,
+      },
+    }).status).toBe('migrated');
+
+    rmSync(legacy, { recursive: true });
+
+    expect(migrateLegacyWorkspaceForFleet({
+      fleet,
+      legacyWorkspacePath: legacy,
+      env: {},
+    })).toMatchObject({
+      status: 'already_migrated',
+      sourceSha256: digest,
+      companionId: FIRST_ID,
+      sourcePath: legacy,
+      destinationPath,
+    });
+  });
+
   it('refuses digest drift and destination collisions instead of merging', () => {
     const { runtimeRoot, legacy, fleet } = fixture();
     const digest = hashLegacyWorkspaceTree(legacy);

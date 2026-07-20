@@ -1633,6 +1633,123 @@ describe('SessionManager', () => {
     });
   });
 
+  // B2 closure property (test 3): resolveSessionChannelId is a public mutable
+  // resolver reachable from inside captured scopes. Under a captured owner it
+  // must resolve the owner's own channel to the owner and fail closed on any
+  // other override-eligible channel, so the mutable active context can never
+  // leak a different session's identity into an admitted turn.
+  it('fails closed when in-scope resolveSessionChannelId targets a non-owner api session', () => {
+    const mgr = new SessionManager(store, makeConfig());
+    const capturedOwner = 'api:captured-owner';
+    const otherApiSession = 'api:other-session';
+    // Mutable active context points at a different api session.
+    mgr.setActiveContextSession(otherApiSession);
+    const sessionReads = mgr.createCapturedSessionReads({
+      logicalSessionId: capturedOwner,
+      sourceChannelId: capturedOwner,
+    });
+
+    sessionReads.run(() => {
+      // The owner's own channel resolves to itself, never the active context.
+      expect(mgr.resolveSessionChannelId(capturedOwner)).toBe(capturedOwner);
+      // A different override-eligible channel throws at the call site instead of
+      // silently inheriting activeContextSessionId (the wrong-session leak).
+      expect(() => mgr.resolveSessionChannelId(otherApiSession)).toThrow(
+        'cannot apply mutable active-context resolution',
+      );
+    });
+
+    // Outside the captured scope the mutable resolver behaves normally again.
+    expect(mgr.resolveSessionChannelId(otherApiSession)).toBe(otherApiSession);
+  });
+
+  // B2 (test 2, mock-blindness closer): the background MemoryExtractor runs
+  // inside the source turn's captured owner scope. Every prior extraction test
+  // wires a mock SessionManager, so none exercised the real resolveSessionChannelId
+  // under capture. Here a REAL SessionManager + REAL MemoryExtractor extract for
+  // session A while activeContextSessionId points at a different api session B.
+  // Pre-fix the extractor re-resolved A through the mutable resolver and got B,
+  // attributing A's facts to B (the 9syj.9 wrong-session bug). Post-fix the
+  // owner-aware resolver keeps attribution on A.
+  it('attributes background extraction to the captured owner, not the mutable active context', async () => {
+    const mgr = new SessionManager(store, makeConfig());
+    const eventBus = new EventBus();
+    const sessionA = 'api:session-a';
+    const sessionB = 'api:session-b';
+
+    for (let i = 0; i < 6; i += 1) {
+      mgr.recordUserMessage(sessionA, `Session A turn ${i}: planning a Kyoto trip in April`, 'user-a', 'User');
+      mgr.recordAssistantMessage(sessionA, `Session A reply ${i}: that sounds wonderful`);
+    }
+    const recoveredEntries = store.getRecent(sessionA, 64);
+
+    // The mutable active context points at a DIFFERENT api session (B).
+    mgr.setActiveContextSession(sessionB);
+
+    const extractionLLM = {
+      stream: vi.fn(),
+      complete: vi.fn().mockResolvedValue({
+        content: [
+          '<response>',
+          '<fact>',
+          '<text>User is planning a Kyoto trip in April</text>',
+          '<type>semantic</type>',
+          '<importance>0.9</importance>',
+          '<emotional_valence>0.1</emotional_valence>',
+          '<confidence>0.9</confidence>',
+          '</fact>',
+          '</response>',
+        ].join('\n'),
+        model: 'test-model',
+        inputTokens: 10,
+        outputTokens: 10,
+        toolCalls: [],
+        stopReason: 'end_turn',
+      }),
+    } as unknown as LLMProviderPort;
+    const memoryStore = new InMemoryMemoryStore().asPort();
+    const embeddingService = {
+      embed: vi.fn().mockResolvedValue(new Float32Array(8)),
+      embedBatch: vi.fn(),
+      dims: 8,
+    } as any;
+    const extractor = new MemoryExtractor(
+      extractionLLM,
+      mgr,
+      memoryStore,
+      embeddingService,
+      eventBus,
+      makeConfig(),
+    );
+    // Spy the fact-write sink: its arg[1] is the extraction source ref (carries
+    // the session token) and arg[5] is extractionSourceSessionId. Both encode
+    // which session A's facts get attributed to.
+    const processFactSpy = vi.fn(async () => ({ action: 'created', memory: { id: 'memory:kyoto' } }));
+    (extractor as any).processFact = processFactSpy;
+
+    const sessionReads = mgr.createCapturedSessionReads({
+      logicalSessionId: sessionA,
+      sourceChannelId: sessionA,
+    });
+    await sessionReads.run(async () => {
+      await extractor.maybeExtract(
+        sessionA,
+        undefined,
+        createTurnId(Date.now()),
+        undefined,
+        undefined,
+        undefined,
+        recoveredEntries,
+      );
+    });
+
+    expect(processFactSpy).toHaveBeenCalled();
+    const firstCall = processFactSpy.mock.calls[0] as unknown[];
+    expect(firstCall[5]).toBe(sessionA);
+    expect(firstCall[1]).toContain(`session:${sessionA}`);
+    expect(firstCall[1]).not.toContain(sessionB);
+  });
+
   it('keeps stable background reads and compaction on the captured API owner', async () => {
     const fencedStore = new SessionStore(dir, {
       turnRecordEligibilityFence: createSerialTurnRecordEligibilityFence(),

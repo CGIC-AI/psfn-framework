@@ -40,6 +40,7 @@ import {
 import type { ContactStorePort } from '../../contacts/contact-store-port.js';
 import type { EmotionalSnapshot } from '../../contacts/store/emotional-baseline.js';
 import type { SessionManager } from '../../session/manager.js';
+import type { CapturedSessionReads } from '../../session/manager/captured-session-owner.js';
 import type { SessionEntry } from '../../session/types.js';
 import type { ConversationScope } from '../../session/conversation-scope.js';
 import { isIntentionAppraisalArtifact } from '../../session/entry-attribution.js';
@@ -263,13 +264,17 @@ export class EmotionSelfModelRuntime {
     // else authorId). Drives the per-participant trend line in a group room —
     // only this participant's own trend moves; idle participants never appear.
     authorParticipantKey?: string,
+    // Owner-bound reads for the admitted turn. Supplied on the foreground turn
+    // path so first-use scope hydration reads session metadata through the
+    // captured facade instead of the raw (fail-closed) SessionManager.
+    capturedSessionReads?: CapturedSessionReads,
   ): Promise<EmotionStateSnapshot | null> {
     this.assertEmotionRuntimeConfigured();
     if (!this.emotionState || !this.emotionObserver) {
       return null;
     }
     const scopeKey = conversationScope?.key ?? sessionChannelId;
-    const entry = this.getOrHydrateScopedState(scopeKey, sessionChannelId);
+    const entry = this.getOrHydrateScopedState(scopeKey, sessionChannelId, capturedSessionReads);
 
     // Arm the directional carry-over modifier BEFORE observing: it reads the
     // (unchanged) previous group scope's transient VAD, so ordering is safe.
@@ -359,6 +364,10 @@ export class EmotionSelfModelRuntime {
     // bead does not change emotion behavior.
     conversationScope?: ConversationScope;
     icpCorrelation?: IcpConversationCorrelation;
+    // Owner-bound reads for the admitted turn; when present the recent-turn
+    // count is read through the captured facade rather than the raw (fail-
+    // closed) SessionManager.
+    capturedSessionReads?: CapturedSessionReads;
   }): Promise<InternalState> {
     const activeConcerns = this.resolveInternalStateActiveConcerns(input.canonicalContactKey);
     const pendingFollowUps = this.resolveInternalStatePendingFollowUps(
@@ -372,7 +381,10 @@ export class EmotionSelfModelRuntime {
         Date.now(),
       ),
     ]);
-    const recentTurnCount = this.resolveRecentTurnCount(input.sessionChannelId);
+    const recentTurnCount = this.resolveRecentTurnCount(
+      input.sessionChannelId,
+      input.capturedSessionReads,
+    );
     const emotionState = input.emotionSnapshot ?? INTERNAL_STATE_NEUTRAL_EMOTION;
     const emotionObservedAtMs = input.emotionSnapshot ? this.emotionStateUpdatedAtMs : null;
 
@@ -432,8 +444,15 @@ export class EmotionSelfModelRuntime {
     toolCallCount: number;
     sessionChannelId: string;
     retrievalProvenanceRefs: readonly string[];
+    // Owner-bound reads for the admitted turn; when present the recent-response
+    // scan reads through the captured facade rather than the raw (fail-closed)
+    // SessionManager.
+    capturedSessionReads?: CapturedSessionReads;
   }): MetacognitiveFlag[] {
-    const recentResponses = this.resolveRecentAssistantResponses(input.sessionChannelId);
+    const recentResponses = this.resolveRecentAssistantResponses(
+      input.sessionChannelId,
+      input.capturedSessionReads,
+    );
     return this.metacognitiveMonitor.detectFlags({
       internalState: input.internalState,
       recentResponses,
@@ -548,25 +567,20 @@ export class EmotionSelfModelRuntime {
   private getOrHydrateScopedState(
     scopeKey: string,
     sessionChannelId: string,
+    capturedSessionReads?: CapturedSessionReads,
   ): ScopedEmotionEntry {
     const existing = this.scopedStates.get(scopeKey);
     if (existing) return existing;
 
-    const manager = this.sessionManager as SessionManager & {
-      getRecentMessages?: (channelId: string, limit?: number) => Array<{
-        metadata?: string;
-        timestamp: number;
-      }>;
-    };
-
-    if (typeof manager.getRecentMessages !== 'function') {
+    const rawEntries = this.readTurnOwnerRecentEntries(sessionChannelId, 64, capturedSessionReads);
+    if (rawEntries === null) {
       if (this.emotionRuntimeRequired) {
         throw new Error('Emotion runtime wiring requires SessionManager.getRecentMessages for metadata recovery');
       }
       return this.registerScopedState(scopeKey, this.createFreshScopedState(), null);
     }
 
-    const recentEntries = manager.getRecentMessages(sessionChannelId, 64)
+    const recentEntries = rawEntries
       .filter(entry => !isIntentionAppraisalArtifact(entry));
     for (let index = recentEntries.length - 1; index >= 0; index -= 1) {
       const entry = recentEntries[index];
@@ -894,37 +908,60 @@ export class EmotionSelfModelRuntime {
     return Math.max(0, Math.floor((nowMs - lastSeenMs) / 1000));
   }
 
-  private resolveRecentTurnCount(sessionChannelId: string): number {
+  /**
+   * Owner-bound recent-message read for the turn's own session. During an
+   * admitted turn these self-model reads run inside the captured owner scope,
+   * where the raw SessionManager.getRecentMessages fails closed
+   * (assertMutableSessionReadAllowed). The turn threads its CapturedSessionReads
+   * so the read stays owner-bound instead of throwing. Returns null only when no
+   * captured reads are supplied AND the manager has no getRecentMessages
+   * (legacy/mocked wiring), preserving each caller's prior fallback.
+   */
+  private readTurnOwnerRecentEntries(
+    sessionChannelId: string,
+    limit: number,
+    capturedSessionReads: CapturedSessionReads | undefined,
+  ): SessionEntry[] | null {
+    if (capturedSessionReads) {
+      const entries = capturedSessionReads.getRecentMessages(limit);
+      if (!Array.isArray(entries)) {
+        throw new Error('CapturedSessionReads.getRecentMessages returned an invalid payload for self-model computation');
+      }
+      return entries;
+    }
     const manager = this.sessionManager as SessionManager & {
-      getRecentMessages?: (channelId: string, limit?: number) => Array<unknown>;
+      getRecentMessages?: (channelId: string, limit?: number) => SessionEntry[];
     };
     if (typeof manager.getRecentMessages !== 'function') {
-      return 0;
+      return null;
     }
-    const recentMessages = manager.getRecentMessages(sessionChannelId, 12)
-      .filter(entry => !isIntentionAppraisalArtifact(entry));
-    if (!Array.isArray(recentMessages)) {
-      throw new Error('SessionManager.getRecentMessages returned an invalid payload for InternalState computation');
+    const entries = manager.getRecentMessages(sessionChannelId, limit);
+    if (!Array.isArray(entries)) {
+      throw new Error('SessionManager.getRecentMessages returned an invalid payload for self-model computation');
     }
-    return recentMessages.length;
+    return entries;
   }
 
-  private resolveRecentAssistantResponses(sessionChannelId: string): string[] {
-    const manager = this.sessionManager as SessionManager & {
-      getRecentMessages?: (channelId: string, limit?: number) => Array<{
-        role: 'user' | 'assistant' | 'system' | 'tool';
-        content: string;
-        timestamp: number;
-      }>;
-    };
-    if (typeof manager.getRecentMessages !== 'function') {
+  private resolveRecentTurnCount(
+    sessionChannelId: string,
+    capturedSessionReads?: CapturedSessionReads,
+  ): number {
+    const recentEntries = this.readTurnOwnerRecentEntries(sessionChannelId, 12, capturedSessionReads);
+    if (recentEntries === null) {
+      return 0;
+    }
+    return recentEntries.filter(entry => !isIntentionAppraisalArtifact(entry)).length;
+  }
+
+  private resolveRecentAssistantResponses(
+    sessionChannelId: string,
+    capturedSessionReads?: CapturedSessionReads,
+  ): string[] {
+    const rawEntries = this.readTurnOwnerRecentEntries(sessionChannelId, 6, capturedSessionReads);
+    if (rawEntries === null) {
       return [];
     }
-    const recentMessages = manager.getRecentMessages(sessionChannelId, 6)
-      .filter(entry => !isIntentionAppraisalArtifact(entry));
-    if (!Array.isArray(recentMessages)) {
-      throw new Error('SessionManager.getRecentMessages returned an invalid payload for metacognitive monitoring');
-    }
+    const recentMessages = rawEntries.filter(entry => !isIntentionAppraisalArtifact(entry));
     const responses: string[] = [];
     for (const entry of recentMessages) {
       if (entry.role !== 'assistant') continue;

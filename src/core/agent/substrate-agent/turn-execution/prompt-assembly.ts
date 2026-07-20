@@ -270,6 +270,7 @@ export async function assembleTurnPrompt(input: {
     toolCallCount: 0,
     sessionChannelId: emotionSessionId,
     retrievalProvenanceRefs: getRetrievalProvenanceRefs(),
+    capturedSessionReads: input.sessionReads,
   });
   runtime.setCurrentSelfModelState(
     preTurnInternalState,
@@ -304,6 +305,7 @@ export async function assembleTurnPrompt(input: {
       buildCurrentUserRuntimeProfile({ authorContext, message }),
       conversationScope,
       participantRelationshipEdges,
+      input.sessionReads,
     ),
     'substrate-agent:buildDynamicPromptTemplateVariables',
   );

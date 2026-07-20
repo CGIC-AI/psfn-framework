@@ -271,7 +271,7 @@ describe('focus tools', () => {
       fatigueDecision: 'allow',
     };
     const focusManager: FocusSessionManager = {
-      getActiveContextSession: () => channelId,
+      getActiveContextSessionForTool: () => channelId,
       startFocusSession: () => {
         throw new Error('not used');
       },

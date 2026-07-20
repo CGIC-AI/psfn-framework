@@ -63,6 +63,13 @@ export interface GatewayMethodRuntime {
   embeddingService: EmbeddingProviderPort;
   modelDiscovery?: ModelDiscoveryBackend;
   discordAdapter: ChannelOutboundDock;
+  /**
+   * vvf.5.2: single-account Telegram outbound dock, present only when Telegram is
+   * configured. Used by clarify.deliver to render a numbered-list clarification
+   * and await the reply. Discord clarify reuses the per-connection
+   * {@link GatewayMethodRuntime.discordAdapter} dock for account isolation.
+   */
+  telegramDock?: ChannelOutboundDock;
   gitOps?: GitOperations;
   imageConfig?: ImageRuntimeConfig;
   modelUsageRecorder?: ModelUsageRecorder;

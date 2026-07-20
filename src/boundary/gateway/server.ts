@@ -239,6 +239,12 @@ export interface GatewayServerOptions extends OptionalCompanionRoutingBinding {
    * only, so one companion can never egress through another companion's bot.
    */
   discordAccountDocks?: ReadonlyMap<CompanionId, ChannelOutboundDock>;
+  /**
+   * vvf.5.2: single-account Telegram outbound dock for interactive clarify
+   * delivery. Present only when Telegram is configured; clarify.deliver fails
+   * closed on the telegram channel without it.
+   */
+  telegramDock?: ChannelOutboundDock;
   gitOps?: GitOperations;
   imageConfig?: ImageRuntimeConfig;
   modelUsageRecorder?: ModelUsageRecorder;
@@ -609,6 +615,7 @@ export class GatewayServer {
       embeddingService: this.options.embeddingService,
       ...(this.options.modelDiscovery ? { modelDiscovery: this.options.modelDiscovery } : {}),
       discordAdapter: this.resolveConnectionDiscordDock(conn),
+      ...(this.options.telegramDock ? { telegramDock: this.options.telegramDock } : {}),
       gitOps: this.options.gitOps,
       imageConfig: this.options.imageConfig,
       ...(this.options.modelUsageRecorder ? { modelUsageRecorder: this.options.modelUsageRecorder } : {}),

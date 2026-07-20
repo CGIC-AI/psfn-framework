@@ -1077,6 +1077,12 @@
       "value": "4"
     },
     {
+      "file": "src/channels/discord/clarification.ts",
+      "name": "DISCORD_BUTTON_LABEL_LIMIT",
+      "value": "80",
+      "note": "Code-owned Discord API protocol limit (max button label length); display-only truncation, not operator-tunable."
+    },
+    {
       "file": "src/channels/discord/voice-types.ts",
       "name": "DECRYPT_RECOVERY_COOLDOWN_MS",
       "value": "1_500"
@@ -2635,6 +2641,36 @@
       "file": "src/core/tools/lifecycle.ts",
       "name": "DEFAULT_REBUILD_TIMEOUT_MS",
       "value": "120_000"
+    },
+    {
+      "file": "src/core/tools/ntfy.ts",
+      "name": "CLARIFY_DELIVERY_TIMEOUT_MS",
+      "value": "120_000",
+      "note": "Code-owned bound on how long a clarify tool call blocks the turn awaiting a human answer before a structured no-answer; interaction default, not operator policy."
+    },
+    {
+      "file": "src/core/tools/ntfy.ts",
+      "name": "CLARIFY_MAX_CHOICE_LENGTH",
+      "value": "200",
+      "note": "Code-owned clarify contract/DoS guard on per-choice length (vvf.5.1); error-string-coupled validation limit."
+    },
+    {
+      "file": "src/core/tools/ntfy.ts",
+      "name": "CLARIFY_MAX_CHOICES",
+      "value": "5",
+      "note": "Code-owned clarify contract bound (vvf.5.1) matching the TypeBox schema maxItems; error-string-coupled validation limit."
+    },
+    {
+      "file": "src/core/tools/ntfy.ts",
+      "name": "CLARIFY_MAX_QUESTION_LENGTH",
+      "value": "1_000",
+      "note": "Code-owned clarify contract/DoS guard on question length (vvf.5.1); error-string-coupled validation limit."
+    },
+    {
+      "file": "src/core/tools/ntfy.ts",
+      "name": "CLARIFY_MIN_CHOICES",
+      "value": "2",
+      "note": "Code-owned clarify contract bound (vvf.5.1) matching the TypeBox schema minItems; error-string-coupled validation limit."
     },
     {
       "file": "src/core/tools/ntfy.ts",

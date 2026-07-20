@@ -15,6 +15,7 @@ import {
   type KubeLifecycleToolRuntime,
 } from '../../core/tools/lifecycle.js';
 import {
+  createGatewayClarificationPort,
   createGatewayDiscordNotifySender,
   createNotifyDispatcher,
   createNotifyTool,
@@ -286,6 +287,7 @@ export function buildAgentControlPlane(
     operatorDiscordChannelId: heartbeatChannelId,
     rateLimiter: externalRateLimiter,
     defaultBudgetChannel: 'discord',
+    clarificationPort: createGatewayClarificationPort(gateway),
   }), {
     gatewayMode: true,
     ...(icpAutonomyRuntime ? { companionOutreach: icpAutonomyRuntime } : {}),

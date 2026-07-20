@@ -529,6 +529,7 @@ async function main(): Promise<void> {
   const shardWorkloadRegistry = new ShardWorkloadRegistry();
   const gateway = createGatewayServer({
     discordAdapter: discord,
+    ...(telegram ? { telegramDock: telegram } : {}),
     ...(discordAccountDocks ? { discordAccountDocks } : {}),
     ...(companionChannelLane ? { companionChannels: companionChannelLane } : {}),
     ...(icpAutonomyStore ? { icpAutonomyStore } : {}),

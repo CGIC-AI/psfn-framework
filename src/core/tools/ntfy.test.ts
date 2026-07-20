@@ -1,14 +1,17 @@
 import { describe, it, expect, vi } from 'vitest';
 import {
+  createGatewayClarificationPort,
   createGatewayDiscordNotifySender,
   createHttpNotificationPortFromEnv,
   createNotifyDispatcher,
   createNotifyTool,
+  resolveClarificationChannelRoute,
   validateClarifyRequest,
   type ClarificationDeliveryPort,
   type ClarificationDeliveryResult,
   type PendingClarification,
 } from './ntfy.js';
+import type { ClarifyDeliverParams, ClarifyDeliverResult } from '../../boundary/gateway/protocol.js';
 import type { NotificationPort } from '../../boundary/gateway/notification-port.js';
 import { ExternalCommunicationRateLimiter } from '../../system/capabilities/safeguards.js';
 import { runWithRequestContext } from '../../primitives/llm/request-context.js';
@@ -509,6 +512,44 @@ describe('notify tool', () => {
     expect((result.details as any).isError).toBe(true);
   });
 
+  it('does not plumb an unverified selection from a pending delivery into the turn', async () => {
+    // Hardening: a channel that reports `pending` while (incorrectly or
+    // maliciously) attaching a `selection` must never leak that choice text
+    // into the turn. The spread is gated strictly on a verified resolved
+    // selection, so the pending outcome carries no selectedChoice/selectedIndex.
+    const notifier: NotificationPort = { notify: vi.fn() };
+    const clarificationPort: ClarificationDeliveryPort = {
+      deliver: async (clarification: PendingClarification): Promise<ClarificationDeliveryResult> => ({
+        status: 'pending',
+        channel: 'discord',
+        target: 'discord:room',
+        selection: {
+          clarificationId: clarification.id,
+          selectedIndex: 1,
+          selectedChoice: clarification.choices[1]!,
+        },
+      }),
+    };
+    const tool = createNotifyTool(createNotifyDispatcher({
+      briefNotifier: notifier,
+      clarificationPort,
+    }));
+
+    const result = await tool.execute('call-clarify-pending-selection', {
+      action: 'clarify',
+      question: 'Tea or coffee?',
+      choices: ['Tea', 'Coffee'],
+    });
+
+    const text = resultText(result as any);
+    // Presented as still-pending, never as answered, and the unverified choice
+    // text is absent from the turn-facing output.
+    expect(text).toContain('waiting for a choice');
+    expect(text).not.toContain('answered');
+    expect(text).not.toContain('Coffee');
+    expect((result.details as any).isError).toBeUndefined();
+  });
+
   it('fails closed when clarify has no interactive channel wired', async () => {
     const notifier: NotificationPort = { notify: vi.fn() };
     const tool = createNotifyTool(createNotifyDispatcher({ briefNotifier: notifier }));
@@ -589,5 +630,87 @@ describe('notify tool', () => {
     } finally {
       vi.unstubAllGlobals();
     }
+  });
+});
+
+describe('resolveClarificationChannelRoute', () => {
+  it('routes a Telegram channel id to the telegram channel', () => {
+    expect(resolveClarificationChannelRoute('telegram:42')).toEqual({
+      channel: 'telegram',
+      target: 'telegram:42',
+    });
+  });
+
+  it('routes a Discord snowflake (and threaded snowflake) to the discord channel', () => {
+    expect(resolveClarificationChannelRoute('123456789012345678')).toEqual({
+      channel: 'discord',
+      target: '123456789012345678',
+    });
+    expect(resolveClarificationChannelRoute('123456789012345678:987654321')).toEqual({
+      channel: 'discord',
+      target: '123456789012345678:987654321',
+    });
+  });
+
+  it('fails closed (null) for internal, voice, and non-interactive channels', () => {
+    expect(resolveClarificationChannelRoute('internal:reflection:whisper')).toBeNull();
+    expect(resolveClarificationChannelRoute('discord-voice:123')).toBeNull();
+    expect(resolveClarificationChannelRoute('api:session-7')).toBeNull();
+    expect(resolveClarificationChannelRoute('')).toBeNull();
+  });
+});
+
+describe('createGatewayClarificationPort', () => {
+  const clarification: PendingClarification = {
+    id: 'clar-9',
+    question: 'Which one?',
+    choices: ['A', 'B'],
+  };
+
+  it('dispatches to the active turn channel with the bounded timeout', async () => {
+    const calls: ClarifyDeliverParams[] = [];
+    const gateway = {
+      clarifyDeliver: async (params: ClarifyDeliverParams): Promise<ClarifyDeliverResult> => {
+        calls.push(params);
+        return {
+          status: 'resolved',
+          channel: 'telegram',
+          target: params.target,
+          selection: { clarificationId: clarification.id, selectedIndex: 1, selectedChoice: 'B' },
+        };
+      },
+    };
+    const port = createGatewayClarificationPort(gateway);
+
+    const result = await runWithRequestContext(
+      { channelId: 'telegram:77', purpose: 'agent.turn.prompt' },
+      async () => port.deliver(clarification),
+    );
+
+    expect(result.status).toBe('resolved');
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.channel).toBe('telegram');
+    expect(calls[0]!.target).toBe('telegram:77');
+    expect(calls[0]!.clarification).toEqual(clarification);
+    expect(calls[0]!.timeoutMs).toBeGreaterThan(0);
+  });
+
+  it('fails closed when the turn has no channel context', async () => {
+    const gateway = { clarifyDeliver: vi.fn() };
+    const port = createGatewayClarificationPort(gateway);
+    await expect(port.deliver(clarification)).rejects.toThrow('no active interactive channel');
+    expect(gateway.clarifyDeliver).not.toHaveBeenCalled();
+  });
+
+  it('fails closed when the active channel cannot present choices', async () => {
+    const gateway = { clarifyDeliver: vi.fn() };
+    const port = createGatewayClarificationPort(gateway);
+    await expect(
+      runWithRequestContext(
+        { channelId: 'api:session-3', purpose: 'agent.turn.prompt' },
+        async () => port.deliver(clarification),
+      ),
+    ).rejects.toThrow('not supported on channel');
+    expect(gateway.clarifyDeliver).not.toHaveBeenCalled();
   });
 });

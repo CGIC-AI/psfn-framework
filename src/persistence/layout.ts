@@ -848,6 +848,19 @@ export function resolveCogSecForensicArchiveDir(companionDataDir: string): strin
 }
 
 /**
+ * Durable Share Capsule custody (jp36.7.1.2, bible §10.10–10.11): the server-
+ * side, outside-companion-reach home for human-approved publication capsules —
+ * the minted capsule, its monotonic exact-replay use-count, and its revocation
+ * state. Co-located with cogsec-events.json / intake-quarantine.json under
+ * companion-data/state so the Garden approvals surface (jp36.7.2) and the agent
+ * publication seam share one file; each process holds its own reload-per-op
+ * instance. Never round-tripped through a model-influenced surface.
+ */
+export function resolveShareCapsuleCustodyPath(companionDataDir: string): string {
+  return join(resolveCompanionStateDir(companionDataDir), 'cogsec-share-capsules.json');
+}
+
+/**
  * Companion-initiated contact block list (cogsec agency, htm9.16). Co-located
  * with cogsec-events.json under companion-data/state so the Garden cogsec tab
  * (htm9.11) surfaces it alongside firewall events, the agent-side contact tool

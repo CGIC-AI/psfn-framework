@@ -47,6 +47,7 @@ import {
 import {
   composeEgressDisclosureDecision,
   deriveDisclosureDestination,
+  type CapsuleCustodyService,
   type DisclosureLineage,
 } from '../cogsec/disclosure/index.js';
 import type { ChannelPromptRegistryPort } from '../../channels/backplane/registry-port.js';
@@ -387,6 +388,10 @@ export class SubstrateAgent {
   // Pluggable memory — null until memory system is wired
   memoryProvider: MemoryProvider | null = null;
   artifactApprovalQueue: ApprovalQueuePort | null = null;
+  // Durable Share Capsule custody riding the same approval queue (jp36.7.1.2).
+  // Consumers (Garden approvals surface jp36.7.2, companion publication tool
+  // jp36.7.3) authorize exact-replay + revoke through this handle; null until wired.
+  shareCapsuleCustody: CapsuleCustodyService | null = null;
   artifactApprovalNotifier: NotificationPort | null = null;
   shareApprovedArtifacts: ((
     attachments: readonly Attachment[],

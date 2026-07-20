@@ -89,7 +89,12 @@ import {
   resolveContactBlockListPath,
   resolveIntrospectionConsentLedgerPath,
   resolvePersonalSkillsDir,
+  resolveShareCapsuleCustodyPath,
 } from '../../persistence/layout.js';
+import {
+  createCapsuleCustodyService,
+  createShareCapsuleCustodyStore,
+} from '../../core/cogsec/disclosure/index.js';
 import { IntrospectionConsentStore } from '../../faculties/introspection/consent-store.js';
 import { IntrospectionTurnSensitivityDecisions } from '../../faculties/introspection/turn-sensitivity.js';
 import { ContactBlockListStore } from '../../core/cogsec/contact-block-list.js';
@@ -318,6 +323,13 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
     ...(options.placesRegistryConfig ? { placesRegistryConfig: options.placesRegistryConfig } : {}),
   });
   agentLoop.artifactApprovalQueue = cardProposalQueue;
+  // Durable Share Capsule custody (jp36.7.1.2): rides the same approval queue as
+  // artifact egress (no second approval store), backed by a server-side custody
+  // file under companion-data/state. Consumers land in jp36.7.2 / jp36.7.3.
+  agentLoop.shareCapsuleCustody = createCapsuleCustodyService({
+    store: createShareCapsuleCustodyStore(resolveShareCapsuleCustodyPath(pathSnapshot.companionDataDir)),
+    approvalQueue: cardProposalQueue,
+  });
   agentLoop.artifactApprovalNotifier = operatorNotifier;
   agentLoop.shareApprovedArtifacts = async (attachments, destination) => {
     if (destination.channelType !== 'discord') {

@@ -854,7 +854,11 @@ export function resolveCogSecForensicArchiveDir(companionDataDir: string): strin
  * state. Co-located with cogsec-events.json / intake-quarantine.json under
  * companion-data/state so the Garden approvals surface (jp36.7.2) and the agent
  * publication seam share one file; each process holds its own reload-per-op
- * instance. Never round-tripped through a model-influenced surface.
+ * instance, and because those are genuinely separate processes every write is
+ * serialized by a cross-process lock (a `<file>.lock` dir) and published via a
+ * per-process-unique tmp + atomic rename, so a use and a concurrent revoke can
+ * never clobber one another. Never round-tripped through a model-influenced
+ * surface.
  */
 export function resolveShareCapsuleCustodyPath(companionDataDir: string): string {
   return join(resolveCompanionStateDir(companionDataDir), 'cogsec-share-capsules.json');

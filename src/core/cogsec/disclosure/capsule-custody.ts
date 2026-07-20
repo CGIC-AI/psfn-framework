@@ -20,24 +20,38 @@
 //      at rest (content edited, hash left stale, authority flipped) fails the
 //      self-authenticating parse and the whole load fails closed.
 //   2. Durable, monotonic use-count. The use-count lives ONLY here and is only
-//      ever incremented, guarded by a compare-and-set on the expected prior
-//      count so a concurrent writer can never silently rewind or double-spend it.
-//      `authorizeReplay` injects `priorUseCount` from this persisted state — never
-//      a caller-supplied zero.
+//      ever incremented. EVERY mutating operation (mint, use, revoke) runs the
+//      whole read → validate → apply → persist cycle inside a cross-process
+//      write lock (`withCrossProcessWriteLock`, the same mkdir-based mutual
+//      exclusion the session-journal path uses), and RE-READS the file under the
+//      lock before deciding. A compare-and-set on the expected prior count then
+//      turns any use that raced ahead into an explicit fail-closed conflict —
+//      never a silent lost update, and never two processes both committing N+1
+//      over the same N (the pre-lock last-writer-wins hazard). `authorizeReplay`
+//      injects `priorUseCount` from this persisted state — never a caller-
+//      supplied zero.
 //   3. Self-authenticating authorization. Replay authorization goes through
 //      `authorizeCapsuleUse` (which parses + self-authenticates the capsule),
 //      never raw `evaluateCapsuleUse` on an unparsed object.
 //
 // Storage model mirrors the sibling cogsec custody store (`quarantine-store.ts`,
-// htm9.11): one JSON file under companion-data/state, atomic tmp+rename writes,
-// fail-closed validation on load, and a reload on every operation because the
-// gateway process, the agent process, and the Garden surface each construct
-// their own instance over the same file. See `resolveShareCapsuleCustodyPath`.
+// htm9.11): one JSON file under companion-data/state, fail-closed validation on
+// load, and a reload on every operation because the gateway process, the agent
+// process, and the Garden surface each construct their own instance over the
+// same file. Because those are genuinely separate OS processes, an in-memory
+// reload is NOT enough on its own: every write is serialized by a cross-process
+// lock (see the durable-use-count obligation above) and published with a
+// per-process-unique tmp name + atomic rename, so concurrent writers can never
+// clobber one another's increment nor publish a half-written file. Reads stay
+// lock-free: `renameSync` is atomic, so a reader observes either the whole old
+// file or the whole new one, and a torn parse fails closed. See
+// `resolveShareCapsuleCustodyPath`.
 
-import { randomUUID } from 'node:crypto';
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
-import { dirname } from 'node:path';
+import { randomBytes, randomUUID } from 'node:crypto';
+import { mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { basename, dirname, join } from 'node:path';
 
+import { withCrossProcessWriteLock } from '../../../persistence/sessions/cross-process-write-lock.js';
 import { sensitivityOrd, type SensitivityLevel } from '../../../system/trust/types.js';
 import type {
   ApprovalQueuePort,
@@ -72,6 +86,19 @@ export const DEFAULT_MAX_ACTIVE_CAPSULES = 3;
 /** The approval-queue method/action the publication share lane rides. */
 export const SHARE_CAPSULE_APPROVAL_METHOD = 'share.capsule' as const;
 export const SHARE_CAPSULE_APPROVAL_ACTION = 'share' as const;
+
+/**
+ * Cross-process write-lock tuning for custody mutations. `staleMs` is well above
+ * the heartbeat's minimum tokenized threshold so a briefly-held lock is never
+ * mistaken for abandoned; `timeoutMs` bounds acquisition so a wedged holder
+ * surfaces loudly instead of hanging a share. Mutations here are short (read a
+ * small JSON file, validate, rewrite it), so the poll interval stays tight.
+ */
+const CUSTODY_LOCK_OPTIONS = {
+  pollMs: 10,
+  staleMs: 30_000,
+  timeoutMs: 10_000,
+} as const;
 
 // ── Persisted record ────────────────────────────────────────────────────────
 
@@ -200,6 +227,10 @@ export function createShareCapsuleCustodyStore(
     throw new Error('Share capsule custody store requires a positive integer maxActiveCapsules');
   }
   const now = options.now ?? Date.now;
+  // Cross-process mutual exclusion for every write. mkdir-based, atomic on
+  // POSIX, with stale-lock recovery — the same mechanism the session-journal
+  // path uses to serialize agent/gateway/garden against a shared file.
+  const lockPath = `${filePath}.lock`;
 
   // Always reload from disk: gateway, agent, and Garden each hold their own
   // instance over the same file, so a cached map would go stale.
@@ -226,13 +257,48 @@ export function createShareCapsuleCustodyStore(
     return entries;
   };
 
+  // Sweep sibling `*.tmp` publish files. Only ever called while THIS process
+  // holds the exclusive write lock, so no other writer can own a live tmp: any
+  // `${basename}.*.tmp` present is an orphan left by a crashed writer and is
+  // safe to remove. Never touches the lock dir or its reclaim tombstones (they
+  // do not end in `.tmp`).
+  const sweepOrphanTmp = (dir: string): void => {
+    const prefix = `${basename(filePath)}.`;
+    let names: string[];
+    try {
+      names = readdirSync(dir);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return;
+      throw error;
+    }
+    for (const name of names) {
+      if (name.startsWith(prefix) && name.endsWith('.tmp')) {
+        rmSync(join(dir, name), { force: true });
+      }
+    }
+  };
+
+  // Publish atomically through a PER-PROCESS-UNIQUE tmp name. A fixed shared
+  // `${filePath}.tmp` let two concurrent writers publish each other's half-
+  // written tmp (torn read → uncaught SyntaxError on load). A unique name +
+  // renameSync means each writer only ever renames its own fully-written file.
   const persist = (entries: Map<string, ShareCapsuleCustodyRecord>): void => {
     const payload: CustodyFileShape = { version: SHARE_CAPSULE_CUSTODY_FILE_VERSION, entries: [...entries.values()] };
-    mkdirSync(dirname(filePath), { recursive: true });
-    const tmpPath = `${filePath}.tmp`;
+    const dir = dirname(filePath);
+    mkdirSync(dir, { recursive: true });
+    sweepOrphanTmp(dir);
+    const tmpPath = join(dir, `${basename(filePath)}.${process.pid}.${randomBytes(8).toString('hex')}.tmp`);
     writeFileSync(tmpPath, `${JSON.stringify(payload, null, 2)}\n`, 'utf8');
     renameSync(tmpPath, filePath);
   };
+
+  // Every mutation runs its whole read → validate → apply → persist cycle inside
+  // the cross-process lock, re-reading the file under the lock. This is what
+  // makes the compare-and-set and the revocation check sound across processes:
+  // a sibling can neither slip an increment in between our read and our write,
+  // nor resurrect a capsule we just revoked.
+  const withWriteLock = <T>(mutate: () => T): T =>
+    withCrossProcessWriteLock(lockPath, CUSTODY_LOCK_OPTIONS, () => mutate());
 
   return {
     putApprovedCapsule(capsule: ApprovedShareCapsule, atMs?: number): ShareCapsuleCustodyRecord {
@@ -243,25 +309,27 @@ export function createShareCapsuleCustodyStore(
         throw new Error('Cannot persist a capsule that fails the ApprovedShareCapsule contract');
       }
       const mintedAtMs = atMs ?? now();
-      const entries = load();
-      if (entries.has(validated.capsuleId)) {
-        throw new Error(`Share capsule custody already holds capsule '${validated.capsuleId}'`);
-      }
-      const activeCount = [...entries.values()].filter((record) => capsuleIsActive(record, mintedAtMs)).length;
-      if (activeCount >= maxActiveCapsules) {
-        throw new Error(
-          `Active share-capsule cap reached (${activeCount}/${maxActiveCapsules}); revoke or let a capsule expire before minting another`,
-        );
-      }
-      const record: ShareCapsuleCustodyRecord = {
-        capsuleId: validated.capsuleId,
-        capsule: validated,
-        useCount: 0,
-        mintedAtMs,
-      };
-      entries.set(record.capsuleId, record);
-      persist(entries);
-      return record;
+      return withWriteLock(() => {
+        const entries = load();
+        if (entries.has(validated.capsuleId)) {
+          throw new Error(`Share capsule custody already holds capsule '${validated.capsuleId}'`);
+        }
+        const activeCount = [...entries.values()].filter((record) => capsuleIsActive(record, mintedAtMs)).length;
+        if (activeCount >= maxActiveCapsules) {
+          throw new Error(
+            `Active share-capsule cap reached (${activeCount}/${maxActiveCapsules}); revoke or let a capsule expire before minting another`,
+          );
+        }
+        const record: ShareCapsuleCustodyRecord = {
+          capsuleId: validated.capsuleId,
+          capsule: validated,
+          useCount: 0,
+          mintedAtMs,
+        };
+        entries.set(record.capsuleId, record);
+        persist(entries);
+        return record;
+      });
     },
 
     getCapsuleState(capsuleId: string): ShareCapsuleCustodyState | undefined {
@@ -271,48 +339,60 @@ export function createShareCapsuleCustodyStore(
     },
 
     recordExactReplayUse(input: RecordReplayUseInput): ShareCapsuleCustodyState {
-      const entries = load();
-      const record = entries.get(input.capsuleId);
-      if (!record) {
-        throw new Error(`Share capsule custody has no capsule '${input.capsuleId}'`);
-      }
-      // Revocation is terminal and wins over any authorized-looking replay.
-      if (record.capsule.revocation.revoked) {
-        throw new Error(`Capsule '${input.capsuleId}' is revoked; no further use may be recorded`);
-      }
-      // Compare-and-set: a concurrent writer that already advanced the count
-      // makes this an explicit conflict, never a silent lost update.
-      if (record.useCount !== input.expectedPriorUseCount) {
-        throw new Error(
-          `Capsule '${input.capsuleId}' use-count moved to ${record.useCount}, expected ${input.expectedPriorUseCount} (concurrent use)`,
-        );
-      }
-      const cap = record.capsule.expiry.maxUseCount;
-      if (cap !== undefined && record.useCount >= cap) {
-        throw new Error(`Capsule '${input.capsuleId}' use-count ${record.useCount} already reached its cap of ${cap}`);
-      }
-      const nextUseCount = record.useCount + 1;
-      entries.set(record.capsuleId, { ...record, useCount: nextUseCount });
-      persist(entries);
-      return { capsule: record.capsule, useCount: nextUseCount };
+      return withWriteLock(() => {
+        // Re-read UNDER the lock: the state the caller compare-and-set against
+        // may already have advanced in another process since it was observed.
+        const entries = load();
+        const record = entries.get(input.capsuleId);
+        if (!record) {
+          throw new Error(`Share capsule custody has no capsule '${input.capsuleId}'`);
+        }
+        // Revocation is terminal and wins over any authorized-looking replay.
+        // Re-checked here under the lock so a revoke committed by a sibling
+        // between the caller's read and this write can never be out-raced.
+        if (record.capsule.revocation.revoked) {
+          throw new Error(`Capsule '${input.capsuleId}' is revoked; no further use may be recorded`);
+        }
+        // Compare-and-set: a concurrent writer that already advanced the count
+        // makes this an explicit conflict, never a silent lost update. Under the
+        // lock the losing writer sees the winner's committed count and fails.
+        if (record.useCount !== input.expectedPriorUseCount) {
+          throw new Error(
+            `Capsule '${input.capsuleId}' use-count moved to ${record.useCount}, expected ${input.expectedPriorUseCount} (concurrent use)`,
+          );
+        }
+        const cap = record.capsule.expiry.maxUseCount;
+        if (cap !== undefined && record.useCount >= cap) {
+          throw new Error(`Capsule '${input.capsuleId}' use-count ${record.useCount} already reached its cap of ${cap}`);
+        }
+        const nextUseCount = record.useCount + 1;
+        entries.set(record.capsuleId, { ...record, useCount: nextUseCount });
+        persist(entries);
+        return { capsule: record.capsule, useCount: nextUseCount };
+      });
     },
 
     revokeCapsule(input: RevokeCapsuleInput): ApprovedShareCapsule {
-      const entries = load();
-      const record = entries.get(input.capsuleId);
-      if (!record) {
-        throw new Error(`Share capsule custody has no capsule '${input.capsuleId}'`);
-      }
-      // Idempotent: revoking an already-revoked capsule keeps it revoked.
-      const revoked = record.capsule.revocation.revoked
-        ? record.capsule
-        : revokeShareCapsule(record.capsule, {
-          revokedAt: input.revokedAt,
-          ...(input.reason !== undefined ? { reason: input.reason } : {}),
-        });
-      entries.set(record.capsuleId, { ...record, capsule: revoked });
-      persist(entries);
-      return revoked;
+      return withWriteLock(() => {
+        // Re-read under the lock so a use committed by a sibling since the caller
+        // last observed the capsule is folded in before we rewrite the record —
+        // a revoke never silently drops a concurrent increment.
+        const entries = load();
+        const record = entries.get(input.capsuleId);
+        if (!record) {
+          throw new Error(`Share capsule custody has no capsule '${input.capsuleId}'`);
+        }
+        // Idempotent: revoking an already-revoked capsule keeps it revoked.
+        const revoked = record.capsule.revocation.revoked
+          ? record.capsule
+          : revokeShareCapsule(record.capsule, {
+            revokedAt: input.revokedAt,
+            ...(input.reason !== undefined ? { reason: input.reason } : {}),
+          });
+        entries.set(record.capsuleId, { ...record, capsule: revoked });
+        persist(entries);
+        return revoked;
+      });
     },
 
     list(): ShareCapsuleCustodyRecord[] {

@@ -208,7 +208,15 @@ implements FleetPortalAuthorizationBatchStore {
         )) {
         if (rosterCompanions.length > 0) {
           // The generation went stale post-commit: degrade to the rostered
-          // companions only instead of locking the rostered admin out.
+          // companions only instead of locking the rostered admin out. Record
+          // the narrower result so the earlier full-projection allow is not
+          // the last event an audit consumer sees.
+          await this.recordPostCommitRosterDegradation(
+            client,
+            sessionEvaluation.decision === 'allow'
+              ? sessionEvaluation.session.principalId
+              : undefined,
+          );
           return {
             decision: 'allow',
             companions: Object.freeze(
@@ -555,6 +563,26 @@ implements FleetPortalAuthorizationBatchStore {
       await this.insertAudit(client, {
         decision: 'deny',
         reasonCode: 'authority_generation_stale' satisfies FleetAuthorizationDenialReason,
+        principalId,
+        authority: await this.lockAuthority(client),
+        occurredAt: this.now(),
+      });
+      await client.query('COMMIT');
+    } catch (error) {
+      await client.query('ROLLBACK').catch(() => undefined);
+      throw error;
+    }
+  }
+
+  private async recordPostCommitRosterDegradation(
+    client: PoolClient,
+    principalId: string | undefined,
+  ): Promise<void> {
+    await client.query('BEGIN');
+    try {
+      await this.insertAudit(client, {
+        decision: 'allow',
+        reasonCode: 'roster_portal_projection_post_commit_degraded',
         principalId,
         authority: await this.lockAuthority(client),
         occurredAt: this.now(),

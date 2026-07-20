@@ -1,0 +1,4490 @@
+diff --git a/config/identity-literal-scan-allowlist.json b/config/identity-literal-scan-allowlist.json
+index 9f35f52be..92c95fd26 100644
+--- a/config/identity-literal-scan-allowlist.json
++++ b/config/identity-literal-scan-allowlist.json
+@@ -650,7 +650,7 @@
+     },
+     {
+       "path": "src/channels/backplane/places-mermaid.ts",
+-      "contains": "%% PSFN world map — sites, places, affordances, and bound satellites.",
++      "contains": "%% PSFN world map \u2014 sites, places, affordances, and bound satellites.",
+       "reason": "The generated operator-facing Mermaid artifact retains its explicit product title.",
+       "pattern": "identity-proper-name"
+     },
+@@ -1979,6 +1979,12 @@
+       "contains": "psfn-postgres-clients-",
+       "reason": "PostgreSQL test harness uses a project-scoped mkdtemp prefix for its per-run client-binary staging directory, consistent with its established project-scoped test artifact namespace.",
+       "pattern": "identity-legacy-slug"
++    },
++    {
++      "path": "src/persistence/postgres/partner-affect-shadow-store.ts",
++      "contains": "applicationName: 'psfn-partner-affect-shadow'",
++      "reason": "Postgres application_name for the partner-affect shadow store follows the established psfn-* connection naming used by every other runtime store adapter.",
++      "pattern": "identity-legacy-slug"
+     }
+   ]
+ }
+diff --git a/config/partner-affect-shadow.seed.json b/config/partner-affect-shadow.seed.json
+new file mode 100644
+index 000000000..53a290437
+--- /dev/null
++++ b/config/partner-affect-shadow.seed.json
+@@ -0,0 +1,22 @@
++{
++  "enabled": false,
++  "partnerContactId": null,
++  "staleAfterMs": 86400000,
++  "evidenceWindowMs": 259200000,
++  "minConfidence": 0.35,
++  "minIndependentFamilies": 2,
++  "conflictValueTolerance": 0.25,
++  "allowedSignalFamilies": [
++    "self_report",
++    "conversation",
++    "sleep",
++    "activity",
++    "presence",
++    "interaction_cadence",
++    "schedule_context"
++  ],
++  "directions": {},
++  "sources": [],
++  "maxRetainedObservations": 5000,
++  "policyRevision": "shadow-v1"
++}
+diff --git a/docs/operations.md b/docs/operations.md
+index 7a0a8ff07..375453199 100644
+--- a/docs/operations.md
++++ b/docs/operations.md
+@@ -981,7 +981,7 @@ authorization and redaction contracts.
+ - Backups are encrypted at rest. `backup.json` declares `encryption.mode: "required"` and an env key reference; the actual key material stays in `PSFN_BACKUP_ENCRYPTION_KEY` or another configured env secret. Startup fails closed when the key is missing.
+ - Under the PostgreSQL runtime backend the scheduled backup stages a `pg_dump` custom-format archive (requires `pg_dump`/`pg_restore` on PATH) plus session JSONL, memory mutation ledger, and character-card files; the scheduler refuses to start without a database backup source.
+ - The scheduled backup also stages the full companion-data file tree (journals, generated media/selfies, vault notes, prompt and card history, scratchpad) into `companion-tree/` with a per-file sha256 manifest; the walk is exhaustive except for sessions (captured separately), backup targets, and repair snapshots, so new companion-authored file classes can never silently fall out of scope.
+-- System-data JSON owner files are staged into `system-config/` with a per-file sha256 manifest. This includes `settings.json`, `models.json`, `providers.json`, `channels.json`, `backup.json`, `trust-policy.json`, and `intake-policy.json` when present. `.env`, generated systemd env files, and raw provider/channel secrets are not copied by this system-config snapshot. `capability-tier.json`, `scheduler.json`, `charge-policy.json`, and `skills.json` are per-companion owner files rooted at `companionDataDir`, so they are captured by the exhaustive `companion-tree` slice above, not this cluster-global system-config slice.
++- System-data JSON owner files are staged into `system-config/` with a per-file sha256 manifest. This includes `settings.json`, `models.json`, `providers.json`, `channels.json`, `backup.json`, `trust-policy.json`, `intake-policy.json`, and `partner-affect-shadow.json` when present. `.env`, generated systemd env files, and raw provider/channel secrets are not copied by this system-config snapshot. `capability-tier.json`, `scheduler.json`, `charge-policy.json`, and `skills.json` are per-companion owner files rooted at `companionDataDir`, so they are captured by the exhaustive `companion-tree` slice above, not this cluster-global system-config slice.
+ - Helm deployments also stage `helm-recovery/`: the recovery-safe deployable files from the repo-owned `deploy/helm/psfn` chart plus a versioned descriptor containing release name, namespace, Helm revision, an exact chart-content digest, and the effective agent/gateway/Garden image references. Documentation files, live Helm values, rendered manifests, Kubernetes Secret objects, and secret material are deliberately excluded. Real YAML parsing rejects secret-bearing values regardless of quoting, inline-map, or snake-case syntax; unsupported overlays, packed/opaque subcharts, special files, and source/destination overlap fail closed before capture writes anything. The chart has a per-file sha256 manifest and is verified before encryption and again by `verify:backup-restore`.
+ - Every snapshot contains `backup-contents.json`, which records whether Helm recovery is `required` or `absent`. In production this marker is inside the authenticated encrypted payload, so deleting the entire Helm subtree cannot make a Kubernetes backup masquerade as a non-Kubernetes backup. Restore operators still re-provision credentials and review deployment-specific overrides rather than replaying stale secrets.
+ - The configured Personal Workspace is staged separately into `workspace-tree/` with its own sha256 manifest. This covers its docs, downloads, images, journal/scratchpad files, authored skills/modules, experiments, and canonical `knowledge/wiki/` store. In fleet mode, each companion slice contains only that companion's Personal Workspace; the cluster artifact contains only the governed Shared Companion Workspace. Group mode captures the complete `workspaces/` parent in its one family artifact. Runtime roots, backup targets, VCS metadata, dependency directories, caches, and temp directories are excluded and recorded in the manifest.
+@@ -1118,6 +1118,34 @@ memory supersession (supersede-not-delete, audited evolution links) through the
+ normal memory store. Tune thresholds under `driftDetection` in
+ `intake-policy.json`.
+ 
++### Partner Affect shadow observations
++
++The Partner Affect observation foundation ([design](partner-affect.md), slice
++1) is policy-owned by `partner-affect-shadow.json` (cluster-global, seeded
++from `config/partner-affect-shadow.seed.json`). The subsystem ships disabled
++and partner-unbound; enabling it requires an exact canonical partner contact
++id — the owner file fails validation otherwise. All mutable policy lives in
++the owner file: staleness and evidence windows, minimum confidence, the
++independent-family quorum, conflict tolerance, allowed Signal Families,
++per-metric directions, the authorized-source consent registry (source-level
++opt-in/revocation), and the shadow retention cap.
++
++Shadow-only invariant: accepted/suppressed observations and the derived
++estimate are recorded for inspection and never feed prompts, emotion
++appraisal, memory candidacy, scheduling, notifications, or world actions (a
++source-tree isolation test enforces the import boundary). Observations enter
++through `POST /v1/telemetry` with eventType
++`external.telemetry.partner_affect.observation`; payloads are screened at the
++API door and again by the fail-closed observation guard (whitelisted scalar
++summary fields only — raw coordinates, biometric streams, message bodies, and
++purchase line items are rejected and never stored). Garden exposes the raw
++policy editor under Settings and two read-only inspection endpoints:
++`GET /api/admin/partner-affect/shadow` (policy summary + deterministic
++estimate with per-family freshness/coverage/missingness/conflicts) and
++`GET /api/admin/partner-affect/observations` (recent accepted and suppressed
++records, structural reason codes only), both gated by the contacts-read
++authority.
++
+ ### Canary egress events
+ 
+ Every session plants a per-session canary token in privileged prompt material;
+diff --git a/docs/partner-affect.md b/docs/partner-affect.md
+index 3d888fd06..6424fff62 100644
+--- a/docs/partner-affect.md
++++ b/docs/partner-affect.md
+@@ -1,10 +1,14 @@
+ # Partner Affect Estimation
+ 
+-> Status: target core design, pre-implementation, 2026-07-18.
++> Status: target core design, 2026-07-18. Slice 1 (contracts and shadow
++> observations, section 19) shipped 2026-07-19: Signal Observation contracts,
++> the fail-closed observation guard, exact-partner binding, the
++> `partner-affect-shadow.json` owner file, Postgres shadow persistence, and
++> the Garden inspection surface. All outputs remain shadow-only.
+ >
+-> This document defines intended behavior. PSFN does not yet ship the composite
+-> estimate, support-posture state machine, or affect-advisory ICP message
+-> described here.
++> The rest of this document defines intended behavior. PSFN does not yet ship
++> the composite estimate, support-posture state machine, or affect-advisory
++> ICP message described here.
+ 
+ ## 1. Purpose
+ 
+diff --git a/scripts/hardcoded-settings-baseline.json b/scripts/hardcoded-settings-baseline.json
+index cd81c4f41..e49fac085 100644
+--- a/scripts/hardcoded-settings-baseline.json
++++ b/scripts/hardcoded-settings-baseline.json
+@@ -122,13 +122,13 @@
+     },
+     {
+       "file": "src/boundary/gateway/attachment-materialization.ts",
+-      "name": "MAX_GATEWAY_ATTACHMENT_BYTES",
+-      "value": "25 * 1024 * 1024"
++      "name": "MAX_GATEWAY_ATTACHMENTS",
++      "value": "10"
+     },
+     {
+       "file": "src/boundary/gateway/attachment-materialization.ts",
+-      "name": "MAX_GATEWAY_ATTACHMENTS",
+-      "value": "10"
++      "name": "MAX_GATEWAY_ATTACHMENT_BYTES",
++      "value": "25 * 1024 * 1024"
+     },
+     {
+       "file": "src/boundary/gateway/bootstrap-input.ts",
+@@ -646,13 +646,13 @@
+     },
+     {
+       "file": "src/boundary/sandbox/capabilities/shell.ts",
+-      "name": "MAX_ARG_LENGTH",
+-      "value": "4096"
++      "name": "MAX_ARGS",
++      "value": "64"
+     },
+     {
+       "file": "src/boundary/sandbox/capabilities/shell.ts",
+-      "name": "MAX_ARGS",
+-      "value": "64"
++      "name": "MAX_ARG_LENGTH",
++      "value": "4096"
+     },
+     {
+       "file": "src/boundary/sandbox/capabilities/shell.ts",
+@@ -1062,13 +1062,13 @@
+     },
+     {
+       "file": "src/channels/discord/attachments.ts",
+-      "name": "DISCORD_MAX_IMAGE_ATTACHMENT_BYTES",
+-      "value": "8 * 1024 * 1024"
++      "name": "DISCORD_MAX_IMAGE_ATTACHMENTS_PER_MESSAGE",
++      "value": "4"
+     },
+     {
+       "file": "src/channels/discord/attachments.ts",
+-      "name": "DISCORD_MAX_IMAGE_ATTACHMENTS_PER_MESSAGE",
+-      "value": "4"
++      "name": "DISCORD_MAX_IMAGE_ATTACHMENT_BYTES",
++      "value": "8 * 1024 * 1024"
+     },
+     {
+       "file": "src/channels/discord/voice-types.ts",
+@@ -1149,13 +1149,13 @@
+     },
+     {
+       "file": "src/core/agent/completion-notices.ts",
+-      "name": "MAX_NOTICE_SUMMARY_CHARS",
+-      "value": "160"
++      "name": "MAX_NOTICES_PER_CHANNEL",
++      "value": "8"
+     },
+     {
+       "file": "src/core/agent/completion-notices.ts",
+-      "name": "MAX_NOTICES_PER_CHANNEL",
+-      "value": "8"
++      "name": "MAX_NOTICE_SUMMARY_CHARS",
++      "value": "160"
+     },
+     {
+       "file": "src/core/agent/fatigue/adaptive-tuning.ts",
+@@ -1499,13 +1499,13 @@
+     },
+     {
+       "file": "src/core/contacts/pending-contact-approvals.ts",
+-      "name": "DEFAULT_MAX_PREVIEW_LENGTH",
+-      "value": "160"
++      "name": "DEFAULT_MAX_PREVIEWS",
++      "value": "3"
+     },
+     {
+       "file": "src/core/contacts/pending-contact-approvals.ts",
+-      "name": "DEFAULT_MAX_PREVIEWS",
+-      "value": "3"
++      "name": "DEFAULT_MAX_PREVIEW_LENGTH",
++      "value": "160"
+     },
+     {
+       "file": "src/core/contacts/relationship-tools.ts",
+@@ -1635,6 +1635,42 @@
+       "name": "DISCRETE_LABEL_CAP",
+       "value": "16"
+     },
++    {
++      "file": "src/core/emotion/partner-affect/observation-guard.ts",
++      "name": "MAX_CONSENT_REF_LENGTH",
++      "value": "128",
++      "note": "Fail-closed structural cap of the partner-affect observation contract (anti-smuggling invariant, docs/partner-affect.md 6.3); deliberately not operator-mutable policy."
++    },
++    {
++      "file": "src/core/emotion/partner-affect/observation-guard.ts",
++      "name": "MAX_ID_LENGTH",
++      "value": "128",
++      "note": "Fail-closed structural cap of the partner-affect observation contract (anti-smuggling invariant, docs/partner-affect.md 6.3); deliberately not operator-mutable policy."
++    },
++    {
++      "file": "src/core/emotion/partner-affect/observation-guard.ts",
++      "name": "MAX_METRIC_NAME_LENGTH",
++      "value": "64",
++      "note": "Fail-closed structural cap of the partner-affect observation contract (anti-smuggling invariant, docs/partner-affect.md 6.3); deliberately not operator-mutable policy."
++    },
++    {
++      "file": "src/core/emotion/partner-affect/observation-guard.ts",
++      "name": "MAX_PROCESSING_REVISION_LENGTH",
++      "value": "64",
++      "note": "Fail-closed structural cap of the partner-affect observation contract (anti-smuggling invariant, docs/partner-affect.md 6.3); deliberately not operator-mutable policy."
++    },
++    {
++      "file": "src/core/emotion/partner-affect/observation-guard.ts",
++      "name": "MAX_PROVENANCE_ENTRIES",
++      "value": "8",
++      "note": "Fail-closed structural cap of the partner-affect observation contract (anti-smuggling invariant, docs/partner-affect.md 6.3); deliberately not operator-mutable policy."
++    },
++    {
++      "file": "src/core/emotion/partner-affect/observation-guard.ts",
++      "name": "MAX_UNIT_LENGTH",
++      "value": "32",
++      "note": "Fail-closed structural cap of the partner-affect observation contract (anti-smuggling invariant, docs/partner-affect.md 6.3); deliberately not operator-mutable policy."
++    },
+     {
+       "file": "src/core/emotion/telemetry-validation.ts",
+       "name": "DEFAULT_MIN_CONFIDENCE",
+@@ -1922,13 +1958,13 @@
+     },
+     {
+       "file": "src/core/intention/concerns.ts",
+-      "name": "MAX_ACTIVE_CONCERN_LIFETIME_MS",
+-      "value": "7 * 24 * 60 * 60 * 1000"
++      "name": "MAX_ACTIVE_CONCERNS",
++      "value": "7"
+     },
+     {
+       "file": "src/core/intention/concerns.ts",
+-      "name": "MAX_ACTIVE_CONCERNS",
+-      "value": "7"
++      "name": "MAX_ACTIVE_CONCERN_LIFETIME_MS",
++      "value": "7 * 24 * 60 * 60 * 1000"
+     },
+     {
+       "file": "src/core/intention/concerns.ts",
+@@ -2386,6 +2422,11 @@
+       "name": "DEFAULT_SESSION_MIRROR_MAX_CHARS",
+       "value": "220"
+     },
++    {
++      "file": "src/core/session/manager-primitives.ts",
++      "name": "MAX_FALLBACK_RECENT_SUMMARY_ITEMS",
++      "value": "4"
++    },
+     {
+       "file": "src/core/session/manager-primitives.ts",
+       "name": "MAX_FALLBACK_RECENT_SUMMARY_ITEM_CHARS",
+@@ -2393,8 +2434,8 @@
+     },
+     {
+       "file": "src/core/session/manager-primitives.ts",
+-      "name": "MAX_FALLBACK_RECENT_SUMMARY_ITEMS",
+-      "value": "4"
++      "name": "MAX_HISTORY_SUMMARY_ITEMS",
++      "value": "6"
+     },
+     {
+       "file": "src/core/session/manager-primitives.ts",
+@@ -2403,24 +2444,19 @@
+     },
+     {
+       "file": "src/core/session/manager-primitives.ts",
+-      "name": "MAX_HISTORY_SUMMARY_ITEMS",
++      "name": "MAX_PRESERVED_EMOTIONAL_ENTRIES",
+       "value": "6"
+     },
+     {
+       "file": "src/core/session/manager-primitives.ts",
+-      "name": "MAX_PRESERVED_EMOTIONAL_ENTRIES",
+-      "value": "6"
++      "name": "MAX_PRESERVED_SAFETY_TAGS",
++      "value": "8"
+     },
+     {
+       "file": "src/core/session/manager-primitives.ts",
+       "name": "MAX_PRESERVED_SAFETY_TAG_CONTENT_CHARS",
+       "value": "240"
+     },
+-    {
+-      "file": "src/core/session/manager-primitives.ts",
+-      "name": "MAX_PRESERVED_SAFETY_TAGS",
+-      "value": "8"
+-    },
+     {
+       "file": "src/core/session/manager-primitives.ts",
+       "name": "MAX_SUMMARY_SOURCE_TOOL_FAILURE_CHARS",
+@@ -2688,13 +2724,13 @@
+     },
+     {
+       "file": "src/faculties/introspection/consent-store.ts",
+-      "name": "MAX_CHANNEL_ID_LENGTH",
+-      "value": "240"
++      "name": "MAX_CHANNEL_IDS",
++      "value": "64"
+     },
+     {
+       "file": "src/faculties/introspection/consent-store.ts",
+-      "name": "MAX_CHANNEL_IDS",
+-      "value": "64"
++      "name": "MAX_CHANNEL_ID_LENGTH",
++      "value": "240"
+     },
+     {
+       "file": "src/faculties/introspection/consent-store.ts",
+@@ -3058,13 +3094,13 @@
+     },
+     {
+       "file": "src/faculties/memory/near-turn-memory-lane.ts",
+-      "name": "MAX_STALE_REVIEW_SCAN",
+-      "value": "50"
++      "name": "MAX_STALE_REVIEWS_PER_RUN",
++      "value": "3"
+     },
+     {
+       "file": "src/faculties/memory/near-turn-memory-lane.ts",
+-      "name": "MAX_STALE_REVIEWS_PER_RUN",
+-      "value": "3"
++      "name": "MAX_STALE_REVIEW_SCAN",
++      "value": "50"
+     },
+     {
+       "file": "src/faculties/memory/postgres-store.ts",
+@@ -3529,13 +3565,13 @@
+     },
+     {
+       "file": "src/operator/garden/services/images-service.ts",
+-      "name": "MAX_GALLERY_TAG_CHARS",
+-      "value": "64"
++      "name": "MAX_GALLERY_TAGS",
++      "value": "32"
+     },
+     {
+       "file": "src/operator/garden/services/images-service.ts",
+-      "name": "MAX_GALLERY_TAGS",
+-      "value": "32"
++      "name": "MAX_GALLERY_TAG_CHARS",
++      "value": "64"
+     },
+     {
+       "file": "src/operator/garden/services/intake-quarantine-service.ts",
+@@ -3562,6 +3598,24 @@
+       "name": "MAX_PAGE_LIMIT",
+       "value": "1_000"
+     },
++    {
++      "file": "src/operator/garden/services/partner-affect-shadow-service.ts",
++      "name": "DEFAULT_OBSERVATION_LIST_LIMIT",
++      "value": "100",
++      "note": "Bounded read-surface page limit for the shadow inspection store; structural API bound, not estimation policy (which is JSON-owned in partner-affect-shadow.json)."
++    },
++    {
++      "file": "src/operator/garden/services/partner-affect-shadow-service.ts",
++      "name": "ESTIMATE_EVIDENCE_FETCH_LIMIT",
++      "value": "1_000",
++      "note": "Bounded read-surface page limit for the shadow inspection store; structural API bound, not estimation policy (which is JSON-owned in partner-affect-shadow.json)."
++    },
++    {
++      "file": "src/operator/garden/services/partner-affect-shadow-service.ts",
++      "name": "MAX_OBSERVATION_LIST_LIMIT",
++      "value": "500",
++      "note": "Bounded read-surface page limit for the shadow inspection store; structural API bound, not estimation policy (which is JSON-owned in partner-affect-shadow.json)."
++    },
+     {
+       "file": "src/operator/garden/services/session-service.ts",
+       "name": "DEFAULT_ADMIN_SESSION_MESSAGE_PAGE_LIMIT",
+@@ -3747,6 +3801,18 @@
+       "name": "MAX_TOP_N",
+       "value": "100"
+     },
++    {
++      "file": "src/persistence/postgres/partner-affect-shadow-store.ts",
++      "name": "DEFAULT_PARTNER_AFFECT_SHADOW_LIST_LIMIT",
++      "value": "200",
++      "note": "Bounded read-surface page limit for the shadow inspection store; structural API bound, not estimation policy (which is JSON-owned in partner-affect-shadow.json)."
++    },
++    {
++      "file": "src/persistence/postgres/partner-affect-shadow-store.ts",
++      "name": "MAX_PARTNER_AFFECT_SHADOW_LIST_LIMIT",
++      "value": "1_000",
++      "note": "Bounded read-surface page limit for the shadow inspection store; structural API bound, not estimation policy (which is JSON-owned in partner-affect-shadow.json)."
++    },
+     {
+       "file": "src/persistence/postgres/scheduled-prompt-store.ts",
+       "name": "DEFAULT_LIST_LIMIT",
+@@ -4075,6 +4141,11 @@
+       "name": "MAX_CONTENT_REF_CHARS",
+       "value": "2048"
+     },
++    {
++      "file": "src/shared/contracts/intake-envelope.ts",
++      "name": "MAX_EXTRACTED_FIELDS",
++      "value": "64"
++    },
+     {
+       "file": "src/shared/contracts/intake-envelope.ts",
+       "name": "MAX_EXTRACTED_FIELD_KEY_CHARS",
+@@ -4085,11 +4156,6 @@
+       "name": "MAX_EXTRACTED_FIELD_VALUE_CHARS",
+       "value": "4096"
+     },
+-    {
+-      "file": "src/shared/contracts/intake-envelope.ts",
+-      "name": "MAX_EXTRACTED_FIELDS",
+-      "value": "64"
+-    },
+     {
+       "file": "src/shared/contracts/intake-envelope.ts",
+       "name": "MAX_PROVENANCE_HOPS",
+diff --git a/src/app/agent/admin-surface.ts b/src/app/agent/admin-surface.ts
+index 96e63e075..f2783b6de 100644
+--- a/src/app/agent/admin-surface.ts
++++ b/src/app/agent/admin-surface.ts
+@@ -35,6 +35,7 @@ import type { IcpInitiationCandidateStorePort } from '../../core/icp/autonomy-st
+ import type { IcpAutonomyRuntimeEnablement } from '../../core/icp/runtime-enablement.js';
+ import { PostgresIcpAdminProjectionStore } from '../../persistence/postgres/icp-admin-projection-store.js';
+ import type { BackgroundWorkStorePort } from '../../core/agent/background-work/store-port.js';
++import type { PartnerAffectShadowStorePort } from '../../core/emotion/partner-affect/shadow-store-port.js';
+ 
+ export interface StartOptionalAdminTransportServerOptions {
+   adminPort?: number;
+@@ -50,6 +51,8 @@ export interface StartOptionalAdminTransportServerOptions {
+   scheduler: Scheduler;
+   schedulerConfig: SchedulerRuntimeConfig;
+   icpInitiationCandidateStore?: IcpInitiationCandidateStorePort | null;
++  /** Shadow-only Partner Affect observation store (docs/partner-affect.md slice 1). */
++  partnerAffectShadowStore?: PartnerAffectShadowStorePort | null;
+   icpRuntimeEnablement: IcpAutonomyRuntimeEnablement;
+   postTurnActions: PostTurnActionRuntime;
+   outreachOutbox?: OutreachOutboxStore | null;
+@@ -126,6 +129,7 @@ export async function startOptionalAdminTransportServer(
+     effectiveSchedulerConfig: options.schedulerConfig,
+     icpInitiationCandidateStore: options.icpInitiationCandidateStore ?? null,
+     icpAdminProjectionStore,
++    partnerAffectShadowStore: options.partnerAffectShadowStore ?? null,
+     icpRuntimeEnablement: options.icpRuntimeEnablement,
+     postTurnActions: options.postTurnActions,
+     outreachOutbox: options.outreachOutbox ?? null,
+diff --git a/src/app/agent/main.ts b/src/app/agent/main.ts
+index 23d3c94a0..c8eab338a 100644
+--- a/src/app/agent/main.ts
++++ b/src/app/agent/main.ts
+@@ -120,6 +120,8 @@ import {
+ } from './session-activity.js';
+ import { loadIntakePolicyConfig } from '../../system/config/intake-policy-config.js';
+ import { maybeCreateIntakeScreeningService } from '../../core/cogsec/intake/screening.js';
++import { loadPartnerAffectShadowConfig } from '../../system/config/partner-affect-shadow-config.js';
++import { createPartnerAffectShadowIngestBridge } from '../../core/emotion/partner-affect/shadow-ingest-bridge.js';
+ import { createIntakeQuarantineStore } from '../../core/cogsec/intake/quarantine-store.js';
+ import { createDriftReviewCardStore } from '../../core/cogsec/drift/drift-review-card-store.js';
+ import { createDriftVelocityEvidencePort } from '../../core/cogsec/drift/drift-evidence-adapters.js';
+@@ -476,6 +478,24 @@ async function main(): Promise<void> {
+     });
+   }
+ 
++  // ── Partner Affect shadow observation foundation (docs/partner-affect.md
++  // slice 1) ── Shadow-only: the bridge records accepted/suppressed Signal
++  // Observations for Garden inspection and emits structural counters. It has
++  // no path into prompts, appraisal, memory, scheduling, or world actions,
++  // and stays fully inert unless the JSON owner file enables it with an
++  // exact canonical partner binding.
++  const partnerAffectShadowPolicy = loadPartnerAffectShadowConfig(pathSnapshot.systemDataDir);
++  const partnerAffectShadowBridge = createPartnerAffectShadowIngestBridge({
++    eventBus,
++    policy: partnerAffectShadowPolicy,
++    store: persistenceRuntime.partnerAffectShadowStore,
++  });
++  if (partnerAffectShadowBridge.active) {
++    log.info('Partner affect shadow observation bridge active (shadow-only)', {
++      policyRevision: partnerAffectShadowPolicy.policyRevision,
++    });
++  }
++
+   sessionManager.characterName = card.data.name;
+   writeStartupSessionMetadata(
+     sessionManager,
+@@ -987,6 +1007,7 @@ async function main(): Promise<void> {
+     scheduler,
+     schedulerConfig,
+     icpInitiationCandidateStore: persistenceRuntime.icpInitiationCandidateStore,
++    partnerAffectShadowStore: persistenceRuntime.partnerAffectShadowStore,
+     icpRuntimeEnablement,
+     postTurnActions,
+     outreachOutbox,
+@@ -1036,11 +1057,13 @@ async function main(): Promise<void> {
+       }
+     },
+     closeDatabase: async () => {
++      partnerAffectShadowBridge.unsubscribe();
+       await persistenceRuntime.contactLifecycleRecovery?.stop();
+       await coreRuntime.closeWikiRuntime();
+       await persistenceRuntime.icpInitiationCandidateStore?.close();
+       await persistenceRuntime.backgroundWorkStore.close();
+       await persistenceRuntime.introspectionLandmarkStore.close();
++      await persistenceRuntime.partnerAffectShadowStore.close();
+     },
+     scheduler,
+     moduleLoader,
+diff --git a/src/boundary/fleet-auth/garden-route-authorization.ts b/src/boundary/fleet-auth/garden-route-authorization.ts
+index 5e1440445..4cdee1901 100644
+--- a/src/boundary/fleet-auth/garden-route-authorization.ts
++++ b/src/boundary/fleet-auth/garden-route-authorization.ts
+@@ -226,6 +226,10 @@ const routeAuthorizationGroups: readonly RouteAuthorizationGroup[] = [
+   {
+     action: 'contacts.read', area: 'contacts', routeIds: [
+       ...ids('GET', ['/api/admin/contacts', '/api/admin/contacts/:id']),
++      // Partner Affect shadow inspection (docs/partner-affect.md slice 1):
++      // sensitive relational data about the bound partner contact, so it is
++      // gated with the contact-read authority rather than diagnostics.
++      ...ids('GET', ['/api/admin/partner-affect/shadow', '/api/admin/partner-affect/observations']),
+       ...pageIds(['/contacts']),
+     ],
+   },
+diff --git a/src/boundary/fleet-auth/garden-route-capabilities.ts b/src/boundary/fleet-auth/garden-route-capabilities.ts
+index 4a6f5c894..6dafddf1a 100644
+--- a/src/boundary/fleet-auth/garden-route-capabilities.ts
++++ b/src/boundary/fleet-auth/garden-route-capabilities.ts
+@@ -246,7 +246,9 @@ const fixedRoutes: readonly RouteTuple[] = [
+   ['GET', '/api/admin/shards'], ['GET', '/api/admin/shared-workspace'],
+   ['GET', '/api/admin/shared-workspace/artifact'], ['POST', '/api/admin/shared-workspace/proposals'],
+   [['GET', 'POST', 'PATCH'], '/api/admin/skills'], ['POST', '/api/admin/skills/toggle'],
+-  ['GET', '/api/admin/subsystem-health'], ['GET', '/api/admin/tool-conformance/latest'],
++  ['GET', '/api/admin/subsystem-health'],
++  ['GET', '/api/admin/partner-affect/shadow'], ['GET', '/api/admin/partner-affect/observations'],
++  ['GET', '/api/admin/tool-conformance/latest'],
+   ['POST', '/api/admin/tool-conformance/run'], ['GET', '/api/admin/tools/adaptive'],
+   ['GET', '/api/admin/values'], ['GET', '/api/admin/values/reflections/daily'],
+   ['GET', '/api/admin/values/reflections/journal'], ['GET', '/api/admin/values/reflections/metacognition'],
+diff --git a/src/channels/api/server.ts b/src/channels/api/server.ts
+index 57e0a9e11..ace21ddbc 100644
+--- a/src/channels/api/server.ts
++++ b/src/channels/api/server.ts
+@@ -28,6 +28,7 @@ import {
+ import type { ContactStorePort } from '../../core/contacts/contact-store-port.js';
+ import type { SubstrateAgent } from '../../core/agent/substrate-agent.js';
+ import type { EventBus, ExternalTelemetryEvent } from '../../shared/event-bus.js';
++import { PARTNER_AFFECT_OBSERVATION_EVENT_TYPE } from '../../shared/contracts/partner-affect.js';
+ import {
+   createEventBusSensorIngestPort,
+   type SensorIngestPort,
+@@ -130,6 +131,7 @@ const TELEMETRY_EVENT_TYPE_ALLOWLIST = new Set([
+   'external.telemetry.heartbeat',
+   'external.telemetry.status',
+   'external.telemetry.incident',
++  PARTNER_AFFECT_OBSERVATION_EVENT_TYPE,
+ ]);
+ const ICP_OPERATOR_CANCEL_PATH = /^\/v1\/operator\/icp-autonomy\/companions\/([^/]+)\/cancel$/u;
+ const CONFIRMATION_OPERATOR_RESOLVE_PATH = '/v1/operator/confirmations/resolve';
+@@ -246,6 +248,16 @@ const TELEMETRY_PAYLOAD_KEYS_BY_EVENT_TYPE: ReadonlyMap<string, ReadonlySet<stri
+     'message', 'detail', 'reason', 'error',
+     'count', 'confidence',
+   ])],
++  // Shadow-only Partner Affect Signal Observations (docs/partner-affect.md
++  // slice 1). Summarized scalar fields only; the downstream observation guard
++  // re-screens the same keys fail-closed before anything is recorded.
++  [PARTNER_AFFECT_OBSERVATION_EVENT_TYPE, new Set([
++    'observationId', 'sourceId', 'partnerContactId',
++    'signalFamily', 'metricName', 'value', 'unit',
++    'windowStartMs', 'windowEndMs', 'observedAtMs',
++    'coverage', 'confidence', 'missingness',
++    'consentRef', 'provenance', 'processingRevision',
++  ])],
+ ]);
+ 
+ export interface TelemetryPayloadScreenFailure {
+diff --git a/src/core/emotion/partner-affect/observation-guard.test.ts b/src/core/emotion/partner-affect/observation-guard.test.ts
+new file mode 100644
+index 000000000..85dfcd484
+--- /dev/null
++++ b/src/core/emotion/partner-affect/observation-guard.test.ts
+@@ -0,0 +1,297 @@
++import { describe, expect, it } from 'vitest';
++import {
++  derivePartnerAffectAssertionBasis,
++  guardPartnerAffectObservation,
++} from './observation-guard.js';
++import type { PartnerAffectShadowPolicy } from '../../../shared/contracts/partner-affect.js';
++
++const NOW_MS = 1_800_000_000_000;
++const PARTNER_ID = 'contact-partner-1';
++
++function testPolicy(overrides: Partial<PartnerAffectShadowPolicy> = {}): PartnerAffectShadowPolicy {
++  return {
++    enabled: true,
++    partnerContactId: PARTNER_ID,
++    staleAfterMs: 24 * 60 * 60_000,
++    evidenceWindowMs: 72 * 60 * 60_000,
++    minConfidence: 0.35,
++    minIndependentFamilies: 2,
++    conflictValueTolerance: 0.25,
++    allowedSignalFamilies: ['self_report', 'conversation', 'sleep', 'activity', 'presence'],
++    directions: { 'sleep.total_sleep_hours': 'lower_supports_need' },
++    sources: [
++      {
++        sourceId: 'edge-sleep-1',
++        families: ['sleep', 'activity'],
++        consentRef: 'consent-sleep-2026-01',
++        sensitivity: 'relational_sensitive',
++        revoked: false,
++      },
++      {
++        sourceId: 'revoked-source',
++        families: ['activity'],
++        consentRef: 'consent-activity-2025-12',
++        sensitivity: 'relational_sensitive',
++        revoked: true,
++      },
++    ],
++    maxRetainedObservations: 500,
++    policyRevision: 'shadow-test-v1',
++    ...overrides,
++  };
++}
++
++function validPayload(overrides: Record<string, unknown> = {}): Record<string, unknown> {
++  return {
++    observationId: 'obs-001',
++    sourceId: 'edge-sleep-1',
++    partnerContactId: PARTNER_ID,
++    signalFamily: 'sleep',
++    metricName: 'total_sleep_hours',
++    value: 7.4,
++    unit: 'hours',
++    windowStartMs: NOW_MS - 10 * 60 * 60_000,
++    windowEndMs: NOW_MS - 60_000,
++    coverage: 0.9,
++    confidence: 0.8,
++    provenance: [{ source: 'runtime_state', observedAtMs: NOW_MS - 60_000 }],
++    processingRevision: 'adapter-v3',
++    ...overrides,
++  };
++}
++
++function guard(
++  payload: Record<string, unknown>,
++  policy: PartnerAffectShadowPolicy = testPolicy(),
++) {
++  return guardPartnerAffectObservation({
++    candidate: { payload, receivedAtMs: NOW_MS },
++    policy,
++    nowMs: NOW_MS,
++  });
++}
++
++describe('guardPartnerAffectObservation', () => {
++  it('accepts a well-formed observation and normalizes every contract field', () => {
++    const decision = guard(validPayload());
++    expect(decision.status).toBe('accepted');
++    if (decision.status !== 'accepted') return;
++    const observation = decision.observation;
++    expect(observation.observationKey).toBe('edge-sleep-1:obs-001');
++    expect(observation.partnerContactId).toBe(PARTNER_ID);
++    expect(observation.signalFamily).toBe('sleep');
++    expect(observation.metricName).toBe('total_sleep_hours');
++    expect(observation.value).toBe(7.4);
++    expect(observation.unit).toBe('hours');
++    // Direction comes from partner-specific policy, never the source payload.
++    expect(observation.direction).toBe('lower_supports_need');
++    // Consent and sensitivity are stamped from the authorized-source registry.
++    expect(observation.consentRef).toBe('consent-sleep-2026-01');
++    expect(observation.sensitivity).toBe('relational_sensitive');
++    // Missingness defaults to 1 - coverage and stays explicit.
++    expect(observation.missingness).toBeCloseTo(0.1, 4);
++    expect(observation.observedAtMs).toBe(NOW_MS - 60_000);
++    expect(observation.assertion).toBe('sensor_summary');
++    expect(observation.processingRevision).toBe('adapter-v3');
++    expect(observation.provenance).toHaveLength(1);
++  });
++
++  it('marks model/classifier provenance as model_inferred, never partner-asserted', () => {
++    const decision = guard(validPayload({
++      provenance: [{ source: 'self_report', classifier: 'affect-cls-v2' }],
++    }));
++    expect(decision.status).toBe('accepted');
++    if (decision.status !== 'accepted') return;
++    expect(decision.observation.assertion).toBe('model_inferred');
++  });
++
++  it('marks pure self-report provenance as partner_asserted', () => {
++    expect(derivePartnerAffectAssertionBasis([{ source: 'self_report' }])).toBe('partner_asserted');
++    expect(derivePartnerAffectAssertionBasis([{ source: 'self_report', model: 'm' }])).toBe('model_inferred');
++    expect(derivePartnerAffectAssertionBasis([{ source: 'runtime_state' }])).toBe('sensor_summary');
++  });
++
++  it('fails closed on non-whitelisted payload keys (raw-sensitive smuggling)', () => {
++    for (const extra of [
++      { gpsLatitude: 52.1, gpsLongitude: 4.3 },
++      { heartRateSeries: [61, 62, 64, 66, 70, 72, 75, 71] },
++      { messageBody: 'private text the estimator must never see' },
++      { lineItems: [{ sku: 'x', price: 12 }] },
++    ]) {
++      const decision = guard(validPayload(extra));
++      expect(decision.status).toBe('suppressed');
++      if (decision.status !== 'suppressed') return;
++      expect(decision.suppressed.reasons).toContain('raw_sensitive_payload');
++      // The suppressed audit record never echoes the offending content.
++      const serialized = JSON.stringify(decision.suppressed);
++      expect(serialized).not.toContain('gpsLatitude');
++      expect(serialized).not.toContain('private text');
++      expect(serialized).not.toContain('sku');
++    }
++  });
++
++  it('fails closed on provenance entries with unexpected keys', () => {
++    const decision = guard(validPayload({
++      provenance: [{ source: 'runtime_state', faceVector: [0.1, 0.2] }],
++    }));
++    expect(decision.status).toBe('suppressed');
++    if (decision.status !== 'suppressed') return;
++    expect(decision.suppressed.reasons).toContain('raw_sensitive_payload');
++  });
++
++  it('suppresses observations naming a different contact as wrong_partner', () => {
++    const decision = guard(validPayload({ partnerContactId: 'contact-housemate-2' }));
++    expect(decision.status).toBe('suppressed');
++    if (decision.status !== 'suppressed') return;
++    expect(decision.suppressed.reasons).toContain('wrong_partner');
++  });
++
++  it('suppresses when no canonical partner is bound', () => {
++    const decision = guard(validPayload(), testPolicy({ enabled: false, partnerContactId: null }));
++    expect(decision.status).toBe('suppressed');
++    if (decision.status !== 'suppressed') return;
++    expect(decision.suppressed.reasons).toEqual(
++      expect.arrayContaining(['partner_unbound', 'shadow_disabled']),
++    );
++  });
++
++  it('suppresses stale observations with an explicit reason', () => {
++    const staleMs = NOW_MS - 25 * 60 * 60_000;
++    const decision = guard(validPayload({
++      windowStartMs: staleMs - 60_000,
++      windowEndMs: staleMs,
++      observedAtMs: staleMs,
++    }));
++    expect(decision.status).toBe('suppressed');
++    if (decision.status !== 'suppressed') return;
++    expect(decision.suppressed.reasons).toContain('stale_observation');
++  });
++
++  it('suppresses future-dated observations beyond clock skew', () => {
++    const future = NOW_MS + 10 * 60_000;
++    const decision = guard(validPayload({
++      windowStartMs: future - 60_000,
++      windowEndMs: future,
++      observedAtMs: future,
++    }));
++    expect(decision.status).toBe('suppressed');
++    if (decision.status !== 'suppressed') return;
++    expect(decision.suppressed.reasons).toContain('future_observation');
++  });
++
++  it('suppresses inverted observation windows', () => {
++    const decision = guard(validPayload({
++      windowStartMs: NOW_MS,
++      windowEndMs: NOW_MS - 60_000,
++    }));
++    expect(decision.status).toBe('suppressed');
++    if (decision.status !== 'suppressed') return;
++    expect(decision.suppressed.reasons).toContain('invalid_window');
++  });
++
++  it('suppresses low-confidence observations against the policy floor', () => {
++    const decision = guard(validPayload({ confidence: 0.1 }));
++    expect(decision.status).toBe('suppressed');
++    if (decision.status !== 'suppressed') return;
++    expect(decision.suppressed.reasons).toContain('low_confidence');
++  });
++
++  it('suppresses unregistered, revoked, and non-consented sources', () => {
++    const unregistered = guard(validPayload({ sourceId: 'never-registered' }));
++    expect(unregistered.status).toBe('suppressed');
++    if (unregistered.status === 'suppressed') {
++      expect(unregistered.suppressed.reasons).toContain('unregistered_source');
++    }
++
++    const revoked = guard(validPayload({ sourceId: 'revoked-source', signalFamily: 'activity' }));
++    expect(revoked.status).toBe('suppressed');
++    if (revoked.status === 'suppressed') {
++      expect(revoked.suppressed.reasons).toContain('revoked_source');
++    }
++
++    const wrongFamily = guard(validPayload({ signalFamily: 'presence' }));
++    expect(wrongFamily.status).toBe('suppressed');
++    if (wrongFamily.status === 'suppressed') {
++      expect(wrongFamily.suppressed.reasons).toContain('family_not_consented');
++    }
++  });
++
++  it('suppresses families outside policy and unknown families', () => {
++    const notAllowed = guard(
++      validPayload({ signalFamily: 'personal_operations' }),
++      testPolicy({
++        sources: [{
++          sourceId: 'edge-sleep-1',
++          families: ['personal_operations'],
++          consentRef: 'consent-ops',
++          sensitivity: 'relational_sensitive',
++          revoked: false,
++        }],
++      }),
++    );
++    expect(notAllowed.status).toBe('suppressed');
++    if (notAllowed.status === 'suppressed') {
++      expect(notAllowed.suppressed.reasons).toContain('family_not_allowed');
++    }
++
++    const unknown = guard(validPayload({ signalFamily: 'astrology' }));
++    expect(unknown.status).toBe('suppressed');
++    if (unknown.status === 'suppressed') {
++      expect(unknown.suppressed.reasons).toContain('unknown_signal_family');
++    }
++  });
++
++  it('suppresses consentRef mismatches against the registry', () => {
++    const decision = guard(validPayload({ consentRef: 'consent-forged' }));
++    expect(decision.status).toBe('suppressed');
++    if (decision.status !== 'suppressed') return;
++    expect(decision.suppressed.reasons).toContain('consent_mismatch');
++  });
++
++  it('requires non-empty concrete provenance', () => {
++    const missing = guard(validPayload({ provenance: [] }));
++    expect(missing.status).toBe('suppressed');
++    if (missing.status === 'suppressed') {
++      expect(missing.suppressed.reasons).toContain('missing_provenance');
++    }
++
++    const vague = guard(validPayload({ provenance: [{ source: 'unknown' }] }));
++    expect(vague.status).toBe('suppressed');
++    if (vague.status === 'suppressed') {
++      expect(vague.suppressed.reasons).toContain('missing_provenance');
++    }
++  });
++
++  it('rejects non-scalar values and out-of-range quality fields as malformed', () => {
++    for (const bad of [
++      { value: [1, 2, 3] },
++      { value: 'seven' },
++      { value: Number.NaN },
++      { coverage: 1.4 },
++      { confidence: -0.1 },
++      { metricName: 'x'.repeat(200) },
++      { unit: 'contains spaces and a very long smuggled sentence' },
++    ]) {
++      const decision = guard(validPayload(bad));
++      expect(decision.status).toBe('suppressed');
++      if (decision.status !== 'suppressed') return;
++      expect(decision.suppressed.reasons).toContain('malformed_observation');
++    }
++  });
++
++  it('collects every applicable suppression reason for the explanation record', () => {
++    const decision = guard(validPayload({
++      partnerContactId: 'someone-else',
++      confidence: 0.05,
++      extraBlob: { anything: true },
++    }));
++    expect(decision.status).toBe('suppressed');
++    if (decision.status !== 'suppressed') return;
++    expect(decision.suppressed.reasons).toEqual(
++      expect.arrayContaining(['wrong_partner', 'low_confidence', 'raw_sensitive_payload']),
++    );
++    expect(decision.suppressed.observationKey).toBe('edge-sleep-1:obs-001');
++    expect(decision.suppressed.sourceId).toBe('edge-sleep-1');
++    expect(decision.suppressed.signalFamily).toBe('sleep');
++  });
++});
+diff --git a/src/core/emotion/partner-affect/observation-guard.ts b/src/core/emotion/partner-affect/observation-guard.ts
+new file mode 100644
+index 000000000..40cd04e23
+--- /dev/null
++++ b/src/core/emotion/partner-affect/observation-guard.ts
+@@ -0,0 +1,429 @@
++// Partner Affect shadow observation guard (docs/partner-affect.md section 6.3).
++//
++// Fail-closed boundary between raw external telemetry payloads and the
++// shadow observation store. Mirrors the identity-claim whitelist posture of
++// sensor-cognition-bridge.ts: only whitelisted scalar summary fields may
++// pass, so raw coordinates, biometric streams, message bodies, purchase line
++// items, and third-party content are structurally unable to reach the
++// composite layer regardless of how they are named or nested.
++//
++// Provenance, confidence, freshness, conflict, and suppression semantics
++// reuse the emotion telemetry primitives (telemetry-validation.ts /
++// emotion-contracts.ts) instead of growing a parallel guard vocabulary.
++
++import { isRecord } from '../../../shared/utils/types.js';
++import type { EmotionTelemetryProvenance } from '../../../shared/contracts/emotion-contracts.js';
++import { normalizeEmotionTelemetryProvenance } from '../telemetry-validation.js';
++import {
++  PARTNER_AFFECT_SCHEMA_VERSION,
++  isPartnerAffectSignalFamily,
++  type PartnerAffectAssertionBasis,
++  type PartnerAffectObservation,
++  type PartnerAffectObservationDecision,
++  type PartnerAffectShadowPolicy,
++  type PartnerAffectSignalFamily,
++  type PartnerAffectSourceAuthorization,
++  type PartnerAffectSuppressionReason,
++} from '../../../shared/contracts/partner-affect.js';
++
++/**
++ * Every key a shadow observation payload may carry. Any key outside this set
++ * — including nested blobs a denylist would miss — fails the candidate
++ * closed as `raw_sensitive_payload`.
++ */
++const OBSERVATION_PAYLOAD_WHITELISTED_KEYS: ReadonlySet<string> = new Set([
++  'observationId',
++  'sourceId',
++  'partnerContactId',
++  'signalFamily',
++  'metricName',
++  'value',
++  'unit',
++  'windowStartMs',
++  'windowEndMs',
++  'observedAtMs',
++  'coverage',
++  'confidence',
++  'missingness',
++  'consentRef',
++  'provenance',
++  'processingRevision',
++]);
++
++const PROVENANCE_ENTRY_WHITELISTED_KEYS: ReadonlySet<string> = new Set([
++  'source',
++  'observedAtMs',
++  'modality',
++  'classifier',
++  'model',
++  'provenanceRef',
++]);
++
++/** String caps stop free-text (message bodies, notes) riding scalar fields. */
++const MAX_ID_LENGTH = 128;
++const MAX_METRIC_NAME_LENGTH = 64;
++const MAX_UNIT_LENGTH = 32;
++const MAX_CONSENT_REF_LENGTH = 128;
++const MAX_PROCESSING_REVISION_LENGTH = 64;
++const MAX_PROVENANCE_ENTRIES = 8;
++const TOKEN_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9_.:/-]*$/;
++
++/** Tolerated forward clock skew before an observation is `future_observation`. */
++export const PARTNER_AFFECT_CLOCK_SKEW_TOLERANCE_MS = 120_000;
++
++export interface PartnerAffectObservationCandidate {
++  payload: Record<string, unknown>;
++  receivedAtMs: number;
++}
++
++export interface PartnerAffectObservationGuardInput {
++  candidate: PartnerAffectObservationCandidate;
++  policy: PartnerAffectShadowPolicy;
++  nowMs: number;
++}
++
++interface FieldFailure {
++  reason: PartnerAffectSuppressionReason;
++  detail: string;
++}
++
++function suppress(
++  reasons: readonly FieldFailure[],
++  context: {
++    observationKey: string | null;
++    sourceId: string | null;
++    signalFamily: PartnerAffectSignalFamily | null;
++    receivedAtMs: number;
++  },
++): PartnerAffectObservationDecision {
++  const uniqueReasons = [...new Set(reasons.map(failure => failure.reason))].sort();
++  const detail = reasons.map(failure => failure.detail).join('; ');
++  return {
++    status: 'suppressed',
++    suppressed: {
++      schemaVersion: PARTNER_AFFECT_SCHEMA_VERSION,
++      observationKey: context.observationKey,
++      sourceId: context.sourceId,
++      signalFamily: context.signalFamily,
++      reasons: uniqueReasons,
++      detail,
++      receivedAtMs: context.receivedAtMs,
++    },
++  };
++}
++
++function readToken(
++  payload: Record<string, unknown>,
++  key: string,
++  maxLength: number,
++  failures: FieldFailure[],
++  options: { required: boolean },
++): string | null {
++  const raw = payload[key];
++  if (raw === undefined || raw === null) {
++    if (options.required) {
++      failures.push({ reason: 'malformed_observation', detail: `${key} is required` });
++    }
++    return null;
++  }
++  if (typeof raw !== 'string') {
++    failures.push({ reason: 'malformed_observation', detail: `${key} must be a string` });
++    return null;
++  }
++  const trimmed = raw.trim();
++  if (trimmed.length === 0 || trimmed.length > maxLength || !TOKEN_PATTERN.test(trimmed)) {
++    failures.push({
++      reason: 'malformed_observation',
++      detail: `${key} must be a token of 1-${String(maxLength)} allowed characters`,
++    });
++    return null;
++  }
++  return trimmed;
++}
++
++function readFinite(
++  payload: Record<string, unknown>,
++  key: string,
++  failures: FieldFailure[],
++  options: { required: boolean },
++): number | null {
++  const raw = payload[key];
++  if (raw === undefined || raw === null) {
++    if (options.required) {
++      failures.push({ reason: 'malformed_observation', detail: `${key} is required` });
++    }
++    return null;
++  }
++  if (typeof raw !== 'number' || !Number.isFinite(raw)) {
++    failures.push({ reason: 'malformed_observation', detail: `${key} must be a finite number` });
++    return null;
++  }
++  return raw;
++}
++
++function readUnitInterval(
++  payload: Record<string, unknown>,
++  key: string,
++  failures: FieldFailure[],
++  options: { required: boolean },
++): number | null {
++  const value = readFinite(payload, key, failures, options);
++  if (value === null) return null;
++  if (value < 0 || value > 1) {
++    failures.push({ reason: 'malformed_observation', detail: `${key} must be in range [0, 1]` });
++    return null;
++  }
++  return value;
++}
++
++function provenanceEntriesAreWhitelisted(value: unknown): boolean {
++  if (!Array.isArray(value)) return false;
++  if (value.length > MAX_PROVENANCE_ENTRIES) return false;
++  for (const entry of value) {
++    if (!isRecord(entry)) return false;
++    for (const key of Object.keys(entry)) {
++      if (!PROVENANCE_ENTRY_WHITELISTED_KEYS.has(key)) return false;
++    }
++  }
++  return true;
++}
++
++/**
++ * Derive how the observation relates to the partner's own voice. Any
++ * classifier or model anywhere in provenance forces `model_inferred`; only
++ * pure self-report provenance may claim `partner_asserted`. The payload has
++ * no say in this: inference can never be presented as partner-asserted fact.
++ */
++export function derivePartnerAffectAssertionBasis(
++  provenance: readonly EmotionTelemetryProvenance[],
++): PartnerAffectAssertionBasis {
++  const modelInferred = provenance.some(entry => entry.classifier !== undefined || entry.model !== undefined);
++  if (modelInferred) return 'model_inferred';
++  if (provenance.every(entry => entry.source === 'self_report')) return 'partner_asserted';
++  return 'sensor_summary';
++}
++
++function resolveSourceAuthorization(
++  policy: PartnerAffectShadowPolicy,
++  sourceId: string,
++): PartnerAffectSourceAuthorization | undefined {
++  return policy.sources.find(source => source.sourceId === sourceId);
++}
++
++/**
++ * Validate and normalize one raw shadow observation candidate. Collects every
++ * applicable suppression reason (rather than first-fail) so Garden can show a
++ * complete explanation, and never copies rejected payload content into the
++ * suppressed record.
++ */
++export function guardPartnerAffectObservation(
++  input: PartnerAffectObservationGuardInput,
++): PartnerAffectObservationDecision {
++  const { candidate, policy } = input;
++  const nowMs = Math.floor(input.nowMs);
++  if (!Number.isFinite(nowMs) || nowMs < 0) {
++    throw new Error('guardPartnerAffectObservation requires a finite non-negative nowMs');
++  }
++  const receivedAtMs = Math.floor(candidate.receivedAtMs);
++  if (!Number.isFinite(receivedAtMs) || receivedAtMs < 0) {
++    throw new Error('guardPartnerAffectObservation requires a finite non-negative receivedAtMs');
++  }
++  const payload = candidate.payload;
++  if (!isRecord(payload)) {
++    throw new Error('guardPartnerAffectObservation requires an object payload');
++  }
++
++  const failures: FieldFailure[] = [];
++
++  // Routing identity is parsed first (leniently) so suppressed records can
++  // carry structural context even when the candidate is otherwise rejected.
++  const identityFailures: FieldFailure[] = [];
++  const sourceId = readToken(payload, 'sourceId', MAX_ID_LENGTH, identityFailures, { required: true });
++  const observationId = readToken(payload, 'observationId', MAX_ID_LENGTH, identityFailures, { required: true });
++  failures.push(...identityFailures);
++  const observationKey = sourceId && observationId ? `${sourceId}:${observationId}` : null;
++
++  const rawFamily = typeof payload.signalFamily === 'string' ? payload.signalFamily.trim() : undefined;
++  let signalFamily: PartnerAffectSignalFamily | null = null;
++  if (rawFamily !== undefined && isPartnerAffectSignalFamily(rawFamily)) {
++    signalFamily = rawFamily;
++  } else {
++    failures.push({ reason: 'unknown_signal_family', detail: 'signalFamily is missing or not a known Signal Family' });
++  }
++
++  const context = { observationKey, sourceId, signalFamily, receivedAtMs };
++
++  if (!policy.enabled) {
++    failures.push({ reason: 'shadow_disabled', detail: 'partner affect shadow observation is disabled' });
++  }
++  if (policy.partnerContactId === null) {
++    failures.push({ reason: 'partner_unbound', detail: 'no canonical partner contact is bound' });
++  }
++
++  // Fail-closed payload whitelist: any unexpected key (raw coordinates,
++  // biometric streams, message bodies, purchase line items, third-party
++  // content, however named) rejects the candidate. Key names are not echoed
++  // into the audit record because hostile payloads can smuggle content there.
++  const unexpectedKeyCount = Object.keys(payload)
++    .filter(key => !OBSERVATION_PAYLOAD_WHITELISTED_KEYS.has(key))
++    .length;
++  if (unexpectedKeyCount > 0) {
++    failures.push({
++      reason: 'raw_sensitive_payload',
++      detail: `payload carries ${String(unexpectedKeyCount)} non-whitelisted key(s)`,
++    });
++  }
++
++  const partnerContactId = readToken(payload, 'partnerContactId', MAX_ID_LENGTH, failures, { required: true });
++  if (
++    partnerContactId !== null
++    && policy.partnerContactId !== null
++    && partnerContactId !== policy.partnerContactId
++  ) {
++    failures.push({
++      reason: 'wrong_partner',
++      detail: 'observation names a contact other than the bound canonical partner',
++    });
++  }
++
++  const metricName = readToken(payload, 'metricName', MAX_METRIC_NAME_LENGTH, failures, { required: true });
++  const unit = readToken(payload, 'unit', MAX_UNIT_LENGTH, failures, { required: true });
++  const processingRevision = readToken(
++    payload,
++    'processingRevision',
++    MAX_PROCESSING_REVISION_LENGTH,
++    failures,
++    { required: true },
++  );
++  const claimedConsentRef = readToken(payload, 'consentRef', MAX_CONSENT_REF_LENGTH, failures, { required: false });
++
++  const value = readFinite(payload, 'value', failures, { required: true });
++  const coverage = readUnitInterval(payload, 'coverage', failures, { required: true });
++  const confidence = readUnitInterval(payload, 'confidence', failures, { required: true });
++  const explicitMissingness = readUnitInterval(payload, 'missingness', failures, { required: false });
++
++  const windowStartMs = readFinite(payload, 'windowStartMs', failures, { required: true });
++  const windowEndMs = readFinite(payload, 'windowEndMs', failures, { required: true });
++  let observedAtMs = readFinite(payload, 'observedAtMs', failures, { required: false });
++  if (windowStartMs !== null && windowEndMs !== null) {
++    if (windowStartMs < 0 || windowEndMs < windowStartMs) {
++      failures.push({ reason: 'invalid_window', detail: 'observation window must satisfy 0 <= start <= end' });
++    } else {
++      observedAtMs ??= windowEndMs;
++    }
++  }
++  if (observedAtMs !== null) {
++    if (observedAtMs < 0 || (windowStartMs !== null && observedAtMs < windowStartMs)) {
++      failures.push({ reason: 'invalid_window', detail: 'observedAtMs must fall at or after the window start' });
++    }
++    if (observedAtMs > nowMs + PARTNER_AFFECT_CLOCK_SKEW_TOLERANCE_MS) {
++      failures.push({ reason: 'future_observation', detail: 'observation claims a future timestamp' });
++    } else if (nowMs - observedAtMs > policy.staleAfterMs) {
++      failures.push({ reason: 'stale_observation', detail: 'observation is older than the configured staleness window' });
++    }
++  }
++
++  if (confidence !== null && confidence < policy.minConfidence) {
++    failures.push({ reason: 'low_confidence', detail: 'confidence is below the configured minimum' });
++  }
++
++  // Provenance: whitelist entry keys first (fail-closed against smuggled
++  // content), then reuse the shared emotion telemetry provenance normalizer.
++  let provenance: EmotionTelemetryProvenance[] = [];
++  const rawProvenance = payload.provenance;
++  if (rawProvenance === undefined || (Array.isArray(rawProvenance) && rawProvenance.length === 0)) {
++    failures.push({ reason: 'missing_provenance', detail: 'provenance is required and must be non-empty' });
++  } else if (!provenanceEntriesAreWhitelisted(rawProvenance)) {
++    failures.push({
++      reason: 'raw_sensitive_payload',
++      detail: 'provenance entries carry non-whitelisted keys or exceed the entry cap',
++    });
++  } else {
++    try {
++      provenance = normalizeEmotionTelemetryProvenance(rawProvenance, 'provenance');
++    } catch (error) {
++      failures.push({
++        reason: 'malformed_observation',
++        detail: error instanceof Error ? error.message : 'provenance failed validation',
++      });
++    }
++    if (provenance.some(entry => entry.source === 'missing' || entry.source === 'unknown')) {
++      failures.push({ reason: 'missing_provenance', detail: 'provenance entries must name a concrete source' });
++    }
++  }
++
++  // Consent: the authorized-source registry is the authority. A payload may
++  // echo a consentRef, but it must match the registry exactly.
++  let authorization: PartnerAffectSourceAuthorization | undefined;
++  if (sourceId !== null) {
++    authorization = resolveSourceAuthorization(policy, sourceId);
++    if (!authorization) {
++      failures.push({ reason: 'unregistered_source', detail: 'source is not in the authorized-source registry' });
++    } else {
++      if (authorization.revoked) {
++        failures.push({ reason: 'revoked_source', detail: 'source consent has been revoked' });
++      }
++      if (claimedConsentRef !== null && claimedConsentRef !== authorization.consentRef) {
++        failures.push({ reason: 'consent_mismatch', detail: 'claimed consentRef does not match the registry' });
++      }
++      if (signalFamily !== null && !authorization.families.includes(signalFamily)) {
++        failures.push({ reason: 'family_not_consented', detail: 'source is not consented for this Signal Family' });
++      }
++    }
++  }
++  if (signalFamily !== null && !policy.allowedSignalFamilies.includes(signalFamily)) {
++    failures.push({ reason: 'family_not_allowed', detail: 'Signal Family is not enabled by policy' });
++  }
++
++  if (failures.length > 0) {
++    return suppress(failures, context);
++  }
++
++  // All of these are non-null after a failure-free pass; assert for narrowing.
++  if (
++    sourceId === null || observationId === null || observationKey === null
++    || signalFamily === null || partnerContactId === null || metricName === null
++    || unit === null || processingRevision === null || value === null
++    || coverage === null || confidence === null || windowStartMs === null
++    || windowEndMs === null || observedAtMs === null || !authorization
++    || policy.partnerContactId === null
++  ) {
++    throw new Error('partner affect observation guard reached an inconsistent accept state');
++  }
++
++  const direction = policy.directions[`${signalFamily}.${metricName}`] ?? 'unknown';
++  const missingness = explicitMissingness ?? roundUnit(1 - coverage);
++
++  const observation: PartnerAffectObservation = {
++    schemaVersion: PARTNER_AFFECT_SCHEMA_VERSION,
++    observationKey,
++    observationId,
++    sourceId,
++    partnerContactId: policy.partnerContactId,
++    signalFamily,
++    metricName,
++    value,
++    unit,
++    windowStartMs: Math.floor(windowStartMs),
++    windowEndMs: Math.floor(windowEndMs),
++    observedAtMs: Math.floor(observedAtMs),
++    coverage: roundUnit(coverage),
++    confidence: roundUnit(confidence),
++    missingness: roundUnit(missingness),
++    direction,
++    sensitivity: authorization.sensitivity,
++    consentRef: authorization.consentRef,
++    assertion: derivePartnerAffectAssertionBasis(provenance),
++    provenance,
++    processingRevision,
++    receivedAtMs,
++  };
++  return { status: 'accepted', observation };
++}
++
++function roundUnit(value: number, precision = 4): number {
++  const factor = 10 ** precision;
++  const rounded = Math.round(value * factor) / factor;
++  const clamped = Math.min(1, Math.max(0, rounded));
++  return Object.is(clamped, -0) ? 0 : clamped;
++}
+diff --git a/src/core/emotion/partner-affect/shadow-estimate.test.ts b/src/core/emotion/partner-affect/shadow-estimate.test.ts
+new file mode 100644
+index 000000000..9dfed45d8
+--- /dev/null
++++ b/src/core/emotion/partner-affect/shadow-estimate.test.ts
+@@ -0,0 +1,222 @@
++import { describe, expect, it } from 'vitest';
++import { computePartnerAffectShadowEstimate } from './shadow-estimate.js';
++import type {
++  PartnerAffectObservation,
++  PartnerAffectShadowPolicy,
++} from '../../../shared/contracts/partner-affect.js';
++
++const NOW_MS = 1_800_000_000_000;
++const PARTNER_ID = 'contact-partner-1';
++
++function policy(overrides: Partial<PartnerAffectShadowPolicy> = {}): PartnerAffectShadowPolicy {
++  return {
++    enabled: true,
++    partnerContactId: PARTNER_ID,
++    staleAfterMs: 24 * 60 * 60_000,
++    evidenceWindowMs: 72 * 60 * 60_000,
++    minConfidence: 0.35,
++    minIndependentFamilies: 2,
++    conflictValueTolerance: 0.25,
++    allowedSignalFamilies: ['self_report', 'conversation', 'sleep', 'activity'],
++    directions: {},
++    sources: [],
++    maxRetainedObservations: 500,
++    policyRevision: 'shadow-test-v1',
++    ...overrides,
++  };
++}
++
++function observation(
++  overrides: Partial<PartnerAffectObservation> = {},
++): PartnerAffectObservation {
++  const observedAtMs = overrides.observedAtMs ?? NOW_MS - 60 * 60_000;
++  return {
++    schemaVersion: 1,
++    observationKey: `src-a:${String(Math.random())}`,
++    observationId: 'obs',
++    sourceId: 'src-a',
++    partnerContactId: PARTNER_ID,
++    signalFamily: 'sleep',
++    metricName: 'total_sleep_hours',
++    value: 7,
++    unit: 'hours',
++    windowStartMs: observedAtMs - 8 * 60 * 60_000,
++    windowEndMs: observedAtMs,
++    observedAtMs,
++    coverage: 0.9,
++    confidence: 0.8,
++    missingness: 0.1,
++    direction: 'unknown',
++    sensitivity: 'relational_sensitive',
++    consentRef: 'consent-x',
++    assertion: 'sensor_summary',
++    provenance: [{ source: 'runtime_state' }],
++    processingRevision: 'v1',
++    receivedAtMs: observedAtMs,
++    ...overrides,
++  };
++}
++
++describe('computePartnerAffectShadowEstimate', () => {
++  it('yields unknown with no_fresh_evidence when nothing has been observed', () => {
++    const estimate = computePartnerAffectShadowEstimate({
++      observations: [],
++      policy: policy(),
++      nowMs: NOW_MS,
++    });
++    expect(estimate.status).toBe('unknown');
++    expect(estimate.reasons).toContain('no_fresh_evidence');
++    // Every allowed family stays explicit as missing rather than disappearing.
++    expect(estimate.families).toHaveLength(4);
++    expect(estimate.families.every(family => family.freshness === 'missing')).toBe(true);
++    expect(estimate.families.every(family => family.missingness === 1)).toBe(true);
++    expect(estimate.derivation).toBe('deterministic_shadow_v1');
++    expect(estimate.policyRevision).toBe('shadow-test-v1');
++  });
++
++  it('yields unknown under the independence quorum with one fresh family', () => {
++    const estimate = computePartnerAffectShadowEstimate({
++      observations: [observation()],
++      policy: policy(),
++      nowMs: NOW_MS,
++    });
++    expect(estimate.status).toBe('unknown');
++    expect(estimate.reasons).toContain('insufficient_family_quorum');
++    const sleep = estimate.families.find(family => family.family === 'sleep');
++    expect(sleep?.freshness).toBe('fresh');
++    expect(sleep?.freshObservationCount).toBe(1);
++  });
++
++  it('yields ordinary only with a fresh multi-family quorum of confident evidence', () => {
++    const estimate = computePartnerAffectShadowEstimate({
++      observations: [
++        observation({ observationKey: 'a:1' }),
++        observation({
++          observationKey: 'b:1',
++          signalFamily: 'conversation',
++          metricName: 'daily_turns',
++          sourceId: 'src-b',
++          unit: 'count',
++          value: 14,
++        }),
++      ],
++      policy: policy(),
++      nowMs: NOW_MS,
++    });
++    expect(estimate.status).toBe('ordinary');
++    expect(estimate.reasons).toEqual(['quorum_met']);
++  });
++
++  it('degrades stale evidence to unknown instead of treating absence as recovery', () => {
++    const staleMs = NOW_MS - 100 * 60 * 60_000;
++    const estimate = computePartnerAffectShadowEstimate({
++      observations: [
++        observation({ observationKey: 'a:1', observedAtMs: staleMs }),
++        observation({
++          observationKey: 'b:1',
++          signalFamily: 'conversation',
++          sourceId: 'src-b',
++          observedAtMs: staleMs,
++        }),
++      ],
++      policy: policy(),
++      nowMs: NOW_MS,
++    });
++    expect(estimate.status).toBe('unknown');
++    expect(estimate.reasons).toContain('no_fresh_evidence');
++    const sleep = estimate.families.find(family => family.family === 'sleep');
++    expect(sleep?.freshness).toBe('stale');
++    expect(sleep?.latestObservedAtMs).toBe(staleMs);
++  });
++
++  it('records cross-source conflicts explicitly and blocks ordinary', () => {
++    const estimate = computePartnerAffectShadowEstimate({
++      observations: [
++        observation({ observationKey: 'a:1', sourceId: 'src-a', value: 8 }),
++        observation({ observationKey: 'b:1', sourceId: 'src-b', value: 3 }),
++        observation({
++          observationKey: 'c:1',
++          signalFamily: 'conversation',
++          sourceId: 'src-c',
++        }),
++      ],
++      policy: policy(),
++      nowMs: NOW_MS,
++    });
++    expect(estimate.status).toBe('unknown');
++    expect(estimate.reasons).toContain('conflicting_evidence');
++    const sleep = estimate.families.find(family => family.family === 'sleep');
++    expect(sleep?.conflict).toBe(true);
++    expect(sleep?.contributingSourceIds).toEqual(['src-a', 'src-b']);
++  });
++
++  it('does not flag agreeing sources or same-source repeats as conflicts', () => {
++    const estimate = computePartnerAffectShadowEstimate({
++      observations: [
++        observation({ observationKey: 'a:1', sourceId: 'src-a', value: 7.0 }),
++        observation({ observationKey: 'a:2', sourceId: 'src-a', value: 3.0 }),
++        observation({ observationKey: 'b:1', sourceId: 'src-b', value: 7.4 }),
++      ],
++      policy: policy(),
++      nowMs: NOW_MS,
++    });
++    const sleep = estimate.families.find(family => family.family === 'sleep');
++    // src-a disagreeing with itself over time is a trend, not a source
++    // conflict; src-b at 7.4 vs src-a at 7.0 is within tolerance. But src-a's
++    // second reading (3.0) conflicts with src-b (7.4) across sources.
++    expect(sleep?.conflict).toBe(true);
++  });
++
++  it('flags low-confidence fresh evidence and stays unknown', () => {
++    const estimate = computePartnerAffectShadowEstimate({
++      observations: [
++        observation({ observationKey: 'a:1', confidence: 0.2 }),
++        observation({
++          observationKey: 'b:1',
++          signalFamily: 'conversation',
++          sourceId: 'src-b',
++        }),
++      ],
++      policy: policy(),
++      nowMs: NOW_MS,
++    });
++    expect(estimate.status).toBe('unknown');
++    expect(estimate.reasons).toContain('low_confidence_evidence');
++  });
++
++  it('ignores observations bound to a different partner contact', () => {
++    const estimate = computePartnerAffectShadowEstimate({
++      observations: [
++        observation({ observationKey: 'a:1', partnerContactId: 'contact-housemate-2' }),
++      ],
++      policy: policy(),
++      nowMs: NOW_MS,
++    });
++    expect(estimate.reasons).toContain('no_fresh_evidence');
++    expect(estimate.families.every(family => family.freshObservationCount === 0)).toBe(true);
++  });
++
++  it('reports partner_unbound and uses no observations when unbound', () => {
++    const estimate = computePartnerAffectShadowEstimate({
++      observations: [observation()],
++      policy: policy({ partnerContactId: null }),
++      nowMs: NOW_MS,
++    });
++    expect(estimate.status).toBe('unknown');
++    expect(estimate.reasons).toContain('partner_unbound');
++    expect(estimate.partnerContactId).toBeNull();
++  });
++
++  it('surfaces assertion bases per family so inference is never partner-asserted', () => {
++    const estimate = computePartnerAffectShadowEstimate({
++      observations: [
++        observation({ observationKey: 'a:1', assertion: 'model_inferred' }),
++        observation({ observationKey: 'a:2', assertion: 'sensor_summary' }),
++      ],
++      policy: policy(),
++      nowMs: NOW_MS,
++    });
++    const sleep = estimate.families.find(family => family.family === 'sleep');
++    expect(sleep?.assertionBases).toEqual(['model_inferred', 'sensor_summary']);
++  });
++});
+diff --git a/src/core/emotion/partner-affect/shadow-estimate.ts b/src/core/emotion/partner-affect/shadow-estimate.ts
+new file mode 100644
+index 000000000..99ecca228
+--- /dev/null
++++ b/src/core/emotion/partner-affect/shadow-estimate.ts
+@@ -0,0 +1,148 @@
++// Shadow-only Partner Affect Estimate projection (docs/partner-affect.md,
++// slice 1).
++//
++// Deterministic and model-free: the same accepted observations and policy
++// always produce the same estimate and explanation. The projection summarizes
++// evidence health per Signal Family — freshness, coverage, missingness,
++// confidence, cross-source conflict — and answers only `unknown` vs
++// `ordinary`. Insufficient, stale, low-confidence, or conflicting evidence is
++// `unknown`; it is never promoted to an ordinary/healthy claim. There is no
++// posture, score, or directional deviation in this slice, and the output is
++// unreachable as behavioral authority (Garden inspection only).
++
++import {
++  PARTNER_AFFECT_SCHEMA_VERSION,
++  PARTNER_AFFECT_SIGNAL_FAMILIES,
++  type PartnerAffectAssertionBasis,
++  type PartnerAffectEstimateReason,
++  type PartnerAffectFamilyEvidence,
++  type PartnerAffectObservation,
++  type PartnerAffectShadowEstimate,
++  type PartnerAffectShadowPolicy,
++  type PartnerAffectSignalFamily,
++} from '../../../shared/contracts/partner-affect.js';
++
++export interface PartnerAffectShadowEstimateInput {
++  observations: readonly PartnerAffectObservation[];
++  policy: PartnerAffectShadowPolicy;
++  nowMs: number;
++}
++
++/**
++ * Two fresh values for the same family+metric from different sources conflict
++ * when they disagree beyond the configured tolerance, scaled by magnitude so
++ * the same policy value works across units: |a - b| > tol * max(1, |a|, |b|).
++ * Conflicts stay explicit in the family record and block `ordinary`; they are
++ * never averaged away and never declare either source false.
++ */
++function valuesConflict(a: number, b: number, tolerance: number): boolean {
++  return Math.abs(a - b) > tolerance * Math.max(1, Math.abs(a), Math.abs(b));
++}
++
++function familyEvidence(
++  family: PartnerAffectSignalFamily,
++  observations: readonly PartnerAffectObservation[],
++  policy: PartnerAffectShadowPolicy,
++  nowMs: number,
++): PartnerAffectFamilyEvidence {
++  const familyObservations = observations.filter(observation => observation.signalFamily === family);
++  const fresh = familyObservations.filter(
++    observation => nowMs - observation.observedAtMs <= policy.evidenceWindowMs,
++  );
++  const latestObservedAtMs = familyObservations.length > 0
++    ? Math.max(...familyObservations.map(observation => observation.observedAtMs))
++    : null;
++
++  let conflict = false;
++  const byMetric = new Map<string, PartnerAffectObservation[]>();
++  for (const observation of fresh) {
++    const bucket = byMetric.get(observation.metricName) ?? [];
++    bucket.push(observation);
++    byMetric.set(observation.metricName, bucket);
++  }
++  for (const bucket of byMetric.values()) {
++    for (let left = 0; left < bucket.length && !conflict; left += 1) {
++      for (let right = left + 1; right < bucket.length; right += 1) {
++        if (bucket[left].sourceId === bucket[right].sourceId) continue;
++        if (valuesConflict(bucket[left].value, bucket[right].value, policy.conflictValueTolerance)) {
++          conflict = true;
++          break;
++        }
++      }
++    }
++  }
++
++  const assertionBases = [...new Set(fresh.map(observation => observation.assertion))]
++    .sort() as PartnerAffectAssertionBasis[];
++  return {
++    family,
++    freshObservationCount: fresh.length,
++    latestObservedAtMs,
++    freshness: fresh.length > 0 ? 'fresh' : familyObservations.length > 0 ? 'stale' : 'missing',
++    confidence: fresh.length > 0 ? Math.max(...fresh.map(observation => observation.confidence)) : 0,
++    coverage: fresh.length > 0 ? Math.max(...fresh.map(observation => observation.coverage)) : 0,
++    missingness: fresh.length > 0 ? Math.min(...fresh.map(observation => observation.missingness)) : 1,
++    conflict,
++    contributingSourceIds: [...new Set(fresh.map(observation => observation.sourceId))].sort(),
++    assertionBases,
++  };
++}
++
++/**
++ * Compute the slice-1 shadow estimate from accepted observations. The family
++ * list always covers every policy-allowed Signal Family so missing evidence
++ * stays explicit rather than disappearing from the explanation.
++ */
++export function computePartnerAffectShadowEstimate(
++  input: PartnerAffectShadowEstimateInput,
++): PartnerAffectShadowEstimate {
++  const { policy } = input;
++  const nowMs = Math.floor(input.nowMs);
++  if (!Number.isFinite(nowMs) || nowMs < 0) {
++    throw new Error('computePartnerAffectShadowEstimate requires a finite non-negative nowMs');
++  }
++
++  // Defensive partner scoping: only observations bound to the configured
++  // canonical partner may contribute, even if the store handed back more.
++  const observations = policy.partnerContactId === null
++    ? []
++    : input.observations.filter(observation => observation.partnerContactId === policy.partnerContactId);
++
++  const families = PARTNER_AFFECT_SIGNAL_FAMILIES
++    .filter(family => policy.allowedSignalFamilies.includes(family))
++    .map(family => familyEvidence(family, observations, policy, nowMs));
++
++  const reasons: PartnerAffectEstimateReason[] = [];
++  if (policy.partnerContactId === null) {
++    reasons.push('partner_unbound');
++  }
++  const freshFamilies = families.filter(family => family.freshness === 'fresh');
++  if (freshFamilies.length === 0) {
++    reasons.push('no_fresh_evidence');
++  } else if (freshFamilies.length < policy.minIndependentFamilies) {
++    reasons.push('insufficient_family_quorum');
++  }
++  if (freshFamilies.some(family => family.conflict)) {
++    reasons.push('conflicting_evidence');
++  }
++  if (freshFamilies.length > 0 && freshFamilies.some(family => family.confidence < policy.minConfidence)) {
++    reasons.push('low_confidence_evidence');
++  }
++
++  const status = reasons.length === 0 ? 'ordinary' : 'unknown';
++  if (status === 'ordinary') {
++    reasons.push('quorum_met');
++  }
++
++  return {
++    schemaVersion: PARTNER_AFFECT_SCHEMA_VERSION,
++    partnerContactId: policy.partnerContactId,
++    computedAtMs: nowMs,
++    evidenceWindowMs: policy.evidenceWindowMs,
++    status,
++    reasons,
++    families,
++    derivation: 'deterministic_shadow_v1',
++    policyRevision: policy.policyRevision,
++  };
++}
+diff --git a/src/core/emotion/partner-affect/shadow-ingest-bridge.test.ts b/src/core/emotion/partner-affect/shadow-ingest-bridge.test.ts
+new file mode 100644
+index 000000000..5a479e3c3
+--- /dev/null
++++ b/src/core/emotion/partner-affect/shadow-ingest-bridge.test.ts
+@@ -0,0 +1,229 @@
++import { describe, expect, it, vi } from 'vitest';
++import { EventBus, type ExternalTelemetryEvent } from '../../../shared/event-bus.js';
++import { createPartnerAffectShadowIngestBridge } from './shadow-ingest-bridge.js';
++import type {
++  PartnerAffectObservation,
++  PartnerAffectShadowPolicy,
++  PartnerAffectShadowTelemetryEvent,
++  PartnerAffectSuppressedObservation,
++} from '../../../shared/contracts/partner-affect.js';
++import type {
++  PartnerAffectShadowStorePort,
++} from './shadow-store-port.js';
++
++const NOW_MS = Date.parse('2026-07-08T12:00:05.000Z');
++const PARTNER_ID = 'contact-partner-1';
++
++function testPolicy(overrides: Partial<PartnerAffectShadowPolicy> = {}): PartnerAffectShadowPolicy {
++  return {
++    enabled: true,
++    partnerContactId: PARTNER_ID,
++    staleAfterMs: 24 * 60 * 60_000,
++    evidenceWindowMs: 72 * 60 * 60_000,
++    minConfidence: 0.35,
++    minIndependentFamilies: 2,
++    conflictValueTolerance: 0.25,
++    allowedSignalFamilies: ['self_report', 'conversation', 'sleep', 'activity'],
++    directions: {},
++    sources: [{
++      sourceId: 'edge-sleep-1',
++      families: ['sleep'],
++      consentRef: 'consent-sleep-2026-01',
++      sensitivity: 'relational_sensitive',
++      revoked: false,
++    }],
++    maxRetainedObservations: 500,
++    policyRevision: 'shadow-test-v1',
++    ...overrides,
++  };
++}
++
++class FakeShadowStore implements PartnerAffectShadowStorePort {
++  readonly accepted: PartnerAffectObservation[] = [];
++  readonly suppressed: PartnerAffectSuppressedObservation[] = [];
++  pruneCalls: number[] = [];
++  failNextRecord = false;
++
++  async recordAccepted(observation: PartnerAffectObservation) {
++    if (this.failNextRecord) {
++      this.failNextRecord = false;
++      throw new Error('injected store failure');
++    }
++    if (this.accepted.some(existing => existing.observationKey === observation.observationKey)) {
++      return { inserted: false };
++    }
++    this.accepted.push(observation);
++    return { inserted: true };
++  }
++
++  async recordSuppressed(suppressed: PartnerAffectSuppressedObservation) {
++    this.suppressed.push(suppressed);
++  }
++
++  async listAccepted() {
++    return [...this.accepted];
++  }
++
++  async listSuppressed() {
++    return [...this.suppressed];
++  }
++
++  async pruneToRetentionCap(maxRetained: number) {
++    this.pruneCalls.push(maxRetained);
++    return 0;
++  }
++
++  async close() {
++    // no-op
++  }
++}
++
++function observationEvent(
++  payloadOverrides: Record<string, unknown> = {},
++  eventOverrides: Partial<ExternalTelemetryEvent> = {},
++): ExternalTelemetryEvent {
++  return {
++    id: 'event-1',
++    source: 'edge-sleep-1',
++    eventType: 'external.telemetry.partner_affect.observation',
++    payload: {
++      observationId: 'obs-001',
++      sourceId: 'edge-sleep-1',
++      partnerContactId: PARTNER_ID,
++      signalFamily: 'sleep',
++      metricName: 'total_sleep_hours',
++      value: 7.4,
++      unit: 'hours',
++      windowStartMs: NOW_MS - 10 * 60 * 60_000,
++      windowEndMs: NOW_MS - 60_000,
++      coverage: 0.9,
++      confidence: 0.8,
++      provenance: [{ source: 'runtime_state', observedAtMs: NOW_MS - 60_000 }],
++      processingRevision: 'adapter-v3',
++      ...payloadOverrides,
++    },
++    occurredAt: '2026-07-08T12:00:00.000Z',
++    receivedAt: '2026-07-08T12:00:01.000Z',
++    nonce: 'nonce-12345678',
++    auth: {
++      principalId: 'api-key-fixture-shared',
++      principalMode: 'api_key',
++      satelliteScoped: false,
++    },
++    ...eventOverrides,
++  };
++}
++
++function createHarness(policy = testPolicy()) {
++  const eventBus = new EventBus();
++  const store = new FakeShadowStore();
++  const counters: PartnerAffectShadowTelemetryEvent[] = [];
++  eventBus.on('emotion.partner_affect.shadow.telemetry', (event) => {
++    counters.push(event);
++  });
++  const bridge = createPartnerAffectShadowIngestBridge({
++    eventBus,
++    policy,
++    store,
++    now: () => NOW_MS,
++  });
++  return { eventBus, store, counters, bridge };
++}
++
++describe('createPartnerAffectShadowIngestBridge', () => {
++  it('records an accepted observation from the real ingest spine and emits an accepted counter', async () => {
++    const { eventBus, store, counters, bridge } = createHarness();
++    expect(bridge.active).toBe(true);
++
++    await eventBus.emit('external.telemetry.ingested', { event: observationEvent() });
++
++    expect(store.accepted).toHaveLength(1);
++    expect(store.accepted[0].observationKey).toBe('edge-sleep-1:obs-001');
++    expect(store.accepted[0].partnerContactId).toBe(PARTNER_ID);
++    expect(store.pruneCalls).toEqual([500]);
++    expect(counters).toHaveLength(1);
++    expect(counters[0].counter).toBe('accepted');
++  });
++
++  it('ignores telemetry of other event types entirely', async () => {
++    const { eventBus, store, counters } = createHarness();
++    await eventBus.emit('external.telemetry.ingested', {
++      event: observationEvent({}, { eventType: 'external.telemetry.status' }),
++    });
++    expect(store.accepted).toHaveLength(0);
++    expect(store.suppressed).toHaveLength(0);
++    expect(counters).toHaveLength(0);
++  });
++
++  it('records suppression with reasons when the guard rejects the payload', async () => {
++    const { eventBus, store, counters } = createHarness();
++    await eventBus.emit('external.telemetry.ingested', {
++      event: observationEvent({ partnerContactId: 'contact-housemate-2' }),
++    });
++    expect(store.accepted).toHaveLength(0);
++    expect(store.suppressed).toHaveLength(1);
++    expect(store.suppressed[0].reasons).toContain('wrong_partner');
++    expect(counters[0].counter).toBe('suppressed');
++    expect(counters[0].reasons).toContain('wrong_partner');
++  });
++
++  it('fails closed on telemetry without an authenticated ingress origin', async () => {
++    const { eventBus, store, counters } = createHarness();
++    const event = observationEvent();
++    delete event.auth;
++    await eventBus.emit('external.telemetry.ingested', { event });
++    expect(store.accepted).toHaveLength(0);
++    expect(store.suppressed).toHaveLength(1);
++    expect(store.suppressed[0].reasons).toEqual(['missing_authenticated_origin']);
++    expect(counters[0].counter).toBe('suppressed');
++  });
++
++  it('reports replayed observation keys as duplicates without double-recording', async () => {
++    const { eventBus, store, counters } = createHarness();
++    await eventBus.emit('external.telemetry.ingested', { event: observationEvent() });
++    await eventBus.emit('external.telemetry.ingested', {
++      event: observationEvent({}, { id: 'event-2' }),
++    });
++    expect(store.accepted).toHaveLength(1);
++    expect(counters.map(entry => entry.counter)).toEqual(['accepted', 'duplicate']);
++  });
++
++  it('emits a store_error counter when persistence fails instead of swallowing it silently', async () => {
++    const { store, counters } = createHarness();
++    const warn = vi.fn();
++    // Re-create with a logger spy to assert the failure is surfaced.
++    const eventBus2 = new EventBus();
++    const counters2: PartnerAffectShadowTelemetryEvent[] = [];
++    eventBus2.on('emotion.partner_affect.shadow.telemetry', event => void counters2.push(event));
++    createPartnerAffectShadowIngestBridge({
++      eventBus: eventBus2,
++      policy: testPolicy(),
++      store,
++      logger: { warn },
++      now: () => NOW_MS,
++    });
++    store.failNextRecord = true;
++    await eventBus2.emit('external.telemetry.ingested', { event: observationEvent() });
++    expect(warn).toHaveBeenCalled();
++    expect(counters2[0].counter).toBe('store_error');
++    expect(counters).toHaveLength(0);
++  });
++
++  it('is fully inert when the shadow policy is disabled', async () => {
++    const { eventBus, store, counters, bridge } = createHarness(
++      testPolicy({ enabled: false, partnerContactId: null }),
++    );
++    expect(bridge.active).toBe(false);
++    await eventBus.emit('external.telemetry.ingested', { event: observationEvent() });
++    expect(store.accepted).toHaveLength(0);
++    expect(store.suppressed).toHaveLength(0);
++    expect(counters).toHaveLength(0);
++  });
++
++  it('stops observing after unsubscribe', async () => {
++    const { eventBus, store, bridge } = createHarness();
++    bridge.unsubscribe();
++    await eventBus.emit('external.telemetry.ingested', { event: observationEvent() });
++    expect(store.accepted).toHaveLength(0);
++  });
++});
+diff --git a/src/core/emotion/partner-affect/shadow-ingest-bridge.ts b/src/core/emotion/partner-affect/shadow-ingest-bridge.ts
+new file mode 100644
+index 000000000..d0ad4aa11
+--- /dev/null
++++ b/src/core/emotion/partner-affect/shadow-ingest-bridge.ts
+@@ -0,0 +1,200 @@
++// Partner Affect shadow ingest bridge (docs/partner-affect.md, slice 1).
++//
++// Shadow-only observer on the external telemetry spine. It subscribes to
++// `external.telemetry.ingested`, screens partner-affect observation
++// candidates through the fail-closed observation guard, and records the
++// accepted/suppressed outcome in the shadow store for Garden inspection.
++//
++// Deliberately inert everywhere else: the bridge never touches prompts,
++// emotion appraisal, memory candidacy, scheduling, notifications, or world
++// actions, and emits only structural telemetry counters. Mirrors the
++// SensorCognitionBridge subscription/lifecycle pattern.
++
++import type {
++  EventBus,
++  ExternalTelemetryEvent,
++} from '../../../shared/event-bus.js';
++import {
++  PARTNER_AFFECT_OBSERVATION_EVENT_TYPE,
++  PARTNER_AFFECT_SCHEMA_VERSION,
++  type PartnerAffectObservationDecision,
++  type PartnerAffectShadowPolicy,
++  type PartnerAffectShadowTelemetryCounter,
++} from '../../../shared/contracts/partner-affect.js';
++import { guardPartnerAffectObservation } from './observation-guard.js';
++import type { PartnerAffectShadowStorePort } from './shadow-store-port.js';
++import { createComponentLogger } from '../../../shared/logger.js';
++import { toErrorMessage } from '../../../shared/utils/errors.js';
++
++const log = createComponentLogger('PartnerAffectShadowBridge');
++
++export interface PartnerAffectShadowIngestBridgeOptions {
++  eventBus: EventBus;
++  policy: PartnerAffectShadowPolicy;
++  store: PartnerAffectShadowStorePort;
++  logger?: Pick<typeof log, 'warn'>;
++  now?: () => number;
++}
++
++export interface PartnerAffectShadowIngestBridge {
++  readonly active: boolean;
++  unsubscribe(): void;
++  handleTelemetryEvent(event: ExternalTelemetryEvent): Promise<void>;
++}
++
++function resolveReceivedAtMs(event: ExternalTelemetryEvent, nowMs: number): number {
++  const parsed = Date.parse(event.receivedAt);
++  return Number.isFinite(parsed) && parsed >= 0 ? parsed : nowMs;
++}
++
++class DefaultPartnerAffectShadowIngestBridge implements PartnerAffectShadowIngestBridge {
++  readonly active = true;
++  private readonly eventBus: EventBus;
++  private readonly policy: PartnerAffectShadowPolicy;
++  private readonly store: PartnerAffectShadowStorePort;
++  private readonly logger: Pick<typeof log, 'warn'>;
++  private readonly now: () => number;
++  private readonly unsubscribeHandler: () => void;
++
++  constructor(options: Required<Omit<PartnerAffectShadowIngestBridgeOptions, 'logger' | 'now'>> & {
++    logger: Pick<typeof log, 'warn'>;
++    now: () => number;
++  }) {
++    this.eventBus = options.eventBus;
++    this.policy = options.policy;
++    this.store = options.store;
++    this.logger = options.logger;
++    this.now = options.now;
++    this.unsubscribeHandler = this.eventBus.on('external.telemetry.ingested', async ({ event }) => {
++      await this.handleTelemetryEvent(event);
++    });
++  }
++
++  unsubscribe(): void {
++    this.unsubscribeHandler();
++  }
++
++  async handleTelemetryEvent(event: ExternalTelemetryEvent): Promise<void> {
++    if (event.eventType !== PARTNER_AFFECT_OBSERVATION_EVENT_TYPE) return;
++    try {
++      await this.handleObservationCandidate(event);
++    } catch (error) {
++      this.logger.warn('Partner affect shadow bridge failed to process observation candidate', {
++        error: toErrorMessage(error),
++        eventId: event.id,
++        source: event.source,
++      });
++      await this.emitTelemetry('store_error', ['subscriber_exception'], event);
++    }
++  }
++
++  private async handleObservationCandidate(event: ExternalTelemetryEvent): Promise<void> {
++    const nowMs = this.now();
++    const receivedAtMs = resolveReceivedAtMs(event, nowMs);
++
++    // Sprint-10 04-M1 posture: telemetry without an authenticated origin
++    // context fails closed before any payload interpretation happens.
++    let decision: PartnerAffectObservationDecision;
++    if (!event.auth) {
++      decision = {
++        status: 'suppressed',
++        suppressed: {
++          schemaVersion: PARTNER_AFFECT_SCHEMA_VERSION,
++          observationKey: null,
++          sourceId: null,
++          signalFamily: null,
++          reasons: ['missing_authenticated_origin'],
++          detail: 'telemetry event lacks an authenticated ingress origin context',
++          receivedAtMs,
++        },
++      };
++    } else {
++      decision = guardPartnerAffectObservation({
++        candidate: { payload: event.payload, receivedAtMs },
++        policy: this.policy,
++        nowMs,
++      });
++    }
++
++    if (decision.status === 'suppressed') {
++      await this.store.recordSuppressed(decision.suppressed);
++      await this.store.pruneToRetentionCap(this.policy.maxRetainedObservations);
++      await this.emitTelemetry('suppressed', decision.suppressed.reasons, event, {
++        sourceId: decision.suppressed.sourceId ?? undefined,
++        signalFamily: decision.suppressed.signalFamily ?? undefined,
++      });
++      return;
++    }
++
++    const { observation } = decision;
++    const result = await this.store.recordAccepted(observation);
++    if (!result.inserted) {
++      await this.emitTelemetry('duplicate', ['duplicate_observation'], event, {
++        sourceId: observation.sourceId,
++        signalFamily: observation.signalFamily,
++      });
++      return;
++    }
++    await this.store.pruneToRetentionCap(this.policy.maxRetainedObservations);
++    await this.emitTelemetry('accepted', [], event, {
++      sourceId: observation.sourceId,
++      signalFamily: observation.signalFamily,
++    });
++  }
++
++  private async emitTelemetry(
++    counter: PartnerAffectShadowTelemetryCounter,
++    reasons: readonly string[],
++    event: ExternalTelemetryEvent,
++    context: { sourceId?: string; signalFamily?: string } = {},
++  ): Promise<void> {
++    try {
++      await this.eventBus.emit('emotion.partner_affect.shadow.telemetry', {
++        counter,
++        reasons: [...reasons],
++        eventId: event.id,
++        ...(context.sourceId ? { sourceId: context.sourceId } : {}),
++        ...(context.signalFamily ? { signalFamily: context.signalFamily } : {}),
++        timestamp: this.now(),
++      });
++    } catch (error) {
++      this.logger.warn('Partner affect shadow bridge telemetry emit failed', {
++        error: toErrorMessage(error),
++        eventId: event.id,
++        counter,
++      });
++    }
++  }
++}
++
++class InactivePartnerAffectShadowIngestBridge implements PartnerAffectShadowIngestBridge {
++  readonly active = false;
++
++  unsubscribe(): void {
++    // No-op: a disabled shadow policy is byte-identical to no bridge at all.
++  }
++
++  async handleTelemetryEvent(): Promise<void> {
++    // No-op: a disabled shadow policy is byte-identical to no bridge at all.
++  }
++}
++
++/**
++ * Create the shadow ingest bridge. Fail-inert: unless the policy is enabled
++ * (which the config contract only allows with an exact canonical partner
++ * binding), no subscription is made and nothing is recorded.
++ */
++export function createPartnerAffectShadowIngestBridge(
++  options: PartnerAffectShadowIngestBridgeOptions,
++): PartnerAffectShadowIngestBridge {
++  if (!options.policy.enabled || options.policy.partnerContactId === null) {
++    return new InactivePartnerAffectShadowIngestBridge();
++  }
++  return new DefaultPartnerAffectShadowIngestBridge({
++    eventBus: options.eventBus,
++    policy: options.policy,
++    store: options.store,
++    logger: options.logger ?? log,
++    now: options.now ?? Date.now,
++  });
++}
+diff --git a/src/core/emotion/partner-affect/shadow-isolation.test.ts b/src/core/emotion/partner-affect/shadow-isolation.test.ts
+new file mode 100644
+index 000000000..2a5299d85
+--- /dev/null
++++ b/src/core/emotion/partner-affect/shadow-isolation.test.ts
+@@ -0,0 +1,139 @@
++// Shadow-only enforcement (docs/partner-affect.md slice 1, psfn-framework-qeid).
++//
++// The Partner Affect observation foundation must be unreachable as behavioral
++// authority: nothing in prompt assembly, session/context recording, emotion
++// appraisal, memory candidacy, intention/scheduling, or world-action code may
++// import the shadow surfaces. This test walks the source tree and fails when
++// a new importer appears outside the reviewed allowlist, so any future wiring
++// into a behavioral path is a deliberate, visible decision.
++
++import { readdirSync, readFileSync } from 'node:fs';
++import { join, relative, sep } from 'node:path';
++import { describe, expect, it } from 'vitest';
++
++const SRC_ROOT = join(process.cwd(), 'src');
++
++/** Import specifiers that identify the partner-affect shadow surfaces. */
++const SHADOW_SPECIFIER_PATTERN = /partner-affect(?:-shadow)?/;
++
++/**
++ * Reviewed importers. Ingest spine, persistence wiring, canonical config,
++ * Garden inspection surface, and the module family itself — nothing else.
++ */
++const ALLOWED_IMPORTERS: ReadonlySet<string> = new Set([
++  // Module family (contracts, guard, estimate, bridge, store port) + tests.
++  'src/core/emotion/partner-affect/observation-guard.ts',
++  'src/core/emotion/partner-affect/observation-guard.test.ts',
++  'src/core/emotion/partner-affect/shadow-estimate.ts',
++  'src/core/emotion/partner-affect/shadow-estimate.test.ts',
++  'src/core/emotion/partner-affect/shadow-ingest-bridge.ts',
++  'src/core/emotion/partner-affect/shadow-ingest-bridge.test.ts',
++  'src/core/emotion/partner-affect/shadow-store-port.ts',
++  // Typed event spine (telemetry counter payload type only).
++  'src/shared/event-bus.ts',
++  // API-channel telemetry allowlist (event-type constant only).
++  'src/channels/api/server.ts',
++  // Postgres persistence + factory wiring.
++  'src/persistence/postgres/partner-affect-shadow-store.ts',
++  'src/persistence/postgres/partner-affect-shadow-store.integration.test.ts',
++  'src/persistence/runtime-factory.ts',
++  'src/persistence/runtime-factory.test.ts',
++  // Canonical JSON-owned settings registration.
++  'src/system/config/partner-affect-shadow-config.ts',
++  'src/system/config/partner-affect-shadow-config.test.ts',
++  'src/system/config/config-store.ts',
++  'src/system/config/settings-contract.ts',
++  'src/system/config/startup-owner-files.ts',
++  // Agent entrypoint wiring (bridge creation + shutdown only).
++  'src/app/agent/main.ts',
++  'src/app/agent/admin-surface.ts',
++  // Garden read-only inspection surface.
++  'src/operator/garden/admin-contract.ts',
++  'src/operator/garden/local-admin-contract.ts',
++  'src/operator/garden/api-routes.ts',
++  'src/operator/garden/routes/partner-affect-shadow-routes.ts',
++  'src/operator/garden/services/partner-affect-shadow-service.ts',
++  'src/operator/garden/services/partner-affect-shadow-service.test.ts',
++]);
++
++/**
++ * Behavioral subsystems that must never consume shadow output. Subset of the
++ * allowlist rule above, asserted separately so the intent survives allowlist
++ * edits.
++ */
++const FORBIDDEN_PREFIXES = [
++  'src/core/session/',
++  'src/core/prompts/',
++  'src/core/identity/',
++  'src/core/intention/',
++  'src/core/scheduler/',
++  'src/core/self-model/',
++  'src/core/agent/',
++  'src/faculties/',
++];
++
++function listSourceFiles(dir: string): string[] {
++  const files: string[] = [];
++  for (const entry of readdirSync(dir, { withFileTypes: true })) {
++    const path = join(dir, entry.name);
++    if (entry.isDirectory()) {
++      files.push(...listSourceFiles(path));
++    } else if (entry.isFile() && entry.name.endsWith('.ts')) {
++      files.push(path);
++    }
++  }
++  return files;
++}
++
++function findShadowImporters(): Map<string, string[]> {
++  const importers = new Map<string, string[]>();
++  const importPattern = /(?:from|import|require\()\s*['"]([^'"]+)['"]/g;
++  for (const file of listSourceFiles(SRC_ROOT)) {
++    const relativePath = relative(process.cwd(), file).split(sep).join('/');
++    // The contracts module defines the surface; it is not an importer of it.
++    if (relativePath === 'src/shared/contracts/partner-affect.ts') continue;
++    if (relativePath === 'src/core/emotion/partner-affect/shadow-isolation.test.ts') continue;
++    const content = readFileSync(file, 'utf8');
++    const matched: string[] = [];
++    for (const match of content.matchAll(importPattern)) {
++      if (SHADOW_SPECIFIER_PATTERN.test(match[1])) {
++        matched.push(match[1]);
++      }
++    }
++    if (matched.length > 0) {
++      importers.set(relativePath, matched);
++    }
++  }
++  return importers;
++}
++
++describe('partner-affect shadow isolation', () => {
++  it('is imported only by the reviewed ingest/persistence/config/Garden allowlist', () => {
++    const importers = findShadowImporters();
++    const unexpected = [...importers.keys()].filter(path => !ALLOWED_IMPORTERS.has(path));
++    expect(
++      unexpected,
++      `Partner-affect shadow surfaces gained importers outside the reviewed allowlist: ${unexpected.join(', ')}. `
++      + 'Shadow output must stay unreachable as behavioral authority (docs/partner-affect.md section 17); '
++      + 'wiring it into a new consumer requires deliberate review of this test.',
++    ).toEqual([]);
++  });
++
++  it('is never imported by prompts, session, memory, appraisal, intention, scheduler, or agent runtime code', () => {
++    const importers = findShadowImporters();
++    const behavioral = [...importers.keys()].filter(
++      path => FORBIDDEN_PREFIXES.some(prefix => path.startsWith(prefix)),
++    );
++    expect(behavioral).toEqual([]);
++  });
++
++  it('keeps the ingest spine wired: the agent entrypoint creates the shadow bridge', () => {
++    // The inverse guarantee: shadow-only must not degrade into dead code. The
++    // production agent entrypoint must instantiate the bridge and the store.
++    const mainSource = readFileSync(join(SRC_ROOT, 'app/agent/main.ts'), 'utf8');
++    expect(mainSource).toContain('createPartnerAffectShadowIngestBridge');
++    expect(mainSource).toContain('loadPartnerAffectShadowConfig');
++    const factorySource = readFileSync(join(SRC_ROOT, 'persistence/runtime-factory.ts'), 'utf8');
++    expect(factorySource).toContain('PostgresPartnerAffectShadowStore.connect');
++  });
++});
+diff --git a/src/core/emotion/partner-affect/shadow-store-port.ts b/src/core/emotion/partner-affect/shadow-store-port.ts
+new file mode 100644
+index 000000000..523842215
+--- /dev/null
++++ b/src/core/emotion/partner-affect/shadow-store-port.ts
+@@ -0,0 +1,58 @@
++// Persistence port for the Partner Affect shadow observation foundation
++// (docs/partner-affect.md, slice 1). Shadow-only: the store is written by the
++// shadow ingest bridge and read exclusively by the Garden inspection surface
++// and tests. It must never be handed to prompt assembly, emotion appraisal,
++// memory candidacy, scheduling, or world-action code.
++
++import type {
++  PartnerAffectObservation,
++  PartnerAffectSuppressedObservation,
++} from '../../../shared/contracts/partner-affect.js';
++
++export interface PartnerAffectObservationRecordResult {
++  /** False when the (sourceId, observationId) key already existed. */
++  inserted: boolean;
++}
++
++export interface PartnerAffectObservationListOptions {
++  partnerContactId: string;
++  /** Only observations with observedAtMs >= sinceMs. */
++  sinceMs?: number;
++  limit?: number;
++}
++
++export interface PartnerAffectSuppressionListOptions {
++  limit?: number;
++}
++
++export interface PartnerAffectShadowStorePort {
++  /**
++   * Idempotent insert keyed on (sourceId, observationId). A replayed key is
++   * reported (`inserted: false`), never an error — duplicate telemetry is an
++   * expected condition, and the first accepted record stays authoritative.
++   */
++  recordAccepted(
++    observation: PartnerAffectObservation,
++  ): Promise<PartnerAffectObservationRecordResult>;
++
++  /** Append a structural suppression audit record (no rejected content). */
++  recordSuppressed(suppressed: PartnerAffectSuppressedObservation): Promise<void>;
++
++  /** Newest-first accepted observations for exactly one partner contact. */
++  listAccepted(
++    options: PartnerAffectObservationListOptions,
++  ): Promise<PartnerAffectObservation[]>;
++
++  /** Newest-first suppression audit records. */
++  listSuppressed(
++    options?: PartnerAffectSuppressionListOptions,
++  ): Promise<PartnerAffectSuppressedObservation[]>;
++
++  /**
++   * Bounded shadow retention: keep at most `maxRetained` rows per table,
++   * pruning oldest first. Returns the number of rows removed.
++   */
++  pruneToRetentionCap(maxRetained: number): Promise<number>;
++
++  close(): Promise<void>;
++}
+diff --git a/src/core/emotion/telemetry-validation.ts b/src/core/emotion/telemetry-validation.ts
+index 0252fa881..58f4dae7d 100644
+--- a/src/core/emotion/telemetry-validation.ts
++++ b/src/core/emotion/telemetry-validation.ts
+@@ -293,6 +293,18 @@ function inferSourceFromProvenance(
+   return normalizeSource(provenance[0].source);
+ }
+ 
++/**
++ * Shared provenance normalizer. Exported so sibling telemetry guards (e.g. the
++ * partner-affect shadow observation guard) reuse the exact same provenance
++ * primitives instead of growing parallel validation code.
++ */
++export function normalizeEmotionTelemetryProvenance(
++  value: unknown,
++  fieldName: string,
++): EmotionTelemetryProvenance[] {
++  return normalizeProvenance(value, fieldName);
++}
++
+ function normalizeProvenance(
+   value: unknown,
+   fieldName: string,
+diff --git a/src/operator/garden/admin-contract.ts b/src/operator/garden/admin-contract.ts
+index 2129592f2..7a8ae7755 100644
+--- a/src/operator/garden/admin-contract.ts
++++ b/src/operator/garden/admin-contract.ts
+@@ -54,6 +54,7 @@ import type { AdminPlacesService } from './services/places-service.js';
+ import type { AdminEnrollmentService } from './services/enrollment-service.js';
+ import type { AdminGraphProposalsService } from './services/graph-proposals-service.js';
+ import type { AdminSubsystemHealthService } from './services/subsystem-health-service.js';
++import type { AdminPartnerAffectShadowService } from './services/partner-affect-shadow-service.js';
+ import type { AdminToolConformanceService } from './services/tool-conformance-service.js';
+ import type { AdminSharedWorkspaceService } from './services/shared-workspace-service.js';
+ import type { AdminPrivacyBreakGlassService } from './services/privacy-break-glass-service.js';
+@@ -210,6 +211,8 @@ export interface GardenAdminDomainServices {
+   graphProposals?: AdminGraphProposalsService | null;
+   concerns?: AdminConcernService | null;
+   subsystemHealth?: AdminSubsystemHealthService | null;
++  /** Shadow-only Partner Affect inspection surface (docs/partner-affect.md slice 1). */
++  partnerAffectShadow?: AdminPartnerAffectShadowService | null;
+   toolConformance?: AdminToolConformanceService | null;
+   icpAutonomy?: AdminIcpAutonomyService | null;
+   settings: AdminSettingsService;
+diff --git a/src/operator/garden/api-routes.ts b/src/operator/garden/api-routes.ts
+index 3403b4e0c..d93688a79 100644
+--- a/src/operator/garden/api-routes.ts
++++ b/src/operator/garden/api-routes.ts
+@@ -29,6 +29,8 @@ import { buildAdminOverviewRoutes } from './routes/overview-routes.js';
+ import { buildAdminPromptRoutes } from './routes/prompt-routes.js';
+ import { buildAdminSchedulerRoutes } from './routes/scheduler-routes.js';
+ import { buildAdminSubsystemHealthRoutes } from './routes/subsystem-health-routes.js';
++import { buildAdminPartnerAffectShadowRoutes } from './routes/partner-affect-shadow-routes.js';
++import type { AdminPartnerAffectShadowService } from './services/partner-affect-shadow-service.js';
+ import { buildAdminToolConformanceRoutes } from './routes/tool-conformance-routes.js';
+ import { buildAdminIcpAutonomyRoutes } from './routes/icp-autonomy-routes.js';
+ import { buildAdminSessionRoutes } from './routes/session-routes.js';
+@@ -287,6 +289,7 @@ export function buildAdminApiRoutes(options: {
+   graphProposalsService?: AdminGraphProposalsService | null;
+   concernService?: AdminConcernService | null;
+   subsystemHealthService?: AdminSubsystemHealthService | null;
++  partnerAffectShadowService?: AdminPartnerAffectShadowService | null;
+   toolConformanceService?: AdminToolConformanceService | null;
+   icpAutonomyService?: AdminIcpAutonomyService | null;
+   settingsService: AdminSettingsService;
+@@ -344,6 +347,7 @@ export function buildAdminApiRoutes(options: {
+     graphProposalsService,
+     concernService,
+     subsystemHealthService,
++    partnerAffectShadowService,
+     toolConformanceService,
+     icpAutonomyService,
+     settingsService,
+@@ -894,6 +898,7 @@ export function buildAdminApiRoutes(options: {
+     ...buildAdminPromptRoutes({ promptsService, withBody }),
+     ...buildAdminSchedulerRoutes({ scheduler, withBody }),
+     ...buildAdminSubsystemHealthRoutes({ subsystemHealth: subsystemHealthService }),
++    ...buildAdminPartnerAffectShadowRoutes({ partnerAffectShadow: partnerAffectShadowService }),
+     ...buildAdminToolConformanceRoutes({ toolConformance: toolConformanceService, withBody }),
+     ...(icpAutonomyService
+       ? buildAdminIcpAutonomyRoutes({
+diff --git a/src/operator/garden/local-admin-contract.ts b/src/operator/garden/local-admin-contract.ts
+index b1973a5bb..a1a2df55f 100644
+--- a/src/operator/garden/local-admin-contract.ts
++++ b/src/operator/garden/local-admin-contract.ts
+@@ -64,6 +64,8 @@ import type { ChannelGroupMemoryConfig } from '../../system/config/group-memory-
+ import { createPostgresModelUsageStoreFromConfig } from '../../persistence/postgres/model-usage-store.js';
+ import { createPostgresObserverEvalSidecarStore } from '../../core/eval/observer-sidecar/persistence.js';
+ import { createOwnerFileConfigStore } from '../../system/config/config-store.js';
++import { AdminPartnerAffectShadowDataService } from './services/partner-affect-shadow-service.js';
++import type { PartnerAffectShadowStorePort } from '../../core/emotion/partner-affect/shadow-store-port.js';
+ import {
+   createDefaultObserverEvalSidecarSettings,
+   sanitizeCoreSubstrateConfig,
+@@ -195,6 +197,8 @@ export interface InProcessGardenAdminContractOptions {
+   effectiveSchedulerConfig?: import('../../system/config/scheduler-config.js').SchedulerRuntimeConfig;
+   icpInitiationCandidateStore?: IcpInitiationCandidateStorePort | null;
+   icpAdminProjectionStore?: IcpAdminProjectionStore | null;
++  /** Shadow-only Partner Affect observation store (docs/partner-affect.md slice 1). */
++  partnerAffectShadowStore?: PartnerAffectShadowStorePort | null;
+   icpRuntimeEnablement?: IcpAutonomyRuntimeEnablement | null;
+   /** Existing gateway-backed Beads create primitive used for explicit wish conversion. */
+   wishlistBeadCreator?: AdminWishlistBeadCreatePort;
+@@ -314,6 +318,12 @@ export function createInProcessGardenAdminContract(
+     eventBus: options.eventBus,
+     scheduler: schedulerService,
+   });
++  const partnerAffectShadow = options.partnerAffectShadowStore
++    ? new AdminPartnerAffectShadowDataService({
++      store: options.partnerAffectShadowStore,
++      loadPolicy: () => configStore.loadPartnerAffectShadow(),
++    })
++    : null;
+   const toolConformance = options.toolConformanceRunner
+     ? createAdminToolConformanceService(options.toolConformanceRunner)
+     : null;
+@@ -593,6 +603,7 @@ export function createInProcessGardenAdminContract(
+     }),
+     scheduler: schedulerService,
+     subsystemHealth,
++    partnerAffectShadow,
+     toolConformance,
+     icpAutonomy,
+     skills: options.skillsRuntime
+diff --git a/src/operator/garden/routes/partner-affect-shadow-routes.ts b/src/operator/garden/routes/partner-affect-shadow-routes.ts
+new file mode 100644
+index 000000000..5f3ed14d8
+--- /dev/null
++++ b/src/operator/garden/routes/partner-affect-shadow-routes.ts
+@@ -0,0 +1,69 @@
++import { sendJson } from '../../../channels/backplane/http/primitives.js';
++import type { AdminPartnerAffectShadowService } from '../services/partner-affect-shadow-service.js';
++import { exactPath } from '../route-matchers.js';
++import { parseRequestUrl } from '../request-url.js';
++import { ADMIN_DYNAMIC_JSON_HEADERS } from './shared.js';
++import type { AdminApiRoute } from './types.js';
++
++const SHADOW_PATH = '/api/admin/partner-affect/shadow';
++const OBSERVATIONS_PATH = '/api/admin/partner-affect/observations';
++
++/**
++ * Read-only Partner Affect shadow inspection routes (docs/partner-affect.md
++ * slice 1). Surfaces the deterministic shadow estimate
++ * (per-family freshness, coverage, missingness, conflicts) and recent
++ * accepted/suppressed observation records for evaluation. When no service is
++ * wired the routes are honest about the absence rather than fabricating an
++ * empty-but-healthy shadow state.
++ */
++export function buildAdminPartnerAffectShadowRoutes(options: {
++  partnerAffectShadow?: AdminPartnerAffectShadowService | null;
++}): AdminApiRoute[] {
++  const { partnerAffectShadow } = options;
++
++  return [
++    {
++      method: 'GET',
++      match: exactPath(SHADOW_PATH),
++      handle: (_req, res) => {
++        if (!partnerAffectShadow) {
++          sendJson(res, 503, { error: 'Partner affect shadow backend unavailable' });
++          return;
++        }
++        partnerAffectShadow.getShadowSnapshot().then(
++          snapshot => sendJson(res, 200, snapshot, ADMIN_DYNAMIC_JSON_HEADERS),
++          () => sendJson(res, 500, { error: 'Failed to load partner affect shadow snapshot' }),
++        );
++      },
++    },
++    {
++      method: 'GET',
++      match: exactPath(OBSERVATIONS_PATH),
++      handle: (req, res) => {
++        if (!partnerAffectShadow) {
++          sendJson(res, 503, { error: 'Partner affect shadow backend unavailable' });
++          return;
++        }
++        const url = parseRequestUrl(req, OBSERVATIONS_PATH);
++        const rawLimit = url.searchParams.get('limit');
++        let limit: number | undefined;
++        if (rawLimit !== null) {
++          const parsed = Number(rawLimit);
++          if (!Number.isSafeInteger(parsed) || parsed < 1) {
++            sendJson(res, 400, { error: 'limit must be a positive integer' });
++            return;
++          }
++          limit = parsed;
++        }
++        partnerAffectShadow.listObservations(limit).then(
++          page => sendJson(res, 200, page, ADMIN_DYNAMIC_JSON_HEADERS),
++          error => sendJson(res, error instanceof Error && error.message.includes('limit') ? 400 : 500, {
++            error: error instanceof Error
++              ? error.message
++              : 'Failed to load partner affect shadow observations',
++          }),
++        );
++      },
++    },
++  ];
++}
+diff --git a/src/operator/garden/server-routes.ts b/src/operator/garden/server-routes.ts
+index a8c176ca2..da48d9c57 100644
+--- a/src/operator/garden/server-routes.ts
++++ b/src/operator/garden/server-routes.ts
+@@ -205,6 +205,7 @@ export function buildAdminRoutes(deps: AdminRouteDependencies): AdminRoute[] {
+       graphProposalsService: deps.services.graphProposals ?? null,
+       concernService: deps.services.concerns,
+       subsystemHealthService: deps.services.subsystemHealth ?? null,
++      partnerAffectShadowService: deps.services.partnerAffectShadow ?? null,
+       toolConformanceService: deps.services.toolConformance ?? null,
+       settingsService: deps.services.settings,
+       sharedWorkspaceService: deps.services.sharedWorkspace ?? null,
+diff --git a/src/operator/garden/services/partner-affect-shadow-service.test.ts b/src/operator/garden/services/partner-affect-shadow-service.test.ts
+new file mode 100644
+index 000000000..3621f4afd
+--- /dev/null
++++ b/src/operator/garden/services/partner-affect-shadow-service.test.ts
+@@ -0,0 +1,177 @@
++import { describe, expect, it } from 'vitest';
++import { AdminPartnerAffectShadowDataService } from './partner-affect-shadow-service.js';
++import type {
++  PartnerAffectObservation,
++  PartnerAffectShadowPolicy,
++  PartnerAffectSuppressedObservation,
++} from '../../../shared/contracts/partner-affect.js';
++import type {
++  PartnerAffectObservationListOptions,
++  PartnerAffectShadowStorePort,
++  PartnerAffectSuppressionListOptions,
++} from '../../../core/emotion/partner-affect/shadow-store-port.js';
++
++const NOW_MS = 1_800_000_000_000;
++const PARTNER_ID = 'contact-partner-1';
++
++function policy(overrides: Partial<PartnerAffectShadowPolicy> = {}): PartnerAffectShadowPolicy {
++  return {
++    enabled: true,
++    partnerContactId: PARTNER_ID,
++    staleAfterMs: 24 * 60 * 60_000,
++    evidenceWindowMs: 72 * 60 * 60_000,
++    minConfidence: 0.35,
++    minIndependentFamilies: 2,
++    conflictValueTolerance: 0.25,
++    allowedSignalFamilies: ['self_report', 'sleep'],
++    directions: {},
++    sources: [
++      {
++        sourceId: 'edge-sleep-1',
++        families: ['sleep'],
++        consentRef: 'consent-sleep-2026-01',
++        sensitivity: 'relational_sensitive',
++        revoked: false,
++      },
++      {
++        sourceId: 'revoked-1',
++        families: ['sleep'],
++        consentRef: 'consent-old',
++        sensitivity: 'relational_sensitive',
++        revoked: true,
++      },
++    ],
++    maxRetainedObservations: 500,
++    policyRevision: 'shadow-test-v1',
++    ...overrides,
++  };
++}
++
++function observation(overrides: Partial<PartnerAffectObservation> = {}): PartnerAffectObservation {
++  const observedAtMs = overrides.observedAtMs ?? NOW_MS - 60_000;
++  return {
++    schemaVersion: 1,
++    observationKey: 'edge-sleep-1:obs-001',
++    observationId: 'obs-001',
++    sourceId: 'edge-sleep-1',
++    partnerContactId: PARTNER_ID,
++    signalFamily: 'sleep',
++    metricName: 'total_sleep_hours',
++    value: 7.4,
++    unit: 'hours',
++    windowStartMs: observedAtMs - 8 * 60 * 60_000,
++    windowEndMs: observedAtMs,
++    observedAtMs,
++    coverage: 0.9,
++    confidence: 0.8,
++    missingness: 0.1,
++    direction: 'unknown',
++    sensitivity: 'relational_sensitive',
++    consentRef: 'consent-sleep-2026-01',
++    assertion: 'sensor_summary',
++    provenance: [{ source: 'runtime_state' }],
++    processingRevision: 'v1',
++    receivedAtMs: observedAtMs,
++    ...overrides,
++  };
++}
++
++class FakeStore implements PartnerAffectShadowStorePort {
++  listAcceptedCalls: PartnerAffectObservationListOptions[] = [];
++  listSuppressedCalls: PartnerAffectSuppressionListOptions[] = [];
++
++  constructor(
++    private readonly accepted: PartnerAffectObservation[],
++    private readonly suppressed: PartnerAffectSuppressedObservation[] = [],
++  ) {}
++
++  async recordAccepted() {
++    return { inserted: true };
++  }
++
++  async recordSuppressed() {
++    // unused in service tests
++  }
++
++  async listAccepted(options: PartnerAffectObservationListOptions) {
++    this.listAcceptedCalls.push(options);
++    return this.accepted.filter(entry => entry.partnerContactId === options.partnerContactId);
++  }
++
++  async listSuppressed(options: PartnerAffectSuppressionListOptions = {}) {
++    this.listSuppressedCalls.push(options);
++    return [...this.suppressed];
++  }
++
++  async pruneToRetentionCap() {
++    return 0;
++  }
++
++  async close() {
++    // no-op
++  }
++}
++
++describe('AdminPartnerAffectShadowDataService', () => {
++  it('summarizes policy without leaking full source registry details and computes the estimate', async () => {
++    const store = new FakeStore([observation()]);
++    const service = new AdminPartnerAffectShadowDataService({
++      store,
++      loadPolicy: () => policy(),
++      now: () => NOW_MS,
++    });
++
++    const snapshot = await service.getShadowSnapshot();
++    expect(snapshot.policy.partnerContactId).toBe(PARTNER_ID);
++    expect(snapshot.policy.sourceCount).toBe(2);
++    expect(snapshot.policy.revokedSourceCount).toBe(1);
++    expect(snapshot.policy.policyRevision).toBe('shadow-test-v1');
++    // Only one fresh family (sleep) => quorum of 2 unmet => unknown.
++    expect(snapshot.estimate.status).toBe('unknown');
++    expect(snapshot.estimate.reasons).toContain('insufficient_family_quorum');
++    expect(store.listAcceptedCalls[0]).toEqual({
++      partnerContactId: PARTNER_ID,
++      sinceMs: NOW_MS - 72 * 60 * 60_000,
++      limit: 1_000,
++    });
++  });
++
++  it('yields an unknown, partner_unbound estimate without touching the store when unbound', async () => {
++    const store = new FakeStore([observation()]);
++    const service = new AdminPartnerAffectShadowDataService({
++      store,
++      loadPolicy: () => policy({ enabled: false, partnerContactId: null }),
++      now: () => NOW_MS,
++    });
++    const snapshot = await service.getShadowSnapshot();
++    expect(snapshot.estimate.status).toBe('unknown');
++    expect(snapshot.estimate.reasons).toContain('partner_unbound');
++    expect(store.listAcceptedCalls).toHaveLength(0);
++  });
++
++  it('pages accepted and suppressed records with a bounded limit', async () => {
++    const suppressed: PartnerAffectSuppressedObservation = {
++      schemaVersion: 1,
++      observationKey: null,
++      sourceId: null,
++      signalFamily: null,
++      reasons: ['missing_authenticated_origin'],
++      detail: 'telemetry event lacks an authenticated ingress origin context',
++      receivedAtMs: NOW_MS,
++    };
++    const store = new FakeStore([observation()], [suppressed]);
++    const service = new AdminPartnerAffectShadowDataService({
++      store,
++      loadPolicy: () => policy(),
++      now: () => NOW_MS,
++    });
++    const page = await service.listObservations(25);
++    expect(page.accepted).toHaveLength(1);
++    expect(page.suppressed).toHaveLength(1);
++    expect(store.listAcceptedCalls[0]).toEqual({ partnerContactId: PARTNER_ID, limit: 25 });
++    expect(store.listSuppressedCalls[0]).toEqual({ limit: 25 });
++
++    await expect(service.listObservations(0)).rejects.toThrow(/limit/);
++    await expect(service.listObservations(10_000)).rejects.toThrow(/limit/);
++  });
++});
+diff --git a/src/operator/garden/services/partner-affect-shadow-service.ts b/src/operator/garden/services/partner-affect-shadow-service.ts
+new file mode 100644
+index 000000000..7ec700622
+--- /dev/null
++++ b/src/operator/garden/services/partner-affect-shadow-service.ts
+@@ -0,0 +1,124 @@
++// Garden inspection surface for the Partner Affect shadow observation
++// foundation (docs/partner-affect.md slice 1). Read-only: operators can see
++// the current policy, the deterministic shadow estimate with per-family
++// evidence health, and recent accepted/suppressed observation records. The
++// records contain summarized scalars and structural reason codes only — raw
++// sensitive source content is rejected upstream and never stored, so it can
++// never appear here.
++
++import type { PartnerAffectShadowStorePort } from '../../../core/emotion/partner-affect/shadow-store-port.js';
++import { computePartnerAffectShadowEstimate } from '../../../core/emotion/partner-affect/shadow-estimate.js';
++import type {
++  PartnerAffectObservation,
++  PartnerAffectShadowEstimate,
++  PartnerAffectShadowPolicy,
++  PartnerAffectSuppressedObservation,
++} from '../../../shared/contracts/partner-affect.js';
++
++const ESTIMATE_EVIDENCE_FETCH_LIMIT = 1_000;
++const DEFAULT_OBSERVATION_LIST_LIMIT = 100;
++const MAX_OBSERVATION_LIST_LIMIT = 500;
++
++export interface PartnerAffectShadowPolicySummary {
++  enabled: boolean;
++  partnerContactId: string | null;
++  staleAfterMs: number;
++  evidenceWindowMs: number;
++  minConfidence: number;
++  minIndependentFamilies: number;
++  conflictValueTolerance: number;
++  allowedSignalFamilies: string[];
++  sourceCount: number;
++  revokedSourceCount: number;
++  maxRetainedObservations: number;
++  policyRevision: string;
++}
++
++export interface PartnerAffectShadowSnapshot {
++  policy: PartnerAffectShadowPolicySummary;
++  estimate: PartnerAffectShadowEstimate;
++}
++
++export interface PartnerAffectShadowObservationsPage {
++  accepted: PartnerAffectObservation[];
++  suppressed: PartnerAffectSuppressedObservation[];
++}
++
++export interface AdminPartnerAffectShadowService {
++  getShadowSnapshot(): Promise<PartnerAffectShadowSnapshot>;
++  listObservations(limit?: number): Promise<PartnerAffectShadowObservationsPage>;
++}
++
++export interface AdminPartnerAffectShadowDataServiceOptions {
++  store: PartnerAffectShadowStorePort;
++  /** Fresh policy per read so Garden edits are reflected without restart. */
++  loadPolicy: () => PartnerAffectShadowPolicy;
++  now?: () => number;
++}
++
++function summarizePolicy(policy: PartnerAffectShadowPolicy): PartnerAffectShadowPolicySummary {
++  return {
++    enabled: policy.enabled,
++    partnerContactId: policy.partnerContactId,
++    staleAfterMs: policy.staleAfterMs,
++    evidenceWindowMs: policy.evidenceWindowMs,
++    minConfidence: policy.minConfidence,
++    minIndependentFamilies: policy.minIndependentFamilies,
++    conflictValueTolerance: policy.conflictValueTolerance,
++    allowedSignalFamilies: [...policy.allowedSignalFamilies],
++    sourceCount: policy.sources.length,
++    revokedSourceCount: policy.sources.filter(source => source.revoked).length,
++    maxRetainedObservations: policy.maxRetainedObservations,
++    policyRevision: policy.policyRevision,
++  };
++}
++
++export class AdminPartnerAffectShadowDataService implements AdminPartnerAffectShadowService {
++  private readonly store: PartnerAffectShadowStorePort;
++  private readonly loadPolicy: () => PartnerAffectShadowPolicy;
++  private readonly now: () => number;
++
++  constructor(options: AdminPartnerAffectShadowDataServiceOptions) {
++    this.store = options.store;
++    this.loadPolicy = options.loadPolicy;
++    this.now = options.now ?? Date.now;
++  }
++
++  async getShadowSnapshot(): Promise<PartnerAffectShadowSnapshot> {
++    const policy = this.loadPolicy();
++    const nowMs = this.now();
++    const observations = policy.partnerContactId === null
++      ? []
++      : await this.store.listAccepted({
++        partnerContactId: policy.partnerContactId,
++        sinceMs: Math.max(0, nowMs - Math.max(policy.evidenceWindowMs, policy.staleAfterMs)),
++        limit: ESTIMATE_EVIDENCE_FETCH_LIMIT,
++      });
++    return {
++      policy: summarizePolicy(policy),
++      estimate: computePartnerAffectShadowEstimate({ observations, policy, nowMs }),
++    };
++  }
++
++  async listObservations(limit?: number): Promise<PartnerAffectShadowObservationsPage> {
++    const boundedLimit = limit ?? DEFAULT_OBSERVATION_LIST_LIMIT;
++    if (
++      !Number.isSafeInteger(boundedLimit)
++      || boundedLimit < 1
++      || boundedLimit > MAX_OBSERVATION_LIST_LIMIT
++    ) {
++      throw new Error(
++        `partner-affect observation list limit must be an integer in [1, ${String(MAX_OBSERVATION_LIST_LIMIT)}]`,
++      );
++    }
++    const policy = this.loadPolicy();
++    const accepted = policy.partnerContactId === null
++      ? []
++      : await this.store.listAccepted({
++        partnerContactId: policy.partnerContactId,
++        limit: boundedLimit,
++      });
++    const suppressed = await this.store.listSuppressed({ limit: boundedLimit });
++    return { accepted, suppressed };
++  }
++}
+diff --git a/src/operator/garden/services/settings-service.ts b/src/operator/garden/services/settings-service.ts
+index 2d3ac5fe8..ee103ba3a 100644
+--- a/src/operator/garden/services/settings-service.ts
++++ b/src/operator/garden/services/settings-service.ts
+@@ -1115,6 +1115,8 @@ export class AdminSettingsDataService implements AdminSettingsService {
+           return JSON.stringify(this.deps.configStore.loadTrustPolicy(), null, 2);
+         case 'intake-policy':
+           return JSON.stringify(this.deps.configStore.loadIntakePolicy(), null, 2);
++        case 'partner-affect-shadow':
++          return JSON.stringify(this.deps.configStore.loadPartnerAffectShadow(), null, 2);
+         case 'capabilities':
+           return JSON.stringify(this.deps.configStore.loadCapabilityTier(), null, 2);
+         case 'charge-policy':
+@@ -1252,6 +1254,10 @@ export class AdminSettingsDataService implements AdminSettingsService {
+           this.deps.configStore.saveIntakePolicy(parsed);
+           return { ok: true, message: 'intake-policy.json saved' };
+         }
++        case 'partner-affect-shadow': {
++          this.deps.configStore.savePartnerAffectShadow(parsed);
++          return { ok: true, message: 'partner-affect-shadow.json saved' };
++        }
+         default:
+           return { ok: false, message: `Unknown settings subsystem: ${key}` };
+       }
+diff --git a/src/operator/garden/transport-server.ts b/src/operator/garden/transport-server.ts
+index da45575b4..3699fdf41 100644
+--- a/src/operator/garden/transport-server.ts
++++ b/src/operator/garden/transport-server.ts
+@@ -161,6 +161,7 @@ export class GardenAdminTransportServer implements Lifecycle {
+       enrollmentService: config.services.enrollment ?? null,
+       graphProposalsService: config.services.graphProposals ?? null,
+       subsystemHealthService: config.services.subsystemHealth ?? null,
++      partnerAffectShadowService: config.services.partnerAffectShadow ?? null,
+       toolConformanceService: config.services.toolConformance ?? null,
+       icpAutonomyService: config.services.icpAutonomy ?? null,
+       diagnosticsService: config.services.diagnostics,
+diff --git a/src/persistence/backups/system-config-tree.ts b/src/persistence/backups/system-config-tree.ts
+index 588fcc7b4..0ce70a2da 100644
+--- a/src/persistence/backups/system-config-tree.ts
++++ b/src/persistence/backups/system-config-tree.ts
+@@ -32,6 +32,7 @@ export const SYSTEM_CONFIG_OWNER_FILES = [
+   'backup.json',
+   'trust-policy.json',
+   'intake-policy.json',
++  'partner-affect-shadow.json',
+   'fleet-auth.json',
+ ] as const;
+ 
+diff --git a/src/persistence/postgres/migrations.test.ts b/src/persistence/postgres/migrations.test.ts
+index a8bcfab0a..0aba747e3 100644
+--- a/src/persistence/postgres/migrations.test.ts
++++ b/src/persistence/postgres/migrations.test.ts
+@@ -10,6 +10,7 @@ import {
+   POSTGRES_MODEL_USAGE_MIGRATIONS,
+   POSTGRES_SHARED_MIGRATIONS,
+   POSTGRES_SHARED_WIKI_MIGRATIONS,
++  POSTGRES_PARTNER_AFFECT_SHADOW_MIGRATIONS,
+ } from './migrations.js';
+ import { MODEL_USAGE_RUNTIME_LANE_CLASSES } from '../../shared/telemetry/model-usage-attribution.js';
+ import { RUNTIME_LANE_CLASSES } from '../../shared/contracts/runtime-lanes.js';
+@@ -340,3 +341,34 @@ describe('Postgres live schema migrations', () => {
+     }
+   });
+ });
++
++describe('Partner affect shadow migrations (docs/partner-affect.md slice 1)', () => {
++  it('creates the shadow observation table with the (source_id, observation_id) idempotency key', () => {
++    const sql = migrationSql(POSTGRES_PARTNER_AFFECT_SHADOW_MIGRATIONS);
++
++    expect(sql).toContain('CREATE TABLE IF NOT EXISTS partner_affect_shadow_observations');
++    expect(sql).toContain('UNIQUE (source_id, observation_id)');
++    // Provenance is bounded jsonb handles only — never raw source content.
++    expect(sql).toContain("CHECK (jsonb_typeof(provenance_json) = 'array')");
++    expect(sql).toContain('octet_length(provenance_json::text) <= 16384');
++    // Quality fields are range-checked in the schema itself (fail closed).
++    expect(sql).toContain('CHECK (coverage >= 0 AND coverage <= 1)');
++    expect(sql).toContain('CHECK (confidence >= 0 AND confidence <= 1)');
++    expect(sql).toContain('CHECK (missingness >= 0 AND missingness <= 1)');
++    expect(sql).toContain("CHECK (direction IN ('higher_supports_need', 'lower_supports_need', 'unknown'))");
++    expect(sql).toContain("CHECK (assertion IN ('partner_asserted', 'model_inferred', 'sensor_summary'))");
++    expect(sql).toContain('idx_partner_affect_shadow_obs_partner_observed');
++  });
++
++  it('creates the structural suppression audit table without content columns', () => {
++    const sql = migrationSql(POSTGRES_PARTNER_AFFECT_SHADOW_MIGRATIONS);
++
++    expect(sql).toContain('CREATE TABLE IF NOT EXISTS partner_affect_shadow_suppressions');
++    expect(sql).toContain("CHECK (jsonb_typeof(reasons_json) = 'array')");
++    expect(sql).toContain('octet_length(detail) <= 4096');
++    expect(sql).toContain('idx_partner_affect_shadow_suppressions_received');
++    // Structural facts only: the table stores routing identity and reasons,
++    // never a payload/value column that could retain rejected content.
++    expect(sql).not.toContain('payload');
++  });
++});
+diff --git a/src/persistence/postgres/migrations.ts b/src/persistence/postgres/migrations.ts
+index 08e26be1d..4070abacc 100644
+--- a/src/persistence/postgres/migrations.ts
++++ b/src/persistence/postgres/migrations.ts
+@@ -2776,3 +2776,72 @@ export const POSTGRES_SHARED_WIKI_MIGRATIONS: readonly string[] = [
+   ON CONFLICT (version) DO NOTHING;
+   `,
+ ];
++
++// ── Partner Affect shadow observations (docs/partner-affect.md slice 1) ──
++//
++// Shadow-only evidence store: accepted Signal Observations (summarized
++// scalars + provenance handles only — raw sensitive content is rejected at
++// the guard boundary and can never reach these tables) and structural
++// suppression audit records. Idempotency key is (source_id, observation_id).
++export const POSTGRES_PARTNER_AFFECT_SHADOW_MIGRATIONS: readonly string[] = [
++  `
++  CREATE TABLE IF NOT EXISTS partner_affect_shadow_observations (
++    observation_key TEXT PRIMARY KEY,
++    schema_version INTEGER NOT NULL,
++    observation_id TEXT NOT NULL,
++    source_id TEXT NOT NULL,
++    partner_contact_id TEXT NOT NULL,
++    signal_family TEXT NOT NULL,
++    metric_name TEXT NOT NULL,
++    value DOUBLE PRECISION NOT NULL,
++    unit TEXT NOT NULL,
++    window_start_ms BIGINT NOT NULL,
++    window_end_ms BIGINT NOT NULL,
++    observed_at_ms BIGINT NOT NULL,
++    coverage DOUBLE PRECISION NOT NULL,
++    confidence DOUBLE PRECISION NOT NULL,
++    missingness DOUBLE PRECISION NOT NULL,
++    direction TEXT NOT NULL,
++    sensitivity TEXT NOT NULL,
++    consent_ref TEXT NOT NULL,
++    assertion TEXT NOT NULL,
++    provenance_json JSONB NOT NULL,
++    processing_revision TEXT NOT NULL,
++    received_at_ms BIGINT NOT NULL,
++    UNIQUE (source_id, observation_id),
++    CHECK (window_start_ms >= 0 AND window_end_ms >= window_start_ms),
++    CHECK (coverage >= 0 AND coverage <= 1),
++    CHECK (confidence >= 0 AND confidence <= 1),
++    CHECK (missingness >= 0 AND missingness <= 1),
++    CHECK (direction IN ('higher_supports_need', 'lower_supports_need', 'unknown')),
++    CHECK (assertion IN ('partner_asserted', 'model_inferred', 'sensor_summary')),
++    CHECK (jsonb_typeof(provenance_json) = 'array'),
++    CHECK (provenance_json <> '[]'::jsonb),
++    CHECK (octet_length(provenance_json::text) <= 16384)
++  );
++  `,
++  `
++  CREATE INDEX IF NOT EXISTS idx_partner_affect_shadow_obs_partner_observed
++    ON partner_affect_shadow_observations(partner_contact_id, observed_at_ms DESC, observation_key DESC);
++  `,
++  `
++  CREATE TABLE IF NOT EXISTS partner_affect_shadow_suppressions (
++    id TEXT PRIMARY KEY,
++    schema_version INTEGER NOT NULL,
++    observation_key TEXT,
++    source_id TEXT,
++    signal_family TEXT,
++    reasons_json JSONB NOT NULL,
++    detail TEXT NOT NULL,
++    received_at_ms BIGINT NOT NULL,
++    CHECK (jsonb_typeof(reasons_json) = 'array'),
++    CHECK (reasons_json <> '[]'::jsonb),
++    CHECK (octet_length(reasons_json::text) <= 4096),
++    CHECK (octet_length(detail) <= 4096)
++  );
++  `,
++  `
++  CREATE INDEX IF NOT EXISTS idx_partner_affect_shadow_suppressions_received
++    ON partner_affect_shadow_suppressions(received_at_ms DESC, id DESC);
++  `,
++];
+diff --git a/src/persistence/postgres/partner-affect-shadow-store.integration.test.ts b/src/persistence/postgres/partner-affect-shadow-store.integration.test.ts
+new file mode 100644
+index 000000000..4f773d1c5
+--- /dev/null
++++ b/src/persistence/postgres/partner-affect-shadow-store.integration.test.ts
+@@ -0,0 +1,202 @@
++import type { Pool } from 'pg';
++import { afterAll, beforeAll, describe, expect, it } from 'vitest';
++import { createPostgresPool } from '../postgres.js';
++import {
++  DEFAULT_POSTGRES_TEST_IMAGE,
++  startPostgresTestHarness,
++  type PostgresTestHarness,
++} from '../../test-support/postgres-test-harness.js';
++import { PostgresPartnerAffectShadowStore } from './partner-affect-shadow-store.js';
++import type {
++  PartnerAffectObservation,
++  PartnerAffectSuppressedObservation,
++} from '../../shared/contracts/partner-affect.js';
++
++const INTEGRATION_TIMEOUT_MS = 120_000;
++const PARTNER_ID = 'contact-partner-1';
++const NOW_MS = 1_800_000_000_000;
++
++let harness: PostgresTestHarness | null = null;
++
++beforeAll(async () => {
++  harness = await startPostgresTestHarness({ image: DEFAULT_POSTGRES_TEST_IMAGE });
++}, INTEGRATION_TIMEOUT_MS);
++
++afterAll(async () => {
++  if (harness) await harness.stop();
++}, INTEGRATION_TIMEOUT_MS);
++
++function observation(overrides: Partial<PartnerAffectObservation> = {}): PartnerAffectObservation {
++  const observedAtMs = overrides.observedAtMs ?? NOW_MS - 60_000;
++  const observationId = overrides.observationId ?? 'obs-001';
++  const sourceId = overrides.sourceId ?? 'edge-sleep-1';
++  return {
++    schemaVersion: 1,
++    observationKey: `${sourceId}:${observationId}`,
++    observationId,
++    sourceId,
++    partnerContactId: PARTNER_ID,
++    signalFamily: 'sleep',
++    metricName: 'total_sleep_hours',
++    value: 7.4,
++    unit: 'hours',
++    windowStartMs: observedAtMs - 8 * 60 * 60_000,
++    windowEndMs: observedAtMs,
++    observedAtMs,
++    coverage: 0.9,
++    confidence: 0.8,
++    missingness: 0.1,
++    direction: 'lower_supports_need',
++    sensitivity: 'relational_sensitive',
++    consentRef: 'consent-sleep-2026-01',
++    assertion: 'sensor_summary',
++    provenance: [{ source: 'runtime_state', observedAtMs }],
++    processingRevision: 'adapter-v3',
++    receivedAtMs: NOW_MS,
++    ...overrides,
++  };
++}
++
++function suppression(
++  overrides: Partial<PartnerAffectSuppressedObservation> = {},
++): PartnerAffectSuppressedObservation {
++  return {
++    schemaVersion: 1,
++    observationKey: 'edge-sleep-1:obs-bad',
++    sourceId: 'edge-sleep-1',
++    signalFamily: 'sleep',
++    reasons: ['wrong_partner'],
++    detail: 'observation names a contact other than the bound canonical partner',
++    receivedAtMs: NOW_MS,
++    ...overrides,
++  };
++}
++
++async function withDatabase<T>(
++  run: (pool: Pool, databaseUrl: string) => Promise<T>,
++): Promise<T> {
++  if (!harness) throw new Error('postgres harness not started');
++  const database = await harness.createDatabase();
++  const pool = createPostgresPool(database.databaseUrl, {
++    applicationName: 'partner-affect-shadow-store-test',
++    allowExitOnIdle: true,
++  });
++  try {
++    return await run(pool, database.databaseUrl);
++  } finally {
++    await pool.end();
++  }
++}
++
++describe('PostgresPartnerAffectShadowStore', () => {
++  it('inserts idempotently on (sourceId, observationId) and reports replays', async () => {
++    await withDatabase(async (pool) => {
++      const store = await PostgresPartnerAffectShadowStore.fromPool(pool);
++      const first = await store.recordAccepted(observation());
++      expect(first.inserted).toBe(true);
++      const replay = await store.recordAccepted(observation({ value: 9.9 }));
++      expect(replay.inserted).toBe(false);
++
++      const rows = await store.listAccepted({ partnerContactId: PARTNER_ID });
++      expect(rows).toHaveLength(1);
++      // First accepted record stays authoritative for the same key.
++      expect(rows[0].value).toBe(7.4);
++      expect(rows[0].provenance).toEqual([{ source: 'runtime_state', observedAtMs: NOW_MS - 60_000 }]);
++      await store.close();
++    });
++  }, INTEGRATION_TIMEOUT_MS);
++
++  it('scopes reads to exactly one partner contact and orders newest first', async () => {
++    await withDatabase(async (pool) => {
++      const store = await PostgresPartnerAffectShadowStore.fromPool(pool);
++      await store.recordAccepted(observation({ observationId: 'a', observedAtMs: NOW_MS - 3_000 }));
++      await store.recordAccepted(observation({ observationId: 'b', observedAtMs: NOW_MS - 1_000 }));
++      await store.recordAccepted(observation({
++        observationId: 'c',
++        partnerContactId: 'contact-housemate-2',
++        observedAtMs: NOW_MS - 500,
++      }));
++
++      const rows = await store.listAccepted({ partnerContactId: PARTNER_ID });
++      expect(rows.map(row => row.observationId)).toEqual(['b', 'a']);
++      // No cross-contact leakage in either direction.
++      expect(rows.every(row => row.partnerContactId === PARTNER_ID)).toBe(true);
++      const other = await store.listAccepted({ partnerContactId: 'contact-housemate-2' });
++      expect(other.map(row => row.observationId)).toEqual(['c']);
++
++      const since = await store.listAccepted({
++        partnerContactId: PARTNER_ID,
++        sinceMs: NOW_MS - 2_000,
++      });
++      expect(since.map(row => row.observationId)).toEqual(['b']);
++    });
++  }, INTEGRATION_TIMEOUT_MS);
++
++  it('persists suppression audit records and rejects empty reason sets', async () => {
++    await withDatabase(async (pool) => {
++      const store = await PostgresPartnerAffectShadowStore.fromPool(pool);
++      await store.recordSuppressed(suppression());
++      await store.recordSuppressed(suppression({
++        observationKey: null,
++        sourceId: null,
++        signalFamily: null,
++        reasons: ['missing_authenticated_origin'],
++        receivedAtMs: NOW_MS + 1_000,
++      }));
++      const rows = await store.listSuppressed();
++      expect(rows).toHaveLength(2);
++      expect(rows[0].reasons).toEqual(['missing_authenticated_origin']);
++      expect(rows[1].reasons).toEqual(['wrong_partner']);
++      await expect(store.recordSuppressed(suppression({ reasons: [] }))).rejects.toThrow(/reason/);
++    });
++  }, INTEGRATION_TIMEOUT_MS);
++
++  it('survives restart: a fresh store instance over the same database reads prior rows', async () => {
++    await withDatabase(async (pool, databaseUrl) => {
++      const first = await PostgresPartnerAffectShadowStore.fromPool(pool);
++      await first.recordAccepted(observation());
++      await first.close();
++
++      const reopened = await PostgresPartnerAffectShadowStore.connect(databaseUrl);
++      try {
++        const rows = await reopened.listAccepted({ partnerContactId: PARTNER_ID });
++        expect(rows).toHaveLength(1);
++        expect(rows[0].observationKey).toBe('edge-sleep-1:obs-001');
++      } finally {
++        await reopened.close();
++      }
++    });
++  }, INTEGRATION_TIMEOUT_MS);
++
++  it('prunes both tables to the retention cap, oldest first', async () => {
++    await withDatabase(async (pool) => {
++      const store = await PostgresPartnerAffectShadowStore.fromPool(pool);
++      for (let index = 0; index < 5; index += 1) {
++        await store.recordAccepted(observation({
++          observationId: `obs-${String(index)}`,
++          observedAtMs: NOW_MS - (5 - index) * 1_000,
++        }));
++        await store.recordSuppressed(suppression({ receivedAtMs: NOW_MS + index }));
++      }
++      const removed = await store.pruneToRetentionCap(2);
++      expect(removed).toBe(6);
++      const rows = await store.listAccepted({ partnerContactId: PARTNER_ID });
++      expect(rows.map(row => row.observationId)).toEqual(['obs-4', 'obs-3']);
++      expect(await store.listSuppressed()).toHaveLength(2);
++    });
++  }, INTEGRATION_TIMEOUT_MS);
++
++  it('rejects unbounded or invalid list limits', async () => {
++    await withDatabase(async (pool) => {
++      const store = await PostgresPartnerAffectShadowStore.fromPool(pool);
++      await expect(store.listAccepted({ partnerContactId: PARTNER_ID, limit: 0 }))
++        .rejects.toThrow(/limit/);
++      await expect(store.listAccepted({ partnerContactId: PARTNER_ID, limit: 10_001 }))
++        .rejects.toThrow(/limit/);
++      await expect(store.listAccepted({ partnerContactId: '  ' }))
++        .rejects.toThrow(/partnerContactId/);
++      await expect(store.listSuppressed({ limit: -1 })).rejects.toThrow(/limit/);
++      await expect(store.pruneToRetentionCap(0)).rejects.toThrow(/positive integer/);
++    });
++  }, INTEGRATION_TIMEOUT_MS);
++});
+diff --git a/src/persistence/postgres/partner-affect-shadow-store.ts b/src/persistence/postgres/partner-affect-shadow-store.ts
+new file mode 100644
+index 000000000..127d55e0f
+--- /dev/null
++++ b/src/persistence/postgres/partner-affect-shadow-store.ts
+@@ -0,0 +1,335 @@
++import { randomUUID } from 'node:crypto';
++import type { Pool, QueryResultRow } from 'pg';
++import {
++  createPostgresPool,
++  ensurePostgresSchema,
++  executeQuery,
++  queryOne,
++  queryRows,
++} from '../postgres.js';
++import { POSTGRES_PARTNER_AFFECT_SHADOW_MIGRATIONS } from './migrations.js';
++import type {
++  PartnerAffectObservationListOptions,
++  PartnerAffectObservationRecordResult,
++  PartnerAffectShadowStorePort,
++  PartnerAffectSuppressionListOptions,
++} from '../../core/emotion/partner-affect/shadow-store-port.js';
++import {
++  PARTNER_AFFECT_SCHEMA_VERSION,
++  PARTNER_AFFECT_SUPPRESSION_REASONS,
++  isPartnerAffectDirection,
++  isPartnerAffectSignalFamily,
++  type PartnerAffectAssertionBasis,
++  type PartnerAffectObservation,
++  type PartnerAffectSuppressedObservation,
++  type PartnerAffectSuppressionReason,
++} from '../../shared/contracts/partner-affect.js';
++import { normalizeEmotionTelemetryProvenance } from '../../core/emotion/telemetry-validation.js';
++
++const MAX_PARTNER_AFFECT_SHADOW_LIST_LIMIT = 1_000;
++const DEFAULT_PARTNER_AFFECT_SHADOW_LIST_LIMIT = 200;
++
++interface ObservationRow extends QueryResultRow {
++  observation_key: string;
++  schema_version: number;
++  observation_id: string;
++  source_id: string;
++  partner_contact_id: string;
++  signal_family: string;
++  metric_name: string;
++  value: number;
++  unit: string;
++  window_start_ms: string | number;
++  window_end_ms: string | number;
++  observed_at_ms: string | number;
++  coverage: number;
++  confidence: number;
++  missingness: number;
++  direction: string;
++  sensitivity: string;
++  consent_ref: string;
++  assertion: string;
++  provenance_json: unknown;
++  processing_revision: string;
++  received_at_ms: string | number;
++}
++
++interface SuppressionRow extends QueryResultRow {
++  observation_key: string | null;
++  source_id: string | null;
++  signal_family: string | null;
++  reasons_json: unknown;
++  detail: string;
++  received_at_ms: string | number;
++}
++
++function safeInteger(value: string | number, field: string): number {
++  const parsed = typeof value === 'number' ? value : Number(value);
++  if (!Number.isSafeInteger(parsed)) {
++    throw new Error(`Persisted partner-affect shadow row has non-integer ${field}: ${String(value)}`);
++  }
++  return parsed;
++}
++
++function normalizeBoundedLimit(limit: number | undefined): number {
++  if (limit === undefined) return DEFAULT_PARTNER_AFFECT_SHADOW_LIST_LIMIT;
++  if (!Number.isSafeInteger(limit) || limit < 1 || limit > MAX_PARTNER_AFFECT_SHADOW_LIST_LIMIT) {
++    throw new Error(
++      `partner-affect shadow list limit must be an integer in [1, ${String(MAX_PARTNER_AFFECT_SHADOW_LIST_LIMIT)}]`,
++    );
++  }
++  return limit;
++}
++
++function mapObservationRow(row: ObservationRow): PartnerAffectObservation {
++  if (row.schema_version !== PARTNER_AFFECT_SCHEMA_VERSION) {
++    throw new Error(
++      `Persisted partner-affect observation ${row.observation_key} has unsupported schema version ${String(row.schema_version)}`,
++    );
++  }
++  if (!isPartnerAffectSignalFamily(row.signal_family)) {
++    throw new Error(
++      `Persisted partner-affect observation ${row.observation_key} has unknown signal family "${row.signal_family}"`,
++    );
++  }
++  if (!isPartnerAffectDirection(row.direction)) {
++    throw new Error(
++      `Persisted partner-affect observation ${row.observation_key} has unknown direction "${row.direction}"`,
++    );
++  }
++  if (
++    row.assertion !== 'partner_asserted'
++    && row.assertion !== 'model_inferred'
++    && row.assertion !== 'sensor_summary'
++  ) {
++    throw new Error(
++      `Persisted partner-affect observation ${row.observation_key} has unknown assertion basis "${row.assertion}"`,
++    );
++  }
++  return {
++    schemaVersion: PARTNER_AFFECT_SCHEMA_VERSION,
++    observationKey: row.observation_key,
++    observationId: row.observation_id,
++    sourceId: row.source_id,
++    partnerContactId: row.partner_contact_id,
++    signalFamily: row.signal_family,
++    metricName: row.metric_name,
++    value: row.value,
++    unit: row.unit,
++    windowStartMs: safeInteger(row.window_start_ms, 'window_start_ms'),
++    windowEndMs: safeInteger(row.window_end_ms, 'window_end_ms'),
++    observedAtMs: safeInteger(row.observed_at_ms, 'observed_at_ms'),
++    coverage: row.coverage,
++    confidence: row.confidence,
++    missingness: row.missingness,
++    direction: row.direction,
++    sensitivity: row.sensitivity,
++    consentRef: row.consent_ref,
++    assertion: row.assertion as PartnerAffectAssertionBasis,
++    provenance: normalizeEmotionTelemetryProvenance(
++      row.provenance_json,
++      `partnerAffectObservation(${row.observation_key}).provenance`,
++    ),
++    processingRevision: row.processing_revision,
++    receivedAtMs: safeInteger(row.received_at_ms, 'received_at_ms'),
++  };
++}
++
++function mapSuppressionRow(row: SuppressionRow): PartnerAffectSuppressedObservation {
++  if (!Array.isArray(row.reasons_json) || row.reasons_json.length === 0) {
++    throw new Error('Persisted partner-affect suppression record has malformed reasons');
++  }
++  const reasons = row.reasons_json.map((reason) => {
++    if (!PARTNER_AFFECT_SUPPRESSION_REASONS.includes(reason as PartnerAffectSuppressionReason)) {
++      throw new Error(`Persisted partner-affect suppression record has unknown reason "${String(reason)}"`);
++    }
++    return reason as PartnerAffectSuppressionReason;
++  });
++  let signalFamily = null;
++  if (row.signal_family !== null) {
++    if (!isPartnerAffectSignalFamily(row.signal_family)) {
++      throw new Error(
++        `Persisted partner-affect suppression record has unknown signal family "${row.signal_family}"`,
++      );
++    }
++    signalFamily = row.signal_family;
++  }
++  return {
++    schemaVersion: PARTNER_AFFECT_SCHEMA_VERSION,
++    observationKey: row.observation_key,
++    sourceId: row.source_id,
++    signalFamily,
++    reasons,
++    detail: row.detail,
++    receivedAtMs: safeInteger(row.received_at_ms, 'received_at_ms'),
++  };
++}
++
++/**
++ * Postgres adapter for the Partner Affect shadow observation store
++ * (docs/partner-affect.md slice 1). Idempotent on (source_id, observation_id);
++ * shadow-only read surface (Garden inspection + tests).
++ */
++export class PostgresPartnerAffectShadowStore implements PartnerAffectShadowStorePort {
++  private constructor(
++    private readonly pool: Pool,
++    private readonly ownsPool: boolean,
++  ) {}
++
++  static async connect(
++    databaseUrl: string,
++    options: { schema?: string; role?: string } = {},
++  ): Promise<PostgresPartnerAffectShadowStore> {
++    const pool = createPostgresPool(databaseUrl, {
++      applicationName: 'psfn-partner-affect-shadow',
++      allowExitOnIdle: true,
++      schema: options.schema,
++      role: options.role,
++    });
++    try {
++      await ensurePostgresSchema(pool, POSTGRES_PARTNER_AFFECT_SHADOW_MIGRATIONS);
++      return new PostgresPartnerAffectShadowStore(pool, true);
++    } catch (error) {
++      await pool.end().catch(() => undefined);
++      throw error;
++    }
++  }
++
++  /** Test/embedding entry point: caller owns the pool lifecycle. */
++  static async fromPool(pool: Pool): Promise<PostgresPartnerAffectShadowStore> {
++    await ensurePostgresSchema(pool, POSTGRES_PARTNER_AFFECT_SHADOW_MIGRATIONS);
++    return new PostgresPartnerAffectShadowStore(pool, false);
++  }
++
++  async recordAccepted(
++    observation: PartnerAffectObservation,
++  ): Promise<PartnerAffectObservationRecordResult> {
++    const row = await queryOne<{ observation_key: string }>(this.pool, `
++      INSERT INTO partner_affect_shadow_observations (
++        observation_key, schema_version, observation_id, source_id,
++        partner_contact_id, signal_family, metric_name, value, unit,
++        window_start_ms, window_end_ms, observed_at_ms,
++        coverage, confidence, missingness, direction,
++        sensitivity, consent_ref, assertion, provenance_json,
++        processing_revision, received_at_ms
++      ) VALUES (
++        $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12,
++        $13, $14, $15, $16, $17, $18, $19, $20::jsonb, $21, $22
++      )
++      ON CONFLICT (source_id, observation_id) DO NOTHING
++      RETURNING observation_key
++    `, [
++      observation.observationKey,
++      observation.schemaVersion,
++      observation.observationId,
++      observation.sourceId,
++      observation.partnerContactId,
++      observation.signalFamily,
++      observation.metricName,
++      observation.value,
++      observation.unit,
++      observation.windowStartMs,
++      observation.windowEndMs,
++      observation.observedAtMs,
++      observation.coverage,
++      observation.confidence,
++      observation.missingness,
++      observation.direction,
++      observation.sensitivity,
++      observation.consentRef,
++      observation.assertion,
++      JSON.stringify(observation.provenance),
++      observation.processingRevision,
++      observation.receivedAtMs,
++    ]);
++    return { inserted: row !== undefined };
++  }
++
++  async recordSuppressed(suppressed: PartnerAffectSuppressedObservation): Promise<void> {
++    if (suppressed.reasons.length === 0) {
++      throw new Error('partner-affect suppression record requires at least one reason');
++    }
++    await executeQuery(this.pool, `
++      INSERT INTO partner_affect_shadow_suppressions (
++        id, schema_version, observation_key, source_id, signal_family,
++        reasons_json, detail, received_at_ms
++      ) VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8)
++    `, [
++      randomUUID(),
++      suppressed.schemaVersion,
++      suppressed.observationKey,
++      suppressed.sourceId,
++      suppressed.signalFamily,
++      JSON.stringify(suppressed.reasons),
++      suppressed.detail.slice(0, 2_048),
++      suppressed.receivedAtMs,
++    ]);
++  }
++
++  async listAccepted(
++    options: PartnerAffectObservationListOptions,
++  ): Promise<PartnerAffectObservation[]> {
++    const partnerContactId = options.partnerContactId.trim();
++    if (!partnerContactId) {
++      throw new Error('listAccepted requires a non-empty partnerContactId');
++    }
++    const limit = normalizeBoundedLimit(options.limit);
++    const sinceMs = options.sinceMs === undefined ? null : options.sinceMs;
++    if (sinceMs !== null && (!Number.isSafeInteger(sinceMs) || sinceMs < 0)) {
++      throw new Error('listAccepted sinceMs must be a non-negative integer when provided');
++    }
++    const rows = await queryRows<ObservationRow>(this.pool, `
++      SELECT *
++      FROM partner_affect_shadow_observations
++      WHERE partner_contact_id = $1
++        AND ($2::bigint IS NULL OR observed_at_ms >= $2::bigint)
++      ORDER BY observed_at_ms DESC, observation_key DESC
++      LIMIT $3
++    `, [partnerContactId, sinceMs, limit]);
++    return rows.map(mapObservationRow);
++  }
++
++  async listSuppressed(
++    options: PartnerAffectSuppressionListOptions = {},
++  ): Promise<PartnerAffectSuppressedObservation[]> {
++    const limit = normalizeBoundedLimit(options.limit);
++    const rows = await queryRows<SuppressionRow>(this.pool, `
++      SELECT observation_key, source_id, signal_family, reasons_json, detail, received_at_ms
++      FROM partner_affect_shadow_suppressions
++      ORDER BY received_at_ms DESC, id DESC
++      LIMIT $1
++    `, [limit]);
++    return rows.map(mapSuppressionRow);
++  }
++
++  async pruneToRetentionCap(maxRetained: number): Promise<number> {
++    if (!Number.isSafeInteger(maxRetained) || maxRetained < 1) {
++      throw new Error('pruneToRetentionCap requires a positive integer cap');
++    }
++    const observationResult = await executeQuery(this.pool, `
++      DELETE FROM partner_affect_shadow_observations
++      WHERE observation_key IN (
++        SELECT observation_key
++        FROM partner_affect_shadow_observations
++        ORDER BY observed_at_ms DESC, observation_key DESC
++        OFFSET $1
++      )
++    `, [maxRetained]);
++    const suppressionResult = await executeQuery(this.pool, `
++      DELETE FROM partner_affect_shadow_suppressions
++      WHERE id IN (
++        SELECT id
++        FROM partner_affect_shadow_suppressions
++        ORDER BY received_at_ms DESC, id DESC
++        OFFSET $1
++      )
++    `, [maxRetained]);
++    return (observationResult.rowCount ?? 0) + (suppressionResult.rowCount ?? 0);
++  }
++
++  async close(): Promise<void> {
++    if (this.ownsPool) {
++      await this.pool.end();
++    }
++  }
++}
+diff --git a/src/persistence/runtime-factory.test.ts b/src/persistence/runtime-factory.test.ts
+index 5b417e308..6accfa48c 100644
+--- a/src/persistence/runtime-factory.test.ts
++++ b/src/persistence/runtime-factory.test.ts
+@@ -33,6 +33,8 @@ const runtimeFactoryMocks = vi.hoisted(() => ({
+   connectPostgresBackgroundWorkStore: vi.fn(async () => runtimeFactoryMocks.postgresBackgroundWorkStore),
+   postgresCompanionPresenceStore: { kind: 'postgres-companion-presence-store' },
+   connectPostgresCompanionPresenceStore: vi.fn(async () => runtimeFactoryMocks.postgresCompanionPresenceStore),
++  postgresPartnerAffectShadowStore: { kind: 'postgres-partner-affect-shadow-store' },
++  connectPostgresPartnerAffectShadowStore: vi.fn(async () => runtimeFactoryMocks.postgresPartnerAffectShadowStore),
+   bootstrapPool: { end: vi.fn(async () => undefined) },
+   createPostgresPool: vi.fn(() => runtimeFactoryMocks.bootstrapPool),
+   ensurePostgresSchemaExists: vi.fn(async () => undefined),
+@@ -109,6 +111,12 @@ vi.mock('./postgres/companion-presence-store.js', () => ({
+   },
+ }));
+ 
++vi.mock('./postgres/partner-affect-shadow-store.js', () => ({
++  PostgresPartnerAffectShadowStore: {
++    connect: runtimeFactoryMocks.connectPostgresPartnerAffectShadowStore,
++  },
++}));
++
+ vi.mock('./postgres.js', () => ({
+   createPostgresPool: runtimeFactoryMocks.createPostgresPool,
+   ensurePostgresSchemaExists: runtimeFactoryMocks.ensurePostgresSchemaExists,
+@@ -130,6 +138,7 @@ beforeEach(() => {
+   runtimeFactoryMocks.connectPostgresScheduledPromptStore.mockClear();
+   runtimeFactoryMocks.connectPostgresBackgroundWorkStore.mockClear();
+   runtimeFactoryMocks.connectPostgresCompanionPresenceStore.mockClear();
++  runtimeFactoryMocks.connectPostgresPartnerAffectShadowStore.mockClear();
+   runtimeFactoryMocks.createReflectionMetacognitionJournalStore.mockClear();
+   runtimeFactoryMocks.connectPostgresInternalStateStore.mockClear();
+   runtimeFactoryMocks.connectPostgresParticipantTrendStore.mockClear();
+@@ -239,6 +248,7 @@ describe('createAgentPersistenceRuntime', () => {
+       participantTrendStore: runtimeFactoryMocks.postgresParticipantTrendStore,
+       scheduledPromptStore: runtimeFactoryMocks.postgresScheduledPromptStore,
+       backgroundWorkStore: runtimeFactoryMocks.postgresBackgroundWorkStore,
++      partnerAffectShadowStore: runtimeFactoryMocks.postgresPartnerAffectShadowStore,
+       introspectionLandmarkStore: expect.any(Object),
+       weightedThoughtStore: undefined,
+     });
+diff --git a/src/persistence/runtime-factory.ts b/src/persistence/runtime-factory.ts
+index 0ec9077a3..25fb28c80 100644
+--- a/src/persistence/runtime-factory.ts
++++ b/src/persistence/runtime-factory.ts
+@@ -49,6 +49,8 @@ import {
+   planPostgresTenantAccess,
+ } from './postgres/tenancy.js';
+ import { IntrospectionLandmarkPostgresStore } from '../faculties/introspection/postgres-store.js';
++import { PostgresPartnerAffectShadowStore } from './postgres/partner-affect-shadow-store.js';
++import type { PartnerAffectShadowStorePort } from '../core/emotion/partner-affect/shadow-store-port.js';
+ import { PostgresBackgroundWorkStore } from './postgres/background-work-store.js';
+ import type { BackgroundWorkStorePort } from '../core/agent/background-work/store-port.js';
+ import type { ContactLifecycleGatewayPort } from '../core/contacts/contact-lifecycle-gateway-port.js';
+@@ -75,6 +77,12 @@ export interface AgentPersistenceRuntime {
+   scheduledPromptStore: ScheduledPromptStorePort;
+   introspectionLandmarkStore: IntrospectionLandmarkPostgresStore;
+   backgroundWorkStore: BackgroundWorkStorePort;
++  /**
++   * Shadow-only Partner Affect observation store (docs/partner-affect.md
++   * slice 1). Written by the shadow ingest bridge; read only by the Garden
++   * inspection surface. Never behavioral authority.
++   */
++  partnerAffectShadowStore: PartnerAffectShadowStorePort;
+   /**
+    * Shared-schema cross-companion presence store (sprint 10, W5a). Present
+    * ONLY when multi-companion mode is enabled; flag-off never touches the
+@@ -213,6 +221,7 @@ export async function createAgentPersistenceRuntime(
+     scheduledPromptStore: await PostgresScheduledPromptStore.connect(databaseUrl, { schema, role: tenantRole }),
+     introspectionLandmarkStore: await IntrospectionLandmarkPostgresStore.connect(databaseUrl, { schema, role: tenantRole }),
+     backgroundWorkStore: await PostgresBackgroundWorkStore.connect(databaseUrl, { schema, role: tenantRole }),
++    partnerAffectShadowStore: await PostgresPartnerAffectShadowStore.connect(databaseUrl, { schema, role: tenantRole }),
+     ...(companionPresenceStore ? { companionPresenceStore } : {}),
+     ...(icpInitiationCandidateStore ? { icpInitiationCandidateStore } : {}),
+   };
+diff --git a/src/persistence/system-owner-fleet-migration.test.ts b/src/persistence/system-owner-fleet-migration.test.ts
+index feba1df03..6fa419a46 100644
+--- a/src/persistence/system-owner-fleet-migration.test.ts
++++ b/src/persistence/system-owner-fleet-migration.test.ts
+@@ -315,6 +315,7 @@ describe('system-owner fleet migration', () => {
+       'trust-policy',
+       'backup',
+       'intake-policy',
++      'partner-affect-shadow',
+     ]) {
+       copyFileSync(
+         join(seedDir, `${ownerFile}.seed.json`),
+diff --git a/src/shared/contracts/partner-affect.ts b/src/shared/contracts/partner-affect.ts
+new file mode 100644
+index 000000000..edb39601f
+--- /dev/null
++++ b/src/shared/contracts/partner-affect.ts
+@@ -0,0 +1,259 @@
++// Partner Affect shadow-observation contracts (docs/partner-affect.md, slice 1).
++//
++// These types define the OBSERVATION foundation only. Everything in this file
++// is shadow-scoped: accepted observations and the derived shadow estimate are
++// recorded for Garden inspection and evaluation, and are deliberately
++// unreachable as behavioral authority. Nothing here may feed prompts, emotion
++// appraisal, memory candidacy, scheduling, notifications, or world actions.
++// The shadow-isolation test (partner-affect-shadow-isolation.test.ts) enforces
++// that boundary mechanically.
++
++import type { EmotionTelemetryProvenance } from './emotion-contracts.js';
++
++export const PARTNER_AFFECT_SCHEMA_VERSION = 1 as const;
++
++/**
++ * External telemetry event type carrying one shadow Signal Observation
++ * candidate. Must be admitted by the API-channel telemetry allowlist and is
++ * consumed only by the shadow ingest bridge.
++ */
++export const PARTNER_AFFECT_OBSERVATION_EVENT_TYPE = 'external.telemetry.partner_affect.observation' as const;
++
++/**
++ * Signal Families are independence groups (docs/partner-affect.md section 6).
++ * Several metrics from one family share one evidence budget; independence
++ * quorums count families, never raw observations.
++ */
++export const PARTNER_AFFECT_SIGNAL_FAMILIES = [
++  'self_report',
++  'conversation',
++  'sleep',
++  'activity',
++  'presence',
++  'interaction_cadence',
++  'schedule_context',
++  'personal_operations',
++] as const;
++
++export type PartnerAffectSignalFamily = typeof PARTNER_AFFECT_SIGNAL_FAMILIES[number];
++
++export function isPartnerAffectSignalFamily(value: unknown): value is PartnerAffectSignalFamily {
++  return typeof value === 'string'
++    && (PARTNER_AFFECT_SIGNAL_FAMILIES as readonly string[]).includes(value);
++}
++
++/**
++ * Direction is partner-specific configuration, never a source claim
++ * (docs/partner-affect.md section 6.4). `unknown` direction can never raise a
++ * future composite; slice 1 records it so Garden can show what is calibrated.
++ */
++export const PARTNER_AFFECT_DIRECTIONS = [
++  'higher_supports_need',
++  'lower_supports_need',
++  'unknown',
++] as const;
++
++export type PartnerAffectDirection = typeof PARTNER_AFFECT_DIRECTIONS[number];
++
++export function isPartnerAffectDirection(value: unknown): value is PartnerAffectDirection {
++  return typeof value === 'string'
++    && (PARTNER_AFFECT_DIRECTIONS as readonly string[]).includes(value);
++}
++
++/**
++ * How the observation's content relates to the partner's own voice. A
++ * model/classifier anywhere in provenance forces `model_inferred`; only pure
++ * self-report provenance may claim `partner_asserted`. Inference must never be
++ * presented as partner-asserted fact.
++ */
++export const PARTNER_AFFECT_ASSERTION_BASES = [
++  'partner_asserted',
++  'model_inferred',
++  'sensor_summary',
++] as const;
++
++export type PartnerAffectAssertionBasis = typeof PARTNER_AFFECT_ASSERTION_BASES[number];
++
++/** Suppression reason codes. Sorted-unique in every decision record. */
++export const PARTNER_AFFECT_SUPPRESSION_REASONS = [
++  'shadow_disabled',
++  'partner_unbound',
++  'wrong_partner',
++  'missing_authenticated_origin',
++  'unregistered_source',
++  'revoked_source',
++  'consent_mismatch',
++  'unknown_signal_family',
++  'family_not_allowed',
++  'family_not_consented',
++  'raw_sensitive_payload',
++  'malformed_observation',
++  'invalid_window',
++  'future_observation',
++  'stale_observation',
++  'low_confidence',
++  'missing_provenance',
++  'duplicate_observation',
++] as const;
++
++export type PartnerAffectSuppressionReason = typeof PARTNER_AFFECT_SUPPRESSION_REASONS[number];
++
++/**
++ * A normalized, accepted Signal Observation: a provenance-bearing,
++ * time-bounded summary from one authorized source, bound to exactly one
++ * canonical partner contact. Raw coordinates, biometric streams, message
++ * bodies, purchase line items, and third-party content are rejected before
++ * this shape exists (payload whitelist + scalar-value rule in the guard).
++ */
++export interface PartnerAffectObservation {
++  schemaVersion: typeof PARTNER_AFFECT_SCHEMA_VERSION;
++  /** Stable idempotency key: `${sourceId}:${observationId}`. */
++  observationKey: string;
++  observationId: string;
++  sourceId: string;
++  /** Exact canonical partner contact id from configuration; never inferred. */
++  partnerContactId: string;
++  signalFamily: PartnerAffectSignalFamily;
++  metricName: string;
++  /** Summarized scalar value only; streams and blobs fail closed upstream. */
++  value: number;
++  unit: string;
++  windowStartMs: number;
++  windowEndMs: number;
++  observedAtMs: number;
++  /** Fraction of the window actually covered by the source, [0,1]. */
++  coverage: number;
++  confidence: number;
++  /** Explicit missingness, [0,1]; absence of data stays visible, never healthy. */
++  missingness: number;
++  /** Partner-configured direction; sources cannot claim it. */
++  direction: PartnerAffectDirection;
++  sensitivity: string;
++  /** Consent record reference from the authorized-source registry. */
++  consentRef: string;
++  assertion: PartnerAffectAssertionBasis;
++  provenance: EmotionTelemetryProvenance[];
++  processingRevision: string;
++  receivedAtMs: number;
++}
++
++/**
++ * Structural record of a suppressed candidate. Carries reason codes and
++ * routing identity only — never the rejected payload content, so revoked or
++ * raw-sensitive material cannot leak through the audit trail.
++ */
++export interface PartnerAffectSuppressedObservation {
++  schemaVersion: typeof PARTNER_AFFECT_SCHEMA_VERSION;
++  observationKey: string | null;
++  sourceId: string | null;
++  signalFamily: PartnerAffectSignalFamily | null;
++  reasons: PartnerAffectSuppressionReason[];
++  detail: string;
++  receivedAtMs: number;
++}
++
++export type PartnerAffectObservationDecision =
++  | { status: 'accepted'; observation: PartnerAffectObservation }
++  | { status: 'suppressed'; suppressed: PartnerAffectSuppressedObservation };
++
++/**
++ * Per-family evidence health inside the shadow estimate. `conflict` marks
++ * disagreeing fresh values for the same family+metric from different sources;
++ * conflicts stay explicit and block `ordinary`, they are never averaged away.
++ */
++export interface PartnerAffectFamilyEvidence {
++  family: PartnerAffectSignalFamily;
++  freshObservationCount: number;
++  latestObservedAtMs: number | null;
++  freshness: 'fresh' | 'stale' | 'missing';
++  /** Max confidence among fresh observations, 0 when none. */
++  confidence: number;
++  /** Max coverage among fresh observations, 0 when none. */
++  coverage: number;
++  /** Min missingness among fresh observations, 1 when none. */
++  missingness: number;
++  conflict: boolean;
++  contributingSourceIds: string[];
++  assertionBases: PartnerAffectAssertionBasis[];
++}
++
++export const PARTNER_AFFECT_ESTIMATE_REASONS = [
++  'partner_unbound',
++  'no_fresh_evidence',
++  'insufficient_family_quorum',
++  'low_confidence_evidence',
++  'conflicting_evidence',
++  'quorum_met',
++] as const;
++
++export type PartnerAffectEstimateReason = typeof PARTNER_AFFECT_ESTIMATE_REASONS[number];
++
++/**
++ * Shadow-only Partner Affect Estimate, slice 1. `unknown` is the honest
++ * default: missing, stale, low-confidence, or conflicting evidence is never
++ * promoted to an ordinary/healthy claim. `ordinary` requires positive fresh
++ * evidence across an independence quorum of families. There is deliberately
++ * no posture, score, or directional claim in this slice; the estimate is a
++ * deterministic evidence summary for evaluation, not behavioral authority.
++ */
++export interface PartnerAffectShadowEstimate {
++  schemaVersion: typeof PARTNER_AFFECT_SCHEMA_VERSION;
++  partnerContactId: string | null;
++  computedAtMs: number;
++  evidenceWindowMs: number;
++  status: 'unknown' | 'ordinary';
++  reasons: PartnerAffectEstimateReason[];
++  families: PartnerAffectFamilyEvidence[];
++  /** Every estimate is deterministic and model-free; recorded for audit. */
++  derivation: 'deterministic_shadow_v1';
++  policyRevision: string;
++}
++
++/** Telemetry counters emitted by the shadow ingest bridge. */
++export type PartnerAffectShadowTelemetryCounter =
++  | 'accepted'
++  | 'suppressed'
++  | 'duplicate'
++  | 'store_error';
++
++export interface PartnerAffectShadowTelemetryEvent {
++  counter: PartnerAffectShadowTelemetryCounter;
++  reasons: string[];
++  eventId?: string;
++  sourceId?: string;
++  signalFamily?: string;
++  timestamp: number;
++}
++
++/**
++ * Registry entry for one authorized observation source. Consent is
++ * source-specific and revocable; revocation stops future acceptance
++ * immediately without erasing the audit trail.
++ */
++export interface PartnerAffectSourceAuthorization {
++  sourceId: string;
++  families: PartnerAffectSignalFamily[];
++  consentRef: string;
++  sensitivity: string;
++  revoked: boolean;
++}
++
++/** Mutable policy for the shadow observation foundation (JSON-owned). */
++export interface PartnerAffectShadowPolicy {
++  enabled: boolean;
++  /** Exact canonical partner contact id; null means unbound (inert). */
++  partnerContactId: string | null;
++  staleAfterMs: number;
++  evidenceWindowMs: number;
++  minConfidence: number;
++  minIndependentFamilies: number;
++  /** Tolerance for equal-metric cross-source disagreement before conflict. */
++  conflictValueTolerance: number;
++  allowedSignalFamilies: PartnerAffectSignalFamily[];
++  /** Per-metric partner-specific direction, keyed `family.metricName`. */
++  directions: Record<string, PartnerAffectDirection>;
++  sources: PartnerAffectSourceAuthorization[];
++  /** Bounded shadow retention; oldest rows beyond the cap are pruned. */
++  maxRetainedObservations: number;
++  policyRevision: string;
++}
+diff --git a/src/shared/contracts/settings-garden-contract.ts b/src/shared/contracts/settings-garden-contract.ts
+index d2b40c038..ff60788ca 100644
+--- a/src/shared/contracts/settings-garden-contract.ts
++++ b/src/shared/contracts/settings-garden-contract.ts
+@@ -274,6 +274,7 @@ export const SETTINGS_GARDEN_RAW_EDITOR_SUBSYSTEM_BY_KEY = {
+   'intake-policy': 'intakePolicy',
+   capabilities: 'capabilities',
+   'charge-policy': 'chargePolicy',
++  'partner-affect-shadow': 'partnerAffectShadow',
+   backup: 'backup',
+ } as const;
+ 
+@@ -300,6 +301,7 @@ export const SETTINGS_GARDEN_RAW_EDITOR_FALLBACK_FILE_BY_KEY: Record<GardenSetti
+   'intake-policy': 'intake-policy.json',
+   capabilities: 'capability-tier.json',
+   'charge-policy': 'charge-policy.json',
++  'partner-affect-shadow': 'partner-affect-shadow.json',
+   backup: 'backup.json',
+ };
+ 
+@@ -314,6 +316,7 @@ export const SETTINGS_GARDEN_RAW_SUBSYSTEM_IDS = [
+   'skills',
+   'trustPolicy',
+   'intakePolicy',
++  'partnerAffectShadow',
+   'backup',
+ ] as const;
+ 
+diff --git a/src/shared/event-bus.ts b/src/shared/event-bus.ts
+index 0e1366262..b7e6e7b2e 100644
+--- a/src/shared/event-bus.ts
++++ b/src/shared/event-bus.ts
+@@ -21,6 +21,7 @@ import type {
+ import type { CompletionHandoffRecord } from './contracts/completion-handoff.js';
+ import type { PlaceKind } from './contracts/places-registry.js';
+ import type { SatelliteTelemetryAuthContext } from './contracts/satellite-registry.js';
++import type { PartnerAffectShadowTelemetryEvent } from './contracts/partner-affect.js';
+ import type { IcpInitiationCandidateStatus } from './contracts/icp-autonomy.js';
+ import type { IcpConversationCostBreakerEvent } from './telemetry/model-usage.js';
+ import type { TurnPerformanceEvent } from './telemetry/turn-performance.js';
+@@ -1073,6 +1074,9 @@ export interface EventMap {
+   };
+   'external.telemetry.ingested': { event: ExternalTelemetryEvent } & EventCorrelationFields;
+   'agent.perception.bridge.telemetry': PerceptionBridgeTelemetryEvent & EventCorrelationFields;
++  // Shadow-only partner-affect observation counters (docs/partner-affect.md
++  // slice 1). Structural telemetry only; carries no observation content.
++  'emotion.partner_affect.shadow.telemetry': PartnerAffectShadowTelemetryEvent & EventCorrelationFields;
+   'module.install': {
+     id: string;
+     name: string;
+diff --git a/src/system/config/config-store.ts b/src/system/config/config-store.ts
+index 6f12776fc..45b5d9f7d 100644
+--- a/src/system/config/config-store.ts
++++ b/src/system/config/config-store.ts
+@@ -12,6 +12,11 @@ import type { EditableSettings } from '../settings/contracts.js';
+ import { loadSettings, saveSettings } from '../settings/io.js';
+ import type { BackupJsonConfig } from './backup-config.js';
+ import { loadBackupConfig, saveBackupConfig } from './backup-config.js';
++import type { PartnerAffectShadowPolicy } from '../../shared/contracts/partner-affect.js';
++import {
++  loadPartnerAffectShadowConfig,
++  savePartnerAffectShadowConfig,
++} from './partner-affect-shadow-config.js';
+ import type { CapabilityTierConfig } from './capability-tier-config.js';
+ import {
+   loadCapabilityTierConfig,
+@@ -93,6 +98,8 @@ export interface ConfigStorePort {
+   saveTrustPolicy(nextConfig: unknown): TrustPolicyConfig;
+   loadIntakePolicy(): IntakePolicyConfig;
+   saveIntakePolicy(nextConfig: unknown): IntakePolicyConfig;
++  loadPartnerAffectShadow(): PartnerAffectShadowPolicy;
++  savePartnerAffectShadow(nextConfig: unknown): PartnerAffectShadowPolicy;
+   /** Read-only system owner. Garden must never turn this into a raw editor. */
+   loadFleetAuthOwnerFile(): FleetAuthConfig | null;
+   loadStartupRuntimeSettings(): Pick<StartupOwnerFileState, 'runtimeSettings' | 'settingsDomains'>;
+@@ -162,6 +169,8 @@ export function createOwnerFileConfigStore(
+     saveTrustPolicy: (nextConfig) => saveTrustPolicyConfig(options.dataDir, nextConfig),
+     loadIntakePolicy: () => loadIntakePolicyConfig(options.dataDir, loadOptions),
+     saveIntakePolicy: (nextConfig) => saveIntakePolicyConfig(options.dataDir, nextConfig),
++    loadPartnerAffectShadow: () => loadPartnerAffectShadowConfig(options.dataDir, loadOptions),
++    savePartnerAffectShadow: (nextConfig) => savePartnerAffectShadowConfig(options.dataDir, nextConfig),
+     loadFleetAuthOwnerFile: () => (
+       existsSync(fleetAuthFilePath(options.dataDir))
+         ? loadFleetAuthConfig(options.dataDir, options.seedDir)
+diff --git a/src/system/config/partner-affect-shadow-config.test.ts b/src/system/config/partner-affect-shadow-config.test.ts
+new file mode 100644
+index 000000000..60bfbe9e1
+--- /dev/null
++++ b/src/system/config/partner-affect-shadow-config.test.ts
+@@ -0,0 +1,140 @@
++import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
++import { tmpdir } from 'node:os';
++import { join } from 'node:path';
++import { afterEach, describe, expect, it } from 'vitest';
++import {
++  PARTNER_AFFECT_SHADOW_FILE_NAME,
++  loadPartnerAffectShadowConfig,
++  savePartnerAffectShadowConfig,
++  validatePartnerAffectShadowConfig,
++} from './partner-affect-shadow-config.js';
++
++const tempDirs: string[] = [];
++
++function tempDir(): string {
++  const dir = mkdtempSync(join(tmpdir(), 'psfn-partner-affect-shadow-'));
++  tempDirs.push(dir);
++  return dir;
++}
++
++afterEach(() => {
++  for (const dir of tempDirs.splice(0)) {
++    rmSync(dir, { recursive: true, force: true });
++  }
++});
++
++function validConfig(overrides: Record<string, unknown> = {}): Record<string, unknown> {
++  return {
++    enabled: false,
++    partnerContactId: null,
++    staleAfterMs: 86_400_000,
++    evidenceWindowMs: 259_200_000,
++    minConfidence: 0.35,
++    minIndependentFamilies: 2,
++    conflictValueTolerance: 0.25,
++    allowedSignalFamilies: ['self_report', 'conversation', 'sleep'],
++    directions: { 'sleep.total_sleep_hours': 'lower_supports_need' },
++    sources: [{
++      sourceId: 'edge-sleep-1',
++      families: ['sleep'],
++      consentRef: 'consent-sleep-2026-01',
++      sensitivity: 'relational_sensitive',
++      revoked: false,
++    }],
++    maxRetainedObservations: 5_000,
++    policyRevision: 'shadow-v1',
++    ...overrides,
++  };
++}
++
++describe('validatePartnerAffectShadowConfig', () => {
++  it('accepts the seed defaults', () => {
++    const seed = JSON.parse(
++      readFileSync(join(process.cwd(), 'config', 'partner-affect-shadow.seed.json'), 'utf8'),
++    ) as unknown;
++    const policy = validatePartnerAffectShadowConfig(seed, 'seed');
++    expect(policy.enabled).toBe(false);
++    expect(policy.partnerContactId).toBeNull();
++    expect(policy.sources).toEqual([]);
++  });
++
++  it('fails closed when enabled without a canonical partner binding', () => {
++    expect(() => validatePartnerAffectShadowConfig(
++      validConfig({ enabled: true, partnerContactId: null }),
++      'test',
++    )).toThrow(/enabled requires a non-null partnerContactId/);
++  });
++
++  it('accepts enabled with an exact partner binding', () => {
++    const policy = validatePartnerAffectShadowConfig(
++      validConfig({ enabled: true, partnerContactId: 'contact-partner-1' }),
++      'test',
++    );
++    expect(policy.partnerContactId).toBe('contact-partner-1');
++  });
++
++  it.each([
++    ['staleAfterMs', 0],
++    ['evidenceWindowMs', -5],
++    ['minIndependentFamilies', 0],
++    ['maxRetainedObservations', 1.5],
++    ['minConfidence', 1.2],
++    ['conflictValueTolerance', -0.1],
++    ['enabled', 'yes'],
++    ['policyRevision', ''],
++    ['allowedSignalFamilies', []],
++    ['allowedSignalFamilies', ['astrology']],
++    ['directions', { badkey: 'unknown' }],
++    ['directions', { 'sleep.total_sleep_hours': 'sideways' }],
++    ['sources', [{ sourceId: 's', families: [], consentRef: 'c', sensitivity: 'x', revoked: false }]],
++    ['sources', [{ sourceId: 's', families: ['sleep'], consentRef: 'c', sensitivity: 'x' }]],
++  ])('rejects invalid %s = %j', (field, value) => {
++    expect(() => validatePartnerAffectShadowConfig(
++      validConfig({ [field]: value }),
++      'test',
++    )).toThrow(/Invalid partner-affect-shadow config/);
++  });
++
++  it('rejects duplicate source registrations', () => {
++    const source = {
++      sourceId: 'edge-sleep-1',
++      families: ['sleep'],
++      consentRef: 'consent-a',
++      sensitivity: 'relational_sensitive',
++      revoked: false,
++    };
++    expect(() => validatePartnerAffectShadowConfig(
++      validConfig({ sources: [source, source] }),
++      'test',
++    )).toThrow(/duplicate sourceId/);
++  });
++});
++
++describe('load/save round trip', () => {
++  it('fails closed when the owner file is missing and no seed exists', () => {
++    const dataDir = tempDir();
++    const emptySeedDir = tempDir();
++    expect(() => loadPartnerAffectShadowConfig(dataDir, { seedDir: emptySeedDir }))
++      .toThrow(/Missing required JSON owner file/);
++  });
++
++  it('saves validated config atomically and loads it back', () => {
++    const dataDir = tempDir();
++    const saved = savePartnerAffectShadowConfig(dataDir, validConfig());
++    expect(saved.policyRevision).toBe('shadow-v1');
++    const loaded = loadPartnerAffectShadowConfig(dataDir, { seedDir: tempDir() });
++    expect(loaded).toEqual(saved);
++  });
++
++  it('rejects malformed owner-file content on save', () => {
++    const dataDir = tempDir();
++    expect(() => savePartnerAffectShadowConfig(dataDir, validConfig({ staleAfterMs: 'soon' })))
++      .toThrow(/Invalid partner-affect-shadow config/);
++  });
++
++  it('rejects malformed persisted owner files on load', () => {
++    const dataDir = tempDir();
++    writeFileSync(join(dataDir, PARTNER_AFFECT_SHADOW_FILE_NAME), '{"enabled": true}', 'utf8');
++    expect(() => loadPartnerAffectShadowConfig(dataDir, { seedDir: tempDir() })).toThrow();
++  });
++});
+diff --git a/src/system/config/partner-affect-shadow-config.ts b/src/system/config/partner-affect-shadow-config.ts
+new file mode 100644
+index 000000000..d8e65de3a
+--- /dev/null
++++ b/src/system/config/partner-affect-shadow-config.ts
+@@ -0,0 +1,188 @@
++import { join } from 'node:path';
++import {
++  loadRequiredJson,
++} from './load-or-seed.js';
++import { writeJsonAtomic } from '../../shared/utils/fs.js';
++import { isRecord } from '../../shared/utils/types.js';
++import {
++  isPartnerAffectDirection,
++  isPartnerAffectSignalFamily,
++  type PartnerAffectDirection,
++  type PartnerAffectShadowPolicy,
++  type PartnerAffectSignalFamily,
++  type PartnerAffectSourceAuthorization,
++} from '../../shared/contracts/partner-affect.js';
++
++// Canonical JSON owner file for the Partner Affect shadow observation
++// foundation (docs/partner-affect.md, slice 1). Every mutable weight, window,
++// and threshold the shadow lane uses lives here — there are no hidden module
++// constants. The subsystem ships disabled and partner-unbound; both must be
++// explicitly configured before any observation is accepted.
++
++export const PARTNER_AFFECT_SHADOW_FILE_NAME = 'partner-affect-shadow.json';
++export const PARTNER_AFFECT_SHADOW_SEED_FILE_NAME = 'partner-affect-shadow.seed.json';
++
++interface PartnerAffectShadowConfigLoadOptions {
++  seedDir?: string;
++}
++
++function invalid(field: string, requirement: string, value: unknown): Error {
++  return new Error(
++    `Invalid partner-affect-shadow config: ${field} must be ${requirement}, got ${JSON.stringify(value)}`,
++  );
++}
++
++function toBoolean(value: unknown, field: string): boolean {
++  if (typeof value !== 'boolean') {
++    throw invalid(field, 'a boolean', value);
++  }
++  return value;
++}
++
++function toPositiveInteger(value: unknown, field: string): number {
++  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value <= 0) {
++    throw invalid(field, 'a positive integer', value);
++  }
++  return value;
++}
++
++function toUnitInterval(value: unknown, field: string): number {
++  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0 || value > 1) {
++    throw invalid(field, 'a number in [0, 1]', value);
++  }
++  return value;
++}
++
++function toToken(value: unknown, field: string, maxLength = 128): string {
++  if (typeof value !== 'string') {
++    throw invalid(field, 'a string', value);
++  }
++  const trimmed = value.trim();
++  if (trimmed.length === 0 || trimmed.length > maxLength) {
++    throw invalid(field, `a non-empty string of at most ${String(maxLength)} characters`, value);
++  }
++  return trimmed;
++}
++
++function toSignalFamily(value: unknown, field: string): PartnerAffectSignalFamily {
++  if (!isPartnerAffectSignalFamily(value)) {
++    throw invalid(field, 'a known partner-affect Signal Family', value);
++  }
++  return value;
++}
++
++function validateDirections(value: unknown, field: string): Record<string, PartnerAffectDirection> {
++  if (value === undefined) return {};
++  if (!isRecord(value)) {
++    throw invalid(field, 'an object keyed by "family.metricName"', value);
++  }
++  const directions: Record<string, PartnerAffectDirection> = {};
++  for (const [key, rawDirection] of Object.entries(value)) {
++    const trimmedKey = key.trim();
++    const separator = trimmedKey.indexOf('.');
++    if (separator <= 0 || separator === trimmedKey.length - 1) {
++      throw invalid(`${field}.${key}`, 'keyed as "family.metricName"', key);
++    }
++    toSignalFamily(trimmedKey.slice(0, separator), `${field}.${key} family prefix`);
++    if (!isPartnerAffectDirection(rawDirection)) {
++      throw invalid(`${field}.${key}`, 'a known partner-affect direction', rawDirection);
++    }
++    directions[trimmedKey] = rawDirection;
++  }
++  return directions;
++}
++
++function validateSource(value: unknown, field: string): PartnerAffectSourceAuthorization {
++  if (!isRecord(value)) {
++    throw invalid(field, 'an object', value);
++  }
++  const families = value.families;
++  if (!Array.isArray(families) || families.length === 0) {
++    throw invalid(`${field}.families`, 'a non-empty array of Signal Families', families);
++  }
++  return {
++    sourceId: toToken(value.sourceId, `${field}.sourceId`),
++    families: [...new Set(families.map((family, index) => toSignalFamily(family, `${field}.families[${String(index)}]`)))],
++    consentRef: toToken(value.consentRef, `${field}.consentRef`),
++    sensitivity: toToken(value.sensitivity, `${field}.sensitivity`, 64),
++    revoked: toBoolean(value.revoked, `${field}.revoked`),
++  };
++}
++
++function validateSources(value: unknown, field: string): PartnerAffectSourceAuthorization[] {
++  if (value === undefined) return [];
++  if (!Array.isArray(value)) {
++    throw invalid(field, 'an array of source authorizations', value);
++  }
++  const sources = value.map((entry, index) => validateSource(entry, `${field}[${String(index)}]`));
++  const seen = new Set<string>();
++  for (const source of sources) {
++    if (seen.has(source.sourceId)) {
++      throw invalid(field, 'free of duplicate sourceId entries', source.sourceId);
++    }
++    seen.add(source.sourceId);
++  }
++  return sources;
++}
++
++function validateAllowedFamilies(value: unknown, field: string): PartnerAffectSignalFamily[] {
++  if (!Array.isArray(value) || value.length === 0) {
++    throw invalid(field, 'a non-empty array of Signal Families', value);
++  }
++  return [...new Set(value.map((family, index) => toSignalFamily(family, `${field}[${String(index)}]`)))];
++}
++
++export function validatePartnerAffectShadowConfig(
++  raw: unknown,
++  sourcePath: string,
++): PartnerAffectShadowPolicy {
++  if (!isRecord(raw)) {
++    throw new Error(`Invalid partner-affect-shadow config at ${sourcePath}: expected object`);
++  }
++  const partnerContactId = raw.partnerContactId === null
++    ? null
++    : toToken(raw.partnerContactId, 'partnerContactId');
++  const enabled = toBoolean(raw.enabled, 'enabled');
++  if (enabled && partnerContactId === null) {
++    // Fail closed: an enabled shadow lane with no exact canonical partner
++    // binding cannot exist — there is nothing valid it could observe.
++    throw new Error(
++      `Invalid partner-affect-shadow config at ${sourcePath}: enabled requires a non-null partnerContactId`,
++    );
++  }
++  return {
++    enabled,
++    partnerContactId,
++    staleAfterMs: toPositiveInteger(raw.staleAfterMs, 'staleAfterMs'),
++    evidenceWindowMs: toPositiveInteger(raw.evidenceWindowMs, 'evidenceWindowMs'),
++    minConfidence: toUnitInterval(raw.minConfidence, 'minConfidence'),
++    minIndependentFamilies: toPositiveInteger(raw.minIndependentFamilies, 'minIndependentFamilies'),
++    conflictValueTolerance: toUnitInterval(raw.conflictValueTolerance, 'conflictValueTolerance'),
++    allowedSignalFamilies: validateAllowedFamilies(raw.allowedSignalFamilies, 'allowedSignalFamilies'),
++    directions: validateDirections(raw.directions, 'directions'),
++    sources: validateSources(raw.sources, 'sources'),
++    maxRetainedObservations: toPositiveInteger(raw.maxRetainedObservations, 'maxRetainedObservations'),
++    policyRevision: toToken(raw.policyRevision, 'policyRevision', 64),
++  };
++}
++
++export function loadPartnerAffectShadowConfig(
++  dataDir: string,
++  options: PartnerAffectShadowConfigLoadOptions = {},
++): PartnerAffectShadowPolicy {
++  const seedDir = options.seedDir ?? process.env.CONFIG_DIR ?? './config';
++  return loadRequiredJson({
++    dataPath: join(dataDir, PARTNER_AFFECT_SHADOW_FILE_NAME),
++    examplePath: join(seedDir, PARTNER_AFFECT_SHADOW_SEED_FILE_NAME),
++    validate: validatePartnerAffectShadowConfig,
++  });
++}
++
++export function savePartnerAffectShadowConfig(
++  dataDir: string,
++  nextConfig: unknown,
++): PartnerAffectShadowPolicy {
++  const validated = validatePartnerAffectShadowConfig(nextConfig, PARTNER_AFFECT_SHADOW_FILE_NAME);
++  writeJsonAtomic(join(dataDir, PARTNER_AFFECT_SHADOW_FILE_NAME), validated);
++  return validated;
++}
+diff --git a/src/system/config/settings-contract-guard.test.ts b/src/system/config/settings-contract-guard.test.ts
+index 14841f786..3a33a9acb 100644
+--- a/src/system/config/settings-contract-guard.test.ts
++++ b/src/system/config/settings-contract-guard.test.ts
+@@ -195,6 +195,7 @@ describe('settings contract guard', () => {
+       { rawEditorKey: 'intake-policy', subsystemId: 'intakePolicy', ownerFile: 'intake-policy.json' },
+       { rawEditorKey: 'capabilities', subsystemId: 'capabilities', ownerFile: 'capability-tier.json' },
+       { rawEditorKey: 'charge-policy', subsystemId: 'chargePolicy', ownerFile: 'charge-policy.json' },
++      { rawEditorKey: 'partner-affect-shadow', subsystemId: 'partnerAffectShadow', ownerFile: 'partner-affect-shadow.json' },
+       { rawEditorKey: 'backup', subsystemId: 'backup', ownerFile: 'backup.json' },
+     ]);
+ 
+diff --git a/src/system/config/settings-contract.ts b/src/system/config/settings-contract.ts
+index df63c58b7..d7dd81929 100644
+--- a/src/system/config/settings-contract.ts
++++ b/src/system/config/settings-contract.ts
+@@ -9,6 +9,7 @@ import { BACKUP_FILE_NAME } from './backup-config.js';
+ import { CAPABILITY_TIER_FILE_NAME } from './capability-tier-config.js';
+ import { CHARGE_POLICY_FILE_NAME } from './charge-policy-config.js';
+ import { INTAKE_POLICY_FILE_NAME } from './intake-policy-config.js';
++import { PARTNER_AFFECT_SHADOW_FILE_NAME } from './partner-affect-shadow-config.js';
+ import { MODELS_FILE_NAME } from './models-config.js';
+ import { PROVIDERS_FILE_NAME } from './providers-config.js';
+ import { SCHEDULER_FILE_NAME } from './scheduler-config.js';
+@@ -37,6 +38,7 @@ export type SettingsSubsystemId =
+   | 'skills'
+   | 'trustPolicy'
+   | 'intakePolicy'
++  | 'partnerAffectShadow'
+   | 'backup'
+   | 'channels';
+ 
+@@ -164,6 +166,12 @@ export const SETTINGS_SUBSYSTEMS: Record<SettingsSubsystemId, SettingsContractSu
+     mode: 'raw_only',
+     scope: ownerFileScope(INTAKE_POLICY_FILE_NAME),
+   },
++  partnerAffectShadow: {
++    id: 'partnerAffectShadow',
++    ownerFile: PARTNER_AFFECT_SHADOW_FILE_NAME,
++    mode: 'raw_only',
++    scope: ownerFileScope(PARTNER_AFFECT_SHADOW_FILE_NAME),
++  },
+   backup: {
+     id: 'backup',
+     ownerFile: BACKUP_FILE_NAME,
+diff --git a/src/system/config/startup-owner-files.test.ts b/src/system/config/startup-owner-files.test.ts
+index d299de575..5f280df21 100644
+--- a/src/system/config/startup-owner-files.test.ts
++++ b/src/system/config/startup-owner-files.test.ts
+@@ -47,6 +47,7 @@ describe('startup owner-file loaders', () => {
+     'backup.json',
+     'skills.json',
+     'intake-policy.json',
++    'partner-affect-shadow.json',
+   ] as const;
+ 
+   afterEach(() => {
+diff --git a/src/system/config/startup-owner-files.ts b/src/system/config/startup-owner-files.ts
+index faef5ec2e..4e14531a8 100644
+--- a/src/system/config/startup-owner-files.ts
++++ b/src/system/config/startup-owner-files.ts
+@@ -55,6 +55,11 @@ import {
+   resolveCompanionFleet,
+   type ResolvedCompanionsFleetConfig,
+ } from './companions-config.js';
++import {
++  loadPartnerAffectShadowConfig,
++  PARTNER_AFFECT_SHADOW_FILE_NAME,
++  PARTNER_AFFECT_SHADOW_SEED_FILE_NAME,
++} from './partner-affect-shadow-config.js';
+ import {
+   loadIntakePolicyConfig,
+   type IntakePolicyConfig,
+@@ -300,6 +305,15 @@ function systemOwnerFileChecks(
+       seedPath: join(seedDir, INTAKE_POLICY_SEED_FILE_NAME),
+       run: () => loadStartupIntakePolicyOwnerFile(options.dataDir, options.seedDir),
+     },
++    {
++      label: 'partner-affect-shadow',
++      dataPath: join(options.dataDir, PARTNER_AFFECT_SHADOW_FILE_NAME),
++      seedPath: join(seedDir, PARTNER_AFFECT_SHADOW_SEED_FILE_NAME),
++      run: () => loadPartnerAffectShadowConfig(
++        options.dataDir,
++        options.seedDir ? { seedDir: options.seedDir } : undefined,
++      ),
++    },
+     {
+       label: 'fleet-auth',
+       dataPath: join(options.dataDir, FLEET_AUTH_FILE_NAME),

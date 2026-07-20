@@ -58,6 +58,7 @@ interface SuppressionRow extends QueryResultRow {
   observation_key: string | null;
   source_id: string | null;
   signal_family: string | null;
+  partner_contact_id: string | null;
   reasons_json: unknown;
   detail: string;
   received_at_ms: string | number;
@@ -101,6 +102,7 @@ function mapObservationRow(row: ObservationRow): PartnerAffectObservation {
     row.assertion !== 'partner_asserted'
     && row.assertion !== 'model_inferred'
     && row.assertion !== 'sensor_summary'
+    && row.assertion !== 'unverified'
   ) {
     throw new Error(
       `Persisted partner-affect observation ${row.observation_key} has unknown assertion basis "${row.assertion}"`,
@@ -159,6 +161,7 @@ function mapSuppressionRow(row: SuppressionRow): PartnerAffectSuppressedObservat
     observationKey: row.observation_key,
     sourceId: row.source_id,
     signalFamily,
+    partnerContactId: row.partner_contact_id,
     reasons,
     detail: row.detail,
     receivedAtMs: safeInteger(row.received_at_ms, 'received_at_ms'),
@@ -252,14 +255,15 @@ export class PostgresPartnerAffectShadowStore implements PartnerAffectShadowStor
     await executeQuery(this.pool, `
       INSERT INTO partner_affect_shadow_suppressions (
         id, schema_version, observation_key, source_id, signal_family,
-        reasons_json, detail, received_at_ms
-      ) VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8)
+        partner_contact_id, reasons_json, detail, received_at_ms
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9)
     `, [
       randomUUID(),
       suppressed.schemaVersion,
       suppressed.observationKey,
       suppressed.sourceId,
       suppressed.signalFamily,
+      suppressed.partnerContactId,
       JSON.stringify(suppressed.reasons),
       suppressed.detail.slice(0, 2_048),
       suppressed.receivedAtMs,
@@ -293,12 +297,21 @@ export class PostgresPartnerAffectShadowStore implements PartnerAffectShadowStor
     options: PartnerAffectSuppressionListOptions = {},
   ): Promise<PartnerAffectSuppressedObservation[]> {
     const limit = normalizeBoundedLimit(options.limit);
+    const partnerContactId = options.partnerContactId?.trim() ?? null;
+    if (options.partnerContactId !== undefined && !partnerContactId) {
+      throw new Error('listSuppressed partnerContactId must be non-empty when provided');
+    }
+    // Scope to the bound partner exactly like listAccepted: a non-null filter
+    // excludes rows from a prior binding, a different partner, and unbound
+    // (null-partner) suppressions. Absent filter returns the full audit.
     const rows = await queryRows<SuppressionRow>(this.pool, `
-      SELECT observation_key, source_id, signal_family, reasons_json, detail, received_at_ms
+      SELECT observation_key, source_id, signal_family, partner_contact_id,
+             reasons_json, detail, received_at_ms
       FROM partner_affect_shadow_suppressions
+      WHERE ($1::text IS NULL OR partner_contact_id = $1)
       ORDER BY received_at_ms DESC, id DESC
-      LIMIT $1
-    `, [limit]);
+      LIMIT $2
+    `, [partnerContactId, limit]);
     return rows.map(mapSuppressionRow);
   }
 

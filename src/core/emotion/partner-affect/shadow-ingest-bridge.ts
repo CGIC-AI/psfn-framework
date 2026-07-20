@@ -103,6 +103,7 @@ class DefaultPartnerAffectShadowIngestBridge implements PartnerAffectShadowInges
           observationKey: null,
           sourceId: null,
           signalFamily: null,
+          partnerContactId: this.policy.partnerContactId,
           reasons: ['missing_authenticated_origin'],
           detail: 'telemetry event lacks an authenticated ingress origin context',
           receivedAtMs,

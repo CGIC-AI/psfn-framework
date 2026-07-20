@@ -62,14 +62,18 @@ export function isPartnerAffectDirection(value: unknown): value is PartnerAffect
 
 /**
  * How the observation's content relates to the partner's own voice. A
- * model/classifier anywhere in provenance forces `model_inferred`; only pure
- * self-report provenance may claim `partner_asserted`. Inference must never be
- * presented as partner-asserted fact.
+ * model/classifier anywhere in provenance forces `model_inferred`. A source
+ * that self-declares `self_report` over telemetry cannot be verified by the
+ * runtime, so it is stamped `unverified`, never `partner_asserted`: inference
+ * (or an unverifiable claim) must never be presented as partner-asserted fact.
+ * `partner_asserted` is reserved for a future trusted in-runtime self-report
+ * path and is not reachable from the external-telemetry ingress in this slice.
  */
 export const PARTNER_AFFECT_ASSERTION_BASES = [
   'partner_asserted',
   'model_inferred',
   'sensor_summary',
+  'unverified',
 ] as const;
 
 export type PartnerAffectAssertionBasis = typeof PARTNER_AFFECT_ASSERTION_BASES[number];
@@ -147,6 +151,14 @@ export interface PartnerAffectSuppressedObservation {
   observationKey: string | null;
   sourceId: string | null;
   signalFamily: PartnerAffectSignalFamily | null;
+  /**
+   * The bound canonical partner this candidate was evaluated against (null
+   * when the shadow lane is unbound). Scopes the suppression audit so rows
+   * from telemetry naming any contact do not surface under, or survive a
+   * re-bind of, a different partner. `detail` carries structural reason codes
+   * only — never the rejected value.
+   */
+  partnerContactId: string | null;
   reasons: PartnerAffectSuppressionReason[];
   detail: string;
   receivedAtMs: number;

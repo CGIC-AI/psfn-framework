@@ -155,6 +155,7 @@ describe('AdminPartnerAffectShadowDataService', () => {
       observationKey: null,
       sourceId: null,
       signalFamily: null,
+      partnerContactId: PARTNER_ID,
       reasons: ['missing_authenticated_origin'],
       detail: 'telemetry event lacks an authenticated ingress origin context',
       receivedAtMs: NOW_MS,
@@ -169,9 +170,22 @@ describe('AdminPartnerAffectShadowDataService', () => {
     expect(page.accepted).toHaveLength(1);
     expect(page.suppressed).toHaveLength(1);
     expect(store.listAcceptedCalls[0]).toEqual({ partnerContactId: PARTNER_ID, limit: 25 });
-    expect(store.listSuppressedCalls[0]).toEqual({ limit: 25 });
+    // Suppression audit is scoped to the bound partner, matching listAccepted.
+    expect(store.listSuppressedCalls[0]).toEqual({ partnerContactId: PARTNER_ID, limit: 25 });
 
     await expect(service.listObservations(0)).rejects.toThrow(/limit/);
     await expect(service.listObservations(10_000)).rejects.toThrow(/limit/);
+  });
+
+  it('does not pass a partner filter to listSuppressed when the lane is unbound', async () => {
+    const store = new FakeStore([]);
+    const service = new AdminPartnerAffectShadowDataService({
+      store,
+      loadPolicy: () => policy({ enabled: false, partnerContactId: null }),
+      now: () => NOW_MS,
+    });
+    await service.listObservations(10);
+    expect(store.listAcceptedCalls).toHaveLength(0);
+    expect(store.listSuppressedCalls[0]).toEqual({ limit: 10 });
   });
 });

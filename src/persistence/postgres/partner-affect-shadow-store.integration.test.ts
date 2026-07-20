@@ -65,6 +65,7 @@ function suppression(
     observationKey: 'edge-sleep-1:obs-bad',
     sourceId: 'edge-sleep-1',
     signalFamily: 'sleep',
+    partnerContactId: PARTNER_ID,
     reasons: ['wrong_partner'],
     detail: 'observation names a contact other than the bound canonical partner',
     receivedAtMs: NOW_MS,
@@ -148,6 +149,36 @@ describe('PostgresPartnerAffectShadowStore', () => {
       expect(rows[0].reasons).toEqual(['missing_authenticated_origin']);
       expect(rows[1].reasons).toEqual(['wrong_partner']);
       await expect(store.recordSuppressed(suppression({ reasons: [] }))).rejects.toThrow(/reason/);
+    });
+  }, INTEGRATION_TIMEOUT_MS);
+
+  it('scopes the suppression audit to the bound partner and excludes prior-binding rows', async () => {
+    await withDatabase(async (pool) => {
+      const store = await PostgresPartnerAffectShadowStore.fromPool(pool);
+      // Rows recorded under the current binding, a different binding, and while
+      // unbound (null partner) all coexist in the table.
+      await store.recordSuppressed(suppression({ partnerContactId: PARTNER_ID }));
+      await store.recordSuppressed(suppression({ partnerContactId: 'contact-previous-partner' }));
+      await store.recordSuppressed(suppression({
+        partnerContactId: null,
+        observationKey: null,
+        sourceId: null,
+        signalFamily: null,
+        reasons: ['missing_authenticated_origin'],
+      }));
+
+      const scoped = await store.listSuppressed({ partnerContactId: PARTNER_ID });
+      expect(scoped).toHaveLength(1);
+      expect(scoped[0].partnerContactId).toBe(PARTNER_ID);
+
+      // A re-bind to the previous partner never surfaces this partner's rows.
+      const other = await store.listSuppressed({ partnerContactId: 'contact-previous-partner' });
+      expect(other.map(row => row.partnerContactId)).toEqual(['contact-previous-partner']);
+
+      // The unscoped audit still returns everything for operator diagnostics.
+      expect(await store.listSuppressed()).toHaveLength(3);
+
+      await expect(store.listSuppressed({ partnerContactId: '  ' })).rejects.toThrow(/partnerContactId/);
     });
   }, INTEGRATION_TIMEOUT_MS);
 

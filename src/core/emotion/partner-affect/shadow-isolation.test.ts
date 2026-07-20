@@ -1,4 +1,4 @@
-// Shadow-only enforcement (docs/partner-affect.md slice 1, psfn-framework-qeid).
+// Shadow-only enforcement (docs/partner-affect.md slice 1).
 //
 // The Partner Affect observation foundation must be unreachable as behavioral
 // authority: nothing in prompt assembly, session/context recording, emotion
@@ -6,6 +6,18 @@
 // import the shadow surfaces. This test walks the source tree and fails when
 // a new importer appears outside the reviewed allowlist, so any future wiring
 // into a behavioral path is a deliberate, visible decision.
+//
+// Two escape hatches beyond a plain module-import graph are covered explicitly:
+//   1. A behavioral consumer could reach shadow output via the event bus
+//      instead of an import — by subscribing (string literal) to the shadow
+//      telemetry event. The third test scans for that literal and holds it to
+//      the same allowlist.
+//   2. A consumer could read the Postgres shadow tables directly. The fourth
+//      test scans for those table names outside the persistence/config layer.
+// Limitation (not overclaimed): these are static source scans. A subscription
+// assembled from a dynamically-computed event name, or a raw SQL string built
+// at runtime, would evade them; such indirection would itself be a reviewable
+// anomaly in this codebase, which uses literal event names and table names.
 
 import { readdirSync, readFileSync } from 'node:fs';
 import { join, relative, sep } from 'node:path';
@@ -125,6 +137,58 @@ describe('partner-affect shadow isolation', () => {
       path => FORBIDDEN_PREFIXES.some(prefix => path.startsWith(prefix)),
     );
     expect(behavioral).toEqual([]);
+  });
+
+  it('has no behavioral subscriber to the shadow telemetry event outside the allowlist', () => {
+    // A consumer could reach shadow output via the bus rather than an import.
+    // Only the bridge (emitter), the event-bus type map, and tests may name the
+    // shadow telemetry event; any other file referencing it — especially a
+    // `.on(...)` subscriber — would be an undeclared behavioral tap.
+    const EVENT_LITERAL = 'emotion.partner_affect.shadow.telemetry';
+    const allowed = new Set([
+      'src/core/emotion/partner-affect/shadow-ingest-bridge.ts',
+      'src/core/emotion/partner-affect/shadow-ingest-bridge.test.ts',
+      'src/shared/event-bus.ts',
+      'src/core/emotion/partner-affect/shadow-isolation.test.ts',
+    ]);
+    const referrers: string[] = [];
+    for (const file of listSourceFiles(SRC_ROOT)) {
+      const relativePath = relative(process.cwd(), file).split(sep).join('/');
+      if (allowed.has(relativePath)) continue;
+      if (readFileSync(file, 'utf8').includes(EVENT_LITERAL)) {
+        referrers.push(relativePath);
+      }
+    }
+    expect(
+      referrers,
+      `Undeclared reference to the shadow telemetry event: ${referrers.join(', ')}. `
+      + 'A bus subscriber to this event is a behavioral tap on shadow output and must be reviewed.',
+    ).toEqual([]);
+  });
+
+  it('reads the Postgres shadow tables only from the persistence layer', () => {
+    // A consumer could bypass the store port and read the tables directly.
+    const TABLE_NAMES = [
+      'partner_affect_shadow_observations',
+      'partner_affect_shadow_suppressions',
+    ];
+    const allowed = new Set([
+      'src/persistence/postgres/partner-affect-shadow-store.ts',
+      'src/persistence/postgres/partner-affect-shadow-store.integration.test.ts',
+      'src/persistence/postgres/migrations.ts',
+      'src/persistence/postgres/migrations.test.ts',
+      'src/core/emotion/partner-affect/shadow-isolation.test.ts',
+    ]);
+    const referrers: string[] = [];
+    for (const file of listSourceFiles(SRC_ROOT)) {
+      const relativePath = relative(process.cwd(), file).split(sep).join('/');
+      if (allowed.has(relativePath)) continue;
+      const content = readFileSync(file, 'utf8');
+      if (TABLE_NAMES.some(table => content.includes(table))) {
+        referrers.push(relativePath);
+      }
+    }
+    expect(referrers).toEqual([]);
   });
 
   it('keeps the ingest spine wired: the agent entrypoint creates the shadow bridge', () => {

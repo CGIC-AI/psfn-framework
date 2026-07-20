@@ -118,7 +118,12 @@ export class AdminPartnerAffectShadowDataService implements AdminPartnerAffectSh
         partnerContactId: policy.partnerContactId,
         limit: boundedLimit,
       });
-    const suppressed = await this.store.listSuppressed({ limit: boundedLimit });
+    // Scope suppression audit to the currently bound partner so rows naming a
+    // different contact, or recorded under a prior binding, never surface here.
+    const suppressed = await this.store.listSuppressed({
+      ...(policy.partnerContactId !== null ? { partnerContactId: policy.partnerContactId } : {}),
+      limit: boundedLimit,
+    });
     return { accepted, suppressed };
   }
 }

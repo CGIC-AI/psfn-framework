@@ -22,6 +22,13 @@ export interface PartnerAffectObservationListOptions {
 }
 
 export interface PartnerAffectSuppressionListOptions {
+  /**
+   * When provided, returns only suppression rows evaluated against exactly
+   * this bound partner. Scopes the audit so rows from a prior binding or a
+   * different partner do not surface. Rows recorded while unbound (null
+   * partner) are excluded by a non-null filter.
+   */
+  partnerContactId?: string;
   limit?: number;
 }
 

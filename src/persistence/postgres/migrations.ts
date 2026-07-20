@@ -2814,7 +2814,7 @@ export const POSTGRES_PARTNER_AFFECT_SHADOW_MIGRATIONS: readonly string[] = [
     CHECK (confidence >= 0 AND confidence <= 1),
     CHECK (missingness >= 0 AND missingness <= 1),
     CHECK (direction IN ('higher_supports_need', 'lower_supports_need', 'unknown')),
-    CHECK (assertion IN ('partner_asserted', 'model_inferred', 'sensor_summary')),
+    CHECK (assertion IN ('partner_asserted', 'model_inferred', 'sensor_summary', 'unverified')),
     CHECK (jsonb_typeof(provenance_json) = 'array'),
     CHECK (provenance_json <> '[]'::jsonb),
     CHECK (octet_length(provenance_json::text) <= 16384)
@@ -2831,6 +2831,7 @@ export const POSTGRES_PARTNER_AFFECT_SHADOW_MIGRATIONS: readonly string[] = [
     observation_key TEXT,
     source_id TEXT,
     signal_family TEXT,
+    partner_contact_id TEXT,
     reasons_json JSONB NOT NULL,
     detail TEXT NOT NULL,
     received_at_ms BIGINT NOT NULL,
@@ -2842,6 +2843,6 @@ export const POSTGRES_PARTNER_AFFECT_SHADOW_MIGRATIONS: readonly string[] = [
   `,
   `
   CREATE INDEX IF NOT EXISTS idx_partner_affect_shadow_suppressions_received
-    ON partner_affect_shadow_suppressions(received_at_ms DESC, id DESC);
+    ON partner_affect_shadow_suppressions(partner_contact_id, received_at_ms DESC, id DESC);
   `,
 ];

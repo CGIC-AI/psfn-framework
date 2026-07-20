@@ -12,7 +12,11 @@
 // emotion-contracts.ts) instead of growing a parallel guard vocabulary.
 
 import { isRecord } from '../../../shared/utils/types.js';
-import type { EmotionTelemetryProvenance } from '../../../shared/contracts/emotion-contracts.js';
+import {
+  EMOTION_TELEMETRY_SOURCES,
+  type EmotionTelemetryProvenance,
+  type EmotionTelemetrySource,
+} from '../../../shared/contracts/emotion-contracts.js';
 import { normalizeEmotionTelemetryProvenance } from '../telemetry-validation.js';
 import {
   PARTNER_AFFECT_SCHEMA_VERSION,
@@ -66,7 +70,18 @@ const MAX_UNIT_LENGTH = 32;
 const MAX_CONSENT_REF_LENGTH = 128;
 const MAX_PROCESSING_REVISION_LENGTH = 64;
 const MAX_PROVENANCE_ENTRIES = 8;
+// Free-text provenance handles (model/classifier/provenanceRef) are bounded to
+// short tokens. The shared emotion telemetry provenance normalizer applies NO
+// length/charset bound, and the API door only rejects >2048-char strings and
+// internal/gateway emitters of external.telemetry.ingested bypass that door —
+// so this guard is the only thing standing between a diary/GPS/PII string
+// smuggled through these fields and the accepted store.
+const MAX_PROVENANCE_TEXT_LENGTH = 128;
 const TOKEN_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9_.:/-]*$/;
+const PROVENANCE_TEXT_FIELDS = ['model', 'classifier', 'provenanceRef'] as const;
+const PROVENANCE_MODALITIES: ReadonlySet<string> = new Set([
+  'text', 'audio', 'fusion', 'runtime', 'self_report', 'unknown',
+]);
 
 /** Tolerated forward clock skew before an observation is `future_observation`. */
 export const PARTNER_AFFECT_CLOCK_SKEW_TOLERANCE_MS = 120_000;
@@ -93,10 +108,14 @@ function suppress(
     observationKey: string | null;
     sourceId: string | null;
     signalFamily: PartnerAffectSignalFamily | null;
+    partnerContactId: string | null;
     receivedAtMs: number;
   },
 ): PartnerAffectObservationDecision {
   const uniqueReasons = [...new Set(reasons.map(failure => failure.reason))].sort();
+  // `detail` is a join of the structural FieldFailure codes only. FieldFailure
+  // details are authored in this module and never interpolate a raw payload
+  // value, so no rejected content can ride the audit trail here.
   const detail = reasons.map(failure => failure.detail).join('; ');
   return {
     status: 'suppressed',
@@ -105,6 +124,7 @@ function suppress(
       observationKey: context.observationKey,
       sourceId: context.sourceId,
       signalFamily: context.signalFamily,
+      partnerContactId: context.partnerContactId,
       reasons: uniqueReasons,
       detail,
       receivedAtMs: context.receivedAtMs,
@@ -176,30 +196,85 @@ function readUnitInterval(
   return value;
 }
 
-function provenanceEntriesAreWhitelisted(value: unknown): boolean {
-  if (!Array.isArray(value)) return false;
-  if (value.length > MAX_PROVENANCE_ENTRIES) return false;
+/**
+ * Fully screen a raw provenance array before it can reach the shared
+ * normalizer (which is length/charset-blind) or the accepted store. Every
+ * failure is a structural code — no rejected value is ever interpolated into
+ * a detail string, so the suppression audit trail cannot leak content either.
+ * When this returns no failures, `normalizeEmotionTelemetryProvenance` is
+ * guaranteed to accept the same array without throwing.
+ */
+function screenProvenanceEntries(value: unknown): FieldFailure[] {
+  if (!Array.isArray(value)) {
+    return [{ reason: 'malformed_observation', detail: 'provenance must be an array' }];
+  }
+  const failures: FieldFailure[] = [];
+  if (value.length > MAX_PROVENANCE_ENTRIES) {
+    failures.push({
+      reason: 'raw_sensitive_payload',
+      detail: `provenance exceeds the ${String(MAX_PROVENANCE_ENTRIES)}-entry cap`,
+    });
+  }
   for (const entry of value) {
-    if (!isRecord(entry)) return false;
+    if (!isRecord(entry)) {
+      failures.push({ reason: 'malformed_observation', detail: 'provenance entry must be an object' });
+      continue;
+    }
     for (const key of Object.keys(entry)) {
-      if (!PROVENANCE_ENTRY_WHITELISTED_KEYS.has(key)) return false;
+      if (!PROVENANCE_ENTRY_WHITELISTED_KEYS.has(key)) {
+        failures.push({ reason: 'raw_sensitive_payload', detail: 'provenance entry carries a non-whitelisted key' });
+      }
+    }
+    // Enum fields are validated here (structural code only) so the shared
+    // normalizer's throw — which inlines the raw offending value — is never
+    // reached with untrusted input.
+    if (typeof entry.source !== 'string'
+      || !EMOTION_TELEMETRY_SOURCES.includes(entry.source as EmotionTelemetrySource)) {
+      failures.push({ reason: 'malformed_observation', detail: 'provenance source is not a supported telemetry source' });
+    }
+    if (entry.modality !== undefined && !PROVENANCE_MODALITIES.has(entry.modality as string)) {
+      failures.push({ reason: 'malformed_observation', detail: 'provenance modality is not supported' });
+    }
+    for (const field of PROVENANCE_TEXT_FIELDS) {
+      const raw = entry[field];
+      if (raw === undefined) continue;
+      if (
+        typeof raw !== 'string'
+        || raw.trim().length === 0
+        || raw.trim().length > MAX_PROVENANCE_TEXT_LENGTH
+        || !TOKEN_PATTERN.test(raw.trim())
+      ) {
+        failures.push({
+          reason: 'raw_sensitive_payload',
+          detail: `provenance ${field} must be a bounded token`,
+        });
+      }
+    }
+    if (
+      entry.observedAtMs !== undefined
+      && (typeof entry.observedAtMs !== 'number' || !Number.isFinite(entry.observedAtMs) || entry.observedAtMs < 0)
+    ) {
+      failures.push({ reason: 'malformed_observation', detail: 'provenance observedAtMs must be a non-negative finite number' });
     }
   }
-  return true;
+  return failures;
 }
 
 /**
  * Derive how the observation relates to the partner's own voice. Any
- * classifier or model anywhere in provenance forces `model_inferred`; only
- * pure self-report provenance may claim `partner_asserted`. The payload has
- * no say in this: inference can never be presented as partner-asserted fact.
+ * classifier or model anywhere in provenance forces `model_inferred`. A
+ * self-declared `self_report` source cannot be verified by the runtime over
+ * telemetry, so it degrades to `unverified` — it is NEVER stamped
+ * `partner_asserted` (that basis is reserved for a future trusted in-runtime
+ * self-report path). Everything else is a `sensor_summary`. The payload's
+ * self-declared source can only ever lower the basis, never assert fact.
  */
 export function derivePartnerAffectAssertionBasis(
   provenance: readonly EmotionTelemetryProvenance[],
 ): PartnerAffectAssertionBasis {
   const modelInferred = provenance.some(entry => entry.classifier !== undefined || entry.model !== undefined);
   if (modelInferred) return 'model_inferred';
-  if (provenance.every(entry => entry.source === 'self_report')) return 'partner_asserted';
+  if (provenance.some(entry => entry.source === 'self_report')) return 'unverified';
   return 'sensor_summary';
 }
 
@@ -251,7 +326,15 @@ export function guardPartnerAffectObservation(
     failures.push({ reason: 'unknown_signal_family', detail: 'signalFamily is missing or not a known Signal Family' });
   }
 
-  const context = { observationKey, sourceId, signalFamily, receivedAtMs };
+  // The suppression audit is scoped to the bound partner (null when unbound),
+  // NOT to any contact the candidate payload names.
+  const context = {
+    observationKey,
+    sourceId,
+    signalFamily,
+    partnerContactId: policy.partnerContactId,
+    receivedAtMs,
+  };
 
   if (!policy.enabled) {
     failures.push({ reason: 'shadow_disabled', detail: 'partner affect shadow observation is disabled' });
@@ -327,28 +410,24 @@ export function guardPartnerAffectObservation(
     failures.push({ reason: 'low_confidence', detail: 'confidence is below the configured minimum' });
   }
 
-  // Provenance: whitelist entry keys first (fail-closed against smuggled
-  // content), then reuse the shared emotion telemetry provenance normalizer.
+  // Provenance: screen keys, enum fields, and free-text handles here (fail
+  // closed against smuggled content, structural codes only), THEN hand the
+  // pre-validated array to the shared normalizer for the canonical shape. The
+  // normalizer is length/charset-blind and throws with inlined raw values, so
+  // it must never see untrusted input directly.
   let provenance: EmotionTelemetryProvenance[] = [];
   const rawProvenance = payload.provenance;
   if (rawProvenance === undefined || (Array.isArray(rawProvenance) && rawProvenance.length === 0)) {
     failures.push({ reason: 'missing_provenance', detail: 'provenance is required and must be non-empty' });
-  } else if (!provenanceEntriesAreWhitelisted(rawProvenance)) {
-    failures.push({
-      reason: 'raw_sensitive_payload',
-      detail: 'provenance entries carry non-whitelisted keys or exceed the entry cap',
-    });
   } else {
-    try {
+    const provenanceFailures = screenProvenanceEntries(rawProvenance);
+    if (provenanceFailures.length > 0) {
+      failures.push(...provenanceFailures);
+    } else {
       provenance = normalizeEmotionTelemetryProvenance(rawProvenance, 'provenance');
-    } catch (error) {
-      failures.push({
-        reason: 'malformed_observation',
-        detail: error instanceof Error ? error.message : 'provenance failed validation',
-      });
-    }
-    if (provenance.some(entry => entry.source === 'missing' || entry.source === 'unknown')) {
-      failures.push({ reason: 'missing_provenance', detail: 'provenance entries must name a concrete source' });
+      if (provenance.some(entry => entry.source === 'missing' || entry.source === 'unknown')) {
+        failures.push({ reason: 'missing_provenance', detail: 'provenance entries must name a concrete source' });
+      }
     }
   }
 

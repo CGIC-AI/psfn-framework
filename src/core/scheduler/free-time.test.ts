@@ -14,6 +14,12 @@ import type {
 import { HEARTBEAT_SILENT_REFLECTION_TOKEN } from './heartbeat-policy.js';
 import { Scheduler } from './scheduler.js';
 import {
+  accumulateDisclosureSource,
+  beginDisclosureAccumulation,
+  type DisclosureDestinationConstraint,
+  type DisclosureLineage,
+} from '../cogsec/disclosure/index.js';
+import {
   buildFreeTimeContinuationPrompt,
   buildFreeTimeFramingPrompt,
   evaluateFreeTimeGate,
@@ -58,6 +64,31 @@ function entry(overrides: Partial<SessionEntry> & Pick<SessionEntry, 'role' | 't
     content: overrides.content ?? 'hello',
     ...overrides,
   };
+}
+
+/**
+ * Build a single-source disclosure lineage (via the landed accumulator) that
+ * permits exactly one contact's DM at `personal` sensitivity — enough to prove
+ * the return-note projection filters per contact.
+ */
+function disclosureLineage(input: { ref: string; permittedContactId: string }): DisclosureLineage {
+  const permitted: DisclosureDestinationConstraint[] = [
+    { kind: 'contact_dm', contactIds: [input.permittedContactId] },
+  ];
+  return accumulateDisclosureSource(
+    beginDisclosureAccumulation({
+      generationContextRef: `gen:${input.ref}`,
+      classifierVersion: 'test',
+      classifiedAt: '2026-07-20T00:00:00.000Z',
+    }),
+    {
+      ref: input.ref,
+      sensitivity: 'personal',
+      permittedDestinations: permitted,
+      subjectContactIds: [input.permittedContactId],
+      classified: true,
+    },
+  );
 }
 
 // ── Lane eligibility ──
@@ -535,6 +566,81 @@ describe('registerFreeTimeTasks', () => {
       expect(channelId).toBe('api:main'); // partner session, NOT the internal channel
       expect(source).toBe(FREE_TIME_RETURN_NOTE_SOURCE);
       expect(note).toContain('While you were away');
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  it('DM-targeted return note summarizes ONLY destination-eligible evidence (multi-contact)', async () => {
+    let nowMs = Date.parse('2026-06-11T06:00:00.000Z');
+    const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => nowMs);
+    try {
+      const { scheduler, sessionManager, runtime } = buildRuntime({
+        turnScript: ['about contact A', HEARTBEAT_SILENT_REFLECTION_TOKEN],
+        freeTimeTranscript: [
+          entry({ id: 10, role: 'assistant', timestamp: nowMs + 10_000, content: 'note about contact A' }),
+          entry({ id: 11, role: 'assistant', timestamp: nowMs + 20_000, content: 'note about contact B' }),
+        ],
+        now: () => nowMs,
+      });
+
+      const summarizeActivity = vi.fn(async (input: { entries: readonly SessionEntry[] }) => {
+        return input.entries.map(e => e.content).join(' | ');
+      });
+      runtime.summarizeActivity = summarizeActivity;
+      runtime.resolveReturnDestination = () => ({ kind: 'contact_dm', contactId: 'contact-a' });
+      const lineages = new Map<number, DisclosureLineage>([
+        [10, disclosureLineage({ ref: 'mem:a', permittedContactId: 'contact-a' })],
+        [11, disclosureLineage({ ref: 'mem:b', permittedContactId: 'contact-b' })],
+      ]);
+      runtime.resolveEntryDisclosureLineage = (e) => lineages.get(e.id);
+
+      registerFreeTimeTasks(runtime);
+      nowMs += 2_000;
+      await scheduler.tick();
+
+      // The summarizer saw ONLY the contact-A entry; contact-B never reached it.
+      expect(summarizeActivity).toHaveBeenCalledTimes(1);
+      const seen = summarizeActivity.mock.calls[0]?.[0].entries ?? [];
+      expect(seen.map(e => e.id)).toEqual([10]);
+      const [, note] = sessionManager.appendContextSystemNote.mock.calls[0];
+      expect(note).toContain('note about contact A');
+      expect(note).not.toContain('note about contact B');
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  it('collapses to a content-free note when nothing is eligible for the outward destination', async () => {
+    let nowMs = Date.parse('2026-06-11T06:00:00.000Z');
+    const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => nowMs);
+    try {
+      const { scheduler, sessionManager, runtime } = buildRuntime({
+        turnScript: ['about contact B', HEARTBEAT_SILENT_REFLECTION_TOKEN],
+        freeTimeTranscript: [
+          entry({ id: 10, role: 'assistant', timestamp: nowMs + 10_000, content: 'note about contact B' }),
+        ],
+        now: () => nowMs,
+      });
+
+      const summarizeActivity = vi.fn(async () => 'should not be called');
+      runtime.summarizeActivity = summarizeActivity;
+      // Target contact A, but the only evidence belongs to contact B → collapse.
+      runtime.resolveReturnDestination = () => ({ kind: 'contact_dm', contactId: 'contact-a' });
+      runtime.resolveEntryDisclosureLineage = () =>
+        disclosureLineage({ ref: 'mem:b', permittedContactId: 'contact-b' });
+
+      registerFreeTimeTasks(runtime);
+      nowMs += 2_000;
+      await scheduler.tick();
+
+      // Fail-closed collapse: no summary generated, content-free self note only.
+      expect(summarizeActivity).not.toHaveBeenCalled();
+      expect(sessionManager.appendContextSystemNote).toHaveBeenCalledTimes(1);
+      const [, note] = sessionManager.appendContextSystemNote.mock.calls[0];
+      expect(note).toContain('While you were away');
+      expect(note).not.toContain('Here is what I got up to');
+      expect(note).not.toContain('contact B');
     } finally {
       nowSpy.mockRestore();
     }

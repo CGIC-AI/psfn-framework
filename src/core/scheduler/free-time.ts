@@ -64,6 +64,8 @@ import type { Scheduler } from './scheduler.js';
 import { conversationalEntryFromSessionMetadata } from './session-metadata-preflight.js';
 import type { FreeTimeChooserOutcome } from './free-time-chooser.js';
 import type { FreeTimeWorkspace } from './free-time-workspace-resolver.js';
+import type { DisclosureDestination, DisclosureLineage } from '../cogsec/disclosure/index.js';
+import { projectReturnNoteEvidence } from './return-note-projection.js';
 
 const log = createComponentLogger('FreeTime');
 
@@ -438,6 +440,27 @@ export interface FreeTimeRuntimeOptions {
     entries: readonly SessionEntry[];
   }) => Promise<string>;
   /**
+   * Resolve the return note's DISCLOSURE DESTINATION for a completed block
+   * (bible §15.2 / §10.8). The destination-eligible summarizer projection
+   * (jp36.2.3.2) filters the block's evidence to only what THIS destination may
+   * lawfully receive before any summary is generated, so a note bound for one
+   * contact's DM can never be summarized from another contact's material. Wire
+   * to the workspace return policy → `DisclosureDestination` mapping owned by
+   * the routing sibling (jp36.2.3.1). ABSENT, the note keeps the full-fidelity
+   * private/self form (`companion_self`) — no regression while routing lands.
+   * This seam can only NARROW what the summarizer sees, never widen it.
+   */
+  resolveReturnDestination?: () => DisclosureDestination;
+  /**
+   * Resolve the captured per-turn disclosure lineage for one free-time
+   * transcript entry, so the projection can assess each entry against the
+   * return destination (bible §9). `undefined` for an entry fails closed — that
+   * entry is dropped for every outward destination (private/self keeps it). When
+   * this port is absent, every entry has undefined lineage, so any outward
+   * destination collapses to the private/self form.
+   */
+  resolveEntryDisclosureLineage?: (entry: SessionEntry) => DisclosureLineage | undefined;
+  /**
    * Resolve the lane-independent continuity session for a free-time block.
    * The scheduler trigger lane (quiet-hours vs idle) MUST NOT determine
    * transcript identity — both lanes resume the SAME chosen workspace session
@@ -572,12 +595,37 @@ async function surfaceReturnNote(
   const assistantEntries = transcript.filter(entry => entry.role === 'assistant');
   if (assistantEntries.length === 0) return false;
 
+  // Destination-eligible summarizer projection (jp36.2.3.2, bible §15.2/§10.8):
+  // filter the block's evidence to only what the return note's DESTINATION may
+  // lawfully receive BEFORE any summary is generated. Absent a resolved
+  // destination, the note keeps the full-fidelity private/self form. The
+  // projection rides the landed CogSec disclosure decision layer (jp36.1) — no
+  // parallel classification here.
+  const destination: DisclosureDestination =
+    options.resolveReturnDestination?.() ?? { kind: 'companion_self' };
+  const projection = projectReturnNoteEvidence({
+    evidence: assistantEntries.map(entry => ({
+      entry,
+      lineage: options.resolveEntryDisclosureLineage?.(entry),
+    })),
+    destination,
+  });
+
+  // Only `content` mode may summarize a transcript, and only from the
+  // destination-eligible subset. `state_only` (publication) and
+  // `collapsed_private` (fail-closed collapse: nothing was eligible for the
+  // requested outward destination) carry NO transcript content — the note stays
+  // a content-free "spent some time on my own" self-disclosure.
   let summary = '';
-  if (options.summarizeActivity) {
+  if (
+    projection.mode === 'content'
+    && projection.eligibleEntries.length > 0
+    && options.summarizeActivity
+  ) {
     try {
       summary = (await options.summarizeActivity({
         channelId: freeTimeChannel,
-        entries: assistantEntries,
+        entries: projection.eligibleEntries,
       })).trim();
     } catch (error) {
       // The summary is an enrichment; its failure must not block the return
@@ -588,6 +636,16 @@ async function surfaceReturnNote(
       });
     }
   }
+
+  log.debug('Free-time return-note projection resolved', {
+    channelId: freeTimeChannel,
+    requestedDestinationKind: destination.kind,
+    mode: projection.mode,
+    collapsed: projection.collapsed,
+    eligibleEntries: projection.eligibleEntries.length,
+    totalAssistantEntries: assistantEntries.length,
+    reason: projection.reason,
+  });
 
   const note = [
     '[While you were away]',

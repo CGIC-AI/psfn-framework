@@ -15,12 +15,21 @@ let serverSessionAuthenticated = $state(false);
 let authResolved = $state(typeof window === 'undefined');
 let sessionProbePromise: Promise<boolean> | null = null;
 let sessionProbeController: AbortController | null = null;
+let sessionProbeScope: string | null = null;
 let authenticated = $derived(!!token || serverSessionAuthenticated);
 
-onCompanionScopeChange(() => {
-  sessionProbeController?.abort();
+function clearSessionProbe(abort: boolean): void {
+  if (abort) sessionProbeController?.abort();
   sessionProbeController = null;
   sessionProbePromise = null;
+  sessionProbeScope = null;
+}
+
+onCompanionScopeChange((_previousCompanionId, nextCompanionId) => {
+  const nextScope = nextCompanionId ?? 'single-companion';
+  if (sessionProbeScope !== nextScope) {
+    clearSessionProbe(true);
+  }
   authResolved = token.length > 0;
   serverSessionAuthenticated = token.length > 0;
 });
@@ -41,6 +50,7 @@ async function probeServerSession(): Promise<boolean> {
   const companionScope = getCompanionCacheScope();
   const controller = new AbortController();
   sessionProbeController = controller;
+  sessionProbeScope = companionScope;
   try {
     const res = await fetch(scopeGardenDataPath('/api/admin/dashboard'), {
       headers: { Accept: 'application/json' },
@@ -48,14 +58,23 @@ async function probeServerSession(): Promise<boolean> {
       signal: controller.signal,
     });
     if (companionScope !== getCompanionCacheScope()) return false;
-    serverSessionAuthenticated = res.ok;
-  } catch {
-    if (companionScope === getCompanionCacheScope()) serverSessionAuthenticated = false;
+    if (res.ok) {
+      serverSessionAuthenticated = true;
+      authResolved = true;
+    } else if (res.status === 401 || res.status === 403) {
+      serverSessionAuthenticated = false;
+      authResolved = true;
+    }
+  } catch (error) {
+    if (!(error instanceof Error && error.name === 'AbortError')) {
+      console.warn(
+        'Garden admin session probe failed; authentication remains unresolved.',
+        error,
+      );
+    }
   } finally {
-    if (companionScope === getCompanionCacheScope()) authResolved = true;
     if (sessionProbeController === controller) {
-      sessionProbeController = null;
-      sessionProbePromise = null;
+      clearSessionProbe(false);
     }
   }
   return authenticated;
@@ -85,9 +104,7 @@ export function clearToken() {
   token = '';
   serverSessionAuthenticated = false;
   authResolved = true;
-  sessionProbePromise = null;
-  sessionProbeController?.abort();
-  sessionProbeController = null;
+  clearSessionProbe(true);
   clearLegacyPersistentAdminToken();
   clearLegacyScriptReadableAdminTokenCookie();
 }

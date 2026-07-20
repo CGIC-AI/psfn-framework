@@ -7,15 +7,20 @@ import {
   scopeGardenDataPath,
   scopeGardenPath,
 } from '$lib/fleet/companion-scope';
+import { throwIfAborted } from './abort';
 import { ApiError } from './errors';
 
 export { ApiError } from './errors';
 
 const inFlightRequests = new Map<AbortController, string>();
 
-onCompanionScopeChange(() => {
-  for (const controller of inFlightRequests.keys()) controller.abort();
-  inFlightRequests.clear();
+onCompanionScopeChange((_previousCompanionId, nextCompanionId) => {
+  const nextScope = nextCompanionId ?? 'single-companion';
+  for (const [controller, requestScope] of inFlightRequests) {
+    if (requestScope === nextScope) continue;
+    controller.abort();
+    inFlightRequests.delete(controller);
+  }
 });
 
 function authHeaders(): Record<string, string> {
@@ -64,7 +69,14 @@ export async function apiFetch(path: string, init: RequestInit = {}): Promise<Re
     : controller.signal;
   inFlightRequests.set(controller, requestScope);
   try {
-    const response = await fetch(url, { ...init, signal });
+    let response: Response;
+    try {
+      response = await fetch(url, { ...init, signal });
+    } catch (error) {
+      throwIfAborted(signal);
+      throw error;
+    }
+    throwIfAborted(signal);
     if (requestScope !== getCompanionCacheScope()) {
       throw abortError();
     }

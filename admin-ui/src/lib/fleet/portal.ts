@@ -1,4 +1,5 @@
 import { companionGardenRoot } from './companion-scope';
+import { throwIfAborted } from '../api/abort';
 import {
   hasExactKeys,
   isRecord,
@@ -142,6 +143,7 @@ export async function fetchFleetPortalProjection(signal?: AbortSignal): Promise<
     headers: { Accept: 'application/json' },
     ...(signal ? { signal } : {}),
   });
+  if (signal) throwIfAborted(signal);
   if (response.status === 401) {
     if (typeof window !== 'undefined') window.location.assign('/fleet/login');
     throw new Error('Fleet session expired');

@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { createComponentLogger } from '../../shared/logger.js';
+import type { InferredPostTurnAction } from '../../shared/contracts/runtime.js';
 import type { MessageSender } from '../../system/lifecycle/notifications.js';
 import {
   inferComposedDeferredPostTurnActions,
@@ -22,11 +23,13 @@ import {
   toInferredPostTurnActions,
 } from '../intention/appraisal.js';
 import { MotivationBridge } from '../intention/motivation.js';
+import { fingerprintSocialDesireOutboundAction } from '../intention/social-desire-outreach.js';
 import {
   evaluatePendingFollowUpActivationState,
   isPendingFollowUpExpired,
 } from '../intention/pending-follow-ups.js';
 import { evaluateProactiveOutboundTimeGate } from '../intention/proactive-time-gate.js';
+import type { OutreachOutboxAppendInput } from '../intention/outreach-outbox.js';
 import { cloneInternalState } from '../self-model/state.js';
 import {
   MAINTENANCE_REFLECTION_RUNTIME_CLASS,
@@ -79,6 +82,14 @@ export function wireHeartbeatPostTurnRuntime(
 
   const telemetryEventBus = runtimeOptions.eventBus;
   const lastIntentionFollowUpActivationByChannel = new Map<string, number>();
+  // Covers the narrow in-process gap after an external/ICP terminal outcome
+  // but before its durable outbox append. Retries finish persistence and
+  // settlement without repeating the external side effect.
+  const pendingSocialDesireTerminals = new Map<string, {
+    record: OutreachOutboxAppendInput;
+    disposition: 'sent' | 'terminal_block';
+    detail: string;
+  }>();
   const shouldUseCompositionalAppraisal = (channelId: string): boolean => (
     evaluateCompositionalPolicyForChannelId({
       policy: runtimeOptions.compositionalPolicy,
@@ -148,15 +159,60 @@ export function wireHeartbeatPostTurnRuntime(
   };
 
   const resolveOutboundProvenanceBlockReason = async (
-    action: { channelId: string },
+    action: InferredPostTurnAction,
     payload: IntentionOutboundMessageActionPayload,
+    options: { durableSocialConsentReplay?: boolean } = {},
   ): Promise<string | undefined> => {
     const hasPendingFollowUpLink = Boolean(payload.pendingFollowUpId);
     const linkedConcernIds = payload.concernIds ?? [];
     const requiresActiveConcern = payload.requiresActiveConcern === true;
+    const socialDesire = payload.socialDesire;
 
-    if (!hasPendingFollowUpLink && linkedConcernIds.length === 0 && !requiresActiveConcern) {
+    if (
+      !hasPendingFollowUpLink
+      && linkedConcernIds.length === 0
+      && !requiresActiveConcern
+      && !socialDesire
+    ) {
       return 'missing_live_provenance';
+    }
+
+    if (socialDesire) {
+      // Consented social-desire provenance (bead oth4.2). Acceptance requires
+      // the desire outbound runtime (wired only when socialDesire.enabled), a
+      // LIVE single-use consent from the companion's consent moment, a real
+      // durable desire record behind it, and headroom in the tight rate
+      // budget. A payload merely claiming this provenance can never pass:
+      // consents exist only in the runtime's own ledger.
+      const socialDesireRuntime = runtimeOptions.socialDesireOutbound;
+      if (!socialDesireRuntime) {
+        return 'social_desire_runtime_unavailable';
+      }
+      if (!runtimeOptions.outreachOutbox) {
+        return 'social_desire_outbox_unavailable';
+      }
+      const nowMs = Date.now();
+      if (!options.durableSocialConsentReplay && !socialDesireRuntime.verifyConsent({
+        consentId: socialDesire.consentId,
+        contactId: socialDesire.contactId,
+        nowMs,
+        actionId: action.id,
+        dedupeKey: action.dedupeKey,
+        channelId: payload.channelId,
+        channelType: payload.channelType,
+        content: payload.content,
+        orientation: socialDesire.orientation,
+        reason: payload.reason ?? '',
+        actionFingerprint: fingerprintSocialDesireOutboundAction(action),
+      })) {
+        return 'social_desire_consent_invalid';
+      }
+      if (!(await socialDesireRuntime.hasDesire(socialDesire.contactId))) {
+        return 'social_desire_record_missing';
+      }
+      if (socialDesireRuntime.isBudgetExhausted(nowMs)) {
+        return 'social_desire_budget_exhausted';
+      }
     }
 
     if (payload.pendingFollowUpId) {
@@ -193,6 +249,52 @@ export function wireHeartbeatPostTurnRuntime(
     }
 
     return undefined;
+  };
+
+  /**
+   * Terminal settlement of consented social-desire provenance (bead oth4.2).
+   * The single-use consent is spent, and the desire's pressure is released on
+   * a successful send or dampened (kept, never released) on a terminal block —
+   * so a budget- or policy-blocked desire retries from a fresh consent moment
+   * later. Non-terminal outcomes (reschedules, deferred ICP candidates) never
+   * settle: the consent stays live for the retry until it expires.
+   */
+  const settleSocialDesireProvenance = async (
+    action: { dedupeKey: string },
+    payload: IntentionOutboundMessageActionPayload,
+    disposition: 'sent' | 'terminal_block',
+    detail: string,
+  ): Promise<void> => {
+    const socialDesire = payload.socialDesire;
+    if (!socialDesire) {
+      return;
+    }
+    const socialDesireRuntime = runtimeOptions.socialDesireOutbound;
+    if (!socialDesireRuntime) {
+      // The gate already fails closed without the runtime; reaching settlement
+      // without it means the gate was bypassed — refuse to continue silently.
+      throw new Error('Social desire settlement requires the social desire outbound runtime');
+    }
+    const nowMs = Date.now();
+    const outcome = await socialDesireRuntime.settle({
+      settlementId: action.dedupeKey,
+      contactId: socialDesire.contactId,
+      disposition,
+      nowMs,
+    });
+    if (outcome === 'missing') {
+      throw new Error(`Social desire record "${socialDesire.contactId}" was missing at outbound settlement`);
+    }
+    // Durable settlement is committed before the ephemeral consent is spent.
+    // A retry can therefore reconcile an already-settled action safely.
+    socialDesireRuntime.consumeConsent(socialDesire.consentId);
+    log.info('Social desire outbound settled', {
+      contactId: socialDesire.contactId,
+      orientation: socialDesire.orientation,
+      disposition,
+      outcome,
+      detail,
+    });
   };
 
   const hashOutreachContent = (content: string): string => (
@@ -711,8 +813,7 @@ export function wireHeartbeatPostTurnRuntime(
     },
   );
 
-  if (intentionAppraisal) {
-    if (agentLoop.followUp) {
+  if (intentionAppraisal && agentLoop.followUp) {
       runtimeOptions.postTurnActions.registerHandler(
         INTENTION_FOLLOW_UP_ACTION_KIND,
         async (action) => {
@@ -780,7 +881,9 @@ export function wireHeartbeatPostTurnRuntime(
           runtimeClass: POST_TURN_APPRAISAL_RUNTIME_CLASS,
         },
       );
-      if (runtimeOptions.proactiveOutbound || runtimeOptions.icpIntentionCandidateAdapter) {
+  }
+
+  if (runtimeOptions.proactiveOutbound || runtimeOptions.icpIntentionCandidateAdapter) {
         const proactiveOutbound = runtimeOptions.proactiveOutbound;
         runtimeOptions.postTurnActions.registerHandler(
           INTENTION_OUTBOUND_MESSAGE_ACTION_KIND,
@@ -800,6 +903,50 @@ export function wireHeartbeatPostTurnRuntime(
               contentLength: payload.content.length,
               ...(payload.reason ? { reason: payload.reason } : {}),
               ...(typeof action.runAt === 'number' ? { runAt: action.runAt } : {}),
+            };
+            const socialDesireBindingHash = payload.socialDesire
+              ? fingerprintSocialDesireOutboundAction(action)
+              : undefined;
+            const persistAndSettleSocialDesireTerminal = async (input: {
+              phase: 'sent' | 'blocked' | 'failed';
+              disposition: 'sent' | 'terminal_block';
+              detail: string;
+              reason?: string;
+              error?: string;
+              metadata?: Record<string, unknown>;
+            }): Promise<void> => {
+              if (!payload.socialDesire) {
+                runtimeOptions.outreachOutbox?.append({
+                  ...baseOutboxRecord,
+                  phase: input.phase,
+                  ...(input.reason ? { reason: input.reason } : {}),
+                  ...(input.error ? { error: input.error } : {}),
+                  ...(input.metadata ? { metadata: input.metadata } : {}),
+                });
+                return;
+              }
+              if (!runtimeOptions.outreachOutbox) {
+                throw new Error('Social desire terminal persistence requires a durable outreach outbox');
+              }
+              const record: OutreachOutboxAppendInput = {
+                ...baseOutboxRecord,
+                phase: input.phase,
+                ...(input.reason ? { reason: input.reason } : {}),
+                ...(input.error ? { error: input.error } : {}),
+                metadata: {
+                  ...(input.metadata ?? {}),
+                  socialDesireDisposition: input.disposition,
+                  socialDesireBindingHash,
+                },
+              };
+              pendingSocialDesireTerminals.set(action.dedupeKey, {
+                record,
+                disposition: input.disposition,
+                detail: input.detail,
+              });
+              runtimeOptions.outreachOutbox.append(record);
+              await settleSocialDesireProvenance(action, payload, input.disposition, input.detail);
+              pendingSocialDesireTerminals.delete(action.dedupeKey);
             };
             const reconcileDeliveredIcpPendingFollowUp = async (
               pendingFollowUpId: string,
@@ -864,8 +1011,52 @@ export function wireHeartbeatPostTurnRuntime(
                 throw new Error('Linked ICP intention requires a durable outreach outbox');
               }
             }
+            const pendingSocialTerminal = payload.socialDesire
+              ? pendingSocialDesireTerminals.get(action.dedupeKey)
+              : undefined;
+            if (pendingSocialTerminal) {
+              if (!runtimeOptions.outreachOutbox) {
+                throw new Error('Social desire terminal reconciliation requires a durable outreach outbox');
+              }
+              if (pendingSocialTerminal.record.metadata?.socialDesireBindingHash !== socialDesireBindingHash) {
+                return { detail: 'blocked:social_desire_consent_invalid' };
+              }
+              const persistedTerminal = runtimeOptions.outreachOutbox.getTerminal(action.dedupeKey);
+              if (persistedTerminal) {
+                if (persistedTerminal.actionId !== pendingSocialTerminal.record.actionId
+                  || persistedTerminal.phase !== pendingSocialTerminal.record.phase
+                  || persistedTerminal.metadata?.socialDesireBindingHash !== socialDesireBindingHash) {
+                  return { detail: 'blocked:social_desire_consent_invalid' };
+                }
+              } else {
+                runtimeOptions.outreachOutbox.append(pendingSocialTerminal.record);
+              }
+              await settleSocialDesireProvenance(
+                action,
+                payload,
+                pendingSocialTerminal.disposition,
+                pendingSocialTerminal.detail,
+              );
+              pendingSocialDesireTerminals.delete(action.dedupeKey);
+              const reconciledPhase = pendingSocialTerminal.record.phase;
+              return reconciledPhase === 'sent'
+                ? { detail: 'sent' }
+                : { detail: `blocked:${pendingSocialTerminal.record.reason ?? 'delivery_outcome_ambiguous'}` };
+            }
             const terminalRecord = runtimeOptions.outreachOutbox?.getTerminal(action.dedupeKey);
             if (terminalRecord) {
+              const disposition = terminalRecord.metadata?.socialDesireDisposition;
+              if (payload.socialDesire && (disposition === 'sent' || disposition === 'terminal_block')) {
+                if (terminalRecord.metadata?.socialDesireBindingHash !== socialDesireBindingHash) {
+                  return { detail: 'blocked:social_desire_consent_invalid' };
+                }
+                await settleSocialDesireProvenance(
+                  action,
+                  payload,
+                  disposition,
+                  `terminal_replay:${terminalRecord.phase}`,
+                );
+              }
               runtimeOptions.outreachOutbox?.append({
                 ...baseOutboxRecord,
                 phase: 'skipped',
@@ -878,11 +1069,32 @@ export function wireHeartbeatPostTurnRuntime(
               recordOutreachSessionAudit(action, payload, 'skipped', `terminal history already recorded as ${terminalRecord.phase}`);
               return { detail: `skipped:terminal_dedupe:${terminalRecord.phase}` };
             }
+            const latestRecord = payload.socialDesire
+              ? runtimeOptions.outreachOutbox?.getLatest(action.dedupeKey)
+              : undefined;
+            const resumingDurableIcpSubmission = latestRecord?.phase === 'dispatching'
+              && latestRecord.metadata?.kind === 'social_desire_icp_submission';
+            if (latestRecord?.phase === 'dispatching') {
+              if (latestRecord.metadata?.socialDesireBindingHash !== socialDesireBindingHash) {
+                return { detail: 'blocked:social_desire_consent_invalid' };
+              }
+              if (!resumingDurableIcpSubmission) {
+                await persistAndSettleSocialDesireTerminal({
+                  phase: 'blocked',
+                  disposition: 'terminal_block',
+                  detail: 'delivery_outcome_ambiguous',
+                  reason: 'delivery_outcome_ambiguous',
+                });
+                return { detail: 'blocked:delivery_outcome_ambiguous' };
+              }
+            }
             runtimeOptions.outreachOutbox?.append({
               ...baseOutboxRecord,
               phase: typeof action.runAt === 'number' && action.runAt > Date.now() ? 'scheduled' : 'queued',
             });
-            const provenanceBlockReason = await resolveOutboundProvenanceBlockReason(action, payload);
+            const provenanceBlockReason = await resolveOutboundProvenanceBlockReason(action, payload, {
+              durableSocialConsentReplay: resumingDurableIcpSubmission,
+            });
             if (provenanceBlockReason) {
               log.info('Intention outbound action blocked by stale or missing provenance', {
                 actionId: action.id,
@@ -890,22 +1102,45 @@ export function wireHeartbeatPostTurnRuntime(
                 reason: provenanceBlockReason,
                 pendingFollowUpId: payload.pendingFollowUpId,
                 concernIds: payload.concernIds,
+                ...(payload.socialDesire
+                  ? { socialDesireContactId: payload.socialDesire.contactId }
+                  : {}),
               });
-              runtimeOptions.outreachOutbox?.append({
-                ...baseOutboxRecord,
-                phase: 'blocked',
-                reason: provenanceBlockReason,
-              });
+              if (provenanceBlockReason === 'social_desire_budget_exhausted') {
+                // Rate-budget exhaustion is a terminal block for THIS consent:
+                // spend it and dampen (never release) so the desire keeps its
+                // pressure and can retry via a later consent moment.
+                await persistAndSettleSocialDesireTerminal({
+                  phase: 'blocked',
+                  disposition: 'terminal_block',
+                  detail: provenanceBlockReason,
+                  reason: provenanceBlockReason,
+                });
+              } else {
+                runtimeOptions.outreachOutbox?.append({
+                  ...baseOutboxRecord,
+                  phase: 'blocked',
+                  reason: provenanceBlockReason,
+                });
+              }
               recordOutreachSessionAudit(action, payload, 'blocked', provenanceBlockReason);
               return { detail: `blocked:${provenanceBlockReason}` };
+            }
+            if (payload.socialDesire && runtimeOptions.icpIntentionCandidateAdapter) {
+              runtimeOptions.outreachOutbox?.append({
+                ...baseOutboxRecord,
+                phase: 'dispatching',
+                metadata: { kind: 'social_desire_icp_submission', socialDesireBindingHash },
+              });
             }
             const icpCandidate = runtimeOptions.icpIntentionCandidateAdapter
               ? await runtimeOptions.icpIntentionCandidateAdapter.submit({ action, payload })
               : { kind: 'not_companion' as const };
             if (icpCandidate.kind === 'blocked') {
-              runtimeOptions.outreachOutbox?.append({
-                ...baseOutboxRecord,
+              await persistAndSettleSocialDesireTerminal({
                 phase: 'blocked',
+                disposition: 'terminal_block',
+                detail: icpCandidate.reason,
                 reason: icpCandidate.reason,
               });
               recordOutreachSessionAudit(action, payload, 'blocked', icpCandidate.reason);
@@ -974,6 +1209,63 @@ export function wireHeartbeatPostTurnRuntime(
                 });
                 recordOutreachSessionAudit(action, payload, 'blocked', dampeningReason);
               }
+              if (payload.socialDesire) {
+                // Companion-target social desire (bead oth4.2): the consent
+                // moment already happened; the candidate rides the existing
+                // ICP defer/retry semantics. Terminal candidate dispositions
+                // settle the consent here; deferred keeps it live for the
+                // durable retry below.
+                const candidateStatus = icpCandidate.result.status;
+                if (candidateStatus === 'consumed' || candidateStatus === 'permitted') {
+                  if (icpCandidate.result.deliveryDisposition === 'suppressed') {
+                    await persistAndSettleSocialDesireTerminal({
+                      phase: 'blocked',
+                      disposition: 'terminal_block',
+                      detail: 'icp_candidate_suppressed',
+                      reason: 'icp_candidate_suppressed',
+                      metadata: {
+                        kind: 'social_desire_icp_disposition',
+                        candidateId: icpCandidate.result.candidateId,
+                        candidateStatus,
+                      },
+                    });
+                    recordOutreachSessionAudit(action, payload, 'blocked', 'icp_candidate_suppressed');
+                  } else {
+                    // Durable 'sent' record: the desire-outreach rate budget
+                    // counts ICP-path sends exactly like human-path sends.
+                    await persistAndSettleSocialDesireTerminal({
+                      phase: 'sent',
+                      disposition: 'sent',
+                      detail: `icp_candidate_${candidateStatus}`,
+                      metadata: {
+                        kind: 'social_desire_icp_delivery',
+                        candidateId: icpCandidate.result.candidateId,
+                        candidateStatus,
+                      },
+                    });
+                    recordOutreachSessionAudit(action, payload, 'sent', `icp_candidate_${candidateStatus}`);
+                  }
+                } else if (
+                  candidateStatus === 'declined'
+                  || candidateStatus === 'rejected'
+                  || candidateStatus === 'expired'
+                  || candidateStatus === 'cancelled'
+                ) {
+                  const socialDesireBlockReason = `icp_candidate_${candidateStatus}`;
+                  await persistAndSettleSocialDesireTerminal({
+                    phase: 'blocked',
+                    disposition: 'terminal_block',
+                    detail: socialDesireBlockReason,
+                    reason: socialDesireBlockReason,
+                    metadata: {
+                      kind: 'social_desire_icp_disposition',
+                      candidateId: icpCandidate.result.candidateId,
+                      candidateStatus,
+                    },
+                  });
+                  recordOutreachSessionAudit(action, payload, 'blocked', socialDesireBlockReason);
+                }
+              }
               const handlerResult = {
                 detail: `icp_candidate:${icpCandidate.result.outcome}:${icpCandidate.result.status}`,
               };
@@ -983,6 +1275,14 @@ export function wireHeartbeatPostTurnRuntime(
               if (icpCandidate.result.retryEligibleAtMs === undefined) {
                 throw new Error('Deferred ICP intention candidate has no durable retry eligibility');
               }
+              if (payload.socialDesire) {
+                runtimeOptions.outreachOutbox?.append({
+                  ...baseOutboxRecord,
+                  phase: 'scheduled',
+                  reason: 'icp_candidate_deferred',
+                  runAt: icpCandidate.result.retryEligibleAtMs,
+                });
+              }
               return {
                 ...handlerResult,
                 rescheduleAt: icpCandidate.result.retryEligibleAtMs,
@@ -991,22 +1291,62 @@ export function wireHeartbeatPostTurnRuntime(
             if (!proactiveOutbound) {
               throw new Error('Intention outbound action has no applicable delivery runtime');
             }
-            const timeGate = evaluateProactiveOutboundTimeGate({
-              nowMs: Date.now(),
-              earliestSendAtMs: action.runAt,
-              quietHours: runtimeOptions.episodicProcessingRestWindow,
-            });
-            if (!timeGate.allowed) {
+            if (payload.socialDesire) {
+              const policyDecision = runtimeOptions.socialDesireHumanDeliveryPolicy
+                ? await runtimeOptions.socialDesireHumanDeliveryPolicy.evaluate({
+                    contactId: payload.socialDesire.contactId,
+                    channelId: payload.channelId,
+                    channelType: payload.channelType,
+                    nowMs: Date.now(),
+                    ...(typeof action.runAt === 'number' ? { earliestSendAtMs: action.runAt } : {}),
+                  })
+                : { allowed: false as const, reason: 'social_desire_human_policy_unavailable' };
+              if (!policyDecision.allowed) {
+                if (policyDecision.rescheduleAt !== undefined) {
+                  runtimeOptions.outreachOutbox?.append({
+                    ...baseOutboxRecord,
+                    phase: 'scheduled',
+                    reason: policyDecision.reason,
+                    runAt: policyDecision.rescheduleAt,
+                  });
+                  return {
+                    detail: policyDecision.reason,
+                    rescheduleAt: policyDecision.rescheduleAt,
+                  };
+                }
+                await persistAndSettleSocialDesireTerminal({
+                  phase: 'blocked',
+                  disposition: 'terminal_block',
+                  detail: policyDecision.reason,
+                  reason: policyDecision.reason,
+                });
+                return { detail: `blocked:${policyDecision.reason}` };
+              }
+            } else {
+              const timeGate = evaluateProactiveOutboundTimeGate({
+                nowMs: Date.now(),
+                earliestSendAtMs: action.runAt,
+                quietHours: runtimeOptions.episodicProcessingRestWindow,
+              });
+              if (!timeGate.allowed) {
+                runtimeOptions.outreachOutbox?.append({
+                  ...baseOutboxRecord,
+                  phase: 'scheduled',
+                  reason: timeGate.reason,
+                  runAt: timeGate.nextEligibleAtMs,
+                });
+                return {
+                  detail: timeGate.reason,
+                  rescheduleAt: timeGate.nextEligibleAtMs,
+                };
+              }
+            }
+            if (payload.socialDesire) {
               runtimeOptions.outreachOutbox?.append({
                 ...baseOutboxRecord,
-                phase: 'scheduled',
-                reason: timeGate.reason,
-                runAt: timeGate.nextEligibleAtMs,
+                phase: 'dispatching',
+                metadata: { kind: 'social_desire_human_dispatch', socialDesireBindingHash },
               });
-              return {
-                detail: timeGate.reason,
-                rescheduleAt: timeGate.nextEligibleAtMs,
-              };
             }
             let dispatchResult: Awaited<ReturnType<typeof proactiveOutbound.dispatch>>;
             try {
@@ -1018,11 +1358,21 @@ export function wireHeartbeatPostTurnRuntime(
                 ...(payload.reason ? { reason: payload.reason } : {}),
               });
             } catch (error) {
-              runtimeOptions.outreachOutbox?.append({
-                ...baseOutboxRecord,
-                phase: 'failed',
-                error: String(error),
-              });
+              if (payload.socialDesire) {
+                await persistAndSettleSocialDesireTerminal({
+                  phase: 'failed',
+                  disposition: 'terminal_block',
+                  detail: 'delivery_outcome_ambiguous',
+                  error: String(error),
+                  metadata: { failureReason: 'delivery_outcome_ambiguous' },
+                });
+              } else {
+                runtimeOptions.outreachOutbox?.append({
+                  ...baseOutboxRecord,
+                  phase: 'failed',
+                  error: String(error),
+                });
+              }
               recordOutreachSessionAudit(action, payload, 'failed', String(error));
               throw error;
             }
@@ -1044,9 +1394,10 @@ export function wireHeartbeatPostTurnRuntime(
                 rescheduleAt: Date.now() + dispatchResult.retryAfterMs,
               };
             }
-            runtimeOptions.outreachOutbox?.append({
-              ...baseOutboxRecord,
+            await persistAndSettleSocialDesireTerminal({
               phase: dispatchResult.outcome === 'sent' ? 'sent' : 'blocked',
+              disposition: dispatchResult.outcome === 'sent' ? 'sent' : 'terminal_block',
+              detail: dispatchResult.outcome === 'sent' ? 'dispatched' : dispatchResult.reason,
               ...(dispatchResult.outcome === 'blocked' ? { reason: dispatchResult.reason } : {}),
             });
             if (dispatchResult.outcome === 'sent') {
@@ -1067,7 +1418,9 @@ export function wireHeartbeatPostTurnRuntime(
             runtimeClass: POST_TURN_APPRAISAL_RUNTIME_CLASS,
           },
         );
-      }
+  }
+
+  if (intentionAppraisal && agentLoop.followUp) {
       runtimeOptions.postTurnActions.registerHandler(
         INTENTION_REMINDER_ACTION_KIND,
         async (action) => {
@@ -1140,9 +1493,9 @@ export function wireHeartbeatPostTurnRuntime(
           runtimeClass: POST_TURN_APPRAISAL_RUNTIME_CLASS,
         },
       );
-    } else {
-      log.warn('Intention appraisal enabled but followUp hook is unavailable on agent loop');
-    }
+  }
+  if (intentionAppraisal && !agentLoop.followUp) {
+    log.warn('Intention appraisal enabled but followUp hook is unavailable on agent loop');
   }
 
   registerSchedulerOwnedPostTurnLanes({

@@ -475,9 +475,11 @@ describe('Postgres ICP intention lifecycle recovery', () => {
           },
           hasTerminal: dedupeKey => durableOutbox.hasTerminal(dedupeKey),
           getTerminal: dedupeKey => durableOutbox.getTerminal(dedupeKey),
+          getLatest: dedupeKey => durableOutbox.getLatest(dedupeKey),
           getIcpDeliveredCompletion: pendingFollowUpId => (
             durableOutbox.getIcpDeliveredCompletion(pendingFollowUpId)
           ),
+          countSentSince: input => durableOutbox.countSentSince(input),
         };
         const firstHandler = await wireOutboundHandler({
           dataDir,

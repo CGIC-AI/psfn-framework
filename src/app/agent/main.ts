@@ -43,6 +43,22 @@ import { deriveConversationScopeEnvelope } from '../../core/session/conversation
 import { registerWeightedThoughtOutreachTask } from '../../core/scheduler/weighted-thought-outreach-lane.js';
 import { createLlmNudgeEvaluator } from '../../core/intention/weighted-thought-nudge-evaluator.js';
 import { recordWeightedThought } from '../../core/intention/weighted-thought-store-port.js';
+import { registerSocialDesireOutreachTask } from '../../core/scheduler/social-desire-outreach-lane.js';
+import { createLlmSocialDesireConsentEvaluator } from '../../core/intention/social-desire-consent-evaluator.js';
+import {
+  createSocialDesireConsentLedger,
+  createSocialDesireOutboundRuntime,
+  type SocialDesireDeliveryChannel,
+  type SocialDesireOutboundRuntime,
+} from '../../core/intention/social-desire-outreach.js';
+import { createContactSocialDesireTierSource } from '../../core/intention/social-desire-store-port.js';
+import {
+  createSocialDesireHumanDeliveryPolicy,
+  type SocialDesireHumanDeliveryPolicy,
+} from '../../core/intention/social-desire-human-policy.js';
+import { composeCompanionDmChannelId } from '../../shared/contracts/companion-channels.js';
+import { createCompanionId } from '../../shared/routing/companion-id.js';
+import { CanonicalCompanionPeerValidationError } from '../../core/icp/agent-facing-autonomy.js';
 import { HEARTBEAT_SILENT_REFLECTION_TOKEN } from '../../core/scheduler/heartbeat-policy.js';
 import {
   getRunChargeSnapshot,
@@ -619,6 +635,7 @@ async function main(): Promise<void> {
     presenceEnabled: companionPresenceRuntime !== null,
     contactStore,
     weightedThoughtStore: persistenceRuntime.weightedThoughtStore,
+    socialDesireStore: persistenceRuntime.socialDesireStore,
     lifecycleConfig: schedulerConfig.weightedThoughtOutreach.lifecycle,
   });
 
@@ -1108,7 +1125,8 @@ async function main(): Promise<void> {
     });
   }
 
-  const heartbeatChannelId = discordChannelView.heartbeatChannelId || undefined;
+  const heartbeatChannel = discordChannelView.heartbeatChannel ?? undefined;
+  const heartbeatChannelId = heartbeatChannel?.channelId;
   const shutdownTargets: AgentControlPlaneShutdownTargets = {};
   const controlPlane = buildAgentControlPlane({
     heartbeatChannelId,
@@ -1495,6 +1513,106 @@ async function main(): Promise<void> {
     log.warn('weightedThoughtOutreach enabled but no weighted-thought store is available; lane not registered');
   }
 
+  // ── Social-desire consent-moment lane (epic oth4, bead oth4.2) ──
+  // Per-contact durable desire crossing threshold -> companion consent moment
+  // (message / defer / decline — never auto-send). Accepted consents carry
+  // social-desire provenance through the EXISTING outbound provenance gate,
+  // durable outbox, ICP candidate broker, and ProactiveOutboundDispatcher —
+  // under a tight desire-outbound rate budget. Fail closed: with
+  // socialDesire.enabled false (or a missing store) nothing is wired, so the
+  // gate rejects any social-desire provenance outright.
+  let socialDesireOutbound: SocialDesireOutboundRuntime | undefined;
+  let socialDesireHumanDeliveryPolicy: SocialDesireHumanDeliveryPolicy | undefined;
+  if (schedulerConfig.socialDesire.enabled) {
+    const socialDesireStore = persistenceRuntime.socialDesireStore;
+    if (!socialDesireStore) {
+      log.warn('socialDesire enabled but no social-desire store is available; lane not registered');
+    } else {
+      const socialDesireConsents = createSocialDesireConsentLedger({
+        ttlMs: schedulerConfig.socialDesire.outreach.consentTtlMs,
+      });
+      socialDesireOutbound = createSocialDesireOutboundRuntime({
+        store: socialDesireStore,
+        lifecycle: schedulerConfig.socialDesire.lifecycle,
+        consents: socialDesireConsents,
+        budget: schedulerConfig.socialDesire.outreach.budget,
+        // Budget counts durable desire-tagged sends from the outreach outbox —
+        // enforcement lives at the dispatch layer and survives restart.
+        countRecentSends: sinceMs => outreachOutbox.countSentSince({
+          sinceMs,
+          reasonPrefix: 'social_desire',
+        }),
+      });
+      const budgetGuard = socialDesireOutbound;
+      if (heartbeatChannel) {
+        socialDesireHumanDeliveryPolicy = createSocialDesireHumanDeliveryPolicy({
+          contacts: contactStore,
+          approvedHeartbeatChannel: heartbeatChannel,
+          quietHours: schedulerConfig.episodicProcessing,
+        });
+      }
+      const icpPeers = coreRuntime.icpAutonomyRuntime;
+      const localCompanionId = config.companionId;
+      registerSocialDesireOutreachTask({
+        scheduler,
+        eventBus,
+        postTurnActions,
+        config: schedulerConfig.socialDesire,
+        deps: {
+          store: socialDesireStore,
+          lifecycle: schedulerConfig.socialDesire.lifecycle,
+          tierSource: createContactSocialDesireTierSource(contactStore),
+          consentEvaluator: createLlmSocialDesireConsentEvaluator({
+            llmProvider,
+            characterName: card.data.name,
+          }),
+          consents: socialDesireConsents,
+          maxConsentMomentsPerRun: schedulerConfig.socialDesire.outreach.maxConsentMomentsPerRun,
+          quietHours: schedulerConfig.episodicProcessing,
+          resolveContactTimeZone: async contactId => (
+            (await contactStore.getById(contactId))?.timezone ?? null
+          ),
+          // Fail-closed delivery-channel policy: companion peers route to
+          // their canonical companion DM (ICP candidate path); humans deliver
+          // only to the primary contact's approved heartbeat DM. Anything
+          // else has no channel — no consent moment, desire keeps pressure.
+          resolveDeliveryChannel: async (contactId): Promise<SocialDesireDeliveryChannel | null> => {
+            const contact = await contactStore.getById(contactId);
+            if (!contact) return null;
+            if (contact.isMachineIntelligence) {
+              if (!icpPeers || !localCompanionId) return null;
+              try {
+                const peer = await icpPeers.resolveKnownPeer(contactId);
+                return {
+                  channelId: composeCompanionDmChannelId(
+                    createCompanionId(localCompanionId, 'social-desire local companion'),
+                    createCompanionId(peer.peerCompanionId, 'social-desire peer companion'),
+                  ),
+                  channelType: 'companion',
+                  contactName: contact.displayName,
+                  companionTarget: true,
+                };
+              } catch (error) {
+                if (error instanceof CanonicalCompanionPeerValidationError) return null;
+                throw error;
+              }
+            }
+            if (contact.trustLevel !== 'primary' || !heartbeatChannel) return null;
+            return {
+              channelId: heartbeatChannel.channelId,
+              channelType: heartbeatChannel.channelType,
+              contactName: contact.displayName,
+              companionTarget: false,
+            };
+          },
+          isBudgetExhausted: (nowMs, reservedConsentCount) => (
+            budgetGuard.isBudgetExhausted(nowMs, reservedConsentCount)
+          ),
+        },
+      });
+    }
+  }
+
   // Journal auto-publisher (for heartbeat reflections -> markdown journal)
   const journalAutoPublisher = createOptionalJournalAutoPublisher(pathSnapshot.workspaceRoot, config);
 
@@ -1803,6 +1921,8 @@ async function main(): Promise<void> {
       proactiveOutbound,
       outboundReplyGuard,
       outreachOutbox,
+      ...(socialDesireOutbound ? { socialDesireOutbound } : {}),
+      ...(socialDesireHumanDeliveryPolicy ? { socialDesireHumanDeliveryPolicy } : {}),
       memoryMaintenanceStore: memoryStore,
       episodicDiagnosticsStore: episodicStore,
       postTurnActions,

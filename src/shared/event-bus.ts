@@ -1024,6 +1024,13 @@ export interface EventMap {
   'intention.nudge.accepted': { thoughtId: string; channelId: string; channelType: string; target: string; timestamp: number };
   'intention.nudge.declined': { thoughtId: string; reason?: string; dampenedWeight: number; timestamp: number };
   'intention.nudge.blocked': { thoughtId: string; reason: string; channelId?: string; nextEligibleAtMs?: number; timestamp: number };
+  // Social-desire consent moments (epic oth4, bead oth4.2). Deterministic
+  // eligibility + budget gates decide whether the LLM consent moment runs at
+  // all; the moment itself is her choice of message / defer / decline.
+  'social_desire.consent.accepted': { contactId: string; orientation: string; pressure: number; channelId: string; channelType: string; companionTarget: boolean; timestamp: number };
+  'social_desire.consent.deferred': { contactId: string; reason?: string; dampenedPressure: number; timestamp: number };
+  'social_desire.consent.declined': { contactId: string; reason?: string; dampenedPressure: number; timestamp: number };
+  'social_desire.consent.blocked': { contactId: string; reason: string; timestamp: number };
   'model.budget.blocked': ModelBudgetBlockedEvent;
   'icp.conversation.cost.decision': IcpConversationCostBreakerEvent;
   'channel.voice.start': { guildId: string; channelId: string; userId: string };

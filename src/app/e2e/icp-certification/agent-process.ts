@@ -327,6 +327,7 @@ async function main(): Promise<void> {
     eventBus: startup.eventBus,
     pendingFollowUpStore: intentionRuntime.pendingFollowUpStore,
     concernStore: intentionRuntime.concernStore,
+    socialDesireStore: persistence.socialDesireStore,
     presenceEnabled: false,
     contactStore,
     weightedThoughtStore,

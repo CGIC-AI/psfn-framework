@@ -5,7 +5,12 @@
   import { goto } from '$app/navigation';
   import { base } from '$app/paths';
   import { navGroups } from '$lib/nav';
-  import { ATTENTION_SOURCES } from '$lib/nav/attention';
+  import {
+    ATTENTION_SOURCES,
+    mergeAttentionPollResults,
+    type AttentionCounts,
+    updateAttentionCountsIfChanged,
+  } from '$lib/nav/attention';
   import { resolveThemeMenuLabel, resolveThemeTemplate } from '$lib/theme/loader';
   import {
     getToken,
@@ -86,23 +91,31 @@
   }
 
   // ── Human-in-the-loop attention badges (polled, fail-quiet) ──
-  let attentionCounts = $state<Record<string, number>>({});
+  let attentionCounts = $state<AttentionCounts>({});
+  let attentionPollGeneration = 0;
 
   async function refreshAttentionCounts(): Promise<void> {
     if (!isAuthenticated()) return;
+    const requestGeneration = ++attentionPollGeneration;
     const requestCompanionId = activeCompanionId;
     const results = await Promise.all(
       ATTENTION_SOURCES.map(async (source) => {
         try {
           const count = await source.fetchCount();
-          return [source.path, count] as const;
+          return { path: source.path, count };
         } catch {
-          return [source.path, 0] as const;
+          return { path: source.path };
         }
       }),
     );
-    if (requestCompanionId === activeCompanionId) {
-      attentionCounts = Object.fromEntries(results);
+    if (
+      requestGeneration === attentionPollGeneration
+      && requestCompanionId === activeCompanionId
+    ) {
+      const polledCounts = mergeAttentionPollResults(attentionCounts, results);
+      updateAttentionCountsIfChanged(attentionCounts, polledCounts, (nextCounts) => {
+        attentionCounts = nextCounts;
+      });
     }
   }
 

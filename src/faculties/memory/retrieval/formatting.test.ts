@@ -125,7 +125,7 @@ describe('renderPromptBlock companion-facing rendering contract', () => {
     });
 
     expect(rendered).toContain(
-      '- Steady baseline: positive; baseline disposition: full of love, joyful, and curious.',
+      '- Steady baseline: positive; baseline disposition: warm, steady, and curious.',
     );
     expect(rendered).toContain(
       '- Current state: currently drifting noticeably toward strongly positive.',
@@ -134,6 +134,26 @@ describe('renderPromptBlock companion-facing rendering contract', () => {
     expect(rendered).not.toMatch(/\b[+-]?\d+\.\d+\b/);
     expect(rendered).not.toContain('Learned signals:');
     expect(rendered).not.toContain('9');
+  });
+
+  it('derives the baseline disposition from the baseline valence so it cannot self-contradict (cf5y)', () => {
+    const rendered = renderPromptBlock(undefined, [], {
+      emotionalSnapshot: {
+        baselineValence: -0.62,
+        moodValence: -0.5,
+        moodDrift: 0.02,
+        moodSamples: 4,
+        lastMoodUpdateEpochMs: Date.now(),
+      },
+    });
+
+    // A negative baseline must never render the old hardcoded positive clause.
+    expect(rendered).not.toContain('full of love, joyful, and curious');
+    expect(rendered).toContain(
+      '- Steady baseline: strongly negative; baseline disposition: heavy, withdrawn, and tender.',
+    );
+    // Still qualitative — no raw telemetry floats leak.
+    expect(rendered).not.toMatch(/\b[+-]?\d+\.\d+\b/);
   });
 
   it('renders episodic landmark chains without raw span, artifact, or provenance identifiers', () => {

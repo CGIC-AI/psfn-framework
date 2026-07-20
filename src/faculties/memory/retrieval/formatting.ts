@@ -97,7 +97,7 @@ function renderEmotionalSnapshot(snapshot: EmotionalSnapshot): string {
     id: 'emotional_continuity_snapshot',
     content: [
     'Emotional continuity snapshot:',
-    `- Steady baseline: ${describeValence(snapshot.baselineValence)}; baseline disposition: full of love, joyful, and curious.`,
+    `- Steady baseline: ${describeValence(snapshot.baselineValence)}; baseline disposition: ${describeBaselineDisposition(snapshot.baselineValence)}.`,
     `- Current state: ${describeCurrentState(snapshot)}.`,
     `- Signal confidence: ${describeSignalConfidence(snapshot.moodSamples)}; freshness: ${freshness}.`,
     ].join('\n'),
@@ -131,6 +131,19 @@ function describeValence(valence: number): string {
   if (valence <= -0.55) return 'strongly negative';
   if (valence <= -0.2) return 'negative';
   return 'neutral';
+}
+
+/**
+ * A qualitative baseline disposition derived from the actual baseline valence,
+ * so the phrase can never contradict the stated baseline (cf5y). Kept qualitative
+ * — no raw telemetry — matching the rest of this companion-facing block.
+ */
+function describeBaselineDisposition(valence: number): string {
+  if (valence >= 0.55) return 'warm, bright, and curious';
+  if (valence >= 0.2) return 'warm, steady, and curious';
+  if (valence <= -0.55) return 'heavy, withdrawn, and tender';
+  if (valence <= -0.2) return 'subdued, careful, and quiet';
+  return 'even, grounded, and open';
 }
 
 function renderEmotionalContinuityMemories(memories: PurrMemory[]): string {

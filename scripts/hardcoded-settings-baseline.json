@@ -1052,6 +1052,12 @@
     },
     {
       "file": "src/channels/discord/adapter.ts",
+      "name": "TYPING_FAILURE_STRIKE_LIMIT",
+      "value": "3",
+      "note": "Fixed code-owned transport safety threshold that disables a failing Discord typing interval after repeated send errors; not operator policy."
+    },
+    {
+      "file": "src/channels/discord/adapter.ts",
       "name": "TYPING_INTERVAL_MS",
       "value": "9_000"
     },

@@ -10,6 +10,7 @@ import {
   DEFAULT_BACKGROUND_WORK_TUNING,
   DEFAULT_ICP_AUTONOMY_SCHEDULER_CONFIG,
   DEFAULT_SOCIAL_AUTONOMY_CONFIG,
+  DEFAULT_SOCIAL_DESIRE_CONFIG,
   saveSchedulerConfig,
 } from './scheduler-config.js';
 import { loadCapabilityTierConfig, saveCapabilityTierConfig } from './capability-tier-config.js';
@@ -340,6 +341,7 @@ describe('startup owner-file loaders', () => {
         },
       },
       socialAutonomy: DEFAULT_SOCIAL_AUTONOMY_CONFIG,
+      socialDesire: DEFAULT_SOCIAL_DESIRE_CONFIG,
       icpAutonomy: DEFAULT_ICP_AUTONOMY_SCHEDULER_CONFIG,
     };
     saveSchedulerConfig(rootDir, scheduler);

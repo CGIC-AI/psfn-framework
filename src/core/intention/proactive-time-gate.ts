@@ -44,7 +44,7 @@ export interface ProactiveOutboundTimeGateInput {
 
 const MINUTE_MS = 60_000;
 
-function isValidTimeZone(timeZone: string): boolean {
+export function isValidProactiveTimeZone(timeZone: string): boolean {
   try {
     // Constructing a formatter throws RangeError on an unknown IANA zone.
     new Intl.DateTimeFormat('en-US', { timeZone });
@@ -67,7 +67,7 @@ function resolveQuietHoursTimeZone(
   if (
     typeof contactTimeZone === 'string'
     && contactTimeZone.trim() !== ''
-    && isValidTimeZone(contactTimeZone)
+    && isValidProactiveTimeZone(contactTimeZone)
   ) {
     return contactTimeZone;
   }

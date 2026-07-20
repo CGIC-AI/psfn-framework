@@ -20,6 +20,7 @@ import {
 import {
   DEFAULT_ICP_AUTONOMY_SCHEDULER_CONFIG,
   DEFAULT_SOCIAL_AUTONOMY_CONFIG,
+  DEFAULT_SOCIAL_DESIRE_CONFIG,
   SCHEDULER_FILE_NAME,
   loadSchedulerConfig,
   saveSchedulerConfig,
@@ -463,6 +464,7 @@ describe('subsystem config round-trip', () => {
         },
       },
       socialAutonomy: DEFAULT_SOCIAL_AUTONOMY_CONFIG,
+      socialDesire: DEFAULT_SOCIAL_DESIRE_CONFIG,
       icpAutonomy: DEFAULT_ICP_AUTONOMY_SCHEDULER_CONFIG,
     };
 

@@ -2732,6 +2732,19 @@ export const POSTGRES_SHARED_MIGRATIONS: readonly string[] = [
     ON speaking_room_episodes (channel_id) WHERE status = 'open';`,
   `CREATE INDEX IF NOT EXISTS idx_speaking_room_episodes_channel
     ON speaking_room_episodes (channel_id, status, last_activity_at_ms);`,
+  // Durable Law-36 room-episode circuit-breaker position (charter §8.11; bible
+  // §12.2/§20.2; jp36.5.1.3). The breaker's prior state must survive a gateway
+  // reboot so the single-probe half-open discipline holds across restarts: a
+  // probe is granted ONLY on the fresh open→half_open transition, never on every
+  // half_open evaluation. Additive (ADD COLUMN IF NOT EXISTS) so it applies to
+  // both fresh and already-provisioned shared schemas on the idempotent chain.
+  `ALTER TABLE speaking_room_episodes
+    ADD COLUMN IF NOT EXISTS breaker_state TEXT NOT NULL DEFAULT 'closed';`,
+  `ALTER TABLE speaking_room_episodes
+    DROP CONSTRAINT IF EXISTS speaking_room_episodes_breaker_state_check;`,
+  `ALTER TABLE speaking_room_episodes
+    ADD CONSTRAINT speaking_room_episodes_breaker_state_check
+    CHECK (breaker_state IN ('closed', 'open', 'half_open'));`,
   // Per-companion speak-least fairness stats within an episode (§8.5 priority #4,
   // §20.1). Least-recent participation + stable companion tie-break is derived
   // from these rows deterministically.

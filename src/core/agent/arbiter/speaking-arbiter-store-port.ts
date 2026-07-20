@@ -70,6 +70,16 @@ export type SpeakingEgressLeaseCompletion =
 /** Per-channel room-episode lifecycle. */
 export type RoomEpisodeStatus = 'open' | 'closed';
 
+/**
+ * Durable Law-36 circuit-breaker position for a channel's room episode (charter
+ * §8.11, bible §12.2/§20.2). Persisted in the arbiter store — the gateway-owned
+ * home the design mandates — so the single-probe half-open discipline survives a
+ * gateway reboot. Mirrors the pure breaker state machine's positions
+ * (`../fatigue/room-episode-circuit-breaker`); kept as a local string union so
+ * this low-level store contract does not depend on the fatigue module.
+ */
+export type RoomEpisodeBreakerState = 'closed' | 'open' | 'half_open';
+
 export const SPEAKING_RESERVATION_STATUSES: readonly SpeakingReservationStatus[] = [
   'reserved',
   'released',
@@ -312,6 +322,23 @@ export interface CompleteEgressLeaseInput {
   pressureDelta?: number;
 }
 
+export interface ReadRoomEpisodeBreakerStateInput {
+  channelId: string;
+}
+
+export interface PersistRoomEpisodeBreakerStateInput {
+  channelId: string;
+  state: RoomEpisodeBreakerState;
+  nowMs: number;
+}
+
+export interface ListActiveReserversInput {
+  channelId: string;
+  /** The source room-event id whose contending reservers are wanted. */
+  triggerEventId: string;
+  nowMs: number;
+}
+
 export interface RecordHumanActivityInput {
   channelId: string;
   nowMs: number;
@@ -345,6 +372,28 @@ export interface SpeakingArbiterStorePort {
   reserve(input: ReserveInput): Promise<ReserveResult>;
   /** Terminate a reservation without speaking (silence/ignore/model failure/etc.). */
   releaseReservation(input: ReleaseReservationInput): Promise<SpeakingReservationSnapshot>;
+  /**
+   * Read the durable Law-36 circuit-breaker position for the channel's open
+   * episode. Returns `'closed'` when no episode is open (a room with no live
+   * episode is not suppressed). Used as the breaker `priorState` at the egress
+   * gate so the single-probe half-open discipline survives a reboot.
+   */
+  readRoomEpisodeBreakerState(input: ReadRoomEpisodeBreakerStateInput): Promise<RoomEpisodeBreakerState>;
+  /**
+   * Persist the durable Law-36 breaker position for the channel's open episode.
+   * No-op when no episode is open. Called by the egress gate after it resolves
+   * the breaker transition, so the next evaluation reads the advanced state (a
+   * spent half-open probe is not re-granted).
+   */
+  persistRoomEpisodeBreakerState(input: PersistRoomEpisodeBreakerStateInput): Promise<void>;
+  /**
+   * List the companion ids that currently hold an active (`reserved`, unexpired)
+   * candidate reservation for a triggering event. The deterministic contender set
+   * the egress phase resolves speak-least fairness over (bible §8.5 priority #4):
+   * the least-recent contender speaks; the rest yield. Ordered by `companionId`
+   * for a stable result.
+   */
+  listActiveReservers(input: ListActiveReserversInput): Promise<string[]>;
   /** Phase 2: acquire the exclusive, fenced egress lease for the triggering event. */
   acquireEgressLease(input: AcquireEgressLeaseInput): Promise<AcquireEgressLeaseResult>;
   /** Finish an egress lease; a speech completion updates episode pressure and fairness. */

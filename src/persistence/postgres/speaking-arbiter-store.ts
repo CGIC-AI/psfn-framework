@@ -12,8 +12,12 @@ import {
   type CloseRoomEpisodeInput,
   type CompleteEgressLeaseInput,
   type EnsureRoomEpisodeInput,
+  type ListActiveReserversInput,
+  type PersistRoomEpisodeBreakerStateInput,
+  type ReadRoomEpisodeBreakerStateInput,
   type ReadRoomEpisodeInput,
   type RecordHumanActivityInput,
+  type RoomEpisodeBreakerState,
   type ReleaseReservationInput,
   type ReserveInput,
   type ReserveResult,
@@ -194,6 +198,13 @@ function assertLeaseStatus(value: string): SpeakingEgressLeaseStatus {
   }
 }
 
+function assertBreakerState(value: string): RoomEpisodeBreakerState {
+  if (value === 'closed' || value === 'open' || value === 'half_open') {
+    return value;
+  }
+  throw new Error(`unexpected speaking room episode breaker state "${value}"`);
+}
+
 function assertReason(value: string | null): SpeakingArbiterReason | null {
   if (value === null) return null;
   switch (value) {
@@ -268,6 +279,63 @@ export class PostgresSpeakingArbiterStore implements SpeakingArbiterStorePort {
       const row = await this.loadOpenEpisodeRow(client, channelId, false);
       if (!row) return null;
       return await this.loadEpisodeSnapshot(client, row.episode_id);
+    });
+  }
+
+  async readRoomEpisodeBreakerState(
+    input: ReadRoomEpisodeBreakerStateInput,
+  ): Promise<RoomEpisodeBreakerState> {
+    const channelId = requireIdentifier(input.channelId, 'speakingArbiter.channelId');
+    this.assertOpen();
+    return await withPostgresClient(this.pool, async (client) => {
+      // A channel with no open episode is not suppressed: `closed` is the safe,
+      // fail-open-to-normal default (the breaker only ever restricts speech).
+      const result = await client.query<{ breaker_state: string }>(
+        `SELECT breaker_state FROM speaking_room_episodes
+         WHERE channel_id = $1 AND status = 'open'`,
+        [channelId],
+      );
+      const row = result.rows.at(0);
+      return row ? assertBreakerState(row.breaker_state) : 'closed';
+    });
+  }
+
+  async persistRoomEpisodeBreakerState(
+    input: PersistRoomEpisodeBreakerStateInput,
+  ): Promise<void> {
+    const channelId = requireIdentifier(input.channelId, 'speakingArbiter.channelId');
+    const state = assertBreakerState(input.state);
+    const nowMs = requireTimestamp(input.nowMs, 'speakingArbiter.nowMs');
+    this.assertOpen();
+    await withPostgresClient(this.pool, async (client) => {
+      await this.lockChannel(client, channelId);
+      // No-op when no episode is open (nothing durable to advance). The breaker
+      // is a property of the live episode; a closed room resets to `closed`
+      // implicitly on the next episode open (column DEFAULT).
+      await client.query(
+        `UPDATE speaking_room_episodes
+         SET breaker_state = $2, last_activity_at_ms = GREATEST(last_activity_at_ms, $3),
+             revision = revision + 1
+         WHERE channel_id = $1 AND status = 'open'`,
+        [channelId, state, nowMs],
+      );
+    });
+  }
+
+  async listActiveReservers(input: ListActiveReserversInput): Promise<string[]> {
+    const channelId = requireIdentifier(input.channelId, 'speakingArbiter.channelId');
+    const triggerEventId = requireIdentifier(input.triggerEventId, 'speakingArbiter.triggerEventId');
+    const nowMs = requireTimestamp(input.nowMs, 'speakingArbiter.nowMs');
+    this.assertOpen();
+    return await withPostgresClient(this.pool, async (client) => {
+      const result = await client.query<{ companion_id: string }>(
+        `SELECT companion_id FROM speaking_reservations
+         WHERE channel_id = $1 AND trigger_event_id = $2
+           AND status = 'reserved' AND expires_at_ms > $3
+         ORDER BY companion_id ASC`,
+        [channelId, triggerEventId, nowMs],
+      );
+      return result.rows.map((row) => row.companion_id);
     });
   }
 

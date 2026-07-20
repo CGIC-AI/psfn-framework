@@ -14,6 +14,10 @@ import type {
   ReservationDecision,
   ReservationSignalContext,
 } from '../../core/agent/arbiter/reservation-phase.js';
+import type {
+  EgressLeaseDecision,
+  EgressReplyTrigger,
+} from '../../core/agent/arbiter/egress-lease-phase.js';
 import type { SpeakingReservationSnapshot } from '../../core/agent/arbiter/speaking-arbiter-store-port.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
 import { resolveCompanionIdFromConfig } from '../../core/identity/companion-runtime.js';
@@ -261,6 +265,29 @@ export interface ReservationPhasePort {
   releaseIgnored(reservation: SpeakingReservationSnapshot, nowMs: number): Promise<void>;
 }
 
+/**
+ * Speaking-arbiter egress-lease phase (bible §8.5/§12.2, §18, §20.1;
+ * jp36.5.1.3). Phase 2: the exclusive send-once binding at delivery. When
+ * present, a RETAINED `reply` reservation is handed to {@link grantReply} (the
+ * Law-36 single-probe breaker gate, lease-threshold-bias confidence bar,
+ * speak-least fairness, the real pot draw, then acquire → send → complete); a
+ * RETAINED `react` reservation is handed to {@link releaseReact} for its
+ * explicit non-lease release. Optional and off by default — promoting an
+ * observed candidate to a real autonomous send is opt-in and fail-closed.
+ */
+export interface EgressLeasePhasePort {
+  grantReply(
+    reservation: SpeakingReservationSnapshot,
+    appraisal: Extract<ParticipationAppraisalResult['appraisal'], { action: 'reply' }>,
+    trigger: EgressReplyTrigger,
+    nowMs: number,
+  ): Promise<EgressLeaseDecision>;
+  releaseReact(
+    reservation: SpeakingReservationSnapshot,
+    nowMs: number,
+  ): Promise<EgressLeaseDecision>;
+}
+
 export interface GatewayMessageLogger {
   info(message: string, meta?: Record<string, unknown>): void;
   warn(message: string, meta?: Record<string, unknown>): void;
@@ -305,6 +332,16 @@ export interface GatewayMessageHandlersDeps {
    */
   reservationPhase?: ReservationPhasePort;
   /**
+   * Speaking-arbiter egress-lease phase (bible §8.5, jp36.5.1.3). When present
+   * (and enabled), a RETAINED `reply`/`react` reservation from the reservation
+   * phase is handed onward here: `reply` binds the exclusive fenced egress lease
+   * and delivers (the real pot draw + Law-36 single-probe breaker gate bind
+   * here), `react` gets its explicit non-lease release. Optional so runtimes
+   * without the arbiter — or with autonomous send disabled — keep the
+   * observe/appraise path unchanged (nothing is sent).
+   */
+  egressLeasePhase?: EgressLeasePhasePort;
+  /**
    * Records primary replies delivered to Discord so replay-prone senders (the
    * internal continuation) can detect and suppress a duplicate of
    * an already-delivered reply. See `outbound-reply-dedupe.ts`.
@@ -339,6 +376,7 @@ export function registerGatewayMessageHandlers(
     passiveNameCandidateBuilder,
     participationAppraiser,
     reservationPhase,
+    egressLeasePhase,
     outboundReplyGuard,
     companionAuthorName,
     eventBus,
@@ -458,8 +496,9 @@ export function registerGatewayMessageHandlers(
     // No appraiser, or the appraiser's belt-and-braces guard tripped: the
     // candidate can never become a reply, so release the reservation.
     const action = result?.appraisal.action ?? 'ignore';
+    let settlement: 'released' | 'retained' = 'released';
     try {
-      const settlement = await phase.settleAfterAppraisal(
+      settlement = await phase.settleAfterAppraisal(
         decision.reservation,
         action,
         nowMonotonicMs(),
@@ -481,6 +520,75 @@ export function registerGatewayMessageHandlers(
         error: errorText,
       });
       safeguardAuditTrail.append('participation.reservation.error', {
+        channelId: candidate.channelId,
+        sourceMessageId: candidate.sourceMessageId,
+        trigger: candidate.trigger,
+        reservationId: decision.reservation.reservationId,
+        error: errorText,
+      });
+      return;
+    }
+
+    // A RETAINED reservation (react/reply) is handed to the exclusive egress-lease
+    // phase (bible §8.5, jp36.5.1.3): a `reply` binds the fenced send-once lease
+    // (the real pot draw + Law-36 single-probe breaker gate bind here) and
+    // delivers; a `react` gets its explicit non-lease release. Fully fail-closed:
+    // it never throws into the observe path. Absent (or disabled) egress phase
+    // keeps the pre-jp36.5.1.3 behavior — nothing is sent.
+    if (settlement !== 'retained' || !egressLeasePhase || !result) {
+      return;
+    }
+    try {
+      let egressDecision: EgressLeaseDecision;
+      if (result.appraisal.action === 'reply') {
+        const trigger: EgressReplyTrigger = {
+          channelId: candidate.channelId,
+          channelType: candidate.channelType,
+          sourceMessageId: candidate.sourceMessageId,
+          authorId: candidate.triggerAuthorId,
+          authorName: candidate.triggerAuthorName,
+          content: candidate.triggerContent,
+          timestampMs: candidate.triggerTimestampMs,
+        };
+        egressDecision = await egressLeasePhase.grantReply(
+          decision.reservation,
+          result.appraisal,
+          trigger,
+          nowMonotonicMs(),
+        );
+      } else if (result.appraisal.action === 'react') {
+        egressDecision = await egressLeasePhase.releaseReact(
+          decision.reservation,
+          nowMonotonicMs(),
+        );
+      } else {
+        return;
+      }
+      safeguardAuditTrail.append('participation.egress.settled', {
+        channelId: candidate.channelId,
+        sourceMessageId: candidate.sourceMessageId,
+        trigger: candidate.trigger,
+        reservationId: decision.reservation.reservationId,
+        action: result.appraisal.action,
+        outcome: egressDecision.outcome,
+        ...(egressDecision.declineReason ? { declineReason: egressDecision.declineReason } : {}),
+        ...(egressDecision.drawOutcome ? { drawOutcome: egressDecision.drawOutcome } : {}),
+        ...(egressDecision.breakerState ? { breakerState: egressDecision.breakerState } : {}),
+        ...(egressDecision.speakLeastWinner
+          ? { yieldedTo: egressDecision.speakLeastWinner }
+          : {}),
+        ...(egressDecision.errorStage ? { errorStage: egressDecision.errorStage } : {}),
+      });
+    } catch (egressError) {
+      // Belt-and-braces: the egress phase is designed to fail closed internally;
+      // this guard ensures nothing here can break message observation.
+      const errorText = toErrorMessage(egressError);
+      log.warn('Participation egress-lease phase failed', {
+        channelId: candidate.channelId,
+        messageId: candidate.sourceMessageId,
+        error: errorText,
+      });
+      safeguardAuditTrail.append('participation.egress.error', {
         channelId: candidate.channelId,
         sourceMessageId: candidate.sourceMessageId,
         trigger: candidate.trigger,

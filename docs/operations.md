@@ -1406,6 +1406,30 @@ a prominent warning and exits 0. This is only acceptable when you have
 independently confirmed the outage and are accepting the risk; re-run without the
 flag once connectivity is restored.
 
+## CI Typecheck Baseline
+
+The `Typecheck (baselined)` CI lane runs the root `tsconfig.json` and fails when
+any `(source path, TypeScript diagnostic code)` pair is new or exceeds its
+checked-in count in `config/typecheck-baseline.json`. Counts deliberately omit
+line numbers, so moving otherwise-unchanged code does not churn the baseline.
+Compiler failures and non-file diagnostics fail closed rather than becoming
+baseline entries.
+
+Run the same gate locally:
+
+```bash
+npm run verify:typecheck-baseline
+```
+
+When a reviewed change removes existing errors, refresh the baseline with
+`npm run verify:typecheck-baseline -- --update`. Update mode rejects new pairs
+and count increases. Review the JSON diff and only land removals or reduced
+counts; never re-baseline to accept a new error.
+
+The Garden UI is outside the root TypeScript project. It has its own
+`admin-ui/tsconfig.json` and is checked with `npm --prefix admin-ui run check`;
+a dedicated Garden typecheck CI gate is separate follow-up work.
+
 ## Validation Commands
 
 These are the common operational checks:
@@ -1419,6 +1443,7 @@ npm run e2e
 npm run e2e:voice
 npm run verify:settings-contract
 npm run verify:supply-chain      # dependency-update gate; see "Dependency Update Policy"
+npm run verify:typecheck-baseline
 npm run verify:repository-hygiene
 npm run verify:agent-docker-isolation
 npm run test:group-harness

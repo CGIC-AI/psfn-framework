@@ -30,7 +30,6 @@ async function runShell(
         ...createDefaultShellExecSettings(),
         enabled: true,
         allowlist: ['bash', 'rg'],
-        maxProcesses: 4,
       }),
     },
   );
@@ -51,12 +50,15 @@ export async function verifyShellSandboxRuntime(): Promise<Record<string, unknow
   try {
     const document = await runShell(
       workspacePath,
-      'printf "bytes="; wc -c < large.txt; rg -n needle-with-provenance large.txt',
+      'printf "bytes="; wc -c < large.txt; rg -n needle-with-provenance large.txt; '
+        + 'git --version; node -e \'console.log("node-cli=ok")\'',
     );
     if (
       document.exitCode !== 0
       || !document.stdout.includes('bytes=26023')
       || !document.stdout.includes('2001:needle-with-provenance')
+      || !document.stdout.includes('git version')
+      || !document.stdout.includes('node-cli=ok')
     ) {
       throw new Error(`bounded document inspection failed: ${JSON.stringify(document)}`);
     }
@@ -85,14 +87,14 @@ export async function verifyShellSandboxRuntime(): Promise<Record<string, unknow
     );
     if (
       limits.exitCode !== 0
-      || limits.stdout !== 'nproc=4 as=131072 fsize=32768 cpu=10 nofile=128\n'
+      || limits.stdout !== 'nproc=64 as=2097152 fsize=524288 cpu=1800 nofile=512\n'
     ) {
       throw new Error(`resource limits missing: ${JSON.stringify(limits)}`);
     }
 
     const forkPressure = await runShell(
       workspacePath,
-      'for i in 1 2 3 4 5 6 7 8; do sleep 10 & done; wait',
+      'for i in $(seq 1 128); do sleep 10 & done; wait',
       1_000,
     );
     if (!forkPressure.timedOut || !forkPressure.stderr.includes('Resource temporarily unavailable')) {

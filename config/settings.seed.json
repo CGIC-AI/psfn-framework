@@ -238,15 +238,15 @@
     "enabled": false,
     "allowlist": [],
     "envAllowlist": [],
-    "defaultTimeoutMs": 5000,
-    "maxTimeoutMs": 30000,
+    "defaultTimeoutMs": 600000,
+    "maxTimeoutMs": 3600000,
     "defaultMaxOutputChars": 20000,
     "maxOutputChars": 100000,
-    "maxProcesses": 8,
-    "maxAddressSpaceBytes": 134217728,
-    "maxFileBytes": 16777216,
-    "maxCpuSeconds": 10,
-    "maxOpenFiles": 128
+    "maxProcesses": 64,
+    "maxAddressSpaceBytes": 2147483648,
+    "maxFileBytes": 268435456,
+    "maxCpuSeconds": 1800,
+    "maxOpenFiles": 512
   },
   "observerEvalSidecar": {
     "enabled": false,

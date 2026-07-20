@@ -63,11 +63,22 @@ export const CATALOG_BOUNDARY_TOOL_CONTRACTS = {
     example: { action: 'inspect', target: 'both' },
   },
   shell: {
-    purpose: 'Run one direct command through the gateway allowlist when no semantic tool owns the operation.',
+    purpose:
+      'Run a one-shot Bash or CLI command while puttering through the entire Personal Workspace, including any Git checkout stored inside it.',
     actions: [action('exec', ['command'], ['args', 'cwd', 'timeout_ms', 'max_output_chars', 'env_vars'])],
-    output: 'It returns bounded stdout, stderr, exit status, timing, and truncation state without bypassing policy.',
-    guidance: 'Do not use shell for ordinary file or git work; prefer fs or repo.',
-    example: { action: 'exec', command: 'node', args: ['--version'] },
+    output:
+      'Each exec starts in a fresh isolated process, returns bounded stdout, stderr, exit status, timing, and truncation state, and leaves intentional workspace writes persisted for later calls.',
+    guidance:
+      'The default wall budget is ten minutes and the operator-owned ceiling is one hour. The sandbox has no network, '
+      + 'clears inherited secrets, exposes only read-only image CLI binaries, and cannot see host or runtime-state paths '
+      + 'outside the Personal Workspace. Use a relative cwd to move around the workspace. Prefer fs or repo when their '
+      + 'structured action is clearer; use shell for direct CLI exploration, scripts, builds, tests, and Git commands.',
+    example: {
+      action: 'exec',
+      command: 'bash',
+      args: ['-lc', 'pwd; git status --short; rg -n "needle" .'],
+      cwd: '.',
+    },
   },
   web: {
     purpose: 'Retrieve external web material or perform small-scope discovery through the configured backend.',

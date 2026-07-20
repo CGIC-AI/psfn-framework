@@ -20,14 +20,13 @@ export interface ShellExecSettings {
 }
 
 export const SHELL_EXEC_SETTINGS_RANGES = {
-  timeoutMs: { min: 100, max: 60_000 },
+  timeoutMs: { min: 100, max: 3_600_000 },
   outputChars: { min: 256, max: 1_000_000 },
-  maxProcesses: { min: 2, max: 16 },
-  maxAddressSpaceBytes: { min: 64 * 1024 * 1024, max: 512 * 1024 * 1024 },
-  maxFileBytes: { min: 1_024, max: 64 * 1024 * 1024 },
-  maxCpuSeconds: { min: 1, max: 60 },
-  maxOpenFiles: { min: 16, max: 256 },
-  maxAggregateAddressSpaceBytes: 1024 * 1024 * 1024,
+  maxProcesses: { min: 8, max: 256 },
+  maxAddressSpaceBytes: { min: 128 * 1024 * 1024, max: 4 * 1024 * 1024 * 1024 },
+  maxFileBytes: { min: 1_024, max: 1024 * 1024 * 1024 },
+  maxCpuSeconds: { min: 1, max: 3_600 },
+  maxOpenFiles: { min: 16, max: 4_096 },
 } as const;
 
 const SHELL_EXEC_SETTING_KEYS = [
@@ -53,15 +52,15 @@ export function createDefaultShellExecSettings(): ShellExecSettings {
     enabled: false,
     allowlist: [],
     envAllowlist: [],
-    defaultTimeoutMs: 5_000,
-    maxTimeoutMs: 30_000,
+    defaultTimeoutMs: 600_000,
+    maxTimeoutMs: 3_600_000,
     defaultMaxOutputChars: 20_000,
     maxOutputChars: 100_000,
-    maxProcesses: 8,
-    maxAddressSpaceBytes: 128 * 1024 * 1024,
-    maxFileBytes: 16 * 1024 * 1024,
-    maxCpuSeconds: 10,
-    maxOpenFiles: 128,
+    maxProcesses: 64,
+    maxAddressSpaceBytes: 2 * 1024 * 1024 * 1024,
+    maxFileBytes: 256 * 1024 * 1024,
+    maxCpuSeconds: 1_800,
+    maxOpenFiles: 512,
   };
 }
 
@@ -179,15 +178,6 @@ export function normalizeShellExecSettings(
     `${fieldPath}.maxAddressSpaceBytes`,
     SHELL_EXEC_SETTINGS_RANGES.maxAddressSpaceBytes,
   );
-  if (
-    maxProcesses * maxAddressSpaceBytes
-    > SHELL_EXEC_SETTINGS_RANGES.maxAggregateAddressSpaceBytes
-  ) {
-    throw new Error(
-      `Invalid settings at ${fieldPath}: maxProcesses * maxAddressSpaceBytes `
-      + `must not exceed ${SHELL_EXEC_SETTINGS_RANGES.maxAggregateAddressSpaceBytes}`,
-    );
-  }
 
   return {
     enabled,

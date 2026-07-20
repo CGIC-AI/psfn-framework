@@ -1977,6 +1977,12 @@
       "value": "8"
     },
     {
+      "file": "src/core/intention/concern-resolution-arc.ts",
+      "name": "ARC_PROMPT_MAX_CHARS",
+      "note": "Code-owned durable journal payload ceiling bounds derived concern text stored in the reflection prompt; it is not mutable runtime policy.",
+      "value": "200"
+    },
+    {
       "file": "src/core/intention/concern-route-adapters.ts",
       "name": "MAX_ROUTE_TEXT_CHARS",
       "value": "500"

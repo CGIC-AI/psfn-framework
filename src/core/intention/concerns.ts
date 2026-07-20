@@ -625,7 +625,11 @@ export function serializeResolutionVAD(value: ActiveConcernVAD | undefined): str
   return JSON.stringify(value);
 }
 
-function parseConcernVAD(raw: string | null, fieldName: string): ActiveConcernVAD | undefined {
+function parseConcernVAD(
+  raw: string | null,
+  fieldName: string,
+  normalizer: (value: ActiveConcernVAD | undefined) => ActiveConcernVAD | undefined,
+): ActiveConcernVAD | undefined {
   if (!raw) return undefined;
   let parsed: unknown;
   try {
@@ -644,7 +648,7 @@ function parseConcernVAD(raw: string | null, fieldName: string): ActiveConcernVA
   ) {
     throw new Error(`Invalid active concern ${fieldName} fields`);
   }
-  return normalizeFormationVAD({
+  return normalizer({
     valence: candidate.valence,
     arousal: candidate.arousal,
     dominance: candidate.dominance,
@@ -652,11 +656,11 @@ function parseConcernVAD(raw: string | null, fieldName: string): ActiveConcernVA
 }
 
 function parseFormationVAD(raw: string | null): ActiveConcernVAD | undefined {
-  return parseConcernVAD(raw, 'formation_vad');
+  return parseConcernVAD(raw, 'formation_vad', normalizeFormationVAD);
 }
 
 function parseResolutionVAD(raw: string | null): ActiveConcernVAD | undefined {
-  return parseConcernVAD(raw, 'resolution_vad');
+  return parseConcernVAD(raw, 'resolution_vad', normalizeResolutionVAD);
 }
 
 function mapPriority(priority: string): ActiveConcernPriority {

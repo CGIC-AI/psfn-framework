@@ -150,3 +150,41 @@ export function createDefaultParticipationAppraiserSettings(): ParticipationAppr
     transcriptMessageChars: 500,
   };
 }
+
+/**
+ * Tunables for the speaking-arbiter reservation phase (bible §8.5/§12.2,
+ * §6.10, jp36.5.1.2). The reservation phase is the deterministic gate that runs
+ * BEFORE the participation appraiser's model call ("peek before the model
+ * runs"): it resolves ICP-over-social precedence and the social-pot funding
+ * peek, and only if those admit does it place a non-exclusive candidate
+ * reservation and let the candidate reach appraisal. A gated candidate never
+ * reaches a model call. These tunables bound that gate; the actual pot draw and
+ * the exclusive egress lease bind later at delivery (jp36.5.1.3).
+ */
+export interface ReservationPhaseSettings {
+  /**
+   * Reservation TTL. A candidate reservation not promoted to an egress lease
+   * within this window is swept and can never promote, so a crashed appraisal
+   * leaks neither the reservation nor an appraisal spend beyond it.
+   */
+  reservationTtlMs: number;
+  /**
+   * Minimum social-pot balance (charge-policy units) required for a candidate to
+   * be worth appraising. This is a non-mutating funding PEEK, never a draw — the
+   * draw binds only at egress (§8.5). Below this the candidate is gated
+   * (`fatigue_pot_insufficient`) and the appraiser model never runs.
+   */
+  minReserveDrawUnits: number;
+}
+
+/**
+ * Defaults factory (owner-file / settings pattern). All numeric tunables live
+ * inside the function body — never as module-level tuning constants — so the
+ * hardcoded-settings gate stays satisfied and Garden/config can own overrides.
+ */
+export function createDefaultReservationPhaseSettings(): ReservationPhaseSettings {
+  return {
+    reservationTtlMs: 2 * 60 * 1000,
+    minReserveDrawUnits: 1,
+  };
+}

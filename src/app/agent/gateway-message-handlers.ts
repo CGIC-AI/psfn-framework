@@ -10,6 +10,11 @@ import type {
   ParticipationCandidate,
   PassiveNameCandidateDecision,
 } from '../../core/participation/types.js';
+import type {
+  ReservationDecision,
+  ReservationSignalContext,
+} from '../../core/agent/arbiter/reservation-phase.js';
+import type { SpeakingReservationSnapshot } from '../../core/agent/arbiter/speaking-arbiter-store-port.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
 import { resolveCompanionIdFromConfig } from '../../core/identity/companion-runtime.js';
 import type { OutboundReplyGuardPort } from '../../system/lifecycle/outbound-reply-dedupe.js';
@@ -240,6 +245,22 @@ export interface ParticipationAppraiserPort {
   appraise(candidate: ParticipationCandidate): Promise<ParticipationAppraisalResult>;
 }
 
+/**
+ * Deterministic speaking-arbiter reservation phase (bible §8.5/§12.2, §6.10;
+ * jp36.5.1.2). Runs BEFORE the appraiser's model call: a gated candidate never
+ * reaches appraisal, and a reserved candidate's reservation is released on an
+ * `ignore` outcome.
+ */
+export interface ReservationPhasePort {
+  reserve(ctx: ReservationSignalContext): Promise<ReservationDecision>;
+  settleAfterAppraisal(
+    reservation: SpeakingReservationSnapshot,
+    action: ParticipationAppraisalResult['appraisal']['action'],
+    nowMs: number,
+  ): Promise<'released' | 'retained'>;
+  releaseIgnored(reservation: SpeakingReservationSnapshot, nowMs: number): Promise<void>;
+}
+
 export interface GatewayMessageLogger {
   info(message: string, meta?: Record<string, unknown>): void;
   warn(message: string, meta?: Record<string, unknown>): void;
@@ -275,6 +296,15 @@ export interface GatewayMessageHandlersDeps {
    */
   participationAppraiser?: ParticipationAppraiserPort;
   /**
+   * Speaking-arbiter reservation phase (bible §8.5/§12.2, jp36.5.1.2). When
+   * present, each created candidate is deterministically gated and reserved
+   * before appraisal ("peek before the model runs"): a gated candidate never
+   * reaches the appraiser, and a reserved candidate's reservation is released on
+   * an `ignore` outcome. Optional so single-companion runtimes (no gateway
+   * arbiter store) keep the appraiser's existing direct path unchanged.
+   */
+  reservationPhase?: ReservationPhasePort;
+  /**
    * Records primary replies delivered to Discord so replay-prone senders (the
    * internal continuation) can detect and suppress a duplicate of
    * an already-delivered reply. See `outbound-reply-dedupe.ts`.
@@ -308,6 +338,7 @@ export function registerGatewayMessageHandlers(
     observedGroupMemoryScheduler,
     passiveNameCandidateBuilder,
     participationAppraiser,
+    reservationPhase,
     outboundReplyGuard,
     companionAuthorName,
     eventBus,
@@ -334,9 +365,9 @@ export function registerGatewayMessageHandlers(
    */
   const appraiseParticipationCandidate = async (
     candidate: ParticipationCandidate,
-  ): Promise<void> => {
+  ): Promise<ParticipationAppraisalResult | undefined> => {
     if (!participationAppraiser) {
-      return;
+      return undefined;
     }
     try {
       const result = await participationAppraiser.appraise(candidate);
@@ -361,6 +392,7 @@ export function registerGatewayMessageHandlers(
         failClosed: result.failClosed,
         timestamp: nowMonotonicMs(),
       });
+      return result;
     } catch (appraiserError) {
       // The appraiser is designed to fail closed internally; this is a
       // belt-and-braces guard so nothing here can break message observation.
@@ -374,6 +406,85 @@ export function registerGatewayMessageHandlers(
         channelId: candidate.channelId,
         sourceMessageId: candidate.sourceMessageId,
         trigger: candidate.trigger,
+        error: errorText,
+      });
+      return undefined;
+    }
+  };
+
+  /**
+   * Gate and reserve one created candidate before appraisal (bible §8.5/§12.2,
+   * jp36.5.1.2), then appraise a reserved candidate and settle its reservation.
+   * A gated candidate never reaches the appraiser (no model spend). A reserved
+   * candidate's reservation is released on an `ignore` outcome (silence is a
+   * valid release, never retried into speech); a `react`/`reply` reservation is
+   * handed to the egress-lease phase (jp36.5.1.3). Fully fail-closed: it never
+   * throws into the observe path.
+   */
+  const reserveAndAppraiseCandidate = async (
+    candidate: ParticipationCandidate,
+    phase: ReservationPhasePort,
+  ): Promise<void> => {
+    const decision = await phase.reserve({
+      channelId: candidate.channelId,
+      triggerEventId: candidate.sourceMessageId,
+      companionId,
+      nowMs: nowMonotonicMs(),
+    });
+    if (decision.outcome === 'gated') {
+      safeguardAuditTrail.append('participation.reservation.gated', {
+        channelId: candidate.channelId,
+        sourceMessageId: candidate.sourceMessageId,
+        trigger: candidate.trigger,
+        blockedBy: decision.blockedBy,
+        ...(decision.availabilityState ? { availabilityState: decision.availabilityState } : {}),
+        ...(decision.errorStage ? { errorStage: decision.errorStage } : {}),
+      });
+      // Gated: the candidate never reaches the appraiser's model call.
+      return;
+    }
+    safeguardAuditTrail.append('participation.reservation.reserved', {
+      channelId: candidate.channelId,
+      sourceMessageId: candidate.sourceMessageId,
+      trigger: candidate.trigger,
+      reservationId: decision.reservation.reservationId,
+      episodeId: decision.reservation.episodeId,
+      replayed: decision.replayed,
+    });
+
+    const result = participationAppraiser
+      ? await appraiseParticipationCandidate(candidate)
+      : undefined;
+    // No appraiser, or the appraiser's belt-and-braces guard tripped: the
+    // candidate can never become a reply, so release the reservation.
+    const action = result?.appraisal.action ?? 'ignore';
+    try {
+      const settlement = await phase.settleAfterAppraisal(
+        decision.reservation,
+        action,
+        nowMonotonicMs(),
+      );
+      safeguardAuditTrail.append('participation.reservation.settled', {
+        channelId: candidate.channelId,
+        sourceMessageId: candidate.sourceMessageId,
+        trigger: candidate.trigger,
+        reservationId: decision.reservation.reservationId,
+        action,
+        settlement,
+      });
+    } catch (releaseError) {
+      // A failed release never wedges the room — the reservation is TTL-swept.
+      const errorText = toErrorMessage(releaseError);
+      log.warn('Participation reservation settle failed', {
+        channelId: candidate.channelId,
+        messageId: candidate.sourceMessageId,
+        error: errorText,
+      });
+      safeguardAuditTrail.append('participation.reservation.error', {
+        channelId: candidate.channelId,
+        sourceMessageId: candidate.sourceMessageId,
+        trigger: candidate.trigger,
+        reservationId: decision.reservation.reservationId,
         error: errorText,
       });
     }
@@ -871,7 +982,12 @@ export function registerGatewayMessageHandlers(
                 matchedDirectAddress: candidate.matchedDirectAddress,
                 precedingContextCount: candidate.precedingContext.length,
               });
-              if (participationAppraiser) {
+              if (reservationPhase) {
+                // Deterministic gate + reservation before appraisal (§8.5/§6.10):
+                // a gated candidate never reaches the model call, and a reserved
+                // candidate's reservation is released on an `ignore` outcome.
+                await reserveAndAppraiseCandidate(candidate, reservationPhase);
+              } else if (participationAppraiser) {
                 await appraiseParticipationCandidate(candidate);
               }
             } else {

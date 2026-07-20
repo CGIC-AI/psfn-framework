@@ -49,8 +49,8 @@ export function parseClarificationReply(
   }
 
   const lowered = trimmed.toLowerCase();
-  const matchedIndex = clarification.choices.findIndex(
-    (choice) => choice.trim().toLowerCase() === lowered,
-  );
-  return matchedIndex >= 0 ? matchedIndex : null;
+  const matchedIndexes = clarification.choices.flatMap((choice, index) => (
+    choice.trim().toLowerCase() === lowered ? [index] : []
+  ));
+  return matchedIndexes.length === 1 ? matchedIndexes[0]! : null;
 }

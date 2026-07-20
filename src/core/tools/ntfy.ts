@@ -154,15 +154,40 @@ export interface ClarificationDispatchOutcome {
   selectedIndex?: number;
 }
 
-export interface NotifyDispatchResult {
-  status: 'sent' | 'debounced';
-  action: NotifyAction;
-  /** Present for ntfy/discord/email deliveries; clarify reports its channel via {@link NotifyDispatchResult.clarification}. */
-  delivery?: NotifyDelivery;
-  target?: string;
-  messageId?: string;
-  clarification?: ClarificationDispatchOutcome;
+interface NotifyBriefDispatchResult {
+  readonly action: 'brief';
+  readonly status: 'sent' | 'debounced';
+  readonly delivery: 'ntfy';
+  readonly target: string;
+  readonly messageId?: string;
 }
+
+interface NotifySendDispatchResult {
+  readonly action: 'send';
+  readonly status: 'sent';
+  readonly delivery: NotifyDeliveryChannel;
+  readonly target: string;
+}
+
+interface NotifyApprovalRequestDispatchResult {
+  readonly action: 'approval_request';
+  readonly status: 'sent' | 'debounced';
+  readonly delivery: NotifyDelivery;
+  readonly target: string;
+  readonly messageId?: string;
+}
+
+interface NotifyClarifyDispatchResult {
+  readonly action: 'clarify';
+  readonly status: 'sent';
+  readonly clarification: ClarificationDispatchOutcome;
+}
+
+export type NotifyDispatchResult =
+  | NotifyBriefDispatchResult
+  | NotifySendDispatchResult
+  | NotifyApprovalRequestDispatchResult
+  | NotifyClarifyDispatchResult;
 
 export interface NotifyDispatcher {
   dispatch(request: NotifyRequest): Promise<NotifyDispatchResult>;
@@ -612,7 +637,8 @@ export function validateClarifyRequest(request: NotifyClarifyRequest): PendingCl
   if (choices.some((choice) => choice.length > CLARIFY_MAX_CHOICE_LENGTH)) {
     throw new Error(`each choice must be at most ${CLARIFY_MAX_CHOICE_LENGTH} characters`);
   }
-  if (new Set(choices).size !== choices.length) {
+  const caseFoldedChoices = choices.map((choice) => choice.toLowerCase());
+  if (new Set(caseFoldedChoices).size !== choices.length) {
     throw new Error('choices must be distinct');
   }
 
@@ -666,10 +692,10 @@ function formatNotifyToolSuccess(result: NotifyDispatchResult): string {
         : `notify: approval_request sent via ${result.delivery} to "${result.target}".`;
     case 'clarify': {
       const outcome = result.clarification;
-      if (outcome?.status === 'resolved' && outcome.selectedChoice) {
+      if (outcome.status === 'resolved' && outcome.selectedChoice) {
         return `notify: clarify answered — chose "${outcome.selectedChoice}".`;
       }
-      return `notify: clarify shared on ${outcome?.channel ?? 'the conversation'}; waiting for a choice.`;
+      return `notify: clarify shared on ${outcome.channel}; waiting for a choice.`;
     }
     default:
       return 'notify: success.';
@@ -1001,6 +1027,7 @@ const notifyToolParameters = Type.Union([
       {
         minItems: CLARIFY_MIN_CHOICES,
         maxItems: CLARIFY_MAX_CHOICES,
+        uniqueItems: true,
         description: 'The distinct options to choose between (2 to 5).',
       },
     ),

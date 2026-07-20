@@ -32,6 +32,16 @@ describe('parseClarificationReply', () => {
     expect(parseClarificationReply(clarification, 'TEA')).toBe(0);
   });
 
+  it('fails closed on ambiguous case-insensitive text while retaining numeric selection', () => {
+    const ambiguous: PendingClarification = {
+      ...clarification,
+      choices: ['Tea', 'tea'],
+    };
+
+    expect(parseClarificationReply(ambiguous, 'tea')).toBeNull();
+    expect(parseClarificationReply(ambiguous, '2')).toBe(1);
+  });
+
   it('fails closed on an out-of-range number', () => {
     expect(parseClarificationReply(clarification, '0')).toBeNull();
     expect(parseClarificationReply(clarification, '4')).toBeNull();

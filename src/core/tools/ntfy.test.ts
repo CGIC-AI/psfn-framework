@@ -1,4 +1,5 @@
-import { describe, it, expect, vi } from 'vitest';
+import { Value } from '@sinclair/typebox/value';
+import { describe, it, expect, expectTypeOf, vi } from 'vitest';
 import {
   createGatewayClarificationPort,
   createGatewayDiscordNotifySender,
@@ -7,8 +8,11 @@ import {
   createNotifyTool,
   resolveClarificationChannelRoute,
   validateClarifyRequest,
+  type ClarificationDispatchOutcome,
   type ClarificationDeliveryPort,
   type ClarificationDeliveryResult,
+  type NotifyDelivery,
+  type NotifyDispatchResult,
   type PendingClarification,
 } from './ntfy.js';
 import type { ClarifyDeliverParams, ClarifyDeliverResult } from '../../boundary/gateway/protocol.js';
@@ -600,6 +604,8 @@ describe('notify tool', () => {
       .toThrow('every choice must be a non-empty string');
     expect(() => validateClarifyRequest({ action: 'clarify', question: 'Q', choices: ['Same', 'Same'] }))
       .toThrow('choices must be distinct');
+    expect(() => validateClarifyRequest({ action: 'clarify', question: 'Q', choices: ['Tea', 'tea'] }))
+      .toThrow('choices must be distinct');
     expect(() => validateClarifyRequest({ action: 'clarify', question: 'Q', choices: ['A', 'X'.repeat(201)] }))
       .toThrow('at most 200 characters');
     // Normalizes trimmed input and mints a stable id + distinct-choice contract.
@@ -607,6 +613,25 @@ describe('notify tool', () => {
     expect(normalized.question).toBe('Q');
     expect(normalized.choices).toEqual(['A', 'B']);
     expect(normalized.id.length).toBeGreaterThan(0);
+  });
+
+  it('declares exact choice uniqueness in the clarify tool schema', () => {
+    const tool = createNotifyTool({ dispatch: vi.fn() });
+    expect(Value.Check(tool.parameters, {
+      action: 'clarify',
+      question: 'Tea or coffee?',
+      choices: ['Tea', 'Tea'],
+    })).toBe(false);
+  });
+
+  it('keeps dispatch results action-discriminated with required delivery metadata', () => {
+    type DeliveryResult = Exclude<NotifyDispatchResult, { action: 'clarify' }>;
+    type ClarifyResult = Extract<NotifyDispatchResult, { action: 'clarify' }>;
+
+    expectTypeOf<DeliveryResult['delivery']>().toEqualTypeOf<NotifyDelivery>();
+    expectTypeOf<DeliveryResult['target']>().toEqualTypeOf<string>();
+    expectTypeOf<ClarifyResult['clarification']>()
+      .toEqualTypeOf<ClarificationDispatchOutcome>();
   });
 
   it('fails closed when the sender provenance does not match the sender kind', async () => {

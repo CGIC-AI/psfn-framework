@@ -132,6 +132,9 @@ describe('resolveGatewayBootstrapInput', () => {
     });
     expect(bootstrap.policyConfig.workspacePath).toBe('/workspace');
     expect(bootstrap.policyConfig.protectedWritePaths).toContain('/workspace/skills');
+    // Operator hook root must be fenced against model-driven writes (psfn-framework-vvf.2):
+    // the hook loader dynamically imports handler modules from <workspaceRoot>/hooks.
+    expect(bootstrap.policyConfig.protectedWritePaths).toContain('/workspace/hooks');
     expect(bootstrap.policyConfig.beads).toEqual({
       enabled: true,
       allowActions: ['ready', 'show', 'create', 'update', 'close', 'sync'],

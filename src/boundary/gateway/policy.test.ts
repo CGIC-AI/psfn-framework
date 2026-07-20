@@ -15,6 +15,7 @@ const policyConfig: PolicyConfig = {
     '/app/companion/state',
     '/app/companion/companion.json',
     '/app/companion/skills',
+    '/app/companion/hooks',
   ],
 };
 
@@ -728,6 +729,61 @@ describe('evaluatePolicy', () => {
     )).toBe('ALLOW');
   });
 
+  // ── Operator hook root (arbitrary-code-execution fence, psfn-framework-vvf.2) ──
+  // The hook loader dynamically imports handler modules from <workspaceRoot>/hooks
+  // at startup, so writes into it must fail closed (DENY, not NEEDS_APPROVAL).
+  // /app/companion/hooks does not exist on disk here, proving the fence holds for
+  // a not-yet-created hooks directory.
+
+  it('denies fs.write of a hook manifest under the protected hooks subtree', () => {
+    expect(evaluatePolicy(
+      { method: 'fs.write', params: { path: '/app/companion/hooks/x/HOOK.yaml' } },
+      policyConfig,
+    )).toBe('DENY');
+  });
+
+  it('denies fs.write of a hook handler module under the protected hooks subtree', () => {
+    expect(evaluatePolicy(
+      { method: 'fs.write', params: { path: '/app/companion/hooks/x/handler.mjs' } },
+      policyConfig,
+    )).toBe('DENY');
+  });
+
+  it('denies fs.edit of a hook manifest under the protected hooks subtree', () => {
+    expect(evaluatePolicy(
+      {
+        method: 'fs.edit',
+        params: {
+          path: '/app/companion/hooks/x/HOOK.yaml',
+          oldText: 'before',
+          newText: 'after',
+        },
+      },
+      policyConfig,
+    )).toBe('DENY');
+  });
+
+  it('denies fs.edit of a hook handler module under the protected hooks subtree', () => {
+    expect(evaluatePolicy(
+      {
+        method: 'fs.edit',
+        params: {
+          path: '/app/companion/hooks/x/handler.mjs',
+          oldText: 'before',
+          newText: 'after',
+        },
+      },
+      policyConfig,
+    )).toBe('DENY');
+  });
+
+  it('allows fs.read under the protected hooks subtree', () => {
+    expect(evaluatePolicy(
+      { method: 'fs.read', params: { path: '/app/companion/hooks/x/HOOK.yaml' } },
+      policyConfig,
+    )).toBe('ALLOW');
+  });
+
   it('still allows fs.write outside the protected managed skills subtree', () => {
     expect(evaluatePolicy(
       { method: 'fs.write', params: { path: '/app/companion/notes.txt' } },
@@ -934,10 +990,13 @@ describe('evaluatePolicy symlink traversal', () => {
   const managedSkillsTarget = join(workspace, 'managed-skills-target');
   const managedSkillsLink = join(workspace, 'skills');
   const managedSkillFile = join(managedSkillsLink, 'x', 'SKILL.md');
+  const hooksDir = join(workspace, 'hooks');
+  const hookManifestFile = join(hooksDir, 'x', 'HOOK.yaml');
+  const hookHandlerFile = join(hooksDir, 'x', 'handler.mjs');
 
   const realPolicyConfig: PolicyConfig = {
     workspacePath: workspace,
-    protectedWritePaths: [managedSkillsLink],
+    protectedWritePaths: [managedSkillsLink, hooksDir],
   };
 
   beforeAll(() => {
@@ -948,6 +1007,11 @@ describe('evaluatePolicy symlink traversal', () => {
     writeFileSync(normalFile, 'normal data');
     mkdirSync(join(managedSkillsTarget, 'x'), { recursive: true });
     writeFileSync(join(managedSkillsTarget, 'x', 'SKILL.md'), 'before');
+    // An existing operator hook directory with a real manifest + handler on disk,
+    // proving the fence holds when the hooks directory actually exists.
+    mkdirSync(join(hooksDir, 'x'), { recursive: true });
+    writeFileSync(hookManifestFile, 'name: x');
+    writeFileSync(hookHandlerFile, 'export default () => {};');
 
     // Symlink inside workspace pointing to file outside
     symlinkSync(outsideFile, symlinkToOutside);
@@ -1013,6 +1077,37 @@ describe('evaluatePolicy symlink traversal', () => {
           newText: 'after',
         },
       },
+      realPolicyConfig,
+    )).toBe('DENY');
+  });
+
+  it('denies fs.write of a hook manifest when the hooks directory exists on disk', () => {
+    expect(evaluatePolicy(
+      { method: 'fs.write', params: { path: hookManifestFile } },
+      realPolicyConfig,
+    )).toBe('DENY');
+  });
+
+  it('denies fs.write of a hook handler module when the hooks directory exists on disk', () => {
+    expect(evaluatePolicy(
+      { method: 'fs.write', params: { path: hookHandlerFile } },
+      realPolicyConfig,
+    )).toBe('DENY');
+  });
+
+  it('denies fs.edit of a hook handler module when the hooks directory exists on disk', () => {
+    expect(evaluatePolicy(
+      {
+        method: 'fs.edit',
+        params: { path: hookHandlerFile, oldText: 'before', newText: 'after' },
+      },
+      realPolicyConfig,
+    )).toBe('DENY');
+  });
+
+  it('denies fs.write of a brand-new hook handler module in an existing hooks directory', () => {
+    expect(evaluatePolicy(
+      { method: 'fs.write', params: { path: join(hooksDir, 'planted', 'evil.mjs') } },
       realPolicyConfig,
     )).toBe('DENY');
   });

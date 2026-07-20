@@ -46,7 +46,16 @@ import {
  */
 
 const HOOK_MANIFEST_FILE_NAME = 'HOOK.yaml';
-const HOOKS_DIRECTORY_NAME = 'hooks';
+/**
+ * Workspace-relative directory the operator hook loader scans and dynamically
+ * imports handler modules from. Exported so the gateway write-policy fence
+ * (see {@link file://../bootstrap-input.ts} `protectedWritePaths`) can protect
+ * the exact same directory the loader executes from — the fence and the loader
+ * must never drift to different directory names, or a model-driven fs.write
+ * could plant a handler module that runs with full Node privileges on the next
+ * agent restart.
+ */
+export const HOOKS_DIRECTORY_NAME = 'hooks';
 const ALLOWED_MANIFEST_KEYS = new Set([
   'name',
   'description',

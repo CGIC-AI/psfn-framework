@@ -13,6 +13,7 @@ import {
   type GatewayPolicyEnv,
 } from './policy-config.js';
 import { resolveWorkspaceRoot } from './filesystem-paths.js';
+import { HOOKS_DIRECTORY_NAME } from './hook-loader.js';
 import { resolveGitRepoRoot } from '../integrations/git/repo-root.js';
 import {
   ALL_BEADS_ACTIONS,
@@ -318,6 +319,12 @@ function buildGatewayPolicyConfig(
       resolve(resolveCompanionStateDir(config.companionDataDir ?? workspaceRoot)),
       resolve(config.characterCardPath),
       resolve(resolvePersonalSkillsDir(workspaceRoot)),
+      // Fence the operator hook root: the hook loader dynamically imports
+      // handler modules from <workspaceRoot>/hooks at startup, so a model-driven
+      // fs.write/fs.edit into it would be arbitrary code execution in the
+      // cognition process on the next restart. Reuse the loader's constant so
+      // the fence can never drift from the directory the loader executes.
+      resolve(workspaceRoot, HOOKS_DIRECTORY_NAME),
     ],
     ...(fullCodebaseReadRoot ? { fullCodebaseReadRoot } : {}),
     urlPolicy: {

@@ -1803,6 +1803,32 @@ describe('GatewayServer', () => {
       await expect(server.requestAgent('test', {})).rejects.toThrow('No agent connected');
     });
 
+    it('disconnects malformed peers while audit persistence remains pending', async () => {
+      let settleAudit: ((auditId: number) => void) | undefined;
+      const auditAppend = vi.fn(() => new Promise<number>((resolve) => {
+        settleAudit = resolve;
+      }));
+      const auditComplete = vi.fn();
+      const { server, conn } = await setupServerConnection({
+        ...createMinimalOptions(),
+        auditStore: createMockAuditStore({
+          append: auditAppend,
+          complete: auditComplete,
+        }),
+      });
+
+      conn._emitFrameError({
+        message: 'Malformed NDJSON frame received',
+        preview: '{"jsonrpc":"2.0","bad":',
+      });
+
+      expect(auditAppend).toHaveBeenCalledOnce();
+      expect(settleAudit).toEqual(expect.any(Function));
+      expect(auditComplete).not.toHaveBeenCalled();
+      expect(conn.conn.destroyed).toBe(true);
+      await expect(server.requestAgent('test', {})).rejects.toThrow('No agent connected');
+    });
+
     it('fails closed on malformed NDJSON frames when audit append rejects', async () => {
       const auditAppend = vi.fn().mockRejectedValue(new Error('audit append unavailable'));
       const { server, conn } = await setupServerConnection({

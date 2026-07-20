@@ -1545,12 +1545,7 @@ export class GatewayServer {
 
     conn.on('frameError', (error: unknown) => {
       const frameError = normalizeNdjsonFrameError(error);
-      void this.handleMalformedFrame(conn, 'ndjson', frameError.reason, frameError.preview)
-        .catch((handlingError: unknown) => {
-          log.error('Malformed NDJSON frame handling failed after fail-closed teardown', {
-            error: toErrorMessage(handlingError),
-          });
-        });
+      this.handleMalformedFrame(conn, 'ndjson', frameError.reason, frameError.preview);
     });
 
     conn.on('heartbeat', () => {
@@ -1565,7 +1560,7 @@ export class GatewayServer {
         this.touchConnectionHealthcheck(conn);
         const validationError = validateJsonRpcFrame(message);
         if (validationError) {
-          await this.handleMalformedFrame(
+          this.handleMalformedFrame(
             conn,
             'jsonrpc',
             validationError,
@@ -1587,7 +1582,7 @@ export class GatewayServer {
           await serverAndClient.receiveAndSend(message as any);
         } catch (error) {
           const messageText = toErrorMessage(error);
-          await this.handleMalformedFrame(
+          this.handleMalformedFrame(
             conn,
             'jsonrpc',
             `JSON-RPC receive/send failed: ${messageText}`,
@@ -2142,12 +2137,12 @@ export class GatewayServer {
     }
   }
 
-  private async handleMalformedFrame(
+  private handleMalformedFrame(
     conn: GatewayRpcConnection,
     frameKind: MalformedFrameKind,
     reason: string,
     preview?: string,
-  ): Promise<void> {
+  ): void {
     if (!this.connectionStatuses.has(conn)) {
       return;
     }
@@ -2158,22 +2153,22 @@ export class GatewayServer {
       reason,
       ...(preview ? { preview } : {}),
     };
-    try {
+    void (async (): Promise<void> => {
       const auditId = await this.audit(INVALID_FRAME_AUDIT_METHOD, 'DENY', params);
       await this.auditComplete(auditId, startedAt, reason);
-    } catch (auditError) {
-      log.error('Malformed IPC frame audit persistence failed; disconnecting peer fail closed', {
+    })().catch((auditError: unknown) => {
+      log.error('Malformed IPC frame audit persistence failed after disconnecting peer fail closed', {
         ...params,
         error: toErrorMessage(auditError),
       });
-    } finally {
-      log.error('Malformed IPC frame received; disconnecting agent connection', params);
-      this.transitionConnectionState(conn, 'degraded', 'malformed_frame', reason);
-      this.transitionConnectionState(conn, 'offline', 'malformed_frame', reason);
-      this.removeConnection(conn);
-      if (!conn.destroyed) {
-        conn.destroy();
-      }
+    });
+
+    log.error('Malformed IPC frame received; disconnecting agent connection', params);
+    this.transitionConnectionState(conn, 'degraded', 'malformed_frame', reason);
+    this.transitionConnectionState(conn, 'offline', 'malformed_frame', reason);
+    this.removeConnection(conn);
+    if (!conn.destroyed) {
+      conn.destroy();
     }
   }
 

@@ -24,8 +24,10 @@
  *   two reads. The procedure is fixed and cheap; wall-clock decay between reads
  *   is expected signal in server mode, not noise.
  */
+import { createComponentLogger } from '../../../shared/logger.js';
 import { toErrorMessage } from '../../../shared/utils/errors.js';
 import { isRecord } from '../../../shared/utils/types.js';
+import { parseEmoSimDirectedRelationshipReading } from './dyad-relationship.js';
 import {
   DEFAULT_EMOSIM_TIMEOUT_MS,
   EMOSIM_ADAPTER_OUTPUT_SCHEMA_VERSION,
@@ -49,6 +51,8 @@ import {
 /** Neutral anchor NPC required because emo_sim sessions need >= 1 NPC. */
 export const EMOSIM_SERVER_ANCHOR_NPC_NAME = 'baseline-anchor' as const;
 export const EMOSIM_SERVER_ANCHOR_NPC_ARCHETYPE = 'serene_sage' as const;
+
+const log = createComponentLogger('EmoSimServerRunner');
 /**
  * Minimum spacing between the two session reads. Operator ruling (oth4): the
  * adapter reads at 1 Hz — no sub-second polling regardless of the emo_sim
@@ -141,6 +145,24 @@ export class EmoSimServerRunner implements EmoSimRunner {
     const afterTickState = await this.readSessionState(bootstrap.sessionId);
     const afterTick = this.toEngineSnapshot(afterTickState);
 
+    // Directed A->B relationship reading, taken from the SAME 1 Hz afterTick
+    // read (no extra request, no sub-second polling). The synthetic anchor NPC
+    // is excluded — it never witnesses stimuli, so a relationship toward it is
+    // a session artifact, not real dyad signal. Parsing is fail-closed to
+    // omission: malformed or absent data yields no reading (never a throw into
+    // the observation, never a fabricated neutral one). Physiological drives
+    // play no part here, so the branch's drive exclusion is unaffected.
+    const relationship = parseEmoSimDirectedRelationshipReading(afterTickState, {
+      agentName: this.agentName,
+      excludeTargets: [EMOSIM_SERVER_ANCHOR_NPC_NAME],
+    });
+    if (!relationship && isRecord(afterTickState.relationships)) {
+      log.debug('emo_sim relationships present but carried no companion-directed reading; omitting advisory', {
+        agentName: this.agentName,
+        sessionLabel: this.sessionLabel,
+      });
+    }
+
     const kicks: Record<string, number> = {};
     for (const emotion of EMOSIM_EMOTION_VECTOR) {
       kicks[emotion] = roundTo(Math.max(0, afterStimulus.emotions[emotion] - before.emotions[emotion]), 6);
@@ -179,6 +201,10 @@ export class EmoSimServerRunner implements EmoSimRunner {
         afterTick,
       },
     };
+
+    if (relationship) {
+      output.relationship = relationship;
+    }
 
     if (input.snapshot.includeWorldState) {
       const worldState: Record<string, unknown> = { ...afterTickState };

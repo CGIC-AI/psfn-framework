@@ -63,6 +63,46 @@ describe('EmoSim server adapter', () => {
     expect(server.createCount).toBe(1);
   });
 
+  it('attaches the companion directed relationship reading, excluding the anchor', async () => {
+    const server = new FakeEmoSimServer();
+    server.relationships = {
+      [AGENT_NAME]: {
+        [EMOSIM_SERVER_ANCHOR_NPC_NAME]: { liking: 0.9, trust: 0.9, familiarity: 0.9 },
+        pierre: { liking: 0.6, trust: 0.4, familiarity: 0.5 },
+      },
+    };
+    const runner = makeRunner(server);
+
+    const result = await runEmoSimProjectedStimulus(makeInput(), { runner });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.output.relationship).toBeDefined();
+    expect(result.output.relationship?.sampleCount).toBe(1);
+    expect(result.output.relationship?.liking).toBeCloseTo(0.6);
+    expect(result.output.relationship?.agentName).toBe(AGENT_NAME);
+  });
+
+  it('omits the relationship reading when only the anchor is present (HEAD reality) or it is empty', async () => {
+    for (const relationships of [{}, { [AGENT_NAME]: { [EMOSIM_SERVER_ANCHOR_NPC_NAME]: { liking: 0.9 } } }]) {
+      const server = new FakeEmoSimServer();
+      server.relationships = relationships;
+      const result = await runEmoSimProjectedStimulus(makeInput(), { runner: makeRunner(server) });
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.output.relationship).toBeUndefined();
+    }
+  });
+
+  it('omits the relationship reading on a malformed relationships payload (fail-closed, no throw)', async () => {
+    const server = new FakeEmoSimServer();
+    server.relationships = 'not-an-object';
+    const result = await runEmoSimProjectedStimulus(makeInput(), { runner: makeRunner(server) });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.output.relationship).toBeUndefined();
+  });
+
   it('derives non-negative kicks from the before/afterStimulus delta', async () => {
     const server = new FakeEmoSimServer();
     // Use an existing session so state reads map 1:1 onto the observation
@@ -382,6 +422,7 @@ class FakeEmoSimServer {
   extraEmotion: string | null = null;
   joySequence: number[] | null = null;
   sadnessSequence: number[] | null = null;
+  relationships: unknown = {};
   private stateReads = 0;
   private created: FakeSessionListing | null = null;
   private anchorRoom = 'chapel';
@@ -498,7 +539,7 @@ class FakeEmoSimServer {
         [AGENT_NAME]: agent(AGENT_NAME),
         [EMOSIM_SERVER_ANCHOR_NPC_NAME]: agent(EMOSIM_SERVER_ANCHOR_NPC_NAME),
       },
-      relationships: {},
+      relationships: this.relationships,
       events: [{ t: 12.5, stimulus: 'observer turn' }],
     };
   }

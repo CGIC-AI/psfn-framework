@@ -1267,6 +1267,38 @@ describe('GatewayClient authenticated identification', () => {
     conn._emit({ jsonrpc: '2.0', id: request.id, result: { success: true } });
     await expect(identified).resolves.toBeUndefined();
   });
+
+  it('publishes only the bounded posture envelope after deterministic runtime wiring', async () => {
+    const conn = createMockConnection();
+    const client = new GatewayClient(conn.conn, 1024, {
+      companionId: TEST_COMPANION_ID,
+    });
+    const started = client.startFleetPostureReporting(() => ({
+      schemaVersion: 1,
+      updatedAt: 1_800_000_000_000,
+      charge: { state: 'pressured', utilizationPercent: 25 },
+      fatigue: { state: 'clear', utilizationPercent: 0 },
+    }));
+    const request = conn.sent[0] as {
+      id: number;
+      method: string;
+      params: Record<string, unknown>;
+    };
+    expect(request).toMatchObject({
+      method: 'gateway.client.health',
+      params: {
+        posture: {
+          schemaVersion: 1,
+          charge: { state: 'pressured', utilizationPercent: 25 },
+          fatigue: { state: 'clear', utilizationPercent: 0 },
+        },
+      },
+    });
+    expect(JSON.stringify(request.params)).not.toContain(TEST_COMPANION_ID);
+    conn._emit({ jsonrpc: '2.0', id: request.id, result: { success: true } });
+    await expect(started).resolves.toBeUndefined();
+    client.destroy();
+  });
 });
 
 describe('GatewayClient reverse RPC (onHandleMessage)', () => {
@@ -2790,6 +2822,43 @@ describe('GatewayClient beads RPC wrappers', () => {
 });
 
 describe('GatewayClient keepalive', () => {
+  it('does not overlap the acknowledged initial posture report with a keepalive report', async () => {
+    vi.useFakeTimers();
+    const conn = createMockConnection();
+    const client = new GatewayClient(conn.conn, 1024, {
+      companionId: TEST_COMPANION_ID,
+      keepaliveIntervalMs: 1_000,
+    });
+
+    try {
+      const started = client.startFleetPostureReporting(() => ({
+        schemaVersion: 1,
+        updatedAt: 1_800_000_000_000,
+        charge: { state: 'clear', utilizationPercent: 0 },
+        fatigue: { state: 'clear', utilizationPercent: 0 },
+      }));
+      const initial = conn.sent[0] as { id: number; method: string };
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(conn.heartbeatCount).toBe(1);
+      expect(conn.sent.filter((frame: unknown) => (
+        (frame as { method?: unknown }).method === 'gateway.client.health'
+      ))).toHaveLength(1);
+
+      conn._emit({ jsonrpc: '2.0', id: initial.id, result: { success: true } });
+      await started;
+      await vi.advanceTimersByTimeAsync(1_000);
+      const reports = conn.sent.filter((frame: unknown) => (
+        (frame as { method?: unknown }).method === 'gateway.client.health'
+      )) as Array<{ id: number }>;
+      expect(reports).toHaveLength(2);
+      conn._emit({ jsonrpc: '2.0', id: reports[1]!.id, result: { success: true } });
+      await Promise.resolve();
+    } finally {
+      client.destroy();
+      vi.useRealTimers();
+    }
+  });
+
   it('emits transport heartbeats without JSON-RPC frames while idle', async () => {
     vi.useFakeTimers();
     const conn = createMockConnection();

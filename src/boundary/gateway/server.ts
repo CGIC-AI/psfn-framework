@@ -113,6 +113,8 @@ import {
   type ShardWorkloadLifecycleRegistryPort,
 } from '../../system/capabilities/shard-approval-grants.js';
 import { GatewayShardWorkloadRegistrar } from './shard-workload-registrar.js';
+import { GatewayFleetPostureCache } from './fleet-posture-cache.js';
+import type { FleetCompanionPostureSummary } from '../../shared/telemetry/fleet-posture.js';
 
 const log = createComponentLogger('Gateway');
 const DEFAULT_CONNECTION_HEALTHCHECK_STALE_AFTER_MS = 90_000;
@@ -155,9 +157,8 @@ Readonly<Record<GatewayConnectionState, readonly GatewayConnectionState[]>> = {
 
 // ── Fleet health snapshot (sprint-10 W4 fleet view) ──
 // Cheap, read-only view over state the gateway already tracks: the companion
-// connection registry plus an in-memory ring of multi-companion violation
-// alarms. No new telemetry pipes; fatigue/charge posture is intentionally not
-// here (documented follow-up — the gateway has no cheap authority for it).
+// connection registry, latest bounded agent posture, and an in-memory ring of
+// multi-companion violation alarms. The gateway never reads companion stores.
 
 const COMPANION_VIOLATION_LOG_LIMIT = 1_000;
 export const FLEET_RECENT_VIOLATION_WINDOW_MS = 60 * 60 * 1_000;
@@ -193,6 +194,8 @@ export interface GatewayFleetCompanionConnection {
   stateReason: string;
   connectedAt: number;
   lastSeenAt: number;
+  /** Latest validated content-free posture, attributed by this bound connection. */
+  posture?: FleetCompanionPostureSummary;
 }
 
 export interface GatewayFleetConnectionSnapshot {
@@ -355,6 +358,7 @@ export class GatewayServer {
   private readonly companionConnections = new Map<CompanionId, GatewayRpcConnection>();
   private readonly companionLastSeen = new Map<CompanionId, number>();
   private readonly companionViolationLog: CompanionViolationEvent[] = [];
+  private readonly companionPostures = new GatewayFleetPostureCache<GatewayRpcConnection>();
   private readonly companionDeliveryFailureReceipts = new CompanionDeliveryFailureReceipts();
   private readonly icpAutonomyBroker: GatewayIcpAutonomyBroker | null;
   private readonly pendingIcpInvalidations = new Map<string, PendingIcpInvalidation>();
@@ -660,6 +664,10 @@ export class GatewayServer {
       audited: (method, handler, paramsSummary) => this.audited(method, handler, paramsSummary),
     });
     target.addMethod('gateway.client.identify', (params: unknown) => this.identifyConnection(conn, params));
+    target.addMethod(
+      'gateway.client.health',
+      (params: unknown) => this.recordConnectionPosture(conn, params),
+    );
     target.addMethod('shard.workload.register', this.audited(
       'shard.workload.register',
       async (params: unknown) => {
@@ -2024,6 +2032,7 @@ export class GatewayServer {
       if (!status || status.state === 'offline') {
         continue;
       }
+      const posture = this.companionPostures.read(conn, companionId, now);
       connections.push({
         companionId,
         state: status.state,
@@ -2031,6 +2040,7 @@ export class GatewayServer {
         stateReason: status.stateReason,
         connectedAt: status.connectedAt,
         lastSeenAt: status.lastHealthcheckAt,
+        ...(posture ? { posture } : {}),
       });
     }
 
@@ -2080,6 +2090,7 @@ export class GatewayServer {
         });
     }
     this.connections.delete(conn);
+    this.companionPostures.unbind(conn);
     this.inlineImageRetentionByConnection.get(conn)?.clear();
     this.inlineImageRetentionByConnection.delete(conn);
     this.rpcClients.delete(conn);
@@ -2500,6 +2511,27 @@ export class GatewayServer {
     return this.runtimeHealthTracker.getSnapshot(this.getConnectionSummary());
   }
 
+  private recordConnectionPosture(
+    conn: GatewayRpcConnection,
+    params: unknown,
+  ): { success: true } {
+    const status = this.connectionStatuses.get(conn);
+    if (status?.role !== 'agent' || !status.companionId) {
+      throw new Error('gateway.client.health requires an authenticated companion agent');
+    }
+    if (!isRecord(params)
+      || !Object.hasOwn(params, 'posture')
+      || Object.keys(params).length !== 1) {
+      throw new Error('gateway.client.health accepts only the bounded posture envelope');
+    }
+    this.companionPostures.record(
+      conn,
+      status.companionId,
+      params.posture,
+    );
+    return { success: true };
+  }
+
   private async identifyConnection(
     conn: GatewayRpcConnection,
     params: unknown,
@@ -2609,6 +2641,7 @@ export class GatewayServer {
           this.companionConnections.delete(authenticatedCompanionId);
         }
         this.companionConnections.set(authenticatedCompanionId, conn);
+        this.companionPostures.bind(conn, authenticatedCompanionId);
       }
       status.companionId = authenticatedCompanionId;
       this.companionLastSeen.set(authenticatedCompanionId, Date.now());
@@ -2621,6 +2654,9 @@ export class GatewayServer {
       // semantics stay byte-identical to single-companion behavior.
       status.companionId = companionId;
       this.companionLastSeen.set(companionId, Date.now());
+      if (params.role === 'agent') {
+        this.companionPostures.bind(conn, companionId);
+      }
     }
 
     status.role = params.role;

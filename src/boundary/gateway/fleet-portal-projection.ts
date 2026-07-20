@@ -8,6 +8,13 @@ import type {
 } from './fleet-portal-authorization.js';
 import { compileFleetSsoGardenPath } from './fleet-sso-route-compiler.js';
 import { compileCompanionUiWebSocketPath } from './companion-ui-websocket-path.js';
+import {
+  FLEET_POSTURE_EXPIRY_TIMEOUT_MS,
+  FLEET_POSTURE_STALE_TIMEOUT_MS,
+  parseFleetCompanionPosture,
+  type FleetChargePosture,
+  type FleetFatiguePosture,
+} from '../../shared/telemetry/fleet-posture.js';
 
 const FLEET_PORTAL_PROTOCOL = Object.freeze({
   schemaVersion: 1 as const,
@@ -23,11 +30,28 @@ export const FLEET_PORTAL_RESPONSE_HEADERS: Readonly<Record<string, string>> = O
 });
 
 export type FleetPortalAvailability = 'online' | 'degraded' | 'offline' | 'unknown';
+export type FleetPortalPostureStatus = 'available' | 'stale' | 'unavailable';
+
+export type FleetPortalPosture =
+  | Readonly<{ status: 'unavailable' }>
+  | Readonly<{
+      status: 'available' | 'stale';
+      updatedAt: string;
+      charge: Readonly<{
+        state: FleetChargePosture;
+        utilizationPercent: number;
+      }>;
+      fatigue: Readonly<{
+        state: FleetFatiguePosture;
+        utilizationPercent: number;
+      }>;
+    }>;
 
 export interface FleetPortalCompanionProjection {
   readonly companionId: string;
   readonly displayName: string;
   readonly availability: FleetPortalAvailability;
+  readonly posture: FleetPortalPosture;
   readonly gardenPath?: string;
   readonly avatarRef?: string;
 }
@@ -88,6 +112,27 @@ function availability(connection: GatewayFleetCompanionConnection | undefined): 
   if (connection.state === 'registering') return 'unknown';
   if (connection.state === 'ready' && connection.health === 'healthy') return 'online';
   return 'degraded';
+}
+
+function posture(
+  connection: GatewayFleetCompanionConnection | undefined,
+  nowMs: number,
+): FleetPortalPosture {
+  if (!connection?.posture) return Object.freeze({ status: 'unavailable' as const });
+  const summary = parseFleetCompanionPosture(connection.posture, nowMs);
+  const ageMs = nowMs - summary.updatedAt;
+  if (ageMs > FLEET_POSTURE_EXPIRY_TIMEOUT_MS) {
+    return Object.freeze({ status: 'unavailable' as const });
+  }
+  const status = ageMs > FLEET_POSTURE_STALE_TIMEOUT_MS
+    ? 'stale'
+    : 'available';
+  return Object.freeze({
+    status,
+    updatedAt: new Date(summary.updatedAt).toISOString(),
+    charge: Object.freeze({ ...summary.charge }),
+    fatigue: Object.freeze({ ...summary.fatigue }),
+  });
 }
 
 function indexConnections(
@@ -159,10 +204,12 @@ export class GatewayFleetPortalProjection {
       // admin endpoint), so authorization is the only gate.
       if (!authority.gardenLinkEligible) continue;
       const gardenPath = compileFleetSsoGardenPath(manifest.companionId);
+      const connection = connections.get(manifest.companionId);
       companions.push(Object.freeze({
         companionId: manifest.companionId,
         displayName: manifest.displayName?.trim() || manifest.companionId,
-        availability: availability(connections.get(manifest.companionId)),
+        availability: availability(connection),
+        posture: posture(connection, now.getTime()),
         gardenPath,
         ...(manifest.avatarRef !== undefined ? { avatarRef: manifest.avatarRef } : {}),
       }));

@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { readFileSync } from 'node:fs';
 import {
   fetchFleetPortalProjection,
   parseFleetPortalProjection,
@@ -21,6 +22,12 @@ describe('Garden fleet portal client', () => {
         companionId: COMPANION_A,
         displayName: 'Canopy',
         availability: 'online',
+        posture: {
+          status: 'available',
+          updatedAt: '2026-07-18T11:59:00.000Z',
+          charge: { state: 'pressured', utilizationPercent: 25 },
+          fatigue: { state: 'clear', utilizationPercent: 0 },
+        },
         gardenPath: `/companions/${COMPANION_A}/garden`,
       }],
     }).companions).toHaveLength(1);
@@ -39,6 +46,7 @@ describe('Garden fleet portal client', () => {
           companionId: COMPANION_A,
           displayName: 'Canopy',
           availability: 'online',
+          posture: { status: 'unavailable' },
           gardenPath: `/companions/${COMPANION_A}/garden`,
           ...widened,
         }],
@@ -58,16 +66,64 @@ describe('Garden fleet portal client', () => {
         companionId: COMPANION_A,
         displayName: 'Canopy',
         availability: 'online',
+        posture: { status: 'unavailable' },
         gardenPath: `/companions/${COMPANION_B}/garden`,
       }],
     })).toThrow(/invalid companion/u);
     expect(() => parseFleetPortalProjection({
       ...base,
       companions: [
-        { companionId: COMPANION_A, displayName: 'Canopy', availability: 'online' },
-        { companionId: COMPANION_A, displayName: 'Duplicate', availability: 'offline' },
+        {
+          companionId: COMPANION_A,
+          displayName: 'Canopy',
+          availability: 'online',
+          posture: { status: 'unavailable' },
+        },
+        {
+          companionId: COMPANION_A,
+          displayName: 'Duplicate',
+          availability: 'offline',
+          posture: { status: 'unavailable' },
+        },
       ],
     })).toThrow(/invalid companion/u);
+  });
+
+  it('accepts stale/unavailable posture and rejects widened or uncapped metrics', () => {
+    const base = {
+      schemaVersion: 1,
+      generatedAt: '2026-07-18T12:00:00.000Z',
+      session: { state: 'authenticated' },
+    };
+    expect(parseFleetPortalProjection({
+      ...base,
+      companions: [{
+        companionId: COMPANION_A,
+        displayName: 'Canopy',
+        availability: 'degraded',
+        posture: {
+          status: 'stale',
+          updatedAt: '2026-07-18T11:00:00.000Z',
+          charge: { state: 'exhausted', utilizationPercent: 100 },
+          fatigue: { state: 'pressured', utilizationPercent: 67 },
+        },
+      }],
+    }).companions[0]?.posture.status).toBe('stale');
+    expect(() => parseFleetPortalProjection({
+      ...base,
+      companions: [{
+        companionId: COMPANION_A,
+        displayName: 'Canopy',
+        availability: 'online',
+        posture: {
+          status: 'available',
+          updatedAt: '2026-07-18T12:00:00.000Z',
+          charge: { state: 'pressured', utilizationPercent: 101 },
+          fatigue: { state: 'clear', utilizationPercent: 0 },
+          rawLedgerEvent: {},
+        },
+      }],
+    })).toThrow(/posture/i);
   });
 
   it('loads the cookie-authenticated no-store fleet projection', async () => {
@@ -83,5 +139,21 @@ describe('Garden fleet portal client', () => {
       cache: 'no-store',
       credentials: 'include',
     }));
+  });
+
+  it('renders charge, fatigue, timestamps, stale state, and honest unavailability', () => {
+    const source = readFileSync(new URL('../../routes/fleet/+page.svelte', import.meta.url), 'utf8');
+    for (const required of [
+      'Posture unavailable',
+      'No bounded charge or fatigue report has arrived.',
+      'companion.posture.charge.state',
+      'companion.posture.charge.utilizationPercent',
+      'companion.posture.fatigue.state',
+      'companion.posture.fatigue.utilizationPercent',
+      "companion.posture.status === 'stale'",
+      'new Date(companion.posture.updatedAt).toLocaleString()',
+    ]) {
+      expect(source).toContain(required);
+    }
   });
 });

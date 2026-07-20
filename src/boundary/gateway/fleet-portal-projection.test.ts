@@ -33,6 +33,7 @@ function connection(
   companionId: typeof COMPANION_A,
   state: 'registering' | 'ready' | 'degraded',
   health: 'healthy' | 'stale' | 'failed',
+  posture?: GatewayFleetConnectionSnapshot['connections'][number]['posture'],
 ): GatewayFleetConnectionSnapshot['connections'][number] {
   return {
     companionId,
@@ -41,6 +42,7 @@ function connection(
     stateReason: `private-${companionId}`,
     connectedAt: GENERATED_AT.getTime() - 10_000,
     lastSeenAt: GENERATED_AT.getTime() - 5_000,
+    ...(posture ? { posture } : {}),
   };
 }
 
@@ -89,6 +91,7 @@ describe('gateway fleet portal projection', () => {
         companionId: COMPANION_A,
         displayName: COMPANION_A,
         availability: 'online',
+        posture: { status: 'unavailable' },
         gardenPath: `/companions/${COMPANION_A}/garden`,
       }],
     });
@@ -160,6 +163,76 @@ describe('gateway fleet portal projection', () => {
     expect(JSON.stringify(result)).not.toContain(COMPANION_B);
     expect(JSON.stringify(result)).not.toContain(COMPANION_C);
     expect(JSON.stringify(result)).not.toContain('gardenPort');
+  });
+
+  it('projects fresh and stale bounded posture without cross-attribution', async () => {
+    const postureA = {
+      schemaVersion: 1 as const,
+      updatedAt: GENERATED_AT.getTime() - 1_000,
+      charge: { state: 'pressured' as const, utilizationPercent: 25 },
+      fatigue: { state: 'clear' as const, utilizationPercent: 0 },
+    };
+    const postureB = {
+      schemaVersion: 1 as const,
+      updatedAt: GENERATED_AT.getTime() - 90_001,
+      charge: { state: 'exhausted' as const, utilizationPercent: 100 },
+      fatigue: { state: 'pressured' as const, utilizationPercent: 67 },
+    };
+    const expiredPosture = {
+      ...postureA,
+      updatedAt: GENERATED_AT.getTime() - 180_001,
+    };
+    const projection = new GatewayFleetPortalProjection({
+      authorizer: {
+        resolve: async () => ({
+          companions: [
+            { companionId: COMPANION_A, gardenLinkEligible: true },
+            { companionId: COMPANION_B, gardenLinkEligible: true },
+            { companionId: COMPANION_C, gardenLinkEligible: true },
+          ],
+        }),
+      },
+      fleet: [
+        { companionId: COMPANION_A },
+        { companionId: COMPANION_B },
+        { companionId: COMPANION_C },
+      ],
+      source: {
+        getFleetConnectionSnapshot: () => snapshot([
+          connection(COMPANION_A, 'ready', 'healthy', postureA),
+          connection(COMPANION_B, 'ready', 'healthy', postureB),
+          connection(COMPANION_C, 'ready', 'healthy', expiredPosture),
+        ]),
+      },
+      now: () => GENERATED_AT,
+    });
+
+    await expect(projection.resolve({ sessionToken: SESSION_TOKEN })).resolves.toMatchObject({
+      companions: [
+        {
+          companionId: COMPANION_A,
+          posture: {
+            status: 'available',
+            updatedAt: new Date(postureA.updatedAt).toISOString(),
+            charge: { utilizationPercent: 25 },
+            fatigue: { utilizationPercent: 0 },
+          },
+        },
+        {
+          companionId: COMPANION_B,
+          posture: {
+            status: 'stale',
+            updatedAt: new Date(postureB.updatedAt).toISOString(),
+            charge: { utilizationPercent: 100 },
+            fatigue: { utilizationPercent: 67 },
+          },
+        },
+        {
+          companionId: COMPANION_C,
+          posture: { status: 'unavailable' },
+        },
+      ],
+    });
   });
 
   it('makes unknown and unauthorized manifest data byte-indistinguishable', async () => {

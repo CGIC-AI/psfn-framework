@@ -158,6 +158,7 @@ import { prepareAgentStartupContext } from './startup-context.js';
 import { AgentApiBackend } from '../../channels/api/agent-backend.js';
 import { resolveActiveHealthProbeConfig } from '../../channels/api/active-health-probe.js';
 import { buildExternalChannelProfiles, resolveDiscordCompanionView } from '../../channels/backplane/config.js';
+import { createAgentFleetPostureProvider } from './fleet-posture.js';
 
 const log = createComponentLogger('Agent');
 ensureActiveTimezone();
@@ -935,6 +936,16 @@ async function main(): Promise<void> {
     resolveChargeLedgerPath(pathSnapshot.companionDataDir),
     eventBus,
   );
+  if (config.multiCompanion === true) {
+    if (!config.chargePolicy) {
+      throw new Error('Multi-companion fleet posture requires chargePolicy');
+    }
+    await gateway.startFleetPostureReporting(createAgentFleetPostureProvider({
+      companionId: resolveCoreCompanionIdFromConfig(config),
+      chargePolicy: config.chargePolicy,
+      fatigueHistory: coreRuntime.fatigueLedger,
+    }));
+  }
   agentLoop.setDurableChargeRecorder(
     event => chargeLedger.commitChargeEvent(event).outcome,
     event => chargeLedger.probeChargeEvent(event),

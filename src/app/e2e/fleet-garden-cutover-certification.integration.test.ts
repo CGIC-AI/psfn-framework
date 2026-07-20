@@ -326,6 +326,7 @@ interface Fixture {
 }
 
 let fixture: Fixture;
+let fixtureReady = false;
 
 const signer = createGatewayRequestCapabilitySigner({
   issuer: ISSUER,
@@ -338,6 +339,7 @@ function buildSubstrateConfig(input: {
   companionId: string;
   dataDir: string;
   characterCardPath: string;
+  companionFleet?: ConfiguredLocalCompanionFleetRuntime['fleet'];
   multiCompanion?: boolean;
 }): SubstrateConfig {
   return {
@@ -374,6 +376,7 @@ function buildSubstrateConfig(input: {
     modelRoster: {
       chat: { model: 'test-model', provider: 'test', maxTokens: 16384, contextWindow: 128_000 },
     },
+    ...(input.companionFleet ? { companionFleet: input.companionFleet } : {}),
     ...(input.multiCompanion ? { multiCompanion: true } : {}),
     fleetAuthVerifier: {
       kind: 'verifier' as const,
@@ -791,7 +794,6 @@ beforeAll(async () => {
   // Production local fleet resolver: companions.json -> immutable target
   // registry with one garden-admin-<companionId>.sock endpoint per agent.
   const runtime = resolveConfiguredLocalCompanionFleetRuntime(fleetEnv);
-  if (!runtime) throw new Error('fleet runtime did not resolve');
 
   const agents = new Map<string, AgentFixture>();
   for (const entry of runtime.fleet.companions) {
@@ -838,6 +840,7 @@ beforeAll(async () => {
     companionId: COMPANION_A,
     dataDir: gardenDataDir,
     characterCardPath: gardenCardPath,
+    companionFleet: runtime.fleet,
     multiCompanion: true,
   });
   const controlPlane = new FleetGardenControlPlane({
@@ -880,9 +883,14 @@ beforeAll(async () => {
     surfaces: [surface],
     revoked,
   };
+  fixtureReady = true;
 }, 60_000);
 
 afterAll(async () => {
+  if (!fixtureReady) {
+    resetRuntimeTrustPolicy();
+    return;
+  }
   await Promise.all(fixture.servers.map(server => new Promise<void>((resolve) => {
     server.close(() => resolve());
   })));

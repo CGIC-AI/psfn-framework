@@ -91,11 +91,24 @@ function renderHelmStartup(input) {
     chartDir,
     '--namespace',
     'psfn-test',
+    '--set-string', `fleet.runtimeRoot=${input.runtimeRoot}`,
+    '--set-string', `fleet.companions[0].companionId=${input.companionId}`,
+    '--set-string', `fleet.companions[0].postgresSchema=${input.postgresSchema}`,
+    '--set-string', 'fleet.companions[0].companionDataClaim=',
+    '--set-string', 'fleet.companions[0].workspaceClaim=',
+    '--set-string', 'fleet.companions[0].authSecret.name=',
+    '--set-string', 'fleet.companions[0].authSecret.sessionIntegrityKey=',
+    '--set-string', 'fleet.companions[0].authSecret.companionAuthKey=',
     '--set-string', `runtime.systemDataDir=${input.systemDataDir}`,
     '--set-string', `runtime.companionDataDir=${input.companionDataDir}`,
     '--set-string', `runtime.companionId=${input.companionId}`,
     '--set-string', `runtime.characterCardPath=${join(input.companionDataDir, 'companion.json')}`,
-    '--set-string', `runtime.workspacePath=${join(input.runtimeRoot, 'workspace')}`,
+    '--set-string', `runtime.workspacePath=${join(
+      input.runtimeRoot,
+      'workspaces',
+      'personal',
+      input.companionId,
+    )}`,
     '--set-string', `runtime.logsDir=${join(input.runtimeRoot, 'logs')}`,
     '--set-string', `runtime.tempDir=${join(input.runtimeRoot, 'tmp')}`,
     '--set-string', `runtime.backupsDir=${join(input.runtimeRoot, 'backups')}`,
@@ -116,20 +129,30 @@ function renderHelmStartup(input) {
 
   const commands = [];
   for (const component of ['agent', 'gateway', 'garden']) {
+    const deploymentName = component === 'agent'
+      ? `psfn-agent-${input.companionId}`
+      : `psfn-${component}`;
     const deployment = parseAllDocuments(rendered.stdout)
       .map(document => document.toJS())
       .find(document => (
         document?.kind === 'Deployment'
-        && document?.metadata?.name === `psfn-${component}`
+        && document?.metadata?.name === deploymentName
       ));
     if (!deployment) throw new Error(`${input.label} ${component} Deployment is missing`);
-    const seed = deployment.spec.template.spec.initContainers
-      ?.find(container => container.name === 'seed-runtime-files');
-    if (seed?.image !== exactImage) {
-      throw new Error(`${input.label} ${component} init did not use ${exactImage}`);
-    }
     if (!deployment.spec.template.spec.containers?.some(container => container.image === exactImage)) {
       throw new Error(`${input.label} ${component} workload did not use ${exactImage}`);
+    }
+    const initContainers = deployment.spec.template.spec.initContainers ?? [];
+    if (component === 'garden') {
+      const waitForPostgres = initContainers.find(container => container.name === 'wait-for-postgres');
+      if (waitForPostgres?.image !== exactImage) {
+        throw new Error(`${input.label} Garden database wait did not use ${exactImage}`);
+      }
+      continue;
+    }
+    const seed = initContainers.find(container => container.name === 'seed-runtime-files');
+    if (seed?.image !== exactImage) {
+      throw new Error(`${input.label} ${component} init did not use ${exactImage}`);
     }
     if (!Array.isArray(seed.command) || seed.command[0] !== 'sh' || seed.command[1] !== '-c') {
       throw new Error(`${input.label} ${component} init command is not rendered sh -c`);
@@ -181,11 +204,11 @@ function assertMalformedSourceRefused(ownerFile, contents, expectedError) {
 const runtimeRoot = mkdtempSync(join(tmpdir(), 'psfn-helm-charge-skills-upgrade-'));
 try {
   const systemDataDir = join(runtimeRoot, 'system-data');
-  const firstCompanionDataDir = join(runtimeRoot, 'companions', 'one');
-  const secondCompanionDataDir = join(runtimeRoot, 'companions', 'two');
+  const firstCompanionDataDir = join(runtimeRoot, 'companions', firstCompanionId);
+  const secondCompanionDataDir = join(runtimeRoot, 'companions', secondCompanionId);
   const manifest = fleetManifest([
-    { companionId: firstCompanionId, name: 'one', postgresSchema: 'one' },
-    { companionId: secondCompanionId, name: 'two', postgresSchema: 'two' },
+    { companionId: firstCompanionId, name: firstCompanionId, postgresSchema: 'one' },
+    { companionId: secondCompanionId, name: secondCompanionId, postgresSchema: 'two' },
   ]);
   mkdirSync(systemDataDir, { recursive: true });
   for (const companionDataDir of [firstCompanionDataDir, secondCompanionDataDir]) {
@@ -308,9 +331,9 @@ try {
     'safe atomic owner evolution rerun',
   );
 
-  for (const [label, companionId, companionDataDir] of [
-    ['first companion', firstCompanionId, firstCompanionDataDir],
-    ['second companion', secondCompanionId, secondCompanionDataDir],
+  for (const [label, companionId, companionDataDir, postgresSchema] of [
+    ['first companion', firstCompanionId, firstCompanionDataDir, 'one'],
+    ['second companion', secondCompanionId, secondCompanionDataDir, 'two'],
   ]) {
     const renderedStartup = renderHelmStartup({
       label,
@@ -318,6 +341,7 @@ try {
       systemDataDir,
       companionDataDir,
       companionId,
+      postgresSchema,
     });
     assertIncludes(
       renderedStartup,
@@ -359,8 +383,8 @@ try {
 
   const restoreRoot = join(runtimeRoot, 'fresh-restore');
   mkdirSync(join(restoreRoot, 'system-data'), { recursive: true });
-  mkdirSync(join(restoreRoot, 'companions', 'one'), { recursive: true });
-  mkdirSync(join(restoreRoot, 'companions', 'two'), { recursive: true });
+  mkdirSync(join(restoreRoot, 'companions', firstCompanionId), { recursive: true });
+  mkdirSync(join(restoreRoot, 'companions', secondCompanionId), { recursive: true });
   assertIncludes(
     runNpm('restore:system-owner-fleet-snapshot', [
       '--manifest', join(snapshotDir, 'system-owner-fleet-snapshot.json'),
@@ -373,8 +397,8 @@ try {
     if (readFileSync(join(restoreRoot, 'system-data', ownerFile), 'utf8') !== contents) {
       throw new Error(`${ownerFile} was not restored to the old system owner root`);
     }
-    for (const companionName of ['one', 'two']) {
-      if (existsSync(join(restoreRoot, 'companions', companionName, ownerFile))) {
+    for (const companionId of [firstCompanionId, secondCompanionId]) {
+      if (existsSync(join(restoreRoot, 'companions', companionId, ownerFile))) {
         throw new Error(`${ownerFile} fan-out survived whole-fleet rollback`);
       }
     }

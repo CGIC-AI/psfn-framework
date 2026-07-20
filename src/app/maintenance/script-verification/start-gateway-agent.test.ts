@@ -10,7 +10,7 @@ import {
   rmSync,
   writeFileSync,
 } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join, relative } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, describe, expect, it } from 'vitest';
 import { deriveCompanionAuthToken } from '../../../boundary/gateway/companion-auth.js';
@@ -55,6 +55,10 @@ function writeFleetAuthOwnerFile(systemDataDir: string): void {
 }
 
 function seedStartupOwnerRoots(systemDataDir: string, companionDataDirs: readonly string[]): void {
+  const companionDataDir = companionDataDirs[0];
+  if (!companionDataDir) {
+    throw new Error('At least one companion owner root is required');
+  }
   mkdirSync(systemDataDir, { recursive: true });
   for (const companionDataDir of companionDataDirs) {
     mkdirSync(companionDataDir, { recursive: true });
@@ -70,18 +74,21 @@ function seedStartupOwnerRoots(systemDataDir: string, companionDataDirs: readonl
   // The companions.json fleet manifest is mandatory. Seed a one-entry
   // (single-companion) manifest by default; fleet tests overwrite it with a
   // multi-entry manifest after calling this helper.
+  const runtimeRoot = dirname(systemDataDir);
+  const relativeCompanionDataDir = relative(runtimeRoot, companionDataDir);
   writeFileSync(
     join(systemDataDir, 'companions.json'),
     `${JSON.stringify({
       companions: [{
         companionId: '11111111-1111-4111-8111-111111111111',
-        companionDataDir: 'companion',
-        characterCardPath: 'companion/companion.json',
+        companionDataDir: relativeCompanionDataDir,
+        characterCardPath: join(relativeCompanionDataDir, 'companion.json'),
         postgresSchema: 'public',
       }],
     }, null, 2)}\n`,
     'utf8',
   );
+  writeFleetAuthOwnerFile(systemDataDir);
 }
 
 function makeRealPreflightLauncher(): {
@@ -148,7 +155,10 @@ function makeRealPreflightLauncher(): {
           GATEWAY_SOCKET: join(workDir, 'run', 'gateway.sock'),
           CONFIG_DIR: join(repoRoot, 'config'),
           COMPANION_ID: '11111111-1111-4111-8111-111111111111',
+          COMPANION_PG_SCHEMA: 'public',
+          GATEWAY_SESSION_HMAC_KEY: 'test-session-secret',
           POSTGRES_DATABASE_URL: 'postgres://verification:verification@127.0.0.1/verification',
+          PSFN_FLEET_AUTH: '1',
           ...env,
         },
       });
@@ -171,22 +181,6 @@ describe('start-gateway-agent launcher supervision', () => {
     expect(launcher).toContain('setsid "$@" &');
     expect(launcher).toContain('kill -TERM -- "-${pgid}"');
     expect(launcher).toContain('kill -KILL -- "-${pgid}"');
-  });
-
-  it('re-execs the repo launcher for lifecycle restart exit codes', () => {
-    const launcher = readFileSync(join(repoRoot, 'scripts/start-gateway-agent.sh'), 'utf8');
-    expect(launcher).toContain('PSFN_LIFECYCLE_RESTART_EXIT_CODE="${PSFN_LIFECYCLE_RESTART_EXIT_CODE:-75}"');
-    expect(launcher).toContain('wait -n "${GATEWAY_PID}" "${AGENT_PID}" "${OPERATOR_PID}"');
-    expect(launcher).toContain('lifecycle restart requested; stopping children and re-execing launcher');
-    expect(launcher).toContain('exec "$0" "$@"');
-  });
-
-  it('waits briefly for the agent restart exit when a sibling child exits first', () => {
-    const launcher = readFileSync(join(repoRoot, 'scripts/start-gateway-agent.sh'), 'utf8');
-    expect(launcher).toContain('wait_for_lifecycle_restart_child');
-    expect(launcher).toContain('wait_for_exited_pid_status');
-    expect(launcher).toContain('if [ "${EXIT_STATUS}" -ne "${PSFN_LIFECYCLE_RESTART_EXIT_CODE}" ]; then');
-    expect(launcher).toContain('EXIT_STATUS="${PSFN_LIFECYCLE_RESTART_EXIT_CODE}"');
   });
 
   it('refuses duplicate launcher starts with a socket-scoped launcher lock', () => {
@@ -231,14 +225,6 @@ describe('start-gateway-agent launcher supervision', () => {
     const gateway = readFileSync(join(repoRoot, 'src/app/gateway/main.ts'), 'utf8');
     expect(runtimePreflight).toContain('const config = loadConfig();');
     expect(gateway).toContain('const config = loadConfig();');
-    expect(launcher).toContain(
-      [
-        'echo "[${MODE_LABEL}] lifecycle restart requested; stopping children and re-execing launcher"',
-        '  cleanup_children',
-        '  trap - INT TERM EXIT',
-        '  exec "$0" "$@"',
-      ].join('\n'),
-    );
   });
 
   it('keeps the alpha scheduler migration manual and exact-companion-root only', () => {
@@ -261,7 +247,9 @@ describe('start-gateway-agent launcher supervision', () => {
     seedStartupOwnerRoots(systemDataDir, [companionDataDir]);
     try {
       const result = launcher.run({});
-      expect(result.output).toContain('system=./data companion=./companion');
+      expect(result.output).toContain(
+        `system=./data fleet=1 companionRoots=${companionDataDir}`,
+      );
       expect(readFileSync(launcher.gatewayStartedPath, 'utf8')).toBe('started\n');
     } finally {
       rmSync(launcher.workDir, { recursive: true, force: true });
@@ -275,7 +263,9 @@ describe('start-gateway-agent launcher supervision', () => {
     seedStartupOwnerRoots(systemDataDir, [companionDataDir]);
     try {
       const result = launcher.run({ SYSTEM_DATA_DIR: systemDataDir, COMPANION_DATA_DIR: companionDataDir });
-      expect(result.output).toContain(`system=${systemDataDir} companion=${companionDataDir}`);
+      expect(result.output).toContain(
+        `system=${systemDataDir} fleet=1 companionRoots=${companionDataDir}`,
+      );
       expect(readFileSync(launcher.gatewayStartedPath, 'utf8')).toBe('started\n');
     } finally {
       rmSync(launcher.workDir, { recursive: true, force: true });
@@ -437,6 +427,8 @@ describe('start-gateway-agent launcher supervision', () => {
     const systemDir = join(scriptsDir, 'system');
     const tsxDir = join(workDir, 'node_modules/.bin');
     const fakeBinDir = join(workDir, 'fake-bin');
+    const companionId = '11111111-1111-4111-8111-111111111111';
+    const adminSocket = join(workDir, 'runtime', `garden-admin-${companionId}.sock`);
     mkdirSync(systemDir, { recursive: true });
     mkdirSync(tsxDir, { recursive: true });
     mkdirSync(fakeBinDir, { recursive: true });
@@ -454,8 +446,10 @@ describe('start-gateway-agent launcher supervision', () => {
         'case "$1" in',
         '  src/app/maintenance/migrate-scheduler-owner.ts) exit 97 ;;',
         '  scripts/preflight-startup-owner-files.ts) exit 0 ;;',
-        '  scripts/resolve-companion-fleet.ts) exit 0 ;;',
-        '  scripts/resolve-single-companion-auth.ts) printf "v1.agent-proof\\tv1.worker-proof\\n"; exit 0 ;;',
+        '  scripts/provision-companion-fleet.ts) exit 0 ;;',
+        '  scripts/resolve-companion-fleet.ts)',
+        `    printf '${companionId}\\t${workDir}/companion\\t${workDir}/companion/card.json\\tpublic\\t${workDir}/workspace\\tproof-a\\tproof-b\\t${adminSocket}\\n'`,
+        '    ;;',
         '  *) sleep 30 ;;',
         'esac',
       ].join('\n'),
@@ -485,7 +479,8 @@ describe('start-gateway-agent launcher supervision', () => {
           '-lc',
           [
             'set -euo pipefail',
-            'PSFN_SKIP_DOTENV=true',
+            'export PSFN_SKIP_DOTENV=true',
+            'export PSFN_FLEET_AUTH=1',
             `PATH=${JSON.stringify(`${fakeBinDir}:/usr/bin:/bin`)}`,
             `XDG_RUNTIME_DIR=${JSON.stringify(join(workDir, 'runtime'))}`,
             `GATEWAY_SOCKET=${JSON.stringify(join(workDir, 'runtime/gateway.sock'))}`,
@@ -601,6 +596,8 @@ describe('start-gateway-agent launcher supervision', () => {
     const tsxDir = join(workDir, 'node_modules/.bin');
     const fakeBinDir = join(workDir, 'fake-bin');
     const auditProbePath = join(workDir, 'audit-keyring-probe.ts');
+    const companionId = '11111111-1111-4111-8111-111111111111';
+    const adminSocket = join(workDir, 'runtime', `garden-admin-${companionId}.sock`);
     mkdirSync(systemDir, { recursive: true });
     mkdirSync(tsxDir, { recursive: true });
     mkdirSync(fakeBinDir, { recursive: true });
@@ -630,8 +627,10 @@ describe('start-gateway-agent launcher supervision', () => {
         'case "$1" in',
         '  src/app/maintenance/migrate-scheduler-owner.ts) exit 97 ;;',
         '  scripts/preflight-startup-owner-files.ts) exit 0 ;;',
-        '  scripts/resolve-companion-fleet.ts) exit 0 ;;',
-        `  scripts/resolve-single-companion-auth.ts) printf "v1.${'a'.repeat(64)}\\tv1.${'b'.repeat(64)}\\n"; exit 0 ;;`,
+        '  scripts/provision-companion-fleet.ts) exit 0 ;;',
+        '  scripts/resolve-companion-fleet.ts)',
+        `    printf '${companionId}\\t${workDir}/companion\\t${workDir}/companion/card.json\\tpublic\\t${workDir}/workspace\\tv1.${'a'.repeat(64)}\\tv1.${'b'.repeat(64)}\\t${adminSocket}\\n'`,
+        '    ;;',
         '  src/app/gateway/main.ts)',
         '    python3 - "$GATEWAY_SOCKET" <<\'PY\'',
         'import os, socket, sys, time',
@@ -683,6 +682,7 @@ describe('start-gateway-agent launcher supervision', () => {
           [
             'set -euo pipefail',
             'export PSFN_SKIP_DOTENV=true',
+            'export PSFN_FLEET_AUTH=1',
             `export PATH=${JSON.stringify(`${fakeBinDir}:/usr/bin:/bin`)}`,
             `export XDG_RUNTIME_DIR=${JSON.stringify(join(workDir, 'runtime'))}`,
             `export GATEWAY_SOCKET=${JSON.stringify(join(workDir, 'runtime/gateway.sock'))}`,
@@ -922,17 +922,17 @@ describe('start-gateway-agent multi-companion supervisor', () => {
       'unset COMPANION_ID CHARACTER_CARD_PATH COMPANION_PG_SCHEMA WORKSPACE_PATH',
     );
     expect(launcher).toContain('start_fleet_operator\n');
-    expect(launcher.indexOf('\n  prepare_fleet_admin_transports\n')).toBeLessThan(
-      launcher.indexOf('\n  start_companion_agents\n'),
+    expect(launcher.indexOf('\nprepare_fleet_admin_transports\n')).toBeLessThan(
+      launcher.indexOf('\nstart_companion_agents\n'),
     );
-    expect(launcher.indexOf('\n  start_companion_agents\n')).toBeLessThan(
-      launcher.indexOf('\n  wait_for_fleet_admin_transports\n'),
+    expect(launcher.indexOf('\nstart_companion_agents\n')).toBeLessThan(
+      launcher.indexOf('\nwait_for_fleet_admin_transports\n'),
     );
-    expect(launcher.indexOf('\n  wait_for_fleet_admin_transports\n')).toBeLessThan(
-      launcher.indexOf('\n  probe_fleet_admin_transports\n'),
+    expect(launcher.indexOf('\nwait_for_fleet_admin_transports\n')).toBeLessThan(
+      launcher.indexOf('\nprobe_fleet_admin_transports\n'),
     );
-    expect(launcher.indexOf('\n  probe_fleet_admin_transports\n')).toBeLessThan(
-      launcher.indexOf('\n  start_fleet_garden\n'),
+    expect(launcher.indexOf('\nprobe_fleet_admin_transports\n')).toBeLessThan(
+      launcher.indexOf('\nstart_fleet_garden\n'),
     );
     // The operator allowlist may carry its own admin auth material but never
     // upstream provider secrets.
@@ -1075,6 +1075,7 @@ describe('start-gateway-agent multi-companion supervisor', () => {
           PATH: process.env.PATH,
           HOME: process.env.HOME,
           PSFN_FLEET_AUTH: '1',
+          PSFN_RUNTIME_ROOT: workDir,
           GATEWAY_SESSION_HMAC_KEY: 'test-session-secret',
           SYSTEM_DATA_DIR: systemDataDir,
           COMPANION_DATA_DIR: companionDataDir,

@@ -2,6 +2,7 @@ import { execFileSync } from 'node:child_process';
 import { join } from 'node:path';
 import { parseAllDocuments } from 'yaml';
 import { describe, expect, it } from 'vitest';
+import { isRecord } from '../../../shared/utils/types.js';
 
 interface SecretKeyRefEnv {
   name: string;
@@ -34,12 +35,17 @@ const renderedResources = parseAllDocuments(execFileSync(
   'helm',
   ['template', 'psfn', join(process.cwd(), 'deploy', 'helm', 'psfn'), '--namespace', 'psfn-test'],
   { encoding: 'utf8' },
-)).map(document => document.toJS() as DeploymentResource);
+)).map(document => document.toJS() as unknown);
 
 function containerEnv(component: 'agent' | 'garden' | 'gateway'): SecretKeyRefEnv[] {
-  const deploymentName = `psfn-${component}`;
-  const deployment = renderedResources.find(resource => (
-    resource.kind === 'Deployment' && resource.metadata?.name === deploymentName
+  const deploymentName = component === 'agent'
+    ? 'psfn-agent-11111111-1111-4111-8111-111111111111'
+    : `psfn-${component}`;
+  const deployment = renderedResources.find((resource): resource is DeploymentResource => (
+    isRecord(resource)
+    && resource.kind === 'Deployment'
+    && isRecord(resource.metadata)
+    && resource.metadata.name === deploymentName
   ));
   if (!deployment) {
     throw new Error(`Missing rendered Helm Deployment ${deploymentName}`);

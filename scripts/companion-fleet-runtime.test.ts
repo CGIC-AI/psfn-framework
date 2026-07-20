@@ -78,4 +78,10 @@ describe('local companion fleet runtime', () => {
       PSFN_FLEET_AUTH: '0',
     }))).toThrow(/requires PSFN_FLEET_AUTH=1/u);
   });
+
+  it('reports an invalid Fleet Auth flag distinctly from a disabled flag', () => {
+    expect(() => resolveConfiguredLocalCompanionFleetRuntime(fleetEnv({
+      PSFN_FLEET_AUTH: 'perhaps',
+    }))).toThrow(/Invalid PSFN_FLEET_AUTH="perhaps".*boolean flag/u);
+  });
 });

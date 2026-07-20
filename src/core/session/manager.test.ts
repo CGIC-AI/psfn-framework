@@ -2580,6 +2580,10 @@ describe('SessionManager', () => {
       sessionMirrorEnabled: true,
       sessionMirrorMaxChars: 80,
       sessionMirrorActiveWindowMs: 60_000,
+      sessionMirrorChannelOverrides: {
+        'api:source': true,
+        'api:target': true,
+      },
     });
     const mgr = new SessionManager(store, config);
     mgr.continuityStore = new UserContinuityStore(dir);
@@ -2622,6 +2626,10 @@ describe('SessionManager', () => {
     const config = makeConfig({
       sessionMirrorEnabled: true,
       sessionMirrorActiveWindowMs: 60_000,
+      sessionMirrorChannelOverrides: {
+        'api:source': true,
+        'api:target': true,
+      },
     });
     const mgr = new SessionManager(store, config);
     mgr.continuityStore = new UserContinuityStore(dir);
@@ -2654,6 +2662,10 @@ describe('SessionManager', () => {
     const config = makeConfig({
       sessionMirrorEnabled: true,
       sessionMirrorActiveWindowMs: 60_000,
+      sessionMirrorChannelOverrides: {
+        '1234567890': true,
+        'api:target': true,
+      },
     });
     const mgr = new SessionManager(store, config);
     mgr.continuityStore = new UserContinuityStore(dir);
@@ -2684,10 +2696,14 @@ describe('SessionManager', () => {
     expect(mirrors[0].content).toContain('Semi-private mirror candidate');
   });
 
-  it('supports global and per-channel mirror toggles', () => {
+  it('requires explicit channel-pair opt-in and respects global and per-channel mirror toggles', () => {
     const disabledConfig = makeConfig({
       sessionMirrorEnabled: false,
       sessionMirrorActiveWindowMs: 60_000,
+      sessionMirrorChannelOverrides: {
+        'api:source': true,
+        'api:target': true,
+      },
     });
     const disabledStore = new SessionStore(join(dir, 'mirrors-disabled'));
     const globallyDisabled = new SessionManager(disabledStore, disabledConfig);
@@ -2712,9 +2728,66 @@ describe('SessionManager', () => {
     );
     expect(disabledStore.getRecent('api:target', 10).some(entry => entry.metadata?.includes('"type":"mirror"'))).toBe(false);
 
+    const unconfiguredStore = new SessionStore(join(dir, 'mirrors-unconfigured'));
+    const unconfigured = new SessionManager(unconfiguredStore, makeConfig({
+      sessionMirrorEnabled: true,
+      sessionMirrorChannelOverrides: {},
+      sessionMirrorActiveWindowMs: 60_000,
+    }));
+    unconfigured.continuityStore = new UserContinuityStore(join(dir, 'mirrors-unconfigured'));
+
+    unconfigured.recordUserMessage(
+      'api:target',
+      'bootstrap',
+      'discord-user-1',
+      'Alice',
+      undefined,
+      'contact-1',
+      { trustLevel: 'primary' },
+    );
+    unconfigured.recordAssistantMessage(
+      'api:test-source',
+      'unconfigured test-channel message',
+      'discord-user-1',
+      undefined,
+      'contact-1',
+      { trustLevel: 'primary' },
+    );
+    expect(unconfiguredStore.getRecent('api:target', 10).some(entry => entry.metadata?.includes('"type":"mirror"'))).toBe(false);
+
+    const oneSidedStore = new SessionStore(join(dir, 'mirrors-one-sided'));
+    const oneSided = new SessionManager(oneSidedStore, makeConfig({
+      sessionMirrorEnabled: true,
+      sessionMirrorChannelOverrides: { 'api:target': true },
+      sessionMirrorActiveWindowMs: 60_000,
+    }));
+    oneSided.continuityStore = new UserContinuityStore(join(dir, 'mirrors-one-sided'));
+
+    oneSided.recordUserMessage(
+      'api:target',
+      'bootstrap',
+      'discord-user-1',
+      'Alice',
+      undefined,
+      'contact-1',
+      { trustLevel: 'primary' },
+    );
+    oneSided.recordAssistantMessage(
+      'api:source',
+      'source is not allowlisted',
+      'discord-user-1',
+      undefined,
+      'contact-1',
+      { trustLevel: 'primary' },
+    );
+    expect(oneSidedStore.getRecent('api:target', 10).some(entry => entry.metadata?.includes('"type":"mirror"'))).toBe(false);
+
     const overrideConfig = makeConfig({
       sessionMirrorEnabled: true,
-      sessionMirrorChannelOverrides: { 'api:target': false },
+      sessionMirrorChannelOverrides: {
+        'api:source': true,
+        'api:target': false,
+      },
       sessionMirrorActiveWindowMs: 60_000,
     });
     const overrideStore = new SessionStore(join(dir, 'mirrors-overrides'));

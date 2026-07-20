@@ -73,6 +73,52 @@ function continuityEntryKey(entry: SessionEntry): string {
   ].join('|');
 }
 
+function compareSessionEntriesChronologically(left: SessionEntry, right: SessionEntry): number {
+  const timestampDelta = left.timestamp - right.timestamp;
+  if (timestampDelta !== 0) return timestampDelta;
+  return left.id - right.id;
+}
+
+function interleaveMirrorEntriesChronologically(entries: readonly SessionEntry[]): SessionEntry[] {
+  const appendOrderedEntries: SessionEntry[] = [];
+  const mirrors: SessionEntry[] = [];
+
+  for (const entry of entries) {
+    const hasSortableTimestamp = Number.isFinite(entry.timestamp) && entry.timestamp > 0;
+    if (hasSortableTimestamp && parseMirrorMetadata(entry.metadata)) {
+      mirrors.push(entry);
+    } else {
+      appendOrderedEntries.push(entry);
+    }
+  }
+
+  if (mirrors.length === 0) return [...entries];
+
+  const mirrorsByInsertionPoint = Array.from(
+    { length: appendOrderedEntries.length + 1 },
+    (): SessionEntry[] => [],
+  );
+  mirrors.sort(compareSessionEntriesChronologically);
+  for (const mirror of mirrors) {
+    const firstLaterEntryIndex = appendOrderedEntries.findIndex(entry => (
+      Number.isFinite(entry.timestamp)
+      && entry.timestamp > 0
+      && entry.timestamp > mirror.timestamp
+    ));
+    const insertionPoint = firstLaterEntryIndex < 0
+      ? appendOrderedEntries.length
+      : firstLaterEntryIndex;
+    mirrorsByInsertionPoint[insertionPoint].push(mirror);
+  }
+
+  const interleaved: SessionEntry[] = [];
+  for (let index = 0; index < appendOrderedEntries.length; index += 1) {
+    interleaved.push(...mirrorsByInsertionPoint[index], appendOrderedEntries[index]);
+  }
+  interleaved.push(...mirrorsByInsertionPoint[appendOrderedEntries.length]);
+  return interleaved;
+}
+
 function directUserProvenance(entry: SessionEntry): ContextMessage['provenance'] {
   return buildAuthenticityProvenance({
     kind: 'user_direct',
@@ -251,11 +297,7 @@ export function getMergedContinuity(params: {
     }
   }
 
-  merged.sort((a, b) => {
-    const timestampDelta = a.timestamp - b.timestamp;
-    if (timestampDelta !== 0) return timestampDelta;
-    return a.id - b.id;
-  });
+  merged.sort(compareSessionEntriesChronologically);
 
   if (merged.length <= params.limit) return merged;
   return merged.slice(-params.limit);
@@ -273,7 +315,10 @@ export function entriesToMessages(
     stampLabel?: string;
   }> = [];
 
-  for (const entry of filterSupersededTemporalWakeupRefreshers(entries)) {
+  const renderEntries = interleaveMirrorEntriesChronologically(
+    filterSupersededTemporalWakeupRefreshers(entries),
+  );
+  for (const entry of renderEntries) {
     if (isNonConversationalSessionEntry(entry)) {
       continue;
     }

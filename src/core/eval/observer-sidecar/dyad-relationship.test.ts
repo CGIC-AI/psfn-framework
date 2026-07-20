@@ -236,12 +236,20 @@ describe('createEmoSimDyadRelationshipAdvisoryProvider', () => {
   });
 
   it('fails closed at the infrastructure boundary: store errors throw unavailable', async () => {
+    const cause = new Error('db down');
     const provider = createEmoSimDyadRelationshipAdvisoryProvider({
-      getLatestObservation: () => Promise.reject(new Error('db down')),
+      getLatestObservation: () => Promise.reject(cause),
     });
-    await expect(provider.describeLatestDirectedRelationship()).rejects.toBeInstanceOf(
-      DyadRelationshipAdvisoryUnavailableError,
+    const rejection = await provider.describeLatestDirectedRelationship().catch(
+      (error: unknown) => error,
     );
+
+    expect(rejection).toBeInstanceOf(DyadRelationshipAdvisoryUnavailableError);
+    expect((rejection as Error).cause).toBe(cause);
+    expect(Object.getOwnPropertyDescriptor(rejection, 'cause')).toMatchObject({
+      value: cause,
+      enumerable: false,
+    });
   });
 
   it('does not swallow: the store is read exactly once per call', async () => {

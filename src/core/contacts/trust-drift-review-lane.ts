@@ -1,8 +1,9 @@
 import { createComponentLogger } from '../../shared/logger.js';
 import type { InferredPostTurnAction, PostTurnActionCandidate } from '../../shared/contracts/runtime.js';
-import type {
-  DyadRelationshipAdvisory,
-  DyadRelationshipAdvisoryProvider,
+import {
+  DyadRelationshipAdvisoryUnavailableError,
+  type DyadRelationshipAdvisory,
+  type DyadRelationshipAdvisoryProvider,
 } from '../../shared/contracts/dyad-relationship-advisory.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
 import { evaluateRestWindowEligibility } from '../scheduler/rest-window.js';
@@ -288,10 +289,16 @@ export class ContactTrustDriftReviewLane {
     try {
       return await this.dyadAdvisoryProvider.describeLatestDirectedRelationship();
     } catch (error) {
-      log.info('Omitting emo_sim dyad advisory from trust-drift review (read unavailable)', {
+      const message = 'Omitting emo_sim dyad advisory from trust-drift review (read unavailable)';
+      const context = {
         actionId,
         error: toErrorMessage(error),
-      });
+      };
+      if (error instanceof DyadRelationshipAdvisoryUnavailableError) {
+        log.info(message, context);
+      } else {
+        log.warn(message, context);
+      }
       return null;
     }
   }

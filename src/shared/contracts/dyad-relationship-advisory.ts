@@ -44,8 +44,8 @@ export interface DyadRelationshipAdvisoryProvider {
  * treat it as an omission.
  */
 export class DyadRelationshipAdvisoryUnavailableError extends Error {
-  constructor(message: string, readonly cause?: unknown) {
-    super(message);
+  constructor(message: string, cause?: unknown) {
+    super(message, { cause });
     this.name = 'DyadRelationshipAdvisoryUnavailableError';
   }
 }

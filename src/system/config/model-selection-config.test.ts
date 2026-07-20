@@ -78,6 +78,16 @@ describe('normalizeModelPurposeSelectionSetting', () => {
     );
   });
 
+  it('rejects the moa purpose with a pointer to the moa* settings (no silent no-op keys)', () => {
+    expect(() => normalizeModelPurposeSelectionSetting({ moa: 'chat-primary' })).toThrow(
+      /modelPurposeSelection\.moa is not a selectable lane.*moaReferenceModels.*moaAggregatorModel/s,
+    );
+    // moa is also absent from the valid-purposes list in the unknown-key error.
+    expect(() => normalizeModelPurposeSelectionSetting({ bigBrain: 'x' })).toThrow(
+      /Valid purposes: (?!.*\bmoa\b).*vision/s,
+    );
+  });
+
   it('rejects empty and malformed slot keys', () => {
     expect(() => normalizeModelPurposeSelectionSetting({ chat: '' })).toThrow(
       /modelPurposeSelection\.chat must be a non-empty/,

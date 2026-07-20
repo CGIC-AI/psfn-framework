@@ -381,8 +381,19 @@ export function resolveCandidates(
   // resolves fail-closed against the models.json registry. The selected model
   // LEADS the purpose's routing chain (transient-error fallbacks preserved);
   // explicit model/provider hint fields still take precedence.
-  const selectionSlotKey = normalizedHint?.slotKey
-    ?? resolveModelSelectionSlotForPurpose(config.modelPurposeSelection, purpose);
+  //
+  // Multi-companion isolation (23pp remediation): a multi-companion gateway
+  // serves MANY companions from ONE config, and whatever modelPurposeSelection
+  // that config hydrated is one companion's character config — substituting it
+  // for a sibling's un-slotted call would silently route the wrong model. In
+  // multiCompanion mode the wire slotKey is therefore the ONLY selection
+  // source; calls without one get registry-primary routing, byte-identical to
+  // pre-selection behavior. Embedded/single-companion processes (config IS the
+  // companion's) keep the config-level fallback.
+  const configSelectionSlotKey = config.multiCompanion === true
+    ? undefined
+    : resolveModelSelectionSlotForPurpose(config.modelPurposeSelection, purpose);
+  const selectionSlotKey = normalizedHint?.slotKey ?? configSelectionSlotKey;
   let effectiveHint = normalizedHint;
   if (selectionSlotKey !== undefined) {
     const selectedEntry = resolveEnabledRegistryEntryBySlotKey(config, selectionSlotKey);

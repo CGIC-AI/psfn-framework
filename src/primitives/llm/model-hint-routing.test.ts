@@ -204,6 +204,45 @@ describe('resolveCandidates per-companion model selection (23pp)', () => {
     expect(candidates.some((candidate) => candidate.model === 'background/model')).toBe(true);
   });
 
+  it('never substitutes the shared config selection on a multi-companion gateway (isolation)', () => {
+    // A multi-companion gateway hydrates ONE config whose modelPurposeSelection
+    // belongs to whichever companion dir it rooted at. A sibling companion's
+    // un-slotted call must get registry-primary routing — byte-identical to a
+    // gateway with no selection at all — never the leaked shared value.
+    const multiConfig = makeConfig({
+      multiCompanion: true,
+      modelPurposeSelection: { chat: 'background-primary', vision: 'vision-flash' },
+    });
+    const baseline = resolveCandidates(makeConfig(), 'chat', undefined);
+    const unslotted = resolveCandidates(multiConfig, 'chat', undefined);
+    expect(unslotted).toEqual(baseline);
+    expect(unslotted[0]).toMatchObject({ model: 'chat/model' });
+    expect(resolveCandidates(multiConfig, 'vision', undefined)[0]).toMatchObject({
+      model: 'chat/model',
+    });
+  });
+
+  it('honors the wire slotKey as the only selection source on a multi-companion gateway', () => {
+    const multiConfig = makeConfig({
+      multiCompanion: true,
+      modelPurposeSelection: { vision: 'chat-primary' },
+    });
+    // The calling companion's own selection arrives as the wire slotKey and
+    // leads the lane; the gateway's config-level value stays inert.
+    const candidates = resolveCandidates(multiConfig, 'vision', { slotKey: 'vision-flash' });
+    expect(candidates[0]).toMatchObject({ model: 'vision/flash', provider: 'openrouter' });
+  });
+
+  it('keeps the config-level fallback for embedded single-companion processes', () => {
+    const config = makeConfig({
+      multiCompanion: false,
+      modelPurposeSelection: { vision: 'vision-flash' },
+    });
+    expect(resolveCandidates(config, 'vision', undefined)[0]).toMatchObject({
+      model: 'vision/flash',
+    });
+  });
+
   it('honors pin on a slot-key hint (selection candidate only)', () => {
     const config = makeConfig();
     const candidates = resolveCandidates(config, 'vision', { slotKey: 'vision-flash', pin: true });

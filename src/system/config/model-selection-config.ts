@@ -26,7 +26,16 @@ import type { SubstrateConfig } from './runtime-config-contracts.js';
  * - an absent selection is byte-identical to today's registry-primary routing.
  */
 
-const CANONICAL_MODEL_PURPOSE_SET = new Set<string>(CANONICAL_MODEL_PURPOSES);
+/**
+ * The purposes a companion may select a lane model for. `moa` is deliberately
+ * excluded: MoA model choices are owned by the dedicated `moaReferenceModels`
+ * and `moaAggregatorModel` settings (both per-companion overlay eligible), so
+ * a `modelPurposeSelection.moa` key would be a silent no-op — rejected instead.
+ */
+export const SELECTABLE_MODEL_PURPOSES: readonly CanonicalModelPurpose[] =
+  CANONICAL_MODEL_PURPOSES.filter((purpose) => purpose !== 'moa');
+
+const SELECTABLE_MODEL_PURPOSE_SET = new Set<string>(SELECTABLE_MODEL_PURPOSES);
 
 /**
  * Normalize a `modelPurposeSelection` settings value. Returns undefined for
@@ -43,16 +52,24 @@ export function normalizeModelPurposeSelectionSetting(
   if (!isRecord(value)) {
     throw new Error(
       `${fieldName} must be an object mapping model purposes `
-      + `(${CANONICAL_MODEL_PURPOSES.join(', ')}) to models.json slot keys`,
+      + `(${SELECTABLE_MODEL_PURPOSES.join(', ')}) to models.json slot keys`,
     );
   }
   const normalized: ModelPurposeSelection = {};
   for (const [rawPurpose, rawSlotKey] of Object.entries(value)) {
     const purpose = rawPurpose.trim();
-    if (!CANONICAL_MODEL_PURPOSE_SET.has(purpose)) {
+    if (purpose === 'moa') {
+      throw new Error(
+        `${fieldName}.moa is not a selectable lane: no runtime call routes the `
+        + '"moa" purpose through lane selection. MoA model choices are owned by '
+        + 'the moaReferenceModels and moaAggregatorModel settings (both '
+        + 'per-companion overlay eligible) — set those instead.',
+      );
+    }
+    if (!SELECTABLE_MODEL_PURPOSE_SET.has(purpose)) {
       throw new Error(
         `${fieldName} contains unknown model purpose "${rawPurpose}". `
-        + `Valid purposes: ${CANONICAL_MODEL_PURPOSES.join(', ')}`,
+        + `Valid purposes: ${SELECTABLE_MODEL_PURPOSES.join(', ')}`,
       );
     }
     if (rawSlotKey === undefined || rawSlotKey === null) continue;

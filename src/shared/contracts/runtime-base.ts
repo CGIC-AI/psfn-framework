@@ -1258,7 +1258,9 @@ export type CanonicalModelPurpose = typeof CANONICAL_MODEL_PURPOSES[number];
  * models.json registry entry id (catalog slot key) the companion should lead
  * that lane with. The catalog and provider credentials stay gateway-global;
  * only the SELECTION is companion-scoped (settings.overlay.json). Absent keys
- * fall back to the registry's primary-purpose routing unchanged.
+ * fall back to the registry's primary-purpose routing unchanged. The `moa`
+ * purpose is not selectable here (rejected by the settings normalizer): MoA
+ * model choices are owned by moaReferenceModels/moaAggregatorModel.
  */
 export type ModelPurposeSelection = Partial<Record<CanonicalModelPurpose, string>>;
 

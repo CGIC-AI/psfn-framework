@@ -7,6 +7,40 @@ export interface AttentionSource {
   fetchCount: () => Promise<number>;
 }
 
+export type AttentionCounts = Record<string, number>;
+
+export type AttentionPollResult =
+  | { path: string; count: number }
+  | { path: string; count?: never };
+
+export function mergeAttentionPollResults(
+  current: AttentionCounts,
+  results: AttentionPollResult[],
+): AttentionCounts {
+  const polled = { ...current };
+  for (const result of results) {
+    if (result.count !== undefined) polled[result.path] = result.count;
+  }
+  return polled;
+}
+
+export function updateAttentionCountsIfChanged(
+  current: AttentionCounts,
+  polled: AttentionCounts,
+  write: (counts: AttentionCounts) => void,
+): AttentionCounts {
+  const currentPaths = Object.keys(current);
+  const polledPaths = Object.keys(polled);
+  if (
+    currentPaths.length === polledPaths.length
+    && polledPaths.every((path) => current[path] === polled[path])
+  ) {
+    return current;
+  }
+  write(polled);
+  return polled;
+}
+
 interface ContactApprovalEntryLite {
   status: 'pending' | 'denied';
 }

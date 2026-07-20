@@ -4191,6 +4191,24 @@
       "value": "2_000"
     },
     {
+      "file": "src/shared/telemetry/fleet-posture.ts",
+      "name": "FLEET_POSTURE_MAX_SERIALIZED_BYTES",
+      "value": "512",
+      "note": "Code-owned wire-protocol and denial-of-service bound; mutable settings must not widen accepted agent health envelopes."
+    },
+    {
+      "file": "src/shared/telemetry/fleet-posture.ts",
+      "name": "FLEET_POSTURE_STALE_TIMEOUT_MS",
+      "value": "90_000",
+      "note": "Code-owned wire freshness bound coupled to the gateway keepalive protocol; mutable settings must not extend acceptance of stale companion health."
+    },
+    {
+      "file": "src/shared/telemetry/fleet-posture.ts",
+      "name": "POSTURE_PERCENT_MAX",
+      "value": "100",
+      "note": "Code-owned percentage invariant used to validate the redacted fleet posture wire contract."
+    },
+    {
       "file": "src/shared/telemetry/model-usage-attribution.ts",
       "name": "MAX_DIMENSION_LENGTH",
       "value": "512"

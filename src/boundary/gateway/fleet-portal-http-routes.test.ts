@@ -25,6 +25,7 @@ function projection(): FleetPortalProjection {
       companionId: COMPANION_A,
       displayName: 'Canopy',
       availability: 'online',
+      posture: { status: 'unavailable' },
       gardenPath: `/companions/${COMPANION_A}/garden`,
     }],
   };

@@ -21,6 +21,7 @@ import type {
 import type { CompletionHandoffRecord } from './contracts/completion-handoff.js';
 import type { PlaceKind } from './contracts/places-registry.js';
 import type { SatelliteTelemetryAuthContext } from './contracts/satellite-registry.js';
+import type { PartnerAffectShadowTelemetryEvent } from './contracts/partner-affect.js';
 import type { IcpInitiationCandidateStatus } from './contracts/icp-autonomy.js';
 import type { IcpConversationCostBreakerEvent } from './telemetry/model-usage.js';
 import type { TurnPerformanceEvent } from './telemetry/turn-performance.js';
@@ -1073,6 +1074,9 @@ export interface EventMap {
   };
   'external.telemetry.ingested': { event: ExternalTelemetryEvent } & EventCorrelationFields;
   'agent.perception.bridge.telemetry': PerceptionBridgeTelemetryEvent & EventCorrelationFields;
+  // Shadow-only partner-affect observation counters (docs/partner-affect.md
+  // slice 1). Structural telemetry only; carries no observation content.
+  'emotion.partner_affect.shadow.telemetry': PartnerAffectShadowTelemetryEvent & EventCorrelationFields;
   'module.install': {
     id: string;
     name: string;

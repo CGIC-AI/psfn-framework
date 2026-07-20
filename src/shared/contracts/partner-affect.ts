@@ -13,6 +13,13 @@ import type { EmotionTelemetryProvenance } from './emotion-contracts.js';
 export const PARTNER_AFFECT_SCHEMA_VERSION = 1 as const;
 
 /**
+ * External telemetry event type carrying one shadow Signal Observation
+ * candidate. Must be admitted by the API-channel telemetry allowlist and is
+ * consumed only by the shadow ingest bridge.
+ */
+export const PARTNER_AFFECT_OBSERVATION_EVENT_TYPE = 'external.telemetry.partner_affect.observation' as const;
+
+/**
  * Signal Families are independence groups (docs/partner-affect.md section 6).
  * Several metrics from one family share one evidence budget; independence
  * quorums count families, never raw observations.
@@ -72,6 +79,7 @@ export const PARTNER_AFFECT_SUPPRESSION_REASONS = [
   'shadow_disabled',
   'partner_unbound',
   'wrong_partner',
+  'missing_authenticated_origin',
   'unregistered_source',
   'revoked_source',
   'consent_mismatch',

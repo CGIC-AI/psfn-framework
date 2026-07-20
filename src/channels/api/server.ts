@@ -28,6 +28,7 @@ import {
 import type { ContactStorePort } from '../../core/contacts/contact-store-port.js';
 import type { SubstrateAgent } from '../../core/agent/substrate-agent.js';
 import type { EventBus, ExternalTelemetryEvent } from '../../shared/event-bus.js';
+import { PARTNER_AFFECT_OBSERVATION_EVENT_TYPE } from '../../shared/contracts/partner-affect.js';
 import {
   createEventBusSensorIngestPort,
   type SensorIngestPort,
@@ -130,6 +131,7 @@ const TELEMETRY_EVENT_TYPE_ALLOWLIST = new Set([
   'external.telemetry.heartbeat',
   'external.telemetry.status',
   'external.telemetry.incident',
+  PARTNER_AFFECT_OBSERVATION_EVENT_TYPE,
 ]);
 const ICP_OPERATOR_CANCEL_PATH = /^\/v1\/operator\/icp-autonomy\/companions\/([^/]+)\/cancel$/u;
 const CONFIRMATION_OPERATOR_RESOLVE_PATH = '/v1/operator/confirmations/resolve';
@@ -245,6 +247,16 @@ const TELEMETRY_PAYLOAD_KEYS_BY_EVENT_TYPE: ReadonlyMap<string, ReadonlySet<stri
     'severity', 'level', 'code', 'category',
     'message', 'detail', 'reason', 'error',
     'count', 'confidence',
+  ])],
+  // Shadow-only Partner Affect Signal Observations (docs/partner-affect.md
+  // slice 1). Summarized scalar fields only; the downstream observation guard
+  // re-screens the same keys fail-closed before anything is recorded.
+  [PARTNER_AFFECT_OBSERVATION_EVENT_TYPE, new Set([
+    'observationId', 'sourceId', 'partnerContactId',
+    'signalFamily', 'metricName', 'value', 'unit',
+    'windowStartMs', 'windowEndMs', 'observedAtMs',
+    'coverage', 'confidence', 'missingness',
+    'consentRef', 'provenance', 'processingRevision',
   ])],
 ]);
 

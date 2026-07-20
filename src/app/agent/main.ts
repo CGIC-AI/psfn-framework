@@ -120,6 +120,8 @@ import {
 } from './session-activity.js';
 import { loadIntakePolicyConfig } from '../../system/config/intake-policy-config.js';
 import { maybeCreateIntakeScreeningService } from '../../core/cogsec/intake/screening.js';
+import { loadPartnerAffectShadowConfig } from '../../system/config/partner-affect-shadow-config.js';
+import { createPartnerAffectShadowIngestBridge } from '../../core/emotion/partner-affect/shadow-ingest-bridge.js';
 import { createIntakeQuarantineStore } from '../../core/cogsec/intake/quarantine-store.js';
 import { createDriftReviewCardStore } from '../../core/cogsec/drift/drift-review-card-store.js';
 import { createDriftVelocityEvidencePort } from '../../core/cogsec/drift/drift-evidence-adapters.js';
@@ -473,6 +475,24 @@ async function main(): Promise<void> {
   if (sessionManager.intakeScreening) {
     log.info('Intake screening wired to session tool observations', {
       mode: sessionManager.intakeScreening.mode,
+    });
+  }
+
+  // ── Partner Affect shadow observation foundation (docs/partner-affect.md
+  // slice 1) ── Shadow-only: the bridge records accepted/suppressed Signal
+  // Observations for Garden inspection and emits structural counters. It has
+  // no path into prompts, appraisal, memory, scheduling, or world actions,
+  // and stays fully inert unless the JSON owner file enables it with an
+  // exact canonical partner binding.
+  const partnerAffectShadowPolicy = loadPartnerAffectShadowConfig(pathSnapshot.systemDataDir);
+  const partnerAffectShadowBridge = createPartnerAffectShadowIngestBridge({
+    eventBus,
+    policy: partnerAffectShadowPolicy,
+    store: persistenceRuntime.partnerAffectShadowStore,
+  });
+  if (partnerAffectShadowBridge.active) {
+    log.info('Partner affect shadow observation bridge active (shadow-only)', {
+      policyRevision: partnerAffectShadowPolicy.policyRevision,
     });
   }
 
@@ -1036,11 +1056,13 @@ async function main(): Promise<void> {
       }
     },
     closeDatabase: async () => {
+      partnerAffectShadowBridge.unsubscribe();
       await persistenceRuntime.contactLifecycleRecovery?.stop();
       await coreRuntime.closeWikiRuntime();
       await persistenceRuntime.icpInitiationCandidateStore?.close();
       await persistenceRuntime.backgroundWorkStore.close();
       await persistenceRuntime.introspectionLandmarkStore.close();
+      await persistenceRuntime.partnerAffectShadowStore.close();
     },
     scheduler,
     moduleLoader,

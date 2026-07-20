@@ -2325,15 +2325,23 @@ export class GatewayServer {
           input.timeoutMs,
           Math.max(1, lease.expiresAtMs - Date.now()),
         );
-        const result = await Promise.race([
-          route.client.request('api.chat.completion', params),
-          new Promise<never>((_, reject) =>
-            setTimeout(
-              () => reject(new Error('Shared-satellite chat request timed out')),
-              effectiveTimeoutMs,
-            ),
-          ),
-        ]) as ApiChatCompletionRpcResult;
+        let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+        const timeout = new Promise<never>((_, reject) => {
+          timeoutHandle = setTimeout(
+            () => reject(new Error('Shared-satellite chat request timed out')),
+            effectiveTimeoutMs,
+          );
+          timeoutHandle.unref();
+        });
+        let result: ApiChatCompletionRpcResult;
+        try {
+          result = await Promise.race([
+            route.client.request('api.chat.completion', params),
+            timeout,
+          ]) as ApiChatCompletionRpcResult;
+        } finally {
+          if (timeoutHandle) clearTimeout(timeoutHandle);
+        }
         if (!result.ok) {
           if (result.error.type === 'request_timeout') {
             this.sharedSatelliteResponseArbiter.timeout(

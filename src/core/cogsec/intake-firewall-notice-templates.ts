@@ -80,10 +80,10 @@ export const INTAKE_FIREWALL_NOTICE_TEMPLATES = Object.freeze({
     + 'do about it.',
   /**
    * Tool-result text returned when a sink gate (htm9.3) declines a
-   * consequential action for this turn (a persona/trust/wiki mutation or an
-   * outbound call) because of the current intake policy. Same contract as the
-   * other templates: fixed, truthful, calm, no imperative at the human, and it
-   * carries the signature phrase so the emotion/memory exclusions apply.
+   * consequential action for this turn (a persona/trust/wiki/skill mutation
+   * or an outbound call) because of the current intake policy. Same contract
+   * as the other templates: fixed, truthful, calm, no imperative at the human,
+   * and it carries the signature phrase so the emotion/memory exclusions apply.
    */
   sinkHeld:
     'This step was set aside for now under the current safety settings, and it '

@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "mode": "shadow",
   "sourceRiskTiers": {
     "operator": "trusted",
@@ -117,6 +117,29 @@
           "poisoning/source_drift"
         ],
         "unscreened": "allow"
+      },
+      "skill_write": {
+        "maxSourceRiskTier": "untrusted",
+        "denyRiskLabels": [
+          "injection/override_attempt",
+          "injection/indirect",
+          "injection/encoded_smuggling",
+          "injection/invisible_text",
+          "injection/role_confusion",
+          "injection/jailbreak_marker",
+          "persona/mutation_attempt",
+          "policy/security_modification",
+          "execution/executable_instruction",
+          "exfil/canary_leak",
+          "exfil/unknown_link",
+          "exfil/prompt_disclosure",
+          "secrets/api_key",
+          "secrets/credential_material",
+          "poisoning/memory_write_pressure",
+          "poisoning/trust_grooming",
+          "poisoning/source_drift"
+        ],
+        "unscreened": "deny"
       },
       "persona_mutation": {
         "maxSourceRiskTier": "standard",

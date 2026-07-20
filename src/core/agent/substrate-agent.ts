@@ -863,7 +863,7 @@ export class SubstrateAgent {
     return {
       evaluate: ({ toolName, requiredTokens, params }) => {
         if (!requiredTokens.some(isEgressCapabilityToken)) return null;
-        const envelopes = this.currentTurnIntakeEnvelopes;
+        const envelopes = this.getActiveTurnIntakeEnvelopes();
         const access = gate.evaluate('tool_egress', envelopes, { toolName });
         let sinkAllowed = access.allowed;
         let sinkReason = access.reason;
@@ -1040,6 +1040,14 @@ export class SubstrateAgent {
 
   getActiveTurnTools(): readonly AgentTool<any>[] {
     return this.toolRuntimeFacade.getActiveTurnTools();
+  }
+
+  /**
+   * Intake envelopes for the exact async-local tool turn. Empty outside a
+   * turn; safe when ordinary turns overlap.
+   */
+  getActiveTurnIntakeEnvelopes(): readonly IntakeEnvelopeSnapshot[] {
+    return this.toolRuntimeFacade.getActiveTurnIntakeEnvelopes();
   }
 
   getToolCatalogSnapshot(): RuntimeToolCatalogSnapshot {

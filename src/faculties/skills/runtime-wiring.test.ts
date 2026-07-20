@@ -3,6 +3,7 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { wireSkillsRuntime } from './runtime-wiring.js';
+import type { IntakeSinkGate } from '../../core/cogsec/intake/sink-gates.js';
 
 describe('skills runtime wiring', () => {
   it('attaches skills runtime and registers the unified skill tool', () => {
@@ -38,6 +39,58 @@ describe('skills runtime wiring', () => {
       expect(registerTool).toHaveBeenCalledTimes(1);
       expect(registerTool.mock.calls[0]?.[0]?.name).toBe('skill');
       expect(registerTool.mock.calls[0]?.[1]).toBe('core');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('threads the canonical intake dependencies into managed skill writes', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'skills-wire-intake-'));
+    const dataDir = join(root, 'data');
+    mkdirSync(dataDir, { recursive: true });
+    const evaluate = vi.fn(() => ({
+      sink: 'skill_write' as const,
+      allowed: false,
+      verdict: 'deny' as const,
+      mode: 'enforce' as const,
+      reason: 'unscreened content denied',
+      unscreened: true,
+      deniedEnvelopeIds: [],
+    }));
+    const gate: IntakeSinkGate = {
+      mode: 'enforce',
+      evaluate,
+      assessEgressTrifecta: vi.fn(),
+    };
+    const registerTool = vi.fn();
+    const target = {
+      skillsRuntime: null,
+      registerTool,
+    };
+
+    try {
+      wireSkillsRuntime(target, {
+        dataDir,
+        repoRoot: root,
+      }, {
+        getIntakeSinkGate: () => gate,
+        getIntakeScreening: () => null,
+        getActiveTurnIntakeEnvelopes: () => [],
+      });
+
+      const tool = registerTool.mock.calls[0]?.[0];
+      await tool.execute('skill-write', {
+        action: 'create',
+        name: 'blocked',
+        category: 'ops',
+        content: '# Blocked\n\nNo screened envelope exists.',
+      });
+      expect(evaluate).toHaveBeenCalledWith('skill_write', [], {
+        tool: 'skill',
+        action: 'create',
+        screening: 'unavailable',
+      });
+      expect(target.skillsRuntime?.getStore().list()).toEqual([]);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

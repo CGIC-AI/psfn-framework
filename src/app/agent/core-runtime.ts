@@ -101,6 +101,7 @@ import { IntrospectionConsentStore } from '../../faculties/introspection/consent
 import { IntrospectionTurnSensitivityDecisions } from '../../faculties/introspection/turn-sensitivity.js';
 import { ContactBlockListStore } from '../../core/cogsec/contact-block-list.js';
 import { maybeCreateIntakeSinkGate } from '../../core/cogsec/intake/sink-gates.js';
+import { maybeCreateIntakeScreeningService } from '../../core/cogsec/intake/screening.js';
 import { loadIntakePolicyConfig } from '../../system/config/intake-policy-config.js';
 import { createComponentLogger } from '../../shared/logger.js';
 import { createSelfStatusTool } from '../../core/tools/self-status.js';
@@ -281,12 +282,17 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
   // (system-data owner file). Null when the firewall mode is 'off'. The gate
   // is threaded to every consequential sink: session context assembly
   // (prompt_assembly), memory candidacy (memory_write), the wiki tool
-  // (wiki_write), the identity tool (persona_mutation), the contact tool
-  // (trust_mutation), and the substrate agent's egress tool guard
-  // (tool_egress + lethal-trifecta invariant).
+  // (wiki_write), managed skill mutation (skill_write), the identity tool
+  // (persona_mutation), the contact tool (trust_mutation), and the substrate
+  // agent's egress tool guard (tool_egress + lethal-trifecta invariant).
+  const intakePolicy = loadIntakePolicyConfig(pathSnapshot.systemDataDir);
   const intakeSinkGate = maybeCreateIntakeSinkGate({
-    policy: loadIntakePolicyConfig(pathSnapshot.systemDataDir),
+    policy: intakePolicy,
     actor: 'agent:intake-sink-gate',
+  });
+  const skillWriteIntakeScreening = maybeCreateIntakeScreeningService({
+    policy: intakePolicy,
+    actor: 'agent:skill-write-intake',
   });
   sessionManager.intakeSinkGate = intakeSinkGate;
   if (intakeSinkGate) {
@@ -437,15 +443,23 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
     ...(icpAutonomyRuntime ? { availability: icpAutonomyRuntime } : {}),
   }), 'core');
 
-  const skillsRuntime = wireSkillsRuntime(agentLoop, {
-    // skills.json and usage telemetry are per-companion; deployment-provided
-    // skill documents remain rooted at repoRoot, while managed skills remain
-    // contained by this companion's Personal Workspace.
-    dataDir: pathSnapshot.companionDataDir,
-    seedDir: process.env.CONFIG_DIR,
-    repoRoot: process.cwd(),
-    managedRootDir: resolvePersonalSkillsDir(pathSnapshot.workspaceRoot),
-  });
+  const skillsRuntime = wireSkillsRuntime(
+    agentLoop,
+    {
+      // skills.json and usage telemetry are per-companion; deployment-provided
+      // skill documents remain rooted at repoRoot, while managed skills remain
+      // contained by this companion's Personal Workspace.
+      dataDir: pathSnapshot.companionDataDir,
+      seedDir: process.env.CONFIG_DIR,
+      repoRoot: process.cwd(),
+      managedRootDir: resolvePersonalSkillsDir(pathSnapshot.workspaceRoot),
+    },
+    {
+      getIntakeSinkGate: () => intakeSinkGate,
+      getIntakeScreening: () => skillWriteIntakeScreening,
+      getActiveTurnIntakeEnvelopes: () => agentLoop.getActiveTurnIntakeEnvelopes(),
+    },
+  );
   registerWebTools(agentLoop, new GatewayWebFetchOps(gatewayOps), {
     gatewayMode: true,
     searchQueryJson: createWebSearchQueryJson(llmProvider),

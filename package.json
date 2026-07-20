@@ -60,6 +60,7 @@
     "snapshot:system-owner-fleet": "tsx src/app/maintenance/system-owner-fleet-snapshot.ts capture",
     "restore:system-owner-fleet-snapshot": "tsx src/app/maintenance/system-owner-fleet-snapshot.ts restore",
     "migrate:scheduler-owner": "tsx src/app/maintenance/migrate-scheduler-owner.ts",
+    "migrate:intake-policy-owner": "tsx src/app/maintenance/migrate-intake-policy-owner.ts",
     "fleet-auth:passkey-ceremony": "tsx src/app/maintenance/create-passkey-ceremony.ts",
     "fleet-auth:account-reapproval": "tsx src/app/maintenance/create-account-reapproval-ceremony.ts",
     "fleet-auth:provider-recovery": "tsx src/app/maintenance/create-provider-recovery.ts",

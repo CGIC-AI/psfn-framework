@@ -407,7 +407,7 @@ never back a ClusterIssuer. */ -}}
 {{- if or (eq ($secretRef.name | default "") "") (eq ($secretRef.key | default "") "") -}}
 {{- fail (printf "fleetAuth.credentialEnv[%d] (%s) requires both secretRef.name and secretRef.key" $index $name) -}}
 {{- end -}}
-{{- else if eq (printf "%v" $entry.value) "" -}}
+{{- else if not $entry.value -}}
 {{- fail (printf "fleetAuth.credentialEnv[%d] (%s) value must not be empty" $index $name) -}}
 {{- end -}}
 {{- end -}}

@@ -196,4 +196,44 @@ describe('SharedSatelliteResponseArbiter', () => {
       'acquired', 'timed_out', 'released',
     ]);
   });
+
+  it('clears a timed-out active owner so the next eligible member can acquire', () => {
+    const arbiter = new SharedSatelliteResponseArbiter({ now: () => 100 });
+    const eligibility = [eligible(PRIMARY), eligible(PRODUCTIVITY)];
+    const addressed = arbiter.acquire({
+      satelliteId: 'sat-1',
+      conversationKey: CONVERSATION,
+      policy,
+      eligibility,
+      explicitAddressedCompanionId: PRODUCTIVITY,
+    });
+    if (!addressed.acquired) throw new Error('expected addressed lease');
+    arbiter.complete(addressed.lease.leaseId, 'speech');
+
+    const active = arbiter.acquire({
+      satelliteId: 'sat-1',
+      conversationKey: CONVERSATION,
+      policy,
+      eligibility,
+    });
+    expect(active).toMatchObject({
+      acquired: true,
+      lease: { companionId: PRODUCTIVITY, priority: 'active_conversation' },
+    });
+    if (!active.acquired) throw new Error('expected active-conversation lease');
+
+    arbiter.timeout(active.lease.leaseId);
+
+    expect(arbiter.resolveActiveConversation(CONVERSATION)).toBeUndefined();
+    expect(arbiter.acquire({
+      satelliteId: 'sat-1',
+      conversationKey: CONVERSATION,
+      policy,
+      eligibility,
+      excludedCompanionIds: new Set([PRODUCTIVITY]),
+    })).toMatchObject({
+      acquired: true,
+      lease: { companionId: PRIMARY, priority: 'primary' },
+    });
+  });
 });

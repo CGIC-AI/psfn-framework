@@ -211,6 +211,7 @@ export class SharedSatelliteResponseArbiter {
     if (!lease) return false;
     this.emit(lease, 'timed_out', reason);
     this.emit(lease, 'released', 'timeout');
+    this.clearTimedOutActiveConversation(lease);
     this.holders.delete(lease.satelliteId);
     this.leaseConversationKeys.delete(lease.leaseId);
     return true;
@@ -266,8 +267,19 @@ export class SharedSatelliteResponseArbiter {
     if (!lease || lease.expiresAtMs > this.now()) return;
     this.emit(lease, 'timed_out', 'response_lease_expired');
     this.emit(lease, 'released', 'timeout');
+    this.clearTimedOutActiveConversation(lease);
     this.holders.delete(satelliteId);
     this.leaseConversationKeys.delete(lease.leaseId);
+  }
+
+  private clearTimedOutActiveConversation(lease: SharedSatelliteResponseLease): void {
+    if (lease.priority !== 'active_conversation') return;
+    const conversationKey = this.leaseConversationKeys.get(lease.leaseId);
+    if (!conversationKey) return;
+    const active = this.activeConversations.get(conversationKey);
+    if (active?.companionId === lease.companionId) {
+      this.activeConversations.delete(conversationKey);
+    }
   }
 
   private emit(

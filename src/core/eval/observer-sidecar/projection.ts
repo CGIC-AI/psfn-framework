@@ -23,11 +23,20 @@ import {
 } from './privacy.js';
 import type { ObserverEvalInputPayload } from './types.js';
 
-export const OBSERVER_APPRAISAL_PROJECTION_SCHEMA_VERSION = 1 as const;
+// v3 (psfn-framework-oth4.4): the projected EVENT appraisal is mood-free.
+// PSFN accumulated mood (EMA) is no longer folded into the outgoing event signal
+// so that downstream emo-sim applies accumulated mood exactly once instead of
+// twice. v2 double-counted inertia (PSFN projection tilted the event by mood,
+// then emo-sim tilted the appraisal again with its own accumulated mood), which
+// flipped modest clearly-negative inputs net-positive under a positive-mood
+// (Love) basin. Schema bumped 1 -> 2 for the added appraisalAdjustments record.
+export const OBSERVER_APPRAISAL_PROJECTION_SCHEMA_VERSION = 2 as const;
 export const OBSERVER_APPRAISAL_PROJECTION_VERSION =
-  'psfn.observer-sidecar.appraisal-projection.v2' as const;
+  'psfn.observer-sidecar.appraisal-projection.v3' as const;
 export const OBSERVER_APPRAISAL_PROJECTION_CAVEAT =
   'Projection is observer-derived eval telemetry, not ground truth and not live companion state.' as const;
+export const OBSERVER_MOOD_FREE_EVENT_APPRAISAL_CAVEAT =
+  'mood-free event appraisal (v3): PSFN accumulated mood (EMA) is excluded from the projected valence, self_norm, and attachment so accumulated mood tilts affect exactly once downstream in emo-sim. v2 folded mood into the event signal, double-counting inertia and softening clearly-negative inputs under a positive-mood basin.' as const;
 export const OBSERVER_ATTACHMENT_NEUTRAL_PRIOR_CAVEAT =
   'attachment (v2) is derived from per-turn affiliative evidence (love/caring/trust-adjacent labels, warm valence) around a 0.45 neutral prior; static relationship metadata (trust level, direct message, resolved contact) is deliberately excluded because it pinned v1 attachment near 0.8 on every turn.' as const;
 export const OBSERVER_SAFETY_NEUTRAL_PRIOR_CAVEAT =
@@ -75,6 +84,41 @@ export interface ObserverProjectionFeatureProvenance {
   caveat?: string;
 }
 
+export type ObserverProjectionAppraisalAdjustmentReason = 'double-mood-inertia';
+
+/**
+ * Structured, queryable record of a deliberate composition change applied to the
+ * projected event appraisal — mirrors the deterministicDegradations pattern
+ * (option/requested/honored/reason/detail) so corpora before and after the
+ * change are distinguishable without diffing code. Recorded on every
+ * observer-derived projection; never silently applied.
+ */
+export interface ObserverProjectionAppraisalAdjustment {
+  adjustment: 'mood-free-event-appraisal';
+  applied: boolean;
+  reason: ObserverProjectionAppraisalAdjustmentReason;
+  /** The PSFN emotion-state component removed from the event signal. */
+  excludedComponent: 'accumulated-mood-valence';
+  /** Appraisal dimensions whose composition dropped the mood component. */
+  affectedDimensions: readonly EmoSimAppraisalDimension[];
+  detail: string;
+}
+
+export const OBSERVER_MOOD_FREE_EVENT_APPRAISAL_ADJUSTMENT: ObserverProjectionAppraisalAdjustment =
+  Object.freeze({
+    adjustment: 'mood-free-event-appraisal',
+    applied: true,
+    reason: 'double-mood-inertia',
+    excludedComponent: 'accumulated-mood-valence',
+    affectedDimensions: Object.freeze(['valence', 'self_norm', 'attachment'] as const),
+    detail:
+      'v3: PSFN accumulated mood (EMA) is excluded from the projected event valence, self_norm, '
+      + 'and attachment. The event signal now carries only the turn\'s own VAD, discrete labels, and '
+      + 'safe metadata; accumulated mood is applied exactly once downstream in emo-sim. v2 folded mood '
+      + 'into the event signal, double-counting inertia and flipping modest clearly-negative inputs '
+      + 'net-positive under a positive-mood (Love) basin.',
+  });
+
 export interface ObserverProjectedAppraisalDimension {
   dimension: EmoSimAppraisalDimension;
   value: number;
@@ -94,6 +138,13 @@ export interface ObserverProjectedAppraisalInput {
   sensitivity: ObserverEvalPrivacyDecision['sensitivity'];
   privacyClass: ObserverEvalPrivacyClass;
   caveats: readonly string[];
+  /**
+   * Deliberate composition changes applied to the projected event appraisal.
+   * Empty for direct-fixture appraisals (explicit input, no heuristic
+   * composition); carries the mood-free-event-appraisal record for
+   * observer-derived projections.
+   */
+  appraisalAdjustments: readonly ObserverProjectionAppraisalAdjustment[];
 }
 
 export type ObserverAppraisalProjectionErrorReason =
@@ -152,7 +203,10 @@ interface ProjectionSignals {
   snapshot: EmotionStateSnapshot | null;
   hasSnapshot: boolean;
   vad: EmotionStateSnapshot['vad'];
-  mood: EmotionStateSnapshot['mood'];
+  // NOTE (v3, double-mood-inertia fix): PSFN accumulated mood (EMA) is
+  // deliberately NOT a projection signal. The event appraisal must carry only
+  // the turn's own VAD/discrete/metadata so emo-sim applies accumulated mood
+  // exactly once. Reintroducing a mood term here re-creates the double count.
   emotionConfidence: number;
   positiveDiscrete: number;
   negativeDiscrete: number;
@@ -279,6 +333,9 @@ export function projectSanitizedObserverEvalToEmoSim(
     sensitivity: input.privacy.sensitivity,
     privacyClass: input.privacy.privacyClass,
     caveats,
+    appraisalAdjustments: source === 'observer-derived'
+      ? [OBSERVER_MOOD_FREE_EVENT_APPRAISAL_ADJUSTMENT]
+      : [],
   };
   const projectedStimulus = buildProjectedStimulus(
     input,
@@ -409,7 +466,6 @@ function collectMissingInputs(input: ObserverEvalSanitizedInputPayload): Observe
 function collectProjectionSignals(input: ObserverEvalSanitizedInputPayload): ProjectionSignals {
   const snapshot = input.emotion.snapshot;
   const vad = snapshot?.vad ?? NEUTRAL_VAD;
-  const mood = snapshot?.mood ?? NEUTRAL_VAD;
   const emotionConfidence = clampUnit(snapshot?.confidence ?? 0.15);
   const trustScore = trustLevelScore(input.metadata.trustLevel);
   const contactScore = input.metadata.contactResolved ? 1 : 0;
@@ -419,7 +475,6 @@ function collectProjectionSignals(input: ObserverEvalSanitizedInputPayload): Pro
     snapshot,
     hasSnapshot: Boolean(snapshot),
     vad,
-    mood,
     emotionConfidence,
     positiveDiscrete: maxDiscrete(snapshot, ['joy', 'optimism', 'trust', 'satisfaction', 'contentment']),
     negativeDiscrete: maxDiscrete(snapshot, ['sadness', 'anger', 'fear', 'pessimism', 'disgust']),
@@ -448,9 +503,13 @@ function projectObserverDerivedAppraisal(
   signals: ProjectionSignals,
 ): { ok: true; value: DerivedAppraisal } {
   const confidence = observerDerivedConfidence(signals);
+  // v3 (double-mood-inertia fix): mood-free event valence. The accumulated-mood
+  // term ((signals.mood.valence * 0.2)) is removed so the event signal carries
+  // only the turn's own VAD and discrete evidence; emo-sim applies accumulated
+  // mood exactly once downstream. Coefficients are NOT rescaled to compensate
+  // (operator ruling: no scaling to force agreement).
   const valence = clampSigned(
     (signals.vad.valence * 0.65)
-      + (signals.mood.valence * 0.2)
       + ((signals.positiveDiscrete - signals.negativeDiscrete) * 0.15),
     -1,
   );
@@ -532,10 +591,10 @@ function projectObserverDerivedAppraisal(
           - (threat * 0.1),
         -1,
       ),
+      // v3 (double-mood-inertia fix): mood-free. The accumulated-mood valence
+      // terms are removed; self_norm reads only speaker role at the event level.
       self_norm: clampSigned(
-        (input.metadata.speakerRole === 'system' ? 0.28 : 0.04)
-          + (Math.max(0, signals.mood.valence) * 0.1)
-          - (Math.max(0, -signals.mood.valence) * 0.1),
+        input.metadata.speakerRole === 'system' ? 0.28 : 0.04,
         -1,
       ),
       threat,
@@ -550,10 +609,12 @@ function projectObserverDerivedAppraisal(
       // Static relationship metadata (trust level, direct message, resolved contact)
       // is excluded: in v1 those terms alone summed to a 0.66 floor on live data,
       // pinning attachment near 0.8 regardless of the turn's actual affect.
+      // v3 (double-mood-inertia fix): mood-free. The accumulated-mood valence
+      // term is removed; attachment reads only per-turn affiliative evidence and
+      // the event's own positive VAD around the 0.45 neutral prior.
       attachment: clampUnit(
         0.45
           + (signals.affiliativeDiscrete * 0.35)
-          + (Math.max(0, signals.mood.valence) * 0.12)
           + (Math.max(0, signals.vad.valence) * 0.08)
           - (signals.angerDiscrete * 0.15),
       ),
@@ -652,8 +713,17 @@ function buildDerivedAppraisal(
 
 function observerDerivedDimensionCaveats(dimension: EmoSimAppraisalDimension): readonly string[] {
   switch (dimension) {
+    // v3: valence, self_norm, and attachment dropped the accumulated-mood term
+    // (double-mood-inertia fix); their caveats surface the mood-free composition.
     case 'attachment':
-      return [OBSERVER_APPRAISAL_PROJECTION_CAVEAT, OBSERVER_ATTACHMENT_NEUTRAL_PRIOR_CAVEAT];
+      return [
+        OBSERVER_APPRAISAL_PROJECTION_CAVEAT,
+        OBSERVER_ATTACHMENT_NEUTRAL_PRIOR_CAVEAT,
+        OBSERVER_MOOD_FREE_EVENT_APPRAISAL_CAVEAT,
+      ];
+    case 'valence':
+    case 'self_norm':
+      return [OBSERVER_APPRAISAL_PROJECTION_CAVEAT, OBSERVER_MOOD_FREE_EVENT_APPRAISAL_CAVEAT];
     case 'safety':
       return [OBSERVER_APPRAISAL_PROJECTION_CAVEAT, OBSERVER_SAFETY_NEUTRAL_PRIOR_CAVEAT];
     case 'agency_other':
@@ -825,6 +895,8 @@ function buildProjectionCaveats(
   ];
   if (source === 'direct-fixture-appraisal') {
     caveats.push('Direct fixture appraisal is explicit eval input, not inferred live appraisal.');
+  } else {
+    caveats.push(OBSERVER_MOOD_FREE_EVENT_APPRAISAL_CAVEAT);
   }
   return caveats;
 }

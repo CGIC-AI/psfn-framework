@@ -101,6 +101,29 @@ jobs:
         env:
           NODE_OPTIONS: --max-old-space-size=4096
 
+  typecheck:
+    name: Typecheck (baselined)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Check out exact change head
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+          ref: ${{ env.HEAD_SHA }}
+
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            admin-ui/package-lock.json
+
+      - run: npm ci
+      - run: npm run verify:typecheck-baseline
+
   repository:
     name: Repository contracts
     runs-on: ubuntu-24.04
@@ -223,7 +246,7 @@ jobs:
   ci-required:
     name: ci-required
     if: always()
-    needs: [change-budget, lint, build, repository, test, semgrep]
+    needs: [change-budget, lint, build, typecheck, repository, test, semgrep]
     runs-on: ubuntu-24.04
     timeout-minutes: 2
     steps:
@@ -232,6 +255,7 @@ jobs:
           CHANGE_BUDGET_RESULT: ${{ needs.change-budget.result }}
           LINT_RESULT: ${{ needs.lint.result }}
           BUILD_RESULT: ${{ needs.build.result }}
+          TYPECHECK_RESULT: ${{ needs.typecheck.result }}
           REPOSITORY_RESULT: ${{ needs.repository.result }}
           TEST_RESULT: ${{ needs.test.result }}
           SEMGREP_RESULT: ${{ needs.semgrep.result }}
@@ -240,6 +264,7 @@ jobs:
             "$CHANGE_BUDGET_RESULT"
             "$LINT_RESULT"
             "$BUILD_RESULT"
+            "$TYPECHECK_RESULT"
             "$REPOSITORY_RESULT"
             "$TEST_RESULT"
             "$SEMGREP_RESULT"

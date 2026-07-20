@@ -111,6 +111,7 @@
     "verify:model-usage-capture": "node scripts/verify-model-usage-capture.mjs",
     "verify:postgres-only": "node scripts/verify-postgres-only.mjs",
     "verify:hardcoded-settings": "node scripts/verify-hardcoded-settings.mjs",
+    "verify:typecheck-baseline": "node scripts/verify-typecheck-baseline.mjs",
     "verify:accounting-certification": "vitest run src/primitives/llm/model-usage-provider-conformance.test.ts src/shared/telemetry/model-usage-certification-properties.test.ts src/persistence/postgres/model-usage-migration-certification.integration.test.ts src/persistence/postgres/model-usage-certification.integration.test.ts",
     "verify:fleet-auth-certification": "tsx scripts/verify-fleet-auth-certification.ts",
     "verify:companion-id-types": "tsc --noEmit -p tsconfig.companion-id-types.json",

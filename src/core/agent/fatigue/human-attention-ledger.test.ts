@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -30,6 +30,8 @@ function event(overrides: Partial<HumanAttentionPressureEvent> = {}): HumanAtten
     decision: 'boundary_alert',
     reason: 'threshold_reached',
     suppressTurn: false,
+    sourceMessageId: 'discord-message-1',
+    turnId: 'turn-1',
     ...overrides,
   };
 }
@@ -52,7 +54,7 @@ describe('HumanAttentionPressureLedger', () => {
       reason: 'below_threshold',
     }));
 
-    expect(readFileSync(path, 'utf-8')).not.toContain('message');
+    expect(readFileSync(path, 'utf-8')).not.toContain('messageText');
     const rebooted = new HumanAttentionPressureLedger(path);
     expect(rebooted.listHumanAttentionPressureEvents({
       localCompanionId: 'purrsephone',
@@ -66,6 +68,42 @@ describe('HumanAttentionPressureLedger', () => {
     expect(rebooted.getData().aggregates).toMatchObject({
       eventCount: 2,
       boundaryAlertCount: 1,
+    });
+  });
+
+  it('allowlists persisted event fields and rejects unknown fields on reload', () => {
+    const path = join(makeTempDir(), 'state', 'human-attention-ledger.jsonl');
+    const ledger = new HumanAttentionPressureLedger(path);
+    ledger.recordHumanAttentionPressureEvent({
+      ...event(),
+      messageText: 'private message body',
+    } as HumanAttentionPressureEvent);
+
+    expect(readFileSync(path, 'utf-8')).not.toContain('private message body');
+    const raw = JSON.parse(readFileSync(path, 'utf-8')) as Record<string, unknown>;
+    const eventValue = raw.event as Record<string, unknown>;
+    eventValue.messageText = 'injected private text';
+    const malformedPath = join(makeTempDir(), 'human-attention-ledger.jsonl');
+    writeFileSync(malformedPath, `${JSON.stringify(raw)}\n`, 'utf-8');
+
+    expect(() => new HumanAttentionPressureLedger(malformedPath))
+      .toThrow('event contains unknown keys: messageText');
+  });
+
+  it('deduplicates the same physical source message after a ledger reload', () => {
+    const path = join(makeTempDir(), 'state', 'human-attention-ledger.jsonl');
+    const ledger = new HumanAttentionPressureLedger(path);
+    ledger.recordHumanAttentionPressureEvent(event());
+    const rebooted = new HumanAttentionPressureLedger(path);
+
+    expect(rebooted.findHumanAttentionPressureEvent({
+      localCompanionId: 'purrsephone',
+      contactId: 'human-a',
+      channelId: 'channel-a',
+      sourceMessageId: 'discord-message-1',
+    })).toMatchObject({
+      decision: 'boundary_alert',
+      turnId: 'turn-1',
     });
   });
 

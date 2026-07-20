@@ -5,6 +5,7 @@ import {
   type CompletionHandoffRecord,
   type CompletionHandoffStatus,
 } from '../../shared/contracts/completion-handoff.js';
+import { sanitizeDiagnosticText } from '../../shared/diagnostics/redaction.js';
 
 export const TASK_LIFECYCLE_PARTNER_NOTIFICATION_ACTION_KIND =
   'task.lifecycle.partner-notification';
@@ -20,6 +21,9 @@ export type TaskLifecyclePartnerContext =
   | 'capacity_unavailable'
   | 'budget_exhausted'
   | 'execution_failed'
+  | 'in_progress'
+  | 'cancelled'
+  | 'folded_back'
   | 'stopped_early';
 
 export interface TaskLifecycleNotificationPayload {
@@ -38,14 +42,14 @@ export interface TaskLifecycleNotificationAuthorInput {
   internalPrompt: string;
 }
 
-function sanitizeTaskLabel(value: string | undefined): string {
-  const normalized = value
-    ?.replace(/https?:\/\/\S+/giu, '')
+export function sanitizeTaskLifecycleLabel(value: string | undefined): string {
+  const normalized = sanitizeDiagnosticText(value)
+    .replace(/https?:\/\/\S+/giu, '')
     .replace(/[A-Za-z]:[\\/][^\s]+/gu, '')
     .replace(/(?:^|\s)\/[^\s]+/gu, ' ')
     .replace(/[^\p{L}\p{N}\s.,!?'"()_:-]/gu, '')
     .replace(/\s+/gu, ' ')
-    .trim() ?? '';
+    .trim();
   const safe = normalized || 'background task';
   return safe.length <= MAX_TASK_LABEL_CHARS
     ? safe
@@ -69,6 +73,9 @@ export function resolvePartnerContext(
   handoff: CompletionHandoffRecord,
 ): TaskLifecyclePartnerContext {
   if (handoff.status === 'completed') return 'finished';
+  if (handoff.status === 'started' || handoff.status === 'progress') return 'in_progress';
+  if (handoff.status === 'cancelled') return 'cancelled';
+  if (handoff.status === 'folded_back') return 'folded_back';
   if (handoff.status === 'partial' || handoff.status === 'interrupted') {
     return 'stopped_early';
   }
@@ -97,16 +104,19 @@ export function resolvePartnerContext(
 
 export function buildTaskLifecycleNotificationPayload(
   handoff: CompletionHandoffRecord,
+  options: { allowTaskLabel?: boolean } = {},
 ): TaskLifecycleNotificationPayload {
   return {
     schemaVersion: 1,
     handoffId: handoff.handoffId,
     source: handoff.source,
     lifecycleStatus: handoff.status,
-    // Completion labels are worker-derived text. There is no contract proving
-    // they are safe to repeat into a different outbound context, so the
-    // partner message receives a generic label and an allowlisted context.
-    taskLabel: 'background task',
+    // Labels are admitted only when the lifecycle event is bound to the
+    // approved primary channel, then secret/path redacted and length bounded.
+    // Raw worker output and blocker details never enter this payload.
+    taskLabel: options.allowTaskLabel
+      ? sanitizeTaskLifecycleLabel(handoff.task.label)
+      : 'background task',
     partnerContext: resolvePartnerContext(handoff),
   };
 }
@@ -136,6 +146,9 @@ export function normalizeTaskLifecycleNotificationPayload(
     'capacity_unavailable',
     'budget_exhausted',
     'execution_failed',
+    'in_progress',
+    'cancelled',
+    'folded_back',
     'stopped_early',
   ];
   if (
@@ -154,7 +167,7 @@ export function normalizeTaskLifecycleNotificationPayload(
     handoffId: value.handoffId,
     source: value.source,
     lifecycleStatus: value.lifecycleStatus,
-    taskLabel: sanitizeTaskLabel(value.taskLabel),
+    taskLabel: sanitizeTaskLifecycleLabel(value.taskLabel),
     partnerContext: value.partnerContext as TaskLifecyclePartnerContext,
   };
 }

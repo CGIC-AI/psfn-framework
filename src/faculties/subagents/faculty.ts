@@ -29,6 +29,7 @@ import type { SessionStore } from '../../persistence/sessions/store.js';
 import { SessionManager } from '../../core/session/manager.js';
 import { inferSessionChannelType } from '../../core/session/session-id.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
+import { createComponentLogger } from '../../shared/logger.js';
 import { AGENT_LOOP_MAX_ASSISTANT_STEPS_PER_RUN } from '../../core/agent/turn-limits.js';
 import {
   buildCompletionHandoffDedupeKey,
@@ -57,6 +58,8 @@ import type {
   SubagentTaskRecord,
   WyomingSubagentDelegationRequest,
 } from './types.js';
+
+const log = createComponentLogger('SubagentFaculty');
 
 /** mmo9.7.7: which declared work-spec budget ceiling curtailed a bounded run. */
 interface SubagentBudgetExhaustion {
@@ -414,6 +417,7 @@ export class SubagentFaculty implements SubagentControlPort {
       }
 
       this.transitionTask(handle.subagentId, 'running', 'agent_initialized', handle.startTime);
+      await this.emitLifecycleProgressHandoff(handle, 'started', 0);
       this.flushPendingMessages(handle);
 
       for (let turn = 0; turn < handle.maxTurns; turn++) {
@@ -430,6 +434,7 @@ export class SubagentFaculty implements SubagentControlPort {
         lastModel = response.metadata.model;
         lastContent = response.content;
         turns += 1;
+        await this.emitLifecycleProgressHandoff(handle, 'progress', turns);
 
         if (this.isCancellationRequested(handle)) {
           await this.finishHandle(handle, this.finalizeCancelled(
@@ -694,7 +699,6 @@ export class SubagentFaculty implements SubagentControlPort {
 
   private async finishHandle(handle: ActiveSubagentHandle, result: SubagentResult): Promise<void> {
     if (handle.settled) return;
-    handle.settled = true;
     // Remove from the active set first so no further follow-up turns can be
     // enqueued via `message` once we begin draining.
     this.activeHandles.delete(handle.subagentId);
@@ -704,7 +708,16 @@ export class SubagentFaculty implements SubagentControlPort {
     // the session store races an in-flight journal write (psfn-framework-k510).
     await this.drainOutstandingTurns(handle);
     this.storeRecentResult(result);
-    await this.emitCompletionHandoff(handle, result);
+    try {
+      await this.emitCompletionHandoff(handle, result);
+    } catch (handoffError) {
+      log.error('Terminal subagent lifecycle handoff failed without changing the task result', {
+        subagentId: handle.subagentId,
+        lifecycleState: result.lifecycleState,
+        error: safeEmitCompletionHandoffError(handoffError),
+      });
+    }
+    handle.settled = true;
     handle.resolveCompletion(cloneSubagentResult(result));
   }
 
@@ -715,7 +728,6 @@ export class SubagentFaculty implements SubagentControlPort {
     error: string,
   ): Promise<void> {
     const sourceContext = this.resolveSourceContext(request);
-    if (!sourceContext) return;
     await this.emitHandoff({
       source: 'subagent',
       taskId: subagentId,
@@ -729,18 +741,18 @@ export class SubagentFaculty implements SubagentControlPort {
       partialResult: false,
       recommendedNextAction: 'Revise the worker request, wait for active workers to clear, or choose a narrower task before notifying any partner.',
       origin: {
-        ...this.originFromSourceContext(sourceContext),
-        sourceChannelId: sourceContext.channelId,
+        ...(sourceContext ? this.originFromSourceContext(sourceContext) : {}),
+        ...(sourceContext ? { sourceChannelId: sourceContext.channelId } : {}),
       },
       dedupeKey: buildCompletionHandoffDedupeKey([
         'subagent',
         subagentId,
         'blocked',
         reason,
-        sourceContext.requestId,
-        sourceContext.turnId,
+        sourceContext?.requestId,
+        sourceContext?.turnId,
       ]),
-    }, sourceContext.channelId);
+    }, sourceContext?.channelId);
   }
 
   private async emitCompletionHandoff(
@@ -748,11 +760,11 @@ export class SubagentFaculty implements SubagentControlPort {
     result: SubagentResult,
   ): Promise<void> {
     const sourceContext = this.resolveSourceContext(handle.request);
-    if (!sourceContext) return;
 
     // mmo9.7.7: key the handoff off the honest terminal outcome + checkpoint. A
-    // cancelled or budget_limited run that captured usable content is a partial
-    // deliverable; a blocked run (or an empty stop) is a non-deliverable.
+    // A cancelled or budget_limited run can still carry a partial deliverable,
+    // but cancellation remains the honest lifecycle status instead of being
+    // collapsed into the generic partial state.
     const checkpointContent = result.partial?.latestCheckpoint.content.trim() ?? '';
     const hasUsableCheckpoint = checkpointContent.length > 0;
     const isPartial = (result.outcome === 'cancelled' || result.outcome === 'budget_limited')
@@ -762,7 +774,7 @@ export class SubagentFaculty implements SubagentControlPort {
       : result.outcome === 'blocked'
         ? 'blocked'
         : result.outcome === 'cancelled'
-          ? (isPartial ? 'partial' : 'cancelled')
+          ? 'cancelled'
           : (isPartial ? 'partial' : 'failed');
     await this.emitHandoff({
       source: 'subagent',
@@ -795,27 +807,70 @@ export class SubagentFaculty implements SubagentControlPort {
         ? 'Review the internal handoff and decide whether to continue, ask a follow-up, or write a companion-authored partner response.'
         : 'Decide whether to retry, narrow the worker task, or surface a companion-authored status after policy review.',
       origin: {
-        ...this.originFromSourceContext(sourceContext),
-        sourceChannelId: sourceContext.channelId,
+        ...(sourceContext ? this.originFromSourceContext(sourceContext) : {}),
+        ...(sourceContext ? { sourceChannelId: sourceContext.channelId } : {}),
       },
       dedupeKey: buildCompletionHandoffDedupeKey([
         'subagent',
         handle.subagentId,
         result.lifecycleState,
         result.stateReason,
-        sourceContext.requestId,
-        sourceContext.turnId,
+        sourceContext?.requestId,
+        sourceContext?.turnId,
       ]),
-    }, sourceContext.channelId);
+    }, sourceContext?.channelId);
   }
 
-  private async emitHandoff(handoff: CompletionHandoffInput, targetChannelId: string): Promise<void> {
+  private async emitLifecycleProgressHandoff(
+    handle: ActiveSubagentHandle,
+    status: 'started' | 'progress',
+    completedTurns: number,
+  ): Promise<void> {
+    const sourceContext = this.resolveSourceContext(handle.request);
+    await this.emitHandoff({
+      source: 'subagent',
+      taskId: handle.subagentId,
+      taskLabel: handle.request.name,
+      subagentId: handle.subagentId,
+      status,
+      resultSummary: status === 'started'
+        ? `Subagent "${handle.request.name}" started.`
+        : `Subagent "${handle.request.name}" completed ${completedTurns} of ${handle.maxTurns} bounded turns.`,
+      outputRefs: [],
+      validationPerformed: [
+        'subagent_lifecycle_nonterminal',
+        ...(status === 'progress' ? [`completed_turns:${completedTurns}`] : []),
+      ],
+      partialResult: status === 'progress',
+      recommendedNextAction: 'Keep the task visible without interrupting the foreground conversation.',
+      origin: {
+        ...(sourceContext ? this.originFromSourceContext(sourceContext) : {}),
+        ...(sourceContext ? { sourceChannelId: sourceContext.channelId } : {}),
+      },
+      dedupeKey: buildCompletionHandoffDedupeKey([
+        'subagent',
+        handle.subagentId,
+        status,
+        String(completedTurns),
+        sourceContext?.requestId,
+        sourceContext?.turnId,
+      ]),
+    }, sourceContext?.channelId, false);
+  }
+
+  private async emitHandoff(
+    handoff: CompletionHandoffInput,
+    targetChannelId?: string,
+    bufferNotice = true,
+  ): Promise<void> {
     try {
       await emitCompletionHandoff({
         eventBus: this.deps.eventBus,
-        targetChannelId,
         handoff,
-        ...(this.deps.completionNotices ? { notices: this.deps.completionNotices } : {}),
+        ...(targetChannelId ? { targetChannelId } : {}),
+        ...(bufferNotice && this.deps.completionNotices
+          ? { notices: this.deps.completionNotices }
+          : {}),
       });
     } catch (error) {
       this.auditTrail?.append('subagent.completion_handoff.failed', {
@@ -823,6 +878,7 @@ export class SubagentFaculty implements SubagentControlPort {
         targetChannelId,
         error: safeEmitCompletionHandoffError(error),
       });
+      throw error;
     }
   }
 

@@ -1490,10 +1490,14 @@ describe('handleMessageForTurn human attention pressure', () => {
       decision: 'boundary_alert' as const,
       reason: 'threshold_reached' as const,
       suppressTurn: false as const,
+      sourceMessageId: 'human-pressure',
+      turnId: '01900000-0000-7000-8000-000000000001',
     }));
     const runtime = createRuntime({
       eventBus: new EventBus(),
-      sessionManager: {} as SessionManager,
+      sessionManager: {
+        resolveSessionChannelId: vi.fn(() => 'logical-session'),
+      } as unknown as SessionManager,
       buildContext,
       scheduleAutoCompactionBetweenTurns: vi.fn(async () => undefined),
       awaitPendingAutoCompaction: vi.fn(async () => undefined),
@@ -1517,6 +1521,8 @@ describe('handleMessageForTurn human attention pressure', () => {
       trustLevel: 'public',
       relationshipType: 'stranger',
       channelContext: 'direct_mention',
+      sourceMessageId: 'human-pressure',
+      turnId: expect.any(String),
     }));
     expect(buildContext.mock.calls[0]?.[1]).toContain('<human_attention_boundary_alert');
     expect(buildContext.mock.calls[0]?.[1]).toContain('in your own voice');

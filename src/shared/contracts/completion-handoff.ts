@@ -12,10 +12,13 @@ export const COMPLETION_HANDOFF_SOURCE_VALUES = [
 export type CompletionHandoffSource = typeof COMPLETION_HANDOFF_SOURCE_VALUES[number];
 
 export const COMPLETION_HANDOFF_STATUS_VALUES = [
+  'started',
+  'progress',
   'completed',
   'blocked',
   'failed',
   'cancelled',
+  'folded_back',
   'partial',
   'interrupted',
 ] as const;

@@ -35,10 +35,18 @@ export interface HumanAttentionPressureEvent {
   decision: HumanAttentionPressureDecision;
   reason: HumanAttentionPressureReason;
   suppressTurn: false;
+  sourceMessageId: string;
+  turnId: string;
   cooldownUntilMs?: number;
 }
 
 export interface HumanAttentionPressureStore {
+  findHumanAttentionPressureEvent(input: {
+    localCompanionId: string;
+    contactId: string;
+    channelId: string;
+    sourceMessageId: string;
+  }): HumanAttentionPressureEvent | null;
   listHumanAttentionPressureEvents(input: {
     localCompanionId: string;
     contactId: string;
@@ -60,6 +68,8 @@ export interface HumanAttentionPressureEvaluationInput {
   relationshipType: RelationshipType;
   channelContext: HumanAttentionChannelContext;
   timestampMs: number;
+  sourceMessageId: string;
+  turnId: string;
 }
 
 function resolveChannelWeight(
@@ -87,6 +97,16 @@ export class DeterministicHumanAttentionPressure implements HumanAttentionPressu
   ) {}
 
   evaluate(input: HumanAttentionPressureEvaluationInput): HumanAttentionPressureEvent {
+    const replayed = this.store.findHumanAttentionPressureEvent({
+      localCompanionId: input.localCompanionId,
+      contactId: input.contactId,
+      channelId: input.channelId,
+      sourceMessageId: input.sourceMessageId,
+    });
+    if (replayed) {
+      return replayed;
+    }
+
     const threshold = resolveThreshold(
       this.config,
       input.trustLevel,
@@ -138,6 +158,8 @@ export class DeterministicHumanAttentionPressure implements HumanAttentionPressu
       decision,
       reason,
       suppressTurn: false,
+      sourceMessageId: input.sourceMessageId,
+      turnId: input.turnId,
       ...(cooldownUntilMs !== undefined && cooldownUntilMs > input.timestampMs
         ? { cooldownUntilMs }
         : {}),

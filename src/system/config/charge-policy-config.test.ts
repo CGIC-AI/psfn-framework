@@ -569,7 +569,43 @@ describe('charge policy config', () => {
             },
           },
         },
-      })).toThrow('humanAttention trust thresholds must increase');
+      })).toThrow('humanAttention trust thresholds must strictly increase');
+
+      expect(() => saveChargePolicyConfig(dataDir, {
+        ...defaultSeed,
+        fatigue: {
+          ...defaultSeed.fatigue,
+          humanAttention: {
+            ...defaultSeed.fatigue.humanAttention,
+            trustThresholds: {
+              public: 3,
+              regular: 6,
+              trusted: 12,
+              primary: 12,
+            },
+          },
+        },
+      })).toThrow('humanAttention trust thresholds must strictly increase');
+
+      expect(() => saveChargePolicyConfig(dataDir, {
+        ...defaultSeed,
+        fatigue: {
+          ...defaultSeed.fatigue,
+          humanAttention: {
+            ...defaultSeed.fatigue.humanAttention,
+            trustThresholds: {
+              public: 1,
+              regular: 2,
+              trusted: 3,
+              primary: 4,
+            },
+            channelWeights: {
+              ...defaultSeed.fatigue.humanAttention.channelWeights,
+              directMention: 4,
+            },
+          },
+        },
+      })).toThrow('primary threshold must exceed every single-message channel weight');
 
       expect(() => saveChargePolicyConfig(dataDir, {
         ...defaultSeed,

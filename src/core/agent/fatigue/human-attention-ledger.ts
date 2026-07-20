@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import { appendJsonLine } from '../../../persistence/jsonl.js';
 import type { EventBus } from '../../../shared/event-bus.js';
+import { assertNoUnknownKeys } from '../../../shared/utils/types.js';
 import type {
   HumanAttentionPressureDecision,
   HumanAttentionPressureEvent,
@@ -32,14 +33,65 @@ export interface HumanAttentionPressureLedgerData {
   events: HumanAttentionPressureLedgerEntry[];
 }
 
+const HUMAN_ATTENTION_EVENT_KEYS = [
+  'schemaVersion',
+  'timestampMs',
+  'localCompanionId',
+  'contactId',
+  'channelId',
+  'trustLevel',
+  'relationshipType',
+  'channelContext',
+  'weight',
+  'pressureInWindow',
+  'threshold',
+  'decision',
+  'reason',
+  'suppressTurn',
+  'sourceMessageId',
+  'turnId',
+  'cooldownUntilMs',
+] as const;
+
+const HUMAN_ATTENTION_ENTRY_KEYS = [
+  'schemaVersion',
+  'recordType',
+  'eventId',
+  'recordedAtMs',
+  'event',
+] as const;
+
 function cloneEvent(event: HumanAttentionPressureEvent): HumanAttentionPressureEvent {
-  return { ...event };
+  return {
+    schemaVersion: 1,
+    timestampMs: event.timestampMs,
+    localCompanionId: event.localCompanionId,
+    contactId: event.contactId,
+    channelId: event.channelId,
+    trustLevel: event.trustLevel,
+    relationshipType: event.relationshipType,
+    channelContext: event.channelContext,
+    weight: event.weight,
+    pressureInWindow: event.pressureInWindow,
+    threshold: event.threshold,
+    decision: event.decision,
+    reason: event.reason,
+    suppressTurn: false,
+    sourceMessageId: event.sourceMessageId,
+    turnId: event.turnId,
+    ...(event.cooldownUntilMs !== undefined
+      ? { cooldownUntilMs: event.cooldownUntilMs }
+      : {}),
+  };
 }
 
 function assertEvent(value: unknown, lineNumber: number): asserts value is HumanAttentionPressureEvent {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     throw new Error(`Invalid human attention ledger entry at line ${lineNumber}: missing event`);
   }
+  assertNoUnknownKeys(value, HUMAN_ATTENTION_EVENT_KEYS, 'event', {
+    errorPrefix: `Invalid human attention ledger entry at line ${lineNumber}`,
+  });
   const event = value as Partial<HumanAttentionPressureEvent>;
   if (
     event.schemaVersion !== 1
@@ -73,6 +125,14 @@ function assertEvent(value: unknown, lineNumber: number): asserts value is Human
       'policy_disabled',
     ].includes(event.reason ?? '')
     || event.suppressTurn !== false
+    || typeof event.sourceMessageId !== 'string'
+    || !event.sourceMessageId.trim()
+    || typeof event.turnId !== 'string'
+    || !event.turnId.trim()
+    || (
+      event.cooldownUntilMs !== undefined
+      && (typeof event.cooldownUntilMs !== 'number' || !Number.isFinite(event.cooldownUntilMs))
+    )
   ) {
     throw new Error(`Invalid human attention ledger entry at line ${lineNumber}: malformed event`);
   }
@@ -85,6 +145,9 @@ function assertEntry(
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     throw new Error(`Invalid human attention ledger entry at line ${lineNumber}: expected object`);
   }
+  assertNoUnknownKeys(value as Record<string, unknown>, HUMAN_ATTENTION_ENTRY_KEYS, 'entry', {
+    errorPrefix: `Invalid human attention ledger entry at line ${lineNumber}`,
+  });
   const entry = value as Partial<HumanAttentionPressureLedgerEntry>;
   if (
     entry.schemaVersion !== 1
@@ -160,6 +223,21 @@ export class HumanAttentionPressureLedger implements HumanAttentionPressureStore
     };
     appendJsonLine(this.path, entry);
     this.entries.push(entry);
+  }
+
+  findHumanAttentionPressureEvent(input: {
+    localCompanionId: string;
+    contactId: string;
+    channelId: string;
+    sourceMessageId: string;
+  }): HumanAttentionPressureEvent | null {
+    const entry = this.entries.find(candidate => (
+      candidate.event.localCompanionId === input.localCompanionId
+      && candidate.event.contactId === input.contactId
+      && candidate.event.channelId === input.channelId
+      && candidate.event.sourceMessageId === input.sourceMessageId
+    ));
+    return entry ? cloneEvent(entry.event) : null;
   }
 
   listHumanAttentionPressureEvents(input: {

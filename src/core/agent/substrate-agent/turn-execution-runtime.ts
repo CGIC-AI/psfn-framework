@@ -203,6 +203,7 @@ function evaluateHumanAttentionPressure(input: {
   turnSessionIdentity: TurnSessionIdentity;
   authorContext: ResolvedAuthorContext;
   timestampMs: number;
+  turnId: string;
 }): HumanAttentionPressureEvent | null {
   if (!input.runtime.humanAttentionPressure || input.authorContext.actorKind !== 'human') {
     return null;
@@ -221,11 +222,13 @@ function evaluateHumanAttentionPressure(input: {
   return input.runtime.humanAttentionPressure.evaluate({
     localCompanionId: resolveCompanionIdFromConfig(input.runtime.config),
     contactId,
-    channelId: input.turnSessionIdentity.logicalSessionId,
+    channelId: input.turnSessionIdentity.sourceChannelId,
     trustLevel: input.authorContext.trustLevel,
     relationshipType: input.authorContext.relationshipType ?? 'stranger',
     channelContext,
     timestampMs: input.timestampMs,
+    sourceMessageId: input.message.id,
+    turnId: input.turnId,
   });
 }
 
@@ -673,6 +676,7 @@ export async function handleMessageForTurn(
           turnSessionIdentity,
           authorContext,
           timestampMs: startTime,
+          turnId,
         });
     if (fatigueDecision) {
       if (message.routing?.icpCorrelation) {

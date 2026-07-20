@@ -35,6 +35,20 @@ const POLICY: HumanAttentionPressureConfig = {
 class MemoryStore implements HumanAttentionPressureStore {
   readonly events: HumanAttentionPressureEvent[] = [];
 
+  findHumanAttentionPressureEvent(input: {
+    localCompanionId: string;
+    contactId: string;
+    channelId: string;
+    sourceMessageId: string;
+  }): HumanAttentionPressureEvent | null {
+    return this.events.find(event => (
+      event.localCompanionId === input.localCompanionId
+      && event.contactId === input.contactId
+      && event.channelId === input.channelId
+      && event.sourceMessageId === input.sourceMessageId
+    )) ?? null;
+  }
+
   listHumanAttentionPressureEvents(input: {
     localCompanionId: string;
     contactId: string;
@@ -66,6 +80,8 @@ function evaluate(
     relationshipType: 'stranger',
     channelContext: 'direct_mention',
     timestampMs: 1_000_000,
+    sourceMessageId: `message-${overrides.timestampMs ?? 1_000_000}`,
+    turnId: `turn-${overrides.timestampMs ?? 1_000_000}`,
     ...overrides,
   });
 }
@@ -117,6 +133,34 @@ describe('DeterministicHumanAttentionPressure', () => {
       channelId: 'group-b',
       timestampMs: 1_004_000,
     }).decision).toBe('clear');
+  });
+
+  it('returns the original decision without scoring a replayed source message twice', () => {
+    const store = new MemoryStore();
+    const pressure = new DeterministicHumanAttentionPressure(store, POLICY);
+
+    const original = evaluate(pressure, {
+      sourceMessageId: 'discord-message-1',
+      turnId: 'turn-original',
+    });
+    const replay = evaluate(pressure, {
+      timestampMs: 1_100_000,
+      sourceMessageId: 'discord-message-1',
+      turnId: 'turn-replay',
+    });
+    const differentContact = evaluate(pressure, {
+      contactId: 'other-human',
+      timestampMs: 1_100_001,
+      sourceMessageId: 'discord-message-1',
+      turnId: 'turn-other-contact',
+    });
+
+    expect(replay).toEqual(original);
+    expect(differentContact).toMatchObject({
+      contactId: 'other-human',
+      turnId: 'turn-other-contact',
+    });
+    expect(store.events).toHaveLength(2);
   });
 
   it('honors a boundary cooldown that is longer than the pressure window', () => {

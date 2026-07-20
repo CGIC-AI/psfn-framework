@@ -547,12 +547,12 @@ function parseHumanAttentionPressureConfig(
     parsePositiveInteger,
   );
   if (
-    trustThresholds.public > trustThresholds.regular
-    || trustThresholds.regular > trustThresholds.trusted
-    || trustThresholds.trusted > trustThresholds.primary
+    trustThresholds.public >= trustThresholds.regular
+    || trustThresholds.regular >= trustThresholds.trusted
+    || trustThresholds.trusted >= trustThresholds.primary
   ) {
     throw new Error(
-      `Invalid charge policy: ${fieldPath} trust thresholds must increase from public through primary`,
+      `Invalid charge policy: ${fieldPath} trust thresholds must strictly increase from public through primary`,
     );
   }
   const relationshipToleranceBonus = parseFixedObjectMap(
@@ -570,6 +570,26 @@ function parseHumanAttentionPressureConfig(
     `${fieldPath}.channelWeights`,
   );
 
+  const channelWeights = {
+    directMessage: parsePositiveNumber(
+      raw.channelWeights.directMessage,
+      `${fieldPath}.channelWeights.directMessage`,
+    ),
+    directMention: parsePositiveNumber(
+      raw.channelWeights.directMention,
+      `${fieldPath}.channelWeights.directMention`,
+    ),
+    ambientGroupMessage: parseNonNegativeNumber(
+      raw.channelWeights.ambientGroupMessage,
+      `${fieldPath}.channelWeights.ambientGroupMessage`,
+    ),
+  };
+  if (trustThresholds.primary <= Math.max(...Object.values(channelWeights))) {
+    throw new Error(
+      `Invalid charge policy: ${fieldPath} primary threshold must exceed every single-message channel weight`,
+    );
+  }
+
   return {
     enabled: parseBoolean(raw.enabled, `${fieldPath}.enabled`),
     windowMs: parsePositiveInteger(raw.windowMs, `${fieldPath}.windowMs`),
@@ -579,20 +599,7 @@ function parseHumanAttentionPressureConfig(
     ),
     trustThresholds,
     relationshipToleranceBonus,
-    channelWeights: {
-      directMessage: parsePositiveNumber(
-        raw.channelWeights.directMessage,
-        `${fieldPath}.channelWeights.directMessage`,
-      ),
-      directMention: parsePositiveNumber(
-        raw.channelWeights.directMention,
-        `${fieldPath}.channelWeights.directMention`,
-      ),
-      ambientGroupMessage: parseNonNegativeNumber(
-        raw.channelWeights.ambientGroupMessage,
-        `${fieldPath}.channelWeights.ambientGroupMessage`,
-      ),
-    },
+    channelWeights,
   };
 }
 

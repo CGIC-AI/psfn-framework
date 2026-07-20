@@ -633,6 +633,14 @@ export class ShardManager implements ShardExecutionPort {
     let shardPostgresPrepared = false;
     let executionFailure: Error | undefined;
     try {
+      await this.emitShardLifecycleProgressHandoff({
+        shardId,
+        shardConfig,
+        lineage,
+        status: 'started',
+        completedTurns: 0,
+        maxTurns,
+      });
       // 2h6q.3: register the authenticated workload generation (with its
       // frozen derived access) before any execution, inside the try so a
       // registration failure releases the shard instead of leaking it. The
@@ -813,6 +821,14 @@ export class ShardManager implements ShardExecutionPort {
         lastContent = response.content;
         turns++;
         this.touchShardHeartbeat(shardId);
+        await this.emitShardLifecycleProgressHandoff({
+          shardId,
+          shardConfig,
+          lineage,
+          status: 'progress',
+          completedTurns: turns,
+          maxTurns,
+        });
 
         // Shards are ephemeral and intentionally do not own a durable post-turn
         // worker. For a bounded multi-turn shard, the manager therefore owns
@@ -870,11 +886,18 @@ export class ShardManager implements ShardExecutionPort {
         health: result.health,
         capabilityGrant: capabilityGrantEvidence,
       });
-      await this.emitShardCompletionHandoff({
-        shardConfig,
-        channelId,
-        result,
-      });
+      try {
+        await this.emitShardCompletionHandoff({
+          shardConfig,
+          channelId,
+          result,
+        });
+      } catch (handoffError) {
+        log.error('Completed shard lifecycle handoff failed without changing the shard result', {
+          shardId,
+          error: safeEmitCompletionHandoffError(handoffError),
+        });
+      }
       return result;
     } catch (error) {
       const msg = toErrorMessage(error);
@@ -887,13 +910,20 @@ export class ShardManager implements ShardExecutionPort {
         error: msg,
         capabilityGrant: capabilityGrantEvidence,
       });
-      await this.emitShardFailureHandoff({
-        shardId,
-        channelId,
-        shardConfig,
-        lineage,
-        error: msg,
-      });
+      try {
+        await this.emitShardFailureHandoff({
+          shardId,
+          channelId,
+          shardConfig,
+          lineage,
+          error: msg,
+        });
+      } catch (handoffError) {
+        log.error('Failed shard lifecycle handoff could not be recorded', {
+          shardId,
+          error: safeEmitCompletionHandoffError(handoffError),
+        });
+      }
       executionFailure = new Error(
         `Shard "${shardConfig.name}" failed (execution_failed): ${msg}`,
         { cause: error },
@@ -1105,17 +1135,57 @@ export class ShardManager implements ShardExecutionPort {
     }, input.shardConfig.sourceContext?.channelId);
   }
 
+  private async emitShardLifecycleProgressHandoff(input: {
+    shardId: string;
+    shardConfig: ShardConfig;
+    lineage: ShardResult['lineage'];
+    status: 'started' | 'progress';
+    completedTurns: number;
+    maxTurns: number;
+  }): Promise<void> {
+    await this.emitShardHandoff({
+      source: 'shard',
+      taskId: input.shardId,
+      taskLabel: input.shardConfig.name,
+      shardId: input.shardId,
+      status: input.status,
+      resultSummary: input.status === 'started'
+        ? `Shard "${input.shardConfig.name}" started.`
+        : `Shard "${input.shardConfig.name}" completed ${input.completedTurns} of ${input.maxTurns} bounded turns.`,
+      outputRefs: [
+        { kind: 'lineage', ref: input.lineage.shardId, label: input.lineage.kind },
+      ],
+      validationPerformed: [
+        'shard_lifecycle_nonterminal',
+        ...(input.status === 'progress' ? [`completed_turns:${input.completedTurns}`] : []),
+      ],
+      partialResult: input.status === 'progress',
+      recommendedNextAction: 'Keep the task visible without interrupting the foreground conversation.',
+      origin: this.originFromShardConfig(input.shardConfig),
+      dedupeKey: buildCompletionHandoffDedupeKey([
+        'shard',
+        input.shardId,
+        input.status,
+        String(input.completedTurns),
+        input.shardConfig.sourceContext?.requestId,
+        input.shardConfig.sourceContext?.turnId,
+      ]),
+    }, input.shardConfig.sourceContext?.channelId, false);
+  }
+
   private async emitShardHandoff(
     handoff: CompletionHandoffInput,
     targetChannelId: string | undefined,
+    bufferNotice = true,
   ): Promise<void> {
-    if (!targetChannelId?.trim()) return;
     try {
       await emitCompletionHandoff({
         eventBus: this.deps.eventBus,
-        targetChannelId,
         handoff,
-        ...(this.deps.completionNotices ? { notices: this.deps.completionNotices } : {}),
+        ...(targetChannelId?.trim() ? { targetChannelId } : {}),
+        ...(bufferNotice && this.deps.completionNotices
+          ? { notices: this.deps.completionNotices }
+          : {}),
       });
     } catch (error) {
       this.auditTrail?.append('shard.completion_handoff.failed', {
@@ -1123,6 +1193,7 @@ export class ShardManager implements ShardExecutionPort {
         targetChannelId,
         error: safeEmitCompletionHandoffError(error),
       });
+      throw error;
     }
   }
 
@@ -1156,7 +1227,48 @@ export class ShardManager implements ShardExecutionPort {
   }
 
   async resolveFoldReview(params: ShardFoldReviewResolveParams): Promise<ShardFoldReviewRecord | null> {
-    return await this.requireFoldReviewController().resolveFoldReview(params);
+    const controller = this.requireFoldReviewController();
+    const review = await controller.resolveFoldReview(params);
+    if (review?.reviewState === 'approved') {
+      const sourceContext = review.lineage.sourceContext;
+      await this.emitShardHandoff({
+        source: 'shard',
+        taskId: review.shardId,
+        taskLabel: review.task,
+        shardId: review.shardId,
+        status: 'folded_back',
+        resultSummary: 'Approved shard outputs were folded back through operator review.',
+        outputRefs: [
+          { kind: 'fold_review', ref: review.validationPath, label: 'approved' },
+        ],
+        validationPerformed: ['shard_fold_review', 'operator_approved'],
+        partialResult: false,
+        recommendedNextAction: 'Review the approved folded-back outputs and continue in the companion’s own voice.',
+        origin: {
+          ...(sourceContext?.channelId
+            ? { sourceChannelId: sourceContext.channelId }
+            : {}),
+          ...(sourceContext?.requestId
+            ? {
+                requestId: sourceContext.requestId,
+                sourceMessageId: sourceContext.requestId,
+              }
+            : {}),
+          ...(sourceContext?.turnId
+            ? {
+                turnId: sourceContext.turnId,
+                originatingTaskId: sourceContext.turnId,
+              }
+            : {}),
+        },
+        dedupeKey: buildCompletionHandoffDedupeKey([
+          'shard',
+          review.shardId,
+          'folded_back',
+        ]),
+      }, sourceContext?.channelId);
+    }
+    return review;
   }
 
   private resolveHeartbeatStaleAfterMs(value: number | undefined): number {

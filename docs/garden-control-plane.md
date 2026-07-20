@@ -224,11 +224,21 @@ a `member` with the same contact binding would):
 
 - **Sessions** (`GET /api/admin/sessions*`, the `/sessions` page): served by
   the subject-bound session projection inside `AdminSessionDataService`. A
-  fleet principal sees only sessions whose resolved linked contact is their
-  own contact binding; other subjects' sessions surface as not-found. The
-  service also re-asserts the Invariant 11 companion scope against its bound
-  companion, so a context admitted for companion A can never read companion
-  B's session stores even if a dispatch gate were bypassed.
+  fleet principal sees only sessions with a STABLE attribution to their own
+  contact binding — a persisted conversation-channel or identity-link match
+  (`getStableLinkedContactForSession`), never the mutable last-entry-author
+  heuristic — and any journal with more than one distinct non-companion
+  author identity (rooms, group DMs) is invisible fail-closed. Other
+  subjects' sessions surface as not-found. Loom/turn reads additionally
+  viewer-filter every globally resolved subsystem datum: memory writes and
+  snapshot memory candidates require a current single-contact subject
+  classification naming the viewer, concern deltas require a matching
+  contactId, contact deltas must be the viewer's own row, and categories
+  without per-item attribution (contact profile artifact, episodic chains)
+  are dropped from fleet reads entirely. The service also re-asserts the
+  Invariant 11 companion scope against its bound companion, so a context
+  admitted for companion A can never read companion B's session stores even
+  if a dispatch gate were bypassed.
 - **Memory** (`/api/admin/memory*`, the `/memory` page): served through the
   subject-authorized memory store (`createSubjectAuthorizedMemoryStore`).
 - **Episodic memory** (`GET /api/admin/episodic-memory/*`, the

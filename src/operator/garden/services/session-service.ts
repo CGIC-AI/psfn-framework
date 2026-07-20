@@ -31,7 +31,11 @@ import {
   toOperatorVisibleCogSecEvent,
 } from '../../../core/cogsec/safe-log.js';
 import type { MemoryStorePort } from '../../../faculties/memory/memory-store-port.js';
-import { sanitizeObservedMemory, type ObservedMemory } from '../../../core/turns/observability.js';
+import {
+  sanitizeObservedMemory,
+  type ObservedMemory,
+  type TurnMemorySnapshotRecord,
+} from '../../../core/turns/observability.js';
 import {
   resolveTurnRecordMemoryCandidates,
   collectTurnRecordMemoryRefIds,
@@ -61,6 +65,7 @@ import type {
   AdminSessionRouteListData,
   AdminSessionRouteResetData,
   AdminSessionRouteResetInput,
+  AdminPromptLoomSubsystemOutputsData,
   AdminSessionMessageOntologyView,
   AdminSessionMessagePaginationOptions,
   AdminSessionDetailData,
@@ -83,7 +88,10 @@ import type {
   FleetGardenRequestContext,
   GardenRequestContext,
 } from '../garden-request-context.js';
-import { getLinkedContactForSession } from './contact-session-linker.js';
+import {
+  getLinkedContactForSession,
+  getStableLinkedContactForSession,
+} from './contact-session-linker.js';
 import {
   AdminSessionTurnObservabilityStore,
   resolvePromptLoomSubsystemOutputs,
@@ -568,21 +576,27 @@ export class AdminSessionDataService implements AdminSessionService {
     }
   }
 
-  private async resolveLinkedContactForRow(row: AdminSessionListRow, contacts: Contact[]) {
-    return await getLinkedContactForSession({
+  /**
+   * Stable-attribution resolver for fleet AUTHORIZATION decisions. Never
+   * consults the mutable last-entry-author heuristic (a participant in a
+   * multi-author channel could regain visibility at will by posting last)
+   * and fails closed on multi-participant journals. Display paths for the
+   * legacy operator Garden keep the heuristic resolver.
+   */
+  private resolveStableLinkedContactForRow(row: AdminSessionListRow, contacts: Contact[]) {
+    return getStableLinkedContactForSession({
       sessionId: row.sessionId,
       channelId: row.channelId,
       contacts,
       sessionStore: this.deps.sessionStore,
-      contactStore: this.deps.contactStore,
     });
   }
 
   /**
-   * The rows a fleet principal may see: sessions whose resolved linked
-   * contact IS the principal's authenticated contact binding. Sessions with
-   * no resolvable linked contact (rooms, system lanes, ambiguous attribution)
-   * are excluded fail-closed.
+   * The rows a fleet principal may see: sessions whose STABLE linked contact
+   * (persisted conversation channel or identity link, single-author journal)
+   * IS the principal's authenticated contact binding. Rooms, group DMs,
+   * system lanes, and ambiguous attribution are excluded fail-closed.
    */
   private async listSubjectBoundSessionRows(
     fleet: FleetGardenRequestContext,
@@ -591,7 +605,7 @@ export class AdminSessionDataService implements AdminSessionService {
     if (contacts.length === 0) return [];
     const rows: AdminSessionListRow[] = [];
     for (const row of this.listSessionRows()) {
-      const linkedContact = await this.resolveLinkedContactForRow(row, contacts);
+      const linkedContact = this.resolveStableLinkedContactForRow(row, contacts);
       if (linkedContact?.id === fleet.actor.contactId) rows.push(row);
     }
     return rows;
@@ -612,7 +626,7 @@ export class AdminSessionDataService implements AdminSessionService {
     if (!row) throw new AdminSessionNotFoundError(sessionId);
     const contacts = this.deps.contactStore ? await this.deps.contactStore.listAll() : [];
     const linkedContact = contacts.length > 0
-      ? await this.resolveLinkedContactForRow(row, contacts)
+      ? this.resolveStableLinkedContactForRow(row, contacts)
       : undefined;
     if (!linkedContact || linkedContact.id !== fleet.actor.contactId) {
       throw new AdminSessionNotFoundError(sessionId);
@@ -633,6 +647,22 @@ export class AdminSessionDataService implements AdminSessionService {
     if (!channel) throw new AdminSessionNotFoundError(sessionId);
 
     const contacts = this.deps.contactStore ? await this.deps.contactStore.listAll() : [];
+    if (fleet) {
+      // Authorization keys on STABLE attribution only; the heuristic display
+      // resolver below must never decide fleet visibility.
+      const stableContact = this.resolveStableLinkedContactForRow(channel, contacts);
+      if (!stableContact || stableContact.id !== fleet.actor.contactId) {
+        throw new AdminSessionNotFoundError(sessionId);
+      }
+      return {
+        channel: {
+          ...channel,
+          linkedContactId: stableContact.id,
+          linkedContactName: stableContact.displayName,
+        },
+      };
+    }
+
     const linkedContact = await getLinkedContactForSession({
       sessionId: channel.sessionId,
       channelId: channel.channelId,
@@ -640,9 +670,6 @@ export class AdminSessionDataService implements AdminSessionService {
       sessionStore: this.deps.sessionStore,
       contactStore: this.deps.contactStore,
     });
-    if (fleet && linkedContact?.id !== fleet.actor.contactId) {
-      throw new AdminSessionNotFoundError(sessionId);
-    }
     return {
       channel: linkedContact
         ? {
@@ -860,10 +887,14 @@ export class AdminSessionDataService implements AdminSessionService {
     options: AdminSessionMessagePaginationOptions = {},
     context?: GardenRequestContext,
   ): Promise<AdminSessionMessagesData> {
-    await this.assertSubjectBoundSessionVisible(this.subjectBoundFleetContext(context), sessionId);
+    const fleet = this.subjectBoundFleetContext(context);
+    await this.assertSubjectBoundSessionVisible(fleet, sessionId);
     const beforeId = normalizeBeforeId(options.beforeId);
     if (beforeId !== null) {
-      return await this.getSessionMessages(sessionId, options);
+      // Forward the request context: the canonical reader re-runs the fleet
+      // gate and applies the same viewer-scoped Loom filtering, so cursor
+      // pages can never widen what the first page was allowed to show.
+      return await this.getSessionMessages(sessionId, options, context);
     }
 
     const pageLimit = normalizePageLimit(options.limit);
@@ -875,7 +906,7 @@ export class AdminSessionDataService implements AdminSessionService {
     const authenticatedMessages = tailMessages
       ? mergeAuthenticatedJournalWithSessionTail(authenticatedJournalMessages, tailMessages).slice(-pageLimit)
       : authenticatedJournalMessages;
-    return await this.buildSessionMessages(sessionId, options, authenticatedMessages);
+    return await this.buildSessionMessages(sessionId, options, authenticatedMessages, fleet?.actor.contactId);
   }
 
   async getSessionMessages(
@@ -883,8 +914,9 @@ export class AdminSessionDataService implements AdminSessionService {
     options: AdminSessionMessagePaginationOptions = {},
     context?: GardenRequestContext,
   ): Promise<AdminSessionMessagesData> {
-    await this.assertSubjectBoundSessionVisible(this.subjectBoundFleetContext(context), sessionId);
-    return await this.buildSessionMessages(sessionId, options);
+    const fleet = this.subjectBoundFleetContext(context);
+    await this.assertSubjectBoundSessionVisible(fleet, sessionId);
+    return await this.buildSessionMessages(sessionId, options, undefined, fleet?.actor.contactId);
   }
 
   /**
@@ -925,7 +957,105 @@ export class AdminSessionDataService implements AdminSessionService {
     return records.map(record => resolveTurnRecordMemoryCandidates(record, resolve));
   }
 
-  private async buildResolvedTurnData(record: TurnRecord): Promise<AdminSessionTurnData> {
+  /**
+   * Fleet Loom viewer filter (88u3): decides whether one memory id may appear
+   * in a fleet principal's Loom view. Attribution must be PROVEN — a current
+   * single-contact subject classification naming exactly the viewer — and
+   * anything else (missing store, missing/stale/ambiguous classification,
+   * foreign subject) is dropped fail-closed. Lookups run through the
+   * service's memory store, so subject-scoped store wrappers further narrow,
+   * never widen, what resolves. Decisions are memoised per read call.
+   */
+  private createFleetMemoryVisibilityChecker(
+    viewerContactId: string,
+  ): (memoryId: string) => Promise<boolean> {
+    const memoryStore = this.deps.memoryStore;
+    const cache = new Map<string, Promise<boolean>>();
+    return (memoryId: string) => {
+      const normalized = memoryId.trim();
+      if (!normalized || !memoryStore) return Promise.resolve(false);
+      const cached = cache.get(normalized);
+      if (cached) return cached;
+      const decision = (async () => {
+        const classification = await memoryStore.getMemorySubjectClassification(normalized);
+        return Boolean(classification
+          && classification.status === 'current'
+          && classification.subjectClass === 'single_contact'
+          && classification.subjectContactIds.length === 1
+          && classification.subjectContactIds[0] === viewerContactId);
+      })();
+      cache.set(normalized, decision);
+      return decision;
+    };
+  }
+
+  /**
+   * Viewer-filter the globally resolved subsystem outputs for a fleet read:
+   * memory writes require a proven viewer subject classification, concern
+   * deltas require a matching contactId (unattributed concerns drop), and
+   * contact deltas must be the viewer's own contact row. Unresolved/missing
+   * entries drop too — a fleet Loom never carries foreign or unattributable
+   * global-store data.
+   */
+  private async filterSubsystemOutputsForFleetViewer(
+    outputs: AdminPromptLoomSubsystemOutputsData,
+    viewerContactId: string,
+    isViewerMemory: (memoryId: string) => Promise<boolean>,
+  ): Promise<AdminPromptLoomSubsystemOutputsData> {
+    const memoryDecisions = await Promise.all(outputs.memoryWrites.map(async entry => (
+      entry.status === 'resolved' && entry.value !== undefined
+        ? await isViewerMemory(entry.value.id)
+        : false
+    )));
+    return {
+      ...outputs,
+      memoryWrites: outputs.memoryWrites.filter((_, index) => memoryDecisions[index] === true),
+      concernDeltas: outputs.concernDeltas.filter(entry => (
+        entry.status === 'resolved' && entry.value?.contactId === viewerContactId
+      )),
+      contactDeltas: outputs.contactDeltas.filter(entry => (
+        entry.status === 'resolved' && entry.value?.id === viewerContactId
+      )),
+    };
+  }
+
+  /**
+   * Scrub the turn snapshot's memory candidate lists for a fleet read. This
+   * covers both ref-resolved candidates (repopulated from the live memory
+   * store) and legacy fat records with embedded memories: every item must
+   * pass the viewer subject-classification check. Categories with no clean
+   * per-item attribution (contact profile artifact, episodic chains) are
+   * dropped entirely for fleet reads.
+   */
+  private async scrubTurnDataForFleetViewer(
+    turn: AdminSessionTurnData,
+    isViewerMemory: (memoryId: string) => Promise<boolean>,
+  ): Promise<AdminSessionTurnData> {
+    const snapshot = turn.snapshot;
+    if (!snapshot?.memory) return turn;
+    const filterObserved = async <T extends { id: string }>(items: readonly T[]): Promise<T[]> => {
+      const decisions = await Promise.all(items.map(item => isViewerMemory(item.id)));
+      return items.filter((_, index) => decisions[index] === true);
+    };
+    const {
+      profile: _profile,
+      episodicChains: _episodicChains,
+      ...memoryRest
+    } = snapshot.memory;
+    const scrubbedMemory: TurnMemorySnapshotRecord = {
+      ...memoryRest,
+      contactEmotionalMemories: await filterObserved(snapshot.memory.contactEmotionalMemories),
+      semanticCandidates: await filterObserved(snapshot.memory.semanticCandidates),
+      lexicalCandidates: await filterObserved(snapshot.memory.lexicalCandidates),
+      proactiveCandidates: await filterObserved(snapshot.memory.proactiveCandidates),
+    };
+    return { ...turn, snapshot: { ...snapshot, memory: scrubbedMemory } };
+  }
+
+  private async buildResolvedTurnData(
+    record: TurnRecord,
+    fleetViewerContactId?: string,
+  ): Promise<AdminSessionTurnData> {
     const expansion = await this.expandTurnSubsystemOutputRefs(record);
     const effectiveRecord = expansion.record;
     const subsystemOutputs = await resolvePromptLoomSubsystemOutputs(effectiveRecord, {
@@ -934,7 +1064,17 @@ export class AdminSessionDataService implements AdminSessionService {
       contactStore: this.deps.contactStore,
       projectionStatus: expansion.projectionStatus,
     });
-    return this.turnObservability.buildTurnData(effectiveRecord, subsystemOutputs);
+    if (fleetViewerContactId === undefined) {
+      return this.turnObservability.buildTurnData(effectiveRecord, subsystemOutputs);
+    }
+    const isViewerMemory = this.createFleetMemoryVisibilityChecker(fleetViewerContactId);
+    const scopedOutputs = await this.filterSubsystemOutputsForFleetViewer(
+      subsystemOutputs,
+      fleetViewerContactId,
+      isViewerMemory,
+    );
+    const turn = this.turnObservability.buildTurnData(effectiveRecord, scopedOutputs);
+    return await this.scrubTurnDataForFleetViewer(turn, isViewerMemory);
   }
 
   private async expandTurnSubsystemOutputRefs(record: TurnRecord): Promise<{
@@ -995,6 +1135,7 @@ export class AdminSessionDataService implements AdminSessionService {
     sessionId: string,
     options: AdminSessionMessagePaginationOptions,
     firstPageMessages?: readonly SessionEntry[],
+    fleetViewerContactId?: string,
   ): Promise<AdminSessionMessagesData> {
     const limit = normalizePageLimit(options.limit);
     const beforeId = normalizeBeforeId(options.beforeId);
@@ -1037,7 +1178,7 @@ export class AdminSessionDataService implements AdminSessionService {
       )
       : [];
     const turns = await Promise.all(turnRecords.map(async (record) => {
-      const turnData = await this.buildResolvedTurnData(record);
+      const turnData = await this.buildResolvedTurnData(record, fleetViewerContactId);
       return {
         ...turnData,
         continuityProvenance: buildContinuityProvenanceViews(
@@ -1087,7 +1228,8 @@ export class AdminSessionDataService implements AdminSessionService {
     turnId: string,
     context?: GardenRequestContext,
   ): Promise<AdminSessionTurnDetailData> {
-    await this.assertSubjectBoundSessionVisible(this.subjectBoundFleetContext(context), sessionId);
+    const fleet = this.subjectBoundFleetContext(context);
+    await this.assertSubjectBoundSessionVisible(fleet, sessionId);
     const normalizedTurnId = turnId.trim();
     if (!normalizedTurnId) {
       throw new AdminSessionTurnNotFoundError(sessionId, turnId);
@@ -1104,7 +1246,7 @@ export class AdminSessionDataService implements AdminSessionService {
     const currentVisibility: ChannelPrivacy = decodeStoredChannelVisibility(recentEntry?.channelVisibility)
       ?? classifyChannelDisclosure(record.channelId).channelPrivacy;
     const [resolvedRecord] = await this.resolveTurnRecordMemoryRefs([record]);
-    const turnData = await this.buildResolvedTurnData(resolvedRecord!);
+    const turnData = await this.buildResolvedTurnData(resolvedRecord!, fleet?.actor.contactId);
     const turn: AdminSessionTurnData = {
       ...turnData,
       continuityProvenance: buildContinuityProvenanceViews(

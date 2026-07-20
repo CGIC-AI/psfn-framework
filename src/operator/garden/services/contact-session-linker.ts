@@ -182,6 +182,80 @@ function sessionMatchesIdentity(
   return normalizedSession.startsWith(`${normalizedChannel}:`) && normalizedSession.endsWith(`:${normalizedUserId}`);
 }
 
+/**
+ * Stable-attribution session→contact resolution for the fleet subject-bound
+ * session projection (88u3). Unlike {@link getLinkedContactForSession}, this
+ * MUST NOT consult the mutable last-entry-author heuristic: in a
+ * multi-participant channel that heuristic attributes the session to whoever
+ * posted last, which would let any participant claim the whole transcript by
+ * posting a message. Authorization therefore only accepts:
+ *
+ * - a persisted conversation-channel binding, or an identity-link match — both
+ *   stable, persisted attributions; and
+ * - a journal with at most ONE distinct non-companion author identity. A
+ *   session with two or more distinct author identities (rooms, group DMs) is
+ *   unattributable to a single subject and resolves to undefined, fail closed.
+ * - when the journal's sole author identity is resolvable for the channel
+ *   type, it must belong to the matched contact's identity links (when any
+ *   exist for that type): a persisted channel binding cannot claim another
+ *   author's words.
+ *
+ * Display/decoration paths may keep the heuristic resolver; this one is for
+ * authorization decisions.
+ */
+export function getStableLinkedContactForSession(options: {
+  sessionId?: string;
+  channelId: string;
+  contacts: Contact[];
+  sessionStore: SessionStore;
+}): Contact | undefined {
+  const { channelId, contacts, sessionStore } = options;
+  if (contacts.length === 0) return undefined;
+
+  let matched: Contact | undefined;
+  for (const contact of contacts) {
+    const stableMatch = getPersistedConversationChannels(contact)
+      .some(entry => sessionMatchesConversationChannel(channelId, entry))
+      || getContactIdentityLinks(contact)
+        .some(identity => sessionMatchesIdentity(channelId, identity));
+    if (!stableMatch) continue;
+    if (matched && matched.id !== contact.id) {
+      // Two different contacts hold stable bindings to the same channel:
+      // ambiguous attribution, fail closed.
+      return undefined;
+    }
+    matched = contact;
+  }
+  if (!matched) return undefined;
+
+  // Multi-participant guard: scan the journal's non-companion author
+  // identities. More than one distinct identity means the transcript contains
+  // other subjects' words and is not visible to any single subject.
+  const journalKey = options.sessionId ?? channelId;
+  const authorIds = new Set<string>();
+  for (const entry of sessionStore.getEntriesInRange(journalKey, 1, Number.MAX_SAFE_INTEGER)) {
+    if (entry.role === 'assistant') continue;
+    const authorId = entry.authorId?.trim().toLowerCase();
+    if (authorId) authorIds.add(authorId);
+    if (authorIds.size > 1) return undefined;
+  }
+
+  if (authorIds.size === 1) {
+    const [soleAuthorId] = authorIds;
+    const channelType = normalizeSessionChannelType(channelId);
+    if (channelType !== 'session') {
+      const typedIdentities = getContactIdentityLinks(matched)
+        .filter(identity => identity.channel.trim().toLowerCase() === channelType);
+      if (typedIdentities.length > 0
+        && !typedIdentities.some(identity => identity.userId.trim().toLowerCase() === soleAuthorId)) {
+        return undefined;
+      }
+    }
+  }
+
+  return matched;
+}
+
 export async function getLinkedContactForSession(options: {
   sessionId?: string;
   channelId: string;

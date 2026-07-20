@@ -1759,7 +1759,7 @@ describe('subject-bound session projection (88u3)', () => {
     });
   }
 
-  function makeContact(id: string): Contact {
+  function makeContact(id: string, discordUserId: string): Contact {
     return {
       id,
       displayName: `Contact ${id}`,
@@ -1767,36 +1767,39 @@ describe('subject-bound session projection (88u3)', () => {
       relationshipType: 'friend',
       firstSeen: '2026-01-01T00:00:00.000Z',
       lastSeen: '2026-01-01T00:00:00.000Z',
+      channels: [{
+        channel: 'discord',
+        userId: discordUserId,
+        firstSeen: '2026-01-01T00:00:00.000Z',
+        lastSeen: '2026-01-01T00:00:00.000Z',
+      }],
     } as Contact;
   }
 
   function makeSubjectFixture() {
-    const contactA = makeContact('contact-a');
-    const contactB = makeContact('contact-b');
-    const contactsByIdentity = new Map<string, Contact>([
-      ['discord:user-a', contactA],
-      ['discord:user-b', contactB],
-    ]);
+    // Stable attribution: each contact carries a persisted identity link for
+    // their own DM channel. Fleet visibility must never key on who posted
+    // last, so the fixture provides no last-author lookup path.
+    const contactA = makeContact('contact-a', '1111');
+    const contactB = makeContact('contact-b', '2222');
     const contactStore = {
       listAll: vi.fn(async () => [contactA, contactB]),
-      getByChannelIdentity: vi.fn(async (channel: string, userId: string) => (
-        contactsByIdentity.get(`${channel}:${userId}`)
-      )),
+      getByChannelIdentity: vi.fn(async () => undefined),
     } as unknown as ContactStorePort;
 
     store.append({
-      channelId: 'discord:111111111111111111',
+      channelId: 'discord:dm:1111',
       role: 'user',
       content: 'private message from subject A',
       timestamp: 1_700_000_000_001,
-      authorId: 'user-a',
+      authorId: '1111',
     });
     store.append({
-      channelId: 'discord:222222222222222222',
+      channelId: 'discord:dm:2222',
       role: 'user',
       content: 'private message from subject B',
       timestamp: 1_700_000_000_002,
-      authorId: 'user-b',
+      authorId: '2222',
     });
 
     const service = new AdminSessionDataService({
@@ -1814,7 +1817,7 @@ describe('subject-bound session projection (88u3)', () => {
 
     const fleetList = await service.listSessions(fleetSessionContext({ contactId: 'contact-a' }));
     expect(fleetList.channels.map(channel => channel.channelId))
-      .toEqual(['discord:111111111111111111']);
+      .toEqual(['discord:dm:1111']);
 
     // Legacy operator context keeps the unpartitioned single-companion view.
     const legacyList = await service.listSessions();
@@ -1824,7 +1827,7 @@ describe('subject-bound session projection (88u3)', () => {
   it('surfaces another subject session as not found across every fleet read path', async () => {
     const { service } = makeSubjectFixture();
     const context = fleetSessionContext({ contactId: 'contact-a' });
-    const foreignSessionId = 'discord:222222222222222222';
+    const foreignSessionId = 'discord:dm:2222';
 
     await expect(service.getSessionDetail(foreignSessionId, context))
       .rejects.toBeInstanceOf(AdminSessionNotFoundError);
@@ -1842,10 +1845,10 @@ describe('subject-bound session projection (88u3)', () => {
     const { service } = makeSubjectFixture();
     const context = fleetSessionContext({ contactId: 'contact-a' });
 
-    const detail = await service.getSessionDetail('discord:111111111111111111', context);
+    const detail = await service.getSessionDetail('discord:dm:1111', context);
     expect(detail.channel.linkedContactId).toBe('contact-a');
 
-    const messages = await service.getSessionMessages('discord:111111111111111111', {}, context);
+    const messages = await service.getSessionMessages('discord:dm:1111', {}, context);
     expect(messages.messages.map(message => message.content))
       .toEqual(['private message from subject A']);
     expect(JSON.stringify(messages)).not.toContain('subject B');
@@ -1857,8 +1860,8 @@ describe('subject-bound session projection (88u3)', () => {
 
     const listed = await service.listSessions(owner);
     expect(listed.channels.map(channel => channel.channelId))
-      .toEqual(['discord:111111111111111111']);
-    await expect(service.getSessionMessages('discord:222222222222222222', {}, owner))
+      .toEqual(['discord:dm:1111']);
+    await expect(service.getSessionMessages('discord:dm:2222', {}, owner))
       .rejects.toBeInstanceOf(AdminSessionNotFoundError);
   });
 
@@ -1871,7 +1874,7 @@ describe('subject-bound session projection (88u3)', () => {
 
     await expect(service.listSessions(crossCompanion))
       .rejects.toThrow(/companion/u);
-    await expect(service.getSessionMessages('discord:111111111111111111', {}, crossCompanion))
+    await expect(service.getSessionMessages('discord:dm:1111', {}, crossCompanion))
       .rejects.toThrow(/companion/u);
   });
 
@@ -1895,22 +1898,245 @@ describe('subject-bound session projection (88u3)', () => {
     await expect(service.listCogSecEvents(context))
       .rejects.toThrow(/subject-bound session projection/u);
     await expect(service.resetSourceChannelSession({
-      sourceChannelId: 'discord:111111111111111111',
+      sourceChannelId: 'discord:dm:1111',
       reason: 'test',
     }, context)).rejects.toThrow(/subject-bound session projection/u);
     await expect(service.previewCogSecRemediation({
-      sourceChannelId: 'discord:111111111111111111',
+      sourceChannelId: 'discord:dm:1111',
       reason: 'test',
       type: 'prompt_injection',
       severity: 'high',
       messageIds: [1],
     }, context)).rejects.toThrow(/subject-bound session projection/u);
     await expect(service.applyCogSecRemediation({
-      sourceChannelId: 'discord:111111111111111111',
+      sourceChannelId: 'discord:dm:1111',
       reason: 'test',
       type: 'prompt_injection',
       severity: 'high',
       messageIds: [1],
     }, context)).rejects.toThrow(/subject-bound session projection/u);
+  });
+
+  it('keeps a multi-participant session invisible even when the subject posted last', async () => {
+    const { service, contactA } = makeSubjectFixture();
+    const roomChannelId = 'discord:room:9999';
+    // Stable binding exists (persisted conversation channel), but the journal
+    // carries TWO distinct author identities — attribution to one subject is
+    // impossible and the last-entry author must not decide visibility.
+    contactA.conversationChannels = [{
+      channel: 'discord',
+      channelId: roomChannelId,
+      firstSeen: '2026-01-01T00:00:00.000Z',
+      lastSeen: '2026-01-01T00:00:00.000Z',
+    }];
+    store.append({
+      channelId: roomChannelId,
+      role: 'user',
+      content: 'private room message from subject B',
+      timestamp: 1_700_000_000_003,
+      authorId: '2222',
+    });
+    store.append({
+      channelId: roomChannelId,
+      role: 'user',
+      content: 'subject A posted last',
+      timestamp: 1_700_000_000_004,
+      authorId: '1111',
+    });
+
+    const context = fleetSessionContext({ contactId: 'contact-a' });
+    const listed = await service.listSessions(context);
+    expect(listed.channels.map(channel => channel.channelId)).toEqual(['discord:dm:1111']);
+    await expect(service.getSessionMessages(roomChannelId, {}, context))
+      .rejects.toBeInstanceOf(AdminSessionNotFoundError);
+    await expect(service.getSessionDetail(roomChannelId, context))
+      .rejects.toBeInstanceOf(AdminSessionNotFoundError);
+  });
+
+  it('forwards the request context on the cursor-page read path', async () => {
+    const { service } = makeSubjectFixture();
+    const context = fleetSessionContext({
+      contactId: 'contact-a',
+      routeId: 'GET /api/admin/sessions/:channelId',
+    });
+
+    const spy = vi.spyOn(service, 'getSessionMessages');
+    await service.getSessionMessagesForAdminRead(
+      'discord:dm:1111',
+      { beforeId: 99, limit: 10 },
+      context,
+    );
+    expect(spy).toHaveBeenCalledWith('discord:dm:1111', { beforeId: 99, limit: 10 }, context);
+  });
+
+  it('filters loom subsystem outputs and snapshot candidates to the viewer subject', async () => {
+    const channelId = 'discord:dm:1111';
+    const contactA = makeContact('contact-a', '1111');
+    const contactB = makeContact('contact-b', '2222');
+    const contactStore = {
+      listAll: vi.fn(async () => [contactA, contactB]),
+      getById: vi.fn(async (id: string) => (
+        id === 'contact-a' ? contactA : id === 'contact-b' ? contactB : undefined
+      )),
+      getByChannelIdentity: vi.fn(async () => undefined),
+    } as unknown as ContactStorePort;
+
+    store.append({
+      channelId,
+      role: 'user',
+      content: 'hello',
+      timestamp: 1_700_000_000_001,
+      authorId: '1111',
+    });
+    const turnId = createTurnId();
+    const record = makeTurnRecord(channelId, turnId);
+    const binding = {
+      logicalSessionId: channelId,
+      sourceChannelId: channelId,
+      sourceTurnId: turnId,
+      sourceRequestId: record.requestId,
+    };
+    record.extractedMemoryIds = [buildTurnSubsystemProjectionRef('memory', binding)];
+    record.concernDeltaRefs = [buildTurnSubsystemProjectionRef('concern', binding)];
+    record.contactDeltaRefs = [buildTurnSubsystemProjectionRef('contact', binding)];
+
+    const makeMemory = (id: string, text: string): PurrMemory => ({
+      id,
+      text,
+      type: 'semantic',
+      importance: 0.7,
+      confidence: 0.9,
+      emotionalValence: 0,
+      salience: 0.6,
+      sourceRef: `turn:${turnId}`,
+      extractedAt: 1_700_000_000_050,
+      lastAccessed: 1_700_000_000_050,
+      accessCount: 0,
+      tags: [],
+      sensitivity: 'personal',
+    });
+    const ownMemory = makeMemory('memory-own', 'about the viewer subject');
+    const foreignMemory = makeMemory('memory-foreign', 'FOREIGN_SUBJECT_SECRET');
+    record.observability = {
+      stages: [],
+      retrievals: [],
+      snapshot: {
+        turnId,
+        requestId: record.requestId,
+        channelId,
+        capturedAt: 1_700_000_000_040,
+        trustLevel: 'trusted',
+        memory: {
+          channelId,
+          contactEmotionalMemories: [],
+          semanticCandidates: [
+            { ...ownMemory, similarity: 0.9 },
+            { ...foreignMemory, similarity: 0.8 },
+          ],
+          lexicalCandidates: [],
+          proactiveCandidates: [foreignMemory],
+          versionPointer: 'test-memory-v1',
+        },
+      },
+    };
+    void store.appendTurnRecord(record);
+
+    const baseClassification = {
+      subjectClass: 'single_contact' as const,
+      status: 'current' as const,
+      classifierVersion: 1,
+      memoryRevision: 1,
+      evidenceDigest: 'a'.repeat(64),
+      evidence: ['explicit_subject_contact' as const],
+      reasonClass: 'explicit_subject_contact',
+      classifiedAt: 1,
+      updatedAt: 1,
+    };
+    const classifications = new Map([
+      ['memory-own', {
+        ...baseClassification,
+        memoryId: 'memory-own',
+        subjectContactIds: ['contact-a'],
+      }],
+      ['memory-foreign', {
+        ...baseClassification,
+        memoryId: 'memory-foreign',
+        subjectContactIds: ['contact-b'],
+      }],
+    ]);
+    const memoriesById = new Map([
+      ['memory-own', ownMemory],
+      ['memory-foreign', foreignMemory],
+    ]);
+    const memoryStore = {
+      getById: vi.fn(async (id: string) => memoriesById.get(id)),
+      getMemorySubjectClassification: vi.fn(async (id: string) => classifications.get(id)),
+    } as unknown as MemoryStorePort;
+    const makeConcern = (id: string, contactId?: string) => ({
+      id,
+      text: `Concern ${id}`,
+      priority: 'medium',
+      source: 'appraisal',
+      status: 'candidate',
+      createdAt: '2026-07-16T12:00:00.000Z',
+      expiresAt: '2026-07-23T12:00:00.000Z',
+      salience: 0.6,
+      sensitivity: 'personal',
+      owner: 'companion',
+      evidenceRefs: [],
+      resolutionEvidenceRefs: [],
+      ...(contactId ? { contactId } : {}),
+    });
+    const concernsById = new Map([
+      ['concern-own', makeConcern('concern-own', 'contact-a')],
+      ['concern-unattributed', makeConcern('concern-unattributed')],
+    ]);
+    const concernStore = {
+      getById: vi.fn(async (id: string) => concernsById.get(id) ?? null),
+    } as unknown as ConcernStorePort;
+    const getSubsystemOutputProjection = vi.fn(async () => ({
+      status: 'applied' as const,
+      outputRefs: [
+        buildSubsystemOutputRef('memory', 'memory-own'),
+        buildSubsystemOutputRef('memory', 'memory-foreign'),
+        buildSubsystemOutputRef('concern', 'concern-own'),
+        buildSubsystemOutputRef('concern', 'concern-unattributed'),
+        buildSubsystemOutputRef('contact', 'contact-a'),
+        buildSubsystemOutputRef('contact', 'contact-b'),
+      ],
+    }));
+
+    const service = new AdminSessionDataService({
+      sessionStore: store,
+      sessionManager: new SessionManager(store, makeConfig({ dataDir: dir })),
+      eventBus: new EventBus(),
+      contactStore,
+      memoryStore,
+      concernStore,
+      subsystemOutputRefStore: { getSubsystemOutputProjection },
+      config: makeConfig({ dataDir: dir, companionId: createCompanionId(COMPANION_ID) }),
+    });
+    const context = fleetSessionContext({
+      contactId: 'contact-a',
+      routeId: 'GET /api/admin/sessions/:channelId/turns/:turnId',
+    });
+
+    const detail = await service.getSessionTurnDetail(channelId, turnId, context);
+    const outputs = detail.turn.promptLoom?.subsystemOutputs;
+    expect(outputs?.memoryWrites.map(entry => entry.value?.id ?? entry.ref))
+      .toEqual(['memory-own']);
+    expect(outputs?.concernDeltas.map(entry => entry.value?.id ?? entry.ref))
+      .toEqual(['concern-own']);
+    expect(outputs?.contactDeltas.map(entry => entry.value?.id ?? entry.ref))
+      .toEqual(['contact-a']);
+    expect(detail.turn.snapshot?.memory?.semanticCandidates.map(memory => memory.id))
+      .toEqual(['memory-own']);
+    expect(detail.turn.snapshot?.memory?.proactiveCandidates).toEqual([]);
+    expect(JSON.stringify(detail)).not.toContain('FOREIGN_SUBJECT_SECRET');
+
+    // The legacy operator read stays unfiltered.
+    const legacy = await service.getSessionTurnDetail(channelId, turnId);
+    expect(legacy.turn.promptLoom?.subsystemOutputs.memoryWrites).toHaveLength(2);
+    expect(legacy.turn.snapshot?.memory?.semanticCandidates).toHaveLength(2);
   });
 });

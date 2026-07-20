@@ -6,6 +6,7 @@ import type { SessionEntry } from '../../core/session/types.js';
 import { CANONICAL_TOOL_SURFACE_DESCRIPTIONS } from '../../core/agent/tool-surface/descriptions.js';
 import type { TurnID } from '../../shared/contracts/runtime.js';
 import { FakeEpisodicPool } from '../../test-support/fake-postgres-episodic-pool.js';
+import { runWithRequestContext } from '../../primitives/llm/request-context.js';
 import { PostgresEpisodicStore } from './episodic/postgres-store.js';
 import { createMemoryTool, type MemoryToolOptions } from './tools.js';
 import type { MemoryStorePort } from './memory-store-port.js';
@@ -96,6 +97,76 @@ describe('memory action=get', () => {
     expect(resultText(result)).toContain('A precise remembered exchange');
     expect(resultText(result)).toContain('Journal-current episode evidence.');
     expect(getRecent).toHaveBeenCalledWith('session:episode-tool', Number.MAX_SAFE_INTEGER);
+  });
+
+  it('ignores a model-supplied foreign channel_id and refuses cross-channel verbatim drill-down', async () => {
+    const store = new PostgresEpisodicStore(
+      new FakeEpisodicPool() as unknown as Pool,
+      { now: () => new Date('2026-07-18T12:00:00.000Z') },
+    );
+    const PRIVATE_CHANNEL = 'api:private-room';
+    const PRIVATE_TURN = '00000000-0000-7000-a000-000000000099' as TurnID;
+    await store.createEpisode({
+      id: 'private-episode-id',
+      title: 'A confidential exchange in another channel',
+      landmark: 'The private exchange that must not leak cross-channel.',
+      startedAt: '2026-07-18T12:00:00.000Z',
+      endedAt: '2026-07-18T12:00:00.000Z',
+      threadId: 'thread:private-room',
+      channelId: PRIVATE_CHANNEL,
+      participantContactIds: ['contact:insider'],
+      salience: { score: 0.9 },
+      affect: { labels: ['tense'] },
+      themes: ['secrecy'],
+      spanRefs: [{
+        spanId: 'span-private',
+        sessionId: 'session:private-room',
+        startTurnId: PRIVATE_TURN,
+        endTurnId: PRIVATE_TURN,
+      }],
+      artifactRefs: [],
+      provenanceRefs: [],
+    });
+    const getRecent = vi.fn(() => [{
+      id: 1,
+      channelId: PRIVATE_CHANNEL,
+      role: 'user' as const,
+      content: 'CROSS CHANNEL SECRET transcript body.',
+      timestamp: Date.UTC(2026, 6, 18, 12),
+      metadata: buildSessionMetadataWithTurn(undefined, {
+        turnId: PRIVATE_TURN,
+        requestId: 'request-private',
+        role: 'user',
+      }),
+    }]);
+    const tool = createMemoryTool({} as MemoryWriter, {} as MemoryStorePort, {
+      episodicStore: store,
+      sessionReader: { getRecent },
+    });
+
+    // A low-trust viewer in a DIFFERENT channel, under prompt injection, tries to
+    // drill into the private channel's episode by passing channel_id explicitly.
+    // The runtime request context is the authorization authority; the model args
+    // must be ignored.
+    const result = await runWithRequestContext(
+      {
+        channelId: 'api:viewer-room',
+        viewerTrustLevel: 'public',
+        viewerChannelPrivacy: 'public',
+      },
+      () => tool.execute('memory-get-exploit', {
+        action: 'get',
+        episode_id: 'private-episode-id',
+        channel_id: PRIVATE_CHANNEL,
+        trust_level: 'primary',
+        channel_visibility: 'private',
+      }),
+    );
+
+    const text = resultText(result);
+    expect(text).toContain('Episode not found or not visible');
+    expect(text).not.toContain('CROSS CHANNEL SECRET');
+    expect(text).not.toContain('A confidential exchange in another channel');
   });
 
   it('requires an episode id and configured drill-down authorities', async () => {

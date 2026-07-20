@@ -42,9 +42,33 @@ export interface EpisodeDrilldownTurn {
   authorName?: string;
 }
 
+/**
+ * Why a span's verbatim turns are not present:
+ *   - 'compacted'     the source session was rolled out / compacted, so the turn
+ *                     boundaries are no longer materialized (old episodes — the
+ *                     primary drill-down target — routinely hit this).
+ *   - 'cross_channel' the span belongs to a channel the viewer is not authorized
+ *                     to read verbatim; the episode can be visible cross-channel
+ *                     (contact-match) yet carry sessions the viewer never saw.
+ *   - 'malformed'     the span is missing its session or turn boundaries.
+ *   - 'reversed'      the persisted turn boundaries are inverted.
+ */
+export type EpisodeSpanUnavailableReason =
+  | 'compacted'
+  | 'cross_channel'
+  | 'malformed'
+  | 'reversed';
+
 export interface ExpandedEpisodeSpan {
   spanRef: EpisodeSpanRef;
   turns: EpisodeDrilldownTurn[];
+  /**
+   * Present when this span could not be — or must not be — expanded into
+   * verbatim turns. The episode's metadata (title/landmark/meaning) still
+   * renders; the raw user/assistant turns do not. Absent for a normally
+   * expanded span.
+   */
+  unavailable?: EpisodeSpanUnavailableReason;
 }
 
 export interface EpisodeArcSibling {
@@ -58,6 +82,13 @@ export interface EpisodeDrilldownResult {
   arcSiblings: EpisodeArcSibling[];
   threadSiblings: Episode[];
 }
+
+const SPAN_UNAVAILABLE_NOTES: Record<EpisodeSpanUnavailableReason, string> = {
+  compacted: 'source session was compacted or rolled out',
+  cross_channel: 'span belongs to another channel; withheld to metadata only',
+  malformed: 'span is missing its session or turn boundaries',
+  reversed: 'span turn boundaries are inverted in the source session',
+};
 
 export function formatEpisodeDrilldown(result: EpisodeDrilldownResult): string {
   const episode = result.episode;
@@ -83,6 +114,10 @@ export function formatEpisodeDrilldown(result: EpisodeDrilldownResult): string {
       `- Span ${span.spanRef.spanId} (${span.spanRef.sessionId ?? span.spanRef.channelId}, `
       + `${span.spanRef.startTurnId} to ${span.spanRef.endTurnId})`,
     );
+    if (span.unavailable) {
+      lines.push(`  - (verbatim turns unavailable: ${SPAN_UNAVAILABLE_NOTES[span.unavailable]})`);
+      continue;
+    }
     for (const turn of span.turns) {
       const speaker = turn.authorName?.trim() || turn.role;
       lines.push(
@@ -159,15 +194,38 @@ export async function retrieveEpisodeDrilldown(
 
   return {
     episode,
-    spans: expandEpisodeSpans(sessionReader, episode.spanRefs),
+    spans: expandEpisodeSpans(sessionReader, episode.spanRefs, input.channelId),
     arcSiblings: toArcSiblings(episode.id, visibleMemberships),
     threadSiblings,
   };
 }
 
+function unavailableSpan(
+  spanRef: EpisodeSpanRef,
+  reason: EpisodeSpanUnavailableReason,
+): ExpandedEpisodeSpan {
+  return { spanRef: { ...spanRef }, turns: [], unavailable: reason };
+}
+
+/**
+ * Expand each span into its journal-current verbatim turns, fail-closed on both
+ * availability and authorization:
+ *   - a span whose source session was rolled out/compacted, or that is
+ *     structurally incomplete/inverted, degrades to metadata-only (no throw) so
+ *     one unavailable span never errors the whole drill-down (old episodes are
+ *     the primary target and routinely have compacted sources);
+ *   - verbatim turns are only expanded for spans that belong to the viewer's
+ *     authorized channel. An episode can be visible cross-channel via a trusted
+ *     contact-match yet carry spans/sessions the viewer was never present in —
+ *     including consolidated, multi-participant episodes that union foreign
+ *     turns. Those restore the prior cross-channel disclosure ceiling
+ *     (title/landmark/meaning only). When a span's channel cannot be pinned to
+ *     the authorized channel, it is NOT expanded.
+ */
 function expandEpisodeSpans(
   sessionReader: EpisodeDrilldownSessionReader,
   spanRefs: readonly EpisodeSpanRef[],
+  authorizedChannelId: string,
 ): ExpandedEpisodeSpan[] {
   const entriesBySession = new Map<string, SessionEntry[]>();
 
@@ -176,9 +234,7 @@ function expandEpisodeSpans(
     const startTurnId = spanRef.startTurnId?.trim();
     const endTurnId = spanRef.endTurnId?.trim();
     if (!sessionId || !startTurnId || !endTurnId) {
-      throw new Error(
-        `episode span "${spanRef.spanId}" is missing sessionId/channelId or turn boundaries`,
-      );
+      return unavailableSpan(spanRef, 'malformed');
     }
 
     let entries = entriesBySession.get(sessionId);
@@ -194,29 +250,37 @@ function expandEpisodeSpans(
     const startIndex = indexed.findIndex(candidate => candidate.turnId === startTurnId);
     const endIndex = indexed.findLastIndex(candidate => candidate.turnId === endTurnId);
     if (startIndex < 0 || endIndex < 0) {
-      throw new Error(
-        `episode span "${spanRef.spanId}" turn boundaries are unavailable in session "${sessionId}"`,
-      );
+      return unavailableSpan(spanRef, 'compacted');
     }
     if (startIndex > endIndex) {
-      throw new Error(
-        `episode span "${spanRef.spanId}" turn boundaries are reversed in session "${sessionId}"`,
-      );
+      return unavailableSpan(spanRef, 'reversed');
     }
 
-    const turns = indexed
+    const roleEntries = indexed
       .slice(startIndex, endIndex + 1)
       .filter((candidate): candidate is typeof candidate & {
         entry: SessionEntry & { role: 'user' | 'assistant' };
-      } => candidate.entry.role === 'user' || candidate.entry.role === 'assistant')
-      .map(({ entry, turnId }) => ({
-        turnId,
-        channelId: entry.channelId,
-        role: entry.role,
-        content: entry.content,
-        timestamp: entry.timestamp,
-        ...(entry.authorName ? { authorName: entry.authorName } : {}),
-      }));
+      } => candidate.entry.role === 'user' || candidate.entry.role === 'assistant');
+
+    // Per-span re-authorization: only the viewer's own authorized channel may
+    // disclose raw turns. Any turn sourced from a different channel (or a span
+    // whose channel cannot be determined) means the viewer was not a participant
+    // of this specific span/session — withhold verbatim, keep metadata only.
+    const spanChannels = new Set(roleEntries.map(({ entry }) => entry.channelId));
+    const belongsToAuthorizedChannel = [...spanChannels]
+      .every(channel => channel === authorizedChannelId);
+    if (!belongsToAuthorizedChannel) {
+      return unavailableSpan(spanRef, 'cross_channel');
+    }
+
+    const turns = roleEntries.map(({ entry, turnId }) => ({
+      turnId,
+      channelId: entry.channelId,
+      role: entry.role,
+      content: entry.content,
+      timestamp: entry.timestamp,
+      ...(entry.authorName ? { authorName: entry.authorName } : {}),
+    }));
 
     return {
       spanRef: { ...spanRef },

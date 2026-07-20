@@ -183,10 +183,12 @@ describe('retrieveEpisodeDrilldown', () => {
     expect(getRecent).not.toHaveBeenCalled();
   });
 
-  it('fails closed when a persisted span boundary cannot be resolved', async () => {
+  it('degrades a compacted/rolled-out span to metadata-only instead of erroring the drill-down', async () => {
     const store = await makeStore();
 
-    await expect(retrieveEpisodeDrilldown(store, {
+    // Only the start boundary survives in the current session (the source was
+    // rolled out / compacted), so the end boundary cannot be resolved.
+    const result = await retrieveEpisodeDrilldown(store, {
       getRecent: () => [entry(2, 'user', 'Only one boundary.', turnId(2))],
     }, {
       episodeId: 'root',
@@ -194,6 +196,61 @@ describe('retrieveEpisodeDrilldown', () => {
       trustLevel: 'trusted',
       channelDisclosure: { channelPrivacy: 'private', broadcast: false },
       siblingLimit: 10,
-    })).rejects.toThrow(/turn boundaries are unavailable/);
+    });
+
+    expect(result).not.toBeNull();
+    expect(result?.spans).toHaveLength(1);
+    expect(result?.spans[0].unavailable).toBe('compacted');
+    expect(result?.spans[0].turns).toEqual([]);
+
+    const formatted = formatEpisodeDrilldown(result!);
+    // Episode metadata still renders; the raw turn does not.
+    expect(formatted).toContain('Episode: Episode root (root)');
+    expect(formatted).toContain('verbatim turns unavailable: source session was compacted or rolled out');
+    expect(formatted).not.toContain('Only one boundary.');
+  });
+
+  it('withholds verbatim turns for a cross-channel contact-match episode the viewer did not participate in', async () => {
+    const store = new PostgresEpisodicStore(
+      new FakeEpisodicPool() as unknown as Pool,
+      { now: () => NOW },
+    );
+    // The episode lives in a protected room the viewer is NOT in, but the viewer
+    // is a participant contact and trusted, so it is visible cross-channel.
+    await store.createEpisode(episode('shared-cross-channel', '2026-07-18T10:00:00.000Z', {
+      channelId: 'api:protected-room',
+      participantContactIds: ['contact:viewer', 'contact:protected'],
+    }));
+
+    // getRecent returns the source turns from the FOREIGN channel — turns the
+    // viewer (in CURRENT_CHANNEL) never saw.
+    const foreignEntry = (id: number, role: 'user' | 'assistant', content: string, turn: TurnID): SessionEntry => ({
+      ...entry(id, role, content, turn),
+      channelId: 'api:protected-room',
+    });
+    const getRecent = vi.fn(() => [
+      foreignEntry(2, 'user', 'Secret turn from the protected room.', turnId(2)),
+      foreignEntry(3, 'assistant', 'Secret reply from the protected room.', turnId(3)),
+    ]);
+
+    const result = await retrieveEpisodeDrilldown(store, { getRecent }, {
+      episodeId: 'shared-cross-channel',
+      channelId: CURRENT_CHANNEL,
+      trustLevel: 'trusted',
+      channelDisclosure: { channelPrivacy: 'private', broadcast: false },
+      canonicalContactId: 'contact:viewer',
+      siblingLimit: 10,
+    });
+
+    // Episode is visible (contact-match), but the verbatim turns are withheld.
+    expect(result).not.toBeNull();
+    expect(result?.spans[0].unavailable).toBe('cross_channel');
+    expect(result?.spans[0].turns).toEqual([]);
+
+    const formatted = formatEpisodeDrilldown(result!);
+    expect(formatted).toContain('Episode: Episode shared-cross-channel (shared-cross-channel)');
+    expect(formatted).toContain('verbatim turns unavailable: span belongs to another channel');
+    expect(formatted).not.toContain('Secret turn from the protected room.');
+    expect(formatted).not.toContain('Secret reply from the protected room.');
   });
 });

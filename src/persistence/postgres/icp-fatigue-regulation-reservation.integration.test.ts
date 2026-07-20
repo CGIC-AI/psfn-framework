@@ -817,8 +817,14 @@ describe("Postgres ICP fatigue regulation reservations", () => {
         expect(await store.isTurnFenced({ companionId: A })).toBe(true);
         expect(await store.isTurnFenced({ companionId: B })).toBe(false);
 
-        // Finalizing the turn (delivered) clears the fence.
+        // The `delivering` window — where the actual external ICP egress
+        // happens (prepareDelivery → finalizeDelivery → finalize) — must stay
+        // fenced. Social must not race an actively-delivering ICP turn (§8.5).
         await store.prepareDelivery({ correlation: turn, fatigue: finalizationFatigue(turn) });
+        expect(await store.isTurnFenced({ companionId: A })).toBe(true);
+        expect(await store.isTurnFenced({ companionId: B })).toBe(false);
+
+        // Finalizing the turn (delivered) clears the fence.
         await store.finalize({
           correlation: turn,
           outcome: "delivered",

@@ -123,7 +123,7 @@ function buildLiveShapedPlan(): PromptPlan {
       volatility: 'turn',
       producer: 'runtime-context.current-datetime',
       scopeKey: 'global',
-      renderedText: '<runtime.current_datetime authority="canonical" overrides="memory,conversation_history,continuity_anchor,wake_orientation,cross_channel_continuity">\n<iso>2026-07-01T12:00:00-04:00</iso>\n</runtime.current_datetime>',
+      renderedText: '<runtime.current_datetime authority="canonical" overrides="memory,conversation_history,cross_channel_continuity">\n<iso>2026-07-01T12:00:00-04:00</iso>\n</runtime.current_datetime>',
     }),
   ];
   return createPromptPlan({

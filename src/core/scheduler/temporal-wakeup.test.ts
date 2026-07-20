@@ -214,18 +214,30 @@ describe('evaluateMorningWakeEligibility', () => {
     })).toMatchObject({ allowed: false, reason: 'anti_loop_note_today' });
   });
 
-  it('does not stack a morning note after an idle-refresher note landed today', () => {
+  it('allows a morning note after a post-midnight refresher but suppresses a second morning note', () => {
     const refresherAt = Date.parse('2026-06-11T02:34:00.000Z');
     const persisted = [wakeNoteEntry(refresherAt, TEMPORAL_WAKEUP_REFRESHER_NOTE_SOURCE)];
-    const latestWakeNoteAt = findLatestTemporalWakeupNoteAt(persisted);
-    expect(latestWakeNoteAt).toBe(refresherAt);
+    const morningSources = new Set([TEMPORAL_WAKEUP_MORNING_NOTE_SOURCE]);
+    const latestMorningNoteAt = findLatestTemporalWakeupNoteAt(persisted, morningSources);
+    expect(latestMorningNoteAt).toBeUndefined();
     expect(evaluateMorningWakeEligibility({
       session,
       recentEntries: [entry({ role: 'user', timestamp: DAY1_EVENING })],
       fullTurnMaxIdleMs: 72 * 60 * 60_000,
       minPartnerIdleMs: 60 * 60_000,
       nowMs: DAY2_MORNING,
-      ...(latestWakeNoteAt !== undefined ? { lastWakeupNoteAtMs: latestWakeNoteAt } : {}),
+      ...(latestMorningNoteAt !== undefined ? { lastWakeupNoteAtMs: latestMorningNoteAt } : {}),
+    })).toMatchObject({ allowed: true, reason: 'eligible' });
+
+    const morningAt = DAY2_MORNING;
+    persisted.push(wakeNoteEntry(morningAt, TEMPORAL_WAKEUP_MORNING_NOTE_SOURCE));
+    expect(evaluateMorningWakeEligibility({
+      session,
+      recentEntries: [entry({ role: 'user', timestamp: DAY1_EVENING })],
+      fullTurnMaxIdleMs: 72 * 60 * 60_000,
+      minPartnerIdleMs: 60 * 60_000,
+      nowMs: DAY2_MORNING + 60_000,
+      lastWakeupNoteAtMs: findLatestTemporalWakeupNoteAt(persisted, morningSources),
     })).toMatchObject({ allowed: false, reason: 'anti_loop_note_today' });
   });
 
@@ -495,7 +507,7 @@ describe('morning wake lane (simulated clock, real session manager)', () => {
     expect(notes).toHaveLength(1);
   });
 
-  it('does not stack a morning note after a post-midnight refresher note', async () => {
+  it('fires one morning note after a post-midnight refresher without repeating its catch-up', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date(DAY1_EVENING));
     mgr.recordUserMessage('api:main', 'wrapping up for the night', 'user-1', 'Ada');
@@ -504,26 +516,33 @@ describe('morning wake lane (simulated clock, real session manager)', () => {
     vi.setSystemTime(new Date(refresherAt));
     mgr.appendContextSystemNote(
       'api:main',
-      '[Temporal wake]\nElapsed-time context already refreshed.',
+      '[Temporal wake]\nCatch-up on where things left off: Overnight catch-up already delivered.',
       TEMPORAL_WAKEUP_REFRESHER_NOTE_SOURCE,
     );
 
     const scheduler = new Scheduler(new EventBus(), { tickIntervalMs: 60_000, heartbeatIntervalMs: 1_800_000 });
+    const summarizeCatchUp = vi.fn(async () => 'Repeated overnight catch-up.');
     registerTemporalWakeupTasks({
       scheduler,
       sessionManager: mgr,
       config: makeWakeConfig({ refresher: { enabled: false } }),
+      summarizeCatchUp,
     });
 
     vi.setSystemTime(new Date(DAY2_MORNING));
     await scheduler.tick();
+    vi.setSystemTime(new Date(DAY2_MORNING + 60_000));
+    await runMorningHandler(scheduler);
 
     const wakeNotes = mgr.getRecentSessionEntries('api:main', 16)
       .filter(entry => findLatestTemporalWakeupNoteAt([entry]) !== undefined);
-    expect(wakeNotes).toHaveLength(1);
-    expect(JSON.parse(wakeNotes[0]?.metadata ?? '{}')).toMatchObject({
-      sessionLane: { source: TEMPORAL_WAKEUP_REFRESHER_NOTE_SOURCE },
-    });
+    expect(wakeNotes).toHaveLength(2);
+    expect(wakeNotes.map(note => JSON.parse(note.metadata ?? '{}').sessionLane?.source)).toEqual([
+      TEMPORAL_WAKEUP_REFRESHER_NOTE_SOURCE,
+      TEMPORAL_WAKEUP_MORNING_NOTE_SOURCE,
+    ]);
+    expect(wakeNotes[1]?.content).not.toContain('Repeated overnight catch-up.');
+    expect(summarizeCatchUp).not.toHaveBeenCalled();
   });
 
   it('does not reset elapsed-time or ambient idle accounting (wake notes are not partner activity)', async () => {
@@ -1055,6 +1074,126 @@ describe('temporal wake handler entry-read preflights', () => {
 });
 
 describe('idle refresher lane', () => {
+  it('reconciles an eligible restart gap before a quick partner return can reset it', async () => {
+    vi.useFakeTimers();
+    const lastExchangeAt = Date.parse('2026-06-11T09:00:00.000Z');
+    const restartedAt = Date.parse('2026-06-11T11:05:00.000Z');
+    const partnerReturnAt = Date.parse('2026-06-11T11:10:00.000Z');
+    const firstPeriodicCheckAt = Date.parse('2026-06-11T11:20:00.000Z');
+    let conversational = [entry({
+      role: 'user',
+      timestamp: lastExchangeAt,
+      content: 'leaving for a while',
+    })];
+    const persisted: SessionEntry[] = [];
+    const eventOrder: string[] = [];
+    const port: TemporalWakeupSessionManagerPort = {
+      resolveStartupSessionMetadata: () => {
+        const latest = conversational.at(-1)!;
+        return {
+          sessionId: 'api:main',
+          channelType: 'api',
+          timestamp: latest.timestamp,
+          lastRole: latest.role,
+        };
+      },
+      getRecentMessages: () => conversational,
+      getRecentSessionEntries: () => persisted,
+      appendContextSystemNote: (channelId, note, source) => {
+        eventOrder.push('refresher');
+        persisted.push(entry({
+          role: 'system',
+          timestamp: Date.now(),
+          channelId,
+          content: note,
+          metadata: JSON.stringify({ sessionLane: { schemaVersion: 1, kind: 'system_note', source } }),
+        }));
+      },
+    };
+    vi.setSystemTime(new Date(restartedAt));
+    const scheduler = new Scheduler(
+      new EventBus(),
+      { tickIntervalMs: 60_000, heartbeatIntervalMs: 1_800_000 },
+    );
+    registerTemporalWakeupTasks({
+      scheduler,
+      sessionManager: port,
+      config: makeWakeConfig({
+        morning: { enabled: false },
+        refresher: {
+          enabled: true,
+          checkIntervalMs: 15 * 60_000,
+          minIdleMinutes: 120,
+          minNoteIntervalMinutes: 120,
+        },
+      }),
+    });
+
+    // Startup reconciliation is due immediately; the ordinary periodic
+    // cadence remains fifteen minutes away.
+    await scheduler.tick();
+    vi.setSystemTime(new Date(partnerReturnAt));
+    conversational = [...conversational, entry({
+      role: 'user',
+      timestamp: partnerReturnAt,
+      content: 'back already',
+    })];
+    eventOrder.push('partner');
+    vi.setSystemTime(new Date(firstPeriodicCheckAt));
+    await scheduler.tick();
+
+    expect(eventOrder).toEqual(['refresher', 'partner']);
+    expect(persisted).toHaveLength(1);
+    expect(persisted[0]?.timestamp).toBe(restartedAt);
+    expect(JSON.parse(persisted[0]?.metadata ?? '{}')).toMatchObject({
+      sessionLane: { source: TEMPORAL_WAKEUP_REFRESHER_NOTE_SOURCE },
+    });
+  });
+
+  it('startup reconciliation does not duplicate a persisted pre-restart refresher note', async () => {
+    vi.useFakeTimers();
+    const lastExchangeAt = Date.parse('2026-06-11T09:00:00.000Z');
+    const existingNoteAt = Date.parse('2026-06-11T11:00:00.000Z');
+    const restartedAt = Date.parse('2026-06-11T11:05:00.000Z');
+    const persisted = [
+      wakeNoteEntry(existingNoteAt, TEMPORAL_WAKEUP_REFRESHER_NOTE_SOURCE),
+    ];
+    const appendContextSystemNote = vi.fn();
+    vi.setSystemTime(new Date(restartedAt));
+    const scheduler = new Scheduler(
+      new EventBus(),
+      { tickIntervalMs: 60_000, heartbeatIntervalMs: 1_800_000 },
+    );
+    registerTemporalWakeupTasks({
+      scheduler,
+      sessionManager: {
+        resolveStartupSessionMetadata: () => ({
+          sessionId: 'api:main',
+          channelType: 'api',
+          timestamp: existingNoteAt,
+          lastRole: 'system',
+        }),
+        getRecentMessages: () => [entry({ role: 'user', timestamp: lastExchangeAt })],
+        getRecentSessionEntries: () => persisted,
+        appendContextSystemNote,
+      },
+      config: makeWakeConfig({
+        morning: { enabled: false },
+        refresher: {
+          enabled: true,
+          checkIntervalMs: 15 * 60_000,
+          minIdleMinutes: 120,
+          minNoteIntervalMinutes: 120,
+        },
+      }),
+    });
+
+    await scheduler.tick();
+
+    expect(scheduler.getTask(TEMPORAL_WAKEUP_REFRESHER_TASK_ID)?.lastOutcome).toBe('succeeded');
+    expect(appendContextSystemNote).not.toHaveBeenCalled();
+  });
+
   it('injects the lighter refresh after a same-day gap and anti-loops afterwards', async () => {
     vi.useFakeTimers();
     const morningAt = Date.parse('2026-06-11T09:00:00.000Z');

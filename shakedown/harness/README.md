@@ -38,7 +38,8 @@ targets, so nothing hardcodes a namespace, service, port, or `/mnt` path:
 | `PSFN_TARGET` | `local` (default) / `kube` | — |
 | `PSFN_API_BASE` | gateway API base | point at a `kubectl port-forward svc/<gateway> 10053` |
 | `PSFN_ADMIN_BASE` | Garden admin base | point at a second `port-forward svc/<garden> 10054` |
-| `API_KEY` / `PSFN_API_KEY` | gateway API key | — |
+| `TESTING_HARNESS_API_KEY` | dedicated gateway credential for the persistent `api:testing-harness` room | required for all conversational harness traffic |
+| `API_KEY` | shared gateway credential used to start a fresh local runtime | local bootstrap/restart only; never use it for harness chat |
 | `ADMIN_TOKEN` / `PSFN_ADMIN_TOKEN` | Garden admin token | fleet-auth token also works |
 | `POSTGRES_DATABASE_URL` | round Postgres | reach the deployment DB via a port-forward; proofs run against it |
 | `PSFN_TIER_FLIP_CONFIRM_TIMEOUT_MS` | tier-flip confirm budget (default 30000) | kube only |
@@ -210,7 +211,7 @@ the app secret (names only — never paste the values into any committed file):
 ```bash
 kubectl config use-context k3d-psfn-kube-test
 ADMIN_TOKEN="$(kubectl -n psfn-test get secret psfn-app -o jsonpath='{.data.ADMIN_TOKEN}' | base64 -d)"
-API_KEY="$(kubectl -n psfn-test get secret psfn-app -o jsonpath='{.data.API_KEY}' | base64 -d)"
+TESTING_HARNESS_API_KEY="$(kubectl -n psfn-test get secret psfn-app -o jsonpath='{.data.TESTING_HARNESS_API_KEY}' | base64 -d)"
 ```
 
 Stand up the two port-forwards (Garden admin :10054, gateway :10053):
@@ -229,7 +230,7 @@ Export (values elided; `POSTGRES_DATABASE_URL` is required because the shared
 export PSFN_TARGET=kube
 export PSFN_API_BASE=http://127.0.0.1:10053     # gateway port-forward
 export PSFN_ADMIN_BASE=http://127.0.0.1:10054    # Garden admin port-forward
-export API_KEY=…                                 # from the secret above
+export TESTING_HARNESS_API_KEY=…                 # dedicated harness key from the secret above
 export ADMIN_TOKEN=…                             # from the secret above
 export POSTGRES_DATABASE_URL=…                   # round Postgres (resolver requires it)
 export PSFN_MATRIX_DIR=$SHAKEDOWN_ROOT/artifacts/matrix   # or PSFN_ROUND_DIR — output dir

@@ -64,6 +64,9 @@ export function resolveSessionChannelId(sessionId, apiUserId) {
   const principal = typeof apiUserId === 'string' && apiUserId.trim().length > 0
     ? apiUserId.trim()
     : INSECURE_LOCAL_API_PRINCIPAL_ID;
+  if (principal === 'testing-harness') {
+    return 'api:testing-harness';
+  }
   return `api:${principal}:${sessionId}`;
 }
 

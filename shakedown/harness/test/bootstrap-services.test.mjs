@@ -15,7 +15,6 @@ import {
   waitForRuntimeReadiness,
 } from '../lib/bootstrap-services.mjs';
 import {
-  deriveApiKeyPrincipalId,
   turnRecordPath,
 } from '../lib/probe.mjs';
 
@@ -120,7 +119,7 @@ const gateway = createServer(async (request, response) => {
     const path = turnRecordPath(
       turnRecordsDir,
       sessionId,
-      deriveApiKeyPrincipalId(apiKey),
+      'testing-harness',
     );
     mkdirSync(dirname(path), { recursive: true });
     writeFileSync(path, `${JSON.stringify({
@@ -182,7 +181,7 @@ try {
   assert.equal(proof.sessionId, sessionId);
   assert.equal(
     proof.turnRecordPath,
-    turnRecordPath(turnRecordsDir, sessionId, deriveApiKeyPrincipalId(apiKey)),
+    turnRecordPath(turnRecordsDir, sessionId, 'testing-harness'),
   );
 
   console.log('bootstrap live readiness/persistence service test passed');

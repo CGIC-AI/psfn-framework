@@ -26,7 +26,7 @@ GATEWAY_PORT="${GATEWAY_PORT:-10053}"
 # Empty = resolve from the live gateway deployment's COMPANION_ID env.
 COMPANION_MODEL_PATTERN="${COMPANION_MODEL_PATTERN:-}"
 SMOKE_TIMEOUT_SECONDS="${SMOKE_TIMEOUT_SECONDS:-180}"
-API_KEY_VALUE=""
+TESTING_HARNESS_API_KEY_VALUE=""
 
 APP_DEPLOYS=(psfn-agent psfn-gateway psfn-garden)
 CHECK_COUNT=0
@@ -49,7 +49,7 @@ Options:
       --expect-tag TAG       Require app pod image tags to match TAG
       --timeout DURATION     Rollout timeout (default: 300s)
       --since DURATION       Agent log scan window (default: 15m)
-      --secret NAME          App secret containing API_KEY (default: psfn-app)
+      --secret NAME          App secret containing TESTING_HARNESS_API_KEY (default: psfn-app)
       --garden-port PORT     Garden localhost port on the node (default: 10054)
       --gateway-port PORT    Gateway localhost port on the node (default: 10053)
       --companion-pattern RE Regex for the expected /v1/models companion route
@@ -277,36 +277,36 @@ run_pod_node() {
   printf '%s\n' "$script" | run_kubectl -n "$NAMESPACE" exec -i "deploy/${deploy}" -c "$container" -- node --input-type=module
 }
 
-run_host_node_with_api_key() {
+run_host_node_with_testing_harness_key() {
   local script=$1
-  if [[ -z "$API_KEY_VALUE" ]]; then
-    printf 'API key has not been loaded\n'
+  if [[ -z "$TESTING_HARNESS_API_KEY_VALUE" ]]; then
+    printf 'Testing-harness API key has not been loaded\n'
     return 1
   fi
 
   if ! deploy_binds_host_port psfn-gateway; then
     verbose_log "kubectl exec -i deploy/psfn-gateway -- node --input-type=module <redacted-api-key+script> (no gateway hostPort)"
     {
-      printf '%s\n' "$API_KEY_VALUE"
+      printf '%s\n' "$TESTING_HARNESS_API_KEY_VALUE"
       printf '%s\n' "$script"
-    } | run_kubectl -n "$NAMESPACE" exec -i deploy/psfn-gateway -c gateway -- sh -c 'IFS= read -r API_KEY; export API_KEY; node --input-type=module'
+    } | run_kubectl -n "$NAMESPACE" exec -i deploy/psfn-gateway -c gateway -- sh -c 'IFS= read -r TESTING_HARNESS_API_KEY; export TESTING_HARNESS_API_KEY; node --input-type=module'
     return
   fi
 
   if [[ "$KUBE_MODE" == "remote" ]]; then
-    verbose_log "ssh ${HOST_ALIAS} 'IFS= read -r API_KEY; export API_KEY; node --input-type=module' <redacted-api-key+script>"
+    verbose_log "ssh ${HOST_ALIAS} 'IFS= read -r TESTING_HARNESS_API_KEY; export TESTING_HARNESS_API_KEY; node --input-type=module' <redacted-testing-harness-key+script>"
     {
-      printf '%s\n' "$API_KEY_VALUE"
+      printf '%s\n' "$TESTING_HARNESS_API_KEY_VALUE"
       printf '%s\n' "$script"
-    } | ssh "$HOST_ALIAS" 'IFS= read -r API_KEY; export API_KEY; node --input-type=module'
+    } | ssh "$HOST_ALIAS" 'IFS= read -r TESTING_HARNESS_API_KEY; export TESTING_HARNESS_API_KEY; node --input-type=module'
     return
   fi
 
   verbose_log "node --input-type=module <redacted-api-key+script>"
   {
-    printf '%s\n' "$API_KEY_VALUE"
+    printf '%s\n' "$TESTING_HARNESS_API_KEY_VALUE"
     printf '%s\n' "$script"
-  } | bash -c 'IFS= read -r API_KEY; export API_KEY; node --input-type=module'
+  } | bash -c 'IFS= read -r TESTING_HARNESS_API_KEY; export TESTING_HARNESS_API_KEY; node --input-type=module'
 }
 
 trim_text() {
@@ -366,33 +366,33 @@ run_check() {
   return 0
 }
 
-ensure_api_key() {
-  if [[ -n "$API_KEY_VALUE" ]]; then
+ensure_testing_harness_api_key() {
+  if [[ -n "$TESTING_HARNESS_API_KEY_VALUE" ]]; then
     return 0
   fi
 
   local encoded
-  if ! encoded="$(run_kubectl -n "$NAMESPACE" get secret "$SECRET_NAME" -o 'jsonpath={.data.API_KEY}' 2>&1)"; then
-    printf 'failed to read API_KEY from secret/%s: %s\n' "$SECRET_NAME" "$encoded"
+  if ! encoded="$(run_kubectl -n "$NAMESPACE" get secret "$SECRET_NAME" -o 'jsonpath={.data.TESTING_HARNESS_API_KEY}' 2>&1)"; then
+    printf 'failed to read TESTING_HARNESS_API_KEY from secret/%s: %s\n' "$SECRET_NAME" "$encoded"
     return 1
   fi
   encoded="$(printf '%s' "$encoded" | trim_text)"
   if [[ -z "$encoded" ]]; then
-    printf 'secret/%s does not contain data.API_KEY\n' "$SECRET_NAME"
+    printf 'secret/%s does not contain data.TESTING_HARNESS_API_KEY\n' "$SECRET_NAME"
     return 1
   fi
 
   local decoded
   if ! decoded="$(printf '%s' "$encoded" | node -e 'const fs = require("node:fs"); const raw = fs.readFileSync(0, "utf8").trim(); process.stdout.write(Buffer.from(raw, "base64").toString("utf8").trim());' 2>&1)"; then
-    printf 'failed to decode API_KEY from secret/%s: %s\n' "$SECRET_NAME" "$decoded"
+    printf 'failed to decode TESTING_HARNESS_API_KEY from secret/%s: %s\n' "$SECRET_NAME" "$decoded"
     return 1
   fi
   if [[ -z "$decoded" ]]; then
-    printf 'decoded API_KEY from secret/%s is empty\n' "$SECRET_NAME"
+    printf 'decoded TESTING_HARNESS_API_KEY from secret/%s is empty\n' "$SECRET_NAME"
     return 1
   fi
 
-  API_KEY_VALUE=$decoded
+  TESTING_HARNESS_API_KEY_VALUE=$decoded
 }
 
 check_rollout_status() {
@@ -576,17 +576,17 @@ fetch_gateway_models_response() {
   script=$(cat <<EOF
 const port = ${GATEWAY_PORT};
 const res = await fetch(\`http://127.0.0.1:\${port}/v1/models\`, {
-  headers: { authorization: \`Bearer \${process.env.API_KEY ?? ""}\` },
+  headers: { authorization: \`Bearer \${process.env.TESTING_HARNESS_API_KEY ?? ""}\` },
 });
 const body = await res.text();
 process.stdout.write(JSON.stringify({ status: res.status, ok: res.ok, body }));
 EOF
 )
-  run_host_node_with_api_key "$script"
+  run_host_node_with_testing_harness_key "$script"
 }
 
 check_gateway_models() {
-  ensure_api_key || return 1
+  ensure_testing_harness_api_key || return 1
 
   # No explicit pattern: expect the deployment's own companion id (COMPANION_ID
   # on the gateway container), so the same gate serves every target.
@@ -882,16 +882,16 @@ check_zero_bookkeeping_writes() {
 }
 
 check_gateway_smoke() {
-  ensure_api_key || return 1
+  ensure_testing_harness_api_key || return 1
 
   local script
   script=$(cat <<EOF
 const port = ${GATEWAY_PORT};
 const timeoutMs = ${SMOKE_TIMEOUT_SECONDS} * 1000;
-const runId = \`testing:kube-rollout-validation-\${Date.now().toString(36)}\`;
+const runId = \`kube-rollout-validation-\${Date.now().toString(36)}\`;
 const marker = \`rollout-\${Math.random().toString(36).slice(2, 10)}\`;
 const baseUrl = \`http://127.0.0.1:\${port}\`;
-const authHeaders = { authorization: \`Bearer \${process.env.API_KEY ?? ""}\` };
+const authHeaders = { authorization: \`Bearer \${process.env.TESTING_HARNESS_API_KEY ?? ""}\` };
 
 async function fetchWithTimeout(path, options) {
   const controller = new AbortController();
@@ -931,7 +931,6 @@ async function chat(messages) {
     headers: {
       ...authHeaders,
       "content-type": "application/json",
-      "x-session-id": runId,
     },
     body: JSON.stringify({
       model,
@@ -972,7 +971,7 @@ EOF
 )
 
   local response
-  if ! response="$(run_host_node_with_api_key "$script" 2>&1)"; then
+  if ! response="$(run_host_node_with_testing_harness_key "$script" 2>&1)"; then
     printf 'gateway smoke failed: %s\n' "$response"
     return 1
   fi

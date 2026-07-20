@@ -186,23 +186,25 @@ describe('session runtime composition transcript projection wiring', () => {
       enableContinuity: true,
       continuityChannelIds: ['discord:configured-room'],
     });
-    const continuityStore = composition.continuityStore!;
-    continuityStore.append('contact-1', {
-      channelId: 'discord:configured-room',
-      originChannelId: 'discord:configured-room',
-      role: 'user',
-      content: 'Configured room entry',
-      timestamp: 1_700_000_000_000,
-      channelVisibility: 'private',
-    });
-    continuityStore.append('contact-1', {
-      channelId: 'api:head-pat-smoke',
-      originChannelId: 'api:head-pat-smoke',
-      role: 'assistant',
-      content: 'Smoke entry',
-      timestamp: 1_700_000_001_000,
-      channelVisibility: 'private',
-    });
+    // Continuity content only renders when it resolves against a live L0
+    // journal row, so seed through the manager (which stamps sourceEntryId)
+    // rather than appending unresolvable rows to the raw store.
+    expect(composition.sessionManager.recordUserMessage(
+      'discord:configured-room',
+      'Configured room entry',
+      'contact-1',
+      'Contact',
+      true,
+      'contact-1',
+    )).not.toBeNull();
+    expect(composition.sessionManager.recordUserMessage(
+      'api:head-pat-smoke',
+      'Smoke entry',
+      'contact-1',
+      'Contact',
+      true,
+      'contact-1',
+    )).not.toBeNull();
 
     expect(composition.sessionManager.crossChannelContinuity.getMerged({
       canonicalUserId: 'contact-1',

@@ -22,6 +22,7 @@
   import SettingsEnvironmentSummary from '$lib/components/settings/SettingsEnvironmentSummary.svelte';
   import SettingsIntegrationsPanels from './SettingsIntegrationsPanels.svelte';
   import SettingsMemoryPanels from './SettingsMemoryPanels.svelte';
+  import FloatingSettingsSave from '$lib/components/settings/FloatingSettingsSave.svelte';
   import SettingsPageChrome from '$lib/components/settings/SettingsPageChrome.svelte';
   import SettingsSearch from '$lib/components/settings/SettingsSearch.svelte';
   import SettingsRuntimePanels from './SettingsRuntimePanels.svelte';
@@ -43,6 +44,11 @@
   import {
     normalizeProvidersRuntimeConfig,
   } from '$lib/providers/registry';
+  import { getCompanionCacheScope } from '$lib/fleet/companion-scope';
+  import {
+    persistSettingsLastSavedAt,
+    restoreSettingsLastSavedAt,
+  } from '$lib/components/settings/floating-save';
   import {
     appendProviderEntry,
     cloneProviderRegistry,
@@ -101,6 +107,7 @@
   let loading = $state(true);
   let error = $state('');
   let saving = $state(false);
+  let lastSavedAt = $state<number | null>(null);
   // Persistent save feedback (qq67): a single banner in SettingsPageChrome,
   // but errors (and successes that skipped owner files) persist until the
   // operator dismisses them or starts the next save. Only plain successes
@@ -128,6 +135,11 @@
   let settingsSaveDirty = $derived(
     curatedDirty || advancedDirty || providerRegistryDirty(),
   );
+
+  function recordConfirmedSave(savedAt: number): void {
+    lastSavedAt = savedAt;
+    persistSettingsLastSavedAt(getCompanionCacheScope(), savedAt);
+  }
 
   let initialRawJsonByKey = $state<Record<RawEditorKey, string>>(
     buildRawEditorJsonMap(() => ''),
@@ -943,6 +955,7 @@
         return;
       }
       await saveSubConfig('providers', JSON.stringify(providerRegistry, null, 2));
+      recordConfirmedSave(Date.now());
       await reloadSettingsState();
       flash(true, 'providers.json saved');
     } catch (error) {
@@ -1030,7 +1043,12 @@
     // raw edits are saved or discarded on the Raw JSON tab.
     const settingsConflict = resolveUnifiedSaveSettingsJsonConflict(dirtyKeys);
     if (settingsConflict) {
-      return { ok: false, invalidFieldCount: 0, message: settingsConflict, skippedOwnerFiles: [] };
+      return {
+        ok: false,
+        invalidFieldCount: 0,
+        message: settingsConflict,
+        skippedOwnerFiles: [],
+      };
     }
 
     // An owner file with a dirty raw editor is being hand-edited on the Raw
@@ -1093,6 +1111,7 @@
       };
     }
 
+    recordConfirmedSave(Date.now());
     await reloadSettingsState();
     const skippedNote = buildUnifiedSaveSkipNote({
       skippedOwnerFiles: ownerConfigPlan.skippedOwnerFiles,
@@ -1174,6 +1193,7 @@
         return;
       }
 
+      recordConfirmedSave(Date.now());
       flashRaw('settings', true, result.message || 'settings.json saved');
       // Rebasing the just-saved editor before the reload keeps it clean (see
       // saveRawConfig); the reload then refreshes it from server state.
@@ -1192,6 +1212,7 @@
       const json = getRawJson(key);
       JSON.parse(json);
       await saveSubConfig(key, json);
+      recordConfirmedSave(Date.now());
       applyValidationErrors({ ok: true, message: '' });
       // Rebasing the just-saved editor before any reload keeps it clean: the
       // reload refreshes it from server state instead of preserving it as dirty.
@@ -1212,6 +1233,7 @@
 
   // ── Init ──
   onMount(async () => {
+    lastSavedAt = restoreSettingsLastSavedAt(getCompanionCacheScope());
     window.addEventListener('beforeunload', handleBeforeUnload);
     hashChangeHandler = () => applyLocationHash('auto');
     window.addEventListener('hashchange', hashChangeHandler);
@@ -1292,6 +1314,14 @@
 </datalist>
 
 <div class="space-y-5">
+  <FloatingSettingsSave
+    {dirty}
+    saveable={settingsSaveDirty}
+    {saving}
+    {lastSavedAt}
+    onSave={saveSettings}
+  />
+
   <SettingsPageChrome
     {dirty}
     feedback={saveFeedback}

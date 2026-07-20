@@ -29,6 +29,7 @@
 
   const SOURCE_LABELS: Record<ChannelEnvelopeRow['source'], string> = {
     channel_label: 'channel-owned',
+    operator_confirmed: 'operator-confirmed',
     operator_override: 'override',
     derived_default: 'derived',
   };

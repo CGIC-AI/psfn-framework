@@ -201,6 +201,45 @@ describe('channel envelope labels (channels.json contract)', () => {
     expect(validateChannelEnvelopeLabel({ privacy: 'public', broadcast: true }, 'label'))
       .toEqual({ privacy: 'public', broadcast: true });
   });
+
+  it('validates the operator-confirmed classificationSource field (jp36.6)', () => {
+    expect(validateChannelEnvelopeLabel(
+      { privacy: 'public', classificationSource: 'operator_confirmed' },
+      'label',
+    )).toEqual({ privacy: 'public', classificationSource: 'operator_confirmed' });
+    // Paired with a bare broadcast=true (tier-1 public) is also valid.
+    expect(validateChannelEnvelopeLabel(
+      { broadcast: true, classificationSource: 'operator_confirmed' },
+      'label',
+    )).toEqual({ broadcast: true, classificationSource: 'operator_confirmed' });
+  });
+
+  it('fails closed on unknown classificationSource values (no computed sources persist)', () => {
+    expect(() => validateChannelEnvelopeLabel(
+      { privacy: 'public', classificationSource: 'derived_default' },
+      'label',
+    )).toThrow(/classificationSource/);
+    expect(() => validateChannelEnvelopeLabel(
+      { privacy: 'public', classificationSource: 'channel_label' },
+      'label',
+    )).toThrow(/classificationSource/);
+    expect(() => validateChannelEnvelopeLabel(
+      { privacy: 'public', classificationSource: true },
+      'label',
+    )).toThrow(/classificationSource/);
+  });
+
+  it('rejects operator_confirmed without a tier-1 classification to pin', () => {
+    expect(() => validateChannelEnvelopeLabel(
+      { classificationSource: 'operator_confirmed' },
+      'label',
+    )).toThrow(/without a tier-1 classification/);
+    // broadcast=false pins nothing (privacy falls through), so it is rejected too.
+    expect(() => validateChannelEnvelopeLabel(
+      { broadcast: false, classificationSource: 'operator_confirmed' },
+      'label',
+    )).toThrow(/without a tier-1 classification/);
+  });
 });
 
 describe('migration map and stored-vocabulary decoding', () => {

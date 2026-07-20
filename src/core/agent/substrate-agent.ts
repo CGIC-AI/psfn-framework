@@ -674,7 +674,7 @@ export class SubstrateAgent {
     });
     installContextCoherenceMonitor({
       eventBus: this.eventBus,
-      getRecentSessionEntries: (channelId, limit) => this.sessionManager.getRecentMessages(channelId, limit),
+      getRecentSessionEntries: (channelId, limit) => this.sessionManager.getRecentSessionEntries(channelId, limit),
     });
     this.toolRuntimeFacade = new ToolRuntimeFacade({
       config: this.config,

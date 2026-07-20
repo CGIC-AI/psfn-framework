@@ -205,7 +205,9 @@ export class SkillsRuntime {
       })),
       roots: scan.roots.map(root => ({
         path: root.path,
+        absolutePath: root.absolutePath,
         exists: root.exists,
+        message: root.message,
       })),
       files: buildSkillFileSignature(files),
     });

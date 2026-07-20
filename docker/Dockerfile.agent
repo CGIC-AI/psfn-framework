@@ -87,6 +87,7 @@ COPY scripts/ops/ ./scripts/ops/
 # runtime (repoRoot = /app in the image); without this COPY the global
 # skills root is missing and the loader reports it as absent.
 COPY skills/ ./skills/
+RUN test -f /app/skills/conversation/SKILL.md
 
 RUN git init /app \
     && git config user.name "PSFN Runtime Image" \

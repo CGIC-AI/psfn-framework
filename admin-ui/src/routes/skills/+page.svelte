@@ -15,6 +15,10 @@
   } from '$lib/types';
   import { pushToast } from '$lib/stores/toast.svelte';
   import { scopeGardenPath } from '$lib/fleet/companion-scope';
+  import {
+    buildSkillRootViews,
+    formatMissingSkillRoot,
+  } from './skills-view';
 
   // ── State ──
   let snapshot = $state<SkillSnapshot | null>(null);
@@ -264,8 +268,9 @@
 
   // Missing scan roots (excluding the lazily-created managed 'custom' root)
   // explain a mysteriously empty skills list, so surface them prominently.
-  let missingScanRoots = $derived.by(() =>
-    (snapshot?.roots ?? []).filter(r => !r.exists && r.source !== 'custom'),
+  let skillRootViews = $derived(buildSkillRootViews(snapshot?.roots ?? []));
+  let missingScanRoots = $derived(
+    skillRootViews.filter(view => view.degradationMessage !== undefined),
   );
 
   function formatRequires(entry: SkillEntry): string {
@@ -447,14 +452,13 @@
     <!-- Missing Scan Roots Warning -->
     {#if missingScanRoots.length > 0}
       <div class="card-garden p-4 border-l-4 border-l-wilt-400">
-        <p class="text-sm text-wilt-700">
-          {missingScanRoots.length} skills root{missingScanRoots.length === 1 ? ' is' : 's are'} missing on disk
-          and cannot contribute skills:
-          {#each missingScanRoots as root, i (root.absolutePath)}
-            {#if i > 0},{/if}
-            <code class="font-mono bg-wilt-50 px-1 py-0.5 rounded">{root.path}</code>
+        <ul class="space-y-1">
+          {#each missingScanRoots as view (view.root.absolutePath)}
+            <li class="text-sm text-wilt-700">
+              {view.degradationMessage}
+            </li>
           {/each}
-        </p>
+        </ul>
       </div>
     {/if}
 
@@ -794,8 +798,8 @@
                   {root.skillCount} skill{root.skillCount === 1 ? '' : 's'}
                 </span>
               {:else}
-                <span class="inline-block px-2 py-0.5 rounded-full text-xs font-medium bg-wilt-100 text-wilt-600">
-                  missing
+                <span class="text-xs text-wilt-600">
+                  {formatMissingSkillRoot(root)}
                 </span>
               {/if}
             </li>

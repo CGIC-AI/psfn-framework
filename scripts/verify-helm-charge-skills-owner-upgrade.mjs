@@ -203,6 +203,7 @@ try {
     'trust-policy',
     'backup',
     'intake-policy',
+    'partner-affect-shadow',
   ]) {
     writeFileSync(
       join(systemDataDir, `${ownerFile}.json`),

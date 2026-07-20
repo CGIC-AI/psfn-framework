@@ -139,16 +139,47 @@ describe('resolveSharedSatelliteObservationDeliveries', () => {
     })).toEqual([]);
   });
 
-  it('fails closed when the registry is disabled or the satellite lacks shared authority', () => {
+  it('falls through when the registry is disabled or the satellite is not shared', () => {
     expect(resolveSharedSatelliteObservationDeliveries({
       event: event(),
       registry: { ...registry, enabled: false },
-    })).toEqual([]);
+    })).toBeNull();
     expect(resolveSharedSatelliteObservationDeliveries({
       event: event(),
       registry: {
         ...registry,
         satellites: [{ ...registry.satellites[0], sharedDevice: undefined }],
+      },
+    })).toBeNull();
+  });
+
+  it.each(['health', 'battery'])('falls through for registered %s telemetry', (scope) => {
+    expect(resolveSharedSatelliteObservationDeliveries({
+      event: event({ scope }),
+      registry,
+    })).toBeNull();
+  });
+
+  it('still fails closed for unauthenticated or non-admitted non-shared observations', () => {
+    const nonSharedRegistry: SatelliteRegistryConfig = {
+      ...registry,
+      satellites: [{ ...registry.satellites[0], sharedDevice: undefined }],
+    };
+    expect(resolveSharedSatelliteObservationDeliveries({
+      event: event({ auth: undefined }),
+      registry: nonSharedRegistry,
+    })).toEqual([]);
+    expect(resolveSharedSatelliteObservationDeliveries({
+      event: event(),
+      registry: {
+        ...nonSharedRegistry,
+        satellites: [{
+          ...nonSharedRegistry.satellites[0],
+          endpoints: [{
+            ...nonSharedRegistry.satellites[0].endpoints[0],
+            telemetryScopes: ['location'],
+          }],
+        }],
       },
     })).toEqual([]);
   });

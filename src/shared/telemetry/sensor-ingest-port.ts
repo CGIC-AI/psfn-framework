@@ -63,13 +63,14 @@ function copyScalar(
 /**
  * Resolve exact recipients and strip a shared-device observation to the
  * minimum normalized fields cognition consumes. Raw payload keys, room
- * history, and unrelated scopes never cross the companion routing boundary.
+ * history never cross the companion routing boundary. Non-observation scopes
+ * fall through to the generic companion delivery path.
  */
 export function resolveSharedSatelliteObservationDeliveries(input: {
   event: ExternalTelemetryEvent;
   registry: SatelliteRegistryConfig;
 }): SharedSatelliteObservationDelivery[] | null {
-  if (!input.registry.enabled) return [];
+  if (!input.registry.enabled) return null;
   const satelliteId = resolveSatelliteId(input.event);
   const satellite = input.registry.satellites.find(
     candidate => candidate.satelliteId === satelliteId,
@@ -84,12 +85,12 @@ export function resolveSharedSatelliteObservationDeliveries(input: {
     : rawScope === 'presence' || rawScope === 'location'
       ? rawScope
       : undefined;
-  if (!scope) return [];
-  if (!satellite.sharedDevice) return [];
+  if (!scope) return null;
   if (!input.event.auth
     || !satelliteAdmitsAuthenticatedTelemetryScope(satellite, input.event.auth, scope)) {
     return [];
   }
+  if (!satellite.sharedDevice) return null;
 
   const payload: Record<string, unknown> = { satelliteId: satellite.satelliteId };
   if (satellite.placeId) payload.placeId = satellite.placeId;

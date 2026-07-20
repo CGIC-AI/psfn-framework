@@ -833,7 +833,8 @@ Harnesses must name ephemeral channels with the reserved
 `api:<principal>:testing:kube-rollout-validation-20260719`. The marker
 preserves ordinary channel-type inference while explicitly excluding the
 session from temporal wake/refresher targeting, near-turn maintenance, and
-episodic synthesis.
+episodic synthesis, plus the sleeptime stack (consolidation, arcs, dreams,
+wiki updates, orientation rewrites, and durable memory writes).
 
 When testing is complete, stop the owning companion workloads and purge each
 session by its exact channel-index key:
@@ -842,10 +843,26 @@ session by its exact channel-index key:
 npm run session:purge -- --session 'api:<principal>:testing:kube-rollout-validation-20260719'
 ```
 
+For a multi-companion fleet, select the manifest-owned companion explicitly:
+
+```bash
+npm run session:purge -- \
+  --companion-id '<companion-uuid>' \
+  --session 'api:<principal>:testing:kube-rollout-validation-20260719'
+```
+
 The command accepts no wildcards. It stages the complete journal chain and
-channel-index removal for rollback, then removes the channel's message and
-drift projection rows in one PostgreSQL transaction. It refuses ordinary
-sessions. An exceptional non-testing purge requires
+channel-index removal for rollback, clears that companion and session's exact
+Redis tail-key family when Redis is configured, then removes the channel's
+message and drift projection rows in one PostgreSQL transaction. In split-root
+deployments it resolves journals from the companion data root. In fleet mode
+it resolves both that root and the non-public PostgreSQL schema from
+`companions.json`; missing or ambiguous companion/schema selection fails
+closed. When Redis is not configured the report says
+`no tail cache configured`. A configured but unreachable Redis aborts and
+rolls the staged journals/index back rather than reporting a clean purge.
+
+The command refuses ordinary sessions. An exceptional non-testing purge requires
 `--force-non-testing` and an interactive confirmation in which the operator
 types the exact id; use that escape hatch only after independently verifying
 the target and backup.

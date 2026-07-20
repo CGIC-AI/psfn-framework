@@ -8,7 +8,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { SessionStore } from './store.js';
-import { purgeTestingSession } from './testing-session-purge.js';
+import {
+  purgeTestingSession,
+  TestingSessionTailPurgeError,
+} from './testing-session-purge.js';
 
 describe('purgeTestingSession', () => {
   let sessionsDir: string;
@@ -46,6 +49,11 @@ describe('purgeTestingSession', () => {
       sessionId,
       channelId: sessionId,
       removedJournalFiles: [filename],
+      tailCache: {
+        status: 'not_configured',
+        message: 'no tail cache configured',
+        removedKeys: 0,
+      },
     });
     expect(projection.purgeChannel).toHaveBeenCalledWith(sessionId);
     expect(existsSync(join(sessionsDir, filename))).toBe(false);
@@ -54,6 +62,67 @@ describe('purgeTestingSession', () => {
       channels: Record<string, unknown>;
     };
     expect(index.channels).toEqual({});
+  });
+
+  it('clears the exact testing-session tail key family in the guarded purge flow', async () => {
+    const sessionId = 'api:testing:cached-transcript';
+    exerciseSession(sessionId);
+    const keys = new Set([
+      `psfn:session-tail-epoch:companion:${sessionId}`,
+      `psfn:session-tail:companion:${sessionId}:e0`,
+      `psfn:session-tail:companion:${sessionId}:e4`,
+      'psfn:session-tail:companion:api:testing:other-session:e0',
+    ]);
+    const tailCache = {
+      purgeChannelKeyFamily: vi.fn(async (target: string) => {
+        let removed = 0;
+        for (const key of [...keys]) {
+          if (key.includes(`:${target}:e`) || key.endsWith(`:${target}`)) {
+            keys.delete(key);
+            removed += 1;
+          }
+        }
+        return removed;
+      }),
+    };
+
+    const report = await purgeTestingSession({
+      sessionsDir,
+      sessionId,
+      projection: { purgeChannel: vi.fn().mockResolvedValue(undefined) },
+      tailCache,
+    });
+
+    expect(tailCache.purgeChannelKeyFamily).toHaveBeenCalledWith(sessionId);
+    expect(report.tailCache).toEqual({
+      status: 'purged',
+      message: 'purged 3 tail cache keys',
+      removedKeys: 3,
+    });
+    expect(keys).toEqual(new Set([
+      'psfn:session-tail:companion:api:testing:other-session:e0',
+    ]));
+  });
+
+  it('rolls journals and the index back with a named error when configured Redis is unreachable', async () => {
+    const sessionId = 'api:testing:redis-unreachable';
+    const filename = exerciseSession(sessionId);
+    const projection = { purgeChannel: vi.fn() };
+
+    await expect(purgeTestingSession({
+      sessionsDir,
+      sessionId,
+      projection,
+      tailCache: {
+        purgeChannelKeyFamily: vi.fn().mockRejectedValue(new Error('ECONNREFUSED')),
+      },
+    })).rejects.toBeInstanceOf(TestingSessionTailPurgeError);
+
+    expect(existsSync(join(sessionsDir, filename))).toBe(true);
+    expect(new SessionStore(sessionsDir).listChannels()).toEqual([
+      { sessionId, channelId: sessionId, messageCount: 1 },
+    ]);
+    expect(projection.purgeChannel).not.toHaveBeenCalled();
   });
 
   it('refuses wildcard-like and missing exact targets', async () => {

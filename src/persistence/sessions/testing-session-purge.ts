@@ -6,6 +6,7 @@ import {
 } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { isTestingSessionId } from '../../core/session/session-id.js';
+import { toErrorMessage } from '../../shared/utils/errors.js';
 import {
   CHANNEL_INDEX_FILENAME,
   type ChannelIndexEntry,
@@ -24,10 +25,26 @@ export interface SessionProjectionPurgePort {
   purgeChannel(channelId: string): Promise<void>;
 }
 
+export interface SessionTailPurgePort {
+  purgeChannelKeyFamily(channelKey: string): Promise<number>;
+}
+
+export class TestingSessionTailPurgeError extends Error {
+  override readonly name = 'TestingSessionTailPurgeError';
+
+  constructor(sessionId: string, cause: unknown) {
+    super(
+      `Configured Redis tail cache purge failed for ${sessionId}: ${toErrorMessage(cause)}`,
+      { cause },
+    );
+  }
+}
+
 export interface PurgeTestingSessionOptions {
   sessionsDir: string;
   sessionId: string;
   projection: SessionProjectionPurgePort;
+  tailCache?: SessionTailPurgePort;
   forceNonTesting?: boolean;
   /**
    * Confirmation proof for non-testing data. The caller must collect the
@@ -40,6 +57,17 @@ export interface PurgeTestingSessionReport {
   sessionId: string;
   channelId: string;
   removedJournalFiles: string[];
+  tailCache:
+    | {
+        status: 'not_configured';
+        message: 'no tail cache configured';
+        removedKeys: 0;
+      }
+    | {
+        status: 'purged';
+        message: string;
+        removedKeys: number;
+      };
 }
 
 interface StagedJournal {
@@ -184,6 +212,22 @@ export async function purgeTestingSession(
     }
   });
 
+  let removedTailCacheKeys = 0;
+  if (options.tailCache) {
+    try {
+      removedTailCacheKeys = await options.tailCache.purgeChannelKeyFamily(options.sessionId);
+    } catch (error) {
+      rollbackBeforeProjectionCommit({
+        staged,
+        sessionId: options.sessionId,
+        entry,
+        channelIndexPath,
+        channelIndex,
+        cause: new TestingSessionTailPurgeError(options.sessionId, error),
+      });
+    }
+  }
+
   try {
     await options.projection.purgeChannel(channelId);
   } catch (error) {
@@ -205,5 +249,16 @@ export async function purgeTestingSession(
     sessionId: options.sessionId,
     channelId,
     removedJournalFiles: entry.filenames,
+    tailCache: options.tailCache
+      ? {
+          status: 'purged',
+          message: `purged ${removedTailCacheKeys} tail cache keys`,
+          removedKeys: removedTailCacheKeys,
+        }
+      : {
+          status: 'not_configured',
+          message: 'no tail cache configured',
+          removedKeys: 0,
+        },
   };
 }

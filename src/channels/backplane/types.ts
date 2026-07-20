@@ -1,4 +1,5 @@
 import type { AgentResponse, Attachment, Lifecycle, SubstrateMessage } from '../../shared/contracts/runtime.js';
+import type { ClarifyDeliverResult, PendingClarification } from '../../boundary/gateway/protocol.js';
 import type { EligibilityRequirements } from '../../system/capabilities/eligibility.js';
 import type { ResolvedReactionSurface } from '../shared/reaction-surface.js';
 
@@ -63,6 +64,20 @@ export interface ChannelOutboundAdapter {
    * converted into a text reply.
    */
   sendReaction?(ctx: OutboundContext, messageId: string, emoji: string): Promise<void>;
+  /**
+   * vvf.5.2: render a structured clarification's ordered choices interactively
+   * (Discord buttons, a Telegram numbered list) and await the human's answer up
+   * to `timeoutMs`. Optional: only channels with a live interactive human
+   * implement it. A resolved result carries a selection verified against the
+   * delivered choices at source; timeout / unrecognized reply / out-of-range
+   * choice fail closed as a `pending` no-answer (never a fabricated selection,
+   * never a silent drop).
+   */
+  deliverClarification?(
+    clarification: PendingClarification,
+    target: string,
+    timeoutMs: number,
+  ): Promise<ClarifyDeliverResult>;
 }
 
 export interface ChannelGatewayAdapter extends Lifecycle {
@@ -136,7 +151,10 @@ export type ChannelAdapterFactoryEntry = ChannelAdapterFactoryPort;
 // Lightweight docks for shared call sites that only need a focused channel facet.
 export interface ChannelOutboundDock {
   id: string;
-  outbound: Pick<ChannelOutboundAdapter, 'textChunkLimit' | 'sendText' | 'sendMedia' | 'sendReaction'>;
+  outbound: Pick<
+    ChannelOutboundAdapter,
+    'textChunkLimit' | 'sendText' | 'sendMedia' | 'sendReaction' | 'deliverClarification'
+  >;
 }
 
 export interface ChannelPromptDock {

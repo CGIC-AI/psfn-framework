@@ -4,6 +4,7 @@ import { registerDiscordMethods } from './discord.js';
 import { registerConfirmationMethods } from './confirmation.js';
 import { registerSessionHmacMethods } from './session-hmac.js';
 import { registerNotifyMethods } from './notify.js';
+import { registerClarifyMethods } from './clarify.js';
 import { registerRuntimeHealthMethods } from './runtime-health.js';
 import { registerWebMethods } from './web.js';
 import { registerShellMethods } from './shell.js';
@@ -24,6 +25,7 @@ export function registerGatewayMethods(runtime: GatewayMethodRuntime): void {
   registerConfirmationMethods(runtime);
   registerSessionHmacMethods(runtime);
   registerNotifyMethods(runtime);
+  registerClarifyMethods(runtime);
   registerRuntimeHealthMethods(runtime);
   registerWebMethods(runtime);
   registerShellMethods(runtime);

@@ -520,6 +520,38 @@ export interface ClarificationSelection {
   readonly selectedChoice: string;
 }
 
+/**
+ * Wire parameters for delivering a {@link PendingClarification} to an
+ * interactive channel that runs in the gateway process (Discord buttons or a
+ * Telegram numbered list). The agent-side clarification port resolves the
+ * active channel and target from the current turn's request context before
+ * dispatching; the gateway renders the choices, awaits the human's answer up to
+ * `timeoutMs`, and returns a {@link ClarifyDeliverResult}.
+ */
+export interface ClarifyDeliverParams {
+  /** Which interactive channel renders the choices. */
+  readonly channel: 'discord' | 'telegram';
+  /** Channel-scoped destination (Discord channel id / Telegram `telegram:<chatId>`). */
+  readonly target: string;
+  /** The runtime-owned clarification to present. */
+  readonly clarification: PendingClarification;
+  /** Upper bound the channel waits for an answer before reporting no-answer. */
+  readonly timeoutMs: number;
+}
+
+/**
+ * Wire result of a clarify delivery. `resolved` carries the verified-at-source
+ * {@link ClarificationSelection}; `pending` (with no selection) is the
+ * structured no-answer returned on timeout, an unrecognized reply, or an
+ * out-of-range choice. The channel never fabricates a selection.
+ */
+export interface ClarifyDeliverResult {
+  readonly status: 'pending' | 'resolved';
+  readonly channel: string;
+  readonly target: string;
+  readonly selection?: ClarificationSelection;
+}
+
 export interface SessionHmacSignParams {
   entry: JournalEntry;
   previousHmac: string | null;
@@ -1035,6 +1067,7 @@ export interface GatewayMethods {
   'image.edit': [ImageEditRpcParams, ImageGenerationRpcResult];
   'approval.request': [ApprovalRequestParams, ApprovalResult];
   'notify.ntfy': [NotifyNtfyParams, NotifyNtfyResult];
+  'clarify.deliver': [ClarifyDeliverParams, ClarifyDeliverResult];
   'shard.backend.request': [ShardBackendRequestParams, ShardBackendRequestResult];
   'shard.workload.register': [ShardWorkloadRegisterParams, ShardWorkloadRegisterResult];
   'shard.workload.end': [ShardWorkloadEndParams, ShardWorkloadEndResult];

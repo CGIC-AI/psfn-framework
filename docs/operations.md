@@ -706,11 +706,14 @@ npm run migrate:system-owner-fleet -- --apply \
 The final Helm chart can rehearse the same transaction as one explicit
 pre-upgrade boundary. Set `ownerMigration.required=true`, keep
 `bootstrap.seedOwnerFiles=false`, bind the exact printed approvals, and list
-the system, backup, and every companion PVC. A single-companion release lists
-its one identity and root, sets `ownerMigration.multiCompanion=false`, and does
-not create `companions.json`; a multi-companion installation sets
-`ownerMigration.multiCompanion=true`, uses the same canonical paths as
-`companions.json`, and lists every entry even when only one exists. The hook
+the system, backup, and every companion PVC. Topology is derived from
+`companions.json` presence, not a flag (`PSFN_MULTI_COMPANION` is retired): a
+single-companion release lists its one identity and root, and when no
+`companions.json` exists yet the migrator synthesizes the one-entry migration
+fleet from the environment without persisting a manifest (the chart provisions
+the runtime `companions.json` separately). A multi-companion installation uses
+the same canonical paths as the already-present `companions.json` and lists
+every entry. The hook
 captures the whole-install snapshot before its
 canonical compiled migration init container runs; packaged per-companion probes
 must then prove distinct writable owners before Helm admits the new revision.

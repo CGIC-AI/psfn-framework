@@ -113,6 +113,21 @@ bootstrap:
   # system-owner fleet migration; this Helm compatibility path does not move them.
   seedOwnerFiles: false
 
+  # Every PSFN deployment is a fleet of one or more companions enumerated by the
+  # mandatory system-owned companions.json manifest; topology is derived from
+  # the entry count, not the retired PSFN_MULTI_COMPANION flag. For the
+  # single-companion (non-fleet) topology, the seed init writes a deterministic
+  # one-entry manifest derived from runtime.companionId into system-data when
+  # absent. This is chart-owned topology wiring (not mutable runtime policy), so
+  # it is provisioned independently of seedOwnerFiles and is how an existing
+  # pre-manifest single-companion install migrates: rolling this chart writes
+  # companions.json on the upgrade's init before any runtime process loads
+  # config. Write-when-absent never overwrites an operator/Garden-edited
+  # manifest. Set false to require an externally provisioned companions.json and
+  # fail closed at init if it is missing. Ignored when fleet.enabled=true, where
+  # companions.json is always operator-provisioned.
+  provisionSingleCompanionManifest: true
+
 # Explicit, one-rollout compatibility boundary for legacy fleets whose
 # charge-policy.json and skills.json still live under system-data. This is
 # disabled after the approval-bound fan-out succeeds. `required` lets a
@@ -121,9 +136,11 @@ bootstrap:
 ownerMigration:
   required: false
   enabled: false
-  # Explicit topology selector. False is the default single-companion chart;
-  # true requires companions.json and every manifest companion below.
-  multiCompanion: false
+  # Topology is derived from companions.json presence, not a flag: the migrator
+  # loads a pre-provisioned manifest when present and otherwise synthesizes the
+  # one-entry migration fleet from the environment (COMPANION_ID + roots). List
+  # exactly one companion for a single-companion install or every manifest entry
+  # for a multi-companion installation under `companions` below.
   runtimeRoot: /runtime
   systemDataDir: /runtime/system-data
   systemDataClaim: ""

@@ -2,13 +2,58 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import type { ConcernStorePort } from './concern-store-port.js';
 import { createTestPostgresIntentionPorts } from '../../test-support/postgres-intention-ports.js';
 import type { FakeIntentionPool } from '../../test-support/fake-postgres-intention-pool.js';
-import { buildActiveConcernsPromptVariables, buildActiveConcernsRuntimeData } from './concerns.js';
+import {
+  buildActiveConcernsPromptVariables,
+  buildActiveConcernsRuntimeData,
+  mapRow,
+  type ActiveConcernRow,
+} from './concerns.js';
 import { injectPromptRuntimeTokens } from '../identity/prompt-runtime.js';
 import { getRuntimePromptLayerDefinition } from '../identity/runtime-prompt-layers.js';
 
 function textFixture(value: string): string {
   return value.replace(/\s+/g, ' ').trim();
 }
+
+function concernRow(overrides: Partial<ActiveConcernRow> = {}): ActiveConcernRow {
+  return {
+    id: 'concern-1',
+    text: 'A persisted concern',
+    priority: 'medium',
+    source: 'agent',
+    status: 'resolved',
+    created_at: '2026-02-01T10:00:00.000Z',
+    expires_at: '2026-02-02T10:00:00.000Z',
+    salience: 0.5,
+    sensitivity: 'personal',
+    owner: 'companion',
+    evidence_refs: null,
+    resolution_evidence_refs: null,
+    resolved_at: '2026-02-01T11:00:00.000Z',
+    resolution_outcome: 'Handled',
+    contact_id: null,
+    formation_vad: null,
+    resolution_vad: null,
+    last_reviewed_at: null,
+    next_review_at: null,
+    merged_from_ids: null,
+    split_from_id: null,
+    origin_icp_root_initiation_id: null,
+    ...overrides,
+  };
+}
+
+describe('mapRow', () => {
+  it('attributes persisted VAD validation failures to the owning lifecycle field', () => {
+    expect(() => mapRow(concernRow({
+      formation_vad: JSON.stringify({ valence: 2, arousal: 0, dominance: 0 }),
+    }))).toThrow(/formationVAD\.valence/);
+
+    expect(() => mapRow(concernRow({
+      resolution_vad: JSON.stringify({ valence: 2, arousal: 0, dominance: 0 }),
+    }))).toThrow(/resolutionVAD\.valence/);
+  });
+});
 
 describe('ActiveConcernStore', () => {
   let nowMs: number;

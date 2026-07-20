@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { rejectsMissingImageAttachmentClaim } from './attachment-claim-guard.js';
+import {
+  healMissingImageAttachmentClaim,
+  rejectsMissingImageAttachmentClaim,
+} from './attachment-claim-guard.js';
 
 describe('rejectsMissingImageAttachmentClaim', () => {
   it.each([
@@ -42,5 +45,63 @@ describe('rejectsMissingImageAttachmentClaim', () => {
       responseText: 'Your selfie is attached below.',
       attachmentCount: 1,
     })).toBe(false);
+  });
+});
+
+describe('healMissingImageAttachmentClaim', () => {
+  it('removes a claim sentence in the middle of a paragraph and preserves the surrounding prose', () => {
+    const responseText = "The lighting finally clicked. Here's your selfie. I kept the warmer color palette.";
+
+    expect(healMissingImageAttachmentClaim(responseText)).toBe(
+      'The lighting finally clicked. I kept the warmer color palette.',
+    );
+  });
+
+  it('removes multiple claim sentences across lines', () => {
+    const responseText = [
+      'I have attached an image for you.',
+      'Please find the attached selfie.',
+      'The warmer composition suits the scene.',
+    ].join('\n');
+
+    expect(healMissingImageAttachmentClaim(responseText)).toBe(
+      'The warmer composition suits the scene.',
+    );
+  });
+
+  it('preserves multiple lines of real prose around a claim', () => {
+    const responseText = [
+      'The first draft felt too cool.',
+      'Your photo is attached below.',
+      'This version keeps the amber highlights.',
+    ].join('\n');
+
+    expect(healMissingImageAttachmentClaim(responseText)).toBe([
+      'The first draft felt too cool.',
+      'This version keeps the amber highlights.',
+    ].join('\n'));
+  });
+
+  it.each([
+    'Here is the attached image.',
+    "Here's your selfie.",
+    'Attached is the photo.',
+    'Your selfie is attached below.',
+    'I included the photo below.',
+    'See the attached image below.',
+  ])('returns an empty result when the claim is the entire reply: %s', (responseText) => {
+    expect(healMissingImageAttachmentClaim(responseText)).toBe('');
+  });
+
+  it('removes a standalone marker while preserving prose on the same line', () => {
+    expect(healMissingImageAttachmentClaim(
+      '*image attached* Fresh selfie, exactly like you asked for.',
+    )).toBe('Fresh selfie, exactly like you asked for.');
+  });
+
+  it('leaves replies without a detected claim byte-for-byte unchanged', () => {
+    const responseText = '  I could not attach an image.\nThe written concept is still ready.  ';
+
+    expect(healMissingImageAttachmentClaim(responseText)).toBe(responseText);
   });
 });

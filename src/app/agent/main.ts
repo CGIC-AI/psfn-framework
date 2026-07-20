@@ -797,6 +797,7 @@ async function main(): Promise<void> {
     writer: toolMemoryWriter,
     memoryStore: toolMemoryStore,
     episodicStore,
+    sessionReader: sessionStore,
     contactStore,
     // Same config authority the MemoryWriter and retrieval faculty resolve
     // from, so the action=timeline tool path honors operator-set timeline

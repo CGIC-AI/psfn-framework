@@ -269,6 +269,7 @@ export function getMergedContinuity(params: {
   fallbackUserIds: string[];
   channelId: string;
   channelMeta?: ChannelMeta;
+  isChannelEligible: (channelId: string) => boolean;
 }): SessionEntry[] {
   if (!params.continuityStore || !params.canonicalUserId) return [];
 
@@ -281,15 +282,19 @@ export function getMergedContinuity(params: {
   const seen = new Set<string>();
 
   for (const candidateUserId of candidateUserIds) {
+    // Apply liveness before the caller's result limit. A retired/test channel
+    // burst at the tail must not hide an older entry from a linked channel.
     const entries = params.continuityStore.getRecent(
       candidateUserId,
-      params.limit,
+      params.continuityStore.count(candidateUserId),
       params.channelId,
       params.channelId,
       params.channelMeta,
     );
 
     for (const entry of entries) {
+      const sourceChannelId = entry.originChannelId ?? entry.channelId;
+      if (!params.isChannelEligible(sourceChannelId)) continue;
       const key = continuityEntryKey(entry);
       if (seen.has(key)) continue;
       seen.add(key);

@@ -353,6 +353,7 @@ async function main(): Promise<void> {
     safeguardSurfaces,
   } = await bootstrapAgentCoreRuntime({
     config: coreConfig,
+    continuityChannelIds: Object.keys(channelsConfig.contextEnvelope.channels),
     postgresDatabaseUrl,
     pathSnapshot,
     eventBus,

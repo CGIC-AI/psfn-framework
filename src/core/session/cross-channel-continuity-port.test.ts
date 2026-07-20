@@ -22,7 +22,10 @@ describe('createUserContinuityPort', () => {
     const dir = mkdtempSync(join(tmpdir(), 'psfn-cross-continuity-'));
     dirs.push(dir);
     const store = new UserContinuityStore(dir);
-    const continuity = createUserContinuityPort(store);
+    const continuity = createUserContinuityPort(
+      store,
+      channelId => channelId === 'api:private-main' || channelId === '1234567890',
+    );
 
     continuity.append({
       continuityUserId: 'contact-1',
@@ -62,6 +65,45 @@ describe('createUserContinuityPort', () => {
       continuityUserId: 'legacy-discord-1',
       sourceChannelId: '1234567890',
     }));
+  });
+
+  it('excludes unconfigured smoke channels before applying the result limit', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'psfn-cross-continuity-live-'));
+    dirs.push(dir);
+    const store = new UserContinuityStore(dir);
+    const liveChannelIds = new Set(['api:primary', 'discord:linked-room']);
+    const continuity = createUserContinuityPort(store, channelId => liveChannelIds.has(channelId));
+
+    continuity.append({
+      continuityUserId: 'contact-1',
+      entry: {
+        channelId: 'discord:linked-room',
+        originChannelId: 'discord:linked-room',
+        role: 'user',
+        content: 'Live room continuity',
+        authorId: 'contact-1',
+        timestamp: 1_700_000_000_000,
+        channelVisibility: 'private',
+      },
+    });
+    continuity.append({
+      continuityUserId: 'contact-1',
+      entry: {
+        channelId: 'api:head-pat-smoke',
+        originChannelId: 'api:head-pat-smoke',
+        role: 'assistant',
+        content: 'Smoke-only continuity',
+        timestamp: 1_700_000_001_000,
+        channelVisibility: 'private',
+      },
+    });
+
+    expect(continuity.getMerged({
+      canonicalUserId: 'contact-1',
+      fallbackUserIds: [],
+      limit: 1,
+      channelId: 'api:primary',
+    }).map(entry => entry.content)).toEqual(['Live room continuity']);
   });
 
   it('fails closed to empty results when no continuity store is wired', () => {

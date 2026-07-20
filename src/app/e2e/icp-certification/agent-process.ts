@@ -209,6 +209,7 @@ async function main(): Promise<void> {
     postgresDatabaseUrl: databaseUrl,
     eventBus: startup.eventBus,
     enableContinuity: true,
+    continuityChannelIds: Object.keys(startup.channelsConfig.contextEnvelope.channels),
     sessionIntegrityProvider: gateway.createSessionIntegrityProvider(),
   });
   const identity = composeIdentity(startup.config);

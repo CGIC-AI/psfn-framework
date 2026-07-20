@@ -130,6 +130,56 @@ for validation and rollback requirements.
 The retired raw fleet-status listener is not present in the chart or exposed by
 Ingress.
 
+## Fleet Topology (multi-companion)
+
+`fleet.enabled=true` renders the complete multi-companion topology from
+values — a fresh fleet install needs zero hand-created workload, Service,
+certificate, or NetworkPolicy objects. `fleet.companions` is the ordered
+registry; the FIRST entry is the primary/canonical companion (the shared
+gateway and fleet Garden assume its identity and it is the fleet backup
+leader), every later entry is a follower. Validations fail the render unless
+`runtime.companionId`, `runtime.companionDataDir`, `runtime.characterCardPath`,
+`runtime.workspacePath`, and the `persistence.companionData`/`persistence.workspace`
+existing claims all name the first entry's canonical paths and claims
+(`<fleet.runtimeRoot>/companions/<companionId>` and
+`<fleet.runtimeRoot>/workspaces/personal/<companionId>`). A live release that
+violates the workspace rule crashloops the gateway through the fail-closed
+legacy-workspace migration.
+
+Per registered companion the chart renders:
+
+- an agent Deployment (`<release>-agent-<companionId>`) labeled
+  `psfn.io/companion-id` and `psfn.io/fleet-target: registered`, wired with
+  its own `GATEWAY_SESSION_INTEGRITY_AUTH_TOKEN`/`GATEWAY_COMPANION_AUTH_TOKEN`
+  Secret references (`fleet.companions[].authSecret`)
+- an admin Service (`<release>-agent-admin-<companionId>`) matching the fleet
+  Garden's per-companion transport resolution
+- a gateway-RPC client certificate and an admin-transport server certificate
+  whose SANs bind the per-companion Service DNS names and the exact SPIFFE URI
+  `spiffe://<trustDomain>/psfn/agent/<companionId>`, issued by the same
+  cert-manager CA flow as the single-companion certificates; each companion
+  pod mounts only its own certificates
+- NetworkPolicy admits: every fleet agent may reach the gateway RPC listener
+  (port `ports.gatewayRpc`), and the fleet Garden egress on
+  `ports.agentAdmin` targets every registered companion pod
+
+The shared gateway mounts every companion's owner root read-only at
+`<runtimeRoot>/companions/<companionId>` and every companion's Personal
+Workspace writable at `<runtimeRoot>/workspaces/personal/<companionId>` (the
+gateway executes the workspace-scoped boundary tools for all companions).
+
+Fleet Auth credential env: `fleet-auth.json` names every credential as an
+env reference (`{ "kind": "env", "envName": "FLEET_AUTH_*" }`) and the
+gateway fails closed when a referenced env var is unset.
+`fleetAuth.credentialEnv` renders those gateway env vars from operator
+Secrets (or plain values for non-secret refs); see `values.yaml` for the
+entry shape.
+
+[`overlays/fleet-k3d-shakedown.values.yaml`](./overlays/fleet-k3d-shakedown.values.yaml)
+is a complete two-companion (primary + follower) example matching the k3d
+shakedown shape, with the owner-file, PVC, and Secret prerequisites listed at
+the top.
+
 ## Runtime Layout
 
 The chart sets the production split-root contract explicitly:

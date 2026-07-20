@@ -6,8 +6,8 @@ import type { ConversationScope, ConversationScopeSpeaker } from '../conversatio
 import type {
   AutoCompactionBetweenTurnsParams,
   AutoCompactionRecentEntriesCaptureParams,
-  SessionManager,
-} from '../manager.js';
+  SessionManagerTypeSurface,
+} from './session-manager-type-surface.js';
 
 export interface CapturedSessionOwnerIdentity {
   readonly logicalSessionId: string;
@@ -23,12 +23,12 @@ type Tail<T extends readonly unknown[]> = T extends readonly [unknown, ...infer 
   : never;
 
 type CaptureTurnSessionContextInput = Omit<
-  Parameters<SessionManager['captureTurnSessionContext']>[0],
+  Parameters<SessionManagerTypeSurface['captureTurnSessionContext']>[0],
   'channelId'
 >;
 
 type ResolveConversationScopeInput = Omit<
-  Parameters<SessionManager['resolveConversationScope']>[0],
+  Parameters<SessionManagerTypeSurface['resolveConversationScope']>[0],
   'channelId'
 >;
 
@@ -41,11 +41,11 @@ type CapturedAutoCompactionRecentEntriesParams = Omit<
 
 export interface CapturedSessionReadOperations {
   buildContext: (
-    ...args: Tail<Parameters<SessionManager['buildContext']>>
-  ) => ReturnType<SessionManager['buildContext']>;
+    ...args: Tail<Parameters<SessionManagerTypeSurface['buildContext']>>
+  ) => ReturnType<SessionManagerTypeSurface['buildContext']>;
   captureTurnSessionContext: (
     input: CaptureTurnSessionContextInput,
-  ) => ReturnType<SessionManager['captureTurnSessionContext']>;
+  ) => ReturnType<SessionManagerTypeSurface['captureTurnSessionContext']>;
   getRecentMessages: (limit?: number) => SessionEntry[];
   getRecentMessagesAtOrBefore: (
     maxEntryId: number,
@@ -65,7 +65,7 @@ export interface CapturedSessionReadOperations {
   getRecentConversationSpeakers: () => ConversationScopeSpeaker[];
   resolveConversationScope: (input: ResolveConversationScopeInput) => ConversationScope;
   reconcileSessionChannelFromDisk: (
-  ) => ReturnType<SessionManager['reconcileSessionChannelFromDisk']>;
+  ) => ReturnType<SessionManagerTypeSurface['reconcileSessionChannelFromDisk']>;
 }
 
 interface CapturedSessionReadsFactoryResult {
@@ -230,15 +230,15 @@ export class CapturedSessionReads {
   }
 
   buildContext(
-    ...args: Tail<Parameters<SessionManager['buildContext']>>
-  ): ReturnType<SessionManager['buildContext']> {
+    ...args: Tail<Parameters<SessionManagerTypeSurface['buildContext']>>
+  ): ReturnType<SessionManagerTypeSurface['buildContext']> {
     this.assertScope('CapturedSessionReads.buildContext');
     return this.operations.buildContext(...args);
   }
 
   captureTurnSessionContext(
     input: CaptureTurnSessionContextInput,
-  ): ReturnType<SessionManager['captureTurnSessionContext']> {
+  ): ReturnType<SessionManagerTypeSurface['captureTurnSessionContext']> {
     this.assertScope('CapturedSessionReads.captureTurnSessionContext');
     return this.operations.captureTurnSessionContext(input);
   }
@@ -291,7 +291,7 @@ export class CapturedSessionReads {
   }
 
   reconcileSessionChannelFromDisk(
-  ): ReturnType<SessionManager['reconcileSessionChannelFromDisk']> {
+  ): ReturnType<SessionManagerTypeSurface['reconcileSessionChannelFromDisk']> {
     this.assertScope('CapturedSessionReads.reconcileSessionChannelFromDisk');
     return this.operations.reconcileSessionChannelFromDisk();
   }

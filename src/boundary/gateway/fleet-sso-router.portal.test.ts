@@ -68,6 +68,7 @@ describe('unified-origin fleet portal routing', () => {
   async function start(): Promise<{
     port: number;
     resolveProjection: ReturnType<typeof vi.fn>;
+    resolveModelUsageProjection: ReturnType<typeof vi.fn>;
     router: GatewayFleetSsoRouter;
   }> {
     const { privateKey, publicKey } = generateKeyPairSync('ed25519');
@@ -96,6 +97,28 @@ describe('unified-origin fleet portal routing', () => {
       session: { state: 'authenticated' as const },
       companions: [],
     }));
+    const resolveModelUsageProjection = vi.fn(async () => ({
+      schemaVersion: 1 as const,
+      generatedAt: '2026-07-16T20:00:00.000Z',
+      resolvedRange: {
+        range: 'today' as const,
+        timezone: 'UTC',
+        sinceMs: 1_752_710_400_000,
+        untilMs: 1_752_796_800_000,
+        bucket: 'hour' as const,
+        boundary: '[sinceMs, untilMs)' as const,
+        calendarWeekStartsOn: 'monday' as const,
+      },
+      combined: {
+        calls: 0,
+        inputTokens: 0,
+        outputTokens: 0,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
+        totalTokens: 0,
+      },
+      companions: [],
+    }));
     const router = new GatewayFleetSsoRouter({
       canonicalOrigin: CANONICAL_ORIGIN,
       trustProxy: true,
@@ -104,17 +127,24 @@ describe('unified-origin fleet portal routing', () => {
       verifier,
       replay: { consume: async input => ({ outcome: 'consumed', result: input.consumeResult }) },
       portalProjection: { resolve: resolveProjection },
+      modelUsageProjection: { resolve: resolveModelUsageProjection },
       upstreams: [{ companionId: COMPANION_ID, origin: new URL('http://127.0.0.1:3211') }],
     });
     const server = createServer((incoming, response) => { void router.handle(incoming, response); });
     servers.push(server);
-    return { port: await listen(server), resolveProjection, router };
+    return {
+      port: await listen(server),
+      resolveProjection,
+      resolveModelUsageProjection,
+      router,
+    };
   }
 
   it('uses only the fixed login return and authenticates both portal surfaces', async () => {
     const harness = await start();
     expect(harness.router.matches('/v1/fleet/portal')).toBe(true);
     expect(harness.router.matches('/v1/fleet/portal/')).toBe(true);
+    expect(harness.router.matches('/v1/fleet/model-usage')).toBe(true);
     expect(harness.router.matches('/fleet/status.json')).toBe(false);
 
     const fleet = await request(harness.port, '/fleet');
@@ -132,6 +162,11 @@ describe('unified-origin fleet portal routing', () => {
     expect(api.headers['access-control-allow-origin']).toBeUndefined();
     expect(harness.resolveProjection).not.toHaveBeenCalled();
 
+    const modelUsage = await request(harness.port, '/v1/fleet/model-usage');
+    expect(modelUsage.status).toBe(401);
+    expect(modelUsage.body).toBe('{"error":{"type":"fleet_model_usage_denied"}}');
+    expect(harness.resolveModelUsageProjection).not.toHaveBeenCalled();
+
     const rawStatus = await request(harness.port, '/fleet/status.json', {
       session: SESSION_TOKEN,
     });
@@ -143,6 +178,22 @@ describe('unified-origin fleet portal routing', () => {
     });
     expect(authenticated.status).toBe(200);
     expect(harness.resolveProjection).toHaveBeenCalledOnce();
+
+    const authenticatedUsage = await request(
+      harness.port,
+      '/v1/fleet/model-usage?range=today&timezone=UTC',
+      { session: SESSION_TOKEN },
+    );
+    expect(authenticatedUsage.status).toBe(200);
+    expect(JSON.parse(authenticatedUsage.body)).toMatchObject({
+      schemaVersion: 1,
+      combined: { totalTokens: 0 },
+      companions: [],
+    });
+    expect(harness.resolveModelUsageProjection).toHaveBeenCalledWith({
+      sessionToken: SESSION_TOKEN,
+      query: { range: 'today', timezone: 'UTC' },
+    });
   });
 
   it('rejects cross-origin reads, aliases, and mutations before portal projection', async () => {

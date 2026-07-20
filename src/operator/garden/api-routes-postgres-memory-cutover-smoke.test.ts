@@ -483,7 +483,7 @@ function makeGroupMemoryDiagnostics(): AdminGroupMemoryChannelDiagnostics {
       ambiguousSpeakerSkippedCount: 0,
       ambiguousSpeakerSkipReasons: {},
       writeCapSkips: [],
-      compositionalMode: 'legacy',
+      compositionalMode: 'single_pass',
       chunkCount: 1,
       mergedFactCount: 1,
       crossChunkDeduplicatedCount: 0,

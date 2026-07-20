@@ -519,7 +519,7 @@ export interface EventMap {
         label?: string;
       }>;
     }>;
-    compositionalMode?: 'legacy' | 'chunk_compose';
+    compositionalMode?: 'single_pass' | 'chunk_compose';
     chunkCount?: number;
     mergedFactCount?: number;
     crossChunkDeduplicatedCount?: number;

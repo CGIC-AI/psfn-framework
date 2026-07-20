@@ -87,7 +87,7 @@ export async function verifyShellSandboxRuntime(): Promise<Record<string, unknow
     );
     if (
       limits.exitCode !== 0
-      || limits.stdout !== 'nproc=64 as=2097152 fsize=524288 cpu=1800 nofile=512\n'
+      || limits.stdout !== 'nproc=64 as=2097152 fsize=262144 cpu=1800 nofile=512\n'
     ) {
       throw new Error(`resource limits missing: ${JSON.stringify(limits)}`);
     }

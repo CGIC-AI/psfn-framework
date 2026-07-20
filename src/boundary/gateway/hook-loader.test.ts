@@ -1,5 +1,12 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import {
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { EventBus } from '../../shared/event-bus.js';
@@ -77,6 +84,40 @@ describe('workspace hook loader', () => {
     } finally {
       rmSync(externalWorkspacePath, { recursive: true, force: true });
     }
+  });
+
+  it('rejects the entire scan without importing hooks when nested traversal fails', async () => {
+    writeHook(workspacePath, 'valid', [
+      'name: valid',
+      'events:',
+      '  - system.ready',
+      'handler: handler.mjs',
+    ].join('\n'));
+    const failingDirectory = join(workspacePath, 'hooks', 'unreadable');
+    mkdirSync(failingDirectory);
+    const importModule = vi.fn(async () => ({ default: () => {} }));
+    const registry = new HookRegistry();
+
+    const result = await loadWorkspaceHooks({
+      workspacePath,
+      registry,
+      importModule,
+      readDirectory: (absolutePath) => {
+        if (absolutePath === failingDirectory) {
+          throw new Error('simulated hook-directory traversal failure');
+        }
+        return readdirSync(absolutePath, { withFileTypes: true });
+      },
+    });
+
+    expect(result.loaded).toEqual([]);
+    expect(result.rejected).toEqual([expect.objectContaining({
+      kind: 'scan_error',
+      relativePath: '.',
+      reason: expect.stringContaining('simulated hook-directory traversal failure'),
+    })]);
+    expect(importModule).not.toHaveBeenCalled();
+    expect(registry.list()).toEqual([]);
   });
 
   it('requires an explicit workspacePath', async () => {

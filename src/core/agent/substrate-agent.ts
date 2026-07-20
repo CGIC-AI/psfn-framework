@@ -44,6 +44,7 @@ import {
   resolveChannelResponseStyle,
   type ChannelMeta,
 } from '../../system/trust/policy.js';
+import { currentChannelClassificationEpoch } from '../../system/trust/runtime-classification-epochs.js';
 import {
   composeEgressDisclosureDecision,
   deriveDisclosureDestination,
@@ -872,7 +873,17 @@ export class SubstrateAgent {
         const destination = deriveDisclosureDestination({
           method: toolName,
           params,
-          resolveChannel: (channelId) => classifyChannelDisclosure(channelId),
+          // jp36.6.4: stamp the channel's CURRENT classification epoch onto the
+          // derived room destination so jp36.6.3's epoch gate can deny content
+          // admitted under a prior epoch. Untracked channels return undefined and
+          // the gate stays inert (byte-identical to the pre-epoch runtime).
+          resolveChannel: (channelId) => {
+            const disclosure = classifyChannelDisclosure(channelId);
+            const classificationEpoch = currentChannelClassificationEpoch(channelId);
+            return classificationEpoch !== undefined
+              ? { ...disclosure, classificationEpoch }
+              : disclosure;
+          },
         });
         const composed = composeEgressDisclosureDecision({
           sinkAllowed,

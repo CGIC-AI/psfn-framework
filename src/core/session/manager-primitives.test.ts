@@ -96,6 +96,60 @@ describe('recent session summary primitives', () => {
     expect(sourceBlock.match(/kubectl logs timed out/g)).toHaveLength(1);
     expect(sourceBlock).not.toContain('[Tool result: search_logs (error)]');
   });
+
+  it('does not misreport tool text containing "failed" as a compressed tool failure', () => {
+    // A successful tool result whose content happens to contain the word
+    // "failed" must not be reported as a compressed tool failure. The earlier
+    // substring filter rebuilt the whole source block and matched any line
+    // containing "failed ", leaking non-failure text into the failure summary.
+    const nonFailure = normalizeToolObservation({
+      toolName: 'search_logs',
+      content: 'the deploy failed earlier but the retry succeeded',
+      isError: false,
+    });
+    const summary = buildRecentSessionSummaryFallbackText({
+      characterName: 'Cardellini',
+      maxTokens: 200,
+      entries: [
+        entry({
+          id: 1,
+          role: 'tool',
+          authorId: 'tool:search_logs',
+          authorName: 'search_logs',
+          content: nonFailure.content,
+          metadata: buildToolObservationMetadata(undefined, nonFailure.metadata),
+        }),
+      ],
+    });
+
+    expect(summary).not.toContain('Earlier tool calls had compressed failures');
+    expect(summary).not.toContain('the deploy failed earlier');
+  });
+
+  it('includes a real compressed tool failure in the fallback failure summary', () => {
+    const failure = normalizeToolObservation({
+      toolName: 'search_logs',
+      content: 'kubectl logs timed out while reading provider payload output',
+      isError: true,
+    });
+    const summary = buildRecentSessionSummaryFallbackText({
+      characterName: 'Cardellini',
+      maxTokens: 200,
+      entries: [
+        entry({
+          id: 1,
+          role: 'tool',
+          authorId: 'tool:search_logs',
+          authorName: 'search_logs',
+          content: failure.content,
+          metadata: buildToolObservationMetadata(undefined, failure.metadata),
+        }),
+      ],
+    });
+
+    expect(summary).toContain('Earlier tool calls had compressed failures');
+    expect(summary).toContain('search_logs failed');
+  });
 });
 
 describe('temporal session history window floor', () => {

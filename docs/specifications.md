@@ -117,6 +117,21 @@ Supported until beta:
   identity rows, and the `core_memory.json` orientation filename. These flows
   may preserve or move opaque files but do not open them through a SQLite
   reader; they are not permission to add new parallel artifact names.
+- Forward-schema rollback bridges for the live-alpha Postgres memory and model
+  usage tables. `l2_memories.salience_decay_anchor_at` retains a current-time
+  default so an image from before the anchor column can insert a new live
+  memory without weakening the column's `NOT NULL` invariant. The
+  `model_usage_events` insert trigger converts only null or blank attribution
+  fields from the pre-attribution writer to the canonical `unknown` sentinel
+  and derives its missing fingerprint as
+  `legacy:rollback-writer:<event-id>`; all accounting, currency, token,
+  schema-version, and attribution constraints remain enforced. Validate this
+  boundary with the Postgres memory integration test and model-usage migration
+  certification against the exact older insert shapes, plus a bounded live
+  turn proving memory, embedding, chat, and reflection writes after any
+  rollback. Remove both bridges before beta after every deployment has retired
+  images that predate these columns and the supported Helm rollback window no
+  longer includes those writers.
 - Tool-surface migration aliases documented in `docs/tool-surface.md`. They preserve model-facing continuity while unified tools roll out, and should be removed after canonical actions have stable adoption.
 - One-time legacy Personal Workspace assignment during the multi-companion alpha
   cutover. If legacy `WORKSPACE_PATH` contains data, startup stops and prints its

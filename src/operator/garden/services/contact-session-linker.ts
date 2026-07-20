@@ -236,7 +236,11 @@ export function getStableLinkedContactForSession(options: {
   for (const entry of sessionStore.getEntriesInRange(journalKey, 1, Number.MAX_SAFE_INTEGER)) {
     if (entry.role === 'assistant') continue;
     const authorId = entry.authorId?.trim().toLowerCase();
-    if (authorId) authorIds.add(authorId);
+    // Any unattributed non-companion entry means we cannot prove that the
+    // whole transcript belongs to the matched contact. Do not silently omit
+    // unknown participants from this authorization decision.
+    if (!authorId) return undefined;
+    authorIds.add(authorId);
     if (authorIds.size > 1) return undefined;
   }
 

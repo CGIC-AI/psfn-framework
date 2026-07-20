@@ -239,10 +239,13 @@ const SUBJECT_BOUND_SESSION_ROUTE_IDS: ReadonlySet<string> = new Set([
  * (88u3): the episodic admin service filters every episode, arc, and thread to
  * the request's authenticated `actor.contactId` via `participantContactIds`.
  */
-const SUBJECT_AUTHORIZED_EPISODIC_ROUTE_ID_PREFIX = 'GET /api/admin/episodic-memory/';
 const SUBJECT_AUTHORIZED_EPISODIC_ROUTE_IDS: ReadonlySet<string> = new Set([
   'GET /api/admin/episodic-memory/episodes',
+  'GET /api/admin/episodic-memory/episodes/:id',
+  'GET /api/admin/episodic-memory/episodes/:id/arcs',
+  'GET /api/admin/episodic-memory/episodes/:id/provenance',
   'GET /api/admin/episodic-memory/threads',
+  'GET /api/admin/episodic-memory/threads/:threadId',
   'GET /episodic-memory',
   'HEAD /episodic-memory',
 ]);
@@ -263,8 +266,7 @@ function isSubjectBoundSessionRoute(context: GardenRequestContext): boolean {
 
 function isSubjectAuthorizedEpisodicRoute(context: GardenRequestContext): boolean {
   if (!hasExplicitSubjectRelation(context)) return false;
-  return SUBJECT_AUTHORIZED_EPISODIC_ROUTE_IDS.has(context.resource.routeId)
-    || context.resource.routeId.startsWith(SUBJECT_AUTHORIZED_EPISODIC_ROUTE_ID_PREFIX);
+  return SUBJECT_AUTHORIZED_EPISODIC_ROUTE_IDS.has(context.resource.routeId);
 }
 
 /**

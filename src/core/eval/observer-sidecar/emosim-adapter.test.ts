@@ -12,6 +12,7 @@ import {
   EMOSIM_TIMESTEP_POLICY,
   EMOSIM_WORLD_SNAPSHOT_FORMAT,
   EmoSimSidecarUnavailableError,
+  describeUnsupportedDeterministicOptions,
   parseEmoSimAdapterInput,
   parseEmoSimAdapterOutput,
   runEmoSimProjectedStimulus,
@@ -20,6 +21,30 @@ import {
   type EmoSimEmotionVector,
   type EmoSimRunner,
 } from './emosim-adapter.js';
+
+describe('describeUnsupportedDeterministicOptions', () => {
+  const basePolicy = {
+    seed: 'seed',
+    clock0Seconds: 0,
+    observedAt: '2026-07-20T00:00:00.000Z',
+  } as const;
+
+  it('flags disableDrives=true as an unsupported-by-server degradation (not silent)', () => {
+    const degradations = describeUnsupportedDeterministicOptions({ ...basePolicy, disableDrives: true });
+    expect(degradations).toHaveLength(1);
+    expect(degradations[0]).toMatchObject({
+      option: 'deterministic.disableDrives',
+      requested: true,
+      honored: false,
+      reason: 'unsupported-by-server',
+    });
+    expect(degradations[0]?.detail).toMatch(/drives-disable control/);
+  });
+
+  it('returns no degradations when disableDrives is not requested', () => {
+    expect(describeUnsupportedDeterministicOptions({ ...basePolicy, disableDrives: false })).toEqual([]);
+  });
+});
 
 describe('EmoSim observer sidecar adapter', () => {
   it('runs a single projected stimulus through an injected deterministic runner', async () => {
@@ -235,6 +260,7 @@ function makeOutput(input: EmoSimAdapterInput): EmoSimAdapterOutput {
         agentName: 'observer',
       },
       emotionSpecs: makeEmotionSpecs(),
+      deterministicDegradations: [],
     },
     input,
     stimulus: input.stimulus,

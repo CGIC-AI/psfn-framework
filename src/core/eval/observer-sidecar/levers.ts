@@ -258,33 +258,24 @@ function evaluateWouldRest(
   snapshot: ObserverLeverSnapshotInput,
   settings: ObserverEvalSidecarLeverSettings,
 ): ObserverLeverConditionResult {
+  // Operator ruling (oth4): physiological drives (hunger/thirst/sleep_pressure)
+  // saturate without real physiological inputs and must NOT drive behavior as
+  // modeled. would_rest therefore reads ONLY the affect signal (mood.arousal)
+  // and never consumes drives.sleepPressure. See docs/operations.md (emo-sim
+  // observer sidecar) and the affect-exclusion boundary test below.
   const config = settings.wouldRest;
-  const sleepPressure = finiteOrNull(snapshot.drives?.sleepPressure);
   const arousal = finiteOrNull(snapshot.mood.arousal);
-
-  const branches: Array<boolean | null> = [];
-  if (sleepPressure === null) {
-    result.missingInputs.push('drives.sleepPressure');
-    result.notes.push('inputs_unavailable:drives.sleepPressure');
-    branches.push(null);
-  } else {
-    branches.push(sleepPressure >= config.sleepPressureThreshold);
-  }
-  if (arousal === null) {
-    result.missingInputs.push('mood.arousal');
-    result.notes.push('inputs_unavailable:mood.arousal');
-    branches.push(null);
-  } else {
-    branches.push(arousal >= config.arousalThreshold);
-  }
-
   result.stateValues = {
-    sleepPressure,
     moodArousal: arousal,
-    sleepPressureThreshold: config.sleepPressureThreshold,
     arousalThreshold: config.arousalThreshold,
   };
-  result.outcome = combineOrBranches(branches, result);
+  if (arousal === null) {
+    result.missingInputs.push('mood.arousal');
+    result.notes.push('inputs_unavailable');
+    result.outcome = 'inputs_unavailable';
+    return result;
+  }
+  result.outcome = arousal >= config.arousalThreshold ? 'met' : 'not_met';
   return result;
 }
 

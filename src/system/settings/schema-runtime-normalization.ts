@@ -293,6 +293,17 @@ function normalizeObserverEvalSidecarLeverSettings(
   const wouldRest = expectRecord(root.wouldRest, `${fieldPath}.wouldRest`);
   const ruminationWatch = expectRecord(root.ruminationWatch, `${fieldPath}.ruminationWatch`);
 
+  // Fail closed on the removed physiological-drive threshold. would_rest no
+  // longer reads drives.sleepPressure (oth4 operator ruling), so a lingering
+  // key would be silently ignored — rejected here per the settings contract
+  // guard's no-silently-ignored-config rule.
+  if ('sleepPressureThreshold' in wouldRest) {
+    throw new Error(
+      `Invalid settings at ${fieldPath}.wouldRest.sleepPressureThreshold: physiological drives no longer feed levers; `
+      + 'would_rest reads mood.arousal only. Remove this key.',
+    );
+  }
+
   const enabled = expectBoolean(root.enabled, `${fieldPath}.enabled`);
   if (enabled && !persistenceEnabled) {
     // Lever events are persistence-only telemetry; without the eval-owned
@@ -333,12 +344,6 @@ function normalizeObserverEvalSidecarLeverSettings(
     },
     wouldRest: {
       enabled: expectBoolean(wouldRest.enabled, `${fieldPath}.wouldRest.enabled`),
-      sleepPressureThreshold: expectNumberInRange(
-        wouldRest.sleepPressureThreshold,
-        `${fieldPath}.wouldRest.sleepPressureThreshold`,
-        0,
-        1,
-      ),
       arousalThreshold: expectNumberInRange(
         wouldRest.arousalThreshold,
         `${fieldPath}.wouldRest.arousalThreshold`,

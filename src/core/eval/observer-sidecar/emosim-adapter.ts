@@ -195,6 +195,34 @@ export interface EmoSimServerSessionMetadata {
   agentName: string;
 }
 
+/**
+ * Reasons a requested deterministic-policy option could not be honored.
+ * `unsupported-by-server` = the emo_sim server API has no control for it.
+ */
+export const EMOSIM_DETERMINISTIC_DEGRADATION_REASONS = Object.freeze([
+  'unsupported-by-server',
+] as const);
+
+export type EmoSimDeterministicDegradationReason =
+  typeof EMOSIM_DETERMINISTIC_DEGRADATION_REASONS[number];
+
+/**
+ * A deterministic-policy option the runtime could not apply. Recorded on the
+ * observation (never silently dropped) so downstream consumers can see the
+ * corpus condition it implies.
+ */
+export interface EmoSimDeterministicDegradation {
+  /** The requested deterministic option, e.g. 'deterministic.disableDrives'. */
+  option: string;
+  /** The requested value that could not be applied. */
+  requested: boolean | number | string;
+  /** Always false: a recorded degradation means the option was not honored. */
+  honored: false;
+  reason: EmoSimDeterministicDegradationReason;
+  /** Human-readable explanation of the effect on the corpus. */
+  detail: string;
+}
+
 export interface EmoSimRuntimeMetadata {
   integrationSurface: typeof EMOSIM_INTEGRATION_SURFACE;
   appraisalDimensions: readonly EmoSimAppraisalDimension[];
@@ -206,6 +234,40 @@ export interface EmoSimRuntimeMetadata {
   timeScale: number;
   session: EmoSimServerSessionMetadata;
   emotionSpecs: Record<EmoSimEmotionName, EmoSimEmotionSpecMetadata>;
+  /**
+   * Deterministic-policy options the server could not honor. Empty when every
+   * requested option applied. Recorded — never silently dropped — so downstream
+   * consumers can see the corpus condition (e.g. disableDrives requested but
+   * the emo_sim server has no drives-disable control, so drives keep
+   * accumulating across the shared session).
+   */
+  deterministicDegradations: readonly EmoSimDeterministicDegradation[];
+}
+
+/**
+ * Pure classifier: which requested deterministic options the emo_sim server
+ * cannot honor. Kept here (adapter-agnostic) so both the server runner and its
+ * tests share one source of truth. No silent drops — every unsupported option
+ * becomes a recorded degradation.
+ */
+export function describeUnsupportedDeterministicOptions(
+  policy: EmoSimDeterminismPolicy,
+): EmoSimDeterministicDegradation[] {
+  const degradations: EmoSimDeterministicDegradation[] = [];
+  if (policy.disableDrives) {
+    degradations.push({
+      option: 'deterministic.disableDrives',
+      requested: true,
+      honored: false,
+      reason: 'unsupported-by-server',
+      detail:
+        'The emo_sim server API has no drives-disable control; physiological and social drives '
+        + 'continue to accumulate across the shared session. Recorded so the corpus condition is '
+        + 'queryable. Physiological drives (hunger/thirst/sleep_pressure) are excluded from lever '
+        + 'and affect reads regardless of this degradation.',
+    });
+  }
+  return degradations;
 }
 
 export interface EmoSimWorldSnapshot {
@@ -553,6 +615,7 @@ function normalizeRuntimeMetadata(value: unknown, field: string): EmoSimRuntimeM
     'timeScale',
     'session',
     'emotionSpecs',
+    'deterministicDegradations',
   ]);
   return {
     integrationSurface: expectConst(record.integrationSurface, `${field}.integrationSurface`, EMOSIM_INTEGRATION_SURFACE),
@@ -569,6 +632,45 @@ function normalizeRuntimeMetadata(value: unknown, field: string): EmoSimRuntimeM
     timeScale: normalizeFiniteNumber(record.timeScale, `${field}.timeScale`, { minExclusive: 0 }),
     session: normalizeServerSessionMetadata(record.session, `${field}.session`),
     emotionSpecs: normalizeEmotionSpecs(record.emotionSpecs, `${field}.emotionSpecs`),
+    deterministicDegradations: normalizeDeterministicDegradations(
+      record.deterministicDegradations,
+      `${field}.deterministicDegradations`,
+    ),
+  };
+}
+
+function normalizeDeterministicDegradations(
+  value: unknown,
+  field: string,
+): EmoSimDeterministicDegradation[] {
+  if (!Array.isArray(value)) {
+    throw new Error(`${field} must be an array`);
+  }
+  return value.map((entry, index) => normalizeDeterministicDegradation(entry, `${field}[${index}]`));
+}
+
+function normalizeDeterministicDegradation(value: unknown, field: string): EmoSimDeterministicDegradation {
+  const record = expectRecord(value, field);
+  assertExactKeys(record, field, ['option', 'requested', 'honored', 'reason', 'detail']);
+  const requested = record.requested;
+  if (typeof requested !== 'boolean' && typeof requested !== 'number' && typeof requested !== 'string') {
+    throw new Error(`${field}.requested must be a boolean, number, or string`);
+  }
+  const reason = record.reason;
+  if (
+    typeof reason !== 'string'
+    || !(EMOSIM_DETERMINISTIC_DEGRADATION_REASONS as readonly string[]).includes(reason)
+  ) {
+    throw new Error(
+      `${field}.reason must be one of: ${EMOSIM_DETERMINISTIC_DEGRADATION_REASONS.join(', ')}`,
+    );
+  }
+  return {
+    option: normalizeNonEmptyString(record.option, `${field}.option`),
+    requested,
+    honored: expectConst(record.honored, `${field}.honored`, false),
+    reason: reason as EmoSimDeterministicDegradationReason,
+    detail: normalizeNonEmptyString(record.detail, `${field}.detail`),
   };
 }
 

@@ -102,16 +102,53 @@ describe('observer sidecar lever conditions (pure)', () => {
     expect(wouldMessage?.missingInputs).toContain('drives.socialNeed');
     expect(wouldMessage?.notes).toContain('inputs_unavailable:drives.socialNeed');
 
+    // would_rest reads only mood.arousal (no drives), so absent drives do not
+    // even register as a missing input for it.
     const wouldRest = results.find(entry => entry.lever === 'would_rest');
     expect(wouldRest?.outcome).toBe('not_met');
-    expect(wouldRest?.missingInputs).toContain('drives.sleepPressure');
+    expect(wouldRest?.missingInputs).not.toContain('drives.sleepPressure');
+    expect(wouldRest?.stateValues).not.toHaveProperty('sleepPressure');
 
-    // would_rest still evaluates the arousal branch without drives.
+    // would_rest evaluates purely from arousal, with or without drives present.
     const restByArousal = evaluateObserverLeverConditions(
       makeSnapshot({ omitDrives: true, arousal: 0.9 }),
       settings,
     ).find(entry => entry.lever === 'would_rest');
     expect(restByArousal?.outcome).toBe('met');
+  });
+
+  it('excludes physiological drives (hunger/thirst/sleepPressure) from every lever', () => {
+    const settings = makeSettings();
+    // A maxed physiological drive profile with quiet affect and non-social,
+    // non-attachment dominance must not fire would_rest or would_message.
+    const maxedPhysiological = makeSnapshot({
+      sleepPressure: 1,
+      arousal: 0.1,
+      socialNeed: 0.1,
+      dominant: 'Calmness',
+      dominantIntensity: 0.2,
+    });
+    const drivenResults = evaluateObserverLeverConditions(maxedPhysiological, settings);
+    expect(drivenResults.find(e => e.lever === 'would_rest')?.outcome).toBe('not_met');
+    expect(drivenResults.find(e => e.lever === 'would_message')?.outcome).toBe('not_met');
+
+    // Sweeping hunger/thirst/sleepPressure across their whole range never
+    // changes any lever outcome: they are not read at all.
+    for (const value of [0, 0.5, 1]) {
+      const swept = evaluateObserverLeverConditions(
+        {
+          t: 0,
+          mood: { valence: 0.2, arousal: 0.1 },
+          dominant: 'Calmness',
+          emotions: { Calmness: 0.2 },
+          drives: { hunger: value, thirst: value, sleepPressure: value, socialNeed: 0.1 },
+        },
+        settings,
+      );
+      for (const entry of swept) {
+        expect(entry.outcome).toBe('not_met');
+      }
+    }
   });
 
   it('evaluates all levers to inputs_unavailable on a missing snapshot', () => {

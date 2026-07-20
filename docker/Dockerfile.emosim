@@ -4,12 +4,32 @@
 # The emo_sim source is NOT vendored in this repository. The build context is
 # a checkout of the sibling emo_sim repo; this Dockerfile only packages it.
 #
+# PIN CONTRACT (fail closed) ---------------------------------------------------
+# emo_sim ships in a DIFFERENT repository, so it cannot be pinned by a submodule
+# ref here. Instead the build is pinned to an exact upstream commit and VERIFIED
+# at build time:
+#
+#   - EXPECTED_EMOSIM_SHA (ARG below) is the pinned commit. To move the pin,
+#     change this default in-repo (reviewed like any other change).
+#   - The `verify` stage reads the ACTUAL commit from the build context's own
+#     git metadata (COPY .git) and refuses the build unless it matches the pin.
+#     The comparison logic is the single source of truth in
+#     docker/emosim-verify-sha.sh (unit-tested); the RUN below inlines the
+#     identical check because that helper lives in the framework repo and is not
+#     part of the emo_sim build context.
+#   - No `.git` in the context, an empty/mismatched SHA, or a missing pin all
+#     FAIL the build (fail closed). There is no unpinned path.
+#   - The verified SHA is written into the final image at /app/EMOSIM_PINNED_SHA
+#     as build provenance, which also forces the final stage to depend on the
+#     verify stage so the check can never be skipped.
+#
 # Build (off-node arm64 cross-build for the k3s Pi, from the framework repo):
 #   docker buildx build --platform linux/arm64 \
 #     -f docker/Dockerfile.emosim \
 #     -t localhost/psfn-emosim:<TAG> \
 #     --output type=docker \
 #     ~/emo_sim
+# (optionally override the pin: --build-arg EXPECTED_EMOSIM_SHA=<sha>)
 #
 # emo_sim is pure Python stdlib (requires-python >= 3.10, zero dependencies).
 #
@@ -23,6 +43,45 @@
 #
 # State: sessions persist under /state (atomic snapshot every 5s, restart
 # recovery with wall-clock downtime catch-up). /state is a PVC in k8s.
+
+# --- verify stage: fail-closed pin check against the context checkout ---------
+FROM python:3.12-slim AS verify
+
+# Pinned emo_sim upstream commit. Fail-closed default; override only for a
+# deliberate, reviewed bump.
+ARG EXPECTED_EMOSIM_SHA=5bb571d4cec42f6d178f70f529b52640a46018b5
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends git \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /verify
+
+# The context's own git metadata is the source of the actual SHA. If the
+# context has no .git (e.g. an export tarball), this COPY fails and the build
+# is refused — exactly the fail-closed behavior we want.
+COPY .git /verify/.git
+
+# Inlined equivalent of docker/emosim-verify-sha.sh (that helper is in the
+# framework repo, not the emo_sim build context, so it cannot be COPYed here).
+RUN set -eu; \
+    if [ -z "${EXPECTED_EMOSIM_SHA}" ]; then \
+      echo "emosim pin: EXPECTED_EMOSIM_SHA is empty; refusing (fail closed)" >&2; \
+      exit 2; \
+    fi; \
+    actual="$(git --git-dir=/verify/.git rev-parse HEAD)"; \
+    if [ -z "${actual}" ]; then \
+      echo "emosim pin: could not resolve context SHA; refusing (fail closed)" >&2; \
+      exit 2; \
+    fi; \
+    if [ "${actual}" != "${EXPECTED_EMOSIM_SHA}" ]; then \
+      echo "emosim pin: context SHA ${actual} != pinned ${EXPECTED_EMOSIM_SHA}; refusing to build" >&2; \
+      exit 1; \
+    fi; \
+    printf '%s\n' "${actual}" > /verify/EMOSIM_PINNED_SHA; \
+    echo "emosim pin: OK (pinned ${EXPECTED_EMOSIM_SHA})"
+
+# --- runtime stage ------------------------------------------------------------
 FROM python:3.12-slim
 
 RUN groupadd --gid 999 emosim \
@@ -34,6 +93,10 @@ WORKDIR /app
 
 # Build context is the emo_sim checkout itself.
 COPY --chown=emosim:emosim . /app/
+
+# Depend on the verify stage: this COPY cannot resolve unless verify succeeded,
+# so the pin check gates every image build. The file is build provenance.
+COPY --from=verify --chown=emosim:emosim /verify/EMOSIM_PINNED_SHA /app/EMOSIM_PINNED_SHA
 
 USER emosim
 

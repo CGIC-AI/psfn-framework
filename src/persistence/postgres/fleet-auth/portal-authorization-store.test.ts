@@ -82,8 +82,10 @@ function harness(options: {
   accountRoster?: FleetAuthConfig['accountRoster'];
   sessionRows?: Array<Record<string, unknown>>;
   generationCurrent?: boolean;
+  generationCurrentSequence?: readonly boolean[];
 } = {}) {
   const audits: Array<{ decision: unknown; reasonCode: unknown }> = [];
+  const generationCurrentSequence = [...(options.generationCurrentSequence ?? [])];
   const client = {
     query: vi.fn(async (sql: string, params?: unknown[]) => {
       if (sql.startsWith('BEGIN') || sql === 'COMMIT' || sql === 'ROLLBACK') {
@@ -116,7 +118,9 @@ function harness(options: {
     config: config(options.accountRoster),
     knownCompanionIds: [COMPANION_A, COMPANION_B],
     providerRevocationAuthority: {
-      sessionAuthorityGenerationIsCurrent: () => options.generationCurrent ?? true,
+      sessionAuthorityGenerationIsCurrent: () => (
+        generationCurrentSequence.shift() ?? options.generationCurrent ?? true
+      ),
       fence: async () => { throw new Error('not used'); },
     },
     now: () => NOW,
@@ -222,6 +226,24 @@ describe('postgres fleet portal authorization roster fallback', () => {
     });
     expect(audits).toEqual([
       { decision: 'allow', reasonCode: 'portal_projection_allowed' },
+    ]);
+  });
+
+  it('audits a post-commit degradation from the full projection to roster-only', async () => {
+    const { store, audits } = harness({
+      accountRoster: OWNER_ROSTER,
+      generationCurrentSequence: [true, false],
+    });
+    expect(await store.resolveBatch({ sessionToken: TOKEN })).toEqual({
+      decision: 'allow',
+      companions: [{ companionId: COMPANION_A, gardenLinkEligible: true }],
+    });
+    expect(audits).toEqual([
+      { decision: 'allow', reasonCode: 'portal_projection_allowed' },
+      {
+        decision: 'allow',
+        reasonCode: 'roster_portal_projection_post_commit_degraded',
+      },
     ]);
   });
 

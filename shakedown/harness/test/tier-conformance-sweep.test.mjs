@@ -57,6 +57,7 @@ function sweepEnv(baseUrl, matrixDir) {
     PSFN_API_BASE: 'http://127.0.0.1:1',
     PSFN_ADMIN_BASE: baseUrl,
     API_KEY: 'stub-key',
+    TESTING_HARNESS_API_KEY: 'stub-testing-harness-key',
     ADMIN_TOKEN,
     POSTGRES_DATABASE_URL: 'postgres://stub',
     PSFN_MATRIX_DIR: matrixDir,

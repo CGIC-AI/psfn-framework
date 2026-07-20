@@ -60,6 +60,7 @@ import {
   type ImportedHistoryBootstrapChunk,
   type ImportedHistoryBootstrapResult,
 } from './manager/import-bootstrap.js';
+import { TESTING_HARNESS_API_PRINCIPAL_ID } from '../../channels/backplane/http/auth.js';
 import {
   mirrorMessageToActiveSessions,
 } from './manager/mirroring.js';
@@ -389,7 +390,7 @@ export class SessionManager {
   private shouldOverrideSessionContext(channelId: string): boolean {
     // The explicitly configured testing-harness principal is a durable API
     // room, not a transient API request that may inherit mutable UI context.
-    if (channelId === 'api:testing-harness') return false;
+    if (channelId === `api:${TESTING_HARNESS_API_PRINCIPAL_ID}`) return false;
     return channelId.startsWith('api:') || channelId.startsWith('terminal:');
   }
 

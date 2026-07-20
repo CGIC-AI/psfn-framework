@@ -27,6 +27,7 @@ GATEWAY_PORT="${GATEWAY_PORT:-10053}"
 COMPANION_MODEL_PATTERN="${COMPANION_MODEL_PATTERN:-}"
 SMOKE_TIMEOUT_SECONDS="${SMOKE_TIMEOUT_SECONDS:-180}"
 TESTING_HARNESS_API_KEY_VALUE=""
+TESTING_HARNESS_SECRET_KEY=""
 
 APP_DEPLOYS=(psfn-agent psfn-gateway psfn-garden)
 CHECK_COUNT=0
@@ -371,24 +372,60 @@ ensure_testing_harness_api_key() {
     return 0
   fi
 
+  local deployment_json
+  if ! deployment_json="$(run_kubectl -n "$NAMESPACE" get deploy psfn-gateway -o json 2>&1)"; then
+    printf 'failed to inspect psfn-gateway TESTING_HARNESS_API_KEY wiring: %s\n' "$deployment_json"
+    return 1
+  fi
+  if ! TESTING_HARNESS_SECRET_KEY="$(
+    printf '%s' "$deployment_json" | node -e '
+      const fs = require("node:fs");
+      const deployment = JSON.parse(fs.readFileSync(0, "utf8"));
+      const containers = deployment.spec?.template?.spec?.containers;
+      const gateway = Array.isArray(containers)
+        ? containers.find((container) => container?.name === "gateway")
+        : undefined;
+      const env = Array.isArray(gateway?.env) ? gateway.env : [];
+      const ref = env.find((entry) => entry?.name === "TESTING_HARNESS_API_KEY")
+        ?.valueFrom?.secretKeyRef;
+      if (typeof ref?.key !== "string" || ref.key.trim().length === 0) {
+        process.exitCode = 1;
+      } else {
+        process.stdout.write(ref.key.trim());
+      }
+    '
+  )"; then
+    printf 'deployment/psfn-gateway does not expose a TESTING_HARNESS_API_KEY secretKeyRef\n'
+    return 1
+  fi
+  if [[ ! "$TESTING_HARNESS_SECRET_KEY" =~ ^[A-Za-z0-9._-]+$ ]]; then
+    printf 'deployment/psfn-gateway exposes an invalid TESTING_HARNESS_API_KEY secret key name\n'
+    return 1
+  fi
+
+  local secret_template
+  printf -v secret_template '{{ index .data "%s" }}' "$TESTING_HARNESS_SECRET_KEY"
   local encoded
-  if ! encoded="$(run_kubectl -n "$NAMESPACE" get secret "$SECRET_NAME" -o 'jsonpath={.data.TESTING_HARNESS_API_KEY}' 2>&1)"; then
-    printf 'failed to read TESTING_HARNESS_API_KEY from secret/%s: %s\n' "$SECRET_NAME" "$encoded"
+  if ! encoded="$(
+    run_kubectl -n "$NAMESPACE" get secret "$SECRET_NAME" \
+      -o "go-template=${secret_template}" 2>&1
+  )"; then
+    printf 'failed to read %s from secret/%s\n' "$TESTING_HARNESS_SECRET_KEY" "$SECRET_NAME"
     return 1
   fi
   encoded="$(printf '%s' "$encoded" | trim_text)"
   if [[ -z "$encoded" ]]; then
-    printf 'secret/%s does not contain data.TESTING_HARNESS_API_KEY\n' "$SECRET_NAME"
+    printf 'secret/%s does not contain data.%s\n' "$SECRET_NAME" "$TESTING_HARNESS_SECRET_KEY"
     return 1
   fi
 
   local decoded
   if ! decoded="$(printf '%s' "$encoded" | node -e 'const fs = require("node:fs"); const raw = fs.readFileSync(0, "utf8").trim(); process.stdout.write(Buffer.from(raw, "base64").toString("utf8").trim());' 2>&1)"; then
-    printf 'failed to decode TESTING_HARNESS_API_KEY from secret/%s: %s\n' "$SECRET_NAME" "$decoded"
+    printf 'failed to decode %s from secret/%s: %s\n' "$TESTING_HARNESS_SECRET_KEY" "$SECRET_NAME" "$decoded"
     return 1
   fi
   if [[ -z "$decoded" ]]; then
-    printf 'decoded TESTING_HARNESS_API_KEY from secret/%s is empty\n' "$SECRET_NAME"
+    printf 'decoded %s from secret/%s is empty\n' "$TESTING_HARNESS_SECRET_KEY" "$SECRET_NAME"
     return 1
   fi
 

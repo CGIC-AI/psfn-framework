@@ -42,6 +42,7 @@ async function runOne(signal) {
     PSFN_API_BASE: 'http://127.0.0.1:1',
     PSFN_ADMIN_BASE: 'http://127.0.0.1:1',
     API_KEY: 'stub-key',
+    TESTING_HARNESS_API_KEY: 'stub-testing-harness-key',
     POSTGRES_DATABASE_URL: 'postgres://stub',
     PSFN_MATRIX_DIR: matrixDir,
     PSFN_TARGET_LIB: STUB_LIB,

@@ -103,7 +103,13 @@ import { ObservedGroupMemoryScheduler } from '../../faculties/memory/extraction/
 import { PassiveNameCandidateBuilder } from '../../core/participation/passive-name-candidate.js';
 import { ParticipationAppraiser } from '../../core/participation/appraiser.js';
 import { SpeakingReservationPhase } from '../../core/agent/arbiter/reservation-phase.js';
-import { createDefaultReservationPhaseSettings } from '../../system/config/participation-config.js';
+import { SpeakingEgressLeasePhase } from '../../core/agent/arbiter/egress-lease-phase.js';
+import { readRoomEpisodePressureFromLedger } from '../../core/agent/fatigue/room-episode-pressure.js';
+import { createAgentLoopEgressReplySender } from './egress-reply-sender.js';
+import {
+  createDefaultEgressLeasePhaseSettings,
+  createDefaultReservationPhaseSettings,
+} from '../../system/config/participation-config.js';
 import { JsonGroupMemoryWatermarkStore } from '../../faculties/memory/extraction/group-ranges.js';
 import { createNoopSatelliteRoutingPort } from '../../core/agent/satellite-adapter-port.js';
 import { createRequestCapabilityVerifier } from '../../boundary/fleet-auth/request-capability.js';
@@ -1434,6 +1440,59 @@ async function main(): Promise<void> {
     })
     : undefined;
 
+  // Speaking-arbiter egress-lease phase (bible §8.5/§12.2, §18, §20.1,
+  // jp36.5.1.3): phase 2, the exclusive send-once binding at delivery. Promoting
+  // a retained candidate to a REAL autonomous room reply is a new,
+  // CogSec-sensitive surface, so it is gated OFF by default (the egress-lease
+  // settings `enabled` flag): with it disabled the observe/appraise/reserve path
+  // is unchanged and nothing is sent. The room-episode pressure gate reads the
+  // ONE reconciled ledger-derived source (jp36.5.4 seam) — never the arbiter
+  // store's raw pressure scalar, which stays a write-only projection.
+  const egressLeaseSettings = createDefaultEgressLeasePhaseSettings();
+  const egressLeasePhase = (
+    egressLeaseSettings.enabled
+    && config.multiCompanion === true
+    && persistenceRuntime.speakingArbiterStore
+    && persistenceRuntime.socialPotStore
+    && config.chargePolicy
+    && config.companionId
+  )
+    ? new SpeakingEgressLeasePhase({
+      store: persistenceRuntime.speakingArbiterStore,
+      socialPot: persistenceRuntime.socialPotStore,
+      companionId: config.companionId,
+      // Single reconciled room-episode pressure source: ledger-derived, decayed,
+      // across every peer in the channel (caller obligation jp36.5.1 #2).
+      roomPressure: {
+        resolve: (ctx) => readRoomEpisodePressureFromLedger(coreRuntime.fatigueLedger, {
+          localCompanionId: config.companionId as string,
+          channelId: ctx.channelId,
+          nowMs: ctx.nowMs,
+          config: config.chargePolicy!.fatigue.socialRegulation.roomEpisodePressure,
+        }),
+      },
+      // Consumes the granted lease to generate + deliver the reply (temporal-
+      // wakeup pattern: synthetic terminal generation, then explicit send).
+      sender: createAgentLoopEgressReplySender({
+        generator: agentLoop,
+        delivery: gatewaySender,
+        companionName: card.data.name,
+      }),
+      config: {
+        leaseTtlMs: egressLeaseSettings.leaseTtlMs,
+        egressDrawUnits: egressLeaseSettings.egressDrawUnits,
+        minReplyConfidence: egressLeaseSettings.minReplyConfidence,
+        socialPot: config.chargePolicy.fatigue.socialPot,
+        roomEpisodeCircuitBreaker:
+          config.chargePolicy.fatigue.socialRegulation.roomEpisodeCircuitBreaker,
+        wrapUpThreshold:
+          config.chargePolicy.fatigue.socialRegulation.roomEpisodePressure.wrapUpThreshold,
+        replyPressureUnits:
+          config.chargePolicy.fatigue.socialRegulation.roomEpisodePressure.replyPressureUnits,
+      },
+    })
+    : undefined;
+
   // ── Slow-poisoning drift-velocity review lane (htm9.14) ──
   // Deterministic nightly aggregation (zero LLM, zero turn latency) over the
   // per-contact valence series, memory-write rows, quarantine risk labels,
@@ -1590,6 +1649,7 @@ async function main(): Promise<void> {
     passiveNameCandidateBuilder,
     participationAppraiser,
     ...(reservationPhase ? { reservationPhase } : {}),
+    ...(egressLeasePhase ? { egressLeasePhase } : {}),
     outboundReplyGuard,
     companionAuthorName: card.data.name,
   });

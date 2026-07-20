@@ -188,3 +188,53 @@ export function createDefaultReservationPhaseSettings(): ReservationPhaseSetting
     minReserveDrawUnits: 1,
   };
 }
+
+/**
+ * Tunables for the speaking-arbiter egress-lease phase (bible §8.5/§12.2, §18,
+ * §20.1, jp36.5.1.3). This is phase 2: the exclusive send-once binding at
+ * delivery ("bind only at egress"). It is the ONLY place the social pot is
+ * actually drawn and the fenced egress lease is acquired, after the Law-36
+ * single-probe breaker gate, the lease-threshold-bias confidence bar, and
+ * speak-least fairness admit the turn.
+ */
+export interface EgressLeasePhaseSettings {
+  /**
+   * Whether the arbiter actually binds a lease and delivers autonomous room
+   * replies. Defaults to OFF: promoting an observed candidate to a real
+   * autonomous send is a new, CogSec-sensitive surface, so it is opt-in and
+   * fail-closed — with it disabled the observe/appraise path is unchanged and no
+   * autonomous reply is sent.
+   */
+  enabled: boolean;
+  /**
+   * Egress lease deadline window. A crashed holder's lease is reclaimable by
+   * another turn once it lapses (bible §18 "lease expires during generation").
+   */
+  leaseTtlMs: number;
+  /**
+   * The REAL social-pot draw amount bound at egress (charge-policy units) — the
+   * fatigue actually spent to speak (§8.5 "bind only at egress"), distinct from
+   * the phase-1 non-mutating funding peek.
+   */
+  egressDrawUnits: number;
+  /**
+   * Base confidence a `reply` appraisal must clear to bind a lease. Rising
+   * room-episode pressure adds `leaseThresholdBias` on top of this bar, so a
+   * flooding room raises the bar for another autonomous lease (soft wrap-up).
+   */
+  minReplyConfidence: number;
+}
+
+/**
+ * Defaults factory (owner-file / settings pattern). All numeric tunables live
+ * inside the function body — never as module-level tuning constants — so the
+ * hardcoded-settings gate stays satisfied and Garden/config can own overrides.
+ */
+export function createDefaultEgressLeasePhaseSettings(): EgressLeasePhaseSettings {
+  return {
+    enabled: false,
+    leaseTtlMs: 60 * 1000,
+    egressDrawUnits: 1,
+    minReplyConfidence: 0.5,
+  };
+}

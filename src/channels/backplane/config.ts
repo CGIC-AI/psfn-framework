@@ -628,9 +628,18 @@ export function assertDiscordAccountTokensConfigured(discord: DiscordChannelConf
 export interface DiscordCompanionChannelView {
   /** Present only when resolved from a multi-account entry. */
   accountId?: string;
-  heartbeatChannelId: string;
+  /** Canonical Discord delivery target; null when this companion has no heartbeat surface. */
+  heartbeatChannel: { channelId: string; channelType: 'discord' } | null;
   allowedBotUserIds: string[];
   groupMemory: ChannelGroupMemoryConfig;
+}
+
+function resolveDiscordHeartbeatChannel(
+  channelId: string,
+): DiscordCompanionChannelView['heartbeatChannel'] {
+  return channelId
+    ? { channelId, channelType: 'discord' }
+    : null;
 }
 
 /**
@@ -647,7 +656,7 @@ export function resolveDiscordCompanionView(
   const accounts = discord.accounts;
   if (!accounts || accounts.length === 0) {
     return {
-      heartbeatChannelId: discord.heartbeatChannelId,
+      heartbeatChannel: resolveDiscordHeartbeatChannel(discord.heartbeatChannelId),
       allowedBotUserIds: discord.allowedBotUserIds,
       groupMemory: discord.groupMemory,
     };
@@ -657,14 +666,14 @@ export function resolveDiscordCompanionView(
     : undefined;
   if (!account) {
     return {
-      heartbeatChannelId: '',
+      heartbeatChannel: null,
       allowedBotUserIds: [],
       groupMemory: createDefaultChannelGroupMemoryConfig(),
     };
   }
   return {
     accountId: account.accountId,
-    heartbeatChannelId: account.heartbeatChannelId,
+    heartbeatChannel: resolveDiscordHeartbeatChannel(account.heartbeatChannelId),
     allowedBotUserIds: account.allowedBotUserIds,
     groupMemory: account.groupMemory,
   };

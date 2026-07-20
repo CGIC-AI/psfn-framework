@@ -24,6 +24,8 @@ import type { SleeptimeWikiPass } from '../../faculties/wiki/sleeptime-wiki-pass
 import type { NearTurnMemoryScopeClassifierPort } from '../../faculties/memory/near-turn-memory-lane.js';
 import type { ProactiveOutboundDispatcher } from '../intention/proactive-outbound.js';
 import type { OutreachOutboxStore } from '../intention/outreach-outbox.js';
+import type { SocialDesireOutboundRuntime } from '../intention/social-desire-outreach.js';
+import type { SocialDesireHumanDeliveryPolicy } from '../intention/social-desire-human-policy.js';
 import type {
   EpisodicStorePort,
 } from '../../faculties/memory/episodic/store-port.js';
@@ -221,6 +223,15 @@ export interface HeartbeatRuntimeOptions {
    */
   outboundReplyGuard?: OutboundReplyGuardPort | null;
   outreachOutbox?: OutreachOutboxStore | null;
+  /**
+   * Consented social-desire outbound acceptance (bead oth4.2). Wired ONLY when
+   * scheduler.json socialDesire.enabled is true; absent ⇒ the outbound gate
+   * fails closed for any payload carrying social-desire provenance, so the
+   * whole desire lane is inert when disabled.
+   */
+  socialDesireOutbound?: SocialDesireOutboundRuntime | null;
+  /** Live human-contact trust/channel/local-time revalidation on every attempt. */
+  socialDesireHumanDeliveryPolicy?: SocialDesireHumanDeliveryPolicy | null;
   memoryMaintenanceStore?: Pick<
     MemoryStorePort,
     'upsertMemoryMaintenanceReview' | 'listActiveMemories' | 'getById' | 'getMemoryMaintenanceDiagnostics'

@@ -26,6 +26,8 @@ export interface IcpInitiationSourceWiringInput {
   eventBus: EventBus;
   pendingFollowUpStore: IntentionAdapterOptions['pendingFollowUpStore'];
   concernStore: IntentionAdapterOptions['concernStore'];
+  /** Durable social-desire recheck for consented desire provenance (oth4.2). */
+  socialDesireStore: IntentionAdapterOptions['socialDesireStore'];
   presenceEnabled: boolean;
   contactStore: CoLocationAdapterOptions['contactStore'];
   weightedThoughtStore: CoLocationAdapterOptions['thoughtStore'] | undefined;
@@ -77,6 +79,7 @@ export function wireIcpInitiationSources(
         pendingFollowUpStore: input.pendingFollowUpStore,
         concernStore: input.concernStore,
         candidateStore: input.candidateStore,
+        ...(input.socialDesireStore ? { socialDesireStore: input.socialDesireStore } : {}),
       })
     : undefined;
   const unregisterCoLocationThoughtAdapter = (

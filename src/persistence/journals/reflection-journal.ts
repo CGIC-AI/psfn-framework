@@ -29,9 +29,34 @@ interface ReflectionJournalNarrativeContext {
   metacognitiveFlags?: ValuesMetacognitiveFlag[];
 }
 
+export interface ReflectionJournalVAD {
+  valence: number;
+  arousal: number;
+  dominance: number;
+}
+
+export type ReflectionConcernArcSource = 'decision' | 'grooming_stale' | 'grooming_cap';
+
+/**
+ * Structured concern-resolution arc (vw3w.2). Machine-readable scaffolding that
+ * accompanies the companion-readable prose in the entry's `reflection`; kept in
+ * telemetry (never the prose) per charter 8.6. Written only when the full arc is
+ * available — both VADs present — so a partial arc is never persisted.
+ */
+export interface ReflectionConcernArc {
+  concernId: string;
+  formationVAD: ReflectionJournalVAD;
+  resolutionVAD: ReflectionJournalVAD;
+  reliefDelta: ReflectionJournalVAD;
+  source: ReflectionConcernArcSource;
+  durationMs?: number;
+  finalSalience?: number;
+}
+
 export interface ReflectionJournalTelemetry {
   deliberation?: ValuesDeliberationMetadata;
   narrativeContext?: ReflectionJournalNarrativeContext;
+  concernArc?: ReflectionConcernArc;
 }
 
 export interface ReflectionJournalEntryInput {
@@ -47,6 +72,7 @@ export interface ReflectionJournalEntryInput {
   internalStateSnapshotRef?: string;
   internalState?: InternalState;
   metacognitiveFlags?: ValuesMetacognitiveFlag[];
+  concernArc?: ReflectionConcernArc;
   substrateBoundary?: string;
   substrateProvenanceRefs?: string[];
 }
@@ -69,11 +95,62 @@ export interface ReflectionJournalListOptions {
   limit?: number;
 }
 
+function normalizeConcernArcVAD(value: unknown, field: string): ReflectionJournalVAD {
+  if (!value || typeof value !== 'object') {
+    throw new Error(`Reflection journal concernArc.${field} must be a VAD object`);
+  }
+  const { valence, arousal, dominance } = value as Record<string, unknown>;
+  for (const [axis, axisValue] of [['valence', valence], ['arousal', arousal], ['dominance', dominance]] as const) {
+    if (typeof axisValue !== 'number' || !Number.isFinite(axisValue)) {
+      throw new Error(`Reflection journal concernArc.${field}.${axis} must be a finite number`);
+    }
+  }
+  return {
+    valence: valence as number,
+    arousal: arousal as number,
+    dominance: dominance as number,
+  };
+}
+
+function normalizeConcernArc(value: ReflectionConcernArc | undefined): ReflectionConcernArc | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  const concernId = typeof value.concernId === 'string' ? value.concernId.trim() : '';
+  if (!concernId) {
+    throw new Error('Reflection journal concernArc requires a non-empty concernId');
+  }
+  // Widened to string: this is a fail-closed validator for persisted/untrusted
+  // input, so the runtime check must not be elided by the static union type.
+  const source = value.source as string;
+  if (source !== 'decision' && source !== 'grooming_stale' && source !== 'grooming_cap') {
+    throw new Error('Reflection journal concernArc.source must be decision, grooming_stale, or grooming_cap');
+  }
+  const durationMs = value.durationMs;
+  if (durationMs !== undefined && (typeof durationMs !== 'number' || !Number.isFinite(durationMs) || durationMs < 0)) {
+    throw new Error('Reflection journal concernArc.durationMs must be a non-negative finite number when provided');
+  }
+  const finalSalience = value.finalSalience;
+  if (finalSalience !== undefined && (typeof finalSalience !== 'number' || !Number.isFinite(finalSalience))) {
+    throw new Error('Reflection journal concernArc.finalSalience must be a finite number when provided');
+  }
+  return {
+    concernId,
+    formationVAD: normalizeConcernArcVAD(value.formationVAD, 'formationVAD'),
+    resolutionVAD: normalizeConcernArcVAD(value.resolutionVAD, 'resolutionVAD'),
+    reliefDelta: normalizeConcernArcVAD(value.reliefDelta, 'reliefDelta'),
+    source: value.source,
+    ...(durationMs !== undefined ? { durationMs } : {}),
+    ...(finalSalience !== undefined ? { finalSalience } : {}),
+  };
+}
+
 function normalizeReflectionTelemetry(
   input: ReflectionJournalEntryInput,
 ): ReflectionJournalTelemetry | undefined {
   const telemetryInput = input.telemetry;
   const deliberation = telemetryInput?.deliberation ?? input.deliberation;
+  const concernArc = normalizeConcernArc(telemetryInput?.concernArc ?? input.concernArc);
 
   const narrativeInput = telemetryInput?.narrativeContext
     ?? ((input.internalStateSnapshotRef !== undefined
@@ -86,7 +163,7 @@ function normalizeReflectionTelemetry(
         }
       : undefined);
 
-  if (!narrativeInput && !deliberation) {
+  if (!narrativeInput && !deliberation && !concernArc) {
     return undefined;
   }
 
@@ -118,13 +195,14 @@ function normalizeReflectionTelemetry(
     }
   }
 
-  if (!narrativeContext && !deliberation) {
+  if (!narrativeContext && !deliberation && !concernArc) {
     return undefined;
   }
 
   return {
     ...(deliberation ? { deliberation } : {}),
     ...(narrativeContext ? { narrativeContext } : {}),
+    ...(concernArc ? { concernArc } : {}),
   };
 }
 

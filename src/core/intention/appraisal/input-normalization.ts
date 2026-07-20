@@ -3,7 +3,7 @@ import type { EmotionStateSnapshot } from '../../emotion/state.js';
 import { cloneEmotionTelemetryValidation } from '../../emotion/telemetry-validation.js';
 import { cloneInternalState, type InternalState } from '../../self-model/state.js';
 import { parseIcpConversationCorrelation } from '../../../shared/contracts/icp-autonomy.js';
-import { normalizeConcernStatus } from '../concerns.js';
+import { normalizeConcernStatus, type ActiveConcernVAD } from '../concerns.js';
 import type {
   ActiveCareReminderSnapshot,
   ActiveConcernSnapshot,
@@ -169,6 +169,19 @@ export function normalizeConcernPriority(value: unknown): IntentionDecisionPrior
   return undefined;
 }
 
+function normalizeSnapshotVAD(value: unknown): ActiveConcernVAD | undefined {
+  if (!isRecord(value)) return undefined;
+  const { valence, arousal, dominance } = value;
+  if (
+    typeof valence !== 'number' || !Number.isFinite(valence)
+    || typeof arousal !== 'number' || !Number.isFinite(arousal)
+    || typeof dominance !== 'number' || !Number.isFinite(dominance)
+  ) {
+    return undefined;
+  }
+  return { valence, arousal, dominance };
+}
+
 function normalizeActiveConcerns(
   value: readonly ActiveConcernSnapshot[] | undefined,
   maxConcernCount: number,
@@ -193,6 +206,8 @@ function normalizeActiveConcerns(
       ? Math.floor(concern.resolvedAt)
       : undefined;
     const priority = normalizeConcernPriority(concern.priority);
+    const formationVAD = normalizeSnapshotVAD(concern.formationVAD);
+    const resolutionVAD = normalizeSnapshotVAD(concern.resolutionVAD);
     normalized.push({
       ...(id ? { id } : {}),
       ...(title ? { title } : {}),
@@ -201,6 +216,8 @@ function normalizeActiveConcerns(
       ...(dueAt !== undefined ? { dueAt } : {}),
       ...(resolvedAt !== undefined ? { resolvedAt } : {}),
       ...(priority ? { priority } : {}),
+      ...(formationVAD ? { formationVAD } : {}),
+      ...(resolutionVAD ? { resolutionVAD } : {}),
     });
   }
 

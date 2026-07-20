@@ -86,12 +86,15 @@ import { resolveEmbeddingProviderProvenanceFromConfig } from '../../faculties/me
 import { createObserverEvalSidecarRuntimeFromConfig } from '../../core/eval/observer-sidecar/config.js';
 import type { ObserverEvalSidecarRuntime } from '../../core/eval/observer-sidecar/types.js';
 import {
+  resolveConcernResolutionArcJournalPath,
   resolveContactsDir,
   resolveContactBlockListPath,
   resolveIntrospectionConsentLedgerPath,
   resolvePersonalSkillsDir,
   resolveShareCapsuleCustodyPath,
 } from '../../persistence/layout.js';
+import { ReflectionJournalStore } from '../../persistence/journals/reflection-journal.js';
+import { createConcernResolutionArcRecorder } from '../../core/intention/concern-resolution-arc.js';
 import {
   createCapsuleCustodyService,
   createShareCapsuleCustodyStore,
@@ -630,6 +633,20 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
     introspectionTurnSensitivityDecisions,
     eventBus,
   });
+  // vw3w.2: record the emotional arc of every resolved concern (formation VAD →
+  // resolution VAD, duration, final salience) into a dedicated reflection
+  // journal as lived experience. Subscribes to the vw3w.1 resolution-appraisal
+  // event; fire-and-forget registration, matching the other runtime subscribers.
+  const concernResolutionArcJournal = new ReflectionJournalStore(
+    resolveConcernResolutionArcJournalPath(pathSnapshot.companionDataDir),
+  );
+  eventBus.on(
+    'intention.concern.resolution_appraisal',
+    createConcernResolutionArcRecorder({
+      concernStore: intentionRuntime.concernStore,
+      journal: concernResolutionArcJournal,
+    }),
+  );
   wireSelfModelRuntime(agentLoop);
   const intentionAppraisalHooks = createIntentionAppraisalHooks(
     intentionRuntime.concernStore,

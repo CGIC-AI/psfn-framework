@@ -56,6 +56,7 @@ import {
   resolvePromptRegistryHistoryPath,
   resolvePromptRegistryPath,
   resolveReflectionJournalPath,
+  resolveConcernResolutionArcJournalPath,
   resolveReflectionMetacognitionDir,
   resolveReflectionMetacognitionJournalPath,
   resolveReflectionNotesDir,
@@ -108,6 +109,7 @@ describe('persistence layout', () => {
     expect(resolveLegacyValuesJournalPath(dataDir)).toBe(join(dataDir, 'values.jsonl'));
     expect(resolveReflectionNotesDir(dataDir)).toBe(join(dataDir, 'state', 'notes', 'reflections'));
     expect(resolveReflectionJournalPath(dataDir)).toBe(join(dataDir, 'state', 'notes', 'reflections', 'journal.jsonl'));
+    expect(resolveConcernResolutionArcJournalPath(dataDir)).toBe(join(dataDir, 'state', 'notes', 'reflections', 'concern-arcs.jsonl'));
     expect(resolveReflectionMetacognitionDir(dataDir)).toBe(join(dataDir, 'state', 'notes', 'reflections', 'metacognition'));
     expect(resolveReflectionMetacognitionJournalPath(dataDir)).toBe(join(dataDir, 'state', 'notes', 'reflections', 'metacognition', 'journal.jsonl'));
     expect(resolveScratchpadMirrorPath(dataDir)).toBe(join(dataDir, 'state', 'notes', 'scratchpad.json'));

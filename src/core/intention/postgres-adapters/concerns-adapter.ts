@@ -496,7 +496,10 @@ export class PostgresActiveConcernStore implements ConcernStorePortBackend {
       terminal ? serializeResolutionVAD(options.resolutionVAD) : null,
       resolutionGenerationId,
     ];
-    if (!terminal) transitionValues.push(current.status, current.resolvedAt ?? null);
+    if (!terminal) {
+      transitionValues.push(current.status);
+      if (current.resolvedAt) transitionValues.push(current.resolvedAt);
+    }
 
     const row = await queryOne<ActiveConcernRow>(
       this.pool,

@@ -121,7 +121,7 @@ function parseInternalState(value: unknown, label: string): InternalState {
   const relational = requireRecord(raw.relational, `${label}.relational`);
   const situated = requireRecord(raw.situated, `${label}.situated`);
   assertExactKeys(emotional, new Set([
-    'vad', 'mood', 'discreteEmotions', 'confidence', 'telemetry', 'acac',
+    'vad', 'mood', 'discreteEmotions', 'confidence', 'telemetry', 'discrepancies', 'acac',
   ]), `${label}.emotional`);
   assertExactKeys(cognitive, new Set([
     'certaintyLevel', 'topicEngagement', 'processingQuality',

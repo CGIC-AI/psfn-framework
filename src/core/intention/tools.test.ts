@@ -80,7 +80,7 @@ describe('orient concern actions', () => {
     expect(payload.concerns[0]?.id).toBe(created.id);
   });
 
-  it('resolve_concern resolves an unresolved concern and reports missing ids', async () => {
+  it('resolve_concern is idempotent for resolved concerns and reports unknown ids', async () => {
     const created = await store.create({
       text: 'Resolve this concern.',
       priority: 'low',
@@ -102,16 +102,31 @@ describe('orient concern actions', () => {
     expect(resolvedPayload.concerns[0]?.resolvedAt).toBeDefined();
     expect(resolvedPayload.concerns[0]?.resolutionOutcome).toBe('Addressed in follow-up');
 
-    const missingResult = await tool.execute('call-4', {
+    const repeatedResult = await tool.execute('call-4', {
       action: 'resolve_concern',
       concernId: created.id,
+    });
+    const repeatedPayload = JSON.parse(resultText(repeatedResult)) as {
+      resolved: number;
+      missing: string[];
+      concerns: Array<{ resolutionOutcome?: string }>;
+    };
+    expect(repeatedPayload.resolved).toBe(1);
+    expect(repeatedPayload.missing).toEqual([]);
+    expect(repeatedPayload.concerns[0]?.resolutionOutcome).toBe('Addressed in follow-up');
+    expect(repeatedResult.details?.isError).toBeUndefined();
+
+    const missingConcernId = 'missing-concern-id';
+    const missingResult = await tool.execute('call-5', {
+      action: 'resolve_concern',
+      concernId: missingConcernId,
     });
     const missingPayload = JSON.parse(resultText(missingResult)) as {
       resolved: number;
       missing: string[];
     };
     expect(missingPayload.resolved).toBe(0);
-    expect(missingPayload.missing).toEqual([created.id]);
+    expect(missingPayload.missing).toEqual([missingConcernId]);
     expect(missingResult.details?.isError).toBe(true);
   });
 });

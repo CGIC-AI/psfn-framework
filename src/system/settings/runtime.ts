@@ -19,8 +19,12 @@ import {
 } from '../config/memory-retrieval-policy.js';
 import {
   cloneImageWorkflowSettings,
+  normalizeFalCreateModelSetting,
+  normalizeFalEditModelSetting,
+  normalizeImageProviderSetting,
   normalizeImageWorkflowSettings,
 } from '../../primitives/images/types.js';
+import { normalizeModelPurposeSelectionSetting } from '../config/model-selection-config.js';
 import {
   resolveMemoryRetrievalBudgetPct,
   resolveSessionHistoryBudgetPct,
@@ -382,6 +386,13 @@ function getWebAndGardenSettingsSnapshot(config: SubstrateConfig) {
       (config as SubstrateConfig & { chatApiBaseUrl?: string })
         .chatApiBaseUrl ?? null,
     comfyUiBaseUrl: config.comfyUiBaseUrl ?? null,
+    imageProvider: config.imageProvider ?? null,
+    imageFalCreateModel: config.imageFalCreateModel ?? null,
+    imageFalEditModel: config.imageFalEditModel ?? null,
+    imageSelfieEditModel: config.imageSelfieEditModel ?? null,
+    modelPurposeSelection: config.modelPurposeSelection
+      ? { ...config.modelPurposeSelection }
+      : null,
     imageWorkflows: cloneImageWorkflowSettings(config.imageWorkflows),
     activeTimezone: config.activeTimezone ?? resolveActiveTimezone(),
     uiThemeId: toNonEmptyString(config.uiThemeId) ?? DEFAULT_UI_THEME_ID,
@@ -400,6 +411,11 @@ function getWebAndGardenSettingsSnapshot(config: SubstrateConfig) {
     | 'promotedExtendedTools'
     | 'chatApiBaseUrl'
     | 'comfyUiBaseUrl'
+    | 'imageProvider'
+    | 'imageFalCreateModel'
+    | 'imageFalEditModel'
+    | 'imageSelfieEditModel'
+    | 'modelPurposeSelection'
     | 'imageWorkflows'
     | 'activeTimezone'
     | 'uiThemeId'
@@ -811,6 +827,30 @@ function applyWebAndGardenSettings(
   }
   applyTrimmedSetting(config, 'chatApiBaseUrl', settings, 'chatApiBaseUrl');
   applyTrimmedSetting(config, 'comfyUiBaseUrl', settings, 'comfyUiBaseUrl');
+  if ('imageProvider' in settings) {
+    config.imageProvider = normalizeImageProviderSetting(settings.imageProvider);
+  }
+  if ('imageFalCreateModel' in settings) {
+    config.imageFalCreateModel = normalizeFalCreateModelSetting(
+      settings.imageFalCreateModel,
+    );
+  }
+  if ('imageFalEditModel' in settings) {
+    config.imageFalEditModel = normalizeFalEditModelSetting(
+      settings.imageFalEditModel,
+    );
+  }
+  if ('imageSelfieEditModel' in settings) {
+    config.imageSelfieEditModel = normalizeFalEditModelSetting(
+      settings.imageSelfieEditModel,
+      'imageSelfieEditModel',
+    );
+  }
+  if ('modelPurposeSelection' in settings) {
+    config.modelPurposeSelection = normalizeModelPurposeSelectionSetting(
+      settings.modelPurposeSelection,
+    );
+  }
   if ('imageWorkflows' in settings) {
     config.imageWorkflows = normalizeImageWorkflowSettings(
       settings.imageWorkflows,

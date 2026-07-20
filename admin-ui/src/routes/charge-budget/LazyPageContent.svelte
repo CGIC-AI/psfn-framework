@@ -2,6 +2,7 @@
   import { onMount } from 'svelte';
   import BoundedList from '$lib/components/garden/BoundedList.svelte';
   import AccountingCockpit from '$lib/components/accounting/AccountingCockpit.svelte';
+  import HumanAttentionPressurePanel from './HumanAttentionPressurePanel.svelte';
   import { accountingSearchParamsForTab } from '$lib/accounting/query-state';
   import {
     getCharges,
@@ -69,6 +70,10 @@
   let activeRun = $derived(charges?.activeRun ?? null);
   let recentRuns = $derived(charges?.recentRuns ?? []);
   let recentEvents = $derived(charges?.events ?? []);
+  let humanAttention = $derived(charges?.humanAttention ?? null);
+  let humanAttentionPolicy = $derived(
+    charges?.humanAttentionPolicy ?? policy?.fatigue.humanAttention ?? null,
+  );
 
   let mergedRuns = $derived.by<MergedRunRow[]>(() => {
     const entriesByRun = new Map<string, RunChargeLedgerEntry[]>();
@@ -304,6 +309,33 @@
       }
       if (pricing > 0 && !nextPolicy.referenceModelClassPricingRationales?.[referenceClass]?.trim()) {
         errors.push(`${labelize(referenceClass)} has nonzero reference pricing and needs a rationale.`);
+      }
+    }
+    const humanAttention = nextPolicy.fatigue.humanAttention;
+    if (!humanAttention) {
+      errors.push('Human attention pressure policy is required.');
+    } else {
+      const { public: publicThreshold, regular, trusted, primary } =
+        humanAttention.trustThresholds;
+      if (
+        ![publicThreshold, regular, trusted, primary]
+          .every(value => Number.isInteger(value) && value > 0)
+      ) {
+        errors.push('Human attention trust thresholds must be positive integers.');
+      } else if (
+        publicThreshold > regular
+        || regular > trusted
+        || trusted > primary
+      ) {
+        errors.push('Human attention trust thresholds must increase from public through primary.');
+      }
+      if (
+        !Number.isFinite(humanAttention.channelWeights.directMessage)
+        || humanAttention.channelWeights.directMessage <= 0
+        || !Number.isFinite(humanAttention.channelWeights.directMention)
+        || humanAttention.channelWeights.directMention <= 0
+      ) {
+        errors.push('Human attention direct-message and direct-mention weights must be greater than zero.');
       }
     }
     return errors;
@@ -624,6 +656,8 @@
         {/if}
       {/if}
     </section>
+
+    <HumanAttentionPressurePanel data={humanAttention} policy={humanAttentionPolicy} />
 
     <section class="card-garden overflow-hidden" aria-labelledby="recent-runs-heading">
       <div class="border-b border-bark-300 px-5 py-4">

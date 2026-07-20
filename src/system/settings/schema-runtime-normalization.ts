@@ -9,7 +9,13 @@ import {
 import { normalizeGroupMemorySettings } from '../config/group-memory-config.js';
 import { normalizeEmotionScopingSettings } from '../config/emotion-scoping-config.js';
 import { normalizeMemoryRetrievalPolicy } from '../config/memory-retrieval-policy.js';
-import { normalizeImageWorkflowSettings } from '../../primitives/images/types.js';
+import {
+  normalizeFalCreateModelSetting,
+  normalizeFalEditModelSetting,
+  normalizeImageProviderSetting,
+  normalizeImageWorkflowSettings,
+} from '../../primitives/images/types.js';
+import { normalizeModelPurposeSelectionSetting } from '../config/model-selection-config.js';
 import {
   MEMORY_RETRIEVAL_BUDGET_PCT_RANGE,
   SESSION_HISTORY_BUDGET_PCT_RANGE,
@@ -625,6 +631,30 @@ function normalizeEndpointAndGardenSettings(
 ): void {
   normalizeTrimmedStringSetting(normalized, settings, 'chatApiBaseUrl');
   normalizeTrimmedStringSetting(normalized, settings, 'comfyUiBaseUrl');
+  if ('imageProvider' in settings) {
+    normalized.imageProvider = normalizeImageProviderSetting(settings.imageProvider);
+  }
+  if ('imageFalCreateModel' in settings) {
+    normalized.imageFalCreateModel = normalizeFalCreateModelSetting(
+      settings.imageFalCreateModel,
+    );
+  }
+  if ('imageFalEditModel' in settings) {
+    normalized.imageFalEditModel = normalizeFalEditModelSetting(
+      settings.imageFalEditModel,
+    );
+  }
+  if ('imageSelfieEditModel' in settings) {
+    normalized.imageSelfieEditModel = normalizeFalEditModelSetting(
+      settings.imageSelfieEditModel,
+      'imageSelfieEditModel',
+    );
+  }
+  if ('modelPurposeSelection' in settings) {
+    normalized.modelPurposeSelection = normalizeModelPurposeSelectionSetting(
+      settings.modelPurposeSelection,
+    );
+  }
   if ('imageWorkflows' in settings) {
     normalized.imageWorkflows = normalizeImageWorkflowSettings(
       settings.imageWorkflows,

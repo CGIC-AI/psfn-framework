@@ -20,6 +20,7 @@ import { DreamMeaningPass } from '../../faculties/memory/episodic/dream-meaning-
 import { SleeptimeWikiPass } from '../../faculties/wiki/sleeptime-wiki-pass.js';
 import { WikiStore } from '../../faculties/wiki/store.js';
 import { ProactiveOutboundDispatcher } from '../../core/intention/proactive-outbound.js';
+import { wireTaskLifecyclePartnerNotifications } from '../../core/agent/task-lifecycle-partner-notifications.js';
 import {
   registerTemporalWakeupTasks,
   TEMPORAL_WAKEUP_MORNING_TASK_NAME,
@@ -236,6 +237,13 @@ async function main(): Promise<void> {
     ...(config.gatewaySessionIntegrityAuthToken
       ? { sessionIntegrityAuthToken: config.gatewaySessionIntegrityAuthToken }
       : {}),
+    // 23pp per-companion model selection: this companion's effective purpose →
+    // slot-key map (settings.json + settings.overlay.json, validated at startup
+    // against models.json). Transported per call as the wire slotKey and
+    // re-validated fail-closed by the gateway registry.
+    ...(config.modelPurposeSelection
+      ? { modelPurposeSelection: config.modelPurposeSelection }
+      : {}),
     onModelBudgetBlocked: (event) => {
       eventBus.emit('model.budget.blocked', event).catch((error) => {
         log.error('Failed to bridge gateway model budget telemetry', {
@@ -257,6 +265,7 @@ async function main(): Promise<void> {
   });
   let shuttingDown = false;
   let stopFn: () => Promise<void> = async () => {};
+  // eslint-disable-next-line @typescript-eslint/no-misused-promises -- Callback API intentionally receives this Promise-returning lifecycle handler.
   const unregisterGatewayDisconnect = gateway.onDisconnect(async (event) => {
     if (shuttingDown) return;
     shuttingDown = true;
@@ -1038,6 +1047,7 @@ async function main(): Promise<void> {
       memoryExtractor,
       intentionRuntime,
       toolConformanceRunner,
+      humanAttentionLedger: coreRuntime.humanAttentionLedger,
     },
   });
   if (adminTransport) {
@@ -1137,6 +1147,30 @@ async function main(): Promise<void> {
       eventBus,
     })
     : null;
+  wireTaskLifecyclePartnerNotifications({
+    eventBus,
+    postTurnActions,
+    outreachOutbox,
+    proactiveOutbound,
+    targetChannelId: heartbeatChannelId,
+    authorNotification: async ({ internalPrompt }) => {
+      const response = await agentLoop.handleMessage({
+        id: `task-lifecycle-author-${Date.now()}`,
+        channelId: 'internal:reflection:task-lifecycle-notification',
+        channelType: 'terminal',
+        authorId: 'system:task-lifecycle',
+        authorName: 'Task lifecycle',
+        content: internalPrompt,
+        timestamp: new Date(),
+      });
+      return response.content;
+    },
+  });
+  if (!proactiveOutbound || !heartbeatChannelId) {
+    log.warn(
+      'Task lifecycle partner notifications will be recorded as skipped because no approved primary DM is configured',
+    );
+  }
 
   // ── Temporal wake-up lanes (E7.1) ──
   // Morning wake + idle time-of-day refresher. Both inject explicit system

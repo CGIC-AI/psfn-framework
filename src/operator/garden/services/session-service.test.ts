@@ -441,7 +441,7 @@ describe('AdminSessionDataService', () => {
       timestamp: 1_700_000_000_002,
     });
     store.insertCompaction(channelId, 'summary of early rows', firstMessageId);
-    store.appendTurnRecord(makeTurnRecord(channelId, createTurnId()));
+    void store.appendTurnRecord(makeTurnRecord(channelId, createTurnId()));
 
     const service = new AdminSessionDataService({
       sessionStore: store,
@@ -467,8 +467,8 @@ describe('AdminSessionDataService', () => {
     store.append({ channelId, role: 'assistant', content: 'hello', timestamp: 1_700_000_000_002 });
     const turnId = createTurnId();
     const otherTurnId = createTurnId();
-    store.appendTurnRecord(makeTurnRecord(channelId, otherTurnId));
-    store.appendTurnRecord(makeTurnRecord(channelId, turnId));
+    void store.appendTurnRecord(makeTurnRecord(channelId, otherTurnId));
+    void store.appendTurnRecord(makeTurnRecord(channelId, turnId));
 
     const service = new AdminSessionDataService({
       sessionStore: store,
@@ -501,7 +501,7 @@ describe('AdminSessionDataService', () => {
     record.concernDeltaRefs = [buildTurnSubsystemProjectionRef('concern', binding)];
     record.contactDeltaRefs = [buildTurnSubsystemProjectionRef('contact', binding)];
     store.append({ channelId, role: 'user', content: 'hi', timestamp: 1_700_000_000_001 });
-    store.appendTurnRecord(record);
+    void store.appendTurnRecord(record);
 
     const memory: PurrMemory = {
       id: 'memory-output-1',
@@ -617,7 +617,7 @@ describe('AdminSessionDataService', () => {
     record.concernDeltaRefs = [buildTurnSubsystemProjectionRef('concern', binding)];
     record.contactDeltaRefs = [buildTurnSubsystemProjectionRef('contact', binding)];
     store.append({ channelId, role: 'user', content: 'hi', timestamp: 1_700_000_000_001 });
-    store.appendTurnRecord(record);
+    void store.appendTurnRecord(record);
 
     const unwired = new AdminSessionDataService({
       sessionStore: store,
@@ -648,7 +648,7 @@ describe('AdminSessionDataService', () => {
       sourceTurnId: mismatchedTurnId,
       sourceRequestId: mismatchedRecord.requestId,
     })];
-    store.appendTurnRecord(mismatchedRecord);
+    void store.appendTurnRecord(mismatchedRecord);
     const mismatched = new AdminSessionDataService({
       sessionStore: store,
       sessionManager: new SessionManager(store, makeConfig({ dataDir: dir })),
@@ -831,7 +831,7 @@ describe('AdminSessionDataService', () => {
       timestamp: 1_700_000_000_025,
     });
 
-    store.appendTurnRecord({
+    void store.appendTurnRecord({
       schemaVersion: 1,
       turnId,
       requestId,
@@ -1278,7 +1278,7 @@ describe('AdminSessionDataService', () => {
     expect(continuityEntry).toBeDefined();
 
     const turnId = createTurnId();
-    store.appendTurnRecord({
+    void store.appendTurnRecord({
       schemaVersion: 1,
       turnId,
       requestId: 'req-continuity-1',
@@ -1389,7 +1389,7 @@ describe('AdminSessionDataService', () => {
     expect(userSessionEntryId).not.toBeNull();
     expect(assistantSessionEntryId).not.toBeNull();
 
-    store.appendTurnRecord({
+    void store.appendTurnRecord({
       schemaVersion: 1,
       turnId,
       requestId,

@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   buildAutonomousActionMemoryContext,
+  inferMemorySourceTypeFromSourceRef,
   inferImportedMemoryType,
   initializeImportedMemorySalience,
   memoryMatchesScopeQuery,
@@ -104,6 +105,23 @@ describe('memory import normalization policy', () => {
       sourceSpanStartMessageId: 12,
       sourceSpanEndMessageId: 14,
     });
+  });
+
+  it('normalizes and infers structured subagent provenance', () => {
+    expect(normalizeMemoryProvenance({
+      subagentId: 'subagent-42',
+      actor: 'subagent',
+      toolName: 'memory',
+      toolCallId: 'call-42',
+    })).toEqual({
+      subagentId: 'subagent-42',
+      actor: 'subagent',
+      toolName: 'memory',
+      toolCallId: 'call-42',
+    });
+    expect(inferMemorySourceTypeFromSourceRef(
+      'source:subagent:subagent-42|tool:memory|action:write|invocation:call-42',
+    )).toBe('subagent');
   });
 });
 

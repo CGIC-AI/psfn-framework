@@ -65,7 +65,7 @@ import { createSocketServer } from './transport.js';
 
 const mockedCreateSocketServer = vi.mocked(createSocketServer);
 
-const PARENT = 'companion-composite-parent';
+const PARENT = '22222222-2222-4222-8222-222222222221';
 const HUB_TOKEN_ENV = 'SATELLITE_HUB_CONTROL_TOKEN';
 
 const TEST_SESSION_HMAC_KEYRING: SessionHmacKeyring = {
@@ -530,7 +530,7 @@ describe('shard approval-grant production composition (2h6q.3 / 2h6q.1)', () => 
     await expect(mainServer.resolveCompanionApproval({
       id: entry.id,
       decision: 'approve',
-      companionId: 'companion-foreign-parent',
+      companionId: '33333333-3333-4333-8333-333333333331',
     })).resolves.toMatchObject({ status: 'not_found', executed: false });
     expect(hubCalls).toHaveLength(0);
 

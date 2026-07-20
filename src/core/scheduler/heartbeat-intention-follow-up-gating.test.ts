@@ -91,7 +91,7 @@ function wire(
     getStatus: vi.fn(),
   };
 
-  wireHeartbeatRuntime(
+  void wireHeartbeatRuntime(
     { registerTool: vi.fn() },
     scheduler,
     {

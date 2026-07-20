@@ -9,6 +9,7 @@ import type {
   AdminIntakeQuarantineService,
 } from '../services/intake-quarantine-service.js';
 import type { AdminSettingsService } from '../services/types.js';
+import type { GardenRequestContext } from '../garden-request-context.js';
 
 class CapturingResponse {
   statusCode = 0;
@@ -53,7 +54,33 @@ const SAMPLE_ITEM: AdminIntakeQuarantineItemView = {
   flywheelTarget: { kind: 'site', pattern: 'suspect.example' },
 };
 
-type AuditCall = { actionType: string; decision: string; narrative: string; details?: Array<string | null | undefined> };
+type AuditCall = {
+  actionType: string;
+  decision: string;
+  narrative: string;
+  details?: Array<string | null | undefined>;
+  context?: GardenRequestContext;
+};
+
+function requestContext(
+  method: 'GET' | 'POST',
+  path: string,
+  pathParams: Readonly<Record<string, string>>,
+): GardenRequestContext {
+  return {
+    kind: 'fleet_principal',
+    actor: { kind: 'fleet_principal', principalId: 'operator-a' },
+    action: method === 'GET' ? 'cogsec.read' : 'cogsec.manage',
+    resource: {
+      routeId: `${method} ${path}`,
+      scope: 'system',
+      area: 'cognitive_security',
+      companionId: null,
+      pathParams,
+      query: {},
+    },
+  } as unknown as GardenRequestContext;
+}
 
 async function invokeRoute(input: {
   quarantineService?: Partial<AdminIntakeQuarantineService>;
@@ -62,7 +89,7 @@ async function invokeRoute(input: {
   path: string;
   body?: unknown;
   auditCalls?: AuditCall[];
-}): Promise<{ statusCode: number; body: unknown }> {
+}): Promise<{ statusCode: number; body: unknown; context: GardenRequestContext }> {
   const withBody: AdminBodyReader = (_req, _res, cb) => {
     cb(typeof input.body === 'string' ? input.body : JSON.stringify(input.body));
   };
@@ -70,8 +97,14 @@ async function invokeRoute(input: {
     quarantineService: (input.quarantineService ?? {}) as AdminIntakeQuarantineService,
     settingsService: (input.settingsService ?? {}) as AdminSettingsService,
     withBody,
-    appendAuditTimelineEntry: (actionType, decision, narrative, details) => {
-      input.auditCalls?.push({ actionType, decision, narrative, ...(details ? { details } : {}) });
+    appendAuditTimelineEntry: (actionType, decision, narrative, details, _actor, context) => {
+      input.auditCalls?.push({
+        actionType,
+        decision,
+        narrative,
+        ...(details ? { details } : {}),
+        ...(context ? { context } : {}),
+      });
     },
   });
   const route = routes.find(candidate => candidate.method === input.method && candidate.match(input.path));
@@ -79,12 +112,19 @@ async function invokeRoute(input: {
     throw new Error(`Route not found: ${input.method} ${input.path}`);
   }
   const params = route.match(input.path) ?? {};
+  const context = requestContext(input.method, input.path, params);
   const res = new CapturingResponse();
-  route.handle({ headers: {} } as IncomingMessage, res as unknown as ServerResponse, params);
+  route.handle(
+    { headers: {} } as IncomingMessage,
+    res as unknown as ServerResponse,
+    params,
+    context,
+  );
   await res.done;
   return {
     statusCode: res.statusCode,
     body: JSON.parse(res.body) as unknown,
+    context,
   };
 }
 
@@ -120,7 +160,7 @@ describe('admin intake quarantine routes (htm9.11)', () => {
     });
     expect(found.statusCode).toBe(200);
     expect(found.body).toEqual({ item: detail });
-    expect(getItem).toHaveBeenCalledWith(SAMPLE_ITEM.id);
+    expect(getItem).toHaveBeenCalledWith(SAMPLE_ITEM.id, found.context);
 
     const missing = await invokeRoute({
       quarantineService: { getItem },
@@ -151,11 +191,12 @@ describe('admin intake quarantine routes (htm9.11)', () => {
       id: SAMPLE_ITEM.id,
       action: 'release_raw',
       sourceList: 'always_allow',
-    });
+    }, result.context);
     expect(auditCalls).toEqual([expect.objectContaining({
       actionType: 'gateway_policy',
       decision: 'needs_approval',
       narrative: expect.stringContaining('step 1 of 2'),
+      context: result.context,
     })]);
   });
 
@@ -185,9 +226,13 @@ describe('admin intake quarantine routes (htm9.11)', () => {
       action: 'release_raw',
       confirmToken: 'f'.repeat(64),
       reason: 'reviewed; benign',
-    });
+    }, result.context);
     expect(auditCalls).toHaveLength(1);
-    expect(auditCalls[0]).toMatchObject({ actionType: 'gateway_policy', decision: 'allowed' });
+    expect(auditCalls[0]).toMatchObject({
+      actionType: 'gateway_policy',
+      decision: 'allowed',
+      context: result.context,
+    });
     const details = (auditCalls[0].details ?? []).filter(Boolean);
     expect(details).toEqual(expect.arrayContaining([
       `envelopeId=${SAMPLE_ITEM.id}`,
@@ -248,7 +293,7 @@ describe('admin intake quarantine routes (htm9.11)', () => {
     expect(beginDecision).not.toHaveBeenCalled();
   });
 
-  it('the detail matcher does not swallow the confirm/decide POST paths', async () => {
+  it('the detail matcher does not swallow the confirm/decide POST paths', () => {
     const routes = buildAdminIntakeQuarantineRoutes({
       quarantineService: {} as AdminIntakeQuarantineService,
       settingsService: {} as AdminSettingsService,

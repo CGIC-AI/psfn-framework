@@ -34,6 +34,7 @@ import type { ImageVisionReviewer } from '../../../primitives/images/types.js';
 import type { VisionIntakeImageScreenerPort } from './vision-attachments.js';
 import type { ObserverEvalSidecarRuntime } from '../../eval/observer-sidecar/types.js';
 import type { FatigueBudgetPort } from '../fatigue/fatigue-budget.js';
+import type { HumanAttentionPressurePort } from '../fatigue/human-attention-pressure.js';
 import type { IcpFatigueRegulationReservationPort } from '../fatigue/regulation-reservation.js';
 import type { IntakeFirewallMode } from '../../../system/config/intake-policy-config.js';
 import type { ApprovalQueuePort } from '../../../system/capabilities/approval-queue-port.js';
@@ -156,6 +157,7 @@ export interface TurnExecutionAdapterOptions {
   durableChargeRecorder?: DurableRunChargeRecorder | null;
   durableChargeProbe?: DurableRunChargeProbe | null;
   fatigueBudget?: FatigueBudgetPort | null;
+  humanAttentionPressure?: HumanAttentionPressurePort | null;
   fatigueRegulationReservations?: IcpFatigueRegulationReservationPort | null;
   satellitePresence: SatellitePresencePort;
   /** Cross-companion presence (W5a); absent/null skips presence writes. */
@@ -208,6 +210,7 @@ export function createTurnExecutionRuntimeAdapter(
     durableChargeRecorder: options.durableChargeRecorder ?? null,
     durableChargeProbe: options.durableChargeProbe ?? null,
     fatigueBudget: options.fatigueBudget ?? null,
+    humanAttentionPressure: options.humanAttentionPressure ?? null,
     fatigueRegulationReservations: options.fatigueRegulationReservations ?? null,
     satellitePresence: options.satellitePresence,
     companionPresence: options.companionPresence ?? null,

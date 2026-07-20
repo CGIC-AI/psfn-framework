@@ -97,7 +97,7 @@ describe('GET /api/admin/memory/shared-background', () => {
     expect(sharedBackground).not.toHaveBeenCalled();
   });
 
-  it('resolves the exact route ahead of the generic memory-detail route', async () => {
+  it('resolves the exact route ahead of the generic memory-detail route', () => {
     const routes = routesFor(makeService(vi.fn(async () => sample)));
     // The first GET route matching the literal path must be the exact
     // shared-background route (which does NOT also match an arbitrary id),

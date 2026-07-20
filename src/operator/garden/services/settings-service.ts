@@ -29,9 +29,22 @@ import {
   SETTINGS_STRING_ARRAY_FIELDS,
 } from '../../../system/config/settings-contract.js';
 import {
+  COMPANION_MODEL_SELECTION_SETTINGS_OVERLAY_KEYS,
+  mergeCompanionSettingsOverlayPatch,
+} from '../../../system/config/settings-overlay.js';
+import {
   validateCompositionalPolicyConfig,
 } from '../../../system/capabilities/compositional-policy.js';
-import { normalizeImageWorkflowSettings } from '../../../primitives/images/types.js';
+import {
+  FAL_CREATE_MODELS,
+  FAL_EDIT_MODELS,
+  IMAGE_PROVIDER_VALUES,
+  normalizeImageWorkflowSettings,
+} from '../../../primitives/images/types.js';
+import {
+  assertModelPurposeSelectionResolvable,
+  normalizeModelPurposeSelectionSetting,
+} from '../../../system/config/model-selection-config.js';
 import {
   normalizeMemoryRetrievalPolicy,
   resolveMemoryRetrievalPolicy,
@@ -86,6 +99,9 @@ import { buildEffectiveFleetAuthOwnerProjection } from './fleet-auth-owner-proje
 
 const IMPORT_ROUTE_MODE_VALUES = new Set(IMPORT_PROCESSING_ROUTE_MODE_VALUES);
 const SESSION_RESTART_BEHAVIOR_VALUES_SET = new Set(SESSION_RESTART_BEHAVIOR_VALUES);
+const IMAGE_PROVIDER_VALUES_SET = new Set<string>(IMAGE_PROVIDER_VALUES);
+const FAL_CREATE_MODEL_VALUES_SET = new Set<string>(FAL_CREATE_MODELS);
+const FAL_EDIT_MODEL_VALUES_SET = new Set<string>(FAL_EDIT_MODELS);
 const REMOVED_RUNTIME_SETTINGS_MESSAGES: Partial<Record<string, string>> = {
   memoryBudgetPct:
     'memoryBudgetPct has been removed; use sessionHistoryBudgetPct, memoryRetrievalBudgetPct, and extractionThresholdPct instead',
@@ -105,6 +121,21 @@ const log = createComponentLogger('AdminSettingsService');
 type SettingsMutationResult =
   | { ok: true; refreshedKeys: AdminSettingsDivergence['key'][]; divergences: AdminSettingsDivergence[] }
   | { ok: false; message: string };
+
+function splitCompanionModelSelectionSettings(
+  settings: EditableSettings,
+): { global: EditableSettings; companion: EditableSettings } {
+  const global = { ...settings };
+  const companion: EditableSettings = {};
+  const globalRecord = global as Record<string, unknown>;
+  const companionRecord = companion as Record<string, unknown>;
+  for (const key of COMPANION_MODEL_SELECTION_SETTINGS_OVERLAY_KEYS) {
+    if (!Object.hasOwn(globalRecord, key)) continue;
+    companionRecord[key] = globalRecord[key];
+    delete globalRecord[key];
+  }
+  return { global, companion };
+}
 
 function refreshModels(config: SubstrateConfig): AdminSettingsDivergence | null {
   try {
@@ -209,14 +240,26 @@ export function applyAdminSettingsMutation(options: {
 
   const currentRuntimeSettings = splitSettingsByDomain(configStore.loadRuntimeSettings()).runtime;
   const domainSplit = splitSettingsByDomain(settings);
+  const settingsByScope = splitCompanionModelSelectionSettings(domainSplit.runtime);
 
   const mergedRuntimeSettings = normalizeEditableSettings(
-    { ...currentRuntimeSettings, ...domainSplit.runtime },
+    { ...currentRuntimeSettings, ...settingsByScope.global },
     { defaultContextWindow: config.defaultContextWindow },
   );
 
-  configStore.saveRuntimeSettings(mergedRuntimeSettings);
-  applySettings(config, mergedRuntimeSettings);
+  if (Object.keys(settingsByScope.global).length > 0) {
+    configStore.saveRuntimeSettings(mergedRuntimeSettings);
+  }
+  if (Object.keys(settingsByScope.companion).length > 0) {
+    const currentOverlay = configStore.loadCompanionSettingsOverlay() ?? {};
+    configStore.saveCompanionSettingsOverlay(
+      mergeCompanionSettingsOverlayPatch(
+        currentOverlay,
+        settingsByScope.companion,
+      ),
+    );
+  }
+  applySettings(config, configStore.loadEffectiveRuntimeSettings());
   invalidatePromptCacheAfterOwnerMutation(config, 'owner-file:settings');
 
   if (Object.hasOwn(domainSplit.runtime, 'openRouterModelsApiUrl')) {
@@ -670,6 +713,47 @@ export class AdminSettingsDataService implements AdminSettingsService {
     }
   }
 
+  /**
+   * 23pp: validate a `modelPurposeSelection` write fail-closed — structural
+   * shape via the shared normalizer, then every slot key against the LIVE
+   * models.json registry so an unknown/disabled selection is rejected at the
+   * admin boundary with the valid slot ids, never persisted to break startup.
+   */
+  private validateModelPurposeSelectionField(
+    payload: Record<string, unknown>,
+    errors: SettingsValidationError[],
+  ): void {
+    if (!('modelPurposeSelection' in payload)) return;
+    let normalized;
+    try {
+      normalized = normalizeModelPurposeSelectionSetting(payload.modelPurposeSelection);
+    } catch (error) {
+      this.pushFieldError(
+        errors,
+        'modelPurposeSelection',
+        error instanceof Error ? error.message : 'modelPurposeSelection is invalid',
+        'invalid_object',
+      );
+      return;
+    }
+    if (!normalized) return;
+    try {
+      assertModelPurposeSelectionResolvable({
+        modelPurposeSelection: normalized,
+        ...(this.deps.config.modelRegistry
+          ? { modelRegistry: this.deps.config.modelRegistry }
+          : {}),
+      });
+    } catch (error) {
+      this.pushFieldError(
+        errors,
+        'modelPurposeSelection',
+        error instanceof Error ? error.message : 'modelPurposeSelection references an unknown model slot',
+        'invalid_object',
+      );
+    }
+  }
+
   private validateModelCatalogRouting(
     payload: Record<string, unknown>,
     errors: SettingsValidationError[],
@@ -763,6 +847,10 @@ export class AdminSettingsDataService implements AdminSettingsService {
 
     this.validateEnumField(payload, 'importProcessingRouteMode', IMPORT_ROUTE_MODE_VALUES, errors);
     this.validateEnumField(payload, 'sessionRestartBehavior', SESSION_RESTART_BEHAVIOR_VALUES_SET, errors);
+    this.validateEnumField(payload, 'imageProvider', IMAGE_PROVIDER_VALUES_SET, errors);
+    this.validateEnumField(payload, 'imageFalCreateModel', FAL_CREATE_MODEL_VALUES_SET, errors);
+    this.validateEnumField(payload, 'imageFalEditModel', FAL_EDIT_MODEL_VALUES_SET, errors);
+    this.validateEnumField(payload, 'imageSelfieEditModel', FAL_EDIT_MODEL_VALUES_SET, errors);
     this.validateTtsProviderField(payload, errors);
     this.validateSttProviderField(payload, errors);
 
@@ -777,6 +865,7 @@ export class AdminSettingsDataService implements AdminSettingsService {
     this.validateHttpUrlField(payload, 'comfyUiBaseUrl', errors);
     this.validateCompositionalPolicyField(payload, errors);
     this.validateImageWorkflowsField(payload, errors);
+    this.validateModelPurposeSelectionField(payload, errors);
     this.validateModelCatalogRouting(payload, errors);
     this.validateNumberRangeField(payload, 'moodCongruenceWeight', MOOD_CONGRUENCE_WEIGHT_RANGE, errors);
     if ('memoryRetrievalPolicy' in payload) {
@@ -835,7 +924,9 @@ export class AdminSettingsDataService implements AdminSettingsService {
   }
 
   async getSettingsData(): Promise<AdminSettingsData> {
-    const runtimeConfig = splitSettingsByDomain(this.deps.configStore.loadRuntimeSettings()).runtime;
+    const runtimeConfig = splitSettingsByDomain(
+      this.deps.configStore.loadEffectiveRuntimeSettings(),
+    ).runtime;
     runtimeConfig.sessionRestartBehavior ??= 'reuse_latest_session';
     const editors = this.loadSettingsConfigEditors();
     return {
@@ -968,7 +1059,7 @@ export class AdminSettingsDataService implements AdminSettingsService {
     }
 
     try {
-      const current = this.deps.configStore.loadRuntimeSettings();
+      const current = this.deps.configStore.loadEffectiveRuntimeSettings();
       const validationErrors = this.validateSettingsPayload(parsed, current as Partial<SubstrateConfig>);
       if (validationErrors.length > 0) {
         return this.buildValidationResult(validationErrors);

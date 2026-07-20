@@ -44,6 +44,7 @@ import {
 } from './channel-index-storage.js';
 
 export {
+  deleteChannelIndexEntryIfUnchanged,
   loadChannelIndex,
   parseChannelIndexEntry,
   saveChannelIndex,

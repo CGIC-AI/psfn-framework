@@ -199,7 +199,7 @@ describe('turn-record introspection source', () => {
           userMessage: { role: 'user', content: oldPoisonedSentinel, timestamp: 1_700_000_000_000 },
           completedAt: 1_700_000_000_100,
         });
-        store.appendTurnRecord(oldTurn);
+        void store.appendTurnRecord(oldTurn);
 
         const reset = manager.resetSourceChannelSession({
           sourceChannelId,
@@ -216,7 +216,7 @@ describe('turn-record introspection source', () => {
           userMessage: { role: 'user', content: freshSentinel, timestamp: 1_700_000_000_200 },
           completedAt: 1_700_000_000_300,
         });
-        store.appendTurnRecord(freshTurn);
+        void store.appendTurnRecord(freshTurn);
         const missingOwnerTurn = record({
           turnId: '019d2326-d9e1-701d-bcee-250d2cbb0e42',
           requestId: 'request-missing-owner',
@@ -225,7 +225,7 @@ describe('turn-record introspection source', () => {
           userMessage: { role: 'user', content: missingOwnerSentinel, timestamp: 1_700_000_000_400 },
           completedAt: 1_700_000_000_500,
         });
-        store.appendTurnRecord(missingOwnerTurn);
+        void store.appendTurnRecord(missingOwnerTurn);
 
         const reloadedStore = new SessionStore(sessionsDir);
         const reloadedManager = new SessionManager(reloadedStore, config);

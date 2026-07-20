@@ -219,6 +219,15 @@ export interface LLMModelHint extends ModelControlKnobs {
   model?: string;
   provider?: string;
   pin?: boolean;
+  /**
+   * Per-companion model selection (23pp): a models.json registry entry id
+   * (catalog slot key) chosen by the companion's settings overlay. Resolved
+   * fail-closed against the serving-side model registry — an unknown or
+   * disabled slot key rejects the call rather than silently substituting a
+   * model. Explicit `model`/`provider` hint fields take precedence over the
+   * slot selection when both are present.
+   */
+  slotKey?: string;
 }
 
 export interface LLMCallAccountingContext {
@@ -1243,6 +1252,17 @@ export const CANONICAL_MODEL_PURPOSES = [
 ] as const;
 
 export type CanonicalModelPurpose = typeof CANONICAL_MODEL_PURPOSES[number];
+
+/**
+ * Per-companion model selection (23pp): maps a canonical model purpose to the
+ * models.json registry entry id (catalog slot key) the companion should lead
+ * that lane with. The catalog and provider credentials stay gateway-global;
+ * only the SELECTION is companion-scoped (settings.overlay.json). Absent keys
+ * fall back to the registry's primary-purpose routing unchanged. The `moa`
+ * purpose is not selectable here (rejected by the settings normalizer): MoA
+ * model choices are owned by moaReferenceModels/moaAggregatorModel.
+ */
+export type ModelPurposeSelection = Partial<Record<CanonicalModelPurpose, string>>;
 
 export interface ModelRegistryPurposeTag {
   purpose: CanonicalModelPurpose;

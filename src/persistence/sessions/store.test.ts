@@ -148,7 +148,7 @@ describe('SessionStore', () => {
 
   it('persists canonical turn records in channel-scoped L0 streams', () => {
     const turnId = createTurnId();
-    store.appendTurnRecord({
+    void store.appendTurnRecord({
       schemaVersion: 1,
       turnId,
       requestId: 'req-turn-record',
@@ -362,7 +362,7 @@ describe('SessionStore', () => {
   it('accepts system-attributed turn records for internal scheduler prompts', () => {
     const turnId = createTurnId();
 
-    store.appendTurnRecord({
+    void store.appendTurnRecord({
       schemaVersion: 1,
       turnId,
       requestId: 'reflection-whisper-1',
@@ -604,7 +604,7 @@ describe('SessionStore', () => {
     const firstTurnId = createTurnId();
     const secondTurnId = createTurnId();
 
-    store.appendTurnRecord({
+    void store.appendTurnRecord({
       schemaVersion: 1,
       turnId: firstTurnId,
       requestId: 'req-1',
@@ -622,7 +622,7 @@ describe('SessionStore', () => {
       versionPointers: { model: 'test/model' },
       provenanceRefs: [],
     });
-    store.appendTurnRecord({
+    void store.appendTurnRecord({
       schemaVersion: 1,
       turnId: secondTurnId,
       requestId: 'req-2',
@@ -678,7 +678,7 @@ describe('SessionStore', () => {
       [redactedTurnId, 'req-redacted', 1_700_000_000_010],
       [visibleTurnId, 'req-visible', 1_700_000_000_110],
     ] as const) {
-      store.appendTurnRecord({
+      void store.appendTurnRecord({
         schemaVersion: 1,
         turnId,
         requestId,
@@ -745,8 +745,8 @@ describe('SessionStore', () => {
       ...buildTurnRecordFixture(sourceChannelId, 2, tombstonedTurnId),
       sessionId: logicalSessionId,
     };
-    store.appendTurnRecord(unique);
-    store.appendTurnRecord(tombstoned);
+    void store.appendTurnRecord(unique);
+    void store.appendTurnRecord(tombstoned);
 
     expect(store.findUniqueSourceTurnRecord(sourceChannelId, uniqueTurnId)).toEqual(unique);
     await store.redactTurn(logicalSessionId, tombstonedTurnId, {
@@ -756,7 +756,7 @@ describe('SessionStore', () => {
     expect(() => store.findUniqueSourceTurnRecord(sourceChannelId, tombstonedTurnId))
       .toThrow('tombstoned, missing its owner, or belongs to another source');
 
-    store.appendTurnRecord(unique);
+    void store.appendTurnRecord(unique);
     expect(() => store.findUniqueSourceTurnRecord(sourceChannelId, uniqueTurnId))
       .toThrow('duplicated and cannot establish a recovery identity');
   });
@@ -778,7 +778,7 @@ describe('SessionStore', () => {
 
     const turnIds = Array.from({ length: 12 }, () => createTurnId());
     turnIds.forEach((turnId, index) => {
-      countingStore.appendTurnRecord(buildTurnRecordFixture(channelId, index, turnId));
+      void countingStore.appendTurnRecord(buildTurnRecordFixture(channelId, index, turnId));
     });
 
     // One tombstoned turn near the tail: a single bounded overscan pass must
@@ -807,8 +807,8 @@ describe('SessionStore', () => {
     const secondTurnId = createTurnId();
     const storeA = new SessionStore(dir);
     storeA.append({ channelId, role: 'user', content: 'seed message', timestamp: 1_000 });
-    storeA.appendTurnRecord(buildTurnRecordFixture(channelId, 0, firstTurnId));
-    storeA.appendTurnRecord(buildTurnRecordFixture(channelId, 1, secondTurnId));
+    void storeA.appendTurnRecord(buildTurnRecordFixture(channelId, 0, firstTurnId));
+    void storeA.appendTurnRecord(buildTurnRecordFixture(channelId, 1, secondTurnId));
 
     // A second process attaches to the same sessions dir and serves a read
     // first, caching "no tombstones" plus the journal fingerprint.

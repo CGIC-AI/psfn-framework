@@ -172,6 +172,7 @@ describe('Postgres trusted-host provider recovery', () => {
       const lifecycle = new GatewayFleetAuthAuthorityLifecycleStore({
         pool: context.pool,
         accountAuthority,
+        sessionPepper: 's'.repeat(32),
       });
       const store = new PostgresTrustedHostProviderRecoveryStore({
         authorityPool: context.pool,
@@ -348,6 +349,7 @@ describe('Postgres trusted-host provider recovery', () => {
       const lifecycle = new GatewayFleetAuthAuthorityLifecycleStore({
         pool: context.pool,
         accountAuthority,
+        sessionPepper: 's'.repeat(32),
       });
       const callbackTransactionId = randomUUID();
       const ceremonyId = randomUUID();

@@ -10,12 +10,15 @@ import type { RunChargeEvent, RunChargeLineage } from '../../../../../src/shared
 import type { FatigueLedgerData } from '../../../../../src/shared/telemetry/fatigue-ledger.js';
 import type { FatigueTuningReport } from '../../../../../src/core/agent/fatigue/adaptive-tuning.js';
 import type { FatiguePolicyConfig } from '../../../../../src/shared/contracts/charge-policy.js';
+import type { HumanAttentionPressureLedgerData } from '../../../../../src/core/agent/fatigue/human-attention-ledger.js';
 
 export type ChargeLedgerQuery = RunChargeLedgerQuery;
 export type AdminChargeLedgerData = RunChargeLedgerData & {
   fatigue?: FatigueLedgerData;
   fatigueTuning?: FatigueTuningReport;
   fatigueSocialPolicy?: FatiguePolicyConfig['socialRegulation'];
+  humanAttention?: HumanAttentionPressureLedgerData;
+  humanAttentionPolicy?: FatiguePolicyConfig['humanAttention'];
 };
 export type {
   RunChargeEvent,

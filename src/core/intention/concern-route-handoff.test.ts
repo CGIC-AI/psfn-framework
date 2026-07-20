@@ -160,7 +160,7 @@ describe('ConcernRouteDispatcher', () => {
 });
 
 describe('north-star route adapter', () => {
-  it('routes a concern into the north-star store as a disabled draft', async () => {
+  it('routes a concern into the north-star store as a disabled draft', () => {
     const store = new NorthStarStore(join(makeTempDir(), 'north-star.json'));
     const handler = createNorthStarRouteHandler(store);
 
@@ -174,7 +174,7 @@ describe('north-star route adapter', () => {
     expect(items[0]).toMatchObject({ enabled: false, scope: 'companion' });
   });
 
-  it('fails closed when the north-star item cap is reached', async () => {
+  it('fails closed when the north-star item cap is reached', () => {
     const store = new NorthStarStore(join(makeTempDir(), 'north-star.json'));
     for (let i = 0; i < 3; i += 1) {
       store.create({ title: `existing ${i}`, content: `content ${i}`, enabled: true });
@@ -187,7 +187,7 @@ describe('north-star route adapter', () => {
 });
 
 describe('introspection route adapter', () => {
-  it('appends to the reflection journal with candidate/concern provenance', async () => {
+  it('appends to the reflection journal with candidate/concern provenance', () => {
     const journalPath = join(makeTempDir(), 'reflection.jsonl');
     const store = new ReflectionJournalStore(journalPath);
     const handler = createIntrospectionRouteHandler(store);
@@ -206,7 +206,7 @@ describe('introspection route adapter', () => {
     expect(raw.length).toBeGreaterThan(0);
   });
 
-  it('falls back to the system channel id when the request carries none', async () => {
+  it('falls back to the system channel id when the request carries none', () => {
     const store = new ReflectionJournalStore(join(makeTempDir(), 'reflection.jsonl'));
     const handler = createIntrospectionRouteHandler(store);
     const request = makeRequest();

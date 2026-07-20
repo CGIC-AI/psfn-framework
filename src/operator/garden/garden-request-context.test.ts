@@ -143,7 +143,7 @@ describe('request-bound Garden principal isolation', () => {
     expect(Object.isFrozen(principalA.actor)).toBe(true);
   });
 
-  it('keeps strong JIT and non-subject relations fail closed', async () => {
+  it('keeps strong JIT and non-subject relations fail closed', () => {
     const rawStore = {
       queryAuthorizedMemorySubjects: vi.fn(async () => ({ memories: [], total: 0 })),
     } as unknown as MemoryStorePort;

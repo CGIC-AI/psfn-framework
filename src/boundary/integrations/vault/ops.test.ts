@@ -278,7 +278,7 @@ describe('VaultOps', () => {
     it('passes through timeout config to execFileSync', () => {
       const custom = new VaultOps({ vaultName: 'V', timeoutMs: 5000 });
       mockExecFileSync.mockReturnValue('');
-      custom.read('test');
+      void custom.read('test');
       expect(mockExecFileSync).toHaveBeenCalledWith(
         'obsidian',
         expect.any(Array),

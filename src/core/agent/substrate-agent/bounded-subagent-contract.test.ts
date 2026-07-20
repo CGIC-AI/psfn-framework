@@ -116,4 +116,15 @@ describe('bounded subagent contract', () => {
     })).toThrow('non-empty sourceContext.embodimentContext.embodimentId');
   });
 
+  it('does not accept memory-write elevation through the launch-tool input contract (c7d)', () => {
+    const untrustedLaunchInput = {
+      name: 'name',
+      task: 'task',
+      memoryWriteElevation: { reason: '  sleeptime maintenance  ' },
+    };
+    const request = normalizeBoundedSubagentLaunchRequest(untrustedLaunchInput);
+
+    expect(request).not.toHaveProperty('memoryWriteElevation');
+  });
+
 });

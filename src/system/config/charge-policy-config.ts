@@ -19,6 +19,8 @@ import {
   FATIGUE_POLICY_CHANNEL_SETTING_VALUES,
   FATIGUE_POLICY_INTENT_VALUES,
   FATIGUE_POLICY_RELATIONSHIP_VALUES,
+  HUMAN_ATTENTION_RELATIONSHIP_VALUES,
+  HUMAN_ATTENTION_TRUST_LEVEL_VALUES,
   type ChargePolicyConfig,
   type ChargePolicyRationaleMap,
   type FatiguePolicyActivityThresholds,
@@ -31,6 +33,7 @@ import {
   type FatigueRoomEpisodeCircuitBreakerConfig,
   type FatigueRoomEpisodePressureConfig,
   type FatigueSocialPotConfig,
+  type HumanAttentionPressureConfig,
   type IcpCostBreakerConfig,
 } from '../../shared/contracts/charge-policy.js';
 
@@ -44,6 +47,8 @@ export {
   FATIGUE_POLICY_CHANNEL_SETTING_VALUES,
   FATIGUE_POLICY_INTENT_VALUES,
   FATIGUE_POLICY_RELATIONSHIP_VALUES,
+  HUMAN_ATTENTION_RELATIONSHIP_VALUES,
+  HUMAN_ATTENTION_TRUST_LEVEL_VALUES,
   type ChargePolicyConfig,
   type ChargePolicyRationaleMap,
   type ChargePolicyReferenceModelClass,
@@ -54,6 +59,7 @@ export {
   type FatiguePolicyIntent,
   type FatiguePolicyRelationshipClass,
   type FatiguePolicyState,
+  type HumanAttentionPressureConfig,
   type IcpCostBreakerConfig,
   type IcpCostPurpose,
 } from '../../shared/contracts/charge-policy.js';
@@ -668,6 +674,88 @@ function parseFatigueSocialPotConfig(
   };
 }
 
+function parseHumanAttentionPressureConfig(
+  raw: unknown,
+  fieldPath: string,
+): HumanAttentionPressureConfig {
+  if (!isRecord(raw)) {
+    throw new Error(`Invalid charge policy: ${fieldPath} must be an object`);
+  }
+  assertNoUnknownKeys(
+    raw,
+    [
+      'enabled',
+      'windowMs',
+      'boundaryCooldownMs',
+      'trustThresholds',
+      'relationshipToleranceBonus',
+      'channelWeights',
+    ],
+    fieldPath,
+  );
+  const trustThresholds = parseFixedObjectMap(
+    raw.trustThresholds,
+    `${fieldPath}.trustThresholds`,
+    HUMAN_ATTENTION_TRUST_LEVEL_VALUES,
+    parsePositiveInteger,
+  );
+  if (
+    trustThresholds.public >= trustThresholds.regular
+    || trustThresholds.regular >= trustThresholds.trusted
+    || trustThresholds.trusted >= trustThresholds.primary
+  ) {
+    throw new Error(
+      `Invalid charge policy: ${fieldPath} trust thresholds must strictly increase from public through primary`,
+    );
+  }
+  const relationshipToleranceBonus = parseFixedObjectMap(
+    raw.relationshipToleranceBonus,
+    `${fieldPath}.relationshipToleranceBonus`,
+    HUMAN_ATTENTION_RELATIONSHIP_VALUES,
+    parseNonNegativeInteger,
+  );
+  if (!isRecord(raw.channelWeights)) {
+    throw new Error(`Invalid charge policy: ${fieldPath}.channelWeights must be an object`);
+  }
+  assertNoUnknownKeys(
+    raw.channelWeights,
+    ['directMessage', 'directMention', 'ambientGroupMessage'],
+    `${fieldPath}.channelWeights`,
+  );
+
+  const channelWeights = {
+    directMessage: parsePositiveNumber(
+      raw.channelWeights.directMessage,
+      `${fieldPath}.channelWeights.directMessage`,
+    ),
+    directMention: parsePositiveNumber(
+      raw.channelWeights.directMention,
+      `${fieldPath}.channelWeights.directMention`,
+    ),
+    ambientGroupMessage: parseNonNegativeNumber(
+      raw.channelWeights.ambientGroupMessage,
+      `${fieldPath}.channelWeights.ambientGroupMessage`,
+    ),
+  };
+  if (trustThresholds.primary <= Math.max(...Object.values(channelWeights))) {
+    throw new Error(
+      `Invalid charge policy: ${fieldPath} primary threshold must exceed every single-message channel weight`,
+    );
+  }
+
+  return {
+    enabled: parseBoolean(raw.enabled, `${fieldPath}.enabled`),
+    windowMs: parsePositiveInteger(raw.windowMs, `${fieldPath}.windowMs`),
+    boundaryCooldownMs: parsePositiveInteger(
+      raw.boundaryCooldownMs,
+      `${fieldPath}.boundaryCooldownMs`,
+    ),
+    trustThresholds,
+    relationshipToleranceBonus,
+    channelWeights,
+  };
+}
+
 function parseFatiguePolicyConfig(
   raw: unknown,
   fieldPath: string,
@@ -686,6 +774,7 @@ function parseFatiguePolicyConfig(
       'overcharge',
       'socialRegulation',
       'socialPot',
+      'humanAttention',
     ],
     fieldPath,
   );
@@ -728,6 +817,10 @@ function parseFatiguePolicyConfig(
     socialPot: parseFatigueSocialPotConfig(
       raw.socialPot,
       `${fieldPath}.socialPot`,
+    ),
+    humanAttention: parseHumanAttentionPressureConfig(
+      raw.humanAttention,
+      `${fieldPath}.humanAttention`,
     ),
   };
 }

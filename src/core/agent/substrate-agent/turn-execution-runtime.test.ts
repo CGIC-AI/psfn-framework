@@ -48,6 +48,7 @@ import {
   type FatigueBudgetPort,
 } from '../fatigue/fatigue-budget.js';
 import type { IcpFatigueRegulationReservationPort } from '../fatigue/regulation-reservation.js';
+import type { HumanAttentionPressurePort } from '../fatigue/human-attention-pressure.js';
 import type { TurnExecutionRuntime } from './turn-execution-runtime.js';
 import { handleMessageForTurn } from './turn-execution-runtime.js';
 import { PromptCacheTurnRuntime } from './turn-execution/prompt-cache-runtime.js';
@@ -590,6 +591,7 @@ function createRuntime(params: {
   emotionSelfModelRuntimeOverrides?: Partial<TurnExecutionRuntime['emotionSelfModelRuntime']>;
   observerEvalSidecar?: ObserverEvalSidecarRuntime | null;
   fatigueBudget?: FatigueBudgetPort | null;
+  humanAttentionPressure?: HumanAttentionPressurePort | null;
   fatigueRegulationReservations?: IcpFatigueRegulationReservationPort | null;
   durableChargeRecorder?: TurnExecutionRuntime['durableChargeRecorder'];
   durableChargeProbe?: TurnExecutionRuntime['durableChargeProbe'];
@@ -616,6 +618,7 @@ function createRuntime(params: {
     durableChargeRecorder: params.durableChargeRecorder ?? vi.fn(async () => undefined),
     durableChargeProbe: params.durableChargeProbe ?? vi.fn(async () => 'absent'),
     fatigueBudget: params.fatigueBudget ?? null,
+    humanAttentionPressure: params.humanAttentionPressure ?? null,
     fatigueRegulationReservations: params.fatigueRegulationReservations ?? null,
     satellitePresence: createActiveEmanationSatellitePresencePort(),
     llmClient: {
@@ -667,7 +670,7 @@ function createRuntime(params: {
       modelRoster: {
         chat: { model: 'test-model', provider: 'test', maxTokens: 1024, contextWindow: 4096 },
       },
-      ...(params.fatigueBudget
+      ...(params.fatigueBudget || params.humanAttentionPressure
         ? {
             companionId: TEST_FLEET_COMPANION_ID,
             chargePolicy: makeChargePolicy(),
@@ -1124,6 +1127,7 @@ describe('handleMessageForTurn generated media delivery', () => {
         workspacePath: companionDataDir,
       },
     });
+    // eslint-disable-next-line @typescript-eslint/no-misused-promises -- Callback API intentionally preserves its Promise-returning lifecycle contract.
     (runtime.agent.prompt as ReturnType<typeof vi.fn>).mockImplementationOnce(async (promptMessage: { content: string }) => {
       (runtime.agent.state.messages as any[]).push({ role: 'user', content: promptMessage.content });
       (runtime.agent.state.messages as any[]).push({
@@ -1333,6 +1337,7 @@ describe('handleMessageForTurn generated media delivery', () => {
         workspacePath: companionDataDir,
       },
     });
+    // eslint-disable-next-line @typescript-eslint/no-misused-promises -- Callback API intentionally preserves its Promise-returning lifecycle contract.
     (runtime.agent.prompt as ReturnType<typeof vi.fn>).mockImplementationOnce(async (promptMessage: { content: string }) => {
       notePendingPaidDeliverable({
         surface: 'paidImageGeneration',
@@ -1431,6 +1436,7 @@ describe('handleMessageForTurn generated media delivery', () => {
         workspacePath: companionDataDir,
       },
     });
+    // eslint-disable-next-line @typescript-eslint/no-misused-promises -- Callback API intentionally preserves its Promise-returning lifecycle contract.
     (runtime.agent.prompt as ReturnType<typeof vi.fn>).mockImplementationOnce(async (promptMessage: { content: string }) => {
       (runtime.agent.state.messages as any[]).push({ role: 'user', content: promptMessage.content });
       (runtime.agent.state.messages as any[]).push({
@@ -1463,6 +1469,69 @@ describe('handleMessageForTurn generated media delivery', () => {
     expect(response.attachments).toBeUndefined();
     expect(response.metadata.noReply).toEqual(noReply);
     expect(recordAssistantMessage).not.toHaveBeenCalled();
+  });
+});
+
+describe('handleMessageForTurn human attention pressure', () => {
+  it('injects an internal boundary alert without suppressing the human turn', async () => {
+    const buildContext = vi.fn(async (_channelId: string, fullPrompt: string) => ({
+      systemPrompt: fullPrompt,
+      messages: [],
+      manifest: makeContextManifestFixture(),
+    }));
+    const evaluate = vi.fn(() => ({
+      schemaVersion: 1 as const,
+      timestampMs: 1_000,
+      localCompanionId: TEST_FLEET_COMPANION_ID,
+      contactId: 'contact-human',
+      channelId: 'ch1',
+      trustLevel: 'public' as const,
+      relationshipType: 'stranger' as const,
+      channelContext: 'direct_mention' as const,
+      weight: 2,
+      pressureInWindow: 4,
+      threshold: 3,
+      decision: 'boundary_alert' as const,
+      reason: 'threshold_reached' as const,
+      suppressTurn: false as const,
+      sourceMessageId: 'human-pressure',
+      turnId: '01900000-0000-7000-8000-000000000001',
+    }));
+    const runtime = createRuntime({
+      eventBus: new EventBus(),
+      sessionManager: {
+        resolveSessionChannelId: vi.fn(() => 'logical-session'),
+      } as unknown as SessionManager,
+      buildContext,
+      scheduleAutoCompactionBetweenTurns: vi.fn(async () => undefined),
+      awaitPendingAutoCompaction: vi.fn(async () => undefined),
+      recordUserMessage: vi.fn(() => 1),
+      recordAssistantMessage: vi.fn(() => 2),
+      humanAttentionPressure: { evaluate },
+      resolveAuthorContext: vi.fn(() => humanAuthorContext({
+        trustLevel: 'public',
+        relationshipType: 'stranger',
+      })),
+    });
+
+    const response = await handleMessageForTurn(runtime, createMessage('human-pressure', {
+      isDirectMessage: false,
+      routing: { responseMode: 'respond' },
+    }));
+
+    expect(evaluate).toHaveBeenCalledWith(expect.objectContaining({
+      contactId: 'contact-human',
+      channelId: 'ch1',
+      trustLevel: 'public',
+      relationshipType: 'stranger',
+      channelContext: 'direct_mention',
+      sourceMessageId: 'human-pressure',
+      turnId: expect.any(String),
+    }));
+    expect(buildContext.mock.calls[0]?.[1]).toContain('<human_attention_boundary_alert');
+    expect(buildContext.mock.calls[0]?.[1]).toContain('in your own voice');
+    expect(runtime.agent.prompt).toHaveBeenCalledOnce();
+    expect(response.content).toBe('assistant reply');
   });
 });
 
@@ -2986,6 +3055,7 @@ describe('handleMessageForTurn fatigue enforcement', () => {
     }));
     const { runtime } = createFatigueRuntime({ fatigueBudget, buildContext });
     const modelAuthoredText = 'I can wrap this thought up from here.';
+    // eslint-disable-next-line @typescript-eslint/no-misused-promises -- Callback API intentionally preserves its Promise-returning lifecycle contract.
     (runtime.agent.prompt as ReturnType<typeof vi.fn>).mockImplementationOnce(async (promptMessage: { content: string }) => {
       (runtime.agent.state.messages as any[]).push({ role: 'user', content: promptMessage.content });
       (runtime.agent.state.messages as any[]).push({ role: 'assistant', content: modelAuthoredText });
@@ -4230,13 +4300,15 @@ describe('handleMessageForTurn compaction scheduling', () => {
       .toEqual(new Set([turnStartLogicalSessionId, futureRoute.newLogicalSessionId]));
   });
 
-  it('keeps prompt history and background handoffs on the admitted API owner across an active-context switch', async () => {
+  it.each(['api', 'terminal'] as const)(
+    'keeps prompt history and background handoffs on the admitted %s owner across an active-context switch',
+    async (channelKind) => {
     const dataDir = makeTempDir();
     const eventBus = new EventBus();
     const { runtime, sessionManager } = createPersistenceBackedRuntime(dataDir, eventBus);
-    const sourceChannelId = 'api:physical-source';
-    const admittedOwner = 'api:admitted-owner';
-    const futureOwner = 'api:future-owner';
+    const sourceChannelId = `${channelKind}:physical-source`;
+    const admittedOwner = `${channelKind}:admitted-owner`;
+    const futureOwner = `${channelKind}:future-owner`;
     sessionManager.recordUserMessage(admittedOwner, 'admitted prompt history', 'user-a', 'User');
     sessionManager.recordUserMessage(futureOwner, 'future prompt history', 'user-b', 'User');
     sessionManager.setActiveContextSession(admittedOwner);
@@ -4269,9 +4341,9 @@ describe('handleMessageForTurn compaction scheduling', () => {
       });
     });
 
-    const inFlight = handleMessageForTurn(runtime, createMessage('msg-owner-switch', {
+    const inFlight = handleMessageForTurn(runtime, createMessage(`msg-owner-switch-${channelKind}`, {
       channelId: sourceChannelId,
-      channelType: 'api',
+      channelType: channelKind,
     }));
     await authorResolutionStarted.promise;
     sessionManager.setActiveContextSession(futureOwner);
@@ -4289,7 +4361,8 @@ describe('handleMessageForTurn compaction scheduling', () => {
         }),
       ]),
     );
-  });
+    },
+  );
 
   it('keeps a distinct Wyoming observability session out of durable turn ownership', async () => {
     const dataDir = makeTempDir();

@@ -42,6 +42,11 @@ import {
   type FatigueBudgetPort,
 } from '../../../core/agent/fatigue/fatigue-budget.js';
 import type { IcpFatigueRegulationReservationPort } from '../../../core/agent/fatigue/regulation-reservation.js';
+import {
+  DeterministicHumanAttentionPressure,
+  type HumanAttentionPressurePort,
+} from '../../../core/agent/fatigue/human-attention-pressure.js';
+import { HumanAttentionPressureLedger } from '../../../core/agent/fatigue/human-attention-ledger.js';
 import type { ObserverEvalSidecarRuntime } from '../../../core/eval/observer-sidecar/types.js';
 import { MemoryRetriever } from '../../../faculties/memory/retrieval.js';
 import type { EpisodicRetrievalStore } from '../../../faculties/memory/retrieval/episodic.js';
@@ -94,6 +99,7 @@ import {
   resolveCoreMemoryPath,
   resolveContinuityDir,
   resolveFatigueLedgerPath,
+  resolveHumanAttentionLedgerPath,
   resolveLegacyValuesJournalPath,
   resolveMemoryJournalPath,
   resolveNotesDir,
@@ -293,6 +299,7 @@ export interface SubstrateAgentCompositionOptions {
   runtimeMode?: RuntimeMode;
   emotionRuntime?: EmotionRuntimeWiring;
   fatigueBudget?: FatigueBudgetPort | null;
+  humanAttentionPressure?: HumanAttentionPressurePort | null;
   fatigueRegulationReservations?: IcpFatigueRegulationReservationPort | null;
   observerEvalSidecar?: ObserverEvalSidecarRuntime | null;
   streamRuntimeOptions?: SubstrateAgentOptions['streamRuntimeOptions'];
@@ -324,6 +331,9 @@ export function composeSubstrateAgent(options: SubstrateAgentCompositionOptions)
       ...(options.runtimeMode ? { runtimeMode: options.runtimeMode } : {}),
       ...(options.emotionRuntime ? { emotionRuntime: options.emotionRuntime } : {}),
       ...(options.fatigueBudget ? { fatigueBudget: options.fatigueBudget } : {}),
+      ...(options.humanAttentionPressure
+        ? { humanAttentionPressure: options.humanAttentionPressure }
+        : {}),
       ...(options.fatigueRegulationReservations
         ? { fatigueRegulationReservations: options.fatigueRegulationReservations }
         : {}),
@@ -346,6 +356,8 @@ export function composeSubstrateAgent(options: SubstrateAgentCompositionOptions)
 export interface FatigueBudgetComposition {
   fatigueLedger: FatigueLedger;
   fatigueBudget: FatigueBudgetPort;
+  humanAttentionLedger: HumanAttentionPressureLedger;
+  humanAttentionPressure: HumanAttentionPressurePort;
 }
 
 export interface FatigueBudgetCompositionOptions {
@@ -365,9 +377,25 @@ export function composeFatigueBudgetRuntime(
     options.eventBus ?? null,
     sharedOptions,
   );
+  const humanAttentionLedger = new HumanAttentionPressureLedger(
+    resolveHumanAttentionLedgerPath(companionDataDir),
+    null,
+    options.now ?? Date.now,
+  );
+  const humanAttentionPolicy = options.config.chargePolicy?.fatigue.humanAttention;
+  if (!humanAttentionPolicy) {
+    throw new Error(
+      'Human attention pressure requires chargePolicy.fatigue.humanAttention',
+    );
+  }
   return {
     fatigueLedger,
     fatigueBudget: new DeterministicFatigueBudgetPort(fatigueLedger, sharedOptions),
+    humanAttentionLedger,
+    humanAttentionPressure: new DeterministicHumanAttentionPressure(
+      humanAttentionLedger,
+      humanAttentionPolicy,
+    ),
   };
 }
 
@@ -603,6 +631,9 @@ export function wireShardAndThinkRuntime(options: ToolRuntimeOptions): ShardExec
     toolCatalogProvider: () => options.agentLoop.getToolCatalog(),
     auditTrail: options.shardAuditTrail ?? undefined,
     runtimeMode: options.runtimeMode,
+    // c7d: restricted-class subagent memory candidates stage through the same
+    // fold-review queue the shard runtime uses (no parallel review system).
+    foldReviewController,
   });
   const shardExecutionPort = createShardExecutionPort(shardManager);
   options.agentLoop.registerTool(createSubagentTool(subagentFaculty), 'core');

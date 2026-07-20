@@ -4,6 +4,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { EventBus } from '../../shared/event-bus.js';
 import { ApiServer } from './server.js';
 
+const TEST_COMPANION_ID = '11111111-1111-4111-8111-111111111111';
+
 async function allocatePort(): Promise<number> {
   return new Promise((resolve, reject) => {
     const server = net.createServer();
@@ -76,7 +78,7 @@ describe('ApiServer sensor ingest wiring', () => {
     };
     server = new ApiServer({
       port,
-      companionId: 'test-companion',
+      companionId: TEST_COMPANION_ID,
       agentLoop: {} as any,
       eventBus,
       sessionManager: {} as any,

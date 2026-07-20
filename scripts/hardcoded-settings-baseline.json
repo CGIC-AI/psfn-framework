@@ -1306,6 +1306,12 @@
       "value": "4"
     },
     {
+      "file": "src/core/agent/task-lifecycle-partner-notification-contract.ts",
+      "name": "MAX_TASK_LABEL_CHARS",
+      "value": "120",
+      "note": "Code-owned privacy/DoS bound on the only label accepted from a persisted notification payload."
+    },
+    {
       "file": "src/core/agent/tool-call-correction.ts",
       "name": "MAX_ECHOED_CATALOG_NAMES",
       "value": "24"

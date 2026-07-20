@@ -382,6 +382,135 @@ describe('executePostTurnBackgroundWork', () => {
     );
   });
 
+  it('keeps the real compaction drain on its captured API owner across an active-context switch', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'psfn-post-turn-owner-race-'));
+    const capturedOwner = 'api:captured-background-owner';
+    const futureOwner = 'api:future-background-owner';
+    const sourceChannelId = 'api:physical-background-source';
+    const fenceEntered = deferred();
+    const releaseFence = deferred();
+    const store = new SessionStore(join(root, 'sessions'), {
+      turnRecordEligibilityFence: {
+        withTurnRecordEligibilityFence: async (_key, operation) => operation(),
+        withTurnRecordEligibilityFences: async (_keys, operation) => {
+          fenceEntered.resolve();
+          await releaseFence.promise;
+          return operation();
+        },
+      },
+    });
+    const config = {
+      dataDir: root,
+      companionDataDir: root,
+      sessionMessageLimit: 30,
+      memoryRetrievalLimit: 15,
+      extractionInterval: 5,
+      maintenanceIntervalMs: 300_000,
+      defaultContextWindow: 4_096,
+      extractionThresholdPct: 30,
+      compactionThresholdPct: 1,
+      modelRoster: {
+        chat: { provider: 'test', model: 'test', contextWindow: 4_096, maxTokens: 128 },
+      },
+    } as SubstrateConfig;
+    const sessionManager = new SessionManager(store, config);
+    const completedAt = Date.now();
+    const record = makeTurnRecord({
+      sessionId: capturedOwner,
+      channelId: sourceChannelId,
+      channelType: 'api',
+      startedAt: completedAt - 10,
+      completedAt,
+      userMessage: {
+        role: 'user',
+        content: 'captured source input',
+        timestamp: completedAt - 10,
+      },
+      assistantMessage: {
+        role: 'assistant',
+        content: 'captured source output',
+        timestamp: completedAt,
+      },
+    });
+
+    try {
+      let capturedUserEntryId: number | null = null;
+      let capturedAssistantEntryId: number | null = null;
+      for (let index = 0; index < 3; index += 1) {
+        const turnContext = {
+          sourceChannelId,
+          turnId: record.turnId,
+          requestId: record.requestId,
+        };
+        capturedUserEntryId = sessionManager.recordUserMessage(
+          capturedOwner,
+          `captured user ${index} ${'A'.repeat(200)}`,
+          'user-a',
+          'User',
+          true,
+          undefined,
+          turnContext,
+        );
+        capturedAssistantEntryId = sessionManager.recordAssistantMessage(
+          capturedOwner,
+          `captured assistant ${index} ${'B'.repeat(200)}`,
+          undefined,
+          true,
+          undefined,
+          turnContext,
+        );
+        sessionManager.recordUserMessage(
+          futureOwner,
+          `future user ${index} ${'C'.repeat(200)}`,
+          'user-b',
+          'User',
+        );
+        sessionManager.recordAssistantMessage(
+          futureOwner,
+          `future assistant ${index} ${'D'.repeat(200)}`,
+        );
+      }
+      expect(capturedUserEntryId).not.toBeNull();
+      expect(capturedAssistantEntryId).not.toBeNull();
+      await sessionManager.recordTurn(record);
+
+      const execution = makeAutoCompactionExecution(record);
+      execution.payload.source.userSessionEntryId = capturedUserEntryId!;
+      execution.payload.source.assistantSessionEntryId = capturedAssistantEntryId!;
+      execution.job.payloadFingerprint = fingerprintBackgroundWorkPayload(execution.payload);
+      const complete = vi.fn<LLMProviderPort['complete']>().mockResolvedValue({
+        content: 'Captured owner summary.',
+        model: 'test',
+        inputTokens: 1,
+        outputTokens: 1,
+        toolCalls: [],
+        stopReason: 'end_turn',
+      });
+      const dependencies = {
+        sessionManager,
+        llmProvider: { stream: vi.fn(), complete } as unknown as LLMProviderPort,
+        getMemoryExtractor: () => null,
+        runIntentionPostTurnHooks: vi.fn(async () => undefined),
+        emotionRuntime: { triggerEmotionAppraisal: vi.fn(async () => undefined) },
+        getEmotionTemplateVariables: () => ({}),
+        tuning: TEST_POST_TURN_TUNING,
+      };
+
+      sessionManager.setActiveContextSession(capturedOwner);
+      const drain = executePostTurnBackgroundWork(execution, dependencies);
+      await fenceEntered.promise;
+      sessionManager.setActiveContextSession(futureOwner);
+      releaseFence.resolve();
+      await expect(drain).resolves.toBeUndefined();
+
+      expect(complete).toHaveBeenCalledTimes(1);
+      expect(store.getCompactionSummaries(capturedOwner)).toHaveLength(1);
+      expect(store.getCompactionSummaries(futureOwner)).toHaveLength(0);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it('sizes the bounded memory snapshot to the configured interval so intervals above ten are reachable', async () => {
     // Regression for psfn-framework-u5bv.10: the handler requested a fixed ten
     // entries, so a configured interval of 11-50 could never accumulate enough

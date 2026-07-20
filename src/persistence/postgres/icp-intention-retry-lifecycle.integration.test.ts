@@ -100,6 +100,7 @@ async function wireOutboundHandler(options: {
 }): Promise<PostTurnActionHandler> {
   const handlers = new Map<string, PostTurnActionHandler>();
   const postTurnActions: PostTurnActionRuntime = {
+    enqueue: () => 'queued',
     registerHandler(kind, handler) {
       handlers.set(kind, handler);
       return () => undefined;

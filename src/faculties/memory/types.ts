@@ -36,6 +36,7 @@ export type MemorySourceType =
   | 'heartbeat'
   | 'compaction_summary'
   | 'shard'
+  | 'subagent'
   | 'tool_write'
   | 'autonomous_action';
 export const GROUP_MEMORY_ADDRESS_MODES = [
@@ -77,7 +78,8 @@ export interface MemoryProvenance {
   sessionId?: string;
   mode?: string;
   shardId?: string;
-  actor?: 'companion' | 'operator' | 'system' | 'shard' | 'repl';
+  subagentId?: string;
+  actor?: 'companion' | 'operator' | 'system' | 'shard' | 'subagent' | 'repl';
   reason?: string;
   triggerContactId?: string;
   routedContactId?: string;
@@ -143,6 +145,7 @@ export const VALID_MEMORY_SOURCE_TYPES: MemorySourceType[] = [
   'heartbeat',
   'compaction_summary',
   'shard',
+  'subagent',
   'tool_write',
   'autonomous_action',
 ];
@@ -424,6 +427,7 @@ export function inferMemorySourceTypeFromSourceRef(sourceRef: string | undefined
   if (normalized.includes('trigger:pre_compaction')) return 'compaction_summary';
   if (normalized.includes('source:autonomous_action')) return 'autonomous_action';
   if (normalized.includes('source:heartbeat')) return 'heartbeat';
+  if (normalized.includes('source:subagent:') || normalized.startsWith('subagent:')) return 'subagent';
   if (normalized.includes('source:shard:') || normalized.startsWith('shard:')) return 'shard';
   if (normalized.includes('operation:memory_') || normalized.includes('source:tool:') || normalized.includes('source:repl|operation:memory_')) {
     return 'tool_write';
@@ -448,6 +452,7 @@ export function normalizeMemoryProvenance(value: unknown): MemoryProvenance | un
     ...(normalizeOptionalString(record.sessionId) ? { sessionId: normalizeOptionalString(record.sessionId) } : {}),
     ...(normalizeOptionalString(record.mode) ? { mode: normalizeOptionalString(record.mode) } : {}),
     ...(normalizeOptionalString(record.shardId) ? { shardId: normalizeOptionalString(record.shardId) } : {}),
+    ...(normalizeOptionalString(record.subagentId) ? { subagentId: normalizeOptionalString(record.subagentId) } : {}),
     ...(normalizeOptionalString(record.reason) ? { reason: normalizeOptionalString(record.reason) } : {}),
     ...(normalizeOptionalString(record.triggerContactId) ? { triggerContactId: normalizeOptionalString(record.triggerContactId) } : {}),
     ...(normalizeOptionalString(record.routedContactId) ? { routedContactId: normalizeOptionalString(record.routedContactId) } : {}),
@@ -479,7 +484,7 @@ export function normalizeMemoryProvenance(value: unknown): MemoryProvenance | un
     provenance.sourceSpanEndMessageId = sourceSpanEndMessageId;
   }
   const actor = normalizeOptionalString(record.actor);
-  if (actor && ['companion', 'operator', 'system', 'shard', 'repl'].includes(actor)) {
+  if (actor && ['companion', 'operator', 'system', 'shard', 'subagent', 'repl'].includes(actor)) {
     provenance.actor = actor as MemoryProvenance['actor'];
   }
   return Object.keys(provenance).length > 0 ? provenance : undefined;

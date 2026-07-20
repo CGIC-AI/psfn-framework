@@ -186,6 +186,30 @@
       "perChannelDrawFraction": 0.34,
       "regenerationTickMs": 3600000,
       "regenerationUnitsPerTick": 1
+    },
+    "humanAttention": {
+      "enabled": true,
+      "windowMs": 600000,
+      "boundaryCooldownMs": 1800000,
+      "trustThresholds": {
+        "public": 3,
+        "regular": 6,
+        "trusted": 12,
+        "primary": 20
+      },
+      "relationshipToleranceBonus": {
+        "stranger": 0,
+        "acquaintance": 1,
+        "friend": 3,
+        "family": 4,
+        "partner": 6,
+        "ai_companion": 0
+      },
+      "channelWeights": {
+        "directMessage": 1,
+        "directMention": 2,
+        "ambientGroupMessage": 0
+      }
     }
   }
 }

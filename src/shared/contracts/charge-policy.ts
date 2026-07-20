@@ -89,6 +89,22 @@ export const FATIGUE_POLICY_STATE_VALUES = [
   'overcharge_eligible',
 ] as const;
 
+export const HUMAN_ATTENTION_TRUST_LEVEL_VALUES = [
+  'public',
+  'regular',
+  'trusted',
+  'primary',
+] as const;
+
+export const HUMAN_ATTENTION_RELATIONSHIP_VALUES = [
+  'stranger',
+  'acquaintance',
+  'friend',
+  'family',
+  'partner',
+  'ai_companion',
+] as const;
+
 export type ChargePolicyRuntimeLane = (typeof CHARGE_POLICY_RUNTIME_LANE_VALUES)[number];
 export type ChargePolicySurface = (typeof CHARGE_POLICY_SURFACE_VALUES)[number];
 export type ChargePolicyReferenceModelClass = (typeof CHARGE_POLICY_REFERENCE_MODEL_CLASS_VALUES)[number];
@@ -269,6 +285,30 @@ export interface FatigueSocialPotConfig {
   regenerationUnitsPerTick: number;
 }
 
+/**
+ * Human-authored attention pressure is a consent/moderation signal, not an
+ * MI-loop fatigue budget. Reaching a threshold may add internal context to the
+ * ordinary turn; it never suppresses the human or emits canned outward text.
+ */
+export interface HumanAttentionPressureConfig {
+  enabled: boolean;
+  windowMs: number;
+  boundaryCooldownMs: number;
+  trustThresholds: Record<
+    (typeof HUMAN_ATTENTION_TRUST_LEVEL_VALUES)[number],
+    number
+  >;
+  relationshipToleranceBonus: Record<
+    (typeof HUMAN_ATTENTION_RELATIONSHIP_VALUES)[number],
+    number
+  >;
+  channelWeights: {
+    directMessage: number;
+    directMention: number;
+    ambientGroupMessage: number;
+  };
+}
+
 export interface FatiguePolicyConfig {
   relationshipBudgets: Record<FatiguePolicyRelationshipClass, FatiguePolicyResponseBudget>;
   channelSettingLimits: Record<FatiguePolicyChannelSetting, FatiguePolicyChannelSettingLimit>;
@@ -278,6 +318,7 @@ export interface FatiguePolicyConfig {
   overcharge: FatiguePolicyOverchargeConfig;
   socialRegulation: FatigueSocialRegulationConfig;
   socialPot: FatigueSocialPotConfig;
+  humanAttention: HumanAttentionPressureConfig;
 }
 
 export interface ChargePolicyConfig {

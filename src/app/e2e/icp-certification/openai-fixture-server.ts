@@ -67,9 +67,13 @@ function renderExtractionXml(promptText: string): string {
   const normalizedPromptText = promptText.toLowerCase();
   const companionMarker = normalizedPromptText.includes("i'm certification a's")
     || normalizedPromptText.includes('you are certification a.')
+    || normalizedPromptText.includes("i'm artemis's")
+    || normalizedPromptText.includes('you are artemis.')
     ? 'A'
     : normalizedPromptText.includes("i'm certification b's")
       || normalizedPromptText.includes('you are certification b.')
+      || normalizedPromptText.includes("i'm mica's")
+      || normalizedPromptText.includes('you are mica.')
       ? 'B'
       : 'unknown';
   return [
@@ -158,6 +162,7 @@ function sendStreamingResponse(
 export async function startIcpCertificationModelServer(): Promise<IcpCertificationModelServer> {
   const requests: IcpCertificationModelRequest[] = [];
   const consentDecisions: IcpCertificationConsentDecision[] = [];
+  // eslint-disable-next-line @typescript-eslint/no-misused-promises -- Callback API intentionally receives this Promise-returning lifecycle handler.
   const server = createServer(async (request, response) => {
     try {
       if (request.method !== 'POST' || request.url !== '/v1/chat/completions') {

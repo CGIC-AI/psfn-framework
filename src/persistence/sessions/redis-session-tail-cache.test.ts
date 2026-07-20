@@ -47,9 +47,12 @@ class FakeRedisClient implements RedisClientLike {
     return removed;
   }
 
-  // eslint-disable-next-line require-yield -- fake never scans
-  async *scanIterator(): AsyncGenerator<string> {
-    return;
+  async *scanIterator(options: { MATCH: string }): AsyncGenerator<string> {
+    const escaped = options.MATCH.replace(/[.+^${}()|[\]\\]/gu, '\\$&');
+    const pattern = new RegExp(`^${escaped.replaceAll('*', '.*').replaceAll('?', '.')}$`, 'u');
+    for (const key of [...this.strings.keys(), ...this.zsets.keys()]) {
+      if (pattern.test(key)) yield key;
+    }
   }
 
   membersInRankOrder(key: string): string[] {
@@ -288,6 +291,42 @@ describe('RedisSessionTailCache (psfn-framework-hgw3.5)', () => {
     await cache.invalidateChannel('ch-1', await cache.getEpoch('ch-1'));
 
     expect(await cache.getTail('ch-1')).toEqual([]);
+  });
+
+  it('purges only one session tail key family across every epoch', async () => {
+    const client = new FakeRedisClient();
+    const cache = makeCache(client, 4);
+    const otherScope = makeCache(client, 4, 'other-companion');
+    const capturedEpoch = await cache.getEpoch('api:testing:purge-me');
+
+    await cache.appendRow('api:testing:purge-me', capturedEpoch, messageRow(1));
+    await cache.bumpEpoch('api:testing:purge-me');
+    await cache.appendRow('api:testing:purge-me', capturedEpoch, messageRow(2));
+    await cache.appendRow(
+      'api:testing:purge-me',
+      await cache.getEpoch('api:testing:purge-me'),
+      messageRow(3),
+    );
+    await cache.appendRow('api:testing:keep-me', 0, messageRow(4));
+    await otherScope.appendRow('api:testing:purge-me', 0, messageRow(5));
+
+    await expect(cache.purgeChannelKeyFamily('api:testing:purge-me')).resolves.toBe(3);
+
+    expect(client.stringValue(
+      `${SESSION_TAIL_EPOCH_KEY_PREFIX}${SCOPE}:api:testing:purge-me`,
+    )).toBeUndefined();
+    expect(client.zsetKeys()).not.toContain(
+      `${SESSION_TAIL_KEY_PREFIX}${SCOPE}:api:testing:purge-me:e0`,
+    );
+    expect(client.zsetKeys()).not.toContain(
+      `${SESSION_TAIL_KEY_PREFIX}${SCOPE}:api:testing:purge-me:e1`,
+    );
+    expect(client.zsetKeys()).toContain(
+      `${SESSION_TAIL_KEY_PREFIX}${SCOPE}:api:testing:keep-me:e0`,
+    );
+    expect(client.zsetKeys()).toContain(
+      `${SESSION_TAIL_KEY_PREFIX}other-companion:api:testing:purge-me:e0`,
+    );
   });
 
   it('serializes rows without integrity fields', async () => {

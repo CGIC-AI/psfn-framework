@@ -19,6 +19,7 @@ import type {
   AdaptiveToolSnapshotTelemetry,
 } from '../core/agent/adaptive-tools-telemetry.js';
 import type { CompletionHandoffRecord } from './contracts/completion-handoff.js';
+import type { HumanAttentionPressureEvent } from '../core/agent/fatigue/human-attention-pressure.js';
 import type { PlaceKind } from './contracts/places-registry.js';
 import type { SatelliteTelemetryAuthContext } from './contracts/satellite-registry.js';
 import type { IcpAvailabilityState, IcpInitiationCandidateStatus } from './contracts/icp-autonomy.js';
@@ -373,6 +374,7 @@ export interface EventMap {
     noticeBuffered?: boolean;
     timestamp: number;
   } & EventCorrelationFields;
+  'agent.human_attention_pressure': HumanAttentionPressureEvent;
   // Lightweight near-turn memory lane fire-rate telemetry (E5.2). The lane
   // replaced the old turn-based "sleeptime" cadence; heavy passes now run
   // only from the rest-window scheduler task.
@@ -650,7 +652,7 @@ export interface EventMap {
         label?: string;
       }>;
     }>;
-    compositionalMode?: 'legacy' | 'chunk_compose';
+    compositionalMode?: 'single_pass' | 'chunk_compose';
     chunkCount?: number;
     mergedFactCount?: number;
     crossChunkDeduplicatedCount?: number;

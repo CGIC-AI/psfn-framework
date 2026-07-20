@@ -26,6 +26,7 @@ export type PostTurnActionHandler = (
   action: InferredPostTurnAction,
 ) => Promise<PostTurnActionHandlerResult | void> | PostTurnActionHandlerResult | void;
 export type PostTurnActionExecutionMode = 'foreground' | 'background';
+export type PostTurnActionEnqueueResult = 'queued' | 'deduplicated' | 'dropped_budget';
 
 export interface PostTurnActionHandlerOptions {
   executionMode?: PostTurnActionExecutionMode;
@@ -257,6 +258,12 @@ export interface PostTurnActionQueueStatus {
 }
 
 export interface PostTurnActionRuntime {
+  /**
+   * Direct, fail-closed enqueue for producers that have already established a
+   * durable intent. Implementations with queue persistence must not expose the
+   * action in memory until that persistence succeeds.
+   */
+  enqueue(action: InferredPostTurnAction): PostTurnActionEnqueueResult;
   registerHandler(
     kind: string,
     handler: PostTurnActionHandler,

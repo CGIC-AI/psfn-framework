@@ -619,3 +619,99 @@ describe('fleet-auth owner-file configuration', () => {
     }, FLEET_AUTH_FILE_NAME)).toThrow(/replace-before-enable.*must be replaced/i);
   });
 });
+
+describe('fleet-auth account roster validation', () => {
+  const rosterKeyPair = generateKeyPairSync('ed25519');
+  const rosterPublicKeyPem = rosterKeyPair.publicKey
+    .export({ type: 'spki', format: 'pem' }).toString();
+  const rosterHubKeyPair = generateKeyPairSync('ed25519');
+  const rosterHubPublicKeyPem = rosterHubKeyPair.publicKey
+    .export({ type: 'spki', format: 'pem' }).toString();
+  const OWNER_SUBJECT = '100000000000000001';
+  const OTHER_SUBJECT = '100000000000000002';
+  const OTHER_COMPANION_ID = '22222222-2222-4222-8222-222222222222';
+
+  function config(): FleetAuthConfig {
+    return validConfig(rosterPublicKeyPem, rosterHubPublicKeyPem);
+  }
+
+  function entry(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+    return {
+      providerSubjectId: OWNER_SUBJECT,
+      companionId: COMPANION_ID,
+      role: 'owner',
+      ...overrides,
+    };
+  }
+
+  it('accepts an absent roster and leaves the parsed config without roster fields', () => {
+    const parsed = validateFleetAuthConfig(config(), FLEET_AUTH_FILE_NAME);
+    expect(parsed.accountRoster).toBeUndefined();
+    expect(parsed.accountRosterSatisfiesStepUp).toBeUndefined();
+  });
+
+  it('accepts a valid roster with the explicit step-up opt-in and round-trips it', () => {
+    const parsed = validateFleetAuthConfig({
+      ...config(),
+      accountRoster: [
+        entry(),
+        entry({ providerSubjectId: OTHER_SUBJECT, companionId: OTHER_COMPANION_ID, role: 'member' }),
+      ],
+      accountRosterSatisfiesStepUp: true,
+    }, FLEET_AUTH_FILE_NAME);
+    expect(parsed.accountRoster).toEqual([
+      { providerSubjectId: OWNER_SUBJECT, companionId: COMPANION_ID, role: 'owner' },
+      { providerSubjectId: OTHER_SUBJECT, companionId: OTHER_COMPANION_ID, role: 'member' },
+    ]);
+    expect(parsed.accountRosterSatisfiesStepUp).toBe(true);
+    const reParsed = validateFleetAuthConfig(
+      JSON.parse(JSON.stringify(parsed)),
+      FLEET_AUTH_FILE_NAME,
+    );
+    expect(reParsed.accountRoster).toEqual(parsed.accountRoster);
+  });
+
+  it('allows the same subject on multiple companions and the same companion for multiple subjects', () => {
+    const parsed = validateFleetAuthConfig({
+      ...config(),
+      accountRoster: [
+        entry(),
+        entry({ companionId: OTHER_COMPANION_ID }),
+        entry({ providerSubjectId: OTHER_SUBJECT, role: 'guest' }),
+      ],
+    }, FLEET_AUTH_FILE_NAME);
+    expect(parsed.accountRoster).toHaveLength(3);
+  });
+
+  it.each([
+    ['non-array roster', { accountRoster: { providerSubjectId: OWNER_SUBJECT } }, /accountRoster must be an array/],
+    ['non-object entry', { accountRoster: ['owner'] }, /must be an object/],
+    ['missing role', { accountRoster: [{ providerSubjectId: OWNER_SUBJECT, companionId: COMPANION_ID }] }, /role is required/],
+    ['unknown entry key', { accountRoster: [entry({ trustLevel: 'ultimate' })] }, /unknown/i],
+    ['short snowflake', { accountRoster: [entry({ providerSubjectId: '1234567890123456' })] }, /snowflake/],
+    ['leading-zero snowflake', { accountRoster: [entry({ providerSubjectId: '000000000000000001' })] }, /snowflake/],
+    ['non-digit snowflake', { accountRoster: [entry({ providerSubjectId: '10000000000000000x' })] }, /snowflake/],
+    ['numeric snowflake', { accountRoster: [entry({ providerSubjectId: 100000000000000001 })] }, /non-empty string/],
+    ['uppercase companion uuid', { accountRoster: [entry({ companionId: 'ABCDEF00-0000-4000-8000-000000000000' })] }, /RFC-4122 UUID/],
+    ['malformed companion id', { accountRoster: [entry({ companionId: 'companion-one' })] }, /RFC-4122 UUID/],
+    ['unknown role', { accountRoster: [entry({ role: 'root' })] }, /role must be one of/],
+    ['non-string role', { accountRoster: [entry({ role: 1 })] }, /role must be one of/],
+    ['duplicate subject+companion pair', { accountRoster: [entry(), entry({ role: 'member' })] }, /duplicate accountRoster entry/],
+    ['step-up opt-in without roster', { accountRosterSatisfiesStepUp: true }, /requires a non-empty accountRoster/],
+    ['step-up opt-in with empty roster', { accountRoster: [], accountRosterSatisfiesStepUp: true }, /requires a non-empty accountRoster/],
+    ['non-boolean step-up opt-in', { accountRoster: [entry()], accountRosterSatisfiesStepUp: 'yes' }, /must be a boolean/],
+  ])('refuses startup on %s', (_label, overrides, expected) => {
+    expect(() => validateFleetAuthConfig({ ...config(), ...overrides }, FLEET_AUTH_FILE_NAME))
+      .toThrow(expected);
+  });
+
+  it('accepts an explicit false opt-in and an empty roster without the opt-in', () => {
+    const parsed = validateFleetAuthConfig({
+      ...config(),
+      accountRoster: [],
+      accountRosterSatisfiesStepUp: false,
+    }, FLEET_AUTH_FILE_NAME);
+    expect(parsed.accountRoster).toEqual([]);
+    expect(parsed.accountRosterSatisfiesStepUp).toBe(false);
+  });
+});

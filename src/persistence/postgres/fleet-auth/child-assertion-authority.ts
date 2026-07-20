@@ -5,7 +5,13 @@ import type {
   ChildAssertionAuthorityInput,
   GatewayChildAssertionAuthorityPort,
 } from '../../../boundary/gateway/fleet-auth-child-assertions.js';
-import type { FleetAuthConfig, FleetAuthRole } from '../../../system/config/fleet-auth-config.js';
+import {
+  findFleetAuthAccountRosterEntry,
+  type FleetAuthAccountRosterEntry,
+  type FleetAuthConfig,
+  type FleetAuthRole,
+} from '../../../system/config/fleet-auth-config.js';
+import { fleetAuthRoleAllowsAction } from '../../../boundary/fleet-auth/role-action-policy.js';
 import { FLEET_AUTH_LOCK_AUTHORITY_STATE_FUNCTION_NAME } from './authority-state-lock-sql.js';
 import { FLEET_AUTH_LOCK_COMPANION_AUTHORITY_FUNCTION_NAME } from './companion-authority-lock-sql.js';
 import { FLEET_AUTH_FLOOR_RESOURCE_TOMBSTONED_FUNCTION_NAME } from './authority-floor-read-sql.js';
@@ -39,10 +45,11 @@ function digest(value: string): string {
 
 export class PostgresChildAssertionAuthority implements GatewayChildAssertionAuthorityPort {
   private readonly disabledActionsByRole: FleetAuthConfig['rolePolicy']['disabledActionsByRole'];
+  private readonly accountRoster: readonly FleetAuthAccountRosterEntry[];
 
   constructor(
     private readonly pool: Pool,
-    config: Pick<FleetAuthConfig, 'rolePolicy'>,
+    config: Pick<FleetAuthConfig, 'rolePolicy' | 'accountRoster'>,
     private readonly providerRevocationAuthority: ProviderRevocationAuthorityPort,
     private readonly now: () => Date = () => new Date(),
   ) {
@@ -52,6 +59,9 @@ export class PostgresChildAssertionAuthority implements GatewayChildAssertionAut
       member: [...config.rolePolicy.disabledActionsByRole.member],
       guest: [...config.rolePolicy.disabledActionsByRole.guest],
     };
+    this.accountRoster = Object.freeze(
+      (config.accountRoster ?? []).map(entry => Object.freeze({ ...entry })),
+    );
   }
 
   async reauthorize(
@@ -83,24 +93,54 @@ export class PostgresChildAssertionAuthority implements GatewayChildAssertionAut
         && current.binding_count === '1'
         && current.grant_count === '1'
         && !this.disabledActionsByRole[current.role].includes(input.childTarget.action);
+      // Admin-unconditional roster path: the parent capability is a
+      // gateway-signed authorization decision, so its actor context is
+      // trustworthy. A rostered subject passes without the exactly-one
+      // session/provider/binding/grant count invariants and without the
+      // authority version/generation exact-match; the parent decision itself
+      // must still exist, be an allow, and bind the exact action/companion.
+      // Defensive access: a parent capability without a well-formed actor
+      // context must simply never match the roster, not fault the gauntlet.
+      const parentAuthContext = (input.parent as {
+        authContext?: ChildAssertionAuthorityInput['parent']['authContext'];
+      }).authContext;
+      const rosterEntry = findFleetAuthAccountRosterEntry(
+        this.accountRoster,
+        parentAuthContext?.provider ?? null,
+        parentAuthContext?.providerSubjectId ?? null,
+        input.childTarget.companionId,
+      );
+      const parentDecisionBound = parentAudit?.decision === 'allow'
+        && parentAudit.action === input.parent.action
+        && parentAudit.companion_id === input.parent.companionId;
+      const rosterAllowed = rosterEntry !== undefined
+        && input.parent.companionId === input.childTarget.companionId
+        && parentDecisionBound
+        && fleetAuthRoleAllowsAction(rosterEntry.role, input.childTarget.action)
+        && !this.disabledActionsByRole[rosterEntry.role].includes(input.childTarget.action);
       const decisionId = randomUUID();
-      const allowed = authorityExact && parentExact && currentExact;
       const externalAuthorityCurrent = this.providerRevocationAuthority
         .sessionAuthorityGenerationIsCurrent(authority.authorityGeneration);
+      const gauntletAllowed = authorityExact && parentExact && currentExact
+        && externalAuthorityCurrent;
+      const allowed = gauntletAllowed || rosterAllowed;
       await this.insertAudit(client, {
         eventId: decisionId,
         input,
         authority,
-        decision: allowed && externalAuthorityCurrent ? 'allow' : 'deny',
+        decision: allowed ? 'allow' : 'deny',
         principalId: parentAudit?.principal_id,
-        reasonCode: allowed && externalAuthorityCurrent
-          ? 'child_authority_reauthorized'
+        reasonCode: allowed
+          ? gauntletAllowed
+            ? 'child_authority_reauthorized'
+            : 'child_authority_roster_reauthorized'
           : 'child_authority_denied',
       });
       await client.query('COMMIT');
-      if (!allowed || !externalAuthorityCurrent) return { decision: 'deny' };
-      if (!this.providerRevocationAuthority
-        .sessionAuthorityGenerationIsCurrent(authority.authorityGeneration)) {
+      if (!allowed) return { decision: 'deny' };
+      if (!rosterAllowed
+        && !this.providerRevocationAuthority
+          .sessionAuthorityGenerationIsCurrent(authority.authorityGeneration)) {
         await client.query('BEGIN');
         const postCommitAuthority = await this.lockAuthority(client);
         await this.insertAudit(client, {

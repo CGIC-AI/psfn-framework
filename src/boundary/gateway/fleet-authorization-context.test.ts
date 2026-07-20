@@ -351,3 +351,192 @@ describe('fleet authorization request parsing', () => {
     });
   });
 });
+
+describe('admin-unconditional account roster authorization', () => {
+  const ROSTER = [
+    { providerSubjectId: SUBJECT_ID, companionId: COMPANION_ID, role: 'owner' } as const,
+  ];
+  const FOREIGN_ROSTER = [
+    { providerSubjectId: '999999999999999999', companionId: COMPANION_ID, role: 'owner' } as const,
+  ];
+  const NO_DISABLES = {
+    owner: [] as FleetAuthAction[],
+    admin: [] as FleetAuthAction[],
+    member: [] as FleetAuthAction[],
+    guest: [] as FleetAuthAction[],
+  };
+
+  function decideRoster(
+    candidate: FleetAuthorizationSnapshot,
+    accountRoster: readonly { providerSubjectId: string; companionId: string; role: FleetAuthRole }[],
+    action: FleetAuthAction = 'settings.write',
+    companionId: string = COMPANION_ID,
+  ) {
+    return evaluateFleetAuthorizationSnapshot({
+      request: {
+        sessionToken: 'A'.repeat(43),
+        audience: 'fleet',
+        companionId,
+        action,
+      },
+      snapshot: candidate,
+      disabledActionsByRole: NO_DISABLES,
+      now: NOW,
+      accountRoster,
+    });
+  }
+
+  /** Every authority layer broken at once: the exact post-incident lockout shape. */
+  function brokenGauntletSnapshot(): FleetAuthorizationSnapshot {
+    return snapshot({
+      sessions: [{
+        ...snapshot().sessions[0]!,
+        authnVersion: 1,
+        authzVersion: 1,
+        bindingVersion: 1,
+        grantVersion: 1,
+        policyVersion: 1,
+        globalAuthEpoch: 1,
+        principal: {
+          ...snapshot().sessions[0]!.principal,
+          status: 'quarantined',
+          restoreState: 'quarantined',
+          authorityGeneration: 1,
+        },
+      }],
+      providerSubjects: [],
+      companions: [{ ...snapshot().companions[0]!, restoreState: 'quarantined' }],
+      bindings: [],
+      grants: [],
+    });
+  }
+
+  it('grants the rostered role although every nested authority layer is broken', () => {
+    const decision = decideRoster(brokenGauntletSnapshot(), ROSTER);
+    expect(decision).toMatchObject({
+      decision: 'allow',
+      facts: {
+        principalId: PRINCIPAL_ID,
+        providerSubjectId: SUBJECT_ID,
+        companionId: COMPANION_ID,
+        operator: { role: 'owner', grantId: `roster-grant-${COMPANION_ID}` },
+        contact: { bindingId: `roster-binding-${COMPANION_ID}` },
+        session: { recordId: SESSION_ID, provider: 'discord' },
+      },
+    });
+  });
+
+  it('keeps every non-rostered decision identical to the roster-free evaluation', () => {
+    const candidates: Array<FleetAuthorizationSnapshot> = [
+      snapshot(),
+      brokenGauntletSnapshot(),
+      snapshot({ sessions: [] }),
+      snapshot({ sessions: [{ ...snapshot().sessions[0]!, revokedAt: NOW }] }),
+      snapshot({ sessions: [{ ...snapshot().sessions[0]!, globalAuthEpoch: 8 }] }),
+      snapshot({ providerSubjects: [] }),
+      snapshot({ bindings: [] }),
+      snapshot({ grants: [] }),
+      snapshot({ companions: [{ ...snapshot().companions[0]!, lifecycle: 'removed' }] }),
+    ];
+    for (const candidate of candidates) {
+      const withForeignRoster = decideRoster(candidate, FOREIGN_ROSTER);
+      const withEmptyRoster = decideRoster(candidate, []);
+      const withoutRoster = evaluateFleetAuthorizationSnapshot({
+        request: {
+          sessionToken: 'A'.repeat(43),
+          audience: 'fleet',
+          companionId: COMPANION_ID,
+          action: 'settings.write',
+        },
+        snapshot: candidate,
+        disabledActionsByRole: NO_DISABLES,
+        now: NOW,
+      });
+      expect(withForeignRoster).toEqual(withoutRoster);
+      expect(withEmptyRoster).toEqual(withoutRoster);
+    }
+  });
+
+  it.each([
+    ['revoked session', { revokedAt: NOW }],
+    ['replaced session', { replacedBy: '00000000-0000-4000-8000-00000000feed' }],
+    ['idle-expired session', { idleExpiresAt: NOW }],
+    ['absolute-expired session', { absoluteExpiresAt: NOW }],
+    ['non-fleet stored audience', { audience: 'garden' }],
+    ['session without a provider subject', { provider: null, providerSubjectId: null }],
+  ] as const)('stays fail-closed for a rostered subject on a %s', (_label, overrides) => {
+    const candidate = brokenGauntletSnapshot();
+    candidate.sessions = [{ ...candidate.sessions[0]!, ...overrides }];
+    expect(decideRoster(candidate, ROSTER).decision).toBe('deny');
+  });
+
+  it('denies when the authenticated session is ambiguous even for a rostered subject', () => {
+    const candidate = brokenGauntletSnapshot();
+    candidate.sessions = [candidate.sessions[0]!, { ...candidate.sessions[0]! }];
+    expect(decideRoster(candidate, ROSTER)).toEqual({
+      decision: 'deny',
+      reasonCode: 'session_ambiguous',
+    });
+  });
+
+  it('never grants a rostered subject a different companion than its exact entry', () => {
+    const foreignCompanion = [
+      { providerSubjectId: SUBJECT_ID, companionId: OTHER_COMPANION_ID, role: 'owner' } as const,
+    ];
+    const decision = decideRoster(brokenGauntletSnapshot(), foreignCompanion);
+    expect(decision.decision).toBe('deny');
+  });
+
+  it('never matches on a session subject that only partially resembles a rostered snowflake', () => {
+    const candidate = brokenGauntletSnapshot();
+    candidate.sessions = [{
+      ...candidate.sessions[0]!,
+      providerSubjectId: `${SUBJECT_ID}9`,
+    }];
+    expect(decideRoster(candidate, ROSTER).decision).toBe('deny');
+  });
+
+  it('keeps the roster role subject to the closed role/action policy and owner-file disables', () => {
+    const memberRoster = [
+      { providerSubjectId: SUBJECT_ID, companionId: COMPANION_ID, role: 'member' } as const,
+    ];
+    expect(decideRoster(brokenGauntletSnapshot(), memberRoster, 'roles.manage').decision)
+      .toBe('deny');
+    expect(evaluateFleetAuthorizationSnapshot({
+      request: {
+        sessionToken: 'A'.repeat(43),
+        audience: 'fleet',
+        companionId: COMPANION_ID,
+        action: 'settings.write',
+      },
+      snapshot: brokenGauntletSnapshot(),
+      disabledActionsByRole: { ...NO_DISABLES, owner: ['settings.write'] },
+      now: NOW,
+      accountRoster: ROSTER,
+    }).decision).toBe('deny');
+  });
+
+  it('leaves Discord-evidence-gated requests to the full gauntlet', () => {
+    expect(evaluateFleetAuthorizationSnapshot({
+      request: {
+        sessionToken: 'A'.repeat(43),
+        audience: 'fleet',
+        companionId: COMPANION_ID,
+        action: 'settings.write',
+        discordEvidence: { evidenceId: '64a1d054-22dd-4e76-9bb3-3ac0d33c63c5' },
+      },
+      snapshot: brokenGauntletSnapshot(),
+      disabledActionsByRole: NO_DISABLES,
+      now: NOW,
+      accountRoster: ROSTER,
+    }).decision).toBe('deny');
+  });
+
+  it('still allows the roster path when the intact gauntlet would also allow', () => {
+    const decision = decideRoster(snapshot(), ROSTER, 'memory.read.self');
+    expect(decision).toMatchObject({
+      decision: 'allow',
+      facts: { operator: { role: 'owner' } },
+    });
+  });
+});

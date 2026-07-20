@@ -2,6 +2,7 @@ import { createHmac, randomUUID } from 'node:crypto';
 import type { Pool, PoolClient } from 'pg';
 import {
   createImmutableFleetAuthorizationContext,
+  evaluateAccountRosterAuthorization,
   evaluateFleetAuthorizationSnapshot,
   type FleetAuthorizationContextStore,
   type FleetAuthorizationDenialReason,
@@ -10,7 +11,11 @@ import {
   type FleetAuthorizationSnapshot,
   type FleetAuthorizationStoreDecision,
 } from '../../../boundary/gateway/fleet-authorization-context.js';
-import type { FleetAuthConfig, FleetAuthRole } from '../../../system/config/fleet-auth-config.js';
+import type {
+  FleetAuthAccountRosterEntry,
+  FleetAuthConfig,
+  FleetAuthRole,
+} from '../../../system/config/fleet-auth-config.js';
 import {
   digestDiscordEvidence,
 } from '../../../boundary/fleet-auth/discord-evidence-types.js';
@@ -129,6 +134,7 @@ export class PostgresFleetAuthorizationContextStore implements FleetAuthorizatio
   private readonly pool: Pool;
   private readonly sessionPepper: string;
   private readonly disabledActionsByRole: FleetAuthConfig['rolePolicy']['disabledActionsByRole'];
+  private readonly accountRoster: readonly FleetAuthAccountRosterEntry[];
   private readonly providerRevocationAuthority: ProviderRevocationAuthorityPort;
   private readonly evidenceConfigDigest: string;
   private readonly evidenceMappingVersion: number;
@@ -146,6 +152,9 @@ export class PostgresFleetAuthorizationContextStore implements FleetAuthorizatio
       member: [...options.config.rolePolicy.disabledActionsByRole.member],
       guest: [...options.config.rolePolicy.disabledActionsByRole.guest],
     };
+    this.accountRoster = Object.freeze(
+      (options.config.accountRoster ?? []).map(entry => Object.freeze({ ...entry })),
+    );
     this.providerRevocationAuthority = options.providerRevocationAuthority;
     this.evidenceConfigDigest = digestDiscordEvidenceConfig(options.config);
     this.evidenceMappingVersion = options.config.activationGeneration;
@@ -159,13 +168,24 @@ export class PostgresFleetAuthorizationContextStore implements FleetAuthorizatio
       await client.query('BEGIN ISOLATION LEVEL REPEATABLE READ');
       const snapshot = await this.loadSnapshot(client, request);
       const resolvedAt = this.now();
-      let evaluation = evaluateFleetAuthorizationSnapshot({
+      // Roster allows are admin-unconditional: they deliberately skip the
+      // authority-generation staleness gate that has locked the operator out.
+      // Non-rostered subjects keep the unchanged full evaluation below.
+      const rosterEvaluation = evaluateAccountRosterAuthorization({
+        request,
+        snapshot,
+        accountRoster: this.accountRoster,
+        disabledActionsByRole: this.disabledActionsByRole,
+        now: resolvedAt,
+      });
+      let evaluation = rosterEvaluation ?? evaluateFleetAuthorizationSnapshot({
         request,
         snapshot,
         disabledActionsByRole: this.disabledActionsByRole,
         now: resolvedAt,
       });
-      if (evaluation.decision === 'allow'
+      if (!rosterEvaluation
+        && evaluation.decision === 'allow'
         && !this.providerRevocationAuthority.sessionAuthorityGenerationIsCurrent(
           snapshot.authority.authorityGeneration,
         )) {
@@ -178,7 +198,9 @@ export class PostgresFleetAuthorizationContextStore implements FleetAuthorizatio
         resource: `companion:${request.companionId}`,
         decision: evaluation.decision,
         reasonCode: evaluation.decision === 'allow'
-          ? 'role_action_allowed'
+          ? rosterEvaluation
+            ? 'roster_authorization_allowed'
+            : 'role_action_allowed'
           : evaluation.reasonCode,
         evidenceRequested: request.discordEvidence !== undefined,
         companionId: request.companionId,
@@ -199,9 +221,10 @@ export class PostgresFleetAuthorizationContextStore implements FleetAuthorizatio
         resolvedAt,
         ...(correlationDigest ? { correlationDigest } : {}),
       });
-      if (!this.providerRevocationAuthority.sessionAuthorityGenerationIsCurrent(
-        snapshot.authority.authorityGeneration,
-      )) {
+      if (!rosterEvaluation
+        && !this.providerRevocationAuthority.sessionAuthorityGenerationIsCurrent(
+          snapshot.authority.authorityGeneration,
+        )) {
         await this.recordPostCommitAuthorityDenial(client, {
           request,
           principalId: evaluation.facts.principalId,

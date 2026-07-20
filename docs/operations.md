@@ -130,6 +130,20 @@ The same compiled Garden bundle renders the `/fleet` overview; its
 authorized projection. The retired raw fleet-status listener and
 `/fleet/status.json` route are absent.
 
+`fleet-auth.json` accepts an optional admin-unconditional `accountRoster`
+(`[{ "providerSubjectId": "<discord snowflake>", "companionId": "<companion uuid>",
+"role": "owner" }]`). A Discord-authenticated session whose token-verified
+subject matches an entry is granted that entry's role for that companion
+directly from config — bypassing the first-owner ceremony, principal
+activation, and the nested authority version/generation gauntlet that can
+otherwise lock the operator out. The session itself must still be real,
+unexpired, and unrevoked, and subjects not in the roster keep the full
+gauntlet unchanged. A malformed roster entry, an unknown role, or a roster
+companion outside the companions registry refuses startup. The separate
+`accountRosterSatisfiesStepUp: true` opt-in (default off, requires a non-empty
+roster) additionally lets a rostered owner satisfy `webauthn_uv`-class step-up
+for lifecycle ceremonies.
+
 For every Garden request, the gateway resolves the live OPL1.5 session/contact/
 grant/policy context for the companion encoded in the path. Only then does it
 mint and durably consume a short-lived, exact request capability and connect to

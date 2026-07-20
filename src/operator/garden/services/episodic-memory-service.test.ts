@@ -7,6 +7,7 @@ import {
   type EpisodeArc,
 } from '../../../shared/contracts/episodic-memory.js';
 import { AdminEpisodicMemoryDataService, type AdminEpisodicStore } from './episodic-memory-service.js';
+import type { FleetGardenRequestContext } from '../garden-request-context.js';
 
 function makeEpisode(overrides: Partial<Episode> = {}): Episode {
   const id = overrides.id ?? 'episode-alpha-1';
@@ -239,5 +240,176 @@ describe('AdminEpisodicMemoryDataService', () => {
     expect(store.listEpisodeArcsForEpisode).toHaveBeenCalledTimes(1);
     expect(store.getEpisodesByIds).toHaveBeenCalledTimes(1);
     expect(store.getEpisodesByIds).toHaveBeenCalledWith(['episode-beta-1', 'episode-alpha-2']);
+  });
+});
+
+describe('subject-authorized episodic projection (88u3)', () => {
+  function fleetMemoryContext(overrides: {
+    contactId: string;
+    subjectRelation?: FleetGardenRequestContext['subjectRelation'];
+    routeId?: string;
+    role?: FleetGardenRequestContext['actor']['role'];
+  }): FleetGardenRequestContext {
+    const subjectRelation = overrides.subjectRelation ?? 'self_or_co_subject';
+    const authorization = Object.freeze({
+      action: 'memory.read.self' as const,
+      baseRole: 'member' as const,
+      resource: Object.freeze({ scope: 'personal_workspace' as const, area: 'memory' as const }),
+      subjectRelation,
+      requirements: Object.freeze({
+        assurance: 'oauth' as const,
+        confirmation: 'none' as const,
+        approvals: Object.freeze([]),
+      }),
+      publicAccess: 'never' as const,
+      recoveryAccess: 'forbidden' as const,
+    });
+    return Object.freeze({
+      kind: 'fleet_principal' as const,
+      requestId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      decisionId: 'cccccccc-dddd-4ddd-8ddd-dddddddddddd',
+      authorizationEventId: 'event-principal-a',
+      resolvedAt: '2030-01-01T00:00:00.000Z',
+      versions: Object.freeze({
+        authorityGeneration: 1,
+        globalAuthEpoch: 1,
+        sessionAuthnVersion: 1,
+        sessionAuthzVersion: 1,
+        bindingVersion: 1,
+        grantVersion: 1,
+        policyVersion: 1,
+      }),
+      issuedAt: 1,
+      expiresAt: 2,
+      actor: Object.freeze({
+        kind: 'fleet_principal' as const,
+        principalId: 'principal-a',
+        provider: 'discord' as const,
+        providerSubjectId: 'provider-principal-a',
+        contactId: overrides.contactId,
+        contactBindingId: 'binding-principal-a',
+        role: overrides.role ?? 'member',
+        operatorGrantId: 'grant-principal-a',
+        sessionRecordId: 'session-principal-a',
+        sessionAssurance: 'oauth' as const,
+      }),
+      action: 'memory.read.self' as const,
+      resource: Object.freeze({
+        routeId: overrides.routeId ?? 'GET /api/admin/episodic-memory/episodes',
+        scope: 'personal_workspace' as const,
+        area: 'memory' as const,
+        companionId: '11111111-1111-4111-8111-111111111111',
+        pathParams: Object.freeze({}),
+        query: Object.freeze({}),
+      }),
+      subjectRelation,
+      authorization,
+    });
+  }
+
+  function makeSubjectEpisodes() {
+    const own = makeEpisode({
+      id: 'episode-own-1',
+      threadId: 'thread-own',
+      participantContactIds: ['contact-a'],
+    });
+    const shared = makeEpisode({
+      id: 'episode-shared-1',
+      threadId: 'thread-own',
+      startedAt: '2026-04-01T11:00:00.000Z',
+      endedAt: '2026-04-01T11:10:00.000Z',
+      participantContactIds: ['contact-a', 'contact-b'],
+    });
+    const foreign = makeEpisode({
+      id: 'episode-foreign-1',
+      threadId: 'thread-foreign',
+      startedAt: '2026-04-02T10:00:00.000Z',
+      endedAt: '2026-04-02T10:10:00.000Z',
+      participantContactIds: ['contact-b'],
+    });
+    const unattributed = makeEpisode({
+      id: 'episode-unattributed-1',
+      threadId: 'thread-unattributed',
+      startedAt: '2026-04-03T10:00:00.000Z',
+      endedAt: '2026-04-03T10:10:00.000Z',
+      participantContactIds: [],
+    });
+    const ownArc = makeArc({
+      id: 'arc-own',
+      sourceEpisodeId: 'episode-own-1',
+      targetEpisodeId: 'episode-shared-1',
+    });
+    const crossArc = makeArc({
+      id: 'arc-cross',
+      sourceEpisodeId: 'episode-own-1',
+      targetEpisodeId: 'episode-foreign-1',
+    });
+    return { own, shared, foreign, unattributed, ownArc, crossArc };
+  }
+
+  it('lists only episodes whose explicit participants include the fleet subject', async () => {
+    const { own, shared, foreign, unattributed, ownArc, crossArc } = makeSubjectEpisodes();
+    const service = new AdminEpisodicMemoryDataService(
+      makeStore([own, shared, foreign, unattributed], [ownArc, crossArc]),
+    );
+
+    const listed = await service.listEpisodes(undefined, fleetMemoryContext({ contactId: 'contact-a' }));
+    expect(listed.episodes.map(episode => episode.id).sort())
+      .toEqual(['episode-own-1', 'episode-shared-1']);
+    expect(listed.pagination.total).toBe(2);
+
+    // Legacy operator context keeps the unpartitioned view.
+    const legacy = await service.listEpisodes();
+    expect(legacy.episodes).toHaveLength(4);
+  });
+
+  it('hides foreign and unattributed episodes across detail, provenance, arcs, and threads', async () => {
+    const { own, shared, foreign, unattributed, ownArc, crossArc } = makeSubjectEpisodes();
+    const service = new AdminEpisodicMemoryDataService(
+      makeStore([own, shared, foreign, unattributed], [ownArc, crossArc]),
+    );
+    const context = fleetMemoryContext({ contactId: 'contact-a' });
+
+    await expect(service.getEpisodeDetail('episode-foreign-1', context)).resolves.toBeNull();
+    await expect(service.getEpisodeDetail('episode-unattributed-1', context)).resolves.toBeNull();
+    await expect(service.getEpisodeProvenance('episode-foreign-1', context)).resolves.toBeNull();
+    await expect(service.listEpisodeArcs('episode-foreign-1', undefined, context)).resolves.toBeNull();
+
+    // Arcs from a visible episode only surface when BOTH endpoints are visible.
+    const arcs = await service.listEpisodeArcs('episode-own-1', undefined, context);
+    expect(arcs?.relatedArcs.map(view => view.arc.id)).toEqual(['arc-own']);
+
+    const threads = await service.listThreads(undefined, context);
+    expect(threads.threads.map(thread => thread.threadId)).toEqual(['thread-own']);
+    await expect(service.getThreadDetail('thread-foreign', context)).resolves.toBeNull();
+
+    const detail = await service.getEpisodeDetail('episode-own-1', context);
+    expect(detail?.relatedArcs.map(view => view.arc.id)).toEqual(['arc-own']);
+    expect(detail?.threadEpisodes.map(episode => episode.id))
+      .toEqual(['episode-own-1', 'episode-shared-1']);
+  });
+
+  it('fails closed without an exact request-local subject relation', async () => {
+    const { own, ownArc } = makeSubjectEpisodes();
+    const service = new AdminEpisodicMemoryDataService(makeStore([own], [ownArc]));
+
+    await expect(service.listEpisodes(undefined, fleetMemoryContext({
+      contactId: 'contact-a',
+      subjectRelation: 'current_companion',
+    }))).rejects.toThrow(/exact request-local subject relation/u);
+  });
+
+  it('does not let an owner role widen episodic visibility beyond the subject', async () => {
+    const { own, shared, foreign, unattributed, ownArc, crossArc } = makeSubjectEpisodes();
+    const service = new AdminEpisodicMemoryDataService(
+      makeStore([own, shared, foreign, unattributed], [ownArc, crossArc]),
+    );
+
+    const listed = await service.listEpisodes(
+      undefined,
+      fleetMemoryContext({ contactId: 'contact-a', role: 'owner' }),
+    );
+    expect(listed.episodes.map(episode => episode.id).sort())
+      .toEqual(['episode-own-1', 'episode-shared-1']);
   });
 });

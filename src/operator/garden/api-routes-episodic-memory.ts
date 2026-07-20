@@ -9,11 +9,17 @@ import {
   type RouteParams,
 } from './route-matchers.js';
 import type { AdminEpisodicMemoryService } from './services/types.js';
+import type { GardenRequestContext } from './garden-request-context.js';
 
 interface AdminApiRoute {
   method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
   match: RouteMatcher;
-  handle: (req: IncomingMessage, res: ServerResponse, params: RouteParams) => void;
+  handle: (
+    req: IncomingMessage,
+    res: ServerResponse,
+    params: RouteParams,
+    context?: GardenRequestContext,
+  ) => void;
 }
 
 const EPISODIC_MEMORY_UNAVAILABLE_ERROR = 'Episodic memory backend unavailable';
@@ -46,10 +52,10 @@ export function buildAdminEpisodicMemoryRoutes(options: {
     {
       method: 'GET',
       match: exactPath('/api/admin/episodic-memory/episodes'),
-      handle: (req, res) => {
+      handle: (req, res, _params, context) => {
         withEpisodicService(episodicMemoryService, res, (service) => {
           const url = parseRequestUrl(req, '/api/admin/episodic-memory/episodes');
-          service.listEpisodes(url.searchParams).then(
+          service.listEpisodes(url.searchParams, context).then(
             payload => sendJson(res, 200, payload),
             error => sendJson(res, 400, {
               error: toSanitizedMessage(error, 'Failed to list episodic episodes'),
@@ -61,10 +67,10 @@ export function buildAdminEpisodicMemoryRoutes(options: {
     {
       method: 'GET',
       match: exactPath('/api/admin/episodic-memory/threads'),
-      handle: (req, res) => {
+      handle: (req, res, _params, context) => {
         withEpisodicService(episodicMemoryService, res, (service) => {
           const url = parseRequestUrl(req, '/api/admin/episodic-memory/threads');
-          service.listThreads(url.searchParams).then(
+          service.listThreads(url.searchParams, context).then(
             payload => sendJson(res, 200, payload),
             error => sendJson(res, 400, {
               error: toSanitizedMessage(error, 'Failed to list episodic threads'),
@@ -76,10 +82,10 @@ export function buildAdminEpisodicMemoryRoutes(options: {
     {
       method: 'GET',
       match: paramWithSuffix('/api/admin/episodic-memory/episodes/', 'id', '/arcs'),
-      handle: (req, res, { id }) => {
+      handle: (req, res, { id }, context) => {
         withEpisodicService(episodicMemoryService, res, (service) => {
           const url = parseRequestUrl(req, `/api/admin/episodic-memory/episodes/${encodeURIComponent(id)}/arcs`);
-          service.listEpisodeArcs(id, url.searchParams).then(
+          service.listEpisodeArcs(id, url.searchParams, context).then(
             (payload) => {
               if (!payload) {
                 sendJson(res, 404, { error: 'Episodic episode not found' });
@@ -97,9 +103,9 @@ export function buildAdminEpisodicMemoryRoutes(options: {
     {
       method: 'GET',
       match: paramWithSuffix('/api/admin/episodic-memory/episodes/', 'id', '/provenance'),
-      handle: (_req, res, { id }) => {
+      handle: (_req, res, { id }, context) => {
         withEpisodicService(episodicMemoryService, res, (service) => {
-          service.getEpisodeProvenance(id).then(
+          service.getEpisodeProvenance(id, context).then(
             (payload) => {
               if (!payload) {
                 sendJson(res, 404, { error: 'Episodic episode not found' });
@@ -117,9 +123,9 @@ export function buildAdminEpisodicMemoryRoutes(options: {
     {
       method: 'GET',
       match: prefixedParamPath('/api/admin/episodic-memory/episodes/', 'id'),
-      handle: (_req, res, { id }) => {
+      handle: (_req, res, { id }, context) => {
         withEpisodicService(episodicMemoryService, res, (service) => {
-          service.getEpisodeDetail(id).then(
+          service.getEpisodeDetail(id, context).then(
             (detail) => {
               if (!detail) {
                 sendJson(res, 404, { error: 'Episodic episode not found' });
@@ -137,9 +143,9 @@ export function buildAdminEpisodicMemoryRoutes(options: {
     {
       method: 'GET',
       match: prefixedParamPath('/api/admin/episodic-memory/threads/', 'threadId'),
-      handle: (_req, res, { threadId }) => {
+      handle: (_req, res, { threadId }, context) => {
         withEpisodicService(episodicMemoryService, res, (service) => {
-          service.getThreadDetail(threadId).then(
+          service.getThreadDetail(threadId, context).then(
             (detail) => {
               if (!detail) {
                 sendJson(res, 404, { error: 'Episodic thread not found' });

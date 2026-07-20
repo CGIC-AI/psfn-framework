@@ -6,6 +6,7 @@ import {
   DEFAULT_BACKGROUND_WORK_TUNING,
   DEFAULT_FREE_TIME_CONFIG,
   DEFAULT_SOCIAL_AUTONOMY_CONFIG,
+  DEFAULT_SOCIAL_DESIRE_CONFIG,
   DEFAULT_TEMPORAL_WAKEUP_CONFIG,
   DEFAULT_WEIGHTED_THOUGHT_OUTREACH_CONFIG,
   loadSchedulerSeedDefaults,
@@ -277,6 +278,55 @@ describe('scheduler config seed defaults', () => {
     expect(loadSchedulerSeedDefaults().weightedThoughtOutreach.checkIntervalMs).toBe(1_800_000);
   });
 
+  it('defaults the social-desire outreach settings with a tight fail-closed budget', () => {
+    const loaded = loadSchedulerSeedDefaults();
+    expect(loaded.socialDesire.enabled).toBe(false);
+    expect(loaded.socialDesire.outreach).toEqual({
+      checkIntervalMs: 1_800_000,
+      maxConsentMomentsPerRun: 1,
+      consentTtlMs: 1_800_000,
+      budget: { maxSendsPerWindow: 2, windowMs: 86_400_000 },
+    });
+  });
+
+  it('applies social-desire outreach defaults for pre-oth4.2 configs and rejects malformed budgets', () => {
+    withSeedDir((seedDir) => {
+      const config = buildValidSchedulerConfig();
+      const socialDesire: Record<string, unknown> = {
+        enabled: DEFAULT_SOCIAL_DESIRE_CONFIG.enabled,
+        lifecycle: DEFAULT_SOCIAL_DESIRE_CONFIG.lifecycle,
+      };
+      config.socialDesire = socialDesire;
+      writeJson(join(seedDir, SCHEDULER_SEED_FILE_NAME), config);
+      expect(loadSchedulerSeedDefaults({ seedDir }).socialDesire.outreach)
+        .toEqual(DEFAULT_SOCIAL_DESIRE_CONFIG.outreach);
+
+      socialDesire.outreach = {
+        checkIntervalMs: 1_800_000,
+        maxConsentMomentsPerRun: 1,
+        consentTtlMs: 1_800_000,
+        budget: { maxSendsPerWindow: 0, windowMs: 86_400_000 },
+      };
+      writeJson(join(seedDir, SCHEDULER_SEED_FILE_NAME), config);
+      expect(() => loadSchedulerSeedDefaults({ seedDir })).toThrow(
+        /socialDesire\.outreach\.budget\.maxSendsPerWindow/,
+      );
+    });
+  });
+
+  it('rejects lifecycle values that the social-desire runtime cannot execute', () => {
+    for (const field of ['pressureCap', 'actionThreshold'] as const) {
+      const config = buildValidSchedulerConfig();
+      const socialDesire = structuredClone(DEFAULT_SOCIAL_DESIRE_CONFIG);
+      socialDesire.lifecycle[field] = 0;
+      config.socialDesire = socialDesire;
+
+      expect(() => validateSchedulerConfig(config, 'test')).toThrow(
+        new RegExp(`socialDesire\\.lifecycle\\.${field} must be > 0`, 'u'),
+      );
+    }
+  });
+
   it('reads seed defaults without requiring a data directory', () => {
     withSeedDir((seedDir) => {
       const config = buildValidSchedulerConfig();
@@ -287,6 +337,7 @@ describe('scheduler config seed defaults', () => {
         freeTime: DEFAULT_FREE_TIME_CONFIG,
         socialAutonomy: DEFAULT_SOCIAL_AUTONOMY_CONFIG,
         weightedThoughtOutreach: DEFAULT_WEIGHTED_THOUGHT_OUTREACH_CONFIG,
+        socialDesire: DEFAULT_SOCIAL_DESIRE_CONFIG,
       });
     });
   });

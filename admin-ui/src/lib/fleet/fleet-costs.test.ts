@@ -2,8 +2,11 @@ import { describe, expect, it } from 'vitest';
 import type { FleetModelUsageCompanion } from '../../../../src/operator/garden/services/fleet-model-usage-service.js';
 import {
   buildFleetCompanionCostPath,
+  fleetCostNavigationPath,
+  fleetSpendShare,
   FLEET_COST_RANGE_OPTIONS,
   normalizeFleetCostRange,
+  selectFleetCostGardenPath,
   sortFleetCompanions,
 } from './fleet-costs.js';
 
@@ -82,8 +85,46 @@ describe('fleet costs helpers', () => {
       customSinceDate: '2026-07-01',
       customUntilDate: '2026-07-18',
     }, 'fleet')).toBe(
-      `/companions/${COMPANION_A}/garden/charge-budget?tab=token-usage&range=custom&timezone=America%2FNew_York&bucket=day&since=2026-07-01&until=2026-07-18`,
+      `/companions/${COMPANION_A}/garden/charge-budget?tab=token-usage&range=custom&timezone=America/New_York&bucket=day&since=2026-07-01&until=2026-07-18`,
     );
+  });
+
+  it('uses the privacy-preserving headline as the spend-share denominator', () => {
+    const visibleRow = row(COMPANION_A, 1, 100, 0.25);
+    expect(fleetSpendShare(
+      visibleRow as Extract<FleetModelUsageCompanion, { status: 'available' }>,
+      1.25,
+    )).toBe(20);
+    expect(fleetSpendShare(
+      visibleRow as Extract<FleetModelUsageCompanion, { status: 'available' }>,
+      null,
+    )).toBeNull();
+  });
+
+  it('uses an available authorized Garden as the signed fleet-cost parent', () => {
+    expect(selectFleetCostGardenPath([
+      {
+        companionId: COMPANION_A,
+        displayName: 'Offline',
+        availability: 'offline',
+        posture: { status: 'unavailable' },
+        gardenPath: `/companions/${COMPANION_A}/garden`,
+      },
+      {
+        companionId: COMPANION_B,
+        displayName: 'Online',
+        availability: 'online',
+        posture: { status: 'unavailable' },
+        gardenPath: `/companions/${COMPANION_B}/garden`,
+      },
+    ])).toBe(`/companions/${COMPANION_B}/garden`);
+  });
+
+  it('links fleet companions up while retaining the single-Garden cost route', () => {
+    expect(fleetCostNavigationPath(
+      `/companions/${COMPANION_A}/garden/charge-budget`,
+    )).toBe('/fleet#fleet-costs');
+    expect(fleetCostNavigationPath('/charge-budget')).toBe('/fleet-costs');
   });
 
   it.each(['test-companion', COMPANION_A])(

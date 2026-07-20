@@ -7,12 +7,22 @@
     type FleetCardDetails,
     type FleetPortalProjection,
   } from '$lib/fleet/portal';
+  import FleetCostUsage from '$lib/components/fleet/FleetCostUsage.svelte';
+  import FleetUsageSummary from '$lib/components/fleet/FleetUsageSummary.svelte';
 
   let projection = $state<FleetPortalProjection | null>(null);
   let cardDetails = $state<Record<string, FleetCardDetails>>({});
   let loading = $state(true);
   let errorMessage = $state('');
   let controller: AbortController | null = null;
+  const companionNames = $derived(
+    projection
+      ? Object.fromEntries(projection.companions.map(companion => [
+          companion.companionId,
+          companion.displayName,
+        ]))
+      : {},
+  );
 
   async function loadFleet(): Promise<void> {
     controller?.abort();
@@ -86,7 +96,7 @@
 </svelte:head>
 
 <div class="min-h-screen bg-bark-100 px-4 py-8 sm:px-6 lg:px-8">
-  <main class="mx-auto max-w-6xl">
+  <main class="mx-auto max-w-7xl">
     <header class="mb-8 flex flex-wrap items-end justify-between gap-4">
       <div>
         <p class="text-xs font-semibold uppercase tracking-[0.22em] text-gold-700">
@@ -97,8 +107,9 @@
         </h1>
         <p class="mt-2 max-w-2xl text-sm text-shadow-600">
           Choose a companion to open their server-authorized Garden. This view
-          separates agent, Garden transport, and channel health, with redacted welfare posture for
-          companions your session may reach.
+          separates agent, Garden transport, and channel health, with redacted
+          welfare posture and
+          authorized usage and cost totals for companions your session may reach.
         </p>
       </div>
       {#if projection}
@@ -107,6 +118,8 @@
         </p>
       {/if}
     </header>
+
+    <FleetUsageSummary {companionNames} />
 
     {#if loading}
       <section class="card-garden p-8" aria-busy="true" aria-live="polite">
@@ -234,6 +247,7 @@
           </article>
         {/each}
       </section>
+      <FleetCostUsage mode="fleet" {projection} />
     {/if}
   </main>
 </div>

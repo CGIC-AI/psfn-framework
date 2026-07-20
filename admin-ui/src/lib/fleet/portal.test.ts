@@ -302,4 +302,52 @@ describe('Garden fleet portal client', () => {
       adminTransport: 'unknown',
     });
   });
+
+  it('hosts fleet usage and cost rendering with explicit loading and unavailable states', () => {
+    const fleetPage = readFileSync(
+      new URL('../../routes/fleet/+page.svelte', import.meta.url),
+      'utf8',
+    );
+    const usagePanel = readFileSync(
+      new URL('../components/fleet/FleetCostUsage.svelte', import.meta.url),
+      'utf8',
+    );
+    const usageSummary = readFileSync(
+      new URL('../components/fleet/FleetUsageSummary.svelte', import.meta.url),
+      'utf8',
+    );
+    const costResults = readFileSync(
+      new URL('../components/fleet/FleetCostResults.svelte', import.meta.url),
+      'utf8',
+    );
+    const legacyCostRoute = readFileSync(
+      new URL('../../routes/fleet-costs/LazyPageContent.svelte', import.meta.url),
+      'utf8',
+    );
+    expect(fleetPage).toContain('<FleetCostUsage mode="fleet" {projection} />');
+    expect(fleetPage).toContain('<FleetUsageSummary {companionNames} />');
+    expect(fleetPage.indexOf('<FleetUsageSummary {companionNames} />'))
+      .toBeLessThan(fleetPage.indexOf('{#if loading}'));
+    for (const required of [
+      'getAuthorizedFleetModelUsage(requireAuthorizedGardenPath(), query)',
+      'Private usage contributes to fleet',
+    ]) {
+      expect(usagePanel).toContain(required);
+    }
+    expect(costResults).toContain('Fleet costs unavailable');
+    expect(costResults).toContain('privacy-preserving headline total');
+    for (const required of [
+      'Loading authorized fleet usage…',
+      'Fleet usage unavailable',
+      'fetchFleetModelUsageProjection({',
+      "range: 'today'",
+      'projection.combined.totalTokens',
+      'companion.usage.inputTokens',
+      'companion.usage.cacheWriteTokens',
+    ]) {
+      expect(usageSummary).toContain(required);
+    }
+    expect(legacyCostRoute).toContain('href="/fleet#fleet-costs"');
+    expect(legacyCostRoute).toContain('Fleet costs moved');
+  });
 });

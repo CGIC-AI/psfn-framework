@@ -96,6 +96,11 @@ export interface ActiveConcernStaleResolutionOptions {
   evidenceRefs?: readonly ActiveConcernEvidenceRef[];
   /** VAD snapshot captured when the grooming pass resolves stale concerns. */
   resolutionVAD?: ActiveConcernVAD;
+  /** Per-concern scoped snapshot source. Preferred over the legacy shared value. */
+  resolutionVADProvider?: (
+    concern: ActiveConcern,
+    asOf: string,
+  ) => ActiveConcernVAD | undefined;
 }
 
 export interface ActiveConcernRecentResolutionOptions {

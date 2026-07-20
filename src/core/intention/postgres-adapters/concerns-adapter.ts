@@ -1,4 +1,5 @@
 import type { Pool } from 'pg';
+import { randomUUID } from 'node:crypto';
 import { queryOne, queryRows } from './connection.js';
 import type { ConcernStorePortBackend } from '../concern-store-port.js';
 import {
@@ -63,6 +64,7 @@ const ACTIVE_CONCERN_SELECT_COLUMNS = `
   id, text, priority, source, status, created_at, expires_at,
   salience, sensitivity, owner, evidence_refs, resolution_evidence_refs,
   resolved_at, resolution_outcome, contact_id, formation_vad, resolution_vad,
+  resolution_generation_id,
   last_reviewed_at, next_review_at, merged_from_ids, split_from_id,
   origin_icp_root_initiation_id, candidate_review_snapshot
 `;
@@ -188,13 +190,6 @@ export class PostgresActiveConcernStore implements ConcernStorePortBackend {
       : JSON.stringify(input.candidateReviewSnapshot);
 
     if (!isConcernTerminalStatus(status)) {
-      if (isConcernAttentionStatus(status)) {
-        await this.resolveStaleConcerns({
-          asOf: createdAt,
-          limit: MAX_LIST_LIMIT,
-          evidenceRefs: [{ kind: 'runtime', ref: `concern-create-stale-sweep:${createdAt}` }],
-        });
-      }
       const activeDuplicate = this.findActiveSimilarConcern({
         text,
         contactId,
@@ -252,6 +247,7 @@ export class PostgresActiveConcernStore implements ConcernStorePortBackend {
     }
     const id = normalizeRequiredText(this.idFactory(), 'id', 128);
     const terminalAt = isConcernTerminalStatus(status) ? createdAt : null;
+    const resolutionGenerationId = terminalAt ? randomUUID() : null;
 
     const row = await queryOne<ActiveConcernRow>(
       this.pool,
@@ -261,10 +257,10 @@ export class PostgresActiveConcernStore implements ConcernStorePortBackend {
           salience, sensitivity, owner, evidence_refs, resolution_evidence_refs,
           resolved_at, contact_id, formation_vad, last_reviewed_at, next_review_at,
           merged_from_ids, split_from_id, origin_icp_root_initiation_id,
-          candidate_review_snapshot
+          candidate_review_snapshot, resolution_generation_id
         ) VALUES (
           $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, $12::jsonb,
-          $13, $14, $15::jsonb, $16, $17, $18::jsonb, $19, $20, $21::jsonb
+          $13, $14, $15::jsonb, $16, $17, $18::jsonb, $19, $20, $21::jsonb, $22
         )
         RETURNING ${ACTIVE_CONCERN_SELECT_COLUMNS}
       `,
@@ -290,6 +286,7 @@ export class PostgresActiveConcernStore implements ConcernStorePortBackend {
         splitFromId ?? null,
         originIcpRootInitiationId ?? null,
         candidateReviewSnapshot,
+        resolutionGenerationId,
       ],
     );
 
@@ -476,12 +473,31 @@ export class PostgresActiveConcernStore implements ConcernStorePortBackend {
     const salience = options.salience === undefined ? current.salience : normalizeSalience(options.salience);
     const updatedEvidenceRefs = mergeConcernEvidenceRefs(current.evidenceRefs, evidenceRefs);
     const terminal = isConcernTerminalStatus(status);
+    if (terminal && isConcernTerminalStatus(current.status)) {
+      return current.status === status ? current : null;
+    }
+    const resolutionGenerationId = terminal ? randomUUID() : null;
     const updatedResolutionEvidenceRefs = terminal
       ? mergeConcernEvidenceRefs(
         current.resolutionEvidenceRefs,
         resolutionEvidenceRefs.length > 0 ? resolutionEvidenceRefs : evidenceRefs,
       )
       : current.resolutionEvidenceRefs;
+
+    const transitionValues: unknown[] = [
+      normalizedId,
+      status,
+      terminal ? transitionedAt : null,
+      terminal ? outcome ?? null : null,
+      transitionedAt,
+      nextReviewAt ?? null,
+      salience,
+      serializeConcernEvidenceRefs(updatedEvidenceRefs),
+      serializeConcernEvidenceRefs(updatedResolutionEvidenceRefs),
+      terminal ? serializeResolutionVAD(options.resolutionVAD) : null,
+      resolutionGenerationId,
+    ];
+    if (!terminal) transitionValues.push(current.status, current.resolvedAt ?? null);
 
     const row = await queryOne<ActiveConcernRow>(
       this.pool,
@@ -497,29 +513,22 @@ export class PostgresActiveConcernStore implements ConcernStorePortBackend {
           evidence_refs = $8::jsonb,
           resolution_evidence_refs = $9::jsonb,
           resolution_vad = $10::jsonb,
+          resolution_generation_id = $11,
           candidate_review_snapshot = CASE
             WHEN $2 = 'candidate' THEN candidate_review_snapshot
             ELSE NULL
           END
         WHERE id = $1
+          ${terminal
+            ? "AND resolved_at IS NULL AND status NOT IN ('resolved', 'dismissed', 'suppressed')"
+            : `AND status = $12 AND ${current.resolvedAt ? 'resolved_at = $13' : 'resolved_at IS NULL'}`}
         RETURNING ${ACTIVE_CONCERN_SELECT_COLUMNS}
       `,
-      [
-        normalizedId,
-        status,
-        terminal ? transitionedAt : null,
-        terminal ? outcome ?? null : null,
-        transitionedAt,
-        nextReviewAt ?? null,
-        salience,
-        serializeConcernEvidenceRefs(updatedEvidenceRefs),
-        serializeConcernEvidenceRefs(updatedResolutionEvidenceRefs),
-        terminal ? serializeResolutionVAD(options.resolutionVAD) : null,
-      ],
+      transitionValues,
     );
     if (!row) {
-      this.activeConcernCache.delete(normalizedId);
-      return null;
+      const latest = await this.getById(normalizedId);
+      return latest?.status === status ? latest : null;
     }
     const concern = mapActiveConcernRow(row);
     this.activeConcernCache.set(concern.id, concern);
@@ -529,9 +538,13 @@ export class PostgresActiveConcernStore implements ConcernStorePortBackend {
   async resolveConcern(id: string, options: ActiveConcernResolveOptions = {}): Promise<ActiveConcern | null> {
     const normalizedId = normalizeRequiredText(id, 'id', 128);
     const current = await this.getById(normalizedId);
-    if (!current || isConcernTerminalStatus(current.status) || current.resolvedAt) {
+    if (!current) {
       return null;
     }
+    if (current.status === 'resolved' && current.resolvedAt) {
+      return current;
+    }
+    if (isConcernTerminalStatus(current.status) || current.resolvedAt) return null;
     return await this.transitionConcernStatus(normalizedId, {
       status: 'resolved',
       ...(options.outcome ? { outcome: options.outcome } : {}),
@@ -562,12 +575,14 @@ export class PostgresActiveConcernStore implements ConcernStorePortBackend {
 
     const resolved: ActiveConcern[] = [];
     for (const concern of candidates) {
+      const resolutionVAD = options.resolutionVADProvider?.(concern, asOf)
+        ?? options.resolutionVAD;
       const next = await this.transitionConcernStatus(concern.id, {
         status: 'resolved',
         transitionedAt: asOf,
         outcome: options.outcome ?? 'Resolved as stale after review window elapsed.',
         ...(options.evidenceRefs ? { evidenceRefs: options.evidenceRefs, resolutionEvidenceRefs: options.evidenceRefs } : {}),
-        ...(options.resolutionVAD ? { resolutionVAD: options.resolutionVAD } : {}),
+        ...(resolutionVAD ? { resolutionVAD } : {}),
       });
       if (next) {
         resolved.push(next);
@@ -656,6 +671,7 @@ export class PostgresActiveConcernStore implements ConcernStorePortBackend {
             resolved_at = NULL,
             resolution_outcome = NULL,
             resolution_vad = NULL,
+            resolution_generation_id = NULL,
             last_reviewed_at = $9,
             next_review_at = $10,
             merged_from_ids = $11::jsonb,

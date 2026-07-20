@@ -78,6 +78,7 @@ import {
 import { createAnalysisWorkbenchTool } from '../../../core/tools/analysis-workbench/tools.js';
 import { CoreMemoryStore } from '../../../faculties/core-memory/store.js';
 import { createOrientTool } from '../../../faculties/core-memory/tools.js';
+import { resolveCurrentInternalStateConcernVAD } from '../../../core/intention/concern-grooming.js';
 import { ValuesJournalStore } from '../../../faculties/values/store.js';
 import type { IntrospectionConsentStore } from '../../../faculties/introspection/consent-store.js';
 import type { IntrospectionTurnSensitivityDecisions } from '../../../faculties/introspection/turn-sensitivity.js';
@@ -454,12 +455,11 @@ export function wireCoreMemoryRuntime(options: CoreMemoryRuntimeOptions): CoreMe
     eventBus: options.eventBus ?? null,
     // Resolution-as-appraisal (vw3w.1): snapshot the agent's live VAD when the
     // companion decides to resolve/terminally-transition a concern.
-    resolutionVadProvider: () => {
-      const vad = options.agentLoop.getCurrentInternalState()?.emotional.vad;
-      return vad
-        ? { valence: vad.valence, arousal: vad.arousal, dominance: vad.dominance }
-        : undefined;
-    },
+    resolutionVadProvider: concern => resolveCurrentInternalStateConcernVAD(
+      concern,
+      options.agentLoop.getCurrentInternalState(),
+      new Date().toISOString(),
+    ),
   }));
   return store;
 }

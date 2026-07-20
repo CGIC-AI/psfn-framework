@@ -24,7 +24,10 @@ import {
   BackgroundMaintenanceRegistry,
   type BackgroundMaintenanceRegistrar,
 } from '../../core/scheduler/background-maintenance.js';
-import { registerConcernGroomingOperation } from '../../core/intention/concern-grooming.js';
+import {
+  registerConcernGroomingOperation,
+  resolveCurrentInternalStateConcernVAD,
+} from '../../core/intention/concern-grooming.js';
 import { createDefaultConcernRouteDispatcher } from './concern-route-wiring.js';
 import type { ConcernStorePort } from '../../core/intention/concern-store-port.js';
 import type { ContactStorePort } from '../../core/contacts/contact-store-port.js';
@@ -392,12 +395,11 @@ export function buildAgentSchedulerRuntime(
       }),
       // Resolution-as-appraisal (vw3w.1): grooming resolves off-turn, so it
       // reads the agent's live internal VAD to snapshot resolutionVAD.
-      resolutionVadProvider: () => {
-        const vad = options.agentLoop.getCurrentInternalState()?.emotional.vad;
-        return vad
-          ? { valence: vad.valence, arousal: vad.arousal, dominance: vad.dominance }
-          : undefined;
-      },
+      resolutionVadProvider: (concern, asOf) => resolveCurrentInternalStateConcernVAD(
+        concern,
+        options.agentLoop.getCurrentInternalState(),
+        asOf,
+      ),
     });
   }
 

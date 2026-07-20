@@ -124,9 +124,11 @@ describe('postgres intention adapters', () => {
     expect(match?.id).toBe(created.id);
   });
 
-  it('resolves stale duplicate concerns before Postgres creation opens another thread', async () => {
+  it('leaves stale concerns unchanged until the explicit grooming lifecycle runs', async () => {
     const pool = new FakeIntentionPool();
-    const ports = createPostgresIntentionPortsFromPool(pool as never);
+    const ports = createPostgresIntentionPortsFromPool(pool as never, {
+      now: () => new Date('2026-03-28T02:00:00.000Z'),
+    });
 
     const stale = await ports.concernStore.create({
       text: 'Follow up on hydration tomorrow morning',
@@ -144,15 +146,17 @@ describe('postgres intention adapters', () => {
       evidenceRefs: [{ kind: 'message', ref: 'msg-repeat-hydration' }],
     });
 
-    expect(duplicate.id).toBe(stale.id);
-    expect(duplicate.status).toBe('resolved');
-    expect(duplicate.resolutionOutcome).toBe('Resolved as stale after review window elapsed.');
-    await expect(ports.concernStore.getActiveConcerns('contact-a')).resolves.toEqual([]);
+    expect(duplicate.id).not.toBe(stale.id);
+    expect(duplicate.status).toBe('active');
+    const unchangedStale = await ports.concernStore.getById(stale.id);
+    expect(unchangedStale).toMatchObject({ status: 'watching' });
+    expect(unchangedStale).not.toHaveProperty('resolvedAt');
+    await expect(ports.concernStore.getActiveConcerns('contact-a')).resolves.toEqual([duplicate]);
     await expect(ports.concernStore.list({
       contactId: 'contact-a',
       includeResolved: true,
       includeExpired: true,
-    })).resolves.toHaveLength(1);
+    })).resolves.toHaveLength(2);
   });
 
   it('persists pending follow-ups and activation state', async () => {

@@ -105,6 +105,7 @@ function createFakeConcernStore(): ConcernStorePort {
         resolvedAt: options.resolvedAt ?? new Date().toISOString(),
         ...(options.outcome ? { resolutionOutcome: options.outcome } : {}),
         resolutionEvidenceRefs: [...(options.evidenceRefs ?? [])],
+        resolutionGenerationId: `generation-${id}`,
         ...(options.resolutionVAD ? { resolutionVAD: options.resolutionVAD } : {}),
       };
       concerns.set(id, resolved);
@@ -126,10 +127,16 @@ function createFakeConcernStore(): ConcernStorePort {
         ...((options.status === 'resolved' || options.status === 'dismissed' || options.status === 'suppressed')
           ? {
             resolvedAt: options.transitionedAt ?? new Date().toISOString(),
+            resolutionGenerationId: concern.resolutionGenerationId ?? `generation-${id}`,
             ...(options.outcome ? { resolutionOutcome: options.outcome } : {}),
             ...(options.resolutionVAD ? { resolutionVAD: options.resolutionVAD } : {}),
           }
-          : { resolvedAt: undefined, resolutionOutcome: undefined, resolutionVAD: undefined }),
+          : {
+            resolvedAt: undefined,
+            resolutionOutcome: undefined,
+            resolutionVAD: undefined,
+            resolutionGenerationId: undefined,
+          }),
       };
       concerns.set(id, transitioned);
       return { ...transitioned };

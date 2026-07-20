@@ -19,6 +19,7 @@ interface ActiveConcernRow {
   contact_id: string | null;
   formation_vad: unknown;
   resolution_vad: unknown;
+  resolution_generation_id: string | null;
   last_reviewed_at: string | null;
   next_review_at: string | null;
   merged_from_ids: unknown;
@@ -147,6 +148,7 @@ export class FakeIntentionPool {
         splitFromId,
         originIcpRootInitiationId,
         candidateReviewSnapshot,
+        resolutionGenerationId,
       ] = values as [
         string,
         string,
@@ -169,6 +171,7 @@ export class FakeIntentionPool {
         string | null,
         string | null,
         unknown,
+        string | null,
       ];
       this.activeConcerns.set(id, {
         id,
@@ -188,6 +191,7 @@ export class FakeIntentionPool {
         contact_id: contactId,
         formation_vad: formationVAD,
         resolution_vad: null,
+        resolution_generation_id: resolutionGenerationId,
         last_reviewed_at: lastReviewedAt,
         next_review_at: nextReviewAt,
         merged_from_ids: mergedFromIds,
@@ -265,6 +269,18 @@ export class FakeIntentionPool {
         return { rows: [] };
       }
       if (normalized.includes('SET status = $2')) {
+        const terminalTransition = normalized.includes("resolved_at IS NULL AND status NOT IN ('resolved', 'dismissed', 'suppressed')");
+        const expectedStatus = values[11] as string | undefined;
+        const expectedResolvedAt = values[12] as string | null | undefined;
+        if (terminalTransition && (row.resolved_at !== null || ['resolved', 'dismissed', 'suppressed'].includes(row.status ?? 'active'))) {
+          return { rows: [] };
+        }
+        if (!terminalTransition && expectedStatus !== undefined && row.status !== expectedStatus) {
+          return { rows: [] };
+        }
+        if (!terminalTransition && normalized.includes('resolved_at = $13') && row.resolved_at !== expectedResolvedAt) {
+          return { rows: [] };
+        }
         const [
           ,
           status,
@@ -276,7 +292,8 @@ export class FakeIntentionPool {
           evidenceRefs,
           resolutionEvidenceRefs,
           resolutionVAD,
-        ] = values as [string, string, string | null, string | null, string, string | null, number, unknown, unknown, unknown];
+          resolutionGenerationId,
+        ] = values as [string, string, string | null, string | null, string, string | null, number, unknown, unknown, unknown, string | null];
         row.status = status;
         row.resolved_at = resolvedAt;
         row.resolution_outcome = resolutionOutcome;
@@ -286,6 +303,7 @@ export class FakeIntentionPool {
         row.evidence_refs = evidenceRefs;
         row.resolution_evidence_refs = resolutionEvidenceRefs;
         row.resolution_vad = resolutionVAD;
+        row.resolution_generation_id = resolutionGenerationId;
         if (status !== 'candidate') row.candidate_review_snapshot = null;
         return { rows: [row as Row] };
       }
@@ -320,6 +338,7 @@ export class FakeIntentionPool {
         row.resolved_at = null;
         row.resolution_outcome = null;
         row.resolution_vad = null;
+        row.resolution_generation_id = null;
       }
       return { rows: [row as Row] };
     }

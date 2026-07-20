@@ -5,11 +5,13 @@ import type { FakeIntentionPool } from '../../test-support/fake-postgres-intenti
 import {
   buildActiveConcernsPromptVariables,
   buildActiveConcernsRuntimeData,
-  mapRow,
-  type ActiveConcernRow,
 } from './concerns.js';
 import { injectPromptRuntimeTokens } from '../identity/prompt-runtime.js';
 import { getRuntimePromptLayerDefinition } from '../identity/runtime-prompt-layers.js';
+import {
+  mapActiveConcernRow,
+  type ActiveConcernRow,
+} from './postgres-adapters/shared.js';
 
 function textFixture(value: string): string {
   return value.replace(/\s+/g, ' ').trim();
@@ -39,19 +41,25 @@ function concernRow(overrides: Partial<ActiveConcernRow> = {}): ActiveConcernRow
     merged_from_ids: null,
     split_from_id: null,
     origin_icp_root_initiation_id: null,
+    candidate_review_snapshot: null,
+    resolution_generation_id: null,
     ...overrides,
   };
 }
 
-describe('mapRow', () => {
-  it('attributes persisted VAD validation failures to the owning lifecycle field', () => {
-    expect(() => mapRow(concernRow({
+describe('production Postgres concern row mapping', () => {
+  it('rejects malformed and out-of-range VAD at the actual adapter boundary', () => {
+    expect(() => mapActiveConcernRow(concernRow({
       formation_vad: JSON.stringify({ valence: 2, arousal: 0, dominance: 0 }),
-    }))).toThrow(/formationVAD\.valence/);
+    }))).toThrow(/formation_vad\.valence/);
 
-    expect(() => mapRow(concernRow({
-      resolution_vad: JSON.stringify({ valence: 2, arousal: 0, dominance: 0 }),
-    }))).toThrow(/resolutionVAD\.valence/);
+    expect(() => mapActiveConcernRow(concernRow({
+      resolution_vad: { valence: 0, arousal: Number.NaN, dominance: 0 },
+    }))).toThrow(/resolution_vad\.arousal/);
+
+    expect(() => mapActiveConcernRow(concernRow({
+      resolution_vad: { valence: 0, arousal: 0 },
+    }))).toThrow(/resolution_vad\.dominance/);
   });
 });
 
@@ -231,6 +239,15 @@ describe('ActiveConcernStore', () => {
     expect(reloaded?.resolutionVAD).toEqual({ valence: 0.3, arousal: 0.1, dominance: 0.2 });
   });
 
+  it('fails closed when the fake Postgres boundary returns a malformed persisted VAD', async () => {
+    const created = await store.create({ text: 'Corrupt persisted VAD boundary' });
+    pool.corruptActiveConcern(created.id, {
+      resolution_vad: { valence: 0, arousal: 3, dominance: 0 },
+    });
+
+    await expect(store.getById(created.id)).rejects.toThrow(/resolution_vad\.arousal/);
+  });
+
   it('captures resolutionVAD on a terminal transition and clears it on reopen', async () => {
     const created = await store.create({
       text: 'Terminal transition captures resolution VAD',
@@ -396,7 +413,7 @@ describe('ActiveConcernStore', () => {
     expect(await store.list({ includeExpired: true })).toHaveLength(1);
   });
 
-  it('resolves stale duplicate concerns before creating another prompt-facing thread', async () => {
+  it('does not silently resolve stale concerns while creating another thread', async () => {
     const stale = await store.create({
       text: 'Follow up on hydration tomorrow morning',
       priority: 'medium',
@@ -412,14 +429,70 @@ describe('ActiveConcernStore', () => {
       evidenceRefs: [{ kind: 'message', ref: 'msg-hydration-repeat' }],
     });
 
-    expect(duplicate.id).toBe(stale.id);
-    expect(duplicate.status).toBe('resolved');
-    expect(duplicate.resolutionOutcome).toBe('Resolved as stale after review window elapsed.');
-    expect(duplicate.resolutionEvidenceRefs).toEqual([
-      { kind: 'runtime', ref: 'concern-create-stale-sweep:2026-02-01T10:00:00.000Z' },
+    expect(duplicate.id).not.toBe(stale.id);
+    expect(duplicate.status).toBe('active');
+    expect((await store.getById(stale.id))?.status).toBe('watching');
+    expect((await store.getById(stale.id))?.resolvedAt).toBeUndefined();
+    expect(await store.getActiveConcerns()).toEqual([duplicate]);
+    expect(await store.list({ includeResolved: true, includeExpired: true })).toHaveLength(2);
+  });
+
+  it('serializes terminal resolution so concurrent callers share one immutable generation', async () => {
+    const created = await store.create({
+      text: 'Resolve exactly once under concurrent delivery',
+      formationVAD: { valence: -0.4, arousal: 0.6, dominance: -0.2 },
+    });
+
+    const [left, right] = await Promise.all([
+      store.resolveConcern(created.id, {
+        outcome: 'Handled once',
+        resolvedAt: '2026-02-01T10:05:00.000Z',
+        resolutionVAD: { valence: 0.2, arousal: 0.1, dominance: 0.3 },
+      }),
+      store.resolveConcern(created.id, {
+        outcome: 'Handled once',
+        resolvedAt: '2026-02-01T10:05:00.000Z',
+        resolutionVAD: { valence: 0.2, arousal: 0.1, dominance: 0.3 },
+      }),
     ]);
-    expect(await store.getActiveConcerns()).toEqual([]);
-    expect(await store.list({ includeResolved: true, includeExpired: true })).toHaveLength(1);
+
+    expect(left).not.toBeNull();
+    expect(right).not.toBeNull();
+    expect(left?.resolutionGenerationId).toEqual(expect.any(String));
+    expect(right?.resolutionGenerationId).toBe(left?.resolutionGenerationId);
+    expect(right?.resolvedAt).toBe(left?.resolvedAt);
+    expect(right?.resolutionOutcome).toBe(left?.resolutionOutcome);
+    expect(right?.resolutionVAD).toEqual(left?.resolutionVAD);
+  });
+
+  it('keeps an exact terminal retry immutable and gives a reopened resolution a new generation', async () => {
+    const created = await store.create({ text: 'Retry and reopen resolution' });
+    const first = await store.resolveConcern(created.id, {
+      outcome: 'First outcome',
+      resolvedAt: '2026-02-01T10:05:00.000Z',
+      resolutionVAD: { valence: 0.1, arousal: -0.2, dominance: 0.3 },
+    });
+    const retry = await store.resolveConcern(created.id, {
+      outcome: 'First outcome',
+      resolvedAt: '2026-02-01T10:05:00.000Z',
+      resolutionVAD: { valence: 0.1, arousal: -0.2, dominance: 0.3 },
+    });
+
+    expect(retry).toEqual(first);
+
+    const reopened = await store.transitionConcernStatus(created.id, {
+      status: 'active',
+      transitionedAt: '2026-02-01T10:06:00.000Z',
+      evidenceRefs: [{ kind: 'runtime', ref: 'new-evidence' }],
+    });
+    expect(reopened?.resolutionGenerationId).toBeUndefined();
+
+    const second = await store.resolveConcern(created.id, {
+      outcome: 'Second outcome',
+      resolvedAt: '2026-02-01T10:07:00.000Z',
+    });
+    expect(second?.resolutionGenerationId).toEqual(expect.any(String));
+    expect(second?.resolutionGenerationId).not.toBe(first?.resolutionGenerationId);
   });
 
   it('records split children with parent provenance', async () => {

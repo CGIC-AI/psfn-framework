@@ -181,6 +181,51 @@ function recursiveRejectingSourceRuntime(input: {
 
 describe('Postgres schema tenancy plumbing', () => {
   it(
+    'serializes concurrent terminal concern writes into one immutable generation',
+    async () => {
+      const databaseUrl = await freshDatabaseUrl();
+      const pool = createPostgresPool(databaseUrl, {
+        applicationName: 'psfn-concern-terminal-cas',
+        allowExitOnIdle: true,
+        max: 6,
+        schema: 'companion_concern_terminal_cas',
+      });
+      try {
+        await runPostgresMigrations(pool, POSTGRES_INTENTION_MIGRATIONS, {
+          schema: 'companion_concern_terminal_cas',
+        });
+        const seed = new PostgresActiveConcernStore(
+          pool,
+          () => new Date('2026-07-20T12:00:00.000Z'),
+          () => 'concern-terminal-cas',
+        );
+        const created = await seed.create({ text: 'Serialize this terminal transition.' });
+        const storeA = new PostgresActiveConcernStore(pool, () => new Date('2026-07-20T12:01:00.000Z'), () => 'unused-a');
+        const storeB = new PostgresActiveConcernStore(pool, () => new Date('2026-07-20T12:02:00.000Z'), () => 'unused-b');
+
+        const [left, right] = await Promise.all([
+          storeA.resolveConcern(created.id, { outcome: 'winner-a' }),
+          storeB.resolveConcern(created.id, { outcome: 'winner-b' }),
+        ]);
+
+        expect(left?.resolutionGenerationId).toEqual(expect.any(String));
+        expect(right?.resolutionGenerationId).toBe(left?.resolutionGenerationId);
+        expect(right?.resolvedAt).toBe(left?.resolvedAt);
+        expect(right?.resolutionOutcome).toBe(left?.resolutionOutcome);
+
+        await pool.query(
+          `UPDATE active_concerns SET resolution_vad = $2::jsonb WHERE id = $1`,
+          [created.id, JSON.stringify({ valence: 0, arousal: 3, dominance: 0 })],
+        );
+        await expect(seed.getById(created.id)).rejects.toThrow(/resolution_vad\.arousal/);
+      } finally {
+        await pool.end();
+      }
+    },
+    INTEGRATION_TIMEOUT_MS,
+  );
+
+  it(
     'pins search_path to the companion schema and runs the migration chain inside it',
     async () => {
       const databaseUrl = await freshDatabaseUrl();

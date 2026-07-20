@@ -232,9 +232,17 @@ function roomRetrievalPolicy(channel: ResolvedRoomChannel, channelId: string): F
   // Room-compatible retrieval: admitted material is bounded by the room's own
   // disclosure ceiling so it can later reach the room; the disclosure ceiling IS
   // that room (§10.7).
+  const disclosureCeiling = roomDisclosureDestination(channelId, channel.envelope);
+  // Belt-and-suspenders (jp36.2.1.2 handoff): a public_room workspace can NEVER
+  // admit above-public material into context, even if the injected channel
+  // ceiling came back higher than 'public' — the retrieval ceiling for a public
+  // room is clamped to 'public' independently of what the port supplied.
+  const retrievalCeiling: SensitivityLevel = disclosureCeiling.kind === 'public_room'
+    ? PUBLIC_RETRIEVAL_CEILING
+    : channel.disclosureCeiling;
   return {
-    retrievalCeiling: channel.disclosureCeiling,
-    disclosureCeiling: roomDisclosureDestination(channelId, channel.envelope),
+    retrievalCeiling,
+    disclosureCeiling,
     allowBroadSelfRetrieval: false,
   };
 }

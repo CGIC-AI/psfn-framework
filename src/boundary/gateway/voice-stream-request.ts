@@ -304,6 +304,7 @@ export async function requestAgentVoiceStream({
         ...(streamResult.attachments ? { attachments: streamResult.attachments } : {}),
         model: streamResult.model,
         durationMs: streamResult.durationMs,
+        ...(streamResult.disposition ? { disposition: streamResult.disposition } : {}),
       };
     } catch (error) {
       if (!cancelled) {

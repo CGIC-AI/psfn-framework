@@ -5,11 +5,11 @@
 //
 //   GET   /api/admin/places                                  — sites + places + affordances + bound satellites
 //   GET   /api/admin/places/map                              — Mermaid world-map (flowchart TB) of the above
-//   PATCH /api/admin/places/satellites/:satelliteId/binding  — static place/companion re-bind
+//   PATCH /api/admin/places/satellites/:satelliteId/binding  — static place re-bind
 //
 // The read is DATA only (Cache-Control: no-store) and is never routed into
-// prompt content. The re-bind is the ONLY path that changes a static placeId or
-// companionId; it fails closed on unknown targets and occupied ownership.
+// prompt content. Shared-device companion authorities are not editable through
+// this place-only endpoint.
 
 import { sendJson } from '../../channels/backplane/http/primitives.js';
 import { parseAdminJsonBody } from './request-body.js';
@@ -64,7 +64,7 @@ export function buildAdminPlacesRoutes(options: {
             return;
           }
           try {
-            assertNoUnknownKeys(parsed.value, ['placeId', 'companionId'], 'Re-bind payload');
+            assertNoUnknownKeys(parsed.value, ['placeId'], 'Re-bind payload');
           } catch (error) {
             sendJson(res, 400, {
               error: toSanitizedMessage(error, 'Invalid re-bind payload'),
@@ -72,25 +72,18 @@ export function buildAdminPlacesRoutes(options: {
             return;
           }
           const hasPlaceId = Object.prototype.hasOwnProperty.call(parsed.value, 'placeId');
-          const hasCompanionId = Object.prototype.hasOwnProperty.call(parsed.value, 'companionId');
-          if (!hasPlaceId && !hasCompanionId) {
-            sendJson(res, 400, { error: 'Re-bind payload must include placeId or companionId' });
+          if (!hasPlaceId) {
+            sendJson(res, 400, { error: 'Re-bind payload must include placeId' });
             return;
           }
           const rawPlaceId = parsed.value.placeId;
-          if (hasPlaceId && rawPlaceId !== null && typeof rawPlaceId !== 'string') {
+          if (rawPlaceId !== null && typeof rawPlaceId !== 'string') {
             sendJson(res, 400, { error: 'placeId must be a string (target place) or null (unbind)' });
-            return;
-          }
-          const rawCompanionId = parsed.value.companionId;
-          if (hasCompanionId && rawCompanionId !== null && typeof rawCompanionId !== 'string') {
-            sendJson(res, 400, { error: 'companionId must be a string (target companion) or null (unbind)' });
             return;
           }
           placesService.rebindSatellite({
             satelliteId,
-            ...(hasPlaceId ? { placeId: rawPlaceId } : {}),
-            ...(hasCompanionId ? { companionId: rawCompanionId } : {}),
+            placeId: rawPlaceId,
           }).then(
             (result) => sendJson(res, 200, result, ADMIN_DYNAMIC_JSON_HEADERS),
             (error) => sendJson(res, 400, { error: toSanitizedMessage(error, 'Failed to re-bind satellite') }),

@@ -64,7 +64,11 @@ import {
 } from './approval-boundary.js';
 import { GatewayRuntimeHealthTracker } from './runtime-health.js';
 import { evaluatePolicy } from './policy.js';
-import type { ApiStreamDeltaNotification } from '../../channels/api/types.js';
+import type {
+  ApiChatCompletionRpcParams,
+  ApiChatCompletionRpcResult,
+  ApiStreamDeltaNotification,
+} from '../../channels/api/types.js';
 import type { ModelUsageRecorder } from '../../shared/telemetry/model-usage.js';
 import type { CredentialVaultPort } from '../custody/credential-vault.js';
 import { verifyCompanionAuthToken } from './companion-auth.js';
@@ -114,6 +118,11 @@ import {
   type ShardWorkloadLifecycleRegistryPort,
 } from '../../system/capabilities/shard-approval-grants.js';
 import { GatewayShardWorkloadRegistrar } from './shard-workload-registrar.js';
+import {
+  SharedSatelliteResponseArbiter,
+  type SharedSatelliteEligibility,
+  type SharedSatelliteLeaseAuditEvent,
+} from './shared-satellite-response-arbiter.js';
 import { GatewayFleetPostureCache } from './fleet-posture-cache.js';
 import type { FleetCompanionPostureSummary } from '../../shared/telemetry/fleet-posture.js';
 
@@ -316,6 +325,8 @@ export interface GatewayServerOptions extends OptionalCompanionRoutingBinding {
    * `companion.event.publish` (w9hj.1).
    */
   eventBus: EventBus;
+  /** JSON-owner quiet-hours gate evaluated before any shared-device model call. */
+  sharedSatelliteQuietHoursAllows?: (nowMs: number) => boolean;
 }
 
 type IcpQueuedInvalidationReason =
@@ -379,9 +390,23 @@ export class GatewayServer {
   }>();
   private readonly gardenQueueChangeUnsubscribers: Array<() => void> = [];
   private readonly sharedWorkspaceReader: SharedCompanionWorkspaceReader | null;
+  private readonly sharedSatelliteResponseArbiter: SharedSatelliteResponseArbiter;
+  private readonly sharedSatelliteChatRequests = new Map<string, CompanionId>();
 
   constructor(options: GatewayServerOptions) {
     this.options = options;
+    this.sharedSatelliteResponseArbiter = new SharedSatelliteResponseArbiter({
+      audit: event => {
+        void this.recordSharedSatelliteLeaseAudit(event).catch((error: unknown) => {
+          log.error('Failed to persist shared-satellite response lease audit', {
+            action: event.action,
+            satelliteId: event.satelliteId,
+            companionId: event.companionId,
+            error: toErrorMessage(error),
+          });
+        });
+      },
+    });
     this.sessionHmacKeyring = options.sessionHmacKeyring;
     this.multiCompanion = options.multiCompanion ?? disabledGatewayMultiCompanionConfig();
     this.fleetCompanionIds = new Set(this.multiCompanion.fleetCompanionIds);
@@ -1857,33 +1882,34 @@ export class GatewayServer {
     companionId: CompanionId;
   } {
     const routeLabel = `satellite:${satellite.satelliteId}`;
-    if (!satellite.companionId) {
+    if (!satellite.sharedDevice) {
       this.alarmCompanionViolation(
         'unbound_satellite',
-        `Satellite "${satellite.satelliteId}" has no companion binding in satellites.json`,
+        `Satellite "${satellite.satelliteId}" has no shared-device policy in satellites.json`,
         { satelliteId: satellite.satelliteId, endpointId: satellite.endpointId },
       );
       throw new Error(
-        `Multi-companion satellite "${satellite.satelliteId}" has no companion binding in satellites.json`,
+        `Multi-companion satellite "${satellite.satelliteId}" has no shared-device policy in satellites.json`,
       );
     }
-    if (!this.fleetCompanionIds.has(satellite.companionId)) {
+    const companionId = satellite.sharedDevice.primaryCompanionId;
+    if (!this.fleetCompanionIds.has(companionId)) {
       this.alarmCompanionViolation(
         'satellite_unknown_companion',
         `Satellite "${satellite.satelliteId}" names a companion absent from companions.json`,
         {
           satelliteId: satellite.satelliteId,
           endpointId: satellite.endpointId,
-          companionId: satellite.companionId,
+          companionId,
         },
       );
       throw new Error(
-        `Satellite "${satellite.satelliteId}" routes to companion "${satellite.companionId}" `
+        `Satellite "${satellite.satelliteId}" routes to companion "${companionId}" `
         + 'which is absent from companions.json',
       );
     }
     this.refreshConnectionHealth();
-    return this.requireReadyCompanionRoute(routeLabel, satellite.companionId);
+    return this.requireReadyCompanionRoute(routeLabel, companionId);
   }
 
   private resolveRoutedCompanionId(
@@ -2236,6 +2262,156 @@ export class GatewayServer {
     return result as T;
   }
 
+  /** Persist and publish a content-free observation-delivery audit. */
+  async recordSharedSatelliteObservationAudit(event: {
+    satelliteId: string;
+    companionId: string;
+    scope: string;
+    eventId: string;
+    timestamp: number;
+  }): Promise<void> {
+    await this.audit('satellite.observation.delivered', 'ALLOW', event);
+    await this.options.eventBus.emit('satellite.observation.delivered', event);
+  }
+
+  /**
+   * Run an authenticated satellite HTTP turn through the same speech lease as
+   * voice. This is the only multi-companion satellite chat model-call path.
+   */
+  async requestSharedSatelliteChatCompletion(input: {
+    satellite: SatelliteRoutingMetadata & {
+      sharedDevice: NonNullable<SatelliteRoutingMetadata['sharedDevice']>;
+    };
+    canonicalContactId: string;
+    channelId: string;
+    params: ApiChatCompletionRpcParams;
+    timeoutMs: number;
+  }): Promise<ApiChatCompletionRpcResult> {
+    const { satellite, params } = input;
+    const policy = satellite.sharedDevice;
+    const eligibility = await this.resolveSharedSatelliteEligibility({
+      policy,
+      canonicalContactId: input.canonicalContactId,
+      channelId: input.channelId,
+    });
+    const excludedCompanionIds = new Set<CompanionId>();
+    const conversationKey = JSON.stringify([
+      input.canonicalContactId,
+      satellite.sessionId,
+    ]);
+
+    for (;;) {
+      const acquisition = this.sharedSatelliteResponseArbiter.acquire({
+        satelliteId: satellite.satelliteId,
+        conversationKey,
+        policy,
+        eligibility,
+        ...(satellite.addressedCompanionId
+          ? { explicitAddressedCompanionId: satellite.addressedCompanionId }
+          : {}),
+        excludedCompanionIds,
+      });
+      if (!acquisition.acquired) {
+        return this.sharedSatelliteChatNoOp(input.channelId);
+      }
+      const { lease } = acquisition;
+      try {
+        const route = this.requireReadyCompanionRoute(
+          `satellite:${satellite.satelliteId}`,
+          lease.companionId,
+        );
+        this.sharedSatelliteChatRequests.set(params.requestId, lease.companionId);
+        const effectiveTimeoutMs = Math.min(
+          input.timeoutMs,
+          Math.max(1, lease.expiresAtMs - Date.now()),
+        );
+        const result = await Promise.race([
+          route.client.request('api.chat.completion', params),
+          new Promise<never>((_, reject) =>
+            setTimeout(
+              () => reject(new Error('Shared-satellite chat request timed out')),
+              effectiveTimeoutMs,
+            ),
+          ),
+        ]) as ApiChatCompletionRpcResult;
+        if (!result.ok) {
+          if (result.error.type === 'request_timeout') {
+            this.sharedSatelliteResponseArbiter.timeout(
+              lease.leaseId,
+              'agent_request_timeout',
+            );
+            excludedCompanionIds.add(lease.companionId);
+            continue;
+          }
+          this.sharedSatelliteResponseArbiter.complete(
+            lease.leaseId,
+            'release',
+            `agent_error:${result.error.type}`,
+          );
+          return result;
+        }
+        if (result.response.content.trim()) {
+          if (!this.sharedSatelliteResponseArbiter.complete(lease.leaseId, 'speech')) {
+            return this.sharedSatelliteChatNoOp(input.channelId);
+          }
+          return result;
+        }
+        if (result.response.noReply?.disposition !== 'intentional_no_reply') {
+          this.sharedSatelliteResponseArbiter.complete(
+            lease.leaseId,
+            'release',
+            'unmarked_empty_response',
+          );
+          return {
+            ok: false,
+            error: {
+              status: 502,
+              type: 'empty_response',
+              message: 'Shared-satellite agent returned empty content without an intentional disposition',
+            },
+          };
+        }
+        this.sharedSatelliteResponseArbiter.complete(
+          lease.leaseId,
+          'decline',
+          'structured_intentional_no_reply',
+        );
+        if (lease.priority === 'explicit_address' || lease.priority === 'active_conversation') {
+          return result;
+        }
+        excludedCompanionIds.add(lease.companionId);
+      } catch (error) {
+        const timedOut = toErrorMessage(error).toLowerCase().includes('timed out');
+        if (timedOut) {
+          this.sharedSatelliteResponseArbiter.timeout(lease.leaseId, 'model_timeout');
+          excludedCompanionIds.add(lease.companionId);
+          continue;
+        }
+        this.sharedSatelliteResponseArbiter.complete(lease.leaseId, 'release', 'model_error');
+        throw error;
+      } finally {
+        if (this.sharedSatelliteChatRequests.get(params.requestId) === lease.companionId) {
+          this.sharedSatelliteChatRequests.delete(params.requestId);
+        }
+      }
+    }
+  }
+
+  async cancelSharedSatelliteChatCompletion(
+    requestId: string,
+    params: unknown,
+    timeoutMs = DEFAULT_AGENT_TIMEOUT_MS,
+  ): Promise<unknown> {
+    const companionId = this.sharedSatelliteChatRequests.get(requestId);
+    if (!companionId) return { cancelled: false };
+    return await this.requestCompanionAgent(
+      companionId,
+      'api.chat.cancel',
+      params,
+      timeoutMs,
+    );
+  }
+
   /**
    * Forward a gateway-process timing observation to the owning agent process,
    * where the canonical Garden tracker lives. Multi-companion routing requires
@@ -2298,6 +2474,17 @@ export class GatewayServer {
     message: SubstrateMessage,
     options: VoiceStreamRequestOptions = {},
   ): Promise<VoiceHandleMessageResult> {
+    const sharedSatellite = this.multiCompanion.enabled
+      && message.routing?.source === 'satellite'
+      ? message.routing.satellite
+      : undefined;
+    if (sharedSatellite?.sharedDevice) {
+      return await this.requestSharedSatelliteVoiceStream(
+        message,
+        { ...sharedSatellite, sharedDevice: sharedSatellite.sharedDevice },
+        options,
+      );
+    }
     let client: JSONRPCServerAndClient;
     let conn: GatewayRpcConnection;
     let companionId = this.options.companionId;
@@ -2365,6 +2552,186 @@ export class GatewayServer {
       this.resolveConnectionWorkspacePath(conn),
     );
     return { ...result, ...(attachments ? { attachments } : {}) };
+  }
+
+  private async requestSharedSatelliteVoiceStream(
+    message: SubstrateMessage,
+    satellite: SatelliteRoutingMetadata & {
+      sharedDevice: NonNullable<SatelliteRoutingMetadata['sharedDevice']>;
+    },
+    options: VoiceStreamRequestOptions,
+  ): Promise<VoiceHandleMessageResult> {
+    const policy = satellite.sharedDevice;
+    const canonicalContactId = message.routing?.canonicalContactId?.trim();
+    if (!canonicalContactId) {
+      throw new Error('Shared-satellite response arbitration requires exact canonical partner identity');
+    }
+    const eligibility = await this.resolveSharedSatelliteEligibility({
+      policy,
+      canonicalContactId,
+      channelId: message.channelId,
+    });
+    const excludedCompanionIds = new Set<CompanionId>();
+    const addressedCompanionId = satellite.addressedCompanionId;
+    const conversationKey = JSON.stringify([canonicalContactId, satellite.sessionId]);
+
+    for (;;) {
+      const acquisition = this.sharedSatelliteResponseArbiter.acquire({
+        satelliteId: satellite.satelliteId,
+        conversationKey,
+        policy,
+        eligibility,
+        ...(addressedCompanionId ? { explicitAddressedCompanionId: addressedCompanionId } : {}),
+        excludedCompanionIds,
+      });
+      if (!acquisition.acquired) {
+        return this.sharedSatelliteNoOp(message.channelId);
+      }
+      const { lease } = acquisition;
+      try {
+        const route = this.requireReadyCompanionRoute(
+          `satellite:${satellite.satelliteId}`,
+          lease.companionId,
+        );
+        const result = await requestAgentVoiceStream({
+          client: route.client,
+          message,
+          options: {
+            ...options,
+            timeoutMs: Math.min(
+              options.timeoutMs ?? DEFAULT_AGENT_TIMEOUT_MS,
+              Math.max(1, lease.expiresAtMs - Date.now()),
+            ),
+          },
+          wyomingShardRouting: this.wyomingShardRouting,
+          companionId: lease.companionId,
+          nextRequestCounter: () => ++this.streamRequestCounter,
+        });
+        if (result.content.trim()) {
+          if (!this.sharedSatelliteResponseArbiter.complete(lease.leaseId, 'speech')) {
+            return this.sharedSatelliteNoOp(message.channelId);
+          }
+          const attachments = materializeGatewayAttachments(
+            result.attachments,
+            this.resolveConnectionWorkspacePath(route.conn),
+          );
+          return { ...result, ...(attachments ? { attachments } : {}) };
+        }
+        if (result.disposition !== 'decline' && result.disposition !== 'no_op') {
+          this.sharedSatelliteResponseArbiter.complete(
+            lease.leaseId,
+            'release',
+            'unmarked_empty_response',
+          );
+          throw new Error('Shared-satellite agent returned empty content without a structured disposition');
+        }
+        this.sharedSatelliteResponseArbiter.complete(
+          lease.leaseId,
+          result.disposition,
+          result.disposition === 'decline'
+            ? 'structured_intentional_no_reply'
+            : 'structured_no_op',
+        );
+        if (lease.priority === 'explicit_address' || lease.priority === 'active_conversation') {
+          return this.sharedSatelliteNoOp(message.channelId);
+        }
+        excludedCompanionIds.add(lease.companionId);
+      } catch (error) {
+        const timedOut = toErrorMessage(error).toLowerCase().includes('timed out');
+        if (timedOut) {
+          this.sharedSatelliteResponseArbiter.timeout(lease.leaseId, 'model_timeout');
+        } else {
+          this.sharedSatelliteResponseArbiter.complete(
+            lease.leaseId,
+            'release',
+            'model_error',
+          );
+        }
+        if (!timedOut) throw error;
+        excludedCompanionIds.add(lease.companionId);
+      }
+    }
+  }
+
+  private sharedSatelliteNoOp(channelId: string): VoiceHandleMessageResult {
+    return {
+      content: '',
+      channelId,
+      model: 'shared-satellite-deterministic-no-op',
+      durationMs: 0,
+    };
+  }
+
+  private sharedSatelliteChatNoOp(channelId: string): ApiChatCompletionRpcResult {
+    return {
+      ok: true,
+      response: {
+        content: '',
+        channelId,
+        inputTokens: 0,
+        outputTokens: 0,
+        disposition: 'no_op',
+      },
+    };
+  }
+
+  private async resolveSharedSatelliteEligibility(
+    input: {
+      policy: NonNullable<SatelliteRoutingMetadata['sharedDevice']>;
+      canonicalContactId: string;
+      channelId: string;
+    },
+  ): Promise<SharedSatelliteEligibility[]> {
+    this.refreshConnectionHealth();
+    return await Promise.all(input.policy.emanationMemberIds.map(async (
+      companionId,
+    ): Promise<SharedSatelliteEligibility> => {
+      const availability = this.icpAutonomyBroker
+        ? await this.icpAutonomyBroker.readOwnAvailability(companionId)
+        : undefined;
+      const availabilityState = availability?.lease?.state;
+      const connection = this.resolveReadyCompanionConnection(companionId);
+      const client = connection ? this.rpcClients.get(connection) : undefined;
+      const nowMs = Date.now();
+      let fatigueAllows = false;
+      if (client) {
+        let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+        try {
+          const timeout = new Promise<never>((_, reject) => {
+            timeoutHandle = setTimeout(
+              () => reject(new Error('Satellite response eligibility timed out')),
+              input.policy.responseLease.durationMs,
+            );
+            timeoutHandle.unref();
+          });
+          const result = await Promise.race([
+            client.request('satellite.response.eligibility', {
+              canonicalContactId: input.canonicalContactId,
+              channelId: input.channelId,
+            }),
+            timeout,
+          ]);
+          fatigueAllows = isRecord(result)
+            && Object.keys(result).length === 1
+            && result.fatigueAllows === true;
+        } catch {
+          fatigueAllows = false;
+        } finally {
+          if (timeoutHandle) clearTimeout(timeoutHandle);
+        }
+      }
+      return {
+        companionId,
+        availabilityAllows: connection !== null && availability?.eligible === true,
+        fatigueAllows,
+        quietHoursAllows: this.options.sharedSatelliteQuietHoursAllows?.(nowMs) === true,
+        restAllows: availabilityState !== 'resting'
+          && availabilityState !== 'do_not_disturb',
+        // This is an explicit human-partner turn, not an autonomous Pack Task.
+        taskAllows: true,
+        deviceAllows: input.policy.emanationMemberIds.includes(companionId),
+      };
+    }));
   }
 
   private resolveReadyRpcClient(): JSONRPCServerAndClient {
@@ -2734,6 +3101,13 @@ export class GatewayServer {
       return await this.options.auditStore.append({ method, decision, params });
     }
     return 0;
+  }
+
+  private async recordSharedSatelliteLeaseAudit(
+    event: SharedSatelliteLeaseAuditEvent,
+  ): Promise<void> {
+    await this.audit('satellite.response.lease', 'ALLOW', { ...event });
+    await this.options.eventBus.emit('satellite.response.lease', event);
   }
 
   private async auditComplete(id: number, startTime: number, error?: string): Promise<void> {

@@ -485,7 +485,8 @@ It means:
 - one embodiment is the primary manifested presence at a time
 - cross-channel inputs may still route into the same core conversation
 - remote text, API, or messaging inputs do not require embodiment handoff by themselves
-- embodiment handoff occurs when presence moves, not merely when another channel speaks
+- embodiment handoff is deliberate; a physical presence observation alone
+  never moves, wakes, or interrupts the companion
 
 ### 6.11 Subagent
 

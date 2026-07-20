@@ -1054,6 +1054,8 @@ export interface VoiceHandleMessageResult {
   attachments?: Attachment[];
   model: string;
   durationMs: number;
+  /** Structured silence outcome; never inferred from prose. */
+  disposition?: 'decline' | 'no_op';
 }
 
 export interface VoiceStreamMetadata {

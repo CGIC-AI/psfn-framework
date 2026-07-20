@@ -240,6 +240,8 @@ export interface ApiChatCompletionRpcSuccess {
     inputTokens: number;
     outputTokens: number;
     noReply?: IntentionalNoReplyMetadata;
+    /** Gateway-authored deterministic silence; never attributed to a companion choice. */
+    disposition?: 'no_op';
   };
 }
 
@@ -331,4 +333,13 @@ export interface ApiServerRuntime {
   handleHealth(): Promise<ApiHealthRpcResult>;
   handleTelemetryIngest(event: ExternalTelemetryEvent): Promise<ApiTelemetryIngestRpcResult>;
   handleChatCompletion(input: ApiRuntimeChatRequest): Promise<ApiChatCompletionRpcResult>;
+}
+
+export interface SatelliteResponseEligibilityRpcParams {
+  canonicalContactId: string;
+  channelId: string;
+}
+
+export interface SatelliteResponseEligibilityRpcResult {
+  fatigueAllows: boolean;
 }

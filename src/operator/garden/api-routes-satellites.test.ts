@@ -72,13 +72,22 @@ describe('satellite registry admin API route', () => {
     const satelliteRegistry = parseSatelliteRegistryConfig({
       schemaVersion: 1,
       enabled: true,
+      productivityCompanionId: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd',
       satellites: [
         {
           satelliteId: 'amica',
           displayName: 'Amica',
           mobility: 'portable',
           staticLocationLabel: 'Live test desk',
-          companionId: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+          sharedDevice: {
+            primaryCompanionId: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+            observationRecipients: [{
+              companionId: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd',
+              scopes: ['presence'],
+            }],
+            emanationMemberIds: ['cccccccc-cccc-4ccc-8ccc-cccccccccccc'],
+            responseLease: { durationMs: 5_000, activeConversationTtlMs: 60_000 },
+          },
           endpoints: [
             {
               endpointId: 'amica-browser',
@@ -119,13 +128,21 @@ describe('satellite registry admin API route', () => {
       satelliteCount: 1,
       endpointCount: 1,
       liveObservationStatus: 'not_implemented',
+      productivityCompanionId: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd',
       satellites: [
         {
           satelliteId: 'amica',
           displayName: 'Amica',
           mobility: 'portable',
           staticLocationLabel: 'Live test desk',
-          companionId: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+          sharedDevice: {
+            primaryCompanionId: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+            observationRecipients: [{
+              companionId: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd',
+              scopes: ['presence'],
+            }],
+            emanationMemberIds: ['cccccccc-cccc-4ccc-8ccc-cccccccccccc'],
+          },
           endpoints: [
             {
               endpointId: 'amica-browser',

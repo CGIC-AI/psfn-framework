@@ -83,6 +83,7 @@ export interface GatewayPrivilegedCore {
      * approval-grant authority inside the gateway server.
      */
     shardApprovalWorkloads?: ShardWorkloadLifecycleRegistryPort;
+    sharedSatelliteQuietHoursAllows?: (nowMs: number) => boolean;
   }): GatewayServer;
 }
 
@@ -209,6 +210,7 @@ export async function buildGatewayPrivilegedCore(
       welfareGrantVerifier,
       contactLifecycleAuthority,
       shardApprovalWorkloads,
+      sharedSatelliteQuietHoursAllows,
     }) => new GatewayServer({
       ...(discordAccountDocks ? { discordAccountDocks } : {}),
       ...(companionChannels ? { companionChannels } : {}),
@@ -217,6 +219,7 @@ export async function buildGatewayPrivilegedCore(
       ...(welfareGrantVerifier ? { welfareGrantVerifier } : {}),
       ...(contactLifecycleAuthority ? { contactLifecycleAuthority } : {}),
       ...(shardApprovalWorkloads ? { shardApprovalWorkloads } : {}),
+      ...(sharedSatelliteQuietHoursAllows ? { sharedSatelliteQuietHoursAllows } : {}),
       socketPath: input.bootstrap.socketPath,
       companionId: resolveCoreCompanionIdFromConfig(input.config),
       gatewayRpcEndpoint: input.bootstrap.gatewayRpcEndpoint,

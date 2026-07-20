@@ -94,7 +94,12 @@ function satelliteRegistryOwnedBy(companionId: string): SatelliteRegistryConfig 
     ...SATELLITE_TEST_REGISTRY,
     satellites: SATELLITE_TEST_REGISTRY.satellites.map(satellite => ({
       ...satellite,
-      companionId: owner,
+      sharedDevice: {
+        primaryCompanionId: owner,
+        observationRecipients: [{ companionId: owner, scopes: ['presence'] }],
+        emanationMemberIds: [owner],
+        responseLease: { durationMs: 5_000, activeConversationTtlMs: 60_000 },
+      },
     })),
   };
 }
@@ -2815,7 +2820,9 @@ describe('ApiServer with auth', () => {
     expect((await sendSatelliteTurn('owner-a')).status).toBe(200);
     currentRegistry = satelliteRegistryOwnedBy('bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb');
     expect((await sendSatelliteTurn('owner-b')).status).toBe(200);
-    expect(receivedMessages.map(message => message.routing?.satellite?.companionId)).toEqual([
+    expect(receivedMessages.map(
+      message => message.routing?.satellite?.sharedDevice?.primaryCompanionId,
+    )).toEqual([
       'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
       'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
     ]);

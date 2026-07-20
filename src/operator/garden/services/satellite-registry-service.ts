@@ -31,6 +31,9 @@ export function buildAdminSatelliteRegistryView(
   return {
     schemaVersion: 1,
     enabled: registry?.enabled ?? false,
+    ...(registry?.productivityCompanionId
+      ? { productivityCompanionId: registry.productivityCompanionId }
+      : {}),
     satelliteCount: satellites.length,
     endpointCount,
     liveObservationStatus: 'not_implemented',
@@ -40,7 +43,7 @@ export function buildAdminSatelliteRegistryView(
       displayName: satellite.displayName,
       mobility: satellite.mobility,
       ...(satellite.staticLocationLabel ? { staticLocationLabel: satellite.staticLocationLabel } : {}),
-      ...(satellite.companionId ? { companionId: satellite.companionId } : {}),
+      ...(satellite.sharedDevice ? { sharedDevice: satellite.sharedDevice } : {}),
       endpoints: satellite.endpoints.map(endpoint => ({
         endpointId: endpoint.endpointId,
         displayName: endpoint.displayName,

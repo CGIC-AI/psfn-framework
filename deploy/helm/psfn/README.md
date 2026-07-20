@@ -6,7 +6,7 @@ component ordering and operator-visible exposure changes; this README remains
 the chart value and topology reference.
 
 This chart renders the PSFN Kubernetes/k3s cluster topology. The default roster
-contains one companion; larger fleets use the same values shape with more
+contains one companion; larger clusters use the same values shape with more
 `fleet.companions` entries:
 
 - gateway Deployment and the sole privileged browser Service/Ingress

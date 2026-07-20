@@ -123,6 +123,8 @@ jobs:
 
       - run: npm ci
       - run: npm run verify:typecheck-baseline
+        env:
+          NODE_OPTIONS: --max-old-space-size=4096
 
   repository:
     name: Repository contracts

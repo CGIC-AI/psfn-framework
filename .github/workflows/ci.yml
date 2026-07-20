@@ -179,10 +179,45 @@ jobs:
       - run: npm ci
       - run: npm test -- --shard=${{ matrix.shard }}/4
 
+  semgrep:
+    name: Semgrep
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Check out exact change head
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          fetch-depth: 0
+          ref: ${{ env.HEAD_SHA }}
+
+      - name: Test committed Semgrep rules
+        run: bash scripts/ci/run-semgrep.sh test
+
+      - name: Scan pull request changes
+        if: github.event_name == 'pull_request'
+        env:
+          SEMGREP_SARIF_OUTPUT: semgrep.sarif
+        run: bash scripts/ci/run-semgrep.sh diff "$BASE_SHA"
+
+      - name: Scan full pushed revision
+        if: github.event_name != 'pull_request'
+        env:
+          SEMGREP_SARIF_OUTPUT: semgrep.sarif
+        run: bash scripts/ci/run-semgrep.sh full
+
+      - name: Retain Semgrep SARIF
+        if: always() && hashFiles('semgrep.sarif') != ''
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: semgrep-sarif-${{ github.run_id }}-${{ github.run_attempt }}
+          path: semgrep.sarif
+          if-no-files-found: error
+          retention-days: 14
+
   ci-required:
     name: ci-required
     if: always()
-    needs: [change-budget, lint, build, repository, test]
+    needs: [change-budget, lint, build, repository, test, semgrep]
     runs-on: ubuntu-24.04
     timeout-minutes: 2
     steps:
@@ -193,6 +228,7 @@ jobs:
           BUILD_RESULT: ${{ needs.build.result }}
           REPOSITORY_RESULT: ${{ needs.repository.result }}
           TEST_RESULT: ${{ needs.test.result }}
+          SEMGREP_RESULT: ${{ needs.semgrep.result }}
         run: |
           results=(
             "$CHANGE_BUDGET_RESULT"
@@ -200,6 +236,7 @@ jobs:
             "$BUILD_RESULT"
             "$REPOSITORY_RESULT"
             "$TEST_RESULT"
+            "$SEMGREP_RESULT"
           )
           for result in "${results[@]}"; do
             if [[ "$result" != "success" ]]; then

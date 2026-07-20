@@ -63,7 +63,8 @@ function migrationEnvironment(input) {
     PSFN_TEMP_DIR: join(input.runtimeRoot, 'tmp'),
     BACKUP_ROOT_DIR: join(input.runtimeRoot, 'backups'),
     CONFIG_DIR: configDir,
-    PSFN_MULTI_COMPANION: 'true',
+    // Topology is derived from companions.json presence by the migrator, not the
+    // retired PSFN_MULTI_COMPANION flag; the fixtures always write companions.json.
     PSFN_FLEET_AUTH: 'false',
     DATA_DIR: '',
   };

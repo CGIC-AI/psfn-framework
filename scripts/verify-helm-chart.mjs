@@ -198,14 +198,13 @@ function ownerMigrationRenderArgs(companions = [
     mountPath: '/runtime/companions/two',
     expectedIdentitySha256: '2'.repeat(64),
   },
-], multiCompanion = true, approvals = {
+], approvals = {
   'charge-policy.json': 'a'.repeat(64),
   'skills.json': 'b'.repeat(64),
 }) {
   return [
     '--set', 'ownerMigration.required=true',
     '--set', 'ownerMigration.enabled=true',
-    '--set', `ownerMigration.multiCompanion=${multiCompanion}`,
     '--set-string', 'ownerMigration.systemDataClaim=owner-system',
     '--set-string', 'ownerMigration.backupsClaim=owner-backups',
     '--set-json', `ownerMigration.approvals=${JSON.stringify(approvals)}`,
@@ -387,7 +386,7 @@ const singleOwnerUpgradeRendered = render(ownerMigrationRenderArgs([
     mountPath: '/runtime/companions/11111111-1111-4111-8111-111111111111',
     expectedIdentitySha256: '1'.repeat(64),
   },
-], false));
+]));
 const singleOwnerUpgradeJob = parseAllDocuments(singleOwnerUpgradeRendered)
   .map(document => document.toJS())
   .find(document => (
@@ -401,8 +400,8 @@ const singleOwnerEnv = new Map(
   singleOwnerUpgradeJob.spec.template.spec.initContainers[0].env
     .map(entry => [entry.name, entry.value]),
 );
-if (singleOwnerEnv.get('PSFN_MULTI_COMPANION') !== 'false') {
-  throw new Error('single-companion ownerMigration must not impersonate multi-companion topology');
+if (singleOwnerEnv.has('PSFN_MULTI_COMPANION')) {
+  throw new Error('ownerMigration must not set the retired PSFN_MULTI_COMPANION flag; topology is derived from companions.json presence');
 }
 if (singleOwnerEnv.get('COMPANION_ID') !== '11111111-1111-4111-8111-111111111111') {
   throw new Error('single-companion ownerMigration did not bind its explicit companion identity');
@@ -411,7 +410,7 @@ if (singleOwnerUpgradeJob.spec.template.spec.containers.length !== 1) {
   throw new Error('single-companion ownerMigration must render one packaged readiness probe');
 }
 assertRenderFails(
-  ownerMigrationRenderArgs([], false),
+  ownerMigrationRenderArgs([]),
   'ownerMigration.enabled=true requires at least one explicit companion PVC',
 );
 assertRenderFails(
@@ -427,7 +426,7 @@ assertRenderFails(
   'ownerMigration.backupsSubPath must be a safe relative PVC subPath',
 );
 assertRenderFails(
-  ownerMigrationRenderArgs(undefined, true, { 'scheduler.json': 'c'.repeat(64) }),
+  ownerMigrationRenderArgs(undefined, { 'scheduler.json': 'c'.repeat(64) }),
   'ownerMigration.approvals contains an unsupported fleet-migration owner: scheduler.json',
 );
 
@@ -1143,6 +1142,58 @@ assertNotIncludes(
   rendered,
   '/app/config/*.seed.json',
   'owner-file seeding disabled by default (fail closed)',
+);
+
+// Always-fleet deploy shape: every deployment is a fleet of one or more
+// companions enumerated by the mandatory system-owned companions.json manifest;
+// topology is derived from the entry count, not the retired PSFN_MULTI_COMPANION
+// flag. The single-companion (non-fleet) seed init provisions a deterministic
+// one-entry manifest into system-data when absent and fails closed if it is
+// still missing. The manifest write is NOT gated on bootstrap.seedOwnerFiles.
+const singleCompanionSeedCommand = renderedSeedCommand(rendered);
+assertIncludes(
+  singleCompanionSeedCommand,
+  'companions_manifest="/app/system-data/companions.json"',
+  'single-companion seed init resolves the companions.json manifest path',
+);
+assertIncludes(
+  singleCompanionSeedCommand,
+  '"companionId":"11111111-1111-4111-8111-111111111111"',
+  'single-companion seed init provisions a one-entry manifest from runtime.companionId',
+);
+assertIncludes(
+  singleCompanionSeedCommand,
+  'if [ ! -e "$companions_manifest" ]; then',
+  'single-companion seed init writes the manifest only when absent',
+);
+assertIncludes(
+  singleCompanionSeedCommand,
+  'Missing required fleet manifest',
+  'seed init fails closed on a missing fleet manifest',
+);
+// commonEnv must not carry the retired flag for the single-companion topology.
+const singleCompanionGateway = findParsedDocumentByKindName(rendered, 'Deployment', 'psfn-gateway');
+const singleCompanionGatewayEnv = new Map(
+  (singleCompanionGateway?.spec?.template?.spec?.containers?.[0]?.env ?? [])
+    .map(entry => [entry.name, entry.value]),
+);
+if (singleCompanionGatewayEnv.has('PSFN_MULTI_COMPANION')) {
+  throw new Error('single-companion gateway must not set the retired PSFN_MULTI_COMPANION env');
+}
+// When single-companion provisioning is disabled, the seed init must not write
+// the manifest but must still fail closed on its absence (externally provisioned).
+const unprovisionedSeedCommand = renderedSeedCommand(
+  render(['--set', 'bootstrap.provisionSingleCompanionManifest=false']),
+);
+assertNotIncludes(
+  unprovisionedSeedCommand,
+  'if [ ! -e "$companions_manifest" ]; then',
+  'provisionSingleCompanionManifest=false omits the manifest write',
+);
+assertIncludes(
+  unprovisionedSeedCommand,
+  'Missing required fleet manifest',
+  'provisionSingleCompanionManifest=false still fails closed on a missing manifest',
 );
 
 const seededRender = render(['--set', 'bootstrap.seedOwnerFiles=true']);

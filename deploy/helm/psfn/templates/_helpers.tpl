@@ -487,8 +487,9 @@ group: cert-manager.io
 - name: PSFN_RUNTIME_LAYOUT_MODE
   value: {{ .Values.runtime.layoutMode | quote }}
 {{- if .Values.fleet.enabled }}
-- name: PSFN_MULTI_COMPANION
-  value: "true"
+{{- /* Topology is derived from the mandatory companions.json manifest entry
+       count (>1 => multi-companion), never an env flag. The retired
+       PSFN_MULTI_COMPANION variable is intentionally not set. */}}
 - name: PSFN_RUNTIME_ROOT
   value: {{ .Values.fleet.runtimeRoot | quote }}
 - name: COMPANION_PG_SCHEMA
@@ -577,8 +578,8 @@ group: cert-manager.io
   value: {{ .Values.runtime.mode | quote }}
 - name: PSFN_RUNTIME_LAYOUT_MODE
   value: {{ .Values.runtime.layoutMode | quote }}
-- name: PSFN_MULTI_COMPANION
-  value: "true"
+{{- /* Fleet topology is derived from the companions.json manifest, not the
+       retired PSFN_MULTI_COMPANION flag. */}}
 - name: PSFN_FLEET_AUTH
   value: "true"
 - name: PSFN_RUNTIME_ROOT
@@ -704,6 +705,27 @@ group: cert-manager.io
 {{- end -}}
 
 {{/*
+Canonical one-entry companions.json for the single-companion (non-fleet)
+topology. Every PSFN deployment is a fleet of one or more companions enumerated
+by the mandatory system-owned companions.json manifest (there is no retired
+PSFN_MULTI_COMPANION flag; a one-entry manifest is the single-companion shape).
+This renders the deterministic one-entry manifest derived from this release's
+own identity so the non-fleet chart can provision it into system-data. The
+relative companionDataDir/characterCardPath are shape-valid manifest paths; a
+one-entry manifest never binds runtime identity through them (load-config keeps
+single-companion identity on the COMPANION_ID / COMPANION_DATA_DIR env), so they
+mirror the canonical single-companion layout without being re-resolved.
+*/}}
+{{- define "psfn.singleCompanionManifest" -}}
+{{- $entry := dict
+  "companionId" (.Values.runtime.companionId | toString)
+  "companionDataDir" "companion-data"
+  "characterCardPath" "companion-data/companion.json"
+  "postgresSchema" "companion_default" -}}
+{{- dict "companions" (list $entry) | toJson -}}
+{{- end -}}
+
+{{/*
 BEGIN GENERATED PER-COMPANION OWNER FILES
 Source of truth: src/system/config/settings-contract.ts PER_COMPANION_OWNER_FILES.
 Checked by scripts/verify-helm-owner-file-registry.ts; do not edit independently.
@@ -731,6 +753,39 @@ capability-tier.json|scheduler.json|charge-policy.json|skills.json
         {{ .Values.runtime.tempDir }} \
         {{ .Values.runtime.backupsDir }} \
         {{ .Values.runtime.modelCacheDir }}
+
+      # Every PSFN deployment is a fleet of one or more companions enumerated by
+      # the mandatory system-owned companions.json manifest. Topology is derived
+      # from the manifest entry count (no retired PSFN_MULTI_COMPANION flag), so
+      # runtime startup (load-config) fails closed without it.
+      companions_manifest="{{ .Values.runtime.systemDataDir }}/companions.json"
+      {{- if and (not .Values.fleet.enabled) .Values.bootstrap.provisionSingleCompanionManifest }}
+      # Single-companion (one-entry fleet) topology: provision the deterministic
+      # one-entry manifest derived from this release's own identity when absent.
+      # This is chart-owned topology wiring (like the mkdir'd roots and the
+      # starter companion.json card), not mutable runtime policy, so it is not
+      # gated on bootstrap.seedOwnerFiles. Write-when-absent is idempotent and
+      # never overwrites an operator/Garden-edited manifest; an atomic
+      # mktemp+rename keeps concurrent workload inits from racing. Existing
+      # pre-manifest single-companion installs migrate simply by rolling this
+      # chart: the upgrade's init writes the manifest before any runtime process
+      # loads config. Set bootstrap.provisionSingleCompanionManifest=false to
+      # require an externally provisioned manifest (fail-closed if missing).
+      if [ ! -e "$companions_manifest" ]; then
+        manifest_tmp="$(mktemp "${companions_manifest}.tmp.XXXXXX")"
+        printf '%s\n' '{{ include "psfn.singleCompanionManifest" . }}' > "$manifest_tmp"
+        chmod 0600 "$manifest_tmp"
+        mv -f "$manifest_tmp" "$companions_manifest"
+      fi
+      {{- end }}
+      # Fail closed: the manifest must be a regular file before any workload
+      # starts. In the fleet topology (and when single-companion provisioning is
+      # disabled) it must be pre-provisioned onto the system-data root.
+      if [ ! -f "$companions_manifest" ] || [ -L "$companions_manifest" ]; then
+        echo "Missing required fleet manifest: $companions_manifest. Every PSFN deployment is a fleet of one or more companions; provision companions.json (a single-companion deployment is a one-entry manifest)." >&2
+        exit 1
+      fi
+
       migration_dir="{{ .Values.runtime.companionDataDir }}/.owner-migrations"
       mkdir -p "$migration_dir"
 

@@ -61,8 +61,9 @@ spec:
               value: /app/config
             - name: COMPANION_ID
               value: {{ (index .Values.ownerMigration.companions 0).companionId | quote }}
-            - name: PSFN_MULTI_COMPANION
-              value: {{ .Values.ownerMigration.multiCompanion | quote }}
+            {{- /* Topology is derived from companions.json presence by the
+                   migrator (system-owner-fleet-context.ts), not the retired
+                   PSFN_MULTI_COMPANION flag, so it is intentionally not set. */}}
             - name: PSFN_FLEET_AUTH
               value: "false"
             - name: DATA_DIR

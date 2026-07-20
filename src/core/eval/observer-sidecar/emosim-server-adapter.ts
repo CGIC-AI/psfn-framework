@@ -52,8 +52,8 @@ export const EMOSIM_SERVER_ANCHOR_NPC_ARCHETYPE = 'serene_sage' as const;
 /**
  * Minimum spacing between the two session reads. Operator ruling (oth4): the
  * adapter reads at 1 Hz — no sub-second polling regardless of the emo_sim
- * internal tick rate. The server ticks fast on its own wall clock; PSFN samples
- * it once per second, so at least one tick always lands between afterStimulus
+ * internal tick rate. The server ticks fast on its own wall clock; the adapter
+ * samples it once per second, so at least one tick always lands between afterStimulus
  * and afterTick without hammering the API.
  */
 export const EMOSIM_MIN_READ_CADENCE_MS = 1000;

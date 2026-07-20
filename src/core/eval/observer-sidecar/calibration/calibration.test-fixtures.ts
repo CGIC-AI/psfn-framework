@@ -1,5 +1,5 @@
 /**
- * Synthetic calibration fixtures for the observer-eval sidecar (psfn-framework-oth4.4).
+ * Synthetic calibration fixtures for the observer-eval sidecar (oth4.4).
  *
  * These encode the shapes from the "consistent v2 window" audit without any live
  * corpus data (which the sidecar cannot access from here):

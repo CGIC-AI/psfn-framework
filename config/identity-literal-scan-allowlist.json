@@ -907,6 +907,12 @@
       "pattern": "identity-legacy-slug"
     },
     {
+      "path": "src/core/eval/observer-sidecar/projection.ts",
+      "contains": "psfn.observer-sidecar.appraisal-projection.v3",
+      "reason": "Observer sidecar projection v3 retains the project-scoped telemetry protocol namespace; it is not a companion identity default.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
       "path": "src/core/identity/companion-naming.ts",
       "contains": "LEGACY_COMPANION_ID = 'psfn'",
       "reason": "Legacy companion-id migration constant.",

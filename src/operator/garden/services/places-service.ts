@@ -1,8 +1,7 @@
 // ── Garden places/affordances service (S10 Workstream F1) ──
 // Operator-facing READ surface over the places soft-registry (`places.json`)
 // joined to the satellite security registry (`satellites.json`), plus the
-// mutations the location/topology models allow: static place and companion
-// ownership bindings.
+// mutation the location/topology model allows: a static place binding.
 //
 // Read-first: every request reads both owner files fresh from `dataDir` so the
 // view reflects the current on-disk registries (including a just-applied
@@ -11,9 +10,8 @@
 // no biometric payload (biometrics live at the Hub, never in core).
 //
 // Static re-bind is the ONLY path that changes a satellite's `placeId` or
-// `companionId`: there is no runtime auto-rebinding. It fails closed on unknown
-// places/companions and occupied companion ownership, leaving the owner file
-// untouched.
+// There is no runtime auto-rebinding. Shared-device authorities are edited as
+// one governed satellites.json policy, never as a legacy single-owner field.
 
 import {
   loadPlacesRegistryConfig,
@@ -32,11 +30,11 @@ import type {
   SiteConfig,
 } from '../../../shared/contracts/places-registry.js';
 import type {
+  SatelliteSharedDevicePolicy,
   SatelliteMobility,
   SatelliteRegistryConfig,
 } from '../../../shared/contracts/satellite-registry.js';
 import {
-  createCompanionId,
   type CompanionId,
 } from '../../../shared/routing/companion-id.js';
 
@@ -56,7 +54,7 @@ export interface AdminBoundSatelliteView {
   displayName: string;
   mobility: SatelliteMobility;
   staticLocationLabel?: string;
-  companionId?: CompanionId;
+  sharedDevice?: SatelliteSharedDevicePolicy;
 }
 
 export interface AdminPlaceView {
@@ -90,15 +88,12 @@ export interface AdminSatelliteRebindInput {
   satelliteId: string;
   /** Target place, or `null` to clear the binding (unbind). */
   placeId?: string | null;
-  /** Target companion, or `null` to explicitly clear the ownership binding. */
-  companionId?: string | null;
 }
 
 export interface AdminSatelliteRebindResult {
   ok: true;
   satelliteId: string;
   placeId: string | null;
-  companionId: CompanionId | null;
   places: AdminPlacesData;
 }
 
@@ -118,14 +113,14 @@ function toBoundSatelliteView(satellite: {
   displayName: string;
   mobility: SatelliteMobility;
   staticLocationLabel?: string;
-  companionId?: CompanionId;
+  sharedDevice?: SatelliteSharedDevicePolicy;
 }): AdminBoundSatelliteView {
   return {
     satelliteId: satellite.satelliteId,
     displayName: satellite.displayName,
     mobility: satellite.mobility,
     ...(satellite.staticLocationLabel ? { staticLocationLabel: satellite.staticLocationLabel } : {}),
-    ...(satellite.companionId ? { companionId: satellite.companionId } : {}),
+    ...(satellite.sharedDevice ? { sharedDevice: satellite.sharedDevice } : {}),
   };
 }
 
@@ -185,7 +180,7 @@ export function createAdminPlacesService(options: {
   fleetCompanionIds: readonly CompanionId[];
 }): AdminPlacesService {
   const { dataDir } = options;
-  const fleetCompanionIds = new Set(options.fleetCompanionIds);
+  void options.fleetCompanionIds;
 
   return {
     async listPlaces(): Promise<AdminPlacesData> {
@@ -203,27 +198,13 @@ export function createAdminPlacesService(options: {
       if (!satelliteId) {
         throw new Error('satelliteId is required to re-bind a satellite');
       }
-      const hasPlaceBinding = input.placeId !== undefined;
-      const hasCompanionBinding = input.companionId !== undefined;
-      if (!hasPlaceBinding && !hasCompanionBinding) {
-        throw new Error('A placeId or companionId binding change is required');
+      if (input.placeId === undefined) {
+        throw new Error('A placeId binding change is required');
       }
-      const targetPlaceId = input.placeId === undefined || input.placeId === null
-        ? input.placeId
-        : input.placeId.trim();
-      if (targetPlaceId !== undefined && targetPlaceId !== null && !targetPlaceId) {
+      const targetPlaceId = input.placeId === null ? null : input.placeId.trim();
+      if (targetPlaceId !== null && !targetPlaceId) {
         throw new Error('placeId must be a non-empty string, or null to unbind');
       }
-      const targetCompanionId = input.companionId === undefined || input.companionId === null
-        ? input.companionId
-        : createCompanionId(input.companionId, 'companionId');
-      if (targetCompanionId && !fleetCompanionIds.has(targetCompanionId)) {
-        throw new Error(
-          `cannot bind satellite "${satelliteId}" to companionId "${targetCompanionId}" `
-          + 'which does not exist in companions.json',
-        );
-      }
-
       const registry = loadSatelliteRegistryConfig(dataDir);
       const satellite = registry.satellites.find((candidate) => candidate.satelliteId === satelliteId);
       if (!satellite) {
@@ -232,7 +213,7 @@ export function createAdminPlacesService(options: {
 
       // Fail closed on an unknown place, mirroring assertSatellitePlaceBindings:
       // the ONLY valid bind target is a place that exists in places.json.
-      if (targetPlaceId !== undefined && targetPlaceId !== null) {
+      if (targetPlaceId !== null) {
         const places = loadPlacesRegistryConfig(dataDir);
         if (!resolvePlaceById(places, targetPlaceId)) {
           throw new Error(
@@ -241,35 +222,15 @@ export function createAdminPlacesService(options: {
         }
       }
 
-      if (targetCompanionId
-        && satellite.companionId
-        && satellite.companionId !== targetCompanionId) {
-        throw new Error(
-          `satellite "${satelliteId}" is already bound to companionId "${satellite.companionId}"; `
-          + 'explicitly unbind it before assigning another companion',
-        );
-      }
-
       const nextRegistry: SatelliteRegistryConfig = {
         ...registry,
         satellites: registry.satellites.map((candidate) => {
           if (candidate.satelliteId !== satelliteId) return candidate;
-          let next = candidate;
-          if (hasPlaceBinding) {
-            const { placeId: _dropPlaceId, ...withoutPlaceId } = next;
-            void _dropPlaceId;
-            next = targetPlaceId === null
-              ? withoutPlaceId
-              : { ...withoutPlaceId, placeId: targetPlaceId };
-          }
-          if (hasCompanionBinding) {
-            const { companionId: _dropCompanionId, ...withoutCompanionId } = next;
-            void _dropCompanionId;
-            next = targetCompanionId === null
-              ? withoutCompanionId
-              : { ...withoutCompanionId, companionId: targetCompanionId };
-          }
-          return next;
+          const { placeId: _dropPlaceId, ...withoutPlaceId } = candidate;
+          void _dropPlaceId;
+          return targetPlaceId === null
+            ? withoutPlaceId
+            : { ...withoutPlaceId, placeId: targetPlaceId };
         }),
       };
 
@@ -278,10 +239,7 @@ export function createAdminPlacesService(options: {
       return {
         ok: true,
         satelliteId,
-        placeId: hasPlaceBinding ? targetPlaceId ?? null : satellite.placeId ?? null,
-        companionId: hasCompanionBinding
-          ? targetCompanionId ?? null
-          : satellite.companionId ?? null,
+        placeId: targetPlaceId,
         places: buildPlacesData(dataDir),
       };
     },

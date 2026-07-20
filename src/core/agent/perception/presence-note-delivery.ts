@@ -32,6 +32,7 @@ import type { PerceptionEvent, PerceptionEventSink } from './sensor-cognition-br
 export const PERCEPTION_PRESENCE_NOTE_SOURCE = 'perception';
 
 const PRESENCE_TAG = '[Presence]';
+const LOCATION_TAG = '[Location]';
 
 /**
  * Narrow structural sink for delivery. `SessionManager.appendContextSystemNote`
@@ -79,6 +80,11 @@ export function composeDepartureNote(placeDisplayName: string): string {
   return `${PRESENCE_TAG} The ${sanitizePlaceName(placeDisplayName)} is now empty.`;
 }
 
+/** Compose a neutral, minimum-metadata location observation. */
+export function composeLocationObservationNote(placeDisplayName: string): string {
+  return `${LOCATION_TAG} A trusted location observation was received for the ${sanitizePlaceName(placeDisplayName)}.`;
+}
+
 /**
  * A delivery sink that consumes both resolved presences (identity claims) and
  * raw presence detected/cleared events, and delivers context-visible notes.
@@ -114,11 +120,18 @@ export function createPerceptionNoteDeliverer(sink: PerceptionNoteSink): Percept
   }
 
   function handlePerceptionEvent(event: PerceptionEvent): void {
-    // Identity claims are handled through handleResolvedPresence (the .13 seam);
-    // this passthrough seam only carries non-identity presence events.
-    if (event.kind !== 'presence') return;
+    // Identity claims are handled through handleResolvedPresence (the .13 seam).
+    if (event.kind === 'identity_claim') return;
     const { channelId, placeDisplayName } = event;
     if (!channelId) return;
+    if (event.kind === 'location') {
+      sink.appendContextSystemNote(
+        channelId,
+        composeLocationObservationNote(placeDisplayName),
+        PERCEPTION_PRESENCE_NOTE_SOURCE,
+      );
+      return;
+    }
 
     if (event.action === 'detected') {
       // De-dup a flapping sensor: only the transition into occupancy speaks.

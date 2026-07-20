@@ -147,27 +147,84 @@ function exampleRegistry(overrides: Record<string, unknown> = {}) {
 }
 
 describe('satellite registry', () => {
-  it('parses and threads a satellite companion ownership binding into authenticated claims', () => {
-    const companionId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
-    const registry = exampleRegistry();
-    registry.satellites[0].companionId = companionId;
-
-    const reparsed = parseSatelliteRegistryConfig(registry);
+  it('parses and threads separate shared-device authorities into authenticated claims', () => {
+    const primaryCompanionId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+    const productivityCompanionId = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+    const registry = exampleRegistry({
+      productivityCompanionId,
+      satellites: [{
+        ...exampleRegistry().satellites[0],
+        sharedDevice: {
+          primaryCompanionId,
+          observationRecipients: [
+            { companionId: primaryCompanionId, scopes: ['presence'] },
+            { companionId: productivityCompanionId, scopes: ['presence'] },
+          ],
+          emanationMemberIds: [primaryCompanionId, productivityCompanionId],
+          responseLease: { durationMs: 5_000, activeConversationTtlMs: 60_000 },
+        },
+      }],
+    });
     const result = resolveSatelliteClaim({
-      registry: reparsed,
+      registry,
       principal,
       headers: {
         'x-psfn-satellite-claim-type': 'voice-pi',
         'x-psfn-satellite-id': 'pi-voice',
         'x-psfn-satellite-endpoint-id': 'wyoming-voice',
         'x-psfn-satellite-session-id': 'owned-voice-session',
+        'x-psfn-satellite-addressed-companion-id': productivityCompanionId,
       },
     });
 
     expect(result.ok).toBe(true);
     if (result.ok) {
-      expect(result.value.satellite.companionId).toBe(companionId);
+      expect(result.value.satellite.sharedDevice).toEqual(
+        registry.satellites[0].sharedDevice,
+      );
+      expect(result.value.satellite.addressedCompanionId).toBe(productivityCompanionId);
     }
+  });
+
+  it('rejects legacy companionId and malformed shared-device role sets', () => {
+    const raw = {
+      schemaVersion: 1,
+      enabled: true,
+      satellites: [{
+        ...exampleRegistry().satellites[0],
+        companionId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      }],
+    };
+    expect(() => parseSatelliteRegistryConfig(raw)).toThrow(/unknown key.*companionId/i);
+    expect(() => parseSatelliteRegistryConfig({
+      schemaVersion: 1,
+      enabled: true,
+      satellites: [{
+        ...exampleRegistry().satellites[0],
+        sharedDevice: {
+          primaryCompanionId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+          observationRecipients: [],
+          emanationMemberIds: ['bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'],
+          responseLease: { durationMs: 5_000, activeConversationTtlMs: 60_000 },
+        },
+      }],
+    })).toThrow(/must list primaryCompanionId first/i);
+    expect(() => parseSatelliteRegistryConfig({
+      schemaVersion: 1,
+      enabled: true,
+      satellites: [{
+        ...exampleRegistry().satellites[0],
+        sharedDevice: {
+          primaryCompanionId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+          observationRecipients: [{
+            companionId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+            scopes: ['location'],
+          }],
+          emanationMemberIds: ['aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'],
+          responseLease: { durationMs: 5_000, activeConversationTtlMs: 60_000 },
+        },
+      }],
+    })).toThrow(/observation scope "location".*no satellite endpoint permits/i);
   });
 
   it('authorizes touch for synthetic canonical Hub and Waveshare endpoints', () => {

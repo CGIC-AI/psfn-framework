@@ -87,6 +87,7 @@ import {
 import { Scheduler } from '../../core/scheduler/scheduler.js';
 import { createGatewayFleetChargePolicyResolver } from './fleet-charge-policy-resolver.js';
 import { parseVerifiedDiscordContactAuthoritySnapshot } from '../../shared/contracts/contact-authority-snapshot.js';
+import { evaluateProactiveOutboundTimeGate } from '../../core/intention/proactive-time-gate.js';
 
 const log = createComponentLogger('Gateway');
 
@@ -504,6 +505,10 @@ async function main(): Promise<void> {
     ...(companionChannelLane ? { companionChannels: companionChannelLane } : {}),
     ...(icpAutonomyStore ? { icpAutonomyStore } : {}),
     ...(icpInitiationPolicyAuthority ? { icpInitiationPolicyAuthority } : {}),
+    sharedSatelliteQuietHoursAllows: nowMs => evaluateProactiveOutboundTimeGate({
+      nowMs,
+      quietHours: startupHydration.schedulerConfig.episodicProcessing,
+    }).allowed,
     ...(welfareGrantVerifier ? { welfareGrantVerifier } : {}),
     shardApprovalWorkloads: shardWorkloadRegistry,
     ...(fleetAuthPersistence?.contactLifecycleAuthority

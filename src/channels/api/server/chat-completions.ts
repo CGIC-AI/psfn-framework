@@ -114,7 +114,8 @@ interface IdentityClaimHeaders {
 function isNoReplyRuntimeCompletion(
   response: ApiChatCompletionRpcSuccess['response'],
 ): boolean {
-  return response.noReply?.disposition === 'intentional_no_reply';
+  return response.noReply?.disposition === 'intentional_no_reply'
+    || response.disposition === 'no_op';
 }
 
 export interface ApiChatCompletionsHandlerConfig {

@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { ResolvedPresence } from './identity-claim-resolver.js';
 import type {
   IdentityClaimPerceptionEvent,
+  LocationPerceptionEvent,
   PresencePerceptionEvent,
 } from './sensor-cognition-bridge.js';
 import {
@@ -9,9 +10,28 @@ import {
   composeAnonymousPresenceNote,
   composeDepartureNote,
   composeKnownArrivalNote,
+  composeLocationObservationNote,
   createPerceptionNoteDeliverer,
   type PerceptionNoteSink,
 } from './presence-note-delivery.js';
+
+function locationEvent(): LocationPerceptionEvent {
+  return {
+    kind: 'location',
+    action: 'observed',
+    eventId: 'evt.location.1',
+    rawEventType: 'external.telemetry.status',
+    source: 'sat.kitchen',
+    occurredAt: '2026-07-08T00:00:00.000Z',
+    receivedAt: '2026-07-08T00:00:00.010Z',
+    scope: 'location',
+    satelliteId: 'sat.kitchen',
+    siteId: 'site.home',
+    placeId: 'place.kitchen',
+    placeDisplayName: 'Kitchen',
+    channelId: 'satellite-observation:sat.kitchen',
+  };
+}
 
 function identityClaimEvent(
   overrides: Partial<IdentityClaimPerceptionEvent> = {},
@@ -193,6 +213,17 @@ describe('createPerceptionNoteDeliverer — resolved presences', () => {
 });
 
 describe('createPerceptionNoteDeliverer — presence detected/cleared', () => {
+  it('delivers a neutral location observation without movement authority', () => {
+    const sink = { appendContextSystemNote: vi.fn() };
+
+    createPerceptionNoteDeliverer(sink).handlePerceptionEvent(locationEvent());
+
+    expect(sink.appendContextSystemNote).toHaveBeenCalledWith(
+      'satellite-observation:sat.kitchen',
+      composeLocationObservationNote('Kitchen'),
+      PERCEPTION_PRESENCE_NOTE_SOURCE,
+    );
+  });
   it('delivers a generic presence note on detected', () => {
     const { sink, calls } = noteSink();
     void createPerceptionNoteDeliverer(sink).handlePerceptionEvent(presenceEvent());

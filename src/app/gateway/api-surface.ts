@@ -540,6 +540,10 @@ export async function startOptionalGatewayApiServer(
   });
   const gatewayApiRuntime = new GatewayApiRuntime(options.gateway, {
     chatRequestTimeoutMs: computeGatewayChatRequestTimeoutMs(GATEWAY_API_REQUEST_TIMEOUT_MS),
+    satelliteRegistryProvider: options.satelliteRegistryProvider,
+    observationAudit: async observation => {
+      await options.gateway.recordSharedSatelliteObservationAudit(observation);
+    },
   });
   const activeCompanionUiInteractions = new Map<string, AbortController>();
   const companionUiWebSocket = fleetAuthBootstrapOnly

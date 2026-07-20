@@ -119,7 +119,7 @@ import { getObserverEvalSidecarHealthSnapshot } from '../../core/eval/observer-s
 import { createSensorCognitionBridge } from '../../core/agent/perception/sensor-cognition-bridge.js';
 import { createIdentityClaimResolvingSink } from '../../core/agent/perception/identity-claim-resolver.js';
 import { createPerceptionNoteDeliverer } from '../../core/agent/perception/presence-note-delivery.js';
-import { createPresenceFollowSink } from '../../core/agent/perception/presence-follow.js';
+import { createSharedSatellitePresenceSink } from '../../core/agent/perception/presence-follow.js';
 import { HubIdentityEnrollmentService } from '../../core/enrollment/service.js';
 import type { HubIdentityEnrollmentStorePort } from '../../core/enrollment/enrollment-store-port.js';
 import {
@@ -130,6 +130,7 @@ import { icpTargetChannelInitiationCommand } from './icp-target-channel-command.
 import type { BackgroundWorkStorePort } from '../../core/agent/background-work/store-port.js';
 import type { BackgroundWorkRuntimeTuning } from '../../core/agent/background-work/config.js';
 import type { BackgroundWorkWelfarePolicy } from '../../core/agent/background-work/store-port.js';
+import { createCompanionId } from '../../shared/routing/companion-id.js';
 
 const log = createComponentLogger('AgentCoreRuntime');
 
@@ -566,19 +567,26 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
   // Absent enrollment store leaves the sink a no-op; off/absent registry config
   // leaves the bridge itself inactive.
   const perceptionNoteDeliverer = createPerceptionNoteDeliverer(sessionManager);
-  // Physical conversation-follows-you (vinz.20): resolved presences pass
-  // through the follow decorator BEFORE note delivery — a fresh, trusted
-  // (primary/trusted, human) identity claim at another satellite-bound
-  // physical place auto-hands the emanation off to that satellite. The
-  // companion-presence port is read lazily because the agent entrypoint wires
-  // it after this composition; null (single-companion / flag-off) keeps the
-  // follow local-only, which is the pre-multi-companion behavior.
-  const presenceFollowSink = createPresenceFollowSink({
+  // Presence is observation, not a summons. Shared satellites deliver only
+  // exact, normalized scopes to configured observation recipients; this path
+  // owns no emanation movement authority.
+  const hasSharedSatellite = options.satelliteRegistryConfig?.satellites.some(
+    satellite => satellite.sharedDevice !== undefined,
+  ) === true;
+  if (hasSharedSatellite && !config.companionId) {
+    throw new Error('Shared-satellite observation routing requires config.companionId');
+  }
+  const sharedSatellitePresenceSink = createSharedSatellitePresenceSink({
     inner: perceptionNoteDeliverer,
-    target: agentLoop,
-    getCompanionPresence: () => agentLoop.companionPresence,
-    ...(options.placesRegistryConfig ? { placesRegistry: options.placesRegistryConfig } : {}),
-    eventBus,
+    ...(config.companionId
+      ? {
+          companionId: createCompanionId(
+            config.companionId,
+            'Shared-satellite observation companionId',
+          ),
+        }
+      : {}),
+    satelliteRegistry: options.satelliteRegistryConfig,
   });
   const perceptionSink = options.hubIdentityEnrollmentStore
     ? createIdentityClaimResolvingSink({
@@ -587,8 +595,8 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
         contactStore,
       ),
       contactStore,
-      presenceSink: presenceFollowSink,
-      inner: perceptionNoteDeliverer,
+      presenceSink: sharedSatellitePresenceSink,
+      inner: sharedSatellitePresenceSink,
     })
     : undefined;
   createSensorCognitionBridge({

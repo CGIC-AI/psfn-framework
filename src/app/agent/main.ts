@@ -65,7 +65,6 @@ import { resolveBeadsToolsEnabled } from '../../boundary/integrations/beads/enab
 import { GatewayBeadsOps } from '../../boundary/integrations/beads/gateway-ops.js';
 import { registerWorldTools } from '../../boundary/integrations/world/runtime-wiring.js';
 import { GatewayWorldOps } from '../../boundary/integrations/world/gateway-ops.js';
-import { registerPresenceLightAutomation } from '../../boundary/integrations/world/presence-light-automation.js';
 import { createBehavioralPatternMemoryPromotionHook } from '../../core/intention/patterns.js';
 import {
   wireShardAndThinkRuntime,
@@ -134,6 +133,7 @@ import { createGatewayOpsPortFromClient } from '../../boundary/gateway/gateway-o
 import {
   bootstrapAgentCoreRuntime,
 } from './core-bootstrap.js';
+import { resolveSharedSatelliteFatigueEligibility } from '../../core/agent/fatigue/shared-satellite-eligibility.js';
 import {
   buildApiHealthChecks,
   resolveAgentApiSurfaceBindings,
@@ -918,14 +918,8 @@ async function main(): Promise<void> {
     allowRequestScopedApprovalTransport: () =>
       getRequestContext()?.channelId?.startsWith('shard:') === true,
   });
-  registerPresenceLightAutomation({
-    eventBus,
-    placesRegistry: placesRegistryConfig,
-    operations: worldOps,
-    enabled: config.capabilityTier === 'autonomous',
-  });
   log.info('World tool enabled', {
-    autonomousLightControl: config.capabilityTier === 'autonomous',
+    autonomousLightControl: false,
   });
 
   // Journal tools — durable markdown notes in the personal workspace.
@@ -1021,6 +1015,14 @@ async function main(): Promise<void> {
   gateway.onShardOwner((params) => Promise.resolve(apiBackend.handleShardOwner(params)));
   gateway.onApiTelemetryIngest((params) => apiBackend.handleTelemetryIngest(params));
   gateway.onApiHealth(() => apiBackend.handleHealth());
+  gateway.onSatelliteResponseEligibility(async ({ canonicalContactId, channelId }) => (
+    resolveSharedSatelliteFatigueEligibility({
+      fatigueLedger: coreRuntime.fatigueLedger,
+      localCompanionId: resolveCoreCompanionIdFromConfig(config),
+      canonicalContactId,
+      channelId,
+    })
+  ));
   gateway.onTurnPerformance(async (event) => {
     await eventBus.emit('agent.turn.performance', event);
   });

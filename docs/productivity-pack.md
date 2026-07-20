@@ -780,11 +780,12 @@ require an upstairs/downstairs application or a separate room task manager.
 
 ### 11.5 Shared physical devices
 
-Current `satellites.json` binds a satellite to at most one companion. The
-current presence-follow path can also move that companion's emanation when a
-trusted partner enters another bound room.
+`satellites.json` now records separate Primary, Observation Recipient, and
+Emanation Member authorities. The retired presence-follow path previously
+moved a companion's emanation when a trusted partner entered another bound
+room.
 
-The target multi-companion policy separates three authorities:
+The implemented multi-companion policy separates three authorities:
 
 1. **Satellite Primary** — the companion that owns the device's default
    relationship and gets the first opportunity to respond.
@@ -813,9 +814,8 @@ partner intent, availability, and device policy allow it. Mere presence
 without an active interaction does not imply that a resting, reading, or
 otherwise occupied companion should follow.
 
-This target rule narrows the currently shipped trust-gated auto-follow behavior.
-Implementation must replace unconditional presence-driven movement rather than
-adding a second competing follow path.
+This rule replaces the former trust-gated auto-follow behavior. Physical
+presence cannot reach a movement or world-control operation.
 
 #### 11.5.2 Primary-first response arbitration
 
@@ -835,7 +835,10 @@ Arbitration happens before a model call when eligibility is answerable from
 Task state, availability, fatigue, quiet hours, active conversation, and
 device policy.
 
-Lease acquisition, decline, timeout, release, and speech outcome are audited.
+Voice and authenticated satellite HTTP responses use the same lease. Fatigue
+is read from the exact companion/partner/channel ledger before acquisition.
+Lease acquisition, decline, timeout, release, speech outcome, and normalized
+observation delivery are persisted through the gateway audit store.
 No companion is fabricated as having chosen to speak when it did not.
 
 Shared-device support must preserve the single-Productivity-Companion
@@ -1384,10 +1387,9 @@ The issue graph already contains related work. Implementation planning should
 inspect and extend it rather than create duplicates:
 
 - `psfn-framework-7ang.8` — phone GPS terminates as Place semantics;
-- `psfn-framework-vinz.20` — currently shipped trust-gated presence auto-follow;
-  shared-device arbitration must narrow rather than duplicate it;
-- `psfn-framework-u4v0` — replace that auto-follow path with shared-satellite
-  observation scopes, emanation allowlists, and primary-first response leases;
+- `psfn-framework-vinz.20` — retired trust-gated presence auto-follow;
+- `psfn-framework-u4v0` — shipped replacement: shared-satellite observation
+  scopes, emanation allowlists, and primary-first response leases;
 - `psfn-framework-vinz.21` — location-scoped concerns/reminders on presence;
 - `psfn-framework-z7qe.8` — derived partner health state from biometric
   summaries;

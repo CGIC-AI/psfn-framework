@@ -145,6 +145,31 @@ describe('sensor cognition bridge normalization', () => {
     });
   });
 
+  it('normalizes minimum location metadata into a typed cognition event', () => {
+    const result = normalize(telemetryEvent({
+      id: 'event-location',
+      scope: 'location',
+      channelId: 'satellite-observation:sat.living',
+      payload: {
+        satelliteId: 'sat.living',
+        placeId: 'place.living',
+      },
+    }));
+
+    expect(result).toMatchObject({
+      ok: true,
+      event: {
+        kind: 'location',
+        action: 'observed',
+        scope: 'location',
+        satelliteId: 'sat.living',
+        placeId: 'place.living',
+        placeDisplayName: 'Living Area',
+        channelId: 'satellite-observation:sat.living',
+      },
+    });
+  });
+
   it('normalizes identity-claim observed events without resolving contacts', () => {
     const result = normalize(telemetryEvent({
       id: 'event-claim',

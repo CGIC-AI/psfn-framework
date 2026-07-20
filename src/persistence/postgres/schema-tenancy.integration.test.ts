@@ -502,6 +502,68 @@ describe('Postgres schema tenancy plumbing', () => {
   );
 
   it(
+    'clears the prior resolution VAD when a resolved PostgreSQL concern is reopened',
+    async () => {
+      const databaseUrl = await freshDatabaseUrl();
+      const pool = createPostgresPool(databaseUrl, {
+        applicationName: 'psfn-concern-reopen-clears-vad',
+        allowExitOnIdle: true,
+        max: 1,
+        schema: 'companion_concern_reopen_vad',
+      });
+      try {
+        await runPostgresMigrations(pool, POSTGRES_INTENTION_MIGRATIONS, {
+          schema: 'companion_concern_reopen_vad',
+        });
+        const runtime = createPostgresIntentionPortsFromPool(pool, {
+          now: () => new Date('2026-07-13T20:00:00.000Z'),
+          idFactory: () => 'concern-reopen-clears-vad',
+        });
+        const created = await runtime.concernStore.create({
+          text: 'Review the reopen VAD hygiene plan.',
+          contactId: 'peer-contact',
+          createdAt: '2026-07-13T20:00:00.000Z',
+          expiresAt: '2026-07-14T20:00:00.000Z',
+        });
+        await runtime.concernStore.resolveConcern(created.id, {
+          outcome: 'Resolved with a captured VAD snapshot.',
+          resolvedAt: '2026-07-13T20:30:00.000Z',
+          resolutionVAD: { valence: 0.42, arousal: -0.18, dominance: 0.27 },
+          evidenceRefs: [{ kind: 'runtime', ref: 'resolved-with-vad' }],
+        });
+        const resolved = await runtime.concernStore.getById(created.id);
+        expect(resolved).toMatchObject({
+          status: 'resolved',
+          resolutionVAD: { valence: 0.42, arousal: -0.18, dominance: 0.27 },
+        });
+
+        // Dedup-reopen must not carry the prior arc's resolution VAD forward:
+        // a reawakened concern is active again and has no resolution snapshot.
+        const reopened = await runtime.concernStore.create({
+          text: 'Review the reopen VAD hygiene plan.',
+          contactId: 'peer-contact',
+          createdAt: '2026-07-13T21:00:00.000Z',
+          expiresAt: '2026-07-14T21:00:00.000Z',
+          reopenResolved: true,
+          evidenceRefs: [{ kind: 'message', ref: 'reopen-clears-vad' }],
+        });
+        expect(reopened.id).toBe(created.id);
+        expect(reopened.resolvedAt).toBeUndefined();
+        expect(reopened.resolutionOutcome).toBeUndefined();
+        expect(reopened.resolutionVAD).toBeUndefined();
+
+        const afterReopen = await runtime.concernStore.getById(created.id);
+        expect(afterReopen?.resolvedAt).toBeUndefined();
+        expect(afterReopen?.resolutionOutcome).toBeUndefined();
+        expect(afterReopen?.resolutionVAD).toBeUndefined();
+      } finally {
+        await pool.end();
+      }
+    },
+    INTEGRATION_TIMEOUT_MS,
+  );
+
+  it(
     'rolls back a stale conflicting reopen after concurrent lineage lands under lock',
     async () => {
       const databaseUrl = await freshDatabaseUrl();

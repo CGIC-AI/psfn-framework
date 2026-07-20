@@ -1061,7 +1061,7 @@ describe('handleMessageForTurn outbound reply hygiene', () => {
     expect(recordAssistantMessage.mock.calls[0]?.[4]).toBe(quoted);
   });
 
-  it('rejects an image-attachment claim when no attachment exists this turn', async () => {
+  it('heals an image-attachment claim without replacing the rest of the reply', async () => {
     const eventBus = new EventBus();
     const buildContext = vi.fn(async () => ({
       systemPrompt: 'System prompt',
@@ -1086,16 +1086,52 @@ describe('handleMessageForTurn outbound reply hygiene', () => {
 
     const response = await handleMessageForTurn(runtime, createMessage('msg-false-image-claim'));
 
-    const correction = 'I could not attach an image because no image tool completed successfully this turn. '
-      + 'I need to call selfie_create or generate_image before saying an image is attached.';
-    expect(response.content).toBe(correction);
+    const healedReply = 'Fresh selfie, exactly like you asked for.';
+    expect(response.content).toBe(healedReply);
+    expect(response.content).not.toContain('I could not attach an image');
     expect(response.attachments).toBeUndefined();
-    expect(recordAssistantMessage.mock.calls[0]?.[4]).toBe(correction);
+    expect(recordAssistantMessage.mock.calls[0]?.[4]).toBe(healedReply);
     expect(runtime.emitTelemetry).toHaveBeenCalledWith(
       'agent.image_attachment_claim.rejected',
       expect.objectContaining({
         channelId: 'ch1',
         requestId: 'msg-false-image-claim',
+      }),
+    );
+  });
+
+  it('uses the correction only when removing the claim leaves no reply', async () => {
+    const eventBus = new EventBus();
+    const buildContext = vi.fn(async () => ({
+      systemPrompt: 'System prompt',
+      messages: [],
+      manifest: makeContextManifestFixture(),
+    }));
+    const recordAssistantMessage = vi.fn(() => 2);
+    const runtime = createRuntime({
+      eventBus,
+      sessionManager: {
+        buildContext,
+      } as unknown as SessionManager,
+      buildContext,
+      scheduleAutoCompactionBetweenTurns: vi.fn(async () => undefined),
+      awaitPendingAutoCompaction: vi.fn(async () => undefined),
+      recordUserMessage: vi.fn(() => 1),
+      recordAssistantMessage,
+    });
+    runtime.extractResponseText = vi.fn(() => 'Your selfie is attached below.');
+
+    const response = await handleMessageForTurn(runtime, createMessage('msg-only-false-image-claim'));
+
+    const correction = 'I could not attach an image because no image tool completed successfully this turn. '
+      + 'I need to call selfie_create or generate_image before saying an image is attached.';
+    expect(response.content).toBe(correction);
+    expect(recordAssistantMessage.mock.calls[0]?.[4]).toBe(correction);
+    expect(runtime.emitTelemetry).toHaveBeenCalledWith(
+      'agent.image_attachment_claim.rejected',
+      expect.objectContaining({
+        channelId: 'ch1',
+        requestId: 'msg-only-false-image-claim',
       }),
     );
   });
@@ -1359,10 +1395,10 @@ describe('handleMessageForTurn generated media delivery', () => {
       (runtime.agent.state.messages as any[]).push({ role: 'user', content: promptMessage.content });
       (runtime.agent.state.messages as any[]).push({
         role: 'assistant',
-        content: 'Here is the recovered image.',
+        content: 'Your selfie is attached below.',
       });
     });
-    runtime.extractResponseText = vi.fn(() => 'Here is the recovered image.');
+    runtime.extractResponseText = vi.fn(() => 'Your selfie is attached below.');
 
     const response = await handleMessageForTurn(runtime, createMessage('msg-missed-tool-result'));
 
@@ -1372,8 +1408,12 @@ describe('handleMessageForTurn generated media delivery', () => {
       name: 'missed-transcript-purr.png',
       localPath,
     };
-    expect(response.content).toBe('Here is the recovered image.');
+    expect(response.content).toBe('Your selfie is attached below.');
     expect(response.attachments).toEqual([expectedAttachment]);
+    expect(runtime.emitTelemetry).not.toHaveBeenCalledWith(
+      'agent.image_attachment_claim.rejected',
+      expect.anything(),
+    );
     expect(runtime.recordToolObservations).toHaveBeenCalledWith(
       expect.objectContaining({ id: 'msg-missed-tool-result' }),
       expect.objectContaining({ sourceChannelId: 'ch1', logicalSessionId: 'ch1' }),

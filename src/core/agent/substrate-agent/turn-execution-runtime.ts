@@ -70,6 +70,7 @@ import {
 } from '../../artifacts/sensitivity-egress.js';
 import type { Attachment } from '../../../shared/contracts/runtime.js';
 import {
+  healMissingImageAttachmentClaim,
   MISSING_IMAGE_ATTACHMENT_CORRECTION,
   rejectsMissingImageAttachmentClaim,
 } from '../../../primitives/images/attachment-claim-guard.js';
@@ -1228,7 +1229,10 @@ export async function handleMessageForTurn(
       responseText: safeResponseText,
       attachmentCount: responseAttachments.length,
     })) {
-      safeResponseText = MISSING_IMAGE_ATTACHMENT_CORRECTION;
+      const healedResponseText = healMissingImageAttachmentClaim(safeResponseText);
+      safeResponseText = healedResponseText.length > 0
+        ? healedResponseText
+        : MISSING_IMAGE_ATTACHMENT_CORRECTION;
       log.warn('Rejected assistant image-attachment claim without a current-turn attachment', {
         channelId: message.channelId,
         turnId,

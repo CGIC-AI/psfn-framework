@@ -113,6 +113,29 @@ function buildScoredMemoryFixture(): ScoredMemory {
 }
 
 describe('renderPromptBlock companion-facing rendering contract', () => {
+  it('frames the current emotional state against a steady baseline without raw telemetry', () => {
+    const rendered = renderPromptBlock(undefined, [], {
+      emotionalSnapshot: {
+        baselineValence: 0.28,
+        moodValence: 0.62,
+        moodDrift: 0.34,
+        moodSamples: 9,
+        lastMoodUpdateEpochMs: Date.now(),
+      },
+    });
+
+    expect(rendered).toContain(
+      '- Steady baseline: positive; baseline disposition: full of love, joyful, and curious.',
+    );
+    expect(rendered).toContain(
+      '- Current state: currently drifting noticeably toward strongly positive.',
+    );
+    expect(rendered).toContain('- Signal confidence: well established; freshness: active-session.');
+    expect(rendered).not.toMatch(/\b[+-]?\d+\.\d+\b/);
+    expect(rendered).not.toContain('Learned signals:');
+    expect(rendered).not.toContain('9');
+  });
+
   it('renders episodic landmark chains without raw span, artifact, or provenance identifiers', () => {
     const rendered = renderPromptBlock(undefined, [], {
       episodicChains: [buildEpisodicChainFixture()],

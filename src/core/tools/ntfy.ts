@@ -751,6 +751,16 @@ export function createNotifyTool(
         });
       }
 
+      if (action === 'send') {
+        const blockedContext = buildContextBlockReason();
+        if (blockedContext) {
+          return textResultWithError(
+            `notify: blocked (send is not allowed from ${blockedContext}).`,
+            true,
+          );
+        }
+      }
+
       try {
         const result = await dispatcher.dispatch(buildNotifyToolRequest({
           ...rawParams,

@@ -143,7 +143,7 @@ For the live running app in this repo, everything operationally authoritative mu
 **Live authority is k3s, not host systemd.** The live companion runs as the k3s
 deployment in namespace `psfn` (agent, gateway, and Garden workloads from
 `deploy/helm/psfn`), with the system-owned owner files mounted at
-`/app/system-data` from the system-data PVC and all persistent state on
+`/runtime/system-data` from the system-data PVC and all persistent state on
 Kubernetes PVCs. The host `psfn.service` systemd unit and its on-host
 `/var/lib/psfn/runtime/system-data` tree are disabled, non-authoritative legacy
 unless an operator explicitly reactivates them. Before any live owner-file or

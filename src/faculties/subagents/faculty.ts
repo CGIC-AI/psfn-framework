@@ -17,7 +17,14 @@ import {
   createWorkerExecutionPolicy,
 } from '../../core/agent/worker-lanes.js';
 import type { RuntimeMode } from '../../core/agent/tool-wiring-validator.js';
-import { normalizeCapabilityTier } from '../../system/capabilities/tiers.js';
+import {
+  normalizeCapabilityTier,
+  resolveTierCapabilityTokens,
+} from '../../system/capabilities/tiers.js';
+import type {
+  CapabilityAccess,
+  CapabilityGrantSnapshot,
+} from '../../system/capabilities/access.js';
 import { resolveCoreCompanionIdFromConfig } from '../../core/identity/companion-runtime.js';
 import {
   createGatewayRoutingEnvelope,
@@ -56,6 +63,10 @@ import {
 import type { SubagentControlPort } from './port.js';
 import { SubagentTaskRegistry } from './task-registry.js';
 import { buildSubagentWorkSpec, createSubagentWorkSpecProvider } from './work-spec.js';
+import {
+  deriveSubagentCapabilityGrant,
+  type DerivedSubagentCapabilityGrant,
+} from './capability-access.js';
 import type {
   SubagentExecutionRequest,
   SubagentExecutionSourceContext,
@@ -160,6 +171,11 @@ export interface SubagentFacultyDeps {
    * restricted writes are denied outright (fail closed), never written.
    */
   foldReviewController?: SubagentFoldReviewPort | null;
+  /**
+   * One atomic read of the parent's authoritative capability owner. Production
+   * composition supplies the same snapshot seam used for shard derivation.
+   */
+  snapshotParentCapabilityGrant?: () => CapabilityGrantSnapshot;
 }
 
 export interface WyomingSubagentDelegationResult {
@@ -182,6 +198,8 @@ interface ActiveSubagentHandle {
   maxTurns: number;
   capabilities: string[];
   requiredCapabilities: string[];
+  capabilityAccess: CapabilityAccess;
+  parentCapabilityTier: CapabilityTier;
   memoryWritePolicy: SubagentMemoryWritePolicy;
   agentLoop: SubstrateAgent | null;
   pendingMessages: SubstrateMessage[];
@@ -270,6 +288,23 @@ export class SubagentFaculty implements SubagentControlPort {
         + `(${missingCapabilities.join(', ')}).`,
       );
     }
+    const capabilityGrant = this.resolveCapabilityGrant(
+      request.memoryWriteElevation
+        ? [...capabilities, 'memory.write']
+        : capabilities,
+    );
+    if (capabilityGrant.deniedExplicitTokens.length > 0) {
+      const deniedTokens = capabilityGrant.deniedExplicitTokens.join(', ');
+      const error = `Subagent capability request denied: "${request.name}" requested `
+        + `${deniedTokens}, which the parent tier "${capabilityGrant.parentTier}" does not grant.`;
+      await this.emitBlockedSpawnHandoff(
+        request,
+        subagentId,
+        'capability_escalation',
+        error,
+      );
+      throw new Error(error);
+    }
 
     // c7d: resolve the memory write-tier ceiling before any registration so a
     // malformed elevation (blank reason) fails the spawn closed.
@@ -339,6 +374,8 @@ export class SubagentFaculty implements SubagentControlPort {
       maxTurns,
       capabilities,
       requiredCapabilities,
+      capabilityAccess: capabilityGrant.access,
+      parentCapabilityTier: capabilityGrant.parentTier,
       memoryWritePolicy,
       agentLoop: null,
       pendingMessages: [],
@@ -456,6 +493,7 @@ export class SubagentFaculty implements SubagentControlPort {
           backgroundWorkDisabled: true,
         },
       );
+      agentLoop.setCapabilityAccess(handle.capabilityAccess);
       handle.agentLoop = agentLoop;
 
       if (this.deps.memoryProvider) {
@@ -473,7 +511,9 @@ export class SubagentFaculty implements SubagentControlPort {
       }
       this.auditTrail?.append('subagent.tools.injected', {
         subagentId: handle.subagentId,
-        tier: this.resolveCapabilityTier(),
+        tier: handle.capabilityAccess.getTier(),
+        parentTier: handle.parentCapabilityTier,
+        grantedCapabilities: [...handle.capabilityAccess.getGrantedTokens()],
         tools: injectedTools.map(tool => tool.name),
       });
 
@@ -1372,6 +1412,32 @@ export class SubagentFaculty implements SubagentControlPort {
 
   private resolveCapabilityTier(): CapabilityTier {
     return normalizeCapabilityTier(this.deps.config.capabilityTier);
+  }
+
+  private resolveCapabilityGrant(capabilities: readonly string[]): DerivedSubagentCapabilityGrant {
+    return deriveSubagentCapabilityGrant(
+      this.snapshotParentCapabilityGrant(),
+      capabilities,
+    );
+  }
+
+  private snapshotParentCapabilityGrant(): CapabilityGrantSnapshot {
+    if (this.deps.snapshotParentCapabilityGrant) {
+      return this.deps.snapshotParentCapabilityGrant();
+    }
+    const tier = this.resolveCapabilityTier();
+    if (tier === 'custom') {
+      throw new Error(
+        'Subagent capability derivation for a custom parent requires an authoritative '
+        + 'snapshotParentCapabilityGrant provider.',
+      );
+    }
+    const grantedTokens = Object.freeze(resolveTierCapabilityTokens(tier));
+    return Object.freeze({
+      tier,
+      customTokens: Object.freeze([]),
+      grantedTokens,
+    });
   }
 
   private resolveAdvertisedCapabilities(tokens: readonly string[] | undefined): string[] {

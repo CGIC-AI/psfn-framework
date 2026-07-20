@@ -44,6 +44,7 @@ import type { ImageRuntimeConfig } from '../../primitives/images/types.js';
 import type { ModelDiscoveryBackend } from '../../primitives/llm/discovery.js';
 import type { GatewayAuditStorePort } from './audit-port.js';
 import type { SessionHmacKeyring } from '../../persistence/journals/journal-utils.js';
+import { resolvePersonalSkillsDir } from '../../persistence/layout.js';
 import { createComponentLogger } from '../../shared/logger.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
 import { registerGatewayMethods } from './methods/index.js';
@@ -812,6 +813,10 @@ export class GatewayServer {
       ...basePolicy,
       workspacePath,
       allowedReadPaths: [workspacePath],
+      protectedWritePaths: [
+        ...(basePolicy.protectedWritePaths ?? []),
+        resolvePersonalSkillsDir(workspacePath),
+      ],
       ...(basePolicy.shellExec
         ? { shellExec: { ...basePolicy.shellExec, allowedCwd: [workspacePath] } }
         : {}),

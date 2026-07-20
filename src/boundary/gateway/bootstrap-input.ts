@@ -38,7 +38,10 @@ import {
 import type { PolicyConfig, WebBackendPolicy } from './policy.js';
 import type { GatewayNtfyConfig } from './ntfy-notifier.js';
 import type { SessionHmacKeyring } from '../../persistence/journals/journal-utils.js';
-import { resolveCompanionStateDir } from '../../persistence/layout.js';
+import {
+  resolveCompanionStateDir,
+  resolvePersonalSkillsDir,
+} from '../../persistence/layout.js';
 import { DEFAULT_DISCORD_START_RETRY_BASE_DELAY_MS,
   DEFAULT_DISCORD_START_RETRY_MAX_DELAY_MS,
   DEFAULT_DISCORD_START_RETRY_MAX_ATTEMPTS,
@@ -314,6 +317,7 @@ function buildGatewayPolicyConfig(
     protectedWritePaths: [
       resolve(resolveCompanionStateDir(config.companionDataDir ?? workspaceRoot)),
       resolve(config.characterCardPath),
+      resolve(resolvePersonalSkillsDir(workspaceRoot)),
     ],
     ...(fullCodebaseReadRoot ? { fullCodebaseReadRoot } : {}),
     urlPolicy: {

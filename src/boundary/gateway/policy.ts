@@ -180,6 +180,25 @@ function resolvePolicyCanonicalPath(normalizedPath: string, isWrite: boolean): s
   });
 }
 
+function resolveProtectedWritePrefixes(
+  policyConfig: PolicyConfig,
+  workspaceRoot: string,
+): string[] | null {
+  const protectedPrefixes: string[] = [];
+  for (const blockedPath of policyConfig.protectedWritePaths ?? []) {
+    const normalizedPrefix = resolveWorkspaceFsPathFromRoot(blockedPath, workspaceRoot);
+    const canonicalPrefix = resolvePolicyCanonicalPath(normalizedPrefix, true);
+    if (canonicalPrefix === null) {
+      return null;
+    }
+    protectedPrefixes.push(normalizedPrefix);
+    if (canonicalPrefix !== normalizedPrefix) {
+      protectedPrefixes.push(canonicalPrefix);
+    }
+  }
+  return protectedPrefixes;
+}
+
 const PRIME_TO_SHARD_SYNC_OPERATIONS: Readonly<Record<ShardSessionMemorySyncClass, readonly ShardSessionMemorySyncOperation[]>> = {
   transcript_fact: ['context_pack_session'],
   derived_memory: ['context_pack_memory'],
@@ -415,10 +434,11 @@ export function evaluatePolicy(ctx: PolicyContext, policyConfig: PolicyConfig): 
             resolveWorkspaceFsPathFromRoot(policyConfig.fullCodebaseReadRoot, workspaceRoot),
           );
         }
-      } else if (policyConfig.protectedWritePaths) {
-        const protectedPrefixes = policyConfig.protectedWritePaths.map((blockedPath) =>
-          resolveWorkspaceFsPathFromRoot(blockedPath, workspaceRoot),
-        );
+      } else {
+        const protectedPrefixes = resolveProtectedWritePrefixes(policyConfig, workspaceRoot);
+        if (protectedPrefixes === null) {
+          return 'DENY';
+        }
         if (isInsideAllowedPaths(normalizedPath, protectedPrefixes)) {
           return 'DENY';
         }
@@ -438,10 +458,11 @@ export function evaluatePolicy(ctx: PolicyContext, policyConfig: PolicyConfig): 
         return 'DENY';
       }
 
-      if (isWrite && policyConfig.protectedWritePaths) {
-        const protectedPrefixes = policyConfig.protectedWritePaths.map((blockedPath) =>
-          resolveWorkspaceFsPathFromRoot(blockedPath, workspaceRoot),
-        );
+      if (isWrite) {
+        const protectedPrefixes = resolveProtectedWritePrefixes(policyConfig, workspaceRoot);
+        if (protectedPrefixes === null) {
+          return 'DENY';
+        }
         if (isInsideAllowedPaths(canonical, protectedPrefixes)) {
           return 'DENY';
         }
@@ -523,6 +544,14 @@ export function evaluatePolicy(ctx: PolicyContext, policyConfig: PolicyConfig): 
         return 'NEEDS_APPROVAL';
       }
 
+      const protectedPrefixes = resolveProtectedWritePrefixes(policyConfig, workspaceRoot);
+      if (protectedPrefixes === null) {
+        return 'DENY';
+      }
+      if (isInsideAllowedPaths(normalizedPath, protectedPrefixes)) {
+        return 'DENY';
+      }
+
       const canonical = resolvePolicyCanonicalPath(normalizedPath, true);
       if (canonical === null) {
         return 'DENY';
@@ -531,13 +560,8 @@ export function evaluatePolicy(ctx: PolicyContext, policyConfig: PolicyConfig): 
         return 'DENY';
       }
 
-      if (policyConfig.protectedWritePaths) {
-        const protectedPrefixes = policyConfig.protectedWritePaths.map((blockedPath) =>
-          resolveWorkspaceFsPathFromRoot(blockedPath, workspaceRoot),
-        );
-        if (isInsideAllowedPaths(canonical, protectedPrefixes)) {
-          return 'DENY';
-        }
+      if (isInsideAllowedPaths(canonical, protectedPrefixes)) {
+        return 'DENY';
       }
 
       return 'ALLOW';

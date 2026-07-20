@@ -131,6 +131,7 @@ describe('resolveGatewayBootstrapInput', () => {
       token: 'ntfy-token',
     });
     expect(bootstrap.policyConfig.workspacePath).toBe('/workspace');
+    expect(bootstrap.policyConfig.protectedWritePaths).toContain('/workspace/skills');
     expect(bootstrap.policyConfig.beads).toEqual({
       enabled: true,
       allowActions: ['ready', 'show', 'create', 'update', 'close', 'sync'],

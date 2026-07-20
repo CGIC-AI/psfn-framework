@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { ContextEnvelope } from '../../system/trust/context-envelope.js';
 import {
+  freeTimeWorkspaceContextFromVisibility,
   FreeTimeWorkspaceResolver,
   resolveFreeTimeWorkspace,
   type FreeTimeProjectRecord,
@@ -262,5 +263,53 @@ describe('FreeTimeWorkspaceResolver (§13.2 resolve half)', () => {
     await expect(resolver.resolve({ kind: 'private_wander' })).resolves.toEqual(
       resolveFreeTimeWorkspace({ kind: 'private_wander' }, deps),
     );
+  });
+});
+
+describe('freeTimeWorkspaceContextFromVisibility (jp36.2.2.2 enum mapping, S11.4)', () => {
+  it('maps self to a private companion-self context with no return target', () => {
+    expect(freeTimeWorkspaceContextFromVisibility('self')).toEqual({ kind: 'private' });
+    expect(freeTimeWorkspaceContextFromVisibility('self', { primaryContactId: 'contact:partner' }))
+      .toEqual({ kind: 'private' });
+  });
+
+  it('maps primary_contact to a private, partner-anchored context when the partner id is known', () => {
+    expect(freeTimeWorkspaceContextFromVisibility('primary_contact', { primaryContactId: 'contact:partner' }))
+      .toEqual({ kind: 'private', returnTarget: { contactId: 'contact:partner' } });
+  });
+
+  it('fails open to private (never broadens) when primary_contact has no resolved partner id', () => {
+    expect(freeTimeWorkspaceContextFromVisibility('primary_contact')).toEqual({ kind: 'private' });
+    expect(freeTimeWorkspaceContextFromVisibility('primary_contact', { primaryContactId: '   ' }))
+      .toEqual({ kind: 'private' });
+  });
+
+  it('maps public to a public-clean publication context', () => {
+    expect(freeTimeWorkspaceContextFromVisibility('public'))
+      .toEqual({ kind: 'publication', mode: 'public_clean' });
+  });
+
+  it('fails closed on an unknown visibility rather than guessing a work context', () => {
+    expect(() => freeTimeWorkspaceContextFromVisibility('broadcast' as never))
+      .toThrow(/unknown companion-owned visibility/);
+  });
+
+  it('preserves partner return eligibility end-to-end through the resolver (acceptance)', () => {
+    // A primary_contact project resolved through the real resolver must yield a
+    // contact_dm return policy targeting the partner — the partner still
+    // receives eligible return context post-migration (§10.6/§10.8).
+    const partnerId = 'contact:partner';
+    const record: FreeTimeProjectRecord = {
+      projectRef: 'project:moon-garden',
+      workspace: freeTimeWorkspaceContextFromVisibility('primary_contact', { primaryContactId: partnerId }),
+    };
+    const deps = makeDeps({ projectDirectory: () => record });
+    const resolved = resolveFreeTimeWorkspace(
+      { kind: 'resume_project', projectRef: 'project:moon-garden' },
+      deps,
+    );
+    expect(resolved.workContext).toEqual({ kind: 'private', returnTarget: { contactId: partnerId } });
+    expect(resolved.returnPolicy).toEqual({ kind: 'contact_dm', contactId: partnerId });
+    expect(resolved.retrievalPolicy.disclosureCeiling).toEqual({ kind: 'companion_self' });
   });
 });

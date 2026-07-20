@@ -35,7 +35,10 @@ import {
 } from '../../system/trust/types.js';
 import type { ContextEnvelope } from '../../system/trust/context-envelope.js';
 import type { DisclosureDestination } from '../cogsec/disclosure/index.js';
-import { normalizeProjectEntityId } from '../../faculties/wiki/personal-project-contracts.js';
+import {
+  normalizeProjectEntityId,
+  type CompanionOwnedVisibility,
+} from '../../faculties/wiki/personal-project-contracts.js';
 import { FREE_TIME_CHANNEL_PREFIX } from './free-time.js';
 
 // ── Shared vocabulary ──
@@ -74,6 +77,54 @@ export type FreeTimeWorkspaceContext =
   | { readonly kind: 'private'; readonly returnTarget?: ContactDmTarget }
   | { readonly kind: 'room'; readonly channelId: string }
   | { readonly kind: 'publication'; readonly mode: PublicationMode; readonly surfaceRef?: string };
+
+/**
+ * Deterministic mapping from a personal project's companion-owned visibility
+ * (`self | primary_contact | public`) to its durable free-time work context
+ * (bible §10.1/§10.3, adjudication S11.4). This is the canonical enum mapping
+ * the one-time privacy migration (jp36.2.2.2) enforces and that manifest v2
+ * (jp36.2.4) / return-note routing (jp36.2.3) will consume through the
+ * `projectDirectory` seam. Kept pure and total.
+ *
+ * - `self`            → private companion-self space, no return target.
+ * - `primary_contact` → private, contact-ANCHORED to the highest-trust partner:
+ *   the work stays companion-self (its disclosure ceiling never broadens past
+ *   self, see {@link privateRetrievalPolicy}) but an ELIGIBLE return note may
+ *   reach that exact partner DM (§10.6/§10.8). The anchor is attached only when
+ *   the partner contact id is known; absent it the context stays private with no
+ *   return — fail-open to private, never broadening.
+ * - `public`          → governed publication work context (public-clean, §10.9).
+ *   The one-time migration contains PRE-EXISTING `public` free-time projects to
+ *   `primary_contact` before mapping (public reach is net-new, governed
+ *   capability), so this branch is reached only for a project a companion
+ *   (re-)declares public through the post-migration governed flow.
+ *
+ * A `room` work context is never derivable from visibility alone (it requires a
+ * bound channel id); room projects are net-new and out of scope for this seam.
+ */
+export function freeTimeWorkspaceContextFromVisibility(
+  visibility: CompanionOwnedVisibility,
+  options: { readonly primaryContactId?: string } = {},
+): FreeTimeWorkspaceContext {
+  switch (visibility) {
+    case 'self':
+      return { kind: 'private' };
+    case 'primary_contact': {
+      const contactId = options.primaryContactId?.trim();
+      return contactId
+        ? { kind: 'private', returnTarget: { contactId } }
+        : { kind: 'private' };
+    }
+    case 'public':
+      return { kind: 'publication', mode: 'public_clean' };
+    default: {
+      // Exhaustiveness guard: fail closed on an unknown visibility rather than
+      // guessing a work context (bible §20.4 missing/unknown lineage fails closed).
+      const unknown = visibility as { toString(): string };
+      throw new Error(`unknown companion-owned visibility for free-time work context: ${String(unknown)}`);
+    }
+  }
+}
 
 /**
  * The retrieval + disclosure ceiling for a workspace (§10.6/§10.7/§10.9/§10.10).

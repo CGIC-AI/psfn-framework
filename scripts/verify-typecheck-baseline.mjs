@@ -317,6 +317,16 @@ function assertMatchingProject(baseline, projectPath) {
   }
 }
 
+function assertMatchingTypeScriptVersion(baseline, installedVersion) {
+  if (baseline.typescriptVersion !== installedVersion) {
+    throw new Error(
+      `Baseline uses TypeScript ${baseline.typescriptVersion}, `
+      + `but installed TypeScript is ${installedVersion}. `
+      + 'Review compiler diagnostics and re-baseline deliberately.',
+    );
+  }
+}
+
 function writeBaseline(baselinePath, baseline) {
   const temporaryPath = `${baselinePath}.${process.pid}.tmp`;
   const errorLines = baseline.errors.map((entry, index) => {
@@ -347,13 +357,27 @@ function writeBaseline(baselinePath, baseline) {
 
 async function main() {
   const options = parseArgs(process.argv.slice(2));
-  const typecheck = await runTypecheck(options.projectPath);
   const baselineExists = existsSync(options.baselinePath);
+  let existingBaseline;
+
+  if (baselineExists) {
+    existingBaseline = readBaseline(options.baselinePath);
+    assertMatchingProject(existingBaseline, options.projectPath);
+  } else if (!options.update) {
+    throw new Error(
+      `Missing ${normalizePath(options.baselinePath)}. `
+      + 'Generate the initial reviewed baseline with --update.',
+    );
+  }
+
+  if (!options.update) {
+    assertMatchingTypeScriptVersion(existingBaseline, readTypeScriptVersion());
+  }
+
+  const typecheck = await runTypecheck(options.projectPath);
 
   if (options.update) {
-    if (baselineExists) {
-      const existingBaseline = readBaseline(options.baselinePath);
-      assertMatchingProject(existingBaseline, options.projectPath);
+    if (existingBaseline) {
       const regressions = findRegressions(existingBaseline, typecheck);
       if (regressions.length > 0) {
         throw new Error(
@@ -372,22 +396,8 @@ async function main() {
     return;
   }
 
-  if (!baselineExists) {
-    throw new Error(
-      `Missing ${normalizePath(options.baselinePath)}. `
-      + 'Generate the initial reviewed baseline with --update.',
-    );
-  }
-
-  const baseline = readBaseline(options.baselinePath);
-  assertMatchingProject(baseline, options.projectPath);
-  if (baseline.typescriptVersion !== typecheck.typescriptVersion) {
-    throw new Error(
-      `Baseline uses TypeScript ${baseline.typescriptVersion}, `
-      + `but installed TypeScript is ${typecheck.typescriptVersion}. `
-      + 'Review compiler diagnostics and re-baseline deliberately.',
-    );
-  }
+  const baseline = existingBaseline;
+  assertMatchingTypeScriptVersion(baseline, typecheck.typescriptVersion);
 
   const regressions = findRegressions(baseline, typecheck);
   if (regressions.length > 0) {

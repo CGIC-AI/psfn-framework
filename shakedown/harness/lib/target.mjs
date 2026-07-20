@@ -78,7 +78,10 @@ export function resolveTarget(env = process.env) {
     isKube,
     chatBaseUrl: requireEnv('PSFN_API_BASE', chatHint),
     adminBaseUrl: requireEnv('PSFN_ADMIN_BASE', adminHint),
-    apiKey: requireEnvOneOf(['API_KEY', 'PSFN_API_KEY'], 'gateway API key'),
+    apiKey: requireEnv(
+      'TESTING_HARNESS_API_KEY',
+      'dedicated testing-harness API key configured by channels.json.api.testingHarness',
+    ),
     adminToken: requireEnvOneOf(['ADMIN_TOKEN', 'PSFN_ADMIN_TOKEN'], 'Garden admin token'),
     postgresUrl: requireEnv('POSTGRES_DATABASE_URL', 'the round Postgres database'),
     tierFlipConfirmTimeoutMs: optionalIntEnv('PSFN_TIER_FLIP_CONFIRM_TIMEOUT_MS', 30000),

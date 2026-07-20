@@ -40,7 +40,7 @@ case "$TARGET" in
 esac
 
 # Common fail-closed requirements for both targets.
-for var in PSFN_MATRIX_DIR POSTGRES_DATABASE_URL API_KEY; do
+for var in PSFN_MATRIX_DIR POSTGRES_DATABASE_URL TESTING_HARNESS_API_KEY; do
   require_env "$var"
 done
 # Target-specific requirements. The kube tier flip goes through the settings API,
@@ -51,6 +51,7 @@ if [[ "$TARGET" == "kube" ]]; then
     require_env "$var"
   done
 else
+  require_env API_KEY
   require_env PSFN_TIER_FILE
 fi
 
@@ -79,16 +80,6 @@ if [[ "$TARGET" == "local" ]]; then
     exit 1
   fi
 fi
-
-derive_api_user_id() {
-  if [[ -n "${PSFN_API_USER_ID:-}" ]]; then
-    printf '%s\n' "$PSFN_API_USER_ID"
-    return
-  fi
-  API_TOKEN="$API_KEY" node -e 'const crypto = require("node:crypto"); const token = process.env.API_TOKEN.trim(); console.log(`api-key-${crypto.createHash("sha256").update(token).digest("hex").slice(0, 24)}`);'
-}
-
-API_USER_ID="$(derive_api_user_id)"
 
 mkdir -p "$MATRIX_DIR"
 
@@ -224,7 +215,6 @@ run_phase() {
   PSFN_SHAKEDOWN_PHASE="$phase" \
   PSFN_CAPABILITY_TIER_EXPECTED="$tier" \
   PSFN_CASE_IDS="$case_ids" \
-  PSFN_API_USER_ID="$API_USER_ID" \
   PSFN_SHAKEDOWN_OUTPUT="$output" \
   node "$HARNESS"
 }

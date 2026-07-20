@@ -60,6 +60,7 @@ function makeEnv(fixtureRoot, repoRoot, roundRoot) {
     ADMIN_PORT: '10154',
     API_CORS_ALLOWLIST: 'http://127.0.0.1:10154',
     API_KEY: 'test-api-key',
+    TESTING_HARNESS_API_KEY: 'dedicated-testing-harness-key',
     ADMIN_TOKEN: 'test-admin-token',
     GATEWAY_SESSION_HMAC_KEY: 'test-hmac-key-that-is-long-enough',
     COMPANION_ID: 'a7100000-0000-4000-8000-000000000001',

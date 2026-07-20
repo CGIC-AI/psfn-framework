@@ -26,7 +26,8 @@ Options:
   --admin-url <url>        Admin server base URL (default: ${DEFAULT_ADMIN_URL})
   --api-base-url <url>     Base URL for API endpoint resolution (default: admin URL)
   --admin-token <token>    Admin bearer token for the bootstrap route
-  --api-key <key>          API bearer token for chat completions when bootstrap does not expose one
+  --testing-harness-api-key <key>
+                           Dedicated testing-harness bearer for chat completions
   --bootstrap-path <path>  Bootstrap path (default: ${DEFAULT_BOOTSTRAP_PATH})
   --report-path <path>     Write a JSON report artifact to this path
   --message <text>         Prompt text for chat completion smoke
@@ -80,7 +81,8 @@ function parseArgs(argv) {
     adminUrl: process.env.ADMIN_URL || DEFAULT_ADMIN_URL,
     apiBaseUrl: process.env.API_BASE_URL || '',
     adminToken: process.env.ADMIN_TOKEN || readEnvValue(liveEnvPath, 'ADMIN_TOKEN'),
-    apiKey: process.env.API_KEY || readEnvValue(liveEnvPath, 'API_KEY'),
+    testingHarnessApiKey: process.env.TESTING_HARNESS_API_KEY
+      || readEnvValue(liveEnvPath, 'TESTING_HARNESS_API_KEY'),
     bootstrapPath: DEFAULT_BOOTSTRAP_PATH,
     reportPath: DEFAULT_REPORT_PATH,
     message: 'Smoke ping from chat cockpit.',
@@ -106,8 +108,8 @@ function parseArgs(argv) {
       case '--admin-token':
         options.adminToken = ensureString(argv[++i], '--admin-token');
         break;
-      case '--api-key':
-        options.apiKey = ensureString(argv[++i], '--api-key');
+      case '--testing-harness-api-key':
+        options.testingHarnessApiKey = ensureString(argv[++i], '--testing-harness-api-key');
         break;
       case '--bootstrap-path':
         options.bootstrapPath = ensureString(argv[++i], '--bootstrap-path');
@@ -250,16 +252,16 @@ async function runChatCompletionCheck(options, bootstrap) {
   const apiBase = options.apiBaseUrl || options.adminUrl;
   const chatCompletionsUrl = resolveUrl(bootstrap.api.chatCompletionsUrl, apiBase);
   info(`Checking chat completions endpoint: ${chatCompletionsUrl}`);
-  const apiKey = bootstrap?.api?.apiKey || options.apiKey;
+  const apiKey = ensureString(
+    options.testingHarnessApiKey,
+    'TESTING_HARNESS_API_KEY or --testing-harness-api-key',
+  );
 
   const response = await fetchWithTimeout(chatCompletionsUrl, {
     method: 'POST',
     headers: {
       Accept: 'application/json',
       'Content-Type': 'application/json',
-      'X-Session-ID': bootstrap.defaultSessionId,
-      'X-User-ID': bootstrap.defaultAuthorId,
-      'X-User-Name': bootstrap.defaultAuthorName,
       ...createAuthHeaders(apiKey),
     },
     body: JSON.stringify({

@@ -23,7 +23,6 @@ import { pgAll, pgScalar, closePool } from './lib/postgres.mjs';
 import * as probe from './lib/probe.mjs';
 import {
   INSECURE_LOCAL_API_PRINCIPAL_ID,
-  deriveApiKeyPrincipalId,
 } from './lib/probe.mjs';
 import {
   resolveTarget,
@@ -108,10 +107,9 @@ const CAPABILITY_COVERAGE_CASE_IDS = Object.freeze([
   'tier_tool_conformance',
 ]);
 
-// Gateway principal id for the run's API key (api-key-<sha256(key)[:24]>),
-// overridable when the sweep pre-derives it. Matches the runtime derivation so
-// turn-record channel ids line up.
-const HARNESS_API_USER_ID = optionalEnv('PSFN_API_USER_ID') ?? deriveApiKeyPrincipalId(API_KEY);
+// The sanctioned harness bearer always resolves to this stable named principal.
+// Caller-selected session/principal identities must not fork the room.
+const HARNESS_API_USER_ID = 'testing-harness';
 
 const DEFAULT_FETCH_TIMEOUT_MS = optionalIntEnv('PSFN_FETCH_TIMEOUT_MS', 120000);
 const DEFAULT_BUSY_RETRY_WINDOW_MS = optionalIntEnv('PSFN_BUSY_RETRY_WINDOW_MS', 120000);

@@ -1,7 +1,6 @@
 import {
   buildChatHeaders,
   chatCompletionsUrl,
-  deriveApiKeyPrincipalId,
   postChatCompletion,
   sleep,
   turnRecordPath,
@@ -130,7 +129,7 @@ export async function proveFirstConversation({
   pollMs = 1_500,
 }) {
   const startedAt = Date.now();
-  const apiUserId = deriveApiKeyPrincipalId(config.apiKey);
+  const apiUserId = 'testing-harness';
   const response = await postChatCompletion({
     apiUrl: chatCompletionsUrl(config.apiBase),
     headers: buildChatHeaders({

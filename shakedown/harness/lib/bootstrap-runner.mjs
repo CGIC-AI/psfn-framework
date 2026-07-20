@@ -133,6 +133,20 @@ function seedOwnerFiles(config) {
       copyFileSync(join(seedDir, `${owner}.seed.json`), target);
     }
   }
+  const channelsPath = join(config.systemDataDir, 'channels.json');
+  if (!existsSync(channelsPath)) {
+    writeFileSync(channelsPath, `${JSON.stringify({
+      api: {
+        testingHarness: {
+          principalId: 'testing-harness',
+          tokenRef: {
+            kind: 'env',
+            envName: 'TESTING_HARNESS_API_KEY',
+          },
+        },
+      },
+    }, null, 2)}\n`);
+  }
 }
 
 async function runCommand(services, config, command, args) {

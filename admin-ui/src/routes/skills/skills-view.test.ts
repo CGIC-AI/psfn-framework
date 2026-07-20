@@ -20,6 +20,23 @@ describe('skills missing-root degradation', () => {
       .toBe('Skills root is missing on disk and cannot contribute skills: /app/skills');
   });
 
+  it('describes an absent managed root as an expected lazy-created directory', () => {
+    const root: SkillRootScan = {
+      path: '/runtime/workspaces/personal/companion-a/skills',
+      absolutePath: '/runtime/workspaces/personal/companion-a/skills',
+      exists: false,
+      skillCount: 0,
+      source: 'custom',
+      precedence: 0,
+    };
+
+    expect(formatMissingSkillRoot(root))
+      .toBe(
+        'Managed skills directory will be created when needed: '
+        + '/runtime/workspaces/personal/companion-a/skills',
+      );
+  });
+
   it('keeps available roots visible when another root is missing', () => {
     const roots: SkillRootScan[] = [
       {

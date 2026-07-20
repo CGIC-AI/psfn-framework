@@ -6,6 +6,9 @@ export interface SkillRootView {
 }
 
 export function formatMissingSkillRoot(root: SkillRootScan): string {
+  if (root.source === 'custom') {
+    return `Managed skills directory will be created when needed: ${root.absolutePath}`;
+  }
   return root.message
     ?? `Skills root is missing on disk and cannot contribute skills: ${root.absolutePath}`;
 }

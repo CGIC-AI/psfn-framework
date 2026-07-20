@@ -757,6 +757,9 @@ export class ApiServer implements ChannelAdapterPort {
       delete req.headers['x-session-id'];
     }
 
+    // The testing-harness bearer deliberately remains available in fleet-auth
+    // mode so sanctioned external probes can reach the one persistent test
+    // room without acquiring a partner or device identity.
     if (this.fleetAuthBootstrapOnly && !testingHarnessPrincipal) {
       if (req.method === 'POST' && path === '/v1/chat/completions') {
         void this.handleFleetHubDeviceChat(req, res, clientCert);

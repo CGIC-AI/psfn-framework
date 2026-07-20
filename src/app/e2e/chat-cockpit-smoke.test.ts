@@ -88,7 +88,7 @@ describe('chat-cockpit smoke harness', () => {
       await execFileAsync('node', [
         scriptPath,
         '--admin-url', adminUrl,
-        '--api-key', 'smoke-secret',
+        '--testing-harness-api-key', 'smoke-secret',
         '--report-path', reportPath,
         '--message', 'Smoke test message.',
       ], {

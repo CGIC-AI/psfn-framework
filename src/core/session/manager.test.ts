@@ -101,7 +101,7 @@ function makeConfig(overrides?: Partial<SubstrateConfig>): SubstrateConfig {
 
 function wireTestContinuity(manager: SessionManager, store: UserContinuityStore): void {
   manager.continuityStore = store;
-  manager.crossChannelContinuity = createUserContinuityPort(store, () => true);
+  manager.crossChannelContinuity = createUserContinuityPort(store, () => [], () => true);
 }
 
 function makeMockLLM(): LLMProviderPort {
@@ -545,7 +545,8 @@ describe('SessionManager', () => {
       expect(ctx.systemPrompt).not.toContain('<time_texture_');
       expect(ctx.systemPrompt).not.toContain('<reconnection_warmth_');
       expect(ctx.systemPrompt).not.toContain('perform affection');
-      expect(ctx.systemPrompt).toContain('The visibility audit is still open in the side thread.');
+      // Live cross-channel rendering is metadata-only (u8iv strip-content).
+      expect(ctx.systemPrompt).not.toContain('The visibility audit is still open in the side thread.');
       expect(ctx.systemPrompt).not.toContain('Open threads');
       const orientationSection = ctx.systemPromptSections.find(section => section.id === 'wake_orientation');
       expect(orientationSection).toBeUndefined();
@@ -635,7 +636,8 @@ describe('SessionManager', () => {
       );
       expect(ctx.systemPrompt).not.toContain('<continuity_anchor');
       expect(ctx.systemPrompt).toContain('<cross_channel_continuity authority="retrieved_context"');
-      expect(ctx.systemPrompt).toContain('Earlier reflection summary');
+      // Live cross-channel rendering is metadata-only (u8iv strip-content).
+      expect(ctx.systemPrompt).not.toContain('Earlier reflection summary');
       expect(ctx.systemPrompt).not.toContain('Heartbeat should stay hidden');
       const orientationSection = ctx.systemPromptSections.find(section => section.id === 'wake_orientation');
       expect(orientationSection).toBeUndefined();
@@ -1876,26 +1878,19 @@ describe('SessionManager', () => {
     mgr.recordUserMessage(futureOwner, 'future owner history', 'user-b', 'User');
     mgr.setActiveContextSession(admittedOwner);
 
-    let markCaptureStarted!: () => void;
-    const captureStarted = new Promise<void>((resolve) => { markCaptureStarted = resolve; });
-    let releaseCapture!: () => void;
-    const captureRelease = new Promise<void>((resolve) => { releaseCapture = resolve; });
-    const captureTurnSessionContext = mgr.captureTurnSessionContext.bind(mgr);
-    vi.spyOn(mgr, 'captureTurnSessionContext').mockImplementationOnce(async (input) => {
-      markCaptureStarted();
-      await captureRelease;
-      return await captureTurnSessionContext(input);
+    // The owner is captured once at buildContext entry; an active-context
+    // switch that lands mid-capture (here, during the tail-window fetch) must
+    // not retarget the in-flight capture onto the newly-active session.
+    vi.spyOn(store, 'fetchSessionTailWindow').mockImplementationOnce(async () => {
+      mgr.setActiveContextSession(futureOwner);
+      return null;
     });
 
-    const contextPromise = mgr.buildContext(
+    const context = await mgr.buildContext(
       `${channelKind}:physical-ingress`,
       'System',
       '',
     );
-    await captureStarted;
-    mgr.setActiveContextSession(futureOwner);
-    releaseCapture();
-    const context = await contextPromise;
 
     expect(context.messages.some(message => message.content.includes('admitted owner history'))).toBe(true);
     expect(context.messages.some(message => message.content.includes('future owner history'))).toBe(false);
@@ -2678,7 +2673,7 @@ describe('SessionManager', () => {
   it('withholds tombstoned origin content before live cross-channel context assembly', async () => {
     const config = makeConfig({ dataDir: dir });
     const mgr = new SessionManager(store, config);
-    mgr.continuityStore = new UserContinuityStore(join(dir, 'continuity-live-redaction'));
+    wireTestContinuity(mgr, new UserContinuityStore(join(dir, 'continuity-live-redaction')));
     const originChannelId = 'api:continuity-origin';
     const consumerChannelId = 'api:continuity-consumer';
     const secret = 'LIVE_CROSS_CHANNEL_SECRET';
@@ -2707,7 +2702,11 @@ describe('SessionManager', () => {
       undefined,
       'partner-1',
     );
-    expect(before.systemPrompt).toContain(secret);
+    // Live cross-channel rendering is metadata-only (u8iv strip-content): the
+    // origin's message text never reaches the live system prompt, even before
+    // any tombstone. Persisted-surface scrubbing is covered separately.
+    expect(before.systemPrompt).not.toContain(secret);
+    expect(before.systemPrompt).toContain('<cross_channel_continuity authority="retrieved_context"');
 
     const caseId = 'cogsec_20260719T000000Z_live_continuity';
     const eventStore = new CogSecEventStore(resolveCogSecEventsPath(dir));
@@ -2735,7 +2734,9 @@ describe('SessionManager', () => {
       'partner-1',
     );
     expect(after.systemPrompt).not.toContain(secret);
-    expect(after.systemPrompt).toContain(REDACTED_SESSION_ENTRY_PLACEHOLDER);
+    // Metadata-only live rendering never emits message text — redacted or not —
+    // so the placeholder does not surface in the live prompt either.
+    expect(after.systemPrompt).not.toContain(REDACTED_SESSION_ENTRY_PLACEHOLDER);
   });
 
   it('reports missing wiring until continuity is explicitly configured', () => {

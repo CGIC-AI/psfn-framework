@@ -171,9 +171,12 @@ export interface SubstrateConfig {
    * single-companion deployment and leaves this false.
    */
   multiCompanion?: boolean;
-  /** Resolved fleet manifest; present only in multi-companion mode. */
+  /**
+   * Resolved fleet manifest. Always present in the operator process and in
+   * Fleet Auth/multi-companion gateway and agent processes.
+   */
   companionFleet?: ResolvedCompanionsFleetConfig;
-  /** Fleet-bound process identity; present only in multi-companion mode. */
+  /** Fleet-bound process identity for an agent/gateway using fleet routing. */
   companionRuntimeIdentity?: CompanionRuntimeIdentity;
   /** Per-companion proof used only during gateway connection authentication. */
   gatewayCompanionAuthToken?: string;

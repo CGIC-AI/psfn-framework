@@ -529,6 +529,21 @@ describe('resolveGatewayMultiCompanionConfig', () => {
       .toThrow(/non-empty resolved companions\.json fleet/);
   });
 
+  it('enables fleet-bound routing for a Fleet Auth roster with one entry', () => {
+    expect(resolveGatewayMultiCompanionConfig({
+      multiCompanion: false,
+      fleetAuth: {} as never,
+      companionFleet: resolvedFleet(['11111111-1111-4111-8111-111111111111']),
+    }, baseChannels(), EMPTY_SATELLITE_REGISTRY)).toMatchObject({
+      enabled: true,
+      fleetCompanionIds: ['11111111-1111-4111-8111-111111111111'],
+      personalWorkspaceByCompanionId: {
+        '11111111-1111-4111-8111-111111111111':
+          '/runtime/workspaces/personal/11111111-1111-4111-8111-111111111111',
+      },
+    });
+  });
+
   it('fails closed when channel routing names a companion outside the fleet', () => {
     const channels = baseChannels();
     channels.api.companionId = '22222222-2222-4222-8222-222222222222';

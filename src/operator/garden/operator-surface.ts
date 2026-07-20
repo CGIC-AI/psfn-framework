@@ -56,9 +56,9 @@ export interface GardenOperatorSurfaceConfig {
   token?: string;
   allowInsecureWithoutToken?: boolean;
   config: SubstrateConfig;
-  /** Fixed single-companion transport. Mutually exclusive with fleetControlPlane. */
+  /** Legacy fixed transport. Mutually exclusive with fleetControlPlane. */
   transportEndpoint?: GardenAdminTransportClientEndpoint;
-  /** Immutable multi-companion admission and target registry. */
+  /** Immutable fleet admission and target registry (including a fleet of one). */
   fleetControlPlane?: FleetGardenControlPlane;
   /** Test seam; production constructs this from fleetControlPlane.targetRegistry(). */
   fleetTransport?: FleetGardenTransportProxyPort;

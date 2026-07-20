@@ -50,24 +50,13 @@ companion-data PVC. This is a fail-closed owner cutover, not a seed operation:
 keep `bootstrap.seedOwnerFiles=false` and use the digest-approved
 `ownerMigration` hook.
 
-The hook supports both chart topologies, and topology is derived from
-`companions.json` presence rather than any flag (the `PSFN_MULTI_COMPANION`
-env variable is retired):
+The hook has one cluster shape. List every companion from `companions.json` with
+its distinct existing claim and canonical mount path. A cluster of one therefore
+lists one entry; a larger cluster lists all entries. Omitting a companion or
+reusing a claim/path fails rendering or migration.
 
-- A single-companion release lists its one existing companion-data PVC. When no
-  `companions.json` is present yet, the migrator synthesizes the one-entry
-  migration cluster from the environment (`COMPANION_ID` plus the split roots) and
-  binds that explicit `companionId`. The migrator does not persist
-  `companions.json`; the runtime manifest is provisioned separately (see
-  [Provision the always-cluster manifest for existing single-companion
-  installs](#provision-the-always-cluster-manifest-for-existing-single-companion-installs)).
-- A multi-companion installation lists every companion from the already-present
-  `companions.json`, with a distinct existing claim and canonical mount path for
-  each. Omitting a companion or reusing a claim/path fails rendering or
-  migration.
-
-For either topology, stop every app process that can read an old owner before
-the pre-upgrade hook runs. Dependencies such as Postgres and Redis stay up:
+Before the hook, stop every app process that can read an old owner. Dependencies
+such as Postgres and Redis stay up:
 
 ```bash
 kubectl -n "$NAMESPACE" scale \
@@ -89,7 +78,7 @@ written before those required blocks existed. Present blocks are never
 replaced; malformed present values fail closed.
 
 Take the whole-install snapshot and use the dry-run migrator's exact SHA-256
-approvals. A single-companion values fragment has this shape (substitute live
+approvals. A cluster-of-one values fragment has this shape (substitute live
 claim names, paths, identity, and digests; never copy the examples):
 
 ```yaml
@@ -139,58 +128,33 @@ quarantined legacy sources remain as recovery evidence. The complete snapshot,
 approval, receipt, retry, and restore procedure is in
 [Existing split clusters with shared per-companion owners](./operations.md#existing-split-clusters-with-shared-per-companion-owners).
 
-### Provision the always-cluster manifest for existing single-companion installs
+### Formalize an existing primary as a cluster tenant
 
-Every PSFN deployment is now a cluster of one or more companions enumerated by the
-mandatory system-owned `companions.json` manifest. Topology is derived from the
-manifest entry count — one entry is the single-companion shape, more than one is
-multi-companion tenancy — and the `PSFN_MULTI_COMPANION` env flag is retired.
-Runtime startup (`load-config`) fails closed with an actionable error if
-`SYSTEM_DATA_DIR/companions.json` is missing or invalid, so an existing
-single-companion install created before the manifest existed has no
-`companions.json` and would refuse to start after the runtime upgrade.
+An install created before cluster values existed becomes a one-entry cluster; it
+does not retain a second chart mode. Before upgrading, choose a lowercase
+RFC-4122 companion ID and map the existing primary into all three authorities:
 
-The chart closes this gap automatically. For the single-companion (non-cluster)
-topology, the `seed-runtime-files` init container provisions a deterministic
-one-entry manifest into `system-data` when absent, derived from this release's
-own `runtime.companionId` and the canonical single-companion layout. This is
-chart-owned topology wiring (like the `mkdir`'d runtime roots and the starter
-`companion.json` card), not mutable runtime policy, so it is provisioned
-independently of `bootstrap.seedOwnerFiles`. Because it runs in the init
-container before any runtime process loads config, an existing single-companion
-install migrates simply by rolling this chart with the fixed image: the
-upgrade's init writes `companions.json` onto the existing `system-data` PVC, and
-the app then boots as a one-entry cluster — byte-identical to the old
-single-companion behavior.
+1. Add one `fleet.companions` entry. Point `companionDataClaim` and
+   `workspaceClaim` at the existing primary PVCs, choose its Postgres schema,
+   and bind both role-proof keys through `authSecret`.
+2. Put the matching one-entry `companions.json` in the system-data PVC. Its
+   companion-data/card paths and Postgres schema must match the Helm entry.
+3. Put the matching roster and credential references in `fleet-auth.json`, and
+   supply every referenced `FLEET_AUTH_*` credential through
+   `fleetAuth.credentialEnv`.
+4. Set the primary `runtime.*` paths to
+   `<fleet.runtimeRoot>/companions/<companion-id>` and
+   `<fleet.runtimeRoot>/workspaces/personal/<companion-id>`. Mount the existing
+   PVCs there; never copy them into new empty claims merely to match the path.
 
-The write is idempotent and fail-closed:
-
-- It only writes when `companions.json` is absent, using an atomic
-  `mktemp`+rename so concurrent gateway/agent/Garden inits cannot race. It never
-  overwrites an operator- or Garden-edited manifest.
-- After the write step, the init container asserts `companions.json` is a
-  regular file and exits non-zero (blocking startup) if it is still missing.
-- Set `bootstrap.provisionSingleCompanionManifest=false` to require an
-  externally provisioned manifest instead. With it disabled, place a valid
-  one-entry `companions.json` on the `system-data` PVC before the upgrade;
-  otherwise the init container fails closed. This is the manual alternative for
-  operators who manage the manifest outside Helm.
-
-No manual step is required for the default (`provisionSingleCompanionManifest=true`)
-path. The migrator that reroots legacy `charge-policy.json`/`skills.json`
-(previous section) still does not persist `companions.json`; the chart owns that
-provisioning. In the multi-companion (`fleet.enabled=true`) topology the manifest
-is always operator-provisioned onto the `system-data` root and the chart never
-writes it; the init container still asserts its presence and fails closed if it
-is missing.
-
-After the upgrade, confirm the manifest landed and the runtime derived the
-single-companion topology:
+The chart does not infer or overwrite either owner file. Missing, mismatched,
+or invalid roster data blocks startup. After provisioning, verify the one-entry
+manifest before the rollout:
 
 ```bash
-kubectl -n "$NAMESPACE" exec deploy/psfn-agent -- sh -c '
-  test -f /app/system-data/companions.json
-  node -e "process.exit(JSON.parse(require(\"fs\").readFileSync(\"/app/system-data/companions.json\")).companions.length === 1 ? 0 : 1)"
+kubectl -n "$NAMESPACE" exec deploy/"${RELEASE}-gateway" -- sh -c '
+  test -f /runtime/system-data/companions.json
+  node -e "process.exit(JSON.parse(require(\"fs\").readFileSync(\"/runtime/system-data/companions.json\")).companions.length === 1 ? 0 : 1)"
 '
 ```
 
@@ -207,8 +171,8 @@ Error: COMPANION_ID must be a lowercase RFC-4122 UUID, got "<legacy-slug>"
 
 Nothing in the runtime mints the UUID — the operator generates it
 (`uuidgen | tr 'A-Z' 'a-z'`) and carries it into the release values. For a
-single-companion deployment the switch is data-safe because nothing durable is
-keyed off the id value:
+cluster-of-one deployment, preserve the existing durable roots while changing
+the identity:
 
 - Postgres stays on the `public` schema (`COMPANION_PG_SCHEMA` is an explicit
   opt-in, never derived from `COMPANION_ID`).
@@ -216,9 +180,8 @@ keyed off the id value:
   integrity HMAC does not bind the companion id.
 - Redis `psfn:session-tail:<companionId>:…` keys embed the old id but are
   rebuildable caches; the journal is the source of truth.
-- Keep `fleet.enabled=false`. Enabling cluster mode switches the data dir to the
-  UUID-derived `<runtimeRoot>/companions/<uuid>` path and orphans the existing
-  companion data.
+- Update the one `fleet.companions` entry and its canonical UUID-derived paths together;
+  never point the release at an empty replacement claim.
 
 The two gateway worker proofs ARE derived from the companion id and must be
 re-derived for the new UUID against the same gateway HMAC keyring:
@@ -267,48 +230,15 @@ rollout can show one benign agent restart if it exhausts its gateway RPC
 connect retries before the gateway is ready; it must recover on the next
 start.
 
-### Choose the Garden administration topology
+### Verify the cluster Garden origin
 
-`fleetAuth.enabled=false` is the normal single-admin topology. Garden requires
-`ADMIN_TOKEN`, and `ingress.garden.enabled=true` exposes it through its own
-Ingress. This is the chart default:
+There is one Garden administration topology. Cluster Auth gates the roster and
+each companion Garden through the canonical gateway HTTPS origin at
+`/companions/<companion-uuid>/garden/`, including when the roster has one
+entry. A separate Garden Ingress, Garden hostPort, and `ADMIN_TOKEN` browser
+path are not upgrade choices.
 
-```bash
-helm upgrade --install "$RELEASE" deploy/helm/psfn \
-  --namespace "$NAMESPACE" \
-  --set fleetAuth.enabled=false \
-  --set ingress.garden.enabled=true \
-  --set-string ingress.garden.host=psfn-garden.example.internal
-```
-
-Use `hostPorts.garden.enabled=true` instead when a single-node deployment needs
-direct node-port access without an Ingress controller. Set
-`hostPorts.garden.hostIP` and, when NetworkPolicy is enabled,
-`hostPorts.garden.sourceCIDRs` to match the intended operator network. In both
-cases, authenticate with `ADMIN_TOKEN`; retrieve or provision it through the
-cluster's normal secret-management path, never logs or shell history.
-
-Set both exposure flags to false when this release should be reachable only by
-port-forward:
-
-```bash
-helm upgrade "$RELEASE" deploy/helm/psfn \
-  --namespace "$NAMESPACE" \
-  --set ingress.garden.enabled=false \
-  --set hostPorts.garden.enabled=false
-kubectl -n "$NAMESPACE" port-forward \
-  --address 127.0.0.1 "svc/${RELEASE}-garden" 10054:10054
-```
-
-`fleetAuth.enabled=true` is the multi-admin/multi-companion topology: one login
-and identity gates backend data across settings and companions instead of
-maintaining separate admin keys. In that mode the chart suppresses the separate
-Garden Ingress and serves authorized Gardens through the configured canonical
-gateway HTTPS origin at `/companions/<companion-uuid>/garden/`. A Garden
-hostPort is invalid in this topology.
-
-Before declaring the upgrade complete, verify the rendered topology matches the
-chosen values:
+Before declaring the upgrade complete, verify the rendered topology:
 
 ```bash
 kubectl -n "$NAMESPACE" get ingress
@@ -361,9 +291,8 @@ in the application image and must not be carried into another cluster.
      --expect-tag <exact-tag> --smoke
    ```
 
-5. Verify Garden through the correct access path for the release's
-   `fleetAuth.enabled`, `ingress.garden.enabled`, and
-   `hostPorts.garden.enabled` state.
+5. Verify Garden through the canonical Cluster Auth gateway origin; a direct
+   Garden Ingress or hostPort is a failed upgrade.
 6. Verify Postgres/pgvector, Redis, owner-file placement, migration receipts,
    and agent `ToolWiringValidator`/`Ready` logs.
 7. Remove the protected temporary values file after the release is verified.
@@ -376,7 +305,7 @@ in the application image and must not be carried into another cluster.
 - A gateway-first welfare skew is an expected degradation to FIFO, not a reason
   to roll agents forward before gateway validation.
 - If Garden access changes, compare the saved Helm exposure values with the
-  chosen single-admin or SSO topology before changing application code.
+  canonical Cluster Auth/sole-gateway topology before changing application code.
 - Roll back only to a revision compatible with the current owner layout and
   sole-browser-origin contract. Restore owner data only from the verified
   backup family described by the migration runbook.

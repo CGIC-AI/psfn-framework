@@ -60,11 +60,9 @@ async function main(): Promise<void> {
   let fleetDirectDatabase: FleetGardenDirectDatabase | undefined;
   let fleetTransport: FleetGardenAdminTransportProxy | undefined;
   let fleetModelUsage: FleetModelUsageService | undefined;
-  if (config.multiCompanion === true) {
-    if (!config.companionFleet || !config.fleetAuthVerifier) {
-      throw new Error(
-        'Fleet Garden startup requires the complete companions registry and Fleet Auth verifier',
-      );
+  if (config.fleetAuthVerifier) {
+    if (!config.companionFleet) {
+      throw new Error('Fleet Garden startup requires the complete companions registry');
     }
     const registry = new FleetGardenTargetRegistry(
       deriveFleetGardenTargets(config.companionFleet, process.env),

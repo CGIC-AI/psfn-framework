@@ -1,6 +1,6 @@
 apiVersion: v2
 name: psfn
-description: PSFN single-companion Kubernetes deployment
+description: PSFN cluster Kubernetes deployment
 type: application
 version: 0.1.0
 appVersion: 0.1.0-kube

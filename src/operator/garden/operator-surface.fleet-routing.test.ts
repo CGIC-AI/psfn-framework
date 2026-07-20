@@ -119,6 +119,18 @@ function config(): SubstrateConfig {
   return {
     multiCompanion: true,
     companionId: COMPANION_A,
+    companionFleet: {
+      persistenceRoot: '/runtime',
+      workspacesRoot: '/runtime/workspaces',
+      sharedWorkspacePath: '/runtime/workspaces/shared',
+      companions: [COMPANION_A, COMPANION_B].map(companionId => ({
+        companionId,
+        companionDataDir: `/runtime/companions/${companionId}`,
+        characterCardPath: `/runtime/companions/${companionId}/companion.json`,
+        personalWorkspacePath: `/runtime/workspaces/personal/${companionId}`,
+        postgresSchema: companionId === COMPANION_A ? 'companion_a' : 'companion_b',
+      })),
+    },
     fleetAuthVerifier: { requestCapabilities: verifierConfig } as SubstrateConfig['fleetAuthVerifier'],
   } as SubstrateConfig;
 }
@@ -274,6 +286,39 @@ describe('GardenOperatorSurface fleet transport routing', () => {
       requestPath: innerTarget,
       body,
     }]);
+  });
+
+  it('uses fleet routing for a one-entry roster', () => {
+    const oneEntryConfig = {
+      ...config(),
+      multiCompanion: false,
+      companionFleet: {
+        ...config().companionFleet!,
+        companions: [config().companionFleet!.companions[0]!],
+      },
+    };
+    const registry = new FleetGardenTargetRegistry([{
+      companionId: COMPANION_A,
+      endpoint: { mode: 'socket', socketPath: '/run/admin-a.sock', timeoutMs: 1_000 },
+    }]);
+    const surface = new GardenOperatorSurface({
+      port: 1,
+      host: '127.0.0.1',
+      config: oneEntryConfig,
+      fleetControlPlane: new FleetGardenControlPlane({
+        registry,
+        verifier: createRequestCapabilityVerifier(verifierConfig),
+        replay: new AtomicRequestCapabilityReplayPort(),
+      }),
+      fleetTransport: {
+        close: callback => callback(),
+        probeAll: async () => undefined,
+        proxyBufferedApiRequest: () => undefined,
+        handleTelemetryUpgrade: () => undefined,
+      },
+    });
+
+    expect(surface).toBeDefined();
   });
 
   it('serves approved direct-database routes in Garden with the admitted companion binding', async () => {

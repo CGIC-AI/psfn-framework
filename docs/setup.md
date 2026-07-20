@@ -184,44 +184,41 @@ Startup verifies the seed-backed owner files before the split runtime comes up. 
 
 Production does not fall back to local/continuous layout. Partial split-root config, overlapping roots, malformed owner files, and mutable settings in `.env` should be fixed directly rather than papered over with compatibility paths.
 
-### Multi-companion (optional)
+### Cluster topology
 
-Multi-companion is an opt-in topology and is off by default. When you enable it,
-these process-wiring env vars come into play (documented in full in
+Every deployment is a cluster. A deployment with one companion has a one-entry
+`companions.json`; adding another companion adds another entry without changing
+the launcher, authentication, Garden, or upgrade model. The process wiring is
+documented in full in
 [`docs/multi-companion.md`](./multi-companion.md) and
-[`docs/operations.md`](./operations.md)):
+[`docs/operations.md`](./operations.md):
 
 - `companions.json` — the mandatory system-owned cluster manifest. Every
   deployment is a cluster of one or more companions, so this owner file is always
-  required (a single-companion deployment is a one-entry manifest); a missing or
-  invalid manifest fails closed at startup. Topology is derived from the entry
-  count, not from any env flag (the retired `PSFN_MULTI_COMPANION` flag no longer
-  exists): one entry is single-companion, more than one is multi-companion
-  tenancy.
-- `PSFN_FLEET_AUTH` — launcher topology hint, required with local
-  multi-companion startup. The one cluster Garden accepts companion-bound Cluster
-  Auth capabilities; the launcher rejects a cluster topology that would fall back
+  required (a cluster of one has one entry); a missing or invalid manifest fails
+  closed at startup. Entry count determines only whether cross-companion
+  tenancy is possible; it never selects a separate deployment path.
+- `PSFN_FLEET_AUTH` — launcher wiring assertion. The one cluster Garden accepts
+  companion-bound Cluster Auth capabilities; the launcher rejects a cluster
+  topology that would fall back
   to shared admin-token authority. Runtime enablement itself is decided solely
   by the presence of the system-owned `fleet-auth.json`: when that file is
   present, cluster auth is enabled and the flag cannot disable it (setting it to
   `0` only produces a loud startup warning); when the file is absent and the
   flag is set to `1`, startup refuses (fail closed) rather than starting
   without authentication.
-  Cluster Auth is cluster-shaped even when the cluster contains one companion: a
-  legacy single-companion deployment must enable the cluster topology and add a
-  system-owned `companions.json` with exactly one entry. That entry supplies a
+  Cluster Auth is required for the cluster Garden even when the cluster contains one
+  companion. The system-owned `companions.json` entry supplies a
   lowercase RFC-4122 UUID `companionId`, manifest-relative `companionDataDir`
   and `characterCardPath`, and a lowercase Postgres schema. Startup does not
   reconstruct this entry from `COMPANION_ID`. If the manifest is absent, it
   fails with the exact error:
 
   ```text
-  Fleet authentication requires companions.json; single-companion deployments must provide a one-entry fleet manifest
+  Fleet authentication requires companions.json; deployments with one companion must provide a one-entry fleet manifest
   ```
-- `COMPANION_PG_SCHEMA` — per-companion Postgres schema for a single agent
-  process. Explicit opt-in, not derived from `COMPANION_ID`; unset means the
-  `public` schema (single-companion). The supervisor launcher sets this per
-  spawned agent from the cluster manifest.
+- `COMPANION_PG_SCHEMA` — per-companion Postgres schema for one agent process.
+  The cluster launcher sets it from the matching manifest entry.
 - `PSFN_RUNTIME_ROOT` — canonical persistence root for manifest-relative
   `companionDataDir` and `characterCardPath`. The cluster resolver emits absolute
   paths beneath this root and rejects traversal or symlink escapes.
@@ -241,12 +238,11 @@ these process-wiring env vars come into play (documented in full in
   token to `.env` under the env var name its account references (for example
   `DISCORD_TOKEN_ARIA`); the token secret stays gateway-owned.
 
-Leave the multi-companion topology variables unset for the default topology.
 The standard launcher derives and injects role-bound gateway authentication
-proofs in both topologies so the isolated session-integrity worker never shares
-the normal agent role. A direct `npm run agent` launch must provide
-`GATEWAY_SESSION_INTEGRITY_AUTH_TOKEN`; in multi-companion mode it must also
-provide the exact cluster tuple and `GATEWAY_COMPANION_AUTH_TOKEN`.
+proofs for every cluster agent so the isolated session-integrity worker never
+shares the normal agent role. A direct `npm run agent` launch must provide the
+exact cluster tuple, `GATEWAY_SESSION_INTEGRITY_AUTH_TOKEN`, and
+`GATEWAY_COMPANION_AUTH_TOKEN`.
 
 If an existing split cluster still has any registered per-companion owner under
 `SYSTEM_DATA_DIR`—including `scheduler.json`, `capability-tier.json`,
@@ -268,7 +264,7 @@ retries preserve rather than delete unbound or replaced crash remnants. Do not
 remove the quarantine or retained staging artifacts manually; they are part of
 deterministic receipt verification and retry.
 
-For a multi-release Helm upgrade, run that command once from the repo-owned
+For a cluster Helm upgrade, run that command once from the repo-owned
 maintenance environment with all manifest PVC roots mounted, then require
 `npm run preflight:startup-owner-files` to pass before upgrading any individual
 release. Keep `bootstrap.seedOwnerFiles=false` throughout the upgrade. Rolling
@@ -276,7 +272,7 @@ back to a pre-routing release requires restoring the verified pre-migration
 backup of system-data and every companion-data root together, never copying a
 quarantined shared owner into selected companions.
 
-### Multi-companion workspaces
+### Cluster workspaces
 
 Do not set per-companion workspace paths in `companions.json`. The cluster
 resolver derives `<runtime-root>/workspaces/personal/<companion-uuid>` and the
@@ -352,17 +348,14 @@ API_KEY=...
 ADMIN_TRANSPORT_SOCKET=./runtime/sockets/garden-admin.sock
 ```
 
-With cluster auth disabled, `admin-ui/build` is served from the internal or
-loopback admin host root, for example `http://127.0.0.1:3001/`. Multi-companion
-local startup still runs exactly one Garden on this cluster-level listener: the
-launcher starts all companion agents, waits for every canonical
-`garden-admin-<companion-uuid>.sock`, and only then starts Garden. With cluster
-auth enabled, the same Garden is reachable only through
-`/companions/<companion-uuid>/garden/` on the canonical gateway HTTPS origin;
-`ADMIN_TOKEN` and `ADMIN_ALLOW_INSECURE` are rejected on that operator process.
-The repo launcher also scrubs those legacy variables from the cluster-auth
-gateway and keeps proxy trust gateway-owned; child agent/operator allowlists do
-not inherit them.
+Local startup runs exactly one cluster Garden: the launcher starts every
+registered companion agent (including a one-entry roster), waits for every
+canonical `garden-admin-<companion-uuid>.sock`, and only then starts Garden.
+Garden is reachable only through `/companions/<companion-uuid>/garden/` on the
+canonical gateway HTTPS origin. `ADMIN_TOKEN` and `ADMIN_ALLOW_INSECURE` are
+rejected on that operator process. The repo launcher scrubs those retired
+variables from the gateway and keeps proxy trust gateway-owned; child
+agent/operator allowlists do not inherit them.
 
 ### Discord voice
 

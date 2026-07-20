@@ -19,7 +19,7 @@ export interface ConfiguredLocalCompanionFleetRuntime {
 /** Pure fleet resolution shared by the plan and post-lock provisioning steps. */
 export function resolveConfiguredCompanionFleet(
   env: NodeJS.ProcessEnv,
-): ResolvedCompanionsFleetConfig | null {
+): ResolvedCompanionsFleetConfig {
   const runtimePathLayout = resolveRuntimePathLayout({
     mode: env.PSFN_RUNTIME_LAYOUT_MODE,
     nodeEnv: env.NODE_ENV,
@@ -33,15 +33,12 @@ export function resolveConfiguredCompanionFleet(
     backupsDir: env.BACKUP_ROOT_DIR,
   });
   // The companions.json manifest is mandatory (resolveCompanionFleet fails
-  // closed if it is missing). A one-entry manifest is the single-companion
-  // topology: the shell launcher runs one gateway+agent directly without the
-  // fleet supervisor, so signal that with null. Only a multi-entry fleet needs
-  // the local fleet target registry.
+  // closed if it is missing). One and many entries use this same resolved fleet
+  // contract and the same supervisor/Garden path.
   const rawFleet = resolveCompanionFleet({
     dataDir: runtimePathLayout.systemDataDir,
     seedDir: env.CONFIG_DIR?.trim() ? env.CONFIG_DIR : undefined,
   });
-  if (rawFleet.companions.length <= 1) return null;
   return resolveCompanionFleetPaths(rawFleet, runtimePathLayout.runtimeRootDir, [
     { label: 'systemDataDir', path: runtimePathLayout.systemDataDir },
     { label: 'companionDataDir', path: runtimePathLayout.companionDataDir },
@@ -59,9 +56,8 @@ export function resolveConfiguredCompanionFleet(
  */
 export function resolveConfiguredLocalCompanionFleetRuntime(
   env: NodeJS.ProcessEnv,
-): ConfiguredLocalCompanionFleetRuntime | null {
+): ConfiguredLocalCompanionFleetRuntime {
   const fleet = resolveConfiguredCompanionFleet(env);
-  if (!fleet) return null;
   const fleetAuthFlag = readFleetAuthEnvFlag(env);
   if (fleetAuthFlag.kind === 'invalid') {
     throw new Error(
@@ -70,12 +66,12 @@ export function resolveConfiguredLocalCompanionFleetRuntime(
   }
   if (fleetAuthFlag.kind !== 'set' || !fleetAuthFlag.value) {
     throw new Error(
-      'Multi-companion local startup requires PSFN_FLEET_AUTH=1 for the one fleet Garden',
+      'Local startup requires PSFN_FLEET_AUTH=1 for the one fleet Garden',
     );
   }
   if (resolveAdminTransportMode(env) !== 'socket') {
     throw new Error(
-      'Multi-companion local startup requires ADMIN_TRANSPORT_MODE=socket: the fleet Garden '
+      'Local startup requires ADMIN_TRANSPORT_MODE=socket: the fleet Garden '
       + 'target registry derives one garden-admin-<companionId>.sock endpoint per agent.',
     );
   }

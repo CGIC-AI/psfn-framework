@@ -76,3 +76,23 @@ export {
   type ProvenanceSourceView,
   type PublicationProvenanceView,
 } from './publication-provenance.js';
+export {
+  DEFAULT_MAX_ACTIVE_CAPSULES,
+  SHARE_CAPSULE_APPROVAL_ACTION,
+  SHARE_CAPSULE_APPROVAL_METHOD,
+  SHARE_CAPSULE_CUSTODY_FILE_VERSION,
+  createCapsuleCustodyService,
+  createShareCapsuleCustodyStore,
+  type AuthorizeReplayInput,
+  type CapsuleCustodyDenyCode,
+  type CapsuleCustodyService,
+  type CapsuleCustodyServiceOptions,
+  type CapsuleReplayDecision,
+  type ProposeShareCandidateInput,
+  type RecordReplayUseInput,
+  type RevokeCapsuleInput,
+  type ShareCapsuleCustodyRecord,
+  type ShareCapsuleCustodyState,
+  type ShareCapsuleCustodyStore,
+  type ShareCapsuleCustodyStoreOptions,
+} from './capsule-custody.js';

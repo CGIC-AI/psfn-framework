@@ -1381,6 +1381,12 @@
       "value": "4 * 1024 * 1024"
     },
     {
+      "file": "src/core/cogsec/disclosure/capsule-custody.ts",
+      "name": "DEFAULT_MAX_ACTIVE_CAPSULES",
+      "value": "3",
+      "note": "Code-owned DEFAULT for the active-capsule queue bound (bible §10.11 'initial cap of three'); already overridable via createShareCapsuleCustodyStore's maxActiveCapsules option. Owned-setting/Garden exposure is deferred to the publication approvals surface (jp36.7.2)."
+    },
+    {
       "file": "src/core/cogsec/drift/drift-evidence-adapters.ts",
       "name": "MEMORY_SCAN_LIMIT",
       "value": "512"

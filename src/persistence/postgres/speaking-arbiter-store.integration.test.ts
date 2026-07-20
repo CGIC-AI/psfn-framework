@@ -11,6 +11,8 @@ import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { PostgresSpeakingArbiterStore } from './speaking-arbiter-store.js';
+import { SHARED_SCHEMA_NAME } from './migrations.js';
+import { createPostgresPool } from '../postgres.js';
 import {
   startPostgresTestHarness,
   type PostgresTestHarness,
@@ -491,7 +493,9 @@ describe('speaking arbiter store integration', () => {
         const participantA = episode?.participants.find((p) => p.companionId === COMPANION_A);
         expect(participantA?.speakCount).toBe(1);
 
-        // A's reservation replays as terminal (delivered); B's is still reservable.
+        // A's reservation replays as terminal (delivered). B's co-reservation was
+        // retired as `superseded` when A's send completed — send-once fencing
+        // means the event is spent, so B is NOT left reservable after a restart.
         const replayA = await restarted.reserve({
           reservationId: randomUUID(),
           channelId: CHANNEL,
@@ -515,9 +519,176 @@ describe('speaking arbiter store integration', () => {
         });
         expect(replayB.outcome).toBe('replayed');
         expect(replayB.reservation.reservationId).toBe(reservationBId);
-        expect(replayB.reservation.status).toBe('reserved');
+        expect(replayB.reservation.status).toBe('released');
+        expect(replayB.reservation.reason).toBe('superseded');
+
+        // Re-driving the same event across the restart cannot produce a second
+        // send: even a fresh reservation + acquire for a peer is declined.
+        const bReReserve = await restarted.reserve({
+          reservationId: randomUUID(),
+          channelId: CHANNEL,
+          triggerEventId: 'evt-restart',
+          companionId: COMPANION_C,
+          nowMs: 2_100,
+          expiresAtMs: 2_100 + TTL_MS,
+        });
+        const bReAcquire = await restarted.acquireEgressLease({
+          leaseId: randomUUID(),
+          reservationId: bReReserve.reservation.reservationId,
+          channelId: CHANNEL,
+          nowMs: 2_200,
+          expiresAtMs: 2_200 + TTL_MS,
+        });
+        expect(bReAcquire.outcome).toBe('declined');
+        expect(bReAcquire.declineReason).toBe('already_delivered');
+        expect(bReAcquire.lease).toBeNull();
+        expect(bReAcquire.heldBy?.companionId).toBe(COMPANION_A);
+
+        // Ground truth: exactly one speech-terminal lease exists for the event.
+        expect(await countSpeechTerminalLeases(databaseUrl, 'evt-restart')).toBe(1);
       } finally {
         await restarted.close();
+      }
+    },
+    INTEGRATION_TIMEOUT_MS,
+  );
+
+  it(
+    'declines a co-reserver acquiring after the winning lease is delivered (send-once)',
+    async () => {
+      const databaseUrl = await freshDatabaseUrl();
+      const store = await PostgresSpeakingArbiterStore.connect(databaseUrl);
+      try {
+        const reservationA = await store.reserve({
+          reservationId: randomUUID(),
+          channelId: CHANNEL,
+          triggerEventId: 'evt-once',
+          companionId: COMPANION_A,
+          nowMs: 1_000,
+          expiresAtMs: 1_000 + TTL_MS,
+        });
+        const reservationB = await store.reserve({
+          reservationId: randomUUID(),
+          channelId: CHANNEL,
+          triggerEventId: 'evt-once',
+          companionId: COMPANION_B,
+          nowMs: 1_000,
+          expiresAtMs: 1_000 + TTL_MS,
+        });
+
+        // A wins the event and delivers, then releases its held lease.
+        const acquireA = await store.acquireEgressLease({
+          leaseId: randomUUID(),
+          reservationId: reservationA.reservation.reservationId,
+          channelId: CHANNEL,
+          nowMs: 1_100,
+          expiresAtMs: 1_100 + TTL_MS,
+        });
+        expect(acquireA.outcome).toBe('acquired');
+        await store.completeEgressLease({
+          leaseId: acquireA.lease?.leaseId ?? '',
+          channelId: CHANNEL,
+          fencingToken: acquireA.lease?.fencingToken ?? 0,
+          completion: 'delivered',
+          nowMs: 1_200,
+          pressureDelta: 1,
+        });
+
+        // With A's held lease gone, B tries to acquire for the SAME event: the
+        // send-once fence declines it (`already_delivered`), no second lease.
+        const acquireB = await store.acquireEgressLease({
+          leaseId: randomUUID(),
+          reservationId: reservationB.reservation.reservationId,
+          channelId: CHANNEL,
+          nowMs: 1_300,
+          expiresAtMs: 1_300 + TTL_MS,
+        });
+        expect(acquireB.outcome).toBe('declined');
+        expect(acquireB.declineReason).toBe('already_delivered');
+        expect(acquireB.lease).toBeNull();
+        expect(acquireB.heldBy?.companionId).toBe(COMPANION_A);
+
+        // B's co-reservation was retired as superseded when A delivered.
+        const replayB = await store.reserve({
+          reservationId: randomUUID(),
+          channelId: CHANNEL,
+          triggerEventId: 'evt-once',
+          companionId: COMPANION_B,
+          nowMs: 1_400,
+          expiresAtMs: 1_400 + TTL_MS,
+        });
+        expect(replayB.outcome).toBe('replayed');
+        expect(replayB.reservation.reservationId).toBe(reservationB.reservation.reservationId);
+        expect(replayB.reservation.status).toBe('released');
+        expect(replayB.reservation.reason).toBe('superseded');
+
+        // SQL ground truth: exactly one delivered lease for this trigger event.
+        expect(await countSpeechTerminalLeases(databaseUrl, 'evt-once')).toBe(1);
+      } finally {
+        await store.close();
+      }
+    },
+    INTEGRATION_TIMEOUT_MS,
+  );
+
+  it(
+    'still reclaims an event whose holder crashed without ever delivering',
+    async () => {
+      const databaseUrl = await freshDatabaseUrl();
+      const store = await PostgresSpeakingArbiterStore.connect(databaseUrl);
+      try {
+        const reservationA = await store.reserve({
+          reservationId: randomUUID(),
+          channelId: CHANNEL,
+          triggerEventId: 'evt-reclaim',
+          companionId: COMPANION_A,
+          nowMs: 1_000,
+          expiresAtMs: 1_000 + TTL_MS,
+        });
+        const reservationB = await store.reserve({
+          reservationId: randomUUID(),
+          channelId: CHANNEL,
+          triggerEventId: 'evt-reclaim',
+          companionId: COMPANION_B,
+          nowMs: 1_000,
+          expiresAtMs: 1_000 + TTL_MS,
+        });
+
+        // A acquires with a short deadline and crashes — it NEVER delivers.
+        const acquireA = await store.acquireEgressLease({
+          leaseId: randomUUID(),
+          reservationId: reservationA.reservation.reservationId,
+          channelId: CHANNEL,
+          nowMs: 2_000,
+          expiresAtMs: 2_000 + 5_000,
+        });
+        expect(acquireA.outcome).toBe('acquired');
+
+        // After A's deadline B reclaims — an expired-never-delivered lease is NOT
+        // a send, so send-once fencing must not block the reclaim.
+        const acquireB = await store.acquireEgressLease({
+          leaseId: randomUUID(),
+          reservationId: reservationB.reservation.reservationId,
+          channelId: CHANNEL,
+          nowMs: 2_000 + 5_000,
+          expiresAtMs: 2_000 + 5_000 + TTL_MS,
+        });
+        expect(acquireB.outcome).toBe('acquired');
+        expect(acquireB.lease?.fencingToken).toBe(2);
+
+        await store.completeEgressLease({
+          leaseId: acquireB.lease?.leaseId ?? '',
+          channelId: CHANNEL,
+          fencingToken: acquireB.lease?.fencingToken ?? 0,
+          completion: 'delivered',
+          nowMs: 2_000 + 6_000,
+          pressureDelta: 1,
+        });
+
+        // Exactly one send happened across the crash + reclaim.
+        expect(await countSpeechTerminalLeases(databaseUrl, 'evt-reclaim')).toBe(1);
+      } finally {
+        await store.close();
       }
     },
     INTEGRATION_TIMEOUT_MS,
@@ -538,4 +709,33 @@ async function store_reserve(
     nowMs,
     expiresAtMs: nowMs + TTL_MS,
   });
+}
+
+/**
+ * Count speech-terminal (delivered/overridden) leases for one trigger event, at
+ * the SQL level — the ground-truth "exactly one send per trigger" invariant that
+ * no store method can paper over. Opens its own short-lived pool so it observes
+ * committed rows independently of the store under test.
+ */
+async function countSpeechTerminalLeases(
+  databaseUrl: string,
+  triggerEventId: string,
+): Promise<number> {
+  const pool = createPostgresPool(databaseUrl, {
+    applicationName: 'speaking-arbiter-test-probe',
+    allowExitOnIdle: true,
+    schema: SHARED_SCHEMA_NAME,
+  });
+  try {
+    const result = await pool.query<{ n: string | number }>(
+      `SELECT COUNT(*)::int AS n
+       FROM speaking_egress_leases
+       WHERE channel_id = $1 AND trigger_event_id = $2
+         AND status IN ('delivered', 'overridden')`,
+      [CHANNEL, triggerEventId],
+    );
+    return Number(result.rows.at(0)?.n ?? 0);
+  } finally {
+    await pool.end();
+  }
 }

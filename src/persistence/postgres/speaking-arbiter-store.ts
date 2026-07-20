@@ -219,10 +219,15 @@ function assertReason(value: string | null): SpeakingArbiterReason | null {
  *
  * Every mutation takes a transaction-scoped advisory lock keyed on the channel
  * and then `SELECT ... FOR UPDATE` on the rows it touches, so all arbiter writes
- * for one channel serialize across processes. Exclusivity ("two companions never
- * both send for one trigger") is enforced by the partial unique index on a held
- * lease plus reclaim-then-grant under that lock; a monotonically increasing
- * per-event fencing token means a revived crashed holder cannot double-send.
+ * for one channel serialize across processes. "Two companions never both send for
+ * one trigger" is enforced on two axes under that lock: the partial unique index
+ * on a held lease gives instantaneous exclusivity, and an acquire-time
+ * send-once check declines any acquisition whose event already has a
+ * speech-terminal (`delivered`/`overridden`) lease — so the guarantee survives
+ * the winner completing and releasing its held lease. Reclaim-then-grant still
+ * re-grants an event whose holder crashed *without* delivering (its lease only
+ * `expired`), and a monotonically increasing per-event fencing token means a
+ * revived crashed holder cannot double-send.
  */
 export class PostgresSpeakingArbiterStore implements SpeakingArbiterStorePort {
   private closed = false;
@@ -425,13 +430,49 @@ export class PostgresSpeakingArbiterStore implements SpeakingArbiterStorePort {
       if (reservationRow.channel_id !== channelId) {
         throw new Error(`speaking reservation ${reservationId} channel mismatch`);
       }
+      const triggerEventId = reservationRow.trigger_event_id;
+
+      // Send-once fencing (evaluated before the per-reservation reservability
+      // guards, because it is a property of the *event*, not this reservation):
+      // if any lease for this event already reached a speech-terminal completion
+      // (`delivered`/`overridden`), the event is spent. A crashed-then-reclaimed
+      // holder that never delivered leaves only `expired` leases and does NOT
+      // block here, so a genuine re-acquire still works. This is the durable
+      // guarantee behind "two companions never both send for one trigger" — the
+      // instantaneous HELD probe below is not enough once the winner has
+      // completed and its held lease is gone. Checking it first also means a
+      // co-reserver whose reservation was retired as `superseded` when the winner
+      // delivered declines cleanly here rather than tripping the guard below.
+      const spent = await client.query<LeaseRow>(
+        `SELECT ${LEASE_COLUMNS}
+         FROM speaking_egress_leases
+         WHERE channel_id = $1 AND trigger_event_id = $2
+           AND status IN ('delivered', 'overridden')
+         ORDER BY fencing_token DESC
+         LIMIT 1
+         FOR UPDATE`,
+        [channelId, triggerEventId],
+      );
+      const spentRow = spent.rows.at(0);
+      if (spentRow) {
+        return {
+          outcome: 'declined' as const,
+          lease: null,
+          heldBy: {
+            companionId: spentRow.companion_id,
+            leaseId: spentRow.lease_id,
+            fencingToken: safeInteger(spentRow.fencing_token, 'lease.fencingToken'),
+          },
+          declineReason: 'already_delivered' as const,
+        };
+      }
+
       if (reservationRow.status !== 'reserved') {
         throw new Error(`speaking reservation ${reservationId} is not reservable (${reservationRow.status})`);
       }
       if (safeInteger(reservationRow.expires_at_ms, 'reservation.expiresAtMs') <= nowMs) {
         throw new Error(`speaking reservation ${reservationId} has expired`);
       }
-      const triggerEventId = reservationRow.trigger_event_id;
 
       // At most one HELD lease per triggering event. A live holder wins; the
       // caller declines with NO retry (silence is not retried into speech).
@@ -455,6 +496,7 @@ export class PostgresSpeakingArbiterStore implements SpeakingArbiterStorePort {
               leaseId: heldRow.lease_id,
               fencingToken: safeInteger(heldRow.fencing_token, 'lease.fencingToken'),
             },
+            declineReason: 'held' as const,
           };
         }
         // The holder's deadline lapsed: reclaim it (crash-recovery) and grant afresh.
@@ -563,6 +605,19 @@ export class PostgresSpeakingArbiterStore implements SpeakingArbiterStorePort {
         [updatedRow.reservation_id, reason, nowMs],
       );
       if (isSpeech) {
+        // The event has now been spoken: no co-reserver may still promote to a
+        // second send for the same trigger. Retire their open reservations as
+        // `superseded` — belt-and-suspenders with the acquire-time
+        // `already_delivered` decline, so no stale `reserved` row lingers to
+        // invite a redundant acquisition attempt. A non-speech completion
+        // (`failed`/`released`) never spoke, so co-reservers stay reservable.
+        await client.query(
+          `UPDATE speaking_reservations
+           SET status = 'released', reason = 'superseded', finalized_at_ms = $3, revision = revision + 1
+           WHERE channel_id = $1 AND trigger_event_id = $2 AND status = 'reserved'
+             AND reservation_id <> $4`,
+          [updatedRow.channel_id, updatedRow.trigger_event_id, nowMs, updatedRow.reservation_id],
+        );
         // A speech completion is machine participation: charge episode pressure,
         // advance the autonomous-turn streak, and update speak-least fairness.
         await client.query(

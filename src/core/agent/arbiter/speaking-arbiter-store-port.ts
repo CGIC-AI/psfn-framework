@@ -8,8 +8,12 @@
  * peeks before appraisal ("peek before the model runs"); a **final egress lease**
  * binds only at delivery ("bind only at egress"). Multiple companions may hold
  * reservations for one triggering room event, but the arbiter grants at most one
- * short-lived egress lease for that event — two companions never both send for
- * one trigger (§20.1).
+ * *speech-terminal* egress lease for that event — two companions never both send
+ * for one trigger (§20.1). This is send-once-per-trigger, not merely
+ * instantaneous exclusivity: once any lease for the event completes speech
+ * (`delivered`/`overridden`), the event is spent and every later acquisition for
+ * that same event is declined fail-closed. A crashed holder whose lease lapses
+ * *without* delivering never sent, so its event remains acquirable (reclaim).
  *
  * Leases are fenced two ways so a crashed holder can neither block the room
  * forever nor double-speak (bible §8.5 crash-recovery fencing, §18 lease-expiry):
@@ -266,13 +270,31 @@ export interface AcquireEgressLeaseInput {
   expiresAtMs: number;
 }
 
+/**
+ * Why an acquisition was declined:
+ *   - `held`: a live held lease currently owns the triggering event;
+ *   - `already_delivered`: the event was already spoken (a prior lease reached a
+ *     `delivered`/`overridden` completion), so it is spent — send-once fencing.
+ * In both cases the caller does NOT retry (silence is never retried into speech).
+ */
+export type AcquireEgressLeaseDeclineReason = 'held' | 'already_delivered';
+
 export interface AcquireEgressLeaseResult {
-  /** `declined` when a live held lease already owns the triggering event. */
+  /**
+   * `declined` when a live held lease already owns the triggering event, or when
+   * the event was already spoken (`already_delivered`) — see {@link declineReason}.
+   */
   outcome: 'acquired' | 'declined';
   /** Present on `acquired` (including idempotent replay). */
   lease: SpeakingEgressLeaseSnapshot | null;
-  /** On `declined`, the live holder that won the event (for telemetry, no retry). */
+  /**
+   * On `declined`, the lease that won the event (for telemetry, no retry): the
+   * live holder for a `held` decline, or the speech-terminal winner for an
+   * `already_delivered` decline. Null on `acquired`.
+   */
   heldBy: { companionId: string; leaseId: string; fencingToken: number } | null;
+  /** Present only on `declined`: whether a live holder or a spent event blocked it. */
+  declineReason?: AcquireEgressLeaseDeclineReason;
 }
 
 export interface CompleteEgressLeaseInput {

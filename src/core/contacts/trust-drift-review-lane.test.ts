@@ -1,4 +1,17 @@
-import { describe, it, expect, vi } from 'vitest';
+import { beforeEach, describe, it, expect, vi } from 'vitest';
+
+const logSpies = vi.hoisted(() => ({
+  debug: vi.fn(),
+  error: vi.fn(),
+  info: vi.fn(),
+  trace: vi.fn(),
+  warn: vi.fn(),
+}));
+
+vi.mock('../../shared/logger.js', () => ({
+  createComponentLogger: () => logSpies,
+}));
+
 import type { Contact } from './types.js';
 import type { EmotionalTimeSeriesPoint } from './store/emotional-baseline.js';
 import type {
@@ -75,6 +88,11 @@ function fakeStore(options: {
 }
 
 const PROMOTABLE_SERIES = [point(0.4), point(0.3), point(0.25)];
+
+beforeEach(() => {
+  logSpies.info.mockClear();
+  logSpies.warn.mockClear();
+});
 
 describe('ContactTrustDriftReviewLane construction', () => {
   it('fails closed without a rest window', () => {
@@ -347,6 +365,41 @@ describe('emo_sim dyad advisory (oth4.6)', () => {
     // The review's own candidate scan still advanced normally.
     expect(store.watermarks.get(CONTACT_TRUST_DRIFT_REVIEW_PROCESSOR)).toBe(
       new Date(INSIDE_WINDOW_MS).toISOString(),
+    );
+    expect(logSpies.info).toHaveBeenCalledWith(
+      'Omitting emo_sim dyad advisory from trust-drift review (read unavailable)',
+      { actionId: 'advisory-down', error: 'store down' },
+    );
+    expect(logSpies.warn).not.toHaveBeenCalledWith(
+      'Omitting emo_sim dyad advisory from trust-drift review (read unavailable)',
+      expect.anything(),
+    );
+  });
+
+  it('warns on unexpected provider errors while still omitting the advisory and delivering', async () => {
+    const deliverReview = vi.fn();
+    const store = promotableStore();
+    const lane = new ContactTrustDriftReviewLane({
+      contactStore: store,
+      restWindow: REST_WINDOW,
+      deliverReview,
+      dyadAdvisoryProvider: advisoryProvider(() =>
+        Promise.reject(new TypeError('provider bug'))),
+      now: () => INSIDE_WINDOW_MS,
+    });
+
+    await lane.execute({ id: 'advisory-bug', payload: {} });
+
+    expect(deliverReview).toHaveBeenCalledTimes(1);
+    const review = deliverReview.mock.calls[0]?.[0] as { content: string };
+    expect(review.content).not.toContain('Background relational read');
+    expect(logSpies.warn).toHaveBeenCalledWith(
+      'Omitting emo_sim dyad advisory from trust-drift review (read unavailable)',
+      { actionId: 'advisory-bug', error: 'provider bug' },
+    );
+    expect(logSpies.info).not.toHaveBeenCalledWith(
+      'Omitting emo_sim dyad advisory from trust-drift review (read unavailable)',
+      expect.anything(),
     );
   });
 

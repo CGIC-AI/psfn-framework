@@ -30,6 +30,7 @@ export interface ActiveConcernRow {
   resolution_outcome: string | null;
   contact_id: string | null;
   formation_vad: unknown;
+  resolution_vad: unknown;
   last_reviewed_at: string | null;
   next_review_at: string | null;
   merged_from_ids: unknown;
@@ -306,13 +307,16 @@ export function toNumber(value: unknown): number {
   return Number.NaN;
 }
 
-export function serializeFormationVAD(value: { valence: number; arousal: number; dominance: number } | undefined): string | null {
+function serializeConcernVAD(value: { valence: number; arousal: number; dominance: number } | undefined): string | null {
   return value ? JSON.stringify(value) : null;
 }
 
-export function parseFormationVAD(value: unknown): { valence: number; arousal: number; dominance: number } | undefined {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
-  const candidate = value as Partial<{ valence: number; arousal: number; dominance: number }>;
+function parseConcernVAD(value: unknown): { valence: number; arousal: number; dominance: number } | undefined {
+  // Real Postgres returns JSONB as a parsed object; test/fake pools may hand
+  // back the raw JSON string. Tolerate both (matches parseJsonValue behavior).
+  const resolved = typeof value === 'string' ? parseOptionalJsonValue(value, 'concern_vad') : value;
+  if (!resolved || typeof resolved !== 'object' || Array.isArray(resolved)) return undefined;
+  const candidate = resolved as Partial<{ valence: number; arousal: number; dominance: number }>;
   if (
     typeof candidate.valence !== 'number'
     || typeof candidate.arousal !== 'number'
@@ -325,6 +329,22 @@ export function parseFormationVAD(value: unknown): { valence: number; arousal: n
     arousal: candidate.arousal,
     dominance: candidate.dominance,
   };
+}
+
+export function serializeFormationVAD(value: { valence: number; arousal: number; dominance: number } | undefined): string | null {
+  return serializeConcernVAD(value);
+}
+
+export function parseFormationVAD(value: unknown): { valence: number; arousal: number; dominance: number } | undefined {
+  return parseConcernVAD(value);
+}
+
+export function serializeResolutionVAD(value: { valence: number; arousal: number; dominance: number } | undefined): string | null {
+  return serializeConcernVAD(value);
+}
+
+export function parseResolutionVAD(value: unknown): { valence: number; arousal: number; dominance: number } | undefined {
+  return parseConcernVAD(value);
 }
 
 function parseJsonValue(value: unknown, fieldName: string): unknown {
@@ -429,6 +449,7 @@ export function mapActiveConcernRow(row: ActiveConcernRow): ActiveConcern {
     : normalizeOptionalText(row.resolution_outcome, 'resolution_outcome', MAX_CONCERN_RESOLUTION_CHARS);
   const contactId = row.contact_id === null ? undefined : normalizeContactId(row.contact_id);
   const formationVAD = parseFormationVAD(row.formation_vad);
+  const resolutionVAD = parseResolutionVAD(row.resolution_vad);
   const lastReviewedAt = row.last_reviewed_at === null
     ? undefined
     : normalizeIsoTimestamp(row.last_reviewed_at, 'last_reviewed_at');
@@ -464,6 +485,7 @@ export function mapActiveConcernRow(row: ActiveConcernRow): ActiveConcern {
     ...(resolutionOutcome ? { resolutionOutcome } : {}),
     ...(contactId ? { contactId } : {}),
     ...(formationVAD ? { formationVAD } : {}),
+    ...(resolutionVAD ? { resolutionVAD } : {}),
     ...(lastReviewedAt ? { lastReviewedAt } : {}),
     ...(nextReviewAt ? { nextReviewAt } : {}),
     ...(mergedFromIds.length > 0 ? { mergedFromIds } : {}),

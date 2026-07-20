@@ -18,6 +18,7 @@ interface ActiveConcernRow {
   resolution_outcome: string | null;
   contact_id: string | null;
   formation_vad: unknown;
+  resolution_vad: unknown;
   last_reviewed_at: string | null;
   next_review_at: string | null;
   merged_from_ids: unknown;
@@ -186,6 +187,7 @@ export class FakeIntentionPool {
         resolution_outcome: null,
         contact_id: contactId,
         formation_vad: formationVAD,
+        resolution_vad: null,
         last_reviewed_at: lastReviewedAt,
         next_review_at: nextReviewAt,
         merged_from_ids: mergedFromIds,
@@ -273,7 +275,8 @@ export class FakeIntentionPool {
           salience,
           evidenceRefs,
           resolutionEvidenceRefs,
-        ] = values as [string, string, string | null, string | null, string, string | null, number, unknown, unknown];
+          resolutionVAD,
+        ] = values as [string, string, string | null, string | null, string, string | null, number, unknown, unknown, unknown];
         row.status = status;
         row.resolved_at = resolvedAt;
         row.resolution_outcome = resolutionOutcome;
@@ -282,6 +285,7 @@ export class FakeIntentionPool {
         row.salience = salience;
         row.evidence_refs = evidenceRefs;
         row.resolution_evidence_refs = resolutionEvidenceRefs;
+        row.resolution_vad = resolutionVAD;
         if (status !== 'candidate') row.candidate_review_snapshot = null;
         return { rows: [row as Row] };
       }
@@ -315,6 +319,7 @@ export class FakeIntentionPool {
       if (normalized.includes('resolved_at = NULL')) {
         row.resolved_at = null;
         row.resolution_outcome = null;
+        row.resolution_vad = null;
       }
       return { rows: [row as Row] };
     }

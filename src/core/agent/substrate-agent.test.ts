@@ -8,6 +8,7 @@ import type { SubstrateConfig } from '../../system/config/runtime-config-contrac
 import type { MemoryProvider, MemoryExtractor, LLMProviderPort } from './substrate-agent.js';
 import { SubstrateAgent as RuntimeSubstrateAgent } from './substrate-agent.js';
 import { EventBus } from '../../shared/event-bus.js';
+import type { ContextCoherenceEvent } from '../../shared/contracts/context-coherence.js';
 import type { SessionManager } from '../session/manager.js';
 import { SessionManager as RuntimeSessionManager } from '../session/manager.js';
 import { SessionStore } from '../../persistence/sessions/store.js';
@@ -652,6 +653,76 @@ describe('SubstrateAgent real-SessionManager turn (B1 regression)', () => {
       // The turn ran end-to-end through prompt assembly and durably recorded the
       // new user+assistant turn on the owner session (2 seeded + 2 this turn).
       expect(sessionManager.getMessageCount('test-channel')).toBeGreaterThanOrEqual(4);
+    } finally {
+      rmSync(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  it('emits coherence telemetry from the admitted owner inside the captured turn scope', async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'psfn-coherence-owner-turn-'));
+    try {
+      const config = makeConfig({
+        dataDir,
+        databasePath: join(dataDir, 'test.db'),
+      });
+      const store = new SessionStore(dataDir);
+      const sessionManager = new RuntimeSessionManager(store, config);
+      const eventBus = new EventBus();
+      const sourceChannelId = 'api:source';
+      const admittedOwnerId = 'api:admitted-owner';
+      const now = Date.now();
+      sessionManager.setActiveContextSession(admittedOwnerId);
+      store.append({
+        channelId: admittedOwnerId,
+        role: 'system',
+        content: 'Owner mirror note.',
+        authorId: 'session-mirror',
+        timestamp: now - 30_000,
+      });
+      store.append({
+        channelId: sourceChannelId,
+        role: 'system',
+        content: 'Source mirror decoy one.',
+        authorId: 'session-mirror',
+        timestamp: now - 20_000,
+      });
+      store.append({
+        channelId: sourceChannelId,
+        role: 'system',
+        content: 'Source mirror decoy two.',
+        authorId: 'session-mirror',
+        timestamp: now - 10_000,
+      });
+      const coherenceEvents: ContextCoherenceEvent[] = [];
+      eventBus.on('context.coherence.detected', event => {
+        coherenceEvents.push(event);
+      });
+      const agent = new SubstrateAgent(
+        eventBus,
+        makeMockLLMProvider(),
+        sessionManager,
+        'test',
+        config,
+      );
+      mockAssistantResponse('Can you remind me which thread we were in?');
+
+      await agent.handleMessage(makeMessage({
+        channelId: sourceChannelId,
+        channelType: 'api',
+        content: 'Continue.',
+        timestamp: new Date(now),
+      }));
+
+      expect(coherenceEvents).toHaveLength(1);
+      expect(coherenceEvents[0]).toMatchObject({
+        signal: 'confusion_ask',
+        source: 'turn_end',
+        channelId: sourceChannelId,
+        sessionId: admittedOwnerId,
+        context: {
+          recentMirrorNoteCount: 1,
+        },
+      });
     } finally {
       rmSync(dataDir, { recursive: true, force: true });
     }

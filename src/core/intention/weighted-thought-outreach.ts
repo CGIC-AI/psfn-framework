@@ -169,7 +169,7 @@ export interface WeightedThoughtOutreachDeps {
   icpCandidateAdapter?: IcpWeightedThoughtCandidateAdapter;
   contactId?: string;
   /**
-   * Per-recipient timezone resolver (psfn-framework-2tli). Wire to
+   * Per-recipient timezone resolver (bead 2tli). Wire to
    * `contactId => contactStore.getById(contactId)?.timezone ?? null` so the
    * quiet-hours gate evaluates the recipient's local time. Optional; when absent
    * or when it returns null the gate falls back to the global window's zone.
@@ -304,7 +304,7 @@ export async function runWeightedThoughtOutreachOnce(
 
     // 2. Deterministic quiet-hours / delivery-window gate (still zero LLM).
     // Evaluate quiet hours in the recipient's own timezone when resolvable
-    // (psfn-framework-2tli); fall back to the global window otherwise.
+    // (bead 2tli); fall back to the global window otherwise.
     const recipientContactId = view.thought.contactId ?? deps.contactId;
     const contactTimeZone = deps.resolveContactTimeZone && recipientContactId
       ? await deps.resolveContactTimeZone(recipientContactId)

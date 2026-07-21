@@ -927,7 +927,7 @@ test('PR wait fails loudly when GitHub reports a different head than the atteste
   );
 });
 
-function makePublisherFixture({ existingPr }) {
+function makePublisherFixture({ existingPr, pushFails = false }) {
   const calls = [];
   let listCount = 0;
 
@@ -974,7 +974,7 @@ function makePublisherFixture({ existingPr }) {
     if (executable !== 'git' || args[0] !== 'push') {
       throw new Error(`Unexpected mock spawn: ${executable} ${args.join(' ')}`);
     }
-    return { error: undefined, status: 0 };
+    return pushFails ? { error: undefined, status: 1 } : { error: undefined, status: 0 };
   }
 
   return {
@@ -1009,6 +1009,26 @@ test('publisher marks an existing draft PR ready before pushing the attested hea
   );
   assert.ok(readyIndex >= 0, 'existing draft PR must be marked ready');
   assert.ok(readyIndex < pushIndex, 'draft PR must be ready before the attested head is pushed');
+});
+
+test('publisher restores draft state when the push fails after marking ready', async () => {
+  const fixture = makePublisherFixture({ existingPr: true, pushFails: true });
+
+  await assert.rejects(publishPr([], fixture.dependencies), /push/i);
+
+  const readyIndex = fixture.calls.findIndex(
+    ([executable, scope, command, flag]) =>
+      executable === 'gh' && scope === 'pr' && command === 'ready' && flag !== '--undo',
+  );
+  const pushIndex = fixture.calls.findIndex(
+    ([executable, command]) => executable === 'git' && command === 'push',
+  );
+  const undoIndex = fixture.calls.findIndex(
+    ([executable, scope, command, flag]) =>
+      executable === 'gh' && scope === 'pr' && command === 'ready' && flag === '--undo',
+  );
+  assert.ok(readyIndex >= 0 && readyIndex < pushIndex, 'PR marked ready before the push attempt');
+  assert.ok(undoIndex > pushIndex, 'failed push must return the PR to draft');
 });
 
 test('publisher creates new PRs as non-draft after pushing the attested head', async () => {

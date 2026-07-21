@@ -28,6 +28,11 @@ interface NormalizedShellAllowlist {
   canonicalPaths: Set<string>;
 }
 
+interface RuntimeRootShellExecPolicy extends ShellExecPolicyConfig {
+  systemDataRoot: string;
+  companionDataRoot: string;
+}
+
 export const SANDBOX_REPOSITORY_MOUNT_TARGET = '/repo';
 
 export interface ResolvedShellExecution {
@@ -282,9 +287,9 @@ function pathsOverlap(left: string, right: string): boolean {
  * Resolve the read-only repository mount. Fail-closed: when the operator-owned
  * `mountRepositoryReadOnly` setting is true, a missing or unusable repository
  * checkout is an error, never a silent skip. The source must be a real
- * directory disjoint from the Personal Workspace so the mount can never
- * widen the writable surface or re-expose workspace paths under a second
- * name.
+ * directory disjoint from the Personal Workspace and runtime data roots so
+ * the mount can never widen the writable surface or expose privileged data
+ * under a second name.
  */
 function resolveRepositoryMount(
   policy: ShellExecPolicyConfig,
@@ -307,6 +312,26 @@ function resolveRepositoryMount(
     throw new ShellExecPolicyError(
       `shell.exec repository mount must not overlap the Personal Workspace: ${canonical}`,
     );
+  }
+  const runtimePolicy = policy as RuntimeRootShellExecPolicy;
+  for (const [label, configuredRoot] of [
+    ['system-data', runtimePolicy.systemDataRoot],
+    ['companion-data', runtimePolicy.companionDataRoot],
+  ] as const) {
+    if (typeof configuredRoot !== 'string' || !configuredRoot.trim()) {
+      throw new ShellExecPolicyError(
+        `shell.exec ${label} root is required when the repository mount is enabled`,
+      );
+    }
+    const canonicalRoot = resolveExistingDirectory(
+      resolve(normalize(configuredRoot.trim())),
+      `shell.exec ${label} root`,
+    );
+    if (pathsOverlap(canonical, canonicalRoot)) {
+      throw new ShellExecPolicyError(
+        `shell.exec repository mount must not overlap the ${label} root: ${canonical}`,
+      );
+    }
   }
   return canonical;
 }

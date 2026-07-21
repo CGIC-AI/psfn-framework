@@ -269,6 +269,13 @@ never back a ClusterIssuer. */ -}}
 {{- if not .Values.repositoryCheckout.mountPath -}}
 {{- fail "repositoryCheckout.mountPath is required when repositoryCheckout.enabled=true" -}}
 {{- end -}}
+{{- $repositoryMountPath := clean .Values.repositoryCheckout.mountPath -}}
+{{- range $label, $configuredPath := dict "system-data" .Values.runtime.systemDataDir "companion-data" .Values.runtime.companionDataDir "workspace" .Values.runtime.workspacePath -}}
+{{- $protectedPath := clean $configuredPath -}}
+{{- if or (eq $repositoryMountPath "/") (eq $protectedPath "/") (eq $repositoryMountPath $protectedPath) (hasPrefix (printf "%s/" $protectedPath) (printf "%s/" $repositoryMountPath)) (hasPrefix (printf "%s/" $repositoryMountPath) (printf "%s/" $protectedPath)) -}}
+{{- fail (printf "repositoryCheckout.mountPath must not overlap the configured %s path" $label) -}}
+{{- end -}}
+{{- end -}}
 {{- $hasHostPath := ne (default "" .Values.repositoryCheckout.hostPath.path) "" -}}
 {{- $hasPvc := ne (default "" .Values.repositoryCheckout.persistentVolumeClaim.claimName) "" -}}
 {{- if eq $hasHostPath $hasPvc -}}

@@ -105,6 +105,74 @@ describe('executeShellCommandWithPolicy', () => {
     }
   });
 
+  it.each([
+    ['system-data parent', 'system-data', 'owners', '.'],
+    ['system-data child', 'system-data', '.', 'repository'],
+    ['companion-data parent', 'companion-data', 'state', '.'],
+    ['companion-data child', 'companion-data', '.', 'repository'],
+  ])('fails closed when the repository mount overlaps the %s root', async (
+    _caseName,
+    protectedRootName,
+    protectedRootSuffix,
+    repositorySuffix,
+  ) => {
+    const { workspace, outside } = workspaceFixture();
+    const systemDataPath = join(
+      outside,
+      'system-data',
+      protectedRootName === 'system-data' ? protectedRootSuffix : '.',
+    );
+    const companionDataPath = join(
+      outside,
+      'companion-data',
+      protectedRootName === 'companion-data' ? protectedRootSuffix : '.',
+    );
+    mkdirSync(systemDataPath, { recursive: true });
+    mkdirSync(companionDataPath, { recursive: true });
+    if (repositorySuffix !== '.') {
+      mkdirSync(join(outside, protectedRootName, repositorySuffix));
+    }
+    const policy = {
+      ...enabledPolicy(workspace),
+      mountRepositoryReadOnly: true,
+      repositoryMountSource: join(outside, protectedRootName, repositorySuffix),
+      systemDataRoot: systemDataPath,
+      companionDataRoot: companionDataPath,
+    };
+
+    await expect(executeShellCommandWithPolicy(
+      { command: 'bash', args: ['-lc', 'true'], cwd: workspace },
+      { workspacePath: workspace, policy },
+    )).rejects.toThrow(`must not overlap the ${protectedRootName} root`);
+  });
+
+  it.each(['system-data', 'companion-data'])(
+    'fails closed when the %s root is missing from repository mount policy resolution',
+    async (missingRoot) => {
+      const { workspace, outside } = workspaceFixture();
+      const repositoryMountSource = join(outside, 'repository');
+      const systemDataRoot = join(outside, 'system-data');
+      const companionDataRoot = join(outside, 'companion-data');
+      mkdirSync(repositoryMountSource);
+      mkdirSync(systemDataRoot);
+      mkdirSync(companionDataRoot);
+      const policy = {
+        ...enabledPolicy(workspace),
+        mountRepositoryReadOnly: true,
+        repositoryMountSource,
+        ...(missingRoot === 'system-data' ? {} : { systemDataRoot }),
+        ...(missingRoot === 'companion-data' ? {} : { companionDataRoot }),
+      };
+
+      await expect(executeShellCommandWithPolicy(
+        { command: 'bash', args: ['-lc', 'true'], cwd: workspace },
+        { workspacePath: workspace, policy },
+      )).rejects.toThrow(
+        `shell.exec ${missingRoot} root is required when the repository mount is enabled`,
+      );
+    },
+  );
+
   it.runIf(!existsSync(sandboxBinaryPath))('fails closed when the namespace sandbox is unavailable', async () => {
     const { workspace } = workspaceFixture();
 
@@ -234,7 +302,11 @@ describe('executeShellCommandWithPolicy', () => {
     it('mounts the configured repository copy read-only at /repo and keeps it out by default', async () => {
       const { workspace, outside } = workspaceFixture();
       const repoSource = join(outside, 'repo-src');
+      const systemDataRoot = join(outside, 'system-data');
+      const companionDataRoot = join(outside, 'companion-data');
       mkdirSync(repoSource);
+      mkdirSync(systemDataRoot);
+      mkdirSync(companionDataRoot);
       writeFileSync(join(repoSource, 'README.md'), 'repo-copy-marker\n');
 
       const mounted = await executeShellCommandWithPolicy(
@@ -254,6 +326,8 @@ describe('executeShellCommandWithPolicy', () => {
             ...enabledPolicy(workspace),
             mountRepositoryReadOnly: true,
             repositoryMountSource: repoSource,
+            systemDataRoot,
+            companionDataRoot,
           },
         },
       );

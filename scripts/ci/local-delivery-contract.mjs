@@ -161,7 +161,12 @@ export function buildGatePlan({
       skip: !matches(/^\.semgrep\//),
     }),
     command('semgrep-diff', 'npm', ['run', 'semgrep:diff', '--', base]),
-    command('ubs', 'ubs', ['--no-auto-update', ...ubsPaths], { skip: ubsPaths.length === 0 }),
+    // Semgrep is the blocking security scanner. UBS remains complementary for
+    // runtime bug classes without re-flagging literals and ordinary equality
+    // throughout every touched file as security-critical false positives.
+    command('ubs', 'ubs', ['--no-auto-update', '--skip=2', ...ubsPaths], {
+      skip: ubsPaths.length === 0,
+    }),
     command('tests', 'npm', ['test', '--', '--maxWorkers=4'], {
       skip: !scope.root_runtime,
     }),

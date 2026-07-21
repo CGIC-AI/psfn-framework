@@ -1323,10 +1323,16 @@ export function wireHeartbeatPostTurnRuntime(
                 return { detail: `blocked:${policyDecision.reason}` };
               }
             } else {
+              // Evaluate quiet hours in the recipient's timezone when resolvable
+              // (2tli); fall back to the global window otherwise.
+              const contactTimeZone = runtimeOptions.resolveContactTimeZone
+                ? await runtimeOptions.resolveContactTimeZone(payload.channelId)
+                : null;
               const timeGate = evaluateProactiveOutboundTimeGate({
                 nowMs: Date.now(),
                 earliestSendAtMs: action.runAt,
                 quietHours: runtimeOptions.episodicProcessingRestWindow,
+                contactTimeZone,
               });
               if (!timeGate.allowed) {
                 runtimeOptions.outreachOutbox?.append({

@@ -568,6 +568,14 @@ export interface TemporalWakeupRuntimeOptions {
    * module depending on any bus.
    */
   onWakeTimingResolved?: (snapshot: WakeWindowSnapshot) => void;
+  /**
+   * Per-recipient timezone resolver for the outward-delivery quiet-hours gate
+   * (psfn-framework-2tli). Called with the wake channel's sessionId; wire to the
+   * contact bound to that channel so quiet hours evaluate in the recipient's
+   * local time. Optional; when absent or returning null the gate falls back to
+   * the global window's zone.
+   */
+  resolveContactTimeZone?: (channelId: string) => Promise<string | null>;
 }
 
 function resolveWakeupChannelType(value: string | undefined): ChannelType {
@@ -807,10 +815,15 @@ async function runOutwardPhase(
   }
 
   // Quiet hours gate outward delivery only — the internal frame update above
-  // has already landed regardless of this decision.
+  // has already landed regardless of this decision. Evaluate quiet hours in the
+  // recipient's timezone when resolvable (2tli); fall back to the global window.
+  const contactTimeZone = options.resolveContactTimeZone
+    ? await options.resolveContactTimeZone(decision.sessionId)
+    : null;
   const timeGate = evaluateProactiveOutboundTimeGate({
     nowMs: decision.nowMs,
     quietHours: options.quietHours ?? null,
+    contactTimeZone,
   });
   if (!timeGate.allowed) {
     log.info('Morning wake outward delivery blocked by time gate; internal frame update stands', {

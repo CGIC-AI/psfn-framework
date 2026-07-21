@@ -297,6 +297,43 @@ describe('weighted-thought outreach initiation', () => {
     expect(evaluator.evaluate).not.toHaveBeenCalled(); // zero LLM during quiet hours
   });
 
+  it('evaluates the quiet-hours gate in the recipient timezone (2tli)', async () => {
+    // T0 is 15:00 UTC. An overnight window 23:00–06:00 in UTC does NOT contain
+    // 15:00, so a global-window evaluation sends. In Asia/Tokyo (UTC+9) T0 is
+    // 00:00 — inside the window — so the recipient-local evaluation defers.
+    const quietHours: ProactiveQuietHoursConfig = {
+      enabled: true,
+      startLocalTime: '23:00',
+      endLocalTime: '06:00',
+      timeZone: 'UTC',
+    };
+    const thought = { ...strongThought('wt-tz'), contactId: 'tokyo-contact' };
+
+    // Control: without a recipient timezone the global UTC window allows the send.
+    const globalResult = await runWeightedThoughtOutreachOnce(
+      baseDeps(makeStore(thought), acceptEvaluator(), { quietHours }),
+      T0,
+    );
+    expect(globalResult.deferred).toHaveLength(0);
+    expect(globalResult.produced).toHaveLength(1);
+
+    // With the recipient's Tokyo timezone the same instant is inside quiet hours,
+    // so the gate defers with zero LLM.
+    const tzEvaluator = acceptEvaluator();
+    const resolveContactTimeZone = vi.fn(async (contactId: string) => (
+      contactId === 'tokyo-contact' ? 'Asia/Tokyo' : null
+    ));
+    const tzResult = await runWeightedThoughtOutreachOnce(
+      baseDeps(makeStore(thought), tzEvaluator, { quietHours, resolveContactTimeZone }),
+      T0,
+    );
+    expect(resolveContactTimeZone).toHaveBeenCalledWith('tokyo-contact');
+    expect(tzResult.produced).toHaveLength(0);
+    expect(tzResult.deferred).toHaveLength(1);
+    expect(tzResult.deferred[0]!.reason).toBe('quiet_hours');
+    expect(tzEvaluator.evaluate).not.toHaveBeenCalled();
+  });
+
   it('routes internal-only (no LLM) when a thought lacks live provenance', async () => {
     const noProvenance = createThoughtWeight(
       { id: 'wt-np', content: 'x', source: 'agent', thoughtClass: 'standard', emotionalIntensity: 1 },

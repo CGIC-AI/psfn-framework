@@ -97,6 +97,16 @@ psfn.io/fleet-target: registered
 {{- default (printf "%s-model-cache" (include "psfn.fullname" .)) .Values.persistence.modelCache.existingClaim -}}
 {{- end -}}
 
+{{- define "psfn.fleetAuthAuthorityFloorClaimName" -}}
+{{- $authorityFloor := .Values.fleetAuth.authorityFloor | default dict -}}
+{{- default (printf "%s-fleet-auth-floor" (include "psfn.fullname" .)) (get $authorityFloor "existingClaim") -}}
+{{- end -}}
+
+{{- define "psfn.fleetAuthAuthorityFloorMountPath" -}}
+{{- $authorityFloor := .Values.fleetAuth.authorityFloor | default dict -}}
+{{- get $authorityFloor "mountPath" | default "" -}}
+{{- end -}}
+
 {{- define "psfn.ownerMigrationImage" -}}
 {{- $root := .root -}}
 {{- $image := .image -}}
@@ -973,6 +983,50 @@ capability-tier.json|scheduler.json|charge-policy.json|skills.json
       readOnly: true
   securityContext:
     {{- toYaml $root.Values.securityContext | nindent 4 }}
+{{- end -}}
+
+{{- define "psfn.fleetAuthAuthorityFloorInitContainer" -}}
+{{- if .Values.fleetAuth.enabled }}
+- name: prepare-fleet-auth-authority-floor
+  image: {{ include "psfn.image" (dict "root" . "image" .Values.workloads.gateway.image) | quote }}
+  imagePullPolicy: {{ default .Values.psfnAppImage.pullPolicy .Values.workloads.gateway.image.pullPolicy }}
+  command:
+    - sh
+    - -c
+    - |
+      set -eu
+      floor_root={{ include "psfn.fleetAuthAuthorityFloorMountPath" . | quote }}
+      chown 999:999 "$floor_root"
+      chmod 0700 "$floor_root"
+      test "$(stat -c '%u:%g:%a' "$floor_root")" = "999:999:700"
+  securityContext:
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: true
+    runAsNonRoot: false
+    runAsUser: 0
+    runAsGroup: 0
+    capabilities:
+      # Retain only the root baseline's CHOWN capability needed to transfer
+      # ownership, then add only FOWNER so chmod can tighten the uid-999 root.
+      drop:
+        - AUDIT_WRITE
+        - DAC_OVERRIDE
+        - FSETID
+        - KILL
+        - MKNOD
+        - NET_BIND_SERVICE
+        - NET_RAW
+        - SETFCAP
+        - SETGID
+        - SETPCAP
+        - SETUID
+        - SYS_CHROOT
+      add:
+        - FOWNER
+  volumeMounts:
+    - name: fleet-auth-authority-floor
+      mountPath: {{ include "psfn.fleetAuthAuthorityFloorMountPath" . }}
+{{- end }}
 {{- end -}}
 
 {{- define "psfn.commonVolumes" -}}

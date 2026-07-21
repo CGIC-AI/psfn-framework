@@ -55,6 +55,7 @@ spec:
         {{- toYaml . | nindent 8 }}
       {{- end }}
       initContainers:
+        {{- include "psfn.fleetAuthAuthorityFloorInitContainer" . | nindent 8 }}
         {{- include "psfn.seedInitContainer" . | nindent 8 }}
         {{- include "psfn.waitForPostgresInitContainer" (dict "root" . "image" .Values.workloads.gateway.image) | nindent 8 }}
       containers:
@@ -97,6 +98,8 @@ spec:
             - name: ADMIN_PORT
               value: {{ .Values.ports.garden | quote }}
             {{- if .Values.fleetAuth.enabled }}
+            - name: FLEET_AUTH_AUTHORITY_FLOOR_ROOT
+              value: {{ include "psfn.fleetAuthAuthorityFloorMountPath" . | quote }}
             - name: FLEET_SSO_TRUST_PROXY
               value: "true"
             - name: FLEET_SSO_GARDEN_HOST
@@ -209,6 +212,8 @@ spec:
               mountPath: {{ printf "%s/gateway-rpc" .Values.certificates.mountBasePath }}
               readOnly: true
             {{- if .Values.fleetAuth.enabled }}
+            - name: fleet-auth-authority-floor
+              mountPath: {{ include "psfn.fleetAuthAuthorityFloorMountPath" . }}
             - name: fleet-sso-garden-tls
               mountPath: {{ printf "%s/fleet-sso-garden" .Values.certificates.mountBasePath }}
               readOnly: true
@@ -223,6 +228,9 @@ spec:
           secret:
             secretName: {{ include "psfn.gatewayRpcCertSecretName" . }}
         {{- if .Values.fleetAuth.enabled }}
+        - name: fleet-auth-authority-floor
+          persistentVolumeClaim:
+            claimName: {{ include "psfn.fleetAuthAuthorityFloorClaimName" . }}
         - name: fleet-sso-garden-tls
           secret:
             secretName: {{ include "psfn.gatewaySsoClientCertSecretName" . }}

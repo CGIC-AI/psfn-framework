@@ -168,7 +168,26 @@ env reference (`{ "kind": "env", "envName": "FLEET_AUTH_*" }`) and the
 gateway fails closed when a referenced env var is unset.
 `fleetAuth.credentialEnv` renders those gateway env vars from operator
 Secrets (or plain values for non-secret refs); see `values.yaml` for the
-entry shape.
+entry shape. `FLEET_AUTH_AUTHORITY_FLOOR_ROOT` is the exception: the chart
+always sets it as a plain path from `fleetAuth.authorityFloor.mountPath` and
+rejects any duplicate `credentialEnv` entry with a remedy message.
+
+The authority floor is a non-restored anti-rollback anchor, so it has its own
+PVC rather than sharing `system-data` or another backed-up claim. By default
+the chart creates `<release>-fleet-auth-floor` at 64Mi using the cluster's
+default StorageClass and mounts it on the gateway at
+`/var/lib/psfn/fleet-auth-floor`. Set
+`fleetAuth.authorityFloor.existingClaim` to adopt a pre-existing claim (for
+the k3d shakedown, `psfn-fleet-auth-floor`); set `storageClassName` only when
+the chart-created claim needs a non-default class. A gateway init container
+sets the floor root to uid/gid 999 and mode `0700` before startup. The chart
+fails rendering when Fleet Auth is enabled without an authority-floor block.
+The chart-created claim carries `helm.sh/resource-policy: keep`: `helm
+uninstall` (or switching to `existingClaim` adoption) intentionally orphans
+the floor PVC instead of deleting it, because the floor is never backed up and
+losing it while the witness survives is an unrecoverable fail-closed state.
+Delete an orphaned floor claim only as part of a deliberate full identity
+reset.
 
 [`overlays/fleet-k3d-shakedown.values.yaml`](./overlays/fleet-k3d-shakedown.values.yaml)
 is a complete two-companion (primary + follower) example matching the k3d
@@ -192,9 +211,11 @@ CHARACTER_CARD_PATH=/runtime/companions/11111111-1111-4111-8111-111111111111/com
 ```
 
 `system-data`, `companion-data`, `workspace`, `runtime`, and `model-cache` are
-PVC-backed. The seed init container creates the runtime directories and, only
-when `bootstrap.seedOwnerFiles=true`, copies `/app/config/*.seed.json` into
-the canonical root for each missing owner file. Seed-backed cluster-global
+PVC-backed. Fleet Auth additionally uses its dedicated, deliberately
+non-restored authority-floor PVC. The seed init container creates the runtime
+directories and, only when `bootstrap.seedOwnerFiles=true`, copies
+`/app/config/*.seed.json` into the canonical root for each missing owner file.
+Seed-backed cluster-global
 owners go to `system-data`; `scheduler.json`, `capability-tier.json`,
 `charge-policy.json`, and `skills.json` go to this release's
 `companion-data`. It never creates system-data copies of those per-companion

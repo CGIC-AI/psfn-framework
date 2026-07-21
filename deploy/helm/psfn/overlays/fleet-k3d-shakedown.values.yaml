@@ -10,6 +10,7 @@
 #   - the system-data PVC already contains the canonical companions.json and
 #     fleet-auth.json owner files matching the entries below
 #   - the per-companion PVCs (companion data + Personal Workspace) exist
+#   - the non-restored psfn-fleet-auth-floor authority-floor PVC exists
 #   - the per-companion auth Secrets and the psfn-fleet-auth credential
 #     Secret exist (see fleetAuth.credentialEnv below)
 #   - the browser-trusted gateway edge TLS Secret exists
@@ -69,6 +70,14 @@ bootstrap:
   seedOwnerFiles: false
 
 fleetAuth:
+  # Adopt the live anti-rollback floor PVC. It is mounted only by the gateway,
+  # initialized as uid/gid 999 with mode 0700, and deliberately never included
+  # in the chart's normal backup/restore claims.
+  authorityFloor:
+    existingClaim: psfn-fleet-auth-floor
+    size: 64Mi
+    storageClassName: ""
+    mountPath: /var/lib/psfn/fleet-auth-floor
   # Every env-kind credential reference in fleet-auth.json must be supplied
   # here (the gateway fails closed on any unset referenced env var). The
   # names below match config/fleet-auth.seed.json; keep them aligned with the
@@ -115,9 +124,6 @@ fleetAuth:
       secretRef:
         name: psfn-fleet-auth
         key: backup-database-url
-    # Non-secret filesystem root; a plain value is allowed for such refs.
-    - name: FLEET_AUTH_AUTHORITY_FLOOR_ROOT
-      value: /runtime/system-data/fleet-auth/authority-floor
 
 ingress:
   enabled: true

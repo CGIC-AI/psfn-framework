@@ -367,6 +367,19 @@ never back a ClusterIssuer. */ -}}
 {{- end -}}
 {{- end -}}
 {{- if .Values.fleetAuth.enabled -}}
+{{- $authorityFloor := .Values.fleetAuth.authorityFloor | default dict -}}
+{{- if not $authorityFloor -}}
+{{- fail "fleetAuth.enabled=true requires fleetAuth.authorityFloor; set fleetAuth.authorityFloor.existingClaim to adopt an existing PVC or configure size for a chart-managed PVC" -}}
+{{- end -}}
+{{- if not (get $authorityFloor "mountPath" | default "" | trim) -}}
+{{- fail "fleetAuth.authorityFloor.mountPath is required (for example /var/lib/psfn/fleet-auth-floor)" -}}
+{{- end -}}
+{{- if not (hasPrefix "/" (get $authorityFloor "mountPath")) -}}
+{{- fail "fleetAuth.authorityFloor.mountPath must be an absolute path" -}}
+{{- end -}}
+{{- if and (not (get $authorityFloor "existingClaim" | default "" | trim)) (not (get $authorityFloor "size" | default "" | trim)) -}}
+{{- fail "fleetAuth.authorityFloor.size is required when existingClaim is empty" -}}
+{{- end -}}
 {{- if not (regexMatch "^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$" .Values.runtime.companionId) -}}
 {{- fail "fleetAuth.enabled=true requires runtime.companionId to be one lowercase RFC4122 UUID" -}}
 {{- end -}}
@@ -399,6 +412,9 @@ never back a ClusterIssuer. */ -}}
 {{- $credentialEnvNames := dict -}}
 {{- range $index, $entry := .Values.fleetAuth.credentialEnv -}}
 {{- $name := $entry.name | default "" -}}
+{{- if eq $name "FLEET_AUTH_AUTHORITY_FLOOR_ROOT" -}}
+{{- fail (printf "fleetAuth.credentialEnv[%d] must not set FLEET_AUTH_AUTHORITY_FLOOR_ROOT; remove this entry and configure fleetAuth.authorityFloor instead" $index) -}}
+{{- end -}}
 {{- if not (regexMatch "^[A-Z][A-Z0-9_]*$" $name) -}}
 {{- fail (printf "fleetAuth.credentialEnv[%d].name must match ^[A-Z][A-Z0-9_]*$ (fleet-auth.json envName pattern)" $index) -}}
 {{- end -}}

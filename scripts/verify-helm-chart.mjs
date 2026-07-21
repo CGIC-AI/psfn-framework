@@ -1149,8 +1149,6 @@ const fleetCredentialEnvArgs = [
   '--set-string', 'fleetAuth.credentialEnv[0].name=FLEET_AUTH_SESSION_PEPPER',
   '--set-string', 'fleetAuth.credentialEnv[0].secretRef.name=psfn-fleet-auth',
   '--set-string', 'fleetAuth.credentialEnv[0].secretRef.key=session-pepper',
-  '--set-string', 'fleetAuth.credentialEnv[1].name=FLEET_AUTH_AUTHORITY_FLOOR_ROOT',
-  '--set-string', 'fleetAuth.credentialEnv[1].value=/runtime/system-data/fleet-auth/authority-floor',
 ];
 const fleetCredentialEnvRendered = render(fleetCredentialEnvArgs);
 const fleetCredentialGatewayEnv = findParsedDocumentByKindName(
@@ -1166,8 +1164,8 @@ if (fleetCredentialPepper?.valueFrom?.secretKeyRef?.name !== 'psfn-fleet-auth'
 }
 const fleetCredentialFloor = fleetCredentialGatewayEnv
   .find(entry => entry.name === 'FLEET_AUTH_AUTHORITY_FLOOR_ROOT');
-if (fleetCredentialFloor?.value !== '/runtime/system-data/fleet-auth/authority-floor') {
-  throw new Error('fleet gateway must bind the plain-value FLEET_AUTH_AUTHORITY_FLOOR_ROOT env');
+if (fleetCredentialFloor?.value !== '/var/lib/psfn/fleet-auth-floor') {
+  throw new Error('fleet gateway must bind FLEET_AUTH_AUTHORITY_FLOOR_ROOT to the chart-owned mount');
 }
 const fleetCredentialAgentEnv = findParsedDocumentByKindName(
   fleetCredentialEnvRendered,
@@ -1177,6 +1175,102 @@ const fleetCredentialAgentEnv = findParsedDocumentByKindName(
 if (fleetCredentialAgentEnv.some(entry => entry.name?.startsWith('FLEET_AUTH_'))) {
   throw new Error('Fleet Auth credential env is gateway-only and must never reach agent pods');
 }
+
+// Dedicated, non-restored Fleet Auth authority-floor persistence (qicb item 1).
+const chartFloorPvc = findParsedDocumentByKindName(
+  fleetCredentialEnvRendered,
+  'PersistentVolumeClaim',
+  'psfn-fleet-auth-floor',
+);
+if (chartFloorPvc?.spec?.resources?.requests?.storage !== '64Mi') {
+  throw new Error('chart-managed Fleet Auth authority-floor PVC must default to 64Mi');
+}
+if ('storageClassName' in (chartFloorPvc?.spec ?? {})) {
+  throw new Error('empty fleetAuth.authorityFloor.storageClassName must use the cluster default');
+}
+if (chartFloorPvc?.metadata?.annotations?.['helm.sh/resource-policy'] !== 'keep') {
+  throw new Error(
+    'chart-managed Fleet Auth authority-floor PVC must carry helm.sh/resource-policy: keep '
+    + '(the never-backed-up anti-rollback anchor must survive helm uninstall and adoption pruning)',
+  );
+}
+const chartFloorGateway = findParsedDocumentByKindName(
+  fleetCredentialEnvRendered,
+  'Deployment',
+  'psfn-gateway',
+);
+const chartFloorVolume = chartFloorGateway?.spec?.template?.spec?.volumes
+  ?.find(volume => volume.name === 'fleet-auth-authority-floor');
+if (chartFloorVolume?.persistentVolumeClaim?.claimName !== 'psfn-fleet-auth-floor') {
+  throw new Error('gateway must use the chart-managed Fleet Auth authority-floor claim');
+}
+const chartFloorMount = chartFloorGateway?.spec?.template?.spec?.containers?.[0]?.volumeMounts
+  ?.find(mount => mount.name === 'fleet-auth-authority-floor');
+if (chartFloorMount?.mountPath !== '/var/lib/psfn/fleet-auth-floor') {
+  throw new Error('gateway must mount the Fleet Auth authority floor at its configured path');
+}
+const chartFloorInit = chartFloorGateway?.spec?.template?.spec?.initContainers
+  ?.find(container => container.name === 'prepare-fleet-auth-authority-floor');
+if (!chartFloorInit) {
+  throw new Error('gateway must prepare the Fleet Auth authority floor before startup');
+}
+if (chartFloorGateway.spec.template.spec.initContainers[0]?.name
+    !== 'prepare-fleet-auth-authority-floor') {
+  throw new Error('Fleet Auth authority-floor preparation must be the first gateway init container');
+}
+if (chartFloorInit.securityContext?.capabilities?.add?.join(',') !== 'FOWNER') {
+  throw new Error('Fleet Auth authority-floor init must add only CAP_FOWNER');
+}
+if (!chartFloorInit.command?.[2]?.includes('chown 999:999 "$floor_root"')
+    || !chartFloorInit.command?.[2]?.includes('chmod 0700 "$floor_root"')) {
+  throw new Error('Fleet Auth authority-floor init must enforce uid/gid 999 and mode 0700');
+}
+
+const adoptedFloorRendered = render([
+  ...fleetGardenRenderArgs(),
+  '--set-string', 'fleetAuth.authorityFloor.existingClaim=adopted-fleet-auth-floor',
+  '--set-string', 'fleetAuth.authorityFloor.mountPath=/authority/floor',
+]);
+if (findDocumentByKindName(adoptedFloorRendered, 'PersistentVolumeClaim', 'psfn-fleet-auth-floor')) {
+  throw new Error('fleetAuth.authorityFloor.existingClaim must suppress the chart-managed PVC');
+}
+const adoptedFloorGateway = findParsedDocumentByKindName(
+  adoptedFloorRendered,
+  'Deployment',
+  'psfn-gateway',
+);
+const adoptedFloorVolume = adoptedFloorGateway?.spec?.template?.spec?.volumes
+  ?.find(volume => volume.name === 'fleet-auth-authority-floor');
+if (adoptedFloorVolume?.persistentVolumeClaim?.claimName !== 'adopted-fleet-auth-floor') {
+  throw new Error('gateway must adopt fleetAuth.authorityFloor.existingClaim exactly');
+}
+const adoptedFloorContainer = adoptedFloorGateway?.spec?.template?.spec?.containers?.[0];
+if (adoptedFloorContainer?.env?.find(entry => (
+  entry.name === 'FLEET_AUTH_AUTHORITY_FLOOR_ROOT'
+))?.value !== '/authority/floor') {
+  throw new Error('adopted Fleet Auth authority floor must project its mount path as plain env');
+}
+if (adoptedFloorContainer?.volumeMounts?.find(mount => (
+  mount.name === 'fleet-auth-authority-floor'
+))?.mountPath !== '/authority/floor') {
+  throw new Error('adopted Fleet Auth authority floor must use its configured gateway mount path');
+}
+assertRenderFails(
+  [
+    ...fleetGardenRenderArgs(),
+    '--set-json', 'fleetAuth.authorityFloor=null',
+  ],
+  'fleetAuth.enabled=true requires fleetAuth.authorityFloor; set fleetAuth.authorityFloor.existingClaim to adopt an existing PVC or configure size for a chart-managed PVC',
+);
+assertRenderFails(
+  [
+    ...fleetGardenRenderArgs(),
+    '--set-string', 'fleetAuth.credentialEnv[0].name=FLEET_AUTH_AUTHORITY_FLOOR_ROOT',
+    '--set-string', 'fleetAuth.credentialEnv[0].secretRef.name=psfn-fleet-auth',
+    '--set-string', 'fleetAuth.credentialEnv[0].secretRef.key=authority-floor-root',
+  ],
+  'must not set FLEET_AUTH_AUTHORITY_FLOOR_ROOT; remove this entry and configure fleetAuth.authorityFloor instead',
+);
 assertRenderFails(
   [
     '--set-string', 'fleetAuth.credentialEnv[0].name=FLEET_AUTH_SESSION_PEPPER',
@@ -1188,33 +1282,33 @@ assertRenderFails(
 assertRenderFails(
   [
     ...fleetCredentialEnvArgs,
-    '--set-string', 'fleetAuth.credentialEnv[2].name=lowercase-name',
-    '--set-string', 'fleetAuth.credentialEnv[2].secretRef.name=psfn-fleet-auth',
-    '--set-string', 'fleetAuth.credentialEnv[2].secretRef.key=other',
+    '--set-string', 'fleetAuth.credentialEnv[1].name=lowercase-name',
+    '--set-string', 'fleetAuth.credentialEnv[1].secretRef.name=psfn-fleet-auth',
+    '--set-string', 'fleetAuth.credentialEnv[1].secretRef.key=other',
   ],
-  'fleetAuth.credentialEnv[2].name must match',
+  'fleetAuth.credentialEnv[1].name must match',
 );
 assertRenderFails(
   [
     ...fleetCredentialEnvArgs,
-    '--set-string', 'fleetAuth.credentialEnv[2].name=FLEET_AUTH_SESSION_PEPPER',
-    '--set-string', 'fleetAuth.credentialEnv[2].secretRef.name=psfn-fleet-auth',
-    '--set-string', 'fleetAuth.credentialEnv[2].secretRef.key=other',
+    '--set-string', 'fleetAuth.credentialEnv[1].name=FLEET_AUTH_SESSION_PEPPER',
+    '--set-string', 'fleetAuth.credentialEnv[1].secretRef.name=psfn-fleet-auth',
+    '--set-string', 'fleetAuth.credentialEnv[1].secretRef.key=other',
   ],
   'fleetAuth.credentialEnv name is duplicated: FLEET_AUTH_SESSION_PEPPER',
 );
 assertRenderFails(
   [
     ...fleetCredentialEnvArgs,
-    '--set-string', 'fleetAuth.credentialEnv[2].name=FLEET_AUTH_RECOVERY_CREDENTIAL',
+    '--set-string', 'fleetAuth.credentialEnv[1].name=FLEET_AUTH_RECOVERY_CREDENTIAL',
   ],
   'requires exactly one of a Secret reference or a plain value',
 );
 assertRenderFails(
   [
     ...fleetCredentialEnvArgs,
-    '--set-string', 'fleetAuth.credentialEnv[2].name=FLEET_AUTH_RECOVERY_CREDENTIAL',
-    '--set-string', 'fleetAuth.credentialEnv[2].secretRef.name=psfn-fleet-auth',
+    '--set-string', 'fleetAuth.credentialEnv[1].name=FLEET_AUTH_RECOVERY_CREDENTIAL',
+    '--set-string', 'fleetAuth.credentialEnv[1].secretRef.name=psfn-fleet-auth',
   ],
   'requires both secretRef.name and secretRef.key',
 );

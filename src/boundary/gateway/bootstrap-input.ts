@@ -298,7 +298,15 @@ function buildGatewayPolicyConfig(
     litellmBaseUrl: config.litellmBaseUrl ?? undefined,
     openRouterModelsApiUrl: config.openRouterModelsApiUrl,
   });
-  const shellExecPolicy = config.shellExec ?? createDefaultShellExecSettings();
+  // Internal runtime derivation (never operator-configurable): the read-only
+  // repository copy the sandbox may mount at /repo is the deployment's
+  // repository checkout. Absence with mountRepositoryReadOnly=true fails
+  // closed at shell.exec time.
+  const repositoryMountSource = env.PSFN_REPOSITORY_DIR?.trim() || undefined;
+  const shellExecPolicy = {
+    ...(config.shellExec ?? createDefaultShellExecSettings()),
+    ...(repositoryMountSource ? { repositoryMountSource } : {}),
+  };
   const beadsToolsEnabled = resolveBeadsToolsEnabled(env.BEADS_TOOLS_ENABLED, {
     workspaceRoot,
     codebaseRoot,

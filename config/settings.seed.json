@@ -238,6 +238,7 @@
     "enabled": false,
     "allowlist": [],
     "envAllowlist": [],
+    "mountRepositoryReadOnly": false,
     "defaultTimeoutMs": 600000,
     "maxTimeoutMs": 3600000,
     "defaultMaxOutputChars": 20000,

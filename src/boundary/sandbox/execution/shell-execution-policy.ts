@@ -28,11 +28,15 @@ interface NormalizedShellAllowlist {
   canonicalPaths: Set<string>;
 }
 
+export const SANDBOX_REPOSITORY_MOUNT_TARGET = '/repo';
+
 export interface ResolvedShellExecution {
   command: string;
   executableCommand: string;
   args: string[];
   workspacePath: string;
+  /** Canonical host path bind-mounted read-only at /repo, when enabled. */
+  repositoryMountPath?: string;
   cwd: string;
   sandboxCwd: string;
   sandboxBinaryPath: string;
@@ -268,6 +272,45 @@ function buildSandboxChildEnv(
   return childEnv;
 }
 
+function pathsOverlap(left: string, right: string): boolean {
+  return left === right
+    || isInsideAllowedPaths(left, [right])
+    || isInsideAllowedPaths(right, [left]);
+}
+
+/**
+ * Resolve the read-only repository mount. Fail-closed: when the operator-owned
+ * `mountRepositoryReadOnly` setting is true, a missing or unusable repository
+ * checkout is an error, never a silent skip. The source must be a real
+ * directory disjoint from the Personal Workspace so the mount can never
+ * widen the writable surface or re-expose workspace paths under a second
+ * name.
+ */
+function resolveRepositoryMount(
+  policy: ShellExecPolicyConfig,
+  workspacePath: string,
+): string | undefined {
+  if (policy.mountRepositoryReadOnly !== true) return undefined;
+  const source = typeof policy.repositoryMountSource === 'string'
+    ? policy.repositoryMountSource.trim()
+    : '';
+  if (!source) {
+    throw new ShellExecPolicyError(
+      'shell.exec repository mount is enabled but no repository checkout is configured (PSFN_REPOSITORY_DIR)',
+    );
+  }
+  const canonical = resolveExistingDirectory(
+    resolve(normalize(source)),
+    'shell.exec repository mount',
+  );
+  if (pathsOverlap(canonical, workspacePath)) {
+    throw new ShellExecPolicyError(
+      `shell.exec repository mount must not overlap the Personal Workspace: ${canonical}`,
+    );
+  }
+  return canonical;
+}
+
 function resolveRequiredRuntimeBinary(path: string, label: string): string {
   const canonical = resolveCanonicalExecutablePath(path);
   if (!canonical) {
@@ -361,6 +404,12 @@ export function resolveShellExecution(
     options.policy.envAllowlist ?? [],
     sandboxPath,
   );
+  const repositoryMountPath = resolveRepositoryMount(options.policy, workspacePath);
+  if (repositoryMountPath) {
+    // Discoverability inside the sandbox: the read-only copy is always at
+    // /repo regardless of the host checkout path.
+    childEnv.PSFN_REPO = SANDBOX_REPOSITORY_MOUNT_TARGET;
+  }
   const limits = resolveLimits(params, options.policy);
 
   return {
@@ -368,6 +417,7 @@ export function resolveShellExecution(
     executableCommand,
     args,
     workspacePath,
+    ...(repositoryMountPath ? { repositoryMountPath } : {}),
     cwd,
     sandboxCwd,
     sandboxBinaryPath: resolveRequiredRuntimeBinary(DEFAULT_SANDBOX_BINARY, 'sandbox'),

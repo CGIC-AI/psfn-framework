@@ -63,6 +63,48 @@ describe('executeShellCommandWithPolicy', () => {
     )).rejects.toThrow('shell.exec cwd not allowlisted');
   });
 
+  it('fails closed when the repository mount is enabled without a configured checkout', async () => {
+    const { workspace } = workspaceFixture();
+
+    await expect(executeShellCommandWithPolicy(
+      { command: 'bash', args: ['-lc', 'true'], cwd: workspace },
+      {
+        workspacePath: workspace,
+        policy: { ...enabledPolicy(workspace), mountRepositoryReadOnly: true },
+      },
+    )).rejects.toThrow('no repository checkout is configured');
+  });
+
+  it('fails closed when the repository mount source is missing or overlaps the workspace', async () => {
+    const { workspace, outside } = workspaceFixture();
+
+    await expect(executeShellCommandWithPolicy(
+      { command: 'bash', args: ['-lc', 'true'], cwd: workspace },
+      {
+        workspacePath: workspace,
+        policy: {
+          ...enabledPolicy(workspace),
+          mountRepositoryReadOnly: true,
+          repositoryMountSource: join(outside, 'missing-checkout'),
+        },
+      },
+    )).rejects.toThrow('shell.exec repository mount is unavailable');
+
+    for (const overlapping of [workspace, join(workspace, '.')]) {
+      await expect(executeShellCommandWithPolicy(
+        { command: 'bash', args: ['-lc', 'true'], cwd: workspace },
+        {
+          workspacePath: workspace,
+          policy: {
+            ...enabledPolicy(workspace),
+            mountRepositoryReadOnly: true,
+            repositoryMountSource: overlapping,
+          },
+        },
+      )).rejects.toThrow('must not overlap the Personal Workspace');
+    }
+  });
+
   it.runIf(!existsSync(sandboxBinaryPath))('fails closed when the namespace sandbox is unavailable', async () => {
     const { workspace } = workspaceFixture();
 
@@ -187,6 +229,56 @@ describe('executeShellCommandWithPolicy', () => {
 
       expect(result.exitCode).toBe(0);
       expect(result.stdout).toBe('nproc=4 as=131072 fsize=2048 cpu=2 nofile=32\n');
+    });
+
+    it('mounts the configured repository copy read-only at /repo and keeps it out by default', async () => {
+      const { workspace, outside } = workspaceFixture();
+      const repoSource = join(outside, 'repo-src');
+      mkdirSync(repoSource);
+      writeFileSync(join(repoSource, 'README.md'), 'repo-copy-marker\n');
+
+      const mounted = await executeShellCommandWithPolicy(
+        {
+          command: 'bash',
+          args: [
+            '-lc',
+            'printf "repo_env=%s\\n" "${PSFN_REPO-unset}"; cat /repo/README.md; '
+              + 'if printf x > /repo/probe 2>/dev/null; then printf "repo_write=allowed\\n"; '
+              + 'else printf "repo_write=denied\\n"; fi',
+          ],
+          cwd: workspace,
+        },
+        {
+          workspacePath: workspace,
+          policy: {
+            ...enabledPolicy(workspace),
+            mountRepositoryReadOnly: true,
+            repositoryMountSource: repoSource,
+          },
+        },
+      );
+      expect(mounted.exitCode).toBe(0);
+      expect(mounted.stdout).toContain('repo_env=/repo');
+      expect(mounted.stdout).toContain('repo-copy-marker');
+      expect(mounted.stdout).toContain('repo_write=denied');
+
+      const unmounted = await executeShellCommandWithPolicy(
+        {
+          command: 'bash',
+          args: [
+            '-lc',
+            'if [ -e /repo ]; then printf present; else printf absent; fi; '
+              + 'printf " repo_env=%s" "${PSFN_REPO-unset}"',
+          ],
+          cwd: workspace,
+        },
+        {
+          workspacePath: workspace,
+          // A configured source without the operator toggle must not mount.
+          policy: { ...enabledPolicy(workspace), repositoryMountSource: repoSource },
+        },
+      );
+      expect(unmounted.stdout).toBe('absent repo_env=unset');
     });
 
     it('does not expose a host path through a symlink inside the workspace', async () => {

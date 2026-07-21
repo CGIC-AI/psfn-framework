@@ -11,6 +11,7 @@ import {
 import { SharedWorldWikiStore } from './store.js';
 import { createSharedWikiPgvectorProjectionStore } from './shared-pgvector-projection.js';
 import { SharedWorldWikiProposalStore } from './shared-world-caretaker-store.js';
+import { bootstrapSharedWikiSchema } from '../../persistence/postgres/shared-schema.js';
 import type { SharedWorldWikiProposalInput } from './shared-world-caretaker-types.js';
 import {
   SharedWorldWikiCaretakerService,
@@ -71,6 +72,10 @@ describe('shared-world wiki caretaker real Postgres toaster', () => {
   it('keeps proposals invisible until approval, dedups, resumes projection, and repairs changed approved content', async () => {
     if (!harness) throw new Error('Postgres harness is unavailable');
     const database = await harness.createDatabase();
+    // The caretaker + projection stores no longer run DDL: the gateway migration
+    // authority provisions the shared wiki chain before agents connect. Mirror
+    // that here so the read-only readiness proofs pass.
+    await bootstrapSharedWikiSchema(database.databaseUrl);
     const systemDataDir = mkdtempSync(join(tmpdir(), 'psfn-caretaker-'));
     const proposalStore = new SharedWorldWikiProposalStore(database.databaseUrl);
     let companionAReader: Awaited<ReturnType<typeof createSharedWikiPgvectorProjectionStore>> | null = null;

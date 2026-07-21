@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import type { Pool, QueryResultRow } from 'pg';
 import { createPostgresPool, queryRows, withPostgresClient } from '../../persistence/postgres.js';
 import { SHARED_SCHEMA_NAME } from '../../persistence/postgres/migrations.js';
-import { ensureSharedWikiSchema } from '../../persistence/postgres/shared-schema.js';
+import { assertSharedWikiSchemaReady } from '../../persistence/postgres/shared-schema.js';
 import type {
   NormalizedSharedWorldWikiProposal,
   SharedWorldWikiApplyState,
@@ -186,7 +186,11 @@ export class SharedWorldWikiProposalStore implements SharedWorldWikiProposalStor
       allowExitOnIdle: true,
       schema: SHARED_SCHEMA_NAME,
     });
-    this.ready = ensureSharedWikiSchema(this.pool);
+    // The gateway's dedicated migration authority provisions the shared wiki
+    // chain before agents start; an ordinary companion credential lacks CREATE
+    // on the shared schema, so the caretaker proves readiness read-only and
+    // fails closed rather than running DDL.
+    this.ready = assertSharedWikiSchemaReady(this.pool);
     void this.ready.catch(() => undefined);
   }
 

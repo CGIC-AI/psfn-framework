@@ -127,6 +127,43 @@ export async function bootstrapSharedWikiSchema(databaseUrl: string): Promise<vo
   }
 }
 
+/**
+ * Read-only proof that the gateway migration authority completed the BASE
+ * shared chain (ledger versions in {@link POSTGRES_SHARED_BASE_MIGRATION_VERSIONS},
+ * which install every pgvector-free shared table — presence, ICP control plane,
+ * social pot, speaking arbiter). Ordinary companion credentials LACK CREATE on
+ * the shared schema (see {@link assertSharedSchemaRuntimeAuthority}), so a shared
+ * store must never run DDL: it proves readiness here and fails closed when the
+ * gateway has not yet provisioned the schema.
+ *
+ * The ledger table is probed with `to_regclass` FIRST so a fully-absent schema
+ * fails with a clear readiness error rather than a raw "relation does not exist"
+ * — and, critically, never with a CREATE attempt.
+ */
+export async function assertSharedSchemaReady(pool: Pool): Promise<void> {
+  const presence = await pool.query<{ ledger_table: string | null }>(
+    `SELECT to_regclass('shared.shared_schema_migrations')::text AS ledger_table`,
+  );
+  const ledgerTable = presence.rows.at(0)?.ledger_table;
+  if (ledgerTable !== 'shared_schema_migrations'
+    && ledgerTable !== 'shared.shared_schema_migrations') {
+    throw new Error(
+      'Shared schema runtime is missing the shared_schema_migrations ledger; '
+      + 'the gateway shared-schema migration authority has not run',
+    );
+  }
+  const ledger = await pool.query<{ versions: number[] | null }>(
+    `SELECT ARRAY_AGG(version ORDER BY version)::integer[] AS versions
+     FROM shared.shared_schema_migrations`,
+  );
+  const versions = ledger.rows.at(0)?.versions ?? [];
+  for (const required of POSTGRES_SHARED_BASE_MIGRATION_VERSIONS) {
+    if (!versions.includes(required)) {
+      throw new Error(`Shared schema runtime is missing required migration ${required}`);
+    }
+  }
+}
+
 /** Read-only proof that the gateway migration authority completed every chain. */
 export async function assertSharedWikiSchemaReady(pool: Pool): Promise<void> {
   const readiness = await pool.query<{

@@ -83,7 +83,7 @@ import { ValuesJournalStore } from '../../../faculties/values/store.js';
 import type { IntrospectionConsentStore } from '../../../faculties/introspection/consent-store.js';
 import type { IntrospectionTurnSensitivityDecisions } from '../../../faculties/introspection/turn-sensitivity.js';
 import { DEFAULT_REPL_CONFIG, type REPLConfig } from '../../../core/tools/analysis-workbench/types.js';
-import type { SandboxExecutionPort } from '../../../boundary/sandbox/capabilities/contracts.js';
+import type { SandboxExecutionPort, SandboxExecutionPortSeed } from '../../../boundary/sandbox/capabilities/contracts.js';
 import type { Scheduler } from '../../../core/scheduler/scheduler.js';
 import type { CapabilityTier } from '../../../system/config/runtime-config-contracts.js';
 import { loadCharacterCard, composeSystemPrompt } from '../../../core/identity/loader.js';
@@ -580,7 +580,7 @@ export interface ToolRuntimeOptions {
   compositionalPolicy?: SubstrateConfig['compositionalPolicy'];
   moduleInstallConfirmationQueue?: ApprovalQueuePort | null;
   onModuleRegistryMutation?: (mutation: ModuleRegistryMutation) => Promise<void> | void;
-  executionPort?: SandboxExecutionPort | null;
+  executionPort?: SandboxExecutionPort | SandboxExecutionPortSeed | null;
   compressionGuidelineEvolution?: CompressionGuidelineEvolutionPort | null;
   shardParentIcpDelivery: PolicyGovernedShardParentIcpDeliveryPort | null;
   /**

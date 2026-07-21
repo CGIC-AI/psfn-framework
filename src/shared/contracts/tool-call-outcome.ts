@@ -28,17 +28,35 @@ export function isToolCallErrorOutcome(outcome: ToolCallOutcome): boolean {
   return outcome !== 'success';
 }
 
+/**
+ * bead sqsz: an errorClass derived only from free-text keyword matching
+ * (classSource === 'inferred') is not authoritative evidence of a rejection or
+ * denial. A genuine runtime failure that RETURNS a diagnostic whose text merely
+ * contains a policy/validation keyword must stay an execution failure, not be
+ * hidden from runtime-failure telemetry. Absent classSource is treated as
+ * declared, so explicit tool-asserted denials and structured signals are
+ * unaffected.
+ */
+function isInferredErrorClass(details: Record<string, unknown>): boolean {
+  return details.classSource === 'inferred';
+}
+
 function isPolicyDenialDetails(details: unknown): boolean {
   if (!isRecord(details)) return false;
-  return details.capabilityDenied === true
+  if (details.capabilityDenied === true
     || details.egressGated === true
-    || details.policyDenied === true
-    || details.errorClass === 'permission_denied'
+    || details.policyDenied === true) {
+    return true;
+  }
+  if (isInferredErrorClass(details)) return false;
+  return details.errorClass === 'permission_denied'
     || details.errorClass === 'policy_blocked';
 }
 
 function isValidationRejectionDetails(details: unknown): boolean {
-  return isRecord(details) && details.errorClass === 'invalid_input';
+  if (!isRecord(details)) return false;
+  if (isInferredErrorClass(details)) return false;
+  return details.errorClass === 'invalid_input';
 }
 
 /**

@@ -62,6 +62,7 @@
     "migrate:persistence-layout": "tsx src/app/maintenance/migrate-persistence-layout.ts",
     "migrate:session-filenames": "tsx src/app/maintenance/migrate-session-filenames.ts",
     "migrate:system-owner-fleet": "tsx src/app/maintenance/migrate-system-owner-fleet.ts",
+    "seed:sibling-contacts": "tsx src/app/maintenance/seed-sibling-contacts.ts",
     "snapshot:system-owner-fleet": "tsx src/app/maintenance/system-owner-fleet-snapshot.ts capture",
     "restore:system-owner-fleet-snapshot": "tsx src/app/maintenance/system-owner-fleet-snapshot.ts restore",
     "migrate:scheduler-owner": "tsx src/app/maintenance/migrate-scheduler-owner.ts",

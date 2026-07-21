@@ -1,10 +1,22 @@
 {
+  "postgres": {
+    "sharedMigrationRole": "shakedown_shared_migration",
+    "sharedMigrationDatabaseUrlRef": {
+      "kind": "env",
+      "envName": "SHAKEDOWN_SHARED_MIGRATION_DATABASE_URL"
+    }
+  },
   "companions": [
     {
       "companionId": "a7100000-0000-4000-8000-000000000001",
       "companionDataDir": "companion-data",
       "characterCardPath": "companion-data/companion.json",
       "postgresSchema": "shakedown_artie",
+      "postgresRole": "shakedown_artie_runtime",
+      "postgresDatabaseUrlRef": {
+        "kind": "env",
+        "envName": "SHAKEDOWN_ARTIE_DATABASE_URL"
+      },
       "displayName": "ARTEMIS"
     },
     {
@@ -12,6 +24,11 @@
       "companionDataDir": "support-companions/mica/data",
       "characterCardPath": "support-companions/mica/data/companion.json",
       "postgresSchema": "shakedown_support_mica",
+      "postgresRole": "shakedown_mica_runtime",
+      "postgresDatabaseUrlRef": {
+        "kind": "env",
+        "envName": "SHAKEDOWN_MICA_DATABASE_URL"
+      },
       "displayName": "Mica"
     },
     {
@@ -19,6 +36,11 @@
       "companionDataDir": "support-companions/lumen/data",
       "characterCardPath": "support-companions/lumen/data/companion.json",
       "postgresSchema": "shakedown_support_lumen",
+      "postgresRole": "shakedown_lumen_runtime",
+      "postgresDatabaseUrlRef": {
+        "kind": "env",
+        "envName": "SHAKEDOWN_LUMEN_DATABASE_URL"
+      },
       "displayName": "Lumen"
     }
   ]

@@ -71,6 +71,11 @@ import {
   sanitizeHubDeviceChatRequest,
 } from './hub-device-ingress.js';
 import { HubDeviceAssertionRejectedError } from '../../../boundary/fleet-auth/hub-device-assertion.js';
+import {
+  BEARER_COMPANION_SELECTOR_HEADER,
+  resolveBearerCompanionTarget,
+  type BearerCompanionRoutingConfig,
+} from './bearer-companion-selector.js';
 
 const IDENTITY_LINK_CHALLENGE_TTL_MS = 5 * 60_000;
 
@@ -132,6 +137,8 @@ export interface ApiChatCompletionsHandlerConfig {
   logger: ApiServerLogger;
   /** htm9.9: shared document file-part ingestion; null when not configured. */
   documentIngest: ApiDocumentIngestConfig | null;
+  /** Gateway-owned routing and entitlement contract for the Bearer surface. */
+  bearerCompanionRouting?: BearerCompanionRoutingConfig;
 }
 
 export interface PendingHubDeviceAdmission {
@@ -157,6 +164,7 @@ export class ApiChatCompletionsHandler {
   private readonly satelliteRegistryProvider: SatelliteRegistryProvider | undefined;
   private readonly logger: ApiServerLogger;
   private readonly documentIngest: ApiDocumentIngestConfig | null;
+  private readonly bearerCompanionRouting: BearerCompanionRoutingConfig | undefined;
   private readonly channelTurnLock = new FifoChannelLock();
   private readonly processingChannels = new Set<string>();
 
@@ -173,6 +181,7 @@ export class ApiChatCompletionsHandler {
     this.satelliteRegistryProvider = config.satelliteRegistryProvider;
     this.logger = config.logger;
     this.documentIngest = config.documentIngest;
+    this.bearerCompanionRouting = config.bearerCompanionRouting;
   }
 
   externalChannelProfile(channelType: ChannelType): ExternalChannelProfileConfig | undefined {
@@ -189,6 +198,24 @@ export class ApiChatCompletionsHandler {
   ): Promise<void> {
     let parsed = await readChatCompletionRequest(req, res, this.logger);
     if (!parsed) return;
+
+    let effectiveFleetRouting = fleetRouting;
+    if (!effectiveFleetRouting && this.bearerCompanionRouting) {
+      const rawSelector = req.headers[BEARER_COMPANION_SELECTOR_HEADER];
+      if (rawSelector !== undefined || principal.scope !== 'satellite') {
+        const requestedCompanionId = singleApiHeader(rawSelector)?.trim();
+        const resolution = resolveBearerCompanionTarget({
+          requestedCompanionId,
+          principal,
+          routing: this.bearerCompanionRouting,
+        });
+        if (!resolution.ok) {
+          sendApiError(res, resolution.status, resolution.type, resolution.message);
+          return;
+        }
+        effectiveFleetRouting = { companionId: resolution.companionId };
+      }
+    }
 
     let hubDevicePrincipal: HubDevicePrincipalSnapshot | undefined;
     let hubDeviceAttachment: HubDeviceAttachmentSnapshot | undefined;
@@ -223,7 +250,7 @@ export class ApiChatCompletionsHandler {
         clientCert,
         hubDevicePrincipal,
         hubDeviceAttachment,
-        fleetRouting,
+        effectiveFleetRouting,
       );
     } else {
       await this.handleNonStreaming(
@@ -234,7 +261,7 @@ export class ApiChatCompletionsHandler {
         clientCert,
         hubDevicePrincipal,
         hubDeviceAttachment,
-        fleetRouting,
+        effectiveFleetRouting,
       );
     }
   }
@@ -996,7 +1023,7 @@ export class ApiChatCompletionsHandler {
         const response = buildChatCompletionResponse({
           id: `chatcmpl-${randomUUID()}`,
           created: Math.floor(Date.now() / 1000),
-          model: this.modelName,
+          model: result.response.companionId ?? fleetRouting?.companionId ?? this.modelName,
           content: result.response.content,
           inputTokens: result.response.inputTokens,
           outputTokens: result.response.outputTokens,
@@ -1057,16 +1084,27 @@ export class ApiChatCompletionsHandler {
   ): Promise<void> {
     const completionId = `chatcmpl-${randomUUID()}`;
     const created = Math.floor(Date.now() / 1000);
-    const transport = new SseStreamingTransport(res, {
-      completionId,
-      created,
-      model: this.modelName,
-    });
     const runtime = this.runtime;
 
     if (runtime) {
-      transport.open();
-      transport.writeRole();
+      let transport: SseStreamingTransport | undefined;
+      let responseModel: string | undefined;
+      const ensureTransport = (model: string): SseStreamingTransport => {
+        if (transport) {
+          if (responseModel !== model) {
+            throw new Error('Streaming response companion identity changed during the request');
+          }
+          return transport;
+        }
+        responseModel = model;
+        transport = new SseStreamingTransport(res, { completionId, created, model });
+        transport.open();
+        transport.writeRole();
+        return transport;
+      };
+      if (fleetRouting) {
+        ensureTransport(fleetRouting.companionId);
+      }
 
       try {
         const result = await this.awaitRuntimeOrInterrupt(
@@ -1081,27 +1119,37 @@ export class ApiChatCompletionsHandler {
             ...(hubDevicePrincipal ? { hubDevicePrincipal } : {}),
             ...(hubDeviceAttachment ? { hubDeviceAttachment } : {}),
             signal,
-            onDelta: (text) => {
-              transport.writeContent(text);
+            onDelta: (text, companionId) => {
+              ensureTransport(
+                companionId ?? fleetRouting?.companionId ?? this.modelName,
+              ).writeContent(text);
             },
           }),
         );
         if (!canWriteResponse(res)) return;
         if (!result.ok) {
-          transport.writeErrorAndDone(result.error.type, result.error.message, result.error.details);
+          ensureTransport(fleetRouting?.companionId ?? this.modelName)
+            .writeErrorAndDone(result.error.type, result.error.message, result.error.details);
           return;
         }
+        const respondingTransport = ensureTransport(
+          result.response.companionId ?? fleetRouting?.companionId ?? this.modelName,
+        );
         if (!result.response.content.trim() && !isNoReplyRuntimeCompletion(result.response)) {
-          transport.writeErrorAndDone('empty_response', 'Agent returned empty content');
+          respondingTransport.writeErrorAndDone('empty_response', 'Agent returned empty content');
           return;
         }
 
-        transport.writeFinish();
-        transport.writeDone();
+        respondingTransport.writeFinish();
+        respondingTransport.writeDone();
       } catch (err) {
-        this.handleStreamingTurnError(res, err, transport);
+        this.handleStreamingTurnError(
+          res,
+          err,
+          transport ?? ensureTransport(fleetRouting?.companionId ?? this.modelName),
+        );
       } finally {
-        transport.endIfWritable();
+        transport?.endIfWritable();
       }
       return;
     }
@@ -1114,6 +1162,11 @@ export class ApiChatCompletionsHandler {
     const pendingTurn = await this.prepareTurn(request, req, res, principal, clientCert);
     if (!pendingTurn) return;
 
+    const transport = new SseStreamingTransport(res, {
+      completionId,
+      created,
+      model: this.modelName,
+    });
     transport.open();
     transport.writeRole();
 

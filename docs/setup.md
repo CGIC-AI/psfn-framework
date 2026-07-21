@@ -220,6 +220,16 @@ documented in full in
   ```
 - `COMPANION_PG_SCHEMA` — per-companion Postgres schema for one agent process.
   The cluster launcher sets it from the matching manifest entry.
+- `companions.json` also owns the distinct `postgresRole` and
+  `postgresDatabaseUrlRef` for each companion plus the root shared-migration
+  role/reference. Put the referenced secret values in the configured credential
+  vault. The gateway resolves them, runs shared DDL through the dedicated role,
+  and gives each agent only its matching URL through an inherited descriptor.
+  The gateway's shared-schema provisioning requires the `pgvector` extension
+  installed in the `extensions` schema, so a multi-companion deployment must
+  provision it before first launch even when no companion uses the shared-world
+  wiki — the shared chain references the `vector` type and gateway startup fails
+  closed without it.
 - `PSFN_RUNTIME_ROOT` — canonical persistence root for manifest-relative
   `companionDataDir` and `characterCardPath`. The cluster resolver emits absolute
   paths beneath this root and rejects traversal or symlink escapes.

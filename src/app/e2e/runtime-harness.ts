@@ -162,12 +162,24 @@ export function createIsolatedE2ERuntime(
     writeFileSync(
       join(systemDataDir, COMPANIONS_FILE_NAME),
       `${JSON.stringify({
+        postgres: {
+          sharedMigrationRole: 'shared_schema_migration',
+          sharedMigrationDatabaseUrlRef: {
+            kind: 'env',
+            envName: 'SHARED_SCHEMA_MIGRATION_DATABASE_URL',
+          },
+        },
         companions: [
           {
             companionId: process.env.COMPANION_ID,
             companionDataDir: 'companion-data',
             characterCardPath: 'companion-data/companion.json',
             postgresSchema: 'public',
+            postgresRole: 'single_companion_runtime',
+            postgresDatabaseUrlRef: {
+              kind: 'env',
+              envName: 'SINGLE_COMPANION_DATABASE_URL',
+            },
           },
         ],
       }, null, 2)}\n`,

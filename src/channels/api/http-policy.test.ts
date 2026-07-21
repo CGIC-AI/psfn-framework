@@ -177,6 +177,7 @@ describe('evaluateCorsPolicy', () => {
     expect(decision.headers?.['Access-Control-Allow-Headers']).toContain('X-PSFN-Channel-ID');
     expect(decision.headers?.['Access-Control-Allow-Headers']).toContain('X-PSFN-Author-ID');
     expect(decision.headers?.['Access-Control-Allow-Headers']).toContain('X-PSFN-Author-Name');
+    expect(decision.headers?.['Access-Control-Allow-Headers']).toContain('X-PSFN-Companion-ID');
   });
 
   it('allows wildcard LAN host preflight origins with exact scheme and port semantics', () => {

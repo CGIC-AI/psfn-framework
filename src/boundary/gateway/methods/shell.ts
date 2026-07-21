@@ -12,11 +12,6 @@ import {
   SlidingWindowCircuitBreaker,
 } from '../../../shared/resilience/circuit-breaker.js';
 
-interface ShellExecResultLike {
-  exitCode: number | null;
-  timedOut: boolean;
-}
-
 const shellCircuitBreaker = new SlidingWindowCircuitBreaker({
   failureThreshold: 3,
   windowMs: 60_000,
@@ -32,14 +27,9 @@ function shellCircuitKey(params: ShellExecParams, runtime: GatewayMethodRuntime)
   return `shell.exec::${command}::${cwd}`;
 }
 
-function shellFailureResult(result: ShellExecResultLike): Error | null {
-  if (result.timedOut) {
-    return new Error('shell.exec timed out');
-  }
-  if (result.exitCode === null || result.exitCode !== 0) {
-    return new Error(`shell.exec exited with code ${String(result.exitCode)}`);
-  }
-  return null;
+function shouldRecordShellFailure(error: Error): boolean {
+  if (!(error instanceof ShellExecPolicyError)) return true;
+  return error.message.startsWith('shell.exec sandbox failed:');
 }
 
 function toCircuitOpenJsonRpcError(error: CircuitOpenError): JSONRPCErrorException {
@@ -102,8 +92,7 @@ const shellDescriptors: Array<GatedMethodDescriptor<any, unknown>> = [
             workspacePath: runtime.workspacePath,
             policy,
           }),
-          isFailureResult: shellFailureResult,
-          shouldRecordFailure: error => !(error instanceof ShellExecPolicyError),
+          shouldRecordFailure: shouldRecordShellFailure,
           onTransition: logShellCircuitTransition,
         });
       } catch (error) {

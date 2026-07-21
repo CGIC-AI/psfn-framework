@@ -15,7 +15,6 @@ const PROVENANCE_HANDLE = 'icp-prov:11111111-1111-4111-8111-111111111111';
 const mocks = vi.hoisted(() => ({
   pool: { end: vi.fn(async () => undefined) },
   createPostgresPool: vi.fn(() => mocks.pool),
-  ensureSharedSchema: vi.fn(async () => undefined),
   executeQuery: vi.fn(async () => ({ rowCount: 1 })),
   queryOne: vi.fn(async () => undefined as unknown),
   queryRows: vi.fn(async () => [] as unknown[]),
@@ -31,7 +30,6 @@ vi.mock('../postgres.js', () => ({
   queryRows: mocks.queryRows,
   withPostgresClient: mocks.withPostgresClient,
 }));
-vi.mock('./shared-schema.js', () => ({ ensureSharedSchema: mocks.ensureSharedSchema }));
 
 const AVAILABILITY_ROW = {
   companion_id: A,
@@ -98,13 +96,12 @@ async function connect(): Promise<PostgresIcpSharedAutonomyStore> {
 }
 
 describe('PostgresIcpSharedAutonomyStore', () => {
-  it('pins and provisions the shared schema', async () => {
+  it('pins the runtime pool to the pre-migrated shared schema without executing DDL', async () => {
     await connect();
     expect(mocks.createPostgresPool).toHaveBeenCalledWith(
       'postgres://example',
       expect.objectContaining({ schema: SHARED_SCHEMA_NAME }),
     );
-    expect(mocks.ensureSharedSchema).toHaveBeenCalledWith(mocks.pool);
   });
 
   it('requires a known fleet and rejects unknown episode participants before SQL', async () => {

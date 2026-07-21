@@ -11,6 +11,7 @@ import type { FatigueSocialPotConfig } from '../../shared/contracts/charge-polic
 import { enforceSocialPotDraw } from '../../core/agent/fatigue/social-pot-enforcement.js';
 import type { SocialPotConfig } from '../../core/agent/fatigue/social-pot.js';
 import { PostgresSocialPotStore } from './social-pot-store.js';
+import { bootstrapSharedSchema } from './shared-schema.js';
 import {
   startPostgresTestHarness,
   type PostgresTestHarness,
@@ -52,6 +53,9 @@ async function freshDatabaseUrl(): Promise<string> {
     throw new Error('Postgres integration harness is not available');
   }
   const database = await harness.createDatabase();
+  // The store no longer runs DDL: the gateway migration authority provisions
+  // the shared schema before agents connect. Mirror that here.
+  await bootstrapSharedSchema(database.databaseUrl);
   return database.databaseUrl;
 }
 

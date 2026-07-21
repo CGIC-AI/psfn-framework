@@ -28,9 +28,35 @@ export interface GeneratedImageView {
   favorite: boolean;
   tags: string[];
   meaningfulMoment?: GeneratedImageMeaningfulMoment;
+  embodiment?: GeneratedImageEmbodiment;
+  autobiography?: GeneratedImageAutobiography;
   conversation?: GeneratedImageConversationLink;
   companionNoteRefs: GeneratedImageCompanionNoteRef[];
   artifactRefs: GeneratedImageArtifactRef[];
+}
+
+export interface GeneratedImageAutobiographyMilestone {
+  marked: boolean;
+  markedAt: string;
+  label?: string;
+}
+
+export interface GeneratedImageAutobiography {
+  narrative: string;
+  emotionalContext?: string;
+  milestone?: GeneratedImageAutobiographyMilestone;
+  author: 'companion' | 'operator';
+  authoredAt: string;
+  updatedAt: string;
+}
+
+export interface GeneratedImageEmbodiment {
+  verdict: 'same_me' | 'drifted' | 'different_person';
+  framing?: string;
+  note?: string;
+  referenceId?: string;
+  referenceDescription?: string;
+  reviewedAt?: string;
 }
 
 export interface GeneratedImageConversationLink {
@@ -90,12 +116,14 @@ export function listGeneratedImages(input: {
   tags?: string[];
   favorite?: boolean;
   meaningful?: boolean;
+  milestone?: boolean;
   q?: string;
 } = {}): Promise<GeneratedImagesResponse> {
   const params = new URLSearchParams();
   if (input.tags?.length) params.set('tags', input.tags.join(','));
   if (input.favorite !== undefined) params.set('favorite', String(input.favorite));
   if (input.meaningful !== undefined) params.set('meaningful', String(input.meaningful));
+  if (input.milestone !== undefined) params.set('milestone', String(input.milestone));
   if (input.q?.trim()) params.set('q', input.q.trim());
   const query = params.toString();
   return apiGet<GeneratedImagesResponse>(`/api/admin/images/generated${query ? `?${query}` : ''}`);
@@ -109,6 +137,13 @@ export function updateGeneratedImage(
     meaningfulMoment?: {
       marked: boolean;
       note?: string;
+    };
+    autobiography?: {
+      narrative?: string;
+      emotionalContext?: string;
+      milestone?: { marked: boolean; label?: string };
+      clear?: boolean;
+      allowOverwriteCompanionAuthored?: boolean;
     };
     conversation?: GeneratedImageConversationLink;
     companionNoteRefs?: GeneratedImageCompanionNoteRef[];

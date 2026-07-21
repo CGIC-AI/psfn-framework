@@ -237,6 +237,8 @@ export interface ApiChatCompletionRpcSuccess {
   response: {
     content: string;
     channelId: string;
+    /** Gateway-authenticated companion connection that produced this response. */
+    companionId?: string;
     inputTokens: number;
     outputTokens: number;
     noReply?: IntentionalNoReplyMetadata;
@@ -325,7 +327,7 @@ export interface ApiRuntimeChatRequest {
   hubDevicePrincipal?: HubDevicePrincipalSnapshot;
   hubDeviceAttachment?: HubDeviceAttachmentSnapshot;
   companionUiCapability?: CompanionUiAgentCapability;
-  onDelta?: (text: string) => void;
+  onDelta?: (text: string, companionId?: string) => void;
   signal?: AbortSignal;
 }
 

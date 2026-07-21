@@ -28,6 +28,7 @@ export const API_CORS_ALLOWED_HEADERS = [
   'X-PSFN-Channel-ID',
   'X-PSFN-Author-ID',
   'X-PSFN-Author-Name',
+  'X-PSFN-Companion-ID',
   'X-PSFN-Satellite-Claim-Type',
   'X-PSFN-Satellite-ID',
   'X-PSFN-Satellite-Endpoint-ID',

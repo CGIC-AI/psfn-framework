@@ -75,11 +75,17 @@ function seedManifestAt(systemDataDir: string, companionId = DEFAULT_TEST_COMPAN
   const manifestPath = join(abs, 'companions.json');
   const manifestPreexisted = existsSync(manifestPath);
   writeFileSync(manifestPath, `${JSON.stringify({
+    postgres: {
+      sharedMigrationRole: 'shared_schema_migration',
+      sharedMigrationDatabaseUrlRef: { kind: 'env', envName: 'SHARED_MIGRATION_URL' },
+    },
     companions: [{
       companionId,
       companionDataDir: 'companion',
       characterCardPath: 'companion/companion.json',
       postgresSchema: 'public',
+      postgresRole: 'single_companion_runtime',
+      postgresDatabaseUrlRef: { kind: 'env', envName: 'SINGLE_COMPANION_DATABASE_URL' },
     }],
   })}\n`);
   seededManifestCleanups.push(() => {
@@ -124,6 +130,7 @@ describe('loadConfig path defaults', () => {
     dataDir: string;
     cardPath: string;
     postgresSchema: string;
+    postgresRole: string;
   } {
     clearRuntimePathEnv();
     const root = mkdtempSync(join(tmpdir(), 'psfn-load-config-fleet-'));
@@ -134,22 +141,31 @@ describe('loadConfig path defaults', () => {
     const dataDir = join(root, 'companions/flagship');
     const cardPath = join(dataDir, 'character-card.json');
     const postgresSchema = 'companion_flagship';
+    const postgresRole = 'companion_flagship_runtime';
     // A two-entry manifest makes this a multi-companion deployment
     // (multiCompanion derives from companions.length > 1). The process binds to
     // the first (flagship) entry via the environment below.
     writeFileSync(join(systemDataDir, 'companions.json'), `${JSON.stringify({
+      postgres: {
+        sharedMigrationRole: 'shared_schema_migration',
+        sharedMigrationDatabaseUrlRef: { kind: 'env', envName: 'SHARED_MIGRATION_URL' },
+      },
       companions: [
         {
           companionId,
           companionDataDir: 'companions/flagship',
           characterCardPath: 'companions/flagship/character-card.json',
           postgresSchema,
+          postgresRole,
+          postgresDatabaseUrlRef: { kind: 'env', envName: 'FLAGSHIP_DATABASE_URL' },
         },
         {
           companionId: '22222222-2222-4222-8222-222222222222',
           companionDataDir: 'companions/aria',
           characterCardPath: 'companions/aria/character-card.json',
           postgresSchema: 'companion_aria',
+          postgresRole: 'companion_aria_runtime',
+          postgresDatabaseUrlRef: { kind: 'env', envName: 'ARIA_DATABASE_URL' },
         },
       ],
     })}\n`);
@@ -170,7 +186,7 @@ describe('loadConfig path defaults', () => {
     );
     delete process.env.POSTGRES_DATABASE_URL;
     process.env.POSTGRES_DATABASE_URL_FILE = postgresCredentialPath;
-    return { root, companionId, dataDir, cardPath, postgresSchema };
+    return { root, companionId, dataDir, cardPath, postgresSchema, postgresRole };
   }
 
   afterEach(() => {
@@ -553,6 +569,7 @@ describe('loadConfig path defaults', () => {
       companionDataDir: expected.dataDir,
       characterCardPath: expected.cardPath,
       postgresSchema: expected.postgresSchema,
+      postgresRole: expected.postgresRole,
       personalWorkspacePath: join(expected.root, 'workspaces', 'personal', expected.companionId),
     });
     expect(config.workspacePath).toBe(

@@ -28,18 +28,26 @@ import {
 } from './system-owner-fleet-migration.js';
 
 const FLEET: CompanionsFleetConfig = {
+  postgres: {
+    sharedMigrationRole: 'shared_schema_migration',
+    sharedMigrationDatabaseUrlRef: { kind: 'env', envName: 'SHARED_MIGRATION_URL' },
+  },
   companions: [
     {
       companionId: '11111111-1111-4111-8111-111111111111',
       companionDataDir: 'companions/one',
       characterCardPath: 'companions/one/companion.json',
       postgresSchema: 'one',
+      postgresRole: 'companion_one_runtime',
+      postgresDatabaseUrlRef: { kind: 'env', envName: 'COMPANION_ONE_DATABASE_URL' },
     },
     {
       companionId: '22222222-2222-4222-8222-222222222222',
       companionDataDir: 'companions/two',
       characterCardPath: 'companions/two/companion.json',
       postgresSchema: 'two',
+      postgresRole: 'companion_two_runtime',
+      postgresDatabaseUrlRef: { kind: 'env', envName: 'COMPANION_TWO_DATABASE_URL' },
     },
   ],
 };

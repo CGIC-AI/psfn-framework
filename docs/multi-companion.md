@@ -54,6 +54,13 @@ with more than one entry. The `PSFN_MULTI_COMPANION` env flag has been retired.
   - additional entries → more agents and schemas under those same controls;
     the values and launch contracts do not change
 
+The root `postgres` block owns the dedicated shared-schema migration role and
+its gateway-only credential reference. This topology authority is independent
+of the optional Cluster Auth owner file; `fleet-auth.json` does not own shared
+DDL. The gateway's `POSTGRES_DATABASE_URL` must exactly match one companion
+credential resolved from the manifest; sibling and shared-migration credentials
+remain gateway-only.
+
 Each companion entry (`CompanionFleetEntry`, strict — unknown keys rejected)
 carries exactly:
 
@@ -63,6 +70,8 @@ carries exactly:
 | `companionDataDir` | companion's data root, relative to the canonical persistence root (`PSFN_RUNTIME_ROOT`, or the selected layout's runtime root) | relative path, may not escape the root |
 | `characterCardPath` | companion's character card, relative to the same canonical persistence root | relative path, may not escape the root |
 | `postgresSchema` | Postgres schema owning this companion's tenant tables | lowercase identifier, ≤63 chars, no `pg_` prefix |
+| `postgresRole` | dedicated owner/runtime role for that schema | safe PostgreSQL role name, unique across the cluster and distinct from the shared migration role |
+| `postgresDatabaseUrlRef` | launcher-resolved credential reference delivered to this agent through an inherited file descriptor | valid credential reference, unique across the cluster and never `POSTGRES_DATABASE_URL` |
 | `displayName` | optional human-facing roster label (display-only, no authority) | non-empty string, ≤120 chars, no control characters |
 | `avatarRef` | optional opaque avatar reference for the roster (display-only) | non-empty string, ≤512 chars, no control characters |
 
@@ -73,8 +82,9 @@ keys or authorization inputs. The roster's display name resolves as
 `displayName` when present, otherwise the `companionId` — no character-card file
 is read at request time.
 
-Cross-entry validation rejects duplicate `companionId`, duplicate
-`postgresSchema`, and overlapping `companionDataDir`.
+Cross-entry validation rejects duplicate `companionId`, `postgresSchema`,
+`postgresRole`, database credential reference, and overlapping
+`companionDataDir`.
 Before any process is spawned, the supervisor resolves both path fields to
 canonical absolute strict subpaths of the runtime root. Existing symlink
 ancestors are resolved and an escape outside that root is rejected. Each agent
@@ -84,8 +94,9 @@ drift refuses startup before persistence or character-card loading. The one
 cluster Garden receives the complete registry without inheriting any companion's
 identity, Personal Workspace, or database schema.
 
-**What is NOT in `companions.json`:** per-companion Discord tokens,
-model/settings selections, or a mutable personal workspace path. Discord identity +
+**What is NOT in `companions.json`:** database secret values, per-companion
+Discord tokens, model/settings selections, or a mutable personal workspace path.
+The file contains credential references only. Discord identity +
 channel→companion routing live in `channels.json`; the per-companion Postgres
 schema for a single agent process is sourced from the `COMPANION_PG_SCHEMA` env
 var. The manifest owns identity, data location, and tenant schema. The cluster
@@ -171,20 +182,23 @@ extra `shared` schema for cross-companion world data.
   derived from `COMPANION_ID`. Leave it unset for single-companion (the `public`
   schema).
 - Pool pinning: `createPostgresPool(url, { schema })`
-  (`src/persistence/postgres.ts`) sets `options=-c search_path=<schema>,public`
+  (`src/persistence/postgres.ts`) sets `options=-c search_path=<schema>,extensions`
   at connection startup. The schema name is validated by
   `assertValidPostgresSchemaName` before it ever reaches a connection option, so
-  it cannot smuggle SQL. `public` is retained in the search path so the
-  `pgvector` `VECTOR` type still resolves. Queries themselves are unchanged.
-- Up-front provisioning: `src/persistence/runtime-factory.ts` creates the schema
-  once (`ensurePostgresSchemaExists`) via a bootstrap pool before any store
-  connects, so a store's first DDL cannot land in `public` by accident. The same
-  `schema` is then threaded into every store.
+  it cannot smuggle SQL. The operator-provisioned `extensions` schema keeps
+  `pgvector` resolvable without exposing legacy objects from `public`. Queries
+  themselves are unchanged.
+- Up-front provisioning: the gateway resolves the topology-owned credentials,
+  verifies the companion schemas and role posture, and runs the complete shared
+  migration chain once through `prepareFleetSharedSchemaRuntime`. Agent startup
+  is read-only: it verifies its tenant boundary and exact shared DML grants
+  before any store connects.
 - Shared schema: `SHARED_SCHEMA_NAME = 'shared'`
   (`src/persistence/postgres/migrations.ts`) holds cross-companion world data —
   `companion_presence` (co-presence) and the shared-world wiki chunks. It is
   provisioned advisory-lock-serialized (`src/persistence/postgres/shared-schema.ts`)
-  so N concurrently-starting agents are safe.
+  only by the dedicated shared migration authority. Runtime stores never issue
+  shared DDL.
 - Migrations run per schema: `runPostgresMigrations(pool, statements, { schema })`.
   Every companion store supplies its registered schema.
 
@@ -199,7 +213,8 @@ cluster and spawns one agent process per companion.
   `companionId, companionDataDir, characterCardPath, postgresSchema,
   personalWorkspacePath,
   role-bound agent proof, role-bound session-integrity proof,
-  adminTransportSocket`. A one-entry roster emits one line and follows the same
+  resolved database credential, adminTransportSocket`. A one-entry roster emits
+  one line and follows the same
   supervisor path as a larger roster. The admin socket is derived from
   `resolveCompanionAdminTransportSocketPath`
   (`src/operator/garden/transport-paths.ts`), never by the shell.
@@ -209,6 +224,9 @@ cluster and spawns one agent process per companion.
   the role-bound gateway proofs from the plan. The proofs are derived from the
   gateway session keyring and companion ID; they are passed only to the agent and its
   isolated session-integrity worker and are omitted from dry-run output.
+  The launcher delivers the matching database URL through
+  `POSTGRES_DATABASE_URL_FD`; no sibling or shared-migration credential is placed
+  in the agent environment or dry-run output.
   A one-entry cluster derives the same role separation and uses the same bound
   gateway routing as every other cluster.
 - `--dry-run` (or `PSFN_SUPERVISOR_DRY_RUN=1`) resolves and prints the spawn

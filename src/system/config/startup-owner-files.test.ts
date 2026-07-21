@@ -97,18 +97,26 @@ describe('startup owner-file loaders', () => {
     const companionAId = '11111111-1111-4111-8111-111111111111';
     const companionBId = '22222222-2222-4222-8222-222222222222';
     const rawFleet = {
+      postgres: {
+        sharedMigrationRole: 'shared_schema_migration',
+        sharedMigrationDatabaseUrlRef: { kind: 'env', envName: 'SHARED_MIGRATION_URL' },
+      },
       companions: [
         {
           companionId: companionAId,
           companionDataDir: 'companions/a',
           characterCardPath: 'companions/a/character-card.json',
           postgresSchema: 'companion_a',
+          postgresRole: 'companion_a_runtime',
+          postgresDatabaseUrlRef: { kind: 'env', envName: 'COMPANION_A_DATABASE_URL' },
         },
         {
           companionId: companionBId,
           companionDataDir: 'companions/b',
           characterCardPath: 'companions/b/character-card.json',
           postgresSchema: 'companion_b',
+          postgresRole: 'companion_b_runtime',
+          postgresDatabaseUrlRef: { kind: 'env', envName: 'COMPANION_B_DATABASE_URL' },
         },
       ],
     };
@@ -518,14 +526,23 @@ describe('startup owner-file loaders', () => {
       companionDataDir: 'companions/a',
       characterCardPath: 'companions/a/character-card.json',
       postgresSchema: 'companion_a',
+      postgresRole: 'companion_a_runtime',
+      postgresDatabaseUrlRef: { kind: 'env', envName: 'COMPANION_A_DATABASE_URL' },
+    };
+    const postgres = {
+      sharedMigrationRole: 'shared_schema_migration',
+      sharedMigrationDatabaseUrlRef: { kind: 'env', envName: 'SHARED_MIGRATION_URL' },
     };
     expect(() => validateCompanionsConfig({
+      postgres,
       companions: [{ ...baseEntry, unknownOwnerRoot: 'system-data' }],
     }, 'companions.json')).toThrow(/unknown key/i);
     expect(() => validateCompanionsConfig({
+      postgres,
       companions: [baseEntry, { ...baseEntry, postgresSchema: 'companion_b' }],
     }, 'companions.json')).toThrow(/duplicate companionId/);
     expect(() => validateCompanionsConfig({
+      postgres,
       companions: [
         baseEntry,
         {
@@ -534,6 +551,8 @@ describe('startup owner-file loaders', () => {
           companionDataDir: 'companions/a/nested',
           characterCardPath: 'companions/a/nested/character-card.json',
           postgresSchema: 'companion_b',
+          postgresRole: 'companion_b_runtime',
+          postgresDatabaseUrlRef: { kind: 'env', envName: 'COMPANION_B_DATABASE_URL' },
         },
       ],
     }, 'companions.json')).toThrow(/must not overlap/);

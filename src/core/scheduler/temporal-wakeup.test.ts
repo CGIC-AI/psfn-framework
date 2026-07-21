@@ -1590,6 +1590,60 @@ describe('temporal wake fan-out across channels (2x37.3)', () => {
 
     expect(appended).toEqual([]);
   });
+
+  it('runs both lanes through the shared fan-out gate to an identical eligible set (2x37.9 item 1)', async () => {
+    vi.useFakeTimers();
+    // The two lanes now share collectEligibleWakeupChannels for enumeration +
+    // preflight + eligibility. Over equivalent fixtures they must admit the same
+    // live channels and exclude the same public/internal/testing ones.
+    const morningAt = Date.parse('2026-06-11T09:00:00.000Z');
+    const afternoonAt = Date.parse('2026-06-11T15:30:00.000Z');
+
+    // Refresher lane: same-day long gap.
+    vi.setSystemTime(new Date(afternoonAt));
+    const refresherRun = makeFanoutPort([
+      { sessionId: DISCORD, channelType: 'discord', entries: [entry({ channelId: DISCORD, role: 'user', timestamp: morningAt })] },
+      { sessionId: SATELLITE, channelType: 'wyoming', entries: [entry({ channelId: SATELLITE, role: 'user', timestamp: morningAt })] },
+      { sessionId: PUBLIC, channelType: 'api', entries: [entry({ channelId: PUBLIC, role: 'user', timestamp: morningAt })] },
+      { sessionId: INTERNAL, channelType: 'terminal', entries: [entry({ channelId: INTERNAL, role: 'user', timestamp: morningAt })] },
+      { sessionId: TESTING, channelType: 'api', entries: [entry({ channelId: TESTING, role: 'user', timestamp: morningAt })] },
+    ]);
+    const refresherScheduler = new Scheduler(new EventBus(), { tickIntervalMs: 60_000, heartbeatIntervalMs: 1_800_000 });
+    registerTemporalWakeupTasks({
+      scheduler: refresherScheduler,
+      sessionManager: refresherRun.port,
+      config: makeWakeConfig({
+        morning: { enabled: false },
+        refresher: { enabled: true, checkIntervalMs: 900_000, minIdleMinutes: 120, minNoteIntervalMinutes: 120 },
+      }),
+    });
+    const refresherHandler = refresherScheduler.getTask(TEMPORAL_WAKEUP_REFRESHER_TASK_ID)?.handler;
+    if (!refresherHandler) throw new Error('refresher task was not registered');
+    await refresherHandler();
+
+    // Morning lane: overnight gap on the equivalent fixture set.
+    vi.setSystemTime(new Date(DAY2_MORNING));
+    const morningRun = makeFanoutPort([
+      { sessionId: DISCORD, channelType: 'discord', entries: [entry({ channelId: DISCORD, role: 'user', timestamp: DAY1_EVENING })] },
+      { sessionId: SATELLITE, channelType: 'wyoming', entries: [entry({ channelId: SATELLITE, role: 'user', timestamp: DAY1_EVENING })] },
+      { sessionId: PUBLIC, channelType: 'api', entries: [entry({ channelId: PUBLIC, role: 'user', timestamp: DAY1_EVENING })] },
+      { sessionId: INTERNAL, channelType: 'terminal', entries: [entry({ channelId: INTERNAL, role: 'user', timestamp: DAY1_EVENING })] },
+      { sessionId: TESTING, channelType: 'api', entries: [entry({ channelId: TESTING, role: 'user', timestamp: DAY1_EVENING })] },
+    ]);
+    const morningScheduler = new Scheduler(new EventBus(), { tickIntervalMs: 60_000, heartbeatIntervalMs: 1_800_000 });
+    registerTemporalWakeupTasks({
+      scheduler: morningScheduler,
+      sessionManager: morningRun.port,
+      config: makeWakeConfig({ refresher: { enabled: false } }),
+    });
+    await runMorningHandler(morningScheduler);
+
+    const morningTargets = morningRun.appended.map(a => a.channelId).sort();
+    const refresherTargets = refresherRun.appended.map(a => a.channelId).sort();
+    expect(morningTargets).toEqual([DISCORD, SATELLITE].sort());
+    expect(refresherTargets).toEqual([DISCORD, SATELLITE].sort());
+    expect(morningTargets).toEqual(refresherTargets);
+  });
 });
 
 describe('listRecentlyActiveChannels (real session manager)', () => {
@@ -1628,6 +1682,25 @@ describe('listRecentlyActiveChannels (real session manager)', () => {
     const active = mgr.listRecentlyActiveChannels({ lookbackMs: 72 * 60 * 60_000, nowMs });
     expect(active.map(channel => channel.sessionId)).toEqual(['satellite:bedroom', 'discord:dm-alpha']);
     expect(active.map(channel => channel.lastRole)).toEqual(['user', 'user']);
+  });
+
+  it('does not miss a partner turn buried behind a long in-window companion tail (2x37.9 item 3)', () => {
+    vi.useFakeTimers();
+    const nowMs = DAY2_MORNING;
+    // Partner speaks once, in-window, then the companion emits a long tail of
+    // assistant turns (more than the initial shallow scan depth of 128) — all
+    // still inside the 72h lookback. A fixed 128-entry scan would see only the
+    // assistant tail and wrongly drop the channel; the growing lookback-bounded
+    // scan must still find the partner turn behind it.
+    vi.setSystemTime(new Date(DAY1_EVENING));
+    mgr.recordUserMessage('discord:dm-chatty', 'still here?', 'user-1', 'Partner');
+    vi.setSystemTime(new Date(DAY1_EVENING + 60_000));
+    for (let index = 0; index < 150; index += 1) {
+      mgr.recordAssistantMessage('discord:dm-chatty', `assistant tail ${index}`);
+    }
+
+    const active = mgr.listRecentlyActiveChannels({ lookbackMs: 72 * 60 * 60_000, nowMs });
+    expect(active.map(channel => channel.sessionId)).toContain('discord:dm-chatty');
   });
 });
 

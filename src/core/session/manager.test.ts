@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import { SessionStore } from '../../persistence/sessions/store.js';
 import { parseContinuityEntryProvenance, UserContinuityStore } from './continuity.js';
 import { SessionManager } from './manager.js';
+import { HISTORY_STAMP_PREFIX_RE } from './manager/context-support.js';
 import { EventBus } from '../../shared/event-bus.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import type { LLMProviderPort } from '../agent/contracts.js';
@@ -58,14 +59,12 @@ import {
 } from '../../persistence/layout.js';
 
 // Assembled history lines carry '[MM-DD-YY HH:mm] ' provenance stamps derived
-// from live clocks; strip them so content assertions stay deterministic.
-// Exact stamp semantics are pinned in context-support.test.ts.
-const HISTORY_STAMP_RE = /^\[[A-Z][a-z]{2} \d{2}-\d{2}-\d{2} \d{2}:\d{2}\] /;
-
+// from live clocks; strip them so content assertions stay deterministic using
+// the canonical matcher exported next to the stamp builder (bead 2x37.9 item 4).
 function stripHistoryStamps(content: string): string {
   return content
     .split('\n')
-    .map(line => line.replace(HISTORY_STAMP_RE, ''))
+    .map(line => line.replace(HISTORY_STAMP_PREFIX_RE, ''))
     .join('\n');
 }
 
@@ -459,7 +458,7 @@ describe('SessionManager', () => {
     );
 
     expect(ctx.messages).toHaveLength(1);
-    expect(ctx.messages[0]?.content).toMatch(HISTORY_STAMP_RE);
+    expect(ctx.messages[0]?.content).toMatch(HISTORY_STAMP_PREFIX_RE);
     expect(stripHistoryStamps(ctx.messages[0]?.content ?? '')).toBe([
       'Asha (discord:asha-id): first group message',
       'Iku (discord:iku-id): second group message',

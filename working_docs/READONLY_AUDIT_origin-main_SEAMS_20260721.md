@@ -345,7 +345,7 @@ That is a healthy defense-in-depth stack. The weakest **content** layer is broad
 |---|---|---|
 | M1–M4 | **High** (scale) | Full hydration, no HNSW, N+1 authorized detail (prior deepdive — still dominant) |
 | WR-2 / A-3 | **Medium** | Paraphrase stack + extraction TOCTOU → automata/welfare load |
-| A-2 | **Medium** | Many concurrent post-turn lanes — need unified backlog/charge visibility |
+| A-2 | **Medium (ops only)** | Many concurrent post-turn lanes — *operator* charge/lane spend visibility optional; **not** a companion “how am I doing?” surface (see WELFARE adjudication) |
 | T-2 | **Medium** | Turn pre-LLM work dominated by retrieval economics as corpus grows |
 | L0-2 | **Low** | Full-segment JSONL parse |
 
@@ -377,7 +377,7 @@ That is a healthy defense-in-depth stack. The weakest **content** layer is broad
 
 6. **Broadcast path:** keep regex; add optional model-side “would this reveal private partner facts?” review for public channels when sensitivity ≥ personal and audience is multi-human.
 
-7. **Automata charge dashboard.** Charter law 25 (compute as care) needs a single pane: extraction, sleeptime, subagents, ICP, deferred queue — tokens and wall time. Without it, efficiency work is guesswork.
+7. **Automata charge (ops telemetry only).** Law 25 is compute stewardship — optional *operator* lane spend metrics (extraction/sleeptime/subagent/ICP/deferred). **Not** a companion-facing “how am I doing?” wellbeing cockpit (WELFARE operator adjudication: leading/performative; prompt/tools already carry state; emosim nearer).
 
 8. **Spirit check:** You are succeeding at “not a chatbot framework.” The danger is not that you’ll abandon privacy; it’s that **complexity cost** forces shortcuts under latency pressure. Keep the gates; make them cheaper.
 

@@ -41,15 +41,27 @@ export function validateAttestation(attestation, { head, base, gates }) {
   return { valid: true, reason: '' };
 }
 
-export function validateRemoteAttestation(statuses, base) {
+export function validateRemoteAttestation(statuses, base, expectedActor) {
   assertSha(base, 'base');
+  if (!expectedActor) throw new Error('Trusted local-gate status issuer is not configured');
   const expectedDescription = `base=${base}`;
   const status = statuses.find(({ context }) => context === REMOTE_ATTESTATION_CONTEXT);
   if (!status) throw new Error(`Missing ${REMOTE_ATTESTATION_CONTEXT} commit status`);
+  if (status.creator?.login !== expectedActor) {
+    throw new Error(`${REMOTE_ATTESTATION_CONTEXT} was not created by the trusted issuer`);
+  }
   if (status.state !== 'success' || status.description !== expectedDescription) {
     throw new Error(`${REMOTE_ATTESTATION_CONTEXT} does not attest the exact base`);
   }
   return status;
+}
+
+export function buildValidatedPushRefspec(head, branch) {
+  assertSha(head, 'head');
+  if (!branch || branch === 'main' || /\s/.test(branch)) {
+    throw new Error('A valid PR branch is required for the attested push');
+  }
+  return `${head}:refs/heads/${branch}`;
 }
 
 export function parsePrePushUpdates(input) {

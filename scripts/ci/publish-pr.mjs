@@ -3,7 +3,10 @@
 import { execFileSync, spawnSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
 
-import { REMOTE_ATTESTATION_CONTEXT } from './local-delivery-contract.mjs';
+import {
+  REMOTE_ATTESTATION_CONTEXT,
+  buildValidatedPushRefspec,
+} from './local-delivery-contract.mjs';
 import {
   readAttestation,
   resolveLocalGateState,
@@ -51,12 +54,39 @@ function currentPr(branch) {
   return prs[0] ?? null;
 }
 
-function pushBranch(branch) {
-  const result = spawnSync('git', ['push', '--set-upstream', 'origin', `HEAD:refs/heads/${branch}`], {
+function requireConfiguredStatusActor() {
+  const expected = run('gh', [
+    'variable',
+    'list',
+    '--json',
+    'name,value',
+    '--jq',
+    '.[] | select(.name == "LOCAL_GATE_STATUS_ACTOR") | .value',
+  ]);
+  const actual = run('gh', ['api', 'user', '--jq', '.login']);
+  if (!expected || actual !== expected) {
+    throw new Error(
+      `Authenticated gh user ${actual || '(unknown)'} is not the configured local-gate status issuer`,
+    );
+  }
+}
+
+function pushBranch(branch, head) {
+  if (run('git', ['rev-parse', 'HEAD']) !== head) {
+    throw new Error('Branch HEAD changed after local validation; refusing to push');
+  }
+  const result = spawnSync('git', ['push', 'origin', buildValidatedPushRefspec(head, branch)], {
     stdio: 'inherit',
   });
   if (result.error) throw result.error;
   if (result.status !== 0) throw new Error(`git push failed with exit ${String(result.status)}`);
+  if (run('git', ['rev-parse', 'HEAD']) !== head) {
+    throw new Error('Branch HEAD changed during push; refusing to publish an attestation');
+  }
+  const remoteHead = run('git', ['ls-remote', '--exit-code', 'origin', `refs/heads/${branch}`])
+    .split(/\s+/)[0];
+  if (remoteHead !== head) throw new Error('Remote branch does not match the attested head');
+  run('git', ['branch', '--set-upstream-to', `origin/${branch}`, branch]);
 }
 
 function publishRemoteAttestation({ head, base }) {
@@ -90,6 +120,7 @@ export async function publishPr(argv = process.argv.slice(2)) {
   const state = resolveLocalGateState({ baseRef });
   const validation = validateStateAttestation(readAttestation(state.attestationPath), state).result;
   if (!validation.valid) throw new Error(validation.reason);
+  requireConfiguredStatusActor();
 
   const existing = currentPr(branch);
   if (!existing && (!options.title || !options.bodyFile)) {
@@ -102,7 +133,7 @@ export async function publishPr(argv = process.argv.slice(2)) {
     run('gh', editArgs, { stdio: 'inherit' });
   }
 
-  pushBranch(branch);
+  pushBranch(branch, state.head);
   publishRemoteAttestation(state);
   if (!existing) {
     run(

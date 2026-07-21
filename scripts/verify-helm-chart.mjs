@@ -1218,8 +1218,11 @@ if (chartFloorGateway.spec.template.spec.initContainers[0]?.name
     !== 'prepare-fleet-auth-authority-floor') {
   throw new Error('Fleet Auth authority-floor preparation must be the first gateway init container');
 }
-if (chartFloorInit.securityContext?.capabilities?.add?.join(',') !== 'FOWNER') {
-  throw new Error('Fleet Auth authority-floor init must add only CAP_FOWNER');
+if (chartFloorInit.securityContext?.capabilities?.drop?.join(',') !== 'ALL') {
+  throw new Error('Fleet Auth authority-floor init must drop all ambient capabilities');
+}
+if (chartFloorInit.securityContext?.capabilities?.add?.join(',') !== 'CHOWN,FOWNER') {
+  throw new Error('Fleet Auth authority-floor init must add only CAP_CHOWN and CAP_FOWNER');
 }
 if (!chartFloorInit.command?.[2]?.includes('chown 999:999 "$floor_root"')
     || !chartFloorInit.command?.[2]?.includes('chmod 0700 "$floor_root"')) {

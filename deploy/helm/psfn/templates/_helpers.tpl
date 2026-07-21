@@ -1006,22 +1006,12 @@ capability-tier.json|scheduler.json|charge-policy.json|skills.json
     runAsUser: 0
     runAsGroup: 0
     capabilities:
-      # Retain only the root baseline's CHOWN capability needed to transfer
-      # ownership, then add only FOWNER so chmod can tighten the uid-999 root.
+      # Drop every ambient capability, then grant only CHOWN to transfer
+      # ownership and FOWNER to tighten the mode after that transfer.
       drop:
-        - AUDIT_WRITE
-        - DAC_OVERRIDE
-        - FSETID
-        - KILL
-        - MKNOD
-        - NET_BIND_SERVICE
-        - NET_RAW
-        - SETFCAP
-        - SETGID
-        - SETPCAP
-        - SETUID
-        - SYS_CHROOT
+        - ALL
       add:
+        - CHOWN
         - FOWNER
   volumeMounts:
     - name: fleet-auth-authority-floor

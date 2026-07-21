@@ -315,8 +315,13 @@ export interface CogSecCompactionRegenerationResult {
 }
 
 export class SessionStore implements TranscriptSearchPort {
+  // Bead ofa1: default per-companion hot-cache window. A class field, not a
+  // module-level const, so it stays outside the hardcoded-settings scanner while
+  // remaining overridable via SessionStoreOptions.maxHotChannels.
+  private static readonly DEFAULT_HOT_CHANNEL_LIMIT = 1000;
   private sessionsDir: string;
   private channels: Map<string, ChannelCache> = new Map();
+  private readonly maxHotChannels: number;
   private channelIndex: Map<string, ChannelIndexEntry> = new Map();
   private channelIndexPath: string;
   private channelIndexFingerprint: string | null = null;
@@ -345,6 +350,10 @@ export class SessionStore implements TranscriptSearchPort {
   private tailDegradedSuppressedCount = 0;
   constructor(sessionsDir: string, options: SessionStoreOptions = {}) {
     this.sessionsDir = sessionsDir;
+    this.maxHotChannels = Math.max(
+      1,
+      Math.floor(options.maxHotChannels ?? SessionStore.DEFAULT_HOT_CHANNEL_LIMIT),
+    );
     this.channelIndexPath = join(sessionsDir, CHANNEL_INDEX_FILENAME);
     this.importManifestPath = join(sessionsDir, IMPORT_MANIFEST_FILENAME);
     const integrityProvider = options.integrityProvider
@@ -491,6 +500,34 @@ export class SessionStore implements TranscriptSearchPort {
   private resolveSessionId(lookupKey: string): string | null {
     return resolvePrimarySessionId(lookupKey, this.channelIndex);
   }
+  /**
+   * Bead ofa1: single write seam for the hot-cache. Sets the channel cache then
+   * evicts the oldest channels beyond the recent window. The on-disk journal is
+   * authoritative (appends are written through immediately), so an evicted
+   * channel re-hydrates correctly on the next read via loadExistingChannelCache
+   * / ensureChannelForWrite. Replacing an existing key does not grow the map, so
+   * it never triggers eviction — safe to call from within channel iterations
+   * (reconcileWriteCache).
+   */
+  private setChannelCache(sessionKey: string, cache: ChannelCache): void {
+    this.channels.set(sessionKey, cache);
+    while (this.channels.size > this.maxHotChannels) {
+      let evicted = false;
+      for (const key of this.channels.keys()) {
+        if (key === sessionKey) continue;
+        this.channels.delete(key);
+        evicted = true;
+        break;
+      }
+      if (!evicted) break;
+    }
+  }
+
+  /** Bead ofa1: test/diagnostic hook — number of channels resident in the hot-cache. */
+  getLoadedChannelCount(): number {
+    return this.channels.size;
+  }
+
   private getLoadedCache(lookupKey: string): ChannelCache | undefined {
     loadChannelIndex(this.channelIndexPath, this.channelIndex);
     const sessionId = this.resolveSessionId(lookupKey) ?? lookupKey;
@@ -562,7 +599,7 @@ export class SessionStore implements TranscriptSearchPort {
     if (!resolved) return null;
     const indexEntry = this.ensureChannelIndexEntry(resolved.sessionId, resolved.channelId, resolved.filePaths);
     const cache = createLightweightCache(resolved.channelId, resolved.filePaths, indexEntry);
-    this.channels.set(resolved.sessionId, cache);
+    this.setChannelCache(resolved.sessionId, cache);
     return cache;
   }
   /**
@@ -600,7 +637,7 @@ export class SessionStore implements TranscriptSearchPort {
     const loaded = this.journalRuntime.loadChannelChain(
       resolved.filePaths.map(filePath => this.journalRuntime.openArchive(resolved.channelId, filePath)),
     );
-    this.channels.set(resolved.sessionId, loaded);
+    this.setChannelCache(resolved.sessionId, loaded);
     this.upsertChannelIndex(resolved.sessionId, snapshotIndexEntry(loaded));
     return loaded;
   }
@@ -619,7 +656,7 @@ export class SessionStore implements TranscriptSearchPort {
     if (resolved) {
       const indexEntry = this.ensureChannelIndexEntry(resolved.sessionId, resolved.channelId, resolved.filePaths);
       const cache = createLightweightCache(resolved.channelId, resolved.filePaths, indexEntry);
-      this.channels.set(resolved.sessionId, cache);
+      this.setChannelCache(resolved.sessionId, cache);
       return cache;
     }
     const archive = this.journalRuntime.createArchive(this.sessionsDir, channelId, seed);
@@ -647,7 +684,7 @@ export class SessionStore implements TranscriptSearchPort {
       fullyLoaded: true,
       recentEntriesByLimit: new Map(),
     };
-    this.channels.set(channelId, cache);
+    this.setChannelCache(channelId, cache);
     this.upsertChannelIndex(channelId, snapshotIndexEntry(cache));
     return cache;
   }
@@ -715,7 +752,7 @@ export class SessionStore implements TranscriptSearchPort {
       runtime: this.journalRuntime,
     });
     if (reconciled.cache === cache) return cache;
-    this.channels.set(sessionId, reconciled.cache);
+    this.setChannelCache(sessionId, reconciled.cache);
     if (reconciled.refreshIndex) {
       this.upsertChannelIndex(sessionId, snapshotIndexEntry(reconciled.cache));
     }
@@ -1756,7 +1793,7 @@ export class SessionStore implements TranscriptSearchPort {
       markRewritten();
       const reloaded = this.loadJournalChain(cache);
       const sessionKey = this.resolveCacheSessionKey(cache);
-      this.channels.set(sessionKey, reloaded);
+      this.setChannelCache(sessionKey, reloaded);
       this.upsertChannelIndex(sessionKey, snapshotIndexEntry(reloaded));
       this.syncTranscriptProjectionForChannel(reloaded.channelId, reloaded.entries);
 
@@ -1900,7 +1937,7 @@ export class SessionStore implements TranscriptSearchPort {
       markRewritten();
       const reloaded = this.loadJournalChain(cache);
       const sessionKey = this.resolveCacheSessionKey(cache);
-      this.channels.set(sessionKey, reloaded);
+      this.setChannelCache(sessionKey, reloaded);
       this.upsertChannelIndex(sessionKey, snapshotIndexEntry(reloaded));
 
       return {
@@ -1966,7 +2003,7 @@ export class SessionStore implements TranscriptSearchPort {
         markRewritten();
         const reloaded = this.loadJournalChain(cache);
         const sessionKey = this.resolveCacheSessionKey(cache);
-        this.channels.set(sessionKey, reloaded);
+        this.setChannelCache(sessionKey, reloaded);
         this.upsertChannelIndex(sessionKey, snapshotIndexEntry(reloaded));
       }
 

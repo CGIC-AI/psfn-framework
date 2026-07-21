@@ -55,6 +55,7 @@ import type {
   MemoryMutationResult,
 } from './types.js';
 import { createSubjectAuthorizedMemoryStore } from '../../../faculties/memory/subject-authorized-store.js';
+import { MemoryWriter, MemoryCandidacyPolicyError } from '../../../faculties/memory/writer.js';
 import type { GardenRequestContext } from '../garden-request-context.js';
 import type { FleetGardenRequestContext } from '../garden-request-context.js';
 import {
@@ -266,6 +267,7 @@ export class AdminMemoryDataService implements AdminMemoryService {
         this.sharedBackground(sessionKey, contactAId, contactBId, limit)
       ),
       supersedeMemory: id => this.supersedeMemory(id),
+      patchMemory: (id, fields) => this.patchMemory(id, fields),
       updateMemoryScope: (id, fields) => this.updateMemoryScope(sessionKey, id, fields),
       linkMemories: (id1, id2, linkType) => this.linkMemories(id1, id2, linkType),
       unlinkMemories: (id1, id2) => this.unlinkMemories(id1, id2),
@@ -784,6 +786,85 @@ export class AdminMemoryDataService implements AdminMemoryService {
       [`source=${memory.sourceRef}`],
     );
     return { ok: true };
+  }
+
+  async patchMemory(
+    id: string,
+    fields: { text: string; reason?: string; referencePath?: string },
+  ): Promise<MemoryMutationResult> {
+    const text = fields.text.trim();
+    if (!text) {
+      return { ok: false, message: 'Replacement text is required' };
+    }
+    const embeddingService = this.deps.embeddingService;
+    if (!embeddingService) {
+      // Fail closed: editing a body without re-embedding would silently
+      // desynchronize retrieval from the stored text.
+      this.appendAudit(
+        'memory_mutation',
+        'denied',
+        `Memory patch failed for "${id}": no embedding service is available to re-embed the body.`,
+      );
+      return { ok: false, message: 'Memory patching is unavailable without an embedding service' };
+    }
+
+    const memory = await this.deps.memoryStore.getById(id);
+    if (!memory) {
+      this.appendAudit(
+        'memory_mutation',
+        'denied',
+        `Memory patch failed: memory "${id}" was not found.`,
+      );
+      return { ok: false, message: 'Memory not found' };
+    }
+
+    const reason = fields.reason?.trim() || undefined;
+    const referencePath = fields.referencePath?.trim() || undefined;
+    // The writer's in-place patch records only `reason`; fold the reference in
+    // so the supporting-evidence path is preserved in the durable patch event.
+    const patchReason = referencePath
+      ? `${reason ?? 'admin memory body edit'} (reference: ${referencePath})`
+      : reason;
+
+    const writer = new MemoryWriter(this.deps.memoryStore, embeddingService);
+    try {
+      const result = await writer.patchMemory({
+        memoryId: id,
+        text,
+        ...(patchReason ? { reason: patchReason } : {}),
+        sourceRef: 'garden:admin_memory_patch',
+        sourceType: 'tool_write',
+        provenance: { actor: 'operator', ...(reason ? { reason } : {}) },
+      });
+      if (!result) {
+        return { ok: false, message: 'Memory not found' };
+      }
+      this.appendAudit(
+        'memory_mutation',
+        'allowed',
+        `${this.resolveCompanionName()} edited the body of memory "${id}".`,
+        [
+          `fields=${result.updatedFields.join(',')}`,
+          reason ? `reason=${reason}` : null,
+          referencePath ? `reference=${referencePath}` : null,
+        ],
+      );
+      return { ok: true };
+    } catch (error) {
+      if (error instanceof MemoryCandidacyPolicyError) {
+        this.appendAudit(
+          'memory_mutation',
+          'denied',
+          `Memory patch for "${id}" was rejected by CogSec candidacy policy.`,
+          [`riskClass=${error.decision.riskClass}`],
+        );
+        return { ok: false, message: 'Replacement text was rejected by memory candidacy policy' };
+      }
+      if (error instanceof Error && error.message === 'patchMemory produced no changes') {
+        return { ok: false, message: 'No changes to apply' };
+      }
+      throw error;
+    }
   }
 
   async updateMemoryScope(

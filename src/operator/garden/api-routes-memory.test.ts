@@ -3,6 +3,10 @@ import { describe, expect, it, vi } from 'vitest';
 import { buildAdminMemoryRoutes } from './api-routes-memory.js';
 import type { AdminApiRoute } from './routes/types.js';
 import type { AdminMemoryService, AdminMemorySessionService } from './services/types.js';
+import { AdminMemoryDataService } from './services/memory-service.js';
+import type { EmbeddingProviderPort } from '../../shared/contracts/embedding-provider.js';
+import type { MemoryStorePort } from '../../faculties/memory/memory-store-port.js';
+import type { PurrMemory } from '../../faculties/memory/types.js';
 
 class CapturingResponse {
   status = 0;
@@ -79,6 +83,7 @@ function makeMemoryService(overrides: Partial<AdminMemorySessionService> = {}): 
       elevation: { elevated: false, ttlMs: 900_000 },
     })),
     supersedeMemory: vi.fn(async () => ({ ok: true })),
+    patchMemory: vi.fn(async () => ({ ok: true })),
     updateMemoryScope: vi.fn(async () => ({ ok: true, memory: {} as never })),
     linkMemories: vi.fn(async () => ({ ok: true, link: {} as never })),
     unlinkMemories: vi.fn(async () => ({ ok: true })),
@@ -174,7 +179,7 @@ describe('admin memory API route split', () => {
     expect(memoryService.getMemoryDetail).not.toHaveBeenCalled();
   });
 
-  it('validates and dispatches the optional memory patch sub-route', async () => {
+  it('validates and dispatches the memory patch sub-route', async () => {
     const patchMemory = vi.fn(async (
       _memoryId: string,
       _fields: { text: string; reason?: string; referencePath?: string },
@@ -211,19 +216,6 @@ describe('admin memory API route split', () => {
       reason: 'operator correction',
       referencePath: 'docs/memory.md',
     });
-  });
-
-  it('fails closed when memory patching is not implemented by the service', async () => {
-    const routes = makeRoutes(makeMemoryService());
-
-    const response = await invokeRoute(
-      routes,
-      'PATCH',
-      '/api/admin/memory/mem-1/patch',
-      JSON.stringify({ text: 'Updated memory text.' }),
-    );
-    expect(response.status).toBe(400);
-    expect(parseBody(response).error).toBe('Memory patching is not available');
   });
 
   it('rejects body patches for redacted high-intimacy memories without a reveal', async () => {
@@ -278,6 +270,85 @@ describe('admin memory API route split', () => {
     expect(response.status).toBe(404);
     expect(parseBody(response).error).toBe('Memory not found');
     expect(patchMemory).not.toHaveBeenCalled();
+  });
+
+  it('patches a memory body end-to-end through the real AdminMemoryDataService', async () => {
+    const stored: PurrMemory = {
+      id: 'mem-real',
+      text: 'Original body text.',
+      type: 'semantic',
+      importance: 0.6,
+      confidence: 0.7,
+      emotionalValence: 0.1,
+      salience: 0.6,
+      sourceRef: 'turn:seed',
+      sourceType: 'turn',
+      extractedAt: Date.now() - 100_000,
+      lastAccessed: Date.now() - 50_000,
+      accessCount: 2,
+      tags: [],
+      sensitivity: 'public',
+    } as unknown as PurrMemory;
+
+    const recordedPatchEvents: Array<Record<string, unknown>> = [];
+    const embeddedTexts: string[] = [];
+    const store = {
+      getById: vi.fn(async (id: string) => (id === stored.id ? stored : undefined)),
+      updateMemory: vi.fn(async (id: string, updates: Partial<PurrMemory>) => {
+        if (id !== stored.id) return;
+        Object.assign(stored, updates);
+      }),
+      recordPatchEvent: vi.fn(async (event: Record<string, unknown>) => {
+        recordedPatchEvents.push(event);
+      }),
+      runInTransaction: vi.fn(async (handler: () => Promise<unknown>) => handler()),
+    } as unknown as MemoryStorePort;
+
+    const embeddingService: EmbeddingProviderPort = {
+      dims: 4,
+      embed: vi.fn(async (text: string) => {
+        embeddedTexts.push(text);
+        return new Float32Array([0.1, 0.2, 0.3, 0.4]);
+      }),
+      embedBatch: vi.fn(async (texts: string[]) => texts.map(() => new Float32Array([0.1, 0.2, 0.3, 0.4]))),
+    };
+
+    const audits: Array<{ decision: string; narrative: string }> = [];
+    const service = new AdminMemoryDataService({
+      memoryStore: store,
+      embeddingService,
+      appendAuditTimelineEntry: (_actionType, decision, narrative) => {
+        audits.push({ decision, narrative });
+      },
+    });
+    const routes = makeRoutes(service);
+
+    const response = await invokeRoute(
+      routes,
+      'PATCH',
+      '/api/admin/memory/mem-real/patch',
+      JSON.stringify({ text: '  Rewritten body text.  ', reason: 'operator correction', referencePath: 'docs/memory.md' }),
+    );
+
+    expect(response.status).toBe(200);
+    expect(parseBody(response)).toMatchObject({ ok: true });
+    // Body was actually persisted, not just acknowledged.
+    expect(stored.text).toBe('Rewritten body text.');
+    // Retrieval stays consistent: the new body was re-embedded and stored.
+    expect(embeddedTexts).toContain('Rewritten body text.');
+    const storedEmbedding = (stored as unknown as { embedding?: Float32Array }).embedding;
+    expect(storedEmbedding).toBeInstanceOf(Float32Array);
+    expect(storedEmbedding).toHaveLength(4);
+    expect(storedEmbedding?.[0]).toBeCloseTo(0.1, 5);
+    // A durable, audited patch event captured the edit and its reference.
+    expect(recordedPatchEvents).toHaveLength(1);
+    expect(recordedPatchEvents[0]).toMatchObject({
+      memoryId: 'mem-real',
+      patch: expect.objectContaining({ text: 'Rewritten body text.' }),
+      previousValues: expect.objectContaining({ text: 'Original body text.' }),
+    });
+    expect(String(recordedPatchEvents[0]?.reason)).toContain('docs/memory.md');
+    expect(audits.some(entry => entry.decision === 'allowed' && entry.narrative.includes('mem-real'))).toBe(true);
   });
 
   it('wires the elevation status, elevate, and drop routes to the memory service', async () => {

@@ -1,4 +1,5 @@
 import { Pool, type PoolClient, type PoolConfig, type QueryResult, type QueryResultRow } from 'pg';
+import { isRecord } from '../shared/utils/types.js';
 
 // Postgres identifiers are bounded to 63 bytes (NAMEDATALEN - 1). We deliberately
 // stay inside that limit and only admit a strict, lowercase-first identifier so a
@@ -110,7 +111,93 @@ export function createPostgresPool(
       `-c search_path=${schema},${POSTGRES_EXTENSION_SCHEMA_NAME}`,
     ].join(' ');
   }
-  return new Pool(config);
+  const pool = new Pool(config);
+  installBindParameterNulStripping(pool);
+  return pool;
+}
+
+/** Marks a client whose `query` has already been wrapped, so re-acquiring a
+ * pooled connection never double-wraps it. */
+const NUL_STRIPPING_INSTALLED = Symbol('psfnNulStrippingInstalled');
+
+/**
+ * Return `args` for a `query(...)` call with any string bind parameters
+ * NUL-stripped, without changing the call shape. Handles both the
+ * `query(text, values[, cb])` form and the `query(config)` form where the
+ * parameters live on `config.values`. Any other shape is passed through
+ * untouched.
+ */
+function sanitizeQueryArguments(args: unknown[]): unknown[] {
+  if (args.length >= 2 && Array.isArray(args[1])) {
+    const next = args.slice();
+    next[1] = stripNulBytesFromBindParameters(args[1] as readonly unknown[]);
+    return next;
+  }
+  const [first] = args;
+  if (isRecord(first) && Array.isArray((first as { values?: unknown }).values)) {
+    const next = args.slice();
+    next[0] = {
+      ...(first as Record<string, unknown>),
+      values: stripNulBytesFromBindParameters(
+        (first as { values: readonly unknown[] }).values,
+      ),
+    };
+    return next;
+  }
+  return args;
+}
+
+/**
+ * Wrap a `Queryable`'s `query` method so every parameterized query strips NUL
+ * bytes from string bind parameters before they reach the driver — the same
+ * choke point as {@link queryRows}/{@link queryOne}/{@link executeQuery}, but at
+ * the shared client/pool boundary so direct `client.query(...)` call sites
+ * (fleet-auth stores, the session message upsert, etc.) are covered too. A
+ * NUL byte in a text/jsonb bind parameter otherwise fails the write with
+ * `22021 invalid byte sequence for encoding "UTF8": 0x00`.
+ */
+function wrapQueryMethodWithNulStripping(
+  target: { query: (...args: unknown[]) => unknown },
+): void {
+  const marked = target as { [NUL_STRIPPING_INSTALLED]?: boolean };
+  if (marked[NUL_STRIPPING_INSTALLED] === true) return;
+  marked[NUL_STRIPPING_INSTALLED] = true;
+  const originalQuery = target.query.bind(target);
+  target.query = (...args: unknown[]) => originalQuery(...sanitizeQueryArguments(args));
+}
+
+/**
+ * Install NUL stripping at the pool boundary: both the pool's own `pool.query`
+ * fast path and every `PoolClient` handed out by `pool.connect()` get their
+ * `query` wrapped. This is the least-invasive shared seam — no call site is
+ * hand-edited — and it is idempotent per client via {@link NUL_STRIPPING_INSTALLED}.
+ */
+export function installBindParameterNulStripping(pool: Pool): void {
+  wrapQueryMethodWithNulStripping(pool as unknown as { query: (...args: unknown[]) => unknown });
+  const originalConnect = pool.connect.bind(pool);
+  // pg's connect is overloaded (promise form + callback form); preserve both.
+  pool.connect = ((callback?: unknown) => {
+    if (typeof callback === 'function') {
+      return originalConnect((err, client, release) => {
+        if (client) {
+          wrapQueryMethodWithNulStripping(
+            client as unknown as { query: (...args: unknown[]) => unknown },
+          );
+        }
+        (callback as (err: Error | undefined, client?: PoolClient, release?: unknown) => void)(
+          err,
+          client,
+          release,
+        );
+      });
+    }
+    return originalConnect().then((client) => {
+      wrapQueryMethodWithNulStripping(
+        client as unknown as { query: (...args: unknown[]) => unknown },
+      );
+      return client;
+    });
+  }) as typeof pool.connect;
 }
 
 export async function withPostgresClient<T>(

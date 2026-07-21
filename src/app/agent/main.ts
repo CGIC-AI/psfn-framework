@@ -89,6 +89,8 @@ import {
   wireOperatorHookRuntime,
   wireShardAndThinkRuntime,
 } from '../startup/composition/composition.js';
+import { createPreToolHookGate } from '../../boundary/gateway/pre-tool-hook.js';
+import { buildShellExecPolicyConfig } from '../../boundary/sandbox/execution/shell-policy-config.js';
 import {
   buildCharacterPromptVariablesProvider,
   buildReplConfig,
@@ -779,6 +781,17 @@ async function main(): Promise<void> {
     loadedHooks: operatorHookRuntime.hookLoadResult.loaded.map(record => record.name),
     rejectedHookCount: operatorHookRuntime.hookLoadResult.rejected.length,
   });
+
+  // Synchronous pre_tool_use hook interception (bead 7ym.3): late-bind the
+  // decision gate onto the agent so the capability gate consults registered
+  // sync hooks before executing any tool. Fast-paths to a no-op when no sync
+  // hook is registered; decisions are recorded as redacted, content-free
+  // telemetry (never argument contents).
+  agentLoop.setPreToolHookGate(createPreToolHookGate({
+    evaluator: operatorHookRuntime.hookRegistry,
+    getCorrelation: getRequestContext,
+    onDecision: (audit) => log.debug('pre_tool_use hook decision', { ...audit }),
+  }));
 
   // Memory write/import tools — intentional memory creation
   const memoryWriter = new MemoryWriter(memoryStore, gateway, {

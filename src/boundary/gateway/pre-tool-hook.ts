@@ -279,3 +279,68 @@ export function buildRedactedPreToolAudit(
   }
   return audit;
 }
+
+/**
+ * Structural port the adapter needs from the hook registry. Kept as an
+ * interface so this module does not import {@link HookRegistry} (which imports
+ * from here) — the concrete registry satisfies it structurally.
+ */
+export interface PreToolHookEvaluatorPort {
+  hasSyncDecisionHooks(): boolean;
+  evaluatePreToolUse(
+    context: PreToolUseHookContext,
+    options?: { timeoutMs?: number },
+  ): Promise<PreToolUseEvaluation>;
+}
+
+/** Content-free correlation fields the adapter folds into the hook context. */
+export interface PreToolCorrelationSnapshot {
+  sessionId?: string;
+  turnId?: string;
+  requestId?: string;
+  companionId?: string;
+  channelId?: string;
+  channelType?: string;
+}
+
+export interface CreatePreToolHookGateOptions {
+  evaluator: PreToolHookEvaluatorPort;
+  /** Reads the active turn's correlation (e.g. `getRequestContext`). */
+  getCorrelation: () => PreToolCorrelationSnapshot | undefined;
+  /** Redacted telemetry sink for every evaluated decision. */
+  onDecision: (audit: RedactedPreToolHookAudit) => void;
+  /** Override the per-hook fail-closed timeout. */
+  timeoutMs?: number;
+}
+
+/**
+ * Build the {@link PreToolHookGate} the capability gate consumes (bead 7ym.3).
+ * Fast-paths to `null` when no sync hook is registered, otherwise enriches the
+ * decision context with the active turn's correlation and delegates to the
+ * registry's fail-closed evaluator.
+ */
+export function createPreToolHookGate(options: CreatePreToolHookGateOptions): PreToolHookGate {
+  return {
+    async evaluate(request: PreToolHookGateRequest): Promise<PreToolUseEvaluation | null> {
+      if (!options.evaluator.hasSyncDecisionHooks()) return null;
+      const correlation = options.getCorrelation() ?? {};
+      const context: PreToolUseHookContext = {
+        toolName: request.toolName,
+        aliases: [],
+        input: request.params,
+        capabilityTier: request.tier,
+        ...(correlation.sessionId ? { sessionId: correlation.sessionId } : {}),
+        ...(correlation.turnId ? { turnId: correlation.turnId } : {}),
+        ...(correlation.requestId ? { requestId: correlation.requestId } : {}),
+        ...(correlation.companionId ? { companionId: correlation.companionId } : {}),
+        ...(correlation.channelId ? { channelId: correlation.channelId } : {}),
+        ...(correlation.channelType ? { channelType: correlation.channelType } : {}),
+      };
+      return options.evaluator.evaluatePreToolUse(
+        context,
+        options.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {},
+      );
+    },
+    onDecision: options.onDecision,
+  };
+}

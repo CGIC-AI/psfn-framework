@@ -39,11 +39,12 @@ describe('agent core runtime builder', () => {
     expect(coreRuntimeSource).toContain('wireMemoryRuntime(');
   });
 
-  it('wires concern resolution through durable arc reconciliation and scoped emotion state', () => {
+  it('wires concern resolution through isolated startup reconciliation and scoped emotion state', () => {
     const coreRuntimeSource = readSource('core-runtime.ts');
     expect(coreRuntimeSource).toContain('createConcernResolutionArcRecorder({');
     expect(coreRuntimeSource).toContain('agentLoop.applyConcernResolutionDelta(');
-    expect(coreRuntimeSource).toContain('await reconcileConcernResolutionArcs({');
+    expect(coreRuntimeSource).toContain('await reconcileConcernResolutionArcsAtStartup({');
+    expect(coreRuntimeSource).not.toContain('await reconcileConcernResolutionArcs({');
     expect(coreRuntimeSource).toContain(
       "eventBus.on('intention.concern.resolution_appraisal', concernResolutionArcRecorder)",
     );

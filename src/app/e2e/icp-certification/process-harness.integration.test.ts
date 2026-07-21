@@ -10,7 +10,6 @@ import {
 } from '../../../test-support/postgres-test-harness.js';
 import { resolveChargeLedgerPath } from '../../../persistence/layout.js';
 import { createPostgresPool } from '../../../persistence/postgres.js';
-import { derivePostgresTenantRole } from '../../../persistence/postgres/tenancy.js';
 import { readRunChargeRollingWindowFromLedger } from '../../../shared/telemetry/charge-ledger.js';
 import { createGatewayFleetChargePolicyResolver } from '../../gateway/fleet-charge-policy-resolver.js';
 import {
@@ -18,6 +17,8 @@ import {
   CERTIFICATION_COMPANION_B,
   CERTIFICATION_DM_CHANNEL,
   CERTIFICATION_PRIVATE_ROOM,
+  CERTIFICATION_ROLE_A,
+  CERTIFICATION_ROLE_B,
   CERTIFICATION_SCHEMA_A,
   CERTIFICATION_SCHEMA_B,
 } from './constants.js';
@@ -290,24 +291,24 @@ describe('ICP certification real process harness', () => {
         ORDER BY namespace.nspname
       `, [
         CERTIFICATION_SCHEMA_A,
-        derivePostgresTenantRole(CERTIFICATION_SCHEMA_A),
+        CERTIFICATION_ROLE_A,
         CERTIFICATION_SCHEMA_B,
-        derivePostgresTenantRole(CERTIFICATION_SCHEMA_B),
+        CERTIFICATION_ROLE_B,
       ]);
       expect(tenantBoundaries.rows).toEqual([
         {
           extension_schema: 'extensions',
           login_is_member: true,
-          role_name: derivePostgresTenantRole(CERTIFICATION_SCHEMA_A),
+          role_name: CERTIFICATION_ROLE_A,
           schema_name: CERTIFICATION_SCHEMA_A,
-          schema_owner: derivePostgresTenantRole(CERTIFICATION_SCHEMA_A),
+          schema_owner: CERTIFICATION_ROLE_A,
         },
         {
           extension_schema: 'extensions',
           login_is_member: true,
-          role_name: derivePostgresTenantRole(CERTIFICATION_SCHEMA_B),
+          role_name: CERTIFICATION_ROLE_B,
           schema_name: CERTIFICATION_SCHEMA_B,
-          schema_owner: derivePostgresTenantRole(CERTIFICATION_SCHEMA_B),
+          schema_owner: CERTIFICATION_ROLE_B,
         },
       ]);
     } finally {

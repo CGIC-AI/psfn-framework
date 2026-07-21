@@ -22,6 +22,8 @@ import {
   CERTIFICATION_COMPANION_A,
   CERTIFICATION_COMPANION_B,
   CERTIFICATION_EMBEDDING_DIMS,
+  CERTIFICATION_ROLE_A,
+  CERTIFICATION_ROLE_B,
   CERTIFICATION_SCHEMA_A,
   CERTIFICATION_SCHEMA_B,
   CERTIFICATION_SESSION_KEYRING,
@@ -58,6 +60,8 @@ export interface IcpCertificationCompanionFixture {
   env: NodeJS.ProcessEnv;
   name: string;
   postgresSchema: string;
+  /** Configured tenant owner role the agent runtime asserts (from companions.json). */
+  postgresRole: string;
   workspacePath: string;
 }
 
@@ -240,6 +244,7 @@ function makeCompanion(input: {
   gatewaySocketPath: string;
   name: string;
   postgresSchema: string;
+  postgresRole: string;
   runtimeRoot: string;
   systemDataDir: string;
   workspacePath: string;
@@ -302,6 +307,7 @@ function makeCompanion(input: {
     env: baseEnv,
     name: input.name,
     postgresSchema: input.postgresSchema,
+    postgresRole: input.postgresRole,
     workspacePath: input.workspacePath,
   };
 }
@@ -326,8 +332,10 @@ export function createIcpCertificationFixture(input: {
   if (
     companionAContract.companionId !== CERTIFICATION_COMPANION_A
     || companionAContract.postgresSchema !== CERTIFICATION_SCHEMA_A
+    || companionAContract.postgresRole !== CERTIFICATION_ROLE_A
     || companionBContract.companionId !== CERTIFICATION_COMPANION_B
     || companionBContract.postgresSchema !== CERTIFICATION_SCHEMA_B
+    || companionBContract.postgresRole !== CERTIFICATION_ROLE_B
   ) {
     throw new Error('Canonical support fixture contract drifted from ICP certification identities');
   }
@@ -477,6 +485,7 @@ export function createIcpCertificationFixture(input: {
       gatewaySocketPath,
       name: companionAContract.displayName ?? 'ARTEMIS',
       postgresSchema: CERTIFICATION_SCHEMA_A,
+      postgresRole: companionAContract.postgresRole,
       runtimeRoot,
       systemDataDir,
       workspacePath: join(runtimeRoot, 'workspaces', 'personal', CERTIFICATION_COMPANION_A),
@@ -498,6 +507,7 @@ export function createIcpCertificationFixture(input: {
       gatewaySocketPath,
       name: companionBContract.displayName ?? 'Mica',
       postgresSchema: CERTIFICATION_SCHEMA_B,
+      postgresRole: companionBContract.postgresRole,
       runtimeRoot,
       systemDataDir,
       workspacePath: join(runtimeRoot, 'workspaces', 'personal', CERTIFICATION_COMPANION_B),

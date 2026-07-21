@@ -162,6 +162,13 @@ The surface stays intentionally narrow while still supporting ordinary CLI work:
 - each call is one fresh process; use `command="bash"` with explicit `["-lc", "..."]` args for normal shell syntax
 - the whole Personal Workspace is writable and traversable, including any Git checkout kept inside it; intentional writes
   persist across calls even though shell process state does not
+- when the operator enables `shellExec.mountRepositoryReadOnly`, the deployment's repository checkout
+  (`PSFN_REPOSITORY_DIR`) is additionally mounted read-only at `/repo` (advertised inside the sandbox as `$PSFN_REPO`);
+  enabling the toggle without a configured checkout fails closed, and the mount can never overlap the workspace
+- the agent image carries a documented analysis toolset for sandbox use — `bash`, `git`, `rg`, `jq`, `file`,
+  `unzip`/`zip`, `sqlite3`, `pdftotext`/`pdfinfo` (poppler), `pandoc`, `python3` (+`venv`), and `uv` — because the
+  sandbox has no network, everything the companion can use must ship in the image
+  (`npm run verify:shell-sandbox-image` proves each tool runs inside the sandbox)
 - gateway policy projected from `settings.json` remains authoritative for enablement, executable allowlists, cwd bounds, and resource caps
 - confirmation, auditing, and fail-closed denial stay on the underlying `shell.exec` gateway path
 - enabled Linux/k3s commands run inside a Bubblewrap user/mount/PID/network namespace: image binaries are read-only, the
@@ -170,7 +177,10 @@ The surface stays intentionally narrow while still supporting ordinary CLI work:
 - the normal wall-time budget is ten minutes and the operator-owned ceiling is one hour, so builds and deliberate CLI
   exploration do not inherit a conversationally short timeout
 - `shell` remains distinct from `fs` and `repo`; use those primitives for structured workspace and git operations instead of shelling out by default
-- `analysis_workbench` does not receive a local `shell_exec` helper; direct command execution stays on the gateway-audited `shell` surface
+- `analysis_workbench` exposes a REPL-only `shell_exec` helper when (and only when) the settings-owned policy enables
+  the shell; every helper call is forwarded over the gateway `shell.exec` RPC, so the single Bubblewrap policy path
+  (allowlist, cwd bounds, limits, confirmation, audit) governs it identically to the direct `shell` tool — there is no
+  second, agent-local execution path, and `shell_exec` stays a REPL-only helper rather than a tool-catalog entry
 
 `fs action="read"` remains intentionally capped at 20,000 bytes. For larger documents, use `analysis_workbench` so the
 raw material stays in temporary context, or use a bounded `subagent` instructed to return provenance-bearing excerpts

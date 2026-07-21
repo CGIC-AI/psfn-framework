@@ -6,7 +6,11 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { executeShellCommandWithPolicy } from '../../boundary/sandbox/execution/shell-runner.js';
+import {
+  executeShellCommandWithPolicy,
+  ShellExecPolicyError,
+} from '../../boundary/sandbox/execution/shell-runner.js';
+import type { ShellExecPolicyConfig } from '../../boundary/sandbox/execution/shell-policy-config.js';
 import {
   createDefaultShellExecSettings,
   normalizeShellExecSettings,
@@ -16,6 +20,7 @@ async function runShell(
   workspacePath: string,
   command: string,
   timeoutMs = 2_000,
+  policyOverrides: Partial<ShellExecPolicyConfig> = {},
 ) {
   return await executeShellCommandWithPolicy(
     {
@@ -26,13 +31,47 @@ async function runShell(
     },
     {
       workspacePath,
-      policy: normalizeShellExecSettings({
-        ...createDefaultShellExecSettings(),
-        enabled: true,
-        allowlist: ['bash', 'rg'],
-      }),
+      policy: {
+        ...normalizeShellExecSettings({
+          ...createDefaultShellExecSettings(),
+          enabled: true,
+          allowlist: ['bash', 'rg'],
+          mountRepositoryReadOnly: policyOverrides.mountRepositoryReadOnly === true,
+        }),
+        ...policyOverrides,
+      },
     },
   );
+}
+
+/**
+ * Every analysis tool the image contract promises must run inside the sandbox
+ * and identify itself; a missing binary fails the probe, never skips it.
+ */
+const SANDBOX_TOOL_PROBES: ReadonlyArray<{ name: string; probe: string; expect: string }> = [
+  { name: 'jq', probe: 'printf tool=; jq --version', expect: 'tool=jq-' },
+  { name: 'file', probe: 'printf "tool=file:"; file --version | head -n1', expect: 'tool=file:file-' },
+  { name: 'unzip', probe: 'printf "tool="; unzip -v | head -n1', expect: 'tool=UnZip' },
+  { name: 'zip', probe: 'printf "tool="; zip -v | head -n2 | tail -n1', expect: 'This is Zip' },
+  { name: 'sqlite3', probe: 'printf "tool=sqlite3 "; sqlite3 --version', expect: 'tool=sqlite3 3.' },
+  { name: 'pdftotext', probe: 'pdftotext -v 2>&1 | head -n1', expect: 'pdftotext version' },
+  { name: 'pandoc', probe: 'pandoc --version | head -n1', expect: 'pandoc' },
+  { name: 'python3', probe: 'python3 --version', expect: 'Python 3.' },
+  { name: 'uv', probe: 'uv --version', expect: 'uv ' },
+];
+
+async function verifySandboxToolset(workspacePath: string): Promise<string[]> {
+  const verified: string[] = [];
+  for (const tool of SANDBOX_TOOL_PROBES) {
+    const result = await runShell(workspacePath, tool.probe, 10_000);
+    if (result.exitCode !== 0 || !result.stdout.includes(tool.expect)) {
+      throw new Error(
+        `sandbox toolset probe failed for ${tool.name}: ${JSON.stringify(result)}`,
+      );
+    }
+    verified.push(tool.name);
+  }
+  return verified;
 }
 
 export async function verifyShellSandboxRuntime(): Promise<Record<string, unknown>> {
@@ -92,6 +131,51 @@ export async function verifyShellSandboxRuntime(): Promise<Record<string, unknow
       throw new Error(`resource limits missing: ${JSON.stringify(limits)}`);
     }
 
+    const toolset = await verifySandboxToolset(workspacePath);
+
+    // Read-only repository mount: readable at /repo, advertised via
+    // $PSFN_REPO, never writable, and absent unless the policy enables it.
+    const repoSource = join(root, 'repo-src');
+    mkdirSync(repoSource);
+    writeFileSync(join(repoSource, 'README.md'), 'repo-copy-marker\n', 'utf8');
+    const repoMounted = await runShell(
+      workspacePath,
+      'printf "repo_env=%s\\n" "${PSFN_REPO-unset}"; cat /repo/README.md; '
+        + 'if printf x > /repo/write-probe 2>/dev/null; then printf "repo_write=allowed\\n"; '
+        + 'else printf "repo_write=denied\\n"; fi',
+      2_000,
+      { mountRepositoryReadOnly: true, repositoryMountSource: repoSource },
+    );
+    if (
+      repoMounted.exitCode !== 0
+      || !repoMounted.stdout.includes('repo_env=/repo')
+      || !repoMounted.stdout.includes('repo-copy-marker')
+      || !repoMounted.stdout.includes('repo_write=denied')
+    ) {
+      throw new Error(`read-only repository mount failed: ${JSON.stringify(repoMounted)}`);
+    }
+    const repoUnmounted = await runShell(
+      workspacePath,
+      'if [ -e /repo ]; then printf "repo=present\\n"; else printf "repo=absent\\n"; fi; '
+        + 'printf "repo_env=%s\\n" "${PSFN_REPO-unset}"',
+    );
+    if (
+      repoUnmounted.exitCode !== 0
+      || !repoUnmounted.stdout.includes('repo=absent')
+      || !repoUnmounted.stdout.includes('repo_env=unset')
+    ) {
+      throw new Error(`repository mount leaked into default policy: ${JSON.stringify(repoUnmounted)}`);
+    }
+    let repoFailClosed = false;
+    try {
+      await runShell(workspacePath, 'true', 2_000, { mountRepositoryReadOnly: true });
+    } catch (error) {
+      repoFailClosed = error instanceof ShellExecPolicyError;
+    }
+    if (!repoFailClosed) {
+      throw new Error('repository mount without a configured checkout must fail closed');
+    }
+
     const forkPressure = await runShell(
       workspacePath,
       'for i in $(seq 1 128); do sleep 10 & done; wait',
@@ -109,6 +193,8 @@ export async function verifyShellSandboxRuntime(): Promise<Record<string, unknow
       inheritedSecret: false,
       resourceLimits: limits.stdout.trim(),
       forkPressureBlocked: true,
+      toolset,
+      repositoryMount: 'read-only, env-advertised, fail-closed without checkout',
     };
   } finally {
     rmSync(root, { recursive: true, force: true });

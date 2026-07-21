@@ -84,6 +84,7 @@ src/
 
 - emotion state, active concerns, self-model snapshots, metacognitive flags, background continuation, and shard lifecycle management are first-class runtime surfaces
 - key files: `src/core/emotion/`, `src/core/intention/`, `src/core/self-model/`, `src/core/agent/post-turn-action-runtime.ts`, `src/core/scheduler/heartbeat-post-turn-runtime.ts`, `src/faculties/shards/manager.ts`
+- the disabled-by-default, non-authoritative observer-eval sidecar (`src/core/eval/observer-sidecar/`) shadows live emotion state against the `emo_sim` engine for eval telemetry only — see [`docs/observer-eval-sidecar.md`](./docs/observer-eval-sidecar.md)
 
 ### Cognitive security (intake firewall)
 

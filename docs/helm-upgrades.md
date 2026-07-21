@@ -887,7 +887,7 @@ resolve the full companion database topology fail-closed at gateway boot.
 A legacy deployment (runtime connecting as the original owner role, e.g.
 `psfn`) hits every gate below, in this order, on its first upgrade across
 that boundary. This ledger was established live on the k3d shakedown
-cluster 2026-07-21; carlini-class fleets and any legacy primary will hit
+cluster 2026-07-21; production k3s fleets and any legacy primary will hit
 the identical chain. Work the list top-to-bottom BEFORE the upgrade and
 the boot succeeds first try.
 

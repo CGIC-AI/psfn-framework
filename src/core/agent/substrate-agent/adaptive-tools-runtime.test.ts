@@ -236,7 +236,7 @@ describe('createToolsetTool', () => {
     expect(state.activeTools).toEqual(runtimeState().activeTools);
   });
 
-  it('marks denied suggestions without changing capability grants', async () => {
+  it('never suggests a capability-denied tool the surface cannot call (bead s3o4)', async () => {
     const access = capabilityAccess(['identity.read']);
     const toolset = createToolset({
       getCoreTools: () => [],
@@ -255,12 +255,40 @@ describe('createToolsetTool', () => {
     });
     const payload = JSON.parse(result.content?.[0]?.text as string);
 
-    expect(payload.recommendations[0]).toMatchObject({
-      toolName: 'notify',
-      availabilityStatus: 'capability_denied',
-      missingTokens: ['external.web', 'external.discord', 'external.email'],
-    });
+    // The tool matches the intent but is not callable for this tier — it must
+    // not be advertised. suggestion ⊆ callable catalog.
+    expect(payload.recommendations).toEqual([]);
+    expect(payload.recommendations.every((r: { availabilityStatus: string }) => r.availabilityStatus === 'active')).toBe(true);
     expect([...access.getGrantedTokens()]).toEqual(['identity.read']);
+  });
+
+  it('does not suggest analysis_workbench when repl.execute is denied (bead s3o4)', async () => {
+    const workbench = actionTool(
+      'analysis_workbench',
+      'Run a sandboxed analysis REPL to explore data and execute code.',
+      ['execute'],
+    );
+    const access = capabilityAccess(['identity.read']);
+    const toolset = createToolset({
+      // Registered as a core tool but repl.execute is absent for this tier, so
+      // it is capability-denied and must not be suggested as directly callable.
+      getCoreTools: () => [workbench] as any,
+      getExtendedTools: () => [],
+      getAdaptiveToolRuntimeState: () => runtimeState({
+        coreTools: ['analysis_workbench'],
+        extendedTools: [],
+        activeTools: [{ toolName: 'analysis_workbench', source: 'core' }],
+      }),
+      resolveCapabilityAccess: () => access,
+    });
+
+    const result = await (toolset as any).execute('suggest-workbench', {
+      action: 'suggest',
+      intent: 'execute code in a sandbox to analyze data',
+    });
+    const payload = JSON.parse(result.content?.[0]?.text as string);
+
+    expect(payload.recommendations.map((r: { toolName: string }) => r.toolName)).not.toContain('analysis_workbench');
   });
 
   it('describes canonical actions and identifies lookup as documentation-only', async () => {

@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { ReflectionJournalStore } from './reflection-journal.js';
@@ -130,7 +130,7 @@ describe('ReflectionJournalStore', () => {
     expect(entries[0]?.reflection).toBe('Later reflection.');
   });
 
-  it('persists internal-state narrative context when provided', () => {
+  it('records only the snapshot ref for internal state, never a duplicated copy', () => {
     const sample = buildInternalStateSample();
     store.append({
       templateId: 'experiential-review',
@@ -142,7 +142,6 @@ describe('ReflectionJournalStore', () => {
       telemetry: {
         narrativeContext: {
           internalStateSnapshotRef: sample.snapshotRef,
-          internalState: sample.state,
           metacognitiveFlags: [{ flag: 'uncertainty', confidence: 0.58 }],
         },
       },
@@ -154,11 +153,7 @@ describe('ReflectionJournalStore', () => {
       telemetry?: {
         narrativeContext?: {
           internalStateSnapshotRef?: string;
-          internalState?: {
-            emotional?: {
-              acac?: unknown;
-            };
-          };
+          internalState?: unknown;
           metacognitiveFlags?: Array<{ flag: string; confidence: number }>;
         };
       };
@@ -166,12 +161,29 @@ describe('ReflectionJournalStore', () => {
     expect((persisted as Record<string, unknown>).internalStateSnapshotRef).toBeUndefined();
     expect((persisted as Record<string, unknown>).metacognitiveFlags).toBeUndefined();
     expect(persisted.telemetry?.narrativeContext?.internalStateSnapshotRef).toBe(sample.snapshotRef);
-    expect(persisted.telemetry?.narrativeContext?.internalState).toEqual(cloneInternalState(sample.state));
-    expect(persisted.telemetry?.narrativeContext?.internalState?.emotional?.acac).toEqual(sample.state.emotional.acac);
+    // ay2o: the full internal state lives once in the snapshot store and is
+    // never duplicated into the reflection entry.
+    expect(persisted.telemetry?.narrativeContext?.internalState).toBeUndefined();
     expect(persisted.telemetry?.narrativeContext?.metacognitiveFlags).toEqual([{ flag: 'uncertainty', confidence: 0.58 }]);
   });
 
-  it('fails closed when internal-state context is partial', () => {
+  it('accepts the snapshot ref alone as complete narrative context', () => {
+    const sample = buildInternalStateSample();
+    const entry = store.append({
+      templateId: 'experiential-review',
+      templateName: 'Experiential Review',
+      prompt: 'Describe your recent experience.',
+      reflection: 'A steady pattern.',
+      channelId: 'internal:reflection:experiential-review',
+      mode: 'agent',
+      internalStateSnapshotRef: sample.snapshotRef,
+      createdAt: '2026-03-02T01:05:00.000Z',
+    });
+    expect(entry.telemetry?.narrativeContext?.internalStateSnapshotRef).toBe(sample.snapshotRef);
+    expect((entry.telemetry?.narrativeContext as Record<string, unknown> | undefined)?.internalState).toBeUndefined();
+  });
+
+  it('fails closed when metacognitive flags are supplied without a snapshot ref', () => {
     expect(() => store.append({
       templateId: 'experiential-review',
       templateName: 'Experiential Review',
@@ -179,8 +191,37 @@ describe('ReflectionJournalStore', () => {
       reflection: 'I noticed a focused processing pattern.',
       channelId: 'internal:reflection:experiential-review',
       mode: 'agent',
-      internalStateSnapshotRef: 'internal-state-v1:abc',
-    })).toThrow('internalStateSnapshotRef and internalState');
+      metacognitiveFlags: [{ flag: 'uncertainty', confidence: 0.58 }],
+    })).toThrow('requires internalStateSnapshotRef when narrative context is provided');
+  });
+
+  it('parses legacy entries that still embed a full internalState copy', () => {
+    const sample = buildInternalStateSample();
+    // Simulate an entry written before ay2o: the persisted narrativeContext still
+    // carries the now-removed embedded internalState copy. It must still parse.
+    const legacyEntry = {
+      id: 'reflection-legacy-1',
+      templateId: 'experiential-review',
+      templateName: 'Experiential Review',
+      prompt: 'Describe your recent experience.',
+      reflection: 'A legacy reflection.',
+      channelId: 'internal:reflection:experiential-review',
+      mode: 'agent',
+      createdAt: '2026-03-01T00:00:00.000Z',
+      telemetry: {
+        narrativeContext: {
+          internalStateSnapshotRef: sample.snapshotRef,
+          internalState: cloneInternalState(sample.state),
+          metacognitiveFlags: [{ flag: 'uncertainty', confidence: 0.58 }],
+        },
+      },
+    };
+    writeFileSync(filePath, `${JSON.stringify(legacyEntry)}\n`);
+
+    const entries = store.listRecent({ limit: 5 });
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.id).toBe('reflection-legacy-1');
+    expect(entries[0]?.telemetry?.narrativeContext?.internalStateSnapshotRef).toBe(sample.snapshotRef);
   });
 
   it('preserves reflection-journal normalization error prefixes', () => {
@@ -196,7 +237,6 @@ describe('ReflectionJournalStore', () => {
       telemetry: {
         narrativeContext: {
           internalStateSnapshotRef: '   ',
-          internalState: sample.state,
         },
       },
     })).toThrow('Reflection journal internalStateSnapshotRef must be a non-empty string when provided');
@@ -211,7 +251,6 @@ describe('ReflectionJournalStore', () => {
       telemetry: {
         narrativeContext: {
           internalStateSnapshotRef: sample.snapshotRef,
-          internalState: sample.state,
           metacognitiveFlags: [{ flag: '', confidence: 0.5 }],
         },
       },

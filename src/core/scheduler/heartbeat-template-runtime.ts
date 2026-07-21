@@ -1067,8 +1067,9 @@ export function createHeartbeatTemplateRuntime(
           createdAt: reflectionCreatedAt,
           ...(deliberationMetadata ? { deliberation: deliberationMetadata } : {}),
           ...(persistenceContextForJournal ? {
+            // ay2o: the snapshot ref is the single source of truth; the full
+            // internalState is not duplicated into the reflection journal.
             internalStateSnapshotRef: persistenceContextForJournal.internalStateSnapshotRef,
-            internalState: persistenceContextForJournal.internalState,
             metacognitiveFlags: persistenceContextForJournal.metacognitiveFlags,
           } : {}),
           ...(journalGroundingProvenanceRefs.length > 0 ? {

@@ -514,4 +514,88 @@ describe('buildTurnUserContent vision intake screening (htm9.8)', () => {
     const parts = result.content as Array<{ type: string; data?: string }>;
     expect(parts.some((part) => part.type === 'image' && part.data === 'aW1hZ2VieXRlcw==')).toBe(true);
   });
+
+  // ── bead j8gv: collapse the duplicate inbound-image VLM pass ──
+
+  const BENIGN_WITH_DESCRIPTION: VisionIntakeScreenDecision = {
+    ...BENIGN,
+    description: 'A neutral red square on a white background.',
+    promptBlock:
+      '[Intake firewall: automated image screening. ...]\n<untrusted_image_transcript>\nA neutral red square on a white background.\n</untrusted_image_transcript>',
+  };
+
+  it('reuses the intake-screen description and does NOT fire the dedicated reviewer for an inbound URL image (bead j8gv)', async () => {
+    const { screener, calls } = makeScreener(BENIGN_WITH_DESCRIPTION);
+    const { reviewer, analyze } = makeReviewer('SECOND VLM PASS SUMMARY');
+    const result = await buildTurnUserContent({
+      message: makeMessage(),
+      llmClient: {} as any,
+      runtimeMode: 'gateway',
+      logger: { warn: vi.fn(), debug: vi.fn() },
+      visionReviewer: reviewer,
+      visionIntakeScreener: screener,
+    });
+
+    // Exactly one vision pass (the intake screen); the reviewer never runs.
+    expect(calls).toHaveLength(1);
+    expect(analyze).not.toHaveBeenCalled();
+
+    const content = result.content as string;
+    expect(content).toContain('A neutral red square on a white background.');
+    expect(content).not.toContain('SECOND VLM PASS SUMMARY');
+
+    // The single description feeds the persisted block and the current-turn review.
+    expect(result.persistedUserContent).toContain('untrusted image-derived data');
+    expect(result.persistedUserContent).toContain('A neutral red square on a white background.');
+    expect(result.currentTurnVisionReview?.summary).toContain('A neutral red square on a white background.');
+  });
+
+  it('injects the sanitized description under an untrusted label when no enforce transcript is present (bead j8gv)', async () => {
+    const shadowBenign: VisionIntakeScreenDecision = {
+      kind: 'screened',
+      mode: 'shadow',
+      flagged: false,
+      withheld: false,
+      description: 'A blue circle on grey.',
+      model: 'test/vision-model',
+    };
+    const { screener } = makeScreener(shadowBenign);
+    const { reviewer, analyze } = makeReviewer();
+    const result = await buildTurnUserContent({
+      message: makeMessage(),
+      llmClient: {} as any,
+      runtimeMode: 'gateway',
+      logger: { warn: vi.fn(), debug: vi.fn() },
+      visionReviewer: reviewer,
+      visionIntakeScreener: screener,
+    });
+
+    expect(analyze).not.toHaveBeenCalled();
+    const content = result.content as string;
+    expect(content).toContain('<untrusted_image_review>');
+    expect(content).toContain('A blue circle on grey.');
+  });
+
+  it('deduplicates identical inbound images before screening fan-out (bead j8gv)', async () => {
+    const sharedUrl = 'https://media.discordapp.net/attachments/a/b/meme.png';
+    const { screener, calls } = makeScreener(BENIGN_WITH_DESCRIPTION);
+    const result = await buildTurnUserContent({
+      message: makeMessage({
+        attachments: [
+          { url: sharedUrl, contentType: 'image/png', name: 'meme.png' },
+          { url: sharedUrl, contentType: 'image/png', name: 'meme-copy.png' },
+        ],
+      }),
+      llmClient: {} as any,
+      runtimeMode: 'gateway',
+      logger: { warn: vi.fn(), debug: vi.fn() },
+      visionIntakeScreener: screener,
+    });
+
+    // Two identical attachments → one screening call, one description in context.
+    expect(calls).toHaveLength(1);
+    const content = result.content as string;
+    const occurrences = content.split('A neutral red square on a white background.').length - 1;
+    expect(occurrences).toBe(1);
+  });
 });

@@ -219,6 +219,8 @@ interface ActiveSubagentHandle {
   resolvedRole: ResolvedSubagentRole | null;
   /** bead 7ym.2.1 — effective system prompt: role instructions layered over inherited identity. */
   systemPrompt: string;
+  /** bead 7ym.2.2 — role wall-clock deadline (ms), enforced as a turn-boundary budget ceiling. */
+  roleTimeoutMs?: number;
   capabilities: string[];
   requiredCapabilities: string[];
   capabilityAccess: CapabilityAccess;
@@ -252,6 +254,8 @@ export class SubagentFaculty implements SubagentControlPort {
   private readonly activeHandles = new Map<string, ActiveSubagentHandle>();
   private readonly recentResults = new Map<string, SubagentResult>();
   private readonly recentResultIds: string[] = [];
+  /** bead 7ym.2.2 — live count of active tasks per role, for role concurrency caps. */
+  private readonly roleActiveCounts = new Map<string, number>();
 
   constructor(private readonly deps: SubagentFacultyDeps) {
     // Owner-file setting (zet.7): explicit deps override wins (tests/embedding),
@@ -317,8 +321,25 @@ export class SubagentFaculty implements SubagentControlPort {
       resolvedRole,
     );
 
-    const maxTurns = normalizeSubagentMaxTurns(request.maxTurns);
-    const capabilities = this.resolveAdvertisedCapabilities(request.capabilities);
+    // bead 7ym.2.2: a role can only NARROW the parent tier. Enforce the per-role
+    // concurrency ceiling before registration, then clamp turns and intersect
+    // the advertised capabilities so the role never widens the deployment tier.
+    if (resolvedRole?.definition.maxConcurrent !== undefined) {
+      const activeForRole = this.roleActiveCounts.get(resolvedRole.name) ?? 0;
+      if (activeForRole >= resolvedRole.definition.maxConcurrent) {
+        const error = `Subagent role "${resolvedRole.name}" concurrency limit reached `
+          + `(${resolvedRole.definition.maxConcurrent} concurrent). `
+          + `Wait for active "${resolvedRole.name}" tasks to finish.`;
+        await this.emitBlockedSpawnHandoff(request, subagentId, 'role_concurrency_limit', error);
+        throw new Error(error);
+      }
+    }
+
+    const maxTurns = this.resolveEffectiveMaxTurns(request.maxTurns, resolvedRole);
+    const capabilities = this.narrowCapabilitiesByRole(
+      this.resolveAdvertisedCapabilities(request.capabilities),
+      resolvedRole,
+    );
     const requiredCapabilities = this.resolveRequiredCapabilities(request.requiredCapabilities);
     const missingCapabilities = requiredCapabilities.filter(capability => !capabilities.includes(capability));
     if (missingCapabilities.length > 0) {
@@ -420,6 +441,9 @@ export class SubagentFaculty implements SubagentControlPort {
       maxTurns,
       resolvedRole,
       systemPrompt,
+      ...(resolvedRole?.definition.timeoutMs !== undefined
+        ? { roleTimeoutMs: resolvedRole.definition.timeoutMs }
+        : {}),
       capabilities,
       requiredCapabilities,
       capabilityAccess: capabilityGrant.access,
@@ -433,6 +457,12 @@ export class SubagentFaculty implements SubagentControlPort {
       outstandingTurns: [],
     };
     this.activeHandles.set(subagentId, handle);
+    if (resolvedRole) {
+      this.roleActiveCounts.set(
+        resolvedRole.name,
+        (this.roleActiveCounts.get(resolvedRole.name) ?? 0) + 1,
+      );
+    }
     queueMicrotask(() => {
       void this.runHandle(handle);
     });
@@ -563,6 +593,7 @@ export class SubagentFaculty implements SubagentControlPort {
         parentTier: handle.parentCapabilityTier,
         grantedCapabilities: [...handle.capabilityAccess.getGrantedTokens()],
         tools: injectedTools.map(tool => tool.name),
+        ...(handle.resolvedRole ? { role: handle.resolvedRole.name } : {}),
       });
 
       if (this.isCancellationRequested(handle)) {
@@ -862,6 +893,15 @@ export class SubagentFaculty implements SubagentControlPort {
     // Remove from the active set first so no further follow-up turns can be
     // enqueued via `message` once we begin draining.
     this.activeHandles.delete(handle.subagentId);
+    // bead 7ym.2.2: release this task's slot in its role's concurrency ceiling.
+    if (handle.resolvedRole) {
+      const remaining = (this.roleActiveCounts.get(handle.resolvedRole.name) ?? 1) - 1;
+      if (remaining > 0) {
+        this.roleActiveCounts.set(handle.resolvedRole.name, remaining);
+      } else {
+        this.roleActiveCounts.delete(handle.resolvedRole.name);
+      }
+    }
     // Drain any follow-up/steer turns still writing to the subagent session
     // before reporting terminality. Without this, `wait`/`execute`/`cancel`
     // resolve while a detached turn is mid-write, and a caller that disposes
@@ -1312,7 +1352,10 @@ export class SubagentFaculty implements SubagentControlPort {
     _turns: number,
   ): SubagentBudgetExhaustion | null {
     const { workSpec } = handle.request;
-    if (workSpec.deadlineMs !== undefined && Date.now() - handle.startTime >= workSpec.deadlineMs) {
+    // bead 7ym.2.2: the effective deadline is the tighter of the work-spec
+    // deadline and the resolved role's timeout (a role only narrows).
+    const effectiveDeadlineMs = resolveEffectiveDeadlineMs(workSpec.deadlineMs, handle.roleTimeoutMs);
+    if (effectiveDeadlineMs !== undefined && Date.now() - handle.startTime >= effectiveDeadlineMs) {
       return { reason: 'deadline' };
     }
     if (workSpec.maxOutputTokens !== undefined && totalOutput >= workSpec.maxOutputTokens) {
@@ -1351,8 +1394,9 @@ export class SubagentFaculty implements SubagentControlPort {
     if (workSpec.maxOutputTokens !== undefined) {
       remaining.remainingOutputTokens = Math.max(0, workSpec.maxOutputTokens - totalOutput);
     }
-    if (workSpec.deadlineMs !== undefined) {
-      remaining.remainingDeadlineMs = workSpec.deadlineMs - (Date.now() - handle.startTime);
+    const effectiveDeadlineMs = resolveEffectiveDeadlineMs(workSpec.deadlineMs, handle.roleTimeoutMs);
+    if (effectiveDeadlineMs !== undefined) {
+      remaining.remainingDeadlineMs = effectiveDeadlineMs - (Date.now() - handle.startTime);
     }
     return remaining;
   }
@@ -1406,9 +1450,16 @@ export class SubagentFaculty implements SubagentControlPort {
     const catalog = this.deps.toolCatalogProvider?.();
     if (!catalog) return [];
 
+    // bead 7ym.2.2: a role's allow-list can only NARROW the tier's toolset —
+    // it never adds a tool the tier does not already grant (the intersection is
+    // taken against the already tier/blocklist-filtered catalog below).
+    const roleAllowedTools = handle.resolvedRole?.definition.allowedTools;
+    const roleAllowSet = roleAllowedTools ? new Set(roleAllowedTools) : null;
+
     const availableByName = new Map<string, AgentTool<any>>();
     for (const tool of [...catalog.core, ...catalog.extended]) {
       if (BLOCKED_SUBAGENT_TOOL_NAMES.has(tool.name)) continue;
+      if (roleAllowSet && !roleAllowSet.has(tool.name)) continue;
       if (!availableByName.has(tool.name)) {
         availableByName.set(
           tool.name,
@@ -1512,6 +1563,35 @@ export class SubagentFaculty implements SubagentControlPort {
     return normalizeCapabilityTokens(tokens, DEFAULT_SUBAGENT_CAPABILITIES);
   }
 
+  /**
+   * bead 7ym.2.2: clamp the requested bounded-loop turns down to the role's
+   * ceiling. A role can only narrow — never raise the requested/tier turn cap.
+   */
+  private resolveEffectiveMaxTurns(
+    requested: number | undefined,
+    role: ResolvedSubagentRole | null,
+  ): number {
+    const base = normalizeSubagentMaxTurns(requested);
+    const roleMax = role?.definition.maxTurns;
+    return roleMax !== undefined ? Math.min(base, roleMax) : base;
+  }
+
+  /**
+   * bead 7ym.2.2: intersect the advertised capability tokens with the role's
+   * capability allow-list. A role can only drop tokens, so the effective set is
+   * a subset of what was advertised (which the grant derivation then clamps to
+   * the parent tier). Absent role allow-list ⇒ no role-level narrowing.
+   */
+  private narrowCapabilitiesByRole(
+    advertised: string[],
+    role: ResolvedSubagentRole | null,
+  ): string[] {
+    const roleCapabilities = role?.definition.capabilities;
+    if (!roleCapabilities) return advertised;
+    const allowed = new Set(roleCapabilities);
+    return advertised.filter(token => allowed.has(token));
+  }
+
   private resolveRequiredCapabilities(tokens: readonly string[] | undefined): string[] {
     return normalizeCapabilityTokens(tokens);
   }
@@ -1600,6 +1680,20 @@ export class SubagentFaculty implements SubagentControlPort {
       resume,
     };
   }
+}
+
+/**
+ * bead 7ym.2.2: the effective wall-clock deadline is the tighter of the
+ * work-spec deadline and the role timeout. Either may be absent; when both are
+ * present the role can only narrow (min wins).
+ */
+function resolveEffectiveDeadlineMs(
+  workSpecDeadlineMs: number | undefined,
+  roleTimeoutMs: number | undefined,
+): number | undefined {
+  if (workSpecDeadlineMs === undefined) return roleTimeoutMs;
+  if (roleTimeoutMs === undefined) return workSpecDeadlineMs;
+  return Math.min(workSpecDeadlineMs, roleTimeoutMs);
 }
 
 function normalizeExecutionChannelId(channelId: string | undefined): string | null {

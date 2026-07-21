@@ -2085,4 +2085,132 @@ describe('SubagentFaculty core-authoritative tool governance (p0le)', () => {
       expect(faculty.getActiveCount()).toBe(0);
     });
   });
+
+  // bead 7ym.2.2 — role restrictions can only NARROW the tier: toolset, turns,
+  // timeout, and concurrency.
+  describe('role enforcement (7ym.2.2)', () => {
+    function roleConfig(roles: Record<string, unknown>): SubstrateConfig {
+      return {
+        ...TEST_CONFIG,
+        subagentRoles: parseSubagentRoleRegistryConfig({ roles }, 'test'),
+      };
+    }
+
+    function makeFaculty(config: SubstrateConfig): SubagentFaculty {
+      return new SubagentFaculty({
+        eventBus,
+        llmProvider: mockLLM(),
+        sessionStore,
+        embeddingService: null,
+        memoryProvider: null,
+        config,
+        parentSystemPrompt: 'You are Companion.',
+      });
+    }
+
+    it('narrows the injected toolset to the role allow-list', async () => {
+      const alpha = makeUnannotatedCatalogTool('alpha');
+      const beta = makeUnannotatedCatalogTool('beta');
+      const config = roleConfig({
+        narrow: { instructions: 'Use only alpha.', allowedTools: ['alpha'] },
+      });
+      const faculty = new SubagentFaculty({
+        eventBus,
+        llmProvider: mockLLM(),
+        sessionStore,
+        embeddingService: null,
+        memoryProvider: null,
+        config,
+        parentSystemPrompt: 'You are Companion.',
+        toolCatalogProvider: () => ({ core: [alpha.tool], extended: [beta.tool] }),
+      });
+      await faculty.execute({ name: 'n', task: 't', role: 'narrow', workSpec: buildSubagentWorkSpec() });
+      const names = mockFirstPromptTools.map(tool => tool.name);
+      expect(names).toContain('alpha');
+      expect(names).not.toContain('beta');
+    });
+
+    it('leaves the tier toolset intact when no role allow-list is set (regression)', async () => {
+      const alpha = makeUnannotatedCatalogTool('alpha');
+      const beta = makeUnannotatedCatalogTool('beta');
+      const faculty = new SubagentFaculty({
+        eventBus,
+        llmProvider: mockLLM(),
+        sessionStore,
+        embeddingService: null,
+        memoryProvider: null,
+        config: TEST_CONFIG,
+        parentSystemPrompt: 'You are Companion.',
+        toolCatalogProvider: () => ({ core: [alpha.tool], extended: [beta.tool] }),
+      });
+      await faculty.execute({ name: 'n', task: 't', workSpec: buildSubagentWorkSpec() });
+      const names = mockFirstPromptTools.map(tool => tool.name);
+      expect(names).toEqual(expect.arrayContaining(['alpha', 'beta']));
+    });
+
+    it('clamps requested maxTurns down to the role ceiling', async () => {
+      const faculty = makeFaculty(roleConfig({ capped: { instructions: 'x', maxTurns: 2 } }));
+      const result = await faculty.execute({
+        name: 'n',
+        task: 't',
+        role: 'capped',
+        maxTurns: 8,
+        workSpec: buildSubagentWorkSpec(),
+      });
+      expect(result.turns).toBe(2);
+    });
+
+    it('a role never widens the requested turn cap', async () => {
+      const faculty = makeFaculty(roleConfig({ roomy: { instructions: 'x', maxTurns: 8 } }));
+      const result = await faculty.execute({
+        name: 'n',
+        task: 't',
+        role: 'roomy',
+        maxTurns: 2,
+        workSpec: buildSubagentWorkSpec(),
+      });
+      expect(result.turns).toBe(2);
+    });
+
+    it('enforces the role timeout as a turn-boundary budget ceiling', async () => {
+      mockSubagentDelayMs = 5;
+      const faculty = makeFaculty(roleConfig({ brief: { instructions: 'x', timeoutMs: 1 } }));
+      const task = await faculty.spawn({
+        name: 'n',
+        task: 't',
+        role: 'brief',
+        maxTurns: 4,
+        workSpec: buildSubagentWorkSpec(),
+      });
+      const result = await faculty.wait(task.subagentId);
+      expect(result.outcome).toBe('budget_limited');
+      expect(result.failureReason).toMatch(/deadline/);
+    });
+
+    it('enforces the per-role concurrency ceiling and releases the slot on completion', async () => {
+      mockSubagentDelayMs = 40;
+      const faculty = makeFaculty(roleConfig({ solo: { instructions: 'x', maxConcurrent: 1 } }));
+      const first = await faculty.spawn({
+        name: 'a',
+        task: 't',
+        role: 'solo',
+        workSpec: buildSubagentWorkSpec(),
+      });
+      await expect(faculty.spawn({
+        name: 'b',
+        task: 't',
+        role: 'solo',
+        workSpec: buildSubagentWorkSpec(),
+      })).rejects.toThrow(/role "solo" concurrency limit/);
+      // Draining the first frees the slot; a fresh spawn then succeeds.
+      await faculty.wait(first.subagentId);
+      const third = await faculty.spawn({
+        name: 'c',
+        task: 't',
+        role: 'solo',
+        workSpec: buildSubagentWorkSpec(),
+      });
+      await faculty.wait(third.subagentId);
+    });
+  });
 });

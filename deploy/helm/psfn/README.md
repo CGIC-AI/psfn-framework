@@ -633,8 +633,15 @@ Enabling `bash` intentionally permits the companion to compose installed image
 commands inside that sandbox. It does not expose system-data, companion-data,
 Kubernetes Secrets, provider credentials, or peer workspaces. Keep
 `envAllowlist` empty unless a specific non-secret variable is required. The
-agent does not receive or execute this policy, so `analysis_workbench` cannot
-bypass the gateway confirmation and audit path with a local shell helper.
+agent does not receive or execute this policy: the `analysis_workbench`
+`shell_exec` helper is a thin forward over the same gateway `shell.exec` RPC,
+so it cannot bypass the gateway confirmation and audit path.
+
+Setting `shellExec.mountRepositoryReadOnly=true` additionally mounts the
+deployment's repository checkout read-only at `/repo` inside the sandbox. The
+mount source is always the gateway's `PSFN_REPOSITORY_DIR` (the
+`repositoryCheckout` mount in this chart), never an operator-supplied path;
+enabling the toggle without a configured checkout fails closed at exec time.
 
 ## Internal mTLS
 

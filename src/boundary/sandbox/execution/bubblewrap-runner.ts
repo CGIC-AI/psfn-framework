@@ -1,7 +1,10 @@
 import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import type { ShellExecResult } from '../../gateway/protocol.js';
-import type { ResolvedShellExecution } from './shell-execution-policy.js';
+import {
+  SANDBOX_REPOSITORY_MOUNT_TARGET,
+  type ResolvedShellExecution,
+} from './shell-execution-policy.js';
 
 const READ_ONLY_ETC_FILES = [
   '/etc/group',
@@ -50,6 +53,11 @@ export function buildBubblewrapArgs(request: ResolvedShellExecution): string[] {
     '--tmpfs', '/tmp',
     '--dir', '/workspace',
     '--bind', request.workspacePath, '/workspace',
+  );
+  if (request.repositoryMountPath) {
+    args.push('--ro-bind', request.repositoryMountPath, SANDBOX_REPOSITORY_MOUNT_TARGET);
+  }
+  args.push(
     '--chdir', request.sandboxCwd,
     '--',
     request.resourceLimitBinaryPath,

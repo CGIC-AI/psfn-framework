@@ -8,6 +8,13 @@ export interface ShellExecSettings {
   enabled: boolean;
   allowlist: string[];
   envAllowlist: string[];
+  /**
+   * Mount the deployment's repository checkout read-only at /repo inside the
+   * sandbox. The mount source is an internal runtime derivation
+   * (PSFN_REPOSITORY_DIR); enabling this without a configured checkout fails
+   * closed at execution time.
+   */
+  mountRepositoryReadOnly: boolean;
   defaultTimeoutMs: number;
   maxTimeoutMs: number;
   defaultMaxOutputChars: number;
@@ -33,6 +40,7 @@ const SHELL_EXEC_SETTING_KEYS = [
   'enabled',
   'allowlist',
   'envAllowlist',
+  'mountRepositoryReadOnly',
   'defaultTimeoutMs',
   'maxTimeoutMs',
   'defaultMaxOutputChars',
@@ -52,6 +60,7 @@ export function createDefaultShellExecSettings(): ShellExecSettings {
     enabled: false,
     allowlist: [],
     envAllowlist: [],
+    mountRepositoryReadOnly: false,
     defaultTimeoutMs: 600_000,
     maxTimeoutMs: 3_600_000,
     defaultMaxOutputChars: 20_000,
@@ -135,6 +144,12 @@ export function normalizeShellExecSettings(
       `Invalid settings at ${fieldPath}.allowlist: enabled shell requires at least one command`,
     );
   }
+  // New-in-jdwd key: absent means the safe disabled state so owner files
+  // written before the key existed keep loading; a present value must be a
+  // real boolean.
+  const mountRepositoryReadOnly = value.mountRepositoryReadOnly === undefined
+    ? false
+    : expectBoolean(value.mountRepositoryReadOnly, `${fieldPath}.mountRepositoryReadOnly`);
 
   const defaultTimeoutMs = expectIntegerInRange(
     value.defaultTimeoutMs,
@@ -183,6 +198,7 @@ export function normalizeShellExecSettings(
     enabled,
     allowlist,
     envAllowlist,
+    mountRepositoryReadOnly,
     defaultTimeoutMs,
     maxTimeoutMs,
     defaultMaxOutputChars,

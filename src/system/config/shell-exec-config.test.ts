@@ -25,6 +25,24 @@ describe('shell exec owner settings', () => {
     });
   });
 
+  it('defaults the repository mount off and requires a real boolean when present', () => {
+    expect(createDefaultShellExecSettings().mountRepositoryReadOnly).toBe(false);
+    const { mountRepositoryReadOnly: _omitted, ...legacyBlock } = createDefaultShellExecSettings();
+    expect(normalizeShellExecSettings(legacyBlock)).toMatchObject({
+      mountRepositoryReadOnly: false,
+    });
+    expect(normalizeShellExecSettings({
+      ...createDefaultShellExecSettings(),
+      enabled: true,
+      allowlist: ['bash'],
+      mountRepositoryReadOnly: true,
+    })).toMatchObject({ mountRepositoryReadOnly: true });
+    expect(() => normalizeShellExecSettings({
+      ...createDefaultShellExecSettings(),
+      mountRepositoryReadOnly: 'yes',
+    })).toThrow('shellExec.mountRepositoryReadOnly');
+  });
+
   it('fails closed for empty enabled allowlists, unknown keys, and out-of-range limits', () => {
     expect(() => normalizeShellExecSettings({
       ...createDefaultShellExecSettings(),

@@ -705,22 +705,22 @@
       "value": "2000"
     },
     {
-      "file": "src/boundary/sandbox/execution/shell-policy-config.ts",
-      "name": "DEFAULT_SHELL_EXEC_MAX_TIMEOUT_MS",
-      "value": "30_000",
-      "note": "zet.6 refusal: shell exec policy path unreachable in current runtime (dead code)."
+      "file": "src/boundary/sandbox/execution/shell-execution-policy.ts",
+      "name": "MAX_ARG_LENGTH",
+      "value": "4_096",
+      "note": "Code-owned DoS guard bounding one shell.exec argv entry before policy resolution; mirrors the REPL-side cap in capabilities/shell.ts."
     },
     {
-      "file": "src/boundary/sandbox/execution/shell-policy-config.ts",
-      "name": "DEFAULT_SHELL_EXEC_OUTPUT_CHARS_CAP",
-      "value": "100_000",
-      "note": "zet.6 refusal: shell exec policy path unreachable in current runtime (dead code)."
+      "file": "src/boundary/sandbox/execution/shell-execution-policy.ts",
+      "name": "MAX_ARGS",
+      "value": "64",
+      "note": "Code-owned DoS guard bounding the shell.exec argv count before policy resolution; mirrors the REPL-side cap in capabilities/shell.ts."
     },
     {
-      "file": "src/boundary/sandbox/execution/shell-policy-config.ts",
-      "name": "DEFAULT_SHELL_EXEC_TIMEOUT_MS",
-      "value": "5_000",
-      "note": "zet.6 refusal: shell exec policy path unreachable in current runtime (dead code)."
+      "file": "src/boundary/sandbox/execution/shell-execution-policy.ts",
+      "name": "MAX_COMMAND_LENGTH",
+      "value": "256",
+      "note": "Code-owned DoS guard bounding the shell.exec command string before policy resolution; mirrors the REPL-side cap in capabilities/shell.ts."
     },
     {
       "file": "src/boundary/sandbox/sandbox-execution-port.ts",
@@ -1747,14 +1747,14 @@
     {
       "file": "src/core/eval/observer-sidecar/emosim-server-adapter.ts",
       "name": "EMOSIM_MAX_READ_CADENCE_MS",
-      "note": "Code-owned safety ceiling prevents a misconfigured inter-read delay from stalling the observer evaluation pipeline.",
-      "value": "60_000"
+      "value": "60_000",
+      "note": "Code-owned safety ceiling prevents a misconfigured inter-read delay from stalling the observer evaluation pipeline."
     },
     {
       "file": "src/core/eval/observer-sidecar/emosim-server-adapter.ts",
       "name": "EMOSIM_MIN_READ_CADENCE_MS",
-      "note": "Operator-mandated 1 Hz protocol floor prevents sub-second observer-sidecar polling regardless of mutable settings.",
-      "value": "1000"
+      "value": "1000",
+      "note": "Operator-mandated 1 Hz protocol floor prevents sub-second observer-sidecar polling regardless of mutable settings."
     },
     {
       "file": "src/core/eval/observer-sidecar/metrics.ts",
@@ -1979,8 +1979,8 @@
     {
       "file": "src/core/intention/concern-resolution-arc.ts",
       "name": "ARC_PROMPT_MAX_CHARS",
-      "note": "Code-owned durable journal payload ceiling bounds derived concern text stored in the reflection prompt; it is not mutable runtime policy.",
-      "value": "200"
+      "value": "200",
+      "note": "Code-owned durable journal payload ceiling bounds derived concern text stored in the reflection prompt; it is not mutable runtime policy."
     },
     {
       "file": "src/core/intention/concern-route-adapters.ts",

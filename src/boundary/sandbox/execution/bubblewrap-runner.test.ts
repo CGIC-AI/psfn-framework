@@ -67,4 +67,21 @@ describe('buildBubblewrapArgs', () => {
     expect(rendered).not.toContain('/app/companion-data');
     expect(rendered).not.toContain('/var/run/secrets');
   });
+
+  it('omits the repository mount unless the policy resolved one', () => {
+    const sequence = buildBubblewrapArgs(request()).join('\0');
+    expect(sequence).not.toContain('/repo');
+  });
+
+  it('binds the resolved repository copy read-only at /repo', () => {
+    const args = buildBubblewrapArgs({
+      ...request(),
+      repositoryMountPath: '/app/repository',
+    });
+    const sequence = args.join('\0');
+    expect(sequence).toContain('--ro-bind\0/app/repository\0/repo');
+    expect(sequence).not.toContain('--bind\0/app/repository');
+    // The workspace bind must stay the only writable persistent root.
+    expect(args.filter(arg => arg === '--bind')).toHaveLength(1);
+  });
 });

@@ -172,6 +172,54 @@ describe('DreamMeaningPass', () => {
     expect(handleMessage).toHaveBeenCalledTimes(1);
   });
 
+  it('grounds the review in the real turns behind each episode, not just title/landmark (bead dtym)', async () => {
+    const store = makeStore();
+    // Default title/landmark carry no "Saturn" content; it lives only in the transcript.
+    await store.createEpisode(episodeInput('a', '2026-06-09T20:00:00.000Z', '2026-06-09T21:00:00.000Z'));
+
+    const transcriptReader = {
+      getRecentMessages: vi.fn(() => [
+        {
+          role: 'user',
+          content: 'I finally got the telescope aligned on Saturn tonight.',
+          timestamp: Date.parse('2026-06-09T20:30:00.000Z'),
+        },
+        {
+          role: 'assistant',
+          content: 'The rings must have looked incredible through it.',
+          timestamp: Date.parse('2026-06-09T20:31:00.000Z'),
+        },
+      ]),
+    };
+    const handleMessage = vi.fn(async () => ({ content: meaningBlock({ a: 'Saturn through the telescope stayed with me.' }) }));
+    const pass = new DreamMeaningPass(store, { handleMessage }, { now: () => NOW, transcriptReader });
+
+    const result = await pass.run({ sessionId: 'discord:main' });
+    expect(result.meaningsRecorded).toBe(1);
+
+    // The pass pulled the real turns for the episode's session...
+    expect(transcriptReader.getRecentMessages).toHaveBeenCalledWith('discord:main', expect.any(Number));
+    // ...and fed their content into the opening prompt, grounded but absent from title/landmark.
+    const openingPrompt = (handleMessage.mock.calls[0][0] as { content: string }).content;
+    expect(openingPrompt).toContain('telescope aligned on Saturn');
+    expect(openingPrompt).toContain('what was actually said');
+    const episode = await store.getEpisode('a');
+    expect(episode?.title).not.toContain('Saturn');
+    expect(episode?.landmark).not.toContain('Saturn');
+  });
+
+  it('reviews metadata-only when no transcript reader is wired', async () => {
+    const store = makeStore();
+    await store.createEpisode(episodeInput('a', '2026-06-09T20:00:00.000Z', '2026-06-09T21:00:00.000Z'));
+    const handleMessage = vi.fn(async () => ({ content: meaningBlock({ a: 'It mattered.' }) }));
+    const pass = new DreamMeaningPass(store, { handleMessage }, { now: () => NOW });
+
+    await pass.run({ sessionId: 'discord:main' });
+
+    const openingPrompt = (handleMessage.mock.calls[0][0] as { content: string }).content;
+    expect(openingPrompt).not.toContain('what was actually said');
+  });
+
   it('rejects a multi-moment monolith meaning, feeds it back, and records only the atomic re-record (bead 3zu5)', async () => {
     const store = makeStore();
     await store.createEpisode(episodeInput('a', '2026-06-09T20:00:00.000Z', '2026-06-09T21:00:00.000Z'));

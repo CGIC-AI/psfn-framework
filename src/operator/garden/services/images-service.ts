@@ -32,6 +32,7 @@ import type {
   AdminImageBlob,
   AdminImagesService,
   AdminPromoteReferenceInput,
+  AutobiographyEditorPrincipal,
 } from './types.js';
 import {
   contestArtifactSensitivity,
@@ -302,6 +303,7 @@ function normalizeMeaningfulMoment(value: unknown): AdminGeneratedImageMeaningfu
 function mergeGeneratedImageUpdate(
   metadata: Record<string, unknown>,
   input: AdminGeneratedImageUpdateInput,
+  editorPrincipal: AutobiographyEditorPrincipal,
 ): Record<string, unknown> {
   const next: Record<string, unknown> = {
     ...metadata,
@@ -337,7 +339,7 @@ function mergeGeneratedImageUpdate(
     }
   }
   if (input.autobiography !== undefined) {
-    applyAutobiographyUpdate(next, metadata, input.autobiography);
+    applyAutobiographyUpdate(next, metadata, input.autobiography, editorPrincipal);
   }
   if (input.conversation !== undefined) {
     const conversation = normalizeConversationLink(input.conversation);
@@ -373,6 +375,7 @@ function applyAutobiographyUpdate(
   next: Record<string, unknown>,
   metadata: Record<string, unknown>,
   input: NonNullable<AdminGeneratedImageUpdateInput['autobiography']>,
+  editorPrincipal: AutobiographyEditorPrincipal,
 ): void {
   const existing = normalizeAutobiography(metadata.autobiography);
   const companionAuthored = existing?.author === 'companion';
@@ -388,13 +391,22 @@ function applyAutobiographyUpdate(
     return;
   }
 
-  const author = input.author ?? existing?.author ?? 'operator';
   const incomingNarrative = input.narrative !== undefined
     ? normalizedOptionalString(input.narrative, MAX_GALLERY_NOTE_CHARS) ?? ''
     : undefined;
   const narrativeChanged = incomingNarrative !== undefined
     && incomingNarrative !== (existing?.narrative ?? '');
-  if (companionAuthored && author !== 'companion' && narrativeChanged
+
+  // Authorship is derived from the editing principal, never from the request body.
+  // The operator admin surface can never mint companion provenance; it may only preserve
+  // an existing companion narrative it is not overwriting. A companion narrative that the
+  // operator actually rewrites (with the explicit override) becomes operator-authored,
+  // because the operator authored the new content.
+  const author: AutobiographyEditorPrincipal = editorPrincipal === 'companion'
+    ? 'companion'
+    : (companionAuthored && !narrativeChanged ? 'companion' : 'operator');
+
+  if (companionAuthored && editorPrincipal !== 'companion' && narrativeChanged
     && input.allowOverwriteCompanionAuthored !== true) {
     throw new Error(
       'Companion-authored autobiography narrative is authorship-protected; set allowOverwriteCompanionAuthored to overwrite it',
@@ -579,6 +591,21 @@ export class AdminImagesDataService implements AdminImagesService {
   }
 
   async updateGeneratedImage(id: string, input: AdminGeneratedImageUpdateInput): Promise<AdminGeneratedImageView> {
+    // The Garden/admin route is an operator-principal surface: it can never author, mint,
+    // or inherit companion provenance. A future companion tool surface authors via the
+    // internal `applyGeneratedImageUpdate` seam with a `'companion'` principal.
+    return this.applyGeneratedImageUpdate(id, input, 'operator');
+  }
+
+  /**
+   * Internal seam for autobiography edits. `editorPrincipal` derives record authorship and
+   * is not reachable from the operator admin route (which only calls updateGeneratedImage).
+   */
+  private async applyGeneratedImageUpdate(
+    id: string,
+    input: AdminGeneratedImageUpdateInput,
+    editorPrincipal: AutobiographyEditorPrincipal,
+  ): Promise<AdminGeneratedImageView> {
     const resolvedImage = this.resolveGeneratedImagePath(id);
     if (!resolvedImage) {
       throw new Error('Generated image not found');
@@ -588,7 +615,7 @@ export class AdminImagesDataService implements AdminImagesService {
       throw new Error('Generated image not found');
     }
     const existingMetadata = await readMetadata(resolvedImage.imagePath);
-    const nextMetadata = mergeGeneratedImageUpdate(existingMetadata, input);
+    const nextMetadata = mergeGeneratedImageUpdate(existingMetadata, input, editorPrincipal);
     writeMetadata(resolvedImage.imagePath, nextMetadata);
     return this.buildGeneratedImageView(resolvedImage.root, resolvedImage.imagePath, fileStat, nextMetadata);
   }

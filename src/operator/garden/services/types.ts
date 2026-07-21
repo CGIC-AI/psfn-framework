@@ -27,6 +27,7 @@ export type {
   AdminGeneratedImageAutobiography,
   AdminGeneratedImageAutobiographyMilestone,
   AdminGeneratedImageAutobiographyInput,
+  AutobiographyEditorPrincipal,
   AdminGeneratedImageListQuery,
   AdminGeneratedImageUpdateInput,
   AdminGeneratedImageListData,

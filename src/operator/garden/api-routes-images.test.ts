@@ -342,7 +342,7 @@ describe('image admin API routes', () => {
     });
   });
 
-  it('forwards visual autobiography updates through the generated image PATCH route', async () => {
+  it('forwards visual autobiography updates but never a body-supplied author (charter 8.2)', async () => {
     const imagesService = makeImagesService();
     const routes = makeRoutes(imagesService);
 
@@ -355,18 +355,19 @@ describe('image admin API routes', () => {
           narrative: 'A render that finally felt like me.',
           emotionalContext: 'settled',
           milestone: { marked: true, label: 'anchor look' },
+          // A forged author in the operator request body must be dropped, not forwarded.
           author: 'companion',
         },
       }),
     );
 
     expect(response.status).toBe(200);
+    // Exact-match: the forwarded input carries no `author` — the body field is dropped.
     expect(imagesService.updateGeneratedImage).toHaveBeenCalledWith('img-1', {
       autobiography: {
         narrative: 'A render that finally felt like me.',
         emotionalContext: 'settled',
         milestone: { marked: true, label: 'anchor look' },
-        author: 'companion',
       },
     });
   });

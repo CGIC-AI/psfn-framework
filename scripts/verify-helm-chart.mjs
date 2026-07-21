@@ -2590,6 +2590,36 @@ assertIncludes(generatedCaIssuer, 'kind: Issuer', 'generated CA issuer namespace
 assertIncludes(generatedCaIssuer, 'secretName: psfn-ca-tls', 'generated CA issuer secret');
 const gatewayRpcCert = findDocumentByKindName(rendered, 'Certificate', 'psfn-gateway-rpc');
 assertIncludes(gatewayRpcCert, 'kind: Issuer', 'gateway cert issuerRef kind');
+const fleetGatewayRpcCert = findDocumentByKindName(
+  fleetGardenRendered,
+  'Certificate',
+  'psfn-gateway-rpc',
+);
+assertIncludes(
+  fleetGatewayRpcCert,
+  'name: psfn-gateway-rpc',
+  'fleet gateway RPC server certificate name',
+);
+assertIncludes(
+  fleetGatewayRpcCert,
+  'name: psfn-ca',
+  'fleet gateway RPC server certificate issuer',
+);
+assertIncludes(
+  fleetGatewayRpcCert,
+  'secretName: psfn-gateway-rpc-tls',
+  'fleet gateway RPC server certificate secret',
+);
+assertIncludes(
+  fleetGatewayRpcCert,
+  '- "spiffe://cluster.local/psfn/gateway/fleet"',
+  'fleet gateway RPC server certificate SPIFFE URI',
+);
+assertIncludes(
+  fleetGatewayRpcCert,
+  '- "psfn-gateway-rpc.psfn-test.svc"',
+  'fleet gateway RPC server certificate service DNS name',
+);
 
 const clusterIssuerRefRendered = render([
   '--set',

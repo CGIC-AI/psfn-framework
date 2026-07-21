@@ -218,13 +218,14 @@ export class PostgresHubDeviceHumanAttachmentStore implements HubDeviceHumanAtta
       // instead of leaking the aborted transaction. A second consecutive
       // conflict still fails closed, matching the sibling fleet-auth stores'
       // 40001 handling (portal-authorization-store.ts).
-      if (!retried && isRecord(error) && error.code === '40001') {
-        return await this.attach(input, true);
-      }
-      throw error;
+      if (retried || !isRecord(error) || error.code !== '40001') throw error;
     } finally {
       client.release();
     }
+    // SAFETY: acquire the retry client only after finally returned the failed
+    // transaction's client, so pool-wide serialization conflicts cannot make
+    // every request hold one client while waiting indefinitely for another.
+    return await this.attach(input, true);
   }
 
   async fenceDevice(input: Parameters<HubDeviceHumanAttachmentPort['fenceDevice']>[0]): Promise<void> {

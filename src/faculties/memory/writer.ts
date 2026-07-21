@@ -3,9 +3,10 @@
 
 import { v7 as uuidv7 } from 'uuid';
 import type { EmbeddingProviderPort } from '../../shared/contracts/embedding-provider.js';
-import type {
-  MemoryEvolutionLink,
-  MemoryStorePort,
+import {
+  InactiveMemoryUpdateError,
+  type MemoryEvolutionLink,
+  type MemoryStorePort,
 } from './memory-store-port.js';
 import { abstractMemoryText } from './abstraction.js';
 import type {
@@ -936,7 +937,7 @@ export class MemoryWriter {
     }
 
     const existing = await this.memoryStore.getById(memoryId);
-    if (!existing || existing.deletedAt !== undefined) {
+    if (!existing || existing.supersededBy !== undefined || existing.deletedAt !== undefined) {
       return null;
     }
 
@@ -1076,21 +1077,26 @@ export class MemoryWriter {
     };
     const patchEventId = uuidv7();
 
-    await this.memoryStore.runInTransaction(async () => {
-      await this.memoryStore.updateMemory(memoryId, updates);
-      await this.memoryStore.recordPatchEvent({
-        id: patchEventId,
-        memoryId,
-        sourceRef: auditContext.sourceRef,
-        sourceType: auditContext.sourceType,
-        provenance: auditContext.provenance,
-        reason: opts.reason?.trim() || undefined,
-        patch,
-        previousValues,
-        nextValues,
-        createdAt: Date.now(),
+    try {
+      await this.memoryStore.runInTransaction(async () => {
+        await this.memoryStore.updateMemory(memoryId, updates, { requireActive: true });
+        await this.memoryStore.recordPatchEvent({
+          id: patchEventId,
+          memoryId,
+          sourceRef: auditContext.sourceRef,
+          sourceType: auditContext.sourceType,
+          provenance: auditContext.provenance,
+          reason: opts.reason?.trim() || undefined,
+          patch,
+          previousValues,
+          nextValues,
+          createdAt: Date.now(),
+        });
       });
-    });
+    } catch (error) {
+      if (error instanceof InactiveMemoryUpdateError) return null;
+      throw error;
+    }
 
     return {
       memory: updatedMemory,

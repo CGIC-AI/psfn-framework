@@ -306,6 +306,17 @@ export type MemoryStoreUpdatePatch = Partial<Pick<
   | 'embedding'
 >>;
 
+export interface MemoryStoreUpdateOptions {
+  requireActive?: boolean;
+}
+
+export class InactiveMemoryUpdateError extends Error {
+  constructor(memoryId: string) {
+    super(`Memory is no longer active: ${memoryId}`);
+    this.name = 'InactiveMemoryUpdateError';
+  }
+}
+
 export interface MemoryListOptions {
   limit?: number;
   offset?: number;
@@ -438,7 +449,11 @@ interface MemoryStorePortBackend extends ScratchpadProvider {
     limit: number,
     scopeQuery?: MemoryScopeQuery,
   ): Awaitable<MemorySearchResult[]>;
-  updateMemory(id: string, updates: MemoryStoreUpdatePatch): Awaitable<void>;
+  updateMemory(
+    id: string,
+    updates: MemoryStoreUpdatePatch,
+    options?: MemoryStoreUpdateOptions,
+  ): Awaitable<void>;
   recordPatchEvent(event: MemoryPatchEvent): Awaitable<void>;
   getAllActiveMemories(limit?: number): Awaitable<PurrMemory[]>;
   listMemories(options?: MemoryListOptions): Awaitable<PurrMemory[]>;
@@ -540,7 +555,11 @@ export interface MemoryStorePort extends ScratchpadProvider {
     limit: number,
     scopeQuery?: MemoryScopeQuery,
   ): Promise<MemorySearchResult[]>;
-  updateMemory(id: string, updates: MemoryStoreUpdatePatch): Promise<void>;
+  updateMemory(
+    id: string,
+    updates: MemoryStoreUpdatePatch,
+    options?: MemoryStoreUpdateOptions,
+  ): Promise<void>;
   recordPatchEvent(event: MemoryPatchEvent): Promise<void>;
   getAllActiveMemories(limit?: number): Promise<PurrMemory[]>;
   listMemories(options?: MemoryListOptions): Promise<PurrMemory[]>;
@@ -642,8 +661,8 @@ export function createMemoryStorePort(store: MemoryStorePortBackend): MemoryStor
       await store.searchByEmbedding(embedding, threshold, limit, scopeQuery)
     ),
     searchByText: async (query, limit, scopeQuery) => await store.searchByText(query, limit, scopeQuery),
-    updateMemory: async (id, updates) => {
-      await store.updateMemory(id, updates);
+    updateMemory: async (id, updates, options) => {
+      await store.updateMemory(id, updates, options);
     },
     recordPatchEvent: async (event) => {
       await store.recordPatchEvent(event);

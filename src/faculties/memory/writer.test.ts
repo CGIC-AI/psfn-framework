@@ -7,6 +7,7 @@ import { MemoryCandidacyPolicyError, MemoryWriter, MemoryWritePolicyError } from
 import type { MemoryWriteOptions } from './writer.js';
 import type { EmbeddingProviderPort } from '../../shared/contracts/embedding-provider.js';
 import type { MemoryEvolutionLinkInput, MemoryStorePort } from './memory-store-port.js';
+import { InactiveMemoryUpdateError } from './memory-store-port.js';
 import { InMemoryMemoryStore } from '../../test-support/in-memory-memory-store.js';
 import type { PurrMemory } from './types.js';
 import { DEDUP_THRESHOLD, MEMORY_CONFIG } from './types.js';
@@ -1627,7 +1628,7 @@ describe('MemoryWriter', () => {
       expect(store.updateMemory).toHaveBeenCalledWith('memory-patch-1', expect.objectContaining({
         confidence: 0.9,
         tags: expect.arrayContaining(['old', 'belief-corrected', 'source-retracted']),
-      }));
+      }), { requireActive: true });
       expect(store.recordPatchEvent).toHaveBeenCalledWith(expect.objectContaining({
         memoryId: 'memory-patch-1',
         sourceRef: 'tool:memory_patch',
@@ -1656,7 +1657,7 @@ describe('MemoryWriter', () => {
       expect(store.updateMemory).toHaveBeenCalledWith('memory-patch-2', expect.objectContaining({
         text: 'New corrected text',
         embedding: expect.any(Float32Array),
-      }));
+      }), { requireActive: true });
     });
 
     it('does not persist patched text when embedding fails', async () => {
@@ -1674,6 +1675,27 @@ describe('MemoryWriter', () => {
 
       expect(store.runInTransaction).not.toHaveBeenCalled();
       expect(store.updateMemory).not.toHaveBeenCalled();
+      expect(store.recordPatchEvent).not.toHaveBeenCalled();
+    });
+
+    it('returns null when a concurrent supersede wins the transactional row lock', async () => {
+      const existing = makeExistingMemory({
+        id: 'memory-patch-superseded-race',
+        text: 'Original memory text',
+      });
+      store.getById.mockReturnValue(existing);
+      store.updateMemory.mockRejectedValueOnce(new InactiveMemoryUpdateError(existing.id));
+
+      await expect(writer.patchMemory({
+        memoryId: existing.id,
+        confidence: 0.9,
+      })).resolves.toBeNull();
+
+      expect(store.updateMemory).toHaveBeenCalledWith(
+        existing.id,
+        expect.objectContaining({ confidence: 0.9 }),
+        { requireActive: true },
+      );
       expect(store.recordPatchEvent).not.toHaveBeenCalled();
     });
 

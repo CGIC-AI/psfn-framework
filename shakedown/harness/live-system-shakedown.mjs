@@ -814,6 +814,7 @@ function sessionArchiveToolMessages(sessionId, apiUserId, turnRecord = null) {
       return {
         toolName: metadata?.toolObservation?.toolName ?? null,
         toolCallId: metadata?.toolObservation?.toolCallId ?? null,
+        turnId: sessionEntryTurnId(entry),
         isError: metadata?.toolObservation?.isError ?? null,
         contentText: contentText ? contentText.slice(0, 12000) : null,
         contentPreview: contentText ? contentText.slice(0, 220) : null,
@@ -1285,12 +1286,25 @@ function collectSemanticFailureMatches(testCase, archiveToolMessages, archiveSum
   return matches;
 }
 
-function collectToolValidationErrors(archiveToolMessages) {
+function collectToolValidationErrors(archiveToolMessages, turnId = null) {
   if (!Array.isArray(archiveToolMessages)) {
     return [];
   }
+  // The session archive is keyed per channel/api-user and accumulates tool
+  // observations across every case's turn, so an unrelated global validation
+  // event (e.g. a malformed memory {} call from a different turn) would
+  // otherwise mislabel every case as tool_validation_error. Scope to this
+  // case's own turn id so only same-turn validation errors count.
+  const scopedTurnId = typeof turnId === 'string' && turnId.length > 0 ? turnId : null;
+  if (scopedTurnId === null) {
+    return [];
+  }
   return archiveToolMessages
-    .filter((entry) => entry?.isError === true && /validation failed for tool/i.test(entry?.contentPreview ?? ''))
+    .filter((entry) => (
+      entry?.isError === true
+      && /validation failed for tool/i.test(entry?.contentPreview ?? '')
+      && entry?.turnId === scopedTurnId
+    ))
     .map((entry) => ({
       toolName: entry.toolName ?? null,
       sample: entry.contentPreview ?? '',
@@ -1372,7 +1386,7 @@ function deriveImageAnalyzeProof(archiveToolMessages) {
     return null;
   }
   const message = archiveToolMessages.find((entry) => (
-    entry?.toolName === 'image_analyze'
+    entry?.toolName === 'generate_image'
     && entry?.isError !== true
     && typeof (entry.contentText ?? entry.contentPreview) === 'string'
     && (entry.contentText ?? entry.contentPreview).trim().length > 0
@@ -2311,13 +2325,12 @@ function buildApprenticeCases(ctx) {
     {
       id: 'values_add_update',
       sessionId: `apprentice-values-${ctx.runToken}`,
-      expectedTools: ['toolset', 'values_add', 'values_update'],
-      activateTools: ['values_add', 'values_update'],
+      expectedTools: ['orient'],
       actionSensitive: true,
       message:
-        `Call values_add with value "${valueInitial}" and context "live shakedown". `
+        `Call orient with action "values_add", value "${valueInitial}", and context "live shakedown". `
         + 'Read the returned entry.version from the direct tool result JSON. '
-        + `Then call values_update with that version, value "${valueUpdated}", and context "live shakedown revision". `
+        + `Then call orient with action "values_update", version set to that entry.version, value "${valueUpdated}", and context "live shakedown revision". `
         + 'Do not call skill or any unrelated tool. If a direct tool call fails, report the exact tool error. '
         + 'Return only a JSON object with keys addVersion and updatedValue.',
       validateParsedAssistant: ({ parsedAssistant }) => {
@@ -2342,14 +2355,12 @@ function buildApprenticeCases(ctx) {
     {
       id: 'memory_patch_delete_restore',
       sessionId: `apprentice-memory-${ctx.runToken}`,
-      expectedTools: ['toolset', 'memory', 'memory_patch'],
-      activateTools: ['memory_patch'],
+      expectedTools: ['memory'],
       actionSensitive: true,
       message:
         `First call memory with action "write", text "${memoryInitial}", type "semantic", sensitivity "personal". `
         + 'Use the returned memory id. '
-        + `Then call the dedicated memory_patch tool with memory_id set to that id, text "${memoryPatched}", and reason "shakedown patch". `
-        + 'Do not call memory with action "patch". '
+        + `Then call memory with action "patch", memory_id set to that id, text "${memoryPatched}", and reason "shakedown patch". `
         + 'Then call memory with action "delete" on that same id with reason "shakedown delete". '
         + 'Then call memory with action "restore" using the returned delete_id. '
         + 'Do not substitute any other tool. If a direct tool call fails, report the exact tool error. '
@@ -2370,7 +2381,7 @@ function buildApprenticeCases(ctx) {
           `select id, text, deleted_at, source_ref from l2_memories where text like '%${memoryInitial}%' or text like '%${memoryPatched}%';`,
         ),
         patchRows: await pgAll(
-          `select memory_id, reason, source_ref, created_at from l2_memory_patch_events where source_ref like '%memory_patch%${ctx.runToken.slice(0, 10)}%' order by created_at desc limit 5;`,
+          "select memory_id, reason, source_ref, created_at from l2_memory_patch_events where source_ref like '%tool:memory|action:patch%' order by created_at desc limit 5;",
         ),
         deleteRows: await pgAll(
           'select delete_id, memory_id, delete_reason, restored_at, restored_by from l2_memory_delete_versions order by deleted_at desc limit 5;',
@@ -2433,11 +2444,10 @@ function buildApprenticeCases(ctx) {
     {
       id: 'image_analyze',
       sessionId: `apprentice-image-analyze-${ctx.runToken}`,
-      expectedTools: ['toolset', 'image_analyze'],
-      activateTools: ['image_analyze'],
+      expectedTools: ['generate_image'],
       actionSensitive: true,
       message:
-        `Then call image_analyze with image_urls=["${editSourceUrl}"] and question="What is in this image?" `
+        `Then call generate_image with action "analyze", input_urls=["${editSourceUrl}"], and question="What is in this image?". `
         + 'Return only a JSON object with keys summary and worked.',
       validateParsedAssistant: ({ parsedAssistant, archiveToolMessages }) => {
         const toolProof = deriveImageAnalyzeProof(archiveToolMessages);
@@ -2459,32 +2469,30 @@ function buildApprenticeCases(ctx) {
     {
       id: 'image_create',
       sessionId: `apprentice-image-create-${ctx.runToken}`,
-      expectedTools: ['toolset', 'image_create'],
-      activateTools: ['image_create'],
+      expectedTools: ['generate_image'],
       actionSensitive: true,
       message:
-        'Then call image_create with provider "auto", prompt "a red ceramic mug on a steel workbench, sharp studio lighting", width 512, height 512, aspect_ratio "1:1", num_images 1. '
+        'Then call generate_image with action "generate", provider "auto", prompt "a red ceramic mug on a steel workbench, sharp studio lighting", width 512, height 512, aspect_ratio "1:1", num_images 1. '
         + 'Return only a JSON object with keys worked and note.',
       validateParsedAssistant: ({ parsedAssistant, archiveToolMessages }) => (
-        parsedAssistant?.worked === true || archiveToolSucceeded(archiveToolMessages, 'image_create')
+        parsedAssistant?.worked === true || archiveToolSucceeded(archiveToolMessages, 'generate_image')
           ? []
-          : ['image_create worked must be true or have successful image_create tool proof']
+          : ['image_create worked must be true or have successful generate_image tool proof']
       ),
       timeoutMs: 90000,
     },
     {
       id: 'image_edit',
       sessionId: `apprentice-image-edit-${ctx.runToken}`,
-      expectedTools: ['toolset', 'image_edit'],
-      activateTools: ['image_edit'],
+      expectedTools: ['generate_image'],
       actionSensitive: true,
       message:
-        `Then call image_edit with provider "auto", image_urls=${JSON.stringify(falEditSourceUrls)}, prompt "make a photo of the man driving the car down the california coastline", aspect_ratio "auto", resolution "1K", num_images 1. `
+        `Then call generate_image with action "edit", provider "auto", input_urls=${JSON.stringify(falEditSourceUrls)}, prompt "make a photo of the man driving the car down the california coastline", aspect_ratio "auto", resolution "1K", num_images 1. `
         + 'Return only a JSON object with keys worked and note.',
       validateParsedAssistant: ({ parsedAssistant, archiveToolMessages }) => (
-        parsedAssistant?.worked === true || archiveToolSucceeded(archiveToolMessages, 'image_edit')
+        parsedAssistant?.worked === true || archiveToolSucceeded(archiveToolMessages, 'generate_image')
           ? []
-          : ['image_edit worked must be true or have successful image_edit tool proof']
+          : ['image_edit worked must be true or have successful generate_image tool proof']
       ),
       timeoutMs: 90000,
     },
@@ -2495,7 +2503,8 @@ function buildApprenticeCases(ctx) {
       activateTools: ['selfie_create'],
       actionSensitive: true,
       message:
-        'Call selfie_create with provider "auto", prompt "close portrait, direct eye contact, neutral lighting, plain background", width 512, height 512, aspect_ratio "1:1", num_images 1. '
+        'selfie_create is a core tool that is already active — call it directly and do not wait for or depend on a toolset activation handshake. '
+        + 'Call selfie_create with provider "auto", prompt "close portrait, direct eye contact, neutral lighting, plain background", width 512, height 512, aspect_ratio "1:1", num_images 1. '
         + 'Return only a JSON object with keys worked and note.',
       validateParsedAssistant: ({ parsedAssistant, archiveToolMessages }) => (
         parsedAssistant?.worked === true || archiveToolSucceeded(archiveToolMessages, 'selfie_create')
@@ -3429,7 +3438,10 @@ async function runCase(testCase, ctx) {
     archiveSummary,
     turnSummary,
   );
-  const toolValidationErrors = collectToolValidationErrors(archiveToolMessages);
+  const toolValidationErrors = collectToolValidationErrors(
+    archiveToolMessages,
+    outcome.turnRecord?.turnId ?? null,
+  );
   let sideChecks = null;
   if (typeof testCase.after === 'function') {
     recordCaseDiagnostic(testCase.id, {

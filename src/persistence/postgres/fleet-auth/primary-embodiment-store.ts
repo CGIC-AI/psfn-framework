@@ -5,7 +5,7 @@ import {
   type PrimaryEmbodimentAuthorityPort,
   type PrimaryEmbodimentSnapshot,
 } from '../../../boundary/fleet-auth/primary-embodiment.js';
-import { isRfc4122Uuid } from '../../../shared/utils/types.js';
+import { isRecord, isRfc4122Uuid } from '../../../shared/utils/types.js';
 import { FLEET_AUTH_LOCK_AUTHORITY_STATE_FUNCTION_NAME } from './authority-state-lock-sql.js';
 import {
   FLEET_AUTH_HANDOFF_PRIMARY_EMBODIMENT_FUNCTION_NAME,
@@ -170,6 +170,15 @@ export class PostgresPrimaryEmbodimentStore implements PrimaryEmbodimentAuthorit
       return snapshot(row);
     } catch (error) {
       await client.query('ROLLBACK').catch(() => undefined);
+      // A SERIALIZABLE serialization failure (SQLSTATE 40001) here means a
+      // concurrent handoff won the race on the same authority lock, so this
+      // caller's expectedGeneration is now stale. Normalize the raw driver
+      // error to the domain denial the sibling stores already surface
+      // (portal-authorization-store.ts), rather than leaking a 40001 to
+      // callers that only understand PrimaryEmbodimentHandoffDeniedError.
+      if (isRecord(error) && error.code === '40001') {
+        throw new PrimaryEmbodimentHandoffDeniedError('stale_generation');
+      }
       throw error;
     } finally {
       client.release();

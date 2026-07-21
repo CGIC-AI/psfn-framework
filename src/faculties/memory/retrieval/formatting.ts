@@ -190,27 +190,34 @@ function renderWithheldSummary(summary: MemoryWithheldSummary): string {
 
 function renderEpisodicLandmarkChains(chains: readonly EpisodicRetrievalChain[]): string {
   const lines = ['Episodes from your shared history related to this conversation:'];
-  chains.forEach((chain, chainIndex) => {
+  // Keep the always-on block bounded: cap the total episodes across all chains
+  // and take them most-relevant-first (highest-scoring chains, root episodes
+  // first within a chain). Arc expansion is intentionally omitted here -- arc
+  // detail belongs to the episode drill-down path, not the always-injected
+  // block, so it cannot ride in ungated.
+  const episodeCap = 5;
+  const orderedChains = [...chains].sort((left, right) => right.score - left.score);
+  let renderedEpisodes = 0;
+  orderedChains.forEach((chain, chainIndex) => {
+    if (renderedEpisodes >= episodeCap) return;
+    const episodes = chain.episodes.slice(0, episodeCap - renderedEpisodes);
+    if (episodes.length === 0) return;
     const chainTerms = chain.matchedTerms.length > 0
       ? `; matched: ${chain.matchedTerms.join(', ')}`
       : '';
     lines.push(`Chain ${chainIndex + 1} (${chain.episodes.length} episode${chain.episodes.length === 1 ? '' : 's'}${chainTerms}):`);
 
-    chain.episodes.forEach((episode, episodeIndex) => {
-      const incomingArc = episodeIndex === 0
-        ? undefined
-        : chain.arcs.find(arc => (
-          arc.sourceEpisodeId === episode.id
-          || arc.targetEpisodeId === episode.id
-        ));
-      const arcPrefix = incomingArc
-        ? `${incomingArc.arcKind} from ${otherEpisodeTitle(chain, incomingArc, episode.id)} -> `
-        : '';
+    episodes.forEach((episode) => {
       const themes = episode.themes.length > 0 ? episode.themes.slice(0, 5).join(', ') : 'none';
       lines.push(
-        `- Episode ${episode.id}: ${arcPrefix}${compactPromptLine(episode.title, 96)} (${formatEpisodeTimeRange(episode.startedAt, episode.endedAt)}; themes: ${themes})`,
+        `- Episode ${episode.id}: ${compactPromptLine(episode.title, 96)} (${formatEpisodeTimeRange(episode.startedAt, episode.endedAt)}; themes: ${themes})`,
       );
       lines.push(`  Landmark: ${compactPromptLine(stripLandmarkTimestampTail(episode.landmark), 260)}`);
+      const meaning = episode.meaning?.text.trim();
+      if (meaning) {
+        lines.push(`  Meaning: ${compactPromptLine(meaning, 200)}`);
+      }
+      renderedEpisodes++;
     });
   });
 
@@ -219,17 +226,6 @@ function renderEpisodicLandmarkChains(chains: readonly EpisodicRetrievalChain[])
     id: 'episodic_landmark_chains',
     content: lines.join('\n'),
   });
-}
-
-function otherEpisodeTitle(
-  chain: EpisodicRetrievalChain,
-  arc: EpisodicRetrievalChain['arcs'][number],
-  episodeId: string,
-): string {
-  const otherId = arc.sourceEpisodeId === episodeId ? arc.targetEpisodeId : arc.sourceEpisodeId;
-  const other = chain.episodes.find(episode => episode.id === otherId);
-  if (!other) return 'an earlier episode';
-  return `"${compactPromptLine(other.title, 64)}"`;
 }
 
 function compactPromptLine(value: string, maxChars: number): string {

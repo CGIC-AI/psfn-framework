@@ -167,12 +167,75 @@ describe('renderPromptBlock companion-facing rendering contract', () => {
     expect(rendered).toContain(`Episode ${EPISODE_B_ID}:`);
   });
 
-  it('describes arc links by episode title instead of episode id', () => {
+  it('omits ungated arc expansion from the always-on landmark block', () => {
     const rendered = renderPromptBlock(undefined, [], {
       episodicChains: [buildEpisodicChainFixture()],
     });
 
-    expect(rendered).toContain('continuation from "Late-night debugging of the voice pipeline"');
+    // Arc detail belongs to the episode drill-down path, not the always-injected
+    // block, so no arc-relationship prefix rides in ungated here.
+    expect(rendered).not.toContain('continuation from');
+    // Both episodes still render (they are within the cap), just without arcs.
+    expect(rendered).toContain('Late-night debugging of the voice pipeline');
+    expect(rendered).toContain('Planning the proactive messaging feature');
+  });
+
+  it('renders a short episode meaning when present', () => {
+    const chain = buildEpisodicChainFixture();
+    (chain.episodes[0] as { meaning?: { text: string; recordedAt: string; source: string } }).meaning = {
+      text: 'That night proved they could weather a crisis together and come out closer.',
+      recordedAt: '2026-05-03T00:00:00.000Z',
+      source: 'companion_dream_pass',
+    };
+    const rendered = renderPromptBlock(undefined, [], { episodicChains: [chain] });
+
+    expect(rendered).toContain('Meaning: That night proved they could weather a crisis together');
+  });
+
+  it('hard-caps the always-on block at five episodes across all chains, most-relevant-first', () => {
+    const makeEpisode = (id: string, title: string) => ({
+      id,
+      title,
+      landmark: `Landmark for ${title}.`,
+      startedAt: '2026-05-02T01:10:00.000Z',
+      endedAt: '2026-05-02T03:40:00.000Z',
+      themes: ['technology'],
+      salience: { score: 0.5 },
+      spanRefs: [],
+      artifactRefs: [],
+      provenanceRefs: [],
+    });
+    const chains = [
+      {
+        rootEpisodeId: 'ep-low-1',
+        episodes: [makeEpisode('ep-low-1', 'Low relevance A'), makeEpisode('ep-low-2', 'Low relevance B')],
+        arcs: [],
+        score: 0.2,
+        matchedTerms: [],
+      },
+      {
+        rootEpisodeId: 'ep-high-1',
+        episodes: [
+          makeEpisode('ep-high-1', 'High relevance A'),
+          makeEpisode('ep-high-2', 'High relevance B'),
+          makeEpisode('ep-high-3', 'High relevance C'),
+          makeEpisode('ep-high-4', 'High relevance D'),
+        ],
+        arcs: [],
+        score: 0.9,
+        matchedTerms: [],
+      },
+    ] as unknown as EpisodicRetrievalChain[];
+    const rendered = renderPromptBlock(undefined, [], { episodicChains: chains });
+
+    const episodeLines = rendered.split('\n').filter(line => line.startsWith('- Episode '));
+    expect(episodeLines).toHaveLength(5);
+    // The higher-scoring chain wins the budget; all four of its episodes render.
+    expect(rendered).toContain('High relevance A');
+    expect(rendered).toContain('High relevance D');
+    // Only one episode from the lower-scoring chain fits under the cap.
+    expect(rendered).toContain('Low relevance A');
+    expect(rendered).not.toContain('Low relevance B');
   });
 
   it('renders relevant memories as clean prose without source refs', () => {

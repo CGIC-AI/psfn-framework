@@ -132,7 +132,8 @@ function parseArtifactRefs(value: unknown): AdminGeneratedImageArtifactRef[] | u
 
 function parseAutobiographyInput(value: unknown): AdminGeneratedImageAutobiographyInput | undefined {
   if (!isRecord(value)) return undefined;
-  const author = value.author === 'companion' || value.author === 'operator' ? value.author : undefined;
+  // Authorship is never parsed from the operator request body: it is derived from the
+  // editing principal by the service (charter 8.2). The admin surface is operator-principal.
   let milestone: AdminGeneratedImageAutobiographyInput['milestone'];
   if (isRecord(value.milestone) && typeof value.milestone.marked === 'boolean') {
     milestone = {
@@ -144,7 +145,6 @@ function parseAutobiographyInput(value: unknown): AdminGeneratedImageAutobiograp
     ...(stringValue(value.narrative) !== undefined ? { narrative: stringValue(value.narrative) } : {}),
     ...(stringValue(value.emotionalContext) !== undefined ? { emotionalContext: stringValue(value.emotionalContext) } : {}),
     ...(milestone ? { milestone } : {}),
-    ...(author ? { author } : {}),
     ...(typeof value.clear === 'boolean' ? { clear: value.clear } : {}),
     ...(typeof value.allowOverwriteCompanionAuthored === 'boolean'
       ? { allowOverwriteCompanionAuthored: value.allowOverwriteCompanionAuthored }

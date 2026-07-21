@@ -113,6 +113,14 @@ export interface AdminGeneratedImageListQuery {
   search?: string;
 }
 
+/**
+ * The principal performing an autobiography edit. Authorship is derived from this
+ * principal by the service and is never accepted from the request body: the operator
+ * admin surface is always `'operator'`, and a future companion tool surface authors as
+ * `'companion'` through its own trusted path (charter 8.2 authorship protection).
+ */
+export type AutobiographyEditorPrincipal = 'companion' | 'operator';
+
 export interface AdminGeneratedImageAutobiographyInput {
   narrative?: string;
   emotionalContext?: string;
@@ -120,8 +128,6 @@ export interface AdminGeneratedImageAutobiographyInput {
     marked: boolean;
     label?: string;
   };
-  /** Who is authoring this record; defaults to the record's current author or 'operator'. */
-  author?: 'companion' | 'operator';
   /** Remove the record entirely. */
   clear?: boolean;
   /** Required to overwrite or clear a companion-authored narrative (charter 8.2). */

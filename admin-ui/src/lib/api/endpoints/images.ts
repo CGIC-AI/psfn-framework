@@ -142,7 +142,6 @@ export function updateGeneratedImage(
       narrative?: string;
       emotionalContext?: string;
       milestone?: { marked: boolean; label?: string };
-      author?: 'companion' | 'operator';
       clear?: boolean;
       allowOverwriteCompanionAuthored?: boolean;
     };

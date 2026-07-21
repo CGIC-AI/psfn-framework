@@ -138,12 +138,23 @@
     await saveImageUpdate(image, { meaningfulMoment: { marked: false } });
   }
 
+  // A companion-authored narrative is authorship-protected (charter 8.2). The operator must
+  // explicitly confirm before overwriting or clearing it; only then is the override flag sent.
+  function confirmCompanionOverride(image: GeneratedImageView, action: string): boolean {
+    if (image.autobiography?.author !== 'companion') return true;
+    return window.confirm(
+      `This visual autobiography was authored by the companion. ${action} it as the operator? This overrides authorship protection.`,
+    );
+  }
+
   async function saveAutobiography(image: GeneratedImageView): Promise<void> {
     const narrative = (narrativeDrafts[image.id] ?? '').trim();
     if (!narrative) {
       error = 'Autobiography narrative is required';
       return;
     }
+    const companionAuthored = image.autobiography?.author === 'companion';
+    if (companionAuthored && !confirmCompanionOverride(image, 'Overwrite')) return;
     await saveImageUpdate(image, {
       autobiography: {
         narrative,
@@ -151,7 +162,7 @@
         milestone: image.autobiography?.milestone
           ? { marked: true, label: (milestoneLabelDrafts[image.id] ?? '').trim() }
           : undefined,
-        ...(image.autobiography?.author === 'companion' ? { allowOverwriteCompanionAuthored: true } : {}),
+        ...(companionAuthored ? { allowOverwriteCompanionAuthored: true } : {}),
       },
     });
   }
@@ -162,21 +173,25 @@
       error = 'Add an autobiography narrative before marking a milestone';
       return;
     }
+    const companionAuthored = image.autobiography?.author === 'companion';
+    if (companionAuthored && !confirmCompanionOverride(image, 'Modify')) return;
     await saveImageUpdate(image, {
       autobiography: {
         narrative,
         emotionalContext: (emotionalDrafts[image.id] ?? '').trim(),
         milestone: { marked: !image.autobiography?.milestone, label: (milestoneLabelDrafts[image.id] ?? '').trim() },
-        ...(image.autobiography?.author === 'companion' ? { allowOverwriteCompanionAuthored: true } : {}),
+        ...(companionAuthored ? { allowOverwriteCompanionAuthored: true } : {}),
       },
     });
   }
 
   async function clearAutobiography(image: GeneratedImageView): Promise<void> {
+    const companionAuthored = image.autobiography?.author === 'companion';
+    if (companionAuthored && !confirmCompanionOverride(image, 'Clear')) return;
     await saveImageUpdate(image, {
       autobiography: {
         clear: true,
-        ...(image.autobiography?.author === 'companion' ? { allowOverwriteCompanionAuthored: true } : {}),
+        ...(companionAuthored ? { allowOverwriteCompanionAuthored: true } : {}),
       },
     });
   }

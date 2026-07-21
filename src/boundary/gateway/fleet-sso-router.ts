@@ -14,6 +14,7 @@ import { TLSSocket } from 'node:tls';
 import {
   compileGatewayGardenRequestTarget,
   GardenRequestTargetError,
+  type CompiledGardenRequestTarget,
 } from '../fleet-auth/request-capability-target.js';
 import {
   compileRequestCapabilityReplayConsumption,
@@ -50,7 +51,6 @@ import { buildGardenCapabilityHeaders } from '../fleet-auth/garden-capability-co
 import { createSpiffeCheckServerIdentity } from '../../shared/net/mtls.js';
 import { createCompanionId, type CompanionId } from '../../shared/routing/companion-id.js';
 import { isRfc4122Uuid } from '../../shared/utils/types.js';
-import { timingSafeStringEqual } from '../../shared/utils/secret-compare.js';
 import {
   parseFleetModelUsageResourceQuery,
   resolveFleetModelUsageInternalRequestTarget,
@@ -80,6 +80,11 @@ import {
   GatewayFleetLoginLanding,
   type FleetBreakGlassLoginRegistration,
 } from './fleet-login-landing.js';
+import {
+  TestingHarnessGardenDoor,
+  TestingHarnessGardenDoorDeniedError,
+  type TestingHarnessGardenDoorOptions,
+} from './testing-harness-garden-door.js';
 
 const SESSION_COOKIE_NAME = '__Host-psfn_session';
 const MAX_PROXY_BODY_BYTES = 1_048_576;
@@ -156,6 +161,7 @@ export interface GatewayFleetSsoRouterOptions extends FleetSsoTrustedOriginOptio
   };
   readonly breakGlassLogin?: FleetBreakGlassLoginRegistration;
   readonly nowSeconds?: () => number;
+  readonly testingHarness?: TestingHarnessGardenDoorOptions;
 }
 
 export interface FleetGardenChatAdmission {
@@ -364,7 +370,9 @@ function authorityVersions(context: FleetAuthorizationContext): RequestCapabilit
   });
 }
 
-function copyRequestHeaders(input: IncomingHttpHeaders): IncomingHttpHeaders {
+export function buildFleetSsoProxyRequestHeaders(
+  input: IncomingHttpHeaders,
+): IncomingHttpHeaders {
   const output: IncomingHttpHeaders = {};
   for (const [name, value] of Object.entries(input)) {
     if (!REQUEST_HEADER_ALLOWLIST.has(name) || value === undefined) continue;
@@ -436,6 +444,7 @@ export class GatewayFleetSsoRouter {
   private readonly loginLanding: GatewayFleetLoginLanding;
   private gardenChatHandler: FleetGardenChatHandler | null = null;
   private readonly modelUsageRoutes: GatewayFleetModelUsageHttpRoutes;
+  private readonly testingHarnessDoor?: TestingHarnessGardenDoor;
 
   constructor(private readonly options: GatewayFleetSsoRouterOptions) {
     const canonical = new URL(options.canonicalOrigin);
@@ -445,6 +454,9 @@ export class GatewayFleetSsoRouter {
     if (options.upstreams.length === 0) {
       throw new Error('Fleet SSO router requires at least one Garden upstream');
     }
+    this.testingHarnessDoor = options.testingHarness
+      ? new TestingHarnessGardenDoor(options.testingHarness)
+      : undefined;
     this.portalRoutes = new GatewayFleetPortalHttpRoutes({
       projection: options.portalProjection,
       ui: options.portalUi ?? new FleetGardenUiAssets(),
@@ -527,6 +539,23 @@ export class GatewayFleetSsoRouter {
         await this.serveCompanionUi(request, response, rawPath, rawQuery);
         return;
       }
+      if (this.testingHarnessDoor?.matchesBearer(request)) {
+        const route = parseGardenRoute(request.url ?? '/');
+        if (!route) throw new FleetSsoRequestError(404, 'Resource not found');
+        const upstream = this.upstreams.get(route.companionId);
+        if (!upstream) throw new FleetSsoRequestError(404, 'Resource not found');
+        const body = await readBoundedBody(request);
+        const authorization = await this.testingHarnessDoor.authorize({
+          companionId: route.companionId,
+          upstreamTarget: route.upstreamTarget,
+          method: request.method ?? 'GET',
+          headers: request.headers,
+          body,
+        });
+        const issued = await this.issueCapability(authorization);
+        await this.proxyHttp(request, response, upstream, route, body, issued);
+        return;
+      }
       const sessionToken = readOpaqueSessionCookie(request);
       if (!sessionToken) {
         if (request.method === 'GET' && (rawPath === FLEET_PATH || rawPath === `${FLEET_PATH}/`)) {
@@ -598,6 +627,10 @@ export class GatewayFleetSsoRouter {
         });
         return;
       }
+      if (error instanceof TestingHarnessGardenDoorDeniedError) {
+        sendJson(response, 404, { error: { type: 'not_found' } });
+        return;
+      }
       if (error instanceof GardenRequestTargetError) {
         sendJson(response, error.code === 'route_not_declared' ? 404 : 400, {
           error: { type: error.code === 'route_not_declared' ? 'not_found' : 'invalid_request_target' },
@@ -631,7 +664,7 @@ export class GatewayFleetSsoRouter {
     }
     const upstreamTarget = rawPath;
     await new Promise<void>((resolve, reject) => {
-      const headers = copyRequestHeaders(request.headers);
+      const headers = buildFleetSsoProxyRequestHeaders(request.headers);
       const proxyRequest = httpRequest(
         requestOptions(
           { origin: companionUi.origin },
@@ -780,7 +813,7 @@ export class GatewayFleetSsoRouter {
         throw new FleetSsoRequestError(400, 'Invalid fleet model usage query');
       }
     }
-    const token = this.options.signer.signOperator({
+    return await this.issueCapability({
       target,
       requestId,
       decisionId,
@@ -796,25 +829,47 @@ export class GatewayFleetSsoRouter {
               : {}),
           }),
       versions,
+      context,
+    });
+  }
+
+  private async issueCapability(input: {
+    target: CompiledGardenRequestTarget;
+    requestId: string;
+    decisionId: string;
+    authContext: ReturnType<typeof toRequestCapabilityAuthContext>;
+    versions: RequestCapabilityAuthorityVersions;
+    context: FleetAuthorizationContext;
+  }): Promise<{
+    token: string;
+    verified: VerifiedRequestCapability;
+    context: FleetAuthorizationContext;
+  }> {
+    const token = this.options.signer.signOperator({
+      target: input.target,
+      requestId: input.requestId,
+      decisionId: input.decisionId,
+      authContext: input.authContext,
+      versions: input.versions,
     });
     if (Buffer.byteLength(token, 'ascii') > MAX_CAPABILITY_HEADER_BYTES) {
       throw new FleetSsoRequestError(503, 'Issued capability exceeds the transport envelope');
     }
     const verified = this.options.verifier.verifyOperator({
       token,
-      target,
-      requestId,
-      decisionId,
-      versions,
+      target: input.target,
+      requestId: input.requestId,
+      decisionId: input.decisionId,
+      versions: input.versions,
       ...(this.options.nowSeconds ? { nowSeconds: this.options.nowSeconds() } : {}),
     });
     const replay = await this.options.replay.consume(
-      compileRequestCapabilityReplayConsumption({ token, verified, target }),
+      compileRequestCapabilityReplayConsumption({ token, verified, target: input.target }),
     );
     if (replay.outcome !== 'consumed') {
       throw new FleetSsoRequestError(404, 'Resource not found');
     }
-    return { token, verified, context };
+    return { token, verified, context: input.context };
   }
 
   private async resolveFleetModelUsageRoster(
@@ -857,7 +912,7 @@ export class GatewayFleetSsoRouter {
     issued: { token: string; verified: VerifiedRequestCapability },
   ): Promise<void> {
     return new Promise<void>((resolve, reject) => {
-      const headers = copyRequestHeaders(request.headers);
+      const headers = buildFleetSsoProxyRequestHeaders(request.headers);
       headers['content-length'] = String(body.byteLength);
       // Canonical Garden capability envelope: one token header plus one
       // canonical context header, exactly what Garden admission consumes.
@@ -909,7 +964,7 @@ export class GatewayFleetSsoRouter {
       headers: request.headers,
       body: Buffer.alloc(0),
     });
-    const headers = copyRequestHeaders(request.headers);
+    const headers = buildFleetSsoProxyRequestHeaders(request.headers);
     headers.connection = 'Upgrade';
     headers.upgrade = 'websocket';
     headers['content-length'] = '0';

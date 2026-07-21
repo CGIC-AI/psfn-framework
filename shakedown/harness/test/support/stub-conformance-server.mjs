@@ -41,7 +41,8 @@ export async function startStubConformanceServer({
 
   const server = createServer(async (req, res) => {
     const url = new URL(req.url, 'http://127.0.0.1');
-    log.push({ method: req.method, path: url.pathname });
+    const path = url.pathname.replace(/^\/companions\/[^/]+\/garden(?=\/)/u, '');
+    log.push({ method: req.method, path });
 
     if (req.headers.authorization !== `Bearer ${adminToken}`) {
       res.writeHead(401, { 'Content-Type': 'application/json' });
@@ -50,7 +51,7 @@ export async function startStubConformanceServer({
     }
 
     // OLD buggy path: PATCH the owner-mapped capabilityTier field. Rejected.
-    if (req.method === 'PATCH' && url.pathname === '/api/admin/settings') {
+    if (req.method === 'PATCH' && path === '/api/admin/settings') {
       res.writeHead(400, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({
         error: 'capabilityTier is owned by capability-tier.json; edit that canonical config instead',
@@ -59,7 +60,7 @@ export async function startStubConformanceServer({
       return;
     }
 
-    if (url.pathname === '/api/admin/settings/capabilities') {
+    if (path === '/api/admin/settings/capabilities') {
       if (req.method === 'GET') {
         res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
         res.end(JSON.stringify({ tier: state.tier, customTokens: state.customTokens }));
@@ -95,7 +96,7 @@ export async function startStubConformanceServer({
       }
     }
 
-    if (req.method === 'POST' && url.pathname === '/api/admin/tool-conformance/run') {
+    if (req.method === 'POST' && path === '/api/admin/tool-conformance/run') {
       const respond = () => {
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ ok: true }));
@@ -105,7 +106,7 @@ export async function startStubConformanceServer({
       return;
     }
 
-    if (req.method === 'GET' && url.pathname === '/api/admin/tool-conformance/latest') {
+    if (req.method === 'GET' && path === '/api/admin/tool-conformance/latest') {
       res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
       res.end(JSON.stringify(latestPayload));
       return;

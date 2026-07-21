@@ -73,6 +73,9 @@ async function main(): Promise<void> {
         config.fleetAuthVerifier.requestCapabilities,
       ),
       replay: new AtomicRequestCapabilityReplayPort(),
+      ...(config.fleetAuthVerifier.testingHarness?.enabled
+        ? { testingHarness: { enabled: true } }
+        : {}),
     });
     fleetTransport = new FleetGardenAdminTransportProxy(registry);
     fleetModelUsage = new FleetModelUsageService({ registry, transport: fleetTransport });

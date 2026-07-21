@@ -589,6 +589,11 @@ certificates:
 # this value enables the matching process/deployment wiring.
 fleetAuth:
   enabled: true
+  # Independent Garden-side key for the synthetic testing-harness provider.
+  # Keep false in production values; enabling it still requires a complete
+  # channels.json api.testingHarness.gardenAdmin policy and the dedicated
+  # TESTING_HARNESS_API_KEY secret, otherwise startup fails closed.
+  testingHarnessGardenVerifierEnabled: false
   # Non-restored anti-rollback authority floor. This dedicated PVC is never
   # part of the normal backup/restore set. Set existingClaim to adopt a
   # pre-provisioned floor PVC; leave it empty for the chart to create

@@ -3,12 +3,12 @@
 // The harness runs against either a locally bootstrapped split runtime
 // (`PSFN_TARGET=local`, the 65rk.1 default) or Artie's live kube deployment
 // (`PSFN_TARGET=kube`). This module is the single place that resolves the
-// transport contract — {chat base URL, admin/Garden base URL, gateway API key,
-// Garden admin token, Postgres connection} — from the fail-closed env for both
+// transport contract — {chat base URL, admin/Garden API base URL, direct Garden
+// health base URL, gateway API key, Garden credential, Postgres connection} — from the fail-closed env for both
 // targets. There are no hardcoded cluster literals: the kube target reaches the
-// gateway (:10053) and Garden (:10054) through operator-provided port-forward
-// URLs in PSFN_API_BASE / PSFN_ADMIN_BASE exactly the way the local target does,
-// so nothing here ever names a namespace, service, or /mnt path.
+// canonical gateway HTTPS origin and the operator-provided Garden health
+// port-forward. Fleet admin APIs use the gateway unified origin; nothing here
+// ever names a namespace, service, or /mnt path.
 //
 // It also owns the kube tier-flip: on kube the capability tier must be changed
 // LIVE through the Garden settings API, never by editing capability-tier.json on
@@ -28,13 +28,12 @@
 // CLI at the bottom of this file so its signal-safe revert can call them.
 
 import {
-  requireEnv,
-  requireEnvOneOf,
+  InvalidEnvError,
+  failClosedOnEnv,
   optionalEnv,
   optionalIntEnv,
-  InvalidEnvError,
-  MissingEnvError,
-  failClosedOnEnv,
+  requireEnv,
+  requireEnvOneOf,
 } from './env.mjs';
 import { probeGatewayReady } from './probe.mjs';
 import { assertPostgresReachable, closePool } from './postgres.mjs';
@@ -51,7 +50,7 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
  * than `local`/`kube` is a named, fail-closed error.
  */
 export function resolveTargetName(env = process.env) {
-  const raw = (optionalEnv('PSFN_TARGET', TARGET_LOCAL) ?? TARGET_LOCAL).toLowerCase();
+  const raw = optionalEnv('PSFN_TARGET', TARGET_LOCAL, env).toLowerCase();
   if (!KNOWN_TARGETS.has(raw)) {
     throw new InvalidEnvError('PSFN_TARGET', `expected 'local' or 'kube', got ${JSON.stringify(raw)}`);
   }
@@ -68,24 +67,40 @@ export function resolveTarget(env = process.env) {
   const target = resolveTargetName(env);
   const isKube = target === TARGET_KUBE;
   const chatHint = isKube
-    ? 'kube gateway API base — port-forward svc <gateway>:10053 to this URL'
+    ? 'canonical kube Fleet SSO HTTPS origin'
     : 'gateway API base URL';
   const adminHint = isKube
     ? 'kube Garden admin base — port-forward svc <garden>:10054 to this URL'
     : 'Garden admin base URL';
+  const chatBaseUrl = requireEnv('PSFN_API_BASE', chatHint, env);
+  const directAdminBaseUrl = requireEnv('PSFN_ADMIN_BASE', adminHint, env);
+  const apiKey = requireEnv(
+    'TESTING_HARNESS_API_KEY',
+    'dedicated testing-harness API key configured by channels.json.api.testingHarness',
+    env,
+  );
+  const companionId = isKube
+    ? requireEnv('COMPANION_ID', 'fleet companion selected by the unified Garden route', env)
+    : null;
   return {
     target,
     isKube,
-    chatBaseUrl: requireEnv('PSFN_API_BASE', chatHint),
-    adminBaseUrl: requireEnv('PSFN_ADMIN_BASE', adminHint),
-    apiKey: requireEnv(
-      'TESTING_HARNESS_API_KEY',
-      'dedicated testing-harness API key configured by channels.json.api.testingHarness',
+    chatBaseUrl,
+    adminBaseUrl: isKube
+      ? `${chatBaseUrl.replace(/\/$/u, '')}/companions/${encodeURIComponent(companionId)}/garden`
+      : directAdminBaseUrl,
+    adminHealthBaseUrl: directAdminBaseUrl,
+    apiKey,
+    adminToken: isKube
+      ? apiKey
+      : requireEnvOneOf(['ADMIN_TOKEN', 'PSFN_ADMIN_TOKEN'], 'Garden admin token', env),
+    postgresUrl: requireEnv('POSTGRES_DATABASE_URL', 'the round Postgres database', env),
+    tierFlipConfirmTimeoutMs: optionalIntEnv(
+      'PSFN_TIER_FLIP_CONFIRM_TIMEOUT_MS',
+      30000,
+      env,
     ),
-    adminToken: requireEnvOneOf(['ADMIN_TOKEN', 'PSFN_ADMIN_TOKEN'], 'Garden admin token'),
-    postgresUrl: requireEnv('POSTGRES_DATABASE_URL', 'the round Postgres database'),
-    tierFlipConfirmTimeoutMs: optionalIntEnv('PSFN_TIER_FLIP_CONFIRM_TIMEOUT_MS', 30000),
-    tierFlipPollMs: optionalIntEnv('PSFN_TIER_FLIP_POLL_MS', 1500),
+    tierFlipPollMs: optionalIntEnv('PSFN_TIER_FLIP_POLL_MS', 1500, env),
   };
 }
 
@@ -233,6 +248,7 @@ async function cliMain(argv) {
         target: contract.target,
         chatBaseUrl: contract.chatBaseUrl,
         adminBaseUrl: contract.adminBaseUrl,
+        adminHealthBaseUrl: contract.adminHealthBaseUrl,
         apiKeyPresent: contract.apiKey.length > 0,
         adminTokenPresent: contract.adminToken.length > 0,
         postgresUrlPresent: contract.postgresUrl.length > 0,

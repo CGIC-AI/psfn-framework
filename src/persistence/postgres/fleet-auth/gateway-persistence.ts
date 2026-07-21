@@ -86,6 +86,8 @@ import { TrustedHostAccountReapprovalService } from '../../../boundary/fleet-aut
 import { PostgresAccountReapprovalCeremonyStore } from './account-reapproval-ceremony-store.js';
 import { TrustedHostProviderRecoveryService } from '../../../boundary/fleet-auth/trusted-host-provider-recovery.js';
 import { PostgresTrustedHostProviderRecoveryStore } from './trusted-host-provider-recovery-store.js';
+import type { TestingHarnessGardenAuthorizationAuditPort } from '../../../boundary/gateway/testing-harness-garden-door.js';
+import { PostgresTestingHarnessGardenAuthorizationAudit } from './testing-harness-authorization-audit.js';
 
 /**
  * Deep gateway-owned fleet-auth persistence. The unrestricted runtime Pool is
@@ -100,6 +102,7 @@ export interface GatewayFleetAuthPersistence {
   requestCapabilities: GatewayRequestCapabilitySigner;
   requestCapabilityVerifier: RequestCapabilityVerifier;
   requestCapabilityReplay: RequestCapabilityReplayPort;
+  testingHarnessGardenAuthorizationAudit: TestingHarnessGardenAuthorizationAuditPort;
   childAssertions: GatewayFleetAuthChildAssertionBroker;
   primaryEmbodiments: PrimaryEmbodimentAuthorityPort;
   jitStepUp: FleetJitStepUpCoordinator;
@@ -710,6 +713,11 @@ export async function initializeGatewayFleetAuthPersistence(options: {
       resolveAuthorizationContext: input => broker.resolveAuthorizationContext(input),
     });
     const requestCapabilityReplay = new PostgresRequestCapabilityReplayStore(pool);
+    const testingHarnessGardenAuthorizationAudit =
+      new PostgresTestingHarnessGardenAuthorizationAudit({
+        pool,
+        sessionPepper: secrets.sessionPepper,
+      });
     const trustedHostRecovery = new GatewayTrustedHostGardenRecoveryService({
       configuredCredential: secrets.trustedHostRecoveryCredential,
       knownCompanionIds: new Set(knownCompanionIds),
@@ -732,6 +740,7 @@ export async function initializeGatewayFleetAuthPersistence(options: {
       requestCapabilities,
       requestCapabilityVerifier,
       requestCapabilityReplay,
+      testingHarnessGardenAuthorizationAudit,
       childAssertions,
       primaryEmbodiments,
       jitStepUp,

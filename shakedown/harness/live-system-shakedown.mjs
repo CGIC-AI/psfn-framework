@@ -45,12 +45,14 @@ const CONFIG = (() => {
     // Single-source the transport contract (chat base, admin base, api key,
     // admin token, Postgres) from the target abstraction so local and kube
     // resolve identically and fail closed on the same named variables. The kube
-    // target simply points PSFN_API_BASE/PSFN_ADMIN_BASE at the port-forward.
+    // target uses the gateway unified origin for fleet Garden APIs while
+    // retaining the direct Garden port-forward only for public health checks.
     const targetContract = resolveTarget();
     return {
       target: targetContract.target,
       apiBase: targetContract.chatBaseUrl,
       adminBase: targetContract.adminBaseUrl,
+      adminHealthBase: targetContract.adminHealthBaseUrl,
       apiKey: targetContract.apiKey,
       adminToken: targetContract.adminToken,
       outputPath: requireEnv('PSFN_SHAKEDOWN_OUTPUT', 'per-phase run JSON path'),
@@ -70,6 +72,7 @@ const CONFIG = (() => {
 const TARGET = CONFIG.target;
 const API_BASE = CONFIG.apiBase;
 const ADMIN_BASE = CONFIG.adminBase;
+const ADMIN_HEALTH_BASE = CONFIG.adminHealthBase;
 const API_URL = `${API_BASE}/v1/chat/completions`;
 const API_KEY = CONFIG.apiKey;
 const ADMIN_TOKEN = CONFIG.adminToken;
@@ -2961,7 +2964,7 @@ function buildAutonomousCases(ctx) {
           120000,
           extractHealthSnapshot(preCaseHealth?.api ?? {}),
         ),
-        adminReachable: await waitForReachableHealth(`${ADMIN_BASE}/health`, 120000),
+        adminReachable: await waitForReachableHealth(`${ADMIN_HEALTH_BASE}/health`, 120000),
       }),
     },
     {
@@ -2984,7 +2987,7 @@ function buildAutonomousCases(ctx) {
           180000,
           extractHealthSnapshot(preCaseHealth?.api ?? {}),
         ),
-        adminReachable: await waitForReachableHealth(`${ADMIN_BASE}/health`, 180000),
+        adminReachable: await waitForReachableHealth(`${ADMIN_HEALTH_BASE}/health`, 180000),
       }),
     },
   ];
@@ -3567,7 +3570,7 @@ async function main() {
   ctx.promptOperatorLayer = selectPromptLayerByType(promptInventory.body, 'operator');
   const bootstrap = await fetchJson(`${ADMIN_BASE}/api/admin/chat/bootstrap`);
   const apiHealth = await fetchJson(`${API_BASE}/health`);
-  const operatorHealth = await fetchJson(`${ADMIN_BASE}/health`);
+  const operatorHealth = await fetchJson(`${ADMIN_HEALTH_BASE}/health`);
   const adaptiveTools = await fetchJson(`${ADMIN_BASE}/api/admin/tools/adaptive`);
   const initialStats = {
     tierFile: readJsonIfExists(CAPABILITY_TIER_PATH),
@@ -3601,6 +3604,7 @@ async function main() {
     phase: PHASE,
     apiBase: API_BASE,
     adminBase: ADMIN_BASE,
+    adminHealthBase: ADMIN_HEALTH_BASE,
     bootstrap,
     apiHealth,
     operatorHealth,

@@ -170,7 +170,7 @@ export interface RequestCapabilityParentBinding {
  */
 export interface RequestCapabilityAuthContext {
   readonly principalId: string;
-  readonly provider: 'discord';
+  readonly provider: 'discord' | 'testing_harness';
   readonly providerSubjectId: string;
   readonly companionId: string;
   readonly contactBindingId: string;
@@ -285,7 +285,7 @@ interface RequestCapabilityVersionClaims {
 
 interface RequestCapabilityAuthClaims {
   principal_id: string;
-  provider: 'discord';
+  provider: RequestCapabilityAuthContext['provider'];
   provider_subject_id: string;
   companion_id: string;
   contact_binding_id: string;
@@ -603,7 +603,9 @@ function assertAuthContext(value: unknown, target: CompiledGardenRequestTarget):
     'authContext',
   );
   requireStableId(context.principalId, 'authContext.principalId');
-  if (requireString(context.provider, 'authContext.provider') !== 'discord') {
+  if (!['discord', 'testing_harness'].includes(
+    requireString(context.provider, 'authContext.provider'),
+  )) {
     reject('authContext.provider is invalid');
   }
   requireStableId(context.providerSubjectId, 'authContext.providerSubjectId');
@@ -1003,7 +1005,9 @@ function parseAuthContext(
   const assurance = requireString(record.session_assurance, 'claims.auth_context.session_assurance');
   const context: RequestCapabilityAuthClaims = {
     principal_id: requireStableId(record.principal_id, 'claims.auth_context.principal_id'),
-    provider: provider === 'discord' ? provider : reject('claims.auth_context.provider is invalid'),
+    provider: provider === 'discord' || provider === 'testing_harness'
+      ? provider
+      : reject('claims.auth_context.provider is invalid'),
     provider_subject_id: requireStableId(
       record.provider_subject_id,
       'claims.auth_context.provider_subject_id',

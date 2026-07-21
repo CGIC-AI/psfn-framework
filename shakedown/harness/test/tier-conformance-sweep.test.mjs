@@ -22,6 +22,7 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { startStubConformanceServer } from './support/stub-conformance-server.mjs';
+import { resolveTarget } from '../lib/target.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const HARNESS_DIR = join(HERE, '..');
@@ -54,11 +55,12 @@ function sweepEnv(baseUrl, matrixDir) {
   return {
     ...process.env,
     PSFN_TARGET: 'kube',
-    PSFN_API_BASE: 'http://127.0.0.1:1',
+    PSFN_API_BASE: baseUrl,
     PSFN_ADMIN_BASE: baseUrl,
     API_KEY: 'stub-key',
-    TESTING_HARNESS_API_KEY: 'stub-testing-harness-key',
+    TESTING_HARNESS_API_KEY: ADMIN_TOKEN,
     ADMIN_TOKEN,
+    COMPANION_ID: '22222222-2222-4222-8222-222222222222',
     POSTGRES_DATABASE_URL: 'postgres://stub',
     PSFN_MATRIX_DIR: matrixDir,
     // Keep the run-settle short so the normal-exit case finishes fast.
@@ -191,6 +193,28 @@ async function testSignalRestore(signal) {
 }
 
 async function main() {
+  const companionId = '22222222-2222-4222-8222-222222222222';
+  const resolved = resolveTarget({
+    PSFN_TARGET: 'kube',
+    PSFN_API_BASE: 'http://127.0.0.1:10053',
+    PSFN_ADMIN_BASE: 'http://127.0.0.1:10054',
+    TESTING_HARNESS_API_KEY: ADMIN_TOKEN,
+    POSTGRES_DATABASE_URL: 'postgres://unused',
+    COMPANION_ID: companionId,
+  });
+  check(
+    resolved.adminBaseUrl
+      === `http://127.0.0.1:10053/companions/${companionId}/garden`,
+    'kube Garden APIs resolve through the gateway unified origin',
+  );
+  check(
+    resolved.adminHealthBaseUrl === 'http://127.0.0.1:10054',
+    'kube Garden health retains its direct public origin',
+  );
+  check(
+    resolved.adminToken === ADMIN_TOKEN,
+    'kube Garden APIs use the testing-harness key without ADMIN_TOKEN',
+  );
   await testNormalExit();
   await testSignalRestore('SIGINT');
   await testSignalRestore('SIGTERM');

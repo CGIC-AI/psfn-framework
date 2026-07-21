@@ -44,7 +44,7 @@ after the env is sourced (two stages, both `set -a`; see the bootstrap section):
 ```bash
 # lite — one explicit target, sub-hour, scripted floor
 PSFN_TARGET=kube \
-PSFN_API_BASE=http://127.0.0.1:10053 \
+PSFN_API_BASE=https://fleet.example.test \
 PSFN_ADMIN_BASE=http://127.0.0.1:10054 \
 PSFN_MATRIX_DIR=$SHAKEDOWN_ROOT/artifacts/matrix \
   node shakedown/harness/run-shakedown-profile.mjs --profile lite
@@ -319,6 +319,56 @@ Personal Workspace, and `shakedown_artie` tenant remain.
 - **No vestigial scripts.** Superseded harnesses are deleted, not shipped alongside.
 - **Proof from persisted state, never from reply text.** A case passes only on evidence: the turn record for the exact probe message (tool calls, model, retrieval), Postgres rows, owner-file mutations, bead state, gateway audit entries. A tool claim without a persisted side effect is a failure. A displayed charge without a ledger decrement is a failure.
 - **Case catalog is cumulative and tagged.** Each case declares: `id`, `tier`, `variants`, `feature` (bead/epic ref), `proof` (what persisted state is asserted). The sprint's new features **must** have cases authored before the round starts — a round may not open with the coverage appendix still `TODO` (the Sprint 9 failure mode).
+
+### Fleet-auth headless Garden transport
+
+In the kube lane, headless Garden API calls use the gateway unified origin:
+
+```text
+$PSFN_API_BASE/companions/$COMPANION_ID/garden/api/admin/...
+```
+
+`PSFN_API_BASE` must be the configured canonical Fleet SSO HTTPS origin, not a
+direct gateway Service port-forward. The unified-origin router retains its
+normal trusted-origin provenance checks for harness traffic.
+
+They authenticate with `TESTING_HARNESS_API_KEY`. `PSFN_ADMIN_BASE` remains the
+direct Garden origin only for the public `/health` probe; `ADMIN_TOKEN` is no
+longer required by the kube case harness or tier-conformance sweep. Local,
+non-Fleet bootstrap keeps its legacy direct Garden transport and `ADMIN_TOKEN`.
+The Playwright operator UI sweep is a separate browser exercise and is not
+converted into a bearer-admin client.
+
+Enablement requires all three controls:
+
+1. A complete system-owned
+   `channels.json.api.testingHarness.gardenAdmin` policy with `enabled: true`,
+   fixed principal/grant/role, and its bounded action list.
+2. Helm value `fleetAuth.testingHarnessGardenVerifierEnabled=true`, which turns
+   on the Garden verifier's independent `testing_harness` provider key.
+3. A distinct `TESTING_HARNESS_API_KEY` secret (minimum 16 characters and not
+   shared with API, admin, or satellite credentials).
+
+Any missing or partial control fails closed. The maximum supported action set is
+`action_pipe.read`, `action_pipe.manage`, `cogsec.read`, `cogsec.manage`,
+`confirmations.read`, `confirmations.manage`, `devices.manage`, `models.read`,
+`prompts.read`, `settings.read`, and `settings.write`. Privacy break-glass is
+always excluded. The gateway gives each route only its minimum required
+assurance (`oauth` for ordinary reads, `webauthn_uv` where the route demands
+it), never break-glass assurance.
+
+This door replaces only browser session authentication. The gateway consumes
+the bearer without forwarding it, appends a durable Fleet authorization event,
+and runs the normal capability mint, verification, replay-consumption, and mTLS
+proxy path. Garden route authorization remains authoritative. CogSec quarantine
+decisions still require the real `/confirm` then `/decide` one-time confirmation
+flow; the harness does not synthesize an approval.
+
+For audit review, filter `fleet_auth.authorization_audit_events` for
+`actor_context->>'kind' = 'testing_harness'`,
+`actor_context->>'provider' = 'testing_harness'`, or reason code
+`testing_harness_garden_authorization_allowed`. Correlation identifiers are
+stored as keyed digests, not raw request values.
 
 ### Standing scripted components
 

@@ -27,9 +27,9 @@ export class InvalidEnvError extends Error {
   }
 }
 
-function firstNonEmpty(names) {
+function firstNonEmpty(names, env = process.env) {
   for (const name of names) {
-    const value = process.env[name];
+    const value = env[name];
     if (typeof value === 'string' && value.trim().length > 0) {
       return { name, value: value.trim() };
     }
@@ -38,8 +38,8 @@ function firstNonEmpty(names) {
 }
 
 /** Require a single named variable; throws MissingEnvError naming it. */
-export function requireEnv(name, hint) {
-  const found = firstNonEmpty([name]);
+export function requireEnv(name, hint, env = process.env) {
+  const found = firstNonEmpty([name], env);
   if (!found) throw new MissingEnvError(name, hint);
   return found.value;
 }
@@ -49,8 +49,8 @@ export function requireEnv(name, hint) {
  * PSFN_API_KEY). Throws naming the canonical (first) variable so the operator
  * always sees a stable name to set.
  */
-export function requireEnvOneOf(names, hint) {
-  const found = firstNonEmpty(names);
+export function requireEnvOneOf(names, hint, env = process.env) {
+  const found = firstNonEmpty(names, env);
   if (!found) {
     throw new MissingEnvError(
       names[0],
@@ -61,33 +61,33 @@ export function requireEnvOneOf(names, hint) {
 }
 
 /** Optional variable with an explicit default; never a filesystem fallback. */
-export function optionalEnv(name, fallback = null) {
-  const value = process.env[name];
+export function optionalEnv(name, fallback = null, env = process.env) {
+  const value = env[name];
   return typeof value === 'string' && value.trim().length > 0 ? value.trim() : fallback;
 }
 
-export function optionalEnvOneOf(names, fallback = null) {
-  const found = firstNonEmpty(names);
+export function optionalEnvOneOf(names, fallback = null, env = process.env) {
+  const found = firstNonEmpty(names, env);
   return found ? found.value : fallback;
 }
 
-export function requireIntEnv(name, hint) {
-  const raw = requireEnv(name, hint);
+export function requireIntEnv(name, hint, env = process.env) {
+  const raw = requireEnv(name, hint, env);
   const parsed = Number.parseInt(raw, 10);
   if (!Number.isFinite(parsed)) throw new InvalidEnvError(name, `expected an integer, got ${JSON.stringify(raw)}`);
   return parsed;
 }
 
-export function optionalIntEnv(name, fallback) {
-  const value = process.env[name];
+export function optionalIntEnv(name, fallback, env = process.env) {
+  const value = env[name];
   if (typeof value !== 'string' || value.trim().length === 0) return fallback;
   const parsed = Number.parseInt(value.trim(), 10);
   if (!Number.isFinite(parsed)) throw new InvalidEnvError(name, `expected an integer, got ${JSON.stringify(value)}`);
   return parsed;
 }
 
-export function optionalBoolEnv(name, fallback = false) {
-  const value = process.env[name];
+export function optionalBoolEnv(name, fallback = false, env = process.env) {
+  const value = env[name];
   if (typeof value !== 'string' || value.trim().length === 0) return fallback;
   const normalized = value.trim().toLowerCase();
   if (['1', 'true', 'yes', 'on'].includes(normalized)) return true;

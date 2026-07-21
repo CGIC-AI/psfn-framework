@@ -768,6 +768,25 @@ enters through the OpenAI-compatible API must use the dedicated
       "tokenRef": {
         "kind": "env",
         "envName": "TESTING_HARNESS_API_KEY"
+      },
+      "gardenAdmin": {
+        "enabled": true,
+        "principalId": "testing-harness",
+        "operatorGrantId": "testing-harness-garden-grant",
+        "role": "admin",
+        "allowedActions": [
+          "action_pipe.read",
+          "action_pipe.manage",
+          "cogsec.read",
+          "cogsec.manage",
+          "confirmations.read",
+          "confirmations.manage",
+          "devices.manage",
+          "models.read",
+          "prompts.read",
+          "settings.read",
+          "settings.write"
+        ]
       }
     }
   }
@@ -782,6 +801,22 @@ configuration load or API construction. In Helm deployments, place
 `TESTING_HARNESS_API_KEY` in the operator-managed Secret selected through
 `secrets.existingSecret`; `secrets.keys.testingHarnessApiKey` controls the key
 name.
+
+`gardenAdmin` is optional and is separate from the conversational channel. When
+present, it authorizes only the listed Garden actions at the gateway unified
+origin. Kubernetes additionally requires
+`fleetAuth.testingHarnessGardenVerifierEnabled=true`; this projects
+`PSFN_TESTING_HARNESS_GARDEN_VERIFIER=true` into both sides of the Fleet Garden
+boundary. The owner policy, verifier switch, and dedicated secret are all
+required. Partial policy, a verifier switch without the policy, or a missing
+secret aborts startup or leaves the door closed. The reverse mismatch (policy
+present, verifier switch off) is deliberately safe-closed.
+
+The gateway consumes the bearer and never forwards it. It records a durable
+Fleet authorization event tagged with `provider: testing_harness`, then issues
+the same single-use, short-lived, companion-audience capability used by browser
+Fleet SSO. The synthetic session receives only the minimum route assurance
+(`oauth` or `webauthn_uv`) and can never receive break-glass assurance.
 
 Requests authenticated by that token resolve to the named API principal and
 always use the durable session key `api:testing-harness`. `X-Session-ID` is
@@ -804,6 +839,10 @@ the named room. The room deliberately does **not** use the reserved `:testing:`
 session namespace: it is a real persistent conversation, so normal memory
 extraction and continuity apply. Use a dedicated test companion; do not point
 harness traffic at a partner's companion.
+
+The chat door and Garden-admin door are intentionally distinct: configuring the
+chat principal alone does not enable Garden administration, and Garden policy
+does not widen the chat surface.
 
 ### Ephemeral testing-session lifecycle
 

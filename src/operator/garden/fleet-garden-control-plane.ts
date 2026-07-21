@@ -57,6 +57,7 @@ export interface FleetGardenControlPlaneOptions {
   readonly registry: FleetGardenTargetRegistry;
   readonly verifier: RequestCapabilityVerifier;
   readonly replay: RequestCapabilityReplayPort;
+  readonly testingHarness?: { readonly enabled: true };
 }
 
 export interface FleetGardenControlPlaneRequest {
@@ -121,6 +122,7 @@ export class FleetGardenControlPlane {
   private readonly registry: FleetGardenTargetRegistry;
   private readonly verifier: RequestCapabilityVerifier;
   private readonly replay: RequestCapabilityReplayPort;
+  private readonly testingHarness?: { readonly enabled: true };
 
   constructor(options: FleetGardenControlPlaneOptions) {
     if (!(options.registry instanceof FleetGardenTargetRegistry)) {
@@ -129,6 +131,7 @@ export class FleetGardenControlPlane {
     this.registry = options.registry;
     this.verifier = options.verifier;
     this.replay = options.replay;
+    this.testingHarness = options.testingHarness;
   }
 
   /** Registry identity owned by this control plane; used to prebuild exact transports. */
@@ -163,6 +166,9 @@ export class FleetGardenControlPlane {
       companionId: route.companionId,
       verifier: this.verifier,
       replay: this.replay,
+      ...(this.testingHarness?.enabled
+        ? { testingHarness: Object.freeze({ enabled: true as const }) }
+        : {}),
     });
     const admitted = await admitFleetGardenRequest({
       admission,

@@ -7,6 +7,8 @@ import {
   buildExternalChannelProfiles,
   loadRuntimeChannelsConfig,
   loadChannelsOwnerFile,
+  loadTestingHarnessGardenAdminConfig,
+  resolveTestingHarnessGardenVerifierConfig,
   resolveDiscordCompanionView,
   saveChannelsOwnerFile,
 } from './config.js';
@@ -197,6 +199,168 @@ describe('loadRuntimeChannelsConfig', () => {
         principalId: 'testing-harness',
         apiKey: 'dedicated-testing-harness-key',
       });
+    } finally {
+      rmSync(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  it('loads the bounded testing-harness Garden admin policy only when complete', () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'psfn-channel-config-'));
+    try {
+      writeFileSync(join(dataDir, 'channels.json'), JSON.stringify({
+        api: {
+          testingHarness: {
+            principalId: 'testing-harness',
+            tokenRef: { kind: 'env', envName: 'TESTING_HARNESS_API_KEY' },
+            gardenAdmin: {
+              enabled: true,
+              principalId: 'testing-harness',
+              operatorGrantId: 'testing-harness-garden-grant',
+              role: 'admin',
+              allowedActions: [
+                'action_pipe.read',
+                'action_pipe.manage',
+                'cogsec.read',
+                'cogsec.manage',
+                'confirmations.read',
+                'confirmations.manage',
+                'devices.manage',
+                'models.read',
+                'prompts.read',
+                'settings.read',
+                'settings.write',
+              ],
+            },
+          },
+        },
+      }));
+
+      const config = loadRuntimeChannelsConfig(dataDir, {
+        TESTING_HARNESS_API_KEY: 'dedicated-testing-harness-key',
+      });
+
+      expect(config.api.testingHarness?.gardenAdmin).toEqual({
+        enabled: true,
+        principalId: 'testing-harness',
+        operatorGrantId: 'testing-harness-garden-grant',
+        role: 'admin',
+        allowedActions: [
+          'action_pipe.read',
+          'action_pipe.manage',
+          'cogsec.read',
+          'cogsec.manage',
+          'confirmations.read',
+          'confirmations.manage',
+          'devices.manage',
+          'models.read',
+          'prompts.read',
+          'settings.read',
+          'settings.write',
+        ],
+      });
+    } finally {
+      rmSync(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  it('fails closed on partial, over-broad, or under-privileged Garden admin policy', () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'psfn-channel-config-'));
+    const writeHarness = (gardenAdmin: unknown) => writeFileSync(
+      join(dataDir, 'channels.json'),
+      JSON.stringify({
+        api: {
+          testingHarness: {
+            principalId: 'testing-harness',
+            tokenRef: { kind: 'env', envName: 'TESTING_HARNESS_API_KEY' },
+            gardenAdmin,
+          },
+        },
+      }),
+    );
+    try {
+      writeHarness({ enabled: true });
+      expect(() => loadRuntimeChannelsConfig(dataDir, {})).toThrow(
+        'channels.json.api.testingHarness.gardenAdmin.principalId must be configured',
+      );
+
+      writeHarness({
+        enabled: true,
+        principalId: 'testing-harness',
+        operatorGrantId: 'testing-harness-garden-grant',
+        role: 'admin',
+        allowedActions: ['privacy.break_glass'],
+      });
+      expect(() => loadRuntimeChannelsConfig(dataDir, {})).toThrow(
+        'channels.json.api.testingHarness.gardenAdmin.allowedActions contains unsupported action privacy.break_glass',
+      );
+
+      writeHarness({
+        enabled: true,
+        principalId: 'testing-harness',
+        operatorGrantId: 'testing-harness-garden-grant',
+        role: 'member',
+        allowedActions: ['settings.write'],
+      });
+      expect(() => loadRuntimeChannelsConfig(dataDir, {})).toThrow(
+        'channels.json.api.testingHarness.gardenAdmin.role does not authorize settings.write',
+      );
+
+      writeHarness({ enabled: false });
+      expect(loadRuntimeChannelsConfig(dataDir, {}).api.testingHarness?.gardenAdmin).toBeUndefined();
+    } finally {
+      rmSync(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  it('requires gateway-side Garden config before enabling the independent verifier key', () => {
+    expect(resolveTestingHarnessGardenVerifierConfig(undefined, {})).toBeUndefined();
+    expect(() => resolveTestingHarnessGardenVerifierConfig(undefined, {
+      PSFN_TESTING_HARNESS_GARDEN_VERIFIER: 'true',
+    })).toThrow(
+      'PSFN_TESTING_HARNESS_GARDEN_VERIFIER requires complete gateway-side gardenAdmin config',
+    );
+    expect(resolveTestingHarnessGardenVerifierConfig({
+      enabled: true,
+      principalId: 'testing-harness',
+      operatorGrantId: 'testing-harness-garden-grant',
+      role: 'admin',
+      allowedActions: ['settings.read'],
+    }, {
+      PSFN_TESTING_HARNESS_GARDEN_VERIFIER: 'true',
+    })).toEqual({ enabled: true });
+    expect(resolveTestingHarnessGardenVerifierConfig({
+      enabled: true,
+      principalId: 'testing-harness',
+      operatorGrantId: 'testing-harness-garden-grant',
+      role: 'admin',
+      allowedActions: ['settings.read'],
+    }, {})).toBeUndefined();
+  });
+
+  it('loads the Garden verifier policy without resolving the gateway bearer secret', () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'psfn-channel-config-'));
+    try {
+      writeFileSync(join(dataDir, 'channels.json'), JSON.stringify({
+        api: {
+          testingHarness: {
+            principalId: 'testing-harness',
+            tokenRef: { kind: 'env', envName: 'TESTING_HARNESS_API_KEY' },
+            gardenAdmin: {
+              enabled: true,
+              principalId: 'testing-harness',
+              operatorGrantId: 'testing-harness-garden-grant',
+              role: 'admin',
+              allowedActions: ['settings.read'],
+            },
+          },
+        },
+      }));
+
+      expect(loadTestingHarnessGardenAdminConfig(dataDir)).toMatchObject({
+        principalId: 'testing-harness',
+        allowedActions: ['settings.read'],
+      });
+      expect(loadRuntimeChannelsConfig(dataDir, {}).api.testingHarness?.apiKey).toBe('');
     } finally {
       rmSync(dataDir, { recursive: true, force: true });
     }

@@ -24,7 +24,7 @@ export interface GardenRequestResourceContext {
 export interface FleetGardenActorContext {
   readonly kind: 'fleet_principal';
   readonly principalId: string;
-  readonly provider: 'discord';
+  readonly provider: 'discord' | 'testing_harness';
   readonly providerSubjectId: string;
   readonly contactId: string;
   readonly contactBindingId: string;

@@ -43,6 +43,9 @@
   let editRelationshipType = $state<RelationshipType>('acquaintance');
   let editNotes = $state('');
   let editIsMachine = $state(false);
+  let editGender = $state('');
+  let editPronouns = $state('');
+  let editAge = $state('');
 
   // Channel privacy edits (tracked per identity or conversation-channel key)
   let channelPrivacyEdits = $state<Record<string, ChannelPrivacyLevel>>({});
@@ -313,6 +316,9 @@
     editRelationshipType = contact.relationshipType as RelationshipType;
     editNotes = contact.notes ?? '';
     editIsMachine = contact.isMachineIntelligence === true;
+    editGender = contact.gender ?? '';
+    editPronouns = contact.pronouns ?? '';
+    editAge = typeof contact.age === 'number' ? String(contact.age) : '';
     showAddChannel = false;
     newChannelName = '';
     newChannelUserId = '';
@@ -361,6 +367,19 @@
       }
       if (editIsMachine !== (contact.isMachineIntelligence === true)) {
         patch.isMachineIntelligence = editIsMachine;
+      }
+      if (editGender.trim() !== (contact.gender ?? '')) {
+        patch.gender = editGender.trim() === '' ? null : editGender.trim();
+      }
+      if (editPronouns.trim() !== (contact.pronouns ?? '')) {
+        patch.pronouns = editPronouns.trim() === '' ? null : editPronouns.trim();
+      }
+      {
+        const currentAge = typeof contact.age === 'number' ? String(contact.age) : '';
+        if (editAge.trim() !== currentAge) {
+          const parsed = Number.parseInt(editAge.trim(), 10);
+          patch.age = editAge.trim() === '' || Number.isNaN(parsed) ? null : parsed;
+        }
       }
 
       // Collect channel privacy changes from both linked identities and observed channels.
@@ -1141,6 +1160,31 @@
                     <option value={rt}>{formatRelType(rt)}</option>
                   {/each}
                 </select>
+              </div>
+
+              <!-- Demographics (bead fnyb) -->
+              <div class="grid grid-cols-3 gap-3">
+                <div>
+                  <label for="edit-gender-{contact.id}" class="block text-sm font-medium text-shadow-800 mb-1">Gender</label>
+                  <input id="edit-gender-{contact.id}" type="text" bind:value={editGender}
+                    class="w-full px-3 py-2 rounded-lg border border-bark-300 bg-bark-50 text-shadow-900 text-sm
+                           focus:outline-none focus:ring-2 focus:ring-gold-300 focus:border-gold-400"
+                    placeholder="e.g. woman" />
+                </div>
+                <div>
+                  <label for="edit-pronouns-{contact.id}" class="block text-sm font-medium text-shadow-800 mb-1">Pronouns</label>
+                  <input id="edit-pronouns-{contact.id}" type="text" bind:value={editPronouns}
+                    class="w-full px-3 py-2 rounded-lg border border-bark-300 bg-bark-50 text-shadow-900 text-sm
+                           focus:outline-none focus:ring-2 focus:ring-gold-300 focus:border-gold-400"
+                    placeholder="e.g. she/her" />
+                </div>
+                <div>
+                  <label for="edit-age-{contact.id}" class="block text-sm font-medium text-shadow-800 mb-1">Age</label>
+                  <input id="edit-age-{contact.id}" type="number" min="0" bind:value={editAge}
+                    class="w-full px-3 py-2 rounded-lg border border-bark-300 bg-bark-50 text-shadow-900 text-sm
+                           focus:outline-none focus:ring-2 focus:ring-gold-300 focus:border-gold-400"
+                    placeholder="—" />
+                </div>
               </div>
 
               <!-- Notes -->

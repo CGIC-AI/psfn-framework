@@ -18,6 +18,9 @@ export interface ContactUpdatePayload {
   relationshipType?: RelationshipType;
   notes?: string;
   isMachineIntelligence?: boolean;
+  gender?: string | null;
+  pronouns?: string | null;
+  age?: number | null;
   channelPrivacy?: Array<{
     channel: string;
     userId?: string;

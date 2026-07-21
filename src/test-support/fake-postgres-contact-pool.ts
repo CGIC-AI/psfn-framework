@@ -145,7 +145,7 @@ export class FakePostgresPool {
       return result();
     }
 
-    if (normalized.startsWith('select id, discord_user_id, display_name, nickname, trust_level, relationship_type, is_machine_intelligence, emotional_baseline, first_seen, last_seen, notes, timezone from contacts where id = $1 limit 1')) {
+    if (normalized.startsWith('select id, discord_user_id, display_name, nickname, trust_level, relationship_type, is_machine_intelligence, emotional_baseline, first_seen, last_seen, notes, timezone, gender, pronouns, age from contacts where id = $1 limit 1')) {
       const row = this.contacts.get(String(values[0] ?? ''));
       return result(row ? [row] : []);
     }
@@ -155,25 +155,25 @@ export class FakePostgresPool {
       return result(row ? [row] : []);
     }
 
-    if (normalized.startsWith('select id, discord_user_id, display_name, nickname, trust_level, relationship_type, is_machine_intelligence, emotional_baseline, emotional_time_series, first_seen, last_seen, notes, timezone from contacts where id = $1 for update')) {
+    if (normalized.startsWith('select id, discord_user_id, display_name, nickname, trust_level, relationship_type, is_machine_intelligence, emotional_baseline, emotional_time_series, first_seen, last_seen, notes, timezone, gender, pronouns, age from contacts where id = $1 for update')) {
       const row = this.contacts.get(String(values[0] ?? ''));
       return result(row ? [row] : []);
     }
 
-    if (normalized.startsWith('select id, discord_user_id, display_name, nickname, trust_level, relationship_type, is_machine_intelligence, emotional_baseline, first_seen, last_seen, notes, timezone from contacts where discord_user_id = $1 limit 1')) {
+    if (normalized.startsWith('select id, discord_user_id, display_name, nickname, trust_level, relationship_type, is_machine_intelligence, emotional_baseline, first_seen, last_seen, notes, timezone, gender, pronouns, age from contacts where discord_user_id = $1 limit 1')) {
       const needle = String(values[0] ?? '');
       const row = [...this.contacts.values()].find(contact => contact.discord_user_id === needle);
       return result(row ? [row] : []);
     }
 
-    if (normalized.startsWith('select id, discord_user_id, display_name, nickname, trust_level, relationship_type, is_machine_intelligence, emotional_baseline, first_seen, last_seen, notes, timezone from contacts where trust_level = $1 order by last_seen desc')) {
+    if (normalized.startsWith('select id, discord_user_id, display_name, nickname, trust_level, relationship_type, is_machine_intelligence, emotional_baseline, first_seen, last_seen, notes, timezone, gender, pronouns, age from contacts where trust_level = $1 order by last_seen desc')) {
       const trustLevel = String(values[0] ?? '');
       return result([...this.contacts.values()]
         .filter(row => row.trust_level === trustLevel)
         .sort((left, right) => right.last_seen.localeCompare(left.last_seen)));
     }
 
-    if (normalized.startsWith('select c.id, c.discord_user_id, c.display_name, c.nickname, c.trust_level, c.relationship_type, c.is_machine_intelligence, c.emotional_baseline, c.first_seen, c.last_seen, c.notes, c.timezone from contacts c inner join contact_channel_ids i on i.contact_id = c.id where i.channel = $1 and i.channel_user_id = $2 limit 1')) {
+    if (normalized.startsWith('select c.id, c.discord_user_id, c.display_name, c.nickname, c.trust_level, c.relationship_type, c.is_machine_intelligence, c.emotional_baseline, c.first_seen, c.last_seen, c.notes, c.timezone, c.gender, c.pronouns, c.age from contacts c inner join contact_channel_ids i on i.contact_id = c.id where i.channel = $1 and i.channel_user_id = $2 limit 1')) {
       const row = this.findContactByChannelIdentity(String(values[0] ?? ''), String(values[1] ?? ''));
       const afterLookup = this.afterNextChannelIdentityLookup;
       this.afterNextChannelIdentityLookup = null;
@@ -230,12 +230,25 @@ export class FakePostgresPool {
         last_seen: String(values[8] ?? ''),
         notes: values[9] == null ? null : String(values[9]),
         timezone: values[10] == null ? null : String(values[10]),
+        gender: null,
+        pronouns: null,
+        age: null,
       };
       this.contacts.set(row.id, row);
       return result();
     }
 
-    if (normalized.startsWith('select id, discord_user_id, display_name, nickname, trust_level, relationship_type, is_machine_intelligence, emotional_baseline, first_seen, last_seen, notes, timezone from contacts order by last_seen desc')) {
+    if (normalized.startsWith('update contacts set gender = $1, pronouns = $2, age = $3 where id = $4')) {
+      const row = this.contacts.get(String(values[3] ?? ''));
+      if (row) {
+        row.gender = values[0] == null ? null : String(values[0]);
+        row.pronouns = values[1] == null ? null : String(values[1]);
+        row.age = values[2] == null ? null : Number(values[2]);
+      }
+      return result();
+    }
+
+    if (normalized.startsWith('select id, discord_user_id, display_name, nickname, trust_level, relationship_type, is_machine_intelligence, emotional_baseline, first_seen, last_seen, notes, timezone, gender, pronouns, age from contacts order by last_seen desc')) {
       return result([...this.contacts.values()]
         .sort((left, right) => right.last_seen.localeCompare(left.last_seen)));
     }

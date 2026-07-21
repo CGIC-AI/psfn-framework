@@ -56,7 +56,7 @@ export function resolveLocalGateState({ cwd = process.cwd(), baseRef = 'origin/m
   if (paths.length === 0) throw new Error(`HEAD contains no changes relative to ${baseRef}.`);
 
   const gitDir = git(['rev-parse', '--absolute-git-dir'], cwd);
-  const stateDir = join(gitDir, 'psfn-local-gate');
+  const stateDir = join(gitDir, 'local-delivery-gate');
   return {
     cwd,
     branch,

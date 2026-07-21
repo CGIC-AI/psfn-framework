@@ -33,7 +33,7 @@ function pushUpdate(remoteRef, localSha = HEAD) {
 }
 
 function makeGateRepository() {
-  const cwd = mkdtempSync(join(tmpdir(), 'psfn-local-gate-'));
+  const cwd = mkdtempSync(join(tmpdir(), 'local-delivery-gate-'));
   git(cwd, 'init', '--quiet');
   git(cwd, 'config', 'user.email', 'ci@example.invalid');
   git(cwd, 'config', 'user.name', 'CI Test');

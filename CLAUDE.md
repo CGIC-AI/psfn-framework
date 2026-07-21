@@ -134,7 +134,7 @@ the tracked pre-push hook and do not publish with raw `gh pr create` or
 commit the exact head, and publish it with:
 
 ```bash
-gh psfn-pr --title "<title>" --body-file <path>
+gh gated-pr --title "<title>" --body-file <path>
 ```
 
 The wrapper runs or reuses the exact-head local gate, pushes, publishes the
@@ -167,5 +167,5 @@ Loop, per bead/stream:
 2. On completion, run the tiered review gate: UBS scan always; reviewer lanes per the tier above, dispatched independently and adversarially — prompted to refute and produce concrete failure scenarios, not to approve; no reviewer sees another's review or the implementer's self-assessment. Run three worker lanes by default; a hard bead must not idle the other two.
 3. Synthesize findings: dedupe, then independently verify every claimed blocker against the Blocking Risk Standard (IMPORTANT ≙ P0/P1) before accepting it — reviewers systematically over-grade severity (confirmed pattern; a blocker claim needs a reproducible failure, not vibes).
 4. **One remediation pass** (Codex) scoped to verified blockers only, then one final check. Re-verify the fixed items only — no full re-review, no successive review/remediation cycles. A newly discovered blocker is surfaced to the operator or routed to the fixes epic; it does not authorize another pass.
-5. Integrate compatible completed beads into one coherent PR-sized branch, run the exact-head local gate, and publish once through `gh psfn-pr`. The owning lane receives any CI or Greptile failure and makes no more than the already-authorized remediation commit.
+5. Integrate compatible completed beads into one coherent PR-sized branch, run the exact-head local gate, and publish once through `gh gated-pr`. The owning lane receives any CI or Greptile failure and makes no more than the already-authorized remediation commit.
 6. Merge and close only after the exact PR head has both required checks green. Leftover IMPORTANT defects → self-contained beads under the wave's `<wave> fixes` epic for a fresh agent; **nonblocking observations go in the handoff report only, never beads**.

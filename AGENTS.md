@@ -254,7 +254,7 @@ patch:
 Before any branch push or PR publication, the exact clean commit must pass
 `npm run gate:pre-pr`. The pre-push hook runs it automatically and caches an
 attestation by exact head and base SHA. Never use `--no-verify`. The gate owns
-full lint, build, typecheck, repository hygiene, the test suite, Semgrep rule
+full lint, build, typecheck, repository hygiene, proportional tests, Semgrep rule
 tests and diff scan, UBS, the change budget, and path-sensitive specialist
 checks. A new commit or base change invalidates the attestation.
 
@@ -371,7 +371,7 @@ npm run gate:pre-pr
 ```
 
 The gate runs full lint, build, baselined typecheck, repository hygiene,
-Semgrep, UBS, the full test suite, and applicable specialist checks. Do not
+Semgrep, UBS, proportional tests, and applicable specialist checks. Do not
 close, integrate, push, or publish tracked work if it fails. Logs and the
 exact-head attestation live in the worktree's Git directory, not in tracked
 files.

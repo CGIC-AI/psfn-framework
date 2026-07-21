@@ -45,22 +45,19 @@ kubectl kustomize k8s/overlays/production | kubectl apply -f -
 
 ## Building Container Images
 
-Both Dockerfiles use multi-stage builds: they compile TypeScript via tsup, build the Garden admin UI (Svelte), then produce a minimal production image.
+A single multi-stage image (`docker/Dockerfile.agent`) serves every process role. It compiles TypeScript via tsup — producing `dist/gateway-main.js`, `dist/agent-main.js`, and `dist/operator-main.js` — builds the Garden admin UI (Svelte), then produces a minimal production image. The gateway and agent workloads run the same image with a `command` override selecting the entrypoint (see `psfn-deployment.yaml`).
 
 ```bash
 # From the repo root:
-docker build -f docker/Dockerfile.gateway -t psfn-gateway:0.1.0 .
 docker build -f docker/Dockerfile.agent -t psfn-agent:0.1.0 .
 ```
 
-The build stages run `npm ci`, `npm run build` (tsup), and for the agent image also `npm --prefix admin-ui run build` (Garden). The production stage copies only `dist/`, `admin-ui/build/`, and production `node_modules`.
+The build stage runs `npm ci`, `npm run build` (tsup), and `npm --prefix admin-ui run build` (Garden). The production stage copies only `dist/`, `admin-ui/build/`, and production `node_modules`.
 
 To push to a registry:
 
 ```bash
-docker tag psfn-gateway:0.1.0 registry.example.com/psfn-gateway:0.1.0
 docker tag psfn-agent:0.1.0 registry.example.com/psfn-agent:0.1.0
-docker push registry.example.com/psfn-gateway:0.1.0
 docker push registry.example.com/psfn-agent:0.1.0
 ```
 

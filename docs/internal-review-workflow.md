@@ -48,10 +48,13 @@ git rebase origin/main
 npm run gate:pre-pr
 ```
 
-The sequential gate owns delivery rules and budgets; full lint, build,
-baselined typecheck, repository hygiene, and proportional tests capped at four workers; Semgrep rule/diff scans;
-UBS 5.3.5; and applicable settings, supply-chain, deployment, Garden, companion
-UI, and changed-workflow actionlint/zizmor checks.
+The sequential gate always owns delivery rules and budgets, changed-file lint,
+Semgrep diff scanning, and changed-file UBS 5.3.5. Full root lint, build,
+baselined typecheck, repository hygiene, and product tests capped at four
+workers run only for root runtime/build-graph or root lockfile changes. UI and
+deployment changes use their focused checks instead of the backend/Postgres
+suite; Semgrep rule tests and changed-workflow actionlint/zizmor run only when
+their own files change.
 
 It refuses dirty, detached, `main`, empty, or non-rebased delivery. Attestation
 and logs live under the worktree Git directory in `local-delivery-gate/`, never in
@@ -105,9 +108,10 @@ an authenticated exact head/base commit status, and waits for `ci-required` and
 before installing dependencies.
 
 GitHub has one complementary delta runner and one status aggregator. Drafts use
-no runners; labels do not retrigger CI. Clean install/build/tests run only for
-applicable code paths, while local lint, typecheck, hygiene, UBS, Semgrep, and
-specialist checks are not repeated.
+no runners; labels do not retrigger CI. Clean root builds, UI checks, and
+deployment contracts run only for applicable paths. GitHub never runs the full
+repository product/Postgres suite, while local lint, typecheck, hygiene, UBS,
+Semgrep, and specialist checks are not repeated wholesale.
 
 On external failure, the wrapper returns evidence to the owning lane. Make one
 evidence-driven corrective commit and publish the new exact head once. Never

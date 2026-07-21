@@ -22,7 +22,7 @@ jobs:
     name: GitHub delta
     if: github.event.pull_request.draft == false
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 10
     steps:
       - name: Check out exact change head
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -64,19 +64,27 @@ jobs:
         id: scope
         run: node scripts/ci/detect-change-scope.mjs --base "$BASE_SHA" --head "$HEAD_SHA"
 
-      - name: Install from the lockfile in a clean environment
-        if: steps.scope.outputs.clean_environment == 'true'
+      - name: Install root dependencies in a clean environment
+        if: steps.scope.outputs.root_runtime == 'true' || steps.scope.outputs.admin_ui == 'true' || steps.scope.outputs.deployment == 'true'
         run: npm ci
 
-      - name: Build in the clean environment
-        if: steps.scope.outputs.clean_environment == 'true'
+      - name: Build root runtime in the clean environment
+        if: steps.scope.outputs.root_runtime == 'true'
         env:
           NODE_OPTIONS: --max-old-space-size=4096
         run: npm run build
 
-      - name: Run the integrated suite in the clean environment
-        if: steps.scope.outputs.clean_environment == 'true'
-        run: npm test
+      - name: Build and test Garden in the clean environment
+        if: steps.scope.outputs.admin_ui == 'true'
+        run: npm ci --prefix admin-ui && npm --prefix admin-ui run build && npm --prefix admin-ui test
+
+      - name: Lint, build, and test companion UI in the clean environment
+        if: steps.scope.outputs.companion_ui == 'true'
+        run: npm run verify:companion-ui
+
+      - name: Verify deployment contracts in the clean environment
+        if: steps.scope.outputs.deployment == 'true'
+        run: npm run verify:deployment-contracts
 
   ci-required:
     name: ci-required

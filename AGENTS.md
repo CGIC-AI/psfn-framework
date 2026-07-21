@@ -254,9 +254,12 @@ patch:
 Before any branch push or PR publication, the exact clean commit must pass
 `npm run gate:pre-pr`. The pre-push hook runs it automatically and caches an
 attestation by exact head and base SHA. Never use `--no-verify`. The gate owns
-full lint, build, typecheck, repository hygiene, proportional tests, Semgrep rule
-tests and diff scan, UBS, the change budget, and path-sensitive specialist
-checks. A new commit or base change invalidates the attestation.
+delivery-rule tests, the change budget, changed-file lint, Semgrep diff scanning,
+changed-file UBS, and changed-workflow lint. Full root lint, build, typecheck,
+repository hygiene, and product tests run only for root runtime/build-graph or
+root lockfile changes. UI and deployment changes use their focused specialist
+checks instead of the backend/Postgres suite. Semgrep rule tests run only when
+the rules change. A new commit or base change invalidates the attestation.
 
 Publish with the repo wrapper; do not use raw `gh pr create` or `gh pr edit`:
 
@@ -272,11 +275,13 @@ review/remediation cycle. Fix the same branch, create one new commit, run the
 bounded final check, and publish that new exact head once.
 
 GitHub CI is deliberately complementary: it validates that commit status and
-change budget, then uses one clean-environment runner for lockfile install,
-build, and integrated tests only when runtime or dependency paths changed. It
-does not duplicate local lint, typecheck, repository hygiene, UBS, Semgrep, or
-specialist gates. Label changes do not retrigger CI. Greptile remains the paid
-external review.
+change budget, then uses one clean-environment runner for scoped root builds,
+UI checks, or deployment contracts when those paths changed. It never runs the
+full repository product/Postgres suite. It
+does not duplicate local full lint, typecheck, repository hygiene, UBS, or
+Semgrep; scoped clean-environment UI and deployment checks complement their
+local specialist gates. Label changes do not retrigger CI. Greptile remains the
+paid external review.
 
 All repository changes go through a PR. Never push directly to `main`. Before
 merge, verify both required checks on the exact PR head:
@@ -370,8 +375,10 @@ feedback. At a stable PR-ready commit, the local gate is mandatory:
 npm run gate:pre-pr
 ```
 
-The gate runs full lint, build, baselined typecheck, repository hygiene,
-Semgrep, UBS, proportional tests, and applicable specialist checks. Do not
+The gate always runs delivery-rule tests, budget, changed-file lint, Semgrep
+diff scanning, and changed-file UBS. It adds full root gates only for root
+runtime/build-graph or lockfile changes, and focused UI, deployment, workflow,
+settings, or supply-chain checks only when their paths changed. Do not
 close, integrate, push, or publish tracked work if it fails. Logs and the
 exact-head attestation live in the worktree's Git directory, not in tracked
 files.

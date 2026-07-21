@@ -51,6 +51,7 @@ import { buildGardenCapabilityHeaders } from '../fleet-auth/garden-capability-co
 import { createSpiffeCheckServerIdentity } from '../../shared/net/mtls.js';
 import { createCompanionId, type CompanionId } from '../../shared/routing/companion-id.js';
 import { isRfc4122Uuid } from '../../shared/utils/types.js';
+import { timingSafeStringEqual } from '../../shared/utils/secret-compare.js';
 import {
   parseFleetModelUsageResourceQuery,
   resolveFleetModelUsageInternalRequestTarget,

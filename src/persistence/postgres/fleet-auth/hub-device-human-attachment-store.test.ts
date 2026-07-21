@@ -1,5 +1,6 @@
 import type { Pool, PoolClient } from 'pg';
 import { describe, expect, it } from 'vitest';
+import type { FleetAuthorizationContext } from '../../../boundary/gateway/fleet-authorization-context.js';
 import { PostgresHubDeviceHumanAttachmentStore } from './hub-device-human-attachment-store.js';
 
 function validAttachmentInput(): Parameters<PostgresHubDeviceHumanAttachmentStore['attach']>[0] {
@@ -32,6 +33,52 @@ function validAttachmentInput(): Parameters<PostgresHubDeviceHumanAttachmentStor
 }
 
 describe('PostgresHubDeviceHumanAttachmentStore serialization retry', () => {
+  it('rejects ephemeral testing-harness contexts before durable attachment writes', async () => {
+    const testingHarnessContext: FleetAuthorizationContext = {
+      principalId: 'testing-harness',
+      providerSubject: { provider: 'testing_harness', subjectId: 'testing-harness' },
+      companionId: '11111111-1111-4111-8111-111111111111',
+      contact: {
+        bindingId: 'testing-harness-binding',
+        contactId: 'testing-harness-contact',
+        bindingVersion: 1,
+      },
+      operator: { grantId: 'testing-harness-grant', role: 'admin', grantVersion: 1 },
+      session: {
+        recordId: 'testing-harness-session',
+        audience: 'fleet',
+        assurance: 'oauth',
+        authnVersion: 1,
+        authzVersion: 1,
+        bindingVersion: 1,
+        grantVersion: 1,
+        policyVersion: 1,
+        provider: 'testing_harness',
+        providerSubjectId: 'testing-harness',
+      },
+      authorization: { action: 'companion.read', decision: 'allow' },
+      authority: { authorityGeneration: 1, globalAuthEpoch: 1 },
+      provenance: {
+        source: 'gateway_testing_harness',
+        authorizationEventId: 'testing-harness-event',
+        resolvedAt: '2026-07-21T00:00:00.000Z',
+      },
+    };
+    const store = new PostgresHubDeviceHumanAttachmentStore({
+      pool: {
+        connect: async () => {
+          throw new Error('Persistence must not be reached');
+        },
+      } as unknown as Pool,
+      resolveAuthorizationContext: async () => testingHarnessContext,
+    });
+
+    await expect(store.attach({
+      ...validAttachmentInput(),
+      human: { kind: 'fleet_browser_session', sessionToken: 'testing-harness' },
+    })).rejects.toThrow('Hub device human attachments require a Discord authorization context');
+  });
+
   it('returns the failed client before the retry acquires another pool client', async () => {
     const serializationError = Object.assign(
       new Error('could not serialize access due to concurrent update'),

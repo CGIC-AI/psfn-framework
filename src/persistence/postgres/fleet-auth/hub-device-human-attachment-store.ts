@@ -40,6 +40,14 @@ interface AuthorityRow {
   global_auth_epoch: string;
 }
 
+type DiscordFleetAuthorizationContext = FleetAuthorizationContext & Readonly<{
+  providerSubject: Readonly<{
+    provider: 'discord';
+    subjectId: string;
+  }>;
+  session: FleetAuthorizationContext['session'] & Readonly<{ provider: 'discord' }>;
+}>;
+
 export interface PostgresHubDeviceHumanAttachmentStoreOptions {
   pool: Pool;
   resolveAuthorizationContext(input: unknown): Promise<FleetAuthorizationContext>;
@@ -86,6 +94,15 @@ function humanBindingDigest(context: FleetAuthorizationContext): string {
     .digest('hex');
 }
 
+function assertDiscordHumanContext(
+  context: FleetAuthorizationContext,
+): asserts context is DiscordFleetAuthorizationContext {
+  // Testing-harness contexts are ephemeral and must never enter durable hub-device attachments.
+  if (context.providerSubject.provider !== 'discord' || context.session.provider !== 'discord') {
+    throw new Error('Hub device human attachments require a Discord authorization context');
+  }
+}
+
 export class PostgresHubDeviceHumanAttachmentStore implements HubDeviceHumanAttachmentPort {
   private readonly pool: Pool;
   private readonly resolveAuthorizationContext: PostgresHubDeviceHumanAttachmentStoreOptions['resolveAuthorizationContext'];
@@ -103,16 +120,18 @@ export class PostgresHubDeviceHumanAttachmentStore implements HubDeviceHumanAtta
     input: Parameters<HubDeviceHumanAttachmentPort['attach']>[0],
     retried = false,
   ): Promise<HubDeviceHumanAttachment> {
-    let human: FleetAuthorizationContext | undefined;
+    let human: DiscordFleetAuthorizationContext | undefined;
     let humanInvalidated = false;
     if (input.human.kind === 'fleet_browser_session') {
       try {
-        human = await this.resolveAuthorizationContext({
+        const resolvedHuman = await this.resolveAuthorizationContext({
           sessionToken: input.human.sessionToken,
           audience: 'fleet',
           companionId: input.connection.companionId,
           action: 'companion.read',
         });
+        assertDiscordHumanContext(resolvedHuman);
+        human = resolvedHuman;
       } catch (error) {
         if (!(error instanceof FleetAuthorizationDeniedError)) throw error;
         humanInvalidated = true;
@@ -296,7 +315,7 @@ export class PostgresHubDeviceHumanAttachmentStore implements HubDeviceHumanAtta
     }
   }
 
-  private humanActor(context: FleetAuthorizationContext): Readonly<HubHumanActorContext> {
+  private humanActor(context: DiscordFleetAuthorizationContext): Readonly<HubHumanActorContext> {
     return Object.freeze({
       kind: 'human',
       principalId: context.principalId,

@@ -9,6 +9,7 @@ import type { StreamingSttProvider } from '../../primitives/voice/connectors/stt
 import type { StreamingTtsProvider } from '../../primitives/voice/connectors/tts/index.js';
 import type { CapabilityTier } from '../capabilities/tier-types.js';
 import type { ChargePolicyConfig } from './charge-policy-config.js';
+import type { SubagentRoleRegistryConfig } from '../../faculties/subagents/role-registry.js';
 import type {
   CompanionRuntimeIdentity,
   ResolvedCompanionsFleetConfig,
@@ -305,6 +306,13 @@ export interface SubstrateConfig {
   observerEvalSidecar?: ObserverEvalSidecarSettings;
   sessionTailCache?: SessionTailCacheSettings;
   shardToolsets?: ShardToolsetConfig;
+  /**
+   * bead 7ym.2.1 — schema-owned subagent role registry (subagent-roles.json).
+   * Named role profiles layered over inherited companion identity; each role may
+   * only narrow the tools/limits the parent tier grants. Absent/empty ⇒ no roles
+   * configured (unknown-role spawns fail closed).
+   */
+  subagentRoles?: SubagentRoleRegistryConfig;
   /** Concurrency cap on simultaneously active subagent tasks (zet.7). */
   subagentMaxConcurrent?: number;
   /** Concurrency cap on simultaneously active shards (zet.7). */

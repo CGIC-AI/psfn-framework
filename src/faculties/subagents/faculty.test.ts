@@ -18,6 +18,8 @@ import type {
 } from '../../shared/contracts/runtime.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import { SubagentFaculty } from './faculty.js';
+import { SubstrateAgent } from '../../core/agent/substrate-agent.js';
+import { parseSubagentRoleRegistryConfig } from './role-registry.js';
 import { SubagentExecutionError } from './types.js';
 import {
   buildSubagentWorkSpec,
@@ -1987,5 +1989,100 @@ describe('SubagentFaculty core-authoritative tool governance (p0le)', () => {
     expect(tools.wiki.execute).not.toHaveBeenCalled();
     expect(tools.skill.execute).not.toHaveBeenCalled();
     expect(tools.vault.execute).not.toHaveBeenCalled();
+  });
+
+  // bead 7ym.2.1 — role profiles: identity-inheritance layering + fail-closed resolution.
+  describe('role profiles (7ym.2.1)', () => {
+    const ROLE_CONFIG: SubstrateConfig = {
+      ...TEST_CONFIG,
+      subagentRoles: parseSubagentRoleRegistryConfig({
+        roles: {
+          researcher: { instructions: 'Research the assigned task.', maxTurns: 4 },
+          soloist: { instructions: 'Replace the inherited identity entirely.', inheritIdentity: false },
+        },
+      }, 'test'),
+    };
+
+    function makeFaculty(config: SubstrateConfig, parentSystemPrompt: string): SubagentFaculty {
+      return new SubagentFaculty({
+        eventBus,
+        llmProvider: mockLLM(),
+        sessionStore,
+        embeddingService: null,
+        memoryProvider: null,
+        config,
+        parentSystemPrompt,
+      });
+    }
+
+    it('layers a resolved role over inherited companion identity', async () => {
+      const handleSpy = vi.spyOn(SubstrateAgent.prototype, 'handleMessage');
+      const faculty = makeFaculty(ROLE_CONFIG, 'You are Companion, warm and precise.');
+      await faculty.execute({
+        name: 'r',
+        task: 't',
+        role: 'researcher',
+        workSpec: buildSubagentWorkSpec(),
+      });
+      const instance = handleSpy.mock.instances[0] as unknown as { systemPrompt: string };
+      expect(instance.systemPrompt).toContain('You are Companion, warm and precise.');
+      expect(instance.systemPrompt).toContain('## Role: researcher');
+      expect(instance.systemPrompt).toContain('Research the assigned task.');
+      handleSpy.mockRestore();
+    });
+
+    it('lets a role opt out of identity inheritance (replaces the identity)', async () => {
+      const handleSpy = vi.spyOn(SubstrateAgent.prototype, 'handleMessage');
+      const faculty = makeFaculty(ROLE_CONFIG, 'You are Companion.');
+      await faculty.execute({
+        name: 'r',
+        task: 't',
+        role: 'soloist',
+        workSpec: buildSubagentWorkSpec(),
+      });
+      const instance = handleSpy.mock.instances[0] as unknown as { systemPrompt: string };
+      expect(instance.systemPrompt).toBe('Replace the inherited identity entirely.');
+      handleSpy.mockRestore();
+    });
+
+    it('uses inherited identity unchanged when no role is requested (regression)', async () => {
+      const handleSpy = vi.spyOn(SubstrateAgent.prototype, 'handleMessage');
+      const faculty = makeFaculty(TEST_CONFIG, 'You are Companion.');
+      await faculty.execute({ name: 'r', task: 't', workSpec: buildSubagentWorkSpec() });
+      const instance = handleSpy.mock.instances[0] as unknown as { systemPrompt: string };
+      expect(instance.systemPrompt).toBe('You are Companion.');
+      handleSpy.mockRestore();
+    });
+
+    it('an explicit systemPrompt override wins over role layering', async () => {
+      const handleSpy = vi.spyOn(SubstrateAgent.prototype, 'handleMessage');
+      const faculty = makeFaculty(ROLE_CONFIG, 'You are Companion.');
+      await faculty.execute({
+        name: 'r',
+        task: 't',
+        role: 'researcher',
+        systemPrompt: 'OVERRIDE-PROMPT',
+        workSpec: buildSubagentWorkSpec(),
+      });
+      const instance = handleSpy.mock.instances[0] as unknown as { systemPrompt: string };
+      expect(instance.systemPrompt).toBe('OVERRIDE-PROMPT');
+      handleSpy.mockRestore();
+    });
+
+    it('rejects an unknown role and emits a blocked spawn handoff (fail closed)', async () => {
+      const lifecycleEvents: Array<{ handoff: CompletionHandoffRecord }> = [];
+      eventBus.on('agent.completion_handoff', event => {
+        lifecycleEvents.push(event);
+      });
+      const faculty = makeFaculty(ROLE_CONFIG, 'You are Companion.');
+      await expect(faculty.spawn({
+        name: 'x',
+        task: 't',
+        role: 'saboteur',
+        workSpec: buildSubagentWorkSpec(),
+      })).rejects.toThrow(/Unknown subagent role "saboteur"/);
+      expect(lifecycleEvents.some(event => event.handoff.status === 'blocked')).toBe(true);
+      expect(faculty.getActiveCount()).toBe(0);
+    });
   });
 });

@@ -21,6 +21,8 @@ export interface BoundedSubagentSourceContext {
 export interface BoundedSubagentLaunchRequestInput {
   name: string;
   task: string;
+  /** bead 7ym.2.1 — optional named role profile layered over inherited identity. */
+  role?: string;
   systemPrompt?: string;
   maxTurns?: number;
   capabilities?: readonly string[];
@@ -31,6 +33,7 @@ export interface BoundedSubagentLaunchRequestInput {
 export interface BoundedSubagentLaunchRequest {
   name: string;
   task: string;
+  role?: string;
   systemPrompt?: string;
   maxTurns: number;
   capabilities: string[];
@@ -178,10 +181,12 @@ export function normalizeBoundedSubagentLaunchRequest(
   input: BoundedSubagentLaunchRequestInput,
 ): BoundedSubagentLaunchRequest {
   const systemPrompt = normalizeOptionalText(input.systemPrompt);
+  const role = normalizeOptionalText(input.role);
   const sourceContext = normalizeSourceContext(input.sourceContext);
   return {
     name: normalizeText(input.name, 'name'),
     task: normalizeText(input.task, 'task'),
+    ...(role ? { role } : {}),
     ...(systemPrompt ? { systemPrompt } : {}),
     maxTurns: normalizeMaxTurns(input.maxTurns),
     capabilities: normalizeStringList(input.capabilities),

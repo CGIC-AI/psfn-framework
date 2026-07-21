@@ -72,6 +72,11 @@ import {
   type DerivedSubagentCapabilityGrant,
 } from './capability-access.js';
 import { SubagentExecutionError } from './types.js';
+import {
+  layerRoleSystemPrompt,
+  resolveSubagentRole,
+  type ResolvedSubagentRole,
+} from './role-registry.js';
 import type {
   SubagentExecutionRequest,
   SubagentExecutionSourceContext,
@@ -210,6 +215,10 @@ interface ActiveSubagentHandle {
   channelId: string;
   startTime: number;
   maxTurns: number;
+  /** bead 7ym.2.1 — resolved role profile (null when no role was requested). */
+  resolvedRole: ResolvedSubagentRole | null;
+  /** bead 7ym.2.1 — effective system prompt: role instructions layered over inherited identity. */
+  systemPrompt: string;
   capabilities: string[];
   requiredCapabilities: string[];
   capabilityAccess: CapabilityAccess;
@@ -285,6 +294,28 @@ export class SubagentFaculty implements SubagentControlPort {
         `Automata limit reached (${this.maxConcurrent} concurrent). Wait for active automata tasks to finish.`,
       );
     }
+
+    // bead 7ym.2.1: resolve the named role before the capability grant so an
+    // unknown role, malformed registry, or blank role name fails the spawn
+    // closed with a structured error rather than silently running role-less.
+    let resolvedRole: ResolvedSubagentRole | null = null;
+    if (request.role !== undefined) {
+      try {
+        resolvedRole = resolveSubagentRole(this.deps.config.subagentRoles, request.role);
+      } catch (error) {
+        const message = toErrorMessage(error);
+        await this.emitBlockedSpawnHandoff(request, subagentId, 'unknown_role', message);
+        throw error instanceof Error ? error : new Error(message);
+      }
+    }
+    // Field-level identity inheritance: an explicit per-spawn systemPrompt wins
+    // wholesale; otherwise role instructions layer OVER the inherited companion
+    // identity (never replacing it) unless the role opts out.
+    const systemPrompt = layerRoleSystemPrompt(
+      this.deps.parentSystemPrompt,
+      request.systemPrompt,
+      resolvedRole,
+    );
 
     const maxTurns = normalizeSubagentMaxTurns(request.maxTurns);
     const capabilities = this.resolveAdvertisedCapabilities(request.capabilities);
@@ -387,6 +418,8 @@ export class SubagentFaculty implements SubagentControlPort {
       channelId: executionChannelId,
       startTime,
       maxTurns,
+      resolvedRole,
+      systemPrompt,
       capabilities,
       requiredCapabilities,
       capabilityAccess: capabilityGrant.access,
@@ -500,7 +533,7 @@ export class SubagentFaculty implements SubagentControlPort {
         this.deps.eventBus,
         workSpecProvider,
         sessionManager,
-        handle.request.systemPrompt ?? this.deps.parentSystemPrompt,
+        handle.systemPrompt,
         sanitizeCoreSubstrateConfig(this.deps.config),
         {
           runtimeMode: this.deps.runtimeMode === 'gateway' ? 'gateway' : undefined,

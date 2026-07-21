@@ -33,6 +33,15 @@ export interface SubagentExecutionRequest {
   name: string;
   task: string;
   /**
+   * bead 7ym.2.1 — optional named role profile resolved from the schema-owned
+   * subagent-role registry. The role layers task-scoped instructions over the
+   * inherited companion identity and may only NARROW the tools, capabilities,
+   * turns, timeout, and concurrency the parent tier already grants. An unknown
+   * role fails the spawn closed. Absent ⇒ inherited identity with no role
+   * posture (existing behavior).
+   */
+  role?: string;
+  /**
    * mmo9.7.7 — the typed {@link LLMWorkSpec} carried through the subagent faculty.
    * Threaded onto the bounded worker's model calls (via the mmo9.7.1 client seam)
    * so admission/accounting attribution flows through the existing client

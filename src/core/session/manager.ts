@@ -777,7 +777,8 @@ export class SessionManager implements SessionManagerTypeSurface {
       channelId,
       options.sourceChannelId,
     );
-    const meta = options.channelMeta ?? (isDirectMessage != null ? { isDirectMessage } : undefined);
+    const meta = options.channelMeta
+      ?? (typeof isDirectMessage === 'boolean' ? { isDirectMessage } : undefined);
     const channelVisibility = classifyChannelEnvelope(sourceChannelId, meta).privacy;
     const timestamp = Date.now();
     const turnMetadata = options.turnId
@@ -926,7 +927,8 @@ export class SessionManager implements SessionManagerTypeSurface {
       channelId,
       options.sourceChannelId,
     );
-    const meta = options.channelMeta ?? (isDirectMessage != null ? { isDirectMessage } : undefined);
+    const meta = options.channelMeta
+      ?? (typeof isDirectMessage === 'boolean' ? { isDirectMessage } : undefined);
     const channelVisibility = classifyChannelEnvelope(sourceChannelId, meta).privacy;
     const timestamp = Date.now();
     const turnMetadata = options.turnId
@@ -1015,7 +1017,8 @@ export class SessionManager implements SessionManagerTypeSurface {
       options.sourceChannelId,
     );
     if (!shouldPersistSessionChannel(resolvedChannelId)) return null;
-    const meta = options.channelMeta ?? (isDirectMessage != null ? { isDirectMessage } : undefined);
+    const meta = options.channelMeta
+      ?? (typeof isDirectMessage === 'boolean' ? { isDirectMessage } : undefined);
     const channelVisibility = classifyChannelEnvelope(sourceChannelId, meta).privacy;
     const timestamp = Date.now();
     const turnMetadata = options.turnId
@@ -1243,7 +1246,8 @@ export class SessionManager implements SessionManagerTypeSurface {
       options.sourceChannelId,
     );
     if (!shouldPersistSessionChannel(resolvedChannelId)) return { entryId: null, intakeSnapshot: null };
-    const meta = options.channelMeta ?? (isDirectMessage != null ? { isDirectMessage } : undefined);
+    const meta = options.channelMeta
+      ?? (typeof isDirectMessage === 'boolean' ? { isDirectMessage } : undefined);
     const channelVisibility = classifyChannelEnvelope(sourceChannelId, meta).privacy;
     const timestamp = Date.now();
     const turnMetadata = options.turnId

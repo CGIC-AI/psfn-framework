@@ -37,6 +37,7 @@ import type {
   MemoryStorePort,
   MemoryStoreStats,
   MemoryStoreUpdatePatch,
+  MemoryStoreUpdateOptions,
   MemoryPatchEvent,
   MemoryUndoSoftDeleteOptions,
   ScratchpadAddResult,
@@ -54,7 +55,7 @@ import type {
   MemorySubjectBackfillOptions,
   MemorySubjectBackfillResult,
 } from './memory-store-port.js';
-import { normalizeMemorySalienceUpdates } from './memory-store-port.js';
+import { InactiveMemoryUpdateError, normalizeMemorySalienceUpdates } from './memory-store-port.js';
 import {
   applyRetentionClassTags,
   normalizeMemoryProvenance,
@@ -791,7 +792,11 @@ class PostgresMemoryStore implements MemoryStorePort {
       .slice(0, limit);
   }
 
-  async updateMemory(id: string, updates: MemoryStoreUpdatePatch): Promise<void> {
+  async updateMemory(
+    id: string,
+    updates: MemoryStoreUpdatePatch,
+    options: MemoryStoreUpdateOptions = {},
+  ): Promise<void> {
     if (updates.text !== undefined && updates.embedding === undefined) {
       throw new Error('Memory text updates require a replacement embedding');
     }
@@ -805,6 +810,9 @@ class PostgresMemoryStore implements MemoryStorePort {
       const currentRow = rows.at(0);
       if (!currentRow) return;
       const next = { ...fromMemoryRow(currentRow) };
+      if (options.requireActive && (next.supersededBy !== undefined || next.deletedAt !== undefined)) {
+        throw new InactiveMemoryUpdateError(id);
+      }
       if (updates.type !== undefined) next.type = updates.type;
       if (updates.text !== undefined) next.text = updates.text;
       if (updates.importance !== undefined) next.importance = updates.importance;

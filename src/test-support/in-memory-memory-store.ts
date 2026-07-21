@@ -23,6 +23,7 @@ import {
   type MemoryStorePort,
   type MemoryStoreStats,
   type MemoryStoreUpdatePatch,
+  type MemoryStoreUpdateOptions,
   type MemorySubjectAuthorizedDelete,
   type MemorySubjectAuthorizedMutation,
   type MemorySubjectAuthorizedQuery,
@@ -33,6 +34,7 @@ import {
   type ScratchpadEntryCreateOptions,
   type ScratchpadEntryReplaceOptions,
 } from '../faculties/memory/memory-store-port.js';
+import { InactiveMemoryUpdateError } from '../faculties/memory/memory-store-port.js';
 import { isInternalMemoryArtifact } from '../faculties/memory/internal-artifacts.js';
 import { normalizeMemoryMaintenanceReviewInput } from '../faculties/memory/maintenance-review.js';
 import {
@@ -231,9 +233,19 @@ export class InMemoryMemoryStore {
       .slice(0, limit);
   }
 
-  updateMemory(id: string, updates: MemoryStoreUpdatePatch): void {
+  updateMemory(
+    id: string,
+    updates: MemoryStoreUpdatePatch,
+    options: MemoryStoreUpdateOptions = {},
+  ): void {
     const stored = this.memories.get(id);
     if (!stored) return;
+    if (
+      options.requireActive
+      && (stored.memory.supersededBy !== undefined || stored.memory.deletedAt !== undefined)
+    ) {
+      throw new InactiveMemoryUpdateError(id);
+    }
     const next = cloneMemory({ ...stored.memory, ...updates });
     if (updates.retentionClass !== undefined) {
       next.tags = applyRetentionClassTags(next, updates.retentionClass);

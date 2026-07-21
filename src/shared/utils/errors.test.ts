@@ -24,6 +24,22 @@ describe('error helpers', () => {
     expect(reason.name).toBe('AbortError');
   });
 
+  it('returns a getter-only-name DOMException reason untouched instead of throwing', () => {
+    const reason = new DOMException('This operation was aborted', 'AbortError');
+    expect(abortError(reason)).toBe(reason);
+    expect(reason.name).toBe('AbortError');
+  });
+
+  it('wraps a frozen empty-name Error reason instead of mutating it', () => {
+    const reason = new Error('upstream cancelled');
+    reason.name = '';
+    Object.freeze(reason);
+    const result = abortError(reason);
+    expect(result).not.toBe(reason);
+    expect(result).toMatchObject({ name: 'AbortError', message: 'upstream cancelled' });
+    expect(reason.name).toBe('');
+  });
+
   it('uses the caller fallback for empty abort reasons', () => {
     expect(abortError(undefined, 'model call cancelled')).toMatchObject({
       name: 'AbortError',

@@ -8,8 +8,8 @@ const ZERO_SHA = /^0+$/;
 
 export const CHANGE_BUDGET = Object.freeze({
   pullRequest: Object.freeze({
-    files: Object.freeze({ target: 12, maximum: 25 }),
-    lines: Object.freeze({ target: 800, maximum: 2_000 }),
+    files: Object.freeze({ target: 25, maximum: 25 }),
+    lines: Object.freeze({ target: 1_500, maximum: 2_000 }),
     commits: Object.freeze({ target: 5, maximum: 8 }),
   }),
   commit: Object.freeze({

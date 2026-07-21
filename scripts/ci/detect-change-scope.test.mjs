@@ -18,6 +18,7 @@ test('detects specialist validation scopes', () => {
       supply_chain: true,
       admin_ui: true,
       companion_ui: true,
+      clean_environment: true,
     },
   );
 });
@@ -29,5 +30,14 @@ test('leaves unrelated source changes on the core CI path', () => {
     supply_chain: false,
     admin_ui: false,
     companion_ui: false,
+    clean_environment: true,
   });
+});
+
+test('keeps documentation and delivery-contract changes on the cheap GitHub path', () => {
+  assert.equal(
+    detectChangeScope(['AGENTS.md', 'CLAUDE.md', 'docs/orchestration-process.md'])
+      .clean_environment,
+    false,
+  );
 });

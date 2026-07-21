@@ -192,6 +192,36 @@ describe('DiscordLifecycleNotifier', () => {
       expect(sentMessages).toHaveLength(1);
       expect(sentMessages[0].content).toContain("I'm back");
       expect(sentMessages[0].content).toMatch(/\d+s/);
+      // Fail-closed process-role label when no subsystemLabel is configured.
+      expect(sentMessages[0].content).toMatch(/^\[agent\] /);
+    });
+
+    it('prefixes the ready message with the configured subsystem label', async () => {
+      const notifier = new DiscordLifecycleNotifier({
+        sender: mockSender,
+        heartbeatChannelId: 'hb-channel',
+        dataDir: tempDir,
+        startTime: Date.now(),
+        subsystemLabel: 'agent:purrsephone',
+      });
+
+      await notifier.notifyReady();
+
+      expect(sentMessages[0].content).toMatch(/^\[agent:purrsephone\] I'm back/);
+    });
+
+    it('falls back to the process role when the subsystem label is blank', async () => {
+      const notifier = new DiscordLifecycleNotifier({
+        sender: mockSender,
+        heartbeatChannelId: 'hb-channel',
+        dataDir: tempDir,
+        startTime: Date.now(),
+        subsystemLabel: '   ',
+      });
+
+      await notifier.notifyReady();
+
+      expect(sentMessages[0].content).toMatch(/^\[agent\] /);
     });
 
     // psfn-framework-dq9c: a deploy boots the agent 2-3 times; only the first should announce.
@@ -263,6 +293,21 @@ describe('DiscordLifecycleNotifier', () => {
 
       expect(sentMessages).toHaveLength(1);
       expect(sentMessages[0].content).toContain('Going offline');
+      expect(sentMessages[0].content).toMatch(/^\[agent\] /);
+    });
+
+    it('prefixes the shutdown message with the configured subsystem label', async () => {
+      const notifier = new DiscordLifecycleNotifier({
+        sender: mockSender,
+        heartbeatChannelId: 'hb-channel',
+        dataDir: tempDir,
+        startTime: Date.now(),
+        subsystemLabel: 'agent:purrsephone',
+      });
+
+      await notifier.notifyShutdown('maintenance');
+
+      expect(sentMessages[0].content).toMatch(/^\[agent:purrsephone\] Going offline -- maintenance\./);
     });
 
     it('includes reason when provided', async () => {

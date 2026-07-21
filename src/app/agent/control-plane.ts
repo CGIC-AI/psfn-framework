@@ -170,6 +170,9 @@ export function buildAgentControlPlane(
     heartbeatChannelId,
     dataDir,
     startTime: Date.now(),
+    // Distinguish this agent process in multi-companion fleets; falls back to
+    // the bare process role when no companion id is bound.
+    ...(config.companionId ? { subsystemLabel: `agent:${config.companionId}` } : {}),
   });
 
   const prepareRestartCommand = createRetryableShutdown(async () => {

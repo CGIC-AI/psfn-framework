@@ -190,7 +190,7 @@
         <div>
           <h3 class="text-sm font-medium text-shadow-800">Adaptive Turn Profiles</h3>
           <p class="text-sm text-shadow-600">
-            Preview of the effective chat slot context window and the same adaptive budget table the runtime uses. Heartbeat and reflection stay on the default companion budget unless their content classifies differently.
+            Preview of the effective chat slot context window and the same adaptive budget table the runtime uses. Scheduled reflections stay on the default companion budget unless their content classifies differently.
           </p>
         </div>
         <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3 text-sm">

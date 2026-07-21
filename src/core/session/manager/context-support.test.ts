@@ -168,7 +168,7 @@ describe('entriesToMessages', () => {
     });
   });
 
-  it('reclassifies scheduled heartbeat prompts as system context', () => {
+  it('reclassifies scheduled reflection prompts as system context', () => {
     const messages = entriesToMessages([
       makeEntry({
         role: 'user',

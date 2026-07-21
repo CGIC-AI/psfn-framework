@@ -317,7 +317,7 @@ export function createInProcessGardenAdminContract(
     options.scheduler,
     // Per-companion state (heartbeat-policy.json + reflection-metacognition
     // journal). Must match the runtime, which roots both under companionDataDir
-    // (agent/main.ts wireHeartbeatRuntime); config.dataDir is the shared
+    // (agent/main.ts wireReflectionRuntime); config.dataDir is the shared
     // system-data root and would collide across a multi-companion fleet.
     companionDataDir,
     // Live habit wake-window snapshot: recompute from the current scheduler

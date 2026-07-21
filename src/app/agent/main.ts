@@ -59,7 +59,7 @@ import {
 import { composeCompanionDmChannelId } from '../../shared/contracts/companion-channels.js';
 import { createCompanionId } from '../../shared/routing/companion-id.js';
 import { CanonicalCompanionPeerValidationError } from '../../core/icp/agent-facing-autonomy.js';
-import { HEARTBEAT_SILENT_REFLECTION_TOKEN } from '../../core/scheduler/heartbeat-policy.js';
+import { REFLECTION_SILENT_TOKEN } from '../../core/scheduler/reflection-policy.js';
 import {
   getRunChargeSnapshot,
   runWithChargeContext,
@@ -90,11 +90,10 @@ import {
   wireShardAndThinkRuntime,
 } from '../startup/composition/composition.js';
 import { createPreToolHookGate } from '../../boundary/gateway/pre-tool-hook.js';
-import { buildShellExecPolicyConfig } from '../../boundary/sandbox/execution/shell-policy-config.js';
 import {
   buildCharacterPromptVariablesProvider,
   buildReplConfig,
-  wireHeartbeatRuntime,
+  wireReflectionRuntime,
 } from '../startup/composition/parity.js';
 import { createAgentPersistenceRuntime } from '../../persistence/runtime-factory.js';
 import { CompanionPresenceRuntime } from '../../core/agent/companion-presence-runtime.js';
@@ -1354,14 +1353,14 @@ async function main(): Promise<void> {
           '',
           'This is your morning wake turn. If you want to send your partner an',
           'outward message right now, reply with only that message. If you have',
-          `nothing you want to send outward, reply with "${HEARTBEAT_SILENT_REFLECTION_TOKEN}" — staying quiet is`,
+          `nothing you want to send outward, reply with "${REFLECTION_SILENT_TOKEN}" — staying quiet is`,
           'completely fine; nothing about this wake requires an outward response.',
         ].join('\n'),
         timestamp: new Date(),
       });
       const trimmed = response.content.trim();
       const isSilentReflection = !trimmed.toLowerCase().localeCompare(
-        HEARTBEAT_SILENT_REFLECTION_TOKEN,
+        REFLECTION_SILENT_TOKEN,
       );
       if (!trimmed || isSilentReflection) {
         return null;
@@ -1678,11 +1677,11 @@ async function main(): Promise<void> {
     }
   }
 
-  // Journal auto-publisher (for heartbeat reflections -> markdown journal)
+  // Journal auto-publisher (for reflections -> markdown journal).
   const journalAutoPublisher = createOptionalJournalAutoPublisher(pathSnapshot.workspaceRoot, config);
 
   // Group-memory observation scheduler doubles as the canonical direct-vs-group
-  // scope classifier for sleeptime cadence, so it is built before the heartbeat
+  // scope classifier for sleeptime cadence, so it is built before the reflection
   // runtime wiring below.
   const observedGroupMemoryScheduler = new ObservedGroupMemoryScheduler({
     channelGroupMemory: discordChannelView.groupMemory,
@@ -1946,8 +1945,8 @@ async function main(): Promise<void> {
     });
   }
 
-  // Heartbeat reflections — policy-driven multi-template reflection system
-  await wireHeartbeatRuntime(
+  // Policy-driven multi-template reflection system.
+  await wireReflectionRuntime(
     agentLoop,
     scheduler,
     agentLoop,

@@ -86,10 +86,12 @@ export { assembleSessionHistoryForContextWithLlmSummary } from './context-histor
 
 const log = createComponentLogger('ContextBuilder');
 const INTERNAL_REFLECTION_CHANNEL_PREFIX = 'internal:reflection:';
-const INTERNAL_HEARTBEAT_CHANNEL = 'internal:heartbeat';
+// Keep the persisted channel id so existing reflection-session continuity is
+// not split by a source-code terminology cleanup.
+const REFLECTION_TURN_CHANNEL = 'internal:heartbeat';
 
-export function isInternalHeartbeatChannel(channelId: string): boolean {
-  return channelId === INTERNAL_HEARTBEAT_CHANNEL;
+export function isReflectionTurnChannel(channelId: string): boolean {
+  return channelId === REFLECTION_TURN_CHANNEL;
 }
 
 export function isInternalReflectionChannel(channelId: string): boolean {
@@ -97,7 +99,7 @@ export function isInternalReflectionChannel(channelId: string): boolean {
 }
 
 function shouldIncludeContinuityEntryForChannel(targetChannelId: string, sourceChannelId: string): boolean {
-  if (isInternalHeartbeatChannel(sourceChannelId)) {
+  if (isReflectionTurnChannel(sourceChannelId)) {
     return false;
   }
   if (isInternalReflectionChannel(sourceChannelId)) {

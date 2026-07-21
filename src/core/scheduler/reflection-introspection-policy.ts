@@ -1,4 +1,4 @@
-import type { ReflectionTemplate } from './heartbeat-policy.js';
+import type { ReflectionTemplate } from './reflection-policy.js';
 import type {
   RetrievalAccessScope,
   RetrievalMode,

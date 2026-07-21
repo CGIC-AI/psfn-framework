@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
-import { wireHeartbeatRuntime } from '../../app/startup/composition/parity.js';
+import { wireReflectionRuntime } from '../../app/startup/composition/parity.js';
 import { wirePostTurnActionRuntime } from '../../app/startup/composition/post-turn-actions.js';
 import {
   createIcpTargetChannelInitiator,
@@ -25,9 +25,9 @@ import { INTENTION_OUTBOUND_MESSAGE_ACTION_KIND } from '../../core/intention/app
 import { createFileOutreachOutboxStore } from '../../core/intention/outreach-outbox.js';
 import { createPostgresIntentionPortsFromPool } from '../../core/intention/postgres-adapters.js';
 import type {
-  HeartbeatAgent,
-  HeartbeatRuntimeOptions,
-} from '../../core/scheduler/heartbeat-runtime-contracts.js';
+  ReflectionAgent,
+  ReflectionRuntimeOptions,
+} from '../../core/scheduler/reflection-runtime-contracts.js';
 import { Scheduler } from '../../core/scheduler/scheduler.js';
 import {
   createPostgresPool,
@@ -92,10 +92,10 @@ async function wireOutboundHandler(options: {
   adapter: ReturnType<typeof createIcpIntentionCandidateAdapter>;
   pendingFollowUpStore: ReturnType<typeof createPostgresIntentionPortsFromPool>['pendingFollowUpStore'];
   onIntentionFollowUpActivated: NonNullable<
-    HeartbeatRuntimeOptions['onIntentionFollowUpActivated']
+    ReflectionRuntimeOptions['onIntentionFollowUpActivated']
   >;
   onIntentionFollowUpDampened: NonNullable<
-    HeartbeatRuntimeOptions['onIntentionFollowUpDampened']
+    ReflectionRuntimeOptions['onIntentionFollowUpDampened']
   >;
 }): Promise<PostTurnActionHandler> {
   const handlers = new Map<string, PostTurnActionHandler>();
@@ -116,7 +116,7 @@ async function wireOutboundHandler(options: {
     tickIntervalMs: 50,
     heartbeatIntervalMs: 1_000,
   });
-  const agentLoop: HeartbeatAgent = {
+  const agentLoop: ReflectionAgent = {
     handleMessage: vi.fn(async () => ({ content: '' })),
     followUp: vi.fn(),
     registerPostTurnActionInferer: vi.fn(() => () => undefined),
@@ -125,7 +125,7 @@ async function wireOutboundHandler(options: {
     stream: vi.fn(),
     complete: vi.fn(),
   };
-  await wireHeartbeatRuntime(
+  await wireReflectionRuntime(
     { registerTool: vi.fn() },
     scheduler,
     agentLoop,
@@ -156,10 +156,10 @@ async function wireOutboundQueue(options: {
   adapter: ReturnType<typeof createIcpIntentionCandidateAdapter>;
   pendingFollowUpStore: ReturnType<typeof createPostgresIntentionPortsFromPool>['pendingFollowUpStore'];
   onIntentionFollowUpActivated: NonNullable<
-    HeartbeatRuntimeOptions['onIntentionFollowUpActivated']
+    ReflectionRuntimeOptions['onIntentionFollowUpActivated']
   >;
   onIntentionFollowUpDampened: NonNullable<
-    HeartbeatRuntimeOptions['onIntentionFollowUpDampened']
+    ReflectionRuntimeOptions['onIntentionFollowUpDampened']
   >;
 }) {
   const eventBus = new EventBus();
@@ -167,7 +167,7 @@ async function wireOutboundQueue(options: {
     tickIntervalMs: 50,
     heartbeatIntervalMs: 1_000,
   });
-  const agentLoop: HeartbeatAgent = {
+  const agentLoop: ReflectionAgent = {
     handleMessage: vi.fn(async () => ({ content: '' })),
     followUp: vi.fn(),
     waitForIdle: vi.fn(),
@@ -180,7 +180,7 @@ async function wireOutboundQueue(options: {
     intervalMs: 1,
     persistencePath: options.persistencePath,
   });
-  await wireHeartbeatRuntime(
+  await wireReflectionRuntime(
     { registerTool: vi.fn() },
     scheduler,
     agentLoop,
@@ -387,14 +387,14 @@ describe('Postgres ICP intention retry and dampening lifecycle', () => {
           executeCompanionOutreach: delivery,
         };
         const activateFollowUp: NonNullable<
-          HeartbeatRuntimeOptions['onIntentionFollowUpActivated']
+          ReflectionRuntimeOptions['onIntentionFollowUpActivated']
         > = async ({ pendingFollowUpId, activationReason }) => (
           await ports.pendingFollowUpStore.dequeue(pendingFollowUpId, {
             ...(activationReason ? { activationReason } : {}),
           })
         ) !== null;
         const dampenFollowUp: NonNullable<
-          HeartbeatRuntimeOptions['onIntentionFollowUpDampened']
+          ReflectionRuntimeOptions['onIntentionFollowUpDampened']
         > = async ({ pendingFollowUpId, dampeningReason }) => {
           const dampened = await ports.pendingFollowUpStore.dampen?.(
             pendingFollowUpId,

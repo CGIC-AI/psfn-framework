@@ -493,7 +493,7 @@ export interface EventMap {
   'participation.candidate': ParticipationCandidateEvent;
   'participation.reservation': ParticipationReservationEvent;
   'participation.egress': ParticipationEgressEvent;
-  //   - reflection template novelty: cadence-fired heartbeat reflection
+  //   - reflection template novelty: cadence-fired reflection
   //     templates, gated on new scope entries since the template's last
   //     reflection run. Manual run_template invocations bypass the gate.
   'reflection.template.novelty.gate': DeterministicGateEvent;

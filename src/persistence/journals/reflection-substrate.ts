@@ -36,6 +36,7 @@ export type ReflectionExecutionSource =
   | 'deferred_scheduler'
   | 'deferred_post_turn';
 
+// Persisted journal discriminator. Renaming it would orphan existing rows.
 export type ReflectionDailyJournalSource = 'heartbeat_template';
 export type ReflectionProcessType = 'reflection_deliberation';
 export type ReflectionProcessStage = 'started' | 'completed' | 'failed';

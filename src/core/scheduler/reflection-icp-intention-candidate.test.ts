@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { wireHeartbeatRuntime } from '../../app/startup/composition/parity.js';
+import { wireReflectionRuntime } from '../../app/startup/composition/parity.js';
 import type { InferredPostTurnAction } from '../../shared/contracts/runtime.js';
 import { EventBus } from '../../shared/event-bus.js';
 import type { LLMProviderPort } from '../agent/contracts.js';
@@ -21,7 +21,7 @@ import type { PendingFollowUp } from '../intention/pending-follow-ups.js';
 import type { PendingFollowUpStorePort } from '../intention/pending-follow-up-store-port.js';
 import { ProactiveOutboundDispatcher } from '../intention/proactive-outbound.js';
 import { ExternalCommunicationRateLimiter } from '../../system/capabilities/safeguards.js';
-import type { HeartbeatAgent } from './heartbeat-runtime-contracts.js';
+import type { ReflectionAgent } from './reflection-runtime-contracts.js';
 import { Scheduler } from './scheduler.js';
 
 const TEMP_DIRS: string[] = [];
@@ -196,7 +196,7 @@ function wire(
     getActionStatus: vi.fn(),
     getStatus: vi.fn().mockReturnValue(emptyQueueStatus()),
   };
-  const agentLoop: HeartbeatAgent = {
+  const agentLoop: ReflectionAgent = {
     handleMessage: vi.fn(),
     followUp: vi.fn(),
     registerPostTurnActionInferer: vi.fn(() => () => undefined),
@@ -205,7 +205,7 @@ function wire(
     stream: vi.fn(),
     complete: vi.fn(),
   };
-  void wireHeartbeatRuntime(
+  void wireReflectionRuntime(
     { registerTool: vi.fn() },
     scheduler,
     agentLoop,
@@ -257,7 +257,7 @@ const ACTION = {
   },
 } satisfies InferredPostTurnAction;
 
-describe('heartbeat ICP intention candidate integration', () => {
+describe('reflection ICP intention candidate integration', () => {
   it('carries a resurfaced ICP root onto the generated follow-up turn', async () => {
     const { handlers, agentLoop } = wire('submitted');
     const handler = handlers.get(INTENTION_FOLLOW_UP_ACTION_KIND);

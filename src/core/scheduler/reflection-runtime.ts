@@ -4,36 +4,36 @@ import type { MessageSender } from '../../system/lifecycle/notifications.js';
 import type { Scheduler } from './scheduler.js';
 import { createScheduleTool } from './schedule-tool.js';
 import {
-  createHeartbeatTemplateRuntime,
-  type HeartbeatTemplateRuntime,
-} from './heartbeat-template-runtime.js';
-import { wireHeartbeatPostTurnRuntime } from './heartbeat-post-turn-runtime.js';
+  createReflectionTemplateRuntime,
+  type ReflectionTemplateRuntime,
+} from './reflection-template-runtime.js';
+import { wirePostTurnRuntime } from './post-turn-runtime.js';
 import {
-  type HeartbeatAgent,
-  type HeartbeatRuntimeOptions,
-} from './heartbeat-runtime-contracts.js';
+  type ReflectionAgent,
+  type ReflectionRuntimeOptions,
+} from './reflection-runtime-contracts.js';
 import { rehydrateScheduledPromptTasks } from './scheduled-prompts.js';
 export {
-  DEFERRED_HEARTBEAT_ACTION_KIND,
-} from './heartbeat-runtime-contracts.js';
+  DEFERRED_REFLECTION_ACTION_KIND,
+} from './reflection-runtime-contracts.js';
 export type {
-  HeartbeatAgent,
-  HeartbeatRunTemplateResult,
-  HeartbeatRuntimeOptions,
-} from './heartbeat-runtime-contracts.js';
+  ReflectionAgent,
+  ReflectionRunTemplateResult,
+  ReflectionRuntimeOptions,
+} from './reflection-runtime-contracts.js';
 
-const log = createComponentLogger('HeartbeatRuntime');
+const log = createComponentLogger('ReflectionRuntime');
 
-export async function wireHeartbeatRuntime(
+export async function wireReflectionRuntime(
   target: ToolRegistrarTarget,
   scheduler: Scheduler,
-  agentLoop: HeartbeatAgent,
+  agentLoop: ReflectionAgent,
   sender: MessageSender,
   dataDir: string,
   heartbeatChannelId?: string,
-  runtimeOptions: HeartbeatRuntimeOptions = {},
+  runtimeOptions: ReflectionRuntimeOptions = {},
 ): Promise<void> {
-  const templateRuntime: HeartbeatTemplateRuntime = createHeartbeatTemplateRuntime({
+  const templateRuntime: ReflectionTemplateRuntime = createReflectionTemplateRuntime({
     scheduler,
     agentLoop,
     sender,
@@ -42,7 +42,7 @@ export async function wireHeartbeatRuntime(
     runtimeOptions,
   });
 
-  wireHeartbeatPostTurnRuntime({
+  wirePostTurnRuntime({
     scheduler,
     agentLoop,
     sender,
@@ -67,7 +67,7 @@ export async function wireHeartbeatRuntime(
     scheduler,
     agentLoop,
     sender,
-    heartbeatPolicyStore: templateRuntime.policyStore,
+    reflectionPolicyStore: templateRuntime.policyStore,
     syncReflectionTasks: templateRuntime.syncReflectionTasks,
     runTemplate: templateRuntime.runTemplateNow,
     heartbeatChannelId,
@@ -78,5 +78,5 @@ export async function wireHeartbeatRuntime(
   }), 'core');
 
   const activeCount = templateRuntime.initialPolicy.templates.filter(t => t.enabled).length;
-  log.info(`Heartbeat runtime wired (${templateRuntime.initialPolicy.templates.length} templates, ${activeCount} active)`);
+  log.info(`Reflection runtime wired (${templateRuntime.initialPolicy.templates.length} templates, ${activeCount} active)`);
 }

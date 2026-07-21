@@ -315,14 +315,15 @@ export function buildDmWithGuestSession(dir: string): GroupChatSessionFixture {
 export const FIXTURE_NOW = new Date('2026-07-01T12:00:00Z');
 
 // ---------------------------------------------------------------------------
-// Internal (self-directed) turn fixtures: heartbeat and reflection channels.
+// Internal (self-directed) turn fixtures: shared and scoped reflection channels.
 // These mirror the scheduler-driven turn shape (resolveAuthorContext binds the
 // companion as the subject with trust 'primary'; reflection turns may carry a
 // canonical-contact routing hint for DM-scoped reflection).
 // ---------------------------------------------------------------------------
 
-export const HEARTBEAT_CHANNEL_ID = 'internal:heartbeat';
-/** Reflection channel id shaped like heartbeat-template-runtime: internal:reflection:<templateId>. */
+/** Shared reflection-turn channel; the persisted id retains legacy spelling. */
+export const REFLECTION_TURN_CHANNEL_ID = 'internal:heartbeat';
+/** Reflection channel id shaped like reflection-template-runtime: internal:reflection:<templateId>. */
 export const REFLECTION_CHANNEL_ID = 'internal:reflection:evening-reflection';
 
 /** The companion itself, as the subject of self-directed internal turns. */
@@ -334,7 +335,7 @@ export const COMPANION_SELF: HarnessParticipant = {
   isMachineIntelligence: false,
 };
 
-/** Build a SubstrateMessage for a self-directed internal turn (heartbeat/reflection). */
+/** Build a SubstrateMessage for a self-directed internal reflection turn. */
 export function makeInternalTurnMessage(
   channelId: string,
   options: { routing?: SubstrateMessage['routing']; content?: string } = {},

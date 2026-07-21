@@ -9,7 +9,7 @@ import {
 import { isRfc4122Uuid } from '../../../shared/utils/types.js';
 import { resolveIcpOriginRootInitiationId } from '../../icp/initiation-lineage.js';
 import type { PendingFollowUp } from '../pending-follow-ups.js';
-import { resolveConsolidatedReflectionTemplateId } from '../../scheduler/heartbeat-policy.js';
+import { resolveConsolidatedReflectionTemplateId } from '../../scheduler/reflection-policy.js';
 import { evaluateProactiveOutboundTimeGate } from '../proactive-time-gate.js';
 import {
   DEFAULT_FOLLOW_UP_PENDING_DELAY_MS,

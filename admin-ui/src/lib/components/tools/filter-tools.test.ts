@@ -26,7 +26,7 @@ function tool(name, overrides = {}) {
       },
       internalHeartbeat: {
         status: 'available',
-        detail: 'heartbeat ready',
+        detail: 'reflection ready',
       },
     },
     ...overrides,
@@ -45,7 +45,7 @@ const groups = [
         scope: 'core',
         contexts: {
           chat: { status: 'active', detail: 'active in chat' },
-          internalHeartbeat: { status: 'available', detail: 'heartbeat ready' },
+          internalHeartbeat: { status: 'available', detail: 'reflection ready' },
         },
       }),
       tool('toolset', {
@@ -65,7 +65,7 @@ const groups = [
         description: 'Inspect git working tree status',
         contexts: {
           chat: { status: 'available', detail: 'chat ready' },
-          internalHeartbeat: { status: 'not_applicable', detail: 'not used by heartbeat' },
+          internalHeartbeat: { status: 'not_applicable', detail: 'not used by reflection' },
         },
       }),
       tool('notify', {
@@ -91,14 +91,14 @@ test('filters inventory groups by tool name and description terms', () => {
   assert.deepEqual(filtered[0].tools.map(item => item.name), ['repo_status']);
 });
 
-test('combines group, scope, health, chat, and heartbeat filters', () => {
+test('combines group, scope, health, chat, and reflection filters', () => {
   const filtered = filterInventoryGroups(groups, {
     query: '',
     groupKey: 'managed_toolset',
     scope: 'extended',
     healthStatus: 'unavailable',
     chatStatus: 'unavailable',
-    heartbeatStatus: 'unavailable',
+    reflectionStatus: 'unavailable',
   });
 
   assert.equal(countInventoryTools(filtered), 1);
@@ -126,7 +126,7 @@ test('derives filter options from values present in inventory data', () => {
     'available',
     'unavailable',
   ]);
-  assert.deepEqual(options.heartbeatStatuses.map(option => option.value), [
+  assert.deepEqual(options.reflectionStatuses.map(option => option.value), [
     'available',
     'unavailable',
     'not_applicable',

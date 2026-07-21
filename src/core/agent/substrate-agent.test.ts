@@ -3646,7 +3646,7 @@ describe('SubstrateAgent.handleMessage', () => {
     expect(response.metadata.outputTokens).toBe(20);
   });
 
-  it('passes taskKind to prompt composer for internal heartbeat turns', async () => {
+  it('passes taskKind to prompt composer for internal reflection turns', async () => {
     const config = makeConfig();
     const agent = new SubstrateAgent(
       new EventBus(), makeMockLLMProvider(), makeMockSessionManager(), 'Base prompt', config,

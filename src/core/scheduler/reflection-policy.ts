@@ -1,4 +1,4 @@
-// ── Heartbeat Policy ──
+// ── Reflection Policy ──
 // Policy-driven multi-template reflection system.
 // Stores reflection templates (prompts, intervals, flags) in a JSON file.
 // The companion can read, edit, and extend its own reflection schedule.
@@ -11,7 +11,7 @@ import {
 import { writeJsonAtomic } from '../../shared/utils/fs.js';
 import type { DailyRecurringCadence, RecurringCadence, WeeklyRecurringCadence } from './types.js';
 
-const log = createComponentLogger('HeartbeatPolicy');
+const log = createComponentLogger('ReflectionPolicy');
 
 // ── Types ──
 
@@ -28,7 +28,7 @@ export interface ReflectionTemplate {
   deliberation?: ReflectionDeliberationConfig;
 }
 
-export interface HeartbeatPolicy {
+export interface ReflectionPolicy {
   templates: ReflectionTemplate[];
   version: number;
   updatedAt: string;    // ISO timestamp
@@ -70,7 +70,7 @@ const CONSOLIDATED_POLICY_VERSION = 2;
 // Bump this constant whenever the default prompt wording changes (R6): the
 // load() migration below refreshes stored defaults from it.
 const WELLBEING_REFLECTION_PROMPT_POLICY_VERSION = 9;
-export const HEARTBEAT_SILENT_REFLECTION_TOKEN = 'silent';
+export const REFLECTION_SILENT_TOKEN = 'silent';
 const DAILY_REVIEW_TEMPLATE_NAME = 'Daily Reflection';
 const WEEKLY_REVIEW_TEMPLATE_NAME = 'Weekly Reflection';
 const MIXED_STATE_REVIEW_TEMPLATE_NAME = 'Mixed-State Reflection';
@@ -364,7 +364,7 @@ function isLegacyWeeklyReviewCadence(cadence: RecurringCadence | undefined): boo
   return cadence?.kind === 'relative';
 }
 
-function normalizeTemplateCadence(policy: HeartbeatPolicy): { policy: HeartbeatPolicy; changed: boolean } {
+function normalizeTemplateCadence(policy: ReflectionPolicy): { policy: ReflectionPolicy; changed: boolean } {
   const templates = policy.templates.map(template => {
     if (template.cadence !== undefined) {
       return template;
@@ -389,7 +389,7 @@ function normalizeTemplateCadence(policy: HeartbeatPolicy): { policy: HeartbeatP
   };
 }
 
-function normalizeConsolidatedDefaults(policy: HeartbeatPolicy): { policy: HeartbeatPolicy; changed: boolean } {
+function normalizeConsolidatedDefaults(policy: ReflectionPolicy): { policy: ReflectionPolicy; changed: boolean } {
   const hasObsoleteDefaults = policy.templates.some(template => OBSOLETE_DEFAULT_TEMPLATE_IDS.has(template.id));
   const hasDailyReview = policy.templates.some(template => template.id === DAILY_REVIEW_TEMPLATE_ID);
   const hasWeeklyReview = policy.templates.some(template => template.id === WEEKLY_REVIEW_TEMPLATE_ID);
@@ -407,7 +407,7 @@ function normalizeConsolidatedDefaults(policy: HeartbeatPolicy): { policy: Heart
     ...defaultTemplates,
     ...retainedCustomTemplates,
   ];
-  const nextPolicy: HeartbeatPolicy = {
+  const nextPolicy: ReflectionPolicy = {
     ...policy,
     templates,
     version: Math.max(policy.version, CONSOLIDATED_POLICY_VERSION),
@@ -423,7 +423,7 @@ function normalizeConsolidatedDefaults(policy: HeartbeatPolicy): { policy: Heart
   };
 }
 
-function normalizeWellbeingReflectionPromptDefaults(policy: HeartbeatPolicy): { policy: HeartbeatPolicy; changed: boolean } {
+function normalizeWellbeingReflectionPromptDefaults(policy: ReflectionPolicy): { policy: ReflectionPolicy; changed: boolean } {
   const weeklyReview = policy.templates.find(template => template.id === WEEKLY_REVIEW_TEMPLATE_ID);
   const shouldRefreshPrompts = policy.version < WELLBEING_REFLECTION_PROMPT_POLICY_VERSION;
   const shouldRefreshWeeklyCadence = weeklyReview !== undefined
@@ -461,7 +461,7 @@ function normalizeWellbeingReflectionPromptDefaults(policy: HeartbeatPolicy): { 
       ...cadenceUpdate,
     };
   });
-  const nextPolicy: HeartbeatPolicy = {
+  const nextPolicy: ReflectionPolicy = {
     ...policy,
     templates,
     version: Math.max(policy.version, WELLBEING_REFLECTION_PROMPT_POLICY_VERSION),
@@ -476,7 +476,7 @@ function normalizeWellbeingReflectionPromptDefaults(policy: HeartbeatPolicy): { 
 // per store: a companion who deliberately deletes the template is not fought by
 // a resurrection on the next load. Must run before the prompt-defaults refresh,
 // which bumps the version to the current target.
-function ensureMixedStateReflectionTemplate(policy: HeartbeatPolicy): { policy: HeartbeatPolicy; changed: boolean } {
+function ensureMixedStateReflectionTemplate(policy: ReflectionPolicy): { policy: ReflectionPolicy; changed: boolean } {
   const hasMixedState = policy.templates.some(template => template.id === MIXED_STATE_REVIEW_TEMPLATE_ID);
   if (hasMixedState || policy.version >= WELLBEING_REFLECTION_PROMPT_POLICY_VERSION) {
     return { policy, changed: false };
@@ -496,7 +496,7 @@ function ensureMixedStateReflectionTemplate(policy: HeartbeatPolicy): { policy: 
 
 // ── Default templates ──
 
-function getDefaults(): HeartbeatPolicy {
+function getDefaults(): ReflectionPolicy {
   return {
     templates: [
       {
@@ -566,21 +566,21 @@ function getDefaults(): HeartbeatPolicy {
 
 // ── Store ──
 
-export class HeartbeatPolicyStore {
+export class ReflectionPolicyStore {
   private filePath: string;
 
   constructor(filePath: string) {
     this.filePath = filePath;
   }
 
-  load(): HeartbeatPolicy {
+  load(): ReflectionPolicy {
     try {
       // Read through the fingerprint (mtime+size+ctime+inode) cache so repeated
       // loads with an unchanged file skip the readFileSync/JSON.parse work while
       // in-place edits (which change the fingerprint) are still picked up.
-      const parsed = loadRequiredJsonCached<HeartbeatPolicy>({
+      const parsed = loadRequiredJsonCached<ReflectionPolicy>({
         dataPath: this.filePath,
-        validate: value => value as HeartbeatPolicy,
+        validate: value => value as ReflectionPolicy,
       });
       if (!Array.isArray(parsed.templates)) {
         log.warn('Invalid policy file, restoring defaults');
@@ -595,7 +595,7 @@ export class HeartbeatPolicyStore {
       for (const template of promptNormalized.policy.templates) {
         const errors = validateTemplate(template as Partial<ReflectionTemplate>, true);
         if (errors.length > 0) {
-          log.warn('Invalid heartbeat template in policy file, restoring defaults', {
+          log.warn('Invalid reflection template in policy file, restoring defaults', {
             templateId: template.id,
             errors,
           });
@@ -627,7 +627,7 @@ export class HeartbeatPolicyStore {
     }
   }
 
-  save(policy: HeartbeatPolicy): void {
+  save(policy: ReflectionPolicy): void {
     // Invalidate the cached parse before the atomic write so a subsequent load
     // never serves a pre-write value; the fresh file establishes a new
     // fingerprint on the next read.

@@ -50,7 +50,7 @@
 
   const REFLECTION_TASK_PREFIX = 'reflection:';
   const DEFERRED_REFLECTION_TASK_PREFIX = 'reflection:deferred:';
-  const KNOWN_HEARTBEAT_CADENCE: Record<string, RecurringCadence> = {
+  const KNOWN_REFLECTION_CADENCE: Record<string, RecurringCadence> = {
     'daily-review': { kind: 'daily', hour: 6, minute: 0, timezone: 'local' },
     'weekly-review': { kind: 'weekly', dayOfWeek: 0, hour: 7, minute: 0, timezone: 'local' },
   };
@@ -147,22 +147,22 @@
     return templateId.length > 0 ? templateId : null;
   }
 
-  function isHeartbeatTask(task: ScheduledTask): boolean {
+  function isReflectionTask(task: ScheduledTask): boolean {
     return getReflectionTemplateId(task.id) !== null;
   }
 
   function hasCadenceControls(task: ScheduledTask): boolean {
-    return task.type === 'every' && (isHeartbeatTask(task) || task.cadence !== undefined);
+    return task.type === 'every' && (isReflectionTask(task) || task.cadence !== undefined);
   }
 
-  function getPreferredHeartbeatCadence(task: ScheduledTask): RecurringCadence | undefined {
+  function getPreferredReflectionCadence(task: ScheduledTask): RecurringCadence | undefined {
     const templateId = getReflectionTemplateId(task.id);
     if (!templateId) return undefined;
-    return KNOWN_HEARTBEAT_CADENCE[templateId];
+    return KNOWN_REFLECTION_CADENCE[templateId];
   }
 
   function resolveTaskCadence(task: ScheduledTask): RecurringCadence {
-    return task.cadence ?? getPreferredHeartbeatCadence(task) ?? { kind: 'relative' };
+    return task.cadence ?? getPreferredReflectionCadence(task) ?? { kind: 'relative' };
   }
 
   function cadenceToEditorState(task: ScheduledTask): CadenceEditorState {
@@ -1062,7 +1062,7 @@
       <div class="card-garden overflow-hidden">
         <div class="px-4 py-3 border-b border-bark-200 bg-bark-50">
           <h2 class="font-serif font-semibold text-shadow-800">Reflection Templates</h2>
-          <p class="text-xs text-shadow-600 mt-0.5">Heartbeat-driven inner reflections. Edit prompts and Discord visibility. Scheduling is managed in Scheduled Tasks.</p>
+          <p class="text-xs text-shadow-600 mt-0.5">Reflection templates. Edit prompts and Discord visibility. Scheduling is managed in Scheduled Tasks.</p>
         </div>
 
         <div class="divide-y divide-bark-100">

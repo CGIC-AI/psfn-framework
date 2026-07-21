@@ -106,7 +106,7 @@ function createTool(options: Partial<Parameters<typeof createScheduleTool>[0]> =
     sender: {
       send: vi.fn(async () => undefined),
     },
-    heartbeatPolicyStore: {
+    reflectionPolicyStore: {
       load: vi.fn(() => ({ templates: [] })),
     } as any,
     syncReflectionTasks: vi.fn(),
@@ -124,7 +124,7 @@ describe('schedule tool', () => {
       scheduler: {} as any,
       agentLoop: {} as any,
       sender: {} as any,
-      heartbeatPolicyStore: {} as any,
+      reflectionPolicyStore: {} as any,
       syncReflectionTasks: vi.fn(),
       runTemplate: vi.fn(),
     });

@@ -61,9 +61,14 @@ import type {
   IntakeSecondArrowPolicyConfig,
 } from '../../system/config/intake-policy-config.js';
 
-export const DEFERRED_HEARTBEAT_ACTION_KIND = 'heartbeat.run_template';
+/**
+ * Persisted post-turn action kind. The value deliberately keeps the legacy
+ * `heartbeat.run_template` spelling because durable queue rows may already
+ * contain it. Renaming the source symbol must not strand those actions.
+ */
+export const DEFERRED_REFLECTION_ACTION_KIND = 'heartbeat.run_template';
 
-export interface HeartbeatAgent {
+export interface ReflectionAgent {
   handleMessage(message: SubstrateMessage): Promise<{
     content: string;
     metadata?: {
@@ -84,7 +89,7 @@ export interface HeartbeatAgent {
   getCurrentAuthoritativeSystemPrompt?(): string | null;
 }
 
-export interface HeartbeatRuntimeOptions {
+export interface ReflectionRuntimeOptions {
   eventBus?: EventBus;
   llmProvider?: LLMProviderPort;
   capabilityTier?: CapabilityTier;
@@ -293,7 +298,7 @@ export interface HeartbeatRuntimeOptions {
   }): Promise<void> };
 }
 
-export interface HeartbeatRunTemplateResult {
+export interface ReflectionRunTemplateResult {
   templateId: string;
   templateName: string;
   reflection: string;

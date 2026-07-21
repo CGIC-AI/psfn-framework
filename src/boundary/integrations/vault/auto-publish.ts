@@ -1,6 +1,6 @@
 // ── Vault Auto-Publisher ──
-// Formats heartbeat reflections as markdown with YAML frontmatter and
-// publishes them to the Obsidian vault. Used as a hook in the heartbeat
+// Formats reflection-template output as markdown with YAML frontmatter and
+// publishes it to the Obsidian vault. Used as a hook in the reflection
 // reflection pipeline when Obsidian auto-publish is enabled in settings.json.
 
 import type { VaultOperations } from './ops.js';

@@ -1,19 +1,19 @@
 import { isRecord } from '../../../shared/utils/types.js';
 // ── Admin Scheduler Service ──
-// Wraps Scheduler + HeartbeatPolicyStore for the admin JSON API.
+// Wraps Scheduler + ReflectionPolicyStore for the admin JSON API.
 // Provides task CRUD and reflection template management.
 
 import type { Scheduler } from '../../../core/scheduler/scheduler.js';
 import { BACKGROUND_MAINTENANCE_TASK_ID } from '../../../core/scheduler/background-maintenance.js';
 import {
-  HeartbeatPolicyStore,
+  ReflectionPolicyStore,
   resolveConsolidatedReflectionTemplateId,
-  type HeartbeatPolicy,
+  type ReflectionPolicy,
   type ReflectionDeliberationConfig,
   validateTemplate,
   type ReflectionTemplate,
   type ValidationError,
-} from '../../../core/scheduler/heartbeat-policy.js';
+} from '../../../core/scheduler/reflection-policy.js';
 import type {
   RecurringCadence,
   RecurringCadenceTimezone,
@@ -23,7 +23,7 @@ import type {
 } from '../../../core/scheduler/types.js';
 import type { WakeWindowSnapshot } from '../../../core/scheduler/temporal-wakeup.js';
 import {
-  resolveHeartbeatPolicyPath,
+  resolveReflectionPolicyPath,
   resolveReflectionMetacognitionJournalPath,
 } from '../../../persistence/layout.js';
 import {
@@ -85,7 +85,7 @@ function toReflectionMutationSnapshot(template: ReflectionTemplate): ReflectionM
   return JSON.parse(JSON.stringify(cloneReflectionTemplate(template))) as ReflectionMutationSnapshot;
 }
 
-function clonePolicy(policy: HeartbeatPolicy): HeartbeatPolicy {
+function clonePolicy(policy: ReflectionPolicy): ReflectionPolicy {
   return {
     ...policy,
     templates: policy.templates.map(template => cloneReflectionTemplate(template)),
@@ -280,13 +280,13 @@ function toAdminTask(task: ScheduledTask): AdminScheduledTask {
 }
 
 export class AdminSchedulerService {
-  private policyStore: HeartbeatPolicyStore;
+  private policyStore: ReflectionPolicyStore;
   private reflectionMetacognitionJournal: ReflectionMetacognitionJournalStore;
 
   constructor(
     private readonly scheduler: Scheduler,
     /**
-     * Companion data root. Both the heartbeat policy and the reflection-
+     * Companion data root. Both the reflection policy and the reflection-
      * metacognition journal are per-companion state and must resolve under
      * companionDataDir so they match the runtime and never collide across a
      * multi-companion fleet (psfn-framework-dnll.4).
@@ -300,7 +300,7 @@ export class AdminSchedulerService {
      */
     private readonly wakeWindowProvider?: (() => WakeWindowSnapshot | null) | null,
   ) {
-    this.policyStore = new HeartbeatPolicyStore(resolveHeartbeatPolicyPath(companionDataDir));
+    this.policyStore = new ReflectionPolicyStore(resolveReflectionPolicyPath(companionDataDir));
     this.reflectionMetacognitionJournal = new ReflectionMetacognitionJournalStore(
       resolveReflectionMetacognitionJournalPath(companionDataDir),
     );

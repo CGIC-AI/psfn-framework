@@ -997,13 +997,13 @@
       "pattern": "identity-legacy-slug"
     },
     {
-      "path": "src/core/scheduler/heartbeat-post-turn-runtime.ts",
+      "path": "src/core/scheduler/post-turn-runtime.ts",
       "contains": "psfn-framework-mdxu",
       "reason": "Scheduler comment cites the bead that owns post-turn continuation delivery.",
       "pattern": "identity-legacy-slug"
     },
     {
-      "path": "src/core/scheduler/heartbeat-runtime-contracts.ts",
+      "path": "src/core/scheduler/reflection-runtime-contracts.ts",
       "contains": "psfn-framework-mdxu",
       "reason": "Scheduler contract comment cites the bead that owns post-turn continuation delivery.",
       "pattern": "identity-legacy-slug"

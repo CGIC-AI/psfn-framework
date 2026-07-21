@@ -399,7 +399,7 @@ function resolveContextAvailability(
   } else if (eligibility && !eligibility.background) {
     return {
       status: 'not_applicable',
-      detail: 'Foreground-only tool; not available during internal heartbeat turns.',
+      detail: 'Foreground-only tool; not available during internal reflection turns.',
     };
   }
 

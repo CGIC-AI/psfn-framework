@@ -2,6 +2,7 @@ import { getRequestContext } from '../../../primitives/llm/request-context.js';
 import { FREE_TIME_CHANNEL_PREFIX } from '../../../core/session/session-id.js';
 import type { RetrievalAccessScope } from '../types.js';
 
+// Telemetry/routing compatibility value consumed by persisted retrieval records.
 export const COMPANION_SELF_REFLECTION_RETRIEVAL_PURPOSE =
   'heartbeat.reflection.memory_retrieval';
 export const COMPANION_SELF_CREATION_RETRIEVAL_PURPOSE =

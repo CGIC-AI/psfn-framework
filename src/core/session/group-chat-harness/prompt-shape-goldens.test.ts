@@ -70,7 +70,7 @@ import {
   COMPANION_SELF,
   FIXTURE_NOW,
   GROUP_ROOM_ID,
-  HEARTBEAT_CHANNEL_ID,
+  REFLECTION_TURN_CHANNEL_ID,
   MEMORY_SENTINELS,
   REFLECTION_CHANNEL_ID,
   buildGroupChatSession,
@@ -337,7 +337,7 @@ describe('prompt-shape goldens (E2.7)', () => {
   });
 
   it('golden c: heartbeat turn (internal:heartbeat)', async () => {
-    const message = makeInternalTurnMessage(HEARTBEAT_CHANNEL_ID, {
+    const message = makeInternalTurnMessage(REFLECTION_TURN_CHANNEL_ID, {
       content: 'Scheduled heartbeat check-in.',
     });
     const authorContext = await resolveAuthorContext({

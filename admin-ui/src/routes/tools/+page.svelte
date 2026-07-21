@@ -162,7 +162,7 @@
     inventoryFilters.scope = next.scope;
     inventoryFilters.healthStatus = next.healthStatus;
     inventoryFilters.chatStatus = next.chatStatus;
-    inventoryFilters.heartbeatStatus = next.heartbeatStatus;
+    inventoryFilters.reflectionStatus = next.reflectionStatus;
   }
 
   function optionWithCount(label: string, option: ToolInventoryFilterOption): string {
@@ -456,13 +456,13 @@
             </label>
 
             <label class="block">
-              <span class="text-xs font-semibold uppercase tracking-[0.16em] text-shadow-500">Heartbeat Availability</span>
+              <span class="text-xs font-semibold uppercase tracking-[0.16em] text-shadow-500">Reflection Availability</span>
               <select
-                bind:value={inventoryFilters.heartbeatStatus}
+                bind:value={inventoryFilters.reflectionStatus}
                 class="mt-2 w-full rounded-xl border border-bark-300 bg-bark-50 px-3 py-2 text-sm text-shadow-900 outline-none transition-colors focus:border-gold-400"
               >
-                <option value={ALL_TOOL_FILTERS}>All heartbeat states ({inventoryTotalCount})</option>
-                {#each inventoryFilterOptions.heartbeatStatuses as option}
+                <option value={ALL_TOOL_FILTERS}>All reflection states ({inventoryTotalCount})</option>
+                {#each inventoryFilterOptions.reflectionStatuses as option}
                   <option value={option.value}>
                     {optionWithCount(availabilityStatusLabel(option.value), option)}
                   </option>

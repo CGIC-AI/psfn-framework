@@ -59,6 +59,7 @@ export interface AdminToolHealthView {
   };
   contexts: {
     chat: AdminToolAvailabilityView;
+    /** Legacy Garden wire key retained for mixed-version clients. */
     internalHeartbeat: AdminToolAvailabilityView;
   };
   lastFailure?: AdminToolFailureEvent;

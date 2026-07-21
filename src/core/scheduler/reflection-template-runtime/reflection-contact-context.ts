@@ -9,11 +9,11 @@ import {
 } from '../../../persistence/journals/reflection-substrate.js';
 import { runWithRequestContext } from '../../../primitives/llm/request-context.js';
 import { COMPANION_SELF_REFLECTION_RETRIEVAL_PURPOSE } from '../../../faculties/memory/retrieval/access-scope.js';
-import type { ReflectionTemplate } from '../heartbeat-policy.js';
+import type { ReflectionTemplate } from '../reflection-policy.js';
 import type {
-  HeartbeatAgent,
-  HeartbeatRuntimeOptions,
-} from '../heartbeat-runtime-contracts.js';
+  ReflectionAgent,
+  ReflectionRuntimeOptions,
+} from '../reflection-runtime-contracts.js';
 import type { ReflectionIntrospectionPolicy } from '../reflection-introspection-policy.js';
 import type { ReflectionInternalStateContext } from './prompt-formatting.js';
 import {
@@ -97,7 +97,7 @@ export async function retrieveReflectionMemoryBlock(input: {
   reflectionCanonicalContactId: string;
   currentVAD?: { valence: number; arousal: number; dominance: number };
   reflectionPolicy: ReflectionIntrospectionPolicy;
-  runtimeOptions: HeartbeatRuntimeOptions;
+  runtimeOptions: ReflectionRuntimeOptions;
 }): Promise<ReflectionMemoryRetrievalResult> {
   const provenanceRefs = new Set<string>();
   const unsubscribe = input.runtimeOptions.eventBus?.on('memory.retrieval', (payload) => {
@@ -148,8 +148,8 @@ export async function awaitPendingReflectionExtractionDrain(input: {
   channelId: string;
   reflectionTemplate: ReflectionTemplate;
   reflectionCanonicalContactId?: string;
-  agentLoop: HeartbeatAgent;
-  runtimeOptions: HeartbeatRuntimeOptions;
+  agentLoop: ReflectionAgent;
+  runtimeOptions: ReflectionRuntimeOptions;
   logger: ReflectionContactContextLogger;
 }): Promise<void> {
   const {
@@ -241,8 +241,8 @@ export async function resolveReflectionContactContextBundle(input: {
   internalStateContext: ReflectionInternalStateContext | null;
   reflectionChannelId: string;
   reflectionCanonicalContactId: string | undefined;
-  runtimeOptions: HeartbeatRuntimeOptions;
-  agentLoop: HeartbeatAgent;
+  runtimeOptions: ReflectionRuntimeOptions;
+  agentLoop: ReflectionAgent;
   logger: ReflectionContactContextLogger;
 }): Promise<ReflectionContactContextResolution> {
   const {
@@ -360,7 +360,7 @@ export async function resolveReflectionContactContextBundle(input: {
     })
     : [];
 
-  const memoryProvider = (agentLoop as HeartbeatAgent & {
+  const memoryProvider = (agentLoop as ReflectionAgent & {
     memoryProvider?: {
       retrieve: (...args: unknown[]) => Promise<string>;
     };

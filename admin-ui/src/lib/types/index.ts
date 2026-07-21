@@ -38,7 +38,7 @@ import type { ValuesJournalEntry } from '../../../../src/faculties/values/store.
 import type { ReflectionJournalEntry } from '../../../../src/persistence/journals/reflection-journal.js';
 import type { ReflectionMetacognitionJournalEntry } from '../../../../src/persistence/journals/reflection-metacognition-journal.js';
 import type { ReflectionDailyJournalEntry } from '../../../../src/persistence/journals/reflection-substrate.js';
-import type { ReflectionTemplate } from '../../../../src/core/scheduler/heartbeat-policy.js';
+import type { ReflectionTemplate } from '../../../../src/core/scheduler/reflection-policy.js';
 import {
   VALID_RELATIONSHIP_TYPES as CANONICAL_RELATIONSHIP_TYPES,
   type ChannelPrivacyLevel as CanonicalChannelPrivacyLevel,
@@ -232,7 +232,7 @@ export type {
 export type {
   ReflectionDeliberationConfig,
   ReflectionTemplate,
-} from '../../../../src/core/scheduler/heartbeat-policy.js';
+} from '../../../../src/core/scheduler/reflection-policy.js';
 export type {
   SkillDirectorySpec,
   SkillEntry,

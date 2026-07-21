@@ -37,37 +37,37 @@ import {
 } from '../agent/worker-lanes.js';
 import type { PostTurnActionInferer } from '../agent/substrate-agent.js';
 import type {
-  HeartbeatAgent,
-  HeartbeatRuntimeOptions,
-} from './heartbeat-runtime-contracts.js';
+  ReflectionAgent,
+  ReflectionRuntimeOptions,
+} from './reflection-runtime-contracts.js';
 import { resolveIcpOriginRootInitiationId } from '../icp/initiation-lineage.js';
-import { DEFERRED_HEARTBEAT_ACTION_KIND } from './heartbeat-runtime-contracts.js';
-import type { HeartbeatTemplateRuntime } from './heartbeat-template-runtime.js';
+import { DEFERRED_REFLECTION_ACTION_KIND } from './reflection-runtime-contracts.js';
+import type { ReflectionTemplateRuntime } from './reflection-template-runtime.js';
 import type { Scheduler } from './scheduler.js';
 import {
   createSchedulerOwnedPostTurnLanes,
   registerSchedulerOwnedPostTurnLanes,
-} from './heartbeat-post-turn-runtime/scheduler-lanes.js';
+} from './post-turn-runtime/scheduler-lanes.js';
 
 export {
   CONTACT_TRUST_DRIFT_REVIEW_OPERATION_ID,
   DRIFT_VELOCITY_REVIEW_OPERATION_ID,
   SLEEPTIME_REST_WINDOW_OPERATION_ID,
-} from './heartbeat-post-turn-runtime/scheduler-lanes.js';
+} from './post-turn-runtime/scheduler-lanes.js';
 
-const log = createComponentLogger('HeartbeatPostTurn');
+const log = createComponentLogger('PostTurnRuntime');
 export const INTENTION_FOLLOW_UP_ACTIVATION_MIN_INTERVAL_MS = 5 * 60_000;
 
-interface WireHeartbeatPostTurnRuntimeOptions {
+interface WirePostTurnRuntimeOptions {
   scheduler: Scheduler;
-  agentLoop: HeartbeatAgent;
+  agentLoop: ReflectionAgent;
   sender: MessageSender;
-  templateRuntime: Pick<HeartbeatTemplateRuntime, 'runDeferredTemplate'>;
-  runtimeOptions?: HeartbeatRuntimeOptions;
+  templateRuntime: Pick<ReflectionTemplateRuntime, 'runDeferredTemplate'>;
+  runtimeOptions?: ReflectionRuntimeOptions;
 }
 
-export function wireHeartbeatPostTurnRuntime(
-  options: WireHeartbeatPostTurnRuntimeOptions,
+export function wirePostTurnRuntime(
+  options: WirePostTurnRuntimeOptions,
 ): void {
   const {
     scheduler,
@@ -794,11 +794,11 @@ export function wireHeartbeatPostTurnRuntime(
   };
 
   runtimeOptions.postTurnActions.registerHandler(
-    DEFERRED_HEARTBEAT_ACTION_KIND,
+    DEFERRED_REFLECTION_ACTION_KIND,
     async (action) => {
       const templateIdRaw = action.payload.templateId;
       if (typeof templateIdRaw !== 'string' || !templateIdRaw.trim()) {
-        throw new Error(`Deferred heartbeat action "${action.id}" is missing payload.templateId`);
+        throw new Error(`Deferred reflection action "${action.id}" is missing payload.templateId`);
       }
       const sendToDiscordOverride = typeof action.payload.sendToDiscordOverride === 'boolean'
         ? action.payload.sendToDiscordOverride
@@ -1523,12 +1523,12 @@ export function wireHeartbeatPostTurnRuntime(
         ? await inferComposedDeferredPostTurnActions({
           message,
           turnMessages,
-          deferredHeartbeatActionKind: DEFERRED_HEARTBEAT_ACTION_KIND,
+          deferredReflectionActionKind: DEFERRED_REFLECTION_ACTION_KIND,
         })
         : inferDeferredPostTurnActionsFromMessages({
           message,
           turnMessages,
-          deferredHeartbeatActionKind: DEFERRED_HEARTBEAT_ACTION_KIND,
+          deferredReflectionActionKind: DEFERRED_REFLECTION_ACTION_KIND,
         });
       // Heavy sleeptime work is intentionally absent here: no code path from
       // turn cadence may reach consolidation, arc weaving, or the dream pass.

@@ -3,7 +3,7 @@ import {
   describeArousal,
   describeDominance,
   describeSignedValence,
-} from '../../scheduler/heartbeat-template-runtime/prompt-formatting.js';
+} from '../../scheduler/reflection-template-runtime/prompt-formatting.js';
 
 /**
  * Companion-readable rendering of a concern's emotional arc (vw3w.2).

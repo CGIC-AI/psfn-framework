@@ -12,6 +12,7 @@ import {
   evaluateChangeBudget,
   extractExceptionReason,
   parseNumstat,
+  resolvePullRequestMetadata,
 } from './check-change-budget.mjs';
 
 test('uses the operator-approved normal PR target without changing the hard ceiling', () => {
@@ -83,6 +84,176 @@ test('collects range and individual commit statistics', () => {
       { subject: 'first', files: 1, lines: 2 },
       { subject: 'second', files: 1, lines: 1 },
     ],
+  );
+});
+
+test('excludes a merge of the PR base from the PR-owned delta', () => {
+  const cwd = makeRepository();
+  const initialBase = git(cwd, 'rev-parse', 'HEAD');
+  git(cwd, 'switch', '--quiet', '-c', 'feature');
+  writeFileSync(join(cwd, 'feature.ts'), 'owned\n');
+  git(cwd, 'add', 'feature.ts');
+  git(cwd, 'commit', '--quiet', '-m', 'feature work');
+
+  git(cwd, 'switch', '--quiet', '-c', 'main', initialBase);
+  for (let index = 0; index < 30; index += 1) {
+    writeFileSync(join(cwd, `base-${index}.ts`), `base ${index}\n`);
+  }
+  git(cwd, 'add', '.');
+  git(cwd, 'commit', '--quiet', '-m', 'large base change');
+  const currentBase = git(cwd, 'rev-parse', 'HEAD');
+
+  git(cwd, 'switch', '--quiet', 'feature');
+  git(cwd, 'merge', '--quiet', '--no-ff', 'main', '-m', 'merge main');
+
+  const stats = collectRangeStats({ base: currentBase, head: 'HEAD', cwd });
+
+  assert.equal(stats.files, 1);
+  assert.equal(stats.lines, 1);
+  assert.equal(stats.commitCount, 1);
+  assert.deepEqual(stats.mergeResolutions, []);
+  assert.deepEqual(
+    stats.commits.map(({ subject, files, lines }) => ({ subject, files, lines })),
+    [{ subject: 'feature work', files: 1, lines: 1 }],
+  );
+});
+
+test('retains PR-owned commits merged from a non-base topic branch', () => {
+  const cwd = makeRepository();
+  const base = git(cwd, 'rev-parse', 'HEAD');
+  git(cwd, 'switch', '--quiet', '-c', 'feature');
+  git(cwd, 'switch', '--quiet', '-c', 'topic');
+  for (let index = 0; index < 9; index += 1) {
+    writeFileSync(join(cwd, `topic-${index}.ts`), `topic ${index}\n`);
+    git(cwd, 'add', '.');
+    git(cwd, 'commit', '--quiet', '-m', `topic ${index}`);
+  }
+  git(cwd, 'switch', '--quiet', 'feature');
+  git(cwd, 'merge', '--quiet', '--no-ff', 'topic', '-m', 'merge topic');
+
+  const stats = collectRangeStats({ base, head: 'HEAD', cwd });
+
+  assert.equal(stats.commitCount, 10);
+  assert.equal(stats.commits.length, 10);
+  assert.match(evaluateChangeBudget(stats).violations.at(-1), /PR has 10 commits/);
+});
+
+test('checks PR-owned conflict resolution changes against the per-commit budget', () => {
+  const cwd = makeRepository();
+  writeFileSync(join(cwd, 'shared.ts'), 'original\n');
+  git(cwd, 'add', 'shared.ts');
+  git(cwd, 'commit', '--quiet', '-m', 'shared base');
+  const initialBase = git(cwd, 'rev-parse', 'HEAD');
+
+  git(cwd, 'switch', '--quiet', '-c', 'feature');
+  writeFileSync(join(cwd, 'shared.ts'), 'feature\n');
+  git(cwd, 'commit', '--quiet', '-am', 'feature change');
+
+  git(cwd, 'switch', '--quiet', '-c', 'main', initialBase);
+  writeFileSync(join(cwd, 'shared.ts'), 'main\n');
+  git(cwd, 'commit', '--quiet', '-am', 'main change');
+  const currentBase = git(cwd, 'rev-parse', 'HEAD');
+
+  git(cwd, 'switch', '--quiet', 'feature');
+  assert.throws(() => git(cwd, 'merge', '--no-ff', 'main', '-m', 'merge main'));
+  writeFileSync(join(cwd, 'shared.ts'), 'resolved\n'.repeat(801));
+  git(cwd, 'add', 'shared.ts');
+  git(cwd, 'commit', '--quiet', '-m', 'merge main with resolution');
+
+  const stats = collectRangeStats({ base: currentBase, head: 'HEAD', cwd });
+  const resolution = stats.mergeResolutions.find(
+    ({ subject }) => subject === 'merge main with resolution',
+  );
+
+  assert.equal(stats.commitCount, 1);
+  assert.ok(resolution);
+  assert.ok(resolution.lines > CHANGE_BUDGET.commit.lines.maximum);
+  assert.ok(
+    evaluateChangeBudget(stats).violations.some((violation) =>
+      violation.startsWith(`merge resolution ${resolution.sha.slice(0, 12)}`),
+    ),
+  );
+});
+
+test('uses exception metadata from the authenticated current-branch PR', () => {
+  const metadata = resolvePullRequestMetadata({
+    options: { exception: false },
+    env: {},
+    cwd: '/repo',
+    runGh(args, cwd) {
+      assert.deepEqual(args, ['pr', 'view', '--json', 'body,labels,state']);
+      assert.equal(cwd, '/repo');
+      return JSON.stringify({
+        state: 'OPEN',
+        labels: [{ name: 'change-budget:exception' }],
+        body: '## Change-budget exception\nIndivisible generated migration.',
+      });
+    },
+  });
+  const decision = decideChangeBudget(
+    { files: 26, lines: 26, commitCount: 1, commits: [] },
+    metadata,
+  );
+
+  assert.equal(metadata.source, 'GitHub');
+  assert.equal(decision.violations.length, 0);
+  assert.deepEqual(decision.bypassed, ['PR has 26 files; maximum is 25']);
+});
+
+test('fails closed with exact offline metadata instructions', () => {
+  assert.throws(
+    () =>
+      resolvePullRequestMetadata({
+        options: { exception: false },
+        env: {},
+        runGh() {
+          throw Object.assign(new Error('gh failed'), { stderr: 'not authenticated' });
+        },
+      }),
+    (error) => {
+      assert.match(error.message, /GitHub PR metadata is unavailable \(not authenticated\)/);
+      assert.match(error.message, /CHANGE_BUDGET_EXCEPTION=false/);
+      assert.match(error.message, /CHANGE_BUDGET_EXCEPTION=true/);
+      assert.match(error.message, /CHANGE_BUDGET_PR_BODY/);
+      return true;
+    },
+  );
+});
+
+test('accepts the documented explicit offline exception metadata', () => {
+  let calledGitHub = false;
+  const metadata = resolvePullRequestMetadata({
+    options: { exception: false },
+    env: {
+      CHANGE_BUDGET_EXCEPTION: 'true',
+      CHANGE_BUDGET_PR_BODY:
+        '## Change-budget exception\nIndivisible generated migration.',
+    },
+    runGh() {
+      calledGitHub = true;
+      throw Object.assign(new Error('gh failed'), { stderr: 'not authenticated' });
+    },
+  });
+
+  assert.equal(calledGitHub, true);
+  assert.match(metadata.source, /^offline \(GitHub unavailable:/);
+  assert.equal(metadata.exception, true);
+});
+
+test('rejects explicit exception metadata that conflicts with connected GitHub metadata', () => {
+  assert.throws(
+    () =>
+      resolvePullRequestMetadata({
+        options: { exception: true },
+        env: {
+          CHANGE_BUDGET_PR_BODY:
+            '## Change-budget exception\nThis must not override the connected PR.',
+        },
+        runGh() {
+          return JSON.stringify({ state: 'OPEN', labels: [], body: '' });
+        },
+      }),
+    /Explicit exception metadata conflicts with GitHub PR metadata/,
   );
 });
 

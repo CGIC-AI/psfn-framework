@@ -21,6 +21,7 @@ export async function reconcileConcernResolutionArcsAtStartup(
   } catch (error) {
     logger.error('Concern resolution arc startup reconciliation failed; continuing startup', {
       error: error instanceof Error ? error.message : String(error),
+      stack: error instanceof Error ? error.stack : undefined,
     });
   }
 }

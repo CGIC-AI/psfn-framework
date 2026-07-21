@@ -41,6 +41,7 @@
     "tools:doctor": "node scripts/ci/check-local-tools.mjs",
     "hooks:install": "node scripts/ci/install-local-hooks.mjs",
     "gate:pre-pr": "node scripts/ci/run-local-gate.mjs",
+    "gate:canary": "node scripts/ci/run-local-gate.mjs --canary",
     "pr:publish": "node scripts/ci/publish-pr.mjs",
     "pr:wait": "node scripts/ci/wait-for-pr.mjs",
     "chat": "tsx src/app/cli/chat-cli.ts",

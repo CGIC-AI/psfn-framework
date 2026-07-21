@@ -38,7 +38,7 @@ export interface WeightedThoughtOutreachTaskOptions {
   icpCandidateAdapter?: IcpWeightedThoughtCandidateAdapter;
   channelPolicy: OutreachChannelPolicy;
   contactId?: string;
-  /** Per-recipient timezone resolver for the quiet-hours gate (psfn-framework-2tli). */
+  /** Per-recipient timezone resolver for the quiet-hours gate (bead 2tli). */
   resolveContactTimeZone?(contactId: string): Promise<string | null>;
   now?: () => number;
 }

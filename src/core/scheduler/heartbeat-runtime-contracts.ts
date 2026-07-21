@@ -240,7 +240,7 @@ export interface HeartbeatRuntimeOptions {
   episodicProcessingRestWindow?: EpisodicProcessingRestWindowConfig;
   /**
    * Per-recipient timezone resolver for the intention-outbound quiet-hours gate
-   * (psfn-framework-2tli). Called with the outbound channelId; wire to the
+   * (bead 2tli). Called with the outbound channelId; wire to the
    * contact bound to that channel so quiet hours evaluate in the recipient's
    * local time. Optional; when absent or returning null the gate falls back to
    * the global window's zone.

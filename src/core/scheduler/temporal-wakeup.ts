@@ -570,7 +570,7 @@ export interface TemporalWakeupRuntimeOptions {
   onWakeTimingResolved?: (snapshot: WakeWindowSnapshot) => void;
   /**
    * Per-recipient timezone resolver for the outward-delivery quiet-hours gate
-   * (psfn-framework-2tli). Called with the wake channel's sessionId; wire to the
+   * (bead 2tli). Called with the wake channel's sessionId; wire to the
    * contact bound to that channel so quiet hours evaluate in the recipient's
    * local time. Optional; when absent or returning null the gate falls back to
    * the global window's zone.
@@ -659,7 +659,7 @@ function isLiveWakeupFanoutChannel(channel: StartupSessionMetadata): boolean {
  * listRecentlyActiveChannels is last-activity sorted and stops at the lookback
  * edge. Falls back to the latest session alone when the enumeration surface is
  * not wired. The most-recent session is no longer force-added when it is idle
- * past the lookback window (psfn-framework-7toj): an inactive channel must not
+ * past the lookback window (bead 7toj): an inactive channel must not
  * feed the estimate.
  */
 function resolveHabitWakeChannelIds(
@@ -688,7 +688,7 @@ interface ResolvedWakeupSessionContext {
 
 /**
  * Recently-active live channels the wake lanes fan out to (bead
- * psfn-framework-2x37.3, narrowed by psfn-framework-7toj). When the session
+ * psfn-framework-2x37.3, narrowed by bead 7toj). When the session
  * manager exposes enumeration, every actively-used live conversational channel
  * (group chat / DM / satellite) with partner activity inside
  * `activeChannelLookbackHours` is a candidate; per-channel eligibility

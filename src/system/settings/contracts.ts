@@ -3,6 +3,7 @@ import type { GroupMemorySettings } from '../config/group-memory-config.js';
 import type { EmotionScopingSettings } from '../config/emotion-scoping-config.js';
 import type { MemoryRetrievalPolicy } from '../config/memory-retrieval-policy.js';
 import type { CapabilityTier, CompositionalPolicyConfig, LifecycleKubernetesSettings, SessionRestartBehavior, SessionTailCacheSettings, SubstrateConfig, VoiceReplySegmenterSettings, WikiStartupHydrationSettings } from '../config/runtime-config-contracts.js';
+import type { ShellExecSettings } from '../config/shell-exec-config.js';
 import type {
   FalCreateModel,
   FalEditModel,
@@ -240,6 +241,7 @@ export interface EditableSettings {
   webFetchTlsCaCertPaths?: string[];
   capabilityTier?: CapabilityTier;
   promotedExtendedTools?: string[];
+  shellExec?: ShellExecSettings;
   /** Override the base URL used by Garden Chat to reach the OpenAI-compatible API.
    *  When set, this takes priority over the `API_BASE_URL` env var and the
    *  auto-resolved URL derived from `API_HOST`/`API_PORT`. Useful when the
@@ -384,6 +386,7 @@ export const RUNTIME_SETTINGS_KEYS = [
   'webFetchTlsCaCertPaths',
   'capabilityTier',
   'promotedExtendedTools',
+  'shellExec',
   'chatApiBaseUrl',
   'comfyUiBaseUrl',
   'imageProvider',
@@ -461,6 +464,7 @@ export type RuntimeSettingValue =
   | MemoryRetrievalPolicy
   | ObserverEvalSidecarSettings
   | SessionTailCacheSettings
+  | ShellExecSettings
   | WikiStartupHydrationSettings
   | LifecycleKubernetesSettings
   | VoiceReplySegmenterSettings

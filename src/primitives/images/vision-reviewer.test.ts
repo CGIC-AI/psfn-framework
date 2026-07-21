@@ -285,6 +285,114 @@ describe('DefaultImageVisionReviewer', () => {
     expect(llmProvider.complete).toHaveBeenCalledTimes(1);
   });
 
+  it('emits distinct embodiment descriptors for matching and divergent renders', async () => {
+    const referenceResolver = {
+      resolveForTool: vi.fn(async () => ({
+        id: 'ref-1',
+        dataUrl: 'data:image/png;base64,AQID',
+        description: 'default selfie',
+      })),
+    };
+    const makeReviewer = (text: string) => new DefaultImageVisionReviewer(
+      { primaryProvider: 'openrouter' } as any,
+      {
+        referenceResolver,
+        binaryFetcher: vi.fn(async () => ({
+          dataBase64: 'BAUG',
+          mimeType: 'image/png',
+          sizeBytes: 3,
+        })),
+        completeImpl: vi.fn(async (_model, context) => {
+          const message = context.messages[0] as {
+            content: Array<{ type: string; data?: string }>;
+          };
+          // Reference identity image is attached first, render(s) after it.
+          expect(message.content[1]).toMatchObject({ type: 'image', data: 'AQID' });
+          expect(message.content[2]).toMatchObject({ type: 'image', data: 'BAUG' });
+          return { model: 'vision-model', content: [{ type: 'text', text }] };
+        }),
+      },
+    );
+
+    const same = await makeReviewer('Looks consistent. EMBODIMENT: same_me — same eyes and jaw.').analyze({
+      imageUrls: ['https://images.example.test/render.png'],
+      mode: 'create',
+      prompt: 'a selfie',
+      compareToReference: true,
+    });
+    expect(same.embodiment).toMatchObject({
+      verdict: 'same_me',
+      framing: 'This still reads as me.',
+      note: 'same eyes and jaw.',
+      referenceId: 'ref-1',
+      referenceDescription: 'default selfie',
+    });
+
+    const divergent = await makeReviewer('This face changed. EMBODIMENT: different_person — different face shape.').analyze({
+      imageUrls: ['https://images.example.test/render.png'],
+      mode: 'create',
+      prompt: 'a selfie',
+      compareToReference: true,
+    });
+    expect(divergent.embodiment?.verdict).toBe('different_person');
+    expect(divergent.embodiment?.framing).toBe('This does not look like me.');
+    expect(same.embodiment?.verdict).not.toBe(divergent.embodiment?.verdict);
+  });
+
+  it('skips embodiment when the review does not opt into reference comparison', async () => {
+    const referenceResolver = { resolveForTool: vi.fn() };
+    const reviewer = new DefaultImageVisionReviewer(
+      { primaryProvider: 'openrouter' } as any,
+      {
+        referenceResolver,
+        binaryFetcher: vi.fn(async () => ({
+          dataBase64: 'AQID',
+          mimeType: 'image/png',
+          sizeBytes: 3,
+        })),
+        completeImpl: vi.fn(async () => ({
+          model: 'vision-model',
+          content: [{ type: 'text', text: 'A clear image.' }],
+        })),
+      },
+    );
+
+    const result = await reviewer.analyze({
+      imageUrls: ['https://images.example.test/render.png'],
+      question: 'Describe it.',
+    });
+    expect(result.embodiment).toBeUndefined();
+    expect(referenceResolver.resolveForTool).not.toHaveBeenCalled();
+  });
+
+  it('reviews without an embodiment descriptor when no active reference is set', async () => {
+    const referenceResolver = { resolveForTool: vi.fn(async () => null) };
+    const reviewer = new DefaultImageVisionReviewer(
+      { primaryProvider: 'openrouter' } as any,
+      {
+        referenceResolver,
+        binaryFetcher: vi.fn(async () => ({
+          dataBase64: 'AQID',
+          mimeType: 'image/png',
+          sizeBytes: 3,
+        })),
+        completeImpl: vi.fn(async () => ({
+          model: 'vision-model',
+          content: [{ type: 'text', text: 'A clear render. EMBODIMENT: same_me — ignored without a reference.' }],
+        })),
+      },
+    );
+
+    const result = await reviewer.analyze({
+      imageUrls: ['https://images.example.test/render.png'],
+      mode: 'create',
+      prompt: 'a selfie',
+      compareToReference: true,
+    });
+    expect(referenceResolver.resolveForTool).toHaveBeenCalledWith({ useDefaultReference: true });
+    expect(result.embodiment).toBeUndefined();
+  });
+
   it('prefers a saved local image path over gateway fetch for generated outputs', async () => {
     const tempDir = mkdtempSync(join(tmpdir(), 'psfn-vision-local-'));
     const imagePath = join(tempDir, 'saved-output.png');

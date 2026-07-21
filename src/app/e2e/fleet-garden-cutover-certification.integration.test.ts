@@ -766,18 +766,29 @@ beforeAll(async () => {
   mkdirSync(companionDataDir, { recursive: true });
   mkdirSync(runDir, { recursive: true });
   writeFileSync(join(systemDataDir, 'companions.json'), `${JSON.stringify({
+    postgres: {
+      sharedMigrationRole: 'shared_schema_migration',
+      sharedMigrationDatabaseUrlRef: {
+        kind: 'env',
+        envName: 'SHARED_SCHEMA_MIGRATION_DATABASE_URL',
+      },
+    },
     companions: [
       {
         companionId: COMPANION_A,
         companionDataDir: 'companions/alpha',
         characterCardPath: 'companions/alpha/character-card.json',
         postgresSchema: 'companion_alpha',
+        postgresRole: 'companion_alpha_runtime',
+        postgresDatabaseUrlRef: { kind: 'env', envName: 'COMPANION_ALPHA_DATABASE_URL' },
       },
       {
         companionId: COMPANION_B,
         companionDataDir: 'companions/beta',
         characterCardPath: 'companions/beta/character-card.json',
         postgresSchema: 'companion_beta',
+        postgresRole: 'companion_beta_runtime',
+        postgresDatabaseUrlRef: { kind: 'env', envName: 'COMPANION_BETA_DATABASE_URL' },
       },
     ],
   })}\n`);

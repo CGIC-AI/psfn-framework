@@ -50,10 +50,10 @@ import type { SpeakingArbiterStorePort } from '../core/agent/arbiter/speaking-ar
 import { createPostgresPool, ensurePostgresSchemaExists } from './postgres.js';
 import {
   assertPostgresTenantAccessProvisioned,
-  derivePostgresTenantRole,
   planPostgresTenantAccess,
 } from './postgres/tenancy.js';
 import { IntrospectionLandmarkPostgresStore } from '../faculties/introspection/postgres-store.js';
+import { assertSharedSchemaRuntimeAuthority } from './postgres/shared-schema.js';
 import { PostgresPartnerAffectShadowStore } from './postgres/partner-affect-shadow-store.js';
 import type { PartnerAffectShadowStorePort } from '../core/emotion/partner-affect/shadow-store-port.js';
 import { PostgresBackgroundWorkStore } from './postgres/background-work-store.js';
@@ -121,7 +121,13 @@ export interface AgentPersistenceRuntime {
 export interface CreateAgentPersistenceRuntimeOptions {
   config: Pick<
     SubstrateConfig,
-    'databasePath' | 'persistenceBackend' | 'postgresDatabaseUrl' | 'postgresSchema' | 'multiCompanion'
+    | 'databasePath'
+    | 'persistenceBackend'
+    | 'postgresDatabaseUrl'
+    | 'postgresSchema'
+    | 'postgresRole'
+    | 'multiCompanion'
+    | 'companionFleet'
   >;
   pathSnapshot: RuntimePathSnapshot;
   embeddingDims: number;
@@ -150,9 +156,9 @@ export async function createAgentPersistenceRuntime(
   // undefined and behavior is byte-identical to single-companion public mode.
   const schema = options.config.postgresSchema?.trim() || undefined;
   const tenantRole = options.config.multiCompanion === true
-    ? derivePostgresTenantRole(schema ?? (() => {
-        throw new Error('Multi-companion Postgres persistence requires config.postgresSchema');
-      })())
+    ? options.config.postgresRole?.trim() || (() => {
+        throw new Error('Multi-companion Postgres persistence requires config.postgresRole');
+      })()
     : undefined;
   if (schema && options.config.multiCompanion === true) {
     // Deployment provisioning is explicit. Startup only verifies the boundary
@@ -184,10 +190,22 @@ export async function createAgentPersistenceRuntime(
     }
   }
 
-  // Shared world schema (sprint 10, W5a). Multi-companion only: the store's
-  // connect provisions the `shared` schema (advisory-lock serialized, so N
-  // concurrently-starting agents are safe) before any presence access. With
-  // the flag off the shared schema is never created or touched.
+  // Shared world schema (sprint 10, W5a). The gateway has already run shared
+  // migrations under the dedicated shared owner before exposing its socket.
+  // Every agent proves its ordinary credential has exact own-schema + shared
+  // DML authority, reciprocal tenant isolation, and zero fleet_auth access
+  // before opening a shared store.
+  if (options.config.multiCompanion === true) {
+    if (!schema || !options.config.companionFleet) {
+      throw new Error('Multi-companion shared persistence requires a complete fleet schema identity');
+    }
+    await assertSharedSchemaRuntimeAuthority(databaseUrl, {
+      ownSchema: schema,
+      companionSchemas: options.config.companionFleet.companions.map(
+        companion => companion.postgresSchema,
+      ),
+    });
+  }
   const companionPresenceStore = options.config.multiCompanion === true
     ? await PostgresCompanionPresenceStore.connect(databaseUrl)
     : undefined;

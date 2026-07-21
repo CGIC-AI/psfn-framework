@@ -7,6 +7,7 @@ import {
   FLEET_AUTH_REAPPROVE_FUNCTION_ARG_TYPES,
   FLEET_AUTH_REAPPROVE_FUNCTION_NAME,
 } from './reapproval-sql.js';
+import { assertPostgresRolesAreLeastPrivilege } from '../role-posture.js';
 import {
   FLEET_AUTH_COMPANION_REAPPROVAL_DDL_SQL,
   FLEET_AUTH_REAPPROVE_COMPANION_FUNCTION_ARG_TYPES,
@@ -90,37 +91,13 @@ export interface FleetAuthDatabaseRoles {
   backupRestore: string;
 }
 
-// The fleet-auth runtime, migration, and backup/restore credentials are
-// least-privilege LOGIN roles. Their exact attribute contract is: LOGIN only,
-// with NONE of PostgreSQL's cluster-wide authority attributes. Each of these
-// attributes places a role outside the runtime/migration/backup authority
-// boundary and is rejected fail-closed before any schema or data work:
-//   - SUPERUSER    bypasses every privilege and RLS check.
-//   - CREATEROLE   can mint or alter roles (including granting itself authority).
-//   - CREATEDB     can create databases outside the fleet_auth boundary.
-//   - REPLICATION  can call pg_create_physical_replication_slot and stream WAL
-//                  (cluster WAL disclosure and storage-exhaustion vectors).
-//   - BYPASSRLS    skips row-level security.
-const FORBIDDEN_ROLE_ATTRIBUTES = [
-  { column: 'rolsuper', label: 'SUPERUSER' },
-  { column: 'rolcreaterole', label: 'CREATEROLE' },
-  { column: 'rolcreatedb', label: 'CREATEDB' },
-  { column: 'rolreplication', label: 'REPLICATION' },
-  { column: 'rolbypassrls', label: 'BYPASSRLS' },
-] as const;
-
-interface RoleAttributeRow {
-  current_user: string;
-  rolcanlogin: boolean;
-  rolinherit: boolean;
-  credential_not_expired: boolean;
-  rolconnlimit: number;
-  owns_current_database: boolean;
-  rolsuper: boolean;
-  rolcreaterole: boolean;
-  rolcreatedb: boolean;
-  rolreplication: boolean;
-  rolbypassrls: boolean;
+/**
+ * Complete database authority set for a fleet backup family. The shared-world
+ * schema has its own migration owner; it is deliberately not one of the three
+ * fleet_auth roles above and receives no fleet_auth privileges.
+ */
+export interface FleetAuthFamilyDatabaseRoles extends FleetAuthDatabaseRoles {
+  sharedMigration: string;
 }
 
 export const FLEET_AUTH_DURABLE_TABLES = [
@@ -231,7 +208,7 @@ function migrationChecksum(sql: string): string {
 }
 
 function assertDistinctRoles(roles: FleetAuthDatabaseRoles): void {
-  const values = Object.values(roles);
+  const values = [roles.runtime, roles.migration, roles.backupRestore];
   values.forEach(quoteIdentifier);
   if (new Set(values).size !== values.length) {
     throw new Error('Fleet auth PostgreSQL runtime, migration, and backup/restore roles must be distinct');
@@ -244,54 +221,16 @@ async function assertCurrentRole(
   authority: string,
   roles: FleetAuthDatabaseRoles,
 ): Promise<void> {
-  const result = await pool.query<RoleAttributeRow>(`
-    SELECT
-      current_user,
-      rol.rolcanlogin,
-      rol.rolinherit,
-      (rol.rolvaliduntil IS NULL OR rol.rolvaliduntil > clock_timestamp())
-        AS credential_not_expired,
-      rol.rolconnlimit,
-      EXISTS (
-        SELECT 1 FROM pg_database
-        WHERE datname = current_database() AND datdba = rol.oid
-      ) AS owns_current_database,
-      rol.rolsuper,
-      rol.rolcreaterole,
-      rol.rolcreatedb,
-      rol.rolreplication,
-      rol.rolbypassrls
-    FROM pg_roles AS rol
-    WHERE rol.rolname = current_user
-  `);
+  const result = await pool.query<{ current_user: string }>('SELECT current_user');
   const row = result.rows.at(0);
   if (!row || row.current_user !== expectedRole) {
     throw new Error(`${authority} credential must authenticate as PostgreSQL role ${expectedRole}`);
   }
-  if (!row.rolcanlogin) {
-    throw new Error(`${authority} PostgreSQL role ${expectedRole} must be a LOGIN role`);
-  }
-  // Exact credential posture: the authority roles are dedicated, non-owning,
-  // non-inheriting logins with a finite connection cap and a currently valid
-  // credential. NOINHERIT is defense in depth; the membership check below also
-  // rejects SET ROLE into every other role, including predefined server-file
-  // and server-program roles.
-  if (row.rolinherit || !row.credential_not_expired || row.rolconnlimit < 1
-    || row.owns_current_database) {
-    throw new Error(
-      `${authority} PostgreSQL role ${expectedRole} must be NOINHERIT, credential-valid, `
-      + 'finite CONNECTION LIMIT >= 1, and must not own the target database',
-    );
-  }
-  const forbiddenAttributes = FORBIDDEN_ROLE_ATTRIBUTES
-    .filter(attribute => row[attribute.column])
-    .map(attribute => attribute.label);
-  if (forbiddenAttributes.length > 0) {
-    throw new Error(
-      `${authority} PostgreSQL role ${expectedRole} must not hold cluster authority attributes: `
-      + forbiddenAttributes.join(', '),
-    );
-  }
+  await assertPostgresRolesAreLeastPrivilege(
+    pool,
+    [roles.runtime, roles.migration, roles.backupRestore],
+    authority,
+  );
   const memberships = await pool.query<{ role_name: string }>(`
     SELECT candidate.rolname AS role_name
     FROM pg_roles AS candidate
@@ -305,7 +244,7 @@ async function assertCurrentRole(
       + memberships.rows.map(row => row.role_name).join(', '),
     );
   }
-  const protectedRoles = Object.values(roles);
+  const protectedRoles = [roles.runtime, roles.migration, roles.backupRestore];
   const inverseMemberships = await pool.query<{
     member_role: string;
     protected_role: string;

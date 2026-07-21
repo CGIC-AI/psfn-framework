@@ -74,12 +74,13 @@ import { DiscordEvidenceObserverRegistry } from '../../boundary/fleet-auth/disco
 import { requireFleetSsoFleetManifest } from '../../boundary/fleet-auth/fleet-sso-transport.js';
 import { assertFleetAuthLegacySurfacesUnavailable } from '../../system/config/fleet-auth-legacy-surface-guard.js';
 import { resolveGatewayFleetAuthSecrets } from '../../system/config/fleet-auth-config.js';
+import { resolveCompanionDatabaseTopology } from '../../system/config/companion-database-config.js';
 import { resolveBackupRuntimeConfig } from '../../persistence/backups/config.js';
 import { resolveKubernetesHelmBackupConfig } from '../../persistence/backups/kubernetes-helm.js';
 import { deriveRestoreVerifyDatabaseUrl } from '../../persistence/backups/postgres-restore.js';
 import { migrateFleetAuthSchema } from '../../persistence/postgres/fleet-auth/schema.js';
 import { buildFleetAuthBackupCycleOptions } from '../../persistence/backups/fleet-scheduler.js';
-import { resolveFleetAuthSchemaAccessContracts } from '../../persistence/backups/fleet-auth-schema-access.js';
+import { prepareFleetSharedSchemaRuntime } from '../../persistence/backups/fleet-shared-schema-startup.js';
 import {
   DEFAULT_SHARED_WORLD_SCHEMA,
   registerScheduledFleetAuthBackupTask,
@@ -147,6 +148,30 @@ async function main(): Promise<void> {
     startupHydration.pathSnapshot.workspacePath,
     startupHydration.pathSnapshot.runtimePathLayout.backupsDir,
   ];
+  const companionDatabaseTopology = config.companionFleet
+    ? (() => {
+        if (!config.credentialVault || !config.postgresDatabaseUrl) {
+          throw new Error(
+            'Fleet startup requires its topology credential vault and gateway database credential',
+          );
+        }
+        return resolveCompanionDatabaseTopology({
+          fleet: config.companionFleet,
+          credentialVault: config.credentialVault,
+          gatewayDatabaseUrl: config.postgresDatabaseUrl,
+        });
+      })()
+    : undefined;
+  const fleetAuthSecrets = config.fleetAuth && config.credentialVault
+    ? resolveGatewayFleetAuthSecrets({
+        config: config.fleetAuth,
+        credentialVault: config.credentialVault,
+        protectedRestoreRoots: fleetAuthProtectedRestoreRoots,
+        ...(config.postgresDatabaseUrl
+          ? { companionDatabaseUrl: config.postgresDatabaseUrl }
+          : {}),
+      })
+    : undefined;
   if (config.fleetAuth) {
     requireFleetSsoFleetManifest(config.companionFleet);
   }
@@ -164,6 +189,26 @@ async function main(): Promise<void> {
     lifecycleWitnessRoot: startupHydration.pathSnapshot.systemDataDir,
     discordEvidenceObserver: discordEvidenceObservers,
   });
+  const sharedSchemaAccessContracts = companionDatabaseTopology
+    ? await prepareFleetSharedSchemaRuntime({
+        sharedMigrationDatabaseUrl: companionDatabaseTopology.sharedMigration.databaseUrl,
+        sharedMigrationRole: companionDatabaseTopology.sharedMigration.role,
+        companionDatabases: companionDatabaseTopology.companions.map(entry => ({
+          databaseUrl: entry.databaseUrl,
+          role: entry.role,
+          schema: entry.companion.postgresSchema,
+        })),
+        sharedSchema: DEFAULT_SHARED_WORLD_SCHEMA,
+        ...(config.fleetAuth && fleetAuthSecrets
+          ? {
+              fleetAuth: {
+                backupRestoreDatabaseUrl: fleetAuthSecrets.database.backupRestoreUrl,
+                roles: config.fleetAuth.databaseRoles,
+              },
+            }
+          : {}),
+      })
+    : undefined;
   const satelliteRegistryConfig = loadSatelliteRegistryConfig(startupHydration.pathSnapshot.systemDataDir);
   const placesRegistryConfig = loadPlacesRegistryConfig(startupHydration.pathSnapshot.systemDataDir);
   assertSatellitePlaceBindings(satelliteRegistryConfig, placesRegistryConfig);
@@ -232,14 +277,9 @@ async function main(): Promise<void> {
       dataDir: startupHydration.pathSnapshot.systemDataDir,
       env,
     });
-    const fleetAuthSecrets = resolveGatewayFleetAuthSecrets({
-      config: config.fleetAuth,
-      credentialVault: config.credentialVault,
-      protectedRestoreRoots: fleetAuthProtectedRestoreRoots,
-      ...(config.postgresDatabaseUrl
-        ? { companionDatabaseUrl: config.postgresDatabaseUrl }
-        : {}),
-    });
+    if (!fleetAuthSecrets || !companionDatabaseTopology || !sharedSchemaAccessContracts) {
+      throw new Error('Fleet auth backup requires the complete multi-companion database topology');
+    }
     if (backupConfig.verifyRestore) {
       const scratchMigrationUrl = deriveRestoreVerifyDatabaseUrl(
         fleetAuthSecrets.database.migrationUrl,
@@ -259,20 +299,23 @@ async function main(): Promise<void> {
       });
     }
     const kubernetesHelm = resolveKubernetesHelmBackupConfig(env);
-    const schemaAccessContracts = await resolveFleetAuthSchemaAccessContracts({
-      databaseUrl: fleetAuthSecrets.database.backupRestoreUrl,
-      companionSchemas: config.companionFleet.companions.map(companion => companion.postgresSchema),
-      sharedSchema: DEFAULT_SHARED_WORLD_SCHEMA,
-      roles: config.fleetAuth.databaseRoles,
-    });
     const cycleOptions = buildFleetAuthBackupCycleOptions({
       fleet: config.companionFleet,
       systemDataDir: startupHydration.pathSnapshot.systemDataDir,
       backupRestoreDatabaseUrl: fleetAuthSecrets.database.backupRestoreUrl,
       schemaOwnerDatabaseUrl: fleetAuthSecrets.database.migrationUrl,
-      roles: config.fleetAuth.databaseRoles,
+      roles: {
+        ...config.fleetAuth.databaseRoles,
+        sharedMigration: companionDatabaseTopology.sharedMigration.role,
+      },
       authorityFloors: fleetAuthPersistence.authorityFloors,
-      schemaAccessContracts,
+      schemaOwnerDatabaseUrls: Object.fromEntries([
+        ...companionDatabaseTopology.companions.map(entry => (
+          [entry.companion.postgresSchema, entry.databaseUrl] as const
+        )),
+        [DEFAULT_SHARED_WORLD_SCHEMA, companionDatabaseTopology.sharedMigration.databaseUrl],
+      ]),
+      schemaAccessContracts: sharedSchemaAccessContracts,
       backupConfig,
       ...(kubernetesHelm ? { kubernetesHelm } : {}),
     });

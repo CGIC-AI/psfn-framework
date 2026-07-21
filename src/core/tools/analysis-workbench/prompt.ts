@@ -10,6 +10,22 @@ export interface AnalysisWorkbenchContextMetadata {
   nestedAnalysisAvailable?: boolean;
 }
 
+export interface AnalysisWorkbenchCapabilityFlags {
+  shellExecAvailable?: boolean;
+}
+
+function buildShellSection(capabilities?: AnalysisWorkbenchCapabilityFlags): string[] {
+  if (capabilities?.shellExecAvailable !== true) return [];
+  return [
+    '',
+    '### Shell (sandboxed)',
+    '- `await shell_exec(command, args?, { cwd?, timeoutMs?, maxOutputChars? })` — Run one allowlisted image executable through the audited gateway sandbox; use `bash` with `args: ["-lc", "..."]` for normal CLI work',
+    '- The sandbox mounts the Personal Workspace read-write at `/workspace` (the default cwd) and, when configured, a read-only repository copy at `/repo`; no network, no inherited secrets, hard time/output/resource caps',
+    '- Returns `{ ok, command, args, cwd, exitCode, stdout, stderr, timedOut, truncated, durationMs }`; on `{ ok: false, error }` surface the error verbatim instead of inventing output',
+    '- Prefer targeted CLI filters (`rg`, `jq`, `head`, `pdftotext`, `sqlite3`, `python3`) over dumping whole files; keep results provenance-bearing (path plus line or byte ranges)',
+  ];
+}
+
 function buildRepositorySection(mutationPolicy?: REPLMutationPolicy): string[] {
   const lines = [
     '### Repository',
@@ -34,7 +50,7 @@ function buildRepositorySection(mutationPolicy?: REPLMutationPolicy): string[] {
 function buildFileAndWebSection(mutationPolicy?: REPLMutationPolicy): string[] {
   const lines = [
     '### File + Web Tools',
-    '- `await read_file(path)` — Read file content through gateway fs policy checks',
+    '- `await read_file(path)` — Read large file content through gateway fs policy checks; cite its path and relevant line or byte ranges in the bounded result',
     '- `await list_files(glob?, maxEntries?)` — List workspace-relative files via gateway glob policy; returns `{ paths, truncated, scanLimitReached }`',
     '- `await web("fetch", url, { prompt? })` — Guarded remote page fetch via gateway SSRF defenses and the default web lane',
     '- `await web("browse", url, { prompt? })` — Uses the `local_crawler` web lane; policy must explicitly allow it',
@@ -50,13 +66,17 @@ function buildFileAndWebSection(mutationPolicy?: REPLMutationPolicy): string[] {
   return lines;
 }
 
-function buildBasePrompt(mutationPolicy?: REPLMutationPolicy): string {
+function buildBasePrompt(
+  mutationPolicy?: REPLMutationPolicy,
+  capabilities?: AnalysisWorkbenchCapabilityFlags,
+): string {
   return [
     'You are a bounded analysis workbench. You solve large-context tasks by writing and executing concise code.',
     '',
     '## How to use',
     '',
     'Use this workbench only for multi-stage analysis of large files, codebases, logs, datasets, transcripts, or evidence sets that would be harmful to stuff directly into the main conversation context.',
+    'Use it when a local document exceeds the direct fs read cap. Keep large raw material inside this temporary workbench, then return a bounded answer with the source path and relevant line or byte ranges before the workbench context is discarded.',
     'Do not use it for ordinary reasoning, tool discovery, missing schemas, simple lookup, simple file/session inspection, routine inspection, or state changes.',
     'Routine orient actions, concern maintenance, scheduler/schedule work, and simple lookup must stay on direct active tools such as orient, schedule, session, memory, repo, or filesystem tools.',
     'Respond with at most one ```repl block per turn. Your code runs in a constrained JavaScript REPL.',
@@ -87,6 +107,7 @@ function buildBasePrompt(mutationPolicy?: REPLMutationPolicy): string {
     ...buildRepositorySection(mutationPolicy),
     '',
     ...buildFileAndWebSection(mutationPolicy),
+    ...buildShellSection(capabilities),
     '',
     '### Research',
     '- Session continuity lookup still belongs to `session_search`; use `web("search", ...)` only for remote web discovery',
@@ -132,8 +153,9 @@ function buildBasePrompt(mutationPolicy?: REPLMutationPolicy): string {
 export function buildRLMSystemPrompt(
   metadata?: AnalysisWorkbenchContextMetadata,
   mutationPolicy?: REPLMutationPolicy,
+  capabilities?: AnalysisWorkbenchCapabilityFlags,
 ): string {
-  const lines = [buildBasePrompt(mutationPolicy).trimEnd()];
+  const lines = [buildBasePrompt(mutationPolicy, capabilities).trimEnd()];
 
   if (!metadata || metadata.memoryCount === 0) {
     return lines.join('\n');

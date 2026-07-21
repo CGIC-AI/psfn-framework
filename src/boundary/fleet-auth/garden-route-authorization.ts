@@ -300,13 +300,18 @@ const routeAuthorizationGroups: readonly RouteAuthorizationGroup[] = [
       ...ids('GET', [
         '/api/admin/image-references', '/api/admin/images/generated',
         '/api/admin/image-references/:id/blob', '/api/admin/images/generated/:id/blob',
+        '/api/admin/image-references/:id/lineage',
       ]),
       ...pageIds(['/images']),
     ],
   },
   {
     action: 'images.manage', area: 'images', routeIds: [
-      ...ids('POST', ['/api/admin/image-references/upload', '/api/admin/image-references/:id/default']),
+      ...ids('POST', [
+        '/api/admin/image-references/upload', '/api/admin/image-references/:id/default',
+        '/api/admin/image-references/rollback-default',
+        '/api/admin/images/generated/:id/promote-reference',
+      ]),
       ...ids('PATCH', ['/api/admin/image-references/:id', '/api/admin/images/generated/:id']),
     ],
   },

@@ -313,6 +313,18 @@
       "pattern": "identity-legacy-slug"
     },
     {
+      "path": "src/app/agent/main.ts",
+      "contains": "psfn-framework-jdwd",
+      "reason": "Implementation comment cites the bead that owns the sandboxed shell and workbench shell_exec wiring.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/app/maintenance/verify-shell-sandbox-runtime.ts",
+      "contains": "psfn-shell-runtime-",
+      "reason": "Ephemeral temp-directory prefix for the sandbox runtime verifier fixture.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
       "path": "src/app/cert-manager/config.ts",
       "contains": "DEFAULT_CA_COMMON_NAME = 'PSFN Private CA'",
       "reason": "Private PKI uses an installation-level project CA common name, not a companion identity.",
@@ -2315,6 +2327,18 @@
       "contains": "\\/psfn\\/agent\\/",
       "reason": "Fleet Garden transport validates the stable project-scoped SPIFFE workload path in its regular expression.",
       "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/channels/api/server/bearer-companion-selector.ts",
+      "contains": "x-psfn-companion-id",
+      "reason": "Wire header name for OpenAI-compatible Bearer companion selection is a stable API contract (psfn-framework-0xxf/vknn).",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/channels/api/server/bearer-companion-selector.ts",
+      "contains": "X-PSFN-Companion-ID",
+      "reason": "Client-facing error messages must name the wire header exactly (psfn-framework-0xxf/vknn).",
+      "pattern": "identity-proper-name"
     }
   ]
 }

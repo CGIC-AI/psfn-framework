@@ -6,6 +6,7 @@ import { parseRequestUrl } from '../request-url.js';
 import { exactPath, paramWithSuffix, prefixedParamPath } from '../route-matchers.js';
 import type {
   AdminGeneratedImageArtifactRef,
+  AdminGeneratedImageAutobiographyInput,
   AdminGeneratedImageCompanionNoteRef,
   AdminGeneratedImageConversationLink,
   AdminGeneratedImageListQuery,
@@ -54,6 +55,9 @@ function parseGeneratedImagesQuery(req: Parameters<AdminApiRoute['handle']>[0]):
       : {}),
     ...(parseBooleanQuery(url.searchParams.get('meaningful')) !== undefined
       ? { meaningful: parseBooleanQuery(url.searchParams.get('meaningful')) }
+      : {}),
+    ...(parseBooleanQuery(url.searchParams.get('milestone')) !== undefined
+      ? { milestone: parseBooleanQuery(url.searchParams.get('milestone')) }
       : {}),
     ...(url.searchParams.get('q')?.trim() ? { search: url.searchParams.get('q')!.trim() } : {}),
   };
@@ -126,6 +130,28 @@ function parseArtifactRefs(value: unknown): AdminGeneratedImageArtifactRef[] | u
     ));
 }
 
+function parseAutobiographyInput(value: unknown): AdminGeneratedImageAutobiographyInput | undefined {
+  if (!isRecord(value)) return undefined;
+  // Authorship is never parsed from the operator request body: it is derived from the
+  // editing principal by the service (charter 8.2). The admin surface is operator-principal.
+  let milestone: AdminGeneratedImageAutobiographyInput['milestone'];
+  if (isRecord(value.milestone) && typeof value.milestone.marked === 'boolean') {
+    milestone = {
+      marked: value.milestone.marked,
+      ...(stringValue(value.milestone.label) !== undefined ? { label: stringValue(value.milestone.label) } : {}),
+    };
+  }
+  return {
+    ...(stringValue(value.narrative) !== undefined ? { narrative: stringValue(value.narrative) } : {}),
+    ...(stringValue(value.emotionalContext) !== undefined ? { emotionalContext: stringValue(value.emotionalContext) } : {}),
+    ...(milestone ? { milestone } : {}),
+    ...(typeof value.clear === 'boolean' ? { clear: value.clear } : {}),
+    ...(typeof value.allowOverwriteCompanionAuthored === 'boolean'
+      ? { allowOverwriteCompanionAuthored: value.allowOverwriteCompanionAuthored }
+      : {}),
+  };
+}
+
 function parseGeneratedImageUpdatePayload(payload: Record<string, unknown>): AdminGeneratedImageUpdateInput {
   const meaningfulMoment = payload.meaningfulMoment;
   const parsedMeaningfulMoment = meaningfulMoment !== undefined
@@ -159,6 +185,9 @@ function parseGeneratedImageUpdatePayload(payload: Record<string, unknown>): Adm
             ...(stringValue(parsedMeaningfulMoment.note) !== undefined ? { note: stringValue(parsedMeaningfulMoment.note) } : {}),
           },
         }
+      : {}),
+    ...(payload.autobiography !== undefined
+      ? { autobiography: parseAutobiographyInput(payload.autobiography) ?? {} }
       : {}),
     ...(payload.conversation !== undefined ? { conversation: parseConversationLink(payload.conversation) ?? {} } : {}),
     ...(parseCompanionNoteRefs(payload.companionNoteRefs) !== undefined
@@ -245,6 +274,59 @@ export function buildAdminImageRoutes(options: {
       },
     },
     {
+      method: 'POST',
+      match: paramWithSuffix('/api/admin/images/generated/', 'id', '/promote-reference'),
+      handle: (req, res, { id }) => {
+        withBody(req, res, (body) => {
+          const parsed = parseAdminJsonBody(body);
+          if (!parsed.ok) {
+            sendJson(res, 400, { error: parsed.error });
+            return;
+          }
+          if (!isRecord(parsed.value)) {
+            sendJson(res, 400, { error: 'Promote reference payload must be a JSON object' });
+            return;
+          }
+          const payload = parsed.value;
+          const promotionReason = stringValue(payload.promotionReason)?.trim() ?? '';
+          if (!promotionReason) {
+            sendJson(res, 400, { error: 'promotionReason is required' });
+            return;
+          }
+          imagesService.promoteGeneratedImageToReference(id, {
+            promotionReason,
+            ...(stringValue(payload.description) !== undefined ? { description: stringValue(payload.description) } : {}),
+            ...(Array.isArray(payload.tags)
+              ? { tags: payload.tags.filter((tag): tag is string => typeof tag === 'string') }
+              : {}),
+            ...(typeof payload.setDefault === 'boolean' ? { setDefault: payload.setDefault } : {}),
+          }).then(
+            reference => {
+              appendIdentityMutationAudit(
+                'allowed',
+                'Operator promoted a generated image into an identity reference slot.',
+                [
+                  `referenceId=${reference.id}`,
+                  `generatedImageId=${id}`,
+                  reference.isDefault ? 'default=true' : null,
+                ],
+              );
+              sendJson(res, 201, { ok: true, reference }, ADMIN_DYNAMIC_JSON_HEADERS);
+            },
+            error => {
+              const safeError = toSanitizedMessage(error, 'Failed to promote generated image');
+              appendIdentityMutationAudit(
+                'denied',
+                `Operator reference promotion failed: ${safeError}`,
+                [`generatedImageId=${id}`],
+              );
+              sendJson(res, safeError.includes('not found') ? 404 : 400, { error: safeError });
+            },
+          );
+        });
+      },
+    },
+    {
       method: 'GET',
       match: exactPath('/api/admin/image-references'),
       handle: (_req, res) => {
@@ -309,6 +391,51 @@ export function buildAdminImageRoutes(options: {
             );
             sendJson(res, 500, { error: safeError });
           },
+        );
+      },
+    },
+    {
+      method: 'POST',
+      match: exactPath('/api/admin/image-references/rollback-default'),
+      handle: (req, res) => {
+        withBody(req, res, (body) => {
+          const parsed = parseAdminJsonBody(body);
+          if (!parsed.ok) {
+            sendJson(res, 400, { error: parsed.error });
+            return;
+          }
+          const payload = isRecord(parsed.value) ? parsed.value : {};
+          const reason = stringValue(payload.reason)?.trim();
+          imagesService.rollbackDefaultReferencePhoto(reason ? { reason } : undefined).then(
+            reference => {
+              appendIdentityMutationAudit(
+                'allowed',
+                'Operator rolled back the default identity reference photo.',
+                [`referenceId=${reference.id}`],
+              );
+              sendJson(res, 200, { ok: true, reference }, ADMIN_DYNAMIC_JSON_HEADERS);
+            },
+            error => {
+              const safeError = toSanitizedMessage(error, 'Failed to roll back default reference photo');
+              appendIdentityMutationAudit(
+                'denied',
+                `Operator default reference rollback failed: ${safeError}`,
+              );
+              sendJson(res, statusFromReferenceError(error), { error: safeError });
+            },
+          );
+        });
+      },
+    },
+    {
+      method: 'GET',
+      match: paramWithSuffix('/api/admin/image-references/', 'id', '/lineage'),
+      handle: (_req, res, { id }) => {
+        imagesService.getReferenceLineage(id).then(
+          lineage => sendJson(res, 200, lineage, ADMIN_DYNAMIC_JSON_HEADERS),
+          error => sendJson(res, statusFromReferenceError(error), {
+            error: toSanitizedMessage(error, 'Failed to load reference lineage'),
+          }),
         );
       },
     },

@@ -42,27 +42,33 @@ export function createShellTool(ops: ShellOperations): SubstrateAgentTool {
     description: CANONICAL_TOOL_SURFACE_DESCRIPTIONS.shell,
     parameters: Type.Object({
       action: Type.Optional(Type.Literal('exec', {
-        description: 'Shell action. Defaults to exec.',
+        description: 'Run one fresh, isolated command. Defaults to exec.',
       })),
       command: Type.Optional(Type.String({
-        description: 'Executable name or allowlisted executable path to run directly.',
+        description:
+          'Allowlisted image executable to run directly. Use bash with args ["-lc", "..."] for normal CLI work.',
       })),
       args: Type.Optional(Type.Array(Type.String(), {
-        description: 'Exact argv entries to pass to the command.',
+        description:
+          'Exact argv entries. They are not parsed by a shell unless command is explicitly bash.',
       })),
       cwd: Type.Optional(Type.String({
-        description: 'Optional working directory. Must remain within the configured shell allowlist.',
+        description:
+          'Working directory relative to the Personal Workspace, or a returned absolute workspace path. Defaults to the workspace root and cannot escape it.',
       })),
       timeout_ms: Type.Optional(Type.Integer({
         minimum: 1,
-        description: 'Optional timeout override in milliseconds, bounded by gateway policy.',
+        description:
+          'Optional wall-time override in milliseconds. Default is 10 minutes; gateway policy caps it at 1 hour.',
       })),
       max_output_chars: Type.Optional(Type.Integer({
         minimum: 1,
-        description: 'Optional combined stdout/stderr cap, bounded by gateway policy.',
+        description:
+          'Optional combined stdout/stderr cap. Use targeted CLI filters instead of dumping large files.',
       })),
       env_vars: Type.Optional(Type.Array(Type.String(), {
-        description: 'Optional environment variable names to request from the gateway-owned shell env allowlist.',
+        description:
+          'Environment names to request from the gateway allowlist. Inherited secrets are absent by default.',
       })),
     }),
     execute: async (

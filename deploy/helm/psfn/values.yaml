@@ -211,7 +211,13 @@ workloads:
       tag: ""
       digest: ""
     command: ["node", "dist/gateway-main.js"]
-    resources: {}
+    resources:
+      requests:
+        cpu: 100m
+        memory: 2Gi
+      limits:
+        cpu: "2"
+        memory: 4Gi
     writableMounts:
       - /app/system-data
       - /app/logs

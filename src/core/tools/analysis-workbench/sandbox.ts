@@ -163,6 +163,11 @@ export class REPLSandbox {
     };
   }
 
+  /** Whether a named host helper is exposed to sandbox code this run. */
+  hasHelper(name: string): boolean {
+    return typeof this.hostHelpers[name] === 'function';
+  }
+
   /** Drain collected evidence since last call */
   collectEvidence(): AnalysisWorkbenchEvidence[] {
     const evidence = this.currentEvidence;

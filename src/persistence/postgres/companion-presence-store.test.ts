@@ -11,7 +11,6 @@ import { SHARED_SCHEMA_NAME } from './migrations.js';
 const storeMocks = vi.hoisted(() => ({
   pool: { kind: 'pool', end: vi.fn(async () => undefined) },
   createPostgresPool: vi.fn(() => storeMocks.pool),
-  ensureSharedSchema: vi.fn(async () => undefined),
   executeQuery: vi.fn(async () => ({ rowCount: 0 })),
   queryOne: vi.fn(async () => undefined as unknown),
   queryRows: vi.fn(async () => [] as unknown[]),
@@ -22,10 +21,6 @@ vi.mock('../postgres.js', () => ({
   executeQuery: storeMocks.executeQuery,
   queryOne: storeMocks.queryOne,
   queryRows: storeMocks.queryRows,
-}));
-
-vi.mock('./shared-schema.js', () => ({
-  ensureSharedSchema: storeMocks.ensureSharedSchema,
 }));
 
 const COMPANION_ID = '11111111-1111-4111-8111-111111111111';
@@ -42,7 +37,6 @@ const DB_ROW = {
 
 beforeEach(() => {
   storeMocks.createPostgresPool.mockClear();
-  storeMocks.ensureSharedSchema.mockClear();
   storeMocks.executeQuery.mockClear();
   storeMocks.queryOne.mockClear();
   storeMocks.queryRows.mockClear();
@@ -56,13 +50,12 @@ async function connect(): Promise<PostgresCompanionPresenceStore> {
 }
 
 describe('PostgresCompanionPresenceStore (W5a)', () => {
-  it('pins the pool to the shared schema and provisions it before any access', async () => {
+  it('pins the runtime pool to the pre-migrated shared schema without executing DDL', async () => {
     await connect();
     expect(storeMocks.createPostgresPool).toHaveBeenCalledWith(
       'postgres://postgres:secret@localhost:5432/psfn',
       expect.objectContaining({ schema: SHARED_SCHEMA_NAME }),
     );
-    expect(storeMocks.ensureSharedSchema).toHaveBeenCalledWith(storeMocks.pool);
   });
 
   it('upserts the own row preserving since across same-place refreshes', async () => {

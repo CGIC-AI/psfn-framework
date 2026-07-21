@@ -24,11 +24,23 @@ function resolveSingleCompanionConfig(input: {
     );
   }
   return {
+    postgres: {
+      sharedMigrationRole: 'shared_schema_migration',
+      sharedMigrationDatabaseUrlRef: {
+        kind: 'env',
+        envName: 'SHARED_SCHEMA_MIGRATION_DATABASE_URL',
+      },
+    },
     companions: [{
       companionId,
       companionDataDir,
       characterCardPath: join(companionDataDir, 'companion.json'),
       postgresSchema: 'public',
+      postgresRole: 'single_companion_runtime',
+      postgresDatabaseUrlRef: {
+        kind: 'env',
+        envName: 'SINGLE_COMPANION_DATABASE_URL',
+      },
     }],
   };
 }

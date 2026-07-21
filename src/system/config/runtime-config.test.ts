@@ -46,11 +46,17 @@ describe('hydrateJsonBackedRuntimeConfig', () => {
     writeFileSync(
       join(dataDir, 'companions.json'),
       `${JSON.stringify({
+        postgres: {
+          sharedMigrationRole: 'shared_schema_migration',
+          sharedMigrationDatabaseUrlRef: { kind: 'env', envName: 'SHARED_MIGRATION_URL' },
+        },
         companions: [{
           companionId: '11111111-1111-4111-8111-111111111111',
           companionDataDir: 'companion',
           characterCardPath: 'companion/companion.json',
           postgresSchema: 'public',
+          postgresRole: 'single_companion_runtime',
+          postgresDatabaseUrlRef: { kind: 'env', envName: 'SINGLE_COMPANION_DATABASE_URL' },
         }],
       })}\n`,
       'utf8',

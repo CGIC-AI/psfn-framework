@@ -12,7 +12,7 @@ import {
 import { isRfc4122Uuid } from '../../shared/utils/types.js';
 import { createPostgresPool, withPostgresClient } from '../postgres.js';
 import { SHARED_SCHEMA_NAME } from './migrations.js';
-import { ensureSharedSchema } from './shared-schema.js';
+import { assertSharedSchemaReady } from './shared-schema.js';
 
 interface SocialPotRow extends QueryResultRow {
   companion_id: string;
@@ -86,6 +86,12 @@ export class PostgresSocialPotStore implements SocialPotPort {
 
   private constructor(private readonly pool: Pool) {}
 
+  /**
+   * Connect a shared-schema-pinned runtime pool. The gateway's dedicated
+   * migration authority provisions the shared schema before agents start; an
+   * ordinary companion credential lacks CREATE on the shared schema, so this
+   * store proves readiness read-only and fails closed rather than running DDL.
+   */
   static async connect(databaseUrl: string): Promise<PostgresSocialPotStore> {
     const pool = createPostgresPool(databaseUrl, {
       applicationName: 'companion-social-pot',
@@ -93,7 +99,7 @@ export class PostgresSocialPotStore implements SocialPotPort {
       schema: SHARED_SCHEMA_NAME,
     });
     try {
-      await ensureSharedSchema(pool);
+      await assertSharedSchemaReady(pool);
       return new PostgresSocialPotStore(pool);
     } catch (error) {
       await pool.end();

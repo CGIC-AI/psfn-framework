@@ -242,14 +242,6 @@ build_agent_env() {
     PSFN_TEMP_DIR \
     PWD \
     SHELL \
-    SHELL_EXEC_ALLOWED_CWD \
-    SHELL_EXEC_ALLOWLIST \
-    SHELL_EXEC_DEFAULT_MAX_OUTPUT_CHARS \
-    SHELL_EXEC_DEFAULT_TIMEOUT_MS \
-    SHELL_EXEC_ENABLED \
-    SHELL_EXEC_ENV_ALLOWLIST \
-    SHELL_EXEC_MAX_OUTPUT_CHARS \
-    SHELL_EXEC_MAX_TIMEOUT_MS \
     SHUTDOWN_FORCE_EXIT_TIMEOUT_MS \
     SYSTEM_DATA_DIR \
     TELEGRAM_PRIMARY_USER_ID \
@@ -490,13 +482,14 @@ start_gateway() {
 }
 
 spawn_agent_process() {
-  if [ -z "${POSTGRES_DATABASE_URL:-}" ]; then
+  local database_url="${1:-}"
+  if [ -z "${database_url}" ]; then
     echo "[${MODE_LABEL}] POSTGRES_DATABASE_URL is required by the launcher credential boundary" >&2
     return 1
   fi
 
   local postgres_database_url_fd
-  exec {postgres_database_url_fd}<<<"${POSTGRES_DATABASE_URL}"
+  exec {postgres_database_url_fd}<<<"${database_url}"
   local POSTGRES_DATABASE_URL_FD="${postgres_database_url_fd}"
   build_agent_env
   if [ -x "./node_modules/.bin/tsx" ]; then
@@ -533,8 +526,9 @@ export_companion_env() {
 
 # Spawn one agent for a single fleet entry.
 start_companion_agent() {
-  export_companion_env "$@"
-  spawn_agent_process
+  local database_url="${9}"
+  export_companion_env "${@:1:8}"
+  spawn_agent_process "${database_url}"
   AGENT_PIDS+=("${LAUNCHED_PID}")
 }
 
@@ -607,20 +601,20 @@ provision_companion_fleet() {
 }
 
 print_supervisor_plan() {
-  local record companion_id companion_data_dir character_card_path postgres_schema personal_workspace_path companion_auth_token session_integrity_auth_token admin_transport_socket
+  local record companion_id companion_data_dir character_card_path postgres_schema personal_workspace_path companion_auth_token session_integrity_auth_token database_url admin_transport_socket
   echo "[supervisor] dry-run spawn plan (${#COMPANION_PLAN[@]} companion(s)):"
   echo "[supervisor]   gateway: ${SOCKET_PATH}"
   for record in "${COMPANION_PLAN[@]}"; do
-    IFS=$'\t' read -r companion_id companion_data_dir character_card_path postgres_schema personal_workspace_path companion_auth_token session_integrity_auth_token admin_transport_socket <<< "${record}"
+    IFS=$'\t' read -r companion_id companion_data_dir character_card_path postgres_schema personal_workspace_path companion_auth_token session_integrity_auth_token database_url admin_transport_socket <<< "${record}"
     echo "[supervisor]   agent: companionId=${companion_id} schema=${postgres_schema} dataDir=${companion_data_dir} workspace=${personal_workspace_path} card=${character_card_path} adminSocket=${admin_transport_socket}"
   done
   echo "[supervisor]   Garden: one fleet operator port=${LAUNCHER_ADMIN_PORT} targets=${#COMPANION_PLAN[@]}"
 }
 
 prepare_fleet_admin_transports() {
-  local record companion_id companion_data_dir character_card_path postgres_schema personal_workspace_path companion_auth_token session_integrity_auth_token admin_transport_socket
+  local record companion_id companion_data_dir character_card_path postgres_schema personal_workspace_path companion_auth_token session_integrity_auth_token database_url admin_transport_socket
   for record in "${COMPANION_PLAN[@]}"; do
-    IFS=$'\t' read -r companion_id companion_data_dir character_card_path postgres_schema personal_workspace_path companion_auth_token session_integrity_auth_token admin_transport_socket <<< "${record}"
+    IFS=$'\t' read -r companion_id companion_data_dir character_card_path postgres_schema personal_workspace_path companion_auth_token session_integrity_auth_token database_url admin_transport_socket <<< "${record}"
     if [ -e "${admin_transport_socket}" ] || [ -L "${admin_transport_socket}" ]; then
       if [ ! -S "${admin_transport_socket}" ]; then
         echo "[supervisor] refusing to replace non-socket admin transport path for ${companion_id}: ${admin_transport_socket}" >&2
@@ -632,16 +626,16 @@ prepare_fleet_admin_transports() {
 }
 
 start_companion_agents() {
-  local record companion_id companion_data_dir character_card_path postgres_schema personal_workspace_path companion_auth_token session_integrity_auth_token admin_transport_socket
+  local record companion_id companion_data_dir character_card_path postgres_schema personal_workspace_path companion_auth_token session_integrity_auth_token database_url admin_transport_socket
   for record in "${COMPANION_PLAN[@]}"; do
-    IFS=$'\t' read -r companion_id companion_data_dir character_card_path postgres_schema personal_workspace_path companion_auth_token session_integrity_auth_token admin_transport_socket <<< "${record}"
+    IFS=$'\t' read -r companion_id companion_data_dir character_card_path postgres_schema personal_workspace_path companion_auth_token session_integrity_auth_token database_url admin_transport_socket <<< "${record}"
     echo "[supervisor] starting agent for companion ${companion_id} (schema=${postgres_schema}, dataDir=${companion_data_dir})"
-    start_companion_agent "${companion_id}" "${companion_data_dir}" "${character_card_path}" "${postgres_schema}" "${personal_workspace_path}" "${companion_auth_token}" "${session_integrity_auth_token}" "${admin_transport_socket}"
+    start_companion_agent "${companion_id}" "${companion_data_dir}" "${character_card_path}" "${postgres_schema}" "${personal_workspace_path}" "${companion_auth_token}" "${session_integrity_auth_token}" "${admin_transport_socket}" "${database_url}"
   done
 }
 
 wait_for_fleet_admin_transports() {
-  local attempt record companion_id companion_data_dir character_card_path postgres_schema personal_workspace_path companion_auth_token session_integrity_auth_token admin_transport_socket
+  local attempt record companion_id companion_data_dir character_card_path postgres_schema personal_workspace_path companion_auth_token session_integrity_auth_token database_url admin_transport_socket
   local index ready_count
   echo "[supervisor] waiting for ${#COMPANION_PLAN[@]} validated agent admin transport(s)..."
   for attempt in $(seq 1 200); do
@@ -652,7 +646,7 @@ wait_for_fleet_admin_transports() {
     index=0
     ready_count=0
     for record in "${COMPANION_PLAN[@]}"; do
-      IFS=$'\t' read -r companion_id companion_data_dir character_card_path postgres_schema personal_workspace_path companion_auth_token session_integrity_auth_token admin_transport_socket <<< "${record}"
+      IFS=$'\t' read -r companion_id companion_data_dir character_card_path postgres_schema personal_workspace_path companion_auth_token session_integrity_auth_token database_url admin_transport_socket <<< "${record}"
       if ! kill -0 "${AGENT_PIDS[${index}]}" 2>/dev/null; then
         echo "[supervisor] agent ${companion_id} exited before admin transport became ready" >&2
         return 1
@@ -670,7 +664,7 @@ wait_for_fleet_admin_transports() {
   done
 
   for record in "${COMPANION_PLAN[@]}"; do
-    IFS=$'\t' read -r companion_id companion_data_dir character_card_path postgres_schema personal_workspace_path companion_auth_token session_integrity_auth_token admin_transport_socket <<< "${record}"
+    IFS=$'\t' read -r companion_id companion_data_dir character_card_path postgres_schema personal_workspace_path companion_auth_token session_integrity_auth_token database_url admin_transport_socket <<< "${record}"
     if [ ! -S "${admin_transport_socket}" ]; then
       echo "[supervisor] agent admin transport missing for ${companion_id}: ${admin_transport_socket}" >&2
     fi

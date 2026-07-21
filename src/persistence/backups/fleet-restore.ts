@@ -72,7 +72,7 @@ import {
 } from '../postgres/fleet-auth/authority-floor.js';
 import {
   assertFleetAuthBackupRestorePrivileges,
-  type FleetAuthDatabaseRoles,
+  type FleetAuthFamilyDatabaseRoles,
 } from '../postgres/fleet-auth/schema.js';
 import {
   restoreFleetAuthSnapshot,
@@ -182,13 +182,16 @@ export interface FleetAuthConsistentFamilyRestoreVerificationOptions {
   manifestPath: string;
   fleetManifestPath: string;
   scratchDatabaseUrl: string;
-  scratchSchemaOwnerDatabaseUrl: string;
-  roles: FleetAuthDatabaseRoles;
+  scratchFleetAuthSchemaOwnerDatabaseUrl: string;
+  scratchSchemaOwnerDatabaseUrls: Readonly<Record<string, string>>;
+  roles: FleetAuthFamilyDatabaseRoles;
   authorityFloors: FleetAuthAuthorityFloorStore;
   activationGeneration: number;
   pgRestoreBinary?: string;
   psqlBinary?: string;
 }
+
+type FleetAuthConsistentFamilyRestoreDisposition = 'commit' | 'verify-rollback';
 
 const FLEET_ARTIFACT_TIMESTAMP_PATTERN = /^\d{8}T\d{9}Z$/u;
 
@@ -477,7 +480,7 @@ function parseTocNamespace(line: string): string | undefined {
 async function assertDumpScope(
   dumpPath: string,
   unit: FleetBackupUnitOutcome,
-  postgres: FleetRestorePostgresOptions,
+  postgres: Pick<FleetRestorePostgresOptions, 'pgRestoreBinary'>,
 ): Promise<string[]> {
   const expectedSchemas = expectedUnitSchemas(unit);
   if (unit.kind !== 'group' && !basename(dumpPath).endsWith(`.${expectedSchemas[0]}.dump`)) {
@@ -593,17 +596,19 @@ export async function restoreFleetAuthConsistentFamily(options: {
   manifestPath: string;
   backupRestoreDatabaseUrl: string;
   fleetAuthSchemaOwnerDatabaseUrl: string;
-  roles: FleetAuthDatabaseRoles;
+  roles: FleetAuthFamilyDatabaseRoles;
   authorityFloors: FleetAuthAuthorityFloorStore;
   activationGeneration: number;
   restoredAt?: string;
   schemaOwnerDatabaseUrls: Readonly<Record<string, string>>;
   pgRestoreBinary?: string;
   psqlBinary?: string;
+  disposition?: FleetAuthConsistentFamilyRestoreDisposition;
   faultInjection?: (
     stage: 'after_database_preflight' | 'after_fleet_auth_restore',
   ) => void | Promise<void>;
 }): Promise<FleetAuthConsistentFamilyRestoreResult> {
+  const disposition = options.disposition ?? 'commit';
   const manifest = verifyFleetAuthBackupManifest(options.manifestPath);
   const familyDir = dirname(resolve(options.manifestPath));
   const schemaArtifacts = manifest.artifacts.filter(
@@ -686,16 +691,26 @@ export async function restoreFleetAuthConsistentFamily(options: {
         contracts: accessContracts,
         ownerRole: options.roles.backupRestore,
       });
-      await removeFleetRestoreDatabaseMarker(postgres, operation);
-      const floor = options.authorityFloors.read();
-      return {
-        restoredSchemas: expectedSchemas,
-        fleetAuth: {
-          importedRows: 0,
-          authorityGeneration: floor.trustedHost.authorityGeneration,
-          restoreCheckpoint: floor.trustedHost.restoreCheckpoint,
-        },
-      };
+      if (disposition === 'verify-rollback') {
+        await rollbackFleetAuthOwnedSchemas({
+          postgres,
+          contracts: accessContracts,
+          ownerDatabaseUrls: options.schemaOwnerDatabaseUrls,
+        });
+        await removeFleetRestoreDatabaseMarker(postgres, operation);
+        schemaState = 'none';
+      } else {
+        await removeFleetRestoreDatabaseMarker(postgres, operation);
+        const floor = options.authorityFloors.read();
+        return {
+          restoredSchemas: expectedSchemas,
+          fleetAuth: {
+            importedRows: 0,
+            authorityGeneration: floor.trustedHost.authorityGeneration,
+            restoreCheckpoint: floor.trustedHost.restoreCheckpoint,
+          },
+        };
+      }
     }
     if (schemaState !== 'none') {
       throw new Error('Fleet auth family restore requires absent target schemas before mutation');
@@ -735,7 +750,7 @@ export async function restoreFleetAuthConsistentFamily(options: {
         await backfillRestoredMemorySubjectProjections(restoredPostgres, [schema]);
       }
 
-      const fleetAuth = await restoreFleetAuthSnapshot({
+      const fleetAuthRestoreOptions = {
         manifestPath: options.manifestPath,
         databaseUrl: options.backupRestoreDatabaseUrl,
         schemaOwnerDatabaseUrl: options.fleetAuthSchemaOwnerDatabaseUrl,
@@ -743,8 +758,21 @@ export async function restoreFleetAuthConsistentFamily(options: {
         authorityFloors: options.authorityFloors,
         activationGeneration: options.activationGeneration,
         ...(options.restoredAt ? { restoredAt: options.restoredAt } : {}),
-      });
+      };
+      const fleetAuth = disposition === 'verify-rollback'
+        ? await verifyFleetAuthSnapshotRestore(fleetAuthRestoreOptions)
+        : await restoreFleetAuthSnapshot(fleetAuthRestoreOptions);
       await options.faultInjection?.('after_fleet_auth_restore');
+      if (disposition === 'verify-rollback') {
+        await rollbackFleetAuthOwnedSchemas({
+          postgres,
+          contracts: accessContracts,
+          ownerDatabaseUrls: options.schemaOwnerDatabaseUrls,
+        });
+        await removeFleetRestoreDatabaseMarker(postgres, operation);
+        markerPrepared = false;
+        return { restoredSchemas, fleetAuth };
+      }
       await commitFleetRestoreDatabaseMarker(postgres, operation);
       await removeFleetRestoreDatabaseMarker(postgres, operation);
       return { restoredSchemas, fleetAuth };
@@ -782,73 +810,120 @@ function assertDedicatedRestoreVerificationDatabase(databaseUrl: string): string
   return databaseName;
 }
 
-async function dropScratchSchemas(
-  databaseUrl: string,
-  schemas: readonly string[],
-  expectedDatabaseName: string,
-  psqlBinary?: string,
-): Promise<void> {
-  const validated = [...new Set(schemas.map(assertValidPostgresSchemaName))];
-  const expectedDatabaseLiteral = `'${expectedDatabaseName.replaceAll("'", "''")}'`;
-  const databaseGuard = [
-    'DO $psfn_restore_verify$',
-    'BEGIN',
-    `  IF current_database() IS DISTINCT FROM ${expectedDatabaseLiteral} THEN`,
-    "    RAISE EXCEPTION 'Fleet auth restore verification connected to the wrong database'",
-    '      USING DETAIL = current_database();',
-    '  END IF;',
-    'END',
-    '$psfn_restore_verify$',
-  ].join('\n');
-  const sql = [
-    databaseGuard,
-    ...validated.map(schema => `DROP SCHEMA IF EXISTS "${schema.replaceAll('"', '""')}" CASCADE`),
-  ].join(';\n');
-  const { connectionArg, password } = sanitizePostgresConnection(
-    databaseUrl,
-    'Fleet auth restore verification',
+async function verifyRecoveryFamilyExactlyMatchesCoordinator(options: {
+  coordinatorManifestPath: string;
+  recoveryManifest: ParsedFleetManifest;
+  roles: FleetAuthFamilyDatabaseRoles;
+  pgRestoreBinary?: string;
+}): Promise<void> {
+  const coordinator = verifyFleetAuthBackupManifest(options.coordinatorManifestPath);
+  const coordinatorArtifacts = coordinator.artifacts.filter(
+    (artifact): artifact is typeof artifact & {
+      kind: 'companion' | 'shared';
+      postgresSchema: string;
+    } => (artifact.kind === 'companion' || artifact.kind === 'shared')
+      && typeof artifact.postgresSchema === 'string',
   );
-  try {
-    await execFileAsync(psqlBinary?.trim() || 'psql', [
-      '--no-password',
-      '--no-psqlrc',
-      '--set=ON_ERROR_STOP=1',
-      '--dbname',
-      connectionArg,
-      '--command',
-      sql,
-    ], {
-      env: createSanitizedPostgresChildEnv(password),
-      maxBuffer: POSTGRES_COMMAND_MAX_BUFFER_BYTES,
+  const coordinatorSchemas = coordinatorArtifacts.map(artifact => artifact.postgresSchema);
+  validateFleetAuthSchemaAccessContracts(
+    coordinatorArtifacts.map(artifact => ({
+      kind: artifact.kind,
+      schema: artifact.postgresSchema,
+      ownerRole: artifact.ownerRole ?? '',
+      runtimeRoles: artifact.runtimeRoles ?? [],
+    })),
+    coordinatorSchemas,
+    options.roles,
+  );
+  const expected = coordinatorArtifacts.map(artifact => ({
+    key: `${artifact.kind}:${artifact.postgresSchema}`,
+    artifact,
+  })).sort((left, right) => left.key.localeCompare(right.key));
+  if (new Set(expected.map(entry => entry.key)).size !== expected.length) {
+    throw new Error('Fleet auth coordinator schema family contains duplicate slices');
+  }
+
+  const actual: Array<{ key: string; schema: string; dumpPath: string }> = [];
+  const companionIds = new Set<string>();
+  for (const unit of options.recoveryManifest.units) {
+    if (unit.kind === 'group') {
+      throw new Error('Fleet auth restore verification requires schema-scoped recovery artifacts');
+    }
+    const schemas = expectedUnitSchemas(unit);
+    if (schemas.length !== 1) {
+      throw new Error('Fleet auth recovery slice must name exactly one PostgreSQL schema');
+    }
+    if (unit.kind === 'companion') {
+      if (typeof unit.companionId !== 'string' || !unit.companionId
+        || companionIds.has(unit.companionId)) {
+        throw new Error('Fleet auth recovery family requires distinct companion identities');
+      }
+      companionIds.add(unit.companionId);
+    }
+    const schema = schemas[0];
+    const artifactDir = resolveArtifactDir(options.recoveryManifest, unit);
+    if (unit.kind === 'companion') {
+      verifyCompanionTreeSnapshot(artifactDir);
+      verifyWorkspaceTreeSnapshot(artifactDir);
+    } else {
+      verifySystemConfigSnapshot(artifactDir);
+      verifyWorkspaceTreeSnapshot(artifactDir);
+      const contents = verifyBackupContentsManifest(artifactDir);
+      if (contents.kubernetesHelmRecovery === 'required') {
+        verifyKubernetesHelmSnapshot(artifactDir);
+      }
+    }
+    const dumpPath = findDatabaseDump(artifactDir);
+    await assertDumpScope(dumpPath, unit, {
+      ...(options.pgRestoreBinary ? { pgRestoreBinary: options.pgRestoreBinary } : {}),
     });
-  } catch (error) {
-    const rawMessage = error instanceof Error ? error.message : String(error);
-    throw new Error(
-      `Fleet auth restore verification could not reset scratch schemas: ${redactPostgresCredential(rawMessage, password)}`,
-    );
+    actual.push({
+      key: `${unit.kind === 'cluster' ? 'shared' : 'companion'}:${schema}`,
+      schema,
+      dumpPath,
+    });
+  }
+  actual.sort((left, right) => left.key.localeCompare(right.key));
+  if (new Set(actual.map(entry => entry.key)).size !== actual.length
+    || JSON.stringify(actual.map(entry => entry.key)) !== JSON.stringify(expected.map(entry => entry.key))) {
+    throw new Error('Fleet auth coordinator and recovery schema families must match exactly');
+  }
+  for (let index = 0; index < actual.length; index += 1) {
+    const recoveryDigest = createHash('sha256')
+      .update(readFileSync(actual[index].dumpPath))
+      .digest('hex');
+    if (recoveryDigest !== expected[index].artifact.sha256) {
+      throw new Error(
+        `Fleet auth recovery dump for ${actual[index].schema} is not bound to the coordinator family`,
+      );
+    }
   }
 }
 
 /**
- * Exercise the canonical recovery family through its real restore entrypoints.
- * Companion/shared schemas and all filesystem trees are restored into isolated
- * scratch targets. The fleet_auth import and reconciliation SQL is executed in
- * the same scratch database but rolled back, while a clone of the non-restored
- * authority floor absorbs the monotonic prepare step. No production floor or
- * destination is mutated by verification.
+ * Exercise the canonical recovery family through its real owner-authenticated
+ * restore entrypoint. Recovery filesystem/session/system-config/Helm artifacts
+ * are verified read-only before the dedicated scratch database is touched.
+ * Schema restore, access-contract application, isolation, and fleet_auth import
+ * then run through `restoreFleetAuthConsistentFamily` and roll back. No
+ * production floor, database, or filesystem destination is mutated.
  */
 export async function verifyFleetAuthConsistentFamilyRestore(
   options: FleetAuthConsistentFamilyRestoreVerificationOptions,
 ): Promise<void> {
-  const scratchDatabaseName = assertDedicatedRestoreVerificationDatabase(options.scratchDatabaseUrl);
-  const manifest = parseFleetManifest(options.fleetManifestPath);
-  if (manifest.mode !== 'per-companion') {
+  assertDedicatedRestoreVerificationDatabase(options.scratchDatabaseUrl);
+  const recoveryManifest = parseFleetManifest(options.fleetManifestPath);
+  if (recoveryManifest.mode !== 'per-companion') {
     throw new Error('Fleet auth restore verification requires schema-scoped recovery artifacts');
   }
-  const expectedSchemas = manifest.units.flatMap(unit => expectedUnitSchemas(unit));
+  await verifyRecoveryFamilyExactlyMatchesCoordinator({
+    coordinatorManifestPath: options.manifestPath,
+    recoveryManifest,
+    roles: options.roles,
+    ...(options.pgRestoreBinary ? { pgRestoreBinary: options.pgRestoreBinary } : {}),
+  });
   const scratchRoot = mkdtempSync(join(tmpdir(), 'psfn-fleet-auth-restore-verify-'));
   const floorRoot = join(scratchRoot, 'authority-floor');
-  let failure: unknown;
   try {
     mkdirSync(floorRoot, { recursive: true, mode: 0o700 });
     copyFileSync(
@@ -856,73 +931,21 @@ export async function verifyFleetAuthConsistentFamilyRestore(
       join(floorRoot, FLEET_AUTH_AUTHORITY_FLOOR_FILE_NAME),
     );
     const scratchFloors = new FleetAuthAuthorityFloorStore(floorRoot);
-    await dropScratchSchemas(
-      options.scratchDatabaseUrl,
-      expectedSchemas,
-      scratchDatabaseName,
-      options.psqlBinary,
-    );
-    for (const unit of manifest.units.filter(
-      (candidate): candidate is typeof candidate & { companionId: string } => (
-        candidate.kind === 'companion' && typeof candidate.companionId === 'string'
-      ),
-    )) {
-      await restoreFleetCompanionSlice({
-        fleetManifestPath: options.fleetManifestPath,
-        companionId: unit.companionId,
-        destinations: {
-          companionDataDir: join(scratchRoot, 'companions', unit.companionId, 'data'),
-          personalWorkspacePath: join(scratchRoot, 'companions', unit.companionId, 'workspace'),
-        },
-        postgres: {
-          databaseUrl: options.scratchDatabaseUrl,
-          ...(options.pgRestoreBinary ? { pgRestoreBinary: options.pgRestoreBinary } : {}),
-          ...(options.psqlBinary ? { psqlBinary: options.psqlBinary } : {}),
-        },
-      });
-    }
-    const clusterRestore = await restoreFleetClusterArtifact({
-      fleetManifestPath: options.fleetManifestPath,
-      destinations: {
-        systemDataDir: join(scratchRoot, 'system-data'),
-        sharedWorkspacePath: join(scratchRoot, 'shared-workspace'),
-      },
-      postgres: {
-        databaseUrl: options.scratchDatabaseUrl,
-        ...(options.pgRestoreBinary ? { pgRestoreBinary: options.pgRestoreBinary } : {}),
-        ...(options.psqlBinary ? { psqlBinary: options.psqlBinary } : {}),
-      },
-    });
-    const clusterContents = verifyBackupContentsManifest(clusterRestore.artifactDir);
-    if (clusterContents.kubernetesHelmRecovery === 'required') {
-      verifyKubernetesHelmSnapshot(clusterRestore.artifactDir);
-    }
-    await verifyFleetAuthSnapshotRestore({
+    await restoreFleetAuthConsistentFamily({
       manifestPath: options.manifestPath,
-      databaseUrl: options.scratchDatabaseUrl,
-      schemaOwnerDatabaseUrl: options.scratchSchemaOwnerDatabaseUrl,
+      backupRestoreDatabaseUrl: options.scratchDatabaseUrl,
+      fleetAuthSchemaOwnerDatabaseUrl: options.scratchFleetAuthSchemaOwnerDatabaseUrl,
       roles: options.roles,
       authorityFloors: scratchFloors,
       activationGeneration: options.activationGeneration,
+      schemaOwnerDatabaseUrls: options.scratchSchemaOwnerDatabaseUrls,
+      disposition: 'verify-rollback',
+      ...(options.pgRestoreBinary ? { pgRestoreBinary: options.pgRestoreBinary } : {}),
+      ...(options.psqlBinary ? { psqlBinary: options.psqlBinary } : {}),
     });
-  } catch (error) {
-    failure = error;
-  }
-  try {
-    await dropScratchSchemas(
-      options.scratchDatabaseUrl,
-      expectedSchemas,
-      scratchDatabaseName,
-      options.psqlBinary,
-    );
-  } catch (cleanupError) {
-    failure = failure
-      ? new AggregateError([failure, cleanupError], 'Fleet auth restore verification and cleanup failed')
-      : cleanupError;
   } finally {
     rmSync(scratchRoot, { recursive: true, force: true });
   }
-  if (failure) throw failure;
 }
 
 interface TargetSchemaState {

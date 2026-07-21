@@ -256,6 +256,24 @@ const TEXT_REFERENCE_ALLOWLIST = [
     classification: 'fail-closed-regression',
     reason: 'The assertion message states the security boundary.',
   },
+  {
+    path: 'src/app/maintenance/verify-shell-sandbox-runtime.ts',
+    contains: "{ name: 'sqlite3', probe: 'printf \"tool=sqlite3 \"; sqlite3 --version', expect: 'tool=sqlite3 3.' }",
+    classification: 'sandbox-cli-tool',
+    reason: 'The sqlite3 CLI is a companion analysis tool inside the network-less shell sandbox, not a runtime persistence backend.',
+  },
+  {
+    path: 'src/core/agent/tool-surface/descriptions/catalog-boundary-contracts.ts',
+    contains: 'unzip/zip, sqlite3, pdftotext (poppler)',
+    classification: 'sandbox-cli-tool',
+    reason: 'The shell tool description lists the image CLI toolset; sqlite3 here is local-file analysis tooling, not a store.',
+  },
+  {
+    path: 'src/core/tools/analysis-workbench/prompt.ts',
+    contains: '`pdftotext`, `sqlite3`, `python3`',
+    classification: 'sandbox-cli-tool',
+    reason: 'The workbench prompt names the sandbox CLI toolset; sqlite3 here is local-file analysis tooling, not a store.',
+  },
 ];
 
 function parseRoot(argv) {

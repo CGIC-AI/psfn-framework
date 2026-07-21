@@ -2488,7 +2488,17 @@ export const POSTGRES_OBSERVER_EVAL_SIDECAR_MIGRATIONS = [
 //   9 — companion_social_pot (jp36.4.1.1)
 //  10 — speaking arbiter: reservations, egress leases, per-channel room episodes
 //       (jp36.5.1.1 gateway speaking arbiter, two-phase reservation/egress lease)
+//  11 — speaking arbiter charge association
 export const SHARED_SCHEMA_NAME = 'shared';
+
+/** Ledger versions installed by POSTGRES_SHARED_MIGRATIONS (excluding wiki versions 3 and 8). */
+export const POSTGRES_SHARED_BASE_MIGRATION_VERSIONS = [
+  1, 2, 4, 5, 6, 7, 9, 10, 11,
+] as const;
+/** Complete ledger across the base and shared-wiki chains. */
+export const POSTGRES_SHARED_ALL_MIGRATION_VERSIONS = [
+  1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11,
+] as const;
 
 export const POSTGRES_SHARED_MIGRATIONS: readonly string[] = [
   // Version ledger for the shared schema. Independent of the per-companion
@@ -2942,9 +2952,9 @@ export const POSTGRES_SHARED_MIGRATIONS: readonly string[] = [
 // POSTGRES_SHARED_MIGRATIONS: it requires the pgvector extension, and the base
 // shared chain must stay runnable on a plain Postgres so pgvector-free shared
 // consumers (companion_presence) never grow a hidden extension dependency.
-// Wiki surfaces provision it via `ensureSharedWikiSchema`, which runs the base
-// chain first and then this list under the same advisory lock, registering
-// version 3 in the same shared_schema_migrations ledger.
+// Gateway startup provisions it after the base chain under the same advisory
+// lock, registering versions 3 and 8 in the same shared_schema_migrations ledger.
+// Ordinary runtime wiki surfaces only verify that the complete chain exists.
 //
 // Column shape mirrors the per-companion `wiki_document_chunks` table closely
 // (plus site_id) so chunk query code stays uniform across both projections.

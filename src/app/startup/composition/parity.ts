@@ -49,10 +49,10 @@ import {
 } from '../../../persistence/layout.js';
 import { createSystemTool } from '../../../core/tools/lifecycle.js';
 import {
-  wireHeartbeatRuntime as wireCoreHeartbeatRuntime,
-  type HeartbeatAgent,
-  type HeartbeatRuntimeOptions,
-} from '../../../core/scheduler/heartbeat-runtime.js';
+  wireReflectionRuntime as wireCoreReflectionRuntime,
+  type ReflectionAgent,
+  type ReflectionRuntimeOptions,
+} from '../../../core/scheduler/reflection-runtime.js';
 
 const log = createComponentLogger('SharedWiring');
 
@@ -210,24 +210,24 @@ export function wireFilesystemToolsRuntime(
 }
 
 /**
- * Wire the multi-template heartbeat/reflection system.
+ * Wire the multi-template reflection system.
  *
  * Keep this startup composition path delegated to the canonical scheduler
  * runtime. The older inline implementation diverged from
- * `core/scheduler/heartbeat-template-runtime`, which meant production
+ * `core/scheduler/reflection-template-runtime`, which meant production
  * scheduled reflections missed memory/contact provenance even though the
  * standalone runtime tests passed.
  */
-export async function wireHeartbeatRuntime(
+export async function wireReflectionRuntime(
   target: ToolRegistrarTarget,
   scheduler: Scheduler,
-  agentLoop: HeartbeatAgent,
+  agentLoop: ReflectionAgent,
   sender: MessageSender,
   dataDir: string,
   heartbeatChannelId?: string,
-  runtimeOptions: HeartbeatRuntimeOptions = {},
+  runtimeOptions: ReflectionRuntimeOptions = {},
 ): Promise<void> {
-  await wireCoreHeartbeatRuntime(
+  await wireCoreReflectionRuntime(
     target,
     scheduler,
     agentLoop,

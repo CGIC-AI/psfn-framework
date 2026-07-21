@@ -26,7 +26,7 @@ import {
   resolveBackupsDir,
   resolveCharacterCardHistoryPath,
   resolveContactsDir,
-  resolveHeartbeatPolicyPath,
+  resolveReflectionPolicyPath,
   resolveIdentityAssetsDir,
   resolveLastActiveSessionPath,
   resolveNorthStarPath,
@@ -416,11 +416,13 @@ function buildCompanionSpecs(options: {
       ]),
     },
     {
+      // This cutover id and the source filenames are persisted compatibility
+      // values. Only the runtime source terminology is renamed here.
       id: 'companion.heartbeat_policy',
       owner: 'companion',
       kind: 'file',
-      description: 'heartbeat policy',
-      targetPath: resolveHeartbeatPolicyPath(options.companionDataDir),
+      description: 'reflection policy (legacy heartbeat-policy.json filename)',
+      targetPath: resolveReflectionPolicyPath(options.companionDataDir),
       sourceCandidates: uniqueResolvedPaths([
         join(options.legacyCompanionDir, 'heartbeat-policy.json'),
         join(options.legacySharedDataDir, 'heartbeat-policy.json'),

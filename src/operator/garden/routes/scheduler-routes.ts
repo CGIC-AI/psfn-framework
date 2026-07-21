@@ -1,5 +1,5 @@
 import { sendJson } from '../../../channels/backplane/http/primitives.js';
-import type { ReflectionTemplate } from '../../../core/scheduler/heartbeat-policy.js';
+import type { ReflectionTemplate } from '../../../core/scheduler/reflection-policy.js';
 import type { ScheduledTask, TaskType } from '../../../core/scheduler/types.js';
 import type { AdminSchedulerApi } from '../admin-contract.js';
 import { parseAdminJsonBody } from '../request-body.js';

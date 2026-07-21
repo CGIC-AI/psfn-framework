@@ -22,7 +22,7 @@ import { createTestPostgresContactStore } from '../../test-support/postgres-cont
 import { runWithRequestContext } from '../../primitives/llm/request-context.js';
 import { __test as tokenTestUtils } from '../../primitives/llm/tokens.js';
 import { createDefaultMemoryRetrievalPolicy } from '../../system/config/memory-retrieval-policy.js';
-import { retrieveReflectionMemoryBlock } from '../../core/scheduler/heartbeat-template-runtime/reflection-contact-context.js';
+import { retrieveReflectionMemoryBlock } from '../../core/scheduler/reflection-template-runtime/reflection-contact-context.js';
 
 // ── Helpers ──
 

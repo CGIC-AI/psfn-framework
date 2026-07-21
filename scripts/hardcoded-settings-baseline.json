@@ -2248,67 +2248,67 @@
       "value": "6 * 60 * 60_000"
     },
     {
-      "file": "src/core/scheduler/heartbeat-policy.ts",
+      "file": "src/core/scheduler/reflection-policy.ts",
       "name": "MAX_INTERVAL_MS",
       "value": "604_800_000"
     },
     {
-      "file": "src/core/scheduler/heartbeat-policy.ts",
+      "file": "src/core/scheduler/reflection-policy.ts",
       "name": "MAX_PROMPT_LENGTH",
       "value": "2000"
     },
     {
-      "file": "src/core/scheduler/heartbeat-policy.ts",
+      "file": "src/core/scheduler/reflection-policy.ts",
       "name": "MAX_TEMPLATES",
       "value": "20"
     },
     {
-      "file": "src/core/scheduler/heartbeat-policy.ts",
+      "file": "src/core/scheduler/reflection-policy.ts",
       "name": "MIN_INTERVAL_MS",
       "value": "300_000"
     },
     {
-      "file": "src/core/scheduler/heartbeat-policy.ts",
+      "file": "src/core/scheduler/reflection-policy.ts",
       "name": "MIN_PROMPT_LENGTH",
       "value": "10"
     },
     {
-      "file": "src/core/scheduler/heartbeat-post-turn-runtime.ts",
+      "file": "src/core/scheduler/post-turn-runtime.ts",
       "name": "INTENTION_FOLLOW_UP_ACTIVATION_MIN_INTERVAL_MS",
       "value": "5 * 60_000"
     },
     {
-      "file": "src/core/scheduler/heartbeat-template-runtime.ts",
+      "file": "src/core/scheduler/reflection-template-runtime.ts",
       "name": "MIN_SCHEDULED_TEMPLATE_GAP_MS",
       "value": "60_000"
     },
     {
-      "file": "src/core/scheduler/heartbeat-template-runtime.ts",
+      "file": "src/core/scheduler/reflection-template-runtime.ts",
       "name": "TEMPLATE_EXECUTION_BURST_LIMIT",
       "value": "4"
     },
     {
-      "file": "src/core/scheduler/heartbeat-template-runtime.ts",
+      "file": "src/core/scheduler/reflection-template-runtime.ts",
       "name": "TEMPLATE_EXECUTION_COOLDOWN_MS",
       "value": "10 * 60_000"
     },
     {
-      "file": "src/core/scheduler/heartbeat-template-runtime/prompt-formatting.ts",
+      "file": "src/core/scheduler/reflection-template-runtime/prompt-formatting.ts",
       "name": "MAX_UNSUPPORTED_CLAIM_FLAGS",
       "value": "4"
     },
     {
-      "file": "src/core/scheduler/heartbeat-template-runtime/reflection-contact-context.ts",
+      "file": "src/core/scheduler/reflection-template-runtime/reflection-contact-context.ts",
       "name": "REFLECTION_CONTACT_EMOTIONAL_TIME_SERIES_LIMIT",
       "value": "8"
     },
     {
-      "file": "src/core/scheduler/heartbeat-template-runtime/reflection-contact-context.ts",
+      "file": "src/core/scheduler/reflection-template-runtime/reflection-contact-context.ts",
       "name": "REFLECTION_MEMORY_EXTRACTION_DRAIN_TIMEOUT_MS",
       "value": "2_500"
     },
     {
-      "file": "src/core/scheduler/heartbeat-template-runtime/runtime-helpers.ts",
+      "file": "src/core/scheduler/reflection-template-runtime/runtime-helpers.ts",
       "name": "REFLECTION_NOVELTY_ENTRY_SCAN_LIMIT",
       "value": "50"
     },

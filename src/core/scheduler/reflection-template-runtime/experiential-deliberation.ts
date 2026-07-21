@@ -1,5 +1,5 @@
 import type { LLMProviderPort } from '../../agent/contracts.js';
-import type { ReflectionTemplate } from '../heartbeat-policy.js';
+import type { ReflectionTemplate } from '../reflection-policy.js';
 import { runDeliberation } from '../../../primitives/llm/deliberation.js';
 import type { DeliberationResult, DeliberationStageDefinition } from '../../../primitives/llm/deliberation.js';
 import type { ValuesDeliberationMetadata } from '../../../faculties/values/store.js';

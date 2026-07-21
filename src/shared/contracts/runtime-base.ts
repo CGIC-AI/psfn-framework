@@ -323,7 +323,7 @@ export interface LLMRequestMetadata {
  * audit reason and remain limited to safe registered lighting. Fail closed:
  * absence is treated as unknown provenance.
  *   - 'human'        live human speaker (speakerRole === 'user')
- *   - 'self_directed' scheduler-driven heartbeat/reflection (internal: channel)
+ *   - 'self_directed' scheduler-driven reflection (internal: channel)
  *   - 'system'       system-injected turn (system: author, e.g. deferred handoff)
  */
 export const REQUESTER_PROVENANCE_VALUES = ['human', 'self_directed', 'system'] as const;
@@ -356,7 +356,7 @@ export interface CorrelationMetadata extends LLMRequestMetadata {
 
 /**
  * E1.7: self-contained ConversationScope decision for scheduler-dispatched
- * reflection/heartbeat turns. Deliberately structural (no core/session import)
+ * reflection turns. Deliberately structural (no core/session import)
  * so the shared contract layer stays clean. A `group` hint makes the reflection
  * reflect on the ROOM: no single canonical contact is bound and continuity keys
  * become room-based. A `dm` hint (or absence) leaves reflection binding
@@ -455,7 +455,7 @@ export interface MessageRoutingMetadata {
   };
   /**
    * E1.7: explicit ConversationScope decision for scheduler-dispatched
-   * reflection/heartbeat turns. When present with `kind: 'group'`, the turn
+   * reflection turns. When present with `kind: 'group'`, the turn
    * pipeline reflects on the ROOM (`roomId`), binds no single canonical contact,
    * and derives room-based continuity fallback keys. Absent (or `kind: 'dm'`)
    * leaves the existing DM/internal reflection binding byte-identical.

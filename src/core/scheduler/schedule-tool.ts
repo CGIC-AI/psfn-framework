@@ -35,11 +35,11 @@ import { toErrorMessage } from '../../shared/utils/errors.js';
 import type { Scheduler } from './scheduler.js';
 import {
   resolveConsolidatedReflectionTemplateId,
-  type HeartbeatPolicy,
-  type HeartbeatPolicyStore,
+  type ReflectionPolicy,
+  type ReflectionPolicyStore,
   type ReflectionDeliberationConfig,
   type ReflectionTemplate,
-} from './heartbeat-policy.js';
+} from './reflection-policy.js';
 import type { MemoryWriter } from '../../faculties/memory/writer.js';
 import {
   registerScheduledPromptTask,
@@ -105,7 +105,7 @@ interface ScheduleTaskAgentLoop {
   waitForIdle?(): Promise<void>;
 }
 
-interface HeartbeatRunTemplateResult {
+interface ReflectionRunTemplateResult {
   templateId: string;
   templateName: string;
   reflection: string;
@@ -162,12 +162,12 @@ export interface ScheduleToolOptions {
   scheduler: Scheduler;
   agentLoop: ScheduleTaskAgentLoop;
   sender: MessageSender;
-  heartbeatPolicyStore: HeartbeatPolicyStore;
+  reflectionPolicyStore: ReflectionPolicyStore;
   syncReflectionTasks: () => void;
   runTemplate: (
     templateId: string,
     options?: { sendToDiscordOverride?: boolean; deferIfBusy?: boolean },
-  ) => Promise<HeartbeatRunTemplateResult>;
+  ) => Promise<ReflectionRunTemplateResult>;
   heartbeatChannelId?: string;
   memoryWriter?: Pick<MemoryWriter, 'write'>;
   pendingFollowUpStore?: Pick<
@@ -233,7 +233,7 @@ function cloneTemplate(template: ReflectionTemplate): ReflectionTemplate {
   };
 }
 
-function clonePolicy(policy: HeartbeatPolicy): HeartbeatPolicy {
+function clonePolicy(policy: ReflectionPolicy): ReflectionPolicy {
   return {
     ...policy,
     templates: policy.templates.map(template => cloneTemplate(template)),
@@ -646,7 +646,7 @@ export function createScheduleTool(options: ScheduleToolOptions): SubstrateAgent
             const plannedTasks = options.scheduler.listTasks()
               .filter(task => task.id.startsWith('planned:'))
               .map(mapPlannedTask);
-            const templates = options.heartbeatPolicyStore.load().templates.map(template => ({
+            const templates = options.reflectionPolicyStore.load().templates.map(template => ({
               id: template.id,
               name: template.name,
               enabled: template.enabled,
@@ -777,7 +777,7 @@ export function createScheduleTool(options: ScheduleToolOptions): SubstrateAgent
           }
 
           case 'list_templates': {
-            const policy = options.heartbeatPolicyStore.load();
+            const policy = options.reflectionPolicyStore.load();
             const lines = [
               `Reflection Schedule Policy (v${policy.version}, updated ${policy.updatedAt} by ${policy.updatedBy})`,
               `Templates: ${policy.templates.length}`,
@@ -802,7 +802,7 @@ export function createScheduleTool(options: ScheduleToolOptions): SubstrateAgent
           }
 
           case 'update_template': {
-            const policy = options.heartbeatPolicyStore.load();
+            const policy = options.reflectionPolicyStore.load();
             const policyBefore = clonePolicy(policy);
 
             if (params.id) {
@@ -812,8 +812,8 @@ export function createScheduleTool(options: ScheduleToolOptions): SubstrateAgent
               if (params.interval_ms === undefined) {
                 return textResultWithError('interval_ms is required when adding a reflection template', true);
               }
-              if (policy.templates.length >= options.heartbeatPolicyStore.maxTemplates) {
-                return textResultWithError(`Max ${options.heartbeatPolicyStore.maxTemplates} templates allowed`, true);
+              if (policy.templates.length >= options.reflectionPolicyStore.maxTemplates) {
+                return textResultWithError(`Max ${options.reflectionPolicyStore.maxTemplates} templates allowed`, true);
               }
               if (policy.templates.some(template => template.id === id)) {
                 return textResultWithError(`Template "${id}" already exists`, true);
@@ -832,7 +832,7 @@ export function createScheduleTool(options: ScheduleToolOptions): SubstrateAgent
                 mode: params.mode ?? 'standard',
                 ...(params.deliberation ? { deliberation: cloneDeliberation(params.deliberation) } : {}),
               };
-              const errors = options.heartbeatPolicyStore.validateNew(newTemplate);
+              const errors = options.reflectionPolicyStore.validateNew(newTemplate);
               if (errors.length > 0) {
                 return textResultWithError(
                   'Validation errors:\n' + errors.map(error => `  ${error.field}: ${error.message}`).join('\n'),
@@ -844,11 +844,11 @@ export function createScheduleTool(options: ScheduleToolOptions): SubstrateAgent
               policy.version++;
               policy.updatedAt = new Date().toISOString();
               policy.updatedBy = 'agent';
-              options.heartbeatPolicyStore.save(policy);
+              options.reflectionPolicyStore.save(policy);
               try {
                 options.syncReflectionTasks();
               } catch (error) {
-                options.heartbeatPolicyStore.save(policyBefore);
+                options.reflectionPolicyStore.save(policyBefore);
                 throw error;
               }
 
@@ -870,7 +870,7 @@ export function createScheduleTool(options: ScheduleToolOptions): SubstrateAgent
             if (params.mode !== undefined) updates.mode = params.mode;
             if (params.deliberation !== undefined) updates.deliberation = params.deliberation;
             if (Object.keys(updates).length > 0) {
-              const errors = options.heartbeatPolicyStore.validateUpdate(updates);
+              const errors = options.reflectionPolicyStore.validateUpdate(updates);
               if (errors.length > 0) {
                 return textResultWithError(
                   'Validation errors:\n' + errors.map(error => `  ${error.field}: ${error.message}`).join('\n'),
@@ -891,11 +891,11 @@ export function createScheduleTool(options: ScheduleToolOptions): SubstrateAgent
             policy.version++;
             policy.updatedAt = new Date().toISOString();
             policy.updatedBy = 'agent';
-            options.heartbeatPolicyStore.save(policy);
+            options.reflectionPolicyStore.save(policy);
             try {
               options.syncReflectionTasks();
             } catch (error) {
-              options.heartbeatPolicyStore.save(policyBefore);
+              options.reflectionPolicyStore.save(policyBefore);
               throw error;
             }
 
@@ -909,7 +909,7 @@ export function createScheduleTool(options: ScheduleToolOptions): SubstrateAgent
           case 'run_template': {
             const requestedTemplateId = normalizeNonEmptyString(params.template_id, 'template_id');
             const templateId = resolveConsolidatedReflectionTemplateId(requestedTemplateId);
-            const policy = options.heartbeatPolicyStore.load();
+            const policy = options.reflectionPolicyStore.load();
             if (!policy.templates.some(template => template.id === templateId)) {
               return textResultWithError(`Template "${requestedTemplateId}" not found`, true);
             }

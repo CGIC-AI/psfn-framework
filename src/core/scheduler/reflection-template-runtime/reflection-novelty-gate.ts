@@ -1,8 +1,8 @@
 import type { Contact } from '../../contacts/types.js';
 import { evaluateDeterministicGate } from '../../../shared/gating/deterministic-gate.js';
 import { DEFAULT_REFLECTION_NOVELTY_GATE } from '../../../system/config/scheduler-config.js';
-import type { ReflectionTemplate } from '../heartbeat-policy.js';
-import type { HeartbeatRuntimeOptions } from '../heartbeat-runtime-contracts.js';
+import type { ReflectionTemplate } from '../reflection-policy.js';
+import type { ReflectionRuntimeOptions } from '../reflection-runtime-contracts.js';
 import { resolveReflectionContactSessionId } from './reflection-contact-session.js';
 import {
   REFLECTION_NOVELTY_ENTRY_SCAN_LIMIT,
@@ -45,7 +45,7 @@ export async function evaluateReflectionNoveltyGate(input: {
   reflectionChannelId: string;
   canonicalContactId: string | undefined;
   groupScope: { channelId: string } | undefined;
-  runtimeOptions: HeartbeatRuntimeOptions;
+  runtimeOptions: ReflectionRuntimeOptions;
 }): Promise<ReflectionNoveltyGateOutcome> {
   const {
     template,
@@ -128,7 +128,7 @@ export async function emitReflectionNoveltyGateEvent(input: {
   outcome: 'ran' | 'skipped';
   gate: Pick<ReflectionNoveltyGateOutcome, 'reason' | 'inputs'>;
   reflectionChannelId: string;
-  runtimeOptions: HeartbeatRuntimeOptions;
+  runtimeOptions: ReflectionRuntimeOptions;
   logger: ReflectionNoveltyGateLogger;
 }): Promise<void> {
   const {
@@ -170,7 +170,7 @@ export async function advanceReflectionNoveltyWatermark(input: {
   template: ReflectionTemplate;
   canonicalContactId: string | undefined;
   groupScope: { channelId: string } | undefined;
-  runtimeOptions: HeartbeatRuntimeOptions;
+  runtimeOptions: ReflectionRuntimeOptions;
   logger: ReflectionNoveltyGateLogger;
 }): Promise<void> {
   const {

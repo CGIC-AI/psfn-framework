@@ -15,7 +15,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { wireHeartbeatRuntime } from '../../app/startup/composition/parity.js';
+import { wireReflectionRuntime } from '../../app/startup/composition/parity.js';
 import type { ChannelType, InferredPostTurnAction } from '../../shared/contracts/runtime.js';
 import { EventBus } from '../../shared/event-bus.js';
 import type { LLMProviderPort } from '../agent/contracts.js';
@@ -50,7 +50,7 @@ import {
   type SocialDesireConsentLedger,
 } from '../intention/social-desire-outreach.js';
 import { ExternalCommunicationRateLimiter } from '../../system/capabilities/safeguards.js';
-import type { HeartbeatAgent } from './heartbeat-runtime-contracts.js';
+import type { ReflectionAgent } from './reflection-runtime-contracts.js';
 import { Scheduler } from './scheduler.js';
 
 const HOUR = 60 * 60 * 1000;
@@ -239,7 +239,7 @@ function wire(options: WireOptions = {}) {
     getActionStatus: vi.fn(),
     getStatus: vi.fn().mockReturnValue(emptyQueueStatus()),
   };
-  const agentLoop: HeartbeatAgent = {
+  const agentLoop: ReflectionAgent = {
     handleMessage: vi.fn(),
     followUp: vi.fn(),
     registerPostTurnActionInferer: vi.fn(() => () => undefined),
@@ -248,7 +248,7 @@ function wire(options: WireOptions = {}) {
     stream: vi.fn(),
     complete: vi.fn(),
   };
-  void wireHeartbeatRuntime(
+  void wireReflectionRuntime(
     { registerTool: vi.fn() },
     scheduler,
     agentLoop,

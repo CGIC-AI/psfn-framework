@@ -91,6 +91,7 @@ export function resolveTaskKind(
   const suffix = message.channelId.slice('internal:'.length).toLowerCase();
   if (!suffix) return undefined;
 
+  // Existing internal:heartbeat sessions persist this task kind in turn metadata.
   if (suffix.includes('heartbeat')) return 'heartbeat';
   if (suffix.includes('reflection')) return 'reflection';
   if (suffix.includes('planning')) return 'planning';

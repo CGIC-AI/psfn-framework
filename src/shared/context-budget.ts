@@ -49,6 +49,8 @@ export interface AdaptiveContextBudgetProfile {
 }
 
 export interface AdaptiveContextBudgetPreviewProfile {
+  // `heartbeat_reflection` is an existing Garden API discriminator. Keep the
+  // wire value stable while presenting it to humans as "Reflection".
   key: 'default' | 'heartbeat_reflection' | 'temporal' | 'recall' | 'task' | 'emotional' | 'creative' | 'factual';
   label: string;
   source: 'disabled' | 'default' | 'adaptive';
@@ -616,7 +618,7 @@ export function resolveAdaptiveContextBudgetPreviewProfiles(
 
   return [
     buildProfile('default', 'Default chat', 'default'),
-    buildProfile('heartbeat_reflection', 'Heartbeat / reflection', 'default'),
+    buildProfile('heartbeat_reflection', 'Reflection', 'default'),
     buildProfile('temporal', 'Temporal grounding', 'temporal'),
     buildProfile('recall', 'Memory recall', 'recall'),
     buildProfile('task', 'Task / terminal', 'task'),

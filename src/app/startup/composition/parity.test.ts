@@ -4,19 +4,19 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { EventBus } from '../../../shared/event-bus.js';
 import { Scheduler } from '../../../core/scheduler/scheduler.js';
-import { HeartbeatPolicyStore } from '../../../core/scheduler/heartbeat-policy.js';
+import { ReflectionPolicyStore } from '../../../core/scheduler/reflection-policy.js';
 import type { LLMProviderPort } from '../../../core/agent/contracts.js';
 import { readLastActiveSession } from '../../../system/lifecycle/notifications.js';
 import { buildInternalStateSnapshotRef, InternalStateComputer } from '../../../core/self-model/state.js';
 import {
   wireFilesystemToolsRuntime,
-  wireHeartbeatRuntime,
+  wireReflectionRuntime,
   wirePromptRuntime,
   wireSessionToolsRuntime,
   wireSettingsRuntime,
 } from './parity.js';
 import {
-  resolveHeartbeatPolicyPath,
+  resolveReflectionPolicyPath,
   resolveReflectionJournalPath,
   resolveReflectionMetacognitionJournalPath,
   resolveValuesJournalPath,
@@ -216,11 +216,11 @@ describe('wireFilesystemToolsRuntime', () => {
   });
 });
 
-describe('wireHeartbeatRuntime', () => {
+describe('wireReflectionRuntime', () => {
   let tempDir: string;
 
   beforeEach(() => {
-    tempDir = mkdtempSync(join(tmpdir(), 'heartbeat-runtime-'));
+    tempDir = mkdtempSync(join(tmpdir(), 'reflection-runtime-'));
   });
 
   afterEach(() => {
@@ -228,7 +228,7 @@ describe('wireHeartbeatRuntime', () => {
   });
 
   it('registers reflection tasks using template cadence', () => {
-    const store = new HeartbeatPolicyStore(resolveHeartbeatPolicyPath(tempDir));
+    const store = new ReflectionPolicyStore(resolveReflectionPolicyPath(tempDir));
     const policy = store.load();
     const dailyReview = policy.templates.find(template => template.id === 'daily-review');
     if (!dailyReview) {
@@ -252,7 +252,7 @@ describe('wireHeartbeatRuntime', () => {
       send: vi.fn().mockResolvedValue(undefined),
     };
 
-    void wireHeartbeatRuntime(
+    void wireReflectionRuntime(
       target,
       scheduler,
       agentLoop,
@@ -281,7 +281,7 @@ describe('wireHeartbeatRuntime', () => {
       send: vi.fn().mockResolvedValue(undefined),
     };
 
-    void wireHeartbeatRuntime(
+    void wireReflectionRuntime(
       target,
       scheduler,
       agentLoop,
@@ -324,7 +324,7 @@ describe('wireHeartbeatRuntime', () => {
       send: vi.fn().mockResolvedValue(undefined),
     };
 
-    void wireHeartbeatRuntime(
+    void wireReflectionRuntime(
       target,
       scheduler,
       agentLoop,
@@ -370,7 +370,7 @@ describe('wireHeartbeatRuntime', () => {
     const nowSpy = vi.spyOn(Date, 'now');
     try {
       nowSpy.mockReturnValue(1_700_000_000_000);
-      void wireHeartbeatRuntime(
+      void wireReflectionRuntime(
         target,
         scheduler,
         agentLoop,
@@ -423,7 +423,7 @@ describe('wireHeartbeatRuntime', () => {
   });
 
   it('runs deliberation mode and persists journal telemetry metadata', async () => {
-    const store = new HeartbeatPolicyStore(resolveHeartbeatPolicyPath(tempDir));
+    const store = new ReflectionPolicyStore(resolveReflectionPolicyPath(tempDir));
     const policy = store.load();
     const values = policy.templates.find(template => template.id === 'weekly-review');
     if (!values) {
@@ -521,7 +521,7 @@ describe('wireHeartbeatRuntime', () => {
     const nowSpy = vi.spyOn(Date, 'now');
     try {
       nowSpy.mockReturnValue(1_700_000_000_000);
-      void wireHeartbeatRuntime(
+      void wireReflectionRuntime(
         target,
         scheduler,
         agentLoop,
@@ -711,7 +711,7 @@ describe('wireHeartbeatRuntime', () => {
       send: vi.fn().mockResolvedValue(undefined),
     };
 
-    void wireHeartbeatRuntime(
+    void wireReflectionRuntime(
       target,
       scheduler,
       agentLoop,
@@ -773,7 +773,7 @@ describe('wireHeartbeatRuntime', () => {
     const nowSpy = vi.spyOn(Date, 'now');
     try {
       nowSpy.mockReturnValue(1_700_000_000_000);
-      void wireHeartbeatRuntime(
+      void wireReflectionRuntime(
         target,
         scheduler,
         agentLoop,
@@ -838,7 +838,7 @@ describe('wireHeartbeatRuntime', () => {
       getStatus: vi.fn(),
     };
 
-    void wireHeartbeatRuntime(
+    void wireReflectionRuntime(
       target,
       scheduler,
       agentLoop,
@@ -852,10 +852,10 @@ describe('wireHeartbeatRuntime', () => {
     );
 
     expect(postTurnActions.registerHandler).toHaveBeenCalledTimes(1);
-    const heartbeatRegisterCall = postTurnActions.registerHandler.mock.calls.find(
+    const reflectionRegisterCall = postTurnActions.registerHandler.mock.calls.find(
       (call) => call[0] === 'heartbeat.run_template',
     );
-    expect(heartbeatRegisterCall).toBeDefined();
+    expect(reflectionRegisterCall).toBeDefined();
     expect(registerPostTurnActionInferer).toHaveBeenCalledTimes(1);
     const inferer = registerPostTurnActionInferer.mock.calls[0]?.[0] as (
       context: {
@@ -906,7 +906,7 @@ describe('wireHeartbeatRuntime', () => {
     const deferredTask = scheduler.listTasks().find(task => task.id.startsWith('reflection-run:deferred:'));
     expect(deferredTask).toBeUndefined();
 
-    const deferredHandler = heartbeatRegisterCall?.[1] as (
+    const deferredHandler = reflectionRegisterCall?.[1] as (
       action: {
         id: string;
         kind: string;
@@ -990,7 +990,7 @@ describe('wireHeartbeatRuntime', () => {
         getStatus: vi.fn(),
       };
 
-      void wireHeartbeatRuntime(
+      void wireReflectionRuntime(
         target,
         scheduler,
         agentLoop,
@@ -1037,7 +1037,7 @@ describe('wireHeartbeatRuntime', () => {
     expect(legacyActions).toHaveLength(2);
   });
 
-  it('suppresses rapid-fire deferred heartbeat template execution loops', async () => {
+  it('suppresses rapid-fire deferred reflection template execution loops', async () => {
     const eventBus = new EventBus();
     const scheduler = new Scheduler(eventBus, {
       tickIntervalMs: 100,
@@ -1067,7 +1067,7 @@ describe('wireHeartbeatRuntime', () => {
     const nowSpy = vi.spyOn(Date, 'now');
     try {
       nowSpy.mockReturnValue(1_700_000_100_000);
-      void wireHeartbeatRuntime(
+      void wireReflectionRuntime(
         target,
         scheduler,
         agentLoop,
@@ -1080,12 +1080,12 @@ describe('wireHeartbeatRuntime', () => {
         },
       );
 
-      const heartbeatRegisterCall = postTurnActions.registerHandler.mock.calls.find(
+      const reflectionRegisterCall = postTurnActions.registerHandler.mock.calls.find(
         (call) => call[0] === 'heartbeat.run_template',
       );
-      expect(heartbeatRegisterCall).toBeDefined();
+      expect(reflectionRegisterCall).toBeDefined();
 
-      const deferredHandler = heartbeatRegisterCall?.[1] as (
+      const deferredHandler = reflectionRegisterCall?.[1] as (
         action: {
           id: string;
           kind: string;
@@ -1152,7 +1152,7 @@ describe('wireHeartbeatRuntime', () => {
     const nowSpy = vi.spyOn(Date, 'now');
     try {
       nowSpy.mockReturnValue(1_700_000_000_000);
-      void wireHeartbeatRuntime(
+      void wireReflectionRuntime(
         target,
         scheduler,
         agentLoop,

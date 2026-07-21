@@ -45,7 +45,7 @@ describe('buildContextBudgetPreview', () => {
     expect(preview.memTokenBudget).toBe(4_000);
   });
 
-  it('shows heartbeat and reflection preview rows using the default companion budget, not the task profile', () => {
+  it('shows the reflection preview row using the default companion budget, not the task profile', () => {
     const preview = buildContextBudgetPreview({
       defaultContextWindow: 100_000,
       modelRoster: {
@@ -63,14 +63,14 @@ describe('buildContextBudgetPreview', () => {
       maxResponseTokens: 4_096,
     });
 
-    const heartbeatVariant = preview.variants.find((variant) => variant.key === 'heartbeat_reflection');
+    const reflectionVariant = preview.variants.find((variant) => variant.key === 'heartbeat_reflection');
     const taskVariant = preview.variants.find((variant) => variant.key === 'task');
 
-    expect(heartbeatVariant).toMatchObject({
+    expect(reflectionVariant).toMatchObject({
       source: 'default',
     });
-    expect(heartbeatVariant?.sessionBudget.budgetPct).toBe(6);
-    expect(heartbeatVariant?.memoryBudget.budgetPct).toBe(2);
+    expect(reflectionVariant?.sessionBudget.budgetPct).toBe(6);
+    expect(reflectionVariant?.memoryBudget.budgetPct).toBe(2);
     expect(taskVariant?.sessionBudget.budgetPct).toBe(12);
     expect(taskVariant?.memoryBudget.budgetPct).toBe(2);
   });

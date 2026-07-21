@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import type { PostTurnActionInferer } from '../agent/substrate-agent.js';
-import { wireHeartbeatRuntime } from '../../app/startup/composition/parity.js';
+import { wireReflectionRuntime } from '../../app/startup/composition/parity.js';
 import { wirePostTurnActionRuntime } from '../../app/startup/composition/post-turn-actions.js';
 import { EventBus } from '../../shared/event-bus.js';
 import { Scheduler } from '../scheduler/scheduler.js';
@@ -135,7 +135,7 @@ function registerOutboundHandlerHarness(options: {
     listQuarantined: vi.fn(),
   };
 
-  void wireHeartbeatRuntime(
+  void wireReflectionRuntime(
     { registerTool: vi.fn() },
     scheduler,
     {
@@ -425,7 +425,7 @@ describe('intention appraisal runtime integration', () => {
         intervalMs: 1,
       });
 
-      void wireHeartbeatRuntime(
+      void wireReflectionRuntime(
         { registerTool: vi.fn() },
         scheduler,
         agentLoop,
@@ -550,7 +550,7 @@ describe('intention appraisal runtime integration', () => {
         intervalMs: 1,
       });
 
-      void wireHeartbeatRuntime(
+      void wireReflectionRuntime(
         { registerTool: vi.fn() },
         scheduler,
         agentLoop,
@@ -667,7 +667,7 @@ describe('intention appraisal runtime integration', () => {
         intervalMs: 1,
       });
 
-      void wireHeartbeatRuntime(
+      void wireReflectionRuntime(
         { registerTool: vi.fn() },
         scheduler,
         agentLoop,
@@ -802,7 +802,7 @@ describe('intention appraisal runtime integration', () => {
         intervalMs: 1,
       });
 
-      void wireHeartbeatRuntime(
+      void wireReflectionRuntime(
         { registerTool: vi.fn() },
         scheduler,
         agentLoop,

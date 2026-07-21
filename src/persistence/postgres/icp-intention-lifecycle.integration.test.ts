@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
-import { wireHeartbeatRuntime } from '../../app/startup/composition/parity.js';
+import { wireReflectionRuntime } from '../../app/startup/composition/parity.js';
 import type { InferredPostTurnAction } from '../../shared/contracts/runtime.js';
 import { EventBus } from '../../shared/event-bus.js';
 import type { LLMProviderPort } from '../../core/agent/contracts.js';
@@ -13,9 +13,9 @@ import type {
   PostTurnActionRuntime,
 } from '../../core/agent/post-turn-action-runtime.js';
 import type {
-  HeartbeatAgent,
-  HeartbeatRuntimeOptions,
-} from '../../core/scheduler/heartbeat-runtime-contracts.js';
+  ReflectionAgent,
+  ReflectionRuntimeOptions,
+} from '../../core/scheduler/reflection-runtime-contracts.js';
 import { Scheduler } from '../../core/scheduler/scheduler.js';
 import { INTENTION_OUTBOUND_MESSAGE_ACTION_KIND } from '../../core/intention/appraisal.js';
 import {
@@ -145,7 +145,7 @@ async function wireOutboundHandler(options: {
   pendingFollowUpStore: ReturnType<typeof createPostgresIntentionPortsFromPool>['pendingFollowUpStore'];
   outreachOutbox: OutreachOutboxStore;
   onIntentionFollowUpActivated: NonNullable<
-    HeartbeatRuntimeOptions['onIntentionFollowUpActivated']
+    ReflectionRuntimeOptions['onIntentionFollowUpActivated']
   >;
 }): Promise<PostTurnActionHandler> {
   const handlers = new Map<string, PostTurnActionHandler>();
@@ -166,7 +166,7 @@ async function wireOutboundHandler(options: {
     tickIntervalMs: 50,
     heartbeatIntervalMs: 1_000,
   });
-  const agentLoop: HeartbeatAgent = {
+  const agentLoop: ReflectionAgent = {
     handleMessage: vi.fn(async () => ({ content: '' })),
     followUp: vi.fn(),
     registerPostTurnActionInferer: vi.fn(() => () => undefined),
@@ -175,7 +175,7 @@ async function wireOutboundHandler(options: {
     stream: vi.fn(),
     complete: vi.fn(),
   };
-  await wireHeartbeatRuntime(
+  await wireReflectionRuntime(
     { registerTool: vi.fn() },
     scheduler,
     agentLoop,

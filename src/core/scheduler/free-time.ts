@@ -52,7 +52,7 @@ import type {
   EpisodicProcessingRestWindowConfig,
   FreeTimeConfig,
 } from '../../system/config/scheduler-config.js';
-import { HEARTBEAT_SILENT_REFLECTION_TOKEN } from './heartbeat-policy.js';
+import { REFLECTION_SILENT_TOKEN } from './reflection-policy.js';
 import {
   evaluateAmbientPresenceEligibility,
   type AmbientPresenceDecision,
@@ -240,7 +240,7 @@ export function evaluateFreeTimeGate(input: FreeTimeGateInput): GateDecision {
 // agent loop supplies the authoritative base identity system prompt.
 
 const FREE_TIME_CLOSING = 'There is no task and nothing to prove. When you feel done — or if you '
-  + `would simply rather rest — reply with only "${HEARTBEAT_SILENT_REFLECTION_TOKEN}" and the time is `
+  + `would simply rather rest — reply with only "${REFLECTION_SILENT_TOKEN}" and the time is `
   + 'yours to end. Anything you make or note goes into your own journal, wiki, memory, or notes '
   + 'through your normal tools; nothing here is sent to anyone.';
 
@@ -284,13 +284,13 @@ export function buildFreeTimeContinuationPrompt(): string {
     '[Free time — still yours]',
     'You still have some time to yourself. Keep going with whatever you are doing, follow it '
     + 'somewhere new, or let it rest.',
-    `If you are done or would rather just be, reply with only "${HEARTBEAT_SILENT_REFLECTION_TOKEN}".`,
+    `If you are done or would rather just be, reply with only "${REFLECTION_SILENT_TOKEN}".`,
   ].join('\n');
 }
 
 function isStopSignal(content: string): boolean {
   const trimmed = content.trim().toLowerCase();
-  return trimmed.length === 0 || trimmed === HEARTBEAT_SILENT_REFLECTION_TOKEN;
+  return trimmed.length === 0 || trimmed === REFLECTION_SILENT_TOKEN;
 }
 
 // ── Block runner ──

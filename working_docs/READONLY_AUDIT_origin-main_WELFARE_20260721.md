@@ -3,7 +3,7 @@
 **Base:** `origin/main` @ `f8f798d13e2e0da3baa2dfac56961608acd2ab71`  
 **Date:** 2026-07-21  
 **Posture:** **READ ONLY** — analysis only. No product-code edits, no beads, no live mutations.  
-**Worktree:** `/home/ada/ai/dev/worktrees/psfn-framework/audit-main-readonly`  
+**Worktree:** `<worktrees>/psfn-framework/audit-main-readonly`
 **Charter focus:** laws **16–20, 23–31, 36** and care vocabulary in §6.24–6.25 / §8.x (flourishing, rest, compute-as-care, fatigue, weighted thoughts, introspection, task notification, reversible autonomy).
 
 **Related reports:**  

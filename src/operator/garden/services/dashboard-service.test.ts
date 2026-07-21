@@ -9,7 +9,8 @@ import { MODEL_USAGE_GROUP_DIMENSIONS } from '../../../shared/telemetry/model-us
 import { AdminDashboardDataService } from './dashboard-service.js';
 import type { AdminAdaptiveToolsService, AdminModelUsageService } from './types.js';
 import { startOfDashboardUtcWeek } from './dashboard-cost-windows.js';
-import type { DashboardCostWindow } from '../types.js';
+import type { AnalysisWorkbenchTraceView, DashboardCostWindow } from '../types.js';
+import type { AnalysisWorkbenchTraceStorePort } from '../../../persistence/postgres/analysis-workbench-trace-store.js';
 
 const EMPTY_TOTALS: ModelUsageTotals = {
   calls: 0,
@@ -447,5 +448,126 @@ describe('AdminDashboardDataService', () => {
     expect(todayResponse.stats.modelUsage).toMatchObject({
       selected: 'today', usage: { calls: 1, effectiveCostUsd: 0.01 },
     });
+  });
+});
+
+class FakeAnalysisWorkbenchTraceStore implements AnalysisWorkbenchTraceStorePort {
+  readonly rows: AnalysisWorkbenchTraceView[] = [];
+  constructor(private readonly cap: number, seed: AnalysisWorkbenchTraceView[] = []) {
+    this.rows.push(...seed);
+  }
+
+  record(trace: AnalysisWorkbenchTraceView): Promise<void> {
+    this.rows.unshift(trace);
+    this.rows.sort((a, b) => b.timestamp - a.timestamp);
+    if (this.rows.length > this.cap) this.rows.length = this.cap;
+    return Promise.resolve();
+  }
+
+  listRecent(limit: number): Promise<AnalysisWorkbenchTraceView[]> {
+    return Promise.resolve(this.rows.slice(0, limit));
+  }
+
+  close(): Promise<void> {
+    return Promise.resolve();
+  }
+}
+
+async function emitTrace(eventBus: EventBus, timestamp: number, task: string): Promise<void> {
+  await eventBus.emit('agent.analysis_workbench.trace', {
+    timestamp,
+    task,
+    result: {
+      iterations: 1,
+      totalInputTokens: 10,
+      totalOutputTokens: 5,
+      durationMs: 42,
+      truncated: false,
+      budgetStop: null,
+      subQueries: 0,
+      toolCalls: 0,
+      sessionCostUsd: 0,
+      warnings: [],
+      nestedAnalysis: {
+        nestedAnalysisCallCount: 0,
+        nestedAnalysisSuccessCount: 0,
+        nestedAnalysisFailureCount: 0,
+        maxNestedAnalysisDepthReached: 0,
+      },
+      steps: [{
+        iteration: 1,
+        timestamp,
+        code: 'print(1)',
+        output: '1',
+        error: null,
+        inputTokens: 10,
+        outputTokens: 5,
+        cumulativeTokens: 15,
+        durationMs: 42,
+        variablesChanged: [],
+      }],
+    },
+  });
+}
+
+describe('AdminDashboardDataService analysis-workbench trace persistence (vb11)', () => {
+  it('write-through persists each recorded trace to the durable store', async () => {
+    const eventBus = new EventBus();
+    const deps = makeBaseDeps(eventBus);
+    const store = new FakeAnalysisWorkbenchTraceStore(50);
+    const service = new AdminDashboardDataService({ ...deps, analysisWorkbenchTraceStore: store });
+    await Promise.resolve();
+
+    await emitTrace(eventBus, 1000, 'first');
+    await emitTrace(eventBus, 2000, 'second');
+
+    expect(store.rows.map((row) => row.task)).toEqual(['second', 'first']);
+    expect(service.listAnalysisWorkbenchTraces().map((row) => row.task)).toEqual(['second', 'first']);
+  });
+
+  it('rehydrates the ring from the durable store after a restart', async () => {
+    const persisted: AnalysisWorkbenchTraceView = {
+      timestamp: 5000,
+      task: 'survivor',
+      iterations: 1,
+      totalTokens: 15,
+      durationMs: 42,
+      truncated: false,
+      budgetStop: null,
+      steps: [],
+    };
+    // A fresh service instance (simulating a Garden restart) with a store that
+    // already holds a trace recorded before the restart.
+    const store = new FakeAnalysisWorkbenchTraceStore(50, [persisted]);
+    const eventBus = new EventBus();
+    const service = new AdminDashboardDataService({
+      ...makeBaseDeps(eventBus),
+      analysisWorkbenchTraceStore: store,
+    });
+    // Allow the async hydrate kicked off in the constructor to settle.
+    await vi.waitFor(() => {
+      expect(service.listAnalysisWorkbenchTraces()).toHaveLength(1);
+    });
+
+    expect(service.listAnalysisWorkbenchTraces()[0]).toMatchObject({ task: 'survivor' });
+  });
+
+  it('keeps the durable ring bounded to the 50-entry window', async () => {
+    const eventBus = new EventBus();
+    const store = new FakeAnalysisWorkbenchTraceStore(50);
+    const service = new AdminDashboardDataService({
+      ...makeBaseDeps(eventBus),
+      analysisWorkbenchTraceStore: store,
+    });
+    await Promise.resolve();
+
+    for (let i = 1; i <= 60; i += 1) {
+      await emitTrace(eventBus, i * 1000, `task-${i}`);
+    }
+
+    expect(store.rows).toHaveLength(50);
+    expect(service.listAnalysisWorkbenchTraces()).toHaveLength(50);
+    expect(store.rows[0].task).toBe('task-60');
+    expect(store.rows[49].task).toBe('task-11');
   });
 });

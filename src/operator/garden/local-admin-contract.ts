@@ -65,6 +65,7 @@ import { FatigueLedger } from '../../shared/telemetry/fatigue-ledger.js';
 import { HumanAttentionPressureLedger } from '../../core/agent/fatigue/human-attention-ledger.js';
 import type { ChannelGroupMemoryConfig } from '../../system/config/group-memory-config.js';
 import { createPostgresModelUsageStoreFromConfig } from '../../persistence/postgres/model-usage-store.js';
+import { createPostgresAnalysisWorkbenchTraceStoreFromConfig } from '../../persistence/postgres/analysis-workbench-trace-store.js';
 import { createPostgresObserverEvalSidecarStore } from '../../core/eval/observer-sidecar/persistence.js';
 import { createOwnerFileConfigStore } from '../../system/config/config-store.js';
 import { AdminPartnerAffectShadowDataService } from './services/partner-affect-shadow-service.js';
@@ -274,6 +275,12 @@ export function createInProcessGardenAdminContract(
   const modelUsage = modelUsageStore
     ? new AdminModelUsageDataService(modelUsageStore)
     : null;
+  // vb11: durable analysis-workbench trace ring, bounded to the same 50-entry
+  // window the in-memory dashboard ring uses, so traces survive a restart.
+  const analysisWorkbenchTraceStore = createPostgresAnalysisWorkbenchTraceStoreFromConfig(
+    options.config,
+    50,
+  );
   const auditHistory = new AdminAuditHistoryDataService({
     gardenStore: new GardenAuditHistoryJsonlStore(join(companionDataDir, 'garden-audit-history.jsonl')),
     gatewayReader: resolveGatewayAuditReader(options.config),
@@ -434,6 +441,7 @@ export function createInProcessGardenAdminContract(
       eventBus: options.eventBus,
       modelUsageService: modelUsage,
       adaptiveToolsService: adaptiveTools,
+      analysisWorkbenchTraceStore,
       resolveLastActiveSessionId,
     }),
     diagnostics: new AdminDiagnosticsDataService({

@@ -11,6 +11,7 @@ import {
   POSTGRES_SHARED_MIGRATIONS,
   POSTGRES_SHARED_WIKI_MIGRATIONS,
   POSTGRES_PARTNER_AFFECT_SHADOW_MIGRATIONS,
+  POSTGRES_ANALYSIS_WORKBENCH_TRACE_MIGRATIONS,
 } from './migrations.js';
 import { MODEL_USAGE_RUNTIME_LANE_CLASSES } from '../../shared/telemetry/model-usage-attribution.js';
 import { RUNTIME_LANE_CLASSES } from '../../shared/contracts/runtime-lanes.js';
@@ -467,5 +468,18 @@ describe('Partner affect shadow migrations (docs/partner-affect.md slice 1)', ()
     // Structural facts only: the table stores routing identity and reasons,
     // never a payload/value column that could retain rejected content.
     expect(sql).not.toContain('payload');
+  });
+
+  it('creates a companion-scoped analysis-workbench trace ring (vb11)', () => {
+    const sql = migrationSql(POSTGRES_ANALYSIS_WORKBENCH_TRACE_MIGRATIONS);
+
+    expect(sql).toContain('CREATE TABLE IF NOT EXISTS analysis_workbench_traces');
+    expect(sql).toContain('companion_id TEXT NOT NULL');
+    expect(sql).toContain('recorded_at_ms BIGINT NOT NULL');
+    expect(sql).toContain('trace_json JSONB NOT NULL');
+    expect(sql).toContain("CHECK (jsonb_typeof(trace_json) = 'object')");
+    // The retention pruning and newest-first read both rely on this index.
+    expect(sql).toContain('idx_analysis_workbench_traces_companion_recorded');
+    expect(sql).toContain('ON analysis_workbench_traces(companion_id, recorded_at_ms DESC, id DESC)');
   });
 });

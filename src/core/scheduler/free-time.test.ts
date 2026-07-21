@@ -692,7 +692,10 @@ describe('registerFreeTimeTasks', () => {
     const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => nowMs);
     try {
       const { scheduler, sessionManager, invokeTurn, runtime, eventBus } = buildRuntime({
-        turnScript: ['I wrote a little poem.', HEARTBEAT_SILENT_REFLECTION_TOKEN],
+        // A non-silent, turns-exhausted block so the NEXT tick is gated by the
+        // block interval — not by the bead 75ci silent-exit suppression.
+        turnScript: ['I wrote a little poem.'],
+        config: freeTimeConfig({ budget: { maxTurns: 1, maxChargeUnits: 8 } }),
         freeTimeTranscript: [
           entry({ id: 10, role: 'assistant', timestamp: nowMs + 30_000, content: 'poem' }),
         ],
@@ -733,9 +736,12 @@ describe('registerFreeTimeTasks', () => {
   it('enforces the shared daily cap before rereading an unchanged session', async () => {
     let nowMs = Date.parse('2026-06-11T01:00:00.000Z');
     const { scheduler, sessionManager, invokeTurn, runtime, eventBus } = buildRuntime({
-      turnScript: [HEARTBEAT_SILENT_REFLECTION_TOKEN],
+      // A non-silent, turns-exhausted block so the NEXT tick is gated by the
+      // daily cap — not by the bead 75ci silent-exit suppression.
+      turnScript: ['I journaled a little.'],
       config: freeTimeConfig({
         maxBlocksPerDay: 1,
+        budget: { maxTurns: 1, maxChargeUnits: 8 },
         quietHours: { enabled: true, checkIntervalMs: 1_000 },
         idle: { enabled: false, checkIntervalMs: 1_000, minIdleMinutes: 180 },
       }),
@@ -766,6 +772,64 @@ describe('registerFreeTimeTasks', () => {
     expect(getRecentSessionEntries).not.toHaveBeenCalled();
     expect(invokeTurn).toHaveBeenCalledTimes(1);
     expect(gateReasons).toEqual(['quiet_hours:daily_block_cap']);
+  });
+
+  it('suppresses further free-time blocks for the rest of the day after a silent exit (bead 75ci)', async () => {
+    let nowMs = Date.parse('2026-06-11T01:00:00.000Z');
+    const { scheduler, invokeTurn, runtime, eventBus } = buildRuntime({
+      // First (and only) turn is silent — the block ends 'loafed'.
+      turnScript: [HEARTBEAT_SILENT_REFLECTION_TOKEN],
+      config: freeTimeConfig({
+        quietHours: { enabled: true, checkIntervalMs: 1_000 },
+        idle: { enabled: false, checkIntervalMs: 1_000, minIdleMinutes: 180 },
+      }),
+      now: () => nowMs,
+    });
+    const gateReasons: string[] = [];
+    eventBus.on('scheduler.free_time.gate', payload => gateReasons.push(payload.reason));
+    registerFreeTimeTasks(runtime);
+
+    const handler = scheduler.getTask(FREE_TIME_QUIET_HOURS_TASK_ID)?.handler;
+    if (!handler) throw new Error('quiet-hours free-time task was not registered');
+    await handler();
+    expect(invokeTurn).toHaveBeenCalledTimes(1);
+    gateReasons.length = 0;
+
+    // Well past the 240-minute min-block interval, still the same local day: the
+    // silent exit — not the interval or daily cap — must keep the gate closed.
+    nowMs += 5 * 60 * 60_000;
+    await handler();
+    expect(invokeTurn).toHaveBeenCalledTimes(1);
+    expect(gateReasons).toEqual(['quiet_hours:silenced_after_stop']);
+  });
+
+  it('does not suppress after a block that ended normally (bead 75ci)', async () => {
+    let nowMs = Date.parse('2026-06-11T01:00:00.000Z');
+    const { scheduler, invokeTurn, runtime, eventBus } = buildRuntime({
+      // A single non-silent turn with maxTurns=1 ends 'turns_exhausted', not a
+      // silent exit — the gate must reopen after the interval.
+      turnScript: ['I journaled for a bit.', 'Still going.'],
+      config: freeTimeConfig({
+        budget: { maxTurns: 1, maxChargeUnits: 8 },
+        quietHours: { enabled: true, checkIntervalMs: 1_000 },
+        idle: { enabled: false, checkIntervalMs: 1_000, minIdleMinutes: 180 },
+      }),
+      now: () => nowMs,
+    });
+    const gateReasons: string[] = [];
+    eventBus.on('scheduler.free_time.gate', payload => gateReasons.push(payload.reason));
+    registerFreeTimeTasks(runtime);
+
+    const handler = scheduler.getTask(FREE_TIME_QUIET_HOURS_TASK_ID)?.handler;
+    if (!handler) throw new Error('quiet-hours free-time task was not registered');
+    await handler();
+    expect(invokeTurn).toHaveBeenCalledTimes(1);
+    gateReasons.length = 0;
+
+    nowMs += 5 * 60 * 60_000;
+    await handler();
+    expect(invokeTurn).toHaveBeenCalledTimes(2);
+    expect(gateReasons).not.toContain('quiet_hours:silenced_after_stop');
   });
 
   it('emits a block event with visible spend and activity', async () => {

@@ -264,6 +264,17 @@ psfn.io/fleet-target: registered
 {{- $schema -}}
 {{- end -}}
 
+{{- define "psfn.fleetCompanionDatabaseUrlSecretKey" -}}
+{{- $companionId := .Values.runtime.companionId -}}
+{{- $secretKey := "" -}}
+{{- range .Values.fleet.companions -}}
+{{- if eq .companionId $companionId -}}
+{{- $secretKey = default "" .databaseUrlSecretKey -}}
+{{- end -}}
+{{- end -}}
+{{- $secretKey -}}
+{{- end -}}
+
 {{- define "psfn.fleetCompanionIds" -}}
 {{- $ids := list -}}
 {{- range .Values.fleet.companions -}}
@@ -464,7 +475,13 @@ group: cert-manager.io
 {{- end -}}
 
 {{- define "psfn.databaseUrlSecretKey" -}}
-{{- if .Values.postgres.external.enabled -}}
+{{- $fleetKey := "" -}}
+{{- if .Values.fleet.enabled -}}
+{{- $fleetKey = include "psfn.fleetCompanionDatabaseUrlSecretKey" . -}}
+{{- end -}}
+{{- if $fleetKey -}}
+{{- $fleetKey -}}
+{{- else if .Values.postgres.external.enabled -}}
 {{- default "postgres-database-url" .Values.postgres.external.databaseUrlSecret.key -}}
 {{- else -}}
 {{- .Values.postgres.auth.keys.databaseUrl -}}

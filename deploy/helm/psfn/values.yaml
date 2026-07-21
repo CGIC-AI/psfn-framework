@@ -83,6 +83,8 @@ fleet:
   companions:
     - companionId: 11111111-1111-4111-8111-111111111111
       postgresSchema: companion_default
+      # Empty uses the chart-wide Postgres database URL Secret key.
+      databaseUrlSecretKey: ""
       # Empty on the first entry means the chart-managed release PVC.
       companionDataClaim: ""
       workspaceClaim: ""
@@ -95,6 +97,7 @@ fleet:
   # Fleet entries have this shape:
   # - companionId: 11111111-1111-4111-8111-111111111111
   #   postgresSchema: companion_a
+  #   databaseUrlSecretKey: companion-a-url
   #   companionDataClaim: companion-a-data
   #   workspaceClaim: companion-a-workspace
   #   authSecret:

@@ -185,7 +185,13 @@ describe('SessionStore bounded logical-archive reads', () => {
 
     const range = store.getEntriesInRange(channelId, 1, 3);
     expect(range.map(entry => entry.id)).toEqual([1, 2, 3]);
-    expect(range.every(entry => entry.content.includes('<unverified_history>'))).toBe(true);
+    // Every unsigned row is still marked untrusted, but the contiguous failed
+    // run renders the full boilerplate exactly once and continuation tags for
+    // the rest (bead g59z), rather than repeating the 3-line notice per entry.
+    expect(range.every(entry => entry.content.includes('<unverified_history'))).toBe(true);
+    const joined = range.map(entry => entry.content).join('\n');
+    expect(joined.match(/<unverified_history>/g)).toHaveLength(1);
+    expect(joined.match(/<unverified_history continued>/g)).toHaveLength(2);
   });
 
   it('canonically reads a later segment whose first signed row was tampered', () => {

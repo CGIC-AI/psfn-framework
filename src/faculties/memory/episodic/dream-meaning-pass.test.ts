@@ -208,6 +208,60 @@ describe('DreamMeaningPass', () => {
     expect(episode?.landmark).not.toContain('Saturn');
   });
 
+  it('reviews an episode metadata-only when no transcript turns overlap its window (bead dtym)', async () => {
+    const store = makeStore();
+    await store.createEpisode(episodeInput('a', '2026-06-09T20:00:00.000Z', '2026-06-09T21:00:00.000Z'));
+
+    // Recent turns exist, but all of them fall well outside the episode window,
+    // so grounding in them would be worse than no excerpt at all.
+    const transcriptReader = {
+      getRecentMessages: vi.fn(() => [
+        {
+          role: 'user',
+          content: 'Unrelated chatter hours after the episode ended.',
+          timestamp: Date.parse('2026-06-10T06:00:00.000Z'),
+        },
+        {
+          role: 'assistant',
+          content: 'More unrelated recent talk.',
+          timestamp: Date.parse('2026-06-10T06:05:00.000Z'),
+        },
+      ]),
+    };
+    const handleMessage = vi.fn(async () => ({ content: meaningBlock({ a: 'It mattered.' }) }));
+    const pass = new DreamMeaningPass(store, { handleMessage }, { now: () => NOW, transcriptReader });
+
+    const result = await pass.run({ sessionId: 'discord:main' });
+    expect(result.meaningsRecorded).toBe(1);
+
+    // The reader was consulted, but the non-overlapping turns produced no excerpt.
+    expect(transcriptReader.getRecentMessages).toHaveBeenCalled();
+    const openingPrompt = (handleMessage.mock.calls[0][0] as { content: string }).content;
+    expect(openingPrompt).not.toContain('what was actually said');
+    expect(openingPrompt).not.toContain('Unrelated chatter');
+  });
+
+  it('degrades to metadata-only when the transcript reader throws (bead dtym)', async () => {
+    const store = makeStore();
+    await store.createEpisode(episodeInput('a', '2026-06-09T20:00:00.000Z', '2026-06-09T21:00:00.000Z'));
+
+    const transcriptReader = {
+      getRecentMessages: vi.fn(() => {
+        throw new Error('session backend offline');
+      }),
+    };
+    const handleMessage = vi.fn(async () => ({ content: meaningBlock({ a: 'It mattered.' }) }));
+    const pass = new DreamMeaningPass(store, { handleMessage }, { now: () => NOW, transcriptReader });
+
+    // A throwing reader must never fail the whole nightly review.
+    const result = await pass.run({ sessionId: 'discord:main' });
+    expect(result.ran).toBe(true);
+    expect(result.meaningsRecorded).toBe(1);
+
+    const openingPrompt = (handleMessage.mock.calls[0][0] as { content: string }).content;
+    expect(openingPrompt).not.toContain('what was actually said');
+  });
+
   it('reviews metadata-only when no transcript reader is wired', async () => {
     const store = makeStore();
     await store.createEpisode(episodeInput('a', '2026-06-09T20:00:00.000Z', '2026-06-09T21:00:00.000Z'));

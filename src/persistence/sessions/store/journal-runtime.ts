@@ -127,16 +127,20 @@ export class SessionJournalRuntime {
   verifyAndNormalizeEntry(
     entry: JournalEntry,
     previousHmacCandidates: readonly (string | null)[],
-    // True when the immediately-preceding entry in the same sequential read
-    // already failed verification. A contiguous run then renders the full
-    // unverified_history notice once (on the first failure) instead of once per
-    // entry (bead g59z). Fail-closed marking is unchanged: every failed entry is
-    // still wrapped and returned verified: false.
+    // True when the current contiguous HMAC-failed run has already rendered its
+    // full unverified_history notice, so this entry renders only the lightweight
+    // continuation tag instead of repeating the 3-line boilerplate (bead g59z).
+    // Fail-closed marking is unchanged: every failed entry is still returned
+    // verified: false. Only entries that actually render a wrapper
+    // (message/compaction) report renderedUnverifiedNotice: true, so a run that
+    // begins with a non-rendered failed entry (tombstone/marker, non-string
+    // message content) does not consume the run's single full notice.
     previousEntryUnverified = false,
   ): {
     entry: JournalEntry;
     nextHmacCandidates: Array<string | null>;
     verified: boolean;
+    renderedUnverifiedNotice: boolean;
   } {
     if (!this.integrityProvider) {
       return {
@@ -145,6 +149,7 @@ export class SessionJournalRuntime {
           ? [entry._hmac]
           : [...previousHmacCandidates],
         verified: true,
+        renderedUnverifiedNotice: false,
       };
     }
 
@@ -167,6 +172,7 @@ export class SessionJournalRuntime {
           entry,
           nextHmacCandidates: resolveJournalIntegrityChainCandidates(verification, previousHmac),
           verified: true,
+          renderedUnverifiedNotice: false,
         };
       }
     }
@@ -193,6 +199,7 @@ export class SessionJournalRuntime {
         },
         nextHmacCandidates,
         verified: false,
+        renderedUnverifiedNotice: true,
       };
     }
 
@@ -204,13 +211,19 @@ export class SessionJournalRuntime {
         },
         nextHmacCandidates,
         verified: false,
+        renderedUnverifiedNotice: true,
       };
     }
 
+    // A failed entry with no rendered wrapper (tombstone/marker, or a message
+    // whose content is not a string) is still fail-closed as verified: false but
+    // does NOT consume the run's single full notice — the next rendered failed
+    // entry must still show the full boilerplate (bead g59z).
     return {
       entry,
       nextHmacCandidates,
       verified: false,
+      renderedUnverifiedNotice: false,
     };
   }
 

@@ -227,21 +227,21 @@ function formatTranscriptEntry(entry: DreamPassTranscriptEntry): string {
 }
 
 /**
- * Builds one episode's transcript excerpt from a session's recent turns,
- * preferring turns that fall inside the episode's own time window and falling
- * back to the most recent turns when timestamps do not line up. Bounded in both
- * entry count and per-entry length so the grounding block stays a review aid,
- * not a full replay.
+ * Builds one episode's transcript excerpt from ONLY the turns that fall inside
+ * the episode's own time window (bead dtym). If no turn overlaps the window —
+ * or the window timestamps are unparseable — this returns no excerpt so the
+ * episode is reviewed metadata-only rather than grounded in unrelated recent
+ * turns that undercut the meaning. Bounded in both entry count and per-entry
+ * length so the grounding block stays a review aid, not a full replay.
  */
 function buildEpisodeExcerpt(episode: Episode, entries: readonly DreamPassTranscriptEntry[]): string | null {
   if (entries.length === 0) return null;
   const startMs = Date.parse(episode.startedAt);
   const endMs = Date.parse(episode.endedAt);
-  const inWindow = (Number.isFinite(startMs) && Number.isFinite(endMs))
-    ? entries.filter(entry => entry.timestamp >= startMs && entry.timestamp <= endMs)
-    : [];
-  const selected = (inWindow.length > 0 ? inWindow : entries).slice(-MAX_TRANSCRIPT_ENTRIES_PER_EPISODE);
-  if (selected.length === 0) return null;
+  if (!Number.isFinite(startMs) || !Number.isFinite(endMs)) return null;
+  const inWindow = entries.filter(entry => entry.timestamp >= startMs && entry.timestamp <= endMs);
+  if (inWindow.length === 0) return null;
+  const selected = inWindow.slice(-MAX_TRANSCRIPT_ENTRIES_PER_EPISODE);
   return selected.map(formatTranscriptEntry).join('\n');
 }
 
@@ -345,10 +345,20 @@ export class DreamMeaningPass {
       const sessionKey = episode.spanRefs[0]?.sessionId ?? episode.channelId ?? episode.threadId;
       if (!sessionKey) continue;
       if (!entriesBySession.has(sessionKey)) {
-        entriesBySession.set(
-          sessionKey,
-          this.transcriptReader.getRecentMessages(sessionKey, this.transcriptMessageLimit),
-        );
+        // A reader that throws (backend unavailable, corrupt segment) must
+        // degrade this session to metadata-only, not fail the whole nightly
+        // review. Cache the empty result so a shared session is not retried
+        // once per episode.
+        let entries: readonly DreamPassTranscriptEntry[] = [];
+        try {
+          entries = this.transcriptReader.getRecentMessages(sessionKey, this.transcriptMessageLimit);
+        } catch (error) {
+          log.warn('Dream pass could not read transcript turns; grounding this session metadata-only', {
+            sessionKey,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+        entriesBySession.set(sessionKey, entries);
       }
       const excerpt = buildEpisodeExcerpt(episode, entriesBySession.get(sessionKey) ?? []);
       if (excerpt) excerpts.set(episode.id, excerpt);

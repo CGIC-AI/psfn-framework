@@ -263,6 +263,29 @@ describe('SessionManager', () => {
     tokenTestUtils.resetTokenizerState();
   });
 
+  it('bounds the hot-cache to the recent window per companion and hydrates evicted sessions on demand (bead ofa1)', () => {
+    const boundedStore = new SessionStore(dir, { maxHotChannels: 3 });
+    const mgr = new SessionManager(boundedStore, makeConfig());
+
+    const channelCount = 12;
+    for (let i = 0; i < channelCount; i += 1) {
+      mgr.recordUserMessage(`api:ofa1-ch-${i}`, `message for channel ${i}`, `user-${i}`, `User ${i}`);
+    }
+
+    // Without the bound the cache would hold all 12 channels; it must stay
+    // within the configured recent window.
+    expect(boundedStore.getLoadedChannelCount()).toBeLessThanOrEqual(3);
+    expect(boundedStore.getLoadedChannelCount()).toBeLessThan(channelCount);
+
+    // The earliest channels were evicted, yet their content still reads back
+    // correctly by hydrating from the authoritative on-disk journal on demand.
+    const earliest = mgr.getRecentMessages('api:ofa1-ch-0', 10);
+    expect(earliest.some(entry => entry.content.includes('message for channel 0'))).toBe(true);
+
+    // Hydrating an evicted channel does not grow the cache past the window.
+    expect(boundedStore.getLoadedChannelCount()).toBeLessThanOrEqual(3);
+  });
+
   it('retries deferred record-first handoffs in bounded same-process batches', async () => {
     const fencedStore = new SessionStore(dir, {
       turnRecordEligibilityFence: createSerialTurnRecordEligibilityFence(),

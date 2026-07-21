@@ -102,6 +102,14 @@ export interface SessionStoreOptions {
    * to the file-only path.
    */
   tailCache?: SessionTailCachePort | null;
+  /**
+   * Bead ofa1: upper bound on the per-companion in-memory hot-cache of channel
+   * caches. Older channels beyond this recent window are evicted and hydrated
+   * on demand from the on-disk journal (which is authoritative), so agent RSS
+   * no longer grows unbounded with total session count. Absent uses the store's
+   * default window (~1k). Must be >= 1.
+   */
+  maxHotChannels?: number;
 }
 
 export interface SessionIntegrityProvider {

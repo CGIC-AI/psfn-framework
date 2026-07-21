@@ -350,6 +350,7 @@ const SETTINGS_OBJECT_FIELDS = new Set<string>([
   'voiceReplySegmenter',
   'wyomingShardRouting',
   'shardToolsets',
+  'shellExec',
 ]);
 
 const DEPRECATED_SETTINGS_FIELDS = new Set<string>([

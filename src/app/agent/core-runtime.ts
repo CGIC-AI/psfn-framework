@@ -444,6 +444,7 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
       },
       repoRoot: process.cwd(),
       getModelUsageQuery,
+      shellExec: config.shellExec,
     },
     runConformance: (trigger) => toolConformanceRunner.run(trigger),
     ...(icpAutonomyRuntime ? { availability: icpAutonomyRuntime } : {}),
@@ -478,6 +479,7 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
   const wikiRuntime = await wireWikiRuntime(agentLoop, pathSnapshot.workspaceRoot, {
     databaseUrl: postgresDatabaseUrl,
     ...(config.postgresSchema?.trim() ? { postgresSchema: config.postgresSchema.trim() } : {}),
+    ...(config.postgresRole?.trim() ? { postgresRole: config.postgresRole.trim() } : {}),
     embedding: gateway,
     embeddingProvenance: resolveEmbeddingProviderProvenanceFromConfig(config, gateway.dims),
     eventBus,
@@ -490,9 +492,11 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
   // E8.3: attach the supplemental wiki RAG provider (null when the projection
   // is unavailable); pre-turn assembly consults it AFTER memory context.
   agentLoop.wikiRetrieval = wikiRuntime.retrievalService;
+  const imageReferenceStore = new ImageReferenceStore(pathSnapshot.companionDataDir);
   const imageVisionReviewer = new DefaultImageVisionReviewer(config, {
     binaryFetcher: gateway.webFetchBinary.bind(gateway),
     llmProvider,
+    referenceResolver: imageReferenceStore,
   });
   registerImageTools(agentLoop, new GatewayImageOps(gateway, () => ({
     provider: config.imageProvider,
@@ -502,7 +506,7 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
   })), {
     gatewayMode: true,
     reviewer: imageVisionReviewer,
-    referenceResolver: new ImageReferenceStore(pathSnapshot.companionDataDir),
+    referenceResolver: imageReferenceStore,
     wardrobeLookResolver: wikiRuntime.personalProjects,
   });
   agentLoop.imageVisionReviewer = imageVisionReviewer;

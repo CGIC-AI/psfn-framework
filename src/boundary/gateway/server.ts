@@ -370,7 +370,11 @@ export class GatewayServer {
   private readonly approvalBoundary: ApprovalBoundaryService;
   private readonly canaryEgressGuard: CanaryEgressGuard | null;
   private readonly runtimeHealthTracker: GatewayRuntimeHealthTracker;
-  private readonly apiStreamListeners = new Map<string, Set<(text: string) => void>>();
+  private readonly apiStreamListeners = new Map<
+    string,
+    Set<(text: string, companionId?: string) => void>
+  >();
+  private readonly apiStreamCompanionTargets = new Map<string, CompanionId>();
   private readonly multiCompanion: GatewayMultiCompanionConfig;
   private readonly fleetCompanionIds: ReadonlySet<CompanionId>;
   private readonly companionConnections = new Map<CompanionId, GatewayRpcConnection>();
@@ -584,7 +588,22 @@ export class GatewayServer {
     };
   }
 
-  subscribeApiStream(requestId: string, listener: (text: string) => void): () => void {
+  subscribeApiStream(
+    requestId: string,
+    listener: (text: string, companionId?: string) => void,
+    companionId?: string,
+  ): () => void {
+    if (companionId) {
+      const exactCompanionId = createCompanionId(
+        companionId,
+        'API stream target companionId',
+      );
+      const existingTarget = this.apiStreamCompanionTargets.get(requestId);
+      if (existingTarget && existingTarget !== exactCompanionId) {
+        throw new Error(`API stream request ${requestId} is already bound to another companion`);
+      }
+      this.apiStreamCompanionTargets.set(requestId, exactCompanionId);
+    }
     const listeners = this.apiStreamListeners.get(requestId) ?? new Set();
     listeners.add(listener);
     this.apiStreamListeners.set(requestId, listeners);
@@ -592,15 +611,19 @@ export class GatewayServer {
       listeners.delete(listener);
       if (listeners.size === 0) {
         this.apiStreamListeners.delete(requestId);
+        this.apiStreamCompanionTargets.delete(requestId);
       }
     };
   }
 
-  private dispatchApiStreamDelta(notification: ApiStreamDeltaNotification): void {
+  private dispatchApiStreamDelta(
+    notification: ApiStreamDeltaNotification,
+    companionId?: string,
+  ): void {
     const listeners = this.apiStreamListeners.get(notification.requestId);
     if (!listeners) return;
     for (const listener of listeners) {
-      listener(notification.text);
+      listener(notification.text, companionId);
     }
   }
 
@@ -753,18 +776,41 @@ export class GatewayServer {
       }),
     ));
     target.addMethod('api.stream.delta', (params: unknown) => {
-      if (this.multiCompanion.enabled && !this.isConnectionAuthorizedForApiStream(conn)) {
+      if (!isRecord(params)
+        || typeof params.requestId !== 'string'
+        || typeof params.text !== 'string') {
         this.alarmCompanionViolation(
           'api_stream_delta_rejected',
-          'api.stream.delta rejected: sending connection is not the routed api companion',
+          'api.stream.delta rejected: notification shape is invalid',
           {
             senderCompanionId: this.connectionStatuses.get(conn)?.companionId ?? '(unidentified)',
-            routedApiCompanionId: this.multiCompanion.channelRouting.api ?? '(unrouted)',
           },
         );
         return null;
       }
-      this.dispatchApiStreamDelta(params as ApiStreamDeltaNotification);
+      const notification: ApiStreamDeltaNotification = {
+        requestId: params.requestId,
+        text: params.text,
+      };
+      if (this.multiCompanion.enabled
+        && !this.isConnectionAuthorizedForApiStream(conn, notification.requestId)) {
+        const expectedCompanionId = this.apiStreamCompanionTargets.get(notification.requestId)
+          ?? this.sharedSatelliteChatRequests.get(notification.requestId)
+          ?? this.multiCompanion.channelRouting.api;
+        this.alarmCompanionViolation(
+          'api_stream_delta_rejected',
+          'api.stream.delta rejected: sending connection is not the request-bound api companion',
+          {
+            senderCompanionId: this.connectionStatuses.get(conn)?.companionId ?? '(unidentified)',
+            routedApiCompanionId: expectedCompanionId ?? '(unrouted)',
+          },
+        );
+        return null;
+      }
+      this.dispatchApiStreamDelta(
+        notification,
+        this.connectionStatuses.get(conn)?.companionId,
+      );
       return null;
     });
     target.addMethod('companion.event.publish', async (params: unknown) => {
@@ -1048,8 +1094,13 @@ export class GatewayServer {
     return dock;
   }
 
-  private isConnectionAuthorizedForApiStream(conn: GatewayRpcConnection): boolean {
-    const routedCompanionId = this.multiCompanion.channelRouting.api;
+  private isConnectionAuthorizedForApiStream(
+    conn: GatewayRpcConnection,
+    requestId: string,
+  ): boolean {
+    const routedCompanionId = this.apiStreamCompanionTargets.get(requestId)
+      ?? this.sharedSatelliteChatRequests.get(requestId)
+      ?? this.multiCompanion.channelRouting.api;
     if (!routedCompanionId) {
       return false;
     }
@@ -2332,7 +2383,7 @@ export class GatewayServer {
           input.timeoutMs,
           Math.max(1, lease.expiresAtMs - Date.now()),
         );
-        const result = await Promise.race([
+        const rawResult = await Promise.race([
           route.client.request('api.chat.completion', params),
           new Promise<never>((_, reject) =>
             setTimeout(
@@ -2341,6 +2392,15 @@ export class GatewayServer {
             ),
           ),
         ]) as ApiChatCompletionRpcResult;
+        const result: ApiChatCompletionRpcResult = rawResult.ok
+          ? {
+              ...rawResult,
+              response: {
+                ...rawResult.response,
+                companionId: lease.companionId,
+              },
+            }
+          : rawResult;
         if (!result.ok) {
           if (result.error.type === 'request_timeout') {
             this.sharedSatelliteResponseArbiter.timeout(

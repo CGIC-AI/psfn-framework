@@ -172,6 +172,7 @@ export const SETTINGS_GARDEN_FIELD_EXPOSURE = {
   wyomingShardRouting: { sectionId: 'channels', surface: 'advanced' },
   shardToolsets: { sectionId: 'channels', surface: 'advanced' },
   promotedExtendedTools: { sectionId: 'channels', surface: 'advanced' },
+  shellExec: { sectionId: 'channels', surface: 'advanced' },
   chatApiBaseUrl: { sectionId: 'channels', surface: 'advanced' },
   comfyUiBaseUrl: { sectionId: 'channels', surface: 'advanced' },
   imageProvider: { sectionId: 'channels', surface: 'advanced' },

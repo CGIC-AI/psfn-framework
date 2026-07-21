@@ -641,6 +641,17 @@ assertIncludes(appSecret, 'API_KEY:', 'API key secret');
 assertIncludes(appSecret, 'ADMIN_TOKEN:', 'admin token secret');
 assertIncludes(appSecret, 'GATEWAY_SESSION_HMAC_KEY:', 'session HMAC secret');
 assertIncludes(appSecret, 'LITELLM_API_KEY:', 'LiteLLM API key secret');
+const credentialSecrets = parseAllDocuments(rendered)
+  .map(document => document.toJS())
+  .filter(document => document?.kind === 'Secret');
+for (const secret of credentialSecrets) {
+  if (secret.metadata?.annotations?.['helm.sh/resource-policy'] !== 'keep') {
+    throw new Error(
+      `chart-rendered credential Secret ${secret.metadata?.name ?? '<unnamed>'} must carry `
+      + 'helm.sh/resource-policy: keep',
+    );
+  }
+}
 
 const defaultDenyPolicy = findDocument(rendered, 'psfn-default-deny');
 assertIncludes(defaultDenyPolicy, 'podSelector: {}', 'default deny policy');
@@ -846,6 +857,26 @@ for (const [name, value] of [
 }
 assertNotIncludes(agentDeployment, 'LITELLM_BASE_URL', 'agent LiteLLM endpoint env');
 assertNotIncludes(agentDeployment, 'LITELLM_API_KEY', 'agent LiteLLM credential env');
+assertNotIncludes(
+  agentDeployment,
+  'name: SHELL_EXEC_ENABLED',
+  'agent has no local shell policy that could bypass gateway approval and audit',
+);
+assertNotIncludes(
+  gatewayDeployment,
+  'name: SHELL_EXEC_ENABLED',
+  'gateway shell policy is settings-owned rather than environment-owned',
+);
+assertIncludes(
+  gatewayDeployment,
+  'requests:\n              cpu: 100m\n              memory: 2Gi',
+  'gateway cgroup resource requests',
+);
+assertIncludes(
+  gatewayDeployment,
+  'limits:\n              cpu: "2"\n              memory: 4Gi',
+  'gateway cgroup resource limits',
+);
 
 const gardenCredentialBoundaryDeployment = findDocumentByKindName(rendered, 'Deployment', 'psfn-garden');
 assertNotIncludes(
@@ -1045,13 +1076,31 @@ const fleetGardenContainer = fleetGardenDeployment.spec?.template?.spec?.contain
 const fleetGardenVolumeNames = new Set(
   (fleetGardenDeployment.spec?.template?.spec?.volumes ?? []).map(volume => volume.name),
 );
-for (const forbiddenVolume of [
-  'companion-data',
-  'workspace',
-]) {
-  if (fleetGardenVolumeNames.has(forbiddenVolume)) {
-    throw new Error(`fleet Garden must not receive ${forbiddenVolume} volume`);
+const fleetGardenMounts = new Map(
+  (fleetGardenContainer?.volumeMounts ?? []).map(mount => [mount.name, mount]),
+);
+const fleetGardenVolumes = new Map(
+  (fleetGardenDeployment.spec?.template?.spec?.volumes ?? [])
+    .map(volume => [volume.name, volume]),
+);
+for (const [index, companion] of fleetGardenCompanions.entries()) {
+  const volumeName = `garden-companion-data-${index}`;
+  const volume = fleetGardenVolumes.get(volumeName);
+  if (volume?.persistentVolumeClaim?.claimName !== companion.companionDataClaim) {
+    throw new Error(
+      `fleet Garden ${volumeName} must use companion claim ${companion.companionDataClaim}`,
+    );
   }
+  const mount = fleetGardenMounts.get(volumeName);
+  const expectedPath = `/runtime/companions/${companion.companionId}`;
+  if (mount?.mountPath !== expectedPath || mount.readOnly !== true) {
+    throw new Error(
+      `fleet Garden ${volumeName} must mount ${expectedPath} read-only`,
+    );
+  }
+}
+if (fleetGardenVolumeNames.has('workspace')) {
+  throw new Error('fleet Garden must not receive workspace volume');
 }
 if (!fleetGardenVolumeNames.has('postgres-database-url')) {
   throw new Error('fleet Garden must mount the postgres-database-url Secret volume');
@@ -1227,6 +1276,13 @@ if (chartFloorInit.securityContext?.capabilities?.add?.join(',') !== 'CHOWN,FOWN
 if (!chartFloorInit.command?.[2]?.includes('chown 999:999 "$floor_root"')
     || !chartFloorInit.command?.[2]?.includes('chmod 0700 "$floor_root"')) {
   throw new Error('Fleet Auth authority-floor init must enforce uid/gid 999 and mode 0700');
+}
+if (!chartFloorInit.command?.[2]?.includes('999:999:700|999:999:2700)')
+    || !chartFloorInit.command?.[2]?.includes('floor perms unexpected:')
+    || !chartFloorInit.command?.[2]?.includes('>&2; exit 1')) {
+  throw new Error(
+    'Fleet Auth authority-floor init must accept 700/2700 and report observed mismatches',
+  );
 }
 
 const adoptedFloorRendered = render([

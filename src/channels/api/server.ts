@@ -78,6 +78,7 @@ import {
 import type { ExternalChannelProfileConfig } from '../backplane/config.js';
 import { resolveCompanionIdFromConfig } from '../../core/identity/companion-runtime.js';
 import { ApiChatCompletionsHandler } from './server/chat-completions.js';
+import type { BearerCompanionRoutingConfig } from './server/bearer-companion-selector.js';
 import type { ApiDocumentIngestConfig } from './server/session.js';
 import {
   applyApiCorsPolicy,
@@ -484,6 +485,8 @@ export interface ApiServerConfig {
   hubDeviceIngress?: GatewayHubDeviceIngressService;
   /** Server-owned companion binding for the gateway API surface. */
   hubDeviceCompanionId?: string;
+  /** Pinned target plus optional per-request Bearer selector entitlement. */
+  bearerCompanionRouting?: BearerCompanionRoutingConfig;
   /** Fleet-only exact same-origin Companion UI WebSocket broker. */
   companionUiWebSocket?: CompanionUiWebSocketAdapter;
 }
@@ -617,6 +620,7 @@ export class ApiServer implements ChannelAdapterPort {
       satelliteRegistryProvider: config.satelliteRegistryProvider,
       logger: log,
       documentIngest: config.documentIngest ?? null,
+      bearerCompanionRouting: config.bearerCompanionRouting,
     });
     this.fleetSsoRouter?.registerGardenChatHandler(
       admission => this.handleFleetGardenChat(admission),

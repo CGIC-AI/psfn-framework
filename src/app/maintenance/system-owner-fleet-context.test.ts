@@ -79,11 +79,17 @@ describe('resolveSystemOwnerFleetContext', () => {
     writeFileSync(
       join(env.SYSTEM_DATA_DIR!, 'companions.json'),
       `${JSON.stringify({
+        postgres: {
+          sharedMigrationRole: 'shared_schema_migration',
+          sharedMigrationDatabaseUrlRef: { kind: 'env', envName: 'SHARED_MIGRATION_URL' },
+        },
         companions: [{
           companionId,
           companionDataDir: 'companions/companion',
           characterCardPath: 'companions/companion/companion.json',
           postgresSchema: 'companion_one',
+          postgresRole: 'companion_one_runtime',
+          postgresDatabaseUrlRef: { kind: 'env', envName: 'COMPANION_ONE_DATABASE_URL' },
         }],
       })}\n`,
     );

@@ -33,7 +33,6 @@ import {
   withPostgresClient,
 } from '../postgres.js';
 import { SHARED_SCHEMA_NAME } from './migrations.js';
-import { ensureSharedSchema } from './shared-schema.js';
 
 interface AvailabilityRow extends QueryResultRow {
   companion_id: string;
@@ -411,7 +410,6 @@ export class PostgresIcpSharedAutonomyStore implements IcpSharedAutonomyStorePor
       schema: SHARED_SCHEMA_NAME,
     });
     try {
-      await ensureSharedSchema(pool);
       const store = new PostgresIcpSharedAutonomyStore(pool, knownCompanionIds);
       await executeQuery(pool, `
         INSERT INTO icp_autonomy_invalidation_fences (companion_id, generation)

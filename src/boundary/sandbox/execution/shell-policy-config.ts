@@ -1,60 +1,14 @@
-import { parseEnvList, parsePositiveIntEnv } from '../../../shared/utils/env.js';
+import type { ShellExecSettings } from '../../../system/config/shell-exec-config.js';
 
-export interface ShellExecPolicyConfig {
-  enabled?: boolean;
-  allowlist?: string[];
-  envAllowlist?: string[];
+/**
+ * Gateway execution policy projected from settings.json. `allowedCwd` and
+ * `repositoryMountSource` are internal runtime derivations and are never
+ * operator-configurable: `allowedCwd` is the per-companion workspace bound and
+ * `repositoryMountSource` is the deployment's repository checkout
+ * (PSFN_REPOSITORY_DIR) used only when the operator-owned
+ * `mountRepositoryReadOnly` setting is true.
+ */
+export type ShellExecPolicyConfig = Partial<ShellExecSettings> & {
   allowedCwd?: string[];
-  /** Curated PATH for the sandbox child. Defaults to system-safe dirs. */
-  pathOverride?: string;
-  defaultTimeoutMs?: number;
-  maxTimeoutMs?: number;
-  defaultMaxOutputChars?: number;
-  maxOutputChars?: number;
-}
-
-const DEFAULT_SHELL_EXEC_TIMEOUT_MS = 5_000;
-const DEFAULT_SHELL_EXEC_MAX_TIMEOUT_MS = 30_000;
-const DEFAULT_SHELL_EXEC_OUTPUT_CHARS = 20_000;
-const DEFAULT_SHELL_EXEC_OUTPUT_CHARS_CAP = 100_000;
-
-function parseBooleanEnvWithFallback(value: string | undefined, fallback = false): boolean {
-  if (value === undefined) return fallback;
-  const normalized = value.trim().toLowerCase();
-  if (['1', 'true', 'yes', 'on'].includes(normalized)) return true;
-  if (['0', 'false', 'no', 'off'].includes(normalized)) return false;
-  return fallback;
-}
-
-export function buildShellExecPolicyConfig(
-  env: NodeJS.ProcessEnv,
-): ShellExecPolicyConfig {
-  const allowlist = parseEnvList(env.SHELL_EXEC_ALLOWLIST, { separators: [','] });
-  const envAllowlist = parseEnvList(env.SHELL_EXEC_ENV_ALLOWLIST, { separators: [','] });
-  const allowedCwd = parseEnvList(env.SHELL_EXEC_ALLOWED_CWD, { separators: [','] });
-  const pathOverride = env.SHELL_EXEC_PATH?.trim() || undefined;
-
-  return {
-    enabled: parseBooleanEnvWithFallback(env.SHELL_EXEC_ENABLED, false),
-    ...(allowlist ? { allowlist } : {}),
-    ...(envAllowlist ? { envAllowlist } : {}),
-    ...(allowedCwd ? { allowedCwd } : {}),
-    ...(pathOverride ? { pathOverride } : {}),
-    defaultTimeoutMs: parsePositiveIntEnv(
-      env.SHELL_EXEC_DEFAULT_TIMEOUT_MS,
-      DEFAULT_SHELL_EXEC_TIMEOUT_MS,
-    ),
-    maxTimeoutMs: parsePositiveIntEnv(
-      env.SHELL_EXEC_MAX_TIMEOUT_MS,
-      DEFAULT_SHELL_EXEC_MAX_TIMEOUT_MS,
-    ),
-    defaultMaxOutputChars: parsePositiveIntEnv(
-      env.SHELL_EXEC_DEFAULT_MAX_OUTPUT_CHARS,
-      DEFAULT_SHELL_EXEC_OUTPUT_CHARS,
-    ),
-    maxOutputChars: parsePositiveIntEnv(
-      env.SHELL_EXEC_MAX_OUTPUT_CHARS,
-      DEFAULT_SHELL_EXEC_OUTPUT_CHARS_CAP,
-    ),
-  };
-}
+  repositoryMountSource?: string;
+};

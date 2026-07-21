@@ -35,7 +35,7 @@ import {
 import { isBoundedString, isRfc4122Uuid } from '../../shared/utils/types.js';
 import { createPostgresPool, withPostgresClient } from '../postgres.js';
 import { SHARED_SCHEMA_NAME } from './migrations.js';
-import { ensureSharedSchema } from './shared-schema.js';
+import { assertSharedSchemaReady } from './shared-schema.js';
 
 /**
  * Advisory-lock seed serializing per-channel arbiter mutations across processes.
@@ -247,6 +247,12 @@ export class PostgresSpeakingArbiterStore implements SpeakingArbiterStorePort {
 
   private constructor(private readonly pool: Pool) {}
 
+  /**
+   * Connect a shared-schema-pinned runtime pool. The gateway's dedicated
+   * migration authority provisions the shared schema before agents start; an
+   * ordinary companion credential lacks CREATE on the shared schema, so this
+   * store proves readiness read-only and fails closed rather than running DDL.
+   */
   static async connect(databaseUrl: string): Promise<PostgresSpeakingArbiterStore> {
     const pool = createPostgresPool(databaseUrl, {
       applicationName: 'companion-speaking-arbiter',
@@ -254,7 +260,7 @@ export class PostgresSpeakingArbiterStore implements SpeakingArbiterStorePort {
       schema: SHARED_SCHEMA_NAME,
     });
     try {
-      await ensureSharedSchema(pool);
+      await assertSharedSchemaReady(pool);
       return new PostgresSpeakingArbiterStore(pool);
     } catch (error) {
       await pool.end();

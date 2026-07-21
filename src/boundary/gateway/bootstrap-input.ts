@@ -22,7 +22,7 @@ import {
 } from '../integrations/beads/enablement.js';
 import { resolveModuleRegistryPathFromWorkspace } from '../../system/modules/registry.js';
 import { parseBooleanEnv, parseEnvList, parsePositiveIntEnv } from '../../shared/utils/env.js';
-import { buildShellExecPolicyConfig } from '../sandbox/execution/shell-policy-config.js';
+import { createDefaultShellExecSettings } from '../../system/config/shell-exec-config.js';
 import {
   buildProviderCredentialEnv,
   resolveOptionalCredentialReference,
@@ -292,13 +292,24 @@ function buildGatewayPolicyConfig(
   workspaceRoot: string,
   codebaseRoot: string,
   systemDataDir: string,
+  companionDataDir: string,
 ): PolicyConfig {
   const fullCodebaseReadRoot = resolveFullCodebaseReadRootFromEnv(env, codebaseRoot);
   const discoveryLaneConfig = resolveDiscoveryLaneConfig({
     litellmBaseUrl: config.litellmBaseUrl ?? undefined,
     openRouterModelsApiUrl: config.openRouterModelsApiUrl,
   });
-  const shellExecPolicy = buildShellExecPolicyConfig(env);
+  // Internal runtime derivation (never operator-configurable): the read-only
+  // repository copy the sandbox may mount at /repo is the deployment's
+  // repository checkout. Absence with mountRepositoryReadOnly=true fails
+  // closed at shell.exec time.
+  const repositoryMountSource = env.PSFN_REPOSITORY_DIR?.trim() || undefined;
+  const shellExecPolicy = {
+    ...(config.shellExec ?? createDefaultShellExecSettings()),
+    ...(repositoryMountSource ? { repositoryMountSource } : {}),
+    systemDataRoot: systemDataDir,
+    companionDataRoot: companionDataDir,
+  };
   const beadsToolsEnabled = resolveBeadsToolsEnabled(env.BEADS_TOOLS_ENABLED, {
     workspaceRoot,
     codebaseRoot,
@@ -470,6 +481,7 @@ export function resolveGatewayBootstrapInput(
       workspaceRoot,
       codebaseRoot,
       startupHydration.systemDataDir,
+      startupHydration.companionDataDir,
     ),
     server: {
       sessionHmacKeyring,

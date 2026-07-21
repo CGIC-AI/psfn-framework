@@ -85,6 +85,14 @@ Set `secrets.allowMissingRequired=false` in install values to make Helm fail
 early when the required app keys are absent. You may also set
 `secrets.existingSecret` and provide the documented keys yourself.
 
+When migrating any chart-created app, Postgres, or Redis credentials to an
+`existingSecret`, first adopt the existing Secret under the corresponding
+value. The chart marks created credential Secrets with
+`helm.sh/resource-policy: keep`, so the manifest transition or an uninstall
+orphans them instead of deleting live credentials; the adopted Secret then
+remains available under `secrets.existingSecret`,
+`postgres.auth.existingSecret`, or `redis.auth.existingSecret`.
+
 Secrets are rendered only as Kubernetes Secrets. The chart does not copy secret
 material into ConfigMaps, annotations, labels, or NOTES.
 
@@ -611,6 +619,37 @@ PSFN_REDIS_PASSWORD=<from Secret>
 
 Set `redis.enabled=false` for memory cache mode, or `redis.mode=external` with
 `redis.external.url` and `redis.external.passwordSecret`.
+
+## Sandboxed Companion CLI
+
+The model-facing `shell` tool is disabled by default. Its mutable policy is
+owned by `settings.json`, exposed in Garden's advanced settings, and loaded by
+the gateway. To enable a bounded CLI, set the complete `shellExec` object from
+`config/settings.seed.json`, change `enabled` to `true`, and explicitly list
+the permitted entry commands (for example `["bash", "rg"]`).
+
+The runtime invokes the allowlisted command through the exact-pinned Bubblewrap
+binary. The child receives a cleared environment, no network namespace, a
+read-only `/usr`, fresh `/proc`, `/dev`, and `/tmp`, and only
+`runtime.workspacePath` mounted writable at `/workspace`. The working directory
+cannot leave the Personal Workspace. Process count, address space, file size,
+CPU time, open files, wall time, and combined output are capped by the
+settings-owned `shellExec` policy. The gateway container also has CPU and memory
+cgroup limits in the chart.
+
+Enabling `bash` intentionally permits the companion to compose installed image
+commands inside that sandbox. It does not expose system-data, companion-data,
+Kubernetes Secrets, provider credentials, or peer workspaces. Keep
+`envAllowlist` empty unless a specific non-secret variable is required. The
+agent does not receive or execute this policy: the `analysis_workbench`
+`shell_exec` helper is a thin forward over the same gateway `shell.exec` RPC,
+so it cannot bypass the gateway confirmation and audit path.
+
+Setting `shellExec.mountRepositoryReadOnly=true` additionally mounts the
+deployment's repository checkout read-only at `/repo` inside the sandbox. The
+mount source is always the gateway's `PSFN_REPOSITORY_DIR` (the
+`repositoryCheckout` mount in this chart), never an operator-supplied path;
+enabling the toggle without a configured checkout fails closed at exec time.
 
 ## Internal mTLS
 

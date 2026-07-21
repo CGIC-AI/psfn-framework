@@ -291,7 +291,8 @@ Wyoming/OpenHome endpoint transports now run from the Satellite Hub repository. 
 **Obsidian Vault:**
 Configure vault name, CLI path, and auto-publish in `settings.json`, not `.env`.
 
-Requires Obsidian desktop app with CLI enabled. In gateway mode, add `obsidian` to `SHELL_EXEC_ALLOWLIST` if you enable vault tools.
+Requires Obsidian desktop app with CLI enabled. Vault operations use their
+dedicated gateway boundary and do not depend on the model-facing shell policy.
 
 **LiteLLM proxy (credential isolation):**
 ```bash

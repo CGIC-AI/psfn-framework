@@ -31,18 +31,26 @@ import {
 const FIRST_ID = '11111111-1111-4111-8111-111111111111';
 const SECOND_ID = '22222222-2222-4222-8222-222222222222';
 const FLEET: CompanionsFleetConfig = {
+  postgres: {
+    sharedMigrationRole: 'shared_schema_migration',
+    sharedMigrationDatabaseUrlRef: { kind: 'env', envName: 'SHARED_MIGRATION_URL' },
+  },
   companions: [
     {
       companionId: FIRST_ID,
       companionDataDir: 'companions/one',
       characterCardPath: 'companions/one/companion.json',
       postgresSchema: 'one',
+      postgresRole: 'companion_one_runtime',
+      postgresDatabaseUrlRef: { kind: 'env', envName: 'COMPANION_ONE_DATABASE_URL' },
     },
     {
       companionId: SECOND_ID,
       companionDataDir: 'companions/two',
       characterCardPath: 'companions/two/companion.json',
       postgresSchema: 'two',
+      postgresRole: 'companion_two_runtime',
+      postgresDatabaseUrlRef: { kind: 'env', envName: 'COMPANION_TWO_DATABASE_URL' },
     },
   ],
 };

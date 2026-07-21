@@ -78,6 +78,10 @@ describe('fs tool', () => {
     expect(longRead.path).toBe('docs/long.txt');
     expect(longRead.truncated).toBe(true);
     expect(String(longRead.content)).toHaveLength(20_000);
+    expect(longRead.next_action).toContain('analysis_workbench');
+    expect(longRead.next_action).toContain('subagent');
+    expect(longRead.next_action).toContain('source path');
+    expect(longRead.next_action).toContain('line or byte ranges');
     expect(searched).toMatchObject({
       action: 'search',
       query: 'alpha',
@@ -88,6 +92,23 @@ describe('fs tool', () => {
       expect.objectContaining({ path: 'docs/notes.txt', line: 1, column: 1 }),
       expect.objectContaining({ path: 'docs/notes.txt', line: 3, column: 1 }),
     ]);
+  });
+
+  it('advertises the hard read cap and the provenance-preserving large-document path', () => {
+    const tool = createFsTool(ops);
+
+    expect(tool.description).toContain('20,000 bytes');
+    expect(tool.description).toContain('analysis_workbench');
+    expect(tool.description).toContain('bounded subagent');
+    expect(tool.description).toContain('provenance-bearing excerpts');
+    expect(tool.parameters).toMatchObject({
+      properties: {
+        max_bytes: {
+          maximum: 20_000,
+          description: expect.stringContaining('hard cap'),
+        },
+      },
+    });
   });
 
   it('retargets broad searches to working folders and skips directories', async () => {

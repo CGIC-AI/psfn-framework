@@ -9,6 +9,7 @@ import {
 import { delimiter, join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import type { ModelUsageQueryPort } from '../../shared/telemetry/model-usage.js';
+import type { ShellExecSettings } from '../../system/config/shell-exec-config.js';
 
 // ── Fail-closed section vocabulary (mirrors self-status.ts) ────────────────
 export type DiagnosisStatus = 'available' | 'unavailable' | 'error';
@@ -154,6 +155,8 @@ export interface SelfDiagnosisDeps {
   /** Lazily-resolved model-usage query port; null when the backend cannot serve it. */
   getModelUsageQuery?: () => ModelUsageQueryPort | null;
   recentModelCallLimit?: number;
+  /** Gateway policy projection from canonical settings.json. */
+  shellExec?: ShellExecSettings;
   fs?: DiagnosisFs;
   exec?: DiagnosisExec;
   which?: DiagnosisWhich;
@@ -448,11 +451,17 @@ function resolvePolicyFlags(deps: SelfDiagnosisDeps): Record<string, unknown> {
   };
   return {
     status: 'available',
-    note: 'agent-process view of policy-relevant env; authoritative enforcement lives in the gateway process',
+    note: 'policy summary; authoritative shell enforcement lives in the gateway process',
     beads: flag(env.BEADS_TOOLS_ENABLED),
     beadsAllowActions: flag(env.BEADS_ALLOW_ACTIONS),
-    shellExec: flag(env.SHELL_EXEC_ENABLED),
-    shellExecAllowlist: flag(env.SHELL_EXEC_ALLOWLIST),
+    shellExec: {
+      value: deps.shellExec?.enabled ?? false,
+      source: 'settings.json',
+    },
+    shellExecAllowlist: {
+      value: [...(deps.shellExec?.allowlist ?? [])],
+      source: 'settings.json',
+    },
     vaultTools: flag(env.VAULT_TOOLS_ENABLED),
     gitRepoRoot: flag(env.GIT_REPO_ROOT),
     web: env.WEB_TOOLS_ENABLED !== undefined

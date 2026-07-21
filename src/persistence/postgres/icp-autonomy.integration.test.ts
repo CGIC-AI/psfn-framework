@@ -22,6 +22,7 @@ import { PostgresIcpInitiationCandidateStore } from './icp-initiation-candidate-
 import { PostgresIcpInitiationPolicyAuthority } from './icp-initiation-policy-authority.js';
 import { PostgresIcpSharedAutonomyStore } from './icp-shared-autonomy-store.js';
 import { SHARED_SCHEMA_NAME } from './migrations.js';
+import { bootstrapSharedSchema } from './shared-schema.js';
 
 const TIMEOUT_MS = 120_000;
 const A = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
@@ -58,7 +59,9 @@ afterAll(async () => {
 
 async function freshDatabaseUrl(): Promise<string> {
   if (!harness) throw new Error('Postgres integration harness is unavailable');
-  return (await harness.createDatabase()).databaseUrl;
+  const databaseUrl = (await harness.createDatabase()).databaseUrl;
+  await bootstrapSharedSchema(databaseUrl);
+  return databaseUrl;
 }
 
 function deferred(): { reached: Promise<void>; release: () => void; wait: () => Promise<void> } {

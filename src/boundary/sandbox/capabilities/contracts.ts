@@ -11,6 +11,7 @@ import type { ModuleRegistryMutation } from '../../../system/modules/types.js';
 import type {
   NestedAnalysisRunner,
   SandboxExecutionPort,
+  SandboxExecutionPortSeed,
 } from '../../../shared/contracts/sandbox-analysis-contracts.js';
 
 export type {
@@ -23,6 +24,7 @@ export type {
   SandboxDeniedCapability,
   SandboxExecutionBoundary,
   SandboxExecutionPort,
+  SandboxExecutionPortSeed,
   SandboxHostHelper,
   ShellExecView,
 } from '../../../shared/contracts/sandbox-analysis-contracts.js';
@@ -91,7 +93,7 @@ export interface ScheduleMutationResult {
 
 export interface SandboxDeps {
   llmProvider: LLMProviderPort;
-  executionPort?: SandboxExecutionPort | null;
+  executionPort?: SandboxExecutionPort | SandboxExecutionPortSeed | null;
   embeddingService: EmbeddingProviderPort | null;
   memoryStore: MemoryStorePort | null;
   sessionManager: SessionManager | null;

@@ -490,4 +490,3 @@ function formatContactDescriptorSuffix(descriptor: RetrievalContactContext): str
   cues.push(`${descriptor.trustLevel} contact`);
   return ` [${cues.join('; ')}]`;
 }
-

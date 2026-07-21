@@ -393,6 +393,8 @@ export function hydrateCanonicalStartupConfig(
   };
   const chargePolicyConfig = configStore.loadStartupChargePolicy();
   config.chargePolicy = chargePolicyConfig;
+  // bead 7ym.2.1: schema-owned subagent role registry (subagent-roles.json).
+  config.subagentRoles = configStore.loadStartupSubagentRoles();
 
   return {
     systemDataDir,

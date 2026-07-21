@@ -27,6 +27,11 @@ import {
   loadCapabilityTierConfig,
   saveCapabilityTierConfig,
 } from './capability-tier-config.js';
+import type { SubagentRoleRegistryConfig } from '../../faculties/subagents/role-registry.js';
+import {
+  loadSubagentRolesConfig,
+  saveSubagentRolesConfig,
+} from './subagent-roles-config.js';
 import type { ChargePolicyConfig } from './charge-policy-config.js';
 import {
   loadChargePolicyConfig,
@@ -61,6 +66,7 @@ import {
   loadStartupSchedulerOwnerFile,
   loadStartupTrustPolicyOwnerFile,
   loadStartupChargePolicyOwnerFile,
+  loadStartupSubagentRolesOwnerFile,
   type StartupOwnerFileState,
 } from './startup-owner-files.js';
 import type { IntakePolicyConfig } from './intake-policy-config.js';
@@ -118,6 +124,9 @@ export interface ConfigStorePort {
   loadStartupCapabilityTier(): CapabilityTierConfig;
   loadStartupChargePolicy(): ChargePolicyConfig;
   loadStartupIntakePolicy(): IntakePolicyConfig;
+  loadSubagentRoles(): SubagentRoleRegistryConfig;
+  saveSubagentRoles(nextConfig: unknown): SubagentRoleRegistryConfig;
+  loadStartupSubagentRoles(): SubagentRoleRegistryConfig;
 }
 
 export interface OwnerFileConfigStoreOptions {
@@ -172,6 +181,9 @@ export function createOwnerFileConfigStore(
     saveCapabilityTier: (nextConfig) => saveCapabilityTierConfig(companionDataDir, nextConfig),
     loadChargePolicy: () => loadChargePolicyConfig(companionDataDir, loadOptions),
     saveChargePolicy: (nextConfig) => saveChargePolicyConfig(companionDataDir, nextConfig),
+    // bead 7ym.2.1: subagent-roles.json is a cluster-global system owner file.
+    loadSubagentRoles: () => loadSubagentRolesConfig(options.dataDir, loadOptions),
+    saveSubagentRoles: (nextConfig) => saveSubagentRolesConfig(options.dataDir, nextConfig),
     loadChannels: (env, overrides) => loadRuntimeChannelsConfig(
       options.dataDir,
       env,
@@ -218,6 +230,10 @@ export function createOwnerFileConfigStore(
       options.seedDir,
     ),
     loadStartupIntakePolicy: () => loadStartupIntakePolicyOwnerFile(
+      options.dataDir,
+      options.seedDir,
+    ),
+    loadStartupSubagentRoles: () => loadStartupSubagentRolesOwnerFile(
       options.dataDir,
       options.seedDir,
     ),

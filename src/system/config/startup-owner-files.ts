@@ -38,6 +38,8 @@ import {
   CHARGE_POLICY_FILE_NAME,
   CHARGE_POLICY_SEED_FILE_NAME,
 } from './charge-policy-config.js';
+import { loadSubagentRolesConfig } from './subagent-roles-config.js';
+import type { SubagentRoleRegistryConfig } from '../../faculties/subagents/role-registry.js';
 import {
   BACKUP_FILE_NAME,
   BACKUP_SEED_FILE_NAME,
@@ -224,6 +226,13 @@ export function loadStartupChargePolicyOwnerFile(
   seedDir?: string,
 ): ChargePolicyConfig {
   return loadChargePolicyConfig(dataDir, seedDir ? { seedDir } : undefined);
+}
+
+export function loadStartupSubagentRolesOwnerFile(
+  dataDir: string,
+  seedDir?: string,
+): SubagentRoleRegistryConfig {
+  return loadSubagentRolesConfig(dataDir, seedDir ? { seedDir } : undefined);
 }
 
 export function loadStartupCompanionsOwnerFile(

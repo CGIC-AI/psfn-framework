@@ -30,6 +30,7 @@ import {
   type SubstrateConfig,
   sanitizeCoreSubstrateConfig,
 } from './runtime-config-contracts.js';
+import { createEmptySubagentRoleRegistryConfig } from '../../faculties/subagents/role-registry.js';
 import { createDefaultGroupMemorySettings } from './group-memory-config.js';
 import { createDefaultEmotionScopingSettings } from './emotion-scoping-config.js';
 import { createDefaultMemoryRetrievalPolicy } from './memory-retrieval-policy.js';
@@ -618,6 +619,9 @@ function loadConfigForMode(mode: LoadConfigMode, env: NodeJS.ProcessEnv = proces
     telegramEnabled: false,
     capabilityTier: DEFAULT_CAPABILITY_TIER,
     shardToolsets: {},
+    // bead 7ym.2.1: placeholder empty registry; the real subagent-roles.json
+    // owner file is loaded and assigned during startup (bootstrap-helpers).
+    subagentRoles: createEmptySubagentRoleRegistryConfig(),
     // Obsidian vault
     obsidianAutoPublish: false,
     obsidianTimeoutMs: DEFAULT_OBSIDIAN_TIMEOUT_MS,

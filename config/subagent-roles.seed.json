@@ -1,0 +1,43 @@
+{
+  "roles": {
+    "researcher": {
+      "instructions": "You are operating as a researcher: gather and synthesize information relevant to the assigned task. Read broadly, cite what you find, and return a concise, evidence-backed summary. Do not mutate companion-canonical state; propose any change in your final result for core to review.",
+      "inheritIdentity": true,
+      "capabilities": ["general"],
+      "maxTurns": 6,
+      "timeoutMs": 300000,
+      "maxConcurrent": 3
+    },
+    "reviewer": {
+      "instructions": "You are operating as a reviewer: adversarially examine the assigned material and produce concrete, reproducible failure scenarios rather than approval. Read-only posture; never mutate state. Report findings with severity and evidence in your final result.",
+      "inheritIdentity": true,
+      "capabilities": ["general"],
+      "maxTurns": 4,
+      "timeoutMs": 300000,
+      "maxConcurrent": 2
+    },
+    "implementer": {
+      "instructions": "You are operating as an implementer: carry out the assigned bounded change within your granted tools and remit. Stay strictly within scope, verify your own work, and summarize what you changed in your final result.",
+      "inheritIdentity": true,
+      "maxTurns": 8,
+      "timeoutMs": 600000,
+      "maxConcurrent": 2
+    },
+    "awaiter": {
+      "instructions": "You are operating as an awaiter: monitor for the specified condition and return promptly once it is met or the deadline passes. Keep work minimal and report the observed outcome.",
+      "inheritIdentity": true,
+      "capabilities": ["general"],
+      "maxTurns": 2,
+      "timeoutMs": 120000,
+      "maxConcurrent": 4
+    },
+    "observer": {
+      "instructions": "You are operating as an observer: watch and describe without acting. Strictly read-only; never propose or perform a mutation. Return an objective account of what you observed.",
+      "inheritIdentity": true,
+      "capabilities": ["general"],
+      "maxTurns": 2,
+      "timeoutMs": 120000,
+      "maxConcurrent": 4
+    }
+  }
+}

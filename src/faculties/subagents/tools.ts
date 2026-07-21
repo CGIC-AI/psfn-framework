@@ -19,6 +19,7 @@ interface SubagentToolParams {
   task?: string;
   message?: string;
   reason?: string;
+  role?: string;
   system_prompt?: string;
   max_turns?: number;
   capabilities?: string[];
@@ -45,6 +46,11 @@ export function createSubagentTool(port: SubagentControlPort): SubstrateAgentToo
       task: Type.Optional(Type.String({ description: 'Initial bounded task for a spawned automaton.' })),
       message: Type.Optional(Type.String({ description: 'Follow-up instruction for an active automaton.' })),
       reason: Type.Optional(Type.String({ description: 'Optional cancellation note.' })),
+      role: Type.Optional(Type.String({
+        description: 'Optional named role profile (e.g. researcher, reviewer, implementer, awaiter, '
+          + 'observer). Layers role instructions over inherited companion identity and narrows the '
+          + 'toolset/limits. An unknown role fails the spawn closed.',
+      })),
       system_prompt: Type.Optional(Type.String({ description: 'Optional automaton system prompt override.' })),
       max_turns: Type.Optional(Type.Number({
         minimum: 1,
@@ -87,6 +93,9 @@ export function createSubagentTool(port: SubagentControlPort): SubstrateAgentToo
               workSpec: buildSubagentWorkSpec(
                 requestContext ? { correlation: requestContext } : {},
               ),
+              ...(typeof params.role === 'string' && params.role.trim().length > 0
+                ? { role: params.role.trim() }
+                : {}),
               ...(typeof params.system_prompt === 'string' ? { systemPrompt: params.system_prompt } : {}),
               ...(typeof params.max_turns === 'number' ? { maxTurns: params.max_turns } : {}),
               ...(params.capabilities?.length ? { capabilities: params.capabilities } : {}),

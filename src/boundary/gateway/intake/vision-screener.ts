@@ -687,6 +687,13 @@ export interface VisionIntakeImageScreenResult {
   action?: string;
   riskLabels?: string[];
   promptBlock?: string;
+  /**
+   * Sanitized, image-derived neutral description (the screening's effectiveText,
+   * post-L1). Present only for delivered (non-withheld) screened images. Lets
+   * the agent reuse this single extraction as the model-visible/persisted
+   * description instead of firing a second dedicated vision pass (bead j8gv).
+   */
+  description?: string;
   noticeText?: string;
   model?: string;
   latencyMs?: number;
@@ -711,6 +718,11 @@ export function toVisionIntakeImageScreenResult(
         model: outcome.verdict.model,
         latencyMs: Number(outcome.verdict.latencyMs.toFixed(1)),
         ...(outcome.promptBlock !== undefined ? { promptBlock: outcome.promptBlock } : {}),
+        // Reuse the single sanitized extraction downstream (bead j8gv). Only for
+        // delivered images — a withheld image never surfaces its description.
+        ...(!outcome.withheld && outcome.screening.effectiveText.trim().length > 0
+          ? { description: outcome.screening.effectiveText }
+          : {}),
         ...(outcome.noticeText !== undefined ? { noticeText: outcome.noticeText } : {}),
       };
     case 'failed_closed':

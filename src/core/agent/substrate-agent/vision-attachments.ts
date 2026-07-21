@@ -49,6 +49,12 @@ export interface VisionIntakeScreenDecision {
   riskLabels?: string[];
   /** Labeled untrusted transcript delivered alongside a benign image. */
   promptBlock?: string;
+  /**
+   * Sanitized image-derived neutral description (delivered images only). Reused
+   * as the model-visible/persisted description so inbound chat images need only
+   * the one intake-screen vision pass, not a second dedicated review (bead j8gv).
+   */
+  description?: string;
   /** Fixed soft-notice text (htm9.12 wording contract) when withheld. */
   noticeText?: string;
   model?: string;
@@ -260,6 +266,44 @@ export async function buildTurnUserContent(input: {
     };
   }
 
+  // One neutral extraction per inbound image (bead j8gv): when the intake
+  // screener already produced descriptions for the surviving benign images,
+  // reuse them as the model-visible + persisted description and SKIP the
+  // redundant dedicated vision review. The ImageVisionReviewer stays reserved
+  // for generated-image validation (image tools), which runs elsewhere and is
+  // unaffected. This branch is preferred over the reviewer branch below so the
+  // production config (screener + reviewer both wired) collapses to one pass.
+  if (visionUrls.length > 0 && !hasInlineImages && intake.descriptions.length > 0) {
+    const descriptionSummary = intake.descriptions.join('\n\n');
+    const extraNotes = [...intakeNotes];
+    if (visionCollection.droppedCount > 0) {
+      extraNotes.push(
+        `${String(visionCollection.droppedCount)} additional image attachment(s) exceeded the ${String(VISION_TURN_IMAGE_CEILING)}-image per-turn limit and were not reviewed; say so if it matters.`,
+      );
+    }
+    return {
+      content: buildScreenedVisionTurnText({
+        descriptionSummary,
+        semanticText,
+        extraNotes,
+        transcriptBlocks: intake.promptBlocks,
+      }),
+      persistedUserContent: appendPersistedImageAttachmentBlock(
+        message.content,
+        buildPersistedImageAttachmentBlock({
+          summary: descriptionSummary,
+          ...(intake.screenModel ? { model: intake.screenModel } : {}),
+          imageCount: intake.descriptions.length,
+        }),
+      ),
+      currentTurnVisionReview: {
+        imageUrls: [...visionUrls],
+        question: DEDICATED_VISION_REVIEW_QUESTION,
+        summary: descriptionSummary,
+      },
+    };
+  }
+
   if (visionUrls.length > 0 && !hasInlineImages && input.visionReviewer) {
     try {
       const review = await analyzeVisionUrlsInChunks({
@@ -391,6 +435,14 @@ interface TurnImageIntakeScreening {
   noticeText?: string;
   /** Labeled untrusted transcripts for delivered (benign) images. */
   promptBlocks: string[];
+  /**
+   * Sanitized neutral descriptions for delivered images (bead j8gv), reused as
+   * the model-visible/persisted description so the dedicated review pass is not
+   * fired for inbound chat images. Empty when no screener is wired.
+   */
+  descriptions: string[];
+  /** Vision-screen model that produced the descriptions, for persistence. */
+  screenModel?: string;
 }
 
 /**
@@ -408,7 +460,7 @@ async function screenTurnImageAttachments(input: {
   const { message, screener } = input;
   const attachments = message.attachments ?? [];
   if (!screener || attachments.length === 0) {
-    return { message, withheldCount: 0, withheldUrls: [], promptBlocks: [] };
+    return { message, withheldCount: 0, withheldUrls: [], promptBlocks: [], descriptions: [] };
   }
 
   const canonicalContactId = message.routing?.canonicalContactId;
@@ -438,10 +490,10 @@ async function screenTurnImageAttachments(input: {
     });
   }
   if (candidates.length === 0) {
-    return { message, withheldCount: 0, withheldUrls: [], promptBlocks: [] };
+    return { message, withheldCount: 0, withheldUrls: [], promptBlocks: [], descriptions: [] };
   }
 
-  const decisions = await Promise.all(candidates.map(async (candidate): Promise<VisionIntakeScreenDecision> => {
+  const screenOne = async (candidate: ScreenCandidate): Promise<VisionIntakeScreenDecision> => {
     try {
       return await screener.screenImageIntake({
         ...candidate.request,
@@ -467,12 +519,34 @@ async function screenTurnImageAttachments(input: {
         noticeText: INTAKE_FIREWALL_NOTICE_TEMPLATES.withheldImage,
       };
     }
+  };
+
+  // Dedup identical images within one message: screen each unique image once
+  // and reuse its decision for every attachment that shares the same bytes/URL,
+  // so a meme repeated across attachments costs one vision pass, not one per
+  // copy (bead j8gv). The security decision (withhold) still applies to every
+  // copy; only the redundant screening call is collapsed.
+  const candidateKeys = candidates.map(
+    (candidate) => candidate.request.imageBase64 ?? candidate.request.imageUrl ?? candidate.originRef,
+  );
+  const decisionByKey = new Map<string, Promise<VisionIntakeScreenDecision>>();
+  const decisions = await Promise.all(candidates.map((candidate, position) => {
+    const key = candidateKeys[position];
+    let pending = decisionByKey.get(key);
+    if (!pending) {
+      pending = screenOne(candidate);
+      decisionByKey.set(key, pending);
+    }
+    return pending;
   }));
 
   const withheld = new Set<Attachment>();
   const withheldUrls: string[] = [];
   const promptBlocks: string[] = [];
+  const descriptions: string[] = [];
+  const collectedKeys = new Set<string>();
   let noticeText: string | undefined;
+  let screenModel: string | undefined;
   decisions.forEach((decision, position) => {
     const candidate = candidates[position];
     if (decision.withheld) {
@@ -490,8 +564,21 @@ async function screenTurnImageAttachments(input: {
       });
       return;
     }
-    if (decision.promptBlock) {
-      promptBlocks.push(decision.promptBlock);
+    // One prompt block / description per UNIQUE delivered image, so duplicates
+    // do not inflate the model context or double-count extractions.
+    const key = candidateKeys[position];
+    if (!collectedKeys.has(key)) {
+      collectedKeys.add(key);
+      if (decision.promptBlock) {
+        promptBlocks.push(decision.promptBlock);
+      }
+      const description = decision.description?.trim();
+      if (description && description.length > 0) {
+        descriptions.push(description);
+      }
+      if (!screenModel && decision.model) {
+        screenModel = decision.model;
+      }
     }
     input.logger.debug('Vision intake screening decision', {
       channelId: message.channelId,
@@ -505,7 +592,14 @@ async function screenTurnImageAttachments(input: {
   });
 
   if (withheld.size === 0) {
-    return { message, withheldCount: 0, withheldUrls: [], promptBlocks };
+    return {
+      message,
+      withheldCount: 0,
+      withheldUrls: [],
+      promptBlocks,
+      descriptions,
+      ...(screenModel !== undefined ? { screenModel } : {}),
+    };
   }
   return {
     message: {
@@ -516,6 +610,8 @@ async function screenTurnImageAttachments(input: {
     withheldUrls,
     ...(noticeText !== undefined ? { noticeText } : {}),
     promptBlocks,
+    descriptions,
+    ...(screenModel !== undefined ? { screenModel } : {}),
   };
 }
 
@@ -1023,6 +1119,48 @@ function buildUnresolvedVisionTurnText(input: {
     textParts.push(`[Runtime note] ${note}`);
   }
   textParts.push(formatVisionAttachmentFailureSummary(input.failures));
+  if (input.semanticText.length > 0) {
+    textParts.push(`User text: ${input.semanticText}`);
+  }
+  return textParts.join('\n\n');
+}
+
+/**
+ * Turn text for inbound chat images whose description came from the single
+ * intake screen (bead j8gv) — no second dedicated review pass. In enforce mode
+ * the screener's own labeled transcript blocks carry the description to the
+ * model; when they are absent (e.g. shadow mode) the sanitized description is
+ * injected under the same untrusted-data label so the model still receives one
+ * neutral description.
+ */
+function buildScreenedVisionTurnText(input: {
+  descriptionSummary: string;
+  semanticText: string;
+  extraNotes?: readonly string[];
+  transcriptBlocks?: readonly string[];
+}): string {
+  const textParts: string[] = [DEDICATED_VISION_REVIEW_INSTRUCTION];
+  const transcriptBlocks = input.transcriptBlocks ?? [];
+  if (transcriptBlocks.length > 0) {
+    for (const block of transcriptBlocks) {
+      textParts.push(block);
+    }
+  } else {
+    const neutralizedSummary = input.descriptionSummary
+      .trim()
+      .replace(UNTRUSTED_IMAGE_REVIEW_TAG_PATTERN, '[delimiter-collision-removed]');
+    textParts.push(
+      [
+        'Current image review (untrusted image-derived data):',
+        '<untrusted_image_review>',
+        neutralizedSummary,
+        '</untrusted_image_review>',
+      ].join('\n'),
+    );
+  }
+  for (const note of input.extraNotes ?? []) {
+    textParts.push(`[Runtime note] ${note}`);
+  }
   if (input.semanticText.length > 0) {
     textParts.push(`User text: ${input.semanticText}`);
   }

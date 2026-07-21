@@ -2929,9 +2929,33 @@
     },
     {
       "file": "src/faculties/memory/episodic/dream-meaning-pass.ts",
+      "name": "DEFAULT_TRANSCRIPT_MESSAGE_LIMIT",
+      "value": "40",
+      "note": "Code-owned session-read safety bound for optional transcript grounding; prevents unbounded history reads when no explicit limit is supplied."
+    },
+    {
+      "file": "src/faculties/memory/episodic/dream-meaning-pass.ts",
       "name": "MAX_MEANING_CHARS",
       "value": "800",
       "note": "zet.7 refusal: DreamMeaningPass options unthreaded; deferred (needs new settings section)."
+    },
+    {
+      "file": "src/faculties/memory/episodic/dream-meaning-pass.ts",
+      "name": "MAX_MEANING_SENTENCES",
+      "value": "4",
+      "note": "Code-owned atomic-meaning protocol ceiling coupled to both the model prompt and deterministic response validator."
+    },
+    {
+      "file": "src/faculties/memory/episodic/dream-meaning-pass.ts",
+      "name": "MAX_TRANSCRIPT_ENTRIES_PER_EPISODE",
+      "value": "12",
+      "note": "Code-owned prompt-amplification ceiling that bounds transcript evidence included for each episode."
+    },
+    {
+      "file": "src/faculties/memory/episodic/dream-meaning-pass.ts",
+      "name": "MAX_TRANSCRIPT_ENTRY_CHARS",
+      "value": "300",
+      "note": "Code-owned per-entry prompt-allocation ceiling that bounds transcript evidence amplification."
     },
     {
       "file": "src/faculties/memory/episodic/postgres-store/rows.ts",

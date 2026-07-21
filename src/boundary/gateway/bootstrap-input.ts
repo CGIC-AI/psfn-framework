@@ -292,6 +292,7 @@ function buildGatewayPolicyConfig(
   workspaceRoot: string,
   codebaseRoot: string,
   systemDataDir: string,
+  companionDataDir: string,
 ): PolicyConfig {
   const fullCodebaseReadRoot = resolveFullCodebaseReadRootFromEnv(env, codebaseRoot);
   const discoveryLaneConfig = resolveDiscoveryLaneConfig({
@@ -306,6 +307,8 @@ function buildGatewayPolicyConfig(
   const shellExecPolicy = {
     ...(config.shellExec ?? createDefaultShellExecSettings()),
     ...(repositoryMountSource ? { repositoryMountSource } : {}),
+    systemDataRoot: systemDataDir,
+    companionDataRoot: companionDataDir,
   };
   const beadsToolsEnabled = resolveBeadsToolsEnabled(env.BEADS_TOOLS_ENABLED, {
     workspaceRoot,
@@ -478,6 +481,7 @@ export function resolveGatewayBootstrapInput(
       workspaceRoot,
       codebaseRoot,
       startupHydration.systemDataDir,
+      startupHydration.companionDataDir,
     ),
     server: {
       sessionHmacKeyring,

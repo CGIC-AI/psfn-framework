@@ -131,6 +131,10 @@ describe('resolveGatewayBootstrapInput', () => {
       token: 'ntfy-token',
     });
     expect(bootstrap.policyConfig.workspacePath).toBe('/workspace');
+    expect(bootstrap.policyConfig.shellExec).toMatchObject({
+      systemDataRoot: '/system-data',
+      companionDataRoot: '/companion-data',
+    });
     expect(bootstrap.policyConfig.protectedWritePaths).toContain('/workspace/skills');
     // Operator hook root must be fenced against model-driven writes (psfn-framework-vvf.2):
     // the hook loader dynamically imports handler modules from <workspaceRoot>/hooks.

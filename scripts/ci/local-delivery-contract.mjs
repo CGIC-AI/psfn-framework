@@ -1,3 +1,6 @@
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
 import { detectChangeScope } from './detect-change-scope.mjs';
 
 const SHA = /^[0-9a-f]{40}$/;
@@ -5,6 +8,19 @@ const ZERO_SHA = '0'.repeat(40);
 
 export const LOCAL_GATE_SCHEMA_VERSION = 1;
 export const REMOTE_ATTESTATION_CONTEXT = 'local-gate/v1';
+
+// Two-phase execution of the local gate. Preflight gates are cheap and
+// parallel-safe across independent worktrees (they take no machine lock).
+// The heavy phase is the full product/Postgres test suite; it is serialized
+// machine-wide by a single lock so concurrent worktrees do not contend for
+// the same finite resources. The phase tag lives on each planned gate so the
+// attestation gate list (membership and order) is unchanged.
+export const GATE_PHASE = Object.freeze({ PREFLIGHT: 'preflight', HEAVY: 'heavy' });
+
+// Fixed, worktree-independent rendezvous for the heavy-phase lock. A directory
+// (mkdir is atomic and fails when it already exists) rather than a file so the
+// holder's metadata and the reap mutex live beside it.
+export const HEAVY_PHASE_LOCK_DIR = join(tmpdir(), 'psfn-local-gate-heavy.lock');
 
 function assertSha(value, name) {
   if (!SHA.test(value)) throw new Error(`${name} must be a lowercase 40-character git SHA`);
@@ -117,7 +133,46 @@ export function planPrePush({
 }
 
 function command(name, executable, args, options = {}) {
-  return { name, executable, args, ...options };
+  return { name, executable, args, phase: GATE_PHASE.PREFLIGHT, ...options };
+}
+
+// Split a built gate plan into its execution phases without changing the
+// membership or ordering of either subset relative to the plan. Every gate
+// carries a phase; anything not explicitly tagged heavy is preflight.
+export function partitionGatePlan(plan) {
+  const preflight = plan.filter((gate) => (gate.phase ?? GATE_PHASE.PREFLIGHT) !== GATE_PHASE.HEAVY);
+  const heavy = plan.filter((gate) => gate.phase === GATE_PHASE.HEAVY);
+  return { preflight, heavy };
+}
+
+export function formatDuration(ms) {
+  if (!Number.isFinite(ms) || ms < 0) return 'unknown';
+  const totalSeconds = Math.floor(ms / 1000);
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  const parts = [];
+  if (hours) parts.push(`${hours}h`);
+  if (hours || minutes) parts.push(`${minutes}m`);
+  parts.push(`${seconds}s`);
+  return parts.join('');
+}
+
+// Human-facing diagnostic printed by a waiter while the heavy-phase lock is
+// held elsewhere: who holds it, from where, since when, and how long we have
+// been blocked. A person watching a stalled gate must identify the blocker at
+// a glance.
+export function describeLockWait({ holder, waitedMs, self }) {
+  const holderPid = holder?.pid ?? 'unknown';
+  const holderWorktree = holder?.worktree ?? 'unknown worktree';
+  const holderCommand = holder?.command ?? 'unknown command';
+  const heldSince = holder?.startedAt ? `since ${holder.startedAt}` : 'since an unknown time';
+  const selfPid = self?.pid ?? 'unknown';
+  const selfWorktree = self?.worktree ?? 'unknown worktree';
+  return (
+    `heavy-phase lock held by pid ${holderPid} (${holderWorktree}, cmd: ${holderCommand}) ` +
+    `${heldSince}; pid ${selfPid} (${selfWorktree}) has waited ${formatDuration(waitedMs)}`
+  );
 }
 
 export function buildGatePlan({
@@ -169,6 +224,7 @@ export function buildGatePlan({
     }),
     command('tests', 'npm', ['test', '--', '--maxWorkers=4'], {
       skip: !scope.root_runtime,
+      phase: GATE_PHASE.HEAVY,
     }),
   ];
 

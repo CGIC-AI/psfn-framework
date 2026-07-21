@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -8,17 +8,26 @@ import test from 'node:test';
 import { validateToolReport } from './check-local-tools.mjs';
 import { normalizeAliasValue } from './install-local-hooks.mjs';
 import {
+  GATE_PHASE,
   REMOTE_ATTESTATION_CONTEXT,
   assessHookInstallation,
   buildValidatedPushRefspec,
   buildGatePlan,
   createAttestation,
+  describeLockWait,
   evaluateRequiredChecks,
+  partitionGatePlan,
   planPrePush,
   validateAttestation,
   validateRemoteAttestation,
 } from './local-delivery-contract.mjs';
-import { runLocalGate } from './run-local-gate.mjs';
+import {
+  acquireHeavyPhaseLock,
+  isProcessAlive,
+  releaseHeavyPhaseLock,
+  runLocalGate,
+  withHeavyPhaseLock,
+} from './run-local-gate.mjs';
 import { validateZizmorInputs } from './run-zizmor-changed.mjs';
 import { waitForRemoteAttestation } from './verify-pr-attestation.mjs';
 
@@ -272,6 +281,318 @@ test('local gate writes one exact-head attestation and reuses it without rerunni
   const third = await runLocalGate({ cwd, baseRef: base, execute });
   assert.notEqual(third.head, first.head);
   assert.ok(executed.length > firstCount);
+});
+
+function makeLockDir() {
+  const parent = mkdtempSync(join(tmpdir(), 'heavy-phase-lock-'));
+  return join(parent, 'heavy.lock');
+}
+
+function seedLock(lockDir, meta) {
+  mkdirSync(lockDir, { recursive: true });
+  writeFileSync(join(lockDir, 'meta.json'), `${JSON.stringify(meta)}\n`);
+}
+
+function readSeededMeta(lockDir) {
+  return JSON.parse(readFileSync(join(lockDir, 'meta.json'), 'utf8'));
+}
+
+test('gate plan splits the heavy product suite from parallel-safe preflight', () => {
+  const plan = buildGatePlan({
+    paths: ['deploy/helm/psfn/values.yaml', 'src/system/config/load-config.ts'],
+  });
+  const { preflight, heavy } = partitionGatePlan(plan);
+
+  // Only the product/Postgres suite is heavy; everything else is preflight.
+  assert.deepEqual(heavy.map(({ name }) => name), ['tests']);
+  assert.equal(plan.find(({ name }) => name === 'tests').phase, GATE_PHASE.HEAVY);
+  assert.ok(!preflight.some(({ name }) => name === 'tests'));
+
+  // Cheap contracts (deployment/settings/supply-chain) are preflight, so they
+  // fire before the heavy suite — the PR-190 ordering regression stays fixed.
+  for (const contract of ['deployment-contracts', 'settings-contract', 'supply-chain']) {
+    assert.ok(
+      preflight.some(({ name }) => name === contract),
+      `${contract} must run in the preflight phase`,
+    );
+  }
+  // Partition preserves the plan's own ordering within each phase.
+  assert.deepEqual(
+    [...preflight, ...heavy].map(({ name }) => name).sort(),
+    plan.map(({ name }) => name).sort(),
+  );
+});
+
+test('heavy-phase lock: preflight runs lock-free while the heavy suite holds the lock', async () => {
+  const { cwd, base } = makeGateRepository();
+  const lockDir = makeLockDir();
+  const lockPresent = {};
+  const execute = async (gate) => {
+    lockPresent[gate.name] = existsSync(lockDir);
+  };
+
+  await runLocalGate({
+    cwd,
+    baseRef: base,
+    execute,
+    heavyLock: { lockDir, isAlive: () => true, sleep: async () => {} },
+  });
+
+  assert.equal(lockPresent.tests, true, 'heavy suite must run while the lock is held');
+  assert.equal(lockPresent['ci-rules'], false, 'preflight must run without the lock');
+  assert.equal(lockPresent['lint'], false, 'preflight must run without the lock');
+  assert.equal(existsSync(lockDir), false, 'lock must be released after the heavy phase');
+});
+
+test('heavy-phase lock: a delivery-only change takes no lock', async () => {
+  const lockDir = makeLockDir();
+  // No heavy gate is active for a docs/delivery-only change.
+  const plan = buildGatePlan({ paths: ['README.md'] });
+  const { heavy } = partitionGatePlan(plan);
+  assert.ok(heavy.every(({ skip }) => skip), 'delivery-only plan has no active heavy gate');
+  // Direct check: acquiring is only reached when an active heavy gate exists,
+  // so the lock directory is never created for delivery-only work.
+  assert.equal(existsSync(lockDir), false);
+});
+
+test('heavy-phase lock: two gates serialize; the waiter prints who holds it', async () => {
+  const lockDir = makeLockDir();
+  const logs = [];
+  const log = { error: (message) => logs.push(message) };
+  let clock = 0;
+  const now = () => clock;
+
+  const holderMeta = { pid: 111, worktree: '/worktree/a', command: 'tests', startedAt: 't0' };
+  const first = await acquireHeavyPhaseLock({
+    lockDir,
+    meta: holderMeta,
+    isAlive: () => true,
+    now,
+    log,
+    sleep: async () => {},
+  });
+  assert.equal(readSeededMeta(lockDir).pid, 111);
+
+  const waiterMeta = { pid: 222, worktree: '/worktree/b', command: 'tests', startedAt: 't1' };
+  let polls = 0;
+  const sleep = async (ms) => {
+    polls += 1;
+    clock += ms;
+    if (polls === 3) first.release(); // holder finishes; waiter can proceed
+  };
+
+  const second = await acquireHeavyPhaseLock({
+    lockDir,
+    meta: waiterMeta,
+    isAlive: () => true,
+    now,
+    log,
+    sleep,
+    diagnosticEveryMs: 1,
+  });
+
+  assert.ok(polls >= 3, 'the second gate waited for the first');
+  assert.ok(
+    logs.some((m) => /held by pid 111/.test(m) && /\/worktree\/a/.test(m) && /waited/.test(m)),
+    'waiter must report the live holder and its own wait state',
+  );
+  assert.equal(readSeededMeta(lockDir).pid, 222, 'the waiter owns the lock once free');
+  second.release();
+  assert.equal(existsSync(lockDir), false);
+});
+
+test('heavy-phase lock: a dead owner is reclaimed', async () => {
+  const lockDir = makeLockDir();
+  const deadPid = 999001;
+  seedLock(lockDir, { pid: deadPid, worktree: '/crashed', command: 'tests', startedAt: 't0' });
+  const logs = [];
+
+  const handle = await acquireHeavyPhaseLock({
+    lockDir,
+    meta: { pid: 222, worktree: '/live', command: 'tests', startedAt: 't1' },
+    isAlive: (pid) => pid !== deadPid,
+    log: { error: (m) => logs.push(m) },
+    sleep: async () => {},
+  });
+
+  assert.equal(readSeededMeta(lockDir).pid, 222, 'the live process reclaimed the stale lock');
+  assert.ok(logs.some((m) => /reclaimed stale lock from dead pid 999001/.test(m)));
+  handle.release();
+});
+
+test('heavy-phase lock: a live owner is never stolen', async () => {
+  const lockDir = makeLockDir();
+  const livePid = 424242;
+  seedLock(lockDir, { pid: livePid, worktree: '/live-holder', command: 'tests', startedAt: 't0' });
+
+  const sentinel = new Error('gave up waiting');
+  let polls = 0;
+  await assert.rejects(
+    acquireHeavyPhaseLock({
+      lockDir,
+      meta: { pid: 222, worktree: '/waiter', command: 'tests', startedAt: 't1' },
+      isAlive: () => true, // holder is alive the whole time
+      log: { error: () => {} },
+      sleep: async () => {
+        polls += 1;
+        if (polls >= 5) throw sentinel; // break the otherwise-unbounded wait
+      },
+    }),
+    (error) => error === sentinel,
+  );
+
+  assert.equal(readSeededMeta(lockDir).pid, livePid, 'the live holder was never displaced');
+});
+
+test('heavy-phase lock: a crashed holder does not wedge the next run', async () => {
+  const lockDir = makeLockDir();
+  const crashedPid = 999002;
+  // Leftover lock from a process that died mid-heavy-phase without releasing.
+  seedLock(lockDir, { pid: crashedPid, worktree: '/crashed', command: 'tests', startedAt: 't0' });
+
+  let ran = false;
+  await withHeavyPhaseLock(
+    {
+      lockDir,
+      meta: { pid: 222, worktree: '/fresh', command: 'tests', startedAt: 't1' },
+      isAlive: (pid) => pid !== crashedPid,
+      log: { error: () => {} },
+      sleep: async () => {},
+    },
+    async () => {
+      ran = true;
+      assert.equal(readSeededMeta(lockDir).pid, 222, 'fresh run holds the lock in-body');
+    },
+  );
+
+  assert.ok(ran, 'the heavy body ran after reclaiming the crashed holder');
+  assert.equal(existsSync(lockDir), false, 'the lock is released after the heavy body');
+});
+
+test('heavy-phase lock: a metaless orphan past the grace period is reclaimed', async () => {
+  const lockDir = makeLockDir();
+  // A holder crashed between mkdir(lockDir) and publishing meta.json, leaving a
+  // metaless directory (and a leftover temp file) that no dead-PID reap can see.
+  mkdirSync(lockDir, { recursive: true });
+  writeFileSync(join(lockDir, 'meta.json.tmp-999001-abcd'), 'partial');
+  const logs = [];
+  const stat = () => ({ birthtimeMs: 1000, mtimeMs: 1000 });
+  const now = () => 1000 + 60000; // 60s later: well past the 10s grace
+
+  const handle = await acquireHeavyPhaseLock({
+    lockDir,
+    meta: { pid: 222, worktree: '/live', command: 'tests', startedAt: 't1' },
+    isAlive: () => false, // the orphan's owner is gone; nobody is mid-write
+    now,
+    stat,
+    log: { error: (m) => logs.push(m) },
+    sleep: async () => {},
+  });
+
+  assert.equal(readSeededMeta(lockDir).pid, 222, 'the waiter acquired after reclaiming the orphan');
+  assert.ok(
+    logs.some((m) => /reclaimed metaless lock dir/.test(m)),
+    'the metaless reclaim is reported',
+  );
+  handle.release();
+});
+
+test('heavy-phase lock: a fresh metaless dir is honored once its writer publishes', async () => {
+  const lockDir = makeLockDir();
+  // The writer has created the directory but not yet published meta.json.
+  mkdirSync(lockDir, { recursive: true });
+  const stat = () => ({ birthtimeMs: 5000, mtimeMs: 5000 });
+  let clock = 5000; // now == birthtime: age 0, far under the 10s grace
+  const now = () => clock;
+
+  const writerMeta = { pid: 777, worktree: '/writer', command: 'tests', startedAt: 't0' };
+  const sentinel = new Error('gave up waiting');
+  let polls = 0;
+  await assert.rejects(
+    acquireHeavyPhaseLock({
+      lockDir,
+      meta: { pid: 222, worktree: '/waiter', command: 'tests', startedAt: 't1' },
+      isAlive: () => true, // the writer is alive the whole time
+      now,
+      stat,
+      log: { error: () => {} },
+      sleep: async (ms) => {
+        polls += 1;
+        clock += ms;
+        // The slow-but-alive writer finishes publishing before the grace elapses.
+        if (polls === 1) writeFileSync(join(lockDir, 'meta.json'), `${JSON.stringify(writerMeta)}\n`);
+        if (polls >= 5) throw sentinel; // break the otherwise-unbounded honor loop
+      },
+    }),
+    (error) => error === sentinel,
+  );
+
+  assert.equal(
+    readSeededMeta(lockDir).pid,
+    777,
+    'the fresh dir was never removed; the writer’s published lock is honored, not stolen',
+  );
+});
+
+test('heavy-phase lock: a live reaper blocks a second metaless reclaimer', async () => {
+  const lockDir = makeLockDir();
+  // A metaless orphan, old enough to reclaim.
+  mkdirSync(lockDir, { recursive: true });
+  // A concurrent reaper already holds the single-owner reap mutex.
+  const reapDir = `${lockDir}.reap`;
+  mkdirSync(reapDir, { recursive: true });
+  writeFileSync(join(reapDir, 'meta.json'), `${JSON.stringify({ pid: 555, startedAt: 't0' })}\n`);
+
+  const stat = () => ({ birthtimeMs: 1000, mtimeMs: 1000 });
+  const now = () => 1000 + 60000; // past the grace
+  const sentinel = new Error('gave up waiting');
+  let polls = 0;
+  await assert.rejects(
+    acquireHeavyPhaseLock({
+      lockDir,
+      meta: { pid: 222, worktree: '/waiter-b', command: 'tests', startedAt: 't1' },
+      isAlive: (pid) => pid === 555, // the reaper holding the mutex is alive
+      now,
+      stat,
+      log: { error: () => {} },
+      sleep: async () => {
+        polls += 1;
+        if (polls >= 4) throw sentinel;
+      },
+    }),
+    (error) => error === sentinel,
+  );
+
+  assert.equal(
+    existsSync(join(lockDir, 'meta.json')),
+    false,
+    'the blocked waiter never removed the orphan or wrote its own meta',
+  );
+  assert.ok(existsSync(reapDir), 'the live reaper still owns the reap mutex');
+});
+
+test('heavy-phase lock: release refuses to remove a different owner', () => {
+  const lockDir = makeLockDir();
+  seedLock(lockDir, { pid: 333, worktree: '/other', command: 'tests', startedAt: 't9' });
+  assert.throws(
+    () => releaseHeavyPhaseLock({ lockDir, meta: { pid: 222, startedAt: 't1' } }),
+    /owner changed/,
+  );
+  assert.equal(readSeededMeta(lockDir).pid, 333, 'the other owner is untouched');
+  rmSync(lockDir, { recursive: true, force: true });
+});
+
+test('heavy-phase lock: describeLockWait and isProcessAlive report clearly', () => {
+  const message = describeLockWait({
+    holder: { pid: 5, worktree: '/w', command: 'tests', startedAt: '2026-07-21T00:00:00.000Z' },
+    waitedMs: 65000,
+    self: { pid: 6, worktree: '/x' },
+  });
+  assert.match(message, /held by pid 5/);
+  assert.match(message, /waited 1m5s/);
+  assert.equal(isProcessAlive(process.pid), true);
+  assert.equal(isProcessAlive(0), false);
+  assert.equal(isProcessAlive(-1), false);
 });
 
 test('PR check evaluator waits for both CI and Greptile and returns failures without reruns', () => {

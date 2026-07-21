@@ -1,0 +1,346 @@
+{
+  "//": "Timeout-margin policy registry for *.integration.test.ts explicit vitest timeout overrides. Enforced by src/test-support/integration-timeout-policy.test.ts via the AST scanner in integration-timeout-scan.ts. Fail closed: any override not listed here breaks the policy test. \"measured\" entries must clear minHeadroomRatio x measuredBaselineMs; \"inherited\" entries are pre-policy overrides pinned as measurement debt (measuredBaselineMs=null).",
+  "policy": {
+    "minHeadroomRatio": 2,
+    "globalDefaultTimeoutMs": 10000,
+    "description": "Every explicit per-test/per-hook timeout override in an integration test must be registered. A measured override must provide a measuredBaselineMs (the worst-case runtime it guards) and set timeoutMs to at least minHeadroomRatio times that baseline. Inherited overrides predate the policy: they are pinned to their exact value (measuredBaselineMs=null) so any edit forces a registry update and a real measurement. New or changed overrides should be registered as measured."
+  },
+  "overrides": [
+    {
+      "file": "src/app/e2e/contact-lifecycle-certification/process-harness.integration.test.ts",
+      "timeoutMs": 120000,
+      "measuredBaselineMs": null,
+      "baselineSource": "inherited",
+      "note": "Pre-policy 120s override (repo-standard integration cap). Registered as measurement debt: pinned to its current value so any change forces a re-measured registry update. No independent baseline measured under this bead (timing wiring scoped to the restore suite)."
+    },
+    {
+      "file": "src/app/e2e/fleet-garden-cutover-certification.integration.test.ts",
+      "timeoutMs": 20000,
+      "measuredBaselineMs": null,
+      "baselineSource": "inherited",
+      "note": "End-to-end cutover certification; per-phase shorter caps (setup 60s / teardown 30s / assertion 20s) predate this policy and were tuned to the certification harness. Inherited pending per-phase measurement."
+    },
+    {
+      "file": "src/app/e2e/fleet-garden-cutover-certification.integration.test.ts",
+      "timeoutMs": 30000,
+      "measuredBaselineMs": null,
+      "baselineSource": "inherited",
+      "note": "End-to-end cutover certification; per-phase shorter caps (setup 60s / teardown 30s / assertion 20s) predate this policy and were tuned to the certification harness. Inherited pending per-phase measurement."
+    },
+    {
+      "file": "src/app/e2e/fleet-garden-cutover-certification.integration.test.ts",
+      "timeoutMs": 60000,
+      "measuredBaselineMs": null,
+      "baselineSource": "inherited",
+      "note": "End-to-end cutover certification; per-phase shorter caps (setup 60s / teardown 30s / assertion 20s) predate this policy and were tuned to the certification harness. Inherited pending per-phase measurement."
+    },
+    {
+      "file": "src/app/e2e/icp-certification/process-harness.integration.test.ts",
+      "timeoutMs": 120000,
+      "measuredBaselineMs": null,
+      "baselineSource": "inherited",
+      "note": "Pre-policy 120s override (repo-standard integration cap). Registered as measurement debt: pinned to its current value so any change forces a re-measured registry update. No independent baseline measured under this bead (timing wiring scoped to the restore suite)."
+    },
+    {
+      "file": "src/boundary/gateway/welfare-grant-verifier.integration.test.ts",
+      "timeoutMs": 120000,
+      "measuredBaselineMs": null,
+      "baselineSource": "inherited",
+      "note": "Pre-policy 120s override (repo-standard integration cap). Registered as measurement debt: pinned to its current value so any change forces a re-measured registry update. No independent baseline measured under this bead (timing wiring scoped to the restore suite)."
+    },
+    {
+      "file": "src/core/agent/arbiter/egress-lease-phase.integration.test.ts",
+      "timeoutMs": 120000,
+      "measuredBaselineMs": null,
+      "baselineSource": "inherited",
+      "note": "Pre-policy 120s override (repo-standard integration cap). Registered as measurement debt: pinned to its current value so any change forces a re-measured registry update. No independent baseline measured under this bead (timing wiring scoped to the restore suite)."
+    },
+    {
+      "file": "src/core/agent/arbiter/reservation-phase.integration.test.ts",
+      "timeoutMs": 120000,
+      "measuredBaselineMs": null,
+      "baselineSource": "inherited",
+      "note": "Pre-policy 120s override (repo-standard integration cap). Registered as measurement debt: pinned to its current value so any change forces a re-measured registry update. No independent baseline measured under this bead (timing wiring scoped to the restore suite)."
+    },
+    {
+      "file": "src/core/contacts/postgres-adapter.integration.test.ts",
+      "timeoutMs": 120000,
+      "measuredBaselineMs": null,
+      "baselineSource": "inherited",
+      "note": "Pre-policy 120s override (repo-standard integration cap). Registered as measurement debt: pinned to its current value so any change forces a re-measured registry update. No independent baseline measured under this bead (timing wiring scoped to the restore suite)."
+    },
+    {
+      "file": "src/core/contacts/postgres-adapter/contact-lifecycle-coordinator.integration.test.ts",
+      "timeoutMs": 120000,
+      "measuredBaselineMs": null,
+      "baselineSource": "inherited",
+      "note": "Pre-policy 120s override (repo-standard integration cap). Registered as measurement debt: pinned to its current value so any change forces a re-measured registry update. No independent baseline measured under this bead (timing wiring scoped to the restore suite)."
+    },
+    {
+      "file": "src/core/contacts/postgres-adapter/contact-lifecycle-ledger.integration.test.ts",
+      "timeoutMs": 120000,
+      "measuredBaselineMs": null,
+      "baselineSource": "inherited",
+      "note": "Pre-policy 120s override (repo-standard integration cap). Registered as measurement debt: pinned to its current value so any change forces a re-measured registry update. No independent baseline measured under this bead (timing wiring scoped to the restore suite)."
+    },
+    {
+      "file": "src/faculties/introspection/postgres-store.integration.test.ts",
+      "timeoutMs": 120000,
+      "measuredBaselineMs": null,
+      "baselineSource": "inherited",
+      "note": "Pre-policy 120s override (repo-standard integration cap). Registered as measurement debt: pinned to its current value so any change forces a re-measured registry update. No independent baseline measured under this bead (timing wiring scoped to the restore suite)."
+    },
+    {
+      "file": "src/faculties/memory/postgres-store.integration.test.ts",
+      "timeoutMs": 120000,
+      "measuredBaselineMs": null,
+      "baselineSource": "inherited",
+      "note": "Pre-policy 120s override (repo-standard integration cap). Registered as measurement debt: pinned to its current value so any change forces a re-measured registry update. No independent baseline measured under this bead (timing wiring scoped to the restore suite)."
+    },
+    {
+      "file": "src/faculties/wiki/pgvector-projection.integration.test.ts",
+      "timeoutMs": 120000,
+      "measuredBaselineMs": null,
+      "baselineSource": "inherited",
+      "note": "Pre-policy 120s override (repo-standard integration cap). Registered as measurement debt: pinned to its current value so any change forces a re-measured registry update. No independent baseline measured under this bead (timing wiring scoped to the restore suite)."
+    },
+    {
+      "file": "src/faculties/wiki/shared-pgvector-projection.integration.test.ts",
+      "timeoutMs": 120000,
+      "measuredBaselineMs": null,
+      "baselineSource": "inherited",
+      "note": "Pre-policy 120s override (repo-standard integration cap). Registered as measurement debt: pinned to its current value so any change forces a re-measured registry update. No independent baseline measured under this bead (timing wiring scoped to the restore suite)."
+    },
+    {
+      "file": "src/faculties/wiki/shared-world-caretaker.integration.test.ts",
+      "timeoutMs": 120000,
+      "measuredBaselineMs": null,
+      "baselineSource": "inherited",
+      "note": "Pre-policy 120s override (repo-standard integration cap). Registered as measurement debt: pinned to its current value so any change forces a re-measured registry update. No independent baseline measured under this bead (timing wiring scoped to the restore suite)."
+    },
+    {
+      "file": "src/persistence/backups/fleet-auth-family-restore.integration.test.ts",
+      "timeoutMs": 240000,
+      "measuredBaselineMs": 108500,
+      "baselineSource": "measured",
+      "note": "Consistent fleet-auth family restore integration monolith (1 heavy it + 2 light). Measured it3 max 81.8s and file max 92.9s across 3 local vitest runs (--maxWorkers=4); conservative worst-case baseline 108500ms envelopes the documented clean-main file runtime range 84.9-108.5s (commit 5c1ce2663). 240000/108500 = 2.21x >= 2x headroom. Per-phase breakdown captured via PhaseTimer under PSFN_TEST_TIMINGS=1."
+    },
+    {
+      "file": "src/persistence/backups/fleet-restore.integration.test.ts",
+      "timeoutMs": 120000,
+      "measuredBaselineMs": null,
+      "baselineSource": "inherited",
+      "note": "Pre-policy 120s override (repo-standard integration cap). Registered as measurement debt: pinned to its current value so any change forces a re-measured registry update. No independent baseline measured under this bead (timing wiring scoped to the restore suite)."
+    },
+    {
+      "file": "src/persistence/postgres/background-work-store.integration.test.ts",
+      "timeoutMs": 30000,
+      "measuredBaselineMs": null,
+      "baselineSource": "inherited",
+      "note": "Background-work store suite; beforeAll 90s (harness+schema), per-test 30s. Inherited pending measurement."
+    },
+    {
+      "file": "src/persistence/postgres/background-work-store.integration.test.ts",
+      "timeoutMs": 90000,
+      "measuredBaselineMs": null,
+      "baselineSource": "inherited",
+      "note": "Background-work store suite; beforeAll 90s (harness+schema), per-test 30s. Inherited pending measurement."
+    },
+    {
+      "file": "src/persistence/postgres/companion-presence.integration.test.ts",
+      "timeoutMs": 120000,
+      "measuredBaselineMs": null,
+      "baselineSource": "inherited",
+      "note": "Pre-policy 120s override (repo-standard integration cap). Registered as measurement debt: pinned to its current value so any change forces a re-measured registry update. No independent baseline measured under this bead (timing wiring scoped to the restore suite)."
+    },
+    {
+      "file": "src/persistence/postgres/fleet-auth/authority-lifecycle-store.integration.test.ts",
+      "timeoutMs": 120000,
+      "measuredBaselineMs": null,
+      "baselineSource": "inherited",
+      "note": "Pre-policy 120s override (repo-standard integration cap). Registered as measurement debt: pinned to its current value so any change forces a re-measured registry update. No independent baseline measured under this bead (timing wiring scoped to the restore suite)."
+    },
+    {
+      "file": "src/persistence/postgres/fleet-auth/authorization-context-store.integration.test.ts",
+      "timeoutMs": 120000,
+      "measuredBaselineMs": null,
+      "baselineSource": "inherited",
+      "note": "Pre-policy 120s override (repo-standard integration cap). Registered as measurement debt: pinned to its current value so any change forces a re-measured registry update. No independent baseline measured under this bead (timing wiring scoped to the restore suite)."
+    },
+    {
+      "file": "src/persistence/postgres/fleet-auth/contact-lifecycle-authority-store.integration.test.ts",
+      "timeoutMs": 120000,
+      "measuredBaselineMs": null,
+      "baselineSource": "inherited",
+      "note": "Pre-policy 120s override (repo-standard integration cap). Registered as measurement debt: pinned to its current value so any change forces a re-measured registry update. No independent baseline measured under this bead (timing wiring scoped to the restore suite)."
+    },
+    {
+      "file": "src/persistence/postgres/fleet-auth/discord-evidence-store.integration.test.ts",
+      "timeoutMs": 120000,
+      "measuredBaselineMs": null,
+      "baselineSource": "inherited",
+      "note": "Pre-policy 120s override (repo-standard integration cap). Registered as measurement debt: pinned to its current value so any change forces a re-measured registry update. No independent baseline measured under this bead (timing wiring scoped to the restore suite)."
+    },
+    {
+      "file": "src/persistence/postgres/fleet-auth/gateway-persistence.integration.test.ts",
+      "timeoutMs": 120000,
+      "measuredBaselineMs": null,
+      "baselineSource": "inherited",
+      "note": "Pre-policy 120s override (repo-standard integration cap). Registered as measurement debt: pinned to its current value so any change forces a re-measured registry update. No independent baseline measured under this bead (timing wiring scoped to the restore suite)."
+    },
+    {
+      "file": "src/persistence/postgres/fleet-auth/migrations.integration.test.ts",
+      "timeoutMs": 120000,
+      "measuredBaselineMs": null,
+      "baselineSource": "inherited",
+      "note": "Pre-policy 120s override (repo-standard integration cap). Registered as measurement debt: pinned to its current value so any change forces a re-measured registry update. No independent baseline measured under this bead (timing wiring scoped to the restore suite)."
+    },
+    {
+      "file": "src/persistence/postgres/fleet-auth/oauth-session-store.integration.test.ts",
+      "timeoutMs": 120000,
+      "measuredBaselineMs": null,
+      "baselineSource": "inherited",
+      "note": "Pre-policy 120s override (repo-standard integration cap). Registered as measurement debt: pinned to its current value so any change forces a re-measured registry update. No independent baseline measured under this bead (timing wiring scoped to the restore suite)."
+    },
+    {
+      "file": "src/persistence/postgres/fleet-auth/schema.integration.test.ts",
+      "timeoutMs": 120000,
+      "measuredBaselineMs": null,
+      "baselineSource": "inherited",
+      "note": "Pre-policy 120s override (repo-standard integration cap). Registered as measurement debt: pinned to its current value so any change forces a re-measured registry update. No independent baseline measured under this bead (timing wiring scoped to the restore suite)."
+    },
+    {
+      "file": "src/persistence/postgres/fleet-auth/trusted-host-provider-recovery-store.integration.test.ts",
+      "timeoutMs": 120000,
+      "measuredBaselineMs": null,
+      "baselineSource": "inherited",
+      "note": "Pre-policy 120s override (repo-standard integration cap). Registered as measurement debt: pinned to its current value so any change forces a re-measured registry update. No independent baseline measured under this bead (timing wiring scoped to the restore suite)."
+    },
+    {
+      "file": "src/persistence/postgres/icp-autonomy.integration.test.ts",
+      "timeoutMs": 120000,
+      "measuredBaselineMs": null,
+      "baselineSource": "inherited",
+      "note": "Pre-policy 120s override (repo-standard integration cap). Registered as measurement debt: pinned to its current value so any change forces a re-measured registry update. No independent baseline measured under this bead (timing wiring scoped to the restore suite)."
+    },
+    {
+      "file": "src/persistence/postgres/icp-conversation-cost-breaker.integration.test.ts",
+      "timeoutMs": 120000,
+      "measuredBaselineMs": null,
+      "baselineSource": "inherited",
+      "note": "Pre-policy 120s override (repo-standard integration cap). Registered as measurement debt: pinned to its current value so any change forces a re-measured registry update. No independent baseline measured under this bead (timing wiring scoped to the restore suite)."
+    },
+    {
+      "file": "src/persistence/postgres/icp-fatigue-regulation-reservation.integration.test.ts",
+      "timeoutMs": 120000,
+      "measuredBaselineMs": null,
+      "baselineSource": "inherited",
+      "note": "Pre-policy 120s override (repo-standard integration cap). Registered as measurement debt: pinned to its current value so any change forces a re-measured registry update. No independent baseline measured under this bead (timing wiring scoped to the restore suite)."
+    },
+    {
+      "file": "src/persistence/postgres/icp-intention-lifecycle.integration.test.ts",
+      "timeoutMs": 120000,
+      "measuredBaselineMs": null,
+      "baselineSource": "inherited",
+      "note": "Pre-policy 120s override (repo-standard integration cap). Registered as measurement debt: pinned to its current value so any change forces a re-measured registry update. No independent baseline measured under this bead (timing wiring scoped to the restore suite)."
+    },
+    {
+      "file": "src/persistence/postgres/icp-intention-retry-lifecycle.integration.test.ts",
+      "timeoutMs": 120000,
+      "measuredBaselineMs": null,
+      "baselineSource": "inherited",
+      "note": "Pre-policy 120s override (repo-standard integration cap). Registered as measurement debt: pinned to its current value so any change forces a re-measured registry update. No independent baseline measured under this bead (timing wiring scoped to the restore suite)."
+    },
+    {
+      "file": "src/persistence/postgres/model-usage-certification.integration.test.ts",
+      "timeoutMs": 120000,
+      "measuredBaselineMs": null,
+      "baselineSource": "inherited",
+      "note": "Pre-policy 120s override (repo-standard integration cap). Registered as measurement debt: pinned to its current value so any change forces a re-measured registry update. No independent baseline measured under this bead (timing wiring scoped to the restore suite)."
+    },
+    {
+      "file": "src/persistence/postgres/model-usage-migration-certification.integration.test.ts",
+      "timeoutMs": 120000,
+      "measuredBaselineMs": null,
+      "baselineSource": "inherited",
+      "note": "Pre-policy 120s override (repo-standard integration cap). Registered as measurement debt: pinned to its current value so any change forces a re-measured registry update. No independent baseline measured under this bead (timing wiring scoped to the restore suite)."
+    },
+    {
+      "file": "src/persistence/postgres/model-usage-store.benchmark.integration.test.ts",
+      "timeoutMs": 120000,
+      "measuredBaselineMs": null,
+      "baselineSource": "inherited",
+      "note": "Pre-policy 120s override (repo-standard integration cap). Registered as measurement debt: pinned to its current value so any change forces a re-measured registry update. No independent baseline measured under this bead (timing wiring scoped to the restore suite)."
+    },
+    {
+      "file": "src/persistence/postgres/model-usage-store.integration.test.ts",
+      "timeoutMs": 120000,
+      "measuredBaselineMs": null,
+      "baselineSource": "inherited",
+      "note": "Pre-policy 120s override (repo-standard integration cap). Registered as measurement debt: pinned to its current value so any change forces a re-measured registry update. No independent baseline measured under this bead (timing wiring scoped to the restore suite)."
+    },
+    {
+      "file": "src/persistence/postgres/partner-affect-shadow-store.integration.test.ts",
+      "timeoutMs": 120000,
+      "measuredBaselineMs": null,
+      "baselineSource": "inherited",
+      "note": "Pre-policy 120s override (repo-standard integration cap). Registered as measurement debt: pinned to its current value so any change forces a re-measured registry update. No independent baseline measured under this bead (timing wiring scoped to the restore suite)."
+    },
+    {
+      "file": "src/persistence/postgres/schema-tenancy.integration.test.ts",
+      "timeoutMs": 120000,
+      "measuredBaselineMs": null,
+      "baselineSource": "inherited",
+      "note": "Pre-policy 120s override (repo-standard integration cap). Registered as measurement debt: pinned to its current value so any change forces a re-measured registry update. No independent baseline measured under this bead (timing wiring scoped to the restore suite)."
+    },
+    {
+      "file": "src/persistence/postgres/shared-schema-runtime-readiness.integration.test.ts",
+      "timeoutMs": 120000,
+      "measuredBaselineMs": null,
+      "baselineSource": "inherited",
+      "note": "Pre-policy 120s override (repo-standard integration cap). Registered as measurement debt: pinned to its current value so any change forces a re-measured registry update. No independent baseline measured under this bead (timing wiring scoped to the restore suite)."
+    },
+    {
+      "file": "src/persistence/postgres/social-pot-enforcement.integration.test.ts",
+      "timeoutMs": 120000,
+      "measuredBaselineMs": null,
+      "baselineSource": "inherited",
+      "note": "Pre-policy 120s override (repo-standard integration cap). Registered as measurement debt: pinned to its current value so any change forces a re-measured registry update. No independent baseline measured under this bead (timing wiring scoped to the restore suite)."
+    },
+    {
+      "file": "src/persistence/postgres/social-pot-store.integration.test.ts",
+      "timeoutMs": 120000,
+      "measuredBaselineMs": null,
+      "baselineSource": "inherited",
+      "note": "Pre-policy 120s override (repo-standard integration cap). Registered as measurement debt: pinned to its current value so any change forces a re-measured registry update. No independent baseline measured under this bead (timing wiring scoped to the restore suite)."
+    },
+    {
+      "file": "src/persistence/postgres/speaking-arbiter-store.integration.test.ts",
+      "timeoutMs": 120000,
+      "measuredBaselineMs": null,
+      "baselineSource": "inherited",
+      "note": "Pre-policy 120s override (repo-standard integration cap). Registered as measurement debt: pinned to its current value so any change forces a re-measured registry update. No independent baseline measured under this bead (timing wiring scoped to the restore suite)."
+    },
+    {
+      "file": "src/persistence/postgres/tenancy-boundary.integration.test.ts",
+      "timeoutMs": 120000,
+      "measuredBaselineMs": null,
+      "baselineSource": "inherited",
+      "note": "Pre-policy 120s override (repo-standard integration cap). Registered as measurement debt: pinned to its current value so any change forces a re-measured registry update. No independent baseline measured under this bead (timing wiring scoped to the restore suite)."
+    },
+    {
+      "file": "src/persistence/postgres/vector-extension-schema.integration.test.ts",
+      "timeoutMs": 120000,
+      "measuredBaselineMs": null,
+      "baselineSource": "inherited",
+      "note": "Pre-policy 120s override (repo-standard integration cap). Registered as measurement debt: pinned to its current value so any change forces a re-measured registry update. No independent baseline measured under this bead (timing wiring scoped to the restore suite)."
+    },
+    {
+      "file": "src/persistence/sessions/testing-session-purge.integration.test.ts",
+      "timeoutMs": 120000,
+      "measuredBaselineMs": null,
+      "baselineSource": "inherited",
+      "note": "Pre-policy 120s override (repo-standard integration cap). Registered as measurement debt: pinned to its current value so any change forces a re-measured registry update. No independent baseline measured under this bead (timing wiring scoped to the restore suite)."
+    }
+  ]
+}

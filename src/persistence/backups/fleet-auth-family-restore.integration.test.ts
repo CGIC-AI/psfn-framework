@@ -36,9 +36,13 @@ import {
 } from './fleet-restore.js';
 import { runFleetBackupCycle as runFleetBackupCycleProduction } from './service.js';
 import { prepareFleetSharedSchemaRuntime } from './fleet-shared-schema-startup.js';
+import { PhaseTimer } from '../../test-support/phase-timer.js';
 
-// Clean-main runs complete in 84.9–108.5s; retain ample host-load margin.
-const TIMEOUT_MS = 180_000;
+// Timeout-margin policy (see src/test-support/integration-timeout-registry.json):
+// measured worst-case baseline is the documented clean-main file runtime of 108.5s
+// (local 3-run it3 max 81.8s, file max 92.9s). 2x headroom => >=217s; set to 240s
+// (2.21x). Registered as a "measured" entry and enforced by integration-timeout-policy.
+const TIMEOUT_MS = 240_000;
 const ROLES: FleetAuthFamilyDatabaseRoles = {
   runtime: 'family_auth_runtime',
   migration: 'family_auth_migration',
@@ -392,6 +396,9 @@ describe('fleet-auth consistent family restore against real Postgres', () => {
   }, TIMEOUT_MS);
 
   it('restores companion/shared schemas before publishing the durable fleet-auth result', async () => {
+    const timer = new PhaseTimer('fleet-auth-family-restore');
+    let phaseFailed = true;
+    const endSourceSetup = timer.begin('source setup + seed + consistent backup');
     const source = await freshDatabase();
     await migrateFleetAuthSchema({ databaseUrl: source.migrationUrl, roles: ROLES });
     const sourceMigration = createPostgresPool(source.migrationUrl, { max: 1 });
@@ -552,7 +559,9 @@ describe('fleet-auth consistent family restore against real Postgres', () => {
         backupDir,
         capturedAt: '2026-07-15T15:00:00.000Z',
       });
+      endSourceSetup();
 
+      const endBackupCycle = timer.begin('backup cycle (recovery)');
       const companionDataDir = join(root, 'companion-data', 'companion-one');
       const sessionsDir = join(companionDataDir, 'state', 'sessions');
       const personalWorkspacePath = join(root, 'workspaces', 'personal', 'companion-one');
@@ -592,7 +601,9 @@ describe('fleet-auth consistent family restore against real Postgres', () => {
         consistentSnapshotDumpPaths: backup.schemaDumpPaths,
         now: () => Date.UTC(2026, 6, 15, 15, 0, 0),
       });
+      endBackupCycle();
 
+      const endRestoreVerification = timer.begin('restore verification (negative + success)');
       const sourceDatabaseName = decodeURIComponent(new URL(source.backupUrl).pathname.slice(1));
       const routedScratchUrl = new URL(source.backupUrl);
       routedScratchUrl.pathname = `/${sourceDatabaseName}_restore_verify`;
@@ -762,6 +773,9 @@ describe('fleet-auth consistent family restore against real Postgres', () => {
         await scratchRuntime.end();
       }
 
+      endRestoreVerification();
+
+      const endDurableRestore = timer.begin('durable restore (negative + success)');
       const target = await freshDatabase();
       await migrateFleetAuthSchema({ databaseUrl: target.migrationUrl, roles: ROLES });
       const routedCompanionUrl = new URL(target.companionUrl);
@@ -795,6 +809,9 @@ describe('fleet-auth consistent family restore against real Postgres', () => {
         restoredAt: '2026-07-15T16:00:00.000Z',
       });
 
+      endDurableRestore();
+
+      const endRestoreAssertions = timer.begin('post-restore authority assertions');
       await prepareFleetSharedSchemaRuntime(sharedStartupOptions(target));
       await assertSharedSchemaRuntimeAuthority(target.companionUrl, {
         ownSchema: 'companion_one',
@@ -930,6 +947,9 @@ describe('fleet-auth consistent family restore against real Postgres', () => {
         await targetSharedMigration.end();
       }
 
+      endRestoreAssertions();
+
+      const endConflictTarget = timer.begin('conflicting-authority target rejection');
       const conflictingTarget = await freshDatabase();
       await migrateFleetAuthSchema({ databaseUrl: conflictingTarget.migrationUrl, roles: ROLES });
       const conflictingRuntime = createPostgresPool(conflictingTarget.runtimeUrl, { max: 1 });
@@ -977,6 +997,9 @@ describe('fleet-auth consistent family restore against real Postgres', () => {
         await conflictingRuntime.end();
       }
 
+      endConflictTarget();
+
+      const endRetryTarget = timer.begin('fault-injection retry target');
       const retryTarget = await freshDatabase();
       await migrateFleetAuthSchema({ databaseUrl: retryTarget.migrationUrl, roles: ROLES });
       const retryRuntime = createPostgresPool(retryTarget.runtimeUrl, { max: 1 });
@@ -1039,6 +1062,9 @@ describe('fleet-auth consistent family restore against real Postgres', () => {
         await retryRuntime.end();
       }
 
+      endRetryTarget();
+
+      const endConcurrentTarget = timer.begin('concurrent restore advisory-lock serialization');
       const concurrentTarget = await freshDatabase();
       await migrateFleetAuthSchema({ databaseUrl: concurrentTarget.migrationUrl, roles: ROLES });
       const concurrentOwnerUrls = {
@@ -1094,8 +1120,15 @@ describe('fleet-auth consistent family restore against real Postgres', () => {
       await expect(secondRestore).resolves.toMatchObject({
         restoredSchemas: ['companion_one', 'companion_two', 'shared'],
       });
-
+      endConcurrentTarget();
+      phaseFailed = false;
     } finally {
+      // Emit timings first: a pg pool broken by the same failure we want to
+      // diagnose can make the awaits below reject, and this instrumentation
+      // exists precisely for that case. report() is synchronous, so running it
+      // ahead of the awaitable cleanup guarantees the phase breakdown is printed
+      // even when the cleanup itself throws (that error still propagates).
+      timer.report({ failed: phaseFailed });
       await sourceCompanion?.end();
       await sourceCompanionTwo?.end();
       await sourceSharedOwner?.end();

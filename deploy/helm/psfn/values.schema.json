@@ -21,8 +21,39 @@
           "enum": [
             true
           ]
+        },
+        "authorityFloor": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "existingClaim",
+            "size",
+            "storageClassName",
+            "mountPath"
+          ],
+          "properties": {
+            "existingClaim": {
+              "type": "string"
+            },
+            "size": {
+              "type": "string",
+              "minLength": 1
+            },
+            "storageClassName": {
+              "type": "string"
+            },
+            "mountPath": {
+              "type": "string",
+              "minLength": 1,
+              "pattern": "^/"
+            }
+          }
         }
-      }
+      },
+      "required": [
+        "enabled",
+        "authorityFloor"
+      ]
     }
   }
 }

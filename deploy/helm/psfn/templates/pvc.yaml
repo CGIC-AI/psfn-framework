@@ -87,3 +87,29 @@ spec:
     requests:
       storage: {{ .Values.persistence.modelCache.size | quote }}
 {{- end }}
+{{- $authorityFloor := .Values.fleetAuth.authorityFloor | default dict }}
+{{- if and .Values.fleetAuth.enabled $authorityFloor (not (get $authorityFloor "existingClaim")) }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "psfn.fullname" . }}-fleet-auth-floor
+  annotations:
+    # The authority floor is the fleet-auth anti-rollback anchor: it is
+    # deliberately never backed up, so a release-lifecycle deletion (helm
+    # uninstall, or pruning after a switch to existingClaim adoption) while
+    # the witness survives on system-data is unrecoverable. Helm must always
+    # orphan this claim instead of deleting it.
+    helm.sh/resource-policy: keep
+  labels:
+    {{- include "psfn.labels" . | nindent 4 }}
+spec:
+  accessModes:
+    {{- toYaml .Values.persistence.accessModes | nindent 4 }}
+  {{- with (get $authorityFloor "storageClassName") }}
+  storageClassName: {{ . | quote }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ get $authorityFloor "size" | quote }}
+{{- end }}

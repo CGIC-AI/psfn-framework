@@ -568,6 +568,17 @@ certificates:
 # this value enables the matching process/deployment wiring.
 fleetAuth:
   enabled: true
+  # Non-restored anti-rollback authority floor. This dedicated PVC is never
+  # part of the normal backup/restore set. Set existingClaim to adopt a
+  # pre-provisioned floor PVC; leave it empty for the chart to create
+  # <release>-fleet-auth-floor. The runtime path is chart-owned and is always
+  # projected as the plain FLEET_AUTH_AUTHORITY_FLOOR_ROOT env value.
+  authorityFloor:
+    existingClaim: ""
+    size: 64Mi
+    # Empty selects the cluster's default StorageClass.
+    storageClassName: ""
+    mountPath: /var/lib/psfn/fleet-auth-floor
   # Optional exact server-owned binding for /companion-ui/. It may be omitted
   # only when the canonical companion fleet contains exactly one companion.
   companionUiCompanionId: ""
@@ -578,7 +589,8 @@ fleetAuth:
   # env var is unset. List every env-kind reference here so the chart owns
   # the wiring (never kubectl set env). Each entry supplies an uppercase env
   # name plus exactly one of a Secret reference (secretRef.name +
-  # secretRef.key) or a plain non-secret value (e.g. a filesystem root).
+  # secretRef.key) or a plain non-secret value. The authority-floor root is
+  # reserved to authorityFloor above and must not be repeated here.
   # References resolved from the credential vault instead of env need no
   # entry.
   credentialEnv: []
@@ -586,8 +598,6 @@ fleetAuth:
   #   secretRef:
   #     name: psfn-fleet-auth
   #     key: session-pepper
-  # - name: FLEET_AUTH_AUTHORITY_FLOOR_ROOT
-  #   value: /runtime/system-data/fleet-auth/authority-floor
 
 networkPolicy:
   enabled: true

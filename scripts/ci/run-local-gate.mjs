@@ -88,12 +88,17 @@ export function writeAttestation(path, attestation) {
   renameSync(temporary, path);
 }
 
-export function buildStateGatePlan(state) {
-  return buildGatePlan({ paths: state.paths, base: state.base, head: state.head });
+export function buildStateGatePlan(state, { changeBudgetException = false } = {}) {
+  return buildGatePlan({
+    paths: state.paths,
+    base: state.base,
+    head: state.head,
+    changeBudgetException,
+  });
 }
 
-export function validateStateAttestation(attestation, state) {
-  const plan = buildStateGatePlan(state);
+export function validateStateAttestation(attestation, state, options) {
+  const plan = buildStateGatePlan(state, options);
   const gates = plan.filter(({ skip }) => !skip).map(({ name }) => name);
   return { plan, gates, result: validateAttestation(attestation, { ...state, gates }) };
 }
@@ -155,13 +160,14 @@ function parseArguments(argv) {
 export async function runLocalGate({
   cwd = process.cwd(),
   baseRef = 'origin/main',
+  changeBudgetException = process.env.CHANGE_BUDGET_EXCEPTION === 'true',
   force = false,
   planOnly = false,
   execute = executeGate,
 } = {}) {
   const state = resolveLocalGateState({ cwd, baseRef });
   const cached = readAttestation(state.attestationPath);
-  const validation = validateStateAttestation(cached, state);
+  const validation = validateStateAttestation(cached, state, { changeBudgetException });
   if (validation.result.valid && !force) {
     console.log(`Local pre-PR gate already passed for ${state.head.slice(0, 12)}.`);
     return cached;

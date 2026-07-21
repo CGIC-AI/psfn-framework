@@ -108,8 +108,14 @@ function command(name, executable, args, options = {}) {
   return { name, executable, args, ...options };
 }
 
-export function buildGatePlan({ paths, base = 'origin/main', head = 'HEAD' }) {
+export function buildGatePlan({
+  paths,
+  base = 'origin/main',
+  head = 'HEAD',
+  changeBudgetException = false,
+}) {
   const matches = (pattern) => paths.some((path) => pattern.test(path));
+  const scope = detectChangeScope(paths);
   const ubsPaths = paths.filter((path) => /\.(?:[cm]?[jt]s|[jt]sx|svelte)$/.test(path));
   const workflowPaths = paths.filter((path) =>
     /^\.github\/(?:workflows\/.*\.ya?ml|actions\/.*\.ya?ml|dependabot\.yml)$/.test(path),
@@ -124,15 +130,28 @@ export function buildGatePlan({ paths, base = 'origin/main', head = 'HEAD' }) {
       base,
       '--head',
       head,
+      ...(changeBudgetException ? ['--exception'] : []),
     ]),
-    command('lint', 'npm', ['run', 'lint'], { nodeHeapMb: 4096 }),
-    command('build', 'npm', ['run', 'build'], { nodeHeapMb: 4096 }),
-    command('typecheck', 'npm', ['run', 'verify:typecheck-baseline'], { nodeHeapMb: 4096 }),
-    command('repository-hygiene', 'npm', ['run', 'verify:repository-hygiene']),
-    command('semgrep-rules', 'npm', ['run', 'semgrep:test']),
+    scope.root_runtime
+      ? command('lint', 'npm', ['run', 'lint'], { nodeHeapMb: 4096 })
+      : command('lint-changed', 'npm', ['run', 'lint:changed', '--', '--base', base]),
+    ...(scope.root_runtime
+      ? [
+          command('build', 'npm', ['run', 'build'], { nodeHeapMb: 4096 }),
+          command('typecheck', 'npm', ['run', 'verify:typecheck-baseline'], {
+            nodeHeapMb: 4096,
+          }),
+          command('repository-hygiene', 'npm', ['run', 'verify:repository-hygiene']),
+        ]
+      : []),
+    command('semgrep-rules', 'npm', ['run', 'semgrep:test'], {
+      skip: !matches(/^\.semgrep\//),
+    }),
     command('semgrep-diff', 'npm', ['run', 'semgrep:diff', '--', base]),
     command('ubs', 'ubs', ['--no-auto-update', ...ubsPaths], { skip: ubsPaths.length === 0 }),
-    command('tests', 'npm', ['test', '--', '--maxWorkers=4'], { skip: !detectChangeScope(paths).clean_environment }),
+    command('tests', 'npm', ['test', '--', '--maxWorkers=4'], {
+      skip: !scope.root_runtime,
+    }),
   ];
 
   if (
@@ -144,7 +163,7 @@ export function buildGatePlan({ paths, base = 'origin/main', head = 'HEAD' }) {
   }
   if (
     matches(
-      /(?:^|\/)package(?:-lock)?\.json$|(?:^|\/)Dockerfile[^/]*$|^\.github\/workflows\/|^deploy\/helm\/|^scripts\/verify-supply-chain\./,
+      /(?:^|\/)package(?:-lock)?\.json$|(?:^|\/)Dockerfile[^/]*$|^deploy\/helm\/|^scripts\/verify-supply-chain\./,
     )
   ) {
     plan.push(

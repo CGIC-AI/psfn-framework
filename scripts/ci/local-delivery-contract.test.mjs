@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -37,13 +37,14 @@ function makeGateRepository() {
   git(cwd, 'init', '--quiet');
   git(cwd, 'config', 'user.email', 'ci@example.invalid');
   git(cwd, 'config', 'user.name', 'CI Test');
-  writeFileSync(join(cwd, 'seed.ts'), 'export const seed = true;\n');
-  git(cwd, 'add', 'seed.ts');
+  mkdirSync(join(cwd, 'src'));
+  writeFileSync(join(cwd, 'src/seed.ts'), 'export const seed = true;\n');
+  git(cwd, 'add', 'src/seed.ts');
   git(cwd, 'commit', '--quiet', '-m', 'seed');
   const base = git(cwd, 'rev-parse', 'HEAD');
   git(cwd, 'switch', '--quiet', '-c', 'feature');
-  writeFileSync(join(cwd, 'feature.ts'), 'export const feature = true;\n');
-  git(cwd, 'add', 'feature.ts');
+  writeFileSync(join(cwd, 'src/feature.ts'), 'export const feature = true;\n');
+  git(cwd, 'add', 'src/feature.ts');
   git(cwd, 'commit', '--quiet', '-m', 'feature');
   return { cwd, base };
 }
@@ -128,10 +129,57 @@ test('pre-push blocks direct main, skips deletions, reuses exact attestations, a
   );
 });
 
-test('gate plan keeps broad checks local and scopes specialist tools', () => {
+test('delivery-only gate stays fast while product changes retain full validation', () => {
+  const deliveryPlan = buildGatePlan({
+    paths: [
+      '.github/workflows/ci.yml',
+      'README.md',
+      'scripts/ci/local-delivery-contract.mjs',
+    ],
+  });
+  const deliveryNames = deliveryPlan
+    .filter(({ skip }) => !skip)
+    .map(({ name }) => name);
+
+  assert.deepEqual(deliveryNames, [
+    'ci-rules',
+    'change-budget',
+    'lint-changed',
+    'semgrep-diff',
+    'ubs',
+    'changed-workflow-analysis',
+  ]);
+  assert.ok(
+    buildGatePlan({ paths: ['README.md'], changeBudgetException: true })
+      .find(({ name }) => name === 'change-budget')
+      .args.includes('--exception'),
+  );
+
+  for (const [path, specialist] of [
+    ['admin-ui/src/routes/+page.svelte', 'garden-ui'],
+    ['companion-ui/src/App.tsx', 'companion-ui'],
+    ['deploy/helm/psfn/values.yaml', 'deployment-contracts'],
+  ]) {
+    const names = buildGatePlan({ paths: [path] })
+      .filter(({ skip }) => !skip)
+      .map(({ name }) => name);
+    assert.ok(names.includes(specialist), `${path} must run ${specialist}`);
+    for (const rootGate of ['lint', 'build', 'typecheck', 'repository-hygiene', 'tests']) {
+      assert.ok(!names.includes(rootGate), `${path} must not run root ${rootGate}`);
+    }
+  }
+
+  const lockfileNames = buildGatePlan({ paths: ['package-lock.json'] })
+    .filter(({ skip }) => !skip)
+    .map(({ name }) => name);
+  for (const rootGate of ['lint', 'build', 'typecheck', 'repository-hygiene', 'tests']) {
+    assert.ok(lockfileNames.includes(rootGate), `root lockfile must run ${rootGate}`);
+  }
+
   const plan = buildGatePlan({
     paths: [
       '.github/workflows/ci.yml',
+      '.semgrep/psfn.yml',
       'deploy/helm/psfn/values.yaml',
       'src/system/config/load-config.ts',
     ],
@@ -159,7 +207,6 @@ test('gate plan keeps broad checks local and scopes specialist tools', () => {
   ]);
   assert.deepEqual(plan.find(({ name }) => name === 'tests').args, ['test', '--', '--maxWorkers=4']);
   assert.equal(plan.find(({ name }) => name === 'tests').skip, false);
-  assert.equal(buildGatePlan({ paths: ['README.md', '.beads/issues.jsonl', 'package.json'] }).find(({ name }) => name === 'tests').skip, true);
 });
 
 test('local tool doctor pins UBS while accepting supported Node releases', () => {
@@ -207,8 +254,8 @@ test('local gate writes one exact-head attestation and reuses it without rerunni
   assert.deepEqual(second, first);
   assert.equal(executed.length, firstCount);
 
-  writeFileSync(join(cwd, 'next.ts'), 'export const next = true;\n');
-  git(cwd, 'add', 'next.ts');
+  writeFileSync(join(cwd, 'src/next.ts'), 'export const next = true;\n');
+  git(cwd, 'add', 'src/next.ts');
   git(cwd, 'commit', '--quiet', '-m', 'next');
   const third = await runLocalGate({ cwd, baseRef: base, execute });
   assert.notEqual(third.head, first.head);
@@ -287,8 +334,12 @@ test('GitHub CI is one complementary delta lane without label-triggered reruns',
     workflow.indexOf('Verify exact local-gate status') < workflow.indexOf('run: npm ci'),
     'attestation must fail before the clean-environment install',
   );
-  assert.match(workflow, /steps\.scope\.outputs\.clean_environment == 'true'/);
+  assert.match(workflow, /steps\.scope\.outputs\.root_runtime == 'true'/);
+  assert.match(workflow, /steps\.scope\.outputs\.admin_ui == 'true'/);
+  assert.match(workflow, /steps\.scope\.outputs\.companion_ui == 'true'/);
+  assert.match(workflow, /steps\.scope\.outputs\.deployment == 'true'/);
   assert.doesNotMatch(workflow, /run: npm run lint/);
+  assert.doesNotMatch(workflow, /run: npm test/);
   assert.doesNotMatch(workflow, /run: bash scripts\/ci\/run-semgrep\.sh/);
   assert.match(workflow, /statuses: read/);
 });

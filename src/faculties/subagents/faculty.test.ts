@@ -2085,6 +2085,29 @@ describe('SubagentFaculty core-authoritative tool governance (p0le)', () => {
       expect(lifecycleEvents.some(event => event.handoff.status === 'blocked')).toBe(true);
       expect(faculty.getActiveCount()).toBe(0);
     });
+
+    it('rejects a prototype-chain role name with a blocked handoff, not a TypeError (7ym.2)', async () => {
+      // '__proto__' (and 'constructor'/'hasOwnProperty'/'toString') resolve to an
+      // inherited Object.prototype member on a bare `roles[name]` lookup — a
+      // phantom "role" with no instructions that later crashes with an uncaught
+      // TypeError outside the spawn try/catch, bypassing the blocked-spawn
+      // handoff. It must fail closed as an unknown role, same as any other.
+      const lifecycleEvents: Array<{ handoff: CompletionHandoffRecord }> = [];
+      eventBus.on('agent.completion_handoff', event => {
+        lifecycleEvents.push(event);
+      });
+      const faculty = makeFaculty(ROLE_CONFIG, 'You are Companion.');
+      for (const name of ['__proto__', 'constructor']) {
+        await expect(faculty.spawn({
+          name: 'x',
+          task: 't',
+          role: name,
+          workSpec: buildSubagentWorkSpec(),
+        })).rejects.toThrow(/Unknown subagent role/);
+      }
+      expect(lifecycleEvents.some(event => event.handoff.status === 'blocked')).toBe(true);
+      expect(faculty.getActiveCount()).toBe(0);
+    });
   });
 
   // bead 7ym.2.2 — role restrictions can only NARROW the tier: toolset, turns,
@@ -2212,6 +2235,74 @@ describe('SubagentFaculty core-authoritative tool governance (p0le)', () => {
         workSpec: buildSubagentWorkSpec(),
       });
       await faculty.wait(third.subagentId);
+    });
+
+    it('releases the role slot exactly once under a cancel-before-start race (7ym.2)', async () => {
+      // Regression: finishHandle decremented the role slot before its first await
+      // but set `settled` only after two awaits. A cancel() while agentLoop was
+      // still null ran finishHandle once; the queued runHandle microtask (settled
+      // still false) then passed its own `if (handle.settled) return` guard and
+      // re-entered the cancellation path — re-finalizing an already-finalized task
+      // (an uncaught rejection outside the spawn try/catch) and racing a second
+      // slot release. The fix claims the handle synchronously so that microtask
+      // short-circuits.
+      mockSubagentDelayMs = 200; // keep the started holder active across the assertions
+      const faculty = makeFaculty(roleConfig({ pair: { instructions: 'x', maxConcurrent: 2 } }));
+
+      const unhandled: unknown[] = [];
+      const onUnhandled = (reason: unknown): void => {
+        unhandled.push(reason);
+      };
+      process.on('unhandledRejection', onUnhandled);
+      try {
+        // B occupies one of the role's two slots and stays active (delayed prompt).
+        const b = await faculty.spawn({ name: 'b', task: 't', role: 'pair', workSpec: buildSubagentWorkSpec() });
+
+        // Spawn A but do NOT await it: its runHandle microtask is now queued but
+        // has not run, so handle.agentLoop is still null. Read the id straight off
+        // the freshly-registered handle and cancel it synchronously — this is the
+        // real interleaving (cancel completes before the runHandle microtask).
+        const aSpawn = faculty.spawn({ name: 'a', task: 't', role: 'pair', workSpec: buildSubagentWorkSpec() });
+        const handles = (faculty as unknown as {
+          activeHandles: Map<string, { subagentId: string; agentLoop: unknown }>;
+        }).activeHandles;
+        let aId: string | undefined;
+        for (const handle of handles.values()) {
+          if (handle.agentLoop === null) {
+            aId = handle.subagentId;
+            break;
+          }
+        }
+        expect(aId).toBeDefined();
+        const cancelled = await faculty.cancel(aId!, 'cancel_before_start');
+        await aSpawn;
+        expect(cancelled.outcome).toBe('cancelled');
+
+        // Let the queued runHandle microtask drain; on the buggy path it re-enters
+        // the cancellation branch here and rejects.
+        await new Promise(resolve => setTimeout(resolve, 0));
+        expect(unhandled).toEqual([]);
+
+        // B still holds exactly one slot: a double-release would read this as 0.
+        const roleActiveCounts = (faculty as unknown as {
+          roleActiveCounts: Map<string, number>;
+        }).roleActiveCounts;
+        expect(roleActiveCounts.get('pair')).toBe(1);
+
+        // Behavioral gate: exactly one more spawn fits under the ceiling; the next
+        // is blocked — the role never exceeds its own maxConcurrent.
+        const c = await faculty.spawn({ name: 'c', task: 't', role: 'pair', workSpec: buildSubagentWorkSpec() });
+        await expect(faculty.spawn({ name: 'd', task: 't', role: 'pair', workSpec: buildSubagentWorkSpec() }))
+          .rejects.toThrow(/role "pair" concurrency limit/);
+
+        // Clean up the still-active workers so no delayed prompt outlives the test.
+        await Promise.all([
+          faculty.cancel(b.subagentId, 'cleanup'),
+          faculty.cancel(c.subagentId, 'cleanup'),
+        ]);
+      } finally {
+        process.removeListener('unhandledRejection', onUnhandled);
+      }
     });
   });
 

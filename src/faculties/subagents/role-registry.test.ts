@@ -114,6 +114,15 @@ describe('resolveSubagentRole', () => {
   it('fails closed on a blank role name', () => {
     expect(() => resolveSubagentRole(registry, '   ')).toThrow(/non-empty string/);
   });
+
+  it('fails closed on prototype-chain names instead of resolving a phantom role', () => {
+    // A bare `roles[name]` lookup would resolve these to inherited
+    // Object.prototype members rather than throwing the structured error.
+    for (const name of ['__proto__', 'constructor', 'hasOwnProperty', 'toString']) {
+      expect(() => resolveSubagentRole(registry, name))
+        .toThrow(/Unknown subagent role/);
+    }
+  });
 });
 
 describe('layerRoleSystemPrompt', () => {

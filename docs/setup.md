@@ -380,6 +380,12 @@ rejected on that operator process. The repo launcher scrubs those retired
 variables from the gateway and keeps proxy trust gateway-owned; child
 agent/operator allowlists do not inherit them.
 
+Fleet deployment checklist item — **do not set `ALLOW_INSECURE_LOCAL_API=true`
+in a `PSFN_FLEET_AUTH` cluster.** Fleet auth forces the no-auth local API
+bypass off regardless of the flag, and the gateway logs a loud startup warning
+when the flag is present. Remove it so the insecure bypass cannot be re-enabled
+by a later config change.
+
 ### Discord voice
 
 ```dotenv

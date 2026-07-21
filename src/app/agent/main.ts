@@ -1524,6 +1524,10 @@ async function main(): Promise<void> {
         ...(heartbeatChannelId ? { primaryChannelId: heartbeatChannelId } : {}),
         primaryChannelType: 'discord',
       },
+      // Evaluate the quiet-hours gate in the recipient's timezone (2tli).
+      resolveContactTimeZone: async contactId => (
+        (await contactStore.getById(contactId))?.timezone ?? null
+      ),
     });
   } else if (schedulerConfig.weightedThoughtOutreach.enabled) {
     log.warn('weightedThoughtOutreach enabled but no weighted-thought store is available; lane not registered');

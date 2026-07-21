@@ -239,6 +239,14 @@ export interface HeartbeatRuntimeOptions {
   episodicDiagnosticsStore?: Pick<EpisodicStorePort, 'getMaintenanceDiagnostics'> | null;
   episodicProcessingRestWindow?: EpisodicProcessingRestWindowConfig;
   /**
+   * Per-recipient timezone resolver for the intention-outbound quiet-hours gate
+   * (psfn-framework-2tli). Called with the outbound channelId; wire to the
+   * contact bound to that channel so quiet hours evaluate in the recipient's
+   * local time. Optional; when absent or returning null the gate falls back to
+   * the global window's zone.
+   */
+  resolveContactTimeZone?: (channelId: string) => Promise<string | null>;
+  /**
    * Read-only advisory over the emo_sim affect model's directed relationship
    * reading (oth4.6). Fed into the nightly contact trust/relationship review as
    * ADVISORY context the companion weighs — never an automatic promoter/demoter

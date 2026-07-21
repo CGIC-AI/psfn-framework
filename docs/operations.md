@@ -1116,6 +1116,64 @@ Generate or rotate the default encryption key with:
 openssl rand -base64 48
 ```
 
+### Append-only subsystem-output tables — keep-forever retention
+
+Two Postgres tables record what each background subsystem produced for a turn so
+projection reads survive terminal background-job purge:
+`agent_turn_subsystem_output_refs` and `agent_turn_subsystem_output_status`
+(`src/persistence/postgres/migrations.ts`). Both carry `BEFORE
+UPDATE/DELETE/TRUNCATE` reject triggers — they are append-only by design, and
+`purgeTerminal` deletes only `agent_background_work_jobs`, never these refs — so
+they have no pruning path and grow for the life of the companion.
+
+**Operator decision (recorded): keep forever.** The rows are tiny, and the
+cognitive-security recovery guarantee comes from the 12-month generational
+backup depth (above), not from trimming these tables. A retention/prune surface
+is deliberately not built. If measured growth ever challenges this, the prune
+must be an explicit, audited maintenance path that drops the trigger inside a
+guarded transaction — never a silent background delete of companion-derived
+records. The math below documents why keep-forever is safe.
+
+**Write rate.** Rows are written only by the memory-extraction background job via
+`PostgresBackgroundWorkStore.completeEffect` (it is the only caller that sets
+`projectsSubsystemOutputs: true`). Extraction is interval-gated, so this is
+per-extraction, not per-turn:
+
+- `…_status`: at most **1 row per extraction** (the primary key is turn-scoped;
+  every insert path is `ON CONFLICT DO NOTHING`).
+- `…_refs`: **N rows per applied extraction**, where `N = |memoryIds| +
+  |concernIds| + |contactIds|` after dedupe. The default memory-write cap is 2
+  (`DEFAULT_MAX_WRITES`), plus a handful of concern/contact ids, so typical `N`
+  is ~0–4. `completeEffect` hard-caps the batch at **128** (it throws above),
+  bounding the worst case.
+
+**Bytes per row.** Every column is `TEXT` except `recorded_at_ms BIGINT`; there
+is no `jsonb` and no payload body — the tables store only identifiers, a small
+status enum (`applied`/`failed`/`outcome_unknown`), and a compact
+`loom-output:v1:<kind>:<base64url-id>` ref string (~70 bytes). Including the
+Postgres heap-tuple header and index tuples (`…_refs` is double-indexed: the
+5-column primary key plus `idx_agent_turn_subsystem_output_refs_turn`), a live
+row is roughly **~500–700 B for `…_refs`** and **~300–400 B for `…_status`**.
+
+**Projected growth.** Per applied extraction that lands ~3 refs: `1 × ~375 B`
+(status) `+ 3 × ~650 B` (refs) ≈ **~2.3 KB all-in**. At a realistic-to-heavy
+**300–1,000 extractions/day** per companion that is **~0.75–2.5 MB/day**, i.e.
+**~0.3–1 GB/year**. The pathological 128-ref cap case is ~83 KB for a single
+extraction and cannot recur without a matching extraction rate.
+
+Against the retained backup footprint (~16 GB) and the operator's "100 GB is
+excessive" ceiling, ~0.3–1 GB/year keeps a decade of history in the low single-
+digit gigabytes — comfortably keep-forever. **Revisit trigger:** if the measured
+row rate (a `SELECT count(*)` on either table over a known window) implies a
+sustained multi-GB/year trajectory, plan the guarded drop-trigger maintenance
+path described above rather than letting it run unbounded.
+
+> Consistency note (non-exploitable, hardening only): the projection-binding
+> hash for these refs is plain SHA-256 (`src/shared/contracts/subsystem-output-refs.ts`),
+> whereas fleet-auth digests are HMAC-keyed. Assessed non-exploitable — the hash
+> binds internal turn identifiers, not an attacker-influenced signature — so it
+> is recorded here for consistency, not scheduled for change.
+
 ## Heartbeat Audit Posture
 
 Use `schedule action=list_templates` when you need the live reflection/scheduler classification, not raw prompt text.

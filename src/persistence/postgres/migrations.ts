@@ -985,6 +985,8 @@ export const POSTGRES_INTENTION_MIGRATIONS = [
   `ALTER TABLE intention_pending_follow_ups ADD COLUMN IF NOT EXISTS origin_icp_root_initiation_id UUID;`,
   `ALTER TABLE intention_pending_follow_ups ADD COLUMN IF NOT EXISTS dampened_at TEXT;`,
   `ALTER TABLE intention_pending_follow_ups ADD COLUMN IF NOT EXISTS dampening_reason TEXT;`,
+  `ALTER TABLE intention_pending_follow_ups ADD COLUMN IF NOT EXISTS formation_vad JSONB;`,
+  `ALTER TABLE intention_pending_follow_ups ADD COLUMN IF NOT EXISTS completion_vad JSONB;`,
   `CREATE INDEX IF NOT EXISTS idx_intention_pending_follow_ups_active ON intention_pending_follow_ups (activated_at, created_at, id);`,
   `CREATE INDEX IF NOT EXISTS idx_intention_pending_follow_ups_live ON intention_pending_follow_ups (activated_at, dampened_at, created_at, id);`,
   `CREATE INDEX IF NOT EXISTS idx_intention_pending_follow_ups_contact ON intention_pending_follow_ups (contact_id, activated_at, created_at, id);`,

@@ -679,6 +679,7 @@ export function wireHeartbeatPostTurnRuntime(
               channelType: context.message.channelType,
               canonicalContactKey: context.canonicalContactKey,
               sourceMessageId: context.message.id,
+              formationVAD: { ...internalState.emotional.vad },
               ...(originIcpRootInitiationId ? { originIcpRootInitiationId } : {}),
             });
             if (pendingFollowUpId) {

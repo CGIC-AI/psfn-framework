@@ -60,6 +60,8 @@ export interface PendingFollowUpRow {
   dampened_at: string | null;
   dampening_reason: string | null;
   origin_icp_root_initiation_id: string | null;
+  formation_vad: unknown;
+  completion_vad: unknown;
 }
 
 export interface BehavioralPatternRow {
@@ -359,6 +361,26 @@ export function serializeFormationVAD(value: { valence: number; arousal: number;
   return serializeConcernVAD(value, 'formation_vad');
 }
 
+/**
+ * Serialize a pending-follow-up formation/completion VAD to a JSONB string (bead
+ * vw3w.3). Reuses the concern VAD normalization so both surfaces validate axes
+ * identically; the field name only labels error messages.
+ */
+export function serializeFollowUpVAD(
+  value: { valence: number; arousal: number; dominance: number } | undefined,
+  fieldName: string,
+): string | null {
+  return serializeConcernVAD(value, fieldName);
+}
+
+/** Parse a persisted pending-follow-up VAD column (bead vw3w.3). */
+export function parseFollowUpVAD(
+  value: unknown,
+  fieldName: string,
+): { valence: number; arousal: number; dominance: number } | undefined {
+  return parseConcernVAD(value, fieldName);
+}
+
 export function parseFormationVAD(value: unknown): { valence: number; arousal: number; dominance: number } | undefined {
   return parseConcernVAD(value, 'formation_vad');
 }
@@ -550,6 +572,8 @@ export function mapPendingFollowUpRow(row: PendingFollowUpRow) {
   const originIcpRootInitiationId = normalizeOptionalIcpRootInitiationId(
     row.origin_icp_root_initiation_id,
   );
+  const formationVAD = parseFollowUpVAD(row.formation_vad, 'formation_vad');
+  const completionVAD = parseFollowUpVAD(row.completion_vad, 'completion_vad');
   return {
     id: normalizeRequiredText(row.id, 'id', MAX_PENDING_ID_CHARS),
     content: normalizeRequiredText(row.content, 'content', MAX_PENDING_TEXT_CHARS),
@@ -570,6 +594,8 @@ export function mapPendingFollowUpRow(row: PendingFollowUpRow) {
     ...(dampenedAt ? { dampenedAt } : {}),
     ...(dampeningReason ? { dampeningReason } : {}),
     ...(originIcpRootInitiationId ? { originIcpRootInitiationId } : {}),
+    ...(formationVAD ? { formationVAD } : {}),
+    ...(completionVAD ? { completionVAD } : {}),
   };
 }
 

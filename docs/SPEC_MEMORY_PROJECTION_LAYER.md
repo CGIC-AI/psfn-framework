@@ -18,7 +18,7 @@ Today that projection exists *de facto*: nine retrieval modes, each hardcoding i
 | 2 | Episodic landmark chains | agent context | `retrieval.ts:1280` | title (≤96ch), humanized time range, themes[0:5], landmark, arc-partner *title* | `renderEpisodicLandmarkChains` `formatting.ts:150–181` |
 | 3 | Emotional snapshot | agent context | `retrieval.ts:648` | profile summary, baseline/mood valence, drift, sample count, freshness | `renderEmotionalSnapshot` `formatting.ts:83–105` |
 | 4 | Emotional continuity | agent context | `retrieval.ts:1119` | narrative text, valence marker | `renderEmotionalContinuityMemories` |
-| 5 | Proactive recall | agent context | `retrieval.ts:1204` | type, narrative text, valence marker | `renderProactiveRecall` `formatting.ts:404` |
+| 5 | Proactive recall | agent context | `retrieval.ts` (`collectProactiveRecallCandidates`, folded into the retrieve() candidate pool) | type, narrative text, valence marker | rendered with the merged candidate pool (standalone `renderProactiveRecall` facade removed) |
 | 6 | Sleep consolidation | background LLM | `sleep-consolidation.ts:125` | JSON: id, startedAt, endedAt, title, landmark, themes, salience.score | inline builder |
 | 7 | Dream pass | her main mind | `dream-meaning-pass.ts:73` | same JSON as #6 | inline |
 | 8 | Appraisal | emotion/intention | `appraisal/formatting.ts:18` | concern excerpts (not UUIDs), VAD state, metacognitive flags | `sessionEntriesToIntentionMessages` |

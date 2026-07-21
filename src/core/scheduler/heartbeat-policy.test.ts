@@ -4,6 +4,10 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { HeartbeatPolicyStore, validateTemplate } from './heartbeat-policy.js';
 import type { ReflectionTemplate } from './heartbeat-policy.js';
+import {
+  getCachedJsonValueDiagnostics,
+  invalidateCachedJsonValue,
+} from '../../system/config/load-or-seed.js';
 
 describe('HeartbeatPolicyStore', () => {
   let tmpDir: string;
@@ -727,5 +731,55 @@ describe('validateTemplate', () => {
   it('boundary: accepts max interval (604_800_000)', () => {
     const errors = validateTemplate({ ...validTemplate, intervalMs: 604_800_000 }, true);
     expect(errors.filter(e => e.field === 'intervalMs')).toHaveLength(0);
+  });
+});
+
+describe('HeartbeatPolicyStore fingerprint-cached load (psfn-framework-nljc)', () => {
+  let tmpDir: string;
+  let filePath: string;
+  let store: HeartbeatPolicyStore;
+
+  beforeEach(() => {
+    tmpDir = join(tmpdir(), `hbp-cache-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`);
+    mkdirSync(tmpDir, { recursive: true });
+    filePath = join(tmpDir, 'heartbeat-policy.json');
+    store = new HeartbeatPolicyStore(filePath);
+  });
+
+  afterEach(() => {
+    invalidateCachedJsonValue(filePath);
+    rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it('serves an unchanged file from cache without re-reading it', () => {
+    // Drive the policy to a normalization fixpoint so a subsequent load does not
+    // self-heal (which would re-save and invalidate the cache).
+    for (let i = 0; i < 4; i += 1) store.load();
+    expect(getCachedJsonValueDiagnostics(filePath).hasCachedValue).toBe(true);
+
+    const before = getCachedJsonValueDiagnostics(filePath);
+    const reloaded = store.load();
+    const after = getCachedJsonValueDiagnostics(filePath);
+
+    expect(reloaded.templates.length).toBeGreaterThan(0);
+    // A cache hit: hits advanced and no fresh disk read (miss) occurred.
+    expect(after.hits).toBe(before.hits + 1);
+    expect(after.misses).toBe(before.misses);
+  });
+
+  it('picks up an in-place edit via a changed fingerprint', () => {
+    for (let i = 0; i < 4; i += 1) store.load();
+    const current = store.load();
+
+    // Simulate an external in-place edit (companion edits the file directly).
+    const edited = { ...current, version: 99_999 };
+    writeFileSync(filePath, JSON.stringify(edited), 'utf-8');
+
+    const missesBefore = getCachedJsonValueDiagnostics(filePath).misses;
+    const reloaded = store.load();
+
+    // The changed fingerprint forces a fresh read and the new content is visible.
+    expect(reloaded.version).toBe(99_999);
+    expect(getCachedJsonValueDiagnostics(filePath).misses).toBe(missesBefore + 1);
   });
 });

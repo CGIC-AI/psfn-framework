@@ -517,14 +517,18 @@ export class HookRegistry {
 
     for (const state of matching) {
       if (state.registration.mode !== 'sync_decision') continue;
-      const hookName = state.registration.name;
+      // Capture the narrowed registration so the closure below keeps the
+      // sync_decision handler type (property narrowing is dropped inside a
+      // closure otherwise).
+      const registration = state.registration;
+      const hookName = registration.name;
       evaluatedHooks.push(hookName);
       state.invocations += 1;
 
       let raw: unknown;
       try {
         raw = await invokeWithTimeout(
-          () => state.registration.handler({ ...context, input: currentInput }),
+          () => registration.handler({ ...context, input: currentInput }),
           timeoutMs,
           hookName,
         );

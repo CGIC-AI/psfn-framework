@@ -19,6 +19,7 @@ SOFT=false
 SMOKE=false
 VERBOSE=false
 CHECK_PROVIDER_ROUTING=true
+LIST_APP_DEPLOYMENTS=false
 KUBE_MODE_REQUESTED="auto"
 KUBE_MODE=""
 GARDEN_PORT="${GARDEN_PORT:-10054}"
@@ -29,7 +30,7 @@ SMOKE_TIMEOUT_SECONDS="${SMOKE_TIMEOUT_SECONDS:-180}"
 TESTING_HARNESS_API_KEY_VALUE=""
 TESTING_HARNESS_SECRET_KEY=""
 
-APP_DEPLOYS=(psfn-agent psfn-gateway psfn-garden)
+APP_DEPLOYS=(psfn-gateway psfn-garden)
 CHECK_COUNT=0
 PASS_COUNT=0
 FAIL_COUNT=0
@@ -56,6 +57,8 @@ Options:
       --companion-pattern RE Regex for the expected /v1/models companion route
       --skip-provider-routing
                             Skip latest chat model_usage_events provider check
+      --list-app-deployments
+                            Print discovered fleet app Deployments and exit
       --smoke                Run a two-turn gateway chat smoke
       --smoke-timeout SEC    Per-smoke request timeout (default: 180)
       --soft                 Continue after failures and summarize at the end
@@ -138,6 +141,10 @@ parse_args() {
         ;;
       --skip-provider-routing)
         CHECK_PROVIDER_ROUTING=false
+        shift
+        ;;
+      --list-app-deployments)
+        LIST_APP_DEPLOYMENTS=true
         shift
         ;;
       --smoke)
@@ -227,6 +234,37 @@ select_kube_mode() {
   if ! command -v node >/dev/null 2>&1; then
     die "node is required for JSON validation"
   fi
+}
+
+discover_app_deployments() {
+  local deployments_json
+  if ! deployments_json="$(run_kubectl -n "$NAMESPACE" get deployments \
+    -l 'psfn.io/fleet-target=registered' -o json 2>&1)"; then
+    printf 'failed to discover registered fleet agent Deployments: %s\n' "$deployments_json" >&2
+    return 1
+  fi
+  local agent_deployments
+  if ! agent_deployments="$(printf '%s' "$deployments_json" | node -e '
+    const fs = require("node:fs");
+    const payload = JSON.parse(fs.readFileSync(0, "utf8"));
+    const names = (Array.isArray(payload.items) ? payload.items : [])
+      .map(item => item.metadata?.name)
+      .filter(name => typeof name === "string" && name.length > 0)
+      .sort();
+    process.stdout.write(names.join("\n"));
+  ' 2>&1)"; then
+    printf 'failed to parse registered fleet agent Deployments: %s\n' "$agent_deployments" >&2
+    return 1
+  fi
+  if [[ -z "$agent_deployments" ]]; then
+    printf 'no registered fleet agent Deployments found\n' >&2
+    return 1
+  fi
+  APP_DEPLOYS=(psfn-gateway psfn-garden)
+  while IFS= read -r deploy; do
+    [[ -n "$deploy" ]] || continue
+    APP_DEPLOYS+=("$deploy")
+  done <<<"$agent_deployments"
 }
 
 run_kubectl() {
@@ -499,7 +537,7 @@ for (const pod of selected) {
 }
 
 if (selected.length === 0) {
-  failures.push("no app pods matched psfn-agent, psfn-gateway, or psfn-garden");
+  failures.push(`no app pods matched discovered Deployments: ${deploys.join(", ")}`);
 }
 
 if (failures.length > 0) {
@@ -1030,6 +1068,11 @@ console.log(`gateway smoke passed: model=${payload.model} user=${payload.validat
 main() {
   parse_args "$@"
   select_kube_mode
+  discover_app_deployments
+  if [[ "$LIST_APP_DEPLOYMENTS" == true ]]; then
+    printf '%s\n' "${APP_DEPLOYS[@]}"
+    exit 0
+  fi
 
   printf 'PSFN kube rollout validation\n'
   printf 'namespace=%s mode=%s host=%s rollout_timeout=%s log_since=%s\n' \

@@ -7,6 +7,8 @@ NAMESPACE="${PSFN_ARTEMIS_NAMESPACE:-psfn-test}"
 RELEASE="${PSFN_ARTEMIS_RELEASE:-psfn}"
 COMPANION_ID="${PSFN_ARTEMIS_COMPANION_ID:-11111111-1111-4111-8111-111111111111}"
 COMPANION_NAME="${PSFN_ARTEMIS_COMPANION_NAME:-ARTEMIS}"
+OWNER_DISCORD_ID="${PSFN_ARTEMIS_OWNER_DISCORD_ID:-123456789012345678}"
+GATEWAY_HOST="${PSFN_ARTEMIS_GATEWAY_HOST:-psfn-gateway.local}"
 GATEWAY_LOCAL_PORT="${PSFN_ARTEMIS_GATEWAY_PORT:-10153}"
 GARDEN_LOCAL_PORT="${PSFN_ARTEMIS_GARDEN_PORT:-10154}"
 RESET_CLUSTER=0
@@ -17,8 +19,13 @@ RUN_CHAT_SMOKE=0
 START_PORT_FORWARDS=1
 PREPARED_ROOT=""
 SEED_ROOT=""
+KEEP_PREPARED_ROOT=0
+PREPARE_SEED_ONLY_OUTPUT=""
+SPLICE_OWNER_TARGET=""
+SPLICE_OWNER_SEED=""
 COMPANION_AUTH_TOKEN=""
 SESSION_INTEGRITY_AUTH_TOKEN=""
+GATEWAY_SESSION_HMAC_KEY_VALUE=""
 FLEET_AUTH_ASSERTION_PRIVATE_KEY_FILE=""
 PRESERVED_FLEET_AUTH_SECRET_DIR=""
 RETAINED_FLEET_AUTH_OWNER=0
@@ -29,10 +36,13 @@ FLEET_AUTH_RECOVERY_CREDENTIAL_VALUE=""
 FLEET_AUTH_RUNTIME_PASSWORD=""
 FLEET_AUTH_MIGRATION_PASSWORD=""
 FLEET_AUTH_BACKUP_PASSWORD=""
+COMPANION_DATABASE_PASSWORD=""
+SHARED_SCHEMA_MIGRATION_PASSWORD=""
 FLEET_AUTH_RUNTIME_DATABASE_URL_VALUE=""
 FLEET_AUTH_MIGRATION_DATABASE_URL_VALUE=""
 FLEET_AUTH_BACKUP_DATABASE_URL_VALUE=""
-FLEET_AUTH_AUTHORITY_FLOOR_ROOT_VALUE="/runtime/logs/fleet-auth-authority"
+COMPANION_DATABASE_URL_VALUE=""
+SHARED_SCHEMA_MIGRATION_DATABASE_URL_VALUE=""
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PORT_FORWARD_RUNNER="${SCRIPT_DIR}/keep-kube-port-forward.sh"
 
@@ -48,12 +58,13 @@ Defaults:
   cluster:        psfn-kube-test
   namespace:      psfn-test
   release:        psfn
-  companion id:   shakedown-artemis
+  companion id:   11111111-1111-4111-8111-111111111111
   gateway URL:    http://127.0.0.1:10153
   Garden URL:     http://127.0.0.1:10154
 
 Options:
-  --shakedown-root PATH   Artemis fixture root.
+  --shakedown-root PATH   Optional Artemis fixture overrides. Missing fixture
+                         directories are generated from current seed defaults.
   --cluster NAME          k3d cluster name.
   --namespace NAME        Kubernetes namespace.
   --release NAME          Helm release name.
@@ -65,6 +76,8 @@ Options:
   --skip-gate             Skip post-rollout validation.
   --chat-smoke            Include provider-backed chat smoke in validation.
   --no-port-forward       Do not start localhost port-forwards.
+  --prepare-seed-only DIR Prepare the resolved one-entry fleet fixture at DIR
+                         without requiring Docker, Helm, or Kubernetes.
   -h, --help              Show this help.
 
 Secrets:
@@ -73,9 +86,13 @@ Secrets:
   the role-bound gateway worker proofs (GATEWAY_COMPANION_AUTH_TOKEN and
   GATEWAY_SESSION_INTEGRITY_AUTH_TOKEN) from the same COMPANION_ID and session
   HMAC key, and only copies provider/media keys that are already set in the
-  environment. The Discord OAuth client secret is copied only when explicitly
-  supplied as FLEET_AUTH_DISCORD_CLIENT_SECRET; bot and Telegram keys are
-  deliberately not copied into this local shakedown.
+  environment. FLEET_AUTH_DISCORD_CLIENT_SECRET is copied when supplied; its
+  generated fallback is only a startup-safe placeholder and cannot complete
+  OAuth. A real OAuth exercise also needs the registered Discord clientId in a
+  fixture fleet-auth.json. --chat-smoke requires OPENROUTER_API_KEY. Bot and
+  Telegram keys are deliberately not copied into this local shakedown. Set
+  PSFN_ARTEMIS_OWNER_DISCORD_ID to the real operator Discord snowflake before
+  exercising login; the disposable offline-safe default is not a provider key.
 EOF
 }
 
@@ -129,6 +146,15 @@ while (($# > 0)); do
       START_PORT_FORWARDS=0
       shift
       ;;
+    --prepare-seed-only)
+      PREPARE_SEED_ONLY_OUTPUT="${2:?--prepare-seed-only requires a value}"
+      shift 2
+      ;;
+    --splice-owner-files)
+      SPLICE_OWNER_TARGET="${2:?--splice-owner-files requires a target root}"
+      SPLICE_OWNER_SEED="${3:?--splice-owner-files requires a seed root}"
+      shift 3
+      ;;
     -h|--help)
       usage
       exit 0
@@ -149,7 +175,7 @@ require_command() {
 }
 
 cleanup_prepared_root() {
-  if [[ -n "$PREPARED_ROOT" && -d "$PREPARED_ROOT" ]]; then
+  if ((KEEP_PREPARED_ROOT == 0)) && [[ -n "$PREPARED_ROOT" && -d "$PREPARED_ROOT" ]]; then
     rm -rf "$PREPARED_ROOT"
   fi
   if [[ -n "${SECRET_ENV_FILE:-}" && -f "$SECRET_ENV_FILE" ]]; then
@@ -167,20 +193,122 @@ random_secret() {
   fi
 }
 
+splice_owner_files() {
+  local target_root=$1
+  local seed_root=$2
+  [[ -d "$target_root" ]] || { echo "owner target root is not a directory: $target_root" >&2; exit 2; }
+  [[ -d "$seed_root" ]] || { echo "owner seed root is not a directory: $seed_root" >&2; exit 2; }
+  local staging_root
+  staging_root="$(mktemp -d "${TMPDIR:-/tmp}/psfn-owner-splice.XXXXXX")"
+  if ! node - "$target_root" "$seed_root" "$staging_root" <<'NODE'
+const fs = require('node:fs');
+const path = require('node:path');
+
+const [, , targetRoot, seedRoot, stagingRoot] = process.argv;
+
+function readJson(file) {
+  return JSON.parse(fs.readFileSync(file, 'utf8'));
+}
+
+function isRecord(value) {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function spliceMissing(seed, current) {
+  if (Array.isArray(seed) && Array.isArray(current)) {
+    return current.map((value, index) => index < seed.length
+      ? spliceMissing(seed[index], value)
+      : value);
+  }
+  if (!isRecord(seed) || !isRecord(current)) return current;
+  const merged = { ...seed };
+  for (const [key, value] of Object.entries(current)) {
+    merged[key] = Object.prototype.hasOwnProperty.call(seed, key)
+      ? spliceMissing(seed[key], value)
+      : value;
+  }
+  return merged;
+}
+
+const actions = [];
+for (const name of fs.readdirSync(seedRoot).filter(entry => entry.endsWith('.json')).sort()) {
+  if (!/^[a-z0-9-]+\.json$/.test(name)) {
+    throw new Error(`owner seed contains an unsafe file name: ${name}`);
+  }
+  const seedPath = path.join(seedRoot, name);
+  const targetPath = path.join(targetRoot, name);
+  const seed = readJson(seedPath);
+  if (!fs.existsSync(targetPath)) {
+    fs.copyFileSync(seedPath, path.join(stagingRoot, name));
+    actions.push(`create\t${name}`);
+    continue;
+  }
+  const current = readJson(targetPath);
+  const merged = spliceMissing(seed, current);
+  if (JSON.stringify(merged) === JSON.stringify(current)) continue;
+  fs.writeFileSync(path.join(stagingRoot, name), `${JSON.stringify(merged, null, 2)}\n`);
+  actions.push(`update\t${name}`);
+}
+fs.writeFileSync(path.join(stagingRoot, 'manifest'), actions.length > 0 ? `${actions.join('\n')}\n` : '');
+NODE
+  then
+    rm -rf "$staging_root"
+    exit 1
+  fi
+  local action name target_path
+  while IFS=$'\t' read -r action name; do
+    [[ -n "$action" ]] || continue
+    target_path="${target_root}/${name}"
+    case "$action" in
+      create)
+        cp "${staging_root}/${name}" "$target_path"
+        echo "seeded missing owner file: $name"
+        ;;
+      update)
+        cp -p "$target_path" "$target_path.bak-$(date +%Y%m%d-%H%M%S)"
+        cp "${staging_root}/${name}" "$target_path"
+        echo "spliced missing owner keys: $name"
+        ;;
+      *)
+        echo "owner splice produced an unsupported action: $action" >&2
+        rm -rf "$staging_root"
+        exit 1
+        ;;
+    esac
+  done <"${staging_root}/manifest"
+  rm -rf "$staging_root"
+}
+
 prepare_seed_root() {
-  PREPARED_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/psfn-artemis-seed.XXXXXX")"
+  if [[ -n "$PREPARE_SEED_ONLY_OUTPUT" ]]; then
+    if [[ -e "$PREPARE_SEED_ONLY_OUTPUT" ]]; then
+      echo "--prepare-seed-only output already exists: $PREPARE_SEED_ONLY_OUTPUT" >&2
+      exit 2
+    fi
+    PREPARED_ROOT="$PREPARE_SEED_ONLY_OUTPUT"
+    KEEP_PREPARED_ROOT=1
+  else
+    PREPARED_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/psfn-artemis-seed.XXXXXX")"
+  fi
   mkdir -p "$PREPARED_ROOT/system-data" "$PREPARED_ROOT/companion-data" "$PREPARED_ROOT/workspace"
-  cp -a "${SHAKEDOWN_ROOT}/system-data/." "$PREPARED_ROOT/system-data/"
-  cp -a "${SHAKEDOWN_ROOT}/companion-data/." "$PREPARED_ROOT/companion-data/"
+  if [[ -d "${SHAKEDOWN_ROOT}/system-data" ]]; then
+    cp -a "${SHAKEDOWN_ROOT}/system-data/." "$PREPARED_ROOT/system-data/"
+  fi
+  if [[ -d "${SHAKEDOWN_ROOT}/companion-data" ]]; then
+    cp -a "${SHAKEDOWN_ROOT}/companion-data/." "$PREPARED_ROOT/companion-data/"
+  fi
   if [[ -d "${SHAKEDOWN_ROOT}/workspace" ]]; then
     cp -a "${SHAKEDOWN_ROOT}/workspace/." "$PREPARED_ROOT/workspace/"
   fi
 
   node - \
     "$PREPARED_ROOT/system-data" \
+    "$PREPARED_ROOT/companion-data" \
     "$PWD/config" \
     "$COMPANION_ID" \
     "$COMPANION_NAME" \
+    "$OWNER_DISCORD_ID" \
+    "$GATEWAY_HOST" \
     "$PREPARED_ROOT/fleet-auth-assertion-private.pem" <<'NODE'
 const crypto = require('node:crypto');
 const fs = require('node:fs');
@@ -190,11 +318,25 @@ const [
   ,
   ,
   systemDataDir,
+  companionDataDir,
   configDir,
   companionId,
   companionName,
+  ownerDiscordId,
+  gatewayHost,
   assertionPrivateKeyPath,
 ] = process.argv;
+
+const PER_COMPANION_OWNERS = new Set([
+  'capability-tier.json',
+  'scheduler.json',
+  'charge-policy.json',
+  'skills.json',
+]);
+
+if (!/^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)(?:\.(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?))*$/.test(gatewayHost)) {
+  throw new Error('PSFN_ARTEMIS_GATEWAY_HOST must be a lowercase RFC1123 hostname');
+}
 
 function readJson(file) {
   return JSON.parse(fs.readFileSync(file, 'utf8'));
@@ -313,17 +455,8 @@ function generateFleetAuthOwner(owner) {
   if (!isRecord(owner) || !isRecord(owner.hubDeviceAssertions)) {
     throw new Error('fleet-auth seed must contain the canonical owner-file structure');
   }
-  if (owner.accountRoster !== undefined) {
-    if (!Array.isArray(owner.accountRoster)) {
-      throw new Error('fleet-auth accountRoster must be an array when present');
-    }
-    for (const [index, entry] of owner.accountRoster.entries()) {
-      if (!isRecord(entry) || entry.companionId !== companionId) {
-        throw new Error(
-          `fleet-auth accountRoster[${index}] must target the one generated companion ${companionId}`,
-        );
-      }
-    }
+  if (!/^[1-9][0-9]{16,19}$/.test(ownerDiscordId)) {
+    throw new Error('PSFN_ARTEMIS_OWNER_DISCORD_ID must be a Discord snowflake (17-20 digits)');
   }
   const broker = crypto.generateKeyPairSync('ed25519');
   const hub = crypto.generateKeyPairSync('ed25519');
@@ -339,6 +472,13 @@ function generateFleetAuthOwner(owner) {
   fs.writeFileSync(assertionPrivateKeyPath, brokerPrivateKeyPem, { mode: 0o600 });
   return {
     ...owner,
+    canonicalOrigin: `https://${gatewayHost}`,
+    accountRoster: [{
+      providerSubjectId: ownerDiscordId,
+      companionId,
+      role: 'owner',
+    }],
+    accountRosterSatisfiesStepUp: true,
     verifierKeys: [{
       issuer: 'psfn-fleet-auth',
       kid: brokerKid,
@@ -349,6 +489,7 @@ function generateFleetAuthOwner(owner) {
     }],
     hubDeviceAssertions: {
       ...owner.hubDeviceAssertions,
+      audience: `https://${gatewayHost}`,
       keys: [{
         kid: hubKid,
         publicKeyPem: hubPublicKeyPem,
@@ -367,15 +508,47 @@ for (const entry of fs.readdirSync(configDir)) {
   }
   const targetName = entry.replace(/\.seed\.json$/, '.json');
   const seedPath = path.join(configDir, entry);
-  const targetPath = path.join(systemDataDir, targetName);
+  const targetRoot = PER_COMPANION_OWNERS.has(targetName) ? companionDataDir : systemDataDir;
+  const targetPath = path.join(targetRoot, targetName);
+  const legacySystemPath = path.join(systemDataDir, targetName);
   const seed = readJson(seedPath);
-  const merged = fs.existsSync(targetPath) ? mergeDefaults(seed, readJson(targetPath)) : seed;
+  const currentPath = fs.existsSync(targetPath)
+    ? targetPath
+    : PER_COMPANION_OWNERS.has(targetName) && fs.existsSync(legacySystemPath)
+      ? legacySystemPath
+      : undefined;
+  const merged = currentPath ? mergeDefaults(seed, readJson(currentPath)) : seed;
   const normalized = normalizeOwner(targetName, merged);
   const owner = targetName === 'fleet-auth.json'
     ? generateFleetAuthOwner(normalized)
     : normalized;
   fs.writeFileSync(targetPath, `${JSON.stringify(owner, null, 2)}\n`);
+  if (PER_COMPANION_OWNERS.has(targetName) && fs.existsSync(legacySystemPath)) {
+    fs.rmSync(legacySystemPath);
+  }
   migrated.push(targetName);
+}
+
+const companionCardPath = path.join(companionDataDir, 'companion.json');
+if (!fs.existsSync(companionCardPath)) {
+  const starterCard = {
+    spec: 'chara_card_v2',
+    spec_version: '2.0',
+    data: {
+      name: companionName,
+      description: `${companionName} is a newly bootstrapped companion instance awaiting onboarding and identity tuning.`,
+      personality: 'Warm, attentive, honest about uncertainty, and ready to be personalized through onboarding.',
+      scenario: 'You are meeting the operator for the first time and can be customized further through companion setup.',
+      first_mes: `Hi, I'm ${companionName}.`,
+      mes_example: '',
+      system_prompt: '',
+      post_history_instructions: '',
+      tags: ['bootstrap'],
+      creator: 'system',
+      creator_notes: 'Auto-seeded starter identity for first-run bootstrap.',
+    },
+  };
+  fs.writeFileSync(companionCardPath, `${JSON.stringify(starterCard, null, 2)}\n`);
 }
 
 if (!migrated.includes('companions.json')) {
@@ -385,7 +558,7 @@ if (!migrated.includes('fleet-auth.json')) {
   throw new Error('current config is missing fleet-auth.seed.json');
 }
 
-console.log(`prepared ${migrated.length} system owner files from current seed defaults`);
+console.log(`prepared ${migrated.length} owner files from current seed defaults`);
 NODE
 
   FLEET_AUTH_ASSERTION_PRIVATE_KEY_FILE="$PREPARED_ROOT/fleet-auth-assertion-private.pem"
@@ -427,6 +600,7 @@ helm_base_args() {
     --set "runtime.companionDataDir=/runtime/companions/${COMPANION_ID}" \
     --set "runtime.workspacePath=/runtime/workspaces/personal/${COMPANION_ID}" \
     --set "runtime.characterCardPath=/runtime/companions/${COMPANION_ID}/companion.json" \
+    --set fleet.enabled=true \
     --set "fleet.companions[0].companionId=${COMPANION_ID}" \
     --set "fleet.companions[0].postgresSchema=companion_default" \
     --set-string "fleet.companions[0].companionDataClaim=" \
@@ -434,6 +608,11 @@ helm_base_args() {
     --set-string "fleet.companions[0].authSecret.name=" \
     --set-string "fleet.companions[0].authSecret.sessionIntegrityKey=" \
     --set-string "fleet.companions[0].authSecret.companionAuthKey=" \
+    --set fleetAuth.enabled=true \
+    --set-string fleetAuth.authorityFloor.existingClaim= \
+    --set fleetAuth.authorityFloor.size=64Mi \
+    --set-string fleetAuth.authorityFloor.storageClassName= \
+    --set fleetAuth.authorityFloor.mountPath=/var/lib/psfn/fleet-auth-floor \
     --set-string "fleetAuth.credentialEnv[0].name=FLEET_AUTH_DISCORD_CLIENT_SECRET" \
     --set-string "fleetAuth.credentialEnv[0].secretRef.name=psfn-app" \
     --set-string "fleetAuth.credentialEnv[0].secretRef.key=FLEET_AUTH_DISCORD_CLIENT_SECRET" \
@@ -458,13 +637,24 @@ helm_base_args() {
     --set-string "fleetAuth.credentialEnv[7].name=FLEET_AUTH_BACKUP_DATABASE_URL" \
     --set-string "fleetAuth.credentialEnv[7].secretRef.name=psfn-app" \
     --set-string "fleetAuth.credentialEnv[7].secretRef.key=FLEET_AUTH_BACKUP_DATABASE_URL" \
-    --set-string "fleetAuth.credentialEnv[8].name=FLEET_AUTH_AUTHORITY_FLOOR_ROOT" \
+    --set-string "fleetAuth.credentialEnv[8].name=SHARED_SCHEMA_MIGRATION_DATABASE_URL" \
     --set-string "fleetAuth.credentialEnv[8].secretRef.name=psfn-app" \
-    --set-string "fleetAuth.credentialEnv[8].secretRef.key=FLEET_AUTH_AUTHORITY_FLOOR_ROOT" \
+    --set-string "fleetAuth.credentialEnv[8].secretRef.key=SHARED_SCHEMA_MIGRATION_DATABASE_URL" \
+    --set-string "fleetAuth.credentialEnv[9].name=COMPANION_DEFAULT_DATABASE_URL" \
+    --set-string "fleetAuth.credentialEnv[9].secretRef.name=psfn-app" \
+    --set-string "fleetAuth.credentialEnv[9].secretRef.key=COMPANION_DEFAULT_DATABASE_URL" \
+    --set ingress.enabled=true \
+    --set ingress.gateway.enabled=true \
+    --set "ingress.gateway.host=${GATEWAY_HOST}" \
+    --set ingress.gateway.path=/ \
+    --set ingress.gateway.pathType=Prefix \
+    --set ingress.gateway.tls.enabled=true \
+    --set "ingress.gateway.tls.secretName=${RELEASE}-gateway-edge-tls" \
     --set identity.seedStarterCard=false \
     --set bootstrap.seedOwnerFiles=false \
     --set secrets.create=false \
-    --set secrets.existingSecret=psfn-app
+    --set secrets.existingSecret=psfn-app \
+    --set postgres.auth.existingSecret=psfn-postgres
 }
 
 helm_upgrade() {
@@ -476,6 +666,32 @@ helm_upgrade() {
     args+=("$arg")
   done < <(helm_base_args "$short" "$full")
   helm upgrade --install "${args[@]}" "$@"
+}
+
+provision_gateway_edge_certificate() {
+  local issuer_name="${RELEASE}-ca"
+  local certificate_name="${RELEASE}-gateway-edge"
+  local secret_name="${RELEASE}-gateway-edge-tls"
+  kubectl -n "$NAMESPACE" wait --for=condition=Ready "issuer/${issuer_name}" --timeout=180s
+  kubectl -n "$NAMESPACE" apply -f - <<YAML
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: ${certificate_name}
+spec:
+  secretName: ${secret_name}
+  dnsNames:
+    - "${GATEWAY_HOST}"
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+  issuerRef:
+    name: ${issuer_name}
+    kind: Issuer
+    group: cert-manager.io
+YAML
+  kubectl -n "$NAMESPACE" wait --for=condition=Ready \
+    "certificate/${certificate_name}" --timeout=180s
 }
 
 # Derive the role-bound gateway worker proofs the runtime requires from the SAME
@@ -507,7 +723,14 @@ derive_role_bound_tokens() {
   fi
 }
 
+prepare_gateway_credentials() {
+  [[ -z "$GATEWAY_SESSION_HMAC_KEY_VALUE" ]] || return 0
+  GATEWAY_SESSION_HMAC_KEY_VALUE="${GATEWAY_SESSION_HMAC_KEY:-$(random_secret)}"
+  derive_role_bound_tokens "$GATEWAY_SESSION_HMAC_KEY_VALUE"
+}
+
 prepare_fleet_auth_credentials() {
+  [[ -z "$COMPANION_DATABASE_URL_VALUE" ]] || return 0
   if ((RETAINED_FLEET_AUTH_OWNER)); then
     FLEET_AUTH_DISCORD_CLIENT_SECRET_VALUE="$(<"${PRESERVED_FLEET_AUTH_SECRET_DIR}/FLEET_AUTH_DISCORD_CLIENT_SECRET")"
     FLEET_AUTH_TOKEN_ENCRYPTION_KEY_VALUE="$(<"${PRESERVED_FLEET_AUTH_SECRET_DIR}/FLEET_AUTH_TOKEN_ENCRYPTION_KEY")"
@@ -516,11 +739,8 @@ prepare_fleet_auth_credentials() {
     FLEET_AUTH_RUNTIME_DATABASE_URL_VALUE="$(<"${PRESERVED_FLEET_AUTH_SECRET_DIR}/FLEET_AUTH_RUNTIME_DATABASE_URL")"
     FLEET_AUTH_MIGRATION_DATABASE_URL_VALUE="$(<"${PRESERVED_FLEET_AUTH_SECRET_DIR}/FLEET_AUTH_MIGRATION_DATABASE_URL")"
     FLEET_AUTH_BACKUP_DATABASE_URL_VALUE="$(<"${PRESERVED_FLEET_AUTH_SECRET_DIR}/FLEET_AUTH_BACKUP_DATABASE_URL")"
-    FLEET_AUTH_AUTHORITY_FLOOR_ROOT_VALUE="$(<"${PRESERVED_FLEET_AUTH_SECRET_DIR}/FLEET_AUTH_AUTHORITY_FLOOR_ROOT")"
-    if [[ "$FLEET_AUTH_AUTHORITY_FLOOR_ROOT_VALUE" != "/runtime/logs/fleet-auth-authority" ]]; then
-      echo "preserved fleet-auth authority floor must remain at /runtime/logs/fleet-auth-authority" >&2
-      exit 1
-    fi
+    COMPANION_DATABASE_URL_VALUE="$(<"${PRESERVED_FLEET_AUTH_SECRET_DIR}/COMPANION_DEFAULT_DATABASE_URL")"
+    SHARED_SCHEMA_MIGRATION_DATABASE_URL_VALUE="$(<"${PRESERVED_FLEET_AUTH_SECRET_DIR}/SHARED_SCHEMA_MIGRATION_DATABASE_URL")"
     return
   fi
 
@@ -531,22 +751,25 @@ prepare_fleet_auth_credentials() {
   FLEET_AUTH_RUNTIME_PASSWORD="$(random_secret)"
   FLEET_AUTH_MIGRATION_PASSWORD="$(random_secret)"
   FLEET_AUTH_BACKUP_PASSWORD="$(random_secret)"
+  COMPANION_DATABASE_PASSWORD="$(random_secret)"
+  SHARED_SCHEMA_MIGRATION_PASSWORD="$(random_secret)"
   local database_host="${RELEASE}-postgres"
   local database_name="psfn"
   FLEET_AUTH_RUNTIME_DATABASE_URL_VALUE="postgresql://fleet_auth_runtime:${FLEET_AUTH_RUNTIME_PASSWORD}@${database_host}:5432/${database_name}"
   FLEET_AUTH_MIGRATION_DATABASE_URL_VALUE="postgresql://fleet_auth_migration:${FLEET_AUTH_MIGRATION_PASSWORD}@${database_host}:5432/${database_name}"
   FLEET_AUTH_BACKUP_DATABASE_URL_VALUE="postgresql://fleet_auth_backup:${FLEET_AUTH_BACKUP_PASSWORD}@${database_host}:5432/${database_name}"
+  COMPANION_DATABASE_URL_VALUE="postgresql://companion_default_runtime:${COMPANION_DATABASE_PASSWORD}@${database_host}:5432/${database_name}"
+  SHARED_SCHEMA_MIGRATION_DATABASE_URL_VALUE="postgresql://shared_schema_migration:${SHARED_SCHEMA_MIGRATION_PASSWORD}@${database_host}:5432/${database_name}"
 }
 
 write_app_secret_env() {
   local path=$1
   chmod 600 "$path"
-  local hmac_key="${GATEWAY_SESSION_HMAC_KEY:-$(random_secret)}"
-  derive_role_bound_tokens "$hmac_key"
+  prepare_gateway_credentials
   {
     printf 'API_KEY=%s\n' "${API_KEY:-$(random_secret)}"
     printf 'ADMIN_TOKEN=%s\n' "${ADMIN_TOKEN:-$(random_secret)}"
-    printf 'GATEWAY_SESSION_HMAC_KEY=%s\n' "$hmac_key"
+    printf 'GATEWAY_SESSION_HMAC_KEY=%s\n' "$GATEWAY_SESSION_HMAC_KEY_VALUE"
     printf 'GATEWAY_COMPANION_AUTH_TOKEN=%s\n' "$COMPANION_AUTH_TOKEN"
     printf 'GATEWAY_SESSION_INTEGRITY_AUTH_TOKEN=%s\n' "$SESSION_INTEGRITY_AUTH_TOKEN"
     printf 'PSFN_BACKUP_ENCRYPTION_KEY=%s\n' "${PSFN_BACKUP_ENCRYPTION_KEY:-$(random_secret)}"
@@ -566,7 +789,8 @@ write_app_secret_env() {
     printf 'FLEET_AUTH_RUNTIME_DATABASE_URL=%s\n' "$FLEET_AUTH_RUNTIME_DATABASE_URL_VALUE"
     printf 'FLEET_AUTH_MIGRATION_DATABASE_URL=%s\n' "$FLEET_AUTH_MIGRATION_DATABASE_URL_VALUE"
     printf 'FLEET_AUTH_BACKUP_DATABASE_URL=%s\n' "$FLEET_AUTH_BACKUP_DATABASE_URL_VALUE"
-    printf 'FLEET_AUTH_AUTHORITY_FLOOR_ROOT=%s\n' "$FLEET_AUTH_AUTHORITY_FLOOR_ROOT_VALUE"
+    printf 'COMPANION_DEFAULT_DATABASE_URL=%s\n' "$COMPANION_DATABASE_URL_VALUE"
+    printf 'SHARED_SCHEMA_MIGRATION_DATABASE_URL=%s\n' "$SHARED_SCHEMA_MIGRATION_DATABASE_URL_VALUE"
     printf 'DISCORD_TOKEN=\n'
     printf 'DISCORD_BOT_ID=\n'
   } >"$path"
@@ -593,7 +817,8 @@ capture_preserved_fleet_auth_credentials() {
       "FLEET_AUTH_RUNTIME_DATABASE_URL",
       "FLEET_AUTH_MIGRATION_DATABASE_URL",
       "FLEET_AUTH_BACKUP_DATABASE_URL",
-      "FLEET_AUTH_AUTHORITY_FLOOR_ROOT",
+      "COMPANION_DEFAULT_DATABASE_URL",
+      "SHARED_SCHEMA_MIGRATION_DATABASE_URL",
     ];
     for (const name of required) {
       const encoded = secret.data?.[name];
@@ -621,6 +846,54 @@ create_local_app_secret() {
     -o yaml \
     | kubectl apply -f -
   rm -f "$env_file"
+}
+
+write_local_postgres_secret() {
+  local password=$1
+  local database_url=$2
+  local env_file
+  env_file="$(mktemp "${TMPDIR:-/tmp}/psfn-artemis-postgres-secret.XXXXXX")"
+  SECRET_ENV_FILE="$env_file"
+  chmod 600 "$env_file"
+  {
+    printf 'postgres-password=%s\n' "$password"
+    printf 'postgres-database-url=%s\n' "$database_url"
+  } >"$env_file"
+  kubectl -n "$NAMESPACE" create secret generic psfn-postgres \
+    --from-env-file="$env_file" \
+    --dry-run=client -o yaml | kubectl apply -f - >/dev/null
+  rm -f "$env_file"
+  SECRET_ENV_FILE=""
+}
+
+create_fresh_postgres_secret() {
+  local password
+  password="$(random_secret)"
+  write_local_postgres_secret "$password" "$COMPANION_DATABASE_URL_VALUE"
+}
+
+replace_postgres_runtime_database_url() {
+  local env_file
+  env_file="$(mktemp "${TMPDIR:-/tmp}/psfn-artemis-postgres-secret.XXXXXX")"
+  SECRET_ENV_FILE="$env_file"
+  chmod 600 "$env_file"
+  printf 'postgres-password=' >"$env_file"
+  kubectl -n "$NAMESPACE" get secret psfn-postgres -o json | node -e '
+    const fs = require("node:fs");
+    const secret = JSON.parse(fs.readFileSync(0, "utf8"));
+    const encoded = secret.data?.["postgres-password"];
+    if (typeof encoded !== "string" || encoded.length === 0) process.exit(2);
+    process.stdout.write(Buffer.from(encoded, "base64"));
+  ' >>"$env_file"
+  {
+    printf '\n'
+    printf 'postgres-database-url=%s\n' "$COMPANION_DATABASE_URL_VALUE"
+  } >>"$env_file"
+  kubectl -n "$NAMESPACE" create secret generic psfn-postgres \
+    --from-env-file="$env_file" \
+    --dry-run=client -o yaml | kubectl apply -f - >/dev/null
+  rm -f "$env_file"
+  SECRET_ENV_FILE=""
 }
 
 launch_seed_pod() {
@@ -658,6 +931,8 @@ spec:
           mountPath: /target/workspace
         - name: runtime
           mountPath: /target/runtime
+        - name: fleet-auth-floor
+          mountPath: /target/fleet-auth-floor
   volumes:
     - name: system-data
       persistentVolumeClaim:
@@ -671,6 +946,9 @@ spec:
     - name: runtime
       persistentVolumeClaim:
         claimName: ${RELEASE}-runtime
+    - name: fleet-auth-floor
+      persistentVolumeClaim:
+        claimName: ${RELEASE}-fleet-auth-floor
 YAML
   kubectl -n "$NAMESPACE" wait --for=condition=Ready "pod/${pod}" --timeout=180s
 }
@@ -679,7 +957,15 @@ prepare_fleet_auth_authority_floor() {
   local pod=$1
   kubectl -n "$NAMESPACE" exec "$pod" -- sh -c '
     set -eu
-    install -d -m 700 -o 999 -g 999 /target/runtime/logs/fleet-auth-authority
+    legacy_floor=/target/runtime/logs/fleet-auth-authority
+    if [ -d "$legacy_floor" ] \
+      && [ -n "$(find "$legacy_floor" -mindepth 1 -maxdepth 1 -print -quit)" ] \
+      && [ -z "$(find /target/fleet-auth-floor -mindepth 1 -maxdepth 1 -print -quit)" ]; then
+      cp -a "$legacy_floor/." /target/fleet-auth-floor/
+      echo "migrated legacy fleet-auth authority floor to dedicated PVC"
+    fi
+    chown 999:999 /target/fleet-auth-floor
+    chmod 700 /target/fleet-auth-floor
   '
 }
 
@@ -739,15 +1025,20 @@ seed_artemis_files() {
     test -f /target/system-data/companions.json
     test -f /target/system-data/fleet-auth.json
     test -f /target/companion-data/companion.json
+    test -f /target/companion-data/capability-tier.json
+    test -f /target/companion-data/scheduler.json
+    test -f /target/companion-data/charge-policy.json
+    test -f /target/companion-data/skills.json
   '
   verify_fleet_auth_broker_key "$pod"
   delete_seed_pod "$pod"
 }
 
-# Preserve-mode owner-file migration: keep every existing owner file exactly as
-# it is on the PVC and only add owner files that are newly required by the
-# current runtime (e.g. intake-policy.json) but absent from a PVC that predates
-# them. Existing mutable owners are never overwritten.
+# Preserve-mode owner-file migration: seed-splice recursively adds missing keys
+# and missing owner files while every existing scalar, object member, and array
+# remains authoritative. The chart retains ownership of its marker-bound
+# scheduler/capability cutover; charge/skills legacy roots require the canonical
+# receipt-bearing operator migration and fail closed here.
 migrate_missing_owner_files() {
   local short=$1
   local pod=psfn-artemis-migrate
@@ -757,21 +1048,6 @@ migrate_missing_owner_files() {
   if kubectl -n "$NAMESPACE" exec "$pod" -- test -f /target/system-data/fleet-auth.json; then
     retained_fleet_auth_owner=1
   fi
-  kubectl -n "$NAMESPACE" exec "$pod" -- sh -c 'rm -rf /seed && mkdir -p /seed/system-data'
-  kubectl -n "$NAMESPACE" cp "${SEED_ROOT}/system-data/." "${pod}:/seed/system-data"
-  kubectl -n "$NAMESPACE" exec "$pod" -- sh -c '
-    set -eu
-    for seed in /seed/system-data/*.json; do
-      [ -e "$seed" ] || continue
-      name="$(basename "$seed")"
-      if [ -e "/target/system-data/$name" ]; then
-        continue
-      fi
-      cp -a "$seed" "/target/system-data/$name"
-      chown 999:999 "/target/system-data/$name"
-      echo "seeded missing owner file: $name"
-    done
-  '
   if ((retained_fleet_auth_owner)); then
     local required_credential
     for required_credential in \
@@ -783,7 +1059,8 @@ migrate_missing_owner_files() {
       FLEET_AUTH_RUNTIME_DATABASE_URL \
       FLEET_AUTH_MIGRATION_DATABASE_URL \
       FLEET_AUTH_BACKUP_DATABASE_URL \
-      FLEET_AUTH_AUTHORITY_FLOOR_ROOT; do
+      COMPANION_DEFAULT_DATABASE_URL \
+      SHARED_SCHEMA_MIGRATION_DATABASE_URL; do
       if [[ -z "$PRESERVED_FLEET_AUTH_SECRET_DIR" \
         || ! -s "${PRESERVED_FLEET_AUTH_SECRET_DIR}/${required_credential}" ]]; then
         echo "preserve mode retained fleet-auth.json but psfn-app lacks ${required_credential}" >&2
@@ -792,7 +1069,45 @@ migrate_missing_owner_files() {
     done
     FLEET_AUTH_ASSERTION_PRIVATE_KEY_FILE="${PRESERVED_FLEET_AUTH_SECRET_DIR}/FLEET_AUTH_ASSERTION_PRIVATE_KEY"
     RETAINED_FLEET_AUTH_OWNER=1
+    verify_fleet_auth_broker_key "$pod"
   fi
+  kubectl -n "$NAMESPACE" exec "$pod" -- sh -c '
+    set -eu
+    rm -rf /seed
+    mkdir -p /seed/system-data /seed/companion-data
+  '
+  kubectl -n "$NAMESPACE" cp "${SEED_ROOT}/system-data/." "${pod}:/seed/system-data"
+  kubectl -n "$NAMESPACE" cp "${SEED_ROOT}/companion-data/." "${pod}:/seed/companion-data"
+  kubectl -n "$NAMESPACE" cp "$SCRIPT_DIR/setup-local-artemis-shakedown.sh" \
+    "${pod}:/seed/setup-local-artemis-shakedown.sh"
+  kubectl -n "$NAMESPACE" exec "$pod" -- sh -c '
+    set -eu
+    for name in scheduler.json capability-tier.json; do
+      if [ -f "/target/system-data/$name" ] && [ ! -e "/target/companion-data/$name" ]; then
+        rm -f "/seed/companion-data/$name"
+        echo "deferring marker-bound owner cutover to chart init: $name"
+      fi
+    done
+    for name in charge-policy.json skills.json; do
+      if [ -f "/target/system-data/$name" ] && [ ! -e "/target/companion-data/$name" ]; then
+        echo "legacy $name requires npm run migrate:system-owner-fleet before --preserve-data" >&2
+        exit 1
+      fi
+    done
+  '
+  kubectl -n "$NAMESPACE" exec "$pod" -- bash /seed/setup-local-artemis-shakedown.sh \
+    --splice-owner-files /target/system-data /seed/system-data
+  kubectl -n "$NAMESPACE" exec "$pod" -- bash /seed/setup-local-artemis-shakedown.sh \
+    --splice-owner-files /target/companion-data /seed/companion-data
+  kubectl -n "$NAMESPACE" exec "$pod" -- sh -c '
+    set -eu
+    chown -R 999:999 /target/system-data /target/companion-data
+    test -f /target/system-data/companions.json
+    test -f /target/system-data/fleet-auth.json
+    test -f /target/companion-data/companion.json
+    test -f /target/companion-data/charge-policy.json
+    test -f /target/companion-data/skills.json
+  '
   verify_fleet_auth_broker_key "$pod"
   delete_seed_pod "$pod"
 }
@@ -806,7 +1121,9 @@ provision_fleet_auth_database_roles() {
   for password in \
     "$FLEET_AUTH_RUNTIME_PASSWORD" \
     "$FLEET_AUTH_MIGRATION_PASSWORD" \
-    "$FLEET_AUTH_BACKUP_PASSWORD"; do
+    "$FLEET_AUTH_BACKUP_PASSWORD" \
+    "$COMPANION_DATABASE_PASSWORD" \
+    "$SHARED_SCHEMA_MIGRATION_PASSWORD"; do
     if [[ ! "$password" =~ ^[0-9a-f]{64}$ ]]; then
       echo "generated fleet-auth database password is not canonical 32-byte hex" >&2
       exit 1
@@ -819,7 +1136,9 @@ SELECT format('CREATE ROLE %I LOGIN NOINHERIT', role_name)
 FROM unnest(ARRAY[
   'fleet_auth_runtime',
   'fleet_auth_migration',
-  'fleet_auth_backup'
+  'fleet_auth_backup',
+  'companion_default_runtime',
+  'shared_schema_migration'
 ]) AS roles(role_name)
 WHERE NOT EXISTS (
   SELECT 1
@@ -828,17 +1147,29 @@ WHERE NOT EXISTS (
 )
 \gexec
 SQL
-    printf "ALTER ROLE fleet_auth_runtime WITH LOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD '%s';\n" \
+    printf "ALTER ROLE fleet_auth_runtime WITH LOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS CONNECTION LIMIT 60 VALID UNTIL 'infinity' PASSWORD '%s';\n" \
       "$FLEET_AUTH_RUNTIME_PASSWORD"
-    printf "ALTER ROLE fleet_auth_migration WITH LOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD '%s';\n" \
+    printf "ALTER ROLE fleet_auth_migration WITH LOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS CONNECTION LIMIT 60 VALID UNTIL 'infinity' PASSWORD '%s';\n" \
       "$FLEET_AUTH_MIGRATION_PASSWORD"
-    printf "ALTER ROLE fleet_auth_backup WITH LOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD '%s';\n" \
+    printf "ALTER ROLE fleet_auth_backup WITH LOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS CONNECTION LIMIT 60 VALID UNTIL 'infinity' PASSWORD '%s';\n" \
       "$FLEET_AUTH_BACKUP_PASSWORD"
+    printf "ALTER ROLE companion_default_runtime WITH LOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS CONNECTION LIMIT 60 VALID UNTIL 'infinity' PASSWORD '%s';\n" \
+      "$COMPANION_DATABASE_PASSWORD"
+    printf "ALTER ROLE shared_schema_migration WITH LOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS CONNECTION LIMIT 60 VALID UNTIL 'infinity' PASSWORD '%s';\n" \
+      "$SHARED_SCHEMA_MIGRATION_PASSWORD"
     cat <<'SQL'
-GRANT CONNECT ON DATABASE psfn TO fleet_auth_runtime, fleet_auth_migration, fleet_auth_backup;
-GRANT CREATE ON DATABASE psfn TO fleet_auth_migration;
+GRANT CONNECT ON DATABASE psfn TO fleet_auth_runtime, fleet_auth_migration, fleet_auth_backup, companion_default_runtime, shared_schema_migration;
+GRANT CREATE ON DATABASE psfn TO fleet_auth_migration, companion_default_runtime, shared_schema_migration;
 GRANT CONNECT ON DATABASE psfn_restore_verify TO fleet_auth_migration, fleet_auth_backup;
 GRANT CREATE ON DATABASE psfn_restore_verify TO fleet_auth_migration;
+\connect psfn
+CREATE SCHEMA IF NOT EXISTS extensions AUTHORIZATION psfn;
+ALTER EXTENSION vector SET SCHEMA extensions;
+REVOKE ALL ON SCHEMA extensions FROM PUBLIC;
+GRANT USAGE ON SCHEMA extensions TO companion_default_runtime, shared_schema_migration;
+CREATE SCHEMA companion_default AUTHORIZATION companion_default_runtime;
+REVOKE ALL ON SCHEMA companion_default FROM PUBLIC;
+GRANT USAGE, CREATE ON SCHEMA companion_default TO companion_default_runtime;
 SQL
   } | kubectl -n "$NAMESPACE" exec -i "$postgres_pod" -- \
     psql --set=ON_ERROR_STOP=1 --username=psfn --dbname=postgres
@@ -886,6 +1217,19 @@ wait_http() {
   return 1
 }
 
+if [[ -n "$SPLICE_OWNER_TARGET" ]]; then
+  require_command node
+  splice_owner_files "$SPLICE_OWNER_TARGET" "$SPLICE_OWNER_SEED"
+  exit 0
+fi
+
+if [[ -n "$PREPARE_SEED_ONLY_OUTPUT" ]]; then
+  require_command node
+  prepare_seed_root
+  echo "prepared one-entry fleet fixture at ${SEED_ROOT}"
+  exit 0
+fi
+
 require_command git
 require_command docker
 require_command helm
@@ -894,10 +1238,8 @@ require_command k3d
 require_command node
 require_command setsid
 
-[[ -d "$SHAKEDOWN_ROOT/system-data" ]] || { echo "missing system-data under $SHAKEDOWN_ROOT" >&2; exit 2; }
-[[ -d "$SHAKEDOWN_ROOT/companion-data" ]] || { echo "missing companion-data under $SHAKEDOWN_ROOT" >&2; exit 2; }
-[[ -f "$SHAKEDOWN_ROOT/companion-data/companion.json" ]] || { echo "missing Artemis companion.json" >&2; exit 2; }
 prepare_seed_root
+prepare_gateway_credentials
 
 SHORT="$(git rev-parse --short=8 HEAD)"
 FULL="$(git rev-parse HEAD)"
@@ -950,14 +1292,24 @@ if ((RESET_DATA)); then
     "${RELEASE}-workspace" \
     "${RELEASE}-runtime" \
     "${RELEASE}-model-cache" \
+    "${RELEASE}-fleet-auth-floor" \
     "data-${RELEASE}-postgres-0" \
     "data-${RELEASE}-redis-0" \
     --ignore-not-found --wait=true >/dev/null
 fi
 
+if ((RESET_DATA)); then
+  prepare_fleet_auth_credentials
+  create_fresh_postgres_secret
+elif ! kubectl -n "$NAMESPACE" get secret psfn-postgres >/dev/null 2>&1; then
+  echo "preserve mode requires the existing psfn-postgres Secret" >&2
+  exit 1
+fi
+
 echo "==> installing PVCs, backing services, and fail-closed fleet workloads"
 helm_upgrade "$SHORT" "$FULL" \
   --timeout 10m >/dev/null
+provision_gateway_edge_certificate
 
 if ((RESET_DATA)); then
   echo "==> seeding Artemis owner files into local PVCs"
@@ -970,6 +1322,7 @@ fi
 prepare_fleet_auth_credentials
 echo "==> provisioning local fleet-auth database roles"
 provision_fleet_auth_database_roles
+replace_postgres_runtime_database_url
 create_local_app_secret
 
 if ((RUN_PREFETCH)); then

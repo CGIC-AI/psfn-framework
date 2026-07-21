@@ -687,10 +687,27 @@ export function createWebSocketRpcServer(
 
 // ── Client: connects to Unix socket with bounded startup retries ──
 
+/**
+ * Exponential-backoff-with-jitter delay for the Nth failed connect attempt.
+ * Delay doubles each attempt up to `maxDelayMs`, then equal-jitter is applied
+ * (result in [capped/2, capped]) so concurrent agents do not retry in lockstep.
+ */
+export function computeReconnectDelayMs(
+  attempt: number,
+  baseDelayMs: number,
+  maxDelayMs: number,
+): number {
+  const exponent = Math.max(0, attempt - 1);
+  const capped = Math.min(maxDelayMs, baseDelayMs * 2 ** exponent);
+  const half = capped / 2;
+  return Math.round(half + Math.random() * half);
+}
+
 export interface ClientConnectionOptions {
   socketPath: string;
   reconnect?: boolean;
   reconnectDelayMs?: number;
+  reconnectMaxDelayMs?: number;
   maxReconnectAttempts?: number;
 }
 
@@ -700,8 +717,12 @@ export function createSocketClient(
   const {
     socketPath,
     reconnect = true,
+    // Exponential backoff from this base, capped by reconnectMaxDelayMs, gives a
+    // multi-minute startup budget that outlasts gateway readiness instead of the
+    // former fixed ~10s window.
     reconnectDelayMs = 1000,
-    maxReconnectAttempts = 10,
+    reconnectMaxDelayMs = 10_000,
+    maxReconnectAttempts = 30,
   } = options;
 
   return new Promise((resolve, reject) => {
@@ -733,8 +754,9 @@ export function createSocketClient(
           return;
         }
 
-        log.info(`Connect attempt ${attempts}/${maxReconnectAttempts} failed; retrying...`);
-        setTimeout(connectOnce, reconnectDelayMs);
+        const delayMs = computeReconnectDelayMs(attempts, reconnectDelayMs, reconnectMaxDelayMs);
+        log.info(`Connect attempt ${attempts}/${maxReconnectAttempts} failed; retrying in ${delayMs}ms...`);
+        setTimeout(connectOnce, delayMs);
       });
     };
 
@@ -747,6 +769,7 @@ export interface WebSocketRpcClientOptions {
   tls: GatewayRpcTlsFileConfig;
   reconnect?: boolean;
   reconnectDelayMs?: number;
+  reconnectMaxDelayMs?: number;
   maxReconnectAttempts?: number;
 }
 
@@ -757,8 +780,12 @@ export function createWebSocketRpcClient(
     url,
     tls,
     reconnect = true,
+    // Exponential backoff from this base, capped by reconnectMaxDelayMs, gives a
+    // multi-minute startup budget that outlasts gateway readiness instead of the
+    // former fixed ~10s window.
     reconnectDelayMs = 1000,
-    maxReconnectAttempts = 10,
+    reconnectMaxDelayMs = 10_000,
+    maxReconnectAttempts = 30,
   } = options;
   const tlsOptions = loadGatewayRpcClientTlsOptions(tls);
 
@@ -799,8 +826,9 @@ export function createWebSocketRpcClient(
           return;
         }
 
-        log.info(`Gateway RPC websocket connect attempt ${attempts}/${maxReconnectAttempts} failed; retrying...`);
-        setTimeout(connectOnce, reconnectDelayMs);
+        const delayMs = computeReconnectDelayMs(attempts, reconnectDelayMs, reconnectMaxDelayMs);
+        log.info(`Gateway RPC websocket connect attempt ${attempts}/${maxReconnectAttempts} failed; retrying in ${delayMs}ms...`);
+        setTimeout(connectOnce, delayMs);
       };
 
       const onUnexpectedResponse = (_req: IncomingMessage, res: IncomingMessage) => {

@@ -3,8 +3,11 @@
 // Stores reflection templates (prompts, intervals, flags) in a JSON file.
 // The companion can read, edit, and extend its own reflection schedule.
 
-import { readFileSync } from 'node:fs';
 import { createComponentLogger } from '../../shared/logger.js';
+import {
+  invalidateCachedJsonValue,
+  loadRequiredJsonCached,
+} from '../../system/config/load-or-seed.js';
 import { writeJsonAtomic } from '../../shared/utils/fs.js';
 import type { DailyRecurringCadence, RecurringCadence, WeeklyRecurringCadence } from './types.js';
 
@@ -572,8 +575,13 @@ export class HeartbeatPolicyStore {
 
   load(): HeartbeatPolicy {
     try {
-      const raw = readFileSync(this.filePath, 'utf-8');
-      const parsed = JSON.parse(raw) as HeartbeatPolicy;
+      // Read through the fingerprint (mtime+size+ctime+inode) cache so repeated
+      // loads with an unchanged file skip the readFileSync/JSON.parse work while
+      // in-place edits (which change the fingerprint) are still picked up.
+      const parsed = loadRequiredJsonCached<HeartbeatPolicy>({
+        dataPath: this.filePath,
+        validate: value => value as HeartbeatPolicy,
+      });
       if (!Array.isArray(parsed.templates)) {
         log.warn('Invalid policy file, restoring defaults');
         const defaults = getDefaults();
@@ -620,6 +628,10 @@ export class HeartbeatPolicyStore {
   }
 
   save(policy: HeartbeatPolicy): void {
+    // Invalidate the cached parse before the atomic write so a subsequent load
+    // never serves a pre-write value; the fresh file establishes a new
+    // fingerprint on the next read.
+    invalidateCachedJsonValue(this.filePath);
     writeJsonAtomic(this.filePath, policy);
   }
 

@@ -5467,14 +5467,15 @@ describe('handleMessageForTurn compaction scheduling', () => {
     const buildTurnRecordMock = runtime.buildTurnRecord as ReturnType<typeof vi.fn>;
     const recordedInput = buildTurnRecordMock.mock.calls[0]?.[0] as { turnSnapshot?: Record<string, unknown> };
     const promptContext = recordedInput.turnSnapshot?.promptContext as Record<string, unknown> | undefined;
+    // 6ahp: the anchor renders the instant once in human-readable form; the
+    // redundant <iso> and <today> restatements were dropped (the underlying
+    // macros remain available for authors who need a machine form).
     const currentDatetimeAnchor = [
       '<runtime.current_datetime authority="canonical" overrides="memory,conversation_history,cross_channel_continuity">',
-      '<iso>2026-03-18T09:30:00.000-04:00</iso>',
       '<timezone>America/New_York</timezone>',
       '<weekday>Wednesday</weekday>',
       '<date>March 18, 2026</date>',
       '<time>9:30 AM</time>',
-      '<today>2026-03-18</today>',
       '<yesterday>2026-03-17</yesterday>',
       '<tomorrow>2026-03-19</tomorrow>',
       '<part_of_day>late morning</part_of_day>',

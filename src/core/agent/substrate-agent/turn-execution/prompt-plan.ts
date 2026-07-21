@@ -104,13 +104,17 @@ function readPromptVariable(variables: Readonly<Record<string, string>>, key: st
 export function buildCurrentDatetimeProximityAnchor(
   variables: Readonly<Record<string, string>>,
 ): string {
+  // The current instant is rendered once, in the canonical human-readable form
+  // (weekday/date/time). The ISO timestamp and the YYYY-MM-DD "today" value are
+  // deliberately omitted here — they restate the same instant and previously
+  // rendered it three ways. Both remain available as prompt macros
+  // ({{runtime_current_datetime_iso}}, {{runtime_current_today}}) for authors who
+  // need a machine form; see macro-hints and runtime-context-sections/datetime.
   const fields = [
-    ['iso', readPromptVariable(variables, 'runtime_current_datetime_iso')],
     ['timezone', readPromptVariable(variables, 'active_timezone')],
     ['weekday', readPromptVariable(variables, 'runtime_current_weekday')],
     ['date', readPromptVariable(variables, 'runtime_current_date_human')],
     ['time', readPromptVariable(variables, 'runtime_current_time_human')],
-    ['today', readPromptVariable(variables, 'runtime_current_today')],
     ['yesterday', readPromptVariable(variables, 'runtime_current_yesterday')],
     ['tomorrow', readPromptVariable(variables, 'runtime_current_tomorrow')],
     ['part_of_day', readPromptVariable(variables, 'runtime_current_part_of_day')],

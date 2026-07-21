@@ -2,6 +2,7 @@ import type { SessionEntry } from '../../core/session/types.js';
 import type { ShardCreationMode as RoutingShardCreationMode } from '../../shared/routing/envelope.js';
 import type { ShardResultLineageEnvelope, ShardSourceContext } from './lineage-contracts.js';
 import type { ArtifactReturnBatch } from './artifact-return-port.js';
+import type { CompletionHandoffDelivery } from '../../shared/contracts/completion-handoff.js';
 import type {
   CompanionId,
   ShardCompanionId,
@@ -17,6 +18,7 @@ import type { SatelliteRoutingMetadata } from '../../core/agent/satellite-adapte
 export type ShardLifecycleState = 'registering' | 'ready' | 'degraded' | 'offline';
 export type ShardHealthState = 'healthy' | 'stale' | 'failed';
 export type ShardCreationMode = RoutingShardCreationMode;
+export type ShardOutcome = 'completed' | 'failed';
 
 export type { ShardSourceContext } from './lineage-contracts.js';
 
@@ -236,6 +238,9 @@ export interface ShardResult {
   outputTokens: number;
   durationMs: number;
   turns: number;
+  outcome: ShardOutcome;
+  /** Terminal lifecycle delivery, reported separately from the worker outcome. */
+  completionHandoff: CompletionHandoffDelivery;
   lifecycleState: ShardLifecycleState;
   health: ShardHealthState;
   stateReason: string;
@@ -245,6 +250,16 @@ export interface ShardResult {
   capabilityGrant: ShardCapabilityGrantEvidence;
   lineage: ShardResultLineageEnvelope;
   artifactReturn?: ArtifactReturnBatch;
+}
+
+export class ShardExecutionError extends Error {
+  readonly result: ShardResult;
+
+  constructor(message: string, result: ShardResult, options?: ErrorOptions) {
+    super(message, options);
+    this.name = 'ShardExecutionError';
+    this.result = result;
+  }
 }
 
 export type ShardStatus = 'running' | 'completed' | 'failed';

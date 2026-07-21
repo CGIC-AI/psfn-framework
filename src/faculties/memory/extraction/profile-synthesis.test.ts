@@ -64,6 +64,7 @@ function options(
     promptRegistry: null,
     memoryStore: memoryStore as unknown as RefreshContactProfileOptions['memoryStore'],
     channelId: 'discord:kube',
+    sourceSessionId: 'discord:kube',
     triggerReason: 'manual',
     canonicalContactId: 'contact-briar',
     targetContact: {
@@ -87,6 +88,32 @@ function options(
 }
 
 describe('refreshContactProfile', () => {
+  it('rejects testing-session profile synthesis before reads, model calls, or writes', async () => {
+    const memoryStore = {
+      getContactProfile: vi.fn(),
+      getMemoriesByContact: vi.fn(),
+      upsertContactProfile: vi.fn(),
+    };
+    const llmClient = {
+      complete: vi.fn(),
+    };
+
+    const result = await refreshContactProfile(options({
+      sourceSessionId: 'api:testing:profile-persistence',
+      llmClient: llmClient as RefreshContactProfileOptions['llmClient'],
+      memoryStore: memoryStore as unknown as RefreshContactProfileOptions['memoryStore'],
+    }));
+
+    expect(result).toEqual({
+      status: 'skipped',
+      reason: 'testing_session',
+    });
+    expect(memoryStore.getContactProfile).not.toHaveBeenCalled();
+    expect(memoryStore.getMemoriesByContact).not.toHaveBeenCalled();
+    expect(llmClient.complete).not.toHaveBeenCalled();
+    expect(memoryStore.upsertContactProfile).not.toHaveBeenCalled();
+  });
+
   it('returns a structured skip reason for insufficient target source memories', async () => {
     const memoryStore = {
       getContactProfile: vi.fn().mockResolvedValue(undefined),

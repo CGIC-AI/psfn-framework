@@ -160,6 +160,67 @@ describe('MemoryWriter', () => {
   });
 
   describe('write()', () => {
+    it('rejects testing-session provenance before embedding or persistence', async () => {
+      await expect(writer.write({
+        text: 'Testing-session content must not become durable memory.',
+        type: 'semantic',
+        provenance: {
+          channelId: 'discord:fixture-alias',
+          sessionId: 'api:testing:memory-write-defense',
+        },
+      })).rejects.toThrow('testing session');
+
+      expect(embeddings.embed).not.toHaveBeenCalled();
+      expect(store.searchByEmbedding).not.toHaveBeenCalled();
+      expect(store.persistMemoryWrite).not.toHaveBeenCalled();
+      expect(store.insertMemory).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ['upsert', () => writer.upsert({
+        text: 'Testing-session upsert content.',
+        type: 'semantic',
+        provenance: {
+          channelId: 'discord:fixture-alias',
+          sessionId: 'api:testing:memory-upsert-defense',
+        },
+      })],
+      ['patchMemory', () => writer.patchMemory({
+        memoryId: 'existing-001',
+        importance: 0.9,
+        provenance: {
+          channelId: 'discord:fixture-alias',
+          sessionId: 'api:testing:memory-patch-defense',
+        },
+      })],
+      ['patch', () => writer.patch({
+        memoryId: 'existing-001',
+        text: 'Testing-session replacement content.',
+        provenance: {
+          channelId: 'discord:fixture-alias',
+          sessionId: 'api:testing:memory-correction-defense',
+        },
+      })],
+      ['importBatch', () => writer.importBatch([{
+        text: 'Testing-session imported content.',
+        type: 'semantic',
+        provenance: {
+          channelId: 'discord:fixture-alias',
+          sessionId: 'api:testing:memory-import-defense',
+        },
+      }])],
+    ])('rejects testing-session provenance at the %s mutation boundary', async (_name, mutate) => {
+      await expect(mutate()).rejects.toThrow('testing session');
+
+      expect(embeddings.embed).not.toHaveBeenCalled();
+      expect(embeddings.embedBatch).not.toHaveBeenCalled();
+      expect(store.getById).not.toHaveBeenCalled();
+      expect(store.searchByEmbedding).not.toHaveBeenCalled();
+      expect(store.persistMemoryWrite).not.toHaveBeenCalled();
+      expect(store.insertMemory).not.toHaveBeenCalled();
+      expect(store.updateMemory).not.toHaveBeenCalled();
+    });
+
     it('inserts a new memory with correct fields', async () => {
       const opts: MemoryWriteOptions = {
         text: 'V loves cats',

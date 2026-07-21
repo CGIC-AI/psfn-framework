@@ -10,6 +10,7 @@ import type { ContactStorePort } from '../../core/contacts/contact-store-port.js
 import { resolvePreferredContactName } from '../../core/contacts/preferred-name.js';
 import type { SessionStore } from '../../persistence/sessions/store.js';
 import type { SessionEntry } from '../../core/session/types.js';
+import { isTestingSessionId } from '../../core/session/session-id.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import type { GroupMemoryWriteCapSettings } from '../../system/config/group-memory-config.js';
 import type { TurnID } from '../../shared/contracts/runtime.js';
@@ -607,6 +608,14 @@ export class MemoryExtractor {
     preemptionProtected?: boolean,
     welfareGrantJobId?: string,
   ): Promise<MemoryExtractionOutputs> {
+    if (isTestingSessionId(logicalSessionId)) {
+      log.debug('Skipping durable extraction for testing session', {
+        channelId,
+        logicalSessionId,
+        triggerReason,
+      });
+      return { memoryIds: [], concernIds: [], contactIds: [] };
+    }
     // u5bv.11: A durable, receipt-bound bounded run (assertEffectAllowed present)
     // can be queued behind other same-session work under serialize scheduling. If
     // the extractor began draining while this run waited its turn, fail closed —
@@ -742,14 +751,25 @@ export class MemoryExtractor {
           : persistExtractionMarker(this.sessionStore, logicalSessionId, coveredUpToMessageId)
       ),
       maybePersistEmotionalState: (contactId, acceptedFacts, recentEntries) => (
-        this.maybePersistEmotionalState(contactId, acceptedFacts, recentEntries)
+        this.maybePersistEmotionalState(
+          logicalSessionId,
+          contactId,
+          acceptedFacts,
+          recentEntries,
+        )
       ),
       maybeRefreshContactProfile: (
         extractionChannelId,
         reason,
         contactId,
         acceptedWrites,
-      ) => this.maybeRefreshContactProfile(extractionChannelId, reason, contactId, acceptedWrites),
+      ) => this.maybeRefreshContactProfile(
+        logicalSessionId,
+        extractionChannelId,
+        reason,
+        contactId,
+        acceptedWrites,
+      ),
       ...(this.emitConcernCandidates
         ? { emitConcernCandidates: this.emitConcernCandidates }
         : {}),
@@ -1024,6 +1044,7 @@ export class MemoryExtractor {
   }
 
   private maybeRefreshContactProfile(
+    sourceSessionId: string,
     channelId: string,
     triggerReason: ExtractionTriggerReason,
     canonicalContactId: string | undefined,
@@ -1043,12 +1064,20 @@ export class MemoryExtractor {
       inFlightProfileByContact: this.inFlightProfileByContact,
       inFlightProfileRefreshes: this.inFlightProfileRefreshes,
       startRefresh: (refreshChannelId, refreshReason, contactId, writes, config) => (
-        this.refreshContactProfile(refreshChannelId, refreshReason, contactId, writes, config)
+        this.refreshContactProfile(
+          sourceSessionId,
+          refreshChannelId,
+          refreshReason,
+          contactId,
+          writes,
+          config,
+        )
       ),
     });
   }
 
   private async refreshContactProfile(
+    sourceSessionId: string,
     channelId: string,
     triggerReason: ExtractionTriggerReason,
     canonicalContactId: string,
@@ -1064,6 +1093,7 @@ export class MemoryExtractor {
       personaPreamble: this.personaPreamble,
       memoryStore: this.memoryStore,
       channelId,
+      sourceSessionId,
       triggerReason,
       canonicalContactId,
       targetContact,
@@ -1074,6 +1104,7 @@ export class MemoryExtractor {
   }
 
   private maybePersistEmotionalState(
+    sourceSessionId: string,
     canonicalContactId: string | undefined,
     acceptedFacts: ExtractedFact[],
     recentEntries: SessionEntry[],
@@ -1084,6 +1115,7 @@ export class MemoryExtractor {
     // failed contact write must reject the effect so recovery records
     // effect_outcome_unknown instead of silently omitting its output ref.
     return persistEmotionalStateFromExtraction({
+      sourceSessionId,
       canonicalContactId,
       acceptedFacts,
       recentEntries,

@@ -3,6 +3,7 @@ import type { EventBus } from '../../shared/event-bus.js';
 import {
   COMPLETION_HANDOFF_SCHEMA_VERSION,
   type CompletionHandoffBlocker,
+  type CompletionHandoffDelivery,
   type CompletionHandoffEmission,
   type CompletionHandoffInput,
   type CompletionHandoffRecord,
@@ -18,6 +19,7 @@ export {
 
 export type {
   CompletionHandoffBlocker,
+  CompletionHandoffDelivery,
   CompletionHandoffEmission,
   CompletionHandoffInput,
   CompletionHandoffOrigin,
@@ -197,6 +199,15 @@ export function extractOriginIds(value: unknown): {
 
 export function safeEmitCompletionHandoffError(error: unknown): string {
   return `completion handoff failed: ${toErrorMessage(error)}`;
+}
+
+export function buildFailedCompletionHandoffDelivery(
+  error: unknown,
+): Extract<CompletionHandoffDelivery, { status: 'failed' }> {
+  return {
+    status: 'failed',
+    error: safeEmitCompletionHandoffError(error),
+  };
 }
 
 function isCompletionHandoffRecord(value: CompletionHandoffInput | CompletionHandoffRecord): value is CompletionHandoffRecord {

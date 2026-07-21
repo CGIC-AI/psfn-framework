@@ -16,6 +16,18 @@ import {
 describe('purgeTestingSession', () => {
   let sessionsDir: string;
 
+  function databasePurge() {
+    return {
+      purgeSession: vi.fn().mockResolvedValue({
+        removedProjectionRows: 0,
+        removedMemoryRows: 0,
+        removedContactProfileRows: 0,
+        removedMemoryLinkRows: 0,
+        removedMaintenanceReviewRows: 0,
+      }),
+    };
+  }
+
   beforeEach(() => {
     sessionsDir = mkdtempSync(join(tmpdir(), 'psfn-testing-session-purge-'));
   });
@@ -41,27 +53,69 @@ describe('purgeTestingSession', () => {
   it('purges an exercised testing session from journals, index, and projection', async () => {
     const sessionId = 'api:testing:kube-rollout-validation-20260719';
     const filename = exerciseSession(sessionId);
-    const projection = { purgeChannel: vi.fn().mockResolvedValue(undefined) };
+    const database = databasePurge();
 
-    const report = await purgeTestingSession({ sessionsDir, sessionId, projection });
+    const report = await purgeTestingSession({ sessionsDir, sessionId, database });
 
     expect(report).toEqual({
       sessionId,
       channelId: sessionId,
       removedJournalFiles: [filename],
+      database: {
+        removedProjectionRows: 0,
+        removedMemoryRows: 0,
+        removedContactProfileRows: 0,
+        removedMemoryLinkRows: 0,
+        removedMaintenanceReviewRows: 0,
+      },
       tailCache: {
         status: 'not_configured',
         message: 'no tail cache configured',
         removedKeys: 0,
       },
     });
-    expect(projection.purgeChannel).toHaveBeenCalledWith(sessionId);
+    expect(database.purgeSession).toHaveBeenCalledWith({
+      sessionId,
+      channelId: sessionId,
+    });
     expect(existsSync(join(sessionsDir, filename))).toBe(false);
     expect(new SessionStore(sessionsDir).listChannels()).toEqual([]);
     const index = JSON.parse(readFileSync(join(sessionsDir, '_channel_index.json'), 'utf8')) as {
       channels: Record<string, unknown>;
     };
     expect(index.channels).toEqual({});
+  });
+
+  it('uses one exact-session database purge contract for projection and durable artifacts', async () => {
+    const sessionId = 'api:testing:durable-artifact-purge';
+    exerciseSession(sessionId);
+    const database = {
+      purgeSession: vi.fn().mockResolvedValue({
+        removedProjectionRows: 2,
+        removedMemoryRows: 1,
+        removedContactProfileRows: 1,
+        removedMemoryLinkRows: 0,
+        removedMaintenanceReviewRows: 0,
+      }),
+    };
+
+    const report = await purgeTestingSession({
+      sessionsDir,
+      sessionId,
+      database,
+    });
+
+    expect(database.purgeSession).toHaveBeenCalledWith({
+      sessionId,
+      channelId: sessionId,
+    });
+    expect(report.database).toEqual({
+      removedProjectionRows: 2,
+      removedMemoryRows: 1,
+      removedContactProfileRows: 1,
+      removedMemoryLinkRows: 0,
+      removedMaintenanceReviewRows: 0,
+    });
   });
 
   it('clears the exact testing-session tail key family in the guarded purge flow', async () => {
@@ -89,7 +143,7 @@ describe('purgeTestingSession', () => {
     const report = await purgeTestingSession({
       sessionsDir,
       sessionId,
-      projection: { purgeChannel: vi.fn().mockResolvedValue(undefined) },
+      database: databasePurge(),
       tailCache,
     });
 
@@ -107,12 +161,12 @@ describe('purgeTestingSession', () => {
   it('rolls journals and the index back with a named error when configured Redis is unreachable', async () => {
     const sessionId = 'api:testing:redis-unreachable';
     const filename = exerciseSession(sessionId);
-    const projection = { purgeChannel: vi.fn() };
+    const database = databasePurge();
 
     await expect(purgeTestingSession({
       sessionsDir,
       sessionId,
-      projection,
+      database,
       tailCache: {
         purgeChannelKeyFamily: vi.fn().mockRejectedValue(new Error('ECONNREFUSED')),
       },
@@ -122,55 +176,55 @@ describe('purgeTestingSession', () => {
     expect(new SessionStore(sessionsDir).listChannels()).toEqual([
       { sessionId, channelId: sessionId, messageCount: 1 },
     ]);
-    expect(projection.purgeChannel).not.toHaveBeenCalled();
+    expect(database.purgeSession).not.toHaveBeenCalled();
   });
 
   it('refuses wildcard-like and missing exact targets', async () => {
-    const projection = { purgeChannel: vi.fn() };
+    const database = databasePurge();
     await expect(purgeTestingSession({
       sessionsDir,
       sessionId: 'api:testing:*',
-      projection,
+      database,
     })).rejects.toThrow('refuses wildcard-like');
     await expect(purgeTestingSession({
       sessionsDir,
       sessionId: 'api:testing:not-present',
-      projection,
+      database,
     })).rejects.toThrow('not an exact channel-index key');
-    expect(projection.purgeChannel).not.toHaveBeenCalled();
+    expect(database.purgeSession).not.toHaveBeenCalled();
   });
 
   it('refuses non-testing sessions without both force and exact confirmation', async () => {
     const sessionId = 'api:production-conversation';
     const filename = exerciseSession(sessionId);
-    const projection = { purgeChannel: vi.fn() };
+    const database = databasePurge();
 
     await expect(purgeTestingSession({
       sessionsDir,
       sessionId,
-      projection,
+      database,
     })).rejects.toThrow('Refusing to purge non-testing session');
     await expect(purgeTestingSession({
       sessionsDir,
       sessionId,
-      projection,
+      database,
       forceNonTesting: true,
       confirmedNonTestingSessionId: 'api:different-session',
     })).rejects.toThrow('confirmation did not exactly match');
 
     expect(existsSync(join(sessionsDir, filename))).toBe(true);
-    expect(projection.purgeChannel).not.toHaveBeenCalled();
+    expect(database.purgeSession).not.toHaveBeenCalled();
   });
 
   it('permits a non-testing purge only with force and exact confirmation', async () => {
     const sessionId = 'api:production-conversation';
     exerciseSession(sessionId);
-    const projection = { purgeChannel: vi.fn().mockResolvedValue(undefined) };
+    const database = databasePurge();
 
     await purgeTestingSession({
       sessionsDir,
       sessionId,
-      projection,
+      database,
       forceNonTesting: true,
       confirmedNonTestingSessionId: sessionId,
     });
@@ -178,18 +232,18 @@ describe('purgeTestingSession', () => {
     expect(new SessionStore(sessionsDir).listChannels()).toEqual([]);
   });
 
-  it('rolls journals and the index back when projection deletion fails', async () => {
+  it('rolls journals and the index back when database deletion fails', async () => {
     const sessionId = 'api:testing:projection-failure';
     const filename = exerciseSession(sessionId);
-    const projection = {
-      purgeChannel: vi.fn().mockRejectedValue(new Error('projection unavailable')),
+    const database = {
+      purgeSession: vi.fn().mockRejectedValue(new Error('database purge unavailable')),
     };
 
     await expect(purgeTestingSession({
       sessionsDir,
       sessionId,
-      projection,
-    })).rejects.toThrow('projection unavailable');
+      database,
+    })).rejects.toThrow('database purge unavailable');
 
     expect(existsSync(join(sessionsDir, filename))).toBe(true);
     expect(new SessionStore(sessionsDir).listChannels()).toEqual([

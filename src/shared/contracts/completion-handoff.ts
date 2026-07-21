@@ -25,6 +25,15 @@ export const COMPLETION_HANDOFF_STATUS_VALUES = [
 
 export type CompletionHandoffStatus = typeof COMPLETION_HANDOFF_STATUS_VALUES[number];
 
+export type CompletionHandoffDelivery =
+  | {
+      status: 'delivered';
+    }
+  | {
+      status: 'failed';
+      error: string;
+    };
+
 export function isCompletionHandoffSource(value: unknown): value is CompletionHandoffSource {
   return typeof value === 'string'
     && COMPLETION_HANDOFF_SOURCE_VALUES.some(candidate => candidate === value);

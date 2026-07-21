@@ -1,5 +1,6 @@
 import type { SubagentWorkerLane } from '../../core/agent/worker-lanes.js';
 import type { SessionEntry } from '../../core/session/types.js';
+import type { CompletionHandoffDelivery } from '../../shared/contracts/completion-handoff.js';
 import type { LLMWorkSpec, SubstrateMessage, WyomingRoutingMetadata } from '../../shared/contracts/runtime.js';
 import type { GatewayRoutingEnvelope } from '../../shared/routing/envelope.js';
 
@@ -135,6 +136,8 @@ export interface SubagentResult {
    * outcome even though the registry records it as a non-completed terminal.
    */
   outcome: SubagentOutcome;
+  /** Terminal lifecycle delivery, reported separately from the worker outcome. */
+  completionHandoff: CompletionHandoffDelivery;
   stateReason: string;
   failureReason?: string;
   /**
@@ -193,4 +196,24 @@ export interface SubagentRuntimeSnapshotOptions {
 
 export interface SubagentRuntimeSnapshotProvider {
   getRuntimeSnapshot(options?: SubagentRuntimeSnapshotOptions): SubagentRuntimeSnapshot;
+}
+
+/**
+ * Terminal subagent execution failure that preserves the truthful worker outcome
+ * alongside the terminal lifecycle-delivery status. Callers that `await execute()`
+ * receive the full structured result instead of a bare message string, so a failed
+ * completion-handoff delivery is never collapsed into an opaque error.
+ */
+export class SubagentExecutionError extends Error {
+  readonly result: SubagentResult;
+
+  constructor(result: SubagentResult, options?: ErrorOptions) {
+    const failureReason = result.failureReason ?? result.stateReason;
+    super(
+      `Subagent "${result.name}" ${result.outcome} (${result.stateReason}): ${failureReason}`,
+      options,
+    );
+    this.name = 'SubagentExecutionError';
+    this.result = result;
+  }
 }

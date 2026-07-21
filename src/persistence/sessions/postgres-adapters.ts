@@ -22,6 +22,10 @@ import type { TurnRecordStorePort } from './turn-record-store-port.js';
 import { createFilesystemTurnRecordStorePort } from './turn-records.js';
 import type { TurnRecordEligibilityFencePort } from './turn-record-eligibility-fence-port.js';
 import { PostgresTurnRecordEligibilityFence } from '../postgres/turn-record-eligibility-fence.js';
+import {
+  purgeTestingSessionPostgresData,
+  type SessionDatabasePurgePort,
+} from './testing-session-postgres-purge.js';
 
 const DEFAULT_SEARCH_LIMIT = 10;
 const MAX_SEARCH_LIMIT = 100;
@@ -85,6 +89,7 @@ export interface PostgresTranscriptProjectionOptions {
 }
 
 export interface PostgresSessionAdapters {
+  sessionPurge: SessionDatabasePurgePort;
   sessionArchivePort: SessionArchivePort;
   transcriptProjection: KeywordSearchableTranscriptProjection;
   transcriptSearch: KeywordSearchableTranscriptProjection;
@@ -473,26 +478,14 @@ class PostgresTranscriptProjection implements KeywordSearchableTranscriptProject
     await this.writeChain;
   }
 
-  async purgeChannel(channelId: string): Promise<void> {
+  async purgeSession(
+    input: Parameters<SessionDatabasePurgePort['purgeSession']>[0],
+  ): ReturnType<SessionDatabasePurgePort['purgeSession']> {
     await this.flushPendingWrites();
-    await withPostgresClient(this.pool, async (client) => {
-      await client.query(
-        `
-          DELETE FROM session_messages_projection
-          WHERE channel_id = $1
-        `,
-        [channelId],
-      );
-      await client.query(
-        `
-          DELETE FROM session_projection_drift
-          WHERE channel_id = $1
-        `,
-        [channelId],
-      );
-    });
-    this.messageMetadataByChannel.delete(channelId);
-    this.driftByChannel.delete(channelId);
+    const report = await purgeTestingSessionPostgresData(this.pool, input);
+    this.messageMetadataByChannel.delete(input.channelId);
+    this.driftByChannel.delete(input.channelId);
+    return report;
   }
 
   async searchByKeywords(
@@ -551,7 +544,7 @@ class PostgresTranscriptProjection implements KeywordSearchableTranscriptProject
 export async function createPostgresTranscriptProjection(
   databaseUrl: string,
   options: PostgresTranscriptProjectionOptions = {},
-): Promise<KeywordSearchableTranscriptProjection> {
+): Promise<KeywordSearchableTranscriptProjection & SessionDatabasePurgePort> {
   const pool = options.pool ?? createPostgresPool(databaseUrl, {
     applicationName: options.applicationName ?? 'psfn-session-search',
     allowExitOnIdle: true,
@@ -581,6 +574,7 @@ export async function createDefaultPostgresSessionAdapters(
     pool,
   });
   return {
+    sessionPurge: transcriptProjection,
     sessionArchivePort: createFilesystemSessionArchivePort(),
     transcriptProjection,
     transcriptSearch: transcriptProjection,

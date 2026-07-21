@@ -5,7 +5,6 @@ import { isTestingSessionId } from '../../core/session/session-id.js';
 import { RedisSessionTailCache } from '../../persistence/sessions/redis-session-tail-cache.js';
 import {
   purgeTestingSession,
-  type SessionProjectionPurgePort,
   type SessionTailPurgePort,
   TestingSessionTailPurgeError,
 } from '../../persistence/sessions/testing-session-purge.js';
@@ -144,11 +143,6 @@ export function runTestingSessionPurgeCli(
         postgresSchema: target.postgresSchema,
         sessionsDir: target.sessionsDir,
       });
-      const projection = adapters.transcriptProjection;
-      if (typeof projection.purgeChannel !== 'function') {
-        throw new Error('Configured transcript projection does not support atomic channel purge');
-      }
-
       const tailCache = await createConfiguredTailPurgePort({
         companionId: target.companionId,
         env: process.env,
@@ -159,7 +153,7 @@ export function runTestingSessionPurgeCli(
           return await purgeTestingSession({
             sessionsDir: target.sessionsDir,
             sessionId,
-            projection: projection as SessionProjectionPurgePort,
+            database: adapters.sessionPurge,
             ...(tailCache ? { tailCache } : {}),
             forceNonTesting: options.forceNonTesting,
             ...(confirmedNonTestingSessionId !== undefined
@@ -175,6 +169,8 @@ export function runTestingSessionPurgeCli(
       console.log(`PostgreSQL schema: ${target.postgresSchema}`);
       console.log(`Projection channel: ${report.channelId}`);
       console.log(`Removed journal files: ${report.removedJournalFiles.join(', ')}`);
+      console.log(`Removed durable memories: ${report.database.removedMemoryRows}`);
+      console.log(`Removed contact profiles: ${report.database.removedContactProfileRows}`);
       console.log(`Tail cache: ${report.tailCache.message}`);
       return report;
     },

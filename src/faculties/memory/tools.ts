@@ -23,6 +23,7 @@ import {
   VALID_MEMORY_REDACTION_OPERATIONS,
 } from './types.js';
 import { textResult, textResultWithError } from '../../core/tools/results.js';
+import { getRequestContext } from '../../primitives/llm/request-context.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
 import { normalizeToolArguments } from '../../shared/tool-argument-normalization.js';
 import {
@@ -154,6 +155,20 @@ function resolveInternalMemoryOrigin(internalSource: string | null): {
   };
 }
 
+/**
+ * Stamp the logical request-context session identity into tool provenance so a
+ * durable write executed during a testing session carries `sessionId`. The
+ * MemoryWriter testing fence reads `provenance.sessionId`, and the exact-scope
+ * testing purge selects rows by `provenance_json->>'sessionId'` — without this
+ * stamp a testing-session write both bypasses the fence and survives purge.
+ * Only session identity is stamped; shard/subagent origin stays owned by
+ * resolveInternalMemoryOrigin and must not be overridden here.
+ */
+function stampRequestContextProvenance(): Pick<MemoryProvenance, 'sessionId'> {
+  const sessionId = getRequestContext()?.sessionId;
+  return sessionId && sessionId.trim().length > 0 ? { sessionId } : {};
+}
+
 function buildToolSourceContext(
   toolName: string,
   toolCallId: string,
@@ -171,6 +186,7 @@ function buildToolSourceContext(
     provenance: {
       toolName,
       toolCallId,
+      ...stampRequestContextProvenance(),
       ...origin.provenance,
     },
   };
@@ -197,6 +213,7 @@ function buildUnifiedMemorySourceContext(
     provenance: {
       toolName: 'memory',
       toolCallId,
+      ...stampRequestContextProvenance(),
       ...origin.provenance,
     },
   };

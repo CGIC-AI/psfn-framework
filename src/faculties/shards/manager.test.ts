@@ -21,6 +21,7 @@ import { resolveInstalledAgentTurnTools } from '../../boundary/pi-agent/agent-lo
 import { AGENT_LOOP_MAX_ASSISTANT_STEPS_PER_RUN } from '../../core/agent/turn-limits.js';
 import {
   DEFAULT_SHARD_TOOLSET,
+  ShardExecutionError,
   ShardManager,
   type ShardManagerDeps,
 } from './manager.js';
@@ -472,6 +473,8 @@ describe('ShardManager', () => {
     expect(result.turns).toBe(1);
     expect(result.durationMs).toBeGreaterThanOrEqual(0);
     expect(result.shardId).toMatch(/^shard-/);
+    expect(result.outcome).toBe('completed');
+    expect(result.completionHandoff).toEqual({ status: 'delivered' });
     expect(lifecycleEvents.map(event => event.handoff.status))
       .toEqual(['started', 'progress', 'completed']);
     expect(lifecycleEvents.every(event => (
@@ -586,6 +589,131 @@ describe('ShardManager', () => {
       .rejects.toThrow('lifecycle sink unavailable');
     expect(manager.getActiveCount()).toBe(0);
     expect(manager.getActiveShards()).toHaveLength(0);
+  });
+
+  it('reports terminal lifecycle delivery failure without falsifying a completed shard result', async () => {
+    eventBus.guard('agent.completion_handoff', event => {
+      if (event.handoff.status === 'completed') {
+        throw new Error('terminal lifecycle sink unavailable');
+      }
+      return true;
+    });
+    const manager = createTestShardManager({
+      eventBus,
+      llmProvider: mockLLM(),
+      sessionStore,
+      embeddingService: null,
+      memoryProvider: null,
+      config: TEST_CONFIG,
+      parentSystemPrompt: 'You are a helpful assistant.',
+    });
+
+    const result = await manager.spawn({
+      name: 'terminal-handoff-failure',
+      task: 'finish despite notification infrastructure failure',
+    });
+
+    expect(result.outcome).toBe('completed');
+    expect(result.completionHandoff).toEqual({
+      status: 'failed',
+      error: 'completion handoff failed: terminal lifecycle sink unavailable',
+    });
+    expect(manager.getActiveCount()).toBe(0);
+  });
+
+  it('reports failed execution and failed terminal lifecycle delivery on the shard error', async () => {
+    mockShardError = new Error('worker execution failed');
+    eventBus.guard('agent.completion_handoff', event => {
+      if (event.handoff.status === 'failed') {
+        throw new Error('terminal lifecycle sink unavailable');
+      }
+      return true;
+    });
+    const manager = createTestShardManager({
+      eventBus,
+      llmProvider: mockLLM(),
+      sessionStore,
+      embeddingService: null,
+      memoryProvider: null,
+      config: TEST_CONFIG,
+      parentSystemPrompt: 'You are a helpful assistant.',
+    });
+
+    const error = await manager.spawn({
+      name: 'failed-terminal-handoff',
+      task: 'fail honestly despite notification infrastructure failure',
+    }).catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(ShardExecutionError);
+    expect((error as ShardExecutionError).result).toMatchObject({
+      outcome: 'failed',
+      failureReason: 'worker execution failed',
+      completionHandoff: {
+        status: 'failed',
+        error: 'completion handoff failed: terminal lifecycle sink unavailable',
+      },
+    });
+    expect(manager.getActiveCount()).toBe(0);
+  });
+
+  it('keeps the structured ShardExecutionError when cleanup also fails', async () => {
+    // The execution failure already carries the truthful outcome and terminal
+    // lifecycle-delivery status. A failing shard-Postgres cleanup must not bury
+    // that structure inside an AggregateError — the thrown error stays the
+    // ShardExecutionError with cleanup failures recorded as suppressed context.
+    mockShardError = new Error('worker execution failed');
+    const cleanupFailure = new Error('shard postgres schema drop failed');
+    const binding: PostgresShardSchemaBinding = {
+      parentCompanionId: createCompanionId('11111111-1111-4111-8111-111111111111'),
+      parentSchema: 'companion_alpha',
+      shardId: 'derived-by-test',
+      schema: 'companion_alpha_shard_cleanupfailure',
+      role: 'psfn_companion_alpha_shard_test',
+    };
+    const lifecycle: PostgresShardSchemaLifecycle = {
+      derive: vi.fn(() => binding),
+      prepare: vi.fn(async () => binding),
+      cleanup: vi.fn(async () => {
+        throw cleanupFailure;
+      }),
+      openPool: () => {
+        throw new Error('Shard pool creation is outside this manager lifecycle test');
+      },
+      migrate: async () => undefined,
+      backup: async () => {
+        throw new Error('Shard backup is outside this manager lifecycle test');
+      },
+      restore: async () => undefined,
+    };
+    const manager = createTestShardManager({
+      eventBus,
+      llmProvider: mockLLM(),
+      sessionStore,
+      embeddingService: null,
+      memoryProvider: null,
+      config: {
+        ...TEST_CONFIG,
+        multiCompanion: true,
+        postgresSchema: 'companion_alpha',
+      },
+      parentSystemPrompt: 'You are a helpful assistant.',
+      shardPostgresLifecycle: lifecycle,
+    });
+
+    const error = await manager.spawn({
+      name: 'cleanup-failure-after-execution-failure',
+      task: 'fail, then fail cleanup without losing the structured result',
+    }).catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(ShardExecutionError);
+    expect((error as ShardExecutionError).result).toMatchObject({
+      outcome: 'failed',
+      failureReason: 'worker execution failed',
+    });
+    expect(
+      (error as ShardExecutionError & { suppressed?: unknown[] }).suppressed,
+    ).toEqual([cleanupFailure]);
+    expect(manager.getActiveCount()).toBe(0);
   });
 
   it('rejects multi-companion shard construction without a Postgres lifecycle', () => {

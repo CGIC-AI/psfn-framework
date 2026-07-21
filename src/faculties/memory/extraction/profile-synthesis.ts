@@ -8,6 +8,7 @@ import {
 } from '../../../core/identity/prompt-registry.js';
 import { injectPromptRuntimeTokens } from '../../../core/identity/prompt-runtime.js';
 import type { PersonaPreamblePort } from '../../../core/identity/persona-preamble.js';
+import { isTestingSessionId } from '../../../core/session/session-id.js';
 import type { MemoryStorePort } from '../memory-store-port.js';
 import type { PurrMemory } from '../types.js';
 import { computeProfileNovelty } from './signals.js';
@@ -37,6 +38,7 @@ export interface RefreshContactProfileOptions {
   personaPreamble?: PersonaPreamblePort | null;
   memoryStore: MemoryStorePort;
   channelId: string;
+  sourceSessionId: string;
   triggerReason: ExtractionTriggerReason;
   canonicalContactId: string;
   targetContact?: ProfileSynthesisTargetContact;
@@ -46,6 +48,7 @@ export interface RefreshContactProfileOptions {
 }
 
 export type ProfileRefreshSkipReason =
+  | 'testing_session'
   | 'no_meaningful_update'
   | 'cooldown'
   | 'insufficient_source_memories'
@@ -73,6 +76,12 @@ export type ProfileRefreshResult =
 export async function refreshContactProfile(
   options: RefreshContactProfileOptions,
 ): Promise<ProfileRefreshResult> {
+  if (isTestingSessionId(options.sourceSessionId)) {
+    return {
+      status: 'skipped',
+      reason: 'testing_session',
+    };
+  }
   const now = Date.now();
   const existingProfile = await options.memoryStore.getContactProfile(options.canonicalContactId);
   const intervalElapsed = !existingProfile

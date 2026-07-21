@@ -53,6 +53,16 @@ export function resolveLocalGateState({ cwd = process.cwd(), baseRef = 'origin/m
   }
   const pathsOutput = gitRaw(['diff', '--name-only', '-M', '-z', base, head], cwd);
   const paths = pathsOutput.split('\0').filter(Boolean);
+  const scannablePathsOutput = gitRaw([
+    'diff',
+    '--name-only',
+    '--diff-filter=ACMRTUXB',
+    '-M',
+    '-z',
+    base,
+    head,
+  ], cwd);
+  const scannablePaths = scannablePathsOutput.split('\0').filter(Boolean);
   if (paths.length === 0) throw new Error(`HEAD contains no changes relative to ${baseRef}.`);
 
   const gitDir = git(['rev-parse', '--absolute-git-dir'], cwd);
@@ -64,6 +74,7 @@ export function resolveLocalGateState({ cwd = process.cwd(), baseRef = 'origin/m
     base,
     baseRef,
     paths,
+    scannablePaths,
     stateDir,
     attestationPath: join(stateDir, 'attestation.json'),
     logDir: join(stateDir, 'logs', head),
@@ -91,6 +102,7 @@ export function writeAttestation(path, attestation) {
 export function buildStateGatePlan(state, { changeBudgetException = false } = {}) {
   return buildGatePlan({
     paths: state.paths,
+    scannablePaths: state.scannablePaths,
     base: state.base,
     head: state.head,
     changeBudgetException,

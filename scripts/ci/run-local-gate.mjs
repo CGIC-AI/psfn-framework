@@ -17,10 +17,15 @@ import { pathToFileURL } from 'node:url';
 import { execFileSync } from 'node:child_process';
 
 import {
+  GATE_VERSION,
   HEAVY_PHASE_LOCK_DIR,
+  STAGE_SCHEMA_VERSION,
   buildGatePlan,
   createAttestation,
+  createCanaryAttestation,
   describeLockWait,
+  gateCommandString,
+  isStageReusable,
   partitionGatePlan,
   validateAttestation,
 } from './local-delivery-contract.mjs';
@@ -83,7 +88,80 @@ export function resolveLocalGateState({ cwd = process.cwd(), baseRef = 'origin/m
     scannablePaths,
     stateDir,
     attestationPath: join(stateDir, 'attestation.json'),
+    // Per-stage records live under a directory keyed by the exact head, so a
+    // changed head (which is a changed commit) can never collide with an older
+    // head's records. The git dir is per-worktree, so concurrent worktrees never
+    // share a state dir.
+    stageDir: join(stateDir, 'stages', head),
     logDir: join(stateDir, 'logs', head),
+  };
+}
+
+// Resolve the state for a clean-main canary run. Unlike a branch gate, the
+// checkout must BE origin/main (base == head, an empty diff), so there is no
+// PR branch, no diff, and no merge-base check.
+export function resolveCanaryState({ cwd = process.cwd(), mainRef = 'origin/main' } = {}) {
+  const head = git(['rev-parse', '--verify', 'HEAD^{commit}'], cwd);
+  const main = git(['rev-parse', '--verify', `${mainRef}^{commit}`], cwd);
+  if (head !== main) {
+    throw new Error(
+      `Canary requires the checkout to be exactly ${mainRef} (${main.slice(0, 12)}); HEAD is ${head.slice(0, 12)}.`,
+    );
+  }
+  const status = git(['status', '--porcelain=v1', '--untracked-files=all'], cwd);
+  if (status) {
+    throw new Error('Canary requires a clean worktree and index against origin/main.');
+  }
+  const gitDir = git(['rev-parse', '--absolute-git-dir'], cwd);
+  const stateDir = join(gitDir, 'local-delivery-gate');
+  return {
+    cwd,
+    canary: true,
+    head,
+    base: head, // degenerate: canary validates main against itself
+    baseRef: mainRef,
+    mainRef,
+    paths: [],
+    scannablePaths: [],
+    stateDir,
+    canaryAttestationPath: join(stateDir, 'canary-attestation.json'),
+    logDir: join(stateDir, 'logs', head),
+  };
+}
+
+export function stageRecordPath(state, gateName) {
+  return join(state.stageDir, `${gateName}.json`);
+}
+
+export function readStageRecord(path) {
+  if (!existsSync(path)) return null;
+  try {
+    return JSON.parse(readFileSync(path, 'utf8'));
+  } catch (error) {
+    // A stage record is written temp-then-rename, so readers never see a torn
+    // write; unparsable content is genuine corruption. Fail closed.
+    throw new Error(
+      `Cannot read local gate stage record ${path}: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+}
+
+export function writeStageRecord(path, record) {
+  mkdirSync(dirname(path), { recursive: true });
+  const temporary = `${path}.tmp-${process.pid}`;
+  writeFileSync(temporary, `${JSON.stringify(record, null, 2)}\n`, { mode: 0o600 });
+  renameSync(temporary, path);
+}
+
+function stageRecordFor(gate, state) {
+  return {
+    schemaVersion: STAGE_SCHEMA_VERSION,
+    gateVersion: GATE_VERSION,
+    head: state.head,
+    base: state.base,
+    name: gate.name,
+    command: gateCommandString(gate),
+    completedAt: new Date().toISOString(),
   };
 }
 
@@ -375,7 +453,7 @@ function gateEnvironment(gate) {
 
 export async function executeGate(gate, { cwd, logDir }) {
   if (gate.skip) {
-    console.log(`==> ${gate.name}: skipped (no applicable changed files)`);
+    console.log(`==> ${gate.name}: skipped (${gate.skipReason ?? 'no applicable changed files'})`);
     return;
   }
   mkdirSync(logDir, { recursive: true });
@@ -409,12 +487,13 @@ export async function executeGate(gate, { cwd, logDir }) {
 }
 
 function parseArguments(argv) {
-  const options = { baseRef: 'origin/main', force: false, plan: false };
+  const options = { baseRef: 'origin/main', force: false, plan: false, canary: false };
   for (let index = 0; index < argv.length; index += 1) {
     const argument = argv[index];
     if (argument === '--base') options.baseRef = argv[++index] ?? '';
     else if (argument === '--force') options.force = true;
     else if (argument === '--plan') options.plan = true;
+    else if (argument === '--canary') options.canary = true;
     else throw new Error(`Unknown argument: ${argument}`);
   }
   if (!options.baseRef) throw new Error('--base requires a git ref');
@@ -430,19 +509,51 @@ function buildHeavyLockMeta(state, activeGates, lockConfig) {
   };
 }
 
-// Run the heavy phase under the machine-wide lock. If every heavy gate is
-// skipped (e.g. a delivery-only change with no product tests to run) no lock is
-// taken; the preflight phase never takes the lock at all.
-export async function runHeavyPhase({ heavy, state, execute, lockConfig = {} }) {
-  const active = heavy.filter((gate) => !gate.skip);
+// Run the heavy phase under the machine-wide lock. If no heavy gate actually
+// needs to run — every heavy gate is either skipped (e.g. a delivery-only change
+// with no product tests) or reusable from a prior passing stage record on the
+// same head+base+gate-version — no lock is taken; the preflight phase never
+// takes the lock at all.
+export async function runHeavyPhase({ heavy, state, runGate, needsRun, lockConfig = {} }) {
+  const active = heavy.filter((gate) => needsRun(gate));
   if (active.length === 0) {
-    for (const gate of heavy) await execute(gate, state);
+    for (const gate of heavy) await runGate(gate);
     return;
   }
   const meta = buildHeavyLockMeta(state, active, lockConfig);
   await withHeavyPhaseLock({ ...lockConfig, meta }, async () => {
-    for (const gate of heavy) await execute(gate, state);
+    for (const gate of heavy) await runGate(gate);
   });
+}
+
+// Build the per-gate orchestrator that layers stage-level reuse over the raw
+// executor. A non-skipped gate whose passing stage record is provably current
+// (same head+base+gate-version+command) is reused without re-executing; every
+// other gate runs, and a passing run records a fresh stage result so a later
+// rerun on the same head can skip it. Skipped gates never record (nothing ran).
+function makeGateOrchestrator(state, execute) {
+  const reusable = (gate) => {
+    if (gate.skip) return false;
+    const record = readStageRecord(stageRecordPath(state, gate.name));
+    return isStageReusable(record, {
+      head: state.head,
+      base: state.base,
+      gateVersion: GATE_VERSION,
+      command: gateCommandString(gate),
+    });
+  };
+  const needsRun = (gate) => !gate.skip && !reusable(gate);
+  const runGate = async (gate) => {
+    if (!gate.skip && reusable(gate)) {
+      console.log(
+        `==> ${gate.name}: reused (stage passed for ${state.head.slice(0, 12)} base ${state.base.slice(0, 12)} gate v${GATE_VERSION})`,
+      );
+      return;
+    }
+    await execute(gate, state);
+    if (!gate.skip) writeStageRecord(stageRecordPath(state, gate.name), stageRecordFor(gate, state));
+  };
+  return { needsRun, runGate };
 }
 
 export async function runLocalGate({
@@ -477,9 +588,12 @@ export async function runLocalGate({
   // deployment/settings/supply-chain contracts — runs before any heavy suite so
   // a cheap contract failure fires first and never after a full product run.
   // Phase 2 (heavy): the product/Postgres suite, serialized machine-wide.
+  // Every gate flows through the orchestrator so a passing stage from a prior
+  // partial run on this same head+base+gate-version is reused, not rerun.
   const { preflight, heavy } = partitionGatePlan(plan);
-  for (const gate of preflight) await execute(gate, state);
-  await runHeavyPhase({ heavy, state, execute, lockConfig: heavyLock });
+  const { needsRun, runGate } = makeGateOrchestrator(state, execute);
+  for (const gate of preflight) await runGate(gate);
+  await runHeavyPhase({ heavy, state, runGate, needsRun, lockConfig: heavyLock });
 
   const attestation = createAttestation({
     head: state.head,
@@ -492,8 +606,60 @@ export async function runLocalGate({
   return attestation;
 }
 
+// Clean-main canary: verify the checkout is exactly origin/main with a clean
+// tree, then run the FULL gate against main itself. base == head (an empty
+// diff), so the plan builder forces the whole-repo gates on and skips every
+// diff-scoped gate with a logged reason. Records a canary attestation and
+// returns it. Any gate failure propagates (fail closed) so the caller exits
+// nonzero — a red canary stops a multi-PR wave before branch fanout.
+export async function runCanaryGate({
+  cwd = process.cwd(),
+  mainRef = 'origin/main',
+  execute = executeGate,
+  heavyLock = {},
+  planOnly = false,
+} = {}) {
+  const state = resolveCanaryState({ cwd, mainRef });
+  const plan = buildGatePlan({ paths: [], base: state.base, head: state.head, canary: true });
+
+  if (planOnly) {
+    for (const gate of plan) {
+      const suffix = gate.skip && gate.skipReason ? ` (${gate.skipReason})` : '';
+      console.log(`${gate.skip ? 'skip' : 'run'}\t${gate.name}\t${gate.executable} ${gate.args.join(' ')}${suffix}`);
+    }
+    return null;
+  }
+
+  console.log(
+    `Clean-main canary: HEAD ${state.head.slice(0, 12)} == ${mainRef}; running the full gate against main.`,
+  );
+  // Canary is a clean full run: no stage reuse, so every non-skipped gate
+  // executes and every diff-scoped gate is skipped explicitly (see buildGatePlan).
+  const { preflight, heavy } = partitionGatePlan(plan);
+  const runGate = (gate) => execute(gate, state);
+  for (const gate of preflight) await runGate(gate);
+  await runHeavyPhase({ heavy, state, runGate, needsRun: (gate) => !gate.skip, lockConfig: heavyLock });
+
+  const attestation = createCanaryAttestation({ base: state.base, mainRef });
+  writeAttestation(state.canaryAttestationPath, attestation);
+  console.log(`Clean-main canary passed; attested main ${state.head.slice(0, 12)}.`);
+  return attestation;
+}
+
 async function main() {
   const options = parseArguments(process.argv.slice(2));
+  if (options.canary) {
+    // Fetch the true remote tip first so "exactly origin/main" is checked
+    // against reality, not a stale local ref. baseRef defaults to origin/main;
+    // its "<remote>/<branch>" shape drives the fetch.
+    const [remote, ...branchParts] = options.baseRef.split('/');
+    const branch = branchParts.join('/');
+    if (remote && branch) {
+      execFileSync('git', ['fetch', remote, branch], { stdio: 'inherit' });
+    }
+    await runCanaryGate({ mainRef: options.baseRef, planOnly: options.plan });
+    return;
+  }
   await runLocalGate({
     baseRef: options.baseRef,
     force: options.force,

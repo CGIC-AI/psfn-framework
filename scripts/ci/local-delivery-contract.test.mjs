@@ -9,13 +9,17 @@ import { validateToolReport } from './check-local-tools.mjs';
 import { normalizeAliasValue } from './install-local-hooks.mjs';
 import {
   GATE_PHASE,
+  GATE_VERSION,
   REMOTE_ATTESTATION_CONTEXT,
+  STAGE_SCHEMA_VERSION,
   assessHookInstallation,
   buildValidatedPushRefspec,
   buildGatePlan,
   createAttestation,
+  createCanaryAttestation,
   describeLockWait,
   evaluateRequiredChecks,
+  isStageReusable,
   partitionGatePlan,
   planPrePush,
   validateAttestation,
@@ -25,6 +29,7 @@ import {
   acquireHeavyPhaseLock,
   isProcessAlive,
   releaseHeavyPhaseLock,
+  runCanaryGate,
   runLocalGate,
   withHeavyPhaseLock,
 } from './run-local-gate.mjs';
@@ -283,6 +288,86 @@ test('local gate writes one exact-head attestation and reuses it without rerunni
   assert.ok(executed.length > firstCount);
 });
 
+test('a stage record is reusable only for the exact head, base, gate version, and command', () => {
+  const record = {
+    schemaVersion: STAGE_SCHEMA_VERSION,
+    gateVersion: GATE_VERSION,
+    head: HEAD,
+    base: BASE,
+    name: 'tests',
+    command: 'npm test -- --maxWorkers=4',
+  };
+  const context = {
+    head: HEAD,
+    base: BASE,
+    gateVersion: GATE_VERSION,
+    command: 'npm test -- --maxWorkers=4',
+  };
+  assert.equal(isStageReusable(record, context), true);
+  assert.equal(isStageReusable(record, { ...context, head: `0${HEAD.slice(1)}` }), false);
+  assert.equal(isStageReusable(record, { ...context, base: `0${BASE.slice(1)}` }), false);
+  assert.equal(isStageReusable(record, { ...context, gateVersion: GATE_VERSION + 1 }), false);
+  assert.equal(isStageReusable(record, { ...context, command: 'npm test -- --bail' }), false);
+  assert.equal(isStageReusable(null, context), false);
+  assert.equal(isStageReusable({ ...record, schemaVersion: STAGE_SCHEMA_VERSION + 1 }, context), false);
+});
+
+test('the whole-gate attestation carries the gate version and stays exact-head bound', () => {
+  const gates = ['ci-rules', 'tests'];
+  const attestation = createAttestation({ head: HEAD, base: BASE, baseRef: 'origin/main', gates });
+  assert.equal(attestation.gateVersion, GATE_VERSION);
+  assert.equal(validateAttestation(attestation, { head: HEAD, base: BASE, gates }).valid, true);
+  // A bumped gate version invalidates an otherwise-exact attestation.
+  assert.match(
+    validateAttestation(attestation, { head: HEAD, base: BASE, gates, gateVersion: GATE_VERSION + 1 }).reason,
+    /gate version/i,
+  );
+  // The exact-head discipline is unchanged: a different head is still rejected.
+  assert.match(
+    validateAttestation(attestation, { head: `0${HEAD.slice(1)}`, base: BASE, gates }).reason,
+    /head/i,
+  );
+  // A v1-shaped attestation (no gateVersion, old schema) never validates.
+  assert.equal(
+    validateAttestation({ ...attestation, schemaVersion: 1 }, { head: HEAD, base: BASE, gates }).valid,
+    false,
+  );
+});
+
+test('a partial gate run reuses passed stages and reruns only the failed stage on the same head', async () => {
+  const { cwd, base } = makeGateRepository();
+  const runs = [];
+  let failTests = true;
+  const execute = async (gate) => {
+    if (gate.skip) return;
+    runs.push(gate.name);
+    if (gate.name === 'tests' && failTests) throw new Error('tests failed');
+  };
+  const heavyLock = { lockDir: makeLockDir(), isAlive: () => true, sleep: async () => {} };
+
+  await assert.rejects(
+    runLocalGate({ cwd, baseRef: base, execute, heavyLock }),
+    /tests failed/,
+  );
+  assert.ok(runs.includes('ci-rules'), 'preflight stages ran on the first pass');
+  assert.ok(runs.includes('tests'), 'the heavy stage ran and failed on the first pass');
+  // The whole-gate attestation is not written when a stage fails.
+  assert.equal(
+    existsSync(join(cwd, '.git', 'local-delivery-gate', 'attestation.json')),
+    false,
+    'no whole-gate attestation exists after a partial failure',
+  );
+
+  runs.length = 0;
+  failTests = false;
+  const attestation = await runLocalGate({ cwd, baseRef: base, execute, heavyLock });
+  assert.ok(runs.includes('tests'), 'the previously failed stage reruns');
+  assert.ok(!runs.includes('ci-rules'), 'a previously passed stage is reused, not rerun');
+  assert.ok(!runs.includes('lint'), 'a previously passed stage is reused, not rerun');
+  assert.equal(attestation.head, git(cwd, 'rev-parse', 'HEAD'));
+  assert.equal(attestation.gateVersion, GATE_VERSION);
+});
+
 function makeLockDir() {
   const parent = mkdtempSync(join(tmpdir(), 'heavy-phase-lock-'));
   return join(parent, 'heavy.lock');
@@ -321,6 +406,120 @@ test('gate plan splits the heavy product suite from parallel-safe preflight', ()
     [...preflight, ...heavy].map(({ name }) => name).sort(),
     plan.map(({ name }) => name).sort(),
   );
+});
+
+function makeCanaryRepository() {
+  const cwd = mkdtempSync(join(tmpdir(), 'local-canary-gate-'));
+  git(cwd, 'init', '--quiet');
+  git(cwd, 'config', 'user.email', 'ci@example.invalid');
+  git(cwd, 'config', 'user.name', 'CI Test');
+  mkdirSync(join(cwd, 'src'));
+  writeFileSync(join(cwd, 'src/seed.ts'), 'export const seed = true;\n');
+  git(cwd, 'add', 'src/seed.ts');
+  git(cwd, 'commit', '--quiet', '-m', 'seed');
+  git(cwd, 'branch', '-M', 'main');
+  return { cwd, main: git(cwd, 'rev-parse', 'HEAD') };
+}
+
+test('canary plan forces whole-repo gates on and skips diff-scoped gates explicitly', () => {
+  const plan = buildGatePlan({ paths: [], canary: true });
+  const active = plan.filter(({ skip }) => !skip).map(({ name }) => name);
+  for (const gate of ['ci-rules', 'lint', 'build', 'typecheck', 'repository-hygiene', 'semgrep-rules', 'tests']) {
+    assert.ok(active.includes(gate), `canary must run ${gate} against main`);
+  }
+  // Diff-scoped gates are skipped with an explicit, logged reason — never silent.
+  for (const gate of ['change-budget', 'semgrep-diff', 'ubs']) {
+    const entry = plan.find(({ name }) => name === gate);
+    assert.equal(entry.skip, true, `canary must skip ${gate}`);
+    assert.match(entry.skipReason ?? '', /canary/, `canary must state why ${gate} is skipped`);
+  }
+  // The delivery-scoped lint-changed variant is never used in canary.
+  assert.ok(!plan.some(({ name }) => name === 'lint-changed'));
+});
+
+test('clean-main canary runs the full gate against main and records an attestation', async () => {
+  const { cwd, main } = makeCanaryRepository();
+  const executed = [];
+  const skipped = [];
+  const execute = async (gate) => {
+    if (gate.skip) skipped.push(gate.name);
+    else executed.push(gate.name);
+  };
+
+  const attestation = await runCanaryGate({
+    cwd,
+    mainRef: 'main',
+    execute,
+    heavyLock: { lockDir: makeLockDir(), isAlive: () => true, sleep: async () => {} },
+  });
+
+  assert.equal(attestation.kind, 'canary');
+  assert.equal(attestation.base, main);
+  assert.equal(attestation.gateVersion, GATE_VERSION);
+  for (const gate of ['ci-rules', 'lint', 'build', 'typecheck', 'repository-hygiene', 'tests']) {
+    assert.ok(executed.includes(gate), `canary must run ${gate}`);
+  }
+  for (const gate of ['change-budget', 'semgrep-diff', 'ubs']) {
+    assert.ok(skipped.includes(gate), `canary must skip ${gate}`);
+  }
+  const written = JSON.parse(
+    readFileSync(join(cwd, '.git', 'local-delivery-gate', 'canary-attestation.json'), 'utf8'),
+  );
+  assert.equal(written.base, main);
+  assert.equal(written.kind, 'canary');
+  // A canary attestation is deliberately not a branch attestation.
+  assert.equal(
+    validateAttestation(written, { head: main, base: main, gates: ['tests'] }).valid,
+    false,
+  );
+});
+
+test('clean-main canary refuses a dirty worktree', async () => {
+  const { cwd } = makeCanaryRepository();
+  writeFileSync(join(cwd, 'src/dirty.ts'), 'export const dirty = true;\n');
+  await assert.rejects(
+    runCanaryGate({ cwd, mainRef: 'main', execute: async () => {} }),
+    /clean worktree/i,
+  );
+});
+
+test('clean-main canary refuses a head that is not origin/main', async () => {
+  const { cwd } = makeCanaryRepository();
+  git(cwd, 'switch', '--quiet', '-c', 'feature');
+  writeFileSync(join(cwd, 'src/feature.ts'), 'export const feature = true;\n');
+  git(cwd, 'add', 'src/feature.ts');
+  git(cwd, 'commit', '--quiet', '-m', 'feature');
+  await assert.rejects(
+    runCanaryGate({ cwd, mainRef: 'main', execute: async () => {} }),
+    /exactly main/i,
+  );
+});
+
+test('clean-main canary propagates a gate failure', async () => {
+  const { cwd } = makeCanaryRepository();
+  const boom = new Error('lint exploded');
+  const execute = async (gate) => {
+    if (gate.name === 'lint') throw boom;
+  };
+  await assert.rejects(
+    runCanaryGate({ cwd, mainRef: 'main', execute, heavyLock: { lockDir: makeLockDir() } }),
+    (error) => error === boom,
+  );
+  // A failed canary leaves no attestation behind.
+  assert.equal(
+    existsSync(join(cwd, '.git', 'local-delivery-gate', 'canary-attestation.json')),
+    false,
+  );
+});
+
+test('createCanaryAttestation records base, gate version, and a timestamp', () => {
+  const attestation = createCanaryAttestation({ base: BASE, mainRef: 'origin/main' });
+  assert.equal(attestation.kind, 'canary');
+  assert.equal(attestation.base, BASE);
+  assert.equal(attestation.gateVersion, GATE_VERSION);
+  assert.equal(attestation.mainRef, 'origin/main');
+  assert.match(attestation.completedAt, /^\d{4}-\d{2}-\d{2}T/);
+  assert.throws(() => createCanaryAttestation({ base: 'not-a-sha', mainRef: 'origin/main' }), /SHA/);
 });
 
 test('heavy-phase lock: preflight runs lock-free while the heavy suite holds the lock', async () => {

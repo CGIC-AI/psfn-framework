@@ -10,9 +10,10 @@ import type {
   SessionArchiveHandle,
   SessionArchivePort,
 } from '../../journals/journal/port.js';
-import type {
-  ChannelCache,
-  SessionIntegrityProvider,
+import {
+  findLastPreviewableEntry,
+  type ChannelCache,
+  type SessionIntegrityProvider,
 } from '../store-primitives.js';
 import { applyJournalState } from './crash-recovery.js';
 
@@ -160,7 +161,9 @@ function loadJournalArchiveChainAttempt(
   cache.lastHmac = previousHmacCandidates[0] ?? null;
   cache.entries = applyTurnTombstones(cache.entries, cache.turnTombstones);
   cache.messageCount = cache.entries.length;
-  const lastMessage = cache.entries.at(-1);
+  // Preview metadata must reflect the last conversational (user/assistant)
+  // message; system/tool scaffold entries never surface in session-list rows.
+  const lastMessage = findLastPreviewableEntry(cache.entries);
   if (lastMessage) {
     cache.lastMessageTimestamp = lastMessage.timestamp;
     cache.lastMessageRole = lastMessage.role;

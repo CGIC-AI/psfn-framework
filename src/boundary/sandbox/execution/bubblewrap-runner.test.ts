@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildBubblewrapArgs } from './bubblewrap-runner.js';
+import { buildBubblewrapArgs, READ_ONLY_ETC_PATHS } from './bubblewrap-runner.js';
 import type { ResolvedShellExecution } from './shell-execution-policy.js';
 
 function request(): ResolvedShellExecution {
@@ -66,6 +66,18 @@ describe('buildBubblewrapArgs', () => {
     expect(rendered).not.toContain('/app/system-data');
     expect(rendered).not.toContain('/app/companion-data');
     expect(rendered).not.toContain('/var/run/secrets');
+  });
+
+  it('exposes only the allowlisted host configuration needed by image tools', () => {
+    expect(READ_ONLY_ETC_PATHS).toEqual(expect.arrayContaining([
+      '/etc/alternatives',
+      '/etc/ca-certificates',
+      '/etc/hosts',
+      '/etc/resolv.conf',
+      '/etc/ssl',
+    ]));
+    expect(READ_ONLY_ETC_PATHS).not.toContain('/etc');
+    expect(READ_ONLY_ETC_PATHS).not.toContain('/etc/shadow');
   });
 
   it('omits the repository mount unless the policy resolved one', () => {

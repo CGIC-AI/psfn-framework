@@ -176,15 +176,6 @@ export interface MemoryProvider {
     retrievalMode?: RetrievalModeInput,
     conversationScope?: ConversationScope,
   ): Promise<string>;
-  retrieveProactiveRecall?(
-    channelId: string,
-    trustLevel?: TrustLevel,
-    channelMeta?: ChannelMeta,
-    canonicalContactId?: string,
-    turnSnapshot?: TurnMemorySnapshot,
-    turnBudgetCharacteristics?: ContextBudgetTurnCharacteristics,
-    scopeQuery?: MemoryScopeQuery,
-  ): Promise<string>;
 }
 
 export interface FinalReflectionExtractionInput {

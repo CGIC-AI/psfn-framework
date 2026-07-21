@@ -159,9 +159,6 @@ export function createSubagentMemoryProviderFacade(provider: MemoryProvider): Me
   if (provider.captureTurnMemorySnapshot) {
     facade.captureTurnMemorySnapshot = provider.captureTurnMemorySnapshot.bind(provider);
   }
-  if (provider.retrieveProactiveRecall) {
-    facade.retrieveProactiveRecall = provider.retrieveProactiveRecall.bind(provider);
-  }
   return facade;
 }
 

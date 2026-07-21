@@ -42,7 +42,6 @@ import type {
 import { classifyChannelDisclosure, type ChannelMeta } from '../../system/trust/policy.js';
 import { resolveBroadcastVisibilityScope } from '../../system/trust/broadcast-safety.js';
 import { createComponentLogger } from '../../shared/logger.js';
-import { clampUnit as clampProbability } from '../../shared/utils/numeric.js';
 import type { ContactStorePort } from '../../core/contacts/contact-store-port.js';
 import type { ConversationScope } from '../../core/session/conversation-scope.js';
 import type { TurnMemorySnapshot } from '../../core/turns/snapshot.js';
@@ -120,9 +119,6 @@ import {
 import {
   resolveEpisodicChains as resolveEpisodicChainsWithDeps,
 } from './retrieval/episodic-resolution.js';
-import {
-  retrieveProactiveRecall as retrieveProactiveRecallWithDeps,
-} from './retrieval/proactive-recall.js';
 import {
   applyScoreGuarantee,
   collectSelectedProvenanceRefs,
@@ -214,8 +210,6 @@ export interface MemoryRetrieverConfig {
   retrievalThreshold?: number;
   moodCongruenceWeight?: number;
   telemetryEnabled?: boolean;
-  proactiveRecallProbability?: number;
-  proactiveRecallMinTurnsBetween?: number;
   memoryRetrievalPolicy?: MemoryRetrievalPolicy;
 }
 
@@ -240,11 +234,6 @@ interface ResolvedActiveMemoryRefreshCacheState {
   roomVisibility?: RetrievalRoomVisibilityContext;
 }
 
-type ProactiveRecallRuntimeConfig = SubstrateConfig & {
-  memoryProactiveRecallProbability?: number;
-  memoryProactiveRecallMinTurnsBetween?: number;
-};
-
 export class MemoryRetriever implements MemoryProvider {
   private memoryStore: MemoryStorePort;
   private embeddingService: EmbeddingProviderPort;
@@ -258,10 +247,6 @@ export class MemoryRetriever implements MemoryProvider {
   private llmProvider: LLMProviderPort | null;
   private episodicStore: EpisodicRetrievalStore | null;
   private moodCongruenceWeight: number;
-  private proactiveRecallProbability: number;
-  private proactiveRecallMinTurnsBetween: number;
-  private proactiveTurnCounter: number;
-  private lastProactiveRecallTurn: number;
   private activeMemoryContexts: Map<string, ActiveMemoryState>;
   private activeMemoryRefreshLoops: Map<string, ActiveMemoryRefreshLoop>;
   private sessionQuarantineFilter: MemorySessionQuarantineFilter | null;
@@ -289,9 +274,6 @@ export class MemoryRetriever implements MemoryProvider {
       this.retrievalThreshold = MEMORY_CONFIG.retrievalThreshold;
       this.moodCongruenceWeight = resolveMoodCongruenceWeight(config.moodCongruenceWeight);
       this.telemetryEnabled = config.memoryRetrievalTelemetryEnabled ?? true;
-      const proactiveConfig = config as ProactiveRecallRuntimeConfig;
-      this.proactiveRecallProbability = clampProbability(proactiveConfig.memoryProactiveRecallProbability ?? 0);
-      this.proactiveRecallMinTurnsBetween = clampTurnFrequency(proactiveConfig.memoryProactiveRecallMinTurnsBetween ?? 2);
     } else {
       const retrieverConfig = config as MemoryRetrieverConfig | undefined;
       this.runtimeConfig = null;
@@ -306,16 +288,12 @@ export class MemoryRetriever implements MemoryProvider {
       this.retrievalThreshold = retrieverConfig?.retrievalThreshold ?? MEMORY_CONFIG.retrievalThreshold;
       this.moodCongruenceWeight = resolveMoodCongruenceWeight(retrieverConfig?.moodCongruenceWeight);
       this.telemetryEnabled = retrieverConfig?.telemetryEnabled ?? true;
-      this.proactiveRecallProbability = clampProbability(retrieverConfig?.proactiveRecallProbability ?? 0);
-      this.proactiveRecallMinTurnsBetween = clampTurnFrequency(retrieverConfig?.proactiveRecallMinTurnsBetween ?? 2);
     }
     this.contactStore = contactStore ?? null;
     this.llmProvider = llmProvider ?? null;
     this.episodicStore = episodicStore ?? null;
     this.sessionQuarantineFilter = sessionQuarantineFilter ?? null;
     this.enforceSubjectAuthorization = enforceSubjectAuthorization;
-    this.proactiveTurnCounter = 0;
-    this.lastProactiveRecallTurn = Number.NEGATIVE_INFINITY;
     this.activeMemoryContexts = new Map();
     this.activeMemoryRefreshLoops = new Map();
   }
@@ -1639,57 +1617,6 @@ export class MemoryRetriever implements MemoryProvider {
     }
   }
 
-  async retrieveProactiveRecall(
-    channelId: string,
-    trustLevel?: TrustLevel,
-    channelMeta?: ChannelMeta,
-    canonicalContactId?: string,
-    turnSnapshot?: TurnMemorySnapshot,
-    _turnBudgetCharacteristics?: ContextBudgetTurnCharacteristics,
-    _scopeQuery?: MemoryScopeQuery,
-  ): Promise<string> {
-    const productMemoryStore = this.productMemoryStore(canonicalContactId);
-    return retrieveProactiveRecallWithDeps({
-      memoryStore: productMemoryStore,
-      sessionQuarantineFilter: this.sessionQuarantineFilter,
-      proactiveRecallProbability: this.proactiveRecallProbability,
-      proactiveRecallMinTurnsBetween: this.proactiveRecallMinTurnsBetween,
-      proactiveTurnCounter: this.proactiveTurnCounter,
-      lastProactiveRecallTurn: this.lastProactiveRecallTurn,
-      setProactiveTurnCounter: value => {
-        this.proactiveTurnCounter = value;
-      },
-      setLastProactiveRecallTurn: value => {
-        this.lastProactiveRecallTurn = value;
-      },
-      resolveRoomVisibilityContext: (roomChannelId, roomChannelMeta, roomCanonicalContactId) => (
-        this.resolveRoomVisibilityContext(roomChannelId, roomChannelMeta, roomCanonicalContactId, undefined)
-      ),
-      createAccessUpdateError: (memoryId, effectiveTrust, error) => new RetrievalIntegrityError(
-        `Failed to update proactive recall access stats for memory ${memoryId}`,
-        {
-          stage: 'proactive_access_update',
-          channelId,
-          trustLevel: effectiveTrust,
-          memoryId,
-        },
-        error,
-      ),
-      logIntegrityFailure: (wrapped, cause) => {
-        log.error('Proactive recall integrity failure', {
-          context: wrapped instanceof RetrievalIntegrityError ? wrapped.context : undefined,
-          error: toErrorMessage(wrapped),
-          cause: toErrorMessage(cause),
-        });
-      },
-      channelId,
-      trustLevel,
-      channelMeta,
-      canonicalContactId,
-      turnSnapshot,
-    });
-  }
-
   private async resolveEpisodicChains(input: {
     contextText: string;
     channelId: string;
@@ -1736,11 +1663,6 @@ function addRetrievalStageTiming(
 ): void {
   const elapsedMs = Math.max(0, performance.now() - startedAt);
   telemetry.stageTimingsMs[stage] = (telemetry.stageTimingsMs[stage] ?? 0) + elapsedMs;
-}
-
-function clampTurnFrequency(value: number): number {
-  if (!Number.isFinite(value)) return 0;
-  return Math.max(0, Math.floor(value));
 }
 
 /** Exported for test access. */

@@ -2750,7 +2750,7 @@ describe('MemoryRetriever basic behavior', () => {
     expect(result).not.toContain('User likes black coffee.');
   });
 
-  it('supports async contact-memory lookups for retrieval and proactive recall', async () => {
+  it('supports async contact-memory lookups for retrieval', async () => {
     const emotionalMemory = makeMemory({
       id: 'emo-async',
       text: 'User felt relieved after finishing the migration.',
@@ -2766,184 +2766,21 @@ describe('MemoryRetriever basic behavior', () => {
     const embedding = makeMockEmbedding();
     const retriever = new MemoryRetriever(store, embedding, {
       retrievalLimit: 20,
-      proactiveRecallProbability: 1,
-      proactiveRecallMinTurnsBetween: 0,
     });
 
-    const randomSpy = vi.spyOn(Math, 'random')
-      .mockReturnValueOnce(0)
-      .mockReturnValueOnce(0.1);
-    try {
-      const result = await retriever.retrieve(
-        'how have things been lately?',
-        'api:test',
-        'primary',
-        undefined,
-        'contact-1',
-      );
-      const proactive = await retriever.retrieveProactiveRecall(
-        'api:test',
-        'primary',
-        undefined,
-        'contact-1',
-      );
+    const result = await retriever.retrieve(
+      'how have things been lately?',
+      'api:test',
+      'primary',
+      undefined,
+      'contact-1',
+    );
 
-      expect(result).toContain('Cross-session emotional continuity:');
-      expect(result).toContain(emotionalMemory.text);
-      expect(proactive).toContain('Spontaneous recall:');
-      expect(proactive).toContain(emotionalMemory.text);
-    } finally {
-      randomSpy.mockRestore();
-    }
+    expect(result).toContain('Cross-session emotional continuity:');
+    expect(result).toContain(emotionalMemory.text);
   });
 
-  it('surfaces spontaneous recall weighted by emotional significance and last-access recency', async () => {
-    const now = Date.now();
-    const lowWeightMemory = makeMemory({
-      id: 'proactive-low',
-      text: 'A minor and stale detail.',
-      type: 'semantic',
-      emotionalValence: 0.02,
-      salience: 0.2,
-      importance: 0.2,
-      lastAccessed: now - 120 * 24 * 60 * 60 * 1000,
-      extractedAt: now - 120 * 24 * 60 * 60 * 1000,
-      sensitivity: 'public',
-      similarity: 0.5,
-    });
-    const highWeightMemory = makeMemory({
-      id: 'proactive-high',
-      text: 'User felt deeply relieved after finishing the launch.',
-      type: 'emotional',
-      emotionalValence: 0.92,
-      salience: 0.95,
-      importance: 0.9,
-      lastAccessed: now - 60 * 60 * 1000,
-      extractedAt: now - 2 * 24 * 60 * 60 * 1000,
-      sensitivity: 'public',
-      similarity: 0.5,
-    });
-    const store = makeMockStore([]);
-    (store.getMemoriesByContact as ReturnType<typeof vi.fn>).mockReturnValue([
-      lowWeightMemory,
-      highWeightMemory,
-    ]);
-    const embedding = makeMockEmbedding();
-    const retriever = new MemoryRetriever(store, embedding, {
-      retrievalLimit: 20,
-      proactiveRecallProbability: 1,
-      proactiveRecallMinTurnsBetween: 0,
-    });
-
-    const randomSpy = vi.spyOn(Math, 'random')
-      .mockReturnValueOnce(0)   // probability gate
-      .mockReturnValueOnce(0.1); // weighted draw
-    try {
-      const result = await retriever.retrieveProactiveRecall(
-        'api:test',
-        'primary',
-        undefined,
-        'contact-1',
-      );
-
-      expect(result).toContain('Spontaneous recall:');
-      expect(result).toContain(highWeightMemory.text);
-      expect(result).not.toContain(lowWeightMemory.text);
-      expect(store.updateMemory).toHaveBeenCalledWith(
-        'proactive-high',
-        expect.objectContaining({
-          accessCount: highWeightMemory.accessCount + 1,
-        }),
-      );
-    } finally {
-      randomSpy.mockRestore();
-    }
-  });
-
-  it('fails closed when proactive recall access stat persistence fails', async () => {
-    const now = Date.now();
-    const memory = makeMemory({
-      id: 'proactive-integrity-memory',
-      text: 'Proactive recall memory',
-      type: 'emotional',
-      emotionalValence: 0.9,
-      salience: 0.9,
-      importance: 0.9,
-      lastAccessed: now,
-      extractedAt: now,
-      sensitivity: 'public',
-      similarity: 0.5,
-    });
-    const store = makeMockStore([]);
-    (store.getMemoriesByChannel as ReturnType<typeof vi.fn>).mockReturnValue([memory]);
-    const persistenceFailure = new Error('simulated proactive access stat failure');
-    (store.updateMemory as ReturnType<typeof vi.fn>).mockImplementation(() => {
-      throw persistenceFailure;
-    });
-    const embedding = makeMockEmbedding();
-    const retriever = new MemoryRetriever(store, embedding, {
-      retrievalLimit: 20,
-      proactiveRecallProbability: 1,
-      proactiveRecallMinTurnsBetween: 0,
-    });
-
-    const randomSpy = vi.spyOn(Math, 'random').mockReturnValue(0);
-    try {
-      const proactivePromise = retriever.retrieveProactiveRecall('api:test', 'primary');
-      await expect(proactivePromise).rejects.toBeInstanceOf(RetrievalIntegrityError);
-      await expect(proactivePromise).rejects.toMatchObject({
-        context: {
-          stage: 'proactive_access_update',
-          channelId: 'api:test',
-          trustLevel: 'primary',
-          memoryId: 'proactive-integrity-memory',
-        },
-        cause: persistenceFailure,
-      });
-    } finally {
-      randomSpy.mockRestore();
-    }
-  });
-
-  it('respects configurable proactive recall frequency across turns', async () => {
-    const now = Date.now();
-    const memory = makeMemory({
-      id: 'proactive-frequency',
-      text: 'Remembering this without being asked.',
-      type: 'emotional',
-      emotionalValence: 0.6,
-      salience: 0.8,
-      importance: 0.8,
-      lastAccessed: now,
-      extractedAt: now,
-      sensitivity: 'public',
-      similarity: 0.5,
-    });
-    const store = makeMockStore([]);
-    (store.getMemoriesByChannel as ReturnType<typeof vi.fn>).mockReturnValue([memory]);
-    const embedding = makeMockEmbedding();
-    const retriever = new MemoryRetriever(store, embedding, {
-      retrievalLimit: 20,
-      proactiveRecallProbability: 1,
-      proactiveRecallMinTurnsBetween: 1,
-    });
-
-    const randomSpy = vi.spyOn(Math, 'random').mockReturnValue(0);
-    try {
-      const first = await retriever.retrieveProactiveRecall('api:test', 'primary');
-      const second = await retriever.retrieveProactiveRecall('api:test', 'primary');
-      const third = await retriever.retrieveProactiveRecall('api:test', 'primary');
-
-      expect(first).toContain('Spontaneous recall:');
-      expect(second).toBe('');
-      expect(third).toContain('Spontaneous recall:');
-      expect(store.updateMemory).toHaveBeenCalledTimes(2);
-    } finally {
-      randomSpy.mockRestore();
-    }
-  });
-
-  it('reuses a captured turn snapshot for retrieval and proactive recall after store drift', async () => {
+  it('reuses a captured turn snapshot for retrieval after store drift', async () => {
     const stableMemory = makeMemory({
       id: 'snapshot-stable',
       text: 'Stable snapshot memory.',
@@ -2961,8 +2798,6 @@ describe('MemoryRetriever basic behavior', () => {
 
     const retriever = new MemoryRetriever(store, makeMockEmbedding(), {
       retrievalLimit: 10,
-      proactiveRecallProbability: 1,
-      proactiveRecallMinTurnsBetween: 0,
     });
 
     const snapshot = await retriever.captureTurnMemorySnapshot('snapshot query', 'api:test', 'primary');
@@ -2972,20 +2807,10 @@ describe('MemoryRetriever basic behavior', () => {
     (store.getMemoriesByChannel as ReturnType<typeof vi.fn>).mockReturnValue([driftMemory]);
     (store.getAllActiveMemories as ReturnType<typeof vi.fn>).mockReturnValue([driftMemory]);
 
-    const randomSpy = vi.spyOn(Math, 'random')
-      .mockReturnValueOnce(0)
-      .mockReturnValueOnce(0.1);
-    try {
-      const result = await retriever.retrieve('snapshot query', 'api:test', 'primary', undefined, undefined, snapshot);
-      const proactive = await retriever.retrieveProactiveRecall('api:test', 'primary', undefined, undefined, snapshot);
+    const result = await retriever.retrieve('snapshot query', 'api:test', 'primary', undefined, undefined, snapshot);
 
-      expect(result).toContain('Stable snapshot memory.');
-      expect(result).not.toContain('Late drift memory.');
-      expect(proactive).toContain('Stable snapshot memory.');
-      expect(proactive).not.toContain('Late drift memory.');
-    } finally {
-      randomSpy.mockRestore();
-    }
+    expect(result).toContain('Stable snapshot memory.');
+    expect(result).not.toContain('Late drift memory.');
   });
 
   it('emits structured retrieval telemetry event when event bus is provided', async () => {

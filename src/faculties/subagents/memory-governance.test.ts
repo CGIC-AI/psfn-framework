@@ -169,17 +169,17 @@ describe('createSubagentMemoryProviderFacade', () => {
     expect((facade as Record<string, unknown>).deleteMemory).toBeUndefined();
     // Optional contract methods absent on the source stay absent on the facade.
     expect(facade.captureTurnMemorySnapshot).toBeUndefined();
-    expect(facade.retrieveProactiveRecall).toBeUndefined();
+    expect(facade.refreshActiveMemoryContext).toBeUndefined();
   });
 
   it('forwards optional contract methods when the source provides them', () => {
-    const retrieveProactiveRecall = vi.fn(async () => 'recall');
+    const captureTurnMemorySnapshot = vi.fn(async () => ({}) as never);
     const provider = {
       retrieve: vi.fn(async () => ''),
-      retrieveProactiveRecall,
+      captureTurnMemorySnapshot,
     } as unknown as MemoryProvider;
     const facade = createSubagentMemoryProviderFacade(provider);
-    expect(facade.retrieveProactiveRecall).toBeDefined();
+    expect(facade.captureTurnMemorySnapshot).toBeDefined();
   });
 });
 

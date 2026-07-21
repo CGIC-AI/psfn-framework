@@ -2758,32 +2758,6 @@ describe('SubstrateAgent.handleMessage', () => {
     expect(mockMemory.refreshActiveMemoryContext.mock.calls[0]?.[0]?.contextText).toBe(retrievalQuery);
   });
 
-  it('does not invoke legacy proactive recall on foreground response path', async () => {
-    const config = makeConfig();
-    const sessionManager = makeMockSessionManager();
-    const retrieveProactiveRecall = vi.fn<any>().mockResolvedValue(
-      'Spontaneous recall:\n- [emotional] User felt proud after the release (+)',
-    );
-    const mockMemory = {
-      getActiveMemoryContext: vi.fn().mockReturnValue(makeActiveMemorySnapshot({
-        contextBlock: 'Active memory context block',
-      })),
-      refreshActiveMemoryContext: vi.fn().mockResolvedValue(null),
-      retrieveProactiveRecall,
-    };
-
-    const agent = new SubstrateAgent(
-      new EventBus(), makeMockLLMProvider(), sessionManager, 'test', config,
-    );
-    agent.memoryProvider = mockMemory as unknown as MemoryProvider;
-
-    await agent.handleMessage(makeMessage());
-
-    expect(retrieveProactiveRecall).not.toHaveBeenCalled();
-    const buildCall = (sessionManager.buildContext as any).mock.calls[0];
-    expect(buildCall[2]).toContain('Active memory context block');
-  });
-
   it('uses primary trust and leaves self-directed heartbeat memory unscoped by scheduler identity', async () => {
     const config = makeConfig();
     const mockMemory = {

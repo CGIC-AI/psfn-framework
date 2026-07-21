@@ -9,7 +9,6 @@ import type { EpisodicRetrievalChain } from './episodic.js';
 import {
   formatMemoryRecencyBand,
   renderPromptBlock,
-  renderProactiveRecall,
 } from './formatting.js';
 import type { ScoredMemory } from './types.js';
 
@@ -380,15 +379,6 @@ describe('recency bands on rendered memory lines', () => {
     expect(rendered).toContain(
       '- [semantic] Their neighbor started a pottery class. (2 weeks ago)',
     );
-  });
-
-  it('appends bands to spontaneous recall lines', () => {
-    const rendered = renderProactiveRecall(makeAgedMemory(FIXED_NOW_MS - 3 * DAY_MS));
-
-    expect(rendered).toBe([
-      'Spontaneous recall:',
-      '- [semantic] The user keeps a small herb garden on the balcony. (this week)',
-    ].join('\n'));
   });
 
   it('renders without a band when extractedAt is missing', () => {

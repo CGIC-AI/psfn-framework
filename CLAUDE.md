@@ -126,6 +126,24 @@ Treat the repo as active implementation, not a planning branch. Determine curren
 
 Everything else — beads workflow, validation gates, parallel-work rules, session completion ("landing the plane"), live deployment boundary — is in AGENTS.md. Follow it.
 
+## Local delivery wiring
+
+After `npm ci`, run `npm run hooks:install` once in each worktree. Do not bypass
+the tracked pre-push hook and do not publish with raw `gh pr create` or
+`gh pr edit`. Assemble compatible small beads into one coherent review unit,
+commit the exact head, and publish it with:
+
+```bash
+gh gated-pr --title "<title>" --body-file <path>
+```
+
+The wrapper runs or reuses the exact-head local gate, pushes, publishes the
+attestation, and waits for `ci-required` plus `Greptile Review`. Keep the owning
+lane assigned while it waits. On failure, return the evidence to that lane once;
+never rerun GitHub Actions, re-request Greptile, or dispatch a fresh review loop.
+The portable machine setup and reviewer prompts are in
+[`docs/internal-review-workflow.md`](./docs/internal-review-workflow.md).
+
 ## Orchestration Loop (Claude-side wiring)
 
 AGENTS.md owns the delivery-loop policy, and [`docs/orchestration-process.md`](./docs/orchestration-process.md) is the full wave protocol (branch/worktree shape, lane tables, review format, fix epics, push policy, operational boundaries). This section is how Claude executes it.
@@ -148,6 +166,6 @@ Loop, per bead/stream:
 1. Decompose to beads; dispatch implementation to Codex in a worktree on a `work/<epic>-<bead>` branch cut from the feature branch (branch shape and push policy per `docs/orchestration-process.md`).
 2. On completion, run the tiered review gate: UBS scan always; reviewer lanes per the tier above, dispatched independently and adversarially — prompted to refute and produce concrete failure scenarios, not to approve; no reviewer sees another's review or the implementer's self-assessment. Run three worker lanes by default; a hard bead must not idle the other two.
 3. Synthesize findings: dedupe, then independently verify every claimed blocker against the Blocking Risk Standard (IMPORTANT ≙ P0/P1) before accepting it — reviewers systematically over-grade severity (confirmed pattern; a blocker claim needs a reproducible failure, not vibes).
-4. **One remediation pass** (Codex) scoped to verified blockers only, then one final check. Re-verify the fixed items only — no full re-review, no successive review/remediation cycles.
-5. If the remediation itself introduces a *new* verified blocker, one more targeted pass is allowed; otherwise stop and surface to the operator.
-6. Close and integrate. Leftover IMPORTANT defects → self-contained beads under the wave's `<wave> fixes` epic for a fresh agent; **nonblocking observations go in the handoff report only, never beads**. **Done beats perfect** — the fixes epic is the go-back pass after the work ships.
+4. **One remediation pass** (Codex) scoped to verified blockers only, then one final check. Re-verify the fixed items only — no full re-review, no successive review/remediation cycles. A newly discovered blocker is surfaced to the operator or routed to the fixes epic; it does not authorize another pass.
+5. Integrate compatible completed beads into one coherent PR-sized branch, run the exact-head local gate, and publish once through `gh gated-pr`. The owning lane receives any CI or Greptile failure and makes no more than the already-authorized remediation commit.
+6. Merge and close only after the exact PR head has both required checks green. Leftover IMPORTANT defects → self-contained beads under the wave's `<wave> fixes` epic for a fresh agent; **nonblocking observations go in the handoff report only, never beads**.

@@ -788,6 +788,58 @@ describe('morning wake outward phase', () => {
     expect(dispatchOutbound).not.toHaveBeenCalled();
   });
 
+  it('delivers outward at 08:05 UTC when an overnight window is evaluated in the global zone (2tli control)', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(DAY1_NIGHT));
+    const { port } = makePort();
+    const scheduler = makeScheduler();
+    const dispatchOutbound = vi.fn(async () => ({ outcome: 'sent' as const }));
+    registerTemporalWakeupTasks({
+      scheduler,
+      sessionManager: port,
+      config: makeWakeConfig({ refresher: { enabled: false } }),
+      // Overnight window; 08:05 UTC is OUTSIDE it in the global (UTC) zone.
+      quietHours: { enabled: true, startLocalTime: '22:00', endLocalTime: '02:00', timeZone: 'UTC' },
+      invokeWakeTurn: async () => 'psst',
+      dispatchOutbound,
+    });
+
+    vi.setSystemTime(new Date(DAY2_MORNING));
+    await scheduler.tick();
+
+    expect(dispatchOutbound).toHaveBeenCalledTimes(1);
+  });
+
+  it('gates outward delivery by the recipient timezone, not the global window (2tli)', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(DAY1_NIGHT));
+    const { port, appended } = makePort();
+    const scheduler = makeScheduler();
+    const dispatchOutbound = vi.fn(async () => ({ outcome: 'sent' as const }));
+    const resolveContactTimeZone = vi.fn(async () => 'America/Los_Angeles');
+    registerTemporalWakeupTasks({
+      scheduler,
+      sessionManager: port,
+      config: makeWakeConfig({ refresher: { enabled: false } }),
+      // Same overnight window that the global-zone control above delivers under.
+      // In America/Los_Angeles, 08:05 UTC is 01:05 PDT — INSIDE 22:00–02:00 — so
+      // the recipient-local evaluation defers outward delivery.
+      quietHours: { enabled: true, startLocalTime: '22:00', endLocalTime: '02:00', timeZone: 'UTC' },
+      invokeWakeTurn: async () => 'psst',
+      dispatchOutbound,
+      resolveContactTimeZone,
+    });
+
+    vi.setSystemTime(new Date(DAY2_MORNING));
+    await scheduler.tick();
+
+    // Internal frame still lands; only outward delivery is gated by the
+    // recipient's local quiet hours.
+    expect(appended).toHaveLength(1);
+    expect(resolveContactTimeZone).toHaveBeenCalledWith('api:main');
+    expect(dispatchOutbound).not.toHaveBeenCalled();
+  });
+
   it('keeps the frame update when the wake turn itself throws', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date(DAY1_NIGHT));
@@ -1390,12 +1442,12 @@ describe('temporal wake fan-out across channels (2x37.3)', () => {
     expect(appended.every(a => a.note.includes('[Temporal wake]'))).toBe(true);
   });
 
-  it('morning lane still wakes the latest session when the partner has been idle past the lookback window', async () => {
+  it('morning lane does NOT wake a channel idle past the lookback window (7toj: no idle latest force-append)', async () => {
     vi.useFakeTimers();
     // Partner last spoke 4 days before the wake slot — outside the 72h
-    // lookback, so enumeration returns nothing; the latest session must
-    // remain a candidate (pre-fan-out behavior, and the absence case is
-    // exactly when the new-day frame matters most).
+    // lookback, so enumeration returns nothing. The latest session is no longer
+    // force-added: fanning a wake note to a channel with no recent partner
+    // activity is exactly the over-broad behavior 7toj removes (fail closed).
     const FOUR_DAYS_AGO = DAY2_MORNING - 4 * 24 * 60 * 60_000;
     const { port, appended } = makeFanoutPort([
       { sessionId: DISCORD, channelType: 'discord', entries: [entry({ channelId: DISCORD, role: 'user', timestamp: FOUR_DAYS_AGO })] },
@@ -1411,8 +1463,31 @@ describe('temporal wake fan-out across channels (2x37.3)', () => {
 
     await runMorningHandler(scheduler);
 
-    expect(appended.map(a => a.channelId)).toEqual([DISCORD]);
-    expect(appended[0]?.note).toContain('[Temporal wake]');
+    expect(appended).toEqual([]);
+  });
+
+  it('morning lane fan-out excludes non-live channel types even when recently active (7toj)', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(DAY2_MORNING));
+    // All three channels have recent partner activity within the lookback, but
+    // only the live conversational surfaces (discord DM, satellite) may receive
+    // an autonomous wake note; the local dev terminal channel is excluded.
+    const TERMINAL = 'terminal:local-dev';
+    const { port, appended } = makeFanoutPort([
+      { sessionId: DISCORD, channelType: 'discord', entries: [entry({ channelId: DISCORD, role: 'user', timestamp: DAY1_EVENING })] },
+      { sessionId: SATELLITE, channelType: 'wyoming', entries: [entry({ channelId: SATELLITE, role: 'user', timestamp: DAY1_EVENING })] },
+      { sessionId: TERMINAL, channelType: 'terminal', entries: [entry({ channelId: TERMINAL, role: 'user', timestamp: DAY1_EVENING })] },
+    ]);
+    const scheduler = new Scheduler(new EventBus(), { tickIntervalMs: 60_000, heartbeatIntervalMs: 1_800_000 });
+    registerTemporalWakeupTasks({
+      scheduler,
+      sessionManager: port,
+      config: makeWakeConfig({ refresher: { enabled: false } }),
+    });
+
+    await runMorningHandler(scheduler);
+
+    expect(appended.map(a => a.channelId).sort()).toEqual([DISCORD, SATELLITE].sort());
   });
 
   it('morning outward delivery targets only the single most-recent-partner channel', async () => {

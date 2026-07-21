@@ -7,18 +7,26 @@ import { collectRangeStats } from './check-change-budget.mjs';
 
 export function detectChangeScope(paths) {
   const matches = (pattern) => paths.some((path) => pattern.test(path));
+  const deployment = matches(
+    /^(?:deploy\/helm\/|docker\/|scripts\/(?:verify-(?:helm|k8s|kube)|ops\/ship-kube))/,
+  );
+  const adminUi = matches(/^admin-ui\//);
+  const companionUi = matches(/^companion-ui\//);
+  const rootRuntime = matches(
+    /^(?:src\/|shakedown\/|scripts\/(?!ci\/|verify-(?:helm|k8s|kube)|ops\/ship-kube)|package-lock\.json$|tsconfig[^/]*\.json$|vitest[^/]*\.[cm]?[jt]s$|eslint[^/]*\.[cm]?[jt]s$)/,
+  );
   return {
     settings: matches(
       /^(?:\.env\.example|src\/shared\/contracts\/runtime\.ts|src\/system\/config\/|src\/system\/settings(?:\.ts|\/)|src\/operator\/garden\/.*settings|admin-ui\/src\/.*settings|scripts\/(?:verify-settings-contract|hardcoded-settings))/,
     ),
-    deployment: matches(
-      /^(?:deploy\/helm\/|docker\/|scripts\/(?:verify-(?:helm|k8s|kube)|ops\/ship-kube))/,
-    ),
+    deployment,
     supply_chain: matches(
       /(?:^|\/)package(?:-lock)?\.json$|(?:^|\/)Dockerfile[^/]*$|^\.github\/workflows\/|^deploy\/helm\/|^scripts\/verify-supply-chain\./,
     ),
-    admin_ui: matches(/^admin-ui\//),
-    companion_ui: matches(/^companion-ui\//),
+    admin_ui: adminUi,
+    companion_ui: companionUi,
+    root_runtime: rootRuntime,
+    clean_environment: rootRuntime || deployment || adminUi || companionUi,
   };
 }
 

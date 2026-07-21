@@ -1,6 +1,5 @@
 import { appendJsonLine, readJsonLines } from '../jsonl.js';
 import { createComponentLogger } from '../../shared/logger.js';
-import { cloneInternalState, type InternalState } from '../../core/self-model/state.js';
 import type { ValuesMetacognitiveFlag } from '../../faculties/values/narrative-context-types.js';
 import {
   normalizeNarrativeMetacognitiveFlags,
@@ -24,8 +23,10 @@ function normalizeTemplateName(templateName: string): string {
 }
 
 interface ReflectionJournalNarrativeContext {
+  // The snapshot ref is the single source of truth for the companion's internal
+  // state at reflection time. The full state lives once in the internal-state
+  // snapshot store; it is never duplicated into this journal entry (ay2o).
   internalStateSnapshotRef: string;
-  internalState: InternalState;
   metacognitiveFlags?: ValuesMetacognitiveFlag[];
 }
 
@@ -71,7 +72,6 @@ export interface ReflectionJournalEntryInput {
   telemetry?: ReflectionJournalTelemetry;
   deliberation?: ValuesDeliberationMetadata;
   internalStateSnapshotRef?: string;
-  internalState?: InternalState;
   metacognitiveFlags?: ValuesMetacognitiveFlag[];
   concernArc?: ReflectionConcernArc;
   substrateBoundary?: string;
@@ -175,11 +175,9 @@ function normalizeReflectionTelemetry(
 
   const narrativeInput = telemetryInput?.narrativeContext
     ?? ((input.internalStateSnapshotRef !== undefined
-      || input.internalState !== undefined
       || input.metacognitiveFlags !== undefined)
       ? {
           internalStateSnapshotRef: input.internalStateSnapshotRef,
-          internalState: input.internalState,
           metacognitiveFlags: input.metacognitiveFlags,
         }
       : undefined);
@@ -194,23 +192,22 @@ function normalizeReflectionTelemetry(
       narrativeInput.internalStateSnapshotRef,
       { contextPrefix: REFLECTION_JOURNAL_ERROR_PREFIX },
     );
-    const internalState = narrativeInput.internalState === undefined
-      ? undefined
-      : cloneInternalState(narrativeInput.internalState);
     const metacognitiveFlags = normalizeNarrativeMetacognitiveFlags(
       narrativeInput.metacognitiveFlags,
       { contextPrefix: REFLECTION_JOURNAL_ERROR_PREFIX },
     );
-    if ((internalStateSnapshotRef || internalState || metacognitiveFlags) && (!internalStateSnapshotRef || !internalState)) {
+    // The snapshot ref is the single source of truth for internal state, so it
+    // is required whenever any narrative context is supplied; metacognitive
+    // flags cannot stand in for it. Fail closed on flags-without-ref.
+    if ((internalStateSnapshotRef || metacognitiveFlags) && !internalStateSnapshotRef) {
       throw new Error(
-        'Reflection journal entry requires both internalStateSnapshotRef and internalState when narrative context is provided',
+        'Reflection journal entry requires internalStateSnapshotRef when narrative context is provided',
       );
     }
 
-    if (internalStateSnapshotRef && internalState) {
+    if (internalStateSnapshotRef) {
       narrativeContext = {
         internalStateSnapshotRef,
-        internalState,
         ...(metacognitiveFlags ? { metacognitiveFlags } : {}),
       };
     }

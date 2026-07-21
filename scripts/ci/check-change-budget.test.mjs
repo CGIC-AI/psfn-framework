@@ -6,12 +6,18 @@ import { join } from 'node:path';
 import test from 'node:test';
 
 import {
+  CHANGE_BUDGET,
   collectRangeStats,
   decideChangeBudget,
   evaluateChangeBudget,
   extractExceptionReason,
   parseNumstat,
 } from './check-change-budget.mjs';
+
+test('uses the operator-approved normal PR target without changing the hard ceiling', () => {
+  assert.deepEqual(CHANGE_BUDGET.pullRequest.files, { target: 25, maximum: 25 });
+  assert.deepEqual(CHANGE_BUDGET.pullRequest.lines, { target: 1_500, maximum: 2_000 });
+});
 
 function git(cwd, ...args) {
   return execFileSync('git', args, { cwd, encoding: 'utf8' }).trim();

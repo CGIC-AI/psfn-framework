@@ -10,6 +10,7 @@ import type { Server as HttpsServer } from 'node:https';
 import { WebSocket } from 'ws';
 import { describe, it, expect, vi } from 'vitest';
 import {
+  computeReconnectDelayMs,
   createSocketClient,
   createSocketServer,
   createWebSocketRpcClient,
@@ -395,6 +396,60 @@ describe('gateway RPC endpoint parsing', () => {
     expect(() => resolveGatewayRpcEndpointFromEnv({
       GATEWAY_RPC_ENDPOINT: 'ws://gateway.internal:10054/rpc',
     }, '/run/psfn/gateway.sock')).toThrow(/Plain ws:\/\/ is not allowed/);
+  });
+});
+
+describe('computeReconnectDelayMs backoff schedule', () => {
+  it('grows exponentially per attempt and caps at the max delay', () => {
+    const base = 1000;
+    const cap = 10_000;
+    // Use the midpoint by stubbing jitter to its lower bound (Math.random -> 0),
+    // which yields exactly capped/2, so the exponential doubling is observable.
+    const spy = vi.spyOn(Math, 'random').mockReturnValue(0);
+    try {
+      expect(computeReconnectDelayMs(1, base, cap)).toBe(500); // 1000 -> /2
+      expect(computeReconnectDelayMs(2, base, cap)).toBe(1000); // 2000 -> /2
+      expect(computeReconnectDelayMs(3, base, cap)).toBe(2000); // 4000 -> /2
+      expect(computeReconnectDelayMs(4, base, cap)).toBe(4000); // 8000 -> /2
+      // Attempt 5 would be 16000 uncapped; capped to 10000 -> /2 = 5000.
+      expect(computeReconnectDelayMs(5, base, cap)).toBe(5000);
+      expect(computeReconnectDelayMs(50, base, cap)).toBe(5000); // stays capped
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('applies equal jitter so the delay stays within [capped/2, capped]', () => {
+    const base = 1000;
+    const cap = 10_000;
+    for (const random of [0, 0.5, 0.999999]) {
+      const spy = vi.spyOn(Math, 'random').mockReturnValue(random);
+      try {
+        // Attempt 5 is capped at 10000; equal jitter keeps it in [5000, 10000].
+        const delay = computeReconnectDelayMs(5, base, cap);
+        expect(delay).toBeGreaterThanOrEqual(5000);
+        expect(delay).toBeLessThanOrEqual(10_000);
+      } finally {
+        spy.mockRestore();
+      }
+    }
+  });
+
+  it('provides a startup budget far longer than the former fixed ~10s window', () => {
+    const base = 1000;
+    const cap = 10_000;
+    const maxReconnectAttempts = 30;
+    const spy = vi.spyOn(Math, 'random').mockReturnValue(0); // lower-bound each delay
+    try {
+      let budgetMs = 0;
+      for (let attempt = 1; attempt < maxReconnectAttempts; attempt += 1) {
+        budgetMs += computeReconnectDelayMs(attempt, base, cap);
+      }
+      // Even at the jitter lower bound the budget is minutes, not ~10s.
+      expect(budgetMs).toBeGreaterThan(60_000);
+    } finally {
+      spy.mockRestore();
+    }
   });
 });
 

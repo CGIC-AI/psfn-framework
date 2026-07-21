@@ -214,17 +214,15 @@ describe('createHeartbeatTemplateRuntime reflection metacognition journal', () =
     const entry = JSON.parse(raw.split('\n').at(-1) ?? '{}') as {
       telemetry?: {
         narrativeContext?: {
-          internalState?: {
-            emotional?: {
-              acac?: unknown;
-            };
-          };
+          internalStateSnapshotRef?: string;
+          internalState?: unknown;
         };
       };
     };
-    expect(entry.telemetry?.narrativeContext?.internalState?.emotional?.acac).toEqual(
-      internalState.emotional.acac,
-    );
+    // ay2o: the reflection entry records only the snapshot ref, not a duplicated
+    // full internalState copy.
+    expect(entry.telemetry?.narrativeContext?.internalStateSnapshotRef).toBe(snapshotRef);
+    expect(entry.telemetry?.narrativeContext?.internalState).toBeUndefined();
   });
 
   it('keeps uncertain emotion telemetry out of the compact daily starter', async () => {
@@ -1263,16 +1261,16 @@ describe('createHeartbeatTemplateRuntime reflection metacognition journal', () =
       const entry = JSON.parse(raw.split('\n').at(-1) ?? '{}') as {
         telemetry?: {
           narrativeContext?: {
-            internalState?: {
-              relational?: {
-                contactId?: string | null;
-              };
-            };
+            internalStateSnapshotRef?: string;
+            internalState?: unknown;
           };
         };
         substrateProvenanceRefs?: string[];
       };
-      expect(entry.telemetry?.narrativeContext?.internalState?.relational?.contactId).toBe('contact-1');
+      // ay2o: the reflection entry records only the snapshot ref (no embedded
+      // internalState copy); the contact binding is proven by the provenance ref.
+      expect(entry.telemetry?.narrativeContext?.internalStateSnapshotRef).toBeTruthy();
+      expect(entry.telemetry?.narrativeContext?.internalState).toBeUndefined();
       expect(entry.substrateProvenanceRefs).toEqual(expect.arrayContaining([
         'reflection_contact:contact-1',
         'reflection_contact_memory:contact-1',

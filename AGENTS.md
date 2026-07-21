@@ -221,51 +221,85 @@ The point is to get work DONE and shipped, then iterate — not to polish in pla
 - **Adversarial review**: reviewer lanes review the same immutable commit range independently and blind to each other, prompted to refute with concrete failure scenarios. The orchestrator dedupes and **independently verifies every claimed blocker** against the Blocking Risk Standard before remediation — reviewers systematically over-grade severity.
 - **Bounded loop**: implement → reviews → **one remediation pass** (verified IMPORTANT/P0-P1 findings only) → one final check → move on. No successive review/remediation cycles.
 - **IMPORTANT ≙ P0/P1** and only for: partner-data security/privacy/isolation, companion welfare/consent/autonomy, real data loss or secret exposure, a broken core acceptance path, or a mandatory gate (lint).
-- **Leftover IMPORTANT defects** go to the wave's `<wave> fixes` epic as self-contained beads for a fresh agent; the completed implementation bead still closes. **Nonblocking observations go in the handoff report only — never beads, never merge blockers.**
+- **Leftover IMPORTANT defects** go to the wave's `<wave> fixes` epic for a fresh agent and block the affected PR; implementation closes after the fixed delivery merges. **Nonblocking observations go in the handoff report only — never beads, never merge blockers.**
 - For high-risk areas (config ownership, gateway policy, trust/privacy, persistence, deployment, durable memory writes) and recurring bug classes, additionally apply `docs/adversarial-review-and-bugfixing-practices.md`; consult it when the task warrants, not at every session start.
 
-## Change Size And GitHub CI
+## Local-First Delivery And GitHub Confirmation
 
-Keep changes reviewable. A large initiative is not a reason to ship a branch
-dump.
+Install this repository's delivery hooks once per worktree after `npm ci`:
 
-- Normal PR target: at most 12 files, 800 counted changed lines, and 5 commits.
+```bash
+npm run hooks:install
+```
+
+The installer refuses to disable any existing hook or replace an existing
+`gh gated-pr` alias. It configures the tracked `.githooks/pre-push` hook for the current
+worktree and installs `gh gated-pr` as the supported PR publisher.
+
+Keep changes reviewable without buying a separate paid review for every tiny
+patch:
+
+- Normal PR target: at most 25 files, 1,500 counted changed lines, and 5 commits.
 - Hard PR limit: 25 files, 2,000 counted changed lines, or 8 commits.
 - Hard per-commit limit: 15 files or 800 counted changed lines.
 - Each commit must be one coherent change. Do not mix unrelated beads,
   remediation, generated artifacts, or another branch's history into it.
-- Prefer one bead per PR. Split implementation waves into independently green,
-  inactive or backward-safe tracer PRs, then use a small activation PR.
+- Batch compatible small beads into one coherent review and deployment unit.
+  Do not open a standalone paid-review PR for a routine tiny patch merely
+  because it has its own bead. A small standalone PR is appropriate only when
+  it is urgent, independently releasable, or unsafe to batch.
 - Use an integration branch only when partial delivery to `main` is genuinely
-  unsafe. Bead PRs into that branch still obey the normal limits. A final pure
-  rollup may use the exception below only when every included commit was
-  reviewed in a green constituent PR and the rollup adds no new code.
+  unsafe. The final coherent PR still obeys the normal limits.
 
-`.github/workflows/ci.yml` enforces these budgets, diff integrity, full lint,
-build, repository hygiene, four test shards, and path-sensitive specialist
-checks. `package-lock.json`, UI lockfiles, and the remote-lane
-`.beads/issues.jsonl` export count as files but their generated line churn is
-excluded.
+Before any branch push or PR publication, the exact clean commit must pass
+`npm run gate:pre-pr`. The pre-push hook runs it automatically and caches an
+attestation by exact head and base SHA. Never use `--no-verify`. The gate owns
+delivery-rule tests, the change budget, changed-file lint, Semgrep diff scanning,
+changed-file UBS, and changed-workflow lint. Full root lint, build, typecheck,
+repository hygiene, and product tests run only for root runtime/build-graph or
+root lockfile changes. UI and deployment changes use their focused specialist
+checks instead of the backend/Postgres suite. Semgrep rule tests run only when
+the rules change. A new commit or base change invalidates the attestation.
 
-The `change-budget:exception` label is maintainer-only in intent. It requires a
-non-empty `## Change-budget exception` PR section and is only for an indivisible
-generated migration, pure rename, atomic cross-interface change, or reviewed
-integration rollup. It is not for a feature wave that should be split.
-
-All repository changes go through a PR. Never push directly to `main`. Before
-merge, wait for the stable `ci-required` job to pass on the exact PR head:
+Publish with the repo wrapper; do not use raw `gh pr create` or `gh pr edit`:
 
 ```bash
-gh pr checks <number> --watch
+gh gated-pr --title "<title>" --body-file <path>
+```
+
+The wrapper reuses the exact-head local attestation, pushes without recursively
+rerunning the gate, publishes an authenticated exact-head/base commit status, and waits
+for both `ci-required` and `Greptile Review`. A failure returns immediately to
+the publishing agent; it never reruns CI, re-requests Greptile, or starts a new
+review/remediation cycle. Fix the same branch, create one new commit, run the
+bounded final check, and publish that new exact head once.
+
+GitHub CI is deliberately complementary: it validates that commit status and
+change budget, then uses one clean-environment runner for scoped root builds,
+UI checks, or deployment contracts when those paths changed. It never runs the
+full repository product/Postgres suite. It
+does not duplicate local full lint, typecheck, repository hygiene, UBS, or
+Semgrep; scoped clean-environment UI and deployment checks complement their
+local specialist gates. Label changes do not retrigger CI. Greptile remains the
+paid external review.
+
+All repository changes go through a PR. Never push directly to `main`. Before
+merge, verify both required checks on the exact PR head:
+
+```bash
+npm run pr:wait -- --pr <number> --head "$(git rev-parse HEAD)"
 ```
 
 Use GitHub's rebase merge so the small, coherent source commits remain small on
 `main`. Do not squash a multi-commit PR into one oversized commit, and do not
 create merge commits.
 
-If the GitHub plan does not expose required status checks or rulesets for this
-private repository, that platform limitation does not relax this contract:
-agents and operators must still refuse a merge unless `ci-required` is green.
+If GitHub billing, Actions, Greptile, required status checks, or rulesets are
+unavailable, stop. The platform limitation does not relax this contract and is
+not permission to rerun paid services in a loop.
+
+The portable setup and internal reviewer procedure are documented in
+[`docs/internal-review-workflow.md`](./docs/internal-review-workflow.md).
 
 ## Live Alpha Migration Boundary
 
@@ -334,25 +368,25 @@ The rule is simple: if you have not read the commit and the code for a specific 
 
 If your change touches code, run the smallest set of quality gates that proves it.
 
-Common expectations:
+During implementation, run focused tests and changed-file lint for quick
+feedback. At a stable PR-ready commit, the local gate is mandatory:
 
-- `npm run lint:changed -- --base origin/main`
-- `npm run build`
-- targeted `npm test -- --run ...`
-- `npm run verify:settings-contract` for settings/config changes
-- `npm run verify:repository-hygiene` for repo-surface changes
-- smoke or reachability verification for new runtime wiring
+```bash
+npm run gate:pre-pr
+```
 
-During implementation, run targeted tests and changed-file lint locally. Do not
-repeat full-repository lint, build, hygiene, or test suites in every worktree;
-GitHub owns those broad gates. `npm run lint:changed -- --base <integration-base>`
-is mandatory before pushing tracked code. If changed-file lint cannot run, stop
-and surface the blocker instead of silently skipping it.
+The gate always runs delivery-rule tests, budget, changed-file lint, Semgrep
+diff scanning, and changed-file UBS. It adds full root gates only for root
+runtime/build-graph or lockfile changes, and focused UI, deployment, workflow,
+settings, or supply-chain checks only when their paths changed. Do not
+close, integrate, push, or publish tracked work if it fails. Logs and the
+exact-head attestation live in the worktree's Git directory, not in tracked
+files.
 
-No worker or sub-agent may mark a bead done or ask for integration until
-changed-file lint and the targeted tests pass in its worktree. Do not close the
-bead until the PR's `ci-required` job passes. If GitHub Actions is unavailable,
-run the equivalent full lint, build, hygiene, and tests locally before closure.
+No worker or sub-agent may mark a bead done or ask for integration until its
+targeted checks and local gate pass. Do not close the bead until the PR's exact
+head has both `ci-required` and `Greptile Review` green and the change is
+integrated as required by the bead's delivery scope.
 
 Include the result in your handoff.
 
@@ -388,9 +422,10 @@ Use parallel streams only when the dependency graph supports it. Prefer up to th
 
 ### Integration branch policy
 
-- Prefer independently safe, small PRs to `main`, with a final small activation
-  PR. Create a dedicated integration branch only when partial delivery is unsafe
-  or the effort requires combined manual verification.
+- Prefer coherent review units near the normal 25-file/1,500-line budget.
+  Batch compatible small beads instead of opening one paid-review PR per bead.
+  Create a dedicated integration branch when partial delivery is unsafe or the
+  effort requires combined manual verification.
 - Create each worktree from the integration branch and merge each completed stream back into the integration branch, not directly into the protected release branch.
 - Keep the release branch stable while the parallel effort is in flight. Merge the integration branch into the release branch only after the user or operator finishes the required manual verification.
 - For this repo, put parallel worktrees under `$HOME/ai/dev/worktrees/psfn-framework` unless the user explicitly asks for a repo-local `worktrees/` directory instead.
@@ -401,7 +436,7 @@ Use parallel streams only when the dependency graph supports it. Prefer up to th
 1. Select the next highest-priority ready beads that are safe to run in parallel.
 2. Create one worktree per selected bead or stream.
 3. Spawn at most one sub-agent per worktree and give it explicit ownership of its bead, files, and validation scope.
-4. Require each sub-agent to implement only its assigned bead, run targeted validation, run changed-file lint, and commit its work inside its own worktree.
+4. Require each sub-agent to implement only its assigned bead, run targeted validation, and commit its work inside its own worktree. The assembled PR-ready branch must pass the local gate before push.
 5. Let the streams run without constant check-ins. Do not micro-manage active workers; check on them only when they report a blocker, finish, or have been silent for an unusually long interval such as 20 minutes.
 6. When the selected streams are complete, merge them back into the integration branch and resolve conflicts only at the orchestrator level.
 7. Run validation on the integration branch for every merged area, plus broader regression coverage when the combined change surface warrants it.
@@ -413,8 +448,9 @@ Use parallel streams only when the dependency graph supports it. Prefer up to th
 - Merge blocker-unlocking or dependency-clearing beads first when merge order matters.
 - If two streams conflict, resolve the conflict once on the integration branch and rerun the impacted tests there.
 - Do not close a bead without validation evidence for the area it changed.
-- Do not integrate a worker change unless changed-file lint passed in its
-  worktree, and do not close its bead until the PR's `ci-required` result passes.
+- Do not integrate a worker change unless targeted validation passed. Do not
+  publish the assembled branch until the local gate passes, and do not close its
+  beads until both `ci-required` and `Greptile Review` pass on the exact PR head.
 - Keep the bead tracker aligned with the integrated branch state, not with partial work still isolated in side worktrees.
 
 ## Orchestration Hygiene
@@ -435,40 +471,40 @@ A work session is not complete until the changes are committed and pushed.
 Required sequence:
 
 1. File issues for remaining follow-up work.
-2. Run quality gates appropriate to the change.
-   Changed-file lint and targeted tests are mandatory locally for tracked code;
-   broad gates run in GitHub CI.
-3. Update bead status.
-4. Commit bead database state to the local shared Dolt server:
+2. Run targeted checks while developing, then commit the PR-ready exact head.
+3. Rebase on the current remote base and run `npm run gate:pre-pr`.
+4. Update bead status, but keep delivered work open until its exact PR head is
+   green and integrated.
+5. Commit bead database state to the local shared Dolt server:
    ```bash
    bd dolt commit --json
    ```
-5. Push git state:
+6. Publish or update the PR through the guarded wrapper:
    ```bash
-   git pull --rebase
-   git push
-   git status
+   gh gated-pr --title "<title>" --body-file <path>
    ```
-6. Open or update the PR, then wait for `gh pr checks <number> --watch`.
-   Do not merge or close the bead unless `ci-required` passes.
-7. Push bead state only if a Dolt remote is actually configured:
+   This pushes the attested head and waits for `ci-required` and Greptile. Do
+   not run a second watcher or rerun failed checks.
+7. Merge only after both checks pass, then close the delivered beads with
+   commit, file, local-gate, PR-head, and merge evidence.
+8. Push bead state only if a Dolt remote is actually configured:
    ```bash
    bd dolt remote list --json
    # bd dolt push --json
    ```
    If the remote list is empty/null or shows `(none)`, skip `bd dolt push`; the local shared Dolt server is still the authoritative bead store for this checkout.
-8. When a sprint or implementation wave is completed, refresh the kanban export:
+9. When a sprint or implementation wave is completed, refresh the kanban export:
    ```bash
    bd export > .beads/issues.jsonl
    ```
    Do not stage `.beads/issues.jsonl`; `.beads/` is ignored local export/runtime state.
-9. When a sprint or implementation wave is completed, run a Fallow pass and review high-signal findings:
+10. When a sprint or implementation wave is completed, run a Fallow pass and review high-signal findings:
    ```bash
    npx -y fallow --format json > /tmp/fallow-report.json
    ```
-10. Verify the branch is up to date with origin.
-11. Clean up orchestration handles.
-12. Hand off with tests run, remaining risks, and any open beads.
+11. Verify the merged branch is up to date with origin.
+12. Clean up orchestration handles.
+13. Hand off with tests run, remaining risks, and any open beads.
 
 Rules:
 
@@ -478,8 +514,8 @@ Rules:
 - If a sprint or implementation wave closes tracked work, refresh `.beads/issues.jsonl` from the final bead database state before handoff.
 - Never force-add or commit `.beads/`; it is intentionally ignored because the live bead source of truth is the local shared Dolt server.
 - Treat Fallow as sprint or implementation-wave wrap-up hygiene, not a mandatory per-change gate.
-- Do not close a worker bead before changed-file lint, targeted validation, and
-  the PR's `ci-required` result pass.
+- Do not close a worker bead before targeted validation, the exact-head local
+  gate, `ci-required`, Greptile, and the required integration pass.
 
 <!-- BEGIN BEADS INTEGRATION v:1 profile:minimal hash:970c3bf2 -->
 ## Beads Issue Tracker
@@ -536,27 +572,3 @@ This protocol applies when ending a Beads implementation workflow. It is subordi
 - Do not commit or push without clear authority from the active profile or the current user request.
 - If a required sync or push is blocked, stop and report the exact command and error.
 <!-- END BEADS INTEGRATION -->
-
-<!-- BEGIN BEADS CODEX SETUP: generated by bd setup codex -->
-## Beads Issue Tracker
-
-Use Beads (`bd`) for durable task tracking in repositories that include it. Use the `beads` skill at `.agents/skills/beads/SKILL.md` (project install) or `~/.agents/skills/beads/SKILL.md` (global install) for Beads workflow guidance, then use the `bd` CLI for issue operations.
-
-### Quick Reference
-
-```bash
-bd ready                # Find available work
-bd show <id>            # View issue details
-bd update <id> --claim  # Claim work
-bd close <id>           # Complete work
-bd prime                # Refresh Beads context
-```
-
-### Rules
-
-- Use `bd` for all task tracking; do not create markdown TODO lists.
-- Run `bd prime` when Beads context is missing or stale. Codex 0.129.0+ can load Beads context automatically through native hooks; use `/hooks` to inspect or toggle them.
-- Keep persistent project memory in Beads via `bd remember`; do not create ad hoc memory files.
-
-**Architecture in one line:** issues live in a local Dolt DB; sync uses `refs/dolt/data` on your git remote; `.beads/issues.jsonl` is a passive export. See https://github.com/gastownhall/beads/blob/main/docs/SYNC_CONCEPTS.md for details and anti-patterns.
-<!-- END BEADS CODEX SETUP -->

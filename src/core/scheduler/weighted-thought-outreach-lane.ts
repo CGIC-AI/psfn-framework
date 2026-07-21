@@ -38,6 +38,8 @@ export interface WeightedThoughtOutreachTaskOptions {
   icpCandidateAdapter?: IcpWeightedThoughtCandidateAdapter;
   channelPolicy: OutreachChannelPolicy;
   contactId?: string;
+  /** Per-recipient timezone resolver for the quiet-hours gate (bead 2tli). */
+  resolveContactTimeZone?(contactId: string): Promise<string | null>;
   now?: () => number;
 }
 
@@ -112,6 +114,7 @@ export async function runWeightedThoughtOutreachTick(
       nudgeEvaluator: options.nudgeEvaluator,
       ...(options.icpCandidateAdapter ? { icpCandidateAdapter: options.icpCandidateAdapter } : {}),
       ...(options.contactId ? { contactId: options.contactId } : {}),
+      ...(options.resolveContactTimeZone ? { resolveContactTimeZone: options.resolveContactTimeZone } : {}),
     },
     nowMs,
   );

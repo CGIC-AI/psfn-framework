@@ -120,6 +120,7 @@ import { DEFAULT_GATEWAY_TOOL_METADATA_COVERAGE } from '../../core/agent/tool-wi
 import { registerGatewayMessageHandlers } from './gateway-message-handlers.js';
 import { registerIcpTargetChannelInitiationCommand } from './icp-target-channel-command.js';
 import { OutboundReplyDeduper } from '../../system/lifecycle/outbound-reply-dedupe.js';
+import { resolveGatewayConnectFailureExitCode } from './gateway-connect-failure.js';
 import { ObservedGroupMemoryScheduler } from '../../faculties/memory/extraction/group-observed-scheduler.js';
 import { PassiveNameCandidateBuilder } from '../../core/participation/passive-name-candidate.js';
 import { ParticipationAppraiser } from '../../core/participation/appraiser.js';
@@ -244,39 +245,54 @@ async function main(): Promise<void> {
   const primaryUserId = config.voiceTargetUserId?.trim() || process.env.PRIMARY_USER_ID;
 
   log.info(`Connecting to gateway at ${formatGatewayRpcEndpoint(gatewayRpcEndpoint)}...`);
-  const gateway = await GatewayClient.connectEndpoint(gatewayRpcEndpoint, embeddingDims, {
-    companionId: resolveCoreCompanionIdFromConfig(config),
-    ...(config.fleetAuthVerifier
-      ? {
-          requestCapabilityVerifier: createRequestCapabilityVerifier(
-            config.fleetAuthVerifier.requestCapabilities,
-          ),
-        }
-      : {}),
-    ...(config.gatewayCompanionAuthToken
-      ? { companionAuthToken: config.gatewayCompanionAuthToken }
-      : {}),
-    ...(config.gatewaySessionIntegrityAuthToken
-      ? { sessionIntegrityAuthToken: config.gatewaySessionIntegrityAuthToken }
-      : {}),
-    // 23pp per-companion model selection: this companion's effective purpose →
-    // slot-key map (settings.json + settings.overlay.json, validated at startup
-    // against models.json). Transported per call as the wire slotKey and
-    // re-validated fail-closed by the gateway registry.
-    ...(config.modelPurposeSelection
-      ? { modelPurposeSelection: config.modelPurposeSelection }
-      : {}),
-    onModelBudgetBlocked: (event) => {
-      eventBus.emit('model.budget.blocked', event).catch((error) => {
-        log.error('Failed to bridge gateway model budget telemetry', {
-          error: error instanceof Error ? error.message : String(error),
-          provider: event.provider,
-          model: event.model,
-          reason: event.reason,
+  let gateway: GatewayClient;
+  try {
+    gateway = await GatewayClient.connectEndpoint(gatewayRpcEndpoint, embeddingDims, {
+      companionId: resolveCoreCompanionIdFromConfig(config),
+      ...(config.fleetAuthVerifier
+        ? {
+            requestCapabilityVerifier: createRequestCapabilityVerifier(
+              config.fleetAuthVerifier.requestCapabilities,
+            ),
+          }
+        : {}),
+      ...(config.gatewayCompanionAuthToken
+        ? { companionAuthToken: config.gatewayCompanionAuthToken }
+        : {}),
+      ...(config.gatewaySessionIntegrityAuthToken
+        ? { sessionIntegrityAuthToken: config.gatewaySessionIntegrityAuthToken }
+        : {}),
+      // 23pp per-companion model selection: this companion's effective purpose →
+      // slot-key map (settings.json + settings.overlay.json, validated at startup
+      // against models.json). Transported per call as the wire slotKey and
+      // re-validated fail-closed by the gateway registry.
+      ...(config.modelPurposeSelection
+        ? { modelPurposeSelection: config.modelPurposeSelection }
+        : {}),
+      onModelBudgetBlocked: (event) => {
+        eventBus.emit('model.budget.blocked', event).catch((error) => {
+          log.error('Failed to bridge gateway model budget telemetry', {
+            error: error instanceof Error ? error.message : String(error),
+            provider: event.provider,
+            model: event.model,
+            reason: event.reason,
+          });
         });
-      });
-    },
-  });
+      },
+    });
+  } catch (error) {
+    // The connect retry budget (exponential backoff in the transport client) was
+    // exhausted before the gateway became ready. Exit through the supervised
+    // restart path so a fresh process re-attempts the connection, rather than
+    // dying with a generic fatal exit(1).
+    const exitCode = resolveGatewayConnectFailureExitCode(lifecycleRuntimeContract.restart);
+    log.error('Gateway connection could not be established; exiting for supervised restart', {
+      error: error instanceof Error ? error.message : String(error),
+      exitCode,
+      restartStrategy: lifecycleRuntimeContract.restart.strategy,
+    });
+    process.exit(exitCode);
+  }
   // Self-report companion identity before any other traffic. Multi-companion
   // gateways reject unidentified agents fail-closed; a failure here is fatal.
   await gateway.identifyAsAgent();
@@ -1509,6 +1525,10 @@ async function main(): Promise<void> {
         ...(heartbeatChannelId ? { primaryChannelId: heartbeatChannelId } : {}),
         primaryChannelType: 'discord',
       },
+      // Evaluate the quiet-hours gate in the recipient's timezone (2tli).
+      resolveContactTimeZone: async contactId => (
+        (await contactStore.getById(contactId))?.timezone ?? null
+      ),
     });
   } else if (schedulerConfig.weightedThoughtOutreach.enabled) {
     log.warn('weightedThoughtOutreach enabled but no weighted-thought store is available; lane not registered');

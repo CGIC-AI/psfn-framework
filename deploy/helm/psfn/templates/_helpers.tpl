@@ -97,6 +97,16 @@ psfn.io/fleet-target: registered
 {{- default (printf "%s-model-cache" (include "psfn.fullname" .)) .Values.persistence.modelCache.existingClaim -}}
 {{- end -}}
 
+{{- define "psfn.fleetAuthAuthorityFloorClaimName" -}}
+{{- $authorityFloor := .Values.fleetAuth.authorityFloor | default dict -}}
+{{- default (printf "%s-fleet-auth-floor" (include "psfn.fullname" .)) (get $authorityFloor "existingClaim") -}}
+{{- end -}}
+
+{{- define "psfn.fleetAuthAuthorityFloorMountPath" -}}
+{{- $authorityFloor := .Values.fleetAuth.authorityFloor | default dict -}}
+{{- get $authorityFloor "mountPath" | default "" -}}
+{{- end -}}
+
 {{- define "psfn.ownerMigrationImage" -}}
 {{- $root := .root -}}
 {{- $image := .image -}}
@@ -973,6 +983,40 @@ capability-tier.json|scheduler.json|charge-policy.json|skills.json
       readOnly: true
   securityContext:
     {{- toYaml $root.Values.securityContext | nindent 4 }}
+{{- end -}}
+
+{{- define "psfn.fleetAuthAuthorityFloorInitContainer" -}}
+{{- if .Values.fleetAuth.enabled }}
+- name: prepare-fleet-auth-authority-floor
+  image: {{ include "psfn.image" (dict "root" . "image" .Values.workloads.gateway.image) | quote }}
+  imagePullPolicy: {{ default .Values.psfnAppImage.pullPolicy .Values.workloads.gateway.image.pullPolicy }}
+  command:
+    - sh
+    - -c
+    - |
+      set -eu
+      floor_root={{ include "psfn.fleetAuthAuthorityFloorMountPath" . | quote }}
+      chown 999:999 "$floor_root"
+      chmod 0700 "$floor_root"
+      test "$(stat -c '%u:%g:%a' "$floor_root")" = "999:999:700"
+  securityContext:
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: true
+    runAsNonRoot: false
+    runAsUser: 0
+    runAsGroup: 0
+    capabilities:
+      # Drop every ambient capability, then grant only CHOWN to transfer
+      # ownership and FOWNER to tighten the mode after that transfer.
+      drop:
+        - ALL
+      add:
+        - CHOWN
+        - FOWNER
+  volumeMounts:
+    - name: fleet-auth-authority-floor
+      mountPath: {{ include "psfn.fleetAuthAuthorityFloorMountPath" . }}
+{{- end }}
 {{- end -}}
 
 {{- define "psfn.commonVolumes" -}}

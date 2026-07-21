@@ -1,5 +1,9 @@
 import type { SessionEntry } from '../../../core/session/types.js';
-import type { ChannelCache } from '../store-primitives.js';
+import {
+  findLastPreviewableEntry,
+  isPreviewableSessionEntryRole,
+  type ChannelCache,
+} from '../store-primitives.js';
 
 const DEFAULT_MESSAGE_PREVIEW_CHARS = 120;
 
@@ -13,6 +17,10 @@ export function applyLastMessageMetadata(
   cache: ChannelCache,
   entry: Pick<SessionEntry, 'timestamp' | 'role' | 'authorName' | 'content'>,
 ): void {
+  // Only conversational (user/assistant) messages surface as a preview. A
+  // system/tool scaffold appended after a real turn must not overwrite the last
+  // conversational message; leave the existing preview metadata in place.
+  if (!isPreviewableSessionEntryRole(entry.role)) return;
   cache.lastMessageTimestamp = entry.timestamp;
   cache.lastMessageRole = entry.role;
   cache.lastMessageAuthorName = entry.authorName;
@@ -20,7 +28,7 @@ export function applyLastMessageMetadata(
 }
 
 export function syncLastMessageMetadataFromEntries(cache: ChannelCache): void {
-  const lastEntry = cache.entries.at(-1);
+  const lastEntry = findLastPreviewableEntry(cache.entries);
   if (lastEntry) {
     applyLastMessageMetadata(cache, lastEntry);
     return;

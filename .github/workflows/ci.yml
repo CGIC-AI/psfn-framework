@@ -2,134 +2,28 @@ name: CI
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened, ready_for_review, labeled, unlabeled]
-  push:
-    branches: [main]
-  workflow_dispatch:
+    types: [opened, synchronize, reopened, ready_for_review]
 
 permissions:
   contents: read
+  statuses: read
 
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number }}
   cancel-in-progress: true
 
 env:
   NODE_VERSION: 24.13.1
-  BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
-  HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+  BASE_SHA: ${{ github.event.pull_request.base.sha }}
+  HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+  EXPECTED_LOCAL_GATE_STATUS_ACTOR: ${{ vars.LOCAL_GATE_STATUS_ACTOR }}
 
 jobs:
-  change-budget:
-    name: Change budget
-    runs-on: ubuntu-24.04
-    timeout-minutes: 5
-    steps:
-      - name: Check out exact change head
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-        with:
-          fetch-depth: 0
-          persist-credentials: false
-          ref: ${{ env.HEAD_SHA }}
-
-      - name: Set up Node.js
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-
-      - name: Test CI rules
-        run: npm run test:ci-rules
-
-      - name: Enforce PR and commit budgets
-        env:
-          CHANGE_BUDGET_EXCEPTION: ${{ contains(github.event.pull_request.labels.*.name, 'change-budget:exception') }}
-          CHANGE_BUDGET_PR_BODY: ${{ github.event.pull_request.body || '' }}
-        run: |
-          args=(--base "$BASE_SHA" --head "$HEAD_SHA")
-          if [[ "$CHANGE_BUDGET_EXCEPTION" == "true" ]]; then
-            args+=(--exception)
-          fi
-          node scripts/ci/check-change-budget.mjs "${args[@]}"
-
-  lint:
-    name: Lint
+  github-delta:
+    name: GitHub delta
+    if: github.event.pull_request.draft == false
     runs-on: ubuntu-24.04
     timeout-minutes: 10
-    steps:
-      - name: Check out exact change head
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-        with:
-          persist-credentials: false
-          ref: ${{ env.HEAD_SHA }}
-
-      - name: Set up Node.js
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-          cache: npm
-          cache-dependency-path: |
-            package-lock.json
-            admin-ui/package-lock.json
-
-      - run: npm ci
-      - run: npm run lint
-        env:
-          NODE_OPTIONS: --max-old-space-size=4096
-
-  build:
-    name: Build
-    runs-on: ubuntu-24.04
-    timeout-minutes: 10
-    steps:
-      - name: Check out exact change head
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-        with:
-          persist-credentials: false
-          ref: ${{ env.HEAD_SHA }}
-
-      - name: Set up Node.js
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-          cache: npm
-          cache-dependency-path: |
-            package-lock.json
-            admin-ui/package-lock.json
-
-      - run: npm ci
-      - run: npm run build
-        env:
-          NODE_OPTIONS: --max-old-space-size=4096
-
-  typecheck:
-    name: Typecheck (baselined)
-    runs-on: ubuntu-24.04
-    timeout-minutes: 10
-    steps:
-      - name: Check out exact change head
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-        with:
-          persist-credentials: false
-          ref: ${{ env.HEAD_SHA }}
-
-      - name: Set up Node.js
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-          cache: npm
-          cache-dependency-path: |
-            package-lock.json
-            admin-ui/package-lock.json
-
-      - run: npm ci
-      - run: npm run verify:typecheck-baseline
-        env:
-          NODE_OPTIONS: --max-old-space-size=4096
-
-  repository:
-    name: Repository contracts
-    runs-on: ubuntu-24.04
-    timeout-minutes: 15
     steps:
       - name: Check out exact change head
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -148,132 +42,63 @@ jobs:
             admin-ui/package-lock.json
             companion-ui/package-lock.json
 
-      - run: npm ci
-      - run: npm run verify:repository-hygiene
+      - name: Verify exact local-gate status
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/ci/verify-pr-attestation.mjs
 
-      - name: Detect specialist checks
+      - name: Test delivery rules
+        run: npm run test:ci-rules
+
+      - name: Enforce change budget
+        env:
+          CHANGE_BUDGET_EXCEPTION: ${{ contains(github.event.pull_request.labels.*.name, 'change-budget:exception') }}
+          CHANGE_BUDGET_PR_BODY: ${{ github.event.pull_request.body || '' }}
+        run: |
+          args=(--base "$BASE_SHA" --head "$HEAD_SHA")
+          if [[ "$CHANGE_BUDGET_EXCEPTION" == "true" ]]; then
+            args+=(--exception)
+          fi
+          node scripts/ci/check-change-budget.mjs "${args[@]}"
+
+      - name: Detect clean-environment coverage
         id: scope
         run: node scripts/ci/detect-change-scope.mjs --base "$BASE_SHA" --head "$HEAD_SHA"
 
-      - name: Verify settings ownership
-        if: steps.scope.outputs.settings == 'true'
-        run: npm run verify:settings-contract
+      - name: Install root dependencies in a clean environment
+        if: steps.scope.outputs.root_runtime == 'true' || steps.scope.outputs.admin_ui == 'true' || steps.scope.outputs.deployment == 'true'
+        run: npm ci
 
-      - name: Verify supply-chain pins
-        if: steps.scope.outputs.supply_chain == 'true'
-        run: |
-          comparison_base="${BASE_SHA:-HEAD^}"
-          comparison_ref="$(git merge-base "$comparison_base" "$HEAD_SHA")"
-          npm run verify:supply-chain -- --ref "$comparison_ref"
+      - name: Build root runtime in the clean environment
+        if: steps.scope.outputs.root_runtime == 'true'
+        env:
+          NODE_OPTIONS: --max-old-space-size=4096
+        run: npm run build
 
-      - name: Verify deployment contracts
-        if: steps.scope.outputs.deployment == 'true'
-        run: npm run verify:helm-chart && npm run verify:k8s-manifests
-
-      - name: Build and test Garden
+      - name: Build and test Garden in the clean environment
         if: steps.scope.outputs.admin_ui == 'true'
-        run: npm run garden:build && npm run test:garden-ui
+        run: npm ci --prefix admin-ui && npm --prefix admin-ui run build && npm --prefix admin-ui test
 
-      - name: Install, lint, build, and test companion UI
+      - name: Lint, build, and test companion UI in the clean environment
         if: steps.scope.outputs.companion_ui == 'true'
-        run: |
-          npm ci --prefix companion-ui
-          npm --prefix companion-ui run lint
-          npm --prefix companion-ui run build
-          npm --prefix companion-ui test
+        run: npm run verify:companion-ui
 
-  test:
-    name: Tests (${{ matrix.shard }}/4)
-    runs-on: ubuntu-24.04
-    timeout-minutes: 20
-    strategy:
-      fail-fast: false
-      matrix:
-        shard: [1, 2, 3, 4]
-    steps:
-      - name: Check out exact change head
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-        with:
-          persist-credentials: false
-          ref: ${{ env.HEAD_SHA }}
-
-      - name: Set up Node.js
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-          cache: npm
-          cache-dependency-path: |
-            package-lock.json
-            admin-ui/package-lock.json
-
-      - run: npm ci
-      - run: npm test -- --shard=${{ matrix.shard }}/4
-
-  semgrep:
-    name: Semgrep
-    runs-on: ubuntu-24.04
-    timeout-minutes: 15
-    steps:
-      - name: Check out exact change head
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-        with:
-          fetch-depth: 0
-          persist-credentials: false
-          ref: ${{ env.HEAD_SHA }}
-
-      - name: Test committed Semgrep rules
-        run: bash scripts/ci/run-semgrep.sh test
-
-      - name: Scan pull request changes
-        if: github.event_name == 'pull_request'
-        env:
-          SEMGREP_SARIF_OUTPUT: semgrep.sarif
-        run: bash scripts/ci/run-semgrep.sh diff "$BASE_SHA"
-
-      - name: Scan full pushed revision
-        if: github.event_name != 'pull_request'
-        env:
-          SEMGREP_SARIF_OUTPUT: semgrep.sarif
-        run: bash scripts/ci/run-semgrep.sh full
-
-      - name: Retain Semgrep SARIF
-        if: always() && hashFiles('semgrep.sarif') != ''
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: semgrep-sarif-${{ github.run_id }}-${{ github.run_attempt }}
-          path: semgrep.sarif
-          if-no-files-found: error
-          retention-days: 14
+      - name: Verify deployment contracts in the clean environment
+        if: steps.scope.outputs.deployment == 'true'
+        run: npm run verify:deployment-contracts
 
   ci-required:
     name: ci-required
-    if: always()
-    needs: [change-budget, lint, build, typecheck, repository, test, semgrep]
+    if: always() && github.event.pull_request.draft == false
+    needs: [github-delta]
     runs-on: ubuntu-24.04
     timeout-minutes: 2
     steps:
-      - name: Require every CI lane
+      - name: Require the complementary GitHub lane
         env:
-          CHANGE_BUDGET_RESULT: ${{ needs.change-budget.result }}
-          LINT_RESULT: ${{ needs.lint.result }}
-          BUILD_RESULT: ${{ needs.build.result }}
-          TYPECHECK_RESULT: ${{ needs.typecheck.result }}
-          REPOSITORY_RESULT: ${{ needs.repository.result }}
-          TEST_RESULT: ${{ needs.test.result }}
-          SEMGREP_RESULT: ${{ needs.semgrep.result }}
+          GITHUB_DELTA_RESULT: ${{ needs.github-delta.result }}
         run: |
-          results=(
-            "$CHANGE_BUDGET_RESULT"
-            "$LINT_RESULT"
-            "$BUILD_RESULT"
-            "$TYPECHECK_RESULT"
-            "$REPOSITORY_RESULT"
-            "$TEST_RESULT"
-            "$SEMGREP_RESULT"
-          )
-          for result in "${results[@]}"; do
-            if [[ "$result" != "success" ]]; then
-              echo "::error title=Required CI failed::A required lane ended with: $result"
-              exit 1
-            fi
-          done
+          if [[ "$GITHUB_DELTA_RESULT" != "success" ]]; then
+            echo "::error title=Required CI failed::GitHub delta ended with: $GITHUB_DELTA_RESULT"
+            exit 1
+          fi

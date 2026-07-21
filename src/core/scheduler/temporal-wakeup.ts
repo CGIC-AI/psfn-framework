@@ -614,30 +614,60 @@ export function resolveMorningWakeSnapshot(input: {
   return buildWakeWindowSnapshot({ morning, partnerTimestampsMs, nowMs, timeZone });
 }
 
+// Channel types that are never a live conversational partner surface for
+// autonomous wake fan-out: the local dev terminal, the internal subagent lane,
+// and the inter-companion lane. Group chats/DMs (discord, telegram, api),
+// satellites (voice/PWA, which infer to an undefined channelType), and
+// companion-ui remain eligible.
+const NON_LIVE_WAKEUP_CHANNEL_TYPES: ReadonlySet<string> = new Set([
+  'terminal',
+  'subagent',
+  'companion',
+]);
+
 /**
- * Channels feeding the habit estimator: every recently-active channel with
- * partner activity inside habit.extendedWindowDays plus the latest session
- * (always a candidate). Bounded — listRecentlyActiveChannels is last-activity
- * sorted and stops at the lookback edge. Falls back to the latest session alone
- * when the enumeration surface is not wired.
+ * Fail-closed gate for wake fan-out: a channel receives an autonomous wake note
+ * only when it is an actively-used live conversational surface — an active group
+ * chat, DM, or satellite. Testing/internal/public-broadcast sessions and
+ * non-conversational channel types are excluded here (downstream eligibility
+ * also rejects most of these; this keeps the fan-out set itself narrow so an
+ * idle or non-live channel is never even considered).
+ */
+function isLiveWakeupFanoutChannel(channel: StartupSessionMetadata): boolean {
+  const sessionId = channel.sessionId;
+  if (!sessionId) return false;
+  if (isTestingSessionId(sessionId)) return false;
+  if (isInternalSessionId(sessionId)) return false;
+  if (classifyChannelDisclosure(sessionId).channelPrivacy === 'public') return false;
+  if (channel.channelType !== undefined && NON_LIVE_WAKEUP_CHANNEL_TYPES.has(channel.channelType)) {
+    return false;
+  }
+  return true;
+}
+
+/**
+ * Channels feeding the habit estimator: every recently-active live channel with
+ * partner activity inside habit.extendedWindowDays. Bounded —
+ * listRecentlyActiveChannels is last-activity sorted and stops at the lookback
+ * edge. Falls back to the latest session alone when the enumeration surface is
+ * not wired. The most-recent session is no longer force-added when it is idle
+ * past the lookback window (psfn-framework-7toj): an inactive channel must not
+ * feed the estimate.
  */
 function resolveHabitWakeChannelIds(
   sessionManager: TemporalWakeupSessionManagerPort,
   morning: TemporalWakeupMorningConfig,
   nowMs: number,
 ): string[] {
-  const latestId = sessionManager
-    .resolveStartupSessionMetadata('reuse_latest_session')?.sessionId;
-  const eligibleLatestId = latestId && !isTestingSessionId(latestId) ? latestId : undefined;
+  const latest = sessionManager.resolveStartupSessionMetadata('reuse_latest_session');
   if (!sessionManager.listRecentlyActiveChannels) {
-    return eligibleLatestId ? [eligibleLatestId] : [];
+    return latest && isLiveWakeupFanoutChannel(latest) ? [latest.sessionId] : [];
   }
   const lookbackMs = Math.max(0, morning.habit.extendedWindowDays) * 24 * HOUR_MS;
   const ids = new Set<string>();
   for (const channel of sessionManager.listRecentlyActiveChannels({ lookbackMs, nowMs })) {
-    if (channel.sessionId && !isTestingSessionId(channel.sessionId)) ids.add(channel.sessionId);
+    if (isLiveWakeupFanoutChannel(channel)) ids.add(channel.sessionId);
   }
-  if (eligibleLatestId) ids.add(eligibleLatestId);
   return [...ids];
 }
 
@@ -649,16 +679,18 @@ interface ResolvedWakeupSessionContext {
 }
 
 /**
- * Recently-active conversational channels the wake lanes fan out to (bead
- * psfn-framework-2x37.3). When the session manager exposes enumeration, every
- * channel with partner activity inside `activeChannelLookbackHours` is a
- * candidate; per-channel eligibility (internal/public/idle/anti-loop) still
- * gates each one downstream. The latest session is always a candidate even
- * when the partner has been idle past the lookback window — a multi-day
- * absence is exactly when the new-day frame matters most, and pre-fan-out
- * behavior always evaluated it. Without the enumeration surface the module
- * falls back to that single latest session alone, so it never assumes a
- * capability the caller did not wire.
+ * Recently-active live channels the wake lanes fan out to (bead
+ * psfn-framework-2x37.3, narrowed by psfn-framework-7toj). When the session
+ * manager exposes enumeration, every actively-used live conversational channel
+ * (group chat / DM / satellite) with partner activity inside
+ * `activeChannelLookbackHours` is a candidate; per-channel eligibility
+ * (idle/anti-loop) still gates each one downstream. The most-recent session is
+ * NOT force-added when it is idle past the lookback window — fanning a wake note
+ * to a channel with no recent partner activity is exactly the over-broad
+ * behavior this lane must avoid (fail closed: when in doubt, exclude). Without
+ * the enumeration surface the module falls back to the single latest session
+ * (still gated as a live channel), so it never assumes a capability the caller
+ * did not wire.
  */
 function enumerateWakeupChannels(
   options: TemporalWakeupRuntimeOptions,
@@ -666,20 +698,12 @@ function enumerateWakeupChannels(
 ): StartupSessionMetadata[] {
   const latest = options.sessionManager.resolveStartupSessionMetadata('reuse_latest_session');
   if (!options.sessionManager.listRecentlyActiveChannels) {
-    return latest && !isTestingSessionId(latest.sessionId) ? [latest] : [];
+    return latest && isLiveWakeupFanoutChannel(latest) ? [latest] : [];
   }
   const lookbackMs = Math.max(0, options.config.activeChannelLookbackHours) * HOUR_MS;
-  const channels = options.sessionManager
+  return options.sessionManager
     .listRecentlyActiveChannels({ lookbackMs, nowMs })
-    .filter(channel => !isTestingSessionId(channel.sessionId));
-  if (
-    latest
-    && !isTestingSessionId(latest.sessionId)
-    && !channels.some(channel => channel.sessionId === latest.sessionId)
-  ) {
-    channels.push(latest);
-  }
-  return channels;
+    .filter(isLiveWakeupFanoutChannel);
 }
 
 /**

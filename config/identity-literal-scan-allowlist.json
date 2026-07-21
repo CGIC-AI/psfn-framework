@@ -2065,6 +2065,12 @@
       "pattern": "identity-legacy-slug"
     },
     {
+      "path": "src/persistence/postgres/analysis-workbench-trace-store.ts",
+      "contains": "applicationName: 'psfn-analysis-workbench-traces'",
+      "reason": "Postgres application_name for the analysis-workbench trace store follows the established psfn-* connection naming used by every other runtime store adapter.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
       "path": "src/channels/backplane/companion-relay/redaction.ts",
       "contains": "psfn-framework-13sk",
       "reason": "Approval redaction comments cite the bead that owns the v2 approval-envelope projection.",

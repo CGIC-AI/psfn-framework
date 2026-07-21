@@ -148,10 +148,29 @@ export async function publishPr(argv = process.argv.slice(2), {
     runCommand('gh', editArgs, { stdio: 'inherit' });
   }
 
-  if (existing?.isDraft) {
+  const flippedReady = existing?.isDraft === true;
+  if (flippedReady) {
     runCommand('gh', ['pr', 'ready', String(existing.number)], { stdio: 'inherit' });
   }
-  pushBranch(branch, state.head, { runCommand, spawnCommand });
+  try {
+    pushBranch(branch, state.head, { runCommand, spawnCommand });
+  } catch (error) {
+    if (flippedReady) {
+      // The PR was flipped ready for a push that never landed; restore draft so
+      // CI/Greptile do not run against the stale head. Fail loudly either way.
+      try {
+        runCommand('gh', ['pr', 'ready', '--undo', String(existing.number)], { stdio: 'inherit' });
+        console.error(`Push failed; PR #${existing.number} returned to draft (stale head not published).`);
+      } catch (undoError) {
+        console.error(
+          `Push failed AND restoring draft state failed for PR #${existing.number}; `
+          + `it is READY at a stale head — convert it back to draft manually. `
+          + `(${undoError instanceof Error ? undoError.message : String(undoError)})`,
+        );
+      }
+    }
+    throw error;
+  }
   publishRemoteAttestation(state, runCommand);
   if (!existing) {
     runCommand(

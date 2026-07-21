@@ -1,7 +1,11 @@
 import { readFileSync, readdirSync } from 'node:fs';
 import { join, relative, sep } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { scanFileForTimeoutOverrides, type FileOverrideScan } from './integration-timeout-scan.js';
+import {
+  scanFileForTimeoutOverrides,
+  scanSourceForTimeoutOverrides,
+  type FileOverrideScan,
+} from './integration-timeout-scan.js';
 
 /**
  * Timeout-margin policy enforcement.
@@ -72,6 +76,34 @@ for (const entry of registry.overrides) {
 }
 
 describe('integration timeout override policy', () => {
+  it('flags dynamic timeout expressions without false-positives on option objects', () => {
+    const scan = scanSourceForTimeoutOverrides(
+      'synthetic.integration.test.ts',
+      [
+        "it('dynamic', { timeout: getRestoreTimeout() }, () => {});",
+        "it('options without timeout', { retry: 2 }, () => {});",
+        "it('static', () => {}, 120_000);",
+      ].join('\n'),
+    );
+    expect(scan.unresolvedSites).toHaveLength(1);
+    expect(scan.unresolvedSites[0]?.expression).toBe('getRestoreTimeout()');
+    expect(scan.sites.map(site => site.timeoutMs)).toEqual([120_000]);
+  });
+
+  it('rejects dynamic timeout expressions the scanner cannot resolve', () => {
+    const unresolved: string[] = [];
+    for (const scan of scans) {
+      for (const site of scan.unresolvedSites) {
+        unresolved.push(`${scan.file}:${site.line} ${site.callee}(... ${site.expression} ...)`);
+      }
+    }
+    expect(
+      unresolved,
+      `Dynamic timeout expression(s) would bypass the registry policy. Use a named `
+      + `numeric constant so the scanner can resolve and enforce the override:\n${unresolved.join('\n')}`,
+    ).toEqual([]);
+  });
+
   it('registers every discovered timeout override (fail closed on unregistered)', () => {
     const unregistered: string[] = [];
     for (const scan of scans) {

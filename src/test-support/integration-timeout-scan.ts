@@ -24,9 +24,22 @@ export interface TimeoutOverrideSite {
   readonly timeoutMs: number;
 }
 
+export interface UnresolvedTimeoutSite {
+  readonly callee: string;
+  readonly line: number;
+  /** Source text of the timeout expression the scanner could not resolve. */
+  readonly expression: string;
+}
+
 export interface FileOverrideScan {
   readonly file: string;
   readonly sites: readonly TimeoutOverrideSite[];
+  /**
+   * Timeout-position expressions that did not resolve to a number (e.g.
+   * `{ timeout: getRestoreTimeout() }`). The policy test fails on these:
+   * a dynamic timeout would otherwise bypass registry enforcement silently.
+   */
+  readonly unresolvedSites: readonly UnresolvedTimeoutSite[];
   /** Sorted, de-duplicated distinct timeout values used in the file. */
   readonly distinctTimeoutMs: readonly number[];
 }
@@ -132,11 +145,38 @@ function resolveTimeoutArgument(
  *   - hooks:    (fn, timeout)
  *   - describe: (name, fn, timeout)
  */
+type OverrideExtraction =
+  | { readonly kind: 'resolved'; readonly timeoutMs: number }
+  | { readonly kind: 'unresolved'; readonly expression: ts.Expression };
+
+function extractionOf(
+  node: ts.Expression,
+  constants: Map<string, number>,
+): OverrideExtraction {
+  const value = resolveTimeoutArgument(node, constants);
+  if (value !== undefined) return { kind: 'resolved', timeoutMs: value };
+  return { kind: 'unresolved', expression: node };
+}
+
+/**
+ * A function-like expression in the positional timeout slot is the test/hook
+ * body (e.g. `it('name', { retry: 2 }, fn)`), not a timeout — vitest never
+ * accepts a function there, so it is skipped rather than flagged unresolved.
+ */
+function positionalExtractionOf(
+  node: ts.Expression,
+  constants: Map<string, number>,
+): OverrideExtraction | undefined {
+  const target = unwrapExpression(node);
+  if (ts.isArrowFunction(target) || ts.isFunctionExpression(target)) return undefined;
+  return extractionOf(node, constants);
+}
+
 function extractOverride(
   call: ts.CallExpression,
   root: string,
   constants: Map<string, number>,
-): number | undefined {
+): OverrideExtraction | undefined {
   const args = call.arguments;
 
   // Options-object form: it('name', { timeout: N }, fn).
@@ -148,8 +188,7 @@ function extractOverride(
           && ts.isIdentifier(property.name)
           && property.name.text === 'timeout'
         ) {
-          const value = resolveTimeoutArgument(property.initializer, constants);
-          if (value !== undefined) return value;
+          return extractionOf(property.initializer, constants);
         }
       }
     }
@@ -158,13 +197,13 @@ function extractOverride(
   if (HOOK_CALLEES.has(root)) {
     // (fn, timeout)
     const timeoutArg = args.at(1);
-    return timeoutArg ? resolveTimeoutArgument(timeoutArg, constants) : undefined;
+    return timeoutArg ? positionalExtractionOf(timeoutArg, constants) : undefined;
   }
 
   if (TEST_CASE_CALLEES.has(root) || SUITE_CALLEES.has(root)) {
     // (name, fn, timeout) — timeout is the third positional argument.
     const timeoutArg = args.at(2);
-    return timeoutArg ? resolveTimeoutArgument(timeoutArg, constants) : undefined;
+    return timeoutArg ? positionalExtractionOf(timeoutArg, constants) : undefined;
   }
 
   return undefined;
@@ -178,15 +217,24 @@ export function scanSourceForTimeoutOverrides(
   const source = ts.createSourceFile(file, sourceText, ts.ScriptTarget.Latest, true);
   const constants = collectNumericConstants(source);
   const sites: TimeoutOverrideSite[] = [];
+  const unresolvedSites: UnresolvedTimeoutSite[] = [];
 
   const visit = (node: ts.Node): void => {
     if (ts.isCallExpression(node)) {
       const root = calleeRootName(node.expression);
       if (root && (TEST_CASE_CALLEES.has(root) || HOOK_CALLEES.has(root) || SUITE_CALLEES.has(root))) {
-        const timeoutMs = extractOverride(node, root, constants);
-        if (timeoutMs !== undefined) {
+        const extraction = extractOverride(node, root, constants);
+        if (extraction !== undefined) {
           const { line } = source.getLineAndCharacterOfPosition(node.getStart(source));
-          sites.push({ callee: root, line: line + 1, timeoutMs });
+          if (extraction.kind === 'resolved') {
+            sites.push({ callee: root, line: line + 1, timeoutMs: extraction.timeoutMs });
+          } else {
+            unresolvedSites.push({
+              callee: root,
+              line: line + 1,
+              expression: extraction.expression.getText(source),
+            });
+          }
         }
       }
     }
@@ -195,7 +243,7 @@ export function scanSourceForTimeoutOverrides(
   visit(source);
 
   const distinctTimeoutMs = [...new Set(sites.map(site => site.timeoutMs))].sort((a, b) => a - b);
-  return { file, sites, distinctTimeoutMs };
+  return { file, sites, unresolvedSites, distinctTimeoutMs };
 }
 
 /** Scan a file on disk (path relative to the repo root or absolute). */

@@ -866,6 +866,9 @@ async function main(): Promise<void> {
     personaPreamble,
   });
   const dreamMeaningPass = new DreamMeaningPass(episodicStore, agentLoop, {
+    // Ground each meaning in the real turns she lived, not the auto-summarized
+    // title/landmark (bead dtym). Same reader synthesis/consolidation use.
+    transcriptReader: sessionManager,
     onGateEvent: (event) => {
       eventBus.emit('memory.dream_meaning.gate', event).catch((error: unknown) => {
         log.warn('Dream-meaning gate event emit failed', { error: String(error) });

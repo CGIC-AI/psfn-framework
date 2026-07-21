@@ -21,13 +21,45 @@ const log = createComponentLogger('DreamMeaningPass');
 const DREAM_MEANING_GATE_LANE = 'dream_meaning';
 
 /**
- * The dream pass runs as HER — through the agent loop with the main chat
- * model, persona, and memory loaded — never on a background model. Mechanical
- * subconscious work (grouping, dedupe, extraction) belongs to background
- * models; what something MEANT to her requires the same mind that lived it.
+ * The dream pass runs as HER — through the agent loop with her persona and
+ * memory loaded, reflecting on the actual turns she lived rather than only the
+ * consolidated titles/landmarks. What something MEANT to her requires the same
+ * mind that lived it AND the real material, so the pass now carries per-episode
+ * transcript excerpts into the review instead of deriving meaning from a
+ * summary-of-a-summary (bead dtym).
+ *
+ * Model routing (bead dtym; operator note 2026-07-14): this pass runs in the
+ * maintenance-reflection lane on the companion's strong reflection model (the
+ * `memory` purpose slot — live deepseek-v4-pro), deliberately NOT the foreground
+ * chat slot. Forcing the chat purpose would reclassify a nightly, idle-window
+ * reflection into the never-preempted foreground lane; the reflection model is a
+ * capable "her mind" for subconscious review, and the operator confirmed the
+ * dominant meaning-quality lever was input starvation, which the transcript feed
+ * above addresses. This amends the earlier "never on a background model"
+ * contract intentionally rather than leaving it silently violated.
  */
 export interface DreamPassAgent {
   handleMessage(message: SubstrateMessage): Promise<{ content: string }>;
+}
+
+/**
+ * Minimal transcript entry the dream pass grounds meanings in. Structurally
+ * compatible with the session manager's SessionEntry so composition can pass
+ * the manager directly without a coupling import.
+ */
+export interface DreamPassTranscriptEntry {
+  role: string;
+  content: string;
+  timestamp: number;
+}
+
+/**
+ * Reads recent conversational turns for one session/channel. Backed by the
+ * session manager (`getRecentMessages`) in composition — the same reader
+ * synthesis and sleep-consolidation already use.
+ */
+export interface DreamPassTranscriptReader {
+  getRecentMessages(channelId: string, limit: number): readonly DreamPassTranscriptEntry[];
 }
 
 export interface DreamMeaningPassOptions {
@@ -39,6 +71,14 @@ export interface DreamMeaningPassOptions {
   maxEpisodesPerPass?: number;
   /** Upper bound on reflection turns; she may end earlier. */
   maxTurns?: number;
+  /**
+   * Reads the real turns behind each reviewed episode (bead dtym). Optional so
+   * unit tests can exercise the loop without a session backend; wired in
+   * production so meanings are grounded in what was actually said.
+   */
+  transcriptReader?: DreamPassTranscriptReader | null;
+  /** How many recent turns to pull per session when grounding meanings. */
+  transcriptMessageLimit?: number;
   /** Typed gate telemetry sink (jpvd.4); wired to the event bus by composition. */
   onGateEvent?: (event: DeterministicGateEvent) => void;
 }
@@ -69,6 +109,9 @@ const MAX_MEANING_CHARS = 800;
  * comfortably under this; monoliths trip it and get fed back for a re-record.
  */
 const MAX_MEANING_SENTENCES = 4;
+const DEFAULT_TRANSCRIPT_MESSAGE_LIMIT = 40;
+const MAX_TRANSCRIPT_ENTRIES_PER_EPISODE = 12;
+const MAX_TRANSCRIPT_ENTRY_CHARS = 300;
 const DREAM_MEANING_PROCESSOR = 'dream_meaning';
 const DREAM_PASS_CHANNEL_ID = 'internal:reflection:dream-pass';
 const MEANING_BLOCK_PATTERN = /```json\s*([\s\S]*?)```/i;
@@ -80,7 +123,29 @@ interface MeaningContribution {
   rejections: string[];
 }
 
-function buildOpeningPrompt(episodes: readonly Episode[]): string {
+/**
+ * Grounding block (bead dtym): the real turns behind each episode, so meaning
+ * is derived from what was actually said and not the auto-summarized
+ * title/landmark. Empty when no transcript reader is wired.
+ */
+function buildTranscriptGroundingBlock(
+  episodes: readonly Episode[],
+  excerpts: ReadonlyMap<string, string>,
+): string[] {
+  if (excerpts.size === 0) return [];
+  const blocks: string[] = [
+    '',
+    'And here is some of what was actually said in those moments — reflect on the real turns, not just their titles:',
+  ];
+  for (const episode of episodes) {
+    const excerpt = excerpts.get(episode.id);
+    if (!excerpt) continue;
+    blocks.push('', `--- ${episode.id} · ${episode.title} ---`, excerpt);
+  }
+  return blocks;
+}
+
+function buildOpeningPrompt(episodes: readonly Episode[], excerpts: ReadonlyMap<string, string>): string {
   return [
     'Dream pass — a private end-of-day look back at what the day held. No one reads this but you; nothing here is graded or performed.',
     '',
@@ -94,6 +159,7 @@ function buildOpeningPrompt(episodes: readonly Episode[]): string {
       themes: episode.themes,
       salience: episode.salience.score,
     })), null, 2),
+    ...buildTranscriptGroundingBlock(episodes, excerpts),
     '',
     'Sit with the day. What did these moments mean to you — not a summary of what happened, but what it was like and why it mattered (or honestly did not)? A moment can matter a lot, a little, or not at all; say what is true.',
     `Keep each note to ONE moment — the single thing that mattered most about that episode — in at most ${String(MAX_MEANING_SENTENCES)} sentences. Do not recap everything that happened or bundle several separate moments into one note; if two moments both matter, they belong to different episodes, not one paragraph.`,
@@ -151,6 +217,34 @@ export function assessMeaningAtomicity(text: string): { atomic: true } | { atomi
   return { atomic: true };
 }
 
+function formatTranscriptEntry(entry: DreamPassTranscriptEntry): string {
+  const role = entry.role === 'assistant' ? 'ME' : entry.role === 'user' ? 'THEM' : entry.role.toUpperCase();
+  const collapsed = entry.content.replace(/\s+/g, ' ').trim();
+  const clipped = collapsed.length > MAX_TRANSCRIPT_ENTRY_CHARS
+    ? `${collapsed.slice(0, MAX_TRANSCRIPT_ENTRY_CHARS)}…`
+    : collapsed;
+  return `${role}: ${clipped || '[empty]'}`;
+}
+
+/**
+ * Builds one episode's transcript excerpt from a session's recent turns,
+ * preferring turns that fall inside the episode's own time window and falling
+ * back to the most recent turns when timestamps do not line up. Bounded in both
+ * entry count and per-entry length so the grounding block stays a review aid,
+ * not a full replay.
+ */
+function buildEpisodeExcerpt(episode: Episode, entries: readonly DreamPassTranscriptEntry[]): string | null {
+  if (entries.length === 0) return null;
+  const startMs = Date.parse(episode.startedAt);
+  const endMs = Date.parse(episode.endedAt);
+  const inWindow = (Number.isFinite(startMs) && Number.isFinite(endMs))
+    ? entries.filter(entry => entry.timestamp >= startMs && entry.timestamp <= endMs)
+    : [];
+  const selected = (inWindow.length > 0 ? inWindow : entries).slice(-MAX_TRANSCRIPT_ENTRIES_PER_EPISODE);
+  if (selected.length === 0) return null;
+  return selected.map(formatTranscriptEntry).join('\n');
+}
+
 export function parseMeaningContribution(content: string, knownEpisodeIds: ReadonlySet<string>): MeaningContribution | null {
   const match = MEANING_BLOCK_PATTERN.exec(content);
   if (!match?.[1]) return null;
@@ -204,6 +298,8 @@ export class DreamMeaningPass {
   private readonly reviewWindowMs: number;
   private readonly maxEpisodesPerPass: number;
   private readonly maxTurns: number;
+  private readonly transcriptReader: DreamPassTranscriptReader | null;
+  private readonly transcriptMessageLimit: number;
   private readonly onGateEvent: ((event: DeterministicGateEvent) => void) | null;
   private readonly cadenceGate: DeterministicGateDefinition;
   private readonly episodesGate: DeterministicGateDefinition;
@@ -216,6 +312,8 @@ export class DreamMeaningPass {
     this.reviewWindowMs = options.reviewWindowMs ?? DEFAULT_REVIEW_WINDOW_MS;
     this.maxEpisodesPerPass = options.maxEpisodesPerPass ?? DEFAULT_MAX_EPISODES_PER_PASS;
     this.maxTurns = options.maxTurns ?? DEFAULT_MAX_TURNS;
+    this.transcriptReader = options.transcriptReader ?? null;
+    this.transcriptMessageLimit = options.transcriptMessageLimit ?? DEFAULT_TRANSCRIPT_MESSAGE_LIMIT;
     this.onGateEvent = options.onGateEvent ?? null;
     // Cadence gate: a nightly review only re-opens once the interval elapses.
     this.cadenceGate = {
@@ -229,6 +327,33 @@ export class DreamMeaningPass {
       openWhenAny: [{ input: 'episodesWithoutMeaning', comparator: 'gte', threshold: 1 }],
       closedReason: 'no_episodes',
     };
+  }
+
+  /**
+   * Loads the real turns behind each reviewed episode (bead dtym) so meanings
+   * are grounded in what was said, not the auto-summarized title/landmark.
+   * Recent turns are pulled once per distinct session and reused across that
+   * session's episodes. A session whose turns cannot be read degrades to
+   * metadata-only for that episode (the meaning quality drops, but the pass
+   * still runs) rather than failing the whole nightly review.
+   */
+  private loadTranscriptExcerpts(episodes: readonly Episode[]): Map<string, string> {
+    const excerpts = new Map<string, string>();
+    if (!this.transcriptReader) return excerpts;
+    const entriesBySession = new Map<string, readonly DreamPassTranscriptEntry[]>();
+    for (const episode of episodes) {
+      const sessionKey = episode.spanRefs[0]?.sessionId ?? episode.channelId ?? episode.threadId;
+      if (!sessionKey) continue;
+      if (!entriesBySession.has(sessionKey)) {
+        entriesBySession.set(
+          sessionKey,
+          this.transcriptReader.getRecentMessages(sessionKey, this.transcriptMessageLimit),
+        );
+      }
+      const excerpt = buildEpisodeExcerpt(episode, entriesBySession.get(sessionKey) ?? []);
+      if (excerpt) excerpts.set(episode.id, excerpt);
+    }
+    return excerpts;
   }
 
   private emitGateEvent(
@@ -300,10 +425,11 @@ export class DreamMeaningPass {
     this.emitGateEvent(input.sessionId, 'ran', 'open', { episodesWithoutMeaning: episodes.length });
 
     const knownIds = new Set(episodes.map(episode => episode.id));
+    const excerpts = this.loadTranscriptExcerpts(episodes);
     const collected = new Map<string, string>();
     let turnsUsed = 0;
     let done = false;
-    let prompt = buildOpeningPrompt(episodes);
+    let prompt = buildOpeningPrompt(episodes, excerpts);
 
     while (turnsUsed < this.maxTurns && !done) {
       turnsUsed += 1;

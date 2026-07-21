@@ -6,16 +6,21 @@ import {
   type ResolvedShellExecution,
 } from './shell-execution-policy.js';
 
-const READ_ONLY_ETC_FILES = [
+export const READ_ONLY_ETC_PATHS = [
+  '/etc/alternatives',
+  '/etc/ca-certificates',
   '/etc/group',
+  '/etc/hosts',
   '/etc/ld.so.cache',
   '/etc/nsswitch.conf',
   '/etc/passwd',
+  '/etc/resolv.conf',
+  '/etc/ssl',
 ] as const;
 
 function appendReadOnlyEtcBindings(args: string[]): void {
   args.push('--dir', '/etc');
-  for (const path of READ_ONLY_ETC_FILES) {
+  for (const path of READ_ONLY_ETC_PATHS) {
     if (existsSync(path)) args.push('--ro-bind', path, path);
   }
 }

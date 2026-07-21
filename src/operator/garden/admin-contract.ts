@@ -59,6 +59,7 @@ import type { AdminPartnerAffectShadowService } from './services/partner-affect-
 import type { AdminToolConformanceService } from './services/tool-conformance-service.js';
 import type { AdminSharedWorkspaceService } from './services/shared-workspace-service.js';
 import type { AdminPrivacyBreakGlassService } from './services/privacy-break-glass-service.js';
+import type { OwnerFileReloadWatcher } from './services/owner-file-reload-watcher.js';
 import type { GardenRequestContext } from './garden-request-context.js';
 
 export interface ConfirmationQueueAdminApi {
@@ -219,6 +220,11 @@ export interface GardenAdminDomainServices {
   /** Fleet Command room-state and arbitration telemetry (jp36.8.1). */
   roomArbiter?: AdminRoomArbiterService | null;
   settings: AdminSettingsService;
+  /**
+   * Owner-file hot-reload watcher (bead nudf). Present only for the in-process
+   * agent Garden; the transport server closes it on shutdown.
+   */
+  ownerFileReloadWatcher?: OwnerFileReloadWatcher | null;
   sharedWorkspace?: AdminSharedWorkspaceService | null;
   /** Intake quarantine approval queue (htm9.11 Cognitive Security tab). */
   intakeQuarantine: AdminIntakeQuarantineService;

@@ -237,6 +237,7 @@ export class GardenAdminTransportServer implements Lifecycle {
   }
 
   async stop(): Promise<void> {
+    this.config.services.ownerFileReloadWatcher?.close();
     await this.config.services.icpAutonomy?.close?.();
     await this.config.services.roomArbiter?.close?.();
     return await new Promise((resolve, reject) => {

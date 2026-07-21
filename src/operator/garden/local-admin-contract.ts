@@ -123,7 +123,8 @@ import { AdminSubsystemHealthDataService } from './services/subsystem-health-ser
 import { createAdminToolConformanceService } from './services/tool-conformance-service.js';
 import type { ToolConformanceRunner } from '../../core/agent/tool-conformance/runner.js';
 import { AdminSessionDataService } from './services/session-service.js';
-import { AdminSettingsDataService } from './services/settings-service.js';
+import { AdminSettingsDataService, reloadOwnerModelsFromDisk } from './services/settings-service.js';
+import { OwnerFileReloadWatcher } from './services/owner-file-reload-watcher.js';
 import { createAdminIntakeQuarantineService } from './services/intake-quarantine-service.js';
 import { createIntakeQuarantineStore } from '../../core/cogsec/intake/quarantine-store.js';
 import { createAdminDriftReviewService } from './services/drift-review-service.js';
@@ -355,6 +356,24 @@ export function createInProcessGardenAdminContract(
       ? { effectiveSchedulerConfig: options.effectiveSchedulerConfig }
       : {}),
   });
+  // bead nudf: hot-reload models.json when it is edited directly on disk (no
+  // Garden save) by re-reading it and driving the same in-place applySettings +
+  // refreshModels hook the Garden save path uses. Other owner files are not
+  // watched (see OwnerFileReloadWatcher.watchedOwnerFiles) and still require a
+  // restart after a direct edit.
+  const ownerFileReloadWatcher = new OwnerFileReloadWatcher({
+    files: [{
+      ownerFile: 'models.json',
+      path: join(options.config.dataDir, 'models.json'),
+      reload: () => {
+        const result = reloadOwnerModelsFromDisk({ config: options.config, configStore });
+        if (!result.ok) {
+          throw new Error(`models.json disk reload failed: ${result.message}`);
+        }
+      },
+    }],
+  });
+  ownerFileReloadWatcher.start();
   const icpAutonomy = options.icpRuntimeEnablement && options.effectiveSchedulerConfig
     ? new AdminIcpAutonomyDataService({
       localCompanionId: options.config.companionId,
@@ -597,6 +616,7 @@ export function createInProcessGardenAdminContract(
       ? new AdminConcernDataService(options.concernStore, concernResolutionArcJournal)
       : null,
     settings: settingsService,
+    ownerFileReloadWatcher,
     sharedWorkspace: options.config.sharedWorkspacePath
       ? new AdminSharedWorkspaceService(options.config.sharedWorkspacePath)
       : null,

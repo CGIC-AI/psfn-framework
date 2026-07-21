@@ -219,12 +219,27 @@ export async function runPostgresMigrations(
   await ensurePostgresSchema(pool, statements);
 }
 
+/**
+ * PostgreSQL text and jsonb storage cannot hold a NUL (0x00) byte: the wire
+ * protocol rejects it with `22021 invalid byte sequence for encoding "UTF8":
+ * 0x00`. NUL bytes reach bind parameters through untrusted inbound content
+ * (e.g. a portal identity string, or a JSON payload that was serialized to a
+ * string before binding), so strip them at this single choke point before any
+ * value is handed to the driver. Only the invalid-for-Postgres NUL byte is
+ * removed; every other byte is preserved.
+ */
+function stripNulBytesFromBindParameters(values: readonly unknown[]): unknown[] {
+  return values.map(value => (typeof value === 'string' && value.includes('\u0000')
+    ? value.replace(/\u0000/g, '')
+    : value));
+}
+
 export async function queryRows<T extends QueryResultRow>(
   pool: Pool,
   text: string,
   values: readonly unknown[] = [],
 ): Promise<T[]> {
-  const result = await pool.query<T>(text, [...values]);
+  const result = await pool.query<T>(text, stripNulBytesFromBindParameters(values));
   return result.rows;
 }
 
@@ -233,7 +248,7 @@ export async function queryOne<T extends QueryResultRow>(
   text: string,
   values: readonly unknown[] = [],
 ): Promise<T | undefined> {
-  const result = await pool.query<T>(text, [...values]);
+  const result = await pool.query<T>(text, stripNulBytesFromBindParameters(values));
   return result.rows[0];
 }
 
@@ -242,5 +257,5 @@ export async function executeQuery(
   text: string,
   values: readonly unknown[] = [],
 ): Promise<QueryResult> {
-  return await pool.query(text, [...values]);
+  return await pool.query(text, stripNulBytesFromBindParameters(values));
 }

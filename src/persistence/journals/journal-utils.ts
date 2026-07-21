@@ -11,6 +11,7 @@ export {
   readJournalFile,
   readJournalEntriesBefore,
   readJournalFirstEntry,
+  readJournalMatchingEntriesBackward,
   readJournalTailEntries,
   scanJournalLinesBackward,
   scanJournalFileMetadata,

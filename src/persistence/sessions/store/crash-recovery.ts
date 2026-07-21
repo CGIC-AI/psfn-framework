@@ -7,10 +7,11 @@ import {
   journalToTurnTombstoneEntry,
 } from '../../journals/journal-utils.js';
 import type { JournalEntry } from '../../../core/session/types.js';
-import type {
-  ChannelCache,
-  ChannelIndexEntry,
-  CrashRecoveryExtractionCandidate,
+import {
+  isPreviewableSessionEntryRole,
+  type ChannelCache,
+  type ChannelIndexEntry,
+  type CrashRecoveryExtractionCandidate,
 } from '../store-primitives.js';
 
 export function isGracefulShutdownEntry(entry: JournalEntry | null): boolean {
@@ -23,7 +24,9 @@ export function applyJournalState(cache: ChannelCache, entry: JournalEntry): voi
   cache.lastTimestamp = entry.timestamp;
 
   const message = journalToSessionEntry(entry);
-  if (message) {
+  // Only conversational (user/assistant) messages surface as a preview; system/
+  // tool scaffold entries never overwrite the last conversational message.
+  if (message && isPreviewableSessionEntryRole(message.role)) {
     cache.lastMessageTimestamp = message.timestamp;
     cache.lastMessageRole = message.role;
     cache.lastMessageAuthorName = message.authorName;

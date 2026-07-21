@@ -840,6 +840,57 @@ describe('SessionStore', () => {
     expect(activity?.lastMessagePreview).toBe('second message');
   });
 
+  it('never surfaces a trailing system scaffold entry as the session preview (live append)', () => {
+    const channelId = 'api:scaffold-live';
+    store.append({ channelId, role: 'user', content: 'plan my week', timestamp: 1_000 });
+    store.append({ channelId, role: 'assistant', content: 'here is your plan', timestamp: 2_000 });
+    // A system scaffold entry appended after the conversational turn must not
+    // leak into the preview surfaced to the session list / admin.
+    store.append({ channelId, role: 'system', content: 'SCAFFOLD: injected context block', timestamp: 3_000 });
+
+    const activity = store.getSessionActivity(channelId);
+    expect(activity?.messageCount).toBe(3);
+    expect(activity?.lastRole).toBe('assistant');
+    expect(activity?.lastMessagePreview).toBe('here is your plan');
+    expect(activity?.lastMessagePreview).not.toContain('SCAFFOLD');
+  });
+
+  it('never surfaces a trailing system scaffold entry as the session preview (reload/index rebuild)', () => {
+    const channelId = 'api:scaffold-reload';
+    store.append({ channelId, role: 'user', content: 'plan my week', timestamp: 1_000 });
+    store.append({ channelId, role: 'assistant', content: 'here is your plan', timestamp: 2_000 });
+    store.append({ channelId, role: 'system', content: 'SCAFFOLD: injected context block', timestamp: 3_000 });
+
+    // A fresh store re-derives previews from disk via the channel index /
+    // journal-chain load path rather than the in-memory append path.
+    const reloaded = new SessionStore(dir);
+    const activity = reloaded.getSessionActivity(channelId);
+    expect(activity?.messageCount).toBe(3);
+    expect(activity?.lastRole).toBe('assistant');
+    expect(activity?.lastMessagePreview).toBe('here is your plan');
+    expect(activity?.lastMessagePreview).not.toContain('SCAFFOLD');
+
+    // The activity summary is what the session-list tool surface reads.
+    const listed = reloaded.listSessionsByRecentActivity(10);
+    const row = listed.find(session => session.channelId === channelId);
+    expect(row?.lastRole).toBe('assistant');
+    expect(row?.lastMessagePreview).toBe('here is your plan');
+  });
+
+  it('reports no conversational activity for a scaffolding-only session', () => {
+    const channelId = 'api:scaffold-only';
+    store.append({ channelId, role: 'system', content: 'SCAFFOLD: boot context', timestamp: 1_000 });
+
+    // No user/assistant turn ever occurred, so there is no preview to surface.
+    expect(store.getSessionActivity(channelId)).toBeNull();
+
+    const reloaded = new SessionStore(dir);
+    expect(reloaded.getSessionActivity(channelId)).toBeNull();
+    // A fresh index rebuild for a scaffolding-only session must be stable
+    // (complete) rather than looping on repeated disk rereads.
+    expect(reloaded.count(channelId)).toBe(1);
+  });
+
   it('indexes appended messages for FTS keyword search across channels', async () => {
     const searchStore = new SessionStore(dir, { transcriptProjection: createInMemoryTranscriptProjection() });
     searchStore.append({

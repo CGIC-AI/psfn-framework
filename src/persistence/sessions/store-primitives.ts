@@ -1,4 +1,4 @@
-import type { JournalEntry, JournalMarkerType, SessionEntryRole } from '../../core/session/types.js';
+import type { JournalEntry, JournalMarkerType, SessionEntry, SessionEntryRole } from '../../core/session/types.js';
 import {
   signJournalEntry,
   verifyJournalEntryIntegrity,
@@ -200,6 +200,31 @@ export function normalizeOptionalSessionEntryRole(value: unknown): SessionEntryR
   if (value == null) return null;
   if (value === 'user' || value === 'assistant' || value === 'system' || value === 'tool') {
     return value;
+  }
+  return undefined;
+}
+
+/**
+ * A session entry role is "previewable" only when it represents a conversational
+ * turn (user or assistant). System/tool scaffold entries are never surfaced in
+ * lastMessagePreview/lastMessageRole, so they must not leak into session-list
+ * rows or activity summaries.
+ */
+export function isPreviewableSessionEntryRole(value: unknown): boolean {
+  const role = normalizeOptionalSessionEntryRole(value);
+  return role === 'user' || role === 'assistant';
+}
+
+/**
+ * Return the most recent conversational (user/assistant) entry, scanning from
+ * the tail, or undefined when the run holds only system/tool scaffold entries.
+ */
+export function findLastPreviewableEntry(
+  entries: readonly SessionEntry[],
+): SessionEntry | undefined {
+  for (let index = entries.length - 1; index >= 0; index -= 1) {
+    const entry = entries[index]!;
+    if (isPreviewableSessionEntryRole(entry.role)) return entry;
   }
   return undefined;
 }

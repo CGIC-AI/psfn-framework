@@ -8,7 +8,7 @@ import {
   fingerprintJournalArchive,
   readJournalFile,
   readJournalFirstEntry,
-  readJournalTailEntries,
+  readJournalMatchingEntriesBackward,
   scanJournalFileMetadata,
 } from '../../journals/journal-utils.js';
 import { backfillLegacyTurnId } from '../../../core/turns/id.js';
@@ -16,6 +16,7 @@ import { resolveSessionEntryTurnContext } from '../../../core/session/turn-prove
 import type { JournalEntry } from '../../../core/session/types.js';
 import {
   CHANNEL_INDEX_FILENAME,
+  isPreviewableSessionEntryRole,
   normalizeOptionalHmac,
   normalizeOptionalJournalType,
   normalizeOptionalMarker,
@@ -80,8 +81,16 @@ export function isIndexEntryComplete(entry: ChannelIndexEntry): boolean {
   const messageCount = normalizeOptionalNonNegativeNumber(entry.messageCount) ?? 0;
   if (messageCount > 0) {
     if (normalizeOptionalNonNegativeNumber(entry.lastMessageTimestamp) === undefined) return false;
-    if (!normalizeOptionalSessionEntryRole(entry.lastMessageRole)) return false;
-    if (normalizeOptionalString(entry.lastMessagePreview) === undefined) return false;
+    const previewRole = normalizeOptionalSessionEntryRole(entry.lastMessageRole);
+    if (previewRole !== null) {
+      // Only user/assistant may surface as a preview. A recorded system/tool role
+      // is a stale leak and must be recomputed; a role that fails to normalize is
+      // not yet computed. Both are incomplete.
+      if (previewRole !== 'user' && previewRole !== 'assistant') return false;
+      if (normalizeOptionalString(entry.lastMessagePreview) === undefined) return false;
+    }
+    // previewRole === null: scaffolding-only session with no conversational
+    // message; the absent preview is a complete "no preview" state.
   }
 
   if (normalizeOptionalNonNegativeNumber(entry.lastExtractionCoveredUpTo) === undefined) return false;
@@ -105,18 +114,18 @@ export function fingerprintArchivePaths(filePaths: readonly string[]): string | 
   return fingerprints.length > 0 ? fingerprints.join('|') : null;
 }
 
-function readLastMessageEntry(filePath: string): JournalEntry | null {
-  const tail = readJournalTailEntries(filePath, {
-    messageLimit: 1,
-    includeBoundaryEntry: false,
+/**
+ * Resolve the most recent conversational (user/assistant) message so that
+ * lastMessagePreview/lastMessageRole never surface system/tool scaffold entries.
+ * Scans backward across the archive chain until a previewable message is found;
+ * returns null when the session holds no conversational message.
+ */
+function readLastPreviewableMessageEntry(filePath: string): JournalEntry | null {
+  const { matches } = readJournalMatchingEntriesBackward(filePath, {
+    limit: 1,
+    matches: (entry) => entry.type === 'message' && isPreviewableSessionEntryRole(entry.role),
   });
-  for (let index = tail.entries.length - 1; index >= 0; index -= 1) {
-    const candidate = tail.entries[index];
-    if (candidate.type === 'message') {
-      return candidate;
-    }
-  }
-  return null;
+  return matches[0]?.entry ?? null;
 }
 
 function enrichIndexEntryWithLastMessage(entry: ChannelIndexEntry, filePath: string): ChannelIndexEntry {
@@ -131,9 +140,16 @@ function enrichIndexEntryWithLastMessage(entry: ChannelIndexEntry, filePath: str
     };
   }
 
-  const lastMessageEntry = readLastMessageEntry(filePath);
+  const lastMessageEntry = readLastPreviewableMessageEntry(filePath);
   if (!lastMessageEntry) {
-    return entry;
+    // Messages exist but none are conversational; surface no preview.
+    return {
+      ...entry,
+      lastMessageTimestamp: 0,
+      lastMessageRole: null,
+      lastMessageAuthorName: undefined,
+      lastMessagePreview: undefined,
+    };
   }
 
   return {
@@ -164,7 +180,7 @@ export function buildIndexEntry(
   }
 
   const marker = metadata.lastEntry ? journalToMarkerEntry(metadata.lastEntry) : null;
-  const lastMessageEntry = metadata.messageCount > 0 ? readLastMessageEntry(filePath) : null;
+  const lastMessageEntry = metadata.messageCount > 0 ? readLastPreviewableMessageEntry(filePath) : null;
 
   return {
     channelId,
@@ -176,7 +192,7 @@ export function buildIndexEntry(
     archiveFingerprint: fingerprintArchivePaths([filePath]) ?? undefined,
     compactionFilenames: metadata.compactionCount > 0 ? [filename] : [],
     lastTimestamp: metadata.lastTimestamp,
-    lastMessageTimestamp: lastMessageEntry?.timestamp,
+    lastMessageTimestamp: lastMessageEntry?.timestamp ?? 0,
     lastMessageRole: normalizeOptionalSessionEntryRole(lastMessageEntry?.role) ?? null,
     lastMessageAuthorName: normalizeOptionalString(lastMessageEntry?.authorName),
     lastMessagePreview: typeof lastMessageEntry?.content === 'string'
@@ -207,7 +223,10 @@ export function buildIndexEntryChain(
     buildIndexEntry(channelId, filePath, warnAboutQuarantinedEntries)
   ));
   const lastNonEmpty = [...perFile].reverse().find(entry => (entry.maxId ?? 0) > 0);
-  const lastWithMessage = [...perFile].reverse().find(entry => (entry.messageCount ?? 0) > 0);
+  // Preview fields must reflect the last segment that actually holds a
+  // conversational message; per-file entries with only scaffold messages carry
+  // a null lastMessageRole and must not shadow an earlier previewable segment.
+  const lastWithPreview = [...perFile].reverse().find(entry => entry.lastMessageRole != null);
   const activeTurnTombstones = new Set<string>();
   let tombstoneAwareMessageCount: number | null = null;
   if (perFile.some(entry => (entry.activeTurnTombstoneCount ?? 0) > 0)) {
@@ -255,10 +274,10 @@ export function buildIndexEntryChain(
       .filter(entry => (entry.compactionFilenames?.length ?? 0) > 0)
       .map(entry => entry.filename),
     lastTimestamp: lastNonEmpty?.lastTimestamp ?? 0,
-    lastMessageTimestamp: lastWithMessage?.lastMessageTimestamp ?? 0,
-    lastMessageRole: lastWithMessage?.lastMessageRole ?? null,
-    lastMessageAuthorName: lastWithMessage?.lastMessageAuthorName,
-    lastMessagePreview: lastWithMessage?.lastMessagePreview,
+    lastMessageTimestamp: lastWithPreview?.lastMessageTimestamp ?? 0,
+    lastMessageRole: lastWithPreview?.lastMessageRole ?? null,
+    lastMessageAuthorName: lastWithPreview?.lastMessageAuthorName,
+    lastMessagePreview: lastWithPreview?.lastMessagePreview,
     maxId: perFile.reduce((max, entry) => Math.max(max, entry.maxId ?? 0), 0),
     lastHmac: lastNonEmpty?.lastHmac ?? null,
     lastExtractionCoveredUpTo: perFile.reduce(

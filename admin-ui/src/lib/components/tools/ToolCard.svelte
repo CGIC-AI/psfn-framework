@@ -125,7 +125,7 @@
 
     <div class="rounded-2xl border border-bark-200 bg-bark-50 px-4 py-3">
       <div class="flex items-center justify-between gap-3">
-        <span class="text-xs font-semibold uppercase tracking-[0.16em] text-shadow-500">Internal Heartbeat</span>
+        <span class="text-xs font-semibold uppercase tracking-[0.16em] text-shadow-500">Internal Reflection</span>
         <span class="rounded-full border px-2 py-0.5 text-xs font-medium {AVAILABILITY_BADGE[tool.contexts.internalHeartbeat.status]}">
           {AVAILABILITY_LABELS[tool.contexts.internalHeartbeat.status]}
         </span>

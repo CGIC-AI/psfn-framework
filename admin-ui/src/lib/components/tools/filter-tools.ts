@@ -13,7 +13,7 @@ export interface ToolInventoryFilters {
   scope: AdminToolHealthView['scope'] | typeof ALL_TOOL_FILTERS;
   healthStatus: RuntimeServiceHealthStatus | typeof ALL_TOOL_FILTERS;
   chatStatus: AdminToolAvailabilityStatus | typeof ALL_TOOL_FILTERS;
-  heartbeatStatus: AdminToolAvailabilityStatus | typeof ALL_TOOL_FILTERS;
+  reflectionStatus: AdminToolAvailabilityStatus | typeof ALL_TOOL_FILTERS;
 }
 
 export interface ToolInventoryFilterOption {
@@ -27,7 +27,7 @@ export interface ToolInventoryFilterOptions {
   scopes: ToolInventoryFilterOption[];
   healthStatuses: ToolInventoryFilterOption[];
   chatStatuses: ToolInventoryFilterOption[];
-  heartbeatStatuses: ToolInventoryFilterOption[];
+  reflectionStatuses: ToolInventoryFilterOption[];
 }
 
 const SCOPE_ORDER: readonly AdminToolHealthView['scope'][] = ['core', 'extended', 'conditional'];
@@ -51,7 +51,7 @@ export function defaultToolInventoryFilters(): ToolInventoryFilters {
     scope: ALL_TOOL_FILTERS,
     healthStatus: ALL_TOOL_FILTERS,
     chatStatus: ALL_TOOL_FILTERS,
-    heartbeatStatus: ALL_TOOL_FILTERS,
+    reflectionStatus: ALL_TOOL_FILTERS,
   };
 }
 
@@ -65,7 +65,7 @@ export function hasActiveToolInventoryFilters(filters: ToolInventoryFilters): bo
     || filters.scope !== ALL_TOOL_FILTERS
     || filters.healthStatus !== ALL_TOOL_FILTERS
     || filters.chatStatus !== ALL_TOOL_FILTERS
-    || filters.heartbeatStatus !== ALL_TOOL_FILTERS;
+    || filters.reflectionStatus !== ALL_TOOL_FILTERS;
 }
 
 export function filterInventoryGroups(
@@ -81,7 +81,7 @@ export function filterInventoryGroups(
       matchesSelectedFilter(tool.scope, filters.scope)
       && matchesSelectedFilter(tool.health.status, filters.healthStatus)
       && matchesSelectedFilter(tool.contexts.chat.status, filters.chatStatus)
-      && matchesSelectedFilter(tool.contexts.internalHeartbeat.status, filters.heartbeatStatus)
+      && matchesSelectedFilter(tool.contexts.internalHeartbeat.status, filters.reflectionStatus)
       && matchesSearchTerms(tool, queryTerms)
     ));
 
@@ -97,14 +97,14 @@ export function deriveToolInventoryFilterOptions(
   const scopeCounts = new Map<string, number>();
   const healthCounts = new Map<string, number>();
   const chatCounts = new Map<string, number>();
-  const heartbeatCounts = new Map<string, number>();
+  const reflectionCounts = new Map<string, number>();
 
   for (const group of groups) {
     for (const tool of group.tools) {
       increment(scopeCounts, tool.scope);
       increment(healthCounts, tool.health.status);
       increment(chatCounts, tool.contexts.chat.status);
-      increment(heartbeatCounts, tool.contexts.internalHeartbeat.status);
+      increment(reflectionCounts, tool.contexts.internalHeartbeat.status);
     }
   }
 
@@ -117,7 +117,7 @@ export function deriveToolInventoryFilterOptions(
     scopes: orderedOptions(SCOPE_ORDER, scopeCounts),
     healthStatuses: orderedOptions(HEALTH_STATUS_ORDER, healthCounts),
     chatStatuses: orderedOptions(AVAILABILITY_STATUS_ORDER, chatCounts),
-    heartbeatStatuses: orderedOptions(AVAILABILITY_STATUS_ORDER, heartbeatCounts),
+    reflectionStatuses: orderedOptions(AVAILABILITY_STATUS_ORDER, reflectionCounts),
   };
 }
 

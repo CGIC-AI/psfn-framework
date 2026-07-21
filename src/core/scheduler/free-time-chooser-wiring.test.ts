@@ -5,7 +5,7 @@ import type {
   FreeTimeConfig,
 } from '../../system/config/scheduler-config.js';
 import type { SessionEntry } from '../session/types.js';
-import { HEARTBEAT_SILENT_REFLECTION_TOKEN } from './heartbeat-policy.js';
+import { REFLECTION_SILENT_TOKEN } from './reflection-policy.js';
 import { Scheduler } from './scheduler.js';
 import {
   FREE_TIME_BLOCK_EVENT,
@@ -77,7 +77,7 @@ function buildRuntime(chooseWorkspace: FreeTimeRuntimeOptions['chooseWorkspace']
 
   const eventBus = new EventBus();
   const scheduler = new Scheduler(eventBus, { tickIntervalMs: 100, heartbeatIntervalMs: 500 });
-  const invokeTurn = vi.fn(async () => ({ content: HEARTBEAT_SILENT_REFLECTION_TOKEN }));
+  const invokeTurn = vi.fn(async () => ({ content: REFLECTION_SILENT_TOKEN }));
 
   const runtime: FreeTimeRuntimeOptions = {
     scheduler,

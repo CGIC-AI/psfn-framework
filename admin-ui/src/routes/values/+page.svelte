@@ -283,7 +283,7 @@
     {:else if values.entries.length === 0}
       <div class="card-garden p-12 text-center">
         <p class="font-serif text-lg text-shadow-700 mb-1">No values reflections recorded yet</p>
-        <p class="text-sm text-shadow-600">Values reflections will appear after heartbeat introspection writes them.</p>
+        <p class="text-sm text-shadow-600">Values reflections will appear after scheduled reflection introspection writes them.</p>
       </div>
     {:else if filteredValues.length === 0}
       {@render noMatches()}

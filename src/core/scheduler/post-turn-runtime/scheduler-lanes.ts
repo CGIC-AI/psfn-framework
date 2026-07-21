@@ -35,12 +35,12 @@ import {
 import { toInferredPostTurnActions } from '../../intention/appraisal.js';
 import { MAINTENANCE_REFLECTION_RUNTIME_CLASS } from '../../agent/worker-lanes.js';
 import type {
-  HeartbeatAgent,
-  HeartbeatRuntimeOptions,
-} from '../heartbeat-runtime-contracts.js';
+  ReflectionAgent,
+  ReflectionRuntimeOptions,
+} from '../reflection-runtime-contracts.js';
 import type { Scheduler } from '../scheduler.js';
 
-const log = createComponentLogger('HeartbeatPostTurn');
+const log = createComponentLogger('PostTurnRuntime');
 
 export const SLEEPTIME_REST_WINDOW_OPERATION_ID = 'memory.sleeptime.rest-window';
 export const CONTACT_TRUST_DRIFT_REVIEW_OPERATION_ID = 'contacts.trust-drift-review.rest-window';
@@ -57,18 +57,18 @@ export interface SchedulerOwnedPostTurnLanes {
 }
 
 interface CreateSchedulerOwnedPostTurnLanesOptions {
-  agentLoop: HeartbeatAgent;
-  runtimeOptions: HeartbeatRuntimeOptions;
+  agentLoop: ReflectionAgent;
+  runtimeOptions: ReflectionRuntimeOptions;
 }
 
 interface RegisterSchedulerOwnedPostTurnLanesOptions extends CreateSchedulerOwnedPostTurnLanesOptions {
   scheduler: Scheduler;
   lanes: SchedulerOwnedPostTurnLanes;
-  postTurnActions: NonNullable<HeartbeatRuntimeOptions['postTurnActions']>;
+  postTurnActions: NonNullable<ReflectionRuntimeOptions['postTurnActions']>;
 }
 
 function resolveContactTrustDriftReviewStore(
-  runtimeOptions: HeartbeatRuntimeOptions,
+  runtimeOptions: ReflectionRuntimeOptions,
 ): ContactTrustDriftReviewStore | null {
   const driftContactStore = runtimeOptions.contactStore;
   return (

@@ -5,13 +5,16 @@ import type {
 } from '../../shared/contracts/runtime.js';
 import { createSignalWisePostTurnAppraiser } from '../intention/post-turn-appraisal.js';
 
-const HEARTBEAT_RUN_TEMPLATE_TOOL_NAME = 'heartbeat_run_template';
+// Preserve the model-facing tool name because stored transcripts contain tool
+// results under this value. The surrounding inference machinery is reflection-
+// named, but changing the wire value would break replay.
+const LEGACY_REFLECTION_RUN_TEMPLATE_TOOL_NAME = 'heartbeat_run_template';
 const SCHEDULE_TOOL_NAME = 'schedule';
 
 export interface InferDeferredPostTurnActionsInput {
   message: SubstrateMessage;
   turnMessages: readonly unknown[];
-  deferredHeartbeatActionKind: string;
+  deferredReflectionActionKind: string;
 }
 
 function normalizeDeferredActionCandidate(raw: unknown): PostTurnActionCandidate | null {
@@ -83,7 +86,7 @@ function extractDeferredActionCandidate(message: unknown): PostTurnActionCandida
   return null;
 }
 
-function isDeferredHeartbeatActionToolResult(message: unknown): boolean {
+function isDeferredReflectionActionToolResult(message: unknown): boolean {
   if (!message || typeof message !== 'object' || Array.isArray(message)) {
     return false;
   }
@@ -92,7 +95,7 @@ function isDeferredHeartbeatActionToolResult(message: unknown): boolean {
   return (
     candidate.role === 'toolResult'
     && (
-      candidate.toolName === HEARTBEAT_RUN_TEMPLATE_TOOL_NAME
+      candidate.toolName === LEGACY_REFLECTION_RUN_TEMPLATE_TOOL_NAME
       || candidate.toolName === SCHEDULE_TOOL_NAME
     )
   );
@@ -105,15 +108,15 @@ function resolvePostTurnCallType(message: SubstrateMessage): ObservabilityCallTy
   return 'chat';
 }
 
-function inferDeferredHeartbeatActions(
+function inferDeferredReflectionActions(
   turnMessages: readonly unknown[],
-  deferredHeartbeatActionKind: string,
+  deferredReflectionActionKind: string,
 ): PostTurnActionCandidate[] {
   const inferred: PostTurnActionCandidate[] = [];
   for (const turnMessage of turnMessages) {
-    if (!isDeferredHeartbeatActionToolResult(turnMessage)) continue;
+    if (!isDeferredReflectionActionToolResult(turnMessage)) continue;
     const candidate = extractDeferredActionCandidate(turnMessage);
-    if (candidate && candidate.kind === deferredHeartbeatActionKind) {
+    if (candidate && candidate.kind === deferredReflectionActionKind) {
       inferred.push(candidate);
     }
   }
@@ -122,19 +125,19 @@ function inferDeferredHeartbeatActions(
 
 export function inferDeferredPostTurnActions({
   turnMessages,
-  deferredHeartbeatActionKind,
+  deferredReflectionActionKind,
 }: InferDeferredPostTurnActionsInput): PostTurnActionCandidate[] {
-  return inferDeferredHeartbeatActions(turnMessages, deferredHeartbeatActionKind);
+  return inferDeferredReflectionActions(turnMessages, deferredReflectionActionKind);
 }
 
 const inferSignalWisePostTurnActions = createSignalWisePostTurnAppraiser<
 InferDeferredPostTurnActionsInput & { callType: ObservabilityCallType }
 >([
   {
-    name: 'heartbeat_deferred_action',
-    infer: (context) => inferDeferredHeartbeatActions(
+    name: 'reflection_deferred_action',
+    infer: (context) => inferDeferredReflectionActions(
       context.turnMessages,
-      context.deferredHeartbeatActionKind,
+      context.deferredReflectionActionKind,
     ),
   },
 ]);

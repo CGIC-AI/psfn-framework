@@ -5,11 +5,11 @@ import { tmpdir } from 'node:os';
 import type { Scheduler } from '../../../core/scheduler/scheduler.js';
 import type { ScheduledTask } from '../../../core/scheduler/types.js';
 import {
-  resolveHeartbeatPolicyPath,
+  resolveReflectionPolicyPath,
   resolveReflectionMetacognitionJournalPath,
 } from '../../../persistence/layout.js';
 import { AdminSchedulerService } from './scheduler-service.js';
-import type { HeartbeatPolicy } from '../../../core/scheduler/heartbeat-policy.js';
+import type { ReflectionPolicy } from '../../../core/scheduler/reflection-policy.js';
 
 function makeTask(overrides: Partial<ScheduledTask> & { id: string; name: string }): ScheduledTask {
   const task: ScheduledTask = {
@@ -65,7 +65,7 @@ describe('AdminSchedulerService', () => {
     rmSync(tempDir, { recursive: true, force: true });
   });
 
-  it('uses the runtime heartbeat policy path under companion state', () => {
+  it('uses the runtime reflection policy path under companion state', () => {
     const { scheduler } = createSchedulerStub();
     const service = new AdminSchedulerService(scheduler, tempDir);
 
@@ -73,11 +73,11 @@ describe('AdminSchedulerService', () => {
       policyStore: { filePath: string };
     }).policyStore.filePath;
 
-    expect(gardenStorePath).toBe(resolveHeartbeatPolicyPath(tempDir));
+    expect(gardenStorePath).toBe(resolveReflectionPolicyPath(tempDir));
 
     service.getFullData();
 
-    expect(existsSync(resolveHeartbeatPolicyPath(tempDir))).toBe(true);
+    expect(existsSync(resolveReflectionPolicyPath(tempDir))).toBe(true);
     expect(existsSync(join(tempDir, 'heartbeat-policy.json'))).toBe(false);
   });
 
@@ -100,8 +100,8 @@ describe('AdminSchedulerService', () => {
       message: 'Task "reflection:whisper" updated',
     });
 
-    const policyPath = resolveHeartbeatPolicyPath(tempDir);
-    const persisted = JSON.parse(readFileSync(policyPath, 'utf-8')) as HeartbeatPolicy;
+    const policyPath = resolveReflectionPolicyPath(tempDir);
+    const persisted = JSON.parse(readFileSync(policyPath, 'utf-8')) as ReflectionPolicy;
     const daily = persisted.templates.find(template => template.id === 'daily-review');
     expect(daily).toBeDefined();
     expect(daily?.enabled).toBe(false);
@@ -141,8 +141,8 @@ describe('AdminSchedulerService', () => {
       message: 'Reflection "daily-review" updated',
     });
 
-    const policyPath = resolveHeartbeatPolicyPath(tempDir);
-    const persisted = JSON.parse(readFileSync(policyPath, 'utf-8')) as HeartbeatPolicy;
+    const policyPath = resolveReflectionPolicyPath(tempDir);
+    const persisted = JSON.parse(readFileSync(policyPath, 'utf-8')) as ReflectionPolicy;
     const daily = persisted.templates.find(template => template.id === 'daily-review');
     expect(daily?.name).toBe('Updated Daily Reflection');
 
@@ -198,8 +198,8 @@ describe('AdminSchedulerService', () => {
     });
 
     const persisted = JSON.parse(
-      readFileSync(resolveHeartbeatPolicyPath(tempDir), 'utf-8'),
-    ) as HeartbeatPolicy;
+      readFileSync(resolveReflectionPolicyPath(tempDir), 'utf-8'),
+    ) as ReflectionPolicy;
     expect(persisted.templates.find(template => template.id === 'weekly-review')?.cadence).toEqual({
       kind: 'weekly',
       dayOfWeek: 0,

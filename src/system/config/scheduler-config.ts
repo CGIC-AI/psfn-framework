@@ -242,7 +242,7 @@ export interface OrientationRewriteGateConfig {
 }
 
 /**
- * Deterministic novelty gate for cadence-fired heartbeat reflection templates
+ * Deterministic novelty gate for cadence-fired reflection templates
  * (jpvd.4). A scheduled reflection must not fire when nothing new happened in
  * its scope since the last reflection run of that template — the gate skips
  * the run with zero LLM spend and typed telemetry. Manual run_template

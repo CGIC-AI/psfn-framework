@@ -7,7 +7,7 @@ import type {
 } from '../../boundary/gateway/protocol.js';
 import type { ConfirmationResolveResult } from '../../system/capabilities/confirmation-queue.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
-import type { ReflectionTemplate } from '../../core/scheduler/heartbeat-policy.js';
+import type { ReflectionTemplate } from '../../core/scheduler/reflection-policy.js';
 import type { RecurringCadence, ScheduledTask, TaskType } from '../../core/scheduler/types.js';
 import type { WakeWindowSnapshot } from '../../core/scheduler/temporal-wakeup.js';
 import type { SkillSnapshot } from '../../faculties/skills/types.js';

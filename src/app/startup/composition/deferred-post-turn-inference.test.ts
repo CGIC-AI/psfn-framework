@@ -4,7 +4,7 @@ import {
 } from './deferred-post-turn-inference.js';
 
 describe('inferDeferredPostTurnActions', () => {
-  it('extracts deferred heartbeat actions from schedule tool results', () => {
+  it('extracts deferred reflection actions from schedule tool results', () => {
     const actions = inferDeferredPostTurnActions({
       message: {
         id: 'msg-1',
@@ -40,7 +40,7 @@ describe('inferDeferredPostTurnActions', () => {
           },
         },
       }],
-      deferredHeartbeatActionKind: 'heartbeat.run_template',
+      deferredReflectionActionKind: 'heartbeat.run_template',
     });
 
     expect(actions).toEqual([{
@@ -51,7 +51,7 @@ describe('inferDeferredPostTurnActions', () => {
     }]);
   });
 
-  it('extracts deferred heartbeat actions from schedule run_template tool results', () => {
+  it('extracts deferred reflection actions from schedule run_template tool results', () => {
     const actions = inferDeferredPostTurnActions({
       message: {
         id: 'msg-schedule',
@@ -77,7 +77,7 @@ describe('inferDeferredPostTurnActions', () => {
           },
         },
       }],
-      deferredHeartbeatActionKind: 'heartbeat.run_template',
+      deferredReflectionActionKind: 'heartbeat.run_template',
     });
 
     expect(actions).toEqual([{

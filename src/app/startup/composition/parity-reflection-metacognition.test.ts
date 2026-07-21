@@ -9,9 +9,9 @@ import {
   resolveReflectionJournalPath,
   resolveReflectionMetacognitionJournalPath,
 } from '../../../persistence/layout.js';
-import { wireHeartbeatRuntime } from './parity.js';
+import { wireReflectionRuntime } from './parity.js';
 
-describe('wireHeartbeatRuntime reflection metacognition journal', () => {
+describe('wireReflectionRuntime reflection metacognition journal', () => {
   let tempDir: string;
 
   afterEach(() => {
@@ -70,7 +70,7 @@ describe('wireHeartbeatRuntime reflection metacognition journal', () => {
       send: vi.fn().mockResolvedValue(undefined),
     };
 
-    void wireHeartbeatRuntime(target as any, scheduler, agentLoop as any, sender, tempDir);
+    void wireReflectionRuntime(target as any, scheduler, agentLoop as any, sender, tempDir);
 
     const runTool = target.registerTool.mock.calls
       .map(call => call[0])

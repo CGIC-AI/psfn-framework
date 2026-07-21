@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { deriveToolHealthViews, deriveToolInventoryGroups } from './adaptive-tools-runtime.js';
 
 describe('deriveToolHealthViews', () => {
-  it('marks chat and internal heartbeat availability from runtime metadata', () => {
+  it('marks chat and internal reflection availability from runtime metadata', () => {
     const views = deriveToolHealthViews({
       catalog: {
         generatedAt: 1,
@@ -33,7 +33,7 @@ describe('deriveToolHealthViews', () => {
           },
           {
             name: 'heartbeat_run_template',
-            description: 'Run a heartbeat reflection template.',
+            description: 'Run a reflection template.',
             scope: 'extended',
             wiringMeta: {
               concurrency: {

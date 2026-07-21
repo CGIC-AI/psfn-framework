@@ -3,12 +3,12 @@ import type { Scheduler } from './scheduler.js';
 import type { MessageSender } from '../../system/lifecycle/notifications.js';
 import { createComponentLogger } from '../../shared/logger.js';
 import {
-  HEARTBEAT_SILENT_REFLECTION_TOKEN,
-  HeartbeatPolicyStore,
+  REFLECTION_SILENT_TOKEN,
+  ReflectionPolicyStore,
   isValuesReflectionTemplateId,
-  type HeartbeatPolicy,
+  type ReflectionPolicy,
   type ReflectionTemplate,
-} from './heartbeat-policy.js';
+} from './reflection-policy.js';
 import { ValuesJournalStore } from '../../faculties/values/store.js';
 import type {
   ValuesDeliberationEpisodeMetadata,
@@ -20,14 +20,15 @@ import type {
   ReflectionScopeHint,
 } from '../../shared/contracts/runtime.js';
 import type { ConversationScope } from '../session/conversation-scope.js';
-import type {
-  HeartbeatAgent,
-  HeartbeatRunTemplateResult,
-  HeartbeatRuntimeOptions,
-} from './heartbeat-runtime-contracts.js';
+import {
+  DEFERRED_REFLECTION_ACTION_KIND,
+  type ReflectionAgent,
+  type ReflectionRunTemplateResult,
+  type ReflectionRuntimeOptions,
+} from './reflection-runtime-contracts.js';
 import {
   resolveDiscrepancyJournalPath,
-  resolveHeartbeatPolicyPath,
+  resolveReflectionPolicyPath,
   resolveLegacyValuesJournalPath,
   resolveReflectionDailyJournalsDir,
   resolveReflectionJournalPath,
@@ -78,39 +79,38 @@ import {
   type ReflectionInternalStateContext,
   type ReflectionMetacognitiveFlag,
   type ReflectionPromptSectionBundle,
-} from './heartbeat-template-runtime/prompt-formatting.js';
+} from './reflection-template-runtime/prompt-formatting.js';
 import {
   buildInternalStatePromptBundle,
   normalizeMetacognitiveFlags,
   normalizeSnapshotRef,
   resolveInternalStateContext,
-} from './heartbeat-template-runtime/internal-state-prompt.js';
-import { buildReflectionStarterPromptBundle } from './heartbeat-template-runtime/reflection-starter-prompt.js';
-import { runExperientialTemplateDeliberation } from './heartbeat-template-runtime/experiential-deliberation.js';
+} from './reflection-template-runtime/internal-state-prompt.js';
+import { buildReflectionStarterPromptBundle } from './reflection-template-runtime/reflection-starter-prompt.js';
+import { runExperientialTemplateDeliberation } from './reflection-template-runtime/experiential-deliberation.js';
 import {
-  HeartbeatTemplateLoopGuardError,
+  ReflectionTemplateLoopGuardError,
   buildUnsupportedReflectionSupportFlags,
   findReflectionTemplateById,
-  getHeartbeatTemplateAuditProfile,
+  getReflectionTemplateAuditProfile,
   isExperientialDeliberationTemplate,
-  isHeartbeatTemplateLoopGuardError,
-  type HeartbeatExecutionSource,
-} from './heartbeat-template-runtime/runtime-helpers.js';
+  isReflectionTemplateLoopGuardError,
+  type ReflectionExecutionSource,
+} from './reflection-template-runtime/runtime-helpers.js';
 import {
   resolveReflectionContactContextBundle,
   type ReflectionContactTelemetryDiagnostics,
-} from './heartbeat-template-runtime/reflection-contact-context.js';
+} from './reflection-template-runtime/reflection-contact-context.js';
 import {
   advanceReflectionNoveltyWatermark,
   emitReflectionNoveltyGateEvent,
   evaluateReflectionNoveltyGate,
-} from './heartbeat-template-runtime/reflection-novelty-gate.js';
+} from './reflection-template-runtime/reflection-novelty-gate.js';
 
-const log = createComponentLogger('HeartbeatTemplates');
+const log = createComponentLogger('ReflectionTemplates');
 
 const DEFERRED_REFLECTION_RUN_TASK_PREFIX = 'reflection-run:deferred:';
 const LEGACY_DEFERRED_REFLECTION_TASK_PREFIX = 'reflection:deferred:';
-const DEFERRED_HEARTBEAT_ACTION_KIND = 'heartbeat.run_template';
 const MIN_SCHEDULED_TEMPLATE_GAP_MS = 60_000;
 const TEMPLATE_EXECUTION_BURST_WINDOW_MS = 60_000;
 const TEMPLATE_EXECUTION_BURST_LIMIT = 4;
@@ -123,10 +123,10 @@ type ReflectionDeliberationExecutionResult = {
   metacognitiveFlags: ReflectionMetacognitiveFlag[];
 };
 
-export interface HeartbeatTemplateRuntime {
-  policyStore: HeartbeatPolicyStore;
+export interface ReflectionTemplateRuntime {
+  policyStore: ReflectionPolicyStore;
   valuesJournal: ValuesJournalStore;
-  initialPolicy: HeartbeatPolicy;
+  initialPolicy: ReflectionPolicy;
   runTemplateNow(
     templateId: string,
     options?: {
@@ -134,7 +134,7 @@ export interface HeartbeatTemplateRuntime {
       deferIfBusy?: boolean;
       conversationScope?: ConversationScope;
     },
-  ): Promise<HeartbeatRunTemplateResult>;
+  ): Promise<ReflectionRunTemplateResult>;
   runDeferredTemplate(
     templateId: string,
     options?: { sendToDiscordOverride?: boolean; actionId?: string; requestedSource?: ReflectionRequestSource },
@@ -142,18 +142,18 @@ export interface HeartbeatTemplateRuntime {
   syncReflectionTasks(): void;
 }
 
-interface CreateHeartbeatTemplateRuntimeOptions {
+interface CreateReflectionTemplateRuntimeOptions {
   scheduler: Scheduler;
-  agentLoop: HeartbeatAgent;
+  agentLoop: ReflectionAgent;
   sender: MessageSender;
   dataDir: string;
   heartbeatChannelId?: string;
-  runtimeOptions?: HeartbeatRuntimeOptions;
+  runtimeOptions?: ReflectionRuntimeOptions;
 }
 
-export function createHeartbeatTemplateRuntime(
-  options: CreateHeartbeatTemplateRuntimeOptions,
-): HeartbeatTemplateRuntime {
+export function createReflectionTemplateRuntime(
+  options: CreateReflectionTemplateRuntimeOptions,
+): ReflectionTemplateRuntime {
   const {
     scheduler,
     agentLoop,
@@ -163,7 +163,7 @@ export function createHeartbeatTemplateRuntime(
     runtimeOptions = {},
   } = options;
 
-  const store = new HeartbeatPolicyStore(resolveHeartbeatPolicyPath(dataDir));
+  const store = new ReflectionPolicyStore(resolveReflectionPolicyPath(dataDir));
   const valuesJournal = new ValuesJournalStore(resolveValuesJournalPath(dataDir), {
     legacyFilePaths: [resolveLegacyValuesJournalPath(dataDir)],
   });
@@ -181,7 +181,7 @@ export function createHeartbeatTemplateRuntime(
 
   const assertTemplateExecutionAllowed = (
     templateId: string,
-    source: HeartbeatExecutionSource,
+    source: ReflectionExecutionSource,
   ): void => {
     if (source === 'manual') {
       return;
@@ -190,7 +190,7 @@ export function createHeartbeatTemplateRuntime(
     const now = Date.now();
     const cooldownUntil = templateExecutionCooldownUntil.get(templateId);
     if (typeof cooldownUntil === 'number' && cooldownUntil > now) {
-      throw new HeartbeatTemplateLoopGuardError(
+      throw new ReflectionTemplateLoopGuardError(
         templateId,
         source,
         cooldownUntil,
@@ -216,7 +216,7 @@ export function createHeartbeatTemplateRuntime(
       windowMs: TEMPLATE_EXECUTION_BURST_WINDOW_MS,
       cooldownUntil: new Date(nextCooldownUntil).toISOString(),
     });
-    throw new HeartbeatTemplateLoopGuardError(
+    throw new ReflectionTemplateLoopGuardError(
       templateId,
       source,
       nextCooldownUntil,
@@ -304,7 +304,7 @@ export function createHeartbeatTemplateRuntime(
   };
 
   const captureResponseInternalStateContext = (
-    response: Awaited<ReturnType<HeartbeatAgent['handleMessage']>>,
+    response: Awaited<ReturnType<ReflectionAgent['handleMessage']>>,
   ): ReflectionInternalStateContext | null => {
     const metadata = response.metadata;
     if (!metadata) {
@@ -316,7 +316,7 @@ export function createHeartbeatTemplateRuntime(
     }
 
     if (metadata.internalState === undefined) {
-      throw new Error('Heartbeat response metadata.internalState is required when snapshot metadata is provided');
+      throw new Error('Reflection response metadata.internalState is required when snapshot metadata is provided');
     }
 
     const internalState = cloneInternalState(metadata.internalState);
@@ -378,13 +378,15 @@ export function createHeartbeatTemplateRuntime(
   });
 
   const resolveReflectionDeliberationCallType = (
-    source: HeartbeatExecutionSource,
+    source: ReflectionExecutionSource,
   ): ObservabilityCallType => (source === 'manual' ? 'background' : 'scheduled');
 
   const buildReflectionDeliberationCorrelation = (
-    source: HeartbeatExecutionSource,
+    source: ReflectionExecutionSource,
     reflectionChannelId: string,
     processId: string,
+    // Persisted/telemetry-visible stage prefix; retain it until a separately
+    // planned data migration can rewrite historical correlations.
     originStage = 'heartbeat.deliberation',
   ) => {
     const callType = resolveReflectionDeliberationCallType(source);
@@ -400,7 +402,7 @@ export function createHeartbeatTemplateRuntime(
 
   const buildReflectionDeliberationOptions = (
     template: ReflectionTemplate,
-    source: HeartbeatExecutionSource,
+    source: ReflectionExecutionSource,
     reflectionChannelId: string,
     processId: string,
     authoritativeSystemPrompt: string,
@@ -449,7 +451,7 @@ export function createHeartbeatTemplateRuntime(
   };
 
   const resolveReflectionInitiationContext = (
-    source: HeartbeatExecutionSource,
+    source: ReflectionExecutionSource,
     requestedSource: ReflectionRequestSource,
   ): { initiatorSurface: string; initiatedBy: string; reason: string } => {
     if (requestedSource === 'manual') {
@@ -502,7 +504,7 @@ export function createHeartbeatTemplateRuntime(
   const emitReflectionGuardrailTelemetry = async (input: {
     template: ReflectionTemplate;
     reflectionChannelId: string;
-    executionSource: HeartbeatExecutionSource;
+    executionSource: ReflectionExecutionSource;
     reflectionMode: 'agent' | 'deliberation';
     canonicalContactId?: string;
     diagnostics: ReflectionContactTelemetryDiagnostics;
@@ -573,6 +575,8 @@ export function createHeartbeatTemplateRuntime(
       importance: 0.72,
       confidence: 0.78,
       emotionalValence: 0,
+      // These source/tag values are persisted in memory rows and remain legacy-
+      // spelled so existing provenance queries keep matching them.
       sourceRef:
         `source:heartbeat|template:${template.id}|mode:deliberation`
         + `|session:${metadata.sessionId}|tokens:${metadata.totalTokens}`
@@ -597,12 +601,12 @@ export function createHeartbeatTemplateRuntime(
     reflection: string,
   ): { reflection: string; silent: boolean } => {
     const trimmed = reflection.trim();
-    const audit = getHeartbeatTemplateAuditProfile(template);
+    const audit = getReflectionTemplateAuditProfile(template);
     if (
       audit.allowSilentInterval
       && (
         trimmed.length === 0
-        || trimmed.toLowerCase() === HEARTBEAT_SILENT_REFLECTION_TOKEN
+        || trimmed.toLowerCase() === REFLECTION_SILENT_TOKEN
       )
     ) {
       return { reflection: '', silent: true };
@@ -613,7 +617,7 @@ export function createHeartbeatTemplateRuntime(
   const runTemplateDeliberation = async (
     template: ReflectionTemplate,
     prompt: string,
-    source: HeartbeatExecutionSource,
+    source: ReflectionExecutionSource,
     reflectionChannelId: string,
     processId: string,
   ): Promise<ReflectionDeliberationExecutionResult> => {
@@ -673,8 +677,8 @@ export function createHeartbeatTemplateRuntime(
        */
       conversationScope?: ConversationScope;
     } = {},
-    source: HeartbeatExecutionSource = 'scheduled',
-  ): Promise<Omit<HeartbeatRunTemplateResult, 'queued' | 'queuedVia' | 'deferredAction'>> => {
+    source: ReflectionExecutionSource = 'scheduled',
+  ): Promise<Omit<ReflectionRunTemplateResult, 'queued' | 'queuedVia' | 'deferredAction'>> => {
     assertTemplateExecutionAllowed(template.id, source);
 
     const requestedSource = options.requestedSource ?? (source === 'manual' ? 'manual' : 'scheduled');
@@ -957,7 +961,7 @@ export function createHeartbeatTemplateRuntime(
         throw error;
       }
     } else {
-      // E1.7: reflection/heartbeat turns enter the same turn pipeline as chat
+      // E1.7: reflection turns enter the same turn pipeline as chat
       // turns, so the turn's ConversationScope is resolved at session-manager
       // ingress from this message. A dm/absent scope keeps the internal-channel
       // canonical-contact binding byte-identical; an explicit group scope makes
@@ -1133,6 +1137,7 @@ export function createHeartbeatTemplateRuntime(
 
       try {
         const dailyEntry = reflectionDailyJournal.append({
+          // Persisted journal discriminator retained for existing readers.
           source: 'heartbeat_template',
           executionSource: source,
           templateId: template.id,
@@ -1260,7 +1265,7 @@ export function createHeartbeatTemplateRuntime(
     try {
       await executeTemplate(template, {}, 'scheduled');
     } catch (error) {
-      if (isHeartbeatTemplateLoopGuardError(error)) {
+      if (isReflectionTemplateLoopGuardError(error)) {
         log.warn('Scheduled reflection suppressed by rapid-fire loop guard', {
           templateId: template.id,
           source: error.source,
@@ -1279,11 +1284,11 @@ export function createHeartbeatTemplateRuntime(
     }
   };
 
-  const buildDeferredHeartbeatAction = (
+  const buildDeferredReflectionAction = (
     template: ReflectionTemplate,
     options: { sendToDiscordOverride?: boolean } = {},
   ): PostTurnActionCandidate => ({
-    kind: DEFERRED_HEARTBEAT_ACTION_KIND,
+    kind: DEFERRED_REFLECTION_ACTION_KIND,
     payload: {
       templateId: template.id,
       ...(options.sendToDiscordOverride !== undefined
@@ -1292,8 +1297,8 @@ export function createHeartbeatTemplateRuntime(
     },
     dedupeKey: (
       options.sendToDiscordOverride === undefined
-        ? `${DEFERRED_HEARTBEAT_ACTION_KIND}:${template.id}`
-        : `${DEFERRED_HEARTBEAT_ACTION_KIND}:${template.id}:discord:${String(options.sendToDiscordOverride)}`
+        ? `${DEFERRED_REFLECTION_ACTION_KIND}:${template.id}`
+        : `${DEFERRED_REFLECTION_ACTION_KIND}:${template.id}:discord:${String(options.sendToDiscordOverride)}`
     ),
     maxRetries: 2,
   });
@@ -1335,7 +1340,7 @@ export function createHeartbeatTemplateRuntime(
             }
             await executeTemplate(latestTemplate, { ...options, requestedSource }, 'deferred_scheduler');
           } catch (error) {
-            if (isHeartbeatTemplateLoopGuardError(error)) {
+            if (isReflectionTemplateLoopGuardError(error)) {
               log.warn(`Deferred reflection "${template.id}" suppressed by rapid-fire loop guard`, {
                 templateId: template.id,
                 source: error.source,
@@ -1364,7 +1369,7 @@ export function createHeartbeatTemplateRuntime(
       deferIfBusy?: boolean;
       conversationScope?: ConversationScope;
     } = {},
-  ): Promise<HeartbeatRunTemplateResult> => {
+  ): Promise<ReflectionRunTemplateResult> => {
     const current = store.load();
     const template = findReflectionTemplateById(current, templateId);
     if (!template) {
@@ -1377,8 +1382,8 @@ export function createHeartbeatTemplateRuntime(
         throw error;
       }
       if (runtimeOptions.postTurnActions) {
-        const deferredAction = buildDeferredHeartbeatAction(template, options);
-        log.info('Inferred deferred heartbeat action from busy template execution', {
+        const deferredAction = buildDeferredReflectionAction(template, options);
+        log.info('Inferred deferred reflection action from busy template execution', {
           templateId: template.id,
           dedupeKey: deferredAction.dedupeKey,
         });
@@ -1406,7 +1411,7 @@ export function createHeartbeatTemplateRuntime(
         reflection: '',
         queued: true,
         queuedVia: 'scheduler',
-        deferredAction: buildDeferredHeartbeatAction(template, options),
+        deferredAction: buildDeferredReflectionAction(template, options),
       };
     }
   };
@@ -1428,8 +1433,8 @@ export function createHeartbeatTemplateRuntime(
         requestedSource: options.requestedSource ?? 'manual',
       }, 'deferred_post_turn');
     } catch (error) {
-      if (isHeartbeatTemplateLoopGuardError(error)) {
-        log.warn(`Deferred heartbeat action "${options.actionId ?? templateId}" suppressed by rapid-fire loop guard`, {
+      if (isReflectionTemplateLoopGuardError(error)) {
+        log.warn(`Deferred reflection action "${options.actionId ?? templateId}" suppressed by rapid-fire loop guard`, {
           templateId,
           source: error.source,
           cooldownUntil: new Date(error.cooldownUntil).toISOString(),

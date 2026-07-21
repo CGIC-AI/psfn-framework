@@ -2,21 +2,21 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdirSync, rmSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { HeartbeatPolicyStore, validateTemplate } from './heartbeat-policy.js';
-import type { ReflectionTemplate } from './heartbeat-policy.js';
+import { ReflectionPolicyStore, validateTemplate } from './reflection-policy.js';
+import type { ReflectionTemplate } from './reflection-policy.js';
 import {
   getCachedJsonValueDiagnostics,
   invalidateCachedJsonValue,
 } from '../../system/config/load-or-seed.js';
 
-describe('HeartbeatPolicyStore', () => {
+describe('ReflectionPolicyStore', () => {
   let tmpDir: string;
-  let store: HeartbeatPolicyStore;
+  let store: ReflectionPolicyStore;
 
   beforeEach(() => {
     tmpDir = join(tmpdir(), `hbp-test-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`);
     mkdirSync(tmpDir, { recursive: true });
-    store = new HeartbeatPolicyStore(join(tmpDir, 'heartbeat-policy.json'));
+    store = new ReflectionPolicyStore(join(tmpDir, 'heartbeat-policy.json'));
   });
 
   afterEach(() => {
@@ -734,16 +734,16 @@ describe('validateTemplate', () => {
   });
 });
 
-describe('HeartbeatPolicyStore fingerprint-cached load (psfn-framework-nljc)', () => {
+describe('ReflectionPolicyStore fingerprint-cached load (psfn-framework-nljc)', () => {
   let tmpDir: string;
   let filePath: string;
-  let store: HeartbeatPolicyStore;
+  let store: ReflectionPolicyStore;
 
   beforeEach(() => {
     tmpDir = join(tmpdir(), `hbp-cache-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`);
     mkdirSync(tmpDir, { recursive: true });
     filePath = join(tmpDir, 'heartbeat-policy.json');
-    store = new HeartbeatPolicyStore(filePath);
+    store = new ReflectionPolicyStore(filePath);
   });
 
   afterEach(() => {

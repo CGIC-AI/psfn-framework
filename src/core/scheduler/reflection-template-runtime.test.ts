@@ -23,21 +23,21 @@ import {
 } from '../../persistence/journals/reflection-substrate.js';
 import { InternalStateComputer, buildInternalStateSnapshotRef } from '../self-model/state.js';
 import {
-  resolveHeartbeatPolicyPath,
+  resolveReflectionPolicyPath,
   resolveReflectionDailyJournalsDir,
   resolveReflectionJournalPath,
   resolveReflectionMetacognitionJournalPath,
   resolveReflectionProcessLogsDir,
   resolveValuesJournalPath,
 } from '../../persistence/layout.js';
-import { HeartbeatPolicyStore } from './heartbeat-policy.js';
+import { ReflectionPolicyStore } from './reflection-policy.js';
 import { Scheduler } from './scheduler.js';
-import { createHeartbeatTemplateRuntime } from './heartbeat-template-runtime.js';
+import { createReflectionTemplateRuntime } from './reflection-template-runtime.js';
 import { createGroupConversationScope } from '../session/conversation-scope.js';
 import { getRequestContext } from '../../primitives/llm/request-context.js';
-import type { HeartbeatAgent } from './heartbeat-runtime-contracts.js';
+import type { ReflectionAgent } from './reflection-runtime-contracts.js';
 
-describe('createHeartbeatTemplateRuntime reflection metacognition journal', () => {
+describe('createReflectionTemplateRuntime reflection metacognition journal', () => {
   let tempDir: string;
 
   const authoritativeDeliberationSystemPrompt = [
@@ -100,9 +100,9 @@ describe('createHeartbeatTemplateRuntime reflection metacognition journal', () =
   }
 
   it('keeps raw ACAC detail out of the daily starter while preserving it in telemetry', async () => {
-    tempDir = mkdtempSync(join(tmpdir(), 'heartbeat-template-runtime-'));
+    tempDir = mkdtempSync(join(tmpdir(), 'reflection-template-runtime-'));
     const capturedPrompts: string[] = [];
-    const policyStore = new HeartbeatPolicyStore(resolveHeartbeatPolicyPath(tempDir));
+    const policyStore = new ReflectionPolicyStore(resolveReflectionPolicyPath(tempDir));
     const policy = policyStore.load();
     const template = policy.templates.find((candidate) => candidate.id === 'daily-review');
     expect(template).toBeDefined();
@@ -147,7 +147,7 @@ describe('createHeartbeatTemplateRuntime reflection metacognition journal', () =
       },
     });
     const snapshotRef = buildInternalStateSnapshotRef(internalState);
-    const handleMessage = vi.fn<HeartbeatAgent['handleMessage']>(async (message: SubstrateMessage) => {
+    const handleMessage = vi.fn<ReflectionAgent['handleMessage']>(async (message: SubstrateMessage) => {
       capturedPrompts.push(message.content);
       return { content: 'ACAC context was captured.' };
     });
@@ -160,7 +160,7 @@ describe('createHeartbeatTemplateRuntime reflection metacognition journal', () =
       extractFinalReflection,
     };
 
-    const runtime = createHeartbeatTemplateRuntime({
+    const runtime = createReflectionTemplateRuntime({
       scheduler: new Scheduler(new EventBus(), { tickIntervalMs: 100, heartbeatIntervalMs: 1_000 }),
       agentLoop: {
         handleMessage,
@@ -226,9 +226,9 @@ describe('createHeartbeatTemplateRuntime reflection metacognition journal', () =
   });
 
   it('keeps uncertain emotion telemetry out of the compact daily starter', async () => {
-    tempDir = mkdtempSync(join(tmpdir(), 'heartbeat-template-runtime-'));
+    tempDir = mkdtempSync(join(tmpdir(), 'reflection-template-runtime-'));
     const capturedPrompts: string[] = [];
-    const policyStore = new HeartbeatPolicyStore(resolveHeartbeatPolicyPath(tempDir));
+    const policyStore = new ReflectionPolicyStore(resolveReflectionPolicyPath(tempDir));
     const policy = policyStore.load();
     const template = policy.templates.find((candidate) => candidate.id === 'daily-review');
     expect(template).toBeDefined();
@@ -271,7 +271,7 @@ describe('createHeartbeatTemplateRuntime reflection metacognition journal', () =
     });
     const snapshotRef = buildInternalStateSnapshotRef(internalState);
 
-    const runtime = createHeartbeatTemplateRuntime({
+    const runtime = createReflectionTemplateRuntime({
       scheduler: new Scheduler(new EventBus(), { tickIntervalMs: 100, heartbeatIntervalMs: 1_000 }),
       agentLoop: {
         handleMessage: vi.fn(async (message: { content: string }) => {
@@ -300,7 +300,7 @@ describe('createHeartbeatTemplateRuntime reflection metacognition journal', () =
   });
 
   it('records manual deliberation runs with provenance and process ids', async () => {
-    tempDir = mkdtempSync(join(tmpdir(), 'heartbeat-template-runtime-'));
+    tempDir = mkdtempSync(join(tmpdir(), 'reflection-template-runtime-'));
     const reflectionJournalPrototype = ReflectionJournalStore.prototype as ReflectionJournalStore & {
       listRecent?: (options?: { limit?: number }) => unknown[];
     };
@@ -308,7 +308,7 @@ describe('createHeartbeatTemplateRuntime reflection metacognition journal', () =
     reflectionJournalPrototype.listRecent = () => [];
 
     try {
-      const policyStore = new HeartbeatPolicyStore(resolveHeartbeatPolicyPath(tempDir));
+      const policyStore = new ReflectionPolicyStore(resolveReflectionPolicyPath(tempDir));
       const policy = policyStore.load();
       const valuesTemplate = policy.templates.find((template) => template.id === 'weekly-review');
       expect(valuesTemplate).toBeDefined();
@@ -365,7 +365,7 @@ describe('createHeartbeatTemplateRuntime reflection metacognition journal', () =
         }),
       };
 
-      const runtime = createHeartbeatTemplateRuntime({
+      const runtime = createReflectionTemplateRuntime({
         scheduler: new Scheduler(new EventBus(), { tickIntervalMs: 100, heartbeatIntervalMs: 1_000 }),
         agentLoop: {
           handleMessage: vi.fn(async () => ({ content: 'unused' })),
@@ -510,7 +510,7 @@ describe('createHeartbeatTemplateRuntime reflection metacognition journal', () =
   });
 
   it('runs experiential deliberation across evidence, synthesis, and contradiction stages and persists unsupported-claim flags', async () => {
-    tempDir = mkdtempSync(join(tmpdir(), 'heartbeat-template-runtime-'));
+    tempDir = mkdtempSync(join(tmpdir(), 'reflection-template-runtime-'));
     const capturedPrompts: string[] = [];
     const capturedSystemPrompts: string[] = [];
     const currentContact = {
@@ -615,7 +615,7 @@ describe('createHeartbeatTemplateRuntime reflection metacognition journal', () =
       }),
     };
     const toolGroundingPrompts: string[] = [];
-    const handleMessage = vi.fn<HeartbeatAgent['handleMessage']>(async (message: SubstrateMessage) => {
+    const handleMessage = vi.fn<ReflectionAgent['handleMessage']>(async (message: SubstrateMessage) => {
       toolGroundingPrompts.push(message.content);
       return {
         content: 'Read-only tool grounding found the unresolved recovery follow-up.',
@@ -630,7 +630,7 @@ describe('createHeartbeatTemplateRuntime reflection metacognition journal', () =
       extractFinalReflection,
     };
 
-    const runtime = createHeartbeatTemplateRuntime({
+    const runtime = createReflectionTemplateRuntime({
       scheduler: new Scheduler(new EventBus(), { tickIntervalMs: 100, heartbeatIntervalMs: 1_000 }),
       agentLoop: {
         handleMessage,
@@ -841,8 +841,8 @@ describe('createHeartbeatTemplateRuntime reflection metacognition journal', () =
   });
 
   it('keeps the authoritative identity stack on non-experiential deliberation voices and synthesis', async () => {
-    tempDir = mkdtempSync(join(tmpdir(), 'heartbeat-template-runtime-'));
-    const policyStore = new HeartbeatPolicyStore(resolveHeartbeatPolicyPath(tempDir));
+    tempDir = mkdtempSync(join(tmpdir(), 'reflection-template-runtime-'));
+    const policyStore = new ReflectionPolicyStore(resolveReflectionPolicyPath(tempDir));
     const policy = policyStore.load();
     policy.templates.push({
       id: 'custom-deliberation',
@@ -886,7 +886,7 @@ describe('createHeartbeatTemplateRuntime reflection metacognition journal', () =
       }),
     };
 
-    const runtime = createHeartbeatTemplateRuntime({
+    const runtime = createReflectionTemplateRuntime({
       scheduler: new Scheduler(new EventBus(), { tickIntervalMs: 100, heartbeatIntervalMs: 1_000 }),
       agentLoop: {
         handleMessage: vi.fn(async () => ({ content: 'unused' })),
@@ -918,15 +918,15 @@ describe('createHeartbeatTemplateRuntime reflection metacognition journal', () =
     expect(providerContexts[1]?.systemPrompt).toContain('inner synthesis layer');
   });
 
-  it('does not inject appearance context into deliberation heartbeat prompts', async () => {
-    tempDir = mkdtempSync(join(tmpdir(), 'heartbeat-template-runtime-'));
+  it('does not inject appearance context into deliberation reflection prompts', async () => {
+    tempDir = mkdtempSync(join(tmpdir(), 'reflection-template-runtime-'));
     const capturedPrompts: string[] = [];
     const reflectionJournalPrototype = ReflectionJournalStore.prototype as ReflectionJournalStore & {
       listRecent?: (options?: { limit?: number }) => unknown[];
     };
     const originalListRecent = reflectionJournalPrototype.listRecent;
     reflectionJournalPrototype.listRecent = () => [];
-    const policyStore = new HeartbeatPolicyStore(resolveHeartbeatPolicyPath(tempDir));
+    const policyStore = new ReflectionPolicyStore(resolveReflectionPolicyPath(tempDir));
     try {
       const policy = policyStore.load();
       const valuesTemplate = policy.templates.find((template) => template.id === 'weekly-review');
@@ -987,7 +987,7 @@ describe('createHeartbeatTemplateRuntime reflection metacognition journal', () =
         }),
       };
 
-      const runtime = createHeartbeatTemplateRuntime({
+      const runtime = createReflectionTemplateRuntime({
         scheduler: new Scheduler(new EventBus(), { tickIntervalMs: 100, heartbeatIntervalMs: 1_000 }),
         agentLoop: {
           handleMessage: vi.fn(async () => ({ content: 'unused' })),
@@ -1024,7 +1024,7 @@ describe('createHeartbeatTemplateRuntime reflection metacognition journal', () =
   it.each(['daily-review', 'weekly-review'])(
     'binds canonical contact context for %s reflection turns',
     async (templateId) => {
-      tempDir = mkdtempSync(join(tmpdir(), 'heartbeat-template-runtime-'));
+      tempDir = mkdtempSync(join(tmpdir(), 'reflection-template-runtime-'));
       const capturedPrompts: string[] = [];
       const recentSessionMessages = [
         {
@@ -1122,7 +1122,7 @@ describe('createHeartbeatTemplateRuntime reflection metacognition journal', () =
         };
       });
 
-      const runtime = createHeartbeatTemplateRuntime({
+      const runtime = createReflectionTemplateRuntime({
         scheduler: new Scheduler(new EventBus(), { tickIntervalMs: 100, heartbeatIntervalMs: 1_000 }),
         agentLoop: {
           handleMessage,
@@ -1292,7 +1292,7 @@ describe('createHeartbeatTemplateRuntime reflection metacognition journal', () =
   );
 
   it('suppresses DM-style canonical-contact grounding for a group-scoped reflection', async () => {
-    tempDir = mkdtempSync(join(tmpdir(), 'heartbeat-template-runtime-'));
+    tempDir = mkdtempSync(join(tmpdir(), 'reflection-template-runtime-'));
     const capturedPrompts: string[] = [];
     const recentSessionMessages = [
       {
@@ -1377,7 +1377,7 @@ describe('createHeartbeatTemplateRuntime reflection metacognition journal', () =
       };
     });
 
-    const runtime = createHeartbeatTemplateRuntime({
+    const runtime = createReflectionTemplateRuntime({
       scheduler: new Scheduler(new EventBus(), { tickIntervalMs: 100, heartbeatIntervalMs: 1_000 }),
       agentLoop: {
         handleMessage,
@@ -1454,7 +1454,7 @@ describe('createHeartbeatTemplateRuntime reflection metacognition journal', () =
   });
 
   it('records internal-state grounding for contactless daily reflection output', async () => {
-    tempDir = mkdtempSync(join(tmpdir(), 'heartbeat-template-runtime-'));
+    tempDir = mkdtempSync(join(tmpdir(), 'reflection-template-runtime-'));
     const internalState = new InternalStateComputer().computeState({
       emotionState: {
         vad: { valence: 0.05, arousal: 0.2, dominance: 0.1 },
@@ -1474,7 +1474,7 @@ describe('createHeartbeatTemplateRuntime reflection metacognition journal', () =
     });
     const snapshotRef = buildInternalStateSnapshotRef(internalState);
 
-    const runtime = createHeartbeatTemplateRuntime({
+    const runtime = createReflectionTemplateRuntime({
       scheduler: new Scheduler(new EventBus(), { tickIntervalMs: 100, heartbeatIntervalMs: 1_000 }),
       agentLoop: {
         handleMessage: vi.fn(async () => ({
@@ -1507,7 +1507,7 @@ describe('createHeartbeatTemplateRuntime reflection metacognition journal', () =
   });
 
   it('persists response retrieval provenance for contactless daily reflection turns', async () => {
-    tempDir = mkdtempSync(join(tmpdir(), 'heartbeat-template-runtime-'));
+    tempDir = mkdtempSync(join(tmpdir(), 'reflection-template-runtime-'));
     const internalState = new InternalStateComputer().computeState({
       emotionState: {
         vad: { valence: 0.05, arousal: 0.2, dominance: 0.1 },
@@ -1527,7 +1527,7 @@ describe('createHeartbeatTemplateRuntime reflection metacognition journal', () =
     });
     const snapshotRef = buildInternalStateSnapshotRef(internalState);
 
-    const runtime = createHeartbeatTemplateRuntime({
+    const runtime = createReflectionTemplateRuntime({
       scheduler: new Scheduler(new EventBus(), { tickIntervalMs: 100, heartbeatIntervalMs: 1_000 }),
       agentLoop: {
         handleMessage: vi.fn(async () => ({
@@ -1576,9 +1576,9 @@ describe('createHeartbeatTemplateRuntime reflection metacognition journal', () =
   });
 
   it('emits null-contact and synthesized snapshot guardrail telemetry when canonical contact binding is absent', async () => {
-    tempDir = mkdtempSync(join(tmpdir(), 'heartbeat-template-runtime-'));
+    tempDir = mkdtempSync(join(tmpdir(), 'reflection-template-runtime-'));
     const telemetryEvents: EventMap['reflection.guardrail'][] = [];
-    const policyStore = new HeartbeatPolicyStore(resolveHeartbeatPolicyPath(tempDir));
+    const policyStore = new ReflectionPolicyStore(resolveReflectionPolicyPath(tempDir));
     const policy = policyStore.load();
     const template = policy.templates.find((candidate) => candidate.id === 'daily-review');
     expect(template).toBeDefined();
@@ -1610,7 +1610,7 @@ describe('createHeartbeatTemplateRuntime reflection metacognition journal', () =
       telemetryEvents.push(payload);
     });
 
-    const runtime = createHeartbeatTemplateRuntime({
+    const runtime = createReflectionTemplateRuntime({
       scheduler: new Scheduler(new EventBus(), { tickIntervalMs: 100, heartbeatIntervalMs: 1_000 }),
       agentLoop: {
         handleMessage: vi.fn(async () => ({ content: 'Quiet check-in.' })),
@@ -1644,10 +1644,10 @@ describe('createHeartbeatTemplateRuntime reflection metacognition journal', () =
   });
 
   it('emits cadence drift and scheduler-bound snapshot guardrail telemetry for contact-scoped reflections', async () => {
-    tempDir = mkdtempSync(join(tmpdir(), 'heartbeat-template-runtime-'));
+    tempDir = mkdtempSync(join(tmpdir(), 'reflection-template-runtime-'));
     const telemetryEvents: EventMap['reflection.guardrail'][] = [];
     const now = Date.now();
-    const policyStore = new HeartbeatPolicyStore(resolveHeartbeatPolicyPath(tempDir));
+    const policyStore = new ReflectionPolicyStore(resolveReflectionPolicyPath(tempDir));
     const policy = policyStore.load();
     const template = policy.templates.find((candidate) => candidate.id === 'daily-review');
     expect(template).toBeDefined();
@@ -1700,7 +1700,7 @@ describe('createHeartbeatTemplateRuntime reflection metacognition journal', () =
       telemetryEvents.push(payload);
     });
 
-    const runtime = createHeartbeatTemplateRuntime({
+    const runtime = createReflectionTemplateRuntime({
       scheduler: new Scheduler(new EventBus(), { tickIntervalMs: 100, heartbeatIntervalMs: 1_000 }),
       agentLoop: {
         handleMessage: vi.fn(async () => ({
@@ -1764,10 +1764,10 @@ describe('createHeartbeatTemplateRuntime reflection metacognition journal', () =
   });
 
   it('emits stale silence-claim guardrail telemetry when reflection text contradicts fresh chat', async () => {
-    tempDir = mkdtempSync(join(tmpdir(), 'heartbeat-template-runtime-'));
+    tempDir = mkdtempSync(join(tmpdir(), 'reflection-template-runtime-'));
     const telemetryEvents: EventMap['reflection.guardrail'][] = [];
     const now = Date.now();
-    const policyStore = new HeartbeatPolicyStore(resolveHeartbeatPolicyPath(tempDir));
+    const policyStore = new ReflectionPolicyStore(resolveReflectionPolicyPath(tempDir));
     const policy = policyStore.load();
     const template = policy.templates.find((candidate) => candidate.id === 'daily-review');
     expect(template).toBeDefined();
@@ -1801,7 +1801,7 @@ describe('createHeartbeatTemplateRuntime reflection metacognition journal', () =
       telemetryEvents.push(payload);
     });
 
-    const runtime = createHeartbeatTemplateRuntime({
+    const runtime = createReflectionTemplateRuntime({
       scheduler: new Scheduler(new EventBus(), { tickIntervalMs: 100, heartbeatIntervalMs: 1_000 }),
       agentLoop: {
         handleMessage: vi.fn(async () => ({
@@ -1887,10 +1887,10 @@ describe('createHeartbeatTemplateRuntime reflection metacognition journal', () =
   });
 
   it('expands reflection macros with only the curated daily starter while retaining source provenance', async () => {
-    tempDir = mkdtempSync(join(tmpdir(), 'heartbeat-template-runtime-'));
+    tempDir = mkdtempSync(join(tmpdir(), 'reflection-template-runtime-'));
     const capturedPrompts: string[] = [];
 
-    const policyStore = new HeartbeatPolicyStore(resolveHeartbeatPolicyPath(tempDir));
+    const policyStore = new ReflectionPolicyStore(resolveReflectionPolicyPath(tempDir));
     const policy = policyStore.load();
     const experientialTemplate = policy.templates.find((template) => template.id === 'daily-review');
     expect(experientialTemplate).toBeDefined();
@@ -2010,7 +2010,7 @@ describe('createHeartbeatTemplateRuntime reflection metacognition journal', () =
       };
     });
 
-    const runtime = createHeartbeatTemplateRuntime({
+    const runtime = createReflectionTemplateRuntime({
       scheduler: new Scheduler(new EventBus(), { tickIntervalMs: 100, heartbeatIntervalMs: 1_000 }),
       agentLoop: {
         handleMessage,
@@ -2113,7 +2113,7 @@ describe('createHeartbeatTemplateRuntime reflection metacognition journal', () =
   });
 
   it('waits for pending extraction before reflection and seeds a recent session tail when retrieval is empty', async () => {
-    tempDir = mkdtempSync(join(tmpdir(), 'heartbeat-template-runtime-'));
+    tempDir = mkdtempSync(join(tmpdir(), 'reflection-template-runtime-'));
     const capturedPrompts: string[] = [];
     const flushTelemetry: Array<{
       channelId: string;
@@ -2129,7 +2129,7 @@ describe('createHeartbeatTemplateRuntime reflection metacognition journal', () =
     reflectionJournalPrototype.listRecent = () => [];
 
     try {
-      const policyStore = new HeartbeatPolicyStore(resolveHeartbeatPolicyPath(tempDir));
+      const policyStore = new ReflectionPolicyStore(resolveReflectionPolicyPath(tempDir));
       const policy = policyStore.load();
       const valuesTemplate = policy.templates.find((template) => template.id === 'weekly-review');
       expect(valuesTemplate).toBeDefined();
@@ -2230,7 +2230,7 @@ describe('createHeartbeatTemplateRuntime reflection metacognition journal', () =
         flushTelemetry.push(telemetry);
       });
 
-      const runtime = createHeartbeatTemplateRuntime({
+      const runtime = createReflectionTemplateRuntime({
         scheduler: new Scheduler(new EventBus(), { tickIntervalMs: 100, heartbeatIntervalMs: 1_000 }),
         agentLoop: {
           handleMessage: vi.fn(async () => ({ content: 'unused' })),
@@ -2314,7 +2314,7 @@ describe('createHeartbeatTemplateRuntime reflection metacognition journal', () =
   });
 });
 
-describe('createHeartbeatTemplateRuntime reflection novelty gate', () => {
+describe('createReflectionTemplateRuntime reflection novelty gate', () => {
   let tempDir: string;
 
   afterEach(() => {
@@ -2437,7 +2437,7 @@ describe('createHeartbeatTemplateRuntime reflection novelty gate', () => {
     };
     const handleMessage = vi.fn(async () => ({ content: 'unused' }));
 
-    const runtime = createHeartbeatTemplateRuntime({
+    const runtime = createReflectionTemplateRuntime({
       scheduler: new Scheduler(new EventBus(), { tickIntervalMs: 100, heartbeatIntervalMs: 1_000 }),
       agentLoop: {
         handleMessage,

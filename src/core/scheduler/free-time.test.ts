@@ -11,7 +11,7 @@ import type {
   EpisodicProcessingRestWindowConfig,
   FreeTimeConfig,
 } from '../../system/config/scheduler-config.js';
-import { HEARTBEAT_SILENT_REFLECTION_TOKEN } from './heartbeat-policy.js';
+import { REFLECTION_SILENT_TOKEN } from './reflection-policy.js';
 import { Scheduler } from './scheduler.js';
 import {
   accumulateDisclosureSource,
@@ -252,7 +252,7 @@ describe('free-time framing', () => {
     expect(prompt).not.toContain('DESCRIPTION_SENTINEL');
     expect(prompt).not.toContain('SCENARIO_SENTINEL');
     expect(prompt).toContain('some time to yourself');
-    expect(prompt).toContain(HEARTBEAT_SILENT_REFLECTION_TOKEN);
+    expect(prompt).toContain(REFLECTION_SILENT_TOKEN);
     expect(prompt).toContain('nothing here is sent to anyone');
     expect(prompt.toLowerCase()).not.toContain('you must');
     expect(prompt.toLowerCase()).not.toContain('your task');
@@ -260,7 +260,7 @@ describe('free-time framing', () => {
 
   it('continuation prompt keeps it optional', () => {
     const prompt = buildFreeTimeContinuationPrompt();
-    expect(prompt).toContain(HEARTBEAT_SILENT_REFLECTION_TOKEN);
+    expect(prompt).toContain(REFLECTION_SILENT_TOKEN);
     expect(prompt.toLowerCase()).not.toContain('you must');
   });
 
@@ -293,7 +293,7 @@ describe('runFreeTimeBlock', () => {
   };
 
   it('records a first-turn stop as a valid zero-output loaf', async () => {
-    const invokeTurn = vi.fn().mockResolvedValue({ content: HEARTBEAT_SILENT_REFLECTION_TOKEN });
+    const invokeTurn = vi.fn().mockResolvedValue({ content: REFLECTION_SILENT_TOKEN });
     const result = await runFreeTimeBlock({
       ...baseInput,
       maxTurns: 6,
@@ -309,7 +309,7 @@ describe('runFreeTimeBlock', () => {
     const invokeTurn = vi.fn()
       .mockResolvedValueOnce({ content: 'I wrote a little poem.' })
       .mockResolvedValueOnce({ content: 'I sketched an idea for the wiki.' })
-      .mockResolvedValueOnce({ content: HEARTBEAT_SILENT_REFLECTION_TOKEN });
+      .mockResolvedValueOnce({ content: REFLECTION_SILENT_TOKEN });
     const result = await runFreeTimeBlock({
       ...baseInput,
       maxTurns: 6,
@@ -397,7 +397,7 @@ function buildRuntime(options: {
     turnIndex: number;
     content: string;
   }) => {
-    const content = options.turnScript[turnIndex] ?? HEARTBEAT_SILENT_REFLECTION_TOKEN;
+    const content = options.turnScript[turnIndex] ?? REFLECTION_SILENT_TOKEN;
     turnIndex += 1;
     return { content };
   });
@@ -468,7 +468,7 @@ describe('registerFreeTimeTasks', () => {
   it('does not treat a recent system index row as recent partner activity', async () => {
     const nowMs = Date.parse('2026-06-11T15:00:00.000Z');
     const { scheduler, sessionManager, invokeTurn, runtime } = buildRuntime({
-      turnScript: [HEARTBEAT_SILENT_REFLECTION_TOKEN],
+      turnScript: [REFLECTION_SILENT_TOKEN],
       config: freeTimeConfig({
         quietHours: { enabled: false, checkIntervalMs: 1_000 },
         idle: { enabled: true, checkIntervalMs: 1_000, minIdleMinutes: 180 },
@@ -500,7 +500,7 @@ describe('registerFreeTimeTasks', () => {
     const sent: unknown[] = [];
     try {
       const { scheduler, invokeTurn, runtime, eventBus } = buildRuntime({
-        turnScript: ['I wrote a little poem.', HEARTBEAT_SILENT_REFLECTION_TOKEN],
+        turnScript: ['I wrote a little poem.', REFLECTION_SILENT_TOKEN],
         freeTimeTranscript: [
           entry({ id: 10, role: 'assistant', timestamp: Date.parse('2026-06-11T06:00:30.000Z'), content: 'I wrote a little poem.' }),
         ],
@@ -532,7 +532,7 @@ describe('registerFreeTimeTasks', () => {
   it('loads one active project before the first free-time turn', async () => {
     const nowMs = Date.parse('2026-06-11T06:00:00.000Z');
     const { scheduler, invokeTurn, runtime } = buildRuntime({
-      turnScript: [HEARTBEAT_SILENT_REFLECTION_TOKEN],
+      turnScript: [REFLECTION_SILENT_TOKEN],
       now: () => nowMs,
     });
     const loadProjectContext = vi.fn(async () => [
@@ -557,7 +557,7 @@ describe('registerFreeTimeTasks', () => {
     const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => nowMs);
     try {
       const { scheduler, sessionManager, runtime } = buildRuntime({
-        turnScript: ['I wrote a little poem.', HEARTBEAT_SILENT_REFLECTION_TOKEN],
+        turnScript: ['I wrote a little poem.', REFLECTION_SILENT_TOKEN],
         freeTimeTranscript: [
           entry({ id: 10, role: 'assistant', timestamp: nowMs + 30_000, content: 'I wrote a little poem.' }),
         ],
@@ -584,7 +584,7 @@ describe('registerFreeTimeTasks', () => {
     const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => nowMs);
     try {
       const { scheduler, sessionManager, runtime } = buildRuntime({
-        turnScript: ['about contact A', HEARTBEAT_SILENT_REFLECTION_TOKEN],
+        turnScript: ['about contact A', REFLECTION_SILENT_TOKEN],
         freeTimeTranscript: [
           entry({ id: 10, role: 'assistant', timestamp: nowMs + 10_000, content: 'note about contact A' }),
           entry({ id: 11, role: 'assistant', timestamp: nowMs + 20_000, content: 'note about contact B' }),
@@ -628,7 +628,7 @@ describe('registerFreeTimeTasks', () => {
     const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => nowMs);
     try {
       const { scheduler, sessionManager, runtime } = buildRuntime({
-        turnScript: ['about contact B', HEARTBEAT_SILENT_REFLECTION_TOKEN],
+        turnScript: ['about contact B', REFLECTION_SILENT_TOKEN],
         freeTimeTranscript: [
           entry({ id: 10, role: 'assistant', timestamp: nowMs + 10_000, content: 'note about contact B' }),
         ],
@@ -668,7 +668,7 @@ describe('registerFreeTimeTasks', () => {
     const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => nowMs);
     try {
       const { scheduler, sessionManager, runtime } = buildRuntime({
-        turnScript: [HEARTBEAT_SILENT_REFLECTION_TOKEN], // first-turn stop = loaf
+        turnScript: [REFLECTION_SILENT_TOKEN], // first-turn stop = loaf
         freeTimeTranscript: [],
         now: () => nowMs,
       });
@@ -778,7 +778,7 @@ describe('registerFreeTimeTasks', () => {
     let nowMs = Date.parse('2026-06-11T01:00:00.000Z');
     const { scheduler, invokeTurn, runtime, eventBus } = buildRuntime({
       // First (and only) turn is silent — the block ends 'loafed'.
-      turnScript: [HEARTBEAT_SILENT_REFLECTION_TOKEN],
+      turnScript: [REFLECTION_SILENT_TOKEN],
       config: freeTimeConfig({
         quietHours: { enabled: true, checkIntervalMs: 1_000 },
         idle: { enabled: false, checkIntervalMs: 1_000, minIdleMinutes: 180 },
@@ -838,7 +838,7 @@ describe('registerFreeTimeTasks', () => {
     const blocks: Array<{ activity: boolean; endReason: string }> = [];
     try {
       const { scheduler, runtime, eventBus } = buildRuntime({
-        turnScript: ['I wrote a little poem.', HEARTBEAT_SILENT_REFLECTION_TOKEN],
+        turnScript: ['I wrote a little poem.', REFLECTION_SILENT_TOKEN],
         freeTimeTranscript: [
           entry({ id: 10, role: 'assistant', timestamp: nowMs + 30_000, content: 'poem' }),
         ],
@@ -1006,7 +1006,7 @@ describe('free-time continuity identity is lane-independent', () => {
     const { scheduler, sessionManager, invokeTurn, runtime, eventBus } = buildRuntime({
       // First-turn stop = valid "loaf": one turn still runs (channel captured),
       // then the block records its provenance note on the same channel.
-      turnScript: [HEARTBEAT_SILENT_REFLECTION_TOKEN],
+      turnScript: [REFLECTION_SILENT_TOKEN],
       config: freeTimeConfig({
         quietHours: { enabled: input.lane === 'quiet_hours', checkIntervalMs: 1_000 },
         idle: { enabled: input.lane === 'idle', checkIntervalMs: 1_000, minIdleMinutes: 180 },
@@ -1157,7 +1157,7 @@ async function runActiveWorkspaceBlock(input: {
   const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => nowMs);
   try {
     const { scheduler, sessionManager, invokeTurn, runtime } = buildRuntime({
-      turnScript: ['I made something.', HEARTBEAT_SILENT_REFLECTION_TOKEN],
+      turnScript: ['I made something.', REFLECTION_SILENT_TOKEN],
       freeTimeTranscript: input.transcript,
       now: () => nowMs,
     });

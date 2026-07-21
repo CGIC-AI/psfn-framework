@@ -974,7 +974,7 @@ describe('values feedback loop across store instances', () => {
       const before = composer.composeSplit();
       expect(before.text).not.toContain('Care over throughput');
 
-      // Mirrors the weekly-review persistence path in heartbeat-template-runtime.
+      // Mirrors the weekly-review persistence path in reflection-template-runtime.
       reflectionRuntimeStore.append({
         templateId: 'weekly-review',
         templateName: 'Weekly Reflection',

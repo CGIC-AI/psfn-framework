@@ -1,9 +1,9 @@
 import {
   resolveConsolidatedReflectionTemplateId,
-  type HeartbeatPolicy,
+  type ReflectionPolicy,
   type ReflectionTemplate,
-} from '../heartbeat-policy.js';
-import type { HeartbeatRuntimeOptions } from '../heartbeat-runtime-contracts.js';
+} from '../reflection-policy.js';
+import type { ReflectionRuntimeOptions } from '../reflection-runtime-contracts.js';
 import type { DeterministicGateDefinition } from '../../../shared/gating/deterministic-gate.js';
 import {
   hasAssertionHeavyIntrospectiveOutput,
@@ -19,37 +19,37 @@ export const REFLECTION_NOVELTY_GATE_LANE = 'reflection.template.novelty';
 export const REFLECTION_NOVELTY_WATERMARK_PROCESSOR = 'reflection_template_novelty';
 export const REFLECTION_NOVELTY_ENTRY_SCAN_LIMIT = 50;
 
-export type HeartbeatExecutionSource = 'manual' | 'scheduled' | 'deferred_scheduler' | 'deferred_post_turn';
+export type ReflectionExecutionSource = 'manual' | 'scheduled' | 'deferred_scheduler' | 'deferred_post_turn';
 
-export function getHeartbeatTemplateAuditProfile(
+export function getReflectionTemplateAuditProfile(
   _template: ReflectionTemplate,
 ): { allowSilentInterval: boolean } {
   return { allowSilentInterval: false };
 }
 
-export class HeartbeatTemplateLoopGuardError extends Error {
+export class ReflectionTemplateLoopGuardError extends Error {
   readonly templateId: string;
-  readonly source: HeartbeatExecutionSource;
+  readonly source: ReflectionExecutionSource;
   readonly cooldownUntil: number;
 
   constructor(
     templateId: string,
-    source: HeartbeatExecutionSource,
+    source: ReflectionExecutionSource,
     cooldownUntil: number,
     message: string,
   ) {
     super(message);
-    this.name = 'HeartbeatTemplateLoopGuardError';
+    this.name = 'ReflectionTemplateLoopGuardError';
     this.templateId = templateId;
     this.source = source;
     this.cooldownUntil = cooldownUntil;
   }
 }
 
-export function isHeartbeatTemplateLoopGuardError(
+export function isReflectionTemplateLoopGuardError(
   error: unknown,
-): error is HeartbeatTemplateLoopGuardError {
-  return error instanceof HeartbeatTemplateLoopGuardError;
+): error is ReflectionTemplateLoopGuardError {
+  return error instanceof ReflectionTemplateLoopGuardError;
 }
 
 export function normalizeFiniteTimestamp(value: unknown): number | undefined {
@@ -82,7 +82,7 @@ export function buildReflectionNoveltyGateDefinition(minNewEntries: number): Det
 }
 
 export function findReflectionTemplateById(
-  policy: HeartbeatPolicy,
+  policy: ReflectionPolicy,
   templateId: string,
 ): ReflectionTemplate | undefined {
   const consolidatedTemplateId = resolveConsolidatedReflectionTemplateId(templateId);
@@ -105,7 +105,7 @@ export function buildUnsupportedReflectionSupportFlags(
 }
 
 export function resolveCompanionNameFromCharacterVariables(
-  provider: HeartbeatRuntimeOptions['characterPromptVariablesProvider'] | undefined,
+  provider: ReflectionRuntimeOptions['characterPromptVariablesProvider'] | undefined,
 ): string | undefined {
   if (!provider) return undefined;
   const variables = provider();

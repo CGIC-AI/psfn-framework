@@ -1456,7 +1456,7 @@ describe('AdminServer JSON API routes', () => {
     }
   });
 
-  it('persists reflection cadence updates from task PATCH into heartbeat policy', async () => {
+  it('persists reflection cadence updates from task PATCH into reflection policy', async () => {
     scheduler.register({
       id: 'reflection:whisper',
       name: 'Whisper',

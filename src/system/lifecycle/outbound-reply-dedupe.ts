@@ -8,7 +8,7 @@ import { createHash } from 'node:crypto';
  * one independent turn execution. The Discord inbound pump
  * (`src/app/agent/gateway-message-handlers.ts`) delivers the primary reply, and
  * a separate internal continuation turn
- * (`src/core/scheduler/heartbeat-post-turn-runtime.ts`) can run afterwards and
+ * (`src/core/scheduler/post-turn-runtime.ts`) can run afterwards and
  * deliver its own model-generated reply to the same channel. Those two paths
  * share no dedupe state, so when the continuation regenerates text identical to
  * the already-delivered reply the operator sees the message twice, roughly one

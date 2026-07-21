@@ -158,6 +158,7 @@ export interface ResolvedAuthorContext {
 }
 
 function isInternalJournalChannel(channelId: string): boolean {
+  // `internal:heartbeat` is a persisted reflection-session channel id.
   return channelId === 'internal:heartbeat' || channelId.startsWith('internal:reflection:');
 }
 
@@ -169,7 +170,7 @@ function isInternalJournalChannel(channelId: string): boolean {
  * parallel flag at every return site:
  *   - speakerRole 'user'   → a live human is driving the turn ('human')
  *   - speakerRole 'system' on an `internal:` channel → scheduler-driven
- *     heartbeat/reflection ('self_directed')
+ *     reflection (`internal:heartbeat` is the persisted legacy id) ('self_directed')
  *   - speakerRole 'system' otherwise → system-injected turn ('system')
  * Fail closed: only 'human' unlocks human-gated effectors; both machine buckets
  * are refused even when `trustLevel` is 'primary' for scoping.
@@ -743,10 +744,12 @@ export async function resolveAuthorContext(input: {
   contactTracking?: ContactTrackingGate;
 }): Promise<ResolvedAuthorContext> {
   if (input.message.channelId.startsWith('internal:')) {
-    const isHeartbeatChannel = input.message.channelId === 'internal:heartbeat';
-    const isReflectionChannel = input.message.channelId.startsWith('internal:reflection:');
-    if (isHeartbeatChannel || isReflectionChannel) {
-      // Heartbeat/reflection turns are executed by the scheduler, but the subject
+    // The first comparison is a compatibility read of the legacy persisted
+    // reflection-turn channel id.
+    const isReflectionTurnChannel = input.message.channelId === 'internal:heartbeat';
+    const isScopedReflectionChannel = input.message.channelId.startsWith('internal:reflection:');
+    if (isReflectionTurnChannel || isScopedReflectionChannel) {
+      // Reflection turns are executed by the scheduler, but the subject
       // of the turn is the companion. Reflection turns may also carry a bound
       // canonical contact hint so self-model and memory subsystems can stay scoped
       // to the current primary contact while subjectIdentityKey continues to drive
@@ -760,7 +763,7 @@ export async function resolveAuthorContext(input: {
       // canonical contact and its continuity fallback keys are room-based. A
       // dm/absent scope keeps the pre-E1.7 binding (routed canonical contact hint,
       // empty fallback keys) byte-identical.
-      const reflectionScopeHint = isReflectionChannel ? input.message.routing?.reflectionScope : undefined;
+      const reflectionScopeHint = isScopedReflectionChannel ? input.message.routing?.reflectionScope : undefined;
       if (reflectionScopeHint?.kind === 'group') {
         // The constructor derives a fail-closed envelope for this
         // continuity-key helper scope; the turn pipeline resolves the
@@ -784,7 +787,7 @@ export async function resolveAuthorContext(input: {
           ),
         };
       }
-      const canonicalContactKey = isReflectionChannel
+      const canonicalContactKey = isScopedReflectionChannel
         ? input.message.routing?.canonicalContactId?.trim() || undefined
         : undefined;
       return {
@@ -1082,6 +1085,7 @@ export function resolveTaskKind(input: {
   const suffix = input.message.channelId.slice('internal:'.length).toLowerCase();
   if (!suffix) return undefined;
 
+  // Preserve the legacy persisted task-kind value for legacy channel ids.
   if (suffix.includes('heartbeat')) return 'heartbeat';
   if (suffix.includes('reflection')) return 'reflection';
   if (suffix.includes('planning')) return 'planning';

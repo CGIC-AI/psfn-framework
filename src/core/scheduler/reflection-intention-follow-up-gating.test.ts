@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { wireHeartbeatRuntime } from '../../app/startup/composition/parity.js';
+import { wireReflectionRuntime } from '../../app/startup/composition/parity.js';
 import { EventBus } from '../../shared/event-bus.js';
 import type { PendingFollowUp } from '../intention/pending-follow-ups.js';
 import { INTENTION_FOLLOW_UP_ACTION_KIND } from '../intention/appraisal.js';
@@ -91,7 +91,7 @@ function wire(
     getStatus: vi.fn(),
   };
 
-  void wireHeartbeatRuntime(
+  void wireReflectionRuntime(
     { registerTool: vi.fn() },
     scheduler,
     {
@@ -131,7 +131,7 @@ function wire(
   };
 }
 
-describe('heartbeat intention follow-up activation gating', () => {
+describe('reflection intention follow-up activation gating', () => {
   it('does not activate a pending follow-up before dueAt or a wake condition is due', async () => {
     const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(1_700_000_000_000);
     try {

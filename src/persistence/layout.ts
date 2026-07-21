@@ -685,7 +685,7 @@ export function resolveDiscrepancyJournalPath(dataDir: string): string {
 /**
  * Dedicated journal for concern-resolution emotional arcs (vw3w.2). Kept
  * separate from the reflection journal so arc entries never leak into the
- * heartbeat reflection-substrate prompt (which reads journal.jsonl); the arc
+ * reflection-substrate prompt (which reads journal.jsonl); the arc
  * surfaces to the companion through the resolved-concern appraisal block.
  */
 export function resolveConcernResolutionArcJournalPath(dataDir: string): string {
@@ -779,7 +779,9 @@ export function resolveNorthStarPath(companionDataDir: string): string {
   return join(resolveCompanionStateDir(companionDataDir), 'north-star.json');
 }
 
-export function resolveHeartbeatPolicyPath(companionDataDir: string): string {
+export function resolveReflectionPolicyPath(companionDataDir: string): string {
+  // Preserve the existing on-disk filename. Renaming it requires a separately
+  // planned owner-file migration and live Companion Cluster rollout.
   return join(resolveCompanionStateDir(companionDataDir), 'heartbeat-policy.json');
 }
 
@@ -1032,7 +1034,7 @@ function migrateLegacyCompanionStateLayout(companionDataDir: string): void {
     ['prompt-registry.json', resolvePromptRegistryPath(companionDataDir)],
     ['prompt-registry-history.jsonl', resolvePromptRegistryHistoryPath(companionDataDir)],
     ['north-star.json', resolveNorthStarPath(companionDataDir)],
-    ['heartbeat-policy.json', resolveHeartbeatPolicyPath(companionDataDir)],
+    ['heartbeat-policy.json', resolveReflectionPolicyPath(companionDataDir)],
     ['introspection-consent.jsonl', resolveIntrospectionConsentLedgerPath(companionDataDir)],
     ['introspection-values-findings.jsonl', resolveIntrospectionValuesFindingsPath(companionDataDir)],
     ['post-turn-actions.queue.json', resolvePostTurnActionQueuePath(companionDataDir)],

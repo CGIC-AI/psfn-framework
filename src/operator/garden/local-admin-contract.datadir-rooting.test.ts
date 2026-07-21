@@ -11,7 +11,7 @@ import { SessionManager } from '../../core/session/manager.js';
 import { Scheduler } from '../../core/scheduler/scheduler.js';
 import { ShardManager } from '../../faculties/shards/manager.js';
 import {
-  resolveHeartbeatPolicyPath,
+  resolveReflectionPolicyPath,
   resolveReflectionMetacognitionJournalPath,
 } from '../../persistence/layout.js';
 import type { CharacterCardV2 } from '../../core/identity/types.js';
@@ -136,16 +136,16 @@ describe('createInProcessGardenAdminContract per-companion dataDir rooting (dnll
     });
   }
 
-  it('roots the Garden heartbeat-policy under companionDataDir, not system-data', () => {
+  it('roots the Garden reflection-policy under companionDataDir, not system-data', () => {
     const services = buildContract();
     const policyPath = (services.scheduler as unknown as {
       policyStore: { filePath: string };
     }).policyStore.filePath;
 
-    expect(policyPath).toBe(resolveHeartbeatPolicyPath(companionDataDir));
+    expect(policyPath).toBe(resolveReflectionPolicyPath(companionDataDir));
     expect(policyPath.startsWith(companionDataDir)).toBe(true);
     expect(policyPath.startsWith(systemDataDir)).toBe(false);
-    expect(policyPath).not.toBe(resolveHeartbeatPolicyPath(systemDataDir));
+    expect(policyPath).not.toBe(resolveReflectionPolicyPath(systemDataDir));
   });
 
   it('roots the scheduler reflection-metacognition journal under companionDataDir', () => {

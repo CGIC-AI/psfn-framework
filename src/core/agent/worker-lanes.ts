@@ -66,6 +66,7 @@ export const BACKGROUND_CONTINUATION_RUNTIME_CLASS: BackgroundContinuationRuntim
 export const MAINTENANCE_REFLECTION_RUNTIME_CLASS: MaintenanceReflectionRuntimeClass = (
   RUNTIME_LANE_CLASSES.maintenanceReflection
 );
+// The heartbeat prefix is telemetry-visible and retained for historical traces.
 const MAINTENANCE_REFLECTION_ORIGIN_STAGE_PREFIXES = [
   'heartbeat.deliberation',
   'reflection.deliberation',
@@ -256,6 +257,7 @@ export function resolveRuntimeLaneClassForPostTurnActionKind(
     return POST_TURN_APPRAISAL_RUNTIME_CLASS;
   }
   if (
+    // Durable queued actions already persist this compatibility discriminator.
     normalized === 'heartbeat.run_template'
     || normalized === 'memory.sleeptime.run'
     || normalized === 'memory.near-turn.run'

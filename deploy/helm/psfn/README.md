@@ -85,6 +85,14 @@ Set `secrets.allowMissingRequired=false` in install values to make Helm fail
 early when the required app keys are absent. You may also set
 `secrets.existingSecret` and provide the documented keys yourself.
 
+When migrating any chart-created app, Postgres, or Redis credentials to an
+`existingSecret`, first adopt the existing Secret under the corresponding
+value. The chart marks created credential Secrets with
+`helm.sh/resource-policy: keep`, so the manifest transition or an uninstall
+orphans them instead of deleting live credentials; the adopted Secret then
+remains available under `secrets.existingSecret`,
+`postgres.auth.existingSecret`, or `redis.auth.existingSecret`.
+
 Secrets are rendered only as Kubernetes Secrets. The chart does not copy secret
 material into ConfigMaps, annotations, labels, or NOTES.
 

@@ -41,11 +41,23 @@ function writeJsonAtomicFixture(path, value) {
 
 function fleetManifest(companions) {
   return {
-    companions: companions.map(({ companionId, name, postgresSchema }) => ({
+    postgres: {
+      sharedMigrationRole: 'shared_schema_migration',
+      sharedMigrationDatabaseUrlRef: {
+        kind: 'env',
+        envName: 'SHARED_SCHEMA_MIGRATION_DATABASE_URL',
+      },
+    },
+    companions: companions.map(({ companionId, name, postgresSchema, postgresRole }) => ({
       companionId,
       companionDataDir: `companions/${name}`,
       characterCardPath: `companions/${name}/companion.json`,
       postgresSchema,
+      postgresRole,
+      postgresDatabaseUrlRef: {
+        kind: 'env',
+        envName: `${postgresRole.toUpperCase()}_DATABASE_URL`,
+      },
     })),
   };
 }
@@ -178,6 +190,7 @@ function assertMalformedSourceRefused(ownerFile, contents, expectedError) {
         companionId: firstCompanionId,
         name: 'one',
         postgresSchema: 'one',
+        postgresRole: 'companion_one_runtime',
       }]), null, 2)}\n`,
       'utf8',
     );
@@ -207,8 +220,18 @@ try {
   const firstCompanionDataDir = join(runtimeRoot, 'companions', firstCompanionId);
   const secondCompanionDataDir = join(runtimeRoot, 'companions', secondCompanionId);
   const manifest = fleetManifest([
-    { companionId: firstCompanionId, name: firstCompanionId, postgresSchema: 'one' },
-    { companionId: secondCompanionId, name: secondCompanionId, postgresSchema: 'two' },
+    {
+      companionId: firstCompanionId,
+      name: firstCompanionId,
+      postgresSchema: 'one',
+      postgresRole: 'companion_one_runtime',
+    },
+    {
+      companionId: secondCompanionId,
+      name: secondCompanionId,
+      postgresSchema: 'two',
+      postgresRole: 'companion_two_runtime',
+    },
   ]);
   mkdirSync(systemDataDir, { recursive: true });
   for (const companionDataDir of [firstCompanionDataDir, secondCompanionDataDir]) {

@@ -137,10 +137,11 @@ function formatResult(result: ImageGenerationResult): string {
 }
 
 function formatVisionReview(review: ImageVisionReview): string {
-  return [
-    'Vision review:',
-    review.summary,
-  ].join('\n');
+  const lines = ['Vision review:', review.summary];
+  if (review.embodiment) {
+    lines.push(`Identity read: ${review.embodiment.framing} (${review.embodiment.note})`);
+  }
+  return lines.join('\n');
 }
 
 function buildToolContent(
@@ -357,6 +358,7 @@ async function reviewGeneratedImages(
           ...(input.imageLocalPaths ? { imageLocalPaths: input.imageLocalPaths } : {}),
           prompt: input.prompt,
           mode: input.mode,
+          compareToReference: true,
         })),
     };
   } catch (error) {

@@ -145,6 +145,18 @@
     return image.sourceToolName || image.mode || image.provider || 'image';
   }
 
+  function embodimentLabel(verdict: 'same_me' | 'drifted' | 'different_person'): string {
+    if (verdict === 'same_me') return 'Same me';
+    if (verdict === 'drifted') return 'Drifted';
+    return 'Different person';
+  }
+
+  function embodimentClass(verdict: 'same_me' | 'drifted' | 'different_person'): string {
+    if (verdict === 'same_me') return 'border-moss-300 bg-moss-50 text-moss-800';
+    if (verdict === 'drifted') return 'border-gold-300 bg-gold-50 text-gold-800';
+    return 'border-wilt-400 bg-wilt-50 text-wilt-700';
+  }
+
   function isSaving(image: GeneratedImageView): boolean {
     return savingIds.has(image.id);
   }
@@ -293,6 +305,18 @@
                 {#each image.tags as tag}
                   <span class="rounded-full bg-bark-100 px-2 py-0.5 text-xs font-medium text-shadow-700">{tag}</span>
                 {/each}
+              </div>
+            {/if}
+
+            {#if image.embodiment}
+              <div class="rounded-lg border px-2.5 py-1.5 text-xs {embodimentClass(image.embodiment.verdict)}">
+                <p class="font-semibold">Identity continuity: {embodimentLabel(image.embodiment.verdict)}</p>
+                {#if image.embodiment.framing}
+                  <p class="mt-0.5">{image.embodiment.framing}</p>
+                {/if}
+                {#if image.embodiment.note}
+                  <p class="mt-0.5 opacity-80">{image.embodiment.note}</p>
+                {/if}
               </div>
             {/if}
 

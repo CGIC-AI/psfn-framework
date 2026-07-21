@@ -20,6 +20,7 @@ import type {
   AdminGeneratedImageArtifactRef,
   AdminGeneratedImageCompanionNoteRef,
   AdminGeneratedImageConversationLink,
+  AdminGeneratedImageEmbodiment,
   AdminGeneratedImageListData,
   AdminGeneratedImageListQuery,
   AdminGeneratedImageMeaningfulMoment,
@@ -230,6 +231,27 @@ function normalizeArtifactRefs(value: unknown): AdminGeneratedImageArtifactRef[]
     });
   }
   return refs;
+}
+
+function normalizeEmbodiment(value: unknown): AdminGeneratedImageEmbodiment | undefined {
+  if (!isRecord(value)) return undefined;
+  const verdict = value.verdict;
+  if (verdict !== 'same_me' && verdict !== 'drifted' && verdict !== 'different_person') {
+    return undefined;
+  }
+  const framing = normalizedOptionalString(value.framing, MAX_GALLERY_NOTE_CHARS);
+  const note = normalizedOptionalString(value.note, MAX_GALLERY_NOTE_CHARS);
+  const referenceId = normalizedOptionalString(value.referenceId);
+  const referenceDescription = normalizedOptionalString(value.referenceDescription, MAX_GALLERY_NOTE_CHARS);
+  const reviewedAt = normalizedOptionalString(value.reviewedAt);
+  return {
+    verdict,
+    ...(framing ? { framing } : {}),
+    ...(note ? { note } : {}),
+    ...(referenceId ? { referenceId } : {}),
+    ...(referenceDescription ? { referenceDescription } : {}),
+    ...(reviewedAt ? { reviewedAt } : {}),
+  };
 }
 
 function normalizeMeaningfulMoment(value: unknown): AdminGeneratedImageMeaningfulMoment | undefined {
@@ -604,6 +626,7 @@ export class AdminImagesDataService implements AdminImagesService {
         assistantSessionEntryId: metadata.assistantSessionEntryId,
       });
     const meaningfulMoment = normalizeMeaningfulMoment(metadata.meaningfulMoment);
+    const embodiment = normalizeEmbodiment(metadata.embodiment);
     const sensitivityClassification = parseArtifactSensitivityClassification(
       metadata.sensitivityClassification,
     );
@@ -630,6 +653,7 @@ export class AdminImagesDataService implements AdminImagesService {
       ...(stringFromMetadata(metadata, 'requestId') ? { requestId: stringFromMetadata(metadata, 'requestId') } : {}),
       ...(stringArrayFromMetadata(metadata, 'referenceImageIds') ? { referenceImageIds: stringArrayFromMetadata(metadata, 'referenceImageIds') } : {}),
       ...(meaningfulMoment ? { meaningfulMoment } : {}),
+      ...(embodiment ? { embodiment } : {}),
       ...(conversation ? { conversation } : {}),
     };
   }

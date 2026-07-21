@@ -292,6 +292,37 @@ async function readExistingMetadata(path: string): Promise<Record<string, unknow
   return {};
 }
 
+const EMBODIMENT_VERDICTS = new Set(['same_me', 'drifted', 'different_person']);
+
+/**
+ * Lift the embodiment-consistency descriptor off a tool-result's vision review
+ * so it is durably recorded on the gallery sidecar. Content-free: verdict,
+ * framing, and the model's short note only.
+ */
+function embodimentFromToolDetails(details: unknown): Record<string, unknown> | undefined {
+  if (!isRecord(details)) return undefined;
+  const review = details.visionReview;
+  if (!isRecord(review)) return undefined;
+  const embodiment = review.embodiment;
+  if (!isRecord(embodiment)) return undefined;
+  const verdict = typeof embodiment.verdict === 'string' ? embodiment.verdict : '';
+  if (!EMBODIMENT_VERDICTS.has(verdict)) return undefined;
+  const referenceId = typeof embodiment.referenceId === 'string' ? embodiment.referenceId.trim() : '';
+  const framing = typeof embodiment.framing === 'string' ? embodiment.framing.trim() : '';
+  const note = typeof embodiment.note === 'string' ? embodiment.note.trim() : '';
+  const referenceDescription = typeof embodiment.referenceDescription === 'string'
+    ? embodiment.referenceDescription.trim()
+    : '';
+  return {
+    verdict,
+    ...(framing ? { framing } : {}),
+    ...(note ? { note } : {}),
+    ...(referenceId ? { referenceId } : {}),
+    ...(referenceDescription ? { referenceDescription } : {}),
+    reviewedAt: new Date().toISOString(),
+  };
+}
+
 function cleanContext(context: GeneratedImageGalleryContext | undefined): Record<string, unknown> | undefined {
   if (!context) return undefined;
   const clean: Record<string, unknown> = {};
@@ -320,6 +351,7 @@ async function writeGeneratedImageGalleryMetadata(params: {
   const { localPath, asset, attachment, result, message, index, context } = params;
   const existing = await readExistingMetadata(localPath);
   const conversation = cleanContext(context);
+  const embodiment = embodimentFromToolDetails(message.details);
   const sensitivityClassification = context?.sensitivityClassification
     ?? classifyArtifactSensitivity(context?.sensitivitySources ?? []);
   const contentType = attachment.contentType || asset.contentType || 'image/png';
@@ -343,6 +375,7 @@ async function writeGeneratedImageGalleryMetadata(params: {
     sourceToolName: message.toolName,
     ...(message.toolCallId ? { toolCallId: message.toolCallId } : {}),
     ...(conversation ? { conversation } : {}),
+    ...(embodiment ? { embodiment } : {}),
     sensitivityClassification,
     artifactRefs: [
       ...(

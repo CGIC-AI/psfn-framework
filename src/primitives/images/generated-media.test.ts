@@ -178,6 +178,64 @@ describe('collectGeneratedImageAttachments', () => {
     expect(readFileSync(attachments[0]!.localPath!)).toEqual(Buffer.from('png-two'));
   });
 
+  it('persists the embodiment-consistency descriptor from the vision review onto the gallery sidecar', async () => {
+    const companionDataDir = mkdtempSync(join(tmpdir(), 'psfn-generated-media-'));
+    tempDirs.push(companionDataDir);
+
+    const attachments = await collectGeneratedImageAttachments({
+      personalFilesDir: companionDataDir,
+      turnMessages: [
+        {
+          role: 'toolResult',
+          toolName: 'selfie_create',
+          content: [{ type: 'text', text: 'not-json' }],
+          details: {
+            mediaResult: {
+              provider: 'fal',
+              mode: 'create',
+              requestId: 'req-embodiment',
+              fallbackUsed: false,
+              images: [
+                { url: 'https://images.example.test/selfie.png', contentType: 'image/png', fileName: 'selfie.png' },
+              ],
+            },
+            visionReview: {
+              question: 'review',
+              summary: 'Looks like her. EMBODIMENT: same_me — same eyes.',
+              model: 'vision-model',
+              imageCount: 1,
+              embodiment: {
+                verdict: 'same_me',
+                framing: 'This still reads as me.',
+                note: 'same eyes',
+                referenceId: 'ref-1',
+                referenceDescription: 'default selfie',
+              },
+            },
+          },
+        } as any,
+      ],
+      fetchImpl: async () => (
+        new Response(Buffer.from('png-embodiment'), {
+          status: 200,
+          headers: { 'content-type': 'image/png' },
+        })
+      ) as Response,
+    });
+
+    expect(attachments).toHaveLength(1);
+    const metadata = JSON.parse(readFileSync(`${attachments[0]!.localPath!}.image-meta.json`, 'utf-8')) as {
+      embodiment?: { verdict: string; framing: string; note: string; referenceId: string; reviewedAt?: string };
+    };
+    expect(metadata.embodiment).toMatchObject({
+      verdict: 'same_me',
+      framing: 'This still reads as me.',
+      note: 'same eyes',
+      referenceId: 'ref-1',
+    });
+    expect(typeof metadata.embodiment?.reviewedAt).toBe('string');
+  });
+
   it('still attaches legacy media turn-record results (retired name)', async () => {
     const companionDataDir = mkdtempSync(join(tmpdir(), 'psfn-generated-media-'));
     tempDirs.push(companionDataDir);

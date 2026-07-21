@@ -25,15 +25,65 @@ import { clampVisionCompletionMaxTokens } from '../llm/vision-limits.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
 import { createComponentLogger } from '../../shared/logger.js';
 import type { CorrelationMetadata, LLMContext } from '../../shared/contracts/runtime.js';
-import type {
-  ImageMode,
-  ImageVisionReview,
-  ImageVisionReviewRequest,
-  ImageVisionReviewer,
+import {
+  describeEmbodimentVerdict,
+  type EmbodimentConsistencyVerdict,
+  type ImageEmbodimentConsistency,
+  type ImageMode,
+  type ImageVisionReview,
+  type ImageVisionReviewRequest,
+  type ImageVisionReviewer,
 } from './types.js';
 
 const VISION_IMAGE_MAX_COUNT = 4;
 const VISION_IMAGE_MAX_BYTES = 8 * 1024 * 1024;
+
+/**
+ * Minimal shape the reviewer needs to load the active identity reference.
+ * `ImageReferenceStore` satisfies this structurally without a hard import.
+ */
+export interface VisionReviewReferenceResolver {
+  resolveForTool(selector: { useDefaultReference?: boolean }): Promise<{
+    id: string;
+    dataUrl: string;
+    description: string;
+  } | null>;
+}
+
+const EMBODIMENT_VERDICTS: readonly EmbodimentConsistencyVerdict[] = [
+  'same_me',
+  'drifted',
+  'different_person',
+];
+
+const EMBODIMENT_MARKER = /EMBODIMENT:\s*(same_me|drifted|different_person)\b\s*[—:-]?\s*(.*)$/im;
+
+function parseDataUrlImageContent(dataUrl: string): ImageContent | null {
+  const match = /^data:([^;,]+);base64,(.+)$/is.exec(dataUrl.trim());
+  if (!match) return null;
+  const mimeType = match[1].trim().toLowerCase();
+  if (!mimeType.startsWith('image/')) return null;
+  return { type: 'image', data: match[2].trim(), mimeType };
+}
+
+function parseEmbodimentConsistency(
+  summary: string,
+  reference: { id: string; description: string },
+): ImageEmbodimentConsistency | undefined {
+  const match = EMBODIMENT_MARKER.exec(summary);
+  if (!match) return undefined;
+  const verdict = match[1].toLowerCase() as EmbodimentConsistencyVerdict;
+  if (!EMBODIMENT_VERDICTS.includes(verdict)) return undefined;
+  const note = match[2].trim();
+  const description = reference.description.trim();
+  return {
+    verdict,
+    framing: describeEmbodimentVerdict(verdict),
+    note: note.length > 0 ? note : describeEmbodimentVerdict(verdict),
+    referenceId: reference.id,
+    ...(description ? { referenceDescription: description } : {}),
+  };
+}
 
 const log = createComponentLogger('ImageVisionReviewer');
 
@@ -53,6 +103,8 @@ type BinaryFetcher = (
 export interface ImageVisionReviewerOptions {
   binaryFetcher?: BinaryFetcher;
   llmProvider?: LLMProviderPort;
+  /** Loads the active identity reference for embodiment-consistency reviews. */
+  referenceResolver?: VisionReviewReferenceResolver;
   completeImpl?: (
     model: Model<any>,
     context: PiContext,
@@ -182,7 +234,7 @@ export class DefaultImageVisionReviewer implements ImageVisionReviewer {
       throw new Error('media action="analyze" requires at least one image URL');
     }
 
-    const question = normalizeQuestion(input);
+    const baseQuestion = normalizeQuestion(input);
     const imageLocalPaths = (input.imageLocalPaths ?? [])
       .map((value) => value.trim())
       .slice(0, imageUrls.length);
@@ -193,6 +245,29 @@ export class DefaultImageVisionReviewer implements ImageVisionReviewer {
       }
       return this.resolveImageContent(url);
     }));
+
+    const embodimentReference = input.compareToReference === true
+      ? await this.loadEmbodimentReference()
+      : null;
+    const referenceBlock = embodimentReference
+      ? parseDataUrlImageContent(embodimentReference.dataUrl)
+      : null;
+    const activeReference = referenceBlock && embodimentReference
+      ? { id: embodimentReference.id, description: embodimentReference.description }
+      : null;
+    const question = activeReference
+      ? [
+          baseQuestion,
+          'The FIRST attached image is my active identity reference; the remaining'
+          + ' image(s) are the new render(s) to review against it.',
+          activeReference.description
+            ? `Reference description: ${activeReference.description}`
+            : '',
+          'Assess whether the render still depicts the same person as the reference.'
+          + ' End your reply with a single line exactly in this form:'
+          + ' EMBODIMENT: <same_me|drifted|different_person> — <short reason>.',
+        ].filter((line) => line.length > 0).join('\n')
+      : baseQuestion;
     const context = {
       systemPrompt: [
         'You are the companion\'s vision review path.',
@@ -203,6 +278,7 @@ export class DefaultImageVisionReviewer implements ImageVisionReviewer {
         role: 'user',
         content: [
           { type: 'text', text: question },
+          ...(referenceBlock ? [referenceBlock] : []),
           ...imageBlocks,
         ],
         timestamp: Date.now(),
@@ -227,11 +303,15 @@ export class DefaultImageVisionReviewer implements ImageVisionReviewer {
         if (!summary) {
           throw new Error(`vision review returned empty text from ${response.model}`);
         }
+        const embodiment = activeReference
+          ? parseEmbodimentConsistency(summary, activeReference)
+          : undefined;
         return {
           question,
           summary,
           model: response.model,
           imageCount: imageBlocks.length,
+          ...(embodiment ? { embodiment } : {}),
         };
       } catch (error) {
         log.warn('Vision review completion failed', {
@@ -256,12 +336,35 @@ export class DefaultImageVisionReviewer implements ImageVisionReviewer {
     if (!summary) {
       throw new Error('vision review returned empty text');
     }
+    const embodiment = activeReference
+      ? parseEmbodimentConsistency(summary, activeReference)
+      : undefined;
     return {
       question,
       summary,
       model: response.model ?? String(model.id),
       imageCount: imageBlocks.length,
+      ...(embodiment ? { embodiment } : {}),
     };
+  }
+
+  private async loadEmbodimentReference(): Promise<{
+    id: string;
+    dataUrl: string;
+    description: string;
+  } | null> {
+    const resolver = this.options.referenceResolver;
+    if (!resolver) return null;
+    try {
+      return await resolver.resolveForTool({ useDefaultReference: true });
+    } catch (error) {
+      // A missing/unreadable reference must not fail the vision review; the
+      // review still runs, it just carries no embodiment descriptor.
+      log.warn('Embodiment reference load failed; continuing without descriptor', {
+        error: toErrorMessage(error),
+      });
+      return null;
+    }
   }
 
   private async resolveImageContent(url: string): Promise<ImageContent> {

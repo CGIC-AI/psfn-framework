@@ -208,7 +208,8 @@ export class PostgresPrimaryEmbodimentStore implements PrimaryEmbodimentAuthorit
     occurredAt: Date;
   }): Promise<void> {
     const eventId = this.options.randomId?.() ?? randomUUID();
-    const isHumanActor = input.input.attachment.actor.kind === 'human';
+    const attachmentActor = input.input.attachment.actor;
+    const isHumanActor = attachmentActor.kind === 'human';
     await client.query(`
       INSERT INTO ${FLEET_AUTH_SCHEMA_NAME}.authorization_audit_events (
         event_id, actor_context, action, resource, decision, reason_code,
@@ -224,7 +225,7 @@ export class PostgresPrimaryEmbodimentStore implements PrimaryEmbodimentAuthorit
         attachmentDigest: digest(input.input.attachment.attachmentId),
         deviceDigest: digest(input.input.attachment.deviceActor.principal.deviceId),
         actorDigest: isHumanActor
-          ? digest(input.input.attachment.actor.principalId)
+          ? digest(attachmentActor.principalId)
           : digest('guest'),
       }),
       `primary_embodiment:${digest(input.input.companionId)}`,

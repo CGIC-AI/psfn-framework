@@ -125,6 +125,16 @@ assert.match(
   /CAPABILITY_COVERAGE_CASE_IDS = Object\.freeze\(\[\s*'capability_refusal_matrix',\s*'tier_tool_conformance',\s*\]\)/u,
   'the artifact publishes stable coverage ids for the grid and per-tier tool conformance',
 );
+assert.match(
+  liveHarnessSource,
+  /id: 'memory_recall_semi_private',[\s\S]*?privacy: 'invite_only'/u,
+  'the retired semi_private case id uses the current invite_only privacy vocabulary',
+);
+assert.match(
+  liveHarnessSource,
+  /const capabilityMatrix = \(CASE_IDS\.size === 0 \|\| CASE_IDS\.has\('capability_refusal_matrix'\)\)[\s\S]*?\? buildCapabilityMatrixCase\(ctx\)[\s\S]*?: null;/u,
+  'explicit case selection skips capability-matrix construction and its unrelated validation',
+);
 assert.doesNotMatch(
   readFileSync(
     fileURLToPath(new URL('../lib/capability-matrix.mjs', import.meta.url)),

@@ -29,6 +29,8 @@ COMPANION_MODEL_PATTERN="${COMPANION_MODEL_PATTERN:-}"
 SMOKE_TIMEOUT_SECONDS="${SMOKE_TIMEOUT_SECONDS:-180}"
 TESTING_HARNESS_API_KEY_VALUE=""
 TESTING_HARNESS_SECRET_KEY=""
+GARDEN_HEALTH_CHECK_MODE=""
+GARDEN_HEALTH_CHECK_LABEL="garden health"
 
 APP_DEPLOYS=(psfn-gateway psfn-garden)
 CHECK_COUNT=0
@@ -306,6 +308,33 @@ deploy_binds_host_port() {
       -o 'jsonpath={.spec.template.spec.containers[*].ports[*].hostPort}' 2>/dev/null | tr -d '[:space:]')"
   fi
   [[ -n "${HOST_PORT_CACHE[$deploy]}" ]]
+}
+
+resolve_garden_health_check_mode() {
+  local port_name
+  if ! port_name="$(run_kubectl -n "$NAMESPACE" get deploy psfn-garden \
+    -o 'jsonpath={.spec.template.spec.containers[?(@.name=="garden")].ports[0].name}' 2>&1)"; then
+    printf 'failed to inspect the Garden listener transport: %s\n' "$port_name" >&2
+    return 1
+  fi
+  port_name="$(printf '%s' "$port_name" | trim_text)"
+  case "$port_name" in
+    https-garden)
+      # The fleet listener admits only the gateway SPIFFE principal. The
+      # garden-admin client certificate is for Garden -> agent admin transport,
+      # so an out-of-band /health curl cannot satisfy this listener contract.
+      GARDEN_HEALTH_CHECK_MODE="pod-readiness"
+      GARDEN_HEALTH_CHECK_LABEL="garden health (pod readiness)"
+      ;;
+    http-garden)
+      GARDEN_HEALTH_CHECK_MODE="http"
+      GARDEN_HEALTH_CHECK_LABEL="garden health"
+      ;;
+    *)
+      printf 'unsupported Garden listener port name: %s\n' "${port_name:-<missing>}" >&2
+      return 1
+      ;;
+  esac
 }
 
 run_pod_node() {
@@ -592,7 +621,52 @@ check_contract_hash_consistency() {
 ' "$first"
 }
 
+check_garden_pod_readiness() {
+  local pods_json
+  if ! pods_json="$(run_kubectl -n "$NAMESPACE" get pods -l 'app.kubernetes.io/component=garden' \
+    -o json 2>&1)"; then
+    printf 'failed to read Garden pod readiness: %s\n' "$pods_json"
+    return 1
+  fi
+
+  printf '%s' "$pods_json" | node -e '
+const fs = require("node:fs");
+const payload = JSON.parse(fs.readFileSync(0, "utf8"));
+const pods = Array.isArray(payload.items) ? payload.items : [];
+const failures = [];
+for (const pod of pods) {
+  const name = String(pod.metadata?.name ?? "<unknown>");
+  const conditions = Array.isArray(pod.status?.conditions) ? pod.status.conditions : [];
+  const ready = conditions.some(
+    condition => condition.type === "Ready" && condition.status === "True",
+  );
+  if (pod.metadata?.deletionTimestamp) failures.push(`${name}: pod is terminating`);
+  if (!ready) failures.push(`${name}: Ready condition is not True`);
+}
+if (pods.length === 0) failures.push("no Garden pods found");
+if (failures.length > 0) {
+  console.error(failures.join("\n"));
+  process.exit(1);
+}
+console.log(`Garden pod readiness=True: ${pods.map(pod => pod.metadata?.name).join(", ")}`);
+'
+}
+
 check_garden_health() {
+  case "$GARDEN_HEALTH_CHECK_MODE" in
+    pod-readiness)
+      check_garden_pod_readiness
+      return
+      ;;
+    http)
+      ;;
+    *)
+      printf 'Garden health check mode is unresolved: %s\n' \
+        "${GARDEN_HEALTH_CHECK_MODE:-<missing>}"
+      return 1
+      ;;
+  esac
+
   local url
   local command
   local response
@@ -1073,6 +1147,7 @@ main() {
     printf '%s\n' "${APP_DEPLOYS[@]}"
     exit 0
   fi
+  resolve_garden_health_check_mode || die "Garden health check mode could not be resolved"
 
   printf 'PSFN kube rollout validation\n'
   printf 'namespace=%s mode=%s host=%s rollout_timeout=%s log_since=%s\n' \
@@ -1084,7 +1159,7 @@ main() {
   run_check "rollout status" check_rollout_status
   run_check "app pods and images" check_app_pods_and_images
   run_check "contract hash consistency" check_contract_hash_consistency
-  run_check "garden health" check_garden_health
+  run_check "$GARDEN_HEALTH_CHECK_LABEL" check_garden_health
   run_check "gateway models" check_gateway_models
   run_check "postgres pgvector and redis" check_postgres_and_redis
   run_check "agent log scan" check_agent_logs

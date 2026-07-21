@@ -40,6 +40,7 @@ import { createComponentLogger } from '../../shared/logger.js';
 import { AGENT_LOOP_MAX_ASSISTANT_STEPS_PER_RUN } from '../../core/agent/turn-limits.js';
 import {
   buildCompletionHandoffDedupeKey,
+  buildFailedCompletionHandoffDelivery,
   emitCompletionHandoff,
   safeEmitCompletionHandoffError,
   summarizeCompletionText,
@@ -67,6 +68,7 @@ import {
   deriveSubagentCapabilityGrant,
   type DerivedSubagentCapabilityGrant,
 } from './capability-access.js';
+import { SubagentExecutionError } from './types.js';
 import type {
   SubagentExecutionRequest,
   SubagentExecutionSourceContext,
@@ -218,6 +220,8 @@ interface ActiveSubagentHandle {
   outstandingTurns: Promise<void>[];
 }
 
+type SubagentExecutionResult = Omit<SubagentResult, 'completionHandoff'>;
+
 export class SubagentFaculty implements SubagentControlPort {
   readonly portFamily = 'subagent' as const;
 
@@ -249,8 +253,7 @@ export class SubagentFaculty implements SubagentControlPort {
     if (result.outcome === 'completed') {
       return result;
     }
-    const failureReason = result.failureReason ?? result.stateReason;
-    throw new Error(`Subagent "${result.name}" ${result.outcome} (${result.stateReason}): ${failureReason}`);
+    throw new SubagentExecutionError(result);
   }
 
   async spawn(request: SubagentExecutionRequest): Promise<SubagentTaskRecord> {
@@ -803,7 +806,7 @@ export class SubagentFaculty implements SubagentControlPort {
     }
   }
 
-  private async finishHandle(handle: ActiveSubagentHandle, result: SubagentResult): Promise<void> {
+  private async finishHandle(handle: ActiveSubagentHandle, result: SubagentExecutionResult): Promise<void> {
     if (handle.settled) return;
     // Remove from the active set first so no further follow-up turns can be
     // enqueued via `message` once we begin draining.
@@ -813,18 +816,24 @@ export class SubagentFaculty implements SubagentControlPort {
     // resolve while a detached turn is mid-write, and a caller that disposes
     // the session store races an in-flight journal write (psfn-framework-k510).
     await this.drainOutstandingTurns(handle);
-    this.storeRecentResult(result);
+    let completionHandoff: SubagentResult['completionHandoff'] = { status: 'delivered' };
     try {
       await this.emitCompletionHandoff(handle, result);
     } catch (handoffError) {
+      completionHandoff = buildFailedCompletionHandoffDelivery(handoffError);
       log.error('Terminal subagent lifecycle handoff failed without changing the task result', {
         subagentId: handle.subagentId,
         lifecycleState: result.lifecycleState,
-        error: safeEmitCompletionHandoffError(handoffError),
+        error: completionHandoff.error,
       });
     }
+    const terminalResult: SubagentResult = {
+      ...result,
+      completionHandoff,
+    };
+    this.storeRecentResult(terminalResult);
     handle.settled = true;
-    handle.resolveCompletion(cloneSubagentResult(result));
+    handle.resolveCompletion(cloneSubagentResult(terminalResult));
   }
 
   private async emitBlockedSpawnHandoff(
@@ -863,7 +872,7 @@ export class SubagentFaculty implements SubagentControlPort {
 
   private async emitCompletionHandoff(
     handle: ActiveSubagentHandle,
-    result: SubagentResult,
+    result: SubagentExecutionResult,
   ): Promise<void> {
     const sourceContext = this.resolveSourceContext(handle.request);
 
@@ -1033,7 +1042,7 @@ export class SubagentFaculty implements SubagentControlPort {
     lastModel: string,
     lastContent: string,
     turns: number,
-  ): SubagentResult {
+  ): SubagentExecutionResult {
     const previous = this.taskRegistry.getActiveTask(handle.subagentId);
     const completed = this.taskRegistry.markCompleted(handle.subagentId, 'completed', Date.now());
     this.auditTrail?.append('subagent.lifecycle.transition', {
@@ -1044,7 +1053,7 @@ export class SubagentFaculty implements SubagentControlPort {
       workerLane: completed.workerLane,
       channelId: completed.channelId,
     });
-    const result: SubagentResult = {
+    const result: SubagentExecutionResult = {
       subagentId: handle.subagentId,
       name: handle.request.name,
       content: lastContent,
@@ -1077,7 +1086,7 @@ export class SubagentFaculty implements SubagentControlPort {
     lastModel: string,
     lastContent: string,
     turns: number,
-  ): SubagentResult {
+  ): SubagentExecutionResult {
     const previous = this.taskRegistry.getActiveTask(handle.subagentId);
     const cancelled = this.taskRegistry.markCancelled(
       handle.subagentId,
@@ -1094,7 +1103,7 @@ export class SubagentFaculty implements SubagentControlPort {
       workerLane: cancelled.workerLane,
       channelId: cancelled.channelId,
     });
-    const result: SubagentResult = {
+    const result: SubagentExecutionResult = {
       subagentId: handle.subagentId,
       name: handle.request.name,
       content: lastContent,
@@ -1126,7 +1135,7 @@ export class SubagentFaculty implements SubagentControlPort {
   private finalizeFailed(
     handle: ActiveSubagentHandle,
     failureReason: string,
-  ): SubagentResult {
+  ): SubagentExecutionResult {
     const previous = this.taskRegistry.getActiveTask(handle.subagentId);
     const failed = this.taskRegistry.markFailed(
       handle.subagentId,
@@ -1143,7 +1152,7 @@ export class SubagentFaculty implements SubagentControlPort {
       workerLane: failed.workerLane,
       channelId: failed.channelId,
     });
-    const result: SubagentResult = {
+    const result: SubagentExecutionResult = {
       subagentId: handle.subagentId,
       name: handle.request.name,
       content: '',
@@ -1179,7 +1188,7 @@ export class SubagentFaculty implements SubagentControlPort {
     lastContent: string,
     turns: number,
     budget: SubagentBudgetExhaustion,
-  ): SubagentResult {
+  ): SubagentExecutionResult {
     const failureReason = budget.reason === 'deadline'
       ? 'work spec deadline budget exhausted before completion'
       : 'work spec output-token budget exhausted before completion';
@@ -1204,7 +1213,7 @@ export class SubagentFaculty implements SubagentControlPort {
       workerLane: stopped.workerLane,
       channelId: stopped.channelId,
     });
-    const result: SubagentResult = {
+    const result: SubagentExecutionResult = {
       subagentId: handle.subagentId,
       name: handle.request.name,
       content: lastContent,
@@ -1578,6 +1587,7 @@ function normalizeRequiredText(value: string, field: string): string {
 function cloneSubagentResult(result: SubagentResult): SubagentResult {
   return {
     ...result,
+    completionHandoff: { ...result.completionHandoff },
     ...(result.partial
       ? {
           partial: {

@@ -373,6 +373,63 @@ describe('extraction acceptance gates', () => {
 });
 
 describe('MemoryExtractor telemetry payloads', () => {
+  it('rejects testing sessions before transcript reads, model calls, or durable writes', async () => {
+    const channelId = 'api:testing:durable-memory-lane';
+    const llmClient = {
+      complete: vi.fn().mockResolvedValue({ content: '<response></response>' }),
+    } as any;
+    const sessionManager = {
+      characterName: 'Purrsephone',
+      resolveSessionChannelId: vi.fn().mockReturnValue(channelId),
+      getRecentMessages: vi.fn().mockReturnValue([
+        {
+          id: 1,
+          channelId,
+          role: 'user',
+          content: 'I moved to Seattle for a new job and feel relieved.',
+          timestamp: 1_000,
+        },
+      ]),
+    } as any;
+    const memoryStore = {
+      getMemoriesByChannel: vi.fn().mockReturnValue([]),
+      insertMemory: vi.fn(),
+      upsertContactProfile: vi.fn(),
+    } as any;
+    const contactStore = {
+      updateEmotionalBaseline: vi.fn(),
+    } as any;
+    const eventBus = {
+      emit: vi.fn().mockResolvedValue(undefined),
+    } as any;
+
+    const extractor = new MemoryExtractor(
+      llmClient,
+      sessionManager,
+      memoryStore,
+      {
+        embed: vi.fn().mockResolvedValue(new Float32Array(8)),
+        embedBatch: vi.fn(),
+        dims: 8,
+      } as any,
+      eventBus,
+      { extractionInterval: 5 },
+      null,
+      null,
+      contactStore,
+    );
+
+    await extractor.extract(channelId, 'contact-testing');
+
+    expect(sessionManager.getRecentMessages).not.toHaveBeenCalled();
+    expect(llmClient.complete).not.toHaveBeenCalled();
+    expect(memoryStore.getMemoriesByChannel).not.toHaveBeenCalled();
+    expect(memoryStore.insertMemory).not.toHaveBeenCalled();
+    expect(memoryStore.upsertContactProfile).not.toHaveBeenCalled();
+    expect(contactStore.updateEmotionalBaseline).not.toHaveBeenCalled();
+    expect(eventBus.emit).not.toHaveBeenCalled();
+  });
+
   it('includes trigger reason and extraction stats in emitted events', async () => {
     const turnId = createTurnId();
     const llmClient = {

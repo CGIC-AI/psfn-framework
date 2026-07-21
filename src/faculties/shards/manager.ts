@@ -26,17 +26,24 @@ import type { SessionStore } from '../../persistence/sessions/store.js';
 import type { SessionManager } from '../../core/session/manager.js';
 import type { ShardExecutionPort } from './port.js';
 import { chargeSurface, getRunChargeContext, runWithChargeContext } from '../../shared/telemetry/run-charge.js';
-import type {
+import {
+  ShardExecutionError,
+  type ActiveShard,
+  type SatelliteDelegationRequest,
+  type ShardConfigurationMutationResult,
+  type ShardConfigurationSnapshot,
+  type ShardConfig,
+  type ShardLifecycleState,
+  type ShardResult,
+  type ShardRuntimeRecord,
+} from './types.js';
+export {
+  ShardExecutionError,
+} from './types.js';
+export type {
   ActiveShard,
   SatelliteDelegationRequest,
-  ShardConfigurationMutationResult,
-  ShardConfigurationSnapshot,
-  ShardConfig,
-  ShardLifecycleState,
-  ShardResult,
-  ShardRuntimeRecord,
 } from './types.js';
-export type { ActiveShard, SatelliteDelegationRequest } from './types.js';
 import { buildShardLineageEnvelope, deriveShardCompanionId } from './result-lineage.js';
 import { getRequestContext } from '../../primitives/llm/request-context.js';
 import { AGENT_LOOP_MAX_ASSISTANT_STEPS_PER_RUN } from '../../core/agent/turn-limits.js';
@@ -48,6 +55,7 @@ import {
 import { toErrorMessage } from '../../shared/utils/errors.js';
 import {
   buildCompletionHandoffDedupeKey,
+  buildFailedCompletionHandoffDelivery,
   emitCompletionHandoff,
   safeEmitCompletionHandoffError,
   summarizeCompletionText,
@@ -96,6 +104,7 @@ import {
 } from './configuration-snapshot.js';
 
 const log = createComponentLogger('ShardManager');
+type ShardExecutionResult = Omit<ShardResult, 'completionHandoff'>;
 const DEFAULT_MAX_CONCURRENT = 5;
 const DEFAULT_MAX_TURNS = 1;
 const DEFAULT_SHARD_HEARTBEAT_STALE_AFTER_MS = 60_000;
@@ -632,6 +641,12 @@ export class ShardManager implements ShardExecutionPort {
     });
     let shardPostgresPrepared = false;
     let executionFailure: Error | undefined;
+    let totalInput = 0;
+    let totalOutput = 0;
+    let lastModel = '';
+    let lastContent = '';
+    let turns = 0;
+    let artifactReturn: ArtifactReturnBatch | null = null;
     try {
       await this.emitShardLifecycleProgressHandoff({
         shardId,
@@ -723,13 +738,6 @@ export class ShardManager implements ShardExecutionPort {
       // No memoryExtractor — shards don't run L1 extraction/archive jobs.
 
       // Execute with a bounded turn loop.
-      let totalInput = 0;
-      let totalOutput = 0;
-      let lastModel = '';
-      let lastContent = '';
-      let turns = 0;
-      let artifactReturn: ArtifactReturnBatch | null = null;
-
       for (
         let turn = 0;
         turn < this.configurationRegistry.effectiveWorkerBudget(shardId).maxTurns;
@@ -858,7 +866,7 @@ export class ShardManager implements ShardExecutionPort {
 
       this.transitionShardState(shardId, 'offline', 'completed');
       const finishedShard = this.activeShards.get(shardId);
-      const result: ShardResult = {
+      const result: ShardExecutionResult = {
         shardId,
         name: shardConfig.name,
         content: lastContent,
@@ -867,6 +875,7 @@ export class ShardManager implements ShardExecutionPort {
         outputTokens: totalOutput,
         durationMs: Date.now() - startTime,
         turns,
+        outcome: 'completed',
         lifecycleState: finishedShard?.state ?? 'offline',
         health: finishedShard?.health ?? 'healthy',
         stateReason: finishedShard?.stateReason ?? 'completed',
@@ -886,6 +895,7 @@ export class ShardManager implements ShardExecutionPort {
         health: result.health,
         capabilityGrant: capabilityGrantEvidence,
       });
+      let completionHandoff: ShardResult['completionHandoff'] = { status: 'delivered' };
       try {
         await this.emitShardCompletionHandoff({
           shardConfig,
@@ -893,12 +903,16 @@ export class ShardManager implements ShardExecutionPort {
           result,
         });
       } catch (handoffError) {
+        completionHandoff = buildFailedCompletionHandoffDelivery(handoffError);
         log.error('Completed shard lifecycle handoff failed without changing the shard result', {
           shardId,
-          error: safeEmitCompletionHandoffError(handoffError),
+          error: completionHandoff.error,
         });
       }
-      return result;
+      return {
+        ...result,
+        completionHandoff,
+      };
     } catch (error) {
       const msg = toErrorMessage(error);
       this.transitionShardState(shardId, 'degraded', 'execution_failed', msg);
@@ -910,6 +924,7 @@ export class ShardManager implements ShardExecutionPort {
         error: msg,
         capabilityGrant: capabilityGrantEvidence,
       });
+      let completionHandoff: ShardResult['completionHandoff'] = { status: 'delivered' };
       try {
         await this.emitShardFailureHandoff({
           shardId,
@@ -919,13 +934,37 @@ export class ShardManager implements ShardExecutionPort {
           error: msg,
         });
       } catch (handoffError) {
+        completionHandoff = buildFailedCompletionHandoffDelivery(handoffError);
         log.error('Failed shard lifecycle handoff could not be recorded', {
           shardId,
-          error: safeEmitCompletionHandoffError(handoffError),
+          error: completionHandoff.error,
         });
       }
-      executionFailure = new Error(
+      const failedShard = this.activeShards.get(shardId);
+      const result: ShardResult = {
+        shardId,
+        name: shardConfig.name,
+        content: lastContent,
+        model: lastModel,
+        inputTokens: totalInput,
+        outputTokens: totalOutput,
+        durationMs: Date.now() - startTime,
+        turns,
+        outcome: 'failed',
+        completionHandoff,
+        lifecycleState: failedShard?.state ?? 'offline',
+        health: failedShard?.health ?? 'failed',
+        stateReason: failedShard?.stateReason ?? 'execution_failed',
+        failureReason: msg,
+        capabilities: [...capabilities],
+        requiredCapabilities: [...requiredCapabilities],
+        capabilityGrant: capabilityGrantEvidence,
+        lineage,
+        ...(artifactReturn ? { artifactReturn } : {}),
+      };
+      executionFailure = new ShardExecutionError(
         `Shard "${shardConfig.name}" failed (execution_failed): ${msg}`,
+        result,
         { cause: error },
       );
       throw executionFailure;
@@ -958,9 +997,25 @@ export class ShardManager implements ShardExecutionPort {
       if (cleanupErrors.length === 1 && !executionFailure) {
         throw cleanupErrors[0];
       }
+      if (cleanupErrors.length > 0 && executionFailure) {
+        // The execution failure already carries the truthful worker outcome and
+        // the terminal lifecycle-delivery status. Surfacing it inside an
+        // AggregateError would force callers to excavate `.errors[0]` to recover
+        // that structure, so the structured error stays the thrown value and
+        // the cleanup failures stay visible on it as suppressed context.
+        // `.suppressed` is custom secondary-failure context on this error; it
+        // keeps cleanup failures visible without replacing the primary throw.
+        const carrier = executionFailure as Error & { suppressed?: unknown[] };
+        carrier.suppressed = [...(carrier.suppressed ?? []), ...cleanupErrors];
+        log.error('Shard cleanup failed after terminal execution; preserving structured result', {
+          shardId,
+          cleanupErrorCount: cleanupErrors.length,
+        });
+        throw executionFailure;
+      }
       if (cleanupErrors.length > 0) {
         throw new AggregateError(
-          [...(executionFailure ? [executionFailure] : []), ...cleanupErrors],
+          cleanupErrors,
           `Shard "${shardConfig.name}" cleanup failed`,
         );
       }
@@ -1058,7 +1113,7 @@ export class ShardManager implements ShardExecutionPort {
   private async emitShardCompletionHandoff(input: {
     shardConfig: ShardConfig;
     channelId: string;
-    result: ShardResult;
+    result: ShardExecutionResult;
   }): Promise<void> {
     const artifactRefs = this.buildArtifactRefs(input.result);
     await this.emitShardHandoff({
@@ -1197,7 +1252,7 @@ export class ShardManager implements ShardExecutionPort {
     }
   }
 
-  private buildArtifactRefs(result: ShardResult): CompletionHandoffRef[] {
+  private buildArtifactRefs(result: Pick<ShardResult, 'artifactReturn'>): CompletionHandoffRef[] {
     return (result.artifactReturn?.artifacts ?? []).map(artifact => ({
       kind: artifact.kind,
       ref: artifact.artifactId,

@@ -145,6 +145,29 @@ function factResponse(text: string): string {
 }
 
 describe('runExtractionOrchestration durable children', () => {
+  it('rejects a queued testing-session run before transcript, model, or write boundaries', async () => {
+    const options = buildOptions({
+      channelId: 'discord:fixture-alias',
+      sourceSessionId: 'api:testing:queued-extraction',
+      recoveredEntries: undefined,
+    });
+
+    await expect(runExtractionOrchestration(options)).resolves.toEqual({
+      memoryIds: [],
+      concernIds: [],
+      contactIds: [],
+    });
+
+    expect(options.sessionManager.getRecentMessages).not.toHaveBeenCalled();
+    expect(options.llmClient.complete).not.toHaveBeenCalled();
+    expect(options.memoryStore.getMemoriesByChannel).not.toHaveBeenCalled();
+    expect(options.processFact).not.toHaveBeenCalled();
+    expect(options.maybePersistEmotionalState).not.toHaveBeenCalled();
+    expect(options.maybeRefreshContactProfile).not.toHaveBeenCalled();
+    expect(options.emitExtractionStart).not.toHaveBeenCalled();
+    expect(options.recordExtractionMarker).not.toHaveBeenCalled();
+  });
+
   it('reports deduplicated memory, durable concern, and actual contact mutation targets', async () => {
     const options = buildOptions({
       processFact: vi.fn().mockResolvedValue({

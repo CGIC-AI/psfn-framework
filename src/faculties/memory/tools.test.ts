@@ -1,4 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { runWithRequestContext } from '../../primitives/llm/request-context.js';
+import { TestingSessionMemoryWriteError } from './writer.js';
 import {
   createMemoryTool,
   createMemoryWriteTool,
@@ -243,6 +245,34 @@ describe('createMemoryTool', () => {
         toolCallId: 'memory-call-1',
       },
     }));
+  });
+
+  it('stamps request-context sessionId so a testing-session write is fenced', async () => {
+    const store = mockUnifiedStore();
+    const tool = createMemoryTool(writer as unknown as MemoryWriter, store as unknown as MemoryStorePort);
+    writer.write.mockRejectedValueOnce(
+      new TestingSessionMemoryWriteError('api:operator:testing:harness'),
+    );
+
+    const result = await runWithRequestContext(
+      { sessionId: 'api:operator:testing:harness', callType: 'chat', purpose: 'chat' },
+      () => tool.execute('memory-call-testing', {
+        action: 'write',
+        text: 'testing-session memory that must not persist',
+        type: 'semantic',
+      }),
+    );
+
+    // The logical session id reaches the writer so its testing fence fires...
+    expect(writer.write).toHaveBeenCalledWith(expect.objectContaining({
+      provenance: expect.objectContaining({
+        toolName: 'memory',
+        toolCallId: 'memory-call-testing',
+        sessionId: 'api:operator:testing:harness',
+      }),
+    }));
+    // ...and the tool surfaces the denial instead of swallowing it.
+    expect(result.details?.isError).toBe(true);
   });
 
   it('normalizes JSON-array tag strings for unified writes', async () => {

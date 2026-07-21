@@ -18,12 +18,12 @@ import {
 } from './store/channel-index.js';
 import { indexedChannelId } from './store/session-index-keys.js';
 import { withSessionJournalWriteLock } from './store/session-journal-write-lock.js';
+import type {
+  SessionDatabasePurgePort,
+  SessionDatabasePurgeReport,
+} from './testing-session-postgres-purge.js';
 
 const WILDCARD_LIKE_PATTERN = /[*?[\]{}]/u;
-
-export interface SessionProjectionPurgePort {
-  purgeChannel(channelId: string): Promise<void>;
-}
 
 export interface SessionTailPurgePort {
   purgeChannelKeyFamily(channelKey: string): Promise<number>;
@@ -43,7 +43,7 @@ export class TestingSessionTailPurgeError extends Error {
 export interface PurgeTestingSessionOptions {
   sessionsDir: string;
   sessionId: string;
-  projection: SessionProjectionPurgePort;
+  database: SessionDatabasePurgePort;
   tailCache?: SessionTailPurgePort;
   forceNonTesting?: boolean;
   /**
@@ -57,6 +57,7 @@ export interface PurgeTestingSessionReport {
   sessionId: string;
   channelId: string;
   removedJournalFiles: string[];
+  database: SessionDatabasePurgeReport;
   tailCache:
     | {
         status: 'not_configured';
@@ -228,8 +229,12 @@ export async function purgeTestingSession(
     }
   }
 
+  let database: SessionDatabasePurgeReport;
   try {
-    await options.projection.purgeChannel(channelId);
+    database = await options.database.purgeSession({
+      sessionId: options.sessionId,
+      channelId,
+    });
   } catch (error) {
     rollbackBeforeProjectionCommit({
       staged,
@@ -249,6 +254,7 @@ export async function purgeTestingSession(
     sessionId: options.sessionId,
     channelId,
     removedJournalFiles: entry.filenames,
+    database,
     tailCache: options.tailCache
       ? {
           status: 'purged',

@@ -17,6 +17,7 @@ import type {
 } from '../../shared/contracts/runtime.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import { SubagentFaculty } from './faculty.js';
+import { SubagentExecutionError } from './types.js';
 import {
   buildSubagentWorkSpec,
   createSubagentWorkSpecProvider,
@@ -280,6 +281,7 @@ describe('SubagentFaculty', () => {
     expect(result.workerLane).toBe('subagent');
     expect(result.lifecycleState).toBe('completed');
     expect(result.outcome).toBe('completed');
+    expect(result.completionHandoff).toEqual({ status: 'delivered' });
     expect(result.partial).toBeUndefined();
     expect(result.content).toBe('task completed');
     expect(faculty.getActiveCount()).toBe(0);
@@ -311,7 +313,7 @@ describe('SubagentFaculty', () => {
     ))).toBe(true);
   });
 
-  it('preserves a completed result when its terminal lifecycle sink rejects', async () => {
+  it('reports terminal lifecycle delivery failure without falsifying a completed result', async () => {
     eventBus.guard('agent.completion_handoff', event => {
       if (event.handoff.status === 'completed') {
         throw new Error('terminal lifecycle sink unavailable');
@@ -335,6 +337,49 @@ describe('SubagentFaculty', () => {
     });
 
     expect(result.outcome).toBe('completed');
+    expect(result.completionHandoff).toEqual({
+      status: 'failed',
+      error: 'completion handoff failed: terminal lifecycle sink unavailable',
+    });
+    expect(faculty.getActiveCount()).toBe(0);
+  });
+
+  it('preserves the structured result (including lifecycle delivery) on execute() failure', async () => {
+    // The completion handoff guard rejects 'failed' lifecycle emissions, so the
+    // worker outcome is 'failed' AND the terminal delivery is 'failed'. The
+    // execute() caller must receive the full structured result, not a bare Error
+    // that has discarded completionHandoff.
+    mockSubagentError = new Error('worker execution failed');
+    eventBus.guard('agent.completion_handoff', event => {
+      if (event.handoff.status === 'blocked') {
+        throw new Error('terminal lifecycle sink unavailable');
+      }
+      return true;
+    });
+    const faculty = new SubagentFaculty({
+      eventBus,
+      llmProvider: mockLLM(),
+      sessionStore,
+      embeddingService: null,
+      memoryProvider: null,
+      config: TEST_CONFIG,
+      parentSystemPrompt: 'test prompt',
+    });
+
+    const error = await faculty.execute({
+      name: 'failed-terminal-handoff',
+      task: 'fail honestly despite notification infrastructure failure',
+      workSpec: buildSubagentWorkSpec(),
+    }).catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(SubagentExecutionError);
+    expect((error as SubagentExecutionError).result).toMatchObject({
+      outcome: 'blocked',
+      completionHandoff: {
+        status: 'failed',
+        error: 'completion handoff failed: terminal lifecycle sink unavailable',
+      },
+    });
     expect(faculty.getActiveCount()).toBe(0);
   });
 

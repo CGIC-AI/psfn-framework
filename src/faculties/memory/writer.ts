@@ -47,6 +47,7 @@ import {
   type CogSecMemoryCandidacyDecision,
 } from '../../core/cogsec/memory-candidacy.js';
 import { appendIntakeEnvelopeProvenanceRef } from '../../shared/contracts/intake-envelope.js';
+import { isTestingSessionId } from '../../core/session/session-id.js';
 import {
   resolveMemoryRetrievalPolicy,
   type MemoryRetrievalPolicy,
@@ -235,6 +236,14 @@ export class MemoryCandidacyPolicyError extends Error {
   }
 }
 
+export class TestingSessionMemoryWriteError extends Error {
+  override readonly name = 'TestingSessionMemoryWriteError';
+
+  constructor(sessionId: string) {
+    super(`Durable memory write rejected for testing session ${sessionId}`);
+  }
+}
+
 export interface MemoryRedactionOptions {
   memoryId: string;
   operation?: MemoryRedactionOperation;
@@ -383,6 +392,15 @@ export class MemoryWriter {
     throw new MemoryCandidacyPolicyError(decision);
   }
 
+  private assertTestingSessionExcluded(
+    opts: Pick<MemoryWriteOptions, 'provenance'> | Pick<MemoryPatchOptions, 'provenance'>,
+  ): void {
+    const sessionId = opts.provenance?.sessionId;
+    if (sessionId && isTestingSessionId(sessionId)) {
+      throw new TestingSessionMemoryWriteError(sessionId);
+    }
+  }
+
   /**
    * Write a single memory with dedup/contradiction handling.
    *
@@ -392,6 +410,7 @@ export class MemoryWriter {
    * 4. Insert new memory
    */
   async write(opts: MemoryWriteOptions): Promise<WriteResult> {
+    this.assertTestingSessionExcluded(opts);
     this.assertCogSecCandidacy(opts);
     const embedding = await this.embeddingService.embed(opts.text);
     return this.writeWithEmbedding(opts, embedding);
@@ -401,6 +420,7 @@ export class MemoryWriter {
     opts: MemoryWriteOptions,
     embedding: Float32Array,
   ): Promise<WriteResult> {
+    this.assertTestingSessionExcluded(opts);
     this.assertCogSecCandidacy(opts);
     this.validateEmbedding(embedding, 'write');
 
@@ -728,6 +748,7 @@ export class MemoryWriter {
    * on dedup, upsert always replaces the old memory.
    */
   async upsert(opts: MemoryWriteOptions): Promise<WriteResult> {
+    this.assertTestingSessionExcluded(opts);
     const {
       text,
       type,
@@ -905,6 +926,7 @@ export class MemoryWriter {
   }
 
   async patchMemory(opts: MemoryPatchOptions): Promise<MemoryPatchResult | null> {
+    this.assertTestingSessionExcluded(opts);
     const memoryId = opts.memoryId.trim();
     if (!memoryId) {
       throw new Error('memoryId is required');
@@ -1078,6 +1100,7 @@ export class MemoryWriter {
   }
 
   async patch(opts: MemoryPatchOptions): Promise<MemoryCorrectionResult | null> {
+    this.assertTestingSessionExcluded(opts);
     const memoryId = opts.memoryId.trim();
     if (!memoryId) {
       throw new Error('memoryId is required');
@@ -1299,6 +1322,7 @@ export class MemoryWriter {
 
     const acceptedRecords: MemoryWriteOptions[] = [];
     for (const record of records) {
+      this.assertTestingSessionExcluded(record);
       try {
         this.assertCogSecCandidacy(record, { logRejection: false });
         acceptedRecords.push(record);

@@ -2,7 +2,10 @@ import { createComponentLogger } from '../../../shared/logger.js';
 import type { LLMProviderPort, MemoryExtractionOutputs } from '../../../core/agent/contracts.js';
 import { buildLLMWorkSpec, completeWithWorkSpec } from '../../../primitives/llm/work-spec.js';
 import type { SessionEntry } from '../../../core/session/types.js';
-import { isExperientialSelfDirectedSessionId } from '../../../core/session/session-id.js';
+import {
+  isExperientialSelfDirectedSessionId,
+  isTestingSessionId,
+} from '../../../core/session/session-id.js';
 import { resolveLatestTurnContext } from '../../../core/session/turn-provenance.js';
 import type { PromptRegistryStatePort } from '../../../core/identity/prompt-state-port.js';
 import type { TurnID } from '../../../shared/contracts/runtime.js';
@@ -188,6 +191,17 @@ export async function runExtractionOrchestration(
 ): Promise<MemoryExtractionOutputs> {
   let resolvedTurnId: TurnID | undefined = options.turnId;
   try {
+    if (
+      isTestingSessionId(options.channelId)
+      || (options.sourceSessionId !== undefined && isTestingSessionId(options.sourceSessionId))
+    ) {
+      log.debug('Skipping durable extraction orchestration for testing session', {
+        channelId: options.channelId,
+        sourceSessionId: options.sourceSessionId,
+        triggerReason: options.triggerReason,
+      });
+      return emptyExtractionOutputs();
+    }
     const recentEntries = selectExtractionRecentEntries({
       recoveredEntries: options.recoveredEntries,
       fetchLiveHistory: () => options.sessionManager.getRecentMessages(options.channelId, 10),
@@ -555,4 +569,3 @@ function createExtractionChunkCompleter(
     return response.content;
   };
 }
-

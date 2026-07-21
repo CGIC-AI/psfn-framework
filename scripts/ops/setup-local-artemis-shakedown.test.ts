@@ -285,4 +285,14 @@ NODE
       `psfn-agent-${companionId}`,
     ]);
   });
+
+  it('uses honestly labelled pod readiness for the fleet Garden TLS listener', () => {
+    const validator = readFileSync(validatorPath, 'utf8');
+
+    expect(validator).toContain('https-garden)');
+    expect(validator).toContain('GARDEN_HEALTH_CHECK_LABEL="garden health (pod readiness)"');
+    expect(validator).toContain("get pods -l 'app.kubernetes.io/component=garden'");
+    expect(validator).toContain('condition.type === "Ready" && condition.status === "True"');
+    expect(validator).toContain('http-garden)');
+  });
 });

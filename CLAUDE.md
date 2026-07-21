@@ -153,7 +153,8 @@ npm run pr:publish -- --title "<title>" --body-file <path>
 
 For an existing PR with no metadata change, run `npm run pr:publish`. The wrapper
 makes a draft ready before pushing (and creates new PRs non-draft), then rejects
-SHA drift or skipped CI/Greptile checks. Keep the owning lane assigned while it
+SHA drift or skipped CI/Greptile checks. It requires the authenticated `gh` user
+to match the repo's `LOCAL_GATE_STATUS_ACTOR` variable (the status issuer). Keep the owning lane assigned while it
 waits. On failure, return the evidence to that lane once; never close/reopen the
 PR, rerun GitHub Actions, re-request Greptile, or dispatch a fresh review loop.
 The full canary, prewarm, lock, stage-attestation, change-budget, publication,

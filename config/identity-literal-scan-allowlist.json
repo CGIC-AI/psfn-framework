@@ -2345,6 +2345,18 @@
       "contains": "X-PSFN-Companion-ID",
       "reason": "Client-facing error messages must name the wire header exactly (psfn-framework-0xxf/vknn).",
       "pattern": "identity-proper-name"
+    },
+    {
+      "path": "scripts/ci/local-delivery-contract.mjs",
+      "contains": "psfn-local-gate-heavy.lock",
+      "reason": "Machine-wide heavy-phase gate lock needs a stable project-scoped name under os.tmpdir() so independent worktrees serialize on the same lock.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "scripts/prewarm-worktree.mjs",
+      "contains": "psfn-worktree-prewarm-",
+      "reason": "Disposable prewarm install fixtures use a project-scoped temp prefix so stray dirs are attributable and safely cleanable.",
+      "pattern": "identity-legacy-slug"
     }
   ]
 }

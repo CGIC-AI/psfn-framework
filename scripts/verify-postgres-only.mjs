@@ -66,13 +66,7 @@ const RETIRED_IMPLEMENTATION_PATHS = [
 const TEXT_REFERENCE_ALLOWLIST = [
   {
     path: 'README.md',
-    contains: 'SQLite runtime implementations, readers, and packages have been removed.',
-    classification: 'cutover-contract',
-    reason: 'The source-of-truth overview states the completed removal explicitly.',
-  },
-  {
-    path: 'README.md',
-    contains: 'no SQLite runtime or migration-reader dependency',
+    contains: 'PostgreSQL 17 + pgvector (no SQLite)',
     classification: 'cutover-contract',
     reason: 'The technology table names the absence of the retired dependency.',
   },

@@ -338,9 +338,10 @@ them.
 
 The wrapper pushes only the attested head, publishes its authenticated
 exact-base status, and verifies that both CI and Greptile target exactly that
-pushed SHA. It fails loudly on head drift or a skipped required check. Treat a
-skip as a defect to report; never close/reopen a PR, rerun Actions, re-request
-Greptile, or toggle labels to manufacture events.
+pushed SHA. It fails loudly on head drift or a required check that reports a
+SKIPPED conclusion; a required check GitHub never posts at all surfaces as the
+wait timeout instead. Treat either as a defect to report; never close/reopen a
+PR, rerun Actions, re-request Greptile, or toggle labels to manufacture events.
 
 On failure, return the evidence to the owning lane. Make at most the one
 already-authorized evidence-driven corrective commit, gate the new exact head,

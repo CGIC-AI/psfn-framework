@@ -75,6 +75,9 @@ import {
   memorySubjectAccessContextFromCorrelation,
 } from '../../faculties/memory/subject-authorized-store.js';
 import { registerGitTools } from '../../boundary/integrations/git/runtime-wiring.js';
+import { registerShellTools } from '../../boundary/integrations/shell/runtime-wiring.js';
+import { GatewayShellOps } from '../../boundary/integrations/shell/gateway-ops.js';
+import type { SandboxExecutionPort } from '../../boundary/sandbox/capabilities/contracts.js';
 import { GatewayGitOps } from '../../boundary/integrations/git/gateway-ops.js';
 import { registerBeadsTools } from '../../boundary/integrations/beads/runtime-wiring.js';
 import { resolveBeadsToolsEnabled } from '../../boundary/integrations/beads/enablement.js';
@@ -713,6 +716,25 @@ async function main(): Promise<void> {
   log.info('Split module registry path resolved', { moduleRegistryPath });
 
   const replConfig = buildReplConfig(config);
+  // Sandboxed shell for REPL surfaces (analysis_workbench): every execution
+  // routes through the gateway shell.exec RPC, so the single OS-enforced
+  // bubblewrap policy path (allowlist, cwd bounds, limits, approval, audit)
+  // governs REPL shell use exactly like the direct shell tool. No second
+  // execution path exists in the agent process (psfn-framework-jdwd).
+  const shellExecEnabled = config.shellExec?.enabled === true;
+  const workbenchShellExecutionPort: Pick<SandboxExecutionPort, 'boundary' | 'shellExec'> | null =
+    shellExecEnabled
+      ? {
+        boundary: {
+          kind: 'sandbox_broker',
+          isolatedFromGatewaySecrets: true,
+          brokerId: 'gateway-shell-exec-rpc',
+        },
+        shellExec: async (command, args = [], options = {}) => (
+          await gateway.shellExec(command, args, options)
+        ),
+      }
+      : null;
   const shardParentIcpDelivery = createPolicyGovernedShardParentIcpDelivery({
     parentCompanionId: resolveCoreCompanionIdFromConfig(config),
     intakeScreening,
@@ -739,7 +761,7 @@ async function main(): Promise<void> {
     onModuleRegistryMutation: async (mutation) => {
       await moduleLoader.applyRegistryMutation(mutation);
     },
-    executionPort: null,
+    executionPort: workbenchShellExecutionPort,
     compressionGuidelineEvolution,
     shardParentIcpDelivery,
     shardWorkloadRegistry: gateway,
@@ -912,6 +934,19 @@ async function main(): Promise<void> {
     access: 'read_only',
   });
   log.info('Git repository inspection tools enabled for parent agent');
+
+  // Direct shell tool — sandboxed CLI via the gateway shell.exec policy path.
+  // Gate registration on the same settings-owned enablement signal the gateway
+  // policy enforces so registration and policy agree (beads e7s0 pattern);
+  // the gateway DENYs shell.exec when shellExec.enabled is false, so
+  // advertising the tool anyway would make every call fail. Fail-closed:
+  // policy wins.
+  if (shellExecEnabled) {
+    registerShellTools(agentLoop, new GatewayShellOps(gateway), { gatewayMode: true });
+    log.info('Sandboxed shell tool enabled (gateway shell.exec policy path)');
+  } else {
+    log.info('Sandboxed shell tool disabled by policy (gateway denies shell.exec)');
+  }
 
   // Beads issue-management tools — policy-scoped gateway RPC access (no shell
   // passthrough). Gate registration on the same enablement signal the gateway

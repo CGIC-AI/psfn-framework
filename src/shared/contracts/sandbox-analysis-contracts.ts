@@ -77,6 +77,15 @@ export interface SandboxExecutionPort {
   ) => Promise<SandboxCodeExecutionResponse>;
 }
 
+/**
+ * Minimal execution-port seed a runtime can supply: the shell boundary plus
+ * its audited shellExec entrypoint. Code execution defaults to the local
+ * child-process sandbox unless the seed overrides it.
+ */
+export type SandboxExecutionPortSeed =
+  Pick<SandboxExecutionPort, 'boundary' | 'shellExec'>
+  & Partial<Pick<SandboxExecutionPort, 'codeExecutionBoundary' | 'executeCode'>>;
+
 export interface NestedAnalysisOptions {
   maxIterations?: number;
   maxTokens?: number;

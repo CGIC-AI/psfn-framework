@@ -6,6 +6,7 @@ import type {
   SandboxCodeExecutionRequest,
   SandboxCodeExecutionResponse,
   SandboxExecutionPort,
+  SandboxExecutionPortSeed,
 } from './capabilities/contracts.js';
 import {
   ANALYSIS_WORKBENCH_CHILD_PROTOCOL,
@@ -14,10 +15,6 @@ import {
 import { toErrorMessage } from '../../shared/utils/errors.js';
 import { createComponentLogger } from '../../shared/logger.js';
 import { createRateLimitedLogEmitter } from '../../shared/log-rate-limit.js';
-
-type SandboxExecutionPortSeed =
-  Pick<SandboxExecutionPort, 'boundary' | 'shellExec'>
-  & Partial<Pick<SandboxExecutionPort, 'codeExecutionBoundary' | 'executeCode'>>;
 
 type ChildSandboxMessage =
   | {

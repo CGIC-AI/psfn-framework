@@ -1216,6 +1216,7 @@ async function main(): Promise<void> {
       coreRuntime.fatigueRegulationReservations;
   }
   shutdownTargets.sessionTailCache = coreRuntime.sessionTailCache;
+  shutdownTargets.skillUsageTelemetry = coreRuntime.skillsRuntime;
   const gatewaySender = {
     send: (channelId: string, content: string) => gateway.discordSend(channelId, content),
   };

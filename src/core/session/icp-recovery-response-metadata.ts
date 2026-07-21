@@ -121,7 +121,7 @@ function isInternalStateShape(value: unknown): value is InternalState {
 // Digest shape (sha256 hex sliced to 16, internal-state-v1 prefix) must stay
 // in lockstep with buildInternalStateSnapshotRef.
 function matchesLegacyInternalStateSnapshotRef(state: InternalState, ref: string): boolean {
-  if (state.emotional.discrepancies.length > 0) return false;
+  if ((state.emotional.discrepancies?.length ?? 0) > 0) return false;
   const normalized = JSON.parse(serializeInternalState(state)) as { emotional: Record<string, unknown> };
   delete normalized.emotional.discrepancies;
   const digest = createHash('sha256').update(JSON.stringify(normalized)).digest('hex').slice(0, 16);

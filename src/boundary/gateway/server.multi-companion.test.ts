@@ -1683,6 +1683,41 @@ describe('GatewayServer multi-companion routing (flag on)', () => {
     }));
   });
 
+  it('keeps a surface unrouted after a gateway bounce until the agent re-identifies on the new connection (imlb)', async () => {
+    const { server, connect } = await setupServer({
+      ...createMinimalOptions(),
+      multiCompanion: multiCompanion({ discord: '11111111-1111-4111-8111-111111111111' }),
+    });
+    const connA = await connect();
+    await identifyAgent(connA, '11111111-1111-4111-8111-111111111111', 1);
+
+    // Baseline: routing works while the agent is identified.
+    server.notifyChannelMessage('discord', 'discord.message', { message: { id: 'm1' } });
+    expect(methodFrames(connA, 'discord.message')).toHaveLength(1);
+
+    // Gateway bounce: the agent's connection drops and a replacement connection
+    // is established, but it has NOT re-run gateway.client.identify yet — the
+    // exact post-reconnect state from the S10 field incident.
+    connA._emitClose();
+    await new Promise(r => setTimeout(r, 5));
+    const connReplacement = await connect();
+
+    // Surface routing (companionConnections) was cleared on close and the
+    // replacement connection never re-registered its surfaces, so inbound
+    // routing must fail closed rather than deliver to a stale/absent agent.
+    expect(() => server.notifyChannelMessage('discord', 'discord.message', { message: { id: 'm2' } }))
+      .toThrow('No agent connection for companion "11111111-1111-4111-8111-111111111111"');
+    expect(methodFrames(connReplacement, 'discord.message')).toHaveLength(0);
+
+    // Re-identify on the replacement connection is what repopulates surface
+    // routing; after it, inbound routing succeeds again with no change to the
+    // static channel routing. This is the contract the agent must satisfy on
+    // reconnect (guaranteed by the fail-closed restart in app/agent/main.ts).
+    await identifyAgent(connReplacement, '11111111-1111-4111-8111-111111111111', 3);
+    server.notifyChannelMessage('discord', 'discord.message', { message: { id: 'm3' } });
+    expect(methodFrames(connReplacement, 'discord.message')).toHaveLength(1);
+  });
+
   it('drops api.stream.delta frames from connections that are not the routed api companion', async () => {
     const { server, connect } = await setupServer({
       ...createMinimalOptions(),

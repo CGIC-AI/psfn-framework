@@ -327,7 +327,7 @@ async function main(): Promise<void> {
         error: error instanceof Error ? error.message : String(error),
       });
     }
-    process.exit(1);
+    process.exit(resolveGatewayConnectFailureExitCode(lifecycleRuntimeContract.restart));
   });
 
   const persistenceRuntime = await createAgentPersistenceRuntime({

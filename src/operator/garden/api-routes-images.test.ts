@@ -342,6 +342,35 @@ describe('image admin API routes', () => {
     });
   });
 
+  it('forwards visual autobiography updates through the generated image PATCH route', async () => {
+    const imagesService = makeImagesService();
+    const routes = makeRoutes(imagesService);
+
+    const response = await invokeRoute(
+      routes,
+      'PATCH',
+      '/api/admin/images/generated/img-1',
+      JSON.stringify({
+        autobiography: {
+          narrative: 'A render that finally felt like me.',
+          emotionalContext: 'settled',
+          milestone: { marked: true, label: 'anchor look' },
+          author: 'companion',
+        },
+      }),
+    );
+
+    expect(response.status).toBe(200);
+    expect(imagesService.updateGeneratedImage).toHaveBeenCalledWith('img-1', {
+      autobiography: {
+        narrative: 'A render that finally felt like me.',
+        emotionalContext: 'settled',
+        milestone: { marked: true, label: 'anchor look' },
+        author: 'companion',
+      },
+    });
+  });
+
   it('promotes a generated image into a reference slot', async () => {
     const imagesService = makeImagesService();
     const routes = makeRoutes(imagesService);

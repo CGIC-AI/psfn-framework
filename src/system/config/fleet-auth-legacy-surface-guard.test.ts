@@ -1,5 +1,8 @@
-import { describe, expect, it } from 'vitest';
-import { assertFleetAuthLegacySurfacesUnavailable } from './fleet-auth-legacy-surface-guard.js';
+import { describe, expect, it, vi } from 'vitest';
+import {
+  assertFleetAuthLegacySurfacesUnavailable,
+  warnIfInsecureLocalApiIgnoredUnderFleetAuth,
+} from './fleet-auth-legacy-surface-guard.js';
 
 describe('fleet auth legacy surface startup guard', () => {
   it.each([
@@ -70,5 +73,42 @@ describe('fleet auth legacy surface startup guard', () => {
       },
       principalAuthenticationWired: true,
     })).not.toThrow();
+  });
+});
+
+describe('warnIfInsecureLocalApiIgnoredUnderFleetAuth', () => {
+  it('warns when fleet auth is active and ALLOW_INSECURE_LOCAL_API=true is set', () => {
+    const logger = { warn: vi.fn() };
+    const fired = warnIfInsecureLocalApiIgnoredUnderFleetAuth({
+      fleetAuthEnabled: true,
+      env: { ALLOW_INSECURE_LOCAL_API: 'TRUE' },
+      logger,
+    });
+    expect(fired).toBe(true);
+    expect(logger.warn).toHaveBeenCalledTimes(1);
+    expect(logger.warn.mock.calls[0]?.[0]).toContain('ALLOW_INSECURE_LOCAL_API=true is set but IGNORED');
+    expect(logger.warn.mock.calls[0]?.[0]).toContain('fleet auth');
+  });
+
+  it('stays silent when fleet auth is active but the insecure flag is unset', () => {
+    const logger = { warn: vi.fn() };
+    const fired = warnIfInsecureLocalApiIgnoredUnderFleetAuth({
+      fleetAuthEnabled: true,
+      env: {},
+      logger,
+    });
+    expect(fired).toBe(false);
+    expect(logger.warn).not.toHaveBeenCalled();
+  });
+
+  it('stays silent when fleet auth is disabled even if the insecure flag is set', () => {
+    const logger = { warn: vi.fn() };
+    const fired = warnIfInsecureLocalApiIgnoredUnderFleetAuth({
+      fleetAuthEnabled: false,
+      env: { ALLOW_INSECURE_LOCAL_API: 'true' },
+      logger,
+    });
+    expect(fired).toBe(false);
+    expect(logger.warn).not.toHaveBeenCalled();
   });
 });

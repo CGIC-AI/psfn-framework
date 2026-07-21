@@ -38,7 +38,10 @@ import type { SensorIngestPort } from '../../shared/telemetry/sensor-ingest-port
 import { parseOptionalPositiveIntEnv } from '../../shared/utils/env.js';
 import { isExplicitTrue, parseCommaSeparatedEnv } from '../startup/support/env-parsing.js';
 import type { IntakeScreeningService } from '../../core/cogsec/intake/screening.js';
-import { assertFleetAuthLegacySurfacesUnavailable } from '../../system/config/fleet-auth-legacy-surface-guard.js';
+import {
+  assertFleetAuthLegacySurfacesUnavailable,
+  warnIfInsecureLocalApiIgnoredUnderFleetAuth,
+} from '../../system/config/fleet-auth-legacy-surface-guard.js';
 import type { GatewayFleetAuthBroker } from '../../boundary/gateway/fleet-auth-broker.js';
 import type { GatewayFleetAuthChildAssertionBroker } from '../../boundary/gateway/fleet-auth-child-assertions.js';
 import { GatewayCompanionUiActionBroker } from '../../boundary/gateway/companion-ui-action-broker.js';
@@ -452,6 +455,9 @@ export async function startOptionalGatewayApiServer(
   });
   const allowInsecureWithoutAuth = !fleetAuthBootstrapOnly
     && isExplicitTrue(env.ALLOW_INSECURE_LOCAL_API);
+  // Fleet auth overrode any ALLOW_INSECURE_LOCAL_API=true above; warn loudly so
+  // the ineffective, dangerous flag is removed rather than left to mislead.
+  warnIfInsecureLocalApiIgnoredUnderFleetAuth({ fleetAuthEnabled: fleetAuthBootstrapOnly, env });
   // Sprint-10 C1/H4: fail-closed parsing — a malformed trusted-proxy token,
   // weak/colliding satellite keys, or partial TLS config abort startup.
   const trustedProxyClientCertToken = parseTrustedProxyClientCertToken(

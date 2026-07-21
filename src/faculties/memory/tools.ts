@@ -111,6 +111,30 @@ function clampInt(val: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, Math.floor(val)));
 }
 
+/**
+ * Resolve the optional historical formation time for an imported memory record.
+ * Fails closed: an unparseable, pre-epoch, or future `occurred_at` yields an
+ * error string instead of silently coercing to the import wall-clock time
+ * (psfn-framework-n2z6). Returns an empty object when no timestamp was supplied.
+ */
+function parseImportOccurredAt(
+  value: string | undefined,
+  index: number,
+): { extractedAt?: number; error?: string } {
+  if (value === undefined) return {};
+  const parsed = Date.parse(value);
+  if (Number.isNaN(parsed)) {
+    return { error: `Error: record[${index}] has an invalid occurred_at "${value}" (expected an ISO-8601 timestamp)` };
+  }
+  if (parsed < 0) {
+    return { error: `Error: record[${index}] occurred_at "${value}" predates the Unix epoch` };
+  }
+  if (parsed > Date.now()) {
+    return { error: `Error: record[${index}] occurred_at "${value}" is in the future` };
+  }
+  return { extractedAt: parsed };
+}
+
 function extractInternalSource(params: Record<string, unknown>): string | null {
   const candidate = params[INTERNAL_SOURCE_PARAM];
   if (typeof candidate !== 'string') return null;
@@ -365,6 +389,7 @@ interface MemoryToolParams {
     confidence?: number;
     tags?: string;
     sensitivity?: SensitivityLevel;
+    occurred_at?: string;
   }>;
   source?: string;
   memory_id?: string;
@@ -528,6 +553,15 @@ export function createMemoryImportTool(writer: MemoryWriter): SubstrateAgentTool
           sensitivity: Type.Optional(
             Type.Unsafe<SensitivityLevel>({ type: 'string', enum: [...VALID_SENSITIVITY_LEVELS] }),
           ),
+          occurred_at: Type.Optional(
+            Type.String({
+              description:
+                'Historical formation time of this memory as an ISO-8601 timestamp '
+                + '(e.g. "2024-03-01T12:00:00Z"). Use when restoring/migrating memories so '
+                + 'they keep their original date instead of being stamped with the import time. '
+                + 'Must not be in the future.',
+            }),
+          ),
         }),
         { description: 'Array of memory records to import' },
       ),
@@ -546,6 +580,7 @@ export function createMemoryImportTool(writer: MemoryWriter): SubstrateAgentTool
           confidence?: number;
           tags?: string;
           sensitivity?: SensitivityLevel;
+          occurred_at?: string;
         }>;
         source?: string;
       },
@@ -574,6 +609,11 @@ export function createMemoryImportTool(writer: MemoryWriter): SubstrateAgentTool
             return textResultWithError(`Error: record[${i}] has invalid type "${type}"`, true);
           }
 
+          const occurred = parseImportOccurredAt(r.occurred_at, i);
+          if (occurred.error) {
+            return textResultWithError(occurred.error, true);
+          }
+
           const sourceContext = buildToolSourceContext(`memory_import:${source}`, toolCallId, internalSource);
           records.push({
             text: text.trim(),
@@ -586,6 +626,7 @@ export function createMemoryImportTool(writer: MemoryWriter): SubstrateAgentTool
             sourceType: sourceContext.sourceType,
             provenance: sourceContext.provenance,
             sensitivity: r.sensitivity,
+            ...(occurred.extractedAt !== undefined ? { extractedAt: occurred.extractedAt } : {}),
           });
         }
 
@@ -960,6 +1001,14 @@ export function createMemoryTool(
             sensitivity: Type.Optional(
               Type.Unsafe<SensitivityLevel>({ type: 'string', enum: [...VALID_SENSITIVITY_LEVELS] }),
             ),
+            occurred_at: Type.Optional(
+              Type.String({
+                description:
+                  'Historical formation time of this memory as an ISO-8601 timestamp. Use when '
+                  + 'restoring/migrating so the memory keeps its original date instead of the import '
+                  + 'time. Must not be in the future.',
+              }),
+            ),
           }),
           { description: 'Required for action=import. Array of memory records to import.' },
         ),
@@ -1287,6 +1336,11 @@ export function createMemoryTool(
                 return textResultWithError(`Error: record[${i}] has invalid type "${type}"`, true);
               }
 
+              const occurred = parseImportOccurredAt(record.occurred_at, i);
+              if (occurred.error) {
+                return textResultWithError(occurred.error, true);
+              }
+
               const sourceContext = buildUnifiedMemorySourceContext(
                 'import',
                 toolCallId,
@@ -1306,6 +1360,7 @@ export function createMemoryTool(
                 sourceType: sourceContext.sourceType,
                 provenance: sourceContext.provenance,
                 sensitivity: record.sensitivity,
+                ...(occurred.extractedAt !== undefined ? { extractedAt: occurred.extractedAt } : {}),
               });
             }
 

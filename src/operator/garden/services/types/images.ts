@@ -36,10 +36,20 @@ export interface AdminGeneratedImageView {
   favorite: boolean;
   tags: string[];
   meaningfulMoment?: AdminGeneratedImageMeaningfulMoment;
+  embodiment?: AdminGeneratedImageEmbodiment;
   conversation?: AdminGeneratedImageConversationLink;
   companionNoteRefs: AdminGeneratedImageCompanionNoteRef[];
   artifactRefs: AdminGeneratedImageArtifactRef[];
   sensitivityClassification?: ArtifactSensitivityClassification;
+}
+
+export interface AdminGeneratedImageEmbodiment {
+  verdict: 'same_me' | 'drifted' | 'different_person';
+  framing?: string;
+  note?: string;
+  referenceId?: string;
+  referenceDescription?: string;
+  reviewedAt?: string;
 }
 
 export interface AdminGeneratedImageConversationLink {

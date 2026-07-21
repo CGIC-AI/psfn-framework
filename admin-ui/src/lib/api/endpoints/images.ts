@@ -28,9 +28,19 @@ export interface GeneratedImageView {
   favorite: boolean;
   tags: string[];
   meaningfulMoment?: GeneratedImageMeaningfulMoment;
+  embodiment?: GeneratedImageEmbodiment;
   conversation?: GeneratedImageConversationLink;
   companionNoteRefs: GeneratedImageCompanionNoteRef[];
   artifactRefs: GeneratedImageArtifactRef[];
+}
+
+export interface GeneratedImageEmbodiment {
+  verdict: 'same_me' | 'drifted' | 'different_person';
+  framing?: string;
+  note?: string;
+  referenceId?: string;
+  referenceDescription?: string;
+  reviewedAt?: string;
 }
 
 export interface GeneratedImageConversationLink {

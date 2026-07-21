@@ -998,7 +998,7 @@ capability-tier.json|scheduler.json|charge-policy.json|skills.json
       floor_root={{ include "psfn.fleetAuthAuthorityFloorMountPath" . | quote }}
       chown 999:999 "$floor_root"
       chmod 0700 "$floor_root"
-      test "$(stat -c '%u:%g:%a' "$floor_root")" = "999:999:700"
+      case "$(stat -c '%u:%g:%a' "$floor_root")" in 999:999:700|999:999:2700) ;; *) echo "floor perms unexpected: $(stat -c '%u:%g:%a' "$floor_root")" >&2; exit 1 ;; esac
   securityContext:
     allowPrivilegeEscalation: false
     readOnlyRootFilesystem: true

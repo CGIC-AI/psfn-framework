@@ -12,8 +12,12 @@
   let filterSearch = $state('');
   let favoriteOnly = $state(false);
   let meaningfulOnly = $state(false);
+  let milestoneOnly = $state(false);
   let tagDrafts = $state<Record<string, string>>({});
   let momentDrafts = $state<Record<string, string>>({});
+  let narrativeDrafts = $state<Record<string, string>>({});
+  let emotionalDrafts = $state<Record<string, string>>({});
+  let milestoneLabelDrafts = $state<Record<string, string>>({});
   let expandedPrompts = $state<Record<string, boolean>>({});
   let savingIds = $state<Set<string>>(new Set());
 
@@ -33,12 +37,21 @@
   function applyDrafts(nextImages: GeneratedImageView[]): void {
     const nextTagDrafts = { ...tagDrafts };
     const nextMomentDrafts = { ...momentDrafts };
+    const nextNarrativeDrafts = { ...narrativeDrafts };
+    const nextEmotionalDrafts = { ...emotionalDrafts };
+    const nextMilestoneLabelDrafts = { ...milestoneLabelDrafts };
     for (const image of nextImages) {
       if (nextTagDrafts[image.id] === undefined) nextTagDrafts[image.id] = image.tags.join(', ');
       if (nextMomentDrafts[image.id] === undefined) nextMomentDrafts[image.id] = image.meaningfulMoment?.note ?? '';
+      if (nextNarrativeDrafts[image.id] === undefined) nextNarrativeDrafts[image.id] = image.autobiography?.narrative ?? '';
+      if (nextEmotionalDrafts[image.id] === undefined) nextEmotionalDrafts[image.id] = image.autobiography?.emotionalContext ?? '';
+      if (nextMilestoneLabelDrafts[image.id] === undefined) nextMilestoneLabelDrafts[image.id] = image.autobiography?.milestone?.label ?? '';
     }
     tagDrafts = nextTagDrafts;
     momentDrafts = nextMomentDrafts;
+    narrativeDrafts = nextNarrativeDrafts;
+    emotionalDrafts = nextEmotionalDrafts;
+    milestoneLabelDrafts = nextMilestoneLabelDrafts;
   }
 
   async function loadImages() {
@@ -48,6 +61,7 @@
         tags: splitTags(filterTags),
         favorite: favoriteOnly ? true : undefined,
         meaningful: meaningfulOnly ? true : undefined,
+        milestone: milestoneOnly ? true : undefined,
         q: filterSearch,
       });
       data = response;
@@ -81,6 +95,9 @@
     }
     tagDrafts = { ...tagDrafts, [image.id]: image.tags.join(', ') };
     momentDrafts = { ...momentDrafts, [image.id]: image.meaningfulMoment?.note ?? '' };
+    narrativeDrafts = { ...narrativeDrafts, [image.id]: image.autobiography?.narrative ?? '' };
+    emotionalDrafts = { ...emotionalDrafts, [image.id]: image.autobiography?.emotionalContext ?? '' };
+    milestoneLabelDrafts = { ...milestoneLabelDrafts, [image.id]: image.autobiography?.milestone?.label ?? '' };
   }
 
   async function saveImageUpdate(
@@ -121,6 +138,76 @@
     await saveImageUpdate(image, { meaningfulMoment: { marked: false } });
   }
 
+  // A companion-authored narrative is authorship-protected (charter 8.2). The operator must
+  // explicitly confirm before overwriting or clearing it; only then is the override flag sent.
+  function confirmCompanionOverride(image: GeneratedImageView, action: string): boolean {
+    if (image.autobiography?.author !== 'companion') return true;
+    return window.confirm(
+      `This visual autobiography was authored by the companion. ${action} it as the operator? This overrides authorship protection.`,
+    );
+  }
+
+  async function saveAutobiography(image: GeneratedImageView): Promise<void> {
+    const narrative = (narrativeDrafts[image.id] ?? '').trim();
+    if (!narrative) {
+      error = 'Autobiography narrative is required';
+      return;
+    }
+    const companionAuthored = image.autobiography?.author === 'companion';
+    if (companionAuthored && !confirmCompanionOverride(image, 'Overwrite')) return;
+    await saveImageUpdate(image, {
+      autobiography: {
+        narrative,
+        emotionalContext: (emotionalDrafts[image.id] ?? '').trim(),
+        milestone: image.autobiography?.milestone
+          ? { marked: true, label: (milestoneLabelDrafts[image.id] ?? '').trim() }
+          : undefined,
+        ...(companionAuthored ? { allowOverwriteCompanionAuthored: true } : {}),
+      },
+    });
+  }
+
+  async function toggleAutobiographyMilestone(image: GeneratedImageView): Promise<void> {
+    const narrative = (narrativeDrafts[image.id] ?? image.autobiography?.narrative ?? '').trim();
+    if (!narrative) {
+      error = 'Add an autobiography narrative before marking a milestone';
+      return;
+    }
+    const companionAuthored = image.autobiography?.author === 'companion';
+    if (companionAuthored && !confirmCompanionOverride(image, 'Modify')) return;
+    await saveImageUpdate(image, {
+      autobiography: {
+        narrative,
+        emotionalContext: (emotionalDrafts[image.id] ?? '').trim(),
+        milestone: { marked: !image.autobiography?.milestone, label: (milestoneLabelDrafts[image.id] ?? '').trim() },
+        ...(companionAuthored ? { allowOverwriteCompanionAuthored: true } : {}),
+      },
+    });
+  }
+
+  async function clearAutobiography(image: GeneratedImageView): Promise<void> {
+    const companionAuthored = image.autobiography?.author === 'companion';
+    if (companionAuthored && !confirmCompanionOverride(image, 'Clear')) return;
+    await saveImageUpdate(image, {
+      autobiography: {
+        clear: true,
+        ...(companionAuthored ? { allowOverwriteCompanionAuthored: true } : {}),
+      },
+    });
+  }
+
+  function updateNarrativeDraft(id: string, value: string): void {
+    narrativeDrafts = { ...narrativeDrafts, [id]: value };
+  }
+
+  function updateEmotionalDraft(id: string, value: string): void {
+    emotionalDrafts = { ...emotionalDrafts, [id]: value };
+  }
+
+  function updateMilestoneLabelDraft(id: string, value: string): void {
+    milestoneLabelDrafts = { ...milestoneLabelDrafts, [id]: value };
+  }
+
   function updateTagDraft(id: string, value: string): void {
     tagDrafts = { ...tagDrafts, [id]: value };
   }
@@ -143,6 +230,18 @@
 
   function imageLabel(image: GeneratedImageView): string {
     return image.sourceToolName || image.mode || image.provider || 'image';
+  }
+
+  function embodimentLabel(verdict: 'same_me' | 'drifted' | 'different_person'): string {
+    if (verdict === 'same_me') return 'Same me';
+    if (verdict === 'drifted') return 'Drifted';
+    return 'Different person';
+  }
+
+  function embodimentClass(verdict: 'same_me' | 'drifted' | 'different_person'): string {
+    if (verdict === 'same_me') return 'border-moss-300 bg-moss-50 text-moss-800';
+    if (verdict === 'drifted') return 'border-gold-300 bg-gold-50 text-gold-800';
+    return 'border-wilt-400 bg-wilt-50 text-wilt-700';
   }
 
   function isSaving(image: GeneratedImageView): boolean {
@@ -195,6 +294,10 @@
       <label class="flex h-10 items-center gap-2 rounded-lg border border-bark-300 px-3 text-sm font-medium text-shadow-700">
         <input type="checkbox" bind:checked={meaningfulOnly} class="size-4 accent-moss-600" />
         Meaningful
+      </label>
+      <label class="flex h-10 items-center gap-2 rounded-lg border border-bark-300 px-3 text-sm font-medium text-shadow-700">
+        <input type="checkbox" bind:checked={milestoneOnly} class="size-4 accent-moss-600" />
+        Milestones
       </label>
       <button
         onclick={() => void loadImages()}
@@ -295,6 +398,94 @@
                 {/each}
               </div>
             {/if}
+
+            {#if image.embodiment}
+              <div class="rounded-lg border px-2.5 py-1.5 text-xs {embodimentClass(image.embodiment.verdict)}">
+                <p class="font-semibold">Identity continuity: {embodimentLabel(image.embodiment.verdict)}</p>
+                {#if image.embodiment.framing}
+                  <p class="mt-0.5">{image.embodiment.framing}</p>
+                {/if}
+                {#if image.embodiment.note}
+                  <p class="mt-0.5 opacity-80">{image.embodiment.note}</p>
+                {/if}
+              </div>
+            {/if}
+
+            {#if image.autobiography}
+              <div class="rounded-lg border border-moss-300 bg-moss-50 px-2.5 py-2 text-xs text-moss-900">
+                <div class="flex items-center justify-between gap-2">
+                  <p class="font-semibold">Visual autobiography</p>
+                  <span class="rounded-full bg-moss-100 px-2 py-0.5 text-[0.65rem] font-medium uppercase tracking-wide">
+                    {image.autobiography.author === 'companion' ? 'Companion-authored' : 'Operator'}
+                  </span>
+                </div>
+                <p class="mt-1 whitespace-pre-line leading-relaxed">{image.autobiography.narrative}</p>
+                {#if image.autobiography.emotionalContext}
+                  <p class="mt-1 italic opacity-80">{image.autobiography.emotionalContext}</p>
+                {/if}
+                {#if image.autobiography.milestone}
+                  <p class="mt-1 font-medium text-gold-800">
+                    Milestone{image.autobiography.milestone.label ? `: ${image.autobiography.milestone.label}` : ''}
+                  </p>
+                {/if}
+              </div>
+            {/if}
+
+            <details class="rounded-lg border border-bark-300 px-2.5 py-2">
+              <summary class="cursor-pointer text-xs font-medium text-shadow-600">
+                {image.autobiography ? 'Edit autobiography' : 'Add autobiography'}
+              </summary>
+              <div class="mt-2 space-y-2">
+                <textarea
+                  rows="3"
+                  placeholder="What this render means (narrative)"
+                  class="w-full resize-y rounded-lg border border-bark-300 bg-bark-50 px-2.5 py-1.5 text-sm text-shadow-900"
+                  value={narrativeDrafts[image.id] ?? ''}
+                  oninput={(event) => updateNarrativeDraft(image.id, (event.currentTarget as HTMLTextAreaElement).value)}
+                ></textarea>
+                <textarea
+                  rows="2"
+                  placeholder="Emotional context (optional)"
+                  class="w-full resize-y rounded-lg border border-bark-300 bg-bark-50 px-2.5 py-1.5 text-sm text-shadow-900"
+                  value={emotionalDrafts[image.id] ?? ''}
+                  oninput={(event) => updateEmotionalDraft(image.id, (event.currentTarget as HTMLTextAreaElement).value)}
+                ></textarea>
+                <input
+                  placeholder="Milestone label (optional)"
+                  class="w-full rounded-lg border border-bark-300 bg-bark-50 px-2.5 py-1.5 text-sm text-shadow-900"
+                  value={milestoneLabelDrafts[image.id] ?? ''}
+                  oninput={(event) => updateMilestoneLabelDraft(image.id, (event.currentTarget as HTMLInputElement).value)}
+                />
+                <div class="flex flex-wrap justify-end gap-2">
+                  <button
+                    type="button"
+                    onclick={() => void toggleAutobiographyMilestone(image)}
+                    disabled={isSaving(image)}
+                    class="rounded-lg border border-gold-300 px-2.5 py-1 text-xs font-medium text-gold-800 transition-colors hover:bg-gold-100 disabled:opacity-50"
+                  >
+                    {image.autobiography?.milestone ? 'Unmark milestone' : 'Mark milestone'}
+                  </button>
+                  {#if image.autobiography}
+                    <button
+                      type="button"
+                      onclick={() => void clearAutobiography(image)}
+                      disabled={isSaving(image)}
+                      class="rounded-lg border border-bark-300 px-2.5 py-1 text-xs font-medium text-shadow-700 transition-colors hover:bg-bark-100 disabled:opacity-50"
+                    >
+                      Clear
+                    </button>
+                  {/if}
+                  <button
+                    type="button"
+                    onclick={() => void saveAutobiography(image)}
+                    disabled={isSaving(image)}
+                    class="rounded-lg border border-moss-300 bg-moss-50 px-2.5 py-1 text-xs font-medium text-moss-800 transition-colors hover:bg-moss-100 disabled:opacity-50"
+                  >
+                    Save
+                  </button>
+                </div>
+              </div>
+            </details>
 
             <div class="space-y-2 border-t border-bark-300 pt-3">
               <label class="block text-xs font-medium text-shadow-600" for="tags-{image.id}">Tags</label>

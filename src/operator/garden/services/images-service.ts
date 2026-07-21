@@ -9,6 +9,7 @@ import { writeJsonAtomic } from '../../../shared/utils/fs.js';
 import { isRecord } from '../../../shared/utils/types.js';
 import {
   ImageReferenceStore,
+  type ImageReferenceLineageView,
   type ImageReferenceListData,
   type ImageReferencePhoto,
   type ImageReferenceUpdateInput,
@@ -17,8 +18,11 @@ import {
 import type { SubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
 import type {
   AdminGeneratedImageArtifactRef,
+  AdminGeneratedImageAutobiography,
+  AdminGeneratedImageAutobiographyMilestone,
   AdminGeneratedImageCompanionNoteRef,
   AdminGeneratedImageConversationLink,
+  AdminGeneratedImageEmbodiment,
   AdminGeneratedImageListData,
   AdminGeneratedImageListQuery,
   AdminGeneratedImageMeaningfulMoment,
@@ -27,6 +31,8 @@ import type {
   AdminGeneratedImageView,
   AdminImageBlob,
   AdminImagesService,
+  AdminPromoteReferenceInput,
+  AutobiographyEditorPrincipal,
 } from './types.js';
 import {
   contestArtifactSensitivity,
@@ -230,6 +236,57 @@ function normalizeArtifactRefs(value: unknown): AdminGeneratedImageArtifactRef[]
   return refs;
 }
 
+function normalizeEmbodiment(value: unknown): AdminGeneratedImageEmbodiment | undefined {
+  if (!isRecord(value)) return undefined;
+  const verdict = value.verdict;
+  if (verdict !== 'same_me' && verdict !== 'drifted' && verdict !== 'different_person') {
+    return undefined;
+  }
+  const framing = normalizedOptionalString(value.framing, MAX_GALLERY_NOTE_CHARS);
+  const note = normalizedOptionalString(value.note, MAX_GALLERY_NOTE_CHARS);
+  const referenceId = normalizedOptionalString(value.referenceId);
+  const referenceDescription = normalizedOptionalString(value.referenceDescription, MAX_GALLERY_NOTE_CHARS);
+  const reviewedAt = normalizedOptionalString(value.reviewedAt);
+  return {
+    verdict,
+    ...(framing ? { framing } : {}),
+    ...(note ? { note } : {}),
+    ...(referenceId ? { referenceId } : {}),
+    ...(referenceDescription ? { referenceDescription } : {}),
+    ...(reviewedAt ? { reviewedAt } : {}),
+  };
+}
+
+function normalizeAutobiographyMilestone(value: unknown): AdminGeneratedImageAutobiographyMilestone | undefined {
+  if (!isRecord(value) || value.marked !== true) return undefined;
+  const markedAt = normalizedOptionalString(value.markedAt) ?? new Date().toISOString();
+  const label = normalizedOptionalString(value.label);
+  return {
+    marked: true,
+    markedAt,
+    ...(label ? { label } : {}),
+  };
+}
+
+function normalizeAutobiography(value: unknown): AdminGeneratedImageAutobiography | undefined {
+  if (!isRecord(value)) return undefined;
+  const narrative = normalizedOptionalString(value.narrative, MAX_GALLERY_NOTE_CHARS);
+  if (!narrative) return undefined;
+  const emotionalContext = normalizedOptionalString(value.emotionalContext, MAX_GALLERY_NOTE_CHARS);
+  const milestone = normalizeAutobiographyMilestone(value.milestone);
+  const author = value.author === 'companion' ? 'companion' : 'operator';
+  const authoredAt = normalizedOptionalString(value.authoredAt) ?? new Date().toISOString();
+  const updatedAt = normalizedOptionalString(value.updatedAt) ?? authoredAt;
+  return {
+    narrative,
+    ...(emotionalContext ? { emotionalContext } : {}),
+    ...(milestone ? { milestone } : {}),
+    author,
+    authoredAt,
+    updatedAt,
+  };
+}
+
 function normalizeMeaningfulMoment(value: unknown): AdminGeneratedImageMeaningfulMoment | undefined {
   if (!isRecord(value) || value.marked !== true) return undefined;
   const markedAt = normalizedOptionalString(value.markedAt) ?? new Date().toISOString();
@@ -246,6 +303,7 @@ function normalizeMeaningfulMoment(value: unknown): AdminGeneratedImageMeaningfu
 function mergeGeneratedImageUpdate(
   metadata: Record<string, unknown>,
   input: AdminGeneratedImageUpdateInput,
+  editorPrincipal: AutobiographyEditorPrincipal,
 ): Record<string, unknown> {
   const next: Record<string, unknown> = {
     ...metadata,
@@ -280,6 +338,9 @@ function mergeGeneratedImageUpdate(
       delete next.meaningfulMoment;
     }
   }
+  if (input.autobiography !== undefined) {
+    applyAutobiographyUpdate(next, metadata, input.autobiography, editorPrincipal);
+  }
   if (input.conversation !== undefined) {
     const conversation = normalizeConversationLink(input.conversation);
     if (conversation) next.conversation = conversation;
@@ -308,6 +369,83 @@ function mergeGeneratedImageUpdate(
   }
 
   return next;
+}
+
+function applyAutobiographyUpdate(
+  next: Record<string, unknown>,
+  metadata: Record<string, unknown>,
+  input: NonNullable<AdminGeneratedImageUpdateInput['autobiography']>,
+  editorPrincipal: AutobiographyEditorPrincipal,
+): void {
+  const existing = normalizeAutobiography(metadata.autobiography);
+  const companionAuthored = existing?.author === 'companion';
+  const now = new Date().toISOString();
+
+  if (input.clear === true) {
+    if (companionAuthored && input.allowOverwriteCompanionAuthored !== true) {
+      throw new Error(
+        'Companion-authored autobiography is authorship-protected; set allowOverwriteCompanionAuthored to remove it',
+      );
+    }
+    delete next.autobiography;
+    return;
+  }
+
+  const incomingNarrative = input.narrative !== undefined
+    ? normalizedOptionalString(input.narrative, MAX_GALLERY_NOTE_CHARS) ?? ''
+    : undefined;
+  const narrativeChanged = incomingNarrative !== undefined
+    && incomingNarrative !== (existing?.narrative ?? '');
+
+  // Authorship is derived from the editing principal, never from the request body.
+  // The operator admin surface can never mint companion provenance; it may only preserve
+  // an existing companion narrative it is not overwriting. A companion narrative that the
+  // operator actually rewrites (with the explicit override) becomes operator-authored,
+  // because the operator authored the new content.
+  const author: AutobiographyEditorPrincipal = editorPrincipal === 'companion'
+    ? 'companion'
+    : (companionAuthored && !narrativeChanged ? 'companion' : 'operator');
+
+  if (companionAuthored && editorPrincipal !== 'companion' && narrativeChanged
+    && input.allowOverwriteCompanionAuthored !== true) {
+    throw new Error(
+      'Companion-authored autobiography narrative is authorship-protected; set allowOverwriteCompanionAuthored to overwrite it',
+    );
+  }
+
+  const narrative = incomingNarrative ?? existing?.narrative ?? '';
+  if (!narrative) {
+    throw new Error('Autobiography narrative is required');
+  }
+
+  const emotionalContext = input.emotionalContext !== undefined
+    ? normalizedOptionalString(input.emotionalContext, MAX_GALLERY_NOTE_CHARS)
+    : existing?.emotionalContext;
+
+  let milestone: AdminGeneratedImageAutobiographyMilestone | undefined;
+  if (input.milestone !== undefined) {
+    if (input.milestone.marked) {
+      const label = normalizedOptionalString(input.milestone.label);
+      milestone = {
+        marked: true,
+        markedAt: existing?.milestone?.markedAt ?? now,
+        ...(label ? { label } : {}),
+      };
+    } else {
+      milestone = undefined;
+    }
+  } else {
+    milestone = existing?.milestone;
+  }
+
+  next.autobiography = {
+    narrative,
+    ...(emotionalContext ? { emotionalContext } : {}),
+    ...(milestone ? { milestone } : {}),
+    author,
+    authoredAt: existing?.authoredAt ?? now,
+    updatedAt: now,
+  } satisfies AdminGeneratedImageAutobiography;
 }
 
 function baseArtifactRefs(input: {
@@ -352,6 +490,8 @@ function matchesGeneratedImageQuery(
   if (requiredTags.length > 0 && !requiredTags.every((tag) => image.tags.includes(tag))) return false;
   if (query?.favorite !== undefined && image.favorite !== query.favorite) return false;
   if (query?.meaningful !== undefined && Boolean(image.meaningfulMoment) !== query.meaningful) return false;
+  if (query?.milestone !== undefined
+    && Boolean(image.autobiography?.milestone) !== query.milestone) return false;
   const search = query?.search?.trim().toLowerCase();
   if (!search) return true;
   const haystack = [
@@ -364,6 +504,9 @@ function matchesGeneratedImageQuery(
     image.sourceToolName,
     image.requestId,
     image.meaningfulMoment?.note,
+    image.autobiography?.narrative,
+    image.autobiography?.emotionalContext,
+    image.autobiography?.milestone?.label,
     image.conversation?.turnId,
     image.conversation?.channelId,
     ...image.tags,
@@ -448,6 +591,21 @@ export class AdminImagesDataService implements AdminImagesService {
   }
 
   async updateGeneratedImage(id: string, input: AdminGeneratedImageUpdateInput): Promise<AdminGeneratedImageView> {
+    // The Garden/admin route is an operator-principal surface: it can never author, mint,
+    // or inherit companion provenance. A future companion tool surface authors via the
+    // internal `applyGeneratedImageUpdate` seam with a `'companion'` principal.
+    return this.applyGeneratedImageUpdate(id, input, 'operator');
+  }
+
+  /**
+   * Internal seam for autobiography edits. `editorPrincipal` derives record authorship and
+   * is not reachable from the operator admin route (which only calls updateGeneratedImage).
+   */
+  private async applyGeneratedImageUpdate(
+    id: string,
+    input: AdminGeneratedImageUpdateInput,
+    editorPrincipal: AutobiographyEditorPrincipal,
+  ): Promise<AdminGeneratedImageView> {
     const resolvedImage = this.resolveGeneratedImagePath(id);
     if (!resolvedImage) {
       throw new Error('Generated image not found');
@@ -457,7 +615,7 @@ export class AdminImagesDataService implements AdminImagesService {
       throw new Error('Generated image not found');
     }
     const existingMetadata = await readMetadata(resolvedImage.imagePath);
-    const nextMetadata = mergeGeneratedImageUpdate(existingMetadata, input);
+    const nextMetadata = mergeGeneratedImageUpdate(existingMetadata, input, editorPrincipal);
     writeMetadata(resolvedImage.imagePath, nextMetadata);
     return this.buildGeneratedImageView(resolvedImage.root, resolvedImage.imagePath, fileStat, nextMetadata);
   }
@@ -479,7 +637,57 @@ export class AdminImagesDataService implements AdminImagesService {
   }
 
   async setDefaultReferencePhoto(id: string): Promise<ImageReferencePhoto> {
-    return await this.referenceStore.setDefault(id);
+    return await this.referenceStore.setDefault(id, { actor: 'operator' });
+  }
+
+  async rollbackDefaultReferencePhoto(input?: { reason?: string }): Promise<ImageReferencePhoto> {
+    return await this.referenceStore.rollbackDefault({
+      actor: 'operator',
+      ...(input?.reason ? { reason: input.reason } : {}),
+    });
+  }
+
+  async getReferenceLineage(id: string): Promise<ImageReferenceLineageView> {
+    return await this.referenceStore.getLineage(id);
+  }
+
+  async promoteGeneratedImageToReference(
+    id: string,
+    input: AdminPromoteReferenceInput,
+  ): Promise<ImageReferencePhoto> {
+    const promotionReason = input.promotionReason.trim();
+    if (!promotionReason) {
+      throw new Error('Promotion reason is required');
+    }
+    const resolvedImage = this.resolveGeneratedImagePath(id);
+    if (!resolvedImage) {
+      throw new Error('Generated image not found');
+    }
+    const fileStat = await stat(resolvedImage.imagePath);
+    if (!fileStat.isFile() || !IMAGE_EXTENSIONS.has(extname(resolvedImage.imagePath).toLowerCase())) {
+      throw new Error('Generated image not found');
+    }
+    const metadata = await readMetadata(resolvedImage.imagePath);
+    const data = await readFile(resolvedImage.imagePath);
+    const requestId = stringFromMetadata(metadata, 'requestId');
+    const originalUrl = stringFromMetadata(metadata, 'originalUrl');
+    return await this.referenceStore.promoteGeneration({
+      filename: basename(resolvedImage.imagePath),
+      contentType: contentTypeForPath(resolvedImage.imagePath),
+      data,
+      promotionReason,
+      ...(input.description !== undefined ? { description: input.description } : {}),
+      ...(input.tags !== undefined ? { tags: input.tags } : {}),
+      ...(input.setDefault !== undefined ? { setDefault: input.setDefault } : {}),
+      actor: 'operator',
+      source: {
+        kind: 'promoted_generation',
+        generatedImageId: id,
+        ...(requestId ? { requestId } : {}),
+        ...(originalUrl ? { originalUrl } : {}),
+        localPath: resolvedImage.imagePath,
+      },
+    });
   }
 
   async getReferencePhotoBlob(id: string) {
@@ -552,6 +760,8 @@ export class AdminImagesDataService implements AdminImagesService {
         assistantSessionEntryId: metadata.assistantSessionEntryId,
       });
     const meaningfulMoment = normalizeMeaningfulMoment(metadata.meaningfulMoment);
+    const embodiment = normalizeEmbodiment(metadata.embodiment);
+    const autobiography = normalizeAutobiography(metadata.autobiography);
     const sensitivityClassification = parseArtifactSensitivityClassification(
       metadata.sensitivityClassification,
     );
@@ -578,6 +788,8 @@ export class AdminImagesDataService implements AdminImagesService {
       ...(stringFromMetadata(metadata, 'requestId') ? { requestId: stringFromMetadata(metadata, 'requestId') } : {}),
       ...(stringArrayFromMetadata(metadata, 'referenceImageIds') ? { referenceImageIds: stringArrayFromMetadata(metadata, 'referenceImageIds') } : {}),
       ...(meaningfulMoment ? { meaningfulMoment } : {}),
+      ...(embodiment ? { embodiment } : {}),
+      ...(autobiography ? { autobiography } : {}),
       ...(conversation ? { conversation } : {}),
     };
   }

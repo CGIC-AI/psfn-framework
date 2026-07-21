@@ -319,6 +319,44 @@ describe('GatewayApiRuntime', () => {
     );
   });
 
+  it('binds selected-companion streaming to the same exact companion', async () => {
+    const selectedCompanionId = '22222222-2222-4222-8222-222222222222';
+    const onDelta = vi.fn();
+    const subscribeApiStream = vi.fn(() => () => {});
+    const requestCompanionAgent = vi.fn(async () => ({
+      ok: true as const,
+      response: {
+        content: 'selected response',
+        channelId: 'api:principal-1:session-1',
+        inputTokens: 3,
+        outputTokens: 2,
+      },
+    }));
+    const runtime = new GatewayApiRuntime({
+      requestAgent: vi.fn(),
+      requestCompanionAgent,
+      subscribeApiStream,
+    });
+
+    await runtime.handleChatCompletion({
+      ...createChatRequest(),
+      companionId: selectedCompanionId,
+      onDelta,
+    });
+
+    expect(subscribeApiStream).toHaveBeenCalledWith(
+      expect.stringMatching(/^api-/),
+      onDelta,
+      selectedCompanionId,
+    );
+    expect(requestCompanionAgent).toHaveBeenCalledWith(
+      selectedCompanionId,
+      'api.chat.completion',
+      expect.any(Object),
+      95_000,
+    );
+  });
+
   it('routes authenticated satellite HTTP chat through shared response arbitration', async () => {
     const primary = createCompanionId('11111111-1111-4111-8111-111111111111');
     const requestAgent = vi.fn();

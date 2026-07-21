@@ -491,9 +491,11 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
   // E8.3: attach the supplemental wiki RAG provider (null when the projection
   // is unavailable); pre-turn assembly consults it AFTER memory context.
   agentLoop.wikiRetrieval = wikiRuntime.retrievalService;
+  const imageReferenceStore = new ImageReferenceStore(pathSnapshot.companionDataDir);
   const imageVisionReviewer = new DefaultImageVisionReviewer(config, {
     binaryFetcher: gateway.webFetchBinary.bind(gateway),
     llmProvider,
+    referenceResolver: imageReferenceStore,
   });
   registerImageTools(agentLoop, new GatewayImageOps(gateway, () => ({
     provider: config.imageProvider,
@@ -503,7 +505,7 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
   })), {
     gatewayMode: true,
     reviewer: imageVisionReviewer,
-    referenceResolver: new ImageReferenceStore(pathSnapshot.companionDataDir),
+    referenceResolver: imageReferenceStore,
     wardrobeLookResolver: wikiRuntime.personalProjects,
   });
   agentLoop.imageVisionReviewer = imageVisionReviewer;

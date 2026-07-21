@@ -86,6 +86,7 @@ import type { FleetPortalChannelHealthSource } from '../../boundary/gateway/flee
 import { createGatewayFleetPortalProjection } from './fleet-portal-composition.js';
 import type { FleetModelUsageSummaryQueryPort } from '../../shared/telemetry/model-usage.js';
 import { createGatewayFleetModelUsageProjection } from './fleet-model-usage-composition.js';
+import { createBearerCompanionRoutingConfig } from '../../channels/api/server/bearer-companion-selector.js';
 
 const DISABLED_VOICE_WEBSOCKET_PATH = '/v1/voice/ws-disabled';
 const GATEWAY_API_REQUEST_TIMEOUT_MS = 240_000;
@@ -556,6 +557,13 @@ export async function startOptionalGatewayApiServer(
       await options.gateway.recordSharedSatelliteObservationAudit(observation);
     },
   });
+  const bearerCompanionRouting = createBearerCompanionRoutingConfig({
+    pinnedCompanionId: options.channelsConfig?.api.companionId,
+    knownCompanionIds: options.config.companionFleet?.companions
+      .map(companion => companion.companionId)
+      ?? (options.config.companionId ? [options.config.companionId] : []),
+    selectableCompanionIds: options.channelsConfig?.api.selectableCompanionIds,
+  });
   const activeCompanionUiInteractions = new Map<string, AbortController>();
   const companionUiWebSocket = fleetAuthBootstrapOnly
     && options.config.fleetAuth
@@ -827,6 +835,7 @@ export async function startOptionalGatewayApiServer(
     voiceWebSocketRuntime,
     requestTimeoutMs: GATEWAY_API_REQUEST_TIMEOUT_MS,
     runtime: gatewayApiRuntime,
+    ...(bearerCompanionRouting ? { bearerCompanionRouting } : {}),
     modelName: options.config.companionId
       ?? hubDeviceCompanionId
       ?? options.config.companionFleet?.companions[0]?.companionId,

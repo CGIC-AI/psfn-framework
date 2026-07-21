@@ -2327,6 +2327,18 @@
       "contains": "\\/psfn\\/agent\\/",
       "reason": "Fleet Garden transport validates the stable project-scoped SPIFFE workload path in its regular expression.",
       "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/channels/api/server/bearer-companion-selector.ts",
+      "contains": "x-psfn-companion-id",
+      "reason": "Wire header name for OpenAI-compatible Bearer companion selection is a stable API contract (psfn-framework-0xxf/vknn).",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/channels/api/server/bearer-companion-selector.ts",
+      "contains": "X-PSFN-Companion-ID",
+      "reason": "Client-facing error messages must name the wire header exactly (psfn-framework-0xxf/vknn).",
+      "pattern": "identity-proper-name"
     }
   ]
 }

@@ -276,6 +276,7 @@ describe('image tools', () => {
       imageLocalPaths: ['/tmp/media-selfie.png'],
       prompt: 'a cinematic portrait in warm morning light',
       mode: 'create',
+      compareToReference: true,
     });
     expect(emitted.map(([eventName, payload]) => [eventName, (payload as any).surface])).toEqual([
       ['agent.charge', 'paidImageGeneration'],
@@ -558,6 +559,7 @@ describe('image tools', () => {
       imageLocalPaths: ['/tmp/selfie.png'],
       prompt: 'a cute mirror selfie of me in warm morning light',
       mode: 'create',
+      compareToReference: true,
     });
     expect(result.details.mediaResult?.requestId).toBe('req-vision-1');
     expect(result.details.mediaResult?.images[0]?.url).toBe('https://images.example.test/selfie.png');
@@ -611,6 +613,7 @@ describe('image tools', () => {
       imageLocalPaths: ['/tmp/selfie-explicit.png'],
       prompt: 'a candid mirror selfie of me, soft morning light, cozy bedroom, natural expression',
       mode: 'create',
+      compareToReference: true,
     });
     expect(result.details.visionReview?.summary).toContain('consistent companion portrait');
     expect(result.details.imageResult?.requestId).toBe('req-selfie-1');
@@ -783,6 +786,7 @@ describe('image tools', () => {
       imageLocalPaths: ['/tmp/selfie-ref.png'],
       prompt: 'a candid mirror selfie with short hair and warm daylight',
       mode: 'edit',
+      compareToReference: true,
     });
     expect(result.details.imageResult?.requestId).toBe('req-selfie-ref-1');
   });
@@ -860,6 +864,7 @@ describe('image tools', () => {
       imageLocalPaths: ['/tmp/selfie-fallback.png'],
       prompt,
       mode: 'edit',
+      compareToReference: true,
     });
     expect(result.details.imageResult?.fallbackUsed).toBe(true);
     expect(result.details.imageResult?.fallbackReason).toBe('selfie_edit_chain_fallback');

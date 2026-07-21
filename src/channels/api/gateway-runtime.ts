@@ -110,7 +110,7 @@ export class GatewayApiRuntime implements ApiServerRuntime {
     const receivedTimestampMs = Date.now();
     const requestId = `api-${Date.now()}-${++this.requestCounter}`;
     const unsubscribe = input.onDelta
-      ? this.gateway.subscribeApiStream(requestId, input.onDelta)
+      ? this.gateway.subscribeApiStream(requestId, input.onDelta, input.companionId)
       : () => {};
 
     let cancelled = false;
@@ -217,7 +217,7 @@ export class GatewayApiRuntime implements ApiServerRuntime {
     }
 
     try {
-      return await requestAgent<ApiChatCompletionRpcResult>('api.chat.completion', {
+      const result = await requestAgent<ApiChatCompletionRpcResult>('api.chat.completion', {
         requestId,
         request: input.request,
         principal: input.principal,
@@ -229,6 +229,16 @@ export class GatewayApiRuntime implements ApiServerRuntime {
         timeoutMs: computeAgentChatTurnTimeoutMs(this.chatRequestTimeoutMs),
         performance: { receivedMonotonicAtMs, receivedTimestampMs },
       });
+      if (!result.ok || !input.companionId || result.response.companionId) {
+        return result;
+      }
+      return {
+        ...result,
+        response: {
+          ...result.response,
+          companionId: input.companionId,
+        },
+      };
     } finally {
       if (input.signal) {
         input.signal.removeEventListener('abort', onAbort);

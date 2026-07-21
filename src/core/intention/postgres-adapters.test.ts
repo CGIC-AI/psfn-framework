@@ -159,6 +159,51 @@ describe('postgres intention adapters', () => {
     })).resolves.toHaveLength(2);
   });
 
+  it('retires a concern past next_review_at without re-observation before its TTL (bead ys51)', async () => {
+    const pool = new FakeIntentionPool();
+    const ports = createPostgresIntentionPortsFromPool(pool as never, {
+      now: () => new Date('2026-03-28T12:00:00.000Z'),
+    });
+
+    // Review point elapsed, expires_at still far in the future (would otherwise
+    // linger to the TTL/7-day ceiling), no re-observation after the review point.
+    const lapsed = await ports.concernStore.create({
+      text: 'Standing thread I never closed',
+      status: 'watching',
+      createdAt: '2026-03-27T00:00:00.000Z',
+      expiresAt: '2026-03-30T00:00:00.000Z',
+      lastReviewedAt: '2026-03-27T00:00:00.000Z',
+      nextReviewAt: '2026-03-28T06:00:00.000Z',
+    });
+
+    // Review point elapsed BUT re-observed after it: must survive.
+    const reobserved = await ports.concernStore.create({
+      text: 'Thread I keep actively working',
+      status: 'watching',
+      createdAt: '2026-03-27T00:00:00.000Z',
+      expiresAt: '2026-03-30T00:00:00.000Z',
+      lastReviewedAt: '2026-03-28T10:00:00.000Z',
+      nextReviewAt: '2026-03-28T06:00:00.000Z',
+    });
+
+    // Review point still in the future: must survive.
+    const future = await ports.concernStore.create({
+      text: 'Thread not yet due for review',
+      status: 'watching',
+      createdAt: '2026-03-28T00:00:00.000Z',
+      expiresAt: '2026-03-30T00:00:00.000Z',
+      lastReviewedAt: '2026-03-28T00:00:00.000Z',
+      nextReviewAt: '2026-03-29T00:00:00.000Z',
+    });
+
+    const resolved = await ports.concernStore.resolveStaleConcerns();
+    expect(resolved.map(concern => concern.id)).toEqual([lapsed.id]);
+
+    expect(await ports.concernStore.getById(lapsed.id)).toMatchObject({ status: 'resolved' });
+    expect(await ports.concernStore.getById(reobserved.id)).toMatchObject({ status: 'watching' });
+    expect(await ports.concernStore.getById(future.id)).toMatchObject({ status: 'watching' });
+  });
+
   it('persists pending follow-ups and activation state', async () => {
     const pool = new FakeIntentionPool();
     const ports = createPostgresIntentionPortsFromPool(pool as never, {

@@ -79,6 +79,29 @@ function isConcernPastHardLifetime(concern: ActiveConcern, asOfMs: number): bool
   return Date.parse(concern.createdAt) + MAX_ACTIVE_CONCERN_LIFETIME_MS <= asOfMs;
 }
 
+/**
+ * bead ys51: a concern whose scheduled review point has passed with no
+ * re-observation after it retires quietly, before its TTL/expires_at. Without
+ * this, next_review_at was persisted but never consulted, so touched standing
+ * concerns kept refreshing expires_at up to the 7-day ceiling and recurred in
+ * every reflective session for days.
+ *
+ * Re-observation (mergeConcern) advances last_reviewed_at, so a review point
+ * that elapsed with last_reviewed_at at or before it means the concern was
+ * never re-touched after it came due — retire it. Concerns with no review
+ * point are unaffected and fall back to the TTL/hard-lifetime paths.
+ */
+function isConcernPastReviewWithoutReobservation(concern: ActiveConcern, asOfMs: number): boolean {
+  if (!concern.nextReviewAt) return false;
+  const reviewMs = Date.parse(concern.nextReviewAt);
+  if (!Number.isFinite(reviewMs) || reviewMs > asOfMs) return false;
+  const lastReviewedMs = concern.lastReviewedAt ? Date.parse(concern.lastReviewedAt) : null;
+  if (lastReviewedMs !== null && Number.isFinite(lastReviewedMs) && lastReviewedMs > reviewMs) {
+    return false;
+  }
+  return true;
+}
+
 function assertCompatibleConcernIcpRoot(
   existing: Pick<ActiveConcern, 'id' | 'originIcpRootInitiationId'>,
   incomingRoot: string | undefined,
@@ -572,6 +595,7 @@ export class PostgresActiveConcernStore implements ConcernStorePortBackend {
       && (
         Date.parse(concern.expiresAt) <= Date.parse(asOf)
         || isConcernPastHardLifetime(concern, Date.parse(asOf))
+        || isConcernPastReviewWithoutReobservation(concern, Date.parse(asOf))
       )
     ));
 

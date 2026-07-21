@@ -48,6 +48,8 @@ interface PendingFollowUpRow {
   dampened_at: string | null;
   dampening_reason: string | null;
   origin_icp_root_initiation_id: string | null;
+  formation_vad: unknown;
+  completion_vad: unknown;
 }
 
 interface PendingFollowUpQuarantineRow {
@@ -360,6 +362,7 @@ export class FakeIntentionPool {
         contextSummary,
         wakeConditions,
         originIcpRootInitiationId,
+        formationVAD,
       ] = values as [
         string,
         string,
@@ -376,6 +379,7 @@ export class FakeIntentionPool {
         string | null,
         string | null,
         string | null,
+        unknown,
       ];
       this.pendingFollowUps.set(id, {
         id,
@@ -397,6 +401,8 @@ export class FakeIntentionPool {
         activation_reason: null,
         dampened_at: null,
         dampening_reason: null,
+        formation_vad: formationVAD ?? null,
+        completion_vad: null,
       });
       return { rows: [this.pendingFollowUps.get(id)! as Row] };
     }
@@ -525,13 +531,19 @@ export class FakeIntentionPool {
         row.dampening_reason = dampeningReason;
         return { rows: [row as Row] };
       }
-      const [id, activatedAt, activationReason] = values as [string, string, string | null];
+      const [id, activatedAt, activationReason, completionVAD] = values as [
+        string,
+        string,
+        string | null,
+        unknown,
+      ];
       const row = this.pendingFollowUps.get(id);
       if (!row || row.activated_at !== null || row.dampened_at !== null) {
         return { rows: [] };
       }
       row.activated_at = activatedAt;
       row.activation_reason = activationReason;
+      row.completion_vad = completionVAD ?? null;
       return { rows: [row as Row] };
     }
 

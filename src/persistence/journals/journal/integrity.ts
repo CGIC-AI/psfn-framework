@@ -226,7 +226,28 @@ export function resolveJournalIntegrityChainCandidates(
   return nextCandidates;
 }
 
-export function wrapUnverifiedHistory(content: string, reason?: string): string {
+export interface WrapUnverifiedHistoryOptions {
+  /**
+   * This entry continues a contiguous run of HMAC-failed entries whose first
+   * entry already carries the full notice. It is still marked untrusted, but
+   * the full 3-line boilerplate is not repeated — one broken chain must not
+   * inject the same warning once per entry into model context (bead g59z).
+   */
+  continuation?: boolean;
+}
+
+export function wrapUnverifiedHistory(
+  content: string,
+  reason?: string,
+  options?: WrapUnverifiedHistoryOptions,
+): string {
+  if (options?.continuation) {
+    return (
+      '<unverified_history continued>\n'
+      + content
+      + '\n</unverified_history>'
+    );
+  }
   const detail = reason ? `Reason: ${reason}\n\n` : '';
   return (
     '<unverified_history>\n'

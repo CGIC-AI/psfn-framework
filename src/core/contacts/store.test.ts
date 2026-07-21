@@ -242,6 +242,42 @@ describe('Postgres contact store behavior', () => {
       ]);
     });
 
+    it('persists, hydrates, and audits demographic fields with operator provenance (bead fnyb)', async () => {
+      const created = await store.upsert({ displayName: 'Demographics Contact' });
+      expect(created.gender).toBeUndefined();
+      expect(created.pronouns).toBeUndefined();
+      expect(created.age).toBeUndefined();
+
+      expect(await store.updateDemographics(
+        created.id,
+        { gender: '  woman  ', pronouns: 'she/her', age: 29 },
+        'operator:test',
+      )).toBe(true);
+
+      const hydrated = await store.getById(created.id);
+      expect(hydrated?.gender).toBe('woman');
+      expect(hydrated?.pronouns).toBe('she/her');
+      expect(hydrated?.age).toBe(29);
+
+      // Per-field audit rows carry the specified-provenance actor.
+      for (const field of ['gender', 'pronouns', 'age'] as const) {
+        expect(await store.listMutationAuditEntries({ contactId: created.id, field }))
+          .toEqual([expect.objectContaining({ actor: 'operator:test', field })]);
+      }
+
+      // Absent keys leave values unchanged; a null clears a field.
+      expect(await store.updateDemographics(created.id, { age: null }, 'operator:test')).toBe(true);
+      const afterClear = await store.getById(created.id);
+      expect(afterClear?.age).toBeUndefined();
+      expect(afterClear?.gender).toBe('woman');
+      expect(afterClear?.pronouns).toBe('she/her');
+
+      // A no-op update writes no new audit rows.
+      expect(await store.updateDemographics(created.id, { gender: 'woman' }, 'operator:test')).toBe(true);
+      expect(await store.listMutationAuditEntries({ contactId: created.id, field: 'gender' }))
+        .toHaveLength(1);
+    });
+
   });
 
   describe('getById', () => {
@@ -895,6 +931,22 @@ describe('Postgres contact store behavior', () => {
       expect(persisted?.channels).toEqual([
         expect.objectContaining({ channel: 'api', userId: 'api-user-1' }),
       ]);
+    });
+
+    it('mints same-cluster fleet companion peers as acquaintance at the public trust floor', async () => {
+      const peer = await store.resolveChannelIdentity('companion', 'sibling-companion-1', 'Sibling');
+      // bead hr1q: recognized above stranger, but the trust floor stays public.
+      expect(peer.relationshipType).toBe('acquaintance');
+      expect(peer.trustLevel).toBe('public');
+      const persisted = await store.getById(peer.id);
+      expect(persisted?.relationshipType).toBe('acquaintance');
+      expect(persisted?.trustLevel).toBe('public');
+    });
+
+    it('still mints non-fleet strangers as stranger at the public trust floor', async () => {
+      const stranger = await store.resolveChannelIdentity('api', 'unknown-api-9', 'Unknown');
+      expect(stranger.relationshipType).toBe('stranger');
+      expect(stranger.trustLevel).toBe('public');
     });
 
     it('reuses canonical contact when linked channel identity exists', async () => {

@@ -123,6 +123,19 @@ export interface PendingFollowUp {
   dampeningReason?: string;
   /** Originating ICP root preserved across durable resurface/restart. */
   originIcpRootInitiationId?: string;
+  /**
+   * Live internal VAD snapshotted when the follow-up was formed (bead vw3w.3;
+   * parity with ActiveConcern.formationVAD). Absent when no trusted emotion
+   * telemetry was available — never fabricated.
+   */
+  formationVAD?: ActiveConcernVAD;
+  /**
+   * Live internal VAD snapshotted when the follow-up was completed (activated /
+   * dequeued). The retained formation→completion pair is the follow-up's
+   * emotional arc; a relief delta is `completionVAD − formationVAD`. Absent when
+   * no trusted emotion telemetry was available at completion.
+   */
+  completionVAD?: ActiveConcernVAD;
 }
 
 export const CARE_REMINDER_KINDS = ['important_date', 'self_reminder'] as const;

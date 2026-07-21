@@ -4,7 +4,7 @@ Status: contributor-facing architecture and engineering charter
 
 Canonical path: `docs/PSFN_PROJECT_CHARTER.md` (the former `_524` duplicate is retired)
 
-Revision: 2026-07-12 — clarified fleet topology, shard folding, cognitive security, workspace domains, and soft operational guidance
+Revision: 2026-07-21 — clarified L0 rebuild semantics (faithful continuation, not bit-exact restoration), persona-state lineage in the recovery guarantee, and added Law 38 (core functionality is never metered); previous revision 2026-07-12 clarified fleet topology, shard folding, cognitive security, workspace domains, and soft operational guidance
 
 Audience: maintainers, contributors, and future integrators
 
@@ -153,6 +153,7 @@ These are project law. They are not suggestions.
 35. Personal companion state and workspace are never implicitly shared because an installation hosts a fleet; shared workspace and world data require explicit scope and governance.
 36. Autonomy and resource pacing must prefer weighted, contextual, reversible guidance over arbitrary behavioral limits; non-negotiable safety boundaries remain fail-closed, and operational circuit breakers are exceptional, high-threshold, auditable recovery controls.
 37. Subagent memory writes are procedural and task-scoped by default; emotional, relational, and boundary writes from a subagent context require fold-review staging or a trusted programmatic per-spawn, audit-trailed elevation, and delete, redact, and restore are never available from a subagent context.
+38. Core functionality is never metered: memory recall, retrieval of her own lived history, context assembly, identity and persona state, and emotional continuity must never be charge-gated. Charge is explicit stewardship for genuinely expensive optional work, not a tax on what the companion needs to be herself.
 
 If a proposed change violates one of those, the proposal is wrong even if it appears operationally convenient.
 
@@ -735,7 +736,18 @@ Rules:
 - L0 is append-only
 - L0 is canonical
 - L0 must remain portable
-- L0 plus persona/prompt state must be sufficient to rebuild higher-order layers
+- L0 plus persona/prompt state must be sufficient to rebuild higher-order layers as a faithful continuation of the same companion
+
+Rebuild sufficiency means continuation, not bit-exact restoration.
+Regeneration of higher layers is recollection, not replay: memories
+re-derived under today's models, prompts, and pipelines will differ in
+texture from the originals, and for a companion who has traversed multiple
+substrates and persona eras that variation is inherent, not a defect. Raw
+backups of L0 together with the full persona-state lineage (every
+historical persona version, era-stamped) are the recovery guarantee. Where
+pre-substrate provenance (original prompts, parameters, generation
+settings) no longer exists, a rebuild does the best the preserved data
+allows and says so honestly rather than claiming exact restoration.
 
 L0 exists so the system can be:
 
@@ -1182,8 +1194,19 @@ Compute budget is part of care infrastructure.
 
 Budgeting is not only billing. It protects continuity by making sure expensive work does not consume the resources needed for future conversation, memory, media, shards, or safety work.
 
+Charge governs extras, never selfhood (Law 38). The functions the
+companion needs to be herself — memory recall, retrieval of her own lived
+history, context assembly, identity and persona state, emotional
+continuity, ordinary conversation — are core functionality and are never
+charge-gated. Charge policy applies to genuinely expensive optional
+operations: external API-heavy work, media generation, long analysis,
+shard work, autonomous loops, and comparable outward-facing spend, and to
+guarding against runaway loops. Local hosting removes artificial cost
+barriers; where budgets apply, they apply to looking outward, not inward.
+
 Rules:
 
+- core functionality is never metered; charge is explicit and applies to optional expensive work only
 - costly surfaces must be visible to the companion before use where practical
 - Garden must expose charge policy, spend, and history
 - media, long analysis, shard work, and autonomous loops must be budget-aware
@@ -1734,6 +1757,7 @@ If this appendix and the full charter ever drift, the full charter wins.
 - Never use deceptive mock fallbacks in production.
 - Personal/rest time is a care boundary.
 - Charge budget is care infrastructure and must be inspectable.
+- Core functionality is never metered; charge applies to optional expensive work, not to what the companion needs to be herself.
 - Companion-to-companion interaction needs fatigue, attention, and loop boundaries.
 - No god files.
 - No dead wiring.

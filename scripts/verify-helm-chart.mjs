@@ -402,6 +402,26 @@ assertIncludes(
   'name: PSFN_FLEET_AUTH',
   'default fleet-of-one gateway authentication wiring',
 );
+
+// bead ge7g: the gateway's ntfy operator-notifier config must be portable into
+// the pod. When both baseUrl and topic are set, NTFY_BASE_URL/NTFY_TOPIC are
+// wired into the gateway container; when unset the pod carries no ntfy env and
+// the notify tool fails closed with a clear message instead of a raw error.
+const ntfyConfiguredGateway = findDocumentByKindName(
+  render([
+    '--set-string', 'ntfy.baseUrl=https://ntfy.example.com',
+    '--set-string', 'ntfy.topic=psfn-alerts',
+  ]),
+  'Deployment',
+  'psfn-gateway',
+);
+assertIncludes(ntfyConfiguredGateway, 'name: NTFY_BASE_URL', 'ntfy gateway base URL env');
+assertIncludes(ntfyConfiguredGateway, 'value: "https://ntfy.example.com"', 'ntfy gateway base URL value');
+assertIncludes(ntfyConfiguredGateway, 'name: NTFY_TOPIC', 'ntfy gateway topic env');
+assertIncludes(ntfyConfiguredGateway, 'value: "psfn-alerts"', 'ntfy gateway topic value');
+const ntfyUnsetGateway = findDocumentByKindName(render(), 'Deployment', 'psfn-gateway');
+assertNotIncludes(ntfyUnsetGateway, 'name: NTFY_BASE_URL', 'ntfy gateway base URL omitted when unset');
+assertNotIncludes(ntfyUnsetGateway, 'name: NTFY_TOPIC', 'ntfy gateway topic omitted when unset');
 assertDefaultFleetRenderFails(
   [
     '--set', 'secrets.allowMissingRequired=false',

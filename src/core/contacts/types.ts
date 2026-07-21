@@ -154,6 +154,9 @@ export const CONTACT_MUTATION_AUDIT_FIELDS = [
   'nickname',
   'timezone',
   'relationship_type',
+  'gender',
+  'pronouns',
+  'age',
   'channel_privacy',
   'channel_bond',
   'channel_link',
@@ -161,6 +164,16 @@ export const CONTACT_MUTATION_AUDIT_FIELDS = [
 ] as const;
 
 export type ContactMutationAuditField = typeof CONTACT_MUTATION_AUDIT_FIELDS[number];
+
+/**
+ * Operator/tool demographic write (bead fnyb). Only present keys are applied;
+ * a `null` clears the field, an absent key leaves it unchanged.
+ */
+export interface ContactDemographicsUpdate {
+  gender?: string | null;
+  pronouns?: string | null;
+  age?: number | null;
+}
 
 export interface ContactMutationAuditEntry {
   id: number;
@@ -283,6 +296,16 @@ export interface Contact {
   timezone?: string;
   trustLevel: TrustLevel;
   relationshipType: RelationshipType;
+  /**
+   * Demographic attributes (bead fnyb). Provenance is carried by the actor on
+   * the per-field contact_mutation_audit rows, mirroring is_machine_intelligence:
+   * an operator/tool actor is a deliberate specification, a `system:`-prefixed
+   * actor is an inference. Registered so a future inference write can honor an
+   * operator-specified value rather than clobber it.
+   */
+  gender?: string;
+  pronouns?: string;
+  age?: number;
   emotionalBaseline?: Record<string, number>;  // e.g. { warmth: 0.7, formality: 0.3 }
   /** True when this contact is another machine intelligence (peer companion/agent) — orthogonal to relationshipType. */
   isMachineIntelligence?: boolean;

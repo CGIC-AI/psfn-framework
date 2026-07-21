@@ -21,6 +21,11 @@ interface NormalizedJournalEntry {
   entry: JournalEntry;
   nextHmacCandidates: Array<string | null>;
   verified: boolean;
+  // True only when this entry actually rendered an unverified_history wrapper
+  // (message/compaction). A failed but non-rendered entry (tombstone/marker,
+  // non-string content) reports false so it does not consume the contiguous
+  // run's single full notice (bead g59z).
+  renderedUnverifiedNotice: boolean;
 }
 
 interface JournalChainContext {
@@ -28,6 +33,10 @@ interface JournalChainContext {
   normalizeEntry: (
     entry: JournalEntry,
     previousHmacCandidates: readonly (string | null)[],
+    // True when the current contiguous HMAC-failed run has already rendered its
+    // full unverified_history notice, so this entry renders only the
+    // continuation tag, not the full boilerplate again (bead g59z).
+    previousEntryUnverified?: boolean,
   ) => NormalizedJournalEntry;
   warnAboutQuarantinedEntries: (
     channelId: string,
@@ -112,6 +121,12 @@ function loadJournalArchiveChainAttempt(
 
   const beforeFingerprint = fingerprintJournalArchiveChain(context.archivePort, archives);
   let previousHmacCandidates: Array<string | null> = [null];
+  // Tracks whether the current contiguous HMAC-failed run (which may span
+  // archive boundaries) has already rendered its one full notice, so the
+  // boilerplate renders once — and only once a rendered failed entry has been
+  // seen, so a run beginning with a non-rendered failed entry still shows the
+  // full notice on its first rendered message (bead g59z).
+  let runNoticeRendered = false;
   let maxId = 0;
   for (const archive of archives) {
     const result = context.archivePort.readJournalFile(archive);
@@ -126,8 +141,11 @@ function loadJournalArchiveChainAttempt(
       );
     }
     for (const rawEntry of result.entries) {
-      const normalized = context.normalizeEntry(rawEntry, previousHmacCandidates);
+      const normalized = context.normalizeEntry(rawEntry, previousHmacCandidates, runNoticeRendered);
       previousHmacCandidates = normalized.nextHmacCandidates;
+      runNoticeRendered = normalized.verified
+        ? false
+        : runNoticeRendered || normalized.renderedUnverifiedNotice;
       applyJournalState(cache, normalized.entry);
       const message = journalToSessionEntry(normalized.entry);
       if (message) {
@@ -314,9 +332,16 @@ function readEntriesInRangeFromJournalArchiveChainAttempt(
         ? [window.entries[oldestMessageIndex - 1]!._hmac ?? null]
         : [previousHmac];
       const segmentMessages: SessionEntry[] = [];
+      // Per-segment reset is intentional (archive-boundary behavior left as is);
+      // within the segment the full notice renders once, and only after a
+      // rendered failed entry has been seen (bead g59z).
+      let runNoticeRendered = false;
       for (let index = oldestMessageIndex; index < window.entries.length; index += 1) {
-        const normalized = context.normalizeEntry(window.entries[index]!, previousHmacCandidates);
+        const normalized = context.normalizeEntry(window.entries[index]!, previousHmacCandidates, runNoticeRendered);
         previousHmacCandidates = normalized.nextHmacCandidates;
+        runNoticeRendered = normalized.verified
+          ? false
+          : runNoticeRendered || normalized.renderedUnverifiedNotice;
         verificationFailed ||= !normalized.verified;
         const message = journalToSessionEntry(normalized.entry);
         if (message && message.id >= startId && message.id <= endId) {
@@ -474,9 +499,13 @@ function readRecentEntriesFromJournalArchiveChainAttempt(
 
   const messages: SessionEntry[] = [];
   let verificationFailed = false;
+  let runNoticeRendered = false;
   for (let index = oldestMessageIndex; index < rawEntries.length; index += 1) {
-    const normalized = context.normalizeEntry(rawEntries[index]!, previousHmacCandidates);
+    const normalized = context.normalizeEntry(rawEntries[index]!, previousHmacCandidates, runNoticeRendered);
     previousHmacCandidates = normalized.nextHmacCandidates;
+    runNoticeRendered = normalized.verified
+      ? false
+      : runNoticeRendered || normalized.renderedUnverifiedNotice;
     verificationFailed ||= !normalized.verified;
     const message = journalToSessionEntry(normalized.entry);
     if (message) messages.push(message);

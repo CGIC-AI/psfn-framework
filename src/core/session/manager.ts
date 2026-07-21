@@ -182,12 +182,24 @@ export type {
 const log = createComponentLogger('SessionManager');
 
 /**
- * Shallow per-channel scan depth used by listRecentlyActiveChannels to confirm
- * genuine partner activity within the lookback window. Deep enough to see past
- * a burst of recent companion/system entries to the partner's last turn,
- * bounded so wake-lane fan-out enumeration stays cheap.
+ * Initial per-channel scan depth used by listRecentlyActiveChannels to confirm
+ * genuine partner activity within the lookback window. Deep enough to see past a
+ * burst of recent companion/system entries to the partner's last turn in the
+ * common case; the scan grows (see RECENT_ACTIVE_CHANNEL_PARTNER_SCAN_CEILING)
+ * only when a channel's in-window history is deeper than this, so a
+ * companion-chatty channel whose partner turn sits behind a long assistant/system
+ * tail is not missed (bead 2x37.9 item 3).
  */
 const RECENT_ACTIVE_CHANNEL_PARTNER_SCAN_LIMIT = 128;
+
+/**
+ * Hard ceiling on the growing partner-activity scan. A channel with this many
+ * in-window entries and zero partner turns behind them is degenerate: the
+ * partner has been silent under a very long companion/system tail, so treating
+ * it as not-a-wake-target is the correct fail-closed outcome. Bounds worst-case
+ * work per tick regardless of history depth.
+ */
+const RECENT_ACTIVE_CHANNEL_PARTNER_SCAN_CEILING = 8192;
 
 export interface LegacyChatImportRunRequest extends LegacyChatImportRequest {
   canonicalContactId?: string;
@@ -627,11 +639,21 @@ export class SessionManager implements SessionManagerTypeSurface {
    * partner (role 'user') message falls within `lookbackMs`, ordered
    * most-recent-activity first (same order the store already sorts by).
    *
-   * Bounded: `listSessionsByRecentActivity` is sorted by last-activity
-   * descending, so the scan stops at the first channel outside the lookback
-   * edge; each surviving candidate is confirmed by a shallow recent-entry scan
-   * for genuine partner (not just assistant/system) activity — a channel where
-   * only the companion emitted something in-window is not a fan-out target.
+   * Bounded by the lookback break: `listSessionsByRecentActivity` is sorted by
+   * last-activity descending, so this loop stops at the first channel whose
+   * newest entry predates the lookback edge and never inspects the older tail
+   * (bead 2x37.9 item 3). Each surviving candidate is confirmed by a
+   * partner-activity scan for genuine partner (not just assistant/system)
+   * activity — a channel where only the companion emitted something in-window is
+   * not a fan-out target.
+   *
+   * Note (2x37.9 item 3, store-side materialization declined): the store still
+   * builds every session summary before sorting, so passing MAX_SAFE_INTEGER
+   * only affects the final slice, not the store's work. That is a store-level
+   * concern (a lookback-aware `listSessionsByRecentActivity` API), deliberately
+   * out of scope here and not a near-term performance problem; the manager loop
+   * itself is already bounded by the break above, which is where the expensive
+   * per-channel entry scans are gated.
    */
   listRecentlyActiveChannels(input: {
     lookbackMs: number;
@@ -644,11 +666,7 @@ export class SessionManager implements SessionManagerTypeSurface {
       // Store list is last-activity-desc: once a channel's newest entry is
       // older than the lookback edge, every remaining channel is too.
       if (summary.lastActivityAt < cutoffMs) break;
-      const entries = this.store.getRecent(summary.sessionId, RECENT_ACTIVE_CHANNEL_PARTNER_SCAN_LIMIT);
-      const hasRecentPartner = entries.some(
-        entry => entry.role === 'user' && entry.timestamp >= cutoffMs,
-      );
-      if (!hasRecentPartner) continue;
+      if (!this.hasRecentPartnerActivity(summary.sessionId, cutoffMs)) continue;
       active.push({
         sessionId: summary.sessionId,
         channelType: summary.channelType,
@@ -657,6 +675,41 @@ export class SessionManager implements SessionManagerTypeSurface {
       });
     }
     return active;
+  }
+
+  /**
+   * Whether `sessionId` has genuine partner (role 'user') activity at or after
+   * `cutoffMs`. Scans recent entries newest-first in geometrically growing
+   * pages, terminating as soon as a partner turn in-window is found OR the page
+   * reaches past the lookback edge — its oldest fetched entry predates `cutoffMs`,
+   * so every remaining (older) entry is out-of-window and no in-window partner
+   * turn can exist. This removes the fixed-cap miss where a partner turn sits
+   * behind a long tail of in-window assistant/system entries (bead 2x37.9
+   * item 3). Work is bounded by the channel's in-window entry count and the hard
+   * ceiling, never by a magic shallow constant.
+   */
+  private hasRecentPartnerActivity(sessionId: string, cutoffMs: number): boolean {
+    let pageSize = RECENT_ACTIVE_CHANNEL_PARTNER_SCAN_LIMIT;
+    for (;;) {
+      const entries = this.store.getRecent(sessionId, pageSize);
+      if (entries.some(entry => entry.role === 'user' && entry.timestamp >= cutoffMs)) {
+        return true;
+      }
+      // `getRecent` returns the newest `pageSize` entries in chronological order,
+      // so entries[0] is the oldest of the fetched window. A short page means the
+      // whole channel history is in hand (this also covers an empty page, which
+      // short-circuits before the entries[0] read); a full page whose oldest
+      // entry predates the cutoff already spans the in-window region. Either way,
+      // and at the ceiling, no in-window partner turn exists.
+      if (
+        entries.length < pageSize
+        || entries[0].timestamp < cutoffMs
+        || pageSize >= RECENT_ACTIVE_CHANNEL_PARTNER_SCAN_CEILING
+      ) {
+        return false;
+      }
+      pageSize = Math.min(pageSize * 2, RECENT_ACTIVE_CHANNEL_PARTNER_SCAN_CEILING);
+    }
   }
 
   getSessionActivity(sessionId: string): SessionActivitySummary | null {
@@ -724,7 +777,8 @@ export class SessionManager implements SessionManagerTypeSurface {
       channelId,
       options.sourceChannelId,
     );
-    const meta = options.channelMeta ?? (isDirectMessage != null ? { isDirectMessage } : undefined);
+    const meta = options.channelMeta
+      ?? (typeof isDirectMessage === 'boolean' ? { isDirectMessage } : undefined);
     const channelVisibility = classifyChannelEnvelope(sourceChannelId, meta).privacy;
     const timestamp = Date.now();
     const turnMetadata = options.turnId
@@ -873,7 +927,8 @@ export class SessionManager implements SessionManagerTypeSurface {
       channelId,
       options.sourceChannelId,
     );
-    const meta = options.channelMeta ?? (isDirectMessage != null ? { isDirectMessage } : undefined);
+    const meta = options.channelMeta
+      ?? (typeof isDirectMessage === 'boolean' ? { isDirectMessage } : undefined);
     const channelVisibility = classifyChannelEnvelope(sourceChannelId, meta).privacy;
     const timestamp = Date.now();
     const turnMetadata = options.turnId
@@ -962,7 +1017,8 @@ export class SessionManager implements SessionManagerTypeSurface {
       options.sourceChannelId,
     );
     if (!shouldPersistSessionChannel(resolvedChannelId)) return null;
-    const meta = options.channelMeta ?? (isDirectMessage != null ? { isDirectMessage } : undefined);
+    const meta = options.channelMeta
+      ?? (typeof isDirectMessage === 'boolean' ? { isDirectMessage } : undefined);
     const channelVisibility = classifyChannelEnvelope(sourceChannelId, meta).privacy;
     const timestamp = Date.now();
     const turnMetadata = options.turnId
@@ -1190,7 +1246,8 @@ export class SessionManager implements SessionManagerTypeSurface {
       options.sourceChannelId,
     );
     if (!shouldPersistSessionChannel(resolvedChannelId)) return { entryId: null, intakeSnapshot: null };
-    const meta = options.channelMeta ?? (isDirectMessage != null ? { isDirectMessage } : undefined);
+    const meta = options.channelMeta
+      ?? (typeof isDirectMessage === 'boolean' ? { isDirectMessage } : undefined);
     const channelVisibility = classifyChannelEnvelope(sourceChannelId, meta).privacy;
     const timestamp = Date.now();
     const turnMetadata = options.turnId

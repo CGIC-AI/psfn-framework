@@ -511,6 +511,14 @@ interface FreeTimeLaneCadenceState {
   lastBlockAtMs?: number;
   blocksTodayKey?: string;
   blocksToday: number;
+  /**
+   * bead 75ci: the local-day key on which a block ended in silence
+   * (loafed/companion_stopped). While it matches the current day the gate stays
+   * closed for the remainder of the day, so a silent exit is not re-prompted up
+   * to the daily cap. Naturally clears on day rollover (a new dayKey no longer
+   * matches).
+   */
+  silencedForDayKey?: string;
 }
 
 function partnerActivityMinutes(decision: AmbientPresenceDecision, nowMs: number): number {
@@ -780,6 +788,24 @@ function makeLaneHandler(
       state.blocksToday = 0;
     }
 
+    // bead 75ci: if a prior block today ended because she chose silence
+    // (loafed/companion_stopped), do not bother her again for the remainder of
+    // the day, regardless of the block interval or daily cap.
+    if (state.silencedForDayKey === dayKey) {
+      if (options.eventBus) {
+        void options.eventBus.emit(FREE_TIME_GATE_EVENT, {
+          lane: FREE_TIME_GATE_LANE,
+          outcome: 'skipped',
+          reason: `${lane}:silenced_after_stop`,
+          inputs: {},
+          timestamp: nowMs,
+          channelId: defaultChannelId,
+        });
+      }
+      log.debug('Free-time block skipped: silenced after a prior silent exit today', { lane });
+      return;
+    }
+
     const activeConversationGuardMinutes = lane === 'idle'
       ? options.config.idle.minIdleMinutes
       : Math.max(1, options.restWindow.inactivityThresholdMinutes);
@@ -941,6 +967,11 @@ function makeLaneHandler(
     // day cap, prevents re-prompting this period).
     if (result.endReason !== 'rested') {
       state.blocksToday += 1;
+    }
+    // bead 75ci: she chose silence and free time ended — close the gate for the
+    // rest of the day so she is not re-prompted up to the daily cap.
+    if (result.endReason === 'loafed' || result.endReason === 'companion_stopped') {
+      state.silencedForDayKey = dayKey;
     }
 
     // Provenance marker on the internal transcript (inspectable, tagged).

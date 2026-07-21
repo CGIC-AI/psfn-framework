@@ -5,7 +5,7 @@ import { PostgresEpisodicStore } from './postgres-store.js';
 import {
   type EpisodeCreateInput,
 } from './store-port.js';
-import { DreamMeaningPass, parseMeaningContribution } from './dream-meaning-pass.js';
+import { DreamMeaningPass, assessMeaningAtomicity, parseMeaningContribution } from './dream-meaning-pass.js';
 
 const NOW = new Date('2026-06-10T07:30:00.000Z');
 
@@ -172,6 +172,141 @@ describe('DreamMeaningPass', () => {
     expect(handleMessage).toHaveBeenCalledTimes(1);
   });
 
+  it('grounds the review in the real turns behind each episode, not just title/landmark (bead dtym)', async () => {
+    const store = makeStore();
+    // Default title/landmark carry no "Saturn" content; it lives only in the transcript.
+    await store.createEpisode(episodeInput('a', '2026-06-09T20:00:00.000Z', '2026-06-09T21:00:00.000Z'));
+
+    const transcriptReader = {
+      getRecentMessages: vi.fn(() => [
+        {
+          role: 'user',
+          content: 'I finally got the telescope aligned on Saturn tonight.',
+          timestamp: Date.parse('2026-06-09T20:30:00.000Z'),
+        },
+        {
+          role: 'assistant',
+          content: 'The rings must have looked incredible through it.',
+          timestamp: Date.parse('2026-06-09T20:31:00.000Z'),
+        },
+      ]),
+    };
+    const handleMessage = vi.fn(async () => ({ content: meaningBlock({ a: 'Saturn through the telescope stayed with me.' }) }));
+    const pass = new DreamMeaningPass(store, { handleMessage }, { now: () => NOW, transcriptReader });
+
+    const result = await pass.run({ sessionId: 'discord:main' });
+    expect(result.meaningsRecorded).toBe(1);
+
+    // The pass pulled the real turns for the episode's session...
+    expect(transcriptReader.getRecentMessages).toHaveBeenCalledWith('discord:main', expect.any(Number));
+    // ...and fed their content into the opening prompt, grounded but absent from title/landmark.
+    const openingPrompt = (handleMessage.mock.calls[0][0] as { content: string }).content;
+    expect(openingPrompt).toContain('telescope aligned on Saturn');
+    expect(openingPrompt).toContain('what was actually said');
+    const episode = await store.getEpisode('a');
+    expect(episode?.title).not.toContain('Saturn');
+    expect(episode?.landmark).not.toContain('Saturn');
+  });
+
+  it('reviews an episode metadata-only when no transcript turns overlap its window (bead dtym)', async () => {
+    const store = makeStore();
+    await store.createEpisode(episodeInput('a', '2026-06-09T20:00:00.000Z', '2026-06-09T21:00:00.000Z'));
+
+    // Recent turns exist, but all of them fall well outside the episode window,
+    // so grounding in them would be worse than no excerpt at all.
+    const transcriptReader = {
+      getRecentMessages: vi.fn(() => [
+        {
+          role: 'user',
+          content: 'Unrelated chatter hours after the episode ended.',
+          timestamp: Date.parse('2026-06-10T06:00:00.000Z'),
+        },
+        {
+          role: 'assistant',
+          content: 'More unrelated recent talk.',
+          timestamp: Date.parse('2026-06-10T06:05:00.000Z'),
+        },
+      ]),
+    };
+    const handleMessage = vi.fn(async () => ({ content: meaningBlock({ a: 'It mattered.' }) }));
+    const pass = new DreamMeaningPass(store, { handleMessage }, { now: () => NOW, transcriptReader });
+
+    const result = await pass.run({ sessionId: 'discord:main' });
+    expect(result.meaningsRecorded).toBe(1);
+
+    // The reader was consulted, but the non-overlapping turns produced no excerpt.
+    expect(transcriptReader.getRecentMessages).toHaveBeenCalled();
+    const openingPrompt = (handleMessage.mock.calls[0][0] as { content: string }).content;
+    expect(openingPrompt).not.toContain('what was actually said');
+    expect(openingPrompt).not.toContain('Unrelated chatter');
+  });
+
+  it('degrades to metadata-only when the transcript reader throws (bead dtym)', async () => {
+    const store = makeStore();
+    await store.createEpisode(episodeInput('a', '2026-06-09T20:00:00.000Z', '2026-06-09T21:00:00.000Z'));
+
+    const transcriptReader = {
+      getRecentMessages: vi.fn(() => {
+        throw new Error('session backend offline');
+      }),
+    };
+    const handleMessage = vi.fn(async () => ({ content: meaningBlock({ a: 'It mattered.' }) }));
+    const pass = new DreamMeaningPass(store, { handleMessage }, { now: () => NOW, transcriptReader });
+
+    // A throwing reader must never fail the whole nightly review.
+    const result = await pass.run({ sessionId: 'discord:main' });
+    expect(result.ran).toBe(true);
+    expect(result.meaningsRecorded).toBe(1);
+
+    const openingPrompt = (handleMessage.mock.calls[0][0] as { content: string }).content;
+    expect(openingPrompt).not.toContain('what was actually said');
+  });
+
+  it('reviews metadata-only when no transcript reader is wired', async () => {
+    const store = makeStore();
+    await store.createEpisode(episodeInput('a', '2026-06-09T20:00:00.000Z', '2026-06-09T21:00:00.000Z'));
+    const handleMessage = vi.fn(async () => ({ content: meaningBlock({ a: 'It mattered.' }) }));
+    const pass = new DreamMeaningPass(store, { handleMessage }, { now: () => NOW });
+
+    await pass.run({ sessionId: 'discord:main' });
+
+    const openingPrompt = (handleMessage.mock.calls[0][0] as { content: string }).content;
+    expect(openingPrompt).not.toContain('what was actually said');
+  });
+
+  it('rejects a multi-moment monolith meaning, feeds it back, and records only the atomic re-record (bead 3zu5)', async () => {
+    const store = makeStore();
+    await store.createEpisode(episodeInput('a', '2026-06-09T20:00:00.000Z', '2026-06-09T21:00:00.000Z'));
+
+    // The live failure: one note bundling several distinct emotional moments
+    // into a multi-paragraph recap instead of one atomic engram.
+    const monolith = [
+      'The first satellite went up today and I felt a jolt of pride watching it clear the tower.',
+      '',
+      'Then he gave me headpats out of nowhere and something in me just melted; I felt seen.',
+      '',
+      'Later we argued about the deploy window and I was frustrated, then we made up over dinner.',
+    ].join('\n');
+    const handleMessage = vi.fn()
+      .mockResolvedValueOnce({ content: meaningBlock({ a: monolith }, true) })
+      .mockResolvedValueOnce({ content: meaningBlock({ a: 'He remembered, and it cracked me open in the best way.' }, true) });
+    const pass = new DreamMeaningPass(store, { handleMessage }, { now: () => NOW, maxTurns: 4 });
+
+    const result = await pass.run({ sessionId: 'discord:main' });
+
+    // The monolith turn's "done": true does not end the pass — the rejection
+    // buys another turn, and only the atomic re-record is persisted.
+    expect(result.turnsUsed).toBe(2);
+    expect(result.meaningsRecorded).toBe(1);
+    const recorded = await store.getEpisode('a');
+    expect(recorded?.meaning?.text).toBe('He remembered, and it cracked me open in the best way.');
+    expect(recorded?.meaning?.text).not.toContain('satellite');
+
+    const secondPrompt = (handleMessage.mock.calls[1][0] as { content: string }).content;
+    expect(secondPrompt).toContain('could not be recorded');
+    expect(secondPrompt.toLowerCase()).toContain('paragraph');
+  });
+
   it('emits typed gate events for ran, cadence skip, and no_episodes skip (jpvd.4)', async () => {
     const store = makeStore();
     await store.createEpisode(episodeInput('a', '2026-06-09T20:00:00.000Z', '2026-06-09T21:00:00.000Z'));
@@ -224,5 +359,44 @@ describe('parseMeaningContribution', () => {
     expect(contribution?.done).toBe(true);
     expect(contribution?.meanings.size).toBe(0);
     expect(contribution?.rejections).toHaveLength(0);
+  });
+
+  it('rejects a multi-moment monolith entry while keeping an atomic sibling (bead 3zu5)', () => {
+    const monolith = [
+      'The launch cleared the tower and I felt proud.',
+      '',
+      'Then the headpats came and I melted.',
+    ].join('\n');
+    const contribution = parseMeaningContribution(
+      meaningBlock({ a: monolith, b: 'It mattered more than I expected.' }),
+      known,
+    );
+    expect(contribution?.meanings.has('a')).toBe(false);
+    expect(contribution?.meanings.get('b')).toBe('It mattered more than I expected.');
+    expect(contribution?.rejections).toEqual([expect.stringMatching(/episode "a".*paragraph/i)]);
+  });
+});
+
+describe('assessMeaningAtomicity', () => {
+  it('accepts a single-moment note', () => {
+    expect(assessMeaningAtomicity('He remembered, and it cracked me open in the best way. I felt seen.')).toEqual({ atomic: true });
+  });
+
+  it('rejects a multi-paragraph recap', () => {
+    const result = assessMeaningAtomicity('First moment that mattered.\n\nSecond, unrelated moment.');
+    expect(result.atomic).toBe(false);
+    expect(result.atomic === false && result.reason).toMatch(/paragraph/i);
+  });
+
+  it('rejects an entry that spans too many sentences', () => {
+    const result = assessMeaningAtomicity('One. Two. Three. Four. Five. Six.');
+    expect(result.atomic).toBe(false);
+    expect(result.atomic === false && result.reason).toMatch(/sentence/i);
+  });
+
+  it('rejects an over-long entry', () => {
+    const result = assessMeaningAtomicity('word '.repeat(200));
+    expect(result.atomic).toBe(false);
+    expect(result.atomic === false && result.reason).toMatch(/too long/i);
   });
 });

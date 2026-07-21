@@ -19,6 +19,7 @@ import {
   formatMemoryWithheldReasonLabel,
   type MemoryWithheldReasonTag,
 } from '../../../faculties/memory/withheld-summary.js';
+import { HISTORY_STAMP_PREFIX_RE } from '../manager/context-support.js';
 
 export interface HistoryMessageLike {
   role: string;
@@ -120,12 +121,10 @@ function attributionPrefixes(participants: readonly AttributionParticipant[]): s
 }
 
 // Assembled history lines carry '[MM-DD-YY HH:mm] ' provenance stamps ahead of
-// speaker attribution; strip them before prefix checks. Stamp semantics are
-// pinned in context-support.test.ts.
-const HISTORY_STAMP_RE = /^\[[A-Z][a-z]{2} \d{2}-\d{2}-\d{2} \d{2}:\d{2}\] /;
-
+// speaker attribution; strip them before prefix checks using the canonical
+// matcher exported next to the stamp builder (bead 2x37.9 item 4).
 function stripHistoryStamp(line: string): string {
-  return line.replace(HISTORY_STAMP_RE, '');
+  return line.replace(HISTORY_STAMP_PREFIX_RE, '');
 }
 
 /**

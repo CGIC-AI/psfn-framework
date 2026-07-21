@@ -378,6 +378,29 @@ describe('journal utils', () => {
       .toContain('<unverified_history>');
   });
 
+  it('emits the unverified_history boilerplate once for a contiguous multi-entry run (bead g59z)', () => {
+    // A broken chain used to inject the full 3-line notice once PER failed
+    // entry (turn 019f3a65 carried 19 identical warnings). The first failure of
+    // a run carries the full notice; each subsequent failure in the same run is
+    // marked untrusted with a lightweight continuation tag instead.
+    const first = wrapUnverifiedHistory('entry one', 'signature_mismatch');
+    const second = wrapUnverifiedHistory('entry two', 'signature_mismatch', { continuation: true });
+    const third = wrapUnverifiedHistory('entry three', 'signature_mismatch', { continuation: true });
+    const rendered = [first, second, third].join('\n');
+
+    // The full boilerplate sentence appears exactly once across the whole run.
+    const noticeCount = rendered.split('failed HMAC verification').length - 1;
+    expect(noticeCount).toBe(1);
+    // The reason line is not repeated for every entry either.
+    expect(rendered.split('Reason: signature_mismatch').length - 1).toBe(1);
+    // Every entry is still fenced as untrusted — fail-closed marking is intact.
+    expect(rendered.match(/<unverified_history/g)).toHaveLength(3);
+    expect(second).toContain('<unverified_history continued>');
+    expect(second).toContain('entry two');
+    // The default (non-continuation) call still emits the full notice.
+    expect(first).toContain('The following session content failed HMAC verification.');
+  });
+
   it('loads entries normally when no keyring is configured (integrity disabled)', () => {
     // When there is no keyring, entries should load without any wrapping
     const entry = buildMessageJournalEntry(1, {

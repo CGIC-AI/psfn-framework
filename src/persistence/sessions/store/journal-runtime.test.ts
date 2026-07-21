@@ -2,11 +2,12 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { buildMessageJournalEntry } from '../../journals/journal/entries.js';
+import { buildMessageJournalEntry, buildTurnTombstoneJournalEntry } from '../../journals/journal/entries.js';
 import { createFilesystemSessionArchivePort } from '../../journals/journal/port.js';
+import { buildSessionHmacKeyring, signJournalEntry } from '../../journals/journal-utils.js';
 import { SessionJournalRuntime } from './journal-runtime.js';
-import type { ChannelCache, ChannelIndexEntry } from '../store-primitives.js';
-import type { SessionEntry } from '../../../core/session/types.js';
+import { createKeyringIntegrityProvider, type ChannelCache, type ChannelIndexEntry } from '../store-primitives.js';
+import type { JournalEntry, SessionEntry } from '../../../core/session/types.js';
 import type { TranscriptProjectionPort } from '../transcript-projection-port.js';
 
 describe('SessionJournalRuntime', () => {
@@ -162,6 +163,58 @@ describe('SessionJournalRuntime', () => {
       'ch-projection',
       'projection backfill offline',
     );
+  });
+
+  it('renders one full unverified_history notice when a failed run begins with a non-rendered entry (bead g59z)', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'psfn-session-journal-g59z-'));
+    dirs.push(dir);
+    const channelId = 'ch-g59z';
+    const filePath = join(dir, 'session.jsonl');
+    const keyring = buildSessionHmacKeyring({ serializedKeys: 'v1:g59z-test-key', activeVersion: 'v1' });
+    if (!keyring) throw new Error('Expected a test keyring');
+
+    let previousHmac: string | null = null;
+    const sign = (entry: JournalEntry): JournalEntry => {
+      const result = signJournalEntry(entry, keyring, previousHmac);
+      previousHmac = result._hmac ?? previousHmac;
+      return result;
+    };
+
+    // A contiguous HMAC-failed run that BEGINS with a non-rendered entry type
+    // (a tombstone, which never emits an unverified_history wrapper) followed by
+    // a rendered failed message. The message must still show the FULL notice.
+    const tombstone = sign(buildTurnTombstoneJournalEntry(1, channelId, {
+      turnId: 'turn:nonexistent',
+      action: 'redact',
+      timestamp: 1_000,
+      actor: 'admin:test',
+      reason: 'privacy request',
+    }));
+    const message = sign(buildMessageJournalEntry(2, {
+      channelId,
+      role: 'user',
+      content: 'secret content that failed verification',
+      timestamp: 2_000,
+    }));
+    // Tamper both after signing so each fails HMAC as one contiguous run.
+    const tamperedTombstone: JournalEntry = { ...tombstone, timestamp: 9_999 };
+    const tamperedMessage: JournalEntry = { ...message, content: 'tampered secret content' };
+
+    const port = createFilesystemSessionArchivePort();
+    const provider = createKeyringIntegrityProvider(keyring);
+    if (!provider) throw new Error('Expected an integrity provider');
+    const runtime = new SessionJournalRuntime(provider, port);
+    const archive = runtime.openArchive(channelId, filePath);
+    port.writeJournalFile(archive, [tamperedTombstone, tamperedMessage]);
+
+    const cache = runtime.loadChannel(archive);
+    const rendered = cache.entries.map(entry => entry.content).join('\n');
+    // The leading tombstone must NOT have consumed the run's single notice, so
+    // the first rendered failed message shows the full boilerplate, not a bare
+    // continuation tag.
+    expect(rendered).toContain('<unverified_history>');
+    expect(rendered).not.toContain('<unverified_history continued>');
+    expect(rendered.match(/<unverified_history>/g)).toHaveLength(1);
   });
 
   it('retries a full chain load when the archive generation changes during the read', () => {

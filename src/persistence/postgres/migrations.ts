@@ -699,6 +699,13 @@ export const POSTGRES_CONTACT_MIGRATIONS = [
   `ALTER TABLE contacts ADD COLUMN IF NOT EXISTS conversation_channels JSONB NOT NULL DEFAULT '[]'::jsonb;`,
   `ALTER TABLE contacts ADD COLUMN IF NOT EXISTS is_machine_intelligence BOOLEAN NOT NULL DEFAULT FALSE;`,
   `ALTER TABLE contacts ADD COLUMN IF NOT EXISTS trust_version BIGINT NOT NULL DEFAULT 0;`,
+  // bead fnyb: structured demographic attributes. Provenance is carried by the
+  // per-field contact_mutation_audit actor (operator/tool = specified,
+  // system:* = inferred), mirroring is_machine_intelligence — no separate
+  // provenance column needed.
+  `ALTER TABLE contacts ADD COLUMN IF NOT EXISTS gender TEXT;`,
+  `ALTER TABLE contacts ADD COLUMN IF NOT EXISTS pronouns TEXT;`,
+  `ALTER TABLE contacts ADD COLUMN IF NOT EXISTS age INTEGER;`,
   `CREATE INDEX IF NOT EXISTS idx_contacts_trust ON contacts(trust_level);`,
   `CREATE INDEX IF NOT EXISTS idx_contacts_discord ON contacts(discord_user_id);`,
   `
@@ -985,6 +992,8 @@ export const POSTGRES_INTENTION_MIGRATIONS = [
   `ALTER TABLE intention_pending_follow_ups ADD COLUMN IF NOT EXISTS origin_icp_root_initiation_id UUID;`,
   `ALTER TABLE intention_pending_follow_ups ADD COLUMN IF NOT EXISTS dampened_at TEXT;`,
   `ALTER TABLE intention_pending_follow_ups ADD COLUMN IF NOT EXISTS dampening_reason TEXT;`,
+  `ALTER TABLE intention_pending_follow_ups ADD COLUMN IF NOT EXISTS formation_vad JSONB;`,
+  `ALTER TABLE intention_pending_follow_ups ADD COLUMN IF NOT EXISTS completion_vad JSONB;`,
   `CREATE INDEX IF NOT EXISTS idx_intention_pending_follow_ups_active ON intention_pending_follow_ups (activated_at, created_at, id);`,
   `CREATE INDEX IF NOT EXISTS idx_intention_pending_follow_ups_live ON intention_pending_follow_ups (activated_at, dampened_at, created_at, id);`,
   `CREATE INDEX IF NOT EXISTS idx_intention_pending_follow_ups_contact ON intention_pending_follow_ups (contact_id, activated_at, created_at, id);`,
@@ -3109,5 +3118,28 @@ export const POSTGRES_PARTNER_AFFECT_SHADOW_MIGRATIONS: readonly string[] = [
   `
   CREATE INDEX IF NOT EXISTS idx_partner_affect_shadow_suppressions_received
     ON partner_affect_shadow_suppressions(partner_contact_id, received_at_ms DESC, id DESC);
+  `,
+];
+
+// Analysis-workbench trace ring (bead vb11). Persists the redacted
+// AnalysisWorkbenchTraceView projection so the Garden /analysis-workbench page
+// survives a Garden/agent restart. Companion-scoped, bounded per companion to
+// the same 50-entry window the in-memory ring uses; the redacted projection is
+// stored verbatim as JSONB and read back newest-first.
+export const POSTGRES_ANALYSIS_WORKBENCH_TRACE_MIGRATIONS: readonly string[] = [
+  `
+  CREATE TABLE IF NOT EXISTS analysis_workbench_traces (
+    id TEXT PRIMARY KEY,
+    companion_id TEXT NOT NULL,
+    recorded_at_ms BIGINT NOT NULL,
+    trace_json JSONB NOT NULL,
+    CHECK (recorded_at_ms >= 0),
+    CHECK (jsonb_typeof(trace_json) = 'object'),
+    CHECK (octet_length(trace_json::text) <= 1048576)
+  );
+  `,
+  `
+  CREATE INDEX IF NOT EXISTS idx_analysis_workbench_traces_companion_recorded
+    ON analysis_workbench_traces(companion_id, recorded_at_ms DESC, id DESC);
   `,
 ];

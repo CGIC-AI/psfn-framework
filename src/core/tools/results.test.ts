@@ -7,6 +7,7 @@ import {
   textResultWithError,
   type ToolErrorClass,
 } from './results.js';
+import { classifyExecutedToolCallOutcome } from '../../shared/contracts/tool-call-outcome.js';
 
 describe('structured tool error results', () => {
   it('preserves the legacy isError-only shape unless metadata is requested', () => {
@@ -24,6 +25,7 @@ describe('structured tool error results', () => {
     expect(result.details).toEqual({
       isError: true,
       errorClass: 'rate_limited',
+      classSource: 'declared',
       retryHint: 'retry_after_delay',
       retryable: true,
       companionMessage: 'Provider rate limit reached.',
@@ -95,6 +97,24 @@ describe('structured tool error results', () => {
     });
   });
 
+  it('marks free-text-derived error classes as inferred and structured ones as declared (bead sqsz)', () => {
+    // Returned runtime failure whose text merely contains a validation keyword.
+    const inferred = buildStructuredToolErrorDetails({ cause: new Error('Missing required field: target') });
+    expect(inferred).toMatchObject({ errorClass: 'invalid_input', classSource: 'inferred' });
+
+    // Free-text policy keyword on a returned upstream error is still inferred.
+    const inferredPolicy = buildStructuredToolErrorDetails({ cause: new Error('403 Forbidden from upstream') });
+    expect(inferredPolicy).toMatchObject({ errorClass: 'policy_blocked', classSource: 'inferred' });
+
+    // Explicit caller-supplied class is declared.
+    const declared = buildStructuredToolErrorDetails({ errorClass: 'policy_blocked', cause: new Error('nope') });
+    expect(declared).toMatchObject({ errorClass: 'policy_blocked', classSource: 'declared' });
+
+    // A structured gateway policy-denied code is declared.
+    const gateway = buildStructuredToolErrorDetails({ cause: { code: -32002, message: 'URL blocked by policy' } });
+    expect(gateway).toMatchObject({ errorClass: 'policy_blocked', classSource: 'declared' });
+  });
+
   it('redacts sensitive diagnostics and bounds rawDiagnostic length', () => {
     const longSecret = 'a'.repeat(80);
     const raw = [
@@ -121,5 +141,53 @@ describe('structured tool error results', () => {
     expect(diagnostic).toContain('[env]');
     expect(diagnostic).toContain('api_key=[redacted]');
     expect(diagnostic).toContain('[truncated]');
+  });
+});
+
+describe('classifyExecutedToolCallOutcome — inferred vs declared classes (bead sqsz)', () => {
+  it('keeps a returned failure with an inferred invalid_input class as an execution failure', () => {
+    expect(classifyExecutedToolCallOutcome({
+      details: { isError: true, errorClass: 'invalid_input', classSource: 'inferred' },
+      isError: true,
+    })).toBe('execution_failure');
+  });
+
+  it('keeps a returned failure with an inferred policy_blocked class as an execution failure', () => {
+    expect(classifyExecutedToolCallOutcome({
+      details: { isError: true, errorClass: 'policy_blocked', classSource: 'inferred' },
+      isError: true,
+    })).toBe('execution_failure');
+  });
+
+  it('classifies a declared validation rejection as validation_rejection', () => {
+    expect(classifyExecutedToolCallOutcome({
+      details: { isError: true, errorClass: 'invalid_input', classSource: 'declared' },
+      isError: true,
+    })).toBe('validation_rejection');
+  });
+
+  it('classifies a declared policy denial as policy_denial', () => {
+    expect(classifyExecutedToolCallOutcome({
+      details: { isError: true, errorClass: 'policy_blocked', classSource: 'declared' },
+      isError: true,
+    })).toBe('policy_denial');
+  });
+
+  it('treats an absent classSource as declared so legacy/explicit denials are unaffected', () => {
+    expect(classifyExecutedToolCallOutcome({
+      details: { isError: true, errorClass: 'policy_blocked' },
+      isError: true,
+    })).toBe('policy_denial');
+    expect(classifyExecutedToolCallOutcome({
+      details: { isError: true, errorClass: 'invalid_input' },
+      isError: true,
+    })).toBe('validation_rejection');
+  });
+
+  it('honors explicit structured denial flags regardless of classSource', () => {
+    expect(classifyExecutedToolCallOutcome({
+      details: { isError: true, capabilityDenied: true, errorClass: 'invalid_input', classSource: 'inferred' },
+      isError: true,
+    })).toBe('policy_denial');
   });
 });

@@ -11,17 +11,16 @@ import {
   captureTurnSessionContext,
 } from './context-builder.js';
 import { collectRecentEntriesWithinHistorySpan } from '../manager-primitives.js';
+import { HISTORY_STAMP_PREFIX_RE } from './context-support.js';
 import type { SessionEntry } from '../types.js';
 
 // Assembled history lines carry '[MM-DD-YY HH:mm] ' provenance stamps; strip
-// them so content assertions stay deterministic across timezones. Stamp
-// semantics are pinned in context-support.test.ts.
-const HISTORY_STAMP_RE = /^\[[A-Z][a-z]{2} \d{2}-\d{2}-\d{2} \d{2}:\d{2}\] /;
-
+// them so content assertions stay deterministic across timezones using the
+// canonical matcher exported next to the stamp builder (bead 2x37.9 item 4).
 function stripHistoryStamps(content: string): string {
   return content
     .split('\n')
-    .map(line => line.replace(HISTORY_STAMP_RE, ''))
+    .map(line => line.replace(HISTORY_STAMP_PREFIX_RE, ''))
     .join('\n');
 }
 
@@ -160,7 +159,7 @@ describe('orientation context surface wiring', () => {
 
     expect(context.messages).toHaveLength(1);
     expect(context.messages[0]).toMatchObject({ role: 'user' });
-    expect(context.messages[0]?.content).toMatch(HISTORY_STAMP_RE);
+    expect(context.messages[0]?.content).toMatch(HISTORY_STAMP_PREFIX_RE);
     expect(stripHistoryStamps(context.messages[0]?.content ?? ''))
       .toBe('first message intentionally received no reply');
     expect(context.messages).not.toEqual(expect.arrayContaining([

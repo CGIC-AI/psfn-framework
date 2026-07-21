@@ -26,6 +26,8 @@ import {
 } from './dashboard-cost-windows.js';
 import { createComponentLogger } from '../../../shared/logger.js';
 import { TurnPerformanceTracker } from '../../../shared/telemetry/turn-performance.js';
+import type { AnalysisWorkbenchTraceStorePort } from '../../../persistence/postgres/analysis-workbench-trace-store.js';
+import { toErrorMessage } from '../../../shared/utils/errors.js';
 
 interface CachedDashboardModelUsage {
   usage: NonNullable<DashboardModelUsageProjection['usage']>;
@@ -70,6 +72,7 @@ export class AdminDashboardDataService implements AdminDashboardService {
     eventBus: EventBus;
     modelUsageService?: AdminModelUsageService | null;
     adaptiveToolsService?: AdminAdaptiveToolsService | null;
+    analysisWorkbenchTraceStore?: AnalysisWorkbenchTraceStorePort | null;
     resolveLastActiveSessionId?: () => string | null;
     now?: () => number;
   }) {
@@ -123,12 +126,46 @@ export class AdminDashboardDataService implements AdminDashboardService {
       if (this.analysisWorkbenchTraces.length > AdminDashboardDataService.ANALYSIS_WORKBENCH_TRACE_LIMIT) {
         this.analysisWorkbenchTraces.length = AdminDashboardDataService.ANALYSIS_WORKBENCH_TRACE_LIMIT;
       }
+      this.persistAnalysisWorkbenchTrace(trace);
     });
+
+    // vb11: rehydrate the ring from durable storage so traces recorded before a
+    // Garden/agent restart remain visible on the /analysis-workbench page.
+    void this.hydrateAnalysisWorkbenchTraces();
   }
 
   /** Recent REPL traces with full step detail for the workbench drill-down page. */
   listAnalysisWorkbenchTraces(): AnalysisWorkbenchTraceView[] {
     return [...this.analysisWorkbenchTraces];
+  }
+
+  private persistAnalysisWorkbenchTrace(trace: AnalysisWorkbenchTraceView): void {
+    const store = this.deps.analysisWorkbenchTraceStore;
+    if (!store) return;
+    store.record(trace).catch((error) => {
+      log.error('Failed to persist analysis-workbench trace', { error: toErrorMessage(error) });
+    });
+  }
+
+  private async hydrateAnalysisWorkbenchTraces(): Promise<void> {
+    const store = this.deps.analysisWorkbenchTraceStore;
+    if (!store) return;
+    try {
+      const persisted = await store.listRecent(AdminDashboardDataService.ANALYSIS_WORKBENCH_TRACE_LIMIT);
+      // Live traces that arrived during hydration stay at the front; append the
+      // durable, older traces behind them (deduped by timestamp) and re-bound.
+      const seen = new Set(this.analysisWorkbenchTraces.map((trace) => trace.timestamp));
+      const merged = [
+        ...this.analysisWorkbenchTraces,
+        ...persisted.filter((trace) => !seen.has(trace.timestamp)),
+      ];
+      merged.sort((a, b) => b.timestamp - a.timestamp);
+      this.analysisWorkbenchTraces = merged.slice(0, AdminDashboardDataService.ANALYSIS_WORKBENCH_TRACE_LIMIT);
+    } catch (error) {
+      log.error('Failed to hydrate analysis-workbench traces from durable storage', {
+        error: toErrorMessage(error),
+      });
+    }
   }
 
   private static normalizeContextUtilization(value: number): number {

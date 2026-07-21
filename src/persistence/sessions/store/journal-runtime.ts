@@ -127,10 +127,20 @@ export class SessionJournalRuntime {
   verifyAndNormalizeEntry(
     entry: JournalEntry,
     previousHmacCandidates: readonly (string | null)[],
+    // True when the current contiguous HMAC-failed run has already rendered its
+    // full unverified_history notice, so this entry renders only the lightweight
+    // continuation tag instead of repeating the 3-line boilerplate (bead g59z).
+    // Fail-closed marking is unchanged: every failed entry is still returned
+    // verified: false. Only entries that actually render a wrapper
+    // (message/compaction) report renderedUnverifiedNotice: true, so a run that
+    // begins with a non-rendered failed entry (tombstone/marker, non-string
+    // message content) does not consume the run's single full notice.
+    previousEntryUnverified = false,
   ): {
     entry: JournalEntry;
     nextHmacCandidates: Array<string | null>;
     verified: boolean;
+    renderedUnverifiedNotice: boolean;
   } {
     if (!this.integrityProvider) {
       return {
@@ -139,6 +149,7 @@ export class SessionJournalRuntime {
           ? [entry._hmac]
           : [...previousHmacCandidates],
         verified: true,
+        renderedUnverifiedNotice: false,
       };
     }
 
@@ -161,6 +172,7 @@ export class SessionJournalRuntime {
           entry,
           nextHmacCandidates: resolveJournalIntegrityChainCandidates(verification, previousHmac),
           verified: true,
+          renderedUnverifiedNotice: false,
         };
       }
     }
@@ -178,14 +190,16 @@ export class SessionJournalRuntime {
       }
     }
 
+    const wrapOptions = { continuation: previousEntryUnverified };
     if (entry.type === 'message' && typeof entry.content === 'string') {
       return {
         entry: {
           ...entry,
-          content: wrapUnverifiedHistory(entry.content, fallbackVerification.reason),
+          content: wrapUnverifiedHistory(entry.content, fallbackVerification.reason, wrapOptions),
         },
         nextHmacCandidates,
         verified: false,
+        renderedUnverifiedNotice: true,
       };
     }
 
@@ -193,17 +207,23 @@ export class SessionJournalRuntime {
       return {
         entry: {
           ...entry,
-          summary: wrapUnverifiedHistory(entry.summary, fallbackVerification.reason),
+          summary: wrapUnverifiedHistory(entry.summary, fallbackVerification.reason, wrapOptions),
         },
         nextHmacCandidates,
         verified: false,
+        renderedUnverifiedNotice: true,
       };
     }
 
+    // A failed entry with no rendered wrapper (tombstone/marker, or a message
+    // whose content is not a string) is still fail-closed as verified: false but
+    // does NOT consume the run's single full notice — the next rendered failed
+    // entry must still show the full boilerplate (bead g59z).
     return {
       entry,
       nextHmacCandidates,
       verified: false,
+      renderedUnverifiedNotice: false,
     };
   }
 
@@ -234,7 +254,7 @@ export class SessionJournalRuntime {
   loadChannelChain(archives: readonly SessionArchiveHandle[]): ChannelCache {
     return loadJournalArchiveChain({
       archivePort: this.archivePort,
-      normalizeEntry: (entry, candidates) => this.verifyAndNormalizeEntry(entry, candidates),
+      normalizeEntry: (entry, candidates, previousEntryUnverified) => this.verifyAndNormalizeEntry(entry, candidates, previousEntryUnverified),
       warnAboutQuarantinedEntries: (...args) => this.warnAboutQuarantinedEntries(...args),
     }, archives);
   }
@@ -395,7 +415,7 @@ export class SessionJournalRuntime {
   ): SessionEntry[] {
     return readRecentEntriesFromJournalArchiveChain({
       archivePort: this.archivePort,
-      normalizeEntry: (entry, candidates) => this.verifyAndNormalizeEntry(entry, candidates),
+      normalizeEntry: (entry, candidates, previousEntryUnverified) => this.verifyAndNormalizeEntry(entry, candidates, previousEntryUnverified),
       warnAboutQuarantinedEntries: (...args) => this.warnAboutQuarantinedEntries(...args),
     }, archives, limit, tombstones);
   }
@@ -408,7 +428,7 @@ export class SessionJournalRuntime {
   ): SessionEntry[] {
     return readEntriesInRangeFromJournalArchiveChain({
       archivePort: this.archivePort,
-      normalizeEntry: (entry, candidates) => this.verifyAndNormalizeEntry(entry, candidates),
+      normalizeEntry: (entry, candidates, previousEntryUnverified) => this.verifyAndNormalizeEntry(entry, candidates, previousEntryUnverified),
       warnAboutQuarantinedEntries: (...args) => this.warnAboutQuarantinedEntries(...args),
     }, archives, startId, endId, tombstones);
   }

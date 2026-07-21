@@ -16,6 +16,9 @@ export interface ContactRow {
   last_seen: string;
   notes: string | null;
   timezone: string | null;
+  gender?: string | null;
+  pronouns?: string | null;
+  age?: number | null;
 }
 
 export interface ContactIdentityRow {

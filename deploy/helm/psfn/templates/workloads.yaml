@@ -141,6 +141,18 @@ spec:
             - name: PSFN_KUBE_RESOURCE_PREFIX
               value: {{ include "psfn.fullname" . | quote }}
             {{- end }}
+            {{- /* ntfy operator-notifier wiring (bead ge7g): port the gateway's
+                 own NTFY_BASE_URL/NTFY_TOPIC into the pod. Only emitted when
+                 both are set, mirroring the gateway bootstrap contract
+                 (ntfy = baseUrl && topic). NTFY_TOKEN arrives separately via
+                 the provider secret env. When absent, the notify tool fails
+                 closed with a clear message instead of surfacing a raw error. */}}
+            {{- if and .Values.ntfy.baseUrl .Values.ntfy.topic }}
+            - name: NTFY_BASE_URL
+              value: {{ .Values.ntfy.baseUrl | quote }}
+            - name: NTFY_TOPIC
+              value: {{ .Values.ntfy.topic | quote }}
+            {{- end }}
             {{- if and .Values.satelliteHub.enabled .Values.satelliteHub.homeAssistant.enabled }}
             - name: SATELLITE_HUB_CONTROL_BASE_URL
               value: {{ printf "http://%s:%v" (include "psfn.satelliteHubServiceName" .) .Values.ports.satelliteHubControl | quote }}

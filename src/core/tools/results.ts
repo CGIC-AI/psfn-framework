@@ -22,9 +22,21 @@ export type ToolRetryHint =
   | 'retry_with_backoff'
   | 'operator_escalation';
 
+/**
+ * Provenance of {@link StructuredToolErrorDetails.errorClass} (bead sqsz):
+ * `declared` when the class came from an explicit caller-supplied errorClass or
+ * a structured gateway error code; `inferred` when it was derived only by
+ * free-text keyword matching on the diagnostic. Outcome classification must not
+ * downgrade an `inferred` returned failure to a rejection/denial — a genuine
+ * runtime failure whose text merely contains a policy/validation keyword stays
+ * an execution failure and remains visible in runtime-failure telemetry.
+ */
+export type ToolErrorClassSource = 'declared' | 'inferred';
+
 export interface StructuredToolErrorDetails {
   isError: true;
   errorClass: ToolErrorClass;
+  classSource: ToolErrorClassSource;
   retryHint: ToolRetryHint;
   retryable: boolean;
   companionMessage: string;
@@ -169,6 +181,17 @@ export function buildStructuredToolErrorDetails(
     input.rawDiagnostic ?? input.cause ?? input.companionMessage,
   );
   const errorClass = input.errorClass ?? classifyToolError(input.cause ?? input.rawDiagnostic);
+  // bead sqsz: the class is `declared` only when the caller passed it explicitly
+  // or a structured gateway error code drove it; otherwise it was inferred from
+  // free-text keyword matching and must not authorize a rejection/denial outcome.
+  const structuredCode = readErrorCode(input.cause ?? input.rawDiagnostic);
+  const hasStructuredCode = structuredCode === GATEWAY_NEEDS_APPROVAL
+    || structuredCode === GATEWAY_APPROVAL_DENIED
+    || structuredCode === GATEWAY_POLICY_DENIED
+    || structuredCode === GATEWAY_PROVIDER_ERROR;
+  const classSource: ToolErrorClassSource = input.errorClass !== undefined || hasStructuredCode
+    ? 'declared'
+    : 'inferred';
   const retryHint = input.retryHint ?? DEFAULT_RETRY_HINTS[errorClass];
   const companionMessage = sanitizeCompanionMessage(
     input.companionMessage ?? buildDefaultCompanionMessage(errorClass, rawDiagnostic),
@@ -177,6 +200,7 @@ export function buildStructuredToolErrorDetails(
   return {
     isError: true,
     errorClass,
+    classSource,
     retryHint,
     retryable: isRetryableHint(retryHint),
     companionMessage,

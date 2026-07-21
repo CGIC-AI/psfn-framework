@@ -204,6 +204,36 @@ export function applyAdminModelsConfigMutation(options: {
   }
 }
 
+/**
+ * Reload models.json from disk into the live runtime (bead nudf). This is the
+ * Garden-save mutation path minus the write: a direct on-disk edit is picked up
+ * by re-reading the owner file, applying it into the shared config in place, and
+ * firing the existing refreshModels hook + prompt-prefix cache invalidation. It
+ * lets an operator edit models.json directly without a process restart.
+ */
+export function reloadOwnerModelsFromDisk(options: {
+  config: SubstrateConfig;
+  configStore: ConfigStorePort;
+}): SettingsMutationResult {
+  const { config, configStore } = options;
+  try {
+    const loaded = configStore.loadModels();
+    applySettings(config, loaded);
+    const divergence = refreshModels(config);
+    invalidatePromptCacheAfterOwnerMutation(config, 'owner-file:models:disk-edit');
+    return {
+      ok: true,
+      refreshedKeys: ['models'],
+      divergences: divergence ? [divergence] : [],
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      message: toErrorMessage(error),
+    };
+  }
+}
+
 export function applyAdminCapabilityTierMutation(options: {
   config: SubstrateConfig;
   configStore: ConfigStorePort;

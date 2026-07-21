@@ -313,16 +313,21 @@ async function main(): Promise<void> {
       source: event.source,
       error: event.error?.message,
     });
+    // Fail closed on disconnect (bead imlb): the GatewayClient has no in-process
+    // reconnect, and surface routing (companionConnections) is only repopulated
+    // when the agent re-runs gateway.client.identify on a fresh connection. If a
+    // graceful stop fails we must NOT linger — a process left alive here is
+    // "connected but unregistered": it never re-identifies, so inbound channel
+    // routing keeps failing with companion_not_connected. Force the exit so the
+    // supervisor restarts the process and re-registers every surface.
     try {
       await stopFn();
     } catch (error) {
-      shuttingDown = false;
-      log.error('Gateway disconnect shutdown failed; leaving process running for retry', {
+      log.error('Gateway disconnect shutdown failed; forcing exit so the supervisor restarts and re-registers surfaces', {
         error: error instanceof Error ? error.message : String(error),
       });
-      return;
     }
-    process.exit(1);
+    process.exit(resolveGatewayConnectFailureExitCode(lifecycleRuntimeContract.restart));
   });
 
   const persistenceRuntime = await createAgentPersistenceRuntime({
@@ -893,6 +898,9 @@ async function main(): Promise<void> {
     personaPreamble,
   });
   const dreamMeaningPass = new DreamMeaningPass(episodicStore, agentLoop, {
+    // Ground each meaning in the real turns she lived, not the auto-summarized
+    // title/landmark (bead dtym). Same reader synthesis/consolidation use.
+    transcriptReader: sessionManager,
     onGateEvent: (event) => {
       eventBus.emit('memory.dream_meaning.gate', event).catch((error: unknown) => {
         log.warn('Dream-meaning gate event emit failed', { error: String(error) });

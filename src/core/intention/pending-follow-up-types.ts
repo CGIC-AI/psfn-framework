@@ -1,4 +1,5 @@
 import type { ChannelType } from '../../shared/contracts/runtime.js';
+import type { ActiveConcernVAD } from '../../shared/contracts/intention-contracts.js';
 import type {
   PendingFollowUp,
   PendingFollowUpPriority,
@@ -28,6 +29,8 @@ export interface PendingFollowUpCreateInput {
   contextSummary?: string;
   wakeConditions?: readonly PendingFollowUpWakeCondition[];
   originIcpRootInitiationId?: string;
+  /** Live internal VAD at follow-up formation (bead vw3w.3). */
+  formationVAD?: ActiveConcernVAD;
 }
 
 export interface PendingFollowUpUpdateInput {
@@ -49,6 +52,8 @@ export interface PendingFollowUpUpdateInput {
 export interface PendingFollowUpActivateOptions {
   activatedAt?: string;
   activationReason?: string;
+  /** Live internal VAD at follow-up completion/activation (bead vw3w.3). */
+  completionVAD?: ActiveConcernVAD;
 }
 
 export interface PendingFollowUpDampenOptions {

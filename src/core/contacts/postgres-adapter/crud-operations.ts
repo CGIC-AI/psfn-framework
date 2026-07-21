@@ -4,6 +4,7 @@ import type {
   ChannelPrivacyLevel,
   Contact,
   ContactChannel,
+  ContactDemographicsUpdate,
   ContactIdentityLinkChallengeInput,
   ContactIdentityLinkChallengeResult,
   ContactIdentityLinkOptions,
@@ -366,7 +367,7 @@ const postgresContactCrudOperations: PostgresContactOperationMap = {
       this.pool,
       `
         SELECT id, discord_user_id, display_name, nickname, trust_level, relationship_type, is_machine_intelligence,
-               emotional_baseline, first_seen, last_seen, notes, timezone
+               emotional_baseline, first_seen, last_seen, notes, timezone, gender, pronouns, age
         FROM contacts
         WHERE discord_user_id = $1
         LIMIT 1
@@ -386,7 +387,7 @@ const postgresContactCrudOperations: PostgresContactOperationMap = {
       this.pool,
       `
         SELECT id, discord_user_id, display_name, nickname, trust_level, relationship_type, is_machine_intelligence,
-               emotional_baseline, first_seen, last_seen, notes, timezone
+               emotional_baseline, first_seen, last_seen, notes, timezone, gender, pronouns, age
         FROM contacts
         WHERE trust_level = $1
         ORDER BY last_seen DESC
@@ -567,7 +568,7 @@ const postgresContactCrudOperations: PostgresContactOperationMap = {
         const result = await client.query<ContactRow>(
           `
             SELECT id, discord_user_id, display_name, nickname, trust_level, relationship_type, is_machine_intelligence,
-                   emotional_baseline, emotional_time_series, first_seen, last_seen, notes, timezone
+                   emotional_baseline, emotional_time_series, first_seen, last_seen, notes, timezone, gender, pronouns, age
             FROM contacts
             WHERE id = $1
             FOR UPDATE
@@ -799,6 +800,54 @@ const postgresContactCrudOperations: PostgresContactOperationMap = {
     if (previousNotes === notes) return true;
     await this.pool.query('UPDATE contacts SET notes = $1 WHERE id = $2', [notes, id]);
     await this.appendMutationAuditEntry(id, 'notes', previousNotes, notes, actor);
+    await this.syncContactExports();
+    return true;
+  },
+
+  async updateDemographics(
+    id: string,
+    updates: ContactDemographicsUpdate,
+    actor?: string,
+  ): Promise<boolean> {
+    const contact = await this.getById(id);
+    if (!contact) return false;
+
+    const normalizeText = (value: string | null | undefined): string | null =>
+      typeof value === 'string' && value.trim().length > 0 ? value.trim() : null;
+
+    const currentGender = contact.gender ?? null;
+    const currentPronouns = contact.pronouns ?? null;
+    const currentAge = typeof contact.age === 'number' ? contact.age : null;
+
+    // Only present keys are applied; absent keys keep the current value.
+    const nextGender = updates.gender !== undefined ? normalizeText(updates.gender) : currentGender;
+    const nextPronouns = updates.pronouns !== undefined ? normalizeText(updates.pronouns) : currentPronouns;
+    const nextAge = updates.age !== undefined
+      ? (typeof updates.age === 'number' && Number.isFinite(updates.age) && updates.age >= 0 ? Math.trunc(updates.age) : null)
+      : currentAge;
+
+    const auditRows: Array<{ field: 'gender' | 'pronouns' | 'age'; oldValue: string | null; newValue: string | null }> = [];
+    if (currentGender !== nextGender) auditRows.push({ field: 'gender', oldValue: currentGender, newValue: nextGender });
+    if (currentPronouns !== nextPronouns) auditRows.push({ field: 'pronouns', oldValue: currentPronouns, newValue: nextPronouns });
+    if (currentAge !== nextAge) {
+      auditRows.push({
+        field: 'age',
+        oldValue: currentAge === null ? null : String(currentAge),
+        newValue: nextAge === null ? null : String(nextAge),
+      });
+    }
+
+    if (auditRows.length === 0) return true;
+
+    // Fixed-shape write (all three columns) keeps the SQL stable; per-field
+    // audit rows carry the specified-provenance actor for changed fields only.
+    await this.pool.query(
+      'UPDATE contacts SET gender = $1, pronouns = $2, age = $3 WHERE id = $4',
+      [nextGender, nextPronouns, nextAge, id],
+    );
+    for (const audit of auditRows) {
+      await this.appendMutationAuditEntry(id, audit.field, audit.oldValue, audit.newValue, actor);
+    }
     await this.syncContactExports();
     return true;
   },
@@ -1437,7 +1486,7 @@ const postgresContactCrudOperations: PostgresContactOperationMap = {
       this.pool,
       `
         SELECT id, discord_user_id, display_name, nickname, trust_level, relationship_type, is_machine_intelligence,
-               emotional_baseline, first_seen, last_seen, notes, timezone
+               emotional_baseline, first_seen, last_seen, notes, timezone, gender, pronouns, age
         FROM contacts
         ORDER BY last_seen DESC
       `,
@@ -1570,6 +1619,13 @@ const postgresContactCrudOperations: PostgresContactOperationMap = {
     return await this.upsert({
       displayName: displayName?.trim() || identity.userId,
       trustLevel: 'public',
+      // bead hr1q: a first message on the gateway-validated 'companion' lane
+      // comes from a same-cluster fleet peer — the gateway already checked the
+      // peer against fleetCompanionIds before delivery. Recognize such peers
+      // above 'stranger' at mint. This bumps relationshipType only; the trust
+      // floor stays 'public' per the fail-closed charter (cross-cluster peers
+      // arrive on other channels and are unaffected).
+      ...(identity.channel === 'companion' ? { relationshipType: 'acquaintance' as const } : {}),
       channels: [{
         channel: identity.channel,
         userId: identity.userId,

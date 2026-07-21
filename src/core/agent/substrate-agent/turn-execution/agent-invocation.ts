@@ -57,6 +57,7 @@ import {
   rebuildProviderWireMessagesForPrompt,
 } from './prompt-invocation-history.js';
 import type { TurnExecutionRuntime, TurnSessionIdentity } from './contracts.js';
+import { runCorrectivePromptLifecycle } from './corrective-prompt-lifecycle.js';
 import type { CapturedSessionReads } from '../../../session/manager/captured-session-owner.js';
 
 const log = createComponentLogger('SubstrateAgent');
@@ -812,41 +813,31 @@ export async function invokeAgentForTurn(input: {
     runtime.agent.state.messages = historyMessages;
     runtime.agent.state.systemPrompt = enforceUntrustedCompactionGuard(strengthenedSystemPrompt);
 
-    const contradictionRetryBridgeToken = runtime.bridge.setChannel(message.channelId, {
+    await runCorrectivePromptLifecycle({
+      bridge: runtime.bridge,
+      channelId: message.channelId,
       turnId,
       requestId: `${requestId}:runtime-contradiction-retry`,
       callType: turnCallType,
-      originType: turnCallType,
       originStage: 'agent.turn.runtime_contradiction_retry',
-      purpose: 'agent.turn.runtime_contradiction_retry',
+      timeoutStage: 'agent_turn_runtime_contradiction_retry',
+      deadlineAt: visionTurnDeadlineAt,
+      onTimeout: () => runtime.agent.abort(),
+      requestContext: {
+        ...runtime.withCorrelationPurpose(turnCorrelationBase, 'agent.turn.runtime_contradiction_retry'),
+        ...viewerRequestContext,
+      },
+      visionToolRequestContext,
+      enterActiveTurn: () => runtime.setActiveTurnContext(
+        turnCorrelationBase,
+        taskKind ?? null,
+        toolTurnOutcome.intent,
+        turnSessionIdentity,
+      ),
+      exitActiveTurn: () => runtime.clearActiveTurnContext(),
+      invokePrompt: () => runtime.agent.prompt(currentPromptMessage),
+      runWithVisionTurnTimeout,
     });
-    runtime.setActiveTurnContext(
-      turnCorrelationBase,
-      taskKind ?? null,
-      toolTurnOutcome.intent,
-      turnSessionIdentity,
-    );
-    try {
-      await runWithVisionTurnTimeout({
-        channelId: message.channelId,
-        deadlineAt: visionTurnDeadlineAt,
-        stage: 'agent_turn_runtime_contradiction_retry',
-        onTimeout: () => runtime.agent.abort(),
-        run: () => runWithRequestContext(
-          {
-            ...runtime.withCorrelationPurpose(turnCorrelationBase, 'agent.turn.runtime_contradiction_retry'),
-            ...viewerRequestContext,
-          },
-          async () => runWithVisionToolRequestContext(
-            visionToolRequestContext,
-            async () => runtime.agent.prompt(currentPromptMessage),
-          ),
-        ),
-      });
-    } finally {
-      runtime.bridge.clearChannel(contradictionRetryBridgeToken);
-      runtime.clearActiveTurnContext();
-    }
 
     mutableState.turnMessages = runtime.agent.state.messages.slice(mutableState.turnStartMessageIndex);
     const retryTurnUsage = runtime.accumulateTurnUsage(mutableState.turnMessages);
@@ -925,36 +916,26 @@ export async function invokeAgentForTurn(input: {
       requestSuffix: string,
       originStage: string,
     ): Promise<void> => {
-      const recoveryBridgeToken = runtime.bridge.setChannel(message.channelId, {
+      await runCorrectivePromptLifecycle({
+        bridge: runtime.bridge,
+        channelId: message.channelId,
         turnId,
         requestId: `${requestId}:${requestSuffix}`,
         callType: turnCallType,
-        originType: turnCallType,
         originStage,
-        purpose: originStage,
+        timeoutStage: originStage,
+        deadlineAt: Date.now() + VISION_TURN_TIMEOUT_MS,
+        onTimeout: () => runtime.agent.abort(),
+        requestContext: {
+          ...runtime.withCorrelationPurpose(turnCorrelationBase, originStage),
+          ...viewerRequestContext,
+        },
+        visionToolRequestContext,
+        enterActiveTurn: () => runtime.setActiveTurnCorrelation(turnCorrelationBase),
+        exitActiveTurn: () => runtime.setActiveTurnCorrelation(null),
+        invokePrompt: () => runtime.agent.prompt(buildPromptMessage(message, speakerRole, content)),
+        runWithVisionTurnTimeout,
       });
-      runtime.setActiveTurnCorrelation(turnCorrelationBase);
-      try {
-        await runWithVisionTurnTimeout({
-          channelId: message.channelId,
-          deadlineAt: Date.now() + VISION_TURN_TIMEOUT_MS,
-          stage: originStage,
-          onTimeout: () => runtime.agent.abort(),
-          run: () => runWithRequestContext(
-            {
-              ...runtime.withCorrelationPurpose(turnCorrelationBase, originStage),
-              ...viewerRequestContext,
-            },
-            async () => runWithVisionToolRequestContext(
-              visionToolRequestContext,
-              async () => runtime.agent.prompt(buildPromptMessage(message, speakerRole, content)),
-            ),
-          ),
-        });
-      } finally {
-        runtime.bridge.clearChannel(recoveryBridgeToken);
-        runtime.setActiveTurnCorrelation(null);
-      }
     };
 
     try {

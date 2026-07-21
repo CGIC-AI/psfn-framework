@@ -67,6 +67,74 @@ describe('PendingFollowUpStore', () => {
     expect(await store.list({ includeActivated: true })).toHaveLength(1);
   });
 
+  it('captures formation VAD at creation and completion VAD at dequeue, retaining the arc (vw3w.3)', async () => {
+    let nextId = 0;
+    const store = createTestPostgresIntentionPorts({
+      idFactory: () => `follow-up-${++nextId}`,
+      now: () => new Date('2026-03-25T12:00:00.000Z'),
+    }).ports.pendingFollowUpStore;
+
+    const created = await store.enqueue({
+      content: 'Return to this once the worry settles.',
+      priority: 'medium',
+      timing: 'soon',
+      channelId: 'discord:dm',
+      channelType: 'discord',
+      authorId: 'system:intention',
+      authorName: 'Whisper',
+      contactId: 'contact-a',
+      formationVAD: { valence: -0.4, arousal: 0.5, dominance: -0.2 },
+    });
+    // Formation VAD is persisted and survives a fresh read.
+    expect(created).toMatchObject({
+      formationVAD: { valence: -0.4, arousal: 0.5, dominance: -0.2 },
+    });
+    expect(await store.peek(created!.id)).toMatchObject({
+      formationVAD: { valence: -0.4, arousal: 0.5, dominance: -0.2 },
+    });
+    expect((created as { completionVAD?: unknown }).completionVAD).toBeUndefined();
+
+    const completed = await store.dequeue(created!.id, {
+      activatedAt: '2026-03-25T12:30:00.000Z',
+      activationReason: 'post_turn_action',
+      completionVAD: { valence: 0.3, arousal: -0.1, dominance: 0.2 },
+    });
+    // Completion VAD is captured and the formation→completion arc is retained
+    // on the soft-terminal row (not a destructive discard) and stays queryable.
+    expect(completed).toMatchObject({
+      activatedAt: '2026-03-25T12:30:00.000Z',
+      formationVAD: { valence: -0.4, arousal: 0.5, dominance: -0.2 },
+      completionVAD: { valence: 0.3, arousal: -0.1, dominance: 0.2 },
+    });
+    expect(await store.list({ includeActivated: true })).toEqual([
+      expect.objectContaining({
+        id: created!.id,
+        formationVAD: { valence: -0.4, arousal: 0.5, dominance: -0.2 },
+        completionVAD: { valence: 0.3, arousal: -0.1, dominance: 0.2 },
+      }),
+    ]);
+  });
+
+  it('leaves follow-up VAD absent when no emotion telemetry is supplied (never fabricated) (vw3w.3)', async () => {
+    const store = createTestPostgresIntentionPorts({
+      idFactory: () => 'follow-up-1',
+      now: () => new Date('2026-03-25T12:00:00.000Z'),
+    }).ports.pendingFollowUpStore;
+
+    const created = await store.enqueue({
+      content: 'Circle back with no affect snapshot available.',
+      priority: 'low',
+      timing: 'soon',
+      channelId: 'api:test',
+      channelType: 'api',
+      authorId: 'system:intention',
+      authorName: 'Whisper',
+    });
+    const completed = await store.dequeue(created!.id, { activationReason: 'post_turn_action' });
+    expect((completed as { formationVAD?: unknown }).formationVAD).toBeUndefined();
+    expect((completed as { completionVAD?: unknown }).completionVAD).toBeUndefined();
+  });
+
   it('exposes pending follow-up queue operations through the port', async () => {
     const port = createTestPostgresIntentionPorts({
       idFactory: () => 'follow-up-1',

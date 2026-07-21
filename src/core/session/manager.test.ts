@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import { SessionStore } from '../../persistence/sessions/store.js';
 import { parseContinuityEntryProvenance, UserContinuityStore } from './continuity.js';
 import { SessionManager } from './manager.js';
+import { HISTORY_STAMP_PREFIX_RE } from './manager/context-support.js';
 import { EventBus } from '../../shared/event-bus.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import type { LLMProviderPort } from '../agent/contracts.js';
@@ -58,14 +59,12 @@ import {
 } from '../../persistence/layout.js';
 
 // Assembled history lines carry '[MM-DD-YY HH:mm] ' provenance stamps derived
-// from live clocks; strip them so content assertions stay deterministic.
-// Exact stamp semantics are pinned in context-support.test.ts.
-const HISTORY_STAMP_RE = /^\[[A-Z][a-z]{2} \d{2}-\d{2}-\d{2} \d{2}:\d{2}\] /;
-
+// from live clocks; strip them so content assertions stay deterministic using
+// the canonical matcher exported next to the stamp builder (bead 2x37.9 item 4).
 function stripHistoryStamps(content: string): string {
   return content
     .split('\n')
-    .map(line => line.replace(HISTORY_STAMP_RE, ''))
+    .map(line => line.replace(HISTORY_STAMP_PREFIX_RE, ''))
     .join('\n');
 }
 
@@ -261,6 +260,29 @@ describe('SessionManager', () => {
   afterEach(() => {
     rmSync(dir, { recursive: true, force: true });
     tokenTestUtils.resetTokenizerState();
+  });
+
+  it('bounds the hot-cache to the recent window per companion and hydrates evicted sessions on demand (bead ofa1)', () => {
+    const boundedStore = new SessionStore(dir, { maxHotChannels: 3 });
+    const mgr = new SessionManager(boundedStore, makeConfig());
+
+    const channelCount = 12;
+    for (let i = 0; i < channelCount; i += 1) {
+      mgr.recordUserMessage(`api:ofa1-ch-${i}`, `message for channel ${i}`, `user-${i}`, `User ${i}`);
+    }
+
+    // Without the bound the cache would hold all 12 channels; it must stay
+    // within the configured recent window.
+    expect(boundedStore.getLoadedChannelCount()).toBeLessThanOrEqual(3);
+    expect(boundedStore.getLoadedChannelCount()).toBeLessThan(channelCount);
+
+    // The earliest channels were evicted, yet their content still reads back
+    // correctly by hydrating from the authoritative on-disk journal on demand.
+    const earliest = mgr.getRecentMessages('api:ofa1-ch-0', 10);
+    expect(earliest.some(entry => entry.content.includes('message for channel 0'))).toBe(true);
+
+    // Hydrating an evicted channel does not grow the cache past the window.
+    expect(boundedStore.getLoadedChannelCount()).toBeLessThanOrEqual(3);
   });
 
   it('retries deferred record-first handoffs in bounded same-process batches', async () => {
@@ -459,7 +481,7 @@ describe('SessionManager', () => {
     );
 
     expect(ctx.messages).toHaveLength(1);
-    expect(ctx.messages[0]?.content).toMatch(HISTORY_STAMP_RE);
+    expect(ctx.messages[0]?.content).toMatch(HISTORY_STAMP_PREFIX_RE);
     expect(stripHistoryStamps(ctx.messages[0]?.content ?? '')).toBe([
       'Asha (discord:asha-id): first group message',
       'Iku (discord:iku-id): second group message',

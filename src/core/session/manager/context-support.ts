@@ -64,6 +64,16 @@ function entryStampLabel(timestamp: number): string | undefined {
   return `${formatActiveWeekdayShort(at)} ${formatActiveDateTimeCompact(at)}`;
 }
 
+/**
+ * Canonical matcher for the `[Weekday MM-DD-YY HH:MM] ` prefix that
+ * `entryStampLabel` renders onto history/context lines (see the `[${stampLabel}]`
+ * wrapping in `entriesToMessages`). Exported so tests and harnesses assert
+ * against ONE source of truth instead of each re-encoding the stamp shape as a
+ * private regex (bead 2x37.9 item 4). Non-global by design: safe to share across
+ * `.replace`, `.test`, and `.toMatch` without a lastIndex hazard.
+ */
+export const HISTORY_STAMP_PREFIX_RE = /^\[[A-Z][a-z]{2} \d{2}-\d{2}-\d{2} \d{2}:\d{2}\] /;
+
 function continuityEntryKey(entry: SessionEntry): string {
   return [
     String(entry.timestamp),

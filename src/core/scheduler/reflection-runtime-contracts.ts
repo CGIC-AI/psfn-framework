@@ -127,6 +127,7 @@ export interface ReflectionRuntimeOptions {
     channelType: SubstrateMessage['channelType'];
     canonicalContactKey?: string;
     sourceMessageId: string;
+    formationVAD?: { valence: number; arousal: number; dominance: number };
     originIcpRootInitiationId?: string;
   }) => Promise<string | undefined> | string | undefined;
   getPendingFollowUpsForResurfacing?: (input: {

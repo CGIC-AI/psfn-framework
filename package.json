@@ -32,6 +32,7 @@
     "test:garden:accounting": "vitest run --config vitest.garden-accounting.config.ts",
     "test:garden-ui": "npm --prefix admin-ui test",
     "test:ops:kube-port-forward": "node --test scripts/ops/keep-kube-port-forward.test.mjs",
+    "prewarm": "node scripts/prewarm-worktree.mjs",
     "test:privacy": "vitest run src/system/trust/privacy-regression.test.ts",
     "test:leak-audit": "vitest run src/core/session/context-leak-audit.test.ts",
     "test:group-harness": "vitest run src/core/session/group-chat-harness/group-chat-regression.test.ts",

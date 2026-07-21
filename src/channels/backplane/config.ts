@@ -37,6 +37,17 @@ import {
   normalizeTestingHarnessApiPrincipalId,
   type TestingHarnessApiPrincipalCredential,
 } from './http/auth.js';
+import {
+  parseTestingHarnessGardenAdminConfig,
+  type TestingHarnessGardenAdminConfig,
+} from './testing-harness-garden-config.js';
+
+export {
+  TESTING_HARNESS_GARDEN_ADMIN_ACTIONS,
+  TESTING_HARNESS_GARDEN_VERIFIER_ENV,
+  resolveTestingHarnessGardenVerifierConfig,
+} from './testing-harness-garden-config.js';
+export type { TestingHarnessGardenAdminConfig } from './testing-harness-garden-config.js';
 
 const log = createComponentLogger('ChannelConfig');
 
@@ -128,7 +139,9 @@ export interface ApiChannelConfig {
    * Omission disables the selector and preserves pinned routing.
    */
   selectableCompanionIds?: CompanionId[];
-  testingHarness?: TestingHarnessApiPrincipalCredential;
+  testingHarness?: TestingHarnessApiPrincipalCredential & {
+    gardenAdmin?: TestingHarnessGardenAdminConfig;
+  };
 }
 
 export interface ExternalChannelProfileConfig {
@@ -714,6 +727,52 @@ export function loadChannelsOwnerFile(dataDir: string): Record<string, unknown> 
   }
 }
 
+/**
+ * Load only the non-secret Garden policy projection. Verifier processes use
+ * this to enforce the second key without receiving or resolving the bearer
+ * credential, which remains gateway-owned.
+ */
+export function loadTestingHarnessGardenAdminConfig(
+  dataDir: string,
+): TestingHarnessGardenAdminConfig | undefined {
+  const root = loadChannelsOwnerFile(dataDir);
+  const scopedRoot = parseSectionObject(root, 'channels') ?? root;
+  const api = parseSectionObject(scopedRoot, 'api');
+  const testingHarness = api ? parseSectionObject(api, 'testingHarness') : undefined;
+  if (!testingHarness) return undefined;
+  const unknownTestingHarnessKeys = Object.keys(testingHarness)
+    .filter(key => key !== 'principalId' && key !== 'tokenRef' && key !== 'gardenAdmin');
+  if (unknownTestingHarnessKeys.length > 0) {
+    throw new Error(
+      `channels.json.api.testingHarness has unsupported keys: ${unknownTestingHarnessKeys.join(', ')}`,
+    );
+  }
+  const principalId = parseConfiguredString(
+    testingHarness.principalId,
+    'channels.json.api.testingHarness.principalId',
+  );
+  if (!principalId) {
+    throw new Error('channels.json.api.testingHarness.principalId must be configured');
+  }
+  normalizeTestingHarnessApiPrincipalId(principalId);
+  rejectInlineSecretField(
+    testingHarness,
+    'token',
+    'channels.json.api.testingHarness.tokenRef',
+  );
+  if (!parseConfiguredCredentialReference(
+    testingHarness.tokenRef,
+    'channels.json.api.testingHarness.tokenRef',
+  )) {
+    throw new Error('channels.json.api.testingHarness.tokenRef must be configured');
+  }
+  if (!Object.hasOwn(testingHarness, 'gardenAdmin')) return undefined;
+  if (!isRecord(testingHarness.gardenAdmin)) {
+    throw new Error('channels.json.api.testingHarness.gardenAdmin must be an object');
+  }
+  return parseTestingHarnessGardenAdminConfig(testingHarness.gardenAdmin);
+}
+
 export function saveChannelsOwnerFile(
   dataDir: string,
   nextConfig: unknown,
@@ -811,7 +870,7 @@ function parseApiChannelSection(
   }
 
   const unknownTestingHarnessKeys = Object.keys(testingHarness)
-    .filter(key => key !== 'principalId' && key !== 'tokenRef');
+    .filter(key => key !== 'principalId' && key !== 'tokenRef' && key !== 'gardenAdmin');
   if (unknownTestingHarnessKeys.length > 0) {
     throw new Error(
       `channels.json.api.testingHarness has unsupported keys: ${unknownTestingHarnessKeys.join(', ')}`,
@@ -838,12 +897,21 @@ function parseApiChannelSection(
     throw new Error('channels.json.api.testingHarness.tokenRef must be configured');
   }
 
+  let gardenAdmin: TestingHarnessGardenAdminConfig | undefined;
+  if (Object.hasOwn(testingHarness, 'gardenAdmin')) {
+    if (!isRecord(testingHarness.gardenAdmin)) {
+      throw new Error('channels.json.api.testingHarness.gardenAdmin must be an object');
+    }
+    gardenAdmin = parseTestingHarnessGardenAdminConfig(testingHarness.gardenAdmin);
+  }
+
   return {
     ...(companionId ? { companionId } : {}),
     ...(selectableCompanionIds ? { selectableCompanionIds } : {}),
     testingHarness: {
       principalId: normalizedPrincipalId,
       apiKey: resolveCredentialValue(tokenRef, env, credentialVault).trim(),
+      ...(gardenAdmin ? { gardenAdmin } : {}),
     },
   };
 }

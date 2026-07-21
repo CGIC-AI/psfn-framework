@@ -203,7 +203,7 @@ export interface FleetAuthorizationFacts {
     bindingVersion: number;
     grantVersion: number;
     policyVersion: number;
-    provider: 'discord';
+    provider: 'discord' | 'testing_harness';
     providerSubjectId: string;
   };
   authority: {
@@ -223,7 +223,7 @@ export type FleetAuthorizationEvaluation =
 export interface FleetAuthorizationContext {
   readonly principalId: string;
   readonly providerSubject: Readonly<{
-    provider: 'discord';
+    provider: 'discord' | 'testing_harness';
     subjectId: string;
   }>;
   readonly companionId: string;
@@ -255,7 +255,7 @@ export interface FleetAuthorizationContext {
     expiresAt: string;
   }>;
   readonly provenance: Readonly<{
-    source: 'gateway_fleet_authorization_snapshot';
+    source: 'gateway_fleet_authorization_snapshot' | 'gateway_testing_harness';
     authorizationEventId: string;
     resolvedAt: string;
     correlationId?: string;
@@ -668,11 +668,12 @@ export function createImmutableFleetAuthorizationContext(input: {
   authorizationEventId: string;
   resolvedAt: Date;
   correlationDigest?: string;
+  provenanceSource?: FleetAuthorizationContext['provenance']['source'];
 }): FleetAuthorizationContext {
   const context: FleetAuthorizationContext = {
     principalId: input.facts.principalId,
     providerSubject: Object.freeze({
-      provider: 'discord',
+      provider: input.facts.session.provider,
       subjectId: input.facts.providerSubjectId,
     }),
     companionId: input.facts.companionId,
@@ -690,7 +691,7 @@ export function createImmutableFleetAuthorizationContext(input: {
         }
       : {}),
     provenance: Object.freeze({
-      source: 'gateway_fleet_authorization_snapshot',
+      source: input.provenanceSource ?? 'gateway_fleet_authorization_snapshot',
       authorizationEventId: input.authorizationEventId,
       resolvedAt: input.resolvedAt.toISOString(),
       ...(input.correlationDigest ? { correlationId: input.correlationDigest } : {}),

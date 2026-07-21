@@ -47,6 +47,10 @@ import {
 } from '../../boundary/gateway/companion-auth.js';
 import { resolveRuntimeCredentialFromEnvironment } from '../../boundary/custody/runtime-credential-source.js';
 import { resolveFleetAuthOwnerFile } from './fleet-auth-config.js';
+import {
+  loadTestingHarnessGardenAdminConfig,
+  resolveTestingHarnessGardenVerifierConfig,
+} from '../../channels/backplane/config.js';
 
 const DEFAULT_MODEL_ROLE_ASSIGNMENTS: ModelRoleAssignments = {
   chat: 'primary',
@@ -337,12 +341,28 @@ function loadConfigForMode(mode: LoadConfigMode, env: NodeJS.ProcessEnv = proces
     }
   }
   const dataDir = runtimePathLayout.systemDataDir;
-  const fleetAuthProjection = resolveFleetAuthOwnerFile({
+  const resolvedFleetAuthProjection = resolveFleetAuthOwnerFile({
     dataDir,
     env,
     processMode: mode,
     seedDir: parseOptionalStringEnv(env.CONFIG_DIR),
   });
+  const testingHarnessGardenVerifier = resolveTestingHarnessGardenVerifierConfig(
+    loadTestingHarnessGardenAdminConfig(dataDir),
+    env,
+  );
+  if (testingHarnessGardenVerifier && !resolvedFleetAuthProjection) {
+    throw new Error(
+      'PSFN_TESTING_HARNESS_GARDEN_VERIFIER requires Fleet authentication',
+    );
+  }
+  const fleetAuthProjection = resolvedFleetAuthProjection?.kind === 'verifier'
+    && testingHarnessGardenVerifier
+    ? Object.freeze({
+        ...resolvedFleetAuthProjection,
+        testingHarness: testingHarnessGardenVerifier,
+      })
+    : resolvedFleetAuthProjection;
   // The fleet manifest is mandatory (every deployment is a fleet of one or
   // more companions). Entry count still tells domain services whether
   // cross-companion tenancy exists, but Fleet Auth and the operator always use

@@ -241,6 +241,8 @@ export interface FleetAuthVerifierConfig {
     keys: FleetAuthVerifierKey[];
   };
   hubDeviceAssertions: HubDeviceAssertionVerifierConfig;
+  /** Independent verifier-side opt-in for testing-harness capabilities. */
+  testingHarness?: { enabled: true };
   /** Startup-captured, bounded Garden view. Production resolvers always set it. */
   gardenMetadata?: FleetAuthGardenMetadata;
 }

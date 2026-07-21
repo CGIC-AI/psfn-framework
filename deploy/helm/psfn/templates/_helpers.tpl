@@ -551,6 +551,10 @@ group: cert-manager.io
 - name: PSFN_FLEET_AUTH
   value: "true"
 {{- end }}
+{{- if .Values.fleetAuth.testingHarnessGardenVerifierEnabled }}
+- name: PSFN_TESTING_HARNESS_GARDEN_VERIFIER
+  value: "true"
+{{- end }}
 {{- if .Values.repositoryCheckout.enabled }}
 - name: GIT_REPO_ROOT
   value: {{ .Values.repositoryCheckout.mountPath | quote }}
@@ -609,6 +613,10 @@ group: cert-manager.io
        retired PSFN_MULTI_COMPANION flag. */}}
 - name: PSFN_FLEET_AUTH
   value: "true"
+{{- if .Values.fleetAuth.testingHarnessGardenVerifierEnabled }}
+- name: PSFN_TESTING_HARNESS_GARDEN_VERIFIER
+  value: "true"
+{{- end }}
 - name: PSFN_RUNTIME_ROOT
   value: {{ .Values.fleet.runtimeRoot | quote }}
 - name: COMPANION_PG_SCHEMA

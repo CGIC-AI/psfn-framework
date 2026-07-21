@@ -72,6 +72,7 @@ export interface FleetPrincipalGardenAdmission {
   readonly companionId: CompanionId;
   readonly verifier: RequestCapabilityVerifier;
   readonly replay: RequestCapabilityReplayPort;
+  readonly testingHarness?: { readonly enabled: true };
 }
 
 export type GardenAdmissionMode = LegacyTokenGardenAdmission | FleetPrincipalGardenAdmission;
@@ -206,6 +207,9 @@ export function resolveGardenAdmissionMode(input: {
     companionId,
     verifier: createRequestCapabilityVerifier(input.fleetAuthVerifier.requestCapabilities),
     replay: input.replay ?? new InMemoryRequestCapabilityReplayPort(),
+    ...(input.fleetAuthVerifier.testingHarness?.enabled
+      ? { testingHarness: Object.freeze({ enabled: true as const }) }
+      : {}),
   });
 }
 
@@ -287,6 +291,10 @@ export async function admitFleetGardenRequest(input: {
       }
     }
   } catch {
+    return { decision: 'deny', status: 403, message: 'Invalid Fleet Garden capability' };
+  }
+  if (verified.authContext.provider === 'testing_harness'
+    && input.admission.testingHarness?.enabled !== true) {
     return { decision: 'deny', status: 403, message: 'Invalid Fleet Garden capability' };
   }
 

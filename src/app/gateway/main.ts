@@ -706,6 +706,8 @@ async function main(): Promise<void> {
           fleetAuthRequestCapabilities: fleetAuthPersistence.requestCapabilities,
           fleetAuthRequestCapabilityVerifier: fleetAuthPersistence.requestCapabilityVerifier,
           fleetAuthRequestCapabilityReplay: fleetAuthPersistence.requestCapabilityReplay,
+          fleetAuthTestingHarnessGardenAuthorizationAudit:
+            fleetAuthPersistence.testingHarnessGardenAuthorizationAudit,
           fleetPortalAuthorization: fleetAuthPersistence.portalAuthorization,
           primaryEmbodiments: fleetAuthPersistence.primaryEmbodiments,
           hubDeviceAssertionVerifier: fleetAuthPersistence,

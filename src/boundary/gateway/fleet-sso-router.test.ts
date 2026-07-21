@@ -3,6 +3,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import { Readable } from 'node:stream';
 import { describe, expect, it, vi } from 'vitest';
 import {
+  buildFleetSsoProxyRequestHeaders,
   GatewayFleetSsoRouter,
   resolveFleetSsoBrowserOrigin,
 } from './fleet-sso-router.js';
@@ -13,6 +14,11 @@ import {
 } from '../fleet-auth/request-capability.js';
 import type { FleetAuthorizationContext } from './fleet-authorization-context.js';
 import { createCompanionId } from '../../shared/routing/companion-id.js';
+import { buildGardenCapabilityHeaders } from '../fleet-auth/garden-capability-context.js';
+import {
+  admitFleetGardenRequest,
+  InMemoryRequestCapabilityReplayPort,
+} from '../../operator/garden/garden-admission.js';
 
 function request(headers: IncomingMessage['headers'], encrypted = false): Pick<IncomingMessage, 'headers' | 'socket'> {
   return {
@@ -142,6 +148,226 @@ describe('unified Fleet SSO origin provenance', () => {
 
     expect(response.writeHead).not.toHaveBeenCalled();
     expect(handler).toHaveBeenCalledOnce();
+  });
+
+  it('mints the normal single-use capability tail for an allowlisted testing-harness request', async () => {
+    const companionId = createCompanionId('11111111-1111-4111-8111-111111111111');
+    const nowSeconds = Math.floor(Date.now() / 1_000);
+    const { privateKey, publicKey } = generateKeyPairSync('ed25519');
+    const baseSigner = createGatewayRequestCapabilitySigner({
+      issuer: 'fleet-harness-test',
+      kid: 'fleet-harness-key',
+      privateKeyPem: privateKey.export({ format: 'pem', type: 'pkcs8' }).toString(),
+      ttlSeconds: 30,
+      nowSeconds: () => nowSeconds,
+      generateJti: () => 'testing-harness-request-once',
+    });
+    let signedInput: Parameters<typeof baseSigner.signOperator>[0] | undefined;
+    let issuedToken: string | undefined;
+    const signOperator = vi.fn((input: Parameters<typeof baseSigner.signOperator>[0]) => {
+      signedInput = input;
+      issuedToken = baseSigner.signOperator(input);
+      return issuedToken;
+    });
+    const audit = vi.fn(async () => ({
+      authorizationEventId: 'ffffffff-ffff-4fff-8fff-ffffffffffff',
+      authorityGeneration: 7,
+      globalAuthEpoch: 11,
+      occurredAt: new Date(nowSeconds * 1_000),
+    }));
+    const replay = vi.fn(async (input: Parameters<NonNullable<ConstructorParameters<typeof GatewayFleetSsoRouter>[0]['replay']['consume']>>[0]) => ({
+      outcome: 'consumed' as const,
+      result: input.consumeResult,
+    }));
+    const broker = { resolveAuthorizationContext: vi.fn(async () => {
+      throw new Error('browser broker must not run for the testing harness');
+    }) };
+    const requestVerifier = createRequestCapabilityVerifier({
+      issuer: 'fleet-harness-test',
+      maxTtlSeconds: 30,
+      keys: [{
+        issuer: 'fleet-harness-test',
+        kid: 'fleet-harness-key',
+        publicKeyPem: publicKey.export({ format: 'pem', type: 'spki' }).toString(),
+        notBefore: '2020-01-01T00:00:00.000Z',
+        notAfter: '2040-01-01T00:00:00.000Z',
+        status: 'active',
+      }],
+    });
+    const router = new GatewayFleetSsoRouter({
+      canonicalOrigin,
+      trustProxy: true,
+      broker,
+      signer: { ...baseSigner, signOperator },
+      verifier: requestVerifier,
+      replay: { consume: replay },
+      portalProjection: { resolve: vi.fn(async () => { throw new Error('not used'); }) },
+      upstreams: [{ companionId, origin: new URL('http://127.0.0.1:3211') }],
+      testingHarness: {
+        apiKey: 'dedicated-testing-harness-key',
+        policy: {
+          enabled: true,
+          principalId: 'testing-harness',
+          operatorGrantId: 'testing-harness-garden-grant',
+          role: 'admin',
+          allowedActions: ['settings.write'],
+        },
+        audit: { record: audit },
+      },
+      nowSeconds: () => nowSeconds,
+    });
+    const body = Buffer.from('configJson=%7B%22mode%22%3A%22local%22%7D');
+    const incoming = Readable.from([body]) as IncomingMessage;
+    incoming.method = 'POST';
+    incoming.url = `/companions/${companionId}/garden/api/admin/settings/backup`;
+    incoming.headers = {
+      host: 'fleet.example.test',
+      'x-forwarded-host': 'fleet.example.test',
+      'x-forwarded-proto': 'https',
+      'x-forwarded-port': '443',
+      'x-forwarded-for': '198.51.100.9',
+      authorization: 'Bearer dedicated-testing-harness-key',
+      'content-type': 'application/x-www-form-urlencoded',
+      'content-length': String(body.byteLength),
+    };
+    Object.defineProperty(incoming, 'socket', { value: {} });
+    const response = {
+      destroyed: false,
+      writableEnded: false,
+      writeHead: vi.fn(),
+      end: vi.fn(),
+    } as unknown as ServerResponse;
+
+    await router.handle(incoming, response);
+
+    expect(broker.resolveAuthorizationContext).not.toHaveBeenCalled();
+    expect(audit).toHaveBeenCalledWith(expect.objectContaining({
+      action: 'settings.write',
+      companionId,
+      principalId: 'testing-harness',
+      provider: 'testing_harness',
+    }));
+    expect(signOperator).toHaveBeenCalledWith(expect.objectContaining({
+      authContext: expect.objectContaining({
+        principalId: 'testing-harness',
+        provider: 'testing_harness',
+        operatorGrantId: 'testing-harness-garden-grant',
+        sessionAssurance: 'webauthn_uv',
+      }),
+    }));
+    expect(replay).toHaveBeenCalledOnce();
+    expect(response.writeHead).toHaveBeenCalledWith(502, expect.any(Object));
+
+    expect(buildFleetSsoProxyRequestHeaders(incoming.headers)).toEqual(expect.not.objectContaining({
+      authorization: expect.anything(),
+      cookie: expect.anything(),
+    }));
+    expect(issuedToken).toBeDefined();
+    expect(signedInput).toBeDefined();
+    const admitted = await admitFleetGardenRequest({
+      admission: {
+        kind: 'fleet-principal',
+        audience: 'operator',
+        companionId,
+        verifier: requestVerifier,
+        replay: new InMemoryRequestCapabilityReplayPort(),
+        testingHarness: { enabled: true },
+      },
+      rawTarget: '/api/admin/settings/backup',
+      method: 'POST',
+      headers: {
+        ...buildGardenCapabilityHeaders({
+          token: issuedToken!,
+          context: {
+            requestId: signedInput!.requestId,
+            decisionId: signedInput!.decisionId,
+            versions: signedInput!.versions,
+          },
+        }),
+        'content-type': 'application/x-www-form-urlencoded',
+      },
+      body,
+    });
+    expect(admitted).toMatchObject({
+      decision: 'allow',
+      verified: {
+        audience: `operator:${companionId}`,
+        action: 'settings.write',
+        authContext: { provider: 'testing_harness', principalId: 'testing-harness' },
+      },
+    });
+  });
+
+  it('rejects a testing-harness action outside the configured allowlist before audit or signing', async () => {
+    const companionId = createCompanionId('11111111-1111-4111-8111-111111111111');
+    const { privateKey, publicKey } = generateKeyPairSync('ed25519');
+    const signer = createGatewayRequestCapabilitySigner({
+      issuer: 'fleet-harness-test',
+      kid: 'fleet-harness-key',
+      privateKeyPem: privateKey.export({ format: 'pem', type: 'pkcs8' }).toString(),
+      ttlSeconds: 30,
+    });
+    const signOperator = vi.fn(signer.signOperator);
+    const audit = vi.fn();
+    const router = new GatewayFleetSsoRouter({
+      canonicalOrigin,
+      trustProxy: true,
+      broker: { resolveAuthorizationContext: vi.fn() },
+      signer: { ...signer, signOperator },
+      verifier: createRequestCapabilityVerifier({
+        issuer: 'fleet-harness-test',
+        maxTtlSeconds: 30,
+        keys: [{
+          issuer: 'fleet-harness-test',
+          kid: 'fleet-harness-key',
+          publicKeyPem: publicKey.export({ format: 'pem', type: 'spki' }).toString(),
+          notBefore: '2020-01-01T00:00:00.000Z',
+          notAfter: '2040-01-01T00:00:00.000Z',
+          status: 'active',
+        }],
+      }),
+      replay: { consume: vi.fn() },
+      portalProjection: { resolve: vi.fn() },
+      upstreams: [{ companionId, origin: new URL('http://127.0.0.1:3211') }],
+      testingHarness: {
+        apiKey: 'dedicated-testing-harness-key',
+        policy: {
+          enabled: true,
+          principalId: 'testing-harness',
+          operatorGrantId: 'testing-harness-garden-grant',
+          role: 'admin',
+          allowedActions: ['settings.read'],
+        },
+        audit: { record: audit },
+      },
+    });
+    const body = Buffer.from('{}');
+    const incoming = Readable.from([body]) as IncomingMessage;
+    incoming.method = 'POST';
+    incoming.url = `/companions/${companionId}/garden/api/admin/privacy-break-glass/memory/item/confirm`;
+    incoming.headers = {
+      host: 'fleet.example.test',
+      'x-forwarded-host': 'fleet.example.test',
+      'x-forwarded-proto': 'https',
+      'x-forwarded-port': '443',
+      'x-forwarded-for': '198.51.100.9',
+      authorization: 'Bearer dedicated-testing-harness-key',
+      'content-type': 'application/json',
+      'content-length': String(body.byteLength),
+    };
+    Object.defineProperty(incoming, 'socket', { value: {} });
+    const response = {
+      destroyed: false,
+      writableEnded: false,
+      writeHead: vi.fn(),
+      end: vi.fn(),
+    } as unknown as ServerResponse;
+
+    await router.handle(incoming, response);
+
+    expect(audit).not.toHaveBeenCalled();
+    expect(signOperator).not.toHaveBeenCalled();
+    expect(response.writeHead).toHaveBeenCalledWith(404, expect.any(Object));
   });
 
   it('builds the fleet-cost roster only from per-companion models.read decisions', async () => {

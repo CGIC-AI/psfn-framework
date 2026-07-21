@@ -55,7 +55,10 @@ import {
   compileCompanionUiAction,
 } from '../../boundary/fleet-auth/companion-ui-action.js';
 import type { RequestCapabilityReplayPort } from '../../boundary/fleet-auth/request-capability-replay.js';
-import { GatewayFleetSsoRouter } from '../../boundary/gateway/fleet-sso-router.js';
+import {
+  GatewayFleetSsoRouter,
+} from '../../boundary/gateway/fleet-sso-router.js';
+import type { TestingHarnessGardenAuthorizationAuditPort } from '../../boundary/gateway/testing-harness-garden-door.js';
 import {
   requireFleetSsoFleetManifest,
   resolveFleetSsoGardenUpstreams,
@@ -140,6 +143,7 @@ export interface StartOptionalGatewayApiServerOptions extends GatewayApiSurfaceB
   fleetAuthRequestCapabilities?: GatewayRequestCapabilitySigner;
   fleetAuthRequestCapabilityVerifier?: RequestCapabilityVerifier;
   fleetAuthRequestCapabilityReplay?: RequestCapabilityReplayPort;
+  fleetAuthTestingHarnessGardenAuthorizationAudit?: TestingHarnessGardenAuthorizationAuditPort;
   fleetPortalAuthorization?: FleetPortalAuthorizationBatchPort;
   fleetPortalChannelHealth?: FleetPortalChannelHealthSource;
   /** Canonical fleet-scoped model-attempt ledger used by the authenticated budget projection. */
@@ -515,6 +519,14 @@ export async function startOptionalGatewayApiServer(
       : {}),
     ...(options.fleetModelUsage ? { usage: options.fleetModelUsage } : {}),
   });
+  const testingHarnessGardenAdmin = options.channelsConfig?.api.testingHarness?.gardenAdmin;
+  if (options.config.fleetAuth
+    && testingHarnessGardenAdmin
+    && !options.fleetAuthTestingHarnessGardenAuthorizationAudit) {
+    throw new Error(
+      'Testing-harness Garden admin requires durable fleet authorization audit wiring',
+    );
+  }
   const fleetSsoRouter = options.config.fleetAuth && options.fleetAuthBroker
     && options.fleetAuthRequestCapabilities
     && options.fleetAuthRequestCapabilityVerifier && options.fleetAuthRequestCapabilityReplay
@@ -528,6 +540,17 @@ export async function startOptionalGatewayApiServer(
         replay: options.fleetAuthRequestCapabilityReplay,
         portalProjection: fleetPortalProjection,
         modelUsageProjection: fleetModelUsageProjection,
+        ...(testingHarnessGardenAdmin
+          && options.channelsConfig?.api.testingHarness
+          && options.fleetAuthTestingHarnessGardenAuthorizationAudit
+          ? {
+              testingHarness: {
+                apiKey: options.channelsConfig.api.testingHarness.apiKey,
+                policy: testingHarnessGardenAdmin,
+                audit: options.fleetAuthTestingHarnessGardenAuthorizationAudit,
+              },
+            }
+          : {}),
         ...(options.fleetAuthJitStepUp ? { jitStepUp: options.fleetAuthJitStepUp } : {}),
         upstreams: resolveFleetSsoGardenUpstreams({
           fleet: fleetAuthFleet,

@@ -38,6 +38,16 @@ const AUTH_CONTEXT = Object.freeze({
   sessionAssurance: 'webauthn_uv' as const, authorizationEventId: 'event-a',
   resolvedAt: '2030-01-01T00:00:00.000Z',
 });
+const TESTING_HARNESS_AUTH_CONTEXT = Object.freeze({
+  ...AUTH_CONTEXT,
+  principalId: 'testing-harness',
+  provider: 'testing_harness' as const,
+  providerSubjectId: 'testing-harness',
+  contactBindingId: 'testing-harness-binding',
+  contactId: 'testing-harness-contact',
+  operatorGrantId: 'testing-harness-garden-grant',
+  sessionRecordId: 'testing-harness-session',
+});
 const keyPair = generateKeyPairSync('ed25519');
 const privateKeyPem = keyPair.privateKey.export({ type: 'pkcs8', format: 'pem' }).toString();
 const publicKeyPem = keyPair.publicKey.export({ type: 'spki', format: 'pem' }).toString();
@@ -82,13 +92,17 @@ function context(parent?: GardenCapabilityContext['parent']): GardenCapabilityCo
   });
 }
 
-function admission(audience: 'operator' | 'agent'): FleetPrincipalGardenAdmission {
+function admission(
+  audience: 'operator' | 'agent',
+  testingHarnessEnabled = false,
+): FleetPrincipalGardenAdmission {
   return {
     kind: 'fleet-principal',
     audience,
     companionId: COMPANION_ID,
     verifier,
     replay: new InMemoryRequestCapabilityReplayPort(),
+    ...(testingHarnessEnabled ? { testingHarness: { enabled: true } } : {}),
   };
 }
 
@@ -168,6 +182,59 @@ describe('discriminated Garden admission', () => {
       body: compiled.body,
     });
     expect(retry).toEqual({
+      decision: 'deny',
+      status: 409,
+      message: 'Fleet Garden capability already consumed',
+    });
+  });
+
+  it('accepts testing_harness capabilities only behind the independent Garden verifier flag', async () => {
+    const compiled = target('/api/admin/settings/backup', 'POST', Buffer.from('configJson=%7B%7D'));
+    const token = signer('testing-harness-once').signOperator({
+      target: compiled,
+      requestId: REQUEST_ID,
+      decisionId: DECISION_ID,
+      authContext: TESTING_HARNESS_AUTH_CONTEXT,
+      versions: VERSIONS,
+    });
+    const authorityHeaders = () => ({
+      ...buildGardenCapabilityHeaders({ token, context: context() }),
+      'content-type': 'application/x-www-form-urlencoded',
+    });
+
+    await expect(admitFleetGardenRequest({
+      admission: admission('operator'),
+      rawTarget: compiled.canonicalRequestTarget,
+      method: compiled.method,
+      headers: authorityHeaders(),
+      body: compiled.body,
+    })).resolves.toMatchObject({ decision: 'deny', status: 403 });
+
+    const enabledAdmission = admission('operator', true);
+    await expect(admitFleetGardenRequest({
+      admission: enabledAdmission,
+      rawTarget: compiled.canonicalRequestTarget,
+      method: compiled.method,
+      headers: authorityHeaders(),
+      body: compiled.body,
+    })).resolves.toMatchObject({
+      decision: 'allow',
+      verified: {
+        authContext: {
+          principalId: 'testing-harness',
+          provider: 'testing_harness',
+          sessionAssurance: 'webauthn_uv',
+        },
+      },
+    });
+
+    await expect(admitFleetGardenRequest({
+      admission: enabledAdmission,
+      rawTarget: compiled.canonicalRequestTarget,
+      method: compiled.method,
+      headers: authorityHeaders(),
+      body: compiled.body,
+    })).resolves.toEqual({
       decision: 'deny',
       status: 409,
       message: 'Fleet Garden capability already consumed',

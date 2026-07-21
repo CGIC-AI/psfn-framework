@@ -880,6 +880,71 @@ kubectl -n "$NAMESPACE" exec deploy/"${RELEASE}-gateway" -- sh -c '
 ```
 
 
+### Tenancy runtime cutover: the ordered fail-closed gate ledger
+
+Builds at or after the wave that made `companions[].postgresRole` required
+resolve the full companion database topology fail-closed at gateway boot.
+A legacy deployment (runtime connecting as the original owner role, e.g.
+`psfn`) hits every gate below, in this order, on its first upgrade across
+that boundary. This ledger was established live on the k3d shakedown
+cluster 2026-07-21; carlini-class fleets and any legacy primary will hit
+the identical chain. Work the list top-to-bottom BEFORE the upgrade and
+the boot succeeds first try.
+
+1. **Owner file `companions.json`** gains a root `postgres` block
+   (`sharedMigrationRole`, `sharedMigrationDatabaseUrlRef`) and per-companion
+   `postgresRole` + `postgresDatabaseUrlRef` (env-kind credential refs).
+   Back up, splice, never overwrite tuned values.
+2. **Shared migration credential** (`SHARED_SCHEMA_MIGRATION_DATABASE_URL` or
+   your chosen env name) must exist in the gateway env — wire through
+   `fleetAuth.credentialEnv` or dedicated chart values — and must
+   authenticate as exactly `sharedMigrationRole`.
+3. **Per-companion credentials** must exist and authenticate as each declared
+   `postgresRole` (URL username == role, exact string).
+4. **Gateway `POSTGRES_DATABASE_URL` must byte-equal one companion
+   credential** — the primary companion's. The gateway does not get its own
+   role. Each agent must receive ITS OWN companion credential (the chart
+   historically mounted one shared URL to all agents; follower agents fail
+   the tenant-membership preflight if left on the primary credential).
+5. **All topology URLs distinct** (one credential per authority) and all
+   targeting the same database identity.
+6. **Family-restore mapped role least-privilege**: the runtime role must be
+   NOINHERIT, credential-valid, finite `CONNECTION LIMIT`, and must NOT own
+   the target database. The legacy owner role fails all of these — this
+   gate is what forces the flip to the provisioned tenant role. Size the
+   connection limit for gateway + agent + garden pools combined (25
+   exhausted live; >= 60 recommended; mind server `max_connections`).
+7. **Shared migration role needs `CREATE` on the database.**
+8. **Shared-schema objects must be owned ONLY by the migration role** —
+   `REASSIGN OWNED` fails when the legacy role owns the database itself;
+   transfer per-object (`ALTER SCHEMA/TABLE/SEQUENCE shared.* OWNER TO ...`).
+9. **Public/tenant-schema functions**: boot migrations `CREATE OR REPLACE`
+   functions — any still owned by the legacy role (`ALTER FUNCTION ... OWNER
+   TO <tenant role>`) block the tenant-role migration pass.
+10. **Exact shared DML grants for tenant roles**: SELECT-only on
+    `shared.shared_schema_migrations`; SELECT/INSERT/UPDATE/DELETE and
+    nothing more on every other shared table (TRUNCATE/REFERENCES/TRIGGER
+    are forbidden authority and fail the check). Add matching
+    `ALTER DEFAULT PRIVILEGES FOR ROLE <migration role> IN SCHEMA shared`.
+11. **Tenant boundary preflight** (per agent, connected as its own
+    credential): schema owned by the tenant role, `extensions` schema
+    present, `vector` extension relocated into it, connecting user a member
+    of the tenant role.
+
+Two upgrade-adjacent traps discovered on the same cutover, both now
+chart-owned but relevant when upgrading OLDER charts:
+
+- Flipping `postgres.auth.existingSecret`/`redis.auth.existingSecret` removes
+  the rendered credential Secrets from the manifest and Helm PRUNES the live
+  ones (recover from `helm get manifest --revision <n>`; strip Helm ownership
+  metadata; note the extracted manifest has no namespace — apply with `-n`).
+  Current charts annotate credential Secrets `helm.sh/resource-policy: keep`.
+- The gateway RPC serving certificate: hand-era Certificate objects are
+  pruned by the first helm-owned upgrade, orphaning a secret whose SPIFFE
+  URI no longer matches the fleet identity agents expect
+  (`spiffe://cluster.local/psfn/gateway/fleet`). Ensure a chart- or
+  operator-owned Certificate reissues it before agents restart.
+
 ### Upgrade a legacy slug COMPANION_ID to the UUID identity contract
 
 Builds at or after the aylm wave require `COMPANION_ID` to be a lowercase

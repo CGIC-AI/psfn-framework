@@ -123,6 +123,13 @@ src/
   system/        # settings, owner files, capabilities, trust, config
 ```
 
+### Self-Direction Tool Surfaces
+
+| Faculty | Direct tool surface |
+| --- | --- |
+| **North Star** | `north_star` (unified aspiration surface) |
+| **Values** | `orient action=values_list|values_add|values_update` |
+
 ## Development
 
 ```bash

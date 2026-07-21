@@ -995,6 +995,11 @@ affect accumulator. It is TRACKING-ONLY: lever events and observations are
 non-authoritative telemetry read by the Garden admin surface; nothing in the
 live companion loop consumes them.
 
+For what it is, the `authoritative: false` boundary, config knobs, the export
+API, and the Garden page, see
+[`observer-eval-sidecar.md`](./observer-eval-sidecar.md). This section is the
+operational runbook only.
+
 Build pin (fail closed). `emo_sim` lives in a separate repo, so it cannot be
 pinned by a submodule ref here. `docker/Dockerfile.emosim` pins the build to an
 exact upstream commit via `ARG EXPECTED_EMOSIM_SHA` and a `verify` stage that

@@ -94,10 +94,7 @@ import {
   resolveShareCapsuleCustodyPath,
 } from '../../persistence/layout.js';
 import { ReflectionJournalStore } from '../../persistence/journals/reflection-journal.js';
-import {
-  createConcernResolutionArcRecorder,
-  reconcileConcernResolutionArcs,
-} from '../../core/intention/concern-resolution-arc.js';
+import { createConcernResolutionArcRecorder } from '../../core/intention/concern-resolution-arc.js';
 import {
   createCapsuleCustodyService,
   createShareCapsuleCustodyStore,
@@ -137,6 +134,7 @@ import type { BackgroundWorkStorePort } from '../../core/agent/background-work/s
 import type { BackgroundWorkRuntimeTuning } from '../../core/agent/background-work/config.js';
 import type { BackgroundWorkWelfarePolicy } from '../../core/agent/background-work/store-port.js';
 import { createCompanionId } from '../../shared/routing/companion-id.js';
+import { reconcileConcernResolutionArcsAtStartup } from './concern-resolution-arc-startup.js';
 
 const log = createComponentLogger('AgentCoreRuntime');
 
@@ -653,7 +651,7 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
     },
   });
   eventBus.on('intention.concern.resolution_appraisal', concernResolutionArcRecorder);
-  await reconcileConcernResolutionArcs({
+  await reconcileConcernResolutionArcsAtStartup({
     concernStore: intentionRuntime.concernStore,
     recorder: concernResolutionArcRecorder,
   });

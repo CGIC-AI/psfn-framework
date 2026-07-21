@@ -1,10 +1,22 @@
 {
+  "postgres": {
+    "sharedMigrationRole": "shared_schema_migration",
+    "sharedMigrationDatabaseUrlRef": {
+      "kind": "env",
+      "envName": "SHARED_SCHEMA_MIGRATION_DATABASE_URL"
+    }
+  },
   "companions": [
     {
       "companionId": "11111111-1111-4111-8111-111111111111",
       "companionDataDir": "companions/flagship",
       "characterCardPath": "companions/flagship/character-card.json",
       "postgresSchema": "companion_flagship",
+      "postgresRole": "companion_flagship_runtime",
+      "postgresDatabaseUrlRef": {
+        "kind": "env",
+        "envName": "COMPANION_FLAGSHIP_DATABASE_URL"
+      },
       "displayName": "Flagship"
     },
     {
@@ -12,6 +24,11 @@
       "companionDataDir": "companions/aria",
       "characterCardPath": "companions/aria/character-card.json",
       "postgresSchema": "companion_aria",
+      "postgresRole": "companion_aria_runtime",
+      "postgresDatabaseUrlRef": {
+        "kind": "env",
+        "envName": "COMPANION_ARIA_DATABASE_URL"
+      },
       "displayName": "Aria",
       "avatarRef": "avatars/aria.png"
     }

@@ -1,7 +1,6 @@
 import type { Pool, QueryResultRow } from 'pg';
 import { createPostgresPool, executeQuery, queryOne, queryRows } from '../postgres.js';
 import { SHARED_SCHEMA_NAME } from './migrations.js';
-import { ensureSharedSchema } from './shared-schema.js';
 import {
   COMPANION_PRESENCE_COMPANION_ID_PATTERN,
   DEFAULT_COMPANION_PRESENCE_STALE_TTL_MS,
@@ -100,9 +99,9 @@ export class PostgresCompanionPresenceStore implements CompanionPresenceStorePor
   ) {}
 
   /**
-   * Connect a shared-schema-pinned pool and provision the shared schema (the
-   * provisioning is advisory-lock serialized, so N agents connecting
-   * concurrently are safe) before any presence access.
+   * Connect a shared-schema-pinned runtime pool. The gateway's dedicated
+   * migration authority provisions the shared schema before agents start;
+   * ordinary runtime stores never execute shared DDL.
    */
   static async connect(
     databaseUrl: string,
@@ -113,7 +112,6 @@ export class PostgresCompanionPresenceStore implements CompanionPresenceStorePor
       allowExitOnIdle: true,
       schema: SHARED_SCHEMA_NAME,
     });
-    await ensureSharedSchema(pool);
     return new PostgresCompanionPresenceStore(
       pool,
       options?.staleTtlMs ?? DEFAULT_COMPANION_PRESENCE_STALE_TTL_MS,

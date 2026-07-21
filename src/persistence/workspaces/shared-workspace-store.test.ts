@@ -16,11 +16,23 @@ import { SharedCompanionWorkspaceStore } from './shared-workspace-store.js';
 import type { DurableWriteStage } from '../../shared/utils/fs.js';
 
 const FLEET: CompanionsFleetConfig = {
+  postgres: {
+    sharedMigrationRole: 'shared_migration',
+    sharedMigrationDatabaseUrlRef: {
+      kind: 'env',
+      envName: 'SHARED_MIGRATION_DATABASE_URL',
+    },
+  },
   companions: [{
     companionId: '11111111-1111-4111-8111-111111111111',
     companionDataDir: 'companions/one',
     characterCardPath: 'companions/one/card.json',
     postgresSchema: 'companion_one',
+    postgresRole: 'companion_one_runtime',
+    postgresDatabaseUrlRef: {
+      kind: 'env',
+      envName: 'COMPANION_ONE_DATABASE_URL',
+    },
   }],
 };
 

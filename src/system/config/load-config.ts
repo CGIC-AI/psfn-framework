@@ -387,6 +387,7 @@ function loadConfigForMode(mode: LoadConfigMode, env: NodeJS.ProcessEnv = proces
   const companionDataDir = companionRuntimeIdentity?.companionDataDir ?? configuredCompanionDataDir;
   const characterCardPath = companionRuntimeIdentity?.characterCardPath ?? configuredCharacterCardPath;
   const postgresSchema = companionRuntimeIdentity?.postgresSchema ?? configuredPostgresSchema;
+  const postgresRole = companionRuntimeIdentity?.postgresRole;
   const gatewayCompanionAuthToken = parseOptionalStringEnv(env[GATEWAY_COMPANION_AUTH_TOKEN_ENV]);
   const gatewaySessionIntegrityAuthToken = parseOptionalStringEnv(
     env[GATEWAY_SESSION_INTEGRITY_AUTH_TOKEN_ENV],
@@ -459,6 +460,7 @@ function loadConfigForMode(mode: LoadConfigMode, env: NodeJS.ProcessEnv = proces
         : {}),
     ...(postgresDatabaseUrl ? { postgresDatabaseUrl } : {}),
     ...(postgresSchema ? { postgresSchema } : {}),
+    ...(postgresRole ? { postgresRole } : {}),
     sessionMessageLimit: 30,
     sessionRestartBehavior: 'reuse_latest_session',
     continuityMessageLimit: DEFAULT_CONTINUITY_MESSAGE_LIMIT,

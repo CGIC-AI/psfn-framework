@@ -185,6 +185,13 @@ describe('resolveGatewayBootstrapInput', () => {
         ...createConfig(),
         multiCompanion: true,
         companionFleet: {
+          postgres: {
+            sharedMigrationRole: 'shared_migration',
+            sharedMigrationDatabaseUrlRef: {
+              kind: 'env',
+              envName: 'SHARED_MIGRATION_DATABASE_URL',
+            },
+          },
           persistenceRoot: '/runtime',
           workspacesRoot: '/runtime/workspaces',
           sharedWorkspacePath: '/runtime/workspaces/shared',
@@ -193,6 +200,11 @@ describe('resolveGatewayBootstrapInput', () => {
             companionDataDir: '/runtime/comp-a',
             characterCardPath: '/runtime/comp-a/companion.json',
             postgresSchema: 'companion_a',
+            postgresRole: 'companion_a_runtime',
+            postgresDatabaseUrlRef: {
+              kind: 'env',
+              envName: 'COMPANION_A_DATABASE_URL',
+            },
             personalWorkspacePath: '/runtime/workspaces/personal/comp-a',
           }],
         },

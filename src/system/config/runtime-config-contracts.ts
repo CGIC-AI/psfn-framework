@@ -204,6 +204,12 @@ export interface SubstrateConfig {
    * behavior. Sourced from the `COMPANION_PG_SCHEMA` env var (see load-config).
    */
   postgresSchema?: string;
+  /**
+   * Topology-owned PostgreSQL role paired with `postgresSchema`. In a
+   * multi-companion agent this is resolved from the matching companions.json
+   * entry and must match the delivered database credential.
+   */
+  postgresRole?: string;
   sessionMessageLimit?: number;
   sessionRestartBehavior?: SessionRestartBehavior;
   continuityMessageLimit?: number;

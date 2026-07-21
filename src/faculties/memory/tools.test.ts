@@ -827,6 +827,68 @@ describe('createMemoryTool', () => {
     ]);
   });
 
+  it('threads a historical occurred_at into extractedAt instead of stamping now (psfn-framework-n2z6)', async () => {
+    const store = mockUnifiedStore();
+    const tool = createMemoryTool(writer as unknown as MemoryWriter, store as unknown as MemoryStorePort);
+
+    const historical = Date.parse('2021-06-15T08:30:00.000Z');
+    await tool.execute('memory-call-occurred', {
+      action: 'import',
+      source: 'backup',
+      records: [
+        { text: 'Old fact', type: 'semantic', occurred_at: '2021-06-15T08:30:00.000Z' },
+        { text: 'No date fact', type: 'semantic' },
+      ],
+    });
+
+    const passed = writer.importBatch.mock.calls[0][0] as Array<{ extractedAt?: number }>;
+    expect(passed[0].extractedAt).toBe(historical);
+    // A record without occurred_at leaves extractedAt unset so the writer's
+    // Date.now() default still applies.
+    expect(passed[1].extractedAt).toBeUndefined();
+  });
+
+  it('fails closed on an unparseable occurred_at for action=import', async () => {
+    const store = mockUnifiedStore();
+    const tool = createMemoryTool(writer as unknown as MemoryWriter, store as unknown as MemoryStorePort);
+
+    const result = await tool.execute('memory-call-bad-date', {
+      action: 'import',
+      records: [{ text: 'Bad date', type: 'semantic', occurred_at: 'not-a-date' }],
+    });
+
+    expect(resultText(result as any)).toContain('invalid occurred_at');
+    expect(result.details?.isError).toBe(true);
+    expect(writer.importBatch).not.toHaveBeenCalled();
+  });
+
+  it('fails closed on a future occurred_at for action=import', async () => {
+    const store = mockUnifiedStore();
+    const tool = createMemoryTool(writer as unknown as MemoryWriter, store as unknown as MemoryStorePort);
+
+    const future = new Date(Date.now() + 86_400_000).toISOString();
+    const result = await tool.execute('memory-call-future-date', {
+      action: 'import',
+      records: [{ text: 'Future fact', type: 'semantic', occurred_at: future }],
+    });
+
+    expect(resultText(result as any)).toContain('is in the future');
+    expect(result.details?.isError).toBe(true);
+    expect(writer.importBatch).not.toHaveBeenCalled();
+  });
+
+  it('memory_import_batch standalone tool threads occurred_at into extractedAt', async () => {
+    const importTool = createMemoryImportTool(writer as unknown as MemoryWriter);
+
+    const historical = Date.parse('2020-01-02T03:04:05.000Z');
+    await importTool.execute('import-standalone', {
+      records: [{ text: 'Archived', type: 'semantic', occurred_at: '2020-01-02T03:04:05.000Z' }],
+    });
+
+    const passed = writer.importBatch.mock.calls[0][0] as Array<{ extractedAt?: number }>;
+    expect(passed[0].extractedAt).toBe(historical);
+  });
+
   it('requires records, not a legacy entries field, for unified action=import', async () => {
     const store = mockUnifiedStore();
     const tool = createMemoryTool(writer as unknown as MemoryWriter, store as unknown as MemoryStorePort);

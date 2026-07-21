@@ -380,3 +380,12 @@ test('GitHub CI is one complementary delta lane without label-triggered reruns',
   assert.match(workflow, /statuses: read/);
   assert.match(workflow, /vars\.LOCAL_GATE_STATUS_ACTOR/);
 });
+
+test('trusted PR label automation has the write scope required by the labels API', () => {
+  const workflow = readFileSync('.github/workflows/pr-labels.yml', 'utf8');
+  const applyJob = workflow.slice(workflow.indexOf('  apply:'), workflow.indexOf('  catalog:'));
+
+  assert.match(applyJob, /pull-requests: write/);
+  assert.doesNotMatch(applyJob, /issues: write/);
+  assert.match(applyJob, /ref: \$\{\{ github\.event\.pull_request\.base\.sha \}\}/);
+});

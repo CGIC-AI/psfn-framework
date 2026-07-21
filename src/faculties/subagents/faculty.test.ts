@@ -18,6 +18,7 @@ import type {
 } from '../../shared/contracts/runtime.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import { SubagentFaculty } from './faculty.js';
+import { createSubagentTool } from './tools.js';
 import { SubstrateAgent } from '../../core/agent/substrate-agent.js';
 import { parseSubagentRoleRegistryConfig } from './role-registry.js';
 import { SubagentExecutionError } from './types.js';
@@ -2211,6 +2212,44 @@ describe('SubagentFaculty core-authoritative tool governance (p0le)', () => {
         workSpec: buildSubagentWorkSpec(),
       });
       await faculty.wait(third.subagentId);
+    });
+  });
+
+  // bead 7ym.2 — field-level identity inheritance wired end-to-end: the model
+  // requests a named role on the subagent tool and gets a deterministic profile
+  // layered over the inherited companion identity.
+  describe('role end-to-end (7ym.2)', () => {
+    it('wires a requested role from the subagent tool to the layered agent prompt', async () => {
+      const handleSpy = vi.spyOn(SubstrateAgent.prototype, 'handleMessage');
+      const config: SubstrateConfig = {
+        ...TEST_CONFIG,
+        subagentRoles: parseSubagentRoleRegistryConfig({
+          roles: { researcher: { instructions: 'Research the assigned task.', maxTurns: 3 } },
+        }, 'test'),
+      };
+      const faculty = new SubagentFaculty({
+        eventBus,
+        llmProvider: mockLLM(),
+        sessionStore,
+        embeddingService: null,
+        memoryProvider: null,
+        config,
+        parentSystemPrompt: 'You are Companion, warm and precise.',
+      });
+      const tool = createSubagentTool(faculty);
+      const spawnResult = await tool.execute('call-e2e', {
+        action: 'spawn',
+        name: 'r',
+        task: 't',
+        role: 'researcher',
+      });
+      const spawned = JSON.parse(spawnResult.content[0]?.text ?? '{}') as { subagent_id: string };
+      await faculty.wait(spawned.subagent_id);
+      const instance = handleSpy.mock.instances[0] as unknown as { systemPrompt: string };
+      expect(instance.systemPrompt).toContain('You are Companion, warm and precise.');
+      expect(instance.systemPrompt).toContain('## Role: researcher');
+      expect(instance.systemPrompt).toContain('Research the assigned task.');
+      handleSpy.mockRestore();
     });
   });
 });

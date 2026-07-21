@@ -39,6 +39,8 @@ interface StoredSkillUsageTelemetry {
 interface SkillUsageTelemetryStoreOptions {
   now?: () => Date;
   filePath?: string;
+  /** Debounce window (ms) before an in-memory mutation is flushed to disk. */
+  flushDelayMs?: number;
 }
 
 function normalizeSkillUsageName(name: string): string {
@@ -187,10 +189,19 @@ function toPublicStats(record: StoredSkillUsageRecord): SkillUsageStats {
 export class SkillUsageTelemetryStore {
   private readonly filePath: string;
   private readonly now: () => Date;
+  // Debounce window between an in-memory mutation and its atomic flush. Kept as
+  // a class field (not a module-level tuning const) so it is code-owned without
+  // needing a settings-contract entry.
+  private readonly flushDelayMs: number;
+  /** Lazily-loaded in-memory aggregate; the single source of truth once loaded. */
+  private cache: StoredSkillUsageTelemetry | null = null;
+  private dirty = false;
+  private flushTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(dataDir: string, options: SkillUsageTelemetryStoreOptions = {}) {
     this.filePath = options.filePath ?? join(dataDir, SKILL_USAGE_TELEMETRY_FILE_NAME);
     this.now = options.now ?? (() => new Date());
+    this.flushDelayMs = options.flushDelayMs ?? 1_000;
   }
 
   record(name: string, input: SkillInvocationRecordInput): SkillUsageStats {
@@ -199,7 +210,7 @@ export class SkillUsageTelemetryStore {
     const outcome = normalizeOutcome(input.outcome);
     const occurredAt = normalizeOccurredAt(input.occurredAt, this.now());
     const durationMs = normalizeDurationMs(input.durationMs);
-    const telemetry = this.load();
+    const telemetry = this.ensureLoaded();
     const existing = telemetry.skills[key];
     const nextInvocationCount = (existing?.invocationCount ?? 0) + 1;
     const nextSuccessCount = (existing?.successCount ?? 0) + (outcome === 'success' ? 1 : 0);
@@ -221,21 +232,63 @@ export class SkillUsageTelemetryStore {
     };
 
     telemetry.skills[key] = record;
-    this.save(telemetry);
+    this.markDirty();
     return toPublicStats(record);
   }
 
   get(name: string): SkillUsageStats | null {
     const key = normalizeSkillUsageKey(name);
-    const record = this.load().skills[key];
+    const record = this.ensureLoaded().skills[key];
     return record ? toPublicStats(record) : null;
   }
 
   list(): SkillUsageStats[] {
-    return Object.values(this.load().skills)
+    return Object.values(this.ensureLoaded().skills)
       .filter((record): record is StoredSkillUsageRecord => record !== undefined)
       .map(record => toPublicStats(record))
       .sort((left, right) => left.name.localeCompare(right.name));
+  }
+
+  /**
+   * Persist any pending in-memory mutations immediately. Idempotent when there
+   * is nothing dirty. Callers with a lifecycle should invoke this (via
+   * {@link close}) on shutdown so the debounced tail is never lost.
+   */
+  flush(): void {
+    if (this.flushTimer !== null) {
+      clearTimeout(this.flushTimer);
+      this.flushTimer = null;
+    }
+    if (!this.dirty || this.cache === null) {
+      return;
+    }
+    this.save(this.cache);
+    this.dirty = false;
+  }
+
+  /** Cancel the pending debounce and flush; use on shutdown/finalize. */
+  close(): void {
+    this.flush();
+  }
+
+  private markDirty(): void {
+    this.dirty = true;
+    if (this.flushTimer !== null) {
+      return;
+    }
+    this.flushTimer = setTimeout(() => {
+      this.flushTimer = null;
+      this.flush();
+    }, this.flushDelayMs);
+    // Do not keep the event loop alive solely for a pending telemetry flush.
+    this.flushTimer.unref();
+  }
+
+  private ensureLoaded(): StoredSkillUsageTelemetry {
+    if (this.cache === null) {
+      this.cache = this.load();
+    }
+    return this.cache;
   }
 
   private load(): StoredSkillUsageTelemetry {

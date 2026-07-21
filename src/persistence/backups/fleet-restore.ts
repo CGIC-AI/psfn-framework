@@ -16,7 +16,6 @@ import { tmpdir } from 'node:os';
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 import { promisify } from 'node:util';
 import { isRecord } from '../../shared/utils/types.js';
-import { createComponentLogger } from '../../shared/logger.js';
 import { isStrictSubpath } from '../layout.js';
 import {
   assertValidPostgresSchemaName,
@@ -94,7 +93,6 @@ import { quarantineRestoredContactLifecycleAuthority } from './contact-lifecycle
 
 export type { FleetRestoreFaultInjectionOptions, FleetRestoreFaultStage };
 
-const log = createComponentLogger('FleetRestore');
 const execFileAsync = promisify(execFile);
 const POSTGRES_COMMAND_MAX_BUFFER_BYTES = 16 * 1024 * 1024;
 const TOC_OBJECT_DESCRIPTIONS = [
@@ -947,53 +945,6 @@ export async function verifyFleetAuthConsistentFamilyRestore(
     });
   } finally {
     rmSync(scratchRoot, { recursive: true, force: true });
-    // Defense in depth, independent of the durable restore marker: a prior run
-    // interrupted after schema restore but before rollback can leave the scratch
-    // schemas present with the marker absent, and the restore preflight then
-    // fail-closes on every future verification ("requires absent target schemas
-    // before mutation"), permanently blocking scheduled verification. Best-effort
-    // drop the expected scratch schemas so the next run starts clean. On the
-    // normal path the verify-rollback already dropped them, so this is a no-op.
-    await dropScratchVerificationSchemas(options);
-  }
-}
-
-/**
- * Best-effort cleanup of the scratch verification schemas. Never throws: cleanup
- * failures are logged so they cannot mask the verification's own outcome (a
- * failure raised from the surrounding body must reach the caller unmasked). The
- * durable restore marker (`restore_control`) is intentionally left alone — its
- * semantics are owned by the restore transaction.
- */
-async function dropScratchVerificationSchemas(
-  options: FleetAuthConsistentFamilyRestoreVerificationOptions,
-): Promise<void> {
-  let expectedSchemas: string[];
-  try {
-    const coordinator = verifyFleetAuthBackupManifest(options.manifestPath);
-    expectedSchemas = coordinator.artifacts
-      .filter((artifact): artifact is typeof artifact & { postgresSchema: string } => (
-        (artifact.kind === 'companion' || artifact.kind === 'shared')
-        && typeof artifact.postgresSchema === 'string'
-      ))
-      .map(artifact => artifact.postgresSchema);
-  } catch (error) {
-    log.warn('Fleet auth restore verification could not resolve scratch schemas for cleanup', {
-      error: error instanceof Error ? error.message : String(error),
-    });
-    return;
-  }
-  for (const schema of expectedSchemas) {
-    const ownerDatabaseUrl = options.scratchSchemaOwnerDatabaseUrls[schema];
-    if (!ownerDatabaseUrl) continue;
-    try {
-      await dropOwnedPostgresSchema(schema, ownerDatabaseUrl, options.psqlBinary);
-    } catch (error) {
-      log.warn('Fleet auth restore verification best-effort scratch schema drop failed', {
-        schema,
-        error: error instanceof Error ? error.message : String(error),
-      });
-    }
   }
 }
 

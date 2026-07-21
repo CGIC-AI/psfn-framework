@@ -37,7 +37,8 @@ import {
 import { runFleetBackupCycle as runFleetBackupCycleProduction } from './service.js';
 import { prepareFleetSharedSchemaRuntime } from './fleet-shared-schema-startup.js';
 
-const TIMEOUT_MS = 120_000;
+// Clean-main runs complete in 84.9–108.5s; retain ample host-load margin.
+const TIMEOUT_MS = 180_000;
 const ROLES: FleetAuthFamilyDatabaseRoles = {
   runtime: 'family_auth_runtime',
   migration: 'family_auth_migration',

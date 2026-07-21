@@ -35,9 +35,9 @@ function parseArguments(argv) {
   return options;
 }
 
-function currentPr(branch) {
+function currentPr(branch, runCommand = run) {
   const prs = JSON.parse(
-    run('gh', [
+    runCommand('gh', [
       'pr',
       'list',
       '--head',
@@ -47,15 +47,22 @@ function currentPr(branch) {
       '--limit',
       '2',
       '--json',
-      'number,url',
+      'number,url,isDraft',
     ]),
   );
   if (prs.length > 1) throw new Error(`Multiple open PRs found for branch ${branch}`);
+  if (prs[0] && (
+    !Number.isInteger(prs[0].number)
+    || typeof prs[0].url !== 'string'
+    || typeof prs[0].isDraft !== 'boolean'
+  )) {
+    throw new Error(`GitHub returned malformed PR data for branch ${branch}`);
+  }
   return prs[0] ?? null;
 }
 
-function requireConfiguredStatusActor() {
-  const expected = run('gh', [
+function requireConfiguredStatusActor(runCommand = run) {
+  const expected = runCommand('gh', [
     'variable',
     'list',
     '--json',
@@ -63,7 +70,7 @@ function requireConfiguredStatusActor() {
     '--jq',
     '.[] | select(.name == "LOCAL_GATE_STATUS_ACTOR") | .value',
   ]);
-  const actual = run('gh', ['api', 'user', '--jq', '.login']);
+  const actual = runCommand('gh', ['api', 'user', '--jq', '.login']);
   if (!expected || actual !== expected) {
     throw new Error(
       `Authenticated gh user ${actual || '(unknown)'} is not the configured local-gate status issuer`,
@@ -71,26 +78,26 @@ function requireConfiguredStatusActor() {
   }
 }
 
-function pushBranch(branch, head) {
-  if (run('git', ['rev-parse', 'HEAD']) !== head) {
+function pushBranch(branch, head, { runCommand = run, spawnCommand = spawnSync } = {}) {
+  if (runCommand('git', ['rev-parse', 'HEAD']) !== head) {
     throw new Error('Branch HEAD changed after local validation; refusing to push');
   }
-  const result = spawnSync('git', ['push', 'origin', buildValidatedPushRefspec(head, branch)], {
+  const result = spawnCommand('git', ['push', 'origin', buildValidatedPushRefspec(head, branch)], {
     stdio: 'inherit',
   });
   if (result.error) throw result.error;
   if (result.status !== 0) throw new Error(`git push failed with exit ${String(result.status)}`);
-  if (run('git', ['rev-parse', 'HEAD']) !== head) {
+  if (runCommand('git', ['rev-parse', 'HEAD']) !== head) {
     throw new Error('Branch HEAD changed during push; refusing to publish an attestation');
   }
-  const remoteHead = run('git', ['ls-remote', '--exit-code', 'origin', `refs/heads/${branch}`])
+  const remoteHead = runCommand('git', ['ls-remote', '--exit-code', 'origin', `refs/heads/${branch}`])
     .split(/\s+/)[0];
   if (remoteHead !== head) throw new Error('Remote branch does not match the attested head');
-  run('git', ['branch', '--set-upstream-to', `origin/${branch}`, branch]);
+  runCommand('git', ['branch', '--set-upstream-to', `origin/${branch}`, branch]);
 }
 
-function publishRemoteAttestation({ head, base }) {
-  run('gh', [
+function publishRemoteAttestation({ head, base }, runCommand = run) {
+  runCommand('gh', [
     'api',
     '--method',
     'POST',
@@ -104,25 +111,33 @@ function publishRemoteAttestation({ head, base }) {
   ]);
 }
 
-export async function publishPr(argv = process.argv.slice(2)) {
+export async function publishPr(argv = process.argv.slice(2), {
+  runCommand = run,
+  spawnCommand = spawnSync,
+  runGate = runLocalGate,
+  resolveGateState = resolveLocalGateState,
+  readGateAttestation = readAttestation,
+  validateGateAttestation = validateStateAttestation,
+  wait = waitForPr,
+} = {}) {
   const options = parseArguments(argv);
-  const hooksPath = run('git', ['config', '--get', '--default', '', 'core.hooksPath']);
+  const hooksPath = runCommand('git', ['config', '--get', '--default', '', 'core.hooksPath']);
   if (hooksPath !== '.githooks') {
     throw new Error('Local hooks are not installed. Run npm run hooks:install first.');
   }
-  const branch = run('git', ['branch', '--show-current']);
+  const branch = runCommand('git', ['branch', '--show-current']);
   if (!branch || branch === 'main') throw new Error('Publish from a named PR branch, not main.');
 
-  run('git', ['fetch', 'origin', options.base], { stdio: 'inherit' });
+  runCommand('git', ['fetch', 'origin', options.base], { stdio: 'inherit' });
   const baseRef = `origin/${options.base}`;
-  run('git', ['config', `branch.${branch}.psfnGateBase`, baseRef]);
-  await runLocalGate({ baseRef });
-  const state = resolveLocalGateState({ baseRef });
-  const validation = validateStateAttestation(readAttestation(state.attestationPath), state).result;
+  runCommand('git', ['config', `branch.${branch}.psfnGateBase`, baseRef]);
+  await runGate({ baseRef });
+  const state = resolveGateState({ baseRef });
+  const validation = validateGateAttestation(readGateAttestation(state.attestationPath), state).result;
   if (!validation.valid) throw new Error(validation.reason);
-  requireConfiguredStatusActor();
+  requireConfiguredStatusActor(runCommand);
 
-  const existing = currentPr(branch);
+  const existing = currentPr(branch, runCommand);
   if (!existing && (!options.title || !options.bodyFile)) {
     throw new Error('A new PR requires --title and --body-file; this prevents an unreviewable empty body.');
   }
@@ -130,13 +145,16 @@ export async function publishPr(argv = process.argv.slice(2)) {
     const editArgs = ['pr', 'edit', String(existing.number)];
     if (options.title) editArgs.push('--title', options.title);
     if (options.bodyFile) editArgs.push('--body-file', options.bodyFile);
-    run('gh', editArgs, { stdio: 'inherit' });
+    runCommand('gh', editArgs, { stdio: 'inherit' });
   }
 
-  pushBranch(branch, state.head);
-  publishRemoteAttestation(state);
+  if (existing?.isDraft) {
+    runCommand('gh', ['pr', 'ready', String(existing.number)], { stdio: 'inherit' });
+  }
+  pushBranch(branch, state.head, { runCommand, spawnCommand });
+  publishRemoteAttestation(state, runCommand);
   if (!existing) {
-    run(
+    runCommand(
       'gh',
       [
         'pr',
@@ -154,10 +172,10 @@ export async function publishPr(argv = process.argv.slice(2)) {
     );
   }
 
-  const pr = currentPr(branch);
+  const pr = currentPr(branch, runCommand);
   if (!pr) throw new Error(`GitHub did not return a PR for branch ${branch}.`);
   console.log(`Published ${pr.url} at ${state.head.slice(0, 12)}; waiting for CI and Greptile.`);
-  await waitForPr({ reference: String(pr.number), expectedHead: state.head });
+  await wait({ reference: String(pr.number), expectedHead: state.head });
   return pr;
 }
 

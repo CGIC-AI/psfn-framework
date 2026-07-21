@@ -39,6 +39,13 @@ export interface LifecycleNotifierConfig {
   startTime: number;
   /** Deploy image tag used to dedupe ready notifications across boot restarts. Falls back to PSFN_IMAGE_TAG. */
   imageTag?: string;
+  /**
+   * Source/subsystem label prefixed to lifecycle notifications so that
+   * multi-process (and multi-companion) deployments announcing to the same
+   * channel stay distinguishable. Empty/whitespace values fall back to the
+   * owning process role (`agent`); the label is never guessed from free text.
+   */
+  subsystemLabel?: string;
 }
 
 // ── Last-active session tracking ──
@@ -340,6 +347,7 @@ export class DiscordLifecycleNotifier implements LifecycleNotifier {
   private dataDir: string;
   private startTime: number;
   private imageTag: string | undefined;
+  private subsystemLabel: string;
 
   constructor(config: LifecycleNotifierConfig) {
     this.sender = config.sender;
@@ -347,6 +355,14 @@ export class DiscordLifecycleNotifier implements LifecycleNotifier {
     this.dataDir = config.dataDir;
     this.startTime = config.startTime;
     this.imageTag = config.imageTag?.trim() || process.env.PSFN_IMAGE_TAG?.trim() || undefined;
+    // Fail closed to the owning process role rather than announcing unlabelled;
+    // never guess a label from free text.
+    this.subsystemLabel = config.subsystemLabel?.trim() || 'agent';
+  }
+
+  /** Prefix a lifecycle message with the subsystem/source label. */
+  private withSubsystemLabel(message: string): string {
+    return `[${this.subsystemLabel}] ${message}`;
   }
 
   /** Resolve which channel to send lifecycle messages to */
@@ -368,9 +384,11 @@ export class DiscordLifecycleNotifier implements LifecycleNotifier {
       return;
     }
 
-    const msg = reason
-      ? `Gonna reboot real quick -- ${reason}. brb~`
-      : 'Gonna reboot real quick, brb~';
+    const msg = this.withSubsystemLabel(
+      reason
+        ? `Gonna reboot real quick -- ${reason}. brb~`
+        : 'Gonna reboot real quick, brb~',
+    );
 
     try {
       await this.sender.send(channelId, msg);
@@ -398,7 +416,7 @@ export class DiscordLifecycleNotifier implements LifecycleNotifier {
 
     const uptimeMs = Date.now() - this.startTime;
     const uptimeSec = Math.round(uptimeMs / 1000);
-    const msg = `I'm back~ (startup took ${uptimeSec}s)`;
+    const msg = this.withSubsystemLabel(`I'm back~ (startup took ${uptimeSec}s)`);
 
     try {
       await this.sender.send(channelId, msg);
@@ -441,9 +459,11 @@ export class DiscordLifecycleNotifier implements LifecycleNotifier {
       return;
     }
 
-    const msg = reason
-      ? `Going offline -- ${reason}. See you soon.`
-      : 'Going offline for a bit. See you soon.';
+    const msg = this.withSubsystemLabel(
+      reason
+        ? `Going offline -- ${reason}. See you soon.`
+        : 'Going offline for a bit. See you soon.',
+    );
 
     try {
       await this.sender.send(channelId, msg);

@@ -205,7 +205,7 @@ test('delivery-only gate stays fast while product changes retain full validation
   }
   assert.deepEqual(plan.find(({ name }) => name === 'ubs').args.slice(0, 2), [
     '--no-auto-update',
-    '--skip=2',
+    '--skip-js=7',
   ]);
   assert.deepEqual(plan.find(({ name }) => name === 'tests').args, ['test', '--', '--maxWorkers=4']);
   assert.equal(plan.find(({ name }) => name === 'tests').skip, false);
@@ -216,7 +216,7 @@ test('delivery-only gate stays fast while product changes retain full validation
   });
   assert.deepEqual(
     deletionPlan.find(({ name }) => name === 'ubs').args,
-    ['--no-auto-update', '--skip=2', 'src/retained.ts'],
+    ['--no-auto-update', '--skip-js=7', 'src/retained.ts'],
   );
 });
 

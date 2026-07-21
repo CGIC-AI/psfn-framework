@@ -465,6 +465,13 @@ export function suggestToolsForIntent(input: SuggestToolsInput): ToolSuggestionR
       runtimeState: input.runtimeState,
       access: input.access,
     });
+    // bead s3o4: a suggestion must never advertise a tool the requesting
+    // surface cannot actually call. Availability previously only rank-penalized
+    // capability-denied / unavailable-this-turn tools, so a tool absent from the
+    // callable catalog for this tier/channel could still be suggested (Artie hit
+    // this with analysis_workbench). Restrict recommendations to the callable
+    // set: suggestion ⊆ catalog.
+    if (availability.availabilityStatus !== 'active') continue;
     const confidence = confidenceFromScore(matchScore);
     candidates.push({
       entry,

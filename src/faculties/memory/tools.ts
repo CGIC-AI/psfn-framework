@@ -115,7 +115,7 @@ function clampInt(val: number, min: number, max: number): number {
  * Resolve the optional historical formation time for an imported memory record.
  * Fails closed: an unparseable, pre-epoch, or future `occurred_at` yields an
  * error string instead of silently coercing to the import wall-clock time
- * (psfn-framework-n2z6). Returns an empty object when no timestamp was supplied.
+ * (bead n2z6). Returns an empty object when no timestamp was supplied.
  */
 function parseImportOccurredAt(
   value: string | undefined,

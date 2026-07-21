@@ -122,13 +122,14 @@ function command(name, executable, args, options = {}) {
 
 export function buildGatePlan({
   paths,
+  scannablePaths = paths,
   base = 'origin/main',
   head = 'HEAD',
   changeBudgetException = false,
 }) {
   const matches = (pattern) => paths.some((path) => pattern.test(path));
   const scope = detectChangeScope(paths);
-  const ubsPaths = paths.filter((path) => /\.(?:[cm]?[jt]s|[jt]sx|svelte)$/.test(path));
+  const ubsPaths = scannablePaths.filter((path) => /\.(?:[cm]?[jt]s|[jt]sx|svelte)$/.test(path));
   const workflowPaths = paths.filter((path) =>
     /^\.github\/(?:workflows\/.*\.ya?ml|actions\/.*\.ya?ml|dependabot\.yml)$/.test(path),
   );

@@ -233,8 +233,8 @@ npm run hooks:install
 ```
 
 The installer refuses to disable any existing hook or replace an existing
-`gh psfn-pr` alias. It configures the tracked `.githooks/pre-push` hook for the current
-worktree and installs `gh psfn-pr` as the supported PR publisher.
+`gh gated-pr` alias. It configures the tracked `.githooks/pre-push` hook for the current
+worktree and installs `gh gated-pr` as the supported PR publisher.
 
 Keep changes reviewable without buying a separate paid review for every tiny
 patch:
@@ -261,7 +261,7 @@ checks. A new commit or base change invalidates the attestation.
 Publish with the repo wrapper; do not use raw `gh pr create` or `gh pr edit`:
 
 ```bash
-gh psfn-pr --title "<title>" --body-file <path>
+gh gated-pr --title "<title>" --body-file <path>
 ```
 
 The wrapper reuses the exact-head local attestation, pushes without recursively
@@ -474,7 +474,7 @@ Required sequence:
    ```
 6. Publish or update the PR through the guarded wrapper:
    ```bash
-   gh psfn-pr --title "<title>" --body-file <path>
+   gh gated-pr --title "<title>" --body-file <path>
    ```
    This pushes the attested head and waits for `ci-required` and Greptile. Do
    not run a second watcher or rerun failed checks.

@@ -76,7 +76,7 @@ git worktree add -b work/<epic>-<bead> <bead-worktree> feat/<epic>
 
 A bead is an ownership boundary, not automatically a paid PR boundary. Batch compatible small beads into one coherent unit; do not buy a standalone Greptile review for a routine tiny patch when it can safely join the next unit. Target at most 25 files, 1,500 counted changed lines, and 5 commits; the hard limits remain 25 files, 2,000 lines, and 8 commits. Do not mix unrelated work or pad a diff.
 
-When a coherent feature completes its final check, publish it the same session through `gh psfn-pr`. An independent lane validates the exact head and uses GitHub's rebase merge after `ci-required` and `Greptile Review` pass. Do not squash or create merge commits. Live deployment remains operator-driven.
+When a coherent feature completes its final check, publish it the same session through `gh gated-pr`. An independent lane validates the exact head and uses GitHub's rebase merge after `ci-required` and `Greptile Review` pass. Do not squash or create merge commits. Live deployment remains operator-driven.
 
 ## Parallel Work Format
 
@@ -206,7 +206,7 @@ Record validation results on the validation bead. Do not rewrite implementation 
 
 Run `npm ci && npm run hooks:install` once per worktree. Before any push, fetch and rebase, commit a clean exact head, then run `npm run gate:pre-pr`. The gate owns full lint, build, typecheck, repository hygiene, tests, Semgrep, UBS, budgets, and applicable specialist checks. Its attestation is valid only for the exact head and base; the pre-push hook blocks missing or stale attestations, direct `main`, and recursion. Never use `--no-verify`.
 
-Publish only with `gh psfn-pr --title "<title>" --body-file <path>`. It pushes the attested head, publishes an authenticated exact-base commit status, and waits for `ci-required` plus `Greptile Review`. GitHub uses one complementary delta runner and one status aggregator; drafts allocate no runners, labels do not retrigger CI, and local lint/Semgrep/UBS are not repeated.
+Publish only with `gh gated-pr --title "<title>" --body-file <path>`. It pushes the attested head, publishes an authenticated exact-base commit status, and waits for `ci-required` plus `Greptile Review`. GitHub uses one complementary delta runner and one status aggregator; drafts allocate no runners, labels do not retrigger CI, and local lint/Semgrep/UBS are not repeated.
 
 On failure, the publisher returns evidence to the owning lane. Make at most one evidence-driven corrective commit and publish the new exact head once. Never rerun Actions, re-request Greptile, toggle labels to manufacture events, or start another review/fix loop. A second failure is an operator-visible blocker. Keep stable checkpoints green and push them through the hook; never force-push or rewrite a shared branch.
 
@@ -219,7 +219,7 @@ After the final check:
 1. The orchestrator merges the bead branch into the feature branch.
 2. The orchestrator resolves conflicts once, preserving both feature intents without inventing new behavior.
 3. A worker validates the integrated branch with focused tests and the exact-head local gate.
-4. Publish the coherent branch through `gh psfn-pr` and wait for both required checks.
+4. Publish the coherent branch through `gh gated-pr` and wait for both required checks.
 5. An independent lane validates and rebase-merges the PR.
 6. Close implementation beads with commit, source, local-gate, PR-head, external-check, and merge evidence; route remaining IMPORTANT defects to the fixes epic.
 7. Assign the next ready bead.

@@ -28,7 +28,7 @@ npm ci
 npm run tools:doctor
 npm run hooks:install
 git config --get core.hooksPath       # .githooks
-gh alias list | grep '^psfn-pr:'      # !npm run pr:publish --
+gh alias list | grep '^gated-pr:'     # !npm run pr:publish --
 ```
 
 The installer replaces nothing; run it separately in every worktree.
@@ -54,7 +54,7 @@ UBS 5.3.5; and applicable settings, supply-chain, deployment, Garden, companion
 UI, and changed-workflow actionlint/zizmor checks.
 
 It refuses dirty, detached, `main`, empty, or non-rebased delivery. Attestation
-and logs live under the worktree Git directory in `psfn-local-gate/`, never in
+and logs live under the worktree Git directory in `local-delivery-gate/`, never in
 tracked files. The cache matches only the exact head and base. The pre-push hook
 invokes the same gate and prevents recursion; never use `--no-verify`.
 
@@ -96,7 +96,7 @@ merge resolutions, shared contracts, and composite acceptance.
 Write a PR body with summary, validation, and bead IDs, then run:
 
 ```bash
-gh psfn-pr --title "<type(scope): outcome>" --body-file <body.md>
+gh gated-pr --title "<type(scope): outcome>" --body-file <body.md>
 ```
 
 The wrapper fetches and gates the base, pushes through the cached hook, publishes

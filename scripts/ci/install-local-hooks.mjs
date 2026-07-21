@@ -49,15 +49,15 @@ export function installLocalHooks({ cwd = process.cwd() } = {}) {
   const aliases = run('gh', ['alias', 'list'], { cwd: repositoryRoot });
   const currentAlias = aliases
     .split('\n')
-    .find((line) => line.startsWith('psfn-pr:'))
-    ?.slice('psfn-pr:'.length)
+    .find((line) => line.startsWith('gated-pr:'))
+    ?.slice('gated-pr:'.length)
     .trim();
   const normalizedAlias = currentAlias ? normalizeAliasValue(currentAlias) : '';
   const expectedAlias = '!npm run pr:publish --';
   if (normalizedAlias && normalizedAlias !== expectedAlias) {
-    throw new Error(`Refusing to replace existing gh alias psfn-pr: ${currentAlias}`);
+    throw new Error(`Refusing to replace existing gh alias gated-pr: ${currentAlias}`);
   }
-  if (!normalizedAlias) run('gh', ['alias', 'set', 'psfn-pr', expectedAlias], { cwd: repositoryRoot });
+  if (!normalizedAlias) run('gh', ['alias', 'set', 'gated-pr', expectedAlias], { cwd: repositoryRoot });
   if (hooksPath !== '.githooks') {
     run('git', ['config', '--local', 'extensions.worktreeConfig', 'true'], {
       cwd: repositoryRoot,
@@ -67,7 +67,7 @@ export function installLocalHooks({ cwd = process.cwd() } = {}) {
     });
   }
 
-  console.log('Installed repo pre-push hook and gh psfn-pr alias.');
+  console.log('Installed repo pre-push hook and gh gated-pr alias.');
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {

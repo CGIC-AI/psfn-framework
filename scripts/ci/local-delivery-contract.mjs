@@ -2,7 +2,7 @@ const SHA = /^[0-9a-f]{40}$/;
 const ZERO_SHA = '0'.repeat(40);
 
 export const LOCAL_GATE_SCHEMA_VERSION = 1;
-export const REMOTE_ATTESTATION_CONTEXT = 'psfn/local-gate/v1';
+export const REMOTE_ATTESTATION_CONTEXT = 'local-gate/v1';
 
 function assertSha(value, name) {
   if (!SHA.test(value)) throw new Error(`${name} must be a lowercase 40-character git SHA`);

@@ -148,6 +148,14 @@ export class SkillsRuntime {
     return this.telemetry.list();
   }
 
+  /**
+   * Persist any pending debounced telemetry immediately. Shutdown/lifecycle
+   * callers use this so the debounced tail is never lost.
+   */
+  flushSkillUsageTelemetry(): void {
+    this.telemetry.flush();
+  }
+
   /** List managed (user-created) skills. */
   listManaged(): Array<{ name: string; description: string; category: string; version: number; content: string; createdAt: string; updatedAt: string }> {
     return this.store.list().map(({ absolutePath: _, relativePath: __, ...rest }) => rest);

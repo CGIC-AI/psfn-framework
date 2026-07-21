@@ -120,6 +120,7 @@ describe('skills per-companion rooting (dnll.9)', () => {
       outcome: 'success',
       durationMs: 1,
     });
+    runtimeA.flushSkillUsageTelemetry();
     expect(existsSync(join(companionA, SKILL_USAGE_TELEMETRY_FILE_NAME))).toBe(true);
     expect(existsSync(join(companionB, SKILL_USAGE_TELEMETRY_FILE_NAME))).toBe(false);
     expect(existsSync(join(systemDataDir, SKILL_USAGE_TELEMETRY_FILE_NAME))).toBe(false);

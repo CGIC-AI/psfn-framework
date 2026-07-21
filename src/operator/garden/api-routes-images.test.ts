@@ -101,6 +101,7 @@ function makeImagesService(): AdminImagesService {
     })),
     listReferencePhotos: vi.fn(async () => ({
       defaultReferenceId: 'ref-1',
+      defaultHistory: [],
       references: [{
         id: 'ref-1',
         fileName: 'ref.png',
@@ -111,6 +112,7 @@ function makeImagesService(): AdminImagesService {
         createdAt: '2026-05-24T00:00:00.000Z',
         updatedAt: '2026-05-24T00:00:00.000Z',
         isDefault: true,
+        lineage: { source: { kind: 'upload' }, derivedGenerationIds: [] },
       }],
     })),
     addReferencePhoto: vi.fn(),
@@ -124,6 +126,7 @@ function makeImagesService(): AdminImagesService {
       createdAt: '2026-05-24T00:00:00.000Z',
       updatedAt: '2026-05-24T01:00:00.000Z',
       isDefault: true,
+      lineage: { source: { kind: 'upload' }, derivedGenerationIds: [] },
     })),
     deleteReferencePhoto: vi.fn(async () => {}),
     setDefaultReferencePhoto: vi.fn(async id => ({
@@ -136,6 +139,62 @@ function makeImagesService(): AdminImagesService {
       createdAt: '2026-05-24T00:00:00.000Z',
       updatedAt: '2026-05-24T00:00:00.000Z',
       isDefault: true,
+      lineage: { source: { kind: 'upload' }, derivedGenerationIds: [] },
+    })),
+    promoteGeneratedImageToReference: vi.fn(async (id, input) => ({
+      id: 'ref-promoted',
+      fileName: 'ref-promoted.png',
+      contentType: 'image/png',
+      description: input.description ?? '',
+      tags: input.tags ?? [],
+      sizeBytes: 4,
+      createdAt: '2026-05-24T02:00:00.000Z',
+      updatedAt: '2026-05-24T02:00:00.000Z',
+      isDefault: true,
+      lineage: {
+        source: { kind: 'promoted_generation' as const, generatedImageId: id },
+        promotionReason: input.promotionReason,
+        previousReferenceId: 'ref-1',
+        derivedGenerationIds: [],
+      },
+    })),
+    rollbackDefaultReferencePhoto: vi.fn(async () => ({
+      id: 'ref-1',
+      fileName: 'ref.png',
+      contentType: 'image/png',
+      description: 'default reference',
+      tags: ['default'],
+      sizeBytes: 4,
+      createdAt: '2026-05-24T00:00:00.000Z',
+      updatedAt: '2026-05-24T03:00:00.000Z',
+      isDefault: true,
+      lineage: { source: { kind: 'upload' }, derivedGenerationIds: [] },
+    })),
+    getReferenceLineage: vi.fn(async id => ({
+      reference: {
+        id,
+        fileName: 'ref-promoted.png',
+        contentType: 'image/png',
+        description: '',
+        tags: [],
+        sizeBytes: 4,
+        createdAt: '2026-05-24T02:00:00.000Z',
+        updatedAt: '2026-05-24T02:00:00.000Z',
+        isDefault: true,
+        lineage: {
+          source: { kind: 'promoted_generation' as const, generatedImageId: 'img-1' },
+          promotionReason: 'she looks the most like me here',
+          previousReferenceId: 'ref-1',
+          derivedGenerationIds: [],
+        },
+      },
+      chain: [{
+        id: 'ref-1',
+        description: 'default reference',
+        tags: ['default'],
+        createdAt: '2026-05-24T00:00:00.000Z',
+        lineage: { source: { kind: 'upload' as const }, derivedGenerationIds: [] },
+      }],
     })),
     getReferencePhotoBlob: vi.fn(async () => ({
       id: 'ref-1',
@@ -280,6 +339,84 @@ describe('image admin API routes', () => {
     expect(JSON.parse(String(patchResponse.body))).toMatchObject({
       ok: true,
       reference: expect.objectContaining({ description: 'updated reference' }),
+    });
+  });
+
+  it('promotes a generated image into a reference slot', async () => {
+    const imagesService = makeImagesService();
+    const routes = makeRoutes(imagesService);
+
+    const response = await invokeRoute(
+      routes,
+      'POST',
+      '/api/admin/images/generated/img-1/promote-reference',
+      JSON.stringify({
+        promotionReason: 'she looks the most like me here',
+        description: 'promoted selfie',
+        tags: ['keeper'],
+        setDefault: true,
+      }),
+    );
+
+    expect(response.status).toBe(201);
+    expect(imagesService.promoteGeneratedImageToReference).toHaveBeenCalledWith('img-1', {
+      promotionReason: 'she looks the most like me here',
+      description: 'promoted selfie',
+      tags: ['keeper'],
+      setDefault: true,
+    });
+    expect(JSON.parse(String(response.body))).toMatchObject({
+      ok: true,
+      reference: expect.objectContaining({
+        lineage: expect.objectContaining({
+          source: expect.objectContaining({ kind: 'promoted_generation', generatedImageId: 'img-1' }),
+          previousReferenceId: 'ref-1',
+        }),
+      }),
+    });
+  });
+
+  it('rejects reference promotion without a reason', async () => {
+    const imagesService = makeImagesService();
+    const routes = makeRoutes(imagesService);
+
+    const response = await invokeRoute(
+      routes,
+      'POST',
+      '/api/admin/images/generated/img-1/promote-reference',
+      JSON.stringify({ description: 'no reason given' }),
+    );
+
+    expect(response.status).toBe(400);
+    expect(imagesService.promoteGeneratedImageToReference).not.toHaveBeenCalled();
+  });
+
+  it('rolls back the default reference photo', async () => {
+    const imagesService = makeImagesService();
+    const routes = makeRoutes(imagesService);
+
+    const response = await invokeRoute(
+      routes,
+      'POST',
+      '/api/admin/image-references/rollback-default',
+      JSON.stringify({ reason: 'the promoted look drifted' }),
+    );
+
+    expect(response.status).toBe(200);
+    expect(imagesService.rollbackDefaultReferencePhoto).toHaveBeenCalledWith({ reason: 'the promoted look drifted' });
+    expect(JSON.parse(String(response.body))).toMatchObject({ ok: true, reference: expect.objectContaining({ id: 'ref-1' }) });
+  });
+
+  it('serves reference lineage chains', async () => {
+    const imagesService = makeImagesService();
+    const routes = makeRoutes(imagesService);
+
+    const response = await invokeRoute(routes, 'GET', '/api/admin/image-references/ref-promoted/lineage');
+    expect(response.status).toBe(200);
+    expect(imagesService.getReferenceLineage).toHaveBeenCalledWith('ref-promoted');
+    expect(JSON.parse(String(response.body))).toMatchObject({
+      reference: expect.objectContaining({ id: 'ref-promoted' }),
+      chain: [expect.objectContaining({ id: 'ref-1' })],
     });
   });
 });

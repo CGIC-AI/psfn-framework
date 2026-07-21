@@ -9,6 +9,7 @@ import { writeJsonAtomic } from '../../../shared/utils/fs.js';
 import { isRecord } from '../../../shared/utils/types.js';
 import {
   ImageReferenceStore,
+  type ImageReferenceLineageView,
   type ImageReferenceListData,
   type ImageReferencePhoto,
   type ImageReferenceUpdateInput,
@@ -27,6 +28,7 @@ import type {
   AdminGeneratedImageView,
   AdminImageBlob,
   AdminImagesService,
+  AdminPromoteReferenceInput,
 } from './types.js';
 import {
   contestArtifactSensitivity,
@@ -479,7 +481,57 @@ export class AdminImagesDataService implements AdminImagesService {
   }
 
   async setDefaultReferencePhoto(id: string): Promise<ImageReferencePhoto> {
-    return await this.referenceStore.setDefault(id);
+    return await this.referenceStore.setDefault(id, { actor: 'operator' });
+  }
+
+  async rollbackDefaultReferencePhoto(input?: { reason?: string }): Promise<ImageReferencePhoto> {
+    return await this.referenceStore.rollbackDefault({
+      actor: 'operator',
+      ...(input?.reason ? { reason: input.reason } : {}),
+    });
+  }
+
+  async getReferenceLineage(id: string): Promise<ImageReferenceLineageView> {
+    return await this.referenceStore.getLineage(id);
+  }
+
+  async promoteGeneratedImageToReference(
+    id: string,
+    input: AdminPromoteReferenceInput,
+  ): Promise<ImageReferencePhoto> {
+    const promotionReason = input.promotionReason?.trim();
+    if (!promotionReason) {
+      throw new Error('Promotion reason is required');
+    }
+    const resolvedImage = this.resolveGeneratedImagePath(id);
+    if (!resolvedImage) {
+      throw new Error('Generated image not found');
+    }
+    const fileStat = await stat(resolvedImage.imagePath);
+    if (!fileStat.isFile() || !IMAGE_EXTENSIONS.has(extname(resolvedImage.imagePath).toLowerCase())) {
+      throw new Error('Generated image not found');
+    }
+    const metadata = await readMetadata(resolvedImage.imagePath);
+    const data = await readFile(resolvedImage.imagePath);
+    const requestId = stringFromMetadata(metadata, 'requestId');
+    const originalUrl = stringFromMetadata(metadata, 'originalUrl');
+    return await this.referenceStore.promoteGeneration({
+      filename: basename(resolvedImage.imagePath),
+      contentType: contentTypeForPath(resolvedImage.imagePath),
+      data,
+      promotionReason,
+      ...(input.description !== undefined ? { description: input.description } : {}),
+      ...(input.tags !== undefined ? { tags: input.tags } : {}),
+      ...(input.setDefault !== undefined ? { setDefault: input.setDefault } : {}),
+      actor: 'operator',
+      source: {
+        kind: 'promoted_generation',
+        generatedImageId: id,
+        ...(requestId ? { requestId } : {}),
+        ...(originalUrl ? { originalUrl } : {}),
+        localPath: resolvedImage.imagePath,
+      },
+    });
   }
 
   async getReferencePhotoBlob(id: string) {

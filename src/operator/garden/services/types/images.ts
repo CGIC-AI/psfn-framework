@@ -1,5 +1,6 @@
 import type {
   ImageReferenceBlob,
+  ImageReferenceLineageView,
   ImageReferenceListData,
   ImageReferencePhoto,
   ImageReferenceUpdateInput,
@@ -106,14 +107,24 @@ export interface AdminImageBlob {
   data: Buffer;
 }
 
+export interface AdminPromoteReferenceInput {
+  promotionReason: string;
+  description?: string;
+  tags?: string[];
+  setDefault?: boolean;
+}
+
 export interface AdminImagesService {
   listGeneratedImages(query?: AdminGeneratedImageListQuery): Promise<AdminGeneratedImageListData>;
   getGeneratedImageBlob(id: string): Promise<AdminImageBlob | null>;
   updateGeneratedImage(id: string, input: AdminGeneratedImageUpdateInput): Promise<AdminGeneratedImageView>;
+  promoteGeneratedImageToReference(id: string, input: AdminPromoteReferenceInput): Promise<ImageReferencePhoto>;
   listReferencePhotos(): Promise<ImageReferenceListData>;
   addReferencePhoto(input: ImageReferenceUploadInput): Promise<ImageReferencePhoto>;
   updateReferencePhoto(id: string, input: ImageReferenceUpdateInput): Promise<ImageReferencePhoto>;
   deleteReferencePhoto(id: string): Promise<void>;
   setDefaultReferencePhoto(id: string): Promise<ImageReferencePhoto>;
+  rollbackDefaultReferencePhoto(input?: { reason?: string }): Promise<ImageReferencePhoto>;
+  getReferenceLineage(id: string): Promise<ImageReferenceLineageView>;
   getReferencePhotoBlob(id: string): Promise<ImageReferenceBlob | null>;
 }

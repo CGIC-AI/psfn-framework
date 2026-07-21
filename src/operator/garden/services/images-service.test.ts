@@ -183,6 +183,59 @@ describe('AdminImagesDataService', () => {
     expect((await reloaded.listGeneratedImages({ favorite: false })).images.map((image) => image.fileName)).toEqual(['second.png']);
   });
 
+  it('promotes a generated image into a reference slot and rolls back the default', async () => {
+    const companionDataDir = mkdtempSync(join(tmpdir(), 'psfn-promote-companion-'));
+    const workspacePath = mkdtempSync(join(tmpdir(), 'psfn-promote-workspace-'));
+    tempDirs.push(companionDataDir, workspacePath);
+    const personalImagesDir = join(resolvePersonalImagesDir(workspacePath), '2026-07-20');
+    await mkdir(personalImagesDir, { recursive: true });
+    const imagePath = join(personalImagesDir, 'selfie.png');
+    writeFileSync(imagePath, Buffer.from([9, 9, 9, 9]));
+    writeFileSync(`${imagePath}.image-meta.json`, JSON.stringify({
+      schemaVersion: 1,
+      createdAt: '2026-07-20T00:00:00.000Z',
+      requestId: 'req-promote',
+      originalUrl: 'https://images.example.test/selfie.png',
+    }));
+
+    const service = new AdminImagesDataService({
+      companionDataDir,
+      config: { workspacePath } as any,
+    });
+    const baseline = await service.addReferencePhoto({
+      filename: 'base.png',
+      contentType: 'image/png',
+      data: Buffer.from([1, 2, 3]),
+      setDefault: true,
+    });
+    const generated = (await service.listGeneratedImages()).images.find((image) => image.fileName === 'selfie.png');
+    expect(generated).toBeDefined();
+
+    const promoted = await service.promoteGeneratedImageToReference(generated!.id, {
+      promotionReason: 'the most me render yet',
+      tags: ['keeper'],
+    });
+    expect(promoted.isDefault).toBe(true);
+    expect(promoted.lineage.source).toMatchObject({
+      kind: 'promoted_generation',
+      generatedImageId: generated!.id,
+      requestId: 'req-promote',
+      originalUrl: 'https://images.example.test/selfie.png',
+    });
+    expect(promoted.lineage.previousReferenceId).toBe(baseline.id);
+
+    const lineage = await service.getReferenceLineage(promoted.id);
+    expect(lineage.chain.map((entry) => entry.id)).toEqual([baseline.id]);
+
+    const rolledBack = await service.rollbackDefaultReferencePhoto({ reason: 'prefer the original' });
+    expect(rolledBack.id).toBe(baseline.id);
+    expect((await service.listReferencePhotos()).defaultReferenceId).toBe(baseline.id);
+
+    await expect(
+      service.promoteGeneratedImageToReference(generated!.id, { promotionReason: '  ' }),
+    ).rejects.toThrow('Promotion reason is required');
+  });
+
   it('stores, updates, defaults, and deletes identity reference photos', async () => {
     const companionDataDir = mkdtempSync(join(tmpdir(), 'psfn-ref-companion-'));
     tempDirs.push(companionDataDir);

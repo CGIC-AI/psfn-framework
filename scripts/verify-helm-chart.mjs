@@ -1051,6 +1051,28 @@ const fleetDatabaseUrlKeyCompanions = fleetGardenCompanions.map((companion, inde
   index === 1 ? { ...companion, databaseUrlSecretKey: fleetDatabaseUrlSecretKey } : companion
 ));
 const fleetDatabaseUrlKeyRendered = render(fleetGardenRenderArgs(fleetDatabaseUrlKeyCompanions));
+const fleetDatabaseUrlKeyGateway = findParsedDocumentByKindName(
+  fleetDatabaseUrlKeyRendered,
+  'Deployment',
+  'psfn-gateway',
+);
+const fleetDatabaseUrlKeyGatewayEnv = fleetDatabaseUrlKeyGateway
+  ?.spec?.template?.spec?.containers?.[0]?.env
+  ?.find(entry => entry.name === 'POSTGRES_DATABASE_URL');
+if (fleetDatabaseUrlKeyGatewayEnv?.valueFrom?.secretKeyRef?.key !== 'postgres-database-url') {
+  throw new Error('fleet Gateway must use the chart-wide Postgres database URL Secret key');
+}
+const fleetDatabaseUrlKeyGarden = findParsedDocumentByKindName(
+  fleetDatabaseUrlKeyRendered,
+  'Deployment',
+  'psfn-garden',
+);
+const fleetDatabaseUrlKeyGardenVolume = fleetDatabaseUrlKeyGarden
+  ?.spec?.template?.spec?.volumes
+  ?.find(volume => volume.name === 'postgres-database-url');
+if (fleetDatabaseUrlKeyGardenVolume?.secret?.items?.[0]?.key !== 'postgres-database-url') {
+  throw new Error('fleet Garden must use the chart-wide Postgres database URL Secret key');
+}
 for (const [companion, expectedKey] of [
   [fleetDatabaseUrlKeyCompanions[0], 'postgres-database-url'],
   [fleetDatabaseUrlKeyCompanions[1], fleetDatabaseUrlSecretKey],
@@ -1082,11 +1104,34 @@ for (const [companion, expectedKey] of [
   }
 }
 assertRenderFails(
-  fleetGardenRenderArgs(fleetGardenCompanions.map(companion => ({
-    ...companion,
-    databaseUrlSecretKey: fleetDatabaseUrlSecretKey,
-  }))),
+  fleetGardenRenderArgs([
+    fleetGardenCompanions[0],
+    { ...fleetGardenCompanions[1], databaseUrlSecretKey: fleetDatabaseUrlSecretKey },
+    {
+      ...fleetGardenCompanions[1],
+      companionId: '33333333-3333-4333-8333-333333333333',
+      postgresSchema: 'companion_c',
+      databaseUrlSecretKey: fleetDatabaseUrlSecretKey,
+      companionDataClaim: 'companion-c-data',
+      workspaceClaim: 'companion-c-workspace',
+      authSecret: { ...fleetGardenCompanions[1].authSecret, name: 'companion-c-auth' },
+    },
+  ]),
   `fleet databaseUrlSecretKey is duplicated: ${fleetDatabaseUrlSecretKey}`,
+);
+assertRenderFails(
+  fleetGardenRenderArgs([
+    { ...fleetGardenCompanions[0], databaseUrlSecretKey: fleetDatabaseUrlSecretKey },
+    fleetGardenCompanions[1],
+  ]),
+  'fleet.companions[0].databaseUrlSecretKey must be empty; the primary/gateway/garden always use the chart-wide key and per-tenant keys belong on follower entries only',
+);
+assertRenderFails(
+  fleetGardenRenderArgs([
+    fleetGardenCompanions[0],
+    { ...fleetGardenCompanions[1], databaseUrlSecretKey: '.' },
+  ]),
+  'fleet.companions[1].databaseUrlSecretKey must be a valid Kubernetes Secret key',
 );
 assertRenderFails(
   fleetGardenRenderArgs([

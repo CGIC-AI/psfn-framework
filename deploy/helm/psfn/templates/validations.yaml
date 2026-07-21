@@ -65,9 +65,13 @@
 {{- $_ := set $schemas $schema true -}}
 {{- $databaseUrlSecretKey := $companion.databaseUrlSecretKey | default "" -}}
 {{- if $databaseUrlSecretKey -}}
-{{- if not (regexMatch "^[A-Za-z0-9._-]+$" $databaseUrlSecretKey) -}}
+{{- if eq $index 0 -}}
+{{- fail "fleet.companions[0].databaseUrlSecretKey must be empty; the primary/gateway/garden always use the chart-wide key and per-tenant keys belong on follower entries only" -}}
+{{- end -}}
+{{- if or (eq $databaseUrlSecretKey ".") (eq $databaseUrlSecretKey "..") (not (regexMatch "^[A-Za-z0-9._-]+$" $databaseUrlSecretKey)) -}}
 {{- fail (printf "fleet.companions[%d].databaseUrlSecretKey must be a valid Kubernetes Secret key" $index) -}}
 {{- end -}}
+{{- /* A follower key equal to the chart-wide default is intentionally allowed as a redundant spelling of "use the shared DSN". */ -}}
 {{- if hasKey $databaseUrlSecretKeys $databaseUrlSecretKey -}}
 {{- fail (printf "fleet databaseUrlSecretKey is duplicated: %s" $databaseUrlSecretKey) -}}
 {{- end -}}

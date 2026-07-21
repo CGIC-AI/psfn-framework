@@ -1,9 +1,13 @@
+import type { Pool } from 'pg';
 import { describe, expect, it } from 'vitest';
 import {
   assertValidPostgresSchemaName,
   createPostgresPool,
+  executeQuery,
   POSTGRES_EXTENSION_SCHEMA_NAME,
   POSTGRES_SCHEMA_NAME_MAX_LENGTH,
+  queryOne,
+  queryRows,
 } from './postgres.js';
 
 const CONNECTION_STRING = 'postgres://user:pass@localhost:5432/psfn';
@@ -96,5 +100,54 @@ describe('createPostgresPool schema pinning', () => {
   it('rejects a role without an explicit tenant schema', () => {
     expect(() => createPostgresPool(CONNECTION_STRING, { role: 'psfn_companion_a' }))
       .toThrow('requires an explicit tenant schema');
+  });
+});
+
+describe('bind-parameter NUL stripping (psfn-framework-dn05)', () => {
+  function captureBindPool(): { pool: Pool; lastValues: () => readonly unknown[] } {
+    let captured: readonly unknown[] = [];
+    const pool = {
+      // eslint-disable-next-line @typescript-eslint/require-await
+      query: async (_text: string, values?: readonly unknown[]) => {
+        captured = values ?? [];
+        return { rows: [{ ok: 1 }], rowCount: 1, command: 'SELECT', oid: 0, fields: [] };
+      },
+    } as unknown as Pool;
+    return { pool, lastValues: () => captured };
+  }
+
+  it('strips embedded NUL bytes from string bind parameters (queryRows)', async () => {
+    const { pool, lastValues } = captureBindPool();
+    // A portal identity string carrying a smuggled NUL (the $6 vector).
+    await queryRows(pool, 'SELECT 1 WHERE $1 = $1', ['portal\u0000id']);
+    expect(lastValues()).toEqual(['portalid']);
+  });
+
+  it('strips a raw NUL byte embedded inside a JSON-shaped string parameter', async () => {
+    const { pool, lastValues } = captureBindPool();
+    // A raw 0x00 byte living inside a JSON string bound to a jsonb column —
+    // the write vector behind the 22021 errors. (JSON.stringify would escape
+    // NUL to the text "\u0000"; the failures come from raw bytes.)
+    const payload = '{"note":"hello\u0000world","tag":"ok"}';
+    await executeQuery(pool, 'INSERT INTO t(doc) VALUES ($1::jsonb)', [payload]);
+    const [bound] = lastValues();
+    expect(typeof bound).toBe('string');
+    expect(bound as string).not.toContain('\u0000');
+    expect(JSON.parse(bound as string)).toEqual({ note: 'helloworld', tag: 'ok' });
+  });
+
+  it('round-trips a string with an embedded NUL without a server error', async () => {
+    const { pool, lastValues } = captureBindPool();
+    // Before the fix pg rejected this with 22021; now it binds cleanly.
+    const row = await queryOne<{ ok: number }>(pool, 'SELECT $1::text', ['a\u0000b\u0000c']);
+    expect(row).toEqual({ ok: 1 });
+    expect(lastValues()).toEqual(['abc']);
+  });
+
+  it('leaves non-string parameters and NUL-free strings untouched', async () => {
+    const { pool, lastValues } = captureBindPool();
+    const buffer = Buffer.from([0x00, 0x01]);
+    await queryRows(pool, 'SELECT $1, $2, $3, $4', ['clean', 42, null, buffer]);
+    expect(lastValues()).toEqual(['clean', 42, null, buffer]);
   });
 });

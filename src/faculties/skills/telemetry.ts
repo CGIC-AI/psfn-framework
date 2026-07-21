@@ -6,6 +6,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { dirname, join } from 'node:path';
+import { createComponentLogger } from '../../shared/logger.js';
 import { isRecord } from '../../shared/utils/types.js';
 import type {
   SkillInvocationOutcome,
@@ -14,6 +15,8 @@ import type {
 } from './types.js';
 
 export const SKILL_USAGE_TELEMETRY_FILE_NAME = 'skill-usage-stats.json';
+
+const logger = createComponentLogger('skills.telemetry');
 
 const TELEMETRY_VERSION = 1;
 const MAX_SKILL_USAGE_NAME_CHARS = 256;
@@ -278,7 +281,20 @@ export class SkillUsageTelemetryStore {
     }
     this.flushTimer = setTimeout(() => {
       this.flushTimer = null;
-      this.flush();
+      // Contain write failures on the TIMER path. A synchronous throw here
+      // (ENOSPC/EACCES/EIO from the atomic write in save()) would surface as a
+      // Node uncaughtException, which the entrypoint signal handler escalates to
+      // a full companion shutdown. `dirty` stays true (flush() only clears it
+      // after a successful save), so the next markDirty() reschedules and the
+      // pending write is retried. Direct flush()/close() callers still surface
+      // errors — only the fire-and-forget timer must never rethrow.
+      try {
+        this.flush();
+      } catch (error) {
+        logger.error('Skill usage telemetry flush failed; will retry on next record', {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
     }, this.flushDelayMs);
     // Do not keep the event loop alive solely for a pending telemetry flush.
     this.flushTimer.unref();

@@ -1,8 +1,17 @@
+import * as fs from 'node:fs';
 import { existsSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { SKILL_USAGE_TELEMETRY_FILE_NAME, SkillUsageTelemetryStore } from './telemetry.js';
+
+vi.mock('node:fs', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs')>();
+  return {
+    ...actual,
+    writeFileSync: vi.fn(actual.writeFileSync),
+  };
+});
 
 describe('SkillUsageTelemetryStore debounced persistence (psfn-framework-ol0b)', () => {
   let tmpDir: string;
@@ -74,5 +83,35 @@ describe('SkillUsageTelemetryStore debounced persistence (psfn-framework-ol0b)',
 
     const reloaded = new SkillUsageTelemetryStore(tmpDir, { now: fixedNow });
     expect(reloaded.get('skill-d')?.invocationCount).toBe(1);
+  });
+
+  it('contains a timer-path write failure instead of throwing to the process, and retries later (psfn-framework-ol0b)', () => {
+    vi.useFakeTimers();
+    const writeFileSpy = vi.mocked(fs.writeFileSync);
+    store = new SkillUsageTelemetryStore(tmpDir, { flushDelayMs: 1_000, now: fixedNow });
+
+    // First debounced flush hits an atomic-write failure (ENOSPC/EACCES/EIO).
+    writeFileSpy.mockImplementationOnce(() => {
+      const error = new Error('ENOSPC: no space left on device') as NodeJS.ErrnoException;
+      error.code = 'ENOSPC';
+      throw error;
+    });
+
+    store.record('skill-e', { outcome: 'success' });
+
+    // Advancing past the debounce fires the timer callback. A throw here would
+    // become an uncaughtException; assert the timer path swallows it and the
+    // file was not written.
+    expect(() => vi.advanceTimersByTime(1_000)).not.toThrow();
+    expect(existsSync(filePath)).toBe(false);
+
+    // dirty stayed true, so a later record()+flush() retries the write and the
+    // aggregate (both invocations) survives.
+    store.record('skill-e', { outcome: 'success' });
+    expect(() => store!.flush()).not.toThrow();
+    expect(existsSync(filePath)).toBe(true);
+
+    const reloaded = new SkillUsageTelemetryStore(tmpDir, { now: fixedNow });
+    expect(reloaded.get('skill-e')?.invocationCount).toBe(2);
   });
 });

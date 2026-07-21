@@ -1,8 +1,8 @@
 const SHA = /^[0-9a-f]{40}$/;
 const ZERO_SHA = '0'.repeat(40);
-const MARKER = /<!-- psfn-local-gate:v1 head=([0-9a-f]{40}) base=([0-9a-f]{40}) -->/g;
 
 export const LOCAL_GATE_SCHEMA_VERSION = 1;
+export const REMOTE_ATTESTATION_CONTEXT = 'psfn/local-gate/v1';
 
 function assertSha(value, name) {
   if (!SHA.test(value)) throw new Error(`${name} must be a lowercase 40-character git SHA`);
@@ -23,7 +23,7 @@ export function createAttestation({ head, base, baseRef, gates }) {
   };
 }
 
-export function validateAttestation(attestation, { head, base }) {
+export function validateAttestation(attestation, { head, base, gates }) {
   if (!attestation || attestation.schemaVersion !== LOCAL_GATE_SCHEMA_VERSION) {
     return { valid: false, reason: 'Local gate attestation schema is missing or unsupported.' };
   }
@@ -33,31 +33,21 @@ export function validateAttestation(attestation, { head, base }) {
   if (attestation.base !== base) {
     return { valid: false, reason: 'Local gate attestation base is stale.' };
   }
-  if (!Array.isArray(attestation.gates) || attestation.gates.length === 0) {
-    return { valid: false, reason: 'Local gate attestation contains no completed gates.' };
+  if (!Array.isArray(gates) || JSON.stringify(attestation.gates) !== JSON.stringify(gates)) {
+    return { valid: false, reason: 'Local gate attestation does not contain the exact gate plan.' };
   }
   return { valid: true, reason: '' };
 }
 
-export function formatAttestationMarker(attestation) {
-  assertSha(attestation.head, 'head');
-  assertSha(attestation.base, 'base');
-  return `<!-- psfn-local-gate:v1 head=${attestation.head} base=${attestation.base} -->`;
-}
-
-export function parseAttestationMarker(body) {
-  const matches = [...body.matchAll(MARKER)];
-  if (matches.length !== 1) return null;
-  return {
-    schemaVersion: LOCAL_GATE_SCHEMA_VERSION,
-    head: matches[0][1],
-    base: matches[0][2],
-  };
-}
-
-export function appendAttestationMarker(body, attestation) {
-  const withoutMarkers = body.replaceAll(MARKER, '').trimEnd();
-  return `${withoutMarkers}\n\n${formatAttestationMarker(attestation)}\n`;
+export function validateRemoteAttestation(statuses, base) {
+  assertSha(base, 'base');
+  const expectedDescription = `base=${base}`;
+  const status = statuses.find(({ context }) => context === REMOTE_ATTESTATION_CONTEXT);
+  if (!status) throw new Error(`Missing ${REMOTE_ATTESTATION_CONTEXT} commit status`);
+  if (status.state !== 'success' || status.description !== expectedDescription) {
+    throw new Error(`${REMOTE_ATTESTATION_CONTEXT} does not attest the exact base`);
+  }
+  return status;
 }
 
 export function parsePrePushUpdates(input) {
@@ -172,7 +162,7 @@ export function buildGatePlan({ paths, base = 'origin/main', head = 'HEAD' }) {
   }
   if (matches(/^\.github\/(?:workflows\/|actions\/)|^\.github\/dependabot\.yml$/)) {
     plan.push(
-      command('zizmor-changed-workflows', 'node', [
+      command('changed-workflow-analysis', 'node', [
         'scripts/ci/run-zizmor-changed.mjs',
         ...workflowPaths,
       ]),
@@ -181,17 +171,17 @@ export function buildGatePlan({ paths, base = 'origin/main', head = 'HEAD' }) {
   return plan;
 }
 
-export function assessHookInstallation({ hooksPath, existingPrePush }) {
+export function assessHookInstallation({ hooksPath, existingHooks }) {
   if (hooksPath && hooksPath !== '.githooks') {
     return {
       allowed: false,
       reason: `Refusing to replace custom hooksPath: ${hooksPath}`,
     };
   }
-  if (!hooksPath && existingPrePush) {
+  if (!hooksPath && existingHooks.length > 0) {
     return {
       allowed: false,
-      reason: 'Refusing to replace an existing pre-push hook.',
+      reason: `Refusing to disable existing hooks: ${existingHooks.join(', ')}`,
     };
   }
   return { allowed: true, reason: '' };

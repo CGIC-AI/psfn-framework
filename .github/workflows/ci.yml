@@ -3,26 +3,24 @@ name: CI
 on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
-  push:
-    branches: [main]
-  workflow_dispatch:
 
 permissions:
   contents: read
+  statuses: read
 
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number }}
   cancel-in-progress: true
 
 env:
   NODE_VERSION: 24.13.1
-  BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before || github.sha }}
-  HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+  BASE_SHA: ${{ github.event.pull_request.base.sha }}
+  HEAD_SHA: ${{ github.event.pull_request.head.sha }}
 
 jobs:
   github-delta:
     name: GitHub delta
-    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
+    if: github.event.pull_request.draft == false
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
@@ -43,10 +41,9 @@ jobs:
             admin-ui/package-lock.json
             companion-ui/package-lock.json
 
-      - name: Verify exact local-gate attestation
-        if: github.event_name == 'pull_request'
+      - name: Verify exact local-gate status
         env:
-          LOCAL_GATE_PR_BODY: ${{ github.event.pull_request.body || '' }}
+          GH_TOKEN: ${{ github.token }}
         run: node scripts/ci/verify-pr-attestation.mjs
 
       - name: Test delivery rules
@@ -83,7 +80,7 @@ jobs:
 
   ci-required:
     name: ci-required
-    if: always() && (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
+    if: always() && github.event.pull_request.draft == false
     needs: [github-delta]
     runs-on: ubuntu-24.04
     timeout-minutes: 2

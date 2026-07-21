@@ -221,7 +221,7 @@ The point is to get work DONE and shipped, then iterate — not to polish in pla
 - **Adversarial review**: reviewer lanes review the same immutable commit range independently and blind to each other, prompted to refute with concrete failure scenarios. The orchestrator dedupes and **independently verifies every claimed blocker** against the Blocking Risk Standard before remediation — reviewers systematically over-grade severity.
 - **Bounded loop**: implement → reviews → **one remediation pass** (verified IMPORTANT/P0-P1 findings only) → one final check → move on. No successive review/remediation cycles.
 - **IMPORTANT ≙ P0/P1** and only for: partner-data security/privacy/isolation, companion welfare/consent/autonomy, real data loss or secret exposure, a broken core acceptance path, or a mandatory gate (lint).
-- **Leftover IMPORTANT defects** go to the wave's `<wave> fixes` epic as self-contained beads for a fresh agent; the completed implementation bead still closes. **Nonblocking observations go in the handoff report only — never beads, never merge blockers.**
+- **Leftover IMPORTANT defects** go to the wave's `<wave> fixes` epic for a fresh agent and block the affected PR; implementation closes after the fixed delivery merges. **Nonblocking observations go in the handoff report only — never beads, never merge blockers.**
 - For high-risk areas (config ownership, gateway policy, trust/privacy, persistence, deployment, durable memory writes) and recurring bug classes, additionally apply `docs/adversarial-review-and-bugfixing-practices.md`; consult it when the task warrants, not at every session start.
 
 ## Local-First Delivery And GitHub Confirmation
@@ -232,8 +232,8 @@ Install this repository's delivery hooks once per worktree after `npm ci`:
 npm run hooks:install
 ```
 
-The installer refuses to replace unrelated hooks or an existing `gh psfn-pr`
-alias. It configures the tracked `.githooks/pre-push` hook for the current
+The installer refuses to disable any existing hook or replace an existing
+`gh psfn-pr` alias. It configures the tracked `.githooks/pre-push` hook for the current
 worktree and installs `gh psfn-pr` as the supported PR publisher.
 
 Keep changes reviewable without buying a separate paid review for every tiny
@@ -265,13 +265,13 @@ gh psfn-pr --title "<title>" --body-file <path>
 ```
 
 The wrapper reuses the exact-head local attestation, pushes without recursively
-rerunning the gate, writes the attestation marker into the PR body, and waits
+rerunning the gate, publishes an authenticated exact-head/base commit status, and waits
 for both `ci-required` and `Greptile Review`. A failure returns immediately to
 the publishing agent; it never reruns CI, re-requests Greptile, or starts a new
 review/remediation cycle. Fix the same branch, create one new commit, run the
 bounded final check, and publish that new exact head once.
 
-GitHub CI is deliberately complementary: it validates the local attestation and
+GitHub CI is deliberately complementary: it validates that commit status and
 change budget, then uses one clean-environment runner for lockfile install,
 build, and integrated tests only when runtime or dependency paths changed. It
 does not duplicate local lint, typecheck, repository hygiene, UBS, Semgrep, or

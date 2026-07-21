@@ -1,26 +1,23 @@
 #!/usr/bin/env node
 
 import { execFileSync, spawnSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
-import { appendAttestationMarker, validateAttestation } from './local-delivery-contract.mjs';
-import { readAttestation, resolveLocalGateState, runLocalGate } from './run-local-gate.mjs';
+import { REMOTE_ATTESTATION_CONTEXT } from './local-delivery-contract.mjs';
+import {
+  readAttestation,
+  resolveLocalGateState,
+  runLocalGate,
+  validateStateAttestation,
+} from './run-local-gate.mjs';
 import { waitForPr } from './wait-for-pr.mjs';
 
-function run(executable, args, { allowFailure = false, stdio = 'pipe' } = {}) {
-  try {
-    const output = execFileSync(executable, args, {
-      encoding: 'utf8',
-      stdio: ['ignore', stdio, allowFailure ? 'ignore' : stdio],
-    });
-    return typeof output === 'string' ? output.trim() : '';
-  } catch (error) {
-    if (allowFailure) return '';
-    throw error;
-  }
+function run(executable, args, { stdio = 'pipe' } = {}) {
+  const output = execFileSync(executable, args, {
+    encoding: 'utf8',
+    stdio: ['ignore', stdio, stdio],
+  });
+  return typeof output === 'string' ? output.trim() : '';
 }
 
 function parseArguments(argv) {
@@ -36,10 +33,22 @@ function parseArguments(argv) {
 }
 
 function currentPr(branch) {
-  const output = run('gh', ['pr', 'view', branch, '--json', 'number,url,body,title'], {
-    allowFailure: true,
-  });
-  return output ? JSON.parse(output) : null;
+  const prs = JSON.parse(
+    run('gh', [
+      'pr',
+      'list',
+      '--head',
+      branch,
+      '--state',
+      'open',
+      '--limit',
+      '2',
+      '--json',
+      'number,url',
+    ]),
+  );
+  if (prs.length > 1) throw new Error(`Multiple open PRs found for branch ${branch}`);
+  return prs[0] ?? null;
 }
 
 function pushBranch(branch) {
@@ -50,9 +59,24 @@ function pushBranch(branch) {
   if (result.status !== 0) throw new Error(`git push failed with exit ${String(result.status)}`);
 }
 
+function publishRemoteAttestation({ head, base }) {
+  run('gh', [
+    'api',
+    '--method',
+    'POST',
+    `repos/{owner}/{repo}/statuses/${head}`,
+    '-f',
+    'state=success',
+    '-f',
+    `context=${REMOTE_ATTESTATION_CONTEXT}`,
+    '-f',
+    `description=base=${base}`,
+  ]);
+}
+
 export async function publishPr(argv = process.argv.slice(2)) {
   const options = parseArguments(argv);
-  const hooksPath = run('git', ['config', '--get', 'core.hooksPath'], { allowFailure: true });
+  const hooksPath = run('git', ['config', '--get', '--default', '', 'core.hooksPath']);
   if (hooksPath !== '.githooks') {
     throw new Error('Local hooks are not installed. Run npm run hooks:install first.');
   }
@@ -64,41 +88,26 @@ export async function publishPr(argv = process.argv.slice(2)) {
   run('git', ['config', `branch.${branch}.psfnGateBase`, baseRef]);
   await runLocalGate({ baseRef });
   const state = resolveLocalGateState({ baseRef });
-  const attestation = readAttestation(state.attestationPath);
-  const validation = validateAttestation(attestation, { head: state.head, base: state.base });
+  const validation = validateStateAttestation(readAttestation(state.attestationPath), state).result;
   if (!validation.valid) throw new Error(validation.reason);
 
   const existing = currentPr(branch);
   if (!existing && (!options.title || !options.bodyFile)) {
     throw new Error('A new PR requires --title and --body-file; this prevents an unreviewable empty body.');
   }
-  const originalBody = existing?.body ?? '';
-  const body = appendAttestationMarker(
-    options.bodyFile ? readFileSync(options.bodyFile, 'utf8') : originalBody,
-    attestation,
-  );
-  const temporaryDirectory = mkdtempSync(join(tmpdir(), 'psfn-pr-'));
-  const attestedBodyFile = join(temporaryDirectory, 'body.md');
-  writeFileSync(attestedBodyFile, body, { mode: 0o600 });
+  if (existing && (options.title || options.bodyFile)) {
+    const editArgs = ['pr', 'edit', String(existing.number)];
+    if (options.title) editArgs.push('--title', options.title);
+    if (options.bodyFile) editArgs.push('--body-file', options.bodyFile);
+    run('gh', editArgs, { stdio: 'inherit' });
+  }
 
-  try {
-    if (existing) {
-      const editArgs = ['pr', 'edit', String(existing.number), '--body-file', attestedBodyFile];
-      if (options.title) editArgs.push('--title', options.title);
-      run('gh', editArgs, { stdio: 'inherit' });
-      try {
-        pushBranch(branch);
-      } catch (error) {
-        const restoreFile = join(temporaryDirectory, 'restore.md');
-        writeFileSync(restoreFile, originalBody, { mode: 0o600 });
-        run('gh', ['pr', 'edit', String(existing.number), '--body-file', restoreFile], {
-          stdio: 'inherit',
-        });
-        throw error;
-      }
-    } else {
-      pushBranch(branch);
-      const createArgs = [
+  pushBranch(branch);
+  publishRemoteAttestation(state);
+  if (!existing) {
+    run(
+      'gh',
+      [
         'pr',
         'create',
         '--base',
@@ -108,12 +117,10 @@ export async function publishPr(argv = process.argv.slice(2)) {
         '--title',
         options.title,
         '--body-file',
-        attestedBodyFile,
-      ];
-      run('gh', createArgs, { stdio: 'inherit' });
-    }
-  } finally {
-    rmSync(temporaryDirectory, { recursive: true, force: true });
+        options.bodyFile,
+      ],
+      { stdio: 'inherit' },
+    );
   }
 
   const pr = currentPr(branch);

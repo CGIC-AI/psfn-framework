@@ -88,6 +88,16 @@ export function writeAttestation(path, attestation) {
   renameSync(temporary, path);
 }
 
+export function buildStateGatePlan(state) {
+  return buildGatePlan({ paths: state.paths, base: state.base, head: state.head });
+}
+
+export function validateStateAttestation(attestation, state) {
+  const plan = buildStateGatePlan(state);
+  const gates = plan.filter(({ skip }) => !skip).map(({ name }) => name);
+  return { plan, gates, result: validateAttestation(attestation, { ...state, gates }) };
+}
+
 function gateEnvironment(gate) {
   const env = { ...process.env, PSFN_LOCAL_GATE_ACTIVE: '1' };
   if (gate.nodeHeapMb) env.NODE_OPTIONS = `--max-old-space-size=${gate.nodeHeapMb}`;
@@ -151,13 +161,13 @@ export async function runLocalGate({
 } = {}) {
   const state = resolveLocalGateState({ cwd, baseRef });
   const cached = readAttestation(state.attestationPath);
-  const cachedResult = validateAttestation(cached, { head: state.head, base: state.base });
-  if (cachedResult.valid && !force) {
+  const validation = validateStateAttestation(cached, state);
+  if (validation.result.valid && !force) {
     console.log(`Local pre-PR gate already passed for ${state.head.slice(0, 12)}.`);
     return cached;
   }
 
-  const plan = buildGatePlan({ paths: state.paths, base: state.base, head: state.head });
+  const { plan, gates } = validation;
   if (planOnly) {
     for (const gate of plan) {
       console.log(`${gate.skip ? 'skip' : 'run'}\t${gate.name}\t${gate.executable} ${gate.args.join(' ')}`);
@@ -174,7 +184,7 @@ export async function runLocalGate({
     head: state.head,
     base: state.base,
     baseRef: state.baseRef,
-    gates: plan.filter(({ skip }) => !skip).map(({ name }) => name),
+    gates,
   });
   writeAttestation(state.attestationPath, attestation);
   console.log(`Local pre-PR gate passed; attested ${state.head.slice(0, 12)}.`);

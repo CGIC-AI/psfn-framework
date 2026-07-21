@@ -1,23 +1,18 @@
 #!/usr/bin/env node
 
 import { execFileSync } from 'node:child_process';
-import { existsSync, statSync } from 'node:fs';
+import { existsSync, readdirSync, statSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 import { assessHookInstallation } from './local-delivery-contract.mjs';
 
-function run(executable, args, { cwd = process.cwd(), allowFailure = false } = {}) {
-  try {
-    return execFileSync(executable, args, {
-      cwd,
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', allowFailure ? 'ignore' : 'pipe'],
-    }).trim();
-  } catch (error) {
-    if (allowFailure) return '';
-    throw error;
-  }
+function run(executable, args, { cwd = process.cwd() } = {}) {
+  return execFileSync(executable, args, {
+    cwd,
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+  }).trim();
 }
 
 export function normalizeAliasValue(value) {
@@ -38,16 +33,17 @@ export function installLocalHooks({ cwd = process.cwd() } = {}) {
     throw new Error('.githooks/pre-push is missing or is not executable');
   }
 
-  const hooksPath = run('git', ['config', '--get', 'core.hooksPath'], {
+  const hooksPath = run('git', ['config', '--get', '--default', '', 'core.hooksPath'], {
     cwd: repositoryRoot,
-    allowFailure: true,
   });
   const defaultHooksPath = resolve(
     repositoryRoot,
     run('git', ['rev-parse', '--git-path', 'hooks'], { cwd: repositoryRoot }),
   );
-  const existingPrePush = existsSync(resolve(defaultHooksPath, 'pre-push'));
-  const assessment = assessHookInstallation({ hooksPath, existingPrePush });
+  const existingHooks = existsSync(defaultHooksPath)
+    ? readdirSync(defaultHooksPath).filter((name) => !name.endsWith('.sample'))
+    : [];
+  const assessment = assessHookInstallation({ hooksPath, existingHooks });
   if (!assessment.allowed) throw new Error(assessment.reason);
 
   const aliases = run('gh', ['alias', 'list'], { cwd: repositoryRoot });

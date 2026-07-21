@@ -206,7 +206,7 @@ Record validation results on the validation bead. Do not rewrite implementation 
 
 Run `npm ci && npm run hooks:install` once per worktree. Before any push, fetch and rebase, commit a clean exact head, then run `npm run gate:pre-pr`. The gate owns full lint, build, typecheck, repository hygiene, tests, Semgrep, UBS, budgets, and applicable specialist checks. Its attestation is valid only for the exact head and base; the pre-push hook blocks missing or stale attestations, direct `main`, and recursion. Never use `--no-verify`.
 
-Publish only with `gh psfn-pr --title "<title>" --body-file <path>`. It pushes the attested head, writes one PR marker, and waits for `ci-required` plus `Greptile Review`. GitHub uses one complementary delta runner and one status aggregator; drafts allocate no runners, labels do not retrigger CI, and local lint/Semgrep/UBS are not repeated.
+Publish only with `gh psfn-pr --title "<title>" --body-file <path>`. It pushes the attested head, publishes an authenticated exact-base commit status, and waits for `ci-required` plus `Greptile Review`. GitHub uses one complementary delta runner and one status aggregator; drafts allocate no runners, labels do not retrigger CI, and local lint/Semgrep/UBS are not repeated.
 
 On failure, the publisher returns evidence to the owning lane. Make at most one evidence-driven corrective commit and publish the new exact head once. Never rerun Actions, re-request Greptile, toggle labels to manufacture events, or start another review/fix loop. A second failure is an operator-visible blocker. Keep stable checkpoints green and push them through the hook; never force-push or rewrite a shared branch.
 

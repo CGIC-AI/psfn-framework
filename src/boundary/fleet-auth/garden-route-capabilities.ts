@@ -108,7 +108,7 @@ const queryPolicies: Readonly<Partial<Record<string, Readonly<Partial<Record<str
     '/api/admin/evals/observer-sidecar/runs': singleton([
       'limit', 'sinceMs', 'untilMs', 'status', 'evalSessionId', 'scenarioId', 'testRunId',
     ]),
-    '/api/admin/images/generated': singleton(['tags', 'favorite', 'meaningful', 'q']),
+    '/api/admin/images/generated': singleton(['tags', 'favorite', 'meaningful', 'milestone', 'q']),
     '/api/admin/image-references/upload': singleton(['description', 'tags', 'setDefault']),
     '/api/admin/memory': singleton([
       'type', 'sensitivity', 'retention', 'startDate', 'endDate', 'limit', 'offset', 'preference',

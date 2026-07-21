@@ -6,6 +6,7 @@ import { parseRequestUrl } from '../request-url.js';
 import { exactPath, paramWithSuffix, prefixedParamPath } from '../route-matchers.js';
 import type {
   AdminGeneratedImageArtifactRef,
+  AdminGeneratedImageAutobiographyInput,
   AdminGeneratedImageCompanionNoteRef,
   AdminGeneratedImageConversationLink,
   AdminGeneratedImageListQuery,
@@ -54,6 +55,9 @@ function parseGeneratedImagesQuery(req: Parameters<AdminApiRoute['handle']>[0]):
       : {}),
     ...(parseBooleanQuery(url.searchParams.get('meaningful')) !== undefined
       ? { meaningful: parseBooleanQuery(url.searchParams.get('meaningful')) }
+      : {}),
+    ...(parseBooleanQuery(url.searchParams.get('milestone')) !== undefined
+      ? { milestone: parseBooleanQuery(url.searchParams.get('milestone')) }
       : {}),
     ...(url.searchParams.get('q')?.trim() ? { search: url.searchParams.get('q')!.trim() } : {}),
   };
@@ -126,6 +130,28 @@ function parseArtifactRefs(value: unknown): AdminGeneratedImageArtifactRef[] | u
     ));
 }
 
+function parseAutobiographyInput(value: unknown): AdminGeneratedImageAutobiographyInput | undefined {
+  if (!isRecord(value)) return undefined;
+  const author = value.author === 'companion' || value.author === 'operator' ? value.author : undefined;
+  let milestone: AdminGeneratedImageAutobiographyInput['milestone'];
+  if (isRecord(value.milestone) && typeof value.milestone.marked === 'boolean') {
+    milestone = {
+      marked: value.milestone.marked,
+      ...(stringValue(value.milestone.label) !== undefined ? { label: stringValue(value.milestone.label) } : {}),
+    };
+  }
+  return {
+    ...(stringValue(value.narrative) !== undefined ? { narrative: stringValue(value.narrative) } : {}),
+    ...(stringValue(value.emotionalContext) !== undefined ? { emotionalContext: stringValue(value.emotionalContext) } : {}),
+    ...(milestone ? { milestone } : {}),
+    ...(author ? { author } : {}),
+    ...(typeof value.clear === 'boolean' ? { clear: value.clear } : {}),
+    ...(typeof value.allowOverwriteCompanionAuthored === 'boolean'
+      ? { allowOverwriteCompanionAuthored: value.allowOverwriteCompanionAuthored }
+      : {}),
+  };
+}
+
 function parseGeneratedImageUpdatePayload(payload: Record<string, unknown>): AdminGeneratedImageUpdateInput {
   const meaningfulMoment = payload.meaningfulMoment;
   const parsedMeaningfulMoment = meaningfulMoment !== undefined
@@ -159,6 +185,9 @@ function parseGeneratedImageUpdatePayload(payload: Record<string, unknown>): Adm
             ...(stringValue(parsedMeaningfulMoment.note) !== undefined ? { note: stringValue(parsedMeaningfulMoment.note) } : {}),
           },
         }
+      : {}),
+    ...(payload.autobiography !== undefined
+      ? { autobiography: parseAutobiographyInput(payload.autobiography) ?? {} }
       : {}),
     ...(payload.conversation !== undefined ? { conversation: parseConversationLink(payload.conversation) ?? {} } : {}),
     ...(parseCompanionNoteRefs(payload.companionNoteRefs) !== undefined

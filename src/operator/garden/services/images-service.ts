@@ -18,6 +18,8 @@ import {
 import type { SubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
 import type {
   AdminGeneratedImageArtifactRef,
+  AdminGeneratedImageAutobiography,
+  AdminGeneratedImageAutobiographyMilestone,
   AdminGeneratedImageCompanionNoteRef,
   AdminGeneratedImageConversationLink,
   AdminGeneratedImageEmbodiment,
@@ -254,6 +256,36 @@ function normalizeEmbodiment(value: unknown): AdminGeneratedImageEmbodiment | un
   };
 }
 
+function normalizeAutobiographyMilestone(value: unknown): AdminGeneratedImageAutobiographyMilestone | undefined {
+  if (!isRecord(value) || value.marked !== true) return undefined;
+  const markedAt = normalizedOptionalString(value.markedAt) ?? new Date().toISOString();
+  const label = normalizedOptionalString(value.label);
+  return {
+    marked: true,
+    markedAt,
+    ...(label ? { label } : {}),
+  };
+}
+
+function normalizeAutobiography(value: unknown): AdminGeneratedImageAutobiography | undefined {
+  if (!isRecord(value)) return undefined;
+  const narrative = normalizedOptionalString(value.narrative, MAX_GALLERY_NOTE_CHARS);
+  if (!narrative) return undefined;
+  const emotionalContext = normalizedOptionalString(value.emotionalContext, MAX_GALLERY_NOTE_CHARS);
+  const milestone = normalizeAutobiographyMilestone(value.milestone);
+  const author = value.author === 'companion' ? 'companion' : 'operator';
+  const authoredAt = normalizedOptionalString(value.authoredAt) ?? new Date().toISOString();
+  const updatedAt = normalizedOptionalString(value.updatedAt) ?? authoredAt;
+  return {
+    narrative,
+    ...(emotionalContext ? { emotionalContext } : {}),
+    ...(milestone ? { milestone } : {}),
+    author,
+    authoredAt,
+    updatedAt,
+  };
+}
+
 function normalizeMeaningfulMoment(value: unknown): AdminGeneratedImageMeaningfulMoment | undefined {
   if (!isRecord(value) || value.marked !== true) return undefined;
   const markedAt = normalizedOptionalString(value.markedAt) ?? new Date().toISOString();
@@ -304,6 +336,9 @@ function mergeGeneratedImageUpdate(
       delete next.meaningfulMoment;
     }
   }
+  if (input.autobiography !== undefined) {
+    applyAutobiographyUpdate(next, metadata, input.autobiography);
+  }
   if (input.conversation !== undefined) {
     const conversation = normalizeConversationLink(input.conversation);
     if (conversation) next.conversation = conversation;
@@ -332,6 +367,73 @@ function mergeGeneratedImageUpdate(
   }
 
   return next;
+}
+
+function applyAutobiographyUpdate(
+  next: Record<string, unknown>,
+  metadata: Record<string, unknown>,
+  input: NonNullable<AdminGeneratedImageUpdateInput['autobiography']>,
+): void {
+  const existing = normalizeAutobiography(metadata.autobiography);
+  const companionAuthored = existing?.author === 'companion';
+  const now = new Date().toISOString();
+
+  if (input.clear === true) {
+    if (companionAuthored && input.allowOverwriteCompanionAuthored !== true) {
+      throw new Error(
+        'Companion-authored autobiography is authorship-protected; set allowOverwriteCompanionAuthored to remove it',
+      );
+    }
+    delete next.autobiography;
+    return;
+  }
+
+  const author = input.author ?? existing?.author ?? 'operator';
+  const incomingNarrative = input.narrative !== undefined
+    ? normalizedOptionalString(input.narrative, MAX_GALLERY_NOTE_CHARS) ?? ''
+    : undefined;
+  const narrativeChanged = incomingNarrative !== undefined
+    && incomingNarrative !== (existing?.narrative ?? '');
+  if (companionAuthored && author !== 'companion' && narrativeChanged
+    && input.allowOverwriteCompanionAuthored !== true) {
+    throw new Error(
+      'Companion-authored autobiography narrative is authorship-protected; set allowOverwriteCompanionAuthored to overwrite it',
+    );
+  }
+
+  const narrative = incomingNarrative ?? existing?.narrative ?? '';
+  if (!narrative) {
+    throw new Error('Autobiography narrative is required');
+  }
+
+  const emotionalContext = input.emotionalContext !== undefined
+    ? normalizedOptionalString(input.emotionalContext, MAX_GALLERY_NOTE_CHARS)
+    : existing?.emotionalContext;
+
+  let milestone: AdminGeneratedImageAutobiographyMilestone | undefined;
+  if (input.milestone !== undefined) {
+    if (input.milestone.marked) {
+      const label = normalizedOptionalString(input.milestone.label);
+      milestone = {
+        marked: true,
+        markedAt: existing?.milestone?.markedAt ?? now,
+        ...(label ? { label } : {}),
+      };
+    } else {
+      milestone = undefined;
+    }
+  } else {
+    milestone = existing?.milestone;
+  }
+
+  next.autobiography = {
+    narrative,
+    ...(emotionalContext ? { emotionalContext } : {}),
+    ...(milestone ? { milestone } : {}),
+    author,
+    authoredAt: existing?.authoredAt ?? now,
+    updatedAt: now,
+  } satisfies AdminGeneratedImageAutobiography;
 }
 
 function baseArtifactRefs(input: {
@@ -376,6 +478,8 @@ function matchesGeneratedImageQuery(
   if (requiredTags.length > 0 && !requiredTags.every((tag) => image.tags.includes(tag))) return false;
   if (query?.favorite !== undefined && image.favorite !== query.favorite) return false;
   if (query?.meaningful !== undefined && Boolean(image.meaningfulMoment) !== query.meaningful) return false;
+  if (query?.milestone !== undefined
+    && Boolean(image.autobiography?.milestone) !== query.milestone) return false;
   const search = query?.search?.trim().toLowerCase();
   if (!search) return true;
   const haystack = [
@@ -388,6 +492,9 @@ function matchesGeneratedImageQuery(
     image.sourceToolName,
     image.requestId,
     image.meaningfulMoment?.note,
+    image.autobiography?.narrative,
+    image.autobiography?.emotionalContext,
+    image.autobiography?.milestone?.label,
     image.conversation?.turnId,
     image.conversation?.channelId,
     ...image.tags,
@@ -521,7 +628,7 @@ export class AdminImagesDataService implements AdminImagesService {
     id: string,
     input: AdminPromoteReferenceInput,
   ): Promise<ImageReferencePhoto> {
-    const promotionReason = input.promotionReason?.trim();
+    const promotionReason = input.promotionReason.trim();
     if (!promotionReason) {
       throw new Error('Promotion reason is required');
     }
@@ -627,6 +734,7 @@ export class AdminImagesDataService implements AdminImagesService {
       });
     const meaningfulMoment = normalizeMeaningfulMoment(metadata.meaningfulMoment);
     const embodiment = normalizeEmbodiment(metadata.embodiment);
+    const autobiography = normalizeAutobiography(metadata.autobiography);
     const sensitivityClassification = parseArtifactSensitivityClassification(
       metadata.sensitivityClassification,
     );
@@ -654,6 +762,7 @@ export class AdminImagesDataService implements AdminImagesService {
       ...(stringArrayFromMetadata(metadata, 'referenceImageIds') ? { referenceImageIds: stringArrayFromMetadata(metadata, 'referenceImageIds') } : {}),
       ...(meaningfulMoment ? { meaningfulMoment } : {}),
       ...(embodiment ? { embodiment } : {}),
+      ...(autobiography ? { autobiography } : {}),
       ...(conversation ? { conversation } : {}),
     };
   }

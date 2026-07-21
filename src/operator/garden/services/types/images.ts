@@ -37,10 +37,32 @@ export interface AdminGeneratedImageView {
   tags: string[];
   meaningfulMoment?: AdminGeneratedImageMeaningfulMoment;
   embodiment?: AdminGeneratedImageEmbodiment;
+  autobiography?: AdminGeneratedImageAutobiography;
   conversation?: AdminGeneratedImageConversationLink;
   companionNoteRefs: AdminGeneratedImageCompanionNoteRef[];
   artifactRefs: AdminGeneratedImageArtifactRef[];
   sensitivityClassification?: ArtifactSensitivityClassification;
+}
+
+export interface AdminGeneratedImageAutobiographyMilestone {
+  marked: boolean;
+  markedAt: string;
+  label?: string;
+}
+
+/**
+ * A companion-authored visual autobiography record for an image: the narrative
+ * of what this render meant, its emotional context, and an optional milestone
+ * marker. `author` is authorship-protected per charter 8.2 — an operator edit
+ * cannot silently overwrite companion-authored narrative.
+ */
+export interface AdminGeneratedImageAutobiography {
+  narrative: string;
+  emotionalContext?: string;
+  milestone?: AdminGeneratedImageAutobiographyMilestone;
+  author: 'companion' | 'operator';
+  authoredAt: string;
+  updatedAt: string;
 }
 
 export interface AdminGeneratedImageEmbodiment {
@@ -87,7 +109,23 @@ export interface AdminGeneratedImageListQuery {
   tags?: string[];
   favorite?: boolean;
   meaningful?: boolean;
+  milestone?: boolean;
   search?: string;
+}
+
+export interface AdminGeneratedImageAutobiographyInput {
+  narrative?: string;
+  emotionalContext?: string;
+  milestone?: {
+    marked: boolean;
+    label?: string;
+  };
+  /** Who is authoring this record; defaults to the record's current author or 'operator'. */
+  author?: 'companion' | 'operator';
+  /** Remove the record entirely. */
+  clear?: boolean;
+  /** Required to overwrite or clear a companion-authored narrative (charter 8.2). */
+  allowOverwriteCompanionAuthored?: boolean;
 }
 
 export interface AdminGeneratedImageUpdateInput {
@@ -97,6 +135,7 @@ export interface AdminGeneratedImageUpdateInput {
     marked: boolean;
     note?: string;
   };
+  autobiography?: AdminGeneratedImageAutobiographyInput;
   conversation?: AdminGeneratedImageConversationLink;
   companionNoteRefs?: AdminGeneratedImageCompanionNoteRef[];
   artifactRefs?: AdminGeneratedImageArtifactRef[];

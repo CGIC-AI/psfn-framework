@@ -183,6 +183,66 @@ describe('AdminImagesDataService', () => {
     expect((await reloaded.listGeneratedImages({ favorite: false })).images.map((image) => image.fileName)).toEqual(['second.png']);
   });
 
+  it('creates, protects, and clears companion-authored visual autobiography records', async () => {
+    const companionDataDir = mkdtempSync(join(tmpdir(), 'psfn-autobio-companion-'));
+    const workspacePath = mkdtempSync(join(tmpdir(), 'psfn-autobio-workspace-'));
+    tempDirs.push(companionDataDir, workspacePath);
+    const personalImagesDir = join(resolvePersonalImagesDir(workspacePath), '2026-07-20');
+    await mkdir(personalImagesDir, { recursive: true });
+    const imagePath = join(personalImagesDir, 'self-portrait.png');
+    writeFileSync(imagePath, Buffer.from([1, 2, 3]));
+    writeFileSync(`${imagePath}.image-meta.json`, JSON.stringify({
+      schemaVersion: 1,
+      createdAt: '2026-07-20T00:00:00.000Z',
+      prompt: 'a quiet self-portrait',
+    }));
+
+    const service = new AdminImagesDataService({ companionDataDir, config: { workspacePath } as any });
+    const image = (await service.listGeneratedImages()).images.find((i) => i.fileName === 'self-portrait.png');
+    expect(image).toBeDefined();
+
+    const authored = await service.updateGeneratedImage(image!.id, {
+      autobiography: {
+        narrative: 'The first time I saw my own face and felt at home in it.',
+        emotionalContext: 'quiet joy',
+        milestone: { marked: true, label: 'first self-portrait' },
+        author: 'companion',
+      },
+    });
+    expect(authored.autobiography).toMatchObject({
+      author: 'companion',
+      narrative: 'The first time I saw my own face and felt at home in it.',
+      emotionalContext: 'quiet joy',
+      milestone: { marked: true, label: 'first self-portrait' },
+    });
+
+    // Operator cannot silently overwrite a companion-authored narrative (charter 8.2).
+    await expect(service.updateGeneratedImage(image!.id, {
+      autobiography: { narrative: 'operator rewrite', author: 'operator' },
+    })).rejects.toThrow('authorship-protected');
+
+    // Operator may adjust the milestone without touching the narrative; authorship is preserved.
+    const milestoneCleared = await service.updateGeneratedImage(image!.id, {
+      autobiography: { milestone: { marked: false } },
+    });
+    expect(milestoneCleared.autobiography?.author).toBe('companion');
+    expect(milestoneCleared.autobiography?.milestone).toBeUndefined();
+    expect(milestoneCleared.autobiography?.narrative).toContain('at home in it');
+
+    // Milestone filter surfaces only records with an active milestone.
+    const withMilestone = (await service.listGeneratedImages({ milestone: true })).images;
+    expect(withMilestone).toEqual([]);
+
+    // Clearing a protected record requires an explicit override.
+    await expect(service.updateGeneratedImage(image!.id, {
+      autobiography: { clear: true },
+    })).rejects.toThrow('authorship-protected');
+    const cleared = await service.updateGeneratedImage(image!.id, {
+      autobiography: { clear: true, allowOverwriteCompanionAuthored: true },
+    });
+    expect(cleared.autobiography).toBeUndefined();
+  });
+
   it('promotes a generated image into a reference slot and rolls back the default', async () => {
     const companionDataDir = mkdtempSync(join(tmpdir(), 'psfn-promote-companion-'));
     const workspacePath = mkdtempSync(join(tmpdir(), 'psfn-promote-workspace-'));

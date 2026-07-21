@@ -1,3 +1,5 @@
+import { detectChangeScope } from './detect-change-scope.mjs';
+
 const SHA = /^[0-9a-f]{40}$/;
 const ZERO_SHA = '0'.repeat(40);
 
@@ -130,7 +132,7 @@ export function buildGatePlan({ paths, base = 'origin/main', head = 'HEAD' }) {
     command('semgrep-rules', 'npm', ['run', 'semgrep:test']),
     command('semgrep-diff', 'npm', ['run', 'semgrep:diff', '--', base]),
     command('ubs', 'ubs', ['--no-auto-update', ...ubsPaths], { skip: ubsPaths.length === 0 }),
-    command('tests', 'npm', ['test', '--', '--maxWorkers=4']),
+    command('tests', 'npm', ['test', '--', '--maxWorkers=4'], { skip: !detectChangeScope(paths).clean_environment }),
   ];
 
   if (

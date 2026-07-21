@@ -53,7 +53,7 @@ export function installLocalHooks({ cwd = process.cwd() } = {}) {
     ?.slice('gated-pr:'.length)
     .trim();
   const normalizedAlias = currentAlias ? normalizeAliasValue(currentAlias) : '';
-  const expectedAlias = '!npm run pr:publish --';
+  const expectedAlias = '!npm run pr:publish -- "$@"';
   if (normalizedAlias && normalizedAlias !== expectedAlias) {
     throw new Error(`Refusing to replace existing gh alias gated-pr: ${currentAlias}`);
   }

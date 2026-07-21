@@ -158,6 +158,8 @@ test('gate plan keeps broad checks local and scopes specialist tools', () => {
     '--no-auto-update',
   ]);
   assert.deepEqual(plan.find(({ name }) => name === 'tests').args, ['test', '--', '--maxWorkers=4']);
+  assert.equal(plan.find(({ name }) => name === 'tests').skip, false);
+  assert.equal(buildGatePlan({ paths: ['README.md', '.beads/issues.jsonl', 'package.json'] }).find(({ name }) => name === 'tests').skip, true);
 });
 
 test('local tool doctor pins UBS while accepting supported Node releases', () => {
@@ -187,7 +189,7 @@ test('hook installer refuses to overwrite an unrelated hook configuration', () =
     assessHookInstallation({ hooksPath: '', existingHooks: ['commit-msg'] }).reason,
     /commit-msg/i,
   );
-  assert.equal(normalizeAliasValue("'!npm run pr:publish --'"), '!npm run pr:publish --');
+  assert.equal(normalizeAliasValue(`'!npm run pr:publish -- "$@"'`), '!npm run pr:publish -- "$@"');
 });
 
 test('local gate writes one exact-head attestation and reuses it without rerunning tools', async () => {

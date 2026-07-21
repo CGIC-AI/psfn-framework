@@ -20,7 +20,7 @@ export function detectChangeScope(paths) {
     admin_ui: matches(/^admin-ui\//),
     companion_ui: matches(/^companion-ui\//),
     clean_environment: matches(
-      /^(?:src\/|admin-ui\/|companion-ui\/|deploy\/|docker\/|shakedown\/|scripts\/(?!ci\/)|package(?:-lock)?\.json$|tsconfig[^/]*\.json$|vitest[^/]*\.[cm]?[jt]s$|eslint[^/]*\.[cm]?[jt]s$)/,
+      /^(?:src\/|admin-ui\/|companion-ui\/|deploy\/|docker\/|shakedown\/|scripts\/(?!ci\/)|package-lock\.json$|tsconfig[^/]*\.json$|vitest[^/]*\.[cm]?[jt]s$|eslint[^/]*\.[cm]?[jt]s$)/,
     ),
   };
 }

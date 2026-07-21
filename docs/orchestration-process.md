@@ -204,7 +204,7 @@ Record validation results on the validation bead. Do not rewrite implementation 
 
 ## Local Gate, Publication, and Failure Handback
 
-Run `npm ci && npm run hooks:install` once per worktree. Before any push, fetch and rebase, commit a clean exact head, then run `npm run gate:pre-pr`. The gate owns full lint, build, typecheck, repository hygiene, tests, Semgrep, UBS, budgets, and applicable specialist checks. Its attestation is valid only for the exact head and base; the pre-push hook blocks missing or stale attestations, direct `main`, and recursion. Never use `--no-verify`.
+Run `npm ci && npm run hooks:install` once per worktree. Before any push, fetch and rebase, commit a clean exact head, then run `npm run gate:pre-pr`. The gate owns full lint, build, typecheck, repository hygiene, proportional tests, Semgrep, UBS, budgets, and applicable specialist checks. Its attestation is valid only for the exact head and base; the pre-push hook blocks missing or stale attestations, direct `main`, and recursion. Never use `--no-verify`.
 
 Publish only with `gh gated-pr --title "<title>" --body-file <path>`. It pushes the attested head, publishes an authenticated exact-base commit status, and waits for `ci-required` plus `Greptile Review`. GitHub uses one complementary delta runner and one status aggregator; drafts allocate no runners, labels do not retrigger CI, and local lint/Semgrep/UBS are not repeated.
 

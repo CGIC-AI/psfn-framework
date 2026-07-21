@@ -34,9 +34,9 @@ test('leaves unrelated source changes on the core CI path', () => {
   });
 });
 
-test('keeps documentation and delivery-contract changes on the cheap GitHub path', () => {
+test('keeps docs, delivery tooling, and package scripts on the cheap GitHub path', () => {
   assert.equal(
-    detectChangeScope(['AGENTS.md', 'CLAUDE.md', 'docs/orchestration-process.md'])
+    detectChangeScope(['AGENTS.md', 'CLAUDE.md', 'docs/orchestration-process.md', 'package.json'])
       .clean_environment,
     false,
   );

@@ -20,7 +20,6 @@ describe('CompanionId type gate wiring', () => {
 
   it.each([
     'docker/Dockerfile.agent',
-    'docker/Dockerfile.gateway',
   ])('%s copies every type-gate input before the production build', (dockerfilePath) => {
     const typeGateConfig: unknown = JSON.parse(
       readFileSync('tsconfig.companion-id-types.json', 'utf8'),

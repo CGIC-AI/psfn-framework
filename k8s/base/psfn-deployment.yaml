@@ -53,7 +53,8 @@ spec:
 
       containers:
         - name: gateway
-          image: psfn-gateway:0.1.0
+          image: psfn-agent:0.1.0
+          command: ["node", "dist/gateway-main.js"]
           securityContext:
             allowPrivilegeEscalation: false
             runAsNonRoot: true

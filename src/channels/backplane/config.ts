@@ -123,6 +123,11 @@ export interface DiscordChannelConfig {
  */
 export interface ApiChannelConfig {
   companionId?: CompanionId;
+  /**
+   * Exact companions an unscoped Bearer principal may select per request.
+   * Omission disables the selector and preserves pinned routing.
+   */
+  selectableCompanionIds?: CompanionId[];
   testingHarness?: TestingHarnessApiPrincipalCredential;
 }
 
@@ -768,7 +773,9 @@ function parseApiChannelSection(
 ): ApiChannelConfig {
   const apiConfig = parseSectionObject(scopedRoot, 'api') ?? {};
   const unknownApiKeys = Object.keys(apiConfig)
-    .filter(key => key !== 'companionId' && key !== 'testingHarness');
+    .filter(key => key !== 'companionId'
+      && key !== 'selectableCompanionIds'
+      && key !== 'testingHarness');
   if (unknownApiKeys.length > 0) {
     throw new Error(`channels.json.api has unsupported keys: ${unknownApiKeys.join(', ')}`);
   }
@@ -780,9 +787,27 @@ function parseApiChannelSection(
   const companionId = rawApiCompanionId
     ? createCompanionId(rawApiCompanionId, 'channels.json.api.companionId')
     : undefined;
+  const rawSelectableCompanionIds = parseConfiguredStringArray(
+    apiConfig.selectableCompanionIds,
+    'channels.json.api.selectableCompanionIds',
+  );
+  const selectableCompanionIds = rawSelectableCompanionIds?.map((entry, index) =>
+    createCompanionId(entry, `channels.json.api.selectableCompanionIds[${index}]`));
+  if (selectableCompanionIds !== undefined && !companionId) {
+    throw new Error(
+      'channels.json.api.selectableCompanionIds requires channels.json.api.companionId',
+    );
+  }
+  if (selectableCompanionIds
+    && new Set(selectableCompanionIds).size !== selectableCompanionIds.length) {
+    throw new Error('channels.json.api.selectableCompanionIds must not contain duplicates');
+  }
   const testingHarness = parseSectionObject(apiConfig, 'testingHarness');
   if (!testingHarness) {
-    return { ...(companionId ? { companionId } : {}) };
+    return {
+      ...(companionId ? { companionId } : {}),
+      ...(selectableCompanionIds ? { selectableCompanionIds } : {}),
+    };
   }
 
   const unknownTestingHarnessKeys = Object.keys(testingHarness)
@@ -815,6 +840,7 @@ function parseApiChannelSection(
 
   return {
     ...(companionId ? { companionId } : {}),
+    ...(selectableCompanionIds ? { selectableCompanionIds } : {}),
     testingHarness: {
       principalId: normalizedPrincipalId,
       apiKey: resolveCredentialValue(tokenRef, env, credentialVault).trim(),

@@ -157,6 +157,7 @@ test('gate plan keeps broad checks local and scopes specialist tools', () => {
   assert.deepEqual(plan.find(({ name }) => name === 'ubs').args.slice(0, 1), [
     '--no-auto-update',
   ]);
+  assert.deepEqual(plan.find(({ name }) => name === 'tests').args, ['test', '--', '--maxWorkers=4']);
 });
 
 test('local tool doctor pins UBS while accepting supported Node releases', () => {

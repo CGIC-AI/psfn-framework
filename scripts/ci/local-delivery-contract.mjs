@@ -130,7 +130,7 @@ export function buildGatePlan({ paths, base = 'origin/main', head = 'HEAD' }) {
     command('semgrep-rules', 'npm', ['run', 'semgrep:test']),
     command('semgrep-diff', 'npm', ['run', 'semgrep:diff', '--', base]),
     command('ubs', 'ubs', ['--no-auto-update', ...ubsPaths], { skip: ubsPaths.length === 0 }),
-    command('tests', 'npm', ['test']),
+    command('tests', 'npm', ['test', '--', '--maxWorkers=4']),
   ];
 
   if (

@@ -49,7 +49,7 @@ npm run gate:pre-pr
 ```
 
 The sequential gate owns delivery rules and budgets; full lint, build,
-baselined typecheck, repository hygiene, and tests; Semgrep rule/diff scans;
+baselined typecheck, repository hygiene, and tests capped at four workers; Semgrep rule/diff scans;
 UBS 5.3.5; and applicable settings, supply-chain, deployment, Garden, companion
 UI, and changed-workflow actionlint/zizmor checks.
 

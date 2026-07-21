@@ -27,6 +27,9 @@ import {
 const log = createComponentLogger('IntakeSinkGating');
 
 const METADATA_KEY_MARKER = `"${INTAKE_SCREENING_METADATA_KEY}"`;
+// Bound synchronous prompt-assembly marking across the whole context. Entries
+// beyond the budget keep their provenance wrapper but use the reduced form.
+const PROMPT_ASSEMBLY_MARKING_WORK_LIMIT_CHARS = 256 * 1024;
 
 export interface PromptAssemblyGateSummary {
   /** Entries whose content was replaced by the withheld placeholder (enforce mode). */
@@ -57,6 +60,7 @@ export function applyPromptAssemblySinkGate(
   };
   if (!gate) return { entries, summary };
 
+  let remainingMarkingWorkChars = PROMPT_ASSEMBLY_MARKING_WORK_LIMIT_CHARS;
   const mutatedRef: { entries: SessionEntry[] | null } = { entries: null };
   const withholdEntry = (index: number, entry: SessionEntry): void => {
     if (gate.mode !== 'enforce') return;
@@ -111,11 +115,16 @@ export function applyPromptAssemblySinkGate(
         continue;
       }
       const sourceRef = screening.envelopes[0]?.envelopeId;
+      const forceReducedForm = entry.content.length > remainingMarkingWorkChars;
+      if (!forceReducedForm) {
+        remainingMarkingWorkChars -= entry.content.length;
+      }
       mutatedRef.entries ??= [...entries];
       mutatedRef.entries[index] = {
         ...entry,
         content: renderMarkedContent(entry.content, screening.marking, {
           ...(sourceRef ? { sourceRef: `intake-envelope:${sourceRef}` } : {}),
+          ...(forceReducedForm ? { forceReducedForm: true } : {}),
         }),
       };
       summary.markedEntryIds.push(entry.id);

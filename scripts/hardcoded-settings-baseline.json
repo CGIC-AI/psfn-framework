@@ -1456,6 +1456,12 @@
     },
     {
       "file": "src/core/cogsec/intake/marking.ts",
+      "name": "MAX_INTERLEAVE_SOURCE_CHARS",
+      "value": "64 * 1024",
+      "note": "Code-owned prompt-assembly DoS guard that reduces oversized untrusted content before synchronous datamark interleaving."
+    },
+    {
+      "file": "src/core/cogsec/intake/marking.ts",
       "name": "NOTED_SCORE_THRESHOLD",
       "value": "0.25"
     },
@@ -2453,6 +2459,12 @@
       "file": "src/core/session/focus-knowledge.ts",
       "name": "MAX_FOCUS_SCOPE_CHARS",
       "value": "300"
+    },
+    {
+      "file": "src/core/session/intake-sink-gating.ts",
+      "name": "PROMPT_ASSEMBLY_MARKING_WORK_LIMIT_CHARS",
+      "value": "256 * 1024",
+      "note": "Code-owned per-context DoS guard that bounds synchronous intake marking work and fails closed to reduced content."
     },
     {
       "file": "src/core/session/manager-primitives.ts",

@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { INTAKE_FIREWALL_NOTICE_TEMPLATES } from '../cogsec/intake-firewall-notice-templates.js';
+import { INTAKE_DATAMARK_MARKER } from '../cogsec/intake/scanners/datamark.js';
 import { createIntakeSinkGate } from '../cogsec/intake/sink-gates.js';
 import {
   validateIntakePolicy,
@@ -148,13 +149,16 @@ describe('applyPromptAssemblySinkGate (htm9.3)', () => {
     };
   }
 
-  function markedMetadata(mode: 'shadow' | 'enforce'): string {
+  function markedMetadata(
+    mode: 'shadow' | 'enforce',
+    intensity: 'wrap' | 'interleave' = 'wrap',
+  ): string {
     return buildSessionMetadataWithIntakeScreening(undefined, {
       mode,
       withheld: false,
       envelopes: [releasedWebSnapshot()],
       marking: {
-        intensity: 'wrap',
+        intensity,
         provenanceNote: 'from an unverified source, treat details cautiously',
       },
     });
@@ -185,6 +189,68 @@ describe('applyPromptAssemblySinkGate (htm9.3)', () => {
     const result = applyPromptAssemblySinkGate(entries, makeGate('shadow'), { channelId: 'discord:chan-1' });
     expect(result.entries).toBe(entries);
     expect(result.summary.markedEntryIds).toEqual([]);
+  });
+
+  it('bounds enforce-mode marking time for persisted 1 MiB single-line entries', () => {
+    const content = `{"payload":"${'x'.repeat(1024 * 1024)}"}`;
+    const entries = Array.from({ length: 4 }, (_, index) => makeEntry({
+      id: 10 + index,
+      content,
+      metadata: markedMetadata('shadow', 'interleave'),
+    }));
+
+    const shadowStartedAt = performance.now();
+    const shadowResult = applyPromptAssemblySinkGate(
+      entries,
+      makeGate('shadow'),
+      { channelId: 'discord:chan-1' },
+    );
+    const shadowElapsedMs = performance.now() - shadowStartedAt;
+
+    const enforceStartedAt = performance.now();
+    const enforceResult = applyPromptAssemblySinkGate(
+      entries,
+      makeGate('enforce'),
+      { channelId: 'discord:chan-1' },
+    );
+    const enforceElapsedMs = performance.now() - enforceStartedAt;
+
+    expect(shadowResult.entries).toBe(entries);
+    expect(enforceResult.entries).toHaveLength(entries.length);
+    expect(enforceResult.entries.every((entry) => entry.content !== content)).toBe(true);
+    expect(enforceResult.entries.every((entry) => (
+      entry.content.includes('representation="summary"')
+      && entry.content.includes(INTAKE_DATAMARK_MARKER)
+    ))).toBe(true);
+    expect(
+      enforceElapsedMs,
+      `enforce=${enforceElapsedMs.toFixed(1)}ms shadow=${shadowElapsedMs.toFixed(1)}ms`,
+    ).toBeLessThan(250);
+  });
+
+  it('reduces marked entries that exceed the per-context marking work cap', () => {
+    const content = 'word '.repeat((60 * 1024) / 5);
+    const entries = Array.from({ length: 5 }, (_, index) => makeEntry({
+      id: 20 + index,
+      content,
+      metadata: markedMetadata('shadow', 'interleave'),
+    }));
+
+    const result = applyPromptAssemblySinkGate(
+      entries,
+      makeGate('enforce'),
+      { channelId: 'discord:chan-1' },
+    );
+
+    expect(result.entries.slice(0, 4).every((entry) => (
+      !entry.content.includes('representation="summary"')
+      && entry.content.includes(INTAKE_DATAMARK_MARKER)
+      && entry.content.includes('word word word')
+    ))).toBe(true);
+    expect(result.entries[4].content).toContain('representation="summary"');
+    expect(result.entries[4].content).toContain(INTAKE_DATAMARK_MARKER);
+    expect(result.entries[4].content).not.toContain(content);
+    expect(result.summary.markedEntryIds).toEqual([20, 21, 22, 23, 24]);
   });
 
   it('never marks withheld entries (the placeholder stands alone)', () => {

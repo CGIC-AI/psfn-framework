@@ -150,6 +150,118 @@ describe('unified Fleet SSO origin provenance', () => {
     expect(handler).toHaveBeenCalledOnce();
   });
 
+  it('issues a browser-principal capability after successful JIT binding without opening a socket', async () => {
+    const companionId = createCompanionId('11111111-1111-4111-8111-111111111111');
+    const nowSeconds = 1_783_000_000;
+    const { privateKey, publicKey } = generateKeyPairSync('ed25519');
+    const authorization: FleetAuthorizationContext = Object.freeze({
+      principalId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      providerSubject: Object.freeze({ provider: 'discord', subjectId: 'subject-a' }),
+      companionId,
+      contact: Object.freeze({
+        bindingId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+        contactId: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+        bindingVersion: 1,
+      }),
+      operator: Object.freeze({
+        grantId: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd',
+        role: 'owner',
+        grantVersion: 1,
+      }),
+      session: Object.freeze({
+        recordId: 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee',
+        audience: 'fleet',
+        assurance: 'oauth',
+        authnVersion: 1,
+        authzVersion: 1,
+        bindingVersion: 1,
+        grantVersion: 1,
+        policyVersion: 1,
+        provider: 'discord',
+        providerSubjectId: 'subject-a',
+      }),
+      authorization: Object.freeze({ action: 'memory.jit.self', decision: 'allow' }),
+      authority: Object.freeze({ authorityGeneration: 1, globalAuthEpoch: 1 }),
+      provenance: Object.freeze({
+        source: 'gateway_fleet_authorization_snapshot',
+        authorizationEventId: 'ffffffff-ffff-4fff-8fff-ffffffffffff',
+        resolvedAt: new Date(nowSeconds * 1_000).toISOString(),
+      }),
+    });
+    const consumeGrant = vi.fn(async () => ({
+      grantId: '99999999-9999-4999-8999-999999999999',
+      principalId: authorization.principalId,
+      browserSessionId: authorization.session.recordId,
+      assurance: 'webauthn_uv' as const,
+      credentialFloorGeneration: 2,
+      expiresAt: new Date((nowSeconds + 300) * 1_000),
+    }));
+    const replay = vi.fn(async () => ({ outcome: 'mismatch' as const }));
+    const router = new GatewayFleetSsoRouter({
+      canonicalOrigin,
+      trustProxy: true,
+      broker: { resolveAuthorizationContext: vi.fn(async () => authorization) },
+      signer: createGatewayRequestCapabilitySigner({
+        issuer: 'fleet-jit-test',
+        kid: 'fleet-jit-key',
+        privateKeyPem: privateKey.export({ format: 'pem', type: 'pkcs8' }).toString(),
+        ttlSeconds: 30,
+        nowSeconds: () => nowSeconds,
+      }),
+      verifier: createRequestCapabilityVerifier({
+        issuer: 'fleet-jit-test',
+        maxTtlSeconds: 30,
+        keys: [{
+          issuer: 'fleet-jit-test',
+          kid: 'fleet-jit-key',
+          publicKeyPem: publicKey.export({ format: 'pem', type: 'spki' }).toString(),
+          notBefore: '2026-07-01T00:00:00.000Z',
+          notAfter: '2026-07-03T00:00:00.000Z',
+          status: 'active',
+        }],
+      }),
+      replay: { consume: replay },
+      jitStepUp: { consumeGrant },
+      portalProjection: { resolve: vi.fn(async () => { throw new Error('not used'); }) },
+      upstreams: [{ companionId, origin: new URL('http://127.0.0.1:3211') }],
+      nowSeconds: () => nowSeconds,
+    });
+    const body = Buffer.from(JSON.stringify({
+      subjectScopeDigest: 'a'.repeat(64),
+      purpose: 'Review my own memory',
+      memoryRevision: 3,
+      classifierVersion: 1,
+      classifierEvidenceDigest: 'b'.repeat(64),
+    }));
+    const incoming = Readable.from([body]) as IncomingMessage;
+    incoming.method = 'POST';
+    incoming.url = `/companions/${companionId}/garden/api/admin/memory/memory-a/reveal`;
+    incoming.headers = {
+      host: 'fleet.example.test',
+      'x-forwarded-host': 'fleet.example.test',
+      'x-forwarded-proto': 'https',
+      'x-forwarded-port': '443',
+      'x-forwarded-for': '198.51.100.9',
+      cookie: `__Host-psfn_session=${'s'.repeat(43)}`,
+      'x-psfn-jit-grant': '99999999-9999-4999-8999-999999999999',
+      'content-type': 'application/json',
+      'content-length': String(body.byteLength),
+    };
+    Object.defineProperty(incoming, 'socket', { value: {} });
+    const response = {
+      destroyed: false,
+      writableEnded: false,
+      writeHead: vi.fn(),
+      end: vi.fn(),
+    } as unknown as ServerResponse;
+
+    await router.handle(incoming, response);
+
+    expect(consumeGrant).toHaveBeenCalledOnce();
+    expect(replay).toHaveBeenCalledOnce();
+    expect(response.writeHead).toHaveBeenCalledWith(404, expect.any(Object));
+  });
+
   it('mints the normal single-use capability tail for an allowlisted testing-harness request', async () => {
     const companionId = createCompanionId('11111111-1111-4111-8111-111111111111');
     const nowSeconds = Math.floor(Date.now() / 1_000);

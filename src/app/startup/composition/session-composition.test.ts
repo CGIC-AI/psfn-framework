@@ -64,7 +64,7 @@ describe('session runtime composition transcript projection wiring', () => {
     vi.mocked(createDefaultPostgresSessionAdapters).mockClear();
   });
 
-  it('pins the transcript projection to the configured companion schema', async () => {
+  it('pins the transcript projection to the configured companion schema and topology role', async () => {
     const root = mkdtempSync(join(tmpdir(), 'psfn-session-composition-schema-'));
     dirs.push(root);
     const companionDataDir = join(root, 'companion-data');
@@ -76,6 +76,8 @@ describe('session runtime composition transcript projection wiring', () => {
         persistenceBackend: 'postgres',
         postgresDatabaseUrl: 'postgres://postgres:secret@localhost:5432/psfn_test',
         postgresSchema: 'companion_alpha',
+        postgresRole: 'companion_alpha_runtime',
+        multiCompanion: true,
       } as any,
     });
 
@@ -84,6 +86,7 @@ describe('session runtime composition transcript projection wiring', () => {
       expect.objectContaining({
         sessionsDir: resolveSessionsDir(companionDataDir),
         schema: 'companion_alpha',
+        role: 'companion_alpha_runtime',
       }),
     );
   });
@@ -241,6 +244,9 @@ describe('session runtime composition transcript projection wiring', () => {
       dataDir: companionDataDir,
       persistenceBackend: 'postgres',
       postgresDatabaseUrl: databaseUrl,
+      postgresSchema: 'companion_alpha',
+      postgresRole: 'companion_alpha_runtime',
+      multiCompanion: true,
     } as any, 1536);
 
     expect(existsSync(join(companionDataDir, 'state', 'companion.db'))).toBe(false);
@@ -251,6 +257,8 @@ describe('session runtime composition transcript projection wiring', () => {
     expect(actualOptions).toMatchObject({
       notesDir: join(companionDataDir, 'state', 'notes'),
       scratchpadMirrorPath: join(companionDataDir, 'state', 'notes', 'scratchpad.json'),
+      schema: 'companion_alpha',
+      role: 'companion_alpha_runtime',
     });
   });
 

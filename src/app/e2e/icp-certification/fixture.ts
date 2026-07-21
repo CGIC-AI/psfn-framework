@@ -510,6 +510,7 @@ export function createIcpCertificationFixture(input: {
     // mandatory, but a lone entry makes multiCompanion derive false (behavior
     // identical to the old single-companion topology).
     writeJson(join(systemDataDir, 'companions.json'), {
+      postgres: supportContract.postgres,
       companions: [supportContract.companions[0]],
     });
   }

@@ -12,6 +12,19 @@ const embedding: EmbeddingProviderPort = {
 };
 
 describe('multi-companion wiki runtime prerequisites', () => {
+  it('fails closed when a tenant schema has no topology-owned role', async () => {
+    const registerTool = vi.fn();
+    await expect(wireWikiRuntime({ registerTool }, '/unused', {
+      databaseUrl: 'postgresql://unused/unused',
+      postgresSchema: 'companion_alpha',
+      embedding,
+      companionId: 'companion-a',
+      systemDataDir: '/unused',
+      getMultiCompanion: () => true,
+    })).rejects.toThrow('requires a topology-owned PostgreSQL role');
+    expect(registerTool).not.toHaveBeenCalled();
+  });
+
   it('fails closed before registration when PostgreSQL is missing', async () => {
     const registerTool = vi.fn();
     await expect(wireWikiRuntime({ registerTool }, '/unused', {

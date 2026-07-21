@@ -18,7 +18,9 @@ import {
 } from '../../shared/utils/types.js';
 import { parseBooleanEnv } from '../../shared/utils/env.js';
 import { writeJsonAtomic } from '../../shared/utils/fs.js';
+import { parseExactPostgresCredential } from '../../shared/utils/postgres-credential.js';
 import { loadRequiredJson } from './load-or-seed.js';
+import type { FleetAuthDatabaseRoles } from '../../persistence/postgres/fleet-auth/schema.js';
 import type {
   HubDeviceAssertionVerifierConfig,
   HubDeviceAssertionVerifierKey,
@@ -199,11 +201,7 @@ export interface FleetAuthConfig {
     backupRestoreDatabaseUrlRef: CredentialReference;
     authorityFloorRootRef: CredentialReference;
   };
-  databaseRoles: {
-    runtime: string;
-    migration: string;
-    backupRestore: string;
-  };
+  databaseRoles: FleetAuthDatabaseRoles;
   verifierKeys: FleetAuthVerifierKey[];
   hubDeviceAssertions: HubDeviceAssertionVerifierConfig;
   ttls: {
@@ -478,7 +476,11 @@ function parseExactHttpsOrigin(value: unknown, field: string): string {
 
 function parseDatabaseRoles(value: unknown): FleetAuthConfig['databaseRoles'] {
   const record = requireRecord(value, 'databaseRoles');
-  requireExactKeys(record, ['runtime', 'migration', 'backupRestore'], 'databaseRoles');
+  requireExactKeys(
+    record,
+    ['runtime', 'migration', 'backupRestore'],
+    'databaseRoles',
+  );
   const roles = {
     runtime: requireString(record.runtime, 'databaseRoles.runtime'),
     migration: requireString(record.migration, 'databaseRoles.migration'),
@@ -487,7 +489,9 @@ function parseDatabaseRoles(value: unknown): FleetAuthConfig['databaseRoles'] {
   for (const [field, role] of Object.entries(roles)) {
     if (!POSTGRES_ROLE_PATTERN.test(role)) fail(`databaseRoles.${field} is not a safe PostgreSQL role name`);
   }
-  if (new Set(Object.values(roles)).size !== 3) fail('databaseRoles must name three distinct roles');
+  if (new Set(Object.values(roles)).size !== 3) {
+    fail('databaseRoles must name three distinct roles');
+  }
   return roles;
 }
 
@@ -872,50 +876,16 @@ function resolveRequiredSecret(
   return value;
 }
 
-const DATABASE_CREDENTIAL_QUERY_OVERRIDES = new Set([
-  'host',
-  'hostaddr',
-  'port',
-  'dbname',
-  'database',
-  'user',
-  'password',
-  'service',
-  'servicefile',
-  'passfile',
-  'options',
-  'target_session_attrs',
-]);
-
 function parseDatabaseCredential(
   value: string,
   expectedRole: string,
   description: string,
 ): URL {
-  let url: URL;
-  try {
-    url = new URL(value);
-  } catch {
-    throw new Error(`${description} must be a PostgreSQL URL`);
-  }
-  if (url.protocol !== 'postgres:' && url.protocol !== 'postgresql:') {
-    throw new Error(`${description} must be a PostgreSQL URL`);
-  }
-  const override = [...url.searchParams.keys()].find(parameter => (
-    DATABASE_CREDENTIAL_QUERY_OVERRIDES.has(parameter.toLowerCase())
-  ));
-  if (override) {
-    throw new Error(
-      `${description} must not use PostgreSQL routing or authentication query override ${override}`,
-    );
-  }
-  if (decodeURIComponent(url.username) !== expectedRole || !url.password) {
+  const credential = parseExactPostgresCredential(value, description);
+  if (credential.username !== expectedRole) {
     throw new Error(`${description} must authenticate as configured role ${expectedRole}`);
   }
-  if (!url.hostname || !url.pathname || url.pathname === '/') {
-    throw new Error(`${description} must identify an exact PostgreSQL database`);
-  }
-  return url;
+  return credential.url;
 }
 
 function databaseIdentity(url: URL): string {
@@ -1061,7 +1031,11 @@ export function resolveGatewayFleetAuthSecrets(options: {
       throw new Error('Companion POSTGRES_DATABASE_URL must not use a PostgreSQL role-routing override');
     }
   }
-  if (new Set([runtime.username, migration.username, backup.username]).size !== 3) {
+  if (new Set([
+    runtime.username,
+    migration.username,
+    backup.username,
+  ]).size !== 3) {
     throw new Error('Fleet auth requires three distinct PostgreSQL credential roles');
   }
   const identities = [runtime, migration, backup].map(databaseIdentity);

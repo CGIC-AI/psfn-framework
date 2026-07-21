@@ -282,11 +282,23 @@ function normalizeTrustPolicy(owner) {
 function normalizeOwner(targetName, owner) {
   if (targetName === 'companions.json') {
     return {
+      postgres: {
+        sharedMigrationRole: 'shared_schema_migration',
+        sharedMigrationDatabaseUrlRef: {
+          kind: 'env',
+          envName: 'SHARED_SCHEMA_MIGRATION_DATABASE_URL',
+        },
+      },
       companions: [{
         companionId,
         companionDataDir: `companions/${companionId}`,
         characterCardPath: `companions/${companionId}/companion.json`,
         postgresSchema: 'companion_default',
+        postgresRole: 'companion_default_runtime',
+        postgresDatabaseUrlRef: {
+          kind: 'env',
+          envName: 'COMPANION_DEFAULT_DATABASE_URL',
+        },
         displayName: companionName,
       }],
     };

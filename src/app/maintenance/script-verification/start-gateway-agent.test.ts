@@ -79,11 +79,19 @@ function seedStartupOwnerRoots(systemDataDir: string, companionDataDirs: readonl
   writeFileSync(
     join(systemDataDir, 'companions.json'),
     `${JSON.stringify({
+      postgres: {
+        sharedMigrationRole: 'shared_schema_migration',
+        sharedMigrationDatabaseUrlRef: {
+          kind: 'env', envName: 'SHARED_SCHEMA_MIGRATION_DATABASE_URL',
+        },
+      },
       companions: [{
         companionId: '11111111-1111-4111-8111-111111111111',
         companionDataDir: relativeCompanionDataDir,
         characterCardPath: join(relativeCompanionDataDir, 'companion.json'),
         postgresSchema: 'public',
+        postgresRole: 'companion_runtime',
+        postgresDatabaseUrlRef: { kind: 'env', envName: 'COMPANION_DATABASE_URL' },
       }],
     }, null, 2)}\n`,
     'utf8',
@@ -157,7 +165,12 @@ function makeRealPreflightLauncher(): {
           COMPANION_ID: '11111111-1111-4111-8111-111111111111',
           COMPANION_PG_SCHEMA: 'public',
           GATEWAY_SESSION_HMAC_KEY: 'test-session-secret',
-          POSTGRES_DATABASE_URL: 'postgres://verification:verification@127.0.0.1/verification',
+          POSTGRES_DATABASE_URL:
+            'postgres://companion_runtime:verification@127.0.0.1/verification',
+          COMPANION_DATABASE_URL:
+            'postgres://companion_runtime:verification@127.0.0.1/verification',
+          SHARED_SCHEMA_MIGRATION_DATABASE_URL:
+            'postgres://shared_schema_migration:migration@127.0.0.1/verification',
           PSFN_FLEET_AUTH: '1',
           ...env,
         },
@@ -281,18 +294,28 @@ describe('start-gateway-agent launcher supervision', () => {
     const companionAId = '11111111-1111-4111-8111-111111111111';
     seedStartupOwnerRoots(systemDataDir, [companionA, companionB]);
     writeFileSync(join(systemDataDir, 'companions.json'), `${JSON.stringify({
+      postgres: {
+        sharedMigrationRole: 'shared_schema_migration',
+        sharedMigrationDatabaseUrlRef: {
+          kind: 'env', envName: 'SHARED_SCHEMA_MIGRATION_DATABASE_URL',
+        },
+      },
       companions: [
         {
           companionId: companionAId,
           companionDataDir: 'companions/a',
           characterCardPath: 'companions/a/card.json',
           postgresSchema: 'companion_a',
+          postgresRole: 'companion_a_runtime',
+          postgresDatabaseUrlRef: { kind: 'env', envName: 'COMPANION_A_DATABASE_URL' },
         },
         {
           companionId: '22222222-2222-4222-8222-222222222222',
           companionDataDir: 'companions/b',
           characterCardPath: 'companions/b/card.json',
           postgresSchema: 'companion_b',
+          postgresRole: 'companion_b_runtime',
+          postgresDatabaseUrlRef: { kind: 'env', envName: 'COMPANION_B_DATABASE_URL' },
         },
       ],
     }, null, 2)}\n`, 'utf8');
@@ -314,6 +337,14 @@ describe('start-gateway-agent launcher supervision', () => {
         COMPANION_PG_SCHEMA: 'companion_a',
         CHARACTER_CARD_PATH: join(companionA, 'card.json'),
         GATEWAY_SESSION_HMAC_KEY: 'test-session-secret',
+        POSTGRES_DATABASE_URL:
+          'postgres://companion_a_runtime:a@127.0.0.1/verification',
+        COMPANION_A_DATABASE_URL:
+          'postgres://companion_a_runtime:a@127.0.0.1/verification',
+        COMPANION_B_DATABASE_URL:
+          'postgres://companion_b_runtime:b@127.0.0.1/verification',
+        SHARED_SCHEMA_MIGRATION_DATABASE_URL:
+          'postgres://shared_schema_migration:migration@127.0.0.1/verification',
       });
       expect(result.output).toContain(
         `system=${systemDataDir} fleet=2 companionRoots=${companionA},${companionB}`,
@@ -629,7 +660,7 @@ describe('start-gateway-agent launcher supervision', () => {
         '  scripts/preflight-startup-owner-files.ts) exit 0 ;;',
         '  scripts/provision-companion-fleet.ts) exit 0 ;;',
         '  scripts/resolve-companion-fleet.ts)',
-        `    printf '${companionId}\\t${workDir}/companion\\t${workDir}/companion/card.json\\tpublic\\t${workDir}/workspace\\tv1.${'a'.repeat(64)}\\tv1.${'b'.repeat(64)}\\t${adminSocket}\\n'`,
+        `    printf '${companionId}\\t${workDir}/companion\\t${workDir}/companion/card.json\\tpublic\\t${workDir}/workspace\\tv1.${'a'.repeat(64)}\\tv1.${'b'.repeat(64)}\\tpostgresql://psfn:split-secret@postgres/psfn\\t${adminSocket}\\n'`,
         '    ;;',
         '  src/app/gateway/main.ts)',
         '    python3 - "$GATEWAY_SOCKET" <<\'PY\'',
@@ -739,11 +770,19 @@ describe('start-gateway-agent launcher supervision', () => {
     // resolved systemDataDir (default './data' relative to cwd).
     mkdirSync(join(workDir, 'data'), { recursive: true });
     writeFileSync(join(workDir, 'data', 'companions.json'), `${JSON.stringify({
+      postgres: {
+        sharedMigrationRole: 'shared_schema_migration',
+        sharedMigrationDatabaseUrlRef: {
+          kind: 'env', envName: 'SHARED_SCHEMA_MIGRATION_DATABASE_URL',
+        },
+      },
       companions: [{
         companionId: '22222222-2222-4222-8222-222222222222',
         companionDataDir: 'companion',
         characterCardPath: 'companion/companion.json',
         postgresSchema: 'public',
+        postgresRole: 'companion_runtime',
+        postgresDatabaseUrlRef: { kind: 'env', envName: 'COMPANION_DATABASE_URL' },
       }],
     })}\n`, 'utf8');
     const loaderPath = join(repoRoot, 'src/system/config/load-config.ts');
@@ -831,32 +870,61 @@ describe('start-gateway-agent multi-companion supervisor', () => {
   }
 
   const twoCompanionFleet = JSON.stringify({
+    postgres: {
+      sharedMigrationRole: 'shared_schema_migration',
+      sharedMigrationDatabaseUrlRef: {
+        kind: 'env', envName: 'SHARED_SCHEMA_MIGRATION_DATABASE_URL',
+      },
+    },
     companions: [
       {
         companionId: '11111111-1111-4111-8111-111111111111',
         companionDataDir: 'alpha',
         characterCardPath: 'alpha/card.json',
         postgresSchema: 'companion_alpha',
+        postgresRole: 'companion_alpha_runtime',
+        postgresDatabaseUrlRef: { kind: 'env', envName: 'COMPANION_ALPHA_DATABASE_URL' },
       },
       {
         companionId: '22222222-2222-4222-8222-222222222222',
         companionDataDir: 'beta',
         characterCardPath: 'beta/card.json',
         postgresSchema: 'companion_beta',
+        postgresRole: 'companion_beta_runtime',
+        postgresDatabaseUrlRef: { kind: 'env', envName: 'COMPANION_BETA_DATABASE_URL' },
       },
     ],
   });
 
   const oneCompanionFleet = JSON.stringify({
+    postgres: {
+      sharedMigrationRole: 'shared_schema_migration',
+      sharedMigrationDatabaseUrlRef: {
+        kind: 'env', envName: 'SHARED_SCHEMA_MIGRATION_DATABASE_URL',
+      },
+    },
     companions: [
       {
         companionId: '11111111-1111-4111-8111-111111111111',
         companionDataDir: 'alpha',
         characterCardPath: 'alpha/card.json',
         postgresSchema: 'public',
+        postgresRole: 'companion_alpha_runtime',
+        postgresDatabaseUrlRef: { kind: 'env', envName: 'COMPANION_ALPHA_DATABASE_URL' },
       },
     ],
   });
+
+  const topologyDatabaseEnv = {
+    POSTGRES_DATABASE_URL:
+      'postgres://companion_alpha_runtime:alpha@db.example.test/psfn',
+    COMPANION_ALPHA_DATABASE_URL:
+      'postgres://companion_alpha_runtime:alpha@db.example.test/psfn',
+    COMPANION_BETA_DATABASE_URL:
+      'postgres://companion_beta_runtime:beta@db.example.test/psfn',
+    SHARED_SCHEMA_MIGRATION_DATABASE_URL:
+      'postgres://shared_schema_migration:migration@db.example.test/psfn',
+  };
 
   it('uses the fleet supervisor process topology for every roster size', () => {
     const launcher = readFileSync(join(repoRoot, 'scripts/start-gateway-agent.sh'), 'utf8');
@@ -991,6 +1059,7 @@ describe('start-gateway-agent multi-companion supervisor', () => {
           COMPANION_DATA_DIR: companionDataDir,
           GATEWAY_SESSION_HMAC_KEY: 'test-session-secret',
           ADMIN_TRANSPORT_SOCKET: join(workDir, 'run', 'garden-admin.sock'),
+          ...topologyDatabaseEnv,
         },
       });
       const socketDir = join(workDir, 'run');
@@ -1001,16 +1070,104 @@ describe('start-gateway-agent multi-companion supervisor', () => {
           + `\t${workDir}/workspaces/personal/11111111-1111-4111-8111-111111111111`
           + `\t${deriveCompanionAuthToken('11111111-1111-4111-8111-111111111111', 'agent', keyring)}`
           + `\t${deriveCompanionAuthToken('11111111-1111-4111-8111-111111111111', 'internal_session_integrity', keyring)}`
+          + `\t${topologyDatabaseEnv.COMPANION_ALPHA_DATABASE_URL}`
           + `\t${socketDir}/garden-admin-11111111-1111-4111-8111-111111111111.sock`,
           `22222222-2222-4222-8222-222222222222\t${workDir}/beta\t${workDir}/beta/card.json\tcompanion_beta`
           + `\t${workDir}/workspaces/personal/22222222-2222-4222-8222-222222222222`
           + `\t${deriveCompanionAuthToken('22222222-2222-4222-8222-222222222222', 'agent', keyring)}`
           + `\t${deriveCompanionAuthToken('22222222-2222-4222-8222-222222222222', 'internal_session_integrity', keyring)}`
+          + `\t${topologyDatabaseEnv.COMPANION_BETA_DATABASE_URL}`
           + `\t${socketDir}/garden-admin-22222222-2222-4222-8222-222222222222.sock`,
           '',
         ].join('\n'),
       );
       expect(existsSync(join(workDir, 'workspaces'))).toBe(false);
+    } finally {
+      rmSync(workDir, { recursive: true, force: true });
+    }
+  });
+
+  it('delivers the validated distinct database credential to each production-shaped agent spawn', () => {
+    const workDir = mkdtempSync(join(tmpdir(), 'psfn-supervisor-database-fanout-'));
+    const scriptsDir = join(workDir, 'scripts');
+    const systemDir = join(scriptsDir, 'system');
+    const tsxDir = join(workDir, 'node_modules/.bin');
+    const fakeBinDir = join(workDir, 'fake-bin');
+    const runtimeDir = join(workDir, 'runtime');
+    mkdirSync(systemDir, { recursive: true });
+    mkdirSync(tsxDir, { recursive: true });
+    mkdirSync(fakeBinDir, { recursive: true });
+    mkdirSync(runtimeDir, { recursive: true });
+    writeFileSync(
+      join(scriptsDir, 'start-gateway-agent.sh'),
+      readFileSync(join(repoRoot, 'scripts/start-gateway-agent.sh'), 'utf8'),
+      'utf8',
+    );
+    chmodSync(join(scriptsDir, 'start-gateway-agent.sh'), 0o755);
+    writeFileSync(join(systemDir, 'runtime-env.sh'), readFileSync(runtimeEnvPath, 'utf8'), 'utf8');
+    const alphaId = '11111111-1111-4111-8111-111111111111';
+    const betaId = '22222222-2222-4222-8222-222222222222';
+    const alphaUrl = 'postgres://companion_alpha_runtime:alpha@postgres/psfn';
+    const betaUrl = 'postgres://companion_beta_runtime:beta@postgres/psfn';
+    writeFileSync(join(tsxDir, 'tsx'), [
+      '#!/usr/bin/env bash',
+      'case "$1" in',
+      '  scripts/resolve-companion-fleet.ts)',
+      `    printf '${alphaId}\\t${workDir}/alpha\\t${workDir}/alpha/card.json\\tcompanion_alpha\\t${workDir}/workspaces/alpha\\tv1.${'a'.repeat(64)}\\tv1.${'b'.repeat(64)}\\t${alphaUrl}\\t${runtimeDir}/alpha.sock\\n'`,
+      `    printf '${betaId}\\t${workDir}/beta\\t${workDir}/beta/card.json\\tcompanion_beta\\t${workDir}/workspaces/beta\\tv1.${'c'.repeat(64)}\\tv1.${'d'.repeat(64)}\\t${betaUrl}\\t${runtimeDir}/beta.sock\\n'`,
+      '    ;;',
+      '  scripts/provision-companion-fleet.ts|scripts/preflight-startup-owner-files.ts) exit 0 ;;',
+      '  src/app/gateway/main.ts)',
+      '    python3 - "$GATEWAY_SOCKET" <<\'PY\'',
+      'import os, socket, sys, time',
+      'path = sys.argv[1]',
+      'os.makedirs(os.path.dirname(path), exist_ok=True)',
+      'server = socket.socket(socket.AF_UNIX)',
+      'server.bind(path)',
+      'server.listen(1)',
+      'time.sleep(30)',
+      'PY',
+      '    ;;',
+      '  src/app/agent/main.ts)',
+      '    cat "/proc/self/fd/${POSTGRES_DATABASE_URL_FD}" > "agent-${COMPANION_ID}.database-url"',
+      '    env | sort > "agent-${COMPANION_ID}.env"',
+      `    for _ in $(seq 1 100); do [ -f 'agent-${alphaId}.database-url' ] && [ -f 'agent-${betaId}.database-url' ] && kill -TERM "$PPID" && exit 0; sleep 0.05; done`,
+      '    exit 1',
+      '    ;;',
+      '  *) sleep 30 ;;',
+      'esac',
+    ].join('\n'), 'utf8');
+    chmodSync(join(tsxDir, 'tsx'), 0o755);
+    writeFileSync(join(fakeBinDir, 'node'), [
+      '#!/usr/bin/env bash',
+      'if [ "$1" = "-p" ]; then printf "22\\n"; else printf "v22.22.3\\n"; fi',
+    ].join('\n'), 'utf8');
+    chmodSync(join(fakeBinDir, 'node'), 0o755);
+    try {
+      const output = execFileSync('bash', ['-lc', [
+        'set -euo pipefail',
+        'export PSFN_SKIP_DOTENV=true',
+        'export PSFN_MULTI_COMPANION=1',
+        `export PATH=${JSON.stringify(`${fakeBinDir}:/usr/bin:/bin`)}`,
+        `export GATEWAY_SOCKET=${JSON.stringify(join(runtimeDir, 'gateway.sock'))}`,
+        `export ADMIN_TRANSPORT_SOCKET=${JSON.stringify(join(runtimeDir, 'garden-admin.sock'))}`,
+        `export POSTGRES_DATABASE_URL=${JSON.stringify(alphaUrl)}`,
+        'export GATEWAY_SESSION_HMAC_KEY=gateway-root-sentinel',
+        'set +e',
+        './scripts/start-gateway-agent.sh >launcher.out 2>&1',
+        'status=$?',
+        'set -e',
+        'printf "status=%s\\n" "$status"',
+      ].join('\n')], { cwd: workDir, encoding: 'utf8', timeout: 15000 });
+      expect(output).toContain('status=0');
+      expect(readFileSync(join(workDir, `agent-${alphaId}.database-url`), 'utf8').trim())
+        .toBe(alphaUrl);
+      expect(readFileSync(join(workDir, `agent-${betaId}.database-url`), 'utf8').trim())
+        .toBe(betaUrl);
+      expect(readFileSync(join(workDir, `agent-${alphaId}.env`), 'utf8'))
+        .not.toContain(betaUrl);
+      expect(readFileSync(join(workDir, `agent-${betaId}.env`), 'utf8'))
+        .not.toContain(alphaUrl);
     } finally {
       rmSync(workDir, { recursive: true, force: true });
     }
@@ -1080,6 +1237,7 @@ describe('start-gateway-agent multi-companion supervisor', () => {
           SYSTEM_DATA_DIR: systemDataDir,
           COMPANION_DATA_DIR: companionDataDir,
           ADMIN_TRANSPORT_SOCKET: join(workDir, 'run', 'garden-admin.sock'),
+          ...topologyDatabaseEnv,
         },
       });
       const keyring = { activeVersion: 'v1', keys: { v1: 'test-session-secret' } };
@@ -1089,6 +1247,7 @@ describe('start-gateway-agent multi-companion supervisor', () => {
         + `${workDir}/workspaces/personal/11111111-1111-4111-8111-111111111111\t`
         + `${deriveCompanionAuthToken('11111111-1111-4111-8111-111111111111', 'agent', keyring)}\t`
         + `${deriveCompanionAuthToken('11111111-1111-4111-8111-111111111111', 'internal_session_integrity', keyring)}\t`
+        + `${topologyDatabaseEnv.COMPANION_ALPHA_DATABASE_URL}\t`
         + `${workDir}/run/garden-admin-11111111-1111-4111-8111-111111111111.sock\n`,
       );
     } finally {
@@ -1139,6 +1298,7 @@ describe('start-gateway-agent multi-companion supervisor', () => {
           COMPANION_DATA_DIR: companionDataDir,
           GATEWAY_SESSION_HMAC_KEY: 'test-session-secret',
           XDG_RUNTIME_DIR: join(workDir, 'run'),
+          ...topologyDatabaseEnv,
         },
         timeout: 30000,
       });
@@ -1155,6 +1315,7 @@ describe('start-gateway-agent multi-companion supervisor', () => {
       expect(output).not.toContain('starting agent');
       expect(output).not.toContain('starting operator');
       expect(output).not.toContain('test-session-secret');
+      expect(output).not.toContain('companion_alpha_runtime');
       expect(output).not.toMatch(/v1\.[a-f0-9]{64}/u);
       expect(existsSync(join(workDir, 'workspaces'))).toBe(false);
     } finally {
@@ -1193,8 +1354,8 @@ describe('start-gateway-agent multi-companion supervisor', () => {
       `      printf 'probe\\n' >> ${JSON.stringify(eventsPath)}`,
       '      exit 0',
       '    fi',
-      `    printf '${companionA}\\t${workDir}/a\\t${workDir}/a/card.json\\tcompanion_a\\t${workDir}/workspaces/a\\tproof-a\\tsession-a\\t${socketA}\\n'`,
-      `    printf '${companionB}\\t${workDir}/b\\t${workDir}/b/card.json\\tcompanion_b\\t${workDir}/workspaces/b\\tproof-b\\tsession-b\\t${socketB}\\n'`,
+      `    printf '${companionA}\\t${workDir}/a\\t${workDir}/a/card.json\\tcompanion_a\\t${workDir}/workspaces/a\\tproof-a\\tsession-a\\tpostgres://companion_a:a@localhost/psfn\\t${socketA}\\n'`,
+      `    printf '${companionB}\\t${workDir}/b\\t${workDir}/b/card.json\\tcompanion_b\\t${workDir}/workspaces/b\\tproof-b\\tsession-b\\tpostgres://companion_b:b@localhost/psfn\\t${socketB}\\n'`,
       '    ;;',
       '  scripts/provision-companion-fleet.ts|scripts/preflight-startup-owner-files.ts) exit 0 ;;',
       '  src/app/gateway/main.ts)',

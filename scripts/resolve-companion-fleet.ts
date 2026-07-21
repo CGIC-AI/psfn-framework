@@ -20,7 +20,7 @@
  *   - One line per companion, fields tab-separated in
  *     the order companionId, companionDataDir, characterCardPath, postgresSchema,
  *     personalWorkspacePath, companionAuthToken, sessionIntegrityAuthToken,
- *     adminTransportSocket.
+ *     databaseUrl, adminTransportSocket.
  *     Tabs/newlines inside any field are rejected (fail closed) so the launcher
  *     can parse the plan with a plain `IFS=$'\t' read`.
  *
@@ -38,6 +38,8 @@ import { FleetGardenAdminTransportProxy } from '../src/operator/garden/fleet-tra
 import { requireGatewaySessionHmacKeyring } from '../src/boundary/gateway/session-hmac-env.js';
 import { deriveCompanionAuthToken } from '../src/boundary/gateway/companion-auth.js';
 import { resolveConfiguredLocalCompanionFleetRuntime } from './companion-fleet-runtime.js';
+import { createCredentialVaultFromEnvironment } from '../src/boundary/custody/credential-vault.js';
+import { resolveCompanionDatabaseTopology } from '../src/system/config/companion-database-config.js';
 
 const FIELD_SEPARATOR = '\t';
 
@@ -55,6 +57,7 @@ function formatPlanLine(
   target: FleetGardenTargetIdentity,
   companionAuthToken: string,
   sessionIntegrityAuthToken: string,
+  databaseUrl: string,
 ): string {
   if (target.companionId !== entry.companionId || target.endpoint.mode !== 'socket') {
     throw new Error(
@@ -69,6 +72,7 @@ function formatPlanLine(
     ['personalWorkspacePath', entry.personalWorkspacePath],
     ['companionAuthToken', companionAuthToken],
     ['sessionIntegrityAuthToken', sessionIntegrityAuthToken],
+    ['databaseUrl', databaseUrl],
     ['adminTransportSocket', target.endpoint.socketPath],
   ];
   for (const [field, value] of fields) {
@@ -110,12 +114,31 @@ async function main(): Promise<void> {
     throw new Error(`Unknown argument ${JSON.stringify(mode)}`);
   }
   const keyring = requireGatewaySessionHmacKeyring(env);
-  const plan = runtime.fleet.companions.map((entry) => formatPlanLine(
-    entry,
-    runtime.targetRegistry.resolve(entry.companionId),
-    deriveCompanionAuthToken(entry.companionId, 'agent', keyring),
-    deriveCompanionAuthToken(entry.companionId, 'internal_session_integrity', keyring),
-  )).join('\n');
+  const gatewayDatabaseUrl = env.POSTGRES_DATABASE_URL?.trim();
+  if (!gatewayDatabaseUrl) {
+    throw new Error('Companion fleet launcher requires POSTGRES_DATABASE_URL for the gateway');
+  }
+  const databaseTopology = resolveCompanionDatabaseTopology({
+    fleet: runtime.fleet,
+    credentialVault: await createCredentialVaultFromEnvironment(env),
+    gatewayDatabaseUrl,
+  });
+  const databaseByCompanionId = new Map(databaseTopology.companions.map(entry => (
+    [entry.companion.companionId, entry.databaseUrl] as const
+  )));
+  const plan = runtime.fleet.companions.map((entry) => {
+    const databaseUrl = databaseByCompanionId.get(entry.companionId);
+    if (!databaseUrl) {
+      throw new Error(`Companion ${entry.companionId} has no resolved database credential`);
+    }
+    return formatPlanLine(
+      entry,
+      runtime.targetRegistry.resolve(entry.companionId),
+      deriveCompanionAuthToken(entry.companionId, 'agent', keyring),
+      deriveCompanionAuthToken(entry.companionId, 'internal_session_integrity', keyring),
+      databaseUrl,
+    );
+  }).join('\n');
   process.stdout.write(`${plan}\n`);
 }
 

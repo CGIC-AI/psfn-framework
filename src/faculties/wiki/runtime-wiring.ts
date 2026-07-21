@@ -32,7 +32,6 @@ import {
 } from './shared-world-caretaker.js';
 import { PersonalProjectLibrary } from './personal-projects.js';
 import { PersonalWishlist } from './personal-wishlist.js';
-import { derivePostgresTenantRole } from '../../persistence/postgres/tenancy.js';
 
 const log = createComponentLogger('WikiRuntime');
 
@@ -69,6 +68,8 @@ export interface WikiRuntimeDeps {
    * projection ignores this: it always pins its own `shared` schema.
    */
   postgresSchema?: string;
+  /** Topology-owned role paired with postgresSchema for tenant pool pinning. */
+  postgresRole?: string;
   /**
    * Intake sink gate provider (htm9.3), threaded to the wiki tool's
    * wiki_write gate. Absent/null = firewall off.
@@ -147,6 +148,11 @@ export async function wireWikiRuntime(
   deps: WikiRuntimeDeps = {},
 ): Promise<WikiRuntimeWiring> {
   const multiCompanion = deps.getMultiCompanion?.() === true;
+  const postgresRole = multiCompanion && deps.postgresSchema?.trim()
+    ? deps.postgresRole?.trim() || (() => {
+        throw new Error('Multi-companion wiki runtime requires a topology-owned PostgreSQL role');
+      })()
+    : undefined;
   let knownSiteIds: ReadonlySet<string> | null = null;
   if (multiCompanion) {
     if (!deps.databaseUrl?.trim()) {
@@ -181,9 +187,7 @@ export async function wireWikiRuntime(
       projection = await createWikiPgvectorProjectionStore(deps.databaseUrl, deps.embedding, {
         ...(deps.eventBus ? { eventBus: deps.eventBus } : {}),
         ...(deps.postgresSchema ? { schema: deps.postgresSchema } : {}),
-        ...(deps.postgresSchema && deps.getMultiCompanion?.() === true
-          ? { role: derivePostgresTenantRole(deps.postgresSchema) }
-          : {}),
+        ...(postgresRole ? { role: postgresRole } : {}),
       });
     } catch (error) {
       log.warn('Wiki pgvector projection unavailable; semantic search disabled, text search still works', {

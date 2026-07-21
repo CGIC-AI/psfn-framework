@@ -34,6 +34,7 @@
 {{- end -}}
 {{- $fleetIds := dict -}}
 {{- $schemas := dict -}}
+{{- $databaseUrlSecretKeys := dict -}}
 {{- $gatewayCompanionClaims := dict -}}
 {{- $workspaceClaims := dict -}}
 {{- $authSecrets := dict -}}
@@ -62,6 +63,16 @@
 {{- fail (printf "fleet postgresSchema is duplicated: %s" $schema) -}}
 {{- end -}}
 {{- $_ := set $schemas $schema true -}}
+{{- $databaseUrlSecretKey := $companion.databaseUrlSecretKey | default "" -}}
+{{- if $databaseUrlSecretKey -}}
+{{- if not (regexMatch "^[A-Za-z0-9._-]+$" $databaseUrlSecretKey) -}}
+{{- fail (printf "fleet.companions[%d].databaseUrlSecretKey must be a valid Kubernetes Secret key" $index) -}}
+{{- end -}}
+{{- if hasKey $databaseUrlSecretKeys $databaseUrlSecretKey -}}
+{{- fail (printf "fleet databaseUrlSecretKey is duplicated: %s" $databaseUrlSecretKey) -}}
+{{- end -}}
+{{- $_ := set $databaseUrlSecretKeys $databaseUrlSecretKey true -}}
+{{- end -}}
 {{- $companionClaim := $companion.companionDataClaim | default "" -}}
 {{- if and (not $companionClaim) (gt $index 0) -}}
 {{- fail (printf "fleet.companions[%d].companionDataClaim is required" $index) -}}

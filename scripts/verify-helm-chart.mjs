@@ -1046,6 +1046,55 @@ for (const companion of fleetGardenCompanions) {
     `${agentDeploymentName} target-bound admin certificate`,
   );
 }
+const fleetDatabaseUrlSecretKey = 'companion-tenant-b-url';
+const fleetDatabaseUrlKeyCompanions = fleetGardenCompanions.map((companion, index) => (
+  index === 1 ? { ...companion, databaseUrlSecretKey: fleetDatabaseUrlSecretKey } : companion
+));
+const fleetDatabaseUrlKeyRendered = render(fleetGardenRenderArgs(fleetDatabaseUrlKeyCompanions));
+for (const [companion, expectedKey] of [
+  [fleetDatabaseUrlKeyCompanions[0], 'postgres-database-url'],
+  [fleetDatabaseUrlKeyCompanions[1], fleetDatabaseUrlSecretKey],
+]) {
+  const deploymentName = `psfn-agent-${companion.companionId}`;
+  const deployment = findParsedDocumentByKindName(
+    fleetDatabaseUrlKeyRendered,
+    'Deployment',
+    deploymentName,
+  );
+  const secretVolume = deployment?.spec?.template?.spec?.volumes
+    ?.find(volume => volume.name === 'postgres-database-url');
+  if (secretVolume?.secret?.items?.[0]?.key !== expectedKey) {
+    throw new Error(`${deploymentName} Postgres database URL Secret key must be ${expectedKey}`);
+  }
+  const initFileEnv = deployment?.spec?.template?.spec?.initContainers
+    ?.find(container => container.name === 'wait-for-postgres')
+    ?.env?.find(entry => entry.name === 'POSTGRES_DATABASE_URL_FILE');
+  const agentFileEnv = deployment?.spec?.template?.spec?.containers?.[0]?.env
+    ?.find(entry => entry.name === 'POSTGRES_DATABASE_URL_FILE');
+  const rawDatabaseUrlEnv = deployment?.spec?.template?.spec?.containers?.[0]?.env
+    ?.find(entry => entry.name === 'POSTGRES_DATABASE_URL');
+  if (initFileEnv?.value !== '/var/run/secrets/psfn-postgres/database-url'
+    || agentFileEnv?.value !== '/var/run/secrets/psfn-postgres/database-url') {
+    throw new Error(`${deploymentName} must consume its Postgres database URL from the Secret file`);
+  }
+  if (rawDatabaseUrlEnv) {
+    throw new Error(`${deploymentName} must not receive the raw Postgres database URL env`);
+  }
+}
+assertRenderFails(
+  fleetGardenRenderArgs(fleetGardenCompanions.map(companion => ({
+    ...companion,
+    databaseUrlSecretKey: fleetDatabaseUrlSecretKey,
+  }))),
+  `fleet databaseUrlSecretKey is duplicated: ${fleetDatabaseUrlSecretKey}`,
+);
+assertRenderFails(
+  fleetGardenRenderArgs([
+    fleetGardenCompanions[0],
+    { ...fleetGardenCompanions[1], databaseUrlSecretKey: 'invalid/key' },
+  ]),
+  'fleet.companions[1].databaseUrlSecretKey must be a valid Kubernetes Secret key',
+);
 const fleetGardenDeployment = renderedGardens[0];
 const fleetGardenYaml = findDocumentByKindName(fleetGardenRendered, 'Deployment', 'psfn-garden');
 const fleetGatewayDeployment = fleetGardenDeployments

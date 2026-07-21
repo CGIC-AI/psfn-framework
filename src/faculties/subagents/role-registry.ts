@@ -220,8 +220,13 @@ export function resolveSubagentRole(
   if (!normalized) {
     throw new Error('Subagent role name must be a non-empty string.');
   }
-  const definition = registry?.roles[normalized];
-  if (!definition) {
+  // Fail closed on prototype-chain names ('__proto__', 'constructor',
+  // 'hasOwnProperty', 'toString', …): a bare `roles[normalized]` lookup would
+  // resolve these to inherited Object.prototype members (a phantom "role") and
+  // later crash with an uncaught TypeError outside the spawn try/catch. Gate on
+  // own-property presence so every unknown name throws the structured error.
+  const roles = registry?.roles;
+  if (!roles || !Object.hasOwn(roles, normalized)) {
     const known = registry ? Object.keys(registry.roles).sort() : [];
     throw new Error(
       `Unknown subagent role "${normalized}". `
@@ -230,7 +235,7 @@ export function resolveSubagentRole(
         : 'No subagent roles are configured.'),
     );
   }
-  return { name: normalized, definition };
+  return { name: normalized, definition: roles[normalized] };
 }
 
 /**

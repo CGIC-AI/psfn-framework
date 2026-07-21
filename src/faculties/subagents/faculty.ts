@@ -890,6 +890,15 @@ export class SubagentFaculty implements SubagentControlPort {
 
   private async finishHandle(handle: ActiveSubagentHandle, result: SubagentExecutionResult): Promise<void> {
     if (handle.settled) return;
+    // 7ym.2: claim the handle synchronously — before the first await and before
+    // any slot release — so this method is idempotent against the cancel-race.
+    // A `cancel()` while `agentLoop` is null runs `finishHandle` here; the
+    // still-queued `runHandle` microtask would otherwise pass its own
+    // `if (handle.settled) return` guard (settled was set only after two awaits)
+    // and re-enter `finishHandle`, double-releasing the role slot and letting a
+    // role exceed its own maxConcurrent. Setting it now makes that microtask
+    // short-circuit. No other path reads `settled` between here and completion.
+    handle.settled = true;
     // Remove from the active set first so no further follow-up turns can be
     // enqueued via `message` once we begin draining.
     this.activeHandles.delete(handle.subagentId);
@@ -923,7 +932,6 @@ export class SubagentFaculty implements SubagentControlPort {
       completionHandoff,
     };
     this.storeRecentResult(terminalResult);
-    handle.settled = true;
     handle.resolveCompletion(cloneSubagentResult(terminalResult));
   }
 

@@ -13,7 +13,10 @@ import {
   POSTGRES_WIKI_PROJECTION_MIGRATIONS,
   SHARED_SCHEMA_NAME,
 } from '../../persistence/postgres/migrations.js';
-import { ensureSharedWikiSchema } from '../../persistence/postgres/shared-schema.js';
+import {
+  bootstrapSharedWikiSchema,
+  ensureSharedWikiSchema,
+} from '../../persistence/postgres/shared-schema.js';
 import {
   startPostgresTestHarness,
   type PostgresTestHarness,
@@ -94,14 +97,34 @@ async function freshDatabaseUrl(): Promise<string> {
     throw new Error('Postgres integration harness is not available');
   }
   const database = await harness.createDatabase();
+  const pool = createPostgresPool(database.databaseUrl, { max: 1 });
+  try {
+    await pool.query('CREATE EXTENSION vector WITH SCHEMA extensions');
+  } finally {
+    await pool.end();
+  }
   return database.databaseUrl;
 }
 
 async function connectStore(databaseUrl: string): Promise<SharedWikiPgvectorProjectionStore> {
+  await bootstrapSharedWikiSchema(databaseUrl);
   return createSharedWikiPgvectorProjectionStore(databaseUrl, deterministicEmbedding);
 }
 
 describe('shared_wiki_chunks shared-schema integration (s10f9)', () => {
+  it('fails read-only runtime construction when the gateway migration has not run', async () => {
+    const databaseUrl = await freshDatabaseUrl();
+    await expect(createSharedWikiPgvectorProjectionStore(databaseUrl, deterministicEmbedding))
+      .rejects.toThrow(/shared_schema_migrations|missing/i);
+    const pool = createPostgresPool(databaseUrl, { max: 1 });
+    try {
+      await expect(pool.query("SELECT to_regnamespace('shared') AS schema"))
+        .resolves.toMatchObject({ rows: [{ schema: null }] });
+    } finally {
+      await pool.end();
+    }
+  }, INTEGRATION_TIMEOUT_MS);
+
   it(
     'provisions the chunk table, indexes, and ledger version 3 in the shared schema only',
     async () => {

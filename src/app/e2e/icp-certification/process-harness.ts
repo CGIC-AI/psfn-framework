@@ -1,7 +1,7 @@
 import { fork, type ChildProcess } from 'node:child_process';
 import { createConnection } from 'node:net';
-import { existsSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { join, resolve } from 'node:path';
 
 import { GatewayServer } from '../../../boundary/gateway/server.js';
 import { deriveCompanionAuthToken } from '../../../boundary/gateway/companion-auth.js';
@@ -14,12 +14,13 @@ import { EventBus } from '../../../shared/event-bus.js';
 import type { IcpConversationCostBreakerEvent } from '../../../shared/telemetry/model-usage.js';
 import { readRunChargeRollingWindowFromLedger } from '../../../shared/telemetry/charge-ledger.js';
 import { resolveChargeLedgerPath } from '../../../persistence/layout.js';
-import { createPostgresPool } from '../../../persistence/postgres.js';
+import { createPostgresPool, quotePostgresRoleName } from '../../../persistence/postgres.js';
 import { PostgresCompanionPresenceStore } from '../../../persistence/postgres/companion-presence-store.js';
 import { PostgresIcpFatigueRegulationReservationStore } from '../../../persistence/postgres/icp-fatigue-regulation-reservation-store.js';
 import { PostgresIcpInitiationPolicyAuthority } from '../../../persistence/postgres/icp-initiation-policy-authority.js';
 import { PostgresIcpSharedAutonomyStore } from '../../../persistence/postgres/icp-shared-autonomy-store.js';
 import { PostgresModelUsageStore } from '../../../persistence/postgres/model-usage-store.js';
+import { bootstrapSharedSchema } from '../../../persistence/postgres/shared-schema.js';
 import { createGatewayFleetChargePolicyResolver } from '../../gateway/fleet-charge-policy-resolver.js';
 import {
   assertPostgresTenantAccessProvisioned,
@@ -46,6 +47,9 @@ import type { IcpCertificationConsentDecision } from './openai-fixture-server.js
 import { IcpCertificationArtifactRecorder } from './artifact-recorder.js';
 
 const AGENT_PROCESS_ENTRY = resolve('src/app/e2e/icp-certification/agent-process.ts');
+// Password for the disposable per-companion tenant login the agents connect as.
+// Test-only; the whole cluster is a throwaway dockerized postgres.
+const CERTIFICATION_TENANT_PASSWORD = 'icp-certification-tenant-role-not-for-production';
 const START_TIMEOUT_MS = 60_000;
 const COMMAND_TIMEOUT_MS = 60_000;
 const STOP_TIMEOUT_MS = 15_000;
@@ -468,10 +472,31 @@ async function waitForDestroyed(connection: GatewayRpcConnection): Promise<void>
   });
 }
 
+/**
+ * Provision the production tenant boundary the multi-companion agents verify at
+ * startup. The gateway migration authority (bootstrapSharedSchema) has already
+ * owned the shared schema; here we mirror the operator/launcher step:
+ *
+ *  - EVERY companion in the fleet manifest gets its own tenant schema owned by
+ *    its configured `postgresRole` (companions.json), including support
+ *    companions that never boot an agent — the agent's runtime-authority proof
+ *    checks the full fleet schema set and reciprocal isolation.
+ *  - Each BOOTED companion role is turned into the least-privilege LOGIN
+ *    credential the agent connects as: own-schema owner + DML-only shared
+ *    access with a SELECT-only migrations ledger, NOINHERIT, finite connection
+ *    limit, no cluster attributes, no role memberships. That credential is
+ *    written to the agent's POSTGRES_DATABASE_URL_FILE.
+ */
 async function provisionCertificationTenantBoundaries(
   databaseUrl: string,
   fixture: IcpCertificationFixture,
 ): Promise<void> {
+  const manifest = JSON.parse(
+    readFileSync(join(fixture.systemDataDir, 'companions.json'), 'utf8'),
+  ) as { companions: Array<{ companionId: string; postgresSchema: string; postgresRole: string }> };
+  const bootedById = new Map(
+    fixture.companions.map(companion => [companion.companionId, companion]),
+  );
   const pool = createPostgresPool(databaseUrl, {
     applicationName: 'psfn-icp-certification-tenant-provisioning',
     max: 1,
@@ -484,9 +509,13 @@ async function provisionCertificationTenantBoundaries(
     if (!runtimeLoginRole) {
       throw new Error('ICP certification could not resolve the disposable PostgreSQL login role');
     }
-    for (const companion of fixture.companions) {
+    for (const entry of manifest.companions) {
       const plan = planPostgresTenantAccess({
-        schema: companion.postgresSchema,
+        schema: entry.postgresSchema,
+        // The agent runtime asserts the schema is owned by its configured
+        // tenant role (companions.json), not the derived default. Provision the
+        // same role here so the boundary the agent verifies actually exists.
+        role: entry.postgresRole,
         approvedSharedSchema: 'shared',
         approvedSharedAccess: 'read_write',
       });
@@ -496,6 +525,36 @@ async function provisionCertificationTenantBoundaries(
         relocateExtensions: ['vector'],
       });
       await assertPostgresTenantAccessProvisioned(pool, plan);
+
+      const booted = bootedById.get(entry.companionId);
+      if (!booted) {
+        // A support companion in the fleet manifest that never boots an agent:
+        // its schema must merely exist and stay reciprocally isolated. Leave the
+        // role NOLOGIN (no agent connects as it).
+        continue;
+      }
+      const role = quotePostgresRoleName(entry.postgresRole);
+      // The migrations ledger is SELECT-only for a runtime credential; the
+      // read_write tenant grant included it, so narrow it back.
+      await pool.query(
+        `REVOKE INSERT, UPDATE, DELETE ON shared.shared_schema_migrations FROM ${role}`,
+      );
+      // Turn the NOLOGIN owner into the least-privilege login the agent uses.
+      // The authority check only requires a finite limit >= 1; an agent opens
+      // many runtime pools, so the cap is generous but still bounded.
+      await pool.query(
+        `ALTER ROLE ${role} LOGIN CONNECTION LIMIT 100 PASSWORD '${CERTIFICATION_TENANT_PASSWORD}'`,
+      );
+      const credentialFile = booted.env.POSTGRES_DATABASE_URL_FILE;
+      if (!credentialFile) {
+        throw new Error(
+          `ICP certification companion ${entry.companionId} is missing POSTGRES_DATABASE_URL_FILE`,
+        );
+      }
+      const roleUrl = new URL(databaseUrl);
+      roleUrl.username = entry.postgresRole;
+      roleUrl.password = CERTIFICATION_TENANT_PASSWORD;
+      writeFileSync(credentialFile, `${roleUrl.toString()}\n`, { encoding: 'utf8', mode: 0o600 });
     }
   } finally {
     await pool.end();
@@ -553,6 +612,11 @@ export async function startIcpCertificationProcessHarness(input: {
     icpConversationChargePolicyResolver: resolveChargePolicy,
   });
   const companionIds = [CERTIFICATION_COMPANION_A, CERTIFICATION_COMPANION_B];
+  // Shared-schema stores no longer self-provision DDL: the gateway migration
+  // authority provisions the shared schema before agents connect. This
+  // hand-composed harness stands in for that authority, so mirror it here
+  // before any shared store (presence, autonomy, fatigue) connects.
+  await bootstrapSharedSchema(input.databaseUrl);
   const presence = await PostgresCompanionPresenceStore.connect(input.databaseUrl);
   const autonomy = await PostgresIcpSharedAutonomyStore.connect(input.databaseUrl, {
     knownCompanionIds: companionIds,

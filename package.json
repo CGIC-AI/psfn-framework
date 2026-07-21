@@ -108,6 +108,7 @@
     "garden:build": "npm --prefix admin-ui run build",
     "garden:preview": "npm --prefix admin-ui run preview",
     "verify:helm-chart": "tsx scripts/verify-kubernetes-helm-recovery-chart.ts && tsx scripts/verify-helm-owner-file-registry.ts && node scripts/verify-helm-chart.mjs && node scripts/verify-helm-charge-skills-owner-upgrade.mjs && node scripts/verify-kube-ship-chart-provenance.mjs",
+    "verify:shell-sandbox-image": "node scripts/verify-shell-sandbox-image.mjs",
     "verify:k8s-manifests": "node scripts/verify-k8s-manifests.mjs",
     "verify:deployment-contracts": "npm run verify:helm-chart && npm run verify:k8s-manifests",
     "verify:garden-ui": "npm run garden:build && npm run test:garden-ui",

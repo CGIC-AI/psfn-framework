@@ -31,6 +31,18 @@ describe('buildRLMSystemPrompt', () => {
     expect(prompt).toContain('Session continuity lookup still belongs to `session_search`');
   });
 
+  it('documents shell_exec only when the audited sandbox shell is actually exposed', () => {
+    const withShell = buildRLMSystemPrompt(undefined, undefined, { shellExecAvailable: true });
+    expect(withShell).toContain('### Shell (sandboxed)');
+    expect(withShell).toContain('`await shell_exec(command, args?, { cwd?, timeoutMs?, maxOutputChars? })`');
+    expect(withShell).toContain('read-only repository copy at `/repo`');
+    expect(withShell).toContain('surface the error verbatim instead of inventing output');
+
+    const withoutShell = buildRLMSystemPrompt(undefined, undefined, { shellExecAvailable: false });
+    expect(withoutShell).not.toContain('shell_exec');
+    expect(buildRLMSystemPrompt()).not.toContain('### Shell (sandboxed)');
+  });
+
   it('keeps explicitly writable sandboxes model-visible as review-only workspaces', () => {
     const prompt = buildRLMSystemPrompt(undefined, {
       allowRepoMutation: true,

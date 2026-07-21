@@ -84,6 +84,7 @@ import {
   type CapabilityAccess,
   type EgressToolGuard,
 } from '../../system/capabilities/gate.js';
+import type { PreToolHookGate } from '../../boundary/gateway/pre-tool-hook.js';
 import { assertToolCapabilityRequirementDeclared } from '../../system/capabilities/requirements.js';
 import { isCanonicalFirstPartyToolName } from './tool-surface/registry.js';
 import type { ToolUsageRanking } from './tool-surface/usage-ranking.js';
@@ -340,6 +341,12 @@ export class SubstrateAgent {
     | import('../../system/capabilities/gate.js').CapabilityDeniedTransportPolicy
     | undefined;
   private gatedToolCache = new WeakMap<AgentTool<any>, AgentTool<any>>();
+  /**
+   * Synchronous pre_tool_use hook gate (bead 7ym.3). Late-bound after
+   * construction (the operator hook runtime is wired later in startup); gated
+   * tool wrappers read it lazily, so cached wrappers pick up a later binding.
+   */
+  private preToolHookGate: PreToolHookGate | null = null;
   private readonly appCache: AppCache;
   private reflectionNudge = new ReflectionNudgeTracker();
   private readonly promptCacheRuntime = new PromptCacheTurnRuntime();
@@ -805,6 +812,15 @@ export class SubstrateAgent {
     };
   }
 
+  /**
+   * Late-bind the synchronous pre_tool_use hook gate (bead 7ym.3). Called
+   * during startup once the operator hook runtime exists. Gated tools consult
+   * this lazily, so previously cached wrappers observe the binding too.
+   */
+  setPreToolHookGate(gate: PreToolHookGate | null): void {
+    this.preToolHookGate = gate;
+  }
+
   private withCapabilityGates(tools: AgentTool<any>[]): AgentTool<any>[] {
     return tools.map((tool) => {
       const cached = this.gatedToolCache.get(tool);
@@ -821,6 +837,7 @@ export class SubstrateAgent {
         () => this.resolveCapabilityAccess(),
         () => this.buildEgressToolGuard(),
         this.allowCapabilityDeniedTransport,
+        () => this.preToolHookGate,
       );
       this.gatedToolCache.set(tool, wrapped);
       return wrapped;

@@ -234,6 +234,21 @@
   "analysisWorkbenchMaxSubQueries": 24,
   "analysisWorkbenchExecutionTimeoutMs": 5000,
   "analysisWorkbenchOutputTruncation": 8192,
+  "shellExec": {
+    "enabled": false,
+    "allowlist": [],
+    "envAllowlist": [],
+    "mountRepositoryReadOnly": false,
+    "defaultTimeoutMs": 600000,
+    "maxTimeoutMs": 3600000,
+    "defaultMaxOutputChars": 20000,
+    "maxOutputChars": 100000,
+    "maxProcesses": 64,
+    "maxAddressSpaceBytes": 2147483648,
+    "maxFileBytes": 268435456,
+    "maxCpuSeconds": 1800,
+    "maxOpenFiles": 512
+  },
   "observerEvalSidecar": {
     "enabled": false,
     "sidecarId": "observer-eval-sidecar",

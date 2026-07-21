@@ -60,6 +60,17 @@ describe('createShellTool', () => {
     expect(ops.exec).toHaveBeenCalledWith('node', [], {});
   });
 
+  it('describes the one-shot Personal Workspace CLI boundary and durable writes', () => {
+    const tool = createShellTool({ exec: vi.fn() });
+
+    expect(tool.description).toContain('Personal Workspace');
+    expect(tool.description).toContain('Git checkout');
+    expect(tool.description).toContain('one-shot');
+    expect(tool.description).toContain('network');
+    expect(tool.description).toContain('persist');
+    expect(tool.description).toContain('fresh');
+  });
+
   it('fails closed on unknown actions', async () => {
     const ops = {
       exec: vi.fn(),

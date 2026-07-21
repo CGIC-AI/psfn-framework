@@ -83,7 +83,7 @@ import { ValuesJournalStore } from '../../../faculties/values/store.js';
 import type { IntrospectionConsentStore } from '../../../faculties/introspection/consent-store.js';
 import type { IntrospectionTurnSensitivityDecisions } from '../../../faculties/introspection/turn-sensitivity.js';
 import { DEFAULT_REPL_CONFIG, type REPLConfig } from '../../../core/tools/analysis-workbench/types.js';
-import type { SandboxExecutionPort } from '../../../boundary/sandbox/capabilities/contracts.js';
+import type { SandboxExecutionPort, SandboxExecutionPortSeed } from '../../../boundary/sandbox/capabilities/contracts.js';
 import type { Scheduler } from '../../../core/scheduler/scheduler.js';
 import type { CapabilityTier } from '../../../system/config/runtime-config-contracts.js';
 import { loadCharacterCard, composeSystemPrompt } from '../../../core/identity/loader.js';
@@ -116,7 +116,6 @@ import {
   resolveValuesJournalPath,
 } from '../../../persistence/layout.js';
 import { createDefaultPostgresSessionAdapters } from '../../../persistence/sessions/postgres-adapters.js';
-import { derivePostgresTenantRole } from '../../../persistence/postgres/tenancy.js';
 import { createPostgresShardSchemaLifecycle } from '../../../persistence/postgres/shard-schema-lifecycle.js';
 import { FatigueLedger } from '../../../shared/telemetry/fatigue-ledger.js';
 
@@ -247,7 +246,9 @@ export async function composeSessionRuntimeAsync(
   }
   const postgresSchema = options.config.postgresSchema?.trim();
   const postgresRole = options.config.multiCompanion === true && postgresSchema
-    ? derivePostgresTenantRole(postgresSchema)
+    ? options.config.postgresRole?.trim() || (() => {
+        throw new Error('Multi-companion session composition requires config.postgresRole');
+      })()
     : undefined;
   const sessionAdapters = await createDefaultPostgresSessionAdapters(databaseUrl, {
     sessionsDir,
@@ -281,7 +282,11 @@ export async function composeMemoryStoreAsync(
       ? {
           schema: config.postgresSchema.trim(),
           ...(config.multiCompanion === true
-            ? { role: derivePostgresTenantRole(config.postgresSchema.trim()) }
+            ? {
+                role: config.postgresRole?.trim() || (() => {
+                  throw new Error('Multi-companion memory composition requires config.postgresRole');
+                })(),
+              }
             : {}),
         }
       : {}),
@@ -580,7 +585,7 @@ export interface ToolRuntimeOptions {
   compositionalPolicy?: SubstrateConfig['compositionalPolicy'];
   moduleInstallConfirmationQueue?: ApprovalQueuePort | null;
   onModuleRegistryMutation?: (mutation: ModuleRegistryMutation) => Promise<void> | void;
-  executionPort?: SandboxExecutionPort | null;
+  executionPort?: SandboxExecutionPort | SandboxExecutionPortSeed | null;
   compressionGuidelineEvolution?: CompressionGuidelineEvolutionPort | null;
   shardParentIcpDelivery: PolicyGovernedShardParentIcpDeliveryPort | null;
   /**

@@ -145,7 +145,6 @@ function makeDeps(world: FakeWorld, overrides: Partial<SelfDiagnosisDeps> = {}):
       PSFN_PREVIOUS_GIT_COMMIT: 'prev00000',
       PSFN_REPOSITORY_DIR: CHECKOUT,
       BEADS_TOOLS_ENABLED: 'true',
-      SHELL_EXEC_ENABLED: 'false',
       GIT_REPO_ROOT: '/app/repository',
     },
     paths: {
@@ -249,7 +248,8 @@ describe('buildSelfDiagnosisReport', () => {
 
     const policy = report.policy as any;
     expect(policy.beads).toEqual({ value: true, source: 'env' });
-    expect(policy.shellExec).toEqual({ value: false, source: 'env' });
+    expect(policy.shellExec).toEqual({ value: false, source: 'settings.json' });
+    expect(policy.shellExecAllowlist).toEqual({ value: [], source: 'settings.json' });
 
     const conformance = report.toolConformance as any;
     expect(conformance).toMatchObject({ status: 'available', recorded: true, total: 3, passCount: 2, failCount: 1 });

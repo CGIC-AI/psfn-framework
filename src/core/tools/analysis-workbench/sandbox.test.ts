@@ -621,6 +621,8 @@ describe('REPLSandbox', () => {
 
     expect(result.output).toContain('true v22.0.0');
     expect(executionPort.shellExec).toHaveBeenCalledWith('node', ['-v'], {});
+    // The prompt builder keys shell documentation off the same exposure.
+    expect(sandbox.hasHelper('shell_exec')).toBe(true);
   });
 
   it('fails closed when the execution port returns an invalid shell result shape', async () => {
@@ -668,6 +670,7 @@ describe('REPLSandbox', () => {
       8192,
     );
     expect(result.output).toBe('undefined');
+    expect(sandbox.hasHelper('shell_exec')).toBe(false);
   });
 
   it('omits shell_exec helper when execution port is unavailable', async () => {

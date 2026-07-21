@@ -24,18 +24,26 @@ describe('local companion fleet runtime', () => {
     mkdirSync(systemDataDir, { recursive: true });
     mkdirSync(companionDataDir, { recursive: true });
     writeFileSync(join(systemDataDir, 'companions.json'), `${JSON.stringify({
+      postgres: {
+        sharedMigrationRole: 'shared_schema_migration',
+        sharedMigrationDatabaseUrlRef: { kind: 'env', envName: 'SHARED_MIGRATION_URL' },
+      },
       companions: [
         {
           companionId: COMPANION_A,
           companionDataDir: 'companions/a',
           characterCardPath: 'companions/a/character-card.json',
           postgresSchema: 'companion_a',
+          postgresRole: 'companion_a_runtime',
+          postgresDatabaseUrlRef: { kind: 'env', envName: 'COMPANION_A_DATABASE_URL' },
         },
         {
           companionId: COMPANION_B,
           companionDataDir: 'companions/b',
           characterCardPath: 'companions/b/character-card.json',
           postgresSchema: 'companion_b',
+          postgresRole: 'companion_b_runtime',
+          postgresDatabaseUrlRef: { kind: 'env', envName: 'COMPANION_B_DATABASE_URL' },
         },
       ],
     })}\n`);

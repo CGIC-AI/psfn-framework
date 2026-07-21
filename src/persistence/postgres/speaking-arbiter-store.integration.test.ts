@@ -12,6 +12,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { PostgresSpeakingArbiterStore } from './speaking-arbiter-store.js';
 import { SHARED_SCHEMA_NAME } from './migrations.js';
+import { bootstrapSharedSchema } from './shared-schema.js';
 import { createPostgresPool } from '../postgres.js';
 import {
   startPostgresTestHarness,
@@ -45,6 +46,9 @@ async function freshDatabaseUrl(): Promise<string> {
     throw new Error('Postgres integration harness is not available');
   }
   const database = await harness.createDatabase();
+  // The store no longer runs DDL: the gateway migration authority provisions
+  // the shared schema before agents connect. Mirror that here.
+  await bootstrapSharedSchema(database.databaseUrl);
   return database.databaseUrl;
 }
 

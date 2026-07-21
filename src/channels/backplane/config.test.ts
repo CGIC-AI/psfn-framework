@@ -370,6 +370,69 @@ describe('loadRuntimeChannelsConfig', () => {
     }
   });
 
+  it('loads the Bearer companion selector allowlist from channels.json', () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'psfn-channel-config-'));
+    try {
+      writeFileSync(join(dataDir, 'channels.json'), JSON.stringify({
+        api: {
+          companionId: '11111111-1111-4111-8111-111111111111',
+          selectableCompanionIds: [
+            ' 11111111-1111-4111-8111-111111111111 ',
+            '22222222-2222-4222-8222-222222222222',
+          ],
+        },
+      }));
+
+      expect(loadRuntimeChannelsConfig(dataDir, {}).api).toEqual({
+        companionId: '11111111-1111-4111-8111-111111111111',
+        selectableCompanionIds: [
+          '11111111-1111-4111-8111-111111111111',
+          '22222222-2222-4222-8222-222222222222',
+        ],
+      });
+    } finally {
+      rmSync(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects duplicate Bearer companion selector allowlist entries', () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'psfn-channel-config-'));
+    try {
+      writeFileSync(join(dataDir, 'channels.json'), JSON.stringify({
+        api: {
+          companionId: '11111111-1111-4111-8111-111111111111',
+          selectableCompanionIds: [
+            '22222222-2222-4222-8222-222222222222',
+            '22222222-2222-4222-8222-222222222222',
+          ],
+        },
+      }));
+
+      expect(() => loadRuntimeChannelsConfig(dataDir, {})).toThrow(
+        'channels.json.api.selectableCompanionIds must not contain duplicates',
+      );
+    } finally {
+      rmSync(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects a Bearer companion selector allowlist without pinned routing', () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'psfn-channel-config-'));
+    try {
+      writeFileSync(join(dataDir, 'channels.json'), JSON.stringify({
+        api: {
+          selectableCompanionIds: ['22222222-2222-4222-8222-222222222222'],
+        },
+      }));
+
+      expect(() => loadRuntimeChannelsConfig(dataDir, {})).toThrow(
+        'channels.json.api.selectableCompanionIds requires channels.json.api.companionId',
+      );
+    } finally {
+      rmSync(dataDir, { recursive: true, force: true });
+    }
+  });
+
   it('omits companionId routing fields when channels.json does not declare them', () => {
     const dataDir = mkdtempSync(join(tmpdir(), 'psfn-channel-config-'));
     try {

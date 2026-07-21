@@ -32,7 +32,8 @@ export const CATALOG_BOUNDARY_TOOL_CONTRACTS = {
     example: { action: 'no_reply', reason: 'The message requests no response.' },
   },
   fs: {
-    purpose: 'Read and safely mutate files within the configured personal-file boundary.',
+    purpose:
+      'Read and safely mutate files within the configured personal-file boundary; one direct read has a hard cap of 20,000 bytes.',
     actions: [
       action('list', [], ['path', 'glob', 'max_entries', 'max_scanned_entries']),
       action('read', ['path'], ['max_bytes']),
@@ -41,7 +42,11 @@ export const CATALOG_BOUNDARY_TOOL_CONTRACTS = {
       action('edit', ['path', 'old_text', 'new_text'], ['replace_all']),
     ],
     output: 'It returns bounded file data and fails closed on unsafe paths or ambiguous mutation.',
-    guidance: 'Do not use it for git state; use repo, and reserve analysis_workbench for genuinely large evidence sets.',
+    guidance:
+      'Do not request more than 20,000 bytes from one read. For a larger document or evidence set, use analysis_workbench '
+      + 'so its temporary context can be discarded after a bounded result, or use a bounded subagent instructed to return '
+      + 'provenance-bearing excerpts with the source path and line or byte ranges; do not rely on a summary-only handoff. '
+      + 'Do not use fs for git state; use repo.',
     example: { action: 'search', query: 'TODO', glob: 'notes/**/*.md' },
   },
   repo: {
@@ -58,11 +63,26 @@ export const CATALOG_BOUNDARY_TOOL_CONTRACTS = {
     example: { action: 'inspect', target: 'both' },
   },
   shell: {
-    purpose: 'Run one direct command through the gateway allowlist when no semantic tool owns the operation.',
+    purpose:
+      'Run a one-shot Bash or CLI command while puttering through the entire Personal Workspace, including any Git checkout stored inside it.',
     actions: [action('exec', ['command'], ['args', 'cwd', 'timeout_ms', 'max_output_chars', 'env_vars'])],
-    output: 'It returns bounded stdout, stderr, exit status, timing, and truncation state without bypassing policy.',
-    guidance: 'Do not use shell for ordinary file or git work; prefer fs or repo.',
-    example: { action: 'exec', command: 'node', args: ['--version'] },
+    output:
+      'Each exec starts in a fresh isolated process, returns bounded stdout, stderr, exit status, timing, and truncation state, and leaves intentional workspace writes persisted for later calls.',
+    guidance:
+      'The default wall budget is ten minutes and the operator-owned ceiling is one hour. The sandbox has no network, '
+      + 'clears inherited secrets, exposes only read-only image CLI binaries, and cannot see host or runtime-state paths '
+      + 'outside the Personal Workspace. The workspace is mounted read-write at /workspace (the default cwd); when the '
+      + 'operator enables it, a read-only copy of the source repository is mounted at /repo (also exposed as $PSFN_REPO). '
+      + 'The image carries analysis and document tooling — bash, rg, jq, file, unzip/zip, sqlite3, pdftotext (poppler), '
+      + 'pandoc, python3, and uv — so prefer targeted CLI filters and small scripts over dumping whole files. '
+      + 'Use a relative cwd to move around the workspace. Prefer fs or repo when their '
+      + 'structured action is clearer; use shell for direct CLI exploration, scripts, builds, tests, and Git commands.',
+    example: {
+      action: 'exec',
+      command: 'bash',
+      args: ['-lc', 'pwd; git status --short; rg -n "needle" .'],
+      cwd: '.',
+    },
   },
   web: {
     purpose: 'Retrieve external web material or perform small-scope discovery through the configured backend.',
@@ -93,7 +113,11 @@ export const CATALOG_BOUNDARY_TOOL_CONTRACTS = {
     purpose: 'Analyze a large file, codebase, log set, transcript set, dataset, or evidence set in a temporary bounded sandbox.',
     actions: [action('analyze', ['task'], ['maxIterations', 'maxTokens'], { id: 'analyze', actionField: false })],
     output: 'It returns a bounded synthesis and does not mutate source state.',
-    guidance: 'Do not use it for routine reasoning, simple lookup, schema confusion, or ordinary orient and schedule work; use the relevant callable semantic tool.',
+    guidance:
+      'Use it when material is too large for the fs 20,000-byte direct-read cap, and bring only the bounded answer plus '
+      + 'source paths and relevant line or byte ranges back into the conversation before its temporary context is discarded. '
+      + 'Do not use it for routine reasoning, simple lookup, schema confusion, or ordinary orient and schedule work; '
+      + 'use the relevant callable semantic tool.',
     example: { task: 'Compare the failure signatures across these large logs and cite the decisive lines.' },
   },
 } as const satisfies Record<string, CanonicalToolSurfaceContract>;

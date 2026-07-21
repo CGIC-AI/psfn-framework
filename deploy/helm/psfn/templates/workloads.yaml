@@ -637,6 +637,11 @@ spec:
             {{- toYaml .Values.workloads.garden.resources | nindent 12 }}
           volumeMounts:
             {{- if .Values.fleet.enabled }}
+            {{- range $index, $companion := .Values.fleet.companions }}
+            - name: {{ printf "garden-companion-data-%d" $index }}
+              mountPath: {{ printf "%s/companions/%s" $.Values.fleet.runtimeRoot $companion.companionId }}
+              readOnly: true
+            {{- end }}
             - name: postgres-database-url
               mountPath: /var/run/secrets/psfn-postgres
               readOnly: true
@@ -672,6 +677,11 @@ spec:
             {{- end }}
       volumes:
         {{- if .Values.fleet.enabled }}
+        {{- range $index, $companion := .Values.fleet.companions }}
+        - name: {{ printf "garden-companion-data-%d" $index }}
+          persistentVolumeClaim:
+            claimName: {{ default (include "psfn.companionDataClaimName" $) $companion.companionDataClaim }}
+        {{- end }}
         - name: postgres-database-url
           secret:
             secretName: {{ include "psfn.databaseUrlSecretName" . }}

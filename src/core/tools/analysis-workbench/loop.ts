@@ -768,7 +768,9 @@ export async function runRLMLoop(
     nestedAnalysisAvailable: nestedAnalysisPolicy.allowed && depth < MAX_NESTED_ANALYSIS_DEPTH,
   };
 
-  const systemPrompt = buildRLMSystemPrompt(metadata, deps.mutationPolicy);
+  const systemPrompt = buildRLMSystemPrompt(metadata, deps.mutationPolicy, {
+    shellExecAvailable: sandbox.hasHelper('shell_exec'),
+  });
 
   const messages: ContextMessage[] = [
     { role: 'user', content: task },

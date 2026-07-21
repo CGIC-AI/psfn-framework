@@ -1,28 +1,26 @@
 import type { ShellExecParams, ShellExecResult } from '../../gateway/protocol.js';
+import { runBubblewrapCommand } from './bubblewrap-runner.js';
+import {
+  resolveShellExecution,
+  ShellExecPolicyError,
+} from './shell-execution-policy.js';
 import type { ShellExecPolicyConfig } from './shell-policy-config.js';
 
-export const SHELL_EXEC_CONFINEMENT_UNAVAILABLE =
-  'shell.exec is unavailable because this runtime has no OS-enforced filesystem confinement';
+export { ShellExecPolicyError } from './shell-execution-policy.js';
 
-export class ShellExecPolicyError extends Error {}
-
-/**
- * `cwd`, argv inspection, executable allowlists, and canonical-path checks are
- * not an execution sandbox. Evaluators can hide file access inside program
- * text, and every pathname check races the later `execve(2)`/open performed by
- * a child. Until the production runtime supplies an enforceable open/exec
- * boundary (for example Landlock/openat2 or an equivalent container profile),
- * the only honest policy is to execute nothing.
- */
 export async function executeShellCommandWithPolicy(
-  _params: ShellExecParams,
+  params: ShellExecParams,
   options: {
     workspacePath: string;
     policy: ShellExecPolicyConfig;
   },
 ): Promise<ShellExecResult> {
-  if (options.policy.enabled !== true) {
-    throw new ShellExecPolicyError('shell.exec policy is disabled');
+  try {
+    return await runBubblewrapCommand(resolveShellExecution(params, options));
+  } catch (error) {
+    if (error instanceof ShellExecPolicyError) throw error;
+    throw new ShellExecPolicyError(
+      `shell.exec sandbox failed: ${error instanceof Error ? error.message : String(error)}`,
+    );
   }
-  throw new ShellExecPolicyError(SHELL_EXEC_CONFINEMENT_UNAVAILABLE);
 }

@@ -12,10 +12,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { importCharacterCardFromPath } from '../src/core/identity/importer.js';
-import {
-  planPostgresTenantAccess,
-  type PostgresTenantAccessPlan,
-} from '../src/persistence/postgres/tenancy.js';
+import type { PostgresTenantAccessPlan } from '../src/persistence/postgres/tenancy.js';
 import { PER_COMPANION_OWNER_FILES } from '../src/system/config/settings-contract.js';
 import { seedCompanionStartupOwnerFiles } from '../src/system/config/startup-owner-files.js';
 import {
@@ -45,7 +42,7 @@ const CARD_SOURCES = new Map([
 class FakeFixtureDatabase implements SupportFixtureDatabasePort {
   readonly schemas = new Set(['shakedown_artie']);
   readonly roles = new Set([
-    planPostgresTenantAccess({ schema: 'shakedown_artie' }).role,
+    'shakedown_artie_runtime',
   ]);
   readonly calls: string[] = [];
   failProvisionSchema: string | null = null;
@@ -273,9 +270,7 @@ describe('support-companion fixture lifecycle', () => {
   it('refuses to adopt a stale support role before provisioning or writing state', async () => {
     const round = createRound();
     const paths = resolveSupportFixturePaths(round.runtimeRoot, round.systemDataDir);
-    round.database.roles.add(
-      planPostgresTenantAccess({ schema: 'shakedown_support_mica' }).role,
-    );
+    round.database.roles.add('shakedown_mica_runtime');
 
     await expect(standUpSupportFixtures(lifecycleInput(round)))
       .rejects.toThrow('tenant remained shakedown_support_mica');

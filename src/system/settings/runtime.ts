@@ -17,6 +17,7 @@ import {
   cloneMemoryRetrievalPolicy,
   createDefaultMemoryRetrievalPolicy,
 } from '../config/memory-retrieval-policy.js';
+import { createDefaultShellExecSettings } from '../config/shell-exec-config.js';
 import {
   cloneImageWorkflowSettings,
   normalizeFalCreateModelSetting,
@@ -128,6 +129,7 @@ const DIRECT_DEFINED_CONFIG_SETTINGS = [
   'analysisWorkbenchMaxSubQueries',
   'analysisWorkbenchExecutionTimeoutMs',
   'analysisWorkbenchOutputTruncation',
+  'shellExec',
   'voiceSessionTimeoutMs',
   'voiceMaxFrameBytes',
   'voiceMaxPendingFrames',
@@ -382,6 +384,9 @@ function getWebAndGardenSettingsSnapshot(config: SubstrateConfig) {
     webFetchTlsCaCertPaths: config.webFetchTlsCaCertPaths ?? [],
     capabilityTier: config.capabilityTier ?? 'nursery',
     promotedExtendedTools: config.promotedExtendedTools ?? [],
+    shellExec: structuredClone(
+      config.shellExec ?? createDefaultShellExecSettings(),
+    ),
     chatApiBaseUrl:
       (config as SubstrateConfig & { chatApiBaseUrl?: string })
         .chatApiBaseUrl ?? null,
@@ -409,6 +414,7 @@ function getWebAndGardenSettingsSnapshot(config: SubstrateConfig) {
     | 'webFetchTlsCaCertPaths'
     | 'capabilityTier'
     | 'promotedExtendedTools'
+    | 'shellExec'
     | 'chatApiBaseUrl'
     | 'comfyUiBaseUrl'
     | 'imageProvider'

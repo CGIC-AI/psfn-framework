@@ -208,6 +208,7 @@ export function buildSupportFixturePlans(contract: CompanionsFleetConfig): {
   const [primary, ...supports] = contract.companions.map(companion => (
     planPostgresTenantAccess({
       schema: companion.postgresSchema,
+      role: companion.postgresRole,
       approvedSharedSchema: 'shared',
       approvedSharedAccess: 'read_write',
     })

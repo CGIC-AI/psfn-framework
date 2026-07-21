@@ -30,6 +30,7 @@ import { CapabilityRuntime } from '../../system/capabilities/runtime.js';
 import { GatewayCapabilityTierResolver } from './capability-tier-resolver.js';
 import type { ResolvedCompanionsFleetConfig } from '../../system/config/companions-config.js';
 import { deriveShardCapabilityGrant } from '../../system/capabilities/shard-derivation.js';
+import { GatewayApiRuntime } from '../../channels/api/gateway-runtime.js';
 
 // Mock the transport module to avoid real socket operations
 vi.mock('./transport.js', () => ({
@@ -1468,6 +1469,78 @@ describe('GatewayServer multi-companion routing (flag on)', () => {
     await expect(requestPromise).resolves.toBeNull();
   });
 
+  it('attributes pinned and selected chat responses to the authenticated responding connection', async () => {
+    const companionA = '11111111-1111-4111-8111-111111111111';
+    const companionB = '22222222-2222-4222-8222-222222222222';
+    const { server, connect } = await setupServer({
+      ...createMinimalOptions(),
+      multiCompanion: multiCompanion({ api: companionA }),
+    });
+    const connA = await connect();
+    const connB = await connect();
+    await identifyAgent(connA, companionA, 1);
+    await identifyAgent(connB, companionB, 2);
+    const runtime = new GatewayApiRuntime(server);
+
+    const runTurn = async (
+      targetCompanionId: string,
+      targetConnection: MockConnection,
+      stream: boolean,
+    ) => {
+      const onDelta = vi.fn();
+      const completion = runtime.handleChatCompletion({
+        request: {
+          model: 'openai-compatible-placeholder',
+          messages: [{ role: 'user', content: 'hello' }],
+          stream,
+        },
+        principal: { id: 'principal', mode: 'api_key' },
+        headers: {},
+        companionId: targetCompanionId,
+        ...(stream ? { onDelta } : {}),
+      });
+      await new Promise(r => setTimeout(r, 10));
+      const frame = methodFrames(targetConnection, 'api.chat.completion').at(-1);
+      expect(frame).toBeDefined();
+      if (stream) {
+        targetConnection._emit({
+          jsonrpc: '2.0',
+          method: 'api.stream.delta',
+          params: { requestId: frame.params.requestId, text: 'delta' },
+        });
+      }
+      targetConnection._emit({
+        jsonrpc: '2.0',
+        id: frame.id,
+        result: {
+          ok: true,
+          response: {
+            content: 'done',
+            channelId: 'api:principal:session',
+            inputTokens: 1,
+            outputTokens: 1,
+          },
+        },
+      });
+      return { result: await completion, onDelta };
+    };
+
+    const pinned = await runTurn(companionA, connA, false);
+    expect(pinned.result).toMatchObject({
+      ok: true,
+      response: { companionId: companionA },
+    });
+    expect(methodFrames(connB, 'api.chat.completion')).toHaveLength(0);
+
+    const selected = await runTurn(companionB, connB, true);
+    expect(selected.result).toMatchObject({
+      ok: true,
+      response: { companionId: companionB },
+    });
+    expect(selected.onDelta).toHaveBeenCalledWith('delta', companionB);
+    expect(methodFrames(connA, 'api.chat.completion')).toHaveLength(1);
+  });
+
   it('routes voice/channel streams by message channelType to exactly the routed companion', async () => {
     const routed = { messages: [] as any[] };
     const { server, connect } = await setupServer({
@@ -1673,6 +1746,38 @@ describe('GatewayServer multi-companion routing (flag on)', () => {
     });
     await new Promise(r => setTimeout(r, 10));
     expect(received).toEqual(['legit']);
+  });
+
+  it('accepts selected-companion stream deltas only from the request-bound companion', async () => {
+    const { server, connect } = await setupServer({
+      ...createMinimalOptions(),
+      multiCompanion: multiCompanion({ api: '11111111-1111-4111-8111-111111111111' }),
+    });
+    const connA = await connect();
+    const connB = await connect();
+    await identifyAgent(connA, '11111111-1111-4111-8111-111111111111', 1);
+    await identifyAgent(connB, '22222222-2222-4222-8222-222222222222', 2);
+
+    const received: string[] = [];
+    server.subscribeApiStream(
+      'req-selected',
+      (text) => received.push(text),
+      '22222222-2222-4222-8222-222222222222',
+    );
+
+    connA._emit({
+      jsonrpc: '2.0',
+      method: 'api.stream.delta',
+      params: { requestId: 'req-selected', text: 'wrong responder' },
+    });
+    connB._emit({
+      jsonrpc: '2.0',
+      method: 'api.stream.delta',
+      params: { requestId: 'req-selected', text: 'selected responder' },
+    });
+    await new Promise(r => setTimeout(r, 10));
+
+    expect(received).toEqual(['selected responder']);
   });
 });
 

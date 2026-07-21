@@ -12,6 +12,7 @@ import { SpeakingReservationPhase } from './reservation-phase.js';
 import type { ReservationPhaseConfig, ReservationSignalContext } from './reservation-phase.js';
 import type { SocialPotSnapshot } from '../fatigue/social-pot.js';
 import { PostgresSpeakingArbiterStore } from '../../../persistence/postgres/speaking-arbiter-store.js';
+import { bootstrapSharedSchema } from '../../../persistence/postgres/shared-schema.js';
 import {
   startPostgresTestHarness,
   type PostgresTestHarness,
@@ -71,6 +72,9 @@ async function connectStore(): Promise<PostgresSpeakingArbiterStore> {
     throw new Error('Postgres integration harness is not available');
   }
   const database = await harness.createDatabase();
+  // The store no longer runs DDL: the gateway migration authority provisions
+  // the shared schema before agents connect. Mirror that here.
+  await bootstrapSharedSchema(database.databaseUrl);
   return PostgresSpeakingArbiterStore.connect(database.databaseUrl);
 }
 

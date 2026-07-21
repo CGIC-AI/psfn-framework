@@ -5,9 +5,11 @@ import type {
 import { parseIcpConversationCorrelation } from '../../shared/contracts/icp-autonomy.js';
 import { isRecord } from '../../shared/utils/types.js';
 import { parseTurnId } from '../turns/id.js';
+import { createHash } from 'node:crypto';
 import {
   buildInternalStateSnapshotRef,
   cloneInternalState,
+  serializeInternalState,
   type InternalState,
 } from '../self-model/state.js';
 import {
@@ -110,6 +112,20 @@ function isInternalStateShape(value: unknown): value is InternalState {
     return false;
   }
   return true;
+}
+
+// Rows recorded before emotional.discrepancies existed hashed a serialization
+// without that key; re-parsing normalizes the key back in, so the recomputed
+// ref can never match theirs. Accept the legacy digest only when the parsed
+// discrepancies list is empty — a legacy row cannot carry a non-empty one.
+// Digest shape (sha256 hex sliced to 16, internal-state-v1 prefix) must stay
+// in lockstep with buildInternalStateSnapshotRef.
+function matchesLegacyInternalStateSnapshotRef(state: InternalState, ref: string): boolean {
+  if ((state.emotional.discrepancies?.length ?? 0) > 0) return false;
+  const normalized = JSON.parse(serializeInternalState(state)) as { emotional: Record<string, unknown> };
+  delete normalized.emotional.discrepancies;
+  const digest = createHash('sha256').update(JSON.stringify(normalized)).digest('hex').slice(0, 16);
+  return `internal-state-v1:${digest}` === ref;
 }
 
 function parseInternalState(value: unknown, label: string): InternalState {
@@ -323,7 +339,8 @@ export function parseIcpRecoveryResponseMetadata(value: unknown, label: string):
     throw new Error(`${label} internal state and snapshot reference must be a pair`);
   }
   if (internalState && internalStateSnapshotRef
-    && buildInternalStateSnapshotRef(internalState) !== internalStateSnapshotRef) {
+    && buildInternalStateSnapshotRef(internalState) !== internalStateSnapshotRef
+    && !matchesLegacyInternalStateSnapshotRef(internalState, internalStateSnapshotRef)) {
     throw new Error(`${label} snapshot reference does not match its internal state`);
   }
   const fatigue = raw.fatigue === undefined

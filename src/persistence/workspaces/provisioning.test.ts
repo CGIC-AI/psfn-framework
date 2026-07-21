@@ -13,11 +13,23 @@ import { createHash } from 'node:crypto';
 
 const COMPANION_ID = '11111111-1111-4111-8111-111111111111';
 const FLEET: CompanionsFleetConfig = {
+  postgres: {
+    sharedMigrationRole: 'shared_migration',
+    sharedMigrationDatabaseUrlRef: {
+      kind: 'env',
+      envName: 'SHARED_MIGRATION_DATABASE_URL',
+    },
+  },
   companions: [{
     companionId: COMPANION_ID,
     companionDataDir: 'companions/one',
     characterCardPath: 'companions/one/card.json',
     postgresSchema: 'companion_one',
+    postgresRole: 'companion_one_runtime',
+    postgresDatabaseUrlRef: {
+      kind: 'env',
+      envName: 'COMPANION_ONE_DATABASE_URL',
+    },
   }],
 };
 

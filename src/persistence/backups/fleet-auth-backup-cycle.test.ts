@@ -15,7 +15,7 @@ import {
   buildRuntimeDiagnosticsSnapshot,
   resetRuntimeDiagnosticsForTests,
 } from '../../shared/diagnostics/runtime-diagnostics.js';
-import type { FleetAuthDatabaseRoles } from '../postgres/fleet-auth/schema.js';
+import type { FleetAuthFamilyDatabaseRoles } from '../postgres/fleet-auth/schema.js';
 import { FleetAuthAuthorityFloorStore } from '../postgres/fleet-auth/authority-floor.js';
 import type { BackupRuntimeConfig } from './config.js';
 import { verifyWorkspaceTreeSnapshot } from './companion-tree.js';
@@ -38,10 +38,11 @@ import {
 } from './service.js';
 import { restoreFleetCompanionSlice } from './fleet-restore.js';
 
-const ROLES: FleetAuthDatabaseRoles = {
+const ROLES: FleetAuthFamilyDatabaseRoles = {
   runtime: 'auth_runtime',
   migration: 'auth_migration',
   backupRestore: 'auth_backup_restore',
+  sharedMigration: 'shared_migration',
 };
 
 const ENCRYPTION: BackupEncryptionRuntimeConfig = {
@@ -214,6 +215,11 @@ function makeCycleOptions(
       groupMode: false,
     },
     authorityFloors,
+    scratchSchemaOwnerDatabaseUrls: {
+      companion_one:
+        'postgresql://companion_runtime:secret@127.0.0.1:5432/app_restore_verify',
+      shared: 'postgresql://companion_runtime:secret@127.0.0.1:5432/app_restore_verify',
+    },
     verifyFamilyRestore,
     now: () => Date.UTC(2026, 6, 15, 15, 0, 0),
     runCoordinator,
@@ -275,6 +281,13 @@ describe('runFleetAuthConsistentBackupCycle', () => {
       recoveryUnitCount: 2,
     });
     expect(verifyFamilyRestore).toHaveBeenCalledOnce();
+    expect(verifyFamilyRestore).toHaveBeenCalledWith(expect.objectContaining({
+      scratchSchemaOwnerDatabaseUrls: {
+        companion_one:
+          'postgresql://companion_runtime:secret@127.0.0.1:5432/app_restore_verify',
+        shared: 'postgresql://companion_runtime:secret@127.0.0.1:5432/app_restore_verify',
+      },
+    }));
     expect(existsSync(join(result.backupDir, ENCRYPTED_BACKUP_PAYLOAD_NAME))).toBe(true);
     expect(existsSync(join(result.backupDir, ENCRYPTED_BACKUP_MANIFEST_NAME))).toBe(true);
     expect(existsSync(join(mirrorDir, '20260715T150000000Z', ENCRYPTED_BACKUP_PAYLOAD_NAME)))

@@ -1,5 +1,12 @@
 import { describe, expect, it, vi } from 'vitest';
 import { Type } from '@sinclair/typebox';
+import {
+  createPreToolHookGate,
+  type PreToolHookGate,
+  type PreToolUseEvaluation,
+  type RedactedPreToolHookAudit,
+} from '../../boundary/gateway/pre-tool-hook.js';
+import { HookMatcher, HookRegistry } from '../../boundary/gateway/hook-registry.js';
 import type { AgentTool } from '../../boundary/pi-agent/index.js';
 import type { CapabilityTier } from '../config/runtime-config-contracts.js';
 import type { CapabilityToken } from './tokens.js';
@@ -1141,5 +1148,320 @@ describe('egress tool guard (htm9.3)', () => {
     expect((denied.details as any).capabilityDenied).toBe(true);
     expect(repoCommit.executeSpy).not.toHaveBeenCalled();
     expect(guardSpy).not.toHaveBeenCalled();
+  });
+});
+
+describe('pre_tool_use hook enforcement (7ym.3.2)', () => {
+  function evaluation(overrides: Partial<PreToolUseEvaluation>): PreToolUseEvaluation {
+    return {
+      outcome: 'allow',
+      matchedHookCount: 1,
+      evaluatedHooks: ['hook-a'],
+      finalInput: {},
+      inputModified: false,
+      additionalContext: [],
+      ...overrides,
+    };
+  }
+
+  function hookGate(
+    result: PreToolUseEvaluation | null,
+    onDecision?: (audit: RedactedPreToolHookAudit) => void,
+  ): PreToolHookGate {
+    return {
+      evaluate: async () => result,
+      onDecision: onDecision ?? (() => {}),
+    };
+  }
+
+  function createSchemaTool(name: string): {
+    tool: AgentTool<any>;
+    executeSpy: ReturnType<typeof vi.fn>;
+  } {
+    const executeSpy = vi.fn().mockResolvedValue({
+      content: [{ type: 'text', text: 'ran' }],
+      details: {},
+    });
+    return {
+      tool: {
+        name,
+        label: name,
+        description: `${name} test tool`,
+        parameters: Type.Object(
+          { command: Type.String() },
+          { additionalProperties: false },
+        ),
+        execute: executeSpy,
+      },
+      executeSpy,
+    };
+  }
+
+  it('(1) a blocking hook stops execution with a structured reason', async () => {
+    const shell = createSchemaTool('shell');
+    const gated = gateToolWithCapabilities(
+      shell.tool,
+      () => accessForTier('autonomous'),
+      undefined,
+      undefined,
+      () => hookGate(evaluation({
+        outcome: 'block',
+        blockReason: 'shell rm -rf is not allowed by policy',
+        blockingHook: 'guard-shell',
+      })),
+    );
+
+    const denied = await gated.execute('shell-hook-block', { command: 'rm -rf /' });
+    expect(shell.executeSpy).not.toHaveBeenCalled();
+    expect((denied.details as any).hookBlocked).toBe(true);
+    expect((denied.details as any).policyDenied).toBe(true);
+    expect((denied.details as any).blockingHook).toBe('guard-shell');
+    expect((denied.content[0] as any).text).toContain('shell rm -rf is not allowed');
+  });
+
+  it('(2) a modified input flows to tool.execute', async () => {
+    const shell = createSchemaTool('shell');
+    const gated = gateToolWithCapabilities(
+      shell.tool,
+      () => accessForTier('autonomous'),
+      undefined,
+      undefined,
+      () => hookGate(evaluation({
+        outcome: 'modified',
+        inputModified: true,
+        finalInput: { command: 'ls' },
+      })),
+    );
+
+    await gated.execute('shell-hook-modify', { command: 'rm -rf /' });
+    expect(shell.executeSpy).toHaveBeenCalledTimes(1);
+    expect(shell.executeSpy).toHaveBeenCalledWith('shell-hook-modify', { command: 'ls' }, undefined);
+  });
+
+  it('(2b) a modified input that fails the tool schema blocks fail-closed', async () => {
+    const shell = createSchemaTool('shell');
+    const gated = gateToolWithCapabilities(
+      shell.tool,
+      () => accessForTier('autonomous'),
+      undefined,
+      undefined,
+      () => hookGate(evaluation({
+        outcome: 'modified',
+        inputModified: true,
+        // `command` must be a string; a rewrite to a number fails Value.Check.
+        finalInput: { command: 42 },
+      })),
+    );
+
+    const denied = await gated.execute('shell-hook-modify-invalid', { command: 'ls' });
+    expect(shell.executeSpy).not.toHaveBeenCalled();
+    expect((denied.details as any).hookModifiedInputInvalid).toBe(true);
+    expect((denied.details as any).hookBlocked).toBe(true);
+  });
+
+  it('(3) additional_context reaches the result path', async () => {
+    const shell = createSchemaTool('shell');
+    const gated = gateToolWithCapabilities(
+      shell.tool,
+      () => accessForTier('autonomous'),
+      undefined,
+      undefined,
+      () => hookGate(evaluation({
+        outcome: 'allow',
+        additionalContext: ['cite your sources', 'respect robots.txt'],
+      })),
+    );
+
+    const result = await gated.execute('shell-hook-augment', { command: 'ls' });
+    expect(shell.executeSpy).toHaveBeenCalledTimes(1);
+    const texts = result.content.map((entry: any) => entry.text);
+    expect(texts).toContain('ran');
+    const appended = texts.find((text: string) => text.includes('pre_tool_use hook context'));
+    expect(appended).toContain('cite your sources');
+    expect(appended).toContain('respect robots.txt');
+  });
+
+  it('(4) a hook can never approve what a capability gate rejects', async () => {
+    // Original params (read) are allowed at this custom tier; the hook rewrites
+    // to a write action that requires memory.write, which the tier lacks.
+    const memory = createTool('memory');
+    const gated = gateToolWithCapabilities(
+      memory.tool,
+      () => accessForTier('custom', ['identity.read']),
+      undefined,
+      undefined,
+      () => hookGate(evaluation({
+        outcome: 'modified',
+        inputModified: true,
+        finalInput: { action: 'write' },
+      })),
+    );
+
+    const denied = await gated.execute('memory-hook-escalate', { action: 'exists', query: 'topic' });
+    expect(memory.executeSpy).not.toHaveBeenCalled();
+    expect((denied.details as any).capabilityDenied).toBe(true);
+    expect((denied.content[0] as any).text).toContain('memory.write');
+  });
+
+  it('(5) telemetry is redacted — the audit carries no argument or context contents', async () => {
+    const shell = createSchemaTool('shell');
+    let captured: RedactedPreToolHookAudit | null = null;
+    const gated = gateToolWithCapabilities(
+      shell.tool,
+      () => accessForTier('autonomous'),
+      undefined,
+      undefined,
+      () => hookGate(
+        evaluation({
+          outcome: 'modified',
+          inputModified: true,
+          finalInput: { command: 'super-secret-payload' },
+          additionalContext: ['contains a private note'],
+        }),
+        (audit) => { captured = audit; },
+      ),
+    );
+
+    await gated.execute('shell-hook-telemetry', { command: 'super-secret-payload' });
+    expect(captured).not.toBeNull();
+    const audit = captured as unknown as RedactedPreToolHookAudit;
+    expect(audit.toolName).toBe('shell');
+    expect(audit.outcome).toBe('modified');
+    expect(audit.modifiedInputKeys).toEqual(['command']);
+    const serialized = JSON.stringify(audit);
+    expect(serialized).not.toContain('super-secret-payload');
+    expect(serialized).not.toContain('contains a private note');
+  });
+
+  it('does not consult the hook gate when a capability gate already denied the original call', async () => {
+    const repoCommit = createTool('repo_commit');
+    const evaluateSpy = vi.fn();
+    const gated = gateToolWithCapabilities(
+      repoCommit.tool,
+      () => accessForTier('nursery'),
+      undefined,
+      undefined,
+      () => ({ evaluate: evaluateSpy, onDecision: () => {} }),
+    );
+
+    const denied = await gated.execute('repo-commit-nursery-hook', { message: 'test' });
+    expect((denied.details as any).capabilityDenied).toBe(true);
+    expect(repoCommit.executeSpy).not.toHaveBeenCalled();
+    // The hook gate must not even run once the capability gate has denied.
+    expect(evaluateSpy).not.toHaveBeenCalled();
+  });
+
+  it('runs normally when no hook matches (empty evaluation)', async () => {
+    const shell = createSchemaTool('shell');
+    const gated = gateToolWithCapabilities(
+      shell.tool,
+      () => accessForTier('autonomous'),
+      undefined,
+      undefined,
+      () => hookGate(evaluation({ matchedHookCount: 0, evaluatedHooks: [] })),
+    );
+    await gated.execute('shell-hook-none', { command: 'ls' });
+    expect(shell.executeSpy).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('pre_tool_use end-to-end wiring (7ym.3)', () => {
+  it('drives a real HookRegistry through the adapter into the gate: block', async () => {
+    const registry = new HookRegistry();
+    const audits: RedactedPreToolHookAudit[] = [];
+    registry.register({
+      mode: 'sync_decision',
+      name: 'no-destructive-shell',
+      sourcePath: 'test',
+      matcher: new HookMatcher(['shell']),
+      handler: (ctx) => {
+        const command = (ctx.input as { command?: string }).command ?? '';
+        return command.includes('rm -rf')
+          ? { decision: 'block', reason: 'destructive shell command refused' }
+          : undefined;
+      },
+    });
+    const gate = createPreToolHookGate({
+      evaluator: registry,
+      getCorrelation: () => ({ sessionId: 'session-xyz', turnId: 'turn-1' }),
+      onDecision: (audit) => audits.push(audit),
+    });
+
+    const shell = createTool('shell');
+    const gated = gateToolWithCapabilities(
+      shell.tool,
+      () => accessForTier('autonomous'),
+      undefined,
+      undefined,
+      () => gate,
+    );
+
+    const denied = await gated.execute('shell-e2e-block', { command: 'rm -rf /' });
+    expect(shell.executeSpy).not.toHaveBeenCalled();
+    expect((denied.details as any).hookBlocked).toBe(true);
+    expect((denied.content[0] as any).text).toContain('destructive shell command refused');
+    // Telemetry captured, redacted (no command contents).
+    expect(audits).toHaveLength(1);
+    expect(audits[0]!.outcome).toBe('block');
+    expect(JSON.stringify(audits[0])).not.toContain('rm -rf');
+
+    // A safe command with the same hook passes through untouched.
+    await gated.execute('shell-e2e-allow', { command: 'ls' });
+    expect(shell.executeSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('fast-paths (no evaluate cost) when the registry has no sync hooks', async () => {
+    const registry = new HookRegistry();
+    const gate = createPreToolHookGate({
+      evaluator: registry,
+      getCorrelation: () => undefined,
+      onDecision: () => {},
+    });
+    // No sync hooks registered → adapter returns null → gate skips hook logic.
+    await expect(gate.evaluate({ toolName: 'shell', params: {}, tier: 'autonomous' }))
+      .resolves.toBeNull();
+
+    const shell = createTool('shell');
+    const gated = gateToolWithCapabilities(
+      shell.tool,
+      () => accessForTier('autonomous'),
+      undefined,
+      undefined,
+      () => gate,
+    );
+    await gated.execute('shell-e2e-fastpath', { command: 'ls' });
+    expect(shell.executeSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('folds the active-turn correlation into the hook context', async () => {
+    const registry = new HookRegistry();
+    let seenSession: string | undefined;
+    registry.register({
+      mode: 'sync_decision',
+      name: 'context-probe',
+      sourcePath: 'test',
+      matcher: new HookMatcher(['shell']),
+      handler: (ctx) => {
+        seenSession = ctx.sessionId;
+        return { additionalContext: 'noted' };
+      },
+    });
+    const gate = createPreToolHookGate({
+      evaluator: registry,
+      getCorrelation: () => ({ sessionId: 'session-abc' }),
+      onDecision: () => {},
+    });
+    const shell = createTool('shell');
+    const gated = gateToolWithCapabilities(
+      shell.tool,
+      () => accessForTier('autonomous'),
+      undefined,
+      undefined,
+      () => gate,
+    );
+    const result = await gated.execute('shell-e2e-context', { command: 'ls' });
+    expect(seenSession).toBe('session-abc');
+    const texts = result.content.map((entry: any) => entry.text);
+    expect(texts.some((text: string) => text.includes('noted'))).toBe(true);
   });
 });

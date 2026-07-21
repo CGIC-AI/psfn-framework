@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import {
   parseIcpDeliveryObservation,
@@ -7,6 +8,7 @@ import {
 import {
   buildInternalStateSnapshotRef,
   InternalStateComputer,
+  serializeInternalState,
 } from '../self-model/state.js';
 import {
   CHANNEL,
@@ -480,6 +482,67 @@ describe('ICP delivery recovery codec', () => {
       metadata: {
         ...valid.metadata,
         internalStateSnapshotRef: 'internal-state-v1:not-the-state',
+      },
+    }, { label: 'test recovery response' })).toThrow(/snapshot reference.*match/i);
+  });
+
+  it('accepts a snapshot reference recorded before emotional.discrepancies existed', () => {
+    const state = new InternalStateComputer().computeState({
+      activeConcerns: [],
+      trustLevel: 'regular',
+      sessionMetrics: {
+        userMessageText: 'hello',
+        responseText: 'hi',
+        toolCallCount: 0,
+        recentTurnCount: 1,
+      },
+    });
+    // Pre-discrepancies images hashed the serialization without that key.
+    const legacyShape = JSON.parse(serializeInternalState(state)) as { emotional: Record<string, unknown> };
+    delete legacyShape.emotional.discrepancies;
+    const legacyRef = `internal-state-v1:${createHash('sha256').update(JSON.stringify(legacyShape)).digest('hex').slice(0, 16)}`;
+    expect(legacyRef).not.toEqual(buildInternalStateSnapshotRef(state));
+
+    const recorded = {
+      ...recoveryResponse,
+      metadata: {
+        ...recoveryResponse.metadata,
+        internalState: state,
+        internalStateSnapshotRef: legacyRef,
+      },
+    };
+    expect(parseIcpRecoveryResponse(recorded, { label: 'test recovery response' })).toEqual(recorded);
+
+    // The legacy path never excuses a genuinely wrong ref.
+    expect(() => parseIcpRecoveryResponse({
+      ...recorded,
+      metadata: {
+        ...recorded.metadata,
+        internalStateSnapshotRef: 'internal-state-v1:0123456789abcdef',
+      },
+    }, { label: 'test recovery response' })).toThrow(/snapshot reference.*match/i);
+
+    // A state carrying real discrepancies must match the modern ref exactly.
+    const withDiscrepancy = {
+      ...state,
+      emotional: {
+        ...state.emotional,
+        discrepancies: [...state.emotional.discrepancies, {
+          kind: 'valence_vs_discrete',
+          magnitude: 0.5,
+          sides: [
+            { family: 'vad_valence', label: 'vad', value: -0.2, confidence: 0.9, provenance: [{ source: 'runtime_state' }] },
+            { family: 'discrete_affect', label: 'calm', value: 0.6, confidence: 0.8, provenance: [{ source: 'classifier_inferred' }] },
+          ],
+        }],
+      },
+    } as typeof state;
+    expect(() => parseIcpRecoveryResponse({
+      ...recorded,
+      metadata: {
+        ...recorded.metadata,
+        internalState: withDiscrepancy,
+        internalStateSnapshotRef: legacyRef,
       },
     }, { label: 'test recovery response' })).toThrow(/snapshot reference.*match/i);
   });

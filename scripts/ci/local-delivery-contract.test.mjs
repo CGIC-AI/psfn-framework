@@ -187,7 +187,7 @@ test('hook installer refuses to overwrite an unrelated hook configuration', () =
     assessHookInstallation({ hooksPath: '', existingHooks: ['commit-msg'] }).reason,
     /commit-msg/i,
   );
-  assert.equal(normalizeAliasValue("'!npm run pr:publish --'"), '!npm run pr:publish --');
+  assert.equal(normalizeAliasValue(`'!npm run pr:publish -- "$@"'`), '!npm run pr:publish -- "$@"');
 });
 
 test('local gate writes one exact-head attestation and reuses it without rerunning tools', async () => {

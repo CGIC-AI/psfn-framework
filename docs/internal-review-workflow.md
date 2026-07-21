@@ -28,7 +28,7 @@ npm ci
 npm run tools:doctor
 npm run hooks:install
 git config --get core.hooksPath       # .githooks
-gh alias list | grep '^gated-pr:'     # !npm run pr:publish --
+gh alias list | grep '^gated-pr:'     # !npm run pr:publish -- "$@"
 ```
 
 The installer replaces nothing; run it separately in every worktree.

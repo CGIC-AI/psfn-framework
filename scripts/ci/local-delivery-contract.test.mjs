@@ -208,6 +208,15 @@ test('delivery-only gate stays fast while product changes retain full validation
   ]);
   assert.deepEqual(plan.find(({ name }) => name === 'tests').args, ['test', '--', '--maxWorkers=4']);
   assert.equal(plan.find(({ name }) => name === 'tests').skip, false);
+
+  const deletionPlan = buildGatePlan({
+    paths: ['src/removed.ts', 'src/retained.ts'],
+    scannablePaths: ['src/retained.ts'],
+  });
+  assert.deepEqual(
+    deletionPlan.find(({ name }) => name === 'ubs').args,
+    ['--no-auto-update', 'src/retained.ts'],
+  );
 });
 
 test('local tool doctor pins UBS while accepting supported Node releases', () => {

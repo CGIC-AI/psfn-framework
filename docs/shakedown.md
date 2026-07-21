@@ -199,6 +199,49 @@ Goal: one clean, repeatable path from release-candidate commit to first proven c
 7. **Launch**: `npm run split` (or the harness restart script) and gate on all three health signals — gateway API up (`GET /v1/models`), Garden admin up, agent connected.
 8. **First-conversation gate**: one probe turn through `POST /v1/chat/completions`, then confirm the persisted turn record exists for that exact message. Only now is the lane "bootstrapped".
 
+#### Satellite seeding contract
+
+Before seeding `satellites.json`, read the place vocabulary from the live
+`$SYSTEM_DATA_DIR/places.json` registry file (the production k3s mount is
+`/runtime/system-data/places.json`):
+
+```bash
+jq -r '.places[] | [.placeId, .kind, (.mirrorsPlaceId // "-")] | @tsv' \
+  "$SYSTEM_DATA_DIR/places.json"
+```
+
+Copy exact IDs; do not assume the example vocabulary in
+`shakedown/artie/shakedown.env.template` matches the current round. A
+satellite's `placeId` must resolve to a `kind: "physical"` entry. The
+mindspace probe variables instead name a virtual place and its exact
+`mirrorsPlaceId` physical counterpart.
+
+When `companions.json` contains more than one companion and the satellite
+registry is enabled, every `satellites.json` entry requires a `sharedDevice`
+authority. A minimal primary-only policy is:
+
+```json
+{
+  "sharedDevice": {
+    "primaryCompanionId": "a7100000-0000-4000-8000-000000000001",
+    "observationRecipients": [],
+    "emanationMemberIds": ["a7100000-0000-4000-8000-000000000001"],
+    "responseLease": {
+      "durationMs": 5000,
+      "activeConversationTtlMs": 60000
+    }
+  }
+}
+```
+
+Every named companion must exist in `companions.json`, and
+`emanationMemberIds` must be nonempty with `primaryCompanionId` first. If the
+device grants observation authority, each recipient has the shape
+`{"companionId":"<fleet-companion-uuid>","scopes":["presence"]}` and every
+granted scope must also appear in at least one endpoint's `telemetryScopes`.
+Do not add `sharedDevice` in a one-entry deployment; startup rejects policy
+that single-companion mode would silently ignore.
+
 ### Kube lane
 
 1. Confirm no concurrent deploy session (helm history + git status on the deploy checkout — one deploy at a time).

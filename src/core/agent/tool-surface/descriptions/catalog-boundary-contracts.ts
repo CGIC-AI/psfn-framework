@@ -71,7 +71,11 @@ export const CATALOG_BOUNDARY_TOOL_CONTRACTS = {
     guidance:
       'The default wall budget is ten minutes and the operator-owned ceiling is one hour. The sandbox has no network, '
       + 'clears inherited secrets, exposes only read-only image CLI binaries, and cannot see host or runtime-state paths '
-      + 'outside the Personal Workspace. Use a relative cwd to move around the workspace. Prefer fs or repo when their '
+      + 'outside the Personal Workspace. The workspace is mounted read-write at /workspace (the default cwd); when the '
+      + 'operator enables it, a read-only copy of the source repository is mounted at /repo (also exposed as $PSFN_REPO). '
+      + 'The image carries analysis and document tooling — bash, rg, jq, file, unzip/zip, sqlite3, pdftotext (poppler), '
+      + 'pandoc, python3, and uv — so prefer targeted CLI filters and small scripts over dumping whole files. '
+      + 'Use a relative cwd to move around the workspace. Prefer fs or repo when their '
       + 'structured action is clearer; use shell for direct CLI exploration, scripts, builds, tests, and Git commands.',
     example: {
       action: 'exec',

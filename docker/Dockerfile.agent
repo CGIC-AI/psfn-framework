@@ -63,14 +63,44 @@ FROM node:24.13.1-slim@sha256:a81a03dd965b4052269a57fac857004022b522a4bf06e7a739
 
 WORKDIR /app
 
+# Sandbox CLI toolset (psfn-framework-jdwd). The bubblewrap sandbox has no
+# network, so every analysis capability the companion can use must ship in the
+# image. Chosen set, kept deliberately small (~200 MB installed, pandoc and
+# poppler dominating):
+#   bubblewrap        OS-enforced sandbox boundary (mandatory)
+#   git               repo inspection inside /workspace and the /repo mount
+#   ripgrep           fast bounded text search over large documents
+#   jq                JSON slicing without loading whole files into context
+#   file              type detection before choosing an extraction tool
+#   unzip/zip         archives; docx/xlsx/odt containers are zip files
+#   sqlite3           local structured-data analysis (CSV import, queries)
+#   poppler-utils     pdftotext/pdfinfo for PDF handoff
+#   pandoc            docx/odt/html/epub -> text/markdown conversion
+#   python3 (+venv)   companion-authored analysis scripts; stdlib covers
+#                     csv/json/sqlite3/zipfile/statistics without network
+#   uv                fast script/venv runner (offline-capable against local
+#                     wheels; network installs are intentionally impossible
+#                     inside the sandbox)
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
       bubblewrap=0.8.0-2+deb12u1 \
+      file=1:5.44-3 \
       git=1:2.39.5-0+deb12u3 \
+      jq=1.6-2.1+deb12u2 \
+      pandoc=2.17.1.1-2~deb12u1 \
+      poppler-utils=22.12.0-2+deb12u2 \
+      python3=3.11.2-1+b1 \
+      python3-venv=3.11.2-1+b1 \
       ripgrep=13.0.0-4+b2 \
+      sqlite3=3.40.1-2+deb12u2 \
+      unzip=6.0-28 \
+      zip=3.0-13 \
     && npm install -g @beads/bd@1.1.0 \
     && npm cache clean --force \
     && rm -rf /var/lib/apt/lists/*
+
+# uv: exact version pinned by immutable multi-arch index digest.
+COPY --from=ghcr.io/astral-sh/uv:0.11.30@sha256:93b61e21202b1dab861092748e46bbd6e0e41dd84f59b9174efd2353186e1b47 /uv /uvx /usr/local/bin/
 
 COPY package*.json ./
 COPY admin-ui/package*.json ./admin-ui/

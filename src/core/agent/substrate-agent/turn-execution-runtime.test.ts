@@ -5998,7 +5998,6 @@ describe('handleMessageForTurn pre-response concurrency', () => {
     const eventBus = new EventBus();
     const captureTurnMemorySnapshot = vi.fn(async () => ({ snapshot: 'memory' }));
     const retrieve = vi.fn(async () => 'fresh memories');
-    const retrieveProactiveRecall = vi.fn(async () => 'proactive');
     const buildContext = vi.fn(async () => ({
       systemPrompt: 'System prompt',
       messages: [],
@@ -6017,7 +6016,6 @@ describe('handleMessageForTurn pre-response concurrency', () => {
         refreshActiveMemoryContext: vi.fn(async () => null),
         captureTurnMemorySnapshot,
         retrieve,
-        retrieveProactiveRecall,
       } as unknown as TurnExecutionRuntime['memoryProvider'],
     });
 
@@ -6026,7 +6024,6 @@ describe('handleMessageForTurn pre-response concurrency', () => {
 
     expect(captureTurnMemorySnapshot).not.toHaveBeenCalled();
     expect(retrieve).not.toHaveBeenCalled();
-    expect(retrieveProactiveRecall).not.toHaveBeenCalled();
     expect(buildContext).toHaveBeenCalledTimes(1);
   });
 
@@ -6197,7 +6194,6 @@ describe('handleMessageForTurn pre-response concurrency', () => {
           captureTurnMemorySnapshot,
           getActiveMemoryContext: vi.fn(() => null),
           refreshActiveMemoryContext,
-          retrieveProactiveRecall: vi.fn(async () => ''),
         } as unknown as TurnExecutionRuntime['memoryProvider'],
       });
       runtime.captureTurnPromptSnapshot = vi.fn(() => ({

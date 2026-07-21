@@ -495,12 +495,3 @@ function formatContactDescriptorSuffix(descriptor: RetrievalContactContext): str
   return ` [${cues.join('; ')}]`;
 }
 
-export function renderProactiveRecall(memory: PurrMemory): string {
-  const valenceSuffix =
-    memory.emotionalValence > 0.3 ? ' (+)' :
-    memory.emotionalValence < -0.3 ? ' (-)' : '';
-  return [
-    'Spontaneous recall:',
-    `- [${memory.type}] ${compactMemoryTextForPrompt(memory.text)}${valenceSuffix}${recencyBandSuffix(memory.extractedAt)}`,
-  ].join('\n');
-}

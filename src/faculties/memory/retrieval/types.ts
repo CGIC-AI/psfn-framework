@@ -148,11 +148,6 @@ export interface CompositionalRetrievalDecision {
   finalistCount: number;
 }
 
-export interface ProactiveWeightedMemory {
-  memory: PurrMemory;
-  weight: number;
-}
-
 export interface RetrievalContactContext {
   contactId: string;
   displayName: string;

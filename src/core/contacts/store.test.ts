@@ -242,6 +242,42 @@ describe('Postgres contact store behavior', () => {
       ]);
     });
 
+    it('persists, hydrates, and audits demographic fields with operator provenance (bead fnyb)', async () => {
+      const created = await store.upsert({ displayName: 'Demographics Contact' });
+      expect(created.gender).toBeUndefined();
+      expect(created.pronouns).toBeUndefined();
+      expect(created.age).toBeUndefined();
+
+      expect(await store.updateDemographics(
+        created.id,
+        { gender: '  woman  ', pronouns: 'she/her', age: 29 },
+        'operator:test',
+      )).toBe(true);
+
+      const hydrated = await store.getById(created.id);
+      expect(hydrated?.gender).toBe('woman');
+      expect(hydrated?.pronouns).toBe('she/her');
+      expect(hydrated?.age).toBe(29);
+
+      // Per-field audit rows carry the specified-provenance actor.
+      for (const field of ['gender', 'pronouns', 'age'] as const) {
+        expect(await store.listMutationAuditEntries({ contactId: created.id, field }))
+          .toEqual([expect.objectContaining({ actor: 'operator:test', field })]);
+      }
+
+      // Absent keys leave values unchanged; a null clears a field.
+      expect(await store.updateDemographics(created.id, { age: null }, 'operator:test')).toBe(true);
+      const afterClear = await store.getById(created.id);
+      expect(afterClear?.age).toBeUndefined();
+      expect(afterClear?.gender).toBe('woman');
+      expect(afterClear?.pronouns).toBe('she/her');
+
+      // A no-op update writes no new audit rows.
+      expect(await store.updateDemographics(created.id, { gender: 'woman' }, 'operator:test')).toBe(true);
+      expect(await store.listMutationAuditEntries({ contactId: created.id, field: 'gender' }))
+        .toHaveLength(1);
+    });
+
   });
 
   describe('getById', () => {

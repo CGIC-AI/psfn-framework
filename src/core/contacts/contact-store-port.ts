@@ -15,6 +15,7 @@ import type {
   ChannelPrivacyLevel,
   Contact,
   ContactChannel,
+  ContactDemographicsUpdate,
   ContactIdentityLinkChallengeInput,
   ContactIdentityLinkChallengeResult,
   ContactIdentityLinkOptions,
@@ -193,6 +194,13 @@ export interface ContactStorePort {
   countRoomRoster(channelId: string, options?: Pick<RoomQueryOptions, 'channel'>): Awaitable<number>;
   mergeContacts(sourceContactId: string, targetContactId: string): Awaitable<boolean>;
   updateNotes(id: string, notes: string, actor?: string): Awaitable<boolean>;
+  /**
+   * Set structured demographic fields (bead fnyb). Only keys present in
+   * `updates` are written; each changed field records a per-field
+   * contact_mutation_audit row under `actor`, so operator/tool writes carry
+   * specified-provenance and a future inference write can honor them.
+   */
+  updateDemographics(id: string, updates: ContactDemographicsUpdate, actor?: string): Awaitable<boolean>;
   updateEmotionalBaseline(
     id: string,
     observation: {

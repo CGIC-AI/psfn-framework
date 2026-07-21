@@ -699,6 +699,13 @@ export const POSTGRES_CONTACT_MIGRATIONS = [
   `ALTER TABLE contacts ADD COLUMN IF NOT EXISTS conversation_channels JSONB NOT NULL DEFAULT '[]'::jsonb;`,
   `ALTER TABLE contacts ADD COLUMN IF NOT EXISTS is_machine_intelligence BOOLEAN NOT NULL DEFAULT FALSE;`,
   `ALTER TABLE contacts ADD COLUMN IF NOT EXISTS trust_version BIGINT NOT NULL DEFAULT 0;`,
+  // bead fnyb: structured demographic attributes. Provenance is carried by the
+  // per-field contact_mutation_audit actor (operator/tool = specified,
+  // system:* = inferred), mirroring is_machine_intelligence — no separate
+  // provenance column needed.
+  `ALTER TABLE contacts ADD COLUMN IF NOT EXISTS gender TEXT;`,
+  `ALTER TABLE contacts ADD COLUMN IF NOT EXISTS pronouns TEXT;`,
+  `ALTER TABLE contacts ADD COLUMN IF NOT EXISTS age INTEGER;`,
   `CREATE INDEX IF NOT EXISTS idx_contacts_trust ON contacts(trust_level);`,
   `CREATE INDEX IF NOT EXISTS idx_contacts_discord ON contacts(discord_user_id);`,
   `

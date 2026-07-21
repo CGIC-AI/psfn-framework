@@ -11,6 +11,7 @@ import {
 import type {
   ChannelPrivacyLevel,
   Contact,
+  ContactDemographicsUpdate,
   ContactMutationAuditEntry,
   ContactMutationAuditField,
   ContactMutationAuditQuery,
@@ -82,6 +83,10 @@ interface ContactUpdatePayload {
   notes?: string;
   timezone?: unknown;
   isMachineIntelligence?: boolean;
+  // bead fnyb: structured demographics. null clears, absent leaves unchanged.
+  gender?: string | null;
+  pronouns?: string | null;
+  age?: number | null;
   channelPrivacy?: ChannelPrivacyUpdate[];
   /** Channel-bonding opt-in per linked channel identity. */
   channelBonding?: ChannelBondingUpdate[];
@@ -741,6 +746,31 @@ export class AdminContactsDataService implements AdminContactsService {
       }
       if (!await contactStore.setMachineIntelligence(contactId, payload.isMachineIntelligence, actor)) {
         return { ok: false, message: 'Unable to update machine-intelligence marker' };
+      }
+    }
+
+    if (payload.gender !== undefined || payload.pronouns !== undefined || payload.age !== undefined) {
+      const demographics: ContactDemographicsUpdate = {};
+      if (payload.gender !== undefined) {
+        if (payload.gender !== null && typeof payload.gender !== 'string') {
+          return { ok: false, message: 'gender must be a string or null' };
+        }
+        demographics.gender = payload.gender;
+      }
+      if (payload.pronouns !== undefined) {
+        if (payload.pronouns !== null && typeof payload.pronouns !== 'string') {
+          return { ok: false, message: 'pronouns must be a string or null' };
+        }
+        demographics.pronouns = payload.pronouns;
+      }
+      if (payload.age !== undefined) {
+        if (payload.age !== null && (typeof payload.age !== 'number' || !Number.isFinite(payload.age) || payload.age < 0)) {
+          return { ok: false, message: 'age must be a non-negative number or null' };
+        }
+        demographics.age = payload.age;
+      }
+      if (!await contactStore.updateDemographics(contactId, demographics, actor)) {
+        return { ok: false, message: 'Unable to update demographic fields' };
       }
     }
 

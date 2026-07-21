@@ -1,6 +1,12 @@
 import type { EventBus, EventMap, EventName } from '../../shared/event-bus.js';
 import { createComponentLogger } from '../../shared/logger.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
+import {
+  normalizePreToolResult,
+  type PreToolUseEvaluation,
+  type PreToolUseHookContext,
+  type PreToolUseHookHandler,
+} from './pre-tool-hook.js';
 
 /**
  * Operator-extensible hook registry (Hermes hooks.py pattern, bead
@@ -34,11 +40,12 @@ import { toErrorMessage } from '../../shared/utils/errors.js';
  *    lifecycle events map to EventBus subscriptions restricted to the
  *    HOOK_SUBSCRIBABLE_EVENTS allowlist; dispatch is async and NEVER blocks
  *    the emitting pipeline.
- *  - `sync_decision` (future, 7ym.3.1): registrations are accepted and
- *    listed so the sync path can be layered onto the same registry, but no
- *    execution path exists here and the workspace loader rejects manifests
- *    that request the mode. Do not add evaluation semantics in this module
- *    without that bead.
+ *  - `sync_decision` (bead 7ym.3.1): the synchronous pre_tool_use decision
+ *    path. Registrations carry a tool-name/alias matcher and a decision
+ *    handler; `evaluatePreToolUse` runs the matching handlers fail-closed
+ *    (throw/timeout/malformed = block) and returns the combined block / modify
+ *    / augment decision. The workspace loader still rejects manifest-authored
+ *    sync hooks — this mode is wired programmatically, not from HOOK.yaml.
  *
  * PROCESS PLACEMENT
  * The module lives on the gateway/boundary surface (the file both vvf.2 and
@@ -325,18 +332,17 @@ export interface AsyncLifecycleHookRegistration extends HookRegistrationBase {
 }
 
 /**
- * Registration-model placeholder for the synchronous pre_tool_use decision
- * path (bead 7ym.3.1). The registry accepts and lists these so the
- * sync path can reuse the same registration/matcher model, but this module
- * provides NO execution path for them and the workspace loader rejects
- * manifests requesting the mode until that bead lands.
+ * Synchronous pre_tool_use decision hook (bead 7ym.3.1). Selected by a
+ * tool-name/alias matcher and evaluated fail-closed by
+ * {@link HookRegistry.evaluatePreToolUse}. The handler return is untrusted and
+ * normalized (see pre-tool-hook.ts `normalizePreToolResult`).
  */
 export interface SyncDecisionHookRegistration extends HookRegistrationBase {
   mode: 'sync_decision';
-  /** Subject matcher (e.g. tool names/aliases) for the future decision path. */
+  /** Subject matcher over tool names/aliases for the decision path. */
   matcher: HookMatcher;
-  /** Decision contract is defined by 7ym.3.1; opaque until then. */
-  handler: (input: Record<string, unknown>) => unknown;
+  /** Decision handler; return value is normalized fail-closed (throw = block). */
+  handler: PreToolUseHookHandler;
 }
 
 export type HookRegistration =
@@ -361,11 +367,57 @@ interface HookRuntimeState {
   lastErrorAtMs?: number;
 }
 
+/**
+ * Run an untrusted sync-decision handler with a fail-closed timeout. A handler
+ * that never settles rejects after `timeoutMs` so the tool call blocks rather
+ * than hanging; the abandoned handler promise is left to settle on its own. A
+ * `timeoutMs <= 0` disables the timer.
+ */
+function invokeWithTimeout(
+  invoke: () => unknown,
+  timeoutMs: number,
+  hookName: string,
+): Promise<unknown> {
+  const settled = Promise.resolve().then(invoke);
+  if (timeoutMs <= 0) return settled;
+  return new Promise<unknown>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      reject(new Error(`pre_tool_use hook "${hookName}" timed out after ${timeoutMs}ms`));
+    }, timeoutMs);
+    // Do not let a pending hook timer keep the process alive.
+    (timer as { unref?: () => void }).unref?.();
+    settled.then(
+      (value) => { clearTimeout(timer); resolve(value); },
+      (error: unknown) => { clearTimeout(timer); reject(error); },
+    );
+  });
+}
+
+function blockedEvaluation(
+  matchedHookCount: number,
+  evaluatedHooks: readonly string[],
+  finalInput: unknown,
+  blockingHook: string,
+  blockReason: string,
+): PreToolUseEvaluation {
+  return {
+    outcome: 'block',
+    matchedHookCount,
+    evaluatedHooks: [...evaluatedHooks],
+    finalInput,
+    inputModified: false,
+    additionalContext: [],
+    blockReason,
+    blockingHook,
+  };
+}
+
 // ── Registry ──
 
 export class HookRegistry {
   private readonly hooks = new Map<string, HookRuntimeState>();
   private readonly lifecycleIndex = new Map<HookSubscribableEventName, HookRuntimeState[]>();
+  private readonly syncDecisionHooks: HookRuntimeState[] = [];
   private readonly subscriptions = new Map<HookSubscribableEventName, () => void>();
   private attachedBus: EventBus | null = null;
 
@@ -399,6 +451,15 @@ export class HookRegistry {
       }
     }
 
+    if (registration.mode === 'sync_decision') {
+      if (!(registration.matcher instanceof HookMatcher)) {
+        throw new Error(`Hook "${name}" sync_decision matcher must be a HookMatcher`);
+      }
+      if (typeof registration.handler !== 'function') {
+        throw new Error(`Hook "${name}" handler must be a function`);
+      }
+    }
+
     const state: HookRuntimeState = { registration, invocations: 0, failures: 0 };
     this.hooks.set(name, state);
 
@@ -410,6 +471,104 @@ export class HookRegistry {
         if (this.attachedBus) this.subscribe(this.attachedBus, event);
       }
     }
+
+    if (registration.mode === 'sync_decision') {
+      this.syncDecisionHooks.push(state);
+    }
+  }
+
+  /** True when at least one synchronous pre_tool_use hook is registered. */
+  hasSyncDecisionHooks(): boolean {
+    return this.syncDecisionHooks.length > 0;
+  }
+
+  /**
+   * Evaluate the synchronous pre_tool_use decision path (bead 7ym.3.1) for one
+   * tool invocation. Runs every registered `sync_decision` hook whose matcher
+   * selects the tool name or one of its aliases, in registration order, and
+   * returns the combined decision.
+   *
+   * Fail-closed at every step: a handler that throws, times out, or returns a
+   * malformed decision BLOCKS the call. `block` wins immediately (later hooks
+   * do not run). A hook that rewrites the input hands the rewritten value to
+   * the next hook; the enforcement site (gateToolWithCapabilities, bead
+   * 7ym.3.2) re-validates the final input against the tool schema and re-runs
+   * the capability/egress gates before execution.
+   */
+  async evaluatePreToolUse(
+    context: PreToolUseHookContext,
+    options: { timeoutMs?: number } = {},
+  ): Promise<PreToolUseEvaluation> {
+    const matching = this.syncDecisionHooks.filter((state) => {
+      if (state.registration.mode !== 'sync_decision') return false;
+      const matcher = state.registration.matcher;
+      if (matcher.matches(context.toolName)) return true;
+      return context.aliases.some(alias => matcher.matches(alias));
+    });
+
+    // Fail-closed default timeout: an unbounded async handler would otherwise
+    // hang the tool call forever. Zero disables the timer (tests/sync-only).
+    const timeoutMs = options.timeoutMs ?? 5_000;
+
+    let currentInput = context.input;
+    let inputModified = false;
+    const additionalContext: string[] = [];
+    const evaluatedHooks: string[] = [];
+
+    for (const state of matching) {
+      if (state.registration.mode !== 'sync_decision') continue;
+      const hookName = state.registration.name;
+      evaluatedHooks.push(hookName);
+      state.invocations += 1;
+
+      let raw: unknown;
+      try {
+        raw = await invokeWithTimeout(
+          () => state.registration.handler({ ...context, input: currentInput }),
+          timeoutMs,
+          hookName,
+        );
+      } catch (error) {
+        // Throw or timeout: fail closed. Record the failure and block.
+        this.recordFailure(state, 'pre_tool_use', error);
+        return blockedEvaluation(
+          matching.length,
+          evaluatedHooks,
+          currentInput,
+          hookName,
+          `pre_tool_use hook "${hookName}" failed and blocked the call: ${toErrorMessage(error)}`,
+        );
+      }
+
+      const decision = normalizePreToolResult(raw);
+      if (decision.block) {
+        // Malformed output is a contract breach; record it so operators see it.
+        this.recordFailure(state, 'pre_tool_use', new Error(decision.reason ?? 'blocked'));
+        return blockedEvaluation(
+          matching.length,
+          evaluatedHooks,
+          currentInput,
+          hookName,
+          decision.reason ?? `blocked by pre_tool_use hook "${hookName}"`,
+        );
+      }
+      if (decision.hasModifiedInput) {
+        currentInput = decision.modifiedInput;
+        inputModified = true;
+      }
+      if (decision.additionalContext !== undefined) {
+        additionalContext.push(decision.additionalContext);
+      }
+    }
+
+    return {
+      outcome: inputModified ? 'modified' : 'allow',
+      matchedHookCount: matching.length,
+      evaluatedHooks,
+      finalInput: currentInput,
+      inputModified,
+      additionalContext,
+    };
   }
 
   list(mode?: HookInvocationMode): HookRegistration[] {

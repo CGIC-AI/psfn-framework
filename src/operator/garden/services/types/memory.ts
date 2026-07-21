@@ -216,6 +216,16 @@ export interface AdminMemorySessionService {
     limit?: number,
   ): Promise<AdminSharedBackgroundResult>;
   supersedeMemory(id: string): Promise<MemoryMutationResult>;
+  /**
+   * Replace a memory's body text in place, re-embedding for retrieval
+   * consistency and recording an audited patch event. Subject-authorized like
+   * the other mutations; callers must already hold body access (the route
+   * fails closed on redacted bodies before reaching here).
+   */
+  patchMemory(
+    memoryId: string,
+    fields: { text: string; reason?: string; referencePath?: string },
+  ): Promise<MemoryMutationResult>;
   updateMemoryScope(
     id: string,
     fields: {

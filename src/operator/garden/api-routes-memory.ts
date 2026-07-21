@@ -570,23 +570,16 @@ export function buildAdminMemoryRoutes(options: {
             return;
           }
 
-          const patchMemory = (
-            memoryService as AdminMemoryService & {
-              patchMemory?: (
-                memoryId: string,
-                fields: { text: string; reason?: string; referencePath?: string },
-              ) => Promise<{ ok: boolean; message?: string }>;
-            }
-          ).patchMemory;
-          if (typeof patchMemory !== 'function') {
-            sendJson(res, 400, { error: 'Memory patching is not available' });
-            return;
-          }
+          const boundService = bindMemoryRequest(
+            memoryService,
+            context,
+            resolveAdminMemorySessionKey(req),
+          );
 
           // Fail closed: the body of a redacted high-intimacy memory cannot
           // be edited without an explicit (audited) reveal or elevation --
           // you cannot honestly edit what you cannot see.
-          void bindMemoryRequest(memoryService, context, resolveAdminMemorySessionKey(req)).getMemoryDetail(id)
+          void boundService.getMemoryDetail(id)
             .then((detail) => {
               if (!detail) {
                 sendJson(res, 404, { error: 'Memory not found' });
@@ -599,7 +592,7 @@ export function buildAdminMemoryRoutes(options: {
                 });
                 return;
               }
-              return patchMemory(id, { text, reason, referencePath });
+              return boundService.patchMemory(id, { text, reason, referencePath });
             })
             .then((result) => {
               if (!result) return;

@@ -507,13 +507,20 @@ export function buildTimeOfDayRefreshNote(input: TimeOfDayRefreshNoteInput): str
 export interface TemporalWakeupSessionManagerPort {
   resolveStartupSessionMetadata(behavior?: 'reuse_latest_session'): StartupSessionMetadata | null;
   /**
-   * Recently-active conversational channels for wake-note fan-out (bead
-   * psfn-framework-2x37.3): every channel with partner (role 'user') activity
-   * within `lookbackMs`, most-recent-activity first. Wire to
+   * Recently-active conversational channels for wake-note fan-out (bead 2x37.3):
+   * every channel with partner (role 'user') activity within `lookbackMs`,
+   * most-recent-activity first. Wire to
    * SessionManager.listRecentlyActiveChannels. Optional for interface
    * tolerance; when absent the lanes fall back to the single latest session
    * (pre-fan-out behavior) so the module never assumes an enumeration surface
    * that a caller has not provided.
+   *
+   * Decision (bead 2x37.9 item 2): kept optional, matching the
+   * `getRecentSessionEntries?` capability-not-assumed idiom used throughout this
+   * port. Production always wires it (src/app/agent/main.ts); the fail-closed
+   * single-latest-session fallback is a deliberate contract, not an accident.
+   * Making it required would churn every test fake for no runtime benefit and
+   * remove the graceful-degradation guarantee, so we decline that change.
    */
   listRecentlyActiveChannels?(input: { lookbackMs: number; nowMs?: number }): StartupSessionMetadata[];
   getRecentMessages(channelId: string, limit?: number): SessionEntry[];
@@ -745,6 +752,63 @@ function resolveWakeupChannelContext(
   };
 }
 
+interface EligibleWakeupChannel<TAllowed> {
+  channel: StartupSessionMetadata;
+  context: ResolvedWakeupSessionContext;
+  decision: TAllowed;
+}
+
+/**
+ * Shared per-channel fan-out pipeline for both wake lanes (bead 2x37.9 item 1).
+ * Enumerates recently-active live channels, then for each runs the lane's
+ * metadata preflight, resolves its per-channel context (recent entries +
+ * anti-loop last-note timestamp), and evaluates the lane's real eligibility.
+ * Denials from either phase are surfaced through `onSkip` (lane-specific
+ * logging) and dropped; the survivors — with their resolved context and
+ * allowed decision — are returned for the lane's own note-building/append work.
+ * Extracting this removes the ~40-line per-channel shape that the morning and
+ * refresher handlers previously duplicated.
+ */
+function collectEligibleWakeupChannels<TDecision extends { allowed: boolean }>(params: {
+  options: TemporalWakeupRuntimeOptions;
+  nowMs: number;
+  inMemoryNoteBySession: Map<string, number>;
+  noteSources: ReadonlySet<string>;
+  recentLimit: number;
+  runPreflight: (
+    channel: StartupSessionMetadata,
+    inMemoryLastNoteAt: number | undefined,
+  ) => TDecision | null;
+  evaluate: (context: ResolvedWakeupSessionContext) => TDecision;
+  onSkip: (denial: Extract<TDecision, { allowed: false }>) => void;
+}): Array<EligibleWakeupChannel<Extract<TDecision, { allowed: true }>>> {
+  const eligible: Array<EligibleWakeupChannel<Extract<TDecision, { allowed: true }>>> = [];
+  for (const channel of enumerateWakeupChannels(params.options, params.nowMs)) {
+    const inMemoryLastNoteAt = params.inMemoryNoteBySession.get(channel.sessionId);
+    // Preflight returns denials only (its documented contract); a non-null
+    // result is always a terminal skip for this channel.
+    const preflightDenial = params.runPreflight(channel, inMemoryLastNoteAt);
+    if (preflightDenial) {
+      params.onSkip(preflightDenial as Extract<TDecision, { allowed: false }>);
+      continue;
+    }
+    const context = resolveWakeupChannelContext(
+      params.options,
+      params.inMemoryNoteBySession,
+      channel,
+      params.recentLimit,
+      params.noteSources,
+    );
+    const decision = params.evaluate(context);
+    if (!decision.allowed) {
+      params.onSkip(decision as Extract<TDecision, { allowed: false }>);
+      continue;
+    }
+    eligible.push({ channel, context, decision: decision as Extract<TDecision, { allowed: true }> });
+  }
+  return eligible;
+}
+
 async function buildCatchUpSummary(
   options: TemporalWakeupRuntimeOptions,
   channelId: string,
@@ -902,61 +966,54 @@ export function registerTemporalWakeupTasks(options: TemporalWakeupRuntimeOption
       cadence: { kind: 'daily', hour, minute, timezone: morning.timezone },
       handler: async () => {
         // Fan the internal new-day frame out to EVERY recently-active channel
-        // (bead psfn-framework-2x37.3), each gated by its own eligibility +
-        // anti-loop state. Outward delivery stays single-target (below) to
-        // avoid multi-channel proactive spam.
-        const channels = enumerateWakeupChannels(options, Date.now());
+        // (bead 2x37.3), each gated by its own eligibility + anti-loop state via
+        // the shared fan-out pipeline (bead 2x37.9 item 1). Outward delivery
+        // stays single-target (below) to avoid multi-channel proactive spam.
+        const nowMs = Date.now();
         const eligible: Array<{
           decision: Extract<MorningWakeDecision, { allowed: true }>;
           note: string;
           channelType: ChannelType;
         }> = [];
 
-        for (const channel of channels) {
-          const inMemoryLastNoteAt = morningNoteBySession.get(channel.sessionId);
-          const preflightDecision = evaluateMorningWakePreflight({
-            session: channel,
-            fullTurnMaxIdleMs: morning.fullTurnMaxIdleHours * HOUR_MS,
-            minPartnerIdleMs: morning.minPartnerIdleMinutes * MINUTE_MS,
-            nowMs: Date.now(),
-            evaluateEligibility: evaluateMorningWakeEligibility,
-            ...(inMemoryLastNoteAt !== undefined
-              ? { lastWakeupNoteAtMs: inMemoryLastNoteAt }
-              : {}),
-          });
-          if (preflightDecision) {
+        const eligibleChannels = collectEligibleWakeupChannels<MorningWakeDecision>({
+          options,
+          nowMs,
+          inMemoryNoteBySession: morningNoteBySession,
+          noteSources: MORNING_WAKEUP_NOTE_SOURCES,
+          recentLimit: Math.max(morning.catchUpEntryLimit, 8),
+          runPreflight: (channel, inMemoryLastNoteAt) =>
+            evaluateMorningWakePreflight({
+              session: channel,
+              fullTurnMaxIdleMs: morning.fullTurnMaxIdleHours * HOUR_MS,
+              minPartnerIdleMs: morning.minPartnerIdleMinutes * MINUTE_MS,
+              nowMs,
+              evaluateEligibility: evaluateMorningWakeEligibility,
+              ...(inMemoryLastNoteAt !== undefined
+                ? { lastWakeupNoteAtMs: inMemoryLastNoteAt }
+                : {}),
+            }),
+          evaluate: (context) =>
+            evaluateMorningWakeEligibility({
+              session: context.session,
+              recentEntries: context.recentEntries,
+              fullTurnMaxIdleMs: morning.fullTurnMaxIdleHours * HOUR_MS,
+              minPartnerIdleMs: morning.minPartnerIdleMinutes * MINUTE_MS,
+              ...(context.lastWakeupNoteAtMs !== undefined
+                ? { lastWakeupNoteAtMs: context.lastWakeupNoteAtMs }
+                : {}),
+            }),
+          // Fires at most once per day; log at info so a skipped morning wake is
+          // visible without turning on debug.
+          onSkip: (denial) => {
             log.info('Morning wake skipped', {
-              reason: preflightDecision.reason,
-              sessionId: preflightDecision.sessionId,
+              reason: denial.reason,
+              sessionId: denial.sessionId,
             });
-            continue;
-          }
-          const context = resolveWakeupChannelContext(
-            options,
-            morningNoteBySession,
-            channel,
-            Math.max(morning.catchUpEntryLimit, 8),
-            MORNING_WAKEUP_NOTE_SOURCES,
-          );
-          const decision = evaluateMorningWakeEligibility({
-            session: context.session,
-            recentEntries: context.recentEntries,
-            fullTurnMaxIdleMs: morning.fullTurnMaxIdleHours * HOUR_MS,
-            minPartnerIdleMs: morning.minPartnerIdleMinutes * MINUTE_MS,
-            ...(context.lastWakeupNoteAtMs !== undefined
-              ? { lastWakeupNoteAtMs: context.lastWakeupNoteAtMs }
-              : {}),
-          });
-          if (!decision.allowed) {
-            // Fires at most once per day; log at info so a skipped morning wake
-            // is visible without turning on debug.
-            log.info('Morning wake skipped', {
-              reason: decision.reason,
-              sessionId: decision.sessionId,
-            });
-            continue;
-          }
+          },
+        });
 
+        for (const { channel, context, decision } of eligibleChannels) {
           const timeZone = resolveActiveTimezone();
           const refresherAlreadyDeliveredCatchUpToday =
             didTemporalWakeupNoteWithContentLandOnLocalDate({
@@ -1041,54 +1098,47 @@ export function registerTemporalWakeupTasks(options: TemporalWakeupRuntimeOption
       intervalMs: Math.max(1_000, refresher.checkIntervalMs),
       handler: async () => {
         // Fan the time-of-day refresh out to every recently-active channel
-        // (bead psfn-framework-2x37.3); each channel keeps its own idle guard
-        // and anti-loop spacing. No outward delivery on this lane.
-        const channels = enumerateWakeupChannels(options, Date.now());
-        for (const channel of channels) {
-          const inMemoryLastNoteAt = refresherNoteBySession.get(channel.sessionId);
-          const preflightDecision = evaluateIdleRefresherPreflight({
-            session: channel,
-            minIdleMs: refresher.minIdleMinutes * MINUTE_MS,
-            minNoteIntervalMs: refresher.minNoteIntervalMinutes * MINUTE_MS,
-            nowMs: Date.now(),
-            evaluateEligibility: evaluateIdleRefresherEligibility,
-            ...(inMemoryLastNoteAt !== undefined
-              ? { lastWakeupNoteAtMs: inMemoryLastNoteAt }
-              : {}),
-          });
-          if (preflightDecision) {
+        // (bead 2x37.3) through the shared fan-out pipeline (bead 2x37.9
+        // item 1); each channel keeps its own idle guard and anti-loop spacing.
+        // No outward delivery on this lane.
+        const nowMs = Date.now();
+        const eligibleChannels = collectEligibleWakeupChannels<IdleRefresherDecision>({
+          options,
+          nowMs,
+          inMemoryNoteBySession: refresherNoteBySession,
+          noteSources: REFRESHER_WAKEUP_NOTE_SOURCES,
+          recentLimit: 32,
+          runPreflight: (channel, inMemoryLastNoteAt) =>
+            evaluateIdleRefresherPreflight({
+              session: channel,
+              minIdleMs: refresher.minIdleMinutes * MINUTE_MS,
+              minNoteIntervalMs: refresher.minNoteIntervalMinutes * MINUTE_MS,
+              nowMs,
+              evaluateEligibility: evaluateIdleRefresherEligibility,
+              ...(inMemoryLastNoteAt !== undefined
+                ? { lastWakeupNoteAtMs: inMemoryLastNoteAt }
+                : {}),
+            }),
+          evaluate: (context) =>
+            evaluateIdleRefresherEligibility({
+              session: context.session,
+              recentEntries: context.recentEntries,
+              minIdleMs: refresher.minIdleMinutes * MINUTE_MS,
+              minNoteIntervalMs: refresher.minNoteIntervalMinutes * MINUTE_MS,
+              ...(context.lastWakeupNoteAtMs !== undefined
+                ? { lastWakeupNoteAtMs: context.lastWakeupNoteAtMs }
+                : {}),
+            }),
+          onSkip: (denial) => {
             log.debug('Idle refresher skipped', {
-              reason: preflightDecision.reason,
-              sessionId: preflightDecision.sessionId,
-              idleGapMs: preflightDecision.idleGapMs,
+              reason: denial.reason,
+              sessionId: denial.sessionId,
+              idleGapMs: denial.idleGapMs,
             });
-            continue;
-          }
-          const context = resolveWakeupChannelContext(
-            options,
-            refresherNoteBySession,
-            channel,
-            32,
-            REFRESHER_WAKEUP_NOTE_SOURCES,
-          );
-          const decision = evaluateIdleRefresherEligibility({
-            session: context.session,
-            recentEntries: context.recentEntries,
-            minIdleMs: refresher.minIdleMinutes * MINUTE_MS,
-            minNoteIntervalMs: refresher.minNoteIntervalMinutes * MINUTE_MS,
-            ...(context.lastWakeupNoteAtMs !== undefined
-              ? { lastWakeupNoteAtMs: context.lastWakeupNoteAtMs }
-              : {}),
-          });
-          if (!decision.allowed) {
-            log.debug('Idle refresher skipped', {
-              reason: decision.reason,
-              sessionId: decision.sessionId,
-              idleGapMs: decision.idleGapMs,
-            });
-            continue;
-          }
+          },
+        });
 
+        for (const { context, decision } of eligibleChannels) {
           const catchUpSummary = await buildCatchUpSummary(
             options,
             decision.sessionId,

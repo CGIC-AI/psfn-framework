@@ -293,7 +293,7 @@ export function buildAgentControlPlane(
   }), {
     gatewayMode: true,
     ...(icpAutonomyRuntime ? { companionOutreach: icpAutonomyRuntime } : {}),
-    companionCandidateEnabled: icpInitiationSourceRuntime !== undefined,
+    companionCandidateEnabled: Boolean(icpInitiationSourceRuntime),
     isCompanionCandidateAuthorized: () => (
       resolveCompanionOutreachOriginCatalogSource(
         deferredCompanionOutreachAuthorizationRuntime,

@@ -37,7 +37,7 @@ export interface SkillsRuntimeOptions {
 }
 
 interface SkillSnapshotCache {
-  signature: string;
+  fingerprint: string;
   snapshot: SkillSnapshot;
   evaluations: SkillEvaluation[];
   byName: Map<string, SkillEvaluation>;
@@ -219,9 +219,9 @@ export class SkillsRuntime {
       })),
       files: buildSkillFileSignature(files),
     });
-    const signature = hashSignature(signaturePayload);
+    const fingerprint = hashSignature(signaturePayload);
 
-    if (this.cache && this.cache.signature === signature) {
+    if (this.cache && !this.cache.fingerprint.localeCompare(fingerprint)) {
       return this.cache;
     }
 
@@ -240,7 +240,7 @@ export class SkillsRuntime {
 
     const snapshot: SkillSnapshot = {
       generatedAt: new Date().toISOString(),
-      signature,
+      signature: fingerprint,
       configEnabled: runtimeConfig.enabled,
       budget: {
         maxSkills: runtimeConfig.maxLoadedSkills,
@@ -266,7 +266,7 @@ export class SkillsRuntime {
     }
 
     this.cache = {
-      signature,
+      fingerprint,
       snapshot,
       evaluations: eligibility.evaluations,
       byName,

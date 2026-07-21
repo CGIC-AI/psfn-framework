@@ -1570,6 +1570,13 @@ const postgresContactCrudOperations: PostgresContactOperationMap = {
     return await this.upsert({
       displayName: displayName?.trim() || identity.userId,
       trustLevel: 'public',
+      // bead hr1q: a first message on the gateway-validated 'companion' lane
+      // comes from a same-cluster fleet peer — the gateway already checked the
+      // peer against fleetCompanionIds before delivery. Recognize such peers
+      // above 'stranger' at mint. This bumps relationshipType only; the trust
+      // floor stays 'public' per the fail-closed charter (cross-cluster peers
+      // arrive on other channels and are unaffected).
+      ...(identity.channel === 'companion' ? { relationshipType: 'acquaintance' as const } : {}),
       channels: [{
         channel: identity.channel,
         userId: identity.userId,

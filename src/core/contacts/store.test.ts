@@ -897,6 +897,22 @@ describe('Postgres contact store behavior', () => {
       ]);
     });
 
+    it('mints same-cluster fleet companion peers as acquaintance at the public trust floor', async () => {
+      const peer = await store.resolveChannelIdentity('companion', 'sibling-companion-1', 'Sibling');
+      // bead hr1q: recognized above stranger, but the trust floor stays public.
+      expect(peer.relationshipType).toBe('acquaintance');
+      expect(peer.trustLevel).toBe('public');
+      const persisted = await store.getById(peer.id);
+      expect(persisted?.relationshipType).toBe('acquaintance');
+      expect(persisted?.trustLevel).toBe('public');
+    });
+
+    it('still mints non-fleet strangers as stranger at the public trust floor', async () => {
+      const stranger = await store.resolveChannelIdentity('api', 'unknown-api-9', 'Unknown');
+      expect(stranger.relationshipType).toBe('stranger');
+      expect(stranger.trustLevel).toBe('public');
+    });
+
     it('reuses canonical contact when linked channel identity exists', async () => {
       const contact = await store.upsert({ displayName: 'V', discordUserId: PRIMARY_USER_ID });
       const link = await store.linkChannelIdentity(contact.id, 'api', 'v-api-id');

@@ -10,6 +10,7 @@ import { normalizeAliasValue } from './install-local-hooks.mjs';
 import {
   REMOTE_ATTESTATION_CONTEXT,
   assessHookInstallation,
+  buildValidatedPushRefspec,
   buildGatePlan,
   createAttestation,
   evaluateRequiredChecks,
@@ -301,15 +302,39 @@ test('GitHub waits for an authenticated exact-base commit status', async () => {
     context: REMOTE_ATTESTATION_CONTEXT,
     state: 'success',
     description: `base=${BASE}`,
+    creator: { login: 'axAilotl' },
   }];
-  assert.equal(validateRemoteAttestation(statuses, BASE).context, REMOTE_ATTESTATION_CONTEXT);
-  assert.throws(() => validateRemoteAttestation(statuses, `3${BASE.slice(1)}`), /exact base/);
+  assert.equal(
+    validateRemoteAttestation(statuses, BASE, 'axAilotl').context,
+    REMOTE_ATTESTATION_CONTEXT,
+  );
+  assert.throws(
+    () => validateRemoteAttestation(statuses, BASE, 'untrusted-writer'),
+    /trusted issuer/,
+  );
+  assert.throws(
+    () => validateRemoteAttestation(statuses, `3${BASE.slice(1)}`, 'axAilotl'),
+    /exact base/,
+  );
   assert.equal(
     (await waitForRemoteAttestation({
-      repository: 'owner/repo', head: HEAD, base: BASE, attempts: 1, read: () => statuses,
+      repository: 'owner/repo',
+      head: HEAD,
+      base: BASE,
+      expectedActor: 'axAilotl',
+      attempts: 1,
+      read: () => statuses,
     })).state,
     'success',
   );
+});
+
+test('publisher pushes the exact attested commit rather than mutable HEAD', () => {
+  assert.equal(
+    buildValidatedPushRefspec(HEAD, 'fix/validated-head'),
+    `${HEAD}:refs/heads/fix/validated-head`,
+  );
+  assert.throws(() => buildValidatedPushRefspec('HEAD', 'fix/validated-head'), /SHA/);
 });
 
 test('changed-workflow security scan accepts only explicit GitHub workflow inputs', () => {
@@ -342,4 +367,5 @@ test('GitHub CI is one complementary delta lane without label-triggered reruns',
   assert.doesNotMatch(workflow, /run: npm test/);
   assert.doesNotMatch(workflow, /run: bash scripts\/ci\/run-semgrep\.sh/);
   assert.match(workflow, /statuses: read/);
+  assert.match(workflow, /vars\.LOCAL_GATE_STATUS_ACTOR/);
 });

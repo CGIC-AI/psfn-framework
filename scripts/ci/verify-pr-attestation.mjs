@@ -19,6 +19,7 @@ export async function waitForRemoteAttestation({
   repository,
   head,
   base,
+  expectedActor,
   attempts = 20,
   intervalMs = 3_000,
   read = readStatuses,
@@ -26,7 +27,7 @@ export async function waitForRemoteAttestation({
   let lastError;
   for (let attempt = 0; attempt < attempts; attempt += 1) {
     try {
-      return validateRemoteAttestation(read(repository, head), base);
+      return validateRemoteAttestation(read(repository, head), base, expectedActor);
     } catch (error) {
       lastError = error;
       if (attempt + 1 < attempts) await delay(intervalMs);
@@ -40,6 +41,7 @@ export async function main(env = process.env) {
     repository: env.GITHUB_REPOSITORY ?? '',
     head: env.HEAD_SHA ?? '',
     base: env.BASE_SHA ?? '',
+    expectedActor: env.EXPECTED_LOCAL_GATE_STATUS_ACTOR ?? '',
   });
   console.log(`Remote local-gate status matches ${env.HEAD_SHA?.slice(0, 12)}.`);
 }

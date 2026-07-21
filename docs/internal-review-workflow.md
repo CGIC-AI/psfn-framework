@@ -32,6 +32,12 @@ gh alias list | grep '^gated-pr:'     # !npm run pr:publish -- "$@"
 ```
 
 The installer replaces nothing; run it separately in every worktree.
+Repository maintainers must also configure the only GitHub identity allowed to
+publish local-gate statuses:
+
+```bash
+gh variable set LOCAL_GATE_STATUS_ACTOR --body "$(gh api user --jq .login)"
+```
 
 ## Implement and gate
 

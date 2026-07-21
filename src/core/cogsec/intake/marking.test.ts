@@ -126,6 +126,20 @@ describe('renderMarkedContent', () => {
     expect(rendered).toContain(`tram schedules.${INTAKE_DATAMARK_MARKER}\n\n`);
   });
 
+  it('reduces and marks interleave content above the synchronous work limit', () => {
+    const largeSingleLine = 'x'.repeat((64 * 1024) + 1);
+    const rendered = renderMarkedContent(
+      largeSingleLine,
+      { intensity: 'interleave', provenanceNote: 'n' },
+    );
+
+    expect(rendered).toContain('marked="true"');
+    expect(rendered).toContain('representation="summary"');
+    expect(rendered).toContain(INTAKE_DATAMARK_MARKER);
+    expect(rendered).toContain('[Reduced to a neutral excerpt by the intake firewall.]');
+    expect(rendered).not.toContain(largeSingleLine);
+  });
+
   it('interleave marker is pre-stripped from inbound content by the L1 pipeline (unforgeable)', () => {
     const scanner = createIntakeL1Scanner({
       rulesPath: join(process.cwd(), 'config', 'intake-l1-rules.json'),
@@ -159,10 +173,12 @@ describe('renderMarkedContent', () => {
 describe('interleaveDatamark', () => {
   it('marks newline boundaries and single-line stride boundaries', () => {
     expect(interleaveDatamark('a\nb\n\nc', '§')).toBe('a§\nb§\n\nc');
-    const singleLine = `${'x'.repeat(199)} ${'y'.repeat(199)} tail`;
-    const marked = interleaveDatamark(singleLine, '§');
-    expect(marked).toContain('§');
-    expect(marked.replaceAll('§', '')).toBe(singleLine);
+    const marked = interleaveDatamark(`${'x'.repeat(199)} ${'y'.repeat(199)} tail`, '§');
+    expect(marked).toBe(`${'x'.repeat(199)} §${'y'.repeat(199)} §tail`);
+    const unicode = `${'😀'.repeat(100)} ${'x'.repeat(98)} tail`;
+    expect(interleaveDatamark(unicode, '§')).toBe(
+      `${'😀'.repeat(100)} ${'x'.repeat(98)} §tail`,
+    );
   });
 
   it('fails closed on an empty marker', () => {

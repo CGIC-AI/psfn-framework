@@ -144,6 +144,10 @@ export function resolveMarkingPlan(input: {
 // ── Rendering (prompt-assembly time) ──
 
 const NEUTRAL_TRUNCATION_CHARS = 400;
+// Large single-line observations are common for minified HTML/JSON. Prompt
+// assembly is synchronous, so cap full-content interleaving and preserve the
+// security boundary with the existing reduced, marked representation instead.
+const MAX_INTERLEAVE_SOURCE_CHARS = 64 * 1024;
 
 /** Wrapper-tag forgery guard: tag-shaped external_content sequences inside the content are neutralized. */
 function neutralizeWrapperCollisions(text: string): string {
@@ -172,22 +176,40 @@ export function interleaveDatamark(text: string, marker: string): string {
   }
   const stride = 200;
   if (text.length <= stride) return text;
-  let out = '';
-  let sinceMarker = 0;
-  for (const char of text) {
-    out += char;
-    sinceMarker += 1;
-    if (sinceMarker >= stride && /\s/u.test(char)) {
-      out += marker;
-      sinceMarker = 0;
+
+  // Jump directly to each stride and find the next whitespace boundary. This
+  // preserves the prior code-point stride semantics while avoiding
+  // per-code-point regex checks and repeated string concatenation for large
+  // single-line bodies.
+  const chunks: string[] = [];
+  const whitespace = /\s/gu;
+  let chunkStart = 0;
+  for (;;) {
+    let searchFrom = chunkStart;
+    for (let advanced = 0; advanced < stride - 1 && searchFrom < text.length; advanced += 1) {
+      const codePoint = text.codePointAt(searchFrom);
+      searchFrom += codePoint !== undefined && codePoint > 0xFFFF ? 2 : 1;
     }
+    if (searchFrom >= text.length) break;
+    whitespace.lastIndex = searchFrom;
+    const match = whitespace.exec(text);
+    if (!match) break;
+    const boundaryEnd = match.index + match[0].length;
+    chunks.push(text.slice(chunkStart, boundaryEnd), marker);
+    chunkStart = boundaryEnd;
   }
-  return out;
+  if (chunkStart === 0) return text;
+  chunks.push(text.slice(chunkStart));
+  return chunks.join('');
 }
 
 function neutralTruncation(text: string): string {
-  const collapsed = text.replace(/\s+/gu, ' ').trim();
-  const excerpt = collapsed.length > NEUTRAL_TRUNCATION_CHARS
+  // Inspect only a bounded prefix: this reducer is itself the fallback for
+  // oversized/unbudgeted content and must not perform whole-input work.
+  const sourcePrefix = text.slice(0, NEUTRAL_TRUNCATION_CHARS * 4);
+  const collapsed = sourcePrefix.replace(/\s+/gu, ' ').trim();
+  const sourceWasTruncated = sourcePrefix.length < text.length;
+  const excerpt = collapsed.length > NEUTRAL_TRUNCATION_CHARS || sourceWasTruncated
     ? `${collapsed.slice(0, NEUTRAL_TRUNCATION_CHARS - 1)}…`
     : collapsed;
   return `[Reduced to a neutral excerpt by the intake firewall.]\n${excerpt}`;
@@ -204,6 +226,8 @@ export interface RenderMarkedContentOptions {
   safeText?: string;
   /** Test seam; production uses the canonical INTAKE_DATAMARK_MARKER. */
   marker?: string;
+  /** Prompt-assembly defense-in-depth: render content in reduced form. */
+  forceReducedForm?: boolean;
 }
 
 /**
@@ -227,13 +251,28 @@ export function renderMarkedContent(
 
   let body: string;
   switch (plan.intensity) {
-    case 'wrap':
-      body = neutralizeWrapperCollisions(text);
+    case 'wrap': {
+      if (options.forceReducedForm === true) {
+        attributes.push('representation="summary"');
+        body = neutralizeWrapperCollisions(neutralTruncation(text));
+      } else {
+        body = neutralizeWrapperCollisions(text);
+      }
       break;
-    case 'interleave':
+    }
+    case 'interleave': {
       attributes.push('marked="true"');
-      body = interleaveDatamark(neutralizeWrapperCollisions(text), marker);
+      if (options.forceReducedForm === true || text.length > MAX_INTERLEAVE_SOURCE_CHARS) {
+        attributes.push('representation="summary"');
+        body = interleaveDatamark(
+          neutralizeWrapperCollisions(neutralTruncation(text)),
+          marker,
+        );
+      } else {
+        body = interleaveDatamark(neutralizeWrapperCollisions(text), marker);
+      }
       break;
+    }
     case 'summary_only': {
       attributes.push('representation="summary"');
       const safe = options.safeText?.trim();

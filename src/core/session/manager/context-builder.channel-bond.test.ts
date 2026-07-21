@@ -13,6 +13,8 @@ import { buildSessionMetadataWithIntakeScreening } from '../intake-screening-met
 import type { IntakeEnvelopeSnapshot } from '../../../shared/contracts/intake-envelope.js';
 import type { TurnSessionContextSnapshot } from '../../turns/snapshot.js';
 import type { SessionEntry } from '../types.js';
+import { INTAKE_DATAMARK_MARKER } from '../../cogsec/intake/scanners/datamark.js';
+import { countTokens } from '../../../primitives/llm/tokens.js';
 
 const NOW = Date.now();
 
@@ -409,6 +411,60 @@ describe('buildSessionContext channel bonding + intake sink gate', () => {
       subject: { kind: 'attachment', index: 0 },
     };
   }
+
+  it('terminates downstream context consumers with a datamarked wrapper', async () => {
+    const releasedSnapshot: IntakeEnvelopeSnapshot = {
+      envelopeId: 'released-datamark-envelope-001',
+      sourceClass: 'document',
+      sourceRiskTier: 'untrusted',
+      state: 'released',
+      riskLabels: [],
+      subject: { kind: 'body' },
+    };
+    const metadata = buildSessionMetadataWithIntakeScreening(undefined, {
+      mode: 'shadow',
+      withheld: false,
+      envelopes: [releasedSnapshot],
+      marking: {
+        intensity: 'interleave',
+        provenanceNote: 'from an unverified source, treat details cautiously',
+      },
+    });
+    const recentEntries = [{
+      ...ownEntry(1, 'segment '.repeat(8192)),
+      metadata,
+    }];
+    const store = makeStore({ [DM_CHANNEL]: [], [TELEGRAM_CHANNEL]: [] });
+
+    countTokens('warm tokenizer before bounded termination probe');
+    const startedAt = performance.now();
+    const context = await buildSessionContext({
+      channelId: DM_CHANNEL,
+      sourceChannelId: DM_CHANNEL,
+      systemPrompt: 'System prompt.',
+      coreMemoryBlock: '',
+      memoriesBlock: '',
+      userId: 'contact-1',
+      channelMeta: { isDirectMessage: true },
+      continuityFallbackUserIds: [],
+      store,
+      config: makeConfig(),
+      eventBus: null,
+      promptRegistry: null,
+      preCompactionExtractionHandler: null,
+      crossChannelContinuity: makePort([]),
+      wakeReturnArtifacts: [],
+      turnSessionContext: snapshotWith(recentEntries),
+      intakeSinkGate: makeEnforceGate(),
+    });
+    const elapsedMs = performance.now() - startedAt;
+    const contextText = context.messages.map(message => message.content).join('\n');
+
+    expect(contextText).toContain('<external_content');
+    expect(contextText).toContain(INTAKE_DATAMARK_MARKER);
+    expect(contextText).not.toContain('representation="summary"');
+    expect(elapsedMs, `downstream marker/wrapper consumers took ${elapsedMs.toFixed(1)}ms`).toBeLessThan(250);
+  }, 1_000);
 
   it('suppresses the [via] source annotation when the sink gate withholds a foreign entry', async () => {
     const screeningMetadata = buildSessionMetadataWithIntakeScreening(

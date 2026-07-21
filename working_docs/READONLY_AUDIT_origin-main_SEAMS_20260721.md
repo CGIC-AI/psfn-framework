@@ -1,14 +1,14 @@
 # PSFN Seam & Provenance Deep Audit
 
-**Base:** `origin/main` @ `f8f798d13e2e0da3baa2dfac56961608acd2ab71`  
-**Date:** 2026-07-21  
-**Posture:** **READ ONLY** — analysis only. No product-code edits, no beads, no live-system mutations.  
-**Worktree:** `/home/ada/ai/dev/worktrees/psfn-framework/audit-main-readonly`
+**Base:** `origin/main` @ `f8f798d13e2e0da3baa2dfac56961608acd2ab71`
+**Date:** 2026-07-21
+**Posture:** **READ ONLY** — analysis only. No product-code edits, no beads, no live-system mutations.
+**Worktree:** `<worktrees>/psfn-framework/audit-main-readonly`
 
 **Prior artifacts (do not re-litigate shallow perimeter):**
 
-- [`READONLY_AUDIT_origin-main_20260721.md`](./READONLY_AUDIT_origin-main_20260721.md) — perimeter skim  
-- [`READONLY_AUDIT_origin-main_DEEPDIVE_20260721.md`](./READONLY_AUDIT_origin-main_DEEPDIVE_20260721.md) — memory store economics (M1–M7: full RAM hydration, no HNSW, N+1 authorized detail, proxy fallthrough)  
+- [`READONLY_AUDIT_origin-main_20260721.md`](./READONLY_AUDIT_origin-main_20260721.md) — perimeter skim
+- [`READONLY_AUDIT_origin-main_DEEPDIVE_20260721.md`](./READONLY_AUDIT_origin-main_DEEPDIVE_20260721.md) — memory store economics (M1–M7: full RAM hydration, no HNSW, N+1 authorized detail, proxy fallthrough)
 - [`READONLY_AUDIT_origin-main_WELFARE_20260721.md`](./READONLY_AUDIT_origin-main_WELFARE_20260721.md) — companion core health/welfare vs charter care laws (rest, charge, fatigue, weighted thoughts, reflection, task notify)
 
 This document goes after **where data crosses trust boundaries**: L0 → extraction → L2 → retrieval → prompt → outbound / multi-human; plus automata efficiency on those paths.
@@ -19,20 +19,20 @@ This document goes after **where data crosses trust boundaries**: L0 → extract
 
 What you’re building is rare: a **continuity substrate** that treats privacy as a structural matrix, not a prompt instruction. The code repeatedly invents the right *seams*:
 
-- ConversationScope as single per-turn “who is this with” object  
-- Context Envelope `{channelPrivacy, broadcast, audience*}` as deterministic pre-prompt state  
-- Memory subject classifications as SQL-level authorization (not post-hoc filter-after-leak on product recall)  
-- Extraction speaker routing that *skips* ambiguous multi-human facts instead of guessing  
-- Continuity that heals unprovable L0 refs to redaction  
-- Artifact egress that refuses to ship sensitive media without approval  
+- ConversationScope as single per-turn “who is this with” object
+- Context Envelope `{channelPrivacy, broadcast, audience*}` as deterministic pre-prompt state
+- Memory subject classifications as SQL-level authorization (not post-hoc filter-after-leak on product recall)
+- Extraction speaker routing that *skips* ambiguous multi-human facts instead of guessing
+- Continuity that heals unprovable L0 refs to redaction
+- Artifact egress that refuses to ship sensitive media without approval
 
 That is the spirit of the charter (partner sovereignty, truthful companion-facing semantics, multi-human care) made operational.
 
 **Where it still strains:**
 
-1. **Cost of doing it right** — subject SQL, dual memory model, multi-gate retrieval, thick turn runtime. Privacy is correct *and* expensive; aging companions will feel economics before clever bugs.  
-2. **Layering debt** — room visibility still has a documented incomplete flip to ConversationScope; broadcast risk is regex heuristic; episodic subject filter is post-query JS.  
-3. **Known open design choices** (explicitly commented in writer) — paraphrase restatement stacks, extraction TOCTOU — intentionally not auto-tightened. Good honesty; still operator load.  
+1. **Cost of doing it right** — subject SQL, dual memory model, multi-gate retrieval, thick turn runtime. Privacy is correct *and* expensive; aging companions will feel economics before clever bugs.
+2. **Layering debt** — room visibility still has a documented incomplete flip to ConversationScope; broadcast risk is regex heuristic; episodic subject filter is post-query JS.
+3. **Known open design choices** (explicitly commented in writer) — paraphrase restatement stacks, extraction TOCTOU — intentionally not auto-tightened. Good honesty; still operator load.
 4. **Automata are thoughtful but heavy** — post-turn deferred queue + near-turn cadence + extraction + rest-window heavy passes is a lot of concurrent machinery; most is correctly deferred off the reply path, but the turn itself remains a large sequential pipeline.
 
 **Net:** You are not over-engineering vanity. You are engineering *seams for human privacy when more humans and outbound surfaces enter the picture*. The architecture is the right bet. The work is finishing incomplete gates, batching authorized access, and keeping automata from competing with the lived turn.
@@ -87,9 +87,9 @@ Every multi-human privacy failure lives at a **re-derive** of scope or a **missi
 
 Episodic reads for Garden use subject-scoped projection:
 
-- Viewer must be in `participantContactIds`  
-- Episodes with **no** participant attribution are **invisible**  
-- Arcs require **both** endpoints visible  
+- Viewer must be in `participantContactIds`
+- Episodes with **no** participant attribution are **invisible**
+- Arcs require **both** endpoints visible
 
 **Evidence:** `faculties/memory/episodic/subject-authorized-store.ts:28–79`
 
@@ -107,11 +107,11 @@ Episodic reads for Garden use subject-scoped projection:
 
 Group / multi-speaker transcripts set `mixedHumanSpeakers` when >1 human speaker (`:108–109`). `resolveFactRouting` can **skip** with:
 
-- `ambiguous_group_speaker`  
-- `unresolved_speaker_contact`  
-- `missing_source_message_ids` / `ambiguous_source_message_ids`  
-- `conflicting_source_attribution`  
-- `unresolved_subject_contact`  
+- `ambiguous_group_speaker`
+- `unresolved_speaker_contact`
+- `missing_source_message_ids` / `ambiguous_source_message_ids`
+- `conflicting_source_attribution`
+- `unresolved_subject_contact`
 
 **Finding EX-1 — positive, charter-grade:** Extraction refuses to invent a subject when speakers are ambiguous. That is the single most important multi-human privacy control on the *write* side. Silent wrong-contact binding would be catastrophic; skip is correct.
 
@@ -123,8 +123,8 @@ Group / multi-speaker transcripts set `mixedHumanSpeakers` when >1 human speaker
 
 Each accepted write carries routing telemetry into provenance:
 
-- `triggerContactId`, `routedContactId`, `sourceContactId`, `subjectContactId`  
-- `sourceSpeakerName`, `scopeRef`, message span ids  
+- `triggerContactId`, `routedContactId`, `sourceContactId`, `subjectContactId`
+- `sourceSpeakerName`, `scopeRef`, message span ids
 
 This is what later subject classification and contact-scope gates *read*. Without these stamps, high-intimacy contact scope becomes weaker.
 
@@ -134,9 +134,9 @@ This is what later subject classification and contact-scope gates *read*. Withou
 
 Order of gates on `write()`:
 
-1. Testing session exclusion (`assertTestingSessionExcluded`)  
-2. CogSec candidacy + optional `memory_write` sink (`assertCogSecCandidacy`, `:361–394`)  
-3. Embed + exact-dup / evolution (`:413–518`)  
+1. Testing session exclusion (`assertTestingSessionExcluded`)
+2. CogSec candidacy + optional `memory_write` sink (`assertCogSecCandidacy`, `:361–394`)
+3. Embed + exact-dup / evolution (`:413–518`)
 4. Sensitivity write policy, retention, provenance refs (including intake envelope ref, `:113–118`)
 
 **Finding WR-1 — positive:** Intake envelope id fails closed if malformed; stamped as `intake-envelope:<id>` for later revocation/lineage (`writer.ts:113–118`, `appendIntakeEnvelopeProvenanceRef`).
@@ -167,12 +167,12 @@ Order of gates on `write()`:
 
 Precedence:
 
-1. Operator approval  
-2. Disclosure boundary (withhold / consent-required fail closed)  
-3. Consent flags (`allowRecall === false`)  
-4. Trust ceiling (sensitivity set per trust tier)  
-5. Envelope visibility (`visibilityAllowed[channelPrivacy]` + broadcast reason tags)  
-6. Default allow  
+1. Operator approval
+2. Disclosure boundary (withhold / consent-required fail closed)
+3. Consent flags (`allowRecall === false`)
+4. Trust ceiling (sensitivity set per trust tier)
+5. Envelope visibility (`visibilityAllowed[channelPrivacy]` + broadcast reason tags)
+6. Default allow
 
 **Finding PM-2 — positive:** Broadcast denials cite `visibility.broadcast_restricted` separately from channel privacy (`:320–326`). Operators can audit *which* envelope dimension gated.
 
@@ -182,9 +182,9 @@ Precedence:
 
 **File:** `conversation-scope.ts` + `context-envelope` / `policy.classifyChannelEnvelope`
 
-- Resolved **once** per turn at ingress (`conversation-scope.ts:1–25, 138–169`)  
-- Group scopes **cannot** carry a singular contact (type-level `contact?: never`, `:81–90`)  
-- Envelope macros are bare values only (`policy.ts:98–107`) — never privacy-reasoning prose  
+- Resolved **once** per turn at ingress (`conversation-scope.ts:1–25, 138–169`)
+- Group scopes **cannot** carry a singular contact (type-level `contact?: never`, `:81–90`)
+- Envelope macros are bare values only (`policy.ts:98–107`) — never privacy-reasoning prose
 
 **Finding PM-4 — positive, anti-class-bug:** The group-scope type guard kills the “bind the group to one human and leak their DM memories” failure class at compile time.
 
@@ -194,10 +194,10 @@ Precedence:
 
 **File:** `retrieval/access.ts:122–232`
 
-- Inconsistent `scopeRef` room vs `provenance.channelId` → **deny**  
-- Missing room proof when memory claims conversation scope → **deny**  
-- DM may surface memories only if source room is in `canonicalContactRoomIds` or primary-private-DM subject rules  
-- Cross-room group recall blocked by default  
+- Inconsistent `scopeRef` room vs `provenance.channelId` → **deny**
+- Missing room proof when memory claims conversation scope → **deny**
+- DM may surface memories only if source room is in `canonicalContactRoomIds` or primary-private-DM subject rules
+- Cross-room group recall blocked by default
 
 **Finding PM-6 — positive:** Room leakage of “what we said in another server/channel” is actively blocked. Primary private DM subject path (`isPrimaryPrivateDmSubject`, `:138–165`) is carefully narrow (primary + private + non-broadcast + DM + attribution consistency).
 
@@ -205,9 +205,9 @@ Precedence:
 
 **File:** `system/trust/broadcast-safety.ts`
 
-- Regex classification of sensitive / private / off-brand (`:20–46, 86–101`)  
-- Explicit approval tokens for elevating broadcast visibility (`:104–130`)  
-- Approval token match uses plain `includes` / string equality — not timing-safe (`:111–114`); tokens are not high-entropy secrets in the same class as API keys, but weak if env tokens are long-lived secrets  
+- Regex classification of sensitive / private / off-brand (`:20–46, 86–101`)
+- Explicit approval tokens for elevating broadcast visibility (`:104–130`)
+- Approval token match uses plain `includes` / string equality — not timing-safe (`:111–114`); tokens are not high-entropy secrets in the same class as API keys, but weak if env tokens are long-lived secrets
 
 **Finding PM-7 — medium (heuristic ceiling):** Regex cannot catch paraphrased partner secrets or screenshots of DMs. This is a **last-mile draft hygiene** layer, not the memory matrix. Do not rely on it as primary privacy; rely on sensitivity + subject + room gates. Consider model-assisted broadcast review later for high-stakes public posts.
 
@@ -215,17 +215,17 @@ Precedence:
 
 **File:** `core/artifacts/sensitivity-egress.ts`
 
-- `self` / `primary_contact` proceed  
-- `external` / `ambiguous` / high sensitivity → approval queue; notifier **must not include artifact body** (`:66–77`)  
-- Fingerprint must not change between request and execute (`:80–91`)  
+- `self` / `primary_contact` proceed
+- `external` / `ambiguous` / high sensitivity → approval queue; notifier **must not include artifact body** (`:66–77`)
+- Fingerprint must not change between request and execute (`:80–91`)
 
 **Finding PM-8 — positive:** Outbound multi-human media path is approval-bound with no secret-in-notification. Matches partner privacy when “additional humans get in the mix.”
 
 ### 4.7 Prompt assembly & observation masking
 
-- Context builder seeds memory with withheld counts in the context manifest (`context-builder.ts:702–736`)  
-- Intake prompt sink can withhold/mark content (`intake-sink-gating` applied in context-builder)  
-- Tool observations fail closed on malformed metadata; masked mode emits `MASKED_TOOL_OBSERVATION_CONTENT` / summary only (`tool-observation.ts:47, 266–270`)  
+- Context builder seeds memory with withheld counts in the context manifest (`context-builder.ts:702–736`)
+- Intake prompt sink can withhold/mark content (`intake-sink-gating` applied in context-builder)
+- Tool observations fail closed on malformed metadata; masked mode emits `MASKED_TOOL_OBSERVATION_CONTENT` / summary only (`tool-observation.ts:47, 266–270`)
 
 **Finding PM-9 — positive:** Tool results and intake content have separate masking paths so untrusted tool egress does not re-enter history as partner speech or full raw dumps by default.
 
@@ -239,19 +239,19 @@ Core path: `handleMessageForTurn` (`turn-execution-runtime.ts:357+`) → identit
 
 **Finding T-1 — positive integrity:**
 
-- Turn IDs UUIDv7 / deterministic ICP reply ids (`:411–431`)  
-- Captured session reads bound to turn session identity (`:465–471`)  
-- Compaction deliberately **not** waited on turn path (`pre-turn-state.ts:400–411`) — atomic insert; no torn read; avoids second budget system  
+- Turn IDs UUIDv7 / deterministic ICP reply ids (`:411–431`)
+- Captured session reads bound to turn session identity (`:465–471`)
+- Compaction deliberately **not** waited on turn path (`pre-turn-state.ts:400–411`) — atomic insert; no torn read; avoids second budget system
 
 **Finding T-2 — turn cost structure:** Even before LLM, the turn does:
 
-1. Presence observe / virtual follow  
-2. Author trust resolution  
-3. L0 append  
-4. Scope + envelope  
-5. Memory retrieval (embed query + authorized SQL + multi-gate filter)  
-6. Context build (history windows, continuity resolve, intake gates, token budgets)  
-7. Prompt compose  
+1. Presence observe / virtual follow
+2. Author trust resolution
+3. L0 append
+4. Scope + envelope
+5. Memory retrieval (embed query + authorized SQL + multi-gate filter)
+6. Context build (history windows, continuity resolve, intake gates, token budgets)
+7. Prompt compose
 
 That is the right work for a companion; it is also why **latency** will track memory economics (deepdive M1/M2/M4) more than raw model TTFT as corpora age.
 
@@ -261,9 +261,9 @@ That is the right work for a companion; it is also why **latency** will track me
 
 Near-turn lane (`near-turn-memory-lane.ts:98–113`):
 
-- **No LLM** structurally  
-- Cadence-gated maintenance / deferred actions only  
-- Heavy sleeptime/dream/arc **unreachable** from near-turn  
+- **No LLM** structurally
+- Cadence-gated maintenance / deferred actions only
+- Heavy sleeptime/dream/arc **unreachable** from near-turn
 
 Post-turn deferred queue (`post-turn-actions.ts`) persists queue, retries, reschedules with telemetry — fire-and-forget emits log failures rather than killing the reply.
 
@@ -297,12 +297,12 @@ Post-turn deferred queue (`post-turn-actions.ts`) persists queue, retries, resch
 
 To leak partner A’s private fact into a surface with human B or the public, an attacker (or bug) must defeat **all of**:
 
-1. Subject SQL (viewer relation / contacts)  
-2. Sensitivity vs trust ceiling  
-3. Channel envelope visibility (+ broadcast)  
-4. Room visibility  
-5. High-intimacy contact scope  
-6. (Outbound) broadcast heuristics / artifact approval  
+1. Subject SQL (viewer relation / contacts)
+2. Sensitivity vs trust ceiling
+3. Channel envelope visibility (+ broadcast)
+4. Room visibility
+5. High-intimacy contact scope
+6. (Outbound) broadcast heuristics / artifact approval
 
 That is a healthy defense-in-depth stack. The weakest **content** layer is broadcast regex; the weakest **structural incomplete** is room visibility’s unfinished ConversationScope flip; the weakest **economics** is authorized N+1 + no ANN + full hydration (deepdive).
 
@@ -351,15 +351,15 @@ That is a healthy defense-in-depth stack. The weakest **content** layer is broad
 
 ### Already strong (do not thrash)
 
-- ConversationScope + group contact prohibition  
-- Trust matrix precedence + high-tier mutation lock  
-- Subject SQL revision/digest binding  
-- Extraction skip-on-ambiguity  
-- Continuity redaction when L0 unprovable  
-- Artifact egress approval without content-in-notify  
-- ICP L0 poison refusal  
-- Near-turn no-LLM structural bound  
-- Compaction non-blocking on turn  
+- ConversationScope + group contact prohibition
+- Trust matrix precedence + high-tier mutation lock
+- Subject SQL revision/digest binding
+- Extraction skip-on-ambiguity
+- Continuity redaction when L0 unprovable
+- Artifact egress approval without content-in-notify
+- ICP L0 poison refusal
+- Near-turn no-LLM structural bound
+- Compaction non-blocking on turn
 
 ---
 
@@ -387,17 +387,17 @@ That is a healthy defense-in-depth stack. The weakest **content** layer is broad
 
 **Deep:**
 
-- L0 provenance / continuity redaction / turn metadata  
-- Extraction speaker routing + write caps + write execution stamps  
-- Writer CogSec + documented dedup design  
-- Trust matrix + envelope classification + room visibility + high-intimacy scope  
-- Broadcast safety + artifact egress  
-- Turn admission / identity / compaction non-wait  
-- Near-turn vs rest-window automata split  
-- Episodic subject projection  
-- Context builder memory manifest / tool mask  
+- L0 provenance / continuity redaction / turn metadata
+- Extraction speaker routing + write caps + write execution stamps
+- Writer CogSec + documented dedup design
+- Trust matrix + envelope classification + room visibility + high-intimacy scope
+- Broadcast safety + artifact egress
+- Turn admission / identity / compaction non-wait
+- Near-turn vs rest-window automata split
+- Episodic subject projection
+- Context builder memory manifest / tool mask
 
-**Referenced, not re-derived:** deepdive M1–M7 store economics.  
+**Referenced, not re-derived:** deepdive M1–M7 store economics.
 
 **Still lighter:** contact lifecycle authority end-to-end, ICP permit races, speaking arbiter multi-agent rooms, full sleeptime synthesis correctness, backup fleet-auth edge cases.
 
@@ -409,9 +409,9 @@ The **seams are real**. Provenance is not theater: L0 → routing → classifica
 
 The **work that matters next** is not reinventing the matrix — it is:
 
-1. closing incomplete gate keys (ConversationScope),  
-2. making authorized access and vector search scale,  
-3. making automata spend visible and charge-bounded,  
+1. closing incomplete gate keys (ConversationScope),
+2. making authorized access and vector search scale,
+3. making automata spend visible and charge-bounded,
 4. keeping extraction honest under ambiguity without starving rooms.
 
 That is exactly the work a companion substrate should be doing.

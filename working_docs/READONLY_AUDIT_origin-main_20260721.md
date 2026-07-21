@@ -1,15 +1,15 @@
 # PSFN Read-Only Code Audit
 
-> **Superseded framing:** This was a perimeter skim. Operator feedback (2026-07-21): kube/fleet+SSO is the live direction (Garden not the exposed edge); CogSec `shadow` is intentional soak; prefer deep findings over deploy-shape nits.  
-> **Deep-dive follow-up:** [`READONLY_AUDIT_origin-main_DEEPDIVE_20260721.md`](./READONLY_AUDIT_origin-main_DEEPDIVE_20260721.md) — memory store economics, subject SQL, fleet capability design, revised priorities.  
-> **Seam/provenance follow-up:** [`READONLY_AUDIT_origin-main_SEAMS_20260721.md`](./READONLY_AUDIT_origin-main_SEAMS_20260721.md) — L0→L2 stack, chat turns, privacy matrix, multi-human/outbound provenance, automata efficiency.  
+> **Superseded framing:** This was a perimeter skim. Operator feedback (2026-07-21): kube/fleet+SSO is the live direction (Garden not the exposed edge); CogSec `shadow` is intentional soak; prefer deep findings over deploy-shape nits.
+> **Deep-dive follow-up:** [`READONLY_AUDIT_origin-main_DEEPDIVE_20260721.md`](./READONLY_AUDIT_origin-main_DEEPDIVE_20260721.md) — memory store economics, subject SQL, fleet capability design, revised priorities.
+> **Seam/provenance follow-up:** [`READONLY_AUDIT_origin-main_SEAMS_20260721.md`](./READONLY_AUDIT_origin-main_SEAMS_20260721.md) — L0→L2 stack, chat turns, privacy matrix, multi-human/outbound provenance, automata efficiency.
 > **Welfare follow-up:** [`READONLY_AUDIT_origin-main_WELFARE_20260721.md`](./READONLY_AUDIT_origin-main_WELFARE_20260721.md) — companion core health/comfort vs charter care laws.
 
-**Scope:** `origin/main` at `f8f798d13e2e0da3baa2dfac56961608acd2ab71`  
-**Date:** 2026-07-21  
-**Auditor posture:** code-first; charter + architecture diagram for intent; no other docs consulted  
-**Method:** static review of security-critical and high-churn paths under `src/` (~3.2k TypeScript files; ~1.7k production, ~1.2k test). Not an exhaustive line-by-line review of every module.  
-**Worktree:** `/home/ada/ai/dev/worktrees/psfn-framework/audit-main-readonly` (detached `origin/main`)
+**Scope:** `origin/main` at `f8f798d13e2e0da3baa2dfac56961608acd2ab71`
+**Date:** 2026-07-21
+**Auditor posture:** code-first; charter + architecture diagram for intent; no other docs consulted
+**Method:** static review of security-critical and high-churn paths under `src/` (~3.2k TypeScript files; ~1.7k production, ~1.2k test). Not an exhaustive line-by-line review of every module.
+**Worktree:** `<worktrees>/psfn-framework/audit-main-readonly` (detached `origin/main`)
 
 ---
 
@@ -106,7 +106,7 @@ if (!probeResult.reachable) {
 
 ### S3 — MEDIUM: Default CogSec intake mode is `shadow` (gates do not block)
 
-**Where:** `config/intake-policy.seed.json` → `mode=shadow`  
+**Where:** `config/intake-policy.seed.json` → `mode=shadow`
 **Logic:** `src/core/cogsec/intake/sink-gates.ts:23–34, 141`
 
 In shadow mode, `allowed` is always true after evaluation. Enforcement of quarantined/unscreened content at sinks is disabled by design for rollout.
@@ -119,7 +119,7 @@ In shadow mode, `allowed` is always true after evaluation. Enforcement of quaran
 
 ### S4 — MEDIUM: Credential custody still env-primary
 
-**Where:** `src/boundary/custody/credential-vault.ts:130–149`  
+**Where:** `src/boundary/custody/credential-vault.ts:130–149`
 Default backend is `env`; OpenBao is opt-in via `CREDENTIAL_VAULT_BACKEND`.
 
 Charter §6.3 / law 9 want vault custody growth. Port abstraction is good; operational default is still process-env keys on the gateway host.
@@ -154,8 +154,8 @@ Sandbox shell path (bubblewrap + argv array) is the stronger model; git ops is w
 
 ### S7 — LOW: Production `as any` at gateway RPC boundary
 
-**Where:**  
-- `src/boundary/gateway/client.ts:590`  
+**Where:**
+- `src/boundary/gateway/client.ts:590`
 - `src/boundary/gateway/server.ts:1627`
 
 ```ts
@@ -218,7 +218,7 @@ Many `arr[0]!` after `length` checks (gateway, sessions, fleets). Usually safe; 
 
 ### B6 — Core-memory startup hydration degrades per-channel
 
-**Where:** `src/faculties/core-memory/startup-hydration.ts:62–64`  
+**Where:** `src/faculties/core-memory/startup-hydration.ts:62–64`
 Channel hydrate failures push to `degraded` and continue. Correct for multi-channel resilience, but charter law 20 requires degraded state to remain visible to operators — confirm Garden/health surfaces always expose this list (not verified end-to-end in this audit).
 
 ---
@@ -237,9 +237,9 @@ Channel hydrate failures push to `degraded` and continue. Correct for multi-chan
 
 **Optimization opportunities (non-blocking):**
 
-1. Streaming JSONL readers for index rebuild / audit scans.  
-2. Batched `getByIdMany(ids)` in memory store for access-context.  
-3. Bound concurrency (`p-limit` style) for vision and authorization maps.  
+1. Streaming JSONL readers for index rebuild / audit scans.
+2. Batched `getByIdMany(ids)` in memory store for access-context.
+3. Bound concurrency (`p-limit` style) for vision and authorization maps.
 4. Continue splitting god files to reduce re-parse / recompile cost in agent loops.
 
 ---
@@ -298,13 +298,13 @@ Charter layer model wants **thin composition roots**. Current agent main imports
 
 Architecture diagram topology is reflected in code:
 
-- External surfaces → gateway channels  
-- Gateway holds secrets, policy, host tools  
-- Operator process → Garden HTTP  
-- Agent → SubstrateAgent, session, memory, scheduler, tools  
-- Persistence: Postgres + JSONL + owner files + workspace + backups  
+- External surfaces → gateway channels
+- Gateway holds secrets, policy, host tools
+- Operator process → Garden HTTP
+- Agent → SubstrateAgent, session, memory, scheduler, tools
+- Persistence: Postgres + JSONL + owner files + workspace + backups
 
-**Gaps diagram does not show but code has:** fleet-auth, CogSec, ICP autonomy, shared satellite hub — good expansions.  
+**Gaps diagram does not show but code has:** fleet-auth, CogSec, ICP autonomy, shared satellite hub — good expansions.
 **Gap code has vs charter target:** full distributed shard isolation, CredentialVault as primary custody, enforce-mode CogSec by default.
 
 ---
@@ -313,34 +313,34 @@ Architecture diagram topology is reflected in code:
 
 ### P0 (do soon if any production bind is internet-reachable)
 
-1. Fail closed Garden construction without auth when bind is non-loopback.  
-2. Assert production intake-policy `mode: 'enforce'` (or explicit loud override).  
+1. Fail closed Garden construction without auth when bind is non-loopback.
+2. Assert production intake-policy `mode: 'enforce'` (or explicit loud override).
 3. Treat agent network isolation as platform-enforced first; improve probe so “unknown” ≠ “isolated.”
 
 ### P1 (security posture / charter honesty)
 
-4. Prefer `spawn(argv)` for git ops; retire shell-string path.  
-5. Route all SQL identifier quoting through shared validators/quoters.  
+4. Prefer `spawn(argv)` for git ops; retire shell-string path.
+5. Route all SQL identifier quoting through shared validators/quoters.
 6. Continue vault custody migration; shrink gateway env key surface.
 
 ### P2 (maintainability / performance)
 
-7. Split `gateway/server.ts`, `agent/main.ts`, `substrate-agent.ts` by domain (methods already partially extracted).  
-8. Batch memory `getById` and cap `Promise.all` fan-out in turn path.  
+7. Split `gateway/server.ts`, `agent/main.ts`, `substrate-agent.ts` by domain (methods already partially extracted).
+8. Batch memory `getById` and cap `Promise.all` fan-out in turn path.
 9. Streaming JSONL readers for large segment scans.
 
 ### P3 (charter completeness)
 
-10. Document and track remaining shard isolation delta as charter debt (not pretend Docker/K8s shard executors exist).  
+10. Document and track remaining shard isolation delta as charter debt (not pretend Docker/K8s shard executors exist).
 11. Keep Garden as real runtime reflection — avoid shadow settings UIs.
 
 ---
 
 ## 10. What is *not* claimed
 
-- No runtime exploit was executed; findings are static.  
-- Live k3s / PVC state was not inspected (read-only code audit).  
-- Not every faculty (wiki, emotion, ICP, fleet-auth full matrix) was deep-read.  
+- No runtime exploit was executed; findings are static.
+- Live k3s / PVC state was not inspected (read-only code audit).
+- Not every faculty (wiki, emotion, ICP, fleet-auth full matrix) was deep-read.
 - Admin UI Svelte code was only lightly scanned for `innerHTML` (none found in quick pass).
 
 ---

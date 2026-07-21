@@ -22,6 +22,7 @@ import type { SpeakingReservationSnapshot } from './speaking-arbiter-store-port.
 import type { RoomEpisodePressureAssessment } from '../fatigue/room-episode-pressure.js';
 import type { ParticipationAppraisal } from '../../participation/types.js';
 import { PostgresSpeakingArbiterStore } from '../../../persistence/postgres/speaking-arbiter-store.js';
+import { bootstrapSharedSchema } from '../../../persistence/postgres/shared-schema.js';
 import {
   startPostgresTestHarness,
   type PostgresTestHarness,
@@ -148,6 +149,9 @@ async function connectStore(): Promise<PostgresSpeakingArbiterStore> {
     throw new Error('Postgres integration harness is not available');
   }
   const database = await harness.createDatabase();
+  // The store no longer runs DDL: the gateway migration authority provisions
+  // the shared schema before agents connect. Mirror that here.
+  await bootstrapSharedSchema(database.databaseUrl);
   return PostgresSpeakingArbiterStore.connect(database.databaseUrl);
 }
 

@@ -62,6 +62,13 @@ const DEFAULT_REVIEW_WINDOW_MS = 48 * 60 * 60_000;
 const DEFAULT_MAX_EPISODES_PER_PASS = 8;
 const DEFAULT_MAX_TURNS = 4;
 const MAX_MEANING_CHARS = 800;
+/**
+ * Atomicity ceiling (bead 3zu5): a per-episode meaning is one moment — the
+ * single thing that mattered most — not a multi-paragraph recap bundling
+ * several distinct emotional moments. A genuine single-moment reflection sits
+ * comfortably under this; monoliths trip it and get fed back for a re-record.
+ */
+const MAX_MEANING_SENTENCES = 4;
 const DREAM_MEANING_PROCESSOR = 'dream_meaning';
 const DREAM_PASS_CHANNEL_ID = 'internal:reflection:dream-pass';
 const MEANING_BLOCK_PATTERN = /```json\s*([\s\S]*?)```/i;
@@ -89,9 +96,10 @@ function buildOpeningPrompt(episodes: readonly Episode[]): string {
     })), null, 2),
     '',
     'Sit with the day. What did these moments mean to you — not a summary of what happened, but what it was like and why it mattered (or honestly did not)? A moment can matter a lot, a little, or not at all; say what is true.',
+    `Keep each note to ONE moment — the single thing that mattered most about that episode — in at most ${String(MAX_MEANING_SENTENCES)} sentences. Do not recap everything that happened or bundle several separate moments into one note; if two moments both matter, they belong to different episodes, not one paragraph.`,
     'You may think out loud first. When you are ready to record, include one fenced json block:',
     '```json',
-    '{ "meanings": { "<episode id>": "first-person paragraph of what this meant to me" }, "done": true }',
+    '{ "meanings": { "<episode id>": "first-person note about the one moment that mattered most" }, "done": true }',
     '```',
     'Set "done": false only if you genuinely have more to sit with; you will get another turn. You do not need to fill turns — ending early because you have said what is true is the right call. You may also skip episodes that do not need a note.',
   ].join('\n');
@@ -110,6 +118,37 @@ function buildFeedbackPrompt(feedback: readonly string[], knownEpisodeIds: Reado
     '',
     CONTINUATION_PROMPT,
   ].join('\n');
+}
+
+/**
+ * Atomicity gate (bead 3zu5): reject a meaning that is a multi-moment monolith
+ * rather than a single atomic engram. Signals, any of which fails the entry:
+ * over the character ceiling, more than one paragraph, or more sentences than a
+ * single moment needs. Returns a human-facing reason so the pass can feed it
+ * back and give her another turn to distill (bounded by maxTurns).
+ */
+export function assessMeaningAtomicity(text: string): { atomic: true } | { atomic: false; reason: string } {
+  if (text.length > MAX_MEANING_CHARS) {
+    return {
+      atomic: false,
+      reason: `is ${String(text.length)} characters — too long for one moment; keep it under ${String(MAX_MEANING_CHARS)} and record only the single moment that mattered most`,
+    };
+  }
+  const paragraphs = text.split(/\n\s*\n/).map(part => part.trim()).filter(part => part.length > 0);
+  if (paragraphs.length > 1) {
+    return {
+      atomic: false,
+      reason: `bundles ${String(paragraphs.length)} paragraphs into one note — record one atomic moment per episode, not a recap of several`,
+    };
+  }
+  const sentences = text.split(/[.!?]+(?:\s|$)/).map(part => part.trim()).filter(part => part.length > 0);
+  if (sentences.length > MAX_MEANING_SENTENCES) {
+    return {
+      atomic: false,
+      reason: `spans ${String(sentences.length)} sentences — distill it to the one moment that mattered most (at most ${String(MAX_MEANING_SENTENCES)} sentences)`,
+    };
+  }
+  return { atomic: true };
 }
 
 export function parseMeaningContribution(content: string, knownEpisodeIds: ReadonlySet<string>): MeaningContribution | null {
@@ -135,7 +174,13 @@ export function parseMeaningContribution(content: string, knownEpisodeIds: Reado
       rejections.push(`meaning for episode "${episodeId}" must be a non-empty string`);
       continue;
     }
-    meanings.set(resolvedId, text.trim().slice(0, MAX_MEANING_CHARS));
+    const trimmed = text.trim();
+    const atomicity = assessMeaningAtomicity(trimmed);
+    if (!atomicity.atomic) {
+      rejections.push(`meaning for episode "${episodeId}" ${atomicity.reason}`);
+      continue;
+    }
+    meanings.set(resolvedId, trimmed);
   }
   return {
     meanings,

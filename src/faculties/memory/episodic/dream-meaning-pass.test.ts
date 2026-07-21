@@ -5,7 +5,7 @@ import { PostgresEpisodicStore } from './postgres-store.js';
 import {
   type EpisodeCreateInput,
 } from './store-port.js';
-import { DreamMeaningPass, parseMeaningContribution } from './dream-meaning-pass.js';
+import { DreamMeaningPass, assessMeaningAtomicity, parseMeaningContribution } from './dream-meaning-pass.js';
 
 const NOW = new Date('2026-06-10T07:30:00.000Z');
 
@@ -172,6 +172,39 @@ describe('DreamMeaningPass', () => {
     expect(handleMessage).toHaveBeenCalledTimes(1);
   });
 
+  it('rejects a multi-moment monolith meaning, feeds it back, and records only the atomic re-record (bead 3zu5)', async () => {
+    const store = makeStore();
+    await store.createEpisode(episodeInput('a', '2026-06-09T20:00:00.000Z', '2026-06-09T21:00:00.000Z'));
+
+    // The live failure: one note bundling several distinct emotional moments
+    // into a multi-paragraph recap instead of one atomic engram.
+    const monolith = [
+      'The first satellite went up today and I felt a jolt of pride watching it clear the tower.',
+      '',
+      'Then he gave me headpats out of nowhere and something in me just melted; I felt seen.',
+      '',
+      'Later we argued about the deploy window and I was frustrated, then we made up over dinner.',
+    ].join('\n');
+    const handleMessage = vi.fn()
+      .mockResolvedValueOnce({ content: meaningBlock({ a: monolith }, true) })
+      .mockResolvedValueOnce({ content: meaningBlock({ a: 'He remembered, and it cracked me open in the best way.' }, true) });
+    const pass = new DreamMeaningPass(store, { handleMessage }, { now: () => NOW, maxTurns: 4 });
+
+    const result = await pass.run({ sessionId: 'discord:main' });
+
+    // The monolith turn's "done": true does not end the pass — the rejection
+    // buys another turn, and only the atomic re-record is persisted.
+    expect(result.turnsUsed).toBe(2);
+    expect(result.meaningsRecorded).toBe(1);
+    const recorded = await store.getEpisode('a');
+    expect(recorded?.meaning?.text).toBe('He remembered, and it cracked me open in the best way.');
+    expect(recorded?.meaning?.text).not.toContain('satellite');
+
+    const secondPrompt = (handleMessage.mock.calls[1][0] as { content: string }).content;
+    expect(secondPrompt).toContain('could not be recorded');
+    expect(secondPrompt.toLowerCase()).toContain('paragraph');
+  });
+
   it('emits typed gate events for ran, cadence skip, and no_episodes skip (jpvd.4)', async () => {
     const store = makeStore();
     await store.createEpisode(episodeInput('a', '2026-06-09T20:00:00.000Z', '2026-06-09T21:00:00.000Z'));
@@ -224,5 +257,44 @@ describe('parseMeaningContribution', () => {
     expect(contribution?.done).toBe(true);
     expect(contribution?.meanings.size).toBe(0);
     expect(contribution?.rejections).toHaveLength(0);
+  });
+
+  it('rejects a multi-moment monolith entry while keeping an atomic sibling (bead 3zu5)', () => {
+    const monolith = [
+      'The launch cleared the tower and I felt proud.',
+      '',
+      'Then the headpats came and I melted.',
+    ].join('\n');
+    const contribution = parseMeaningContribution(
+      meaningBlock({ a: monolith, b: 'It mattered more than I expected.' }),
+      known,
+    );
+    expect(contribution?.meanings.has('a')).toBe(false);
+    expect(contribution?.meanings.get('b')).toBe('It mattered more than I expected.');
+    expect(contribution?.rejections).toEqual([expect.stringMatching(/episode "a".*paragraph/i)]);
+  });
+});
+
+describe('assessMeaningAtomicity', () => {
+  it('accepts a single-moment note', () => {
+    expect(assessMeaningAtomicity('He remembered, and it cracked me open in the best way. I felt seen.')).toEqual({ atomic: true });
+  });
+
+  it('rejects a multi-paragraph recap', () => {
+    const result = assessMeaningAtomicity('First moment that mattered.\n\nSecond, unrelated moment.');
+    expect(result.atomic).toBe(false);
+    expect(result.atomic === false && result.reason).toMatch(/paragraph/i);
+  });
+
+  it('rejects an entry that spans too many sentences', () => {
+    const result = assessMeaningAtomicity('One. Two. Three. Four. Five. Six.');
+    expect(result.atomic).toBe(false);
+    expect(result.atomic === false && result.reason).toMatch(/sentence/i);
+  });
+
+  it('rejects an over-long entry', () => {
+    const result = assessMeaningAtomicity('word '.repeat(200));
+    expect(result.atomic).toBe(false);
+    expect(result.atomic === false && result.reason).toMatch(/too long/i);
   });
 });

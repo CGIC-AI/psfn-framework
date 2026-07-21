@@ -65,6 +65,7 @@ export interface AgentControlPlaneShutdownTargets {
   fatigueRegulationReservations?: { close: () => Promise<void> };
   chargeLedger?: Pick<RunChargeLedger, 'close'>;
   sessionTailCache?: { close?: () => Promise<void> } | null;
+  skillUsageTelemetry?: { flushSkillUsageTelemetry: () => void };
 }
 
 export interface BuildAgentControlPlaneOptions {
@@ -235,6 +236,7 @@ export function buildAgentControlPlane(
       { step: 'close charge ledger', action: () => shutdownTargets.chargeLedger?.close() },
       { step: 'close ICP fatigue regulation reservations', action: () => shutdownTargets.fatigueRegulationReservations?.close() },
       { step: 'close session tail cache', action: () => shutdownTargets.sessionTailCache?.close?.() },
+      { step: 'flush skill usage telemetry', action: () => shutdownTargets.skillUsageTelemetry?.flushSkillUsageTelemetry() },
       { step: 'destroy gateway client', action: () => gateway.destroy() },
       { step: 'close database', action: () => closeDatabase() },
     ], log);

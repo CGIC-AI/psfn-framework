@@ -45,7 +45,11 @@ describe('agent control plane', () => {
     expect(controlPlaneSource).toContain('failClosed: true');
     expect(controlPlaneSource).toContain('write graceful shutdown markers');
     expect(controlPlaneSource).toContain('close app cache');
+    expect(controlPlaneSource).toContain('flush skill usage telemetry');
     expect(readSource('main.ts')).toContain('shutdownTargets.appCache = appCache');
+    expect(readSource('main.ts')).toContain(
+      'shutdownTargets.skillUsageTelemetry = coreRuntime.skillsRuntime',
+    );
   });
 
   it('registers deferred handlers and the target command before starting restored actions', () => {

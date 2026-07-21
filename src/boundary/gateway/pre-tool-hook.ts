@@ -15,7 +15,10 @@ import { isRecord } from '../../shared/utils/types.js';
  * This path sits on a security-sensitive chokepoint (gateToolWithCapabilities,
  * bead 7ym.3.2). Every failure mode denies the call rather than allowing it:
  *  - a handler that throws BLOCKS the tool call;
- *  - a handler that times out BLOCKS the tool call;
+ *  - a handler that times out BLOCKS the tool call — for handlers that yield
+ *    to the event loop; a CPU-bound synchronous handler cannot be preempted
+ *    in-process and will stall the turn instead (it still cannot fail open).
+ *    True preemption needs async-only handlers or worker isolation;
  *  - a handler that returns a malformed decision BLOCKS the tool call;
  *  - a hook can only SUBTRACT authority (block) or rewrite arguments; it can
  *    never grant a capability. A rewritten input is re-validated against the

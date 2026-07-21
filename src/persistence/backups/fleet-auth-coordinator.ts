@@ -31,7 +31,7 @@ import {
   FLEET_AUTH_DURABLE_TABLES,
   FLEET_AUTH_SCHEMA_NAME,
   assertFleetAuthBackupRestorePrivileges,
-  type FleetAuthDatabaseRoles,
+  type FleetAuthFamilyDatabaseRoles,
 } from '../postgres/fleet-auth/schema.js';
 import {
   restoreVerifiedFleetAuthSnapshot,
@@ -198,7 +198,7 @@ function writeJsonDurable(path: string, value: unknown): void {
  */
 export async function runFleetAuthConsistentBackup(options: {
   databaseUrl: string;
-  roles: FleetAuthDatabaseRoles;
+  roles: FleetAuthFamilyDatabaseRoles;
   schemas: ReadonlyArray<{
     kind: 'companion' | 'shared';
     schema: string;

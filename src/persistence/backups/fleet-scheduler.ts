@@ -9,8 +9,9 @@ import {
 } from '../layout.js';
 import type { Scheduler } from '../../core/scheduler/scheduler.js';
 import type { CompanionsFleetConfig, ResolvedCompanionsFleetConfig } from '../../system/config/companions-config.js';
+import { parseExactPostgresCredential } from '../../shared/utils/postgres-credential.js';
 import type { BackupRuntimeConfig } from './config.js';
-import type { FleetAuthDatabaseRoles } from '../postgres/fleet-auth/schema.js';
+import type { FleetAuthFamilyDatabaseRoles } from '../postgres/fleet-auth/schema.js';
 import type { FleetAuthAuthorityFloorStore } from '../postgres/fleet-auth/authority-floor.js';
 import type { KubernetesHelmBackupConfig } from './kubernetes-helm.js';
 import {
@@ -35,6 +36,62 @@ import type {
 } from './fleet-backup-contracts.js';
 
 const log = createComponentLogger('FleetBackupScheduler');
+
+function databaseIdentity(url: URL): string {
+  return `postgresql://${url.hostname.toLowerCase()}:${url.port || '5432'}${url.pathname}`;
+}
+
+function deriveScratchSchemaOwnerDatabaseUrls(options: {
+  contracts: readonly FleetAuthSchemaAccessContract[];
+  schemaOwnerDatabaseUrls: Readonly<Record<string, string>>;
+  scratchBackupRestoreDatabaseUrl: string;
+}): Readonly<Record<string, string>> {
+  const expectedSchemas = options.contracts.map(contract => contract.schema).sort();
+  const credentialSchemas = Object.keys(options.schemaOwnerDatabaseUrls).sort();
+  if (JSON.stringify(credentialSchemas) !== JSON.stringify(expectedSchemas)) {
+    throw new Error(
+      'Fleet auth verifyRestore schema owner credentials must exactly match the access contracts',
+    );
+  }
+  const scratchBackup = parseExactPostgresCredential(
+    options.scratchBackupRestoreDatabaseUrl,
+    'Fleet auth verifyRestore scratch backup credential',
+  );
+  const scratchTarget = databaseIdentity(scratchBackup.url);
+  const scratchOwnerUrls: Record<string, string> = {};
+  for (const contract of options.contracts) {
+    const sourceUrl = options.schemaOwnerDatabaseUrls[contract.schema];
+    const source = parseExactPostgresCredential(
+      sourceUrl,
+      `Fleet auth verifyRestore owner credential for ${contract.schema}`,
+    );
+    if (source.username !== contract.ownerRole) {
+      throw new Error(
+        `Fleet auth verifyRestore owner credential for ${contract.schema} must authenticate as ${contract.ownerRole}`,
+      );
+    }
+    const scratchUrl = deriveRestoreVerifyDatabaseUrl(sourceUrl);
+    if (!scratchUrl) {
+      throw new Error(
+        `Fleet auth verifyRestore owner credential for ${contract.schema} cannot derive a scratch database URL`,
+      );
+    }
+    const scratch = parseExactPostgresCredential(
+      scratchUrl,
+      `Fleet auth verifyRestore scratch owner credential for ${contract.schema}`,
+    );
+    if (scratch.username !== contract.ownerRole || databaseIdentity(scratch.url) !== scratchTarget) {
+      throw new Error(
+        `Fleet auth verifyRestore scratch owner credential for ${contract.schema} targets the wrong authority or database`,
+      );
+    }
+    scratchOwnerUrls[contract.schema] = scratchUrl;
+  }
+  if (new Set(Object.values(scratchOwnerUrls)).size !== expectedSchemas.length) {
+    throw new Error('Fleet auth verifyRestore requires one distinct scratch owner credential per schema');
+  }
+  return scratchOwnerUrls;
+}
 
 /**
  * Multi-companion fleet-backup wiring (sprint 10, W2).
@@ -243,8 +300,9 @@ export function buildFleetAuthBackupCycleOptions(params: {
   systemDataDir: string;
   backupRestoreDatabaseUrl: string;
   schemaOwnerDatabaseUrl: string;
-  roles: FleetAuthDatabaseRoles;
+  roles: FleetAuthFamilyDatabaseRoles;
   authorityFloors: FleetAuthAuthorityFloorStore;
+  schemaOwnerDatabaseUrls: Readonly<Record<string, string>>;
   schemaAccessContracts: readonly FleetAuthSchemaAccessContract[];
   backupConfig: BackupRuntimeConfig;
   kubernetesHelm?: KubernetesHelmBackupConfig;
@@ -306,6 +364,13 @@ export function buildFleetAuthBackupCycleOptions(params: {
     expectedSchemas,
     params.roles,
   );
+  const scratchSchemaOwnerDatabaseUrls = restoreVerifyDatabaseUrl
+    ? deriveScratchSchemaOwnerDatabaseUrls({
+        contracts: schemaAccessContracts,
+        schemaOwnerDatabaseUrls: params.schemaOwnerDatabaseUrls,
+        scratchBackupRestoreDatabaseUrl: restoreVerifyDatabaseUrl,
+      })
+    : {};
   return {
     backupRestoreDatabaseUrl: params.backupRestoreDatabaseUrl,
     ...(restoreVerifySchemaOwnerDatabaseUrl ? { restoreVerifySchemaOwnerDatabaseUrl } : {}),
@@ -316,6 +381,7 @@ export function buildFleetAuthBackupCycleOptions(params: {
     config: params.backupConfig,
     fleetBackupOptions,
     authorityFloors: params.authorityFloors,
+    scratchSchemaOwnerDatabaseUrls,
     verifyFamilyRestore: verifyFleetAuthConsistentFamilyRestore,
     ...(params.pgDumpBinary ? { pgDumpBinary: params.pgDumpBinary } : {}),
   };

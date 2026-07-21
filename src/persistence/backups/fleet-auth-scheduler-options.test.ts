@@ -3,19 +3,27 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { ResolvedCompanionsFleetConfig } from '../../system/config/companions-config.js';
-import type { FleetAuthDatabaseRoles } from '../postgres/fleet-auth/schema.js';
+import type { FleetAuthFamilyDatabaseRoles } from '../postgres/fleet-auth/schema.js';
 import type { BackupRuntimeConfig } from './config.js';
 import { buildFleetAuthBackupCycleOptions } from './fleet-scheduler.js';
 import { FleetAuthAuthorityFloorStore } from '../postgres/fleet-auth/authority-floor.js';
 import type { KubernetesHelmBackupConfig } from './kubernetes-helm.js';
 
-const ROLES: FleetAuthDatabaseRoles = {
+const ROLES: FleetAuthFamilyDatabaseRoles = {
   runtime: 'auth_runtime',
   migration: 'auth_migration',
   backupRestore: 'auth_backup_restore',
+  sharedMigration: 'shared_migration',
 };
 
 const FLEET: ResolvedCompanionsFleetConfig = {
+  postgres: {
+    sharedMigrationRole: 'shared_migration',
+    sharedMigrationDatabaseUrlRef: {
+      kind: 'env',
+      envName: 'SHARED_MIGRATION_DATABASE_URL',
+    },
+  },
   persistenceRoot: '/runtime',
   workspacesRoot: '/runtime/workspaces',
   sharedWorkspacePath: '/runtime/workspaces/shared',
@@ -25,6 +33,11 @@ const FLEET: ResolvedCompanionsFleetConfig = {
       companionDataDir: '/runtime/companion-data/11111111-1111-4111-8111-111111111111',
       characterCardPath: '/runtime/companion-data/11111111-1111-4111-8111-111111111111/character.json',
       postgresSchema: 'companion_one',
+      postgresRole: 'companion_one_runtime',
+      postgresDatabaseUrlRef: {
+        kind: 'env',
+        envName: 'COMPANION_ONE_DATABASE_URL',
+      },
       personalWorkspacePath: '/runtime/workspaces/personal/11111111-1111-4111-8111-111111111111',
     },
     {
@@ -32,6 +45,11 @@ const FLEET: ResolvedCompanionsFleetConfig = {
       companionDataDir: '/runtime/companion-data/22222222-2222-4222-8222-222222222222',
       characterCardPath: '/runtime/companion-data/22222222-2222-4222-8222-222222222222/character.json',
       postgresSchema: 'companion_two',
+      postgresRole: 'companion_two_runtime',
+      postgresDatabaseUrlRef: {
+        kind: 'env',
+        envName: 'COMPANION_TWO_DATABASE_URL',
+      },
       personalWorkspacePath: '/runtime/workspaces/personal/22222222-2222-4222-8222-222222222222',
     },
   ],
@@ -68,6 +86,33 @@ const KUBERNETES_HELM: KubernetesHelmBackupConfig = {
   },
 };
 
+const SCHEMA_OWNER_DATABASE_URLS = {
+  companion_one: 'postgresql://companion_one_runtime:secret@127.0.0.1:5432/app',
+  companion_two: 'postgresql://companion_two_runtime:secret@127.0.0.1:5432/app',
+  shared: 'postgresql://shared_migration:secret@127.0.0.1:5432/app',
+} as const;
+
+const SCHEMA_ACCESS_CONTRACTS = [
+  {
+    kind: 'companion',
+    schema: 'companion_one',
+    ownerRole: 'companion_one_runtime',
+    runtimeRoles: ['companion_one_runtime'],
+  },
+  {
+    kind: 'companion',
+    schema: 'companion_two',
+    ownerRole: 'companion_two_runtime',
+    runtimeRoles: ['companion_two_runtime'],
+  },
+  {
+    kind: 'shared',
+    schema: 'shared',
+    ownerRole: 'shared_migration',
+    runtimeRoles: ['companion_one_runtime', 'companion_two_runtime'],
+  },
+] as const;
+
 const roots: string[] = [];
 
 function makeAuthorityFloors(): FleetAuthAuthorityFloorStore {
@@ -93,26 +138,8 @@ describe('buildFleetAuthBackupCycleOptions', () => {
       schemaOwnerDatabaseUrl: 'postgresql://auth_migration:secret@127.0.0.1:5432/app',
       roles: ROLES,
       authorityFloors,
-      schemaAccessContracts: [
-        {
-          kind: 'companion',
-          schema: 'companion_one',
-          ownerRole: 'companion_one_runtime',
-          runtimeRoles: ['companion_one_runtime'],
-        },
-        {
-          kind: 'companion',
-          schema: 'companion_two',
-          ownerRole: 'companion_two_runtime',
-          runtimeRoles: ['companion_two_runtime'],
-        },
-        {
-          kind: 'shared',
-          schema: 'shared',
-          ownerRole: 'shared_migration',
-          runtimeRoles: ['companion_one_runtime', 'companion_two_runtime'],
-        },
-      ],
+      schemaOwnerDatabaseUrls: SCHEMA_OWNER_DATABASE_URLS,
+      schemaAccessContracts: SCHEMA_ACCESS_CONTRACTS,
       backupConfig: BACKUP_CONFIG,
       kubernetesHelm: KUBERNETES_HELM,
       pgDumpBinary: '/usr/local/bin/pg_dump',
@@ -140,6 +167,13 @@ describe('buildFleetAuthBackupCycleOptions', () => {
       config: BACKUP_CONFIG,
       pgDumpBinary: '/usr/local/bin/pg_dump',
       authorityFloors,
+      scratchSchemaOwnerDatabaseUrls: {
+        companion_one:
+          'postgresql://companion_one_runtime:secret@127.0.0.1:5432/app_restore_verify',
+        companion_two:
+          'postgresql://companion_two_runtime:secret@127.0.0.1:5432/app_restore_verify',
+        shared: 'postgresql://shared_migration:secret@127.0.0.1:5432/app_restore_verify',
+      },
       fleetBackupOptions: {
         postgres: {
           databaseUrl: 'postgresql://auth_backup_restore:secret@127.0.0.1:5432/app',
@@ -174,6 +208,7 @@ describe('buildFleetAuthBackupCycleOptions', () => {
       schemaOwnerDatabaseUrl: 'postgresql://auth_migration:secret@127.0.0.1:5432/app',
       roles: ROLES,
       authorityFloors: makeAuthorityFloors(),
+      schemaOwnerDatabaseUrls: SCHEMA_OWNER_DATABASE_URLS,
       schemaAccessContracts: [
         {
           kind: 'companion', schema: 'companion_one', ownerRole: 'companion_runtime',
@@ -190,5 +225,39 @@ describe('buildFleetAuthBackupCycleOptions', () => {
       ],
       backupConfig: BACKUP_CONFIG,
     })).toThrow(/one companion role across sibling schemas/i);
+  });
+
+  it('rejects an incomplete scratch owner credential family while verification is enabled', () => {
+    expect(() => buildFleetAuthBackupCycleOptions({
+      fleet: FLEET,
+      systemDataDir: '/runtime/system-data',
+      backupRestoreDatabaseUrl: 'postgresql://auth_backup_restore:secret@127.0.0.1:5432/app',
+      schemaOwnerDatabaseUrl: 'postgresql://auth_migration:secret@127.0.0.1:5432/app',
+      roles: ROLES,
+      authorityFloors: makeAuthorityFloors(),
+      schemaOwnerDatabaseUrls: {
+        companion_one: SCHEMA_OWNER_DATABASE_URLS.companion_one,
+        shared: SCHEMA_OWNER_DATABASE_URLS.shared,
+      },
+      schemaAccessContracts: SCHEMA_ACCESS_CONTRACTS,
+      backupConfig: BACKUP_CONFIG,
+    })).toThrow(/owner credentials.*exactly match/i);
+  });
+
+  it('rejects a routed schema-owner credential before scheduling verification', () => {
+    expect(() => buildFleetAuthBackupCycleOptions({
+      fleet: FLEET,
+      systemDataDir: '/runtime/system-data',
+      backupRestoreDatabaseUrl: 'postgresql://auth_backup_restore:secret@127.0.0.1:5432/app',
+      schemaOwnerDatabaseUrl: 'postgresql://auth_migration:secret@127.0.0.1:5432/app',
+      roles: ROLES,
+      authorityFloors: makeAuthorityFloors(),
+      schemaOwnerDatabaseUrls: {
+        ...SCHEMA_OWNER_DATABASE_URLS,
+        companion_one: `${SCHEMA_OWNER_DATABASE_URLS.companion_one}?service=shadow`,
+      },
+      schemaAccessContracts: SCHEMA_ACCESS_CONTRACTS,
+      backupConfig: BACKUP_CONFIG,
+    })).toThrow(/routing or authentication query override service/i);
   });
 });

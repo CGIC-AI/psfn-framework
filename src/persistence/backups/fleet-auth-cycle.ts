@@ -11,7 +11,7 @@ import { basename, join, resolve } from 'node:path';
 import type { Scheduler } from '../../core/scheduler/scheduler.js';
 import { recordBackupDiagnosticOutcome } from '../../shared/diagnostics/runtime-diagnostics.js';
 import { createComponentLogger } from '../../shared/logger.js';
-import type { FleetAuthDatabaseRoles } from '../postgres/fleet-auth/schema.js';
+import type { FleetAuthFamilyDatabaseRoles } from '../postgres/fleet-auth/schema.js';
 import type { FleetAuthAuthorityFloorStore } from '../postgres/fleet-auth/authority-floor.js';
 import type { BackupRuntimeConfig } from './config.js';
 import type {
@@ -39,7 +39,7 @@ function sha256(path: string): string {
 export interface FleetAuthConsistentBackupCycleOptions {
   backupRestoreDatabaseUrl: string;
   restoreVerifySchemaOwnerDatabaseUrl?: string;
-  roles: FleetAuthDatabaseRoles;
+  roles: FleetAuthFamilyDatabaseRoles;
   schemas: ReadonlyArray<{
     kind: 'companion' | 'shared';
     schema: string;
@@ -53,6 +53,8 @@ export interface FleetAuthConsistentBackupCycleOptions {
   fleetBackupOptions: FleetBackupRunOptions;
   /** Non-restored authority source cloned only into the scratch verifier. */
   authorityFloors: FleetAuthAuthorityFloorStore;
+  /** Dedicated scratch-database credentials for every authenticated schema owner. */
+  scratchSchemaOwnerDatabaseUrls: Readonly<Record<string, string>>;
   verifyFamilyRestore?: (options: FleetAuthFamilyRestoreVerificationOptions) => Promise<void>;
   pgDumpBinary?: string;
   now?: () => number;
@@ -74,8 +76,9 @@ export interface FleetAuthFamilyRestoreVerificationOptions {
   manifestPath: string;
   fleetManifestPath: string;
   scratchDatabaseUrl: string;
-  scratchSchemaOwnerDatabaseUrl: string;
-  roles: FleetAuthDatabaseRoles;
+  scratchFleetAuthSchemaOwnerDatabaseUrl: string;
+  scratchSchemaOwnerDatabaseUrls: Readonly<Record<string, string>>;
+  roles: FleetAuthFamilyDatabaseRoles;
   authorityFloors: FleetAuthAuthorityFloorStore;
   activationGeneration: number;
   pgRestoreBinary?: string;
@@ -187,7 +190,8 @@ export async function runFleetAuthConsistentBackupCycleImplementation(
         manifestPath: expectedManifestPath,
         fleetManifestPath: fleetResult.fleetManifestPath,
         scratchDatabaseUrl,
-        scratchSchemaOwnerDatabaseUrl: options.restoreVerifySchemaOwnerDatabaseUrl,
+        scratchFleetAuthSchemaOwnerDatabaseUrl: options.restoreVerifySchemaOwnerDatabaseUrl,
+        scratchSchemaOwnerDatabaseUrls: options.scratchSchemaOwnerDatabaseUrls,
         roles: options.roles,
         authorityFloors: options.authorityFloors,
         activationGeneration: options.authorityFloors.read().trustedHost.activationGeneration,

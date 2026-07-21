@@ -95,6 +95,7 @@ import {
 } from '../../persistence/layout.js';
 import { ReflectionJournalStore } from '../../persistence/journals/reflection-journal.js';
 import { createConcernResolutionArcRecorder } from '../../core/intention/concern-resolution-arc.js';
+import { resolveCurrentInternalStateConcernVAD } from '../../core/intention/concern-grooming.js';
 import {
   createCapsuleCustodyService,
   createShareCapsuleCustodyStore,
@@ -659,6 +660,15 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
   const intentionAppraisalHooks = createIntentionAppraisalHooks(
     intentionRuntime.concernStore,
     intentionRuntime.pendingFollowUpStore,
+    {
+      // Completion VAD for pending follow-ups reads the agent's live internal
+      // VAD at activation, mirroring the concern resolutionVadProvider (vw3w.3).
+      completionVadProvider: (followUp, asOf) => resolveCurrentInternalStateConcernVAD(
+        followUp,
+        agentLoop.getCurrentInternalState(),
+        asOf,
+      ),
+    },
   );
   const intentionBehavioralHooks = createIntentionBehavioralPatternHooks(
     intentionRuntime.behavioralPatternTracker,

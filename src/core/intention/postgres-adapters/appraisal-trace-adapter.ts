@@ -37,6 +37,7 @@ import {
   normalizePendingPriority,
   normalizeRequiredText,
   normalizeTiming,
+  serializeFollowUpVAD,
 } from './shared.js';
 
 interface PendingFollowUpQuarantineRow {
@@ -136,7 +137,8 @@ export class PostgresPendingFollowUpStore implements PendingFollowUpStorePort {
           id, content, priority, timing, created_at, channel_id, channel_type,
           author_id, author_name, due_at, contact_id, source_message_id,
           context_summary, wake_conditions, origin_icp_root_initiation_id,
-          activated_at, activation_reason, dampened_at, dampening_reason
+          activated_at, activation_reason, dampened_at, dampening_reason,
+          formation_vad, completion_vad
         FROM intention_pending_follow_ups
       `,
     );
@@ -175,15 +177,17 @@ export class PostgresPendingFollowUpStore implements PendingFollowUpStorePort {
         INSERT INTO intention_pending_follow_ups (
           id, content, priority, timing, created_at, channel_id, channel_type,
           author_id, author_name, due_at, contact_id, source_message_id,
-          context_summary, wake_conditions, origin_icp_root_initiation_id
+          context_summary, wake_conditions, origin_icp_root_initiation_id,
+          formation_vad
         ) VALUES (
-          $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15
+          $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16::jsonb
         )
         RETURNING
           id, content, priority, timing, created_at, channel_id, channel_type,
           author_id, author_name, due_at, contact_id, source_message_id,
           context_summary, wake_conditions, origin_icp_root_initiation_id,
-          activated_at, activation_reason, dampened_at, dampening_reason
+          activated_at, activation_reason, dampened_at, dampening_reason,
+          formation_vad, completion_vad
       `,
       [
         id,
@@ -201,6 +205,7 @@ export class PostgresPendingFollowUpStore implements PendingFollowUpStorePort {
         contextSummary ?? null,
         wakeConditions,
         originIcpRootInitiationId ?? null,
+        serializeFollowUpVAD(input.formationVAD, 'formation_vad'),
       ],
     );
 
@@ -258,7 +263,8 @@ export class PostgresPendingFollowUpStore implements PendingFollowUpStorePort {
           id, content, priority, timing, created_at, channel_id, channel_type,
           author_id, author_name, due_at, contact_id, source_message_id,
           context_summary, wake_conditions, origin_icp_root_initiation_id,
-          activated_at, activation_reason, dampened_at, dampening_reason
+          activated_at, activation_reason, dampened_at, dampening_reason,
+          formation_vad, completion_vad
         FROM intention_pending_follow_ups
         WHERE id = $1
       `,
@@ -310,7 +316,8 @@ export class PostgresPendingFollowUpStore implements PendingFollowUpStorePort {
           id, content, priority, timing, created_at, channel_id, channel_type,
           author_id, author_name, due_at, contact_id, source_message_id,
           context_summary, wake_conditions, origin_icp_root_initiation_id,
-          activated_at, activation_reason, dampened_at, dampening_reason
+          activated_at, activation_reason, dampened_at, dampening_reason,
+          formation_vad, completion_vad
         FROM intention_pending_follow_ups
         ${whereClauses.length > 0 ? `WHERE ${whereClauses.join(' AND ')}` : ''}
         ORDER BY created_at ASC, id ASC
@@ -338,15 +345,21 @@ export class PostgresPendingFollowUpStore implements PendingFollowUpStorePort {
       this.pool,
       `
         UPDATE intention_pending_follow_ups
-        SET activated_at = $2, activation_reason = $3
+        SET activated_at = $2, activation_reason = $3, completion_vad = $4::jsonb
         WHERE id = $1 AND activated_at IS NULL AND dampened_at IS NULL
         RETURNING
           id, content, priority, timing, created_at, channel_id, channel_type,
           author_id, author_name, due_at, contact_id, source_message_id,
           context_summary, wake_conditions, origin_icp_root_initiation_id,
-          activated_at, activation_reason, dampened_at, dampening_reason
+          activated_at, activation_reason, dampened_at, dampening_reason,
+          formation_vad, completion_vad
       `,
-      [normalizedId, activatedAt, activationReason ?? null],
+      [
+        normalizedId,
+        activatedAt,
+        activationReason ?? null,
+        serializeFollowUpVAD(options.completionVAD, 'completion_vad'),
+      ],
     );
     if (!row) return null;
     const followUp = mapPendingFollowUpRow(row);
@@ -379,7 +392,8 @@ export class PostgresPendingFollowUpStore implements PendingFollowUpStorePort {
           id, content, priority, timing, created_at, channel_id, channel_type,
           author_id, author_name, due_at, contact_id, source_message_id,
           context_summary, wake_conditions, origin_icp_root_initiation_id,
-          activated_at, activation_reason, dampened_at, dampening_reason
+          activated_at, activation_reason, dampened_at, dampening_reason,
+          formation_vad, completion_vad
       `,
       [normalizedId, dampenedAt, dampeningReason],
     );
@@ -509,7 +523,8 @@ export class PostgresPendingFollowUpStore implements PendingFollowUpStorePort {
           id, content, priority, timing, created_at, channel_id, channel_type,
           author_id, author_name, due_at, contact_id, source_message_id,
           context_summary, wake_conditions, origin_icp_root_initiation_id,
-          activated_at, activation_reason, dampened_at, dampening_reason
+          activated_at, activation_reason, dampened_at, dampening_reason,
+          formation_vad, completion_vad
       `,
       [
         normalizedId,

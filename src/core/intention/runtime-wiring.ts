@@ -79,6 +79,7 @@ export interface IntentionAppraisalHooks {
     channelType: ChannelType;
     canonicalContactKey?: string;
     sourceMessageId: string;
+    formationVAD?: ActiveConcernVAD;
     originIcpRootInitiationId?: string;
   }): Promise<string | undefined>;
   getPendingFollowUpsForResurfacing(input: {
@@ -167,9 +168,24 @@ function normalizeObservedAtIso(value: number | undefined): string | undefined {
 
 const PENDING_FOLLOW_UP_RESURFACE_LIMIT = 3;
 
+export interface IntentionAppraisalHookOptions {
+  /**
+   * Resolves the live internal VAD to snapshot as a follow-up's completion VAD
+   * at activation/dequeue (bead vw3w.3; parity with the concern
+   * `resolutionVadProvider`). Fail-open: returns undefined when no trusted,
+   * contact-matched emotion telemetry is available — the completion VAD is then
+   * simply absent, never fabricated.
+   */
+  completionVadProvider?: (
+    followUp: Pick<PendingFollowUp, 'id' | 'contactId'>,
+    asOf: string,
+  ) => ActiveConcernVAD | undefined;
+}
+
 export function createIntentionAppraisalHooks(
   concernStore: ConcernStorePort,
   pendingFollowUpStore?: PendingFollowUpStorePort,
+  options: IntentionAppraisalHookOptions = {},
 ): IntentionAppraisalHooks {
   return {
     getActiveConcerns: async ({ canonicalContactKey }) => (
@@ -213,6 +229,7 @@ export function createIntentionAppraisalHooks(
       channelType,
       canonicalContactKey,
       sourceMessageId,
+      formationVAD,
       originIcpRootInitiationId,
     }) => {
       if (decision.type !== 'followUp') {
@@ -233,6 +250,7 @@ export function createIntentionAppraisalHooks(
         ...(decision.dueAt ? { dueAt: normalizeFutureIsoTimestamp(decision.dueAt) } : {}),
         ...(canonicalContactKey ? { contactId: canonicalContactKey } : {}),
         sourceMessageId,
+        ...(formationVAD ? { formationVAD } : {}),
         ...(originIcpRootInitiationId ? { originIcpRootInitiationId } : {}),
         ...(decision.followUp?.contextSummary
           ? { contextSummary: decision.followUp.contextSummary }
@@ -282,8 +300,24 @@ export function createIntentionAppraisalHooks(
       if (!pendingFollowUpStore) {
         throw new Error('PendingFollowUpStorePort is required for follow-up activation');
       }
+      // Snapshot completion VAD BEFORE the activating dequeue so the retained
+      // formation→completion arc reflects the affect at the moment of
+      // completion (bead vw3w.3). Peek supplies the contactId the provider
+      // needs; a missing follow-up or absent telemetry leaves completion VAD
+      // unset (fail-open, never fabricated).
+      let completionVAD: ActiveConcernVAD | undefined;
+      if (options.completionVadProvider) {
+        const existing = await pendingFollowUpStore.peek(pendingFollowUpId);
+        if (existing) {
+          completionVAD = options.completionVadProvider(
+            { id: existing.id, ...(existing.contactId ? { contactId: existing.contactId } : {}) },
+            new Date().toISOString(),
+          );
+        }
+      }
       const activated = await pendingFollowUpStore.dequeue(pendingFollowUpId, {
         ...(activationReason ? { activationReason } : {}),
+        ...(completionVAD ? { completionVAD } : {}),
       });
       return activated !== null;
     },

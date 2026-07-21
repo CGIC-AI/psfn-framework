@@ -4,6 +4,7 @@ import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
+import type { Pool } from 'pg';
 import {
   POSTGRES_EXTENSION_SCHEMA_NAME,
   createPostgresPool,
@@ -18,6 +19,17 @@ const POSTGRES_DATABASE = 'postgres';
 const POSTGRES_PORT = 5432;
 const READY_RETRY_LIMIT = 120;
 const READY_RETRY_DELAY_MS = 500;
+/**
+ * Before shutting the container down, wait for every test-owned client backend
+ * to disconnect. Properly-ended pools cost zero wait; a leaked pool closes its
+ * idle sockets within pg's default 10 000 ms idle timeout (see
+ * `createPostgresPool`, which leaves `idleTimeoutMillis` at that default), so
+ * the 30 s deadline clears them with margin. Stopping the container while a
+ * backend is still open makes postgres kill it with SQLSTATE 57P01, which the
+ * owning pg Pool surfaces as an unhandled 'error' event and fails a random file.
+ */
+const DRAIN_POLL_INTERVAL_MS = 200;
+const DRAIN_DEADLINE_MS = 30_000;
 
 export interface PostgresTestDatabase {
   databaseName: string;
@@ -131,6 +143,51 @@ async function provisionTestDatabase(databaseUrl: string): Promise<void> {
   }
 }
 
+interface ClientBackendRow {
+  datname: string | null;
+  application_name: string | null;
+  state: string | null;
+}
+
+function summarizeSurvivingBackends(rows: readonly ClientBackendRow[]): string {
+  const counts = new Map<string, number>();
+  for (const row of rows) {
+    const key = `datname=${row.datname ?? '<none>'} application_name=${
+      row.application_name ?? '<none>'
+    } state=${row.state ?? '<none>'}`;
+    counts.set(key, (counts.get(key) ?? 0) + 1);
+  }
+  return [...counts.entries()].map(([key, count]) => `${key} count=${count}`).join('; ');
+}
+
+/**
+ * Poll `pg_stat_activity` via the admin pool until no test-owned client
+ * backends remain, so `docker stop` never SIGTERMs postgres out from under a
+ * still-open pool. Excludes the admin pool's own backend via `pg_backend_pid()`.
+ * Fails closed: if backends survive past the deadline the leak is reported so
+ * the offending file fails loudly instead of poisoning a random sibling.
+ */
+async function waitForClientBackendsToDrain(adminPool: Pool): Promise<void> {
+  const deadline = Date.now() + DRAIN_DEADLINE_MS;
+  for (;;) {
+    const result = await adminPool.query<ClientBackendRow>(
+      "SELECT datname, application_name, state FROM pg_stat_activity " +
+        "WHERE backend_type = 'client backend' AND pid <> pg_backend_pid()",
+    );
+    if (result.rows.length === 0) {
+      return;
+    }
+    if (Date.now() >= deadline) {
+      throw new Error(
+        `Postgres test harness stop() timed out after ${DRAIN_DEADLINE_MS} ms waiting for ` +
+          `${result.rows.length} client backend(s) to disconnect; a test leaked a connection pool. ` +
+          `Surviving connections: ${summarizeSurvivingBackends(result.rows)}`,
+      );
+    }
+    await delay(DRAIN_POLL_INTERVAL_MS);
+  }
+}
+
 function resolveDatabaseUrl(adminDatabaseUrl: string, databaseName: string): string {
   const url = new URL(adminDatabaseUrl);
   url.pathname = `/${databaseName}`;
@@ -199,11 +256,24 @@ export async function startPostgresTestHarness(options: PostgresTestHarnessOptio
       };
     },
     async stop(): Promise<void> {
+      // Drain test-owned client backends BEFORE ending the admin pool (the wait
+      // needs it) and BEFORE stopping the container, so postgres never
+      // fast-shuts a still-open backend into a 57P01. A surviving-backend
+      // timeout still tears everything down, then rethrows so the leak is loud.
+      let drainError: Error | undefined;
+      try {
+        await waitForClientBackendsToDrain(adminPool);
+      } catch (error) {
+        drainError = error instanceof Error ? error : new Error(String(error));
+      }
       await adminPool.end().catch(() => undefined);
       try {
         runDocker(['stop', containerId]);
       } finally {
         rmSync(clientRoot, { recursive: true, force: true });
+      }
+      if (drainError) {
+        throw drainError;
       }
     },
   };

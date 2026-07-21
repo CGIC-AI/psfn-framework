@@ -4724,6 +4724,12 @@
     },
     {
       "file": "src/test-support/postgres-test-harness.ts",
+      "name": "DRAIN_POLL_INTERVAL_MS",
+      "value": "200",
+      "note": "Test-harness teardown poll cadence; code-owned test timing, not a runtime setting."
+    },
+    {
+      "file": "src/test-support/postgres-test-harness.ts",
       "name": "READY_RETRY_DELAY_MS",
       "value": "500"
     },

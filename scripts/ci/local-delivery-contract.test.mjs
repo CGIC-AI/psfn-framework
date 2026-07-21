@@ -8,25 +8,28 @@ import test from 'node:test';
 import { validateToolReport } from './check-local-tools.mjs';
 import { normalizeAliasValue } from './install-local-hooks.mjs';
 import {
-  appendAttestationMarker,
+  REMOTE_ATTESTATION_CONTEXT,
   assessHookInstallation,
   buildGatePlan,
   createAttestation,
   evaluateRequiredChecks,
-  formatAttestationMarker,
-  parseAttestationMarker,
   planPrePush,
   validateAttestation,
+  validateRemoteAttestation,
 } from './local-delivery-contract.mjs';
 import { runLocalGate } from './run-local-gate.mjs';
 import { validateZizmorInputs } from './run-zizmor-changed.mjs';
-import { verifyPrAttestation } from './verify-pr-attestation.mjs';
+import { waitForRemoteAttestation } from './verify-pr-attestation.mjs';
 
 const HEAD = '1111111111111111111111111111111111111111';
 const BASE = '2222222222222222222222222222222222222222';
 
 function git(cwd, ...args) {
   return execFileSync('git', args, { cwd, encoding: 'utf8' }).trim();
+}
+
+function pushUpdate(remoteRef, localSha = HEAD) {
+  return { localSha, localRef: localSha === '0'.repeat(40) ? '(delete)' : 'HEAD', remoteRef, remoteSha: BASE };
 }
 
 function makeGateRepository() {
@@ -46,60 +49,33 @@ function makeGateRepository() {
 }
 
 test('attestation is valid only for the exact clean head and base', () => {
+  const gates = ['change-budget', 'tests', 'semgrep'];
   const attestation = createAttestation({
     head: HEAD,
     base: BASE,
     baseRef: 'origin/main',
-    gates: ['change-budget', 'tests', 'semgrep'],
+    gates,
   });
 
-  assert.deepEqual(validateAttestation(attestation, { head: HEAD, base: BASE }), {
+  assert.deepEqual(validateAttestation(attestation, { head: HEAD, base: BASE, gates }), {
     valid: true,
     reason: '',
   });
   assert.match(
-    validateAttestation(attestation, { head: `0${HEAD.slice(1)}`, base: BASE }).reason,
+    validateAttestation(attestation, { head: `0${HEAD.slice(1)}`, base: BASE, gates }).reason,
     /head/i,
   );
   assert.match(
-    validateAttestation(attestation, { head: HEAD, base: `0${BASE.slice(1)}` }).reason,
+    validateAttestation(attestation, { head: HEAD, base: `0${BASE.slice(1)}`, gates }).reason,
     /base/i,
   );
-});
-
-test('PR marker round-trips and replaces a stale marker instead of accumulating', () => {
-  const attestation = createAttestation({
-    head: HEAD,
-    base: BASE,
-    baseRef: 'origin/main',
-    gates: ['change-budget', 'tests'],
-  });
-  const marker = formatAttestationMarker(attestation);
-
-  assert.deepEqual(parseAttestationMarker(marker), {
-    schemaVersion: 1,
-    head: HEAD,
-    base: BASE,
-  });
-  const body = appendAttestationMarker(`Summary\n\n${marker}`, {
-    ...attestation,
-    head: `3${HEAD.slice(1)}`,
-  });
-  assert.equal((body.match(/psfn-local-gate:v1/g) ?? []).length, 1);
-  assert.match(body, new RegExp(`head=3${HEAD.slice(1)}`));
+  assert.match(validateAttestation(attestation, { head: HEAD, base: BASE, gates: ['fake'] }).reason, /gate plan/i);
 });
 
 test('pre-push blocks direct main, skips deletions, reuses exact attestations, and never recurses', () => {
   assert.deepEqual(
     planPrePush({
-      updates: [
-        {
-          localSha: HEAD,
-          localRef: 'HEAD',
-          remoteRef: 'refs/heads/main',
-          remoteSha: BASE,
-        },
-      ],
+      updates: [pushUpdate('refs/heads/main')],
       head: HEAD,
       currentBranch: 'feature',
       attestationValid: false,
@@ -109,14 +85,7 @@ test('pre-push blocks direct main, skips deletions, reuses exact attestations, a
   );
   assert.deepEqual(
     planPrePush({
-      updates: [
-        {
-          localSha: '0'.repeat(40),
-          localRef: '(delete)',
-          remoteRef: 'refs/heads/old',
-          remoteSha: BASE,
-        },
-      ],
+      updates: [pushUpdate('refs/heads/old', '0'.repeat(40))],
       head: HEAD,
       currentBranch: 'feature',
       attestationValid: false,
@@ -126,14 +95,7 @@ test('pre-push blocks direct main, skips deletions, reuses exact attestations, a
   );
   assert.equal(
     planPrePush({
-      updates: [
-        {
-          localSha: HEAD,
-          localRef: 'HEAD',
-          remoteRef: 'refs/heads/feature',
-          remoteSha: BASE,
-        },
-      ],
+      updates: [pushUpdate('refs/heads/feature')],
       head: HEAD,
       currentBranch: 'feature',
       attestationValid: true,
@@ -143,14 +105,7 @@ test('pre-push blocks direct main, skips deletions, reuses exact attestations, a
   );
   assert.equal(
     planPrePush({
-      updates: [
-        {
-          localSha: HEAD,
-          localRef: 'HEAD',
-          remoteRef: 'refs/heads/feature',
-          remoteSha: BASE,
-        },
-      ],
+      updates: [pushUpdate('refs/heads/feature')],
       head: HEAD,
       currentBranch: 'feature',
       attestationValid: false,
@@ -160,14 +115,7 @@ test('pre-push blocks direct main, skips deletions, reuses exact attestations, a
   );
   assert.deepEqual(
     planPrePush({
-      updates: [
-        {
-          localSha: HEAD,
-          localRef: 'HEAD',
-          remoteRef: 'refs/heads/feature',
-          remoteSha: BASE,
-        },
-      ],
+      updates: [pushUpdate('refs/heads/feature')],
       head: HEAD,
       currentBranch: 'feature',
       attestationValid: false,
@@ -202,7 +150,7 @@ test('gate plan keeps broad checks local and scopes specialist tools', () => {
     'settings-contract',
     'supply-chain',
     'deployment-contracts',
-    'zizmor-changed-workflows',
+    'changed-workflow-analysis',
   ]) {
     assert.ok(names.includes(required), `missing local gate: ${required}`);
   }
@@ -226,17 +174,17 @@ test('local tool doctor pins UBS while accepting supported Node releases', () =>
 });
 
 test('hook installer refuses to overwrite an unrelated hook configuration', () => {
-  assert.deepEqual(assessHookInstallation({ hooksPath: '', existingPrePush: false }), {
+  assert.deepEqual(assessHookInstallation({ hooksPath: '', existingHooks: [] }), {
     allowed: true,
     reason: '',
   });
   assert.match(
-    assessHookInstallation({ hooksPath: '/custom/hooks', existingPrePush: false }).reason,
+    assessHookInstallation({ hooksPath: '/custom/hooks', existingHooks: [] }).reason,
     /custom hooksPath/i,
   );
   assert.match(
-    assessHookInstallation({ hooksPath: '', existingPrePush: true }).reason,
-    /existing pre-push/i,
+    assessHookInstallation({ hooksPath: '', existingHooks: ['commit-msg'] }).reason,
+    /commit-msg/i,
   );
   assert.equal(normalizeAliasValue("'!npm run pr:publish --'"), '!npm run pr:publish --');
 });
@@ -298,12 +246,19 @@ test('PR check evaluator waits for both CI and Greptile and returns failures wit
   );
 });
 
-test('GitHub verifies the local marker against the exact event head and base', () => {
-  const marker = `<!-- psfn-local-gate:v1 head=${HEAD} base=${BASE} -->`;
-  assert.equal(verifyPrAttestation({ body: marker, head: HEAD, base: BASE }).head, HEAD);
-  assert.throws(
-    () => verifyPrAttestation({ body: marker, head: `3${HEAD.slice(1)}`, base: BASE }),
-    /does not match PR head/,
+test('GitHub waits for an authenticated exact-base commit status', async () => {
+  const statuses = [{
+    context: REMOTE_ATTESTATION_CONTEXT,
+    state: 'success',
+    description: `base=${BASE}`,
+  }];
+  assert.equal(validateRemoteAttestation(statuses, BASE).context, REMOTE_ATTESTATION_CONTEXT);
+  assert.throws(() => validateRemoteAttestation(statuses, `3${BASE.slice(1)}`), /exact base/);
+  assert.equal(
+    (await waitForRemoteAttestation({
+      repository: 'owner/repo', head: HEAD, base: BASE, attempts: 1, read: () => statuses,
+    })).state,
+    'success',
   );
 });
 
@@ -320,14 +275,17 @@ test('GitHub CI is one complementary delta lane without label-triggered reruns',
   const workflow = readFileSync('.github/workflows/ci.yml', 'utf8');
 
   assert.doesNotMatch(workflow, /\b(?:labeled|unlabeled)\b/);
+  assert.doesNotMatch(workflow, /^  push:\s*$/m);
+  assert.doesNotMatch(workflow, /^  workflow_dispatch:\s*$/m);
   assert.match(workflow, /^  github-delta:\s*$/m);
   assert.match(workflow, /^  ci-required:\s*$/m);
   assert.equal((workflow.match(/^    runs-on:/gm) ?? []).length, 2);
   assert.ok(
-    workflow.indexOf('Verify exact local-gate attestation') < workflow.indexOf('run: npm ci'),
+    workflow.indexOf('Verify exact local-gate status') < workflow.indexOf('run: npm ci'),
     'attestation must fail before the clean-environment install',
   );
   assert.match(workflow, /steps\.scope\.outputs\.clean_environment == 'true'/);
   assert.doesNotMatch(workflow, /run: npm run lint/);
   assert.doesNotMatch(workflow, /run: bash scripts\/ci\/run-semgrep\.sh/);
+  assert.match(workflow, /statuses: read/);
 });

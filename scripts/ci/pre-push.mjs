@@ -4,8 +4,12 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 
-import { parsePrePushUpdates, planPrePush, validateAttestation } from './local-delivery-contract.mjs';
-import { readAttestation, resolveLocalGateState } from './run-local-gate.mjs';
+import { parsePrePushUpdates, planPrePush } from './local-delivery-contract.mjs';
+import {
+  readAttestation,
+  resolveLocalGateState,
+  validateStateAttestation,
+} from './run-local-gate.mjs';
 
 function git(args) {
   return execFileSync('git', args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
@@ -16,11 +20,7 @@ function readStdin() {
 }
 
 export function configuredBaseRef(branch) {
-  try {
-    return git(['config', '--get', `branch.${branch}.psfnGateBase`]) || 'origin/main';
-  } catch {
-    return 'origin/main';
-  }
+  return git(['config', '--get', '--default', 'origin/main', `branch.${branch}.psfnGateBase`]);
 }
 
 export function main() {
@@ -43,7 +43,7 @@ export function main() {
   const baseRef = configuredBaseRef(currentBranch);
   const state = resolveLocalGateState({ baseRef });
   const attestation = readAttestation(state.attestationPath);
-  const attestationResult = validateAttestation(attestation, { head: state.head, base: state.base });
+  const attestationResult = validateStateAttestation(attestation, state).result;
   const plan = planPrePush({
     updates,
     head,

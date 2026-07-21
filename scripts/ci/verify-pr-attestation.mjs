@@ -1,35 +1,52 @@
 #!/usr/bin/env node
 
+import { execFileSync } from 'node:child_process';
+import { setTimeout as delay } from 'node:timers/promises';
 import { pathToFileURL } from 'node:url';
 
-import { parseAttestationMarker } from './local-delivery-contract.mjs';
+import { validateRemoteAttestation } from './local-delivery-contract.mjs';
 
-export function verifyPrAttestation({ body, head, base }) {
-  const marker = parseAttestationMarker(body);
-  if (!marker) throw new Error('PR body must contain exactly one local-gate attestation marker');
-  if (marker.head !== head) {
-    throw new Error(`Local-gate marker head ${marker.head} does not match PR head ${head}`);
-  }
-  if (marker.base !== base) {
-    throw new Error(`Local-gate marker base ${marker.base} does not match PR base ${base}`);
-  }
-  return marker;
+function readStatuses(repository, head) {
+  return JSON.parse(
+    execFileSync('gh', ['api', `repos/${repository}/commits/${head}/statuses`], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+    }),
+  );
 }
 
-export function main(env = process.env) {
-  verifyPrAttestation({
-    body: env.LOCAL_GATE_PR_BODY ?? '',
+export async function waitForRemoteAttestation({
+  repository,
+  head,
+  base,
+  attempts = 20,
+  intervalMs = 3_000,
+  read = readStatuses,
+}) {
+  let lastError;
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    try {
+      return validateRemoteAttestation(read(repository, head), base);
+    } catch (error) {
+      lastError = error;
+      if (attempt + 1 < attempts) await delay(intervalMs);
+    }
+  }
+  throw lastError;
+}
+
+export async function main(env = process.env) {
+  await waitForRemoteAttestation({
+    repository: env.GITHUB_REPOSITORY ?? '',
     head: env.HEAD_SHA ?? '',
     base: env.BASE_SHA ?? '',
   });
-  console.log(`Local gate attestation matches ${env.HEAD_SHA?.slice(0, 12)}.`);
+  console.log(`Remote local-gate status matches ${env.HEAD_SHA?.slice(0, 12)}.`);
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
-  try {
-    main();
-  } catch (error) {
+  main().catch((error) => {
     console.error(error instanceof Error ? error.message : String(error));
     process.exitCode = 1;
-  }
+  });
 }

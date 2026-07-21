@@ -1,7 +1,6 @@
 # Local Delivery and Internal Review Workflow
 
-This reproduces PSFN's pre-PR gate and internal reviews on another machine so
-broad failures stay local and GitHub/Greptile remain external confirmation.
+This reproduces PSFN's pre-PR gate and internal reviews on another machine.
 
 ## Prerequisites and setup
 
@@ -19,14 +18,12 @@ printf '%s  %s\n' \
 bash "$ubs_installer" --easy-mode
 ```
 
-Keep UBS in `PATH`; do not update it in place. The gate passes
-`--no-auto-update`. Semgrep and zizmor run through digest-pinned Docker images,
-so they need no host install. Fallow remains end-of-wave hygiene.
+Keep UBS in `PATH`; the gate pins it with `--no-auto-update`. Semgrep, actionlint,
+and zizmor use pinned Docker images and need no host install.
 
 Run once per clone/worktree:
 
 ```bash
-gh auth status
 npm ci
 npm run tools:doctor
 npm run hooks:install
@@ -34,8 +31,7 @@ git config --get core.hooksPath       # .githooks
 gh alias list | grep '^psfn-pr:'      # !npm run pr:publish --
 ```
 
-The installer stops rather than replacing an unrelated hook or alias. Hook
-configuration is worktree-specific; run it in every new worktree.
+The installer replaces nothing; run it separately in every worktree.
 
 ## Implement and gate
 
@@ -49,14 +45,13 @@ Before the first push or PR update:
 ```bash
 git fetch origin main
 git rebase origin/main
-git status --short
 npm run gate:pre-pr
 ```
 
 The sequential gate owns delivery rules and budgets; full lint, build,
 baselined typecheck, repository hygiene, and tests; Semgrep rule/diff scans;
 UBS 5.3.5; and applicable settings, supply-chain, deployment, Garden, companion
-UI, and changed-workflow checks.
+UI, and changed-workflow actionlint/zizmor checks.
 
 It refuses dirty, detached, `main`, empty, or non-rebased delivery. Attestation
 and logs live under the worktree Git directory in `psfn-local-gate/`, never in
@@ -105,8 +100,8 @@ gh psfn-pr --title "<type(scope): outcome>" --body-file <body.md>
 ```
 
 The wrapper fetches and gates the base, pushes through the cached hook, publishes
-one exact head/base marker, and waits for `ci-required` and `Greptile Review`.
-Do not use raw `gh pr create`/`edit`; GitHub rejects missing or stale markers
+an authenticated exact head/base commit status, and waits for `ci-required` and
+`Greptile Review`. Do not use raw `gh pr create`/`edit`; GitHub rejects a stale status
 before installing dependencies.
 
 GitHub has one complementary delta runner and one status aggregator. Drafts use
@@ -121,10 +116,8 @@ successive review/fix agents. A second failure is an operator-visible blocker.
 
 ## Troubleshooting
 
-- Docker unhealthy: start it and rerun `npm run tools:doctor`; skip nothing.
-- UBS mismatch: reinstall pinned 5.3.5 above; do not update it.
-- Hook/alias conflict: inspect with the operator; the installer will not replace it.
+- Docker/UBS unhealthy: repair it and rerun `npm run tools:doctor`; skip nothing.
+- Hook/alias conflict: inspect with the operator; the installer replaces nothing.
 - Stale base: fetch, rebase once, commit, and gate the new exact range.
-- Dirty worktree: commit only the intended unit; uncommitted state is never attested.
-- Head changed while waiting: stop and resolve ownership before publishing again.
-- Actions, Greptile, billing, or required checks unavailable: stop; local green is not merge authority.
+- Dirty or changed head: stop and resolve ownership; only committed state is attested.
+- External checks unavailable: stop; local green is not merge authority.

@@ -25,6 +25,7 @@ import {
   validateAttestation,
   validateRemoteAttestation,
 } from './local-delivery-contract.mjs';
+import { publishPr } from './publish-pr.mjs';
 import {
   acquireHeavyPhaseLock,
   isProcessAlive,
@@ -35,6 +36,7 @@ import {
 } from './run-local-gate.mjs';
 import { validateZizmorInputs } from './run-zizmor-changed.mjs';
 import { waitForRemoteAttestation } from './verify-pr-attestation.mjs';
+import { waitForPr } from './wait-for-pr.mjs';
 
 const HEAD = '1111111111111111111111111111111111111111';
 const BASE = '2222222222222222222222222222222222222222';
@@ -908,4 +910,145 @@ test('trusted PR label automation has the write scope required by the labels API
   assert.match(applyJob, /pull-requests: write/);
   assert.doesNotMatch(applyJob, /issues: write/);
   assert.match(applyJob, /ref: \$\{\{ github\.event\.pull_request\.base\.sha \}\}/);
+});
+
+test('PR wait fails loudly when GitHub reports a different head than the attested SHA', async () => {
+  await assert.rejects(
+    waitForPr({
+      reference: '191',
+      expectedHead: HEAD,
+      read: () => ({
+        number: 191,
+        headRefOid: `3${HEAD.slice(1)}`,
+        statusCheckRollup: [],
+      }),
+    }),
+    /PR head changed.*while waiting/i,
+  );
+});
+
+function makePublisherFixture({ existingPr }) {
+  const calls = [];
+  let listCount = 0;
+
+  function runCommand(executable, args) {
+    calls.push([executable, ...args]);
+    if (executable === 'git' && args[0] === 'config' && args.includes('core.hooksPath')) {
+      return '.githooks';
+    }
+    if (executable === 'git' && args[0] === 'branch' && args[1] === '--show-current') {
+      return 'work/publish-ordering';
+    }
+    if (executable === 'git' && args[0] === 'rev-parse' && args[1] === 'HEAD') return HEAD;
+    if (executable === 'git' && args[0] === 'ls-remote') {
+      return `${HEAD}\trefs/heads/work/publish-ordering`;
+    }
+    if (executable === 'gh' && args[0] === 'variable') return 'publisher';
+    if (executable === 'gh' && args[0] === 'api' && args[1] === 'user') return 'publisher';
+    if (executable === 'gh' && args[0] === 'pr' && args[1] === 'list') {
+      listCount += 1;
+      if (listCount === 1) {
+        if (!existingPr) return '[]';
+        return JSON.stringify([{
+          number: 191,
+          url: 'https://example.invalid/pr/191',
+          isDraft: true,
+        }]);
+      }
+      return JSON.stringify([{ number: 191, url: 'https://example.invalid/pr/191', isDraft: false }]);
+    }
+    if (executable === 'git' && (
+      args[0] === 'fetch'
+      || (args[0] === 'config' && args[1].startsWith('branch.'))
+      || (args[0] === 'branch' && args[1] === '--set-upstream-to')
+    )) return '';
+    if (executable === 'gh' && (
+      (args[0] === 'api' && args[1] === '--method' && args[2] === 'POST')
+      || (args[0] === 'pr' && ['create', 'ready'].includes(args[1]))
+    )) return '';
+    throw new Error(`Unexpected mock command: ${executable} ${args.join(' ')}`);
+  }
+
+  function spawnCommand(executable, args) {
+    calls.push([executable, ...args]);
+    if (executable !== 'git' || args[0] !== 'push') {
+      throw new Error(`Unexpected mock spawn: ${executable} ${args.join(' ')}`);
+    }
+    return { error: undefined, status: 0 };
+  }
+
+  return {
+    calls,
+    dependencies: {
+      runCommand,
+      spawnCommand,
+      runGate: async () => {},
+      resolveGateState: () => ({
+        head: HEAD,
+        base: BASE,
+        baseRef: 'origin/main',
+        attestationPath: '/tmp/test-attestation.json',
+      }),
+      readGateAttestation: () => ({}),
+      validateGateAttestation: () => ({ result: { valid: true, reason: '' } }),
+      wait: async () => {},
+    },
+  };
+}
+
+test('publisher marks an existing draft PR ready before pushing the attested head', async () => {
+  const fixture = makePublisherFixture({ existingPr: true });
+
+  await publishPr([], fixture.dependencies);
+
+  const readyIndex = fixture.calls.findIndex(
+    ([executable, scope, command]) => executable === 'gh' && scope === 'pr' && command === 'ready',
+  );
+  const pushIndex = fixture.calls.findIndex(
+    ([executable, command]) => executable === 'git' && command === 'push',
+  );
+  assert.ok(readyIndex >= 0, 'existing draft PR must be marked ready');
+  assert.ok(readyIndex < pushIndex, 'draft PR must be ready before the attested head is pushed');
+});
+
+test('publisher creates new PRs as non-draft after pushing the attested head', async () => {
+  const fixture = makePublisherFixture({ existingPr: false });
+
+  await publishPr(['--title', 'Publish ordering', '--body-file', 'pr-body.md'], fixture.dependencies);
+
+  const createIndex = fixture.calls.findIndex(
+    ([executable, scope, command]) => executable === 'gh' && scope === 'pr' && command === 'create',
+  );
+  const pushIndex = fixture.calls.findIndex(
+    ([executable, command]) => executable === 'git' && command === 'push',
+  );
+  assert.ok(createIndex > pushIndex, 'new PR must be opened for the already-pushed attested head');
+  assert.ok(!fixture.calls[createIndex].includes('--draft'), 'new PR must not be created as draft');
+});
+
+test('PR wait fails loudly when a required check is skipped', async () => {
+  await assert.rejects(
+    waitForPr({
+      reference: '191',
+      expectedHead: HEAD,
+      read: () => ({
+        number: 191,
+        headRefOid: HEAD,
+        statusCheckRollup: [
+          { name: 'ci-required', status: 'COMPLETED', conclusion: 'SKIPPED' },
+          { name: 'Greptile Review', status: 'COMPLETED', conclusion: 'SUCCESS' },
+        ],
+      }),
+    }),
+    /ci-required concluded SKIPPED/i,
+  );
+});
+
+test('ready-for-review CI runs use the exact PR head without label-triggered reruns', () => {
+  const workflow = readFileSync('.github/workflows/ci.yml', 'utf8');
+
+  assert.match(workflow, /types:\s*\[[^\]]*ready_for_review[^\]]*\]/);
+  assert.doesNotMatch(workflow, /\b(?:labeled|unlabeled)\b/);
+  assert.match(workflow, /HEAD_SHA:\s*\$\{\{ github\.event\.pull_request\.head\.sha \}\}/);
+  assert.match(workflow, /ref:\s*\$\{\{ env\.HEAD_SHA \}\}/);
 });

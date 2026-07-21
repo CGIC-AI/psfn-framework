@@ -30,13 +30,15 @@ export async function waitForPr({
   expectedHead,
   timeoutMs = 45 * 60 * 1_000,
   intervalMs = 15_000,
+  read = readPr,
+  sleep = delay,
 } = {}) {
   if (!reference) throw new Error('PR reference is required');
   if (!expectedHead) throw new Error('Expected PR head is required');
   const deadline = Date.now() + timeoutMs;
 
   while (Date.now() < deadline) {
-    const pr = readPr(String(reference));
+    const pr = await read(String(reference));
     const checks = normalizeChecks(pr.statusCheckRollup ?? []);
     const result = evaluateRequiredChecks({
       expectedHead,
@@ -51,7 +53,7 @@ export async function waitForPr({
       }
       throw new Error(`Failure handback for ${expectedHead.slice(0, 12)}: ${result.reason}`);
     }
-    await delay(Math.min(intervalMs, Math.max(1, deadline - Date.now())));
+    await sleep(Math.min(intervalMs, Math.max(1, deadline - Date.now())));
   }
   throw new Error(`Timed out waiting for ci-required and Greptile Review on ${expectedHead.slice(0, 12)}.`);
 }

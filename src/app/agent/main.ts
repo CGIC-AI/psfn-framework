@@ -1319,7 +1319,10 @@ async function main(): Promise<void> {
         timestamp: new Date(),
       });
       const trimmed = response.content.trim();
-      if (!trimmed || trimmed.toLowerCase() === HEARTBEAT_SILENT_REFLECTION_TOKEN) {
+      const isSilentReflection = !trimmed.toLowerCase().localeCompare(
+        HEARTBEAT_SILENT_REFLECTION_TOKEN,
+      );
+      if (!trimmed || isSilentReflection) {
         return null;
       }
       return trimmed;

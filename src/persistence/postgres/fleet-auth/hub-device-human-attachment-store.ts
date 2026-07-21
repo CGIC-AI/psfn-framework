@@ -10,6 +10,7 @@ import {
   FleetAuthorizationDeniedError,
   type FleetAuthorizationContext,
 } from '../../../boundary/gateway/fleet-authorization-context.js';
+import { isRecord } from '../../../shared/utils/types.js';
 import { FLEET_AUTH_FLOOR_RESOURCE_TOMBSTONED_FUNCTION_NAME } from './authority-floor-read-sql.js';
 import { FLEET_AUTH_LOCK_AUTHORITY_STATE_FUNCTION_NAME } from './authority-state-lock-sql.js';
 import { FLEET_AUTH_LOCK_COMPANION_AUTHORITY_FUNCTION_NAME } from './companion-authority-lock-sql.js';
@@ -98,7 +99,10 @@ export class PostgresHubDeviceHumanAttachmentStore implements HubDeviceHumanAtta
     this.randomId = options.randomId ?? randomUUID;
   }
 
-  async attach(input: Parameters<HubDeviceHumanAttachmentPort['attach']>[0]): Promise<HubDeviceHumanAttachment> {
+  async attach(
+    input: Parameters<HubDeviceHumanAttachmentPort['attach']>[0],
+    retried = false,
+  ): Promise<HubDeviceHumanAttachment> {
     let human: FleetAuthorizationContext | undefined;
     let humanInvalidated = false;
     if (input.human.kind === 'fleet_browser_session') {
@@ -207,6 +211,16 @@ export class PostgresHubDeviceHumanAttachmentStore implements HubDeviceHumanAtta
       });
     } catch (error) {
       await client.query('ROLLBACK').catch(() => undefined);
+      // A SERIALIZABLE serialization failure (SQLSTATE 40001) means a
+      // concurrent admit for the same channel won the race. Re-run once from
+      // the top (re-resolving the human context): the attachment function is
+      // replay-aware, so the rerun reports the winner's outcome ('retry')
+      // instead of leaking the aborted transaction. A second consecutive
+      // conflict still fails closed, matching the sibling fleet-auth stores'
+      // 40001 handling (portal-authorization-store.ts).
+      if (!retried && isRecord(error) && error.code === '40001') {
+        return await this.attach(input, true);
+      }
       throw error;
     } finally {
       client.release();

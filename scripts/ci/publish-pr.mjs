@@ -195,7 +195,49 @@ export async function publishPr(argv = process.argv.slice(2), {
   if (!pr) throw new Error(`GitHub did not return a PR for branch ${branch}.`);
   console.log(`Published ${pr.url} at ${state.head.slice(0, 12)}; waiting for CI and Greptile.`);
   await wait({ reference: String(pr.number), expectedHead: state.head });
+  surfaceReviewFindings(pr.number, runCommand);
   return pr;
+}
+
+const SEVERITY_BADGE = /badges\/p([01])\.svg/;
+
+/**
+ * Passing checks do not mean the paid review was read: the Greptile status
+ * succeeds even when its inline comments carry P0/P1 findings. Surface every
+ * live inline comment after the wait and refuse success while a live P0/P1
+ * finding exists — outdated comments (position null, superseded by a later
+ * push) are listed but never block.
+ */
+function surfaceReviewFindings(prNumber, runCommand = run) {
+  const raw = runCommand('gh', [
+    'api',
+    `repos/{owner}/{repo}/pulls/${prNumber}/comments`,
+    '--paginate',
+  ]);
+  const comments = JSON.parse(raw || '[]');
+  if (!Array.isArray(comments)) {
+    throw new Error(`Unexpected review-comment payload for PR #${prNumber}.`);
+  }
+  if (comments.length === 0) return;
+
+  const blocking = [];
+  for (const comment of comments) {
+    const live = comment.position !== null && comment.position !== undefined;
+    const severity = SEVERITY_BADGE.exec(String(comment.body ?? ''));
+    const headline = String(comment.body ?? '').split('\n').find(line => line.trim()) ?? '';
+    const label = severity ? `P${severity[1]}` : 'note';
+    console.log(
+      `review comment [${label}${live ? '' : ', outdated'}] ${comment.path}:${comment.line ?? comment.original_line} ${headline.slice(0, 160)}`,
+    );
+    if (live && severity) {
+      blocking.push(`${comment.path}:${comment.line ?? comment.original_line} [P${severity[1]}]`);
+    }
+  }
+  if (blocking.length > 0) {
+    throw new Error(
+      `PR #${prNumber} has ${blocking.length} live P0/P1 review finding(s) — triage them in the PR thread before calling this published: ${blocking.join('; ')}`,
+    );
+  }
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {

@@ -927,7 +927,7 @@ test('PR wait fails loudly when GitHub reports a different head than the atteste
   );
 });
 
-function makePublisherFixture({ existingPr, pushFails = false }) {
+function makePublisherFixture({ existingPr, pushFails = false, reviewComments = '[]' }) {
   const calls = [];
   let listCount = 0;
 
@@ -966,6 +966,9 @@ function makePublisherFixture({ existingPr, pushFails = false }) {
       (args[0] === 'api' && args[1] === '--method' && args[2] === 'POST')
       || (args[0] === 'pr' && ['create', 'ready'].includes(args[1]))
     )) return '';
+    if (executable === 'gh' && args[0] === 'api' && String(args[1]).includes('/comments')) {
+      return reviewComments;
+    }
     throw new Error(`Unexpected mock command: ${executable} ${args.join(' ')}`);
   }
 
@@ -1029,6 +1032,29 @@ test('publisher restores draft state when the push fails after marking ready', a
   );
   assert.ok(readyIndex >= 0 && readyIndex < pushIndex, 'PR marked ready before the push attempt');
   assert.ok(undoIndex > pushIndex, 'failed push must return the PR to draft');
+});
+
+test('publisher surfaces inline review findings and blocks on live P0/P1 badges', async () => {
+  const badge = severity =>
+    `<img alt="${severity}" src="https://greptile-static-assets.s3.amazonaws.com/badges/${severity.toLowerCase()}.svg?v=9"> **Finding**`;
+  const blocked = makePublisherFixture({
+    existingPr: true,
+    reviewComments: JSON.stringify([
+      { position: 3, path: 'a.mjs', line: 10, body: 'style nit, no badge' },
+      { position: null, path: 'b.mjs', original_line: 20, body: badge('P1') },
+      { position: 7, path: 'c.mjs', line: 30, body: badge('P1') },
+    ]),
+  });
+  await assert.rejects(publishPr([], blocked.dependencies), /live P0\/P1 review finding.*c\.mjs:30/s);
+
+  const advisory = makePublisherFixture({
+    existingPr: true,
+    reviewComments: JSON.stringify([
+      { position: 3, path: 'a.mjs', line: 10, body: 'style nit, no badge' },
+      { position: null, path: 'b.mjs', original_line: 20, body: badge('P1') },
+    ]),
+  });
+  await publishPr([], advisory.dependencies);
 });
 
 test('publisher creates new PRs as non-draft after pushing the attested head', async () => {

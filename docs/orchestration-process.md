@@ -342,6 +342,10 @@ pushed SHA. It fails loudly on head drift or a required check that reports a
 SKIPPED conclusion; a required check GitHub never posts at all surfaces as the
 wait timeout instead. Treat either as a defect to report; never close/reopen a
 PR, rerun Actions, re-request Greptile, or toggle labels to manufacture events.
+After checks pass, the wrapper prints every inline review comment and refuses
+success while a live P0/P1-badged finding exists: a green review status is not
+review completion — the paid review's findings must be triaged in the PR
+thread, by every harness, before the publish counts as done.
 
 On failure, return the evidence to the owning lane. Make at most the one
 already-authorized evidence-driven corrective commit, gate the new exact head,

@@ -197,6 +197,39 @@ describe('createSubagentTool', () => {
     });
   });
 
+  it('threads a requested role through the spawn surface (7ym.2)', async () => {
+    const port = createPort();
+    const tool = createSubagentTool(port);
+
+    await tool.execute('call-role', {
+      action: 'spawn',
+      name: 'inspect',
+      task: 'inspect runtime state',
+      role: '  researcher  ',
+    });
+
+    expect(port.spawn).toHaveBeenCalledWith(expect.objectContaining({ role: 'researcher' }));
+  });
+
+  it('omits role from the spawn request when none is provided (7ym.2)', async () => {
+    const port = createPort();
+    const tool = createSubagentTool(port);
+
+    await tool.execute('call-no-role', {
+      action: 'spawn',
+      name: 'inspect',
+      task: 'inspect runtime state',
+    });
+
+    expect((port.spawn as ReturnType<typeof vi.fn>).mock.calls[0]?.[0]).not.toHaveProperty('role');
+  });
+
+  it('exposes role as an optional parameter on the spawn schema (7ym.2)', () => {
+    const tool = createSubagentTool(createPort());
+    const parameterSchema = tool.parameters as { properties: Record<string, unknown> };
+    expect(parameterSchema.properties).toHaveProperty('role');
+  });
+
   it('does not expose memory-write elevation on the model-facing spawn surface (c7d)', async () => {
     const port = createPort();
     const tool = createSubagentTool(port);

@@ -246,6 +246,7 @@ the first missing one — the required set is verified in
 - `fleet-auth.json` — conditional: required only when cluster human-auth is
   enabled, and must be **absent** otherwise (`PSFN_FLEET_AUTH`; see
   [Optional Surface Wiring](#cluster-authenticated-browser-origin)).
+- `subagent-roles.json` (optional; absent ⇒ no subagent roles configured. Defines named subagent role profiles — researcher, reviewer, implementer, awaiter, observer — layered over inherited companion identity. A malformed file fails closed at load.)
 
 `channels.json` is also system-owned but is **not** a fail-closed startup owner:
 it has no seed file, loads safe defaults when absent, and is created or updated
@@ -302,6 +303,8 @@ Startup verifies the seed-backed owner files before the split runtime comes up. 
    cp config/backup.seed.json ./data/backup.json
    cp config/skills.seed.json ./data/skills.json
    cp config/partner-affect-shadow.seed.json ./data/partner-affect-shadow.json
+   # Optional: named subagent role profiles (absent ⇒ no roles configured).
+   cp config/subagent-roles.seed.json ./data/subagent-roles.json
    ```
 
    Then provide the mandatory fleet manifest. `config/companions.seed.json` ships

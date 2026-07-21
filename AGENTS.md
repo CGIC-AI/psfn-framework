@@ -217,6 +217,42 @@ Expanded meaning in this repo:
 
 The point is to get work DONE and shipped, then iterate — not to polish in place. The full wave protocol (roles, lane tables, branch shape, review/remediation loop, fix epics, validation separation, push policy) is **[`docs/orchestration-process.md`](./docs/orchestration-process.md)** — the operating contract for multi-agent implementation waves. Summary of the load-bearing rules:
 
+For every multi-PR wave, use this order:
+
+1. Run `npm run gate:canary` from a clean checkout exactly at `origin/main`
+   before branch fanout. It fetches first; unconditionally runs CI rules, lint,
+   build, typecheck, repository hygiene, Semgrep rules, and tests; and logs why
+   empty-diff change-budget, Semgrep-diff, and UBS stages skip. Its
+   `kind: 'canary'` attestation under `.git/local-delivery-gate/` records the
+   base SHA, gate version, and timestamp. A red canary stops the wave; fix
+   `main` first.
+2. Run `npm run prewarm` once per wave (and after a lockfile change), then use
+   the canary-attested base for the feature branch and that feature branch for
+   each lane. Run `npm ci --offline --ignore-scripts` in every new worktree. Use
+   `npm run prewarm -- --check` to verify without warming; never share
+   `node_modules` or `dist` between worktrees.
+3. Let lock-free PREFLIGHT phases (CI rules, change budget, lint,
+   build/typecheck, repository hygiene, Semgrep/UBS, settings/supply-chain, and
+   deployment contracts) run concurrently. Full-test HEAVY phases queue
+   automatically on the machine-wide
+   `<os-tmpdir>/psfn-local-gate-heavy.lock`; `meta.json` names the PID,
+   worktree, command, and ISO start time. Read the 15-second holder diagnostics
+   and never remove a lock whose named PID is alive. The gate reclaims a
+   provably dead PID under a reap mutex and a metadata-free orphan after a
+   10-second grace period.
+4. Give verified P0/P1 blockers one scoped remediation pass and re-verify only
+   the fixed items. Nonblocking observations go only in the wave handoff, never
+   in new mid-wave beads.
+5. Commit exact heads and run `npm run gate:pre-pr` per branch. Passing stage
+   records under `.git/local-delivery-gate/stages/<head>/` are reusable only for
+   the same head, base, gate version, and command; failed stages write no pass
+   record, and the whole-gate attestation appears only after all stages pass.
+   After any base change, rebase rather than merge, then rerun the gate.
+6. Run `npm run pr:publish` for each PR. It makes an existing draft ready before
+   pushing (new PRs are non-draft), pushes only the attested head, and fails if
+   CI or Greptile skips or targets a SHA other than the pushed head. Do not use
+   close/reopen workarounds for skipped checks.
+
 - **Roles**: Codex (`gpt-5.6-sol`, xhigh) is the primary implementer; Opus 4.8 (high) and the Pi agent (GLM 5.2, xhigh) are the two adversarial reviewer lanes; the orchestrator plans, dispatches, synthesizes, and integrates but does not implement or bulk-read code. Claude-side tool wiring lives in CLAUDE.md.
 - **Adversarial review**: reviewer lanes review the same immutable commit range independently and blind to each other, prompted to refute with concrete failure scenarios. The orchestrator dedupes and **independently verifies every claimed blocker** against the Blocking Risk Standard before remediation — reviewers systematically over-grade severity.
 - **Bounded loop**: implement → reviews → **one remediation pass** (verified IMPORTANT/P0-P1 findings only) → one final check → move on. No successive review/remediation cycles.
@@ -230,7 +266,7 @@ The point is to get work DONE and shipped, then iterate — not to polish in pla
 Keep changes reviewable. A large initiative is not a reason to ship a branch
 dump.
 
-- Normal PR target: at most 12 files, 800 counted changed lines, and 5 commits.
+- Normal PR target: at most 25 files, 1,500 counted changed lines, and 5 commits.
 - Hard PR limit: 25 files, 2,000 counted changed lines, or 8 commits.
 - Hard per-commit limit: 15 files or 800 counted changed lines.
 - Each commit must be one coherent change. Do not mix unrelated beads,
@@ -252,6 +288,13 @@ The `change-budget:exception` label is maintainer-only in intent. It requires a
 non-empty `## Change-budget exception` PR section and is only for an indivisible
 generated migration, pure rename, atomic cross-interface change, or reviewed
 integration rollup. It is not for a feature wave that should be split.
+
+The change-budget check reads that label and rationale from the open PR through
+authenticated `gh` when available. Offline runs must provide the explicit
+inputs documented in `scripts/ci/check-change-budget.mjs`; missing evidence
+fails closed. Base-only merge history is excluded from the PR-owned files,
+lines, and commit counts, while novel merge-conflict resolutions still count.
+Wave branches still rebase rather than merge when their base changes.
 
 All repository changes go through a PR. Never push directly to `main`. Before
 merge, wait for the stable `ci-required` job to pass on the exact PR head:
@@ -344,11 +387,21 @@ Common expectations:
 - `npm run verify:repository-hygiene` for repo-surface changes
 - smoke or reachability verification for new runtime wiring
 
-During implementation, run targeted tests and changed-file lint locally. Do not
-repeat full-repository lint, build, hygiene, or test suites in every worktree;
-GitHub owns those broad gates. `npm run lint:changed -- --base <integration-base>`
-is mandatory before pushing tracked code. If changed-file lint cannot run, stop
-and surface the blocker instead of silently skipping it.
+Integration-test timeout overrides must be registered in
+`src/test-support/integration-timeout-registry.json`; the convention test rejects
+unregistered or drifted overrides. Measured entries require at least 2x headroom
+over their recorded baseline, while inherited entries stay pinned as measurement
+debt. Never bump a timeout reactively: measure, record the baseline, then set at
+least 2x margin. `PSFN_TEST_TIMINGS=1` prints instrumented per-phase timings on
+success; failures print them unconditionally.
+
+During implementation, run targeted tests and changed-file lint locally. Before
+publishing, `npm run gate:pre-pr` owns the required broad PREFLIGHT and full-test
+HEAVY stages; stage reuse avoids repeating passed work. Do not run duplicate
+broad suites outside that gate in every worktree.
+`npm run lint:changed -- --base <integration-base>` is mandatory before pushing
+tracked code and is enforced by gate preflight. If changed-file lint or the gate
+cannot run, stop and surface the blocker instead of silently skipping it.
 
 No worker or sub-agent may mark a bead done or ask for integration until
 changed-file lint and the targeted tests pass in its worktree. Do not close the
@@ -399,6 +452,9 @@ Use parallel streams only when the dependency graph supports it. Prefer up to th
 
 ### Standard parallel loop
 
+Before selecting lanes for a multi-PR wave, complete Delivery Loop steps 1-2:
+the clean-main canary and dependency prewarm. Then:
+
 1. Select the next highest-priority ready beads that are safe to run in parallel.
 2. Create one worktree per selected bead or stream.
 3. Spawn at most one sub-agent per worktree and give it explicit ownership of its bead, files, and validation scope.
@@ -438,20 +494,24 @@ Required sequence:
 1. File issues for remaining follow-up work.
 2. Run quality gates appropriate to the change.
    Changed-file lint and targeted tests are mandatory locally for tracked code;
-   broad gates run in GitHub CI.
+   `npm run gate:pre-pr` owns the broad local PREFLIGHT and HEAVY stages before
+   publication, while GitHub verifies the published exact SHA.
 3. Update bead status.
 4. Commit bead database state to the local shared Dolt server:
    ```bash
    bd dolt commit --json
    ```
-5. Push git state:
+5. Rebase and validate the exact git state:
    ```bash
    git pull --rebase
-   git push
+   npm run gate:pre-pr
    git status
    ```
-6. Open or update the PR, then wait for `gh pr checks <number> --watch`.
-   Do not merge or close the bead unless `ci-required` passes.
+6. Open or update the PR only through `npm run pr:publish` (pass `--title` and
+   `--body-file` after `--` for a new PR). It handles ready-before-push ordering
+   and waits for CI and Greptile on the exact attested SHA. Do not merge or close
+   the bead unless the required checks pass; SHA drift or a skipped check is a
+   defect, not a reason to close/reopen the PR.
 7. Push bead state only if a Dolt remote is actually configured:
    ```bash
    bd dolt remote list --json

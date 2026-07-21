@@ -70,13 +70,42 @@ $HOME/ai/dev/worktrees/psfn-framework/
 Typical setup:
 
 ```bash
+git fetch origin main
+git switch --detach origin/main
+npm run gate:canary
+npm run prewarm
 git worktree add -b feat/<epic> <feature-worktree> <approved-base>
 git worktree add -b work/<epic>-<bead> <bead-worktree> feat/<epic>
+# In each new feature/bead worktree:
+npm ci --offline --ignore-scripts
 ```
+
+Use the canary-attested base SHA as `<approved-base>`; every lane then starts
+from the resulting feature branch.
+
+The clean-main canary is mandatory before any multi-PR wave fans out. It fetches
+first, refuses a dirty tree or a checkout that is not exactly `origin/main`, and
+runs the whole-repository `ci-rules`, lint, build, typecheck,
+repository-hygiene, Semgrep-rules, and test gates. Empty-diff checks
+(`change-budget`, `semgrep-diff`, and UBS) skip with a logged reason. A passing
+run records a `kind: 'canary'` attestation containing the base SHA, gate version,
+and timestamp under `.git/local-delivery-gate/`. A red canary stops the wave:
+fix `main` before creating branches or worktrees. This prevents baseline defects
+or a gate-version change from invalidating every branch attestation after fanout.
+
+Run `npm run prewarm` once per wave, and again after any lockfile change. It
+populates the shared npm cache, proves the cache with an offline install, and
+attests the result by lockfile hash. `npm run prewarm -- --check` verifies the
+attestation and cache without warming. Never share `node_modules` or `dist`
+between worktrees; install each worktree with
+`npm ci --offline --ignore-scripts` (normally about 15 seconds after prewarm).
 
 A bead is an ownership boundary, not automatically a paid PR boundary. Batch compatible small beads into one coherent unit; do not buy a standalone Greptile review for a routine tiny patch when it can safely join the next unit. Target at most 25 files, 1,500 counted changed lines, and 5 commits; the hard limits remain 25 files, 2,000 lines, and 8 commits. Do not mix unrelated work or pad a diff.
 
-When a coherent feature completes its final check, publish it the same session through `gh gated-pr`. An independent lane validates the exact head and uses GitHub's rebase merge after `ci-required` and `Greptile Review` pass. Do not squash or create merge commits. Live deployment remains operator-driven.
+When a coherent feature completes its final check, publish it the same session
+through `npm run pr:publish`. An independent lane validates the exact head and
+uses GitHub's rebase merge after `ci-required` and `Greptile Review` pass. Do not
+squash or create merge commits. Live deployment remains operator-driven.
 
 ## Parallel Work Format
 
@@ -91,6 +120,40 @@ Track the live wave in this format:
 | C | `<bead-id>` | `<path>` | `feat/<name>` | `<base>@<sha>` | implementation/review/remediation/validation | `<sha>` | `<specific next action>` |
 
 When a lane finishes, immediately assign the next ready independent bead. A difficult bead must not monopolize the worker pool.
+
+Preflight work may fan out concurrently across all worktrees. The full test
+suite is the heavy phase and queues automatically on the machine-wide gate lock,
+including against unrelated sessions on the same host. Read the 15-second waiter
+diagnostics before treating a queued lane as hung; do not manually serialize
+lanes or delete a lock held by a live PID.
+
+## Canonical Multi-PR Wave
+
+Use this order for every multi-PR implementation wave, including a two-PR wave:
+
+1. In a clean checkout exactly at `origin/main`, run `npm run gate:canary`.
+   Record its base SHA and gate version. Any failure stops fanout; repair `main`
+   and rerun the canary first.
+2. Run `npm run prewarm` once for the wave (or after a lockfile change), create
+   the feature branch from the canary-attested base and each lane from that
+   feature branch, and run
+   `npm ci --offline --ignore-scripts` in every new worktree. Use
+   `npm run prewarm -- --check` when only verification is needed.
+3. Implement the independent lanes. Their lock-free PREFLIGHT stages may run
+   concurrently; their full-test HEAVY stages queue on the machine-wide lock.
+   Follow the waiter diagnostics and never remove a live holder's lock.
+4. Independently verify review claims. Only verified P0/P1 blockers receive one
+   scoped remediation pass, followed by re-verification of those fixed items
+   only. Put nonblocking observations in the wave handoff; never turn them into
+   beads mid-wave.
+5. Commit each exact branch head and run `npm run gate:pre-pr`. A rerun reuses
+   passed stages for that exact head, base, gate version, and command. After any
+   base change, rebase rather than merge, then rerun the gate; an attestation
+   minted for the old base cannot be reused.
+6. Publish each ready PR with `npm run pr:publish` (for a new PR, pass its title
+   and body file after `--`). The publisher makes an existing draft ready before
+   pushing, creates a new PR as non-draft, pushes only the attested head, and
+   waits for CI and Greptile on that exact SHA.
 
 ## Standard Bead Loop
 
@@ -204,13 +267,102 @@ Record validation results on the validation bead. Do not rewrite implementation 
 
 ## Local Gate, Publication, and Failure Handback
 
-Run `npm ci && npm run hooks:install` once per worktree. Before any push, fetch and rebase, commit a clean exact head, then run `npm run gate:pre-pr`. The gate always runs delivery-rule tests, budget, changed-file lint, Semgrep diff scanning, and changed-file UBS. It adds full root gates only for root runtime/build-graph or root lockfile changes, and otherwise adds only path-specific workflow, UI, deployment, settings, supply-chain, or Semgrep-rule checks. Its attestation is valid only for the exact head and base; the pre-push hook blocks missing or stale attestations, direct `main`, and recursion. Never use `--no-verify`.
+Install dependencies in a prewarmed worktree with
+`npm ci --offline --ignore-scripts`, then run `npm run hooks:install` once. Before
+any push, fetch, rebase rather than merge, commit a clean exact head, and run
+`npm run gate:pre-pr`. Never use `--no-verify`.
 
-Publish only with `gh gated-pr --title "<title>" --body-file <path>`. It pushes the attested head, publishes an authenticated exact-base commit status, and waits for `ci-required` plus `Greptile Review`. GitHub uses one complementary delta runner and one status aggregator; drafts allocate no runners, labels do not retrigger CI, local lint/Semgrep/UBS are not repeated, and the full repository product/Postgres suite never runs remotely.
+### Gate phases and machine-wide heavy lock
 
-On failure, the publisher returns evidence to the owning lane. Make at most one evidence-driven corrective commit and publish the new exact head once. Never rerun Actions, re-request Greptile, toggle labels to manufacture events, or start another review/fix loop. A second failure is an operator-visible blocker. Keep stable checkpoints green and push them through the hook; never force-push or rewrite a shared branch.
+The local gate has two phases:
 
-Bead state remains on the authoritative local Dolt server. Run `bd dolt commit --json`; only push Dolt state when a real remote is configured and the operator has authorized it.
+- **PREFLIGHT** runs first without a lock and may run concurrently in every
+  worktree. It covers CI rules, change budget, lint, build and typecheck,
+  repository hygiene, Semgrep and UBS, settings and supply-chain checks, and
+  deployment contracts.
+- **HEAVY** runs the full test suite and serializes across the whole machine on
+  the directory `<os-tmpdir>/psfn-local-gate-heavy.lock`. Its `meta.json` names
+  the holder PID, worktree, command, and ISO start time. Waiters print the holder
+  diagnostics every 15 seconds.
+
+External sessions on the same host participate in the same lock, so operators
+do not need to serialize them by hand. A stale lock whose PID is provably dead
+is reclaimed automatically under a reap mutex. A lock without metadata is
+reclaimed only after a 10-second orphan grace period. Never delete the lock
+directory manually while the named PID is alive; check waiter diagnostics before
+assuming the gate is hung.
+
+### Exact-stage attestations and reruns
+
+Each successful gate stage writes a record beneath
+`.git/local-delivery-gate/stages/<head>/`, keyed by the exact head, base, gate
+version, and command. Failed stages write no passing record. A rerun with the
+same four inputs reuses the stages that passed and runs only failed or missing
+stages, so a partial failure does not discard completed work. A different head,
+base, gate version, or command cannot reuse the record, and the tooling cannot
+bless a head that did not run. The whole-gate attestation is written only after
+every required stage passes.
+
+The pre-push hook rejects a missing or stale whole-gate attestation, a push from
+`main`, and hook recursion. After any base update, rebase the branch and rerun
+the gate. The wave canary's recorded base and gate version make stale branch
+attestations visible immediately.
+
+### Change-budget inputs
+
+When authenticated `gh` access is available, the change-budget check reads the
+exception label and the required PR-body rationale from the open PR. Offline
+operation must supply the explicit inputs documented in the header of
+`scripts/ci/check-change-budget.mjs`; missing evidence fails closed, and the
+budget is never silently skipped.
+
+The calculation measures the PR-owned delta. Commits that only merge the current
+base into a branch do not count toward its files, lines, or commit budget, so
+normal base integration needs no misleading exception prose. Novel conflict
+resolution introduced by such a merge still counts. Wave branches must
+nevertheless rebase rather than merge when their base changes.
+
+### Ready-before-push publication
+
+Publish only with the tracked wrapper. For a new PR:
+
+```bash
+npm run pr:publish -- --title "<title>" --body-file <path>
+```
+
+For an already-open PR whose title and body do not need changes, run
+`npm run pr:publish`. The wrapper marks an existing draft ready **before** it
+pushes the attested head; it creates a new PR as non-draft. Never push while the
+PR is draft, because draft synchronizations receive no CI and Greptile skips
+them.
+
+The wrapper pushes only the attested head, publishes its authenticated
+exact-base status, and verifies that both CI and Greptile target exactly that
+pushed SHA. It fails loudly on head drift or a skipped required check. Treat a
+skip as a defect to report; never close/reopen a PR, rerun Actions, re-request
+Greptile, or toggle labels to manufacture events.
+
+On failure, return the evidence to the owning lane. Make at most the one
+already-authorized evidence-driven corrective commit, gate the new exact head,
+and publish it once. A second failure is an operator-visible blocker. Keep stable
+checkpoints green; never force-push or rewrite a shared branch.
+
+Bead state remains on the authoritative local Dolt server. Run
+`bd dolt commit --json`; only push Dolt state when a real remote is configured
+and the operator has authorized it.
+
+## Slow-Test Timing and Timeout Margins
+
+Every integration test with an explicit timeout override must be registered in
+`src/test-support/integration-timeout-registry.json`. The convention test fails
+when an override is unregistered or has drifted from its entry. A measured entry
+must preserve at least 2x headroom over its recorded baseline; inherited entries
+remain pinned as measurement debt.
+
+Never raise a timeout reactively. Measure the slow path, record the baseline,
+then set a margin of at least 2x. Set `PSFN_TEST_TIMINGS=1` to print the
+instrumented suites' per-phase timings on successful runs; failures always print
+those timings.
 
 ## Integration
 
@@ -219,7 +371,8 @@ After the final check:
 1. The orchestrator merges the bead branch into the feature branch.
 2. The orchestrator resolves conflicts once, preserving both feature intents without inventing new behavior.
 3. A worker validates the integrated branch with focused tests and the exact-head local gate.
-4. Publish the coherent branch through `gh gated-pr` and wait for both required checks.
+4. Publish the coherent branch through `npm run pr:publish`; the wrapper waits
+   for both required checks on the exact pushed SHA.
 5. An independent lane validates and rebase-merges the PR.
 6. Close implementation beads with commit, source, local-gate, PR-head, external-check, and merge evidence; route remaining IMPORTANT defects to the fixes epic.
 7. Assign the next ready bead.

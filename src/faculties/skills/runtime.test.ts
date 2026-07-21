@@ -247,6 +247,7 @@ describe('skills runtime', () => {
       expect(runtime.getSkillUsageStats('memory-management')).toEqual(stats);
       expect(runtime.listSkillUsageStats()).toHaveLength(1);
 
+      runtime.flushSkillUsageTelemetry();
       const persisted = readFileSync(join(dataDir, SKILL_USAGE_TELEMETRY_FILE_NAME), 'utf-8');
       expect(persisted).toContain('"invocationCount": 2');
       expect(persisted).not.toContain('Sensitive workflow body');

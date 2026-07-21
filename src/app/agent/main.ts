@@ -90,7 +90,6 @@ import {
   wireShardAndThinkRuntime,
 } from '../startup/composition/composition.js';
 import { createPreToolHookGate } from '../../boundary/gateway/pre-tool-hook.js';
-import { buildShellExecPolicyConfig } from '../../boundary/sandbox/execution/shell-policy-config.js';
 import {
   buildCharacterPromptVariablesProvider,
   buildReplConfig,

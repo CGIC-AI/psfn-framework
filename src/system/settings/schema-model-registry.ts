@@ -378,8 +378,8 @@ const MODEL_REGISTRY_PROMPT_CACHE_SCOPES = new Set<PromptCacheScope>(['channel',
 /**
  * Registry-wide provider prompt-caching policy (E2.4). Fail-closed: `enabled`
  * must be an explicit boolean, and retention/scope must be canonical values
- * when present. The seed default is `{ "enabled": false }`; the operator flips
- * it after verifying cache engagement on a test channel.
+ * when present. When the key is absent entirely the registry defaults to
+ * enabled — see `defaultModelRegistryPromptCachingPolicy`.
  */
 function normalizeModelRegistryPromptCachingPolicy(
   value: unknown,
@@ -421,6 +421,27 @@ function normalizeModelRegistryPromptCachingPolicy(
     ...(retention ? { retention } : {}),
     ...(scope ? { scope } : {}),
   };
+}
+
+/**
+ * Compatibility default for a registry with no `promptCaching` key at all.
+ *
+ * Prompt caching shipped after models.json was already deployed, and the seed
+ * (`config/models.seed.json`, `promptCaching.enabled: true`) only reaches fresh
+ * installs — an existing owner file is never rewritten by it. Treating absence
+ * as "off" therefore stranded every already-deployed companion uncached until
+ * someone hand-edited the file, so absence now means enabled.
+ *
+ * Only absence defaults: an explicit `{ "enabled": false }` still disables
+ * caching, because an operator's recorded choice always beats a default.
+ *
+ * `retention`/`scope` are deliberately left unset so the routing defaults
+ * (`short`/`channel` in `resolveGlobalPromptCachePolicy`) stay the single
+ * source of truth for lifetime and session keying — and so the default can
+ * never land on retention `none`, which the turn path reports as `disabled`.
+ */
+function defaultModelRegistryPromptCachingPolicy(): ModelRegistryPromptCachingPolicy {
+  return { enabled: true };
 }
 
 function normalizeModelRegistryEntry(value: unknown, fieldPath: string): ModelRegistryEntry {
@@ -551,7 +572,7 @@ export function normalizeCanonicalModelRegistry(
     : undefined;
   const promptCaching = value.promptCaching !== undefined
     ? normalizeModelRegistryPromptCachingPolicy(value.promptCaching, `${sourcePath}.promptCaching`)
-    : undefined;
+    : defaultModelRegistryPromptCachingPolicy();
 
   const seenIds = new Set<string>();
   const models = value.models.map((entry, index) => {
@@ -589,7 +610,9 @@ export function normalizeCanonicalModelRegistry(
     schemaVersion: 1,
     models,
     ...(budgetPolicy ? { budgetPolicy } : {}),
-    ...(promptCaching ? { promptCaching } : {}),
+    // Always present: absent input is defaulted above, so the normalized
+    // registry states the effective caching policy rather than implying it.
+    promptCaching,
   };
 }
 

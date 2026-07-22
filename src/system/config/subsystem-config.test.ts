@@ -69,6 +69,9 @@ describe('subsystem config round-trip', () => {
         monthlyUsdLimit: 60,
         currency: 'USD',
       },
+      // Stated explicitly: this test is about drift, not about the absent-key
+      // caching default (covered by the promptCaching round-trip test below).
+      promptCaching: { enabled: true },
       models: [
         {
           id: 'primary',
@@ -162,9 +165,26 @@ describe('subsystem config round-trip', () => {
     expect(loadModelsConfig(dataDir, { defaultContextWindow: 128_000 }).modelRegistry.promptCaching)
       .toEqual({ enabled: true, retention: 'long', scope: 'channel' });
 
-    // Absent policy stays absent (default OFF; no silent defaulting).
+    // Absent policy defaults ON, with retention/scope left to the routing
+    // defaults. Registries predating prompt caching carry no key at all, and
+    // the seed never rewrites a deployed owner file — absence must not mean off.
     const withoutPolicy = saveModelsConfig(dataDir, base, { defaultContextWindow: 128_000 });
-    expect(withoutPolicy.modelRegistry.promptCaching).toBeUndefined();
+    expect(withoutPolicy.modelRegistry.promptCaching).toEqual({ enabled: true });
+    // The default materializes on save and then round-trips byte-stably.
+    expect(readJsonFile(join(dataDir, MODELS_FILE_NAME)))
+      .toEqual({ ...base, promptCaching: { enabled: true } });
+    expect(loadModelsConfig(dataDir, { defaultContextWindow: 128_000 }).modelRegistry.promptCaching)
+      .toEqual({ enabled: true });
+
+    // An explicit operator opt-out is never overridden by the default.
+    const disabled = saveModelsConfig(
+      dataDir,
+      { ...base, promptCaching: { enabled: false } },
+      { defaultContextWindow: 128_000 },
+    );
+    expect(disabled.modelRegistry.promptCaching).toEqual({ enabled: false });
+    expect(loadModelsConfig(dataDir, { defaultContextWindow: 128_000 }).modelRegistry.promptCaching)
+      .toEqual({ enabled: false });
 
     // Fail-closed validation.
     expect(() => saveModelsConfig(dataDir, { ...base, promptCaching: { enabled: 'maybe' } }, { defaultContextWindow: 128_000 }))

@@ -284,8 +284,11 @@ export interface GlobalPromptCachePolicy {
 
 /**
  * Resolve the registry-wide promptCaching policy (models.json owner, E2.4).
- * Returns null when the flag is off or absent — the default: no provider
- * request carries any cache parameter.
+ * Returns null only when the operator explicitly disabled it — then no
+ * provider request carries any cache parameter. A registry loaded through the
+ * normalizer always carries an explicit policy (absence defaults to enabled);
+ * the `?.` guard covers hand-built SubstrateConfig objects that never passed
+ * through it, and stays fail-safe-to-off for those.
  */
 export function resolveGlobalPromptCachePolicy(config: SubstrateConfig): GlobalPromptCachePolicy | null {
   const policy = config.modelRegistry?.promptCaching;

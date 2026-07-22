@@ -1380,11 +1380,13 @@ export interface ModelRegistryEntry {
 /**
  * Registry-wide provider prompt-caching policy (models.json owner, E2.4).
  *
- * `enabled` is the master switch and seeds ON (the shipped models.seed.json
- * default): the operator can flip it to false to fully disable provider
- * caching. When disabled, no provider request carries any cache parameter
- * (zero wire change). When
- * enabled, per-provider serializers engage the mechanism the pi-ai layer
+ * `enabled` is the master switch and defaults ON: the shipped
+ * models.seed.json sets it for fresh installs, and the registry normalizer
+ * defaults an ABSENT key to enabled so registries written before caching
+ * shipped are not stranded off. The operator can flip it to false to fully
+ * disable provider caching — an explicit false is never overridden. When
+ * disabled, no provider request carries any cache parameter (zero wire
+ * change). When enabled, per-provider serializers engage the mechanism the pi-ai layer
  * actually supports (Anthropic cache_control breakpoints at PromptPlan
  * boundaries, OpenRouter anthropic cache_control passthrough, OpenAI
  * responses prompt_cache_key; byte-stable-prefix-only providers get telemetry

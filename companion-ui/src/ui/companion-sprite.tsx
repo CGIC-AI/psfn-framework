@@ -94,6 +94,7 @@ function CssFace() {
 export function CompanionSprite({
   animated,
   label,
+  mouthOpen = false,
   onHeadpat,
   petted,
   state,
@@ -104,6 +105,8 @@ export function CompanionSprite({
 }: {
   animated: boolean;
   label: string;
+  /** v1 amplitude lipsync: open the mouth while the companion speaks. */
+  mouthOpen?: boolean;
   onHeadpat: () => void;
   petted: boolean;
   state: SpriteState;
@@ -133,7 +136,7 @@ export function CompanionSprite({
 
   return (
     <button
-      className={`companion-sprite ${state} ${animated ? 'animated' : 'static'} ${petted ? 'petted' : ''} ${hasSprite ? 'sprite-art' : 'sprite-css'}`}
+      className={`companion-sprite ${state} ${animated ? 'animated' : 'static'} ${petted ? 'petted' : ''} ${mouthOpen ? 'mouth-open' : ''} ${hasSprite ? 'sprite-art' : 'sprite-css'}`}
       type="button"
       aria-label={`Give ${label} a headpat; currently ${state}`}
       title={`Give ${label} a headpat`}

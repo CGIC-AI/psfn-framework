@@ -6,7 +6,31 @@ import {
 } from 'react';
 import type { AttachmentKind, MicMode, PendingAttachment } from './types.js';
 
-export function useComposerController() {
+/**
+ * Live browser-voice capability, derived by the app from the negotiated
+ * session ceiling. `captureReady` gates outbound mic capture (the capture
+ * pipeline is tracked separately); `playbackReady` reflects the
+ * `streamed_audio` output ceiling that drives spoken-reply playback + lipsync.
+ */
+export interface VoiceCapability {
+  readonly captureReady: boolean;
+  readonly playbackReady: boolean;
+}
+
+const NO_VOICE_CAPABILITY: VoiceCapability = { captureReady: false, playbackReady: false };
+
+export function buildVoiceNotice(mode: MicMode, capability: VoiceCapability): string {
+  const label = mode === 'dictation' ? 'Dictation' : 'Voice chat';
+  if (capability.captureReady) {
+    return `${label} capture is active.`;
+  }
+  const playback = capability.playbackReady
+    ? ' Spoken replies from your companion still play back with mouth movement.'
+    : '';
+  return `${label} capture is not wired in this build yet, so text remains the source of truth.${playback}`;
+}
+
+export function useComposerController(voice: VoiceCapability = NO_VOICE_CAPABILITY) {
   const [input, setInput] = useState('');
   const [attachmentMenuOpen, setAttachmentMenuOpen] = useState(false);
   const [micMode, setMicMode] = useState<MicMode>('dictation');
@@ -40,9 +64,7 @@ export function useComposerController() {
   function toggleMic() {
     setMicActive((value) => {
       const next = !value;
-      setVoiceNotice(next
-        ? `${micMode === 'dictation' ? 'Dictation' : 'Voice chat'} capture is selected. Browser audio capture is not wired to the hub yet, so text remains the source of truth.`
-        : null);
+      setVoiceNotice(next ? buildVoiceNotice(micMode, voice) : null);
       return next;
     });
   }

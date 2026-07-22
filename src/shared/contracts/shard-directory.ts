@@ -19,7 +19,7 @@ export class ShardDirectoryDeniedError extends Error {
 }
 
 export class ShardDirectoryOperationalError extends Error {
-  readonly cause: unknown;
+  override readonly cause: unknown;
 
   constructor(cause: unknown) {
     super('Shard directory operation failed');

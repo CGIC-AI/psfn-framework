@@ -9,8 +9,9 @@ import {
 } from '../../test-support/postgres-test-harness.js';
 import { createPostgresMemoryStoreFromPool } from './postgres-store.js';
 import {
-  L2_EMBEDDING_ANN_INDEX_NAME,
+  buildL2EmbeddingAnnIndexConcurrently,
   embeddingAnnOrderExpression,
+  l2EmbeddingAnnIndexName,
 } from './postgres-store/embedding-index.js';
 import { MEMORY_SUBJECT_SELECT_COLUMNS } from './postgres-store/subject-queries.js';
 import { buildMemorySubjectAuthorizationPredicate } from './postgres-store/subject-policy.js';
@@ -1648,10 +1649,10 @@ describe('postgres memory store ANN embedding search (a27w.2)', () => {
 
   it('creates the HNSW cosine ANN index for the runtime embedding dimension', async () => {
     await withMemoryDatabase(async (pool) => {
-      await createPostgresMemoryStoreFromPool(pool, 4);
+      await createPostgresMemoryStoreFromPool(pool, 4, { awaitAnnIndexBuild: true });
       const index = await pool.query<{ indexdef: string }>(
         `SELECT indexdef FROM pg_indexes WHERE indexname = $1 AND schemaname = current_schema()`,
-        [L2_EMBEDDING_ANN_INDEX_NAME],
+        [l2EmbeddingAnnIndexName(4)],
       );
       expect(index.rows).toHaveLength(1);
       expect(index.rows[0]?.indexdef).toContain('USING hnsw');
@@ -1662,7 +1663,7 @@ describe('postgres memory store ANN embedding search (a27w.2)', () => {
 
   it('EXPLAIN shows raw semantic search using the HNSW ANN index', async () => {
     await withMemoryDatabase(async (pool) => {
-      await createPostgresMemoryStoreFromPool(pool, 4);
+      await createPostgresMemoryStoreFromPool(pool, 4, { awaitAnnIndexBuild: true });
       await bulkSeedNearMemories(pool, 500);
       await pool.query('ANALYZE l2_memories');
       const orderExpr = embeddingAnnOrderExpression('embedding', '$1', 4);
@@ -1677,13 +1678,13 @@ describe('postgres memory store ANN embedding search (a27w.2)', () => {
         LIMIT $3
       `;
       const plan = await explainPlan(pool, sql, [embeddingLiteral([...QUERY_VECTOR]), -1, 200]);
-      expect(plan).toContain(L2_EMBEDDING_ANN_INDEX_NAME);
+      expect(plan).toContain(l2EmbeddingAnnIndexName(4));
     });
   }, INTEGRATION_TIMEOUT_MS);
 
   it('EXPLAIN shows subject-authorized semantic search using the HNSW ANN index', async () => {
     await withMemoryDatabase(async (pool) => {
-      await createPostgresMemoryStoreFromPool(pool, 4);
+      await createPostgresMemoryStoreFromPool(pool, 4, { awaitAnnIndexBuild: true });
       await bulkSeedNearMemories(pool, 500);
       await pool.query('ANALYZE l2_memories');
       const embeddingParam = '$1';
@@ -1720,7 +1721,95 @@ describe('postgres memory store ANN embedding search (a27w.2)', () => {
         ) page ON TRUE
       `;
       const plan = await explainPlan(pool, sql, [...values, 200, 50, 0]);
-      expect(plan).toContain(L2_EMBEDDING_ANN_INDEX_NAME);
+      expect(plan).toContain(l2EmbeddingAnnIndexName(4));
+    });
+  }, INTEGRATION_TIMEOUT_MS);
+
+  it('renames the ANN index per dimension and drops the stale sibling on an embeddingDims change', async () => {
+    await withMemoryDatabase(async (pool) => {
+      // Build at dims=4 on a fresh (empty) corpus.
+      await createPostgresMemoryStoreFromPool(pool, 4, {
+        awaitAnnIndexBuild: true,
+        subjectBackfill: false,
+      });
+      const afterFirst = await pool.query<{ indexname: string }>(
+        `SELECT indexname FROM pg_indexes
+          WHERE schemaname = current_schema()
+            AND tablename = 'l2_memories'
+            AND indexname LIKE 'idx_l2_memories_embedding_hnsw_cosine%'`,
+      );
+      const firstNames = afterFirst.rows.map(row => row.indexname);
+      expect(firstNames).toContain(l2EmbeddingAnnIndexName(4));
+
+      // Operator raises the config-owned embeddingDims. Reopen at dims=8.
+      await createPostgresMemoryStoreFromPool(pool, 8, {
+        awaitAnnIndexBuild: true,
+        subjectBackfill: false,
+      });
+      const afterSecond = await pool.query<{ indexname: string }>(
+        `SELECT indexname FROM pg_indexes
+          WHERE schemaname = current_schema()
+            AND tablename = 'l2_memories'
+            AND indexname LIKE 'idx_l2_memories_embedding_hnsw_cosine%'`,
+      );
+      const secondNames = afterSecond.rows.map(row => row.indexname);
+      // New dimension's index exists...
+      expect(secondNames).toContain(l2EmbeddingAnnIndexName(8));
+      // ...and the stale dims=4 sibling was dropped, not silently kept.
+      expect(secondNames).not.toContain(l2EmbeddingAnnIndexName(4));
+    });
+  }, INTEGRATION_TIMEOUT_MS);
+
+  it('a failed background ANN index build leaves the store query-correct (degraded, no throw)', async () => {
+    await withMemoryDatabase(async (pool) => {
+      // Bootstrap the schema (and the valid dims=4 ANN index) on a fresh DB.
+      await createPostgresMemoryStoreFromPool(pool, 4, {
+        awaitAnnIndexBuild: true,
+        subjectBackfill: false,
+      });
+      // Seed a dimension-4 embedding, then force a build over vector(8): the
+      // CREATE INDEX CONCURRENTLY over embedding::vector(8) cannot cast the
+      // stored 4-d row and fails. The build must NOT throw.
+      await pool.query(`
+        INSERT INTO l2_memories (
+          id, text, type, importance, confidence, emotional_valence, salience,
+          source_ref, source_type, extracted_at, last_accessed, access_count,
+          sensitivity, embedding
+        ) VALUES (
+          'degraded-1', 'query-correct probe', 'semantic', 0.5, 0.5, 0, 0.5,
+          'seed:degraded', 'unknown', 1700000000000, 1700000000000, 0, 'personal',
+          '[1,0,0,0]'::vector
+        )
+      `);
+
+      const outcome = await buildL2EmbeddingAnnIndexConcurrently(pool, 8);
+      expect(outcome.status).toBe('degraded');
+      expect(outcome.error).toBeInstanceOf(Error);
+      // No usable ANN index landed.
+      const built = await pool.query<{ indexname: string; indisvalid: boolean }>(
+        `SELECT c.relname AS indexname, i.indisvalid
+           FROM pg_index i
+           JOIN pg_class c ON c.oid = i.indexrelid
+           JOIN pg_class t ON t.oid = i.indrelid
+           JOIN pg_namespace n ON n.oid = c.relnamespace
+          WHERE n.nspname = current_schema()
+            AND t.relname = 'l2_memories'
+            AND c.relname = $1`,
+        [l2EmbeddingAnnIndexName(8)],
+      );
+      // Either no index row, or an invalid one — never a live, valid index.
+      expect(built.rows.every(row => row.indisvalid === false)).toBe(true);
+
+      // The store is still query-correct: a plain cosine ranking (sequential
+      // scan, no ANN index) returns the seeded row.
+      const ranked = await pool.query<{ id: string }>(
+        `SELECT id
+           FROM l2_memories
+          WHERE embedding IS NOT NULL
+          ORDER BY embedding <=> '[1,0,0,0]'::vector ASC
+          LIMIT 1`,
+      );
+      expect(ranked.rows[0]?.id).toBe('degraded-1');
     });
   }, INTEGRATION_TIMEOUT_MS);
 

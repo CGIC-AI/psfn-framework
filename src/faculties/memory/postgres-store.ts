@@ -128,10 +128,11 @@ import {
   ANN_MAX_CANDIDATES,
   annCandidatePool,
   annEfSearch,
+  buildL2EmbeddingAnnIndexConcurrently,
   detectPgvectorIterativeScanSupport,
   embeddingAnnOrderExpression,
-  ensureL2EmbeddingAnnIndex,
   runAnnTunedQuery,
+  type L2EmbeddingAnnIndexBuildOutcome,
 } from './postgres-store/embedding-index.js';
 import {
   MEMORY_SUBJECT_SELECT_COLUMNS,
@@ -170,6 +171,16 @@ export interface PostgresMemoryStoreOptions {
    * top-k exact. Threaded through {@link createPostgresMemoryStoreFromPool}.
    */
   annIterativeScanAvailable?: boolean;
+  /**
+   * Await the background HNSW ANN index build before the factory returns.
+   * Production leaves this false so the build stays OFF the boot critical path
+   * (it is a performance artifact; queries are correct on a sequential scan
+   * without it — see {@link buildL2EmbeddingAnnIndexConcurrently}). Tests set it
+   * true for determinism when asserting index existence. Either way the build
+   * uses the identical autocommit `CREATE INDEX CONCURRENTLY` path and never
+   * throws — a failure is reported as a degraded outcome, not a boot crash.
+   */
+  awaitAnnIndexBuild?: boolean;
 }
 
 export async function createPostgresMemoryStore(
@@ -198,16 +209,23 @@ export async function createPostgresMemoryStoreFromPool(
   await assertExistingMemorySchemaHasEmbeddingColumn(pool);
   await ensurePostgresSchema(pool, POSTGRES_MEMORY_MIGRATIONS);
   await validatePostgresMemorySchema(pool);
-  // Build the dimension-parameterized HNSW ANN index (fail-closed) so semantic
-  // search runs on a bounded index plan instead of a sequential scan, then
-  // detect whether iterative scans are available for exact ANN + subject-filter.
-  await ensureL2EmbeddingAnnIndex(pool, embeddingDims);
+  // Detect whether iterative scans are available for exact ANN + subject-filter.
+  // This is a cheap metadata read and stays on the critical path.
   const annIterativeScanAvailable = await detectPgvectorIterativeScanSupport(pool);
   if (options.subjectBackfill !== false) {
     await runMemorySubjectBackfillToCompletion(pool, embeddingDims, options.subjectBackfill);
   }
   const store = new PostgresMemoryStore(pool, embeddingDims, { ...options, annIterativeScanAvailable });
   await store.waitUntilReady();
+  // Kick the dimension-parameterized HNSW ANN index build OFF the boot critical
+  // path. It runs CONCURRENTLY in the background so a large existing corpus can
+  // never blow the pod readiness window and crash-loop startup; semantic search
+  // is query-correct on a sequential scan until it lands. Awaited only when a
+  // caller (tests) explicitly asks for determinism.
+  const annIndexBuild = store.startAnnIndexBuild();
+  if (options.awaitAnnIndexBuild === true) {
+    await annIndexBuild;
+  }
   return store;
 }
 
@@ -220,6 +238,9 @@ class PostgresMemoryStore implements MemoryStorePort {
   private readonly pool: Pool;
   private readonly embeddingDims: number;
   private readonly annIterativeScanAvailable: boolean;
+  /** Background HNSW ANN index build; kicked off once, off the boot critical path. */
+  private annIndexBuild: Promise<L2EmbeddingAnnIndexBuildOutcome> | null = null;
+  private annIndexBuildStatus: 'idle' | 'building' | 'ready' | 'degraded' = 'idle';
   private readonly journal: MemoryJournal | null;
   private readonly scratchpadMirrorPath: string | null;
   private persistChain: Promise<void> = Promise.resolve();
@@ -254,6 +275,35 @@ class PostgresMemoryStore implements MemoryStorePort {
 
   async waitUntilReady(): Promise<void> {
     await this.initialization;
+  }
+
+  /**
+   * Start the background HNSW ANN index build (idempotent). Returns the settle
+   * promise so callers that want determinism (tests) can await it; production
+   * fires and forgets. The underlying build never throws — a failure resolves to
+   * a `degraded` outcome and leaves semantic search query-correct on a
+   * sequential scan.
+   */
+  startAnnIndexBuild(): Promise<L2EmbeddingAnnIndexBuildOutcome> {
+    if (this.annIndexBuild) return this.annIndexBuild;
+    this.annIndexBuildStatus = 'building';
+    this.annIndexBuild = buildL2EmbeddingAnnIndexConcurrently(this.pool, this.embeddingDims)
+      .then((outcome) => {
+        this.annIndexBuildStatus = outcome.status;
+        return outcome;
+      });
+    return this.annIndexBuild;
+  }
+
+  /**
+   * Coarse capability signal for the ANN index build: 'building' while it runs,
+   * 'ready' once the index is live, 'degraded' if the build failed (queries
+   * remain correct but unindexed). Loud structured logs accompany each
+   * transition; this accessor exposes the state for status/observability
+   * surfaces.
+   */
+  getAnnIndexBuildStatus(): 'idle' | 'building' | 'ready' | 'degraded' {
+    return this.annIndexBuildStatus;
   }
 
   getSalienceMaintenanceRevision(): number {

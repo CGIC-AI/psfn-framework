@@ -9,7 +9,11 @@ import {
   getRetiredToolAlias,
   isCanonicalFirstPartyToolName,
   listRetiredToolAliases,
+  resolveToolAliasMatchers,
+  resolveToolAliasMatchersFrom,
   resolveToolPresentationRank,
+  type CanonicalToolSurfaceEntry,
+  type RetiredToolAlias,
 } from './registry.js';
 import { createJournalTool } from '../../../boundary/integrations/journal/tools.js';
 import { isRecord } from '../../../shared/utils/types.js';
@@ -282,6 +286,59 @@ describe('first-party tool surface registry', () => {
         .toBeLessThan(resolveToolPresentationRank(adminToolName));
       expect(resolveToolPresentationRank('selfie_create'))
         .toBeLessThan(resolveToolPresentationRank(adminToolName));
+    }
+  });
+});
+
+describe('resolveToolAliasMatchers (pre_tool_use hook alias equivalence, psfn-framework-816w)', () => {
+  it('lists the retired aliases when invoked by the canonical name', () => {
+    // `web` retires `web_fetch` / `crawler_fetch` / `web_research`; a policy
+    // written against any of those must be able to match the canonical call.
+    const matchers = resolveToolAliasMatchers('web');
+    expect(matchers).toEqual(
+      expect.arrayContaining(['web_fetch', 'crawler_fetch', 'web_research']),
+    );
+    // The invoked name is never included in its own alias set.
+    expect(matchers).not.toContain('web');
+  });
+
+  it('lists the canonical name plus sibling aliases when invoked by a retired alias', () => {
+    // An alias-form invocation (`web_fetch`) must expose the canonical `web`
+    // (so a canonical policy matches) and its siblings, but not itself.
+    const matchers = resolveToolAliasMatchers('web_fetch');
+    expect(matchers).toContain('web');
+    expect(matchers).toEqual(expect.arrayContaining(['crawler_fetch', 'web_research']));
+    expect(matchers).not.toContain('web_fetch');
+  });
+
+  it('returns an empty set for third-party / unknown tool names (not a bypass)', () => {
+    expect(resolveToolAliasMatchers('some_plugin_tool')).toEqual([]);
+    expect(resolveToolAliasMatchers('analysis_workbench')).toEqual([]);
+  });
+
+  it('fails closed (throws) when a retired alias targets an unknown canonical tool', () => {
+    // Malformed metadata: the alias resolves, but its canonicalName does not.
+    const brokenAlias: RetiredToolAlias = {
+      alias: 'ghost_read',
+      canonicalName: 'ghost',
+      exposure: 'hidden',
+      reason: 'dangling canonical reference',
+    };
+    const source = {
+      getCanonicalToolSurface: (name: string): CanonicalToolSurfaceEntry | undefined =>
+        name === 'ghost' ? undefined : getCanonicalToolSurface(name),
+      getRetiredToolAlias: (name: string): RetiredToolAlias | undefined =>
+        name === 'ghost_read' ? brokenAlias : undefined,
+    };
+    expect(() => resolveToolAliasMatchersFrom('ghost_read', source)).toThrow(
+      /Malformed tool alias metadata.*ghost_read.*ghost/u,
+    );
+  });
+
+  it('every real retired alias resolves to a live canonical surface (no dangling metadata)', () => {
+    for (const alias of listRetiredToolAliases()) {
+      expect(() => resolveToolAliasMatchers(alias.alias)).not.toThrow();
+      expect(resolveToolAliasMatchers(alias.alias)).toContain(alias.canonicalName);
     }
   });
 });

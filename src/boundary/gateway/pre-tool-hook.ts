@@ -310,6 +310,16 @@ export interface CreatePreToolHookGateOptions {
   evaluator: PreToolHookEvaluatorPort;
   /** Reads the active turn's correlation (e.g. `getRequestContext`). */
   getCorrelation: () => PreToolCorrelationSnapshot | undefined;
+  /**
+   * Resolves the invoked tool's registered aliases (retired names / surface
+   * aliases), EXCLUDING the invoked name itself, so an alias-only hook policy
+   * intercepts the canonical call and a canonical policy intercepts an
+   * alias-form call. Wired from the tool-surface registry in production
+   * (`resolveToolAliasMatchers`). MUST throw on malformed alias metadata: a
+   * broken mapping has to fail closed (the tool call errors out) rather than
+   * silently supply an empty set that never matches a policy.
+   */
+  resolveAliases: (toolName: string) => readonly string[];
   /** Redacted telemetry sink for every evaluated decision. */
   onDecision: (audit: RedactedPreToolHookAudit) => void;
   /** Override the per-hook fail-closed timeout. */
@@ -327,9 +337,14 @@ export function createPreToolHookGate(options: CreatePreToolHookGateOptions): Pr
     async evaluate(request: PreToolHookGateRequest): Promise<PreToolUseEvaluation | null> {
       if (!options.evaluator.hasSyncDecisionHooks()) return null;
       const correlation = options.getCorrelation() ?? {};
+      // Resolve the invoked tool's alias set so a policy written against an
+      // alias intercepts the canonical call (and vice-versa). A throw here
+      // (malformed alias metadata) propagates out of the gated execute and
+      // fails the tool call closed rather than letting it run un-policied.
+      const aliases = options.resolveAliases(request.toolName);
       const context: PreToolUseHookContext = {
         toolName: request.toolName,
-        aliases: [],
+        aliases,
         input: request.params,
         capabilityTier: request.tier,
         ...(correlation.sessionId ? { sessionId: correlation.sessionId } : {}),

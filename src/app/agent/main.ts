@@ -89,6 +89,7 @@ import {
   wireShardAndThinkRuntime,
 } from '../startup/composition/composition.js';
 import { createPreToolHookGate } from '../../boundary/gateway/pre-tool-hook.js';
+import { resolveToolAliasMatchers } from '../../core/agent/tool-surface/registry.js';
 import {
   buildCharacterPromptVariablesProvider,
   buildReplConfig,
@@ -793,6 +794,11 @@ async function main(): Promise<void> {
   agentLoop.setPreToolHookGate(createPreToolHookGate({
     evaluator: operatorHookRuntime.hookRegistry,
     getCorrelation: getRequestContext,
+    // Resolve the invoked tool's canonical/retired-alias equivalence class so a
+    // hook policy registered against a retired or surface alias still matches
+    // the canonical call (and vice-versa); throws fail-closed on malformed
+    // alias metadata (psfn-framework-816w).
+    resolveAliases: resolveToolAliasMatchers,
     onDecision: (audit) => log.debug('pre_tool_use hook decision', { ...audit }),
   }));
 

@@ -7,6 +7,7 @@ import {
   type RedactedPreToolHookAudit,
 } from '../../boundary/gateway/pre-tool-hook.js';
 import { HookMatcher, HookRegistry } from '../../boundary/gateway/hook-registry.js';
+import { resolveToolAliasMatchers } from '../../core/agent/tool-surface/registry.js';
 import type { AgentTool } from '../../boundary/pi-agent/index.js';
 import type { CapabilityTier } from '../config/runtime-config-contracts.js';
 import type { CapabilityToken } from './tokens.js';
@@ -1384,6 +1385,7 @@ describe('pre_tool_use end-to-end wiring (7ym.3)', () => {
     const gate = createPreToolHookGate({
       evaluator: registry,
       getCorrelation: () => ({ sessionId: 'session-xyz', turnId: 'turn-1' }),
+      resolveAliases: resolveToolAliasMatchers,
       onDecision: (audit) => audits.push(audit),
     });
 
@@ -1415,6 +1417,7 @@ describe('pre_tool_use end-to-end wiring (7ym.3)', () => {
     const gate = createPreToolHookGate({
       evaluator: registry,
       getCorrelation: () => undefined,
+      resolveAliases: resolveToolAliasMatchers,
       onDecision: () => {},
     });
     // No sync hooks registered → adapter returns null → gate skips hook logic.
@@ -1449,6 +1452,7 @@ describe('pre_tool_use end-to-end wiring (7ym.3)', () => {
     const gate = createPreToolHookGate({
       evaluator: registry,
       getCorrelation: () => ({ sessionId: 'session-abc' }),
+      resolveAliases: resolveToolAliasMatchers,
       onDecision: () => {},
     });
     const shell = createTool('shell');

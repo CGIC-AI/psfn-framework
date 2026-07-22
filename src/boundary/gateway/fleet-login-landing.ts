@@ -165,21 +165,21 @@ function pageBody(registration?: FleetBreakGlassLoginRegistration): Buffer {
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="light">
-  <title>Sign in · PSFN Fleet Portal</title>
+  <title>Sign in · PSFN Cluster Portal</title>
   <style>${PAGE_STYLE}</style>
 </head>
 <body>
   <main>
     <section class="login" aria-labelledby="login-title">
-      <div class="brand" aria-label="PSFN Fleet Portal">
+      <div class="brand" aria-label="PSFN Cluster Portal">
         <span class="mark" aria-hidden="true">PSFN</span>
         <div>
           <div class="wordmark">PSFN</div>
-          <div class="product">Fleet Portal</div>
+          <div class="product">Cluster Portal</div>
         </div>
       </div>
       <h1 id="login-title">Welcome back.</h1>
-      <p class="intro">Sign in to continue to the PSFN Fleet Portal.</p>
+      <p class="intro">Sign in to continue to the PSFN Cluster Portal.</p>
       <a class="primary" href="${DISCORD_LOGIN_PATH}">Login with Discord</a>
       <p class="privacy">Authentication is handled securely through Discord.</p>${breakGlass}
     </section>

@@ -1545,7 +1545,7 @@ export class AgentApiBackend {
       claimedChannelPrivacy = this.externalChannelProfiles['companion-ui']?.channelPrivacy ?? 'private';
       if (hubDeviceAttachment.actor.kind === 'human') {
         authorId = hubDeviceAttachment.actor.principalId;
-        authorName = 'Authenticated fleet human';
+        authorName = 'Authenticated cluster human';
         // A Discord-SSO'd human binds to their existing canonical contact via
         // the attachment's validated contact binding — never minted as a new
         // person or an api principal. `isHubDeviceAttachmentSnapshot` (checked

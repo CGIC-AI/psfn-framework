@@ -30,7 +30,11 @@ describe('SleepCycleEpisodeConsolidator', () => {
       landmark: `A 7-message exchange with 4 user turns and 3 assistant turns around they, what from ${startedAt} to ${endedAt}.`,
       startedAt,
       endedAt,
-      threadId: 'discord:main',
+      // apq0-shaped: thread_id is a topic-thread id decoupled from the session,
+      // NOT the sessionId. Session scoping now flows through spanRefs.sessionId
+      // (below), so a thread_id != sessionId would silently return nothing under
+      // the old thread_id=sessionId filter — the bug this fixture now guards.
+      threadId: 'topic:discord-main',
       channelId: 'discord:main',
       participantContactIds: ['contact:vega'],
       salience: { score: 0.85, novelty: 0.4, emotionalIntensity: 0.2 },
@@ -126,7 +130,8 @@ describe('SleepCycleEpisodeConsolidator', () => {
     await store.createEpisode(episodeInput('later', '2026-06-10T03:00:00.000Z', '2026-06-10T03:30:00.000Z'));
     await store.createEpisode(episodeInput('other-channel', '2026-06-10T03:31:00.000Z', '2026-06-10T03:45:00.000Z', {
       channelId: 'telegram:dm',
-      threadId: 'telegram:dm',
+      threadId: 'topic:telegram-dm',
+      spanRefs: [{ spanId: 'span-other-channel', sessionId: 'telegram:dm' }],
     }));
 
     const complete = vi.fn(async () => refinementResponse());
@@ -152,12 +157,14 @@ describe('SleepCycleEpisodeConsolidator', () => {
     // Other session sharing the same time window: must not be reviewed or merged
     // (its transcript is a different conversation).
     await store.createEpisode(episodeInput('other-1', '2026-06-10T01:05:00.000Z', '2026-06-10T01:25:00.000Z', {
-      threadId: 'telegram:dm',
+      threadId: 'topic:telegram-dm',
       channelId: 'telegram:dm',
+      spanRefs: [{ spanId: 'span-other-1', sessionId: 'telegram:dm' }],
     }));
     await store.createEpisode(episodeInput('other-2', '2026-06-10T01:27:00.000Z', '2026-06-10T01:45:00.000Z', {
-      threadId: 'telegram:dm',
+      threadId: 'topic:telegram-dm',
       channelId: 'telegram:dm',
+      spanRefs: [{ spanId: 'span-other-2', sessionId: 'telegram:dm' }],
     }));
 
     const complete = vi.fn(async () => refinementResponse());
@@ -179,7 +186,7 @@ describe('SleepCycleEpisodeConsolidator', () => {
     const otherSession = await store.searchByTime({
       from: '2026-06-09T00:00:00.000Z',
       to: '2026-06-11T00:00:00.000Z',
-      sessionId: 'telegram:dm',
+      spanSessionId: 'telegram:dm',
     });
     expect(otherSession.map(episode => episode.id).sort()).toEqual(['other-1', 'other-2']);
   });
@@ -220,7 +227,7 @@ describe('SleepCycleEpisodeConsolidator', () => {
     const activeRecent = await store.searchByTime({
       from: '2026-06-09T00:00:00.000Z',
       to: '2026-06-10T00:00:00.000Z',
-      sessionId: 'discord:main',
+      spanSessionId: 'discord:main',
     });
     expect(activeRecent.map(episode => episode.id)).toEqual(['recent-1']);
   });
@@ -405,7 +412,8 @@ describe('SleepCycleEpisodeConsolidator candidate consolidation (m58.1)', () => 
       landmark: `A 7-message exchange with 4 user turns from ${startedAt} to ${endedAt}.`,
       startedAt,
       endedAt,
-      threadId: 'discord:main',
+      // apq0-shaped topic thread, decoupled from the session (see episodeInput).
+      threadId: 'topic:discord-main',
       channelId: 'discord:main',
       participantContactIds: ['contact:vega'],
       salience: { score: 0.6, novelty: 0.3, emotionalIntensity: 0.2 },
@@ -719,6 +727,56 @@ describe('SleepCycleEpisodeConsolidator candidate consolidation (m58.1)', () => 
     // repair may never fold claim-holding episodes.
     expect((await store.listEpisodeMessageClaims({ episodeId: 'solo', status: 'active' })))
       .toHaveLength(1);
+  });
+
+  it('reviews and confirms candidates whose threadId is an apq0 singleton (thread_id != sessionId)', async () => {
+    // Regression for the dead candidate-confirmation path: post-apq0 a fresh
+    // candidate's threadId is its OWN id (a singleton topic thread), never the
+    // sessionId. The old thread_id=sessionId scope filter returned NOTHING for
+    // these, so candidateEpisodesReviewed stayed 0 and every post-ship episode
+    // was stranded as a candidate forever. Session scoping now flows through
+    // spanRefs.sessionId, so singleton-threaded candidates are still reviewed
+    // and confirmed.
+    const store = makeStore();
+    await seedClaimedCandidate(
+      store,
+      candidateInput('singleton-a', '2026-06-10T10:00:00.000Z', '2026-06-10T10:10:00.000Z', {
+        threadId: 'singleton-a', // apq0 singleton: thread_id == episode id, != 'discord:main'
+      }),
+      ['msg-a'],
+    );
+    await seedClaimedCandidate(
+      store,
+      candidateInput('singleton-b', '2026-06-10T10:12:00.000Z', '2026-06-10T10:22:00.000Z', {
+        threadId: 'singleton-b',
+      }),
+      ['msg-b'],
+    );
+
+    const llm = complete(() => {
+      throw new Error('no LLM call expected: singleton threads form lone clusters');
+    });
+    const consolidator = new SleepCycleEpisodeConsolidator(
+      store,
+      { getRecentMessages: () => [] },
+      { complete: llm },
+      { now: () => RUN_AT },
+    );
+
+    const result = await consolidator.run({ sessionId: 'discord:main' });
+
+    // The heart of the regression: the session query FOUND the candidates
+    // (would be 0 under the old thread_id=sessionId filter) and confirmed them.
+    expect(result.candidateEpisodesReviewed).toBe(2);
+    expect(result.candidatesConfirmed).toBe(2);
+    expect(llm).not.toHaveBeenCalled();
+    const canonical = await store.searchByTime({
+      from: '2026-06-10T00:00:00.000Z',
+      to: '2026-06-11T00:00:00.000Z',
+      lifecycleStatus: 'canonical',
+      spanSessionId: 'discord:main',
+    });
+    expect(canonical.map(episode => episode.id).sort()).toEqual(['singleton-a', 'singleton-b']);
   });
 
   it('protects claim-holding canonical episodes from the deterministic adjacent merge', async () => {

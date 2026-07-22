@@ -55,6 +55,8 @@ import type {
   EpisodicProcessingWatermarkWriteInput,
   EpisodicStoreOptions,
   EpisodicStorePort,
+  RepointThreadMembersInput,
+  RepointThreadMembersResult,
 } from './store-port.js';
 import {
   CANDIDATE_DECISION_STATUSES,
@@ -377,14 +379,17 @@ export class PostgresEpisodicStore implements EpisodicStorePort {
       params.push(to);
       where.push(`started_at <= $${params.length}`);
     }
-    if (options.sessionId !== undefined) {
-      // Legacy scope filter: matches the thread_id column against the given
-      // value. Since apq0, an episode's thread_id is a topic-thread id (the
-      // arc connected-component representative), NOT its session id, so this
-      // filter only matches rows from the pre-apq0 era where thread_id was set
-      // verbatim to the session id. No live caller passes sessionId.
-      params.push(parseRequiredText(options.sessionId, 'sessionId'));
-      where.push(`thread_id = $${params.length}`);
+    if (options.spanSessionId !== undefined) {
+      // Real session scope (apq0). An episode's session identity lives in its
+      // span refs (episode_json.spanRefs[].sessionId), NOT thread_id — since
+      // apq0 thread_id is a topic-thread id (arc connected-component
+      // representative), decoupled from the session. Match any episode carrying
+      // a span in this session via jsonb containment, served by the existing
+      // episode_json GIN index (idx_l01_episodes_episode_json_gin).
+      params.push(json({
+        spanRefs: [{ sessionId: parseRequiredText(options.spanSessionId, 'spanSessionId') }],
+      }));
+      where.push(`episode_json @> $${params.length}::jsonb`);
     }
     params.push(normalizeLimit(options.limit));
     const limitIndex = params.length;
@@ -417,6 +422,56 @@ export class PostgresEpisodicStore implements EpisodicStorePort {
       normalizeOffset(options.offset),
     ]);
     return rows.map(mapEpisodeRow);
+  }
+
+  async repointThreadMembers(input: RepointThreadMembersInput): Promise<RepointThreadMembersResult> {
+    const fromThreadId = parseRequiredText(input.fromThreadId, 'repointThreadMembers.fromThreadId');
+    const toThreadId = parseRequiredText(input.toThreadId, 'repointThreadMembers.toThreadId');
+    if (!Number.isInteger(input.maxEpisodes) || input.maxEpisodes < 1) {
+      throw new Error('repointThreadMembers requires a positive integer maxEpisodes');
+    }
+    if (fromThreadId === toThreadId) {
+      throw new Error('thread members cannot be re-pointed onto the same thread');
+    }
+    const nowIso = this.now().toISOString();
+
+    return withPostgresClient(this.pool, async (client) => {
+      // Lock the losing thread's live members and detect oversize in one shot:
+      // fetching one row past the cap lets us refuse without a separate count.
+      const members = (await client.query<{ id: string }>(`
+        SELECT id
+        FROM l01_episodes
+        WHERE thread_id = $1 AND ${ACTIVE_CANONICAL_EPISODE_FILTER}
+        ORDER BY started_at ASC, id ASC
+        LIMIT $2
+        FOR UPDATE
+      `, [fromThreadId, input.maxEpisodes + 1])).rows;
+
+      if (members.length > input.maxEpisodes) {
+        return { updatedEpisodeIds: [], skippedOversize: true };
+      }
+      if (members.length === 0) {
+        return { updatedEpisodeIds: [], skippedOversize: false };
+      }
+
+      const ids = members.map(row => row.id);
+      // One naturally-atomic statement re-points every locked member and keeps
+      // the materialized episode_json.threadId consistent with the thread_id
+      // column. There is no per-row loop, so a crash cannot leave the thread
+      // half-split: the whole re-point commits or rolls back together.
+      await client.query(`
+        UPDATE l01_episodes
+        SET thread_id = $2,
+            episode_json = jsonb_set(
+              jsonb_set(episode_json, '{threadId}', to_jsonb($2::text), true),
+              '{updatedAt}', to_jsonb($3::text), true
+            ),
+            updated_at = $3
+        WHERE id = ANY($1::text[])
+      `, [ids, toThreadId, nowIso]);
+
+      return { updatedEpisodeIds: ids, skippedOversize: false };
+    });
   }
 
   async writeEpisodeArc(input: EpisodeArcWriteInput): Promise<EpisodeArc> {

@@ -110,13 +110,17 @@ export interface ThreadUnionResult {
   skippedOversize: boolean;
 }
 
-type ThreadUnionStore = Pick<EpisodicStorePort, 'searchByThread' | 'updateEpisode'>;
+type ThreadUnionStore = Pick<EpisodicStorePort, 'repointThreadMembers'>;
 
 /**
  * Union the topic threads of two arc-linked episodes. The higher-id thread's
  * live episodes are re-pointed onto the lexicographically-smaller thread id.
  * The passed `source`/`target` objects are mutated in place so a caller
  * chaining several arcs in one pass observes the converged thread id.
+ *
+ * The re-point is delegated to the store's single atomic `repointThreadMembers`
+ * statement — there is no per-member update loop, so a crash mid-union can
+ * never leave a thread permanently split.
  */
 export async function applyThreadUnionForArc(
   store: ThreadUnionStore,
@@ -144,11 +148,13 @@ export async function applyThreadUnionForArc(
     return { threadId: winningThreadId, updatedEpisodeIds: [], skippedOversize: false };
   }
 
-  // One extra so we can detect (and refuse) an oversize merge without a count query.
-  const members = await store.searchByThread(losingThreadId, {
-    limit: options.maxThreadEpisodes + 1,
+  const outcome = await store.repointThreadMembers({
+    fromThreadId: losingThreadId,
+    toThreadId: winningThreadId,
+    maxEpisodes: options.maxThreadEpisodes,
   });
-  if (members.length > options.maxThreadEpisodes) {
+
+  if (outcome.skippedOversize) {
     options.onEvent?.({
       outcome: 'merge_skipped_oversize',
       winningThreadId,
@@ -159,14 +165,9 @@ export async function applyThreadUnionForArc(
     return { threadId: winningThreadId, updatedEpisodeIds: [], skippedOversize: true };
   }
 
-  const updatedEpisodeIds: string[] = [];
-  for (const member of members) {
-    await store.updateEpisode({ ...member, threadId: winningThreadId });
-    member.threadId = winningThreadId;
-    updatedEpisodeIds.push(member.id);
-  }
   // The endpoints handed to us may be distinct object instances from the rows
-  // just fetched; converge them too so a chained caller sees the final id.
+  // the store re-pointed; converge them too so a chained caller sees the final
+  // id.
   source.threadId = winningThreadId;
   target.threadId = winningThreadId;
 
@@ -174,8 +175,12 @@ export async function applyThreadUnionForArc(
     outcome: 'merged',
     winningThreadId,
     losingThreadId,
-    updatedEpisodeCount: updatedEpisodeIds.length,
+    updatedEpisodeCount: outcome.updatedEpisodeIds.length,
     timestamp: now().getTime(),
   });
-  return { threadId: winningThreadId, updatedEpisodeIds, skippedOversize: false };
+  return {
+    threadId: winningThreadId,
+    updatedEpisodeIds: outcome.updatedEpisodeIds,
+    skippedOversize: false,
+  };
 }

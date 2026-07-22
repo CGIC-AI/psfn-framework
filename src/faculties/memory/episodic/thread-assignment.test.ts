@@ -1,6 +1,8 @@
-import { describe, expect, it, vi } from 'vitest';
-import type { Episode } from '../../../shared/contracts/episodic-memory.js';
-import type { EpisodeListOptions, EpisodeUpdateInput } from './store-port.js';
+import type { Pool } from 'pg';
+import { describe, expect, it } from 'vitest';
+import { FakeEpisodicPool } from '../../../test-support/fake-postgres-episodic-pool.js';
+import { PostgresEpisodicStore } from './postgres-store.js';
+import type { EpisodeCreateInput } from './store-port.js';
 import {
   applyThreadUnionForArc,
   chooseThreadRepresentative,
@@ -8,7 +10,21 @@ import {
   type ThreadAssignmentEvent,
 } from './thread-assignment.js';
 
-function episode(id: string, threadId: string = id): Episode {
+const NOW = new Date('2026-06-01T12:00:00.000Z');
+
+/**
+ * Thread-union tests run against the REAL PostgresEpisodicStore backed by the
+ * in-process FakeEpisodicPool, so they exercise the actual atomic
+ * `repointThreadMembers` SQL path (single UPDATE ... WHERE id = ANY) — not a
+ * hand-rolled loop that could hide a partial-split regression.
+ */
+function makeHarness(): { pool: FakeEpisodicPool; store: PostgresEpisodicStore } {
+  const pool = new FakeEpisodicPool();
+  const store = new PostgresEpisodicStore(pool as unknown as Pool, { now: () => NOW });
+  return { pool, store };
+}
+
+function episodeInput(id: string, threadId: string = id): EpisodeCreateInput {
   return {
     id,
     threadId,
@@ -24,30 +40,17 @@ function episode(id: string, threadId: string = id): Episode {
     spanRefs: [{ spanId: `span-${id}`, sessionId: 'discord:main' }],
     artifactRefs: [],
     provenanceRefs: [],
-  } as unknown as Episode;
+  };
 }
 
-/** In-memory store surface exercising thread grouping and updates. */
-function makeStore(episodes: readonly Episode[]) {
-  const byId = new Map(episodes.map(entry => [entry.id, entry]));
-  return {
-    async searchByThread(threadId: string, options?: EpisodeListOptions): Promise<Episode[]> {
-      const matches = [...byId.values()]
-        .filter(entry => entry.threadId === threadId)
-        .sort((left, right) => left.id.localeCompare(right.id));
-      return options?.limit ? matches.slice(0, options.limit) : matches;
-    },
-    async updateEpisode(input: EpisodeUpdateInput): Promise<Episode> {
-      const current = byId.get(input.id);
-      if (!current) throw new Error(`episode "${input.id}" does not exist`);
-      const updated = { ...current, ...input } as Episode;
-      byId.set(input.id, updated);
-      return updated;
-    },
-    threadOf(id: string): string | undefined {
-      return byId.get(id)?.threadId;
-    },
-  };
+async function threadOf(store: PostgresEpisodicStore, id: string): Promise<string | undefined> {
+  return (await store.getEpisode(id))?.threadId;
+}
+
+function threadRepointUpdateCount(pool: FakeEpisodicPool): number {
+  return pool.queries.filter(query => (
+    query.text.replace(/\s+/g, ' ').trim().toLowerCase().startsWith('update l01_episodes set thread_id =')
+  )).length;
 }
 
 describe('chooseThreadRepresentative', () => {
@@ -95,21 +98,21 @@ describe('computeThreadComponents', () => {
 
 describe('applyThreadUnionForArc', () => {
   it('re-points the higher-id thread onto the lower-id representative and mutates the endpoints', async () => {
-    const source = episode('e9');
-    const target = episode('e5');
-    const store = makeStore([source, target]);
+    const { store } = makeHarness();
+    const source = await store.createEpisode(episodeInput('e9'));
+    const target = await store.createEpisode(episodeInput('e5'));
     const events: ThreadAssignmentEvent[] = [];
 
     const result = await applyThreadUnionForArc(store, source, target, {
       maxThreadEpisodes: 100,
-      now: () => new Date('2026-06-01T12:00:00.000Z'),
+      now: () => NOW,
       onEvent: event => events.push(event),
     });
 
     expect(result.threadId).toBe('e5');
     expect(result.updatedEpisodeIds).toEqual(['e9']);
-    expect(store.threadOf('e9')).toBe('e5');
-    expect(store.threadOf('e5')).toBe('e5');
+    expect(await threadOf(store, 'e9')).toBe('e5');
+    expect(await threadOf(store, 'e5')).toBe('e5');
     expect(source.threadId).toBe('e5');
     expect(target.threadId).toBe('e5');
     expect(events).toEqual([{
@@ -117,29 +120,47 @@ describe('applyThreadUnionForArc', () => {
       winningThreadId: 'e5',
       losingThreadId: 'e9',
       updatedEpisodeCount: 1,
-      timestamp: Date.parse('2026-06-01T12:00:00.000Z'),
+      timestamp: NOW.getTime(),
     }]);
   });
 
   it('re-points every live member of the losing thread, not just the endpoint', async () => {
-    const anchor = episode('e5');
-    const sibling = episode('e8', 'e5'); // already in e5 thread
-    const newcomer = episode('e2'); // its own thread, lower id
-    const store = makeStore([anchor, sibling, newcomer]);
+    const { store } = makeHarness();
+    const anchor = await store.createEpisode(episodeInput('e5'));
+    await store.createEpisode(episodeInput('e8', 'e5')); // already in e5 thread
+    const newcomer = await store.createEpisode(episodeInput('e2')); // its own thread, lower id
 
     await applyThreadUnionForArc(store, anchor, newcomer, { maxThreadEpisodes: 100 });
 
     // e2 is the new representative; the whole e5 thread (anchor + sibling) moves.
-    expect(store.threadOf('e5')).toBe('e2');
-    expect(store.threadOf('e8')).toBe('e2');
-    expect(store.threadOf('e2')).toBe('e2');
+    expect(await threadOf(store, 'e5')).toBe('e2');
+    expect(await threadOf(store, 'e8')).toBe('e2');
+    expect(await threadOf(store, 'e2')).toBe('e2');
+  });
+
+  it('re-points the whole losing thread in exactly one atomic UPDATE (no partial split)', async () => {
+    const { pool, store } = makeHarness();
+    const anchor = await store.createEpisode(episodeInput('e5'));
+    await store.createEpisode(episodeInput('e8', 'e5'));
+    await store.createEpisode(episodeInput('e4', 'e5'));
+    const newcomer = await store.createEpisode(episodeInput('e2'));
+
+    const result = await applyThreadUnionForArc(store, anchor, newcomer, { maxThreadEpisodes: 100 });
+
+    // Three live members re-pointed, but only ONE re-point statement was
+    // issued: there is no per-member loop, so a mid-union crash cannot leave
+    // the thread half-split.
+    expect(result.updatedEpisodeIds.sort()).toEqual(['e4', 'e5', 'e8']);
+    expect(threadRepointUpdateCount(pool)).toBe(1);
+    for (const id of ['e5', 'e8', 'e4']) {
+      expect(await threadOf(store, id)).toBe('e2');
+    }
   });
 
   it('is a no-op when both endpoints already share a thread', async () => {
-    const source = episode('e9', 'e5');
-    const target = episode('e5');
-    const store = makeStore([source, target]);
-    const update = vi.spyOn(store, 'updateEpisode');
+    const { pool, store } = makeHarness();
+    const source = await store.createEpisode(episodeInput('e9', 'e5'));
+    const target = await store.createEpisode(episodeInput('e5'));
     const events: ThreadAssignmentEvent[] = [];
 
     const result = await applyThreadUnionForArc(store, source, target, {
@@ -148,16 +169,16 @@ describe('applyThreadUnionForArc', () => {
     });
 
     expect(result.updatedEpisodeIds).toEqual([]);
-    expect(update).not.toHaveBeenCalled();
+    expect(threadRepointUpdateCount(pool)).toBe(0);
     expect(events[0]?.outcome).toBe('noop');
   });
 
   it('fails safe on an oversize losing thread: no rewrite, distinct threads, oversize event', async () => {
-    const source = episode('e9');
-    const target = episode('e5');
-    const extra = [episode('e6', 'e9'), episode('e7', 'e9')];
-    const store = makeStore([source, target, ...extra]);
-    const update = vi.spyOn(store, 'updateEpisode');
+    const { pool, store } = makeHarness();
+    const source = await store.createEpisode(episodeInput('e9'));
+    const target = await store.createEpisode(episodeInput('e5'));
+    await store.createEpisode(episodeInput('e6', 'e9'));
+    await store.createEpisode(episodeInput('e7', 'e9'));
     const events: ThreadAssignmentEvent[] = [];
 
     // Losing thread 'e9' has 3 members (e9, e6, e7) which exceeds the cap of 2.
@@ -167,17 +188,64 @@ describe('applyThreadUnionForArc', () => {
     });
 
     expect(result.skippedOversize).toBe(true);
-    expect(update).not.toHaveBeenCalled();
-    expect(store.threadOf('e9')).toBe('e9');
-    expect(store.threadOf('e5')).toBe('e5');
+    expect(threadRepointUpdateCount(pool)).toBe(0);
+    expect(await threadOf(store, 'e9')).toBe('e9');
+    expect(await threadOf(store, 'e5')).toBe('e5');
     expect(events[0]?.outcome).toBe('merge_skipped_oversize');
   });
 
   it('rejects a non-positive cap', async () => {
-    const source = episode('a');
-    const target = episode('b');
-    const store = makeStore([source, target]);
+    const { store } = makeHarness();
+    const source = await store.createEpisode(episodeInput('a'));
+    const target = await store.createEpisode(episodeInput('b'));
     await expect(applyThreadUnionForArc(store, source, target, { maxThreadEpisodes: 0 }))
       .rejects.toThrow(/positive integer maxThreadEpisodes/);
+  });
+});
+
+describe('PostgresEpisodicStore.repointThreadMembers', () => {
+  it('atomically moves every live member and keeps episode_json.threadId consistent', async () => {
+    const { pool, store } = makeHarness();
+    await store.createEpisode(episodeInput('e5'));
+    await store.createEpisode(episodeInput('e8', 'e5'));
+
+    const outcome = await store.repointThreadMembers({
+      fromThreadId: 'e5',
+      toThreadId: 'e2',
+      maxEpisodes: 100,
+    });
+
+    expect(outcome.skippedOversize).toBe(false);
+    expect(outcome.updatedEpisodeIds.sort()).toEqual(['e5', 'e8']);
+    expect(threadRepointUpdateCount(pool)).toBe(1);
+    // Both the thread_id column and the materialized episode_json.threadId move
+    // together (getEpisode reads threadId out of episode_json).
+    const moved = await store.getEpisode('e8');
+    expect(moved?.threadId).toBe('e2');
+  });
+
+  it('is idempotent: a re-run finds no members on the drained thread and moves nothing', async () => {
+    const { pool, store } = makeHarness();
+    await store.createEpisode(episodeInput('e5'));
+    await store.createEpisode(episodeInput('e8', 'e5'));
+
+    const first = await store.repointThreadMembers({ fromThreadId: 'e5', toThreadId: 'e2', maxEpisodes: 100 });
+    expect(first.updatedEpisodeIds.sort()).toEqual(['e5', 'e8']);
+
+    // Re-running the same union (as a crash-recovery retry would) is a clean
+    // no-op — the losing thread is already drained, so there is nothing to
+    // half-move and no duplicate re-point.
+    const second = await store.repointThreadMembers({ fromThreadId: 'e5', toThreadId: 'e2', maxEpisodes: 100 });
+    expect(second.updatedEpisodeIds).toEqual([]);
+    expect(second.skippedOversize).toBe(false);
+    expect(threadRepointUpdateCount(pool)).toBe(1); // only the first run wrote
+    expect(await threadOf(store, 'e5')).toBe('e2');
+    expect(await threadOf(store, 'e8')).toBe('e2');
+  });
+
+  it('refuses to re-point onto the same thread', async () => {
+    const { store } = makeHarness();
+    await expect(store.repointThreadMembers({ fromThreadId: 'e5', toThreadId: 'e5', maxEpisodes: 10 }))
+      .rejects.toThrow(/same thread/);
   });
 });

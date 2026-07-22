@@ -191,7 +191,9 @@ describe('retrieveEpisodicChains rolled-out session breadcrumbs', () => {
       salience: { score: 0.6 },
       affect: { labels: ['warm'] },
       themes: ['shared-life'],
-      spanRefs: [{ spanId: `span-${input.id}` }],
+      // apq0: rolled-out breadcrumbs scope by real span-session identity, so the
+      // session must live in the span ref, not the (now topic-thread) thread_id.
+      spanRefs: [{ spanId: `span-${input.id}`, sessionId: 'session:current' }],
       artifactRefs: [],
       provenanceRefs: [{ kind: 'l0_span', refId: `span-${input.id}` }],
     });

@@ -142,7 +142,24 @@ Startup verifies the seed-backed owner files before the split runtime comes up. 
 
 5. Keep the backup encryption key secret in `.env` or your deployment secret manager. `backup.json` should contain only the env key reference. Generate a local key with `openssl rand -base64 48`.
 
-6. Start the split runtime (gateway + agent + operator):
+6. Supply the Companion Library seed bundle. The runtime seeds each companion's
+   Personal Workspace from a `companion_docs/` bundle, but `companion_docs/` is
+   gitignored and is not present in a fresh clone. The repository tracks a
+   generic starter bundle at `companion_docs.example/`; copy it into place and
+   edit it for this deployment:
+
+   ```bash
+   cp -r companion_docs.example/ companion_docs/
+   ```
+
+   Gateway startup fails closed with an actionable message if the bundle is
+   missing. The bundle's `companion-library-manifest.json` pins every file hash;
+   after editing a file, update its hash (and the bundle version, if you are
+   reseeding an already-provisioned deployment) or startup rejects the drift.
+   To seed from a different location, pass an explicit
+   `companionLibrarySourceDir` to `provisionFleetWorkspaces`.
+
+7. Start the split runtime (gateway + agent + operator):
 
    ```bash
    npm run split

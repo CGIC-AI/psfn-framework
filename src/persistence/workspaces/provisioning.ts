@@ -16,6 +16,8 @@ import { ensurePersonalFilesLayout } from '../layout.js';
 
 export const COMPANION_LIBRARY_SEED_VERSION = 'companion-library-v2';
 export const COMPANION_LIBRARY_MANIFEST_FILE = 'companion-library-manifest.json';
+export const COMPANION_LIBRARY_EXAMPLE_DIR = 'companion_docs.example';
+export const COMPANION_LIBRARY_DEFAULT_SOURCE_DIR = 'companion_docs';
 export const SHARED_WORKSPACE_POLICY_VERSION = 1;
 
 export const SHARED_WORKSPACE_POLICY = Object.freeze({
@@ -83,6 +85,16 @@ function requireSha256(value: unknown, field: string): string {
 
 function loadSourceBundle(sourceDir: string): CompanionLibrarySourceBundle {
   const manifestPath = resolve(sourceDir, COMPANION_LIBRARY_MANIFEST_FILE);
+  if (!existsSync(sourceDir) || !existsSync(manifestPath)) {
+    throw new Error(
+      `Companion Library source bundle not found at ${resolve(sourceDir)} `
+      + `(expected manifest ${COMPANION_LIBRARY_MANIFEST_FILE}). This directory is not `
+      + `committed. Operator action required before first boot: copy the tracked example `
+      + `bundle into place with \`cp -r ${COMPANION_LIBRARY_EXAMPLE_DIR}/ ${COMPANION_LIBRARY_DEFAULT_SOURCE_DIR}/\` `
+      + `and edit it for this deployment, or pass an explicit `
+      + `companionLibrarySourceDir option pointing at your bundle.`,
+    );
+  }
   let rawManifest: string;
   let parsed: unknown;
   try {

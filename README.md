@@ -104,9 +104,13 @@ and [`docs/helm-upgrades.md`](./docs/helm-upgrades.md).
 - [`CLAUDE.md`](./CLAUDE.md) — Claude-specific orientation; AGENTS.md wins on process
 - [`docs/CODEBASE_MAP.md`](./docs/CODEBASE_MAP.md) — generated module map for navigation
 
-**Companion-facing material** lives in [`companion_docs/`](./companion_docs/):
-welcome documentation, philosophy, and privacy references for companions built
-on the framework.
+**Companion-facing material** — welcome documentation, philosophy, and privacy
+references for companions built on the framework — is seeded from a
+Companion Library bundle. The repository tracks a generic starter bundle at
+[`companion_docs.example/`](./companion_docs.example/); `companion_docs/` itself
+is gitignored and supplied locally per deployment. Before first boot, copy the
+example into place (`cp -r companion_docs.example/ companion_docs/`) and edit it,
+or point provisioning at your own bundle. See [`docs/setup.md`](./docs/setup.md).
 
 ## Project Structure
 

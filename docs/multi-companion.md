@@ -303,9 +303,12 @@ Authenticated companion connections have only `shared.workspace.list` and
 Shared content is stored only below `artifacts/`, accepts non-executable text
 formats, and is never auto-loaded into skills, modules, prompts, wikis, or
 memory. The versioned Companion Library seed lands under
-`docs/companion-library/` with no-overwrite copies. Its checked-in manifest
+`docs/companion-library/` with no-overwrite copies. The seed is supplied from a
+local `companion_docs/` bundle (gitignored; copy the tracked
+`companion_docs.example/` starter into place before first boot). Its manifest
 contains every source hash; source changes without a versioned manifest update
-fail startup.
+fail startup, and a missing bundle fails startup with an actionable operator
+step.
 
 ## Per-companion channels (Discord)
 

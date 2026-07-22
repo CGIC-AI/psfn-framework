@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { tmpdir } from 'node:os';
 import { resolveCompanionFleetPaths, type CompanionsFleetConfig } from '../../system/config/companions-config.js';
 import {
@@ -10,6 +11,9 @@ import {
   SHARED_WORKSPACE_POLICY,
 } from './provisioning.js';
 import { createHash } from 'node:crypto';
+
+const REPO_ROOT = fileURLToPath(new URL('../../../', import.meta.url));
+const EXAMPLE_BUNDLE_DIR = join(REPO_ROOT, 'companion_docs.example');
 
 const COMPANION_ID = '11111111-1111-4111-8111-111111111111';
 const FLEET: CompanionsFleetConfig = {
@@ -136,6 +140,33 @@ describe('fleet workspace provisioning', () => {
     expect(() => provisionFleetWorkspaces(fixture.fleet, {
       companionLibrarySourceDir: fixture.source,
     })).toThrow(/only manifest-declared regular files/);
+  });
+
+  it('fails closed with an actionable operator step when the source bundle is missing', () => {
+    const fixture = makeFixture();
+    const missing = join(fixture.root, 'no-such-companion_docs');
+
+    expect(() => provisionFleetWorkspaces(fixture.fleet, {
+      companionLibrarySourceDir: missing,
+    })).toThrow(/Companion Library source bundle not found/);
+    expect(() => provisionFleetWorkspaces(fixture.fleet, {
+      companionLibrarySourceDir: missing,
+    })).toThrow(/cp -r companion_docs\.example\/ companion_docs\//);
+  });
+
+  it('seeds from the tracked companion_docs.example bundle', () => {
+    const fixture = makeFixture();
+    provisionFleetWorkspaces(fixture.fleet, { companionLibrarySourceDir: EXAMPLE_BUNDLE_DIR });
+    const personal = fixture.fleet.companions[0].personalWorkspacePath;
+
+    for (const file of ['welcome.md', 'privacy-boundary-reference.md', 'live_verification_checklist.md']) {
+      expect(readFileSync(join(personal, 'docs/companion-library', file), 'utf8'))
+        .toBe(readFileSync(join(EXAMPLE_BUNDLE_DIR, file), 'utf8'));
+    }
+    expect(JSON.parse(readFileSync(
+      join(personal, '.psfn/seed-bundles', `${COMPANION_LIBRARY_SEED_VERSION}.json`),
+      'utf8',
+    ))).toMatchObject({ bundleVersion: COMPANION_LIBRARY_SEED_VERSION, overwritePolicy: 'never' });
   });
 
   it('fails closed when a manifest changes without a bundle version bump', () => {

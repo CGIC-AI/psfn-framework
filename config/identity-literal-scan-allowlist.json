@@ -2234,7 +2234,7 @@
     },
     {
       "path": "src/system/capabilities/shard-derivation.ts",
-      "contains": "psfn.shard-grant.v1",
+      "contains": "psfn.shard-grant.v2",
       "reason": "Shard grant derivation uses a stable project-scoped protocol version.",
       "pattern": "identity-legacy-slug"
     },

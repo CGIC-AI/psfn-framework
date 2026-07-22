@@ -159,6 +159,31 @@ const SCRATCHPAD_TTL_MS = 24 * 60 * 60 * 1000;
 const SCRATCHPAD_MAX_ENTRIES = 64;
 const log = createComponentLogger('PostgresMemoryStore');
 
+function appendMemoryScopeSqlPredicate(
+  scopeQuery: MemoryScopeQuery | undefined,
+  values: unknown[],
+): string | undefined {
+  if (!scopeQuery) return undefined;
+  const refConditions = (scopeQuery.refs ?? []).map((ref) => {
+    values.push(ref.kind, ref.id);
+    return `(scope_ref_kind = $${values.length - 1} AND scope_ref_id = $${values.length})`;
+  });
+  const tags = scopeQuery.tags ?? [];
+  let tagCondition: string | undefined;
+  if (tags.length > 0) {
+    values.push(tags);
+    tagCondition = `scope_tags ?| $${values.length}::text[]`;
+  }
+  const refCondition = refConditions.length > 0 ? `(${refConditions.join(' OR ')})` : undefined;
+  if (scopeQuery.mode === 'only') {
+    const conditions = [refCondition, tagCondition]
+      .filter((condition): condition is string => condition !== undefined);
+    return conditions.length > 0 ? conditions.join(' AND ') : undefined;
+  }
+  if (refCondition && tagCondition) return `(${refCondition} OR ${tagCondition})`;
+  return refCondition ?? tagCondition;
+}
+
 export interface PostgresMemoryStoreOptions {
   notesDir?: string;
   scratchpadMirrorPath?: string;
@@ -860,13 +885,18 @@ class PostgresMemoryStore implements MemoryStorePort {
     const normalizedScopeQuery = normalizeMemoryScopeQuery(scopeQuery);
     // Bounded ANN retrieval: order by the fixed-dimension cast distance with a
     // candidate-pool LIMIT so the HNSW index serves a top-N scan instead of a
-    // sequential scan over the whole corpus. The pool oversamples `limit` so the
-    // scope post-filter and threshold rarely under-return; ef_search matches the
-    // pool and, when available, iterative scans make the filtered top-k exact.
+    // sequential scan over the whole corpus. Scope predicates are part of the
+    // indexed query, before LIMIT, so other scopes cannot crowd matching rows out
+    // of the candidate horizon. ef_search and iterative scans make that filtered
+    // top-k exact when pgvector supports them.
     // The similarity column and threshold keep the unbounded `<=>` form (the same
     // distance) so scoring is unchanged from the pre-ANN query.
     const candidatePool = annCandidatePool(boundedLimit);
     const orderExpression = embeddingAnnOrderExpression('embedding', '$1', this.embeddingDims);
+    const values: unknown[] = [encodeEmbeddingLiteral(embedding), threshold];
+    const scopePredicate = appendMemoryScopeSqlPredicate(normalizedScopeQuery, values);
+    values.push(candidatePool);
+    const candidateLimitParameter = `$${values.length}`;
     const rows = await runAnnTunedQuery<MemoryEmbeddingSearchRow>(
       this.pool,
       { efSearch: annEfSearch(candidatePool), iterativeScan: this.annIterativeScanAvailable },
@@ -881,13 +911,16 @@ class PostgresMemoryStore implements MemoryStorePort {
         1 - (embedding <=> $1::vector) AS similarity
       FROM l2_memories
       WHERE embedding IS NOT NULL
+        AND vector_dims(embedding) = ${this.embeddingDims}
         AND superseded_by IS NULL
         AND deleted_at IS NULL
-        AND 1 - (embedding <=> $1::vector) >= $2
+        AND CASE WHEN vector_dims(embedding) = ${this.embeddingDims}
+          THEN 1 - (embedding <=> $1::vector) END >= $2
+        ${scopePredicate ? `AND ${scopePredicate}` : ''}
       ORDER BY ${orderExpression} ASC
-      LIMIT $3
+      LIMIT ${candidateLimitParameter}
     `,
-      [encodeEmbeddingLiteral(embedding), threshold, candidatePool],
+      values,
     );
 
     return rows

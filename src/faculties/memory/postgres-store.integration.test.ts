@@ -9,7 +9,6 @@ import {
 } from '../../test-support/postgres-test-harness.js';
 import { createPostgresMemoryStoreFromPool } from './postgres-store.js';
 import {
-  buildL2EmbeddingAnnIndexConcurrently,
   embeddingAnnOrderExpression,
   l2EmbeddingAnnIndexName,
 } from './postgres-store/embedding-index.js';
@@ -500,6 +499,8 @@ describe('postgres memory store integration', () => {
 
   it('rolls back the memory row when classification persistence fails', async () => {
     await withMemoryDatabase(async (pool) => {
+      // This test intentionally mutates the live schema. Let the factory's
+      // concurrent ANN build settle first so DROP TABLE cannot deadlock with it.
       const store = await createPostgresMemoryStoreFromPool(pool, 4, {
         awaitAnnIndexBuild: true,
       });
@@ -1928,6 +1929,7 @@ describe('postgres memory store ANN embedding search (a27w.2)', () => {
         SELECT id, 1 - (embedding <=> $1::vector) AS similarity
         FROM l2_memories
         WHERE embedding IS NOT NULL
+          AND vector_dims(embedding) = 4
           AND superseded_by IS NULL
           AND deleted_at IS NULL
           AND 1 - (embedding <=> $1::vector) >= $2
@@ -1955,6 +1957,7 @@ describe('postgres memory store ANN embedding search (a27w.2)', () => {
         'memory.superseded_by IS NULL',
         'memory.deleted_at IS NULL',
         'memory.embedding IS NOT NULL',
+        'vector_dims(memory.embedding) = 4',
         `1 - (memory.embedding <=> ${embeddingParam}::vector) >= ${thresholdParam}`,
         predicate.sql,
       ].join('\n AND ');
@@ -2017,16 +2020,15 @@ describe('postgres memory store ANN embedding search (a27w.2)', () => {
     });
   }, INTEGRATION_TIMEOUT_MS);
 
-  it('a failed background ANN index build leaves the store query-correct (degraded, no throw)', async () => {
+  it('isolates stale-dimension vectors while indexing and searching the active dimension', async () => {
     await withMemoryDatabase(async (pool) => {
       // Bootstrap the schema (and the valid dims=4 ANN index) on a fresh DB.
       await createPostgresMemoryStoreFromPool(pool, 4, {
         awaitAnnIndexBuild: true,
         subjectBackfill: false,
       });
-      // Seed a dimension-4 embedding, then force a build over vector(8): the
-      // CREATE INDEX CONCURRENTLY over embedding::vector(8) cannot cast the
-      // stored 4-d row and fails. The build must NOT throw.
+      // Seed a dimension-4 embedding, then reopen at vector(8). The active index
+      // must exclude the stale row instead of failing its cast.
       await pool.query(`
         INSERT INTO l2_memories (
           id, text, type, importance, confidence, emotional_valence, salience,
@@ -2039,10 +2041,10 @@ describe('postgres memory store ANN embedding search (a27w.2)', () => {
         )
       `);
 
-      const outcome = await buildL2EmbeddingAnnIndexConcurrently(pool, 8);
-      expect(outcome.status).toBe('degraded');
-      expect(outcome.error).toBeInstanceOf(Error);
-      // No usable ANN index landed.
+      const store = await createPostgresMemoryStoreFromPool(pool, 8, {
+        awaitAnnIndexBuild: true,
+        subjectBackfill: false,
+      });
       const built = await pool.query<{ indexname: string; indisvalid: boolean }>(
         `SELECT c.relname AS indexname, i.indisvalid
            FROM pg_index i
@@ -2054,19 +2056,66 @@ describe('postgres memory store ANN embedding search (a27w.2)', () => {
             AND c.relname = $1`,
         [l2EmbeddingAnnIndexName(8)],
       );
-      // Either no index row, or an invalid one — never a live, valid index.
-      expect(built.rows.every(row => row.indisvalid === false)).toBe(true);
+      expect(built.rows).toEqual([
+        expect.objectContaining({ indexname: l2EmbeddingAnnIndexName(8), indisvalid: true }),
+      ]);
 
-      // The store is still query-correct: a plain cosine ranking (sequential
-      // scan, no ANN index) returns the seeded row.
-      const ranked = await pool.query<{ id: string }>(
-        `SELECT id
-           FROM l2_memories
-          WHERE embedding IS NOT NULL
-          ORDER BY embedding <=> '[1,0,0,0]'::vector ASC
-          LIMIT 1`,
+      await store.insertMemory(
+        makeMemory({ id: 'active-dims-8', text: 'active dimension probe' }),
+        new Float32Array([1, 0, 0, 0, 0, 0, 0, 0]),
       );
-      expect(ranked.rows[0]?.id).toBe('degraded-1');
+      const ranked = await store.searchByEmbedding(
+        new Float32Array([1, 0, 0, 0, 0, 0, 0, 0]),
+        -1,
+        10,
+        undefined,
+        { authorization: 'bypass-system-internal' },
+      );
+      expect(ranked.map(memory => memory.id)).toEqual(['active-dims-8']);
+    });
+  }, INTEGRATION_TIMEOUT_MS);
+
+  it('applies raw scope filters before the bounded ANN candidate limit', async () => {
+    await withMemoryDatabase(async (pool) => {
+      const store = await createPostgresMemoryStoreFromPool(pool, 4, {
+        awaitAnnIndexBuild: true,
+        subjectBackfill: false,
+      });
+      await pool.query(`
+        INSERT INTO l2_memories (
+          id, text, type, importance, confidence, emotional_valence, salience,
+          source_ref, source_type, extracted_at, last_accessed, access_count,
+          scope_ref_kind, scope_ref_id, sensitivity, embedding
+        )
+        SELECT
+          'scope-crowd-' || g, 'near other-scope neighbour ' || g,
+          'semantic', 0.5, 0.5, 0, 0.5, 'seed:scope-crowd', 'unknown',
+          1700000000000, 1700000000000, 0, 'project', 'beta', 'personal',
+          ('[1,' || (g::float / 1000000) || ',0,0]')::vector
+        FROM generate_series(1, 250) g
+      `);
+      await pool.query(`
+        INSERT INTO l2_memories (
+          id, text, type, importance, confidence, emotional_valence, salience,
+          source_ref, source_type, extracted_at, last_accessed, access_count,
+          scope_ref_kind, scope_ref_id, sensitivity, embedding
+        ) VALUES (
+          'scope-target', 'farther matching-scope neighbour',
+          'semantic', 0.5, 0.5, 0, 0.5, 'seed:scope-target', 'unknown',
+          1700000000000, 1700000000000, 0, 'project', 'alpha', 'personal',
+          '[0.7,0.3,0,0]'::vector
+        )
+      `);
+      await pool.query('ANALYZE l2_memories');
+
+      const ranked = await store.searchByEmbedding(
+        QUERY_VECTOR,
+        -1,
+        1,
+        { refs: [{ kind: 'project', id: 'alpha' }], mode: 'only' },
+        { authorization: 'bypass-system-internal' },
+      );
+      expect(ranked.map(memory => memory.id)).toEqual(['scope-target']);
     });
   }, INTEGRATION_TIMEOUT_MS);
 

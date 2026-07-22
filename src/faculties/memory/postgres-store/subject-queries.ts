@@ -207,7 +207,11 @@ function buildSelector(
       const embeddingParameter = `$${values.length}`;
       values.push(selector.threshold);
       where.push('memory.embedding IS NOT NULL');
-      where.push(`1 - (memory.embedding <=> ${embeddingParameter}::vector) >= $${values.length}`);
+      where.push(`vector_dims(memory.embedding) = ${embeddingDims}`);
+      where.push(
+        `CASE WHEN vector_dims(memory.embedding) = ${embeddingDims} `
+        + `THEN 1 - (memory.embedding <=> ${embeddingParameter}::vector) END >= $${values.length}`,
+      );
       similaritySql = `1 - (memory.embedding <=> ${embeddingParameter}::vector)`;
       orderBy = `memory.embedding <=> ${embeddingParameter}::vector ASC, memory.salience DESC, memory.extracted_at DESC`;
       // The bounded ANN path orders by the fixed-dimension cast distance so the

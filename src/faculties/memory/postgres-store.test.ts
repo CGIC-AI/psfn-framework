@@ -359,9 +359,9 @@ class FakeMemoryPool {
     if (normalized.includes('1 - (embedding <=> $1::vector) as similarity')) {
       const queryEmbedding = decodeEmbeddingLiteral(typeof values[0] === 'string' ? values[0] : null);
       const threshold = Number(values[1] ?? 0);
-      // Record the bounded LIMIT parameter ($3) the raw path sends to Postgres.
-      this.embeddingSearchLimits.push(Number(values[2]));
-      const rows = [...this.memories.values()]
+      // The raw path appends its bounded LIMIT after optional scope parameters.
+      this.embeddingSearchLimits.push(Number(values.at(-1)));
+      let rows = [...this.memories.values()]
         .filter((row) => !row.superseded_by && row.deleted_at === null && row.embedding)
         .map((row) => ({
           ...row,
@@ -369,6 +369,14 @@ class FakeMemoryPool {
         }))
         .filter((row) => row.similarity >= threshold)
         .sort((left, right) => right.similarity - left.similarity || right.salience - left.salience || right.extracted_at - left.extracted_at);
+      if (normalized.includes('scope_ref_kind = $3') && normalized.includes('scope_ref_id = $4')) {
+        rows = rows.filter(row => row.scope_ref_kind === values[2] && row.scope_ref_id === values[3]);
+      }
+      if (normalized.includes('scope_tags ?| $3::text[]')) {
+        const scopeTags = new Set(values[2] as string[]);
+        rows = rows.filter(row => Array.isArray(row.scope_tags)
+          && row.scope_tags.some(tag => scopeTags.has(String(tag))));
+      }
       return {
         rows,
         rowCount: rows.length,
@@ -801,6 +809,33 @@ describe('postgres memory store unit coverage', () => {
       })).rejects.toThrow('positive finite limit');
     }
     expect(pool.embeddingSearchLimits).toEqual([]);
+  });
+
+  it('pushes raw embedding scope filters into SQL before the candidate limit', async () => {
+    const pool = new FakeMemoryPool();
+    const inScope = makeMemory('scope-hit', 'Scoped hit', {
+      scopeRef: { kind: 'project', id: 'alpha' },
+    });
+    const outOfScope = makeMemory('scope-miss', 'Closer but outside scope', {
+      scopeRef: { kind: 'project', id: 'beta' },
+    });
+    pool.memories.set(inScope.id, makeMemoryRow(inScope, '[0.8,0.2,0,0]'));
+    pool.memories.set(outOfScope.id, makeMemoryRow(outOfScope, '[1,0,0,0]'));
+    postgresMocks.activePool = pool;
+    const store = await createPostgresMemoryStore('postgres://unused', 4);
+
+    const results = await store.searchByEmbedding(
+      new Float32Array([1, 0, 0, 0]),
+      -1,
+      1,
+      { refs: [{ kind: 'project', id: 'alpha' }], mode: 'only' },
+      { authorization: 'bypass-system-internal' },
+    );
+
+    expect(results.map(memory => memory.id)).toEqual(['scope-hit']);
+    const searchSql = pool.clients.flatMap(client => client.statements)
+      .find(sql => sql.includes('1 - (embedding <=> $1::vector) as similarity'));
+    expect(searchSql).toMatch(/scope_ref_kind = \$3.*scope_ref_id = \$4.*order by.*limit \$5/);
   });
 
   it('paginates lexical augmentation across deterministic Postgres extracted-at ordering', async () => {

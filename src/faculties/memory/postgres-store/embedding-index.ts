@@ -15,9 +15,9 @@ const log = createComponentLogger('L2EmbeddingAnnIndex');
  * constraint explicitly by building the index over the fixed-dimension cast
  * expression `(embedding::vector(N))`, with N pinned to the runtime dimension,
  * and every ANN query orders by the identical cast expression so the planner
- * uses the index. A dimension change is already a breaking corpus event
- * (`validateEmbeddingDimensions` rejects mismatched writes); rebuilding this
- * index is part of that migration.
+ * uses the index. The partial predicate admits only vectors matching the active
+ * runtime dimension, so an operator can re-embed a corpus incrementally without
+ * one stale vector breaking the new index or every semantic query.
  */
 /**
  * Base (dimension-agnostic) name shared by every generation of the L2 embedding
@@ -53,8 +53,8 @@ export function l2EmbeddingAnnIndexName(embeddingDims: number): string {
 // they give strong recall (>0.95 at ef_search >= the candidate pool) for corpora
 // up to the low millions while keeping build time and index size bounded. cosine
 // ops (`<=>`) match the distance every embedding query uses. The index is partial
-// on `embedding IS NOT NULL` so the (already search-excluded) null-embedding rows
-// never enter the graph, mirroring idx_l2_memories_embedding_present.
+// on non-null vectors of the active dimension so null and stale-dimension rows
+// never enter the graph.
 const HNSW_M = 16;
 const HNSW_EF_CONSTRUCTION = 64;
 
@@ -126,7 +126,7 @@ export function buildL2EmbeddingAnnIndexCreateStatement(
   return `CREATE INDEX ${concurrently}IF NOT EXISTS ${name} `
     + `ON l2_memories USING hnsw ((embedding::vector(${dims})) vector_cosine_ops) `
     + `WITH (m = ${HNSW_M}, ef_construction = ${HNSW_EF_CONSTRUCTION}) `
-    + `WHERE embedding IS NOT NULL;`;
+    + `WHERE embedding IS NOT NULL AND vector_dims(embedding) = ${dims};`;
 }
 
 export type L2EmbeddingAnnIndexBuildStatus = 'ready' | 'degraded';

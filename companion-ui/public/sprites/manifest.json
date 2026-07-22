@@ -1,0 +1,925 @@
+{
+  "version": 1,
+  "placeholder": true,
+  "generator": "companion-ui/scripts/generate-sprite-sheets.ts (placeholder art)",
+  "sheets": {
+    "expr-mini": {
+      "src": "sprites/expr-mini.png",
+      "cols": 8,
+      "rows": 4,
+      "frameCount": 32,
+      "frameSize": {
+        "w": 96,
+        "h": 96
+      },
+      "lazy": false,
+      "placeholder": true
+    },
+    "expr-avatar": {
+      "src": "sprites/expr-avatar.png",
+      "cols": 8,
+      "rows": 4,
+      "frameCount": 32,
+      "frameSize": {
+        "w": 96,
+        "h": 144
+      },
+      "lazy": true,
+      "placeholder": true
+    },
+    "tool": {
+      "src": "sprites/tool.png",
+      "cols": 8,
+      "rows": 9,
+      "frameCount": 70,
+      "frameSize": {
+        "w": 96,
+        "h": 96
+      },
+      "lazy": false,
+      "placeholder": true
+    },
+    "touch": {
+      "src": "sprites/touch.png",
+      "cols": 8,
+      "rows": 2,
+      "frameCount": 9,
+      "frameSize": {
+        "w": 96,
+        "h": 96
+      },
+      "lazy": false,
+      "placeholder": true
+    }
+  },
+  "entries": {
+    "expr.neutral.mini": {
+      "id": "expr.neutral.mini",
+      "kind": "expression",
+      "sheet": "expr-mini",
+      "frames": [
+        0,
+        1
+      ],
+      "fps": 2,
+      "loop": true,
+      "label": "Neutral (mini)",
+      "placeholder": true,
+      "base": "neutral",
+      "crop": "mini"
+    },
+    "expr.content.mini": {
+      "id": "expr.content.mini",
+      "kind": "expression",
+      "sheet": "expr-mini",
+      "frames": [
+        2,
+        3
+      ],
+      "fps": 2,
+      "loop": true,
+      "label": "Content (mini)",
+      "placeholder": true,
+      "base": "content",
+      "crop": "mini"
+    },
+    "expr.happy.mini": {
+      "id": "expr.happy.mini",
+      "kind": "expression",
+      "sheet": "expr-mini",
+      "frames": [
+        4,
+        5
+      ],
+      "fps": 2,
+      "loop": true,
+      "label": "Happy (mini)",
+      "placeholder": true,
+      "base": "happy",
+      "crop": "mini"
+    },
+    "expr.excited.mini": {
+      "id": "expr.excited.mini",
+      "kind": "expression",
+      "sheet": "expr-mini",
+      "frames": [
+        6,
+        7
+      ],
+      "fps": 2,
+      "loop": true,
+      "label": "Excited (mini)",
+      "placeholder": true,
+      "base": "excited",
+      "crop": "mini"
+    },
+    "expr.laughing.mini": {
+      "id": "expr.laughing.mini",
+      "kind": "expression",
+      "sheet": "expr-mini",
+      "frames": [
+        8,
+        9
+      ],
+      "fps": 2,
+      "loop": true,
+      "label": "Laughing (mini)",
+      "placeholder": true,
+      "base": "laughing",
+      "crop": "mini"
+    },
+    "expr.love.mini": {
+      "id": "expr.love.mini",
+      "kind": "expression",
+      "sheet": "expr-mini",
+      "frames": [
+        10,
+        11
+      ],
+      "fps": 2,
+      "loop": true,
+      "label": "Love (mini)",
+      "placeholder": true,
+      "base": "love",
+      "crop": "mini"
+    },
+    "expr.curious.mini": {
+      "id": "expr.curious.mini",
+      "kind": "expression",
+      "sheet": "expr-mini",
+      "frames": [
+        12,
+        13
+      ],
+      "fps": 2,
+      "loop": true,
+      "label": "Curious (mini)",
+      "placeholder": true,
+      "base": "curious",
+      "crop": "mini"
+    },
+    "expr.surprised.mini": {
+      "id": "expr.surprised.mini",
+      "kind": "expression",
+      "sheet": "expr-mini",
+      "frames": [
+        14,
+        15
+      ],
+      "fps": 2,
+      "loop": true,
+      "label": "Surprised (mini)",
+      "placeholder": true,
+      "base": "surprised",
+      "crop": "mini"
+    },
+    "expr.sad.mini": {
+      "id": "expr.sad.mini",
+      "kind": "expression",
+      "sheet": "expr-mini",
+      "frames": [
+        16,
+        17
+      ],
+      "fps": 2,
+      "loop": true,
+      "label": "Sad (mini)",
+      "placeholder": true,
+      "base": "sad",
+      "crop": "mini"
+    },
+    "expr.tired.mini": {
+      "id": "expr.tired.mini",
+      "kind": "expression",
+      "sheet": "expr-mini",
+      "frames": [
+        18,
+        19
+      ],
+      "fps": 2,
+      "loop": true,
+      "label": "Tired (mini)",
+      "placeholder": true,
+      "base": "tired",
+      "crop": "mini"
+    },
+    "expr.anxious.mini": {
+      "id": "expr.anxious.mini",
+      "kind": "expression",
+      "sheet": "expr-mini",
+      "frames": [
+        20,
+        21
+      ],
+      "fps": 2,
+      "loop": true,
+      "label": "Anxious (mini)",
+      "placeholder": true,
+      "base": "anxious",
+      "crop": "mini"
+    },
+    "expr.grumpy.mini": {
+      "id": "expr.grumpy.mini",
+      "kind": "expression",
+      "sheet": "expr-mini",
+      "frames": [
+        22,
+        23
+      ],
+      "fps": 2,
+      "loop": true,
+      "label": "Grumpy (mini)",
+      "placeholder": true,
+      "base": "grumpy",
+      "crop": "mini"
+    },
+    "expr.smug.mini": {
+      "id": "expr.smug.mini",
+      "kind": "expression",
+      "sheet": "expr-mini",
+      "frames": [
+        24,
+        25
+      ],
+      "fps": 2,
+      "loop": true,
+      "label": "Smug (mini)",
+      "placeholder": true,
+      "base": "smug",
+      "crop": "mini"
+    },
+    "expr.embarrassed.mini": {
+      "id": "expr.embarrassed.mini",
+      "kind": "expression",
+      "sheet": "expr-mini",
+      "frames": [
+        26,
+        27
+      ],
+      "fps": 2,
+      "loop": true,
+      "label": "Embarrassed (mini)",
+      "placeholder": true,
+      "base": "embarrassed",
+      "crop": "mini"
+    },
+    "expr.thinking.mini": {
+      "id": "expr.thinking.mini",
+      "kind": "expression",
+      "sheet": "expr-mini",
+      "frames": [
+        28,
+        29
+      ],
+      "fps": 2,
+      "loop": true,
+      "label": "Thinking (mini)",
+      "placeholder": true,
+      "base": "thinking",
+      "crop": "mini"
+    },
+    "expr.asleep.mini": {
+      "id": "expr.asleep.mini",
+      "kind": "expression",
+      "sheet": "expr-mini",
+      "frames": [
+        30,
+        31
+      ],
+      "fps": 2,
+      "loop": true,
+      "label": "Asleep (mini)",
+      "placeholder": true,
+      "base": "asleep",
+      "crop": "mini"
+    },
+    "expr.neutral.avatar": {
+      "id": "expr.neutral.avatar",
+      "kind": "expression",
+      "sheet": "expr-avatar",
+      "frames": [
+        0,
+        1
+      ],
+      "fps": 2,
+      "loop": true,
+      "label": "Neutral (avatar)",
+      "placeholder": true,
+      "base": "neutral",
+      "crop": "avatar"
+    },
+    "expr.content.avatar": {
+      "id": "expr.content.avatar",
+      "kind": "expression",
+      "sheet": "expr-avatar",
+      "frames": [
+        2,
+        3
+      ],
+      "fps": 2,
+      "loop": true,
+      "label": "Content (avatar)",
+      "placeholder": true,
+      "base": "content",
+      "crop": "avatar"
+    },
+    "expr.happy.avatar": {
+      "id": "expr.happy.avatar",
+      "kind": "expression",
+      "sheet": "expr-avatar",
+      "frames": [
+        4,
+        5
+      ],
+      "fps": 2,
+      "loop": true,
+      "label": "Happy (avatar)",
+      "placeholder": true,
+      "base": "happy",
+      "crop": "avatar"
+    },
+    "expr.excited.avatar": {
+      "id": "expr.excited.avatar",
+      "kind": "expression",
+      "sheet": "expr-avatar",
+      "frames": [
+        6,
+        7
+      ],
+      "fps": 2,
+      "loop": true,
+      "label": "Excited (avatar)",
+      "placeholder": true,
+      "base": "excited",
+      "crop": "avatar"
+    },
+    "expr.laughing.avatar": {
+      "id": "expr.laughing.avatar",
+      "kind": "expression",
+      "sheet": "expr-avatar",
+      "frames": [
+        8,
+        9
+      ],
+      "fps": 2,
+      "loop": true,
+      "label": "Laughing (avatar)",
+      "placeholder": true,
+      "base": "laughing",
+      "crop": "avatar"
+    },
+    "expr.love.avatar": {
+      "id": "expr.love.avatar",
+      "kind": "expression",
+      "sheet": "expr-avatar",
+      "frames": [
+        10,
+        11
+      ],
+      "fps": 2,
+      "loop": true,
+      "label": "Love (avatar)",
+      "placeholder": true,
+      "base": "love",
+      "crop": "avatar"
+    },
+    "expr.curious.avatar": {
+      "id": "expr.curious.avatar",
+      "kind": "expression",
+      "sheet": "expr-avatar",
+      "frames": [
+        12,
+        13
+      ],
+      "fps": 2,
+      "loop": true,
+      "label": "Curious (avatar)",
+      "placeholder": true,
+      "base": "curious",
+      "crop": "avatar"
+    },
+    "expr.surprised.avatar": {
+      "id": "expr.surprised.avatar",
+      "kind": "expression",
+      "sheet": "expr-avatar",
+      "frames": [
+        14,
+        15
+      ],
+      "fps": 2,
+      "loop": true,
+      "label": "Surprised (avatar)",
+      "placeholder": true,
+      "base": "surprised",
+      "crop": "avatar"
+    },
+    "expr.sad.avatar": {
+      "id": "expr.sad.avatar",
+      "kind": "expression",
+      "sheet": "expr-avatar",
+      "frames": [
+        16,
+        17
+      ],
+      "fps": 2,
+      "loop": true,
+      "label": "Sad (avatar)",
+      "placeholder": true,
+      "base": "sad",
+      "crop": "avatar"
+    },
+    "expr.tired.avatar": {
+      "id": "expr.tired.avatar",
+      "kind": "expression",
+      "sheet": "expr-avatar",
+      "frames": [
+        18,
+        19
+      ],
+      "fps": 2,
+      "loop": true,
+      "label": "Tired (avatar)",
+      "placeholder": true,
+      "base": "tired",
+      "crop": "avatar"
+    },
+    "expr.anxious.avatar": {
+      "id": "expr.anxious.avatar",
+      "kind": "expression",
+      "sheet": "expr-avatar",
+      "frames": [
+        20,
+        21
+      ],
+      "fps": 2,
+      "loop": true,
+      "label": "Anxious (avatar)",
+      "placeholder": true,
+      "base": "anxious",
+      "crop": "avatar"
+    },
+    "expr.grumpy.avatar": {
+      "id": "expr.grumpy.avatar",
+      "kind": "expression",
+      "sheet": "expr-avatar",
+      "frames": [
+        22,
+        23
+      ],
+      "fps": 2,
+      "loop": true,
+      "label": "Grumpy (avatar)",
+      "placeholder": true,
+      "base": "grumpy",
+      "crop": "avatar"
+    },
+    "expr.smug.avatar": {
+      "id": "expr.smug.avatar",
+      "kind": "expression",
+      "sheet": "expr-avatar",
+      "frames": [
+        24,
+        25
+      ],
+      "fps": 2,
+      "loop": true,
+      "label": "Smug (avatar)",
+      "placeholder": true,
+      "base": "smug",
+      "crop": "avatar"
+    },
+    "expr.embarrassed.avatar": {
+      "id": "expr.embarrassed.avatar",
+      "kind": "expression",
+      "sheet": "expr-avatar",
+      "frames": [
+        26,
+        27
+      ],
+      "fps": 2,
+      "loop": true,
+      "label": "Embarrassed (avatar)",
+      "placeholder": true,
+      "base": "embarrassed",
+      "crop": "avatar"
+    },
+    "expr.thinking.avatar": {
+      "id": "expr.thinking.avatar",
+      "kind": "expression",
+      "sheet": "expr-avatar",
+      "frames": [
+        28,
+        29
+      ],
+      "fps": 2,
+      "loop": true,
+      "label": "Thinking (avatar)",
+      "placeholder": true,
+      "base": "thinking",
+      "crop": "avatar"
+    },
+    "expr.asleep.avatar": {
+      "id": "expr.asleep.avatar",
+      "kind": "expression",
+      "sheet": "expr-avatar",
+      "frames": [
+        30,
+        31
+      ],
+      "fps": 2,
+      "loop": true,
+      "label": "Asleep (avatar)",
+      "placeholder": true,
+      "base": "asleep",
+      "crop": "avatar"
+    },
+    "tool.notebook.started": {
+      "id": "tool.notebook.started",
+      "kind": "tool",
+      "sheet": "tool",
+      "frames": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "fps": 6,
+      "loop": true,
+      "label": "Notebook started",
+      "placeholder": true,
+      "domain": "notebook",
+      "phase": "started"
+    },
+    "tool.notebook.completed": {
+      "id": "tool.notebook.completed",
+      "kind": "tool",
+      "sheet": "tool",
+      "frames": [
+        4,
+        5,
+        6
+      ],
+      "fps": 8,
+      "loop": false,
+      "label": "Notebook completed",
+      "placeholder": true,
+      "domain": "notebook",
+      "phase": "completed"
+    },
+    "tool.notebook.failed": {
+      "id": "tool.notebook.failed",
+      "kind": "tool",
+      "sheet": "tool",
+      "frames": [
+        7,
+        8,
+        9
+      ],
+      "fps": 8,
+      "loop": false,
+      "label": "Notebook failed",
+      "placeholder": true,
+      "domain": "notebook",
+      "phase": "failed"
+    },
+    "tool.magnifier.started": {
+      "id": "tool.magnifier.started",
+      "kind": "tool",
+      "sheet": "tool",
+      "frames": [
+        10,
+        11,
+        12,
+        13
+      ],
+      "fps": 6,
+      "loop": true,
+      "label": "Magnifier started",
+      "placeholder": true,
+      "domain": "magnifier",
+      "phase": "started"
+    },
+    "tool.magnifier.completed": {
+      "id": "tool.magnifier.completed",
+      "kind": "tool",
+      "sheet": "tool",
+      "frames": [
+        14,
+        15,
+        16
+      ],
+      "fps": 8,
+      "loop": false,
+      "label": "Magnifier completed",
+      "placeholder": true,
+      "domain": "magnifier",
+      "phase": "completed"
+    },
+    "tool.magnifier.failed": {
+      "id": "tool.magnifier.failed",
+      "kind": "tool",
+      "sheet": "tool",
+      "frames": [
+        17,
+        18,
+        19
+      ],
+      "fps": 8,
+      "loop": false,
+      "label": "Magnifier failed",
+      "placeholder": true,
+      "domain": "magnifier",
+      "phase": "failed"
+    },
+    "tool.wrench.started": {
+      "id": "tool.wrench.started",
+      "kind": "tool",
+      "sheet": "tool",
+      "frames": [
+        20,
+        21,
+        22,
+        23
+      ],
+      "fps": 6,
+      "loop": true,
+      "label": "Wrench started",
+      "placeholder": true,
+      "domain": "wrench",
+      "phase": "started"
+    },
+    "tool.wrench.completed": {
+      "id": "tool.wrench.completed",
+      "kind": "tool",
+      "sheet": "tool",
+      "frames": [
+        24,
+        25,
+        26
+      ],
+      "fps": 8,
+      "loop": false,
+      "label": "Wrench completed",
+      "placeholder": true,
+      "domain": "wrench",
+      "phase": "completed"
+    },
+    "tool.wrench.failed": {
+      "id": "tool.wrench.failed",
+      "kind": "tool",
+      "sheet": "tool",
+      "frames": [
+        27,
+        28,
+        29
+      ],
+      "fps": 8,
+      "loop": false,
+      "label": "Wrench failed",
+      "placeholder": true,
+      "domain": "wrench",
+      "phase": "failed"
+    },
+    "tool.painting.started": {
+      "id": "tool.painting.started",
+      "kind": "tool",
+      "sheet": "tool",
+      "frames": [
+        30,
+        31,
+        32,
+        33
+      ],
+      "fps": 6,
+      "loop": true,
+      "label": "Painting started",
+      "placeholder": true,
+      "domain": "painting",
+      "phase": "started"
+    },
+    "tool.painting.completed": {
+      "id": "tool.painting.completed",
+      "kind": "tool",
+      "sheet": "tool",
+      "frames": [
+        34,
+        35,
+        36
+      ],
+      "fps": 8,
+      "loop": false,
+      "label": "Painting completed",
+      "placeholder": true,
+      "domain": "painting",
+      "phase": "completed"
+    },
+    "tool.painting.failed": {
+      "id": "tool.painting.failed",
+      "kind": "tool",
+      "sheet": "tool",
+      "frames": [
+        37,
+        38,
+        39
+      ],
+      "fps": 8,
+      "loop": false,
+      "label": "Painting failed",
+      "placeholder": true,
+      "domain": "painting",
+      "phase": "failed"
+    },
+    "tool.envelope.started": {
+      "id": "tool.envelope.started",
+      "kind": "tool",
+      "sheet": "tool",
+      "frames": [
+        40,
+        41,
+        42,
+        43
+      ],
+      "fps": 6,
+      "loop": true,
+      "label": "Envelope started",
+      "placeholder": true,
+      "domain": "envelope",
+      "phase": "started"
+    },
+    "tool.envelope.completed": {
+      "id": "tool.envelope.completed",
+      "kind": "tool",
+      "sheet": "tool",
+      "frames": [
+        44,
+        45,
+        46
+      ],
+      "fps": 8,
+      "loop": false,
+      "label": "Envelope completed",
+      "placeholder": true,
+      "domain": "envelope",
+      "phase": "completed"
+    },
+    "tool.envelope.failed": {
+      "id": "tool.envelope.failed",
+      "kind": "tool",
+      "sheet": "tool",
+      "frames": [
+        47,
+        48,
+        49
+      ],
+      "fps": 8,
+      "loop": false,
+      "label": "Envelope failed",
+      "placeholder": true,
+      "domain": "envelope",
+      "phase": "failed"
+    },
+    "tool.clock.started": {
+      "id": "tool.clock.started",
+      "kind": "tool",
+      "sheet": "tool",
+      "frames": [
+        50,
+        51,
+        52,
+        53
+      ],
+      "fps": 6,
+      "loop": true,
+      "label": "Clock started",
+      "placeholder": true,
+      "domain": "clock",
+      "phase": "started"
+    },
+    "tool.clock.completed": {
+      "id": "tool.clock.completed",
+      "kind": "tool",
+      "sheet": "tool",
+      "frames": [
+        54,
+        55,
+        56
+      ],
+      "fps": 8,
+      "loop": false,
+      "label": "Clock completed",
+      "placeholder": true,
+      "domain": "clock",
+      "phase": "completed"
+    },
+    "tool.clock.failed": {
+      "id": "tool.clock.failed",
+      "kind": "tool",
+      "sheet": "tool",
+      "frames": [
+        57,
+        58,
+        59
+      ],
+      "fps": 8,
+      "loop": false,
+      "label": "Clock failed",
+      "placeholder": true,
+      "domain": "clock",
+      "phase": "failed"
+    },
+    "tool.clones.started": {
+      "id": "tool.clones.started",
+      "kind": "tool",
+      "sheet": "tool",
+      "frames": [
+        60,
+        61,
+        62,
+        63
+      ],
+      "fps": 6,
+      "loop": true,
+      "label": "Clones started",
+      "placeholder": true,
+      "domain": "clones",
+      "phase": "started"
+    },
+    "tool.clones.completed": {
+      "id": "tool.clones.completed",
+      "kind": "tool",
+      "sheet": "tool",
+      "frames": [
+        64,
+        65,
+        66
+      ],
+      "fps": 8,
+      "loop": false,
+      "label": "Clones completed",
+      "placeholder": true,
+      "domain": "clones",
+      "phase": "completed"
+    },
+    "tool.clones.failed": {
+      "id": "tool.clones.failed",
+      "kind": "tool",
+      "sheet": "tool",
+      "frames": [
+        67,
+        68,
+        69
+      ],
+      "fps": 8,
+      "loop": false,
+      "label": "Clones failed",
+      "placeholder": true,
+      "domain": "clones",
+      "phase": "failed"
+    },
+    "touch.headpat-happy": {
+      "id": "touch.headpat-happy",
+      "kind": "touch",
+      "sheet": "touch",
+      "frames": [
+        0,
+        1,
+        2
+      ],
+      "fps": 8,
+      "loop": false,
+      "label": "Headpat happy",
+      "placeholder": true,
+      "reaction": "headpat-happy"
+    },
+    "touch.hug-squeeze": {
+      "id": "touch.hug-squeeze",
+      "kind": "touch",
+      "sheet": "touch",
+      "frames": [
+        3,
+        4,
+        5
+      ],
+      "fps": 8,
+      "loop": false,
+      "label": "Hug squeeze",
+      "placeholder": true,
+      "reaction": "hug-squeeze"
+    },
+    "touch.kiss-blush": {
+      "id": "touch.kiss-blush",
+      "kind": "touch",
+      "sheet": "touch",
+      "frames": [
+        6,
+        7,
+        8
+      ],
+      "fps": 8,
+      "loop": false,
+      "label": "Kiss blush",
+      "placeholder": true,
+      "reaction": "kiss-blush"
+    }
+  }
+}

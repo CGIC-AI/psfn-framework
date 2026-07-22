@@ -60,6 +60,7 @@ function makeMockStore(memories: Array<PurrMemory & { similarity: number }>): Me
     getById: vi.fn().mockImplementation((id: string) => memories.find(memory => memory.id === id)),
     getMemoriesByContact: vi.fn().mockReturnValue([]),
     getMemoriesByChannel: vi.fn().mockReturnValue([]),
+    aggregateAuthorizedMemorySubjects: vi.fn(async () => ({ kind: 'memories', memories: [], total: 0 })),
     getAllActiveMemories: vi.fn().mockReturnValue(memories),
     listActiveMemories: vi.fn().mockReturnValue(memories),
     recordEvolutionLink: vi.fn(),
@@ -204,6 +205,7 @@ describe('MemoryRetriever active memory context', () => {
         }
         return { memories: [], total: 0 };
       }),
+      aggregateAuthorizedMemorySubjects: vi.fn(async () => ({ kind: 'memories', memories: [], total: 0 })),
       mutateAuthorizedMemorySubjects: vi.fn().mockResolvedValue(1),
     } as unknown as MemoryStorePort;
     const retriever = new MemoryRetriever(

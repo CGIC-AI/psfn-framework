@@ -166,7 +166,7 @@ export class LiveShardDirectory implements ShardDirectoryPort {
           channelId: runtime.channelId,
           channelType: 'companion-ui',
           authorId: actor.principalId,
-          authorName: 'Authenticated fleet human',
+          authorName: 'Authenticated cluster human',
           content,
           timestamp: new Date(timestamp),
           isDirectMessage: true,

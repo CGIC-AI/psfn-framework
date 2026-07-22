@@ -224,7 +224,7 @@ describe('AgentApiBackend Hub device principal boundary', () => {
       channelId: `hub-device:${'a'.repeat(64)}`,
       channelType: 'companion-ui',
       authorId: humanAttachment.actor.principalId,
-      authorName: 'Authenticated fleet human',
+      authorName: 'Authenticated cluster human',
       routing: {
         source: 'companion-ui',
         channelPrivacy: 'private',

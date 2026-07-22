@@ -202,6 +202,17 @@ export interface IntentionOutboundSocialDesireProvenance {
   orientation: SocialDesireOrientation;
 }
 
+/**
+ * Runtime-stamped provenance for a model-authored external appraisal draft.
+ * Presence requires exact-action ratification through the single-use social
+ * desire consent ledger before the outbound gate may accept the draft.
+ */
+export interface IntentionOutboundAppraisalFollowUpProvenance {
+  /** Original concern lookup scope used when the appraisal was evaluated. */
+  channelId: string;
+  canonicalContactKey?: string;
+}
+
 export interface IntentionOutboundMessageActionPayload {
   channelId: string;
   channelType: ChannelType;
@@ -210,6 +221,8 @@ export interface IntentionOutboundMessageActionPayload {
   pendingFollowUpId?: string;
   concernIds?: string[];
   requiresActiveConcern?: boolean;
+  /** Marks direct external output drafted by the background appraisal model. */
+  appraisalFollowUp?: IntentionOutboundAppraisalFollowUpProvenance;
   /** Consented social-desire provenance (verified live at the outbound gate). */
   socialDesire?: IntentionOutboundSocialDesireProvenance;
   /** Preserve an originating ICP root so peer-derived intentions cannot recurse. */
@@ -231,6 +244,8 @@ export interface IntentionDecisionActionOptions {
   now?: number;
   minimumOutboundRunAt?: number;
   proactiveOutboundQuietHours?: ProactiveQuietHoursConfig | null;
+  /** Original contact/session scope for live concern revalidation at dispatch. */
+  appraisalConcernScope?: IntentionOutboundAppraisalFollowUpProvenance;
 }
 
 export interface SessionAppraisalState {

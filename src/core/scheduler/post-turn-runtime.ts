@@ -23,6 +23,7 @@ import {
   toInferredPostTurnActions,
 } from '../intention/appraisal.js';
 import { MotivationBridge } from '../intention/motivation.js';
+import { hashString } from '../intention/appraisal/shared.js';
 import { fingerprintSocialDesireOutboundAction } from '../intention/social-desire-outreach.js';
 import {
   evaluatePendingFollowUpActivationState,
@@ -167,6 +168,29 @@ export function wirePostTurnRuntime(
     const linkedConcernIds = payload.concernIds ?? [];
     const requiresActiveConcern = payload.requiresActiveConcern === true;
     const socialDesire = payload.socialDesire;
+    const appraisalFollowUp = payload.appraisalFollowUp;
+    const legacyAppraisalDedupe = [
+      INTENTION_OUTBOUND_MESSAGE_ACTION_KIND,
+      action.sourceMessageId,
+      hashString(payload.content),
+    ].join(':');
+    const isAppraisalFollowUp = Boolean(appraisalFollowUp)
+      || action.dedupeKey === legacyAppraisalDedupe;
+
+    // The appraisal model may propose external text, but it is not the
+    // companion's consent moment. Only the existing exact-action, single-use
+    // social-desire consent can ratify that draft for delivery. The dedupe
+    // fallback also fail-closes already-queued pre-marker appraisal actions.
+    if (isAppraisalFollowUp && !socialDesire) {
+      return 'appraisal_consent_required';
+    }
+    if (
+      appraisalFollowUp?.canonicalContactKey
+      && socialDesire
+      && appraisalFollowUp.canonicalContactKey !== socialDesire.contactId
+    ) {
+      return 'appraisal_consent_scope_mismatch';
+    }
 
     if (
       !hasPendingFollowUpLink
@@ -235,7 +259,10 @@ export function wirePostTurnRuntime(
         return 'active_concern_unavailable';
       }
       const activeConcerns = await Promise.resolve(runtimeOptions.getActiveConcerns({
-        channelId: action.channelId,
+        channelId: appraisalFollowUp?.channelId ?? action.channelId,
+        ...(appraisalFollowUp?.canonicalContactKey
+          ? { canonicalContactKey: appraisalFollowUp.canonicalContactKey }
+          : {}),
       }));
       const activeConcernIds = new Set(normalizeConcernIds(activeConcerns));
       if (linkedConcernIds.length > 0) {
@@ -715,18 +742,12 @@ export function wirePostTurnRuntime(
           }
         }
 
-        const activeConcernIds = normalizeConcernIds(activeConcerns);
         for (const decision of decisions) {
           if (decision.type !== 'followUp' || decision.followUp?.delivery !== 'external') {
             continue;
           }
           const suppliedConcernIds = decision.followUp.concernIds ?? [];
-          if (suppliedConcernIds.length === 0 && activeConcernIds.length > 0) {
-            decision.followUp = {
-              ...decision.followUp,
-              concernIds: activeConcernIds,
-            };
-          } else if (suppliedConcernIds.length === 0 && decisionReferencesConcernPressure(decision)) {
+          if (suppliedConcernIds.length === 0 && decisionReferencesConcernPressure(decision)) {
             decision.followUp = {
               ...decision.followUp,
               requiresActiveConcern: true,
@@ -744,6 +765,12 @@ export function wirePostTurnRuntime(
             now: candidateNow,
             minimumOutboundRunAt: resolveMinimumOutboundRunAt(activeConcerns, candidateNow),
             proactiveOutboundQuietHours: runtimeOptions.episodicProcessingRestWindow,
+            appraisalConcernScope: {
+              channelId: resolvedSessionId,
+              ...(context.canonicalContactKey
+                ? { canonicalContactKey: context.canonicalContactKey }
+                : {}),
+            },
             ...(isBackgroundAppraisalChannel(context.message.channelId)
               ? { surfacePendingFollowUpsImmediately: true }
               : {}),

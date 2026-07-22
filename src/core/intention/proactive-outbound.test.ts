@@ -135,7 +135,12 @@ describe('external follow-up translation', () => {
         requiresActiveConcern: true,
       },
     }];
-    const candidates = decisionsToPostTurnActionCandidates(decisions, context);
+    const candidates = decisionsToPostTurnActionCandidates(decisions, context, {
+      appraisalConcernScope: {
+        channelId: 'session:resolved',
+        canonicalContactKey: 'contact-primary',
+      },
+    });
     expect(candidates).toHaveLength(1);
     expect(candidates[0].kind).toBe(INTENTION_OUTBOUND_MESSAGE_ACTION_KIND);
     const payload = normalizeIntentionOutboundMessageActionPayload(candidates[0].payload);
@@ -144,6 +149,10 @@ describe('external follow-up translation', () => {
     expect(payload?.reason).toBe('checking in after a long quiet stretch');
     expect(payload?.concernIds).toEqual(['concern-1', 'concern-2']);
     expect(payload?.requiresActiveConcern).toBe(true);
+    expect(payload?.appraisalFollowUp).toEqual({
+      channelId: 'session:resolved',
+      canonicalContactKey: 'contact-primary',
+    });
   });
 
   it('time-gates external follow-ups behind future concern boundaries and quiet hours', () => {

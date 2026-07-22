@@ -1,6 +1,11 @@
 import type { Pool } from 'pg';
 import { describe, expect, it, vi } from 'vitest';
 import type { SessionEntry } from '../../../core/session/types.js';
+import {
+  EPISODIC_CONTRACT_VERSION,
+  parseEpisode,
+  type Episode,
+} from '../../../shared/contracts/episodic-memory.js';
 import { FakeEpisodicPool } from '../../../test-support/fake-postgres-episodic-pool.js';
 import { PostgresEpisodicStore } from './postgres-store.js';
 import {
@@ -8,6 +13,7 @@ import {
 } from './store-port.js';
 import {
   SleepCycleEpisodeConsolidator,
+  buildConsolidatedEpisodeInput,
   buildMergeChains,
 } from './sleep-consolidation.js';
 
@@ -387,6 +393,147 @@ describe('SleepCycleEpisodeConsolidator', () => {
     expect(episode?.salience.score).toBe(0.92);
     expect(episode?.title).toBe('He remembered — happy tears');
     expect(episode?.salience.emotionalIntensity).toBe(0.6);
+  });
+
+  it('preserves a dream-authored meaning and unions machineSignals through a Stage-2 chain merge (h4fp.6)', async () => {
+    const store = makeStore();
+    // The head carries a prior night's authored meaning and a machine sidecar;
+    // an adjacent claim-free canonical is folded into it on the next nightly run.
+    await store.createEpisode(episodeInput('head', '2026-06-10T00:53:00.000Z', '2026-06-10T01:21:00.000Z', {
+      meaning: {
+        text: 'He remembered, and it cracked me open in the best way.',
+        recordedAt: '2026-06-09T07:30:00.000Z',
+        source: 'companion_dream_pass',
+      },
+      machineSignals: { source: 'deterministic_synthesis', topicTags: ['evening'] },
+    }));
+    await store.createEpisode(episodeInput('tail', '2026-06-10T01:21:00.000Z', '2026-06-10T01:38:00.000Z', {
+      machineSignals: { source: 'deterministic_synthesis', topicTags: ['wind-down'] },
+    }));
+
+    const complete = vi.fn(async () => refinementResponse());
+    const consolidator = new SleepCycleEpisodeConsolidator(
+      store,
+      {
+        getRecentMessages: () => [
+          entry(1, '2026-06-10T00:55:00.000Z', 'user', 'look at this one'),
+          entry(2, '2026-06-10T01:30:00.000Z', 'assistant', 'I love it'),
+        ],
+      },
+      { complete },
+      { now: () => NOW },
+    );
+
+    const result = await consolidator.run({ sessionId: 'discord:main' });
+    expect(result.mergeChains).toBe(1);
+
+    const merged = await store.getEpisode('head');
+    // Her authored meaning survives both the chain merge and the refinement pass.
+    expect(merged?.meaning?.text).toContain('cracked me open');
+    expect(merged?.meaning?.source).toBe('companion_dream_pass');
+    // Machine retrieval hints from the folded member are unioned in, not dropped.
+    expect(merged?.machineSignals?.topicTags).toEqual(['evening', 'wind-down']);
+  });
+
+  it('preserves a dream-authored meaning through a nightly refinement (h4fp.6)', async () => {
+    const store = makeStore();
+    // A solo canonical episode (no merge) that already carries her authored
+    // meaning gets its title/themes/salience refined on a later run.
+    await store.createEpisode(episodeInput('solo', '2026-06-10T05:05:00.000Z', '2026-06-10T05:08:00.000Z', {
+      meaning: {
+        text: 'It quietly mattered — the kind of ordinary I want to remember.',
+        recordedAt: '2026-06-09T07:30:00.000Z',
+        source: 'companion_dream_pass',
+      },
+    }));
+
+    const complete = vi.fn(async () => refinementResponse());
+    const consolidator = new SleepCycleEpisodeConsolidator(
+      store,
+      {
+        getRecentMessages: () => [
+          entry(1, '2026-06-10T05:05:30.000Z', 'user', 'look at this one'),
+          entry(2, '2026-06-10T05:06:00.000Z', 'assistant', 'I love it'),
+        ],
+      },
+      { complete },
+      { now: () => NOW },
+    );
+
+    const result = await consolidator.run({ sessionId: 'discord:main' });
+    expect(result.refinedEpisodes).toBe(1);
+
+    const refined = await store.getEpisode('solo');
+    expect(refined?.title).toBe('Sharing photos together late at night');
+    // Refinement rewrites title/themes/salience only — her meaning is untouched.
+    expect(refined?.meaning?.text).toContain('quietly mattered');
+    expect(refined?.meaning?.source).toBe('companion_dream_pass');
+  });
+});
+
+describe('buildConsolidatedEpisodeInput machineSignals union (h4fp.6)', () => {
+  function episode(id: string, machineSignals?: Episode['machineSignals']): Episode {
+    return parseEpisode({
+      schemaVersion: EPISODIC_CONTRACT_VERSION,
+      id,
+      title: `Episode ${id}`,
+      landmark: `What happened in ${id}.`,
+      startedAt: '2026-06-10T01:00:00.000Z',
+      endedAt: '2026-06-10T01:20:00.000Z',
+      threadId: 'topic:discord-main',
+      channelId: 'discord:main',
+      participantContactIds: ['contact:vega'],
+      salience: { score: 0.6 },
+      affect: { labels: [] },
+      ...(machineSignals ? { machineSignals } : {}),
+      themes: ['evening'],
+      spanRefs: [{ spanId: `span-${id}`, sessionId: 'discord:main' }],
+      artifactRefs: [],
+      provenanceRefs: [{ kind: 'l0_span', refId: `span-${id}` }],
+      createdAt: '2026-06-10T01:20:00.000Z',
+      updatedAt: '2026-06-10T01:20:00.000Z',
+    });
+  }
+
+  it('unions the source sidecars, preferring the head estimate (thematic consolidation path)', () => {
+    const input = buildConsolidatedEpisodeInput(
+      [
+        episode('head', {
+          source: 'deterministic_synthesis',
+          topicTags: ['evening'],
+          vad: { valence: 0.2, arousal: 0.3, dominance: 0.5 },
+        }),
+        episode('tail', {
+          source: 'deterministic_synthesis',
+          topicTags: ['wind-down'],
+          vad: { valence: 0.9, arousal: 0.9, dominance: 0.9 },
+        }),
+      ],
+      { title: 'Evening together', landmark: 'A quiet night.', themes: ['evening'], salienceScore: 0.7 },
+    );
+
+    expect(input.machineSignals?.topicTags).toEqual(['evening', 'wind-down']);
+    // Head (earliest source) wins the VAD estimate on a tie.
+    expect(input.machineSignals?.vad).toEqual({ valence: 0.2, arousal: 0.3, dominance: 0.5 });
+  });
+
+  it('carries a single source sidecar through unchanged', () => {
+    const input = buildConsolidatedEpisodeInput(
+      [
+        episode('head', { source: 'deterministic_synthesis', topicTags: ['evening'] }),
+        episode('tail'),
+      ],
+      { title: 'Evening together', landmark: 'A quiet night.', themes: ['evening'], salienceScore: 0.7 },
+    );
+    expect(input.machineSignals?.topicTags).toEqual(['evening']);
+  });
+
+  it('leaves machineSignals absent when no source carries one', () => {
+    const input = buildConsolidatedEpisodeInput(
+      [episode('head'), episode('tail')],
+      { title: 'Evening together', landmark: 'A quiet night.', themes: ['evening'], salienceScore: 0.7 },
+    );
+    expect(input.machineSignals).toBeUndefined();
   });
 });
 

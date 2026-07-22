@@ -36,6 +36,14 @@ export type EpisodeUpdateInput = Omit<
   'schemaVersion' | 'createdAt' | 'updatedAt'
 > & {
   updatedAt?: string;
+  /**
+   * Explicit opt-in to erase a previously companion-authored `meaning` (bead
+   * h4fp.6). `updateEpisode` is a full-row replace, so it fails closed when an
+   * input omits `meaning` on an episode that already carries one — the caller
+   * must either carry the meaning forward or set this sentinel to drop it on
+   * purpose. Not persisted; consumed by the store's drop-guard only.
+   */
+  clearMeaning?: boolean;
 };
 
 export type EpisodeArcWriteInput = Omit<

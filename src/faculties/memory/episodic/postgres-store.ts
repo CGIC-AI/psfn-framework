@@ -204,12 +204,26 @@ export class PostgresEpisodicStore implements EpisodicStorePort {
       throw new Error(`episode "${input.id}" does not exist`);
     }
 
+    // Fail closed on silent meaning loss (bead h4fp.6): updateEpisode is a
+    // full-row replace, so an input that omits `meaning` erases a
+    // companion-authored dream-pass note the next time the episode is touched.
+    // Dropping HER authored content must be explicit — a caller that truly
+    // intends to clear it passes `clearMeaning`. `clearMeaning` is a control
+    // sentinel, never a persisted field, so it is stripped before validation.
+    const { clearMeaning, ...episodeInput } = input;
+    if (current.meaning && episodeInput.meaning === undefined && !clearMeaning) {
+      throw new Error(
+        `episode "${input.id}" update would drop companion-authored meaning; `
+        + 'carry the existing meaning forward or pass clearMeaning to erase it explicitly',
+      );
+    }
+
     const now = this.now().toISOString();
     // Preserve the stored schemaVersion (no silent shape drift): a content
     // update to a legacy v1 episode must not silently upgrade it to v2. Only
     // explicit migration (bead h4fp.7) changes a persisted episode's version.
     const episode = parseEpisode({
-      ...input,
+      ...episodeInput,
       schemaVersion: current.schemaVersion,
       createdAt: current.createdAt,
       updatedAt: input.updatedAt ?? now,

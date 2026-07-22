@@ -6,10 +6,12 @@ import { createComponentLogger } from '../../../shared/logger.js';
 import type {
   Episode,
   EpisodeAffect,
+  EpisodeMachineSignals,
   EpisodeProvenanceRef,
   EpisodeSalience,
 } from '../../../shared/contracts/episodic-memory.js';
 import { resolveKnownEpisodeId } from './episode-ids.js';
+import { mergeMachineSignals } from './synthesis/consolidation.js';
 import type { DeterministicGateEvent } from '../../../shared/event-bus.js';
 import {
   evaluateDeterministicGate,
@@ -289,6 +291,21 @@ function mergeChainIntoHead(chain: readonly Episode[]): EpisodeUpdateInput {
         : {}),
       labels: [...new Set([...merged.affect.labels, ...episode.affect.labels])],
     },
+    // Union the machine-signals sidecars across the chain (bead h4fp.6): the
+    // head's estimate/source is preferred, tags are unioned. Omitting this on a
+    // full-row-replace update would drop machine retrieval hints from the
+    // folded members. `...merged` already carries the accumulator's sidecar;
+    // this override replaces it with the union whenever either side has one.
+    ...((merged.machineSignals || episode.machineSignals)
+      ? { machineSignals: mergeMachineSignals(merged.machineSignals, episode.machineSignals) }
+      : {}),
+    // Carry the companion's authored felt-meaning forward (bead h4fp.6):
+    // head-wins on a tie (the head is the surviving episode), and a chain
+    // member's meaning is adopted only when the head has none — so a dream-pass
+    // note is never silently erased when claim-free canonicals are repaired.
+    ...(merged.meaning === undefined && episode.meaning
+      ? { meaning: episode.meaning }
+      : {}),
     themes: [...new Set([...merged.themes, ...episode.themes])],
     spanRefs: mergeUnique(merged.spanRefs, episode.spanRefs, ref => ref.spanId),
     artifactRefs: mergeUnique(merged.artifactRefs, episode.artifactRefs, ref => ref.artifactId),
@@ -304,6 +321,8 @@ function mergeChainIntoHead(chain: readonly Episode[]): EpisodeUpdateInput {
     participantContactIds: head.participantContactIds,
     salience: head.salience,
     affect: head.affect,
+    ...(head.machineSignals ? { machineSignals: head.machineSignals } : {}),
+    ...(head.meaning ? { meaning: head.meaning } : {}),
     themes: head.themes,
     spanRefs: head.spanRefs,
     artifactRefs: head.artifactRefs,
@@ -381,6 +400,17 @@ export function buildConsolidatedEpisodeInput(
       })),
   ];
 
+  // Union the machine-signals sidecars of the consolidated sources (bead
+  // h4fp.6): the earliest (head) source's estimate/source is preferred, topic
+  // tags are unioned. Without this the thematic-consolidation create path drops
+  // every source's machine retrieval hints on the new canonical episode.
+  const machineSignals = ordered
+    .map(episode => episode.machineSignals)
+    .reduce<EpisodeMachineSignals | undefined>(
+      (merged, signals) => (merged || signals ? mergeMachineSignals(merged, signals) : undefined),
+      undefined,
+    );
+
   return {
     id: stableConsolidatedEpisodeId(ordered.map(episode => episode.id)),
     title: group.title,
@@ -392,6 +422,7 @@ export function buildConsolidatedEpisodeInput(
     participantContactIds: [...new Set(ordered.flatMap(episode => episode.participantContactIds))].sort(),
     salience: mergeSalience(ordered, group.salienceScore),
     affect: mergeAffect(ordered),
+    ...(machineSignals ? { machineSignals } : {}),
     themes: group.themes,
     spanRefs,
     artifactRefs: ordered
@@ -797,10 +828,13 @@ export class SleepCycleEpisodeConsolidator {
           ...episode.salience,
           score: refinement.salienceScore,
         },
-        // Refinement rewrites titles/themes/salience only; affect and the
-        // machine-signals sidecar are preserved untouched (bead h4fp.6).
+        // Refinement rewrites titles/themes/salience only; affect, the
+        // machine-signals sidecar, and her authored felt-meaning are preserved
+        // untouched (bead h4fp.6). Omitting `meaning` here would erase a
+        // dream-pass note the next time an episode is refined.
         affect: episode.affect,
         ...(episode.machineSignals ? { machineSignals: episode.machineSignals } : {}),
+        ...(episode.meaning ? { meaning: episode.meaning } : {}),
         themes: refinement.themes,
         spanRefs: episode.spanRefs,
         artifactRefs: episode.artifactRefs,

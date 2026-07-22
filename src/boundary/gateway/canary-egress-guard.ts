@@ -58,24 +58,83 @@ export interface CanaryEgressGuard {
    * leaked into egress. Non-egress methods pass through untouched.
    */
   inspect(method: string, params: unknown): unknown;
+  /**
+   * d269: inspect a reverse-RPC REPLY result (the main conversational reply
+   * returning from the agent as the result of voice.handleMessage /
+   * voice.transcript.end / api.chat.completion / shard-action calls). The
+   * agent attaches the session canary under the reserved carrier key; this
+   * strips the carrier and scans the remaining reply strings. Returns the
+   * carrier-free result; THROWS a HELD error in enforce mode when the canary
+   * (or a fail-closed scan condition) is found. Results without a carrier
+   * pass through with only the defensive strip.
+   */
+  inspectReply(method: string, result: unknown): unknown;
+  /**
+   * d269: inspect one streamed reply frame (api.stream.delta). Scans the frame
+   * text against the carried token over a rolling per-request tail window so a
+   * token split across frame boundaries is still caught before the fragment
+   * that completes it egresses. In enforce mode a hit poisons the requestId —
+   * this and all later frames of the stream are dropped (and the final
+   * completion result is independently held by `inspectReply`). Returns
+   * whether the frame may be forwarded to stream listeners.
+   */
+  inspectApiStreamDelta(input: {
+    requestId: string;
+    text: string;
+    token: string | undefined;
+  }): { forward: boolean };
 }
 
 function resolveSourceChannelId(method: string, params: unknown): string {
   if (params && typeof params === 'object' && !Array.isArray(params)) {
-    const channelId = (params as Record<string, unknown>).channelId;
+    const record = params as Record<string, unknown>;
+    const channelId = record.channelId;
     if (typeof channelId === 'string' && channelId.trim().length > 0) {
       return channelId.trim();
+    }
+    // Reply results (api.chat.completion) nest the channel under `response`.
+    const response = record.response;
+    if (response && typeof response === 'object' && !Array.isArray(response)) {
+      const nested = (response as Record<string, unknown>).channelId;
+      if (typeof nested === 'string' && nested.trim().length > 0) {
+        return nested.trim();
+      }
     }
   }
   return `egress:${method}`;
 }
+
+/**
+ * Bounds on the per-request streamed-reply scan state. FIFO eviction: an
+ * evicted tail only weakens split-frame detection for the evicted stream (a
+ * whole-frame token is still caught, and the final completion result is
+ * independently scanned), so a hostile flood cannot grow memory unboundedly.
+ */
+const MAX_TRACKED_STREAM_STATES = 512;
 
 /** The calm, operator-reviewed message the companion sees for a held action. */
 export const CANARY_HELD_NOTICE = INTAKE_FIREWALL_NOTICE_TEMPLATES.sinkHeld;
 
 export function createCanaryEgressGuard(deps: CanaryEgressGuardDeps): CanaryEgressGuard {
   const mode = deps.mode ?? 'enforce';
-  const recordLeak = (method: string, token: string, params: unknown, scan: CanaryScanResult): void => {
+  type LeakSurface = 'request' | 'reply' | 'stream';
+  const surfaceSummary = (surface: LeakSurface, method: string): string => {
+    const subject = surface === 'request'
+      ? `Outbound content on ${method}`
+      : surface === 'reply'
+        ? `The conversational reply returning over ${method}`
+        : `A streamed reply frame on ${method}`;
+    return mode === 'enforce'
+      ? `${subject} matched the session integrity marker and was held for review.`
+      : `${subject} matched the session integrity marker in shadow mode and was allowed.`;
+  };
+  const recordLeak = (
+    method: string,
+    token: string,
+    params: unknown,
+    scan: CanaryScanResult,
+    surface: LeakSurface = 'request',
+  ): void => {
     if (scan.leaked !== true) return;
     // The raw token NEVER enters an event, audit row, or log line — only its
     // sha256 digest and a calm, blocklist-clean summary.
@@ -97,9 +156,7 @@ export function createCanaryEgressGuard(deps: CanaryEgressGuardDeps): CanaryEgre
         actor: 'cogsec:canary-egress',
         actions: [],
         sealedForensicPayloadHashes: [tokenHash],
-        safeAgentSummary: mode === 'enforce'
-          ? `Outbound content on ${method} matched the session integrity marker and was held for review.`
-          : `Outbound content on ${method} matched the session integrity marker in shadow mode and was allowed.`,
+        safeAgentSummary: surfaceSummary(surface, method),
       });
     } catch (error) {
       // Holding the action is what matters; a failed audit event is loud, not
@@ -109,6 +166,23 @@ export function createCanaryEgressGuard(deps: CanaryEgressGuardDeps): CanaryEgre
         error: error instanceof Error ? error.message : String(error),
       });
     }
+  };
+
+  // d269: per-request streamed-reply scan state. `tail` keeps the last
+  // (token.length - 1) chars already forwarded for the request so a token
+  // split across frames is caught on the frame that completes it; `flagged`
+  // requests recorded a leak already (enforce additionally stops forwarding).
+  const streamStates = new Map<string, { tail: string; flagged: boolean }>();
+  const ensureStreamState = (requestId: string): { tail: string; flagged: boolean } => {
+    const existing = streamStates.get(requestId);
+    if (existing) return existing;
+    if (streamStates.size >= MAX_TRACKED_STREAM_STATES) {
+      const oldest = streamStates.keys().next();
+      if (!oldest.done) streamStates.delete(oldest.value);
+    }
+    const state = { tail: '', flagged: false };
+    streamStates.set(requestId, state);
+    return state;
   };
 
   return {
@@ -135,6 +209,67 @@ export function createCanaryEgressGuard(deps: CanaryEgressGuardDeps): CanaryEgre
         }
       }
       return cleaned;
+    },
+
+    inspectReply(method, result) {
+      const token = readCanaryCarrier(result);
+      const cleaned = stripCanaryCarrier(result);
+      // No carrier rode back with this reply (CogSec off on the agent, a
+      // non-turn result, or a turn that never planted a canary): nothing to
+      // compare against. The carrier is still stripped so the reserved key
+      // never reaches a channel adapter.
+      if (!token) return cleaned;
+
+      const scan = scanEgressParamsForCanary(cleaned, token);
+      if (scan.leaked) {
+        recordLeak(method, token, cleaned, scan, 'reply');
+        deps.log?.warn(mode === 'enforce'
+          ? 'Canary egress tripwire held a conversational reply'
+          : 'Canary egress tripwire observed a would-hold reply in shadow mode', {
+          method,
+          reason: scan.reason,
+        });
+        if (mode === 'enforce') {
+          throw new JSONRPCErrorException(CANARY_HELD_NOTICE, GatewayErrors.EGRESS_HELD);
+        }
+      }
+      return cleaned;
+    },
+
+    inspectApiStreamDelta({ requestId, text, token }) {
+      // No carrier on the frame ⇒ no live canary to compare against (CogSec
+      // off or a non-canary turn); forward untouched.
+      if (!token) return { forward: true };
+      const state = ensureStreamState(requestId);
+      if (state.flagged && mode === 'enforce') {
+        // The stream already leaked: keep the tap closed for its remainder.
+        return { forward: false };
+      }
+      let scan: CanaryScanResult;
+      try {
+        const window = state.tail + text;
+        scan = window.includes(token)
+          ? { leaked: true, reason: 'token_present' }
+          : { leaked: false };
+        // Keep strictly less than one full token so the tail alone can never
+        // re-match; the next frame completes any straddling occurrence.
+        state.tail = window.slice(-(Math.max(1, token.length - 1)));
+      } catch (error) {
+        void error;
+        scan = { leaked: true, reason: 'scan_error' };
+      }
+      if (!scan.leaked) return { forward: true };
+      if (!state.flagged) {
+        state.flagged = true;
+        recordLeak('api.stream.delta', token, { requestId }, scan, 'stream');
+        deps.log?.warn(mode === 'enforce'
+          ? 'Canary egress tripwire held a streamed reply frame'
+          : 'Canary egress tripwire observed a would-hold streamed reply frame in shadow mode', {
+          requestId,
+          reason: scan.reason,
+        });
+      }
+      return { forward: mode !== 'enforce' };
     },
   };
 }

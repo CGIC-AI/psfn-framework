@@ -68,6 +68,15 @@ export interface RequestAgentVoiceStreamOptions extends CompanionRoutingBinding 
   wyomingShardRouting: WyomingShardRoutingConfig;
   companionId: CompanionId;
   nextRequestCounter: () => number;
+  /**
+   * d269: canary reply-egress inspection applied to the RAW reverse-RPC result
+   * (voice.transcript.end / voice.handleMessage) BEFORE this module picks its
+   * fields — the reserved carrier key rides the raw result and would be
+   * dropped by the field pick. The gateway server threads its guard here;
+   * throwing HOLDS the reply. Must strip the carrier even when no guard is
+   * active, hence gateway callers always provide it.
+   */
+  inspectReply?: (method: string, result: unknown) => Promise<unknown> | unknown;
 }
 
 export async function requestAgentVoiceStream({
@@ -77,6 +86,7 @@ export async function requestAgentVoiceStream({
   wyomingShardRouting,
   companionId,
   nextRequestCounter,
+  inspectReply,
 }: RequestAgentVoiceStreamOptions): Promise<VoiceHandleMessageResult> {
   const timeoutMs = options.timeoutMs ?? DEFAULT_AGENT_TIMEOUT_MS;
   const chunkSize = normalizePositiveInt(options.chunkSize, DEFAULT_VOICE_CHUNK_SIZE);
@@ -245,7 +255,7 @@ export async function requestAgentVoiceStream({
       await invokeWithTimeout(() => client.request(reverseVoiceMethods.start, startParams));
     } catch (error) {
       if (isMethodNotFoundError(error)) {
-        return requestAgentViaHandlePath(client, serializedMessage, timeoutMs);
+        return requestAgentViaHandlePath(client, serializedMessage, timeoutMs, inspectReply);
       }
       throw error;
     }
@@ -294,9 +304,14 @@ export async function requestAgentVoiceStream({
         },
       };
 
-      const streamResult = await invokeWithTimeout(() =>
+      const rawStreamResult = await invokeWithTimeout(() =>
         client.request(reverseVoiceMethods.end, endParams) as Promise<VoiceStreamEndResult>,
       );
+      // d269: scan the raw reply (canary carrier still attached) before the
+      // field pick below drops unknown keys. Throws to HOLD a leaked reply.
+      const streamResult = (inspectReply
+        ? await inspectReply(reverseVoiceMethods.end, rawStreamResult)
+        : rawStreamResult) as VoiceStreamEndResult;
 
       return {
         content: streamResult.content,
@@ -359,6 +374,7 @@ async function requestAgentViaHandlePath(
   client: JSONRPCServerAndClient,
   message: RpcSubstrateMessage,
   timeoutMs: number,
+  inspectReply?: (method: string, result: unknown) => Promise<unknown> | unknown,
 ): Promise<VoiceHandleMessageResult> {
   const invokeHandle = async (method: string): Promise<VoiceHandleMessageResult> => {
     const result = await Promise.race([
@@ -367,7 +383,9 @@ async function requestAgentViaHandlePath(
         setTimeout(() => reject(new Error('Agent voice handle request timed out')), timeoutMs),
       ),
     ]);
-    return result as VoiceHandleMessageResult;
+    // d269: same reply-egress scan as the transcript path; the version-skew
+    // fallback must not become an unscanned seam.
+    return (inspectReply ? await inspectReply(method, result) : result) as VoiceHandleMessageResult;
   };
 
   return await invokeHandle(PRIMARY_REVERSE_VOICE_RPC_METHODS.handleMessage);

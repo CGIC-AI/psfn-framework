@@ -10,7 +10,7 @@ export const PRIVACY_BREAK_GLASS_REASON_CATEGORIES = [
 
 export type PrivacyBreakGlassReasonCategory =
   typeof PRIVACY_BREAK_GLASS_REASON_CATEGORIES[number];
-export type PrivacyBreakGlassResourceKind = 'memory' | 'profile';
+export type PrivacyBreakGlassResourceKind = 'memory' | 'profile' | 'journal';
 
 export interface PrivacyBreakGlassConfirmRequest {
   reasonCategory: PrivacyBreakGlassReasonCategory;

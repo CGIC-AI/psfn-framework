@@ -23,6 +23,25 @@ import type {
 import type { ReflectionMetacognitionJournalEntry } from '../../persistence/journals/reflection-metacognition-journal.js';
 import type { ReflectionDailyJournalEntry } from '../../persistence/journals/reflection-substrate.js';
 import type { ReflectionJournalEntry } from '../../persistence/journals/reflection-journal.js';
+import type { GardenRequestContext } from './garden-request-context.js';
+
+/**
+ * Companion-private journals are gated behind the privacy break-glass
+ * assurance; every read carries a fleet-principal context whose session
+ * assurance decides disclosure. These builders synthesise just the fields the
+ * route gate inspects (`kind`, `actor.sessionAssurance`).
+ */
+function breakGlassContext(): GardenRequestContext {
+  return { kind: 'fleet_principal', actor: { sessionAssurance: 'break_glass' } } as unknown as GardenRequestContext;
+}
+
+function oauthContext(): GardenRequestContext {
+  return { kind: 'fleet_principal', actor: { sessionAssurance: 'oauth' } } as unknown as GardenRequestContext;
+}
+
+type AuditAppender = NonNullable<
+  Parameters<typeof buildAdminApiRoutes>[0]['appendAuditTimelineEntry']
+>;
 
 class CapturingResponse {
   status = 0;
@@ -54,6 +73,7 @@ function makeRoutes(options: {
   reflectionMetacognitionJournal?: AdminReflectionMetacognitionJournalApi | null;
   reflectionDailyJournal?: AdminReflectionDailyJournalApi | null;
   reflectionJournal?: AdminReflectionJournalApi | null;
+  appendAuditTimelineEntry?: AuditAppender;
 }): AdminApiRoute[] {
   return buildAdminApiRoutes({
     config: {} as SubstrateConfig,
@@ -70,17 +90,34 @@ function makeRoutes(options: {
     reflectionMetacognitionJournal: options.reflectionMetacognitionJournal,
     reflectionDailyJournal: options.reflectionDailyJournal,
     reflectionJournal: options.reflectionJournal,
+    // A break-glass disclosure fails closed unless it can be audited, so tests
+    // default to a real appender; passing the key explicitly (even undefined)
+    // exercises the unauditable path.
+    appendAuditTimelineEntry: 'appendAuditTimelineEntry' in options
+      ? options.appendAuditTimelineEntry
+      : vi.fn(),
     withBody: () => {},
   });
 }
 
-async function invokeRoute(route: AdminApiRoute, url: string): Promise<CapturingResponse> {
+async function invokeRoute(
+  route: AdminApiRoute,
+  url: string,
+  context: GardenRequestContext | undefined = breakGlassContext(),
+): Promise<CapturingResponse> {
   const response = new CapturingResponse();
   const params = route.match(new URL(url, 'http://localhost').pathname);
-  route.handle(makeRequest(url), response as unknown as ServerResponse, params ?? {});
+  route.handle(makeRequest(url), response as unknown as ServerResponse, params ?? {}, context);
   await new Promise(resolve => setImmediate(resolve));
   return response;
 }
+
+const JOURNAL_ROUTE_URLS = [
+  '/api/admin/values',
+  '/api/admin/values/reflections/metacognition',
+  '/api/admin/values/reflections/daily',
+  '/api/admin/values/reflections/journal',
+] as const;
 
 describe('values reflection journal admin API routes', () => {
   it('returns recent metacognition, daily, and free-form reflection entries', async () => {
@@ -185,5 +222,99 @@ describe('values reflection journal admin API routes', () => {
     expect(JSON.parse(missing.body)).toEqual({
       error: 'Reflection metacognition journal unavailable',
     });
+  });
+});
+
+describe('companion journal privacy break-glass gate', () => {
+  function serviceRoutes(appendAuditTimelineEntry?: AuditAppender): AdminApiRoute[] {
+    return makeRoutes({
+      reflectionMetacognitionJournal: { listRecent: vi.fn(() => []) },
+      reflectionDailyJournal: { listRecent: vi.fn(() => []) },
+      reflectionJournal: { listRecent: vi.fn(() => []) },
+      ...(appendAuditTimelineEntry ? { appendAuditTimelineEntry } : {}),
+    });
+  }
+
+  it.each(JOURNAL_ROUTE_URLS)(
+    'denies %s without an active break-glass grant and audits the denial',
+    async (url) => {
+      const appendAudit = vi.fn();
+      const routes = serviceRoutes(appendAudit);
+      const route = routes.find(candidate => candidate.match(new URL(url, 'http://localhost').pathname));
+      expect(route).toBeDefined();
+
+      const denied = await invokeRoute(route!, url, oauthContext());
+
+      expect(denied.status).toBe(403);
+      expect(JSON.parse(denied.body)).toEqual({
+        error: 'Companion journal read requires privacy break-glass',
+      });
+      expect(denied.headers['Cache-Control']).toBe('no-store');
+      expect(appendAudit).toHaveBeenCalledTimes(1);
+      const [actionType, decision, , details] = appendAudit.mock.calls[0]!;
+      expect(actionType).toBe('memory_access');
+      expect(decision).toBe('denied');
+      expect(details).toContain('resourceKind=journal');
+      expect(details).toContain('reasonCode=break_glass_required');
+    },
+  );
+
+  it('denies a legacy (non-fleet) operator context and audits the denial', async () => {
+    const appendAudit = vi.fn();
+    const routes = serviceRoutes(appendAudit);
+    const route = routes.find(candidate => candidate.match('/api/admin/values/reflections/journal'));
+    expect(route).toBeDefined();
+
+    const denied = await invokeRoute(
+      route!,
+      '/api/admin/values/reflections/journal',
+      { kind: 'legacy_token' } as unknown as GardenRequestContext,
+    );
+
+    expect(denied.status).toBe(403);
+    const [, decision, , details] = appendAudit.mock.calls[0]!;
+    expect(decision).toBe('denied');
+    expect(details).toContain('reasonCode=trusted_principal_required');
+  });
+
+  it.each(JOURNAL_ROUTE_URLS)(
+    'discloses %s under an active break-glass grant and audits the read',
+    async (url) => {
+      const appendAudit = vi.fn();
+      const routes = serviceRoutes(appendAudit);
+      const route = routes.find(candidate => candidate.match(new URL(url, 'http://localhost').pathname));
+      expect(route).toBeDefined();
+
+      const allowed = await invokeRoute(route!, url, breakGlassContext());
+
+      expect(allowed.status).toBe(200);
+      expect(JSON.parse(allowed.body)).toEqual({ entries: [] });
+      expect(appendAudit).toHaveBeenCalledTimes(1);
+      const [actionType, decision, , details] = appendAudit.mock.calls[0]!;
+      expect(actionType).toBe('memory_access');
+      expect(decision).toBe('allowed');
+      expect(details).toContain('resourceKind=journal');
+      expect(details).toContain('assurance=break_glass');
+    },
+  );
+
+  it('fails closed with 503 when a break-glass read cannot be audited', async () => {
+    const routes = makeRoutes({
+      reflectionJournal: { listRecent: vi.fn(() => []) },
+      // No appendAuditTimelineEntry override; force the appender absent so the
+      // disclosure cannot be recorded and must not proceed.
+      appendAuditTimelineEntry: undefined as unknown as AuditAppender,
+    });
+    const route = routes.find(candidate => candidate.match('/api/admin/values/reflections/journal'));
+    expect(route).toBeDefined();
+
+    const response = await invokeRoute(
+      route!,
+      '/api/admin/values/reflections/journal',
+      breakGlassContext(),
+    );
+
+    expect(response.status).toBe(503);
+    expect(JSON.parse(response.body)).toEqual({ error: 'Companion journal read is unavailable' });
   });
 });

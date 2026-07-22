@@ -52,6 +52,8 @@ import type {
   MemorySubjectAuthorizedRestore,
   MemorySubjectAuthorizedQuery,
   MemorySubjectAuthorizedQueryResult,
+  MemorySubjectAdminQuery,
+  MemorySubjectAdminResult,
   MemorySubjectBackfillOptions,
   MemorySubjectBackfillResult,
   EmbeddingSearchAuthorization,
@@ -139,6 +141,7 @@ import {
   getMemorySubjectClassification as loadMemorySubjectClassification,
   queryAuthorizedMemorySubjects as runAuthorizedMemorySubjectQuery,
 } from './postgres-store/subject-queries.js';
+import { queryAuthorizedMemorySubjectAdmin as runAuthorizedMemorySubjectAdmin } from './postgres-store/subject-admin-queries.js';
 import { buildMemorySubjectAuthorizationPredicate } from './postgres-store/subject-policy.js';
 import { persistMemorySubjectProjection } from './postgres-store/subject-projection.js';
 import {
@@ -1194,6 +1197,16 @@ class PostgresMemoryStore implements MemoryStorePort {
     return await runAuthorizedMemorySubjectQuery(this.pool, this.embeddingDims, input, {
       iterativeScanAvailable: this.annIterativeScanAvailable,
     });
+  }
+
+  async aggregateAuthorizedMemorySubjects(
+    input: MemorySubjectAdminQuery,
+  ): Promise<MemorySubjectAdminResult> {
+    if (this.transactionContext.getStore()) {
+      throw new Error('Authorized memory subject aggregates are unavailable inside a memory-store transaction');
+    }
+    await this.persistChain;
+    return await runAuthorizedMemorySubjectAdmin(this.pool, input);
   }
 
   async getMemorySubjectClassification(

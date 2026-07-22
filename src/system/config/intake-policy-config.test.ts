@@ -12,6 +12,7 @@ import {
   INTAKE_POLICY_SCHEMA_VERSION,
   INTAKE_POLICY_SEED_FILE_NAME,
   INTAKE_SOURCE_LIST_NAMES,
+  INTAKE_UNSCREENED_DENY_REQUIRED_SINKS,
   applyIntakeSourceListMutation,
   createSkillWriteSinkRule,
   injectionScoreThresholdForTier,
@@ -520,12 +521,57 @@ describe('intake policy owner file', () => {
     expect(policy.sinkGates.sinks.prompt_assembly.maxSourceRiskTier).toBe('hostile');
     expect(policy.sinkGates.sinks.skill_write).toEqual(createSkillWriteSinkRule());
     expect(policy.sinkGates.sinks.skill_write.unscreened).toBe('deny');
+    // qg13: per-sink unscreened posture. Durable prompt-bearing self-authored
+    // sinks + the security-sensitive trust sink fail closed on unscreened
+    // content; the high-volume inform/derived sinks stay allow (justified).
+    expect(policy.sinkGates.sinks.persona_mutation.unscreened).toBe('deny');
+    expect(policy.sinkGates.sinks.wiki_write.unscreened).toBe('deny');
+    expect(policy.sinkGates.sinks.trust_mutation.unscreened).toBe('deny');
+    expect(policy.sinkGates.sinks.prompt_assembly.unscreened).toBe('allow');
+    expect(policy.sinkGates.sinks.memory_write.unscreened).toBe('allow');
+    expect(policy.sinkGates.sinks.tool_egress.unscreened).toBe('allow');
     // Trifecta: hard for public/untrusted sources, soft for trusted sources.
     expect(Object.keys(policy.sinkGates.trifecta.enforcementByTier).sort())
       .toEqual([...INTAKE_SOURCE_RISK_TIERS].sort());
     expect(trifectaEnforcementForTier(policy, 'untrusted')).toBe('hard');
     expect(trifectaEnforcementForTier(policy, 'hostile')).toBe('hard');
     expect(trifectaEnforcementForTier(policy, 'trusted')).toBe('soft');
+  });
+
+  it('forces unscreened=deny for durable prompt-bearing self-authored sinks, no override (qg13)', () => {
+    const policy = seedPolicy();
+    expect([...INTAKE_UNSCREENED_DENY_REQUIRED_SINKS].sort())
+      .toEqual(['persona_mutation', 'skill_write', 'wiki_write']);
+
+    for (const sink of INTAKE_UNSCREENED_DENY_REQUIRED_SINKS) {
+      const tampered = {
+        ...policy,
+        sinkGates: {
+          ...policy.sinkGates,
+          sinks: {
+            ...policy.sinkGates.sinks,
+            [sink]: { ...policy.sinkGates.sinks[sink], unscreened: 'allow' },
+          },
+        },
+      };
+      expect(() => validateIntakePolicy(tampered, INTAKE_POLICY_FILE_NAME))
+        .toThrow(new RegExp(`sinkGates\\.sinks\\.${sink}\\.unscreened must be 'deny'`));
+    }
+
+    // trust_mutation is fail-closed by SEED default but operator-tunable
+    // (security-sensitive, not prompt-bearing) — validation must accept allow.
+    const trustAllow = {
+      ...policy,
+      sinkGates: {
+        ...policy.sinkGates,
+        sinks: {
+          ...policy.sinkGates.sinks,
+          trust_mutation: { ...policy.sinkGates.sinks.trust_mutation, unscreened: 'allow' },
+        },
+      },
+    };
+    expect(validateIntakePolicy(trustAllow, INTAKE_POLICY_FILE_NAME)
+      .sinkGates.sinks.trust_mutation.unscreened).toBe('allow');
   });
 
   it('fails closed on missing/unknown sink-gate config (htm9.3)', () => {

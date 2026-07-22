@@ -51,8 +51,11 @@ import type {
   CompanionApprovalResolvedPayload,
   CompanionArtifactCreatedPayload,
   CompanionArtifactPreviewSource,
+  CompanionEmotionSnapshotPayload,
+  CompanionEmotionSnapshotTrigger,
   CompanionToolActivityPayload,
 } from './contracts/companion-relay.js';
+import type { AcacAxis, VADVector } from './contracts/emotion-contracts.js';
 import { createComponentLogger } from './logger.js';
 
 const log = createComponentLogger('EventBus');
@@ -608,6 +611,23 @@ export interface EventMap {
     errorMessage?: string;
     shardId?: string;
   } & EventCorrelationFields;
+  // Agent-process emotion snapshot source (bead psfn-framework-7ang.1). Carries
+  // a CONTENT-FREE numeric projection of `InternalState.emotional` (VAD/mood,
+  // discrete scores, confidence, ACAC axis SCORES only — never rationale text,
+  // concerns, or salient entities). The companion event forwarder redacts and
+  // forwards these to the gateway relay; nothing else consumes them. Fired on
+  // the steady per-turn cadence (`post_turn`) and on `vad_shift` appraisal.
+  'agent.emotion.snapshot': {
+    trigger: CompanionEmotionSnapshotTrigger;
+    vad: VADVector;
+    mood: VADVector;
+    discrete: Record<string, number>;
+    confidence: number;
+    /** ACAC axis scores only; never the axis rationale text. */
+    acacAxisScores?: Partial<Record<AcacAxis, number>>;
+    channelId?: string;
+    timestamp: number;
+  };
   'agent.compaction.start': {
     channelId: string;
     reason: 'threshold' | 'overflow';
@@ -1278,6 +1298,16 @@ export interface EventMap {
   };
   'companion.tool.activity': {
     payload: CompanionToolActivityPayload;
+    channelId?: string;
+    companionId?: string;
+    timestamp: number;
+  };
+  // Redacted emotion snapshot re-emitted on the gateway bus after crossing the
+  // RPC boundary (bead psfn-framework-7ang.1). Payload is ALREADY redacted at
+  // agent-side emission and re-validated field-by-field at the boundary; the
+  // relay fans it out only to subscribers granted the `emotion` scope.
+  'companion.emotion.snapshot': {
+    payload: CompanionEmotionSnapshotPayload;
     channelId?: string;
     companionId?: string;
     timestamp: number;

@@ -5,6 +5,7 @@ import type {
   ApprovalSourceSystem,
 } from './approval-envelope.js';
 import type { ToolCallOutcome } from './tool-call-outcome.js';
+import type { AcacAxis } from './emotion-contracts.js';
 
 export type {
   ApprovalAttribution,
@@ -37,6 +38,7 @@ export const COMPANION_EVENT_KINDS = [
   'approval.resolved',
   'artifact.created',
   'tool.activity',
+  'emotion.snapshot',
 ] as const;
 
 export type CompanionEventKind = typeof COMPANION_EVENT_KINDS[number];
@@ -142,11 +144,63 @@ export interface CompanionToolActivityPayload {
   timestamp: string;
 }
 
+/**
+ * What caused an `emotion.snapshot` to be emitted (bead psfn-framework-7ang.1):
+ * either the steady per-turn cadence (`post_turn`) or a large enough VAD
+ * movement detected by the emotion appraisal gate (`vad_shift`). Descriptive
+ * only — never an authorization signal.
+ */
+export const COMPANION_EMOTION_SNAPSHOT_TRIGGERS = ['post_turn', 'vad_shift'] as const;
+
+export type CompanionEmotionSnapshotTrigger = typeof COMPANION_EMOTION_SNAPSHOT_TRIGGERS[number];
+
+/** Rounded VAD/mood axis triple. Every component is in `[-1, 1]`. */
+export interface CompanionEmotionVector {
+  valence: number;
+  arousal: number;
+  dominance: number;
+}
+
+/** One discrete-emotion label and its rounded `[0, 1]` score. */
+export interface CompanionEmotionDiscreteScore {
+  label: string;
+  score: number;
+}
+
+/** One ACAC axis and its rounded `[0, 1]` self-report SCORE. No rationale text. */
+export interface CompanionEmotionAcacAxisScore {
+  axis: AcacAxis;
+  score: number;
+}
+
+/**
+ * Redacted emotion snapshot (bead psfn-framework-7ang.1). Sourced from
+ * `InternalState.emotional`, this payload crosses the companion relay as a
+ * PRIVACY SURFACE and is built field-by-field from a whitelist in
+ * `companion/redaction.ts`. It carries ONLY the rounded VAD + mood vectors, the
+ * top-K discrete labels/scores, the aggregate confidence, and the ACAC axis
+ * SCORES. It never carries ACAC rationale text, active concerns, salient
+ * entities, telemetry provenance, or any other private internal-state field.
+ */
+export interface CompanionEmotionSnapshotPayload {
+  trigger: CompanionEmotionSnapshotTrigger;
+  vad: CompanionEmotionVector;
+  mood: CompanionEmotionVector;
+  /** Top-K discrete labels by score, descending. Bounded and rounded. */
+  discrete: CompanionEmotionDiscreteScore[];
+  confidence: number;
+  /** ACAC axis scores only (rationale is dropped at redaction). Omitted when absent. */
+  acacAxes?: CompanionEmotionAcacAxisScore[];
+  /** ISO timestamp of the snapshot sample. */
+  timestamp: string;
+}
+
 export type CompanionEventPayload =
   | CompanionApprovalRequestedPayload
   | CompanionApprovalResolvedPayload
   | CompanionArtifactCreatedPayload
-  | CompanionToolActivityPayload;
+  | CompanionToolActivityPayload
+  | CompanionEmotionSnapshotPayload;
 
 export interface CompanionEventEnvelope {
   kind: CompanionEventKind;
@@ -173,6 +227,7 @@ export const COMPANION_EVENT_SCOPE_BY_KIND: Readonly<
   'approval.resolved': 'approvals',
   'artifact.created': 'artifacts',
   'tool.activity': 'tool_activity',
+  'emotion.snapshot': 'emotion',
 });
 
 export function companionEventKindsForScopes(

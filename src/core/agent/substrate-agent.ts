@@ -619,6 +619,23 @@ export class SubstrateAgent {
           });
         });
       },
+      // 7ang.1: forward a vad-shift emotion snapshot onto the companion relay
+      // source bus. Fire-and-forget; a relay failure never blocks appraisal.
+      onEmotionSnapshot: (snapshot) => {
+        this.eventBus.emit('agent.emotion.snapshot', {
+          trigger: snapshot.trigger,
+          vad: snapshot.vad,
+          mood: snapshot.mood,
+          discrete: snapshot.discrete,
+          confidence: snapshot.confidence,
+          channelId: snapshot.channelId,
+          timestamp: Date.now(),
+        }).catch((error) => {
+          log.warn('Failed to emit companion emotion snapshot', {
+            error: toErrorMessage(error),
+          });
+        });
+      },
     });
     this.emotionSelfModelRuntime.assertEmotionRuntimeConfigured();
 

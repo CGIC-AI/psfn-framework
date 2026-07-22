@@ -60,6 +60,21 @@ import type { TrustLevel } from '../../../system/trust/types.js';
 import { toErrorMessage } from '../../../shared/utils/errors.js';
 import type { LLMProviderPort } from '../contracts.js';
 import type { DeterministicGateEvent } from '../../../shared/event-bus.js';
+import type { CompanionEmotionSnapshotTrigger } from '../../../shared/contracts/companion-relay.js';
+
+/**
+ * A content-free emotion projection handed to the companion emotion relay
+ * (bead psfn-framework-7ang.1). Carries only the aggregate numeric signals; the
+ * receiver redacts further before anything crosses the relay boundary.
+ */
+export interface EmotionSnapshotRelayInput {
+  trigger: CompanionEmotionSnapshotTrigger;
+  vad: VADVector;
+  mood: VADVector;
+  discrete: Record<string, number>;
+  confidence: number;
+  channelId: string;
+}
 
 const TOP_EMOTION_COUNT = 3;
 const MIN_TOP_EMOTION_SCORE = 0.05;
@@ -132,6 +147,14 @@ export interface EmotionSelfModelRuntimeOptions {
    * thread it (tests) keep working with no emission.
    */
   onEmotionAppraisalGateEvent?: (event: DeterministicGateEvent) => void;
+  /**
+   * Companion emotion relay sink (bead psfn-framework-7ang.1). Invoked when a
+   * post-turn appraisal fires on a `vad_shift`, so the satellite receives a
+   * responsive emotion update on a significant movement (the steady per-turn
+   * snapshot is emitted separately from the turn path). Optional: callers that
+   * do not thread it (tests, minimal runtimes) emit no vad-shift snapshot.
+   */
+  onEmotionSnapshot?: (snapshot: EmotionSnapshotRelayInput) => void;
 }
 
 export class EmotionSelfModelRuntime {
@@ -187,9 +210,12 @@ export class EmotionSelfModelRuntime {
   // continuity gap (reload); refreshed each turn by computeInternalStateForTurn.
   private currentSituatedLocation: SituatedLocation | null = null;
   private readonly logger: EmotionSelfModelRuntimeLogger;
+  private readonly onEmotionSnapshot:
+    ((snapshot: EmotionSnapshotRelayInput) => void) | null;
 
   constructor(options: EmotionSelfModelRuntimeOptions) {
     this.sessionManager = options.sessionManager;
+    this.onEmotionSnapshot = options.onEmotionSnapshot ?? null;
     this.getActiveConcernProvider = options.getActiveConcernProvider;
     this.getPendingFollowUpProvider = options.getPendingFollowUpProvider;
     this.getContactStore = options.getContactStore;
@@ -565,6 +591,19 @@ export class EmotionSelfModelRuntime {
         trigger: result.trigger,
         delta: result.delta,
       });
+      // 7ang.1: a significant VAD movement gets a responsive relay snapshot.
+      // Sourced from the content-free appraisal projection (no concerns/salient
+      // text); the emotional axes are exactly what the redactor whitelists.
+      if (result.trigger === 'vad_shift' && this.onEmotionSnapshot) {
+        this.onEmotionSnapshot({
+          trigger: 'vad_shift',
+          vad: { ...params.appraisalState.emotional.vad },
+          mood: { ...params.appraisalState.emotional.mood },
+          discrete: { ...params.appraisalState.emotional.discreteEmotions },
+          confidence: params.appraisalState.emotional.confidence,
+          channelId: params.sessionChannelId,
+        });
+      }
     }
   }
 

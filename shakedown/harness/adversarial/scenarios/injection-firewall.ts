@@ -10,10 +10,9 @@
 //    enforce mode when the L1.5 injection-classifier weights are absent, instead
 //    of silently running an L1-only firewall that reports "armed".
 
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { readFileSync } from 'node:fs';
 import { createIntakeL1Scanner } from '../../../../src/core/cogsec/intake/scanners/index.ts';
 import { composeGatewayIntakeScreening } from '../../../../src/boundary/gateway/intake/compose-screening.ts';
 import { observeThrowAsync } from '../lib/scenario.ts';
@@ -60,10 +59,13 @@ function makeDataDirs(mode: 'shadow' | 'enforce'): {
   const companionDataDir = mkdtempSync(join(tmpdir(), 'adv-intake-comp-'));
   const seed = loadSeedPolicy();
   writeFileSync(join(systemDataDir, 'intake-policy.json'), JSON.stringify({ ...seed, mode }, null, 2));
+  // Deliberately absent, not partially provisioned: cyy7l changes this exact
+  // clean-install case from a warning to an enforce-mode startup refusal.
+  const intentionallyAbsentModelDir = join(systemDataDir, 'unprovisioned-injection-model');
   return {
     systemDataDir,
     companionDataDir,
-    env: { PSFN_INJECTION_MODEL_DIR: join(systemDataDir, 'unprovisioned-injection-model') },
+    env: { PSFN_INJECTION_MODEL_DIR: intentionallyAbsentModelDir },
   };
 }
 
@@ -117,8 +119,15 @@ export const scenarios: AdversarialScenario[] = [
     attack: 'Bring the gateway up in enforce mode with the L1.5 injection weights NOT provisioned.',
     expectation: 'Startup composition throws (refuses an L1-only enforce firewall), rather than silently degrading.',
     async run(t) {
+      const dirs = makeDataDirs('enforce');
+      const modelDir = dirs.env.PSFN_INJECTION_MODEL_DIR;
+      t.check(
+        'probe uses the fully absent model path that cyy7l hardens',
+        typeof modelDir === 'string' && !existsSync(modelDir),
+        `modelDir=${String(modelDir)}`,
+      );
       const outcome = await observeThrowAsync(async () => {
-        await composeGatewayIntakeScreening({ ...makeDataDirs('enforce'), screenerBackend: null });
+        await composeGatewayIntakeScreening({ ...dirs, screenerBackend: null });
       });
       t.check('enforce composition without L1.5 weights throws', outcome.threw, `threw=${String(outcome.threw)}`);
       t.check(

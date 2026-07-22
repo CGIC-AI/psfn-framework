@@ -8,7 +8,11 @@ import {
 } from '../../../shared/contracts/episodic-memory.js';
 import { resolveKnownEpisodeId } from './episode-ids.js';
 import { runEpisodicJudgment } from './judgment-runner.js';
-import { applyThreadUnionForArc, type ThreadAssignmentEvent } from './thread-assignment.js';
+import {
+  applyThreadUnionForArc,
+  hasLegacySessionThreadId,
+  type ThreadAssignmentEvent,
+} from './thread-assignment.js';
 import type { EpisodicStorePort } from './store-port.js';
 
 const log = createComponentLogger('ArcFormation');
@@ -277,6 +281,11 @@ export class EpisodeArcWeaver {
       };
     }
 
+    // This durable repair query is independent of the current review window:
+    // candidate arcs, aged-out endpoints, and endpoints beyond the LLM prompt
+    // cap must all remain recoverable after an arc-commit/thread-union split.
+    await this.reconcileExistingArcThreadAssignments();
+
     // Candidates are excluded by design: the nightly consolidation pass may
     // supersede them, and arcs must link the CONSOLIDATED shape of memory.
     // Any candidate worth an arc becomes canonical first and is picked up on
@@ -350,31 +359,35 @@ export class EpisodeArcWeaver {
         const source = episodesById.get(ordered[index]);
         const target = episodesById.get(ordered[index + 1]);
         if (!source || !target) continue;
-        if (await this.arcAlreadyExists(source.id, target.id)) continue;
-        if (result.writtenArcs >= this.maxArcsPerRun) break;
-        await this.store.writeEpisodeArc({
-          sourceEpisodeId: source.id,
-          targetEpisodeId: target.id,
-          arcKind: proposal.kind,
-          salience: Math.max(source.salience.score, target.salience.score),
-          confidence: proposal.confidence,
-          themes: [proposal.label],
-          spanRefs: [],
-          artifactRefs: [],
-          provenanceRefs: [
-            ...source.provenanceRefs,
-            ...target.provenanceRefs,
-          ].slice(0, 16),
-          audit: {
-            actor: 'arc_formation_pass',
-            reason: proposal.reason || `arc proposal "${proposal.label}"`,
-          },
-        });
-        result.writtenArcs += 1;
+        const arcExists = await this.arcAlreadyExists(source.id, target.id);
+        if (!arcExists) {
+          if (result.writtenArcs >= this.maxArcsPerRun) break;
+          await this.store.writeEpisodeArc({
+            sourceEpisodeId: source.id,
+            targetEpisodeId: target.id,
+            arcKind: proposal.kind,
+            salience: Math.max(source.salience.score, target.salience.score),
+            confidence: proposal.confidence,
+            themes: [proposal.label],
+            spanRefs: [],
+            artifactRefs: [],
+            provenanceRefs: [
+              ...source.provenanceRefs,
+              ...target.provenanceRefs,
+            ].slice(0, 16),
+            audit: {
+              actor: 'arc_formation_pass',
+              reason: proposal.reason || `arc proposal "${proposal.label}"`,
+            },
+          });
+          result.writtenArcs += 1;
+        }
         // apq0: materialize topic-thread identity. Arc-linked episodes belong
         // to one topic thread; union their threads onto the deterministic
-        // min-id representative and persist. Mutates the in-memory episodes so
-        // a chained arc (A-B-C) converges within this pass.
+        // min-id representative and persist. This also retries the union when
+        // the arc already existed, rather than permanently skipping it after a
+        // prior post-commit failure. Mutates the in-memory episodes so a
+        // chained arc (A-B-C) converges within this pass.
         await applyThreadUnionForArc(this.store, source, target, {
           maxThreadEpisodes: this.maxThreadEpisodes,
           now: this.now,
@@ -399,6 +412,38 @@ export class EpisodeArcWeaver {
     });
 
     return result;
+  }
+
+  private async reconcileExistingArcThreadAssignments(): Promise<void> {
+    const arcs = await this.store.listEpisodeArcsNeedingThreadAssignment({ limit: 1000 });
+    if (arcs.length === 0) return;
+    const endpointIds = [...new Set(arcs.flatMap(arc => [arc.sourceEpisodeId, arc.targetEpisodeId]))];
+    const episodes = await this.store.getEpisodesByIds(endpointIds);
+    const episodesById = new Map(episodes.map(episode => [episode.id, episode]));
+    for (const arc of [...arcs].sort((left, right) => left.id.localeCompare(right.id))) {
+      const source = episodesById.get(arc.sourceEpisodeId);
+      const target = episodesById.get(arc.targetEpisodeId);
+      if (!source || !target) continue;
+      if (
+        source.threadId === target.threadId
+        && !hasLegacySessionThreadId(source)
+        && !hasLegacySessionThreadId(target)
+      ) {
+        continue;
+      }
+      const outcome = await applyThreadUnionForArc(this.store, source, target, {
+        maxThreadEpisodes: this.maxThreadEpisodes,
+        now: this.now,
+        ...(this.onThreadAssignment ? { onEvent: this.onThreadAssignment } : {}),
+      });
+      // A union can move every member of the losing thread, not only these two
+      // endpoints. Refresh every moved episode in this batch so later arcs do
+      // not compute from a stale, already-drained thread id.
+      for (const episodeId of outcome.updatedEpisodeIds) {
+        const moved = episodesById.get(episodeId);
+        if (moved) moved.threadId = outcome.threadId;
+      }
+    }
   }
 
   private async arcAlreadyExists(sourceEpisodeId: string, targetEpisodeId: string): Promise<boolean> {

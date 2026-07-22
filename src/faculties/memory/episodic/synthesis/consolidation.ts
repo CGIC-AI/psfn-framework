@@ -210,7 +210,9 @@ export function mergeEpisodeWithCandidate(
       ...canonical.affect,
       labels: mergeStringSets(canonical.affect.labels, candidate.affect.labels),
     },
-    ...(canonical.machineSignals || candidate.machineSignals
+    // A legacy v1 survivor cannot persist the v2-only sidecar. Keep the merge
+    // live without silently upgrading its stored contract; h4fp.7 owns migration.
+    ...(canonical.schemaVersion >= 2 && (canonical.machineSignals || candidate.machineSignals)
       ? { machineSignals: mergeMachineSignals(canonical.machineSignals, candidate.machineSignals) }
       : {}),
     // Carry the companion's authored felt-meaning forward (bead h4fp.6):

@@ -138,6 +138,26 @@ export interface ThreadUnionResult {
 type ThreadUnionStore = Pick<EpisodicStorePort, 'repointThreadMembers'>;
 
 /**
+ * Older valid episode rows may omit threadId. Materialize their implicit
+ * singleton (`threadId = episode.id`) before unioning so searchByThread and
+ * later durable reconciliation observe the same identity as the in-memory
+ * fallback.
+ */
+async function normalizeUnassignedEndpoint(
+  store: ThreadUnionStore,
+  episode: Episode,
+): Promise<void> {
+  if (episode.threadId !== undefined) return;
+  await store.repointThreadMembers({
+    fromThreadId: episode.id,
+    toThreadId: episode.id,
+    maxEpisodes: 1,
+    memberEpisodeIds: [episode.id],
+  });
+  episode.threadId = episode.id;
+}
+
+/**
  * Extract a legacy session-keyed endpoint out of its per-channel bucket into
  * its own singleton topic thread before it participates in a union. Only THIS
  * episode moves — the rest of the legacy bucket stays where it is (bounded,
@@ -191,6 +211,8 @@ export async function applyThreadUnionForArc(
     throw new Error('applyThreadUnionForArc requires a positive integer maxThreadEpisodes');
   }
   const now = options.now ?? (() => new Date());
+  await normalizeUnassignedEndpoint(store, source);
+  await normalizeUnassignedEndpoint(store, target);
   await normalizeLegacyEndpoint(store, source, options.onEvent, now);
   await normalizeLegacyEndpoint(store, target, options.onEvent, now);
   const sourceThread = source.threadId ?? source.id;

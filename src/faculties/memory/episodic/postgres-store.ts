@@ -444,15 +444,15 @@ export class PostgresEpisodicStore implements EpisodicStorePort {
     if (!Number.isInteger(input.maxEpisodes) || input.maxEpisodes < 1) {
       throw new Error('repointThreadMembers requires a positive integer maxEpisodes');
     }
-    if (fromThreadId === toThreadId) {
-      throw new Error('thread members cannot be re-pointed onto the same thread');
-    }
     if (input.memberEpisodeIds !== undefined && input.memberEpisodeIds.length === 0) {
       throw new Error('repointThreadMembers memberEpisodeIds must be non-empty when provided');
     }
     const memberEpisodeIds = input.memberEpisodeIds?.map(
       (id, index) => parseRequiredText(id, `repointThreadMembers.memberEpisodeIds[${String(index)}]`),
     );
+    if (fromThreadId === toThreadId && memberEpisodeIds === undefined) {
+      throw new Error('thread members cannot be re-pointed onto the same thread');
+    }
     const nowIso = this.now().toISOString();
 
     return withPostgresClient(this.pool, async (client) => {
@@ -466,7 +466,8 @@ export class PostgresEpisodicStore implements EpisodicStorePort {
       const members = (await client.query<{ id: string }>(`
         SELECT id
         FROM l01_episodes
-        WHERE thread_id = $1 AND ${ACTIVE_CANONICAL_EPISODE_FILTER}${memberFilter}
+        WHERE (thread_id = $1 OR (thread_id IS NULL AND id = $1))
+          AND ${ACTIVE_CANONICAL_EPISODE_FILTER}${memberFilter}
         ORDER BY started_at ASC, id ASC
         LIMIT $2
         FOR UPDATE
@@ -864,6 +865,65 @@ export class PostgresEpisodicStore implements EpisodicStorePort {
       FROM deduped
       ORDER BY updated_at DESC, id ASC
     `, params);
+    return rows.map(mapArcRow);
+  }
+
+  async listEpisodeArcsNeedingThreadAssignment(
+    options: Pick<EpisodeListOptions, 'limit'> = {},
+  ): Promise<EpisodeArc[]> {
+    const rows = await queryRows<PostgresEpisodeArcRow>(this.pool, `
+      SELECT arcs.id, arcs.arc_json
+      FROM l01_episode_arcs arcs
+      JOIN l01_episodes source ON source.id = arcs.source_episode_id
+      JOIN l01_episodes target ON target.id = arcs.target_episode_id
+      WHERE (arcs.status IS NULL OR arcs.status = 'canonical')
+        AND (arcs.canonical_arc_id IS NULL OR arcs.canonical_arc_id = arcs.id)
+        AND arcs.merged_into_arc_id IS NULL
+        AND arcs.superseded_by_arc_id IS NULL
+        AND (source.status IS NULL OR source.status IN ('canonical', 'candidate'))
+        AND (source.canonical_episode_id IS NULL OR source.canonical_episode_id = source.id)
+        AND source.merged_into_episode_id IS NULL
+        AND source.superseded_by_episode_id IS NULL
+        AND (target.status IS NULL OR target.status IN ('canonical', 'candidate'))
+        AND (target.canonical_episode_id IS NULL OR target.canonical_episode_id = target.id)
+        AND target.merged_into_episode_id IS NULL
+        AND target.superseded_by_episode_id IS NULL
+        AND (
+          COALESCE(source.thread_id, source.id) IS DISTINCT FROM COALESCE(target.thread_id, target.id)
+          OR (
+            source.thread_id IS NOT NULL
+            AND source.thread_id <> source.id
+            AND EXISTS (
+              SELECT 1
+              FROM jsonb_array_elements(
+                CASE
+                  WHEN jsonb_typeof(source.episode_json->'spanRefs') = 'array'
+                    THEN source.episode_json->'spanRefs'
+                  ELSE '[]'::jsonb
+                END
+              ) AS span_ref
+              WHERE span_ref->>'sessionId' = source.thread_id
+            )
+          )
+          OR (
+            target.thread_id IS NOT NULL
+            AND target.thread_id <> target.id
+            AND EXISTS (
+              SELECT 1
+              FROM jsonb_array_elements(
+                CASE
+                  WHEN jsonb_typeof(target.episode_json->'spanRefs') = 'array'
+                    THEN target.episode_json->'spanRefs'
+                  ELSE '[]'::jsonb
+                END
+              ) AS span_ref
+              WHERE span_ref->>'sessionId' = target.thread_id
+            )
+          )
+        )
+      ORDER BY arcs.updated_at DESC, arcs.id ASC
+      LIMIT $1
+    `, [normalizeLimit(options.limit)]);
     return rows.map(mapArcRow);
   }
 

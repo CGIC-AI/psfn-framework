@@ -969,6 +969,10 @@ export class EpisodicSynthesizer {
       state.linkedArcs.push(await this.store.writeEpisodeArc(
         buildArcInput(related.episode, episode, related.overlap, stableId),
       ));
+      // If the process dies after the durable arc write but before the union,
+      // EpisodeArcWeaver replays every persisted arc's thread assignment before
+      // judging or writing new arcs. The two-step write is therefore retryable
+      // even though this candidate's source turns are already claimed.
       // apq0: an arc links two episodes into one topic thread. Union their
       // threads (deterministic min-id representative) so the related prior
       // episode and this one share a bounded topic thread instead of one

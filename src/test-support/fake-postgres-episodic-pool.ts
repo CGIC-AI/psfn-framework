@@ -374,7 +374,7 @@ export class FakeEpisodicPool {
       return queryResult(row ? [{ id: row.id }] : []);
     }
 
-    if (normalized.startsWith('select id from l01_episodes where thread_id =')) {
+    if (normalized.startsWith('select id from l01_episodes where (thread_id =')) {
       // apq0 atomic thread union: the losing thread's live members, capped.
       // The `id = any` variant restricts to specific members (legacy
       // extraction) — mirrors the store's optional $3 filter.
@@ -385,7 +385,7 @@ export class FakeEpisodicPool {
         : null;
       const rows = [...this.episodes.values()]
         .filter(isActiveEpisode)
-        .filter(row => row.thread_id === threadId)
+        .filter(row => row.thread_id === threadId || (row.thread_id === null && row.id === threadId))
         .filter(row => memberIds === null || memberIds.has(row.id))
         .sort((left, right) => (
           left.started_at.localeCompare(right.started_at)
@@ -455,6 +455,44 @@ export class FakeEpisodicPool {
 
     if (normalized.startsWith('select id, episode_json from l01_episodes')) {
       return queryResult(this.filterEpisodeRows(normalized, values));
+    }
+
+    if (normalized.startsWith('select arcs.id, arcs.arc_json from l01_episode_arcs arcs')) {
+      const limit = Number(values[0] ?? this.arcs.size);
+      const hasLegacySessionThread = (row: StoredEpisodeRow): boolean => {
+        if (row.thread_id === null || row.thread_id === row.id) return false;
+        const episode = parseEpisodeJson(row.episode_json);
+        const spanRefs = Array.isArray(episode.spanRefs) ? episode.spanRefs : [];
+        return spanRefs.some(ref => (
+          ref !== null
+          && typeof ref === 'object'
+          && String((ref as { sessionId?: unknown }).sessionId ?? '') === row.thread_id
+        ));
+      };
+      const rows = [...this.arcs.values()]
+        .filter(isActiveArc)
+        .filter((arc) => {
+          const source = this.episodes.get(arc.source_episode_id);
+          const target = this.episodes.get(arc.target_episode_id);
+          return Boolean(
+            source
+            && target
+            && isActiveEpisode(source)
+            && isActiveEpisode(target)
+            && (
+              (source.thread_id ?? source.id) !== (target.thread_id ?? target.id)
+              || hasLegacySessionThread(source)
+              || hasLegacySessionThread(target)
+            )
+          );
+        })
+        .sort((left, right) => (
+          right.updated_at.localeCompare(left.updated_at)
+          || left.id.localeCompare(right.id)
+        ))
+        .slice(0, limit)
+        .map(row => ({ id: row.id, arc_json: row.arc_json }));
+      return queryResult(rows);
     }
 
     if (normalized.startsWith('select id, arc_json from l01_episode_arcs')) {

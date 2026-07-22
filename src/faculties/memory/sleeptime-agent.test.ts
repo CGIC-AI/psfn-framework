@@ -595,8 +595,8 @@ describe('SleeptimeMemoryAgent', () => {
       endedAt: '2026-07-22T02:30:00.000Z',
       themes: ['private logistics'],
     };
-    const searchByTime = vi.fn((options?: { sessionId?: string }) => (
-      options?.sessionId === 'discord:dm-logical'
+    const searchByTime = vi.fn((options?: { spanSessionId?: string }) => (
+      options?.spanSessionId === 'discord:dm-logical'
         ? [currentEpisode]
         : [currentEpisode, foreignEpisode]
     ) as never);
@@ -635,7 +635,7 @@ describe('SleeptimeMemoryAgent', () => {
     }));
 
     expect(searchByTime).toHaveBeenCalledWith(expect.objectContaining({
-      sessionId: 'discord:dm-logical',
+      spanSessionId: 'discord:dm-logical',
       order: 'desc',
     }));
     const openingPrompt = (reviewAgent.handleMessage.mock.calls[0]?.[0] as { content: string }).content;

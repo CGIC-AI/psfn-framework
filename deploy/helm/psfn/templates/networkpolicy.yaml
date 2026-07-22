@@ -461,7 +461,7 @@ spec:
           protocol: TCP
     {{- end }}
 {{- end }}
-{{- if and .Values.modelPrefetch.enabled .Values.modelPrefetch.textEmotion.enabled }}
+{{- if and .Values.modelPrefetch.enabled (or .Values.modelPrefetch.textEmotion.enabled .Values.modelPrefetch.injectionClassifier.enabled) }}
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy

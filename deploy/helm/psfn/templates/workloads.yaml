@@ -59,6 +59,52 @@ spec:
         {{- include "psfn.fleetAuthAuthorityFloorInitContainer" . | nindent 8 }}
         {{- include "psfn.seedInitContainer" . | nindent 8 }}
         {{- include "psfn.waitForPostgresInitContainer" (dict "root" . "image" .Values.workloads.gateway.image) | nindent 8 }}
+        {{- if and .Values.modelPrefetch.enabled .Values.modelPrefetch.injectionClassifier.enabled .Values.persistence.modelCache.enabled }}
+        # Keep the gateway process stopped while the concurrently-created
+        # prefetch Job atomically provisions the enforce-mode classifier.
+        - name: wait-for-injection-model
+          image: {{ include "psfn.image" (dict "root" . "image" .Values.workloads.gateway.image) | quote }}
+          imagePullPolicy: {{ default .Values.psfnAppImage.pullPolicy .Values.workloads.gateway.image.pullPolicy }}
+          command:
+            - node
+            - --input-type=module
+            - -e
+            - |
+              import { stat } from 'node:fs/promises';
+              import { join } from 'node:path';
+              import { setTimeout } from 'node:timers/promises';
+
+              const modelDir = process.env.PSFN_INJECTION_MODEL_DIR;
+              const required = [
+                'config.json',
+                'tokenizer.json',
+                'tokenizer_config.json',
+                'special_tokens_map.json',
+                'onnx/model.onnx',
+              ];
+              for (;;) {
+                const missing = [];
+                for (const file of required) {
+                  try {
+                    if ((await stat(join(modelDir, file))).size === 0) missing.push(file);
+                  } catch {
+                    missing.push(file);
+                  }
+                }
+                if (missing.length === 0) break;
+                console.log(`[wait-for-injection-model] waiting for: ${missing.join(', ')}`);
+                await setTimeout(2000);
+              }
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          env:
+            - name: PSFN_INJECTION_MODEL_DIR
+              value: {{ printf "%s/prompt-injection-v2" .Values.runtime.modelCacheDir | quote }}
+          volumeMounts:
+            - name: model-cache
+              mountPath: {{ .Values.runtime.modelCacheDir }}
+              readOnly: true
+        {{- end }}
       containers:
         - name: gateway
           image: {{ include "psfn.image" (dict "root" . "image" .Values.workloads.gateway.image) | quote }}

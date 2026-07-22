@@ -2272,6 +2272,26 @@
       "value": "6 * 60 * 60_000"
     },
     {
+      "file": "src/core/scheduler/post-turn-runtime.ts",
+      "name": "INTENTION_FOLLOW_UP_ACTIVATION_MIN_INTERVAL_MS",
+      "value": "5 * 60_000"
+    },
+    {
+      "file": "src/core/scheduler/reflection-guardrail-telemetry.ts",
+      "name": "CLAIM_SNIPPET_MAX_CHARS",
+      "value": "180"
+    },
+    {
+      "file": "src/core/scheduler/reflection-guardrail-telemetry.ts",
+      "name": "REFLECTION_CADENCE_DRIFT_RATIO_THRESHOLD",
+      "value": "4"
+    },
+    {
+      "file": "src/core/scheduler/reflection-guardrail-telemetry.ts",
+      "name": "REFLECTION_GUARDRAIL_RECENT_CHAT_MAX_AGE_MS",
+      "value": "6 * 60 * 60 * 1000"
+    },
+    {
       "file": "src/core/scheduler/reflection-policy.ts",
       "name": "MAX_INTERVAL_MS",
       "value": "604_800_000"
@@ -2295,11 +2315,6 @@
       "file": "src/core/scheduler/reflection-policy.ts",
       "name": "MIN_PROMPT_LENGTH",
       "value": "10"
-    },
-    {
-      "file": "src/core/scheduler/post-turn-runtime.ts",
-      "name": "INTENTION_FOLLOW_UP_ACTIVATION_MIN_INTERVAL_MS",
-      "value": "5 * 60_000"
     },
     {
       "file": "src/core/scheduler/reflection-template-runtime.ts",
@@ -2335,21 +2350,6 @@
       "file": "src/core/scheduler/reflection-template-runtime/runtime-helpers.ts",
       "name": "REFLECTION_NOVELTY_ENTRY_SCAN_LIMIT",
       "value": "50"
-    },
-    {
-      "file": "src/core/scheduler/reflection-guardrail-telemetry.ts",
-      "name": "CLAIM_SNIPPET_MAX_CHARS",
-      "value": "180"
-    },
-    {
-      "file": "src/core/scheduler/reflection-guardrail-telemetry.ts",
-      "name": "REFLECTION_CADENCE_DRIFT_RATIO_THRESHOLD",
-      "value": "4"
-    },
-    {
-      "file": "src/core/scheduler/reflection-guardrail-telemetry.ts",
-      "name": "REFLECTION_GUARDRAIL_RECENT_CHAT_MAX_AGE_MS",
-      "value": "6 * 60 * 60 * 1000"
     },
     {
       "file": "src/core/scheduler/schedule-tool.ts",
@@ -4793,6 +4793,12 @@
       "name": "DRAIN_POLL_INTERVAL_MS",
       "value": "200",
       "note": "Test-harness teardown poll cadence; code-owned test timing, not a runtime setting."
+    },
+    {
+      "file": "src/test-support/postgres-test-harness.ts",
+      "name": "MAX_DATABASES_FOR_IN_PLACE_RESET",
+      "value": "16",
+      "note": "Test-harness recycle threshold keeps database teardown within Vitest's 30-second hook; code-owned infrastructure safety, not a runtime setting."
     },
     {
       "file": "src/test-support/postgres-test-harness.ts",

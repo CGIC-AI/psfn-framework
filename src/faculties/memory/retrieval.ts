@@ -4,6 +4,7 @@ import type {
   RetrievalVADInput,
 } from '../../core/agent/contracts.js';
 import type { EmbeddingProviderPort } from '../../shared/contracts/embedding-provider.js';
+import { MemorySubjectAuthorizationDeniedError } from '../../shared/contracts/memory-subject.js';
 import { createHash } from 'node:crypto';
 import {
   createTurnRetrievalQueryEmbedding as createTurnRetrievalQueryEmbeddingValue,
@@ -1557,7 +1558,18 @@ export class MemoryRetriever implements MemoryProvider {
       addRetrievalStageTiming(telemetry, 'enrichment', enrichmentStartedAt);
 
       // Update access stats; fail closed if persistence fails.
+      //
+      // One exception: a subject-authorization refusal. These counters are
+      // bookkeeping on memories this retrieval already selected, scored and
+      // rendered into the prompt, so the access decision has been made
+      // upstream. Memories whose subject classification is `unattributed` or
+      // `ambiguous` are legitimately recallable but are outside the *mutation*
+      // authorization set, and treating that refusal as fatal discards the
+      // entire active memory context — a companion with many unattributed
+      // memories then reads as having none at all. Skip those counters and
+      // keep the context; every other persistence failure stays fatal.
       const accessUpdateStartedAt = performance.now();
+      let accessStatAuthorizationSkips = 0;
       for (const s of selected) {
         try {
           await productMemoryStore.updateMemory(s.memory.id, {
@@ -1565,6 +1577,10 @@ export class MemoryRetriever implements MemoryProvider {
             accessCount: s.memory.accessCount + 1,
           });
         } catch (error) {
+          if (error instanceof MemorySubjectAuthorizationDeniedError) {
+            accessStatAuthorizationSkips += 1;
+            continue;
+          }
           throw new RetrievalIntegrityError(
             `Failed to update retrieval access stats for memory ${s.memory.id}`,
             {
@@ -1576,6 +1592,9 @@ export class MemoryRetriever implements MemoryProvider {
             error,
           );
         }
+      }
+      if (accessStatAuthorizationSkips > 0) {
+        telemetry.accessStatAuthorizationSkips = accessStatAuthorizationSkips;
       }
       addRetrievalStageTiming(telemetry, 'access_update', accessUpdateStartedAt);
 

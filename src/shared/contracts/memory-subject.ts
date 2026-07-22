@@ -6,6 +6,20 @@ import {
 
 export const MEMORY_SUBJECT_CLASSIFIER_VERSION = 1;
 
+/**
+ * A memory subject mutation was refused because the caller's authorization does
+ * not cover every requested memory. Callers performing a *mutation* must keep
+ * treating this as fatal. Callers doing bookkeeping on rows retrieval already
+ * selected and rendered (access counters) must degrade instead of discarding
+ * the caller's work — see the retrieval access-stat loop.
+ */
+export class MemorySubjectAuthorizationDeniedError extends Error {
+  constructor(message = 'Memory subject authorization denied') {
+    super(message);
+    this.name = 'MemorySubjectAuthorizationDeniedError';
+  }
+}
+
 export const MEMORY_SUBJECT_CLASSES = [
   'single_contact',
   'multiple_contacts',

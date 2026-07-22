@@ -135,6 +135,7 @@ import {
   runMemorySubjectBackfillToCompletion,
 } from './postgres-store/subject-backfill.js';
 import {
+  MemorySubjectAuthorizationDeniedError,
   parseMemorySubjectQueryAuthorization,
   type MemorySubjectClassification,
   type MemorySubjectQueryAuthorization,
@@ -1045,7 +1046,7 @@ class PostgresMemoryStore implements MemoryStorePort {
       FOR UPDATE
     `, [memoryIds, ...predicate.values]);
     if (authorizedRows.length !== memoryIds.length) {
-      throw new Error('Memory subject authorization denied');
+      throw new MemorySubjectAuthorizationDeniedError();
     }
     return authorizedRows;
   }

@@ -1,0 +1,51 @@
+name: Zizmor Full Audit
+
+on:
+  schedule:
+    - cron: "37 7 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: zizmor-audit-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  zizmor:
+    name: Zizmor online audit
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Check out exact revision
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ github.sha }}
+
+      - name: Set up Node.js
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version: 24.13.1
+
+      - name: Full online audit with the default read-only token
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/ci/run-zizmor-changed.mjs audit --format=github
+
+      - name: Generate audit SARIF report
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/ci/run-zizmor-changed.mjs audit --format=sarif > zizmor.sarif
+
+      - name: Retain Zizmor SARIF
+        if: always() && hashFiles('zizmor.sarif') != ''
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: zizmor-audit-sarif-${{ github.run_id }}-${{ github.run_attempt }}
+          path: zizmor.sarif
+          if-no-files-found: error
+          retention-days: 30

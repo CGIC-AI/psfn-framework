@@ -53,13 +53,13 @@ interface FleetReferencePhoto {
 
 function parseHealthStatus(value: unknown): FleetPortalHealthStatus {
   if (value === 'up' || value === 'down' || value === 'unknown') return value;
-  throw new Error('Fleet portal returned an invalid health dimension');
+  throw new Error('Cluster portal returned an invalid health dimension');
 }
 
 function parseHealth(value: unknown): FleetPortalCompanion['health'] {
   if (!isRecord(value)
     || !hasExactKeys(value, ['agentRpc', 'adminTransport', 'channels'])) {
-    throw new Error('Fleet portal returned an invalid health projection');
+    throw new Error('Cluster portal returned an invalid health projection');
   }
   return {
     agentRpc: parseHealthStatus(value.agentRpc),
@@ -78,7 +78,7 @@ function parsePostureMetric(value: unknown): {
     || !Number.isInteger(value.utilizationPercent)
     || (value.utilizationPercent as number) < 0
     || (value.utilizationPercent as number) > 100) {
-    throw new Error('Fleet portal returned an invalid posture metric');
+    throw new Error('Cluster portal returned an invalid posture metric');
   }
   return {
     state: value.state as FleetPortalPostureState,
@@ -89,18 +89,18 @@ function parsePostureMetric(value: unknown): {
 function parsePosture(value: unknown): FleetPortalPosture {
   if (!isRecord(value)
     || !['available', 'stale', 'unavailable'].includes(String(value.status))) {
-    throw new Error('Fleet portal returned an invalid posture');
+    throw new Error('Cluster portal returned an invalid posture');
   }
   if (value.status === 'unavailable') {
     if (!hasExactKeys(value, ['status'])) {
-      throw new Error('Fleet portal unavailable posture was widened');
+      throw new Error('Cluster portal unavailable posture was widened');
     }
     return { status: 'unavailable' };
   }
   if (!hasExactKeys(value, ['status', 'updatedAt', 'charge', 'fatigue'])
     || typeof value.updatedAt !== 'string'
     || !Number.isFinite(Date.parse(value.updatedAt))) {
-    throw new Error('Fleet portal returned an invalid timestamped posture');
+    throw new Error('Cluster portal returned an invalid timestamped posture');
   }
   return {
     status: value.status as 'available' | 'stale',
@@ -124,7 +124,7 @@ function parseCompanion(value: unknown, seen: Set<string>): FleetPortalCompanion
       && (typeof value.avatarRef !== 'string' || value.avatarRef.length > 2_048))
     || (value.gardenPath !== undefined
       && value.gardenPath !== companionGardenRoot(value.companionId))) {
-    throw new Error('Fleet portal returned an invalid companion projection');
+    throw new Error('Cluster portal returned an invalid companion projection');
   }
   const keys = [
     'companionId',
@@ -135,7 +135,7 @@ function parseCompanion(value: unknown, seen: Set<string>): FleetPortalCompanion
     ...(value.avatarRef === undefined ? [] : ['avatarRef']),
   ];
   if (!hasExactKeys(value, keys)) {
-    throw new Error('Fleet portal companion projection was widened');
+    throw new Error('Cluster portal companion projection was widened');
   }
   seen.add(value.companionId);
   return {
@@ -159,7 +159,7 @@ export function parseFleetPortalProjection(value: unknown): FleetPortalProjectio
     || value.session.state !== 'authenticated'
     || !Array.isArray(value.companions)
     || value.companions.length > MAX_FLEET_COMPANIONS) {
-    throw new Error('Fleet portal returned an invalid bounded projection');
+    throw new Error('Cluster portal returned an invalid bounded projection');
   }
   const seen = new Set<string>();
   return {
@@ -248,12 +248,12 @@ export async function fetchFleetPortalProjection(signal?: AbortSignal): Promise<
   if (signal) throwIfAborted(signal);
   if (response.status === 401) {
     if (typeof window !== 'undefined') window.location.assign('/fleet/login');
-    throw new Error('Fleet session expired');
+    throw new Error('Cluster session expired');
   }
   if (!response.ok) {
     throw new Error(response.status === 403
-      ? 'Fleet access is unavailable'
-      : 'Fleet status is temporarily unavailable');
+      ? 'Cluster access is unavailable'
+      : 'Cluster status is temporarily unavailable');
   }
   return parseFleetPortalProjection(await response.json());
 }

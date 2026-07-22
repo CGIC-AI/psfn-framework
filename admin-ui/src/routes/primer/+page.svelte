@@ -57,17 +57,17 @@
     },
     {
       title: 'Usage and cost',
-      description: 'Dashboard has the quick current-companion totals. Token Usage provides the detailed per-companion accounting cockpit; Fleet Costs compares authorized companions and fleet totals.',
+      description: 'Dashboard has the quick current-companion totals. Token Usage provides the detailed per-companion accounting cockpit; Cluster Costs compares authorized companions and cluster totals.',
       links: [
         { label: 'Token Usage', path: '/charge-budget?tab=token-usage' },
-        { label: 'Fleet Costs', path: '/fleet-costs' },
+        { label: 'Cluster Costs', path: '/fleet-costs' },
       ],
     },
     {
-      title: 'Fleet',
-      description: 'Every deployment is a fleet, including a one-companion deployment. The fleet portal is the fleet-level entry point; each authorized companion opens into a separately scoped Garden.',
+      title: 'Cluster',
+      description: 'Every deployment is a cluster, including a one-companion deployment. The cluster portal is the cluster-level entry point; each authorized companion opens into a separately scoped Garden.',
       links: [
-        { label: 'Fleet overview', path: '/fleet', fleetLevel: true },
+        { label: 'Cluster overview', path: '/fleet', fleetLevel: true },
       ],
     },
   ];
@@ -87,11 +87,11 @@
       steps: [
         'Use Dashboard for a quick companion snapshot.',
         'Open Token Usage for model, provider, cache, time-window, and event detail.',
-        'Use Fleet Costs when the question spans companions.',
+        'Use Cluster Costs when the question spans companions.',
       ],
       links: [
         { label: 'Token Usage', path: '/charge-budget?tab=token-usage' },
-        { label: 'Fleet Costs', path: '/fleet-costs' },
+        { label: 'Cluster Costs', path: '/fleet-costs' },
       ],
     },
     {
@@ -106,10 +106,10 @@
     {
       title: 'Switch companions',
       steps: [
-        'Use the companion selector in the Garden sidebar for a direct switch, or return to Fleet overview.',
+        'Use the companion selector in the Garden sidebar for a direct switch, or return to Cluster overview.',
         'A switch clears the previous companion browser scope before loading the selected companion Garden.',
       ],
-      links: [{ label: 'Fleet overview', path: '/fleet', fleetLevel: true }],
+      links: [{ label: 'Cluster overview', path: '/fleet', fleetLevel: true }],
     },
     {
       title: 'Recover a session',
@@ -130,7 +130,7 @@
     {
       label: 'docs/multi-companion.md',
       href: 'https://github.com/CGIC-AI/psfn-framework/blob/main/docs/multi-companion.md',
-      description: 'fleet topology, authorization, and per-companion Garden boundaries',
+      description: 'cluster topology, authorization, and per-companion Garden boundaries',
     },
     {
       label: 'docs/cognitive-security.md',
@@ -170,7 +170,7 @@
   <section class="space-y-4" aria-labelledby="locations-title">
     <div>
       <h2 id="locations-title" class="font-serif text-xl font-semibold text-shadow-900">Where things live</h2>
-      <p class="mt-1 text-sm text-shadow-600">Links stay inside the active companion Garden unless marked fleet-level.</p>
+      <p class="mt-1 text-sm text-shadow-600">Links stay inside the active companion Garden unless marked cluster-level.</p>
     </div>
     <div class="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
       {#each locations as location (location.title)}
@@ -225,7 +225,7 @@
     </div>
     <div class="grid gap-4 lg:grid-cols-3">
       <article class="card-garden p-5 lg:col-span-2">
-        <h3 class="font-serif text-lg font-semibold text-shadow-900">Fleet companion status</h3>
+        <h3 class="font-serif text-lg font-semibold text-shadow-900">Cluster companion status</h3>
         <dl class="mt-3 grid gap-3 text-sm sm:grid-cols-3">
           <div class="rounded-lg border border-bark-200 bg-bark-50 p-3">
             <dt class="font-semibold text-shadow-800">Agent</dt>

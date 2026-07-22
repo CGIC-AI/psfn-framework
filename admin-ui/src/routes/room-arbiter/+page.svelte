@@ -67,13 +67,13 @@
 </script>
 
 <svelte:head>
-  <title>Fleet Command · Garden</title>
+  <title>Cluster Command · Garden</title>
 </svelte:head>
 
 <div class="min-h-screen bg-bark-100 px-4 py-8 sm:px-6 lg:px-8">
   <main class="mx-auto max-w-6xl space-y-6">
     <header class="space-y-1">
-      <h1 class="text-2xl font-semibold text-shadow-800">Fleet Command</h1>
+      <h1 class="text-2xl font-semibold text-shadow-800">Cluster Command</h1>
       <p class="text-sm text-shadow-600">
         Room-state and arbitration telemetry. Content-free by contract: ids, enums, counts,
         and timestamps only &mdash; no room or message text is collected.

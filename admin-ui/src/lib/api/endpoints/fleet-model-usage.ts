@@ -47,7 +47,7 @@ export async function getAuthorizedFleetModelUsage(
 ): Promise<FleetModelUsageData> {
   const scope = parseCompanionGardenScope(gardenPath);
   if (!scope || scope.publicPrefix !== gardenPath || scope.innerPath !== '/') {
-    throw new Error('Fleet costs require one server-authorized companion Garden path');
+    throw new Error('Cluster costs require one server-authorized companion Garden path');
   }
   const response = await fetch(`${gardenPath}${buildFleetModelUsagePath(query)}`, {
     cache: 'no-store',
@@ -57,16 +57,16 @@ export async function getAuthorizedFleetModelUsage(
   });
   if (response.status === 401) {
     if (typeof window !== 'undefined') window.location.assign('/fleet/login');
-    throw new Error('Fleet session expired');
+    throw new Error('Cluster session expired');
   }
   if (!response.ok) {
     throw new Error(response.status === 403
-      ? 'Fleet cost access is unavailable'
-      : 'Fleet cost telemetry is temporarily unavailable');
+      ? 'Cluster cost access is unavailable'
+      : 'Cluster cost telemetry is temporarily unavailable');
   }
   const projection = parseFleetModelUsageData(await response.json());
   if (projection.deployment !== 'fleet') {
-    throw new Error('Fleet cost telemetry returned a non-fleet projection');
+    throw new Error('Cluster cost telemetry returned a non-cluster projection');
   }
   return projection;
 }

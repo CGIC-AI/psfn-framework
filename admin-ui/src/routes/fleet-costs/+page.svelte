@@ -6,6 +6,6 @@
 
 <LazyGardenPage
   loader={loadPage}
-  loadingLabel="Loading fleet costs..."
-  errorLabel="Failed to load fleet costs page."
+  loadingLabel="Loading cluster costs..."
+  errorLabel="Failed to load cluster costs page."
 />

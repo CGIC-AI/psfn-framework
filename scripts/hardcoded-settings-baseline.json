@@ -3317,6 +3317,18 @@
     },
     {
       "file": "src/faculties/memory/sleeptime-agent.ts",
+      "name": "EPISODE_REVIEW_LIMIT",
+      "note": "Code-owned prompt-allocation ceiling that bounds one sleeptime review's episodic context.",
+      "value": "20"
+    },
+    {
+      "file": "src/faculties/memory/sleeptime-agent.ts",
+      "name": "MAX_REVIEW_TURNS",
+      "note": "Code-owned LLM-call ceiling that bounds parse-feedback retries for one sleeptime review.",
+      "value": "3"
+    },
+    {
+      "file": "src/faculties/memory/sleeptime-agent.ts",
       "name": "MAX_TRANSCRIPT_ENTRY_CHARS",
       "value": "600"
     },

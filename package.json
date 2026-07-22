@@ -92,6 +92,8 @@
     "smoke:garden:postgres-memory": "node scripts/garden-postgres-memory-cutover-smoke.mjs",
     "smoke:discord:dm-voice": "node scripts/discord-dm-voice-smoke.mjs",
     "shakedown:bootstrap": "node shakedown/harness/bootstrap-local.mjs",
+    "shakedown:adversarial": "tsx shakedown/harness/adversarial/run.ts",
+    "shakedown:adversarial:selftest": "tsx shakedown/harness/adversarial/selftest.ts",
     "walkthrough": "tsx src/app/e2e/e2e-walkthrough.ts",
     "semgrep": "bash scripts/ci/run-semgrep.sh full",
     "semgrep:diff": "bash scripts/ci/run-semgrep.sh diff",

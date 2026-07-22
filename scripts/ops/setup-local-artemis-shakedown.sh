@@ -665,7 +665,7 @@ helm_upgrade() {
   while IFS= read -r -d '' arg; do
     args+=("$arg")
   done < <(helm_base_args "$short" "$full")
-  helm upgrade --install "${args[@]}" "$@"
+  helm upgrade --install --take-ownership "${args[@]}" "$@"
 }
 
 provision_gateway_edge_certificate() {

@@ -363,6 +363,7 @@ export function createLiveDeployPipelineRunner(
         '--set', `image.repository=${context.imageRepository}`,
         '--set', `image.tag=${context.imageTag}`,
         '--set', `image.reference=${reference}`,
+        '--take-ownership',
         '--wait', '--timeout', '10m',
       ], { cwd: config.repoDir, env: { ...process.env, PSFN_HELM_UPGRADE_AT: now().toISOString() } });
       if (result.code !== 0) {

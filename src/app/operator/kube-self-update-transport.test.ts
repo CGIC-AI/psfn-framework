@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
+  createLiveDeployPipelineRunner,
   createLiveHelmRollbackApi,
   createLiveRollbackTargetResolver,
   readHelmHistory,
@@ -117,6 +118,41 @@ describe('createLiveHelmRollbackApi', () => {
     const api = createLiveHelmRollbackApi({ run: run as unknown as CommandRunner });
     await expect(api.rollback('Bad_NS', 'psfn', 7)).rejects.toThrow(/must be a DNS label/);
     expect(run).not.toHaveBeenCalled();
+  });
+});
+
+describe('createLiveDeployPipelineRunner', () => {
+  it('takes ownership of existing chart-declared resources during Helm upgrade', async () => {
+    const { run, calls } = runner([
+      { match: (f, a) => f === 'helm' && a.includes('upgrade'), result: ok('upgrade complete') },
+      {
+        match: (f, a) => f === 'helm' && a.includes('history'),
+        result: ok(helmHistoryJson([{ revision: 12, status: 'deployed' }])),
+      },
+    ]);
+    const deploy = createLiveDeployPipelineRunner({
+      run,
+      repoDir: '/repo',
+      dockerfile: 'docker/Dockerfile.agent',
+      buildContext: '.',
+      chartPath: 'deploy/helm/psfn',
+      importImage: async () => undefined,
+      verifyBackup: async () => true,
+    });
+
+    await expect(deploy.helmUpgrade({
+      action: 'deploy',
+      namespace: 'psfn',
+      release: 'psfn',
+      sourceBranch: 'fix/chart-ownership',
+      sourceCommit: 'a'.repeat(40),
+      imageRepository: 'localhost/psfn-framework',
+      imageTag: '0.1.0-kube-aaaaaaaa',
+      imageRevisionLabel: 'a'.repeat(40),
+    }, {})).resolves.toEqual({ helmRevision: 12 });
+
+    const upgrade = calls.find(call => call.args.includes('upgrade'));
+    expect(upgrade?.args).toContain('--take-ownership');
   });
 });
 

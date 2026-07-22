@@ -140,9 +140,60 @@ export interface AdminIntakeQuarantineService {
   ): AdminIntakeQuarantineResolveResult;
 }
 
+/**
+ * What the release re-delivery port is handed once an item is released
+ * (jvbt). The envelope has already transitioned to its terminal
+ * `human_released*` state, so its provenance (original source class, risk
+ * tier, taint) survives and the delivery must remain untrusted-origin.
+ */
+export interface IntakeReleaseRedeliveryInput {
+  /** Released envelope (terminal `human_released` / `human_released_sanitized`). */
+  envelope: IntakeQuarantineEntry['envelope'];
+  /** Firewall mode at hold time. */
+  mode: 'shadow' | 'enforce';
+  /** The release action that was applied. */
+  action: Extract<IntakeQuarantineDecisionAction, 'release_raw' | 'release_sanitized'>;
+  /** Acting principal recorded on the decision. */
+  actor: string;
+  /** Decision timestamp (ms). */
+  atMs: number;
+  /** Verbatim content to re-deliver (raw text or the safe representation). */
+  content: string;
+  /** True when the held raw copy was truncated at the storage cap. */
+  rawTextTruncated: boolean;
+  /** Carrying channel of the withheld item, when one was recorded. */
+  sourceChannelId?: string;
+  /** Canonical contact id of the sender, when known. */
+  canonicalContactId?: string;
+}
+
+export interface IntakeReleaseRedeliveryResult {
+  /** True when the content reached a conversation. */
+  delivered: boolean;
+  /** Channel the delivery landed in, when delivered. */
+  channelId?: string;
+  /** Session entry id of the delivery, when one was appended. */
+  entryId?: number | null;
+  /** Why delivery could not happen (undeliverable item), when not delivered. */
+  reason?: string;
+}
+
+/**
+ * Re-delivers released content into the companion's conversation through the
+ * honest, provenance-marked session path (jvbt). REQUIRED: without it a
+ * false-positive quarantine would be silently dropped even after a human
+ * judged the content safe. The port never throws for an undeliverable item
+ * (it returns `delivered: false` with a reason); the release itself has
+ * already been applied by the time it runs.
+ */
+export type IntakeReleaseRedeliveryPort =
+  (input: IntakeReleaseRedeliveryInput) => IntakeReleaseRedeliveryResult;
+
 export interface AdminIntakeQuarantineServiceDeps {
   store: IntakeQuarantineStore;
   settingsService: Pick<AdminSettingsService, 'getIntakeSourceLists' | 'mutateIntakeSourceList'>;
+  /** Honest re-delivery of released content into conversation (jvbt). */
+  redeliverReleased: IntakeReleaseRedeliveryPort;
   /**
    * Provider (not instance): CogSecEventStore snapshots the file at
    * construction, and the gateway writes the same file concurrently — a
@@ -520,9 +571,58 @@ export function createAdminIntakeQuarantineService(
           message: `Quarantine decision failed (case ${event.caseId}): ${toErrorMessage(error)}`,
         };
       }
+      // ── Honest re-delivery (jvbt): a release is not complete until the
+      // set-aside content is delivered back into the conversation it was
+      // withheld from. A discard delivers nothing. The item is already
+      // released here, so a delivery failure is recorded (never swallowed,
+      // never thrown) rather than reversing the human decision.
+      let redelivery: IntakeReleaseRedeliveryResult | null = null;
+      if (request.action === 'release_raw' || request.action === 'release_sanitized') {
+        const content = request.action === 'release_raw'
+          ? decided.rawText
+          : decided.safeRepresentationText ?? '';
+        try {
+          redelivery = deps.redeliverReleased({
+            envelope: decided.envelope,
+            mode: decided.mode,
+            action: request.action,
+            actor: requestActor,
+            atMs,
+            content,
+            rawTextTruncated: decided.rawTextTruncated,
+            ...(decided.sourceChannelId !== undefined
+              ? { sourceChannelId: decided.sourceChannelId }
+              : {}),
+            ...(decided.canonicalContactId !== undefined
+              ? { canonicalContactId: decided.canonicalContactId }
+              : {}),
+          });
+        } catch (error) {
+          redelivery = {
+            delivered: false,
+            reason: `re-delivery threw: ${toErrorMessage(error)}`,
+          };
+        }
+      }
+
+      const redeliveryNote = redelivery
+        ? redelivery.delivered
+          ? ` and re-delivered it into ${redelivery.channelId ?? 'the conversation'}`
+          : `; re-delivery did not land (${redelivery.reason ?? 'no reason recorded'})`
+        : '';
+
       cogSecEvents.updateEvent(event.caseId, {
         status: 'applied',
         appliedAt: new Date(atMs).toISOString(),
+        ...(redelivery
+          ? {
+            safeAgentSummary: `Operator ${decisionPhrase} `
+              + `(${entry.envelope.sourceClass}, envelope ${entry.id})`
+              + (redelivery.delivered
+                ? '; the content was re-delivered into the conversation'
+                : '; re-delivery did not land and the content was not returned to the conversation'),
+          }
+          : {}),
       });
 
       deps.onQueueChanged?.();
@@ -530,7 +630,7 @@ export function createAdminIntakeQuarantineService(
       return {
         ok: true,
         item: toItemView(decided, atMs),
-        message: `Applied ${request.action} to quarantine item ${entry.id}${flywheelMessage}`,
+        message: `Applied ${request.action} to quarantine item ${entry.id}${flywheelMessage}${redeliveryNote}`,
         cogSecCaseId: event.caseId,
       };
     },

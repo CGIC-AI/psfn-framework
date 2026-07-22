@@ -600,9 +600,28 @@ direction) — so every human decision teaches the policy and the same class of
 item stops escalating. Direct list CRUD:
 `src/operator/garden/routes/intake-source-list-routes.ts`.
 
-Note the release currently updates envelope/store state, the flywheel, and
-the audit trail — it does not re-deliver the content into the companion's
-conversation (see Known Gaps).
+**Honest re-delivery on release (jvbt).** A release updates envelope/store
+state, the flywheel, and the audit trail, and then re-delivers the set-aside
+content back into the conversation it was withheld from — a false-positive
+hold is no longer silently dropped. The delivery is a `role: 'system'`
+firewall note on the item's source channel: the fixed, operator-reviewed
+`releasedContent` intro (in `intake-firewall-notice-templates.ts`, so all
+companion-facing firewall wording stays in one place) leads, an explicit
+provenance line names the source class, origin, reviewer, and time, and the
+verbatim raw text (or the safe representation, for `release_sanitized`)
+follows. Because the intro carries the firewall-notice signature phrase, the
+whole delivery is excluded from emotion appraisal and memory candidacy — the
+companion can read it, but it never drives appraisal or becomes a durable
+memory as if it were fresh trusted partner input. The released envelope rides
+the entry's `intakeScreening` metadata in its terminal `human_released*`
+state: sink-consumable, but with its original untrusted source risk tier
+intact, so every consequential sink still gates it (its provenance survives —
+it is never laundered as trusted). If no source channel was recorded on the
+held item, the release still applies and the undeliverable outcome is recorded
+in the decision result and CogSec event rather than silently swallowed. The
+`discard` action delivers nothing. Wiring:
+`redeliverReleased` in `src/operator/garden/local-admin-contract.ts` →
+`SessionManager.recordSystemMessage`.
 
 ## Drift Detection and Second-Arrow Lanes (htm9.14/.15)
 
@@ -995,10 +1014,14 @@ Documented deliberately; do not let the layer diagram imply otherwise.
   reverse-RPC (`requestAgent`) result/stream seam, which is never passed to
   the egress guard. Agent-initiated egress (messages, web, notifications)
   is covered.
-- **Released-content delivery is undesigned.** An operator release updates
-  the envelope state machine, the audit trail, and the flywheel — but there
-  is no path that re-delivers the released content into the companion's
-  conversation. Today the operator relays it out of band.
+- **Released-content re-delivery is wired (jvbt).** An operator release now
+  updates the envelope state machine, the audit trail, and the flywheel AND
+  re-delivers the set-aside content into the conversation it was withheld from
+  as a provenance-marked `role: 'system'` firewall note (see "Honest
+  re-delivery on release" above). Residual: delivery targets the item's
+  recorded source channel; an item held with no source channel cannot be
+  routed and reports an undeliverable outcome (the release still applies), so
+  such items still need out-of-band relay.
 - **`persona_mutation` / `wiki_write` / `trust_mutation` fail closed but are
   not yet screen-then-allow wired (qg13).** Their seed `unscreened` default is
   now `deny` (the first two are schema-forced), so an unenveloped write is

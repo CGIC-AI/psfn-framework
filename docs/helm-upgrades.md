@@ -764,6 +764,30 @@ The checked-in `scripts/ops/validate-kube-rollout.sh` still probes a fixed
 `psfn-agent` Deployment and is therefore supplemental on this branch, not a
 replacement for the label-selected agent gate above.
 
+**Read the gate's coverage accounting, not just its pass count.** The script
+prints its full planned check set before it runs anything, and every planned
+check ends in exactly one of four states:
+
+| State | Meaning |
+|---|---|
+| `PASS` | the assertion ran and held |
+| `FAIL` | the assertion ran and did not hold |
+| `SKIP` | a prerequisite failed, so nothing was validated |
+| `NOT RUN` | an earlier failure aborted the plan, so nothing was validated |
+
+The summary names every non-`PASS` check and prints `COVERAGE INCOMPLETE` with
+the count. Any `SKIP` or `NOT RUN` exits non-zero, so a partial run can never
+be read as a validated deploy. Only an operator-requested skip
+(`--skip-provider-routing`) is reported without failing the gate — and it is
+still named as unvalidated.
+
+Reading the testing-harness API key is its own check. When the key is absent or
+malformed, only `gateway models` and `gateway chat smoke` report `SKIP`; the
+pgvector, Redis, log-scan, provider-routing and zero-bookkeeping-rows checks
+still run. Provision `TESTING_HARNESS_API_KEY` in the app secret (see
+`docs/operations.md`) before treating a rollout as validated — the `/v1/models`
+route and the two-turn continuity smoke cannot be exercised without it.
+
 ### 10. Close out or recover
 
 When the gate is green:

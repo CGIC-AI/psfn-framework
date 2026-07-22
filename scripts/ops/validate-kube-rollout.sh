@@ -33,11 +33,28 @@ GARDEN_HEALTH_CHECK_MODE=""
 GARDEN_HEALTH_CHECK_LABEL="garden health"
 
 APP_DEPLOYS=(psfn-gateway psfn-garden)
-CHECK_COUNT=0
+
+# Exit status a check function returns when a declared prerequisite failed, so
+# the check could not run at all. It is deliberately distinct from 1 (the check
+# ran and the assertion failed) because the two mean opposite things about
+# coverage: a failed check validated something, a skipped check validated
+# nothing.
+CHECK_SKIPPED_STATUS=3
+
 PASS_COUNT=0
 FAIL_COUNT=0
 WARN_COUNT=0
+SKIP_COUNT=0
+REQUESTED_SKIP_COUNT=0
+NOT_RUN_COUNT=0
 FAILED_CHECKS=()
+SKIPPED_CHECKS=()
+REQUESTED_SKIP_CHECKS=()
+NOT_RUN_CHECKS=()
+PLANNED_CHECK_SCOPES=()
+PLANNED_CHECK_NAMES=()
+PLANNED_CHECK_FUNCS=()
+ABORTED_BY_CHECK=""
 
 usage() {
   cat <<'EOF'
@@ -69,6 +86,15 @@ Options:
 
 Auto mode uses local kubectl when available. Otherwise it runs kube commands as:
   ssh <host> sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl ...
+
+Coverage accounting: the gate plans its full check set up front and the summary
+always reports that plan. A check is PASS, FAIL, SKIP (a prerequisite failed, so
+nothing was validated), or NOT RUN (an earlier gate failure aborted the run).
+Anything other than PASS/FAIL leaves coverage incomplete and the gate exits
+non-zero, so a partial run can never read as a validated deploy.
+
+Exit status: 0 all planned checks passed (operator-requested skips allowed);
+1 at least one check failed, was skipped, or did not run; 2 setup error.
 EOF
 }
 
@@ -386,62 +412,167 @@ warn_line() {
   printf 'WARN %s\n' "$*"
 }
 
+planned_check_total() {
+  printf '%d' "${#PLANNED_CHECK_NAMES[@]}"
+}
+
+print_named_checks() {
+  local heading=$1
+  local -n entries=$2
+  ((${#entries[@]} > 0)) || return 0
+  printf '%s\n' "$heading"
+  local check
+  for check in "${entries[@]}"; do
+    printf '  - %s\n' "$check"
+  done
+}
+
 print_summary() {
-  printf '\nSummary: %d checks, %d passed, %d failed, %d warnings\n' "$CHECK_COUNT" "$PASS_COUNT" "$FAIL_COUNT" "$WARN_COUNT"
-  if ((${#FAILED_CHECKS[@]} > 0)); then
-    printf 'Failed checks:\n'
-    local check
-    for check in "${FAILED_CHECKS[@]}"; do
-      printf '  - %s\n' "$check"
-    done
+  local planned executed unvalidated
+  planned="$(planned_check_total)"
+  executed=$((PASS_COUNT + FAIL_COUNT + SKIP_COUNT))
+  unvalidated=$((FAIL_COUNT + SKIP_COUNT + REQUESTED_SKIP_COUNT + NOT_RUN_COUNT))
+
+  printf '\nSummary: %d checks planned, %d ran; %d passed, %d failed, %d skipped, %d requested-skip, %d not run, %d warnings\n' \
+    "$planned" "$executed" "$PASS_COUNT" "$FAIL_COUNT" "$SKIP_COUNT" \
+    "$REQUESTED_SKIP_COUNT" "$NOT_RUN_COUNT" "$WARN_COUNT"
+
+  print_named_checks 'Failed checks:' FAILED_CHECKS
+  print_named_checks 'SKIPPED — prerequisite failed, nothing was validated:' SKIPPED_CHECKS
+  print_named_checks 'SKIPPED by operator request, nothing was validated:' REQUESTED_SKIP_CHECKS
+  print_named_checks \
+    "NOT RUN — gate aborted after \"${ABORTED_BY_CHECK}\" failed, nothing was validated:" \
+    NOT_RUN_CHECKS
+
+  if ((FAIL_COUNT + SKIP_COUNT + NOT_RUN_COUNT > 0)); then
+    printf 'COVERAGE INCOMPLETE: %d of %d planned checks did not pass. This is NOT a validated deploy.\n' \
+      "$unvalidated" "$planned"
+  elif ((REQUESTED_SKIP_COUNT > 0)); then
+    printf 'COVERAGE REDUCED BY REQUEST: %d of %d planned checks validated nothing because the operator skipped them.\n' \
+      "$REQUESTED_SKIP_COUNT" "$planned"
   fi
 }
 
+# Scope decides what a failure costs:
+#   gate   — the failure invalidates the run; abort the remaining checks unless
+#            --soft, and name every check that therefore did not run.
+#   scoped — the failure invalidates only the checks that declare it as a
+#            prerequisite; those report SKIP and everything else still runs.
+plan_check() {
+  PLANNED_CHECK_SCOPES+=("$1")
+  PLANNED_CHECK_NAMES+=("$2")
+  PLANNED_CHECK_FUNCS+=("$3")
+}
+
+# A check the operator asked not to run. It stays in the plan so the summary
+# still names it as unvalidated.
+plan_requested_skip() {
+  PLANNED_CHECK_SCOPES+=("requested-skip")
+  PLANNED_CHECK_NAMES+=("$1")
+  PLANNED_CHECK_FUNCS+=("$2")
+}
+
+first_line() {
+  local text=$1
+  printf '%s' "${text%%$'\n'*}"
+}
+
+# Returns 0 to continue the plan, 1 to abort it.
+#
+# Bash locals are dynamically scoped, so a check function that assigns an
+# undeclared variable overwrites this frame's local of the same name. Every
+# local here therefore carries a check_ prefix that no check body uses.
 run_check() {
-  local name=$1
-  shift
-  local tmp
-  local status
-  tmp="$(mktemp "${TMPDIR:-/tmp}/validate-kube-rollout.XXXXXX")" || die "mktemp failed"
+  local check_scope=$1
+  local check_name=$2
+  local check_function=$3
+  local check_output_file
+  local check_status
+  local check_output
 
-  CHECK_COUNT=$((CHECK_COUNT + 1))
-  printf '==> %s\n' "$name"
-
-  if "$@" >"$tmp" 2>&1; then
-    PASS_COUNT=$((PASS_COUNT + 1))
-    printf 'PASS %s\n' "$name"
-    if [[ -s "$tmp" ]]; then
-      sed 's/^/  /' "$tmp"
-    fi
-    rm -f "$tmp"
+  if [[ "$check_scope" == "requested-skip" ]]; then
+    REQUESTED_SKIP_COUNT=$((REQUESTED_SKIP_COUNT + 1))
+    REQUESTED_SKIP_CHECKS+=("${check_name}: not run at operator request")
+    printf '==> %s\n' "$check_name"
+    printf 'SKIP %s (operator request; nothing was validated)\n' "$check_name"
     return 0
-  else
-    status=$?
+  fi
+
+  check_output_file="$(mktemp "${TMPDIR:-/tmp}/validate-kube-rollout.XXXXXX")" || die "mktemp failed"
+  printf '==> %s\n' "$check_name"
+
+  check_status=0
+  "$check_function" >"$check_output_file" 2>&1 || check_status=$?
+  check_output="$(cat "$check_output_file")"
+  rm -f "$check_output_file"
+
+  if ((check_status == 0)); then
+    PASS_COUNT=$((PASS_COUNT + 1))
+    printf 'PASS %s\n' "$check_name"
+    if [[ -n "$check_output" ]]; then
+      printf '%s\n' "$check_output" | sed 's/^/  /'
+    fi
+    return 0
+  fi
+
+  if ((check_status == CHECK_SKIPPED_STATUS)); then
+    SKIP_COUNT=$((SKIP_COUNT + 1))
+    SKIPPED_CHECKS+=("${check_name}: $(first_line "$check_output")")
+    printf 'SKIP %s (nothing was validated)\n' "$check_name"
+    if [[ -n "$check_output" ]]; then
+      printf '%s\n' "$check_output" | sed 's/^/  /'
+    fi
+    return 0
   fi
 
   FAIL_COUNT=$((FAIL_COUNT + 1))
-  FAILED_CHECKS+=("$name")
-  printf 'FAIL %s\n' "$name"
-  if [[ -s "$tmp" ]]; then
-    sed 's/^/  /' "$tmp"
+  FAILED_CHECKS+=("$check_name")
+  printf 'FAIL %s\n' "$check_name"
+  if [[ -n "$check_output" ]]; then
+    printf '%s\n' "$check_output" | sed 's/^/  /'
   fi
-  rm -f "$tmp"
 
-  if [[ "$SOFT" != true ]]; then
-    print_summary
-    exit "$status"
-  fi
-  return 0
-}
-
-ensure_testing_harness_api_key() {
-  if [[ -n "$TESTING_HARNESS_API_KEY_VALUE" ]]; then
+  # A scoped failure is already accounted for by the SKIP lines its dependents
+  # emit, so it never costs the rest of the plan.
+  if [[ "$check_scope" == "scoped" || "$SOFT" == true ]]; then
     return 0
   fi
+  return 1
+}
 
+run_check_plan() {
+  local total index remaining
+  total="$(planned_check_total)"
+  for ((index = 0; index < total; index++)); do
+    if run_check "${PLANNED_CHECK_SCOPES[index]}" "${PLANNED_CHECK_NAMES[index]}" \
+      "${PLANNED_CHECK_FUNCS[index]}"; then
+      continue
+    fi
+
+    ABORTED_BY_CHECK="${PLANNED_CHECK_NAMES[index]}"
+    for ((remaining = index + 1; remaining < total; remaining++)); do
+      NOT_RUN_COUNT=$((NOT_RUN_COUNT + 1))
+      NOT_RUN_CHECKS+=("${PLANNED_CHECK_NAMES[remaining]}")
+    done
+    if ((NOT_RUN_COUNT > 0)); then
+      printf '\nGate aborted after "%s" failed; %d later check(s) were NOT RUN. Re-run with --soft to attempt them.\n' \
+        "$ABORTED_BY_CHECK" "$NOT_RUN_COUNT"
+    fi
+    return 0
+  done
+}
+
+# Reading the harness key is its own check rather than a side effect of the
+# first check that needs it, so a missing or malformed key is reported once, in
+# its own right, and costs exactly the two checks that must present a bearer
+# token instead of aborting the whole gate (psfn-framework-zu0g5).
+TESTING_HARNESS_KEY_STATE="unresolved"
+TESTING_HARNESS_KEY_FAILURE=""
+
+resolve_testing_harness_secret_key() {
   local deployment_json
   if ! deployment_json="$(run_kubectl -n "$NAMESPACE" get deploy psfn-gateway -o json 2>&1)"; then
-    printf 'failed to inspect psfn-gateway TESTING_HARNESS_API_KEY wiring: %s\n' "$deployment_json"
+    TESTING_HARNESS_KEY_FAILURE="failed to inspect psfn-gateway TESTING_HARNESS_API_KEY wiring: ${deployment_json}"
     return 1
   fi
   if ! TESTING_HARNESS_SECRET_KEY="$(
@@ -462,41 +593,137 @@ ensure_testing_harness_api_key() {
       }
     '
   )"; then
-    printf 'deployment/psfn-gateway does not expose a TESTING_HARNESS_API_KEY secretKeyRef\n'
+    TESTING_HARNESS_KEY_FAILURE="deployment/psfn-gateway does not expose a TESTING_HARNESS_API_KEY secretKeyRef"
     return 1
   fi
   if [[ ! "$TESTING_HARNESS_SECRET_KEY" =~ ^[A-Za-z0-9._-]+$ ]]; then
-    printf 'deployment/psfn-gateway exposes an invalid TESTING_HARNESS_API_KEY secret key name\n'
+    TESTING_HARNESS_KEY_FAILURE="deployment/psfn-gateway exposes an invalid TESTING_HARNESS_API_KEY secret key name"
     return 1
   fi
+}
 
+report_secret_keys() {
+  local names
+  if names="$(run_kubectl -n "$NAMESPACE" get secret "$SECRET_NAME" \
+    -o 'go-template={{ range $key, $value := .data }}{{ $key }}{{ "\n" }}{{ end }}' 2>/dev/null)"; then
+    names="$(printf '%s' "$names" | tr -d '\r' | sort | paste -sd, -)"
+  fi
+  printf '%s' "${names:-<unreadable>}"
+}
+
+load_testing_harness_api_key() {
+  resolve_testing_harness_secret_key || return 1
+
+  # 'with' is what makes a missing key readable: a bare
+  # '{{ index .data "KEY" }}' renders Go's literal '<no value>' sentinel and
+  # exits 0. That sentinel used to reach a lenient base64 decoder, which
+  # dropped '<', ' ' and '>' and produced five junk bytes whose UTF-8 decode
+  # was U+FFFD mojibake — undici then rejected the Authorization header at the
+  # character right after 'Bearer ' (psfn-framework-zu0g5).
   local secret_template
-  printf -v secret_template '{{ index .data "%s" }}' "$TESTING_HARNESS_SECRET_KEY"
+  printf -v secret_template '{{ with index .data "%s" }}{{ . }}{{ end }}' "$TESTING_HARNESS_SECRET_KEY"
   local encoded
   if ! encoded="$(
     run_kubectl -n "$NAMESPACE" get secret "$SECRET_NAME" \
       -o "go-template=${secret_template}" 2>&1
   )"; then
-    printf 'failed to read %s from secret/%s\n' "$TESTING_HARNESS_SECRET_KEY" "$SECRET_NAME"
+    TESTING_HARNESS_KEY_FAILURE="failed to read ${TESTING_HARNESS_SECRET_KEY} from secret/${SECRET_NAME}: ${encoded}"
     return 1
   fi
   encoded="$(printf '%s' "$encoded" | trim_text)"
   if [[ -z "$encoded" ]]; then
-    printf 'secret/%s does not contain data.%s\n' "$SECRET_NAME" "$TESTING_HARNESS_SECRET_KEY"
+    TESTING_HARNESS_KEY_FAILURE="secret/${SECRET_NAME} has no data.${TESTING_HARNESS_SECRET_KEY} (keys present: $(report_secret_keys)); provision the testing-harness key or the gateway auth checks cannot run"
     return 1
   fi
 
   local decoded
-  if ! decoded="$(printf '%s' "$encoded" | node -e 'const fs = require("node:fs"); const raw = fs.readFileSync(0, "utf8").trim(); process.stdout.write(Buffer.from(raw, "base64").toString("utf8").trim());' 2>&1)"; then
-    printf 'failed to decode %s from secret/%s: %s\n' "$TESTING_HARNESS_SECRET_KEY" "$SECRET_NAME" "$decoded"
-    return 1
-  fi
-  if [[ -z "$decoded" ]]; then
-    printf 'decoded %s from secret/%s is empty\n' "$TESTING_HARNESS_SECRET_KEY" "$SECRET_NAME"
+  if ! decoded="$(
+    printf '%s' "$encoded" \
+      | SECRET_NAME="$SECRET_NAME" SECRET_KEY="$TESTING_HARNESS_SECRET_KEY" node -e '
+const fs = require("node:fs");
+const secretName = process.env.SECRET_NAME;
+const secretKey = process.env.SECRET_KEY;
+const encoded = fs.readFileSync(0, "utf8").trim();
+
+function fail(message) {
+  console.error(`secret/${secretName} data.${secretKey} ${message}`);
+  process.exit(1);
+}
+
+// Decode strictly. Buffer.from(x, "base64") silently discards every character
+// it does not recognise, so a non-base64 payload yields plausible-looking
+// garbage instead of an error.
+if (encoded.length % 4 !== 0 || !/^[A-Za-z0-9+/]+={0,2}$/.test(encoded)) {
+  fail("is not canonical base64");
+}
+const raw = Buffer.from(encoded, "base64");
+if (raw.toString("base64") !== encoded) {
+  fail("is not canonical base64 (round-trip mismatch)");
+}
+
+// A secret written from a CRLF file carries a trailing \r, which is safe to
+// strip. Anything else outside printable ASCII is not: the value goes into an
+// Authorization header, and undici rejects any header byte above 0xFF while
+// bytes 0x00-0x20 would split or truncate the header.
+const isAsciiSpace = (byte) => byte === 0x09 || byte === 0x0a || byte === 0x0d || byte === 0x20;
+let start = 0;
+let end = raw.length;
+while (start < end && isAsciiSpace(raw[start])) start += 1;
+while (end > start && isAsciiSpace(raw[end - 1])) end -= 1;
+const value = raw.subarray(start, end);
+if (value.length === 0) {
+  fail("decodes to an empty value");
+}
+for (let index = 0; index < value.length; index += 1) {
+  const byte = value[index];
+  if (byte < 0x21 || byte > 0x7e) {
+    fail(
+      `decodes to a value that cannot be sent in an HTTP header: byte ${index} is 0x${byte
+        .toString(16)
+        .padStart(2, "0")}; only printable ASCII 0x21-0x7E is accepted`,
+    );
+  }
+}
+process.stdout.write(value.toString("latin1"));
+' 2>&1
+  )"; then
+    TESTING_HARNESS_KEY_FAILURE="$decoded"
     return 1
   fi
 
   TESTING_HARNESS_API_KEY_VALUE=$decoded
+}
+
+check_testing_harness_key() {
+  if load_testing_harness_api_key; then
+    TESTING_HARNESS_KEY_STATE="ok"
+    printf 'testing-harness API key loaded from secret/%s data.%s (%d characters, printable ASCII)\n' \
+      "$SECRET_NAME" "$TESTING_HARNESS_SECRET_KEY" "${#TESTING_HARNESS_API_KEY_VALUE}"
+    return 0
+  fi
+
+  TESTING_HARNESS_KEY_STATE="failed"
+  printf '%s\n' "$TESTING_HARNESS_KEY_FAILURE"
+  return 1
+}
+
+require_testing_harness_key() {
+  case "$TESTING_HARNESS_KEY_STATE" in
+    ok)
+      return 0
+      ;;
+    failed)
+      # The first line lands in the summary, so keep it short and put the full
+      # diagnosis (already printed by the "testing-harness key" check) below it.
+      printf 'prerequisite "testing-harness key" failed\n'
+      printf '%s\n' "$TESTING_HARNESS_KEY_FAILURE"
+      return "$CHECK_SKIPPED_STATUS"
+      ;;
+    *)
+      printf 'prerequisite "testing-harness key" did not run\n'
+      return "$CHECK_SKIPPED_STATUS"
+      ;;
+  esac
 }
 
 check_rollout_status() {
@@ -599,7 +826,7 @@ check_contract_hash_consistency() {
     fi
   done
   if [[ ${#hashes[@]} -eq 0 ]]; then
-    printf 'no app image carries /app/contract-hash.txt (pre-hash generation); skipping
+    printf 'no app image carries /app/contract-hash.txt (pre-hash generation); contract agreement was NOT asserted
 '
     return 0
   fi
@@ -735,7 +962,7 @@ EOF
 }
 
 check_gateway_models() {
-  ensure_testing_harness_api_key || return 1
+  require_testing_harness_key || return $?
 
   # No explicit pattern: expect the deployment's own companion id (COMPANION_ID
   # on the gateway container), so the same gate serves every target.
@@ -952,6 +1179,9 @@ check_provider_routing() {
     return 1
   fi
 
+  # Declared local: an undeclared `read` target would leak into the caller's
+  # frame and clobber a same-named local there (bash locals are dynamic).
+  local status requested_provider actual_provider requested_model actual_model recorded_at_ms
   IFS='|' read -r status requested_provider actual_provider requested_model actual_model recorded_at_ms <<<"$output"
   if [[ "$status" != "OK" ]]; then
     printf 'last chat row provider mismatch: requested_provider=%s provider=%s requested_model=%s model=%s recorded_at_ms=%s\n' \
@@ -973,7 +1203,8 @@ check_emosim_service() {
   # observer-sidecar contract surface: /api/model must expose 17 appraisal
   # dims and 48 emotions.
   if ! run_kubectl -n "$NAMESPACE" get deploy psfn-emosim >/dev/null 2>&1; then
-    printf 'emosim deployment not present; skipping optional emosim check\n'
+    printf 'emosim is not deployed in namespace %s; the optional sidecar contract was NOT asserted\n' \
+      "$NAMESPACE"
     return 0
   fi
 
@@ -1031,7 +1262,7 @@ check_zero_bookkeeping_writes() {
 }
 
 check_gateway_smoke() {
-  ensure_testing_harness_api_key || return 1
+  require_testing_harness_key || return $?
 
   local script
   script=$(cat <<EOF
@@ -1139,6 +1370,30 @@ console.log(`gateway smoke passed: model=${payload.model} user=${payload.validat
 '
 }
 
+# The plan is the gate's documented coverage contract. Every check belongs here
+# even when it will not be executed, so the summary can name what was not
+# validated instead of silently reporting a shorter run.
+build_check_plan() {
+  plan_check gate "rollout status" check_rollout_status
+  plan_check gate "app pods and images" check_app_pods_and_images
+  plan_check gate "contract hash consistency" check_contract_hash_consistency
+  plan_check gate "$GARDEN_HEALTH_CHECK_LABEL" check_garden_health
+  plan_check scoped "testing-harness key" check_testing_harness_key
+  plan_check gate "gateway models" check_gateway_models
+  plan_check gate "postgres pgvector and redis" check_postgres_and_redis
+  plan_check gate "agent log scan" check_agent_logs
+  if [[ "$SMOKE" == true ]]; then
+    plan_check gate "gateway chat smoke" check_gateway_smoke
+  fi
+  if [[ "$CHECK_PROVIDER_ROUTING" == true ]]; then
+    plan_check gate "provider routing" check_provider_routing
+  else
+    plan_requested_skip "provider routing" check_provider_routing
+  fi
+  plan_check gate "zero bookkeeping writes" check_zero_bookkeeping_writes
+  plan_check gate "emosim service (optional)" check_emosim_service
+}
+
 main() {
   parse_args "$@"
   select_kube_mode
@@ -1156,26 +1411,16 @@ main() {
     printf 'expect_tag=%s\n' "$EXPECT_TAG"
   fi
 
-  run_check "rollout status" check_rollout_status
-  run_check "app pods and images" check_app_pods_and_images
-  run_check "contract hash consistency" check_contract_hash_consistency
-  run_check "$GARDEN_HEALTH_CHECK_LABEL" check_garden_health
-  run_check "gateway models" check_gateway_models
-  run_check "postgres pgvector and redis" check_postgres_and_redis
-  run_check "agent log scan" check_agent_logs
-  if [[ "$SMOKE" == true ]]; then
-    run_check "gateway chat smoke" check_gateway_smoke
-  fi
-  if [[ "$CHECK_PROVIDER_ROUTING" == true ]]; then
-    run_check "provider routing" check_provider_routing
-  else
-    warn_line "provider routing check skipped"
-  fi
-  run_check "zero bookkeeping writes" check_zero_bookkeeping_writes
-  run_check "emosim service (optional)" check_emosim_service
+  build_check_plan
+  printf 'planned checks (%d):\n' "$(planned_check_total)"
+  printf '  - %s\n' "${PLANNED_CHECK_NAMES[@]}"
+  run_check_plan
 
   print_summary
-  if (( FAIL_COUNT > 0 )); then
+  # Skipped and not-run checks validated nothing, so they must never leave the
+  # gate looking successful. Operator-requested skips are deliberate and are
+  # reported without failing the run.
+  if ((FAIL_COUNT > 0 || SKIP_COUNT > 0 || NOT_RUN_COUNT > 0)); then
     exit 1
   fi
 }

@@ -214,6 +214,15 @@ turn's turn record and confirm `plan.messages` is exactly real dialogue.
 After a maintenance-timer cycle (~30–45 min), re-verify no unexpected session
 writes appeared on any channel.
 
+**A short run is a failed run.** The gate prints its planned check set up front
+and closes with `N checks planned, M ran`. Anything reported as `SKIP`
+(prerequisite failed) or `NOT RUN` (an earlier failure aborted the plan) is
+named in the summary under `COVERAGE INCOMPLETE` and exits non-zero. Never
+wave one through as a known quirk — that is exactly how `/v1/models`, provider
+routing and the continuity smoke went unverified across two deploys
+(psfn-framework-zu0g5). `gateway models` and `gateway chat smoke` need
+`TESTING_HARNESS_API_KEY` in the app secret; without it they can only `SKIP`.
+
 ## 5. Data surgery (when runtime data itself is polluted)
 
 - Scale the agent to 0 first; the gateway can stay up.

@@ -6,6 +6,9 @@ import { isRecord } from './utils/types.js';
 
 const RUNTIME_FALLBACK_STRATEGIES = new Set<RuntimeFallbackStrategy>([
   'runtime_nonfabricating_notice',
+  // Legacy strategy — no longer written, but kept accepted so historical turn
+  // records persisted before the datetime-guard fix still normalize on read.
+  'runtime_datetime_contradiction_refusal',
 ]);
 
 export function normalizeRuntimeFallbackProvenance(

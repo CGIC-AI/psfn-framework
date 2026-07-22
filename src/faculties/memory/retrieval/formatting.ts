@@ -1,6 +1,14 @@
 import type { EmotionalSnapshot } from '../../../core/contacts/store/emotional-baseline.js';
 import { wrapPromptSectionXml } from '../../../core/identity/prompt-sections.js';
 import { renderSystemLanguageTemplate } from '../../../core/identity/system-language.js';
+import { renderSystemLanguageTemplateText } from '../../../core/identity/system-language-contracts.js';
+import type { SystemLanguageTemplateKey } from '../../../core/identity/system-language-contracts.js';
+import {
+  formatRecencyLabelTemplate,
+  resolveMemoryPresentationProfile,
+  type MemoryPresentationProfile,
+  type MemoryPresentationRecencyLabels,
+} from '../../../system/config/memory-presentation-profile.js';
 import { formatActiveDate, resolveActiveTimezone } from '../../../shared/time/active-timezone.js';
 import { isBoundaryMemory } from '../boundary-log.js';
 import type {
@@ -32,38 +40,55 @@ export function renderPromptBlock(
     socialContext?: RetrievalSocialContext;
     contactContextById?: ReadonlyMap<string, RetrievalContactContext>;
     episodicChains?: EpisodicRetrievalChain[];
+    presentationProfile?: MemoryPresentationProfile;
   },
 ): string {
-  const sections: string[] = [];
+  const presentation = resolveMemoryPresentationProfile(options?.presentationProfile);
   const socialContext = options?.socialContext;
+
+  // Render each present section into a slot keyed by its structural section id,
+  // then emit in the configured order. Missing/empty slots are skipped, so the
+  // default section order reproduces the historical fixed ordering byte-for-byte.
+  const rendered = new Map<string, string>();
   if (profile && profile.summary.trim().length > 0) {
-    sections.push(wrapPromptSectionXml({
+    rendered.set('core_profile', wrapPromptSectionXml({
       id: 'core_profile',
       content: `Core profile for this person:\n${profile.summary.trim()}`,
     }));
   }
   if ((socialContext?.relatedContactsById.size ?? 0) > 0 && socialContext) {
-    sections.push(renderSocialContext(socialContext));
+    rendered.set('relationship_context', renderSocialContext(socialContext));
   }
   if (options?.emotionalSnapshot) {
-    sections.push(renderEmotionalSnapshot(options.emotionalSnapshot));
+    rendered.set('emotional_continuity_snapshot', renderEmotionalSnapshot(options.emotionalSnapshot));
   }
   if ((options?.emotionalContinuityMemories?.length ?? 0) > 0) {
-    sections.push(renderEmotionalContinuityMemories(options?.emotionalContinuityMemories ?? []));
+    rendered.set(
+      'cross_session_emotional_continuity',
+      renderEmotionalContinuityMemories(options?.emotionalContinuityMemories ?? [], presentation),
+    );
   }
   if (options?.withheldSummary && options.withheldSummary.totalCount > 0) {
-    sections.push(renderWithheldSummary(options.withheldSummary));
+    rendered.set('memory_context_note', renderWithheldSummary(options.withheldSummary, presentation));
   }
   if ((options?.episodicChains?.length ?? 0) > 0) {
-    sections.push(renderEpisodicLandmarkChains(options?.episodicChains ?? []));
+    rendered.set(
+      'episodic_landmark_chains',
+      renderEpisodicLandmarkChains(options?.episodicChains ?? [], presentation),
+    );
   }
   if (scored.length > 0) {
-    sections.push(formatMemoriesForPrompt(
+    rendered.set('relevant_memories', formatMemoriesForPrompt(
       scored,
+      presentation,
       options?.socialContext,
       options?.contactContextById,
     ));
   }
+
+  const sections = presentation.sectionOrder
+    .map(section => rendered.get(section))
+    .filter((content): content is string => content !== undefined);
   return sections.join('\n\n');
 }
 
@@ -146,22 +171,46 @@ function describeBaselineDisposition(valence: number): string {
   return 'even, grounded, and open';
 }
 
-function renderEmotionalContinuityMemories(memories: PurrMemory[]): string {
+function renderEmotionalContinuityMemories(
+  memories: PurrMemory[],
+  presentation: MemoryPresentationProfile,
+): string {
+  const { valence, recencyLabels } = presentation;
   const lines = memories.map(memory => {
-    const marker = memory.emotionalValence >= 0.25
-      ? ' (+)'
-      : memory.emotionalValence <= -0.25
-        ? ' (-)'
+    const marker = memory.emotionalValence >= valence.continuityPositiveThreshold
+      ? valence.positiveMarker
+      : memory.emotionalValence <= valence.continuityNegativeThreshold
+        ? valence.negativeMarker
         : '';
-    return `- [emotional] ${compactMemoryTextForPrompt(memory.text)}${marker}${recencyBandSuffix(memory.extractedAt)}`;
+    return `- [emotional] ${compactMemoryTextForPrompt(memory.text)}${marker}${recencyBandSuffix(memory.extractedAt, recencyLabels)}`;
   });
   return wrapPromptSectionXml({
     id: 'cross_session_emotional_continuity',
-    content: `Cross-session emotional continuity:\n${lines.join('\n')}`,
+    content: `${presentation.headings.emotionalContinuity}\n${lines.join('\n')}`,
   });
 }
 
-function renderWithheldSummary(summary: MemoryWithheldSummary): string {
+/**
+ * Render one withheld-memory ("memory context note") line. When the profile
+ * supplies a per-companion override string it is rendered with the same
+ * `{{token}}` substitution engine as the system-owned language layer; otherwise
+ * the system-language default is used unchanged (byte-identical default path).
+ */
+function renderWithheldWordingLine(
+  key: SystemLanguageTemplateKey,
+  override: string | null,
+  variables: Record<string, unknown> = {},
+): string {
+  if (override !== null) {
+    return renderSystemLanguageTemplateText(key, override, variables).text;
+  }
+  return renderSystemLanguageTemplate(key, variables);
+}
+
+function renderWithheldSummary(
+  summary: MemoryWithheldSummary,
+  presentation: MemoryPresentationProfile,
+): string {
   const detailLine = listMemoryWithheldReasonEntries(summary.reasonCounts)
     .map(({ reason, count }) => `${count} ${formatMemoryWithheldReasonLabel(reason)}`)
     .join(', ');
@@ -169,33 +218,37 @@ function renderWithheldSummary(summary: MemoryWithheldSummary): string {
     .map(({ band, count }) => `${count} ${formatMemoryWithheldRelevanceBandLabel(band)}`)
     .join(', ');
   const plural = summary.totalCount === 1 ? 'memory was' : 'memories were';
+  const wording = presentation.withheldWording;
   return wrapPromptSectionXml({
     id: 'memory_context_note',
     content: [
-      renderSystemLanguageTemplate('memory_context_note.header'),
-      renderSystemLanguageTemplate('memory_context_note.withheld_count', {
+      renderWithheldWordingLine('memory_context_note.header', wording.header),
+      renderWithheldWordingLine('memory_context_note.withheld_count', wording.withheldCount, {
         total_count: summary.totalCount,
         memory_noun: plural,
       }),
       ...(detailLine
-        ? [renderSystemLanguageTemplate('memory_context_note.reasons', { detail_line: detailLine })]
+        ? [renderWithheldWordingLine('memory_context_note.reasons', wording.reasons, { detail_line: detailLine })]
         : []),
       ...(relevanceLine
-        ? [renderSystemLanguageTemplate('memory_context_note.relevance', { relevance_line: relevanceLine })]
+        ? [renderWithheldWordingLine('memory_context_note.relevance', wording.relevance, { relevance_line: relevanceLine })]
         : []),
-      renderSystemLanguageTemplate('memory_context_note.safe_next_actions'),
+      renderWithheldWordingLine('memory_context_note.safe_next_actions', wording.safeNextActions),
     ].join('\n'),
   });
 }
 
-function renderEpisodicLandmarkChains(chains: readonly EpisodicRetrievalChain[]): string {
-  const lines = ['Episodes from your shared history related to this conversation:'];
+function renderEpisodicLandmarkChains(
+  chains: readonly EpisodicRetrievalChain[],
+  presentation: MemoryPresentationProfile,
+): string {
+  const lines = [presentation.headings.episodicLandmarks];
   // Keep the always-on block bounded: cap the total episodes across all chains
   // and take them most-relevant-first (highest-scoring chains, root episodes
   // first within a chain). Arc expansion is intentionally omitted here -- arc
   // detail belongs to the episode drill-down path, not the always-injected
   // block, so it cannot ride in ungated.
-  const episodeCap = 5;
+  const episodeCap = presentation.episodeCap;
   const orderedChains = [...chains].sort((left, right) => right.score - left.score);
   let renderedEpisodes = 0;
   orderedChains.forEach((chain, chainIndex) => {
@@ -266,27 +319,37 @@ function activeCalendarDayIndex(atMs: number): number {
  * (N years ago). Returns undefined when extractedAt is missing or invalid —
  * rendering must degrade to a bandless line, never crash.
  */
+const DEFAULT_RECENCY_LABELS = resolveMemoryPresentationProfile(undefined).recencyLabels;
+
 export function formatMemoryRecencyBand(
   extractedAtMs: number | undefined,
   nowMs: number = Date.now(),
+  labels: MemoryPresentationRecencyLabels = DEFAULT_RECENCY_LABELS,
 ): string | undefined {
   if (extractedAtMs === undefined || !Number.isFinite(extractedAtMs) || !Number.isFinite(nowMs)) {
     return undefined;
   }
   const dayDiff = activeCalendarDayIndex(nowMs) - activeCalendarDayIndex(extractedAtMs);
-  if (dayDiff <= 0) return 'today';
-  if (dayDiff === 1) return 'yesterday';
-  if (dayDiff < 7) return 'this week';
+  if (dayDiff <= 0) return labels.today;
+  if (dayDiff === 1) return labels.yesterday;
+  if (dayDiff < 7) return labels.thisWeek;
   const weeks = Math.floor(dayDiff / 7);
-  if (weeks <= 8) return weeks === 1 ? '1 week ago' : `${weeks} weeks ago`;
+  if (weeks <= 8) {
+    return weeks === 1
+      ? formatRecencyLabelTemplate(labels.weekAgo, weeks)
+      : formatRecencyLabelTemplate(labels.weeksAgo, weeks);
+  }
   const months = Math.floor(dayDiff / MEAN_DAYS_PER_MONTH);
-  if (months < 24) return `${months} months ago`;
+  if (months < 24) return formatRecencyLabelTemplate(labels.monthsAgo, months);
   const years = Math.floor(months / 12);
-  return `${years} years ago`;
+  return formatRecencyLabelTemplate(labels.yearsAgo, years);
 }
 
-function recencyBandSuffix(extractedAtMs: number | undefined): string {
-  const band = formatMemoryRecencyBand(extractedAtMs);
+function recencyBandSuffix(
+  extractedAtMs: number | undefined,
+  labels: MemoryPresentationRecencyLabels = DEFAULT_RECENCY_LABELS,
+): string {
+  const band = formatMemoryRecencyBand(extractedAtMs, Date.now(), labels);
   return band === undefined ? '' : ` (${band})`;
 }
 
@@ -334,32 +397,81 @@ function formatEpisodeTimeRange(startedAt: string, endedAt: string): string {
   return `${day(startParts)} ${clock(startParts)} to ${day(endParts)} ${clock(endParts)} ${timeZone}`;
 }
 
+/**
+ * Presentation-time per-type display cap. Applied AFTER selection: it only
+ * governs how many already-selected emotional/procedural memories are rendered,
+ * never which memories are selected. `null` caps are uncapped (default), so the
+ * default profile is a no-op and preserves the historical rendering exactly.
+ * Order is preserved; overflow lines beyond the cap are dropped.
+ */
+function applyDisplayCaps(
+  scored: ScoredMemory[],
+  presentation: MemoryPresentationProfile,
+): ScoredMemory[] {
+  const { emotional, procedural } = presentation.displayCaps;
+  if (emotional === null && procedural === null) return scored;
+  let emotionalCount = 0;
+  let proceduralCount = 0;
+  const kept: ScoredMemory[] = [];
+  for (const item of scored) {
+    const type = item.memory.type;
+    if (type === 'emotional' && emotional !== null) {
+      if (emotionalCount >= emotional) continue;
+      emotionalCount += 1;
+    } else if (type === 'procedural' && procedural !== null) {
+      if (proceduralCount >= procedural) continue;
+      proceduralCount += 1;
+    }
+    kept.push(item);
+  }
+  return kept;
+}
+
+function valenceMarker(
+  emotionalValence: number,
+  presentation: MemoryPresentationProfile,
+): string {
+  const { valence } = presentation;
+  if (emotionalValence > valence.positiveThreshold) return valence.positiveMarker;
+  if (emotionalValence < valence.negativeThreshold) return valence.negativeMarker;
+  return '';
+}
+
 function formatMemoriesForPrompt(
   scored: ScoredMemory[],
+  presentation: MemoryPresentationProfile,
   socialContext?: RetrievalSocialContext,
   contactContextById?: ReadonlyMap<string, RetrievalContactContext>,
 ): string {
   const boundaryMemories = scored.filter(item => isBoundaryMemory(item.memory));
-  const nonBoundaryMemories = scored.filter(item => !isBoundaryMemory(item.memory));
+  const nonBoundaryMemories = applyDisplayCaps(
+    scored.filter(item => !isBoundaryMemory(item.memory)),
+    presentation,
+  );
   const sections: string[] = [];
 
   if (boundaryMemories.length > 0) {
     sections.push(renderMemorySection(
-      'Active safety boundaries from prior refusals:',
+      'active_safety_boundaries',
+      presentation.headings.boundary,
       boundaryMemories,
+      presentation,
     ));
   }
   if (nonBoundaryMemories.length > 0) {
     if (socialContext) {
       sections.push(...renderSociallyScopedMemorySections(
         nonBoundaryMemories,
+        presentation,
         socialContext,
         contactContextById,
       ));
     } else {
       sections.push(renderMemorySection(
-        'Relevant memories for this person:',
+        'relevant_memories',
+        presentation.headings.relevant,
         nonBoundaryMemories,
+        presentation,
       ));
     }
   }
@@ -369,6 +481,7 @@ function formatMemoriesForPrompt(
 
 function renderSociallyScopedMemorySections(
   scored: ScoredMemory[],
+  presentation: MemoryPresentationProfile,
   socialContext: RetrievalSocialContext,
   contactContextById?: ReadonlyMap<string, RetrievalContactContext>,
 ): string[] {
@@ -391,19 +504,28 @@ function renderSociallyScopedMemorySections(
 
   const sections: string[] = [];
   if (canonical.length > 0) {
-    sections.push(renderMemorySection('Relevant memories for this person:', canonical));
+    sections.push(renderMemorySection(
+      'relevant_memories',
+      presentation.headings.relevant,
+      canonical,
+      presentation,
+    ));
   }
   if (related.length > 0) {
     sections.push(renderAttributedMemorySection(
-      'Relevant memories about other people in their social context:',
+      'social_context_memories',
+      presentation.headings.socialContext,
       related,
+      presentation,
       contactContextById,
     ));
   }
   if (separatePeople.length > 0) {
     sections.push(renderAttributedMemorySection(
-      'Relevant memories about other separate people:',
+      'separate_people_memories',
+      presentation.headings.separatePeople,
       separatePeople,
+      presentation,
       contactContextById,
     ));
   }
@@ -411,51 +533,48 @@ function renderSociallyScopedMemorySections(
   return sections;
 }
 
-function renderMemorySection(heading: string, scored: ScoredMemory[]): string {
+function renderMemorySection(
+  id: string,
+  heading: string,
+  scored: ScoredMemory[],
+  presentation: MemoryPresentationProfile,
+): string {
   const lines = scored.flatMap(s => {
     const m = s.memory;
-    const valence =
-      m.emotionalValence > 0.3 ? ' (+)' :
-      m.emotionalValence < -0.3 ? ' (-)' : '';
+    const valence = valenceMarker(m.emotionalValence, presentation);
     return [
-      `- [${m.type}] ${compactMemoryTextForPrompt(m.text)}${valence}${recencyBandSuffix(m.extractedAt)}`,
+      `- [${m.type}] ${compactMemoryTextForPrompt(m.text)}${valence}${recencyBandSuffix(m.extractedAt, presentation.recencyLabels)}`,
       ...formatEvolutionChainLines(s),
     ];
   });
 
   return wrapPromptSectionXml({
-    id: heading === 'Active safety boundaries from prior refusals:'
-      ? 'active_safety_boundaries'
-      : heading === 'Relevant memories for this person:'
-        ? 'relevant_memories'
-        : 'memory_section',
+    id,
     content: `${heading}\n${lines.join('\n')}`,
   });
 }
 
 function renderAttributedMemorySection(
+  id: string,
   heading: string,
   scored: ScoredMemory[],
+  presentation: MemoryPresentationProfile,
   contactContextById?: ReadonlyMap<string, RetrievalContactContext>,
 ): string {
   const lines = scored.flatMap(s => {
     const memory = s.memory;
-    const valence =
-      memory.emotionalValence > 0.3 ? ' (+)' :
-      memory.emotionalValence < -0.3 ? ' (-)' : '';
+    const valence = valenceMarker(memory.emotionalValence, presentation);
     const descriptor = memory.contactId ? contactContextById?.get(memory.contactId) : undefined;
     const subjectPrefix = descriptor
       ? `${descriptor.displayName}${formatContactDescriptorSuffix(descriptor)}: `
       : '';
     return [
-      `- [${memory.type}] ${subjectPrefix}${compactMemoryTextForPrompt(memory.text)}${valence}${recencyBandSuffix(memory.extractedAt)}`,
+      `- [${memory.type}] ${subjectPrefix}${compactMemoryTextForPrompt(memory.text)}${valence}${recencyBandSuffix(memory.extractedAt, presentation.recencyLabels)}`,
       ...formatEvolutionChainLines(s),
     ];
   });
   return wrapPromptSectionXml({
-    id: heading.includes('social context')
-      ? 'social_context_memories'
-      : 'separate_people_memories',
+    id,
     content: `${heading}\n${lines.join('\n')}`,
   });
 }

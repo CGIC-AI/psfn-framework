@@ -10,6 +10,11 @@ import {
   formatMemoryRecencyBand,
   renderPromptBlock,
 } from './formatting.js';
+import {
+  cloneMemoryPresentationProfile,
+  createDefaultMemoryPresentationProfile,
+} from '../../../system/config/memory-presentation-profile.js';
+import type { MemoryWithheldSummary } from '../withheld-summary.js';
 import type { ScoredMemory } from './types.js';
 
 const ORIGINAL_TZ = process.env.TZ;
@@ -453,5 +458,146 @@ describe('recency bands on rendered memory lines', () => {
       '- [semantic] The user keeps a small herb garden on the balcony.\n',
     );
     expect(rendered).not.toContain('(today)');
+  });
+});
+
+// psfn-framework-0236: presentation is a versioned, per-companion profile.
+// The default profile MUST reproduce the historical hardcoded rendering
+// byte-for-byte (regression pin); a custom profile MUST change the rendered
+// block with no code edits.
+describe('MemoryPresentationProfile-driven rendering', () => {
+  function withheldFixture(): MemoryWithheldSummary {
+    return {
+      totalCount: 2,
+      reasonCounts: {},
+      relevanceBands: {},
+    } as unknown as MemoryWithheldSummary;
+  }
+
+  it('passing the default profile is byte-identical to passing no profile', () => {
+    const scored = [buildScoredMemoryFixture()];
+    const withheld = withheldFixture();
+    const options = { withheldSummary: withheld };
+    const baseline = renderPromptBlock(undefined, scored, options);
+    const withDefault = renderPromptBlock(undefined, scored, {
+      ...options,
+      presentationProfile: createDefaultMemoryPresentationProfile(),
+    });
+    expect(withDefault).toBe(baseline);
+  });
+
+  it('applies custom section headings without changing the structural section id', () => {
+    const profile = cloneMemoryPresentationProfile(createDefaultMemoryPresentationProfile());
+    profile.headings.relevant = 'What I recall about them:';
+    const rendered = renderPromptBlock(undefined, [buildScoredMemoryFixture()], {
+      presentationProfile: profile,
+    });
+    expect(rendered).toContain('What I recall about them:');
+    expect(rendered).not.toContain('Relevant memories for this person:');
+    // Structural id is stable regardless of heading wording.
+    expect(rendered).toContain('<relevant_memories>');
+  });
+
+  it('applies custom valence markers and thresholds', () => {
+    const profile = cloneMemoryPresentationProfile(createDefaultMemoryPresentationProfile());
+    profile.valence.positiveMarker = ' [warm]';
+    profile.valence.positiveThreshold = 0.4;
+    // valence 0.5 fixture > 0.4 threshold -> custom marker.
+    const rendered = renderPromptBlock(undefined, [buildScoredMemoryFixture()], {
+      presentationProfile: profile,
+    });
+    expect(rendered).toContain(' [warm]');
+    expect(rendered).not.toContain(' (+)');
+  });
+
+  it('honors a raised valence threshold that suppresses the marker', () => {
+    const profile = cloneMemoryPresentationProfile(createDefaultMemoryPresentationProfile());
+    profile.valence.positiveThreshold = 0.9; // 0.5 fixture no longer clears the bar
+    const rendered = renderPromptBlock(undefined, [buildScoredMemoryFixture()], {
+      presentationProfile: profile,
+    });
+    expect(rendered).not.toContain(' (+)');
+  });
+
+  it('applies a custom episode cap', () => {
+    const chain = buildEpisodicChainFixture(); // two episodes
+    const profile = cloneMemoryPresentationProfile(createDefaultMemoryPresentationProfile());
+    profile.episodeCap = 1;
+    const rendered = renderPromptBlock(undefined, [], {
+      episodicChains: [chain],
+      presentationProfile: profile,
+    });
+    expect(rendered).toContain(`Episode ${EPISODE_A_ID}`);
+    expect(rendered).not.toContain(`Episode ${EPISODE_B_ID}`);
+  });
+
+  it('reorders top-level sections per sectionOrder', () => {
+    const profile = cloneMemoryPresentationProfile(createDefaultMemoryPresentationProfile());
+    // Move relevant memories ahead of the withheld note.
+    profile.sectionOrder = [
+      'core_profile',
+      'relationship_context',
+      'emotional_continuity_snapshot',
+      'cross_session_emotional_continuity',
+      'relevant_memories',
+      'episodic_landmark_chains',
+      'memory_context_note',
+    ];
+    const rendered = renderPromptBlock(undefined, [buildScoredMemoryFixture()], {
+      withheldSummary: withheldFixture(),
+      presentationProfile: profile,
+    });
+    const relevantIdx = rendered.indexOf('<relevant_memories>');
+    const noteIdx = rendered.indexOf('<memory_context_note>');
+    expect(relevantIdx).toBeGreaterThanOrEqual(0);
+    expect(noteIdx).toBeGreaterThanOrEqual(0);
+    expect(relevantIdx).toBeLessThan(noteIdx);
+  });
+
+  it('applies per-type display caps as presentation-time truncation', () => {
+    const emotionalMemories: ScoredMemory[] = [0, 1, 2].map(i => ({
+      memory: {
+        id: `emo-${i}`,
+        type: 'emotional',
+        text: `Emotional memory number ${i}.`,
+        emotionalValence: 0.1,
+        tags: [],
+        sourceRef: 'fixture',
+      } as unknown as PurrMemory,
+      score: 0.9 - i * 0.01,
+    } as unknown as ScoredMemory));
+    const profile = cloneMemoryPresentationProfile(createDefaultMemoryPresentationProfile());
+    profile.displayCaps.emotional = 2;
+    const rendered = renderPromptBlock(undefined, emotionalMemories, {
+      presentationProfile: profile,
+    });
+    expect(rendered).toContain('Emotional memory number 0.');
+    expect(rendered).toContain('Emotional memory number 1.');
+    expect(rendered).not.toContain('Emotional memory number 2.');
+  });
+
+  it('applies custom recency-band labels', () => {
+    vi.spyOn(Date, 'now').mockReturnValue(FIXED_NOW_MS);
+    const profile = cloneMemoryPresentationProfile(createDefaultMemoryPresentationProfile());
+    profile.recencyLabels.today = 'just now';
+    const rendered = renderPromptBlock(undefined, [
+      {
+        memory: makeAgedMemory(FIXED_NOW_MS - 60 * 60 * 1000),
+        score: 0.9,
+      } as unknown as ScoredMemory,
+    ], { presentationProfile: profile });
+    expect(rendered).toContain('(just now)');
+    expect(rendered).not.toContain('(today)');
+  });
+
+  it('routes withheld-memory wording through a per-companion override', () => {
+    const profile = cloneMemoryPresentationProfile(createDefaultMemoryPresentationProfile());
+    profile.withheldWording.header = 'Some memories are held back for now:';
+    const rendered = renderPromptBlock(undefined, [], {
+      withheldSummary: withheldFixture(),
+      presentationProfile: profile,
+    });
+    expect(rendered).toContain('Some memories are held back for now:');
+    expect(rendered).not.toContain('Memory context note:');
   });
 });

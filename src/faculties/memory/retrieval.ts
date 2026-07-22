@@ -33,6 +33,10 @@ import {
   resolveMemoryRetrievalPolicy,
   type MemoryRetrievalPolicy,
 } from '../../system/config/memory-retrieval-policy.js';
+import {
+  resolveMemoryPresentationProfile,
+  type MemoryPresentationProfile,
+} from '../../system/config/memory-presentation-profile.js';
 import type { EventBus } from '../../shared/event-bus.js';
 import type { TrustLevel } from '../../system/trust/types.js';
 import type { ChannelPrivacy } from '../../system/trust/context-envelope.js';
@@ -212,6 +216,7 @@ export interface MemoryRetrieverConfig {
   moodCongruenceWeight?: number;
   telemetryEnabled?: boolean;
   memoryRetrievalPolicy?: MemoryRetrievalPolicy;
+  memoryPresentationProfile?: MemoryPresentationProfile;
 }
 
 function isSubstrateConfig(config: MemoryRetrieverConfig | SubstrateConfig | undefined): config is SubstrateConfig {
@@ -252,6 +257,7 @@ export class MemoryRetriever implements MemoryProvider {
   private activeMemoryRefreshLoops: Map<string, ActiveMemoryRefreshLoop>;
   private sessionQuarantineFilter: MemorySessionQuarantineFilter | null;
   private fallbackMemoryRetrievalPolicy: MemoryRetrievalPolicy | undefined;
+  private fallbackMemoryPresentationProfile: MemoryPresentationProfile | undefined;
   private enforceSubjectAuthorization: boolean;
 
   constructor(
@@ -271,6 +277,7 @@ export class MemoryRetriever implements MemoryProvider {
     if (isSubstrateConfig(config)) {
       this.runtimeConfig = config;
       this.fallbackMemoryRetrievalPolicy = undefined;
+      this.fallbackMemoryPresentationProfile = undefined;
       this.fallbackBudgetConfig = null;
       this.retrievalThreshold = MEMORY_CONFIG.retrievalThreshold;
       this.moodCongruenceWeight = resolveMoodCongruenceWeight(config.moodCongruenceWeight);
@@ -279,6 +286,7 @@ export class MemoryRetriever implements MemoryProvider {
       const retrieverConfig = config as MemoryRetrieverConfig | undefined;
       this.runtimeConfig = null;
       this.fallbackMemoryRetrievalPolicy = retrieverConfig?.memoryRetrievalPolicy;
+      this.fallbackMemoryPresentationProfile = retrieverConfig?.memoryPresentationProfile;
       this.fallbackBudgetConfig = {
         defaultContextWindow: retrieverConfig?.contextWindow ?? 128_000,
         modelRoster: {},
@@ -359,6 +367,12 @@ export class MemoryRetriever implements MemoryProvider {
   private resolveMemoryRetrievalPolicy(): MemoryRetrievalPolicy {
     return resolveMemoryRetrievalPolicy(
       this.runtimeConfig?.memoryRetrievalPolicy ?? this.fallbackMemoryRetrievalPolicy,
+    );
+  }
+
+  private resolveMemoryPresentationProfile(): MemoryPresentationProfile {
+    return resolveMemoryPresentationProfile(
+      this.runtimeConfig?.memoryPresentationProfile ?? this.fallbackMemoryPresentationProfile,
     );
   }
 
@@ -828,6 +842,7 @@ export class MemoryRetriever implements MemoryProvider {
     }, {
       activeMemoryContexts: this.activeMemoryContexts,
       memoryRetrievalPolicy: this.resolveMemoryRetrievalPolicy(),
+      memoryPresentationProfile: this.resolveMemoryPresentationProfile(),
       eventBus: this.eventBus,
       isMemoryQuarantined: memory => isMemoryQuarantined(this.sessionQuarantineFilter, memory),
       filterQuarantinedMemories: memories => filterQuarantinedMemories(

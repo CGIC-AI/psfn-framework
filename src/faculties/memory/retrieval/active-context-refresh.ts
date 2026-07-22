@@ -4,6 +4,7 @@ import {
   resolveMemorySelectionCap,
   type MemoryRetrievalPolicy,
 } from '../../../system/config/memory-retrieval-policy.js';
+import type { MemoryPresentationProfile } from '../../../system/config/memory-presentation-profile.js';
 import type { EmotionalSnapshot } from '../../../core/contacts/store/emotional-baseline.js';
 import type { ContextManifestMemorySeed } from '../../../core/session/context-manifest.js';
 import { buildSnapshotVersionPointer } from '../../../core/turns/snapshot.js';
@@ -125,6 +126,7 @@ export interface FinalizeRetrievalPromptBlockInput {
 export interface ActiveMemoryContextRefreshDeps {
   activeMemoryContexts: Map<string, ActiveMemoryState>;
   memoryRetrievalPolicy: MemoryRetrievalPolicy;
+  memoryPresentationProfile: MemoryPresentationProfile;
   eventBus?: EventBus;
   isMemoryQuarantined(memory: PurrMemory): boolean;
   filterQuarantinedMemories(memories: readonly PurrMemory[]): PurrMemory[];
@@ -143,6 +145,7 @@ export function finalizeRetrievalPromptBlock(
     socialContext: input.socialContext,
     contactContextById: input.contactContextById,
     episodicChains: input.episodicChains,
+    presentationProfile: deps.memoryPresentationProfile,
   });
 
   if (!input.activeContextTarget) {
@@ -323,6 +326,7 @@ function applyActiveMemoryContextRefresh(
     socialContext,
     contactContextById,
     episodicChains,
+    presentationProfile: deps.memoryPresentationProfile,
   });
   const selectedMemoryIds = [...cappedEntries.keys()];
   const artifactSensitivitySources = collectArtifactSensitivitySources({

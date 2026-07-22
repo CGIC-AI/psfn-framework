@@ -41,7 +41,12 @@ export type { ChannelType } from './channel-types.js';
 export type { TurnID } from './turn-contracts.js';
 export type { ModelContextBudgetConfig } from '../context-budget-contracts.js';
 
-export type RuntimeFallbackStrategy = 'runtime_nonfabricating_notice';
+export type RuntimeFallbackStrategy =
+  | 'runtime_nonfabricating_notice'
+  // Legacy: no longer written (the datetime-contradiction guard now preserves
+  // the companion's response and surfaces a system note instead). Retained as a
+  // readable value so historical turn records persisted with it still normalize.
+  | 'runtime_datetime_contradiction_refusal';
 
 export interface RuntimeFallbackProvenance {
   schemaVersion: 1;

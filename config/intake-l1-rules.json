@@ -8,10 +8,10 @@
       "weight": 0.9,
       "match": {
         "kind": "phrase",
-        "anchors": ["\\bignore", "(?:previous|all|above|prior|earlier)", "instructions\\b"],
+        "anchors": ["\\bignore", "(?:previous|all|above|prior|earlier)", "instructions?\\b"],
         "maxFillerWords": 8
       },
-      "note": "Hermes prompt_injection: bounded filler defeats insert-a-few-words bypasses without unbounded backtracking."
+      "note": "Hermes prompt_injection: bounded filler defeats insert-a-few-words bypasses without unbounded backtracking. Singular 'instruction' is covered too ('ignore every previous instruction' is a real override phrasing)."
     },
     {
       "id": "system_prompt_override",

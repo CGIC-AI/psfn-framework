@@ -2,7 +2,7 @@
  * emo_sim directed A->B relationship state -> companion advisory.
  *
  * The pinned emo_sim server (`emo_sim/server.py#http-api.v1`, SHA
- * 5bb571d4cec42f6d178f70f529b52640a46018b5) exposes a top-level `relationships`
+ * 112cd60edecad08ae2c99df818e623cd6245b8b5) exposes a top-level `relationships`
  * map in the `?full=1` session snapshot. That map is FLAT: each key is the two
  * participant NAMES joined by the literal `->` separator (`"<source>-><target>"`,
  * statemashine.py) and each value is a record carrying `from`/`to` participant

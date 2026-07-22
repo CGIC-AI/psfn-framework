@@ -2938,6 +2938,12 @@
     },
     {
       "file": "src/faculties/memory/episodic/arc-formation.ts",
+      "name": "DEFAULT_MAX_THREAD_EPISODES",
+      "value": "500",
+      "note": "Code-owned safety bound on a single topic-thread union's write amplification (apq0); a fail-safe DoS guard, not behavioral tuning."
+    },
+    {
+      "file": "src/faculties/memory/episodic/arc-formation.ts",
       "name": "DEFAULT_PASS_INTERVAL_MS",
       "value": "6 * 24 * 60 * 60_000"
     },
@@ -3063,6 +3069,12 @@
       "file": "src/faculties/memory/episodic/synthesis.ts",
       "name": "DEFAULT_MAX_PRIOR_CANDIDATES",
       "value": "24"
+    },
+    {
+      "file": "src/faculties/memory/episodic/synthesis.ts",
+      "name": "DEFAULT_MAX_THREAD_EPISODES",
+      "value": "500",
+      "note": "Code-owned safety bound on a single topic-thread union's write amplification (apq0); a fail-safe DoS guard, not behavioral tuning."
     },
     {
       "file": "src/faculties/memory/episodic/synthesis.ts",

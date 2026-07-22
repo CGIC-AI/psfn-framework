@@ -31,11 +31,15 @@ export {
 } from './postgres-store.js';
 export {
   DreamMeaningPass,
+  episodeMachineSignalDensity,
   parseMeaningContribution,
+  prioritizeDreamBudget,
+  type DreamBudgetEntry,
   type DreamMeaningPassOptions,
   type DreamMeaningPassRunInput,
   type DreamMeaningPassRunResult,
   type DreamPassAgent,
+  type DreamPassContactTrustReader,
 } from './dream-meaning-pass.js';
 export {
   EpisodeArcWeaver,
@@ -79,6 +83,7 @@ export {
   applyThreadUnionForArc,
   chooseThreadRepresentative,
   computeThreadComponents,
+  hasLegacySessionThreadId,
   type ThreadAssignmentEvent,
   type ThreadUnionOptions,
   type ThreadUnionResult,

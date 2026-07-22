@@ -462,6 +462,18 @@ export interface EventMap {
     confidence?: number;
     timestamp: number;
   };
+  // Topic-thread materialization outcome (apq0): an arc-driven thread union
+  // merged two topic threads, no-oped (already unified), extracted a legacy
+  // session-keyed endpoint into its own singleton topic thread, or was skipped
+  // fail-safe because the losing thread exceeded the write-amplification cap.
+  // Oversize skips are surfaced here, never silently mis-threaded.
+  'memory.episodic.thread_assignment': {
+    outcome: 'merged' | 'noop' | 'merge_skipped_oversize' | 'legacy_session_thread_extracted';
+    winningThreadId: string;
+    losingThreadId: string;
+    updatedEpisodeCount: number;
+    timestamp: number;
+  };
   // Deterministic pre-LLM gate outcomes (jpvd.4). One per recurring LLM pass;
   // a `skipped` outcome means the gate closed and the pass spent zero tokens.
   // Reasons + inputs surface on the Garden subsystem-health lanes.

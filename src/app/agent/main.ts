@@ -38,6 +38,7 @@ import {
 } from '../../core/scheduler/free-time-chooser.js';
 import { InMemoryRestWindowPolicy } from '../../core/scheduler/rest-window-policy.js';
 import { classifyChannelDisclosure, getVisibilityDisclosureCeiling } from '../../system/trust/policy.js';
+import { trustOrd } from '../../system/trust/types.js';
 import { deriveConversationScopeEnvelope } from '../../core/session/conversation-scope.js';
 import { registerWeightedThoughtOutreachTask } from '../../core/scheduler/weighted-thought-outreach-lane.js';
 import { createLlmNudgeEvaluator } from '../../core/intention/weighted-thought-nudge-evaluator.js';
@@ -833,7 +834,25 @@ async function main(): Promise<void> {
   const MINUTE_MS = 60_000;
   const HOUR_MS = 60 * MINUTE_MS;
   const DAY_MS = 24 * HOUR_MS;
+  // Topic-thread materialization telemetry (apq0): merges, legacy extractions,
+  // and fail-safe oversize skips are typed events, never silence.
+  const emitThreadAssignment = (event: {
+    outcome: 'merged' | 'noop' | 'merge_skipped_oversize' | 'legacy_session_thread_extracted';
+    winningThreadId: string;
+    losingThreadId: string;
+    updatedEpisodeCount: number;
+    timestamp: number;
+  }): void => {
+    eventBus.emit('memory.episodic.thread_assignment', event).catch((error: unknown) => {
+      log.warn('Episodic thread-assignment event emit failed', {
+        outcome: event.outcome,
+        winningThreadId: event.winningThreadId,
+        error: String(error),
+      });
+    });
+  };
   const episodicSynthesizer = new EpisodicSynthesizer(episodicStore, sessionManager, {
+    onThreadAssignment: emitThreadAssignment,
     transcriptMessageLimit: schedulerConfig.episodeSynthesis.transcriptMessageLimit,
     maxEpisodesPerRun: schedulerConfig.episodeSynthesis.maxEpisodesPerRun,
     maxPriorCandidates: schedulerConfig.episodeSynthesis.maxPriorCandidates,
@@ -885,6 +904,7 @@ async function main(): Promise<void> {
     },
   });
   const arcWeaver = new EpisodeArcWeaver(episodicStore, llmProvider, {
+    onThreadAssignment: emitThreadAssignment,
     passIntervalMs: schedulerConfig.arcFormation.passIntervalDays * DAY_MS,
     reviewWindowMs: schedulerConfig.arcFormation.reviewWindowDays * DAY_MS,
     minConfidence: schedulerConfig.arcFormation.minConfidence,
@@ -906,6 +926,19 @@ async function main(): Promise<void> {
     // Ground each meaning in the real turns she lived, not the auto-summarized
     // title/landmark (bead dtym). Same reader synthesis/consolidation use.
     transcriptReader: sessionManager,
+    // Prioritized nightly budget (h4fp.6): rank participants by contact trust
+    // so high-trust episodes land inside the capped pass first. Unknown
+    // participant ids simply rank 0.
+    contactTrust: {
+      resolveTrustRanks: async (contactIds) => {
+        const ranks = new Map<string, number>();
+        for (const contactId of contactIds) {
+          const contact = await contactStore.getById(contactId);
+          if (contact) ranks.set(contactId, trustOrd(contact.trustLevel));
+        }
+        return ranks;
+      },
+    },
     onGateEvent: (event) => {
       eventBus.emit('memory.dream_meaning.gate', event).catch((error: unknown) => {
         log.warn('Dream-meaning gate event emit failed', { error: String(error) });

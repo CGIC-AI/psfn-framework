@@ -27,6 +27,10 @@ import { createComponentLogger } from '../../shared/logger.js';
 import { abortError } from '../../shared/utils/errors.js';
 import { getActiveCanaryToken, CANARY_CARRIER_PARAM_KEY } from '../../core/cogsec/canary/canary-token.js';
 import { isEgressCanaryMethod } from '../../core/cogsec/canary/egress-scan.js';
+import {
+  captureReplyCanary,
+  getReplyCanaryCaptureToken,
+} from '../../core/cogsec/canary/reply-canary.js';
 import { BoundedQueue, QueueOverflowError, type QueueOverflowPolicy } from './backpressure.js';
 import { registerReverseGatewayMethods } from './reverse-methods.js';
 import type { MessageHandler, MessageHandlerOptions } from '../../channels/backplane/types.js';
@@ -1849,10 +1853,21 @@ export class GatewayClient implements
   }
 
   notifyApiStreamDelta(requestId: string, text: string): void {
+    // d269: streamed reply frames are main-reply egress over the reverse-RPC
+    // seam. Attach the live session canary (turn async context, falling back to
+    // the reply capture the api.chat.completion handler runs inside) so the
+    // gateway delta guard can scan each frame before dispatching it to API
+    // stream listeners. This frame bypasses the JSONRPCClient send wrapper, so
+    // the carrier is attached here explicitly.
+    const canaryToken = getActiveCanaryToken() ?? getReplyCanaryCaptureToken();
     this.conn.send({
       jsonrpc: '2.0',
       method: 'api.stream.delta',
-      params: { requestId, text },
+      params: {
+        requestId,
+        text,
+        ...(canaryToken ? { [CANARY_CARRIER_PARAM_KEY]: canaryToken } : {}),
+      },
     });
   }
 
@@ -1914,16 +1929,24 @@ export class GatewayClient implements
       throw new Error('No voice.handleMessage handler registered');
     }
 
-    const substrateMessage = this.deserializeMessage(message);
-    const response = await this.handleMessageHandler(substrateMessage, options);
-    return {
-      content: response.content,
-      channelId: response.channelId,
-      ...(response.attachments ? { attachments: response.attachments } : {}),
-      model: response.metadata.model,
-      durationMs: response.metadata.durationMs,
-      ...(response.metadata.noReply ? { disposition: 'decline' as const } : {}),
-    } satisfies VoiceHandleMessageResult;
+    // d269: the returned reply crosses the reverse-RPC seam back to the
+    // gateway. Run the turn inside a canary reply capture so the session
+    // canary rides the result carrier and the gateway reply guard can scan the
+    // reply before it reaches a channel adapter. `handleVoiceStreamEnd`
+    // funnels through here, so voice.transcript.end inherits the carrier via
+    // its `...result` spread.
+    return captureReplyCanary(async () => {
+      const substrateMessage = this.deserializeMessage(message);
+      const response = await this.handleMessageHandler!(substrateMessage, options);
+      return {
+        content: response.content,
+        channelId: response.channelId,
+        ...(response.attachments ? { attachments: response.attachments } : {}),
+        model: response.metadata.model,
+        durationMs: response.metadata.durationMs,
+        ...(response.metadata.noReply ? { disposition: 'decline' as const } : {}),
+      } satisfies VoiceHandleMessageResult;
+    });
   }
 
   private async handleApiChatCompletion(
@@ -1932,7 +1955,9 @@ export class GatewayClient implements
     if (!this.apiChatCompletionHandler) {
       throw new Error('No api.chat.completion handler registered');
     }
-    return await this.apiChatCompletionHandler(params);
+    // d269: main-reply egress over the reverse-RPC seam — capture the session
+    // canary so the completion result carries it to the gateway reply guard.
+    return captureReplyCanary(() => this.apiChatCompletionHandler!(params));
   }
 
   private async handleApiChatCancel(
@@ -1950,7 +1975,9 @@ export class GatewayClient implements
     if (!this.companionUiShardActionHandler) {
       throw new Error('No api.companion-ui.shard.action handler registered');
     }
-    return await this.companionUiShardActionHandler(params);
+    // d269: shard chat responses are conversational reply egress over the same
+    // seam; capture so a canary minted during the shard turn rides the result.
+    return captureReplyCanary(() => this.companionUiShardActionHandler!(params));
   }
 
   private async handleShardOwner(

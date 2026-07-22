@@ -49,6 +49,7 @@ import {
   SessionCanaryRegistry,
   runWithCanaryContext,
 } from '../../cogsec/canary/canary-token.js';
+import { recordReplyCanaryToken } from '../../cogsec/canary/reply-canary.js';
 import {
   DISCLOSURE_CLASSIFIER_VERSION,
   buildGenerationDisclosureLineage,
@@ -860,6 +861,13 @@ export async function handleMessageForTurn(
     const canaryToken = runtime.cogSecMode === 'off'
       ? undefined
       : sessionCanaryRegistry.ensure(emotionSessionId);
+    // d269: when this turn was initiated by a reply-bearing reverse-RPC call
+    // (voice.handleMessage / voice.transcript.end / api.chat.completion), record
+    // the token into the ambient reply capture so the reply result carries the
+    // carrier back to the gateway reply guard. No-op outside such a capture.
+    if (canaryToken) {
+      recordReplyCanaryToken(canaryToken);
+    }
     const promptAssemblyStartedAt = performance.now();
     const promptAssembly = await assembleTurnPrompt({
       runtime,

@@ -114,7 +114,8 @@ describe('PromptRegistryStore', () => {
   it('seeds the sleeptime orientation prompt without assigning companion identity or mood', () => {
     const prompt = getDefaultPromptText(SLEEPTIME_ORIENTATION_PROMPT_KEY);
 
-    expect(prompt).toContain('Review recent conversation evidence for one channel scope');
+    expect(prompt).toContain('my own quiet end-of-day review of one channel scope');
+    expect(prompt).toContain("the day's episodes and transcript");
     expect(prompt).toContain('Do not assign the companion an identity');
     expect(prompt).toContain('Do not override the character card');
     expect(prompt).toContain('"orient"');

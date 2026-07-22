@@ -18,7 +18,7 @@
 // extraction-facing rendering. If a prefix is removed, shortened, or bypassed
 // on any system-note path, the golden output changes and the test fails.
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import type { AssistantMessage, UserMessage } from '@mariozechner/pi-ai';
 import type { AgentMessage } from '../../boundary/pi-agent/index.js';
 import {
@@ -36,6 +36,15 @@ import {
   isExtractionTranscriptEntry,
 } from '../../faculties/memory/extraction/chunk-compose.js';
 import type { SessionEntry } from '../session/types.js';
+import type { LLMProviderPort } from './contracts.js';
+import type {
+  CompletionPurpose,
+  LLMContext,
+  LLMResponse,
+} from '../../shared/contracts/runtime.js';
+import { EmotionAppraisal } from '../emotion/appraisal.js';
+import { selectEmotionAppraisalSourceEntries } from './substrate-agent/emotion-self-model-runtime.js';
+import { INTAKE_FIREWALL_NOTICE_TEMPLATES } from '../cogsec/intake-firewall-notice-templates.js';
 
 const NOW = 1_700_000_000_000;
 
@@ -216,6 +225,188 @@ describe('golden: system notes never render as unprefixed companion thoughts', (
         }),
       });
       expect(attribution.role).toBe('system');
+    });
+  });
+
+  // ── Emotion-appraisal surface ──
+  //
+  // The live path `SessionManager.appendContextSystemNote` (role 'system',
+  // sessionLane.kind 'system_note'; writers: temporal-wakeup, free-time,
+  // room-entry-note, presence-note-delivery) flows through `getRecentMessages`
+  // (NOT stripped) → `selectEmotionAppraisalSourceEntries` (only filters
+  // appraisal artifacts + intake-firewall notices) → `EmotionAppraisal.buildPrompt`
+  // which renders `- ${message.role}: ${message.content}` under
+  // `[Recent Conversation]`. The ONLY attribution defense there is the bare role
+  // label in that template string, so a `.map()` that dropped/coerced role to
+  // 'assistant' would silently re-introduce the m42b confabulation on the
+  // appraisal surface. These goldens pin that surface end-to-end.
+
+  describe('emotion-appraisal surface (selectEmotionAppraisalSourceEntries → buildPrompt)', () => {
+    // A context system note shaped EXACTLY like appendContextSystemNote output:
+    // role 'system', system author, sessionLane.kind 'system_note'.
+    const GOLDEN_CONTEXT_NOTE = 'Some time has passed since you two last spoke here.';
+    const GOLDEN_PARTNER_LINE = 'are you still around?';
+    const GOLDEN_COMPANION_LINE = 'I am, right here.';
+
+    function contextSystemNoteEntry(id: number, content: string): SessionEntry {
+      return {
+        id,
+        channelId: 'discord:room',
+        role: 'system',
+        content,
+        authorId: 'system',
+        authorName: 'System',
+        timestamp: NOW,
+        metadata: JSON.stringify({
+          sessionLane: {
+            schemaVersion: 1,
+            kind: 'system_note',
+            source: 'temporal-wakeup',
+          },
+        }),
+      };
+    }
+
+    function makeCapturingProvider(summary: string): {
+      provider: LLMProviderPort;
+      complete: ReturnType<typeof vi.fn>;
+    } {
+      const complete = vi.fn(async (
+        _context: LLMContext,
+        _purpose: CompletionPurpose,
+      ): Promise<LLMResponse> => ({
+        content: summary,
+        toolCalls: [],
+        model: 'test-model',
+        inputTokens: 10,
+        outputTokens: 20,
+        stopReason: 'stop',
+      }));
+      return {
+        provider: {
+          stream: vi.fn(async () => ({
+            content: '',
+            toolCalls: [],
+            model: 'test-model',
+            inputTokens: 0,
+            outputTokens: 0,
+            stopReason: 'stop',
+          })),
+          complete,
+        },
+        complete,
+      };
+    }
+
+    it('GOLDEN: pins the exact [Recent Conversation] rendering — the note is `- system:`, never `- assistant:`', async () => {
+      // Mixed transcript: partner speech, companion reply, and a context system
+      // note shaped exactly like appendContextSystemNote output.
+      const partner: SessionEntry = {
+        id: 1, channelId: 'discord:room', role: 'user',
+        content: GOLDEN_PARTNER_LINE, authorId: 'u1', authorName: 'Alice', timestamp: NOW,
+      };
+      const companion: SessionEntry = {
+        id: 2, channelId: 'discord:room', role: 'assistant',
+        content: GOLDEN_COMPANION_LINE, timestamp: NOW,
+      };
+      const note = contextSystemNoteEntry(3, GOLDEN_CONTEXT_NOTE);
+
+      // Drive the REAL pipeline: the runtime maps surviving entries into
+      // {role, content, timestamp} exactly as triggerEmotionAppraisal does.
+      const recentMessages = selectEmotionAppraisalSourceEntries([partner, companion, note])
+        .map((entry) => ({
+          role: entry.role,
+          content: entry.content,
+          timestamp: entry.timestamp,
+        }));
+
+      const { provider, complete } = makeCapturingProvider('appraisal summary');
+      const appraisal = new EmotionAppraisal({
+        llmProvider: provider,
+        turnCadence: 1,
+        vadDeltaThreshold: 0.9,
+      });
+
+      const result = await appraisal.maybeAppraise({
+        sessionId: 'discord:room',
+        currentEmotion: {
+          vad: { valence: 0, arousal: 0, dominance: 0 },
+          mood: { valence: 0, arousal: 0, dominance: 0 },
+          discrete: {},
+          confidence: 0.5,
+        },
+        recentMessages,
+        personalityTraits: {},
+      });
+      expect(result.appraised).toBe(true);
+      expect(complete).toHaveBeenCalledTimes(1);
+
+      const prompt = complete.mock.calls[0]?.[0].messages[0]?.content as string;
+      const marker = '[Recent Conversation]';
+      const recentBlock = prompt.slice(prompt.indexOf(marker));
+
+      // Golden: the system note renders under its own explicit `system` role
+      // label — NEVER as `- assistant:` (companion self-speech) and never bare.
+      expect(recentBlock).toBe(
+        '[Recent Conversation]\n'
+        + `- user: ${GOLDEN_PARTNER_LINE}\n`
+        + `- assistant: ${GOLDEN_COMPANION_LINE}\n`
+        + `- system: ${GOLDEN_CONTEXT_NOTE}`,
+      );
+      // Belt-and-braces: the note text never appears attributed to the companion.
+      expect(recentBlock).toContain(`- system: ${GOLDEN_CONTEXT_NOTE}`);
+      expect(recentBlock).not.toContain(`- assistant: ${GOLDEN_CONTEXT_NOTE}`);
+      expect(recentBlock).not.toContain(`\n${GOLDEN_CONTEXT_NOTE}`);
+    });
+
+    it('pins the pipeline shape: a system_note-lane entry survives selection with role still `system`', () => {
+      const partner: SessionEntry = {
+        id: 1, channelId: 'discord:room', role: 'user',
+        content: GOLDEN_PARTNER_LINE, authorId: 'u1', authorName: 'Alice', timestamp: NOW,
+      };
+      const companion: SessionEntry = {
+        id: 2, channelId: 'discord:room', role: 'assistant',
+        content: GOLDEN_COMPANION_LINE, timestamp: NOW,
+      };
+      const note = contextSystemNoteEntry(3, GOLDEN_CONTEXT_NOTE);
+
+      const surviving = selectEmotionAppraisalSourceEntries([partner, companion, note]);
+
+      // The note is NOT stripped by the appraisal source selection.
+      expect(surviving).toHaveLength(3);
+      const survivingNote = surviving.find((entry) => entry.id === 3);
+      expect(survivingNote).toBeDefined();
+      // If a future .map()/normalization dropped or coerced role, this fails:
+      // the surviving system-note entry MUST retain role 'system'.
+      expect(survivingNote?.role).toBe('system');
+      expect(survivingNote?.role).not.toBe('assistant');
+      expect(survivingNote?.content).toBe(GOLDEN_CONTEXT_NOTE);
+      // Partner + companion pass through unchanged.
+      expect(surviving.find((entry) => entry.id === 1)?.role).toBe('user');
+      expect(surviving.find((entry) => entry.id === 2)?.role).toBe('assistant');
+    });
+
+    it('INVERSE GUARD: an intake-firewall-notice entry IS excluded from the appraisal source', () => {
+      const partner: SessionEntry = {
+        id: 1, channelId: 'discord:room', role: 'user',
+        content: GOLDEN_PARTNER_LINE, authorId: 'u1', authorName: 'Alice', timestamp: NOW,
+      };
+      const contextNote = contextSystemNoteEntry(2, GOLDEN_CONTEXT_NOTE);
+      // A firewall/quarantine notice carrying the signature phrase.
+      const firewallNotice: SessionEntry = {
+        id: 3, channelId: 'discord:room', role: 'system',
+        content: INTAKE_FIREWALL_NOTICE_TEMPLATES.one,
+        authorId: 'system', authorName: 'System', timestamp: NOW,
+      };
+
+      const surviving = selectEmotionAppraisalSourceEntries([partner, contextNote, firewallNotice]);
+
+      // Pins the existing exclusion so it cannot silently break: the firewall
+      // notice contributes ZERO appraisal input, while the ordinary context
+      // system note and partner speech survive.
+      const ids = surviving.map((entry) => entry.id);
+      expect(ids).toEqual([1, 2]);
+      expect(surviving.some((entry) => entry.content === INTAKE_FIREWALL_NOTICE_TEMPLATES.one)).toBe(false);
     });
   });
 

@@ -506,6 +506,10 @@ export class MemoryWriter {
       embedding,
       DEDUP_THRESHOLD[type],
       3,
+      undefined,
+      // Memory formation dedup runs process-locally and must compare against the
+      // unscoped corpus; explicit, auditable system-internal opt-out.
+      { authorization: 'bypass-system-internal' },
     );
 
     const sameTypeDups = duplicates.filter(d => (
@@ -615,6 +619,9 @@ export class MemoryWriter {
       embedding,
       DEDUP_THRESHOLD[type] - MEMORY_CONFIG.contradictionThresholdOffset,
       5,
+      undefined,
+      // Memory formation contradiction scan: process-local system-internal read.
+      { authorization: 'bypass-system-internal' },
     );
 
     const sameTypeBroader = broader.filter(b => (
@@ -809,6 +816,9 @@ export class MemoryWriter {
       embedding,
       DEDUP_THRESHOLD[type] - MEMORY_CONFIG.contradictionThresholdOffset,
       5,
+      undefined,
+      // Memory formation near-duplicate scan: process-local system-internal read.
+      { authorization: 'bypass-system-internal' },
     );
 
     const sameType = similar.filter(s => (

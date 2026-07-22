@@ -218,6 +218,27 @@ export interface MemoryMaintenanceDiagnosticsOptions {
 
 export type MemorySearchResult = PurrMemory & { similarity: number };
 
+/**
+ * Explicit authorization stance every caller of the raw `searchByEmbedding`
+ * path must declare. There is no default: a call cannot silently pick a stance.
+ *
+ * - `'subject-enforced'`: the caller asserts subject authorization MUST be
+ *   applied. Only a subject-authorized store (see
+ *   `createSubjectAuthorizedMemoryStore`) can honor it; the raw
+ *   `PostgresMemoryStore` rejects it by throwing, so a product-recall caller
+ *   that is accidentally wired to the raw store fails closed instead of leaking
+ *   unscoped memories.
+ * - `'bypass-system-internal'`: an auditable opt-out for process-local
+ *   system/maintenance callers (memory formation dedup, operator admin surfaces)
+ *   that legitimately read the unscoped corpus. Every bypass site is greppable
+ *   by the `'bypass-system-internal'` literal.
+ */
+export type EmbeddingSearchAuthorizationStance = 'subject-enforced' | 'bypass-system-internal';
+
+export interface EmbeddingSearchAuthorization {
+  authorization: EmbeddingSearchAuthorizationStance;
+}
+
 export type MemorySubjectQuerySelector =
   | { kind: 'list'; limit?: number; offset?: number; scopeQuery?: MemoryScopeQuery }
   | { kind: 'detail'; memoryId: string }
@@ -442,7 +463,8 @@ interface MemoryStorePortBackend extends ScratchpadProvider {
     embedding: Float32Array,
     threshold: number,
     limit: number,
-    scopeQuery?: MemoryScopeQuery,
+    scopeQuery: MemoryScopeQuery | undefined,
+    authorization: EmbeddingSearchAuthorization,
   ): Awaitable<MemorySearchResult[]>;
   searchByText(
     query: string,
@@ -548,7 +570,8 @@ export interface MemoryStorePort extends ScratchpadProvider {
     embedding: Float32Array,
     threshold: number,
     limit: number,
-    scopeQuery?: MemoryScopeQuery,
+    scopeQuery: MemoryScopeQuery | undefined,
+    authorization: EmbeddingSearchAuthorization,
   ): Promise<MemorySearchResult[]>;
   searchByText(
     query: string,
@@ -657,8 +680,8 @@ export function createMemoryStorePort(store: MemoryStorePortBackend): MemoryStor
     runInTransaction: async (handler) => {
       return await store.runInTransaction(handler);
     },
-    searchByEmbedding: async (embedding, threshold, limit, scopeQuery) => (
-      await store.searchByEmbedding(embedding, threshold, limit, scopeQuery)
+    searchByEmbedding: async (embedding, threshold, limit, scopeQuery, authorization) => (
+      await store.searchByEmbedding(embedding, threshold, limit, scopeQuery, authorization)
     ),
     searchByText: async (query, limit, scopeQuery) => await store.searchByText(query, limit, scopeQuery),
     updateMemory: async (id, updates, options) => {

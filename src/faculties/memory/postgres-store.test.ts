@@ -3,6 +3,7 @@ import type { QueryResult } from 'pg';
 import type { EmbeddingProviderPort } from '../../shared/contracts/embedding-provider.js';
 import { MemoryRetriever } from './retrieval.js';
 import { createPostgresMemoryStore } from './postgres-store.js';
+import { ANN_MAX_CANDIDATES } from './postgres-store/embedding-index.js';
 import { POSTGRES_MEMORY_MIGRATIONS } from '../../persistence/postgres/migrations.js';
 import {
   DURABLE_PREFERENCE_MEMORY_TAG,
@@ -183,6 +184,8 @@ class FakeMemoryPool {
   readonly scratchpadEntries = new Map<string, ScratchpadTestRow>();
   readonly patchEvents: Array<Record<string, unknown>> = [];
   readonly clients: FakeTransactionClient[] = [];
+  /** LIMIT parameter sent to Postgres by each raw embedding search (a27w.3 bound). */
+  readonly embeddingSearchLimits: number[] = [];
   subjectBackfillCheckpoint: {
     cursor_memory_id: string | null;
     completed: boolean;
@@ -356,6 +359,8 @@ class FakeMemoryPool {
     if (normalized.includes('1 - (embedding <=> $1::vector) as similarity')) {
       const queryEmbedding = decodeEmbeddingLiteral(typeof values[0] === 'string' ? values[0] : null);
       const threshold = Number(values[1] ?? 0);
+      // Record the bounded LIMIT parameter ($3) the raw path sends to Postgres.
+      this.embeddingSearchLimits.push(Number(values[2]));
       const rows = [...this.memories.values()]
         .filter((row) => !row.superseded_by && row.deleted_at === null && row.embedding)
         .map((row) => ({
@@ -718,8 +723,84 @@ describe('postgres memory store unit coverage', () => {
     })).rejects.toThrow('Memory text updates require a replacement embedding');
 
     expect((await store.getById(memory.id))?.text).toBe(memory.text);
-    await expect(store.searchByEmbedding(originalEmbedding, 0.99, 10))
+    await expect(store.searchByEmbedding(originalEmbedding, 0.99, 10, undefined, {
+      authorization: 'bypass-system-internal',
+    }))
       .resolves.toEqual([expect.objectContaining({ id: memory.id, text: memory.text })]);
+  });
+
+  it('rejects the raw embedding search when the caller demands subject enforcement (fail closed)', async () => {
+    const pool = new FakeMemoryPool();
+    const embedding = new Float32Array([1, 0, 0, 0]);
+    const memory = makeMemory('bypass-required', 'Subject scoped memory');
+    pool.memories.set(memory.id, makeMemoryRow(memory, '[1,0,0,0]'));
+    postgresMocks.activePool = pool;
+    const store = await createPostgresMemoryStore('postgres://unused', 4);
+
+    // A product-recall caller that reaches the raw store must fail closed rather
+    // than return unscoped rows: the raw store cannot enforce subject authorization.
+    await expect(store.searchByEmbedding(embedding, 0.5, 10, undefined, {
+      authorization: 'subject-enforced',
+    })).rejects.toThrow('cannot enforce subject authorization');
+    expect(pool.embeddingSearchLimits).toEqual([]);
+  });
+
+  it('rejects the raw embedding search when no explicit authorization stance is given', async () => {
+    const pool = new FakeMemoryPool();
+    const embedding = new Float32Array([1, 0, 0, 0]);
+    postgresMocks.activePool = pool;
+    const store = await createPostgresMemoryStore('postgres://unused', 4);
+
+    // The authorization stance is a required parameter, so omitting it is a
+    // compile error for typed callers. A caller that casts past the type still
+    // fails closed at runtime: the raw path throws and never queries Postgres.
+    await expect(
+      (store.searchByEmbedding as unknown as (
+        embedding: Float32Array,
+        threshold: number,
+        limit: number,
+      ) => Promise<unknown>)(embedding, 0.5, 10),
+    ).rejects.toThrow();
+    expect(pool.embeddingSearchLimits).toEqual([]);
+  });
+
+  it('bounds the raw embedding search LIMIT sent to Postgres regardless of the requested limit', async () => {
+    const pool = new FakeMemoryPool();
+    const embedding = new Float32Array([1, 0, 0, 0]);
+    const memory = makeMemory('bounded-search', 'Bounded search memory');
+    pool.memories.set(memory.id, makeMemoryRow(memory, '[1,0,0,0]'));
+    postgresMocks.activePool = pool;
+    const store = await createPostgresMemoryStore('postgres://unused', 4);
+
+    // An enormous requested limit must not translate into an unbounded LIMIT.
+    await store.searchByEmbedding(embedding, 0.5, Number.MAX_SAFE_INTEGER, undefined, {
+      authorization: 'bypass-system-internal',
+    });
+    const [hugeLimit] = pool.embeddingSearchLimits;
+    expect(hugeLimit).toBeLessThanOrEqual(ANN_MAX_CANDIDATES);
+    expect(hugeLimit).toBe(ANN_MAX_CANDIDATES);
+
+    // A modest limit still oversamples for post-filter recall but stays capped.
+    await store.searchByEmbedding(embedding, 0.5, 10, undefined, {
+      authorization: 'bypass-system-internal',
+    });
+    const modestLimit = pool.embeddingSearchLimits[1];
+    expect(modestLimit).toBeGreaterThanOrEqual(10);
+    expect(modestLimit).toBeLessThanOrEqual(ANN_MAX_CANDIDATES);
+  });
+
+  it('rejects a non-finite or non-positive raw embedding search limit', async () => {
+    const pool = new FakeMemoryPool();
+    const embedding = new Float32Array([1, 0, 0, 0]);
+    postgresMocks.activePool = pool;
+    const store = await createPostgresMemoryStore('postgres://unused', 4);
+
+    for (const badLimit of [0, -5, Number.NaN, Number.POSITIVE_INFINITY]) {
+      await expect(store.searchByEmbedding(embedding, 0.5, badLimit, undefined, {
+        authorization: 'bypass-system-internal',
+      })).rejects.toThrow('positive finite limit');
+    }
+    expect(pool.embeddingSearchLimits).toEqual([]);
   });
 
   it('paginates lexical augmentation across deterministic Postgres extracted-at ordering', async () => {

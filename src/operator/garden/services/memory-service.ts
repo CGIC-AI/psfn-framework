@@ -698,8 +698,13 @@ export class AdminMemoryDataService implements AdminMemoryService {
       };
     }
     const embedding = await embeddingService.embed(query);
+    // Operator admin memory search. For fleet principals `memoryStore` is the
+    // subject-authorized projection (see forRequest), which enforces regardless
+    // of this stance; the legacy operator session uses the raw store behind the
+    // body-elevation gate, so this is an explicit, auditable system-internal
+    // opt-out rather than a product-recall path.
     const results = (await this.deps.memoryStore
-      .searchByEmbedding(embedding, 0.1, 50))
+      .searchByEmbedding(embedding, 0.1, 50, undefined, { authorization: 'bypass-system-internal' }))
       .filter(isActiveMemoryView)
       .filter(memory => !isInternalMemoryArtifact(memory));
     return {

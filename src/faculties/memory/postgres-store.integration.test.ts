@@ -307,12 +307,12 @@ describe('postgres memory store integration', () => {
         makeMemory({ id: 'sd-embed', text: 'soft delete embedding survives', sensitivity: 'public', provenance: { subjectContactId: 'contact-a' } }),
         embedding,
       );
-      await expect(store.searchByEmbedding(embedding, 0.99, 5))
+      await expect(store.searchByEmbedding(embedding, 0.99, 5, undefined, { authorization: 'bypass-system-internal' }))
         .resolves.toEqual([expect.objectContaining({ id: 'sd-embed' })]);
 
       const deleted = await store.softDeleteMemory('sd-embed', { deletedBy: 'integration:test' });
       expect(deleted).not.toBeNull();
-      await expect(store.searchByEmbedding(embedding, 0.99, 5)).resolves.toEqual([]);
+      await expect(store.searchByEmbedding(embedding, 0.99, 5, undefined, { authorization: 'bypass-system-internal' })).resolves.toEqual([]);
       // The re-upsert must NOT null the vector — the on-demand fetch preserves it.
       const rawAfterDelete = await pool.query<{ embedding: string | null }>(
         `SELECT embedding::text AS embedding FROM l2_memories WHERE id = 'sd-embed'`,
@@ -321,7 +321,7 @@ describe('postgres memory store integration', () => {
 
       await expect(store.undoSoftDelete(deleted!.deleteId, { restoredBy: 'integration:test' }))
         .resolves.not.toBeNull();
-      await expect(store.searchByEmbedding(embedding, 0.99, 5))
+      await expect(store.searchByEmbedding(embedding, 0.99, 5, undefined, { authorization: 'bypass-system-internal' }))
         .resolves.toEqual([expect.objectContaining({ id: 'sd-embed' })]);
     });
   }, INTEGRATION_TIMEOUT_MS);
@@ -1360,7 +1360,7 @@ describe('postgres memory store integration', () => {
         text: seededMemory.text,
       });
 
-      const embeddingSearch = await store.searchByEmbedding(DEFAULT_EMBEDDING, 0.99, 10);
+      const embeddingSearch = await store.searchByEmbedding(DEFAULT_EMBEDDING, 0.99, 10, undefined, { authorization: 'bypass-system-internal' });
       expect(embeddingSearch).toHaveLength(1);
       expect(embeddingSearch[0]).toMatchObject({
         id: seededMemory.id,
@@ -1402,7 +1402,7 @@ describe('postgres memory store integration', () => {
         id: memory.id,
         text: memory.text,
       });
-      const searchResults = await store.searchByEmbedding(DEFAULT_EMBEDDING, 0.99, 10);
+      const searchResults = await store.searchByEmbedding(DEFAULT_EMBEDDING, 0.99, 10, undefined, { authorization: 'bypass-system-internal' });
       expect(searchResults).toHaveLength(1);
       expect(searchResults[0]).toMatchObject({
         id: memory.id,
@@ -1468,7 +1468,7 @@ describe('postgres memory store integration', () => {
         id: memory.id,
         deletedBy: 'integration-test',
       });
-      expect(await store.searchByEmbedding(DEFAULT_EMBEDDING, 0.99, 10)).toHaveLength(0);
+      expect(await store.searchByEmbedding(DEFAULT_EMBEDDING, 0.99, 10, undefined, { authorization: 'bypass-system-internal' })).toHaveLength(0);
     });
   }, INTEGRATION_TIMEOUT_MS);
 
@@ -1568,7 +1568,7 @@ describe('postgres memory store integration', () => {
         udt_name: 'vector',
       });
 
-      const embeddingSearch = await store.searchByEmbedding(DEFAULT_EMBEDDING, 0.99, 10);
+      const embeddingSearch = await store.searchByEmbedding(DEFAULT_EMBEDDING, 0.99, 10, undefined, { authorization: 'bypass-system-internal' });
       expect(embeddingSearch).toHaveLength(1);
       expect(embeddingSearch[0]).toMatchObject({
         id: legacyMemory.id,
@@ -1752,8 +1752,53 @@ describe('postgres memory store ANN embedding search (a27w.2)', () => {
         .sort((left, right) => right.similarity - left.similarity)
         .slice(0, 5)
         .map(row => row.id);
-      const actual = await store.searchByEmbedding(new Float32Array(query), -1, 5);
+      const actual = await store.searchByEmbedding(new Float32Array(query), -1, 5, undefined, { authorization: 'bypass-system-internal' });
       expect(actual.map(memory => memory.id)).toEqual(bruteForce);
+    });
+  }, INTEGRATION_TIMEOUT_MS);
+
+  it('fills the requested raw-search limit from scoped rows when enough scoped matches exist (a27w.3)', async () => {
+    await withMemoryDatabase(async (pool) => {
+      const store = await createPostgresMemoryStoreFromPool(pool, 4);
+      // 12 in-scope rows clustered tightly around the query, interleaved with 12
+      // out-of-scope rows that are the true nearest neighbours. The ANN candidate
+      // pool oversamples `limit` so the JS scope post-filter still returns a full
+      // page of scoped rows rather than under-returning.
+      const scopedRef = { kind: 'project' as const, id: 'alpha' };
+      const otherRef = { kind: 'project' as const, id: 'beta' };
+      for (let index = 0; index < 12; index += 1) {
+        await store.insertMemory(
+          makeMemory({
+            id: `scope-in-${index}`,
+            text: `scoped match ${index}`,
+            sensitivity: 'public',
+            scopeRef: scopedRef,
+          }),
+          new Float32Array([1, index * 0.001, 0, 0]),
+        );
+        await store.insertMemory(
+          makeMemory({
+            id: `scope-out-${index}`,
+            text: `unscoped match ${index}`,
+            sensitivity: 'public',
+            scopeRef: otherRef,
+          }),
+          // Even closer to the query than the scoped rows, so a naive top-k would
+          // be dominated by these out-of-scope neighbours.
+          new Float32Array([1, index * 0.0005, 0, 0]),
+        );
+      }
+
+      const results = await store.searchByEmbedding(
+        new Float32Array([1, 0, 0, 0]),
+        -1,
+        8,
+        { mode: 'only', refs: [scopedRef] },
+        { authorization: 'bypass-system-internal' },
+      );
+
+      expect(results).toHaveLength(8);
+      expect(results.every(memory => memory.scopeRef?.id === 'alpha')).toBe(true);
     });
   }, INTEGRATION_TIMEOUT_MS);
 

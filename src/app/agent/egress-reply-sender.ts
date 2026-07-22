@@ -13,10 +13,11 @@
  * qgqw.3 hardening, all fail-closed:
  *
  * - **Single delivery per trigger event.** A per-`(channel, sourceMessageId)`
- *   fence records every successful send, so a post-TTL re-drive of the same
- *   trigger (the lease completed after the send failed to persist and was
- *   TTL-reclaimed) is suppressed BEFORE regeneration — exactly-once delivery
- *   even when a regenerated reply would differ textually. The shared
+ *   fence records every send attempt before entering the gateway ambiguity
+ *   window, so a post-TTL re-drive of the same trigger (the lease completed
+ *   after the send failed to persist and was TTL-reclaimed) is suppressed
+ *   BEFORE regeneration — at-most-once delivery even when a regenerated reply
+ *   would differ textually. The shared
  *   {@link OutboundReplyGuardPort} additionally suppresses an exact-content
  *   duplicate already delivered to the channel by ANY sender (e.g. the normal
  *   reply pump), and every delivery is recorded back into it.
@@ -89,9 +90,8 @@ export interface AgentLoopEgressReplySenderDeps {
    */
   silentToken?: string;
   /**
-   * Retention window for the per-trigger-event single-delivery fence. Must
-   * comfortably exceed the egress-lease TTL so a post-TTL re-drive of a
-   * trigger whose send already happened is still fenced.
+   * Safety window retained after the later of send time or lease expiry, so a
+   * post-TTL re-drive of an attempted trigger remains fenced.
    */
   eventFenceWindowMs?: number;
   /** Clock override for deterministic tests. */
@@ -143,17 +143,19 @@ export function createAgentLoopEgressReplySender(
     ? deps.eventFenceWindowMs
     : DEFAULT_EVENT_FENCE_WINDOW_MS;
   const now = deps.now ?? Date.now;
-  /** Successful sends keyed by `(channelId, sourceMessageId)` → sent-at ms. */
-  const deliveredEvents = new Map<string, number>();
+  /** Send attempts keyed by `(channelId, sourceMessageId)` until safe expiry. */
+  const fencedEvents = new Map<string, {
+    expiresAtMs: number;
+    status: 'attempted' | 'delivered';
+  }>();
 
   const eventKey = (channelId: string, sourceMessageId: string): string =>
     `${channelId}\u0000${sourceMessageId}`;
 
-  const pruneDeliveredEvents = (nowMs: number): void => {
-    const minSentAt = nowMs - eventFenceWindowMs;
-    for (const [key, sentAt] of deliveredEvents) {
-      if (sentAt < minSentAt) {
-        deliveredEvents.delete(key);
+  const pruneFencedEvents = (nowMs: number): void => {
+    for (const [key, fence] of fencedEvents) {
+      if (fence.expiresAtMs < nowMs) {
+        fencedEvents.delete(key);
       }
     }
   };
@@ -167,16 +169,18 @@ export function createAgentLoopEgressReplySender(
       }
 
       // Per-trigger-event single-delivery fence (qgqw.3): a re-drive of a
-      // trigger this sender already delivered for (a post-TTL reclaim after the
-      // lease completion failed to persist) is suppressed BEFORE regeneration,
-      // so exactly one message reaches the room even when a fresh generation
-      // would differ textually. Reported as `delivered` — that is the truthful
-      // outcome for this event — with a content-free duplicate marker.
+      // trigger this sender already attempted (a post-TTL reclaim after an
+      // ambiguous send or failed completion persistence) is suppressed BEFORE
+      // regeneration. Confirmed delivery is reported as `delivered`; an
+      // ambiguous prior attempt remains failed closed.
       const nowMs = now();
-      pruneDeliveredEvents(nowMs);
+      pruneFencedEvents(nowMs);
       const fenceKey = eventKey(request.trigger.channelId, request.trigger.sourceMessageId);
-      if (deliveredEvents.has(fenceKey)) {
-        return { outcome: 'delivered', detail: 'duplicate_event_suppressed' };
+      const existingFence = fencedEvents.get(fenceKey);
+      if (existingFence) {
+        return existingFence.status === 'delivered'
+          ? { outcome: 'delivered', detail: 'duplicate_event_suppressed' }
+          : { outcome: 'failed', detail: 'ambiguous_delivery_suppressed' };
       }
 
       // Destination-clamped disclosure (qgqw.3): resolve the REAL room's
@@ -224,10 +228,26 @@ export function createAgentLoopEgressReplySender(
         return { outcome: 'failed', detail: 'duplicate_reply_suppressed' };
       }
 
-      await deps.delivery.send(request.trigger.channelId, reply);
-      // Record only AFTER the send succeeded, so a failed send never fences a
-      // legitimate retry, and other sender paths see this delivery.
-      deliveredEvents.set(fenceKey, now());
+      // Arm the event fence BEFORE entering the delivery ambiguity window. A
+      // rejected gateway promise cannot prove the platform did not accept the
+      // message, so retrying that event could double-send. Retain the fence
+      // through the actual lease expiry plus the configured safety window.
+      const leaseExpiresAtMs = Number.isFinite(request.lease.expiresAtMs)
+        ? request.lease.expiresAtMs
+        : nowMs;
+      const fence: { expiresAtMs: number; status: 'attempted' | 'delivered' } = {
+        expiresAtMs: Math.max(nowMs, leaseExpiresAtMs) + eventFenceWindowMs,
+        status: 'attempted',
+      };
+      fencedEvents.set(fenceKey, fence);
+      try {
+        await deps.delivery.send(request.trigger.channelId, reply);
+      } catch (error) {
+        fence.expiresAtMs = Math.max(fence.expiresAtMs, now() + eventFenceWindowMs);
+        throw error;
+      }
+      fence.status = 'delivered';
+      fence.expiresAtMs = Math.max(fence.expiresAtMs, now() + eventFenceWindowMs);
       deps.outboundReplyGuard.noteDelivered({
         channelId: request.trigger.channelId,
         content: reply,

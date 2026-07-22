@@ -253,7 +253,7 @@ describe('per-trigger-event single-delivery fence (qgqw.3)', () => {
     expect(delivery.send).toHaveBeenCalledTimes(1);
   });
 
-  it('does not fence a trigger whose send failed (legitimate retry still sends)', async () => {
+  it('fences an ambiguous send failure before delivery can be retried', async () => {
     const generator = { handleMessage: vi.fn(async () => makeResponse('Hi!')) };
     const send = vi.fn(async () => undefined)
       .mockRejectedValueOnce(new Error('gateway down'));
@@ -262,9 +262,37 @@ describe('per-trigger-event single-delivery fence (qgqw.3)', () => {
 
     await expect(sender.deliver(makeRequest())).rejects.toThrow('gateway down');
     const retry = await sender.deliver(makeRequest());
-    expect(retry.outcome).toBe('delivered');
-    expect(retry.detail).toBeUndefined();
-    expect(send).toHaveBeenCalledTimes(2);
+    expect(retry.outcome).toBe('failed');
+    expect(retry.detail).toBe('ambiguous_delivery_suppressed');
+    expect(generator.handleMessage).toHaveBeenCalledTimes(1);
+    expect(send).toHaveBeenCalledTimes(1);
+  });
+
+  it('retains the fence through lease expiry plus the configured window', async () => {
+    let nowMs = 0;
+    let generation = 0;
+    const generator = {
+      handleMessage: vi.fn(async () => makeResponse(`Hi ${(generation += 1)}!`)),
+    };
+    const delivery = { send: vi.fn(async () => undefined) };
+    const sender = makeSender(generator, delivery, {
+      eventFenceWindowMs: 10_000,
+      now: () => nowMs,
+    });
+    const request = makeRequest();
+    request.lease = { ...request.lease, expiresAtMs: 60_000 };
+
+    await sender.deliver(request);
+    nowMs = 60_001;
+    const afterLeaseExpiry = await sender.deliver(request);
+    expect(afterLeaseExpiry.detail).toBe('duplicate_event_suppressed');
+    expect(delivery.send).toHaveBeenCalledTimes(1);
+
+    nowMs = 70_001;
+    const afterRetention = await sender.deliver(request);
+    expect(afterRetention.outcome).toBe('delivered');
+    expect(afterRetention.detail).toBeUndefined();
+    expect(delivery.send).toHaveBeenCalledTimes(2);
   });
 
   it('expires fence entries after the retention window', async () => {

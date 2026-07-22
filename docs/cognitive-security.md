@@ -413,14 +413,75 @@ Structural rules (never configurable):
 
 Content reaching a gated sink **without** an envelope (legacy paths that
 predate stamping) resolves per the sink's explicit `unscreened` policy
-default. The seed keeps the six pre-existing sinks at `allow` as a deliberate
-rollout posture (see Known Gaps), while the new prompt-bearing `skill_write`
-sink is explicitly `deny`; there is no implicit default, and the owner-file
-validator requires every sink to map one.
+default. There is no implicit default, and the owner-file validator requires
+every sink to map one. The full per-sink posture decision, its justifications,
+and the enforce-mode wiring caveats are in
+[Per-sink `unscreened` posture (qg13)](#per-sink-unscreened-posture-qg13)
+below.
 
 Mode semantics mirror screening: `shadow` evaluates and audits every gate but
 always allows; `enforce` honors verdicts fail-closed; `off` constructs no
 gate at all.
+
+<!-- BEGIN qg13: per-sink unscreened posture (owned by qg13; keep self-contained) -->
+### Per-sink `unscreened` posture (qg13)
+
+The `unscreened` default decides what happens when content reaches a gated
+sink **with no covering envelope** (`envelopes: []`). It only bites in
+`enforce` mode — `shadow` always allows regardless. The audit set the posture
+per sink with a fail-closed bias: a sink stays `allow` only with a stated
+justification.
+
+| Sink | Old | New | Justification |
+| --- | --- | --- | --- |
+| `skill_write` | `deny` | `deny` (unchanged) | Durable, prompt-bearing, self-authored: managed skill text becomes part of the model's own instruction surface. Already canonical; now schema-forced. Its call site (`screenSkillWrite`) already screens the proposed content + attaches active-turn envelopes, so legitimate writes carry an envelope and pass; `deny` bites only when screening is unavailable. |
+| `persona_mutation` | `allow` | **`deny`** | Durable, prompt-bearing, self-authored: identity/persona layers *are* the prompt. Parity with `skill_write` — "you do not write a skill that namshubs yourself." Schema-forced. **Enforce-mode caveat below.** |
+| `wiki_write` | `allow` | **`deny`** | Durable, prompt-bearing, self-authored: wiki knowledge is retrievable back into context. Parity with `skill_write`. Schema-forced. **Enforce-mode caveat below.** |
+| `trust_mutation` | `allow` | **`deny`** | Security-sensitive: trust drives a contact's effective source-risk tier, which drives screening leniency (trust-grooming is a named attack). Fail closed by default. **Not** schema-forced — not prompt-bearing, so an operator may set `allow` with a justification. **Enforce-mode caveat below.** |
+| `prompt_assembly` | `allow` | `allow` (justified) | The inform boundary (`maxSourceRiskTier: hostile` — all tiers may inform). Unenveloped content here is trusted-origin system/operator/character context that has no intake envelope by nature; external content already arrives enveloped and tier/label-gated. Denying unscreened would break core turn assembly on every turn without external content. |
+| `memory_write` | `allow` | `allow` (justified) | Fed by external-derived facts (enveloped + quarantine-label-gated) **and** self-authored reflection/heartbeat memory (no external envelope, legitimate, high-volume). Denying unscreened would block the companion's own memory formation; slow self-poisoning is covered by the drift lanes (htm9.14/.15), not by blocking unenveloped writes. |
+| `tool_egress` | `allow` | `allow` (justified) | The egress control here is the **trifecta assessment** (`assessEgressTrifecta`), a separate mechanism, not the `unscreened` default. Unenveloped tool calls are the norm; `denyRiskLabels` (`exfil/canary_leak`) gate enveloped content. Denying unscreened would block all tool egress. |
+
+Schema invariant: `skill_write`, `persona_mutation`, and `wiki_write` are the
+durable prompt-bearing self-authored sinks
+(`INTAKE_UNSCREENED_DENY_REQUIRED_SINKS` in `intake-policy-config.ts`); the
+owner-file validator **rejects** any value other than `deny` for them (no
+operator override). `trust_mutation` defaults to `deny` in the seed but stays
+operator-tunable.
+
+**Enforce-mode wiring caveat (open seam).** The `persona_mutation`,
+`wiki_write`, and `trust_mutation` gate call sites currently evaluate with an
+**empty** envelope list (agent-authored params; no screening pipeline
+attached — `src/core/identity/prompt-tools.ts`, `src/faculties/wiki/tools.ts`,
+`src/core/contacts/tools.ts`). Consequently, under `deny` an **enforce-mode**
+self-authored persona/wiki/trust write is **held** (soft htm9.12 notice), not
+screen-then-allowed the way `skill_write` is. This is fail-closed and inert
+while the firewall runs in `shadow` (the current live mode), but before
+enabling `enforce` an operator/dev must either (a) wire those call sites to
+attach the active-turn envelopes + screen the proposed content (mirror
+`screenSkillWrite`) so legitimate self-authored writes carry an envelope and
+pass, or (b) accept that these self-modification surfaces are held for operator
+review in `enforce`. Tracked as a follow-up seam; not closed by qg13.
+
+**Live verification steps (operator — the deployed `system-data` owner JSON is
+not visible from the repo).** On the live system:
+
+1. Open the deployed `system-data/intake-policy.json` (or the Garden Firewall
+   page) and read `sinkGates.sinks.<sink>.unscreened` for all seven sinks.
+   Expected: `persona_mutation`, `wiki_write`, `trust_mutation`, `skill_write`
+   = `deny`; `prompt_assembly`, `memory_write`, `tool_egress` = `allow`.
+2. If the live owner still shows any of `persona_mutation` / `wiki_write` /
+   `trust_mutation` at `allow`, flip them to `deny` (the schema now rejects
+   `allow` for the first three at load, so an un-migrated owner will fail
+   startup — a fail-closed prompt to fix it, not a silent pass).
+3. Confirm `mode`. While `shadow`, none of this changes behavior. Before
+   flipping to `enforce`, resolve the wiring caveat above.
+4. Enforce-mode behavior check (once wired): drive an unscreened write at each
+   `deny` sink (a persona/identity mutation, a wiki write, a `set_trust`) and
+   confirm it is held with the soft withheld notice, and that an audit
+   `sink_access` deny event is recorded on the Garden Cognitive Security page.
+<!-- END qg13 -->
+
 
 ### Capability tiers vs. the intake firewall (an52.1)
 
@@ -797,9 +858,12 @@ Seed values: `prompt_assembly`, `memory_write`, `wiki_write`, and
 persona/policy-mutation, and poisoning labels; `persona_mutation`/
 `trust_mutation` deny their mutation list plus `injection/invisible_text`;
 `tool_egress` denies `exfil/canary_leak`; `prompt_assembly` denies none
-(state-machine rules already hide quarantined content). The six pre-existing
-sinks retain an `allow` unscreened rollout posture; `skill_write` is
-explicitly `deny`.
+(state-machine rules already hide quarantined content). Unscreened posture:
+`skill_write`, `persona_mutation`, `wiki_write`, and `trust_mutation` map
+`deny`; `prompt_assembly`, `memory_write`, and `tool_egress` stay `allow` —
+see [Per-sink `unscreened` posture (qg13)](#per-sink-unscreened-posture-qg13)
+for the full decision table and the enforce-mode wiring caveat. The validator
+schema-forces `deny` for `skill_write`/`persona_mutation`/`wiki_write`.
 
 | Knob | Seed default | What it does |
 | --- | --- | --- |
@@ -935,12 +999,19 @@ Documented deliberately; do not let the layer diagram imply otherwise.
   the envelope state machine, the audit trail, and the flywheel — but there
   is no path that re-delivers the released content into the companion's
   conversation. Today the operator relays it out of band.
-- **The six legacy unscreened sink defaults are `allow` in the seed.** Paths
-  that predate envelope stamping pass those sink gates in enforce mode until
-  each sink's `unscreened` default is flipped to `deny`. This is an explicit
-  rollout posture knob, not an oversight. `skill_write` is excluded from this
-  gap: its seed default is `deny`, and managed writes receive a new strict
-  screening envelope before the gate evaluates active-turn provenance.
+- **`persona_mutation` / `wiki_write` / `trust_mutation` fail closed but are
+  not yet screen-then-allow wired (qg13).** Their seed `unscreened` default is
+  now `deny` (the first two are schema-forced), so an unenveloped write is
+  *held* in enforce mode. But their gate call sites still evaluate with an
+  empty envelope list, so — unlike `skill_write`, which screens its proposed
+  content and attaches active-turn envelopes — a *legitimate* self-authored
+  persona/wiki/trust write is also held rather than screened-and-passed. Inert
+  in `shadow` (current live mode); before enabling `enforce`, wire those call
+  sites (mirror `screenSkillWrite`) or accept the held-for-review posture. See
+  [Per-sink `unscreened` posture (qg13)](#per-sink-unscreened-posture-qg13).
+  `prompt_assembly`, `memory_write`, and `tool_egress` remain `allow` with
+  stated justifications (inform boundary; self-authored memory; trifecta is the
+  egress control).
 - **L1 is fail-open-advisory by design.** A scanner exception is recorded
   and visible but does not hold the item; the structural guarantees live in
   the envelope states and sink gates, not in L1.

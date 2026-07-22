@@ -504,12 +504,43 @@ export function isIntakeTrifectaEnforcement(value: unknown): value is IntakeTrif
  * never drive that sink (state-mutation sinks cap lower than inform sinks).
  * `denyRiskLabels` refuses specific screening findings at this sink even for
  * released content. `unscreened` is the explicit enforce-mode default for
- * non-enveloped content.
+ * non-enveloped content — required to be `'deny'` for the durable
+ * prompt-bearing self-authored sinks (see INTAKE_UNSCREENED_DENY_REQUIRED_SINKS).
  */
 export interface IntakeSinkRuleConfig {
   maxSourceRiskTier: IntakeSourceRiskTier;
   denyRiskLabels: IntakeRiskLabel[];
   unscreened: IntakeUnscreenedSinkAction;
+}
+
+/**
+ * Durable, prompt-bearing, self-authored write sinks (qg13). Content written
+ * through these becomes part of the model's OWN future instruction surface —
+ * managed skills, identity/persona layers, and retrievable wiki knowledge — so
+ * an UNSCREENED (non-enveloped) write must never fail open. The owner file is
+ * REQUIRED to map `unscreened: 'deny'` for each of these; `allow` is rejected
+ * at validation with no operator override. This codifies parity with the
+ * canonical skill_write rule and blocks owner drift back to a fail-open posture
+ * ("you do not write a skill that namshubs yourself").
+ *
+ * NOTE (enforce-mode wiring seam): the identity and wiki tool call sites
+ * currently evaluate this gate with an EMPTY envelope list (agent-authored
+ * params, no screening pipeline attached), so under `deny` an enforce-mode
+ * self-authored persona/wiki write is HELD (soft htm9.12 notice), not screened.
+ * Reaching skill_write's screen-then-allow behavior for these two sinks
+ * requires attaching the active-turn envelopes + screening the proposed content
+ * at those call sites (mirrors `screenSkillWrite` in faculties/skills/tools.ts).
+ * That call-site work is a separate seam; the fail-closed owner posture lands
+ * here first and is inert while the firewall runs in `shadow`.
+ */
+export const INTAKE_UNSCREENED_DENY_REQUIRED_SINKS: readonly IntakeSink[] = [
+  'skill_write',
+  'persona_mutation',
+  'wiki_write',
+];
+
+export function isIntakeUnscreenedDenyRequiredSink(sink: IntakeSink): boolean {
+  return INTAKE_UNSCREENED_DENY_REQUIRED_SINKS.includes(sink);
 }
 
 /**
@@ -1031,6 +1062,15 @@ function validateSinkGates(raw: unknown, sourcePath: string): IntakeSinkGatesPol
       throw invalid(sourcePath, `sinkGates.sinks.${sink} is required (every consequential sink must be mapped)`);
     }
     sinks[sink] = validateSinkRule(rule, sourcePath, `sinkGates.sinks.${sink}`);
+    // Fail-closed invariant (qg13): durable prompt-bearing self-authored sinks
+    // may never fail open on unscreened content. No operator override.
+    if (isIntakeUnscreenedDenyRequiredSink(sink) && sinks[sink].unscreened !== 'deny') {
+      throw invalid(
+        sourcePath,
+        `sinkGates.sinks.${sink}.unscreened must be 'deny' `
+        + '(durable prompt-bearing self-authored sink; fail closed, no operator override — qg13)',
+      );
+    }
   }
   if (!isRecord(raw.trifecta)) {
     throw invalid(sourcePath, 'sinkGates.trifecta must be an object');

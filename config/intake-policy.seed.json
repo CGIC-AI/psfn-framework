@@ -116,7 +116,7 @@
           "poisoning/trust_grooming",
           "poisoning/source_drift"
         ],
-        "unscreened": "allow"
+        "unscreened": "deny"
       },
       "skill_write": {
         "maxSourceRiskTier": "untrusted",
@@ -158,7 +158,7 @@
           "poisoning/trust_grooming",
           "poisoning/source_drift"
         ],
-        "unscreened": "allow"
+        "unscreened": "deny"
       },
       "trust_mutation": {
         "maxSourceRiskTier": "standard",
@@ -177,7 +177,7 @@
           "poisoning/trust_grooming",
           "poisoning/source_drift"
         ],
-        "unscreened": "allow"
+        "unscreened": "deny"
       },
       "tool_egress": {
         "maxSourceRiskTier": "hostile",

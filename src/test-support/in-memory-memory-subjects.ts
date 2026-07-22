@@ -1,5 +1,6 @@
 import {
   MEMORY_SUBJECT_CLASSIFIER_VERSION,
+  MemorySubjectAuthorizationDeniedError,
   parseMemorySubjectQueryAuthorization,
   type MemorySubjectClassification,
   type MemorySubjectQueryAuthorization,
@@ -235,7 +236,7 @@ export async function mutateInMemoryAuthorizedSubjects(
         || memory.supersededBy
         || !isAuthorized(memory, authorization)
       ) {
-        throw new Error('Memory subject authorization denied');
+        throw new MemorySubjectAuthorizationDeniedError();
       }
     }
     for (const memoryId of memoryIds) {
@@ -250,12 +251,12 @@ export async function persistInMemoryAuthorizedSubject(
   input: MemorySubjectAuthorizedWrite,
 ): Promise<void> {
   if (input.authorization.action !== 'bulk_mutation' || !isAuthorized(input.memory, input.authorization)) {
-    throw new Error('Memory subject authorization denied');
+    throw new MemorySubjectAuthorizationDeniedError();
   }
   for (const memoryId of input.supersededMemoryIds ?? []) {
     const memory = await store.getById(memoryId);
     if (!memory || !isAuthorized(memory, input.authorization)) {
-      throw new Error('Memory subject authorization denied');
+      throw new MemorySubjectAuthorizationDeniedError();
     }
   }
   await store.persistMemoryWrite({

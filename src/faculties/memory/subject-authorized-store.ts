@@ -157,9 +157,103 @@ function emptyAdminResult(
 }
 
 /**
+ * Default-deny policy classification for every {@link MemoryStorePort} member
+ * (a27w.6). This `Record<keyof MemoryStorePort, …>` is the exhaustiveness gate:
+ * adding a method to `MemoryStorePort` fails to compile until it is classified
+ * here, so a new backend method can never silently inherit raw (unauthorized)
+ * behavior through the proxy — the 5ixyj-class footgun.
+ *
+ * - `authorized`: has an explicit subject-authorization projection or denial in
+ *   the proxy `get` trap below.
+ * - `pass-through-safe`: forwards to the raw store because it exposes no
+ *   contact-subject rows (each entry documents why it is safe).
+ *
+ * At runtime the trap consults this map: only `pass-through-safe` methods reach
+ * the raw store; anything else that resolves to a callable is refused loudly.
+ */
+export type SubjectProxyMethodPolicy = 'authorized' | 'pass-through-safe';
+
+export const MEMORY_STORE_METHOD_POLICY: Record<keyof MemoryStorePort, SubjectProxyMethodPolicy> = {
+  // --- authorized: explicit projection / denial in the proxy trap below ---
+  insertMemory: 'authorized',
+  persistMemoryWrite: 'authorized',
+  searchByEmbedding: 'authorized',
+  searchByText: 'authorized',
+  updateMemory: 'authorized',
+  recordPatchEvent: 'authorized',
+  getAllActiveMemories: 'authorized',
+  listMemories: 'authorized',
+  listActiveMemories: 'authorized',
+  listAdminMemories: 'authorized',
+  getAdminMemoryPrivacySummary: 'authorized',
+  countActiveMemories: 'authorized',
+  getById: 'authorized',
+  getByIds: 'authorized',
+  softDeleteMemory: 'authorized',
+  undoSoftDelete: 'authorized',
+  getDeleteVersion: 'authorized',
+  recordAbstractionLink: 'authorized',
+  getAbstractionLinksForSourceMemory: 'authorized',
+  getAbstractionLinksForAbstractedMemory: 'authorized',
+  recordEvolutionLink: 'authorized',
+  getEvolutionLinksForSourceMemory: 'authorized',
+  getEvolutionLinksForTargetMemory: 'authorized',
+  getStats: 'authorized',
+  getMemoriesByChannel: 'authorized',
+  getMemoriesByContact: 'authorized',
+  linkMemories: 'authorized',
+  unlinkMemories: 'authorized',
+  getLinkedMemories: 'authorized',
+  bulkDelete: 'authorized',
+  bulkUpdate: 'authorized',
+  bulkUpdateSalience: 'authorized',
+  upsertContactProfile: 'authorized',
+  getContactProfile: 'authorized',
+  listContactProfiles: 'authorized',
+  upsertMemoryMaintenanceReview: 'authorized',
+  listMemoryMaintenanceReviews: 'authorized',
+  getMemoryMaintenanceReview: 'authorized',
+  getMemoryMaintenanceDiagnostics: 'authorized',
+  listActiveMemoryEmbeddingsSince: 'authorized',
+  queryAuthorizedMemorySubjects: 'authorized',
+  aggregateAuthorizedMemorySubjects: 'authorized',
+  mutateAuthorizedMemorySubjects: 'authorized',
+  persistAuthorizedMemoryWrite: 'authorized',
+  softDeleteAuthorizedMemorySubject: 'authorized',
+  undoAuthorizedMemorySubjectDelete: 'authorized',
+  getMemorySubjectClassification: 'authorized',
+  backfillMemorySubjectClassifications: 'authorized',
+  // --- pass-through-safe: exposes no contact-subject rows ---
+  // Process-local monotonic counters (retrieval-cache / salience-decay
+  // invalidation signals). They carry no memory content and are feature-detected
+  // by their consumers; the bead requires the retrieval-cache getter keep working.
+  getSalienceMaintenanceRevision: 'pass-through-safe',
+  getRetrievalCorpusVersion: 'pass-through-safe',
+  // Capability-free transaction boundary. Used by MemoryWriter.patch/patchMemory
+  // through the subject store (memory tool action=patch). The operations inside
+  // the handler run through this same authorized proxy (e.g. updateMemory ->
+  // mutateAuthorizedMemorySubjects), so wrapping them in a DB transaction adds
+  // atomicity without granting any unauthorized read or write.
+  runInTransaction: 'pass-through-safe',
+  // Companion-owned working scratchpad (ScratchpadProvider). Distinct ownership
+  // contract from contact-subject memories: entries are process/companion-local
+  // notes keyed by entry id, never per-contact subject rows, and the scratchpad
+  // tool operates on this same store. No subject predicate applies.
+  addScratchpadEntry: 'pass-through-safe',
+  replaceScratchpadEntry: 'pass-through-safe',
+  appendScratchpadEntry: 'pass-through-safe',
+  removeScratchpadEntry: 'pass-through-safe',
+  getScratchpadEntry: 'pass-through-safe',
+  listScratchpadEntries: 'pass-through-safe',
+};
+
+/**
  * Project the broad maintenance store into a subject-scoped product store.
  * Named reads and mutations at every sensitivity never fall back to the
- * hydrated/raw methods.
+ * hydrated/raw methods. The proxy is DEFAULT-DENY (a27w.6): a MemoryStorePort
+ * method without an explicit projection here — or a future/unclassified method —
+ * is refused at the proxy boundary rather than silently forwarded to the raw
+ * store. See {@link MEMORY_STORE_METHOD_POLICY}.
  */
 export function createSubjectAuthorizedMemoryStore(
   store: MemoryStorePort,
@@ -682,8 +776,45 @@ export function createSubjectAuthorizedMemoryStore(
       if (property === 'backfillMemorySubjectClassifications') {
         return async () => deniedMutation();
       }
+      if (property === 'recordPatchEvent') {
+        // Audit patch-event write. Reachable only through the subject-backed
+        // MemoryWriter.patchMemory path (memory tool action=patch), which first
+        // proves the target memory via an authorized getById before this runs.
+        // Fail closed: an unsubjected caller cannot append patch events.
+        return async (event: Parameters<MemoryStorePort['recordPatchEvent']>[0]) => {
+          if (!normalizedSubject(currentContext())) deniedMutation();
+          await target.recordPatchEvent(event);
+        };
+      }
+      // --- DEFAULT-DENY boundary (a27w.6) ---
+      // Every MemoryStorePort member is classified in MEMORY_STORE_METHOD_POLICY;
+      // authorized ones returned above. A symbol key is a JS-internal
+      // (then / toStringTag / util.inspect), never a port method — pass it through.
+      if (typeof property === 'symbol') {
+        return Reflect.get(target, property, target) as unknown;
+      }
+      if (MEMORY_STORE_METHOD_POLICY[property as keyof MemoryStorePort] === 'pass-through-safe') {
+        const value = Reflect.get(target, property, target) as unknown;
+        return typeof value === 'function' ? value.bind(target) : value;
+      }
       const value = Reflect.get(target, property, target) as unknown;
-      return typeof value === 'function' ? value.bind(target) : value;
+      if (typeof value === 'function') {
+        // A callable on the raw store with no subject-authorization projection: a
+        // newly added / unclassified MemoryStorePort method (or a denial) lands
+        // here and fails closed instead of silently forwarding. Loud + greppable.
+        return (): never => {
+          throw new Error(
+            'subject-authorized-memory-proxy default-deny: refusing unauthorized/unhandled '
+            + `MemoryStorePort method "${String(property)}" — it has no subject-authorization `
+            + 'projection. Add an explicit handler and classify it in '
+            + 'MEMORY_STORE_METHOD_POLICY before use (fail closed).',
+          );
+        };
+      }
+      // Non-callable, unclassified key (JS internals like `constructor`, or an
+      // absent property resolving to undefined). The port exposes no subject data
+      // as a bare value property, so returning it cannot disclose a memory.
+      return value;
     },
   });
 }

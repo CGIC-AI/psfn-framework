@@ -60,6 +60,7 @@ function actionMatchesSelector(input: MemorySubjectAuthorizedQuery): boolean {
     case 'list':
       return ['list', 'snippet', 'export', 'prompt_preview'].includes(action);
     case 'detail':
+    case 'details_batch':
       return ['detail', 'snippet', 'export', 'prompt_preview'].includes(action);
     case 'text_search':
       return ['search', 'snippet', 'export', 'prompt_preview'].includes(action);
@@ -169,6 +170,17 @@ export async function queryInMemoryAuthorizedSubjects(
     return {
       memories: memory ? [{ ...memory, similarity: 1 }] : [],
       total: memory ? 1 : 0,
+    };
+  }
+
+  if (selector.kind === 'details_batch') {
+    const requested = new Set(
+      selector.memoryIds.map(id => id.trim()).filter(Boolean),
+    );
+    const matches = authorized.filter(memory => requested.has(memory.id));
+    return {
+      memories: matches.map(memory => ({ ...memory, similarity: 1 })),
+      total: matches.length,
     };
   }
 

@@ -221,6 +221,18 @@ class InMemoryMemoryStorePort implements MemoryStorePort {
     return memory ? { ...memory } : undefined;
   }
 
+  getByIds(ids: readonly string[]): PurrMemory[] {
+    const seen = new Set<string>();
+    const result: PurrMemory[] = [];
+    for (const id of ids) {
+      if (seen.has(id)) continue;
+      seen.add(id);
+      const memory = this.memories.get(id);
+      if (memory) result.push({ ...memory });
+    }
+    return result;
+  }
+
   softDeleteMemory(id: string, options: MemorySoftDeleteOptions = {}): MemoryDeleteVersion | null {
     const memory = this.memories.get(id);
     if (!memory || memory.deletedAt) return null;

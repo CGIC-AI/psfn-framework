@@ -1169,6 +1169,21 @@ class PostgresMemoryStore implements MemoryStorePort {
     return this.memories.get(id);
   }
 
+  async getByIds(ids: readonly string[]): Promise<PurrMemory[]> {
+    // Batch counterpart to getById over the hydrated snapshot: deduplicated,
+    // first-seen input order, misses dropped. Identical result set to calling
+    // getById per id, only without the per-id iteration overhead.
+    const seen = new Set<string>();
+    const result: PurrMemory[] = [];
+    for (const id of ids) {
+      if (seen.has(id)) continue;
+      seen.add(id);
+      const memory = this.memories.get(id);
+      if (memory) result.push(memory);
+    }
+    return result;
+  }
+
   async queryAuthorizedMemorySubjects(
     input: MemorySubjectAuthorizedQuery,
   ): Promise<MemorySubjectAuthorizedQueryResult> {

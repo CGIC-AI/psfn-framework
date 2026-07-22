@@ -8,6 +8,7 @@ import {
   ADMIN_DURABLE_MEMORY_TAGS,
   ADMIN_PREFERENCE_MEMORY_TAGS,
 } from './postgres-store/admin.js';
+import { MEMORY_SUBJECT_DETAILS_BATCH_MAX } from './postgres-store/subject-queries.js';
 import type {
   MemoryAdminListOptions,
   MemoryAdminPrivacySummary,
@@ -335,6 +336,37 @@ export function createSubjectAuthorizedMemoryStore(
           })).memories[0];
         };
       }
+      if (property === 'getByIds') {
+        return async (ids: readonly string[]) => {
+          const auth = authorization(currentContext(), 'detail');
+          if (!auth) return [];
+          const normalized = [...new Set(
+            ids.map(id => id.trim()).filter(Boolean),
+          )];
+          if (normalized.length === 0) return [];
+          // Resolve the authorized subset in bounded batches. Each batch routes
+          // through the same hard-WHERE authorization primitive as getById, so a
+          // memory the caller is not authorized for is excluded identically —
+          // batching never widens access. A batch query failure propagates (no
+          // fallback to raw/unauthorized reads): fail closed.
+          const authorizedById = new Map<string, PurrMemory>();
+          for (let start = 0; start < normalized.length; start += MEMORY_SUBJECT_DETAILS_BATCH_MAX) {
+            const chunk = normalized.slice(start, start + MEMORY_SUBJECT_DETAILS_BATCH_MAX);
+            const page = await target.queryAuthorizedMemorySubjects({
+              authorization: auth,
+              selector: { kind: 'details_batch', memoryIds: chunk },
+            });
+            for (const memory of page.memories) authorizedById.set(memory.id, memory);
+          }
+          // Preserve the caller's requested order; misses are silently absent.
+          const result: PurrMemory[] = [];
+          for (const id of normalized) {
+            const memory = authorizedById.get(id);
+            if (memory) result.push(memory);
+          }
+          return result;
+        };
+      }
       if (property === 'getAllActiveMemories') {
         return async (limit = 10_000) => (await listAllAuthorized(target, currentContext())).slice(0, limit);
       }
@@ -496,23 +528,11 @@ export function createSubjectAuthorizedMemoryStore(
           const method = Reflect.get(target, property, target) as (...methodArgs: unknown[]) => unknown;
           const links = await method.apply(target, args);
           if (!Array.isArray(links)) return [];
-          const authorizedById = new Map<string, boolean>([[sourceMemoryId, true]]);
-          const authorizeId = async (memoryId: string): Promise<boolean> => {
-            const normalizedId = memoryId.trim();
-            if (!normalizedId) return false;
-            const cached = authorizedById.get(normalizedId);
-            if (cached !== undefined) return cached;
-            const selected = await target.queryAuthorizedMemorySubjects({
-              authorization: auth,
-              selector: { kind: 'detail', memoryId: normalizedId },
-            });
-            const allowed = selected.total === 1;
-            authorizedById.set(normalizedId, allowed);
-            return allowed;
-          };
-          const visible: unknown[] = [];
-          for (const link of links) {
-            if (!link || typeof link !== 'object') continue;
+          // Normalize each link's referenced endpoints once, then authorize every
+          // distinct endpoint across all links in bounded batches instead of one
+          // detail query per endpoint. The source is already proven authorized.
+          const linkReferencedIds = links.map(link => {
+            if (!link || typeof link !== 'object') return undefined;
             const row = link as Record<string, unknown>;
             const referencedIds = [
               row.id1,
@@ -520,10 +540,29 @@ export function createSubjectAuthorizedMemoryStore(
               row.sourceMemoryId,
               row.targetMemoryId,
               row.abstractedMemoryId,
-            ].filter((value): value is string => typeof value === 'string');
-            if (referencedIds.length === 0) continue;
-            const decisions = await Promise.all(referencedIds.map(authorizeId));
-            if (decisions.every(Boolean)) visible.push(link);
+            ]
+              .filter((value): value is string => typeof value === 'string')
+              .map(value => value.trim())
+              .filter(Boolean);
+            return referencedIds.length === 0 ? undefined : referencedIds;
+          });
+          const idsToAuthorize = [...new Set(
+            linkReferencedIds.flatMap(ids => ids ?? []).filter(id => id !== sourceMemoryId),
+          )];
+          const authorizedIds = new Set<string>([sourceMemoryId]);
+          for (let start = 0; start < idsToAuthorize.length; start += MEMORY_SUBJECT_DETAILS_BATCH_MAX) {
+            const chunk = idsToAuthorize.slice(start, start + MEMORY_SUBJECT_DETAILS_BATCH_MAX);
+            const page = await target.queryAuthorizedMemorySubjects({
+              authorization: auth,
+              selector: { kind: 'details_batch', memoryIds: chunk },
+            });
+            for (const memory of page.memories) authorizedIds.add(memory.id);
+          }
+          const visible: unknown[] = [];
+          for (let index = 0; index < links.length; index++) {
+            const referencedIds = linkReferencedIds[index];
+            if (!referencedIds) continue;
+            if (referencedIds.every(id => authorizedIds.has(id))) visible.push(links[index]);
           }
           return visible;
         };

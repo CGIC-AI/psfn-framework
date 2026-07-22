@@ -27,6 +27,7 @@ import type { ChannelPrivacyLevel, Contact, SocialGraphEntity } from '../../../c
 import type { MemoryStorePort } from '../memory-store-port.js';
 import type { PurrMemory } from '../types.js';
 import { isInternalMemoryArtifact } from '../internal-artifacts.js';
+import { resolveMemoriesByIds } from './memory-batch.js';
 import { clamp } from './scoring.js';
 import {
   evaluateRetrievalAccessDecision,
@@ -76,7 +77,8 @@ export interface SharedBackgroundCandidate {
 
 /** Narrow port surface consumed by shared-background collection (read-only). */
 export interface SharedBackgroundDeps {
-  memoryStore: Pick<MemoryStorePort, 'getById' | 'listMemories'>;
+  memoryStore: Pick<MemoryStorePort, 'getById' | 'listMemories'>
+    & Partial<Pick<MemoryStorePort, 'getByIds'>>;
   contactStore: {
     getById(contactId: string): PromiseLike<Contact | undefined> | Contact | undefined;
     getSocialGraphEntityByContactId(
@@ -303,9 +305,10 @@ export async function collectSharedBackgroundUnion(
         }
       }
     }
-    for (const id of evidenceIds) {
-      const memory = await deps.memoryStore.getById(id);
-      if (!memory || memory.deletedAt !== undefined) continue;
+    // Resolve all edge-evidence memories in one authorized batch instead of one
+    // sequential detail query per evidence id.
+    for (const memory of await resolveMemoriesByIds(deps.memoryStore, [...evidenceIds])) {
+      if (memory.deletedAt !== undefined) continue;
       addSource(memory, 'edge_evidence');
     }
   }

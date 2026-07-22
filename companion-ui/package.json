@@ -13,7 +13,8 @@
     "test:browser": "playwright test --config playwright.config.ts",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "sprites:generate": "esbuild scripts/generate-sprite-sheets.ts --bundle --platform=node --format=esm --outfile=node_modules/.cache/generate-sprite-sheets.mjs && node node_modules/.cache/generate-sprite-sheets.mjs"
   },
   "devDependencies": {
     "@playwright/test": "1.61.1",

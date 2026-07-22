@@ -819,6 +819,22 @@ button:focus-visible {
   right: 3px;
 }
 
+.sprite-image {
+  position: relative;
+  margin-bottom: 19px;
+  background-repeat: no-repeat;
+  image-rendering: pixelated;
+  filter: drop-shadow(0 10px 18px rgba(72, 52, 24, 0.18));
+}
+
+.companion-sprite.animated .sprite-image {
+  animation: breathe 3.6s ease-in-out infinite;
+}
+
+.companion-sprite.petted .sprite-image {
+  transform: translateY(2px) scale(1.04);
+}
+
 .sprite-face {
   position: relative;
   width: 74px;

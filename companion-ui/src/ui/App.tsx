@@ -36,6 +36,7 @@ import {
 } from '../lib/stream/hub-stream.js';
 import { deriveOperationalTraces } from '../lib/traces.js';
 import { HeadpatCoalescer } from '../lib/touch-interactions.js';
+import { useSpriteManifest } from '../lib/sprites/use-sprite-manifest.js';
 import { ActivityDrawer, traceMatchesFilter } from './activity-drawer.js';
 import { CompanionSelectorPage } from './companion-selector.js';
 import { CompanionSprite, deriveSpriteState } from './companion-sprite.js';
@@ -75,6 +76,7 @@ export function App() {
   const [touchError, setTouchError] = useState<string | null>(null);
   const [now, setNow] = useState(() => Date.now());
   const composer = useComposerController();
+  const spriteManifest = useSpriteManifest(spriteEnabled);
   const updateReady = useSyncExternalStore(
     subscribeToServiceWorkerUpdates,
     getServiceWorkerUpdateReady,
@@ -450,7 +452,15 @@ export function App() {
           : undefined}
       />
       {spriteEnabled && (
-        <CompanionSprite state={spriteState} animated={spriteAnimations} label={identityLabel} onHeadpat={giveHeadpat} petted={spritePetted} />
+        <CompanionSprite
+          state={spriteState}
+          animated={spriteAnimations}
+          label={identityLabel}
+          onHeadpat={giveHeadpat}
+          petted={spritePetted}
+          manifest={spriteManifest.state === 'ready' ? spriteManifest.manifest : null}
+          touch={spritePetted ? 'headpat-happy' : null}
+        />
       )}
       <ToastLayer
         approvals={approvals}

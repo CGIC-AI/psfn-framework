@@ -108,6 +108,47 @@ WebSocket, query-bearing, credential-header, and no-store request traffic stays
 on the browser network. Online shell responses are never written to Cache
 Storage; offline mode serves only the build-time unauthenticated shell.
 
+## Emotion Sprite Sheets
+
+The floating companion sprite can render packed sprite-sheet art driven by the
+runtime state model, falling back to the built-in CSS face whenever the sprite
+manifest is missing or malformed (fail-visible, never blank).
+
+- **Taxonomy** (`src/lib/sprites/taxonomy.ts`): the frozen id space — 16
+  emotional bases x 2 crops (mini head / full-body avatar), 7 tool-activity
+  domains x 3 phases (started/completed/failed), 3 touch reactions. This is the
+  single source of truth shared by the generator, the manifest, the runtime
+  catalog, and the tests.
+- **Manifest** (`src/lib/sprites/manifest.ts`): `buildSpriteManifest()` is pure
+  and deterministic and defines the consumer contract — sheets (grid geometry,
+  lazy flag), entries (frame indices, fps, loop), and provenance. The runtime
+  loads the serialized `public/sprites/manifest.json` and never regenerates it.
+- **Catalog** (`src/lib/sprites/catalog.ts`): `resolveSpriteEntryId()` maps a
+  runtime state to a manifest entry (priority: touch > tool > emotional base).
+  This is the seam sprite v2 (bead 7ang.3) extends once the redacted
+  `emotion.snapshot` and tool-domain signals land; the entry ids are
+  art-agnostic.
+
+### Placeholder art (current) and swapping in final art
+
+The committed sheets under `public/sprites/` are **programmatically generated
+placeholder art** — flat-coloured, labelled frames, one per manifest frame,
+with a `PLACEHOLDER` watermark and `placeholder: true` provenance on every sheet
+and entry in the manifest. Nothing ships pretending to be final art.
+
+Regenerate them with:
+
+```bash
+npm run sprites:generate
+```
+
+To swap in real art, replace each PNG in `public/sprites/` with a final sheet
+that honours the same grid (`cols` x `rows`, `frameSize`) and frame ordering
+from the manifest — the swap is file-for-file with no code change — then set
+`placeholder` to false where the manifest is built. Real art is produced offline
+via the Satellite-Hub fal.ai sprite pipeline (satellite-side, out of scope for
+this package); only the packed sheets and manifest are consumed here.
+
 ## In-Cluster Test Deployment
 
 For a browser-reachable test of this PWA against an in-cluster Satellite Hub,

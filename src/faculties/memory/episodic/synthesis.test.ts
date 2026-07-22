@@ -96,6 +96,43 @@ describe('EpisodicSynthesizer', () => {
     ]));
   });
 
+  it('births affect-empty episodes and routes machine emotion heuristics to the machineSignals sidecar (h4fp.6)', async () => {
+    const store = makeStore();
+    const sessionReader = {
+      getRecentMessages: () => [
+        // Keyword content that the old inferAffect turned into felt affect:
+        // "excited"/"love" (positive), "bug"/"frustrated" (concerned),
+        // "fix"/"debug" (focused), plus exclamation-driven arousal.
+        entry(1, '2026-04-01T10:00:00.000Z', 'user', 'I am so excited we love this! But there is a frustrating bug.'),
+        entry(2, '2026-04-01T10:02:00.000Z', 'assistant', 'I will debug and fix the atlas scheduler bug now!'),
+      ],
+    };
+    const synthesizer = new EpisodicSynthesizer(store, sessionReader);
+
+    const result = await synthesizer.run({ sessionId: 'terminal:daily' });
+
+    expect(result.createdEpisodes).toHaveLength(1);
+    const episode = result.createdEpisodes[0];
+
+    // Born affect-empty: no first-person felt-affect claim from machine keywords.
+    expect(episode.affect).toEqual({ labels: [] });
+    expect(episode.affect.valence).toBeUndefined();
+    expect(episode.affect.arousal).toBeUndefined();
+    expect(episode.meaning).toBeUndefined();
+
+    // Machine emotion context lives in the clearly machine-labeled sidecar.
+    expect(episode.schemaVersion).toBe(2);
+    expect(episode.machineSignals?.source).toBe('deterministic_synthesis');
+    expect(episode.machineSignals?.topicTags).toEqual(['concerned', 'focused', 'positive']);
+    expect(episode.machineSignals?.vad?.arousal).toBeGreaterThan(0);
+    expect(typeof episode.machineSignals?.vad?.valence).toBe('number');
+
+    // The persisted row round-trips through the store with the same shape.
+    const persisted = await store.getEpisode(episode.id);
+    expect(persisted?.affect).toEqual({ labels: [] });
+    expect(persisted?.machineSignals?.topicTags).toEqual(['concerned', 'focused', 'positive']);
+  });
+
   it('is idempotent for repeated rest runs over the same spans', async () => {
     const store = makeStore();
     const entries = [

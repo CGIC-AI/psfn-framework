@@ -2,6 +2,7 @@ import type {
   Episode,
   EpisodeArcWriteInput,
   EpisodeArtifactRef,
+  EpisodeMachineSignals,
   EpisodeSpanRef,
 } from '../../../../shared/contracts/episodic-memory.js';
 import type {
@@ -149,6 +150,29 @@ function mergeStringSets(left: readonly string[], right: readonly string[]): str
   return [...new Set([...left, ...right])].sort();
 }
 
+/**
+ * Union the machine-signals sidecars of two overlapping candidates (bead
+ * h4fp.6). Topic tags are unioned; the canonical episode's machine VAD estimate
+ * is preferred, falling back to the candidate's. These are machine retrieval
+ * hints, never the companion's felt affect.
+ */
+function mergeMachineSignals(
+  canonical: EpisodeMachineSignals | undefined,
+  candidate: EpisodeMachineSignals | undefined,
+): EpisodeMachineSignals {
+  const base = canonical ?? candidate;
+  if (!base) {
+    throw new Error('mergeMachineSignals requires at least one machine-signals sidecar');
+  }
+  const topicTags = mergeStringSets(canonical?.topicTags ?? [], candidate?.topicTags ?? []);
+  const vad = canonical?.vad ?? candidate?.vad;
+  return {
+    source: base.source,
+    topicTags,
+    ...(vad ? { vad } : {}),
+  };
+}
+
 function mergeByKey<T>(left: readonly T[], right: readonly T[], keyFor: (value: T) => string): T[] {
   const values = new Map<string, T>();
   for (const value of [...left, ...right]) {
@@ -179,11 +203,16 @@ export function mergeEpisodeWithCandidate(
         candidate.salience.emotionalIntensity ?? 0,
       ),
     },
+    // Affect is never fabricated on merge (bead h4fp.6): carry forward only
+    // affect the companion actually authored. An affect-empty candidate must
+    // not gain a machine-derived arousal:0 claim; VAD lives in machineSignals.
     affect: {
       ...canonical.affect,
-      arousal: Math.max(canonical.affect.arousal ?? 0, candidate.affect.arousal ?? 0),
       labels: mergeStringSets(canonical.affect.labels, candidate.affect.labels),
     },
+    ...(canonical.machineSignals || candidate.machineSignals
+      ? { machineSignals: mergeMachineSignals(canonical.machineSignals, candidate.machineSignals) }
+      : {}),
     themes: mergeStringSets(canonical.themes, candidate.themes),
     spanRefs: mergeByKey(canonical.spanRefs, candidate.spanRefs, ref => ref.spanId),
     artifactRefs: mergeByKey(canonical.artifactRefs, candidate.artifactRefs, ref => ref.artifactId),

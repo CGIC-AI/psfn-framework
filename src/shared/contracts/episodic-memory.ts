@@ -1,5 +1,25 @@
 import { isRecord } from '../utils/types.js';
-export const EPISODIC_CONTRACT_VERSION = 1 as const;
+
+/**
+ * Current write version. Bumped to 2 for the affect-authorship split
+ * (bead h4fp.6): synthesized episodes are born affect-empty and machine
+ * emotion heuristics move to the clearly machine-labeled `machineSignals`
+ * sidecar, which is permitted only at schemaVersion >= 2.
+ */
+export const EPISODIC_CONTRACT_VERSION = 2 as const;
+
+/** A schemaVersion the parser accepts on read. */
+export type EpisodeContractVersion = 1 | 2;
+
+/**
+ * Versions the parser accepts. Reads preserve the stored version verbatim —
+ * a v1 row stays v1 on read (no silent shape drift); only explicit migration
+ * (bead h4fp.7) upgrades a persisted episode.
+ */
+export const EPISODE_CONTRACT_SUPPORTED_VERSIONS: ReadonlySet<EpisodeContractVersion> = new Set<EpisodeContractVersion>([
+  1,
+  2,
+]);
 
 export const EPISODE_ARC_KINDS = [
   'continuation',
@@ -51,6 +71,30 @@ export interface EpisodeAffect {
   labels: string[];
 }
 
+/** Machine VAD estimate — a fallible heuristic signal, NOT felt affect. */
+export interface EpisodeMachineVad {
+  valence?: number;
+  arousal?: number;
+  dominance?: number;
+}
+
+/**
+ * Machine-derived signals attached to an episode as topic tags and retrieval
+ * hints — explicitly NOT the companion's felt affect. Deterministic
+ * segmentation and keyword/VAD heuristics produce these at synthesis time; the
+ * companion's own felt sense of an episode is authored separately, in prose, in
+ * the `meaning` field via the dream pass. Present only at schemaVersion >= 2
+ * (mirrors-and-letters.md "Episodes: candidates, not verdicts"; bead h4fp.6).
+ */
+export interface EpisodeMachineSignals {
+  /** What produced these signals, e.g. 'deterministic_synthesis'. */
+  source: string;
+  /** Keyword/segmentation-derived topic tags. Retrieval hints, never feelings. */
+  topicTags: string[];
+  /** Machine VAD estimate from fallible heuristics — a signal, not her felt state. */
+  vad?: EpisodeMachineVad;
+}
+
 /** The companion's own first-person take on what an episode meant to her. */
 export interface EpisodeMeaning {
   text: string;
@@ -59,7 +103,7 @@ export interface EpisodeMeaning {
 }
 
 export interface Episode {
-  schemaVersion: typeof EPISODIC_CONTRACT_VERSION;
+  schemaVersion: EpisodeContractVersion;
   id: string;
   title: string;
   landmark: string;
@@ -69,7 +113,14 @@ export interface Episode {
   channelId?: string;
   participantContactIds: string[];
   salience: EpisodeSalience;
+  /**
+   * The companion's felt affect. Born EMPTY (`{ labels: [] }`) from synthesis —
+   * machine heuristics never write felt affect here (they live in
+   * `machineSignals`). Populated only by the companion's own authorship.
+   */
   affect: EpisodeAffect;
+  /** Machine topic tags / retrieval hints. Never her felt affect. schemaVersion >= 2. */
+  machineSignals?: EpisodeMachineSignals;
   themes: string[];
   spanRefs: EpisodeSpanRef[];
   artifactRefs: EpisodeArtifactRef[];
@@ -80,7 +131,7 @@ export interface Episode {
 }
 
 export interface EpisodeArc {
-  schemaVersion: typeof EPISODIC_CONTRACT_VERSION;
+  schemaVersion: EpisodeContractVersion;
   id: string;
   sourceEpisodeId: string;
   targetEpisodeId: string;
@@ -108,6 +159,7 @@ const EPISODE_KEYS = new Set([
   'participantContactIds',
   'salience',
   'affect',
+  'machineSignals',
   'themes',
   'spanRefs',
   'artifactRefs',
@@ -117,6 +169,8 @@ const EPISODE_KEYS = new Set([
   'updatedAt',
 ]);
 const MEANING_KEYS = new Set(['text', 'recordedAt', 'source']);
+const MACHINE_SIGNALS_KEYS = new Set(['source', 'topicTags', 'vad']);
+const MACHINE_VAD_KEYS = new Set(['valence', 'arousal', 'dominance']);
 const MEANING_SOURCES = new Set(['companion_dream_pass', 'companion_direct']);
 const EPISODE_ARC_KEYS = new Set([
   'schemaVersion',
@@ -325,6 +379,41 @@ function parseAffect(value: unknown): EpisodeAffect {
   };
 }
 
+function parseSchemaVersion(value: unknown, label: string): EpisodeContractVersion {
+  if ((value === 1 || value === 2) && EPISODE_CONTRACT_SUPPORTED_VERSIONS.has(value)) {
+    return value;
+  }
+  throw new Error(`unsupported ${label} schemaVersion: ${String(value)}`);
+}
+
+function parseOptionalMachineVad(value: unknown): EpisodeMachineVad | undefined {
+  if (value === undefined) return undefined;
+  const record = parseRecord(value, 'episode.machineSignals.vad');
+  assertKnownKeys(record, MACHINE_VAD_KEYS, 'episode.machineSignals.vad');
+  const valence = parseOptionalSignedUnitInterval(record.valence, 'episode.machineSignals.vad.valence');
+  const arousal = parseOptionalUnitInterval(record.arousal, 'episode.machineSignals.vad.arousal');
+  const dominance = parseOptionalUnitInterval(record.dominance, 'episode.machineSignals.vad.dominance');
+  return {
+    ...(valence !== undefined ? { valence } : {}),
+    ...(arousal !== undefined ? { arousal } : {}),
+    ...(dominance !== undefined ? { dominance } : {}),
+  };
+}
+
+function parseOptionalMachineSignals(value: unknown): EpisodeMachineSignals | undefined {
+  if (value === undefined) return undefined;
+  const record = parseRecord(value, 'episode.machineSignals');
+  assertKnownKeys(record, MACHINE_SIGNALS_KEYS, 'episode.machineSignals');
+  const source = parseRequiredString(record.source, 'episode.machineSignals.source');
+  const topicTags = parseStringArray(record.topicTags, 'episode.machineSignals.topicTags');
+  const vad = parseOptionalMachineVad(record.vad);
+  return {
+    source,
+    topicTags,
+    ...(vad ? { vad } : {}),
+  };
+}
+
 function parseSpanRefs(value: unknown, field: string): EpisodeSpanRef[] {
   if (!Array.isArray(value)) {
     throw new Error(`${field} must be an array`);
@@ -349,8 +438,13 @@ function parseProvenanceRefs(value: unknown, field: string): EpisodeProvenanceRe
 export function parseEpisode(value: unknown): Episode {
   const record = parseRecord(value, 'episode');
   assertKnownKeys(record, EPISODE_KEYS, 'episode');
-  if (record.schemaVersion !== EPISODIC_CONTRACT_VERSION) {
-    throw new Error(`unsupported episode schemaVersion: ${String(record.schemaVersion)}`);
+  const schemaVersion = parseSchemaVersion(record.schemaVersion, 'episode');
+
+  const machineSignals = parseOptionalMachineSignals(record.machineSignals);
+  if (machineSignals && schemaVersion < 2) {
+    // Version gating (no silent shape drift): the machine-signals sidecar is a
+    // v2 field. A v1 record carrying it is malformed, not silently upgraded.
+    throw new Error('episode.machineSignals requires schemaVersion 2 or later');
   }
 
   const startedAt = parseIsoInstant(record.startedAt, 'episode.startedAt');
@@ -369,7 +463,7 @@ export function parseEpisode(value: unknown): Episode {
   const channelId = parseOptionalString(record.channelId, 'episode.channelId');
   const meaning = parseOptionalMeaning(record.meaning);
   return {
-    schemaVersion: EPISODIC_CONTRACT_VERSION,
+    schemaVersion,
     id: parseRequiredString(record.id, 'episode.id'),
     title: parseRequiredString(record.title, 'episode.title'),
     landmark: parseRequiredString(record.landmark, 'episode.landmark'),
@@ -380,6 +474,7 @@ export function parseEpisode(value: unknown): Episode {
     participantContactIds: parseStringArray(record.participantContactIds, 'episode.participantContactIds'),
     salience: parseSalience(record.salience),
     affect: parseAffect(record.affect),
+    ...(machineSignals ? { machineSignals } : {}),
     themes: parseStringArray(record.themes, 'episode.themes'),
     spanRefs,
     artifactRefs,
@@ -408,9 +503,7 @@ function parseOptionalMeaning(value: unknown): EpisodeMeaning | undefined {
 export function parseEpisodeArc(value: unknown): EpisodeArc {
   const record = parseRecord(value, 'episodeArc');
   assertKnownKeys(record, EPISODE_ARC_KEYS, 'episodeArc');
-  if (record.schemaVersion !== EPISODIC_CONTRACT_VERSION) {
-    throw new Error(`unsupported episodeArc schemaVersion: ${String(record.schemaVersion)}`);
-  }
+  const schemaVersion = parseSchemaVersion(record.schemaVersion, 'episodeArc');
 
   const sourceEpisodeId = parseRequiredString(record.sourceEpisodeId, 'episodeArc.sourceEpisodeId');
   const targetEpisodeId = parseRequiredString(record.targetEpisodeId, 'episodeArc.targetEpisodeId');
@@ -424,7 +517,7 @@ export function parseEpisodeArc(value: unknown): EpisodeArc {
   }
 
   return {
-    schemaVersion: EPISODIC_CONTRACT_VERSION,
+    schemaVersion,
     id: parseRequiredString(record.id, 'episodeArc.id'),
     sourceEpisodeId,
     targetEpisodeId,

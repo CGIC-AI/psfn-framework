@@ -502,7 +502,10 @@ export class DreamMeaningPass {
         channelId: episode.channelId,
         participantContactIds: episode.participantContactIds,
         salience: episode.salience,
+        // The dream pass authors felt meaning in prose (the `meaning` field);
+        // it preserves affect and the machine-signals sidecar untouched.
         affect: episode.affect,
+        ...(episode.machineSignals ? { machineSignals: episode.machineSignals } : {}),
         themes: episode.themes,
         spanRefs: episode.spanRefs,
         artifactRefs: episode.artifactRefs,

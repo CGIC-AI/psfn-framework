@@ -76,6 +76,36 @@ describe('DreamMeaningPass', () => {
     expect(firstCall.content).toContain('No one reads this but you');
   });
 
+  it('authors felt meaning on an affect-empty episode while leaving affect empty and the machineSignals sidecar intact (h4fp.6)', async () => {
+    const store = makeStore();
+    // A synthesis-shaped candidate: affect empty, machine heuristics in the sidecar.
+    await store.createEpisode(episodeInput('lived', '2026-06-10T05:05:00.000Z', '2026-06-10T05:08:00.000Z', {
+      affect: { labels: [] },
+      machineSignals: {
+        source: 'deterministic_synthesis',
+        topicTags: ['focused', 'positive'],
+        vad: { valence: 0.2, arousal: 0.3, dominance: 0.5 },
+      },
+    }));
+
+    const handleMessage = vi.fn(async () => ({
+      content: meaningBlock({ lived: 'It quietly mattered — the kind of ordinary I want to remember.' }),
+    }));
+    const pass = new DreamMeaningPass(store, { handleMessage }, { now: () => NOW });
+
+    const result = await pass.run({ sessionId: 'discord:main' });
+    expect(result.meaningsRecorded).toBe(1);
+
+    const lived = await store.getEpisode('lived');
+    // Her authorship writes felt meaning (in prose)...
+    expect(lived?.meaning?.text).toContain('quietly mattered');
+    expect(lived?.meaning?.source).toBe('companion_dream_pass');
+    // ...but never fabricates VAD affect, and the machine sidecar survives.
+    expect(lived?.affect).toEqual({ labels: [] });
+    expect(lived?.machineSignals?.topicTags).toEqual(['focused', 'positive']);
+    expect(lived?.machineSignals?.vad?.valence).toBe(0.2);
+  });
+
   it('continues across turns until she says done, capped at maxTurns', async () => {
     const store = makeStore();
     await store.createEpisode(episodeInput('a', '2026-06-09T20:00:00.000Z', '2026-06-09T21:00:00.000Z'));

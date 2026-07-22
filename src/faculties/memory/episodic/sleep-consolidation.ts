@@ -279,9 +279,14 @@ function mergeChainIntoHead(chain: readonly Episode[]): EpisodeUpdateInput {
         episode.salience.emotionalIntensity ?? 0,
       ),
     },
+    // Affect is never fabricated on merge (bead h4fp.6): only carry forward an
+    // arousal the companion actually authored. An affect-empty candidate must
+    // not gain a machine-derived arousal:0 claim.
     affect: {
       ...merged.affect,
-      arousal: Math.max(merged.affect.arousal ?? 0, episode.affect.arousal ?? 0),
+      ...(episode.affect.arousal !== undefined
+        ? { arousal: Math.max(merged.affect.arousal ?? 0, episode.affect.arousal) }
+        : {}),
       labels: [...new Set([...merged.affect.labels, ...episode.affect.labels])],
     },
     themes: [...new Set([...merged.themes, ...episode.themes])],
@@ -791,7 +796,10 @@ export class SleepCycleEpisodeConsolidator {
           ...episode.salience,
           score: refinement.salienceScore,
         },
+        // Refinement rewrites titles/themes/salience only; affect and the
+        // machine-signals sidecar are preserved untouched (bead h4fp.6).
         affect: episode.affect,
+        ...(episode.machineSignals ? { machineSignals: episode.machineSignals } : {}),
         themes: refinement.themes,
         spanRefs: episode.spanRefs,
         artifactRefs: episode.artifactRefs,

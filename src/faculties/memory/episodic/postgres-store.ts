@@ -203,9 +203,12 @@ export class PostgresEpisodicStore implements EpisodicStorePort {
     }
 
     const now = this.now().toISOString();
+    // Preserve the stored schemaVersion (no silent shape drift): a content
+    // update to a legacy v1 episode must not silently upgrade it to v2. Only
+    // explicit migration (bead h4fp.7) changes a persisted episode's version.
     const episode = parseEpisode({
       ...input,
-      schemaVersion: EPISODIC_CONTRACT_VERSION,
+      schemaVersion: current.schemaVersion,
       createdAt: current.createdAt,
       updatedAt: input.updatedAt ?? now,
     });

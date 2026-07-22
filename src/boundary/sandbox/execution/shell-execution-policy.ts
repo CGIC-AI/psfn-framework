@@ -7,6 +7,7 @@ import { createDefaultShellExecSettings } from '../../../system/config/shell-exe
 
 const DEFAULT_SANDBOX_BINARY = '/usr/bin/bwrap';
 const DEFAULT_RESOURCE_LIMIT_BINARY = '/usr/bin/prlimit';
+const DEFAULT_DEADLINE_BINARY = '/usr/bin/timeout';
 const DEFAULT_SANDBOX_PATH = ['/usr/local/bin', '/usr/bin', '/bin'].join(delimiter);
 const DEFAULT_SHELL_EXEC_SETTINGS = createDefaultShellExecSettings();
 const MAX_COMMAND_LENGTH = 256;
@@ -46,6 +47,13 @@ export interface ResolvedShellExecution {
   sandboxCwd: string;
   sandboxBinaryPath: string;
   resourceLimitBinaryPath: string;
+  /**
+   * coreutils `timeout` binary that enforces the policy deadline inside the
+   * sandbox. The kernel delivers its alarm and tears down the PID namespace
+   * when it exits, so the deadline holds even when the agent process's event
+   * loop is starved (see bubblewrap-runner.ts).
+   */
+  deadlineBinaryPath: string;
   sandboxPath: string;
   childEnv: NodeJS.ProcessEnv;
   timeoutMs: number;
@@ -449,6 +457,10 @@ export function resolveShellExecution(
     resourceLimitBinaryPath: resolveRequiredRuntimeBinary(
       DEFAULT_RESOURCE_LIMIT_BINARY,
       'resource limiter',
+    ),
+    deadlineBinaryPath: resolveRequiredRuntimeBinary(
+      DEFAULT_DEADLINE_BINARY,
+      'deadline enforcer',
     ),
     sandboxPath,
     childEnv,

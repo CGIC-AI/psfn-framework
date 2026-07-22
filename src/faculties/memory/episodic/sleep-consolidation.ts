@@ -12,6 +12,7 @@ import type {
 } from '../../../shared/contracts/episodic-memory.js';
 import { resolveKnownEpisodeId } from './episode-ids.js';
 import { mergeMachineSignals } from './synthesis/consolidation.js';
+import { hasLegacySessionThreadId } from './thread-assignment.js';
 import type { DeterministicGateEvent } from '../../../shared/event-bus.js';
 import {
   evaluateDeterministicGate,
@@ -210,10 +211,25 @@ function provenanceRefKey(ref: EpisodeProvenanceRef): string {
   return `${ref.kind}:${ref.refId}:${ref.note ?? ''}`;
 }
 
+/**
+ * Conversation scope for clustering/merging: channel + span-session +
+ * participants. Since apq0 an episode's `threadId` is TOPIC identity — a fresh
+ * candidate seeds its own singleton thread — so keying the scope on threadId
+ * would prevent any two new candidates from ever clustering (killing thematic
+ * consolidation). Session identity lives in the span refs; pre-apq0 rows keyed
+ * `threadId = sessionId`, which this scope reproduces exactly.
+ */
+function episodeSessionKey(episode: Episode): string {
+  for (const ref of episode.spanRefs) {
+    if (typeof ref.sessionId === 'string' && ref.sessionId.length > 0) return ref.sessionId;
+  }
+  return '';
+}
+
 function sameEpisodeScope(left: Episode, right: Episode): boolean {
   const sameChannel = (left.channelId ?? '') === (right.channelId ?? '');
-  const sameThread = (left.threadId ?? '') === (right.threadId ?? '');
-  if (!sameChannel || !sameThread) return false;
+  const sameSession = episodeSessionKey(left) === episodeSessionKey(right);
+  if (!sameChannel || !sameSession) return false;
   return [...left.participantContactIds].sort().join(',')
     === [...right.participantContactIds].sort().join(',');
 }
@@ -221,7 +237,7 @@ function sameEpisodeScope(left: Episode, right: Episode): boolean {
 function episodeScopeKey(episode: Episode): string {
   return [
     episode.channelId ?? '',
-    episode.threadId ?? '',
+    episodeSessionKey(episode),
     [...episode.participantContactIds].sort().join(','),
   ].join('\u0000');
 }
@@ -411,13 +427,18 @@ export function buildConsolidatedEpisodeInput(
       undefined,
     );
 
+  const consolidatedId = stableConsolidatedEpisodeId(ordered.map(episode => episode.id));
   return {
-    id: stableConsolidatedEpisodeId(ordered.map(episode => episode.id)),
+    id: consolidatedId,
     title: group.title,
     landmark: group.landmark,
     startedAt: ordered.reduce((min, episode) => (episode.startedAt < min ? episode.startedAt : min), head.startedAt),
     endedAt: ordered.reduce((max, episode) => (episode.endedAt > max ? episode.endedAt : max), head.endedAt),
-    threadId: head.threadId,
+    // Topic-thread identity (apq0): adopt the head source's topic thread — but
+    // never a legacy session-keyed threadId (pre-apq0 `threadId = sessionId`),
+    // which would re-attach the new canonical episode to the per-channel
+    // mega-thread. A legacy-headed consolidation seeds its own topic thread.
+    threadId: hasLegacySessionThreadId(head) ? consolidatedId : head.threadId,
     channelId: head.channelId,
     participantContactIds: [...new Set(ordered.flatMap(episode => episode.participantContactIds))].sort(),
     salience: mergeSalience(ordered, group.salienceScore),

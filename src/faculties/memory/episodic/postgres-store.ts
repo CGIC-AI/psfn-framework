@@ -447,19 +447,30 @@ export class PostgresEpisodicStore implements EpisodicStorePort {
     if (fromThreadId === toThreadId) {
       throw new Error('thread members cannot be re-pointed onto the same thread');
     }
+    if (input.memberEpisodeIds !== undefined && input.memberEpisodeIds.length === 0) {
+      throw new Error('repointThreadMembers memberEpisodeIds must be non-empty when provided');
+    }
+    const memberEpisodeIds = input.memberEpisodeIds?.map(
+      (id, index) => parseRequiredText(id, `repointThreadMembers.memberEpisodeIds[${String(index)}]`),
+    );
     const nowIso = this.now().toISOString();
 
     return withPostgresClient(this.pool, async (client) => {
       // Lock the losing thread's live members and detect oversize in one shot:
       // fetching one row past the cap lets us refuse without a separate count.
+      // With memberEpisodeIds the scan is further restricted to those specific
+      // members (apq0 legacy extraction) — the rest of the bucket is untouched.
+      const memberFilter = memberEpisodeIds ? ' AND id = ANY($3::text[])' : '';
+      const memberParams: unknown[] = [fromThreadId, input.maxEpisodes + 1];
+      if (memberEpisodeIds) memberParams.push(memberEpisodeIds);
       const members = (await client.query<{ id: string }>(`
         SELECT id
         FROM l01_episodes
-        WHERE thread_id = $1 AND ${ACTIVE_CANONICAL_EPISODE_FILTER}
+        WHERE thread_id = $1 AND ${ACTIVE_CANONICAL_EPISODE_FILTER}${memberFilter}
         ORDER BY started_at ASC, id ASC
         LIMIT $2
         FOR UPDATE
-      `, [fromThreadId, input.maxEpisodes + 1])).rows;
+      `, memberParams)).rows;
 
       if (members.length > input.maxEpisodes) {
         return { updatedEpisodeIds: [], skippedOversize: true };

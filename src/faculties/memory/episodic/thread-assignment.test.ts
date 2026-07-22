@@ -7,6 +7,7 @@ import {
   applyThreadUnionForArc,
   chooseThreadRepresentative,
   computeThreadComponents,
+  hasLegacySessionThreadId,
   type ThreadAssignmentEvent,
 } from './thread-assignment.js';
 
@@ -203,6 +204,89 @@ describe('applyThreadUnionForArc', () => {
   });
 });
 
+describe('legacy session-keyed threads (pre-apq0 threadId = sessionId)', () => {
+  it('detects a legacy session-keyed threadId via the episode span refs', () => {
+    expect(hasLegacySessionThreadId({
+      id: 'e1',
+      threadId: 'discord:main',
+      spanRefs: [{ spanId: 'span-e1', sessionId: 'discord:main' }],
+    })).toBe(true);
+    // Own singleton thread — not legacy.
+    expect(hasLegacySessionThreadId({
+      id: 'e1',
+      threadId: 'e1',
+      spanRefs: [{ spanId: 'span-e1', sessionId: 'discord:main' }],
+    })).toBe(false);
+    // Topic thread named by another episode's id — not legacy.
+    expect(hasLegacySessionThreadId({
+      id: 'e1',
+      threadId: 'e0',
+      spanRefs: [{ spanId: 'span-e1', sessionId: 'discord:main' }],
+    })).toBe(false);
+  });
+
+  it('extracts only the arc endpoint from a legacy session bucket instead of absorbing or renaming the bucket', async () => {
+    const { store } = makeHarness();
+    // A pre-apq0 per-channel mega-thread: three episodes keyed to the session.
+    const bucketMember = await store.createEpisode(episodeInput('b2', 'discord:main'));
+    await store.createEpisode(episodeInput('b1', 'discord:main'));
+    await store.createEpisode(episodeInput('b3', 'discord:main'));
+    const fresh = await store.createEpisode(episodeInput('e1'));
+    const events: ThreadAssignmentEvent[] = [];
+
+    const result = await applyThreadUnionForArc(store, bucketMember, fresh, {
+      maxThreadEpisodes: 100,
+      now: () => NOW,
+      onEvent: event => events.push(event),
+    });
+
+    // The arc-linked legacy endpoint joined a TOPIC thread with the fresh
+    // episode ('b2' is the min id), and the rest of the mega-thread stayed
+    // exactly where it was: neither absorbed into the topic thread nor
+    // mass-relabeled.
+    expect(result.threadId).toBe('b2');
+    expect(await threadOf(store, 'b2')).toBe('b2');
+    expect(await threadOf(store, 'e1')).toBe('b2');
+    expect(await threadOf(store, 'b1')).toBe('discord:main');
+    expect(await threadOf(store, 'b3')).toBe('discord:main');
+    expect(events.map(event => event.outcome)).toEqual([
+      'legacy_session_thread_extracted',
+      'merged',
+    ]);
+    expect(events[0]).toMatchObject({
+      winningThreadId: 'b2',
+      losingThreadId: 'discord:main',
+      updatedEpisodeCount: 1,
+    });
+  });
+
+  it('unions two legacy bucket members into a real topic thread instead of no-oping inside the mega-thread', async () => {
+    const { store } = makeHarness();
+    const left = await store.createEpisode(episodeInput('b1', 'discord:main'));
+    const right = await store.createEpisode(episodeInput('b2', 'discord:main'));
+    await store.createEpisode(episodeInput('b3', 'discord:main'));
+    const events: ThreadAssignmentEvent[] = [];
+
+    const result = await applyThreadUnionForArc(store, left, right, {
+      maxThreadEpisodes: 100,
+      onEvent: event => events.push(event),
+    });
+
+    // Pre-fix this was a silent noop (both endpoints "shared" the session
+    // thread) and the mega-thread kept accreting. Now both endpoints peel off
+    // into one topic thread while the uninvolved member stays behind.
+    expect(result.threadId).toBe('b1');
+    expect(await threadOf(store, 'b1')).toBe('b1');
+    expect(await threadOf(store, 'b2')).toBe('b1');
+    expect(await threadOf(store, 'b3')).toBe('discord:main');
+    expect(events.map(event => event.outcome)).toEqual([
+      'legacy_session_thread_extracted',
+      'legacy_session_thread_extracted',
+      'merged',
+    ]);
+  });
+});
+
 describe('PostgresEpisodicStore.repointThreadMembers', () => {
   it('atomically moves every live member and keeps episode_json.threadId consistent', async () => {
     const { pool, store } = makeHarness();
@@ -247,5 +331,36 @@ describe('PostgresEpisodicStore.repointThreadMembers', () => {
     const { store } = makeHarness();
     await expect(store.repointThreadMembers({ fromThreadId: 'e5', toThreadId: 'e5', maxEpisodes: 10 }))
       .rejects.toThrow(/same thread/);
+  });
+
+  it('restricts the re-point to memberEpisodeIds, leaving the rest of the thread untouched', async () => {
+    const { pool, store } = makeHarness();
+    await store.createEpisode(episodeInput('b1', 'discord:main'));
+    await store.createEpisode(episodeInput('b2', 'discord:main'));
+    await store.createEpisode(episodeInput('b3', 'discord:main'));
+
+    const outcome = await store.repointThreadMembers({
+      fromThreadId: 'discord:main',
+      toThreadId: 'b2',
+      maxEpisodes: 1,
+      memberEpisodeIds: ['b2'],
+    });
+
+    expect(outcome.skippedOversize).toBe(false);
+    expect(outcome.updatedEpisodeIds).toEqual(['b2']);
+    expect(threadRepointUpdateCount(pool)).toBe(1);
+    expect(await threadOf(store, 'b2')).toBe('b2');
+    expect(await threadOf(store, 'b1')).toBe('discord:main');
+    expect(await threadOf(store, 'b3')).toBe('discord:main');
+  });
+
+  it('rejects an empty memberEpisodeIds restriction', async () => {
+    const { store } = makeHarness();
+    await expect(store.repointThreadMembers({
+      fromThreadId: 'discord:main',
+      toThreadId: 'b2',
+      maxEpisodes: 1,
+      memberEpisodeIds: [],
+    })).rejects.toThrow(/memberEpisodeIds must be non-empty/);
   });
 });

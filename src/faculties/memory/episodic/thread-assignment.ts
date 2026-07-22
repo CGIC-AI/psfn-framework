@@ -27,6 +27,17 @@ import type { EpisodicStorePort } from './store-port.js';
  * keeps working and now sees bounded topic threads. The processing-watermark
  * scope stays session-keyed — it is a per-session cursor, decoupled from
  * thread identity.
+ *
+ * LEGACY DATA: pre-apq0 episodes carry `threadId = sessionId` verbatim — the
+ * per-channel mega-thread. Such a session-keyed thread is NOT a topic thread
+ * and must never participate in a union as one: unioning against it would
+ * either absorb the new episode into the channel bucket (re-creating the bug)
+ * or mass-relabel the whole bucket as one topic. When an arc touches a legacy
+ * endpoint, that single episode is first EXTRACTED out of its session bucket
+ * into its own singleton topic thread (`threadId = episode.id`) and only then
+ * unioned — so arc formation incrementally decomposes the mega-thread while a
+ * global recompute over episode ids (`computeThreadComponents`) still
+ * reproduces the same assignment.
  */
 
 /** The component representative is the lexicographically-smaller thread id. */
@@ -83,8 +94,22 @@ export function computeThreadComponents(
   return assignments;
 }
 
+/**
+ * True when the episode still carries a pre-apq0 session-keyed threadId (the
+ * legacy per-channel mega-thread): the threadId is not the episode's own id
+ * and matches one of its span refs' session ids. A post-apq0 topic-thread id
+ * is always some episode's id, which can never collide with a session id.
+ */
+export function hasLegacySessionThreadId(
+  episode: Pick<Episode, 'id' | 'threadId' | 'spanRefs'>,
+): boolean {
+  const threadId = episode.threadId;
+  if (threadId === undefined || threadId === episode.id) return false;
+  return episode.spanRefs.some(ref => ref.sessionId === threadId);
+}
+
 export interface ThreadAssignmentEvent {
-  outcome: 'merged' | 'noop' | 'merge_skipped_oversize';
+  outcome: 'merged' | 'noop' | 'merge_skipped_oversize' | 'legacy_session_thread_extracted';
   winningThreadId: string;
   losingThreadId: string;
   /** Live episodes re-pointed onto the winning thread (0 for noop/skip). */
@@ -113,10 +138,44 @@ export interface ThreadUnionResult {
 type ThreadUnionStore = Pick<EpisodicStorePort, 'repointThreadMembers'>;
 
 /**
+ * Extract a legacy session-keyed endpoint out of its per-channel bucket into
+ * its own singleton topic thread before it participates in a union. Only THIS
+ * episode moves — the rest of the legacy bucket stays where it is (bounded,
+ * incremental decomposition; bead h4fp.7 owns the full historical repair).
+ */
+async function normalizeLegacyEndpoint(
+  store: ThreadUnionStore,
+  episode: Episode,
+  onEvent: ((event: ThreadAssignmentEvent) => void) | undefined,
+  now: () => Date,
+): Promise<void> {
+  if (!hasLegacySessionThreadId(episode)) return;
+  const legacyThreadId = episode.threadId as string;
+  const outcome = await store.repointThreadMembers({
+    fromThreadId: legacyThreadId,
+    toThreadId: episode.id,
+    maxEpisodes: 1,
+    memberEpisodeIds: [episode.id],
+  });
+  episode.threadId = episode.id;
+  onEvent?.({
+    outcome: 'legacy_session_thread_extracted',
+    winningThreadId: episode.id,
+    losingThreadId: legacyThreadId,
+    updatedEpisodeCount: outcome.updatedEpisodeIds.length,
+    timestamp: now().getTime(),
+  });
+}
+
+/**
  * Union the topic threads of two arc-linked episodes. The higher-id thread's
  * live episodes are re-pointed onto the lexicographically-smaller thread id.
  * The passed `source`/`target` objects are mutated in place so a caller
  * chaining several arcs in one pass observes the converged thread id.
+ *
+ * A legacy session-keyed endpoint (pre-apq0 `threadId = sessionId`) is first
+ * extracted into its own singleton topic thread so the per-channel mega-thread
+ * is never treated as a topic thread — neither absorbed nor mass-relabeled.
  *
  * The re-point is delegated to the store's single atomic `repointThreadMembers`
  * statement — there is no per-member update loop, so a crash mid-union can
@@ -132,6 +191,8 @@ export async function applyThreadUnionForArc(
     throw new Error('applyThreadUnionForArc requires a positive integer maxThreadEpisodes');
   }
   const now = options.now ?? (() => new Date());
+  await normalizeLegacyEndpoint(store, source, options.onEvent, now);
+  await normalizeLegacyEndpoint(store, target, options.onEvent, now);
   const sourceThread = source.threadId ?? source.id;
   const targetThread = target.threadId ?? target.id;
   const winningThreadId = chooseThreadRepresentative(sourceThread, targetThread);

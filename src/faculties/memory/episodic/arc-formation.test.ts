@@ -321,13 +321,51 @@ describe('EpisodeArcWeaver', () => {
     expect(await store.searchByThread('y-day2', { limit: 10 })).toEqual([]);
   });
 
-  it('leaves threads untouched when linked episodes already share a thread (apq0 no-op)', async () => {
+  it('extracts arc-linked members out of a legacy session mega-thread instead of no-oping inside it (apq0)', async () => {
     const store = makeStore();
-    // Both episodes already carry the shared fixture thread 'discord:main'.
+    // All four episodes carry the pre-apq0 session-keyed thread 'discord:main'
+    // (threadId equals the span sessionId — the per-channel mega-thread).
     await store.createEpisode(episodeInput('day1', '2026-06-04T20:00:00.000Z', '2026-06-04T21:00:00.000Z'));
     await store.createEpisode(episodeInput('day2', '2026-06-06T20:00:00.000Z', '2026-06-06T21:00:00.000Z'));
     await store.createEpisode(episodeInput('day3', '2026-06-08T20:00:00.000Z', '2026-06-08T21:00:00.000Z'));
     await store.createEpisode(episodeInput('day4', '2026-06-09T20:00:00.000Z', '2026-06-09T21:00:00.000Z'));
+
+    const events: ThreadAssignmentEvent[] = [];
+    const complete = vi.fn(async () => arcResponse([{
+      episode_ids: ['day1', 'day2'],
+      kind: 'continuation',
+      label: 'the postgres cutover effort',
+      confidence: 0.85,
+      reason: 'continues',
+    }]));
+    const weaver = new EpisodeArcWeaver(store, { complete }, {
+      now: () => NOW,
+      onThreadAssignment: event => events.push(event),
+    });
+
+    await weaver.run({ sessionId: 'discord:main' });
+
+    // The arc-linked pair peeled off into a real topic thread; the uninvolved
+    // members stay in the legacy bucket (h4fp.7 owns full historical repair).
+    // Pre-fix this was a silent noop and the mega-thread kept accreting.
+    const topic = await store.searchByThread('day1', { limit: 10 });
+    expect(topic.map(episode => episode.id).sort()).toEqual(['day1', 'day2']);
+    const legacy = await store.searchByThread('discord:main', { limit: 10 });
+    expect(legacy.map(episode => episode.id).sort()).toEqual(['day3', 'day4']);
+    expect(events.map(event => event.outcome)).toEqual([
+      'legacy_session_thread_extracted',
+      'legacy_session_thread_extracted',
+      'merged',
+    ]);
+  });
+
+  it('leaves threads untouched when linked episodes already share a topic thread (apq0 no-op)', async () => {
+    const store = makeStore();
+    // Both episodes already share the real topic thread 'day1'.
+    await store.createEpisode(episodeInput('day1', '2026-06-04T20:00:00.000Z', '2026-06-04T21:00:00.000Z', { threadId: 'day1' }));
+    await store.createEpisode(episodeInput('day2', '2026-06-06T20:00:00.000Z', '2026-06-06T21:00:00.000Z', { threadId: 'day1' }));
+    await store.createEpisode(episodeInput('day3', '2026-06-08T20:00:00.000Z', '2026-06-08T21:00:00.000Z', { threadId: 'day3' }));
+    await store.createEpisode(episodeInput('day4', '2026-06-09T20:00:00.000Z', '2026-06-09T21:00:00.000Z', { threadId: 'day4' }));
 
     const events: ThreadAssignmentEvent[] = [];
     const complete = vi.fn(async () => arcResponse([{
@@ -344,12 +382,12 @@ describe('EpisodeArcWeaver', () => {
 
     await weaver.run({ sessionId: 'discord:main' });
 
-    const shared = await store.searchByThread('discord:main', { limit: 10 });
-    expect(shared.map(episode => episode.id).sort()).toEqual(['day1', 'day2', 'day3', 'day4']);
+    const shared = await store.searchByThread('day1', { limit: 10 });
+    expect(shared.map(episode => episode.id).sort()).toEqual(['day1', 'day2']);
     expect(events).toEqual([{
       outcome: 'noop',
-      winningThreadId: 'discord:main',
-      losingThreadId: 'discord:main',
+      winningThreadId: 'day1',
+      losingThreadId: 'day1',
       updatedEpisodeCount: 0,
       timestamp: NOW.getTime(),
     }]);

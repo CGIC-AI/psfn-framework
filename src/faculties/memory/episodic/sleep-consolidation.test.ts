@@ -535,6 +535,29 @@ describe('buildConsolidatedEpisodeInput machineSignals union (h4fp.6)', () => {
     );
     expect(input.machineSignals).toBeUndefined();
   });
+
+  it('adopts the head topic thread but never a legacy session-keyed threadId (apq0)', () => {
+    // Head carries a real topic thread: the consolidated episode adopts it.
+    const topicInput = buildConsolidatedEpisodeInput(
+      [episode('head'), episode('tail')],
+      { title: 'Evening together', landmark: 'A quiet night.', themes: ['evening'], salienceScore: 0.7 },
+    );
+    expect(topicInput.threadId).toBe('topic:discord-main');
+
+    // Head is a pre-apq0 row whose threadId is the session id verbatim: the
+    // new canonical must seed its own topic thread instead of re-attaching to
+    // the per-channel mega-thread.
+    const legacyHead = parseEpisode({
+      ...episode('head'),
+      threadId: 'discord:main',
+    });
+    const legacyInput = buildConsolidatedEpisodeInput(
+      [legacyHead, episode('tail')],
+      { title: 'Evening together', landmark: 'A quiet night.', themes: ['evening'], salienceScore: 0.7 },
+    );
+    expect(legacyInput.threadId).toBe(legacyInput.id);
+    expect(legacyInput.threadId).not.toBe('discord:main');
+  });
 });
 
 describe('SleepCycleEpisodeConsolidator candidate consolidation (m58.1)', () => {
@@ -892,16 +915,20 @@ describe('SleepCycleEpisodeConsolidator candidate consolidation (m58.1)', () => 
       }),
       ['msg-a'],
     );
+    // Far apart in time: separate sittings, so each stays a lone cluster and
+    // is confirmed deterministically. (ADJACENT same-scope singletons now
+    // correctly cluster for thematic grouping — see the buildMergeChains
+    // singleton-topic-thread regression test.)
     await seedClaimedCandidate(
       store,
-      candidateInput('singleton-b', '2026-06-10T10:12:00.000Z', '2026-06-10T10:22:00.000Z', {
+      candidateInput('singleton-b', '2026-06-10T14:00:00.000Z', '2026-06-10T14:10:00.000Z', {
         threadId: 'singleton-b',
       }),
       ['msg-b'],
     );
 
     const llm = complete(() => {
-      throw new Error('no LLM call expected: singleton threads form lone clusters');
+      throw new Error('no LLM call expected: non-adjacent candidates form lone clusters');
     });
     const consolidator = new SleepCycleEpisodeConsolidator(
       store,
@@ -1148,6 +1175,66 @@ describe('buildMergeChains', () => {
       'nested',
       'tail-overlap',
     ]]);
+  });
+
+  it('clusters post-apq0 candidates whose threadIds are per-episode singleton topic threads (regression)', () => {
+    // Since apq0 every fresh candidate seeds its own topic thread
+    // (threadId = its own id). Conversation scope must therefore come from
+    // channel + span-session + participants — keying on threadId would mean no
+    // two new candidates ever cluster and thematic consolidation goes dead.
+    const make = (id: string, startedAt: string, endedAt: string) => ({
+      schemaVersion: 1,
+      id,
+      title: id,
+      landmark: id,
+      startedAt,
+      endedAt,
+      threadId: id, // singleton topic thread, distinct per episode
+      channelId: 'c',
+      participantContactIds: ['p'],
+      salience: { score: 0.5 },
+      affect: { labels: [] },
+      themes: [],
+      spanRefs: [{ spanId: `span-${id}`, sessionId: 'discord:main' }],
+      artifactRefs: [],
+      provenanceRefs: [],
+      createdAt: NOW.toISOString(),
+      updatedAt: NOW.toISOString(),
+    });
+    const chains = buildMergeChains([
+      make('a', '2026-06-10T00:00:00.000Z', '2026-06-10T00:30:00.000Z'),
+      make('b', '2026-06-10T00:45:00.000Z', '2026-06-10T01:00:00.000Z'),
+    ] as never, 45 * 60_000);
+
+    expect(chains.map(chain => chain.map(episode => episode.id))).toEqual([['a', 'b']]);
+  });
+
+  it('keeps candidates from different span-sessions apart even on the same channel', () => {
+    const make = (id: string, sessionId: string) => ({
+      schemaVersion: 1,
+      id,
+      title: id,
+      landmark: id,
+      startedAt: '2026-06-10T00:00:00.000Z',
+      endedAt: '2026-06-10T00:30:00.000Z',
+      threadId: id,
+      channelId: 'c',
+      participantContactIds: ['p'],
+      salience: { score: 0.5 },
+      affect: { labels: [] },
+      themes: [],
+      spanRefs: [{ spanId: `span-${id}`, sessionId }],
+      artifactRefs: [],
+      provenanceRefs: [],
+      createdAt: NOW.toISOString(),
+      updatedAt: NOW.toISOString(),
+    });
+    const chains = buildMergeChains([
+      make('a', 'discord:main'),
+      make('b', 'telegram:main'),
+    ] as never, 45 * 60_000);
+
+    expect(chains).toHaveLength(2);
   });
 
   it('keeps same-scope chains intact when another scope interleaves by timestamp', () => {

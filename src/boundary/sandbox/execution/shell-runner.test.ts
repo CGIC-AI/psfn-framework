@@ -277,8 +277,19 @@ describe('executeShellCommandWithPolicy', () => {
           command: 'bash',
           args: [
             '-lc',
+            // fsize is read in BYTES from /proc/self/limits rather than via
+            // `ulimit -f`, whose reporting unit is not stable across shells:
+            // bash 5.3 prints the RLIMIT_FSIZE soft limit in 1024-byte units
+            // while older bash/dash print 512-byte POSIX blocks, so the same
+            // 1 MiB ceiling surfaces as different numbers. /proc/self/limits is
+            // authoritative and unit-stable (the OS-namespace sandbox is
+            // Linux-only, so /proc is always present). awk splits on runs of
+            // whitespace, so the column index is robust to spacing; "Max file
+            // size" spans fields 1-3, leaving the soft limit at field 4.
             'printf "nproc=%s as=%s fsize=%s cpu=%s nofile=%s\\n" '
-              + '"$(ulimit -u)" "$(ulimit -v)" "$(ulimit -f)" "$(ulimit -t)" "$(ulimit -n)"',
+              + '"$(ulimit -u)" "$(ulimit -v)" '
+              + '"$(awk \'/^Max file size/ { print $4 }\' /proc/self/limits)" '
+              + '"$(ulimit -t)" "$(ulimit -n)"',
           ],
           cwd: workspace,
         },
@@ -296,7 +307,7 @@ describe('executeShellCommandWithPolicy', () => {
       );
 
       expect(result.exitCode).toBe(0);
-      expect(result.stdout).toBe('nproc=4 as=131072 fsize=2048 cpu=2 nofile=32\n');
+      expect(result.stdout).toBe('nproc=4 as=131072 fsize=1048576 cpu=2 nofile=32\n');
     });
 
     it('mounts the configured repository copy read-only at /repo and keeps it out by default', async () => {

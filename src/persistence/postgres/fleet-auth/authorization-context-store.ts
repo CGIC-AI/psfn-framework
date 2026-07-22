@@ -40,6 +40,10 @@ import { FLEET_AUTH_SCHEMA_NAME } from './schema.js';
 const AUTHORIZATION_CORRELATION_DIGEST_DOMAIN = 'fleet-authorization:correlation:v1\0';
 const positiveInteger = createPositiveIntegerCoercer('authorization-context');
 
+function isPostgresSerializationFailure(error: unknown): boolean {
+  return isRecord(error) && error.code === '40001';
+}
+
 interface ProviderSubjectRow {
   provider: 'discord';
   subject_id: string;
@@ -162,6 +166,13 @@ export class PostgresFleetAuthorizationContextStore implements FleetAuthorizatio
   }
 
   async resolve(request: FleetAuthorizationRequest): Promise<FleetAuthorizationStoreDecision> {
+    return this.resolveWithSerializationRetry(request, true);
+  }
+
+  private async resolveWithSerializationRetry(
+    request: FleetAuthorizationRequest,
+    retrySerializationFailure: boolean,
+  ): Promise<FleetAuthorizationStoreDecision> {
     const client = await this.pool.connect();
     const correlationDigest = this.digestCorrelation(request.correlationId);
     try {
@@ -238,6 +249,9 @@ export class PostgresFleetAuthorizationContextStore implements FleetAuthorizatio
       };
     } catch (error) {
       await client.query('ROLLBACK').catch(() => undefined);
+      if (retrySerializationFailure && isPostgresSerializationFailure(error)) {
+        return this.resolveWithSerializationRetry(request, false);
+      }
       try {
         await this.recordInfrastructureDenial(client, {
           action: request.action,

@@ -645,7 +645,8 @@ describe('Postgres fleet authorization context snapshot', () => {
   }, TIMEOUT_MS);
 
   it('serializes with authority mutation and commits denial audit after the competing transaction', async () => {
-    const { runtime, coordinator, migration, resolver, principalId } = await createContextRuntime();
+    const { databaseName, runtime, coordinator, migration, resolver, principalId } =
+      await createContextRuntime();
     const mutator = await runtime.connect();
     try {
       await mutator.query('BEGIN');
@@ -657,6 +658,7 @@ describe('Postgres fleet authorization context snapshot', () => {
         action: 'memory.read.self',
         correlationId: 'correlation-race',
       });
+      await waitForBlockedContextResolution(databaseName);
       await mutator.query(`
         UPDATE fleet_auth.human_principals
         SET authz_version = authz_version + 1, updated_at = clock_timestamp()

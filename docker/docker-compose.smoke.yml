@@ -1,0 +1,230 @@
+name: psfn-smoke
+
+# ── Compose smoke stack (psfn-framework-65rk.12) ──
+# The contributor onboarding / "someone can run it" path (public-flip checklist
+# item 4). Unlike docker-compose.yml (single agent-only container, host-socket
+# bind, SQLite), this file stands up the real split runtime end to end:
+#
+#   postgres  pgvector-backed Postgres 17 — the only supported runtime store.
+#   seed      one-shot: lays split-root owner files + a starter card, chowns the
+#             shared volumes to the runtime UID (runs before gateway/agent).
+#   gateway   host-side process. Holds ALL secrets (provider key, session HMAC,
+#             backup key) and owns external egress + the OpenAI-compatible /v1
+#             edge. Talks to Postgres and to the agent over the shared gateway
+#             socket.
+#   agent     isolated companion process. No dotenv, no provider/egress secrets;
+#             reaches the gateway over the shared Unix socket and drives turns.
+#
+# Split topology is real here: gateway and agent are separate containers that
+# share ONLY the gateway socket (an internal named volume). system-data and
+# companion-data are DISTINCT named volumes, so the two roots can never overlap
+# (production layout rejects overlap). k8s/Helm remains the reference deployment
+# shape (network-mode mTLS RPC + cert-manager); this compose uses the simpler
+# single-node Unix-socket RPC and is explicitly not production-hardened.
+#
+# One documented secret slot: export OPENROUTER_API_KEY before `up` for a full
+# provider-backed turn. Without it the whole stack still comes up healthy, the
+# gateway<->agent RPC connects, migrations apply, and /v1/chat/completions is
+# accepted — the turn fails ONLY at the provider egress boundary.
+#
+# Bring up + drive one chat turn with:  npm run smoke:docker
+# Or manually:  docker compose -f docker/docker-compose.smoke.yml up -d --wait
+
+x-runtime-image: &runtime-image
+  build:
+    context: ..
+    dockerfile: docker/Dockerfile.agent
+  image: psfn-framework:smoke
+
+# Non-secret runtime layout + identity shared by gateway and agent. Production
+# split-root layout: SYSTEM_DATA_DIR and COMPANION_DATA_DIR are separate volumes.
+x-runtime-env: &runtime-env
+  PSFN_RUNTIME_MODE: split
+  PSFN_RUNTIME_LAYOUT_MODE: production
+  PSFN_RUNTIME_ROOT: /app/runtime-root
+  SYSTEM_DATA_DIR: /app/system-data
+  COMPANION_DATA_DIR: /app/companion-data
+  WORKSPACE_PATH: /app/workspace
+  PSFN_LOGS_DIR: /app/logs
+  PSFN_TEMP_DIR: /app/tmp
+  BACKUP_ROOT_DIR: /app/backups
+  GATEWAY_SOCKET: /run/psfn/gateway.sock
+  CHARACTER_CARD_PATH: /app/companion-data/companion.json
+  COMPANION_ID: ${PSFN_SMOKE_COMPANION_ID:-11111111-1111-4111-8111-111111111111}
+  # Single-node runtime store. Same credential the gateway provisions and the
+  # agent reads; it is the persistence-tier credential, not a provider/egress
+  # secret. In k8s the agent receives it as a mounted file instead.
+  POSTGRES_DATABASE_URL: postgresql://psfn:psfn@postgres:5432/psfn
+
+services:
+  postgres:
+    image: ${PSFN_SMOKE_POSTGRES_IMAGE:-pgvector/pgvector:pg17}
+    container_name: psfn-smoke-postgres
+    environment:
+      POSTGRES_DB: psfn
+      POSTGRES_USER: psfn
+      POSTGRES_PASSWORD: psfn
+      PGDATA: /var/lib/postgresql/data/pgdata
+    networks:
+      - psfn-smoke-internal
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U psfn -d psfn"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 20s
+
+  seed:
+    <<: *runtime-image
+    container_name: psfn-smoke-seed
+    user: "0:0"
+    entrypoint: ["sh", "/app/scripts/ops/psfn-compose-smoke-seed.sh"]
+    environment:
+      <<: *runtime-env
+      PSFN_SMOKE_COMPANION_NAME: ${PSFN_SMOKE_COMPANION_NAME:-Smoke}
+      # The seed is the trusted credential-bootstrap step: it holds the session
+      # HMAC key only to DERIVE the agent's two role-bound proofs, then hands the
+      # agent just those proofs (never the raw key) via the agent-auth volume. It
+      # also relays the agent's persistence-tier backup key into that same
+      # sourced file (mandatory encrypted backups), so the agent service declares
+      # no secrets of its own.
+      GATEWAY_SESSION_HMAC_KEY: ${PSFN_SMOKE_SESSION_HMAC_KEY:-psfn-smoke-session-hmac-key}
+      PSFN_BACKUP_ENCRYPTION_KEY: ${PSFN_SMOKE_BACKUP_KEY:-psfn-smoke-backup-encryption-key-please-rotate}
+    networks:
+      - psfn-smoke-internal
+    volumes:
+      - ../scripts/ops:/app/scripts/ops:ro
+      - system-data:/app/system-data
+      - companion-data:/app/companion-data
+      - workspace:/app/workspace
+      - gateway-sock:/run/psfn
+      - agent-auth:/run/psfn-auth
+      - model-cache:/app/models
+    restart: "no"
+
+  # Downloads the in-process ML models (text-emotion + embedding) into the shared
+  # model cache while it still has egress, so the isolated agent can warm them
+  # offline. Compose analogue of the Helm model-prefetch Job.
+  model-prefetch:
+    <<: *runtime-image
+    container_name: psfn-smoke-model-prefetch
+    depends_on:
+      seed:
+        condition: service_completed_successfully
+    entrypoint: ["node", "/app/scripts/ops/psfn-compose-smoke-prefetch.mjs"]
+    networks:
+      - psfn-smoke-egress
+    volumes:
+      - ../scripts/ops:/app/scripts/ops:ro
+      - model-cache:/app/models
+    restart: "no"
+
+  gateway:
+    <<: *runtime-image
+    container_name: psfn-smoke-gateway
+    depends_on:
+      postgres:
+        condition: service_healthy
+      seed:
+        condition: service_completed_successfully
+      model-prefetch:
+        condition: service_completed_successfully
+    command: ["node", "dist/gateway-main.js"]
+    environment:
+      <<: *runtime-env
+      API_HOST: 0.0.0.0
+      API_PORT: "3000"
+      ADMIN_HOST: 127.0.0.1
+      ADMIN_PORT: "3001"
+      # Secure local API: the port is published on 0.0.0.0, so a bearer is
+      # required (the insecure bypass only permits loopback binds). The smoke
+      # harness sends this key; the ONLY remaining failure surface is provider
+      # egress.
+      API_KEY: ${PSFN_SMOKE_API_KEY:-psfn-smoke-api-key-please-rotate}
+      # Secrets live here (host-side gateway). Dev-only fixed values; the
+      # provider key is the single real slot a runnable turn needs.
+      GATEWAY_SESSION_HMAC_KEY: ${PSFN_SMOKE_SESSION_HMAC_KEY:-psfn-smoke-session-hmac-key}
+      PSFN_BACKUP_ENCRYPTION_KEY: ${PSFN_SMOKE_BACKUP_KEY:-psfn-smoke-backup-encryption-key-please-rotate}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+    ports:
+      - "${PSFN_SMOKE_API_PORT:-13000}:3000"
+    # The gateway is the ONLY service with external egress (provider calls). The
+    # agent stays on the internal-only network and fails closed if it can reach
+    # the internet, mirroring the k8s NetworkPolicy that denies agent egress.
+    networks:
+      - psfn-smoke-internal
+      - psfn-smoke-egress
+    volumes:
+      - system-data:/app/system-data
+      - companion-data:/app/companion-data
+      - workspace:/app/workspace
+      - gateway-sock:/run/psfn
+      - model-cache:/app/models
+    healthcheck:
+      # The API edge listening proves the gateway booted (migrations applied,
+      # config validated). Deeper agent-connectivity is asserted by smoke:docker.
+      test:
+        - "CMD"
+        - "node"
+        - "-e"
+        - "require('node:net').connect(3000,'127.0.0.1').on('connect',()=>process.exit(0)).on('error',()=>process.exit(1))"
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+
+  agent:
+    <<: *runtime-image
+    container_name: psfn-smoke-agent
+    depends_on:
+      gateway:
+        condition: service_healthy
+      model-prefetch:
+        condition: service_completed_successfully
+    # Source the two derived HMAC proofs (written by the seed step; the raw
+    # session HMAC key is never present here) and exec the agent.
+    command:
+      - "sh"
+      - "-c"
+      - ". /run/psfn-auth/agent-auth.env && exec node dist/agent-main.js"
+    # No dotenv (agent-main never loads it) and no provider/egress secrets: the
+    # environment carries only non-secret layout/identity, the persistence
+    # credential, and the two sourced HMAC proofs. All external calls route
+    # through the gateway over the socket.
+    environment:
+      <<: *runtime-env
+    networks:
+      - psfn-smoke-internal
+    volumes:
+      - system-data:/app/system-data
+      - companion-data:/app/companion-data
+      - workspace:/app/workspace
+      - gateway-sock:/run/psfn
+      - agent-auth:/run/psfn-auth:ro
+      - model-cache:/app/models
+    # No healthcheck: probing the agent must not open the gateway RPC socket
+    # (that registers as a phantom agent connect/disconnect and flaps the
+    # gateway). If the agent process exits, its container exits and surfaces as
+    # not-running. Agent readiness is asserted via the gateway /health endpoint
+    # (which only reports healthy once the agent's RPC has registered).
+
+networks:
+  # No external route: postgres + agent live here only, so the agent has no
+  # outbound egress and boots past its network-isolation guard.
+  psfn-smoke-internal:
+    name: psfn-smoke-internal
+    internal: true
+  # External bridge for the gateway's provider egress only.
+  psfn-smoke-egress:
+    name: psfn-smoke-egress
+
+volumes:
+  pgdata:
+  system-data:
+  companion-data:
+  workspace:
+  gateway-sock:
+  agent-auth:
+  model-cache:

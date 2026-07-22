@@ -63,7 +63,6 @@
     {"path":"src/core/agent/substrate-agent/turn-execution/post-turn-scheduling.ts","code":"TS2322","count":1},
     {"path":"src/core/agent/substrate-agent/turn-execution/pre-turn-state.ts","code":"TS2339","count":1},
     {"path":"src/core/agent/substrate-agent/turn-execution/prompt-assembly.ts","code":"TS18048","count":1},
-    {"path":"src/core/agent/task-lifecycle-partner-notifications.ts","code":"TS2322","count":3},
     {"path":"src/core/contacts/postgres-adapter/contact-lifecycle-recovery.ts","code":"TS2322","count":1},
     {"path":"src/core/contacts/postgres-adapter/factory.ts","code":"TS2741","count":1},
     {"path":"src/core/contacts/postgres-adapter/store.ts","code":"TS2345","count":8},

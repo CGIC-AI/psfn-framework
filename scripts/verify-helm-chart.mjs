@@ -1410,6 +1410,9 @@ if (fleetGardenVolumeNames.has('workspace')) {
 if (!fleetGardenVolumeNames.has('postgres-database-url')) {
   throw new Error('fleet Garden must mount the postgres-database-url Secret volume');
 }
+if (!fleetGardenVolumeNames.has('tmp') || !fleetGardenMounts.has('tmp')) {
+  throw new Error('fleet Garden must define and mount its ephemeral tmp volume');
+}
 const fleetGardenSecretEnv = (fleetGardenContainer?.env ?? [])
   .filter(entry => entry.valueFrom?.secretKeyRef)
   .map(entry => entry.name);

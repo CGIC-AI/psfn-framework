@@ -50,14 +50,20 @@ FROM python:3.12.13-slim@sha256:57cd7c3a7a273101a6485ba99423ee568157882804b1124b
 # Pinned emo_sim upstream commit. Fail-closed default; override only for a
 # deliberate, reviewed bump.
 #
-# Pinned to the PSFN integration fork (`integration/psfn-testing`), the merge of
-# `feat/per-dyad-social-need` (directed A->B social-need scales) and
-# `feat/per-drive-session-config` (sparse per-drive enable/scale policy). Both
-# are additive: the relationship record gains `social_need`/`social_need_scale`
-# (null when unconfigured) and session creation gains an optional `drive_config`.
-# No data file changed, so the /api/model contract this repo asserts — 17
-# appraisal dims, the 48-emotion vector — is byte-identical to the previous pin.
-ARG EXPECTED_EMOSIM_SHA=112cd60edecad08ae2c99df818e623cd6245b8b5
+# Pinned to emo_sim `main`, which now carries the directed social-need work:
+# `feat/per-dyad-social-need` (directed A->B social-need scales, upstream PR #1)
+# and `feat/per-drive-session-config` (sparse per-drive enable/scale policy,
+# upstream PR #4). Both are additive: the relationship record gains
+# `social_need`/`social_need_scale` (null when unconfigured) and session creation
+# gains an optional `drive_config`. No data file changed, so the /api/model
+# contract this repo asserts — 17 appraisal dims, the 48-emotion vector — is
+# byte-identical to the previous pin.
+#
+# Pin a commit that is reachable from `main`, never a feature or integration
+# branch: the build resolves the SHA from the context's own git metadata, and a
+# commit reachable only from a deletable branch can become unreachable in a
+# fresh clone while this pin still demands it.
+ARG EXPECTED_EMOSIM_SHA=854ce6a787a29911008b193629a8f8e51d7f9507
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends git \

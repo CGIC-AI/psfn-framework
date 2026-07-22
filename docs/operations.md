@@ -1055,12 +1055,15 @@ unpinned path. The verified SHA is baked into the image at
 `docker/emosim-verify-sha.sh`; to move the pin, change the ARG default in-repo
 (reviewed like any other change) and rebuild against a matching checkout.
 
-The pin currently tracks the PSFN integration fork branch
-`integration/psfn-testing` (merge of `feat/per-dyad-social-need` and
-`feat/per-drive-session-config`), so the `emo_sim` checkout used for a build —
+The pin tracks `emo_sim` `main`, which carries the directed social-need work
+(upstream PRs #1 and #4). The `emo_sim` checkout used for a build —
 `$PSFN_EMOSIM_SRC`, default `~/emo_sim`, per
-`scripts/ops/ship-kube-update.sh --components emosim` — must be on that branch
-at the pinned commit or the verify stage refuses the build. Both merged
+`scripts/ops/ship-kube-update.sh --components emosim` — must be at the pinned
+commit or the verify stage refuses the build; `git -C ~/emo_sim checkout main &&
+git pull` is normally enough. Always pin a commit reachable from `main`: the
+verify stage resolves the SHA from the build context's own git metadata, so a
+commit reachable only from a feature or integration branch can vanish from a
+fresh clone while the pin still demands it. Both merged
 features are additive to the API this repo consumes (a relationship record
 gains nullable `social_need`/`social_need_scale`; session creation gains an
 optional `drive_config`), and no engine data file changed, so the `/api/model`

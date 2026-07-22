@@ -257,6 +257,32 @@ export interface MemorySubjectAuthorizedQueryResult {
   total: number;
 }
 
+/**
+ * Subject-authorized admin aggregation/filter selectors (a27w.5). Unlike the
+ * row-returning {@link MemorySubjectQuerySelector}, these push the operator
+ * admin surface's counts, groupings, filters, and channel/contact slices into
+ * SQL so the caller never hydrates the full authorized corpus into process.
+ * Every selector applies `buildMemorySubjectAuthorizationPredicate` in the same
+ * query, so a summary or slice can never observe a memory the caller is not
+ * authorized for.
+ */
+export type MemorySubjectAdminSelector =
+  | { kind: 'admin_page'; options?: MemoryAdminListOptions }
+  | { kind: 'channel_prefix'; channelId: string; limit: number }
+  | { kind: 'contact_filter'; contactId: string; limit: number }
+  | { kind: 'privacy_summary' }
+  | { kind: 'stats' };
+
+export interface MemorySubjectAdminQuery {
+  authorization: MemorySubjectQueryAuthorization;
+  selector: MemorySubjectAdminSelector;
+}
+
+export type MemorySubjectAdminResult =
+  | { kind: 'memories'; memories: MemorySearchResult[]; total: number }
+  | { kind: 'privacy_summary'; privacySummary: MemoryAdminPrivacySummary }
+  | { kind: 'stats'; stats: MemoryStoreStats };
+
 export interface MemorySubjectAuthorizedMutation {
   authorization: MemorySubjectQueryAuthorization;
   memoryIds: string[];
@@ -560,6 +586,7 @@ interface MemoryStorePortBackend extends ScratchpadProvider {
    */
   listActiveMemoryEmbeddingsSince?(sinceMs: number, limit?: number): Awaitable<MemoryEmbeddingSample[]>;
   queryAuthorizedMemorySubjects(input: MemorySubjectAuthorizedQuery): Awaitable<MemorySubjectAuthorizedQueryResult>;
+  aggregateAuthorizedMemorySubjects(input: MemorySubjectAdminQuery): Awaitable<MemorySubjectAdminResult>;
   mutateAuthorizedMemorySubjects(input: MemorySubjectAuthorizedMutation): Awaitable<number>;
   persistAuthorizedMemoryWrite(input: MemorySubjectAuthorizedWrite): Awaitable<void>;
   softDeleteAuthorizedMemorySubject(input: MemorySubjectAuthorizedDelete): Awaitable<MemoryDeleteVersion | null>;
@@ -660,6 +687,7 @@ export interface MemoryStorePort extends ScratchpadProvider {
   /** See MemoryStorePortBackend.listActiveMemoryEmbeddingsSince (htm9.15 evidence read). */
   listActiveMemoryEmbeddingsSince?(sinceMs: number, limit?: number): Promise<MemoryEmbeddingSample[]>;
   queryAuthorizedMemorySubjects(input: MemorySubjectAuthorizedQuery): Promise<MemorySubjectAuthorizedQueryResult>;
+  aggregateAuthorizedMemorySubjects(input: MemorySubjectAdminQuery): Promise<MemorySubjectAdminResult>;
   mutateAuthorizedMemorySubjects(input: MemorySubjectAuthorizedMutation): Promise<number>;
   persistAuthorizedMemoryWrite(input: MemorySubjectAuthorizedWrite): Promise<void>;
   softDeleteAuthorizedMemorySubject(input: MemorySubjectAuthorizedDelete): Promise<MemoryDeleteVersion | null>;
@@ -787,6 +815,7 @@ export function createMemoryStorePort(store: MemoryStorePortBackend): MemoryStor
       }
       : {}),
     queryAuthorizedMemorySubjects: async input => await store.queryAuthorizedMemorySubjects(input),
+    aggregateAuthorizedMemorySubjects: async input => await store.aggregateAuthorizedMemorySubjects(input),
     mutateAuthorizedMemorySubjects: async input => await store.mutateAuthorizedMemorySubjects(input),
     persistAuthorizedMemoryWrite: async input => await store.persistAuthorizedMemoryWrite(input),
     softDeleteAuthorizedMemorySubject: async input => await store.softDeleteAuthorizedMemorySubject(input),

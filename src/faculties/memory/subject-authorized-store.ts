@@ -4,18 +4,16 @@ import type {
   MemorySubjectQueryAuthorization,
 } from '../../shared/contracts/memory-subject.js';
 import type { CorrelationMetadata } from '../../shared/contracts/runtime.js';
-import {
-  ADMIN_DURABLE_MEMORY_TAGS,
-  ADMIN_PREFERENCE_MEMORY_TAGS,
-} from './postgres-store/admin.js';
 import { MEMORY_SUBJECT_DETAILS_BATCH_MAX } from './postgres-store/subject-queries.js';
 import type {
   MemoryAdminListOptions,
   MemoryAdminPrivacySummary,
+  MemoryStoreStats,
   MemoryStorePort,
+  MemorySubjectAdminQuery,
+  MemorySubjectAdminResult,
 } from './memory-store-port.js';
 import type { PurrMemory } from './types.js';
-import { isInternalMemoryArtifact } from './internal-artifacts.js';
 
 export interface MemorySubjectAccessContext {
   /** Must come from resolved ingress/contact context, never tool or request parameters. */
@@ -123,50 +121,39 @@ async function listAllAuthorized(
   }
 }
 
-function isPreference(memory: PurrMemory): boolean {
-  const preferenceTags = new Set<string>(ADMIN_PREFERENCE_MEMORY_TAGS);
-  return memory.type !== 'boundary' && memory.tags.some(tag => (
-    preferenceTags.has(tag.toLowerCase()) || tag.toLowerCase().startsWith('preference:')
-  ));
-}
-
-function isDurable(memory: PurrMemory): boolean {
-  const durableTags = new Set<string>(ADMIN_DURABLE_MEMORY_TAGS);
-  return memory.retentionClass === 'durable'
-    || memory.tags.some(tag => durableTags.has(tag.toLowerCase()));
-}
-
-function privacySummary(memories: readonly PurrMemory[]): MemoryAdminPrivacySummary {
-  const sensitivityCounts: Record<string, number> = {};
-  for (const memory of memories) {
-    sensitivityCounts[memory.sensitivity] = (sensitivityCounts[memory.sensitivity] ?? 0) + 1;
-  }
+function emptyPrivacySummary(): MemoryAdminPrivacySummary {
   return {
-    activeMemoryCount: memories.length,
-    highSensitivityCount: memories.filter(memory => (
-      memory.sensitivity === 'intimate' || memory.sensitivity === 'confidential'
-    )).length,
-    consentGatedCount: memories.filter(memory => memory.consentFlags?.allowRecall === false).length,
-    contactLinkedCount: memories.filter(memory => Boolean(memory.contactId)).length,
-    scopedCount: memories.filter(memory => Boolean(memory.scopeRef || memory.scopeTags?.length)).length,
-    preferenceCount: memories.filter(isPreference).length,
-    durablePreferenceCount: memories.filter(memory => isPreference(memory) && isDurable(memory)).length,
-    sensitivityCounts,
+    activeMemoryCount: 0,
+    highSensitivityCount: 0,
+    consentGatedCount: 0,
+    contactLinkedCount: 0,
+    scopedCount: 0,
+    preferenceCount: 0,
+    durablePreferenceCount: 0,
+    sensitivityCounts: {},
   };
 }
 
-function filterAdminMemories(
-  memories: readonly PurrMemory[],
-  options: MemoryAdminListOptions,
-): PurrMemory[] {
-  return memories.filter(memory => (
-    (options.type === undefined || memory.type === options.type)
-    && (options.sensitivity === undefined || memory.sensitivity === options.sensitivity)
-    && (options.retentionClass === undefined || memory.retentionClass === options.retentionClass)
-    && (options.preferenceOnly !== true || isPreference(memory))
-    && (options.startDate === undefined || memory.extractedAt >= options.startDate)
-    && (options.endDate === undefined || memory.extractedAt <= options.endDate)
-  ));
+function emptyStats(): MemoryStoreStats {
+  return { total: 0, byType: {}, avgSalience: 0 };
+}
+
+/**
+ * Fail-closed empty aggregate for an unauthorized caller, shaped to the
+ * requested selector so no caller can observe a memory it is not authorized
+ * for.
+ */
+function emptyAdminResult(
+  kind: MemorySubjectAdminQuery['selector']['kind'],
+): MemorySubjectAdminResult {
+  switch (kind) {
+    case 'privacy_summary':
+      return { kind: 'privacy_summary', privacySummary: emptyPrivacySummary() };
+    case 'stats':
+      return { kind: 'stats', stats: emptyStats() };
+    default:
+      return { kind: 'memories', memories: [], total: 0 };
+  }
 }
 
 /**
@@ -188,6 +175,16 @@ export function createSubjectAuthorizedMemoryStore(
           const auth = authorization(currentContext(), input.authorization.action);
           if (!auth) return { memories: [], total: 0 };
           return await target.queryAuthorizedMemorySubjects({
+            authorization: auth,
+            selector: input.selector,
+          });
+        };
+      }
+      if (property === 'aggregateAuthorizedMemorySubjects') {
+        return async (input: MemorySubjectAdminQuery): Promise<MemorySubjectAdminResult> => {
+          const auth = authorization(currentContext(), input.authorization.action);
+          if (!auth) return emptyAdminResult(input.selector.kind);
+          return await target.aggregateAuthorizedMemorySubjects({
             authorization: auth,
             selector: input.selector,
           });
@@ -381,48 +378,88 @@ export function createSubjectAuthorizedMemoryStore(
         };
       }
       if (property === 'listAdminMemories') {
+        // a27w.5: page + filtered total + privacy summary computed in Postgres
+        // with the subject authorization predicate applied inside each query,
+        // instead of hydrating the whole authorized corpus and filtering in JS.
         return async (options: MemoryAdminListOptions = {}) => {
-          const all = (await listAllAuthorized(target, currentContext()))
-            .filter(memory => !isInternalMemoryArtifact(memory));
-          const filtered = filterAdminMemories(all, options);
-          const offset = Math.max(0, Math.floor(options.offset ?? 0));
-          const limit = Math.max(1, Math.min(500, Math.floor(options.limit ?? 50)));
+          const listAuth = authorization(currentContext(), 'list');
+          const countAuth = authorization(currentContext(), 'count');
+          if (!listAuth || !countAuth) {
+            return { memories: [], total: 0, privacySummary: emptyPrivacySummary() };
+          }
+          const page = await target.aggregateAuthorizedMemorySubjects({
+            authorization: listAuth,
+            selector: { kind: 'admin_page', options },
+          });
+          const summary = await target.aggregateAuthorizedMemorySubjects({
+            authorization: countAuth,
+            selector: { kind: 'privacy_summary' },
+          });
+          if (page.kind !== 'memories' || summary.kind !== 'privacy_summary') {
+            throw new Error('Unexpected subject admin aggregate result shape');
+          }
           return {
-            memories: filtered.slice(offset, offset + limit),
-            total: filtered.length,
-            privacySummary: privacySummary(all),
+            memories: page.memories,
+            total: page.total,
+            privacySummary: summary.privacySummary,
           };
         };
       }
       if (property === 'getAdminMemoryPrivacySummary') {
-        return async () => privacySummary(
-          (await listAllAuthorized(target, currentContext()))
-            .filter(memory => !isInternalMemoryArtifact(memory)),
-        );
+        return async () => {
+          const auth = authorization(currentContext(), 'count');
+          if (!auth) return emptyPrivacySummary();
+          const result = await target.aggregateAuthorizedMemorySubjects({
+            authorization: auth,
+            selector: { kind: 'privacy_summary' },
+          });
+          if (result.kind !== 'privacy_summary') {
+            throw new Error('Unexpected subject admin aggregate result shape');
+          }
+          return result.privacySummary;
+        };
       }
       if (property === 'getStats') {
         return async () => {
-          const memories = await listAllAuthorized(target, currentContext());
-          const byType: Record<string, number> = {};
-          for (const memory of memories) byType[memory.type] = (byType[memory.type] ?? 0) + 1;
-          return {
-            total: memories.length,
-            byType,
-            avgSalience: memories.length === 0
-              ? 0
-              : memories.reduce((sum, memory) => sum + memory.salience, 0) / memories.length,
-          };
+          const auth = authorization(currentContext(), 'count');
+          if (!auth) return emptyStats();
+          const result = await target.aggregateAuthorizedMemorySubjects({
+            authorization: auth,
+            selector: { kind: 'stats' },
+          });
+          if (result.kind !== 'stats') {
+            throw new Error('Unexpected subject admin aggregate result shape');
+          }
+          return result.stats;
         };
       }
       if (property === 'getMemoriesByChannel') {
-        return async (channelId: string, limit: number) => (
-          await listAllAuthorized(target, currentContext())
-        ).filter(memory => memory.sourceRef.startsWith(`${channelId}:`)).slice(0, limit);
+        return async (channelId: string, limit: number) => {
+          const auth = authorization(currentContext(), 'list');
+          if (!auth) return [];
+          const result = await target.aggregateAuthorizedMemorySubjects({
+            authorization: auth,
+            selector: { kind: 'channel_prefix', channelId, limit },
+          });
+          if (result.kind !== 'memories') {
+            throw new Error('Unexpected subject admin aggregate result shape');
+          }
+          return result.memories;
+        };
       }
       if (property === 'getMemoriesByContact') {
-        return async (contactId: string, limit: number) => (
-          await listAllAuthorized(target, currentContext())
-        ).filter(memory => memory.contactId === contactId).slice(0, limit);
+        return async (contactId: string, limit: number) => {
+          const auth = authorization(currentContext(), 'list');
+          if (!auth) return [];
+          const result = await target.aggregateAuthorizedMemorySubjects({
+            authorization: auth,
+            selector: { kind: 'contact_filter', contactId, limit },
+          });
+          if (result.kind !== 'memories') {
+            throw new Error('Unexpected subject admin aggregate result shape');
+          }
+          return result.memories;
+        };
       }
       if (property === 'getContactProfile') {
         return async (contactId: string) => {

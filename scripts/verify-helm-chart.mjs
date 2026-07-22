@@ -138,6 +138,45 @@ function findParsedDocumentByKindName(rendered, kind, name) {
     .find(document => document?.kind === kind && document?.metadata?.name === name);
 }
 
+function parseRenderedDocuments(rendered, label) {
+  const parsed = parseAllDocuments(rendered);
+  const errors = parsed.flatMap(document => document.errors);
+  if (errors.length > 0) {
+    throw new Error(`${label} contains malformed YAML: ${errors[0].message}`);
+  }
+  return parsed.map(document => document.toJS()).filter(Boolean);
+}
+
+function assertContainerVolumeMount(deployment, containerField, containerName, expected, label) {
+  const container = deployment?.spec?.template?.spec?.[containerField]
+    ?.find(candidate => candidate.name === containerName);
+  if (!container) {
+    throw new Error(`${label} container missing: ${containerName}`);
+  }
+  const mount = container.volumeMounts?.find(candidate => candidate.name === expected.name);
+  if (!mount
+    || mount.mountPath !== expected.mountPath
+    || mount.subPath !== expected.subPath) {
+    throw new Error(
+      `${label} must mount ${expected.name} at ${expected.mountPath} with subPath ${expected.subPath}`,
+    );
+  }
+}
+
+function assertContainerEnvNames(deployment, containerName, expectedNames, label) {
+  const container = deployment?.spec?.template?.spec?.containers
+    ?.find(candidate => candidate.name === containerName);
+  if (!container) {
+    throw new Error(`${label} container missing: ${containerName}`);
+  }
+  const actualNames = new Set((container.env ?? []).map(entry => entry.name));
+  for (const expectedName of expectedNames) {
+    if (!actualNames.has(expectedName)) {
+      throw new Error(`${label} env missing: ${expectedName}`);
+    }
+  }
+}
+
 function renderedSeedCommand(rendered) {
   const commands = [];
   for (const deploymentName of ['psfn-agent', 'psfn-gateway', 'psfn-garden']) {
@@ -372,9 +411,28 @@ function assertServiceSelectorsDoNotSelectPrefetch(rendered, label) {
 
 const rendered = render();
 const defaultFleetRendered = renderHelm();
-const defaultFleetDocuments = parseAllDocuments(defaultFleetRendered)
-  .map(document => document.toJS())
-  .filter(Boolean);
+const defaultFleetDocuments = parseRenderedDocuments(defaultFleetRendered, 'default fleet render');
+const defaultFleetCertificates = defaultFleetDocuments.filter(document => (
+  document.kind === 'Certificate'
+));
+if (defaultFleetCertificates.length !== 7) {
+  throw new Error(
+    `default fleet render must contain seven Certificates, got ${defaultFleetCertificates.length}`,
+  );
+}
+if (!defaultFleetCertificates.some(document => document.metadata?.name === 'psfn-gateway-rpc')) {
+  throw new Error('default fleet render omitted the psfn-gateway-rpc Certificate');
+}
+const defaultFleetGatewayCertificate = defaultFleetCertificates.find(document => (
+  document.metadata?.name === 'psfn-gateway-rpc'
+));
+const expectedFleetGatewaySpiffeUri = 'spiffe://cluster.local/psfn/gateway/fleet';
+if (defaultFleetGatewayCertificate?.spec?.uris?.length !== 1
+  || defaultFleetGatewayCertificate.spec.uris[0] !== expectedFleetGatewaySpiffeUri) {
+  throw new Error(
+    'fleet gateway Certificate must carry only the shared gateway SPIFFE identity',
+  );
+}
 const defaultFleetAgents = defaultFleetDocuments.filter(document => (
   document.kind === 'Deployment'
   && document.spec?.selector?.matchLabels?.['app.kubernetes.io/component'] === 'agent'
@@ -385,6 +443,57 @@ if (defaultFleetAgents.length !== 1) {
 if (defaultFleetAgents[0]?.metadata?.name
   !== 'psfn-agent-11111111-1111-4111-8111-111111111111') {
   throw new Error('default fleet-of-one render did not use the fleet agent naming contract');
+}
+const defaultFleetGateway = defaultFleetDocuments.find(document => (
+  document.kind === 'Deployment' && document.metadata?.name === 'psfn-gateway'
+));
+const defaultFleetGarden = defaultFleetDocuments.find(document => (
+  document.kind === 'Deployment' && document.metadata?.name === 'psfn-garden'
+));
+const sharedWorkspaceMount = {
+  name: 'runtime',
+  mountPath: '/runtime/workspaces/shared',
+  subPath: 'workspaces-shared',
+};
+for (const [deployment, containerName] of [
+  [defaultFleetGateway, 'gateway'],
+  [defaultFleetGarden, 'garden'],
+  [defaultFleetAgents[0], 'agent'],
+]) {
+  assertContainerVolumeMount(
+    deployment,
+    'containers',
+    containerName,
+    sharedWorkspaceMount,
+    `${containerName} shared workspace`,
+  );
+}
+for (const [deployment, label] of [
+  [defaultFleetGateway, 'gateway owner seeding'],
+  [defaultFleetAgents[0], 'fleet agent owner seeding'],
+]) {
+  assertContainerVolumeMount(
+    deployment,
+    'initContainers',
+    'seed-runtime-files',
+    sharedWorkspaceMount,
+    label,
+  );
+}
+const helmBackupImageEnvNames = ['AGENT', 'GATEWAY', 'GARDEN'].flatMap(workload => (
+  ['REPOSITORY', 'TAG', 'DIGEST'].map(field => `PSFN_HELM_BACKUP_${workload}_IMAGE_${field}`)
+));
+for (const [deployment, containerName] of [
+  [defaultFleetGateway, 'gateway'],
+  [defaultFleetGarden, 'garden'],
+  [defaultFleetAgents[0], 'agent'],
+]) {
+  assertContainerEnvNames(
+    deployment,
+    containerName,
+    helmBackupImageEnvNames,
+    `${containerName} Helm recovery provenance`,
+  );
 }
 if (findDocumentByKindName(defaultFleetRendered, 'Deployment', 'psfn-agent')) {
   throw new Error('default fleet-of-one render must not contain the legacy unbound agent Deployment');

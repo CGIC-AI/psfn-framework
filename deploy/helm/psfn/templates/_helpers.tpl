@@ -379,6 +379,35 @@ psfn.io/fleet-target: registered
 {{- printf "spiffe://%s/psfn/satellite-hub/%s" .Values.certificates.trustDomain .Values.runtime.companionId -}}
 {{- end -}}
 
+{{- define "psfn.sharedWorkspaceVolumeMount" -}}
+{{- if .Values.fleet.enabled }}
+- name: runtime
+  mountPath: {{ printf "%s/workspaces/shared" .Values.fleet.runtimeRoot }}
+  subPath: workspaces-shared
+{{- end }}
+{{- end -}}
+
+{{- define "psfn.helmBackupImageEnv" -}}
+- name: PSFN_HELM_BACKUP_AGENT_IMAGE_REPOSITORY
+  value: {{ default .Values.psfnAppImage.repository .Values.workloads.agent.image.repository | quote }}
+- name: PSFN_HELM_BACKUP_AGENT_IMAGE_TAG
+  value: {{ default .Values.psfnAppImage.tag .Values.workloads.agent.image.tag | quote }}
+- name: PSFN_HELM_BACKUP_AGENT_IMAGE_DIGEST
+  value: {{ default .Values.psfnAppImage.digest .Values.workloads.agent.image.digest | quote }}
+- name: PSFN_HELM_BACKUP_GATEWAY_IMAGE_REPOSITORY
+  value: {{ default .Values.psfnAppImage.repository .Values.workloads.gateway.image.repository | quote }}
+- name: PSFN_HELM_BACKUP_GATEWAY_IMAGE_TAG
+  value: {{ default .Values.psfnAppImage.tag .Values.workloads.gateway.image.tag | quote }}
+- name: PSFN_HELM_BACKUP_GATEWAY_IMAGE_DIGEST
+  value: {{ default .Values.psfnAppImage.digest .Values.workloads.gateway.image.digest | quote }}
+- name: PSFN_HELM_BACKUP_GARDEN_IMAGE_REPOSITORY
+  value: {{ default .Values.psfnAppImage.repository .Values.workloads.garden.image.repository | quote }}
+- name: PSFN_HELM_BACKUP_GARDEN_IMAGE_TAG
+  value: {{ default .Values.psfnAppImage.tag .Values.workloads.garden.image.tag | quote }}
+- name: PSFN_HELM_BACKUP_GARDEN_IMAGE_DIGEST
+  value: {{ default .Values.psfnAppImage.digest .Values.workloads.garden.image.digest | quote }}
+{{- end -}}
+
 {{- define "psfn.certIssuerName" -}}
 {{- if .Values.certificates.issuer.existingIssuerRef.name -}}
 {{- .Values.certificates.issuer.existingIssuerRef.name -}}
@@ -963,6 +992,7 @@ capability-tier.json|scheduler.json|charge-policy.json|skills.json
       mountPath: {{ .Values.runtime.companionDataDir }}
     - name: workspace
       mountPath: {{ .Values.runtime.workspacePath }}
+    {{- include "psfn.sharedWorkspaceVolumeMount" . | nindent 4 }}
     - name: runtime
       mountPath: {{ .Values.runtime.logsDir }}
       subPath: logs

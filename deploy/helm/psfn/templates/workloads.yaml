@@ -141,6 +141,7 @@ spec:
             - name: PSFN_KUBE_RESOURCE_PREFIX
               value: {{ include "psfn.fullname" . | quote }}
             {{- end }}
+            {{- include "psfn.helmBackupImageEnv" . | nindent 12 }}
             {{- /* ntfy operator-notifier wiring (bead ge7g): port the gateway's
                  own NTFY_BASE_URL/NTFY_TOPIC into the pod. Only emitted when
                  both are set, mirroring the gateway bootstrap contract
@@ -206,6 +207,7 @@ spec:
               subPath: state
             - name: workspace
               mountPath: {{ .Values.runtime.workspacePath }}
+            {{- include "psfn.sharedWorkspaceVolumeMount" . | nindent 12 }}
             {{- if .Values.fleet.enabled }}
             {{- include "psfn.gatewayAdditionalWorkspaceVolumeMounts" . | nindent 12 }}
             {{- end }}
@@ -323,24 +325,7 @@ spec:
             - name: PSFN_KUBE_CURRENT_IMAGE
               value: {{ include "psfn.image" (dict "root" . "image" .Values.workloads.gateway.image) | quote }}
             {{- end }}
-            - name: PSFN_HELM_BACKUP_AGENT_IMAGE_REPOSITORY
-              value: {{ default .Values.psfnAppImage.repository .Values.workloads.agent.image.repository | quote }}
-            - name: PSFN_HELM_BACKUP_AGENT_IMAGE_TAG
-              value: {{ default .Values.psfnAppImage.tag .Values.workloads.agent.image.tag | quote }}
-            - name: PSFN_HELM_BACKUP_AGENT_IMAGE_DIGEST
-              value: {{ default .Values.psfnAppImage.digest .Values.workloads.agent.image.digest | quote }}
-            - name: PSFN_HELM_BACKUP_GATEWAY_IMAGE_REPOSITORY
-              value: {{ default .Values.psfnAppImage.repository .Values.workloads.gateway.image.repository | quote }}
-            - name: PSFN_HELM_BACKUP_GATEWAY_IMAGE_TAG
-              value: {{ default .Values.psfnAppImage.tag .Values.workloads.gateway.image.tag | quote }}
-            - name: PSFN_HELM_BACKUP_GATEWAY_IMAGE_DIGEST
-              value: {{ default .Values.psfnAppImage.digest .Values.workloads.gateway.image.digest | quote }}
-            - name: PSFN_HELM_BACKUP_GARDEN_IMAGE_REPOSITORY
-              value: {{ default .Values.psfnAppImage.repository .Values.workloads.garden.image.repository | quote }}
-            - name: PSFN_HELM_BACKUP_GARDEN_IMAGE_TAG
-              value: {{ default .Values.psfnAppImage.tag .Values.workloads.garden.image.tag | quote }}
-            - name: PSFN_HELM_BACKUP_GARDEN_IMAGE_DIGEST
-              value: {{ default .Values.psfnAppImage.digest .Values.workloads.garden.image.digest | quote }}
+            {{- include "psfn.helmBackupImageEnv" . | nindent 12 }}
             - name: GATEWAY_RPC_ENDPOINT
               value: {{ include "psfn.gatewayRpcUrlForClient" . | quote }}
             - name: GATEWAY_SESSION_INTEGRITY_AUTH_TOKEN
@@ -418,6 +403,7 @@ spec:
               mountPath: {{ .Values.runtime.companionDataDir }}
             - name: workspace
               mountPath: {{ .Values.runtime.workspacePath }}
+            {{- include "psfn.sharedWorkspaceVolumeMount" . | nindent 12 }}
             - name: runtime
               mountPath: {{ .Values.runtime.logsDir }}
               subPath: logs
@@ -519,6 +505,7 @@ spec:
             {{- else }}
             {{- include "psfn.commonEnv" . | nindent 12 }}
             {{- end }}
+            {{- include "psfn.helmBackupImageEnv" . | nindent 12 }}
             - name: ADMIN_HOST
               value: 0.0.0.0
             - name: ADMIN_PORT
@@ -648,6 +635,7 @@ spec:
             - name: system-data
               mountPath: {{ .Values.runtime.systemDataDir }}
               readOnly: true
+            {{- include "psfn.sharedWorkspaceVolumeMount" . | nindent 12 }}
             - name: runtime
               mountPath: {{ .Values.runtime.logsDir }}
               subPath: logs

@@ -24,19 +24,35 @@ import type { CompletionHandoffRecord } from '../../shared/contracts/completion-
 const MAX_NOTICES_PER_CHANNEL = 8;
 const NOTICE_TTL_MS = 24 * 60 * 60 * 1000;
 const MAX_NOTICE_SUMMARY_CHARS = 160;
+const RESULT_REF_BOUNDS = {
+  count: 4,
+  labelChars: 24,
+  valueChars: 60,
+  renderedChars: 90,
+} as const;
+
+export interface CompletionNoticeResultRef {
+  kind: string;
+  ref: string;
+  label?: string;
+}
 
 export interface CompletionNotice {
   dedupeKey: string;
   label: string;
   status: CompletionHandoffRecord['status'];
   summary: string;
+  resultRefs: CompletionNoticeResultRef[];
   createdAt: number;
 }
 
 export function renderCompletionNoticeLines(notice: CompletionNotice): string {
+  const renderedRefs = renderResultRefs(notice.resultRefs);
+  const suffix = renderedRefs ? ` [result refs: ${renderedRefs}]` : '';
+  const summaryBudget = Math.max(1, MAX_NOTICE_SUMMARY_CHARS - suffix.length);
   return [
     `[background completion] ${notice.label} — ${notice.status}`,
-    notice.summary,
+    `${truncate(notice.summary, summaryBudget)}${suffix}`,
   ].join('\n');
 }
 
@@ -46,13 +62,46 @@ export function buildCompletionNotice(handoff: CompletionHandoffRecord): Complet
   const summary = normalizedSummary.length > MAX_NOTICE_SUMMARY_CHARS
     ? `${normalizedSummary.slice(0, MAX_NOTICE_SUMMARY_CHARS - 3)}...`
     : normalizedSummary;
+  const resultRefs = [...handoff.refs.artifacts, ...handoff.refs.outputs]
+    .slice(0, RESULT_REF_BOUNDS.count)
+    .map(ref => ({
+      kind: truncate(ref.kind, RESULT_REF_BOUNDS.labelChars),
+      ref: truncate(ref.ref, RESULT_REF_BOUNDS.valueChars),
+      ...(ref.label
+        ? { label: truncate(ref.label, RESULT_REF_BOUNDS.labelChars) }
+        : {}),
+    }));
   return {
     dedupeKey: handoff.dedupeKey,
     label,
     status: handoff.status,
     summary,
+    resultRefs,
     createdAt: handoff.createdAt,
   };
+}
+
+function renderResultRefs(refs: readonly CompletionNoticeResultRef[]): string {
+  let rendered = '';
+  for (const ref of refs) {
+    const label = (ref.label?.trim() || ref.kind).replace(/\s+/g, ' ');
+    const value = ref.ref.replace(/\s+/g, ' ').trim();
+    if (!label || !value) continue;
+    const candidate = `${label}=${value}`;
+    const next = rendered ? `${rendered}; ${candidate}` : candidate;
+    if (next.length > RESULT_REF_BOUNDS.renderedChars) {
+      if (!rendered) rendered = truncate(candidate, RESULT_REF_BOUNDS.renderedChars);
+      break;
+    }
+    rendered = next;
+  }
+  return rendered;
+}
+
+function truncate(value: string, maxChars: number): string {
+  if (value.length <= maxChars) return value;
+  if (maxChars <= 3) return value.slice(0, maxChars);
+  return `${value.slice(0, maxChars - 3)}...`;
 }
 
 export class CompletionNoticeBuffer {

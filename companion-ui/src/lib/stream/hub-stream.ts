@@ -12,6 +12,10 @@ import type {
   ApprovalGrantMode,
   ApprovalResolvedStatus,
   ApprovalSourceSystem,
+  EmotionAcacAxisScore,
+  EmotionDiscreteScore,
+  EmotionSnapshotTrigger,
+  EmotionVector,
   HubToClientMessage,
   ToolActivityPhase,
 } from '../protocol/events.js';
@@ -103,6 +107,27 @@ export interface ArtifactPreviewStreamState {
   message?: string;
 }
 
+/**
+ * The latest redacted emotion snapshot, retained as current companion affect.
+ * Only the newest snapshot is kept — this is a state projection, not a log. The
+ * sprite layer derives the emotional base from it and decays to a neutral
+ * default once the snapshot is older than the staleness window (never a stuck
+ * expression), so downstream reads MUST consult `receivedAt`.
+ */
+export interface EmotionSnapshotStreamEntry {
+  trigger: EmotionSnapshotTrigger;
+  vad: EmotionVector;
+  mood: EmotionVector;
+  discrete: EmotionDiscreteScore[];
+  confidence: number;
+  acacAxes?: EmotionAcacAxisScore[];
+  /** ISO timestamp of the snapshot sample (server clock). */
+  timestamp: string;
+  sequence: number;
+  /** ISO timestamp the frame was received (client clock; use for staleness). */
+  receivedAt: string;
+}
+
 /** One tool-activity lifecycle event, grouped downstream by `id`. */
 export interface ToolActivityStreamEntry {
   id: string;
@@ -128,6 +153,8 @@ export interface HubStreamState {
   artifacts: ArtifactStreamItem[];
   artifactPreviews: Record<string, ArtifactPreviewStreamState>;
   toolActivity: ToolActivityStreamEntry[];
+  /** Latest redacted emotion snapshot, or null when none received / authority cleared. */
+  emotion: EmotionSnapshotStreamEntry | null;
   sequence: number;
   updatedAt: string;
 }
@@ -182,6 +209,7 @@ export function createInitialHubStreamState(at = new Date().toISOString()): HubS
     artifacts: [],
     artifactPreviews: {},
     toolActivity: [],
+    emotion: null,
     sequence: 0,
     updatedAt: at,
   };
@@ -318,6 +346,7 @@ export class HubStreamStore {
       artifacts: this.state.artifacts.map((item) => ({ ...item })),
       artifactPreviews: cloneArtifactPreviews(this.state.artifactPreviews),
       toolActivity: this.state.toolActivity.map((entry) => ({ ...entry })),
+      emotion: cloneEmotionSnapshot(this.state.emotion),
     };
   }
 
@@ -437,6 +466,9 @@ function applyConnectionState(
           session: null,
           approvals: [],
           approvalResolutions: {},
+          // Drop stale companion affect on lost authority so the sprite falls
+          // back to a neutral default rather than freezing a past expression.
+          emotion: null,
         }
       : {}),
     updatedAt: at,
@@ -627,6 +659,24 @@ function applyInboundMessage(
       };
       return { ...base, toolActivity: [...base.toolActivity, entry] };
     }
+    case 'emotion.snapshot': {
+      // Retain only the newest snapshot — this is a current-state projection,
+      // not a log. The sprite layer decays it to neutral once stale.
+      const entry: EmotionSnapshotStreamEntry = {
+        trigger: message.data.trigger,
+        vad: { ...message.data.vad },
+        mood: { ...message.data.mood },
+        discrete: message.data.discrete.map((score) => ({ ...score })),
+        confidence: message.data.confidence,
+        ...(message.data.acacAxes !== undefined
+          ? { acacAxes: message.data.acacAxes.map((axis) => ({ ...axis })) }
+          : {}),
+        timestamp: message.data.timestamp,
+        sequence,
+        receivedAt: at,
+      };
+      return { ...base, emotion: entry };
+    }
     case 'text':
     case 'audio':
     case 'action':
@@ -742,6 +792,21 @@ function cloneSession(session: SatelliteHubSession | undefined): SatelliteHubSes
       : undefined,
     place: session.place ? { ...session.place } : undefined,
     shards: session.shards?.map(entry => ({ ...entry })),
+  };
+}
+
+function cloneEmotionSnapshot(
+  emotion: EmotionSnapshotStreamEntry | null,
+): EmotionSnapshotStreamEntry | null {
+  if (!emotion) {
+    return null;
+  }
+  return {
+    ...emotion,
+    vad: { ...emotion.vad },
+    mood: { ...emotion.mood },
+    discrete: emotion.discrete.map((score) => ({ ...score })),
+    ...(emotion.acacAxes ? { acacAxes: emotion.acacAxes.map((axis) => ({ ...axis })) } : {}),
   };
 }
 

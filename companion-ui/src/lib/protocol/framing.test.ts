@@ -132,6 +132,29 @@ describe('hub websocket framing', () => {
         timestamp: '2026-06-17T00:00:02.000Z',
       },
     },
+    {
+      type: 'emotion.snapshot',
+      data: {
+        trigger: 'post_turn',
+        vad: { valence: 0.5, arousal: 0.3, dominance: 0.1 },
+        mood: { valence: 0.2, arousal: 0.1, dominance: 0 },
+        discrete: [{ label: 'joy', score: 0.8 }, { label: 'love', score: 0.4 }],
+        confidence: 0.7,
+        acacAxes: [{ axis: 'agency', score: 0.6 }, { axis: 'connection', score: 0.4 }],
+        timestamp: '2026-06-17T00:00:03.000Z',
+      },
+    },
+    {
+      type: 'emotion.snapshot',
+      data: {
+        trigger: 'vad_shift',
+        vad: { valence: -1, arousal: 1, dominance: -1 },
+        mood: { valence: 0, arousal: 0, dominance: 0 },
+        discrete: [],
+        confidence: 0,
+        timestamp: '2026-06-17T00:00:04.000Z',
+      },
+    },
   ];
 
   const clientMessages: ClientToHubMessage[] = [
@@ -196,6 +219,13 @@ describe('hub websocket framing', () => {
     ['artifact.preview.error missing message', '{"type":"artifact.preview.error","requestId":"r","artifactId":"a"}'],
     ['tool.activity bad phase', '{"type":"tool.activity","data":{"id":"1","tool":"t","phase":"paused","timestamp":"ts"}}'],
     ['tool.activity missing data', '{"type":"tool.activity"}'],
+    ['emotion.snapshot bad trigger', '{"type":"emotion.snapshot","data":{"trigger":"idle","vad":{"valence":0,"arousal":0,"dominance":0},"mood":{"valence":0,"arousal":0,"dominance":0},"discrete":[],"confidence":0,"timestamp":"2026-06-17T00:00:03.000Z"}}'],
+    ['emotion.snapshot vad out of range', '{"type":"emotion.snapshot","data":{"trigger":"post_turn","vad":{"valence":1.5,"arousal":0,"dominance":0},"mood":{"valence":0,"arousal":0,"dominance":0},"discrete":[],"confidence":0,"timestamp":"2026-06-17T00:00:03.000Z"}}'],
+    ['emotion.snapshot confidence out of range', '{"type":"emotion.snapshot","data":{"trigger":"post_turn","vad":{"valence":0,"arousal":0,"dominance":0},"mood":{"valence":0,"arousal":0,"dominance":0},"discrete":[],"confidence":1.2,"timestamp":"2026-06-17T00:00:03.000Z"}}'],
+    ['emotion.snapshot discrete score out of range', '{"type":"emotion.snapshot","data":{"trigger":"post_turn","vad":{"valence":0,"arousal":0,"dominance":0},"mood":{"valence":0,"arousal":0,"dominance":0},"discrete":[{"label":"joy","score":2}],"confidence":0,"timestamp":"2026-06-17T00:00:03.000Z"}}'],
+    ['emotion.snapshot unknown acac axis', '{"type":"emotion.snapshot","data":{"trigger":"post_turn","vad":{"valence":0,"arousal":0,"dominance":0},"mood":{"valence":0,"arousal":0,"dominance":0},"discrete":[],"confidence":0,"acacAxes":[{"axis":"vengeance","score":0.5}],"timestamp":"2026-06-17T00:00:03.000Z"}}'],
+    ['emotion.snapshot extra key', '{"type":"emotion.snapshot","data":{"trigger":"post_turn","vad":{"valence":0,"arousal":0,"dominance":0},"mood":{"valence":0,"arousal":0,"dominance":0},"discrete":[],"confidence":0,"timestamp":"2026-06-17T00:00:03.000Z","rationale":"secret"}}'],
+    ['emotion.snapshot missing data', '{"type":"emotion.snapshot"}'],
   ];
 
   it.each(malformedHubFrames)('fails closed on malformed hub frame: %s', (_label, frame) => {

@@ -312,6 +312,76 @@ describe('hub stream reducer', () => {
     expect(state.phase).toBe('failed');
     expect(state.failure?.message).toBe('protocol violation');
   });
+
+  it('retains only the latest emotion snapshot as current affect', () => {
+    let state = createInitialHubStreamState('2026-06-17T00:00:00.000Z');
+    expect(state.emotion).toBeNull();
+
+    state = reduceHubStreamState(state, {
+      type: 'hub.inbound',
+      at: '2026-06-17T00:00:01.000Z',
+      event: {
+        message: {
+          type: 'emotion.snapshot',
+          data: {
+            trigger: 'post_turn',
+            vad: { valence: 0.1, arousal: 0.1, dominance: 0 },
+            mood: { valence: 0, arousal: 0, dominance: 0 },
+            discrete: [{ label: 'joy', score: 0.6 }],
+            confidence: 0.5,
+            timestamp: '2026-06-17T00:00:01.000Z',
+          },
+        },
+      },
+    });
+    expect(state.emotion?.trigger).toBe('post_turn');
+    expect(state.emotion?.receivedAt).toBe('2026-06-17T00:00:01.000Z');
+
+    state = reduceHubStreamState(state, {
+      type: 'hub.inbound',
+      at: '2026-06-17T00:00:02.000Z',
+      event: {
+        message: {
+          type: 'emotion.snapshot',
+          data: {
+            trigger: 'vad_shift',
+            vad: { valence: -0.8, arousal: 0.7, dominance: -0.5 },
+            mood: { valence: -0.2, arousal: 0.1, dominance: 0 },
+            discrete: [],
+            confidence: 0.9,
+            acacAxes: [{ axis: 'agency', score: 0.3 }],
+            timestamp: '2026-06-17T00:00:02.000Z',
+          },
+        },
+      },
+    });
+    // Newest replaces the previous snapshot (state projection, not a log).
+    expect(state.emotion?.trigger).toBe('vad_shift');
+    expect(state.emotion?.vad.valence).toBe(-0.8);
+    expect(state.emotion?.acacAxes).toEqual([{ axis: 'agency', score: 0.3 }]);
+  });
+
+  it('clears emotion affect when connection authority is lost', () => {
+    let state: HubStreamState = {
+      ...createInitialHubStreamState('2026-06-17T00:00:00.000Z'),
+      emotion: {
+        trigger: 'post_turn',
+        vad: { valence: 0.5, arousal: 0.5, dominance: 0 },
+        mood: { valence: 0, arousal: 0, dominance: 0 },
+        discrete: [],
+        confidence: 0.5,
+        timestamp: '2026-06-17T00:00:00.000Z',
+        sequence: 1,
+        receivedAt: '2026-06-17T00:00:00.000Z',
+      },
+    };
+    state = reduceHubStreamState(state, {
+      type: 'client.state',
+      at: '2026-06-17T00:00:01.000Z',
+      event: { previous: 'ready', current: 'closed' },
+    });
+    expect(state.emotion).toBeNull();
+  });
 });
 
 describe('hub stream store', () => {

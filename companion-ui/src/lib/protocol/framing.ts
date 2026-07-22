@@ -3,6 +3,7 @@ import {
   isBoundedString as boundedString,
   isObjectRecord as isRecord,
 } from '../../../../src/shared/utils/types.js';
+import { ACAC_AXES } from '../../../../src/shared/contracts/emotion-contracts.js';
 /**
  * Wire framing for the Companion Cockpit <-> PSFN-Satellite-Hub transport.
  *
@@ -60,6 +61,7 @@ const HUB_TO_CLIENT_TYPES: ReadonlySet<HubToClientMessage['type']> = new Set([
   'artifact.preview.result',
   'artifact.preview.error',
   'tool.activity',
+  'emotion.snapshot',
 ]);
 
 const CLIENT_TO_HUB_TYPES: ReadonlySet<ClientToHubMessage['type']> = new Set([
@@ -110,6 +112,41 @@ function isoTimestamp(value: unknown): value is string {
   return typeof value === 'string'
     && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/u.test(value)
     && !Number.isNaN(Date.parse(value));
+}
+
+function signedUnit(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value) && value >= -1 && value <= 1;
+}
+
+function unitInterval(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 1;
+}
+
+function emotionVector(value: unknown): boolean {
+  const record = exactRecord(value, ['valence', 'arousal', 'dominance']);
+  return record !== null
+    && signedUnit(record.valence) && signedUnit(record.arousal) && signedUnit(record.dominance);
+}
+
+/** Bounded, open-vocabulary discrete list: `[{ label, score }]`, ≤32 entries. */
+function emotionDiscrete(value: unknown): boolean {
+  return Array.isArray(value) && value.length <= 32 && value.every((entry) => {
+    const record = exactRecord(entry, ['label', 'score']);
+    return record !== null && boundedString(record.label, 64) && unitInterval(record.score);
+  });
+}
+
+/** ACAC axis scores: `[{ axis, score }]`, ≤ACAC_AXES.length, axes unique + known. */
+function emotionAcacAxes(value: unknown): boolean {
+  if (value === undefined) return true;
+  if (!Array.isArray(value) || value.length > ACAC_AXES.length) return false;
+  const axes: string[] = [];
+  for (const entry of value) {
+    const record = exactRecord(entry, ['axis', 'score']);
+    if (!record || !oneOf(record.axis, ACAC_AXES) || !unitInterval(record.score)) return false;
+    axes.push(record.axis as string);
+  }
+  return new Set(axes).size === axes.length;
 }
 
 function base64(value: unknown): value is string {
@@ -332,6 +369,18 @@ const STRICT_HUB_VALIDATORS: Record<HubToClientMessage['type'], (payload: unknow
     return data !== null && boundedString(data.id, 256) && boundedString(data.tool, 256)
       && oneOf(data.phase, ['started', 'progress', 'completed', 'failed'])
       && optionalBoundedString(data.detail, 4096) && isoTimestamp(data.timestamp);
+  },
+  'emotion.snapshot': payload => {
+    const data = dataRecord(
+      payload,
+      ['trigger', 'vad', 'mood', 'discrete', 'confidence', 'timestamp'],
+      ['acacAxes'],
+    );
+    return data !== null
+      && oneOf(data.trigger, ['post_turn', 'vad_shift'])
+      && emotionVector(data.vad) && emotionVector(data.mood)
+      && emotionDiscrete(data.discrete) && unitInterval(data.confidence)
+      && emotionAcacAxes(data.acacAxes) && isoTimestamp(data.timestamp);
   },
 };
 

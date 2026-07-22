@@ -997,7 +997,6 @@ function makeServices(): GardenAdminDomainServices {
             timezone: 'local',
           },
           enabled: true,
-          sendToDiscord: false,
           internalStateInput: true,
           mode: 'deliberation',
         }, {
@@ -1006,7 +1005,6 @@ function makeServices(): GardenAdminDomainServices {
           prompt: 'Weekly private review.',
           intervalMs: 604_800_000,
           enabled: true,
-          sendToDiscord: false,
           internalStateInput: true,
           mode: 'deliberation',
         }],

@@ -32,7 +32,6 @@ describe('ReflectionMetacognitionJournalStore', () => {
       initiatedBy: 'scheduler',
       reason: 'Scheduled reflection run',
       channelId: 'internal:reflection:values-reflection',
-      sendToDiscordEffective: false,
       mode: 'deliberation',
       prompt: 'Reflect on values.',
       reflection: 'Continuity and care remained durable values.',

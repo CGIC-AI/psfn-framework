@@ -58,7 +58,6 @@ export interface ReflectionRunMetacognitionEntryInput extends ReflectionMetacogn
   templateName: string;
   executionSource: ReflectionExecutionSource;
   channelId: string;
-  sendToDiscordEffective: boolean;
   mode: 'agent' | 'deliberation';
   prompt: string;
   reflection: string;
@@ -248,7 +247,6 @@ function normalizeRunEntry(
     templateName: normalizeRequiredString(input.templateName, 'templateName'),
     executionSource: input.executionSource,
     channelId: normalizeRequiredString(input.channelId, 'channelId'),
-    sendToDiscordEffective: normalizeRequiredBoolean(input.sendToDiscordEffective, 'sendToDiscordEffective'),
     mode: input.mode,
     prompt: normalizeRequiredString(input.prompt, 'prompt'),
     reflection: normalizeRequiredString(input.reflection, 'reflection'),
@@ -289,7 +287,7 @@ function normalizePersistedEntry(raw: unknown): ReflectionMetacognitionJournalEn
 
   if (candidate.kind === 'reflection_run') {
     const base = normalizeBaseEntry(candidate as ReflectionRunMetacognitionEntryInput, Date.now);
-    if (!base.templateId || !base.templateName || !base.executionSource || !base.channelId || base.sendToDiscordEffective === undefined || !base.mode || !base.prompt || !base.reflection) {
+    if (!base.templateId || !base.templateName || !base.executionSource || !base.channelId || !base.mode || !base.prompt || !base.reflection) {
       return null;
     }
     return {
@@ -300,7 +298,7 @@ function normalizePersistedEntry(raw: unknown): ReflectionMetacognitionJournalEn
       templateName: base.templateName,
       executionSource: base.executionSource,
       channelId: base.channelId,
-      sendToDiscordEffective: base.sendToDiscordEffective,
+      ...(base.sendToDiscordEffective !== undefined ? { sendToDiscordEffective: base.sendToDiscordEffective } : {}),
       mode: base.mode,
       prompt: base.prompt,
       reflection: base.reflection,

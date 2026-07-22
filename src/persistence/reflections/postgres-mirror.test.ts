@@ -37,7 +37,6 @@ describe('PostgresReflectionMetacognitionMirrorStore', () => {
       initiatedBy: 'companion',
       reason: 'Manual reflection run via heartbeat_run_template',
       channelId: 'internal:reflection:musing',
-      sendToDiscordEffective: false,
       mode: 'agent',
       internalStateSnapshotRef: 'snapshot-1',
       metacognitiveFlags: [{ flag: 'steadiness', confidence: 0.7 }],

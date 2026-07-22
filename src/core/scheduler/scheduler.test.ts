@@ -664,6 +664,92 @@ describe('Scheduler', () => {
     });
   });
 
+  describe('lastRunAt option', () => {
+    it('fires immediately when the persisted last run is older than the interval', async () => {
+      const fn = vi.fn();
+      scheduler.register(
+        {
+          id: 'seeded-overdue',
+          name: 'Seeded Overdue',
+          type: 'every',
+          intervalMs: 60_000,
+          handler: fn,
+          state: 'idle',
+        },
+        { lastRunAt: Date.now() - 120_000 },
+      );
+
+      await scheduler.tick();
+      expect(fn).toHaveBeenCalledOnce();
+    });
+
+    it('waits out the remaining interval when the persisted last run is recent', async () => {
+      const fn = vi.fn();
+      scheduler.register(
+        {
+          id: 'seeded-recent',
+          name: 'Seeded Recent',
+          type: 'every',
+          intervalMs: 999_999,
+          handler: fn,
+          state: 'idle',
+        },
+        { lastRunAt: Date.now() - 1_000 },
+      );
+
+      await scheduler.tick();
+      expect(fn).not.toHaveBeenCalled();
+    });
+
+    it('treats lastRunAt 0 as never run', async () => {
+      const fn = vi.fn();
+      scheduler.register(
+        {
+          id: 'seeded-never',
+          name: 'Seeded Never',
+          type: 'every',
+          intervalMs: 999_999,
+          handler: fn,
+          state: 'idle',
+        },
+        { lastRunAt: 0 },
+      );
+
+      await scheduler.tick();
+      expect(fn).toHaveBeenCalledOnce();
+    });
+
+    it('rejects a non-finite or negative lastRunAt', () => {
+      const task: ScheduledTask = {
+        id: 'seeded-invalid',
+        name: 'Seeded Invalid',
+        type: 'every',
+        intervalMs: 1_000,
+        handler: () => {},
+        state: 'idle',
+      };
+
+      expect(() => scheduler.register(task, { lastRunAt: Number.NaN }))
+        .toThrow(/lastRunAt must be a non-negative finite epoch/);
+      expect(() => scheduler.register(task, { lastRunAt: -1 }))
+        .toThrow(/lastRunAt must be a non-negative finite epoch/);
+    });
+
+    it('rejects combining lastRunAt with skipFirstRun', () => {
+      expect(() => scheduler.register(
+        {
+          id: 'seeded-conflict',
+          name: 'Seeded Conflict',
+          type: 'every',
+          intervalMs: 1_000,
+          handler: () => {},
+          state: 'idle',
+        },
+        { lastRunAt: Date.now(), skipFirstRun: true },
+      )).toThrow(/cannot combine lastRunAt with skipFirstRun/);
+    });
+  });
+
   describe('heartbeat', () => {
     it('registers heartbeat as a special every task', () => {
       scheduler.registerHeartbeat(() => {});

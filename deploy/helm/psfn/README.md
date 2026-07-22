@@ -220,7 +220,12 @@ CHARACTER_CARD_PATH=/runtime/companions/11111111-1111-4111-8111-111111111111/com
 
 `system-data`, `companion-data`, `workspace`, `runtime`, and `model-cache` are
 PVC-backed. Fleet Auth additionally uses its dedicated, deliberately
-non-restored authority-floor PVC. The seed init container creates the runtime
+non-restored authority-floor PVC. `BACKUP_ROOT_DIR` is set on every workload
+that owns a backup lane, so every such workload must also mount the `runtime`
+PVC's `backups` subPath there — the agents and the gateway (which owns the
+fleet-auth consistent lane) all do. The runtime proves that root writable at
+startup and fails closed if it is not, rather than reporting a backup lane as
+enabled when it cannot write a byte. The seed init container creates the runtime
 directories and, only when `bootstrap.seedOwnerFiles=true`, copies
 `/app/config/*.seed.json` into the canonical root for each missing owner file.
 Seed-backed cluster-global

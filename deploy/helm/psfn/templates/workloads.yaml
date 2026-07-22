@@ -218,6 +218,14 @@ spec:
             - name: runtime
               mountPath: {{ .Values.runtime.tempDir }}
               subPath: tmp
+            # The gateway owns the fleet-auth consistent backup lane, so it needs
+            # the same runtime backups subPath the agents mount. Without it the
+            # lane has BACKUP_ROOT_DIR pointing at an unwritable container path
+            # and the runtime now refuses to start rather than pretend it is
+            # enabled (psfn-framework-vcyxv).
+            - name: runtime
+              mountPath: {{ .Values.runtime.backupsDir }}
+              subPath: backups
             {{- if .Values.persistence.modelCache.enabled }}
             - name: model-cache
               mountPath: {{ .Values.runtime.modelCacheDir }}

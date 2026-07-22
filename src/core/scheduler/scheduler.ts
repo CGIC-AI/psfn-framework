@@ -276,7 +276,14 @@ export class Scheduler {
     }
   }
 
-  register(task: ScheduledTask, opts?: { skipFirstRun?: boolean }): void {
+  /**
+   * `lastRunAt` seeds the task's last-run epoch from state that outlived this
+   * process (e.g. a persisted backup watermark), so an interval task resumes its
+   * real cadence instead of restarting it at every boot. Pass `0` for "never
+   * ran" — the task is then due on the first tick. It is mutually exclusive with
+   * `skipFirstRun`, which is the in-memory-only "start the interval now" seed.
+   */
+  register(task: ScheduledTask, opts?: { skipFirstRun?: boolean; lastRunAt?: number }): void {
     if (this.tasks.has(task.id)) {
       throw new Error(`Task "${task.id}" is already registered`);
     }
@@ -288,11 +295,20 @@ export class Scheduler {
     } else if (task.cadence !== undefined) {
       throw new Error(`Task "${task.id}" cadence is only supported for "every" tasks`);
     }
+    if (opts?.lastRunAt !== undefined) {
+      if (!Number.isFinite(opts.lastRunAt) || opts.lastRunAt < 0) {
+        throw new Error(`Task "${task.id}" lastRunAt must be a non-negative finite epoch`);
+      }
+      if (opts.skipFirstRun !== undefined) {
+        throw new Error(`Task "${task.id}" cannot combine lastRunAt with skipFirstRun`);
+      }
+    }
 
     const now = Date.now();
+    const seededLastRun = opts?.lastRunAt ?? (opts?.skipFirstRun ? now : 0);
     const lastRun = task.type === 'every' && isWallClockCadence(task.cadence)
       ? now
-      : (opts?.skipFirstRun ? now : 0);
+      : seededLastRun;
     const entry: RuntimeScheduledTask = { ...task, lastRun };
     this.tasks.set(task.id, entry);
     // Re-arm the adaptive wake if this task is due sooner than the currently

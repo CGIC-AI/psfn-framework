@@ -8,14 +8,12 @@ import { describe, expect, it, vi } from 'vitest';
 import type { Scheduler } from '../../core/scheduler/scheduler.js';
 import type { CompanionsFleetConfig } from '../../system/config/companions-config.js';
 import type { BackupRuntimeConfig } from './config.js';
+import { SCHEDULED_BACKUP_TASK_ID } from './service.js';
 import {
   FleetBackupPartialFailureError,
-  SCHEDULED_BACKUP_TASK_ID,
-} from './service.js';
-import type {
-  FleetBackupRunOptions,
-  FleetBackupRunResult,
-  FleetBackupUnitOutcome,
+  type FleetBackupRunOptions,
+  type FleetBackupRunResult,
+  type FleetBackupUnitOutcome,
 } from './fleet-backup-contracts.js';
 import {
   buildFleetBackupRunOptions,

@@ -21,18 +21,18 @@ import {
 import { deriveRestoreVerifyDatabaseUrl } from './postgres-restore.js';
 import { verifyFleetAuthConsistentFamilyRestore } from './fleet-restore.js';
 import {
-  FleetBackupPartialFailureError,
   DEFAULT_SHARED_WORLD_SCHEMA,
   runFleetBackupCycle,
   SCHEDULED_BACKUP_TASK_ID,
   SCHEDULED_BACKUP_TASK_NAME,
   type FleetAuthConsistentBackupCycleOptions,
 } from './service.js';
-import type {
-  BackupPostgresOptions,
-  FleetBackupCompanionUnit,
-  FleetBackupRunOptions,
-  FleetBackupRunResult,
+import {
+  FleetBackupPartialFailureError,
+  type BackupPostgresOptions,
+  type FleetBackupCompanionUnit,
+  type FleetBackupRunOptions,
+  type FleetBackupRunResult,
 } from './fleet-backup-contracts.js';
 
 const log = createComponentLogger('FleetBackupScheduler');

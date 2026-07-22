@@ -14,9 +14,17 @@ import { createComponentLogger } from '../../shared/logger.js';
 import type { FleetAuthFamilyDatabaseRoles } from '../postgres/fleet-auth/schema.js';
 import type { FleetAuthAuthorityFloorStore } from '../postgres/fleet-auth/authority-floor.js';
 import type { BackupRuntimeConfig } from './config.js';
-import type {
-  FleetBackupRunOptions,
-  FleetBackupRunResult,
+import {
+  assertBackupRootWritable,
+  lastFleetAuthBackupCycleAt,
+  readFleetAuthBackupWatermark,
+  writeFleetAuthBackupWatermark,
+  type FleetAuthBackupWatermark,
+} from './backup-root.js';
+import {
+  FleetBackupPartialFailureError,
+  type FleetBackupRunOptions,
+  type FleetBackupRunResult,
 } from './fleet-backup-contracts.js';
 import {
   assertEncryptedBackupPackage,
@@ -89,7 +97,6 @@ export interface RegisterScheduledFleetAuthBackupTaskOptions {
   cycleOptions: FleetAuthConsistentBackupCycleOptions;
   config: BackupRuntimeConfig;
   onBackupFailure?: (error: unknown) => void;
-  skipFirstRun?: boolean;
   runCycle?: (
     options: FleetAuthConsistentBackupCycleOptions,
   ) => Promise<FleetAuthConsistentBackupCycleResult>;
@@ -160,7 +167,10 @@ export async function runFleetAuthConsistentBackupCycleImplementation(
       now: () => cycleTimestamp,
     });
     if (fleetResult.overallStatus !== 'success') {
-      throw new Error('Fleet auth recovery packaging produced an incomplete fleet family');
+      // The production runner throws this itself; a fleet runner that reports a
+      // failed family in its result must surface the same typed error so the
+      // scheduled lane can still name the companion that failed.
+      throw new FleetBackupPartialFailureError(fleetResult.fleetManifestPath, fleetResult.units);
     }
     for (const [index, unit] of fleetResult.units.entries()) {
       const schema = unit.postgresSchema;
@@ -255,6 +265,30 @@ export async function runFleetAuthConsistentBackupCycleImplementation(
   }
 }
 
+/**
+ * Arms the gateway-owned fleet-auth consistent backup lane.
+ *
+ * Two startup guarantees, both learned from a lane that ran for weeks producing
+ * nothing at all (psfn-framework-vcyxv):
+ *
+ * 1. The backup root is proved writable *before* the lane is registered, so a
+ *    workload whose backups volume was never mounted fails closed at startup
+ *    instead of reporting the lane as enabled and then dying on EACCES inside
+ *    every cycle, where no operator ever sees it.
+ * 2. The cadence is seeded from a watermark persisted in the backup root, not
+ *    from process start. The catch-up policy is "run when
+ *    `now - lastCycleAt >= intervalMs`", where `lastCycleAt` is the later of the
+ *    last attempt and the last completion:
+ *      - no watermark (fresh deployment, or a replaced backup volume) → due
+ *        immediately, so the first artifact does not wait for a pod to survive a
+ *        whole interval;
+ *      - watermark older than the interval → due immediately (the catch-up a
+ *        short-lived pod needs; a pure in-memory interval never reached it);
+ *      - watermark newer than the interval → waits out the remainder, so a
+ *        restart cannot re-run a heavy consistent backup on every boot.
+ *    Stamping the attempt (not only the completion) is what bounds a
+ *    crash-looping gateway to one cycle per interval.
+ */
 export function registerScheduledFleetAuthBackupTaskImplementation(
   options: RegisterScheduledFleetAuthBackupTaskOptions,
   dependencies: {
@@ -266,6 +300,12 @@ export function registerScheduledFleetAuthBackupTaskImplementation(
   },
 ): void {
   const runCycle = options.runCycle ?? dependencies.runDefaultCycle;
+  const backupRootDir = options.cycleOptions.backupRootDir;
+  assertBackupRootWritable(backupRootDir);
+
+  let watermark: FleetAuthBackupWatermark | null = readFleetAuthBackupWatermark(backupRootDir);
+  const lastCycleAt = lastFleetAuthBackupCycleAt(watermark, Date.now());
+
   options.scheduler.register(
     {
       id: dependencies.taskId,
@@ -273,14 +313,41 @@ export function registerScheduledFleetAuthBackupTaskImplementation(
       type: 'every',
       intervalMs: options.config.intervalMs,
       handler: async () => {
+        const attemptStartedAt = new Date().toISOString();
         let result: FleetAuthConsistentBackupCycleResult;
         try {
+          // Stamped before any work so a crash mid-cycle still moves the
+          // watermark; a failure to persist it fails the cycle rather than
+          // letting the lane run unbounded on the next boot.
+          watermark = writeFleetAuthBackupWatermark(backupRootDir, {
+            lastAttemptStartedAt: attemptStartedAt,
+            ...(watermark?.lastCompletedAt ? { lastCompletedAt: watermark.lastCompletedAt } : {}),
+            ...(watermark?.lastBackupDir ? { lastBackupDir: watermark.lastBackupDir } : {}),
+          });
           result = await runCycle(options.cycleOptions);
         } catch (error) {
           const observedAt = Date.now();
           const errorMessage = error instanceof Error ? error.message : String(error);
+          const partial = error instanceof FleetBackupPartialFailureError;
+          const failedUnits = partial
+            ? error.units.filter(unit => unit.status === 'failure')
+            : [];
           log.error('Scheduled fleet auth consistent backup failed', {
             error: errorMessage,
+            partialFailure: partial,
+            ...(partial
+              ? {
+                fleetManifestPath: error.fleetManifestPath,
+                failedUnitCount: failedUnits.length,
+                totalUnitCount: error.units.length,
+                failedUnits: failedUnits.map(unit => ({
+                  kind: unit.kind,
+                  ...(unit.companionId ? { companionId: unit.companionId } : {}),
+                  ...(unit.postgresSchema ? { postgresSchema: unit.postgresSchema } : {}),
+                  error: unit.error ?? 'unknown error',
+                })),
+              }
+              : {}),
           });
           recordBackupDiagnosticOutcome({
             status: 'failure',
@@ -288,9 +355,42 @@ export function registerScheduledFleetAuthBackupTaskImplementation(
             taskId: dependencies.taskId,
             taskName: dependencies.taskName,
             message: errorMessage,
+            ...(partial
+              ? {
+                details: {
+                  partialFailure: true,
+                  fleetManifestPath: error.fleetManifestPath,
+                  failedUnitCount: failedUnits.length,
+                  totalUnitCount: error.units.length,
+                  // Diagnostics details carry scalars only, so the failing
+                  // companions are joined rather than dropped.
+                  failedUnits: failedUnits
+                    .map(unit => `${unit.kind}${unit.companionId ? `(${unit.companionId})` : ''}`)
+                    .join(', '),
+                },
+              }
+              : {}),
           });
           options.onBackupFailure?.(error);
           throw error;
+        }
+
+        try {
+          watermark = writeFleetAuthBackupWatermark(backupRootDir, {
+            lastAttemptStartedAt: attemptStartedAt,
+            lastCompletedAt: new Date().toISOString(),
+            lastBackupDir: result.backupDir,
+          });
+        } catch (error) {
+          // The artifact is written and verified — reporting the cycle as failed
+          // would be a lie. Losing the completion stamp only costs cadence
+          // precision (the attempt stamp still bounds re-runs), so it is surfaced
+          // loudly and the success stands.
+          log.error('Fleet auth backup completion watermark write failed', {
+            backupRootDir,
+            backupDir: result.backupDir,
+            error: error instanceof Error ? error.message : String(error),
+          });
         }
 
         recordBackupDiagnosticOutcome({
@@ -320,6 +420,13 @@ export function registerScheduledFleetAuthBackupTaskImplementation(
       },
       state: 'idle',
     },
-    { skipFirstRun: options.skipFirstRun ?? true },
+    { lastRunAt: lastCycleAt ?? 0 },
   );
+  log.info('Fleet auth consistent backup lane armed', {
+    backupRootDir,
+    intervalMs: options.config.intervalMs,
+    lastCycleAt: lastCycleAt === null ? null : new Date(lastCycleAt).toISOString(),
+    catchUpDueAtBoot: lastCycleAt === null
+      || Date.now() - lastCycleAt >= options.config.intervalMs,
+  });
 }

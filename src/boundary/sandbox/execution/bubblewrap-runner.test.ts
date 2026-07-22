@@ -12,6 +12,7 @@ function request(): ResolvedShellExecution {
     sandboxCwd: '/workspace/docs',
     sandboxBinaryPath: '/usr/bin/bwrap',
     resourceLimitBinaryPath: '/usr/bin/prlimit',
+    deadlineBinaryPath: '/usr/bin/timeout',
     sandboxPath: '/usr/local/bin:/usr/bin:/bin',
     childEnv: {
       PATH: '/usr/local/bin:/usr/bin:/bin',
@@ -57,8 +58,7 @@ describe('buildBubblewrapArgs', () => {
       '--nofile=512:512',
       '--core=0:0',
     ]));
-    expect(args.slice(-4)).toEqual([
-      '--',
+    expect(args.slice(-3)).toEqual([
       '/usr/bin/bash',
       '-lc',
       'rg needle docs/large.md',
@@ -66,6 +66,22 @@ describe('buildBubblewrapArgs', () => {
     expect(rendered).not.toContain('/app/system-data');
     expect(rendered).not.toContain('/app/companion-data');
     expect(rendered).not.toContain('/var/run/secrets');
+  });
+
+  it('wraps the command in a kernel-enforced in-sandbox deadline after the rlimit stage', () => {
+    const sequence = buildBubblewrapArgs(request()).join('\0');
+
+    // prlimit → timeout → command: the deadline supervisor runs inside the
+    // namespace so its SIGKILL and the namespace teardown on its exit are
+    // kernel-enforced, independent of the agent process's event loop.
+    expect(sequence).toContain(
+      ['--core=0:0', '--', '/usr/bin/timeout', '--signal=KILL', '600.000', '/usr/bin/bash'].join('\0'),
+    );
+
+    const millisecondPrecision = buildBubblewrapArgs({ ...request(), timeoutMs: 50 }).join('\0');
+    expect(millisecondPrecision).toContain(
+      ['/usr/bin/timeout', '--signal=KILL', '0.050', '/usr/bin/bash'].join('\0'),
+    );
   });
 
   it('exposes only the allowlisted host configuration needed by image tools', () => {

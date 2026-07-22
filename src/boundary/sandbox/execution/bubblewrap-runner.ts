@@ -73,11 +73,36 @@ export function buildBubblewrapArgs(request: ResolvedShellExecution): string[] {
     `--nofile=${request.maxOpenFiles}:${request.maxOpenFiles}`,
     '--core=0:0',
     '--',
+    // Kernel-enforced policy deadline, inside the sandbox. The `timeout`
+    // supervisor's alarm is kernel-delivered, so it fires even when the agent
+    // process's event loop is starved (JS timers do not). When it KILLs the
+    // command and exits, bubblewrap's namespace-init exits with it, and the
+    // kernel tears down the PID namespace, SIGKILLing every remaining
+    // descendant — no orphan can survive or hold our stdio pipes open. The
+    // command path is canonical-absolute, so no `--` separator is needed (and
+    // keeping it out stays compatible with both GNU and uutils coreutils).
+    request.deadlineBinaryPath,
+    '--signal=KILL',
+    formatDeadlineSeconds(request.timeoutMs),
     request.executableCommand,
     ...request.args,
   );
   return args;
 }
+
+/** `timeout` duration in seconds; both GNU and uutils accept fractions. */
+function formatDeadlineSeconds(timeoutMs: number): string {
+  return (timeoutMs / 1000).toFixed(3);
+}
+
+/**
+ * Bounded wait between the sandbox host's `exit` and its stdio `close`.
+ * `close` only fires once every holder of the stdout/stderr pipes is gone;
+ * a sandbox descendant that briefly outlives the host must not be able to
+ * hang the run promise on that drain (observed pre-fix as an unbounded
+ * `shell.exec` hang under load; bead ijtak.6).
+ */
+const STREAM_DRAIN_GRACE_MS = 500;
 
 function runBounded(
   request: ResolvedShellExecution,
@@ -90,6 +115,9 @@ function runBounded(
       env: { PATH: '/usr/bin:/bin' },
       shell: false,
       stdio: ['ignore', 'pipe', 'pipe'],
+      // Give the sandbox host its own process group/session so the deadline
+      // escalation below can SIGKILL the group without touching this process.
+      detached: true,
     });
     let stdout = '';
     let stderr = '';
@@ -97,6 +125,9 @@ function runBounded(
     let truncated = false;
     let timedOut = false;
     let settled = false;
+    let hostExited = false;
+    let deadlineTimer: NodeJS.Timeout | undefined;
+    let drainTimer: NodeJS.Timeout | undefined;
 
     const appendOutput = (target: 'stdout' | 'stderr', value: Buffer | string): void => {
       const text = typeof value === 'string' ? value : value.toString('utf8');
@@ -112,36 +143,75 @@ function runBounded(
       if (next.length < text.length) truncated = true;
     };
 
-    const timeoutHandle = setTimeout(() => {
+    const settle = (complete: () => void): void => {
+      if (settled) return;
+      settled = true;
+      if (deadlineTimer !== undefined) clearTimeout(deadlineTimer);
+      if (drainTimer !== undefined) clearTimeout(drainTimer);
+      complete();
+    };
+
+    const killSandboxProcessGroup = (): void => {
+      // Once the host is reaped its PID (and group id) may be recycled, so
+      // never signal after `exit`; the in-sandbox kernel deadline owns any
+      // remaining cleanup from there.
+      if (hostExited || typeof child.pid !== 'number') return;
+      try {
+        process.kill(-child.pid, 'SIGKILL');
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ESRCH') return; // group already gone
+        settle(() => rejectResult(error instanceof Error ? error : new Error(String(error))));
+      }
+    };
+
+    // Best-effort escalation only: JS timers starve with the event loop. The
+    // authoritative deadline is the in-sandbox `timeout --signal=KILL` (see
+    // buildBubblewrapArgs), whose kill and namespace teardown the kernel
+    // enforces regardless of this process's liveness.
+    deadlineTimer = setTimeout(() => {
       timedOut = true;
-      child.kill('SIGTERM');
-      setTimeout(() => child.kill('SIGKILL'), 250).unref();
+      killSandboxProcessGroup();
     }, request.timeoutMs);
 
-    child.stdout.on('data', chunk => appendOutput('stdout', chunk));
-    child.stderr.on('data', chunk => appendOutput('stderr', chunk));
-    child.once('error', (error) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timeoutHandle);
-      rejectResult(error);
-    });
-    child.once('close', (code) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timeoutHandle);
+    const finalize = (code: number | null, signal: NodeJS.Signals | null): void => settle(() => {
+      const deadlineElapsed = Date.now() - startedAt >= request.timeoutMs;
+      // Detect a deadline kill even when the JS timer above never fired
+      // (starved event loop): GNU coreutils `timeout --signal=KILL` exits 137,
+      // uutils coreutils exits 124, and the host-group escalation surfaces as
+      // SIGKILL. Any of these after the policy deadline elapsed is a timeout.
+      const killedAtDeadline = timedOut
+        || (deadlineElapsed && (code === 124 || code === 137 || signal === 'SIGKILL'));
       resolveResult({
         command: request.command,
         args: request.args,
         cwd: request.cwd,
-        exitCode: timedOut ? null : code,
+        exitCode: killedAtDeadline ? null : code,
         stdout,
         stderr,
-        timedOut,
+        timedOut: killedAtDeadline,
         truncated,
         durationMs: Date.now() - startedAt,
       });
     });
+
+    child.stdout.on('data', chunk => appendOutput('stdout', chunk));
+    child.stderr.on('data', chunk => appendOutput('stderr', chunk));
+    child.once('error', (error) => {
+      settle(() => rejectResult(error));
+    });
+    child.once('exit', (code, signal) => {
+      hostExited = true;
+      if (settled) return;
+      // `close` waits for stdio to drain; bound that wait so a pipe-holding
+      // straggler can never hang the run promise. Normal runs settle via
+      // `close` immediately after `exit` and cancel this timer.
+      drainTimer = setTimeout(() => {
+        child.stdout.destroy();
+        child.stderr.destroy();
+        finalize(code, signal);
+      }, STREAM_DRAIN_GRACE_MS);
+    });
+    child.once('close', (code, signal) => finalize(code, signal));
   });
 }
 

@@ -1,10 +1,70 @@
-import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   executeShellCommandWithPolicy,
 } from './shell-runner.js';
+
+/**
+ * Read-only /proc scan for live processes whose command line contains the
+ * given unique marker. Used to prove the sandbox left no orphans; it never
+ * signals anything.
+ */
+function scanForSandboxProcesses(marker: string): string[] {
+  const hits: string[] = [];
+  for (const entry of readdirSync('/proc')) {
+    if (!/^\d+$/.test(entry)) continue;
+    let cmdline = '';
+    try {
+      cmdline = readFileSync(`/proc/${entry}/cmdline`, 'utf8').replaceAll('\0', ' ');
+    } catch {
+      continue; // process exited between listing and read
+    }
+    if (cmdline.includes(marker)) hits.push(`pid ${entry}: ${cmdline}`);
+  }
+  return hits;
+}
+
+/** Poll briefly for post-kill reaping, then assert zero survivors. */
+async function expectNoSandboxProcesses(marker: string): Promise<void> {
+  const deadline = Date.now() + 3_000;
+  let hits = scanForSandboxProcesses(marker);
+  while (hits.length > 0 && Date.now() < deadline) {
+    await new Promise(resolve => setTimeout(resolve, 100));
+    hits = scanForSandboxProcesses(marker);
+  }
+  expect(hits).toEqual([]);
+}
+
+/** Fail loudly if the run promise hangs instead of resolving in bounds. */
+async function resolveWithin<T>(pending: Promise<T>, budgetMs: number, label: string): Promise<T> {
+  let guard: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([
+      pending,
+      new Promise<never>((_resolve, reject) => {
+        guard = setTimeout(
+          () => reject(new Error(`${label} did not resolve within ${budgetMs}ms`)),
+          budgetMs,
+        );
+      }),
+    ]);
+  } finally {
+    if (guard !== undefined) clearTimeout(guard);
+  }
+}
 
 describe('executeShellCommandWithPolicy', () => {
   const tempPaths: string[] = [];
@@ -365,6 +425,86 @@ describe('executeShellCommandWithPolicy', () => {
       );
       expect(unmounted.stdout).toBe('absent repo_env=unset');
     });
+
+    // Regression for psfn-framework-ijtak.6: the pre-fix runner enforced the
+    // timeout with a SIGTERM to the bwrap host plus a 250ms JS-timer SIGKILL
+    // escalation. Under machine load the event loop starves, the escalation
+    // fires late or never, the run promise hangs unboundedly (>5min observed),
+    // and the bwrap host + inner command leak as init-reparented orphans that
+    // survive SIGKILL-to-host. The fix moves enforcement into the kernel
+    // (in-sandbox `timeout --signal=KILL` + PID-namespace teardown). This test
+    // reproduces the load-starved hang deterministically by blocking the event
+    // loop synchronously across the deadline — no JS timer, including the
+    // runner's escalation, can fire until the block ends.
+    it('enforces the deadline in the kernel while the event loop is starved, reaping the whole tree', async () => {
+      const { workspace } = workspaceFixture();
+      const marker = `psfn-ijtak6-starve-${randomUUID()}`;
+      const heartbeatPath = join(workspace, 'heartbeat');
+      const pending = executeShellCommandWithPolicy(
+        {
+          command: 'bash',
+          // `: <marker>` puts a unique scan marker in the bash cmdline; the
+          // loop heartbeats a workspace file so the kill instant stays
+          // observable (via mtime) while this thread is blocked.
+          args: ['-lc', `: ${marker}; while :; do touch heartbeat; sleep 0.02; done`],
+          cwd: workspace,
+          timeoutMs: 2_000,
+        },
+        { workspacePath: workspace, policy: enabledPolicy(workspace) },
+      );
+
+      // Wait (event loop live) until the sandboxed command demonstrably
+      // started, i.e. the kernel deadline supervisor is armed.
+      const startDeadline = Date.now() + 15_000;
+      while (!existsSync(heartbeatPath)) {
+        if (Date.now() > startDeadline) throw new Error('sandboxed command never started');
+        await new Promise(resolve => setTimeout(resolve, 20));
+      }
+
+      // Starve the event loop synchronously well past the policy deadline.
+      const blockStart = Date.now();
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 3_500);
+      const blockEnd = Date.now();
+      expect(blockEnd - blockStart).toBeGreaterThanOrEqual(3_400);
+
+      const result = await resolveWithin(pending, 5_000, 'starved timeout run');
+      expect(result.timedOut).toBe(true);
+      expect(result.exitCode).toBeNull();
+
+      // The heartbeat stopped mid-block — within the policy deadline plus
+      // slack, well before the loop resumed — so the kill was necessarily
+      // kernel-enforced, not a JS-timer action.
+      const lastHeartbeatMs = statSync(heartbeatPath).mtimeMs;
+      expect(lastHeartbeatMs).toBeLessThanOrEqual(blockStart + 2_000 + 1_000);
+      expect(lastHeartbeatMs).toBeLessThan(blockEnd - 500);
+
+      await expectNoSandboxProcesses(marker);
+    }, 30_000);
+
+    it('leaves no orphaned descendants after a normal-path timeout kill', async () => {
+      const { workspace } = workspaceFixture();
+      // Unique sleep duration doubles as the /proc scan marker for the
+      // backgrounded child, which reparents to the namespace init when bash
+      // dies — exactly the orphan class observed pre-fix.
+      const orphanSleepSeconds = String(3_000_000 + Math.floor(Math.random() * 1_000_000));
+      const result = await resolveWithin(
+        executeShellCommandWithPolicy(
+          {
+            command: 'bash',
+            args: ['-lc', `sleep ${orphanSleepSeconds} & while :; do :; done`],
+            cwd: workspace,
+            timeoutMs: 100,
+          },
+          { workspacePath: workspace, policy: enabledPolicy(workspace) },
+        ),
+        15_000,
+        'timeout run with backgrounded child',
+      );
+
+      expect(result.timedOut).toBe(true);
+      expect(result.exitCode).toBeNull();
+      await expectNoSandboxProcesses(`sleep ${orphanSleepSeconds}`);
+    }, 30_000);
 
     it('does not expose a host path through a symlink inside the workspace', async () => {
       const { workspace, outside } = workspaceFixture();

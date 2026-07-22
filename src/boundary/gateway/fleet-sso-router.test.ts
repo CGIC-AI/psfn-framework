@@ -274,11 +274,13 @@ describe('unified Fleet SSO origin provenance', () => {
       nowSeconds: () => nowSeconds,
       generateJti: () => 'testing-harness-request-once',
     });
-    let signedInput: Parameters<typeof baseSigner.signOperator>[0] | undefined;
+    let signedInput: Parameters<typeof baseSigner.signTestingHarness>[0] | undefined;
     let issuedToken: string | undefined;
-    const signOperator = vi.fn((input: Parameters<typeof baseSigner.signOperator>[0]) => {
+    const signTestingHarness = vi.fn((
+      input: Parameters<typeof baseSigner.signTestingHarness>[0],
+    ) => {
       signedInput = input;
-      issuedToken = baseSigner.signOperator(input);
+      issuedToken = baseSigner.signTestingHarness(input);
       return issuedToken;
     });
     const audit = vi.fn(async () => ({
@@ -310,7 +312,7 @@ describe('unified Fleet SSO origin provenance', () => {
       canonicalOrigin,
       trustProxy: true,
       broker,
-      signer: { ...baseSigner, signOperator },
+      signer: { ...baseSigner, signTestingHarness },
       verifier: requestVerifier,
       replay: { consume: replay },
       portalProjection: { resolve: vi.fn(async () => { throw new Error('not used'); }) },
@@ -359,7 +361,7 @@ describe('unified Fleet SSO origin provenance', () => {
       principalId: 'testing-harness',
       provider: 'testing_harness',
     }));
-    expect(signOperator).toHaveBeenCalledWith(expect.objectContaining({
+    expect(signTestingHarness).toHaveBeenCalledWith(expect.objectContaining({
       authContext: expect.objectContaining({
         principalId: 'testing-harness',
         provider: 'testing_harness',
@@ -403,7 +405,7 @@ describe('unified Fleet SSO origin provenance', () => {
     expect(admitted).toMatchObject({
       decision: 'allow',
       verified: {
-        audience: `operator:${companionId}`,
+        audience: 'testing-harness',
         action: 'settings.write',
         authContext: { provider: 'testing_harness', principalId: 'testing-harness' },
       },
@@ -419,13 +421,13 @@ describe('unified Fleet SSO origin provenance', () => {
       privateKeyPem: privateKey.export({ format: 'pem', type: 'pkcs8' }).toString(),
       ttlSeconds: 30,
     });
-    const signOperator = vi.fn(signer.signOperator);
+    const signTestingHarness = vi.fn(signer.signTestingHarness);
     const audit = vi.fn();
     const router = new GatewayFleetSsoRouter({
       canonicalOrigin,
       trustProxy: true,
       broker: { resolveAuthorizationContext: vi.fn() },
-      signer: { ...signer, signOperator },
+      signer: { ...signer, signTestingHarness },
       verifier: createRequestCapabilityVerifier({
         issuer: 'fleet-harness-test',
         maxTtlSeconds: 30,
@@ -478,7 +480,7 @@ describe('unified Fleet SSO origin provenance', () => {
     await router.handle(incoming, response);
 
     expect(audit).not.toHaveBeenCalled();
-    expect(signOperator).not.toHaveBeenCalled();
+    expect(signTestingHarness).not.toHaveBeenCalled();
     expect(response.writeHead).toHaveBeenCalledWith(404, expect.any(Object));
   });
 

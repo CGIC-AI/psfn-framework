@@ -190,7 +190,7 @@ describe('discriminated Garden admission', () => {
 
   it('accepts testing_harness capabilities only behind the independent Garden verifier flag', async () => {
     const compiled = target('/api/admin/settings/backup', 'POST', Buffer.from('configJson=%7B%7D'));
-    const token = signer('testing-harness-once').signOperator({
+    const token = signer('testing-harness-once').signTestingHarness({
       target: compiled,
       requestId: REQUEST_ID,
       decisionId: DECISION_ID,

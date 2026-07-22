@@ -63,6 +63,25 @@ describe('fleet auth child assertion transport', () => {
     expect(parsed.child.target.body).toEqual(Buffer.from('{"favorite":true}'));
   });
 
+  it('derives a testing-harness control identity from the normalized provider audience', () => {
+    const wire = {
+      ...wireRequest(),
+      providerIdentity: {
+        provider: 'testing_harness',
+        audience: 'testing-harness',
+      },
+    };
+
+    expect(parseChildAssertionExchangeRequest(wire)).toMatchObject({
+      operator: {
+        kind: 'testing_harness_provider',
+        provider: 'testing_harness',
+        audience: 'testing-harness',
+        companionId,
+      },
+    });
+  });
+
   it.each([
     ['query', (wire: ReturnType<typeof wireRequest>) => {
       wire.child.target.rawTarget = '/api/admin/images/generated/image-a?capability=forged';

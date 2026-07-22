@@ -846,24 +846,36 @@ export class GatewayFleetSsoRouter {
     verified: VerifiedRequestCapability;
     context: FleetAuthorizationContext;
   }> {
-    const token = this.options.signer.signOperator({
+    const capabilityInput = {
       target: input.target,
       requestId: input.requestId,
       decisionId: input.decisionId,
       authContext: input.authContext,
       versions: input.versions,
-    });
+    };
+    const testingHarnessParent = input.authContext.provider === 'testing_harness';
+    if (testingHarnessParent
+      && (!timingSafeStringEqual(input.authContext.principalId, 'testing-harness')
+        || !timingSafeStringEqual(input.authContext.providerSubjectId, 'testing-harness'))) {
+      throw new FleetSsoRequestError(404, 'Resource not found');
+    }
+    const token = testingHarnessParent
+      ? this.options.signer.signTestingHarness(capabilityInput)
+      : this.options.signer.signOperator(capabilityInput);
     if (Buffer.byteLength(token, 'ascii') > MAX_CAPABILITY_HEADER_BYTES) {
       throw new FleetSsoRequestError(503, 'Issued capability exceeds the transport envelope');
     }
-    const verified = this.options.verifier.verifyOperator({
+    const verifyInput = {
       token,
       target: input.target,
       requestId: input.requestId,
       decisionId: input.decisionId,
       versions: input.versions,
       ...(this.options.nowSeconds ? { nowSeconds: this.options.nowSeconds() } : {}),
-    });
+    };
+    const verified = testingHarnessParent
+      ? this.options.verifier.verifyTestingHarness(verifyInput)
+      : this.options.verifier.verifyOperator(verifyInput);
     const replay = await this.options.replay.consume(
       compileRequestCapabilityReplayConsumption({ token, verified, target: input.target }),
     );

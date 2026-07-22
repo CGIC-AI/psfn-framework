@@ -143,7 +143,12 @@ const ACTIONS = new Set<string>(FLEET_AUTH_ACTIONS);
 const SCOPES = new Set<string>(GARDEN_WORKSPACE_SCOPES);
 const RESOURCE_AREAS = new Set<string>(GARDEN_RESOURCE_AREAS);
 
-export type RequestCapabilityAudience = `operator:${string}` | `agent:${string}`;
+export const TESTING_HARNESS_REQUEST_CAPABILITY_AUDIENCE = 'testing-harness' as const;
+
+export type RequestCapabilityParentAudience =
+  | `operator:${string}`
+  | typeof TESTING_HARNESS_REQUEST_CAPABILITY_AUDIENCE;
+export type RequestCapabilityAudience = RequestCapabilityParentAudience | `agent:${string}`;
 
 export interface RequestCapabilityAuthorityVersions {
   readonly authorityGeneration: number;
@@ -156,7 +161,7 @@ export interface RequestCapabilityAuthorityVersions {
 }
 
 export interface RequestCapabilityParentBinding {
-  readonly audience: `operator:${string}`;
+  readonly audience: RequestCapabilityParentAudience;
   readonly requestId: string;
   readonly decisionId: string;
   readonly jti: string;
@@ -205,6 +210,7 @@ export interface RequestCapabilityVerifierConfig {
 export interface GatewayRequestCapabilitySigner
   extends GatewayTrustedHostRecoveryCapabilitySigner {
   signOperator(input: RequestCapabilitySignInput): string;
+  signTestingHarness(input: RequestCapabilitySignInput): string;
   signAgent(input: RequestCapabilitySignInput & {
     readonly parent: RequestCapabilityParentBinding;
   }): string;
@@ -225,6 +231,7 @@ export interface RequestCapabilityVerifyInput extends Omit<RequestCapabilitySign
 
 export interface RequestCapabilityVerifier extends TrustedHostRecoveryCapabilityVerifier {
   verifyOperator(input: RequestCapabilityVerifyInput): VerifiedRequestCapability;
+  verifyTestingHarness(input: RequestCapabilityVerifyInput): VerifiedRequestCapability;
   verifyAgent(input: RequestCapabilityVerifyInput & {
     readonly parent: RequestCapabilityParentBinding;
   }): VerifiedRequestCapability;
@@ -301,7 +308,7 @@ interface RequestCapabilityAuthClaims {
 }
 
 interface RequestCapabilityParentClaims {
-  aud: `operator:${string}`;
+  aud: RequestCapabilityParentAudience;
   request_id: string;
   decision_id: string;
   jti: string;
@@ -661,8 +668,33 @@ function assertAuthContext(value: unknown, target: CompiledGardenRequestTarget):
   }
 }
 
-function assertParent(parent: RequestCapabilityParentBinding, companionId: string): void {
-  if (parent.audience !== `operator:${companionId}`) reject('parent audience does not match');
+function assertTestingHarnessAuthContext(
+  context: Pick<RequestCapabilityAuthContext, 'provider' | 'principalId' | 'providerSubjectId'>,
+): void {
+  if (context.provider !== 'testing_harness'
+    || context.principalId !== TESTING_HARNESS_REQUEST_CAPABILITY_AUDIENCE
+    || context.providerSubjectId !== TESTING_HARNESS_REQUEST_CAPABILITY_AUDIENCE) {
+    reject('testing-harness provider identity does not match audience');
+  }
+}
+
+function expectedParentAudience(
+  context: Pick<RequestCapabilityAuthContext, 'provider' | 'principalId' | 'providerSubjectId'>,
+  companionId: string,
+): RequestCapabilityParentAudience {
+  if (context.provider === 'testing_harness') {
+    assertTestingHarnessAuthContext(context);
+    return TESTING_HARNESS_REQUEST_CAPABILITY_AUDIENCE;
+  }
+  return `operator:${companionId}`;
+}
+
+function assertParent(
+  parent: RequestCapabilityParentBinding,
+  companionId: string,
+  expectedAudience: RequestCapabilityParentAudience = `operator:${companionId}`,
+): void {
+  if (parent.audience !== expectedAudience) reject('parent audience does not match');
   requireUuid(parent.requestId, 'parent.requestId');
   requireUuid(parent.decisionId, 'parent.decisionId');
   requireTokenId(parent.jti, 'parent.jti');
@@ -826,7 +858,23 @@ export function createGatewayRequestCapabilitySigner(input: {
     parent?: RequestCapabilityParentBinding,
   ): string => {
     validateSignInput(signInput);
-    if (parent) assertParent(parent, signInput.target.companionId);
+    if (audience === TESTING_HARNESS_REQUEST_CAPABILITY_AUDIENCE) {
+      assertTestingHarnessAuthContext(signInput.authContext);
+      if (parent) reject('testing-harness capabilities must not contain a parent binding');
+    } else if (audience === `operator:${signInput.target.companionId}`) {
+      if (signInput.authContext.provider !== 'discord') {
+        reject('operator capabilities require the operator provider');
+      }
+      if (parent) reject('operator capabilities must not contain a parent binding');
+    } else if (parent) {
+      assertParent(
+        parent,
+        signInput.target.companionId,
+        expectedParentAudience(signInput.authContext, signInput.target.companionId),
+      );
+    } else {
+      reject('agent capabilities require a parent binding');
+    }
     const issuedAt = input.nowSeconds?.() ?? Math.floor(Date.now() / 1000);
     requireInteger(issuedAt, 'signing time', 1);
     const jti = requireTokenId(input.generateJti?.() ?? randomUUID(), 'generated jti');
@@ -849,6 +897,10 @@ export function createGatewayRequestCapabilitySigner(input: {
     signOperator: (signInput: RequestCapabilitySignInput) => issue(
       signInput,
       `operator:${signInput.target.companionId}`,
+    ),
+    signTestingHarness: (signInput: RequestCapabilitySignInput) => issue(
+      signInput,
+      TESTING_HARNESS_REQUEST_CAPABILITY_AUDIENCE,
     ),
     signAgent: (signInput: RequestCapabilitySignInput & { parent: RequestCapabilityParentBinding }) => issue(
       signInput,
@@ -1066,13 +1118,16 @@ function parseAuthContext(
   return context;
 }
 
-function parseParent(value: unknown, companionId: string): RequestCapabilityParentClaims {
+function parseParent(
+  value: unknown,
+  expectedAudience: RequestCapabilityParentAudience,
+): RequestCapabilityParentClaims {
   const record = requireRecord(value, 'claims.parent');
   requireExactKeys(record, PARENT_KEYS, 'claims.parent');
   const aud = requireString(record.aud, 'claims.parent.aud');
-  if (aud !== `operator:${companionId}`) reject('claims.parent audience does not match');
+  if (aud !== expectedAudience) reject('claims.parent audience does not match');
   return {
-    aud: aud as `operator:${string}`,
+    aud: aud as RequestCapabilityParentAudience,
     request_id: requireUuid(record.request_id, 'claims.parent.request_id'),
     decision_id: requireUuid(record.decision_id, 'claims.parent.decision_id'),
     jti: requireTokenId(record.jti, 'claims.parent.jti'),
@@ -1121,12 +1176,18 @@ function canonicalClaims(claims: RequestCapabilityClaims): RequestCapabilityClai
       };
 }
 
-function parseClaims(encoded: string, audienceKind: 'operator' | 'agent'): RequestCapabilityClaims {
+function parseClaims(
+  encoded: string,
+  audienceKind: 'operator' | 'testing_harness' | 'agent',
+): RequestCapabilityClaims {
   const record = parseJsonSegment(encoded, 'claims');
-  requireExactKeys(record, audienceKind === 'operator' ? OPERATOR_CLAIM_KEYS : AGENT_CLAIM_KEYS, 'claims');
+  requireExactKeys(record, audienceKind === 'agent' ? AGENT_CLAIM_KEYS : OPERATOR_CLAIM_KEYS, 'claims');
   const companionId = requireUuid(record.companion_id, 'claims.companion_id');
   const audience = requireString(record.aud, 'claims.aud');
-  if (audience !== `${audienceKind}:${companionId}`) reject('claims audience does not match companion');
+  const expectedAudience = audienceKind === 'testing_harness'
+    ? TESTING_HARNESS_REQUEST_CAPABILITY_AUDIENCE
+    : `${audienceKind}:${companionId}`;
+  if (audience !== expectedAudience) reject('claims audience does not match companion');
   const method = requireString(record.method, 'claims.method');
   const action = requireString(record.action, 'claims.action');
   if (!METHODS.has(method) || !ACTIONS.has(action)) reject('claims target vocabulary is invalid');
@@ -1134,6 +1195,13 @@ function parseClaims(encoded: string, audienceKind: 'operator' | 'agent'): Reque
   const fleetRosterAllowed = method === 'GET'
     && path === '/api/admin/fleet-model-usage'
     && action === 'models.read';
+  const authContext = parseAuthContext(record.auth_context, companionId, fleetRosterAllowed);
+  if (audienceKind === 'operator' && authContext.provider !== 'discord') {
+    reject('operator capabilities require the operator provider');
+  }
+  if (audienceKind === 'testing_harness') {
+    assertTestingHarnessAuthContext(fromAuthClaims(authContext));
+  }
   const claims: RequestCapabilityClaims = {
     iss: requireStableId(record.iss, 'claims.iss'),
     aud: audience as RequestCapabilityAudience,
@@ -1150,8 +1218,15 @@ function parseClaims(encoded: string, audienceKind: 'operator' | 'agent'): Reque
     resource_digest: requireDigest(record.resource_digest, 'claims.resource_digest'),
     request_id: requireUuid(record.request_id, 'claims.request_id'),
     decision_id: requireUuid(record.decision_id, 'claims.decision_id'),
-    auth_context: parseAuthContext(record.auth_context, companionId, fleetRosterAllowed),
-    ...(audienceKind === 'agent' ? { parent: parseParent(record.parent, companionId) } : {}),
+    auth_context: authContext,
+    ...(audienceKind === 'agent'
+      ? {
+          parent: parseParent(
+            record.parent,
+            expectedParentAudience(fromAuthClaims(authContext), companionId),
+          ),
+        }
+      : {}),
     versions: parseVersions(record.versions),
     jti: requireTokenId(record.jti, 'claims.jti'),
     iat: requireInteger(record.iat, 'claims.iat', 1),
@@ -1229,7 +1304,7 @@ export function createRequestCapabilityVerifier(
   const parsedConfig = parseVerifierConfig(config);
   const verifyToken = (
     token: string,
-    audienceKind: 'operator' | 'agent',
+    audienceKind: 'operator' | 'testing_harness' | 'agent',
     nowSecondsInput?: number,
   ): { claims: RequestCapabilityClaims; key: ParsedVerifierKey } => {
     const nowSeconds = nowSecondsInput ?? Math.floor(Date.now() / 1000);
@@ -1293,23 +1368,30 @@ export function createRequestCapabilityVerifier(
   });
   const verifyExpected = (
     input: RequestCapabilityVerifyInput,
-    audienceKind: 'operator' | 'agent',
+    audienceKind: 'operator' | 'testing_harness' | 'agent',
     expectedParent?: RequestCapabilityParentBinding,
   ): VerifiedRequestCapability => {
     const { claims, key } = verifyToken(input.token, audienceKind, input.nowSeconds);
     assertClaimsBinding(claims, input);
     if (audienceKind === 'agent') {
       if (!claims.parent || !expectedParent) reject('agent parent binding is required');
-      assertParent(expectedParent, input.target.companionId);
+      assertParent(
+        expectedParent,
+        input.target.companionId,
+        expectedParentAudience(fromAuthClaims(claims.auth_context), input.target.companionId),
+      );
       assertSameParent(claims.parent, expectedParent);
     } else if (claims.parent || expectedParent) {
-      reject('operator capabilities must not contain a parent binding');
+      reject('parent capabilities must not contain a parent binding');
     }
     return verifiedCapability(claims, key);
   };
   return Object.freeze({
     verifyRecovery: recoveryVerifier.verifyRecovery,
     verifyOperator: (input: RequestCapabilityVerifyInput) => verifyExpected(input, 'operator'),
+    verifyTestingHarness: (input: RequestCapabilityVerifyInput) => (
+      verifyExpected(input, 'testing_harness')
+    ),
     verifyAgent: (input: RequestCapabilityVerifyInput & { parent: RequestCapabilityParentBinding }) => (
       verifyExpected(input, 'agent', input.parent)
     ),

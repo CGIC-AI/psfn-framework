@@ -91,6 +91,10 @@ import { Scheduler } from '../../core/scheduler/scheduler.js';
 import { createGatewayFleetChargePolicyResolver } from './fleet-charge-policy-resolver.js';
 import { parseVerifiedDiscordContactAuthoritySnapshot } from '../../shared/contracts/contact-authority-snapshot.js';
 import { evaluateProactiveOutboundTimeGate } from '../../core/intention/proactive-time-gate.js';
+import {
+  loadTestingHarnessGardenAdminConfig,
+  resolveTestingHarnessGardenVerifierConfig,
+} from '../../channels/backplane/config.js';
 
 const log = createComponentLogger('Gateway');
 
@@ -178,6 +182,13 @@ async function main(): Promise<void> {
   const fleetAuthKnownCompanionIds = config.companionFleet?.companions
     .map(companion => companion.companionId) ?? [];
   const discordEvidenceObservers = new DiscordEvidenceObserverRegistry();
+  const testingHarnessGardenAdmin = loadTestingHarnessGardenAdminConfig(
+    startupHydration.pathSnapshot.systemDataDir,
+  );
+  const testingHarnessGardenVerifier = resolveTestingHarnessGardenVerifierConfig(
+    testingHarnessGardenAdmin,
+    env,
+  );
   const fleetAuthPersistence = await initializeGatewayFleetAuthPersistence({
     config: config.fleetAuth,
     credentialVault: config.credentialVault,
@@ -188,6 +199,9 @@ async function main(): Promise<void> {
     protectedRestoreRoots: fleetAuthProtectedRestoreRoots,
     lifecycleWitnessRoot: startupHydration.pathSnapshot.systemDataDir,
     discordEvidenceObserver: discordEvidenceObservers,
+    ...(testingHarnessGardenVerifier && testingHarnessGardenAdmin
+      ? { testingHarness: testingHarnessGardenAdmin }
+      : {}),
   });
   const sharedSchemaAccessContracts = companionDatabaseTopology
     ? await prepareFleetSharedSchemaRuntime({

@@ -26,6 +26,8 @@ const OPERATOR_API_KEY = 'companion-relay-operator-key';
 const HUB_PRINCIPAL_ID = deriveApiKeyPrincipalId(API_KEY);
 const AUTH = { Authorization: `Bearer ${API_KEY}` };
 const HUB_QUERY = 'satelliteId=hub-node&endpointId=hub-endpoint&claimType=satellite-hub';
+const EMOTION_QUERY = 'satelliteId=emotion-node&endpointId=emotion-endpoint&claimType=satellite-hub';
+const EMOTION_SECONDARY_QUERY = 'satelliteId=emotion-node&endpointId=emotion-secondary&claimType=satellite-hub';
 const WAIT_TIMEOUT_MS = 2_000;
 const DEFAULT_COMPANION_ID = '11111111-1111-4111-8111-111111111111';
 
@@ -87,6 +89,24 @@ const TEST_REGISTRY = parseSatelliteRegistryConfig({
         endpointFixture({
           endpointId: 'bare-endpoint',
           telemetryScopes: ['presence'],
+        }),
+      ],
+    },
+    {
+      // 7ang.2: satellites that advertise an emotion output surface are granted
+      // the deny-by-default `emotion` telemetry scope; two endpoints exercise
+      // per-consumer disconnect isolation.
+      satelliteId: 'emotion-node',
+      displayName: 'Emotion Scope Node',
+      mobility: 'static',
+      endpoints: [
+        endpointFixture({
+          endpointId: 'emotion-endpoint',
+          telemetryScopes: ['emotion'],
+        }),
+        endpointFixture({
+          endpointId: 'emotion-secondary',
+          telemetryScopes: ['emotion'],
         }),
       ],
     },
@@ -505,6 +525,86 @@ describe('companion relay routes', () => {
 
       v2Stream.close();
       legacyStream.close();
+    });
+  });
+
+  describe('emotion.snapshot hub relay (7ang.2)', () => {
+    const snapshotFixture = () => ({
+      trigger: 'post_turn' as const,
+      vad: { valence: 0.12, arousal: -0.65, dominance: 0.5 },
+      mood: { valence: 0.2, arousal: 0.11, dominance: -0.9 },
+      discrete: [{ label: 'joy', score: 0.81 }],
+      confidence: 0.88,
+      acacAxes: [{ axis: 'agency', score: 0.7 }],
+      timestamp: new Date(nowMs).toISOString(),
+    });
+
+    it('relays emotion.snapshot to an emotion-scoped endpoint and withholds it from one without the scope', async () => {
+      const emotionStream = await openSseStream(port, `/v1/companion/events?${EMOTION_QUERY}`, AUTH);
+      const hubStream = await openSseStream(port, `/v1/companion/events?${HUB_QUERY}`, AUTH);
+      expect(emotionStream.status).toBe(200);
+      expect(hubStream.status).toBe(200);
+
+      const snapshot = snapshotFixture();
+      await eventBus.emit('companion.emotion.snapshot', {
+        payload: snapshot,
+        channelId: 'chan-emotion',
+        timestamp: Date.now(),
+      });
+      // The hub endpoint lacks the emotion scope but keeps its tool_activity
+      // scope: a tool.activity frame proves its stream is live while the
+      // emotion frame is withheld (guards against a vacuous "received nothing").
+      await eventBus.emit('companion.tool.activity', {
+        payload: { id: 'call-e', tool: 'shell', phase: 'started', timestamp: new Date(nowMs).toISOString() },
+        channelId: 'chan-1',
+        timestamp: Date.now(),
+      });
+
+      await waitFor(() => emotionStream.frames.length >= 1, 'emotion stream frame');
+      await waitFor(() => hubStream.frames.length >= 1, 'hub stream tool.activity frame');
+      // Give any misrouted emotion frame a chance to reach the hub stream.
+      await new Promise((r) => setTimeout(r, 50));
+
+      const emotionEvents = emotionStream.frames.map((f) => ({ event: f.event, data: JSON.parse(f.data) }));
+      expect(emotionEvents.every((f) => f.event === 'companion')).toBe(true);
+      // The emotion endpoint holds ONLY the emotion scope: exactly the snapshot,
+      // no tool.activity leaks in.
+      expect(emotionEvents.map((f) => f.data.kind)).toEqual(['emotion.snapshot']);
+      expect(emotionEvents[0].data.payload).toEqual(snapshot);
+      expect(emotionEvents[0].data.channelId).toBe('chan-emotion');
+
+      const hubKinds = hubStream.frames.map((f) => (JSON.parse(f.data) as { kind: string }).kind);
+      expect(hubKinds).toContain('tool.activity');
+      expect(hubKinds).not.toContain('emotion.snapshot');
+
+      emotionStream.close();
+      hubStream.close();
+    });
+
+    it('isolates a disconnected emotion consumer without disturbing another emotion consumer', async () => {
+      const dropped = await openSseStream(port, `/v1/companion/events?${EMOTION_QUERY}`, AUTH);
+      const survivor = await openSseStream(port, `/v1/companion/events?${EMOTION_SECONDARY_QUERY}`, AUTH);
+      expect(dropped.status).toBe(200);
+      expect(survivor.status).toBe(200);
+      await waitFor(() => relay.subscriberCount() === 2, 'both emotion subscribers registered');
+
+      // Drop one consumer mid-stream; its unsubscribe must not block the
+      // publisher or starve the surviving consumer.
+      dropped.close();
+      await waitFor(() => relay.subscriberCount() === 1, 'dropped emotion subscriber unsubscribed');
+
+      await expect(eventBus.emit('companion.emotion.snapshot', {
+        payload: snapshotFixture(),
+        channelId: 'chan-emotion-2',
+        timestamp: Date.now(),
+      })).resolves.toBeUndefined();
+
+      await waitFor(() => survivor.frames.length >= 1, 'survivor emotion stream frame');
+      const kinds = survivor.frames.map((f) => (JSON.parse(f.data) as { kind: string }).kind);
+      expect(kinds).toEqual(['emotion.snapshot']);
+      expect(JSON.parse(survivor.frames[0].data).channelId).toBe('chan-emotion-2');
+
+      survivor.close();
     });
   });
 

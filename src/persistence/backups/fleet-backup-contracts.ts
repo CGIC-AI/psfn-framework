@@ -147,3 +147,31 @@ export interface FleetBackupRunResult {
   units: FleetBackupUnitOutcome[];
   results: BackupRunResult[];
 }
+
+/**
+ * Thrown when at least one unit in a fleet backup failed. The fleet manifest has
+ * already been written (recording every unit's per-unit outcome) before this is
+ * raised, so a partial run can never be mistaken for a full success.
+ *
+ * It lives with the contracts rather than with the runner so every consumer —
+ * the fleet lane, the gateway-owned fleet-auth lane, restore tooling — can name
+ * the failing companion without importing the runner and forming a cycle.
+ */
+export class FleetBackupPartialFailureError extends Error {
+  readonly fleetManifestPath: string;
+  readonly units: FleetBackupUnitOutcome[];
+
+  constructor(fleetManifestPath: string, units: FleetBackupUnitOutcome[]) {
+    const failed = units.filter(unit => unit.status === 'failure');
+    const summary = failed
+      .map(unit => `${unit.kind}${unit.companionId ? `(${unit.companionId})` : ''}: ${unit.error ?? 'unknown error'}`)
+      .join('; ');
+    super(
+      `Fleet backup failed for ${failed.length} of ${units.length} unit(s): ${summary}. `
+      + `Per-unit outcomes recorded in ${fleetManifestPath}.`,
+    );
+    this.name = 'FleetBackupPartialFailureError';
+    this.fleetManifestPath = fleetManifestPath;
+    this.units = units;
+  }
+}

@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import {
+  chmodSync,
   existsSync,
   mkdirSync,
   readFileSync,
@@ -36,6 +37,16 @@ import {
   SCHEDULED_BACKUP_TASK_ID,
   type FleetAuthConsistentBackupCycleOptions,
 } from './service.js';
+import {
+  BackupRootNotWritableError,
+  FLEET_AUTH_BACKUP_WATERMARK_NAME,
+  writeFleetAuthBackupWatermark,
+} from './backup-root.js';
+import { FleetBackupPartialFailureError } from './fleet-backup-contracts.js';
+import {
+  runFleetAuthConsistentBackupCycleImplementation,
+  type FleetAuthConsistentBackupCycleResult,
+} from './fleet-auth-cycle.js';
 import { restoreFleetCompanionSlice } from './fleet-restore.js';
 
 const ROLES: FleetAuthFamilyDatabaseRoles = {
@@ -512,5 +523,257 @@ describe('registerScheduledFleetAuthBackupTask', () => {
       taskId: SCHEDULED_BACKUP_TASK_ID,
       message: 'consistent family failed',
     });
+  });
+});
+
+// ── Startup guarantees for the gateway-owned lane (psfn-framework-vcyxv) ──
+// The deployed lane logged "enabled" against a backup root the gateway could not
+// write and, on a 6h in-memory interval seeded with skipFirstRun, never fired a
+// cycle in a pod that lived under 6h. Both directions were silent.
+
+const HOUR_MS = 60 * 60 * 1000;
+const SIX_HOURS_MS = 6 * HOUR_MS;
+
+function completedCycleResult(root: string): FleetAuthConsistentBackupCycleResult {
+  return {
+    backupDir: join(root, 'backups', BACKUP_TIMESTAMP),
+    manifestVerified: true,
+    familyRestoreVerified: true,
+    encrypted: true,
+    prunedBackupDirs: [],
+    recoveryUnitCount: 2,
+  };
+}
+
+function armLane(
+  root: string,
+  config: BackupRuntimeConfig,
+  runCycle: () => Promise<FleetAuthConsistentBackupCycleResult>,
+): { scheduler: Scheduler; runCycle: ReturnType<typeof vi.fn> } {
+  const scheduler = new Scheduler(new EventBus());
+  const spy = vi.fn(runCycle);
+  registerScheduledFleetAuthBackupTask({
+    scheduler,
+    cycleOptions: makeCycleOptions(root, config, async options => writeFakeFamily(options.backupDir)),
+    config,
+    runCycle: spy,
+  });
+  return { scheduler, runCycle: spy };
+}
+
+describe('fleet auth backup lane writability gate', () => {
+  it('fails closed instead of arming a lane whose backup root cannot hold a tree', () => {
+    const root = makeRoot();
+    // A file where the root should be reproduces "BACKUP_ROOT_DIR points at a
+    // path this process cannot turn into a backup tree" deterministically, with
+    // no dependence on the uid running the suite.
+    const backupRootDir = join(root, 'backups');
+    writeFileSync(backupRootDir, 'not a directory\n');
+    const config = makeConfig(backupRootDir);
+    const scheduler = new Scheduler(new EventBus());
+    const runCycle = vi.fn(async () => completedCycleResult(root));
+
+    expect(() => registerScheduledFleetAuthBackupTask({
+      scheduler,
+      cycleOptions: makeCycleOptions(root, config, async options => writeFakeFamily(options.backupDir)),
+      config,
+      runCycle,
+    })).toThrow(BackupRootNotWritableError);
+
+    expect(scheduler.getTask(SCHEDULED_BACKUP_TASK_ID)).toBeUndefined();
+    expect(runCycle).not.toHaveBeenCalled();
+  });
+
+  const asNonRoot = process.getuid?.() === 0 ? it.skip : it;
+  asNonRoot('fails closed when the root exists but the runtime uid cannot write it', () => {
+    const root = makeRoot();
+    const backupRootDir = join(root, 'backups');
+    mkdirSync(backupRootDir, { recursive: true });
+    // The deployed shape exactly: the directory exists and lists fine, the
+    // process just cannot create anything in it.
+    chmodSync(backupRootDir, 0o555);
+    const config = makeConfig(backupRootDir);
+    const scheduler = new Scheduler(new EventBus());
+    try {
+      expect(() => registerScheduledFleetAuthBackupTask({
+        scheduler,
+        cycleOptions: makeCycleOptions(root, config, async options => writeFakeFamily(options.backupDir)),
+        config,
+        runCycle: async () => completedCycleResult(root),
+      })).toThrow(BackupRootNotWritableError);
+    } finally {
+      chmodSync(backupRootDir, 0o755);
+    }
+    expect(scheduler.getTask(SCHEDULED_BACKUP_TASK_ID)).toBeUndefined();
+  });
+});
+
+describe('fleet auth backup lane catch-up watermark', () => {
+  it('runs a catch-up cycle at boot when the lane has never completed one', async () => {
+    const root = makeRoot();
+    const config = makeConfig(join(root, 'backups'), { intervalMs: SIX_HOURS_MS });
+    const { scheduler, runCycle } = armLane(root, config, async () => completedCycleResult(root));
+
+    // A pod that never lives six hours: under the old in-memory seeding this
+    // task was never due, so the lane produced nothing and reported nothing.
+    await scheduler.tick();
+
+    expect(runCycle).toHaveBeenCalledTimes(1);
+  });
+
+  it('runs a catch-up cycle when the persisted watermark is older than the interval', async () => {
+    const root = makeRoot();
+    const backupRootDir = join(root, 'backups');
+    mkdirSync(backupRootDir, { recursive: true });
+    const staleAt = new Date(Date.now() - SIX_HOURS_MS - HOUR_MS).toISOString();
+    writeFleetAuthBackupWatermark(backupRootDir, {
+      lastAttemptStartedAt: staleAt,
+      lastCompletedAt: staleAt,
+      lastBackupDir: join(backupRootDir, '20260715T090000000Z'),
+    });
+    const config = makeConfig(backupRootDir, { intervalMs: SIX_HOURS_MS });
+    const { scheduler, runCycle } = armLane(root, config, async () => completedCycleResult(root));
+
+    await scheduler.tick();
+
+    expect(runCycle).toHaveBeenCalledTimes(1);
+  });
+
+  it('waits out the remaining interval when the watermark is recent', async () => {
+    const root = makeRoot();
+    const backupRootDir = join(root, 'backups');
+    mkdirSync(backupRootDir, { recursive: true });
+    const recentAt = new Date(Date.now() - HOUR_MS).toISOString();
+    writeFleetAuthBackupWatermark(backupRootDir, {
+      lastAttemptStartedAt: recentAt,
+      lastCompletedAt: recentAt,
+    });
+    const config = makeConfig(backupRootDir, { intervalMs: SIX_HOURS_MS });
+    const { scheduler, runCycle } = armLane(root, config, async () => completedCycleResult(root));
+
+    // Restart churn must not turn a heavy consistent backup into a per-boot job.
+    await scheduler.tick();
+
+    expect(runCycle).not.toHaveBeenCalled();
+  });
+
+  it('stamps the attempt before the cycle and the completion after it', async () => {
+    const root = makeRoot();
+    const backupRootDir = join(root, 'backups');
+    const config = makeConfig(backupRootDir, { intervalMs: SIX_HOURS_MS });
+    const watermarkPath = join(backupRootDir, FLEET_AUTH_BACKUP_WATERMARK_NAME);
+    let attemptStampedBeforeCycle = false;
+    const { scheduler } = armLane(root, config, async () => {
+      attemptStampedBeforeCycle = existsSync(watermarkPath);
+      return completedCycleResult(root);
+    });
+
+    await scheduler.tick();
+
+    expect(attemptStampedBeforeCycle).toBe(true);
+    const persisted = JSON.parse(readFileSync(watermarkPath, 'utf8')) as {
+      lastAttemptStartedAt: string;
+      lastCompletedAt?: string;
+      lastBackupDir?: string;
+    };
+    expect(Number.isFinite(Date.parse(persisted.lastAttemptStartedAt))).toBe(true);
+    expect(Number.isFinite(Date.parse(persisted.lastCompletedAt ?? ''))).toBe(true);
+    expect(persisted.lastBackupDir).toBe(completedCycleResult(root).backupDir);
+  });
+
+  it('stamps the attempt even when the cycle fails, so a crash loop cannot re-run it', async () => {
+    const root = makeRoot();
+    const backupRootDir = join(root, 'backups');
+    const config = makeConfig(backupRootDir, { intervalMs: SIX_HOURS_MS });
+    const { scheduler, runCycle } = armLane(root, config, async () => {
+      throw new Error('consistent family failed');
+    });
+
+    await scheduler.tick();
+    expect(runCycle).toHaveBeenCalledTimes(1);
+
+    const persisted = JSON.parse(
+      readFileSync(join(backupRootDir, FLEET_AUTH_BACKUP_WATERMARK_NAME), 'utf8'),
+    ) as { lastAttemptStartedAt: string; lastCompletedAt?: string };
+    expect(Number.isFinite(Date.parse(persisted.lastAttemptStartedAt))).toBe(true);
+    expect(persisted.lastCompletedAt).toBeUndefined();
+
+    // A fresh process seeded from that watermark stays quiet for the interval.
+    const { scheduler: rebooted, runCycle: afterReboot } = armLane(
+      root,
+      config,
+      async () => completedCycleResult(root),
+    );
+    await rebooted.tick();
+    expect(afterReboot).not.toHaveBeenCalled();
+  });
+});
+
+describe('fleet auth backup partial-failure attribution', () => {
+  const partialFailure = () => new FleetBackupPartialFailureError(
+    '/runtime/backups/fleet-backup-manifest.json',
+    [
+      {
+        kind: 'companion',
+        companionId: COMPANION_ID,
+        postgresSchema: 'companion_one',
+        status: 'failure',
+        error: 'pg_dump exited 1',
+      },
+      {
+        kind: 'cluster',
+        postgresSchema: 'shared',
+        status: 'success',
+        artifactDir: '/runtime/backups/cluster',
+      },
+    ],
+  );
+
+  it('records which companion failed instead of a bare message', async () => {
+    const root = makeRoot();
+    const config = makeConfig(join(root, 'backups'));
+    const failure = partialFailure();
+    const { scheduler } = armLane(root, config, async () => { throw failure; });
+
+    await scheduler.tick();
+
+    const diagnostics = buildRuntimeDiagnosticsSnapshot({ includeFileLogs: false });
+    expect(diagnostics.backup.lastFailure).toMatchObject({
+      status: 'failure',
+      taskId: SCHEDULED_BACKUP_TASK_ID,
+    });
+    expect(diagnostics.backup.lastFailure?.details).toMatchObject({
+      partialFailure: true,
+      fleetManifestPath: '/runtime/backups/fleet-backup-manifest.json',
+      failedUnitCount: 1,
+      totalUnitCount: 2,
+      failedUnits: `companion(${COMPANION_ID})`,
+    });
+  });
+
+  it('raises a typed partial failure when the fleet runner reports an incomplete family', async () => {
+    const root = makeRoot();
+    const config = makeConfig(join(root, 'backups'));
+    await expect(runFleetAuthConsistentBackupCycleImplementation(
+      makeCycleOptions(root, config, async options => writeFakeFamily(options.backupDir)),
+      {
+        formatTimestamp: () => BACKUP_TIMESTAMP,
+        mirrorBackup: () => undefined,
+        runFleetBackup: async () => ({
+          mode: 'per-companion',
+          backupRootDir: config.rootDir,
+          fleetManifestPath: join(config.rootDir, 'fleet-backup-manifest.json'),
+          overallStatus: 'failure',
+          units: [{
+            kind: 'companion',
+            companionId: COMPANION_ID,
+            postgresSchema: 'companion_one',
+            status: 'failure',
+            error: 'pg_dump exited 1',
+          }],
+          results: [],
+        }),
+      },
+    )).rejects.toThrow(FleetBackupPartialFailureError);
   });
 });

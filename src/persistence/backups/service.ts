@@ -65,15 +65,16 @@ import {
   type FleetAuthConsistentBackupCycleResult,
   type RegisterScheduledFleetAuthBackupTaskOptions,
 } from './fleet-auth-cycle.js';
-import type {
-  BackupPostgresOptions,
-  BackupRunOptions,
-  BackupRunResult,
-  FleetBackupRunOptions,
-  FleetBackupRunResult,
-  FleetBackupUnitKind,
-  FleetBackupUnitOutcome,
-  PostgresDumpVerificationResult,
+import {
+  FleetBackupPartialFailureError,
+  type BackupPostgresOptions,
+  type BackupRunOptions,
+  type BackupRunResult,
+  type FleetBackupRunOptions,
+  type FleetBackupRunResult,
+  type FleetBackupUnitKind,
+  type FleetBackupUnitOutcome,
+  type PostgresDumpVerificationResult,
 } from './fleet-backup-contracts.js';
 
 export type {
@@ -707,30 +708,6 @@ export const FLEET_COMPANIONS_DIR_NAME = 'companions';
 export const FLEET_CLUSTER_DIR_NAME = 'cluster';
 export const FLEET_GROUP_DIR_NAME = 'group';
 export const DEFAULT_SHARED_WORLD_SCHEMA = 'shared';
-
-/**
- * Thrown when at least one unit in a fleet backup failed. The fleet manifest has
- * already been written (recording every unit's per-unit outcome) before this is
- * raised, so a partial run can never be mistaken for a full success.
- */
-export class FleetBackupPartialFailureError extends Error {
-  readonly fleetManifestPath: string;
-  readonly units: FleetBackupUnitOutcome[];
-
-  constructor(fleetManifestPath: string, units: FleetBackupUnitOutcome[]) {
-    const failed = units.filter(unit => unit.status === 'failure');
-    const summary = failed
-      .map(unit => `${unit.kind}${unit.companionId ? `(${unit.companionId})` : ''}: ${unit.error ?? 'unknown error'}`)
-      .join('; ');
-    super(
-      `Fleet backup failed for ${failed.length} of ${units.length} unit(s): ${summary}. `
-      + `Per-unit outcomes recorded in ${fleetManifestPath}.`,
-    );
-    this.name = 'FleetBackupPartialFailureError';
-    this.fleetManifestPath = fleetManifestPath;
-    this.units = units;
-  }
-}
 
 interface FleetBackupManifest {
   schemaVersion: typeof FLEET_BACKUP_MANIFEST_SCHEMA_VERSION;

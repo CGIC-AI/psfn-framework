@@ -274,11 +274,18 @@ export function createSubjectAuthorizedMemoryStore(
         };
       }
       if (property === 'searchByEmbedding') {
+        // The authorized projection always enforces subject authorization by
+        // routing to `queryAuthorizedMemorySubjects` (hard WHERE), so the
+        // caller's declared authorization stance is intentionally ignored here:
+        // a `bypass-system-internal` request that reaches an authorized store is
+        // still enforced (fail closed), and a `subject-enforced` request is
+        // honored as intended.
         return async (
           embedding: Float32Array,
           threshold: number,
           limit: number,
-          scopeQuery?: Parameters<MemoryStorePort['searchByEmbedding']>[3],
+          scopeQuery: Parameters<MemoryStorePort['searchByEmbedding']>[3],
+          _authorization?: Parameters<MemoryStorePort['searchByEmbedding']>[4],
         ) => {
           const auth = authorization(currentContext(), 'embedding');
           if (!auth) return [];

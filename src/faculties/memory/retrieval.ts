@@ -18,6 +18,7 @@ import {
 import { getRuntimeChannelEnvelopeLabelsRevision } from '../../system/trust/runtime-channel-labels.js';
 import type {
   ContactProfileArtifact,
+  EmbeddingSearchAuthorization,
   MemoryStorePort,
 } from './memory-store-port.js';
 import type {
@@ -305,6 +306,21 @@ export class MemoryRetriever implements MemoryProvider {
     this.enforceSubjectAuthorization = enforceSubjectAuthorization;
     this.activeMemoryContexts = new Map();
     this.activeMemoryRefreshLoops = new Map();
+  }
+
+  /**
+   * Explicit authorization stance for the raw embedding search path (a27w.3).
+   * When subject enforcement is on, `productMemoryStore` is the subject-
+   * authorized projection and this asserts enforcement (so a raw store wired
+   * here by mistake fails closed). When the retriever was explicitly constructed
+   * without enforcement, this is the auditable system-internal opt-out.
+   */
+  private embeddingSearchAuthorization(): EmbeddingSearchAuthorization {
+    return {
+      authorization: this.enforceSubjectAuthorization
+        ? 'subject-enforced'
+        : 'bypass-system-internal',
+    };
   }
 
   private productMemoryStore(canonicalContactId?: string): MemoryStorePort {
@@ -802,6 +818,7 @@ export class MemoryRetriever implements MemoryProvider {
           }
           : {}),
         retrievalThreshold: this.retrievalThreshold,
+        embeddingSearchAuthorization: this.embeddingSearchAuthorization(),
         resolveMemoryRetrievalPolicy: () => this.resolveMemoryRetrievalPolicy(),
         resolveRetrievalBudget: turn => this.resolveRetrievalBudget(turn),
         resolveRoomVisibilityContext: (roomChannelId, roomChannelMeta, roomCanonicalContactId) => (
@@ -1067,6 +1084,7 @@ export class MemoryRetriever implements MemoryProvider {
           this.retrievalThreshold,
           candidateLimit,
           normalizedScopeQuery,
+          this.embeddingSearchAuthorization(),
           );
           addRetrievalStageTiming(telemetry, 'vector_search', vectorSearchStartedAt);
           semanticMemories = semanticMemories.filter(memory => !isInternalMemoryArtifact(memory));

@@ -54,6 +54,7 @@ import type {
   MemorySubjectAuthorizedQueryResult,
   MemorySubjectBackfillOptions,
   MemorySubjectBackfillResult,
+  EmbeddingSearchAuthorization,
 } from './memory-store-port.js';
 import { InactiveMemoryUpdateError, normalizeMemorySalienceUpdates } from './memory-store-port.js';
 import {
@@ -124,6 +125,7 @@ import {
   validatePostgresMemorySchema,
 } from './postgres-store/schema.js';
 import {
+  ANN_MAX_CANDIDATES,
   annCandidatePool,
   annEfSearch,
   detectPgvectorIterativeScanSupport,
@@ -777,9 +779,31 @@ class PostgresMemoryStore implements MemoryStorePort {
     embedding: Float32Array,
     threshold: number,
     limit: number,
-    scopeQuery?: MemoryScopeQuery,
+    scopeQuery: MemoryScopeQuery | undefined,
+    authorization: EmbeddingSearchAuthorization,
   ): Promise<Array<PurrMemory & { similarity: number }>> {
+    // Fail closed: the raw store cannot apply subject authorization. A caller
+    // that declares it MUST be subject-enforced (product recall) but reaches
+    // this raw path is misconfigured — throw rather than silently return
+    // unscoped rows. Only an explicit `bypass-system-internal` opt-out (memory
+    // formation dedup, operator admin surfaces) is permitted here, and every
+    // such site is greppable by that literal.
+    if (authorization.authorization !== 'bypass-system-internal') {
+      throw new Error(
+        'PostgresMemoryStore.searchByEmbedding cannot enforce subject authorization; '
+        + 'wrap the store with createSubjectAuthorizedMemoryStore for product recall, '
+        + "or pass { authorization: 'bypass-system-internal' } for system-internal access",
+      );
+    }
     validateEmbeddingDimensions(embedding, this.embeddingDims, 'search');
+    // Bound the requested result count: reject a non-finite/non-positive limit
+    // (no silent fallback) and clamp the effective return to the ANN candidate
+    // ceiling so a caller can never ask the raw path for an unbounded result set
+    // to transfer, decode, and allocate.
+    if (!Number.isFinite(limit) || limit <= 0) {
+      throw new Error(`searchByEmbedding requires a positive finite limit, got ${String(limit)}`);
+    }
+    const boundedLimit = clampLimit(limit, ANN_MAX_CANDIDATES, 1, ANN_MAX_CANDIDATES);
     const normalizedScopeQuery = normalizeMemoryScopeQuery(scopeQuery);
     // Bounded ANN retrieval: order by the fixed-dimension cast distance with a
     // candidate-pool LIMIT so the HNSW index serves a top-N scan instead of a
@@ -788,7 +812,7 @@ class PostgresMemoryStore implements MemoryStorePort {
     // pool and, when available, iterative scans make the filtered top-k exact.
     // The similarity column and threshold keep the unbounded `<=>` form (the same
     // distance) so scoring is unchanged from the pre-ANN query.
-    const candidatePool = annCandidatePool(limit);
+    const candidatePool = annCandidatePool(boundedLimit);
     const orderExpression = embeddingAnnOrderExpression('embedding', '$1', this.embeddingDims);
     const rows = await runAnnTunedQuery<MemoryEmbeddingSearchRow>(
       this.pool,
@@ -828,7 +852,7 @@ class PostgresMemoryStore implements MemoryStorePort {
         return normalizedScopeQuery.mode === 'only' ? scopeMatch && tagMatch : scopeMatch || tagMatch;
       })
       .sort((left, right) => right.similarity - left.similarity || right.salience - left.salience || right.extractedAt - left.extractedAt)
-      .slice(0, limit);
+      .slice(0, boundedLimit);
   }
 
   async searchByText(

@@ -252,7 +252,12 @@ export function createMemoryCapabilities(options: CreateMemoryCapabilitiesOption
     const embedding = await options.embeddingService.embed(query);
     const results = filterQuarantinedMemories(
       sessionQuarantineFilter,
-      await memoryStore.searchByEmbedding(embedding, 0.3, limit),
+      // Sandbox memory_search runs against the subject-authorized projection
+      // (createSubjectAuthorizedMemoryStore above); require enforcement so a raw
+      // store can never satisfy this companion-facing recall.
+      await memoryStore.searchByEmbedding(embedding, 0.3, limit, undefined, {
+        authorization: 'subject-enforced',
+      }),
     ).memories;
 
     addEvidence(options.pushEvidence, {

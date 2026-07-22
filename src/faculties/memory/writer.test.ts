@@ -875,6 +875,8 @@ describe('MemoryWriter', () => {
         expect.any(Float32Array),
         DEDUP_THRESHOLD.episodic,
         3,
+        undefined,
+        { authorization: 'bypass-system-internal' },
       );
 
       // Second call: contradiction threshold (dedup - offset)
@@ -882,6 +884,8 @@ describe('MemoryWriter', () => {
         expect.any(Float32Array),
         DEDUP_THRESHOLD.episodic - MEMORY_CONFIG.contradictionThresholdOffset,
         5,
+        undefined,
+        { authorization: 'bypass-system-internal' },
       );
     });
 

@@ -16,7 +16,7 @@ import type { ChannelMeta } from '../../../system/trust/policy.js';
 import { classifyChannelDisclosure } from '../../../system/trust/policy.js';
 import type { TrustLevel } from '../../../system/trust/types.js';
 import type { MemoryRetrievalPolicy } from '../../../system/config/memory-retrieval-policy.js';
-import type { ContactProfileArtifact, MemoryStorePort } from '../memory-store-port.js';
+import type { ContactProfileArtifact, EmbeddingSearchAuthorization, MemoryStorePort } from '../memory-store-port.js';
 import type {
   MemoryScopeQuery,
   PurrMemory,
@@ -81,6 +81,13 @@ export interface CaptureTurnMemorySnapshotDeps {
   embeddingService: EmbeddingProviderPort;
   embeddingProvenance?: RetrievalQueryEmbeddingProvenance;
   retrievalThreshold: number;
+  /**
+   * Explicit authorization stance for the raw embedding search (a27w.3). The
+   * retriever passes 'subject-enforced' when it runs against the subject-
+   * authorized projection and 'bypass-system-internal' only when it was
+   * explicitly constructed without subject enforcement.
+   */
+  embeddingSearchAuthorization: EmbeddingSearchAuthorization;
   resolveMemoryRetrievalPolicy(): MemoryRetrievalPolicy;
   resolveRetrievalBudget(turn?: ContextBudgetTurnCharacteristics): ResolvedContextBudget;
   resolveRoomVisibilityContext(
@@ -220,6 +227,10 @@ export async function captureTurnMemorySnapshot(
       deps.retrievalThreshold,
       candidateLimit,
       normalizedScopeQuery,
+      // Product recall snapshot: the retriever supplies the authorization stance
+      // it was configured with. In production `deps.memoryStore` is the subject-
+      // authorized projection and the stance is 'subject-enforced'.
+      deps.embeddingSearchAuthorization,
     );
     semanticCandidates = semanticCandidates
       .filter(memory => !isInternalMemoryArtifact(memory))

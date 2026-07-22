@@ -3240,6 +3240,24 @@
       "value": "64"
     },
     {
+      "file": "src/faculties/memory/postgres-store/embedding-index.ts",
+      "name": "ANN_MAX_CANDIDATES",
+      "value": "1000",
+      "note": "Code-owned query and allocation ceiling aligned with pgvector's ef_search hard cap; it bounds raw-store work regardless of operator settings."
+    },
+    {
+      "file": "src/faculties/memory/postgres-store/embedding-index.ts",
+      "name": "ANN_MAX_EF_SEARCH",
+      "value": "1000",
+      "note": "Code-owned pgvector protocol ceiling: hnsw.ef_search rejects values above 1000, so runtime tuning must clamp at the database limit."
+    },
+    {
+      "file": "src/faculties/memory/postgres-store/embedding-index.ts",
+      "name": "ANN_MIN_CANDIDATES",
+      "value": "200",
+      "note": "Code-owned ANN correctness floor that preserves recall after authorization and threshold post-filtering; callers cannot safely tune below it."
+    },
+    {
       "file": "src/faculties/memory/postgres-store/subject-backfill.ts",
       "name": "MAX_BATCH_SIZE",
       "value": "500",

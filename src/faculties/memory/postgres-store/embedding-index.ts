@@ -204,8 +204,9 @@ export async function buildL2EmbeddingAnnIndexConcurrently(
   // A dedicated connection kept in autocommit: we deliberately never issue BEGIN,
   // so each CONCURRENTLY statement is its own implicit transaction as pgvector/
   // Postgres require.
-  const client = await pool.connect();
+  let client: PoolClient | undefined;
   try {
+    client = await pool.connect();
     const siblings = await findL2EmbeddingAnnSiblingIndexes(client);
     for (const sibling of siblings) {
       const isCurrentValid = sibling.indexName === indexName && sibling.isValid;
@@ -250,7 +251,7 @@ export async function buildL2EmbeddingAnnIndexConcurrently(
     );
     return { status: 'degraded', indexName, droppedIndexes, error: normalized };
   } finally {
-    client.release();
+    client?.release();
   }
 }
 

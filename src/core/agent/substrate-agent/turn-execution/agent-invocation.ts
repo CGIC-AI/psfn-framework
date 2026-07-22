@@ -36,7 +36,7 @@ import {
 } from '../turn-tool-context.js';
 import {
   buildRuntimeDatetimeAnchorRetryPrompt,
-  buildRuntimeDatetimeContradictionRefusal,
+  buildRuntimeDatetimeContradictionSystemNote,
   buildRuntimeDatetimeDetectionContext,
   detectRuntimeDatetimeContradiction,
 } from '../runtime-datetime-contradiction-guard.js';
@@ -867,13 +867,16 @@ export async function invokeAgentForTurn(input: {
         ...runtimeContradictionDiagnostic,
         attempts: 2,
         retrySucceeded: false,
-        refusalApplied: true,
+        refusalApplied: false,
       };
       runtimeContradictionDiagnostics = {
         runtimeContradiction: runtimeContradictionDiagnostic,
       };
-      responseText = buildRuntimeDatetimeContradictionRefusal();
-      runtimeFallbackProvenance = buildRuntimeFallbackProvenance('runtime_datetime_contradiction_refusal');
+      runtime.sessionManager.appendContextSystemNote(
+        turnSessionIdentity.logicalSessionId,
+        buildRuntimeDatetimeContradictionSystemNote(),
+        'runtime_datetime_contradiction_guard',
+      );
     } else {
       runtimeContradictionDiagnostic = {
         ...runtimeContradictionDiagnostic,

@@ -158,6 +158,10 @@ export function buildRuntimeDatetimeAnchorRetryPrompt(baseSystemPrompt: string):
     .join('\n\n');
 }
 
-export function buildRuntimeDatetimeContradictionRefusal(): string {
-  return 'I cannot treat the authoritative runtime datetime anchor as wrong. I will answer from the runtime current_datetime block instead.';
+export function buildRuntimeDatetimeContradictionSystemNote(): string {
+  return [
+    'Runtime datetime concern: the previous assistant response still disputed the authoritative runtime current_datetime anchor after the strengthened-anchor retry.',
+    'The response was preserved verbatim as companion-authored speech.',
+    "On the next turn, use that turn's runtime current_datetime block as the authoritative clock.",
+  ].join(' ');
 }

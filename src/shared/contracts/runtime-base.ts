@@ -41,9 +41,7 @@ export type { ChannelType } from './channel-types.js';
 export type { TurnID } from './turn-contracts.js';
 export type { ModelContextBudgetConfig } from '../context-budget-contracts.js';
 
-export type RuntimeFallbackStrategy =
-  | 'runtime_nonfabricating_notice'
-  | 'runtime_datetime_contradiction_refusal';
+export type RuntimeFallbackStrategy = 'runtime_nonfabricating_notice';
 
 export interface RuntimeFallbackProvenance {
   schemaVersion: 1;

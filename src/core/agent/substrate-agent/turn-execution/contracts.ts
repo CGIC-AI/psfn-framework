@@ -84,6 +84,7 @@ export type TurnSessionManager = Pick<
   | 'recordTurn'
   | 'deferBackgroundWorkHandoffRecovery'
   | 'appendSystemNote'
+  | 'appendContextSystemNote'
 >;
 
 export type TurnAdmissionSessionManager = TurnSessionManager & Pick<

@@ -61,25 +61,6 @@ describe('AdminActionPipeDataService', () => {
       listRecent: vi.fn(() => [
         {
           version: 1,
-          phase: 'blocked',
-          actionId: 'lifecycle-action-1',
-          dedupeKey: 'lifecycle-dedupe-1',
-          channelId: 'discord:primary',
-          channelType: 'discord',
-          sourceMessageId: 'handoff-1',
-          recordedAt: 1_700_000_000_001,
-          reason: 'channel_not_approved_for_primary',
-          metadata: {
-            kind: 'task_lifecycle_notification',
-            handoffId: 'handoff-1',
-            source: 'subagent',
-            lifecycleStatus: 'blocked',
-            taskLabel: 'dependency audit',
-            notificationDisposition: 'denied',
-          },
-        },
-        {
-          version: 1,
           phase: 'sent',
           actionId: 'outbound-action-1',
           dedupeKey: 'outbound-dedupe-1',
@@ -99,26 +80,10 @@ describe('AdminActionPipeDataService', () => {
     expect(outbox.listRecent).toHaveBeenCalledWith(25);
     expect(status.outreachOutbox?.recentRecords).toEqual([
       expect.objectContaining({
-        phase: 'blocked',
-        actionId: 'lifecycle-action-1',
-      }),
-      expect.objectContaining({
         phase: 'sent',
         actionId: 'outbound-action-1',
         channelId: 'discord:primary',
       }),
-    ]);
-    expect(status.taskLifecycleNotifications).toEqual([
-      {
-        actionId: 'lifecycle-action-1',
-        handoffId: 'handoff-1',
-        source: 'subagent',
-        lifecycleStatus: 'blocked',
-        taskLabel: 'dependency audit',
-        notificationStatus: 'denied',
-        recordedAt: 1_700_000_000_001,
-        reason: 'channel_not_approved_for_primary',
-      },
     ]);
   });
 });

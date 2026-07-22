@@ -241,7 +241,7 @@ Two disciplines worth knowing:
   L1 output never includes a decision; that authority belongs to the
   screening service and the sink gates.
 
-### L1.5 — ONNX injection classifier (wired, gateway-side, optional)
+### L1.5 — ONNX injection classifier (wired, gateway-side; required under enforce)
 
 `src/boundary/gateway/intake/injection-classifier.ts` runs
 `protectai/deberta-v3-base-prompt-injection-v2` (Apache-2.0, pinned revision
@@ -262,12 +262,27 @@ word alone. Per-tier thresholds live in `intake-policy.json`
 Weights (~704 MiB) are gitignored (`models/`) and never downloaded at
 runtime: `npm run provision:injection-model` fetches the pinned revision with
 per-file sha256 verification. Composition posture
-(`compose-screening.ts`): weights absent → **loud skip** (structured startup
-warning, screening continues on L1 alone); weights present but broken →
-**gateway startup fails closed**. Model dir: `PSFN_INJECTION_MODEL_DIR`,
-default `./models/prompt-injection-v2`. There is no RPC method for the
-classifier — it runs inside the gateway's `screen()`; the agent-side L1-only
-service never runs it.
+(`compose-screening.ts`, tightened by `cyy7l`):
+
+- **`mode=enforce`, weights absent → gateway startup FAILS CLOSED** with an
+  actionable error naming the provisioning command. A degraded L1-only
+  firewall under an enforce posture is a fail-closed violation: the posture
+  reports "armed" while L1.5 scoring silently never runs, so enforce refuses
+  to start until the weights are on disk.
+- **`mode=shadow`, weights absent → loud skip**: one structured startup
+  warning (never per-message), screening continues on the deterministic L1
+  layer alone, and the composition is flagged
+  `injectionClassifier.degraded=true` for intake health surfaces.
+- **weights present but broken (any mode) → gateway startup fails closed.**
+
+Model dir: `PSFN_INJECTION_MODEL_DIR`, default `./models/prompt-injection-v2`
+(kube: `<modelCacheDir>/prompt-injection-v2` on the model-cache PVC). On
+Kubernetes, `modelPrefetch.enabled=true` provisions the weights onto that PVC
+before the restricted-egress gateway relies on them; the deploy contract
+(`npm run verify:deployment-contracts`) asserts the prefetch destination
+matches the gateway's `PSFN_INJECTION_MODEL_DIR`. There is no RPC method for
+the classifier — it runs inside the gateway's `screen()`; the agent-side
+L1-only service never runs it.
 
 ### L2 — fast API LLM screener
 

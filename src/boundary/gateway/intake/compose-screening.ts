@@ -7,12 +7,18 @@
 // resolvable — the L2/L3 escalation port (htm9.6/htm9.7, escalation.ts) so
 // the layered firewall actually escalates at runtime.
 //
-// L1.5 provisioning posture (from the htm9.2 wiring contract): weights are
-// OPTIONAL for this wiring. When `npm run provision:injection-model` has not
-// been run, the gateway SKIPS the classifier LOUDLY (structured warn log at
-// startup) and screens on L1 alone; it never downloads at runtime and never
-// silently degrades an already-provisioned model (a present-but-broken model
-// directory fails startup, fail closed).
+// L1.5 provisioning posture (htm9.2 wiring contract, tightened by cyy7l):
+// - enforce mode: the ~700MiB ONNX weights are a HARD startup prerequisite.
+//   When they are absent the gateway FAILS CLOSED at startup with an
+//   actionable error naming `npm run provision:injection-model`. A degraded
+//   L1-only firewall under an enforce posture is a fail-closed violation: the
+//   posture reports "armed" while L1.5 scoring silently never runs.
+// - shadow mode: weights remain optional. When absent the gateway emits ONE
+//   loud structured startup warning (never per-message), screens on the
+//   deterministic L1 layer alone, and marks the composition
+//   `injectionClassifier.degraded` so intake health surfaces show it.
+// In every mode a present-but-broken model directory fails startup (fail
+// closed), and the classifier never downloads at runtime.
 
 import { existsSync } from 'node:fs';
 import { join, resolve } from 'node:path';
@@ -38,6 +44,7 @@ import {
   INJECTION_CLASSIFIER_REQUIRED_FILES,
   INJECTION_CLASSIFIER_SCANNER_ID,
   type InjectionClassifier,
+  type InjectionClassifierBackendFactory,
 } from './injection-classifier.js';
 import type { ScreenerBackend, ScreenerFetch } from './screener-transport.js';
 import { createGatewayIntakeEscalationPort } from './escalation.js';
@@ -109,6 +116,18 @@ export interface GatewayIntakeScreeningComposition {
    * backend FAILS STARTUP — images must never be delivered unscreened.
    */
   visionIntake: GatewayVisionIntakeScreener | null;
+  /**
+   * L1.5 injection-classifier capability, surfaced for intake health (cyy7l).
+   * `enabled` reflects whether the ONNX classifier actually loaded. `degraded`
+   * is true only in shadow mode with the weights absent — enforce mode fails
+   * startup instead of degrading — and means the firewall is screening on the
+   * deterministic L1 layer alone. `modelDir` is the resolved provisioning path.
+   */
+  injectionClassifier: {
+    enabled: boolean;
+    degraded: boolean;
+    modelDir: string;
+  };
   /** For shutdown: disposes the ONNX session when one was loaded. */
   dispose(): Promise<void>;
 }
@@ -129,11 +148,25 @@ export async function composeGatewayIntakeScreening(input: {
   /** Called after a quarantine hold has been atomically persisted. */
   onQuarantineHeld?: () => void;
   env?: NodeJS.ProcessEnv;
+  /**
+   * Test seam for the L1.5 injection classifier backend. When provided the
+   * classifier is treated as provisioned and constructed with this factory
+   * (bypassing the on-disk weight check); production always loads the ONNX
+   * weights from `modelDir`.
+   */
+  injectionBackendFactory?: InjectionClassifierBackendFactory;
 }): Promise<GatewayIntakeScreeningComposition> {
+  const modelDir = resolveInjectionModelDir(input.env ?? process.env);
   const policy = loadIntakePolicyConfig(input.systemDataDir);
   if (policy.mode === 'off') {
     log.warn("Intake firewall mode is 'off': gateway intake screening is not wired");
-    return { screening: null, quarantine: null, visionIntake: null, dispose: async () => {} };
+    return {
+      screening: null,
+      quarantine: null,
+      visionIntake: null,
+      injectionClassifier: { enabled: false, degraded: false, modelDir },
+      dispose: async () => {},
+    };
   }
 
   // Held items land in companion-data/state/intake-quarantine.json; the
@@ -159,13 +192,18 @@ export async function composeGatewayIntakeScreening(input: {
     : durableQuarantine;
 
   let classifier: InjectionClassifier | null = null;
-  const modelDir = resolveInjectionModelDir(input.env ?? process.env);
-  if (isInjectionModelProvisioned(modelDir)) {
+  let injectionClassifierDegraded = false;
+  const injectionModelProvisioned = input.injectionBackendFactory != null
+    || isInjectionModelProvisioned(modelDir);
+  if (injectionModelProvisioned) {
     // Present model directories must load correctly — a broken provision
     // throws here and stops gateway startup (fail closed, no silent skip).
     classifier = await createInjectionClassifier({
       modelDir,
       labelThreshold: policy.injectionClassifier.labelThreshold,
+      ...(input.injectionBackendFactory
+        ? { backendFactory: input.injectionBackendFactory }
+        : {}),
     });
     log.info('Intake L1.5 injection classifier loaded', { modelDir });
   } else if (existsSync(modelDir)) {
@@ -173,12 +211,33 @@ export async function composeGatewayIntakeScreening(input: {
     // Treat it as broken state, not as the clean "not installed" case: an
     // interrupted download must never silently downgrade live screening.
     assertInjectionModelProvisioned(modelDir);
+  } else if (policy.mode === 'enforce') {
+    // FAIL CLOSED (cyy7l): an enforce-mode intake firewall that silently runs
+    // on the deterministic L1 layer alone reports "armed" while the L1.5
+    // injection classifier never scores anything. The ~700MiB weights are
+    // gitignored and provisioned out of band, so a kube target that skipped
+    // provisioning would otherwise pass this point degraded under an enforce
+    // posture. Refuse to start until the weights are on disk.
+    throw new Error(
+      'Intake firewall mode=enforce but the L1.5 injection classifier weights '
+      + `are not provisioned at ${modelDir}. Provision them onto every deploy `
+      + "target's model-cache before startup — "
+      + `\`npm run provision:injection-model -- --dest ${modelDir}\` — then `
+      + 'restart the gateway. Refusing to run an enforce-mode intake firewall '
+      + 'on L1 scanners alone (no silent L1-only operation under enforce).',
+    );
   } else {
+    // shadow mode: a single loud, structured startup warning (never
+    // per-message) plus a degraded-capability flag on the composition so
+    // intake health surfaces can show the firewall is screening without L1.5.
+    injectionClassifierDegraded = true;
     log.warn(
-      'Intake L1.5 injection classifier weights are not provisioned; '
-      + 'gateway intake screening runs on L1 scanners alone. '
-      + 'Run `npm run provision:injection-model` to enable L1.5 scoring.',
-      { modelDir },
+      'Intake L1.5 injection classifier weights are not provisioned; gateway '
+      + 'intake screening runs on the deterministic L1 layer alone (DEGRADED). '
+      + 'Tolerated only because intake mode=shadow — provision the weights onto '
+      + 'the model-cache before switching to enforce (enforce fails closed here): '
+      + '`npm run provision:injection-model`.',
+      { modelDir, mode: policy.mode, injectionClassifierDegraded: true },
     );
   }
 
@@ -298,6 +357,7 @@ export async function composeGatewayIntakeScreening(input: {
   log.info('Gateway intake screening composed', {
     mode: policy.mode,
     l15Enabled: classifier !== null,
+    l15Degraded: injectionClassifierDegraded,
     escalationWired: escalation !== null,
     visionScreenerEnabled: policy.visionScreener.enabled,
     visionIntakeWired: visionIntake !== null,
@@ -307,6 +367,11 @@ export async function composeGatewayIntakeScreening(input: {
     screening,
     quarantine,
     visionIntake,
+    injectionClassifier: {
+      enabled: classifier !== null,
+      degraded: injectionClassifierDegraded,
+      modelDir,
+    },
     dispose: async () => {
       await classifier?.dispose();
     },

@@ -7,6 +7,12 @@
       "value": "10_000"
     },
     {
+      "file": "src/app/agent/egress-reply-sender.ts",
+      "name": "TRIGGER_MESSAGE_CHAR_CAP",
+      "value": "2_000",
+      "note": "Code-owned protocol and safety ceiling matching Discord's 2,000-character message limit; it bounds untrusted prompt input independently of operator tuning."
+    },
+    {
       "file": "src/app/agent/main.ts",
       "name": "DEFAULT_SHUTDOWN_FORCE_EXIT_TIMEOUT_MS",
       "value": "15_000"

@@ -37,6 +37,16 @@ spec:
         - name: redis
           image: {{ include "psfn.redisImage" . | quote }}
           imagePullPolicy: {{ .Values.redis.image.pullPolicy }}
+          # Explicit container security context (no default context). The root
+          # filesystem is left writable: the upstream Redis image writes runtime
+          # state under its data dir and may touch other root paths at startup, so
+          # a read-only root would risk breaking it. Hardening the writable root is
+          # tracked as a separate, live-validated follow-up (.trivyignore.yaml
+          # AVD-KSV-0014).
+          securityContext:
+            allowPrivilegeEscalation: false
+            seccompProfile:
+              type: RuntimeDefault
           command:
             - sh
             - -c

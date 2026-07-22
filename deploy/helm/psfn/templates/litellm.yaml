@@ -64,7 +64,7 @@ spec:
             - --port
             - {{ .Values.ports.liteLlm | quote }}
           securityContext:
-            {{- toYaml .Values.securityContext | nindent 12 }}
+            {{- include "psfn.appReadOnlySecurityContext" . | nindent 12 }}
           ports:
             - name: http-proxy
               containerPort: {{ .Values.ports.liteLlm }}
@@ -109,10 +109,16 @@ spec:
           resources:
             {{- toYaml .Values.liteLlm.resources | nindent 12 }}
           volumeMounts:
+            # LiteLLM runs read-only-root with HOME=/tmp/litellm; an ephemeral
+            # /tmp emptyDir backs its home and any incidental temp writes.
+            - name: tmp
+              mountPath: /tmp
             - name: litellm-config
               mountPath: /etc/litellm
               readOnly: true
       volumes:
+        - name: tmp
+          emptyDir: {}
         - name: litellm-config
           configMap:
             name: {{ include "psfn.liteLlmConfigMapName" . }}

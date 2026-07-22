@@ -60,6 +60,16 @@ spec:
         - name: postgres
           image: {{ include "psfn.postgresImage" . | quote }}
           imagePullPolicy: {{ .Values.postgres.image.pullPolicy }}
+          # Explicit container security context (no default context). Capabilities
+          # are intentionally not dropped and the root filesystem is left writable:
+          # the upstream Postgres entrypoint switches user and writes its socket
+          # and PGDATA at runtime, so a read-only root or dropped caps would break
+          # startup. Hardening the writable root is tracked as a separate,
+          # live-validated follow-up (see .trivyignore.yaml AVD-KSV-0014).
+          securityContext:
+            allowPrivilegeEscalation: false
+            seccompProfile:
+              type: RuntimeDefault
           ports:
             - name: postgres
               containerPort: {{ .Values.ports.postgres }}

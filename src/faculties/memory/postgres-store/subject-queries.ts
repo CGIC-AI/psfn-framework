@@ -18,6 +18,17 @@ import type { MemoryEmbeddingSearchRow } from './rows.js';
 import { clampLimit } from './utils.js';
 import { buildMemorySubjectAuthorizationPredicate } from './subject-policy.js';
 import { normalizeMemoryScopeQuery } from '../types.js';
+import {
+  annCandidatePool,
+  annEfSearch,
+  embeddingAnnOrderExpression,
+  runAnnTunedQuery,
+} from './embedding-index.js';
+
+export interface AuthorizedMemorySubjectQueryOptions {
+  /** Whether the connected pgvector supports iterative scans (>= 0.8). */
+  iterativeScanAvailable: boolean;
+}
 
 export const MEMORY_SUBJECT_SELECT_COLUMNS = `
   memory.id, memory.text, memory.type, memory.importance, memory.confidence,
@@ -95,6 +106,7 @@ function buildSelector(
   limit: number;
   offset: number;
   countOnly: boolean;
+  annOrderExpr?: string;
 } {
   const { selector } = input;
   const where = ['memory.superseded_by IS NULL', 'memory.deleted_at IS NULL'];
@@ -105,6 +117,7 @@ function buildSelector(
   let limit = 50;
   let offset = 0;
   let countOnly = false;
+  let annOrderExpr: string | undefined;
   if ('scopeQuery' in selector) {
     const scopeQuery = normalizeMemoryScopeQuery(selector.scopeQuery);
     if (scopeQuery) {
@@ -167,6 +180,11 @@ function buildSelector(
       where.push(`1 - (memory.embedding <=> ${embeddingParameter}::vector) >= $${values.length}`);
       similaritySql = `1 - (memory.embedding <=> ${embeddingParameter}::vector)`;
       orderBy = `memory.embedding <=> ${embeddingParameter}::vector ASC, memory.salience DESC, memory.extracted_at DESC`;
+      // The bounded ANN path orders by the fixed-dimension cast distance so the
+      // HNSW index is used; all filters (threshold, scope, and the subject
+      // authorization predicate) sit at the same query level so an iterative scan
+      // keeps the filtered top-k exact and never returns unauthorized rows.
+      annOrderExpr = embeddingAnnOrderExpression('memory.embedding', embeddingParameter, embeddingDims);
       pageOrderBy = 'similarity DESC, salience DESC, extracted_at DESC, id DESC';
       limit = clampLimit(selector.limit, 50, 1, 500);
       offset = clampLimit(selector.offset, 0, 0, 100_000);
@@ -177,13 +195,14 @@ function buildSelector(
       limit = 0;
       break;
   }
-  return { where, values, orderBy, pageOrderBy, similaritySql, limit, offset, countOnly };
+  return { where, values, orderBy, pageOrderBy, similaritySql, limit, offset, countOnly, annOrderExpr };
 }
 
 export async function queryAuthorizedMemorySubjects(
   pool: Pool,
   embeddingDims: number,
   input: MemorySubjectAuthorizedQuery,
+  options: AuthorizedMemorySubjectQueryOptions,
 ): Promise<MemorySubjectAuthorizedQueryResult> {
   assertActionMatchesSelector(input);
   const selector = buildSelector(input, embeddingDims);
@@ -200,6 +219,18 @@ export async function queryAuthorizedMemorySubjects(
       WHERE ${where}
     `, values);
     return { memories: [], total: Number(countRows.rows[0]?.count ?? 0) };
+  }
+
+  if (selector.annOrderExpr) {
+    return await queryAuthorizedEmbeddingAnn(pool, options, {
+      where,
+      values,
+      annOrderExpr: selector.annOrderExpr,
+      pageOrderBy: selector.pageOrderBy,
+      similaritySql: selector.similaritySql,
+      limit: selector.limit,
+      offset: selector.offset,
+    });
   }
 
   const pageValues = [...values, selector.limit, selector.offset];
@@ -222,6 +253,66 @@ export async function queryAuthorizedMemorySubjects(
   const total = Number(rows.rows.at(0)?.authorized_total ?? 0);
   return {
     memories: rows.rows.filter(hasAuthorizedPage).map(row => ({
+      ...fromMemoryRow(row),
+      similarity: parsePgNumber(row.similarity, 'similarity'),
+    })),
+    total,
+  };
+}
+
+/**
+ * Subject-authorized semantic search on a bounded ANN plan. Every filter — the
+ * similarity threshold, scope predicates, AND the subject authorization
+ * predicate — sits at the same query level as the ANN `ORDER BY <distance>
+ * LIMIT candidatePool`, so the HNSW index drives the scan and (on pgvector >=
+ * 0.8) an iterative scan keeps the filtered top-k exact. Subject isolation is a
+ * hard WHERE, so unauthorized rows are never returned regardless of recall; the
+ * candidate pool oversamples the requested page so authorized rows are still
+ * found when most nearest neighbours are unauthorized. `total` is the count of
+ * authorized matches within the ANN candidate pool (the nearest-neighbour
+ * horizon), not an exhaustive corpus-wide count — an exhaustive count would
+ * defeat the bounded plan and is not meaningful for nearest-neighbour retrieval.
+ */
+async function queryAuthorizedEmbeddingAnn(
+  pool: Pool,
+  options: AuthorizedMemorySubjectQueryOptions,
+  input: {
+    where: string;
+    values: unknown[];
+    annOrderExpr: string;
+    pageOrderBy: string;
+    similaritySql: string;
+    limit: number;
+    offset: number;
+  },
+): Promise<MemorySubjectAuthorizedQueryResult> {
+  const candidatePool = annCandidatePool(input.limit + input.offset);
+  const pageValues = [...input.values, candidatePool, input.limit, input.offset];
+  const rows = await runAnnTunedQuery<AuthorizedPageRow>(
+    pool,
+    { efSearch: annEfSearch(candidatePool), iterativeScan: options.iterativeScanAvailable },
+    `
+    WITH authorized AS MATERIALIZED (
+      SELECT ${MEMORY_SUBJECT_SELECT_COLUMNS}, ${input.similaritySql} AS similarity
+      FROM l2_memories memory
+      WHERE ${input.where}
+      ORDER BY ${input.annOrderExpr} ASC
+      LIMIT $${input.values.length + 1}
+    )
+    SELECT page.*, totals.authorized_total
+    FROM (SELECT COUNT(*) AS authorized_total FROM authorized) totals
+    LEFT JOIN LATERAL (
+      SELECT * FROM authorized
+      ORDER BY ${input.pageOrderBy}
+      LIMIT $${input.values.length + 2}
+      OFFSET $${input.values.length + 3}
+    ) page ON TRUE
+  `,
+    pageValues,
+  );
+  const total = Number(rows.at(0)?.authorized_total ?? 0);
+  return {
+    memories: rows.filter(hasAuthorizedPage).map(row => ({
       ...fromMemoryRow(row),
       similarity: parsePgNumber(row.similarity, 'similarity'),
     })),

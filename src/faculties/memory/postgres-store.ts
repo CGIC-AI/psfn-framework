@@ -124,6 +124,14 @@ import {
   validatePostgresMemorySchema,
 } from './postgres-store/schema.js';
 import {
+  annCandidatePool,
+  annEfSearch,
+  detectPgvectorIterativeScanSupport,
+  embeddingAnnOrderExpression,
+  ensureL2EmbeddingAnnIndex,
+  runAnnTunedQuery,
+} from './postgres-store/embedding-index.js';
+import {
   MEMORY_SUBJECT_SELECT_COLUMNS,
   getMemorySubjectClassification as loadMemorySubjectClassification,
   queryAuthorizedMemorySubjects as runAuthorizedMemorySubjectQuery,
@@ -154,6 +162,12 @@ export interface PostgresMemoryStoreOptions {
   role?: string;
   /** Disable only for bounded-backfill tests; production startup drains this before hydration. */
   subjectBackfill?: false | MemorySubjectBackfillOptions;
+  /**
+   * Detected at startup, not caller-supplied: whether the connected pgvector
+   * supports `hnsw.iterative_scan` (>= 0.8), used to make ANN + subject-filter
+   * top-k exact. Threaded through {@link createPostgresMemoryStoreFromPool}.
+   */
+  annIterativeScanAvailable?: boolean;
 }
 
 export async function createPostgresMemoryStore(
@@ -182,10 +196,15 @@ export async function createPostgresMemoryStoreFromPool(
   await assertExistingMemorySchemaHasEmbeddingColumn(pool);
   await ensurePostgresSchema(pool, POSTGRES_MEMORY_MIGRATIONS);
   await validatePostgresMemorySchema(pool);
+  // Build the dimension-parameterized HNSW ANN index (fail-closed) so semantic
+  // search runs on a bounded index plan instead of a sequential scan, then
+  // detect whether iterative scans are available for exact ANN + subject-filter.
+  await ensureL2EmbeddingAnnIndex(pool, embeddingDims);
+  const annIterativeScanAvailable = await detectPgvectorIterativeScanSupport(pool);
   if (options.subjectBackfill !== false) {
     await runMemorySubjectBackfillToCompletion(pool, embeddingDims, options.subjectBackfill);
   }
-  const store = new PostgresMemoryStore(pool, embeddingDims, options);
+  const store = new PostgresMemoryStore(pool, embeddingDims, { ...options, annIterativeScanAvailable });
   await store.waitUntilReady();
   return store;
 }
@@ -198,6 +217,7 @@ interface MemoryStoreTransactionState {
 class PostgresMemoryStore implements MemoryStorePort {
   private readonly pool: Pool;
   private readonly embeddingDims: number;
+  private readonly annIterativeScanAvailable: boolean;
   private readonly journal: MemoryJournal | null;
   private readonly scratchpadMirrorPath: string | null;
   private persistChain: Promise<void> = Promise.resolve();
@@ -224,6 +244,7 @@ class PostgresMemoryStore implements MemoryStorePort {
   constructor(pool: Pool, embeddingDims: number, options: PostgresMemoryStoreOptions = {}) {
     this.pool = pool;
     this.embeddingDims = embeddingDims;
+    this.annIterativeScanAvailable = options.annIterativeScanAvailable ?? false;
     this.journal = options.journal ?? null;
     this.scratchpadMirrorPath = options.scratchpadMirrorPath?.trim() ? options.scratchpadMirrorPath.trim() : null;
     this.initialization = this.initialize();
@@ -760,7 +781,19 @@ class PostgresMemoryStore implements MemoryStorePort {
   ): Promise<Array<PurrMemory & { similarity: number }>> {
     validateEmbeddingDimensions(embedding, this.embeddingDims, 'search');
     const normalizedScopeQuery = normalizeMemoryScopeQuery(scopeQuery);
-    const rows = await queryRows<MemoryEmbeddingSearchRow>(this.pool, `
+    // Bounded ANN retrieval: order by the fixed-dimension cast distance with a
+    // candidate-pool LIMIT so the HNSW index serves a top-N scan instead of a
+    // sequential scan over the whole corpus. The pool oversamples `limit` so the
+    // scope post-filter and threshold rarely under-return; ef_search matches the
+    // pool and, when available, iterative scans make the filtered top-k exact.
+    // The similarity column and threshold keep the unbounded `<=>` form (the same
+    // distance) so scoring is unchanged from the pre-ANN query.
+    const candidatePool = annCandidatePool(limit);
+    const orderExpression = embeddingAnnOrderExpression('embedding', '$1', this.embeddingDims);
+    const rows = await runAnnTunedQuery<MemoryEmbeddingSearchRow>(
+      this.pool,
+      { efSearch: annEfSearch(candidatePool), iterativeScan: this.annIterativeScanAvailable },
+      `
       SELECT
         id, text, type, importance, confidence, emotional_valence, formation_vad, emotional_texture,
         salience, salience_decay_anchor_at, source_ref, source_type, provenance_json, extracted_at, last_accessed,
@@ -774,8 +807,11 @@ class PostgresMemoryStore implements MemoryStorePort {
         AND superseded_by IS NULL
         AND deleted_at IS NULL
         AND 1 - (embedding <=> $1::vector) >= $2
-      ORDER BY embedding <=> $1::vector ASC, salience DESC, extracted_at DESC
-    `, [encodeEmbeddingLiteral(embedding), threshold]);
+      ORDER BY ${orderExpression} ASC
+      LIMIT $3
+    `,
+      [encodeEmbeddingLiteral(embedding), threshold, candidatePool],
+    );
 
     return rows
       .map((row) => ({ ...fromMemoryRow(row), similarity: parsePgNumber(row.similarity, 'similarity') }))
@@ -1066,7 +1102,9 @@ class PostgresMemoryStore implements MemoryStorePort {
       throw new Error('Authorized memory subject queries are unavailable inside a memory-store transaction');
     }
     await this.persistChain;
-    return await runAuthorizedMemorySubjectQuery(this.pool, this.embeddingDims, input);
+    return await runAuthorizedMemorySubjectQuery(this.pool, this.embeddingDims, input, {
+      iterativeScanAvailable: this.annIterativeScanAvailable,
+    });
   }
 
   async getMemorySubjectClassification(

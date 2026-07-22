@@ -797,7 +797,7 @@ async function main(): Promise<void> {
     // Resolve the invoked tool's canonical/retired-alias equivalence class so a
     // hook policy registered against a retired or surface alias still matches
     // the canonical call (and vice-versa); throws fail-closed on malformed
-    // alias metadata (psfn-framework-816w).
+    // alias metadata (816w).
     resolveAliases: resolveToolAliasMatchers,
     onDecision: (audit) => log.debug('pre_tool_use hook decision', { ...audit }),
   }));

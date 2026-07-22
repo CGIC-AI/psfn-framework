@@ -364,6 +364,18 @@ export class InMemoryMemoryStore {
     return memory ? cloneMemory(memory) : undefined;
   }
 
+  getByIds(ids: readonly string[]): PurrMemory[] {
+    const seen = new Set<string>();
+    const result: PurrMemory[] = [];
+    for (const id of ids) {
+      if (seen.has(id)) continue;
+      seen.add(id);
+      const memory = this.memories.get(id)?.memory;
+      if (memory) result.push(cloneMemory(memory));
+    }
+    return result;
+  }
+
   softDeleteMemory(id: string, options: MemorySoftDeleteOptions = {}): MemoryDeleteVersion | null {
     const stored = this.memories.get(id);
     if (!stored || stored.memory.deletedAt) return null;

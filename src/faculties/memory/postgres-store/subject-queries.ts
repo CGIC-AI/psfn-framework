@@ -30,6 +30,14 @@ export interface AuthorizedMemorySubjectQueryOptions {
   iterativeScanAvailable: boolean;
 }
 
+/**
+ * Hard upper bound on ids resolved in a single `details_batch` authorization
+ * query. Callers that resolve larger id sets must chunk into bounded batches so
+ * the authorization predicate work and parameter size stay bounded. Enforced
+ * fail-closed: an oversized batch throws rather than silently truncating.
+ */
+export const MEMORY_SUBJECT_DETAILS_BATCH_MAX = 256;
+
 export const MEMORY_SUBJECT_SELECT_COLUMNS = `
   memory.id, memory.text, memory.type, memory.importance, memory.confidence,
   memory.emotional_valence, memory.formation_vad, memory.emotional_texture, memory.salience,
@@ -78,6 +86,7 @@ function assertActionMatchesSelector(input: MemorySubjectAuthorizedQuery): void 
       case 'list':
         return ['list', 'snippet', 'export', 'prompt_preview'] as const;
       case 'detail':
+      case 'details_batch':
         return ['detail', 'snippet', 'export', 'prompt_preview'] as const;
       case 'text_search':
         return ['search', 'snippet', 'export', 'prompt_preview'] as const;
@@ -153,6 +162,27 @@ function buildSelector(
       values.push(memoryId);
       where.push(`memory.id = $${values.length}`);
       limit = 1;
+      break;
+    }
+    case 'details_batch': {
+      // Deduplicate and normalize before binding so the bounded batch matches
+      // the union of the equivalent per-id `detail` queries exactly. The subject
+      // authorization predicate is appended identically for every kind, so a
+      // batch never widens access beyond what each id would resolve alone.
+      const memoryIds = [...new Set(
+        selector.memoryIds.map(id => id.trim()).filter(Boolean),
+      )];
+      if (memoryIds.length === 0) throw new Error('Authorized memory details batch requires at least one memoryId');
+      if (memoryIds.length > MEMORY_SUBJECT_DETAILS_BATCH_MAX) {
+        throw new Error(
+          `Authorized memory details batch exceeds bound (${memoryIds.length} > ${MEMORY_SUBJECT_DETAILS_BATCH_MAX})`,
+        );
+      }
+      values.push(memoryIds);
+      where.push(`memory.id = ANY($${values.length}::text[])`);
+      // The page LIMIT bounds materialized output to the authorized subset; the
+      // deduped id count is the exact ceiling.
+      limit = memoryIds.length;
       break;
     }
     case 'text_search': {

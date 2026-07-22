@@ -12,6 +12,7 @@ import type {
   RetrievalAccessScope,
 } from '../types.js';
 import { isInternalMemoryArtifact } from '../internal-artifacts.js';
+import { resolveMemoriesByIds } from './memory-batch.js';
 import { evaluateRetrievalAccessDecision, type RetrievalRoomVisibilityContext } from './access.js';
 import {
   mergeRetrievalContactContext,
@@ -179,10 +180,20 @@ export async function attachEvolutionChains(
     const item = expanded[index];
     const links = (await memoryStore.getEvolutionLinksForSourceMemory(item.memory.id))
       .slice(0, EVOLUTION_CHAIN_PER_MEMORY_LIMIT);
+    // Resolve every chain target for this source in one authorized batch rather
+    // than one detail query per link.
+    const targetsById = new Map(
+      (await resolveMemoriesByIds(
+        memoryStore,
+        links
+          .map(link => link.targetMemoryId)
+          .filter(targetId => !selectedIds.has(targetId)),
+      )).map(memory => [memory.id, memory] as const),
+    );
     const chain: NonNullable<ScoredMemory['evolutionChain']> = [];
     for (const link of links) {
       if (selectedIds.has(link.targetMemoryId)) continue;
-      const target = await memoryStore.getById(link.targetMemoryId);
+      const target = targetsById.get(link.targetMemoryId);
       if (!target || target.deletedAt !== undefined) continue;
       if (isMemoryQuarantined(target)) continue;
       const accessDecision = evaluateRetrievalAccessDecision(target, {

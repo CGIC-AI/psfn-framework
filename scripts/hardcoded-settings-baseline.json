@@ -3264,6 +3264,12 @@
       "note": "Code-owned database transaction ceiling that bounds subject-backfill lock duration and resource use."
     },
     {
+      "file": "src/faculties/memory/postgres-store/subject-queries.ts",
+      "name": "MEMORY_SUBJECT_DETAILS_BATCH_MAX",
+      "value": "256",
+      "note": "Code-owned fail-closed SQL and parameter ceiling that bounds subject-authorized detail batches; callers chunk larger sets."
+    },
+    {
       "file": "src/faculties/memory/research-library/store.ts",
       "name": "PREVIEW_MAX_CHARS",
       "value": "12_000"

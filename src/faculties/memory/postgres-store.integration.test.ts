@@ -500,7 +500,9 @@ describe('postgres memory store integration', () => {
 
   it('rolls back the memory row when classification persistence fails', async () => {
     await withMemoryDatabase(async (pool) => {
-      const store = await createPostgresMemoryStoreFromPool(pool, 4);
+      const store = await createPostgresMemoryStoreFromPool(pool, 4, {
+        awaitAnnIndexBuild: true,
+      });
       await pool.query('DROP TABLE l2_memory_subject_classifications CASCADE');
 
       await expect(store.insertMemory(makeMemory({ id: 'classification-failure' }), DEFAULT_EMBEDDING))
@@ -899,7 +901,9 @@ describe('postgres memory store integration', () => {
 
   it('fails closed when an admin aggregate query errors (a27w.5)', async () => {
     await withMemoryDatabase(async (pool) => {
-      const store = await createPostgresMemoryStoreFromPool(pool, 4);
+      const store = await createPostgresMemoryStoreFromPool(pool, 4, {
+        awaitAnnIndexBuild: true,
+      });
       await store.insertMemory(makeMemory({
         id: 'fc1', provenance: { subjectContactId: 'contact-a' },
       }), DEFAULT_EMBEDDING);

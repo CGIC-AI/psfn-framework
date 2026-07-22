@@ -1,11 +1,9 @@
 import type { InferredPostTurnAction } from '../../../shared/contracts/runtime.js';
 import {
-  INTENTION_OUTBOUND_MESSAGE_ACTION_KIND,
   type IntentionActionDecision,
   type IntentionOutboundAppraisalFollowUpProvenance,
   type IntentionOutboundMessageActionPayload,
 } from './types.js';
-import { hashString } from './shared.js';
 
 export type AppraisalOutboundProvenanceBlockReason =
   | 'appraisal_consent_required'
@@ -35,19 +33,11 @@ export function resolveAppraisalOutboundProvenance(
   payload: IntentionOutboundMessageActionPayload,
 ): AppraisalOutboundProvenanceResolution {
   const appraisalFollowUp = payload.appraisalFollowUp;
-  const legacyAppraisalDedupe = [
-    INTENTION_OUTBOUND_MESSAGE_ACTION_KIND,
-    action.sourceMessageId,
-    hashString(payload.content),
-  ].join(':');
-  const isAppraisalFollowUp = Boolean(appraisalFollowUp)
-    || action.dedupeKey === legacyAppraisalDedupe;
 
   // The appraisal model may propose external text, but it is not the
   // companion's consent moment. Only the existing exact-action, single-use
-  // social-desire consent can ratify that draft for delivery. The dedupe
-  // fallback also fail-closes already-queued pre-marker appraisal actions.
-  if (isAppraisalFollowUp && !payload.socialDesire) {
+  // social-desire consent can ratify that draft for delivery.
+  if (appraisalFollowUp && !payload.socialDesire) {
     return {
       blockReason: 'appraisal_consent_required',
       concernScope: createAppraisalConcernScope(action.channelId),

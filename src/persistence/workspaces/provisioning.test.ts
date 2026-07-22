@@ -169,6 +169,13 @@ describe('fleet workspace provisioning', () => {
     ))).toMatchObject({ bundleVersion: COMPANION_LIBRARY_SEED_VERSION, overwritePolicy: 'never' });
   });
 
+  it('packages the tracked example as the container default seed source', () => {
+    const dockerfile = readFileSync(join(REPO_ROOT, 'docker/Dockerfile.agent'), 'utf8');
+
+    expect(dockerfile).toContain('COPY companion_docs.example/ ./companion_docs.example/');
+    expect(dockerfile).toContain('RUN cp -a companion_docs.example companion_docs');
+  });
+
   it('fails closed when a manifest changes without a bundle version bump', () => {
     const fixture = makeFixture();
     provisionFleetWorkspaces(fixture.fleet, { companionLibrarySourceDir: fixture.source });

@@ -47,7 +47,7 @@ purrsephone/
 
 # Companion library seed docs are runtime/personal data; operators supply them at
 # deploy time (default seed source for provisionFleetWorkspaces). Kept off GitHub.
-companion_docs/
+/companion_docs/
 
 # Local agent/assistant tooling config and runbooks (Claude, Copilot) are not product.
 .claude/

@@ -112,6 +112,8 @@ COPY --from=build /app/contract-hash.txt ./contract-hash.txt
 COPY --from=build /app/admin-ui/build/ ./admin-ui/build/
 COPY config/*.seed.json ./config/
 COPY config/intake-l1-rules.json ./config/intake-l1-rules.json
+COPY companion_docs.example/ ./companion_docs.example/
+RUN cp -a companion_docs.example companion_docs
 COPY deploy/helm/psfn/ ./deploy/helm/psfn/
 COPY scripts/ops/ ./scripts/ops/
 # Repo-root skills tree: the skills runtime scans <repoRoot>/skills at

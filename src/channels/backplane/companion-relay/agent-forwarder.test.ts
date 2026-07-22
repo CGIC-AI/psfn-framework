@@ -73,6 +73,50 @@ describe('attachCompanionEventForwarder', () => {
     detach();
   });
 
+  it('forwards a redacted emotion snapshot sourced from the agent bus', async () => {
+    const eventBus = new EventBus();
+    const published: CompanionRelayPublishParams[] = [];
+    const detach = attachCompanionEventForwarder({
+      eventBus,
+      publisher: { publishCompanionEvent: (params) => published.push(params) },
+    });
+
+    await eventBus.emit('agent.emotion.snapshot', {
+      trigger: 'vad_shift',
+      vad: { valence: 0.123456, arousal: -0.654321, dominance: 0.5 },
+      mood: { valence: 0.2, arousal: 0.111111, dominance: -0.9 },
+      discrete: { joy: 0.812345, anger: 0.02 },
+      confidence: 0.876543,
+      acacAxisScores: { agency: 0.7 },
+      channelId: 'chan-e',
+      timestamp: 1_700_000_000_000,
+    });
+
+    expect(published).toHaveLength(1);
+    const frame = published[0];
+    expect(frame.kind).toBe('emotion.snapshot');
+    expect(frame.channelId).toBe('chan-e');
+    if (frame.kind !== 'emotion.snapshot') throw new Error('unreachable');
+    // The forwarder redacts (rounds) before anything crosses the boundary.
+    expect(frame.payload.vad).toEqual({ valence: 0.12, arousal: -0.65, dominance: 0.5 });
+    expect(frame.payload.confidence).toBe(0.88);
+    expect(frame.payload.discrete[0]).toEqual({ label: 'joy', score: 0.81 });
+    expect(frame.payload.acacAxes).toEqual([{ axis: 'agency', score: 0.7 }]);
+    expect(frame.payload.timestamp).toBe(new Date(1_700_000_000_000).toISOString());
+
+    detach();
+    await eventBus.emit('agent.emotion.snapshot', {
+      trigger: 'post_turn',
+      vad: { valence: 0, arousal: 0, dominance: 0 },
+      mood: { valence: 0, arousal: 0, dominance: 0 },
+      discrete: {},
+      confidence: 0,
+      channelId: 'chan-e',
+      timestamp: 1_700_000_000_001,
+    });
+    expect(published).toHaveLength(1);
+  });
+
   it('logs instead of throwing when the publisher fails', async () => {
     const eventBus = new EventBus();
     const detach = attachCompanionEventForwarder({

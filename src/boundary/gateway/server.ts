@@ -940,11 +940,11 @@ export class GatewayServer {
   }
 
   /**
-   * Agent-forwarded redacted companion events (tool activity, artifacts).
-   * The params are re-validated and payloads reconstructed field-by-field at
-   * this process boundary; malformed frames are rejected, never partially
-   * published. Approval events cannot arrive here — they originate inside
-   * the gateway approval boundary.
+   * Agent-forwarded redacted companion events (tool activity, artifacts,
+   * emotion snapshots). The params are re-validated and payloads reconstructed
+   * field-by-field at this process boundary; malformed frames are rejected,
+   * never partially published. Approval events cannot arrive here — they
+   * originate inside the gateway approval boundary.
    */
   private async dispatchCompanionEventPublish(
     conn: GatewayRpcConnection,
@@ -957,6 +957,15 @@ export class GatewayServer {
     }
     if (parsed.kind === 'tool.activity') {
       await this.options.eventBus.emit('companion.tool.activity', {
+        payload: parsed.payload,
+        ...(parsed.channelId ? { channelId: parsed.channelId } : {}),
+        ...(companionId ? { companionId } : {}),
+        timestamp: Date.now(),
+      });
+      return;
+    }
+    if (parsed.kind === 'emotion.snapshot') {
+      await this.options.eventBus.emit('companion.emotion.snapshot', {
         payload: parsed.payload,
         ...(parsed.channelId ? { channelId: parsed.channelId } : {}),
         ...(companionId ? { companionId } : {}),

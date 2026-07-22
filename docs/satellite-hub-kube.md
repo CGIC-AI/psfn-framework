@@ -131,9 +131,13 @@ supplied at `helm upgrade` time (or through `secrets.existingSecret`).
 (`src/shared/contracts/satellite-registry.ts`); on the live cluster it lives
 in the `system-data` PVC root. Add a satellite + endpoint entry for the hub
 (neutral ids shown; align with `satelliteHub.identity.*` in the overlay). The
-three companion relay scopes (`approvals`, `artifacts`, `tool_activity`,
-deny-by-default per w9hj.1) are what authorize the hub's companion bridge SSE
-stream, artifact previews, and approval decisions:
+companion relay scopes (`approvals`, `artifacts`, `tool_activity`, and
+`emotion`, deny-by-default per w9hj.1 / 7ang.1) are what authorize the hub's
+companion bridge SSE stream, artifact previews, approval decisions, and
+redacted emotion snapshots. The `emotion` scope is what gates the redacted
+`emotion.snapshot` frames (rounded VAD/mood, top-K discrete labels, confidence,
+and ACAC axis scores only — never rationale text, concerns, or salient
+entities); an endpoint without it receives zero emotion frames:
 
 ```json
 {
@@ -175,7 +179,8 @@ stream, artifact previews, and approval decisions:
             "status",
             "approvals",
             "artifacts",
-            "tool_activity"
+            "tool_activity",
+            "emotion"
           ]
         }
       ]

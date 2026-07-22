@@ -5,6 +5,7 @@ import {
   redactApprovalRequested,
   redactApprovalResolved,
   redactArtifactCreated,
+  redactEmotionSnapshot,
   redactToolActivity,
   toCompanionApprovalStatus,
   type ApprovalRequestedV2Context,
@@ -310,5 +311,108 @@ describe('redactArtifactCreated', () => {
     expect(payload.mediaType).toBe('application/octet-stream');
     expect(payload.provenance).toBe('unknown');
     expect(payload.previewable).toBe(false);
+  });
+});
+
+describe('redactEmotionSnapshot', () => {
+  const RATIONALE_SENTINEL = 'because the user shared a private secret about their health';
+  const CONCERN_SENTINEL = 'active-concern: user is worried about their job interview';
+
+  function richEmotionInput() {
+    return {
+      trigger: 'post_turn' as const,
+      vad: { valence: 0.123456, arousal: -0.654321, dominance: 0.5 },
+      mood: { valence: 0.2, arousal: 0.111111, dominance: -0.9 },
+      discrete: {
+        joy: 0.812345,
+        curiosity: 0.4,
+        anger: 0.02,
+        sadness: 0.71,
+        surprise: 0.33,
+        love: 0.66,
+        fear: 0.05,
+      },
+      confidence: 0.876543,
+      acacAxisScores: { agency: 0.7, connection: 0.44, authenticity: 0.9, curiosity: 0.6 },
+      timestampMs: 1_700_000_000_000,
+    };
+  }
+
+  it('emits only the whitelisted payload keys', () => {
+    const payload = redactEmotionSnapshot(richEmotionInput());
+    expect(Object.keys(payload).sort()).toEqual(
+      ['acacAxes', 'confidence', 'discrete', 'mood', 'timestamp', 'trigger', 'vad'].sort(),
+    );
+    expect(payload.trigger).toBe('post_turn');
+    expect(payload.timestamp).toBe(new Date(1_700_000_000_000).toISOString());
+  });
+
+  it('rounds VAD/mood/confidence to a coarse 2-decimal read', () => {
+    const payload = redactEmotionSnapshot(richEmotionInput());
+    expect(payload.vad).toEqual({ valence: 0.12, arousal: -0.65, dominance: 0.5 });
+    expect(payload.mood).toEqual({ valence: 0.2, arousal: 0.11, dominance: -0.9 });
+    expect(payload.confidence).toBe(0.88);
+  });
+
+  it('keeps only the top-K discrete labels by score, rounded and lowercased', () => {
+    const payload = redactEmotionSnapshot(richEmotionInput());
+    expect(payload.discrete).toHaveLength(5);
+    expect(payload.discrete.map((d) => d.label)).toEqual(['joy', 'sadness', 'love', 'curiosity', 'surprise']);
+    expect(payload.discrete[0]).toEqual({ label: 'joy', score: 0.81 });
+    // anger (0.02) and fear (0.05) fall outside the top-5 and are dropped.
+    expect(payload.discrete.map((d) => d.label)).not.toContain('anger');
+    expect(payload.discrete.map((d) => d.label)).not.toContain('fear');
+  });
+
+  it('carries ACAC axis SCORES only and never rationale text', () => {
+    const payload = redactEmotionSnapshot(richEmotionInput());
+    expect(payload.acacAxes).toEqual([
+      { axis: 'agency', score: 0.7 },
+      { axis: 'connection', score: 0.44 },
+      { axis: 'authenticity', score: 0.9 },
+      { axis: 'curiosity', score: 0.6 },
+    ]);
+    for (const axis of payload.acacAxes ?? []) {
+      expect(Object.keys(axis).sort()).toEqual(['axis', 'score']);
+    }
+  });
+
+  it('omits acacAxes entirely when no ACAC scores are supplied', () => {
+    const { acacAxisScores: _drop, ...rest } = richEmotionInput();
+    const payload = redactEmotionSnapshot(rest);
+    expect(payload).not.toHaveProperty('acacAxes');
+  });
+
+  it('provably never serializes rationale or concern text', () => {
+    // Sentinels are injected on fields the redactor does not read; the whitelist
+    // construction means they can never reach the payload.
+    const dirty = {
+      ...richEmotionInput(),
+      // @ts-expect-error — hostile extra fields must be ignored, not copied.
+      rationale: RATIONALE_SENTINEL,
+      // @ts-expect-error — hostile extra fields must be ignored, not copied.
+      concerns: [CONCERN_SENTINEL],
+      // @ts-expect-error — a discrete label carrying rationale must not survive as a value.
+      discrete: { ...richEmotionInput().discrete },
+    };
+    const serialized = JSON.stringify(redactEmotionSnapshot(dirty));
+    expect(serialized).not.toContain(RATIONALE_SENTINEL);
+    expect(serialized).not.toContain(CONCERN_SENTINEL);
+    expect(serialized).not.toContain('rationale');
+    expect(serialized).not.toContain('concerns');
+  });
+
+  it('clamps out-of-range axis and score values', () => {
+    const payload = redactEmotionSnapshot({
+      trigger: 'vad_shift',
+      vad: { valence: 5, arousal: -5, dominance: 0 },
+      mood: { valence: 0, arousal: 0, dominance: 0 },
+      discrete: { joy: 9 },
+      confidence: 4,
+      timestampMs: 1_700_000_000_000,
+    });
+    expect(payload.vad).toEqual({ valence: 1, arousal: -1, dominance: 0 });
+    expect(payload.confidence).toBe(1);
+    expect(payload.discrete[0]).toEqual({ label: 'joy', score: 1 });
   });
 });

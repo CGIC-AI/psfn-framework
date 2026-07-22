@@ -1,3 +1,5 @@
+import { access, readFile, stat } from 'node:fs/promises';
+import { dirname } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import {
   createLiveDeployPipelineRunner,
@@ -153,6 +155,90 @@ describe('createLiveDeployPipelineRunner', () => {
 
     const upgrade = calls.find(call => call.args.includes('upgrade'));
     expect(upgrade?.args).toContain('--take-ownership');
+  });
+
+  it('applies captured live values from a private temporary file before image overrides', async () => {
+    const liveValues = {
+      runtime: { companionId: '11111111-1111-4111-8111-111111111111' },
+      secrets: { values: { adminToken: 'CHANGE_ME_ADMIN_TOKEN' } },
+    };
+    let valuesPath = '';
+    let serializedValues = '';
+    let valuesMode = 0;
+    const run: CommandRunner = async (file, args) => {
+      if (file === 'helm' && args.includes('upgrade')) {
+        const valuesIndex = args.indexOf('--values');
+        valuesPath = args[valuesIndex + 1] ?? '';
+        serializedValues = await readFile(valuesPath, 'utf8');
+        valuesMode = (await stat(valuesPath)).mode & 0o777;
+        expect(valuesIndex).toBeGreaterThan(-1);
+        expect(valuesIndex).toBeLessThan(args.indexOf('--set'));
+        return ok('upgrade complete');
+      }
+      if (file === 'helm' && args.includes('history')) {
+        return ok(helmHistoryJson([{ revision: 13, status: 'deployed' }]));
+      }
+      throw new Error(`unexpected command: ${file} ${args.join(' ')}`);
+    };
+    const deploy = createLiveDeployPipelineRunner({
+      run,
+      repoDir: '/repo',
+      dockerfile: 'docker/Dockerfile.agent',
+      buildContext: '.',
+      chartPath: 'deploy/helm/psfn',
+      importImage: async () => undefined,
+      verifyBackup: async () => true,
+    });
+
+    await expect(deploy.helmUpgrade({
+      action: 'deploy',
+      namespace: 'psfn',
+      release: 'psfn',
+      sourceBranch: 'fix/preserve-values',
+      sourceCommit: 'b'.repeat(40),
+      imageRepository: 'localhost/psfn-framework',
+      imageTag: '0.1.0-kube-bbbbbbbb',
+      imageRevisionLabel: 'b'.repeat(40),
+    }, liveValues)).resolves.toEqual({ helmRevision: 13 });
+
+    expect(JSON.parse(serializedValues)).toEqual(liveValues);
+    expect(valuesMode).toBe(0o600);
+    await expect(access(valuesPath)).rejects.toThrow();
+    await expect(access(dirname(valuesPath))).rejects.toThrow();
+  });
+
+  it('deletes the temporary live-values file when Helm upgrade fails', async () => {
+    let valuesPath = '';
+    const run: CommandRunner = async (file, args) => {
+      if (file === 'helm' && args.includes('upgrade')) {
+        valuesPath = args[args.indexOf('--values') + 1] ?? '';
+        return err('upgrade rejected');
+      }
+      throw new Error(`unexpected command: ${file} ${args.join(' ')}`);
+    };
+    const deploy = createLiveDeployPipelineRunner({
+      run,
+      repoDir: '/repo',
+      dockerfile: 'docker/Dockerfile.agent',
+      buildContext: '.',
+      chartPath: 'deploy/helm/psfn',
+      importImage: async () => undefined,
+      verifyBackup: async () => true,
+    });
+
+    await expect(deploy.helmUpgrade({
+      action: 'deploy',
+      namespace: 'psfn',
+      release: 'psfn',
+      sourceBranch: 'fix/preserve-values',
+      sourceCommit: 'c'.repeat(40),
+      imageRepository: 'localhost/psfn-framework',
+      imageTag: '0.1.0-kube-cccccccc',
+      imageRevisionLabel: 'c'.repeat(40),
+    }, { companionLibrary: { enabled: true } })).rejects.toThrow(/helm upgrade failed/);
+
+    await expect(access(valuesPath)).rejects.toThrow();
+    await expect(access(dirname(valuesPath))).rejects.toThrow();
   });
 });
 

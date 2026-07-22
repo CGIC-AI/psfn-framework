@@ -55,6 +55,7 @@ spec:
         {{- toYaml . | nindent 8 }}
       {{- end }}
       initContainers:
+        {{- include "psfn.sharedWorkspaceBootstrapInitContainer" . | nindent 8 }}
         {{- include "psfn.fleetAuthAuthorityFloorInitContainer" . | nindent 8 }}
         {{- include "psfn.seedInitContainer" . | nindent 8 }}
         {{- include "psfn.waitForPostgresInitContainer" (dict "root" . "image" .Values.workloads.gateway.image) | nindent 8 }}
@@ -296,6 +297,7 @@ spec:
         {{- toYaml . | nindent 8 }}
       {{- end }}
       initContainers:
+        {{- include "psfn.sharedWorkspaceBootstrapInitContainer" . | nindent 8 }}
         {{- include "psfn.seedInitContainer" . | nindent 8 }}
         {{- include "psfn.waitForPostgresInitContainer" (dict "root" . "image" .Values.workloads.agent.image) | nindent 8 }}
       containers:
@@ -476,6 +478,7 @@ spec:
         {{- toYaml . | nindent 8 }}
       {{- end }}
       initContainers:
+        {{- include "psfn.sharedWorkspaceBootstrapInitContainer" . | nindent 8 }}
         {{- if .Values.fleet.enabled }}
         {{- include "psfn.waitForPostgresInitContainer" (dict "root" . "image" .Values.workloads.garden.image) | nindent 8 }}
         {{- else }}

@@ -65,6 +65,7 @@ spec:
         {{- toYaml . | nindent 8 }}
       {{- end }}
       initContainers:
+        {{- include "psfn.sharedWorkspaceBootstrapInitContainer" $ctx | nindent 8 }}
         {{- include "psfn.seedInitContainer" $ctx | nindent 8 }}
         {{- include "psfn.waitForPostgresInitContainer" (dict "root" $ctx "image" $values.workloads.agent.image) | nindent 8 }}
       containers:

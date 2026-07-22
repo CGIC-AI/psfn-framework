@@ -351,6 +351,28 @@ describe('hub stream store control + artifact wiring', () => {
     store.destroy();
   });
 
+  it('relays a device.location sample through a coordinate-terminating transport', () => {
+    const client = new FakeHubClient();
+    const spy = vi.spyOn(client, 'sendDeviceLocation');
+    const store = new HubStreamStore(client);
+    const sample = { lat: 37.42, lon: -122.08, accuracyM: 12, timestamp: 1_700_000_000_000 };
+
+    expect(store.canSendDeviceLocation()).toBe(true);
+    store.sendDeviceLocation(sample);
+
+    expect(spy).toHaveBeenCalledWith(sample);
+    store.destroy();
+  });
+
+  it('reports device.location as unavailable when the transport cannot terminate coordinates', () => {
+    const client = new FakeHubClient();
+    vi.spyOn(client, 'supportsDeviceLocation').mockReturnValue(false);
+    const store = new HubStreamStore(client);
+
+    expect(store.canSendDeviceLocation()).toBe(false);
+    store.destroy();
+  });
+
   it('relays approval decisions through the client transport', () => {
     const client = new FakeHubClient();
     const spy = vi.spyOn(client, 'sendApprovalDecision');
@@ -486,6 +508,14 @@ class FakeHubClient implements HubStreamClientLike {
   }
 
   sendTouchInteraction(): void {
+    return;
+  }
+
+  supportsDeviceLocation(): boolean {
+    return true;
+  }
+
+  sendDeviceLocation(): void {
     return;
   }
 

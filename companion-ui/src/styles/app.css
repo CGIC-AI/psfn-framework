@@ -1148,6 +1148,12 @@ button:focus-visible {
   accent-color: var(--color-blue);
 }
 
+.location-status {
+  color: var(--color-muted);
+  font-size: 0.8rem;
+  margin: 0;
+}
+
 .segmented-field {
   display: grid;
   gap: 0.35rem;

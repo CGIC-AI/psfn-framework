@@ -40,6 +40,19 @@ describe('error helpers', () => {
     expect(reason.name).toBe('');
   });
 
+  it('wraps an extensible error whose empty name comes from a getter-only prototype', () => {
+    class InheritedNameError extends Error {}
+    Object.defineProperty(InheritedNameError.prototype, 'name', {
+      get: () => '',
+      configurable: true,
+    });
+    const reason = new InheritedNameError('upstream cancelled');
+    expect(Object.isExtensible(reason)).toBe(true);
+    const result = abortError(reason);
+    expect(result).not.toBe(reason);
+    expect(result).toMatchObject({ name: 'AbortError', message: 'upstream cancelled' });
+  });
+
   it('uses the caller fallback for empty abort reasons', () => {
     expect(abortError(undefined, 'model call cancelled')).toMatchObject({
       name: 'AbortError',

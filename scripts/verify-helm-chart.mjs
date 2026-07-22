@@ -163,6 +163,42 @@ function assertContainerVolumeMount(deployment, containerField, containerName, e
   }
 }
 
+function assertSharedWorkspaceBootstrap(deployment, label) {
+  const initContainers = deployment?.spec?.template?.spec?.initContainers ?? [];
+  const bootstrapIndex = initContainers.findIndex(
+    container => container.name === 'bootstrap-shared-workspace',
+  );
+  if (bootstrapIndex !== 0) {
+    throw new Error(`${label} shared workspace bootstrap must be the first init container`);
+  }
+
+  const bootstrap = initContainers[bootstrapIndex];
+  const runtimeMount = bootstrap.volumeMounts?.find(mount => mount.name === 'runtime');
+  if (!runtimeMount
+    || runtimeMount.mountPath !== '/bootstrap/runtime'
+    || Object.hasOwn(runtimeMount, 'subPath')
+    || runtimeMount.readOnly !== false) {
+    throw new Error(
+      `${label} shared workspace bootstrap must mount the runtime PVC root writable at /bootstrap/runtime`,
+    );
+  }
+
+  const command = bootstrap.command;
+  if (!Array.isArray(command)
+    || command[0] !== 'sh'
+    || command[1] !== '-c'
+    || command[2]?.trim() !== 'set -eu\nmkdir -p /bootstrap/runtime/workspaces-shared') {
+    throw new Error(
+      `${label} shared workspace bootstrap must create only workspaces-shared`,
+    );
+  }
+
+  const seedIndex = initContainers.findIndex(container => container.name === 'seed-runtime-files');
+  if (seedIndex >= 0 && bootstrapIndex >= seedIndex) {
+    throw new Error(`${label} shared workspace bootstrap must run before owner seeding`);
+  }
+}
+
 function assertContainerEnvNames(deployment, containerName, expectedNames, label) {
   const container = deployment?.spec?.template?.spec?.containers
     ?.find(candidate => candidate.name === containerName);
@@ -460,6 +496,7 @@ for (const [deployment, containerName] of [
   [defaultFleetGarden, 'garden'],
   [defaultFleetAgents[0], 'agent'],
 ]) {
+  assertSharedWorkspaceBootstrap(deployment, containerName);
   assertContainerVolumeMount(
     deployment,
     'containers',
@@ -1110,6 +1147,9 @@ if (fleetAgentDeployments.length !== fleetGardenCompanions.length) {
     `fleet render must contain one agent Deployment per target, got ${fleetAgentDeployments.length}`,
   );
 }
+for (const deployment of fleetAgentDeployments) {
+  assertSharedWorkspaceBootstrap(deployment, deployment.metadata.name);
+}
 if (findDocumentByKindName(fleetGardenRendered, 'Deployment', 'psfn-agent')) {
   throw new Error('fleet render must not contain the legacy unsuffixed agent Deployment');
 }
@@ -1481,14 +1521,22 @@ const chartFloorMount = chartFloorGateway?.spec?.template?.spec?.containers?.[0]
 if (chartFloorMount?.mountPath !== '/var/lib/psfn/fleet-auth-floor') {
   throw new Error('gateway must mount the Fleet Auth authority floor at its configured path');
 }
-const chartFloorInit = chartFloorGateway?.spec?.template?.spec?.initContainers
-  ?.find(container => container.name === 'prepare-fleet-auth-authority-floor');
+const chartFloorInitContainers = chartFloorGateway?.spec?.template?.spec?.initContainers ?? [];
+const chartFloorInitIndex = chartFloorInitContainers.findIndex(
+  container => container.name === 'prepare-fleet-auth-authority-floor',
+);
+const chartFloorInit = chartFloorInitContainers[chartFloorInitIndex];
 if (!chartFloorInit) {
   throw new Error('gateway must prepare the Fleet Auth authority floor before startup');
 }
-if (chartFloorGateway.spec.template.spec.initContainers[0]?.name
-    !== 'prepare-fleet-auth-authority-floor') {
-  throw new Error('Fleet Auth authority-floor preparation must be the first gateway init container');
+const chartFloorSeedIndex = chartFloorInitContainers.findIndex(
+  container => container.name === 'seed-runtime-files',
+);
+if (chartFloorInitIndex !== 1 || chartFloorInitIndex >= chartFloorSeedIndex) {
+  throw new Error(
+    'Fleet Auth authority-floor preparation must immediately follow shared workspace bootstrap '
+    + 'and precede owner seeding',
+  );
 }
 if (chartFloorInit.securityContext?.capabilities?.drop?.join(',') !== 'ALL') {
   throw new Error('Fleet Auth authority-floor init must drop all ambient capabilities');

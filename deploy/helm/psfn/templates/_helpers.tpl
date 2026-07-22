@@ -387,6 +387,26 @@ psfn.io/fleet-target: registered
 {{- end }}
 {{- end -}}
 
+{{- define "psfn.sharedWorkspaceBootstrapInitContainer" -}}
+{{- if .Values.fleet.enabled }}
+- name: bootstrap-shared-workspace
+  image: {{ include "psfn.image" (dict "root" . "image" .Values.workloads.agent.image) | quote }}
+  imagePullPolicy: {{ .Values.psfnAppImage.pullPolicy }}
+  command:
+    - sh
+    - -c
+    - |
+      set -eu
+      mkdir -p /bootstrap/runtime/workspaces-shared
+  securityContext:
+    {{- toYaml .Values.securityContext | nindent 4 }}
+  volumeMounts:
+    - name: runtime
+      mountPath: /bootstrap/runtime
+      readOnly: false
+{{- end }}
+{{- end -}}
+
 {{- define "psfn.helmBackupImageEnv" -}}
 - name: PSFN_HELM_BACKUP_AGENT_IMAGE_REPOSITORY
   value: {{ default .Values.psfnAppImage.repository .Values.workloads.agent.image.repository | quote }}

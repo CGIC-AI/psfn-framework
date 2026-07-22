@@ -20,8 +20,8 @@ import {
 const NOW = new Date('2026-06-10T08:00:00.000Z');
 
 describe('SleepCycleEpisodeConsolidator', () => {
-  function makeStore(): PostgresEpisodicStore {
-    return new PostgresEpisodicStore(new FakeEpisodicPool() as unknown as Pool, { now: () => NOW });
+  function makeStore(pool = new FakeEpisodicPool()): PostgresEpisodicStore {
+    return new PostgresEpisodicStore(pool as unknown as Pool, { now: () => NOW });
   }
 
   function episodeInput(
@@ -433,6 +433,40 @@ describe('SleepCycleEpisodeConsolidator', () => {
     expect(merged?.meaning?.source).toBe('companion_dream_pass');
     // Machine retrieval hints from the folded member are unioned in, not dropped.
     expect(merged?.machineSignals?.topicTags).toEqual(['evening', 'wind-down']);
+  });
+
+  it('keeps nightly chain consolidation live when a legacy v1 head meets v2 machineSignals', async () => {
+    const pool = new FakeEpisodicPool();
+    const store = makeStore(pool);
+    await store.createEpisode(episodeInput('legacy-head', '2026-06-10T00:53:00.000Z', '2026-06-10T01:21:00.000Z'));
+    await store.createEpisode(episodeInput('v2-tail', '2026-06-10T01:21:00.000Z', '2026-06-10T01:38:00.000Z', {
+      machineSignals: { source: 'deterministic_synthesis', topicTags: ['wind-down'] },
+    }));
+
+    const legacyRow = pool.episodes.get('legacy-head');
+    if (!legacyRow) throw new Error('legacy-head fixture was not stored');
+    const legacyJson = JSON.parse(String(legacyRow.episode_json)) as Record<string, unknown>;
+    legacyJson.schemaVersion = 1;
+    delete legacyJson.machineSignals;
+    legacyRow.episode_json = JSON.stringify(legacyJson);
+
+    const consolidator = new SleepCycleEpisodeConsolidator(
+      store,
+      {
+        getRecentMessages: () => [
+          entry(1, '2026-06-10T00:55:00.000Z', 'user', 'look at this one'),
+          entry(2, '2026-06-10T01:30:00.000Z', 'assistant', 'I love it'),
+        ],
+      },
+      { complete: vi.fn(async () => refinementResponse()) },
+      { now: () => NOW },
+    );
+
+    const result = await consolidator.run({ sessionId: 'discord:main' });
+    expect(result.mergeChains).toBe(1);
+    const merged = await store.getEpisode('legacy-head');
+    expect(merged?.schemaVersion).toBe(1);
+    expect(merged?.machineSignals).toBeUndefined();
   });
 
   it('preserves a dream-authored meaning through a nightly refinement (h4fp.6)', async () => {

@@ -913,7 +913,7 @@ export class SleeptimeMemoryAgent {
    */
   private async loadDayEpisodes(sessionId: string, nowMs: number): Promise<Episode[]> {
     const episodes = await this.episodicStore.searchByTime({
-      sessionId,
+      spanSessionId: sessionId,
       order: 'desc',
       from: toIsoInstant(nowMs - DAY_MS),
       to: toIsoInstant(nowMs),

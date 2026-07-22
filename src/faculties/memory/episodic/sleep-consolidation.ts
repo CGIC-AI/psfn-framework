@@ -309,10 +309,10 @@ function mergeChainIntoHead(chain: readonly Episode[]): EpisodeUpdateInput {
     },
     // Union the machine-signals sidecars across the chain (bead h4fp.6): the
     // head's estimate/source is preferred, tags are unioned. Omitting this on a
-    // full-row-replace update would drop machine retrieval hints from the
-    // folded members. `...merged` already carries the accumulator's sidecar;
-    // this override replaces it with the union whenever either side has one.
-    ...((merged.machineSignals || episode.machineSignals)
+    // v2 head's estimate/source is preferred and tags are unioned. A legacy v1
+    // head cannot persist the v2-only sidecar; keep consolidation live without
+    // silently upgrading its stored contract (h4fp.7 owns migration).
+    ...(head.schemaVersion >= 2 && (merged.machineSignals || episode.machineSignals)
       ? { machineSignals: mergeMachineSignals(merged.machineSignals, episode.machineSignals) }
       : {}),
     // Carry the companion's authored felt-meaning forward (bead h4fp.6):

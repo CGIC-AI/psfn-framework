@@ -931,12 +931,13 @@ async function main(): Promise<void> {
     // participant ids simply rank 0.
     contactTrust: {
       resolveTrustRanks: async (contactIds) => {
-        const ranks = new Map<string, number>();
-        for (const contactId of contactIds) {
+        const entries = await Promise.all(contactIds.map(async (contactId) => {
           const contact = await contactStore.getById(contactId);
-          if (contact) ranks.set(contactId, trustOrd(contact.trustLevel));
-        }
-        return ranks;
+          return contact ? ([contactId, trustOrd(contact.trustLevel)] as const) : undefined;
+        }));
+        return new Map(entries.filter(
+          (entry): entry is readonly [string, number] => entry !== undefined,
+        ));
       },
     },
     onGateEvent: (event) => {

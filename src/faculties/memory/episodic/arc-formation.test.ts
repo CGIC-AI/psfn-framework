@@ -507,6 +507,100 @@ describe('EpisodeArcWeaver', () => {
     const day2Outgoing = await store.listEpisodeArcsForEpisode('day2', { direction: 'outgoing' });
     expect(day2Outgoing.map(arc => arc.targetEpisodeId)).toEqual(['day3']);
   });
+
+  it('replays thread assignment for a persisted arc without requiring an LLM re-proposal', async () => {
+    const store = makeStore();
+    const day1 = episodeInput(
+      'day1',
+      '2025-06-04T20:00:00.000Z',
+      '2025-06-04T21:00:00.000Z',
+    );
+    const day2 = episodeInput(
+      'day2',
+      '2026-06-06T20:00:00.000Z',
+      '2026-06-06T21:00:00.000Z',
+    );
+    delete day1.threadId;
+    delete day2.threadId;
+    await store.createEpisode(day1);
+    await store.createEpisode(day2);
+    await store.writeEpisodeArc({
+      sourceEpisodeId: 'day1',
+      targetEpisodeId: 'day2',
+      arcKind: 'same_theme',
+      salience: 0.6,
+      confidence: 0.9,
+      themes: ['postgres'],
+      spanRefs: [],
+      artifactRefs: [],
+      provenanceRefs: [],
+    });
+    const weaver = new EpisodeArcWeaver(
+      store,
+      { complete: vi.fn(async () => arcResponse([])) },
+      { now: () => NOW },
+    );
+
+    const result = await weaver.run({ sessionId: 'discord:main' });
+
+    expect(result.ran).toBe(false);
+    expect(result.skippedReason).toBe('not_enough_episodes');
+    expect(result.writtenArcs).toBe(0);
+    expect((await store.getEpisode('day1'))?.threadId).toBe('day1');
+    expect((await store.getEpisode('day2'))?.threadId).toBe('day1');
+  });
+
+  it('refreshes every moved member while reconciling a persisted arc chain', async () => {
+    const store = makeStore();
+    for (const [id, threadId, day] of [
+      ['a', 'a', '01'],
+      ['b', 'b', '02'],
+      ['c', 'b', '03'],
+      ['d', 'd', '04'],
+    ] as const) {
+      await store.createEpisode(episodeInput(
+        id,
+        `2025-06-${day}T20:00:00.000Z`,
+        `2025-06-${day}T21:00:00.000Z`,
+        { threadId },
+      ));
+    }
+    await store.writeEpisodeArc({
+      id: 'arc-1',
+      sourceEpisodeId: 'a',
+      targetEpisodeId: 'b',
+      arcKind: 'same_theme',
+      salience: 0.6,
+      confidence: 0.9,
+      themes: ['postgres'],
+      spanRefs: [],
+      artifactRefs: [],
+      provenanceRefs: [],
+    });
+    await store.writeEpisodeArc({
+      id: 'arc-2',
+      sourceEpisodeId: 'c',
+      targetEpisodeId: 'd',
+      arcKind: 'continuation',
+      salience: 0.6,
+      confidence: 0.9,
+      themes: ['postgres'],
+      spanRefs: [],
+      artifactRefs: [],
+      provenanceRefs: [],
+    });
+    const weaver = new EpisodeArcWeaver(
+      store,
+      { complete: vi.fn(async () => arcResponse([])) },
+      { now: () => NOW },
+    );
+
+    await weaver.run({ sessionId: 'discord:main' });
+
+    for (const id of ['a', 'b', 'c', 'd']) {
+      expect((await store.getEpisode(id))?.threadId).toBe('a');
+    }
+  });
 });
 
 describe('parseProposedArcs', () => {

@@ -111,6 +111,15 @@ describe('mergeEpisodeWithCandidate meaning carry-forward (h4fp.6)', () => {
     expect(merged.machineSignals?.vad).toEqual({ valence: 0.2, arousal: 0.3, dominance: 0.5 });
   });
 
+  it('does not attach v2-only machineSignals when the surviving canonical is legacy v1', () => {
+    const merged = mergeEpisodeWithCandidate(
+      canonicalEpisode({ schemaVersion: 1, machineSignals: undefined }),
+      candidate(),
+    );
+
+    expect(merged.machineSignals).toBeUndefined();
+  });
+
   it('round-trips the carried meaning through the store without tripping the drop guard', async () => {
     const store = new PostgresEpisodicStore(new FakeEpisodicPool() as unknown as Pool, { now: () => NOW });
     const seeded = canonicalEpisode({ meaning: dreamMeaning });

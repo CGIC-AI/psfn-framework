@@ -423,6 +423,15 @@ export interface EpisodicStorePort {
     episodeIds: readonly string[],
     options?: EpisodeArcListOptions,
   ): EpisodicStoreResult<EpisodeArc[]>;
+  /**
+   * Active arcs whose active endpoint episodes do not yet materialize the same
+   * topic-thread assignment (including legacy session-keyed endpoints). This
+   * is the durable retry surface for an arc commit followed by a failed thread
+   * union; it is intentionally independent of review windows and LLM output.
+   */
+  listEpisodeArcsNeedingThreadAssignment(
+    options?: Pick<EpisodeListOptions, 'limit'>,
+  ): EpisodicStoreResult<EpisodeArc[]>;
   getProcessingWatermark(
     scope: EpisodicProcessingWatermarkScope,
   ): EpisodicStoreResult<EpisodicProcessingWatermark | undefined>;

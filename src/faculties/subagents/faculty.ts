@@ -114,6 +114,13 @@ const BLOCKED_SUBAGENT_TOOL_NAMES = new Set([
   // pre-existing list blocked even the split reads.
   'identity',
   'north_star',
+  // notify is the operator emergency button, not a companion outbound surface.
+  // delegateWyomingSession plumbs caller-supplied message identity through, so a
+  // future human-authored ingress would open the provenance gate in ntfy.ts and
+  // let a bounded child dispatch external notify sends. Exclude it at the source
+  // now (root-cause fix, ahead of any human-authored caller) rather than relying
+  // on the today-empty Wyoming capability grant.
+  'notify',
   'contact',
   'contact_list',
   'contact_lookup',

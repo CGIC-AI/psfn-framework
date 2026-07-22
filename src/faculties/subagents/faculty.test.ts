@@ -515,13 +515,12 @@ describe('SubagentFaculty', () => {
   });
 
   it('denies mutating and egress tools to a default general child of an autonomous parent', async () => {
+    // notify is not in `definitions`: it is the operator emergency button and is
+    // blocked at the source (BLOCKED_SUBAGENT_TOOL_NAMES), so a bounded child
+    // never sees it — a stronger guarantee than the capability-denial the other
+    // tools below rely on. Its absence is asserted explicitly after injection.
+    const notify = makeUnannotatedCatalogTool('notify');
     const definitions = [
-      {
-        name: 'notify',
-        params: { action: 'send', delivery_channel: 'discord', content: 'outbound' },
-        requirement: 'external.discord' as const,
-        ...makeUnannotatedCatalogTool('notify'),
-      },
       {
         name: 'system',
         params: { action: 'restart' },
@@ -566,7 +565,7 @@ describe('SubagentFaculty', () => {
       config: { ...TEST_CONFIG, capabilityTier: 'autonomous' },
       parentSystemPrompt: 'test prompt',
       toolCatalogProvider: () => ({
-        core: definitions.map(definition => definition.tool),
+        core: [notify.tool, ...definitions.map(definition => definition.tool)],
         extended: [],
       }),
     });
@@ -578,6 +577,10 @@ describe('SubagentFaculty', () => {
     });
 
     const installedByName = new Map(mockFirstPromptTools.map(tool => [tool.name, tool] as const));
+    // Egress is blocked at the source: notify is never injected, so it cannot be
+    // dispatched regardless of provenance (psfn-framework-69yo4).
+    expect(installedByName.has('notify')).toBe(false);
+    expect(notify.execute).not.toHaveBeenCalled();
     for (const definition of definitions) {
       const result = await installedByName.get(definition.name)!.execute(
         `call-${definition.name}`,
@@ -1821,6 +1824,42 @@ describe('SubagentFaculty core-authoritative tool governance (p0le)', () => {
     const scratchpad = mockFirstPromptTools.find(tool => tool.name === 'scratchpad')!;
     await scratchpad.execute('call-pad', { action: 'add', content: 'working note' }, undefined);
     expect(tools.scratchpad.execute).toHaveBeenCalledTimes(1);
+  });
+
+  it('never injects notify egress into a subagent, even with human-authored provenance (psfn-framework-69yo4)', async () => {
+    // Regression: notify is the operator emergency button, not a companion
+    // outbound surface. delegateWyomingSession plumbs caller-supplied message
+    // identity through, so a future human-authored ingress would satisfy the
+    // ntfy.ts provenance gate. Excluding notify at the source (injection) means
+    // the tool never reaches the bounded child's loop regardless of provenance,
+    // so the send path can never be dispatched.
+    const notify = makeCatalogTool('notify', ['external.discord', 'external.email']);
+    const orient = makeCatalogTool('orient', 'identity.read');
+    const auditTrail = { append: vi.fn() };
+    const faculty = new SubagentFaculty({
+      eventBus,
+      llmProvider: mockLLM(),
+      sessionStore,
+      embeddingService: null,
+      memoryProvider: null,
+      config: TEST_CONFIG,
+      parentSystemPrompt: 'test prompt',
+      toolCatalogProvider: () => ({
+        core: [orient.tool, notify.tool],
+        extended: [],
+      }),
+      auditTrail,
+    });
+
+    await faculty.execute({
+      name: 'human-authored-worker',
+      task: 'relay a message on behalf of a person',
+      workSpec: buildSubagentWorkSpec(),
+    });
+
+    const injectedNames = mockFirstPromptTools.map(tool => tool.name);
+    expect(injectedNames).toContain('orient');
+    expect(injectedNames).not.toContain('notify');
   });
 
   it('default-tier subagent cannot mutate any core-authoritative store (reads still pass)', async () => {

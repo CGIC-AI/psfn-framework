@@ -1532,6 +1532,74 @@ a prominent warning and exits 0. This is only acceptable when you have
 independently confirmed the outage and are accepting the risk; re-run without the
 flag once connectivity is restored.
 
+## Container and IaC Security Scanning (Trivy)
+
+Trivy owns exactly the surfaces the other gates do not: **rendered Helm/Kubernetes
+misconfiguration** and **built container images**. It never scans npm lockfiles
+(OSV owns those; see *Dependency Update Policy*) and never scans source code
+(Semgrep owns that). The wrapper is `scripts/ci/run-trivy-scan.mjs`.
+
+### Pinned scanner and supply-chain posture
+
+Trivy runs from an **immutable digest** (v0.72.0,
+`ghcr.io/aquasecurity/trivy@sha256:c6e969c…5b97ada`) — never `aquasecurity/trivy-action`,
+`setup-trivy`, or a floating tag. The Trivy ecosystem suffered a March 2026
+credential compromise, so only the reproduced post-incident digest is trusted;
+the wrapper probes `trivy --version` and **fails closed** if it is not `0.72.0`
+before any scan runs. Every invocation is **tokenless**, passes
+`--disable-telemetry` and `--skip-version-check`, and **never mounts the Docker
+socket**.
+
+### Config scan (Helm/Kubernetes misconfiguration)
+
+`node scripts/ci/run-trivy-scan.mjs config` renders the repo-authoritative chart
+with real Helm and the representative fail-closed non-fleet values (the same
+inputs `verify:deployment-contracts` uses) into a per-template directory
+(`helm template --output-dir`), then scans the rendered YAML at
+`--severity HIGH,CRITICAL --exit-code 1`. A missing Helm binary, render failure,
+empty render, missing/expired ignore entry, or scanner error fails the gate
+closed. It runs in `.github/workflows/trivy-config.yml` on IaC-touching pull
+requests (a **standalone** gate, never wired into `ci-required`) and weekly so
+the bundled misconfiguration checks stay fresh.
+
+The current baseline is **clean** at HIGH/CRITICAL: the first-party app
+containers (agent, gateway, Garden, LiteLLM, and their init containers) run with
+`readOnlyRootFilesystem: true` (the `/app` image is read-only by design; a writable
+`/tmp` emptyDir backs incidental temp writes), and Postgres/Redis carry an
+explicit hardened container security context (`allowPrivilegeEscalation: false`,
+`seccompProfile: RuntimeDefault`).
+
+### Image scan (vulnerabilities)
+
+`node scripts/ci/run-trivy-scan.mjs image (--input <archive.tar> | --image <ref@sha256:…>)`
+scans an **exported image archive** or an **exact remote digest** — never a
+floating tag, never the Docker socket — at `--severity HIGH,CRITICAL --exit-code 1`.
+`.github/workflows/trivy-image.yml` runs it daily and on demand against the digest
+from the `image_digest` dispatch input or the `TRIVY_IMAGE_DIGEST` repository
+variable; with neither set it **fails loudly rather than skipping**. A private
+registry would need a separately reviewed credentialed path.
+
+### Feed policy (mutable DB, immutable pins)
+
+Trivy's **vulnerability database is a mutable security feed** and is refreshed on
+every run (Trivy downloads the latest DB by default), so advisories that land
+after build time are caught rather than silently frozen. The **application/image
+target is immutable** (always an exact `@sha256:` digest), and the scanner itself
+is pinned by digest. This is the deliberate split: mutable *feed*, immutable
+*pins*.
+
+### Exception policy (`.trivyignore.yaml`)
+
+Exceptions live in the repo-owned `.trivyignore.yaml` and are **exact** (one rule,
+one rendered template path), **justified** (a `statement`), **owned**, and
+**expiring**. Broad rule- or path-wide suppression is forbidden. Trivy 0.72.0 does
+not enforce the `expiry` field for misconfiguration ignores, so the wrapper does:
+an entry that is missing, malformed, unscoped, or **past its expiry** fails the
+gate closed and forces a fresh review. The only current exceptions risk-accept
+`AVD-KSV-0014` (writable root filesystem) on the third-party Postgres and Redis
+StatefulSets, whose upstream images write across the root filesystem at startup;
+read-only-root hardening for them is a live-validated follow-up.
+
 ## CI Typecheck Baseline
 
 The `Typecheck (baselined)` CI lane runs the root `tsconfig.json` and fails when

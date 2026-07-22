@@ -6,7 +6,10 @@ import type {
   MemorySubjectAuthorizedMutation,
   MemorySubjectAuthorizedQuery,
 } from './memory-store-port.js';
-import { createSubjectAuthorizedMemoryStore } from './subject-authorized-store.js';
+import {
+  MEMORY_STORE_METHOD_POLICY,
+  createSubjectAuthorizedMemoryStore,
+} from './subject-authorized-store.js';
 import type { PurrMemory } from './types.js';
 
 function memory(id: string, text: string): PurrMemory {
@@ -410,5 +413,96 @@ describe('subject-authorized memory store', () => {
 
     expect(await denied.getByIds(['known-id-a', 'known-id-b'])).toEqual([]);
     expect(rawRead).not.toHaveBeenCalled();
+  });
+
+  it('default-deny: an unclassified/new store method cannot reach the raw target', async () => {
+    // Simulate a future MemoryStorePort method the proxy has never classified:
+    // a callable present on the raw store but with no authorization projection.
+    const sneakyRawRead = vi.fn(() => {
+      throw new Error('unclassified raw method must not run');
+    });
+    const store = {
+      queryAuthorizedMemorySubjects: vi.fn(async () => ({ memories: [], total: 0 })),
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      readEveryoneElsesMemories: sneakyRawRead,
+    } as unknown as MemoryStorePort;
+    const authorized = createSubjectAuthorizedMemoryStore(store, { viewerContactId: 'contact-a' });
+
+    // Even with a fully trusted subject, the unclassified callable is refused at
+    // the proxy boundary (loud, greppable) and never forwards to the raw target.
+    expect(() => (authorized as unknown as Record<string, () => unknown>).readEveryoneElsesMemories())
+      .toThrow(/subject-authorized-memory-proxy default-deny/);
+    expect(sneakyRawRead).not.toHaveBeenCalled();
+    // The deny holds identically without a trusted subject.
+    const denied = createSubjectAuthorizedMemoryStore(store, {});
+    expect(() => (denied as unknown as Record<string, () => unknown>).readEveryoneElsesMemories())
+      .toThrow(/default-deny: refusing unauthorized\/unhandled MemoryStorePort method/);
+    expect(sneakyRawRead).not.toHaveBeenCalled();
+  });
+
+  it('classifies runInTransaction as a capability-free pass-through boundary', async () => {
+    // The subject-backed MemoryWriter.patch/patchMemory path wraps authorized
+    // mutations in a transaction; the boundary itself carries no subject data and
+    // must keep forwarding to the raw store.
+    const handled: Array<() => unknown> = [];
+    const runInTransaction = vi.fn(async (handler: () => unknown) => {
+      handled.push(handler);
+      return await handler();
+    });
+    const store = { runInTransaction } as unknown as MemoryStorePort;
+    const authorized = createSubjectAuthorizedMemoryStore(store, { viewerContactId: 'contact-a' });
+
+    const handler = vi.fn(async () => 'committed');
+    await expect(authorized.runInTransaction(handler)).resolves.toBe('committed');
+    expect(runInTransaction).toHaveBeenCalledTimes(1);
+    expect(handled[0]).toBe(handler);
+  });
+
+  it('forwards the companion-owned scratchpad (distinct ownership contract) to raw', async () => {
+    const entries = [{ id: 'note-1', content: 'draft', createdAt: 1, updatedAt: 1 }];
+    const listScratchpadEntries = vi.fn(() => entries);
+    const addScratchpadEntry = vi.fn(async () => ({ entry: entries[0]!, evictedIds: [] }));
+    const store = { listScratchpadEntries, addScratchpadEntry } as unknown as MemoryStorePort;
+    // Scratchpad is companion/process-local, not contact-subject data, so it is
+    // pass-through-safe even without a viewer subject.
+    const authorized = createSubjectAuthorizedMemoryStore(store, {});
+
+    expect(authorized.listScratchpadEntries(5)).toEqual(entries);
+    expect(listScratchpadEntries).toHaveBeenCalledWith(5);
+    await expect(authorized.addScratchpadEntry('draft')).resolves.toMatchObject({ evictedIds: [] });
+    expect(addScratchpadEntry).toHaveBeenCalledWith('draft');
+  });
+
+  it('subject-gates recordPatchEvent: forwards with a trusted subject, denies without one', async () => {
+    const recordPatchEvent = vi.fn(async () => undefined);
+    const store = { recordPatchEvent } as unknown as MemoryStorePort;
+    const event = {
+      id: 'patch-1',
+      memoryId: 'mem-1',
+      sourceRef: 'tool:memory_patch',
+      sourceType: 'system' as const,
+      patch: { text: 'next' },
+      previousValues: { text: 'prev' },
+      nextValues: { text: 'next' },
+      createdAt: 1,
+    };
+
+    const authorized = createSubjectAuthorizedMemoryStore(store, { viewerContactId: 'contact-a' });
+    await expect(authorized.recordPatchEvent(event)).resolves.toBeUndefined();
+    expect(recordPatchEvent).toHaveBeenCalledWith(event);
+
+    const denied = createSubjectAuthorizedMemoryStore(store, {});
+    await expect(denied.recordPatchEvent(event)).rejects.toThrow('trusted memory subject');
+    expect(recordPatchEvent).toHaveBeenCalledTimes(1);
+  });
+
+  it('exhaustiveness map classifies every method as authorized or pass-through-safe', () => {
+    // A new MemoryStorePort member fails to compile until added here; at runtime
+    // no member is left unclassified.
+    const policies = new Set(Object.values(MEMORY_STORE_METHOD_POLICY));
+    expect([...policies].sort()).toEqual(['authorized', 'pass-through-safe']);
+    expect(MEMORY_STORE_METHOD_POLICY.runInTransaction).toBe('pass-through-safe');
+    expect(MEMORY_STORE_METHOD_POLICY.recordPatchEvent).toBe('authorized');
+    expect(MEMORY_STORE_METHOD_POLICY.queryAuthorizedMemorySubjects).toBe('authorized');
   });
 });

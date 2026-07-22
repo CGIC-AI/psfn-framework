@@ -802,6 +802,35 @@ assertNotIncludes(rendered, 'name: psfn-model-prefetch', 'disabled model prefetc
     );
   }
   const prefetchRendered = render(['--set', 'modelPrefetch.enabled=true']);
+  const gatewayWithPrefetch = findParsedDocumentByKindName(
+    prefetchRendered,
+    'Deployment',
+    'psfn-gateway',
+  );
+  const injectionWait = gatewayWithPrefetch?.spec?.template?.spec?.initContainers
+    ?.find(container => container?.name === 'wait-for-injection-model');
+  if (!injectionWait) {
+    throw new Error('gateway must wait for injection model provisioning when prefetch is enabled');
+  }
+  const injectionWaitCommand = injectionWait.command?.join('\n') ?? '';
+  for (const requiredFile of [
+    'config.json',
+    'tokenizer.json',
+    'tokenizer_config.json',
+    'special_tokens_map.json',
+    'onnx/model.onnx',
+  ]) {
+    assertIncludes(
+      injectionWaitCommand,
+      requiredFile,
+      `gateway injection-model wait required file ${requiredFile}`,
+    );
+  }
+  const injectionWaitMount = injectionWait.volumeMounts
+    ?.find(mount => mount?.name === 'model-cache');
+  if (injectionWaitMount?.mountPath !== '/app/models/transformers' || injectionWaitMount?.readOnly !== true) {
+    throw new Error('gateway injection-model wait must mount the shared model cache read-only');
+  }
   const prefetchJob = findParsedDocumentByKindName(prefetchRendered, 'Job', 'psfn-model-prefetch');
   if (!prefetchJob) {
     throw new Error('modelPrefetch.enabled=true did not render the model-prefetch Job');
@@ -838,6 +867,39 @@ assertNotIncludes(rendered, 'name: psfn-model-prefetch', 'disabled model prefetc
       '--set', 'persistence.modelCache.enabled=false',
     ],
     'modelPrefetch.enabled=true requires persistence.modelCache.enabled=true',
+  );
+
+  const injectionOnlyRendered = render([
+    '--set', 'modelPrefetch.enabled=true',
+    '--set', 'modelPrefetch.textEmotion.enabled=false',
+  ]);
+  const injectionOnlyJob = findParsedDocumentByKindName(
+    injectionOnlyRendered,
+    'Job',
+    'psfn-model-prefetch',
+  );
+  if (!injectionOnlyJob?.spec?.template?.spec?.containers
+    ?.some(container => container?.name === 'injection-classifier')) {
+    throw new Error('injection-only model prefetch must render the injection classifier container');
+  }
+  if (injectionOnlyJob.spec.template.spec.containers
+    .some(container => container?.name === 'text-emotion')) {
+    throw new Error('injection-only model prefetch must not render the text-emotion container');
+  }
+  if (!findParsedDocumentByKindName(
+    injectionOnlyRendered,
+    'NetworkPolicy',
+    'psfn-model-prefetch-egress',
+  )) {
+    throw new Error('injection-only model prefetch must render its egress NetworkPolicy');
+  }
+  assertRenderFails(
+    [
+      '--set', 'modelPrefetch.enabled=true',
+      '--set', 'modelPrefetch.textEmotion.enabled=false',
+      '--set', 'modelPrefetch.injectionClassifier.enabled=false',
+    ],
+    'modelPrefetch.enabled=true requires at least one enabled prefetch target',
   );
 }
 

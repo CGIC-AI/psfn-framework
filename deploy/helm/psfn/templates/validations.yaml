@@ -346,14 +346,16 @@ never back a ClusterIssuer. */ -}}
 {{- if not .Values.persistence.modelCache.enabled -}}
 {{- fail "modelPrefetch.enabled=true requires persistence.modelCache.enabled=true" -}}
 {{- end -}}
-{{- if not .Values.modelPrefetch.textEmotion.enabled -}}
-{{- fail "modelPrefetch.enabled=true requires modelPrefetch.textEmotion.enabled=true until another prefetch target is configured" -}}
+{{- if not (or .Values.modelPrefetch.textEmotion.enabled .Values.modelPrefetch.injectionClassifier.enabled) -}}
+{{- fail "modelPrefetch.enabled=true requires at least one enabled prefetch target" -}}
 {{- end -}}
+{{- if .Values.modelPrefetch.textEmotion.enabled -}}
 {{- if not .Values.modelPrefetch.textEmotion.model -}}
 {{- fail "modelPrefetch.textEmotion.model is required when modelPrefetch.enabled=true" -}}
 {{- end -}}
 {{- if not (has .Values.modelPrefetch.textEmotion.dtype (list "auto" "fp32" "fp16" "q8" "int8" "uint8" "q4" "bnb4" "q4f16")) -}}
 {{- fail "modelPrefetch.textEmotion.dtype must be one of: auto, fp32, fp16, q8, int8, uint8, q4, bnb4, q4f16" -}}
+{{- end -}}
 {{- end -}}
 {{- end -}}
 {{- if and .Values.satelliteHub.enabled (ne .Values.satelliteHub.agentRuntime "psfn") -}}

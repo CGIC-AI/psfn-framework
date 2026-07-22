@@ -650,6 +650,40 @@ describe('postgres memory store integration', () => {
       });
       expect(hiddenDetail).toEqual({ memories: [], total: 0 });
 
+      // Batch detail resolves exactly the authorized subset in a single query,
+      // matching the union of the equivalent per-id detail queries and never
+      // disclosing inaccessible/nonexistent ids through order or count.
+      const batchInputIds = [
+        'authorized-personal',
+        'unauthorized-personal',
+        'authorized-confidential',
+        'unattributed',
+        'does-not-exist',
+        'authorized-personal', // duplicate is coalesced
+      ];
+      const batched = await store.queryAuthorizedMemorySubjects({
+        authorization: subjectAuthorization('contact-a', 'detail'),
+        selector: { kind: 'details_batch', memoryIds: batchInputIds },
+      });
+      const perItemAuthorized = new Set<string>();
+      for (const id of new Set(batchInputIds)) {
+        const single = await store.queryAuthorizedMemorySubjects({
+          authorization: subjectAuthorization('contact-a', 'detail'),
+          selector: { kind: 'detail', memoryId: id },
+        });
+        for (const memory of single.memories) perItemAuthorized.add(memory.id);
+      }
+      expect(new Set(batched.memories.map(memory => memory.id))).toEqual(perItemAuthorized);
+      expect(batched.total).toBe(perItemAuthorized.size);
+      expect(batched.memories.map(memory => memory.id).sort())
+        .toEqual(['authorized-confidential', 'authorized-personal']);
+
+      // Empty / oversized batches fail closed rather than widening access.
+      await expect(store.queryAuthorizedMemorySubjects({
+        authorization: subjectAuthorization('contact-a', 'detail'),
+        selector: { kind: 'details_batch', memoryIds: [] },
+      })).rejects.toThrow(/requires at least one memoryId/);
+
       const failClosedUnknownSubjects = await store.queryAuthorizedMemorySubjects({
         authorization: subjectAuthorization('contact-a', 'count', {
           allowedSubjectClasses: ['ambiguous', 'unattributed', 'unbound_person'],

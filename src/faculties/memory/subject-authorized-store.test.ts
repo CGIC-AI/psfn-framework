@@ -222,16 +222,24 @@ describe('subject-authorized memory store', () => {
     });
   });
 
-  it('filters every linked endpoint through the same subject SQL primitive', async () => {
+  it('filters every linked endpoint through the same subject SQL primitive in one batch', async () => {
     const visibleIds = new Set(['source', 'allowed']);
     const rawLinks = [
       { id1: 'source', id2: 'allowed', linkType: 'supports' },
       { id1: 'source', id2: 'other-subject', linkType: 'supports' },
     ];
+    const batchSelectors: string[][] = [];
     const queryAuthorizedMemorySubjects = vi.fn(async (input: MemorySubjectAuthorizedQuery) => {
-      const id = input.selector.kind === 'detail' ? input.selector.memoryId : '';
-      const visible = visibleIds.has(id);
-      return { memories: visible ? [memory(id, id)] : [], total: visible ? 1 : 0 };
+      if (input.selector.kind === 'detail') {
+        const visible = visibleIds.has(input.selector.memoryId);
+        return { memories: visible ? [memory(input.selector.memoryId, input.selector.memoryId)] : [], total: visible ? 1 : 0 };
+      }
+      if (input.selector.kind === 'details_batch') {
+        batchSelectors.push([...input.selector.memoryIds]);
+        const visible = input.selector.memoryIds.filter(id => visibleIds.has(id));
+        return { memories: visible.map(id => memory(id, id)), total: visible.length };
+      }
+      throw new Error(`unexpected selector ${input.selector.kind}`);
     });
     const getLinkedMemories = vi.fn(async () => rawLinks);
     const store = createSubjectAuthorizedMemoryStore({
@@ -240,7 +248,73 @@ describe('subject-authorized memory store', () => {
     } as unknown as MemoryStorePort, { viewerContactId: 'contact-self' });
 
     await expect(store.getLinkedMemories('source')).resolves.toEqual([rawLinks[0]]);
+    // Endpoints (excluding the already-authorized source) resolve in exactly one
+    // batch query, not one per endpoint.
+    expect(batchSelectors).toEqual([['allowed', 'other-subject']]);
     await expect(store.getLinkedMemories('other-subject')).resolves.toEqual([]);
     expect(getLinkedMemories).toHaveBeenCalledTimes(1);
+  });
+
+  it('getByIds returns exactly the authorized subset per-item getById would, in input order', async () => {
+    const authorizedIds = new Set(['auth-1', 'auth-2', 'auth-3']);
+    const queryCalls: MemorySubjectAuthorizedQuery[] = [];
+    const store = {
+      getById: vi.fn(() => { throw new Error('raw getById must not run'); }),
+      queryAuthorizedMemorySubjects: vi.fn(async (input: MemorySubjectAuthorizedQuery) => {
+        queryCalls.push(input);
+        if (input.selector.kind === 'detail') {
+          const visible = authorizedIds.has(input.selector.memoryId);
+          return { memories: visible ? [memory(input.selector.memoryId, input.selector.memoryId)] : [], total: visible ? 1 : 0 };
+        }
+        if (input.selector.kind === 'details_batch') {
+          const visible = input.selector.memoryIds.filter(id => authorizedIds.has(id));
+          return { memories: visible.map(id => memory(id, id)), total: visible.length };
+        }
+        throw new Error(`unexpected selector ${input.selector.kind}`);
+      }),
+    } as unknown as MemoryStorePort;
+    const authorized = createSubjectAuthorizedMemoryStore(store, { viewerContactId: 'contact-a' });
+
+    // Mixed input: authorized, unauthorized, nonexistent, and a duplicate.
+    const input = ['nonexistent', 'auth-2', 'unauth-x', 'auth-1', 'auth-2', 'auth-3', 'unauth-y'];
+    const batched = (await authorized.getByIds(input)).map(m => m.id);
+    const perItem = (
+      await Promise.all([...new Set(input)].map(id => authorized.getById(id)))
+    ).filter(Boolean).map(m => m!.id);
+
+    // Equivalence: same authorized set as the per-item detail path.
+    expect([...batched].sort()).toEqual([...perItem].sort());
+    // Ordering preserved (first-seen input order, deduped, misses dropped).
+    expect(batched).toEqual(['auth-2', 'auth-1', 'auth-3']);
+    // O(1) batch queries: one details_batch call for the whole set.
+    const batchCalls = queryCalls.filter(call => call.selector.kind === 'details_batch');
+    expect(batchCalls).toHaveLength(1);
+    expect(batchCalls[0]!.authorization.action).toBe('detail');
+  });
+
+  it('getByIds fails closed: a batch query failure propagates without a raw fallback', async () => {
+    const store = {
+      getById: vi.fn(() => { throw new Error('raw getById must not run'); }),
+      queryAuthorizedMemorySubjects: vi.fn(async () => {
+        throw new Error('batch authorization query failed');
+      }),
+    } as unknown as MemoryStorePort;
+    const authorized = createSubjectAuthorizedMemoryStore(store, { viewerContactId: 'contact-a' });
+
+    await expect(authorized.getByIds(['auth-1', 'auth-2']))
+      .rejects.toThrow('batch authorization query failed');
+    expect(store.getById).not.toHaveBeenCalled();
+  });
+
+  it('getByIds returns nothing without a trusted subject and never probes raw storage', async () => {
+    const rawRead = vi.fn(() => { throw new Error('raw memory access must not run'); });
+    const store = {
+      getById: rawRead,
+      queryAuthorizedMemorySubjects: rawRead,
+    } as unknown as MemoryStorePort;
+    const denied = createSubjectAuthorizedMemoryStore(store, {});
+
+    expect(await denied.getByIds(['known-id-a', 'known-id-b'])).toEqual([]);
+    expect(rawRead).not.toHaveBeenCalled();
   });
 });

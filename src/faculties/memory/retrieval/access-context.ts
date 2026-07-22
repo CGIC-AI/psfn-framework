@@ -7,9 +7,9 @@ import type { ConversationScope } from '../../../core/session/conversation-scope
 import { cloneContactProfileArtifact } from '../../../core/turns/snapshot.js';
 import type { ContactProfileArtifact, MemoryStorePort } from '../memory-store-port.js';
 import type {
-  PurrMemory,
   RetrievalAccessScope,
 } from '../types.js';
+import { resolveMemoriesByIds } from './memory-batch.js';
 import {
   type MemoryWithheldSummary,
 } from '../withheld-summary.js';
@@ -95,14 +95,13 @@ export async function resolveContactProfileAccess(input: {
   const sourceMemoryIds = input.profile.sourceMemoryIds
     .map(id => id.trim())
     .filter(Boolean);
-  if (sourceMemoryIds.length === 0 || typeof input.memoryStore.getById !== 'function') {
+  if (sourceMemoryIds.length === 0
+    || (typeof input.memoryStore.getById !== 'function'
+      && typeof input.memoryStore.getByIds !== 'function')) {
     return { profile: cloneContactProfileArtifact(input.profile), withheldSourceMemoryIds: [] };
   }
 
-  const sourceMemories = (
-    await Promise.all(sourceMemoryIds.map(id => input.memoryStore.getById(id)))
-  )
-    .filter((memory): memory is PurrMemory => Boolean(memory))
+  const sourceMemories = (await resolveMemoriesByIds(input.memoryStore, sourceMemoryIds))
     .map(memory => ({ ...memory, similarity: 1 }));
   if (sourceMemories.length === 0) {
     return { profile: cloneContactProfileArtifact(input.profile), withheldSourceMemoryIds: [] };

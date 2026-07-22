@@ -242,6 +242,7 @@ export interface EmbeddingSearchAuthorization {
 export type MemorySubjectQuerySelector =
   | { kind: 'list'; limit?: number; offset?: number; scopeQuery?: MemoryScopeQuery }
   | { kind: 'detail'; memoryId: string }
+  | { kind: 'details_batch'; memoryIds: readonly string[] }
   | { kind: 'text_search'; query: string; limit?: number; offset?: number; scopeQuery?: MemoryScopeQuery }
   | { kind: 'embedding_search'; embedding: Float32Array; threshold: number; limit?: number; offset?: number; scopeQuery?: MemoryScopeQuery }
   | { kind: 'count'; scopeQuery?: MemoryScopeQuery };
@@ -484,6 +485,15 @@ interface MemoryStorePortBackend extends ScratchpadProvider {
   getAdminMemoryPrivacySummary(): Awaitable<MemoryAdminPrivacySummary>;
   countActiveMemories(): Awaitable<number>;
   getById(id: string): Awaitable<PurrMemory | undefined>;
+  /**
+   * Batch counterpart to {@link getById}. Resolves the accessible subset of the
+   * requested ids in a single authorization round trip, deduplicated and
+   * returned in first-seen input order. Inaccessible or nonexistent ids are
+   * silently absent (never disclosed via order, count, or error). Semantics are
+   * identical to calling `getById` for each id and dropping the misses; only the
+   * query count differs.
+   */
+  getByIds(ids: readonly string[]): Awaitable<PurrMemory[]>;
   softDeleteMemory(
     id: string,
     options?: MemorySoftDeleteOptions,
@@ -591,6 +601,14 @@ export interface MemoryStorePort extends ScratchpadProvider {
   getAdminMemoryPrivacySummary(): Promise<MemoryAdminPrivacySummary>;
   countActiveMemories(): Promise<number>;
   getById(id: string): Promise<PurrMemory | undefined>;
+  /**
+   * Batch counterpart to {@link getById}. Resolves the accessible subset of the
+   * requested ids in a single authorization round trip, deduplicated and
+   * returned in first-seen input order. Inaccessible or nonexistent ids are
+   * silently absent. Semantics are identical to calling `getById` per id and
+   * dropping the misses; only the query count differs.
+   */
+  getByIds(ids: readonly string[]): Promise<PurrMemory[]>;
   softDeleteMemory(id: string, options?: MemorySoftDeleteOptions): Promise<MemoryDeleteVersion | null>;
   undoSoftDelete(
     deleteId: string,
@@ -697,6 +715,7 @@ export function createMemoryStorePort(store: MemoryStorePortBackend): MemoryStor
     getAdminMemoryPrivacySummary: async () => await store.getAdminMemoryPrivacySummary(),
     countActiveMemories: async () => await store.countActiveMemories(),
     getById: async (id) => await store.getById(id),
+    getByIds: async (ids) => await store.getByIds(ids),
     softDeleteMemory: async (id, options) => await store.softDeleteMemory(id, options),
     undoSoftDelete: async (deleteId, options) => await store.undoSoftDelete(deleteId, options),
     getDeleteVersion: async (deleteId) => await store.getDeleteVersion(deleteId),

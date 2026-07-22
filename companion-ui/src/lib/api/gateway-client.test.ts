@@ -420,6 +420,24 @@ describe('CompanionGatewayClient', () => {
       },
     ]);
   });
+
+  it('fails closed on device.location and never sends raw coordinates over the gateway', async () => {
+    const socket = new FakeSocket();
+    const client = await connectClient(socket);
+
+    expect(client.supportsDeviceLocation()).toBe(false);
+    const before = socket.sent.length;
+    expect(() =>
+      client.sendDeviceLocation({ lat: 37.42, lon: -122.08, accuracyM: 12, timestamp: 1_700_000_000_000 }),
+    ).toThrow(/terminate at a satellite hub/);
+
+    // No frame was queued, and the coordinates never appear on the wire.
+    expect(socket.sent.length).toBe(before);
+    const wire = socket.sent.join('\n');
+    expect(wire).not.toContain('37.42');
+    expect(wire).not.toContain('-122.08');
+    expect(wire).not.toContain('device.location');
+  });
 });
 
 function flushAsyncMessage(): Promise<void> {

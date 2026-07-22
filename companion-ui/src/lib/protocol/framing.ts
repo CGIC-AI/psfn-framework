@@ -78,6 +78,7 @@ const CLIENT_TO_HUB_TYPES: ReadonlySet<ClientToHubMessage['type']> = new Set([
   'approval.decision',
   'artifact.preview',
   'touch.interaction',
+  'device.location',
 ]);
 
 
@@ -106,6 +107,10 @@ function oneOf(value: unknown, allowed: readonly string[]): boolean {
 
 function nonNegativeInteger(value: unknown, maximum = Number.MAX_SAFE_INTEGER): value is number {
   return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 && value <= maximum;
+}
+
+function finiteNumberInRange(value: unknown, min: number, max: number): value is number {
+  return typeof value === 'number' && Number.isFinite(value) && value >= min && value <= max;
 }
 
 function isoTimestamp(value: unknown): value is string {
@@ -442,6 +447,14 @@ const STRICT_CLIENT_VALIDATORS: Record<ClientToHubMessage['type'], (payload: unk
       && oneOf(record.region, ['head', 'cheek', 'body'])
       && nonNegativeInteger(record.count, 20) && Number(record.count) >= 1
       && nonNegativeInteger(record.durationMs, 60_000);
+  },
+  'device.location': payload => {
+    const record = exactRecord(payload, ['type', 'lat', 'lon', 'accuracyM', 'timestamp']);
+    return record !== null
+      && finiteNumberInRange(record.lat, -90, 90)
+      && finiteNumberInRange(record.lon, -180, 180)
+      && finiteNumberInRange(record.accuracyM, 0, 1_000_000)
+      && nonNegativeInteger(record.timestamp) && Number(record.timestamp) > 0;
   },
 };
 

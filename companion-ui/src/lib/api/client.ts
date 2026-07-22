@@ -19,6 +19,7 @@ import {
 } from '../protocol/framing.js';
 import { buildSatelliteHello, type SatelliteHelloOptions } from './auth.js';
 import type { ShardDirectoryEntry } from '../../../../src/shared/contracts/shard-directory.js';
+import type { DeviceLocationSample } from '../geolocation.js';
 
 export type SatelliteHubConnectionState =
   | 'idle'
@@ -287,6 +288,25 @@ export class SatelliteHubClient {
     this.send({ type: 'touch.interaction', ...interaction });
   }
 
+  /**
+   * The direct-hub transport terminates raw coordinates at the hub (it
+   * geofences them into a place label and never forwards lat/lon toward PSFN),
+   * so `device.location` may be sent here.
+   */
+  supportsDeviceLocation(): boolean {
+    return true;
+  }
+
+  sendDeviceLocation(sample: DeviceLocationSample): void {
+    this.send({
+      type: 'device.location',
+      lat: sample.lat,
+      lon: sample.lon,
+      accuracyM: sample.accuracyM,
+      timestamp: sample.timestamp,
+    });
+  }
+
   ping(sentAt = this.nowMs()): void {
     this.session.lastPingSentAt = sentAt;
     this.send({ type: 'ping', sentAt });
@@ -542,7 +562,22 @@ function cloneHello(message: HelloMessage): HelloMessage {
 }
 
 function redactClientMessage(message: ClientToHubMessage): ClientToHubMessage {
-  return message.type === 'hello' ? cloneHello(message) : message;
+  if (message.type === 'hello') {
+    return cloneHello(message);
+  }
+  if (message.type === 'device.location') {
+    // Raw coordinates must never reach the 'outbound' telemetry event (which
+    // may be logged). Emit the shape without lat/lon; keep coarse accuracy and
+    // timestamp so diagnostics can confirm a fix was sent.
+    return {
+      type: 'device.location',
+      lat: 0,
+      lon: 0,
+      accuracyM: message.accuracyM,
+      timestamp: message.timestamp,
+    };
+  }
+  return message;
 }
 
 function cloneIdentity(identity: RuntimeIdentity | undefined): RuntimeIdentity | undefined {

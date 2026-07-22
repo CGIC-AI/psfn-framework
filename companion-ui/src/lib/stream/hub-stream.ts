@@ -29,6 +29,7 @@ import {
   resetVoicePlayback,
   type VoicePlaybackState,
 } from '../audio/frame-reassembly.js';
+import type { DeviceLocationSample } from '../geolocation.js';
 
 export type { VoicePlaybackState, CompletedUtterance } from '../audio/frame-reassembly.js';
 
@@ -192,6 +193,9 @@ export interface HubStreamClientLike {
   sendApprovalDecision(id: string, decision: 'approve' | 'deny'): void;
   sendArtifactPreviewRequest(requestId: string, artifactId: string): void;
   sendTouchInteraction(interaction: TouchInteraction): void;
+  sendDeviceLocation(sample: DeviceLocationSample): void;
+  /** Whether this transport can terminate raw coordinates at a hub. */
+  supportsDeviceLocation?(): boolean;
   refreshShards?(): void;
   selectShard?(shardId: string | null): void;
   snapshot(): SatelliteHubSnapshot;
@@ -417,6 +421,19 @@ export class HubStreamStore {
 
   sendTouchInteraction(interaction: TouchInteraction): void {
     this.client.sendTouchInteraction(interaction);
+  }
+
+  /**
+   * Whether the active transport terminates raw coordinates at a hub. False for
+   * transports that reach PSFN directly (the gateway), so the location watcher
+   * stays inert rather than leaking lat/lon toward PSFN.
+   */
+  canSendDeviceLocation(): boolean {
+    return this.client.supportsDeviceLocation?.() ?? false;
+  }
+
+  sendDeviceLocation(sample: DeviceLocationSample): void {
+    this.client.sendDeviceLocation(sample);
   }
 
   refreshShards(): void {

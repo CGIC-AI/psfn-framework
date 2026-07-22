@@ -375,9 +375,11 @@ export class PostgresEpisodicStore implements EpisodicStorePort {
       where.push(`started_at <= $${params.length}`);
     }
     if (options.sessionId !== undefined) {
-      // Episodes are scoped by their threadId, which synthesis sets equal to the
-      // session id (buildEpisodeInput); the episode record has no distinct
-      // top-level sessionId field.
+      // Legacy scope filter: matches the thread_id column against the given
+      // value. Since apq0, an episode's thread_id is a topic-thread id (the
+      // arc connected-component representative), NOT its session id, so this
+      // filter only matches rows from the pre-apq0 era where thread_id was set
+      // verbatim to the session id. No live caller passes sessionId.
       params.push(parseRequiredText(options.sessionId, 'sessionId'));
       where.push(`thread_id = $${params.length}`);
     }

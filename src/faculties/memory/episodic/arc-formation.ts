@@ -8,6 +8,7 @@ import {
 } from '../../../shared/contracts/episodic-memory.js';
 import { resolveKnownEpisodeId } from './episode-ids.js';
 import { runEpisodicJudgment } from './judgment-runner.js';
+import { applyThreadUnionForArc, type ThreadAssignmentEvent } from './thread-assignment.js';
 import type { EpisodicStorePort } from './store-port.js';
 
 const log = createComponentLogger('ArcFormation');
@@ -24,8 +25,16 @@ export interface ArcFormationOptions {
   maxEpisodesPerRun?: number;
   /** Confidence floor below which proposed arcs are rejected (0..1). */
   minConfidence?: number;
+  /**
+   * Safety bound on a single arc-driven topic-thread merge (apq0). A losing
+   * thread larger than this is left unmerged fail-safe. Defaults to
+   * DEFAULT_MAX_THREAD_EPISODES.
+   */
+  maxThreadEpisodes?: number;
   /** Typed fail-closed outcomes (rejected proposals, failed judgments); wired to the event bus by composition. */
   onEvent?: (event: ArcFormationOutcomeEvent) => void;
+  /** Topic-thread materialization telemetry sink (apq0). */
+  onThreadAssignment?: (event: ThreadAssignmentEvent) => void;
   /** Shared persona preamble service (E6.1); soft persona framing before the arc-judgment task prompt. */
   personaPreamble?: PersonaPreamblePort | null;
 }
@@ -72,6 +81,7 @@ const DEFAULT_PASS_INTERVAL_MS = 6 * 24 * 60 * 60_000;
 const DEFAULT_REVIEW_WINDOW_MS = 30 * 24 * 60 * 60_000;
 const DEFAULT_MAX_ARCS_PER_RUN = 12;
 const DEFAULT_MAX_EPISODES_PER_RUN = 60;
+const DEFAULT_MAX_THREAD_EPISODES = 500;
 const MIN_EPISODES_FOR_PASS = 4;
 const MIN_ARC_CONFIDENCE = 0.5;
 const ARC_FORMATION_PROCESSOR = 'arc_formation';
@@ -216,7 +226,9 @@ export class EpisodeArcWeaver {
   private readonly maxArcsPerRun: number;
   private readonly maxEpisodesPerRun: number;
   private readonly minConfidence: number;
+  private readonly maxThreadEpisodes: number;
   private readonly onEvent: ((event: ArcFormationOutcomeEvent) => void) | null;
+  private readonly onThreadAssignment: ((event: ThreadAssignmentEvent) => void) | null;
   private readonly personaPreamble: PersonaPreamblePort | null;
 
   constructor(
@@ -236,7 +248,13 @@ export class EpisodeArcWeaver {
       throw new Error('ArcFormationOptions.minConfidence must be a number between 0 and 1');
     }
     this.minConfidence = minConfidence;
+    const maxThreadEpisodes = options.maxThreadEpisodes ?? DEFAULT_MAX_THREAD_EPISODES;
+    if (!Number.isInteger(maxThreadEpisodes) || maxThreadEpisodes < 1) {
+      throw new Error('ArcFormationOptions.maxThreadEpisodes must be a positive integer');
+    }
+    this.maxThreadEpisodes = maxThreadEpisodes;
     this.onEvent = options.onEvent ?? null;
+    this.onThreadAssignment = options.onThreadAssignment ?? null;
     this.personaPreamble = options.personaPreamble ?? null;
   }
 
@@ -353,6 +371,15 @@ export class EpisodeArcWeaver {
           },
         });
         result.writtenArcs += 1;
+        // apq0: materialize topic-thread identity. Arc-linked episodes belong
+        // to one topic thread; union their threads onto the deterministic
+        // min-id representative and persist. Mutates the in-memory episodes so
+        // a chained arc (A-B-C) converges within this pass.
+        await applyThreadUnionForArc(this.store, source, target, {
+          maxThreadEpisodes: this.maxThreadEpisodes,
+          now: this.now,
+          ...(this.onThreadAssignment ? { onEvent: this.onThreadAssignment } : {}),
+        });
       }
     }
 

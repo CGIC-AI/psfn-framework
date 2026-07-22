@@ -15,6 +15,7 @@ import {
   cloneInternalState,
   type InternalState,
 } from '../../self-model/state.js';
+import { extractRelayAcacAxisScores } from '../../emotion/relay-emotion-snapshot.js';
 import type { ChannelMeta } from '../../../system/trust/policy.js';
 import { currentChannelClassificationEpoch } from '../../../system/trust/runtime-classification-epochs.js';
 import type {
@@ -1111,6 +1112,26 @@ export async function handleMessageForTurn(
       internalStateSnapshotRef,
       metacognitiveFlags,
     );
+
+    // Companion emotion relay (bead psfn-framework-7ang.1): publish a redacted
+    // per-turn emotion snapshot sourced from the post-turn InternalState. The
+    // forwarder redacts before anything crosses the relay; emission is strictly
+    // fire-and-forget so a relay failure can never break the turn.
+    const emotionAcacAxisScores = extractRelayAcacAxisScores(internalState.emotional.acac);
+    void runtime.eventBus.emit('agent.emotion.snapshot', {
+      trigger: 'post_turn',
+      vad: { ...internalState.emotional.vad },
+      mood: { ...internalState.emotional.mood },
+      discrete: { ...internalState.emotional.discreteEmotions },
+      confidence: internalState.emotional.confidence,
+      ...(emotionAcacAxisScores ? { acacAxisScores: emotionAcacAxisScores } : {}),
+      channelId: emotionSessionId,
+      timestamp: Date.now(),
+    }).catch((error) => {
+      log.warn('Failed to emit companion emotion snapshot', {
+        error: toErrorMessage(error),
+      });
+    });
 
     const toolResultDisclosureSources = runtime.recordToolObservations(
       message,

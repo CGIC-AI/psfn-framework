@@ -8,10 +8,15 @@ import type {
   CompanionApprovalResolvedPayload,
   CompanionApprovalResolutionStatus,
   CompanionArtifactCreatedPayload,
+  CompanionEmotionAcacAxisScore,
+  CompanionEmotionDiscreteScore,
+  CompanionEmotionSnapshotPayload,
+  CompanionEmotionSnapshotTrigger,
   CompanionToolActivityPayload,
   CompanionToolActivityPhase,
 } from '../../../shared/contracts/companion-relay.js';
 import type { ToolCallOutcome } from '../../../shared/contracts/tool-call-outcome.js';
+import { ACAC_AXES, type AcacAxis } from '../../../shared/contracts/emotion-contracts.js';
 import type {
   ApprovalAttribution,
   ApprovalGrantMode,
@@ -27,6 +32,13 @@ import type {
  * and chain-of-thought can never survive into a payload — the tests in
  * redaction.test.ts prove the exact output key sets.
  */
+
+const MAX_EMOTION_DISCRETE_LABELS = 5;
+const MAX_EMOTION_DISCRETE_LABEL_LENGTH = 48;
+// Rounding precision for emotion axis/score values. Coarse on purpose: the
+// relay is an external privacy surface, so a low-resolution read is emitted
+// rather than the full-precision internal signal.
+const EMOTION_AXIS_PRECISION = 2;
 
 const MAX_TITLE_LENGTH = 160;
 const MAX_CONTEXT_LENGTH = 280;
@@ -260,5 +272,91 @@ export function redactArtifactCreated(input: {
     provenance: clampText(input.provenance, MAX_PROVENANCE_LENGTH) || 'unknown',
     createdAt: toIsoTimestamp(input.createdAtMs),
     previewable: input.previewable === true,
+  };
+}
+
+function roundEmotionValue(value: unknown, fieldName: string): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    throw new Error(`Cannot redact emotion snapshot: ${fieldName} must be a finite number`);
+  }
+  const factor = 10 ** EMOTION_AXIS_PRECISION;
+  return Math.round(value * factor) / factor;
+}
+
+function redactEmotionVector(
+  vector: { valence: number; arousal: number; dominance: number },
+  fieldName: string,
+): CompanionEmotionSnapshotPayload['vad'] {
+  const clamp = (value: unknown, axis: string): number => {
+    const rounded = roundEmotionValue(value, `${fieldName}.${axis}`);
+    return Math.min(1, Math.max(-1, rounded));
+  };
+  return {
+    valence: clamp(vector.valence, 'valence'),
+    arousal: clamp(vector.arousal, 'arousal'),
+    dominance: clamp(vector.dominance, 'dominance'),
+  };
+}
+
+function redactDiscreteScores(discrete: Record<string, number>): CompanionEmotionDiscreteScore[] {
+  return Object.entries(discrete)
+    .map(([rawLabel, rawScore]): CompanionEmotionDiscreteScore | null => {
+      const label = clampText(rawLabel, MAX_EMOTION_DISCRETE_LABEL_LENGTH).toLowerCase();
+      if (!label) return null;
+      const rounded = roundEmotionValue(rawScore, `discrete.${label}`);
+      const score = Math.min(1, Math.max(0, rounded));
+      return { label, score };
+    })
+    .filter((entry): entry is CompanionEmotionDiscreteScore => entry !== null)
+    // Top-K by score, then label for a stable order.
+    .sort((left, right) => (right.score - left.score) || left.label.localeCompare(right.label))
+    .slice(0, MAX_EMOTION_DISCRETE_LABELS);
+}
+
+function redactAcacAxisScores(
+  scores: Partial<Record<AcacAxis, number>>,
+): CompanionEmotionAcacAxisScore[] {
+  const redacted: CompanionEmotionAcacAxisScore[] = [];
+  // Iterate the canonical axis list so only known axes survive, in a fixed order.
+  for (const axis of ACAC_AXES) {
+    const raw = scores[axis];
+    if (raw === undefined) continue;
+    const rounded = roundEmotionValue(raw, `acac.${axis}`);
+    redacted.push({ axis, score: Math.min(1, Math.max(0, rounded)) });
+  }
+  return redacted;
+}
+
+/**
+ * Emotion state → redacted snapshot (bead psfn-framework-7ang.1).
+ *
+ * The payload is CONSTRUCTED here from an explicit whitelist. Only the rounded
+ * VAD + mood vectors, the top-K discrete labels/scores, the aggregate
+ * confidence, and the ACAC axis SCORES survive. The input signature exposes no
+ * ACAC rationale, active concerns, salient entities, or telemetry provenance,
+ * so none of those can ever enter the payload — the tests in redaction.test.ts
+ * prove the exact output key set and the absence of rationale/concern text.
+ */
+export function redactEmotionSnapshot(input: {
+  trigger: CompanionEmotionSnapshotTrigger;
+  vad: { valence: number; arousal: number; dominance: number };
+  mood: { valence: number; arousal: number; dominance: number };
+  discrete: Record<string, number>;
+  confidence: number;
+  acacAxisScores?: Partial<Record<AcacAxis, number>>;
+  timestampMs: number;
+}): CompanionEmotionSnapshotPayload {
+  const confidence = Math.min(1, Math.max(0, roundEmotionValue(input.confidence, 'confidence')));
+  const acacAxes = input.acacAxisScores
+    ? redactAcacAxisScores(input.acacAxisScores)
+    : [];
+  return {
+    trigger: input.trigger,
+    vad: redactEmotionVector(input.vad, 'vad'),
+    mood: redactEmotionVector(input.mood, 'mood'),
+    discrete: redactDiscreteScores(input.discrete),
+    confidence,
+    ...(acacAxes.length > 0 ? { acacAxes } : {}),
+    timestamp: toIsoTimestamp(input.timestampMs),
   };
 }

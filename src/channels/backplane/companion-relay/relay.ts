@@ -7,6 +7,10 @@ import type {
   CompanionArtifactPreviewSource,
   CompanionApprovalRequestedPayload,
   CompanionApprovalResolvedPayload,
+  CompanionEmotionAcacAxisScore,
+  CompanionEmotionDiscreteScore,
+  CompanionEmotionSnapshotPayload,
+  CompanionEmotionSnapshotTrigger,
   CompanionEventEnvelope,
   CompanionEventKind,
   CompanionToolActivityPayload,
@@ -16,9 +20,11 @@ import {
   type ToolCallOutcome,
 } from '../../../shared/contracts/tool-call-outcome.js';
 import {
+  COMPANION_EMOTION_SNAPSHOT_TRIGGERS,
   COMPANION_TOOL_ACTIVITY_PHASES,
   type CompanionToolActivityPhase,
 } from '../../../shared/contracts/companion-relay.js';
+import { ACAC_AXES, type AcacAxis } from '../../../shared/contracts/emotion-contracts.js';
 import { createComponentLogger } from '../../../shared/logger.js';
 import { isRecord } from '../../../shared/utils/types.js';
 import { toErrorMessage } from '../../../shared/utils/errors.js';
@@ -142,6 +148,16 @@ export class CompanionEventRelay {
           ...(companionId ?? this.defaultCompanionId
             ? { companionId: companionId ?? this.defaultCompanionId }
             : {}),
+          ...(channelId ? { channelId } : {}),
+          emittedAt: new Date().toISOString(),
+        });
+      }),
+      options.eventBus.on('companion.emotion.snapshot', ({ payload, channelId, companionId }) => {
+        const owner = companionId ?? this.defaultCompanionId;
+        this.publish(owner, {
+          kind: 'emotion.snapshot',
+          payload,
+          ...(owner ? { companionId: owner } : {}),
           ...(channelId ? { channelId } : {}),
           emittedAt: new Date().toISOString(),
         });
@@ -319,6 +335,11 @@ export type CompanionRelayPublishParams =
     payload: CompanionArtifactCreatedPayload;
     channelId?: string;
     preview?: CompanionArtifactPreviewSource;
+  }
+  | {
+    kind: 'emotion.snapshot';
+    payload: CompanionEmotionSnapshotPayload;
+    channelId?: string;
   };
 
 function requireString(record: Record<string, unknown>, field: string, maxLength: number): string {
@@ -349,6 +370,75 @@ function requireIsoTimestamp(record: Record<string, unknown>, field: string): st
   return value;
 }
 
+function requireBoundedNumber(
+  record: Record<string, unknown>,
+  field: string,
+  min: number,
+  max: number,
+): number {
+  const value = record[field];
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    throw new Error(`companion.event.publish: ${field} must be a finite number`);
+  }
+  if (value < min || value > max) {
+    throw new Error(`companion.event.publish: ${field} must be in range [${min}, ${max}]`);
+  }
+  return value;
+}
+
+function parseEmotionVector(value: unknown, field: string): CompanionEmotionSnapshotPayload['vad'] {
+  if (!isRecord(value)) {
+    throw new Error(`companion.event.publish: ${field} must be an object`);
+  }
+  return {
+    valence: requireBoundedNumber(value, 'valence', -1, 1),
+    arousal: requireBoundedNumber(value, 'arousal', -1, 1),
+    dominance: requireBoundedNumber(value, 'dominance', -1, 1),
+  };
+}
+
+function parseEmotionDiscreteScores(value: unknown): CompanionEmotionDiscreteScore[] {
+  if (!Array.isArray(value)) {
+    throw new Error('companion.event.publish: emotion discrete must be an array');
+  }
+  if (value.length > 16) {
+    throw new Error('companion.event.publish: emotion discrete has too many entries');
+  }
+  return value.map((entry): CompanionEmotionDiscreteScore => {
+    if (!isRecord(entry)) {
+      throw new Error('companion.event.publish: emotion discrete entry must be an object');
+    }
+    return {
+      label: requireString(entry, 'label', 48),
+      score: requireBoundedNumber(entry, 'score', 0, 1),
+    };
+  });
+}
+
+function parseEmotionAcacAxes(value: unknown): CompanionEmotionAcacAxisScore[] {
+  if (!Array.isArray(value)) {
+    throw new Error('companion.event.publish: emotion acacAxes must be an array');
+  }
+  if (value.length > ACAC_AXES.length) {
+    throw new Error('companion.event.publish: emotion acacAxes has too many entries');
+  }
+  const seen = new Set<AcacAxis>();
+  return value.map((entry): CompanionEmotionAcacAxisScore => {
+    if (!isRecord(entry)) {
+      throw new Error('companion.event.publish: emotion acacAxes entry must be an object');
+    }
+    const axis = requireString(entry, 'axis', 32);
+    if (!ACAC_AXES.includes(axis as AcacAxis)) {
+      throw new Error('companion.event.publish: emotion acacAxes contains an unknown axis');
+    }
+    if (seen.has(axis as AcacAxis)) {
+      throw new Error('companion.event.publish: emotion acacAxes contains a duplicate axis');
+    }
+    seen.add(axis as AcacAxis);
+    return { axis: axis as AcacAxis, score: requireBoundedNumber(entry, 'score', 0, 1) };
+  });
+}
+
 /**
  * Fail-closed parse of agent-forwarded companion events at the gateway RPC
  * boundary. Payloads are RECONSTRUCTED field-by-field from a whitelist —
@@ -362,14 +452,36 @@ export function parseCompanionRelayPublishParams(params: unknown): CompanionRela
     throw new Error('companion.event.publish: params must be an object');
   }
   const kind = params.kind;
-  if (kind !== 'artifact.created' && kind !== 'tool.activity') {
-    throw new Error('companion.event.publish: kind must be artifact.created or tool.activity');
+  if (kind !== 'artifact.created' && kind !== 'tool.activity' && kind !== 'emotion.snapshot') {
+    throw new Error(
+      'companion.event.publish: kind must be artifact.created, tool.activity, or emotion.snapshot',
+    );
   }
   if (!isRecord(params.payload)) {
     throw new Error('companion.event.publish: payload must be an object');
   }
   const channelId = optionalString(params, 'channelId', 256);
   const payload = params.payload;
+
+  if (kind === 'emotion.snapshot') {
+    const trigger = requireString(payload, 'trigger', 32);
+    if (!COMPANION_EMOTION_SNAPSHOT_TRIGGERS.includes(trigger as CompanionEmotionSnapshotTrigger)) {
+      throw new Error('companion.event.publish: invalid emotion snapshot trigger');
+    }
+    const acacAxes = payload.acacAxes === undefined
+      ? undefined
+      : parseEmotionAcacAxes(payload.acacAxes);
+    const parsed: CompanionEmotionSnapshotPayload = {
+      trigger: trigger as CompanionEmotionSnapshotTrigger,
+      vad: parseEmotionVector(payload.vad, 'emotion vad'),
+      mood: parseEmotionVector(payload.mood, 'emotion mood'),
+      discrete: parseEmotionDiscreteScores(payload.discrete),
+      confidence: requireBoundedNumber(payload, 'confidence', 0, 1),
+      ...(acacAxes && acacAxes.length > 0 ? { acacAxes } : {}),
+      timestamp: requireIsoTimestamp(payload, 'timestamp'),
+    };
+    return { kind, payload: parsed, ...(channelId ? { channelId } : {}) };
+  }
 
   if (kind === 'tool.activity') {
     const phase = requireString(payload, 'phase', 32);

@@ -1,0 +1,73 @@
+name: Trivy Image Vulnerability Rescan
+
+# Periodic OS/library vulnerability rescan of an immutable built container image.
+#
+# Feed policy: Trivy's vulnerability database is a MUTABLE security feed. This
+# workflow refreshes it on every run (Trivy downloads the latest DB by default),
+# so advisories that land after build time are caught rather than silently frozen.
+# The application/image target, by contrast, is IMMUTABLE: it is always an exact
+# digest (registry/repo@sha256:...), never a floating tag. The scan is tokenless
+# and never mounts the Docker socket; a private-registry target would require a
+# separately reviewed credentialed path.
+#
+# Target resolution (fail closed): the workflow_dispatch `image_digest` input wins;
+# otherwise the repository variable TRIVY_IMAGE_DIGEST is used. If neither is set
+# the run fails loudly instead of skipping.
+
+on:
+  schedule:
+    - cron: "47 6 * * *"
+  workflow_dispatch:
+    inputs:
+      image_digest:
+        description: "Exact image ref to scan (registry/repo@sha256:<64 hex>). Overrides the TRIVY_IMAGE_DIGEST repo variable."
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: trivy-image-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  trivy-image:
+    name: Trivy exact-digest image scan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Check out exact revision
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ github.sha }}
+
+      - name: Set up Node.js
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version: 24.13.1
+
+      - name: Resolve the immutable image target
+        id: target
+        env:
+          INPUT_DIGEST: ${{ github.event.inputs.image_digest }}
+          VAR_DIGEST: ${{ vars.TRIVY_IMAGE_DIGEST }}
+        run: |
+          set -euo pipefail
+          digest="${INPUT_DIGEST:-$VAR_DIGEST}"
+          if [[ -z "$digest" ]]; then
+            echo "::error title=No image target::Provide the workflow_dispatch image_digest input or set the TRIVY_IMAGE_DIGEST repository variable. Refusing to skip the rescan." >&2
+            exit 1
+          fi
+          if [[ ! "$digest" =~ @sha256:[0-9a-f]{64}$ ]]; then
+            echo "::error title=Non-immutable target::Image target must be an exact digest ref (…@sha256:<64 hex>): $digest" >&2
+            exit 1
+          fi
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+
+      - name: Scan the exact image digest with a fresh vulnerability feed
+        env:
+          TARGET_DIGEST: ${{ steps.target.outputs.digest }}
+        run: node scripts/ci/run-trivy-scan.mjs image --image "$TARGET_DIGEST"

@@ -77,6 +77,17 @@ const FIXTURES: Fixture[] = [
     expectParsedContains: [],
     expectState: 'quarantined',
   },
+  {
+    // psfn-framework-5ixyj regression: the live s10_cogsec_document_quarantine
+    // fixture uses SINGULAR "instruction" and "ignore every previous …" — the
+    // exact phrasing that slipped past the plural-only L1 override anchor while
+    // the plural injection.md above stayed green. This guards every channel
+    // against that class of L1 false negative.
+    name: 'injection-singular.md',
+    bytes: readFileSync(join(FIXTURES_DIR, 'injection-singular.md')),
+    expectParsedContains: [],
+    expectState: 'quarantined',
+  },
 ];
 
 function makeScreening(): IntakeScreeningService {

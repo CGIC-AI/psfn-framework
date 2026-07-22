@@ -141,6 +141,12 @@
       "value": "15_000"
     },
     {
+      "file": "src/boundary/gateway/canary-egress-guard.ts",
+      "name": "MAX_TRACKED_STREAM_STATES",
+      "value": "512",
+      "note": "Code-owned denial-of-service guard bounding per-request split-frame canary scan state; operator expansion would weaken the egress boundary's memory ceiling."
+    },
+    {
       "file": "src/boundary/gateway/client.ts",
       "name": "DEFAULT_GATEWAY_KEEPALIVE_INTERVAL_MS",
       "value": "30_000"

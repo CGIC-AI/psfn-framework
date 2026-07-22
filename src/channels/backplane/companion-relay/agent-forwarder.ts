@@ -1,7 +1,7 @@
 import type { EventBus } from '../../../shared/event-bus.js';
 import { createComponentLogger } from '../../../shared/logger.js';
 import { toErrorMessage } from '../../../shared/utils/errors.js';
-import { redactToolActivity } from './redaction.js';
+import { redactEmotionSnapshot, redactToolActivity } from './redaction.js';
 import type { CompanionRelayPublishParams } from './relay.js';
 import type { ToolCallOutcome } from '../../../shared/contracts/tool-call-outcome.js';
 
@@ -86,6 +86,24 @@ export function attachCompanionEventForwarder(options: {
         ...(channelId ? { channelId } : {}),
       });
     }),
+    options.eventBus.on(
+      'agent.emotion.snapshot',
+      ({ trigger, vad, mood, discrete, confidence, acacAxisScores, channelId, timestamp }) => {
+        publish({
+          kind: 'emotion.snapshot',
+          payload: redactEmotionSnapshot({
+            trigger,
+            vad,
+            mood,
+            discrete,
+            confidence,
+            ...(acacAxisScores ? { acacAxisScores } : {}),
+            timestampMs: timestamp,
+          }),
+          ...(channelId ? { channelId } : {}),
+        });
+      },
+    ),
   ];
 
   return () => {

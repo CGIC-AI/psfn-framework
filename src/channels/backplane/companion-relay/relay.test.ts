@@ -22,6 +22,10 @@ describe('companionEventKindsForScopes', () => {
       'artifact.created',
       'tool.activity',
     ]);
+    // 7ang.1: the emotion scope is deny-by-default and maps to emotion.snapshot.
+    expect(companionEventKindsForScopes(['emotion'])).toEqual(['emotion.snapshot']);
+    expect(companionEventKindsForScopes(['approvals', 'artifacts', 'tool_activity']))
+      .not.toContain('emotion.snapshot');
   });
 });
 
@@ -92,6 +96,33 @@ describe('CompanionEventRelay', () => {
     expect(toolsOnly).toHaveLength(1);
     expect(toolsOnly[0].kind).toBe('tool.activity');
     expect(toolsOnly[0].channelId).toBe('chan-1');
+  });
+
+  it('fans emotion snapshots only to subscribers granted the emotion scope', async () => {
+    // A satellite WITHOUT the emotion scope resolves to no emotion kinds.
+    const withoutScope = collect(companionEventKindsForScopes(['tool_activity', 'presence']));
+    // A satellite WITH the emotion scope resolves to emotion.snapshot.
+    const withScope = collect(companionEventKindsForScopes(['emotion']));
+
+    await eventBus.emit('companion.emotion.snapshot', {
+      payload: {
+        trigger: 'post_turn',
+        vad: { valence: 0.12, arousal: -0.65, dominance: 0.5 },
+        mood: { valence: 0.2, arousal: 0.11, dominance: -0.9 },
+        discrete: [{ label: 'joy', score: 0.81 }],
+        confidence: 0.88,
+        acacAxes: [{ axis: 'agency', score: 0.7 }],
+        timestamp: new Date(3).toISOString(),
+      },
+      channelId: 'chan-1',
+      timestamp: Date.now(),
+    });
+
+    expect(withoutScope).toHaveLength(0);
+    expect(withScope).toHaveLength(1);
+    expect(withScope[0].kind).toBe('emotion.snapshot');
+    expect(withScope[0].channelId).toBe('chan-1');
+    expect(withScope[0].companionId).toBe('test-companion');
   });
 
   it('retains the parent owner and shard provenance through approval fan-out, scoped to the owner', async () => {
@@ -467,6 +498,67 @@ describe('parseCompanionRelayPublishParams', () => {
     expect(parsed.kind).toBe('tool.activity');
     expect(Object.keys(parsed.payload).sort()).toEqual(['id', 'phase', 'timestamp', 'tool']);
     expect(JSON.stringify(parsed)).not.toContain('shadow');
+  });
+
+  it('parses an emotion snapshot frame and drops smuggled extras', () => {
+    const parsed = parseCompanionRelayPublishParams({
+      kind: 'emotion.snapshot',
+      channelId: 'chan-e',
+      payload: {
+        trigger: 'vad_shift',
+        vad: { valence: 0.1, arousal: 0.2, dominance: -0.3 },
+        mood: { valence: 0, arousal: 0, dominance: 0 },
+        discrete: [{ label: 'joy', score: 0.8 }],
+        confidence: 0.5,
+        acacAxes: [{ axis: 'agency', score: 0.6 }],
+        timestamp: new Date(9).toISOString(),
+        // Hostile extras a compromised agent might attach.
+        rationale: 'because the user disclosed a private secret',
+        concerns: ['user is worried about a job interview'],
+      },
+    });
+    expect(parsed.kind).toBe('emotion.snapshot');
+    if (parsed.kind !== 'emotion.snapshot') throw new Error('unreachable');
+    expect(Object.keys(parsed.payload).sort()).toEqual(
+      ['acacAxes', 'confidence', 'discrete', 'mood', 'timestamp', 'trigger', 'vad'].sort(),
+    );
+    expect(JSON.stringify(parsed)).not.toContain('secret');
+    expect(JSON.stringify(parsed)).not.toContain('rationale');
+    expect(JSON.stringify(parsed)).not.toContain('job interview');
+  });
+
+  it('rejects malformed emotion snapshot frames', () => {
+    const base = {
+      kind: 'emotion.snapshot' as const,
+      payload: {
+        trigger: 'post_turn',
+        vad: { valence: 0, arousal: 0, dominance: 0 },
+        mood: { valence: 0, arousal: 0, dominance: 0 },
+        discrete: [],
+        confidence: 0.5,
+        timestamp: new Date(9).toISOString(),
+      },
+    };
+    expect(() => parseCompanionRelayPublishParams({
+      ...base,
+      payload: { ...base.payload, trigger: 'sideways' },
+    })).toThrow(/trigger/);
+    expect(() => parseCompanionRelayPublishParams({
+      ...base,
+      payload: { ...base.payload, vad: { valence: 2, arousal: 0, dominance: 0 } },
+    })).toThrow(/range/);
+    expect(() => parseCompanionRelayPublishParams({
+      ...base,
+      payload: { ...base.payload, confidence: 3 },
+    })).toThrow(/range/);
+    expect(() => parseCompanionRelayPublishParams({
+      ...base,
+      payload: { ...base.payload, acacAxes: [{ axis: 'made_up', score: 0.5 }] },
+    })).toThrow(/axis/);
+    expect(() => parseCompanionRelayPublishParams({
+      ...base,
+      payload: { ...base.payload, discrete: [{ label: 'joy', score: 2 }] },
+    })).toThrow(/range/);
   });
 
   it('parses artifact frames with an optional preview sidecar', () => {

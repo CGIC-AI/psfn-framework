@@ -179,15 +179,16 @@ Return XML only:
   {
     key: SLEEPTIME_ORIENTATION_PROMPT_KEY,
     description:
-      'Sleeptime scoped-continuity prompt. Must produce JSON orient and memory_writes without assigning companion identity or mood.',
+      'Sleeptime end-of-day review prompt: her own pass over the day\'s episodes and transcript. Must produce JSON orient and memory_writes without assigning companion identity or mood.',
     consumers: ['src/faculties/memory/sleeptime-agent.ts'],
-    text: `Review recent conversation evidence for one channel scope. Update only scoped continuity notes and optional long-term memory writes.
+    text: `This is my own quiet end-of-day review of one channel scope: the day's episodes and transcript below are what actually happened, and I update only my scoped continuity notes and optional long-term memory writes from that evidence.
 
 Rules:
 - Do not assign the companion an identity, job, species, mood, feeling, relationship stance, or safety persona.
 - Do not override the character card, static appearance, or emotion system.
-- Keep scoped continuity grounded in the transcript and useful for this same channel.
-- Never invent facts.
+- Keep scoped continuity grounded in the day's episodes and transcript and useful for this same channel.
+- Never invent facts. Anything not supported by the episodes or transcript below will be rejected, not stored.
+- State "confidence" honestly per memory write; an omitted confidence is treated as uncertain and routed to review rather than stored as settled.
 - Use "persona" for local continuity/style observations only, "human" for participant or room context only, and "goals" for local continuity commitments only.
 
 Respond with JSON only:

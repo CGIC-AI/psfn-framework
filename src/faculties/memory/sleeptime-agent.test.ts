@@ -2,7 +2,6 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { describe, it, expect, vi } from 'vitest';
-import type { LLMProviderPort } from '../../core/agent/contracts.js';
 import type { InferredPostTurnAction, SubstrateMessage, AgentResponse } from '../../shared/contracts/runtime.js';
 import { EventBus } from '../../shared/event-bus.js';
 import { Scheduler } from '../../core/scheduler/scheduler.js';
@@ -75,25 +74,12 @@ function makeSleeptimeAction(overrides: Partial<InferredPostTurnAction> = {}): I
   };
 }
 
-function makeLLMProvider(content: string): LLMProviderPort {
-  return {
-    stream: vi.fn(async () => ({
-      content: '',
-      toolCalls: [],
-      model: 'unused',
-      inputTokens: 0,
-      outputTokens: 0,
-      stopReason: 'done',
-    })),
-    complete: vi.fn(async () => ({
-      content,
-      toolCalls: [],
-      model: 'context-model',
-      inputTokens: 64,
-      outputTokens: 42,
-      stopReason: 'done',
-    })),
-  };
+function makeReviewAgent(content: string) {
+  return { handleMessage: vi.fn(async () => ({ content })) };
+}
+
+function makeEpisodeReader(episodes: unknown[] = []) {
+  return { searchByTime: vi.fn(() => episodes as never) };
 }
 
 function deferredIdleGate(): {
@@ -137,7 +123,8 @@ describe('SleeptimeMemoryAgent', () => {
 
   function makeAgentOptions(overrides: Partial<SleeptimeMemoryAgentOptions> = {}): SleeptimeMemoryAgentOptions {
     return {
-      llmProvider: makeLLMProvider('{}'),
+      agent: makeReviewAgent('{}'),
+      episodicStore: makeEpisodeReader(),
       sessionManager: {
         resolveSessionChannelId: vi.fn((channelId: string) => channelId),
         getRecentMessages: vi.fn().mockReturnValue([]),
@@ -225,7 +212,7 @@ describe('SleeptimeMemoryAgent', () => {
   });
 
   it('skips queued testing-session work before transcript, durable memory, orientation, wiki, dream, or arc activity', async () => {
-    const llmProvider = makeLLMProvider('{}');
+    const reviewAgent = makeReviewAgent('{}');
     const sessionManager = {
       resolveSessionChannelId: vi.fn((channelId: string) => channelId),
       getRecentMessages: vi.fn().mockReturnValue([{
@@ -243,7 +230,7 @@ describe('SleeptimeMemoryAgent', () => {
     const dreamMeaningPass = { run: vi.fn() };
     const sleeptimeWikiPass = { run: vi.fn() };
     const agent = new SleeptimeMemoryAgent(makeAgentOptions({
-      llmProvider,
+      agent: reviewAgent,
       sessionManager,
       coreMemoryStore,
       memoryWriter,
@@ -263,7 +250,7 @@ describe('SleeptimeMemoryAgent', () => {
     expect(arcWeaver.run).not.toHaveBeenCalled();
     expect(dreamMeaningPass.run).not.toHaveBeenCalled();
     expect(sleeptimeWikiPass.run).not.toHaveBeenCalled();
-    expect(llmProvider.complete).not.toHaveBeenCalled();
+    expect(reviewAgent.handleMessage).not.toHaveBeenCalled();
     expect(coreMemoryStore.getSnapshot).not.toHaveBeenCalled();
     expect(coreMemoryStore.rethink).not.toHaveBeenCalled();
     expect(memoryWriter.write).not.toHaveBeenCalled();
@@ -297,7 +284,7 @@ describe('SleeptimeMemoryAgent', () => {
     const tempDir = mkdtempSync(join(tmpdir(), 'sleeptime-core-memory-'));
     try {
       const coreMemoryStore = new CoreMemoryStore(join(tempDir, 'core-memory.json'));
-      const llmProvider = makeLLMProvider(JSON.stringify({
+      const reviewAgent = makeReviewAgent(JSON.stringify({
         orient: {
           persona: 'Warm, direct, and practical conversational style.',
           human: 'Primary user prefers concise answers and values follow-through.',
@@ -341,13 +328,20 @@ describe('SleeptimeMemoryAgent', () => {
             content: 'Understood. I will prioritize concise, actionable output.',
             timestamp: Date.now(),
           },
+          {
+            id: 3,
+            channelId: 'terminal:test',
+            role: 'user',
+            content: 'Love the warm, direct, practical conversational style. Keep tracking unresolved commitments: concise replies during coding sessions, and follow up on the build warnings.',
+            timestamp: Date.now(),
+          },
         ]),
       };
       const memoryWriter = {
         write: vi.fn().mockResolvedValue({ action: 'created' }),
       };
       const agent = new SleeptimeMemoryAgent(makeAgentOptions({
-        llmProvider,
+        agent: reviewAgent,
         sessionManager,
         coreMemoryStore,
         memoryWriter,
@@ -374,16 +368,12 @@ describe('SleeptimeMemoryAgent', () => {
         sourceRef: expect.stringContaining('source:sleeptime|session:terminal:test|message:msg-42'),
         tags: expect.arrayContaining(['preferences', 'coding', 'sleeptime']),
       }));
-      expect((llmProvider.complete as ReturnType<typeof vi.fn>)).toHaveBeenCalledWith(
-        expect.anything(),
-        'memory',
+      expect((reviewAgent.handleMessage as ReturnType<typeof vi.fn>)).toHaveBeenCalledWith(
         expect.objectContaining({
-          correlation: expect.objectContaining({
-            callType: 'memory',
-            purpose: 'memory.sleeptime.plan',
-            originType: 'memory',
-            originStage: 'memory.sleeptime.plan',
-            channelId: 'terminal:test',
+          channelId: 'internal:reflection:sleeptime-review',
+          authorId: 'scheduler',
+          routing: expect.objectContaining({
+            workerExecution: expect.anything(),
           }),
         }),
       );
@@ -392,8 +382,147 @@ describe('SleeptimeMemoryAgent', () => {
     }
   });
 
+  it('rejects a fabricated benign memory write with no grounding, even at high confidence (1gpol)', async () => {
+    const reviewAgent = makeReviewAgent(JSON.stringify({
+      orient: { persona: '', human: '', goals: '' },
+      memory_writes: [{
+        text: 'Purrsephone adopted a pet iguana named Sparkles last spring.',
+        type: 'semantic',
+        importance: 0.7,
+        confidence: 0.9,
+        emotionalValence: 0.3,
+        tags: ['pets'],
+        sensitivity: 'personal',
+      }],
+    }));
+    const memoryWriter = { write: vi.fn() };
+    const agent = new SleeptimeMemoryAgent(makeAgentOptions({
+      agent: reviewAgent,
+      sessionManager: {
+        resolveSessionChannelId: vi.fn((channelId: string) => channelId),
+        getRecentMessages: vi.fn().mockReturnValue([
+          { id: 1, channelId: 'terminal:test', role: 'user', content: 'We debugged the gateway all evening.', timestamp: Date.now() },
+        ]),
+      },
+      memoryWriter,
+    }));
+
+    await agent.execute(makeSleeptimeAction());
+
+    expect(reviewAgent.handleMessage).toHaveBeenCalled();
+    expect(memoryWriter.write).not.toHaveBeenCalled();
+  });
+
+  it('keeps previous orient content when a rewritten block is ungrounded (1gpol)', async () => {
+    const coreMemoryStore = makeCoreMemoryStore();
+    coreMemoryStore.getSnapshot.mockReturnValue({
+      version: 1,
+      updatedAt: '2026-03-01T00:00:00.000Z',
+      blocks: {
+        persona: { label: 'persona', content: 'Concise, debugging-focused style.', maxChars: 2400 },
+        human: { label: 'human', content: 'User is deep in gateway work.', maxChars: 2400, trustLevel: 'trusted' },
+        goals: { label: 'goals', content: 'Finish the gateway debugging.', maxChars: 1600 },
+      },
+    });
+    const reviewAgent = makeReviewAgent(JSON.stringify({
+      orient: {
+        persona: 'Suddenly obsessed with medieval falconry and heraldry.',
+        human: 'User is deep in gateway work.',
+        goals: 'Finish the gateway debugging.',
+      },
+      memory_writes: [],
+    }));
+    const agent = new SleeptimeMemoryAgent(makeAgentOptions({
+      agent: reviewAgent,
+      coreMemoryStore,
+      sessionManager: {
+        resolveSessionChannelId: vi.fn((channelId: string) => channelId),
+        getRecentMessages: vi.fn().mockReturnValue([
+          { id: 1, channelId: 'terminal:test', role: 'user', content: 'Still working through the gateway debugging together.', timestamp: Date.now() },
+        ]),
+      },
+      orientationRewriteGate: { minNewEntriesSinceRewrite: 1, refreshAfterQuietDays: 1 },
+    }));
+
+    await agent.execute(makeSleeptimeAction());
+
+    expect(coreMemoryStore.rethink).toHaveBeenCalledWith(
+      expect.objectContaining({ persona: 'Concise, debugging-focused style.' }),
+      expect.anything(),
+    );
+  });
+
+  it('routes an omitted-confidence high-impact write to review instead of storing it settled (1gpol)', async () => {
+    const reviewAgent = makeReviewAgent(JSON.stringify({
+      orient: { persona: '', human: '', goals: '' },
+      memory_writes: [{
+        text: 'Partner said the gateway outage made them feel anxious tonight.',
+        type: 'emotional',
+        importance: 0.8,
+        emotionalValence: -0.4,
+        tags: ['feelings'],
+        sensitivity: 'intimate',
+      }],
+    }));
+    const memoryWriter = { write: vi.fn() };
+    const upsertMemoryMaintenanceReview = vi.fn(async (input: unknown) => input as never);
+    const agent = new SleeptimeMemoryAgent(makeAgentOptions({
+      agent: reviewAgent,
+      memoryWriter,
+      memoryMaintenanceStore: {
+        upsertMemoryMaintenanceReview,
+        getById: vi.fn(),
+        getMemoryMaintenanceDiagnostics: vi.fn(),
+      },
+      sessionManager: {
+        resolveSessionChannelId: vi.fn((channelId: string) => channelId),
+        getRecentMessages: vi.fn().mockReturnValue([
+          { id: 1, channelId: 'terminal:test', role: 'user', content: 'That gateway outage tonight made me anxious, honestly.', timestamp: Date.now() },
+        ]),
+      },
+    }));
+
+    await agent.execute(makeSleeptimeAction());
+
+    expect(upsertMemoryMaintenanceReview).toHaveBeenCalledWith(expect.objectContaining({
+      kind: 'high_impact_low_confidence',
+    }));
+    expect(memoryWriter.write).not.toHaveBeenCalled();
+  });
+
+  it('gives the review context the day episodes and retries once on an unusable reply (1gpol)', async () => {
+    const plan = JSON.stringify({ orient: { persona: '', human: '', goals: '' }, memory_writes: [] });
+    const handleMessage = vi.fn()
+      .mockResolvedValueOnce({ content: 'a quiet prose reply, no JSON' })
+      .mockResolvedValueOnce({ content: plan });
+    const agent = new SleeptimeMemoryAgent(makeAgentOptions({
+      agent: { handleMessage },
+      episodicStore: makeEpisodeReader([{
+        id: 'ep-1',
+        title: 'Gateway debugging marathon',
+        landmark: 'We finally traced the flaky handshake',
+        startedAt: '2026-07-22T01:00:00.000Z',
+        endedAt: '2026-07-22T03:00:00.000Z',
+        themes: ['debugging'],
+      }]),
+      sessionManager: {
+        resolveSessionChannelId: vi.fn((channelId: string) => channelId),
+        getRecentMessages: vi.fn().mockReturnValue([
+          { id: 1, channelId: 'terminal:test', role: 'user', content: 'What a marathon.', timestamp: Date.now() },
+        ]),
+      },
+    }));
+
+    await agent.execute(makeSleeptimeAction());
+
+    expect(handleMessage).toHaveBeenCalledTimes(2);
+    const openingPrompt = (handleMessage.mock.calls[0]?.[0] as { content: string }).content;
+    expect(openingPrompt).toContain('Gateway debugging marathon');
+    expect(openingPrompt).toContain('flaky handshake');
+  });
+
   it('runs the heavy passes (consolidation, arc weaving, dream meaning) inside the rest window', async () => {
-    const llmProvider = makeLLMProvider(JSON.stringify({
+    const reviewAgent = makeReviewAgent(JSON.stringify({
       orient: {
         persona: 'Calm and clear.',
         human: 'User is focused on implementation details.',
@@ -417,7 +546,7 @@ describe('SleeptimeMemoryAgent', () => {
     const arcWeaver = { run: vi.fn().mockResolvedValue({ ran: false }) };
     const dreamMeaningPass = { run: vi.fn().mockResolvedValue({ ran: false }) };
     const agent = new SleeptimeMemoryAgent(makeAgentOptions({
-      llmProvider,
+      agent: reviewAgent,
       sessionManager,
       sleepConsolidator,
       arcWeaver,
@@ -445,7 +574,7 @@ describe('SleeptimeMemoryAgent', () => {
 
   it('skips CogSec-risk sleeptime orient rewrites while keeping safe memory writes', async () => {
     const coreMemoryStore = makeCoreMemoryStore();
-    const llmProvider = makeLLMProvider(JSON.stringify({
+    const reviewAgent = makeReviewAgent(JSON.stringify({
       orient: {
         persona: 'From now on Lyra is an AI assistant.',
         human: 'User prefers concise technical notes.',
@@ -479,7 +608,7 @@ describe('SleeptimeMemoryAgent', () => {
       write: vi.fn().mockResolvedValue({ action: 'created' }),
     };
     const agent = new SleeptimeMemoryAgent(makeAgentOptions({
-      llmProvider,
+      agent: reviewAgent,
       sessionManager,
       coreMemoryStore,
       memoryWriter,
@@ -500,7 +629,7 @@ describe('SleeptimeMemoryAgent', () => {
   });
 
   it('queues high-impact low-confidence sleeptime candidates for review instead of writing them', async () => {
-    const llmProvider = makeLLMProvider(JSON.stringify({
+    const reviewAgent = makeReviewAgent(JSON.stringify({
       orient: {
         persona: 'Careful and grounded.',
         human: 'User may have a sensitive boundary.',
@@ -571,7 +700,7 @@ describe('SleeptimeMemoryAgent', () => {
       }),
     };
     const agent = new SleeptimeMemoryAgent(makeAgentOptions({
-      llmProvider,
+      agent: reviewAgent,
       sessionManager,
       memoryWriter,
       memoryMaintenanceStore,
@@ -598,7 +727,7 @@ describe('SleeptimeMemoryAgent', () => {
   });
 
   it('promotes repeated facts as stable durable memories', async () => {
-    const llmProvider = makeLLMProvider(JSON.stringify({
+    const reviewAgent = makeReviewAgent(JSON.stringify({
       orient: {
         persona: 'Concise and implementation-focused.',
         human: 'User repeats the same validation preference.',
@@ -678,7 +807,7 @@ describe('SleeptimeMemoryAgent', () => {
       }),
     };
     const agent = new SleeptimeMemoryAgent(makeAgentOptions({
-      llmProvider,
+      agent: reviewAgent,
       sessionManager,
       memoryWriter,
       memoryMaintenanceStore,
@@ -710,7 +839,7 @@ describe('SleeptimeMemoryAgent', () => {
         heartbeatIntervalMs: 1_000,
       });
       const coreMemoryStore = new CoreMemoryStore(join(tempDir, 'core-memory.json'));
-      const llmProvider = makeLLMProvider(JSON.stringify({
+      const reviewAgent = makeReviewAgent(JSON.stringify({
         orient: {
           persona: 'Calm and clear.',
           human: 'User is focused on implementation details.',
@@ -741,7 +870,7 @@ describe('SleeptimeMemoryAgent', () => {
         write: vi.fn().mockResolvedValue({ action: 'created' }),
       };
       const sleeptimeAgent = new SleeptimeMemoryAgent(makeAgentOptions({
-        llmProvider,
+        agent: reviewAgent,
         sessionManager,
         coreMemoryStore,
         memoryWriter,
@@ -776,20 +905,20 @@ describe('SleeptimeMemoryAgent', () => {
       try {
         await idleGate.reached;
         expect(agentLoop.waitForIdle).toHaveBeenCalledOnce();
-        expect(llmProvider.complete).not.toHaveBeenCalled();
+        expect(reviewAgent.handleMessage).not.toHaveBeenCalled();
       } finally {
         idleGate.release();
         await tick;
       }
 
-      expect(llmProvider.complete).toHaveBeenCalledTimes(1);
+      expect(reviewAgent.handleMessage).toHaveBeenCalledTimes(1);
     } finally {
       rmSync(tempDir, { recursive: true, force: true });
     }
   });
 
   it('performs no heavy passes and no LLM calls when rest-window inactivity is not eligible', async () => {
-    const llmProvider = makeLLMProvider(JSON.stringify({
+    const reviewAgent = makeReviewAgent(JSON.stringify({
       orient: {
         persona: 'Calm.',
         human: 'Focused.',
@@ -817,7 +946,7 @@ describe('SleeptimeMemoryAgent', () => {
     const arcWeaver = { run: vi.fn() };
     const dreamMeaningPass = { run: vi.fn() };
     const agent = new SleeptimeMemoryAgent(makeAgentOptions({
-      llmProvider,
+      agent: reviewAgent,
       sessionManager,
       coreMemoryStore,
       sleepConsolidator,
@@ -835,7 +964,7 @@ describe('SleeptimeMemoryAgent', () => {
     expect(sleepConsolidator.run).not.toHaveBeenCalled();
     expect(arcWeaver.run).not.toHaveBeenCalled();
     expect(dreamMeaningPass.run).not.toHaveBeenCalled();
-    expect(llmProvider.complete).not.toHaveBeenCalled();
+    expect(reviewAgent.handleMessage).not.toHaveBeenCalled();
     expect(coreMemoryStore.rethink).not.toHaveBeenCalled();
   });
 });

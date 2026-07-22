@@ -1963,6 +1963,7 @@ async function main(): Promise<void> {
       sleepConsolidator,
       arcWeaver,
       dreamMeaningPass,
+      episodicReviewStore: episodicStore,
       sleeptimeWikiPass,
       proactiveOutbound,
       outboundReplyGuard,

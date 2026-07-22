@@ -218,6 +218,8 @@ export interface ReflectionRuntimeOptions {
   sleepConsolidator?: Pick<SleepCycleEpisodeConsolidator, 'run'> | null;
   arcWeaver?: Pick<EpisodeArcWeaver, 'run'> | null;
   dreamMeaningPass?: Pick<DreamMeaningPass, 'run'> | null;
+  /** Day's-episodes reader for her sleeptime end-of-day review (1gpol). */
+  episodicReviewStore?: Pick<EpisodicStorePort, 'searchByTime'> | null;
   /** Sleeptime wiki update pass (E8.2): runs inside the sleeptime stack after settling. */
   sleeptimeWikiPass?: Pick<SleeptimeWikiPass, 'run'> | null;
   proactiveOutbound?: Pick<ProactiveOutboundDispatcher, 'dispatch'> | null;

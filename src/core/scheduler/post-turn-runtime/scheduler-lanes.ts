@@ -97,16 +97,18 @@ export function createSchedulerOwnedPostTurnLanes(
   // True sleeptime: heavy passes (sleep consolidation, arc weaving, dream
   // meaning, orientation rewrite) are scheduler-owned rest-window work. The
   // agent is intentionally NOT reachable from the post-turn inferer below —
-  // its only trigger surface is the rest-window scheduler task.
+  // its only trigger surface is the rest-window scheduler task. The review
+  // itself runs through HER loop (1gpol): agentLoop, not a raw provider.
   const sleeptimeAgent = (
-    runtimeOptions.llmProvider
+    runtimeOptions.episodicReviewStore
     && runtimeOptions.memoryWriter
     && runtimeOptions.sessionManager
     && runtimeOptions.coreMemoryStore
     && runtimeOptions.episodicProcessingRestWindow
   )
     ? new SleeptimeMemoryAgent({
-      llmProvider: runtimeOptions.llmProvider,
+      agent: agentLoop,
+      episodicStore: runtimeOptions.episodicReviewStore,
       sessionManager: runtimeOptions.sessionManager,
       coreMemoryStore: runtimeOptions.coreMemoryStore,
       memoryWriter: runtimeOptions.memoryWriter,

@@ -310,6 +310,22 @@ Emotional persistence scales its half-life from 1x to 6x using formation intensi
 
 Selection caps reflections and procedurals at two each per turn. Other engram types remain uncapped within the token budget. The lexical augment scans active memories in deterministic newest-first Postgres order using settings-owned page and scan bounds (defaults: 256 per page, 2,048 scanned, 12 retained), so it reaches beyond the former newest-96 window without creating an unbounded turn-time scan. Its match gate is also settings-owned: `lexicalAugment.minOverlap` (default 2 shared tokens) and `lexicalAugment.baseSimilarity` (default 0.62). The score guarantee that rescues top-similarity memories when the scored set is thin is owned by `scoreGuaranteeMinK` (default 3) and `scoreGuaranteeFloor` (default 0.01). L0.1 episodic landmark and timeline retrieval bounds are owned under `memoryRetrievalPolicy.episodic` (chain `scanLimit`/`maxChains`/`maxDepth`/`maxEpisodesPerChain`, timeline `timelineLimit`/`timelineScanLimit`/`timelineMaxDepth`/`timelineMaxEpisodesPerRoot`, plus `arcScanLimit`, `minRootMatchScore`, and `minRelatedMatchScore`), preserving the compiled defaults. Vector search continues to score the full active corpus before applying its result limit. Dedup thresholds and privacy/trust filtering are unchanged.
 
+### Memory Presentation Profile
+
+`memoryRetrievalPolicy` governs *selection* (which memories are chosen); `memoryPresentationProfile` governs *presentation* (how the chosen block is rendered into the companion-facing prompt). It is a separate `settings.json`-owned object, exposed in the advanced Memory section, and is versioned by `PRESENTATION_PROFILE_VERSION` (currently `1`) so an intentional default-rendering change re-records goldens on purpose rather than by accident. The default profile reproduces the historical hardcoded rendering byte-for-byte; the prompt-shape goldens pin that default.
+
+The profile covers presentation only:
+
+- `sectionOrder` — an exact permutation of the seven top-level prompt sections (`core_profile`, `relationship_context`, `emotional_continuity_snapshot`, `cross_session_emotional_continuity`, `memory_context_note`, `episodic_landmark_chains`, `relevant_memories`). Structural section ids never change with wording.
+- `headings` — wording for the boundary, relevant, social-context, separate-people, emotional-continuity, and episodic-landmark section headings.
+- `valence` — the positive/negative marker strings and their thresholds for memory lines, plus the emotional-continuity block's own thresholds.
+- `recencyLabels` — the coarse age-band labels (`today`/`yesterday`/`this week` and `{n}`-templated week/month/year bands).
+- `episodeCap` — the always-on episodic-landmark block's total episode cap (default 5).
+- `displayCaps` — optional per-type presentation-time truncation for `emotional` and `procedural` lines (`null` = uncapped, the default; caps drop overflow after selection, never affecting which memories are selected).
+- `withheldWording` — optional per-companion overrides for the withheld-memory ("memory context note") lines. A `null` field falls back to the system-owned language layer default; an override string is rendered with the same `{{token}}` substitution.
+
+Presentation config fails closed: a malformed profile (unknown/missing key, wrong type, out-of-range number, non-permutation `sectionOrder`, or wrong `version`) is rejected loudly rather than silently defaulted. Changing the profile changes the rendered block with no code edits.
+
 ### Turn Hot Path (Active Memory Context, E5.5)
 
 Foreground turns never block on retrieval. The turn serves the cached active-memory context and schedules a background refresh; the refreshed context lands on a later pass, so remembering something a turn late is acceptable and by design. There is no blocking legacy fallback: a memory provider wired into turn execution must expose the active-context surface or startup of the turn fails closed.

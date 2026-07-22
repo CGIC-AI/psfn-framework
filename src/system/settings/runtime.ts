@@ -17,6 +17,10 @@ import {
   cloneMemoryRetrievalPolicy,
   createDefaultMemoryRetrievalPolicy,
 } from '../config/memory-retrieval-policy.js';
+import {
+  cloneMemoryPresentationProfile,
+  createDefaultMemoryPresentationProfile,
+} from '../config/memory-presentation-profile.js';
 import { createDefaultShellExecSettings } from '../config/shell-exec-config.js';
 import {
   cloneImageWorkflowSettings,
@@ -255,6 +259,9 @@ function getMemorySettingsSnapshot(config: SubstrateConfig) {
     memoryRetrievalPolicy: cloneMemoryRetrievalPolicy(
       config.memoryRetrievalPolicy ?? createDefaultMemoryRetrievalPolicy(),
     ),
+    memoryPresentationProfile: cloneMemoryPresentationProfile(
+      config.memoryPresentationProfile ?? createDefaultMemoryPresentationProfile(),
+    ),
     memoryRefreshFailureAlertThreshold:
       config.memoryRefreshFailureAlertThreshold ?? null,
     groupMemory: cloneGroupMemorySettings(
@@ -296,6 +303,7 @@ function getMemorySettingsSnapshot(config: SubstrateConfig) {
     | 'memoryExtractionTelemetryEnabled'
     | 'memoryRetrievalTelemetryEnabled'
     | 'memoryRetrievalPolicy'
+    | 'memoryPresentationProfile'
     | 'memoryRefreshFailureAlertThreshold'
     | 'groupMemory'
     | 'emotionScoping'
@@ -681,6 +689,11 @@ function applyCoreSettings(
   if ('memoryRetrievalPolicy' in settings) {
     config.memoryRetrievalPolicy = cloneMemoryRetrievalPolicy(
       settings.memoryRetrievalPolicy ?? createDefaultMemoryRetrievalPolicy(),
+    );
+  }
+  if ('memoryPresentationProfile' in settings) {
+    config.memoryPresentationProfile = cloneMemoryPresentationProfile(
+      settings.memoryPresentationProfile ?? createDefaultMemoryPresentationProfile(),
     );
   }
   if ('sessionRestartBehavior' in settings) {

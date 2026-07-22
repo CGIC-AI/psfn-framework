@@ -2,6 +2,7 @@ import type { CanonicalModelRegistry, ImportProcessingRouteMode, ModelCatalogEnt
 import type { GroupMemorySettings } from '../config/group-memory-config.js';
 import type { EmotionScopingSettings } from '../config/emotion-scoping-config.js';
 import type { MemoryRetrievalPolicy } from '../config/memory-retrieval-policy.js';
+import type { MemoryPresentationProfile } from '../config/memory-presentation-profile.js';
 import type { CapabilityTier, CompositionalPolicyConfig, LifecycleKubernetesSettings, SessionRestartBehavior, SessionTailCacheSettings, SubstrateConfig, VoiceReplySegmenterSettings, WikiStartupHydrationSettings } from '../config/runtime-config-contracts.js';
 import type { ShellExecSettings } from '../config/shell-exec-config.js';
 import type {
@@ -169,6 +170,7 @@ export interface EditableSettings {
   memoryExtractionTelemetryEnabled?: boolean;
   memoryRetrievalTelemetryEnabled?: boolean;
   memoryRetrievalPolicy?: MemoryRetrievalPolicy;
+  memoryPresentationProfile?: MemoryPresentationProfile;
   memoryRefreshFailureAlertThreshold?: number;
   groupMemory?: GroupMemorySettings;
   emotionScoping?: EmotionScopingSettings;
@@ -335,6 +337,7 @@ export const RUNTIME_SETTINGS_KEYS = [
   'memoryExtractionTelemetryEnabled',
   'memoryRetrievalTelemetryEnabled',
   'memoryRetrievalPolicy',
+  'memoryPresentationProfile',
   'memoryRefreshFailureAlertThreshold',
   'groupMemory',
   'emotionScoping',
@@ -462,6 +465,7 @@ export type RuntimeSettingValue =
   | GroupMemorySettings
   | EmotionScopingSettings
   | MemoryRetrievalPolicy
+  | MemoryPresentationProfile
   | ObserverEvalSidecarSettings
   | SessionTailCacheSettings
   | ShellExecSettings

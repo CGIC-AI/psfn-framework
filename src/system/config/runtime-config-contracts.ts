@@ -17,6 +17,7 @@ import type { SatelliteRegistryConfig } from '../../shared/contracts/satellite-r
 import type { GroupMemorySettings } from './group-memory-config.js';
 import type { EmotionScopingSettings } from './emotion-scoping-config.js';
 import type { MemoryRetrievalPolicy } from './memory-retrieval-policy.js';
+import type { MemoryPresentationProfile } from './memory-presentation-profile.js';
 import type { ShellExecSettings } from './shell-exec-config.js';
 import type { RuntimeCompanionId } from '../../shared/routing/companion-id.js';
 import type {
@@ -247,6 +248,13 @@ export interface SubstrateConfig {
   memoryExtractionTelemetryEnabled?: boolean;
   memoryRetrievalTelemetryEnabled?: boolean;
   memoryRetrievalPolicy?: MemoryRetrievalPolicy;
+  /**
+   * Versioned, schema-validated presentation profile for the retrieval
+   * formatting layer (ordering, headings, valence markers, recency labels,
+   * episode cap, display caps, withheld wording). Governs presentation only,
+   * never selection. Owned by settings.json.
+   */
+  memoryPresentationProfile?: MemoryPresentationProfile;
   /**
    * Consecutive failed active-memory context refreshes (per context key)
    * before an operator alert is raised via the system-derived notification

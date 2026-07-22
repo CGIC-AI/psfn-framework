@@ -27,6 +27,37 @@ cluster of one, not a second deployment mode.
 - No production access through self-healing `kubectl port-forward` loops. Use
   chart-owned durable ingress; if another durable exposure is required, add it
   to the chart and values before the rollout.
+- No accepting a partial validation gate as a validated deploy. If
+  `verify:kube-rollout` reports fewer checks than it defines, name the checks
+  that did not run and either fix the gate or run them by hand — see
+  "Known deploy-tooling defects" below.
+- No relying on in-pod shell expansion through the `rkubectl` wrapper. It
+  flattens arguments through `$*`, so quotes are lost and the remote *login*
+  shell expands the variable before the pod sees it. Use `printenv` / `cat`.
+
+## Known deploy-tooling defects
+
+Recorded 2026-07-22 shipping `9dfb11b46` to psfn-shard (helm rev 65). Each is
+tracked; check the bead before assuming current behaviour.
+
+| Bead | Defect | Operational consequence |
+|---|---|---|
+| `q8xy1` | `ship:kube` hardcoded `deploy/psfn-agent`; a fleet renders `psfn-agent-<companionId>` | Ship dies at the rollout wait **after** `helm upgrade` already succeeded, so the validation gate never runs. Also silently dropped `previousGitCommit` (see below). |
+| `6187t` | `_helpers.tpl` bakes `.Release.Revision` into gateway/agent pod env as `PSFN_HELM_REVISION` | Every helm operation changes the pod template hash and restarts the companion — including `--components emosim`, which ships only the sidecar image. A sidecar cannot currently be updated without bouncing core. The value is also stale by construction and feeds rollback targeting. |
+| `zu0g5` | Gate aborts at `gateway models` on a U+FFFD decode of the testing-harness key | The key gates every later check, so provider routing, pgvector, Redis, zero-bookkeeping-rows and the two-turn continuity smoke are **skipped silently**. "4/5, known issue" hides real coverage loss. |
+| `vcyxv` | Gateway logs fleet-auth consistent backups "enabled" but has no `/runtime/backups` mount and runs as uid 999 | Every cycle dies on EACCES; the 6h in-memory scheduler with `skipFirstRun` never fires in a pod that lives under 6h. No artifact and no error. (The host NAS `pg_dump` lane is separately healthy.) |
+| `3u2en` | Chart does not own four live hand-patches | They survive a helm v4 SSA upgrade only because helm never owned those fields; they vanish on `--force`, `rollback`, or delete/recreate. |
+
+Provenance vars (`PSFN_IMAGE_TAG`, `PSFN_GIT_COMMIT`, `PSFN_PREVIOUS_GIT_COMMIT`)
+feed the companion's `self_status diagnose` "fixes shipped in this build" line.
+A wrong value is not cosmetic — it tells her a false story about her own
+history. Verify them after every ship:
+
+```bash
+kubectl -n <ns> get deploy <agent-deploy> -o jsonpath=\
+'{range .spec.template.spec.containers[0].env[*]}{.name}={.value}{"\n"}{end}' \
+  | grep -E 'PSFN_IMAGE_TAG|PSFN_GIT_COMMIT|PSFN_PREVIOUS_GIT_COMMIT'
+```
 
 ## Required end-to-end procedure
 

@@ -125,6 +125,44 @@ describe('CompanionEventRelay', () => {
     expect(withScope[0].companionId).toBe('test-companion');
   });
 
+  it('isolates a failing emotion subscriber and keeps delivering to healthy ones', async () => {
+    // 7ang.2: a satellite whose delivery throws (disconnected/errored socket)
+    // must not break relay for others or block the publisher.
+    const healthy = collect(['emotion.snapshot']);
+    let failingCalls = 0;
+    relay.subscribe({
+      companionId: 'test-companion',
+      allowedKinds: ['emotion.snapshot'],
+      onEvent: () => {
+        failingCalls += 1;
+        throw new Error('satellite socket exploded');
+      },
+    });
+    expect(relay.subscriberCount()).toBe(2);
+
+    // The throwing subscriber must not reject the publisher's emit.
+    await expect(eventBus.emit('companion.emotion.snapshot', {
+      payload: {
+        trigger: 'vad_shift',
+        vad: { valence: 0.1, arousal: 0.2, dominance: -0.3 },
+        mood: { valence: 0, arousal: 0, dominance: 0 },
+        discrete: [{ label: 'joy', score: 0.8 }],
+        confidence: 0.5,
+        timestamp: new Date(4).toISOString(),
+      },
+      channelId: 'chan-2',
+      timestamp: Date.now(),
+    })).resolves.toBeUndefined();
+
+    // The failing subscriber was invoked once, then dropped; the healthy one
+    // still received the frame.
+    expect(failingCalls).toBe(1);
+    expect(healthy).toHaveLength(1);
+    expect(healthy[0].kind).toBe('emotion.snapshot');
+    expect(healthy[0].channelId).toBe('chan-2');
+    expect(relay.subscriberCount()).toBe(1);
+  });
+
   it('retains the parent owner and shard provenance through approval fan-out, scoped to the owner', async () => {
     const ownerReceived = collect(['approval.requested', 'approval.resolved']);
     const otherReceived: CompanionEventEnvelope[] = [];

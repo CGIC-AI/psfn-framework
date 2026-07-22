@@ -189,7 +189,7 @@ export function handleCompanionEventsStream(ctx: CompanionRelayRequestContext): 
       ctx.res,
       403,
       'companion_events_not_allowed',
-      'Satellite endpoint has no companion event scopes (approvals, artifacts, tool_activity)',
+      'Satellite endpoint has no companion event scopes (approvals, artifacts, tool_activity, emotion)',
     );
     return;
   }

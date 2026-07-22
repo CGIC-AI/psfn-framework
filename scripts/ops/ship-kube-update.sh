@@ -225,10 +225,20 @@ if [[ $SHIP_EMOSIM -eq 1 ]]; then
     exit 1
   fi
   EMOSIM_SHA="$(git -C "$EMOSIM_SRC" rev-parse --short=8 HEAD)"
+  EMOSIM_FULL_SHA="$(git -C "$EMOSIM_SRC" rev-parse HEAD)"
   EMOSIM_TAG="0.1.0-emosim-${EMOSIM_SHA}"
-  echo "==> building ${EMOSIM_IMAGE_NAME}:${EMOSIM_TAG} (from ${EMOSIM_SRC})"
-  mkdir -p "$BUILD_DIR/emosim-src"
-  git -C "$EMOSIM_SRC" archive HEAD | tar -x -C "$BUILD_DIR/emosim-src"
+  echo "==> building ${EMOSIM_IMAGE_NAME}:${EMOSIM_TAG} (from ${EMOSIM_SRC} @ ${EMOSIM_FULL_SHA})"
+  # The build context MUST carry .git: Dockerfile.emosim derives the actual SHA
+  # from the context's own git metadata and refuses the build when it cannot
+  # (fail-closed pin). `git archive` produces exactly the export tarball that
+  # check rejects, so this path could never build. Clone instead — no hardlinks
+  # and no --shared, so the copy is self-contained rather than pointing at
+  # object alternates the daemon cannot see.
+  git clone --quiet --no-hardlinks "$EMOSIM_SRC" "$BUILD_DIR/emosim-src"
+  git -C "$BUILD_DIR/emosim-src" checkout --quiet --detach "$EMOSIM_FULL_SHA"
+  CONTEXT_SHA="$(git -C "$BUILD_DIR/emosim-src" rev-parse HEAD)"
+  [[ "$CONTEXT_SHA" == "$EMOSIM_FULL_SHA" ]] \
+    || { echo "FAIL: emosim build context is at ${CONTEXT_SHA}, expected ${EMOSIM_FULL_SHA}" >&2; exit 1; }
   docker buildx build --platform "$PLATFORM" -f "docker/Dockerfile.emosim" \
     -t "${EMOSIM_IMAGE_NAME}:${EMOSIM_TAG}" --load "$BUILD_DIR/emosim-src"
 

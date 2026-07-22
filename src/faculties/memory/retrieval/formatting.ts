@@ -6,6 +6,7 @@ import type { SystemLanguageTemplateKey } from '../../../core/identity/system-la
 import {
   formatRecencyLabelTemplate,
   resolveMemoryPresentationProfile,
+  validateMemoryPresentationWithheldWordingOverride,
   type MemoryPresentationProfile,
   type MemoryPresentationRecencyLabels,
 } from '../../../system/config/memory-presentation-profile.js';
@@ -202,7 +203,25 @@ function renderWithheldWordingLine(
   variables: Record<string, unknown> = {},
 ): string {
   if (override !== null) {
-    return renderSystemLanguageTemplateText(key, override, variables).text;
+    const field = key === 'memory_context_note.header'
+      ? 'header'
+      : key === 'memory_context_note.withheld_count'
+        ? 'withheldCount'
+        : key === 'memory_context_note.reasons'
+          ? 'reasons'
+          : key === 'memory_context_note.relevance'
+            ? 'relevance'
+            : 'safeNextActions';
+    validateMemoryPresentationWithheldWordingOverride(
+      field,
+      override,
+      `memoryPresentationProfile.withheldWording.${field}`,
+    );
+    const rendered = renderSystemLanguageTemplateText(key, override, variables);
+    if (rendered.diagnostics.length > 0) {
+      throw new Error(rendered.diagnostics.map(diagnostic => diagnostic.message).join('; '));
+    }
+    return rendered.text;
   }
   return renderSystemLanguageTemplate(key, variables);
 }

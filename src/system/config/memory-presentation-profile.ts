@@ -1,4 +1,5 @@
 import { isRecord } from '../../shared/utils/types.js';
+import type { SystemLanguageTemplateKey } from '../../core/identity/system-language-contracts.js';
 
 /**
  * Versioned, schema-validated presentation profile for the retrieval formatting
@@ -279,6 +280,62 @@ function requireNullableString(
   return requireString(value, fieldPath, bounds);
 }
 
+const WITHHELD_WORDING_TEMPLATE_KEYS: Record<
+  keyof MemoryPresentationWithheldWording,
+  SystemLanguageTemplateKey
+> = {
+  header: 'memory_context_note.header',
+  withheldCount: 'memory_context_note.withheld_count',
+  reasons: 'memory_context_note.reasons',
+  relevance: 'memory_context_note.relevance',
+  safeNextActions: 'memory_context_note.safe_next_actions',
+};
+
+const WITHHELD_WORDING_ALLOWED_TOKENS: Record<keyof MemoryPresentationWithheldWording, readonly string[]> = {
+  header: [],
+  withheldCount: ['total_count', 'memory_noun'],
+  reasons: ['detail_line'],
+  relevance: ['relevance_line'],
+  safeNextActions: [],
+};
+
+/**
+ * Validate one companion-owned wording override before it reaches a structural
+ * prompt section. Overrides are plain text with a small, field-specific token
+ * vocabulary; structural markup belongs exclusively to the system renderer.
+ */
+export function validateMemoryPresentationWithheldWordingOverride(
+  field: keyof MemoryPresentationWithheldWording,
+  value: string,
+  fieldPath: string,
+): void {
+  if (/[<>]/u.test(value)) {
+    throw new Error(`Invalid settings at ${fieldPath}: structural markup is not allowed`);
+  }
+  const allowed = new Set(WITHHELD_WORDING_ALLOWED_TOKENS[field]);
+  for (const match of value.matchAll(/\{\{\s*([a-zA-Z0-9_.-]+)\s*\}\}/gu)) {
+    const token = match[1];
+    if (!allowed.has(token)) {
+      throw new Error(
+        `Invalid settings at ${fieldPath}: unsupported placeholder "{{${token}}}" for ${WITHHELD_WORDING_TEMPLATE_KEYS[field]}`,
+      );
+    }
+  }
+}
+
+function requireNullableWithheldWording(
+  field: keyof MemoryPresentationWithheldWording,
+  value: unknown,
+  fieldPath: string,
+  bounds: { minLength: number; maxLength: number },
+): string | null {
+  const normalized = requireNullableString(value, fieldPath, bounds);
+  if (normalized !== null) {
+    validateMemoryPresentationWithheldWordingOverride(field, normalized, fieldPath);
+  }
+  return normalized;
+}
+
 function normalizeSectionOrder(value: unknown, fieldPath: string): MemoryPresentationSection[] {
   if (!Array.isArray(value)) {
     throw new Error(`Invalid settings at ${fieldPath}: expected array`);
@@ -434,11 +491,22 @@ function normalizeWithheldWording(
   assertExactKeys(record, keys, fieldPath);
   const bounds = { minLength: 1, maxLength: 600 };
   return {
-    header: requireNullableString(record.header, `${fieldPath}.header`, bounds),
-    withheldCount: requireNullableString(record.withheldCount, `${fieldPath}.withheldCount`, bounds),
-    reasons: requireNullableString(record.reasons, `${fieldPath}.reasons`, bounds),
-    relevance: requireNullableString(record.relevance, `${fieldPath}.relevance`, bounds),
-    safeNextActions: requireNullableString(
+    header: requireNullableWithheldWording('header', record.header, `${fieldPath}.header`, bounds),
+    withheldCount: requireNullableWithheldWording(
+      'withheldCount',
+      record.withheldCount,
+      `${fieldPath}.withheldCount`,
+      bounds,
+    ),
+    reasons: requireNullableWithheldWording('reasons', record.reasons, `${fieldPath}.reasons`, bounds),
+    relevance: requireNullableWithheldWording(
+      'relevance',
+      record.relevance,
+      `${fieldPath}.relevance`,
+      bounds,
+    ),
+    safeNextActions: requireNullableWithheldWording(
+      'safeNextActions',
       record.safeNextActions,
       `${fieldPath}.safeNextActions`,
       bounds,

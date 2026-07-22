@@ -1055,6 +1055,18 @@ unpinned path. The verified SHA is baked into the image at
 `docker/emosim-verify-sha.sh`; to move the pin, change the ARG default in-repo
 (reviewed like any other change) and rebuild against a matching checkout.
 
+The pin currently tracks the PSFN integration fork branch
+`integration/psfn-testing` (merge of `feat/per-dyad-social-need` and
+`feat/per-drive-session-config`), so the `emo_sim` checkout used for a build —
+`$PSFN_EMOSIM_SRC`, default `~/emo_sim`, per
+`scripts/ops/ship-kube-update.sh --components emosim` — must be on that branch
+at the pinned commit or the verify stage refuses the build. Both merged
+features are additive to the API this repo consumes (a relationship record
+gains nullable `social_need`/`social_need_scale`; session creation gains an
+optional `drive_config`), and no engine data file changed, so the `/api/model`
+contract the adapter asserts — 17 appraisal dims, the 48-emotion vector — is
+unchanged across the bump.
+
 Read cadence. The adapter samples the server at 1 Hz
 (`EMOSIM_MIN_READ_CADENCE_MS`); there is no sub-second polling regardless of the
 emo_sim internal tick rate. The server ticks fast on its own wall clock, so at

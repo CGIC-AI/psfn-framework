@@ -15,7 +15,7 @@ import { describe, expect, it } from 'vitest';
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../..');
 const VERIFY_SCRIPT = path.join(REPO_ROOT, 'docker', 'emosim-verify-sha.sh');
 const DOCKERFILE = path.join(REPO_ROOT, 'docker', 'Dockerfile.emosim');
-const PINNED_SHA = '5bb571d4cec42f6d178f70f529b52640a46018b5';
+const PINNED_SHA = '112cd60edecad08ae2c99df818e623cd6245b8b5';
 const PINNED_PYTHON_IMAGE =
   'python:3.12.13-slim@sha256:57cd7c3a7a273101a6485ba99423ee568157882804b1124b4dd04266317710de';
 

@@ -103,6 +103,7 @@ import type { GroupMemoryBackfillInput } from '../../faculties/memory/extraction
 import type { AdminSharedWorkspaceService } from './services/shared-workspace-service.js';
 import { buildAdminSharedWorkspaceRoutes } from './api-routes-shared-workspace.js';
 import type { GardenRequestContext } from './garden-request-context.js';
+import { privacyBreakGlassResourceSelectorDigest } from '../../shared/contracts/privacy-break-glass.js';
 import { buildAdminPrivacyBreakGlassRoutes } from './routes/privacy-break-glass-routes.js';
 import type { AdminPrivacyBreakGlassService } from './services/privacy-break-glass-service.js';
 
@@ -408,6 +409,66 @@ export function buildAdminApiRoutes(options: {
     const parsed = toPositiveIntegerQueryNumber(url.searchParams.get('limit'), 'limit');
     if (!parsed.ok) return parsed;
     return { ok: true, value: Math.min(parsed.value ?? 250, 250) };
+  };
+
+  // Companion-private journals (reflection, metacognition, values timeline) are
+  // welfare-sensitive substrates: the operator may not read them through an
+  // ordinary admin GET. Reuse the privacy break-glass contract — default deny,
+  // disclose only under an active `break_glass` assurance (the same assurance
+  // AdminPrivacyBreakGlassService demands for memory/profile), and emit the same
+  // `memory_access` audit evidence. Fail closed if the disclosure cannot be
+  // audited so a read never happens without a durable record.
+  const enforceJournalBreakGlass = (input: {
+    res: ServerResponse;
+    context: GardenRequestContext | undefined;
+    resourceSelector: string;
+  }): boolean => {
+    const resourceSelectorDigest = privacyBreakGlassResourceSelectorDigest(
+      'journal',
+      input.resourceSelector,
+    );
+    const writeAudit = (
+      decision: 'allowed' | 'denied',
+      narrative: string,
+      extraDetails: Array<string | null | undefined>,
+    ): boolean => {
+      if (!appendAuditTimelineEntry) return false;
+      try {
+        appendAuditTimelineEntry('memory_access', decision, narrative, [
+          'resourceKind=journal',
+          `resourceSelectorDigest=${resourceSelectorDigest}`,
+          ...extraDetails,
+        ], 'operator', input.context);
+        return true;
+      } catch {
+        return false;
+      }
+    };
+    const principal = input.context?.kind === 'fleet_principal' ? input.context : null;
+    if (!principal || principal.actor.sessionAssurance !== 'break_glass') {
+      writeAudit('denied', 'Companion journal read denied without privacy break-glass.', [
+        `reasonCode=${principal ? 'break_glass_required' : 'trusted_principal_required'}`,
+      ]);
+      sendJson(
+        input.res,
+        403,
+        { error: 'Companion journal read requires privacy break-glass' },
+        { 'Cache-Control': 'no-store' },
+      );
+      return false;
+    }
+    if (!writeAudit('allowed', 'Companion journal read disclosed under privacy break-glass.', [
+      'assurance=break_glass',
+    ])) {
+      sendJson(
+        input.res,
+        503,
+        { error: 'Companion journal read is unavailable' },
+        { 'Cache-Control': 'no-store' },
+      );
+      return false;
+    }
+    return true;
   };
 
   const handleDiscoveredModels = (res: ServerResponse, refresh: boolean): void => {
@@ -1190,7 +1251,10 @@ export function buildAdminApiRoutes(options: {
     {
       method: 'GET',
       match: exactPath('/api/admin/values'),
-      handle: (_req, res) => {
+      handle: (_req, res, _params, context) => {
+        if (!enforceJournalBreakGlass({ res, context, resourceSelector: 'values-journal' })) {
+          return;
+        }
         if (!valuesJournal) {
           sendJson(res, 200, { entries: [] });
           return;
@@ -1202,7 +1266,14 @@ export function buildAdminApiRoutes(options: {
     {
       method: 'GET',
       match: exactPath('/api/admin/values/reflections/metacognition'),
-      handle: (req, res) => {
+      handle: (req, res, _params, context) => {
+        if (!enforceJournalBreakGlass({
+          res,
+          context,
+          resourceSelector: 'reflection-metacognition',
+        })) {
+          return;
+        }
         if (!reflectionMetacognitionJournal) {
           sendJson(res, 503, { error: 'Reflection metacognition journal unavailable' });
           return;
@@ -1220,7 +1291,10 @@ export function buildAdminApiRoutes(options: {
     {
       method: 'GET',
       match: exactPath('/api/admin/values/reflections/daily'),
-      handle: (req, res) => {
+      handle: (req, res, _params, context) => {
+        if (!enforceJournalBreakGlass({ res, context, resourceSelector: 'reflection-daily' })) {
+          return;
+        }
         if (!reflectionDailyJournal) {
           sendJson(res, 503, { error: 'Reflection daily journal unavailable' });
           return;
@@ -1238,7 +1312,10 @@ export function buildAdminApiRoutes(options: {
     {
       method: 'GET',
       match: exactPath('/api/admin/values/reflections/journal'),
-      handle: (req, res) => {
+      handle: (req, res, _params, context) => {
+        if (!enforceJournalBreakGlass({ res, context, resourceSelector: 'reflection-journal' })) {
+          return;
+        }
         if (!reflectionJournal) {
           sendJson(res, 503, { error: 'Reflection journal unavailable' });
           return;

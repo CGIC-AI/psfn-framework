@@ -236,6 +236,90 @@ describe('postgres memory store integration', () => {
     });
   }, INTEGRATION_TIMEOUT_MS);
 
+  it('lists active memory embeddings since a cutoff from Postgres with the prior in-memory semantics (a27w.1)', async () => {
+    await withMemoryDatabase(async (pool) => {
+      const store = await createPostgresMemoryStoreFromPool(pool, 4);
+      const base = 1_700_000_000_000;
+      const embA = new Float32Array([0.12, 0.22, 0.32, 0.42]);
+      const embB = new Float32Array([0.52, 0.62, 0.72, 0.82]);
+      // Active, in-window.
+      await store.insertMemory(
+        makeMemory({ id: 'lae-a', text: 'active a', extractedAt: base + 10, salience: 0.3, sensitivity: 'public', provenance: { subjectContactId: 'contact-a' } }),
+        embA,
+      );
+      await store.insertMemory(
+        makeMemory({ id: 'lae-b', text: 'active b', extractedAt: base + 20, salience: 0.4, sensitivity: 'public', provenance: { subjectContactId: 'contact-a' } }),
+        embB,
+      );
+      // Active but BEFORE the cutoff → excluded by extracted_at >= sinceMs.
+      await store.insertMemory(
+        makeMemory({ id: 'lae-old', text: 'too old', extractedAt: base - 100, sensitivity: 'public', provenance: { subjectContactId: 'contact-a' } }),
+        new Float32Array([0.9, 0.1, 0.1, 0.1]),
+      );
+      // Deleted in-window → excluded.
+      await store.insertMemory(
+        makeMemory({ id: 'lae-del', text: 'deleted', extractedAt: base + 30, sensitivity: 'public', provenance: { subjectContactId: 'contact-a' } }),
+        new Float32Array([0.2, 0.2, 0.2, 0.2]),
+      );
+      await store.softDeleteMemory('lae-del', { deletedBy: 'integration:test' });
+      // Superseded in-window → excluded.
+      await seedMemoryRow(
+        pool,
+        makeMemory({ id: 'lae-sup', text: 'superseded', extractedAt: base + 40, supersededBy: 'lae-a' }),
+        [0.3, 0.3, 0.3, 0.3],
+      );
+      // In-window but NULL embedding → excluded, never re-embedded.
+      await seedMemoryRow(
+        pool,
+        makeMemory({ id: 'lae-noemb', text: 'no embedding', extractedAt: base + 50 }),
+        [0.4, 0.4, 0.4, 0.4],
+      );
+      await pool.query(`UPDATE l2_memories SET embedding = NULL WHERE id = 'lae-noemb'`);
+
+      const samples = await store.listActiveMemoryEmbeddingsSince(base);
+      expect(samples.map(sample => sample.id)).toEqual(['lae-a', 'lae-b']);
+      expect(samples[0]?.extractedAt).toBe(base + 10);
+      expect(samples[0]?.salience).toBeCloseTo(0.3, 5);
+      expect(samples[0]?.type).toBe('semantic');
+      expect(Array.from(samples[0]!.embedding)).toEqual(Array.from(embA));
+      expect(Array.from(samples[1]!.embedding)).toEqual(Array.from(embB));
+
+      // sinceMs boundary is inclusive (>=), matching the former `< sinceMs` skip.
+      const strictCutoff = await store.listActiveMemoryEmbeddingsSince(base + 20);
+      expect(strictCutoff.map(sample => sample.id)).toEqual(['lae-b']);
+      // limit is applied after the extractedAt ASC, id ASC ordering.
+      const limited = await store.listActiveMemoryEmbeddingsSince(base, 1);
+      expect(limited.map(sample => sample.id)).toEqual(['lae-a']);
+    });
+  }, INTEGRATION_TIMEOUT_MS);
+
+  it('preserves the stored embedding across plain soft delete and restore via on-demand fetch (a27w.1)', async () => {
+    await withMemoryDatabase(async (pool) => {
+      const store = await createPostgresMemoryStoreFromPool(pool, 4);
+      const embedding = new Float32Array([0.12, 0.34, 0.56, 0.78]);
+      await store.insertMemory(
+        makeMemory({ id: 'sd-embed', text: 'soft delete embedding survives', sensitivity: 'public', provenance: { subjectContactId: 'contact-a' } }),
+        embedding,
+      );
+      await expect(store.searchByEmbedding(embedding, 0.99, 5))
+        .resolves.toEqual([expect.objectContaining({ id: 'sd-embed' })]);
+
+      const deleted = await store.softDeleteMemory('sd-embed', { deletedBy: 'integration:test' });
+      expect(deleted).not.toBeNull();
+      await expect(store.searchByEmbedding(embedding, 0.99, 5)).resolves.toEqual([]);
+      // The re-upsert must NOT null the vector — the on-demand fetch preserves it.
+      const rawAfterDelete = await pool.query<{ embedding: string | null }>(
+        `SELECT embedding::text AS embedding FROM l2_memories WHERE id = 'sd-embed'`,
+      );
+      expect(rawAfterDelete.rows[0]?.embedding).toBeTruthy();
+
+      await expect(store.undoSoftDelete(deleted!.deleteId, { restoredBy: 'integration:test' }))
+        .resolves.not.toBeNull();
+      await expect(store.searchByEmbedding(embedding, 0.99, 5))
+        .resolves.toEqual([expect.objectContaining({ id: 'sd-embed' })]);
+    });
+  }, INTEGRATION_TIMEOUT_MS);
+
   it('keeps the forward schema insert-compatible with the pre-anchor rollback writer', async () => {
     await withMemoryDatabase(async (pool) => {
       await ensurePostgresSchema(pool, POSTGRES_MEMORY_MIGRATIONS);

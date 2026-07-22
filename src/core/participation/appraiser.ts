@@ -257,7 +257,14 @@ function neutralizeWrapperCollisions(text: string): string {
   return text.replace(/<\s*\/?\s*untrusted_context\b[^<>]*>?/giu, '[wrapper-collision-removed]');
 }
 
-function sanitizeMessageBody(content: string, charCap: number): string {
+/**
+ * Sanitize one untrusted room-message body for datamarked prompt inclusion:
+ * control/zero-width/bidi stripping, wrapper-collision neutralization,
+ * whitespace collapse, and a hard char cap. Exported for the egress reply
+ * sender (qgqw.3), which fences the triggering room text with the same
+ * conventions before wrapUntrustedContext.
+ */
+export function sanitizeMessageBody(content: string, charCap: number): string {
   const collapsed = neutralizeWrapperCollisions(stripUnsafeControlChars(content))
     .replace(/\s+/gu, ' ')
     .trim();
@@ -267,7 +274,8 @@ function sanitizeMessageBody(content: string, charCap: number): string {
   return collapsed.length > charCap ? `${collapsed.slice(0, charCap - 1)}…` : collapsed;
 }
 
-function sanitizeDisplayName(name: string): string {
+/** Sanitize an untrusted display name (same neutralization as the body). */
+export function sanitizeDisplayName(name: string): string {
   const displayNameCap = 80;
   // Collapse ALL whitespace (matching the body), not just CR/LF, so a Unicode
   // line/paragraph separator in an author name cannot inject a second visual

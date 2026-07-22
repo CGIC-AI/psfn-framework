@@ -92,6 +92,9 @@ const drawnPot = {
     before: { companionId: COMPANION_A, balance: 10, cap: 240, lastRegenAtMs: 0, revision: 1 },
     after: { companionId: COMPANION_A, balance: 9, cap: 240, lastRegenAtMs: 0, revision: 2 },
   }),
+  refund: async () => (
+    { companionId: COMPANION_A, balance: 10, cap: 240, lastRegenAtMs: 0, revision: 3 }
+  ),
 };
 
 function deliveringSender(): EgressReplySender {

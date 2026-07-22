@@ -6,6 +6,18 @@ export function toErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+// `name` may be an own property or inherited from a prototype (DOMException
+// defines a getter-only `name` on its prototype). An assignment is safe only
+// when the resolved property is a writable data property or an accessor with a
+// setter, and the object is extensible when no descriptor exists anywhere.
+function canAssignName(target: object): boolean {
+  for (let current: object | null = target; current; current = Object.getPrototypeOf(current)) {
+    const descriptor = Object.getOwnPropertyDescriptor(current, 'name');
+    if (descriptor) return descriptor.writable === true || descriptor.set !== undefined;
+  }
+  return Object.isExtensible(target);
+}
+
 export function abortError(
   reason?: unknown,
   fallbackMessage = 'Request aborted',
@@ -16,8 +28,7 @@ export function abortError(
     // reason) exposes a getter-only `name`, and assigning it throws from
     // inside abort handlers where an escape is fatal to the process.
     if (reason.name) return reason;
-    const descriptor = Object.getOwnPropertyDescriptor(reason, 'name');
-    if (descriptor ? descriptor.writable === true || descriptor.set !== undefined : Object.isExtensible(reason)) {
+    if (canAssignName(reason)) {
       reason.name = 'AbortError';
       return reason;
     }

@@ -834,7 +834,7 @@ describe('SubagentFaculty', () => {
         task: expect.objectContaining({ subagentId: result.subagentId }),
         origin: expect.objectContaining({ originatingBeadId: 'PSFNLIVE-hlh0' }),
         privacy: expect.objectContaining({
-          partnerNotification: 'policy_gated_companion_authored',
+          partnerNotification: 'companion_mediated_only',
         }),
       }),
     });

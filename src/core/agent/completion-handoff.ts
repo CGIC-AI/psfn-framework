@@ -119,7 +119,7 @@ export function buildCompletionHandoff(input: CompletionHandoffInput): Completio
     recommendedNextAction: summarizeCompletionText(input.recommendedNextAction, 'Parent companion should decide the next step.'),
     privacy: {
       visibility: 'internal_companion_context',
-      partnerNotification: 'policy_gated_companion_authored',
+      partnerNotification: 'companion_mediated_only',
       rawWorkerCompletionForPartner: 'not_allowed',
     },
     createdAt,

@@ -1460,7 +1460,7 @@ describe('wirePostTurnActionRuntime', () => {
         status: 'blocked',
         blocker: expect.objectContaining({ reason: 'eligibility_denied' }),
         privacy: expect.objectContaining({
-          partnerNotification: 'policy_gated_companion_authored',
+          partnerNotification: 'companion_mediated_only',
         }),
       }),
     });

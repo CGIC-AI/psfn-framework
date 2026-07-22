@@ -777,7 +777,7 @@ describe('ShardManager', () => {
         source: 'shard',
         task: expect.objectContaining({ shardId: result.shardId }),
         privacy: expect.objectContaining({
-          partnerNotification: 'policy_gated_companion_authored',
+          partnerNotification: 'companion_mediated_only',
         }),
       }),
     });

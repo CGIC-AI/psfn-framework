@@ -53,7 +53,11 @@ describe('completion handoff emitter', () => {
     expect(events).toHaveLength(1);
     const buffered = notices.peek('api:parent');
     expect(buffered).toHaveLength(1);
-    expect(buffered[0]).toMatchObject({ label: 'research', status: 'completed' });
+    expect(buffered[0]).toMatchObject({
+      label: 'research',
+      status: 'completed',
+      resultRefs: [{ kind: 'session', ref: 'subagent:subagent-1' }],
+    });
   });
 
   it('buffers a compact two-line notice that drains exactly once', async () => {
@@ -83,6 +87,7 @@ describe('completion handoff emitter', () => {
     const block = renderBackgroundCompletionsBlock(drained);
     expect(block).toContain('<background_completions>');
     expect(block).toContain('[background completion] fold-review — completed');
+    expect(block).toContain('[result refs: session=shard:shard-1]');
     // Two lines per notice, compact summary.
     const noticeLines = block.split('\n').filter(line => line.includes('fold-review') || line.startsWith('Shard finished.'));
     expect(noticeLines).toHaveLength(2);
@@ -195,6 +200,30 @@ describe('completion handoff emitter', () => {
     expect(drained[0]).toMatchObject({ summary: 'Run 2 finished.' });
   });
 
+  it('keeps the first result lookup visible while bounding long references', async () => {
+    const notices = new CompletionNoticeBuffer();
+    const eventBus = new EventBus();
+    await emitCompletionHandoff({
+      eventBus,
+      notices,
+      targetChannelId: 'api:parent',
+      handoff: {
+        source: 'subagent',
+        taskId: 'long-reference',
+        status: 'completed',
+        resultSummary: 'The delegated work returned a usable result.',
+        outputRefs: [{ kind: 'session', ref: `subagent:${'x'.repeat(500)}` }],
+        partialResult: false,
+        recommendedNextAction: 'Review the result.',
+      },
+    });
+
+    const block = renderBackgroundCompletionsBlock(notices.drain('api:parent'));
+    const detailLine = block.split('\n').find(line => line.includes('[result refs:'));
+    expect(detailLine).toContain('[result refs: session=subagent:');
+    expect(detailLine?.length).toBeLessThanOrEqual(160);
+  });
+
   it('marks partial interrupted handoffs without treating them as partner-facing text', () => {
     const handoff = buildCompletionHandoff({
       source: 'scheduled_loop',
@@ -215,7 +244,7 @@ describe('completion handoff emitter', () => {
     expect(handoff.status).toBe('interrupted');
     expect(handoff.privacy).toEqual({
       visibility: 'internal_companion_context',
-      partnerNotification: 'policy_gated_companion_authored',
+      partnerNotification: 'companion_mediated_only',
       rawWorkerCompletionForPartner: 'not_allowed',
     });
   });

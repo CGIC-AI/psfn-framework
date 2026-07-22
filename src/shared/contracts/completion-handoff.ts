@@ -113,7 +113,7 @@ export interface CompletionHandoffRecord {
   recommendedNextAction: string;
   privacy: {
     visibility: 'internal_companion_context';
-    partnerNotification: 'policy_gated_companion_authored';
+    partnerNotification: 'companion_mediated_only';
     rawWorkerCompletionForPartner: 'not_allowed';
   };
   createdAt: number;

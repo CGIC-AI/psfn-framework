@@ -118,6 +118,7 @@ import {
 import { createContactTrackingGate } from '../../core/contacts/tracking-gate.js';
 import { rehydratePersistedInternalState } from '../../core/self-model/internal-state-persistence.js';
 import { createPostgresObserverEvalSidecarStore } from '../../core/eval/observer-sidecar/persistence.js';
+import { resolveConfigTenantPoolScope } from '../../persistence/postgres/tenant-pool-scope.js';
 import { createEmoSimDyadRelationshipAdvisoryProvider } from '../../core/eval/observer-sidecar/dyad-relationship-advisory-provider.js';
 import { ModuleLoader } from '../../system/modules/loader.js';
 import { DEFAULT_GATEWAY_TOOL_METADATA_COVERAGE } from '../../core/agent/tool-wiring-validator.js';
@@ -1962,7 +1963,11 @@ async function main(): Promise<void> {
     && dyadEmosimAgentName
       ? createEmoSimDyadRelationshipAdvisoryProvider({
         getLatestObservation: () =>
-          createPostgresObserverEvalSidecarStore(postgresDatabaseUrl).getLatestObservation(),
+          createPostgresObserverEvalSidecarStore(
+            postgresDatabaseUrl,
+            {},
+            resolveConfigTenantPoolScope(config),
+          ).getLatestObservation(),
       })
       : null;
   if (!dyadRelationshipAdvisoryProvider) {

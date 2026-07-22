@@ -5,6 +5,7 @@ import type { TurnID } from '../../../shared/contracts/runtime.js';
 import type { ObserverEvalSidecarLeverSettings } from '../../../shared/contracts/runtime.js';
 import { createDefaultObserverEvalSidecarSettings } from '../../../system/config/runtime-config-contracts.js';
 import type { SubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
+import type { TenantPoolScope } from '../../../persistence/postgres/tenant-pool-scope.js';
 import { createObserverEmotionCrosswalk } from './crosswalk.js';
 import {
   runEmoSimProjectedStimulus,
@@ -45,7 +46,7 @@ const OBSERVER_EVAL_LEVER_MIN_RETENTION_DAYS = 90;
 
 export function createObserverEvalSidecarRuntimeFromConfig(
   config: Pick<SubstrateConfig, 'observerEvalSidecar' | 'persistenceBackend'>,
-  dependencies: { postgresDatabaseUrl?: string; eventBus?: EventBus },
+  dependencies: { postgresDatabaseUrl?: string; eventBus?: EventBus; tenant?: TenantPoolScope },
 ): ObserverEvalSidecarRuntime {
   const settings = structuredClone(
     config.observerEvalSidecar ?? createDefaultObserverEvalSidecarSettings(),
@@ -54,6 +55,7 @@ export function createObserverEvalSidecarRuntimeFromConfig(
     config,
     settings,
     dependencies.postgresDatabaseUrl,
+    dependencies.tenant,
   );
 
   return {
@@ -106,6 +108,7 @@ function createObserverEvalSidecarPersistence(
   config: Pick<SubstrateConfig, 'persistenceBackend'>,
   settings: ObserverEvalSidecarConfig,
   postgresDatabaseUrlInput: string | undefined,
+  tenant: TenantPoolScope | undefined,
 ): ObserverEvalSidecarPersistencePort | null {
   if (settings.persistence?.enabled !== true) {
     return null;
@@ -121,7 +124,12 @@ function createObserverEvalSidecarPersistence(
       'observerEvalSidecar.persistence requires an explicit PostgreSQL database URL',
     );
   }
-  return createPostgresObserverEvalSidecarStore(postgresDatabaseUrl);
+  // Per-companion store: pin the tenant search_path/role so a multi-companion
+  // follower's sidecar write pool operates inside its own companion schema
+  // instead of defaulting to the primary tenant's `public` (psfn-framework-3ack).
+  // This is the memoized first creation in the agent process, so it decides the
+  // scope the advisory read path later reuses.
+  return createPostgresObserverEvalSidecarStore(postgresDatabaseUrl, {}, tenant);
 }
 
 interface EmoSimObserverEvalSidecarOptions {

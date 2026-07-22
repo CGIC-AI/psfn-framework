@@ -8,6 +8,7 @@ import {
   queryOne,
 } from '../../../persistence/postgres.js';
 import { POSTGRES_OBSERVER_EVAL_SIDECAR_MIGRATIONS } from '../../../persistence/postgres/migrations.js';
+import type { TenantPoolScope } from '../../../persistence/postgres/tenant-pool-scope.js';
 import type { ObserverEmotionCrosswalkOutput } from './crosswalk.js';
 import type { EmoSimAdapterRunResult } from './emosim-adapter.js';
 import type { ObserverAppraisalProjectionResult } from './projection.js';
@@ -351,7 +352,7 @@ interface SqlWhere {
   values: unknown[];
 }
 
-const storeByDatabaseUrl = new Map<string, PostgresObserverEvalSidecarStore>();
+const storeByPoolKey = new Map<string, PostgresObserverEvalSidecarStore>();
 
 export class PostgresObserverEvalSidecarStore
 implements ObserverEvalSidecarPersistencePort, ObserverEvalSidecarLeverPersistencePort {
@@ -366,10 +367,12 @@ implements ObserverEvalSidecarPersistencePort, ObserverEvalSidecarLeverPersisten
   static connect(
     databaseUrl: string,
     options: StoreOptions = {},
+    tenant?: TenantPoolScope,
   ): PostgresObserverEvalSidecarStore {
     const pool = createPostgresPool(databaseUrl, {
       applicationName: 'psfn-observer-eval-sidecar',
       allowExitOnIdle: true,
+      ...(tenant ? { schema: tenant.schema, role: tenant.role } : {}),
     });
     return new PostgresObserverEvalSidecarStore(pool, options);
   }
@@ -741,16 +744,22 @@ implements ObserverEvalSidecarPersistencePort, ObserverEvalSidecarLeverPersisten
 export function createPostgresObserverEvalSidecarStore(
   databaseUrl: string,
   options: StoreOptions = {},
+  tenant?: TenantPoolScope,
 ): PostgresObserverEvalSidecarStore {
+  // Key the memo by databaseUrl AND tenant schema: distinct companion scopes
+  // sharing one databaseUrl must never resolve to the same pooled store, while
+  // every caller inside one companion process (write path and advisory read)
+  // shares a single memoized instance (psfn-framework-3ack).
+  const memoKey = tenant ? `${databaseUrl} ${tenant.schema}` : databaseUrl;
   if (!options.nowMs) {
-    const existing = storeByDatabaseUrl.get(databaseUrl);
+    const existing = storeByPoolKey.get(memoKey);
     if (existing) {
       return existing;
     }
   }
-  const store = PostgresObserverEvalSidecarStore.connect(databaseUrl, options);
+  const store = PostgresObserverEvalSidecarStore.connect(databaseUrl, options, tenant);
   if (!options.nowMs) {
-    storeByDatabaseUrl.set(databaseUrl, store);
+    storeByPoolKey.set(memoKey, store);
   }
   return store;
 }

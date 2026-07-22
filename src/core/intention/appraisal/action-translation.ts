@@ -161,6 +161,11 @@ export function decisionsToPostTurnActionCandidates(
       if (decision.followUp?.delivery === 'external') {
         const outboundRunAt = resolveOutboundRunAt(runAt, now, options);
         const concernIds = normalizeConcernIds(decision.followUp.concernIds);
+        const canonicalContactKey = options.appraisalConcernScope?.canonicalContactKey?.trim();
+        const appraisalConcernScope = {
+          channelId: options.appraisalConcernScope?.channelId.trim() || context.message.channelId,
+          ...(canonicalContactKey ? { canonicalContactKey } : {}),
+        };
         candidates.push({
           kind: INTENTION_OUTBOUND_MESSAGE_ACTION_KIND,
           dedupeKey: `${INTENTION_OUTBOUND_MESSAGE_ACTION_KIND}:${context.message.id}:${hashString(content)}`,
@@ -176,6 +181,7 @@ export function decisionsToPostTurnActionCandidates(
             ...(decision.followUp.requiresActiveConcern === true
               ? { requiresActiveConcern: true }
               : {}),
+            appraisalFollowUp: appraisalConcernScope,
             ...(originIcpRootInitiationId ? { originIcpRootInitiationId } : {}),
           } satisfies IntentionOutboundMessageActionPayload,
           maxRetries: 1,
@@ -324,6 +330,21 @@ function normalizeSocialDesireProvenance(
   return { contactId, consentId, orientation: orientation as SocialDesireOrientation };
 }
 
+function normalizeAppraisalFollowUpProvenance(
+  value: unknown,
+): IntentionOutboundMessageActionPayload['appraisalFollowUp'] | null {
+  if (!isRecord(value)) return null;
+  const channelId = typeof value.channelId === 'string' ? value.channelId.trim() : '';
+  const canonicalContactKey = typeof value.canonicalContactKey === 'string'
+    ? value.canonicalContactKey.trim()
+    : '';
+  if (!channelId) return null;
+  return {
+    channelId,
+    ...(canonicalContactKey ? { canonicalContactKey } : {}),
+  };
+}
+
 export function normalizeIntentionOutboundMessageActionPayload(
   payload: unknown,
 ): IntentionOutboundMessageActionPayload | null {
@@ -357,6 +378,12 @@ export function normalizeIntentionOutboundMessageActionPayload(
     if (!normalized) return null;
     socialDesire = normalized;
   }
+  let appraisalFollowUp: IntentionOutboundMessageActionPayload['appraisalFollowUp'];
+  if (payload.appraisalFollowUp !== undefined) {
+    const normalized = normalizeAppraisalFollowUpProvenance(payload.appraisalFollowUp);
+    if (!normalized) return null;
+    appraisalFollowUp = normalized;
+  }
   return {
     channelId,
     channelType: channelType as ChannelType,
@@ -365,6 +392,7 @@ export function normalizeIntentionOutboundMessageActionPayload(
     ...(pendingFollowUpId ? { pendingFollowUpId } : {}),
     ...(concernIds.length > 0 ? { concernIds } : {}),
     ...(requiresActiveConcern ? { requiresActiveConcern } : {}),
+    ...(appraisalFollowUp ? { appraisalFollowUp } : {}),
     ...(socialDesire ? { socialDesire } : {}),
     ...(typeof originIcpRootInitiationId === 'string'
       ? { originIcpRootInitiationId }

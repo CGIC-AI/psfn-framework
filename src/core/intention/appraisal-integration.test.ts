@@ -10,6 +10,7 @@ import { Scheduler } from '../scheduler/scheduler.js';
 import { InternalStateComputer } from '../self-model/state.js';
 import type { AgentResponse, InferredPostTurnAction, SubstrateMessage } from '../../shared/contracts/runtime.js';
 import { INTENTION_OUTBOUND_MESSAGE_ACTION_KIND } from './appraisal.js';
+import { hashString } from './appraisal/shared.js';
 import type { OutreachOutboxAppendInput, OutreachOutboxRecord } from './outreach-outbox.js';
 
 function makeMessage(): SubstrateMessage {
@@ -72,12 +73,15 @@ function makeResponse(internalState = makeInternalState()): AgentResponse {
 
 function makeOutboundAction(
   payload: Record<string, unknown>,
+  source: 'appraisal' | 'weighted-thought' = 'weighted-thought',
 ): InferredPostTurnAction {
   return {
     id: 'outbound-action-1',
     kind: INTENTION_OUTBOUND_MESSAGE_ACTION_KIND,
     payload,
-    dedupeKey: 'outbound-action-1',
+    dedupeKey: source === 'weighted-thought'
+      ? 'intention.outbound_message:weighted-thought:thought-1:content-hash'
+      : `${INTENTION_OUTBOUND_MESSAGE_ACTION_KIND}:source-message-1:${hashString(String(payload.content ?? ''))}`,
     channelId: 'primary-dm',
     sourceMessageId: 'source-message-1',
     inferredAt: Date.now(),
@@ -135,6 +139,10 @@ function registerOutboundHandlerHarness(options: {
     listQuarantined: vi.fn(),
   };
 
+  const getActiveConcerns = vi.fn(
+    () => (options.activeConcernIds ?? []).map(id => ({ id })),
+  );
+
   void wireReflectionRuntime(
     { registerTool: vi.fn() },
     scheduler,
@@ -170,7 +178,7 @@ function registerOutboundHandlerHarness(options: {
       } as any,
       pendingFollowUpStore: pendingFollowUpStore as any,
       onIntentionFollowUpActivated,
-      getActiveConcerns: () => (options.activeConcernIds ?? []).map(id => ({ id })),
+      getActiveConcerns,
     },
   );
 
@@ -192,11 +200,37 @@ function registerOutboundHandlerHarness(options: {
     sessionAssistant,
     onIntentionFollowUpActivated,
     pendingFollowUpStore,
+    getActiveConcerns,
     cleanup: () => rmSync(tempDir, { recursive: true, force: true }),
   };
 }
 
 describe('intention appraisal runtime integration', () => {
+  it('does not let an unrelated active concern clear an off-topic external appraisal draft', async () => {
+    const harness = registerOutboundHandlerHarness({
+      activeConcernIds: ['concern-user-seems-tired'],
+    });
+    try {
+      const result = await harness.handler(makeOutboundAction({
+        channelId: 'primary-dm',
+        channelType: 'discord',
+        content: "Let's book Paris; I'll sort the flights tonight.",
+        reason: 'Spontaneous trip planning.',
+        concernIds: ['concern-user-seems-tired'],
+      }, 'appraisal'));
+
+      expect(result).toEqual({ detail: 'blocked:appraisal_consent_required' });
+      expect(harness.dispatch).not.toHaveBeenCalled();
+      expect(harness.getActiveConcerns).not.toHaveBeenCalled();
+      expect(harness.outboxRecords.map(record => record.phase)).toEqual(['queued', 'blocked']);
+      expect(harness.outboxRecords[1]).toMatchObject({
+        reason: 'appraisal_consent_required',
+      });
+    } finally {
+      harness.cleanup();
+    }
+  });
+
   it('blocks stale outbound actions when their linked concern has been cleared', async () => {
     const harness = registerOutboundHandlerHarness({
       pendingFollowUp: makePendingFollowUp(),
@@ -217,7 +251,7 @@ describe('intention appraisal runtime integration', () => {
       expect(harness.outboxRecords.map(record => record.phase)).toEqual(['queued', 'blocked']);
       expect(harness.outboxRecords[1]).toMatchObject({
         reason: 'stale_concern',
-        dedupeKey: 'outbound-action-1',
+        dedupeKey: 'intention.outbound_message:weighted-thought:thought-1:content-hash',
       });
       expect(harness.sessionAudit).toHaveBeenCalledWith(
         'primary-dm',
@@ -288,7 +322,7 @@ describe('intention appraisal runtime integration', () => {
       version: 1,
       phase: 'sent',
       actionId: 'outbound-action-1',
-      dedupeKey: 'outbound-action-1',
+      dedupeKey: 'intention.outbound_message:weighted-thought:thought-1:content-hash',
       channelId: 'primary-dm',
       channelType: 'discord',
       sourceMessageId: 'source-message-1',

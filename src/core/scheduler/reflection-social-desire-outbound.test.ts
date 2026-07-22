@@ -140,6 +140,7 @@ interface WireOptions {
   dataDir?: string;
   store?: SocialDesireStorePort;
   intentionAppraisalEnabled?: boolean;
+  getActiveConcerns?: ReturnType<typeof vi.fn>;
 }
 
 function wire(options: WireOptions = {}) {
@@ -265,6 +266,7 @@ function wire(options: WireOptions = {}) {
         evaluate: vi.fn(async () => ({ allowed: true as const })),
       },
       intentionAppraisalEnabled: options.intentionAppraisalEnabled ?? true,
+      ...(options.getActiveConcerns ? { getActiveConcerns: options.getActiveConcerns } : {}),
       ...(options.icp
         ? {
             icpIntentionCandidateAdapter: {
@@ -433,6 +435,32 @@ describe('social-desire provenance at the outbound gate', () => {
     await expect(handler(action)).resolves.toEqual({ detail: 'skipped:terminal_dedupe:sent' });
     expect(dispatch).toHaveBeenCalledOnce();
     expect(sent).toHaveLength(1);
+  });
+
+  it('accepts an exact-text appraisal follow-up ratified by social desire and re-fetches its original concern scope', async () => {
+    const getActiveConcerns = vi.fn(async () => [{ id: 'concern-1' }]);
+    const { handler, dispatch, consents } = wire({ getActiveConcerns });
+    const consent = consents.issue({ contactId: CONTACT_ID, orientation: 'warm', nowMs: Date.now() });
+    const baseAction = desireAction(consent.consentId);
+    const action = {
+      ...baseAction,
+      payload: {
+        ...baseAction.payload,
+        concernIds: ['concern-1'],
+        appraisalFollowUp: {
+          channelId: 'session:source',
+          canonicalContactKey: CONTACT_ID,
+        },
+      },
+    };
+    bindConsentToAction(consents, consent.consentId, action);
+
+    await expect(handler(action)).resolves.toEqual({ detail: 'sent' });
+    expect(dispatch).toHaveBeenCalledOnce();
+    expect(getActiveConcerns).toHaveBeenCalledWith({
+      channelId: 'session:source',
+      canonicalContactKey: CONTACT_ID,
+    });
   });
 
   it.each([

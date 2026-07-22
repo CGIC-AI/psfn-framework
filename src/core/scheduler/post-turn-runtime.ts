@@ -23,7 +23,11 @@ import {
   toInferredPostTurnActions,
 } from '../intention/appraisal.js';
 import { MotivationBridge } from '../intention/motivation.js';
-import { hashString } from '../intention/appraisal/shared.js';
+import {
+  applyExternalAppraisalConcernRequirement,
+  createAppraisalConcernScope,
+  resolveAppraisalOutboundProvenance,
+} from '../intention/appraisal/outbound-provenance.js';
 import { fingerprintSocialDesireOutboundAction } from '../intention/social-desire-outreach.js';
 import {
   evaluatePendingFollowUpActivationState,
@@ -154,11 +158,6 @@ export function wirePostTurnRuntime(
     return ids;
   };
 
-  const decisionReferencesConcernPressure = (decision: { reason?: string; followUp?: { content?: string } }): boolean => {
-    const text = `${decision.reason ?? ''} ${decision.followUp?.content ?? ''}`.toLowerCase();
-    return /\bconcerns?\b/.test(text) || /\bopen threads?\b/.test(text) || /\bactive high-priority\b/.test(text);
-  };
-
   const resolveOutboundProvenanceBlockReason = async (
     action: InferredPostTurnAction,
     payload: IntentionOutboundMessageActionPayload,
@@ -168,28 +167,9 @@ export function wirePostTurnRuntime(
     const linkedConcernIds = payload.concernIds ?? [];
     const requiresActiveConcern = payload.requiresActiveConcern === true;
     const socialDesire = payload.socialDesire;
-    const appraisalFollowUp = payload.appraisalFollowUp;
-    const legacyAppraisalDedupe = [
-      INTENTION_OUTBOUND_MESSAGE_ACTION_KIND,
-      action.sourceMessageId,
-      hashString(payload.content),
-    ].join(':');
-    const isAppraisalFollowUp = Boolean(appraisalFollowUp)
-      || action.dedupeKey === legacyAppraisalDedupe;
-
-    // The appraisal model may propose external text, but it is not the
-    // companion's consent moment. Only the existing exact-action, single-use
-    // social-desire consent can ratify that draft for delivery. The dedupe
-    // fallback also fail-closes already-queued pre-marker appraisal actions.
-    if (isAppraisalFollowUp && !socialDesire) {
-      return 'appraisal_consent_required';
-    }
-    if (
-      appraisalFollowUp?.canonicalContactKey
-      && socialDesire
-      && appraisalFollowUp.canonicalContactKey !== socialDesire.contactId
-    ) {
-      return 'appraisal_consent_scope_mismatch';
+    const appraisalProvenance = resolveAppraisalOutboundProvenance(action, payload);
+    if (appraisalProvenance.blockReason) {
+      return appraisalProvenance.blockReason;
     }
 
     if (
@@ -258,12 +238,9 @@ export function wirePostTurnRuntime(
       if (!runtimeOptions.getActiveConcerns) {
         return 'active_concern_unavailable';
       }
-      const activeConcerns = await Promise.resolve(runtimeOptions.getActiveConcerns({
-        channelId: appraisalFollowUp?.channelId ?? action.channelId,
-        ...(appraisalFollowUp?.canonicalContactKey
-          ? { canonicalContactKey: appraisalFollowUp.canonicalContactKey }
-          : {}),
-      }));
+      const activeConcerns = await Promise.resolve(
+        runtimeOptions.getActiveConcerns(appraisalProvenance.concernScope),
+      );
       const activeConcernIds = new Set(normalizeConcernIds(activeConcerns));
       if (linkedConcernIds.length > 0) {
         const hasLiveLinkedConcern = linkedConcernIds.some(id => activeConcernIds.has(id));
@@ -742,18 +719,7 @@ export function wirePostTurnRuntime(
           }
         }
 
-        for (const decision of decisions) {
-          if (decision.type !== 'followUp' || decision.followUp?.delivery !== 'external') {
-            continue;
-          }
-          const suppliedConcernIds = decision.followUp.concernIds ?? [];
-          if (suppliedConcernIds.length === 0 && decisionReferencesConcernPressure(decision)) {
-            decision.followUp = {
-              ...decision.followUp,
-              requiresActiveConcern: true,
-            };
-          }
-        }
+        applyExternalAppraisalConcernRequirement(decisions);
 
         const candidateNow = Date.now();
         const decisionCandidates = decisionsToPostTurnActionCandidates(
@@ -765,12 +731,10 @@ export function wirePostTurnRuntime(
             now: candidateNow,
             minimumOutboundRunAt: resolveMinimumOutboundRunAt(activeConcerns, candidateNow),
             proactiveOutboundQuietHours: runtimeOptions.episodicProcessingRestWindow,
-            appraisalConcernScope: {
-              channelId: resolvedSessionId,
-              ...(context.canonicalContactKey
-                ? { canonicalContactKey: context.canonicalContactKey }
-                : {}),
-            },
+            appraisalConcernScope: createAppraisalConcernScope(
+              resolvedSessionId,
+              context.canonicalContactKey,
+            ),
             ...(isBackgroundAppraisalChannel(context.message.channelId)
               ? { surfacePendingFollowUpsImmediately: true }
               : {}),

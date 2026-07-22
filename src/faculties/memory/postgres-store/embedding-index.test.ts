@@ -1,6 +1,8 @@
-import { describe, expect, it } from 'vitest';
+import type { Pool } from 'pg';
+import { describe, expect, it, vi } from 'vitest';
 import {
   L2_EMBEDDING_ANN_INDEX_BASE_NAME,
+  buildL2EmbeddingAnnIndexConcurrently,
   buildL2EmbeddingAnnIndexCreateStatement,
   embeddingAnnOrderExpression,
   l2EmbeddingAnnIndexName,
@@ -38,6 +40,22 @@ describe('L2 embedding ANN index build statement', () => {
     const statement = buildL2EmbeddingAnnIndexCreateStatement(8, { concurrent: true });
     expect(statement).toContain('CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_l2_memories_embedding_hnsw_cosine_d8');
     expect(statement).toContain('::vector(8)');
+  });
+});
+
+describe('L2 embedding ANN index background build', () => {
+  it('reports degraded instead of rejecting when connection acquisition fails', async () => {
+    const connectionError = new Error('database unavailable');
+    const pool = {
+      connect: vi.fn().mockRejectedValue(connectionError),
+    } as unknown as Pool;
+
+    await expect(buildL2EmbeddingAnnIndexConcurrently(pool, 4)).resolves.toMatchObject({
+      status: 'degraded',
+      indexName: `${L2_EMBEDDING_ANN_INDEX_BASE_NAME}_d4`,
+      droppedIndexes: [],
+      error: connectionError,
+    });
   });
 });
 

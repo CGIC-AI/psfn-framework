@@ -310,6 +310,29 @@ describe('canary stream-delta guard (d269: streamed reply frames)', () => {
     expect(JSON.stringify(log.lines)).not.toContain(token);
   });
 
+  it('does not reopen a poisoned stream when clean streams fill the state cache', () => {
+    const token = generateCanaryToken();
+    const store = makeFakeEventStore();
+    const guard = createCanaryEgressGuard({ cogSecEvents: store });
+
+    expect(guard.inspectApiStreamDelta({
+      requestId: 'req-poisoned', text: `leak ${token}`, token,
+    })).toEqual({ forward: false });
+
+    // Exceed the bounded state cache with independent clean streams. A
+    // poisoned enforce-mode stream must remain closed throughout the flood.
+    for (let index = 0; index < 513; index += 1) {
+      expect(guard.inspectApiStreamDelta({
+        requestId: `req-clean-${index}`, text: 'clean frame', token,
+      })).toEqual({ forward: true });
+    }
+
+    expect(guard.inspectApiStreamDelta({
+      requestId: 'req-poisoned', text: 'clean tail', token,
+    })).toEqual({ forward: false });
+    expect(store.inputs).toHaveLength(1);
+  });
+
   it('catches a token split across two frames before the completing fragment egresses', () => {
     const token = generateCanaryToken();
     const store = makeFakeEventStore();

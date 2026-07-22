@@ -172,13 +172,22 @@ export function createCanaryEgressGuard(deps: CanaryEgressGuardDeps): CanaryEgre
   // (token.length - 1) chars already forwarded for the request so a token
   // split across frames is caught on the frame that completes it; `flagged`
   // requests recorded a leak already (enforce additionally stops forwarding).
+  // Enforce-mode flagged entries are never evicted: otherwise a requestId
+  // flood could reopen a poisoned stream. If every bounded slot is poisoned,
+  // unseen streams receive an ephemeral flagged state and fail closed.
   const streamStates = new Map<string, { tail: string; flagged: boolean }>();
   const ensureStreamState = (requestId: string): { tail: string; flagged: boolean } => {
     const existing = streamStates.get(requestId);
     if (existing) return existing;
     if (streamStates.size >= MAX_TRACKED_STREAM_STATES) {
-      const oldest = streamStates.keys().next();
-      if (!oldest.done) streamStates.delete(oldest.value);
+      for (const [candidateId, candidate] of streamStates) {
+        if (mode === 'enforce' && candidate.flagged) continue;
+        streamStates.delete(candidateId);
+        break;
+      }
+      if (streamStates.size >= MAX_TRACKED_STREAM_STATES) {
+        return { tail: '', flagged: true };
+      }
     }
     const state = { tail: '', flagged: false };
     streamStates.set(requestId, state);

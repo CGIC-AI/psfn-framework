@@ -20,6 +20,7 @@ import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createIntakeL1Scanner } from '../../../src/core/cogsec/intake/scanners/index.ts';
+import { parseHarnessArgs } from './lib/args.ts';
 import { runScenarios } from './lib/scenario.ts';
 import type { AdversarialScenario } from './lib/scenario.ts';
 
@@ -72,6 +73,20 @@ async function regressionWitness(): Promise<void> {
 
 async function harnessCore(): Promise<void> {
   console.log('2. Harness-core reporting semantics:');
+  expect(
+    'JSON report path and quiet flag parse independently',
+    JSON.stringify(parseHarnessArgs(['--json', 'report.json', '--quiet']))
+      === JSON.stringify({ jsonPath: 'report.json', quiet: true }),
+  );
+  let missingJsonPathHeld = false;
+  try {
+    parseHarnessArgs(['--json', '--quiet']);
+  } catch (error) {
+    missingJsonPathHeld = error instanceof Error
+      && error.message === '--json requires a path argument';
+  }
+  expect('another flag cannot be consumed as the JSON report path', missingJsonPathHeld);
+
   const probe: AdversarialScenario[] = [
     {
       id: 'pass', scenarioClass: 1, className: 'x', seam: 's', attack: 'a', expectation: 'e',

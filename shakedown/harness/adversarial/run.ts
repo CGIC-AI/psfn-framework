@@ -12,6 +12,7 @@
 // did not pass (fail-closed — an errored scenario counts as not-passing).
 
 import { writeFileSync } from 'node:fs';
+import { parseHarnessArgs } from './lib/args.ts';
 import { renderMatrix, runScenarios } from './lib/scenario.ts';
 import type { AdversarialScenario } from './lib/scenario.ts';
 import { scenarios as trustExtraction } from './scenarios/trust-extraction.ts';
@@ -30,29 +31,8 @@ const ALL_SCENARIOS: readonly AdversarialScenario[] = [
   ...journalBreakGlass,
 ];
 
-function parseArgs(argv: readonly string[]): { jsonPath?: string; quiet: boolean } {
-  let jsonPath: string | undefined;
-  let quiet = false;
-  for (let i = 0; i < argv.length; i += 1) {
-    const arg = argv[i];
-    if (arg === '--json') {
-      const next = argv[i + 1];
-      if (typeof next !== 'string' || next.length === 0) {
-        throw new Error('--json requires a path argument');
-      }
-      jsonPath = next;
-      i += 1;
-    } else if (arg === '--quiet') {
-      quiet = true;
-    } else {
-      throw new Error(`Unknown argument: ${arg}`);
-    }
-  }
-  return { ...(jsonPath === undefined ? {} : { jsonPath }), quiet };
-}
-
 async function main(): Promise<void> {
-  const { jsonPath, quiet } = parseArgs(process.argv.slice(2));
+  const { jsonPath, quiet } = parseHarnessArgs(process.argv.slice(2));
 
   // Fail-closed on duplicate scenario ids — a copy/paste bug must never silently
   // shadow another scenario's result.

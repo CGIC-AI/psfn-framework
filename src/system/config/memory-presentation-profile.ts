@@ -2,7 +2,7 @@ import { isRecord } from '../../shared/utils/types.js';
 
 /**
  * Versioned, schema-validated presentation profile for the retrieval formatting
- * layer (psfn-framework-0236). This governs HOW retrieved memory is rendered
+ * layer (0236). This governs HOW retrieved memory is rendered
  * into the companion-facing prompt block — section ordering, heading wording,
  * valence markers, recency-band labels, the always-on episode cap, per-type
  * display caps, and optional withheld-memory wording overrides. It deliberately

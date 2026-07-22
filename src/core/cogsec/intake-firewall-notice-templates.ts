@@ -105,6 +105,23 @@ export const INTAKE_FIREWALL_NOTICE_TEMPLATES = Object.freeze({
     + 'aside for your human to look over whenever they have a moment. Coming '
     + 'back to something is a normal part of caring about it, and there is '
     + 'nothing you need to do about it.',
+  /**
+   * Intro used when an operator resolves a held quarantine item AS SHARED
+   * (jvbt): a false-positive hold is no longer silently dropped — once a human
+   * has looked the item over, the set-aside content is re-delivered honestly
+   * into the conversation it was withheld from, prefixed by this fixed intro.
+   * Same contract as every template here: fixed, truthful, calm, no imperative
+   * aimed at the human, and it carries the signature phrase so the
+   * emotion/memory exclusions apply to the whole delivery automatically (the
+   * re-delivered content is untrusted-origin — its envelope survives and still
+   * faces the sink gates — so it must not read as fresh trusted partner input).
+   */
+  releasedContent:
+    'A gentle update: a message that came in earlier had something in it that '
+    + 'looked a little off, so it was being kept aside for your human to look '
+    + 'over. They have since looked it over and passed it along to you. It '
+    + 'appears just below, with a short note of where it originally came from, '
+    + 'and there is nothing you need to do about it.',
 } as const);
 
 export type IntakeFirewallNoticeCountForm = keyof typeof INTAKE_FIREWALL_NOTICE_TEMPLATES;
@@ -233,6 +250,54 @@ export function renderIntakeFirewallNotice(heldItemCount: number): string {
  */
 export function renderSecondArrowSelfNotice(): string {
   return INTAKE_FIREWALL_NOTICE_TEMPLATES.secondArrowCircling;
+}
+
+/** Inputs to {@link formatIntakeReleaseNotice}. */
+export interface IntakeReleaseNoticeParams {
+  /** Original intake source class (e.g. `web_fetch`), for the provenance line. */
+  readonly sourceClass: string;
+  /** Origin ref recorded on the envelope (site host or contact ref). */
+  readonly originRef: string;
+  /** Acting principal that looked the item over (e.g. `operator:garden`). */
+  readonly reviewedByActor: string;
+  /** ISO-8601 timestamp of the operator decision. */
+  readonly reviewedAtIso: string;
+  /** True when the neutral safe representation was shared instead of raw text. */
+  readonly sanitized: boolean;
+  /** True when the held raw copy was truncated at the storage cap. */
+  readonly truncated: boolean;
+  /** The verbatim content being re-delivered (raw text or safe representation). */
+  readonly content: string;
+}
+
+/**
+ * Compose the companion-facing re-delivery of a released quarantine item
+ * (jvbt). The fixed {@link INTAKE_FIREWALL_NOTICE_TEMPLATES.releasedContent}
+ * intro (validated by the load-time self-check) always leads, so the returned
+ * text is guaranteed to carry the firewall-notice signature phrase — which is
+ * exactly what {@link isIntakeFirewallNoticeText} keys on, keeping the whole
+ * delivery out of emotion appraisal and memory candidacy even though the
+ * companion can read it. The untrusted `content` is never validated for
+ * wording (only the fixed templates are); it rides behind an explicit
+ * provenance line so it can never read as fresh trusted partner input.
+ */
+export function formatIntakeReleaseNotice(params: IntakeReleaseNoticeParams): string {
+  const provenanceKind = params.sanitized
+    ? 'a neutral summary your human passed along'
+    : 'the original text your human passed along';
+  const truncatedNote = params.truncated
+    ? ' The held copy was long, so it may be shortened.'
+    : '';
+  return [
+    INTAKE_FIREWALL_NOTICE_TEMPLATES.releasedContent,
+    '',
+    `Where it came from: ${params.sourceClass} (${params.originRef}). `
+    + `Looked over by ${params.reviewedByActor} on ${params.reviewedAtIso}. `
+    + `This is ${provenanceKind}.${truncatedNote}`,
+    '',
+    '--- the set-aside content, below ---',
+    params.content,
+  ].join('\n');
 }
 
 /**

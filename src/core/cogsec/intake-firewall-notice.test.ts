@@ -5,6 +5,7 @@ import { evaluateCogSecMemoryCandidacy } from './memory-candidacy.js';
 import {
   FORBIDDEN_ALARM_WORDS,
   FORBIDDEN_HUMAN_IMPERATIVE_WORDS,
+  formatIntakeReleaseNotice,
   INTAKE_FIREWALL_NOTICE_SIGNATURE,
   INTAKE_FIREWALL_NOTICE_TEMPLATES,
   isIntakeFirewallNoticeText,
@@ -93,6 +94,47 @@ describe('intake-firewall notice wording contract (htm9.12)', () => {
     expect(isIntakeFirewallNoticeText(renderIntakeFirewallNotice(3))).toBe(true);
     expect(isIntakeFirewallNoticeText('the weather is nice today')).toBe(false);
     expect(isIntakeFirewallNoticeText(undefined)).toBe(false);
+  });
+});
+
+describe('released-content re-delivery notice (jvbt)', () => {
+  const sample = (overrides: Partial<Parameters<typeof formatIntakeReleaseNotice>[0]> = {}) =>
+    formatIntakeReleaseNotice({
+      sourceClass: 'web_fetch',
+      originRef: 'https://suspect.example/article',
+      reviewedByActor: 'operator:garden',
+      reviewedAtIso: '2026-07-21T12:00:00.000Z',
+      sanitized: false,
+      truncated: false,
+      content: 'the legitimate content that was held by mistake',
+      ...overrides,
+    });
+
+  it('carries the firewall signature so the whole delivery is excluded from appraisal/memory', () => {
+    const text = sample();
+    expect(text).toContain(INTAKE_FIREWALL_NOTICE_SIGNATURE);
+    expect(isIntakeFirewallNoticeText(text)).toBe(true);
+    const memory = evaluateCogSecMemoryCandidacy({ text });
+    expect(memory.disposition).toBe('reject');
+    expect(memory.reasonCodes).toContain('intake_firewall_quarantine_notice');
+  });
+
+  it('re-delivers the content verbatim behind an explicit provenance line', () => {
+    const text = sample();
+    expect(text).toContain('the legitimate content that was held by mistake');
+    expect(text).toContain('Where it came from: web_fetch (https://suspect.example/article)');
+    expect(text).toContain('operator:garden');
+    // Untrusted content is never validated for wording; it must not read as
+    // fresh trusted partner input, hence the leading provenance framing.
+    expect(text.indexOf(INTAKE_FIREWALL_NOTICE_SIGNATURE))
+      .toBeLessThan(text.indexOf('the legitimate content'));
+  });
+
+  it('names the sanitized vs raw form and flags a truncated held copy', () => {
+    expect(sample({ sanitized: true })).toContain('a neutral summary your human passed along');
+    expect(sample({ sanitized: false })).toContain('the original text your human passed along');
+    expect(sample({ truncated: true })).toContain('may be shortened');
+    expect(sample({ truncated: false })).not.toContain('may be shortened');
   });
 });
 

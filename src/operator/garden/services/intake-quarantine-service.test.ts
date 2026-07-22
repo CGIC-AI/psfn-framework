@@ -20,6 +20,7 @@ import type { CogSecCreateEventInput, CogSecUpdateEventInput } from '../../../co
 import {
   createAdminIntakeQuarantineService,
   type AdminIntakeQuarantineService,
+  type IntakeReleaseRedeliveryInput,
 } from './intake-quarantine-service.js';
 import type { GardenRequestContext } from '../garden-request-context.js';
 
@@ -105,6 +106,13 @@ describe('admin intake quarantine service (htm9.11)', () => {
   let mutations: Array<{ action: string; list: string; pattern: string }>;
   let createdEvents: CogSecCreateEventInput[];
   let updatedEvents: Array<{ caseId: string; input: CogSecUpdateEventInput }>;
+  let redeliveries: IntakeReleaseRedeliveryInput[];
+  let redeliverResult: (input: IntakeReleaseRedeliveryInput) => {
+    delivered: boolean;
+    channelId?: string;
+    entryId?: number | null;
+    reason?: string;
+  };
   let service: AdminIntakeQuarantineService;
 
   const buildService = (overrides: {
@@ -112,6 +120,10 @@ describe('admin intake quarantine service (htm9.11)', () => {
     onQueueChanged?: () => void;
   } = {}) => createAdminIntakeQuarantineService({
     store,
+    redeliverReleased: (input) => {
+      redeliveries.push(input);
+      return redeliverResult(input);
+    },
     settingsService: {
       getIntakeSourceLists: () => lists,
       mutateIntakeSourceList: vi.fn((input) => {
@@ -174,6 +186,12 @@ describe('admin intake quarantine service (htm9.11)', () => {
     mutations = [];
     createdEvents = [];
     updatedEvents = [];
+    redeliveries = [];
+    redeliverResult = (input) => ({
+      delivered: true,
+      channelId: input.sourceChannelId ?? 'discord:chan-1',
+      entryId: 4242,
+    });
     service = buildService();
   });
 
@@ -414,6 +432,92 @@ describe('admin intake quarantine service (htm9.11)', () => {
       });
       expect(resolved.ok).toBe(true);
       expect(store.getById(envelope.id)?.envelope.state).toBe('human_released_sanitized');
+    });
+  });
+
+  describe('honest re-delivery of released content (jvbt)', () => {
+    const releaseRaw = (envelope: IntakeEnvelope) => {
+      const begin = service.beginDecision({ id: envelope.id, action: 'release_raw' });
+      if (!begin.ok) throw new Error('begin failed');
+      return service.resolveDecision({
+        id: envelope.id,
+        action: 'release_raw',
+        confirmToken: begin.confirmToken,
+        reason: 'false positive; content is fine',
+      });
+    };
+
+    it('re-delivers the raw content with the surviving envelope provenance', () => {
+      const envelope = holdItem();
+      const resolved = releaseRaw(envelope);
+      expect(resolved.ok).toBe(true);
+      expect(redeliveries).toHaveLength(1);
+      const delivered = redeliveries[0];
+      expect(delivered.action).toBe('release_raw');
+      expect(delivered.content).toBe('the suspicious raw content');
+      expect(delivered.sourceChannelId).toBe('discord:chan-1');
+      // The envelope is terminal-released but keeps its untrusted origin so
+      // the delivery stays gated at the sinks (never laundered as trusted).
+      expect(delivered.envelope.state).toBe('human_released');
+      expect(delivered.envelope.sourceClass).toBe('web_fetch');
+      expect(delivered.envelope.sourceRiskTier).toBe('untrusted');
+      if (resolved.ok) {
+        expect(resolved.message).toContain('re-delivered it into discord:chan-1');
+      }
+    });
+
+    it('re-delivers the safe representation when that action is chosen', () => {
+      const envelope = holdItem({ safeRepresentationText: 'Summary: a neutral description.' });
+      const begin = service.beginDecision({ id: envelope.id, action: 'release_sanitized' });
+      if (!begin.ok) throw new Error('begin failed');
+      service.resolveDecision({
+        id: envelope.id,
+        action: 'release_sanitized',
+        confirmToken: begin.confirmToken,
+        reason: 'summary is enough',
+      });
+      expect(redeliveries).toHaveLength(1);
+      expect(redeliveries[0].action).toBe('release_sanitized');
+      expect(redeliveries[0].content).toBe('Summary: a neutral description.');
+      expect(redeliveries[0].envelope.state).toBe('human_released_sanitized');
+    });
+
+    it('never re-delivers a discarded item', () => {
+      const envelope = holdItem();
+      const begin = service.beginDecision({ id: envelope.id, action: 'discard' });
+      if (!begin.ok) throw new Error('begin failed');
+      service.resolveDecision({
+        id: envelope.id,
+        action: 'discard',
+        confirmToken: begin.confirmToken,
+        reason: 'genuinely hostile',
+      });
+      expect(redeliveries).toHaveLength(0);
+    });
+
+    it('records an undeliverable release without reversing it or throwing', () => {
+      redeliverResult = () => ({ delivered: false, reason: 'no source channel was recorded' });
+      const envelope = holdItem();
+      const resolved = releaseRaw(envelope);
+      // The release still applied; only the delivery is reported as not landing.
+      expect(resolved.ok).toBe(true);
+      expect(store.getById(envelope.id)?.status).toBe('released_raw');
+      if (resolved.ok) {
+        expect(resolved.message).toContain('re-delivery did not land');
+      }
+    });
+
+    it('does not let a throwing delivery port reverse the applied release', () => {
+      redeliverResult = () => {
+        throw new Error('session store unavailable');
+      };
+      const envelope = holdItem();
+      const resolved = releaseRaw(envelope);
+      expect(resolved.ok).toBe(true);
+      expect(store.getById(envelope.id)?.envelope.state).toBe('human_released');
+      if (resolved.ok) {
+        expect(resolved.message).toContain('re-delivery did not land');
+      }
     });
   });
 

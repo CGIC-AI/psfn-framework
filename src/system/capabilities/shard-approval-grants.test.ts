@@ -129,7 +129,7 @@ async function activateThroughApprovalQueue(input: {
 }
 
 describe('ShardApprovalGrantAuthority', () => {
-  it('consumes the shared disposition table for all six masked tokens without widening standing access', () => {
+  it('consumes the shared disposition table for all ten masked tokens without widening standing access', () => {
     const registry = new TestWorkloadRegistry();
     const authority = new ShardApprovalGrantAuthority({ workloadRegistry: registry });
     const { standingGrant, workload } = registerWorkload(registry);

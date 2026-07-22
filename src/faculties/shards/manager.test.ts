@@ -45,6 +45,7 @@ import type { PostgresShardSchemaBinding } from '../../persistence/postgres/shar
 import { createCompanionId } from '../../shared/routing/companion-id.js';
 import type { CapabilityGrantSnapshot } from '../../system/capabilities/access.js';
 import { CAPABILITY_TIER_DEFAULTS } from '../../system/capabilities/tiers.js';
+import { deriveShardCapabilityGrant } from '../../system/capabilities/shard-derivation.js';
 
 // ── Mock pi-agent-core Agent ──
 // We mock Agent.prototype.prompt so it doesn't actually call the LLM.
@@ -1880,6 +1881,48 @@ describe('ShardManager', () => {
       'repo_commit',
       'prompt_layer_update',
     ]));
+  });
+
+  it('never injects external notify egress even for an autonomous shard (psfn-framework-tu0mw)', async () => {
+    // Regression: an autonomous/custom parent's shard gets the full catalog
+    // (toolset ['*']). notify is the operator emergency button, not a companion
+    // outbound surface, so a human-driven shard chat turn must not be able to
+    // dispatch notify action:send to an external target. The tool must be
+    // absent from the injected surface (name-block), and the derived shard
+    // grant must lack the external.* egress tokens (capability backstop).
+    const memory = makeTestTool('memory');
+    const notify = makeTestTool('notify');
+
+    const manager = createTestShardManager({
+      eventBus,
+      llmProvider: mockLLM(),
+      sessionStore,
+      embeddingService: null,
+      memoryProvider: null,
+      config: { ...TEST_CONFIG, capabilityTier: 'autonomous' },
+      parentSystemPrompt: 'test',
+      toolCatalogProvider: () => ({
+        core: [memory.tool],
+        extended: [notify.tool],
+      }),
+    });
+
+    await manager.spawn({ name: 'toolset-notify-blocked', task: 'test' });
+
+    const injected = lastSetToolNames();
+    expect(injected).toContain('memory');
+    expect(injected).not.toContain('notify');
+
+    // Defense in depth: the standing shard denial mask strips every external.*
+    // egress token from the derived grant regardless of parent authority.
+    const grant = deriveShardCapabilityGrant({
+      companionId: 'companion-parent',
+      tier: 'autonomous',
+      customTokens: [],
+    });
+    for (const egress of ['external.discord', 'external.email', 'external.web', 'external.companion'] as const) {
+      expect(grant.access.has(egress)).toBe(false);
+    }
   });
 
   it('respects configured shard toolset overrides', async () => {

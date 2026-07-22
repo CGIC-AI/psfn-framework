@@ -47,11 +47,19 @@ describe('canonicalizeCapabilityTokens', () => {
 });
 
 describe('SHARD_CAPABILITY_DENIAL_MASK', () => {
-  it('contains exactly the six approved tokens in canonical order', () => {
+  it('bumps the derivation contract for the expanded denial mask', () => {
+    expect(SHARD_GRANT_DERIVATION_VERSION).toBe('psfn.shard-grant.v2');
+  });
+
+  it('contains exactly the ten approved tokens in canonical order', () => {
     expect(SHARD_CAPABILITY_DENIAL_MASK).toEqual([
       'identity.write.base',
       'identity.write.operator',
       'memory.delete',
+      'external.discord',
+      'external.email',
+      'external.web',
+      'external.companion',
       'lifecycle.restart',
       'lifecycle.rebuild',
       'world.control',
@@ -76,6 +84,10 @@ describe('SHARD_CAPABILITY_DENIAL_MASK', () => {
       'identity.write.base',
       'identity.write.operator',
       'memory.delete',
+      'external.discord',
+      'external.email',
+      'external.web',
+      'external.companion',
       'lifecycle.restart',
       'lifecycle.rebuild',
     ];
@@ -174,7 +186,7 @@ describe('computeCapabilityOwnerVersion', () => {
 });
 
 describe('deriveShardCapabilityGrant', () => {
-  it('derives the all-token parent to exactly the parent set minus the six-token mask, in canonical order', () => {
+  it('derives the all-token parent to exactly the parent set minus the full mask, in canonical order', () => {
     const grant = deriveShardCapabilityGrant({
       companionId: PARENT_ID,
       tier: 'custom',
@@ -182,10 +194,16 @@ describe('deriveShardCapabilityGrant', () => {
     });
     const expected = ALL_TOKENS.filter(token => !MASK_SET.has(token));
     expect(grant.tokens).toEqual(expected);
-    expect(grant.tokens).toHaveLength(ALL_TOKENS.length - 6);
+    expect(grant.tokens).toHaveLength(ALL_TOKENS.length - SHARD_CAPABILITY_DENIAL_MASK.length);
     for (const masked of SHARD_CAPABILITY_DENIAL_MASK) {
       expect(grant.tokens).not.toContain(masked);
       expect(grant.access.has(masked)).toBe(false);
+    }
+    // Egress backstop (psfn-framework-tu0mw): no external-send capability
+    // survives derivation, so even a re-injected or renamed external tool is
+    // capability-denied for a shard regardless of parent authority.
+    for (const egress of ['external.discord', 'external.email', 'external.web', 'external.companion'] as const) {
+      expect(grant.access.has(egress)).toBe(false);
     }
   });
 

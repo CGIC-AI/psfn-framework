@@ -42,7 +42,7 @@ The `grantDigest` is a SHA-256 digest of a canonical serialization containing:
 - the shard-grant derivation contract version;
 - the authenticated parent companion ID;
 - `ownerVersion`, parent tier, and canonical parent tokens;
-- the canonical six-token denial mask; and
+- the canonical ten-token denial mask; and
 - the canonical derived shard tokens.
 
 This makes an authority change, derivation-rule change, companion mismatch, or
@@ -80,7 +80,7 @@ and neither may be reused as or widen the parent snapshot or derived grant.
 
 ## Standing denial mask
 
-The complete standing mask contains six tokens:
+The complete standing mask contains ten tokens:
 
 | Token | Rationale |
 | --- | --- |
@@ -90,6 +90,10 @@ The complete standing mask contains six tokens:
 | `identity.write.base` | Base identity is canonical shared identity state. Allowing a shard copy to stage or commit base-layer changes creates competing authors and an unsafe fold-back ambiguity. |
 | `identity.write.operator` | The operator layer represents human-owned direction and is never delegated to a task copy. A shard must not edit or impersonate operator authority. |
 | `memory.delete` | Shard memory mutation already flows through isolated staging, sync policy, and fold review; delete/redact/restore operations are currently denied on shard-to-prime sync. Removing the token as well is defense-in-depth: a newly injected or renamed memory tool must not gain destructive memory authority merely because a parent has it. |
+| `external.discord` | Standing outbound communication is not a shard authority. The `notify` tool is the operator emergency button (contact the operator when a normal channel is down), never a companion surface a task copy may drive. `notify` is name-blocked at injection (`BLOCKED_SHARD_TOOL_NAMES`); masking the egress token as well is defense-in-depth so a renamed or newly injected external-send tool cannot regain Discord egress merely because a parent has it. |
+| `external.email` | Same rationale as `external.discord`: no standing email egress for a shard. |
+| `external.web` | Same rationale: the operator-directed `notify` brief/clarify/approval_request paths and any other `external.web`-gated egress are not a standing shard authority. |
+| `external.companion` | Companion-to-companion outreach (`notify` send/consider to a contact) is a primary-companion surface, not a shard authority. |
 
 Tokens not in this table are not globally promised to every shard. They remain
 only when the parent actually has them. In particular,
@@ -115,6 +119,10 @@ uniformly across the mask:
 | `identity.write.base` | Never. | Never. | Nondelegable: shards cannot temporarily become competing authors of canonical base identity. |
 | `identity.write.operator` | Never. | Never. | Nondelegable: operator authority cannot be lent to a shard. |
 | `memory.delete` | Never. | Never. | Nondelegable: destructive memory authority remains behind isolation, fold review, and prime-owned policy. |
+| `external.discord` | Never. | Never. | Nondelegable: outbound communication egress is operator-only and is never lent to a task copy. |
+| `external.email` | Never. | Never. | Nondelegable: same as `external.discord`. |
+| `external.web` | Never. | Never. | Nondelegable: same as `external.discord`. |
+| `external.companion` | Never. | Never. | Nondelegable: companion outreach is a primary-companion surface, never a shard authority. |
 
 Request-scoped `world.control` authority is exact-use and cannot be auto-cleared
 from the parent's autonomous tier. TTL support remains unavailable until the
@@ -138,7 +146,7 @@ The helper must:
 1. Load and validate the parent owner once, resolving the tier and token set
    from that same parsed value. Independent refreshing getters are forbidden.
 2. Validate every input token against `CAPABILITY_TOKENS`.
-3. Remove exactly the six mask members above.
+3. Remove exactly the ten mask members above.
 4. Return tokens in canonical order with no duplicates.
 5. Compute a content-stable owner version and the canonical SHA-256 grant digest
    defined above.
@@ -255,11 +263,11 @@ The coordinated implementation is filed under `psfn-framework-mus2`:
 Implementation tests should prove:
 
 - autonomous and explicit-custom parent grants derive to `custom` with exactly
-  the parent's tokens minus the six-token mask;
+  the parent's tokens minus the ten-token mask;
 - nursery/apprentice/default/custom parents cannot gain tokens through
   derivation, and parents without `shard.spawn` cannot launch;
-- all six mask members remain absent even when the parent grants all capability
-  tokens;
+- all ten mask members remain absent even when the parent grants all capability
+  tokens, including every `external.*` egress token;
 - `identity.write.runtime`, `memory.write`, and other unmasked tokens survive
   only when the parent grants them;
 - custom-parent tokens come from authoritative `customTokens`, not tier-name
@@ -289,8 +297,8 @@ Implementation tests should prove:
   or granted tokens;
 - only `world.control` is eligible for exact request-scoped temporary authority;
   TTL remains unavailable without separately canonical JSON-owned server
-  policy, and all five other masked tokens reject both request and TTL authority;
-- the existing six-token mask and independent recursion, memory-fold, shell
+  policy, and all nine other masked tokens reject both request and TTL authority;
+- the existing ten-token mask and independent recursion, memory-fold, shell
   allowlist, approval, and multi-companion isolation boundaries remain intact.
 
 ## Non-goals

@@ -21,7 +21,7 @@ import { CAPABILITY_TOKENS, isCapabilityToken, type CapabilityToken } from './to
  * a manager and gateway running different contracts can never agree on a
  * digest by accident.
  */
-export const SHARD_GRANT_DERIVATION_VERSION = 'psfn.shard-grant.v1';
+export const SHARD_GRANT_DERIVATION_VERSION = 'psfn.shard-grant.v2';
 
 /**
  * Owner-version contract label. The owner version is a SHA-256 digest of the
@@ -65,15 +65,27 @@ export function canonicalizeCapabilityTokens(
 }
 
 /**
- * The complete standing shard denial mask (canonical order). These six tokens
+ * The complete standing shard denial mask (canonical order). These ten tokens
  * are removed from every derived shard grant regardless of parent authority.
  * Rationale per token lives in docs/shard-capability-tier-derivation.md.
+ *
+ * The four `external.*` egress tokens are masked so a shard never holds
+ * standing outbound-communication authority: `notify` (the operator emergency
+ * button) and every other external-send surface are operator-only, not a
+ * companion surface a shard may drive. Name-blocking the tool is the first
+ * line (BLOCKED_SHARD_TOOL_NAMES); dropping the capability tokens is the
+ * defense-in-depth backstop so a renamed or newly injected external-send tool
+ * cannot regain egress merely because a parent has it.
  */
 export const SHARD_CAPABILITY_DENIAL_MASK: readonly CapabilityToken[] = canonicalizeCapabilityTokens(
   [
     'identity.write.base',
     'identity.write.operator',
     'memory.delete',
+    'external.discord',
+    'external.email',
+    'external.web',
+    'external.companion',
     'lifecycle.restart',
     'lifecycle.rebuild',
     'world.control',
@@ -85,6 +97,10 @@ export type ShardDenialMaskToken =
   | 'identity.write.base'
   | 'identity.write.operator'
   | 'memory.delete'
+  | 'external.discord'
+  | 'external.email'
+  | 'external.web'
+  | 'external.companion'
   | 'lifecycle.restart'
   | 'lifecycle.rebuild'
   | 'world.control';
@@ -116,6 +132,10 @@ export const SHARD_MASK_TEMPORARY_GRANT_DISPOSITIONS: Readonly<
   'identity.write.base': Object.freeze({ requestScoped: 'never', ttl: 'never' } as const),
   'identity.write.operator': Object.freeze({ requestScoped: 'never', ttl: 'never' } as const),
   'memory.delete': Object.freeze({ requestScoped: 'never', ttl: 'never' } as const),
+  'external.discord': Object.freeze({ requestScoped: 'never', ttl: 'never' } as const),
+  'external.email': Object.freeze({ requestScoped: 'never', ttl: 'never' } as const),
+  'external.web': Object.freeze({ requestScoped: 'never', ttl: 'never' } as const),
+  'external.companion': Object.freeze({ requestScoped: 'never', ttl: 'never' } as const),
   'lifecycle.restart': Object.freeze({ requestScoped: 'never', ttl: 'never' } as const),
   'lifecycle.rebuild': Object.freeze({ requestScoped: 'never', ttl: 'never' } as const),
   'world.control': Object.freeze({
@@ -247,7 +267,7 @@ export interface ShardCapabilityAccess extends CapabilityAccess {
 export interface DerivedShardCapabilityGrant {
   readonly derivationVersion: string;
   readonly parent: ShardParentGrantSnapshot;
-  /** The standing denial mask applied (canonical order, all six tokens). */
+  /** The standing denial mask applied (canonical order, all ten tokens). */
   readonly denialMask: readonly CapabilityToken[];
   /** Derived shard tokens: parent tokens minus the mask, canonical order. */
   readonly tokens: readonly CapabilityToken[];

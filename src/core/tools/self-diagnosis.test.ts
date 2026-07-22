@@ -140,7 +140,6 @@ function makeDeps(world: FakeWorld, overrides: Partial<SelfDiagnosisDeps> = {}):
     env: {
       PATH: '/usr/bin',
       PSFN_IMAGE_TAG: '0.1.0-kube',
-      PSFN_HELM_REVISION: '7',
       PSFN_GIT_COMMIT: 'current1111',
       PSFN_PREVIOUS_GIT_COMMIT: 'prev00000',
       PSFN_REPOSITORY_DIR: CHECKOUT,
@@ -202,7 +201,6 @@ describe('buildSelfDiagnosisReport', () => {
     const deployment = report.deployment as any;
     expect(deployment.status).toBe('available');
     expect(deployment.imageTag).toBe('0.1.0-kube');
-    expect(deployment.helmRevision).toBe('7');
     expect(deployment.gitCommit).toBe('current1111');
     expect(deployment.fixesShipped).toMatchObject({
       status: 'available',
@@ -290,7 +288,6 @@ describe('buildSelfDiagnosisReport', () => {
     const report = await buildSelfDiagnosisReport(deps);
     const deployment = report.deployment as any;
     expect(deployment.imageTag).toMatchObject({ status: 'unavailable' });
-    expect(deployment.helmRevision).toMatchObject({ status: 'unavailable' });
     // Falls back to the image-snapshot commit even without PSFN_GIT_COMMIT.
     expect(deployment.gitCommit).toBe('image00000000');
     expect(deployment.gitCommitSource).toBe('image-snapshot');

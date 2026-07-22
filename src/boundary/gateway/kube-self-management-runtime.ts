@@ -71,14 +71,6 @@ function parseEnabled(raw: string | undefined): boolean {
   throw new Error('PSFN_KUBE_SELF_MANAGEMENT_ENABLED must be true or false.');
 }
 
-function requirePositiveRevision(raw: string | undefined): number {
-  const revision = Number(raw);
-  if (!Number.isSafeInteger(revision) || revision <= 0) {
-    throw new Error('PSFN_HELM_REVISION must be a positive integer for Kubernetes self-management.');
-  }
-  return revision;
-}
-
 function auditSummary(event: KubeSelfManagementAuditEvent): AuditSummaryEntry {
   return {
     method: `kube.self_management.${event.phase}`,
@@ -127,7 +119,12 @@ export function resolveKubeSelfManagementController(
   if (!isPinnedKubeImageReference(targetImage)) {
     throw new Error('PSFN_KUBE_CURRENT_IMAGE must be an exact pinned image reference for Kubernetes self-management.');
   }
-  const helmRevision = requirePositiveRevision(options.env.PSFN_HELM_REVISION);
+  // The live Helm revision is readable only through a Helm release-history
+  // transport, which the operator-job composition owns. Where it is supplied the
+  // diagnostics executor resolves the revision per call; where it is not, the
+  // report says the revision is unavailable rather than echoing a start-time
+  // constant that goes stale on the next upgrade (psfn-framework-6187t).
+  const helmRollbackApi = options.helmRollback?.api;
   const api = options.createApi
     ? options.createApi(options.env, settings.kubernetesReadRequestTimeoutMs)
     : createInClusterKubernetesReadApi(options.env, {
@@ -156,7 +153,11 @@ export function resolveKubeSelfManagementController(
       namespace,
       release,
       resourcePrefix,
-      helmRevision,
+      ...(helmRollbackApi
+        ? {
+          resolveHelmRevision: (ns: string, rel: string) => helmRollbackApi.currentRevision(ns, rel),
+        }
+        : {}),
       sourceRevision,
       targetImage,
       api,

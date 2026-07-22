@@ -162,7 +162,7 @@ export async function readHelmHistory(
 }
 
 /** The current (latest) deployed Helm revision for a release. */
-async function currentDeployedRevision(
+export async function currentDeployedRevision(
   config: HelmKubectlConfig,
   namespace: string,
   release: string,
@@ -241,6 +241,11 @@ export function createLiveHelmRollbackApi(
       }
       return mapDeploymentJson(name, JSON.parse(result.stdout));
     },
+    // Read live per call so rollback targeting is judged against the revision the
+    // release is actually on, not one captured when some process started.
+    currentRevision: async (namespace, release) => (
+      await currentDeployedRevision(config, namespace, release)
+    ),
   };
 }
 

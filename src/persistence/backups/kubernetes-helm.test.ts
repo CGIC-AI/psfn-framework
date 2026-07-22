@@ -110,7 +110,6 @@ describe('Kubernetes Helm backup config', () => {
       PSFN_HELM_CHART_DIR: '/app/deploy/helm/psfn',
       PSFN_HELM_RELEASE_NAME: 'psfn',
       PSFN_HELM_NAMESPACE: 'psfn',
-      PSFN_HELM_REVISION: '33',
       PSFN_HELM_CHART_NAME: 'psfn',
       PSFN_HELM_CHART_VERSION: '0.1.0',
       PSFN_HELM_APP_VERSION: '0.1.0-kube',
@@ -126,8 +125,39 @@ describe('Kubernetes Helm backup config', () => {
       PSFN_BACKUP_ENCRYPTION_KEY: 'must-not-be-captured',
     });
 
-    expect(config).toEqual(makeConfig('/app/deploy/helm/psfn', TEST_CHART_DIGEST));
+    const { revision: _unresolvable, ...expected } = makeConfig(
+      '/app/deploy/helm/psfn',
+      TEST_CHART_DIGEST,
+    );
+    expect(config).toEqual(expected);
+    expect(config).not.toHaveProperty('revision');
     expect(JSON.stringify(config)).not.toContain('must-not-be-captured');
+  });
+
+  // psfn-framework-6187t: the chart stopped injecting PSFN_HELM_REVISION because
+  // a pod can only ever report the revision it was created at. A leftover value
+  // in a stale pod's environment must not resurrect that wrong provenance.
+  it('ignores a leftover PSFN_HELM_REVISION rather than recording a stale revision', () => {
+    const env = {
+      PSFN_KUBERNETES_BACKUP_ENABLED: 'true',
+      PSFN_HELM_CHART_DIR: '/app/deploy/helm/psfn',
+      PSFN_HELM_RELEASE_NAME: 'psfn',
+      PSFN_HELM_NAMESPACE: 'psfn',
+      PSFN_HELM_CHART_NAME: 'psfn',
+      PSFN_HELM_CHART_VERSION: '0.1.0',
+      PSFN_HELM_APP_VERSION: '0.1.0-kube',
+      PSFN_HELM_CHART_CONTENT_SHA256: TEST_CHART_DIGEST,
+      PSFN_HELM_BACKUP_AGENT_IMAGE_REPOSITORY: 'localhost/psfn-framework',
+      PSFN_HELM_BACKUP_AGENT_IMAGE_TAG: '0.1.0-kube-ae758a4f',
+      PSFN_HELM_BACKUP_GATEWAY_IMAGE_REPOSITORY: 'localhost/psfn-framework',
+      PSFN_HELM_BACKUP_GATEWAY_IMAGE_TAG: '0.1.0-kube-ae758a4f',
+      PSFN_HELM_BACKUP_GARDEN_IMAGE_REPOSITORY: 'localhost/psfn-framework',
+      PSFN_HELM_BACKUP_GARDEN_IMAGE_TAG: '0.1.0-kube-ae758a4f',
+      PSFN_GIT_COMMIT: 'ae758a4f099633a921b823f9cc651f252b58ca00',
+    };
+
+    expect(resolveKubernetesHelmBackupConfig({ ...env, PSFN_HELM_REVISION: '3' }))
+      .toEqual(resolveKubernetesHelmBackupConfig(env));
   });
 });
 

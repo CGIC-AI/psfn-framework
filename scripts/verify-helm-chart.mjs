@@ -1005,7 +1005,6 @@ for (const [name, value] of [
   ['PSFN_HELM_CHART_DIR', '/app/deploy/helm/psfn'],
   ['PSFN_HELM_RELEASE_NAME', 'psfn'],
   ['PSFN_HELM_NAMESPACE', 'psfn-test'],
-  ['PSFN_HELM_REVISION', '1'],
   ['PSFN_HELM_CHART_NAME', 'psfn'],
   ['PSFN_HELM_CHART_VERSION', '0.1.0'],
   ['PSFN_HELM_APP_VERSION', '0.1.0-kube'],
@@ -1118,6 +1117,22 @@ const defaultGardenIngress = findDocumentByKindName(rendered, 'Ingress', 'psfn-g
 assertIncludes(defaultGardenIngress, 'host: "psfn-garden.local"', 'default Garden Ingress host');
 assertIncludes(defaultGardenIngress, 'name: http-garden', 'default Garden Ingress service port');
 assertNotIncludes(gardenDeployment, 'hostPort:', 'default fleet-off Garden hostPort');
+
+// psfn-framework-6187t: nothing in a pod template may vary per helm operation.
+// `.Release.Revision` increments on every one, so baking it in rewrote the pod
+// template hash and force-restarted the companion on upgrades that changed
+// nothing about it — including sidecar-only ships.
+for (const [component, deployment] of [
+  ['agent', agentDeployment],
+  ['gateway', gatewayDeployment],
+  ['garden', gardenDeployment],
+]) {
+  assertNotIncludes(
+    deployment,
+    'PSFN_HELM_REVISION',
+    `${component} carries no per-helm-operation revision env`,
+  );
+}
 
 const fleetGardenRendered = render(fleetGardenRenderArgs());
 const fleetGardenDocuments = parseAllDocuments(fleetGardenRendered)

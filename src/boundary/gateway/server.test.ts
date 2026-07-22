@@ -908,7 +908,6 @@ describe('GatewayServer', () => {
         release: 'psfn',
         sourceRevision: 'a'.repeat(40),
         targetImage: 'localhost/psfn-framework:0.1.0-kube-aaaaaaaaaaaa',
-        helmRevision: 7,
         reason: 'Restart the reviewed release.',
       });
       const approvalId = queued.result.approvalId as string;
@@ -976,7 +975,6 @@ describe('GatewayServer', () => {
         release: 'psfn',
         sourceRevision: 'a'.repeat(40),
         targetImage: 'localhost/psfn-framework:0.1.0-kube-aaaaaaaaaaaa',
-        helmRevision: 7,
         reason: 'Restart the reviewed release.',
       });
 

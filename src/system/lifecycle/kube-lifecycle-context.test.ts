@@ -12,7 +12,6 @@ function kubeEnv(overrides: Record<string, string | undefined> = {}): NodeJS.Pro
     PSFN_HELM_RELEASE_NAME: 'psfn',
     PSFN_GIT_COMMIT: VALID_COMMIT,
     PSFN_KUBE_CURRENT_IMAGE: VALID_IMAGE,
-    PSFN_HELM_REVISION: '8',
     ...overrides,
   } as NodeJS.ProcessEnv;
 }
@@ -31,7 +30,6 @@ describe('resolveKubeLifecycleContext', () => {
         release: 'psfn',
         sourceRevision: VALID_COMMIT,
         targetImage: VALID_IMAGE,
-        helmRevision: 8,
       },
     });
   });
@@ -74,8 +72,21 @@ describe('resolveKubeLifecycleContext', () => {
       .toThrow(/pinned image reference/);
   });
 
-  it('throws on a non-positive helm revision', () => {
-    expect(() => resolveKubeLifecycleContext(kubeEnv({ PSFN_HELM_REVISION: '0' })))
-      .toThrow(/positive integer/);
+  // psfn-framework-6187t: the chart no longer injects PSFN_HELM_REVISION, and a
+  // pod could never have carried a current one anyway. Startup must not depend
+  // on it, and a stray leftover value must not resurrect the dependency.
+  it('resolves without PSFN_HELM_REVISION in the environment', () => {
+    const env = kubeEnv();
+    expect(env.PSFN_HELM_REVISION).toBeUndefined();
+    const context = resolveKubeLifecycleContext(env);
+    expect(context.deployment).toBe('kube');
+    if (context.deployment !== 'kube') throw new Error('expected kube deployment');
+    expect(context.selfManagement.enabled).toBe(true);
+    expect(context.selfManagement).not.toHaveProperty('helmRevision');
+  });
+
+  it('ignores a stale PSFN_HELM_REVISION left in the environment', () => {
+    const context = resolveKubeLifecycleContext(kubeEnv({ PSFN_HELM_REVISION: '0' }));
+    expect(context).toEqual(resolveKubeLifecycleContext(kubeEnv()));
   });
 });

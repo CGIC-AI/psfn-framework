@@ -1290,7 +1290,6 @@ describe('system tool under a guarded Kubernetes deployment', () => {
         release: 'psfn',
         sourceRevision: VALID_COMMIT,
         targetImage: VALID_IMAGE,
-        helmRevision: 8,
       },
     };
   }
@@ -1315,7 +1314,6 @@ describe('system tool under a guarded Kubernetes deployment', () => {
       release: 'psfn',
       sourceRevision: VALID_COMMIT,
       targetImage: VALID_IMAGE,
-      helmRevision: 8,
       reason: 'apply hotfix',
     });
     expect(resultText(result)).toContain('queued for operator approval');
@@ -1401,6 +1399,36 @@ describe('system tool under a guarded Kubernetes deployment', () => {
     expect(text).toContain(VALID_IMAGE);
     expect(text).toContain('psfn-agent: ready 1/1');
     expect(text).toContain('psfn-gateway: ready 0/1');
+  });
+
+  // psfn-framework-6187t: the status line used to print a revision frozen into
+  // this pod's environment. It now comes from the live diagnose report.
+  it('reports the Helm revision from the live diagnose report', async () => {
+    const invoke = vi.fn(async () => ({
+      status: 'completed',
+      validationResult: 'not_run',
+      rollbackStatus: 'not_requested',
+      details: { helmRevision: 41, deployments: [] },
+    }));
+    const tool = makeKubeTool(invoke);
+    const result = await tool.execute('call-kube-read-rev', { action: 'read', list: true });
+    expect(resultText(result)).toContain('Helm revision: 41');
+  });
+
+  it('says the Helm revision is unavailable rather than guessing one', async () => {
+    const invoke = vi.fn(async () => ({
+      status: 'completed',
+      validationResult: 'not_run',
+      rollbackStatus: 'not_requested',
+      details: {
+        helmRevision: null,
+        helmRevisionUnavailable: 'no Helm release-history access',
+        deployments: [],
+      },
+    }));
+    const tool = makeKubeTool(invoke);
+    const result = await tool.execute('call-kube-read-norev', { action: 'read', list: true });
+    expect(resultText(result)).toContain('Helm revision: unavailable (no Helm release-history access)');
   });
 
   it('keeps a settings read working when live diagnose fails', async () => {

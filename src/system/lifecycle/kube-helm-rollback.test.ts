@@ -5,6 +5,7 @@ import {
   managedRollbackDeploymentNames,
   type KubeHelmRollbackApiPort,
 } from './kube-helm-rollback.js';
+import { KubeHelmRevisionUnavailableError } from './kube-helm-revision.js';
 import { combineKubeSelfManagementExecutors } from './kube-self-management.js';
 import { hasRolledBackFrom, type KubeRollbackRecord } from './kube-rollback-store.js';
 
@@ -32,6 +33,14 @@ function rolling(name: string): KubeDeploymentDiagnostic {
   };
 }
 
+/**
+ * The live current revision these fixtures roll back FROM: helm enacts the
+ * rollback of revision 9 to target 8 as a fresh revision 10.
+ */
+function liveRevision(revision = 9) {
+  return vi.fn(async () => revision);
+}
+
 const ROLLBACK_REQUEST = {
   action: 'rollback' as const,
   namespace: 'psfn',
@@ -48,7 +57,7 @@ describe('createKubeHelmRollbackExecutor', () => {
       namespace: 'psfn',
       release: 'psfn',
       resourcePrefix: 'psfn',
-      api: { rollback: vi.fn(), getDeployment: vi.fn() },
+      api: { rollback: vi.fn(), getDeployment: vi.fn(), currentRevision: liveRevision() },
     });
     expect(executor.supports('rollback')).toBe(true);
     expect(executor.supports('restart')).toBe(false);
@@ -60,7 +69,7 @@ describe('createKubeHelmRollbackExecutor', () => {
     const rollback = vi.fn(async () => ({ helmRevision: 10 }));
     const getDeployment = vi.fn(async (_ns: string, name: string) => ready(name));
     const recordRollback = vi.fn();
-    const api: KubeHelmRollbackApiPort = { rollback, getDeployment };
+    const api: KubeHelmRollbackApiPort = { rollback, getDeployment, currentRevision: liveRevision() };
 
     const executor = createKubeHelmRollbackExecutor({
       namespace: 'psfn', release: 'psfn', resourcePrefix: 'psfn-runtime', api, recordRollback,
@@ -86,15 +95,16 @@ describe('createKubeHelmRollbackExecutor', () => {
   });
 
   it('records the source revision so a manual rollback keys the act-once ledger', async () => {
-    // Helm enacts the rollback as resulting revision 10 (from live revision 9),
-    // so the ledger must key on fromHelmRevision=9 — the revision the automatic
-    // surface stays pinned to and must not double-fire against.
+    // The ledger keys on fromHelmRevision=9 — the live revision read from Helm
+    // before the rollback, which is the revision the automatic surface stays
+    // pinned to and must not double-fire against.
     const recordRollback = vi.fn();
     const executor = createKubeHelmRollbackExecutor({
       namespace: 'psfn', release: 'psfn', resourcePrefix: 'psfn',
       api: {
         rollback: vi.fn(async () => ({ helmRevision: 10 })),
         getDeployment: vi.fn(async (_ns: string, name: string) => ready(name)),
+        currentRevision: liveRevision(),
       },
       recordRollback,
     });
@@ -116,6 +126,7 @@ describe('createKubeHelmRollbackExecutor', () => {
       api: {
         rollback: vi.fn(async () => ({ helmRevision: 10 })),
         getDeployment: vi.fn(async (_ns: string, name: string) => rolling(name)),
+        currentRevision: liveRevision(),
       },
       recordRollback,
       now: () => clock,
@@ -139,6 +150,7 @@ describe('createKubeHelmRollbackExecutor', () => {
       api: {
         rollback: vi.fn(async () => { throw new Error('helm rollback failed: release not found'); }),
         getDeployment: vi.fn(),
+        currentRevision: liveRevision(),
       },
     });
     await expect(executor.execute(ROLLBACK_REQUEST)).rejects.toThrow(/helm rollback failed/);
@@ -147,15 +159,96 @@ describe('createKubeHelmRollbackExecutor', () => {
   it('rejects an invalid resulting helm revision', async () => {
     const executor = createKubeHelmRollbackExecutor({
       namespace: 'psfn', release: 'psfn', resourcePrefix: 'psfn',
-      api: { rollback: vi.fn(async () => ({ helmRevision: 0 })), getDeployment: vi.fn() },
+      api: { rollback: vi.fn(async () => ({ helmRevision: 0 })), getDeployment: vi.fn(), currentRevision: liveRevision() },
     });
     await expect(executor.execute(ROLLBACK_REQUEST)).rejects.toThrow(/invalid resulting release revision/);
+  });
+
+  // ── psfn-framework-6187t: the current revision is read live, never inherited ──
+
+  it('reads the CURRENT revision live rather than any revision fixed at startup', async () => {
+    // The executor was built long ago, when the release was on revision 9; the
+    // release has since moved to 40. The ledger must key on 40, not on 9.
+    const recordRollback = vi.fn();
+    const currentRevision = vi.fn(async () => 40);
+    const executor = createKubeHelmRollbackExecutor({
+      namespace: 'psfn', release: 'psfn', resourcePrefix: 'psfn',
+      api: {
+        rollback: vi.fn(async () => ({ helmRevision: 41 })),
+        getDeployment: vi.fn(async (_ns: string, name: string) => ready(name)),
+        currentRevision,
+      },
+      recordRollback,
+    });
+
+    await executor.execute(ROLLBACK_REQUEST);
+
+    expect(currentRevision).toHaveBeenCalledWith('psfn', 'psfn');
+    const record = recordRollback.mock.calls[0][0] as KubeRollbackRecord;
+    expect(record.fromHelmRevision).toBe(40);
+    expect(hasRolledBackFrom([record], 'psfn', 40)).toBe(true);
+    expect(hasRolledBackFrom([record], 'psfn', 9)).toBe(false);
+  });
+
+  it('refuses to roll back when the current revision cannot be resolved', async () => {
+    const rollback = vi.fn();
+    const executor = createKubeHelmRollbackExecutor({
+      namespace: 'psfn', release: 'psfn', resourcePrefix: 'psfn',
+      api: {
+        rollback,
+        getDeployment: vi.fn(),
+        currentRevision: vi.fn(async () => { throw new Error('helm history unreachable'); }),
+      },
+    });
+
+    await expect(executor.execute(ROLLBACK_REQUEST))
+      .rejects.toThrow(KubeHelmRevisionUnavailableError);
+    // Fail closed: an unresolvable current revision must never reach `helm rollback`.
+    expect(rollback).not.toHaveBeenCalled();
+  });
+
+  it('refuses a revision resolver that answers with a non-revision', async () => {
+    const rollback = vi.fn();
+    const executor = createKubeHelmRollbackExecutor({
+      namespace: 'psfn', release: 'psfn', resourcePrefix: 'psfn',
+      api: { rollback, getDeployment: vi.fn(), currentRevision: vi.fn(async () => 0) },
+    });
+
+    await expect(executor.execute(ROLLBACK_REQUEST))
+      .rejects.toThrow(/not a positive revision/);
+    expect(rollback).not.toHaveBeenCalled();
+  });
+
+  it('refuses a target that is not strictly earlier than the current revision', async () => {
+    const rollback = vi.fn();
+    const executor = createKubeHelmRollbackExecutor({
+      namespace: 'psfn', release: 'psfn', resourcePrefix: 'psfn',
+      api: { rollback, getDeployment: vi.fn(), currentRevision: liveRevision(8) },
+    });
+
+    // Target 8 against a live revision of 8 is a same-revision "rollback".
+    await expect(executor.execute(ROLLBACK_REQUEST))
+      .rejects.toThrow(/refusing to roll forward/);
+    expect(rollback).not.toHaveBeenCalled();
+  });
+
+  it('rejects a rollback request that carries no target revision', async () => {
+    const rollback = vi.fn();
+    const executor = createKubeHelmRollbackExecutor({
+      namespace: 'psfn', release: 'psfn', resourcePrefix: 'psfn',
+      api: { rollback, getDeployment: vi.fn(), currentRevision: liveRevision() },
+    });
+    const { helmRevision: _omitted, ...withoutTarget } = ROLLBACK_REQUEST;
+
+    await expect(executor.execute(withoutTarget))
+      .rejects.toThrow(/no target revision/);
+    expect(rollback).not.toHaveBeenCalled();
   });
 
   it('rejects a request outside the configured release scope', async () => {
     const executor = createKubeHelmRollbackExecutor({
       namespace: 'psfn', release: 'psfn', resourcePrefix: 'psfn',
-      api: { rollback: vi.fn(), getDeployment: vi.fn() },
+      api: { rollback: vi.fn(), getDeployment: vi.fn(), currentRevision: liveRevision() },
     });
     await expect(executor.execute({ ...ROLLBACK_REQUEST, namespace: 'other' }))
       .rejects.toThrow(/outside the configured release scope/);
@@ -178,6 +271,7 @@ describe('rollback executor composition (fail-closed unique-executor guard stays
       api: {
         rollback: vi.fn(async () => ({ helmRevision: 10 })),
         getDeployment: vi.fn(async (_ns: string, name: string) => ready(name)),
+        currentRevision: liveRevision(),
       },
     });
     const combined = combineKubeSelfManagementExecutors([restart, rollback]);
@@ -191,11 +285,11 @@ describe('rollback executor composition (fail-closed unique-executor guard stays
   it('fails closed when two executors both claim rollback', async () => {
     const rollbackA = createKubeHelmRollbackExecutor({
       namespace: 'psfn', release: 'psfn', resourcePrefix: 'psfn',
-      api: { rollback: vi.fn(), getDeployment: vi.fn() },
+      api: { rollback: vi.fn(), getDeployment: vi.fn(), currentRevision: liveRevision() },
     });
     const rollbackB = createKubeHelmRollbackExecutor({
       namespace: 'psfn', release: 'psfn', resourcePrefix: 'psfn',
-      api: { rollback: vi.fn(), getDeployment: vi.fn() },
+      api: { rollback: vi.fn(), getDeployment: vi.fn(), currentRevision: liveRevision() },
     });
     const combined = combineKubeSelfManagementExecutors([rollbackA, rollbackB]);
     expect(combined.supports('rollback')).toBe(false);

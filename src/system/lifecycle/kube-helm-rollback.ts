@@ -19,6 +19,7 @@
 // (rollbackStatus 'failed') rather than a silent success.
 
 import type { KubeDeploymentDiagnostic } from './kube-diagnostics.js';
+import { resolveCurrentHelmRevision } from './kube-helm-revision.js';
 import { isDeploymentRolloutComplete } from './kube-rollout-restart.js';
 import type {
   KubeSelfManagementAction,
@@ -42,6 +43,13 @@ export interface KubeHelmRollbackApiPort {
   ): Promise<{ helmRevision: number }>;
   /** Read Deployment rollout status for the post-rollback readiness wait. */
   getDeployment(namespace: string, name: string): Promise<KubeDeploymentDiagnostic>;
+  /**
+   * The current (highest) Helm revision of the release, read live from Helm's
+   * release history at the moment of use. The executor cannot take this from its
+   * own process environment: a long-lived pod only knows the revision it was
+   * created at (psfn-framework-6187t).
+   */
+  currentRevision(namespace: string, release: string): Promise<number>;
 }
 
 /** The three Deployments a rollback must bring back to ready. */
@@ -154,8 +162,34 @@ export function createKubeHelmRollbackExecutor(
         || request.release !== options.release) {
         throw new Error('Kubernetes Helm rollback request is outside the configured release scope.');
       }
-      // Mutation requests carry the target revision to roll back TO.
+      // Rollback requests carry the target revision to roll back TO. The
+      // controller's parser already rejects a rollback without one; re-assert it
+      // here so the executor never depends on an upstream guard to avoid calling
+      // `helm rollback` with an undefined target.
       const targetRevision = request.helmRevision;
+      if (targetRevision === undefined) {
+        throw new Error('Kubernetes Helm rollback request carries no target revision.');
+      }
+
+      // Resolve the live current revision before touching the release. It is the
+      // only trustworthy source: the process environment cannot carry it (a pod
+      // knows only the revision it was created at — psfn-framework-6187t), and an
+      // unresolvable revision is a typed throw, never a default that could aim
+      // the rollback at the wrong content.
+      const currentRevision = await resolveCurrentHelmRevision(
+        (namespace, release) => options.api.currentRevision(namespace, release),
+        options.namespace,
+        options.release,
+      );
+      // Same invariant the automatic surface enforces: only ever roll back to a
+      // strictly-earlier revision. Without the live current revision this
+      // executor had no way to tell a rollback from a roll-forward.
+      if (targetRevision >= currentRevision) {
+        throw new Error(
+          `Kubernetes Helm rollback target revision ${targetRevision} is not earlier than the current revision `
+          + `${currentRevision}; refusing to roll forward.`,
+        );
+      }
       const startedAt = now();
 
       // A failing Helm rollback COMMAND propagates: the controller audits it as
@@ -185,12 +219,11 @@ export function createKubeHelmRollbackExecutor(
         namespace: options.namespace,
         release: options.release,
         trigger: 'manual' as const,
-        // The live revision this rollback moved AWAY from. Helm enacts a rollback
-        // as a fresh revision numbered one above the current live revision, so the
-        // source revision is the resulting revision minus one. Recording it keys
-        // the act-once ledger (hasRolledBackFrom) so a manual rollback of revision
-        // N stops the automatic surface — still pinned to N — from double-firing.
-        fromHelmRevision: rollbackResult.helmRevision - 1,
+        // The live revision this rollback moved AWAY from, as read from Helm
+        // before the rollback ran. Recording it keys the act-once ledger
+        // (hasRolledBackFrom) so a manual rollback of revision N stops the
+        // automatic surface — still pinned to N — from double-firing.
+        fromHelmRevision: currentRevision,
         targetHelmRevision: targetRevision,
         resultingHelmRevision: rollbackResult.helmRevision,
         reason: request.reason,

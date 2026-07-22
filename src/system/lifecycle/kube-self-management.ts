@@ -111,7 +111,13 @@ export interface KubeSelfManagementMutationRequest {
   release: string;
   sourceRevision: string;
   targetImage: string;
-  helmRevision: number;
+  /**
+   * The revision to roll back TO. Required for `rollback` and rejected for every
+   * other action: a requester cannot state the release's *current* revision,
+   * because the pod it runs in only knows the revision it was created at
+   * (psfn-framework-6187t). Executors read the live revision themselves.
+   */
+  helmRevision?: number;
   reason: string;
 }
 
@@ -216,20 +222,28 @@ function parseRequest(value: unknown): KubeSelfManagementRequest | null {
       release: value.release,
     };
   }
+  // `helmRevision` is the rollback TARGET, so it belongs to `rollback` alone.
+  // Any other action carrying one is a malformed request, not a tolerated extra:
+  // the requester has no way to know the release's live revision, so a number
+  // there could only be a stale guess (psfn-framework-6187t).
+  const rollback = value.action === 'rollback';
   if (!hasOnlyKeys(value, [
     'action',
     'namespace',
     'release',
     'sourceRevision',
     'targetImage',
-    'helmRevision',
+    ...(rollback ? ['helmRevision'] : []),
     'reason',
   ])) return null;
+  if (rollback
+    && (typeof value.helmRevision !== 'number'
+      || !Number.isSafeInteger(value.helmRevision)
+      || value.helmRevision <= 0)) {
+    return null;
+  }
   if (!isKubeSourceRevision(value.sourceRevision)
     || !isPinnedKubeImageReference(value.targetImage)
-    || typeof value.helmRevision !== 'number'
-    || !Number.isSafeInteger(value.helmRevision)
-    || value.helmRevision <= 0
     || typeof value.reason !== 'string'
     || value.reason.trim().length === 0
     || value.reason.trim().length > 500
@@ -242,7 +256,7 @@ function parseRequest(value: unknown): KubeSelfManagementRequest | null {
     release: value.release,
     sourceRevision: value.sourceRevision,
     targetImage: value.targetImage,
-    helmRevision: value.helmRevision,
+    ...(rollback ? { helmRevision: value.helmRevision as number } : {}),
     reason: value.reason.trim(),
   };
 }
@@ -259,11 +273,14 @@ export function summarizeKubeSelfManagementParams(
     ...(isMutationRequest(request) ? {
       sourceRevision: request.sourceRevision,
       targetImage: request.targetImage,
-      helmRevision: request.helmRevision,
+      ...(request.helmRevision !== undefined ? { helmRevision: request.helmRevision } : {}),
     } : {}),
   };
 }
 
+// Binding params are re-parsed when an approval is executed, and `parseRequest`
+// rejects a stray `helmRevision` key on a non-rollback action — so the key must
+// be omitted, not set to undefined.
 function bindingParams(request: KubeSelfManagementMutationRequest): Record<string, unknown> {
   return {
     action: request.action,
@@ -271,7 +288,7 @@ function bindingParams(request: KubeSelfManagementMutationRequest): Record<strin
     release: request.release,
     sourceRevision: request.sourceRevision,
     targetImage: request.targetImage,
-    helmRevision: request.helmRevision,
+    ...(request.helmRevision !== undefined ? { helmRevision: request.helmRevision } : {}),
   };
 }
 
@@ -320,7 +337,7 @@ function requestAuditEvent(
     ...(isMutationRequest(request) ? {
       sourceRevision: request.sourceRevision,
       targetImage: request.targetImage,
-      helmRevision: request.helmRevision,
+      ...(request.helmRevision !== undefined ? { helmRevision: request.helmRevision } : {}),
     } : {}),
     ...overrides,
   };

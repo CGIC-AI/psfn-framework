@@ -1,4 +1,4 @@
-import { describe, expect, it, beforeEach } from 'vitest';
+import { describe, expect, it, beforeEach, vi } from 'vitest';
 import { EventBus } from '../../shared/event-bus.js';
 import {
   buildCompletionHandoff,
@@ -54,6 +54,8 @@ describe('completion handoff emitter', () => {
     const buffered = notices.peek('api:parent');
     expect(buffered).toHaveLength(1);
     expect(buffered[0]).toMatchObject({
+      source: 'subagent',
+      taskId: 'subagent-1',
       label: 'research',
       status: 'completed',
       resultRefs: [{ kind: 'session', ref: 'subagent:subagent-1' }],
@@ -86,7 +88,7 @@ describe('completion handoff emitter', () => {
     expect(drained).toHaveLength(1);
     const block = renderBackgroundCompletionsBlock(drained);
     expect(block).toContain('<background_completions>');
-    expect(block).toContain('[background completion] fold-review — completed');
+    expect(block).toContain('[shard completion] fold-review — completed [task=shard-1]');
     expect(block).toContain('[result refs: session=shard:shard-1]');
     // Two lines per notice, compact summary.
     const noticeLines = block.split('\n').filter(line => line.includes('fold-review') || line.startsWith('Shard finished.'));
@@ -96,8 +98,9 @@ describe('completion handoff emitter', () => {
     expect(notices.drain('api:parent')).toHaveLength(0);
   });
 
-  it('omits notices entirely when no buffer is passed (bookkeeping emissions)', async () => {
+  it('only routes terminal subagent and shard results into companion context', async () => {
     const eventBus = new EventBus();
+    const notices = new CompletionNoticeBuffer();
     const events: Array<{ noticeBuffered?: boolean }> = [];
     eventBus.on('agent.completion_handoff', event => {
       events.push(event as { noticeBuffered?: boolean });
@@ -105,6 +108,7 @@ describe('completion handoff emitter', () => {
 
     const result = await emitCompletionHandoff({
       eventBus,
+      notices,
       targetChannelId: '1313001762793197678',
       handoff: {
         source: 'post_turn_action',
@@ -122,6 +126,87 @@ describe('completion handoff emitter', () => {
     expect(result.emitted).toBe(true);
     expect(result.noticeBuffered).toBe(false);
     expect(events[0]?.noticeBuffered).toBe(false);
+    expect(notices.peek('1313001762793197678')).toHaveLength(0);
+
+    const progress = await emitCompletionHandoff({
+      eventBus,
+      notices,
+      targetChannelId: 'api:parent',
+      handoff: {
+        source: 'subagent',
+        taskId: 'automata-progress',
+        status: 'progress',
+        resultSummary: 'One turn finished.',
+        partialResult: true,
+        recommendedNextAction: 'Wait.',
+      },
+    });
+    expect(progress.noticeBuffered).toBe(false);
+
+    const blocked = await emitCompletionHandoff({
+      eventBus,
+      notices,
+      targetChannelId: 'api:parent',
+      handoff: {
+        source: 'shard',
+        taskId: 'shard-blocked',
+        shardId: 'shard-blocked',
+        status: 'blocked',
+        resultSummary: 'The shard could not read the requested file.',
+        partialResult: false,
+        recommendedNextAction: 'Inspect the blocker.',
+      },
+    });
+    expect(blocked.noticeBuffered).toBe(true);
+    const blockedAutomata = await emitCompletionHandoff({
+      eventBus,
+      notices,
+      targetChannelId: 'api:parent',
+      handoff: {
+        source: 'subagent',
+        taskId: 'automata-blocked',
+        subagentId: 'automata-blocked',
+        status: 'blocked',
+        resultSummary: 'The automata could not access the requested input.',
+        partialResult: false,
+        recommendedNextAction: 'Inspect the blocker.',
+      },
+    });
+    expect(blockedAutomata.noticeBuffered).toBe(true);
+    expect(notices.peek('api:parent')).toHaveLength(2);
+  });
+
+  it('delivers an allowlisted result through the parent-orchestration port', async () => {
+    const deliver = vi.fn().mockResolvedValue('active_nudge' as const);
+    const result = await emitCompletionHandoff({
+      eventBus: new EventBus(),
+      noticeDelivery: { deliver },
+      targetChannelId: 'discord:origin',
+      handoff: {
+        source: 'subagent',
+        taskId: 'automata-delivery',
+        subagentId: 'automata-delivery',
+        status: 'completed',
+        resultSummary: 'The requested summary is ready.',
+        outputRefs: [{ kind: 'session', ref: 'subagent:automata-delivery' }],
+        partialResult: false,
+        recommendedNextAction: 'Review the result.',
+        origin: {
+          sourceChannelId: 'discord:origin',
+          logicalSessionId: 'session:captured-origin',
+        },
+      },
+    });
+
+    expect(deliver).toHaveBeenCalledWith(expect.objectContaining({
+      sourceChannelId: 'discord:origin',
+      logicalSessionId: 'session:captured-origin',
+      notice: expect.objectContaining({ taskId: 'automata-delivery' }),
+    }));
+    expect(result).toMatchObject({
+      noticeBuffered: false,
+      noticeDelivery: 'active_nudge',
+    });
   });
 
   it('does not burn the dedupe key when a critical lifecycle guard rejects emission', async () => {
@@ -173,7 +258,7 @@ describe('completion handoff emitter', () => {
     expect(replay).toMatchObject({ emitted: false, duplicate: true });
   });
 
-  it('replaces stacked notices for the same task label instead of accumulating', async () => {
+  it('keeps distinct child results even when their human-readable labels match', async () => {
     const notices = new CompletionNoticeBuffer();
     const eventBus = new EventBus();
     for (let index = 0; index < 3; index++) {
@@ -196,8 +281,59 @@ describe('completion handoff emitter', () => {
       });
     }
     const drained = notices.drain('api:parent');
-    expect(drained).toHaveLength(1);
-    expect(drained[0]).toMatchObject({ summary: 'Run 2 finished.' });
+    expect(drained).toHaveLength(3);
+    expect(drained.map(notice => notice.taskId)).toEqual(['task-0', 'task-1', 'task-2']);
+  });
+
+  it('replaces an older terminal update for the same child task', async () => {
+    const notices = new CompletionNoticeBuffer();
+    const eventBus = new EventBus();
+    for (const [status, dedupeKey] of [['blocked', 'blocked-1'], ['completed', 'completed-1']] as const) {
+      await emitCompletionHandoff({
+        eventBus,
+        notices,
+        targetChannelId: 'api:parent',
+        handoff: {
+          source: 'subagent',
+          taskId: 'same-task',
+          taskLabel: 'recurring-check',
+          status,
+          resultSummary: `${status} result`,
+          partialResult: false,
+          recommendedNextAction: 'Review.',
+          dedupeKey,
+        },
+      });
+    }
+    expect(notices.drain('api:parent')).toMatchObject([
+      { taskId: 'same-task', status: 'completed' },
+    ]);
+  });
+
+  it('bounds and expires an offline completion backlog', async () => {
+    const notices = new CompletionNoticeBuffer();
+    const eventBus = new EventBus();
+    for (let index = 0; index < 10; index++) {
+      await emitCompletionHandoff({
+        eventBus,
+        notices,
+        targetChannelId: 'api:parent',
+        handoff: {
+          source: 'subagent',
+          taskId: `offline-${index}`,
+          status: 'completed',
+          resultSummary: `Offline result ${index}`,
+          partialResult: false,
+          recommendedNextAction: 'Review.',
+          createdAt: index === 2 ? 1 : 100,
+          dedupeKey: `offline-dedupe-${index}`,
+        },
+      });
+    }
+
+    expect(notices.peek('api:parent')).toHaveLength(8);
+    expect(notices.drain('api:parent', 24 * 60 * 60 * 1000 + 2))
+      .toHaveLength(7);
   });
 
   it('keeps the first result lookup visible while bounding long references', async () => {
@@ -218,9 +354,12 @@ describe('completion handoff emitter', () => {
       },
     });
 
+    const [notice] = notices.peek('api:parent');
+    expect(notice.resultRefs[0]?.ref).toBe(`subagent:${'x'.repeat(500)}`);
     const block = renderBackgroundCompletionsBlock(notices.drain('api:parent'));
     const detailLine = block.split('\n').find(line => line.includes('[result refs:'));
-    expect(detailLine).toContain('[result refs: session=subagent:');
+    expect(detailLine).toContain('[result refs: session=');
+    expect(detailLine).not.toContain('subagent');
     expect(detailLine?.length).toBeLessThanOrEqual(160);
   });
 

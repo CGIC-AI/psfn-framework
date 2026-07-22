@@ -1,22 +1,20 @@
 /**
- * Compact, ephemeral background-completion notices.
+ * Compact, ephemeral child-completion notices.
  *
  * Replaces the old behavior of persisting full CompletionHandoff JSON blobs
  * as session-store system messages (which polluted every channel's transcript
  * and displaced real conversation in the count-based history fetch).
  *
  * Contract:
- * - Notices are NEVER written to the session store. They live in memory only;
- *   the durable record of a completion is the `agent.completion_handoff`
- *   event-bus emission and its journal/telemetry consumers.
+ * - Notices are NEVER written to the session store. The child transcript or
+ *   returned artifact remains the durable result; this queue is only the
+ *   bounded signal that tells the parent companion where to look.
  * - A notice is at most two short lines, rendered once into the prompt's
  *   `background_completions` system block (well above the recent chat tail),
  *   then dropped. If the agent restarts before render, the notice is lost by
- *   design — the event journal still has the full record.
- * - Only companion-relevant completions produce notices (subagent/shard
- *   results, background continuations carrying a deliverable). Maintenance
- *   bookkeeping (near-turn memory, episode synthesis, follow-up activation,
- *   queue drops) must not create notices at all.
+ *   design; child results remain addressable through their task/result refs.
+ * - Only terminal automata/shard results produce notices. Maintenance
+ *   bookkeeping and lifecycle progress must not enter companion context.
  */
 
 import type { CompletionHandoffRecord } from '../../shared/contracts/completion-handoff.js';
@@ -24,12 +22,10 @@ import type { CompletionHandoffRecord } from '../../shared/contracts/completion-
 const MAX_NOTICES_PER_CHANNEL = 8;
 const NOTICE_TTL_MS = 24 * 60 * 60 * 1000;
 const MAX_NOTICE_SUMMARY_CHARS = 160;
-const RESULT_REF_BOUNDS = {
-  count: 4,
-  labelChars: 24,
-  valueChars: 60,
-  renderedChars: 90,
-} as const;
+const MAX_NOTICE_LABEL_CHARS = 48;
+const MAX_NOTICE_RESULT_REFS = 4;
+const MAX_NOTICE_RESULT_REF_LABEL_CHARS = 24;
+const MAX_NOTICE_RENDERED_REFS_CHARS = 110;
 
 export interface CompletionNoticeResultRef {
   kind: string;
@@ -39,6 +35,9 @@ export interface CompletionNoticeResultRef {
 
 export interface CompletionNotice {
   dedupeKey: string;
+  handoffId: string;
+  source: CompletionHandoffRecord['source'];
+  taskId: string;
   label: string;
   status: CompletionHandoffRecord['status'];
   summary: string;
@@ -46,33 +45,50 @@ export interface CompletionNotice {
   createdAt: number;
 }
 
+export type CompletionNoticeDeliveryDisposition = 'active_nudge' | 'buffered';
+
+export interface CompletionNoticeDeliveryInput {
+  sourceChannelId: string;
+  logicalSessionId: string;
+  notice: CompletionNotice;
+}
+
+export interface CompletionNoticeDeliveryPort {
+  deliver(input: CompletionNoticeDeliveryInput): Promise<CompletionNoticeDeliveryDisposition>;
+}
+
 export function renderCompletionNoticeLines(notice: CompletionNotice): string {
   const renderedRefs = renderResultRefs(notice.resultRefs);
   const suffix = renderedRefs ? ` [result refs: ${renderedRefs}]` : '';
   const summaryBudget = Math.max(1, MAX_NOTICE_SUMMARY_CHARS - suffix.length);
+  const sourceLabel = notice.source === 'subagent' ? 'automata' : notice.source;
+  const heading = `[${sourceLabel} completion] ${notice.label} — ${notice.status} [task=${notice.taskId}]`;
   return [
-    `[background completion] ${notice.label} — ${notice.status}`,
+    truncate(heading, MAX_NOTICE_SUMMARY_CHARS),
     `${truncate(notice.summary, summaryBudget)}${suffix}`,
   ].join('\n');
 }
 
 export function buildCompletionNotice(handoff: CompletionHandoffRecord): CompletionNotice {
-  const label = handoff.task.label?.trim() || handoff.task.id;
+  const label = truncate(handoff.task.label?.trim() || handoff.task.id, MAX_NOTICE_LABEL_CHARS);
   const normalizedSummary = handoff.result.summary.replace(/\s+/g, ' ').trim();
   const summary = normalizedSummary.length > MAX_NOTICE_SUMMARY_CHARS
     ? `${normalizedSummary.slice(0, MAX_NOTICE_SUMMARY_CHARS - 3)}...`
     : normalizedSummary;
   const resultRefs = [...handoff.refs.artifacts, ...handoff.refs.outputs]
-    .slice(0, RESULT_REF_BOUNDS.count)
+    .slice(0, MAX_NOTICE_RESULT_REFS)
     .map(ref => ({
-      kind: truncate(ref.kind, RESULT_REF_BOUNDS.labelChars),
-      ref: truncate(ref.ref, RESULT_REF_BOUNDS.valueChars),
+      kind: ref.kind,
+      ref: ref.ref,
       ...(ref.label
-        ? { label: truncate(ref.label, RESULT_REF_BOUNDS.labelChars) }
+        ? { label: ref.label }
         : {}),
     }));
   return {
     dedupeKey: handoff.dedupeKey,
+    handoffId: handoff.handoffId,
+    source: handoff.source,
+    taskId: handoff.task.id,
     label,
     status: handoff.status,
     summary,
@@ -84,18 +100,28 @@ export function buildCompletionNotice(handoff: CompletionHandoffRecord): Complet
 function renderResultRefs(refs: readonly CompletionNoticeResultRef[]): string {
   let rendered = '';
   for (const ref of refs) {
-    const label = (ref.label?.trim() || ref.kind).replace(/\s+/g, ' ');
-    const value = ref.ref.replace(/\s+/g, ' ').trim();
+    const label = renderResultRefLabel(ref).slice(0, MAX_NOTICE_RESULT_REF_LABEL_CHARS);
+    const value = renderResultRefValue(ref).replace(/\s+/g, ' ').trim();
     if (!label || !value) continue;
     const candidate = `${label}=${value}`;
     const next = rendered ? `${rendered}; ${candidate}` : candidate;
-    if (next.length > RESULT_REF_BOUNDS.renderedChars) {
-      if (!rendered) rendered = truncate(candidate, RESULT_REF_BOUNDS.renderedChars);
+    if (next.length > MAX_NOTICE_RENDERED_REFS_CHARS) {
+      if (!rendered) rendered = truncate(candidate, MAX_NOTICE_RENDERED_REFS_CHARS);
       break;
     }
     rendered = next;
   }
   return rendered;
+}
+
+function renderResultRefLabel(ref: CompletionNoticeResultRef): string {
+  const label = (ref.label?.trim() || ref.kind).replace(/\s+/g, ' ');
+  return label.replace(/subagent/gi, 'automata');
+}
+
+function renderResultRefValue(ref: CompletionNoticeResultRef): string {
+  const value = ref.ref.trim();
+  return value.startsWith('subagent:') ? value.slice('subagent:'.length) : value;
 }
 
 function truncate(value: string, maxChars: number): string {
@@ -108,8 +134,8 @@ export class CompletionNoticeBuffer {
   private readonly noticesByChannel = new Map<string, CompletionNotice[]>();
 
   /**
-   * Register a notice for a channel. Dedupes by dedupeKey and by task label
-   * (a newer completion of the same task replaces the older notice instead of
+   * Register a notice for a channel. Dedupes by dedupeKey and child task id
+   * (a newer terminal state for the same task replaces the older notice instead of
    * stacking). Oldest notices are dropped beyond the per-channel cap.
    */
   register(channelId: string, notice: CompletionNotice): void {
@@ -117,7 +143,7 @@ export class CompletionNoticeBuffer {
     if (!key) return;
     const existing = this.noticesByChannel.get(key) ?? [];
     const filtered = existing.filter(
-      candidate => candidate.dedupeKey !== notice.dedupeKey && candidate.label !== notice.label,
+      candidate => candidate.dedupeKey !== notice.dedupeKey && candidate.taskId !== notice.taskId,
     );
     filtered.push(notice);
     while (filtered.length > MAX_NOTICES_PER_CHANNEL) {
@@ -150,7 +176,7 @@ export function renderBackgroundCompletionsBlock(notices: readonly CompletionNot
   const body = notices.map(renderCompletionNoticeLines).join('\n');
   return [
     '<background_completions>',
-    'Internal background work finished since your last turn. Companion-only context; mention it to the partner only if policy and the conversation call for it.',
+    'Delegated work reported back to you. This is private orchestration context, not partner speech. Review the result and decide your own next action.',
     body,
     '</background_completions>',
   ].join('\n');

@@ -8,7 +8,7 @@ export type TurnRunOwnerAttribution = {
 } | {
   kind: 'queued-ingress';
   sourceId: string;
-  ingress: 'follow-up' | 'steer' | 'observation';
+  ingress: 'follow-up' | 'steer' | 'observation' | 'completion';
 };
 
 export interface TurnIngressLease {

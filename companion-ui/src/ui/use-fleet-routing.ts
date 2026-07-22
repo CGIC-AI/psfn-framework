@@ -41,7 +41,7 @@ export function useFleetRouting(input: {
     connectWhenAllowed: boolean,
   ): Promise<void> {
     const client = clientRef.current;
-    if (!client) throw new Error('Fleet roster client is unavailable');
+    if (!client) throw new Error('Cluster roster client is unavailable');
     const [nextRoster, nextApprovals] = await Promise.all([
       client.readRoster(),
       client.readApprovals(),
@@ -52,7 +52,7 @@ export function useFleetRouting(input: {
     ) ?? nextRoster.companions.find(
       companion => companion.websocketPath === status.websocketPath,
     ) ?? nextRoster.companions[0];
-    if (!selected) throw new Error('Fleet session has no authorized companions');
+    if (!selected) throw new Error('Cluster session has no authorized companions');
     activeCompanionIdRef.current = selected.companionId;
     setRoster(nextRoster.companions);
     setActiveCompanionId(selected.companionId);
@@ -67,7 +67,7 @@ export function useFleetRouting(input: {
       const next = await client.readApprovals();
       rememberApprovals(next.approvals);
     } catch (error) {
-      reportErrorRef.current(error instanceof Error ? error.message : 'Fleet approvals refresh failed');
+      reportErrorRef.current(error instanceof Error ? error.message : 'Cluster approvals refresh failed');
     }
   }
 

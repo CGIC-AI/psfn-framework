@@ -126,6 +126,10 @@ export function privacyBreakGlassResourceKindForRoute(
     || routeId === 'POST /api/admin/privacy-break-glass/profile/:id/decide') {
     return 'profile';
   }
+  if (routeId === 'POST /api/admin/privacy-break-glass/journal/:id/confirm'
+    || routeId === 'POST /api/admin/privacy-break-glass/journal/:id/decide') {
+    return 'journal';
+  }
   return null;
 }
 

@@ -5,6 +5,7 @@ import type {
 } from '../../../faculties/memory/memory-store-port.js';
 import type { PurrMemory } from '../../../faculties/memory/types.js';
 import type { MemorySubjectClassification } from '../../../shared/contracts/memory-subject.js';
+import type { ReflectionJournalEntry } from '../../../persistence/journals/reflection-journal.js';
 import type { FleetGardenRequestContext } from '../garden-request-context.js';
 import { AdminPrivacyBreakGlassService } from './privacy-break-glass-service.js';
 
@@ -52,8 +53,14 @@ function classification(
   };
 }
 
+const JOURNAL_AREA_BY_KIND = {
+  memory: 'memory',
+  profile: 'contacts',
+  journal: 'values',
+} as const;
+
 function context(input: {
-  kind: 'memory' | 'profile';
+  kind: 'memory' | 'profile' | 'journal';
   phase: 'confirm' | 'decide';
   resourceId: string;
   assurance?: FleetGardenRequestContext['actor']['sessionAssurance'];
@@ -62,7 +69,7 @@ function context(input: {
   sessionAuthzVersion?: number;
 }): FleetGardenRequestContext {
   const assurance = input.assurance ?? (input.phase === 'confirm' ? 'break_glass' : 'oauth');
-  const area = input.kind === 'memory' ? 'memory' : 'contacts';
+  const area = JOURNAL_AREA_BY_KIND[input.kind];
   const authorization = {
     action: 'privacy.break_glass' as const,
     baseRole: 'admin' as const,
@@ -142,20 +149,37 @@ function fixture() {
     getContactProfile: vi.fn(async () => profile),
   } as unknown as Pick<MemoryStorePort,
     'getById' | 'getMemorySubjectClassification' | 'getContactProfile'>;
+  let journalEntries: ReflectionJournalEntry[] = [{
+    id: 'reflection-1',
+    templateId: 'musing',
+    templateName: 'Musing',
+    prompt: 'Free-form reflection prompt.',
+    reflection: 'A private companion reflection.',
+    channelId: 'discord:heartbeat',
+    mode: 'agent',
+    createdAt: '2026-03-08T08:00:00.000Z',
+  }];
+  const listStream = vi.fn((stream: string, limit: number) => {
+    if (stream !== 'reflection-journal') return [];
+    return journalEntries.slice(0, limit);
+  });
   let clock = NOW;
   const service = new AdminPrivacyBreakGlassService({
     memoryStore: store,
+    journalReader: { listStream: listStream as never },
     confirmTtlMs: 60_000,
     now: () => clock,
     randomBytes: () => Buffer.alloc(32, 0xab),
   });
   return {
     service,
+    listStream,
     advance: (ms: number) => { clock += ms; },
     changeMemory: (value: PurrMemory) => { currentMemory = value; },
     changeClassification: (value: MemorySubjectClassification) => {
       currentClassification = value;
     },
+    changeJournal: (value: ReflectionJournalEntry[]) => { journalEntries = value; },
   };
 }
 
@@ -316,6 +340,81 @@ describe('AdminPrivacyBreakGlassService', () => {
     changedContent.changeMemory(memory({ text: 'content changed after confirmation' }));
     await expect(changedContent.service.decide({
       ...decision, request: { ...REASON, confirmToken: contentSnapshot.confirmToken },
+    })).resolves.toMatchObject({ ok: false, code: 'resource_changed' });
+  });
+
+  it('discloses one exact companion-private journal window under the same two-step binding', async () => {
+    const { service, listStream } = fixture();
+    const routine = await service.begin({
+      resourceKind: 'journal',
+      resourceId: 'reflection-journal',
+      request: REASON,
+      context: context({
+        kind: 'journal', phase: 'confirm', resourceId: 'reflection-journal', assurance: 'oauth',
+      }),
+    });
+    expect(routine).toMatchObject({ ok: false, code: 'trusted_uv_authority_required' });
+
+    const begun = await service.begin({
+      resourceKind: 'journal',
+      resourceId: 'reflection-journal',
+      request: REASON,
+      context: context({ kind: 'journal', phase: 'confirm', resourceId: 'reflection-journal' }),
+    });
+    expect(begun.ok).toBe(true);
+    if (!begun.ok) throw new Error('expected journal confirmation');
+    expect(begun.audit).toMatchObject({ assurance: 'webauthn_uv', resourceKind: 'journal' });
+    expect(listStream).toHaveBeenCalledWith('reflection-journal', 250);
+
+    const decided = await service.decide({
+      resourceKind: 'journal',
+      resourceId: 'reflection-journal',
+      request: { ...REASON, confirmToken: begun.confirmToken },
+      context: context({ kind: 'journal', phase: 'decide', resourceId: 'reflection-journal' }),
+    });
+    expect(decided).toMatchObject({
+      ok: true,
+      disclosure: {
+        kind: 'journal',
+        journal: { stream: 'reflection-journal', entries: [{ id: 'reflection-1' }] },
+      },
+    });
+  });
+
+  it('treats an unknown journal stream selector as unavailable', async () => {
+    const { service } = fixture();
+    await expect(service.begin({
+      resourceKind: 'journal',
+      resourceId: 'not-a-journal',
+      request: REASON,
+      context: context({ kind: 'journal', phase: 'confirm', resourceId: 'not-a-journal' }),
+    })).resolves.toMatchObject({ ok: false, code: 'resource_unavailable' });
+  });
+
+  it('consumes a journal confirmation when the disclosed window changes before decision', async () => {
+    const changed = fixture();
+    const begun = await changed.service.begin({
+      resourceKind: 'journal',
+      resourceId: 'reflection-journal',
+      request: REASON,
+      context: context({ kind: 'journal', phase: 'confirm', resourceId: 'reflection-journal' }),
+    });
+    if (!begun.ok) throw new Error('expected journal confirmation');
+    changed.changeJournal([{
+      id: 'reflection-2',
+      templateId: 'musing',
+      templateName: 'Musing',
+      prompt: 'A newer reflection prompt.',
+      reflection: 'A newer private companion reflection.',
+      channelId: 'discord:heartbeat',
+      mode: 'agent',
+      createdAt: '2026-03-09T08:00:00.000Z',
+    }]);
+    await expect(changed.service.decide({
+      resourceKind: 'journal',
+      resourceId: 'reflection-journal',
+      request: { ...REASON, confirmToken: begun.confirmToken },
+      context: context({ kind: 'journal', phase: 'decide', resourceId: 'reflection-journal' }),
     })).resolves.toMatchObject({ ok: false, code: 'resource_changed' });
   });
 

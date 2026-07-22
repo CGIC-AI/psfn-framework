@@ -363,6 +363,22 @@ const routeAuthorizationGroups: readonly RouteAuthorizationGroup[] = [
     ]), subjectRelation: 'none', assurance: 'oauth', confirmation: 'explicit',
   },
   {
+    // Companion-private journals (values timeline, metacognition, daily and
+    // free-form reflections) are welfare-sensitive substrates. The confirm
+    // phase demands the same per-request `privacy_break_glass` step-up as
+    // memory/profile so the gateway mints the `break_glass` session assurance
+    // the disclosure requires; the decide phase then discloses one exact
+    // journal window under that authority.
+    action: 'privacy.break_glass', area: 'values', routeIds: ids('POST', [
+      '/api/admin/privacy-break-glass/journal/:id/confirm',
+    ]), subjectRelation: 'none', assurance: 'privacy_break_glass', confirmation: 'explicit',
+  },
+  {
+    action: 'privacy.break_glass', area: 'values', routeIds: ids('POST', [
+      '/api/admin/privacy-break-glass/journal/:id/decide',
+    ]), subjectRelation: 'none', assurance: 'oauth', confirmation: 'explicit',
+  },
+  {
     action: 'memory.manage', area: 'memory', routeIds: [
       ...ids('POST', [
         '/api/admin/memory/bulk-delete', '/api/admin/memory/bulk-update',

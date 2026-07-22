@@ -4,6 +4,10 @@ import type {
   MemoryStorePort,
 } from '../../../faculties/memory/memory-store-port.js';
 import type { PurrMemory } from '../../../faculties/memory/types.js';
+import type { ValuesJournalEntry } from '../../../faculties/values/store.js';
+import type { ReflectionJournalEntry } from '../../../persistence/journals/reflection-journal.js';
+import type { ReflectionMetacognitionJournalEntry } from '../../../persistence/journals/reflection-metacognition-journal.js';
+import type { ReflectionDailyJournalEntry } from '../../../persistence/journals/reflection-substrate.js';
 import {
   isPrivacyBreakGlassConfirmRoute,
   privacyBreakGlassReasonDigest,
@@ -17,9 +21,62 @@ import {
 import { timingSafeStringEqual } from '../../../shared/utils/secret-compare.js';
 import type { FleetGardenRequestContext } from '../garden-request-context.js';
 
+/**
+ * The four companion-private journal streams gated by the values/reflection
+ * read routes. The break-glass `:id` selector names exactly one stream; every
+ * other selector is treated as unavailable so a disclosure only ever exposes a
+ * known welfare substrate.
+ */
+export type PrivacyBreakGlassJournalStream =
+  | 'values-journal'
+  | 'reflection-metacognition'
+  | 'reflection-daily'
+  | 'reflection-journal';
+
+export type PrivacyBreakGlassJournalEntry =
+  | ValuesJournalEntry
+  | ReflectionMetacognitionJournalEntry
+  | ReflectionDailyJournalEntry
+  | ReflectionJournalEntry;
+
+export interface PrivacyBreakGlassJournalDisclosure {
+  readonly stream: PrivacyBreakGlassJournalStream;
+  readonly entries: readonly PrivacyBreakGlassJournalEntry[];
+}
+
+/**
+ * Read side for journal break-glass disclosures. Mirrors the bounded-window
+ * shape the gated GET routes serve: one exact stream, most-recent-first, capped
+ * at `limit`. Kept separate from the memory store so the service never reaches
+ * for a subject-scoped read path when disclosing companion-private journals.
+ */
+export interface PrivacyBreakGlassJournalReader {
+  listStream(
+    stream: PrivacyBreakGlassJournalStream,
+    limit: number,
+  ): readonly PrivacyBreakGlassJournalEntry[];
+}
+
+const JOURNAL_STREAMS: readonly PrivacyBreakGlassJournalStream[] = [
+  'values-journal',
+  'reflection-metacognition',
+  'reflection-daily',
+  'reflection-journal',
+];
+
+/** Bounded disclosure window; matches the gated GET routes' server-side cap. */
+const JOURNAL_DISCLOSURE_LIMIT = 250;
+
+function journalStream(value: string): PrivacyBreakGlassJournalStream | null {
+  return (JOURNAL_STREAMS as readonly string[]).includes(value)
+    ? value as PrivacyBreakGlassJournalStream
+    : null;
+}
+
 export type PrivacyBreakGlassDisclosure =
   | { kind: 'memory'; memory: PurrMemory }
-  | { kind: 'profile'; profile: ContactProfileArtifact };
+  | { kind: 'profile'; profile: ContactProfileArtifact }
+  | { kind: 'journal'; journal: PrivacyBreakGlassJournalDisclosure };
 
 export interface PrivacyBreakGlassAuditEvidence {
   assurance: 'webauthn_uv';
@@ -92,7 +149,7 @@ function authorityBinding(context: FleetGardenRequestContext): string {
 }
 
 interface ExactNonSubjectResource {
-  resource: PurrMemory | ContactProfileArtifact;
+  resource: PurrMemory | ContactProfileArtifact | PrivacyBreakGlassJournalDisclosure;
   subjectScopeDigest: string;
 }
 
@@ -110,6 +167,7 @@ export class AdminPrivacyBreakGlassService {
   constructor(private readonly options: {
     memoryStore: Pick<MemoryStorePort,
       'getById' | 'getContactProfile' | 'getMemorySubjectClassification'>;
+    journalReader?: PrivacyBreakGlassJournalReader;
     confirmTtlMs: number;
     now?: () => number;
     randomBytes?: (length: number) => Buffer;
@@ -231,11 +289,20 @@ export class AdminPrivacyBreakGlassService {
       )) {
       return { ok: false, status: 409, code: 'resource_changed' };
     }
+    let disclosure: PrivacyBreakGlassDisclosure;
+    if (input.resourceKind === 'memory') {
+      disclosure = { kind: 'memory', memory: current.resource as PurrMemory };
+    } else if (input.resourceKind === 'profile') {
+      disclosure = { kind: 'profile', profile: current.resource as ContactProfileArtifact };
+    } else {
+      disclosure = {
+        kind: 'journal',
+        journal: current.resource as PrivacyBreakGlassJournalDisclosure,
+      };
+    }
     return {
       ok: true,
-      disclosure: input.resourceKind === 'memory'
-        ? { kind: 'memory', memory: current.resource as PurrMemory }
-        : { kind: 'profile', profile: current.resource as ContactProfileArtifact },
+      disclosure,
       audit: this.auditEvidence(pending),
     };
   }
@@ -245,6 +312,19 @@ export class AdminPrivacyBreakGlassService {
     resourceId: string,
     actorContactId: string,
   ): Promise<ExactNonSubjectResource | null> {
+    if (kind === 'journal') {
+      const stream = journalStream(resourceId);
+      if (!stream || !this.options.journalReader) return null;
+      const entries = this.options.journalReader.listStream(stream, JOURNAL_DISCLOSURE_LIMIT);
+      return {
+        resource: { stream, entries },
+        subjectScopeDigest: digest(JSON.stringify({
+          schemaVersion: 1,
+          resourceKind: 'journal',
+          stream,
+        })),
+      };
+    }
     if (kind === 'profile') {
       if (timingSafeStringEqual(resourceId, actorContactId)) return null;
       const profile = await this.options.memoryStore.getContactProfile(resourceId);

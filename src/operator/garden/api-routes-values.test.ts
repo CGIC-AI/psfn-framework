@@ -24,6 +24,8 @@ import type { ReflectionMetacognitionJournalEntry } from '../../persistence/jour
 import type { ReflectionDailyJournalEntry } from '../../persistence/journals/reflection-substrate.js';
 import type { ReflectionJournalEntry } from '../../persistence/journals/reflection-journal.js';
 import type { GardenRequestContext } from './garden-request-context.js';
+import { requireGardenRouteAuthorization } from '../../boundary/fleet-auth/garden-route-authorization.js';
+import { isPrivacyBreakGlassConfirmRoute } from '../../shared/contracts/privacy-break-glass.js';
 
 /**
  * Companion-private journals are gated behind the privacy break-glass
@@ -297,6 +299,45 @@ describe('companion journal privacy break-glass gate', () => {
       expect(details).toContain('assurance=break_glass');
     },
   );
+
+  it('makes the gated read reachable through the real journal break-glass confirm assurance', async () => {
+    // The gateway (fleet-sso-router) mints the `break_glass` session assurance
+    // the four gated GET reads require ONLY when a request targets a recognised
+    // privacy break-glass confirm route whose authorization demands
+    // `privacy_break_glass`. Before this seam, no journal route satisfied that
+    // predicate, so the reads were a permanent 403. Assert the journal confirm
+    // route now satisfies both halves of the real mint predicate, then derive
+    // the minted assurance from that classification (not a hand-picked literal)
+    // and prove it unlocks a disclosure.
+    const confirmRouteId = 'POST /api/admin/privacy-break-glass/journal/:id/confirm';
+    expect(isPrivacyBreakGlassConfirmRoute(confirmRouteId)).toBe(true);
+    const mintPredicate = requireGardenRouteAuthorization(confirmRouteId).requirements.assurance;
+    expect(mintPredicate).toBe('privacy_break_glass');
+    const mintedAssurance = mintPredicate === 'privacy_break_glass' ? 'break_glass' : 'oauth';
+    const mintedContext = {
+      kind: 'fleet_principal',
+      actor: { sessionAssurance: mintedAssurance },
+    } as unknown as GardenRequestContext;
+
+    const appendAudit = vi.fn();
+    const routes = makeRoutes({
+      reflectionJournal: { listRecent: vi.fn(() => []) },
+      appendAuditTimelineEntry: appendAudit,
+    });
+    const route = routes.find(candidate => candidate.match('/api/admin/values/reflections/journal'));
+    expect(route).toBeDefined();
+
+    const allowed = await invokeRoute(
+      route!,
+      '/api/admin/values/reflections/journal',
+      mintedContext,
+    );
+
+    expect(allowed.status).toBe(200);
+    const [, decision, , details] = appendAudit.mock.calls[0]!;
+    expect(decision).toBe('allowed');
+    expect(details).toContain('assurance=break_glass');
+  });
 
   it('fails closed with 503 when a break-glass read cannot be audited', async () => {
     const routes = makeRoutes({

@@ -197,6 +197,44 @@ describe('privacy break-glass routes', () => {
     expect(response.statusCode).toBe(503);
   });
 
+  it('registers and discloses through the companion-journal route pair', async () => {
+    const calls: AuditCall[] = [];
+    const appendAudit: AdminAuditTimelineAppender = (...args) => { calls.push(args); };
+    const journalDisclosure = {
+      kind: 'journal' as const,
+      journal: {
+        stream: 'reflection-journal' as const,
+        entries: [{ id: 'reflection-1', reflection: 'private companion reflection' }],
+      },
+    };
+    const decide = vi.fn().mockResolvedValue({
+      ok: true, disclosure: journalDisclosure, audit: { ...auditEvidence, resourceKind: 'journal' },
+    });
+    const withBody: AdminBodyReader = (_req, _res, callback) => {
+      callback(JSON.stringify({ ...BODY, confirmToken: TOKEN }));
+    };
+    const routes = buildAdminPrivacyBreakGlassRoutes({
+      service: { decide } as unknown as AdminPrivacyBreakGlassService,
+      withBody,
+      appendAuditTimelineEntry: appendAudit,
+    });
+    const path = '/api/admin/privacy-break-glass/journal/reflection-journal/decide';
+    const route = routes.find(candidate => candidate.method === 'POST' && candidate.match(path));
+    expect(route).toBeDefined();
+    const response = new CapturingResponse();
+    route!.handle(
+      { headers: {} } as IncomingMessage,
+      response as unknown as ServerResponse,
+      route!.match(path) ?? {},
+      { ...context('decide'), resource: { ...context('decide').resource, routeId: 'POST /api/admin/privacy-break-glass/journal/:id/decide', area: 'values', pathParams: { id: 'reflection-journal' } } } as unknown as GardenRequestContext,
+    );
+    await response.done;
+    expect(response.statusCode).toBe(200);
+    expect(response.body).toContain('reflection-journal');
+    expect(decide).toHaveBeenCalledWith(expect.objectContaining({ resourceKind: 'journal' }));
+    expect(calls[0]?.[1]).toBe('allowed');
+  });
+
   it('never returns a disclosure when durable audit persistence throws', async () => {
     const secretText = 'must remain undisclosed';
     const decision = await invoke({

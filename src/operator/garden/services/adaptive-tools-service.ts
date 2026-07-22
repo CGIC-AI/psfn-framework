@@ -68,7 +68,13 @@ export class AdminAdaptiveToolsDataService implements AdminAdaptiveToolsService 
   private readonly invocationLimit: number;
   private readonly recentTelemetry: AdminAdaptiveToolTelemetryEvent[] = [];
   private readonly recentFailures: AdminToolFailureEvent[] = [];
-  private readonly recentInvocations: AdminToolInvocationEvent[] = [];
+  // Each invocation carries a monotonic sequence so newest-first ordering is a
+  // total order even when two events share a millisecond timestamp. Without it
+  // the sort falls back to insertion order only on a tie, so the visible order
+  // silently flips whenever the wall clock ticks between two back-to-back
+  // events (see psfn-framework-5gg3).
+  private readonly recentInvocations: { entry: AdminToolInvocationEvent; sequence: number }[] = [];
+  private invocationSequence = 0;
   private readonly pendingActions = new Map<string, { toolName: string; action: string }>();
 
   constructor(private readonly deps: {
@@ -170,8 +176,11 @@ export class AdminAdaptiveToolsDataService implements AdminAdaptiveToolsService 
       .map(entry => ({ ...entry }));
     const recentInvocations = this.recentInvocations
       .slice()
-      .sort((left, right) => right.timestamp - left.timestamp)
-      .map(entry => ({ ...entry }));
+      .sort((left, right) => (
+        right.entry.timestamp - left.entry.timestamp
+        || right.sequence - left.sequence
+      ))
+      .map(item => ({ ...item.entry }));
     const toolHealth = deriveToolHealthViews({
       catalog,
       state,
@@ -216,7 +225,7 @@ export class AdminAdaptiveToolsDataService implements AdminAdaptiveToolsService 
   }
 
   private pushInvocation(entry: AdminToolInvocationEvent): void {
-    this.recentInvocations.push(entry);
+    this.recentInvocations.push({ entry, sequence: this.invocationSequence++ });
     if (this.recentInvocations.length > this.invocationLimit) {
       this.recentInvocations.splice(0, this.recentInvocations.length - this.invocationLimit);
     }

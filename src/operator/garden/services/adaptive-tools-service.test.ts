@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { EventBus } from '../../../shared/event-bus.js';
 import { AdminAdaptiveToolsDataService } from './adaptive-tools-service.js';
 
@@ -186,10 +186,51 @@ describe('AdminAdaptiveToolsDataService invocation audit', () => {
     });
 
     const data = await service.getAdaptiveToolsData();
+    // Deterministic newest-first order by construction: the monotonic
+    // invocation sequence breaks millisecond-timestamp ties, so the
+    // second-emitted event (duplicate_skip) always sorts ahead of the first
+    // (policy_denial) regardless of whether the wall clock ticked between the
+    // two emits (psfn-framework-5gg3).
     expect(data.recentInvocations.map(invocation => invocation.outcome)).toEqual([
-      'policy_denial',
       'duplicate_skip',
+      'policy_denial',
     ]);
     expect(data.recentFailures).toEqual([]);
+  });
+
+  it('orders recent invocations newest-first deterministically on a millisecond tie', async () => {
+    const eventBus = new EventBus();
+    const service = new AdminAdaptiveToolsDataService({ eventBus });
+
+    // Pin the clock so both events share an identical millisecond timestamp:
+    // this is exactly the tie case where a timestamp-only sort would fall back
+    // to insertion order and mask the ordering bug. With the sequence
+    // tiebreaker the newest-emitted event must still come first.
+    const fixedNow = 1_700_000_000_000;
+    const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(fixedNow);
+    try {
+      await eventBus.emit('agent.tool.end', {
+        channelId: 'api-session',
+        toolCallId: 'first',
+        toolName: 'web',
+        outcome: 'policy_denial',
+        isError: true,
+      });
+      await eventBus.emit('agent.tool.end', {
+        channelId: 'api-session',
+        toolCallId: 'second',
+        toolName: 'fs',
+        outcome: 'duplicate_skip',
+        isError: true,
+      });
+    } finally {
+      nowSpy.mockRestore();
+    }
+
+    const data = await service.getAdaptiveToolsData();
+    expect(data.recentInvocations.map(invocation => invocation.toolCallId)).toEqual([
+      'second',
+      'first',
+    ]);
   });
 });

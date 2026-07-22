@@ -118,6 +118,12 @@ const BLOCKED_SHARD_TOOL_NAMES = new Set([
   'subagent',
   'spawn_subagent',
   'load_tools',
+  // notify is the operator emergency button (contact the operator when a
+  // normal channel is down), never a companion outbound surface. A shard —
+  // even on a human-driven chat turn — must not hold external notify egress.
+  // The external.* capability mask (SHARD_CAPABILITY_DENIAL_MASK) is the
+  // defense-in-depth backstop; this name-block keeps the tool off the surface.
+  'notify',
   'memory_write',
   'memory_import_batch',
   'memory_patch',

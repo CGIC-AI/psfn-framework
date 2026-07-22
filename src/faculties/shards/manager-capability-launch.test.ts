@@ -361,12 +361,15 @@ describe('ShardManager digest-bound capability launches', () => {
       ownerVersion: expected.ownerVersion,
       grantDigest: expected.grantDigest,
     }));
+    // external.web is stripped by the standing denial mask (psfn-framework-tu0mw):
+    // a shard, including a Wyoming-delegated one, never holds standing external
+    // egress even when the parent grants it.
     expect(result.capabilityGrant.tokens).toEqual([
       'identity.read',
       'memory.write',
-      'external.web',
       'shard.spawn',
     ]);
+    expect(result.capabilityGrant.tokens).not.toContain('external.web');
     expect(result.capabilities).toEqual([
       'wyoming',
       'wyoming:site-test',

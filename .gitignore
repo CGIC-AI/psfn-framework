@@ -30,6 +30,7 @@ __pycache__/
 # Internal planning/audit artifacts (non-product docs)
 history/
 working_doc/
+context_packets/
 working_docs/*primer*
 working_docs/*Primer*
 working_docs/*PRIMER*
@@ -43,6 +44,14 @@ deploy/helm/psfn/overlays/*.local.values.yaml
 
 # Companion personal files live inside the repo tree but are runtime/personal data.
 purrsephone/
+
+# Companion library seed docs are runtime/personal data; operators supply them at
+# deploy time (default seed source for provisionFleetWorkspaces). Kept off GitHub.
+companion_docs/
+
+# Local agent/assistant tooling config and runbooks (Claude, Copilot) are not product.
+.claude/
+.github/copilot-instructions.md
 
 # Local satellite hub checkout; not part of this repository.
 PSFN-Satellite-Hub/

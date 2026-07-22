@@ -19,7 +19,9 @@ export async function retrieveRolledOutBreadcrumbs(input: {
   const boundary = cloneRolledOutSessionBoundary(input.boundary);
   const episodes = await input.store.searchByTime({
     to: new Date(boundary.beforeMs).toISOString(),
-    sessionId: boundary.sessionId,
+    // apq0 decoupled thread_id from sessionId; a rolled-out session's episodes
+    // are scoped by real span-session identity, not the topic-thread column.
+    spanSessionId: boundary.sessionId,
     order: 'desc',
     limit: input.scanLimit,
   });

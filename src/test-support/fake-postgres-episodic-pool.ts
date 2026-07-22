@@ -95,6 +95,41 @@ function normalizeSql(text: string): string {
   return text.replace(/\s+/g, ' ').trim().toLowerCase();
 }
 
+function parseEpisodeJson(value: unknown): Record<string, unknown> {
+  if (typeof value === 'string') {
+    try {
+      return JSON.parse(value) as Record<string, unknown>;
+    } catch {
+      return {};
+    }
+  }
+  return (value && typeof value === 'object' ? value : {}) as Record<string, unknown>;
+}
+
+function episodeJsonMatchesSession(episodeJson: unknown, sessionId: string): boolean {
+  const parsed = parseEpisodeJson(episodeJson);
+  const spanRefs = Array.isArray(parsed.spanRefs) ? parsed.spanRefs : [];
+  return spanRefs.some(ref => (
+    ref !== null && typeof ref === 'object'
+    && (ref as { sessionId?: unknown }).sessionId === sessionId
+  ));
+}
+
+/**
+ * Mirror the store's `jsonb_set` re-point: patch threadId (and updatedAt) inside
+ * the serialized episode_json without disturbing any other field. Preserves the
+ * stored representation (string in, string out) so downstream parsing matches.
+ */
+function patchEpisodeJsonThreadId(
+  episodeJson: unknown,
+  threadId: string,
+  updatedAt: string,
+): unknown {
+  const parsed = parseEpisodeJson(episodeJson);
+  const patched = { ...parsed, threadId, updatedAt };
+  return typeof episodeJson === 'string' ? JSON.stringify(patched) : patched;
+}
+
 function isActiveEpisode(row: StoredEpisodeRow): boolean {
   return (
     (row.status === null || row.status === 'canonical' || row.status === 'candidate')
@@ -175,6 +210,23 @@ export class FakeEpisodicPool {
       };
       this.episodes.set(row.id, row);
       return queryResult([], 'INSERT');
+    }
+
+    if (normalized.startsWith('update l01_episodes set thread_id =')) {
+      // apq0 atomic thread union: re-point a set of episode ids onto the
+      // winning thread and keep episode_json.threadId consistent.
+      const ids = new Set(Array.isArray(values[0]) ? values[0].map(String) : []);
+      const toThreadId = String(values[1] ?? '');
+      const updatedAt = String(values[2] ?? '');
+      const updated: unknown[] = [];
+      for (const id of ids) {
+        const row = this.episodes.get(id);
+        if (!row) continue;
+        row.thread_id = toThreadId;
+        row.episode_json = patchEpisodeJsonThreadId(row.episode_json, toThreadId, updatedAt);
+        updated.push({});
+      }
+      return queryResult(updated, 'UPDATE');
     }
 
     if (normalized.startsWith("update l01_episodes set status = 'superseded'")) {
@@ -320,6 +372,22 @@ export class FakeEpisodicPool {
     if (normalized.startsWith('select id from l01_episodes where id =')) {
       const row = this.episodes.get(String(values[0] ?? ''));
       return queryResult(row ? [{ id: row.id }] : []);
+    }
+
+    if (normalized.startsWith('select id from l01_episodes where thread_id =')) {
+      // apq0 atomic thread union: the losing thread's live members, capped.
+      const threadId = String(values[0] ?? '');
+      const limit = Number(values[1] ?? this.episodes.size);
+      const rows = [...this.episodes.values()]
+        .filter(isActiveEpisode)
+        .filter(row => row.thread_id === threadId)
+        .sort((left, right) => (
+          left.started_at.localeCompare(right.started_at)
+          || left.id.localeCompare(right.id)
+        ))
+        .slice(0, limit)
+        .map(row => ({ id: row.id }));
+      return queryResult(rows);
     }
 
     if (normalized.startsWith('select id, merged_into_episode_id, superseded_by_episode_id from l01_episodes where id =')) {
@@ -525,6 +593,15 @@ export class FakeEpisodicPool {
     if (normalized.includes('thread_id =')) {
       const threadId = String(values[cursor++] ?? '');
       rows = rows.filter(row => row.thread_id === threadId);
+    }
+    if (normalized.includes('episode_json @>')) {
+      // apq0 real session scope: jsonb containment on spanRefs[].sessionId.
+      const containment = parseEpisodeJson(values[cursor++]);
+      const spanRefs = Array.isArray(containment.spanRefs) ? containment.spanRefs : [];
+      const wantedSession = spanRefs.length > 0 && spanRefs[0] !== null && typeof spanRefs[0] === 'object'
+        ? String((spanRefs[0] as { sessionId?: unknown }).sessionId ?? '')
+        : '';
+      rows = rows.filter(row => episodeJsonMatchesSession(row.episode_json, wantedSession));
     }
 
     const limit = Number(values[cursor++] ?? rows.length);

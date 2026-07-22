@@ -99,6 +99,27 @@ export interface EpisodeArcRepointResult {
   removedArcIds: string[];
 }
 
+export interface RepointThreadMembersInput {
+  /** The losing topic thread whose live members move onto the winner. */
+  fromThreadId: string;
+  /** The winning topic-thread representative (lexicographically-smaller id). */
+  toThreadId: string;
+  /**
+   * Safety bound on a single re-point's write amplification. When the losing
+   * thread already carries more than this many live episodes the re-point is
+   * skipped fail-safe (the two threads stay distinct) — never an unbounded
+   * rewrite.
+   */
+  maxEpisodes: number;
+}
+
+export interface RepointThreadMembersResult {
+  /** Live episode ids re-pointed onto the winning thread (empty when skipped). */
+  updatedEpisodeIds: string[];
+  /** True when the losing thread exceeded maxEpisodes and nothing was moved. */
+  skippedOversize: boolean;
+}
+
 export type EpisodicProcessingWatermarkStatus = 'active' | 'reconciling' | 'blocked' | 'complete';
 export type EpisodicReconciliationStatus = 'pending' | 'clean' | 'needs_review' | 'blocked';
 
@@ -308,12 +329,14 @@ export interface EpisodeTimeSearchOptions extends EpisodeListOptions {
    */
   lifecycleStatus?: EpisodeLifecycleStatus;
   /**
-   * Legacy session filter: matches the thread_id column against the value.
-   * Since apq0 an episode's thread_id is a topic-thread id (arc connected-
-   * component representative), not its session id, so this only matches
-   * pre-apq0 rows. No live caller passes it. Omitted => every session.
+   * Real session scope. Since apq0 an episode's thread_id is a topic-thread id
+   * (arc connected-component representative), decoupled from the session, so
+   * session identity lives in the episode's span refs
+   * (`episode_json.spanRefs[].sessionId`), not thread_id. This restricts
+   * results to episodes carrying at least one span in the given session (jsonb
+   * containment on the episode_json GIN index). Omitted => every session.
    */
-  sessionId?: string;
+  spanSessionId?: string;
   /**
    * Order results by start time. Defaults to 'asc' (oldest first). Use 'desc'
    * when a capped query must include the most recent episodes rather than
@@ -354,6 +377,13 @@ export interface EpisodicStorePort {
   listEpisodes(options?: EpisodeListOptions): EpisodicStoreResult<Episode[]>;
   searchByTime(options?: EpisodeTimeSearchOptions): EpisodicStoreResult<Episode[]>;
   searchByThread(threadId: string, options?: EpisodeListOptions): EpisodicStoreResult<Episode[]>;
+  /**
+   * Atomically re-point every live episode of the losing topic thread onto the
+   * winning thread in a single statement (apq0 thread union). All-or-nothing:
+   * a crash cannot leave a thread permanently half-split. Fails safe (moves
+   * nothing) when the losing thread exceeds maxEpisodes.
+   */
+  repointThreadMembers(input: RepointThreadMembersInput): EpisodicStoreResult<RepointThreadMembersResult>;
   writeEpisodeArc(input: EpisodeArcWriteInput): EpisodicStoreResult<EpisodeArc>;
   /**
    * Retires one active arc (an episode "leaves" the arc). The row is kept

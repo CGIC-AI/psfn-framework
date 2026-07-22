@@ -75,7 +75,7 @@ spec:
           command:
             {{- toYaml $root.Values.workloads.agent.command | nindent 12 }}
           securityContext:
-            {{- toYaml $root.Values.securityContext | nindent 12 }}
+            {{- include "psfn.appReadOnlySecurityContext" $root | nindent 12 }}
           ports:
             - name: admin-https
               containerPort: {{ $root.Values.ports.agentAdmin }}
@@ -156,6 +156,8 @@ spec:
           resources:
             {{- toYaml $root.Values.workloads.agent.resources | nindent 12 }}
           volumeMounts:
+            - name: tmp
+              mountPath: /tmp
             - name: postgres-database-url
               mountPath: /var/run/secrets/psfn-postgres
               readOnly: true

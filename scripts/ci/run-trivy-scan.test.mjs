@@ -4,6 +4,9 @@ import { join } from 'node:path';
 import test from 'node:test';
 
 import {
+  TRIVY_FLEET_HELM_RENDER_ARGS,
+  TRIVY_HELM_RENDER_ARGS,
+  TRIVY_HELM_RENDER_PASSES,
   TRIVY_IMAGE,
   TRIVY_VERSION,
   assertIgnoresNotExpired,
@@ -21,26 +24,38 @@ import {
 function stubDocker({
   version = { status: 0, stdout: `Version: ${TRIVY_VERSION}\n` },
   scan = { status: 0 },
+  // Optional per-scan-call outcomes; overrides `scan` when provided so a test
+  // can make (say) only the second config render pass report findings.
+  scans = null,
 } = {}) {
   const calls = [];
+  let scanIndex = 0;
   const runDocker = (args) => {
     calls.push(args);
     if (args.includes('--version')) return { stdout: '', ...version };
-    return { stdout: '', ...scan };
+    const outcome = scans ? (scans[scanIndex] ?? scans[scans.length - 1]) : scan;
+    scanIndex += 1;
+    return { stdout: '', ...outcome };
   };
   return { runDocker, calls };
 }
 
 const scanCall = (calls) => calls.find((args) => args.includes(TRIVY_IMAGE) && !args.includes('--version'));
+const scanCalls = (calls) => calls.filter((args) => args.includes(TRIVY_IMAGE) && !args.includes('--version'));
 
 // A helm render stub that materialises the per-template directory the scanner
-// expects, so runTrivy's fail-closed "no templates" guard passes.
+// expects, so runTrivy's fail-closed "no templates" guard passes. Records the
+// render args of each pass so tests can assert every topology is covered.
 function stubHelmRender() {
-  return (outDir) => {
+  const renders = [];
+  const render = (outDir, args = []) => {
+    renders.push(args);
     const dir = join(outDir, 'psfn', 'templates');
     mkdirSync(dir, { recursive: true });
     writeFileSync(join(dir, 'workloads.yaml'), 'kind: Deployment\n');
   };
+  render.renders = renders;
+  return render;
 }
 
 const FUTURE_IGNORE = `
@@ -182,6 +197,54 @@ test('runTrivy config returns 0 for a clean render/scan', () => {
   assert.equal(status, 0);
   const scan = scanCall(calls);
   assert.ok(scan.includes('config'));
+});
+
+test('TRIVY_HELM_RENDER_PASSES covers both the non-fleet and the default fleet topology', () => {
+  assert.deepEqual(TRIVY_HELM_RENDER_PASSES.map((pass) => pass.name), ['non-fleet', 'fleet']);
+  const nonFleet = TRIVY_HELM_RENDER_PASSES.find((pass) => pass.name === 'non-fleet');
+  const fleet = TRIVY_HELM_RENDER_PASSES.find((pass) => pass.name === 'fleet');
+  assert.equal(nonFleet.args, TRIVY_HELM_RENDER_ARGS);
+  assert.equal(fleet.args, TRIVY_FLEET_HELM_RENDER_ARGS);
+  // The non-fleet pass explicitly disables fleet; the fleet pass enables it
+  // (with its required fleetAuth and /runtime-derived paths) so fleet-agents.yaml
+  // — the DEFAULT shipped container — is actually rendered and scanned.
+  assert.ok(nonFleet.args.includes('fleet.enabled=false'));
+  assert.ok(fleet.args.includes('fleet.enabled=true'));
+  assert.ok(fleet.args.includes('fleetAuth.enabled=true'));
+  assert.ok(fleet.args.includes('runtime.systemDataDir=/runtime/system-data'));
+});
+
+test('runTrivy config renders and scans every topology pass', () => {
+  const { runDocker, calls } = stubDocker();
+  const helmRender = stubHelmRender();
+  const status = runTrivy({
+    argv: ['config'],
+    runDocker,
+    helmRender,
+    readIgnore: () => FUTURE_IGNORE,
+    now: new Date('2026-07-22T00:00:00Z'),
+  });
+  assert.equal(status, 0);
+  // One render + one scan per declared pass.
+  assert.equal(helmRender.renders.length, TRIVY_HELM_RENDER_PASSES.length);
+  assert.equal(scanCalls(calls).length, TRIVY_HELM_RENDER_PASSES.length);
+  assert.ok(helmRender.renders.some((args) => args.includes('fleet.enabled=false')));
+  assert.ok(helmRender.renders.some((args) => args.includes('fleet.enabled=true')));
+});
+
+test('runTrivy config fails closed when only the fleet render pass reports findings', () => {
+  // First (non-fleet) scan clean, second (fleet) scan reports a finding.
+  const { runDocker, calls } = stubDocker({ scans: [{ status: 0 }, { status: 1 }] });
+  const status = runTrivy({
+    argv: ['config'],
+    runDocker,
+    helmRender: stubHelmRender(),
+    readIgnore: () => FUTURE_IGNORE,
+    now: new Date('2026-07-22T00:00:00Z'),
+  });
+  assert.equal(status, 1);
+  // Both passes are exercised (the gate does not short-circuit before fleet).
+  assert.equal(scanCalls(calls).length, 2);
 });
 
 test('runTrivy config fails closed (exit 1) when the scan reports findings', () => {

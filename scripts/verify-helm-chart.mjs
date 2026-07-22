@@ -1183,6 +1183,33 @@ for (const companion of fleetGardenCompanions) {
   const agentService = findDocumentByKindName(fleetGardenRendered, 'Service', agentServiceName);
   if (!agentDeployment) throw new Error(`fleet render missing ${agentDeploymentName}`);
   if (!agentService) throw new Error(`fleet render missing ${agentServiceName}`);
+  // The fleet agent container is the DEFAULT shipped topology (values.yaml
+  // fleet.enabled=true). It must render with an immutable root filesystem, the
+  // same hardened contract as the non-fleet agent — a revert to the plain
+  // securityContext (readOnlyRootFilesystem: false) must fail this contract,
+  // not only the Trivy IaC gate. See psfn-framework-7hw4.
+  const parsedAgentDeployment = findParsedDocumentByKindName(
+    fleetGardenRendered,
+    'Deployment',
+    agentDeploymentName,
+  );
+  const fleetAgentContainer = parsedAgentDeployment?.spec?.template?.spec?.containers
+    ?.find(container => container.name === 'agent');
+  if (!fleetAgentContainer) {
+    throw new Error(`${agentDeploymentName} must render an agent container`);
+  }
+  if (fleetAgentContainer.securityContext?.readOnlyRootFilesystem !== true) {
+    throw new Error(
+      `${agentDeploymentName} agent container must set securityContext.readOnlyRootFilesystem: true`,
+    );
+  }
+  const fleetAgentTmpMount = fleetAgentContainer.volumeMounts
+    ?.find(mount => mount.name === 'tmp' && mount.mountPath === '/tmp');
+  if (!fleetAgentTmpMount) {
+    throw new Error(
+      `${agentDeploymentName} agent container needs a writable /tmp emptyDir mount for the read-only root`,
+    );
+  }
   assertIncludes(agentDeployment, `value: "${suffix}"`, `${agentDeploymentName} companion identity`);
   assertIncludes(
     agentDeployment,

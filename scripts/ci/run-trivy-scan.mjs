@@ -68,6 +68,44 @@ export const TRIVY_HELM_RENDER_ARGS = Object.freeze([
   '--set-string', 'runtime.characterCardPath=/app/companion-data/companion.json',
 ]);
 
+// The fleet topology is the DEFAULT shipped posture (values.yaml
+// fleet.enabled=true, and workloads.yaml suppresses the non-fleet agent when
+// fleet is on), so scanning only the non-fleet render above would leave
+// fleet-agents.yaml — the container that actually ships — permanently
+// unscanned. This second pass renders the fleet topology so a misconfiguration
+// regression in fleet-agents.yaml (e.g. a securityContext that drops
+// readOnlyRootFilesystem) fails the gate. Fleet rendering fails closed unless
+// fleetAuth is enabled and the runtime.* paths are derived from
+// fleet.runtimeRoot (/runtime) and the first registered companion, so these are
+// the minimal valid fixtures — mirrored from fleetGardenRenderArgs in
+// scripts/verify-helm-chart.mjs. The default single-companion fleet from
+// values.yaml is used (companionId 11111111-…-111111111111).
+const FLEET_PRIMARY_COMPANION_ID = '11111111-1111-4111-8111-111111111111';
+export const TRIVY_FLEET_HELM_RENDER_ARGS = Object.freeze([
+  '--namespace', 'psfn-test',
+  '--skip-schema-validation',
+  '--set', 'fleet.enabled=true',
+  '--set', 'fleetAuth.enabled=true',
+  '--set', 'ingress.gateway.tls.enabled=true',
+  '--set-string', 'ingress.gateway.tls.secretName=fleet-gateway-tls',
+  '--set', 'ingress.garden.enabled=true',
+  '--set-string', `runtime.companionId=${FLEET_PRIMARY_COMPANION_ID}`,
+  '--set-string', 'runtime.systemDataDir=/runtime/system-data',
+  '--set-string', `runtime.companionDataDir=/runtime/companions/${FLEET_PRIMARY_COMPANION_ID}`,
+  '--set-string', `runtime.characterCardPath=/runtime/companions/${FLEET_PRIMARY_COMPANION_ID}/companion.json`,
+  '--set-string', `runtime.workspacePath=/runtime/workspaces/personal/${FLEET_PRIMARY_COMPANION_ID}`,
+  '--set-string', 'runtime.logsDir=/runtime/logs',
+  '--set-string', 'runtime.tempDir=/runtime/tmp',
+  '--set-string', 'runtime.backupsDir=/runtime/backups',
+]);
+
+// Every render pass the config gate must scan. Both topologies must pass the
+// HIGH,CRITICAL misconfiguration scan; a finding in either fails the gate.
+export const TRIVY_HELM_RENDER_PASSES = Object.freeze([
+  Object.freeze({ name: 'non-fleet', args: TRIVY_HELM_RENDER_ARGS }),
+  Object.freeze({ name: 'fleet', args: TRIVY_FLEET_HELM_RENDER_ARGS }),
+]);
+
 export const TRIVY_IGNORE_FILE = resolve(repoRoot, '.trivyignore.yaml');
 
 export function interpretTrivyVersion(output, expected = TRIVY_VERSION) {
@@ -239,14 +277,15 @@ function realDocker(args, { capture = false } = {}) {
   return { status: result.status ?? 1, stdout: result.stdout ?? '' };
 }
 
-// Render the authoritative chart into a fresh per-template directory. Fails
-// closed on a missing Helm binary, render failure, or empty output.
-function realHelmRender(outDir) {
+// Render the authoritative chart into a fresh per-template directory using the
+// supplied per-pass render args. Fails closed on a missing Helm binary, render
+// failure, or empty output.
+function realHelmRender(outDir, renderArgs = TRIVY_HELM_RENDER_ARGS) {
   let stdout;
   try {
     stdout = execFileSync(
       'helm',
-      ['template', 'psfn', chartDir, ...TRIVY_HELM_RENDER_ARGS, '--output-dir', outDir],
+      ['template', 'psfn', chartDir, ...renderArgs, '--output-dir', outDir],
       { cwd: repoRoot, encoding: 'utf8', maxBuffer: 32 * 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe'] },
     );
   } catch (error) {
@@ -281,23 +320,31 @@ export function runTrivy({
     return runDocker(buildTrivyImageArgs({ input: opts.input, image: opts.image })).status;
   }
 
-  // config mode: enforce the ignore expiry contract, render, then scan.
+  // config mode: enforce the ignore expiry contract, then render+scan every
+  // topology pass. Both the non-fleet and the (default-shipped) fleet render
+  // must pass HIGH,CRITICAL; a finding in either fails the gate closed.
   const ignoreText = readIgnore();
   assertIgnoresNotExpired(ignoreText, now);
 
-  const outDir = mkdtempSync(join(tmpdir(), 'psfn-trivy-render-'));
-  try {
-    helmRender(outDir);
-    const renderedRoot = join(outDir, 'psfn', 'templates');
-    if (!existsSync(renderedRoot)) {
-      throw new Error(`Helm render produced no templates directory at ${renderedRoot}; refusing to scan`);
+  for (const pass of TRIVY_HELM_RENDER_PASSES) {
+    const outDir = mkdtempSync(join(tmpdir(), `psfn-trivy-render-${pass.name}-`));
+    try {
+      helmRender(outDir, pass.args);
+      const renderedRoot = join(outDir, 'psfn', 'templates');
+      if (!existsSync(renderedRoot)) {
+        throw new Error(
+          `Helm ${pass.name} render produced no templates directory at ${renderedRoot}; refusing to scan`,
+        );
+      }
+      const status = runDocker(
+        buildTrivyConfigArgs({ scanMount: outDir, ignoreMount: TRIVY_IGNORE_FILE }),
+      ).status;
+      if (status !== 0) return status;
+    } finally {
+      rmSync(outDir, { recursive: true, force: true });
     }
-    return runDocker(
-      buildTrivyConfigArgs({ scanMount: outDir, ignoreMount: TRIVY_IGNORE_FILE }),
-    ).status;
-  } finally {
-    rmSync(outDir, { recursive: true, force: true });
   }
+  return 0;
 }
 
 export function main(argv = process.argv.slice(2)) {

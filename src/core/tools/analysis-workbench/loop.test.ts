@@ -14,6 +14,8 @@ import { makeTestFatiguePolicyConfig } from '../../../test-support/charge-policy
 import { InMemoryMemoryStore } from '../../../test-support/in-memory-memory-store.js';
 import type {
   MemorySearchResult,
+  MemorySubjectAdminQuery,
+  MemorySubjectAdminResult,
   MemorySubjectAuthorizedQuery,
   MemorySubjectAuthorizedQueryResult,
 } from '../../../faculties/memory/memory-store-port.js';
@@ -129,6 +131,7 @@ function makeChargePolicy(): ChargePolicyConfig {
 
 class SubjectAuthorizedLoopMemoryStore extends InMemoryMemoryStore {
   readonly authorizedQueries: MemorySubjectAuthorizedQuery[] = [];
+  readonly adminQueries: MemorySubjectAdminQuery[] = [];
 
   constructor(private readonly authorizedMemories: readonly MemorySearchResult[]) {
     super();
@@ -149,6 +152,35 @@ class SubjectAuthorizedLoopMemoryStore extends InMemoryMemoryStore {
     return {
       memories: this.authorizedMemories.slice(offset, offset + input.selector.limit),
       total: this.authorizedMemories.length,
+    };
+  }
+
+  async aggregateAuthorizedMemorySubjects(
+    input: MemorySubjectAdminQuery,
+  ): Promise<MemorySubjectAdminResult> {
+    this.adminQueries.push(input);
+    if (
+      !input.authorization.viewerContactIds.includes('companion:internal')
+      || !input.authorization.allowedSubjectClasses.includes('companion_private')
+      || input.selector.kind !== 'stats'
+    ) {
+      throw new Error('Analysis Workbench memory inventory requires companion-private stats authority');
+    }
+    const byType: Record<string, number> = {};
+    let salienceSum = 0;
+    for (const memory of this.authorizedMemories) {
+      byType[memory.type] = (byType[memory.type] ?? 0) + 1;
+      salienceSum += memory.salience;
+    }
+    return {
+      kind: 'stats',
+      stats: {
+        total: this.authorizedMemories.length,
+        byType,
+        avgSalience: this.authorizedMemories.length === 0
+          ? 0
+          : salienceSum / this.authorizedMemories.length,
+      },
     };
   }
 }
@@ -282,15 +314,18 @@ describe('runRLMLoop', () => {
     );
 
     expect(result.answer).toBe('done');
-    expect(memoryStore.authorizedQueries).toEqual([
+    // The memory inventory now derives from a single subject-authorized SQL
+    // aggregate (a27w.5) instead of paging the whole authorized corpus.
+    expect(memoryStore.authorizedQueries).toEqual([]);
+    expect(memoryStore.adminQueries).toEqual([
       expect.objectContaining({
         authorization: expect.objectContaining({
-          action: 'list',
+          action: 'count',
           viewerContactIds: ['companion:internal'],
           allowedSubjectClasses: ['companion_private'],
           allowedViewerRelations: ['none'],
         }),
-        selector: { kind: 'list', limit: 500, offset: 0 },
+        selector: { kind: 'stats' },
       }),
     ]);
     expect(complete.mock.calls[0]?.[0].systemPrompt).toContain(

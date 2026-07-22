@@ -655,6 +655,12 @@ export class SubagentFaculty implements SubagentControlPort {
         }),
         message: request.message,
         executionChannelId: request.message.channelId,
+        sourceContext: {
+          channelId: request.message.channelId,
+          ...(routing?.sessionId ? { logicalSessionId: routing.sessionId } : {}),
+          requestId: request.message.id,
+          ...(routing?.turnId ? { turnId: routing.turnId } : {}),
+        },
         maxTurns: 1,
         capabilities: this.resolveWyomingRouteCapabilities(routing),
         requiredCapabilities: this.resolveWyomingRouteCapabilities(routing),
@@ -1012,6 +1018,9 @@ export class SubagentFaculty implements SubagentControlPort {
     if (request.message?.channelId.trim()) {
       return {
         channelId: request.message.channelId,
+        ...(request.message.routing?.wyoming?.sessionId
+          ? { logicalSessionId: request.message.routing.wyoming.sessionId }
+          : {}),
         requestId: request.message.id,
         ...(request.message.routing?.wyoming?.turnId ? { turnId: request.message.routing.wyoming.turnId } : {}),
       };

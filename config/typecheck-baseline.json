@@ -3,8 +3,8 @@
   "typescriptVersion": "5.9.3",
   "project": "tsconfig.json",
   "aggregation": "path-and-code-count",
-  "totalErrors": 243,
-  "filesWithErrors": 95,
+  "totalErrors": 240,
+  "filesWithErrors": 94,
   "errors": [
     {"path":"src/app/agent/companion-presence-wiring.ts","code":"TS2739","count":1},
     {"path":"src/app/agent/gateway-message-handlers.ts","code":"TS2345","count":2},

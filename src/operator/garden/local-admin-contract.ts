@@ -607,6 +607,20 @@ export function createInProcessGardenAdminContract(
     }),
     privacyBreakGlass: new AdminPrivacyBreakGlassService({
       memoryStore: options.memoryStore,
+      journalReader: {
+        listStream: (stream, limit) => {
+          switch (stream) {
+            case 'values-journal':
+              return valuesJournal.list({ limit });
+            case 'reflection-metacognition':
+              return reflectionMetacognitionJournal.listRecent({ limit });
+            case 'reflection-daily':
+              return reflectionDailyJournal.listRecent({ limit });
+            case 'reflection-journal':
+              return reflectionJournal.listRecent({ limit });
+          }
+        },
+      },
       confirmTtlMs: Math.min(options.config.fleetAuth?.ttls.jitGrantMs ?? 120_000, 120_000),
     }),
     sessions: new AdminSessionDataService({

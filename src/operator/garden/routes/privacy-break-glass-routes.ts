@@ -286,5 +286,11 @@ export function buildAdminPrivacyBreakGlassRoutes(options: {
       appendAudit: options.appendAuditTimelineEntry,
       withBody: options.withBody,
     }),
+    ...routePair({
+      resourceKind: 'journal',
+      service: options.service,
+      appendAudit: options.appendAuditTimelineEntry,
+      withBody: options.withBody,
+    }),
   ];
 }

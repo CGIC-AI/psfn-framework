@@ -1,0 +1,10 @@
+{{- if .Values.companionLibrary.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "psfn.fullname" . }}-companion-library
+  labels:
+    {{- include "psfn.labels" . | nindent 4 }}
+data:
+{{ (.Files.Glob "overlays/companion-library/*").AsConfig | indent 2 }}
+{{- end }}

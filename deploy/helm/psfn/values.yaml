@@ -121,6 +121,9 @@ fleet:
   #   admin Service:  <release>-agent-admin-<companionId>
   #   SPIFFE:         /psfn/agent/<companionId>
 
+companionLibrary:
+  enabled: false
+
 bootstrap:
   # First-ever-install opt-in ONLY. When true, the seed init container copies
   # missing cluster-global owners from /app/config/*.seed.json into system-data

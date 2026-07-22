@@ -13,6 +13,18 @@
         }
       }
     },
+    "companionLibrary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "enabled"
+      ],
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        }
+      }
+    },
     "fleetAuth": {
       "type": "object",
       "properties": {

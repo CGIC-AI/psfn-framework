@@ -792,11 +792,7 @@ export function wirePostTurnRuntime(
       if (typeof templateIdRaw !== 'string' || !templateIdRaw.trim()) {
         throw new Error(`Deferred reflection action "${action.id}" is missing payload.templateId`);
       }
-      const sendToDiscordOverride = typeof action.payload.sendToDiscordOverride === 'boolean'
-        ? action.payload.sendToDiscordOverride
-        : undefined;
       await templateRuntime.runDeferredTemplate(templateIdRaw.trim(), {
-        ...(sendToDiscordOverride !== undefined ? { sendToDiscordOverride } : {}),
         actionId: action.id,
       });
     },

@@ -216,12 +216,7 @@ export function decisionsToPostTurnActionCandidates(
       candidates.push({
         kind: 'heartbeat.run_template',
         dedupeKey: `heartbeat.run_template:${templateId}:${context.message.id}`,
-        payload: {
-          templateId,
-          ...(decision.schedule?.sendToDiscordOverride !== undefined
-            ? { sendToDiscordOverride: decision.schedule.sendToDiscordOverride }
-            : {}),
-        },
+        payload: { templateId },
         maxRetries: 2,
       });
       continue;

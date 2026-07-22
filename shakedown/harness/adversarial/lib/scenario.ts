@@ -11,7 +11,7 @@
 // Fail-closed contract: a scenario that records zero checks, or that throws,
 // is a FAILURE — never a silent pass. Errors are surfaced, never swallowed.
 
-export type ScenarioClassId = 1 | 2 | 3 | 4 | 5 | 6;
+export type ScenarioClassId = 1 | 2 | 3 | 4 | 5 | 6 | 7;
 
 export interface CheckResult {
   label: string;

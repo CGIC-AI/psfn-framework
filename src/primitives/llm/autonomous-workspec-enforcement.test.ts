@@ -78,7 +78,9 @@ describe('autonomous LLMWorkSpec enforcement (src/core + src/faculties)', () => 
   });
 
   it('every adopted call site references completeWithWorkSpec', () => {
-    // Spot-check representative adopted files import/use the typed entry.
+    // Spot-check representative raw-completion files import/use the typed
+    // entry. Sleeptime review is intentionally absent: it now routes through
+    // the companion agent loop instead of owning an LLM provider call.
     const adopted = [
       'core/emotion/appraisal.ts',
       'core/intention/concern-candidates.ts',
@@ -87,7 +89,6 @@ describe('autonomous LLMWorkSpec enforcement (src/core + src/faculties)', () => 
       'core/tools/focus.ts',
       'core/tools/analysis-workbench/loop.ts',
       'faculties/memory/extraction/orchestrator.ts',
-      'faculties/memory/sleeptime-agent.ts',
       'faculties/introspection/model-runtime.ts',
       'faculties/context-feedback/evaluator.ts',
     ];

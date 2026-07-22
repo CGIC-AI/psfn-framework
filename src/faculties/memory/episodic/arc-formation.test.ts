@@ -10,6 +10,7 @@ import {
   parseProposedArcs,
   type ArcFormationOutcomeEvent,
 } from './arc-formation.js';
+import type { ThreadAssignmentEvent } from './thread-assignment.js';
 
 const NOW = new Date('2026-06-10T08:00:00.000Z');
 
@@ -221,6 +222,137 @@ describe('EpisodeArcWeaver', () => {
     expect(audit[0].action).toBe('written');
     expect(audit[0].actor).toBe('arc_formation_pass');
     expect(audit[0].reason).toBe('the same book discussion resumes two days later');
+  });
+
+  it('materializes bounded topic threads: an arc unions two singleton threads (apq0)', async () => {
+    const store = makeStore();
+    // A multi-topic history: four canonical episodes, each seeded as its own
+    // singleton topic thread (threadId = its own id, the apq0 default). Only
+    // the two book episodes belong to one story.
+    await store.createEpisode(episodeInput('ep-book-1', '2026-06-01T20:00:00.000Z', '2026-06-01T21:00:00.000Z', {
+      threadId: 'ep-book-1',
+      themes: ['the left hand of darkness', 'books'],
+    }));
+    await store.createEpisode(episodeInput('ep-cooking', '2026-06-02T10:00:00.000Z', '2026-06-02T10:30:00.000Z', {
+      threadId: 'ep-cooking',
+      themes: ['cooking'],
+    }));
+    await store.createEpisode(episodeInput('ep-weather', '2026-06-02T18:00:00.000Z', '2026-06-02T18:20:00.000Z', {
+      threadId: 'ep-weather',
+      themes: ['weather'],
+    }));
+    await store.createEpisode(episodeInput('ep-book-2', '2026-06-03T20:00:00.000Z', '2026-06-03T21:00:00.000Z', {
+      threadId: 'ep-book-2',
+      themes: ['the left hand of darkness', 'books'],
+    }));
+
+    const events: ThreadAssignmentEvent[] = [];
+    const complete = vi.fn(async () => arcResponse([{
+      episode_ids: ['ep-book-1', 'ep-book-2'],
+      kind: 'same_theme',
+      label: 'the ongoing left hand of darkness discussion',
+      confidence: 0.9,
+      reason: 'the same book discussion resumes two days later',
+    }]));
+    const weaver = new EpisodeArcWeaver(store, { complete }, {
+      now: () => NOW,
+      onThreadAssignment: event => events.push(event),
+    });
+
+    const result = await weaver.run({ sessionId: 'discord:main' });
+    expect(result.writtenArcs).toBe(1);
+
+    // The two book episodes now share one bounded topic thread, represented by
+    // the min episode id. The unrelated episodes keep their own threads.
+    const bookThread = await store.searchByThread('ep-book-1', { limit: 10 });
+    expect(bookThread.map(episode => episode.id).sort()).toEqual(['ep-book-1', 'ep-book-2']);
+    expect(await store.searchByThread('ep-book-2', { limit: 10 })).toEqual([]);
+    expect((await store.searchByThread('ep-cooking', { limit: 10 })).map(e => e.id)).toEqual(['ep-cooking']);
+    expect((await store.searchByThread('ep-weather', { limit: 10 })).map(e => e.id)).toEqual(['ep-weather']);
+    expect(events).toEqual([{
+      outcome: 'merged',
+      winningThreadId: 'ep-book-1',
+      losingThreadId: 'ep-book-2',
+      updatedEpisodeCount: 1,
+      timestamp: NOW.getTime(),
+    }]);
+  });
+
+  it('a continuation chain resumes onto one thread across all its episodes (apq0)', async () => {
+    const store = makeStore();
+    // Three singleton-threaded episodes of one continuing effort, ids chosen
+    // so the global minimum is the newest ('x-day3').
+    await store.createEpisode(episodeInput('z-day1', '2026-06-04T20:00:00.000Z', '2026-06-04T21:00:00.000Z', {
+      threadId: 'z-day1',
+    }));
+    await store.createEpisode(episodeInput('y-day2', '2026-06-06T20:00:00.000Z', '2026-06-06T21:00:00.000Z', {
+      threadId: 'y-day2',
+    }));
+    await store.createEpisode(episodeInput('x-day3', '2026-06-08T20:00:00.000Z', '2026-06-08T21:00:00.000Z', {
+      threadId: 'x-day3',
+    }));
+    // A fourth, unrelated episode so the pass clears MIN_EPISODES_FOR_PASS; it
+    // stays out of the continuation proposal and keeps its own thread.
+    await store.createEpisode(episodeInput('m-other', '2026-06-07T10:00:00.000Z', '2026-06-07T10:30:00.000Z', {
+      threadId: 'm-other',
+      themes: ['cooking'],
+    }));
+
+    const complete = vi.fn(async () => arcResponse([{
+      episode_ids: ['z-day1', 'y-day2', 'x-day3'],
+      kind: 'continuation',
+      label: 'the postgres cutover effort',
+      confidence: 0.88,
+      reason: 'one effort progressing across three evenings',
+    }]));
+    const weaver = new EpisodeArcWeaver(store, { complete }, { now: () => NOW });
+
+    const result = await weaver.run({ sessionId: 'discord:main' });
+    expect(result.writtenArcs).toBe(2);
+
+    // All three converge on the global minimum id regardless of merge order.
+    const thread = await store.searchByThread('x-day3', { limit: 10 });
+    expect(thread.map(episode => episode.startedAt.slice(0, 10))).toEqual([
+      '2026-06-04',
+      '2026-06-06',
+      '2026-06-08',
+    ]);
+    expect(await store.searchByThread('z-day1', { limit: 10 })).toEqual([]);
+    expect(await store.searchByThread('y-day2', { limit: 10 })).toEqual([]);
+  });
+
+  it('leaves threads untouched when linked episodes already share a thread (apq0 no-op)', async () => {
+    const store = makeStore();
+    // Both episodes already carry the shared fixture thread 'discord:main'.
+    await store.createEpisode(episodeInput('day1', '2026-06-04T20:00:00.000Z', '2026-06-04T21:00:00.000Z'));
+    await store.createEpisode(episodeInput('day2', '2026-06-06T20:00:00.000Z', '2026-06-06T21:00:00.000Z'));
+    await store.createEpisode(episodeInput('day3', '2026-06-08T20:00:00.000Z', '2026-06-08T21:00:00.000Z'));
+    await store.createEpisode(episodeInput('day4', '2026-06-09T20:00:00.000Z', '2026-06-09T21:00:00.000Z'));
+
+    const events: ThreadAssignmentEvent[] = [];
+    const complete = vi.fn(async () => arcResponse([{
+      episode_ids: ['day1', 'day2'],
+      kind: 'continuation',
+      label: 'shared thread already',
+      confidence: 0.85,
+      reason: 'continues',
+    }]));
+    const weaver = new EpisodeArcWeaver(store, { complete }, {
+      now: () => NOW,
+      onThreadAssignment: event => events.push(event),
+    });
+
+    await weaver.run({ sessionId: 'discord:main' });
+
+    const shared = await store.searchByThread('discord:main', { limit: 10 });
+    expect(shared.map(episode => episode.id).sort()).toEqual(['day1', 'day2', 'day3', 'day4']);
+    expect(events).toEqual([{
+      outcome: 'noop',
+      winningThreadId: 'discord:main',
+      losingThreadId: 'discord:main',
+      updatedEpisodeCount: 0,
+      timestamp: NOW.getTime(),
+    }]);
   });
 
   it('excludes candidate episodes from arc formation entirely', async () => {

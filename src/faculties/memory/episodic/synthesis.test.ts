@@ -329,10 +329,15 @@ describe('EpisodicSynthesizer', () => {
     expect(second.createdEpisodes).toEqual([]);
     expect(second.skippedEpisodeIds).toEqual([]);
 
-    const episodes = await store.searchByThread('terminal:daily');
+    // apq0: a lone (un-arced) episode seeds its own singleton topic thread,
+    // threadId === its own id, NOT the session id.
+    expect(first.createdEpisodes[0].threadId).toBe(first.createdEpisodes[0].id);
+    expect(await store.searchByThread('terminal:daily')).toEqual([]);
+    const episodes = await store.searchByThread(first.createdEpisodes[0].id);
     expect(episodes).toHaveLength(1);
     expect(episodes[0]).toMatchObject({
       id: first.createdEpisodes[0].id,
+      threadId: first.createdEpisodes[0].id,
       startedAt: '2026-04-01T10:00:00.000Z',
       endedAt: '2026-04-01T10:02:00.000Z',
     });
@@ -473,7 +478,25 @@ describe('EpisodicSynthesizer', () => {
     expect(result.linkedArcs).toHaveLength(3);
     expect(result.linkedArcs.map(arc => arc.arcKind)).toEqual(['continuation', 'continuation', 'continuation']);
 
-    const episodes = await store.searchByThread('terminal:trip-month', { limit: 10 });
+    // apq0: the four episodes seed singleton threads, then the three
+    // continuation arcs union them into ONE bounded topic thread — decoupled
+    // from the session id and represented by the min episode id. The old
+    // session-keyed mega-thread ('terminal:trip-month') no longer exists.
+    expect(await store.searchByThread('terminal:trip-month', { limit: 10 })).toEqual([]);
+    const allEpisodes = await store.searchByTime({
+      from: '2026-04-01T00:00:00.000Z',
+      to: '2026-05-01T00:00:00.000Z',
+      limit: 50,
+    });
+    expect(allEpisodes).toHaveLength(4);
+    const distinctThreads = new Set(allEpisodes.map(episode => episode.threadId));
+    expect(distinctThreads.size).toBe(1);
+    const topicThreadId = [...distinctThreads][0];
+    const expectedRepresentative = [...allEpisodes.map(episode => episode.id)].sort()[0];
+    expect(topicThreadId).toBe(expectedRepresentative);
+    expect(topicThreadId).not.toBe('terminal:trip-month');
+    const episodes = await store.searchByThread(topicThreadId as string, { limit: 10 });
+    expect(episodes).toHaveLength(4);
     expect(episodes.map(episode => episode.startedAt.slice(0, 10))).toEqual([
       '2026-04-01',
       '2026-04-10',

@@ -308,9 +308,10 @@ export interface EpisodeTimeSearchOptions extends EpisodeListOptions {
    */
   lifecycleStatus?: EpisodeLifecycleStatus;
   /**
-   * Restrict to episodes belonging to one session. Episodes are scoped by
-   * their threadId, which synthesis sets equal to the session id, so this
-   * matches the episode's thread_id. Omitted => episodes from every session.
+   * Legacy session filter: matches the thread_id column against the value.
+   * Since apq0 an episode's thread_id is a topic-thread id (arc connected-
+   * component representative), not its session id, so this only matches
+   * pre-apq0 rows. No live caller passes it. Omitted => every session.
    */
   sessionId?: string;
   /**

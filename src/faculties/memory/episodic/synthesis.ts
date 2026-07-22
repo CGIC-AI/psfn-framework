@@ -28,6 +28,7 @@ import {
   type EpisodeCandidateInput,
 } from './synthesis/consolidation.js';
 import { proposeTopicSegments, type TopicSegment } from './topic-segmentation.js';
+import { applyThreadUnionForArc, type ThreadAssignmentEvent } from './thread-assignment.js';
 import type { PersonaPreamblePort } from '../../../core/identity/persona-preamble.js';
 import { resolveEpisodeSessionEntryTurnId } from './turn-reference.js';
 
@@ -80,6 +81,14 @@ export interface EpisodicSynthesisOptions {
    * Absent or disabled => deterministic behavior is byte-identical.
    */
   topicSegmentation?: EpisodicTopicSegmentationOptions;
+  /**
+   * Safety bound on a single arc-driven topic-thread merge (apq0). Defaults to
+   * DEFAULT_MAX_THREAD_EPISODES; a losing thread larger than this is left
+   * unmerged fail-safe and surfaced through onThreadAssignment.
+   */
+  maxThreadEpisodes?: number;
+  /** Topic-thread materialization telemetry sink (apq0). */
+  onThreadAssignment?: (event: ThreadAssignmentEvent) => void;
 }
 
 export interface EpisodicSynthesisRunInput {
@@ -157,6 +166,7 @@ const DEFAULT_MAX_EPISODES_PER_RUN = 6;
 const DEFAULT_MAX_PRIOR_CANDIDATES = 24;
 const DEFAULT_GAP_SPLIT_MINUTES = 45;
 const DEFAULT_MAX_ENTRIES_PER_EPISODE = 14;
+const DEFAULT_MAX_THREAD_EPISODES = 500;
 const MIN_CONVERSATIONAL_ENTRIES = 2;
 const MIN_SINGLE_ENTRY_CHARS = 120;
 const MIN_CONSOLIDATION_SEARCH_WINDOW_MS = 2 * 60 * 60_000;
@@ -511,7 +521,11 @@ function buildEpisodeInput(
     landmark: summarizeLandmark(entries, themes),
     startedAt: toIso(first.timestamp),
     endedAt: toIso(last.timestamp),
-    threadId: sessionId,
+    // apq0: a new episode seeds its OWN singleton topic thread (threadId = its
+    // own id), not the session id. Arc formation then unions arc-linked
+    // episodes into shared topic threads. Keying threadId to sessionId is what
+    // produced the unbounded per-channel mega-thread.
+    threadId: id,
     channelId: first.channelId,
     participantContactIds: [...new Set(entries
       .map(entry => entry.authorId)
@@ -577,6 +591,7 @@ export class EpisodicSynthesizer {
     | 'updateEpisode'
     | 'getEpisode'
     | 'searchByTime'
+    | 'searchByThread'
     | 'writeEpisodeArc'
     | 'getProcessingWatermark'
     | 'upsertProcessingWatermark'
@@ -586,6 +601,8 @@ export class EpisodicSynthesizer {
     | 'listEpisodeMessageClaims'
   >;
   private readonly sessionReader: EpisodicSynthesisSessionReader;
+  private readonly maxThreadEpisodes: number;
+  private readonly onThreadAssignment?: (event: ThreadAssignmentEvent) => void;
   private readonly transcriptMessageLimit: number;
   private readonly maxEpisodesPerRun: number;
   private readonly maxPriorCandidates: number;
@@ -607,6 +624,7 @@ export class EpisodicSynthesizer {
       | 'updateEpisode'
       | 'getEpisode'
       | 'searchByTime'
+      | 'searchByThread'
       | 'writeEpisodeArc'
       | 'getProcessingWatermark'
       | 'upsertProcessingWatermark'
@@ -639,6 +657,11 @@ export class EpisodicSynthesizer {
       options.minSingleEntryChars,
       MIN_SINGLE_ENTRY_CHARS,
     );
+    this.maxThreadEpisodes = normalizePositiveInteger(
+      options.maxThreadEpisodes,
+      DEFAULT_MAX_THREAD_EPISODES,
+    );
+    this.onThreadAssignment = options.onThreadAssignment;
     const segmentation = options.topicSegmentation;
     this.segmentationEnabled = segmentation?.enabled === true;
     this.segmentationProvider = segmentation?.llmProvider ?? null;
@@ -928,6 +951,15 @@ export class EpisodicSynthesizer {
       state.linkedArcs.push(await this.store.writeEpisodeArc(
         buildArcInput(related.episode, episode, related.overlap, stableId),
       ));
+      // apq0: an arc links two episodes into one topic thread. Union their
+      // threads (deterministic min-id representative) so the related prior
+      // episode and this one share a bounded topic thread instead of one
+      // per-channel mega-thread. Mutates the endpoints so a chained run
+      // converges within the pass.
+      await applyThreadUnionForArc(this.store, related.episode, episode, {
+        maxThreadEpisodes: this.maxThreadEpisodes,
+        ...(this.onThreadAssignment ? { onEvent: this.onThreadAssignment } : {}),
+      });
       await this.store.writeEpisodeLineage({
         id: stableId('episode-lineage', [related.episode.id, episode.id, candidateDecision.id]),
         sourceEpisodeId: related.episode.id,

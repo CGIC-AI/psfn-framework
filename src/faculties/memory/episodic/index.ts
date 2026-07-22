@@ -75,6 +75,14 @@ export {
   type TopicSegmentStatus,
   type TopicSegmentationRequest,
 } from './topic-segmentation.js';
+export {
+  applyThreadUnionForArc,
+  chooseThreadRepresentative,
+  computeThreadComponents,
+  type ThreadAssignmentEvent,
+  type ThreadUnionOptions,
+  type ThreadUnionResult,
+} from './thread-assignment.js';
 export type {
   Episode,
   EpisodeAffect,

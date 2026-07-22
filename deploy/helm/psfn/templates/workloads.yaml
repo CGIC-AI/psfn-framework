@@ -682,6 +682,11 @@ spec:
             {{- end }}
       volumes:
         {{- if .Values.fleet.enabled }}
+        # Fleet Garden still mounts /tmp under the read-only-root contract.
+        # The non-fleet branch gets this from psfn.commonVolumes; define the
+        # equivalent ephemeral volume explicitly for the fleet-specific set.
+        - name: tmp
+          emptyDir: {}
         {{- range $index, $companion := .Values.fleet.companions }}
         - name: {{ printf "garden-companion-data-%d" $index }}
           persistentVolumeClaim:

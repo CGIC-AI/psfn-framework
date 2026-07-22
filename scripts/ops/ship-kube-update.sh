@@ -85,6 +85,63 @@ fi
 remote() { ssh "$HOST_ALIAS" "$@"; }
 rkubectl() { remote "sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl -n $NAMESPACE $*"; }
 
+# Agent Deployments are named per topology: a fleet renders one
+# psfn-agent-<companionId> per roster entry, a single-companion release renders a
+# bare psfn-agent. Nothing may assume either shape -- hardcoding "psfn-agent"
+# made every fleet ship die after a successful helm upgrade (psfn-framework-q8xy1).
+# Resolved once, from what is actually live. `-o name` avoids quoting jsonpath
+# through the ssh wrapper.
+AGENT_DEPLOYS=()
+resolve_agent_deploys() {
+  local names
+  names="$(rkubectl get deploy -o name 2>/dev/null | sed 's|^deployment\.apps/||' | tr -d '\r' \
+    | grep -E '^psfn-agent(-.+)?$' || true)"
+  AGENT_DEPLOYS=()
+  [[ -n "$names" ]] || return 0
+  while IFS= read -r n; do
+    [[ -n "$n" ]] && AGENT_DEPLOYS+=("$n")
+  done <<<"$names"
+}
+
+# Provenance probe target: any live agent carries the same image, so the first
+# resolved one answers for the release. Fails loudly rather than being swallowed.
+primary_agent_deploy() {
+  [[ ${#AGENT_DEPLOYS[@]} -gt 0 ]] || resolve_agent_deploys
+  if [[ ${#AGENT_DEPLOYS[@]} -eq 0 ]]; then
+    echo "FAIL: no agent Deployment found in namespace ${NAMESPACE} (looked for psfn-agent and psfn-agent-<companionId>)" >&2
+    return 1
+  fi
+  printf '%s' "${AGENT_DEPLOYS[0]}"
+}
+
+# Reads PSFN_GIT_COMMIT off a live agent for previousGitCommit provenance. An
+# empty result is only legitimate when no agent Deployment exists at all (first
+# install). An agent that is present but unreadable is a real failure: swallowing
+# it with `|| true` is what silently shipped a stale previousGitCommit and told
+# the companion a false story about her own history (psfn-framework-q8xy1).
+live_agent_commit() {
+  local target commit
+  resolve_agent_deploys
+  if [[ ${#AGENT_DEPLOYS[@]} -eq 0 ]]; then
+    echo "==> no live agent Deployment; omitting previousGitCommit (first install)" >&2
+    return 0
+  fi
+  target="${AGENT_DEPLOYS[0]}"
+  # printenv, not `sh -c 'echo "$VAR"'`: rkubectl flattens its arguments through
+  # $* into a single ssh command string, so the inner quotes are lost and the
+  # remote LOGIN shell expands $PSFN_GIT_COMMIT (unset) before the pod ever sees
+  # it. That made this probe return empty on every topology, fleet or not.
+  if ! commit="$(rkubectl exec "deploy/${target}" -c agent -- printenv PSFN_GIT_COMMIT 2>/dev/null | tr -d '[:space:]')"; then
+    echo "FAIL: cannot read PSFN_GIT_COMMIT from live ${target}" >&2
+    return 1
+  fi
+  if [[ -z "$commit" ]]; then
+    echo "FAIL: live ${target} reports an empty PSFN_GIT_COMMIT; refusing to ship an unknown previousGitCommit" >&2
+    return 1
+  fi
+  printf '%s' "$commit"
+}
+
 if [[ -n "$(git status --porcelain)" ]]; then
   echo "FAIL: working tree is dirty; ship only committed state" >&2
   exit 1
@@ -122,7 +179,8 @@ trap 'rm -rf "$BUILD_DIR"' EXIT
 # ship must refresh the agent too; otherwise the new Helm revision would point
 # at a stale embedded chart. Unknown provenance fails closed.
 if [[ ! " ${SELECTED[*]} " == *" agent "* ]]; then
-  LIVE_AGENT_COMMIT="$(rkubectl exec deploy/psfn-agent -- sh -c 'echo "$PSFN_GIT_COMMIT"' 2>/dev/null | tr -d '[:space:]' || true)"
+  PROVENANCE_AGENT="$(primary_agent_deploy)" || exit 1
+  LIVE_AGENT_COMMIT="$(rkubectl exec "deploy/${PROVENANCE_AGENT}" -c agent -- printenv PSFN_GIT_COMMIT 2>/dev/null | tr -d '[:space:]' || true)"
   if [[ ! "$LIVE_AGENT_COMMIT" =~ ^[0-9a-f]{40}$ ]] || ! git cat-file -e "${LIVE_AGENT_COMMIT}^{commit}" 2>/dev/null; then
     echo "FAIL: cannot prove the live agent chart provenance; use --components all" >&2
     exit 1
@@ -261,7 +319,7 @@ if [[ $SHIP_EMOSIM -eq 1 ]]; then
   HELM_SETS+=("--set" "emosim.image.tag=${EMOSIM_TAG}")
 fi
 if [[ ${#SELECTED[@]} -eq 3 ]]; then
-  PREV_COMMIT="$(rkubectl exec deploy/psfn-agent -- sh -c 'echo "$PSFN_GIT_COMMIT"' 2>/dev/null | tr -d '[:space:]' || true)"
+  PREV_COMMIT="$(live_agent_commit)" || exit 1
   HELM_SETS+=("--set" "psfnAppImage.tag=${TAG}")
   HELM_SETS+=("--set" "psfnAppImage.gitCommit=${FULL_SHA}")
   [[ -n "$PREV_COMMIT" ]] && HELM_SETS+=("--set" "psfnAppImage.previousGitCommit=${PREV_COMMIT}")
@@ -272,7 +330,7 @@ else
     HELM_SETS+=("--set" "workloads.${c}.image.tag=${TAG}")
   done
   if [[ " ${SELECTED[*]} " == *" agent "* ]]; then
-    PREV_COMMIT="$(rkubectl exec deploy/psfn-agent -- sh -c 'echo "$PSFN_GIT_COMMIT"' 2>/dev/null | tr -d '[:space:]' || true)"
+    PREV_COMMIT="$(live_agent_commit)" || exit 1
     HELM_SETS+=("--set" "psfnAppImage.gitCommit=${FULL_SHA}")
     [[ -n "$PREV_COMMIT" ]] && HELM_SETS+=("--set" "psfnAppImage.previousGitCommit=${PREV_COMMIT}")
   fi
@@ -282,7 +340,20 @@ remote "sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml helm upgrade psfn ${REMOTE_DIR
 
 echo "==> waiting for selected rollouts"
 for c in "${SELECTED[@]}"; do
-  rkubectl rollout status "deploy/psfn-${c}" --timeout=300s
+  if [[ "$c" == "agent" ]]; then
+    # A fleet has one agent Deployment per companion; every one of them must be
+    # awaited, not a single assumed name.
+    resolve_agent_deploys
+    if [[ ${#AGENT_DEPLOYS[@]} -eq 0 ]]; then
+      echo "FAIL: agent rollout requested but no agent Deployment exists in ${NAMESPACE}" >&2
+      exit 1
+    fi
+    for d in "${AGENT_DEPLOYS[@]}"; do
+      rkubectl rollout status "deploy/${d}" --timeout=300s
+    done
+  else
+    rkubectl rollout status "deploy/psfn-${c}" --timeout=300s
+  fi
 done
 if [[ $SHIP_EMOSIM -eq 1 ]]; then
   rkubectl rollout status deploy/psfn-emosim --timeout=300s

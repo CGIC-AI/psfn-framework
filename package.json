@@ -1,6 +1,7 @@
 {
   "name": "psfn-framework",
   "version": "0.1.0",
+  "license": "AGPL-3.0-only",
   "description": "PSFN Substrate Framework — a purpose-built runtime for emergent artificial consciousness",
   "type": "module",
   "main": "dist/index.js",

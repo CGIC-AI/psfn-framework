@@ -2,6 +2,7 @@
   "name": "psfn-companion-ui",
   "private": true,
   "version": "0.0.1",
+  "license": "AGPL-3.0-only",
   "type": "module",
   "description": "PWA Companion Cockpit — client of the PSFN-Satellite Hub. Relational chat + presence/operational state only. No core, no server.",
   "scripts": {

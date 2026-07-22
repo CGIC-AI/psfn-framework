@@ -158,4 +158,4 @@ npm run e2e                       # integration tests
 
 ## License
 
-Private, not yet published.
+Licensed under the GNU Affero General Public License v3.0 (AGPL-3.0-only). See the [LICENSE](./LICENSE) file for the full text. Under the AGPL, if you run a modified version of this software to provide a network service, you must make the modified source available to its users.

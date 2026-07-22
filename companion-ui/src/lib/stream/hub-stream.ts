@@ -16,6 +16,17 @@ import type {
   ToolActivityPhase,
 } from '../protocol/events.js';
 import type { TouchInteraction } from '../touch-interactions.js';
+import {
+  classifyPlaybackSignal,
+  cloneVoicePlaybackState,
+  consumeUtterance,
+  createVoicePlaybackState,
+  reduceVoicePlayback,
+  resetVoicePlayback,
+  type VoicePlaybackState,
+} from '../audio/frame-reassembly.js';
+
+export type { VoicePlaybackState, CompletedUtterance } from '../audio/frame-reassembly.js';
 
 export type HubStreamConnection =
   | 'idle'
@@ -128,6 +139,7 @@ export interface HubStreamState {
   artifacts: ArtifactStreamItem[];
   artifactPreviews: Record<string, ArtifactPreviewStreamState>;
   toolActivity: ToolActivityStreamEntry[];
+  voicePlayback: VoicePlaybackState;
   sequence: number;
   updatedAt: string;
 }
@@ -138,7 +150,8 @@ export type HubStreamReducerEvent =
   | { type: 'client.error'; event: SatelliteHubErrorEvent; at: string }
   | { type: 'hub.inbound'; event: SatelliteHubInboundEvent; at: string }
   | { type: 'artifact.preview.request'; requestId: string; artifactId: string; at: string }
-  | { type: 'artifact.preview.timeout'; requestId: string; artifactId: string; at: string };
+  | { type: 'artifact.preview.timeout'; requestId: string; artifactId: string; at: string }
+  | { type: 'voice.consume'; utteranceId: string; at: string };
 
 export interface HubStreamClientLike {
   on<K extends keyof SatelliteHubClientEventMap>(
@@ -182,9 +195,24 @@ export function createInitialHubStreamState(at = new Date().toISOString()): HubS
     artifacts: [],
     artifactPreviews: {},
     toolActivity: [],
+    voicePlayback: createVoicePlaybackState(false),
     sequence: 0,
     updatedAt: at,
   };
+}
+
+/** True when a session's advertised output ceiling includes streamed audio. */
+function sessionSupportsStreamedAudio(session: SatelliteHubSession | null | undefined): boolean {
+  return Boolean(session?.capabilities?.output?.includes('streamed_audio'));
+}
+
+/** Re-derive the playback support flag for a session, resetting on any change. */
+function syncPlaybackSupport(
+  state: VoicePlaybackState,
+  session: SatelliteHubSession | null | undefined,
+): VoicePlaybackState {
+  const supported = sessionSupportsStreamedAudio(session);
+  return supported === state.supported ? state : createVoicePlaybackState(supported);
 }
 
 export function reduceHubStreamState(
@@ -197,9 +225,14 @@ export function reduceHubStreamState(
     case 'client.session': {
       const shardSelectionChanged =
         state.session?.activeShardId !== event.session.activeShardId;
+      const supported = sessionSupportsStreamedAudio(event.session);
+      const voicePlayback = supported !== state.voicePlayback.supported || shardSelectionChanged
+        ? createVoicePlaybackState(supported)
+        : state.voicePlayback;
       return {
         ...state,
         session: cloneSession(event.session) ?? null,
+        voicePlayback,
         ...(shardSelectionChanged ? {
           messages: [],
           liveAssistant: null,
@@ -250,6 +283,11 @@ export function reduceHubStreamState(
         updatedAt: event.at,
       };
     }
+    case 'voice.consume': {
+      const voicePlayback = consumeUtterance(state.voicePlayback, event.utteranceId);
+      if (voicePlayback === state.voicePlayback) return state;
+      return { ...state, voicePlayback, updatedAt: event.at };
+    }
   }
 }
 
@@ -275,10 +313,12 @@ export class HubStreamStore {
     this.scheduleTimeout = resolved.scheduleTimeout ?? ((cb, ms) => globalThis.setTimeout(cb, ms));
     this.cancelTimeout = resolved.cancelTimeout ?? ((handle) => globalThis.clearTimeout(handle as ReturnType<typeof setTimeout>));
     this.previewTimeoutMs = resolved.previewTimeoutMs ?? DEFAULT_PREVIEW_TIMEOUT_MS;
+    const initialSession = cloneSession(client.snapshot().session) ?? null;
     this.state = {
       ...initialState,
-      session: cloneSession(client.snapshot().session) ?? null,
+      session: initialSession,
       connection: mapClientConnection(client.snapshot().state),
+      voicePlayback: syncPlaybackSupport(initialState.voicePlayback, initialSession),
     };
     this.unsubscribeClient = [
       client.on('state', (event) => this.dispatch({ type: 'client.state', event, at: this.now() })),
@@ -318,6 +358,7 @@ export class HubStreamStore {
       artifacts: this.state.artifacts.map((item) => ({ ...item })),
       artifactPreviews: cloneArtifactPreviews(this.state.artifactPreviews),
       toolActivity: this.state.toolActivity.map((entry) => ({ ...entry })),
+      voicePlayback: cloneVoicePlaybackState(this.state.voicePlayback),
     };
   }
 
@@ -335,6 +376,14 @@ export class HubStreamStore {
 
   interrupt(): void {
     this.client.interrupt();
+  }
+
+  /**
+   * Mark a reassembled utterance as taken by the playback sink so the ready
+   * queue only ever holds audio that has not yet been handed to Web Audio.
+   */
+  consumeVoiceUtterance(utteranceId: string): void {
+    this.dispatch({ type: 'voice.consume', utteranceId, at: this.now() });
   }
 
   sendTouchInteraction(interaction: TouchInteraction): void {
@@ -437,6 +486,7 @@ function applyConnectionState(
           session: null,
           approvals: [],
           approvalResolutions: {},
+          voicePlayback: createVoicePlaybackState(false),
         }
       : {}),
     updatedAt: at,
@@ -465,40 +515,46 @@ function applyInboundMessage(
   };
 
   switch (message.type) {
-    case 'session.ready':
+    case 'session.ready': {
+      const session: SatelliteHubSession = {
+        deviceId: message.deviceId,
+        deviceName: message.deviceName,
+        satelliteId: message.satelliteId,
+        satelliteName: state.session?.satelliteName ?? message.deviceName,
+        sessionId: message.sessionId,
+        channelId: message.channelId,
+        audioFormat: message.audioFormat,
+        place: message.place ? { ...message.place } : undefined,
+        identity: message.identity,
+      };
       return {
         ...base,
         connection: 'ready',
         phase: 'listening',
-        session: {
-          deviceId: message.deviceId,
-          deviceName: message.deviceName,
-          satelliteId: message.satelliteId,
-          satelliteName: state.session?.satelliteName ?? message.deviceName,
-          sessionId: message.sessionId,
-          channelId: message.channelId,
-          audioFormat: message.audioFormat,
-          place: message.place ? { ...message.place } : undefined,
-          identity: message.identity,
-        },
+        session,
+        voicePlayback: syncPlaybackSupport(base.voicePlayback, session),
       };
-    case 'hello.ack':
+    }
+    case 'hello.ack': {
+      const session: SatelliteHubSession = {
+        deviceId: message.deviceId,
+        deviceName: message.deviceName,
+        satelliteId: message.satelliteId,
+        satelliteName: message.satelliteName,
+        sessionId: message.sessionId,
+        channelId: message.channelId,
+        capabilities: cloneCapabilities(message.capabilities),
+        place: message.place ? { ...message.place } : undefined,
+        identity: message.identity,
+      };
       return {
         ...base,
         connection: 'ready',
         phase: 'listening',
-        session: {
-          deviceId: message.deviceId,
-          deviceName: message.deviceName,
-          satelliteId: message.satelliteId,
-          satelliteName: message.satelliteName,
-          sessionId: message.sessionId,
-          channelId: message.channelId,
-          capabilities: cloneCapabilities(message.capabilities),
-          place: message.place ? { ...message.place } : undefined,
-          identity: message.identity,
-        },
+        session,
+        voicePlayback: syncPlaybackSupport(base.voicePlayback, session),
       };
+    }
     case 'status':
       return {
         ...base,
@@ -512,6 +568,7 @@ function applyInboundMessage(
         ...base,
         phase: 'interrupted',
         liveAssistant: null,
+        voicePlayback: resetVoicePlayback(base.voicePlayback),
       };
     case 'error-event':
       return {
@@ -628,8 +685,19 @@ function applyInboundMessage(
       return { ...base, toolActivity: [...base.toolActivity, entry] };
     }
     case 'text':
-    case 'audio':
+    case 'audio': {
+      // `text` doubles as the audio-init/audio-end bracket signal channel and
+      // the caption channel; only the exact bracket signals touch playback.
+      const signal = classifyPlaybackSignal(message);
+      if (!signal) return base;
+      return { ...base, voicePlayback: reduceVoicePlayback(base.voicePlayback, signal, at) };
+    }
     case 'action':
+      // A server-driven interrupt or pause stops in-flight speech (barge-in).
+      if (message.data === 'interrupt' || message.data === 'pause-audio') {
+        return { ...base, voicePlayback: resetVoicePlayback(base.voicePlayback) };
+      }
+      return base;
     case 'pong':
     case 'relay.stt.result':
     case 'relay.tts.chunk':

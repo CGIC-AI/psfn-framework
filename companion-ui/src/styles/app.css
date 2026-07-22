@@ -962,6 +962,20 @@ button:focus-visible {
   animation: talk 420ms ease-in-out infinite;
 }
 
+/*
+ * v1 amplitude lipsync: when the playback controller reports the mouth open on
+ * the reply's loudness, the mouth reflects that directly and overrides the
+ * timed speaking animation so movement tracks real audio, not a fixed cadence.
+ */
+.companion-sprite.mouth-open .sprite-mouth {
+  height: 12px;
+  border: 2px solid #9c6d58;
+  border-top: 0;
+  border-radius: 0 0 14px 14px;
+  animation: none;
+  transition: height 60ms linear;
+}
+
 .companion-sprite.listening .sprite-aura,
 .companion-sprite.tool_use .sprite-aura {
   animation: pulse 1.4s ease-in-out infinite;

@@ -6,19 +6,22 @@ import type { SpriteState } from './types.js';
 export function CompanionSprite({
   animated,
   label,
+  mouthOpen = false,
   onHeadpat,
   petted,
   state,
 }: {
   animated: boolean;
   label: string;
+  /** v1 amplitude lipsync: open the mouth while the companion speaks. */
+  mouthOpen?: boolean;
   onHeadpat: () => void;
   petted: boolean;
   state: SpriteState;
 }) {
   return (
     <button
-      className={`companion-sprite ${state} ${animated ? 'animated' : 'static'} ${petted ? 'petted' : ''}`}
+      className={`companion-sprite ${state} ${animated ? 'animated' : 'static'} ${petted ? 'petted' : ''} ${mouthOpen ? 'mouth-open' : ''}`}
       type="button"
       aria-label={`Give ${label} a headpat; currently ${state}`}
       title={`Give ${label} a headpat`}

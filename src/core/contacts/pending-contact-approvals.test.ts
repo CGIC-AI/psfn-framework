@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -98,6 +98,80 @@ describe('createFilePendingContactApprovalStore', () => {
     const store = createFilePendingContactApprovalStore(filePath);
     expect(await store.markDenied('missing')).toBeUndefined();
     expect(await store.remove('missing')).toBeUndefined();
+  });
+
+  it('does not persist a lastSeenAt-only refresh (idle purity)', async () => {
+    const times = ['2026-01-01T00:00:00.000Z', '2026-01-01T00:05:00.000Z'];
+    let call = 0;
+    const now = () => new Date(times[Math.min(call++, times.length - 1)]);
+    const store = createFilePendingContactApprovalStore(filePath, { now });
+
+    await store.recordSighting(makeSighting()); // t0: create -> persists
+    const afterCreate = readFileSync(filePath, 'utf8');
+
+    // Same messageId again: dedupes to no new preview, same displayName -> only
+    // lastSeenAt would move. This must NOT rewrite the durable store.
+    await store.recordSighting(makeSighting()); // t1: bare refresh -> no write
+    const afterRefresh = readFileSync(filePath, 'utf8');
+    expect(afterRefresh).toBe(afterCreate); // byte-identical: zero persist
+
+    // The refresh is live in memory but was intentionally not flushed to disk.
+    const inMemory = await store.getByIdentity('discord', 'user-42');
+    expect(inMemory?.lastSeenAt).toBe(times[1]);
+    const reopened = createFilePendingContactApprovalStore(filePath);
+    const persisted = await reopened.getByIdentity('discord', 'user-42');
+    expect(persisted?.lastSeenAt).toBe(times[0]);
+  });
+
+  it('persists a material change (new preview)', async () => {
+    const store = createFilePendingContactApprovalStore(filePath);
+    await store.recordSighting(makeSighting());
+    const afterCreate = readFileSync(filePath, 'utf8');
+
+    await store.recordSighting(makeSighting({ messageId: 'msg-2', messagePreview: 'second' }));
+    const afterMaterial = readFileSync(filePath, 'utf8');
+    expect(afterMaterial).not.toBe(afterCreate);
+
+    const reopened = createFilePendingContactApprovalStore(filePath);
+    const persisted = await reopened.getByIdentity('discord', 'user-42');
+    expect(persisted?.messagePreviews).toHaveLength(2);
+  });
+
+  it('persists a display-name change even without a new preview', async () => {
+    const store = createFilePendingContactApprovalStore(filePath);
+    await store.recordSighting(makeSighting());
+    const afterCreate = readFileSync(filePath, 'utf8');
+
+    // Same messageId (no new preview) but a changed display name is material.
+    await store.recordSighting(makeSighting({ displayName: 'Renamed Speaker' }));
+    const afterRename = readFileSync(filePath, 'utf8');
+    expect(afterRename).not.toBe(afterCreate);
+
+    const reopened = createFilePendingContactApprovalStore(filePath);
+    const persisted = await reopened.getByIdentity('discord', 'user-42');
+    expect(persisted?.displayName).toBe('Renamed Speaker');
+  });
+
+  it('flushes the refreshed lastSeenAt durably on the next material write', async () => {
+    const times = [
+      '2026-01-01T00:00:00.000Z',
+      '2026-01-01T00:05:00.000Z',
+      '2026-01-01T00:10:00.000Z',
+    ];
+    let call = 0;
+    const now = () => new Date(times[Math.min(call++, times.length - 1)]);
+    const store = createFilePendingContactApprovalStore(filePath, { now });
+
+    await store.recordSighting(makeSighting()); // t0: create
+    await store.recordSighting(makeSighting()); // t1: bare refresh, not written
+    // t2: new preview is material -> flushes the whole entry, carrying the
+    // current (t2) lastSeenAt with it. No timestamp data loss across writes.
+    await store.recordSighting(makeSighting({ messageId: 'msg-2', messagePreview: 'second' }));
+
+    const reopened = createFilePendingContactApprovalStore(filePath);
+    const persisted = await reopened.getByIdentity('discord', 'user-42');
+    expect(persisted?.lastSeenAt).toBe(times[2]);
+    expect(persisted?.messagePreviews).toHaveLength(2);
   });
 
   it('fails closed on a corrupt state file instead of silently dropping decisions', async () => {

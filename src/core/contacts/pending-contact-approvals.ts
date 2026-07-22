@@ -206,7 +206,18 @@ export function createFilePendingContactApprovalStore(
               ],
           };
           entries.set(key, updated);
-          persist(entries);
+          // Idle-purity gate: a bare re-sighting only refreshes lastSeenAt, which is
+          // roster-class churn — persisting the whole store on every untracked-speaker
+          // message is a junk write. Persist only on a material change (new preview or
+          // display-name change). The refreshed lastSeenAt stays live in memory and is
+          // flushed durably by the next material persist; losing an in-flight
+          // lastSeenAt-only refresh on crash is acceptable (operator-decision state —
+          // status, decidedAt, firstSeenAt — is always persisted immediately).
+          const displayNameChanged = updated.displayName !== existing.displayName;
+          const previewAdded = updated.messagePreviews.length !== existing.messagePreviews.length;
+          if (displayNameChanged || previewAdded) {
+            persist(entries);
+          }
           return { entry: updated, created: false };
         }
 

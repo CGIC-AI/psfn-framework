@@ -8,6 +8,12 @@ import {
   type PostgresTestHarness,
 } from '../../test-support/postgres-test-harness.js';
 import { createPostgresMemoryStoreFromPool } from './postgres-store.js';
+import {
+  L2_EMBEDDING_ANN_INDEX_NAME,
+  embeddingAnnOrderExpression,
+} from './postgres-store/embedding-index.js';
+import { MEMORY_SUBJECT_SELECT_COLUMNS } from './postgres-store/subject-queries.js';
+import { buildMemorySubjectAuthorizationPredicate } from './postgres-store/subject-policy.js';
 import type { PurrMemory } from './types.js';
 import { MEMORY_SUBJECT_CLASSIFIER_VERSION } from '../../shared/contracts/memory-subject.js';
 import type { MemorySubjectQueryAuthorization } from '../../shared/contracts/memory-subject.js';
@@ -1587,5 +1593,203 @@ describe('postgres memory store integration', () => {
     } finally {
       await plainHarness.stop();
     }
+  }, INTEGRATION_TIMEOUT_MS);
+});
+
+describe('postgres memory store ANN embedding search (a27w.2)', () => {
+  const QUERY_VECTOR = new Float32Array([1, 0, 0, 0]);
+
+  function embeddingLiteral(vector: readonly number[]): string {
+    return `[${vector.join(',')}]`;
+  }
+
+  // Fast direct-SQL seed of unclassified rows whose embeddings crowd the query
+  // vector. They are excluded from every subject's authorized set (no current
+  // classification) yet dominate the nearest-neighbour horizon, so a filtered ANN
+  // scan must look past them to reach authorized rows farther out in the space.
+  async function bulkSeedNearMemories(pool: Pool, count: number): Promise<void> {
+    await pool.query(`
+      INSERT INTO l2_memories (
+        id, text, type, importance, confidence, emotional_valence, salience,
+        source_ref, source_type, extracted_at, last_accessed, access_count,
+        sensitivity, embedding
+      )
+      SELECT
+        'near-' || g, 'near neighbour ' || g, 'semantic', 0.5, 0.5, 0, 0.5,
+        'seed:near', 'unknown', 1700000000000, 1700000000000, 0, 'personal',
+        ('[1,' || (g::float / 1000000) || ',0,0]')::vector
+      FROM generate_series(1, $1) g
+    `, [count]);
+  }
+
+  // EXPLAIN under the ANN GUCs. enable_sort/enable_seqscan are disabled so the
+  // only way to satisfy `ORDER BY embedding <=> q` is an index that provides that
+  // ordering — for the vector distance that is exclusively the HNSW ANN index.
+  // This deterministically proves the query SHAPE is served by the index (a
+  // mismatched ORDER BY expression could not be, and the index name would be
+  // absent). At production corpus scale the planner selects the same HNSW scan by
+  // cost, which is the sublinear retrieval this bead adds; on the tiny test
+  // corpus a plain sort would otherwise win, hence the forced ordered path.
+  async function explainPlan(pool: Pool, sql: string, params: readonly unknown[]): Promise<string> {
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      await client.query('SET LOCAL enable_seqscan = off');
+      await client.query('SET LOCAL enable_sort = off');
+      await client.query(`SELECT set_config('hnsw.ef_search', '200', true)`);
+      await client.query(`SELECT set_config('hnsw.iterative_scan', 'strict_order', true)`);
+      const explained = await client.query(`EXPLAIN (FORMAT JSON) ${sql}`, [...params]);
+      await client.query('COMMIT');
+      return JSON.stringify(explained.rows);
+    } finally {
+      client.release();
+    }
+  }
+
+  it('creates the HNSW cosine ANN index for the runtime embedding dimension', async () => {
+    await withMemoryDatabase(async (pool) => {
+      await createPostgresMemoryStoreFromPool(pool, 4);
+      const index = await pool.query<{ indexdef: string }>(
+        `SELECT indexdef FROM pg_indexes WHERE indexname = $1 AND schemaname = current_schema()`,
+        [L2_EMBEDDING_ANN_INDEX_NAME],
+      );
+      expect(index.rows).toHaveLength(1);
+      expect(index.rows[0]?.indexdef).toContain('USING hnsw');
+      expect(index.rows[0]?.indexdef).toContain('vector_cosine_ops');
+      expect(index.rows[0]?.indexdef).toContain('::vector(4)');
+    });
+  }, INTEGRATION_TIMEOUT_MS);
+
+  it('EXPLAIN shows raw semantic search using the HNSW ANN index', async () => {
+    await withMemoryDatabase(async (pool) => {
+      await createPostgresMemoryStoreFromPool(pool, 4);
+      await bulkSeedNearMemories(pool, 500);
+      await pool.query('ANALYZE l2_memories');
+      const orderExpr = embeddingAnnOrderExpression('embedding', '$1', 4);
+      const sql = `
+        SELECT id, 1 - (embedding <=> $1::vector) AS similarity
+        FROM l2_memories
+        WHERE embedding IS NOT NULL
+          AND superseded_by IS NULL
+          AND deleted_at IS NULL
+          AND 1 - (embedding <=> $1::vector) >= $2
+        ORDER BY ${orderExpr} ASC
+        LIMIT $3
+      `;
+      const plan = await explainPlan(pool, sql, [embeddingLiteral([...QUERY_VECTOR]), -1, 200]);
+      expect(plan).toContain(L2_EMBEDDING_ANN_INDEX_NAME);
+    });
+  }, INTEGRATION_TIMEOUT_MS);
+
+  it('EXPLAIN shows subject-authorized semantic search using the HNSW ANN index', async () => {
+    await withMemoryDatabase(async (pool) => {
+      await createPostgresMemoryStoreFromPool(pool, 4);
+      await bulkSeedNearMemories(pool, 500);
+      await pool.query('ANALYZE l2_memories');
+      const embeddingParam = '$1';
+      const thresholdParam = '$2';
+      const authorization = subjectAuthorization('contact-a', 'embedding');
+      const predicate = buildMemorySubjectAuthorizationPredicate(authorization, {
+        memoryAlias: 'memory',
+        firstParameter: 3,
+      });
+      const where = [
+        'memory.superseded_by IS NULL',
+        'memory.deleted_at IS NULL',
+        'memory.embedding IS NOT NULL',
+        `1 - (memory.embedding <=> ${embeddingParam}::vector) >= ${thresholdParam}`,
+        predicate.sql,
+      ].join('\n AND ');
+      const orderExpr = embeddingAnnOrderExpression('memory.embedding', embeddingParam, 4);
+      const values: unknown[] = [embeddingLiteral([...QUERY_VECTOR]), -1, ...predicate.values];
+      const sql = `
+        WITH authorized AS MATERIALIZED (
+          SELECT ${MEMORY_SUBJECT_SELECT_COLUMNS}, 1 - (memory.embedding <=> ${embeddingParam}::vector) AS similarity
+          FROM l2_memories memory
+          WHERE ${where}
+          ORDER BY ${orderExpr} ASC
+          LIMIT $${values.length + 1}
+        )
+        SELECT page.*, totals.authorized_total
+        FROM (SELECT COUNT(*) AS authorized_total FROM authorized) totals
+        LEFT JOIN LATERAL (
+          SELECT * FROM authorized
+          ORDER BY similarity DESC, salience DESC, extracted_at DESC, id DESC
+          LIMIT $${values.length + 2}
+          OFFSET $${values.length + 3}
+        ) page ON TRUE
+      `;
+      const plan = await explainPlan(pool, sql, [...values, 200, 50, 0]);
+      expect(plan).toContain(L2_EMBEDDING_ANN_INDEX_NAME);
+    });
+  }, INTEGRATION_TIMEOUT_MS);
+
+  it('matches a brute-force cosine ranking on a small corpus (result equivalence)', async () => {
+    await withMemoryDatabase(async (pool) => {
+      const store = await createPostgresMemoryStoreFromPool(pool, 4);
+      const corpus: Array<{ id: string; embedding: number[] }> = [
+        { id: 'eqv-1', embedding: [1, 0, 0, 0] },
+        { id: 'eqv-2', embedding: [0.9, 0.2, 0, 0] },
+        { id: 'eqv-3', embedding: [0.6, 0.6, 0, 0] },
+        { id: 'eqv-4', embedding: [0.2, 0.9, 0, 0] },
+        { id: 'eqv-5', embedding: [0, 1, 0, 0] },
+        { id: 'eqv-6', embedding: [0, 0.3, 0.9, 0] },
+        { id: 'eqv-7', embedding: [0.1, 0.1, 0.1, 0.95] },
+        { id: 'eqv-8', embedding: [0.5, 0, 0.5, 0.5] },
+      ];
+      for (const row of corpus) {
+        await store.insertMemory(
+          makeMemory({ id: row.id, text: `equivalence ${row.id}`, sensitivity: 'public' }),
+          new Float32Array(row.embedding),
+        );
+      }
+      const query = [1, 0, 0, 0];
+      const norm = (v: number[]): number => Math.sqrt(v.reduce((sum, value) => sum + value * value, 0));
+      const cosine = (a: number[], b: number[]): number =>
+        a.reduce((sum, value, index) => sum + value * b[index]!, 0) / (norm(a) * norm(b));
+      const bruteForce = [...corpus]
+        .map(row => ({ id: row.id, similarity: cosine(query, row.embedding) }))
+        .sort((left, right) => right.similarity - left.similarity)
+        .slice(0, 5)
+        .map(row => row.id);
+      const actual = await store.searchByEmbedding(new Float32Array(query), -1, 5);
+      expect(actual.map(memory => memory.id)).toEqual(bruteForce);
+    });
+  }, INTEGRATION_TIMEOUT_MS);
+
+  it('returns authorized rows even when the nearest neighbours are all unauthorized (ANN + filter)', async () => {
+    await withMemoryDatabase(async (pool) => {
+      const store = await createPostgresMemoryStoreFromPool(pool, 4);
+      // 300 unauthorized rows crowd the query vector, well beyond the ANN
+      // candidate pool (>= 200). The 5 authorized rows sit far away in embedding
+      // space, so a naive top-pool scan would never surface them; the filtered ANN
+      // plan (iterative scan on pgvector >= 0.8) must still return exactly them.
+      await bulkSeedNearMemories(pool, 300);
+      const authorizedIds: string[] = [];
+      for (let index = 0; index < 5; index += 1) {
+        const id = `far-authorized-${index}`;
+        authorizedIds.push(id);
+        await store.insertMemory(
+          makeMemory({
+            id,
+            text: `far authorized ${index}`,
+            sensitivity: 'public',
+            provenance: { subjectContactId: 'contact-a' },
+          }),
+          new Float32Array([0.1, 1, 0.1, 0.1]),
+        );
+      }
+      const result = await store.queryAuthorizedMemorySubjects({
+        authorization: subjectAuthorization('contact-a', 'embedding'),
+        selector: {
+          kind: 'embedding_search',
+          embedding: QUERY_VECTOR,
+          threshold: -1,
+          limit: 50,
+        },
+      });
+      expect(result.memories.map(memory => memory.id).sort()).toEqual([...authorizedIds].sort());
+      expect(result.total).toBe(5);
+    });
   }, INTEGRATION_TIMEOUT_MS);
 });

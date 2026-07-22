@@ -75,9 +75,11 @@ function normalizeSourceContext(sourceContext: ShardSourceContext | undefined): 
   const channelId = normalizeNonEmptyString(sourceContext.channelId, 'source context channelId');
   const requestId = sourceContext.requestId?.trim();
   const turnId = sourceContext.turnId?.trim();
+  const logicalSessionId = sourceContext.logicalSessionId?.trim();
 
   return {
     channelId,
+    ...(logicalSessionId ? { logicalSessionId } : {}),
     ...(requestId ? { requestId } : {}),
     ...(turnId ? { turnId } : {}),
   };

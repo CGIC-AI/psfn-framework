@@ -168,6 +168,7 @@ function cloneTaskRecord(record: SubagentTaskRecord): SubagentTaskRecord {
 function cloneSourceContext(sourceContext: SubagentExecutionSourceContext): SubagentExecutionSourceContext {
   return {
     channelId: sourceContext.channelId,
+    ...(sourceContext.logicalSessionId ? { logicalSessionId: sourceContext.logicalSessionId } : {}),
     ...(sourceContext.requestId ? { requestId: sourceContext.requestId } : {}),
     ...(sourceContext.turnId ? { turnId: sourceContext.turnId } : {}),
     ...(sourceContext.originatingTaskId ? { originatingTaskId: sourceContext.originatingTaskId } : {}),

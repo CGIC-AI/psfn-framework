@@ -97,6 +97,7 @@ export function createSubagentTool(port: SubagentControlPort): SubstrateAgentToo
                 ? {
                     sourceContext: {
                       channelId: requestContext.channelId,
+                      ...(requestContext.sessionId ? { logicalSessionId: requestContext.sessionId } : {}),
                       ...(requestContext.requestId ? { requestId: requestContext.requestId } : {}),
                       ...(requestContext.turnId ? { turnId: requestContext.turnId } : {}),
                     },

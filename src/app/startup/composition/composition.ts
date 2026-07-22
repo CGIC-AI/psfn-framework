@@ -633,7 +633,9 @@ export function wireShardAndThinkRuntime(options: ToolRuntimeOptions): ShardExec
     eventBus: options.eventBus,
     llmProvider: options.llmProvider,
     sessionStore: options.sessionStore,
-    completionNotices: options.agentLoop.completionNotices,
+    completionNoticeDelivery: {
+      deliver: input => options.agentLoop.deliverCompletionNotice(input),
+    },
     sessionManager: options.sessionManager,
     embeddingService: options.embeddingService,
     memoryProvider: options.agentLoop.memoryProvider,
@@ -654,7 +656,9 @@ export function wireShardAndThinkRuntime(options: ToolRuntimeOptions): ShardExec
     eventBus: options.eventBus,
     llmProvider: options.llmProvider,
     sessionStore: options.sessionStore,
-    completionNotices: options.agentLoop.completionNotices,
+    completionNoticeDelivery: {
+      deliver: input => options.agentLoop.deliverCompletionNotice(input),
+    },
     embeddingService: options.embeddingService,
     memoryProvider: options.agentLoop.memoryProvider,
     config: options.config,

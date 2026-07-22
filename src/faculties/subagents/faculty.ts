@@ -46,7 +46,10 @@ import {
   summarizeCompletionText,
   type CompletionHandoffInput,
 } from '../../core/agent/completion-handoff.js';
-import type { CompletionNoticeBuffer } from '../../core/agent/completion-notices.js';
+import type {
+  CompletionNoticeBuffer,
+  CompletionNoticeDeliveryPort,
+} from '../../core/agent/completion-notices.js';
 import { assertWorkSpecLaneParity } from '../../primitives/llm/work-spec.js';
 import { buildShardLineageEnvelope } from '../shards/result-lineage.js';
 import type { ShardResultLineageEnvelope } from '../shards/result-lineage.js';
@@ -159,6 +162,8 @@ export interface SubagentFacultyDeps {
   sessionStore: SessionStore;
   /** Buffer for compact companion-facing completion notices (never session-persisted). */
   completionNotices?: CompletionNoticeBuffer | null;
+  /** Canonical parent-orchestration result delivery; production uses this instead of direct buffering. */
+  completionNoticeDelivery?: CompletionNoticeDeliveryPort | null;
   embeddingService: EmbeddingService | null;
   memoryProvider: MemoryProvider | null;
   config: SubstrateConfig;
@@ -849,7 +854,7 @@ export class SubagentFaculty implements SubagentControlPort {
       taskLabel: request.name,
       subagentId,
       status: 'blocked',
-      resultSummary: `Subagent "${request.name}" did not start.`,
+      resultSummary: `Automata "${request.name}" did not start.`,
       outputRefs: [],
       validationPerformed: ['subagent_spawn_policy', reason],
       blocker: { reason, error },
@@ -899,10 +904,10 @@ export class SubagentFaculty implements SubagentControlPort {
       status,
       resultSummary: result.outcome === 'completed' || isPartial
         ? summarizeCompletionText(result.content)
-        : `Subagent "${result.name}" ended without a usable final output.`,
+        : `Automata "${result.name}" ended without a usable final output.`,
       outputRefs: [
-        { kind: 'session', ref: handle.channelId, label: 'subagent transcript' },
-        { kind: 'subagent_result', ref: result.subagentId, label: result.lifecycleState },
+        { kind: 'session', ref: handle.channelId, label: 'automata transcript' },
+        { kind: 'automata_result', ref: result.subagentId, label: result.lifecycleState },
       ],
       validationPerformed: [
         'subagent_lifecycle_terminal',
@@ -949,8 +954,8 @@ export class SubagentFaculty implements SubagentControlPort {
       subagentId: handle.subagentId,
       status,
       resultSummary: status === 'started'
-        ? `Subagent "${handle.request.name}" started.`
-        : `Subagent "${handle.request.name}" completed ${completedTurns} of ${handle.maxTurns} bounded turns.`,
+        ? `Automata "${handle.request.name}" started.`
+        : `Automata "${handle.request.name}" completed ${completedTurns} of ${handle.maxTurns} bounded turns.`,
       outputRefs: [],
       validationPerformed: [
         'subagent_lifecycle_nonterminal',
@@ -986,6 +991,9 @@ export class SubagentFaculty implements SubagentControlPort {
         ...(bufferNotice && this.deps.completionNotices
           ? { notices: this.deps.completionNotices }
           : {}),
+        ...(bufferNotice && this.deps.completionNoticeDelivery
+          ? { noticeDelivery: this.deps.completionNoticeDelivery }
+          : {}),
       });
     } catch (error) {
       this.auditTrail?.append('subagent.completion_handoff.failed', {
@@ -1015,6 +1023,7 @@ export class SubagentFaculty implements SubagentControlPort {
     return {
       ...(sourceContext.originatingTaskId ? { originatingTaskId: sourceContext.originatingTaskId } : {}),
       ...(sourceContext.originatingBeadId ? { originatingBeadId: sourceContext.originatingBeadId } : {}),
+      ...(sourceContext.logicalSessionId ? { logicalSessionId: sourceContext.logicalSessionId } : {}),
       ...(sourceContext.requestId ? { requestId: sourceContext.requestId, sourceMessageId: sourceContext.requestId } : {}),
       ...(sourceContext.turnId ? { turnId: sourceContext.turnId } : {}),
     };
@@ -1411,6 +1420,7 @@ export class SubagentFaculty implements SubagentControlPort {
         ? {
             sourceContext: {
               channelId: sourceContext.channelId,
+              ...(sourceContext.logicalSessionId ? { logicalSessionId: sourceContext.logicalSessionId } : {}),
               ...(sourceContext.requestId ? { requestId: sourceContext.requestId } : {}),
               ...(sourceContext.turnId ? { turnId: sourceContext.turnId } : {}),
             },

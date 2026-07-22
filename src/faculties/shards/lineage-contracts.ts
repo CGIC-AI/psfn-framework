@@ -7,6 +7,8 @@ import type {
 
 export interface ShardSourceContext {
   channelId: string;
+  /** Captured parent session owner; never re-resolve this from mutable focus. */
+  logicalSessionId?: string;
   requestId?: string;
   turnId?: string;
   embodimentContext?: EmbodimentPresenceMetadata;

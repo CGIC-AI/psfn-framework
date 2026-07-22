@@ -65,6 +65,9 @@ jobs:
         id: scope
         run: node scripts/ci/detect-change-scope.mjs --base "$BASE_SHA" --head "$HEAD_SHA"
 
+      - name: Scan changed workflow security surface
+        run: node scripts/ci/run-zizmor-changed.mjs --format=github --base "$BASE_SHA" --head "$HEAD_SHA"
+
       - name: Install root dependencies in a clean environment
         if: steps.scope.outputs.root_runtime == 'true' || steps.scope.outputs.admin_ui == 'true' || steps.scope.outputs.deployment == 'true'
         run: npm ci

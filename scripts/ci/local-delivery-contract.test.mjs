@@ -901,6 +901,12 @@ test('GitHub CI is one complementary delta lane without label-triggered reruns',
   assert.doesNotMatch(workflow, /run: bash scripts\/ci\/run-semgrep\.sh/);
   assert.match(workflow, /statuses: read/);
   assert.match(workflow, /vars\.LOCAL_GATE_STATUS_ACTOR/);
+  // The workflow-security scan is a step inside the always-run delta job, so it
+  // enforces zizmor findings without adding a skippable ci-required dependency.
+  assert.match(
+    workflow,
+    /node scripts\/ci\/run-zizmor-changed\.mjs --format=github --base "\$BASE_SHA" --head "\$HEAD_SHA"/,
+  );
 });
 
 test('trusted PR label automation has the write scope required by the labels API', () => {

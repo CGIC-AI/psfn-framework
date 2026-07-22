@@ -955,8 +955,10 @@ capability-tier.json|scheduler.json|charge-policy.json|skills.json
         cp /seed/companion.json {{ .Values.runtime.characterCardPath }}
       fi
   securityContext:
-    {{- toYaml .Values.securityContext | nindent 4 }}
+    {{- include "psfn.appReadOnlySecurityContext" . | nindent 4 }}
   volumeMounts:
+    - name: tmp
+      mountPath: /tmp
     - name: system-data
       mountPath: {{ .Values.runtime.systemDataDir }}
     - name: companion-data
@@ -1007,7 +1009,7 @@ capability-tier.json|scheduler.json|charge-policy.json|skills.json
       mountPath: /var/run/secrets/psfn-postgres
       readOnly: true
   securityContext:
-    {{- toYaml $root.Values.securityContext | nindent 4 }}
+    {{- include "psfn.appReadOnlySecurityContext" $root | nindent 4 }}
 {{- end -}}
 
 {{- define "psfn.fleetAuthAuthorityFloorInitContainer" -}}
@@ -1044,6 +1046,24 @@ capability-tier.json|scheduler.json|charge-policy.json|skills.json
 {{- end }}
 {{- end -}}
 
+{{/*
+Container securityContext for first-party PSFN app-image containers (agent,
+gateway, Garden and their seed/wait init containers, plus the in-cluster
+LiteLLM proxy). It is the shared .Values.securityContext with
+readOnlyRootFilesystem forced on. The /app image is built read-only by design
+(see the "read-only /app image" note in psfn.commonEnv: every writable runtime
+path — system-data, companion-data, workspace, logs, temp, backups, the Dolt
+config root and an ephemeral /tmp emptyDir — is an explicit mount), so these
+containers run with an immutable root filesystem. Third-party/opt-in surfaces
+(postgres, redis, satellite-hub, companion-ui-test) intentionally keep the
+base context and are hardened separately; they must not silently inherit a
+read-only root without per-image validation. deepCopy protects .Values from
+Sprig merge mutation.
+*/}}
+{{- define "psfn.appReadOnlySecurityContext" -}}
+{{- toYaml (merge (dict "readOnlyRootFilesystem" true) (deepCopy .Values.securityContext)) -}}
+{{- end -}}
+
 {{- define "psfn.commonVolumes" -}}
 - name: system-data
   persistentVolumeClaim:
@@ -1063,6 +1083,11 @@ capability-tier.json|scheduler.json|charge-policy.json|skills.json
 - name: runtime
   persistentVolumeClaim:
     claimName: {{ include "psfn.runtimeClaimName" . }}
+{{- /* Ephemeral writable /tmp so the read-only root filesystem never blocks
+       os.tmpdir()/mktemp writes. Real runtime temp still lives on the runtime
+       PVC via PSFN_TEMP_DIR; this only backs incidental /tmp usage. */}}
+- name: tmp
+  emptyDir: {}
 {{- if .Values.persistence.modelCache.enabled }}
 - name: model-cache
   persistentVolumeClaim:

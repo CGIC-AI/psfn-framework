@@ -65,7 +65,7 @@ spec:
           command:
             {{- toYaml .Values.workloads.gateway.command | nindent 12 }}
           securityContext:
-            {{- toYaml .Values.securityContext | nindent 12 }}
+            {{- include "psfn.appReadOnlySecurityContext" . | nindent 12 }}
           ports:
             - name: http-api
               containerPort: {{ .Values.ports.gatewayApi }}
@@ -196,6 +196,8 @@ spec:
           resources:
             {{- toYaml .Values.workloads.gateway.resources | nindent 12 }}
           volumeMounts:
+            - name: tmp
+              mountPath: /tmp
             - name: system-data
               mountPath: {{ .Values.runtime.systemDataDir }}
             {{- include "psfn.gatewayCompanionDataVolumeMounts" . | nindent 12 }}
@@ -303,7 +305,7 @@ spec:
           command:
             {{- toYaml .Values.workloads.agent.command | nindent 12 }}
           securityContext:
-            {{- toYaml .Values.securityContext | nindent 12 }}
+            {{- include "psfn.appReadOnlySecurityContext" . | nindent 12 }}
           ports:
             - name: admin-https
               containerPort: {{ .Values.ports.agentAdmin }}
@@ -409,6 +411,8 @@ spec:
           resources:
             {{- toYaml .Values.workloads.agent.resources | nindent 12 }}
           volumeMounts:
+            - name: tmp
+              mountPath: /tmp
             - name: postgres-database-url
               mountPath: /var/run/secrets/psfn-postgres
               readOnly: true
@@ -502,7 +506,7 @@ spec:
           command:
             {{- toYaml .Values.workloads.garden.command | nindent 12 }}
           securityContext:
-            {{- toYaml .Values.securityContext | nindent 12 }}
+            {{- include "psfn.appReadOnlySecurityContext" . | nindent 12 }}
           ports:
             - name: {{ ternary "https-garden" "http-garden" .Values.fleetAuth.enabled }}
               containerPort: {{ .Values.ports.garden }}
@@ -636,6 +640,8 @@ spec:
           resources:
             {{- toYaml .Values.workloads.garden.resources | nindent 12 }}
           volumeMounts:
+            - name: tmp
+              mountPath: /tmp
             {{- if .Values.fleet.enabled }}
             {{- range $index, $companion := .Values.fleet.companions }}
             - name: {{ printf "garden-companion-data-%d" $index }}

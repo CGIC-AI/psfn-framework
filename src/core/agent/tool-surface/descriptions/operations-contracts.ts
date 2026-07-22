@@ -68,11 +68,11 @@ export const OPERATIONS_TOOL_CONTRACTS = {
       action('activate_follow_up', ['follow_up_id'], ['activation_reason']),
       action('create_reminder', ['title', 'content', 'due_at', 'channel_id', 'channel_type'], ['kind', 'classification', 'reminder_schedule', 'reason', 'contact_id', 'source_message_id']),
       action('trigger_reminder', ['reminder_id']), action('list_templates'),
-      action('update_template', [], ['name', 'prompt', 'interval_ms', 'enabled', 'send_to_discord', 'internal_state_input', 'mode', 'deliberation'], {
+      action('update_template', [], ['name', 'prompt', 'interval_ms', 'enabled', 'internal_state_input', 'mode', 'deliberation'], {
         id: 'update_template', requiredAnyOf: [['template_id'], ['id', 'name', 'prompt', 'interval_ms']],
         rule: 'template_id updates an existing template; the id branch creates a new template',
       }),
-      action('run_template', ['template_id'], ['send_to_discord', 'defer_if_busy']),
+      action('run_template', ['template_id'], ['defer_if_busy']),
       action('schedule_prompt', ['name', 'prompt'], [], { id: 'schedule_prompt', requiredAnyOf: [['delay_minutes'], ['run_at']], rule: 'supply exactly one timing field' }),
     ],
     output: 'It returns durable identifiers or run state and does not replace untimed open threads managed through orient.',

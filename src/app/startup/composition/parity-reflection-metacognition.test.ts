@@ -75,13 +75,13 @@ describe('wireReflectionRuntime reflection metacognition journal', () => {
     const runTool = target.registerTool.mock.calls
       .map(call => call[0])
       .find(tool => tool?.name === 'schedule') as {
-        execute: (toolCallId: string, params: { action: string; template_id: string; send_to_discord?: boolean }, signal: AbortSignal) => Promise<unknown>;
+        execute: (toolCallId: string, params: { action: string; template_id: string }, signal: AbortSignal) => Promise<unknown>;
       };
     expect(runTool).toBeDefined();
 
     await runTool.execute(
       'call-reflection-meta',
-      { action: 'run_template', template_id: 'daily-review', send_to_discord: false },
+      { action: 'run_template', template_id: 'daily-review' },
       new AbortController().signal,
     );
 

@@ -36,9 +36,7 @@ export async function wireReflectionRuntime(
   const templateRuntime: ReflectionTemplateRuntime = createReflectionTemplateRuntime({
     scheduler,
     agentLoop,
-    sender,
     dataDir,
-    heartbeatChannelId,
     runtimeOptions,
   });
 

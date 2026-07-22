@@ -110,7 +110,6 @@ describe('createReflectionTemplateRuntime reflection metacognition journal', () 
       throw new Error('daily-review template missing from defaults');
     }
     template.internalStateInput = true;
-    template.sendToDiscord = false;
     policyStore.save(policy);
 
     const internalState = new InternalStateComputer().computeState({
@@ -169,12 +168,10 @@ describe('createReflectionTemplateRuntime reflection metacognition journal', () 
         getCurrentInternalStateSnapshotRef: () => snapshotRef,
         getCurrentMetacognitiveFlags: () => [],
       },
-      sender: { send: vi.fn(async () => undefined) },
       dataDir: tempDir,
     });
 
     await runtime.runTemplateNow('daily-review', {
-      sendToDiscordOverride: false,
       deferIfBusy: false,
     });
 
@@ -236,7 +233,6 @@ describe('createReflectionTemplateRuntime reflection metacognition journal', () 
       throw new Error('daily-review template missing from defaults');
     }
     template.internalStateInput = true;
-    template.sendToDiscord = false;
     policyStore.save(policy);
 
     const nowMs = Date.parse('2026-03-02T12:00:00.000Z');
@@ -282,12 +278,10 @@ describe('createReflectionTemplateRuntime reflection metacognition journal', () 
         getCurrentInternalStateSnapshotRef: () => snapshotRef,
         getCurrentMetacognitiveFlags: () => [],
       } as any,
-      sender: { send: vi.fn(async () => undefined) },
       dataDir: tempDir,
     });
 
     await runtime.runTemplateNow('daily-review', {
-      sendToDiscordOverride: false,
       deferIfBusy: false,
     });
 
@@ -374,7 +368,6 @@ describe('createReflectionTemplateRuntime reflection metacognition journal', () 
           getCurrentMetacognitiveFlags: () => metacognitiveFlags,
           getCurrentAuthoritativeSystemPrompt: () => authoritativeDeliberationSystemPrompt,
         },
-        sender: { send: vi.fn(async () => undefined) },
         dataDir: tempDir,
         runtimeOptions: {
           llmProvider: llmProvider as any,
@@ -382,7 +375,6 @@ describe('createReflectionTemplateRuntime reflection metacognition journal', () 
       });
 
       await runtime.runTemplateNow('weekly-review', {
-        sendToDiscordOverride: false,
         deferIfBusy: false,
       });
 
@@ -643,7 +635,6 @@ describe('createReflectionTemplateRuntime reflection metacognition journal', () 
         getCurrentMetacognitiveFlags: () => [{ flag: 'continuity', confidence: 0.51 }],
         getCurrentAuthoritativeSystemPrompt: () => authoritativeDeliberationSystemPrompt,
       } as any,
-      sender: { send: vi.fn(async () => undefined) },
       dataDir: tempDir,
       runtimeOptions: {
         llmProvider: llmProvider as any,
@@ -694,7 +685,6 @@ describe('createReflectionTemplateRuntime reflection metacognition journal', () 
     });
 
     const result = await runtime.runTemplateNow('daily-review', {
-      sendToDiscordOverride: false,
       deferIfBusy: false,
     });
 
@@ -850,7 +840,6 @@ describe('createReflectionTemplateRuntime reflection metacognition journal', () 
       prompt: 'Reflect on one grounded tension without forcing a conclusion.',
       intervalMs: 300_000,
       enabled: true,
-      sendToDiscord: false,
       mode: 'deliberation',
       deliberation: {
         maxRounds: 1,
@@ -892,13 +881,11 @@ describe('createReflectionTemplateRuntime reflection metacognition journal', () 
         handleMessage: vi.fn(async () => ({ content: 'unused' })),
         getCurrentAuthoritativeSystemPrompt: () => authoritativeDeliberationSystemPrompt,
       },
-      sender: { send: vi.fn(async () => undefined) },
       dataDir: tempDir,
       runtimeOptions: { llmProvider },
     });
 
     await runtime.runTemplateNow('custom-deliberation', {
-      sendToDiscordOverride: false,
       deferIfBusy: false,
     });
 
@@ -996,7 +983,6 @@ describe('createReflectionTemplateRuntime reflection metacognition journal', () 
           getCurrentMetacognitiveFlags: () => [],
           getCurrentAuthoritativeSystemPrompt: () => authoritativeDeliberationSystemPrompt,
         },
-        sender: { send: vi.fn(async () => undefined) },
         dataDir: tempDir,
         runtimeOptions: {
           llmProvider: llmProvider as any,
@@ -1007,7 +993,6 @@ describe('createReflectionTemplateRuntime reflection metacognition journal', () 
       });
 
       await runtime.runTemplateNow('weekly-review', {
-        sendToDiscordOverride: false,
         deferIfBusy: false,
       });
 
@@ -1133,7 +1118,6 @@ describe('createReflectionTemplateRuntime reflection metacognition journal', () 
           getCurrentInternalStateSnapshotRef: () => currentSnapshotRef,
           getCurrentMetacognitiveFlags: () => [],
         } as any,
-        sender: { send: vi.fn(async () => undefined) },
         dataDir: tempDir,
         runtimeOptions: {
           eventBus,
@@ -1198,7 +1182,6 @@ describe('createReflectionTemplateRuntime reflection metacognition journal', () 
       });
 
       await runtime.runTemplateNow(templateId, {
-        sendToDiscordOverride: false,
         deferIfBusy: false,
       });
 
@@ -1388,7 +1371,6 @@ describe('createReflectionTemplateRuntime reflection metacognition journal', () 
         getCurrentInternalStateSnapshotRef: () => currentSnapshotRef,
         getCurrentMetacognitiveFlags: () => [],
       } as any,
-      sender: { send: vi.fn(async () => undefined) },
       dataDir: tempDir,
       runtimeOptions: {
         eventBus,
@@ -1409,7 +1391,6 @@ describe('createReflectionTemplateRuntime reflection metacognition journal', () 
     });
 
     await runtime.runTemplateNow('daily-review', {
-      sendToDiscordOverride: false,
       deferIfBusy: false,
       conversationScope: createGroupConversationScope({
         channelId: 'discord:room-42',
@@ -1484,12 +1465,10 @@ describe('createReflectionTemplateRuntime reflection metacognition journal', () 
         getCurrentInternalStateSnapshotRef: () => snapshotRef,
         getCurrentMetacognitiveFlags: () => [],
       } as any,
-      sender: { send: vi.fn(async () => undefined) },
       dataDir: tempDir,
     });
 
     await runtime.runTemplateNow('daily-review', {
-      sendToDiscordOverride: false,
       deferIfBusy: false,
     });
 
@@ -1543,12 +1522,10 @@ describe('createReflectionTemplateRuntime reflection metacognition journal', () 
         getCurrentInternalStateSnapshotRef: () => snapshotRef,
         getCurrentMetacognitiveFlags: () => [],
       } as any,
-      sender: { send: vi.fn(async () => undefined) },
       dataDir: tempDir,
     });
 
     await runtime.runTemplateNow('daily-review', {
-      sendToDiscordOverride: false,
       deferIfBusy: false,
     });
 
@@ -1618,13 +1595,11 @@ describe('createReflectionTemplateRuntime reflection metacognition journal', () 
         getCurrentInternalStateSnapshotRef: () => null,
         getCurrentMetacognitiveFlags: () => [],
       },
-      sender: { send: vi.fn(async () => undefined) },
       dataDir: tempDir,
       runtimeOptions: { eventBus },
     });
 
     await runtime.runTemplateNow('daily-review', {
-      sendToDiscordOverride: false,
       deferIfBusy: false,
     });
 
@@ -1715,7 +1690,6 @@ describe('createReflectionTemplateRuntime reflection metacognition journal', () 
         getCurrentInternalStateSnapshotRef: () => currentSnapshotRef,
         getCurrentMetacognitiveFlags: () => [],
       },
-      sender: { send: vi.fn(async () => undefined) },
       dataDir: tempDir,
       runtimeOptions: {
         eventBus,
@@ -1744,7 +1718,6 @@ describe('createReflectionTemplateRuntime reflection metacognition journal', () 
     });
 
     await runtime.runTemplateNow('daily-review', {
-      sendToDiscordOverride: false,
       deferIfBusy: false,
     });
 
@@ -1816,7 +1789,6 @@ describe('createReflectionTemplateRuntime reflection metacognition journal', () 
         getCurrentInternalStateSnapshotRef: () => snapshotRef,
         getCurrentMetacognitiveFlags: () => [],
       },
-      sender: { send: vi.fn(async () => undefined) },
       dataDir: tempDir,
       runtimeOptions: {
         eventBus,
@@ -1866,7 +1838,6 @@ describe('createReflectionTemplateRuntime reflection metacognition journal', () 
     });
 
     await runtime.runTemplateNow('daily-review', {
-      sendToDiscordOverride: false,
       deferIfBusy: false,
     });
 
@@ -2021,7 +1992,6 @@ describe('createReflectionTemplateRuntime reflection metacognition journal', () 
         getCurrentInternalStateSnapshotRef: () => currentSnapshotRef,
         getCurrentMetacognitiveFlags: () => [],
       } as any,
-      sender: { send: vi.fn(async () => undefined) },
       dataDir: tempDir,
       runtimeOptions: {
         characterPromptVariablesProvider: () => ({
@@ -2064,7 +2034,6 @@ describe('createReflectionTemplateRuntime reflection metacognition journal', () 
     });
 
     await runtime.runTemplateNow('daily-review', {
-      sendToDiscordOverride: false,
       deferIfBusy: false,
     });
 
@@ -2243,7 +2212,6 @@ describe('createReflectionTemplateRuntime reflection metacognition journal', () 
           getCurrentMetacognitiveFlags: () => [],
           getCurrentAuthoritativeSystemPrompt: () => authoritativeDeliberationSystemPrompt,
         } as any,
-        sender: { send: vi.fn(async () => undefined) },
         dataDir: tempDir,
         runtimeOptions: {
           eventBus,
@@ -2282,7 +2250,6 @@ describe('createReflectionTemplateRuntime reflection metacognition journal', () 
       });
 
       const reflectionRun = runtime.runTemplateNow('weekly-review', {
-        sendToDiscordOverride: false,
         deferIfBusy: false,
       });
 
@@ -2450,7 +2417,6 @@ describe('createReflectionTemplateRuntime reflection novelty gate', () => {
           '<runtime_emotional_affect>test affect</runtime_emotional_affect>',
         ].join('\n\n'),
       } as any,
-      sender: { send: vi.fn(async () => undefined) },
       dataDir: tempDir,
       runtimeOptions: {
         eventBus,
@@ -2578,7 +2544,6 @@ describe('createReflectionTemplateRuntime reflection novelty gate', () => {
     });
 
     const result = await harness.runtime.runTemplateNow('daily-review', {
-      sendToDiscordOverride: false,
       deferIfBusy: false,
     });
 

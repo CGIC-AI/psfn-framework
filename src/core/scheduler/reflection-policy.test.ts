@@ -56,7 +56,6 @@ describe('ReflectionPolicyStore', () => {
     const daily = policy.templates.find(t => t.id === 'daily-review');
     expect(daily).toBeDefined();
     expect(daily!.name).toBe('Daily Reflection');
-    expect(daily!.sendToDiscord).toBe(false);
     expect(daily!.intervalMs).toBe(24 * 60 * 60_000);
     expect(daily!.cadence).toEqual({ kind: 'daily', hour: 6, minute: 0, timezone: 'local' });
     expect(daily!.enabled).toBe(true);
@@ -132,7 +131,6 @@ describe('ReflectionPolicyStore', () => {
             intervalMs: 24 * 60 * 60_000,
             cadence: { kind: 'daily', hour: 7, minute: 0, timezone: 'local' },
             enabled: false,
-            sendToDiscord: false,
             internalStateInput: true,
           },
           {
@@ -142,7 +140,6 @@ describe('ReflectionPolicyStore', () => {
             intervalMs: 7 * 24 * 60 * 60_000,
             cadence: { kind: 'relative' },
             enabled: true,
-            sendToDiscord: false,
             internalStateInput: true,
           },
         ],
@@ -293,13 +290,6 @@ describe('ReflectionPolicyStore', () => {
     });
   });
 
-  it('scheduled reflection templates do not send to Discord by default', () => {
-    const policy = store.load();
-    for (const t of policy.templates) {
-      expect(t.sendToDiscord).toBe(false);
-    }
-  });
-
   it('weekly-review stays open-ended instead of prescribing an answer inventory', () => {
     const policy = store.load();
     const weekly = policy.templates.find(t => t.id === 'weekly-review');
@@ -342,7 +332,6 @@ describe('ReflectionPolicyStore', () => {
             prompt: 'This prompt is long enough to pass prompt validation.',
             intervalMs: 0,
             enabled: true,
-            sendToDiscord: true,
           },
         ],
         version: 99,
@@ -370,7 +359,6 @@ describe('ReflectionPolicyStore', () => {
             intervalMs: 3_600_000,
             cadence: { kind: 'hourly', minute: 99, timezone: 'local' },
             enabled: true,
-            sendToDiscord: true,
           },
         ],
         version: 99,
@@ -398,7 +386,6 @@ describe('ReflectionPolicyStore', () => {
             prompt: 'This prompt is long enough to pass prompt validation.',
             intervalMs: 3_600_000,
             enabled: true,
-            sendToDiscord: true,
           },
           {
             id: 'daily-review',
@@ -406,7 +393,6 @@ describe('ReflectionPolicyStore', () => {
             prompt: 'This daily review prompt is long enough to pass validation.',
             intervalMs: 86_400_000,
             enabled: true,
-            sendToDiscord: false,
           },
         ],
         version: 8,
@@ -453,7 +439,6 @@ describe('ReflectionPolicyStore', () => {
     // Disabled by default: a blind-cadence firing would manufacture a split even
     // when nothing diverges. The live surface is the starter mixed-state note.
     expect(mixedState!.enabled).toBe(false);
-    expect(mixedState!.sendToDiscord).toBe(false);
     expect(mixedState!.internalStateInput).toBe(true);
     // Invitation to explore, not resolve (charter §8.3); no raw machinery.
     expect(mixedState!.prompt).toContain('my systems disagree');
@@ -479,7 +464,6 @@ describe('ReflectionPolicyStore', () => {
             intervalMs: 24 * 60 * 60_000,
             cadence: { kind: 'daily', hour: 6, minute: 0, timezone: 'local' },
             enabled: true,
-            sendToDiscord: false,
             internalStateInput: true,
           },
           {
@@ -489,7 +473,6 @@ describe('ReflectionPolicyStore', () => {
             intervalMs: 7 * 24 * 60 * 60_000,
             cadence: { kind: 'weekly', dayOfWeek: 0, hour: 7, minute: 0, timezone: 'local' },
             enabled: true,
-            sendToDiscord: false,
             internalStateInput: true,
           },
         ],
@@ -523,7 +506,6 @@ describe('ReflectionPolicyStore', () => {
             intervalMs: 24 * 60 * 60_000,
             cadence: { kind: 'daily', hour: 6, minute: 0, timezone: 'local' },
             enabled: true,
-            sendToDiscord: false,
             internalStateInput: true,
           },
           {
@@ -533,7 +515,6 @@ describe('ReflectionPolicyStore', () => {
             intervalMs: 7 * 24 * 60 * 60_000,
             cadence: { kind: 'weekly', dayOfWeek: 0, hour: 7, minute: 0, timezone: 'local' },
             enabled: true,
-            sendToDiscord: false,
             internalStateInput: true,
           },
         ],
@@ -561,7 +542,6 @@ describe('ReflectionPolicyStore', () => {
             intervalMs: 3_600_000,
             cadence: { kind: 'hourly', minute: 0, timezone: 'local' },
             enabled: true,
-            sendToDiscord: true,
           },
         ],
         version: 8,
@@ -588,7 +568,6 @@ describe('validateTemplate', () => {
     prompt: 'A prompt that is long enough to pass validation',
     intervalMs: 600_000,
     enabled: true,
-    sendToDiscord: false,
   };
 
   it('accepts a valid template', () => {

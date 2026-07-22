@@ -109,7 +109,6 @@ interface ReflectionRunTemplateResult {
   templateId: string;
   templateName: string;
   reflection: string;
-  silent?: boolean;
   queued?: boolean;
   deferredAction?: PostTurnActionCandidate;
 }
@@ -144,7 +143,6 @@ interface ScheduleToolParams {
   reason?: string;
   reminder_id?: string;
   template_id?: string;
-  send_to_discord?: boolean;
   defer_if_busy?: boolean;
   name?: string;
   prompt?: string;
@@ -166,7 +164,7 @@ export interface ScheduleToolOptions {
   syncReflectionTasks: () => void;
   runTemplate: (
     templateId: string,
-    options?: { sendToDiscordOverride?: boolean; deferIfBusy?: boolean },
+    options?: { deferIfBusy?: boolean },
   ) => Promise<ReflectionRunTemplateResult>;
   heartbeatChannelId?: string;
   memoryWriter?: Pick<MemoryWriter, 'write'>;
@@ -583,7 +581,6 @@ export function createScheduleTool(options: ScheduleToolOptions): SubstrateAgent
       reason: Type.Optional(Type.String({ minLength: 1, description: 'Optional provenance or policy update reason.' })),
       reminder_id: Type.Optional(Type.String({ minLength: 1, description: 'Reminder id for action=trigger_reminder.' })),
       template_id: Type.Optional(Type.String({ minLength: 1, description: 'Heartbeat template id for template actions.' })),
-      send_to_discord: Type.Optional(Type.Boolean({ description: 'Optional send override for action=run_template or action=update_template.' })),
       defer_if_busy: Type.Optional(Type.Boolean({ description: 'Whether manual template runs should defer while busy. Defaults to true.' })),
       name: Type.Optional(Type.String({ minLength: 1, description: 'Scheduled prompt name for action=schedule_prompt.' })),
       prompt: Type.Optional(Type.String({ minLength: 1, description: 'Scheduled prompt body.' })),
@@ -651,7 +648,6 @@ export function createScheduleTool(options: ScheduleToolOptions): SubstrateAgent
               name: template.name,
               enabled: template.enabled,
               intervalMs: template.intervalMs,
-              sendToDiscord: template.sendToDiscord,
               internalStateInput: template.internalStateInput ?? false,
               mode: template.mode ?? 'standard',
             }));
@@ -787,7 +783,6 @@ export function createScheduleTool(options: ScheduleToolOptions): SubstrateAgent
             for (const template of policy.templates) {
               lines.push(`[${template.enabled ? 'ON' : 'OFF'}] ${template.id} - "${template.name}"`);
               lines.push(`  Interval: ${formatMs(template.intervalMs)}`);
-              lines.push(`  Discord: ${template.sendToDiscord ? 'yes' : 'no'}`);
               lines.push(`  Mode: ${template.mode ?? 'standard'}`);
               if (template.mode === 'deliberation') {
                 lines.push(`  Deliberation: ${formatDeliberation(template.deliberation)}`);
@@ -825,7 +820,6 @@ export function createScheduleTool(options: ScheduleToolOptions): SubstrateAgent
                 prompt,
                 intervalMs: params.interval_ms,
                 enabled: params.enabled ?? true,
-                sendToDiscord: params.send_to_discord ?? false,
                 ...(params.internal_state_input !== undefined
                   ? { internalStateInput: params.internal_state_input }
                   : {}),
@@ -883,7 +877,6 @@ export function createScheduleTool(options: ScheduleToolOptions): SubstrateAgent
             if (params.prompt !== undefined) template.prompt = params.prompt;
             if (params.interval_ms !== undefined) template.intervalMs = params.interval_ms;
             if (params.enabled !== undefined) template.enabled = params.enabled;
-            if (params.send_to_discord !== undefined) template.sendToDiscord = params.send_to_discord;
             if (params.internal_state_input !== undefined) template.internalStateInput = params.internal_state_input;
             if (params.mode !== undefined) template.mode = params.mode;
             if (params.deliberation !== undefined) template.deliberation = cloneDeliberation(params.deliberation);
@@ -915,9 +908,6 @@ export function createScheduleTool(options: ScheduleToolOptions): SubstrateAgent
             }
 
             const result = await options.runTemplate(requestedTemplateId, {
-              ...(params.send_to_discord !== undefined
-                ? { sendToDiscordOverride: params.send_to_discord }
-                : {}),
               deferIfBusy: params.defer_if_busy ?? true,
             });
             if (result.queued) {

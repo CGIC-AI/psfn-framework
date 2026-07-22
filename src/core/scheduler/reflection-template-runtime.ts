@@ -1,9 +1,7 @@
 import { compactMemoryTextForPrompt } from '../../faculties/memory/retrieval/formatting.js';
 import type { Scheduler } from './scheduler.js';
-import type { MessageSender } from '../../system/lifecycle/notifications.js';
 import { createComponentLogger } from '../../shared/logger.js';
 import {
-  REFLECTION_SILENT_TOKEN,
   ReflectionPolicyStore,
   isValuesReflectionTemplateId,
   type ReflectionPolicy,
@@ -92,7 +90,6 @@ import {
   ReflectionTemplateLoopGuardError,
   buildUnsupportedReflectionSupportFlags,
   findReflectionTemplateById,
-  getReflectionTemplateAuditProfile,
   isExperientialDeliberationTemplate,
   isReflectionTemplateLoopGuardError,
   type ReflectionExecutionSource,
@@ -130,14 +127,13 @@ export interface ReflectionTemplateRuntime {
   runTemplateNow(
     templateId: string,
     options?: {
-      sendToDiscordOverride?: boolean;
       deferIfBusy?: boolean;
       conversationScope?: ConversationScope;
     },
   ): Promise<ReflectionRunTemplateResult>;
   runDeferredTemplate(
     templateId: string,
-    options?: { sendToDiscordOverride?: boolean; actionId?: string; requestedSource?: ReflectionRequestSource },
+    options?: { actionId?: string; requestedSource?: ReflectionRequestSource },
   ): Promise<void>;
   syncReflectionTasks(): void;
 }
@@ -145,9 +141,7 @@ export interface ReflectionTemplateRuntime {
 interface CreateReflectionTemplateRuntimeOptions {
   scheduler: Scheduler;
   agentLoop: ReflectionAgent;
-  sender: MessageSender;
   dataDir: string;
-  heartbeatChannelId?: string;
   runtimeOptions?: ReflectionRuntimeOptions;
 }
 
@@ -157,9 +151,7 @@ export function createReflectionTemplateRuntime(
   const {
     scheduler,
     agentLoop,
-    sender,
     dataDir,
-    heartbeatChannelId,
     runtimeOptions = {},
   } = options;
 
@@ -596,23 +588,7 @@ export function createReflectionTemplateRuntime(
     return Boolean(runtimeOptions.llmProvider);
   };
 
-  const normalizeTemplateReflectionOutput = (
-    template: ReflectionTemplate,
-    reflection: string,
-  ): { reflection: string; silent: boolean } => {
-    const trimmed = reflection.trim();
-    const audit = getReflectionTemplateAuditProfile(template);
-    if (
-      audit.allowSilentInterval
-      && (
-        trimmed.length === 0
-        || trimmed.toLowerCase() === REFLECTION_SILENT_TOKEN
-      )
-    ) {
-      return { reflection: '', silent: true };
-    }
-    return { reflection: trimmed, silent: false };
-  };
+  const normalizeTemplateReflectionOutput = (reflection: string): string => reflection.trim();
 
   const runTemplateDeliberation = async (
     template: ReflectionTemplate,
@@ -667,7 +643,6 @@ export function createReflectionTemplateRuntime(
   const executeTemplate = async (
     template: ReflectionTemplate,
     options: {
-      sendToDiscordOverride?: boolean;
       requestedSource?: ReflectionRequestSource;
       /**
        * E1.7: explicit ConversationScope the reflection reflects over. A group
@@ -812,7 +787,6 @@ export function createReflectionTemplateRuntime(
       formatReflectionIntrospectionPolicyBlock(reflectionPolicy),
     );
     let reflectionText = '';
-    let silentInterval = false;
     let deliberationMetadata: ValuesDeliberationMetadata | undefined;
     let reflectionMode: 'agent' | 'deliberation' = 'agent';
     let persistenceContext = internalStateContext;
@@ -896,9 +870,7 @@ export function createReflectionTemplateRuntime(
           reflectionChannelId,
           processId,
         );
-        const normalizedReflection = normalizeTemplateReflectionOutput(template, deliberationResult.reflection);
-        reflectionText = normalizedReflection.reflection;
-        silentInterval = normalizedReflection.silent;
+        reflectionText = normalizeTemplateReflectionOutput(deliberationResult.reflection);
         deliberationMetadata = deliberationResult.metadata;
         reflectionMode = 'deliberation';
         persistenceContext = mergeInternalStateContextMetacognitiveFlags(
@@ -928,14 +900,12 @@ export function createReflectionTemplateRuntime(
           });
         }
 
-        if (!silentInterval) {
-          try {
-            await persistDeliberationMemory(template, reflectionText, deliberationMetadata);
-          } catch (error) {
-            log.warn(`Reflection "${template.id}" memory persistence skipped`, {
-              error: String(error),
-            });
-          }
+        try {
+          await persistDeliberationMemory(template, reflectionText, deliberationMetadata);
+        } catch (error) {
+          log.warn(`Reflection "${template.id}" memory persistence skipped`, {
+            error: String(error),
+          });
         }
       } catch (error) {
         try {
@@ -985,9 +955,7 @@ export function createReflectionTemplateRuntime(
           },
         },
       });
-      const normalizedReflection = normalizeTemplateReflectionOutput(template, response.content);
-      reflectionText = normalizedReflection.reflection;
-      silentInterval = normalizedReflection.silent;
+      reflectionText = normalizeTemplateReflectionOutput(response.content);
       const responseContext = captureResponseInternalStateContext(response);
       if (responseContext) {
         persistenceContext = responseContext;
@@ -1059,181 +1027,172 @@ export function createReflectionTemplateRuntime(
     let reflectionJournalEntryId: string | undefined;
     let finalReflectionJournalEntry: ReflectionJournalEntry | undefined;
     let dailyJournalEntryId: string | undefined;
-    if (!silentInterval) {
-      try {
-        const reflectionEntry = reflectionJournal.append({
-          templateId: template.id,
-          templateName: template.name,
-          prompt: reflectionPrompt,
-          reflection: reflectionText,
-          channelId: reflectionChannelId,
-          mode: reflectionMode,
-          createdAt: reflectionCreatedAt,
-          ...(deliberationMetadata ? { deliberation: deliberationMetadata } : {}),
-          ...(persistenceContextForJournal ? {
-            // ay2o: the snapshot ref is the single source of truth; the full
-            // internalState is not duplicated into the reflection journal.
-            internalStateSnapshotRef: persistenceContextForJournal.internalStateSnapshotRef,
-            metacognitiveFlags: persistenceContextForJournal.metacognitiveFlags,
-          } : {}),
-          ...(journalGroundingProvenanceRefs.length > 0 ? {
-            ...(reflectionSubstrateContext ? { substrateBoundary: reflectionSubstrateContext.canonicalTruthBoundary } : {}),
-            substrateProvenanceRefs: journalGroundingProvenanceRefs,
-          } : {}),
-        });
-        reflectionJournalEntryId = reflectionEntry.id;
-        finalReflectionJournalEntry = reflectionEntry;
-      } catch (error) {
-        log.warn(`Reflection "${template.id}" note journal persistence skipped`, {
-          error: String(error),
-        });
-      }
-
-      // A cross-family divergence (031.11.1) that was surfaced INTO this
-      // reflection leaves a durable, queryable record with both sides'
-      // provenance and confidence intact (031.11.2). This reads the same
-      // pre-turn context that fed the starter's mixed-state note — not the
-      // post-turn persistence context — so the record is exactly the divergence
-      // the companion saw and reflected on, with the matching snapshot ref. The
-      // descriptor is already trusted-only gated at detection, so a non-empty
-      // array is the signal that a real, trusted mixed state was reflected on.
-      // Charter §8.3: it is journaled verbatim, never resolved.
-      const surfacedDiscrepancies = internalStateContext?.internalState.emotional.discrepancies ?? [];
-      if (internalStateContext && surfacedDiscrepancies.length > 0) {
-        try {
-          discrepancyJournal.append({
-            templateId: template.id,
-            templateName: template.name,
-            channelId: reflectionChannelId,
-            internalStateSnapshotRef: internalStateContext.internalStateSnapshotRef,
-            discrepancies: surfacedDiscrepancies,
-            createdAt: reflectionCreatedAt,
-          });
-        } catch (error) {
-          log.warn(`Reflection "${template.id}" discrepancy journal persistence skipped`, {
-            error: String(error),
-          });
-        }
-      }
-
-      if (finalReflectionJournalEntry && agentLoop.memoryExtractor?.extractFinalReflection) {
-        try {
-          await agentLoop.memoryExtractor.extractFinalReflection({
-            source: 'reflection_journal',
-            journalEntryId: finalReflectionJournalEntry.id,
-            templateId: finalReflectionJournalEntry.templateId,
-            templateName: finalReflectionJournalEntry.templateName,
-            channelId: finalReflectionJournalEntry.channelId,
-            reflection: finalReflectionJournalEntry.reflection,
-            mode: finalReflectionJournalEntry.mode,
-            createdAt: finalReflectionJournalEntry.createdAt,
-          });
-        } catch (error) {
-          log.warn(`Reflection "${template.id}" experiential extraction skipped`, {
-            error: String(error),
-          });
-        }
-      }
-
-      try {
-        const dailyEntry = reflectionDailyJournal.append({
-          // Persisted journal discriminator retained for existing readers.
-          source: 'heartbeat_template',
-          executionSource: source,
-          templateId: template.id,
-          templateName: template.name,
-          channelId: reflectionChannelId,
-          prompt: reflectionPrompt,
-          reflection: reflectionText,
-          mode: reflectionMode,
-          createdAt: reflectionCreatedAt,
-          ...(reflectionJournalEntryId ? { reflectionJournalEntryId } : {}),
-          ...(reflectionProcessId ? { processId: reflectionProcessId } : {}),
-          tags: [template.id, 'reflection', reflectionMode],
-        });
-        dailyJournalEntryId = dailyEntry.id;
-      } catch (error) {
-        log.warn(`Reflection "${template.id}" daily journal persistence skipped`, {
-          error: String(error),
-        });
-      }
-
-      const shouldSendToDiscord = options.sendToDiscordOverride ?? template.sendToDiscord;
-      const sendToDiscordEffective = Boolean(shouldSendToDiscord && heartbeatChannelId);
-      const initiationContext = resolveReflectionInitiationContext(source, requestedSource);
-
-      await reflectionMetacognitionJournal.append({
-        kind: 'reflection_run',
-        occurredAt: reflectionCreatedAt,
+    try {
+      const reflectionEntry = reflectionJournal.append({
         templateId: template.id,
         templateName: template.name,
-        executionSource: source,
-        initiatorSurface: initiationContext.initiatorSurface,
-        initiatedBy: initiationContext.initiatedBy,
-        reason: initiationContext.reason,
-        channelId: reflectionChannelId,
-        sendToDiscordEffective,
-        mode: reflectionMode,
         prompt: reflectionPrompt,
         reflection: reflectionText,
-        ...(persistenceContextForJournal ? {
-          internalStateSnapshotRef: persistenceContextForJournal.internalStateSnapshotRef,
-        } : {}),
-        ...(persistedMetacognitiveFlags.length > 0
-          ? { metacognitiveFlags: persistedMetacognitiveFlags }
-          : {}),
-        ...(reflectionJournalEntryId ? { reflectionJournalEntryId } : {}),
-        ...(dailyJournalEntryId ? { dailyJournalEntryId } : {}),
-        ...(reflectionProcessId ? { processId: reflectionProcessId } : {}),
+        channelId: reflectionChannelId,
+        mode: reflectionMode,
+        createdAt: reflectionCreatedAt,
         ...(deliberationMetadata ? { deliberation: deliberationMetadata } : {}),
+        ...(persistenceContextForJournal ? {
+          // ay2o: the snapshot ref is the single source of truth; the full
+          // internalState is not duplicated into the reflection journal.
+          internalStateSnapshotRef: persistenceContextForJournal.internalStateSnapshotRef,
+          metacognitiveFlags: persistenceContextForJournal.metacognitiveFlags,
+        } : {}),
         ...(journalGroundingProvenanceRefs.length > 0 ? {
           ...(reflectionSubstrateContext ? { substrateBoundary: reflectionSubstrateContext.canonicalTruthBoundary } : {}),
           substrateProvenanceRefs: journalGroundingProvenanceRefs,
         } : {}),
       });
+      reflectionJournalEntryId = reflectionEntry.id;
+      finalReflectionJournalEntry = reflectionEntry;
+    } catch (error) {
+      log.warn(`Reflection "${template.id}" note journal persistence skipped`, {
+        error: String(error),
+      });
+    }
 
-      if (isValuesReflectionTemplateId(template.id)) {
-        valuesJournal.append({
+    // A cross-family divergence (031.11.1) that was surfaced INTO this
+    // reflection leaves a durable, queryable record with both sides'
+    // provenance and confidence intact (031.11.2). This reads the same
+    // pre-turn context that fed the starter's mixed-state note — not the
+    // post-turn persistence context — so the record is exactly the divergence
+    // the companion saw and reflected on, with the matching snapshot ref. The
+    // descriptor is already trusted-only gated at detection, so a non-empty
+    // array is the signal that a real, trusted mixed state was reflected on.
+    // Charter §8.3: it is journaled verbatim, never resolved.
+    const surfacedDiscrepancies = internalStateContext?.internalState.emotional.discrepancies ?? [];
+    if (internalStateContext && surfacedDiscrepancies.length > 0) {
+      try {
+        discrepancyJournal.append({
           templateId: template.id,
           templateName: template.name,
-          prompt: reflectionPrompt,
-          reflection: reflectionText,
-          ...(deliberationMetadata ? { deliberation: deliberationMetadata } : {}),
-          ...(persistenceContextForJournal ? {
-            internalStateSnapshotRef: persistenceContextForJournal.internalStateSnapshotRef,
-            internalState: persistenceContextForJournal.internalState,
-            metacognitiveFlags: persistenceContextForJournal.metacognitiveFlags,
-          } : {}),
-          provenance: {
-            source: 'companion_reflection',
-            templateId: template.id,
-            templateName: template.name,
-            channelId: reflectionChannelId,
-            mode: reflectionMode,
-            ...(reflectionJournalEntryId ? { reflectionJournalEntryId } : {}),
-          },
+          channelId: reflectionChannelId,
+          internalStateSnapshotRef: internalStateContext.internalStateSnapshotRef,
+          discrepancies: surfacedDiscrepancies,
+          createdAt: reflectionCreatedAt,
+        });
+      } catch (error) {
+        log.warn(`Reflection "${template.id}" discrepancy journal persistence skipped`, {
+          error: String(error),
         });
       }
+    }
 
-      if (runtimeOptions.vaultAutoPublisher) {
-        try {
-          await runtimeOptions.vaultAutoPublisher.publishReflection({
-            templateId: template.id,
-            templateName: template.name,
-            reflection: reflectionText,
-            mode: reflectionMode,
-            createdAt: new Date(),
-          });
-        } catch (error) {
-          log.warn(`Reflection "${template.id}" vault publish skipped`, { error: String(error) });
-        }
+    if (finalReflectionJournalEntry && agentLoop.memoryExtractor?.extractFinalReflection) {
+      try {
+        await agentLoop.memoryExtractor.extractFinalReflection({
+          source: 'reflection_journal',
+          journalEntryId: finalReflectionJournalEntry.id,
+          templateId: finalReflectionJournalEntry.templateId,
+          templateName: finalReflectionJournalEntry.templateName,
+          channelId: finalReflectionJournalEntry.channelId,
+          reflection: finalReflectionJournalEntry.reflection,
+          mode: finalReflectionJournalEntry.mode,
+          createdAt: finalReflectionJournalEntry.createdAt,
+        });
+      } catch (error) {
+        log.warn(`Reflection "${template.id}" experiential extraction skipped`, {
+          error: String(error),
+        });
       }
     }
 
-    const shouldSendToDiscord = options.sendToDiscordOverride ?? template.sendToDiscord;
-    if (!silentInterval && shouldSendToDiscord && heartbeatChannelId) {
-      await sender.send(heartbeatChannelId, reflectionText);
+    try {
+      const dailyEntry = reflectionDailyJournal.append({
+        // Persisted journal discriminator retained for existing readers.
+        source: 'heartbeat_template',
+        executionSource: source,
+        templateId: template.id,
+        templateName: template.name,
+        channelId: reflectionChannelId,
+        prompt: reflectionPrompt,
+        reflection: reflectionText,
+        mode: reflectionMode,
+        createdAt: reflectionCreatedAt,
+        ...(reflectionJournalEntryId ? { reflectionJournalEntryId } : {}),
+        ...(reflectionProcessId ? { processId: reflectionProcessId } : {}),
+        tags: [template.id, 'reflection', reflectionMode],
+      });
+      dailyJournalEntryId = dailyEntry.id;
+    } catch (error) {
+      log.warn(`Reflection "${template.id}" daily journal persistence skipped`, {
+        error: String(error),
+      });
     }
+
+    const initiationContext = resolveReflectionInitiationContext(source, requestedSource);
+
+    await reflectionMetacognitionJournal.append({
+      kind: 'reflection_run',
+      occurredAt: reflectionCreatedAt,
+      templateId: template.id,
+      templateName: template.name,
+      executionSource: source,
+      initiatorSurface: initiationContext.initiatorSurface,
+      initiatedBy: initiationContext.initiatedBy,
+      reason: initiationContext.reason,
+      channelId: reflectionChannelId,
+      mode: reflectionMode,
+      prompt: reflectionPrompt,
+      reflection: reflectionText,
+      ...(persistenceContextForJournal ? {
+        internalStateSnapshotRef: persistenceContextForJournal.internalStateSnapshotRef,
+      } : {}),
+      ...(persistedMetacognitiveFlags.length > 0
+        ? { metacognitiveFlags: persistedMetacognitiveFlags }
+        : {}),
+      ...(reflectionJournalEntryId ? { reflectionJournalEntryId } : {}),
+      ...(dailyJournalEntryId ? { dailyJournalEntryId } : {}),
+      ...(reflectionProcessId ? { processId: reflectionProcessId } : {}),
+      ...(deliberationMetadata ? { deliberation: deliberationMetadata } : {}),
+      ...(journalGroundingProvenanceRefs.length > 0 ? {
+        ...(reflectionSubstrateContext ? { substrateBoundary: reflectionSubstrateContext.canonicalTruthBoundary } : {}),
+        substrateProvenanceRefs: journalGroundingProvenanceRefs,
+      } : {}),
+    });
+
+    if (isValuesReflectionTemplateId(template.id)) {
+      valuesJournal.append({
+        templateId: template.id,
+        templateName: template.name,
+        prompt: reflectionPrompt,
+        reflection: reflectionText,
+        ...(deliberationMetadata ? { deliberation: deliberationMetadata } : {}),
+        ...(persistenceContextForJournal ? {
+          internalStateSnapshotRef: persistenceContextForJournal.internalStateSnapshotRef,
+          internalState: persistenceContextForJournal.internalState,
+          metacognitiveFlags: persistenceContextForJournal.metacognitiveFlags,
+        } : {}),
+        provenance: {
+          source: 'companion_reflection',
+          templateId: template.id,
+          templateName: template.name,
+          channelId: reflectionChannelId,
+          mode: reflectionMode,
+          ...(reflectionJournalEntryId ? { reflectionJournalEntryId } : {}),
+        },
+      });
+    }
+
+    if (runtimeOptions.vaultAutoPublisher) {
+      try {
+        await runtimeOptions.vaultAutoPublisher.publishReflection({
+          templateId: template.id,
+          templateName: template.name,
+          reflection: reflectionText,
+          mode: reflectionMode,
+          createdAt: new Date(),
+        });
+      } catch (error) {
+        log.warn(`Reflection "${template.id}" vault publish skipped`, { error: String(error) });
+      }
+    }
+
 
     await advanceReflectionNoveltyWatermark({
       template,
@@ -1247,7 +1206,6 @@ export function createReflectionTemplateRuntime(
       templateId: template.id,
       templateName: template.name,
       reflection: reflectionText,
-      ...(silentInterval ? { silent: true } : {}),
     };
   };
 
@@ -1286,26 +1244,16 @@ export function createReflectionTemplateRuntime(
 
   const buildDeferredReflectionAction = (
     template: ReflectionTemplate,
-    options: { sendToDiscordOverride?: boolean } = {},
   ): PostTurnActionCandidate => ({
     kind: DEFERRED_REFLECTION_ACTION_KIND,
-    payload: {
-      templateId: template.id,
-      ...(options.sendToDiscordOverride !== undefined
-        ? { sendToDiscordOverride: options.sendToDiscordOverride }
-        : {}),
-    },
-    dedupeKey: (
-      options.sendToDiscordOverride === undefined
-        ? `${DEFERRED_REFLECTION_ACTION_KIND}:${template.id}`
-        : `${DEFERRED_REFLECTION_ACTION_KIND}:${template.id}:discord:${String(options.sendToDiscordOverride)}`
-    ),
+    payload: { templateId: template.id },
+    dedupeKey: `${DEFERRED_REFLECTION_ACTION_KIND}:${template.id}`,
     maxRetries: 2,
   });
 
   const queueDeferredTemplateRun = (
     templateId: string,
-    options: { sendToDiscordOverride?: boolean; requestedSource?: ReflectionRequestSource } = {},
+    options: { requestedSource?: ReflectionRequestSource } = {},
   ): { templateName: string; queuedNow: boolean; requestedSource: ReflectionRequestSource } => {
     const requestedSource = options.requestedSource ?? 'scheduled';
     const current = store.load();
@@ -1365,7 +1313,6 @@ export function createReflectionTemplateRuntime(
   const runTemplateNow = async (
     templateId: string,
     options: {
-      sendToDiscordOverride?: boolean;
       deferIfBusy?: boolean;
       conversationScope?: ConversationScope;
     } = {},
@@ -1382,7 +1329,7 @@ export function createReflectionTemplateRuntime(
         throw error;
       }
       if (runtimeOptions.postTurnActions) {
-        const deferredAction = buildDeferredReflectionAction(template, options);
+        const deferredAction = buildDeferredReflectionAction(template);
         log.info('Inferred deferred reflection action from busy template execution', {
           templateId: template.id,
           dedupeKey: deferredAction.dedupeKey,
@@ -1398,7 +1345,6 @@ export function createReflectionTemplateRuntime(
       }
 
       const deferred = queueDeferredTemplateRun(template.id, {
-        sendToDiscordOverride: options.sendToDiscordOverride,
         requestedSource: 'manual',
       });
       log.info('Deferred manual reflection template execution', {
@@ -1411,14 +1357,14 @@ export function createReflectionTemplateRuntime(
         reflection: '',
         queued: true,
         queuedVia: 'scheduler',
-        deferredAction: buildDeferredReflectionAction(template, options),
+        deferredAction: buildDeferredReflectionAction(template),
       };
     }
   };
 
   const runDeferredTemplate = async (
     templateId: string,
-    options: { sendToDiscordOverride?: boolean; actionId?: string; requestedSource?: ReflectionRequestSource } = {},
+    options: { actionId?: string; requestedSource?: ReflectionRequestSource } = {},
   ): Promise<void> => {
     const current = store.load();
     const template = findReflectionTemplateById(current, templateId);
@@ -1427,9 +1373,6 @@ export function createReflectionTemplateRuntime(
     }
     try {
       await executeTemplate(template, {
-        ...(options.sendToDiscordOverride !== undefined
-          ? { sendToDiscordOverride: options.sendToDiscordOverride }
-          : {}),
         requestedSource: options.requestedSource ?? 'manual',
       }, 'deferred_post_turn');
     } catch (error) {

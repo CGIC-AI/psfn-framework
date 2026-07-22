@@ -22,7 +22,6 @@ export interface ReflectionTemplate {
   intervalMs: number;   // how often (validated: 5min – 7d)
   cadence?: RecurringCadence;
   enabled: boolean;
-  sendToDiscord: boolean;  // if true, sends response via sender.send()
   internalStateInput?: boolean; // inject serialized InternalState + recent signals into prompt
   mode?: 'standard' | 'deliberation';
   deliberation?: ReflectionDeliberationConfig;
@@ -506,7 +505,6 @@ function getDefaults(): ReflectionPolicy {
         intervalMs: 24 * 60 * 60_000, // 24 hours
         cadence: { ...DAILY_REVIEW_CADENCE },
         enabled: true,
-        sendToDiscord: false,
         internalStateInput: true,
         mode: 'deliberation',
         deliberation: {
@@ -523,7 +521,6 @@ function getDefaults(): ReflectionPolicy {
         intervalMs: 7 * 24 * 60 * 60_000, // 7 days
         cadence: { ...WEEKLY_REVIEW_CADENCE },
         enabled: true,
-        sendToDiscord: false,
         internalStateInput: true,
         mode: 'deliberation',
         deliberation: {
@@ -547,7 +544,6 @@ function getDefaults(): ReflectionPolicy {
         // producer wiring. It is registered, validated, and companion-editable
         // (and enableable) here.
         enabled: false,
-        sendToDiscord: false,
         internalStateInput: true,
         mode: 'deliberation',
         deliberation: {

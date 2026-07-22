@@ -168,16 +168,17 @@ export async function emitCompletionHandoff(input: {
   }
 
   let noticeDelivery: CompletionNoticeDeliveryDisposition | undefined;
-  if (targetChannelId && shouldRouteCompanionCompletionNotice(handoff)) {
+  const logicalSessionId = handoff.origin.logicalSessionId?.trim();
+  if (targetChannelId && logicalSessionId && shouldRouteCompanionCompletionNotice(handoff)) {
     const notice = buildCompletionNotice(handoff);
     if (input.noticeDelivery) {
       noticeDelivery = await input.noticeDelivery.deliver({
         sourceChannelId: targetChannelId,
-        logicalSessionId: handoff.origin.logicalSessionId?.trim() || targetChannelId,
+        logicalSessionId,
         notice,
       });
     } else if (input.notices) {
-      input.notices.register(handoff.origin.logicalSessionId?.trim() || targetChannelId, notice);
+      input.notices.register(logicalSessionId, notice);
       noticeDelivery = 'buffered';
     }
   }

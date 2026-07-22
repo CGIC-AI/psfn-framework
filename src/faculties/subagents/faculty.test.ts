@@ -844,6 +844,65 @@ describe('SubagentFaculty', () => {
     });
   });
 
+  it('routes a message-only completion to the Wyoming logical session', async () => {
+    const handoffs: Array<{
+      handoff: CompletionHandoffRecord;
+      noticeBuffered: boolean;
+    }> = [];
+    eventBus.on('agent.completion_handoff', event => {
+      handoffs.push(event);
+    });
+    const completionNotices = new CompletionNoticeBuffer();
+    const faculty = new SubagentFaculty({
+      eventBus,
+      llmProvider: mockLLM(),
+      sessionStore,
+      completionNotices,
+      embeddingService: null,
+      memoryProvider: null,
+      config: TEST_CONFIG,
+      parentSystemPrompt: 'test prompt',
+    });
+
+    const result = await faculty.execute({
+      name: 'message-only-handoff',
+      task: 'return to the originating Wyoming session',
+      workSpec: buildSubagentWorkSpec(),
+      message: {
+        id: 'wyoming-msg-message-only',
+        channelId: 'api:wyoming:ha-main:voice-pe-library',
+        channelType: 'api',
+        authorId: 'wyoming-user:owner',
+        authorName: 'Wyoming Voice User',
+        content: 'inspect the library',
+        isDirectMessage: true,
+        timestamp: new Date('2026-07-22T04:30:00.000Z'),
+        routing: {
+          wyoming: {
+            sessionId: 'session-message-only',
+            turnId: 'turn-message-only',
+          },
+        },
+      },
+    });
+
+    expect(completionNotices.peek('session-message-only')).toHaveLength(1);
+    expect(handoffs.at(-1)).toMatchObject({
+      noticeBuffered: true,
+      handoff: {
+        status: 'completed',
+        task: { subagentId: result.subagentId },
+        origin: {
+          sourceChannelId: 'api:wyoming:ha-main:voice-pe-library',
+          logicalSessionId: 'session-message-only',
+          requestId: 'wyoming-msg-message-only',
+          sourceMessageId: 'wyoming-msg-message-only',
+          turnId: 'turn-message-only',
+        },
+      },
+    });
+  });
+
   it('cancels active bounded workers without crossing into shard semantics', async () => {
     mockSubagentContent = 'late result';
     mockSubagentDelayMs = 50;
@@ -991,6 +1050,63 @@ describe('SubagentFaculty', () => {
         status: 'blocked',
         blocker: expect.objectContaining({ reason: 'missing_capabilities' }),
       }),
+    });
+  });
+
+  it('routes separately supplied Wyoming delegation results to the resolved session', async () => {
+    const handoffs: Array<{
+      handoff: CompletionHandoffRecord;
+      noticeBuffered: boolean;
+    }> = [];
+    eventBus.on('agent.completion_handoff', event => {
+      handoffs.push(event);
+    });
+    const completionNotices = new CompletionNoticeBuffer();
+    const faculty = new SubagentFaculty({
+      eventBus,
+      llmProvider: mockLLM(),
+      sessionStore,
+      completionNotices,
+      embeddingService: null,
+      memoryProvider: null,
+      config: TEST_CONFIG,
+      parentSystemPrompt: 'test prompt',
+    });
+
+    const result = await faculty.delegateWyomingSession({
+      message: {
+        id: 'wyoming-msg-separated-routing',
+        channelId: 'api:wyoming:ha-main:voice-pe-observatory',
+        channelType: 'api',
+        authorId: 'wyoming-user:owner',
+        authorName: 'Wyoming Voice User',
+        content: 'inspect the observatory',
+        isDirectMessage: true,
+        timestamp: new Date('2026-07-22T04:35:00.000Z'),
+      },
+      routing: {
+        connectionId: 'conn-observatory',
+        sessionId: 'session-separated-routing',
+        turnId: 'turn-separated-routing',
+        siteId: 'ha-main',
+        satelliteId: 'voice-pe-observatory',
+      },
+    });
+
+    expect(completionNotices.peek('session-separated-routing')).toHaveLength(1);
+    expect(handoffs.at(-1)).toMatchObject({
+      noticeBuffered: true,
+      handoff: {
+        status: 'completed',
+        task: { subagentId: result.subagentId },
+        origin: {
+          sourceChannelId: 'api:wyoming:ha-main:voice-pe-observatory',
+          logicalSessionId: 'session-separated-routing',
+          requestId: 'wyoming-msg-separated-routing',
+          sourceMessageId: 'wyoming-msg-separated-routing',
+          turnId: 'turn-separated-routing',
+        },
+      },
     });
   });
 

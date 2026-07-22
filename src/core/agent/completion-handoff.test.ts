@@ -40,6 +40,7 @@ describe('completion handoff emitter', () => {
         recommendedNextAction: 'Review the result before writing a companion-authored update.',
         origin: {
           sourceChannelId: 'api:parent',
+          logicalSessionId: 'api:parent',
           sourceMessageId: 'msg-1',
           requestId: 'msg-1',
           turnId: 'turn-1',
@@ -80,6 +81,7 @@ describe('completion handoff emitter', () => {
         validationPerformed: ['shard_lifecycle_terminal'],
         partialResult: false,
         recommendedNextAction: 'Review the shard handoff.',
+        origin: { logicalSessionId: 'api:parent' },
         dedupeKey: 'dedupe-shard-notice',
       },
     });
@@ -120,6 +122,7 @@ describe('completion handoff emitter', () => {
         validationPerformed: ['post_turn_action_handler_completed'],
         partialResult: false,
         recommendedNextAction: 'None.',
+        origin: { logicalSessionId: '1313001762793197678' },
       },
     });
 
@@ -139,6 +142,7 @@ describe('completion handoff emitter', () => {
         resultSummary: 'One turn finished.',
         partialResult: true,
         recommendedNextAction: 'Wait.',
+        origin: { logicalSessionId: 'api:parent' },
       },
     });
     expect(progress.noticeBuffered).toBe(false);
@@ -155,6 +159,7 @@ describe('completion handoff emitter', () => {
         resultSummary: 'The shard could not read the requested file.',
         partialResult: false,
         recommendedNextAction: 'Inspect the blocker.',
+        origin: { logicalSessionId: 'api:parent' },
       },
     });
     expect(blocked.noticeBuffered).toBe(true);
@@ -170,6 +175,7 @@ describe('completion handoff emitter', () => {
         resultSummary: 'The automata could not access the requested input.',
         partialResult: false,
         recommendedNextAction: 'Inspect the blocker.',
+        origin: { logicalSessionId: 'api:parent' },
       },
     });
     expect(blockedAutomata.noticeBuffered).toBe(true);
@@ -207,6 +213,44 @@ describe('completion handoff emitter', () => {
       noticeBuffered: false,
       noticeDelivery: 'active_nudge',
     });
+  });
+
+  it('refuses to guess a logical parent session from a transport channel', async () => {
+    const eventBus = new EventBus();
+    const notices = new CompletionNoticeBuffer();
+    const deliver = vi.fn().mockResolvedValue('buffered' as const);
+
+    const throughPort = await emitCompletionHandoff({
+      eventBus,
+      noticeDelivery: { deliver },
+      targetChannelId: 'discord:shared-transport',
+      handoff: {
+        source: 'subagent',
+        taskId: 'legacy-without-session-port',
+        status: 'completed',
+        resultSummary: 'A restored child returned without a captured parent session.',
+        partialResult: false,
+        recommendedNextAction: 'Retain lifecycle telemetry only.',
+      },
+    });
+    const throughBuffer = await emitCompletionHandoff({
+      eventBus,
+      notices,
+      targetChannelId: 'discord:shared-transport',
+      handoff: {
+        source: 'shard',
+        taskId: 'legacy-without-session-buffer',
+        status: 'completed',
+        resultSummary: 'A restored shard returned without a captured parent session.',
+        partialResult: false,
+        recommendedNextAction: 'Retain lifecycle telemetry only.',
+      },
+    });
+
+    expect(deliver).not.toHaveBeenCalled();
+    expect(notices.peek('discord:shared-transport')).toHaveLength(0);
+    expect(throughPort).toMatchObject({ emitted: true, noticeBuffered: false });
+    expect(throughBuffer).toMatchObject({ emitted: true, noticeBuffered: false });
   });
 
   it('does not burn the dedupe key when a critical lifecycle guard rejects emission', async () => {
@@ -276,6 +320,7 @@ describe('completion handoff emitter', () => {
           validationPerformed: [],
           partialResult: false,
           recommendedNextAction: 'None.',
+          origin: { logicalSessionId: 'api:parent' },
           dedupeKey: `recurring-${index}`,
         },
       });
@@ -301,6 +346,7 @@ describe('completion handoff emitter', () => {
           resultSummary: `${status} result`,
           partialResult: false,
           recommendedNextAction: 'Review.',
+          origin: { logicalSessionId: 'api:parent' },
           dedupeKey,
         },
       });
@@ -325,6 +371,7 @@ describe('completion handoff emitter', () => {
           resultSummary: `Offline result ${index}`,
           partialResult: false,
           recommendedNextAction: 'Review.',
+          origin: { logicalSessionId: 'api:parent' },
           createdAt: index === 2 ? 1 : 100,
           dedupeKey: `offline-dedupe-${index}`,
         },
@@ -351,6 +398,7 @@ describe('completion handoff emitter', () => {
         outputRefs: [{ kind: 'session', ref: `subagent:${'x'.repeat(500)}` }],
         partialResult: false,
         recommendedNextAction: 'Review the result.',
+        origin: { logicalSessionId: 'api:parent' },
       },
     });
 

@@ -407,6 +407,44 @@ psfn.io/fleet-target: registered
 {{- end }}
 {{- end -}}
 
+{{- define "psfn.companionLibraryInitContainer" -}}
+{{- if .Values.companionLibrary.enabled }}
+- name: seed-companion-library
+  image: {{ include "psfn.image" (dict "root" . "image" .Values.workloads.agent.image) | quote }}
+  imagePullPolicy: {{ default .Values.psfnAppImage.pullPolicy .Values.workloads.agent.image.pullPolicy }}
+  command:
+    - sh
+    - -c
+    - set -eu; cp -L /lib-src/* /lib-dst/
+  securityContext:
+    {{- toYaml .Values.securityContext | nindent 4 }}
+  volumeMounts:
+    - name: companion-library-src
+      mountPath: /lib-src
+      readOnly: true
+    - name: companion-library
+      mountPath: /lib-dst
+{{- end }}
+{{- end -}}
+
+{{- define "psfn.companionLibraryVolumeMount" -}}
+{{- if .Values.companionLibrary.enabled }}
+- name: companion-library
+  mountPath: /app/companion_docs
+  readOnly: true
+{{- end }}
+{{- end -}}
+
+{{- define "psfn.companionLibraryVolumes" -}}
+{{- if .Values.companionLibrary.enabled }}
+- name: companion-library
+  emptyDir: {}
+- name: companion-library-src
+  configMap:
+    name: {{ include "psfn.fullname" . }}-companion-library
+{{- end }}
+{{- end -}}
+
 {{- define "psfn.helmBackupImageEnv" -}}
 - name: PSFN_HELM_BACKUP_AGENT_IMAGE_REPOSITORY
   value: {{ default .Values.psfnAppImage.repository .Values.workloads.agent.image.repository | quote }}

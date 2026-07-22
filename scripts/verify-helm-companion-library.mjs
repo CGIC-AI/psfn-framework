@@ -64,21 +64,21 @@ for (const entry of manifest.files) {
   if (actual !== entry.sha256) fail(`manifest digest is stale for ${entry.path}`);
 }
 
-const defaultDocuments = parsedDocuments(render(), 'default');
-if (defaultDocuments.some(document => (
+const inactiveDocuments = parsedDocuments(
+  render(['--set', 'companionLibrary.enabled=false']),
+  'inactive',
+);
+if (inactiveDocuments.some(document => (
   document.kind === 'ConfigMap' && document.metadata?.name === 'psfn-companion-library'
 ))) {
   fail('inactive default unexpectedly renders psfn-companion-library');
 }
 
-const enabledDocuments = parsedDocuments(
-  render(['--set', 'companionLibrary.enabled=true']),
-  'enabled',
-);
-const configMaps = enabledDocuments.filter(document => (
+const defaultDocuments = parsedDocuments(render(), 'default');
+const configMaps = defaultDocuments.filter(document => (
   document.kind === 'ConfigMap' && document.metadata?.name === 'psfn-companion-library'
 ));
-if (configMaps.length !== 1) fail(`enabled render contains ${configMaps.length} companion ConfigMaps`);
+if (configMaps.length !== 1) fail(`default render contains ${configMaps.length} companion ConfigMaps`);
 if (configMaps[0].metadata.labels?.['app.kubernetes.io/managed-by'] !== 'Helm') {
   fail('ConfigMap is missing Helm ownership labels');
 }
@@ -90,6 +90,62 @@ for (const fileName of fileNames) {
   if (configMaps[0].data[fileName] !== canonical[fileName]) {
     fail(`rendered ConfigMap data differs for ${fileName}`);
   }
+}
+
+function named(items, name) {
+  return (items ?? []).find(item => item.name === name);
+}
+
+const deployments = defaultDocuments.filter(document => document.kind === 'Deployment');
+const libraryWorkloads = deployments.filter(deployment => (
+  ['psfn-gateway', 'psfn-garden'].includes(deployment.metadata?.name)
+  || deployment.spec?.template?.metadata?.labels?.['psfn.io/fleet-target'] === 'registered'
+));
+if (!libraryWorkloads.some(deployment => deployment.metadata?.name === 'psfn-gateway')) {
+  fail('default render omitted the gateway library workload');
+}
+if (!libraryWorkloads.some(deployment => deployment.metadata?.name === 'psfn-garden')) {
+  fail('default render omitted the Garden library workload');
+}
+if (!libraryWorkloads.some(deployment => (
+  deployment.spec?.template?.metadata?.labels?.['psfn.io/fleet-target'] === 'registered'
+))) {
+  fail('default render omitted fleet agent library workloads');
+}
+
+for (const deployment of libraryWorkloads) {
+  const pod = deployment.spec.template.spec;
+  const init = named(pod.initContainers, 'seed-companion-library');
+  if (!init) fail(`${deployment.metadata.name} omitted seed-companion-library`);
+  if (JSON.stringify(init.command) !== JSON.stringify([
+    'sh', '-c', 'set -eu; cp -L /lib-src/* /lib-dst/',
+  ])) {
+    fail(`${deployment.metadata.name} has an unexpected library seed command`);
+  }
+  if (!named(init.volumeMounts, 'companion-library-src')?.readOnly) {
+    fail(`${deployment.metadata.name} library source is not read-only`);
+  }
+  const runtimeSeedIndex = pod.initContainers.findIndex(item => item.name === 'seed-runtime-files');
+  if (runtimeSeedIndex >= 0 && pod.initContainers.indexOf(init) >= runtimeSeedIndex) {
+    fail(`${deployment.metadata.name} seeds the library after runtime files`);
+  }
+  const component = deployment.spec.template.metadata.labels['app.kubernetes.io/component'];
+  const runtime = named(pod.containers, component);
+  const mount = named(runtime?.volumeMounts, 'companion-library');
+  if (mount?.mountPath !== '/app/companion_docs' || mount.readOnly !== true) {
+    fail(`${deployment.metadata.name} lacks the read-only runtime library mount`);
+  }
+  if (!named(pod.volumes, 'companion-library')?.emptyDir) {
+    fail(`${deployment.metadata.name} lacks the library staging volume`);
+  }
+  const source = named(pod.volumes, 'companion-library-src')?.configMap;
+  if (source?.name !== 'psfn-companion-library') {
+    fail(`${deployment.metadata.name} lacks the canonical library ConfigMap source`);
+  }
+}
+
+if (inactiveDocuments.some(document => JSON.stringify(document).includes('companion-library'))) {
+  fail('inactive render retains companion-library workload wiring');
 }
 
 console.log('Helm companion-library bundle verification passed.');

@@ -56,6 +56,7 @@ spec:
       {{- end }}
       initContainers:
         {{- include "psfn.sharedWorkspaceBootstrapInitContainer" . | nindent 8 }}
+        {{- include "psfn.companionLibraryInitContainer" . | nindent 8 }}
         {{- include "psfn.fleetAuthAuthorityFloorInitContainer" . | nindent 8 }}
         {{- include "psfn.seedInitContainer" . | nindent 8 }}
         {{- include "psfn.waitForPostgresInitContainer" (dict "root" . "image" .Values.workloads.gateway.image) | nindent 8 }}
@@ -198,6 +199,7 @@ spec:
           resources:
             {{- toYaml .Values.workloads.gateway.resources | nindent 12 }}
           volumeMounts:
+            {{- include "psfn.companionLibraryVolumeMount" . | nindent 12 }}
             - name: system-data
               mountPath: {{ .Values.runtime.systemDataDir }}
             {{- include "psfn.gatewayCompanionDataVolumeMounts" . | nindent 12 }}
@@ -235,6 +237,7 @@ spec:
             {{- end }}
       volumes:
         {{- include "psfn.commonVolumes" . | nindent 8 }}
+        {{- include "psfn.companionLibraryVolumes" . | nindent 8 }}
         {{- include "psfn.gatewayAdditionalCompanionDataVolumes" . | nindent 8 }}
         {{- if .Values.fleet.enabled }}
         {{- include "psfn.gatewayAdditionalWorkspaceVolumes" . | nindent 8 }}
@@ -298,6 +301,7 @@ spec:
       {{- end }}
       initContainers:
         {{- include "psfn.sharedWorkspaceBootstrapInitContainer" . | nindent 8 }}
+        {{- include "psfn.companionLibraryInitContainer" . | nindent 8 }}
         {{- include "psfn.seedInitContainer" . | nindent 8 }}
         {{- include "psfn.waitForPostgresInitContainer" (dict "root" . "image" .Values.workloads.agent.image) | nindent 8 }}
       containers:
@@ -396,6 +400,7 @@ spec:
           resources:
             {{- toYaml .Values.workloads.agent.resources | nindent 12 }}
           volumeMounts:
+            {{- include "psfn.companionLibraryVolumeMount" . | nindent 12 }}
             - name: postgres-database-url
               mountPath: /var/run/secrets/psfn-postgres
               readOnly: true
@@ -428,6 +433,7 @@ spec:
               readOnly: true
       volumes:
         {{- include "psfn.commonVolumes" . | nindent 8 }}
+        {{- include "psfn.companionLibraryVolumes" . | nindent 8 }}
         - name: gateway-rpc-client-tls
           secret:
             secretName: {{ include "psfn.agentRpcClientCertSecretName" . }}
@@ -479,6 +485,7 @@ spec:
       {{- end }}
       initContainers:
         {{- include "psfn.sharedWorkspaceBootstrapInitContainer" . | nindent 8 }}
+        {{- include "psfn.companionLibraryInitContainer" . | nindent 8 }}
         {{- if .Values.fleet.enabled }}
         {{- include "psfn.waitForPostgresInitContainer" (dict "root" . "image" .Values.workloads.garden.image) | nindent 8 }}
         {{- else }}
@@ -626,6 +633,7 @@ spec:
           resources:
             {{- toYaml .Values.workloads.garden.resources | nindent 12 }}
           volumeMounts:
+            {{- include "psfn.companionLibraryVolumeMount" . | nindent 12 }}
             {{- if .Values.fleet.enabled }}
             {{- range $index, $companion := .Values.fleet.companions }}
             - name: {{ printf "garden-companion-data-%d" $index }}
@@ -688,6 +696,7 @@ spec:
         {{- else }}
         {{- include "psfn.commonVolumes" . | nindent 8 }}
         {{- end }}
+        {{- include "psfn.companionLibraryVolumes" . | nindent 8 }}
         - name: admin-transport-client-tls
           secret:
             secretName: {{ include "psfn.gardenAdminClientCertSecretName" . }}

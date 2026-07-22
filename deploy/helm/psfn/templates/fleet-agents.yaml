@@ -66,6 +66,7 @@ spec:
       {{- end }}
       initContainers:
         {{- include "psfn.sharedWorkspaceBootstrapInitContainer" $ctx | nindent 8 }}
+        {{- include "psfn.companionLibraryInitContainer" $ctx | nindent 8 }}
         {{- include "psfn.seedInitContainer" $ctx | nindent 8 }}
         {{- include "psfn.waitForPostgresInitContainer" (dict "root" $ctx "image" $values.workloads.agent.image) | nindent 8 }}
       containers:
@@ -156,6 +157,7 @@ spec:
           resources:
             {{- toYaml $root.Values.workloads.agent.resources | nindent 12 }}
           volumeMounts:
+            {{- include "psfn.companionLibraryVolumeMount" $ctx | nindent 12 }}
             - name: postgres-database-url
               mountPath: /var/run/secrets/psfn-postgres
               readOnly: true
@@ -189,6 +191,7 @@ spec:
               readOnly: true
       volumes:
         {{- include "psfn.commonVolumes" $ctx | nindent 8 }}
+        {{- include "psfn.companionLibraryVolumes" $ctx | nindent 8 }}
         - name: gateway-rpc-client-tls
           secret:
             secretName: {{ include "psfn.fleetAgentRpcClientCertSecretName" $target }}

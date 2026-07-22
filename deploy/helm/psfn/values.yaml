@@ -122,7 +122,7 @@ fleet:
   #   SPIFFE:         /psfn/agent/<companionId>
 
 companionLibrary:
-  enabled: false
+  enabled: true
 
 bootstrap:
   # First-ever-install opt-in ONLY. When true, the seed init container copies

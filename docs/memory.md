@@ -4,7 +4,7 @@ PSFN memory is not a single store. The runtime combines an append-only lived
 session archive, typed long-term memories, continuity artifacts, contact state,
 and a few small high-priority ledgers.
 
-Last updated: 2026-07-15.
+Last updated: 2026-07-22.
 
 ## Layers That Exist Today
 
@@ -58,6 +58,24 @@ The model-facing **personal journal** is separate: it contains companion-authore
 Markdown under `WORKSPACE_PATH/journal/`. A reflection publication copied there
 is a mirror of the runtime reflection ledger, not its replacement. Do not call
 L0 or generic audit logs "the journal."
+
+## Persistence Authority And Restore
+
+Which layer is canonical for what, and what restores it, is decided in
+[`memory-persistence-authority.md`](./memory-persistence-authority.md)
+(bead `upx0.11`, operator decision 2026-07-10). The short version:
+
+- L0 (filesystem JSONL) stays canonical for lived history; its Postgres search
+  copy is a projection rebuilt from L0 (`runTranscriptProjectionRepair`).
+- Derived layers (L0.1 episodes, L2 memories, embeddings, evolution links) and
+  the Postgres-only runtime-state stores restore from encrypted `pg_dump`
+  backups. Those backups are the canonical restore primitive, not a
+  convenience.
+- `notes/memories.jsonl` is an append-only audit/export aid, not a restore or
+  replay primitive.
+- Re-deriving L2/episodic state from L0 yields a faithful continuation, not a
+  restoration (charter §6.20); derived-layer repair is supersede-based
+  re-derivation with provenance intact, never deletion.
 
 ## Orientation, Long-Term Memory, And Scratchpad
 

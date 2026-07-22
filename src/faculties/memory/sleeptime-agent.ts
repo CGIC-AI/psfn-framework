@@ -730,7 +730,7 @@ export class SleeptimeMemoryAgent {
     const transcript = recentEntries.map(summarizeSessionEntry).join('\n');
     // Fail closed: episode loading errors abort the pass — she must not review
     // her day against a silently degraded context.
-    const dayEpisodes = await this.loadDayEpisodes(this.now());
+    const dayEpisodes = await this.loadDayEpisodes(sessionId, this.now());
     const plan = await this.runReviewConversation({
       sessionId,
       actionId: action.id,
@@ -779,6 +779,19 @@ export class SleeptimeMemoryAgent {
     let reviewQueuedCount = 0;
     let ungroundedRejectedCount = 0;
     for (const memory of plan.memoryWrites) {
+      const evidenceCount = countSupportingTranscriptEntries(memory.text, groundingCorpus);
+      // Grounding gate (1gpol): zero supporting entries is a rejection before
+      // either active-memory or maintenance-review persistence.
+      if (evidenceCount === 0) {
+        ungroundedRejectedCount += 1;
+        log.warn('Sleeptime memory write rejected: ungrounded in the day transcript and episodes', {
+          sessionId,
+          actionId: action.id,
+          type: memory.type,
+        });
+        continue;
+      }
+
       const queuedReview = await this.queueUncertainMemoryWriteReview({
         memory,
         sessionId,
@@ -790,18 +803,6 @@ export class SleeptimeMemoryAgent {
         continue;
       }
 
-      const evidenceCount = countSupportingTranscriptEntries(memory.text, groundingCorpus);
-      // Grounding gate (1gpol): zero supporting entries is a rejection, not a
-      // tag — mirrors the enforced check in extraction/self-directed.ts.
-      if (evidenceCount === 0) {
-        ungroundedRejectedCount += 1;
-        log.warn('Sleeptime memory write rejected: ungrounded in the day transcript and episodes', {
-          sessionId,
-          actionId: action.id,
-          type: memory.type,
-        });
-        continue;
-      }
       const writePayload = buildSleepTimeMemoryWritePayload({
         memory,
         sessionId,
@@ -905,11 +906,15 @@ export class SleeptimeMemoryAgent {
   }
 
   /**
-   * The day's consolidated episodes, oldest first. Errors propagate: the pass
-   * fails closed rather than reviewing against a silently degraded context.
+   * The current logical session's recent consolidated episodes, returned oldest
+   * first. One logical session may span bound private physical surfaces; group,
+   * invite-only, and unrelated private sessions retain distinct logical owners.
+   * Errors propagate rather than silently widening or degrading that context.
    */
-  private async loadDayEpisodes(nowMs: number): Promise<Episode[]> {
+  private async loadDayEpisodes(sessionId: string, nowMs: number): Promise<Episode[]> {
     const episodes = await this.episodicStore.searchByTime({
+      sessionId,
+      order: 'desc',
       from: toIsoInstant(nowMs - DAY_MS),
       to: toIsoInstant(nowMs),
       limit: EPISODE_REVIEW_LIMIT,

@@ -498,6 +498,46 @@ describe('SleeptimeMemoryAgent', () => {
     expect(memoryWriter.write).not.toHaveBeenCalled();
   });
 
+  it('rejects an ungrounded omitted-confidence high-impact write before review persistence (1gpol)', async () => {
+    const reviewAgent = makeReviewAgent(JSON.stringify({
+      orient: {
+        persona: 'Focused on careful gateway debugging.',
+        human: 'We debugged the gateway all evening.',
+        goals: 'Continue the gateway debugging work carefully.',
+      },
+      memory_writes: [{
+        text: 'Partner set a hard boundary against any future family contact.',
+        type: 'boundary',
+        importance: 0.9,
+        emotionalValence: -0.5,
+        tags: ['boundary', 'family'],
+        sensitivity: 'confidential',
+      }],
+    }));
+    const memoryWriter = { write: vi.fn() };
+    const upsertMemoryMaintenanceReview = vi.fn(async (input: unknown) => input as never);
+    const agent = new SleeptimeMemoryAgent(makeAgentOptions({
+      agent: reviewAgent,
+      memoryWriter,
+      memoryMaintenanceStore: {
+        upsertMemoryMaintenanceReview,
+        getById: vi.fn(),
+        getMemoryMaintenanceDiagnostics: vi.fn(),
+      },
+      sessionManager: {
+        resolveSessionChannelId: vi.fn((channelId: string) => channelId),
+        getRecentMessages: vi.fn().mockReturnValue([
+          { id: 1, channelId: 'terminal:test', role: 'user', content: 'We debugged the gateway all evening.', timestamp: Date.now() },
+        ]),
+      },
+    }));
+
+    await agent.execute(makeSleeptimeAction());
+
+    expect(upsertMemoryMaintenanceReview).not.toHaveBeenCalled();
+    expect(memoryWriter.write).not.toHaveBeenCalled();
+  });
+
   it('gives the review context the day episodes and retries once on an unusable reply (1gpol)', async () => {
     const plan = JSON.stringify({
       orient: {
@@ -534,6 +574,74 @@ describe('SleeptimeMemoryAgent', () => {
     const openingPrompt = (handleMessage.mock.calls[0]?.[0] as { content: string }).content;
     expect(openingPrompt).toContain('Gateway debugging marathon');
     expect(openingPrompt).toContain('flaky handshake');
+  });
+
+  it('shares day episodes inside one logical session while excluding unrelated sessions (1gpol)', async () => {
+    const currentEpisode = {
+      id: 'ep-current',
+      title: 'Gateway debugging marathon',
+      landmark: 'We finally traced the flaky handshake',
+      startedAt: '2026-07-22T01:00:00.000Z',
+      endedAt: '2026-07-22T03:00:00.000Z',
+      threadId: 'discord:dm-logical',
+      channelId: 'satellite:private-presence',
+      themes: ['debugging'],
+    };
+    const foreignEpisode = {
+      id: 'ep-foreign',
+      title: 'Private bicycle storage arrangement',
+      landmark: 'Roommate stores the spare bicycle behind the blue shed',
+      startedAt: '2026-07-22T02:00:00.000Z',
+      endedAt: '2026-07-22T02:30:00.000Z',
+      themes: ['private logistics'],
+    };
+    const searchByTime = vi.fn((options?: { sessionId?: string }) => (
+      options?.sessionId === 'discord:dm-logical'
+        ? [currentEpisode]
+        : [currentEpisode, foreignEpisode]
+    ) as never);
+    const reviewAgent = makeReviewAgent(JSON.stringify({
+      orient: {
+        persona: 'Focused on the gateway debugging marathon.',
+        human: 'We finally traced the flaky handshake.',
+        goals: 'Continue the gateway debugging work.',
+      },
+      memory_writes: [{
+        text: 'Roommate stores the spare bicycle behind the blue shed.',
+        type: 'semantic',
+        importance: 0.7,
+        confidence: 0.9,
+        emotionalValence: 0,
+        tags: ['storage'],
+        sensitivity: 'confidential',
+      }],
+    }));
+    const memoryWriter = { write: vi.fn().mockResolvedValue({ action: 'created' }) };
+    const agent = new SleeptimeMemoryAgent(makeAgentOptions({
+      agent: reviewAgent,
+      episodicStore: { searchByTime },
+      memoryWriter,
+      sessionManager: {
+        resolveSessionChannelId: vi.fn(() => 'discord:dm-logical'),
+        getRecentMessages: vi.fn().mockReturnValue([
+          { id: 1, channelId: 'api:private-app', role: 'user', content: 'What a gateway debugging marathon.', timestamp: Date.now() },
+        ]),
+      },
+    }));
+
+    await agent.execute(makeSleeptimeAction({
+      channelId: 'api:private-app',
+      payload: { sessionId: 'discord:dm-logical' },
+    }));
+
+    expect(searchByTime).toHaveBeenCalledWith(expect.objectContaining({
+      sessionId: 'discord:dm-logical',
+      order: 'desc',
+    }));
+    const openingPrompt = (reviewAgent.handleMessage.mock.calls[0]?.[0] as { content: string }).content;
+    expect(openingPrompt).not.toContain('Private bicycle storage arrangement');
+    expect(openingPrompt).not.toContain('blue shed');
+    expect(memoryWriter.write).not.toHaveBeenCalled();
   });
 
   it('runs the heavy passes (consolidation, arc weaving, dream meaning) inside the rest window', async () => {

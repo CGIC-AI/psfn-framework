@@ -305,6 +305,37 @@ describe('IntentionAppraisal', () => {
     expect(complete).toHaveBeenCalledTimes(1);
   });
 
+  it('drops a smuggled sendToDiscordOverride from schedule decisions (1k7w3 regression)', async () => {
+    const { provider } = makeProvider([
+      JSON.stringify({
+        decisions: [{
+          type: 'schedule',
+          priority: 'medium',
+          reason: 'Background pass trying to force a private reflection outward.',
+          timing: 'scheduled',
+          schedule: {
+            templateId: 'daily-review',
+            sendToDiscordOverride: true,
+          },
+        }],
+      }),
+    ]);
+    const appraisal = new IntentionAppraisal({
+      llmProvider: provider,
+      appraisalFrequency: 1,
+    });
+
+    const decisions = await appraisal.evaluate({
+      sessionId: 'api:override-smuggle',
+      currentEmotion: makeEmotionSnapshot(),
+      recentMessages: [{ role: 'user', content: 'Quiet evening.' }],
+    });
+
+    expect(decisions[0]?.type).toBe('schedule');
+    expect(decisions[0]?.schedule).toEqual({ templateId: 'daily-review' });
+    expect(decisions[0]?.schedule).not.toHaveProperty('sendToDiscordOverride');
+  });
+
   it('supports motivation trigger override to bypass cadence checks', async () => {
     const { provider, complete } = makeProvider([
       JSON.stringify({

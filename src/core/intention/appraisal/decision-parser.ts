@@ -165,13 +165,7 @@ function parseSchedulePayload(value: unknown): IntentionScheduleDecision | undef
   if (!isRecord(value)) return undefined;
   const templateId = typeof value.templateId === 'string' ? value.templateId.trim() : '';
   if (!templateId) return undefined;
-  const sendToDiscordOverride = typeof value.sendToDiscordOverride === 'boolean'
-    ? value.sendToDiscordOverride
-    : undefined;
-  return {
-    templateId,
-    ...(sendToDiscordOverride !== undefined ? { sendToDiscordOverride } : {}),
-  };
+  return { templateId };
 }
 
 function parseReminderPayload(value: unknown): IntentionReminderDecision | undefined {

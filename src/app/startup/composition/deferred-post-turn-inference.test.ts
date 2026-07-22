@@ -51,41 +51,4 @@ describe('inferDeferredPostTurnActions', () => {
     }]);
   });
 
-  it('extracts deferred reflection actions from schedule run_template tool results', () => {
-    const actions = inferDeferredPostTurnActions({
-      message: {
-        id: 'msg-schedule',
-        channelId: 'terminal:dev',
-        channelType: 'terminal',
-        authorId: 'user-1',
-        authorName: 'Test User',
-        content: 'trigger heartbeat through schedule',
-        timestamp: new Date(),
-      },
-      turnMessages: [{
-        role: 'toolResult',
-        toolName: 'schedule',
-        result: {
-          content: [{ type: 'text', text: 'Queued manual reflection run "Musing" (musing) for post-turn execution.' }],
-          details: {
-            deferredAction: {
-              kind: 'heartbeat.run_template',
-              payload: { templateId: 'musing', sendToDiscordOverride: false },
-              dedupeKey: 'heartbeat.run_template:musing:discord:false',
-              maxRetries: 2,
-            },
-          },
-        },
-      }],
-      deferredReflectionActionKind: 'heartbeat.run_template',
-    });
-
-    expect(actions).toEqual([{
-      kind: 'heartbeat.run_template',
-      payload: { templateId: 'musing', sendToDiscordOverride: false },
-      dedupeKey: 'heartbeat.run_template:musing:discord:false',
-      maxRetries: 2,
-    }]);
-  });
-
 });

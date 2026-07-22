@@ -237,6 +237,26 @@ class FakeMemoryPool {
         return { rows: [], rowCount: 0, command: 'OK', oid: 0, fields: [] } as QueryResult;
       }
 
+    if (normalized.startsWith('select set_config')) {
+      return {
+        rows: [{ set_config: String(values[0] ?? '') }],
+        rowCount: 1,
+        command: 'SELECT',
+        oid: 0,
+        fields: [],
+      } as QueryResult;
+    }
+
+    if (normalized.includes('from pg_extension') && normalized.includes('extversion')) {
+      return {
+        rows: [{ extversion: '0.8.2' }],
+        rowCount: 1,
+        command: 'SELECT',
+        oid: 0,
+        fields: [],
+      } as QueryResult;
+    }
+
     if (normalized.includes('information_schema.tables')) {
       return {
         rows: this.schemaHasLegacyEmbeddingTable

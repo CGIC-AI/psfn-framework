@@ -88,6 +88,9 @@ import { TrustedHostProviderRecoveryService } from '../../../boundary/fleet-auth
 import { PostgresTrustedHostProviderRecoveryStore } from './trusted-host-provider-recovery-store.js';
 import type { TestingHarnessGardenAuthorizationAuditPort } from '../../../boundary/gateway/testing-harness-garden-door.js';
 import { PostgresTestingHarnessGardenAuthorizationAudit } from './testing-harness-authorization-audit.js';
+import type {
+  TestingHarnessGardenAdminConfig,
+} from '../../../channels/backplane/testing-harness-garden-config.js';
 
 /**
  * Deep gateway-owned fleet-auth persistence. The unrestricted runtime Pool is
@@ -438,6 +441,7 @@ export async function initializeGatewayFleetAuthPersistence(options: {
   companionDatabaseUrl?: string;
   lifecycleWitnessRoot: string;
   discordEvidenceObserver?: DiscordEvidenceObservationPort;
+  testingHarness?: TestingHarnessGardenAdminConfig;
 }): Promise<GatewayFleetAuthPersistence | undefined> {
   const lifecycleWitness = new FleetAuthLifecycleWitnessStore(options.lifecycleWitnessRoot);
   if (!options.config) {
@@ -732,6 +736,7 @@ export async function initializeGatewayFleetAuthPersistence(options: {
       signer: requestCapabilities,
       replay: requestCapabilityReplay,
       authority: new PostgresChildAssertionAuthority(pool, config, accountAuthority),
+      ...(options.testingHarness ? { testingHarness: options.testingHarness } : {}),
     });
     return {
       authorityFloors,

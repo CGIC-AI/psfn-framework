@@ -7,6 +7,7 @@ import {
 } from '../../boundary/fleet-auth/request-capability-replay.js';
 import {
   createRequestCapabilityVerifier,
+  TESTING_HARNESS_REQUEST_CAPABILITY_AUDIENCE,
   type RequestCapabilityVerifier,
   type VerifiedRequestCapability,
 } from '../../boundary/fleet-auth/request-capability.js';
@@ -279,8 +280,24 @@ export async function admitFleetGardenRequest(input: {
     context = parseGardenCapabilityContext(encodedContext, input.admission.companionId);
     if (input.admission.audience === 'operator') {
       if (context.parent) throw new Error('operator capability cannot contain a parent');
-      verified = input.admission.verifier.verifyOperator({ token, target, ...context });
-      if (!timingSafeStringEqual(verified.audience, `operator:${input.admission.companionId}`)) {
+      try {
+        verified = input.admission.verifier.verifyOperator({ token, target, ...context });
+      } catch (error) {
+        if (input.admission.testingHarness?.enabled !== true) throw error;
+        verified = input.admission.verifier.verifyTestingHarness({ token, target, ...context });
+      }
+      if (verified.authContext.provider === 'testing_harness') {
+        if (input.admission.testingHarness?.enabled !== true
+          || !timingSafeStringEqual(
+            verified.audience,
+            TESTING_HARNESS_REQUEST_CAPABILITY_AUDIENCE,
+          )) {
+          throw new Error('testing-harness audience mismatch');
+        }
+      } else if (!timingSafeStringEqual(
+        verified.audience,
+        `operator:${input.admission.companionId}`,
+      )) {
         throw new Error('operator audience mismatch');
       }
     } else {

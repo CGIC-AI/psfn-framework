@@ -9,6 +9,7 @@ import {
   createGatewayRequestCapabilitySigner,
   createRequestCapabilityVerifier,
   type RequestCapabilityAuthorityVersions,
+  type RequestCapabilityParentBinding,
 } from '../../boundary/fleet-auth/request-capability.js';
 import { createCompanionId } from '../../shared/routing/companion-id.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
@@ -63,6 +64,7 @@ function signedRequestForTarget(
   options: {
     method?: 'GET' | 'PATCH' | 'POST';
     body?: Buffer;
+    provider?: 'discord' | 'testing_harness';
   } = {},
 ): IncomingMessage {
   const method = options.method ?? 'GET';
@@ -75,20 +77,23 @@ function signedRequestForTarget(
   });
   const requestId = `aaaaaaaa-aaaa-4aaa-8aaa-${jti.padEnd(12, '0').slice(0, 12)}`;
   const decisionId = `bbbbbbbb-bbbb-4bbb-8bbb-${jti.padEnd(12, '0').slice(0, 12)}`;
-  const token = createGatewayRequestCapabilitySigner({
+  const capabilitySigner = createGatewayRequestCapabilitySigner({
     issuer: 'fleet-auth',
     kid: 'active',
     privateKeyPem,
     ttlSeconds: 30,
     generateJti: () => jti,
-  }).signOperator({
+  });
+  const capabilityInput = {
     target,
     requestId,
     decisionId,
     authContext: {
-      principalId: 'principal-1',
-      provider: 'discord',
-      providerSubjectId: '12345678901234567',
+      principalId: options.provider === 'testing_harness' ? 'testing-harness' : 'principal-1',
+      provider: options.provider ?? 'discord',
+      providerSubjectId: options.provider === 'testing_harness'
+        ? 'testing-harness'
+        : '12345678901234567',
       companionId,
       contactBindingId: 'binding-1',
       contactId: 'contact-1',
@@ -100,7 +105,10 @@ function signedRequestForTarget(
       resolvedAt: '2030-01-01T00:00:00.000Z',
     },
     versions: VERSIONS,
-  });
+  };
+  const token = options.provider === 'testing_harness'
+    ? capabilitySigner.signTestingHarness(capabilityInput)
+    : capabilitySigner.signOperator(capabilityInput);
   const request = Readable.from(body.byteLength > 0 ? [body] : []) as IncomingMessage;
   request.method = method;
   request.url = `/companions/${companionId}/garden${innerTarget}`;
@@ -164,7 +172,10 @@ interface RoutedFleetRequest {
   body: Buffer;
 }
 
-function createFleetProxySurface(routed: RoutedFleetRequest[]): GardenOperatorSurface {
+function createFleetProxySurface(
+  routed: RoutedFleetRequest[],
+  providerIdentities: unknown[] = [],
+): GardenOperatorSurface {
   const registry = new FleetGardenTargetRegistry([{
     companionId: COMPANION_A,
     endpoint: { mode: 'socket', socketPath: '/run/admin-a.sock', timeoutMs: 1_000 },
@@ -173,6 +184,7 @@ function createFleetProxySurface(routed: RoutedFleetRequest[]): GardenOperatorSu
     registry,
     verifier: createRequestCapabilityVerifier(verifierConfig),
     replay: new AtomicRequestCapabilityReplayPort(),
+    testingHarness: { enabled: true },
   });
   return new GardenOperatorSurface({
     port: 1,
@@ -190,21 +202,24 @@ function createFleetProxySurface(routed: RoutedFleetRequest[]): GardenOperatorSu
       },
     },
     fleetChildAssertions: {
-      exchange: async input => ({
-        token: `child-${input.parentVerified.jti}`,
-        context: {
-          requestId: input.parentVerified.requestId,
-          decisionId: input.parentVerified.decisionId,
-          versions: input.parentVerified.versions,
-          parent: {
-            audience: input.parentVerified.audience as `operator:${string}`,
+      exchange: async (input) => {
+        providerIdentities.push(input.providerIdentity);
+        return {
+          token: `child-${input.parentVerified.jti}`,
+          context: {
             requestId: input.parentVerified.requestId,
             decisionId: input.parentVerified.decisionId,
-            jti: input.parentVerified.jti,
-            targetDigest: input.parentVerified.targetDigest,
+            versions: input.parentVerified.versions,
+            parent: {
+              audience: input.parentVerified.audience as RequestCapabilityParentBinding['audience'],
+              requestId: input.parentVerified.requestId,
+              decisionId: input.parentVerified.decisionId,
+              jti: input.parentVerified.jti,
+              targetDigest: input.parentVerified.targetDigest,
+            },
           },
-        },
-      }),
+        };
+      },
     },
   });
 }
@@ -286,6 +301,30 @@ describe('GardenOperatorSurface fleet transport routing', () => {
       requestPath: innerTarget,
       body,
     }]);
+  });
+
+  it('dispatches testing-harness admissions with their provider-scoped identity', async () => {
+    const routed: RoutedFleetRequest[] = [];
+    const providerIdentities: unknown[] = [];
+    const surface = createFleetProxySurface(routed, providerIdentities);
+    const request = signedRequestForTarget(
+      COMPANION_A,
+      '8',
+      '/api/admin/settings',
+      { provider: 'testing_harness' },
+    );
+
+    await (
+      surface as unknown as {
+        handleFleetRequest(req: IncomingMessage, res: ServerResponse): Promise<void>;
+      }
+    ).handleFleetRequest(request, {} as ServerResponse);
+
+    expect(providerIdentities).toEqual([{
+      provider: 'testing_harness',
+      audience: 'testing-harness',
+    }]);
+    expect(routed).toHaveLength(1);
   });
 
   it('uses fleet routing for a one-entry roster', () => {

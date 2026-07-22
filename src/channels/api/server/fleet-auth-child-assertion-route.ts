@@ -13,6 +13,7 @@ import type { RequestCapabilityAuthorityVersions } from '../../../boundary/fleet
 import { readJsonBodyWithLimit, sendJson } from '../../backplane/http/primitives.js';
 import { createCompanionId } from '../../../shared/routing/companion-id.js';
 import { hasExactKeys, isRecord, isRfc4122Uuid } from '../../../shared/utils/types.js';
+import { normalizeTestingHarnessApiPrincipalId } from '../../backplane/http/auth.js';
 
 export const FLEET_AUTH_CHILD_ASSERTION_EXCHANGE_PATH =
   '/v1/internal/fleet-auth/child-assertions';
@@ -99,9 +100,20 @@ function parseTarget(
 export function parseChildAssertionExchangeRequest(
   value: unknown,
 ): GatewayChildAssertionExchangeInput {
+  const hasProviderIdentity = isRecord(value) && Object.hasOwn(value, 'providerIdentity');
   if (!isRecord(value)
-    || !hasExactKeys(value, ['schemaVersion', 'companionId', 'parent', 'child'])
+    || !hasExactKeys(
+      value,
+      hasProviderIdentity
+        ? ['schemaVersion', 'companionId', 'providerIdentity', 'parent', 'child']
+        : ['schemaVersion', 'companionId', 'parent', 'child'],
+    )
     || value.schemaVersion !== 1
+    || (hasProviderIdentity
+      && (!isRecord(value.providerIdentity)
+        || !hasExactKeys(value.providerIdentity, ['provider', 'audience'])
+        || value.providerIdentity.provider !== 'testing_harness'
+        || typeof value.providerIdentity.audience !== 'string'))
     || !isRecord(value.parent)
     || !hasExactKeys(value.parent, ['token', 'target', 'requestId', 'decisionId', 'versions'])
     || typeof value.parent.token !== 'string'
@@ -117,12 +129,22 @@ export function parseChildAssertionExchangeRequest(
   const companionId = createCompanionId(value.companionId);
   const parentTarget = parseTarget(value.parent.target, companionId);
   const childTarget = parseTarget(value.child.target, companionId);
+  const operator = hasProviderIdentity
+    ? Object.freeze({
+        kind: 'testing_harness_provider' as const,
+        provider: 'testing_harness' as const,
+        audience: normalizeTestingHarnessApiPrincipalId(
+          (value.providerIdentity as Record<string, unknown>).audience as string,
+        ),
+        companionId,
+      })
+    : Object.freeze({
+        kind: 'operator_process' as const,
+        operatorId: `operator:${companionId}` as const,
+        companionId,
+      });
   return Object.freeze({
-    operator: Object.freeze({
-      kind: 'operator_process',
-      operatorId: `operator:${companionId}`,
-      companionId,
-    }),
+    operator,
     parent: Object.freeze({
       token: value.parent.token,
       target: parentTarget,

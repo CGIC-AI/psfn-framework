@@ -1,8 +1,14 @@
 import { timingSafeEqual } from 'node:crypto';
-import type {
-  RequestCapabilityAuthorityVersions,
-  RequestCapabilityParentBinding,
+import {
+  TESTING_HARNESS_REQUEST_CAPABILITY_AUDIENCE,
+  type RequestCapabilityAuthorityVersions,
+  type RequestCapabilityParentBinding,
+  type RequestCapabilityParentAudience,
 } from './request-capability.js';
+/*
+ * Keep parent-envelope parsing limited to the two signed parent audiences;
+ * provider/audience pairing is enforced by the capability verifier.
+ */
 import { REQUEST_CAPABILITY_ASSERTION_HEADERS } from './request-capability-transport.js';
 import type { CompanionId } from '../../shared/routing/companion-id.js';
 import { hasExactKeys, isRecord, isRfc4122Uuid } from '../../shared/utils/types.js';
@@ -60,7 +66,8 @@ function parseParent(value: unknown, companionId: CompanionId): RequestCapabilit
   const keys = ['audience', 'requestId', 'decisionId', 'jti', 'targetDigest'] as const;
   if (!isRecord(value)
     || !hasExactKeys(value, keys)
-    || value.audience !== `operator:${companionId}`
+    || (value.audience !== `operator:${companionId}`
+      && value.audience !== TESTING_HARNESS_REQUEST_CAPABILITY_AUDIENCE)
     || !isRfc4122Uuid(value.requestId)
     || !isRfc4122Uuid(value.decisionId)
     || typeof value.jti !== 'string'
@@ -71,7 +78,7 @@ function parseParent(value: unknown, companionId: CompanionId): RequestCapabilit
     throw new Error('invalid parent binding');
   }
   return Object.freeze({
-    audience: value.audience as RequestCapabilityParentBinding['audience'],
+    audience: value.audience as RequestCapabilityParentAudience,
     requestId: value.requestId,
     decisionId: value.decisionId,
     jti: value.jti,

@@ -42,6 +42,12 @@ const AUTH_CONTEXT = Object.freeze({
   sessionAssurance: 'webauthn_uv' as const, authorizationEventId: 'event-a',
   resolvedAt: '2030-01-01T00:00:00.000Z',
 });
+const TESTING_HARNESS_AUTH_CONTEXT = Object.freeze({
+  ...AUTH_CONTEXT,
+  principalId: 'testing-harness',
+  provider: 'testing_harness' as const,
+  providerSubjectId: 'testing-harness',
+});
 const FLEET_MODEL_USAGE_REQUEST_TARGET = resolveFleetModelUsageInternalRequestTarget(
   { range: 'week', timezone: 'UTC' },
   NOW * 1_000,
@@ -230,6 +236,48 @@ describe('Ed25519 hop request capabilities', () => {
       parent: { ...parent, decisionId: 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee' },
       nowSeconds: NOW,
     })).toThrow(/parent binding does not match/u);
+  });
+
+  it('uses a provider-scoped testing-harness parent audience and rejects verifier crossover', () => {
+    const harnessBinding = { ...binding(), authContext: TESTING_HARNESS_AUTH_CONTEXT };
+    const harnessToken = signer().signTestingHarness(harnessBinding);
+    const harnessVerified = verifier().verifyTestingHarness({
+      token: harnessToken,
+      ...binding(),
+      nowSeconds: NOW,
+    });
+    const parent: RequestCapabilityParentBinding = {
+      audience: harnessVerified.audience,
+      requestId: harnessVerified.requestId,
+      decisionId: harnessVerified.decisionId,
+      jti: harnessVerified.jti,
+      targetDigest: harnessVerified.targetDigest,
+    };
+    const agentToken = signer({ jti: 'testing-harness-agent-once' }).signAgent({
+      ...harnessBinding,
+      parent,
+    });
+
+    expect(harnessVerified).toMatchObject({
+      audience: 'testing-harness',
+      authContext: TESTING_HARNESS_AUTH_CONTEXT,
+    });
+    expect(verifier().verifyAgent({
+      token: agentToken,
+      ...binding(),
+      parent,
+      nowSeconds: NOW,
+    })).toMatchObject({ audience: `agent:${COMPANION_ID}`, parent });
+    expect(() => verifier().verifyOperator({
+      token: harnessToken,
+      ...binding(),
+      nowSeconds: NOW,
+    })).toThrow(RequestCapabilityRejectedError);
+    expect(() => verifier().verifyTestingHarness({
+      token: signer().signOperator(binding()),
+      ...binding(),
+      nowSeconds: NOW,
+    })).toThrow(RequestCapabilityRejectedError);
   });
 
   it.each([

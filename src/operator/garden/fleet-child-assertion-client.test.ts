@@ -68,8 +68,50 @@ const parentVerified = createRequestCapabilityVerifier({
     status: 'active',
   }],
 }).verifyOperator({ token, target, requestId, decisionId, versions: VERSIONS });
+const harnessToken = createGatewayRequestCapabilitySigner({
+  issuer: 'fleet-auth',
+  kid: 'active',
+  privateKeyPem,
+  ttlSeconds: 30,
+  generateJti: () => 'harness-parent-jti',
+}).signTestingHarness({
+  target,
+  requestId,
+  decisionId,
+  versions: VERSIONS,
+  authContext: {
+    principalId: 'testing-harness',
+    provider: 'testing_harness',
+    providerSubjectId: 'testing-harness',
+    companionId: COMPANION_ID,
+    contactBindingId: `testing-harness-binding-${COMPANION_ID}`,
+    contactId: `testing-harness-contact-${COMPANION_ID}`,
+    operatorGrantId: 'testing-harness-admin',
+    role: 'admin',
+    sessionRecordId: `testing-harness-session-${COMPANION_ID}`,
+    sessionAssurance: 'webauthn_uv',
+    authorizationEventId: 'harness-event',
+    resolvedAt: '2030-01-01T00:00:00.000Z',
+  },
+});
+const harnessParentVerified = createRequestCapabilityVerifier({
+  issuer: 'fleet-auth',
+  maxTtlSeconds: 30,
+  keys: [{
+    issuer: 'fleet-auth',
+    kid: 'active',
+    publicKeyPem,
+    notBefore: '2020-01-01T00:00:00.000Z',
+    notAfter: '2040-01-01T00:00:00.000Z',
+    status: 'active',
+  }],
+}).verifyTestingHarness({ token: harnessToken, target, requestId, decisionId, versions: VERSIONS });
 
-function exchangeResponse(bodyValue: BodyInit | null | undefined, override: Record<string, unknown> = {}): Response {
+function exchangeResponse(
+  bodyValue: BodyInit | null | undefined,
+  override: Record<string, unknown> = {},
+  verified = parentVerified,
+): Response {
   const body = JSON.parse(String(bodyValue)) as {
     child: { requestId: string };
   };
@@ -82,11 +124,11 @@ function exchangeResponse(bodyValue: BodyInit | null | undefined, override: Reco
     targetDigest: target.targetDigest,
     versions: VERSIONS,
     parent: {
-      audience: parentVerified.audience,
-      requestId: parentVerified.requestId,
-      decisionId: parentVerified.decisionId,
-      jti: parentVerified.jti,
-      targetDigest: parentVerified.targetDigest,
+      audience: verified.audience,
+      requestId: verified.requestId,
+      decisionId: verified.decisionId,
+      jti: verified.jti,
+      targetDigest: verified.targetDigest,
     },
     ...override,
   }), { status: 200, headers: { 'content-type': 'application/json' } });
@@ -99,6 +141,20 @@ function exchange(fetchImpl: typeof fetch) {
     parentVerified,
     target,
     expectedAgentAudience: `agent:${COMPANION_ID}`,
+  });
+}
+
+function exchangeHarness(fetchImpl: typeof fetch) {
+  return createGardenFleetChildAssertionClient('http://127.0.0.1:10000/v1', fetchImpl).exchange({
+    parentToken: harnessToken,
+    parentContext: { requestId, decisionId, versions: VERSIONS },
+    parentVerified: harnessParentVerified,
+    target,
+    expectedAgentAudience: `agent:${COMPANION_ID}`,
+    providerIdentity: {
+      provider: 'testing_harness',
+      audience: 'testing-harness',
+    },
   });
 }
 
@@ -147,5 +203,26 @@ describe('createGardenFleetChildAssertionClient', () => {
         exchangeResponse(init?.body, override)
       ))).rejects.toThrow('Fleet child assertion response was invalid');
     }
+  });
+
+  it('adds a provider-scoped identity only for testing-harness parent exchanges', async () => {
+    let operatorBody: Record<string, unknown> | undefined;
+    let harnessBody: Record<string, unknown> | undefined;
+    await exchange(async (_input, init) => {
+      operatorBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      return exchangeResponse(init?.body);
+    });
+    await exchangeHarness(async (_input, init) => {
+      harnessBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      return exchangeResponse(init?.body, {}, harnessParentVerified);
+    });
+
+    expect(operatorBody).not.toHaveProperty('providerIdentity');
+    expect(harnessBody).toMatchObject({
+      providerIdentity: {
+        provider: 'testing_harness',
+        audience: 'testing-harness',
+      },
+    });
   });
 });

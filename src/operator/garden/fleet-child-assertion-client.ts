@@ -1,6 +1,9 @@
 import { randomUUID } from 'node:crypto';
 import type { CompiledGardenRequestTarget } from '../../boundary/fleet-auth/request-capability-target.js';
-import type { VerifiedRequestCapability } from '../../boundary/fleet-auth/request-capability.js';
+import {
+  TESTING_HARNESS_REQUEST_CAPABILITY_AUDIENCE,
+  type VerifiedRequestCapability,
+} from '../../boundary/fleet-auth/request-capability.js';
 import type { GardenCapabilityContext } from './garden-admission.js';
 import { hasExactKeys, isRecord } from '../../shared/utils/types.js';
 
@@ -28,6 +31,11 @@ export interface GardenFleetChildAssertion {
   readonly context: GardenCapabilityContext;
 }
 
+export interface GardenFleetChildAssertionProviderIdentity {
+  readonly provider: 'testing_harness';
+  readonly audience: string;
+}
+
 export interface GardenFleetChildAssertionClient {
   exchange(input: {
     readonly parentToken: string;
@@ -35,6 +43,7 @@ export interface GardenFleetChildAssertionClient {
     readonly parentVerified: VerifiedRequestCapability;
     readonly target: CompiledGardenRequestTarget<Buffer>;
     readonly expectedAgentAudience: `agent:${string}`;
+    readonly providerIdentity?: GardenFleetChildAssertionProviderIdentity;
   }): Promise<GardenFleetChildAssertion>;
 }
 
@@ -132,13 +141,19 @@ export function createGardenFleetChildAssertionClient(
   const endpoint = endpointFromBaseUrl(baseUrl);
   return Object.freeze({
     exchange: async (
-      { parentToken, parentContext, parentVerified, target, expectedAgentAudience }:
+      {
+        parentToken,
+        parentContext,
+        parentVerified,
+        target,
+        expectedAgentAudience,
+        providerIdentity,
+      }:
       Parameters<GardenFleetChildAssertionClient['exchange']>[0],
     ) => {
       if (parentContext.parent) throw new Error('Operator parent capability must not be a child');
       if (parentVerified.parent
         || parentVerified.companionId !== target.companionId
-        || parentVerified.audience !== `operator:${target.companionId}`
         || expectedAgentAudience !== `agent:${target.companionId}`
         || parentContext.requestId !== parentVerified.requestId
         || parentContext.decisionId !== parentVerified.decisionId
@@ -146,6 +161,18 @@ export function createGardenFleetChildAssertionClient(
           key => parentContext.versions[key] !== parentVerified.versions[key],
         )) {
         throw new Error('Fleet child assertion input was not bound to one companion');
+      }
+      const testingHarnessParent = parentVerified.authContext.provider === 'testing_harness';
+      if (testingHarnessParent
+        ? providerIdentity?.provider !== 'testing_harness'
+          || providerIdentity.audience !== TESTING_HARNESS_REQUEST_CAPABILITY_AUDIENCE
+          || parentVerified.audience !== TESTING_HARNESS_REQUEST_CAPABILITY_AUDIENCE
+          || parentVerified.authContext.principalId !== TESTING_HARNESS_REQUEST_CAPABILITY_AUDIENCE
+          || parentVerified.authContext.providerSubjectId
+            !== TESTING_HARNESS_REQUEST_CAPABILITY_AUDIENCE
+        : providerIdentity !== undefined
+          || parentVerified.audience !== `operator:${target.companionId}`) {
+        throw new Error('Fleet child assertion provider identity was invalid');
       }
       const requestId = randomUUID();
       const wireTarget = {
@@ -165,6 +192,7 @@ export function createGardenFleetChildAssertionClient(
         body: JSON.stringify({
           schemaVersion: 1,
           companionId: target.companionId,
+          ...(providerIdentity ? { providerIdentity } : {}),
           parent: {
             token: parentToken,
             target: wireTarget,

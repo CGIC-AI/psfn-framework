@@ -189,6 +189,14 @@ export class FleetGardenOperatorRouter {
       parentVerified: admitted.verified,
       target: admitted.target,
       expectedAgentAudience: admitted.upstream.expectedAgentAudience,
+      ...(admitted.verified.authContext.provider === 'testing_harness'
+        ? {
+            providerIdentity: {
+              provider: 'testing_harness' as const,
+              audience: admitted.verified.authContext.principalId,
+            },
+          }
+        : {}),
     });
   }
 }

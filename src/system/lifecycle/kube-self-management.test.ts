@@ -154,7 +154,6 @@ describe('KubeSelfManagementController', () => {
         release: 'psfn',
         sourceRevision: 'a'.repeat(40),
         targetImage: 'localhost/psfn-framework:0.1.0-kube-aaaaaaaaaaaa',
-        helmRevision: 7,
         reason: 'Apply the approved runtime update.',
       },
       approvals: {
@@ -181,8 +180,7 @@ describe('KubeSelfManagementController', () => {
           release: 'psfn',
           sourceRevision: 'a'.repeat(40),
           targetImage: 'localhost/psfn-framework:0.1.0-kube-aaaaaaaaaaaa',
-          helmRevision: 7,
-        },
+          },
       }),
     ]);
     expect(audit).toHaveBeenCalledWith(expect.objectContaining({
@@ -190,7 +188,6 @@ describe('KubeSelfManagementController', () => {
       decision: 'NEEDS_APPROVAL',
       sourceRevision: 'a'.repeat(40),
       targetImage: 'localhost/psfn-framework:0.1.0-kube-aaaaaaaaaaaa',
-      helmRevision: 7,
     }));
   });
 
@@ -227,7 +224,8 @@ describe('KubeSelfManagementController', () => {
         release: 'psfn',
         sourceRevision: 'a'.repeat(40),
         targetImage: 'localhost/psfn-framework:0.1.0-kube-aaaaaaaaaaaa',
-        helmRevision: 7,
+        // Only rollback carries a revision, and it means the TARGET to roll back to.
+        ...(action === 'rollback' ? { helmRevision: 8 } : {}),
         reason: 'Operator-visible context that must not enter audit records.',
       };
 
@@ -238,6 +236,16 @@ describe('KubeSelfManagementController', () => {
         enqueue: async (request, run) => queue.enqueue(request, run),
       },
     });
+
+    // psfn-framework-6187t: a non-rollback mutation carrying a revision is a
+    // malformed request, because no requester can know the live revision.
+    if (action !== 'validate' && action !== 'rollback') {
+      await expect(controller.invoke({
+        actor: 'c',
+        params: { ...params, helmRevision: 7 },
+        approvals: { enqueue: async (request, run) => queue.enqueue(request, run) },
+      })).rejects.toThrow(/Invalid Kubernetes self-management request/);
+    }
 
     expect(audit).toHaveBeenCalledWith(expect.objectContaining({
       phase: 'attempt',
@@ -251,7 +259,6 @@ describe('KubeSelfManagementController', () => {
         decision: 'NEEDS_APPROVAL',
         sourceRevision: 'a'.repeat(40),
         targetImage: 'localhost/psfn-framework:0.1.0-kube-aaaaaaaaaaaa',
-        helmRevision: 7,
       }),
     }));
     expect(JSON.stringify(audit.mock.calls)).not.toContain('Operator-visible context');
@@ -278,7 +285,6 @@ describe('KubeSelfManagementController', () => {
         release: 'psfn',
         sourceRevision: 'a'.repeat(40),
         targetImage: 'localhost/psfn-framework:0.1.0-kube-aaaaaaaaaaaa',
-        helmRevision: 8,
         reason: 'Deploy the reviewed image.',
       },
       approvals: {
@@ -295,7 +301,6 @@ describe('KubeSelfManagementController', () => {
         release: 'psfn',
         sourceRevision: 'a'.repeat(40),
         targetImage: 'localhost/psfn-framework:0.1.0-kube-bbbbbbbbbbbb',
-        helmRevision: 8,
       },
     }, GARDEN_OPERATOR);
 
@@ -334,7 +339,6 @@ describe('KubeSelfManagementController', () => {
         release: 'psfn',
         sourceRevision: 'a'.repeat(40),
         targetImage: 'localhost/psfn-framework:0.1.0-kube-aaaaaaaaaaaa',
-        helmRevision: 7,
         reason: 'Restart the reviewed release.',
       },
       approvals: {
@@ -371,7 +375,6 @@ describe('KubeSelfManagementController', () => {
       release: 'psfn',
       sourceRevision: 'a'.repeat(40),
       targetImage: 'localhost/psfn-framework:0.1.0-kube-aaaaaaaaaaaa',
-      helmRevision: 7,
       reason: 'Restart the reviewed release.',
     };
     await controller.invoke({
@@ -433,7 +436,6 @@ describe('KubeSelfManagementController', () => {
         release: 'psfn',
         sourceRevision: 'a'.repeat(40),
         targetImage: 'localhost/psfn-framework:0.1.0-kube-aaaaaaaaaaaa',
-        helmRevision: 7,
         reason: 'Restart the reviewed release.',
       },
       approvals: {

@@ -12,7 +12,15 @@ export interface KubernetesHelmBackupConfig {
   chartSourceDir: string;
   releaseName: string;
   namespace: string;
-  revision: number;
+  /**
+   * Helm revision live when the backup was captured, when the capturing process
+   * can know it. In-cluster it cannot: the pod env only ever carried the revision
+   * the pod was created at, which made this field wrong in exactly the long-lived
+   * deployments a recovery artifact is for (psfn-framework-6187t). Recovery does
+   * not need it — the descriptor bundles the chart and image pins and installs as
+   * a fresh release — so it is optional provenance, omitted rather than guessed.
+   */
+  revision?: number;
   chartName: string;
   chartVersion: string;
   appVersion: string;
@@ -163,7 +171,9 @@ export function validateKubernetesHelmBackupConfig(
   assertHelmMetadataToken(chartName, 'chart name');
   assertHelmMetadataToken(chartVersion, 'chart version');
   assertHelmMetadataToken(appVersion, 'app version');
-  if (!Number.isSafeInteger(config.revision) || config.revision < 1) {
+  // Optional, but never sloppy: a revision that is present must be a real one.
+  if (config.revision !== undefined
+    && (!Number.isSafeInteger(config.revision) || config.revision < 1)) {
     throw new Error('Kubernetes Helm backup revision must be a positive safe integer');
   }
   if (!isRecord(config.images)) {
@@ -173,7 +183,7 @@ export function validateKubernetesHelmBackupConfig(
     chartSourceDir: resolve(chartSourceDir),
     releaseName,
     namespace,
-    revision: config.revision,
+    ...(config.revision !== undefined ? { revision: config.revision } : {}),
     chartName,
     chartVersion,
     appVersion,
@@ -224,15 +234,6 @@ export function resolveKubernetesHelmBackupConfig(
   assertKubernetesDnsLabel(releaseName, 'release name', 53);
   assertKubernetesDnsLabel(namespace, 'namespace');
 
-  const revisionText = requiredEnv(env, 'PSFN_HELM_REVISION');
-  if (!/^[1-9][0-9]*$/.test(revisionText)) {
-    throw new Error('Kubernetes Helm backup PSFN_HELM_REVISION must be a positive integer');
-  }
-  const revision = Number(revisionText);
-  if (!Number.isSafeInteger(revision)) {
-    throw new Error('Kubernetes Helm backup PSFN_HELM_REVISION exceeds the safe integer range');
-  }
-
   const chartName = requiredEnv(env, 'PSFN_HELM_CHART_NAME');
   const chartVersion = requiredEnv(env, 'PSFN_HELM_CHART_VERSION');
   const appVersion = requiredEnv(env, 'PSFN_HELM_APP_VERSION');
@@ -240,11 +241,12 @@ export function resolveKubernetesHelmBackupConfig(
   assertHelmMetadataToken(chartName, 'chart name');
   assertHelmMetadataToken(chartVersion, 'chart version');
   assertHelmMetadataToken(appVersion, 'app version');
+  // No `revision`: the chart deliberately no longer injects one, because the
+  // only value it could inject was the revision this pod was created at.
   return validateKubernetesHelmBackupConfig({
     chartSourceDir,
     releaseName,
     namespace,
-    revision,
     chartName,
     chartVersion,
     appVersion,

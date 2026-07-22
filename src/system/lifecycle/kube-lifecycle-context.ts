@@ -17,12 +17,16 @@ import {
   isPinnedKubeImageReference,
 } from './kube-self-management.js';
 
+// The live Helm revision is deliberately NOT a fact here. It is a property of
+// the release, not of this process: a pod only ever knows the revision it was
+// created at, so freezing it at startup made it stale the moment the release
+// moved on (psfn-framework-6187t). Surfaces that need it read it live from the
+// gateway's diagnose report.
 export interface KubeLifecycleSelfManagementFacts {
   namespace: string;
   release: string;
   sourceRevision: string;
   targetImage: string;
-  helmRevision: number;
 }
 
 export type KubeLifecycleContext =
@@ -43,14 +47,6 @@ function parseSelfManagementEnabled(raw: string | undefined): boolean {
   if (value === '' || value === 'false') return false;
   if (value === 'true') return true;
   throw new Error('PSFN_KUBE_SELF_MANAGEMENT_ENABLED must be true or false.');
-}
-
-function parseHelmRevision(raw: string | undefined): number {
-  const revision = Number(normalize(raw));
-  if (!Number.isSafeInteger(revision) || revision <= 0) {
-    throw new Error('PSFN_HELM_REVISION must be a positive integer for Kubernetes self-management.');
-  }
-  return revision;
 }
 
 function runningUnderKubernetes(env: NodeJS.ProcessEnv): boolean {
@@ -93,7 +89,6 @@ export function resolveKubeLifecycleContext(
   const release = normalize(env.PSFN_HELM_RELEASE_NAME);
   const sourceRevision = normalize(env.PSFN_GIT_COMMIT);
   const targetImage = normalize(env.PSFN_KUBE_CURRENT_IMAGE);
-  const helmRevision = parseHelmRevision(env.PSFN_HELM_REVISION);
 
   if (!isKubeDnsLabel(namespace) || !isKubeDnsLabel(release)) {
     throw new Error(
@@ -115,7 +110,6 @@ export function resolveKubeLifecycleContext(
       release,
       sourceRevision,
       targetImage,
-      helmRevision,
     },
   };
 }

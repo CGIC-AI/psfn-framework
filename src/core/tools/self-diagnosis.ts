@@ -308,7 +308,6 @@ function resolveDeployment(
   repository: RepositoryState,
 ): Record<string, unknown> {
   const imageTag = deps.env.PSFN_IMAGE_TAG?.trim();
-  const helmRevision = deps.env.PSFN_HELM_REVISION?.trim();
   const envGitCommit = deps.env.PSFN_GIT_COMMIT?.trim();
   const snapshotCommit = repository.imageSnapshot.status === 'available'
     ? repository.imageSnapshot.commit
@@ -318,7 +317,9 @@ function resolveDeployment(
   return {
     status: 'available',
     imageTag: imageTag || unavailable('PSFN_IMAGE_TAG is not set in this deployment'),
-    helmRevision: helmRevision || unavailable('PSFN_HELM_REVISION is not set in this deployment'),
+    // No Helm revision here: it is a property of the release, not of this pod,
+    // and reading it needs the cluster (see the kube `diagnose` action). The env
+    // var that used to supply it was stale by construction (psfn-framework-6187t).
     gitCommit: gitCommit || unavailable('neither PSFN_GIT_COMMIT nor an image-snapshot commit is available'),
     gitCommitSource: envGitCommit ? 'env' : (snapshotCommit ? 'image-snapshot' : 'unknown'),
     fixesShipped: resolveFixesShipped(deps, exec, repository),

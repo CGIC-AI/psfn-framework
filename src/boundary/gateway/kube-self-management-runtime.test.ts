@@ -34,7 +34,6 @@ describe('resolveKubeSelfManagementController', () => {
         PSFN_HELM_NAMESPACE: 'psfn-test',
         PSFN_HELM_RELEASE_NAME: 'psfn',
         PSFN_KUBE_RESOURCE_PREFIX: 'psfn',
-        PSFN_HELM_REVISION: '7',
         PSFN_GIT_COMMIT: 'a'.repeat(40),
         PSFN_KUBE_CURRENT_IMAGE: 'localhost/psfn-framework:latest',
       },
@@ -47,7 +46,6 @@ describe('resolveKubeSelfManagementController', () => {
         PSFN_KUBE_SELF_MANAGEMENT_ENABLED: 'true',
         PSFN_HELM_NAMESPACE: 'psfn-test',
         PSFN_HELM_RELEASE_NAME: 'psfn',
-        PSFN_HELM_REVISION: '7',
         PSFN_GIT_COMMIT: 'a'.repeat(40),
         PSFN_KUBE_CURRENT_IMAGE: 'localhost/psfn-framework:0.1.0-kube-aaaaaaaaaaaa',
       },
@@ -79,7 +77,6 @@ describe('resolveKubeSelfManagementController', () => {
         PSFN_HELM_NAMESPACE: 'psfn-test',
         PSFN_HELM_RELEASE_NAME: 'psfn',
         PSFN_KUBE_RESOURCE_PREFIX: 'psfn-runtime',
-        PSFN_HELM_REVISION: '7',
         PSFN_GIT_COMMIT: 'a'.repeat(40),
         PSFN_KUBE_CURRENT_IMAGE: 'localhost/psfn-framework:0.1.0-kube-aaaaaaaaaaaa',
       },
@@ -139,7 +136,6 @@ describe('resolveKubeSelfManagementController', () => {
         PSFN_HELM_NAMESPACE: 'psfn-test',
         PSFN_HELM_RELEASE_NAME: 'psfn',
         PSFN_KUBE_RESOURCE_PREFIX: 'psfn-runtime',
-        PSFN_HELM_REVISION: '7',
         PSFN_GIT_COMMIT: 'a'.repeat(40),
         PSFN_KUBE_CURRENT_IMAGE: 'localhost/psfn-framework:0.1.0-kube-aaaaaaaaaaaa',
       },
@@ -157,7 +153,6 @@ describe('resolveKubeSelfManagementController', () => {
         release: 'psfn',
         sourceRevision: 'a'.repeat(40),
         targetImage: 'localhost/psfn-framework:0.1.0-kube-aaaaaaaaaaaa',
-        helmRevision: 7,
         reason: 'apply a hotfix',
       },
       approvals: { enqueue },
@@ -176,7 +171,6 @@ describe('resolveKubeSelfManagementController', () => {
       PSFN_HELM_NAMESPACE: 'psfn-test',
       PSFN_HELM_RELEASE_NAME: 'psfn',
       PSFN_KUBE_RESOURCE_PREFIX: 'psfn-runtime',
-      PSFN_HELM_REVISION: '7',
       PSFN_GIT_COMMIT: 'a'.repeat(40),
       PSFN_KUBE_CURRENT_IMAGE: 'localhost/psfn-framework:0.1.0-kube-aaaaaaaaaaaa',
     } as const;
@@ -225,7 +219,6 @@ describe('resolveKubeSelfManagementController', () => {
       PSFN_HELM_NAMESPACE: 'psfn-test',
       PSFN_HELM_RELEASE_NAME: 'psfn',
       PSFN_KUBE_RESOURCE_PREFIX: 'psfn-runtime',
-      PSFN_HELM_REVISION: '9',
       PSFN_GIT_COMMIT: 'a'.repeat(40),
       PSFN_KUBE_CURRENT_IMAGE: 'localhost/psfn-framework:0.1.0-kube-aaaaaaaaaaaa',
     } as const;
@@ -263,6 +256,7 @@ describe('resolveKubeSelfManagementController', () => {
             name, generation: 1, observedGeneration: 1,
             desiredReplicas: 1, readyReplicas: 1, updatedReplicas: 1, availableReplicas: 1,
           })),
+          currentRevision: vi.fn(async () => 9),
         },
       },
     });
@@ -280,5 +274,87 @@ describe('resolveKubeSelfManagementController', () => {
     expect(response).toEqual({ status: 'approval_required', approvalId: 'approval-r', expiresAt: 456 });
     expect(enqueue).toHaveBeenCalledTimes(1);
     expect(rollback).not.toHaveBeenCalled();
+  });
+
+  // ── psfn-framework-6187t ──
+
+  it('initialises with PSFN_HELM_REVISION absent, and never reads a stale one', async () => {
+    const listPods = vi.fn(async () => []);
+    const getDeployment = vi.fn(async (_namespace: string, name: string) => ({
+      name,
+      generation: 1,
+      observedGeneration: 1,
+      desiredReplicas: 1,
+      readyReplicas: 1,
+      updatedReplicas: 1,
+      availableReplicas: 1,
+    }));
+    // A pod left over from an older chart could still carry the variable. It must
+    // not come back to life as the reported revision.
+    const controller = resolveKubeSelfManagementController({
+      env: {
+        PSFN_KUBE_SELF_MANAGEMENT_ENABLED: 'true',
+        PSFN_HELM_NAMESPACE: 'psfn-test',
+        PSFN_HELM_RELEASE_NAME: 'psfn',
+        PSFN_KUBE_RESOURCE_PREFIX: 'psfn-runtime',
+        PSFN_HELM_REVISION: '3',
+        PSFN_GIT_COMMIT: 'a'.repeat(40),
+        PSFN_KUBE_CURRENT_IMAGE: 'localhost/psfn-framework:0.1.0-kube-aaaaaaaaaaaa',
+      },
+      lifecycleKubernetes,
+      audit: vi.fn(async () => 1),
+      createApi: () => ({ getDeployment, listPods }),
+      createRolloutApi: () => ({ getDeployment, restartDeployment: vi.fn() }),
+    });
+    expect(controller).toBeDefined();
+
+    const response = await controller?.invoke({
+      actor: 'companion',
+      params: { action: 'diagnose', namespace: 'psfn-test', release: 'psfn' },
+      approvals: { enqueue: vi.fn() },
+    });
+
+    expect(response?.status).toBe('completed');
+    if (response?.status !== 'completed') throw new Error('expected a completed diagnose');
+    expect(response.details?.helmRevision).toBeNull();
+    expect(response.details?.helmRevisionUnavailable).toEqual(expect.any(String));
+  });
+
+  it('resolves the live revision per diagnose when the Helm transport is composed', async () => {
+    const getDeployment = vi.fn(async (_ns: string, name: string) => ({
+      name,
+      generation: 1,
+      observedGeneration: 1,
+      desiredReplicas: 1,
+      readyReplicas: 1,
+      updatedReplicas: 1,
+      availableReplicas: 1,
+    }));
+    const currentRevision = vi.fn(async () => 42);
+    const controller = resolveKubeSelfManagementController({
+      env: {
+        PSFN_KUBE_SELF_MANAGEMENT_ENABLED: 'true',
+        PSFN_HELM_NAMESPACE: 'psfn-test',
+        PSFN_HELM_RELEASE_NAME: 'psfn',
+        PSFN_KUBE_RESOURCE_PREFIX: 'psfn-runtime',
+        PSFN_GIT_COMMIT: 'a'.repeat(40),
+        PSFN_KUBE_CURRENT_IMAGE: 'localhost/psfn-framework:0.1.0-kube-aaaaaaaaaaaa',
+      },
+      lifecycleKubernetes,
+      audit: vi.fn(async () => 1),
+      createApi: () => ({ getDeployment, listPods: vi.fn(async () => []) }),
+      createRolloutApi: () => ({ getDeployment, restartDeployment: vi.fn() }),
+      helmRollback: { api: { rollback: vi.fn(), getDeployment, currentRevision } },
+    });
+
+    const response = await controller?.invoke({
+      actor: 'companion',
+      params: { action: 'diagnose', namespace: 'psfn-test', release: 'psfn' },
+      approvals: { enqueue: vi.fn() },
+    });
+
+    if (response?.status !== 'completed') throw new Error('expected a completed diagnose');
+    expect(response.details?.helmRevision).toBe(42);
+    expect(currentRevision).toHaveBeenCalledWith('psfn-test', 'psfn');
   });
 });

@@ -17,7 +17,8 @@ export interface KubernetesHelmRecoveryDescriptor {
   release: {
     name: string;
     namespace: string;
-    revision: number;
+    /** Optional provenance; absent when the capturing process cannot know it. */
+    revision?: number;
   };
   chart: {
     name: string;
@@ -48,7 +49,7 @@ export function createKubernetesHelmRecoveryDescriptor(
     release: {
       name: config.releaseName,
       namespace: config.namespace,
-      revision: config.revision,
+      ...(config.revision !== undefined ? { revision: config.revision } : {}),
     },
     chart: {
       name: config.chartName,
@@ -87,13 +88,18 @@ export function readKubernetesHelmRecoveryDescriptorFile(
   if (!isRecord(parsed.release) || !isRecord(parsed.chart) || !isRecord(parsed.images) || !isRecord(parsed.exclusions)) {
     throw new Error(`Invalid Kubernetes Helm recovery descriptor: ${descriptorPath}`);
   }
-  assertExactKeys(parsed.release, ['name', 'namespace', 'revision'], 'release');
+  assertExactKeys(
+    parsed.release,
+    ['name', 'namespace', ...(parsed.release.revision !== undefined ? ['revision'] : [])],
+    'release',
+  );
   assertExactKeys(parsed.chart, ['name', 'version', 'appVersion', 'path', 'contentSha256'], 'chart');
   assertExactKeys(parsed.images, ['agent', 'gateway', 'garden'], 'images');
   assertExactKeys(parsed.exclusions, ['liveHelmValues', 'kubernetesSecrets'], 'exclusions');
 
   const releaseRevision = parsed.release.revision;
-  if (!Number.isSafeInteger(releaseRevision) || (releaseRevision as number) < 1) {
+  if (releaseRevision !== undefined
+    && (!Number.isSafeInteger(releaseRevision) || (releaseRevision as number) < 1)) {
     throw new Error('Invalid Kubernetes Helm recovery release.revision');
   }
   if (
@@ -142,7 +148,7 @@ export function readKubernetesHelmRecoveryDescriptorFile(
     release: {
       name: releaseName,
       namespace,
-      revision: releaseRevision as number,
+      ...(releaseRevision !== undefined ? { revision: releaseRevision as number } : {}),
     },
     chart: {
       name: chartName,

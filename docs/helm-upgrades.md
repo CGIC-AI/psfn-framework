@@ -43,7 +43,7 @@ tracked; check the bead before assuming current behaviour.
 | Bead | Defect | Operational consequence |
 |---|---|---|
 | `q8xy1` | `ship:kube` hardcoded `deploy/psfn-agent`; a fleet renders `psfn-agent-<companionId>` | Ship dies at the rollout wait **after** `helm upgrade` already succeeded, so the validation gate never runs. Also silently dropped `previousGitCommit` (see below). |
-| `6187t` | `_helpers.tpl` bakes `.Release.Revision` into gateway/agent pod env as `PSFN_HELM_REVISION` | Every helm operation changes the pod template hash and restarts the companion — including `--components emosim`, which ships only the sidecar image. A sidecar cannot currently be updated without bouncing core. The value is also stale by construction and feeds rollback targeting. |
+| `6187t` — **FIXED** | `_helpers.tpl` baked `.Release.Revision` into gateway/agent pod env as `PSFN_HELM_REVISION` | Every helm operation changed the pod template hash and restarted the companion — including `--components emosim`, which ships only the sidecar image. The variable is gone from every pod template; see "Helm revision is never in a pod" below. |
 | `zu0g5` | Gate aborts at `gateway models` on a U+FFFD decode of the testing-harness key | The key gates every later check, so provider routing, pgvector, Redis, zero-bookkeeping-rows and the two-turn continuity smoke are **skipped silently**. "4/5, known issue" hides real coverage loss. |
 | `vcyxv` | Gateway logs fleet-auth consistent backups "enabled" but has no `/runtime/backups` mount and runs as uid 999 | Every cycle dies on EACCES; the 6h in-memory scheduler with `skipFirstRun` never fires in a pod that lives under 6h. No artifact and no error. (The host NAS `pg_dump` lane is separately healthy.) |
 | `3u2en` | Chart does not own four live hand-patches | They survive a helm v4 SSA upgrade only because helm never owned those fields; they vanish on `--force`, `rollback`, or delete/recreate. |
@@ -58,6 +58,36 @@ kubectl -n <ns> get deploy <agent-deploy> -o jsonpath=\
 '{range .spec.template.spec.containers[0].env[*]}{.name}={.value}{"\n"}{end}' \
   | grep -E 'PSFN_IMAGE_TAG|PSFN_GIT_COMMIT|PSFN_PREVIOUS_GIT_COMMIT'
 ```
+
+## Helm revision is never in a pod
+
+Every value in a pod template must be **stable across helm operations**.
+`.Release.Revision` is not: it increments on every install, upgrade and
+rollback. While it was rendered into the shared app env as
+`PSFN_HELM_REVISION`, each `helm upgrade` rewrote the gateway and agent pod
+templates and force-restarted the companion — even an upgrade that touched
+neither, such as `ship:kube --components emosim`, which ships only the separate
+`psfn-emosim` sidecar image. It was wrong as well as disruptive: a pod that does
+not restart keeps reporting the revision it was created at.
+
+Do not reintroduce it, and apply the same rule to anything else that changes per
+operation. `PSFN_HELM_RELEASE_NAME`, `PSFN_HELM_NAMESPACE`, `PSFN_IMAGE_TAG` and
+the `PSFN_HELM_CHART_*` values are all stable and stay. `verify:helm-chart`
+enforces the absence for the agent, gateway and Garden Deployments.
+
+The live revision is resolved on demand instead, from Helm's own release
+history, by the operator job that holds the Helm credentials
+(`currentDeployedRevision` in `src/app/operator/kube-self-update-transport.ts`,
+behind `KubeHelmRevisionResolver`). Consequences worth knowing:
+
+- Rollback targeting reads the current revision live and refuses to act if it
+  cannot — and refuses any target that is not strictly earlier than it.
+- The kube `diagnose` action reports the revision only where that Helm transport
+  is composed. Elsewhere it reports `helmRevision: null` plus a
+  `helmRevisionUnavailable` reason, rather than a number it cannot vouch for.
+- The Kubernetes Helm backup descriptor's `release.revision` is now optional and
+  is omitted in-cluster. Recovery does not need it: the descriptor bundles the
+  chart and image pins and installs as a fresh release.
 
 ## Required end-to-end procedure
 

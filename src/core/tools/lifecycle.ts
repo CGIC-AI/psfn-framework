@@ -491,7 +491,6 @@ async function buildKubeLifecycleStatusText(kube: KubeLifecycleToolRuntime): Pro
   const lines = [
     'Deployment mode: kubernetes (guarded self-management enabled).',
     `Image: ${selfManagement.targetImage}`,
-    `Helm revision: ${selfManagement.helmRevision}`,
     `Source revision: ${selfManagement.sourceRevision}`,
   ];
   try {
@@ -501,6 +500,15 @@ async function buildKubeLifecycleStatusText(kube: KubeLifecycleToolRuntime): Pro
       release: selfManagement.release,
     });
     if (diagnose.status === 'completed' && diagnose.details) {
+      // The Helm revision comes from the live diagnose report, never from this
+      // pod's own environment — the pod knows only the revision it started at
+      // (psfn-framework-6187t).
+      const details = diagnose.details as { helmRevision?: unknown; helmRevisionUnavailable?: unknown };
+      if (typeof details.helmRevision === 'number') {
+        lines.push(`Helm revision: ${details.helmRevision}`);
+      } else if (typeof details.helmRevisionUnavailable === 'string') {
+        lines.push(`Helm revision: unavailable (${details.helmRevisionUnavailable})`);
+      }
       const rawDeployments = (diagnose.details as { deployments?: unknown }).deployments;
       const deployments = Array.isArray(rawDeployments)
         ? rawDeployments.map(projectDeploymentReadiness).filter((d): d is KubeDeploymentReadiness => d !== null)
@@ -579,7 +587,6 @@ async function executeKubeRestartAction(
       release: selfManagement.release,
       sourceRevision: selfManagement.sourceRevision,
       targetImage: selfManagement.targetImage,
-      helmRevision: selfManagement.helmRevision,
       reason,
     });
   } catch (err) {

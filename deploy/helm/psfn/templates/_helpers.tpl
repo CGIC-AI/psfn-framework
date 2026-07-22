@@ -620,7 +620,15 @@ group: cert-manager.io
 - name: BEADS_ALLOW_ACTIONS
   value: {{ join "," .Values.beads.allowActions | quote }}
 {{- end }}
-{{- /* Deployment provenance for companion self-diagnosis (self_status diagnose). */}}
+{{- /* Deployment provenance for companion self-diagnosis (self_status diagnose).
+       Every value here must be STABLE across helm operations. `.Release.Revision`
+       is not (it increments on every operation by definition), so it is
+       deliberately absent: baking it in changed the pod template hash on every
+       upgrade and force-restarted the companion even when the upgrade shipped
+       only a sidecar image (psfn-framework-6187t). It was also stale by
+       construction — a pod that does not restart keeps reporting the revision it
+       was created at. The live revision is resolved on demand from Helm's own
+       release history instead (src/system/lifecycle/kube-helm-revision.ts). */}}
 - name: PSFN_KUBERNETES_BACKUP_ENABLED
   value: "true"
 - name: PSFN_HELM_CHART_DIR
@@ -631,8 +639,6 @@ group: cert-manager.io
   value: {{ .Release.Namespace | quote }}
 - name: PSFN_IMAGE_TAG
   value: {{ .Values.psfnAppImage.tag | quote }}
-- name: PSFN_HELM_REVISION
-  value: {{ .Release.Revision | quote }}
 - name: PSFN_HELM_CHART_NAME
   value: {{ .Chart.Name | quote }}
 - name: PSFN_HELM_CHART_VERSION

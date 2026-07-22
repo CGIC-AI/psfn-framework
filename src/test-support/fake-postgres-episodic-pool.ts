@@ -376,11 +376,17 @@ export class FakeEpisodicPool {
 
     if (normalized.startsWith('select id from l01_episodes where thread_id =')) {
       // apq0 atomic thread union: the losing thread's live members, capped.
+      // The `id = any` variant restricts to specific members (legacy
+      // extraction) — mirrors the store's optional $3 filter.
       const threadId = String(values[0] ?? '');
       const limit = Number(values[1] ?? this.episodes.size);
+      const memberIds = normalized.includes('and id = any')
+        ? new Set(Array.isArray(values[2]) ? values[2].map(String) : [])
+        : null;
       const rows = [...this.episodes.values()]
         .filter(isActiveEpisode)
         .filter(row => row.thread_id === threadId)
+        .filter(row => memberIds === null || memberIds.has(row.id))
         .sort((left, right) => (
           left.started_at.localeCompare(right.started_at)
           || left.id.localeCompare(right.id)

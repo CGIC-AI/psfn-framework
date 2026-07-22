@@ -119,6 +119,13 @@ export interface RepointThreadMembersInput {
    * rewrite.
    */
   maxEpisodes: number;
+  /**
+   * Restrict the re-point to these specific live members of the losing thread
+   * (apq0 legacy extraction: pull ONE episode out of a pre-apq0 session-keyed
+   * mega-thread without touching the rest of the bucket). Omitted => every
+   * live member of the losing thread moves. An empty array is rejected.
+   */
+  memberEpisodeIds?: readonly string[];
 }
 
 export interface RepointThreadMembersResult {

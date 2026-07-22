@@ -114,6 +114,7 @@ import {
   createPostgresModelUsageStoreFromConfig,
   type PostgresModelUsageStore,
 } from '../../persistence/postgres/model-usage-store.js';
+import { resolveConfigTenantPoolScope } from '../../persistence/postgres/tenant-pool-scope.js';
 import type { ModelUsageQueryPort } from '../../shared/telemetry/model-usage.js';
 import {
   createToolConformanceRunner,
@@ -266,6 +267,7 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
   const observerEvalSidecar = createObserverEvalSidecarRuntimeFromConfig(config, {
     postgresDatabaseUrl,
     eventBus,
+    tenant: resolveConfigTenantPoolScope(config),
   });
   const sessionComposition = await composeSessionRuntimeAsync({
     config,
@@ -405,6 +407,11 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
   let cachedModelUsageStore: PostgresModelUsageStore | null | undefined;
   const getModelUsageQuery = (): ModelUsageQueryPort | null => {
     if (cachedModelUsageStore === undefined) {
+      // NOT tenant-pinned on purpose: `model_usage_events` is a fleet-wide
+      // ledger written by the gateway and aggregated across companions by the
+      // fleet Garden (psfn-framework-stmof). Pinning this reader to the
+      // companion schema would fork it away from the writer and silently read
+      // an empty per-tenant table.
       cachedModelUsageStore = createPostgresModelUsageStoreFromConfig({
         persistenceBackend: config.persistenceBackend,
         postgresDatabaseUrl,

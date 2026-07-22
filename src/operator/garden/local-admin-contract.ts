@@ -65,6 +65,10 @@ import { FatigueLedger } from '../../shared/telemetry/fatigue-ledger.js';
 import { HumanAttentionPressureLedger } from '../../core/agent/fatigue/human-attention-ledger.js';
 import type { ChannelGroupMemoryConfig } from '../../system/config/group-memory-config.js';
 import { createPostgresModelUsageStoreFromConfig } from '../../persistence/postgres/model-usage-store.js';
+import {
+  resolveConfigTenantPoolScope,
+  type TenantPoolScope,
+} from '../../persistence/postgres/tenant-pool-scope.js';
 import { createPostgresAnalysisWorkbenchTraceStoreFromConfig } from '../../persistence/postgres/analysis-workbench-trace-store.js';
 import { createPostgresObserverEvalSidecarStore } from '../../core/eval/observer-sidecar/persistence.js';
 import { createOwnerFileConfigStore } from '../../system/config/config-store.js';
@@ -272,6 +276,11 @@ export function createInProcessGardenAdminContract(
   const fatigueLedger = new FatigueLedger(resolveFatigueLedgerPath(companionDataDir), options.eventBus);
   const humanAttentionLedger = options.humanAttentionLedger
     ?? new HumanAttentionPressureLedger(resolveHumanAttentionLedgerPath(companionDataDir));
+  // NOT tenant-pinned on purpose: `model_usage_events` is a fleet-wide ledger
+  // written by the gateway and aggregated across companions by the fleet
+  // Garden (psfn-framework-stmof). Pinning this reader to the companion schema
+  // would fork it away from the writer and silently read an empty per-tenant
+  // table.
   const modelUsageStore = createPostgresModelUsageStoreFromConfig(options.config);
   const auditOpaqueIdKeyring = requireAuditOpaqueIdKeyring(
     options.config.gatewaySessionIntegrityAuthToken,
@@ -281,6 +290,8 @@ export function createInProcessGardenAdminContract(
     : null;
   // vb11: durable analysis-workbench trace ring, bounded to the same 50-entry
   // window the in-memory dashboard ring uses, so traces survive a restart.
+  // The trace-store factory resolves the tenant schema/role from config itself
+  // (psfn-framework-stmof), so it needs no scope threaded from here.
   const analysisWorkbenchTraceStore = createPostgresAnalysisWorkbenchTraceStoreFromConfig(
     options.config,
     50,
@@ -537,6 +548,9 @@ export function createInProcessGardenAdminContract(
     observerEvalSidecar: createObserverEvalSidecarAdminService({
       config: options.config,
       runtime: options.observerEvalSidecar ?? null,
+      // Agent process: this Garden serves exactly one companion, so its sidecar
+      // pool must stay inside that companion's tenant boundary.
+      tenant: resolveConfigTenantPoolScope(options.config),
     }),
     actionPipe: options.postTurnActions
       ? new AdminActionPipeDataService(options.postTurnActions, options.outreachOutbox ?? null)
@@ -739,6 +753,14 @@ export function createInProcessGardenAdminContract(
 export function createObserverEvalSidecarAdminService(input: {
   config: SubstrateConfig;
   runtime?: ObserverEvalSidecarRuntime | null;
+  /**
+   * Tenant boundary for the sidecar's own pool. The sidecar tables are
+   * companion-local, so the agent's in-process Garden pins its companion
+   * schema/role here (psfn-framework-cc3v7). The fleet Garden operator process
+   * serves every companion from one config and carries no per-companion role,
+   * so it passes nothing and stays on the pre-existing unscoped pool.
+   */
+  tenant?: TenantPoolScope;
 }): AdminObserverEvalSidecarService {
   const settings = input.config.observerEvalSidecar ?? createDefaultObserverEvalSidecarSettings();
 
@@ -747,7 +769,7 @@ export function createObserverEvalSidecarAdminService(input: {
     && settings.garden.exposeTelemetry
     && input.config.persistenceBackend === 'postgres'
     && postgresDatabaseUrl
-    ? createPostgresObserverEvalSidecarStore(postgresDatabaseUrl)
+    ? createPostgresObserverEvalSidecarStore(postgresDatabaseUrl, {}, input.tenant)
     : null;
 
   return new AdminObserverEvalSidecarDataService({

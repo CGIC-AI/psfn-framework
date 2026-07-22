@@ -11,7 +11,6 @@
   import ActionPipeQueue from './ActionPipeQueue.svelte';
   import ActionPipePersistence from './ActionPipePersistence.svelte';
   import ActionPipeOutreach from './ActionPipeOutreach.svelte';
-  import ActionPipeTaskLifecycle from './ActionPipeTaskLifecycle.svelte';
   import ActionPipeHistory from './ActionPipeHistory.svelte';
   import ActionPipeSubagents from './ActionPipeSubagents.svelte';
 
@@ -40,7 +39,6 @@
   let recentTerminals = $derived(status?.terminal.recentTerminals ?? []);
   let recentCompletions = $derived(status?.completions.recentCompletions ?? []);
   let outreachRecords = $derived(status?.outreachOutbox?.recentRecords ?? []);
-  let taskLifecycleNotifications = $derived(status?.taskLifecycleNotifications ?? []);
   let subagentOutcomes = $derived.by(() => recentCompletions.filter((entry) => Boolean(entry.subagentSpawn)));
   let historyPanels = $derived.by(() => [
     { title: 'Failures', records: recentFailures as HistoryRecord[], empty: 'No recent failures.' },
@@ -146,7 +144,6 @@
       onAcknowledge={(action) => void acknowledgeAction(action)}
     />
     <ActionPipePersistence {status} />
-    <ActionPipeTaskLifecycle notifications={taskLifecycleNotifications} />
     <ActionPipeOutreach records={outreachRecords} />
     <ActionPipeHistory panels={historyPanels} />
     <ActionPipeSubagents outcomes={subagentOutcomes} />

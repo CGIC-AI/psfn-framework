@@ -47,7 +47,7 @@ function sendNotFound(response: ServerResponse): void {
 }
 
 function sendUnavailable(response: ServerResponse): void {
-  const body = Buffer.from('Fleet Garden unavailable', 'utf8');
+  const body = Buffer.from('Cluster Garden unavailable', 'utf8');
   response.writeHead(503, {
     ...baseHeaders('text/plain; charset=utf-8', body.byteLength),
     'Cache-Control': 'no-store',

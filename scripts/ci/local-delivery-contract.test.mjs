@@ -224,7 +224,12 @@ test('delivery-only gate stays fast while product changes retain full validation
     '--skip-js=4,7',
     'src/system/config/load-config.ts',
   ]);
-  assert.deepEqual(plan.find(({ name }) => name === 'tests').args, ['test', '--', '--maxWorkers=4']);
+  assert.deepEqual(plan.find(({ name }) => name === 'tests').args, [
+    'test',
+    '--',
+    '--maxWorkers=8',
+    '--bail=1',
+  ]);
   assert.equal(plan.find(({ name }) => name === 'tests').skip, false);
 
   const deletionPlan = buildGatePlan({
@@ -271,21 +276,22 @@ test('local gate writes one exact-head attestation and reuses it without rerunni
   const { cwd, base } = makeGateRepository();
   const executed = [];
   const execute = async (gate) => executed.push(gate.name);
+  const heavyLock = { lockDir: makeLockDir() };
 
-  const first = await runLocalGate({ cwd, baseRef: base, execute });
+  const first = await runLocalGate({ cwd, baseRef: base, execute, heavyLock });
   assert.equal(first.head, git(cwd, 'rev-parse', 'HEAD'));
   assert.equal(first.base, base);
   assert.ok(executed.includes('tests'));
   const firstCount = executed.length;
 
-  const second = await runLocalGate({ cwd, baseRef: base, execute });
+  const second = await runLocalGate({ cwd, baseRef: base, execute, heavyLock });
   assert.deepEqual(second, first);
   assert.equal(executed.length, firstCount);
 
   writeFileSync(join(cwd, 'src/next.ts'), 'export const next = true;\n');
   git(cwd, 'add', 'src/next.ts');
   git(cwd, 'commit', '--quiet', '-m', 'next');
-  const third = await runLocalGate({ cwd, baseRef: base, execute });
+  const third = await runLocalGate({ cwd, baseRef: base, execute, heavyLock });
   assert.notEqual(third.head, first.head);
   assert.ok(executed.length > firstCount);
 });
@@ -297,13 +303,13 @@ test('a stage record is reusable only for the exact head, base, gate version, an
     head: HEAD,
     base: BASE,
     name: 'tests',
-    command: 'npm test -- --maxWorkers=4',
+    command: 'npm test -- --maxWorkers=8 --bail=1',
   };
   const context = {
     head: HEAD,
     base: BASE,
     gateVersion: GATE_VERSION,
-    command: 'npm test -- --maxWorkers=4',
+    command: 'npm test -- --maxWorkers=8 --bail=1',
   };
   assert.equal(isStageReusable(record, context), true);
   assert.equal(isStageReusable(record, { ...context, head: `0${HEAD.slice(1)}` }), false);

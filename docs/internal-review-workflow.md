@@ -56,11 +56,11 @@ npm run gate:pre-pr
 
 The sequential gate always owns delivery rules and budgets, changed-file lint,
 Semgrep diff scanning, and changed-file UBS 5.3.5. Full root lint, build,
-baselined typecheck, repository hygiene, and product tests capped at four
-workers run only for root runtime/build-graph or root lockfile changes. UI and
-deployment changes use their focused checks instead of the backend/Postgres
-suite; Semgrep rule tests and changed-workflow actionlint/zizmor run only when
-their own files change.
+baselined typecheck, repository hygiene, and product tests capped at eight
+workers with fail-fast enabled run only for root runtime/build-graph or root
+lockfile changes. UI and deployment changes use their focused checks instead
+of the backend/Postgres suite; Semgrep rule tests and changed-workflow
+actionlint/zizmor run only when their own files change.
 
 It refuses dirty, detached, `main`, empty, or non-rebased delivery. Attestation
 and logs live under the worktree Git directory in `local-delivery-gate/`, never in

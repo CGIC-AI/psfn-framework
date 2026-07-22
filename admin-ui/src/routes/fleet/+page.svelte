@@ -45,7 +45,7 @@
       if (request.signal.aborted || controller !== request) return;
       errorMessage = error instanceof Error
         ? error.message
-        : 'Fleet status is temporarily unavailable';
+        : 'Cluster status is temporarily unavailable';
     } finally {
       if (controller === request) loading = false;
     }
@@ -92,7 +92,7 @@
 </script>
 
 <svelte:head>
-  <title>Fleet · Garden</title>
+  <title>Cluster · Garden</title>
 </svelte:head>
 
 <div class="min-h-screen bg-bark-100 px-4 py-8 sm:px-6 lg:px-8">
@@ -103,7 +103,7 @@
           Garden control plane
         </p>
         <h1 class="mt-2 font-serif text-3xl font-semibold text-shadow-900">
-          Authorized fleet
+          Authorized cluster
         </h1>
         <p class="mt-2 max-w-2xl text-sm text-shadow-600">
           Choose a companion to open their server-authorized Garden. This view
@@ -127,7 +127,7 @@
       </section>
     {:else if errorMessage}
       <section class="card-garden border-wilt-200 p-8" role="alert">
-        <h2 class="font-serif text-xl font-semibold text-shadow-900">Fleet view unavailable</h2>
+        <h2 class="font-serif text-xl font-semibold text-shadow-900">Cluster view unavailable</h2>
         <p class="mt-2 text-sm text-shadow-600">{errorMessage}</p>
         <button
           type="button"

@@ -75,14 +75,14 @@
   }
 
   function companionCostPath(companionId: string): string {
-    if (!data) throw new Error('Fleet cost links require loaded deployment scope');
+    if (!data) throw new Error('Cluster cost links require loaded deployment scope');
     return buildFleetCompanionCostPath(companionId, appliedState, data.deployment);
   }
 </script>
 
 {#if errorMessage}
   <section class="card-garden border-l-4 border-l-wilt-400 p-5" role="alert">
-    <h2 class="font-serif text-lg font-semibold text-shadow-900">Fleet costs unavailable</h2>
+    <h2 class="font-serif text-lg font-semibold text-shadow-900">Cluster costs unavailable</h2>
     <p class="mt-1 text-sm text-wilt-700">{errorMessage}</p>
     <button
       type="button"
@@ -92,12 +92,12 @@
   </section>
 {:else if loading}
   <section class="card-garden p-8" aria-busy="true" aria-live="polite">
-    <p class="text-sm text-shadow-600">Loading fleet model usage…</p>
+    <p class="text-sm text-shadow-600">Loading cluster model usage…</p>
   </section>
 {:else if data}
   {#if !data.coverage.complete}
     <section class="rounded-xl border border-gold-300 bg-gold-50 p-4" role="status">
-      <p class="text-sm font-medium text-shadow-800">Partial fleet totals</p>
+      <p class="text-sm font-medium text-shadow-800">Partial cluster totals</p>
       <p class="mt-1 text-sm text-shadow-600">
         {data.coverage.unavailable} companion{data.coverage.unavailable === 1 ? ' is' : 's are'} unavailable.
         Their usage is excluded from the headline totals and they remain listed below.
@@ -110,7 +110,7 @@
     <TokenCompositionChart buckets={[...data.timeSeries]} timezone={data.resolvedRange.timezone} />
   {:else}
     <section class="card-garden p-8">
-      <h2 class="font-serif text-lg font-semibold text-shadow-900">No fleet totals available</h2>
+      <h2 class="font-serif text-lg font-semibold text-shadow-900">No cluster totals available</h2>
       <p class="mt-1 text-sm text-shadow-600">Every registered companion is currently unavailable.</p>
     </section>
   {/if}
@@ -119,7 +119,7 @@
     <div class="border-b border-bark-300 px-5 py-4">
       <h2 id="fleet-leaderboard-heading" class="font-serif text-lg font-semibold text-shadow-900">Companion leaderboard</h2>
       <p class="mt-1 text-sm text-shadow-600">
-        Rows use operator-visible usage. Fleet spend share uses the privacy-preserving headline total as its denominator.
+        Rows use operator-visible usage. Cluster spend share uses the privacy-preserving headline total as its denominator.
       </p>
     </div>
     <div class="overflow-x-auto">
@@ -143,7 +143,7 @@
               <button type="button" onclick={() => toggleSort('effectiveCostUsd')}>Effective cost{sortIndicator('effectiveCostUsd')}</button>
             </th>
             <th scope="col" class="px-4 py-3 text-right" aria-sort={ariaSort('spendShare')}>
-              <button type="button" onclick={() => toggleSort('spendShare')}>Fleet spend{sortIndicator('spendShare')}</button>
+              <button type="button" onclick={() => toggleSort('spendShare')}>Cluster spend{sortIndicator('spendShare')}</button>
             </th>
           </tr>
         </thead>

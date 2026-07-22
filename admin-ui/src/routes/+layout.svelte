@@ -141,7 +141,7 @@
     } catch (error) {
       if (controller.signal.aborted || fleetProjectionController !== controller) return;
       fleetProjection = null;
-      fleetProjectionError = error instanceof Error ? error.message : 'Fleet roster unavailable';
+      fleetProjectionError = error instanceof Error ? error.message : 'Cluster roster unavailable';
     }
   }
 
@@ -223,14 +223,14 @@
         if (!csrfResponse.ok
           || typeof csrf.csrfToken !== 'string'
           || !/^[A-Za-z0-9_-]{43}$/u.test(csrf.csrfToken)) {
-          throw new Error('Fleet logout ceremony unavailable');
+          throw new Error('Cluster logout ceremony unavailable');
         }
         const logoutResponse = await fetch('/v1/fleet-auth/logout', {
           method: 'POST',
           credentials: 'include',
           headers: { 'X-PSFN-CSRF': csrf.csrfToken },
         });
-        if (!logoutResponse.ok) throw new Error('Fleet logout failed');
+        if (!logoutResponse.ok) throw new Error('Cluster logout failed');
         clearToken();
         window.location.assign('/fleet/login');
         return;
@@ -421,7 +421,7 @@
             href="/fleet"
             class="mt-3 inline-flex w-full items-center justify-center rounded-lg border border-gold-300 bg-gold-50 px-3 py-2 text-sm font-semibold text-gold-800 transition-colors hover:border-gold-400 hover:bg-gold-100"
           >
-            Fleet Overview
+            Cluster Overview
           </a>
           {#if fleetProjectionError}
             <p class="mt-1 text-[0.68rem] text-wilt-600">{fleetProjectionError}</p>

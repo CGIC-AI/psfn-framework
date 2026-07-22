@@ -170,7 +170,7 @@
       || parsed.hash
       || parsed.username
       || parsed.password) {
-      throw new Error('Fleet Garden chat endpoint is invalid');
+      throw new Error('Cluster Garden chat endpoint is invalid');
     }
     return '/v1/chat/completions';
   }

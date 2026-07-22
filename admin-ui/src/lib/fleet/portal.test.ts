@@ -188,7 +188,7 @@ describe('Garden fleet portal client', () => {
     vi.stubGlobal('window', { location });
     vi.stubGlobal('fetch', vi.fn(async () => new Response('{}', { status: 401 })));
 
-    await expect(fetchFleetPortalProjection()).rejects.toThrow('Fleet session expired');
+    await expect(fetchFleetPortalProjection()).rejects.toThrow('Cluster session expired');
     expect(location.assign).toHaveBeenCalledWith('/fleet/login');
   });
 
@@ -332,11 +332,11 @@ describe('Garden fleet portal client', () => {
       'getAuthorizedFleetModelUsage(',
       'request.signal',
       'controller?.abort()',
-      'Private usage contributes to fleet',
+      'Private usage contributes to cluster',
     ]) {
       expect(usagePanel).toContain(required);
     }
-    expect(costResults).toContain('Fleet costs unavailable');
+    expect(costResults).toContain('Cluster costs unavailable');
     expect(costResults).toContain('privacy-preserving headline total');
     expect(costResults).toContain('{@const rowSpendShare = spendShare(row)}');
     expect(costResults).toContain(
@@ -347,8 +347,8 @@ describe('Garden fleet portal client', () => {
       '<span class="text-shadow-600">{companionLabel(row)}</span>',
     );
     for (const required of [
-      'Loading authorized fleet usage…',
-      'Fleet usage unavailable',
+      'Loading authorized cluster usage…',
+      'Cluster usage unavailable',
       'fetchFleetModelUsageProjection({',
       "range: 'today'",
       'projection.combined.totalTokens',
@@ -358,6 +358,6 @@ describe('Garden fleet portal client', () => {
       expect(usageSummary).toContain(required);
     }
     expect(legacyCostRoute).toContain('href="/fleet#fleet-costs"');
-    expect(legacyCostRoute).toContain('Fleet costs moved');
+    expect(legacyCostRoute).toContain('Cluster costs moved');
   });
 });

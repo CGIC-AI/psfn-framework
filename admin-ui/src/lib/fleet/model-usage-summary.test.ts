@@ -105,7 +105,7 @@ describe('fleet model-usage summary client', () => {
   it('renders unavailable rather than manufacturing zeroes on transport failure', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response(null, { status: 503 })));
     await expect(fetchFleetModelUsageProjection()).rejects.toThrow(
-      'Fleet usage is temporarily unavailable',
+      'Cluster usage is temporarily unavailable',
     );
   });
 

@@ -93,7 +93,7 @@
 
   function requireAuthorizedGardenPath(): string {
     if (!authorizedGardenPath) {
-      throw new Error('No authorized companion Garden is available for fleet costs');
+      throw new Error('No authorized companion Garden is available for cluster costs');
     }
     return authorizedGardenPath;
   }
@@ -123,7 +123,7 @@
       if (request.signal.aborted || generation !== loadGeneration) return;
       errorMessage = error instanceof Error
         ? error.message
-        : 'Fleet cost telemetry is temporarily unavailable.';
+        : 'Cluster cost telemetry is temporarily unavailable.';
     } finally {
       if (controller === request) controller = null;
       if (generation === loadGeneration) {
@@ -174,20 +174,20 @@
 </script>
 
 <svelte:head>
-  <title>{mode === 'fleet' ? 'Fleet Usage · Garden' : 'Fleet Costs · Garden'}</title>
+  <title>{mode === 'fleet' ? 'Cluster Usage · Garden' : 'Cluster Costs · Garden'}</title>
 </svelte:head>
 
 <div id={mode === 'fleet' ? 'fleet-costs' : undefined} class="space-y-6 {mode === 'fleet' ? 'pt-10' : 'p-4 sm:p-6 lg:p-8'}">
   <header class="flex flex-wrap items-end justify-between gap-4">
     <div>
-      <p class="text-xs font-semibold uppercase tracking-[0.2em] text-gold-700">Fleet accounting</p>
+      <p class="text-xs font-semibold uppercase tracking-[0.2em] text-gold-700">Cluster accounting</p>
       {#if mode === 'fleet'}
-        <h2 class="mt-1 font-serif text-3xl font-semibold text-shadow-900">Fleet costs</h2>
+        <h2 class="mt-1 font-serif text-3xl font-semibold text-shadow-900">Cluster costs</h2>
       {:else}
-        <h1 class="mt-1 font-serif text-3xl font-semibold text-shadow-900">Fleet Costs</h1>
+        <h1 class="mt-1 font-serif text-3xl font-semibold text-shadow-900">Cluster Costs</h1>
       {/if}
       <p class="mt-2 max-w-3xl text-sm text-shadow-600">
-        Aggregated model usage across every registered companion. Private usage contributes to fleet
+        Aggregated model usage across every registered companion. Private usage contributes to cluster
         headline totals only; companion rows contain operator-visible usage.
       </p>
     </div>
@@ -213,7 +213,7 @@
       <p class="mt-1 text-sm text-shadow-600">All companions use the same resolved calendar window and bucket boundaries.</p>
     </div>
     <div class="space-y-4 p-5">
-      <div class="flex flex-wrap gap-2" aria-label="Fleet cost range">
+      <div class="flex flex-wrap gap-2" aria-label="Cluster cost range">
         {#each FLEET_COST_RANGE_OPTIONS as option (option.value)}
           <button
             type="button"

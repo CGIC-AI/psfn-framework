@@ -81,7 +81,7 @@ export const SETTINGS_SIMPLE_SECTIONS = [
   },
   {
     id: 'advanced-fleet-auth',
-    title: 'Fleet Authentication',
+    title: 'Cluster Authentication',
     description: 'Read-only effective and canonical owner state',
     groupId: 'trust',
   },

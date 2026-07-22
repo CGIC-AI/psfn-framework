@@ -384,7 +384,11 @@ describe('SleeptimeMemoryAgent', () => {
 
   it('rejects a fabricated benign memory write with no grounding, even at high confidence (1gpol)', async () => {
     const reviewAgent = makeReviewAgent(JSON.stringify({
-      orient: { persona: '', human: '', goals: '' },
+      orient: {
+        persona: 'Focused on careful gateway debugging.',
+        human: 'We debugged the gateway all evening.',
+        goals: 'Continue the gateway debugging work carefully.',
+      },
       memory_writes: [{
         text: 'Purrsephone adopted a pet iguana named Sparkles last spring.',
         type: 'semantic',
@@ -454,7 +458,11 @@ describe('SleeptimeMemoryAgent', () => {
 
   it('routes an omitted-confidence high-impact write to review instead of storing it settled (1gpol)', async () => {
     const reviewAgent = makeReviewAgent(JSON.stringify({
-      orient: { persona: '', human: '', goals: '' },
+      orient: {
+        persona: 'Focused on careful gateway debugging.',
+        human: 'Partner felt anxious about the gateway outage tonight.',
+        goals: 'Continue debugging the gateway outage carefully.',
+      },
       memory_writes: [{
         text: 'Partner said the gateway outage made them feel anxious tonight.',
         type: 'emotional',
@@ -491,7 +499,14 @@ describe('SleeptimeMemoryAgent', () => {
   });
 
   it('gives the review context the day episodes and retries once on an unusable reply (1gpol)', async () => {
-    const plan = JSON.stringify({ orient: { persona: '', human: '', goals: '' }, memory_writes: [] });
+    const plan = JSON.stringify({
+      orient: {
+        persona: 'Focused on the gateway debugging marathon.',
+        human: 'We finally traced the flaky handshake.',
+        goals: 'Continue the gateway debugging work.',
+      },
+      memory_writes: [],
+    });
     const handleMessage = vi.fn()
       .mockResolvedValueOnce({ content: 'a quiet prose reply, no JSON' })
       .mockResolvedValueOnce({ content: plan });

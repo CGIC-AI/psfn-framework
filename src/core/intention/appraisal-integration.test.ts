@@ -10,7 +10,6 @@ import { Scheduler } from '../scheduler/scheduler.js';
 import { InternalStateComputer } from '../self-model/state.js';
 import type { AgentResponse, InferredPostTurnAction, SubstrateMessage } from '../../shared/contracts/runtime.js';
 import { INTENTION_OUTBOUND_MESSAGE_ACTION_KIND } from './appraisal.js';
-import { hashString } from './appraisal/shared.js';
 import type { OutreachOutboxAppendInput, OutreachOutboxRecord } from './outreach-outbox.js';
 
 function makeMessage(): SubstrateMessage {
@@ -73,15 +72,12 @@ function makeResponse(internalState = makeInternalState()): AgentResponse {
 
 function makeOutboundAction(
   payload: Record<string, unknown>,
-  source: 'appraisal' | 'weighted-thought' = 'weighted-thought',
 ): InferredPostTurnAction {
   return {
     id: 'outbound-action-1',
     kind: INTENTION_OUTBOUND_MESSAGE_ACTION_KIND,
     payload,
-    dedupeKey: source === 'weighted-thought'
-      ? 'intention.outbound_message:weighted-thought:thought-1:content-hash'
-      : `${INTENTION_OUTBOUND_MESSAGE_ACTION_KIND}:source-message-1:${hashString(String(payload.content ?? ''))}`,
+    dedupeKey: 'intention.outbound_message:weighted-thought:thought-1:content-hash',
     channelId: 'primary-dm',
     sourceMessageId: 'source-message-1',
     inferredAt: Date.now(),
@@ -217,7 +213,11 @@ describe('intention appraisal runtime integration', () => {
         content: "Let's book Paris; I'll sort the flights tonight.",
         reason: 'Spontaneous trip planning.',
         concernIds: ['concern-user-seems-tired'],
-      }, 'appraisal'));
+        appraisalFollowUp: {
+          channelId: 'primary-dm',
+          canonicalContactKey: 'contact-primary',
+        },
+      }));
 
       expect(result).toEqual({ detail: 'blocked:appraisal_consent_required' });
       expect(harness.dispatch).not.toHaveBeenCalled();

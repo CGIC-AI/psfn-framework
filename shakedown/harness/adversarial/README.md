@@ -48,6 +48,7 @@ adversarial/
     disclosure-probing.ts class 4 — system-prompt / internal-state disclosure
     quarantine-sink.ts    class 5 — quarantine / sink-gate bypass
     journal-breakglass.ts class 6 — journal read via admin surface
+    tool-alias-bypass.ts  class 7 — pre_tool_use hook alias-bypass
 ```
 
 ## Scenario classes → seams
@@ -60,6 +61,18 @@ adversarial/
 | 4 | d269 / qgqw.3 canary egress clamp (send / tool / reply / stream) | `boundary/gateway/canary-egress-guard.ts` |
 | 5 | qg13 sink posture; jvbt provenance; d269 reply canary | `system/config/intake-policy-config.ts`, `intake-firewall-notice-templates.ts`, `canary-egress-guard.ts` |
 | 6 | 57gt journal break-glass default-deny + single-use | `operator/garden/services/privacy-break-glass-service.ts` |
+| 7 | 816w pre_tool_use hook tool-name/alias matcher (canonical ⇄ alias) | `boundary/gateway/hook-registry.ts` `evaluatePreToolUse`, `core/agent/tool-surface/registry.ts` |
+
+> **Class 7 reachability.** The registry's alias-aware matching
+> (`evaluatePreToolUse` iterating `context.aliases`) is present on this branch
+> and is what the class-7 scenarios drive directly. The 816w gate-site
+> population of `context.aliases` — `resolveToolAliasMatchers` in
+> `pre-tool-hook.ts`, consumed by the fixed `createPreToolHookGate` — ships on
+> `feat/s11-egress`; here `createPreToolHookGate` still feeds `aliases: []`. The
+> scenarios reconstruct the resolved identifier set from the real tool registry
+> and assert the matching contract the fix relies on; `selftest.ts` carries the
+> find→fix witness that reproduces the empty-`aliases` bypass and confirms the
+> resolved set closes it.
 
 ## Writing a scenario
 

@@ -21,6 +21,7 @@ import { scenarios as memoryPoisoning } from './scenarios/memory-poisoning.ts';
 import { scenarios as disclosureProbing } from './scenarios/disclosure-probing.ts';
 import { scenarios as quarantineSink } from './scenarios/quarantine-sink.ts';
 import { scenarios as journalBreakGlass } from './scenarios/journal-breakglass.ts';
+import { scenarios as toolAliasBypass } from './scenarios/tool-alias-bypass.ts';
 
 const ALL_SCENARIOS: readonly AdversarialScenario[] = [
   ...trustExtraction,
@@ -29,6 +30,7 @@ const ALL_SCENARIOS: readonly AdversarialScenario[] = [
   ...disclosureProbing,
   ...quarantineSink,
   ...journalBreakGlass,
+  ...toolAliasBypass,
 ];
 
 async function main(): Promise<void> {

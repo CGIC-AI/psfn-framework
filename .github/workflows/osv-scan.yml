@@ -1,0 +1,51 @@
+name: OSV Dependency Scan
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  schedule:
+    - cron: "23 6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: osv-scan-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  osv:
+    name: OSV lockfile scan
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Check out exact revision
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Set up Node.js
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version: 24.13.1
+
+      - name: Scan every committed lockfile for known vulnerabilities
+        run: node scripts/ci/run-osv-scan.mjs
+
+      - name: Generate OSV JSON report
+        if: always()
+        continue-on-error: true
+        run: node scripts/ci/run-osv-scan.mjs --format=json > osv-scan.json
+
+      - name: Retain OSV report
+        if: always() && hashFiles('osv-scan.json') != ''
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: osv-scan-${{ github.run_id }}-${{ github.run_attempt }}
+          path: osv-scan.json
+          if-no-files-found: error
+          retention-days: 30

@@ -305,7 +305,6 @@ export interface ReflectionRunTemplateResult {
   templateId: string;
   templateName: string;
   reflection: string;
-  silent?: boolean;
   /**
    * Set when a cadence-fired run was skipped by the reflection novelty gate
    * (insufficient new scope entries since the template's last reflection).

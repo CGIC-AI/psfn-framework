@@ -519,23 +519,6 @@
     }
   }
 
-  async function toggleReflectionDiscord(tpl: ReflectionTemplate) {
-    saving = `reflection-discord:${tpl.id}`;
-    try {
-      const result = await updateReflectionTemplate(tpl.id, { sendToDiscord: !tpl.sendToDiscord });
-      if (result.ok) {
-        showFeedback('ok', result.message);
-        await loadData();
-      } else {
-        showFeedback('error', result.message);
-      }
-    } catch (e) {
-      showFeedback('error', e instanceof Error ? e.message : 'Failed to toggle Discord setting');
-    } finally {
-      saving = null;
-    }
-  }
-
   async function toggleReflectionEnabled(tpl: ReflectionTemplate) {
     saving = `reflection-enabled:${tpl.id}`;
     try {
@@ -1062,7 +1045,7 @@
       <div class="card-garden overflow-hidden">
         <div class="px-4 py-3 border-b border-bark-200 bg-bark-50">
           <h2 class="font-serif font-semibold text-shadow-800">Reflection Templates</h2>
-          <p class="text-xs text-shadow-600 mt-0.5">Reflection templates. Edit prompts and Discord visibility. Scheduling is managed in Scheduled Tasks.</p>
+          <p class="text-xs text-shadow-600 mt-0.5">Reflection templates. Edit prompts. Scheduling is managed in Scheduled Tasks.</p>
         </div>
 
         <div class="divide-y divide-bark-100">
@@ -1118,21 +1101,6 @@
                     title={isReflectionEnabled(tpl) ? 'Disable reflection template' : 'Enable reflection template'}
                   >
                     {isReflectionEnabled(tpl) ? 'Disable' : 'Enable'}
-                  </button>
-                  <!-- Send to Discord toggle -->
-                  <button
-                    onclick={() => toggleReflectionDiscord(tpl)}
-                    disabled={saving === `reflection-discord:${tpl.id}`}
-                    class="flex items-center gap-1 text-xs px-2 py-1 rounded border transition-colors font-medium disabled:opacity-50
-                           {tpl.sendToDiscord
-                             ? 'border-petal-300 bg-petal-50 text-petal-600'
-                             : 'border-bark-300 bg-bark-50 text-shadow-600'}"
-                    title={tpl.sendToDiscord ? 'Sends to Discord' : 'Internal only'}
-                  >
-                    <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                      <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
-                    </svg>
-                    {tpl.sendToDiscord ? 'Discord' : 'Silent'}
                   </button>
                 </div>
               </div>

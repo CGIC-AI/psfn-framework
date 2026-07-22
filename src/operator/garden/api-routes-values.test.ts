@@ -94,7 +94,6 @@ describe('values reflection journal admin API routes', () => {
       templateName: 'Weekly Review',
       executionSource: 'scheduled',
       channelId: 'discord:heartbeat',
-      sendToDiscordEffective: false,
       mode: 'deliberation',
       prompt: 'Review this week.',
       reflection: 'A realistic metacognition reflection entry.',

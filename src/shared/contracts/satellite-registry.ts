@@ -47,6 +47,10 @@ export const SATELLITE_TELEMETRY_SCOPES = [
   'approvals',
   'artifacts',
   'tool_activity',
+  // Redacted emotion snapshot relay scope (7ang.1). Emotion data crossing the
+  // relay is a privacy surface; a satellite receives `emotion.snapshot` frames
+  // only when its endpoint explicitly grants this scope.
+  'emotion',
 ] as const;
 
 export type SatelliteTelemetryScope = typeof SATELLITE_TELEMETRY_SCOPES[number];

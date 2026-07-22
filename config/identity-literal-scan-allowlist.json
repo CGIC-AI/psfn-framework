@@ -277,6 +277,12 @@
       "pattern": "identity-legacy-slug"
     },
     {
+      "path": "scripts/ci/run-trivy-scan.mjs",
+      "contains": "psfn",
+      "reason": "The Trivy wrapper renders and scans the repository-owned PSFN Helm chart, whose checked-in chart path and generated output identifiers use the stable project slug.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
       "path": "scripts/verify-kubernetes-helm-recovery-chart.ts",
       "contains": "deploy/helm/psfn",
       "reason": "Recovery-chart verification targets the repo-owned Helm chart directory.",

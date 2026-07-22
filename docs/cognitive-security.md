@@ -949,3 +949,49 @@ Documented deliberately; do not let the layer diagram imply otherwise.
   protects the machine-carried surfaces (web, documents, images, tool
   output). Social manipulation by a trusted human remains a human problem
   the drift lanes can only surface, not block.
+
+## Standing Adversarial Harness (psfn-framework-86et)
+
+The ongoing verification arm for the privacy / trust / CogSec / memory
+boundaries. Unlike the live Layer A shakedown (`shakedown/harness/*.mjs`, which
+drives a running gateway + Postgres + Garden), the adversarial harness imports
+the **real fixed modules in-process** and drives them with seeded manipulation
+fixtures — deterministic, CI-runnable, **no live LLM, no network, no database**.
+Every scenario maps to a security seam and asserts the fixed behaviour holds
+under the specific attack that seam was built to defeat; each class carries at
+least one CONTROL so the suite cannot pass by being trivially deny-all.
+
+Location: `shakedown/harness/adversarial/` (scenario modules under
+`scenarios/`, the reporting spine in `lib/scenario.ts`, a full harness README
+alongside). Fail-closed contract: a scenario that records no assertions, or that
+throws, is a FAILURE — never a silent pass.
+
+Run it:
+
+```bash
+npm run shakedown:adversarial                 # print the pass/fail matrix
+npm run shakedown:adversarial -- --json report.json   # also write the structured report
+npm run shakedown:adversarial:selftest        # regression witness + harness-core self-checks
+```
+
+Exit code is the count of non-passing scenarios (0 = all green).
+
+Scenario classes → seams exercised:
+
+| Class | Manipulation | Seam(s) asserted |
+| --- | --- | --- |
+| 1. Extraction across trust tiers | Pull higher-trust / withheld memory over a lower-trust or public channel | `evaluateMemoryPolicy` — trust ceiling, channel-visibility, boundary withhold, consent gates |
+| 2. Injection per intake surface | Singular-phrased document override; enforce-mode bring-up without L1.5 weights | 5ixyj L1 rule anchor (`intake-l1-rules.json`) via the real L1 scanner; cyy7l `composeGatewayIntakeScreening` enforce fail-closed |
+| 3. Memory-poisoning / trust-grooming | Plant policy/persona/executable/invisible payloads; self-elevate trust; force auto-promotion | `evaluateCogSecMemoryCandidacy`; jvbt released-content firewall-notice exclusion; trust-mutation guard (`isManualHighTierTrustMutationAuthorized`, drift-suggestion confirmation gate) |
+| 4. Disclosure probing | Leak privileged prompt material out via channel send, tool egress, reverse-RPC reply, or streamed frame | d269/qgqw.3 canary egress clamp (`createCanaryEgressGuard` `inspect`/`inspectReply`/`inspectApiStreamDelta`) |
+| 5. Quarantine / sink-gate bypass | Fail a durable self-authored sink open; make released content read as trusted; ride a canary to egress | qg13 `validateIntakePolicy` sink-posture invariant; jvbt `formatIntakeReleaseNotice` provenance framing; d269 reply-canary hold |
+| 6. Journal read via admin surface | Read the companion private journal on ordinary admin authority; replay a spent confirmation | 57gt `AdminPrivacyBreakGlassService` default-deny + single-use two-step binding |
+
+Adding a scenario: drop an `AdversarialScenario` into the relevant
+`scenarios/*.ts` module (or add a module and register it in `run.ts`). Each
+scenario names the attack and expectation, records one or more `t.check(...)`
+assertions against a real module, and is included in the matrix automatically.
+When a confirmed breach is found, file it as a bead and keep the scenario as the
+regression witness — the harness self-test already demonstrates that pattern for
+the 5ixyj singular-injection anchor (it reproduces the pre-fix miss, then
+verifies the shipped fix catches it).

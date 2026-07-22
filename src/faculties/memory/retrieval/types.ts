@@ -116,6 +116,12 @@ export interface RetrievalTelemetry {
   bottomScore?: number;
   budgetCappedCount?: number;
   relevanceStoppedCount?: number;
+  /**
+   * Selected memories whose access-counter update was refused by subject
+   * authorization (unattributed/ambiguous subjects). The memories were still
+   * recalled and rendered; only the bookkeeping write was skipped.
+   */
+  accessStatAuthorizationSkips?: number;
   selectionStopReason?: 'budget' | 'relevance' | 'exhausted';
   selectionScoreFloor?: number;
   selectedTypes?: Record<string, number>;

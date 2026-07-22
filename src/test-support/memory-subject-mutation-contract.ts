@@ -80,7 +80,7 @@ export function describeMemorySubjectMutationContract(
           authorization: authorization(),
           memoryIds,
           updates: { sensitivity: 'confidential' },
-        })).rejects.toThrow(new Error('Memory subject authorization denied'));
+        })).rejects.toThrow('Memory subject authorization denied');
         expect((await store.getById('a-authorized'))?.sensitivity).toBe('public');
         expect((await store.getById('z-other-subject'))?.sensitivity).toBe('personal');
       });
@@ -113,7 +113,7 @@ export function describeMemorySubjectMutationContract(
           }),
           memoryIds: ['a-authorized', 'z-stale-binding'],
           updates: { sensitivity: 'confidential' },
-        })).rejects.toThrow(new Error('Memory subject authorization denied'));
+        })).rejects.toThrow('Memory subject authorization denied');
         expect((await store.getById('a-authorized'))?.sensitivity).toBe('public');
         expect((await store.getById('z-stale-binding'))?.sensitivity).toBe('personal');
       });

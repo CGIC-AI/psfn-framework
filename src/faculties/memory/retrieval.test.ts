@@ -7,6 +7,7 @@ import {
 import type { MemoryStorePort, MemorySubjectAuthorizedQuery } from './memory-store-port.js';
 import type { LLMProviderPort } from '../../core/agent/contracts.js';
 import type { EmbeddingProviderPort } from '../../shared/contracts/embedding-provider.js';
+import { MemorySubjectAuthorizationDeniedError } from '../../shared/contracts/memory-subject.js';
 import type { PurrMemory } from './types.js';
 import type { SensitivityLevel } from '../../system/trust/types.js';
 import type { ConsentFlags } from '../../system/trust/types.js';
@@ -2153,6 +2154,39 @@ describe('MemoryRetriever basic behavior', () => {
     expect(calls[0][1]).toMatchObject({
       reason: 'error',
       channelId: 'api:test',
+    });
+  });
+
+  it('keeps the retrieval result when an access stat write is refused by subject authorization', async () => {
+    // Regression (psfn-framework-ib98o): a companion with many `unattributed`
+    // memories had its ENTIRE active memory context discarded because the
+    // bookkeeping access-counter write was refused for those subjects. The
+    // memories are recalled and rendered; only the counter write is skipped.
+    const memories = [
+      makeMemory({
+        id: 'unattributed-retrieval-memory',
+        text: 'Recallable but unattributed memory',
+        sensitivity: 'public',
+        similarity: 0.95,
+      }),
+    ];
+    const store = makeMockStore(memories);
+    (store.updateMemory as ReturnType<typeof vi.fn>).mockImplementation(() => {
+      throw new MemorySubjectAuthorizationDeniedError();
+    });
+    const embedding = makeMockEmbedding();
+    const eventBus = makeMockEventBus();
+    const retriever = new MemoryRetriever(store, embedding, { retrievalLimit: 20 }, eventBus);
+
+    const result = await retriever.retrieve('remember this', 'api:test', 'primary');
+    expect(result).toBeTruthy();
+    expect(JSON.stringify(result)).toContain('Recallable but unattributed memory');
+
+    const calls = ((eventBus.emit as unknown) as ReturnType<typeof vi.fn>).mock.calls;
+    expect(calls[0][0]).toBe('memory.retrieval');
+    expect(calls[0][1]).toMatchObject({
+      reason: 'ok',
+      accessStatAuthorizationSkips: 1,
     });
   });
 

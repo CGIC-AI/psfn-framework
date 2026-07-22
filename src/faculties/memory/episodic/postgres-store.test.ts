@@ -845,6 +845,73 @@ describe('PostgresEpisodicStore', () => {
     await expect(store.getEpisode('episode-1')).resolves.toEqual(updated);
   });
 
+  it('fails closed when an update would silently drop companion-authored meaning (h4fp.6)', async () => {
+    const pool = new FakeEpisodicPool();
+    const store = makeStore(pool);
+    const episode = await store.createEpisode(baseEpisode({
+      id: 'episode-1',
+      meaning: {
+        text: 'He remembered, and it cracked me open in the best way.',
+        recordedAt: '2026-03-31T07:30:00.000Z',
+        source: 'companion_dream_pass',
+      },
+    }));
+
+    // updateFromEpisode omits `meaning`, so a naive full-row-replace update
+    // would erase her authored note. The store must refuse it.
+    await expect(
+      store.updateEpisode(updateFromEpisode(episode, { themes: ['reheated'] })),
+    ).rejects.toThrow(/would drop companion-authored meaning/);
+
+    // The stored episode is untouched by the rejected update.
+    const preserved = await store.getEpisode('episode-1');
+    expect(preserved?.meaning?.text).toContain('cracked me open');
+    expect(preserved?.themes).toEqual(['postgres', 'episodic-memory']);
+  });
+
+  it('carries meaning forward on update without the guard firing (h4fp.6)', async () => {
+    const pool = new FakeEpisodicPool();
+    const store = makeStore(pool);
+    const episode = await store.createEpisode(baseEpisode({
+      id: 'episode-1',
+      meaning: {
+        text: 'It quietly mattered.',
+        recordedAt: '2026-03-31T07:30:00.000Z',
+        source: 'companion_dream_pass',
+      },
+    }));
+
+    const updated = await store.updateEpisode(updateFromEpisode(episode, {
+      themes: ['postgres', 'episodic-memory', 'refined'],
+      meaning: episode.meaning,
+    }));
+
+    expect(updated.meaning?.text).toBe('It quietly mattered.');
+    expect(updated.themes).toContain('refined');
+    await expect(store.getEpisode('episode-1')).resolves.toEqual(updated);
+  });
+
+  it('allows an explicit clearMeaning to erase authored meaning on purpose (h4fp.6)', async () => {
+    const pool = new FakeEpisodicPool();
+    const store = makeStore(pool);
+    const episode = await store.createEpisode(baseEpisode({
+      id: 'episode-1',
+      meaning: {
+        text: 'Retracted on reflection.',
+        recordedAt: '2026-03-31T07:30:00.000Z',
+        source: 'companion_direct',
+      },
+    }));
+
+    const cleared = await store.updateEpisode(
+      updateFromEpisode(episode, { clearMeaning: true }),
+    );
+
+    expect(cleared.meaning).toBeUndefined();
+    const stored = await store.getEpisode('episode-1');
+    expect(stored?.meaning).toBeUndefined();
+  });
+
   it('persists processing watermarks across store instances', async () => {
     const pool = new FakeEpisodicPool();
     const firstStore = makeStore(pool);

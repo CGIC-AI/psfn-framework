@@ -156,7 +156,7 @@ function mergeStringSets(left: readonly string[], right: readonly string[]): str
  * is preferred, falling back to the candidate's. These are machine retrieval
  * hints, never the companion's felt affect.
  */
-function mergeMachineSignals(
+export function mergeMachineSignals(
   canonical: EpisodeMachineSignals | undefined,
   candidate: EpisodeMachineSignals | undefined,
 ): EpisodeMachineSignals {
@@ -212,6 +212,15 @@ export function mergeEpisodeWithCandidate(
     },
     ...(canonical.machineSignals || candidate.machineSignals
       ? { machineSignals: mergeMachineSignals(canonical.machineSignals, candidate.machineSignals) }
+      : {}),
+    // Carry the companion's authored felt-meaning forward (bead h4fp.6):
+    // updateEpisode is a full-row replace, so omitting `meaning` here would
+    // silently erase a dream-pass note when a later candidate merges in. The
+    // canonical (surviving) episode's meaning wins on a tie — HER authored
+    // content on the survivor is never dropped; the candidate's is adopted only
+    // when the survivor has none so no authored meaning is lost either way.
+    ...((canonical.meaning ?? candidate.meaning)
+      ? { meaning: canonical.meaning ?? candidate.meaning }
       : {}),
     themes: mergeStringSets(canonical.themes, candidate.themes),
     spanRefs: mergeByKey(canonical.spanRefs, candidate.spanRefs, ref => ref.spanId),

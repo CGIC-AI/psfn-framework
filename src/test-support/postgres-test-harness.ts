@@ -1,9 +1,10 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
+import { fileURLToPath } from 'node:url';
 import { isMainThread } from 'node:worker_threads';
 import type { Pool } from 'pg';
 import {
@@ -20,6 +21,31 @@ const POSTGRES_DATABASE = 'postgres';
 const POSTGRES_PORT = 5432;
 const TEST_POSTGRES_LABEL = 'io.local-gate.test-postgres';
 const TEST_POSTGRES_IMAGE_LABEL = 'io.local-gate.test-postgres.image';
+// Crash-safe ownership labels. These keys MUST stay identical to the reader in
+// scripts/ci/reap-test-postgres.mjs, which reaps containers whose owner PID is
+// provably dead (killed/SIGKILLed run) while never touching a live owner's
+// container (psfn-framework-ijtak.7).
+const OWNER_PID_LABEL = 'psfn.gate.owner-pid';
+const OWNER_START_LABEL = 'psfn.gate.owner-start';
+const OWNER_BOOT_LABEL = 'psfn.gate.owner-boot-id';
+const CREATED_AT_LABEL = 'psfn.gate.created-at';
+// PGDATA path for the official Postgres (alpine) and pgvector (bookworm) images;
+// both inherit the upstream Postgres entrypoint and default.
+const POSTGRES_TMPFS_PGDATA_PATH = '/var/lib/postgresql/data';
+// tmpfs ceiling for a worker's ephemeral cluster. The heaviest suite creates
+// dozens of throwaway databases; 1 GiB of RAM-backed storage is ample and bounds
+// a runaway. Sized in bytes for docker's `--tmpfs ...:size=`.
+const POSTGRES_TMPFS_SIZE_BYTES = 1024 * 1024 * 1024;
+// Absolute path to the standalone reaper, resolved from this module's location
+// so it works whether tests run from source (tsx/vitest) or a checkout copy.
+const TEST_POSTGRES_REAPER_PATH = join(
+  dirname(fileURLToPath(import.meta.url)),
+  '..',
+  '..',
+  'scripts',
+  'ci',
+  'reap-test-postgres.mjs',
+);
 const READY_RETRY_LIMIT = 120;
 const READY_RETRY_DELAY_MS = 500;
 const MAX_DATABASES_FOR_IN_PLACE_RESET = 16;
@@ -104,6 +130,69 @@ function runDocker(args: string[]): string {
   return result.stdout;
 }
 
+// The owning process for a run's containers. In Vitest's forked-pool workers
+// `isMainThread` is true and the shared owner is the Vitest main (ppid); this
+// matches the scope used to name the container, so every worker of one run
+// records the same live owner. The owner stays alive for the whole run and is
+// provably dead once the run exits, which is exactly what the reaper checks.
+function currentOwnerPid(): number {
+  return isMainThread ? process.ppid : process.pid;
+}
+
+// Field 22 of /proc/<pid>/stat (start-time in clock ticks since boot). Paired
+// with the PID it defeats PID recycling. The comm field can contain spaces and
+// parens, so parse from the last ')'. Returns '' when unreadable.
+function readPidStartTime(pid: number): string {
+  if (!Number.isInteger(pid) || pid <= 0) return '';
+  let raw: string;
+  try {
+    raw = readFileSync(`/proc/${pid}/stat`, 'utf8');
+  } catch {
+    return '';
+  }
+  const rparen = raw.lastIndexOf(')');
+  if (rparen < 0) return '';
+  const fields = raw.slice(rparen + 1).trim().split(/\s+/);
+  return fields[19] ?? '';
+}
+
+// Host boot id; changes on every reboot so a container from a prior boot can
+// never be mistaken for one owned by a live same-numbered PID. '' when
+// unreadable (non-Linux/restricted); the reaper then relies on PID liveness.
+function readBootId(): string {
+  try {
+    return readFileSync('/proc/sys/kernel/random/boot_id', 'utf8').trim();
+  } catch {
+    return '';
+  }
+}
+
+// Best-effort startup sweep: reap any orphaned `local-gate-test-postgres-*`
+// container whose owner is provably dead before this run creates its own. Runs
+// the standalone reaper as a child so the src/scripts import boundary is never
+// crossed. Never throws — a broken docker CLI surfaces as the harness's normal
+// container-start failure below, not as a sweep crash (psfn-framework-ijtak.7).
+let sweptOrphanedTestPostgresContainers = false;
+function sweepOrphanedTestPostgresContainersOnce(): void {
+  if (sweptOrphanedTestPostgresContainers) return;
+  sweptOrphanedTestPostgresContainers = true;
+  try {
+    const result = spawnSync(process.execPath, [TEST_POSTGRES_REAPER_PATH], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'ignore', 'inherit'],
+    });
+    if (result.error) {
+      process.stderr.write(
+        `[test-postgres-reap] startup sweep skipped: ${result.error.message}\n`,
+      );
+    }
+  } catch (error) {
+    process.stderr.write(
+      `[test-postgres-reap] startup sweep skipped: ${error instanceof Error ? error.message : String(error)}\n`,
+    );
+  }
+}
+
 export function postgresTestContainerScope({
   vitestPoolId = process.env.VITEST_POOL_ID?.trim(),
   invocationProcessId = isMainThread ? process.ppid : process.pid,
@@ -157,6 +246,7 @@ function ensurePersistentPostgresContainer(image: string): string {
   const name = postgresTestContainerNameForImage(image);
   let container = inspectPersistentPostgresContainer(name);
   if (!container) {
+    const ownerPid = currentOwnerPid();
     const createArgs = [
       'run',
       '-d',
@@ -166,6 +256,22 @@ function ensurePersistentPostgresContainer(image: string): string {
       `${TEST_POSTGRES_LABEL}=true`,
       '--label',
       `${TEST_POSTGRES_IMAGE_LABEL}=${image}`,
+      // Crash-safe ownership: the reaper removes this container only once this
+      // PID (with this start-time, on this boot) is provably gone.
+      '--label',
+      `${OWNER_PID_LABEL}=${ownerPid}`,
+      '--label',
+      `${OWNER_START_LABEL}=${readPidStartTime(ownerPid)}`,
+      '--label',
+      `${OWNER_BOOT_LABEL}=${readBootId()}`,
+      '--label',
+      `${CREATED_AT_LABEL}=${new Date().toISOString()}`,
+      // RAM-back PGDATA and drop durability. These clusters are throwaway; the
+      // disk I/O of leaked containers was part of what drove machine load past
+      // 300. If the kernel cannot mount the tmpfs, `docker run` fails and we
+      // throw below — never a silent fall back to disk.
+      '--tmpfs',
+      `${POSTGRES_TMPFS_PGDATA_PATH}:rw,size=${POSTGRES_TMPFS_SIZE_BYTES}`,
       '-e',
       `POSTGRES_USER=${POSTGRES_USER}`,
       '-e',
@@ -175,6 +281,14 @@ function ensurePersistentPostgresContainer(image: string): string {
       '-p',
       `127.0.0.1::${POSTGRES_PORT}`,
       image,
+      // Ephemeral-test durability flags (the upstream entrypoint prepends
+      // `postgres` because these start with `-`).
+      '-c',
+      'fsync=off',
+      '-c',
+      'synchronous_commit=off',
+      '-c',
+      'full_page_writes=off',
     ];
     const createResult = runDockerCommand(createArgs);
     container = inspectPersistentPostgresContainer(name);
@@ -395,6 +509,10 @@ function resolveDatabaseUrl(adminDatabaseUrl: string, databaseName: string): str
 
 export async function startPostgresTestHarness(options: PostgresTestHarnessOptions = {}): Promise<PostgresTestHarness> {
   const image = options.image?.trim() || PGVECTOR_POSTGRES_TEST_IMAGE;
+  // Reap dead-owner orphans (killed/SIGKILLed prior runs) before spinning up
+  // this run's container, so a machine with pre-existing orphans is cleaned at
+  // the first harness startup. Once per process; never touches live owners.
+  sweepOrphanedTestPostgresContainersOnce();
   const containerName = ensurePersistentPostgresContainer(image);
 
   const mapping = runDocker(['port', containerName, `${POSTGRES_PORT}/tcp`]);

@@ -29,6 +29,7 @@ import {
   partitionGatePlan,
   validateAttestation,
 } from './local-delivery-contract.mjs';
+import { sweepTestPostgresContainers } from './reap-test-postgres.mjs';
 
 function git(args, cwd, options = {}) {
   return execFileSync('git', args, {
@@ -519,6 +520,21 @@ export async function runHeavyPhase({ heavy, state, runGate, needsRun, lockConfi
   if (active.length === 0) {
     for (const gate of heavy) await runGate(gate);
     return;
+  }
+  // Before any real-Postgres suite runs, reap dead-owner test containers that a
+  // killed/SIGKILLed prior run leaked, so pre-existing orphans never pile onto
+  // this machine's heavy phase. Best-effort: a docker failure is logged, never
+  // fatal — the suite's own container start fails loudly if docker is broken
+  // (psfn-framework-ijtak.7).
+  try {
+    const { reaped } = sweepTestPostgresContainers();
+    if (reaped.length > 0) {
+      console.log(`heavy-phase: reaped ${reaped.length} orphaned test-postgres container(s)`);
+    }
+  } catch (error) {
+    console.error(
+      `heavy-phase: test-postgres reap skipped: ${error instanceof Error ? error.message : String(error)}`,
+    );
   }
   const meta = buildHeavyLockMeta(state, active, lockConfig);
   await withHeavyPhaseLock({ ...lockConfig, meta }, async () => {

@@ -712,9 +712,22 @@ on first use unless you pre-populate the PVC or enable `modelPrefetch`.
 
 `modelPrefetch.enabled=false` by default. Set it to `true` to render a
 one-shot `model-prefetch` Job that uses the PSFN app image, mounts the
-model-cache PVC at `/app/models/transformers`, and downloads the text-emotion
-model `SamLowe/roberta-base-go_emotions-onnx` before restricted-egress agent
-startup relies on the cache.
+model-cache PVC at `/app/models/transformers`, and populates it before
+restricted-egress agent/gateway startup relies on the cache. It requires
+`persistence.modelCache.enabled=true` (the chart fails render otherwise). The
+Job provisions:
+
+- `modelPrefetch.textEmotion.enabled` (default `true`): the text-emotion model
+  `SamLowe/roberta-base-go_emotions-onnx`.
+- `modelPrefetch.injectionClassifier.enabled` (default `true`): the L1.5 intake
+  injection-classifier weights (pinned, sha256-verified
+  `protectai/deberta-v3-base-prompt-injection-v2`, ~700 MiB) into
+  `<modelCacheDir>/prompt-injection-v2` — exactly the gateway's
+  `PSFN_INJECTION_MODEL_DIR`. This is a hard prerequisite for enforce-mode
+  intake screening: the gateway **fails closed at startup** when
+  `intake-policy.json` `mode=enforce` and these weights are absent. The deploy
+  contract (`npm run verify:deployment-contracts`) asserts the prefetch
+  destination matches the gateway model path.
 
 Kubernetes NetworkPolicy cannot portably restrict egress by provider hostname.
 When NetworkPolicies are enabled, the chart gives only the `model-prefetch` Job

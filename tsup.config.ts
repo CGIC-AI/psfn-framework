@@ -23,6 +23,7 @@ export default defineConfig({
     'verify-shell-sandbox-runtime':
       'src/app/maintenance/verify-shell-sandbox-runtime.ts',
     'preflight-startup-owner-files': 'scripts/preflight-startup-owner-files.ts',
+    'provision-injection-model': 'scripts/provision-injection-model.ts',
   },
   format: ['esm'],
   target: 'node22',

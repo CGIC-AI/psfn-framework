@@ -5,7 +5,17 @@ import { PostgresEpisodicStore } from './postgres-store.js';
 import {
   type EpisodeCreateInput,
 } from './store-port.js';
-import { DreamMeaningPass, assessMeaningAtomicity, parseMeaningContribution } from './dream-meaning-pass.js';
+import {
+  DreamMeaningPass,
+  assessMeaningAtomicity,
+  parseMeaningContribution,
+  prioritizeDreamBudget,
+} from './dream-meaning-pass.js';
+import {
+  EPISODIC_CONTRACT_VERSION,
+  parseEpisode,
+  type Episode,
+} from '../../../shared/contracts/episodic-memory.js';
 
 const NOW = new Date('2026-06-10T07:30:00.000Z');
 
@@ -428,5 +438,173 @@ describe('assessMeaningAtomicity', () => {
     const result = assessMeaningAtomicity('word '.repeat(200));
     expect(result.atomic).toBe(false);
     expect(result.atomic === false && result.reason).toMatch(/too long/i);
+  });
+});
+
+describe('prioritizeDreamBudget (h4fp.6 nightly budget)', () => {
+  function budgetEpisode(id: string, overrides: {
+    startedAt?: string;
+    participantContactIds?: string[];
+    machineSignals?: Episode['machineSignals'];
+  } = {}): Episode {
+    return parseEpisode({
+      schemaVersion: EPISODIC_CONTRACT_VERSION,
+      id,
+      title: `Episode ${id}`,
+      landmark: `What happened in ${id}.`,
+      startedAt: overrides.startedAt ?? '2026-06-10T05:00:00.000Z',
+      endedAt: new Date(
+        Date.parse(overrides.startedAt ?? '2026-06-10T05:00:00.000Z') + 30 * 60_000,
+      ).toISOString(),
+      threadId: id,
+      channelId: 'discord:main',
+      participantContactIds: overrides.participantContactIds ?? [],
+      salience: { score: 0.5 },
+      affect: { labels: [] },
+      ...(overrides.machineSignals ? { machineSignals: overrides.machineSignals } : {}),
+      themes: [],
+      spanRefs: [{ spanId: `span-${id}`, sessionId: 'discord:main' }],
+      artifactRefs: [],
+      provenanceRefs: [],
+      createdAt: '2026-06-10T05:30:00.000Z',
+      updatedAt: '2026-06-10T05:30:00.000Z',
+    });
+  }
+
+  it('orders by trust rank, then machine-signal density, then oldest first', () => {
+    const trustRanks = new Map([['contact:primary', 3], ['contact:stranger', 0]]);
+    const budget = prioritizeDreamBudget(
+      [
+        budgetEpisode('old-plain', { startedAt: '2026-06-10T01:00:00.000Z' }),
+        budgetEpisode('dense', {
+          startedAt: '2026-06-10T04:00:00.000Z',
+          machineSignals: {
+            source: 'deterministic_synthesis',
+            topicTags: ['focused', 'positive'],
+            vad: { valence: 0.2, arousal: 0.3, dominance: 0.5 },
+          },
+        }),
+        budgetEpisode('trusted', {
+          startedAt: '2026-06-10T06:00:00.000Z',
+          participantContactIds: ['contact:primary'],
+        }),
+        budgetEpisode('young-plain', { startedAt: '2026-06-10T02:00:00.000Z' }),
+      ],
+      trustRanks,
+      10,
+    );
+
+    expect(budget.map(entry => entry.episode.id)).toEqual([
+      'trusted', // highest participant trust wins regardless of age
+      'dense', // then denser machine signals
+      'old-plain', // then oldest-first among the plain rest
+      'young-plain',
+    ]);
+    expect(budget[0].trustRank).toBe(3);
+    expect(budget[1].machineSignalDensity).toBe(3); // 2 tags + vad
+  });
+
+  it('is deterministic regardless of input order and enforces the cap', () => {
+    const episodes = [
+      budgetEpisode('b', { startedAt: '2026-06-10T02:00:00.000Z' }),
+      budgetEpisode('a', { startedAt: '2026-06-10T02:00:00.000Z' }),
+      budgetEpisode('c', { startedAt: '2026-06-10T01:00:00.000Z' }),
+    ];
+    const forward = prioritizeDreamBudget(episodes, new Map(), 2);
+    const reversed = prioritizeDreamBudget([...episodes].reverse(), new Map(), 2);
+    // Same start time ties break on id, so any input order converges.
+    expect(forward.map(entry => entry.episode.id)).toEqual(['c', 'a']);
+    expect(reversed.map(entry => entry.episode.id)).toEqual(['c', 'a']);
+  });
+
+  it('ranks unknown participants at trust 0 without a resolver entry', () => {
+    const budget = prioritizeDreamBudget(
+      [budgetEpisode('solo', { participantContactIds: ['contact:unknown'] })],
+      new Map(),
+      5,
+    );
+    expect(budget[0].trustRank).toBe(0);
+  });
+});
+
+describe('DreamMeaningPass nightly budget wiring (h4fp.6)', () => {
+  function makeStore(): PostgresEpisodicStore {
+    return new PostgresEpisodicStore(new FakeEpisodicPool() as unknown as Pool, { now: () => NOW });
+  }
+
+  it('reviews the capped budget in priority order: trusted participants land inside the cap', async () => {
+    const store = makeStore();
+    const input = (id: string, startedAt: string, participants: string[]): EpisodeCreateInput => ({
+      id,
+      title: `Episode ${id}`,
+      landmark: `What happened in ${id}.`,
+      startedAt,
+      endedAt: startedAt.replace('T05', 'T06'),
+      threadId: id,
+      channelId: 'discord:main',
+      participantContactIds: participants,
+      salience: { score: 0.5 },
+      affect: { labels: [] },
+      themes: [],
+      spanRefs: [{ spanId: `span-${id}`, sessionId: 'discord:main' }],
+      artifactRefs: [],
+      provenanceRefs: [],
+    });
+    // Older stranger episode vs a younger high-trust one; cap of 1 must land
+    // on the high-trust episode, not the merely-older one.
+    await store.createEpisode(input('stranger-old', '2026-06-10T05:00:00.000Z', ['contact:stranger']));
+    await store.createEpisode(input('primary-young', '2026-06-10T05:10:00.000Z', ['contact:primary']));
+
+    const handleMessage = vi.fn(async () => ({ content: meaningBlock({}) }));
+    const resolveTrustRanks = vi.fn(async () => new Map([['contact:primary', 3]]));
+    const pass = new DreamMeaningPass(store, { handleMessage }, {
+      now: () => NOW,
+      maxEpisodesPerPass: 1,
+      contactTrust: { resolveTrustRanks },
+    });
+
+    const result = await pass.run({ sessionId: 'discord:main' });
+
+    expect(result.ran).toBe(true);
+    expect(result.reviewedEpisodes).toBe(1);
+    expect(resolveTrustRanks).toHaveBeenCalledWith(['contact:primary', 'contact:stranger']);
+    const prompt = (handleMessage.mock.calls[0][0] as { content: string }).content;
+    expect(prompt).toContain('"primary-young"');
+    expect(prompt).not.toContain('"stranger-old"');
+  });
+
+  it('degrades to signal-density/age order when the trust reader fails, still running the pass', async () => {
+    const store = makeStore();
+    await store.createEpisode({
+      id: 'only',
+      title: 'Episode only',
+      landmark: 'What happened.',
+      startedAt: '2026-06-10T05:00:00.000Z',
+      endedAt: '2026-06-10T05:30:00.000Z',
+      threadId: 'only',
+      channelId: 'discord:main',
+      participantContactIds: ['contact:vega'],
+      salience: { score: 0.5 },
+      affect: { labels: [] },
+      themes: [],
+      spanRefs: [{ spanId: 'span-only', sessionId: 'discord:main' }],
+      artifactRefs: [],
+      provenanceRefs: [],
+    });
+    const handleMessage = vi.fn(async () => ({
+      content: meaningBlock({ only: 'A small true thing I want to keep.' }),
+    }));
+    const pass = new DreamMeaningPass(store, { handleMessage }, {
+      now: () => NOW,
+      contactTrust: {
+        resolveTrustRanks: async () => {
+          throw new Error('contact store offline');
+        },
+      },
+    });
+
+    const result = await pass.run({ sessionId: 'discord:main' });
+    expect(result.ran).toBe(true);
+    expect(result.meaningsRecorded).toBe(1);
   });
 });

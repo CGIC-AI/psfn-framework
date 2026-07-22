@@ -160,6 +160,11 @@ describe('retrieveEpisodeDrilldown', () => {
     expect(formatted).toContain('thread-visible');
     expect(formatted).not.toContain('arc-hidden');
     expect(formatted).not.toContain('thread-hidden');
+    // Candidates, not verdicts (h4fp.6): the root has no companion-authored
+    // meaning, so its machine-drafted summary is explicitly marked unreviewed,
+    // and meaning-less siblings carry the compact marker too.
+    expect(formatted).toContain('unreviewed: machine-drafted summary');
+    expect(formatted).toContain('[unreviewed]');
   });
 
   it('returns the same null outcome for missing and inaccessible exact ids', async () => {

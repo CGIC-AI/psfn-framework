@@ -103,6 +103,11 @@ export function formatEpisodeDrilldown(result: EpisodeDrilldownResult): string {
   }
   if (episode.meaning?.text) {
     lines.push(`Meaning: ${episode.meaning.text}`);
+  } else {
+    // Candidates, not verdicts (h4fp.6): without her authored meaning the
+    // title/landmark are machine-drafted summaries, marked so they never
+    // masquerade as her settled lived past.
+    lines.push('(unreviewed: machine-drafted summary — you have not yet given this episode its meaning)');
   }
 
   lines.push(`Source turns (${turnCount} message${turnCount === 1 ? '' : 's'}):`);
@@ -133,7 +138,8 @@ export function formatEpisodeDrilldown(result: EpisodeDrilldownResult): string {
     for (const sibling of result.arcSiblings) {
       lines.push(
         `- ${sibling.arc.arcKind} via ${sibling.arc.id}: `
-        + `${sibling.episode.title} (${sibling.episode.id}) — ${sibling.episode.landmark}`,
+        + `${sibling.episode.title} (${sibling.episode.id}) — ${sibling.episode.landmark}`
+        + (sibling.episode.meaning ? '' : ' [unreviewed]'),
       );
     }
   }
@@ -143,7 +149,10 @@ export function formatEpisodeDrilldown(result: EpisodeDrilldownResult): string {
     lines.push('- None.');
   } else {
     for (const sibling of result.threadSiblings) {
-      lines.push(`- ${sibling.title} (${sibling.id}) — ${sibling.landmark}`);
+      lines.push(
+        `- ${sibling.title} (${sibling.id}) — ${sibling.landmark}`
+        + (sibling.meaning ? '' : ' [unreviewed]'),
+      );
     }
   }
 

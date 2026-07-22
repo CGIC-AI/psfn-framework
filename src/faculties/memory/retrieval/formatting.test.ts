@@ -197,6 +197,25 @@ describe('renderPromptBlock companion-facing rendering contract', () => {
     expect(rendered).toContain('Meaning: That night proved they could weather a crisis together');
   });
 
+  it('marks meaning-less episodes unreviewed so machine summaries never read as her settled past (h4fp.6)', () => {
+    const chain = buildEpisodicChainFixture();
+    (chain.episodes[0] as { meaning?: { text: string; recordedAt: string; source: string } }).meaning = {
+      text: 'That night proved they could weather a crisis together and come out closer.',
+      recordedAt: '2026-05-03T00:00:00.000Z',
+      source: 'companion_dream_pass',
+    };
+    const rendered = renderPromptBlock(undefined, [], { episodicChains: [chain] });
+
+    // Episode A carries her authored meaning — no unreviewed marker on it; the
+    // meaning-less episode B is explicitly marked as a machine-drafted summary.
+    const lines = rendered.split('\n');
+    const markerLines = lines.filter(line => line.includes('unreviewed: machine-drafted summary'));
+    expect(markerLines).toHaveLength(1);
+    const episodeBIndex = lines.findIndex(line => line.includes(`Episode ${EPISODE_B_ID}:`));
+    expect(episodeBIndex).toBeGreaterThanOrEqual(0);
+    expect(lines.slice(episodeBIndex, episodeBIndex + 3).join('\n')).toContain('unreviewed: machine-drafted summary');
+  });
+
   it('hard-caps the always-on block at five episodes across all chains, most-relevant-first', () => {
     const makeEpisode = (id: string, title: string) => ({
       id,

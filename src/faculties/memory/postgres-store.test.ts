@@ -353,6 +353,24 @@ class FakeMemoryPool {
       } as QueryResult;
     }
 
+    if (normalized.startsWith('select id, embedding::text as embedding from l2_memories')) {
+      const target = this.memories.get(String(values[0] ?? ''));
+      const rows = target ? [{ id: target.id, embedding: target.embedding }] : [];
+      return { rows, rowCount: rows.length, command: 'SELECT', oid: 0, fields: [] } as QueryResult;
+    }
+
+    if (normalized.includes('from l2_memories')
+      && normalized.includes('embedding is not null')
+      && normalized.includes('extracted_at >=')) {
+      const since = Number(values[0] ?? 0);
+      const limit = Number(values[1] ?? 4096);
+      const rows = [...this.memories.values()]
+        .filter(row => !row.superseded_by && row.deleted_at === null && row.embedding && Number(row.extracted_at) >= since)
+        .sort((left, right) => Number(left.extracted_at) - Number(right.extracted_at) || left.id.localeCompare(right.id))
+        .slice(0, limit);
+      return { rows, rowCount: rows.length, command: 'SELECT', oid: 0, fields: [] } as QueryResult;
+    }
+
     if (normalized.includes('from l2_memories')) {
       return {
         rows: [...this.memories.values()],
@@ -1605,6 +1623,45 @@ describe('postgres memory store unit coverage', () => {
 
     await expect(createPostgresMemoryStore('postgres://unused', 4)).rejects.toThrow(
       'PostgreSQL memory schema column l2_memories.embedding must use pgvector',
+    );
+  });
+
+  it('does not select or hydrate L2 embeddings at startup (a27w.1 bounded boot)', async () => {
+    const pool = new FakeMemoryPool();
+    // Seed many rows that each carry an embedding. Startup cost must not scale
+    // with them: the hydration SELECT must not request the embedding column,
+    // so no Float32Array is ever decoded or retained at boot.
+    for (let index = 0; index < 50; index += 1) {
+      const memory = makeMemory(`boot-embed-${index}`, `boot memory ${index}`);
+      pool.memories.set(memory.id, makeMemoryRow(memory, '[0.1,0.2,0.3,0.4]'));
+    }
+    postgresMocks.activePool = pool;
+    postgresMocks.queryRows.mockClear();
+
+    const store = await createPostgresMemoryStore('postgres://unused', 4);
+
+    const hydrationSelects = postgresMocks.queryRows.mock.calls
+      .map(call => String(call[1]))
+      .filter(sql => /FROM\s+l2_memories/i.test(sql) && /ORDER BY extracted_at DESC, id DESC/i.test(sql));
+    expect(hydrationSelects.length).toBeGreaterThan(0);
+    for (const sql of hydrationSelects) {
+      expect(sql).not.toMatch(/embedding/i);
+    }
+    // Metadata still hydrates so getById / lexical search / counts are intact.
+    expect(await store.getById('boot-embed-0')).toBeDefined();
+    expect(await store.countActiveMemories()).toBe(50);
+  });
+
+  it('fails closed at startup when the embedding schema probe is unreachable (a27w.1)', async () => {
+    const pool = new FakeMemoryPool();
+    // Simulate the embedding table/column reachability probe erroring (e.g. the
+    // database becoming unreachable). Startup must reject, never boot silently
+    // with an empty in-memory index.
+    pool.failNextQuery('information_schema.columns', 'connection terminated unexpectedly');
+    postgresMocks.activePool = pool;
+
+    await expect(createPostgresMemoryStore('postgres://unused', 4)).rejects.toThrow(
+      'connection terminated unexpectedly',
     );
   });
 });

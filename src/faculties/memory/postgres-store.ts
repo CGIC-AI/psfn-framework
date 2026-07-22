@@ -208,7 +208,11 @@ class PostgresMemoryStore implements MemoryStorePort {
   private readonly transactionContext = new AsyncLocalStorage<MemoryStoreTransactionState>();
 
   private memories = new Map<string, PurrMemory>();
-  private embeddings = new Map<string, Float32Array>();
+  // Embeddings are NOT hydrated into memory (a27w.1). Similarity search runs in
+  // Postgres/pgvector (searchByEmbedding) and the remaining stored-embedding
+  // consumers read their vectors on demand via fetchStoredEmbedding /
+  // listActiveMemoryEmbeddingsSince, so resident memory no longer scales with
+  // lifetime corpus size × embedding dimensions.
   private deleteVersions = new Map<string, MemoryDeleteVersion>();
   private abstractionLinks = new Map<string, MemoryAbstractionLink>();
   private memoryEvolutionLinks = new Map<string, MemoryEvolutionLink>();
@@ -253,6 +257,12 @@ class PostgresMemoryStore implements MemoryStorePort {
   }
 
   private async initialize(): Promise<void> {
+    // a27w.1: startup no longer selects or decodes embedding vectors. The
+    // embedding column is deliberately excluded here so boot cost stays
+    // O(rows) metadata rather than O(rows × dimensions). Embedding-table
+    // reachability is still asserted fail-closed before this method runs, by
+    // assertExistingMemorySchemaHasEmbeddingColumn + validatePostgresMemorySchema
+    // in createPostgresMemoryStoreFromPool.
     const memoryRows = await queryRows<MemoryRow>(this.pool, `
       SELECT
         id, text, type, importance, confidence, emotional_valence, formation_vad, emotional_texture,
@@ -260,20 +270,12 @@ class PostgresMemoryStore implements MemoryStorePort {
         access_count, superseded_by,
         tags, scope_ref_kind, scope_ref_id, scope_ref_label, scope_tags, provenance_refs,
         retention_class, sensitivity, consent_flags, contact_id, deleted_at, deleted_by,
-        delete_reason, embedding::text AS embedding
+        delete_reason
       FROM l2_memories
       ORDER BY extracted_at DESC, id DESC
     `);
     for (const row of memoryRows) {
       this.memories.set(row.id, fromMemoryRow(row));
-      if (row.embedding) {
-        const embedding = decodeEmbedding(row.embedding);
-        if (!embedding) {
-          throw new Error(`PostgreSQL memory schema returned an unreadable pgvector embedding for memory ${row.id}`);
-        }
-        validateEmbeddingDimensions(embedding, this.embeddingDims, 'hydrate');
-        this.embeddings.set(row.id, embedding);
-      }
     }
 
     const deleteRows = await queryRows<MemoryDeleteVersionRow>(this.pool, `
@@ -404,6 +406,33 @@ class PostgresMemoryStore implements MemoryStorePort {
 
   private async executeWrite(text: string, values: readonly unknown[]): Promise<void> {
     await this.queryWrite(text, values);
+  }
+
+  /**
+   * Reads a single memory's stored embedding on demand (a27w.1). Replaces the
+   * former hydrated `embeddings` map for the re-upsert paths (soft delete /
+   * restore) that must preserve the persisted vector. Runs on the active
+   * transaction client when inside one and takes a row lock so a concurrent
+   * write cannot swap the vector between this read and the re-upsert. A NULL /
+   * absent embedding yields undefined; a present-but-undecodable vector fails
+   * closed, matching the old hydration contract.
+   */
+  private async fetchStoredEmbedding(
+    id: string,
+    operation: string,
+  ): Promise<Float32Array | undefined> {
+    const rows = await this.queryWrite<{ embedding: string | null }>(
+      'SELECT id, embedding::text AS embedding FROM l2_memories WHERE id = $1 FOR UPDATE',
+      [id],
+    );
+    const raw = rows.at(0)?.embedding;
+    if (!raw) return undefined;
+    const embedding = decodeEmbedding(raw);
+    if (!embedding) {
+      throw new Error(`PostgreSQL memory schema returned an unreadable pgvector embedding for memory ${id}`);
+    }
+    validateEmbeddingDimensions(embedding, this.embeddingDims, operation);
+    return embedding;
   }
 
   private async queryWrite<T extends QueryResultRow>(
@@ -634,7 +663,6 @@ class PostgresMemoryStore implements MemoryStorePort {
     };
     await this.persistClassifiedMemoryRow(anchoredMemory, embedding);
     this.memories.set(memory.id, anchoredMemory);
-    this.embeddings.set(memory.id, embedding);
     this.markSalienceMaintenanceChanged();
     this.markRetrievalCorpusChanged();
     this.journal?.onInsert(anchoredMemory);
@@ -672,7 +700,6 @@ class PostgresMemoryStore implements MemoryStorePort {
       const client = await this.pool.connect();
       const state: MemoryStoreTransactionState = { client, operations: [] };
       const memoriesSnapshot = new Map(this.memories);
-      const embeddingsSnapshot = new Map(this.embeddings);
       const salienceMaintenanceRevisionSnapshot = this.salienceMaintenanceRevision;
       try {
         await client.query('BEGIN');
@@ -691,8 +718,9 @@ class PostgresMemoryStore implements MemoryStorePort {
             error: String(rollbackError),
           });
         }
+        // Embeddings are not held in memory (a27w.1); the database ROLLBACK
+        // above is the sole authority for their transactional state.
         this.memories = memoriesSnapshot;
-        this.embeddings = embeddingsSnapshot;
         this.salienceMaintenanceRevision = salienceMaintenanceRevisionSnapshot;
         // Generations are monotonic. A rollback is itself a corpus transition:
         // any refresh that observed staged in-memory data must become stale.
@@ -848,8 +876,6 @@ class PostgresMemoryStore implements MemoryStorePort {
       const embedding = updates.embedding ?? storedEmbedding;
       await this.persistClassifiedMemoryRow(next, embedding);
       this.memories.set(id, next);
-      if (embedding) this.embeddings.set(id, embedding);
-      else this.embeddings.delete(id);
       this.markSalienceMaintenanceChanged();
       if (Object.keys(updates).some(key => key !== 'lastAccessed' && key !== 'accessCount')) {
         this.markRetrievalCorpusChanged();
@@ -871,19 +897,48 @@ class PostgresMemoryStore implements MemoryStorePort {
 
   /**
    * Active memories written at/after `sinceMs`, paired with their stored
-   * embeddings (htm9.15 second-arrow evidence read). Pure read over hydrated
-   * state — rows lacking a persisted embedding are excluded, never re-embedded.
+   * embeddings (htm9.15 second-arrow evidence read). a27w.1: queried from
+   * Postgres on demand rather than scanning a hydrated embedding map, so the
+   * read cost is bounded by the `limit` window (default 4096) and the active
+   * corpus since `sinceMs`, not by lifetime corpus size. The WHERE/ORDER/LIMIT
+   * reproduce the former in-memory semantics exactly: active rows only, rows
+   * lacking a persisted embedding excluded (never re-embedded), ordered by
+   * extractedAt ASC then id ASC. A present-but-undecodable vector fails closed.
    */
   async listActiveMemoryEmbeddingsSince(
     sinceMs: number,
     limit: number = 4096,
   ): Promise<MemoryEmbeddingSample[]> {
+    if (this.transactionContext.getStore()) {
+      throw new Error('Active memory embedding reads are unavailable inside a memory-store transaction');
+    }
+    // Settle any in-flight write/rollback so the pool read observes committed
+    // state, matching queryAuthorizedMemorySubjects / getRetrievalCorpusVersion.
+    await this.persistChain;
+    const rows = await queryRows<MemoryRow>(this.pool, `
+      SELECT
+        id, text, type, importance, confidence, emotional_valence, formation_vad, emotional_texture,
+        salience, salience_decay_anchor_at, source_ref, source_type, provenance_json, extracted_at, last_accessed,
+        access_count, superseded_by,
+        tags, scope_ref_kind, scope_ref_id, scope_ref_label, scope_tags, provenance_refs,
+        retention_class, sensitivity, consent_flags, contact_id, deleted_at, deleted_by,
+        delete_reason, embedding::text AS embedding
+      FROM l2_memories
+      WHERE superseded_by IS NULL
+        AND deleted_at IS NULL
+        AND embedding IS NOT NULL
+        AND extracted_at >= $1
+      ORDER BY extracted_at ASC, id ASC
+      LIMIT $2
+    `, [sinceMs, limit]);
     const samples: MemoryEmbeddingSample[] = [];
-    for (const memory of this.memories.values()) {
-      if (memory.supersededBy || memory.deletedAt) continue;
-      if (!Number.isFinite(memory.extractedAt) || memory.extractedAt < sinceMs) continue;
-      const embedding = this.embeddings.get(memory.id);
-      if (!embedding) continue;
+    for (const row of rows) {
+      const embedding = decodeEmbedding(row.embedding);
+      if (!embedding) {
+        throw new Error(`PostgreSQL memory schema returned an unreadable pgvector embedding for memory ${row.id}`);
+      }
+      validateEmbeddingDimensions(embedding, this.embeddingDims, 'evidence');
+      const memory = fromMemoryRow(row);
       samples.push({
         id: memory.id,
         text: memory.text,
@@ -895,9 +950,7 @@ class PostgresMemoryStore implements MemoryStorePort {
         embedding,
       });
     }
-    return samples
-      .sort((left, right) => left.extractedAt - right.extractedAt || left.id.localeCompare(right.id))
-      .slice(0, limit);
+    return samples;
   }
 
   async listMemories(options: MemoryListOptions = {}): Promise<PurrMemory[]> {
@@ -1051,15 +1104,18 @@ class PostgresMemoryStore implements MemoryStorePort {
     return authorizedRows;
   }
 
+  /**
+   * Refreshes the in-memory `memories` snapshot from freshly locked rows so a
+   * concurrent committed write cannot be overwritten by stale data. a27w.1:
+   * embeddings are no longer cached, so the locked vector is only validated
+   * fail-closed (bounded to the locked set) and never retained.
+   */
   private hydrateLockedMemoryRows(rows: readonly MemoryRow[], operation: string): void {
     for (const row of rows) {
       this.memories.set(row.id, fromMemoryRow(row));
       const embedding = decodeEmbedding(row.embedding);
       if (embedding) {
         validateEmbeddingDimensions(embedding, this.embeddingDims, operation);
-        this.embeddings.set(row.id, embedding);
-      } else {
-        this.embeddings.delete(row.id);
       }
     }
   }
@@ -1247,10 +1303,13 @@ class PostgresMemoryStore implements MemoryStorePort {
       ...(deleteReason ? { deleteReason } : {}),
     };
     await this.runInTransaction(async () => {
+      // a27w.1: read the stored vector under a row lock instead of a hydrated
+      // map so the re-upsert preserves it (passing undefined would NULL it).
+      const embedding = await this.fetchStoredEmbedding(id, 'soft delete');
       await this.upsertDeleteVersion(version);
       await this.persistClassifiedMemoryRow(
         { ...memory, deletedAt, deletedBy, deleteReason },
-        this.embeddings.get(id),
+        embedding,
       );
     });
     this.memories.set(id, { ...memory, deletedAt, deletedBy, deleteReason });
@@ -1271,8 +1330,11 @@ class PostgresMemoryStore implements MemoryStorePort {
     const restored = { ...current, deletedAt: undefined, deletedBy: undefined, deleteReason: undefined };
     const nextVersion = { ...version, restoredAt, restoredBy };
     await this.runInTransaction(async () => {
+      // a27w.1: preserve the persisted vector by reading it under a row lock
+      // rather than from a hydrated map.
+      const embedding = await this.fetchStoredEmbedding(version.memoryId, 'undo soft delete');
       await this.upsertDeleteVersion(nextVersion);
-      await this.persistClassifiedMemoryRow(restored, this.embeddings.get(version.memoryId));
+      await this.persistClassifiedMemoryRow(restored, embedding);
     });
     this.memories.set(version.memoryId, restored);
     this.markSalienceMaintenanceChanged();

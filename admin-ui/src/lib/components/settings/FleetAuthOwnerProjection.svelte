@@ -33,7 +33,7 @@
     <div class="flex flex-wrap items-start justify-between gap-3">
       <div class="space-y-1">
         <p class="text-xs uppercase tracking-[0.16em] text-shadow-500">System owner · Read-only</p>
-        <h2 class="text-sm font-serif font-semibold text-shadow-800">Fleet Authentication</h2>
+        <h2 class="text-sm font-serif font-semibold text-shadow-800">Cluster Authentication</h2>
         <p class="text-sm text-shadow-600">
           Effective startup state compared with the freshly parsed canonical
           <code class="font-mono">fleet-auth.json</code> owner file.

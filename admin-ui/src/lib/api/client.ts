@@ -55,7 +55,7 @@ export async function apiFetch(path: string, init: RequestInit = {}): Promise<Re
     url = scopeGardenDataPath(path, pathname);
   } else {
     if (currentCompanionGardenScope(pathname) || isFleetOverviewPath(pathname)) {
-      throw new Error('Fleet Garden data endpoints must be same-origin root-absolute paths');
+      throw new Error('Cluster Garden data endpoints must be same-origin root-absolute paths');
     }
     const parsed = new URL(path);
     if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {

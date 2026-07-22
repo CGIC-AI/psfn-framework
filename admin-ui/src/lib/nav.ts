@@ -32,7 +32,7 @@ export const navGroups: NavGroup[] = [
     { id: 'places', path: '/places', defaultLabel: 'Places', icon: '\u{1F5FA}\u{FE0F}' },
     { id: 'action-pipe', path: '/action-pipe', defaultLabel: 'Action Pipe', icon: '\u{1F39B}\u{FE0F}' },
     { id: 'autonomy', path: '/autonomy', defaultLabel: 'Autonomy', icon: '\u{1F331}' },
-    { id: 'room-arbiter', path: '/room-arbiter', defaultLabel: 'Fleet Command', icon: '\u{1F5E3}\u{FE0F}' },
+    { id: 'room-arbiter', path: '/room-arbiter', defaultLabel: 'Cluster Command', icon: '\u{1F5E3}\u{FE0F}' },
   ]),
   navGroup('memory', 'Memory & Identity', [
     { id: 'memory', path: '/memory', defaultLabel: 'Memory', icon: '\u{1F33F}' },
@@ -53,7 +53,7 @@ export const navGroups: NavGroup[] = [
     { id: 'models', path: '/models', defaultLabel: 'Models', icon: '\u{1F9EA}' },
     { id: 'analysis-workbench', path: '/analysis-workbench', defaultLabel: 'Analysis Workbench', icon: '\u{1F52C}' },
     { id: 'charge-budget', path: '/charge-budget', defaultLabel: 'Charge / Budget', icon: '\u{1F4B0}' },
-    { id: 'fleet-costs', path: '/fleet-costs', defaultLabel: 'Fleet Costs', icon: '\u{1F4B8}' },
+    { id: 'fleet-costs', path: '/fleet-costs', defaultLabel: 'Cluster Costs', icon: '\u{1F4B8}' },
     { id: 'tools', path: '/tools', defaultLabel: 'Tools', icon: '\u{1F527}' },
     { id: 'shards', path: '/shards', defaultLabel: 'Shards', icon: '\u{1F338}' },
     { id: 'skills', path: '/skills', defaultLabel: 'Skills', icon: '\u{2728}' },

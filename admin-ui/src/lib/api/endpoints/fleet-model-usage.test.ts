@@ -165,7 +165,7 @@ describe('fleet model-usage endpoint', () => {
 
     await expect(getAuthorizedFleetModelUsage(
       `/companions/${COMPANION_A}/garden`,
-    )).rejects.toThrow(/non-fleet projection/u);
+    )).rejects.toThrow(/non-cluster projection/u);
   });
 
   it('preserves private spend in fleet headlines without adding it to companion rows', async () => {

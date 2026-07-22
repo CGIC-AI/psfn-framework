@@ -200,7 +200,7 @@ export function parseFleetModelUsageData(value: unknown): FleetModelUsageData {
     || !Array.isArray(value.timeSeries)
     || !isRecord(value.coverage)
     || !hasExactKeys(value.coverage, ['available', 'unavailable', 'complete'])) {
-    throw new Error('Fleet cost telemetry returned an invalid projection');
+    throw new Error('Cluster cost telemetry returned an invalid projection');
   }
   const seen = new Set<string>();
   let available = 0;
@@ -210,12 +210,12 @@ export function parseFleetModelUsageData(value: unknown): FleetModelUsageData {
       || !isRfc4122Uuid(companion.companionId)
       || seen.has(companion.companionId)
       || !['available', 'unavailable'].includes(String(companion.status))) {
-      throw new Error('Fleet cost telemetry returned an invalid companion row');
+      throw new Error('Cluster cost telemetry returned an invalid companion row');
     }
     seen.add(companion.companionId);
     if (companion.status === 'unavailable') {
       if (!hasExactKeys(companion, ['companionId', 'status'])) {
-        throw new Error('Fleet cost telemetry returned an invalid unavailable row');
+        throw new Error('Cluster cost telemetry returned an invalid unavailable row');
       }
       continue;
     }
@@ -223,7 +223,7 @@ export function parseFleetModelUsageData(value: unknown): FleetModelUsageData {
     if (!hasExactKeys(companion, ['companionId', 'status', 'totals', 'topModel'])
       || !isUsageTotals(companion.totals)
       || !isTopModel(companion.topModel)) {
-      throw new Error('Fleet cost telemetry returned an invalid available row');
+      throw new Error('Cluster cost telemetry returned an invalid available row');
     }
   }
   for (const bucket of value.timeSeries) {
@@ -235,7 +235,7 @@ export function parseFleetModelUsageData(value: unknown): FleetModelUsageData {
       || !isUsageTotals(Object.fromEntries(
         TOTAL_FIELDS.map(field => [field, bucket[field]]),
       ))) {
-      throw new Error('Fleet cost telemetry returned an invalid time bucket');
+      throw new Error('Cluster cost telemetry returned an invalid time bucket');
     }
   }
   const unavailable = value.perCompanion.length - available;
@@ -246,7 +246,7 @@ export function parseFleetModelUsageData(value: unknown): FleetModelUsageData {
     || value.coverage.unavailable !== unavailable
     || value.coverage.complete !== (unavailable === 0)
     || (available === 0) !== (value.totals === null)) {
-    throw new Error('Fleet cost telemetry returned invalid coverage');
+    throw new Error('Cluster cost telemetry returned invalid coverage');
   }
   return value as unknown as FleetModelUsageData;
 }

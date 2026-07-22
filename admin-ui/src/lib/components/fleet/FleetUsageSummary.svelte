@@ -41,7 +41,7 @@
       if (request.signal.aborted || controller !== request) return;
       errorMessage = error instanceof Error
         ? error.message
-        : 'Fleet usage is temporarily unavailable.';
+        : 'Cluster usage is temporarily unavailable.';
     } finally {
       if (controller === request) loading = false;
     }
@@ -67,9 +67,9 @@
   </div>
   {#if viewState === 'unavailable'}
     <div class="card-garden border-l-4 border-l-wilt-400 p-5" role="alert">
-      <p class="font-medium text-shadow-900">Fleet usage unavailable</p>
+      <p class="font-medium text-shadow-900">Cluster usage unavailable</p>
       <p class="mt-1 text-sm text-wilt-700">
-        {errorMessage || 'Fleet usage returned no authorized projection.'}
+        {errorMessage || 'Cluster usage returned no authorized projection.'}
       </p>
       <button
         type="button"
@@ -79,7 +79,7 @@
     </div>
   {:else if viewState === 'loading'}
     <div class="card-garden p-6" aria-busy="true" aria-live="polite">
-      <p class="text-sm text-shadow-600">Loading authorized fleet usage…</p>
+      <p class="text-sm text-shadow-600">Loading authorized cluster usage…</p>
     </div>
   {:else if viewState === 'ready' && projection}
     <div class="grid gap-3 sm:grid-cols-2">

@@ -51,11 +51,11 @@ export function resolveFleetUsageViewState(input: {
 
 function parseTokenTotals(value: unknown): FleetModelUsageTokenTotals {
   if (!isRecord(value) || !hasExactKeys(value, TOKEN_TOTAL_FIELDS)) {
-    throw new Error('Fleet usage returned invalid token totals');
+    throw new Error('Cluster usage returned invalid token totals');
   }
   for (const field of TOKEN_TOTAL_FIELDS) {
     if (!Number.isSafeInteger(value[field]) || (value[field] as number) < 0) {
-      throw new Error('Fleet usage returned invalid token totals');
+      throw new Error('Cluster usage returned invalid token totals');
     }
   }
   const totals = Object.fromEntries(
@@ -65,7 +65,7 @@ function parseTokenTotals(value: unknown): FleetModelUsageTokenTotals {
     + totals.outputTokens
     + totals.cacheReadTokens
     + totals.cacheWriteTokens) {
-    throw new Error('Fleet usage returned inconsistent token totals');
+    throw new Error('Cluster usage returned inconsistent token totals');
   }
   return totals;
 }
@@ -87,7 +87,7 @@ function parseResolvedRange(value: unknown): ModelUsageResolvedRange {
     || value.bucket === 'auto'
     || value.boundary !== '[sinceMs, untilMs)'
     || value.calendarWeekStartsOn !== 'monday') {
-    throw new Error('Fleet usage returned an invalid resolved range');
+    throw new Error('Cluster usage returned an invalid resolved range');
   }
   return {
     range: value.range as ModelUsageResolvedRange['range'],
@@ -103,7 +103,7 @@ function parseResolvedRange(value: unknown): ModelUsageResolvedRange {
 function checkedAdd(left: number, right: number): number {
   const result = left + right;
   if (!Number.isSafeInteger(result)) {
-    throw new Error('Fleet usage token totals overflowed');
+    throw new Error('Cluster usage token totals overflowed');
   }
   return result;
 }
@@ -136,7 +136,7 @@ export function parseFleetModelUsageProjection(value: unknown): FleetModelUsageP
     || !Number.isFinite(Date.parse(value.generatedAt))
     || !Array.isArray(value.companions)
     || value.companions.length > MAX_FLEET_COMPANIONS) {
-    throw new Error('Fleet usage returned an invalid bounded projection');
+    throw new Error('Cluster usage returned an invalid bounded projection');
   }
   const seen = new Set<string>();
   const companions = value.companions.map((row) => {
@@ -145,7 +145,7 @@ export function parseFleetModelUsageProjection(value: unknown): FleetModelUsageP
       || typeof row.companionId !== 'string'
       || !isRfc4122Uuid(row.companionId)
       || seen.has(row.companionId)) {
-      throw new Error('Fleet usage returned an invalid companion projection');
+      throw new Error('Cluster usage returned an invalid companion projection');
     }
     seen.add(row.companionId);
     return {
@@ -167,7 +167,7 @@ export function parseFleetModelUsageProjection(value: unknown): FleetModelUsageP
   );
   const combined = parseTokenTotals(value.combined);
   if (TOKEN_TOTAL_FIELDS.some(field => combined[field] !== conserved[field])) {
-    throw new Error('Fleet usage combined totals do not conserve companion totals');
+    throw new Error('Cluster usage combined totals do not conserve companion totals');
   }
   return {
     schemaVersion: 1,
@@ -200,12 +200,12 @@ export async function fetchFleetModelUsageProjection(
   });
   if (response.status === 401) {
     if (typeof window !== 'undefined') window.location.assign('/fleet/login');
-    throw new Error('Fleet session expired');
+    throw new Error('Cluster session expired');
   }
   if (!response.ok) {
     throw new Error(response.status === 403
-      ? 'Fleet usage access is unavailable'
-      : 'Fleet usage is temporarily unavailable');
+      ? 'Cluster usage access is unavailable'
+      : 'Cluster usage is temporarily unavailable');
   }
   return parseFleetModelUsageProjection(await response.json());
 }

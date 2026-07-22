@@ -4,9 +4,9 @@ import type { SessionEntry } from '../../../core/session/types.js';
 import { createComponentLogger } from '../../../shared/logger.js';
 import type {
   Episode,
-  EpisodeAffect,
   EpisodeArc,
   EpisodeArtifactRef,
+  EpisodeMachineSignals,
   EpisodeProvenanceRef,
   EpisodeSalience,
   EpisodeSpanRef,
@@ -394,28 +394,39 @@ function inferEmotionalIntensity(entries: readonly SessionEntry[]): number {
   return normalizeBoundedUnit(Math.min(0.8, 0.1 + hits * 0.12));
 }
 
-function inferAffect(entries: readonly SessionEntry[]): EpisodeAffect {
+/**
+ * Machine signals sidecar (bead h4fp.6). Deterministic keyword/VAD heuristics
+ * produce TOPIC TAGS and a fallible machine VAD estimate — explicitly NOT the
+ * companion's felt affect. A synthesized episode is born affect-empty; these
+ * signals are retrieval hints in a clearly machine-labeled field, and the
+ * episode's felt meaning is authored only by her (the `meaning` field, dream
+ * pass). See mirrors-and-letters.md "Episodes: candidates, not verdicts".
+ */
+function buildMachineSignals(entries: readonly SessionEntry[]): EpisodeMachineSignals {
   const text = entries.map(entry => entry.content).join(' ').toLowerCase();
-  const labels = new Set<string>();
+  const topicTags = new Set<string>();
   let valence = 0;
 
   if (/\b(thanks|great|good|love|excited|excellent)\b/.test(text)) {
-    labels.add('positive');
+    topicTags.add('positive');
     valence += 0.25;
   }
   if (/\b(blocked|worry|worried|bad|hate|frustrated|issue|bug)\b/.test(text)) {
-    labels.add('concerned');
+    topicTags.add('concerned');
     valence -= 0.25;
   }
   if (/\b(plan|implement|debug|fix|ship|test|review)\b/.test(text)) {
-    labels.add('focused');
+    topicTags.add('focused');
   }
 
   return {
-    valence: normalizeBoundedUnit((valence + 1) / 2) * 2 - 1,
-    arousal: inferEmotionalIntensity(entries),
-    dominance: 0.5,
-    labels: labels.size > 0 ? [...labels].sort() : ['neutral'],
+    source: 'deterministic_synthesis',
+    topicTags: [...topicTags].sort(),
+    vad: {
+      valence: normalizeBoundedUnit((valence + 1) / 2) * 2 - 1,
+      arousal: inferEmotionalIntensity(entries),
+      dominance: 0.5,
+    },
   };
 }
 
@@ -531,7 +542,12 @@ function buildEpisodeInput(
       .map(entry => entry.authorId)
       .filter((authorId): authorId is string => typeof authorId === 'string' && authorId.trim().length > 0))].sort(),
     salience: inferSalience(entries, themes),
-    affect: inferAffect(entries),
+    // Episodes are born affect-empty (bead h4fp.6): machine emotion heuristics
+    // must never masquerade as her felt affect. The keyword/VAD signals move to
+    // the clearly machine-labeled `machineSignals` sidecar; the affect field is
+    // authored only by her, later, in review.
+    affect: { labels: [] },
+    machineSignals: buildMachineSignals(entries),
     themes,
     spanRefs: [spanRef],
     artifactRefs: inferArtifactRefs(entries),

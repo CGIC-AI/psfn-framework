@@ -7,6 +7,15 @@ export function cloneEpisode(episode: Episode): Episode {
     participantContactIds: [...episode.participantContactIds],
     salience: { ...episode.salience },
     affect: { ...episode.affect, labels: [...episode.affect.labels] },
+    ...(episode.machineSignals
+      ? {
+        machineSignals: {
+          ...episode.machineSignals,
+          topicTags: [...episode.machineSignals.topicTags],
+          ...(episode.machineSignals.vad ? { vad: { ...episode.machineSignals.vad } } : {}),
+        },
+      }
+      : {}),
     themes: [...episode.themes],
     spanRefs: episode.spanRefs.map(ref => ({ ...ref })),
     artifactRefs: episode.artifactRefs.map(ref => ({ ...ref })),

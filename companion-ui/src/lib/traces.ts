@@ -239,6 +239,20 @@ function eventToTrace(
           phase: message.data.phase,
         },
       };
+    case 'emotion.snapshot': {
+      const top = message.data.discrete[0];
+      return {
+        ...common,
+        operationClass: 'emotion_snapshot',
+        status: 'info',
+        summary: top ? `Emotion: ${top.label} (${message.data.trigger})` : `Emotion (${message.data.trigger})`,
+        metadata: {
+          trigger: message.data.trigger,
+          confidence: message.data.confidence,
+          ...(top ? { topLabel: top.label } : {}),
+        },
+      };
+    }
   }
 }
 

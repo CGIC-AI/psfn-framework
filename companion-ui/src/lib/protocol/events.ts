@@ -28,6 +28,9 @@ import type {
   ApprovalSourceSystem,
 } from '../../../../src/shared/contracts/approval-envelope.js';
 import { COMPANION_APPROVALS_V2_CAPABILITY } from '../../../../src/shared/contracts/companion-relay.js';
+import type { AcacAxis } from '../../../../src/shared/contracts/emotion-contracts.js';
+
+export type { AcacAxis } from '../../../../src/shared/contracts/emotion-contracts.js';
 
 export type {
   ApprovalAttribution,
@@ -167,7 +170,8 @@ export type HubToClientMessage =
   | ArtifactCreatedMessage
   | ArtifactPreviewResultMessage
   | ArtifactPreviewErrorMessage
-  | ToolActivityMessage;
+  | ToolActivityMessage
+  | EmotionSnapshotMessage;
 
 export interface SessionReadyMessage {
   type: 'session.ready';
@@ -357,6 +361,58 @@ export interface ToolActivityMessage {
     tool: string;
     phase: ToolActivityPhase;
     detail?: string;
+    timestamp: string;
+  };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Emotion telemetry plane (hub -> client). Relayed only to satellites that
+// advertise the `emotion` telemetry scope (deny-by-default privacy surface).
+//
+// PROVENANCE: this is the client-side projection of the PSFN companion-relay
+// `CompanionEmotionSnapshotPayload` (src/shared/contracts/companion-relay.ts,
+// bead psfn-framework-7ang.1), re-mirrored here per bead psfn-framework-7ang.3.
+// The hub relays the redacted payload as a flat `{ type, data }` frame like
+// `tool.activity`. It carries ONLY rounded VAD/mood, top-K discrete
+// labels/scores, aggregate confidence, and ACAC axis SCORES — never ACAC
+// rationale, active concerns, or salient entities (charter §8.3 / §6.10).
+// The hub is the source of truth for this retained mirror; if it drifts, the
+// HUB WINS — re-mirror.
+// ─────────────────────────────────────────────────────────────────────────────
+
+export type EmotionSnapshotTrigger = 'post_turn' | 'vad_shift';
+
+/** Signed VAD/mood axis triple; every component is in [-1, 1]. */
+export interface EmotionVector {
+  valence: number;
+  arousal: number;
+  dominance: number;
+}
+
+/** One discrete-emotion label and its [0, 1] score. Open-vocabulary label. */
+export interface EmotionDiscreteScore {
+  label: string;
+  score: number;
+}
+
+/** One ACAC axis and its [0, 1] self-report score. No rationale text. */
+export interface EmotionAcacAxisScore {
+  axis: AcacAxis;
+  score: number;
+}
+
+export interface EmotionSnapshotMessage {
+  type: 'emotion.snapshot';
+  data: {
+    trigger: EmotionSnapshotTrigger;
+    vad: EmotionVector;
+    mood: EmotionVector;
+    /** Top-K discrete labels by score, descending. Bounded and rounded. */
+    discrete: EmotionDiscreteScore[];
+    confidence: number;
+    /** ACAC axis scores only. Omitted when absent. */
+    acacAxes?: EmotionAcacAxisScore[];
+    /** ISO timestamp of the snapshot sample. */
     timestamp: string;
   };
 }

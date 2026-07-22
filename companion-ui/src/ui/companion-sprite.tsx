@@ -1,8 +1,13 @@
 import { Sparkles } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
-import type { HubStreamState } from '../lib/stream/hub-stream.js';
+import type {
+  EmotionSnapshotStreamEntry,
+  HubStreamState,
+  ToolActivityStreamEntry,
+} from '../lib/stream/hub-stream.js';
 import type { OperationalTrace } from '../lib/traces.js';
 import { resolveSpriteEntryId } from '../lib/sprites/catalog.js';
+import { deriveSpriteInputs } from '../lib/sprites/emotion-mapping.js';
 import { frameRect, type SpriteEntry, type SpriteManifest } from '../lib/sprites/manifest.js';
 import type { TouchReaction } from '../lib/sprites/taxonomy.js';
 import type { SpriteState } from './types.js';
@@ -94,6 +99,8 @@ export function CompanionSprite({
   state,
   manifest = null,
   touch = null,
+  emotion = null,
+  toolActivity = null,
 }: {
   animated: boolean;
   label: string;
@@ -102,8 +109,26 @@ export function CompanionSprite({
   state: SpriteState;
   manifest?: SpriteManifest | null;
   touch?: TouchReaction | null;
+  /** Latest redacted emotion snapshot; drives the emotional base when fresh. */
+  emotion?: EmotionSnapshotStreamEntry | null;
+  /** Most recent tool-activity entry; drives the tool-domain overlay when fresh. */
+  toolActivity?: ToolActivityStreamEntry | null;
 }) {
-  const entryId = manifest ? resolveSpriteEntryId({ state, touch, crop: 'mini' }) : null;
+  // Local clock so a stale snapshot / finished tool decays without a new frame.
+  const [nowMs, setNowMs] = useState(() => Date.now());
+  const { base, toolDomain, toolPhase } = deriveSpriteInputs({ emotion, toolActivity, nowMs });
+  // Tick only while a time-gated layer is still live; stop once everything has
+  // decayed so we never hold a permanent timer (a new frame re-arms it).
+  const decaying = base !== null || toolDomain !== null;
+  useEffect(() => {
+    if (!decaying) return undefined;
+    const interval = window.setInterval(() => setNowMs(Date.now()), 1000);
+    return () => window.clearInterval(interval);
+  }, [decaying]);
+
+  const entryId = manifest
+    ? resolveSpriteEntryId({ state, touch, base, toolDomain, toolPhase, crop: 'mini' })
+    : null;
   const hasSprite = Boolean(manifest && entryId && manifest.entries[entryId]);
 
   return (

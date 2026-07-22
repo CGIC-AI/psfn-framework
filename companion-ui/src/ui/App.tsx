@@ -264,7 +264,7 @@ export function App() {
       if (authorityEpoch !== authorityEpochRef.current) return;
       clearHumanScopedState();
       setAccess({ state: 'offline' });
-      setConfigError(error instanceof Error ? error.message : 'Fleet session status failed');
+      setConfigError(error instanceof Error ? error.message : 'Cluster session status failed');
     }
   }
 
@@ -610,7 +610,7 @@ function presentAccess(access: AccessState): CompanionUiAccessPresentation {
     case 'signed_in':
       return { state: 'signed_in', humanLabel: access.human.label, humanDetail: `Discord · ${access.human.role}`, guestAvailable: false };
     case 'guest':
-      return { state: 'guest', humanLabel: 'Guest', humanDetail: 'No fleet human attached', guestAvailable: true };
+      return { state: 'guest', humanLabel: 'Guest', humanDetail: 'No cluster human attached', guestAvailable: true };
   }
 }
 

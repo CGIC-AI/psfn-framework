@@ -207,6 +207,7 @@ export function App() {
     && streamState.connection === 'ready';
   const connectionTone = getConnectionTone(streamState.connection, connecting);
   const spriteState = deriveSpriteState(streamState, traces, composer.micActive, connecting);
+  const latestToolActivity = streamState.toolActivity.at(-1) ?? null;
   const latestTrace = traces.at(-1);
   const companionTalking = Boolean(streamState.liveAssistant)
     || (latestTrace?.operationClass === 'relay_tts' && latestTrace.status === 'active');
@@ -460,6 +461,8 @@ export function App() {
           petted={spritePetted}
           manifest={spriteManifest.state === 'ready' ? spriteManifest.manifest : null}
           touch={spritePetted ? 'headpat-happy' : null}
+          emotion={streamState.emotion}
+          toolActivity={latestToolActivity}
         />
       )}
       <ToastLayer

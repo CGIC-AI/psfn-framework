@@ -64,9 +64,6 @@ const JOURNAL_STREAMS: readonly PrivacyBreakGlassJournalStream[] = [
   'reflection-journal',
 ];
 
-/** Bounded disclosure window; matches the gated GET routes' server-side cap. */
-const JOURNAL_DISCLOSURE_LIMIT = 250;
-
 function journalStream(value: string): PrivacyBreakGlassJournalStream | null {
   return (JOURNAL_STREAMS as readonly string[]).includes(value)
     ? value as PrivacyBreakGlassJournalStream
@@ -315,7 +312,8 @@ export class AdminPrivacyBreakGlassService {
     if (kind === 'journal') {
       const stream = journalStream(resourceId);
       if (!stream || !this.options.journalReader) return null;
-      const entries = this.options.journalReader.listStream(stream, JOURNAL_DISCLOSURE_LIMIT);
+      // Code-owned least-disclosure ceiling; matches the gated GET routes.
+      const entries = this.options.journalReader.listStream(stream, 250);
       return {
         resource: { stream, entries },
         subjectScopeDigest: digest(JSON.stringify({

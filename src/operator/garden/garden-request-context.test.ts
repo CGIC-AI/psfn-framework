@@ -1,9 +1,36 @@
 import { describe, expect, it, vi } from 'vitest';
 import type {
+  MemorySubjectAdminQuery,
+  MemorySubjectAdminResult,
   MemorySubjectAuthorizedQuery,
   MemoryStorePort,
 } from '../../faculties/memory/memory-store-port.js';
 import type { PurrMemory } from '../../faculties/memory/types.js';
+
+const ADMIN_PRIVACY_ZERO = {
+  activeMemoryCount: 0,
+  highSensitivityCount: 0,
+  consentGatedCount: 0,
+  contactLinkedCount: 0,
+  scopedCount: 0,
+  preferenceCount: 0,
+  durablePreferenceCount: 0,
+  sensitivityCounts: {},
+} as const;
+
+function adminAggregateFromMemories(
+  input: MemorySubjectAdminQuery,
+  pageMemories: readonly (PurrMemory & { similarity: number })[],
+): MemorySubjectAdminResult {
+  switch (input.selector.kind) {
+    case 'privacy_summary':
+      return { kind: 'privacy_summary', privacySummary: { ...ADMIN_PRIVACY_ZERO } };
+    case 'stats':
+      return { kind: 'stats', stats: { total: 0, byType: {}, avgSalience: 0 } };
+    default:
+      return { kind: 'memories', memories: [...pageMemories], total: pageMemories.length };
+  }
+}
 import { AdminMemoryDataService } from './services/memory-service.js';
 import {
   gardenRequestServiceBoundaryDenial,
@@ -107,7 +134,15 @@ describe('request-bound Garden principal isolation', () => {
       const memories = [memory(contactId)];
       return { memories, total: memories.length };
     });
-    const rawStore = { queryAuthorizedMemorySubjects } as unknown as MemoryStorePort;
+    const aggregateAuthorizedMemorySubjects = vi.fn(async (input: MemorySubjectAdminQuery) => {
+      await new Promise(resolve => setImmediate(resolve));
+      const contactId = input.authorization.viewerContactIds[0]!;
+      return adminAggregateFromMemories(input, [{ ...memory(contactId), similarity: 1 }]);
+    });
+    const rawStore = {
+      queryAuthorizedMemorySubjects,
+      aggregateAuthorizedMemorySubjects,
+    } as unknown as MemoryStorePort;
     rawStore.getMemorySubjectClassification = vi.fn(async memoryId => {
       const contactId = memoryId.replace(/^memory-/u, '');
       return {
@@ -138,9 +173,11 @@ describe('request-bound Garden principal isolation', () => {
 
     expect(resultA.memories.map(item => item.contactId)).toEqual(['contact-a']);
     expect(resultB.memories.map(item => item.contactId)).toEqual(['contact-b']);
-    expect(queryAuthorizedMemorySubjects.mock.calls.map(([input]) => (
-      input.authorization.viewerContactIds
-    ))).toEqual(expect.arrayContaining([['contact-a'], ['contact-b']]));
+    // Admin listing now flows through the subject-authorized SQL aggregate (a27w.5).
+    expect(aggregateAuthorizedMemorySubjects.mock.calls
+      .filter(([input]) => input.selector.kind === 'admin_page')
+      .map(([input]) => input.authorization.viewerContactIds))
+      .toEqual(expect.arrayContaining([['contact-a'], ['contact-b']]));
     expect(Object.isFrozen(principalA)).toBe(true);
     expect(Object.isFrozen(principalA.actor)).toBe(true);
   });
@@ -275,9 +312,13 @@ describe('request-bound Garden principal isolation', () => {
       throw new Error('owner role must not reach the broad admin list');
     });
     const queryAuthorizedMemorySubjects = vi.fn(async () => ({ memories: [], total: 0 }));
+    const aggregateAuthorizedMemorySubjects = vi.fn(async (input: MemorySubjectAdminQuery) => (
+      adminAggregateFromMemories(input, [])
+    ));
     const rawStore = {
       listAdminMemories: rawAdminList,
       queryAuthorizedMemorySubjects,
+      aggregateAuthorizedMemorySubjects,
     } as unknown as MemoryStorePort;
     const service = new AdminMemoryDataService({ memoryStore: rawStore, fleetMemoryStore: rawStore });
 
@@ -286,12 +327,15 @@ describe('request-bound Garden principal isolation', () => {
 
     expect(result.memories).toEqual([]);
     expect(result.pagination.total).toBe(0);
-    expect(queryAuthorizedMemorySubjects).toHaveBeenCalledWith(expect.objectContaining({
+    // The owner-role listing is forced through the subject-authorized SQL aggregate
+    // (a27w.5), never the raw admin list which would bypass the subject predicate.
+    expect(aggregateAuthorizedMemorySubjects).toHaveBeenCalledWith(expect.objectContaining({
       authorization: expect.objectContaining({
         viewerContactIds: ['contact-a'],
         allowedSubjectClasses: ['single_contact'],
         allowedViewerRelations: ['self'],
       }),
+      selector: expect.objectContaining({ kind: 'admin_page' }),
     }));
     expect(rawAdminList).not.toHaveBeenCalled();
   });

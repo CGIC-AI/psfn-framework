@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
 import type {
   MemoryStorePort,
+  MemorySubjectAdminQuery,
+  MemorySubjectAdminResult,
   MemorySubjectAuthorizedMutation,
   MemorySubjectAuthorizedQuery,
 } from './memory-store-port.js';
@@ -108,6 +110,98 @@ describe('subject-authorized memory store', () => {
     expect(queries.every(query => query.authorization.viewerContactIds[0] === 'contact-a')).toBe(true);
     expect(mutations.map(mutation => mutation.authorization.action)).toEqual(['update', 'bulk_mutation']);
     expect(rawRead).not.toHaveBeenCalled();
+  });
+
+  it('routes admin summaries/filters through the SQL aggregate primitive, never full-corpus hydration', async () => {
+    const visible = memory('visible', 'visible body');
+    const admin: MemorySubjectAdminQuery[] = [];
+    const rawList = vi.fn(() => {
+      throw new Error('full authorized-corpus hydration must not run');
+    });
+    const aggregate = vi.fn(async (input: MemorySubjectAdminQuery): Promise<MemorySubjectAdminResult> => {
+      admin.push(input);
+      switch (input.selector.kind) {
+        case 'privacy_summary':
+          return {
+            kind: 'privacy_summary',
+            privacySummary: {
+              activeMemoryCount: 3,
+              highSensitivityCount: 0,
+              consentGatedCount: 0,
+              contactLinkedCount: 0,
+              scopedCount: 0,
+              preferenceCount: 0,
+              durablePreferenceCount: 0,
+              sensitivityCounts: {},
+            },
+          };
+        case 'stats':
+          return { kind: 'stats', stats: { total: 3, byType: { semantic: 3 }, avgSalience: 0.7 } };
+        default:
+          return { kind: 'memories', memories: [{ ...visible, similarity: 1 }], total: 1 };
+      }
+    });
+    const store = {
+      queryAuthorizedMemorySubjects: rawList,
+      getAllActiveMemories: rawList,
+      aggregateAuthorizedMemorySubjects: aggregate,
+    } as unknown as MemoryStorePort;
+    const authorized = createSubjectAuthorizedMemoryStore(store, { viewerContactId: 'contact-a' });
+
+    const list = await authorized.listAdminMemories({ type: 'semantic', limit: 10 });
+    expect(list.memories.map(entry => entry.id)).toEqual(['visible']);
+    expect(list.total).toBe(1);
+    expect(list.privacySummary.activeMemoryCount).toBe(3);
+    expect(await authorized.getStats()).toEqual({ total: 3, byType: { semantic: 3 }, avgSalience: 0.7 });
+    expect((await authorized.getAdminMemoryPrivacySummary()).activeMemoryCount).toBe(3);
+    expect((await authorized.getMemoriesByChannel('discord', 5))[0]?.id).toBe('visible');
+    expect((await authorized.getMemoriesByContact('contact-a', 5))[0]?.id).toBe('visible');
+
+    expect(admin.map(entry => [entry.authorization.action, entry.selector.kind])).toEqual([
+      ['list', 'admin_page'],
+      ['count', 'privacy_summary'],
+      ['count', 'stats'],
+      ['count', 'privacy_summary'],
+      ['list', 'channel_prefix'],
+      ['list', 'contact_filter'],
+    ]);
+    expect(admin.every(entry => entry.authorization.viewerContactIds[0] === 'contact-a')).toBe(true);
+    // The admin page carried the caller's filter options into SQL.
+    const page = admin.find(entry => entry.selector.kind === 'admin_page');
+    expect(page?.selector).toMatchObject({ kind: 'admin_page', options: { type: 'semantic', limit: 10 } });
+    expect(rawList).not.toHaveBeenCalled();
+  });
+
+  it('fails closed on admin aggregates without a trusted subject and never probes the aggregate primitive', async () => {
+    const aggregate = vi.fn(() => {
+      throw new Error('aggregate must not run without a trusted subject');
+    });
+    const store = {
+      aggregateAuthorizedMemorySubjects: aggregate,
+    } as unknown as MemoryStorePort;
+    const denied = createSubjectAuthorizedMemoryStore(store, {});
+
+    expect(await denied.getStats()).toEqual({ total: 0, byType: {}, avgSalience: 0 });
+    expect(await denied.getAdminMemoryPrivacySummary()).toMatchObject({
+      activeMemoryCount: 0,
+      sensitivityCounts: {},
+    });
+    expect(await denied.listAdminMemories()).toMatchObject({ memories: [], total: 0 });
+    expect(await denied.getMemoriesByChannel('discord', 5)).toEqual([]);
+    expect(await denied.getMemoriesByContact('contact-a', 5)).toEqual([]);
+    // Direct aggregate call with an attacker-chosen authorization is enforced closed.
+    expect(await denied.aggregateAuthorizedMemorySubjects({
+      authorization: {
+        action: 'count',
+        viewerContactIds: ['attacker-selected-contact'],
+        allowedSubjectClasses: ['single_contact'],
+        allowedViewerRelations: ['self'],
+        classifierVersion: 1,
+        grantBindings: [],
+      },
+      selector: { kind: 'stats' },
+    })).toEqual({ kind: 'stats', stats: { total: 0, byType: {}, avgSalience: 0 } });
+    expect(aggregate).not.toHaveBeenCalled();
   });
 
   it('fails closed without a trusted subject and never probes raw storage', async () => {

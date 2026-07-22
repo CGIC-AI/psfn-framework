@@ -6,8 +6,13 @@ import {
   type MemorySubjectQueryAuthorization,
 } from '../shared/contracts/memory-subject.js';
 import type {
+  MemoryAdminListOptions,
+  MemoryAdminPrivacySummary,
   MemoryDeleteVersion,
+  MemoryStoreStats,
   MemoryStoreUpdatePatch,
+  MemorySubjectAdminQuery,
+  MemorySubjectAdminResult,
   MemorySubjectAuthorizedDelete,
   MemorySubjectAuthorizedMutation,
   MemorySubjectAuthorizedQuery,
@@ -15,6 +20,10 @@ import type {
   MemorySubjectAuthorizedRestore,
   MemorySubjectAuthorizedWrite,
 } from '../faculties/memory/memory-store-port.js';
+import {
+  ADMIN_DURABLE_MEMORY_TAGS,
+  ADMIN_PREFERENCE_MEMORY_TAGS,
+} from '../faculties/memory/postgres-store/admin.js';
 import { classifyMemorySubject } from '../faculties/memory/subject-classification.js';
 import { isInternalMemoryArtifact } from '../faculties/memory/internal-artifacts.js';
 import type { MemoryScopeQuery, PurrMemory } from '../faculties/memory/types.js';
@@ -219,6 +228,129 @@ export async function queryInMemoryAuthorizedSubjects(
     })),
     total: matches.length,
   };
+}
+
+// ---------------------------------------------------------------------------
+// Subject-authorized admin aggregation reference (a27w.5).
+//
+// Pure-JS reference for the operator admin surface's counts, filters, stats,
+// and channel/contact slices, matching the semantics the Postgres
+// `subject-admin-queries` module reproduces in SQL. The preference predicate is
+// tags-only and the retention filter is exact equality (NOT the operator raw
+// store's text-regex-inclusive semantics). Exported so the equivalence test can
+// use it as an independent oracle against the SQL path.
+// ---------------------------------------------------------------------------
+
+const ADMIN_PREFERENCE_TAG_SET = new Set<string>(ADMIN_PREFERENCE_MEMORY_TAGS);
+const ADMIN_DURABLE_TAG_SET = new Set<string>(ADMIN_DURABLE_MEMORY_TAGS);
+
+export function subjectAdminIsPreference(memory: PurrMemory): boolean {
+  return memory.type !== 'boundary' && memory.tags.some((tag) => {
+    const normalized = tag.toLowerCase();
+    return ADMIN_PREFERENCE_TAG_SET.has(normalized) || normalized.startsWith('preference:');
+  });
+}
+
+export function subjectAdminIsDurable(memory: PurrMemory): boolean {
+  return memory.retentionClass === 'durable'
+    || memory.tags.some(tag => ADMIN_DURABLE_TAG_SET.has(tag.toLowerCase()));
+}
+
+export function subjectAdminPrivacySummary(
+  memories: readonly PurrMemory[],
+): MemoryAdminPrivacySummary {
+  const sensitivityCounts: Record<string, number> = {};
+  for (const memory of memories) {
+    sensitivityCounts[memory.sensitivity] = (sensitivityCounts[memory.sensitivity] ?? 0) + 1;
+  }
+  return {
+    activeMemoryCount: memories.length,
+    highSensitivityCount: memories.filter(memory => (
+      memory.sensitivity === 'intimate' || memory.sensitivity === 'confidential'
+    )).length,
+    consentGatedCount: memories.filter(memory => memory.consentFlags?.allowRecall === false).length,
+    contactLinkedCount: memories.filter(memory => Boolean(memory.contactId)).length,
+    scopedCount: memories.filter(memory => Boolean(memory.scopeRef || memory.scopeTags?.length)).length,
+    preferenceCount: memories.filter(subjectAdminIsPreference).length,
+    durablePreferenceCount: memories
+      .filter(memory => subjectAdminIsPreference(memory) && subjectAdminIsDurable(memory)).length,
+    sensitivityCounts,
+  };
+}
+
+export function subjectAdminStats(memories: readonly PurrMemory[]): MemoryStoreStats {
+  const byType: Record<string, number> = {};
+  let salienceSum = 0;
+  for (const memory of memories) {
+    byType[memory.type] = (byType[memory.type] ?? 0) + 1;
+    salienceSum += memory.salience;
+  }
+  return {
+    total: memories.length,
+    byType,
+    avgSalience: memories.length === 0 ? 0 : salienceSum / memories.length,
+  };
+}
+
+export function subjectAdminFilter(
+  memories: readonly PurrMemory[],
+  options: MemoryAdminListOptions,
+): PurrMemory[] {
+  return memories.filter(memory => (
+    (options.type === undefined || memory.type === options.type)
+    && (options.sensitivity === undefined || memory.sensitivity === options.sensitivity)
+    && (options.retentionClass === undefined || memory.retentionClass === options.retentionClass)
+    && (options.preferenceOnly !== true || subjectAdminIsPreference(memory))
+    && (options.startDate === undefined || memory.extractedAt >= options.startDate)
+    && (options.endDate === undefined || memory.extractedAt <= options.endDate)
+  ));
+}
+
+export async function queryInMemoryAuthorizedAdmin(
+  store: InMemorySubjectStoreBackend,
+  input: MemorySubjectAdminQuery,
+): Promise<MemorySubjectAdminResult> {
+  const authorized = (await store.getAllActiveMemories())
+    .filter(memory => isAuthorized(memory, input.authorization))
+    .sort((left, right) => right.extractedAt - left.extractedAt || right.id.localeCompare(left.id));
+  const { selector } = input;
+  switch (selector.kind) {
+    case 'stats':
+      return { kind: 'stats', stats: subjectAdminStats(authorized) };
+    case 'privacy_summary':
+      return {
+        kind: 'privacy_summary',
+        privacySummary: subjectAdminPrivacySummary(
+          authorized.filter(memory => !isInternalMemoryArtifact(memory)),
+        ),
+      };
+    case 'channel_prefix': {
+      const memories = authorized
+        .filter(memory => memory.sourceRef.startsWith(`${selector.channelId}:`))
+        .slice(0, selector.limit)
+        .map(memory => ({ ...memory, similarity: 1 }));
+      return { kind: 'memories', memories, total: memories.length };
+    }
+    case 'contact_filter': {
+      const memories = authorized
+        .filter(memory => memory.contactId === selector.contactId)
+        .slice(0, selector.limit)
+        .map(memory => ({ ...memory, similarity: 1 }));
+      return { kind: 'memories', memories, total: memories.length };
+    }
+    case 'admin_page': {
+      const options = selector.options ?? {};
+      const all = authorized.filter(memory => !isInternalMemoryArtifact(memory));
+      const filtered = subjectAdminFilter(all, options);
+      const offset = Math.max(0, Math.floor(options.offset ?? 0));
+      const limit = Math.max(1, Math.min(500, Math.floor(options.limit ?? 50)));
+      return {
+        kind: 'memories',
+        memories: filtered.slice(offset, offset + limit).map(memory => ({ ...memory, similarity: 1 })),
+        total: filtered.length,
+      };
+    }
+  }
 }
 
 export async function mutateInMemoryAuthorizedSubjects(

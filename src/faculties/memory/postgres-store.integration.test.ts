@@ -16,11 +16,18 @@ import {
 import { MEMORY_SUBJECT_SELECT_COLUMNS } from './postgres-store/subject-queries.js';
 import { buildMemorySubjectAuthorizationPredicate } from './postgres-store/subject-policy.js';
 import type { PurrMemory } from './types.js';
+import type { MemoryAdminListOptions } from './memory-store-port.js';
 import { MEMORY_SUBJECT_CLASSIFIER_VERSION } from '../../shared/contracts/memory-subject.js';
 import type { MemorySubjectQueryAuthorization } from '../../shared/contracts/memory-subject.js';
 import { createPostgresContactStore } from '../../core/contacts/postgres-adapter.js';
 import { persistMemorySubjectProjection } from './postgres-store/subject-projection.js';
 import { createSubjectAuthorizedMemoryStore } from './subject-authorized-store.js';
+import { isInternalMemoryArtifact } from './internal-artifacts.js';
+import {
+  subjectAdminFilter,
+  subjectAdminPrivacySummary,
+  subjectAdminStats,
+} from '../../test-support/in-memory-memory-subjects.js';
 import { MemoryWriter } from './writer.js';
 import type { EmbeddingProviderPort } from '../../shared/contracts/embedding-provider.js';
 import { MemoryRetriever } from './retrieval.js';
@@ -797,6 +804,159 @@ describe('postgres memory store integration', () => {
         byType: {},
         avgSalience: 0,
       });
+    });
+  }, INTEGRATION_TIMEOUT_MS);
+
+  it('computes subject-authorized admin summaries/filters in SQL identically to the JS path (a27w.5)', async () => {
+    await withMemoryDatabase(async (pool) => {
+      const store = await createPostgresMemoryStoreFromPool(pool, 4);
+      const base = 1_700_000_000_000;
+      // Mixed authorized/unauthorized fixture with distinct extractedAt values so
+      // ordering is total (no id-tiebreak collation ambiguity between SQL and JS).
+      const fixture: PurrMemory[] = [
+        makeMemory({
+          id: 'a1', type: 'semantic', sensitivity: 'low', extractedAt: base + 50,
+          sourceRef: 'discord:general', tags: ['project'], salience: 0.2,
+          provenance: { subjectContactId: 'contact-a' },
+        }),
+        makeMemory({
+          id: 'a2', type: 'episodic', sensitivity: 'intimate', extractedAt: base + 40,
+          sourceRef: 'api:x', tags: ['preference', 'durable'], retentionClass: 'durable',
+          contactId: 'contact-c', salience: 0.4, consentFlags: { allowRecall: false },
+          provenance: { subjectContactId: 'contact-a' },
+        }),
+        makeMemory({
+          id: 'a3', type: 'semantic', sensitivity: 'confidential', extractedAt: base + 30,
+          sourceRef: 'discord:dm', scopeRef: { kind: 'project', id: 'alpha' },
+          tags: ['favorite'], contactId: 'contact-a', salience: 0.6,
+          provenance: { subjectContactId: 'contact-a' },
+        }),
+        // Internal cognitive artifact: the subject authorization predicate already
+        // excludes context-feedback rows for a viewer-contact caller, so it must
+        // never surface in any admin summary/filter/slice or count.
+        makeMemory({
+          id: 'a4', type: 'procedural', sensitivity: 'low', extractedAt: base + 20,
+          sourceRef: 'source:context_feedback|fb1', tags: ['context_feedback'], salience: 0.1,
+          provenance: { subjectContactId: 'contact-a' },
+        }),
+        makeMemory({
+          id: 'a5', type: 'semantic', sensitivity: 'personal', extractedAt: base + 10,
+          sourceRef: 'discord:general', tags: ['preference:color'], retentionClass: 'standard',
+          salience: 0.5, provenance: { subjectContactId: 'contact-a' },
+        }),
+        // Unauthorized (subject contact-b) — must never appear or be counted.
+        makeMemory({
+          id: 'b1', type: 'semantic', sensitivity: 'intimate', extractedAt: base + 45,
+          sourceRef: 'discord:general', tags: ['preference'], contactId: 'contact-d', salience: 0.9,
+          provenance: { subjectContactId: 'contact-b' },
+        }),
+        // Unauthorized but contactId==contact-a: proves authorization is applied
+        // BEFORE the contact filter, not after.
+        makeMemory({
+          id: 'b2', type: 'semantic', sensitivity: 'low', extractedAt: base + 35,
+          sourceRef: 'discord:dm', contactId: 'contact-a', salience: 0.3,
+          provenance: { subjectContactId: 'contact-b' },
+        }),
+        // Unattributed — not authorized for anyone.
+        makeMemory({ id: 'u1', type: 'relational', sensitivity: 'low', extractedAt: base + 5 }),
+      ];
+      for (const memory of fixture) await store.insertMemory(memory, DEFAULT_EMBEDDING);
+
+      const authorized = createSubjectAuthorizedMemoryStore(store, { viewerContactId: 'contact-a' });
+
+      // JS oracle: hydrate the full authorized corpus via the proven row primitive
+      // (extracted_at DESC order), then aggregate with the shared JS reference.
+      const hydrated: PurrMemory[] = [];
+      for (let offset = 0; ; ) {
+        const page = await store.queryAuthorizedMemorySubjects({
+          authorization: subjectAuthorization('contact-a', 'list'),
+          selector: { kind: 'list', limit: 500, offset },
+        });
+        hydrated.push(...page.memories);
+        offset += page.memories.length;
+        if (page.memories.length === 0 || offset >= page.total) break;
+      }
+      // a4 (context-feedback) is excluded by the authorization predicate itself.
+      expect(hydrated.map(memory => memory.id)).toEqual(['a1', 'a2', 'a3', 'a5']);
+      const adminCorpus = hydrated.filter(memory => !isInternalMemoryArtifact(memory));
+      expect(adminCorpus.map(memory => memory.id)).toEqual(['a1', 'a2', 'a3', 'a5']);
+
+      const unauthorizedIds = new Set(['a4', 'b1', 'b2', 'u1']);
+      const assertNoLeak = (ids: readonly string[], label: string): void => {
+        for (const id of ids) expect(unauthorizedIds.has(id), `${label} leaked ${id}`).toBe(false);
+      };
+
+      // getStats — over the full active authorized corpus.
+      const stats = await authorized.getStats();
+      expect(stats).toEqual(subjectAdminStats(hydrated));
+      expect(stats.total).toBe(4);
+
+      // Privacy summary — internal artifact excluded. Every field matches the JS
+      // oracle EXCEPT consentGatedCount: `fromMemoryRow` drops boolean consent
+      // flags during hydration (decodeJsonObject keeps only numbers), so the JS
+      // path under-counted consent-gated rows. The SQL path reads the stored
+      // jsonb directly and is authoritative; a2 carries allowRecall:false.
+      const expectedPrivacy = { ...subjectAdminPrivacySummary(adminCorpus), consentGatedCount: 1 };
+      expect(await authorized.getAdminMemoryPrivacySummary()).toEqual(expectedPrivacy);
+
+      // listAdminMemories: unfiltered + several filter shapes.
+      const optionSets: MemoryAdminListOptions[] = [
+        {},
+        { type: 'semantic' },
+        { sensitivity: 'confidential' },
+        { preferenceOnly: true },
+        { retentionClass: 'durable' },
+        { startDate: base + 25, endDate: base + 55 },
+        { limit: 2, offset: 1 },
+      ];
+      for (const options of optionSets) {
+        const result = await authorized.listAdminMemories(options);
+        const expectedFiltered = subjectAdminFilter(adminCorpus, options);
+        const offset = Math.max(0, Math.floor(options.offset ?? 0));
+        const limit = Math.max(1, Math.min(500, Math.floor(options.limit ?? 50)));
+        expect(result.memories.map(memory => memory.id), JSON.stringify(options))
+          .toEqual(expectedFiltered.slice(offset, offset + limit).map(memory => memory.id));
+        expect(result.total, JSON.stringify(options)).toBe(expectedFiltered.length);
+        expect(result.privacySummary).toEqual(expectedPrivacy);
+        assertNoLeak(result.memories.map(memory => memory.id), `listAdminMemories ${JSON.stringify(options)}`);
+      }
+
+      // Channel slice.
+      const channel = await authorized.getMemoriesByChannel('discord', 10);
+      expect(channel.map(memory => memory.id))
+        .toEqual(hydrated.filter(memory => memory.sourceRef.startsWith('discord:')).slice(0, 10).map(memory => memory.id));
+      expect(channel.map(memory => memory.id)).toEqual(['a1', 'a3', 'a5']);
+      assertNoLeak(channel.map(memory => memory.id), 'getMemoriesByChannel');
+
+      // Contact slice: includes authorized a3 (contactId contact-a), excludes the
+      // unauthorized b2 whose contactId is also contact-a.
+      const contact = await authorized.getMemoriesByContact('contact-a', 10);
+      expect(contact.map(memory => memory.id)).toEqual(['a3']);
+      assertNoLeak(contact.map(memory => memory.id), 'getMemoriesByContact');
+
+      // A caller with no trusted subject counts nothing.
+      const denied = createSubjectAuthorizedMemoryStore(store, {});
+      expect(await denied.getStats()).toEqual({ total: 0, byType: {}, avgSalience: 0 });
+      expect((await denied.getAdminMemoryPrivacySummary()).activeMemoryCount).toBe(0);
+      expect(await denied.listAdminMemories()).toMatchObject({ memories: [], total: 0 });
+    });
+  }, INTEGRATION_TIMEOUT_MS);
+
+  it('fails closed when an admin aggregate query errors (a27w.5)', async () => {
+    await withMemoryDatabase(async (pool) => {
+      const store = await createPostgresMemoryStoreFromPool(pool, 4);
+      await store.insertMemory(makeMemory({
+        id: 'fc1', provenance: { subjectContactId: 'contact-a' },
+      }), DEFAULT_EMBEDDING);
+      const authorized = createSubjectAuthorizedMemoryStore(store, { viewerContactId: 'contact-a' });
+      await expect(authorized.getStats()).resolves.toBeDefined();
+      // Remove the backing table: the SQL aggregate must throw, never fall back to
+      // an unauthorized or empty summary.
+      await pool.query('DROP TABLE l2_memories CASCADE');
+      await expect(authorized.getStats()).rejects.toThrow();
+      await expect(authorized.getAdminMemoryPrivacySummary()).rejects.toThrow();
+      await expect(authorized.listAdminMemories()).rejects.toThrow();
+      await expect(authorized.getMemoriesByChannel('discord', 5)).rejects.toThrow();
     });
   }, INTEGRATION_TIMEOUT_MS);
 

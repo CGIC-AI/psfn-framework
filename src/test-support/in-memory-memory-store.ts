@@ -24,6 +24,7 @@ import {
   type MemoryStoreStats,
   type MemoryStoreUpdatePatch,
   type MemoryStoreUpdateOptions,
+  type MemorySubjectAdminQuery,
   type MemorySubjectAuthorizedDelete,
   type MemorySubjectAuthorizedMutation,
   type MemorySubjectAuthorizedQuery,
@@ -48,6 +49,7 @@ import {
   classifyInMemorySubject,
   mutateInMemoryAuthorizedSubjects,
   persistInMemoryAuthorizedSubject,
+  queryInMemoryAuthorizedAdmin,
   queryInMemoryAuthorizedSubjects,
   softDeleteInMemoryAuthorizedSubject,
   undoDeleteInMemoryAuthorizedSubject,
@@ -418,6 +420,10 @@ export class InMemoryMemoryStore {
 
   queryAuthorizedMemorySubjects(input: MemorySubjectAuthorizedQuery) {
     return queryInMemoryAuthorizedSubjects(this, input);
+  }
+
+  aggregateAuthorizedMemorySubjects(input: MemorySubjectAdminQuery) {
+    return queryInMemoryAuthorizedAdmin(this, input);
   }
 
   mutateAuthorizedMemorySubjects(input: MemorySubjectAuthorizedMutation) {

@@ -167,6 +167,44 @@ describe('satellite hub websocket client', () => {
     });
   });
 
+  it('sends raw coordinates to the hub but redacts them from the outbound telemetry event', async () => {
+    const socket = new FakeSocket();
+    const client = new SatelliteHubClient({
+      url: 'ws://127.0.0.1:8787/',
+      webSocketFactory: () => socket,
+    });
+    const outbound: unknown[] = [];
+    client.on('outbound', (event) => outbound.push(event.message));
+
+    const connecting = client.connect();
+    socket.open();
+    await connecting;
+
+    expect(client.supportsDeviceLocation()).toBe(true);
+    client.sendDeviceLocation({ lat: 37.42, lon: -122.08, accuracyM: 12, timestamp: 1_700_000_000_000 });
+
+    // The wire frame to the hub carries the real coordinates (they terminate there).
+    expect(socket.sent.map((frame) => JSON.parse(frame))).toContainEqual({
+      type: 'device.location',
+      lat: 37.42,
+      lon: -122.08,
+      accuracyM: 12,
+      timestamp: 1_700_000_000_000,
+    });
+
+    // The telemetry copy (which may be logged) must not carry the coordinates.
+    const telemetry = outbound.find(
+      (message): message is { type: string; lat: number; lon: number; accuracyM: number } =>
+        typeof message === 'object' && message !== null && (message as { type?: unknown }).type === 'device.location',
+    );
+    expect(telemetry).toBeDefined();
+    expect(telemetry?.lat).toBe(0);
+    expect(telemetry?.lon).toBe(0);
+    expect(telemetry?.accuracyM).toBe(12);
+    expect(JSON.stringify(outbound)).not.toContain('37.42');
+    expect(JSON.stringify(outbound)).not.toContain('-122.08');
+  });
+
   it('rejects unknown inbound hub message types and marks the client unhealthy', async () => {
     const socket = new FakeSocket();
     const client = new SatelliteHubClient({

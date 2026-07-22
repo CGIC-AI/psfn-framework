@@ -1,4 +1,5 @@
 import type { TouchInteraction } from '../touch-interactions.js';
+import type { DeviceLocationSample } from '../geolocation.js';
 import type { HubToClientMessage } from '../protocol/events.js';
 import { buildSatelliteHello } from './auth.js';
 import { COMPANION_APPROVALS_V2_CAPABILITY } from '../../../../src/shared/contracts/companion-relay.js';
@@ -265,6 +266,25 @@ export class CompanionGatewayClient {
       count: interaction.count,
       durationMs: interaction.durationMs,
     });
+  }
+
+  /**
+   * The gateway transport reaches PSFN directly — there is no satellite hub in
+   * the path to geofence coordinates into a place label. Raw lat/lon must never
+   * cross into PSFN, so this transport does not carry `device.location`.
+   */
+  supportsDeviceLocation(): boolean {
+    return false;
+  }
+
+  sendDeviceLocation(_sample: DeviceLocationSample): void {
+    // Fail closed: forwarding coordinates over the gateway would move raw
+    // lat/lon into PSFN, violating the 7ang.8 privacy invariant. device.location
+    // is valid only on a coordinate-terminating hub transport.
+    throw this.emitLocalError(
+      'device.location is unsupported on the gateway transport: raw coordinates must terminate at a satellite hub',
+      false,
+    );
   }
 
   private sendAction(

@@ -55,7 +55,8 @@ export type ClientToHubMessage =
   | TurnEndMessage
   | ApprovalDecisionMessage
   | ArtifactPreviewRequestMessage
-  | TouchInteractionMessage;
+  | TouchInteractionMessage
+  | DeviceLocationMessage;
 
 export interface HelloMessage {
   type: 'hello';
@@ -144,6 +145,23 @@ export interface TouchInteractionMessage {
   region: 'head' | 'cheek' | 'body';
   count: number;
   durationMs: number;
+}
+
+/**
+ * Reduced GPS sample from a foregrounded phone satellite.
+ *
+ * RAW COORDINATES TERMINATE AT THE HUB. This is the only message in the union
+ * that carries lat/lon, and it is only ever sent to a satellite hub that
+ * geofences it into a place label. The hub NEVER forwards lat/lon toward PSFN
+ * (privacy invariant, bead psfn-framework-7ang.8); transports that reach PSFN
+ * directly (the gateway) fail closed rather than send this message.
+ */
+export interface DeviceLocationMessage {
+  type: 'device.location';
+  lat: number;
+  lon: number;
+  accuracyM: number;
+  timestamp: number;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

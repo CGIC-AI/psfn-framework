@@ -7,6 +7,7 @@ import {
   WifiOff,
 } from 'lucide-react';
 import {
+  useCallback,
   useEffect,
   useMemo,
   useRef,
@@ -37,6 +38,8 @@ import {
 import { deriveOperationalTraces } from '../lib/traces.js';
 import { HeadpatCoalescer } from '../lib/touch-interactions.js';
 import { useSpriteManifest } from '../lib/sprites/use-sprite-manifest.js';
+import type { DeviceLocationSample } from '../lib/geolocation.js';
+import { useDeviceLocation } from './use-device-location.js';
 import { ActivityDrawer, traceMatchesFilter } from './activity-drawer.js';
 import { CompanionSelectorPage } from './companion-selector.js';
 import { CompanionSprite, deriveSpriteState } from './companion-sprite.js';
@@ -75,6 +78,7 @@ export function App() {
   const [spriteAnimations, setSpriteAnimations] = useState(true);
   const [spritePetted, setSpritePetted] = useState(false);
   const [touchError, setTouchError] = useState<string | null>(null);
+  const [locationEnabled, setLocationEnabled] = useState(false);
   const [now, setNow] = useState(() => Date.now());
   const composer = useComposerController({
     captureReady: false,
@@ -100,6 +104,19 @@ export function App() {
     reportError: setConfigError,
   });
   const mouthOpen = useVoicePlayback(streamState.voicePlayback, storeRef.current);
+
+  const sendDeviceLocation = useCallback((sample: DeviceLocationSample) => {
+    // Only ever reached when the transport can terminate coordinates at a hub
+    // (canSendLocation). Raw lat/lon must never cross into PSFN.
+    storeRef.current?.sendDeviceLocation(sample);
+  }, []);
+  const canSendLocation =
+    streamState.connection === 'ready' && (storeRef.current?.canSendDeviceLocation() ?? false);
+  const locationStatus = useDeviceLocation({
+    enabled: locationEnabled,
+    canSend: canSendLocation,
+    send: sendDeviceLocation,
+  });
 
   useEffect(() => {
     const coalescer = new HeadpatCoalescer({
@@ -508,8 +525,11 @@ export function App() {
               micMode={composer.micMode}
               spriteAnimations={spriteAnimations}
               spriteEnabled={spriteEnabled}
+              locationEnabled={locationEnabled}
+              locationStatus={locationStatus}
               streamState={streamState}
               onClose={() => setOverlay(null)}
+              onLocationEnabledChange={setLocationEnabled}
               onConnect={() => void refreshAuthority(true)}
               onDisconnect={disconnect}
               onGuest={() => {

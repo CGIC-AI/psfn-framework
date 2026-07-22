@@ -12,6 +12,7 @@ import type { HubStreamState } from '../lib/stream/hub-stream.js';
 import type { FleetRosterCompanion } from '../lib/fleet-roster.js';
 import { DrawerHeader } from './overlay-drawer.js';
 import type { MicMode } from './types.js';
+import type { DeviceLocationStatus } from './use-device-location.js';
 
 export type CompanionUiAccessPresentation = Readonly<{
   state: 'loading' | 'offline' | 'signed_out' | 'signed_in' | 'guest';
@@ -28,6 +29,8 @@ export function SettingsDrawer({
   micMode,
   spriteAnimations,
   spriteEnabled,
+  locationEnabled,
+  locationStatus,
   streamState,
   onClose,
   onConnect,
@@ -39,6 +42,7 @@ export function SettingsDrawer({
   onCompanionChange,
   onSpriteAnimationsChange,
   onSpriteEnabledChange,
+  onLocationEnabledChange,
   onSwitchUser,
 }: {
   access: CompanionUiAccessPresentation;
@@ -48,6 +52,8 @@ export function SettingsDrawer({
   micMode: MicMode;
   spriteAnimations: boolean;
   spriteEnabled: boolean;
+  locationEnabled: boolean;
+  locationStatus: DeviceLocationStatus;
   streamState: HubStreamState;
   onClose: () => void;
   onConnect: () => void;
@@ -59,6 +65,7 @@ export function SettingsDrawer({
   onCompanionChange: (companionId: string) => void;
   onSpriteAnimationsChange: (value: boolean) => void;
   onSpriteEnabledChange: (value: boolean) => void;
+  onLocationEnabledChange: (value: boolean) => void;
   onSwitchUser: () => void;
 }) {
   const attached = streamState.session;
@@ -152,6 +159,21 @@ export function SettingsDrawer({
           <ToggleRow label="Animation enabled" checked={spriteAnimations} onChange={onSpriteAnimationsChange} />
         </section>
 
+        <section className="settings-section" aria-label="Location awareness">
+          <h2>Location</h2>
+          <p>
+            Share your phone&apos;s location while the app is open so she knows where you are
+            as a place (home, out) — never as raw coordinates. Coordinates are geofenced at the
+            satellite hub and never reach the runtime. Turns off when the app is backgrounded.
+          </p>
+          <ToggleRow
+            label="Share location while open"
+            checked={locationEnabled}
+            onChange={onLocationEnabledChange}
+          />
+          <p className="location-status" role="status">{describeLocationStatus(locationStatus)}</p>
+        </section>
+
         <details className="settings-section advanced-section">
           <summary><span>Advanced</span><ChevronDown aria-hidden /></summary>
           <p>Diagnostics remain redacted. OAuth, session, assertion, enrollment, device, and channel credentials are never written to browser storage or logs.</p>
@@ -159,6 +181,27 @@ export function SettingsDrawer({
       </div>
     </aside>
   );
+}
+
+function describeLocationStatus(status: DeviceLocationStatus): string {
+  switch (status) {
+    case 'off':
+      return 'Location sharing is off.';
+    case 'unsupported':
+      return 'This device has no geolocation support.';
+    case 'transport-unavailable':
+      return 'Location needs a satellite hub connection that keeps coordinates on-device; unavailable on this connection.';
+    case 'suspended':
+      return 'Paused while the app is in the background.';
+    case 'watching':
+      return 'Sharing your place while the app is open.';
+    case 'denied':
+      return 'Location permission was denied. Enable it in your browser settings to share your place.';
+    case 'error':
+      return 'Location is temporarily unavailable.';
+    default:
+      return '';
+  }
 }
 
 function ReadOnlyAuthority({ label, value, detail }: { label: string; value: string; detail: string }) {

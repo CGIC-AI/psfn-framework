@@ -179,6 +179,8 @@ describe('hub websocket framing', () => {
     { type: 'turn.end', reason: 'typed_submit' },
     { type: 'approval.decision', id: 'ap-1', decision: 'approve' },
     { type: 'artifact.preview', requestId: 'req-1', artifactId: 'art-1' },
+    { type: 'device.location', lat: 37.42, lon: -122.08, accuracyM: 12, timestamp: 1_700_000_000_000 },
+    { type: 'device.location', lat: -90, lon: 180, accuracyM: 0, timestamp: 1 },
   ];
 
   it.each(hubMessages)('parses known hub message %s', (message) => {
@@ -272,6 +274,23 @@ describe('hub websocket framing', () => {
 
     const badPreview = { type: 'artifact.preview', artifactId: 'art-1' } as unknown as ClientToHubMessage;
     expect(() => serializeClientToHubMessage(badPreview)).toThrow(HubFramingError);
+  });
+
+  const malformedDeviceLocation: Array<[string, Record<string, unknown>]> = [
+    ['latitude out of range', { type: 'device.location', lat: 91, lon: 0, accuracyM: 5, timestamp: 1 }],
+    ['longitude out of range', { type: 'device.location', lat: 0, lon: 181, accuracyM: 5, timestamp: 1 }],
+    ['latitude NaN', { type: 'device.location', lat: Number.NaN, lon: 0, accuracyM: 5, timestamp: 1 }],
+    ['longitude infinite', { type: 'device.location', lat: 0, lon: Number.POSITIVE_INFINITY, accuracyM: 5, timestamp: 1 }],
+    ['negative accuracy', { type: 'device.location', lat: 0, lon: 0, accuracyM: -1, timestamp: 1 }],
+    ['zero timestamp', { type: 'device.location', lat: 0, lon: 0, accuracyM: 5, timestamp: 0 }],
+    ['non-integer timestamp', { type: 'device.location', lat: 0, lon: 0, accuracyM: 5, timestamp: 1.5 }],
+    ['missing accuracy', { type: 'device.location', lat: 0, lon: 0, timestamp: 1 }],
+    ['extra field', { type: 'device.location', lat: 0, lon: 0, accuracyM: 5, timestamp: 1, placeId: 'home' }],
+    ['string coordinate', { type: 'device.location', lat: '0', lon: 0, accuracyM: 5, timestamp: 1 }],
+  ];
+
+  it.each(malformedDeviceLocation)('fails closed on malformed device.location: %s', (_label, message) => {
+    expect(() => serializeClientToHubMessage(message as unknown as ClientToHubMessage)).toThrow(HubFramingError);
   });
 });
 

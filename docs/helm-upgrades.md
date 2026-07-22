@@ -37,8 +37,11 @@ cluster of one, not a second deployment mode.
 
 ## Known deploy-tooling defects
 
-Recorded 2026-07-22 shipping `9dfb11b46` to psfn-shard (helm rev 65). Each is
-tracked; check the bead before assuming current behaviour.
+Recorded 2026-07-22 while shipping a merged-main build to the live companion
+deployment. Each is tracked; check the bead before assuming current behaviour.
+(The exact commit, node, and Helm revision this was observed against live in the
+ignored `working_docs/private-live-ops.md` note — see
+`working_docs/private-live-ops.example.md` — not in this tracked doc.)
 
 | Bead | Defect | Operational consequence |
 |---|---|---|

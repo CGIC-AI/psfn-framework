@@ -10,7 +10,14 @@
 //     scanner over the SHIPPED (fixed) rule file and asserts it CATCHES it. This
 //     proves the harness detects the regression, and that the fix closes it.
 //
-//  2. Harness-core coverage: exercises runScenarios' pass / fail / error /
+//  2. 816w alias-bypass witness. It gates a real first-party tool by its
+//     canonical name, replays the pre-816w gate state (empty `context.aliases`)
+//     and asserts the alias invocation SLIPS the policy (bypass reproduced),
+//     then feeds the resolved alias set (what `resolveToolAliasMatchers`
+//     supplies) and asserts the canonical policy CATCHES the alias call (fix
+//     verified). Drives the real `HookRegistry.evaluatePreToolUse`.
+//
+//  3. Harness-core coverage: exercises runScenarios' pass / fail / error /
 //     fail-closed-on-zero-checks semantics so the reporting spine itself is
 //     trustworthy.
 //
@@ -21,6 +28,11 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createIntakeL1Scanner } from '../../../src/core/cogsec/intake/scanners/index.ts';
 import { parseHarnessArgs } from './lib/args.ts';
+import { HookMatcher, HookRegistry } from '../../../src/boundary/gateway/hook-registry.ts';
+import {
+  getCanonicalToolSurface,
+  getRetiredToolAlias,
+} from '../../../src/core/agent/tool-surface/registry.ts';
 import { runScenarios } from './lib/scenario.ts';
 import type { AdversarialScenario } from './lib/scenario.ts';
 
@@ -71,8 +83,64 @@ async function regressionWitness(): Promise<void> {
   );
 }
 
+async function toolAliasBypassWitness(): Promise<void> {
+  console.log('2. 816w pre_tool_use alias-bypass witness (find → fix → rerun):');
+
+  // Real gated tool + retired alias from the live first-party tool registry.
+  const CANONICAL = 'shell';
+  const ALIAS = 'shell_exec';
+  const retired = getRetiredToolAlias(ALIAS);
+  expect(
+    `registry resolves alias "${ALIAS}" -> canonical "${CANONICAL}"`,
+    retired?.canonicalName === CANONICAL,
+    `resolved=${String(retired?.canonicalName)}`,
+  );
+
+  // Operator policy gates the tool by its CANONICAL name.
+  function gatedRegistry(): HookRegistry {
+    const registry = new HookRegistry();
+    registry.register({
+      name: 'gate:shell',
+      mode: 'sync_decision',
+      sourcePath: 'adversarial-selftest://alias-bypass',
+      matcher: new HookMatcher([CANONICAL]),
+      handler: () => ({ decision: 'deny', reason: 'shell is operator-gated' }),
+    });
+    return registry;
+  }
+
+  // FIND: reproduce the pre-816w miss. The current gate (createPreToolHookGate)
+  // still feeds `aliases: []`; with no resolved aliases the canonical-scoped
+  // policy never sees the alias invocation — the adversary slips the gate.
+  const preFix = await gatedRegistry().evaluatePreToolUse(
+    { toolName: ALIAS, aliases: [], input: {}, capabilityTier: 'autonomous' },
+    { timeoutMs: 0 },
+  );
+  expect(
+    'pre-fix (empty aliases) MISSES the alias invocation — bypass reproduced',
+    preFix.outcome === 'allow' && preFix.matchedHookCount === 0,
+    `outcome=${preFix.outcome} matched=${String(preFix.matchedHookCount)}`,
+  );
+
+  // RERUN after FIX: resolve the alias's sibling identifiers (what 816w's
+  // resolveToolAliasMatchers feeds) and the canonical policy fires.
+  const canonical = getCanonicalToolSurface(CANONICAL);
+  const resolvedAliases = canonical
+    ? [canonical.name, ...canonical.retiredAliases.map((a) => a.alias)].filter((n) => n !== ALIAS)
+    : [];
+  const postFix = await gatedRegistry().evaluatePreToolUse(
+    { toolName: ALIAS, aliases: resolvedAliases, input: {}, capabilityTier: 'autonomous' },
+    { timeoutMs: 0 },
+  );
+  expect(
+    'post-fix (resolved aliases) CATCHES the alias invocation — fix verified',
+    postFix.outcome === 'block' && postFix.blockingHook === 'gate:shell',
+    `outcome=${postFix.outcome} blockingHook=${String(postFix.blockingHook)}`,
+  );
+}
+
 async function harnessCore(): Promise<void> {
-  console.log('2. Harness-core reporting semantics:');
+  console.log('3. Harness-core reporting semantics:');
   expect(
     'JSON report path and quiet flag parse independently',
     JSON.stringify(parseHarnessArgs(['--json', 'report.json', '--quiet']))
@@ -116,6 +184,7 @@ async function harnessCore(): Promise<void> {
 
 async function main(): Promise<void> {
   await regressionWitness();
+  await toolAliasBypassWitness();
   await harnessCore();
   console.log('');
   if (failures.length === 0) {

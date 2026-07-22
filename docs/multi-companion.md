@@ -169,8 +169,13 @@ correcting them is a pure path fix. Any pre-existing shared file at the old
 system-data location is left frozen — its mixed-companion contents are not split
 or migrated, and no dual-read fallback is added; each companion's file simply
 starts fresh at the correct root. Model-usage accounting is already per-companion
-through the Postgres `model_usage_events` store (schema-per-companion +
-`companion_id` attribution), so there is no shared JSONL usage ledger to re-root.
+through the Postgres `model_usage_events` store (`companion_id` attribution), so
+there is no shared JSONL usage ledger to re-root. That ledger is fleet-wide, not
+schema-per-companion: the gateway owns LLM egress and records into the ledger
+under its own credential, and the fleet Garden aggregates across companions from
+the same relation. Pinning it to a companion schema would fork the ledger
+per tenant and leave both the gateway writer and the fleet reader looking at the
+wrong table.
 
 ## Postgres tenancy: schema-per-companion + one shared schema
 
@@ -201,6 +206,23 @@ extra `shared` schema for cross-companion world data.
   shared DDL.
 - Migrations run per schema: `runPostgresMigrations(pool, statements, { schema })`.
   Every companion store supplies its registered schema.
+- Stores that build their own pool from `SubstrateConfig` — rather than through
+  `createAgentPersistenceRuntime` — must resolve `postgresSchema`/`postgresRole`
+  themselves and hand them to `createPostgresPool`
+  (`createPostgresAnalysisWorkbenchTraceStoreFromConfig` is the worked example).
+  A companion-local store that skips the pin inherits the default
+  `"$user", public` search_path, which resolves to *nothing* under a fleet
+  member's credential — no schema is named after the login role, and an adopted
+  `public` tenant has revoked USAGE from PUBLIC — so its unqualified startup DDL
+  dies with `no schema has been selected to create in`. A `public` tenant never
+  reproduces it, which is why the coverage in
+  `src/persistence/postgres/named-tenant-store-boot.integration.test.ts` runs
+  against a provisioned `companion_*` tenant.
+- A startup migration promise built in a store constructor is not awaited until
+  that store's first call, so it must be observed where it is created. Otherwise
+  a boot-time failure escapes the agent as a process-level unhandled rejection
+  instead of a reported error. Observing it does not swallow it: the promise is
+  still awaited — and still throws — on every store operation.
 
 ## Launcher: supervisor mode
 

@@ -9,6 +9,10 @@ import {
 import { POSTGRES_ANALYSIS_WORKBENCH_TRACE_MIGRATIONS } from './migrations.js';
 import type { AnalysisWorkbenchTraceView } from '../../operator/garden/types.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
+import { createComponentLogger } from '../../shared/logger.js';
+import { toErrorMessage } from '../../shared/utils/errors.js';
+
+const log = createComponentLogger('AnalysisWorkbenchTraceStore');
 
 /**
  * Durable ring for the redacted analysis-workbench trace projection (bead
@@ -57,16 +61,29 @@ export class PostgresAnalysisWorkbenchTraceStore implements AnalysisWorkbenchTra
       throw new Error('analysis-workbench trace store requires a positive retention cap');
     }
     this.ready = ensurePostgresSchema(pool, POSTGRES_ANALYSIS_WORKBENCH_TRACE_MIGRATIONS);
+    // The migration promise is created here but nothing awaits it until the
+    // first `record`/`listRecent` call, so a boot-time failure would otherwise
+    // escape as a process-level unhandled rejection and destabilise the agent
+    // (psfn-framework-stmof). Observing it reports the failure once; `ready`
+    // still rejects for every caller below, so nothing is swallowed.
+    this.ready.catch((error) => {
+      log.error('Analysis-workbench trace schema migration failed', {
+        error: toErrorMessage(error),
+      });
+    });
   }
 
   static connect(
     databaseUrl: string,
     companionId: string,
     retentionCap: number,
+    options: { schema?: string; role?: string } = {},
   ): PostgresAnalysisWorkbenchTraceStore {
     const pool = createPostgresPool(databaseUrl, {
       applicationName: 'psfn-analysis-workbench-traces',
       allowExitOnIdle: true,
+      schema: options.schema,
+      role: options.role,
     });
     return new PostgresAnalysisWorkbenchTraceStore(pool, companionId, retentionCap, true);
   }
@@ -131,13 +148,30 @@ export class PostgresAnalysisWorkbenchTraceStore implements AnalysisWorkbenchTra
 }
 
 /**
- * Build a companion-scoped trace store from runtime config, mirroring
- * `createPostgresModelUsageStoreFromConfig`. Returns null when persistence is
- * not Postgres (the dashboard then stays memory-only); throws when Postgres is
- * configured without a companionId, since the store must be companion-scoped.
+ * Build a companion-scoped trace store from runtime config. Returns null when
+ * persistence is not Postgres (the dashboard then stays memory-only); throws
+ * when Postgres is configured without a companionId, since the store must be
+ * companion-scoped.
+ *
+ * Traces are companion-local, so the pool pins the companion's tenant schema
+ * and role exactly like every other per-companion store in
+ * `createAgentPersistenceRuntime`. Without that pin the store inherits the
+ * default `"$user", public` search_path, which resolves to nothing under a
+ * named tenant credential (no `$user` schema, no USAGE on `public`) and fails
+ * the unqualified migration DDL with `no schema has been selected to create
+ * in` (psfn-framework-stmof). When `postgresSchema` is unset the behavior is
+ * byte-identical to the legacy single-companion public tenant.
  */
 export function createPostgresAnalysisWorkbenchTraceStoreFromConfig(
-  config: Pick<SubstrateConfig, 'persistenceBackend' | 'postgresDatabaseUrl' | 'companionId'>,
+  config: Pick<
+    SubstrateConfig,
+    | 'persistenceBackend'
+    | 'postgresDatabaseUrl'
+    | 'companionId'
+    | 'postgresSchema'
+    | 'postgresRole'
+    | 'multiCompanion'
+  >,
   retentionCap: number,
 ): PostgresAnalysisWorkbenchTraceStore | null {
   if (config.persistenceBackend !== 'postgres') {
@@ -149,5 +183,20 @@ export function createPostgresAnalysisWorkbenchTraceStoreFromConfig(
   if (!companionId) {
     throw new Error('PostgreSQL analysis-workbench trace persistence requires a configured companionId');
   }
-  return PostgresAnalysisWorkbenchTraceStore.connect(databaseUrl, companionId, retentionCap);
+  const schema = config.postgresSchema?.trim() || undefined;
+  // A least-privilege tenant role is only accepted alongside an explicit
+  // schema, and multi-companion topology owns it — same contract as
+  // `createAgentPersistenceRuntime`, so a fleet member never silently falls
+  // back to its login role's default privileges.
+  const role = schema && config.multiCompanion === true
+    ? config.postgresRole?.trim() || (() => {
+        throw new Error(
+          'Multi-companion analysis-workbench trace persistence requires config.postgresRole',
+        );
+      })()
+    : undefined;
+  return PostgresAnalysisWorkbenchTraceStore.connect(databaseUrl, companionId, retentionCap, {
+    schema,
+    role,
+  });
 }

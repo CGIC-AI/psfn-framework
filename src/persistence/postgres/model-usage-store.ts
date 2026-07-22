@@ -81,6 +81,8 @@ import {
   roundModelUsageUsd,
 } from '../../shared/telemetry/model-usage-accounting.js';
 import { boundModelUsageMetadata } from '../../shared/telemetry/model-usage-metadata.js';
+import { createComponentLogger } from '../../shared/logger.js';
+import { toErrorMessage } from '../../shared/utils/errors.js';
 import { isRecord, isRfc4122Uuid } from '../../shared/utils/types.js';
 import { parseIcpConversationCorrelation } from '../../shared/contracts/icp-autonomy.js';
 import {
@@ -88,6 +90,8 @@ import {
   resolveModelUsageRange,
   resolvePreviousModelUsagePeriod,
 } from '../../shared/telemetry/model-usage-range.js';
+
+const log = createComponentLogger('ModelUsageStore');
 
 const DEFAULT_EVENT_LIMIT = 200;
 const MAX_EVENT_LIMIT = 2_000;
@@ -1183,6 +1187,15 @@ export class PostgresModelUsageStore implements ModelUsageRecorder, ModelUsageQu
       POSTGRES_MODEL_USAGE_MIGRATIONS,
       POSTGRES_MODEL_USAGE_MIGRATION_ADVISORY_LOCK,
     );
+    // Nothing awaits this promise until the first recorded event or query, so a
+    // startup migration failure would otherwise escape as a process-level
+    // unhandled rejection — how psfn-framework-stmof surfaced on a named tenant
+    // whose credential cannot reach the shared usage schema. Observing it
+    // reports the failure once at the point it happens; `ready` still rejects
+    // for every recorder/query caller below, so nothing is swallowed.
+    this.ready.catch((error) => {
+      log.error('Model usage schema migration failed', { error: toErrorMessage(error) });
+    });
   }
 
   static connect(databaseUrl: string, options: ModelUsageStoreScope): PostgresModelUsageStore {

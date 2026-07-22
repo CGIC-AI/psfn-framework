@@ -7,6 +7,7 @@ import {
   type SocialPotDrawResult,
   type SocialPotPort,
   type SocialPotReadInput,
+  type SocialPotRefundInput,
   type SocialPotSnapshot,
 } from '../../core/agent/fatigue/social-pot.js';
 import { isRfc4122Uuid } from '../../shared/utils/types.js';
@@ -185,6 +186,37 @@ export class PostgresSocialPotStore implements SocialPotPort {
         before,
         after,
       };
+    });
+  }
+
+  async refund(input: SocialPotRefundInput): Promise<SocialPotSnapshot> {
+    const companionId = requireCompanionId(input.companionId);
+    const nowMs = requireTimestamp(input.nowMs, 'socialPot.nowMs');
+    const amount = requirePositiveFinite(input.amount, 'socialPot.amount');
+    const config = assertSocialPotConfig(input.config);
+    if (this.closed) {
+      throw new Error('social pot store is closed');
+    }
+    return await withPostgresClient(this.pool, async (client) => {
+      await this.lock(client, companionId);
+      const current = await this.loadOrInitialize(client, companionId, nowMs, config);
+      const regenerated = regenerateSocialPot({
+        balance: current.balance,
+        lastRegenAtMs: current.lastRegenAtMs,
+        nowMs,
+        config,
+      });
+      // A refund credits a previously drawn amount back, clamped at the cap so
+      // a refund racing regeneration can never overfill the pot.
+      const nextBalance = Math.min(regenerated.balance + amount, config.capUnits);
+      const persisted = await this.persistIfChanged(
+        client,
+        companionId,
+        current,
+        nextBalance,
+        regenerated.lastRegenAtMs,
+      );
+      return this.toSnapshot(companionId, persisted, config.capUnits);
     });
   }
 

@@ -71,6 +71,7 @@ import {
 import type { RoomEpisodePressureAssessment } from '../fatigue/room-episode-pressure.js';
 import {
   enforceSocialPotDraw,
+  refundSocialPotDraw,
   type SocialPotEnforcementOutcome,
 } from '../fatigue/social-pot-enforcement.js';
 import type { SocialPotPort } from '../fatigue/social-pot.js';
@@ -204,6 +205,13 @@ export interface EgressLeaseDecision {
   drawOutcome?: SocialPotEnforcementOutcome;
   /** On `lease_declined`: whether a live holder or a spent event blocked it. */
   declineReason?: AcquireEgressLeaseDeclineReason;
+  /**
+   * Present when the social-pot draw succeeded but the lease was never acquired
+   * (declined or errored): whether the drawn units were credited back. A
+   * `refund_failed` is a TOLERATED, bounded machine-lane leak (the phase never
+   * throws) surfaced structurally here rather than swallowed.
+   */
+  refundOutcome?: 'refunded' | 'refund_failed';
   /** On `gate_error`: the lifecycle stage that failed. */
   errorStage?: EgressLeaseErrorStage;
   /** Content-free delivery detail from the sender. */
@@ -254,7 +262,7 @@ type EgressStore = Pick<
 
 export interface EgressLeasePhaseDeps {
   store: EgressStore;
-  socialPot: Pick<SocialPotPort, 'draw'>;
+  socialPot: Pick<SocialPotPort, 'draw' | 'refund'>;
   /** The single reconciled room-episode pressure source (jp36.5.4 seam). */
   roomPressure: RoomEpisodePressureAssessmentResolver;
   /** Consumes a granted lease to produce and deliver the reply. */
@@ -356,7 +364,7 @@ export function selectSpeakLeastWinner(
  */
 export class SpeakingEgressLeasePhase {
   private readonly store: EgressStore;
-  private readonly socialPot: Pick<SocialPotPort, 'draw'>;
+  private readonly socialPot: Pick<SocialPotPort, 'draw' | 'refund'>;
   private readonly roomPressure: RoomEpisodePressureAssessmentResolver;
   private readonly sender: EgressReplySender;
   private readonly companionId: string;
@@ -541,25 +549,40 @@ export class SpeakingEgressLeasePhase {
       if (acquired.outcome === 'declined' || acquired.lease === null) {
         // For an `already_delivered` decline the store already superseded our
         // reservation; a `held` decline leaves it reserved, so release it to a
-        // clean silence. Either way: no send, no retry.
+        // clean silence. Either way: no send, no retry — and the units drawn at
+        // step 5 fund nothing, so they are refunded (no lease record exists to
+        // carry the charge for reconciliation).
+        const refundOutcome = await this.refundDraw(drawnUnits, now);
         await this.releaseSilently(reservation, now);
         return {
           ...base,
           outcome: 'lease_declined',
           breakerState,
           ...(acquired.declineReason ? { declineReason: acquired.declineReason } : {}),
+          ...(refundOutcome ? { refundOutcome } : {}),
         };
       }
       lease = acquired.lease;
     } catch {
       // The reservation was concurrently retired (superseded/expired) between the
-      // guard and acquire, or the store errored: fail closed, no send.
-      return { ...base, outcome: 'gate_error', errorStage: 'acquire' };
+      // guard and acquire, or the store errored: fail closed, no send. The drawn
+      // units fund nothing and no lease record carries them — refund.
+      const refundOutcome = await this.refundDraw(drawnUnits, now);
+      return {
+        ...base,
+        outcome: 'gate_error',
+        errorStage: 'acquire',
+        ...(refundOutcome ? { refundOutcome } : {}),
+      };
     }
 
     // 7. Consume the lease: deliver, then complete with the delivery outcome and
     //    the pressure projection (single source). A sender failure completes the
     //    lease `failed` (no pressure charged) so the lease never wedges the room.
+    //    From here on the drawn units are DELIBERATELY not refunded (documented
+    //    tolerance, qgqw.3): the lease's `chargedUnits` is the durable record the
+    //    charge reconciles off (jp36.5.3), and a failed/declined generation still
+    //    incurred its cost.
     let delivery: EgressReplyDeliveryResult;
     try {
       delivery = await this.sender.deliver({ reservation, lease, appraisal, trigger, nowMs: now });
@@ -575,7 +598,9 @@ export class SpeakingEgressLeasePhase {
     } catch {
       // The send may have already happened but its completion did not persist.
       // Surface it structurally (never swallow): the held lease is TTL-swept, and
-      // the sender's own outbound-reply guard suppresses a duplicate on re-drive.
+      // a post-TTL re-drive is suppressed by the sender's per-trigger-event
+      // single-delivery fence plus the shared outbound-reply guard (qgqw.3 —
+      // regression-tested in egress-reply-sender.test.ts).
       return { ...base, outcome: 'gate_error', errorStage: 'complete', lease, breakerState };
     }
     return {
@@ -615,6 +640,31 @@ export class SpeakingEgressLeasePhase {
     }
     await this.releaseSilently(reservation, now);
     return { ...base, outcome: 'react_released' };
+  }
+
+  /**
+   * Credit a bound-at-egress draw back when the lease it was meant to fund was
+   * never acquired (qgqw.3). Never throws — `grantReply` fails closed to a
+   * structural decision — so a refund failure is TOLERATED as a bounded
+   * machine-lane leak and surfaced via the decision's `refundOutcome`.
+   */
+  private async refundDraw(
+    drawnUnits: number,
+    nowMs: number,
+  ): Promise<'refunded' | 'refund_failed' | undefined> {
+    if (drawnUnits <= 0) {
+      return undefined;
+    }
+    try {
+      await refundSocialPotDraw(this.socialPot, this.config.socialPot, {
+        companionId: this.companionId,
+        amount: drawnUnits,
+        nowMs,
+      });
+      return 'refunded';
+    } catch {
+      return 'refund_failed';
+    }
   }
 
   private async completeLease(

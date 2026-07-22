@@ -37,7 +37,7 @@ import {
   type FreeTimeProjectSummary,
 } from '../../core/scheduler/free-time-chooser.js';
 import { InMemoryRestWindowPolicy } from '../../core/scheduler/rest-window-policy.js';
-import { getVisibilityDisclosureCeiling } from '../../system/trust/policy.js';
+import { classifyChannelDisclosure, getVisibilityDisclosureCeiling } from '../../system/trust/policy.js';
 import { deriveConversationScopeEnvelope } from '../../core/session/conversation-scope.js';
 import { registerWeightedThoughtOutreachTask } from '../../core/scheduler/weighted-thought-outreach-lane.js';
 import { createLlmNudgeEvaluator } from '../../core/intention/weighted-thought-nudge-evaluator.js';
@@ -1807,10 +1807,16 @@ async function main(): Promise<void> {
       },
       // Consumes the granted lease to generate + deliver the reply (temporal-
       // wakeup pattern: synthetic terminal generation, then explicit send).
+      // qgqw.3 hardening: the SHARED outbound-reply guard (same instance as the
+      // reply pump) plus the sender's per-trigger-event fence give single
+      // delivery across re-drives, and the destination room's disclosure pair
+      // clamps the synthetic generation context to the room's ceiling.
       sender: createAgentLoopEgressReplySender({
         generator: agentLoop,
         delivery: gatewaySender,
         companionName: card.data.name,
+        outboundReplyGuard,
+        resolveDestinationDisclosure: (channelId) => classifyChannelDisclosure(channelId),
       }),
       config: {
         leaseTtlMs: egressLeaseSettings.leaseTtlMs,

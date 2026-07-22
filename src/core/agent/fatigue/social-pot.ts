@@ -58,6 +58,11 @@ export interface SocialPotDrawInput extends SocialPotReadInput {
 
 export type SocialPotDrawOutcome = 'drawn' | 'insufficient' | 'capped';
 
+export interface SocialPotRefundInput extends SocialPotReadInput {
+  /** Previously drawn amount to credit back (positive). Clamped at capUnits. */
+  amount: number;
+}
+
 export interface SocialPotDrawResult {
   outcome: SocialPotDrawOutcome;
   /** Amount actually removed from the pot (0 when the balance is insufficient). */
@@ -83,6 +88,13 @@ export interface SocialPotPort {
    * is `capped` — again no draw, only regeneration persists.
    */
   draw(input: SocialPotDrawInput): Promise<SocialPotDrawResult>;
+  /**
+   * Atomically regenerate then credit a previously drawn `amount` back, clamped
+   * at `capUnits` (a refund never overfills the pot). Exists so a draw bound at
+   * egress can be returned when the send it funded never happened (qgqw.3: the
+   * lease was declined/errored before any lease record could carry the charge).
+   */
+  refund(input: SocialPotRefundInput): Promise<SocialPotSnapshot>;
   close(): Promise<void>;
 }
 

@@ -195,6 +195,9 @@ function makePot(outcome: 'drawn' | 'capped' | 'insufficient' = 'drawn') {
         revision: 2,
       },
     })),
+    refund: vi.fn(async () => (
+      { companionId: COMPANION_A, balance: 10, cap: 240, lastRegenAtMs: 0, revision: 3 }
+    )),
   };
 }
 
@@ -545,6 +548,63 @@ describe('SpeakingEgressLeasePhase.grantReply — fail-closed matrix', () => {
     const decision = await phase.grantReply(makeReservation(), REPLY, TRIGGER_CTX, 10_000);
     expect(decision.outcome).toBe('gate_error');
     expect(decision.errorStage).toBe('complete');
+  });
+});
+
+describe('SpeakingEgressLeasePhase.grantReply — draw refund-or-tolerate (qgqw.3)', () => {
+  it('refunds the drawn units when acquire declines (no lease record to carry the charge)', async () => {
+    const store = makeFakeStore({ acquire: 'declined_held' });
+    const pot = makePot('drawn');
+    const phase = makePhase({ store, pot });
+    const decision = await phase.grantReply(makeReservation(), REPLY, TRIGGER_CTX, 10_000);
+    expect(decision.outcome).toBe('lease_declined');
+    expect(decision.refundOutcome).toBe('refunded');
+    expect(pot.refund).toHaveBeenCalledWith(
+      expect.objectContaining({ companionId: COMPANION_A, amount: 1, nowMs: 10_000 }),
+    );
+  });
+
+  it('refunds the drawn units when acquire throws', async () => {
+    const store = makeFakeStore({ acquireThrows: true });
+    const pot = makePot('drawn');
+    const phase = makePhase({ store, pot });
+    const decision = await phase.grantReply(makeReservation(), REPLY, TRIGGER_CTX, 10_000);
+    expect(decision.outcome).toBe('gate_error');
+    expect(decision.errorStage).toBe('acquire');
+    expect(decision.refundOutcome).toBe('refunded');
+    expect(pot.refund).toHaveBeenCalledOnce();
+  });
+
+  it('tolerates a refund failure (bounded leak, surfaced structurally, never thrown)', async () => {
+    const store = makeFakeStore({ acquire: 'declined_held' });
+    const pot = makePot('drawn');
+    pot.refund.mockRejectedValueOnce(new Error('pot unavailable'));
+    const phase = makePhase({ store, pot });
+    const decision = await phase.grantReply(makeReservation(), REPLY, TRIGGER_CTX, 10_000);
+    expect(decision.outcome).toBe('lease_declined');
+    expect(decision.refundOutcome).toBe('refund_failed');
+  });
+
+  it('does not refund a refused draw (nothing was drawn)', async () => {
+    const store = makeFakeStore();
+    const pot = makePot('capped');
+    const phase = makePhase({ store, pot });
+    const decision = await phase.grantReply(makeReservation(), REPLY, TRIGGER_CTX, 10_000);
+    expect(decision.outcome).toBe('draw_refused');
+    expect(decision.refundOutcome).toBeUndefined();
+    expect(pot.refund).not.toHaveBeenCalled();
+  });
+
+  it('does not refund once the lease is acquired (chargedUnits reconcile off the lease)', async () => {
+    // Documented tolerance: a failed delivery still incurred its generation
+    // cost, and the durable lease record carries the charge (jp36.5.3).
+    const store = makeFakeStore();
+    const pot = makePot('drawn');
+    const phase = makePhase({ store, pot, sender: makeSender('failed') });
+    const decision = await phase.grantReply(makeReservation(), REPLY, TRIGGER_CTX, 10_000);
+    expect(decision.outcome).toBe('delivery_failed');
+    expect(decision.refundOutcome).toBeUndefined();
+    expect(pot.refund).not.toHaveBeenCalled();
   });
 });
 

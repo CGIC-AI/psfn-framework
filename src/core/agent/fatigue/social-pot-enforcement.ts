@@ -153,3 +153,24 @@ export async function enforceSocialPotDraw(
     after: result.after,
   };
 }
+
+/**
+ * Return a previously enforced draw to the pot (qgqw.3). For the egress-lease
+ * phase only: when the draw succeeded but the fenced lease was never acquired,
+ * no durable record carries the charge, so the units are credited back (clamped
+ * at the cap by the store). Fails closed like the draw: an invalid amount
+ * throws rather than silently crediting.
+ */
+export async function refundSocialPotDraw(
+  port: Pick<SocialPotPort, 'refund'>,
+  config: FatigueSocialPotConfig,
+  request: { companionId: string; amount: number; nowMs: number },
+): Promise<SocialPotSnapshot> {
+  const amount = requirePositiveFiniteAmount(request.amount);
+  return await port.refund({
+    companionId: request.companionId,
+    nowMs: request.nowMs,
+    amount,
+    config: toStoreConfig(config),
+  });
+}

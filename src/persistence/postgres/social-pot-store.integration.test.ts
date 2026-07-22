@@ -116,6 +116,45 @@ describe('companion_social_pot store integration', () => {
   );
 
   it(
+    'refunds a draw back into the pot, clamped at the cap (qgqw.3)',
+    async () => {
+      const databaseUrl = await freshDatabaseUrl();
+      const store = await PostgresSocialPotStore.connect(databaseUrl);
+      try {
+        await store.readPot({ companionId: COMPANION_A, nowMs: 0, config: CONFIG });
+        const draw = await store.draw({
+          companionId: COMPANION_A,
+          nowMs: 0,
+          amount: 10,
+          config: CONFIG,
+        });
+        expect(draw.after.balance).toBe(14);
+
+        // The lease acquire never happened: the drawn units come back.
+        const refunded = await store.refund({
+          companionId: COMPANION_A,
+          nowMs: 0,
+          amount: 10,
+          config: CONFIG,
+        });
+        expect(refunded.balance).toBe(24);
+
+        // A duplicate/over-refund can never overfill the pot past the cap.
+        const clamped = await store.refund({
+          companionId: COMPANION_A,
+          nowMs: 0,
+          amount: 10,
+          config: CONFIG,
+        });
+        expect(clamped.balance).toBe(CONFIG.capUnits);
+      } finally {
+        await store.close();
+      }
+    },
+    INTEGRATION_TIMEOUT_MS,
+  );
+
+  it(
     'regenerates lazily on read and persists the regenerated balance and tick boundary',
     async () => {
       const databaseUrl = await freshDatabaseUrl();

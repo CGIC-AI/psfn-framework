@@ -278,7 +278,7 @@ else
   fi
 fi
 
-remote "sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml helm upgrade psfn ${REMOTE_DIR}/chart-${SHORT_SHA}/deploy/helm/psfn -n $NAMESPACE -f ${REMOTE_DIR}/live-values-${SHORT_SHA}.yaml ${OVERLAY_ARG} $(printf '%s ' "${HELM_SETS[@]}") --timeout 10m" | tail -2
+remote "sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml helm upgrade psfn ${REMOTE_DIR}/chart-${SHORT_SHA}/deploy/helm/psfn -n $NAMESPACE -f ${REMOTE_DIR}/live-values-${SHORT_SHA}.yaml ${OVERLAY_ARG} $(printf '%s ' "${HELM_SETS[@]}") --take-ownership --timeout 10m" | tail -2
 
 echo "==> waiting for selected rollouts"
 for c in "${SELECTED[@]}"; do

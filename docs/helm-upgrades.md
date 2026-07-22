@@ -566,6 +566,7 @@ per-component image overrides:
 helm upgrade "$RELEASE" deploy/helm/psfn \
   --namespace "$NAMESPACE" \
   -f "$VALUES_FILE" \
+  --take-ownership \
   --set-string 'psfnAppImage.repository=localhost/psfn-framework' \
   --set-string "psfnAppImage.tag=${TARGET_TAG}" \
   --set-string "psfnAppImage.gitCommit=${TARGET_SHA}" \
@@ -987,6 +988,7 @@ then upgrade with the new id and image:
 helm -n <ns> get values <release> -o yaml > live-values.yaml
 helm upgrade <release> deploy/helm/psfn -n <ns> \
   -f live-values.yaml \
+  --take-ownership \
   --set runtime.companionId="$NEW_UUID" \
   --set psfnAppImage.tag=<new-tag> \
   --set psfnAppImage.gitCommit=<new-sha> \

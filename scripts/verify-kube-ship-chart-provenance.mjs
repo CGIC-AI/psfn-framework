@@ -36,6 +36,9 @@ const buildIndex = shipScript.indexOf('docker buildx build');
 if (guardIndex < 0 || forceIndex < guardIndex || buildIndex < forceIndex) {
   throw new Error('ship-kube-update.sh does not force an agent refresh before building when the chart changes');
 }
+if (!shipScript.includes('helm upgrade psfn') || !shipScript.includes('--take-ownership --timeout 10m')) {
+  throw new Error('ship-kube-update.sh must adopt chart-declared resources during Helm upgrades');
+}
 
 const root = mkdtempSync(join(tmpdir(), 'psfn-kube-chart-provenance-'));
 const runGit = (...args) => execFileSync('git', args, {

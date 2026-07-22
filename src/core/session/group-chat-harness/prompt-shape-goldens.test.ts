@@ -61,6 +61,11 @@ import {
 } from '../../agent/substrate-agent/prompt-lifecycle.js';
 import { resolveAuthorContext } from '../../agent/substrate-agent/runtime-context.js';
 import { MemoryRetriever } from '../../../faculties/memory/retrieval.js';
+import {
+  cloneMemoryPresentationProfile,
+  createDefaultMemoryPresentationProfile,
+  type MemoryPresentationProfile,
+} from '../../../system/config/memory-presentation-profile.js';
 import type { ContactStorePort } from '../../contacts/contact-store-port.js';
 import type { SubstrateMessage } from '../../../shared/contracts/runtime.js';
 import type { SessionEntry } from '../types.js';
@@ -264,11 +269,14 @@ async function assembleScenarioSystemPrompt(input: {
   return context.systemPrompt;
 }
 
-function newLeakProbeRetriever(withContacts = false): MemoryRetriever {
+function newLeakProbeRetriever(
+  withContacts = false,
+  presentationProfile?: MemoryPresentationProfile,
+): MemoryRetriever {
   return new MemoryRetriever(
     makeLeakProbeStore(makeLeakProbeMemories()),
     makeEmbeddingProvider(),
-    { retrievalLimit: 20 },
+    { retrievalLimit: 20, ...(presentationProfile ? { memoryPresentationProfile: presentationProfile } : {}) },
     undefined,
     withContacts ? (makeLeakProbeContactStore() as unknown as ContactStorePort) : undefined,
   );
@@ -460,6 +468,47 @@ describe('prompt-shape goldens (E2.7)', () => {
     await expect(
       formatGoldenArtifact('group-turn-with-withheld-memories', systemPrompt, [dir]),
     ).toMatchFileSnapshot('./goldens/group-turn-with-withheld-memories.golden.txt');
+  });
+
+  // golden g (psfn-framework-0236): the SAME DM-with-memories scenario as golden
+  // e, rendered under a CUSTOM MemoryPresentationProfile threaded end-to-end
+  // through MemoryRetriever. Proves presentation is configurable with no code
+  // edits: the section id (<relevant_memories>) is unchanged, but the heading
+  // wording and valence marker differ from the default golden e.
+  it('golden g: DM turn with retrieved memories under a custom presentation profile', async () => {
+    const profile: MemoryPresentationProfile = cloneMemoryPresentationProfile(
+      createDefaultMemoryPresentationProfile(),
+    );
+    profile.headings.relevant = 'What I hold from our history with them:';
+    profile.valence.positiveMarker = ' [+warm]';
+    profile.valence.negativeMarker = ' [-heavy]';
+
+    const memoriesBlock = await newLeakProbeRetriever(true, profile).retrieve(
+      'What did the group decide about the offsite?',
+      dmChannelId(ALICE),
+      'trusted',
+      { isDirectMessage: true },
+      ALICE.id,
+    );
+    // Configurable presentation is visible; the structural id is preserved.
+    expect(memoriesBlock).toContain('What I hold from our history with them:');
+    expect(memoriesBlock).toContain('<relevant_memories>');
+    expect(memoriesBlock).not.toContain('Relevant memories for this person:');
+
+    const systemPrompt = await assembleScenarioSystemPrompt({
+      fixture,
+      composer,
+      message: makeDmTurnMessage(ALICE),
+      speaker: ALICE,
+      channelType: 'api',
+      userId: ALICE.authorId,
+      channelMeta: { isDirectMessage: true },
+      memoriesBlock,
+    });
+    expect(systemPrompt).not.toMatch(/\{\{(?!TMPDIR)/u);
+    await expect(
+      formatGoldenArtifact('dm-turn-with-memories-custom-profile', systemPrompt, [dir]),
+    ).toMatchFileSnapshot('./goldens/dm-turn-with-memories-custom-profile.golden.txt');
   });
 
   // -------------------------------------------------------------------------

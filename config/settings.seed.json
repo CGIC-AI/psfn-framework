@@ -124,6 +124,55 @@
     },
     "emotionalIntensityPersistenceMaxMultiplier": 6
   },
+  "memoryPresentationProfile": {
+    "version": 1,
+    "sectionOrder": [
+      "core_profile",
+      "relationship_context",
+      "emotional_continuity_snapshot",
+      "cross_session_emotional_continuity",
+      "memory_context_note",
+      "episodic_landmark_chains",
+      "relevant_memories"
+    ],
+    "headings": {
+      "boundary": "Active safety boundaries from prior refusals:",
+      "relevant": "Relevant memories for this person:",
+      "socialContext": "Relevant memories about other people in their social context:",
+      "separatePeople": "Relevant memories about other separate people:",
+      "emotionalContinuity": "Cross-session emotional continuity:",
+      "episodicLandmarks": "Episodes from your shared history related to this conversation:"
+    },
+    "valence": {
+      "positiveThreshold": 0.3,
+      "negativeThreshold": -0.3,
+      "positiveMarker": " (+)",
+      "negativeMarker": " (-)",
+      "continuityPositiveThreshold": 0.25,
+      "continuityNegativeThreshold": -0.25
+    },
+    "recencyLabels": {
+      "today": "today",
+      "yesterday": "yesterday",
+      "thisWeek": "this week",
+      "weekAgo": "{n} week ago",
+      "weeksAgo": "{n} weeks ago",
+      "monthsAgo": "{n} months ago",
+      "yearsAgo": "{n} years ago"
+    },
+    "episodeCap": 5,
+    "displayCaps": {
+      "emotional": null,
+      "procedural": null
+    },
+    "withheldWording": {
+      "header": null,
+      "withheldCount": null,
+      "reasons": null,
+      "relevance": null,
+      "safeNextActions": null
+    }
+  },
   "memoryRefreshFailureAlertThreshold": 3,
   "groupMemory": {
     "enabled": true,

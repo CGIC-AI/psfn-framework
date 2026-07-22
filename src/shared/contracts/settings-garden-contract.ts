@@ -91,6 +91,7 @@ export const SETTINGS_GARDEN_FIELD_EXPOSURE = {
   memoryExtractionTelemetryEnabled: { sectionId: 'extraction-tuning', surface: 'advanced' },
   memoryRetrievalTelemetryEnabled: { sectionId: 'extraction-tuning', surface: 'advanced' },
   memoryRetrievalPolicy: { sectionId: 'memory', surface: 'advanced' },
+  memoryPresentationProfile: { sectionId: 'memory', surface: 'advanced' },
   memoryRefreshFailureAlertThreshold: { sectionId: 'memory', surface: 'advanced' },
   groupMemory: { sectionId: 'extraction-tuning', surface: 'advanced' },
   emotionScoping: { sectionId: 'memory', surface: 'advanced' },

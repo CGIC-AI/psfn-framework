@@ -33,6 +33,7 @@ import {
 import { createDefaultGroupMemorySettings } from './group-memory-config.js';
 import { createDefaultEmotionScopingSettings } from './emotion-scoping-config.js';
 import { createDefaultMemoryRetrievalPolicy } from './memory-retrieval-policy.js';
+import { createDefaultMemoryPresentationProfile } from './memory-presentation-profile.js';
 import {
   resolveCompanionFleet,
   resolveCompanionFleetPaths,
@@ -507,6 +508,7 @@ function loadConfigForMode(mode: LoadConfigMode, env: NodeJS.ProcessEnv = proces
     memoryExtractionTelemetryEnabled: true,
     memoryRetrievalTelemetryEnabled: true,
     memoryRetrievalPolicy: createDefaultMemoryRetrievalPolicy(),
+    memoryPresentationProfile: createDefaultMemoryPresentationProfile(),
     memoryRefreshFailureAlertThreshold: DEFAULT_MEMORY_REFRESH_FAILURE_ALERT_THRESHOLD,
     groupMemory: createDefaultGroupMemorySettings(),
     emotionScoping: createDefaultEmotionScopingSettings(),

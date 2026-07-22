@@ -9,6 +9,7 @@ import {
 import { normalizeGroupMemorySettings } from '../config/group-memory-config.js';
 import { normalizeEmotionScopingSettings } from '../config/emotion-scoping-config.js';
 import { normalizeMemoryRetrievalPolicy } from '../config/memory-retrieval-policy.js';
+import { normalizeMemoryPresentationProfile } from '../config/memory-presentation-profile.js';
 import { normalizeShellExecSettings } from '../config/shell-exec-config.js';
 import {
   normalizeFalCreateModelSetting,
@@ -1257,6 +1258,12 @@ export function normalizeContextControlSettings(
     normalized.memoryRetrievalPolicy = normalizeMemoryRetrievalPolicy(
       settings.memoryRetrievalPolicy,
       'memoryRetrievalPolicy',
+    );
+  }
+  if ('memoryPresentationProfile' in settings) {
+    normalized.memoryPresentationProfile = normalizeMemoryPresentationProfile(
+      settings.memoryPresentationProfile,
+      'memoryPresentationProfile',
     );
   }
 

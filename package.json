@@ -89,6 +89,7 @@
     "e2e:multi-companion-runtime": "LOG_LEVEL=error tsx src/app/e2e/multi-companion-runtime-validation.ts",
     "e2e:fleet-posture": "vitest run --reporter=verbose src/app/e2e/fleet-posture-runtime-validation.test.ts",
     "smoke:chat": "node scripts/chat-cockpit-smoke.mjs",
+    "smoke:docker": "node scripts/smoke-docker.mjs",
     "smoke:cogsec": "tsx scripts/cogsec-remediation-smoke.ts",
     "smoke:wiki-caretaker": "vitest run src/faculties/wiki/shared-world-caretaker.integration.test.ts",
     "smoke:garden:postgres-memory": "node scripts/garden-postgres-memory-cutover-smoke.mjs",

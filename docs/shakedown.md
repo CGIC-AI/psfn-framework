@@ -249,6 +249,60 @@ that single-companion mode would silently ignore.
 3. Gate with `bash scripts/ops/validate-kube-rollout.sh --smoke` (rollout status for agent/gateway/garden, garden health, `/v1/models` companion route, two-turn chat smoke).
 4. Her `companion-data` PVC persists — no re-import, no wipe. Open the round with a session telling her the shakedown is starting and what sprint build she is now on.
 
+### Docker Compose smoke lane
+
+The contributor onboarding / "someone can run it" path. Unlike the agent-only
+`docker/docker-compose.yml` (single container, host-socket bind, SQLite), the
+smoke file stands up the real split runtime — Postgres (pgvector), the
+secret-holding gateway, and one isolated agent — and drives one chat turn
+through the gateway's OpenAI-compatible `/v1` edge. k3d+Helm stays the reference
+deployment shape; this Compose lane is the simpler single-node Unix-socket
+variant and is not production-hardened.
+
+From a clean checkout (Docker + Docker Compose only; no Kubernetes):
+
+```bash
+# Full provider-backed turn (persisted assistant reply):
+export OPENROUTER_API_KEY=sk-or-...
+npm run smoke:docker
+```
+
+`npm run smoke:docker` (`scripts/smoke-docker.mjs`) brings up
+`docker/docker-compose.smoke.yml` with `docker compose up -d --wait`, then:
+
+1. asserts every container is healthy (Postgres, gateway, agent);
+2. confirms the gateway↔agent RPC is connected and the plumbing subsystems
+   (`memory`, `embeddings`, `scheduler`) are healthy via the gateway `/health`
+   endpoint, and that Postgres migrations applied;
+3. POSTs one turn to `/v1/chat/completions` and asserts a persisted assistant
+   reply.
+
+Exit codes: `0` full turn with a persisted reply; `2` provider boundary reached
+(stack healthy, gateway↔agent RPC connected, request accepted, turn failed only
+at the external provider — expected when `OPENROUTER_API_KEY` is unset); `1`
+plumbing failure. By default the harness tears the stack down with
+`docker compose down -v` on exit; pass `--keep-up` to inspect, `--no-up` to run
+against an already-running stack.
+
+Split-topology and seeding notes:
+
+- The gateway is the only service with external egress and the only holder of
+  secrets (provider key, session HMAC key, backup key). The agent runs on an
+  internal-only Docker network with no dotenv and no provider/egress secrets;
+  it reaches the gateway over a shared Unix-socket volume and fails closed if it
+  can reach the internet (mirrors the k8s agent NetworkPolicy).
+- `system-data` and `companion-data` are distinct named volumes, so the two
+  roots never overlap (production layout rejects overlap).
+- A one-shot `seed` service lays the split-root owner files + a starter card and,
+  as the trusted credential-bootstrap step, derives the agent's two role-bound
+  gateway proofs from the session HMAC key (the agent never receives the raw
+  key). A one-shot `model-prefetch` service (Compose analogue of the Helm
+  model-prefetch Job) downloads the in-process ML models into a shared cache
+  while it still has egress, so the isolated agent can warm them offline.
+- Override the single provider slot and the dev-only fixed secrets/identity via
+  `OPENROUTER_API_KEY`, `PSFN_SMOKE_API_KEY`, `PSFN_SMOKE_COMPANION_ID`,
+  `PSFN_SMOKE_SESSION_HMAC_KEY`, `PSFN_SMOKE_BACKUP_KEY`, and `PSFN_SMOKE_API_PORT`.
+
 ### Support companions
 
 For ICP, fatigue, and crossover-isolation testing, use the disposable Mica and

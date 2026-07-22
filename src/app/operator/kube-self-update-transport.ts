@@ -8,6 +8,9 @@
 
 import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { isRecord } from '../../shared/utils/types.js';
 import type { KubeDeploymentDiagnostic } from '../../system/lifecycle/kube-diagnostics.js';
 import {
@@ -360,17 +363,30 @@ export function createLiveDeployPipelineRunner(
       // `helm get values` emits `null` when no user-supplied values exist.
       return isRecord(parsed) ? parsed : {};
     },
-    helmUpgrade: async (context) => {
+    helmUpgrade: async (context, liveValues) => {
       const reference = `${context.imageRepository}:${context.imageTag}`;
-      const result = await run(helm, [
-        ...(config.helmGlobalArgs ?? []),
-        'upgrade', context.release, config.chartPath, '-n', context.namespace,
-        '--set', `image.repository=${context.imageRepository}`,
-        '--set', `image.tag=${context.imageTag}`,
-        '--set', `image.reference=${reference}`,
-        '--take-ownership',
-        '--wait', '--timeout', '10m',
-      ], { cwd: config.repoDir, env: { ...process.env, PSFN_HELM_UPGRADE_AT: now().toISOString() } });
+      const valuesDir = await mkdtemp(join(tmpdir(), 'psfn-helm-values-'));
+      const valuesPath = join(valuesDir, 'values.json');
+      let result: CommandResult;
+      try {
+        await writeFile(valuesPath, `${JSON.stringify(liveValues)}\n`, {
+          encoding: 'utf8',
+          flag: 'wx',
+          mode: 0o600,
+        });
+        result = await run(helm, [
+          ...(config.helmGlobalArgs ?? []),
+          'upgrade', context.release, config.chartPath, '-n', context.namespace,
+          '--values', valuesPath,
+          '--set', `image.repository=${context.imageRepository}`,
+          '--set', `image.tag=${context.imageTag}`,
+          '--set', `image.reference=${reference}`,
+          '--take-ownership',
+          '--wait', '--timeout', '10m',
+        ], { cwd: config.repoDir, env: { ...process.env, PSFN_HELM_UPGRADE_AT: now().toISOString() } });
+      } finally {
+        await rm(valuesDir, { recursive: true, force: true });
+      }
       if (result.code !== 0) {
         throw new Error(`Kube self-update transport: helm upgrade failed: ${tail(result.stderr || result.stdout)}`);
       }

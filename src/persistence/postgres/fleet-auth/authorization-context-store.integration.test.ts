@@ -18,6 +18,7 @@ import { FLEET_AUTH_LOCK_AUTHORITY_STATE_FUNCTION_NAME } from './authority-state
 import {
   createPostgresFleetAuthorizationContextResolver,
 } from './authorization-context.js';
+import { PostgresFleetAuthorizationContextStore } from './authorization-context-store.js';
 import { createPostgresFleetPortalAuthorization } from './portal-authorization-store.js';
 import {
   createGatewayProviderRevocationAuthorityPort,
@@ -135,6 +136,7 @@ function fleetConfig(): FleetAuthConfig {
 async function createContextRuntime(options: {
   now?: () => Date;
   config?: FleetAuthConfig;
+  runtimePoolMax?: number;
   configureProviderAuthority?: (
     authority: ProviderRevocationAuthorityPort,
     floors: FleetAuthAuthorityFloorStore,
@@ -163,7 +165,7 @@ async function createContextRuntime(options: {
   const migration = createPostgresPool(migrationUrl, { max: 1, allowExitOnIdle: true });
   const runtime = createPostgresPool(roleUrl(database.databaseUrl, ROLES.runtime), {
     applicationName: 'fleet-auth-context-resolver-test',
-    max: 4,
+    max: options.runtimePoolMax ?? 4,
     allowExitOnIdle: true,
   });
   const coordinator = createPostgresPool(roleUrl(database.databaseUrl, ROLES.backupRestore), {
@@ -646,8 +648,8 @@ describe('Postgres fleet authorization context snapshot', () => {
 
   it('serializes with authority mutation and commits denial audit after the competing transaction', async () => {
     const { databaseName, runtime, coordinator, migration, resolver, principalId } =
-      await createContextRuntime();
-    const mutator = await runtime.connect();
+      await createContextRuntime({ runtimePoolMax: 1 });
+    const mutator = await migration.connect();
     try {
       await mutator.query('BEGIN');
       await mutator.query(`SELECT * FROM ${FLEET_AUTH_LOCK_AUTHORITY_STATE_FUNCTION_NAME}()`);
@@ -678,6 +680,59 @@ describe('Postgres fleet authorization context snapshot', () => {
     } finally {
       await mutator.query('ROLLBACK').catch(() => undefined);
       mutator.release();
+      await coordinator.end();
+      await migration.end();
+      await runtime.end();
+    }
+  }, TIMEOUT_MS);
+
+  it('does not replay a committed authorization when its post-commit denial audit fails', async () => {
+    const { runtime, coordinator, migration } = await createContextRuntime();
+    let authorityChecks = 0;
+    const store = new PostgresFleetAuthorizationContextStore({
+      pool: runtime,
+      sessionPepper: SESSION_PEPPER,
+      config: fleetConfig(),
+      providerRevocationAuthority: {
+        sessionAuthorityGenerationIsCurrent: () => {
+          authorityChecks += 1;
+          return authorityChecks === 1;
+        },
+      } as unknown as ProviderRevocationAuthorityPort,
+    });
+    const postCommitFailure = Object.assign(
+      new Error('post-commit audit serialization failure'),
+      { code: '40001' },
+    );
+    let postCommitAttempts = 0;
+    const testSeam = store as unknown as {
+      recordPostCommitAuthorityDenial: () => Promise<void>;
+    };
+    testSeam.recordPostCommitAuthorityDenial = async () => {
+      postCommitAttempts += 1;
+      throw postCommitFailure;
+    };
+    try {
+      await expect(store.resolve({
+        sessionToken: SESSION_TOKEN,
+        audience: 'fleet',
+        companionId: COMPANION_ID,
+        action: 'memory.read.self',
+        correlationId: 'correlation-post-commit-failure',
+      })).rejects.toBe(postCommitFailure);
+      expect(authorityChecks).toBe(2);
+      expect(postCommitAttempts).toBe(1);
+      const audit = await runtime.query<{ decision: string; reason_code: string }>(`
+        SELECT decision, reason_code
+        FROM fleet_auth.authorization_audit_events
+        WHERE correlation_id = $1
+      `, [digestCorrelation('correlation-post-commit-failure')]);
+      expect(audit.rows).toEqual(expect.arrayContaining([
+        { decision: 'allow', reason_code: 'role_action_allowed' },
+        { decision: 'deny', reason_code: 'authorization_store_error' },
+      ]));
+      expect(audit.rows).toHaveLength(2);
+    } finally {
       await coordinator.end();
       await migration.end();
       await runtime.end();

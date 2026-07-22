@@ -119,6 +119,18 @@ export interface PostgresFleetAuthorizationContextStoreOptions {
   now?: () => Date;
 }
 
+interface PostCommitAuthorityDenialOutcome {
+  postCommitAuthorityDenial: {
+    request: FleetAuthorizationRequest;
+    principalId: string;
+    correlationDigest?: string;
+  };
+}
+
+type AuthorizationTransactionOutcome =
+  | FleetAuthorizationStoreDecision
+  | PostCommitAuthorityDenialOutcome;
+
 export function mapAuthorizationContextSessionRow(
   row: FleetAuthSessionRow,
 ): FleetAuthorizationSnapshot['sessions'][number] {
@@ -166,13 +178,37 @@ export class PostgresFleetAuthorizationContextStore implements FleetAuthorizatio
   }
 
   async resolve(request: FleetAuthorizationRequest): Promise<FleetAuthorizationStoreDecision> {
-    return this.resolveWithSerializationRetry(request, true);
+    const outcome = await this.resolveWithSerializationRetry(request, true);
+    if ('postCommitAuthorityDenial' in outcome) {
+      try {
+        await this.recordPostCommitAuthorityDenial(outcome.postCommitAuthorityDenial);
+      } catch (error) {
+        try {
+          await this.recordInfrastructureDenialWithFreshClient({
+            action: request.action,
+            companionId: request.companionId,
+            ...(outcome.postCommitAuthorityDenial.correlationDigest
+              ? { correlationDigest: outcome.postCommitAuthorityDenial.correlationDigest }
+              : {}),
+            evidenceRequested: request.discordEvidence !== undefined,
+          });
+        } catch (auditError) {
+          throw new AggregateError(
+            [error, auditError],
+            'Fleet authorization failed and its denial audit could not be persisted',
+          );
+        }
+        throw error;
+      }
+      return { decision: 'deny', reasonCode: 'authority_generation_stale' };
+    }
+    return outcome;
   }
 
   private async resolveWithSerializationRetry(
     request: FleetAuthorizationRequest,
     retrySerializationFailure: boolean,
-  ): Promise<FleetAuthorizationStoreDecision> {
+  ): Promise<AuthorizationTransactionOutcome> {
     const client = await this.pool.connect();
     const correlationDigest = this.digestCorrelation(request.correlationId);
     try {
@@ -236,12 +272,13 @@ export class PostgresFleetAuthorizationContextStore implements FleetAuthorizatio
         && !this.providerRevocationAuthority.sessionAuthorityGenerationIsCurrent(
           snapshot.authority.authorityGeneration,
         )) {
-        await this.recordPostCommitAuthorityDenial(client, {
-          request,
-          principalId: evaluation.facts.principalId,
-          ...(correlationDigest ? { correlationDigest } : {}),
-        });
-        return { decision: 'deny', reasonCode: 'authority_generation_stale' };
+        return {
+          postCommitAuthorityDenial: {
+            request,
+            principalId: evaluation.facts.principalId,
+            ...(correlationDigest ? { correlationDigest } : {}),
+          },
+        };
       }
       return {
         decision: 'allow',
@@ -249,26 +286,28 @@ export class PostgresFleetAuthorizationContextStore implements FleetAuthorizatio
       };
     } catch (error) {
       await client.query('ROLLBACK').catch(() => undefined);
-      if (retrySerializationFailure && isPostgresSerializationFailure(error)) {
-        return this.resolveWithSerializationRetry(request, false);
+      if (!retrySerializationFailure || !isPostgresSerializationFailure(error)) {
+        try {
+          await this.recordInfrastructureDenial(client, {
+            action: request.action,
+            companionId: request.companionId,
+            correlationDigest,
+            evidenceRequested: request.discordEvidence !== undefined,
+          });
+        } catch (auditError) {
+          throw new AggregateError(
+            [error, auditError],
+            'Fleet authorization failed and its denial audit could not be persisted',
+          );
+        }
+        throw error;
       }
-      try {
-        await this.recordInfrastructureDenial(client, {
-          action: request.action,
-          companionId: request.companionId,
-          correlationDigest,
-          evidenceRequested: request.discordEvidence !== undefined,
-        });
-      } catch (auditError) {
-        throw new AggregateError(
-          [error, auditError],
-          'Fleet authorization failed and its denial audit could not be persisted',
-        );
-      }
-      throw error;
     } finally {
       client.release();
     }
+    // This fallthrough is reachable only for the first 40001. The finally
+    // above has returned the failed client before the retry can acquire one.
+    return this.resolveWithSerializationRetry(request, false);
   }
 
   async recordRequestDenial(
@@ -634,11 +673,26 @@ export class PostgresFleetAuthorizationContextStore implements FleetAuthorizatio
     }
   }
 
-  private async recordPostCommitAuthorityDenial(client: PoolClient, input: {
+  private async recordInfrastructureDenialWithFreshClient(input: {
+    action: string;
+    companionId: string;
+    correlationDigest?: string;
+    evidenceRequested: boolean;
+  }): Promise<void> {
+    const client = await this.pool.connect();
+    try {
+      await this.recordInfrastructureDenial(client, input);
+    } finally {
+      client.release();
+    }
+  }
+
+  private async recordPostCommitAuthorityDenial(input: {
     request: FleetAuthorizationRequest;
     principalId: string;
     correlationDigest?: string;
   }): Promise<void> {
+    const client = await this.pool.connect();
     try {
       await client.query('BEGIN');
       const authority = await this.lockAuthority(client);
@@ -660,6 +714,8 @@ export class PostgresFleetAuthorizationContextStore implements FleetAuthorizatio
     } catch (error) {
       await client.query('ROLLBACK').catch(() => undefined);
       throw error;
+    } finally {
+      client.release();
     }
   }
 

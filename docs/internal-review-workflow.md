@@ -40,13 +40,14 @@ gh variable set LOCAL_GATE_STATUS_ACTOR --body "$(gh api user --jq .login)"
 ```
 
 The integration harness keeps one labeled Postgres container alive per exact
-test image and Vitest worker pool, then creates an isolated database for each
-test-file harness. Worker scoping isolates cluster-wide roles while still
-reusing warm containers across files and gates. Normal teardown drops each
-harness's databases and roles; high-churn workers replace their verified test
-container with a clean running one instead of serially dropping dozens of
-databases. Either path leaves a warm container for the next file. Remove only
-those cached containers when needed with:
+test image, Vitest invocation, and worker pool, then creates an isolated
+database for each test-file harness. Invocation and worker scoping isolates
+simultaneous test commands and cluster-wide roles while still reusing warm
+containers across files in one gate. Normal teardown drops each harness's
+databases and roles; high-churn workers replace their verified test container
+with a clean running one instead of serially dropping dozens of databases.
+Either path leaves a warm container for another file in that invocation.
+Remove only those cached containers when needed with:
 
 ```bash
 docker ps -aq --filter label=io.local-gate.test-postgres=true |

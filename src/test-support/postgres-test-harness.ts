@@ -4,6 +4,7 @@ import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
+import { isMainThread } from 'node:worker_threads';
 import type { Pool } from 'pg';
 import {
   POSTGRES_EXTENSION_SCHEMA_NAME,
@@ -103,9 +104,18 @@ function runDocker(args: string[]): string {
   return result.stdout;
 }
 
-function postgresTestContainerScope(): string {
-  const vitestPoolId = process.env.VITEST_POOL_ID?.trim();
-  return vitestPoolId ? `vitest-pool-${vitestPoolId}` : `process-${process.pid}`;
+export function postgresTestContainerScope({
+  vitestPoolId = process.env.VITEST_POOL_ID?.trim(),
+  invocationProcessId = isMainThread ? process.ppid : process.pid,
+  processId = process.pid,
+}: {
+  vitestPoolId?: string;
+  invocationProcessId?: number;
+  processId?: number;
+} = {}): string {
+  return vitestPoolId
+    ? `vitest-run-${invocationProcessId}-pool-${vitestPoolId}`
+    : `process-${processId}`;
 }
 
 export function postgresTestContainerNameForImage(

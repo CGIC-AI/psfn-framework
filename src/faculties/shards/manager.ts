@@ -62,7 +62,10 @@ import {
   type CompletionHandoffInput,
   type CompletionHandoffRef,
 } from '../../core/agent/completion-handoff.js';
-import type { CompletionNoticeBuffer } from '../../core/agent/completion-notices.js';
+import type {
+  CompletionNoticeBuffer,
+  CompletionNoticeDeliveryPort,
+} from '../../core/agent/completion-notices.js';
 import type {
   ShardFoldReviewController,
   ShardFoldReviewRecord,
@@ -175,6 +178,8 @@ export interface ShardManagerDeps {
   sessionStore: SessionStore;
   /** Buffer for compact companion-facing completion notices (never session-persisted). */
   completionNotices?: CompletionNoticeBuffer | null;
+  /** Canonical parent-orchestration result delivery; production uses this instead of direct buffering. */
+  completionNoticeDelivery?: CompletionNoticeDeliveryPort | null;
   sessionManager?: SessionManager | null;
   embeddingService: EmbeddingProviderPort | null;
   memoryProvider: MemoryProvider | null;
@@ -441,6 +446,7 @@ export class ShardManager implements ShardExecutionPort {
       requiredCapabilities: routeCapabilities,
       sourceContext: {
         channelId: request.message.channelId,
+        ...(routing?.sessionId ? { logicalSessionId: routing.sessionId } : {}),
         requestId: request.message.id,
         ...(routing?.turnId ? { turnId: routing.turnId } : {}),
         ...(embodimentContext ? { embodimentContext } : {}),
@@ -1241,6 +1247,9 @@ export class ShardManager implements ShardExecutionPort {
         ...(bufferNotice && this.deps.completionNotices
           ? { notices: this.deps.completionNotices }
           : {}),
+        ...(bufferNotice && this.deps.completionNoticeDelivery
+          ? { noticeDelivery: this.deps.completionNoticeDelivery }
+          : {}),
       });
     } catch (error) {
       this.auditTrail?.append('shard.completion_handoff.failed', {
@@ -1268,6 +1277,7 @@ export class ShardManager implements ShardExecutionPort {
     }
     return {
       sourceChannelId: source.channelId,
+      ...(source.logicalSessionId ? { logicalSessionId: source.logicalSessionId } : {}),
       ...(source.requestId ? { requestId: source.requestId, sourceMessageId: source.requestId } : {}),
       ...(source.turnId ? { turnId: source.turnId, originatingTaskId: source.turnId } : {}),
     };
@@ -1302,6 +1312,9 @@ export class ShardManager implements ShardExecutionPort {
         origin: {
           ...(sourceContext?.channelId
             ? { sourceChannelId: sourceContext.channelId }
+            : {}),
+          ...(sourceContext?.logicalSessionId
+            ? { logicalSessionId: sourceContext.logicalSessionId }
             : {}),
           ...(sourceContext?.requestId
             ? {

@@ -21,6 +21,8 @@ export type SubagentOutcome = 'completed' | 'blocked' | 'cancelled' | 'budget_li
 
 export interface SubagentExecutionSourceContext {
   channelId: string;
+  /** Captured parent session owner; never re-resolve this from mutable focus. */
+  logicalSessionId?: string;
   requestId?: string;
   turnId?: string;
   originatingTaskId?: string;

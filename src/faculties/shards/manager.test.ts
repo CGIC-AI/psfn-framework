@@ -755,6 +755,7 @@ describe('ShardManager', () => {
       task: 'Do something',
       sourceContext: {
         channelId: 'api:parent',
+        logicalSessionId: 'session:captured-parent',
         requestId: 'msg-parent',
         turnId: 'turn-parent',
       },
@@ -763,7 +764,7 @@ describe('ShardManager', () => {
     // Handoffs never write session entries; they surface as one compact
     // buffered notice plus the structured event-bus record.
     expect(sessionStore.getRecent('api:parent', 10)).toHaveLength(0);
-    const notices = completionNotices.peek('api:parent');
+    const notices = completionNotices.peek('session:captured-parent');
     expect(notices).toHaveLength(1);
     expect(notices[0]).toMatchObject({
       status: 'completed',
@@ -776,6 +777,7 @@ describe('ShardManager', () => {
       handoff: expect.objectContaining({
         source: 'shard',
         task: expect.objectContaining({ shardId: result.shardId }),
+        origin: expect.objectContaining({ logicalSessionId: 'session:captured-parent' }),
         privacy: expect.objectContaining({
           partnerNotification: 'companion_mediated_only',
         }),

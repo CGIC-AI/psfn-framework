@@ -812,6 +812,7 @@ describe('SubagentFaculty', () => {
       workSpec: buildSubagentWorkSpec(),
       sourceContext: {
         channelId: 'api:parent',
+        logicalSessionId: 'session:captured-parent',
         requestId: 'msg-parent',
         turnId: 'turn-parent',
         originatingBeadId: 'PSFNLIVE-hlh0',
@@ -822,7 +823,7 @@ describe('SubagentFaculty', () => {
     expect(replay.subagentId).toBe(result.subagentId);
     // Handoffs never write session entries; the parent transcript stays clean.
     expect(sessionStore.getRecent('api:parent', 10)).toHaveLength(0);
-    const notices = completionNotices.peek('api:parent');
+    const notices = completionNotices.peek('session:captured-parent');
     expect(notices).toHaveLength(1);
     expect(notices[0]).toMatchObject({ status: 'completed' });
     expect(events.map(event => (event as { handoff: CompletionHandoffRecord }).handoff.status))
@@ -832,7 +833,10 @@ describe('SubagentFaculty', () => {
       handoff: expect.objectContaining({
         source: 'subagent',
         task: expect.objectContaining({ subagentId: result.subagentId }),
-        origin: expect.objectContaining({ originatingBeadId: 'PSFNLIVE-hlh0' }),
+        origin: expect.objectContaining({
+          logicalSessionId: 'session:captured-parent',
+          originatingBeadId: 'PSFNLIVE-hlh0',
+        }),
         privacy: expect.objectContaining({
           partnerNotification: 'companion_mediated_only',
         }),

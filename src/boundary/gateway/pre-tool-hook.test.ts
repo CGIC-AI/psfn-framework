@@ -2,10 +2,12 @@ import { describe, expect, it } from 'vitest';
 import { HookMatcher, HookRegistry } from './hook-registry.js';
 import {
   buildRedactedPreToolAudit,
+  createPreToolHookGate,
   normalizePreToolResult,
   type PreToolUseHookContext,
   type PreToolUseHookHandler,
 } from './pre-tool-hook.js';
+import { resolveToolAliasMatchers } from '../../core/agent/tool-surface/registry.js';
 
 function contextFor(
   toolName: string,
@@ -208,6 +210,87 @@ describe('HookRegistry.evaluatePreToolUse decisions', () => {
     expect(decision.outcome).toBe('block');
     expect(decision.blockingHook).toBe('garbage');
     expect(registry.stats().find(stat => stat.name === 'garbage')?.failures).toBe(1);
+  });
+});
+
+describe('createPreToolHookGate alias resolution (psfn-framework-816w)', () => {
+  function registerBlocker(registry: HookRegistry, name: string, pattern: string): void {
+    registerSync(registry, name, [pattern], () => ({ decision: 'block', reason: `${name} refused` }));
+  }
+
+  it('lets an alias-only policy intercept the canonical tool call', async () => {
+    // Policy is registered against a RETIRED alias (`web_fetch`); the tool is
+    // invoked by its canonical name (`web`). Before the fix the adapter passed
+    // aliases:[] and this policy never matched.
+    const registry = new HookRegistry();
+    registerBlocker(registry, 'alias-policy', 'web_fetch');
+    const gate = createPreToolHookGate({
+      evaluator: registry,
+      getCorrelation: () => undefined,
+      resolveAliases: resolveToolAliasMatchers,
+      onDecision: () => {},
+    });
+
+    const evaluation = await gate.evaluate({ toolName: 'web', params: {}, tier: 'autonomous' });
+    expect(evaluation?.outcome).toBe('block');
+    expect(evaluation?.blockingHook).toBe('alias-policy');
+  });
+
+  it('lets a canonical-name policy intercept an alias-form invocation', async () => {
+    // Policy is registered against the canonical `web`; the tool is invoked by
+    // a retired alias (`web_fetch`). The alias set must expose `web`.
+    const registry = new HookRegistry();
+    registerBlocker(registry, 'canonical-policy', 'web');
+    const gate = createPreToolHookGate({
+      evaluator: registry,
+      getCorrelation: () => undefined,
+      resolveAliases: resolveToolAliasMatchers,
+      onDecision: () => {},
+    });
+
+    const evaluation = await gate.evaluate({ toolName: 'web_fetch', params: {}, tier: 'autonomous' });
+    expect(evaluation?.outcome).toBe('block');
+    expect(evaluation?.blockingHook).toBe('canonical-policy');
+  });
+
+  it('fails closed (rejects) when alias resolution reports malformed metadata', async () => {
+    // A resolver that throws on malformed alias metadata must abort the call
+    // rather than degrade to a never-matching empty alias set.
+    const registry = new HookRegistry();
+    registerBlocker(registry, 'any', 'web');
+    const gate = createPreToolHookGate({
+      evaluator: registry,
+      getCorrelation: () => undefined,
+      resolveAliases: () => {
+        throw new Error('Malformed tool alias metadata: dangling canonical reference');
+      },
+      onDecision: () => {},
+    });
+
+    await expect(
+      gate.evaluate({ toolName: 'web', params: {}, tier: 'autonomous' }),
+    ).rejects.toThrow(/Malformed tool alias metadata/u);
+  });
+
+  it('skips alias resolution entirely on the no-hooks fast path', async () => {
+    // With no sync hooks the adapter must return null BEFORE resolving aliases,
+    // so a throwing resolver is never consulted.
+    const registry = new HookRegistry();
+    let resolverCalls = 0;
+    const gate = createPreToolHookGate({
+      evaluator: registry,
+      getCorrelation: () => undefined,
+      resolveAliases: () => {
+        resolverCalls += 1;
+        return [];
+      },
+      onDecision: () => {},
+    });
+
+    await expect(
+      gate.evaluate({ toolName: 'web', params: {}, tier: 'autonomous' }),
+    ).resolves.toBeNull();
+    expect(resolverCalls).toBe(0);
   });
 });
 

@@ -591,6 +591,67 @@ export function listRetiredToolAliases(): readonly RetiredToolAlias[] {
   return [...RETIRED_BY_NAME.values()];
 }
 
+/**
+ * Lookup surface the pre_tool_use alias resolver needs. The real registry
+ * satisfies it structurally via {@link getCanonicalToolSurface} /
+ * {@link getRetiredToolAlias}; kept injectable so the fail-closed behaviour on
+ * malformed metadata is exercisable without mutating the canonical tables.
+ */
+export interface ToolAliasResolutionSource {
+  getCanonicalToolSurface(name: string): CanonicalToolSurfaceEntry | undefined;
+  getRetiredToolAlias(name: string): RetiredToolAlias | undefined;
+}
+
+/**
+ * Resolve the alternative first-party names a pre_tool_use hook policy could
+ * have been written against for an invoked `toolName`, EXCLUDING `toolName`
+ * itself. When the tool is invoked by its canonical name the set is its retired
+ * aliases; when invoked by a retired alias the set is the canonical name plus
+ * its sibling aliases. A name that is neither a canonical surface nor a
+ * registered alias (third-party / plugin tools) legitimately carries no aliases
+ * and yields [].
+ *
+ * FAIL CLOSED: a retired alias whose `canonicalName` does not resolve to a real
+ * canonical surface is malformed registry metadata and THROWS, so a broken
+ * alias mapping can never degrade into a silently never-matching empty set that
+ * lets a policied tool call slip past its intended pre_tool_use hook.
+ */
+export function resolveToolAliasMatchersFrom(
+  toolName: string,
+  source: ToolAliasResolutionSource,
+): readonly string[] {
+  const canonical = source.getCanonicalToolSurface(toolName);
+  if (canonical) {
+    return canonical.retiredAliases.map(entry => entry.alias);
+  }
+  const retired = source.getRetiredToolAlias(toolName);
+  if (!retired) return [];
+  const canonicalEntry = source.getCanonicalToolSurface(retired.canonicalName);
+  if (!canonicalEntry) {
+    throw new Error(
+      `Malformed tool alias metadata: retired alias "${toolName}" targets `
+        + `unknown canonical tool "${retired.canonicalName}"`,
+    );
+  }
+  const matchers = new Set<string>([canonicalEntry.name]);
+  for (const sibling of canonicalEntry.retiredAliases) {
+    if (sibling.alias !== toolName) matchers.add(sibling.alias);
+  }
+  return [...matchers];
+}
+
+/**
+ * Production binding of {@link resolveToolAliasMatchersFrom} to the canonical
+ * tool-surface registry. Wired into the gateway pre_tool_use hook gate so hook
+ * policies match by alias as well as canonical name.
+ */
+export function resolveToolAliasMatchers(toolName: string): readonly string[] {
+  return resolveToolAliasMatchersFrom(toolName, {
+    getCanonicalToolSurface,
+    getRetiredToolAlias,
+  });
+}
+
 export function assertNoRetiredFirstPartyToolAliases(
   toolNames: Iterable<string>,
   context: string,

@@ -62,6 +62,15 @@ export interface DreamPassTranscriptReader {
   getRecentMessages(channelId: string, limit: number): readonly DreamPassTranscriptEntry[];
 }
 
+/**
+ * Deterministic trust ranks for episode participants (bead h4fp.6 nightly
+ * budget). Backed by the contact store in composition (`trustOrd` of the
+ * contact's trust level); unknown ids are simply omitted and rank 0.
+ */
+export interface DreamPassContactTrustReader {
+  resolveTrustRanks(contactIds: readonly string[]): Promise<ReadonlyMap<string, number>>;
+}
+
 export interface DreamMeaningPassOptions {
   now?: () => Date;
   /** Minimum time between passes; the dream pass is a nightly review. */
@@ -79,6 +88,13 @@ export interface DreamMeaningPassOptions {
   transcriptReader?: DreamPassTranscriptReader | null;
   /** How many recent turns to pull per session when grounding meanings. */
   transcriptMessageLimit?: number;
+  /**
+   * Prioritized nightly budget (bead h4fp.6): rank the capped review so
+   * episodes with high-trust participants and dense machine signals land in
+   * the pass first. Absent => trust rank 0 for everyone (signal density and
+   * age still order deterministically).
+   */
+  contactTrust?: DreamPassContactTrustReader | null;
   /** Typed gate telemetry sink (jpvd.4); wired to the event bus by composition. */
   onGateEvent?: (event: DeterministicGateEvent) => void;
 }
@@ -217,6 +233,55 @@ export function assessMeaningAtomicity(text: string): { atomic: true } | { atomi
   return { atomic: true };
 }
 
+/**
+ * Machine-signal density of an episode — the count of machine topic tags plus
+ * one when a VAD estimate is present. These are the clearly machine-labeled
+ * retrieval hints in the `machineSignals` sidecar (never her felt affect); a
+ * denser sidecar means the deterministic segmentation saw more likely-mattering
+ * structure, so the episode ranks earlier in the capped nightly budget.
+ */
+export function episodeMachineSignalDensity(episode: Episode): number {
+  const signals = episode.machineSignals;
+  if (!signals) return 0;
+  return signals.topicTags.length + (signals.vad ? 1 : 0);
+}
+
+export interface DreamBudgetEntry {
+  episode: Episode;
+  /** Highest trust rank among the episode's participants (0 when unknown). */
+  trustRank: number;
+  machineSignalDensity: number;
+}
+
+/**
+ * Prioritized nightly budget (bead h4fp.6): deterministic order — highest
+ * participant trust rank first, then denser machine signals, then OLDEST first
+ * (startedAt, then id) as the tiebreak — so the capped pass lands on
+ * likely-mattering episodes and never depends on store return order.
+ */
+export function prioritizeDreamBudget(
+  episodes: readonly Episode[],
+  trustRanks: ReadonlyMap<string, number>,
+  cap: number,
+): DreamBudgetEntry[] {
+  return episodes
+    .map((episode): DreamBudgetEntry => ({
+      episode,
+      trustRank: episode.participantContactIds.reduce(
+        (best, contactId) => Math.max(best, trustRanks.get(contactId) ?? 0),
+        0,
+      ),
+      machineSignalDensity: episodeMachineSignalDensity(episode),
+    }))
+    .sort((left, right) => (
+      right.trustRank - left.trustRank
+      || right.machineSignalDensity - left.machineSignalDensity
+      || left.episode.startedAt.localeCompare(right.episode.startedAt)
+      || left.episode.id.localeCompare(right.episode.id)
+    ))
+    .slice(0, cap);
+}
+
 function formatTranscriptEntry(entry: DreamPassTranscriptEntry): string {
   const role = entry.role === 'assistant' ? 'ME' : entry.role === 'user' ? 'THEM' : entry.role.toUpperCase();
   const collapsed = entry.content.replace(/\s+/g, ' ').trim();
@@ -300,6 +365,7 @@ export class DreamMeaningPass {
   private readonly maxTurns: number;
   private readonly transcriptReader: DreamPassTranscriptReader | null;
   private readonly transcriptMessageLimit: number;
+  private readonly contactTrust: DreamPassContactTrustReader | null;
   private readonly onGateEvent: ((event: DeterministicGateEvent) => void) | null;
   private readonly cadenceGate: DeterministicGateDefinition;
   private readonly episodesGate: DeterministicGateDefinition;
@@ -314,6 +380,7 @@ export class DreamMeaningPass {
     this.maxTurns = options.maxTurns ?? DEFAULT_MAX_TURNS;
     this.transcriptReader = options.transcriptReader ?? null;
     this.transcriptMessageLimit = options.transcriptMessageLimit ?? DEFAULT_TRANSCRIPT_MESSAGE_LIMIT;
+    this.contactTrust = options.contactTrust ?? null;
     this.onGateEvent = options.onGateEvent ?? null;
     // Cadence gate: a nightly review only re-opens once the interval elapses.
     this.cadenceGate = {
@@ -408,14 +475,43 @@ export class DreamMeaningPass {
       };
     }
 
-    const episodes = (await this.store.searchByTime({
+    const unreviewed = (await this.store.searchByTime({
       from: toIsoInstant(nowMs - this.reviewWindowMs),
       to: toIsoInstant(nowMs),
       limit: 100,
-    }))
-      .filter(episode => !episode.meaning)
-      .sort((left, right) => left.startedAt.localeCompare(right.startedAt))
-      .slice(0, this.maxEpisodesPerPass);
+    })).filter(episode => !episode.meaning);
+
+    // Prioritized nightly budget (bead h4fp.6): high-trust participants and
+    // dense machine signals first, oldest-first tiebreak — deterministic and
+    // logged, so the capped pass lands on likely-mattering episodes.
+    let trustRanks: ReadonlyMap<string, number> = new Map<string, number>();
+    if (this.contactTrust && unreviewed.length > 0) {
+      const participantIds = [...new Set(unreviewed.flatMap(episode => episode.participantContactIds))].sort();
+      try {
+        trustRanks = await this.contactTrust.resolveTrustRanks(participantIds);
+      } catch (error) {
+        // Degrade like the transcript reader: the deterministic fallback order
+        // (signal density, then oldest-first) is still correct behavior; a
+        // contact-store outage must not cancel the nightly review.
+        log.warn('Dream pass trust ranks unavailable; budget order falls back to machine-signal density and age', {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+    const budget = prioritizeDreamBudget(unreviewed, trustRanks, this.maxEpisodesPerPass);
+    const episodes = budget.map(entry => entry.episode);
+    if (budget.length > 0) {
+      log.info('Dream pass nightly budget order (h4fp.6): trust rank desc, machine-signal density desc, oldest first', {
+        sessionId: input.sessionId,
+        unreviewedEpisodes: unreviewed.length,
+        selected: budget.map(entry => ({
+          id: entry.episode.id,
+          trustRank: entry.trustRank,
+          machineSignalDensity: entry.machineSignalDensity,
+          startedAt: entry.episode.startedAt,
+        })),
+      });
+    }
 
     // Episodes gate (jpvd.4): new consolidated episodes still needing a meaning.
     const episodesGate = evaluateDeterministicGate(this.episodesGate, {

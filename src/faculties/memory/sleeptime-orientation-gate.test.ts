@@ -1,5 +1,4 @@
 import { describe, it, expect, vi } from 'vitest';
-import type { LLMProviderPort } from '../../core/agent/contracts.js';
 import type { DeterministicGateEvent } from '../../shared/event-bus.js';
 import type { EpisodicProcessingRestWindowConfig } from '../../system/config/scheduler-config.js';
 import {
@@ -21,21 +20,15 @@ function alwaysOpenRestWindow(): EpisodicProcessingRestWindowConfig {
   };
 }
 
-function makeLLMProvider(): LLMProviderPort {
+function makeReviewAgent() {
   return {
-    stream: vi.fn(),
-    complete: vi.fn(async () => ({
+    handleMessage: vi.fn(async () => ({
       content: JSON.stringify({
         orient: { persona: 'p', human: 'h', goals: 'g' },
         memory_writes: [],
       }),
-      toolCalls: [],
-      model: 'm',
-      inputTokens: 1,
-      outputTokens: 1,
-      stopReason: 'done',
     })),
-  } as unknown as LLMProviderPort;
+  };
 }
 
 function makeSnapshot(updatedAtMs: number) {
@@ -66,11 +59,12 @@ function makeAgent(input: {
   updatedAtMs: number;
   entries: ReturnType<typeof makeEntries>;
   events: DeterministicGateEvent[];
-}): { agent: SleeptimeMemoryAgent; llmProvider: LLMProviderPort; rethink: ReturnType<typeof vi.fn> } {
-  const llmProvider = makeLLMProvider();
+}): { agent: SleeptimeMemoryAgent; reviewAgent: ReturnType<typeof makeReviewAgent>; rethink: ReturnType<typeof vi.fn> } {
+  const reviewAgent = makeReviewAgent();
   const rethink = vi.fn();
   const options: SleeptimeMemoryAgentOptions = {
-    llmProvider,
+    agent: reviewAgent,
+    episodicStore: { searchByTime: vi.fn().mockResolvedValue([]) },
     sessionManager: {
       resolveSessionChannelId: vi.fn((channelId: string) => channelId),
       getRecentMessages: vi.fn().mockReturnValue(input.entries),
@@ -85,7 +79,7 @@ function makeAgent(input: {
     onGateEvent: (event) => input.events.push(event),
     now: () => NOW_MS,
   };
-  return { agent: new SleeptimeMemoryAgent(options), llmProvider, rethink };
+  return { agent: new SleeptimeMemoryAgent(options), reviewAgent, rethink };
 }
 
 function makeAction() {
@@ -105,7 +99,7 @@ describe('SleeptimeMemoryAgent orientation-rewrite gate (jpvd.4)', () => {
     const events: DeterministicGateEvent[] = [];
     // Rewritten yesterday, only 2 new turns since => below the 4-turn minimum
     // and not stale (1 day < 7) => gate closed.
-    const { agent, llmProvider, rethink } = makeAgent({
+    const { agent, reviewAgent, rethink } = makeAgent({
       updatedAtMs: NOW_MS - DAY_MS,
       entries: makeEntries(2, NOW_MS - 60_000),
       events,
@@ -113,7 +107,7 @@ describe('SleeptimeMemoryAgent orientation-rewrite gate (jpvd.4)', () => {
 
     await agent.execute(makeAction());
 
-    expect(llmProvider.complete).not.toHaveBeenCalled();
+    expect(reviewAgent.handleMessage).not.toHaveBeenCalled();
     expect(rethink).not.toHaveBeenCalled();
     expect(events).toHaveLength(1);
     expect(events[0]).toMatchObject({
@@ -127,7 +121,7 @@ describe('SleeptimeMemoryAgent orientation-rewrite gate (jpvd.4)', () => {
 
   it('runs the orient rewrite when enough new turns accumulated since the last rewrite', async () => {
     const events: DeterministicGateEvent[] = [];
-    const { agent, llmProvider, rethink } = makeAgent({
+    const { agent, reviewAgent, rethink } = makeAgent({
       updatedAtMs: NOW_MS - DAY_MS,
       entries: makeEntries(5, NOW_MS - 60_000),
       events,
@@ -135,7 +129,7 @@ describe('SleeptimeMemoryAgent orientation-rewrite gate (jpvd.4)', () => {
 
     await agent.execute(makeAction());
 
-    expect(llmProvider.complete).toHaveBeenCalledOnce();
+    expect(reviewAgent.handleMessage).toHaveBeenCalledOnce();
     expect(rethink).toHaveBeenCalledOnce();
     expect(events).toHaveLength(1);
     expect(events[0]).toMatchObject({
@@ -148,7 +142,7 @@ describe('SleeptimeMemoryAgent orientation-rewrite gate (jpvd.4)', () => {
   it('re-opens on any activity once the last rewrite is stale beyond the quiet-day floor', async () => {
     const events: DeterministicGateEvent[] = [];
     // Only 1 new turn (below the 4 minimum) but the last rewrite is 30 days old.
-    const { agent, llmProvider } = makeAgent({
+    const { agent, reviewAgent } = makeAgent({
       updatedAtMs: NOW_MS - 30 * DAY_MS,
       entries: makeEntries(1, NOW_MS - 60_000),
       events,
@@ -156,7 +150,7 @@ describe('SleeptimeMemoryAgent orientation-rewrite gate (jpvd.4)', () => {
 
     await agent.execute(makeAction());
 
-    expect(llmProvider.complete).toHaveBeenCalledOnce();
+    expect(reviewAgent.handleMessage).toHaveBeenCalledOnce();
     expect(events[0].outcome).toBe('ran');
   });
 });

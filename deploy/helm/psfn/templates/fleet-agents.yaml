@@ -87,24 +87,7 @@ spec:
             - name: PSFN_KUBE_CURRENT_IMAGE
               value: {{ include "psfn.image" (dict "root" $root "image" $root.Values.workloads.gateway.image) | quote }}
             {{- end }}
-            - name: PSFN_HELM_BACKUP_AGENT_IMAGE_REPOSITORY
-              value: {{ default $root.Values.psfnAppImage.repository $root.Values.workloads.agent.image.repository | quote }}
-            - name: PSFN_HELM_BACKUP_AGENT_IMAGE_TAG
-              value: {{ default $root.Values.psfnAppImage.tag $root.Values.workloads.agent.image.tag | quote }}
-            - name: PSFN_HELM_BACKUP_AGENT_IMAGE_DIGEST
-              value: {{ default $root.Values.psfnAppImage.digest $root.Values.workloads.agent.image.digest | quote }}
-            - name: PSFN_HELM_BACKUP_GATEWAY_IMAGE_REPOSITORY
-              value: {{ default $root.Values.psfnAppImage.repository $root.Values.workloads.gateway.image.repository | quote }}
-            - name: PSFN_HELM_BACKUP_GATEWAY_IMAGE_TAG
-              value: {{ default $root.Values.psfnAppImage.tag $root.Values.workloads.gateway.image.tag | quote }}
-            - name: PSFN_HELM_BACKUP_GATEWAY_IMAGE_DIGEST
-              value: {{ default $root.Values.psfnAppImage.digest $root.Values.workloads.gateway.image.digest | quote }}
-            - name: PSFN_HELM_BACKUP_GARDEN_IMAGE_REPOSITORY
-              value: {{ default $root.Values.psfnAppImage.repository $root.Values.workloads.garden.image.repository | quote }}
-            - name: PSFN_HELM_BACKUP_GARDEN_IMAGE_TAG
-              value: {{ default $root.Values.psfnAppImage.tag $root.Values.workloads.garden.image.tag | quote }}
-            - name: PSFN_HELM_BACKUP_GARDEN_IMAGE_DIGEST
-              value: {{ default $root.Values.psfnAppImage.digest $root.Values.workloads.garden.image.digest | quote }}
+            {{- include "psfn.helmBackupImageEnv" $ctx | nindent 12 }}
             - name: GATEWAY_RPC_ENDPOINT
               value: {{ include "psfn.gatewayRpcUrlForClient" $root | quote }}
             - name: GATEWAY_SESSION_INTEGRITY_AUTH_TOKEN
@@ -182,6 +165,7 @@ spec:
               mountPath: {{ $companionDataDir }}
             - name: workspace
               mountPath: {{ $workspacePath }}
+            {{- include "psfn.sharedWorkspaceVolumeMount" $ctx | nindent 12 }}
             - name: runtime
               mountPath: {{ $root.Values.runtime.logsDir }}
               subPath: logs

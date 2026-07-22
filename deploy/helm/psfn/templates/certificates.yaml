@@ -62,7 +62,7 @@ spec:
     - {{ include "psfn.spiffeGateway" . | quote }}
   issuerRef:
     {{- include "psfn.certIssuerRef" . | nindent 4 }}
-{{- if not .Values.fleet.enabled }}
+{{ if not .Values.fleet.enabled }}
 ---
 apiVersion: cert-manager.io/v1
 kind: Certificate
@@ -104,7 +104,7 @@ spec:
     - {{ include "psfn.spiffeAgent" . | quote }}
   issuerRef:
     {{- include "psfn.certIssuerRef" . | nindent 4 }}
-{{- else }}
+{{ else }}
 {{- $root := . -}}
 {{- range $companion := .Values.fleet.companions }}
 {{- $target := dict "root" $root "companionId" $companion.companionId -}}

@@ -178,7 +178,12 @@ import type { HumanAttentionPressurePort } from './fatigue/human-attention-press
 import { createTurnExecutionRuntimeAdapter } from './substrate-agent/turn-execution-adapter.js';
 import { parseTurnRecordBackgroundWorkHandoff } from './background-work/types.js';
 import type { BackgroundWorkRuntimeTuning } from './background-work/config.js';
-import { CompletionNoticeBuffer } from './completion-notices.js';
+import {
+  CompletionNoticeBuffer,
+  renderCompletionNoticeLines,
+  type CompletionNoticeDeliveryDisposition,
+  type CompletionNoticeDeliveryInput,
+} from './completion-notices.js';
 import {
   refreshModelFromConfig as refreshModelFromConfigForRuntime,
 } from './substrate-agent/model-runtime.js';
@@ -1175,6 +1180,44 @@ export class SubstrateAgent {
       } finally {
         slot.dispose();
       }
+    });
+  }
+
+  /**
+   * Route a terminal child result to its originating companion context.
+   * A matching active parent turn receives a private internal whisper; idle or
+   * differently-scoped work is buffered by logical session for the next
+   * ordinary turn. Neither path creates conversational speech or outbound IO.
+   */
+  async deliverCompletionNotice(
+    input: CompletionNoticeDeliveryInput,
+  ): Promise<CompletionNoticeDeliveryDisposition> {
+    const sourceChannelId = input.sourceChannelId.trim();
+    const logicalSessionId = input.logicalSessionId.trim();
+    if (!sourceChannelId || !logicalSessionId) {
+      throw new Error('Completion notice delivery requires source and logical session ids');
+    }
+    return this.turnRunReservation.runIngress({
+      kind: 'queued-ingress',
+      sourceId: input.notice.handoffId,
+      ingress: 'completion',
+    }, async ({ deferredFromExclusive }) => {
+      const activeIdentity = this.turnSupportRuntime.getActiveTurnSessionIdentity();
+      if (!deferredFromExclusive
+        && this.turnQueueIngress.canQueueIntoActiveOrdinaryRun()
+        && activeIdentity?.logicalSessionId === logicalSessionId) {
+        this.agent.followUp({
+          role: 'custom',
+          type: 'internalWhisper',
+          messageClass: MESSAGE_CLASSES.internalWhisper,
+          content: renderCompletionNoticeLines(input.notice),
+          speakerName: 'Task report',
+          timestamp: Date.now(),
+        } satisfies InternalWhisperMessage);
+        return 'active_nudge';
+      }
+      this.completionNotices.register(logicalSessionId, input.notice);
+      return 'buffered';
     });
   }
 

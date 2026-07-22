@@ -9,7 +9,12 @@ import {
   type CompletionHandoffRecord,
   type CompletionHandoffRef,
 } from '../../shared/contracts/completion-handoff.js';
-import { buildCompletionNotice, type CompletionNoticeBuffer } from './completion-notices.js';
+import {
+  buildCompletionNotice,
+  type CompletionNoticeBuffer,
+  type CompletionNoticeDeliveryDisposition,
+  type CompletionNoticeDeliveryPort,
+} from './completion-notices.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
 
 export {
@@ -38,6 +43,18 @@ const MAX_SUMMARY_CHARS = 700;
 const MAX_TRACKED_DEDUPE_KEYS = 4096;
 
 const emittedDedupeKeys = new Set<string>();
+const SUBAGENT_NOTICE_STATUSES: ReadonlySet<CompletionHandoffRecord['status']> = new Set([
+  'completed',
+  'blocked',
+  'failed',
+  'cancelled',
+  'partial',
+  'interrupted',
+]);
+const SHARD_NOTICE_STATUSES: ReadonlySet<CompletionHandoffRecord['status']> = new Set([
+  ...SUBAGENT_NOTICE_STATUSES,
+  'folded_back',
+]);
 
 function rememberDedupeKey(dedupeKey: string): void {
   emittedDedupeKeys.add(dedupeKey);
@@ -99,6 +116,7 @@ export function buildCompletionHandoff(input: CompletionHandoffInput): Completio
       ...(input.origin?.originatingTaskId ? { originatingTaskId: input.origin.originatingTaskId } : {}),
       ...(input.origin?.originatingBeadId ? { originatingBeadId: input.origin.originatingBeadId } : {}),
       ...(input.origin?.sourceChannelId ? { sourceChannelId: input.origin.sourceChannelId } : {}),
+      ...(input.origin?.logicalSessionId ? { logicalSessionId: input.origin.logicalSessionId } : {}),
       ...(input.origin?.sourceMessageId ? { sourceMessageId: input.origin.sourceMessageId } : {}),
       ...(input.origin?.requestId ? { requestId: input.origin.requestId } : {}),
       ...(input.origin?.turnId ? { turnId: input.origin.turnId } : {}),
@@ -129,19 +147,17 @@ export function buildCompletionHandoff(input: CompletionHandoffInput): Completio
 /**
  * Emit a completion handoff.
  *
- * The durable record is the `agent.completion_handoff` event-bus emission
- * (journal/telemetry). Handoffs are NEVER persisted into any session store —
- * that was the source of transcript pollution that displaced real
- * conversation. When a completion is companion-relevant, pass `notices` and a
- * `targetChannelId`: a compact two-line notice is buffered and rendered once
- * into the next turn's `background_completions` prompt block. Maintenance
- * bookkeeping must omit `notices` so nothing ever reaches companion context.
+ * Handoffs are NEVER persisted as conversational session entries. Terminal
+ * automata/shard results may be routed through the injected internal delivery
+ * port (or directly into a test/local buffer); all other source/status pairs
+ * fail closed to event-only lifecycle telemetry.
  */
 export async function emitCompletionHandoff(input: {
   eventBus: EventBus;
   handoff: CompletionHandoffInput | CompletionHandoffRecord;
   targetChannelId?: string;
   notices?: CompletionNoticeBuffer;
+  noticeDelivery?: CompletionNoticeDeliveryPort;
 }): Promise<CompletionHandoffEmission> {
   const handoff = isCompletionHandoffRecord(input.handoff)
     ? input.handoff
@@ -151,16 +167,27 @@ export async function emitCompletionHandoff(input: {
     return { emitted: false, handoff, ...(targetChannelId ? { targetChannelId } : {}), duplicate: true };
   }
 
-  let noticeBuffered = false;
-  if (input.notices && targetChannelId) {
-    input.notices.register(targetChannelId, buildCompletionNotice(handoff));
-    noticeBuffered = true;
+  let noticeDelivery: CompletionNoticeDeliveryDisposition | undefined;
+  if (targetChannelId && shouldRouteCompanionCompletionNotice(handoff)) {
+    const notice = buildCompletionNotice(handoff);
+    if (input.noticeDelivery) {
+      noticeDelivery = await input.noticeDelivery.deliver({
+        sourceChannelId: targetChannelId,
+        logicalSessionId: handoff.origin.logicalSessionId?.trim() || targetChannelId,
+        notice,
+      });
+    } else if (input.notices) {
+      input.notices.register(handoff.origin.logicalSessionId?.trim() || targetChannelId, notice);
+      noticeDelivery = 'buffered';
+    }
   }
+  const noticeBuffered = noticeDelivery === 'buffered';
 
   await input.eventBus.emit('agent.completion_handoff', {
     handoff,
     ...(targetChannelId ? { targetChannelId } : {}),
     noticeBuffered,
+    ...(noticeDelivery ? { noticeDelivery } : {}),
     timestamp: Date.now(),
   });
   rememberDedupeKey(handoff.dedupeKey);
@@ -169,7 +196,14 @@ export async function emitCompletionHandoff(input: {
     handoff,
     ...(targetChannelId ? { targetChannelId } : {}),
     noticeBuffered,
+    ...(noticeDelivery ? { noticeDelivery } : {}),
   };
+}
+
+export function shouldRouteCompanionCompletionNotice(handoff: CompletionHandoffRecord): boolean {
+  if (handoff.source === 'subagent') return SUBAGENT_NOTICE_STATUSES.has(handoff.status);
+  if (handoff.source === 'shard') return SHARD_NOTICE_STATUSES.has(handoff.status);
+  return false;
 }
 
 export function extractOriginIds(value: unknown): {

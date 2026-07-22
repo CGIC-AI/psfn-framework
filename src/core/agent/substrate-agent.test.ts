@@ -56,6 +56,8 @@ import { PromptComposer } from '../identity/prompt-composer.js';
 import { PromptLayerStore } from '../identity/prompt-store.js';
 import { lifecycleKubernetesSettingsFixture } from '../../test-support/lifecycle-kubernetes-settings.js';
 import { makeContextManifestFixture } from '../../test-support/context-manifest.js';
+import { buildCompletionNotice } from './completion-notices.js';
+import { buildCompletionHandoff } from './completion-handoff.js';
 
 class SubstrateAgent extends RuntimeSubstrateAgent {
   constructor(...args: ConstructorParameters<typeof RuntimeSubstrateAgent>) {
@@ -5528,6 +5530,110 @@ describe('SubstrateAgent steering + follow-up', () => {
       content: 'Keep the answer concrete and grounded.',
     }));
 
+    followUpSpy.mockRestore();
+  });
+
+  it('buffers an idle child result for its captured logical session without authoring speech', async () => {
+    const sessionManager = makeMockSessionManager();
+    sessionManager.setActiveContextSession('session:origin');
+    const agent = new SubstrateAgent(
+      new EventBus(), makeMockLLMProvider(), sessionManager, 'test', makeConfig(),
+    );
+    const followUpSpy = vi.spyOn(Agent.prototype, 'followUp').mockImplementation(() => {});
+    const notice = buildCompletionNotice(buildCompletionHandoff({
+      source: 'subagent',
+      taskId: 'child-1',
+      taskLabel: 'collect files',
+      subagentId: 'child-1',
+      status: 'completed',
+      resultSummary: 'Collected the requested files.',
+      outputRefs: [{ kind: 'session', ref: 'subagent:child-1', label: 'subagent transcript' }],
+      partialResult: false,
+      recommendedNextAction: 'Review the result.',
+    }));
+
+    await agent.deliverCompletionNotice({
+      sourceChannelId: 'api:origin',
+      logicalSessionId: 'session:origin',
+      notice,
+    });
+
+    expect(agent.completionNotices.peek('session:origin')).toMatchObject([
+      { taskId: 'child-1', status: 'completed' },
+    ]);
+    expect(followUpSpy).not.toHaveBeenCalled();
+    expect(sessionManager.recordUserMessage).not.toHaveBeenCalled();
+    expect(sessionManager.recordSystemMessage).not.toHaveBeenCalled();
+    expect(sessionManager.recordAssistantMessage).not.toHaveBeenCalled();
+    followUpSpy.mockRestore();
+  });
+
+  it('nudges a matching active parent turn with a private child-result whisper', async () => {
+    const sessionManager = makeMockSessionManager();
+    sessionManager.setActiveContextSession('session:origin');
+    let markPromptEntered!: () => void;
+    let releasePrompt!: () => void;
+    const promptEntered = new Promise<void>(resolve => { markPromptEntered = resolve; });
+    const promptRelease = new Promise<void>(resolve => { releasePrompt = resolve; });
+    const agent = new SubstrateAgent(
+      new EventBus(), makeMockLLMProvider(), sessionManager, 'test', makeConfig(), {
+        streamFn: vi.fn(async () => {
+          markPromptEntered();
+          await promptRelease;
+          const response = {
+            role: 'assistant',
+            content: [{ type: 'text' as const, text: 'parent response' }],
+            api: 'chat', provider: 'test', model: 'test-model',
+            usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+            stopReason: 'stop' as const,
+            timestamp: Date.now(),
+          };
+          return {
+            async *[Symbol.asyncIterator]() { yield { type: 'start', partial: structuredClone(response) }; yield { type: 'done' }; },
+            result: async () => structuredClone(response),
+          } as never;
+        }),
+      },
+    );
+    promptSpy.mockImplementationOnce(function (this: Agent, input, images) {
+      return realAgentPrompt.call(this, input, images);
+    });
+    const followUpSpy = vi.spyOn(Agent.prototype, 'followUp');
+    const run = agent.handleMessage(makeMessage({
+      id: 'active-parent',
+      channelId: 'api:origin',
+      channelType: 'api',
+    }));
+    await promptEntered;
+    const notice = buildCompletionNotice(buildCompletionHandoff({
+      source: 'subagent',
+      taskId: 'child-2',
+      taskLabel: 'summarize files',
+      subagentId: 'child-2',
+      status: 'completed',
+      resultSummary: 'The summaries are ready.',
+      outputRefs: [{ kind: 'session', ref: 'subagent:child-2', label: 'subagent transcript' }],
+      partialResult: false,
+      recommendedNextAction: 'Review the result.',
+    }));
+
+    await agent.deliverCompletionNotice({
+      sourceChannelId: 'api:origin',
+      logicalSessionId: 'session:origin',
+      notice,
+    });
+
+    expect(followUpSpy).toHaveBeenCalledWith(expect.objectContaining({
+      role: 'custom',
+      type: 'internalWhisper',
+      messageClass: MESSAGE_CLASSES.internalWhisper,
+      speakerName: 'Task report',
+      content: expect.stringContaining('summarize files'),
+    }));
+    expect(agent.completionNotices.peek('session:origin')).toHaveLength(0);
+    expect(sessionManager.recordSystemMessage).not.toHaveBeenCalled();
+    releasePrompt();
+    await run;
     followUpSpy.mockRestore();
   });
 

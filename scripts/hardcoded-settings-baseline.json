@@ -1179,6 +1179,30 @@
     },
     {
       "file": "src/core/agent/completion-notices.ts",
+      "name": "MAX_NOTICE_LABEL_CHARS",
+      "value": "48",
+      "note": "Code-owned wire-format bound keeping one internal child-result heading within the two-line prompt protocol."
+    },
+    {
+      "file": "src/core/agent/completion-notices.ts",
+      "name": "MAX_NOTICE_RENDERED_REFS_CHARS",
+      "value": "110",
+      "note": "Code-owned wire-format bound preventing child result references from exceeding the 160-character notice line."
+    },
+    {
+      "file": "src/core/agent/completion-notices.ts",
+      "name": "MAX_NOTICE_RESULT_REF_LABEL_CHARS",
+      "value": "24",
+      "note": "Code-owned wire-format bound reserving space for actionable reference values in a bounded internal notice."
+    },
+    {
+      "file": "src/core/agent/completion-notices.ts",
+      "name": "MAX_NOTICE_RESULT_REFS",
+      "value": "4",
+      "note": "Code-owned fan-out guard bounding untrusted child result metadata before it enters companion prompt context."
+    },
+    {
+      "file": "src/core/agent/completion-notices.ts",
       "name": "MAX_NOTICE_SUMMARY_CHARS",
       "value": "160"
     },

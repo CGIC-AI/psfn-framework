@@ -61,6 +61,7 @@ export interface CompletionHandoffOrigin {
   originatingTaskId?: string;
   originatingBeadId?: string;
   sourceChannelId?: string;
+  logicalSessionId?: string;
   sourceMessageId?: string;
   requestId?: string;
   turnId?: string;
@@ -125,6 +126,8 @@ export interface CompletionHandoffEmission {
   targetChannelId?: string;
   /** True when a compact companion-facing notice was buffered for the next turn. */
   noticeBuffered?: boolean;
+  /** How the internal notice reached the parent companion, when allowlisted. */
+  noticeDelivery?: 'active_nudge' | 'buffered';
   duplicate?: boolean;
   error?: string;
 }

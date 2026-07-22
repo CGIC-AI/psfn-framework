@@ -396,6 +396,7 @@ export interface EventMap {
     handoff: CompletionHandoffRecord;
     targetChannelId?: string;
     noticeBuffered?: boolean;
+    noticeDelivery?: 'active_nudge' | 'buffered';
     timestamp: number;
   } & EventCorrelationFields;
   'agent.human_attention_pressure': HumanAttentionPressureEvent;

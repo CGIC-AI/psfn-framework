@@ -275,8 +275,27 @@ artifact/file transport is not implemented here yet.
 
 The mic button defaults to Dictation and can toggle to Voice Chat. Both modes
 are compact composer states, not separate tabs. Text remains the canonical
-conversation record. Browser audio capture and TTS transport are shown
-fail-closed until the hub/client voice path is implemented.
+conversation record.
+
+Browser voice follows the gateway-owned contract, capability-gated and
+fail-closed:
+
+- Spoken-reply **playback** is wired. When the negotiated session ceiling
+  advertises the `streamed_audio` output capability, the client reassembles the
+  hub's bracketed audio stream (`audio-init` text signal, base64 `audio` frames,
+  `audio-end` text signal) into whole utterances, decodes them through Web
+  Audio, and plays them back. The decoded amplitude drives v1 lipsync — the
+  floating sprite's mouth opens on the companion's speech (amplitude only, no
+  visemes). A server interrupt/pause or an assistant interruption stops playback
+  (barge-in). Audio that arrives outside a bracket, malformed base64, or a reply
+  over the size ceiling is dropped, never played. Sessions without the
+  `streamed_audio` ceiling buffer no audio at all, so playback stays inert and
+  text remains the source of truth.
+- Outbound mic **capture** (getUserMedia + downsample to 16k PCM, or browser
+  speech-to-text feeding the gateway `conversation.audio` transcript action) is
+  not wired in this build yet; the Voice Chat toggle surfaces a fail-closed
+  notice. The reassembly and amplitude/lipsync primitives live under
+  `src/lib/audio/`.
 
 Approval and artifact UI is contextual only. It does not live as a permanent
 section on the main page. Approval cards (approve/deny with an expiry

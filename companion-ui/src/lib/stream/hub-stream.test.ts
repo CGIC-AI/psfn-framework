@@ -4,6 +4,7 @@ import type {
   SatelliteHubSnapshot,
 } from '../api/client.js';
 import { buildSatelliteHello } from '../api/auth.js';
+import type { HubToClientMessage } from '../protocol/events.js';
 import {
   createInitialHubStreamState,
   HubStreamStore,
@@ -582,3 +583,79 @@ class FakeHubClient implements HubStreamClientLike {
 function fixedClock(): Date {
   return new Date('2026-06-17T00:00:09.000Z');
 }
+
+describe('hub stream voice playback wiring', () => {
+  const AUDIO_CHUNK = 'AAAA';
+
+  function withStreamedAudio(at: string): HubStreamState {
+    return reduceHubStreamState(createInitialHubStreamState(at), {
+      type: 'client.session',
+      at,
+      session: { capabilities: { output: ['text', 'streamed_audio'] } },
+    });
+  }
+
+  function inbound(state: HubStreamState, message: HubToClientMessage, at: string): HubStreamState {
+    return reduceHubStreamState(state, { type: 'hub.inbound', at, event: { message } });
+  }
+
+  it('reassembles bracketed audio frames when the session advertises streamed_audio', () => {
+    let state = withStreamedAudio('2026-07-22T00:00:00.000Z');
+    expect(state.voicePlayback.supported).toBe(true);
+    state = inbound(state, { type: 'text', data: 'audio-init' }, '2026-07-22T00:00:01.000Z');
+    state = inbound(state, { type: 'audio', data: AUDIO_CHUNK }, '2026-07-22T00:00:02.000Z');
+    state = inbound(state, { type: 'text', data: 'audio-end' }, '2026-07-22T00:00:03.000Z');
+    expect(state.voicePlayback.queue).toHaveLength(1);
+    expect(state.voicePlayback.queue[0]?.chunksBase64).toEqual([AUDIO_CHUNK]);
+  });
+
+  it('drops audio and does not buffer without the streamed_audio ceiling', () => {
+    let state = createInitialHubStreamState('2026-07-22T00:00:00.000Z');
+    expect(state.voicePlayback.supported).toBe(false);
+    state = inbound(state, { type: 'text', data: 'audio-init' }, '2026-07-22T00:00:01.000Z');
+    state = inbound(state, { type: 'audio', data: AUDIO_CHUNK }, '2026-07-22T00:00:02.000Z');
+    expect(state.voicePlayback.queue).toHaveLength(0);
+    expect(state.voicePlayback.bracketOpen).toBe(false);
+    expect(state.voicePlayback.droppedFrames).toBeGreaterThan(0);
+  });
+
+  it('leaves ordinary caption text frames untouched', () => {
+    let state = withStreamedAudio('2026-07-22T00:00:00.000Z');
+    state = inbound(state, { type: 'text', data: 'a subtitle line' }, '2026-07-22T00:00:01.000Z');
+    expect(state.voicePlayback.bracketOpen).toBe(false);
+    expect(state.voicePlayback.droppedFrames).toBe(0);
+  });
+
+  it('clears buffered audio on an assistant interruption (barge-in)', () => {
+    let state = withStreamedAudio('2026-07-22T00:00:00.000Z');
+    state = inbound(state, { type: 'text', data: 'audio-init' }, '2026-07-22T00:00:01.000Z');
+    state = inbound(state, { type: 'audio', data: AUDIO_CHUNK }, '2026-07-22T00:00:02.000Z');
+    expect(state.voicePlayback.bracketOpen).toBe(true);
+    state = inbound(state, { type: 'assistant.interrupted', sessionId: 's' }, '2026-07-22T00:00:03.000Z');
+    expect(state.voicePlayback.bracketOpen).toBe(false);
+    expect(state.voicePlayback.pending).toHaveLength(0);
+  });
+
+  it('resets playback support when authority is cleared', () => {
+    let state = withStreamedAudio('2026-07-22T00:00:00.000Z');
+    state = reduceHubStreamState(state, {
+      type: 'client.state',
+      at: '2026-07-22T00:00:04.000Z',
+      event: { previous: 'ready', current: 'closed' },
+    });
+    expect(state.voicePlayback.supported).toBe(false);
+  });
+
+  it('consumes a delivered utterance through the store', () => {
+    const client = new FakeHubClient();
+    const store = new HubStreamStore(client);
+    client.emit('session', { capabilities: { output: ['streamed_audio'] } });
+    client.emit('inbound', { message: { type: 'text', data: 'audio-init' } });
+    client.emit('inbound', { message: { type: 'audio', data: AUDIO_CHUNK } });
+    client.emit('inbound', { message: { type: 'text', data: 'audio-end' } });
+    const queued = store.snapshot().voicePlayback.queue;
+    expect(queued).toHaveLength(1);
+    store.consumeVoiceUtterance(queued[0]!.id);
+    expect(store.snapshot().voicePlayback.queue).toHaveLength(0);
+  });
+});

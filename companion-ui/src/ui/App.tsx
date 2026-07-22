@@ -56,6 +56,7 @@ import {
 import { ThreadView } from './thread-view.js';
 import type { ActivityFilter, OverlayDrawer } from './types.js';
 import { useFleetRouting } from './use-fleet-routing.js';
+import { useVoicePlayback } from './use-voice-playback.js';
 import { WishlistDrawer } from './wishlist-drawer.js';
 
 type AccessState = FleetSessionStatus
@@ -75,7 +76,10 @@ export function App() {
   const [spritePetted, setSpritePetted] = useState(false);
   const [touchError, setTouchError] = useState<string | null>(null);
   const [now, setNow] = useState(() => Date.now());
-  const composer = useComposerController();
+  const composer = useComposerController({
+    captureReady: false,
+    playbackReady: streamState.voicePlayback.supported,
+  });
   const spriteManifest = useSpriteManifest(spriteEnabled);
   const updateReady = useSyncExternalStore(
     subscribeToServiceWorkerUpdates,
@@ -95,6 +99,7 @@ export function App() {
     connect,
     reportError: setConfigError,
   });
+  const mouthOpen = useVoicePlayback(streamState.voicePlayback, storeRef.current);
 
   useEffect(() => {
     const coalescer = new HeadpatCoalescer({
@@ -457,6 +462,7 @@ export function App() {
           state={spriteState}
           animated={spriteAnimations}
           label={identityLabel}
+          mouthOpen={mouthOpen}
           onHeadpat={giveHeadpat}
           petted={spritePetted}
           manifest={spriteManifest.state === 'ready' ? spriteManifest.manifest : null}

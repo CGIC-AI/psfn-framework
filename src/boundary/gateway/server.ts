@@ -79,6 +79,10 @@ import {
 import type { IntakeScreeningService } from '../../core/cogsec/intake/screening.js';
 import type { CogSecEventStore } from '../../core/cogsec/events.js';
 import { createCanaryEgressGuard, type CanaryEgressGuard } from './canary-egress-guard.js';
+import {
+  readCanaryCarrier,
+  stripCanaryCarrier,
+} from '../../core/cogsec/canary/egress-scan.js';
 import type { GatewayVisionIntakeScreener } from './intake/compose-screening.js';
 import type { EventBus, GardenQueueName } from '../../shared/event-bus.js';
 import type {
@@ -588,6 +592,27 @@ export class GatewayServer {
     };
   }
 
+  /**
+   * d269: scan a reverse-RPC reply result at the gateway seam before it can
+   * reach any channel adapter. Strips the reserved canary carrier in every
+   * mode; when the CogSec guard is active, a reply carrying its own session
+   * canary is HELD in enforce mode (recorded + audited) and observed in
+   * shadow. This adds no RPC round-trips — one substring scan on the already
+   * in-hand result.
+   */
+  private async inspectAgentReply<T>(method: string, result: T): Promise<T> {
+    if (!this.canaryEgressGuard) {
+      return stripCanaryCarrier(result) as T;
+    }
+    try {
+      return this.canaryEgressGuard.inspectReply(method, result) as T;
+    } catch (error) {
+      const auditId = await this.audit(method, 'DENY', { canaryReplyHeld: true });
+      await this.auditComplete(auditId, Date.now(), toErrorMessage(error));
+      throw error;
+    }
+  }
+
   subscribeApiStream(
     requestId: string,
     listener: (text: string, companionId?: string) => void,
@@ -806,6 +831,19 @@ export class GatewayServer {
           },
         );
         return null;
+      }
+      // d269: streamed reply frames are main-reply egress. The agent attaches
+      // the session canary under the reserved carrier key (never forwarded);
+      // the guard scans the frame over a rolling per-request window and, in
+      // enforce mode, a hit closes the stream tap for the request.
+      const carrierToken = readCanaryCarrier(params);
+      if (this.canaryEgressGuard) {
+        const verdict = this.canaryEgressGuard.inspectApiStreamDelta({
+          requestId: notification.requestId,
+          text: notification.text,
+          token: carrierToken,
+        });
+        if (!verdict.forward) return null;
       }
       this.dispatchApiStreamDelta(
         notification,
@@ -2294,7 +2332,9 @@ export class GatewayServer {
         setTimeout(() => reject(new Error('Agent request timed out')), timeoutMs),
       ),
     ]);
-    return result as T;
+    // d269: reverse-RPC results are reply egress — scan before returning to
+    // any channel surface.
+    return await this.inspectAgentReply(method, result) as T;
   }
 
   /** Route one exact authority read to the authenticated companion agent. */
@@ -2317,7 +2357,9 @@ export class GatewayServer {
         setTimeout(() => reject(new Error('Companion agent request timed out')), timeoutMs),
       ),
     ]);
-    return result as T;
+    // d269: reverse-RPC results are reply egress — scan before returning to
+    // any channel surface.
+    return await this.inspectAgentReply(method, result) as T;
   }
 
   /** Persist and publish a content-free observation-delivery audit. */
@@ -2383,7 +2425,7 @@ export class GatewayServer {
           input.timeoutMs,
           Math.max(1, lease.expiresAtMs - Date.now()),
         );
-        const rawResult = await Promise.race([
+        const raced = await Promise.race([
           route.client.request('api.chat.completion', params),
           new Promise<never>((_, reject) =>
             setTimeout(
@@ -2391,7 +2433,13 @@ export class GatewayServer {
               effectiveTimeoutMs,
             ),
           ),
-        ]) as ApiChatCompletionRpcResult;
+        ]);
+        // d269: shared-satellite chat replies cross the same reverse-RPC seam;
+        // scan before arbitration reads the content.
+        const rawResult = await this.inspectAgentReply(
+          'api.chat.completion',
+          raced,
+        ) as ApiChatCompletionRpcResult;
         const result: ApiChatCompletionRpcResult = rawResult.ok
           ? {
               ...rawResult,
@@ -2613,6 +2661,8 @@ export class GatewayServer {
       wyomingShardRouting: this.wyomingShardRouting,
       companionId,
       nextRequestCounter: () => ++this.streamRequestCounter,
+      // d269: main-reply canary scan at the reverse-RPC seam.
+      inspectReply: (replyMethod, replyResult) => this.inspectAgentReply(replyMethod, replyResult),
     });
     const attachments = materializeGatewayAttachments(
       result.attachments,
@@ -2673,6 +2723,8 @@ export class GatewayServer {
           wyomingShardRouting: this.wyomingShardRouting,
           companionId: lease.companionId,
           nextRequestCounter: () => ++this.streamRequestCounter,
+          // d269: main-reply canary scan at the reverse-RPC seam.
+          inspectReply: (replyMethod, replyResult) => this.inspectAgentReply(replyMethod, replyResult),
         });
         if (result.content.trim()) {
           if (!this.sharedSatelliteResponseArbiter.complete(lease.leaseId, 'speech')) {

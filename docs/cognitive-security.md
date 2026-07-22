@@ -698,12 +698,65 @@ legitimately lives in the prompt). Cost contract: benign turns pay one
 by depth, node count, and scanned bytes, and hitting a bound fails closed
 (treated as a potential leak → hold).
 
-**Known gap (structural, confirmed):** the scan runs only on agent→gateway
-*requests*. The main conversational reply returns as the result of the
-gateway's reverse `requestAgent(...)` call and its streamed frames, and RPC
-responses are never passed to the egress guard — so a canary leaked into the
-ordinary reply over the reverse-RPC seam is not caught today.
-Agent-initiated sends are covered.
+<!-- BEGIN d269: reverse-RPC reply canary scan (owned by d269; keep self-contained) -->
+### Reverse-RPC reply canary scan (d269)
+
+The former structural gap — request-path-only scanning, leaving the main
+conversational reply returning over the gateway's reverse-RPC seam
+unscanned — is closed. The design mirrors the request path exactly, in the
+opposite direction:
+
+- **Agent side.** Reply-bearing reverse handlers (`voice.handleMessage`,
+  `voice.transcript.end`/`voice.stream.end` — which funnels through the same
+  dispatch — `api.chat.completion`, and `api.companion-ui.shard.action`) run
+  inside an AsyncLocalStorage *reply capture*
+  (`src/core/cogsec/canary/reply-canary.ts`, wired in
+  `src/boundary/gateway/client.ts`). Turn execution records the session
+  canary into the ambient capture at the moment it plants the prompt marker
+  (`turn-execution-runtime.ts`), and the resolved result gets the token
+  attached under the reserved `__cogsecCanary` carrier key. Streamed reply
+  frames (`api.stream.delta`, which bypass the JSON-RPC client send wrapper)
+  attach the carrier explicitly per frame. In `off` mode no token is ever
+  minted, so the wire format is byte-identical.
+- **Gateway side.** `CanaryEgressGuard.inspectReply` strips the carrier and
+  scans the remaining reply strings at every seam chokepoint before anything
+  reaches a channel adapter: `GatewayServer.requestAgent`,
+  `requestCompanionAgent`, the shared-satellite `api.chat.completion` path,
+  and both voice paths (`voice-stream-request.ts` applies the hook to the RAW
+  `voice.transcript.end` / `voice.handleMessage` result, before its field
+  pick could drop the carrier — this covers Telegram text, API/Wyoming voice,
+  and satellite voice). `inspectApiStreamDelta` scans each streamed frame
+  over a rolling per-request tail window of `token.length - 1` chars, so a
+  token split across frame boundaries is caught on the frame that completes
+  it. The carrier is stripped defensively in every mode, including `off`.
+
+**Recorded tradeoff decision: inline block, not post-send alert.** In
+`enforce` mode a canary hit HOLDS the reply — the reverse-RPC result throws
+the same `EGRESS_HELD` error as the request path (the channel surfaces its
+standard failure behavior), and a hit on a streamed frame closes the stream
+tap for the rest of that request. Rationale: (1) a canary token is
+`cnry_` + 16 base32 chars of 80-bit process-local randomness that the model
+is explicitly never told to emit — a substring match in a reply is
+practically always a real prompt-material leak, so the false-positive cost
+of blocking is negligible; (2) the scan is one `String.includes` pass over
+strings already in hand — no added RPC round-trips and effectively zero
+per-turn latency; (3) a post-send alert cannot un-send an exfiltrated
+token, and the repo doctrine for security paths is fail-closed. `shadow`
+mode records the CogSec event and lets the reply through. Fail-closed
+extends to scanner failure: a scan bound exceeded or scanner error on a
+carried-token reply is treated as a leak (held in `enforce`, recorded in
+`shadow`). Residual accepted risk: with streaming, a *partial* token prefix
+in an earlier frame may egress before the completing fragment is blocked
+(the fragment alone has no replay value), and per-request stream scan state
+is bounded (512 entries, FIFO eviction) so a hostile flood degrades only
+split-frame detection, never whole-frame detection or the final
+whole-result scan. Every hit writes the standard `prompt_injection`
+CogSecEvent (sha256 digest only) plus a DENY audit row; held replies never
+enter emotion appraisal or memory candidacy because nothing is delivered.
+<!-- END d269 -->
+
+Agent-initiated sends (messages, web, notifications) were already covered
+by the request-path guard above.
 
 ## Companion Wellbeing: The Language Contract (htm9.12)
 
@@ -1009,11 +1062,15 @@ Documented deliberately; do not let the layer diagram imply otherwise.
   containment, not detection: `image_ocr` provenance stays hostile-tier
   regardless of transcript content, so image-derived text can never drive
   persona/trust mutation and always faces mandatory-tier screening policy.
-- **The canary egress scan does not cover the main conversational reply.**
-  Scanning is request-path only; the reply returns over the gateway's
-  reverse-RPC (`requestAgent`) result/stream seam, which is never passed to
-  the egress guard. Agent-initiated egress (messages, web, notifications)
-  is covered.
+- **The canary egress scan now covers the main conversational reply (d269).**
+  The reverse-RPC result/stream seam (`requestAgent`, companion/satellite
+  chat, both voice paths, `api.stream.delta` frames) is scanned by the reply
+  guard — inline block in `enforce`, record-and-allow in `shadow`; see
+  [Reverse-RPC reply canary scan (d269)](#reverse-rpc-reply-canary-scan-d269).
+  Residual: a partial token prefix in an already-forwarded stream frame may
+  egress before the completing fragment is blocked, and bounded stream-scan
+  state (512 requests, FIFO) can degrade split-frame detection under a
+  hostile flood of concurrent streams.
 - **Released-content re-delivery is wired (jvbt).** An operator release now
   updates the envelope state machine, the audit trail, and the flywheel AND
   re-delivers the set-aside content into the conversation it was withheld from

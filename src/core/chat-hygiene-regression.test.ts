@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { PromptComposer } from './identity/prompt-composer.js';
 import {
   buildRuntimeDatetimeAnchorRetryPrompt,
-  buildRuntimeDatetimeContradictionRefusal,
+  buildRuntimeDatetimeContradictionSystemNote,
   detectRuntimeDatetimeContradiction,
 } from './agent/substrate-agent/runtime-datetime-contradiction-guard.js';
 import {
@@ -349,8 +349,11 @@ describe('Sprint 8 chat hygiene regressions', () => {
     expect(buildRuntimeDatetimeAnchorRetryPrompt('Base system prompt')).toContain(
       'The runtime current_datetime block is authoritative for this turn.',
     );
-    expect(buildRuntimeDatetimeContradictionRefusal()).toBe(
-      'I cannot treat the authoritative runtime datetime anchor as wrong. I will answer from the runtime current_datetime block instead.',
+    expect(buildRuntimeDatetimeContradictionSystemNote()).toContain(
+      'previous assistant response still disputed the authoritative runtime current_datetime anchor',
+    );
+    expect(buildRuntimeDatetimeContradictionSystemNote()).toContain(
+      'preserved verbatim as companion-authored speech',
     );
   });
 });

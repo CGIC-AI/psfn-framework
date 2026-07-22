@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { EventBus, type EventMap } from '../../../shared/event-bus.js';
 import { DEFAULT_COMPANION_ID } from '../../identity/companion-naming.js';
+import { sessionEntryToMessage } from '../messages.js';
 import { PromptRuntimeLayoutStore, resolvePromptRuntimeLayoutPath } from '../../identity/prompt-runtime.js';
 import { getVisionToolRequestContext } from '../../../primitives/images/request-context.js';
 import { buildFocusMemoryScopeQuery } from '../../session/focus-knowledge.js';
@@ -639,6 +640,7 @@ function createRuntime(params: {
     findUniqueSourceRecordedTurn: vi.fn(() => null),
     resolveSessionForIngress: vi.fn((channelId: string) => channelId),
     appendSystemNote: vi.fn(),
+    appendContextSystemNote: vi.fn(),
     awaitPendingAutoCompaction: params.awaitPendingAutoCompaction,
     hasPendingAutoCompaction: params.hasPendingAutoCompaction ?? vi.fn(() => false),
     scheduleAutoCompactionBetweenTurns: params.scheduleAutoCompactionBetweenTurns,
@@ -958,6 +960,7 @@ function createPersistenceBackedRuntime(
     )),
   });
   runtime.sessionManager.recordTurn = sessionManager.recordTurn.bind(sessionManager);
+  runtime.sessionManager.appendContextSystemNote = sessionManager.appendContextSystemNote.bind(sessionManager);
   runtime.recordSystemMessage = turnSupportRuntime.recordSystemMessage.bind(turnSupportRuntime);
   runtime.recordToolObservations = turnSupportRuntime.recordToolObservations.bind(turnSupportRuntime);
   runtime.buildTurnRecord = turnSupportRuntime.buildTurnRecord.bind(turnSupportRuntime);
@@ -7078,10 +7081,10 @@ describe('handleMessageForTurn pre-response concurrency', () => {
     });
   });
 
-  it('persists runtime datetime refusal provenance after a contradictory retry', async () => {
+  it('preserves a contradictory retry verbatim and surfaces the concern as a system note', async () => {
     const dataDir = makeTempDir();
     const eventBus = new EventBus();
-    const { runtime, store } = createPersistenceBackedRuntime(dataDir, eventBus);
+    const { runtime, store, sessionManager } = createPersistenceBackedRuntime(dataDir, eventBus);
     runtime.buildDynamicPromptTemplateVariables = vi.fn(() => ({
       ...BASE_TURN_PROMPT_VARIABLES,
       active_timezone: 'America/New_York',
@@ -7094,11 +7097,19 @@ describe('handleMessageForTurn pre-response concurrency', () => {
       runtime_current_tomorrow: '2026-03-19',
       runtime_current_part_of_day: 'late morning',
     }));
+    const initialContradictoryResponse = 'The clock is off. That cannot be right.';
+    const retriedContradictoryResponse = 'The time is wrong. Are you sure this is right?';
+    let promptAttempt = 0;
     runtime.agent.prompt = vi.fn(async (promptMessage: { content: string }) => {
       (runtime.agent.state.messages as any[]).push({ role: 'user', content: promptMessage.content });
       (runtime.agent.state.messages as any[]).push({
         role: 'assistant',
-        content: [{ type: 'text', text: 'The time is wrong. Are you sure this is right?' }],
+        content: [{
+          type: 'text',
+          text: promptAttempt++ === 0
+            ? initialContradictoryResponse
+            : retriedContradictoryResponse,
+        }],
         api: 'openai-completions',
         provider: 'test',
         model: 'test-model',
@@ -7122,30 +7133,50 @@ describe('handleMessageForTurn pre-response concurrency', () => {
     expect(response.metadata.diagnostics?.runtimeContradiction).toMatchObject({
       retryAttempted: true,
       retrySucceeded: false,
-      refusalApplied: true,
+      refusalApplied: false,
     });
-    expect(response.metadata.runtimeFallbackProvenance).toEqual({
-      schemaVersion: 1,
-      authoredBy: 'runtime',
-      model: 'runtime-fallback',
-      strategy: 'runtime_datetime_contradiction_refusal',
+    expect(runtime.agent.prompt).toHaveBeenCalledTimes(2);
+    expect(response.content).toBe(retriedContradictoryResponse);
+    expect(response.metadata.runtimeFallbackProvenance).toBeUndefined();
+
+    const persistedEntries = store.getRecent('ch1', 10);
+    const assistantEntries = persistedEntries.filter(entry => entry.role === 'assistant');
+    expect(assistantEntries).toHaveLength(1);
+    expect(assistantEntries[0]).toMatchObject({
+      role: 'assistant',
+      content: retriedContradictoryResponse,
     });
-    const assistantEntry = store.getRecent('ch1', 10).find(entry => entry.role === 'assistant');
-    expect(JSON.parse(assistantEntry?.metadata ?? '{}')).toMatchObject({
-      runtimeFallbackProvenance: {
+    expect(JSON.parse(assistantEntries[0]?.metadata ?? '{}'))
+      .not.toHaveProperty('runtimeFallbackProvenance');
+
+    const systemNoteEntry = persistedEntries.find(entry => entry.role === 'system');
+    expect(systemNoteEntry).toMatchObject({
+      role: 'system',
+      content: expect.stringContaining('authoritative runtime current_datetime anchor'),
+    });
+    expect(JSON.parse(systemNoteEntry?.metadata ?? '{}')).toMatchObject({
+      sessionLane: {
         schemaVersion: 1,
-        authoredBy: 'runtime',
-        model: 'runtime-fallback',
-        strategy: 'runtime_datetime_contradiction_refusal',
+        kind: 'system_note',
+        source: 'runtime_datetime_contradiction_guard',
       },
     });
-    const turnRecord = store.getRecentTurnRecords('ch1', 1)[0];
-    expect(turnRecord.assistantMessage?.runtimeFallbackProvenance).toEqual({
-      schemaVersion: 1,
-      authoredBy: 'runtime',
-      model: 'runtime-fallback',
-      strategy: 'runtime_datetime_contradiction_refusal',
+    expect(sessionEntryToMessage(systemNoteEntry!)).toMatchObject({
+      role: 'custom',
+      type: 'systemNote',
+      messageClass: 'systemNote',
     });
+
+    const turnRecord = store.getRecentTurnRecords('ch1', 1)[0];
+    expect(turnRecord.assistantMessage).toMatchObject({ content: retriedContradictoryResponse });
+    expect(turnRecord.assistantMessage?.runtimeFallbackProvenance).toBeUndefined();
+
+    const nextTurnContext = await sessionManager.buildContext('ch1', 'System prompt', '');
+    expect(nextTurnContext.messages).toContainEqual(expect.objectContaining({
+      role: 'system',
+      content: expect.stringContaining('authoritative runtime current_datetime anchor'),
+      provenance: expect.objectContaining({ kind: 'system_note' }),
+    }));
   });
 
   it('retries empty vision prompt recovery three times before returning a visible fallback reply', async () => {

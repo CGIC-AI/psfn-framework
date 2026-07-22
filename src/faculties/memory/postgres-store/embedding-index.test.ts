@@ -34,6 +34,7 @@ describe('L2 embedding ANN index build statement', () => {
     expect(statement).not.toContain('CONCURRENTLY');
     expect(statement).toContain('USING hnsw ((embedding::vector(4)) vector_cosine_ops)');
     expect(statement).toContain('WHERE embedding IS NOT NULL');
+    expect(statement).toContain('vector_dims(embedding) = 4');
   });
 
   it('emits CREATE INDEX CONCURRENTLY when requested (must run outside a txn)', () => {

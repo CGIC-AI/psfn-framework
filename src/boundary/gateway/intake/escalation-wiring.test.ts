@@ -29,12 +29,30 @@ import { CogSecEventStore } from '../../../core/cogsec/events.js';
 import { resolveCogSecEventsPath } from '../../../persistence/layout.js';
 import { validateIntakePolicy } from '../../../system/config/intake-policy-config.js';
 import { composeGatewayIntakeScreening } from './compose-screening.js';
+import type { InjectionClassifierBackend } from './injection-classifier.js';
 import type { ScreenerFetch } from './screener-transport.js';
 import { L2_SCREENER_SCANNER_ID, L2_SCREENER_SUMMARY_FIELD } from './l2-screener.js';
 import { L3_FIELD_ERROR, L3_SCREENER_SCANNER_ID } from './l3-screener.js';
 import { L2_SCREENER_ERROR_FIELD } from './escalation.js';
 
 const POLICY_SEED_PATH = join(process.cwd(), 'config', 'intake-policy.seed.json');
+
+// Enforce-mode compositions now REQUIRE a provisioned L1.5 classifier (cyy7l);
+// the ~700MiB ONNX weights are unavailable in unit tests, so this fake backend
+// (always low P(injection)) stands in so these escalation tests exercise the
+// L2/L3 wiring rather than tripping the L1.5 fail-closed gate.
+function fakeInjectionBackendFactory(): Promise<InjectionClassifierBackend> {
+  const wordIds = (text: string): number[] =>
+    text.split(/\s+/u).filter(Boolean).map((_, index) => 10 + index);
+  return Promise.resolve({
+    clsTokenId: 1,
+    sepTokenId: 2,
+    encode: (text) => Promise.resolve(wordIds(text)),
+    encodeWithSpecialTokens: (text) => Promise.resolve([1, ...wordIds(text), 2]),
+    injectionProbability: () => Promise.resolve(0.01),
+    dispose: () => Promise.resolve(),
+  });
+}
 
 // Seed model slugs (the mock transport routes on the request body's model).
 const L2_MODEL = 'google/gemini-2.5-flash-lite';
@@ -173,6 +191,7 @@ async function composeWith(
     ...dirs,
     screenerBackend: BACKEND,
     screenerFetch: fetch,
+    injectionBackendFactory: fakeInjectionBackendFactory,
   });
   return { composition, companionDataDir: dirs.companionDataDir };
 }
@@ -449,6 +468,9 @@ describe('L2/L3 escalation wired into the live gateway screening path', () => {
     await expect(composeGatewayIntakeScreening({
       ...dirs,
       screenerBackend: null,
+      // L1.5 provisioned (fake) so this test reaches the escalation-backend
+      // fail-closed check rather than the L1.5 fail-closed gate (cyy7l).
+      injectionBackendFactory: fakeInjectionBackendFactory,
     })).rejects.toThrow(/no OpenRouter backend is resolvable/);
   });
 

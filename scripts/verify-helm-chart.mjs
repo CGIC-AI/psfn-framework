@@ -784,6 +784,63 @@ assertIncludes(rendered, 'kind: NetworkPolicy', 'network policy render');
 assertNotIncludes(rendered, 'ALLOW_AGENT_OUTBOUND_NETWORK', 'agent network isolation');
 assertNotIncludes(rendered, 'name: psfn-model-prefetch', 'disabled model prefetch Job');
 
+// cyy7l: the L1.5 intake injection-classifier weights (~700MiB, gitignored,
+// provisioned out of band) are a HARD prerequisite for enforce-mode intake —
+// the gateway fails closed at startup when they are absent. The deploy contract
+// must therefore provision them onto the shared model-cache PVC at exactly the
+// path the gateway reads (PSFN_INJECTION_MODEL_DIR), so no kube target can
+// silently run the firewall degraded. Verify the prefetch Job wires the pinned
+// provisioning script to that exact destination.
+{
+  const injectionExpectedDir = '/app/models/transformers/prompt-injection-v2';
+  const gatewayInjectionEnv = findParsedDocumentByKindName(rendered, 'Deployment', 'psfn-gateway')
+    ?.spec?.template?.spec?.containers?.[0]?.env
+    ?.find(entry => entry.name === 'PSFN_INJECTION_MODEL_DIR');
+  if (gatewayInjectionEnv?.value !== injectionExpectedDir) {
+    throw new Error(
+      `gateway PSFN_INJECTION_MODEL_DIR must be ${injectionExpectedDir}, got ${gatewayInjectionEnv?.value}`,
+    );
+  }
+  const prefetchRendered = render(['--set', 'modelPrefetch.enabled=true']);
+  const prefetchJob = findParsedDocumentByKindName(prefetchRendered, 'Job', 'psfn-model-prefetch');
+  if (!prefetchJob) {
+    throw new Error('modelPrefetch.enabled=true did not render the model-prefetch Job');
+  }
+  const injectionContainer = prefetchJob.spec?.template?.spec?.containers
+    ?.find(container => container?.name === 'injection-classifier');
+  if (!injectionContainer) {
+    throw new Error('model-prefetch Job missing the injection-classifier provisioning container');
+  }
+  assertIncludes(
+    injectionContainer.command?.join(' ') ?? '',
+    'node /app/dist/provision-injection-model.js',
+    'injection-classifier provisioning entrypoint',
+  );
+  const destIndex = injectionContainer.command?.indexOf('--dest');
+  const renderedDest = destIndex >= 0 ? injectionContainer.command?.[destIndex + 1] : undefined;
+  if (renderedDest !== injectionExpectedDir) {
+    throw new Error(
+      'injection-classifier prefetch must provision into the gateway PSFN_INJECTION_MODEL_DIR '
+      + `(${injectionExpectedDir}), got ${renderedDest}`,
+    );
+  }
+  const injectionMount = injectionContainer.volumeMounts
+    ?.find(mount => mount?.name === 'model-cache');
+  if (injectionMount?.mountPath !== '/app/models/transformers') {
+    throw new Error('injection-classifier prefetch must mount the model-cache PVC');
+  }
+  // The provisioning step is inert without the PVC it writes to: the chart
+  // must refuse a prefetch Job with no model-cache PVC rather than provision
+  // into an ephemeral path the gateway never sees (fail closed at render time).
+  assertRenderFails(
+    [
+      '--set', 'modelPrefetch.enabled=true',
+      '--set', 'persistence.modelCache.enabled=false',
+    ],
+    'modelPrefetch.enabled=true requires persistence.modelCache.enabled=true',
+  );
+}
+
 const customPostgresRendered = render([
   '--set-string',
   'postgres.auth.database=companion',

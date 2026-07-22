@@ -568,6 +568,15 @@ modelPrefetch:
     enabled: true
     model: SamLowe/roberta-base-go_emotions-onnx
     dtype: fp32
+  # L1.5 intake injection-classifier weights (cyy7l). When modelPrefetch is
+  # enabled this provisions the pinned, sha256-verified
+  # protectai/deberta-v3-base-prompt-injection-v2 ONNX weights (~700 MiB) onto
+  # the shared model-cache PVC at <modelCacheDir>/prompt-injection-v2 — exactly
+  # the gateway's PSFN_INJECTION_MODEL_DIR. Required for enforce-mode intake:
+  # the gateway FAILS CLOSED at startup when mode=enforce and the weights are
+  # absent. Requires persistence.modelCache.enabled=true.
+  injectionClassifier:
+    enabled: true
 
 certificates:
   enabled: true

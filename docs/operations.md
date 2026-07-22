@@ -1266,16 +1266,46 @@ The gateway-side L1.5 prompt-injection classifier
 (`src/boundary/gateway/intake/injection-classifier.ts`) runs
 `protectai/deberta-v3-base-prompt-injection-v2` (Apache-2.0) in-process via
 the pinned `@huggingface/transformers` ONNX runtime. Model weights (~704 MiB)
-are not committed to git and are never downloaded at runtime. When the model
-directory is absent the gateway skips L1.5 scoring with a loud startup warning
-and screens on the deterministic L1 layer alone; a present-but-broken model
-directory fails startup closed (`src/boundary/gateway/intake/compose-screening.ts`).
+are not committed to git and are never downloaded at runtime. Provisioning is a
+**verified deploy prerequisite** — the posture depends on `intake-policy.json`
+`mode` (`src/boundary/gateway/intake/compose-screening.ts`, `cyy7l`):
+
+- **`mode=enforce` + weights absent → gateway startup FAILS CLOSED** with an
+  actionable error naming `npm run provision:injection-model`. A degraded
+  L1-only firewall under an enforce posture reports "armed" while L1.5 never
+  scores, so the gateway refuses to start until the weights are on disk.
+- **`mode=shadow` + weights absent → loud skip**: one structured startup
+  warning (never per-message), screening continues on the deterministic L1
+  layer alone, and intake health is flagged `injectionClassifier.degraded`.
+- **weights present but broken (any mode) → gateway startup fails closed.**
 
 Provision (pinned revision, every file sha256-verified):
 
 ```bash
 npm run provision:injection-model -- --dest ./models/prompt-injection-v2
 ```
+
+On Kubernetes, provisioning targets the model-cache PVC at
+`<runtime.modelCacheDir>/prompt-injection-v2` (the gateway's
+`PSFN_INJECTION_MODEL_DIR`). Set `modelPrefetch.enabled=true` (requires
+`persistence.modelCache.enabled=true`); the chart's model-prefetch Job runs an
+`injection-classifier` container that provisions the pinned weights onto the
+PVC before the restricted-egress gateway starts. Verify the deploy contract
+(the prefetch destination must match the gateway's model path) with:
+
+```bash
+npm run verify:deployment-contracts
+```
+
+Failure symptoms:
+
+- Gateway `CrashLoopBackOff` with `mode=enforce but the L1.5 injection
+  classifier weights are not provisioned` → the model-cache PVC was never
+  populated (run/enable the prefetch, or provision the PVC out of band).
+- Startup log `Intake L1.5 injection classifier weights are not provisioned;
+  gateway intake screening runs on the deterministic L1 layer alone (DEGRADED)`
+  under `mode=shadow` → the firewall is running without L1.5 scoring; provision
+  before switching to enforce.
 
 Notes:
 

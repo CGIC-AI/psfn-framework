@@ -5,9 +5,31 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { composeGatewayIntakeScreening } from './compose-screening.js';
+import type { InjectionClassifierBackend } from './injection-classifier.js';
+import { getRecentDiagnosticLogRecords } from '../../../shared/logger.js';
 import { resolveIntakeQuarantinePath } from '../../../persistence/layout.js';
 
 const POLICY_SEED_PATH = join(process.cwd(), 'config', 'intake-policy.seed.json');
+
+// L1.5 injection classifier weights (~700MiB ONNX) are not available in unit
+// tests. This fake backend stands in so enforce-mode compositions — which now
+// REQUIRE a provisioned L1.5 classifier (cyy7l) — can exercise the rest of the
+// wiring without the real weights. It always returns a low P(injection).
+const FAKE_CLS = 1;
+const FAKE_SEP = 2;
+function fakeInjectionBackend(): InjectionClassifierBackend {
+  const wordIds = (text: string): number[] =>
+    text.split(/\s+/u).filter(Boolean).map((_, index) => 10 + index);
+  return {
+    clsTokenId: FAKE_CLS,
+    sepTokenId: FAKE_SEP,
+    encode: (text) => Promise.resolve(wordIds(text)),
+    encodeWithSpecialTokens: (text) => Promise.resolve([FAKE_CLS, ...wordIds(text), FAKE_SEP]),
+    injectionProbability: () => Promise.resolve(0.01),
+    dispose: () => Promise.resolve(),
+  };
+}
+const fakeInjectionBackendFactory = () => Promise.resolve(fakeInjectionBackend());
 
 const tempDirs: string[] = [];
 
@@ -50,6 +72,7 @@ describe('composeGatewayIntakeScreening vision wiring (htm9.8)', () => {
     const composition = await composeGatewayIntakeScreening({
       ...makeDataDirs('enforce', true),
       screenerBackend: { apiBaseUrl: 'https://openrouter.test/api/v1', apiKey: 'sk-test' },
+      injectionBackendFactory: fakeInjectionBackendFactory,
     });
     expect(composition.screening).not.toBeNull();
     expect(composition.visionIntake).not.toBeNull();
@@ -60,6 +83,7 @@ describe('composeGatewayIntakeScreening vision wiring (htm9.8)', () => {
     await expect(composeGatewayIntakeScreening({
       ...makeDataDirs('enforce', true),
       screenerBackend: null,
+      injectionBackendFactory: fakeInjectionBackendFactory,
     })).rejects.toThrow(/no OpenRouter backend is resolvable/);
   });
 
@@ -77,6 +101,7 @@ describe('composeGatewayIntakeScreening vision wiring (htm9.8)', () => {
     const composition = await composeGatewayIntakeScreening({
       ...makeDataDirs('enforce', false),
       screenerBackend: { apiBaseUrl: 'https://openrouter.test/api/v1', apiKey: 'sk-test' },
+      injectionBackendFactory: fakeInjectionBackendFactory,
     });
     expect(composition.visionIntake).toBeNull();
     await composition.dispose();
@@ -129,6 +154,7 @@ describe('composeGatewayIntakeScreening vision wiring (htm9.8)', () => {
       ...input,
       screenerBackend: { apiBaseUrl: 'https://openrouter.test/api/v1', apiKey: 'sk-test' },
       screenerFetch: vi.fn().mockRejectedValue(new Error('vision transport unavailable')),
+      injectionBackendFactory: fakeInjectionBackendFactory,
       onQuarantineHeld: () => {
         const stored = JSON.parse(
           readFileSync(resolveIntakeQuarantinePath(input.companionDataDir), 'utf8'),
@@ -145,6 +171,72 @@ describe('composeGatewayIntakeScreening vision wiring (htm9.8)', () => {
 
     expect(result.withheld).toBe(true);
     expect(durableCounts).toEqual([1]);
+    await composition.dispose();
+  });
+});
+
+describe('composeGatewayIntakeScreening L1.5 provisioning gate (cyy7l)', () => {
+  it('FAILS CLOSED at startup in enforce mode when the L1.5 weights are absent', async () => {
+    // The env points PSFN_INJECTION_MODEL_DIR at an unprovisioned directory and
+    // no injectionBackendFactory is supplied, so the weights are absent.
+    await expect(composeGatewayIntakeScreening({
+      ...makeDataDirs('enforce', false),
+      screenerBackend: null,
+    })).rejects.toThrow(/mode=enforce.*not provisioned/su);
+  });
+
+  it('names the provisioning command in the enforce fail-closed error', async () => {
+    await expect(composeGatewayIntakeScreening({
+      ...makeDataDirs('enforce', false),
+      screenerBackend: null,
+    })).rejects.toThrow(/npm run provision:injection-model/u);
+  });
+
+  it('warns once and flags degraded (not throw) in shadow mode when weights are absent', async () => {
+    const startedAt = Date.now();
+    const input = makeDataDirs('shadow', false);
+    const composition = await composeGatewayIntakeScreening({
+      ...input,
+      screenerBackend: null,
+    });
+    // Screening still runs (L1 alone); the classifier is not loaded.
+    expect(composition.screening).not.toBeNull();
+    expect(composition.injectionClassifier.enabled).toBe(false);
+    expect(composition.injectionClassifier.degraded).toBe(true);
+    expect(composition.injectionClassifier.modelDir)
+      .toBe(input.env.PSFN_INJECTION_MODEL_DIR);
+    // Exactly one structured degraded-capability warning for the absent L1.5
+    // weights — a startup-time notice, never per-message.
+    const l15Warnings = getRecentDiagnosticLogRecords({ sinceMs: startedAt })
+      .filter(record =>
+        record.level === 'warn'
+        && record.component === 'GatewayIntakeScreening'
+        && record.message.includes('L1.5 injection classifier weights are not provisioned'),
+      );
+    expect(l15Warnings).toHaveLength(1);
+    await composition.dispose();
+  });
+
+  it('loads the classifier and reports non-degraded when weights are provisioned (enforce)', async () => {
+    const composition = await composeGatewayIntakeScreening({
+      ...makeDataDirs('enforce', false),
+      // Enforce mode with mandatory L2/L3 tiers requires an escalation backend.
+      screenerBackend: { apiBaseUrl: 'https://openrouter.test/api/v1', apiKey: 'sk-test' },
+      injectionBackendFactory: fakeInjectionBackendFactory,
+    });
+    expect(composition.injectionClassifier.enabled).toBe(true);
+    expect(composition.injectionClassifier.degraded).toBe(false);
+    await composition.dispose();
+  });
+
+  it('loads the classifier and reports non-degraded when weights are provisioned (shadow)', async () => {
+    const composition = await composeGatewayIntakeScreening({
+      ...makeDataDirs('shadow', false),
+      screenerBackend: null,
+      injectionBackendFactory: fakeInjectionBackendFactory,
+    });
+    expect(composition.injectionClassifier.enabled).toBe(true);
+    expect(composition.injectionClassifier.degraded).toBe(false);
     await composition.dispose();
   });
 });

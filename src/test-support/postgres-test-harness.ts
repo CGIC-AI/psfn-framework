@@ -1,10 +1,17 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  chmodSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  unlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
-import { isMainThread } from 'node:worker_threads';
 import type { Pool } from 'pg';
 import {
   POSTGRES_EXTENSION_SCHEMA_NAME,
@@ -20,6 +27,18 @@ const POSTGRES_DATABASE = 'postgres';
 const POSTGRES_PORT = 5432;
 const TEST_POSTGRES_LABEL = 'io.local-gate.test-postgres';
 const TEST_POSTGRES_IMAGE_LABEL = 'io.local-gate.test-postgres.image';
+const TEST_POSTGRES_PROFILE_LABEL = 'io.local-gate.test-postgres.profile';
+const POSTGRES_TEST_RUNTIME = Object.freeze({
+  cpuLimit: '2',
+  lockBasePath: join(tmpdir(), 'psfn-postgres-test-harness'),
+  lockMalformedGraceMs: 5_000,
+  lockRetryMs: 100,
+  maxConcurrentHarnesses: 4,
+  memoryLimit: '768m',
+  profile: 'tmpfs-v1',
+  sharedMemorySize: '128m',
+  tmpfsSize: '512m',
+});
 const READY_RETRY_LIMIT = 120;
 const READY_RETRY_DELAY_MS = 500;
 const MAX_DATABASES_FOR_IN_PLACE_RESET = 16;
@@ -78,8 +97,19 @@ interface PersistentPostgresContainer {
   image: string;
   imageLabel: string;
   name: string;
+  profileLabel: string;
   running: boolean;
   testLabel: string;
+}
+
+interface PostgresTestLockOwner {
+  pid: number;
+  token: string;
+}
+
+interface PostgresTestHarnessLease {
+  release(): void;
+  slot: number;
 }
 
 function runDockerCommand(args: string[]): DockerCommandResult {
@@ -104,23 +134,111 @@ function runDocker(args: string[]): string {
   return result.stdout;
 }
 
-export function postgresTestContainerScope({
-  vitestPoolId = process.env.VITEST_POOL_ID?.trim(),
-  invocationProcessId = isMainThread ? process.ppid : process.pid,
-  processId = process.pid,
-}: {
-  vitestPoolId?: string;
-  invocationProcessId?: number;
-  processId?: number;
-} = {}): string {
-  return vitestPoolId
-    ? `vitest-run-${invocationProcessId}-pool-${vitestPoolId}`
-    : `process-${processId}`;
+function readPostgresTestLockOwner(lockPath: string): PostgresTestLockOwner | null {
+  try {
+    const parsed: unknown = JSON.parse(readFileSync(lockPath, 'utf8'));
+    if (
+      typeof parsed !== 'object'
+      || parsed === null
+      || !('pid' in parsed)
+      || !('token' in parsed)
+      || typeof parsed.pid !== 'number'
+      || !Number.isInteger(parsed.pid)
+      || parsed.pid <= 0
+      || typeof parsed.token !== 'string'
+      || !parsed.token
+    ) {
+      throw new Error(`Malformed PostgreSQL test harness lock: ${lockPath}`);
+    }
+    return {
+      pid: parsed.pid as number,
+      token: parsed.token,
+    };
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      return null;
+    }
+    throw error;
+  }
+}
+
+function isProcessRunning(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code !== 'ESRCH';
+  }
+}
+
+async function acquirePostgresTestHarnessLease(): Promise<PostgresTestHarnessLease> {
+  for (;;) {
+    for (let slot = 0; slot < POSTGRES_TEST_RUNTIME.maxConcurrentHarnesses; slot += 1) {
+      const lockPath = `${POSTGRES_TEST_RUNTIME.lockBasePath}.${slot}.lock`;
+      const owner: PostgresTestLockOwner = {
+        pid: process.pid,
+        token: randomUUID(),
+      };
+      try {
+        writeFileSync(
+          lockPath,
+          `${JSON.stringify(owner)}\n`,
+          { encoding: 'utf8', flag: 'wx', mode: 0o600 },
+        );
+        let released = false;
+        return {
+          release() {
+            if (released) return;
+            const currentOwner = readPostgresTestLockOwner(lockPath);
+            if (!currentOwner || currentOwner.token !== owner.token) {
+              throw new Error(
+                'Refusing to release a PostgreSQL test harness slot owned by another process',
+              );
+            }
+            unlinkSync(lockPath);
+            released = true;
+          },
+          slot,
+        };
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'EEXIST') {
+          throw error;
+        }
+      }
+
+      let existingOwner: PostgresTestLockOwner | null;
+      try {
+        existingOwner = readPostgresTestLockOwner(lockPath);
+      } catch (error) {
+        let ageMs: number;
+        try {
+          ageMs = Date.now() - statSync(lockPath).mtimeMs;
+        } catch (statError) {
+          if ((statError as NodeJS.ErrnoException).code === 'ENOENT') continue;
+          throw statError;
+        }
+        if (ageMs < POSTGRES_TEST_RUNTIME.lockMalformedGraceMs) {
+          continue;
+        }
+        throw error;
+      }
+      if (!existingOwner) continue;
+      if (!isProcessRunning(existingOwner.pid)) {
+        try {
+          unlinkSync(lockPath);
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+        }
+        continue;
+      }
+    }
+    await delay(POSTGRES_TEST_RUNTIME.lockRetryMs);
+  }
 }
 
 export function postgresTestContainerNameForImage(
   image: string,
-  scope = postgresTestContainerScope(),
+  scope: string = POSTGRES_TEST_RUNTIME.profile,
 ): string {
   const normalizedImage = image.trim();
   if (!normalizedImage) {
@@ -135,47 +253,96 @@ export function postgresTestContainerNameForImage(
   return `local-gate-test-postgres-${scopeHash}-${imageHash}`;
 }
 
+export function postgresTestDockerRunArgs(image: string, name: string): string[] {
+  return [
+    'run',
+    '-d',
+    '--name',
+    name,
+    '--label',
+    `${TEST_POSTGRES_LABEL}=true`,
+    '--label',
+    `${TEST_POSTGRES_IMAGE_LABEL}=${image}`,
+    '--label',
+    `${TEST_POSTGRES_PROFILE_LABEL}=${POSTGRES_TEST_RUNTIME.profile}`,
+    '--log-driver',
+    'none',
+    '--memory',
+    POSTGRES_TEST_RUNTIME.memoryLimit,
+    '--memory-swap',
+    POSTGRES_TEST_RUNTIME.memoryLimit,
+    '--cpus',
+    POSTGRES_TEST_RUNTIME.cpuLimit,
+    '--shm-size',
+    POSTGRES_TEST_RUNTIME.sharedMemorySize,
+    '--tmpfs',
+    `/var/lib/postgresql/data:rw,noexec,nosuid,size=${POSTGRES_TEST_RUNTIME.tmpfsSize}`,
+    '-e',
+    `POSTGRES_USER=${POSTGRES_USER}`,
+    '-e',
+    `POSTGRES_PASSWORD=${POSTGRES_PASSWORD}`,
+    '-e',
+    `POSTGRES_DB=${POSTGRES_DATABASE}`,
+    '-e',
+    'POSTGRES_INITDB_ARGS=--nosync',
+    '-p',
+    `127.0.0.1::${POSTGRES_PORT}`,
+    image,
+    'postgres',
+    '-c',
+    'fsync=off',
+    '-c',
+    'synchronous_commit=off',
+    '-c',
+    'full_page_writes=off',
+    '-c',
+    'shared_buffers=32MB',
+    '-c',
+    'min_wal_size=32MB',
+    '-c',
+    'max_wal_size=64MB',
+  ];
+}
+
 function inspectPersistentPostgresContainer(name: string): PersistentPostgresContainer | null {
   const format = [
     '{{.State.Running}}',
     '{{.Config.Image}}',
     `{{index .Config.Labels "${TEST_POSTGRES_IMAGE_LABEL}"}}`,
     `{{index .Config.Labels "${TEST_POSTGRES_LABEL}"}}`,
+    `{{index .Config.Labels "${TEST_POSTGRES_PROFILE_LABEL}"}}`,
   ].join('\t');
   const result = runDockerCommand(['inspect', '--format', format, name]);
   if (result.status !== 0) {
     return null;
   }
-  const [running, image, imageLabel, testLabel] = result.stdout.split('\t');
-  if ((running !== 'true' && running !== 'false') || !image || !imageLabel || !testLabel) {
+  const [running, image, imageLabel, testLabel, profileLabel] = result.stdout.split('\t');
+  if (
+    (running !== 'true' && running !== 'false')
+    || !image
+    || !imageLabel
+    || !testLabel
+    || !profileLabel
+  ) {
     throw new Error(`Malformed Docker metadata for persistent Postgres container ${name}`);
   }
-  return { image, imageLabel, name, running: running === 'true', testLabel };
+  return {
+    image,
+    imageLabel,
+    name,
+    profileLabel,
+    running: running === 'true',
+    testLabel,
+  };
 }
 
-function ensurePersistentPostgresContainer(image: string): string {
-  const name = postgresTestContainerNameForImage(image);
+function ensurePersistentPostgresContainer(
+  image: string,
+  name = postgresTestContainerNameForImage(image),
+): string {
   let container = inspectPersistentPostgresContainer(name);
   if (!container) {
-    const createArgs = [
-      'run',
-      '-d',
-      '--name',
-      name,
-      '--label',
-      `${TEST_POSTGRES_LABEL}=true`,
-      '--label',
-      `${TEST_POSTGRES_IMAGE_LABEL}=${image}`,
-      '-e',
-      `POSTGRES_USER=${POSTGRES_USER}`,
-      '-e',
-      `POSTGRES_PASSWORD=${POSTGRES_PASSWORD}`,
-      '-e',
-      `POSTGRES_DB=${POSTGRES_DATABASE}`,
-      '-p',
-      `127.0.0.1::${POSTGRES_PORT}`,
-      image,
-    ];
+    const createArgs = postgresTestDockerRunArgs(image, name);
     const createResult = runDockerCommand(createArgs);
     container = inspectPersistentPostgresContainer(name);
     if (!container) {
@@ -185,10 +352,16 @@ function ensurePersistentPostgresContainer(image: string): string {
       throw new Error(`Created persistent Postgres container ${name}, but Docker cannot inspect it`);
     }
   }
-  if (container.image !== image || container.imageLabel !== image || container.testLabel !== 'true') {
+  if (
+    container.image !== image
+    || container.imageLabel !== image
+    || container.testLabel !== 'true'
+    || container.profileLabel !== POSTGRES_TEST_RUNTIME.profile
+  ) {
     throw new Error(
       `Persistent Postgres container ${name} does not match requested image ${image}: ` +
-        `configured=${container.image} labeled=${container.imageLabel}`,
+        `configured=${container.image} labeled=${container.imageLabel} ` +
+        `profile=${container.profileLabel}`,
     );
   }
   if (!container.running) {
@@ -202,11 +375,28 @@ function recyclePersistentPostgresContainer(name: string, image: string): void {
   if (!container
     || container.image !== image
     || container.imageLabel !== image
-    || container.testLabel !== 'true') {
+    || container.testLabel !== 'true'
+    || container.profileLabel !== POSTGRES_TEST_RUNTIME.profile) {
     throw new Error(`Refusing to recycle unverified persistent Postgres container ${name}`);
   }
   runDocker(['rm', '-f', name]);
-  ensurePersistentPostgresContainer(image);
+  ensurePersistentPostgresContainer(image, name);
+}
+
+function stopPersistentPostgresContainer(name: string, image: string): void {
+  const container = inspectPersistentPostgresContainer(name);
+  if (!container) return;
+  if (
+    container.image !== image
+    || container.imageLabel !== image
+    || container.testLabel !== 'true'
+    || container.profileLabel !== POSTGRES_TEST_RUNTIME.profile
+  ) {
+    throw new Error(`Refusing to stop unverified persistent Postgres container ${name}`);
+  }
+  if (container.running) {
+    runDocker(['stop', '--time', '2', name]);
+  }
 }
 
 function quoteIdentifier(identifier: string): string {
@@ -395,99 +585,160 @@ function resolveDatabaseUrl(adminDatabaseUrl: string, databaseName: string): str
 
 export async function startPostgresTestHarness(options: PostgresTestHarnessOptions = {}): Promise<PostgresTestHarness> {
   const image = options.image?.trim() || PGVECTOR_POSTGRES_TEST_IMAGE;
-  const containerName = ensurePersistentPostgresContainer(image);
-
-  const mapping = runDocker(['port', containerName, `${POSTGRES_PORT}/tcp`]);
-  const mappedPortText = mapping.split('\n').map(line => line.trim()).find(Boolean)?.split(':').pop();
-  if (!mappedPortText) {
-    throw new Error(`Unable to resolve mapped postgres port for container ${containerName}`);
-  }
-  const mappedPort = Number(mappedPortText);
-  if (!Number.isInteger(mappedPort) || mappedPort <= 0) {
-    throw new Error(`Invalid mapped postgres port "${mappedPortText}" for container ${containerName}`);
-  }
-
-  const adminDatabaseUrl = `postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@127.0.0.1:${mappedPort}/${POSTGRES_DATABASE}`;
-  await waitForDatabaseReady(adminDatabaseUrl);
-
-  const adminPool = createPostgresPool(adminDatabaseUrl, {
-    applicationName: 'psfn-memory-test-admin',
-    allowExitOnIdle: true,
-    // Large files create dozens of databases; parallel force-drops must finish
-    // inside their 30-second Vitest teardown hook even under full-suite load.
-    max: 16,
-  });
-  // A worker container is exclusive to one Vitest file at a time. Reset stale
-  // artifacts left by an interrupted prior run before handing it to the file.
-  await resetWorkerPostgres(adminPool);
-  const clientRoot = mkdtempSync(join(tmpdir(), 'psfn-postgres-clients-'));
-  const clientBinaries: PostgresTestClientBinaries = {
-    pgDumpBinary: writeDockerPostgresClient(clientRoot, image, 'pg_dump'),
-    pgRestoreBinary: writeDockerPostgresClient(clientRoot, image, 'pg_restore'),
-    psqlBinary: writeDockerPostgresClient(clientRoot, image, 'psql'),
-  };
-  return {
-    adminDatabaseUrl,
-    clientBinaries,
-    containerName,
+  const lease = await acquirePostgresTestHarnessLease();
+  const containerName = postgresTestContainerNameForImage(
     image,
-    async createDatabase(
-      databaseOptions: PostgresTestDatabaseOptions = {},
-    ): Promise<PostgresTestDatabase> {
-      const databaseName = `psfn_${randomUUID().replaceAll('-', '')}`;
-      await adminPool.query(`CREATE DATABASE ${quoteIdentifier(databaseName)}`);
-      const databaseUrl = resolveDatabaseUrl(adminDatabaseUrl, databaseName);
-      await waitForDatabaseReady(databaseUrl);
-      if (databaseOptions.provisionExtensionSchema !== false) {
-        await provisionTestDatabase(databaseUrl);
-      }
-      return {
-        databaseName,
-        databaseUrl,
-      };
-    },
-    async stop(): Promise<void> {
-      // The container persists machine-wide but belongs to one Vitest worker.
-      // Drain and reset that worker's test databases and cluster-wide roles.
-      // A surviving-backend timeout still force-cleans this harness's databases
-      // and then rethrows so the connection leak remains loud.
-      const cleanupErrors: Error[] = [];
-      let recycleContainer = false;
-      try {
-        const testDatabases = await listTestDatabases(adminPool);
-        recycleContainer = testDatabases.size > MAX_DATABASES_FOR_IN_PLACE_RESET;
-        await waitForClientBackendsToDrain(adminPool, testDatabases);
-      } catch (error) {
-        cleanupErrors.push(error instanceof Error ? error : new Error(String(error)));
-      }
-      if (!recycleContainer) {
+    `${POSTGRES_TEST_RUNTIME.profile}-slot-${lease.slot}`,
+  );
+  let adminPool: Pool | undefined;
+  let clientRoot: string | undefined;
+
+  try {
+    ensurePersistentPostgresContainer(image, containerName);
+    const mapping = runDocker(['port', containerName, `${POSTGRES_PORT}/tcp`]);
+    const mappedPortText = mapping.split('\n').map(line => line.trim()).find(Boolean)?.split(':').pop();
+    if (!mappedPortText) {
+      throw new Error(`Unable to resolve mapped postgres port for container ${containerName}`);
+    }
+    const mappedPort = Number(mappedPortText);
+    if (!Number.isInteger(mappedPort) || mappedPort <= 0) {
+      throw new Error(`Invalid mapped postgres port "${mappedPortText}" for container ${containerName}`);
+    }
+
+    const adminDatabaseUrl = `postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@127.0.0.1:${mappedPort}/${POSTGRES_DATABASE}`;
+    await waitForDatabaseReady(adminDatabaseUrl);
+
+    adminPool = createPostgresPool(adminDatabaseUrl, {
+      applicationName: 'psfn-memory-test-admin',
+      allowExitOnIdle: true,
+      // Large files create dozens of databases; parallel force-drops must finish
+      // inside their 30-second Vitest teardown hook even under full-suite load.
+      max: 16,
+    });
+    const activeAdminPool = adminPool;
+    // A semaphore slot owns one RAM-backed container. Reset stale artifacts
+    // left by an interrupted prior run before handing it to the test file.
+    await resetWorkerPostgres(activeAdminPool);
+    clientRoot = mkdtempSync(join(tmpdir(), 'psfn-postgres-clients-'));
+    const activeClientRoot = clientRoot;
+    const clientBinaries: PostgresTestClientBinaries = {
+      pgDumpBinary: writeDockerPostgresClient(activeClientRoot, image, 'pg_dump'),
+      pgRestoreBinary: writeDockerPostgresClient(activeClientRoot, image, 'pg_restore'),
+      psqlBinary: writeDockerPostgresClient(activeClientRoot, image, 'psql'),
+    };
+    return {
+      adminDatabaseUrl,
+      clientBinaries,
+      containerName,
+      image,
+      async createDatabase(
+        databaseOptions: PostgresTestDatabaseOptions = {},
+      ): Promise<PostgresTestDatabase> {
+        const databaseName = `psfn_${randomUUID().replaceAll('-', '')}`;
+        await activeAdminPool.query(`CREATE DATABASE ${quoteIdentifier(databaseName)}`);
+        const databaseUrl = resolveDatabaseUrl(adminDatabaseUrl, databaseName);
+        await waitForDatabaseReady(databaseUrl);
+        if (databaseOptions.provisionExtensionSchema !== false) {
+          await provisionTestDatabase(databaseUrl);
+        }
+        return {
+          databaseName,
+          databaseUrl,
+        };
+      },
+      async stop(): Promise<void> {
+        // The tmpfs is destroyed when Docker stops the container. Reset first
+        // only to preserve the existing leak diagnostics and fast-path reuse;
+        // stopping also releases the container's bounded RAM before the next
+        // test file receives this machine-wide semaphore slot.
+        const cleanupErrors: Error[] = [];
+        let recycleContainer = false;
         try {
-          await resetWorkerPostgres(adminPool);
+          const testDatabases = await listTestDatabases(activeAdminPool);
+          recycleContainer = testDatabases.size > MAX_DATABASES_FOR_IN_PLACE_RESET;
+          await waitForClientBackendsToDrain(activeAdminPool, testDatabases);
         } catch (error) {
           cleanupErrors.push(error instanceof Error ? error : new Error(String(error)));
         }
-      }
+        if (!recycleContainer) {
+          try {
+            await resetWorkerPostgres(activeAdminPool);
+          } catch (error) {
+            cleanupErrors.push(error instanceof Error ? error : new Error(String(error)));
+          }
+        }
+        try {
+          await activeAdminPool.end();
+        } catch (error) {
+          cleanupErrors.push(error instanceof Error ? error : new Error(String(error)));
+        }
+        if (recycleContainer) {
+          try {
+            recyclePersistentPostgresContainer(containerName, image);
+          } catch (error) {
+            cleanupErrors.push(error instanceof Error ? error : new Error(String(error)));
+          }
+        }
+        try {
+          stopPersistentPostgresContainer(containerName, image);
+        } catch (error) {
+          cleanupErrors.push(error instanceof Error ? error : new Error(String(error)));
+        }
+        try {
+          rmSync(activeClientRoot, { recursive: true, force: true });
+        } catch (error) {
+          cleanupErrors.push(error instanceof Error ? error : new Error(String(error)));
+        }
+        try {
+          lease.release();
+        } catch (error) {
+          cleanupErrors.push(error instanceof Error ? error : new Error(String(error)));
+        }
+        if (cleanupErrors.length > 1) {
+          throw new AggregateError(cleanupErrors, 'Postgres test harness cleanup failed');
+        }
+        if (cleanupErrors[0]) throw cleanupErrors[0];
+      },
+    };
+  } catch (error) {
+    const cleanupErrors: Error[] = [
+      error instanceof Error ? error : new Error(String(error)),
+    ];
+    if (adminPool) {
       try {
         await adminPool.end();
-      } catch (error) {
-        cleanupErrors.push(error instanceof Error ? error : new Error(String(error)));
+      } catch (cleanupError) {
+        cleanupErrors.push(
+          cleanupError instanceof Error ? cleanupError : new Error(String(cleanupError)),
+        );
       }
-      if (recycleContainer) {
-        try {
-          recyclePersistentPostgresContainer(containerName, image);
-        } catch (error) {
-          cleanupErrors.push(error instanceof Error ? error : new Error(String(error)));
-        }
-      }
+    }
+    try {
+      stopPersistentPostgresContainer(containerName, image);
+    } catch (cleanupError) {
+      cleanupErrors.push(
+        cleanupError instanceof Error ? cleanupError : new Error(String(cleanupError)),
+      );
+    }
+    if (clientRoot) {
       try {
         rmSync(clientRoot, { recursive: true, force: true });
-      } catch (error) {
-        cleanupErrors.push(error instanceof Error ? error : new Error(String(error)));
+      } catch (cleanupError) {
+        cleanupErrors.push(
+          cleanupError instanceof Error ? cleanupError : new Error(String(cleanupError)),
+        );
       }
-      if (cleanupErrors.length > 1) {
-        throw new AggregateError(cleanupErrors, 'Postgres test harness cleanup failed');
-      }
-      if (cleanupErrors[0]) throw cleanupErrors[0];
-    },
-  };
+    }
+    try {
+      lease.release();
+    } catch (cleanupError) {
+      cleanupErrors.push(
+        cleanupError instanceof Error ? cleanupError : new Error(String(cleanupError)),
+      );
+    }
+    if (cleanupErrors.length > 1) {
+      throw new AggregateError(cleanupErrors, 'Postgres test harness startup failed');
+    }
+    throw cleanupErrors[0];
+  }
 }

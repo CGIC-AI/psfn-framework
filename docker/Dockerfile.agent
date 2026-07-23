@@ -128,7 +128,16 @@ RUN find /app/skills -type f -name SKILL.md -print -quit | grep -q .
 # the byte-identical checked-in source. Without this COPY the gateway crashes on
 # boot with "Invalid Companion Library source manifest .../companion-library-manifest.json: ENOENT".
 COPY companion_docs/ ./companion_docs/
-RUN test -f /app/companion_docs/companion-library-manifest.json
+# Fail the build (not gateway boot) if any file the runtime seeds is missing from
+# the context. The manifest alone is insufficient: a dropped .md would pass a
+# manifest-only check and only surface later as a runtime SHA-256/strict-dir throw.
+RUN set -eu; for f in \
+      companion-library-manifest.json \
+      welcome.md \
+      privacy-boundary-reference.md \
+      live_verification_checklist.md; do \
+      test -f "/app/companion_docs/${f}"; \
+    done
 
 RUN git init /app \
     && git config user.name "PSFN Runtime Image" \

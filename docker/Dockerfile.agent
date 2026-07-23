@@ -120,6 +120,16 @@ COPY scripts/ops/ ./scripts/ops/
 COPY skills/ ./skills/
 RUN find /app/skills -type f -name SKILL.md -print -quit | grep -q .
 
+# Companion-library seed bundle (psfn-framework-o3wwr): provisionFleetWorkspaces()
+# -> seedCompanionLibrary() reads this bundle UNCONDITIONALLY at gateway boot from
+# resolve('companion_docs') = /app/companion_docs (WORKDIR /app). Baking it here is
+# unconditional and so matches the unconditional runtime requirement; the runtime
+# verifies each file against the manifest's SHA-256 digests, so the bundle must be
+# the byte-identical checked-in source. Without this COPY the gateway crashes on
+# boot with "Invalid Companion Library source manifest .../companion-library-manifest.json: ENOENT".
+COPY companion_docs/ ./companion_docs/
+RUN test -f /app/companion_docs/companion-library-manifest.json
+
 RUN git init /app \
     && git config user.name "PSFN Runtime Image" \
     && git config user.email "runtime-image@psfn.local" \

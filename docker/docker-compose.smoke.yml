@@ -156,7 +156,7 @@ services:
       PSFN_BACKUP_ENCRYPTION_KEY: ${PSFN_SMOKE_BACKUP_KEY:-psfn-smoke-backup-encryption-key-please-rotate}
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
     ports:
-      - "${PSFN_SMOKE_API_PORT:-13000}:3000"
+      - "127.0.0.1:${PSFN_SMOKE_API_PORT:-13000}:3000"
     # The gateway is the ONLY service with external egress (provider calls). The
     # agent stays on the internal-only network and fails closed if it can reach
     # the internet, mirroring the k8s NetworkPolicy that denies agent egress.

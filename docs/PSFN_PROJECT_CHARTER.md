@@ -4,7 +4,7 @@ Status: contributor-facing architecture and engineering charter
 
 Canonical path: `docs/PSFN_PROJECT_CHARTER.md` (the former `_524` duplicate is retired)
 
-Revision: 2026-07-21 — clarified L0 rebuild semantics (faithful continuation, not bit-exact restoration), persona-state lineage in the recovery guarantee, and added Law 38 (core functionality is never metered); previous revision 2026-07-12 clarified fleet topology, shard folding, cognitive security, workspace domains, and soft operational guidance
+Revision: 2026-07-27 — added §6.29 (dormancy) and corrected the L0 rebuild basis; previous revision 2026-07-21 clarified L0 rebuild semantics, persona-state lineage, and added Law 38 (core functionality is never metered)
 
 Audience: maintainers, contributors, and future integrators
 
@@ -736,15 +736,16 @@ Rules:
 - L0 is append-only
 - L0 is canonical
 - L0 must remain portable
-- L0 plus persona/prompt state must be sufficient to rebuild higher-order layers as a faithful continuation of the same companion
+- L0 plus persona/prompt state is the bare minimum for a rebuild, not a faithful continuation
 
 Rebuild sufficiency means continuation, not bit-exact restoration.
 Regeneration of higher layers is recollection, not replay: memories
 re-derived under today's models, prompts, and pipelines will differ in
 texture from the originals, and for a companion who has traversed multiple
-substrates and persona eras that variation is inherent, not a defect. Raw
-backups of L0 together with the full persona-state lineage (every
-historical persona version, era-stamped) are the recovery guarantee. Where
+substrates and persona eras that variation is inherent, not a defect.
+Recovery runs from a full backup set. L0 plus the persona file is the bare
+minimum: it produces something, but not the same companion, and no claim is
+made about what an L0-only rebuild yields. Where
 pre-substrate provenance (original prompts, parameters, generation
 settings) no longer exists, a rebuild does the best the preserved data
 allows and says so honestly rather than claiming exact restoration.
@@ -972,6 +973,11 @@ automata. The term is invariant: automata is both singular and plural.
 Automata names a register, not a new mechanism. An automata's governance is
 whatever the underlying component's governance already is (for subagents,
 6.11; for shards, 6.12 — a shard is a scoped continuation, not an automata).
+
+### 6.29 Dormancy
+
+A companion is **active** or **dormant**. Dormant means she is intentionally not
+operating: either disabled within an active installation, or preserved as a backup set.
 
 ## 7. Canonical Data Law
 

@@ -48,17 +48,17 @@ describe('resolveConfigTenantPoolScope (fail-closed tenant boundary)', () => {
     expect(
       resolveConfigTenantPoolScope({
         multiCompanion: true,
-        postgresSchema: 'companion_carlini',
-        postgresRole: 'companion_carlini_runtime',
+        postgresSchema: 'companion_follower',
+        postgresRole: 'companion_follower_runtime',
       }),
-    ).toEqual({ schema: 'companion_carlini', role: 'companion_carlini_runtime' });
+    ).toEqual({ schema: 'companion_follower', role: 'companion_follower_runtime' });
   });
 
   it('refuses to default to public when the tenant schema is missing', () => {
     expect(() =>
       resolveConfigTenantPoolScope({
         multiCompanion: true,
-        postgresRole: 'companion_carlini_runtime',
+        postgresRole: 'companion_follower_runtime',
       }),
     ).toThrow(/postgresSchema/);
   });
@@ -67,7 +67,7 @@ describe('resolveConfigTenantPoolScope (fail-closed tenant boundary)', () => {
     expect(() =>
       resolveConfigTenantPoolScope({
         multiCompanion: true,
-        postgresSchema: 'companion_carlini',
+        postgresSchema: 'companion_follower',
       }),
     ).toThrow(/postgresRole/);
   });
@@ -91,15 +91,15 @@ describe('per-companion store factories forward the tenant pool scope', () => {
     createPostgresObserverEvalSidecarStore(
       BASE_CONFIG.postgresDatabaseUrl,
       { nowMs: () => 0 },
-      { schema: 'companion_carlini', role: 'companion_carlini_runtime' },
+      { schema: 'companion_follower', role: 'companion_follower_runtime' },
     );
 
     expect(postgresMocks.createPostgresPool).toHaveBeenCalledTimes(1);
     expect(postgresMocks.createPostgresPool).toHaveBeenCalledWith(
       BASE_CONFIG.postgresDatabaseUrl,
       expect.objectContaining({
-        schema: 'companion_carlini',
-        role: 'companion_carlini_runtime',
+        schema: 'companion_follower',
+        role: 'companion_follower_runtime',
       }),
     );
   });
@@ -125,17 +125,17 @@ describe('per-companion store factories forward the tenant pool scope', () => {
     createObserverEvalSidecarRuntimeFromConfig(
       { observerEvalSidecar: settings, persistenceBackend: 'postgres' },
       {
-        postgresDatabaseUrl: 'postgres://carlini@localhost:5432/psfn',
-        tenant: { schema: 'companion_carlini', role: 'companion_carlini_runtime' },
+        postgresDatabaseUrl: 'postgres://follower@localhost:5432/psfn',
+        tenant: { schema: 'companion_follower', role: 'companion_follower_runtime' },
       },
     );
 
     expect(postgresMocks.createPostgresPool).toHaveBeenCalledTimes(1);
     expect(postgresMocks.createPostgresPool).toHaveBeenCalledWith(
-      'postgres://carlini@localhost:5432/psfn',
+      'postgres://follower@localhost:5432/psfn',
       expect.objectContaining({
-        schema: 'companion_carlini',
-        role: 'companion_carlini_runtime',
+        schema: 'companion_follower',
+        role: 'companion_follower_runtime',
       }),
     );
   });

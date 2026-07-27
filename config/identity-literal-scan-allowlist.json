@@ -2357,6 +2357,18 @@
       "contains": "psfn-worktree-prewarm-",
       "reason": "Disposable prewarm install fixtures use a project-scoped temp prefix so stray dirs are attributable and safely cleanable.",
       "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/test-support/postgres-test-harness.ts",
+      "contains": "join(tmpdir(), 'psfn-postgres-test-harness')",
+      "reason": "PostgreSQL test harness uses a project-scoped lock-directory prefix for its machine-wide slot semaphore, consistent with its established project-scoped test artifact namespace.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/persistence/backups/backup-root.ts",
+      "contains": ".psfn-backup-writable-probe-",
+      "reason": "Backup-root writability probe uses a project-scoped throwaway filename so operators can attribute stray probe files; never persisted content.",
+      "pattern": "identity-legacy-slug"
     }
   ]
 }

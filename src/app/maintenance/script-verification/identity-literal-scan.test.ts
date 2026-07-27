@@ -106,6 +106,25 @@ describe('identity-literal scan', () => {
     ]);
   });
 
+  it('exempts bead-tracker citations but still flags bare legacy slugs on the same line', () => {
+    const result = scanIdentityLiteralEntries([
+      {
+        path: 'src/example.ts',
+        text: [
+          '// Executors read the live revision themselves (psfn-framework-6187t).',
+          "const slug = 'psfn';",
+        ].join('\n'),
+      },
+    ]);
+
+    // The bead citation is the tracker's namespace, not an identity literal;
+    // the bare slug on line 2 must still fail.
+    expect(result.violations).toHaveLength(1);
+    expect(result.violations[0]).toEqual(
+      expect.objectContaining({ line: 2, pattern: 'identity-legacy-slug' }),
+    );
+  });
+
   it('scopes allowlist suppression by pattern to avoid masking other hits on the same line', () => {
     const result = scanIdentityLiteralEntries(
       [

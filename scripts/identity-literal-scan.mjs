@@ -33,7 +33,12 @@ const TEXT_EXTENSIONS = new Set([
 
 export const DEFAULT_PATTERNS = [
   { name: 'identity-proper-name', regex: /\bPSFN\b/g },
-  { name: 'identity-legacy-slug', regex: /\bpsfn\b/g },
+  // `psfn-framework-<id>` is the shared bead tracker's namespace; citing a bead
+  // ID in a comment is the repo's documented traceability convention, not an
+  // identity literal. Without this exemption every lane that cites the bead it
+  // implements reddens this scan, which is exactly how main went red on
+  // 2026-07-27 (16 of 17 violations were bead citations from four lanes).
+  { name: 'identity-legacy-slug', regex: /\bpsfn\b(?!-framework-)/g },
 ];
 
 /**

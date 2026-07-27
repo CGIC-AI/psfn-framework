@@ -952,6 +952,18 @@
     },
     {
       "file": "src/channels/backplane/companion-relay/redaction.ts",
+      "name": "MAX_EMOTION_DISCRETE_LABEL_LENGTH",
+      "value": "48",
+      "note": "Per-label truncation on the redacted emotion.snapshot relay payload; code-owned egress guard keeping classifier labels from carrying free text, not a tunable runtime setting."
+    },
+    {
+      "file": "src/channels/backplane/companion-relay/redaction.ts",
+      "name": "MAX_EMOTION_DISCRETE_LABELS",
+      "value": "5",
+      "note": "Top-K clamp on the redacted emotion.snapshot relay payload; code-owned egress guard bounding satellite frame size against an open-vocabulary classifier, not a tunable runtime setting."
+    },
+    {
+      "file": "src/channels/backplane/companion-relay/redaction.ts",
       "name": "MAX_ID_LENGTH",
       "value": "160"
     },

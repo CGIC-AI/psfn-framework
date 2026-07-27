@@ -154,17 +154,6 @@ function decodeJsonArray(value: unknown): string[] {
   return value.flatMap((entry) => (typeof entry === 'string' ? [entry] : []));
 }
 
-function decodeJsonObject(value: unknown): Record<string, number> {
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) return {};
-  const out: Record<string, number> = {};
-  for (const [key, raw] of Object.entries(value)) {
-    if (typeof raw === 'number' && Number.isFinite(raw)) {
-      out[key] = raw;
-    }
-  }
-  return out;
-}
-
 export function decodeJsonRecord(value: unknown): Record<string, unknown> {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return {};
   return { ...(value as Record<string, unknown>) };
@@ -330,7 +319,11 @@ export function fromMemoryRow(row: MemoryRow): PurrMemory {
     ...(Array.isArray(row.provenance_refs) ? { provenanceRefs: decodeStringArray(row.provenance_refs) } : {}),
     ...(row.retention_class ? { retentionClass: row.retention_class } : {}),
     sensitivity: row.sensitivity,
-    consentFlags: normalizeConsentFlags(decodeJsonObject(row.consent_flags)),
+    // Consent flags are booleans. Decoding them through a numbers-only reader
+    // silently dropped every one of them, so `normalizeConsentFlags` always saw
+    // an empty object and the Layer-3 recall gate never fired. Hand the stored
+    // jsonb over intact and let `normalizeConsentFlags` do the type checking.
+    consentFlags: normalizeConsentFlags(decodeJsonRecord(row.consent_flags)),
     ...(row.contact_id ? { contactId: row.contact_id } : {}),
     ...(deletedAt !== undefined ? { deletedAt } : {}),
     ...(row.deleted_by ? { deletedBy: row.deleted_by } : {}),

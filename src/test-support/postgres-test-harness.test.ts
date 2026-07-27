@@ -6,6 +6,7 @@ import {
   postgresTestContainerNameForImage,
   postgresTestDockerRunArgs,
   resolveMaxConcurrentHarnesses,
+  resolvePostgresTestTmpfsSize,
   shouldStopContainerBetweenFiles,
 } from './postgres-test-harness.js';
 
@@ -52,14 +53,19 @@ describe('RAM-backed Postgres test containers', () => {
     };
 
     expect(valueAfter('--tmpfs')).toBe(
-      '/var/lib/postgresql/data:rw,noexec,nosuid,size=512m',
+      '/var/lib/postgresql/data:rw,noexec,nosuid,size=1g',
     );
-    expect(valueAfter('--memory')).toBe('768m');
-    expect(valueAfter('--memory-swap')).toBe('768m');
+    expect(valueAfter('--memory')).toBe('1g');
+    // Swap is pinned to the memory limit so the container can never spill the
+    // RAM-backed cluster onto disk.
+    expect(valueAfter('--memory-swap')).toBe('1g');
     expect(valueAfter('--cpus')).toBe('2');
     expect(valueAfter('--shm-size')).toBe('128m');
     expect(valueAfter('--log-driver')).toBe('none');
-    expect(args).toContain('io.local-gate.test-postgres.profile=tmpfs-v1');
+    // Bumped with the tmpfs/memory raise: the profile is part of the container
+    // name and the reuse check, so warm containers built on the old shape are
+    // rotated out instead of silently reused at the old size.
+    expect(args).toContain('io.local-gate.test-postgres.profile=tmpfs-v2');
     expect(args).toContain('POSTGRES_INITDB_ARGS=--nosync');
 
     const imageIndex = args.lastIndexOf(DEFAULT_POSTGRES_TEST_IMAGE);
@@ -115,6 +121,27 @@ describe('RAM-backed Postgres test containers', () => {
       expect(() =>
         resolveMaxConcurrentHarnesses({ PSFN_POSTGRES_TEST_MAX_HARNESSES: value }, 32),
       ).toThrow(/positive integer/);
+    }
+  });
+
+  // Databases accumulate for the whole of a file, so a database-heavy file is
+  // sized by its test count. 512m ran out partway through the memory-store
+  // integration file and failed whichever test happened to be last.
+  it('defaults the tmpfs to enough headroom for a database-heavy file', () => {
+    expect(resolvePostgresTestTmpfsSize({})).toBe('1g');
+    expect(resolvePostgresTestTmpfsSize({ PSFN_POSTGRES_TEST_TMPFS_SIZE: '   ' })).toBe('1g');
+  });
+
+  it('honours an explicit tmpfs override and rejects unusable sizes', () => {
+    for (const value of ['512m', '2g', '1500M', '262144k']) {
+      expect(resolvePostgresTestTmpfsSize({ PSFN_POSTGRES_TEST_TMPFS_SIZE: value })).toBe(value);
+    }
+    // A unitless or garbage value would be silently rejected by Docker at
+    // container-create time, stranding the run behind a confusing failure.
+    for (const value of ['1024', '1gb', '1.5g', 'large', '-1g']) {
+      expect(() =>
+        resolvePostgresTestTmpfsSize({ PSFN_POSTGRES_TEST_TMPFS_SIZE: value }),
+      ).toThrow(/Docker size/);
     }
   });
 });

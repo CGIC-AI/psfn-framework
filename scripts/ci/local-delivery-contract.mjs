@@ -275,7 +275,7 @@ export function buildGatePlan({
       canary ? { skip: true, skipReason: 'canary: origin/main has no diff to budget' } : {},
     ),
     rootRuntime
-      ? command('lint', 'npm', ['run', 'lint'], { nodeHeapMb: 4096 })
+      ? command('lint', 'npm', ['run', 'lint'], { nodeHeapMb: 6144 })
       : command('lint-changed', 'npm', ['run', 'lint:changed', '--', '--base', base]),
     ...(rootRuntime
       ? [

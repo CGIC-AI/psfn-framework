@@ -504,6 +504,51 @@ describe('postgres memory store integration', () => {
     });
   }, INTEGRATION_TIMEOUT_MS);
 
+  it('keeps an explicit consent denial through hydration and an access-counter touch (xnfks)', async () => {
+    await withMemoryDatabase(async (pool) => {
+      const store = await createPostgresMemoryStoreFromPool(pool, 4);
+      await store.insertMemory(
+        makeMemory({
+          id: 'consent-denied',
+          sensitivity: 'public',
+          consentFlags: { allowRecall: false, deleteOnRequest: true },
+          provenance: { subjectContactId: 'contact-a' },
+        }),
+        DEFAULT_EMBEDDING,
+      );
+
+      // The column really does hold booleans; only the read path was lossy.
+      const stored = await pool.query<{ consent_flags: unknown }>(
+        'SELECT consent_flags FROM l2_memories WHERE id = $1',
+        ['consent-denied'],
+      );
+      expect(stored.rows[0]?.consent_flags).toEqual({ allowRecall: false, deleteOnRequest: true });
+
+      expect((await store.getById('consent-denied'))?.consentFlags)
+        .toEqual({ allowRecall: false, deleteOnRequest: true });
+
+      // retrieval.ts touches lastAccessed/accessCount for every recalled memory.
+      // updateMemory rebuilds the row from fromMemoryRow and writes it back, so a
+      // lossy decoder did not merely hide the flags — this touch permanently
+      // flattened the subject's stored consent on the very first recall.
+      await store.updateMemory('consent-denied', { lastAccessed: Date.now(), accessCount: 1 });
+
+      expect((await store.getById('consent-denied'))?.consentFlags)
+        .toEqual({ allowRecall: false, deleteOnRequest: true });
+      const afterTouch = await pool.query<{ consent_flags: unknown }>(
+        'SELECT consent_flags FROM l2_memories WHERE id = $1',
+        ['consent-denied'],
+      );
+      expect(afterTouch.rows[0]?.consent_flags).toEqual({ allowRecall: false, deleteOnRequest: true });
+
+      // A fresh store proves the value survived to disk rather than living only
+      // in the writer's in-process snapshot.
+      const reopened = await createPostgresMemoryStoreFromPool(pool, 4);
+      expect((await reopened.getById('consent-denied'))?.consentFlags)
+        .toEqual({ allowRecall: false, deleteOnRequest: true });
+    });
+  }, INTEGRATION_TIMEOUT_MS);
+
   it('reclassifies every subject-evidence mutation and leaves access counters revision-stable', async () => {
     await withMemoryDatabase(async (pool) => {
       const store = await createPostgresMemoryStoreFromPool(pool, 4);

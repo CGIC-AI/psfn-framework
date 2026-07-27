@@ -2381,6 +2381,18 @@
       "contains": "join(tmpdir(), 'psfn-helm-values-')",
       "reason": "Self-update helm upgrade stages live values in a project-scoped mkdtemp dir so stray temp dirs are attributable; contents are chart values, never identity.",
       "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "scripts/smoke-docker.mjs",
+      "contains": "const API_KEY = process.env.PSFN_SMOKE_API_KEY || 'psfn-smoke-api-key-please-rot",
+      "reason": "Compose smoke harness uses a project-scoped compose project name so stray smoke containers/volumes are attributable and safely cleanable.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "scripts/smoke-docker.mjs",
+      "contains": "'psql', '-U', 'psfn', '-d', 'psfn'",
+      "reason": "Disposable smoke-stack Postgres uses project-scoped throwaway user/database names; credentials are dev-only and the stack is torn down after the run.",
+      "pattern": "identity-legacy-slug"
     }
   ]
 }

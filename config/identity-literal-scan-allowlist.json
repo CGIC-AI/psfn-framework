@@ -2375,6 +2375,12 @@
       "contains": ".psfn-backup-writable-probe-",
       "reason": "Backup-root writability probe uses a project-scoped throwaway filename so operators can attribute stray probe files; never persisted content.",
       "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/app/operator/kube-self-update-transport.ts",
+      "contains": "join(tmpdir(), 'psfn-helm-values-')",
+      "reason": "Self-update helm upgrade stages live values in a project-scoped mkdtemp dir so stray temp dirs are attributable; contents are chart values, never identity.",
+      "pattern": "identity-legacy-slug"
     }
   ]
 }

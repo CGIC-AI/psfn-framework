@@ -280,6 +280,13 @@
       "note": "Pre-policy 120s override (repo-standard integration cap). Registered as measurement debt: pinned to its current value so any change forces a re-measured registry update. No independent baseline measured under this bead (timing wiring scoped to the restore suite)."
     },
     {
+      "file": "src/persistence/postgres/named-tenant-store-boot.integration.test.ts",
+      "timeoutMs": 180000,
+      "measuredBaselineMs": null,
+      "baselineSource": "inherited",
+      "note": "Pre-policy 180s override shipped unregistered by the stmof named-tenant lane (89c6ba23cd landed without the repo-wide tests stage). Registered as measurement debt: pinned so any change forces a real measurement."
+    },
+    {
       "file": "src/persistence/postgres/partner-affect-shadow-store.integration.test.ts",
       "timeoutMs": 120000,
       "measuredBaselineMs": null,

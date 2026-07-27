@@ -51,10 +51,14 @@ x-runtime-env: &runtime-env
   GATEWAY_SOCKET: /run/psfn/gateway.sock
   CHARACTER_CARD_PATH: /app/companion-data/companion.json
   COMPANION_ID: ${PSFN_SMOKE_COMPANION_ID:-11111111-1111-4111-8111-111111111111}
-  # Single-node runtime store. Same credential the gateway provisions and the
-  # agent reads; it is the persistence-tier credential, not a provider/egress
-  # secret. In k8s the agent receives it as a mounted file instead.
-  POSTGRES_DATABASE_URL: postgresql://psfn:psfn@postgres:5432/psfn
+
+# Single-node runtime store. This is the persistence-tier credential, not a
+# provider/egress secret. It is deliberately NOT part of x-runtime-env: the
+# gateway and the seed take it inline, but the agent process refuses an inline
+# POSTGRES_DATABASE_URL (runtime credential custody requires a file or fd), so
+# the seed writes it to the agent-auth volume and the agent reads it via
+# POSTGRES_DATABASE_URL_FILE — the same file-delivery shape k8s uses.
+x-postgres-url: &postgres-url postgresql://psfn:psfn@postgres:5432/psfn
 
 services:
   postgres:
@@ -84,6 +88,8 @@ services:
     environment:
       <<: *runtime-env
       PSFN_SMOKE_COMPANION_NAME: ${PSFN_SMOKE_COMPANION_NAME:-Smoke}
+      # Sourced so the seed can write the agent's file-delivered copy.
+      POSTGRES_DATABASE_URL: *postgres-url
       # The seed is the trusted credential-bootstrap step: it holds the session
       # HMAC key only to DERIVE the agent's two role-bound proofs, then hands the
       # agent just those proofs (never the raw key) via the agent-auth volume. It
@@ -134,6 +140,7 @@ services:
     command: ["node", "dist/gateway-main.js"]
     environment:
       <<: *runtime-env
+      POSTGRES_DATABASE_URL: *postgres-url
       API_HOST: 0.0.0.0
       API_PORT: "3000"
       ADMIN_HOST: 127.0.0.1
@@ -190,11 +197,14 @@ services:
       - "-c"
       - ". /run/psfn-auth/agent-auth.env && exec node dist/agent-main.js"
     # No dotenv (agent-main never loads it) and no provider/egress secrets: the
-    # environment carries only non-secret layout/identity, the persistence
-    # credential, and the two sourced HMAC proofs. All external calls route
-    # through the gateway over the socket.
+    # environment carries only non-secret layout/identity, a PATH to the
+    # persistence credential (never the credential itself), and the two sourced
+    # HMAC proofs. All external calls route through the gateway over the socket.
     environment:
       <<: *runtime-env
+      # Path only. An inline POSTGRES_DATABASE_URL here is rejected by the agent's
+      # runtime credential custody check.
+      POSTGRES_DATABASE_URL_FILE: /run/psfn-auth/postgres-database-url
     networks:
       - psfn-smoke-internal
     volumes:

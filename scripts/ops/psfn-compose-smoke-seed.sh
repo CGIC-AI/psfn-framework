@@ -10,9 +10,11 @@
 #   * chowns the shared named volumes to the runtime UID (999) so the non-root
 #     gateway/agent can write runtime state and bind the gateway socket.
 #
-# It deliberately does NOT seed companions.json or fleet-auth.json: their absence
-# keeps the deployment a single non-fleet companion with ADMIN_TOKEN-style local
-# auth, instead of forcing the cluster-auth (gateway-HTTPS + mTLS) path that the
+# Every PSFN deployment is a fleet of one or more companions, so it writes a
+# single-entry companions.json naming this deployment's COMPANION_ID (the gateway
+# fails closed without the fleet manifest). It deliberately does NOT seed
+# fleet-auth.json: that absence keeps the deployment on ADMIN_TOKEN-style local
+# auth instead of forcing the cluster-auth (gateway-HTTPS + mTLS) path that the
 # k3d/Helm shakedown covers. Cluster/fleet topology stays the Helm reference shape.
 #
 # Idempotent: existing owner files and an existing card are left untouched, so a
@@ -30,8 +32,10 @@ MODEL_CACHE_DIR="${PSFN_SMOKE_MODEL_CACHE_ROOT:-/app/models}"
 RUNTIME_UID="${PSFN_RUNTIME_UID:-999}"
 RUNTIME_GID="${PSFN_RUNTIME_GID:-999}"
 
-# Cluster-global owner files (SYSTEM_DATA_DIR).
-SYSTEM_OWNERS="settings models providers trust-policy intake-policy backup"
+# Cluster-global owner files (SYSTEM_DATA_DIR). Startup no longer copies seed
+# templates into runtime state, so every owner the runtime requires must be laid
+# down here or the process fails closed on the first missing one.
+SYSTEM_OWNERS="settings models providers trust-policy intake-policy backup partner-affect-shadow places runtime-prompt-layers"
 # Per-companion owner files (COMPANION_DATA_DIR) — startup never reads a
 # system-root copy of these as a fallback.
 COMPANION_OWNERS="scheduler capability-tier charge-policy skills"
@@ -67,6 +71,47 @@ for owner in $COMPANION_OWNERS; do
   seed_owner "$COMPANION_DATA_DIR" "$owner"
   seed_owner "$SYSTEM_DATA_DIR" "$owner"
 done
+
+# ── Fleet manifest ──
+# Every PSFN deployment is a fleet of one or more companions and the gateway
+# fails closed without companions.json, so write a one-entry fleet naming THIS
+# deployment's COMPANION_ID. The topology credential refs must not reuse
+# POSTGRES_DATABASE_URL (the manifest contract rejects that), so they carry their
+# own env names; this single-node stack resolves persistence from
+# POSTGRES_DATABASE_URL directly and never dereferences them.
+COMPANIONS_MANIFEST="${SYSTEM_DATA_DIR}/companions.json"
+if [ -f "$COMPANIONS_MANIFEST" ]; then
+  echo "[smoke-seed] keep existing fleet manifest: $COMPANIONS_MANIFEST"
+else
+  if [ -z "${COMPANION_ID:-}" ]; then
+    echo "[smoke-seed] COMPANION_ID is required to write the fleet manifest" >&2
+    exit 2
+  fi
+  PSFN_SMOKE_CARD_NAME="$COMPANION_NAME" node -e '
+    const fs = require("node:fs");
+    const companionId = String(process.env.COMPANION_ID).trim();
+    const displayName = process.env.PSFN_SMOKE_CARD_NAME || "Smoke";
+    const manifest = {
+      postgres: {
+        sharedMigrationRole: "shared_schema_migration",
+        sharedMigrationDatabaseUrlRef: { kind: "env", envName: "SHARED_SCHEMA_MIGRATION_DATABASE_URL" },
+      },
+      companions: [
+        {
+          companionId,
+          companionDataDir: "companions/smoke",
+          characterCardPath: "companions/smoke/character-card.json",
+          postgresSchema: "companion_smoke",
+          postgresRole: "companion_smoke_runtime",
+          postgresDatabaseUrlRef: { kind: "env", envName: "COMPANION_SMOKE_DATABASE_URL" },
+          displayName,
+        },
+      ],
+    };
+    fs.writeFileSync(process.argv[1], `${JSON.stringify(manifest, null, 2)}\n`);
+  ' "$COMPANIONS_MANIFEST"
+  echo "[smoke-seed] wrote fleet manifest: $COMPANIONS_MANIFEST"
+fi
 
 if [ -f "$CHARACTER_CARD_PATH" ]; then
   echo "[smoke-seed] keep existing card: $CHARACTER_CARD_PATH"
@@ -143,6 +188,24 @@ if [ -n "${GATEWAY_SESSION_HMAC_KEY:-}" ]; then
 else
   echo "[smoke-seed] GATEWAY_SESSION_HMAC_KEY unset; skipping agent auth derivation" >&2
 fi
+
+# ── Agent persistence credential (file, never inline env) ──
+# The agent process refuses POSTGRES_DATABASE_URL in its own environment: the
+# runtime credential custody rule requires it to arrive via
+# POSTGRES_DATABASE_URL_FILE or _FD. Hand it over as a 0600 file on the dedicated
+# auth volume; the gateway keeps the inline env form.
+if [ -z "${POSTGRES_DATABASE_URL:-}" ]; then
+  echo "[smoke-seed] POSTGRES_DATABASE_URL is required to hand the agent its persistence credential" >&2
+  exit 2
+fi
+mkdir -p "$AUTH_ENV_DIR"
+PG_URL_FILE="${AUTH_ENV_DIR}/postgres-database-url"
+printf '%s' "$POSTGRES_DATABASE_URL" > "$PG_URL_FILE"
+chmod 0600 "$PG_URL_FILE"
+chown "${RUNTIME_UID}:${RUNTIME_GID}" "$PG_URL_FILE"
+chmod 0700 "$AUTH_ENV_DIR"
+chown "${RUNTIME_UID}:${RUNTIME_GID}" "$AUTH_ENV_DIR"
+echo "[smoke-seed] wrote agent persistence credential: ${PG_URL_FILE}"
 
 # Hand the shared named volumes to the non-root runtime UID so the gateway can
 # bind the socket and both processes can write runtime state.

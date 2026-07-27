@@ -9,7 +9,7 @@ import {
   unlinkSync,
   writeFileSync,
 } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { availableParallelism, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import type { Pool } from 'pg';
@@ -28,17 +28,68 @@ const POSTGRES_PORT = 5432;
 const TEST_POSTGRES_LABEL = 'io.local-gate.test-postgres';
 const TEST_POSTGRES_IMAGE_LABEL = 'io.local-gate.test-postgres.image';
 const TEST_POSTGRES_PROFILE_LABEL = 'io.local-gate.test-postgres.profile';
+const MIN_CONCURRENT_HARNESSES = 4;
+const MAX_CONCURRENT_HARNESSES = 8;
+
+/**
+ * Vitest forks one worker per core, so on a large machine dozens of integration
+ * files enter `beforeAll` at once and queue on this semaphore. Every file waits
+ * for a slot inside its own `beforeAll` timeout, so too few slots turns normal
+ * queueing into hook timeouts on whichever files land at the back — the failure
+ * is scheduling luck, not a bug in the file that reports it.
+ *
+ * Scale slots with the machine so the queue drains inside that timeout, while
+ * staying bounded: a measured container holds ~100-360 MiB, so the ceiling of 8
+ * (times the images in flight) stays well inside a dev box or CI runner. Small
+ * machines keep the original 4, which is already matched to their worker count.
+ */
+export function resolveMaxConcurrentHarnesses(
+  environment: NodeJS.ProcessEnv = process.env,
+  parallelism: number = availableParallelism(),
+): number {
+  const override = environment.PSFN_POSTGRES_TEST_MAX_HARNESSES?.trim();
+  if (override) {
+    const parsed = Number(override);
+    if (!Number.isInteger(parsed) || parsed < 1) {
+      throw new Error(
+        `PSFN_POSTGRES_TEST_MAX_HARNESSES must be a positive integer; received "${override}"`,
+      );
+    }
+    return parsed;
+  }
+  return Math.min(
+    MAX_CONCURRENT_HARNESSES,
+    Math.max(MIN_CONCURRENT_HARNESSES, Math.floor(parallelism / 4)),
+  );
+}
+
 const POSTGRES_TEST_RUNTIME = Object.freeze({
   cpuLimit: '2',
   lockBasePath: join(tmpdir(), 'psfn-postgres-test-harness'),
   lockMalformedGraceMs: 5_000,
   lockRetryMs: 100,
-  maxConcurrentHarnesses: 4,
+  maxConcurrentHarnesses: resolveMaxConcurrentHarnesses(),
   memoryLimit: '768m',
   profile: 'tmpfs-v1',
   sharedMemorySize: '128m',
   tmpfsSize: '512m',
 });
+/**
+ * PGDATA lives on a tmpfs, so `docker stop` destroys the cluster and the next
+ * `docker start` pays a full `initdb`. Stopping between test files therefore
+ * rebuilt the server once per file for no isolation benefit:
+ * `resetWorkerPostgres` already drops every test database and role, and the
+ * slot lease already guarantees one file owns a container at a time. Leave the
+ * server hot and let the reset be the isolation boundary.
+ *
+ * Set `PSFN_POSTGRES_TEST_STOP_BETWEEN_FILES=1` to restore the stop-every-file
+ * behaviour; `npm run test:postgres:down` releases the containers for good.
+ */
+export function shouldStopContainerBetweenFiles(
+  environment: NodeJS.ProcessEnv = process.env,
+): boolean {
+  return environment.PSFN_POSTGRES_TEST_STOP_BETWEEN_FILES === '1';
+}
 const READY_RETRY_LIMIT = 120;
 const READY_RETRY_DELAY_MS = 500;
 const MAX_DATABASES_FOR_IN_PLACE_RESET = 16;
@@ -647,10 +698,10 @@ export async function startPostgresTestHarness(options: PostgresTestHarnessOptio
         };
       },
       async stop(): Promise<void> {
-        // The tmpfs is destroyed when Docker stops the container. Reset first
-        // only to preserve the existing leak diagnostics and fast-path reuse;
-        // stopping also releases the container's bounded RAM before the next
-        // test file receives this machine-wide semaphore slot.
+        // Dropping every test database and role is the isolation boundary; the
+        // container itself stays hot so the next file skips container start and
+        // `initdb`. See shouldStopContainerBetweenFiles for why stopping is
+        // wrong here and how to opt back into it.
         const cleanupErrors: Error[] = [];
         let recycleContainer = false;
         try {
@@ -679,10 +730,12 @@ export async function startPostgresTestHarness(options: PostgresTestHarnessOptio
             cleanupErrors.push(error instanceof Error ? error : new Error(String(error)));
           }
         }
-        try {
-          stopPersistentPostgresContainer(containerName, image);
-        } catch (error) {
-          cleanupErrors.push(error instanceof Error ? error : new Error(String(error)));
+        if (shouldStopContainerBetweenFiles()) {
+          try {
+            stopPersistentPostgresContainer(containerName, image);
+          } catch (error) {
+            cleanupErrors.push(error instanceof Error ? error : new Error(String(error)));
+          }
         }
         try {
           rmSync(activeClientRoot, { recursive: true, force: true });
@@ -713,6 +766,9 @@ export async function startPostgresTestHarness(options: PostgresTestHarnessOptio
         );
       }
     }
+    // Startup failed, so this container is suspect. Stop it unconditionally —
+    // wiping the tmpfs forces a clean `initdb` for the next run rather than
+    // handing the next file a half-provisioned server.
     try {
       stopPersistentPostgresContainer(containerName, image);
     } catch (cleanupError) {

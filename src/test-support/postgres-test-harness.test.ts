@@ -5,6 +5,8 @@ import {
   PGVECTOR_POSTGRES_TEST_IMAGE,
   postgresTestContainerNameForImage,
   postgresTestDockerRunArgs,
+  resolveMaxConcurrentHarnesses,
+  shouldStopContainerBetweenFiles,
 } from './postgres-test-harness.js';
 
 describe('RAM-backed Postgres test containers', () => {
@@ -77,5 +79,42 @@ describe('RAM-backed Postgres test containers', () => {
       '-c',
       'max_wal_size=64MB',
     ]);
+  });
+
+  // Stopping wipes the tmpfs PGDATA, so every restart pays a full initdb.
+  // Keeping the server hot between files is the whole point of the RAM profile.
+  it('keeps the container hot between test files by default', () => {
+    expect(shouldStopContainerBetweenFiles({})).toBe(false);
+  });
+
+  it('restores stop-between-files only on the explicit opt-in value', () => {
+    expect(
+      shouldStopContainerBetweenFiles({ PSFN_POSTGRES_TEST_STOP_BETWEEN_FILES: '1' }),
+    ).toBe(true);
+    for (const value of ['0', 'true', 'yes', '']) {
+      expect(
+        shouldStopContainerBetweenFiles({ PSFN_POSTGRES_TEST_STOP_BETWEEN_FILES: value }),
+      ).toBe(false);
+    }
+  });
+
+  // Too few slots turns ordinary queueing into beforeAll hook timeouts on
+  // whichever integration files land at the back of the semaphore.
+  it('scales harness slots with the machine, within a bounded range', () => {
+    expect(resolveMaxConcurrentHarnesses({}, 32)).toBe(8);
+    expect(resolveMaxConcurrentHarnesses({}, 64)).toBe(8);
+    expect(resolveMaxConcurrentHarnesses({}, 16)).toBe(4);
+    expect(resolveMaxConcurrentHarnesses({}, 4)).toBe(4);
+    expect(resolveMaxConcurrentHarnesses({}, 1)).toBe(4);
+  });
+
+  it('honours an explicit slot override and rejects unusable values', () => {
+    expect(resolveMaxConcurrentHarnesses({ PSFN_POSTGRES_TEST_MAX_HARNESSES: '2' }, 32)).toBe(2);
+    expect(resolveMaxConcurrentHarnesses({ PSFN_POSTGRES_TEST_MAX_HARNESSES: '16' }, 4)).toBe(16);
+    for (const value of ['0', '-1', '2.5', 'many']) {
+      expect(() =>
+        resolveMaxConcurrentHarnesses({ PSFN_POSTGRES_TEST_MAX_HARNESSES: value }, 32),
+      ).toThrow(/positive integer/);
+    }
   });
 });

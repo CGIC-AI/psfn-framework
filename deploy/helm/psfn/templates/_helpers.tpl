@@ -399,7 +399,7 @@ psfn.io/fleet-target: registered
       set -eu
       mkdir -p /bootstrap/runtime/workspaces-shared
   securityContext:
-    {{- toYaml .Values.securityContext | nindent 4 }}
+    {{- include "psfn.appReadOnlySecurityContext" . | nindent 4 }}
   volumeMounts:
     - name: runtime
       mountPath: /bootstrap/runtime

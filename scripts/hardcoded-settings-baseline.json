@@ -1432,7 +1432,7 @@
       "file": "src/core/cogsec/disclosure/capsule-custody.ts",
       "name": "DEFAULT_MAX_ACTIVE_CAPSULES",
       "value": "3",
-      "note": "Code-owned DEFAULT for the active-capsule queue bound (bible §10.11 'initial cap of three'); already overridable via createShareCapsuleCustodyStore's maxActiveCapsules option. Owned-setting/Garden exposure is deferred to the publication approvals surface (jp36.7.2)."
+      "note": "Code-owned DEFAULT for the active-capsule queue bound (bible \u00a710.11 'initial cap of three'); already overridable via createShareCapsuleCustodyStore's maxActiveCapsules option. Owned-setting/Garden exposure is deferred to the publication approvals surface (jp36.7.2)."
     },
     {
       "file": "src/core/cogsec/drift/drift-evidence-adapters.ts",
@@ -3360,14 +3360,14 @@
     {
       "file": "src/faculties/memory/sleeptime-agent.ts",
       "name": "EPISODE_REVIEW_LIMIT",
-      "note": "Code-owned prompt-allocation ceiling that bounds one sleeptime review's episodic context.",
-      "value": "20"
+      "value": "20",
+      "note": "Code-owned prompt-allocation ceiling that bounds one sleeptime review's episodic context."
     },
     {
       "file": "src/faculties/memory/sleeptime-agent.ts",
       "name": "MAX_REVIEW_TURNS",
-      "note": "Code-owned LLM-call ceiling that bounds parse-feedback retries for one sleeptime review.",
-      "value": "3"
+      "value": "3",
+      "note": "Code-owned LLM-call ceiling that bounds parse-feedback retries for one sleeptime review."
     },
     {
       "file": "src/faculties/memory/sleeptime-agent.ts",
@@ -4838,9 +4838,21 @@
     },
     {
       "file": "src/test-support/postgres-test-harness.ts",
+      "name": "MAX_CONCURRENT_HARNESSES",
+      "value": "8",
+      "note": "Test-harness slot ceiling: bounds RAM-backed test-postgres containers regardless of core count (DoS guard); code-owned test infrastructure, not a runtime setting."
+    },
+    {
+      "file": "src/test-support/postgres-test-harness.ts",
       "name": "MAX_DATABASES_FOR_IN_PLACE_RESET",
       "value": "16",
       "note": "Test-harness recycle threshold keeps database teardown within Vitest's 30-second hook; code-owned infrastructure safety, not a runtime setting."
+    },
+    {
+      "file": "src/test-support/postgres-test-harness.ts",
+      "name": "MIN_CONCURRENT_HARNESSES",
+      "value": "4",
+      "note": "Test-harness slot floor: keeps small machines at the pre-existing 4-slot bound; code-owned test infrastructure, not a runtime setting."
     },
     {
       "file": "src/test-support/postgres-test-harness.ts",

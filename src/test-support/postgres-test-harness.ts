@@ -30,6 +30,7 @@ const TEST_POSTGRES_IMAGE_LABEL = 'io.local-gate.test-postgres.image';
 const TEST_POSTGRES_PROFILE_LABEL = 'io.local-gate.test-postgres.profile';
 const MIN_CONCURRENT_HARNESSES = 4;
 const MAX_CONCURRENT_HARNESSES = 8;
+const DEFAULT_POSTGRES_TEST_TMPFS_SIZE = '1g';
 
 /**
  * Vitest forks one worker per core, so on a large machine dozens of integration
@@ -63,16 +64,50 @@ export function resolveMaxConcurrentHarnesses(
   );
 }
 
+/**
+ * PGDATA is a tmpfs and `resetWorkerPostgres` only runs between files, so every
+ * `createDatabase` inside one file accumulates until that file finishes. A
+ * database-heavy file is therefore sized by its whole test count, not by its
+ * largest test: `postgres-store.integration.test.ts` alone stands up ~44 of
+ * them, and at 512 MiB it ran the tmpfs out of space partway through. The
+ * casualty is whichever test is unlucky enough to be last, which reads as a
+ * flaky test rather than as the capacity limit it actually is.
+ *
+ * 1 GiB clears that file with room to spare. Keep the value at or below
+ * `memoryLimit`: tmpfs pages are charged to the container's memory cgroup, so
+ * a tmpfs larger than the limit converts an ENOSPC into an OOM kill — a worse
+ * failure, because Postgres dies mid-query instead of returning an error.
+ */
+export function resolvePostgresTestTmpfsSize(
+  environment: NodeJS.ProcessEnv = process.env,
+): string {
+  const override = environment.PSFN_POSTGRES_TEST_TMPFS_SIZE?.trim();
+  if (override) {
+    if (!/^\d+[kmg]$/i.test(override)) {
+      throw new Error(
+        `PSFN_POSTGRES_TEST_TMPFS_SIZE must be a Docker size such as "512m" or "2g"; received "${override}"`,
+      );
+    }
+    return override;
+  }
+  return DEFAULT_POSTGRES_TEST_TMPFS_SIZE;
+}
+
 const POSTGRES_TEST_RUNTIME = Object.freeze({
   cpuLimit: '2',
   lockBasePath: join(tmpdir(), 'psfn-postgres-test-harness'),
   lockMalformedGraceMs: 5_000,
   lockRetryMs: 100,
   maxConcurrentHarnesses: resolveMaxConcurrentHarnesses(),
-  memoryLimit: '768m',
-  profile: 'tmpfs-v1',
+  memoryLimit: '1g',
+  // The profile is part of the container name and is re-checked before reuse,
+  // so it is what rotates warm containers when the runtime shape changes.
+  // Leaving it at v1 would silently reuse existing 512m containers and the new
+  // tmpfs size would never take effect on any machine that already ran tests.
+  // Old v1 containers linger until `npm run test:postgres:down`.
+  profile: 'tmpfs-v2',
   sharedMemorySize: '128m',
-  tmpfsSize: '512m',
+  tmpfsSize: resolvePostgresTestTmpfsSize(),
 });
 /**
  * PGDATA lives on a tmpfs, so `docker stop` destroys the cluster and the next

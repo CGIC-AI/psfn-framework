@@ -424,8 +424,14 @@ export class EpisodeArcWeaver {
       const source = episodesById.get(arc.sourceEpisodeId);
       const target = episodesById.get(arc.targetEpisodeId);
       if (!source || !target) continue;
+      // An unassigned endpoint's thread is its implicit singleton (its own id),
+      // exactly as listEpisodeArcsNeedingThreadAssignment scores it with
+      // COALESCE(thread_id, id). Comparing the raw nullable threadIds instead
+      // reads two unassigned endpoints as already converged and skips the arc
+      // the store keeps re-selecting every pass — the nullable legacy rows
+      // would never get materialized.
       if (
-        source.threadId === target.threadId
+        (source.threadId ?? source.id) === (target.threadId ?? target.id)
         && !hasLegacySessionThreadId(source)
         && !hasLegacySessionThreadId(target)
       ) {

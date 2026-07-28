@@ -1,10 +1,14 @@
-import { closeSync, fstatSync, openSync, statSync } from 'node:fs';
+import {
+  closeSync,
+  fstatSync,
+  openSync,
+  statSync,
+} from 'node:fs';
 import { basename, dirname, extname, join } from 'node:path';
-import { isRecord } from '../shared/utils/types.js';
 import { toErrorMessage } from '../shared/utils/errors.js';
+import { isRecord } from '../shared/utils/types.js';
 import {
   fileIdentityKey,
-  listNumberedJsonlSegments,
   readJsonlLineBefore,
   type JsonlLineAtOffset,
   type JsonlReadStats,
@@ -13,15 +17,18 @@ import {
 export interface JsonlSnapshotPageStats extends JsonlReadStats {
   linesRead: number;
 }
+
 export interface JsonlSnapshotLine {
   path: string;
   line: string;
 }
+
 export interface JsonlSnapshotPage {
   lines: JsonlSnapshotLine[];
   nextCursor?: string;
   exhausted: boolean;
 }
+
 export interface ReadJsonlSnapshotPageOptions {
   chunkBytes: number;
   rotationRetries: number;
@@ -29,92 +36,66 @@ export interface ReadJsonlSnapshotPageOptions {
 }
 
 interface SnapshotSegment {
-  /** Canonical basename, stable inode identity, and captured exclusive byte ceiling. */
   name: string;
   identity: string;
   size: number;
 }
+
 interface SnapshotCursorPayload {
   version: 1;
   sourceId: string;
-  segments: SnapshotSegment[];
-  segmentIndex: number;
+  current: SnapshotSegment | null;
+  nextSealedNumber: number;
   exclusiveOffset: number;
+  activeRelocationName?: string;
+}
+
+function segmentCoordinates(activePath: string): {
+  directory: string;
+  activeName: string;
+  extension: string;
+  stem: string;
+} {
+  const activeName = basename(activePath);
+  const extension = extname(activeName);
+  return {
+    directory: dirname(activePath),
+    activeName,
+    extension,
+    stem: activeName.slice(0, -extension.length),
+  };
+}
+
+function segmentName(activePath: string, segmentNumber: number): string {
+  const { stem, extension } = segmentCoordinates(activePath);
+  return `${stem}.${String(segmentNumber).padStart(5, '0')}${extension}`;
+}
+
+function segmentPath(activePath: string, segmentNumber: number): string {
+  return join(
+    segmentCoordinates(activePath).directory,
+    segmentName(activePath, segmentNumber),
+  );
 }
 
 function isCanonicalSegmentName(name: string, activePath: string): boolean {
-  const activeName = basename(activePath);
+  const { activeName, extension, stem } = segmentCoordinates(activePath);
   if (name === activeName) return true;
-  const extension = extname(activeName);
-  const stem = activeName.slice(0, -extension.length);
   const prefix = `${stem}.`;
-  if (!name.startsWith(prefix) || !name.endsWith(extension)) return false;
-  const segmentNumber = name.slice(prefix.length, -extension.length);
-  return /^\d{5,}$/.test(segmentNumber);
+  return name.startsWith(prefix)
+    && name.endsWith(extension)
+    && /^\d{5,}$/.test(name.slice(prefix.length, -extension.length));
 }
 
-function encodeCursor(payload: SnapshotCursorPayload): string {
-  return Buffer.from(JSON.stringify(payload), 'utf8').toString('base64url');
-}
-function decodeCursor(
-  cursor: string,
-  sourceId: string,
-  activePath: string,
-): SnapshotCursorPayload {
-  let parsed: unknown;
+function readFileIdentity(path: string): string | null {
   try {
-    parsed = JSON.parse(Buffer.from(cursor, 'base64url').toString('utf8')) as unknown;
+    return fileIdentityKey(statSync(path));
   } catch (error) {
-    throw new Error(`JSONL snapshot cursor is malformed: ${toErrorMessage(error)}`);
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
+    throw error;
   }
-  if (!isRecord(parsed)
-    || parsed.version !== 1
-    || parsed.sourceId !== sourceId
-    || !Array.isArray(parsed.segments)
-    || !Number.isSafeInteger(parsed.segmentIndex)
-    || (parsed.segmentIndex as number) < 0
-    || !Number.isSafeInteger(parsed.exclusiveOffset)
-    || (parsed.exclusiveOffset as number) < 0) {
-    throw new Error('JSONL snapshot cursor does not match the requested source');
-  }
-  const segments: SnapshotSegment[] = [];
-  const identities = new Set<string>();
-  for (const entry of parsed.segments) {
-    if (!isRecord(entry)
-      || typeof entry.name !== 'string'
-      || !isCanonicalSegmentName(entry.name, activePath)
-      || typeof entry.identity !== 'string'
-      || !/^\d+:\d+$/.test(entry.identity)
-      || !Number.isSafeInteger(entry.size)
-      || (entry.size as number) < 0
-      || identities.has(entry.identity)) {
-      throw new Error('JSONL snapshot cursor contains an invalid segment');
-    }
-    identities.add(entry.identity);
-    segments.push({
-      name: entry.name,
-      identity: entry.identity,
-      size: entry.size as number,
-    });
-  }
-  const segmentIndex = parsed.segmentIndex as number;
-  const exclusiveOffset = parsed.exclusiveOffset as number;
-  if (segmentIndex > segments.length
-    || (segmentIndex === segments.length && exclusiveOffset !== 0)
-    || (
-      segmentIndex < segments.length
-      && exclusiveOffset > (segments[segmentIndex]?.size ?? 0)
-    )) {
-    throw new Error('JSONL snapshot cursor position is outside its snapshot');
-  }
-  return {
-    version: 1,
-    sourceId,
-    segments,
-    segmentIndex,
-    exclusiveOffset,
-  };
 }
+
 function openSnapshotSegment(path: string): SnapshotSegment | null {
   let fd: number;
   try {
@@ -137,74 +118,226 @@ function openSnapshotSegment(path: string): SnapshotSegment | null {
     closeSync(fd);
   }
 }
+
 /**
- * Capture one fixed newest-to-oldest segment snapshot without parsing history.
- *
- * The active inode is pinned first. If it rotates before sealed segments are
- * listed, inode de-duplication keeps the moved active segment exactly once and
- * a newly-created active file belongs to the next snapshot.
+ * Find the contiguous sealed high-water mark without listing or retaining the
+ * archive. Supported rotation creates segment 1 then monotonically claims the
+ * next number; a missing segment inside that sequence is handled fail-closed
+ * when traversal reaches it.
  */
-function snapshotSegments(activePath: string): SnapshotSegment[] {
-  const segments: SnapshotSegment[] = [];
-  const identities = new Set<string>();
-  const active = openSnapshotSegment(activePath);
-  if (active) {
-    segments.push(active);
-    identities.add(active.identity);
-  }
-  for (const rotated of listNumberedJsonlSegments(activePath)
-    .sort((left, right) => right.segmentNumber - left.segmentNumber)) {
-    const segment = openSnapshotSegment(rotated.path);
-    if (!segment) {
-      throw new Error(`JSONL snapshot segment vanished while being captured: ${rotated.path}`);
+function findNewestSealedNumber(activePath: string): number {
+  if (readFileIdentity(segmentPath(activePath, 1)) === null) return 0;
+  let present = 1;
+  let absent = 2;
+  while (readFileIdentity(segmentPath(activePath, absent)) !== null) {
+    present = absent;
+    if (absent > Math.floor(Number.MAX_SAFE_INTEGER / 2)) {
+      throw new Error('JSONL segment number exceeds the supported safe-integer range');
     }
-    if (identities.has(segment.identity)) continue;
-    identities.add(segment.identity);
-    segments.push(segment);
+    absent *= 2;
   }
-  return segments;
+  while (absent - present > 1) {
+    const candidate = present + Math.floor((absent - present) / 2);
+    if (readFileIdentity(segmentPath(activePath, candidate)) === null) {
+      absent = candidate;
+    } else {
+      present = candidate;
+    }
+  }
+  return present;
 }
-function locateSegment(activePath: string, segment: SnapshotSegment): string {
-  const directory = dirname(activePath);
-  const preferredPath = join(directory, segment.name);
-  const directPaths = preferredPath === activePath
-    ? [preferredPath]
-    : [preferredPath, activePath];
-  for (const path of directPaths) {
-    try {
-      if (fileIdentityKey(statSync(path)) === segment.identity) return path;
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue;
-      throw error;
+
+function locatePinnedActive(
+  activePath: string,
+  active: SnapshotSegment,
+  newestSealedNumber: number,
+  rotationRetries: number,
+): number | null {
+  const oldestCandidate = Math.max(1, newestSealedNumber - rotationRetries);
+  for (
+    let segmentNumber = newestSealedNumber;
+    segmentNumber >= oldestCandidate;
+    segmentNumber -= 1
+  ) {
+    if (readFileIdentity(segmentPath(activePath, segmentNumber)) === active.identity) {
+      return segmentNumber;
     }
   }
-  for (const candidate of listNumberedJsonlSegments(activePath)) {
-    if (candidate.path === preferredPath) continue;
-    try {
-      if (fileIdentityKey(statSync(candidate.path)) === segment.identity) return candidate.path;
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue;
-      throw error;
+  return null;
+}
+
+/**
+ * Snapshot boundary: pin active inode A first. If A rotates during capture,
+ * locate it within the bounded concurrent-rotation window and fence sealed
+ * history immediately before A. Any newer B/C rotations belong to the next
+ * snapshot. If A moves beyond that window, retry from a fresh active inode.
+ */
+function captureSnapshot(
+  activePath: string,
+  sourceId: string,
+  rotationRetries: number,
+): SnapshotCursorPayload {
+  for (let attempt = 0; ; attempt += 1) {
+    const active = openSnapshotSegment(activePath);
+    const newestSealedNumber = findNewestSealedNumber(activePath);
+    if (!active) {
+      const current = newestSealedNumber > 0
+        ? openSnapshotSegment(segmentPath(activePath, newestSealedNumber))
+        : null;
+      if (newestSealedNumber > 0 && !current) {
+        throw new Error('Newest JSONL snapshot segment vanished during capture');
+      }
+      return {
+        version: 1,
+        sourceId,
+        current,
+        nextSealedNumber: Math.max(0, newestSealedNumber - 1),
+        exclusiveOffset: current?.size ?? 0,
+      };
+    }
+    const activeSegmentNumber = locatePinnedActive(
+      activePath,
+      active,
+      newestSealedNumber,
+      rotationRetries,
+    );
+    if (activeSegmentNumber !== null) {
+      const movedName = segmentName(activePath, activeSegmentNumber);
+      return {
+        version: 1,
+        sourceId,
+        current: { ...active, name: movedName },
+        nextSealedNumber: activeSegmentNumber - 1,
+        exclusiveOffset: active.size,
+        activeRelocationName: movedName,
+      };
+    }
+    if (readFileIdentity(activePath) === active.identity) {
+      return {
+        version: 1,
+        sourceId,
+        current: active,
+        nextSealedNumber: newestSealedNumber,
+        exclusiveOffset: active.size,
+        activeRelocationName: segmentName(activePath, newestSealedNumber + 1),
+      };
+    }
+    if (attempt >= rotationRetries) {
+      throw new Error(
+        `JSONL snapshot capture exceeded ${rotationRetries} concurrent-rotation retries`,
+      );
+    }
+  }
+}
+
+function encodeCursor(payload: SnapshotCursorPayload): string {
+  return Buffer.from(JSON.stringify(payload), 'utf8').toString('base64url');
+}
+
+function parseSnapshotSegment(
+  value: unknown,
+  activePath: string,
+): SnapshotSegment | null | undefined {
+  if (value === null) return null;
+  if (!isRecord(value)
+    || typeof value.name !== 'string'
+    || !isCanonicalSegmentName(value.name, activePath)
+    || typeof value.identity !== 'string'
+    || !/^\d+:\d+$/.test(value.identity)
+    || !Number.isSafeInteger(value.size)
+    || (value.size as number) < 0) {
+    return undefined;
+  }
+  return {
+    name: value.name,
+    identity: value.identity,
+    size: value.size as number,
+  };
+}
+
+function decodeCursor(
+  cursor: string,
+  sourceId: string,
+  activePath: string,
+): SnapshotCursorPayload {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(Buffer.from(cursor, 'base64url').toString('utf8')) as unknown;
+  } catch (error) {
+    throw new Error(`JSONL snapshot cursor is malformed: ${toErrorMessage(error)}`);
+  }
+  if (!isRecord(parsed)
+    || parsed.version !== 1
+    || parsed.sourceId !== sourceId
+    || !Number.isSafeInteger(parsed.nextSealedNumber)
+    || (parsed.nextSealedNumber as number) < 0
+    || !Number.isSafeInteger(parsed.exclusiveOffset)
+    || (parsed.exclusiveOffset as number) < 0
+    || (
+      parsed.activeRelocationName !== undefined
+      && (
+        typeof parsed.activeRelocationName !== 'string'
+        || !isCanonicalSegmentName(parsed.activeRelocationName, activePath)
+      )
+    )) {
+    throw new Error('JSONL snapshot cursor does not match the requested source');
+  }
+  const current = parseSnapshotSegment(parsed.current, activePath);
+  const exclusiveOffset = parsed.exclusiveOffset as number;
+  if (current === undefined
+    || (current === null && exclusiveOffset !== 0)
+    || (current !== null && exclusiveOffset > current.size)) {
+    throw new Error('JSONL snapshot cursor position is outside its snapshot');
+  }
+  return {
+    version: 1,
+    sourceId,
+    current,
+    nextSealedNumber: parsed.nextSealedNumber as number,
+    exclusiveOffset,
+    ...(typeof parsed.activeRelocationName === 'string'
+      ? { activeRelocationName: parsed.activeRelocationName }
+      : {}),
+  };
+}
+
+function locateCurrentSegment(
+  activePath: string,
+  state: SnapshotCursorPayload,
+): string {
+  const current = state.current;
+  if (!current) throw new Error('JSONL snapshot cursor has no current segment');
+  const directory = dirname(activePath);
+  const candidates = [...new Set([
+    join(directory, current.name),
+    ...(state.activeRelocationName ? [join(directory, state.activeRelocationName)] : []),
+    ...(state.activeRelocationName ? [activePath] : []),
+  ])];
+  for (const path of candidates) {
+    if (readFileIdentity(path) === current.identity) {
+      current.name = basename(path);
+      return path;
     }
   }
   throw new Error(
-    `JSONL snapshot segment ${segment.identity} is no longer available; refusing to skip history`,
+    `JSONL snapshot segment ${current.identity} is no longer available; refusing to skip history`,
   );
 }
-function readSnapshotLineBefore(
+
+function readCurrentLine(
   activePath: string,
-  segment: SnapshotSegment,
-  exclusiveOffset: number,
+  state: SnapshotCursorPayload,
   options: ReadJsonlSnapshotPageOptions,
 ): (JsonlLineAtOffset & { path: string }) | null {
   for (let attempt = 0; ; attempt += 1) {
-    const path = locateSegment(activePath, segment);
-    segment.name = basename(path);
+    const current = state.current;
+    if (!current) return null;
+    const path = locateCurrentSegment(activePath, state);
     try {
-      const line = readJsonlLineBefore(path, exclusiveOffset, {
+      const line = readJsonlLineBefore(path, state.exclusiveOffset, {
         chunkBytes: options.chunkBytes,
         stats: options.stats,
-        expectedFileIdentity: segment.identity,
+        expectedFileIdentity: current.identity,
       });
       return line ? { ...line, path } : null;
     } catch (error) {
@@ -219,9 +352,30 @@ function readSnapshotLineBefore(
     }
   }
 }
+
+function advanceSegment(activePath: string, state: SnapshotCursorPayload): void {
+  state.activeRelocationName = undefined;
+  if (state.nextSealedNumber <= 0) {
+    state.current = null;
+    state.exclusiveOffset = 0;
+    return;
+  }
+  const segmentNumber = state.nextSealedNumber;
+  const path = segmentPath(activePath, segmentNumber);
+  const next = openSnapshotSegment(path);
+  if (!next) {
+    throw new Error(
+      `JSONL snapshot is missing sealed segment ${segmentNumber}; refusing to skip history`,
+    );
+  }
+  state.current = next;
+  state.nextSealedNumber = segmentNumber - 1;
+  state.exclusiveOffset = next.size;
+}
+
 /**
  * Read at most `limit` physical rows from one fixed active+numbered snapshot.
- * Supplying no cursor explicitly resets traversal to a newly captured snapshot.
+ * Cursor state retains one segment descriptor regardless of archive length.
  */
 export function readJsonlSnapshotPage(
   activePath: string,
@@ -235,47 +389,26 @@ export function readJsonlSnapshotPage(
   }
   const state = cursor
     ? decodeCursor(cursor, sourceId, activePath)
-    : {
-      version: 1 as const,
-      sourceId,
-      segments: snapshotSegments(activePath),
-      segmentIndex: 0,
-      exclusiveOffset: 0,
-    };
-  if (!cursor && state.segments.length > 0) {
-    state.exclusiveOffset = state.segments[0]?.size ?? 0;
-  }
+    : captureSnapshot(activePath, sourceId, options.rotationRetries);
   const lines: JsonlSnapshotLine[] = [];
-  while (lines.length < limit && state.segmentIndex < state.segments.length) {
-    const segment = state.segments[state.segmentIndex]!;
+  while (lines.length < limit && state.current) {
     if (state.exclusiveOffset <= 0) {
-      state.segmentIndex += 1;
-      state.exclusiveOffset = state.segments[state.segmentIndex]?.size ?? 0;
+      advanceSegment(activePath, state);
       continue;
     }
-    const line = readSnapshotLineBefore(
-      activePath,
-      segment,
-      state.exclusiveOffset,
-      options,
-    );
+    const line = readCurrentLine(activePath, state, options);
     if (!line) {
-      state.segmentIndex += 1;
-      state.exclusiveOffset = state.segments[state.segmentIndex]?.size ?? 0;
+      advanceSegment(activePath, state);
       continue;
     }
     state.exclusiveOffset = line.startOffset;
     lines.push({ path: line.path, line: line.line });
     if (options.stats) options.stats.linesRead += 1;
   }
-  while (
-    state.segmentIndex < state.segments.length
-    && state.exclusiveOffset <= 0
-  ) {
-    state.segmentIndex += 1;
-    state.exclusiveOffset = state.segments[state.segmentIndex]?.size ?? 0;
+  while (state.current && state.exclusiveOffset <= 0) {
+    advanceSegment(activePath, state);
   }
-  const exhausted = state.segmentIndex >= state.segments.length;
+  const exhausted = state.current === null;
   return {
     lines,
     exhausted,

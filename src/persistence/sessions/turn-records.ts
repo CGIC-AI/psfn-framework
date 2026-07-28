@@ -1580,6 +1580,15 @@ export function createFilesystemTurnRecordStorePort(
   const segmentMaxBytes = options.segmentMaxBytes ?? TURN_RECORD_SEGMENT_MAX_BYTES;
   const scanChunkBytes = options.scanChunkBytes ?? TURN_RECORD_TAIL_SCAN_CHUNK_BYTES;
   const sharedStore = createTurnRecordSharedStore(turnRecordsDir(sessionsDir));
+  const resolveStoredTurnRecord = (record: TurnRecord): TurnRecord => (
+    resolveTurnRecordStaticPrompt(
+      resolveTurnRecordWirePayload(
+        resolveTurnRecordToolDefinitions(record, sharedStore),
+        sharedStore,
+      ),
+      sharedStore,
+    )
+  );
   return {
     appendTurnRecord: (record) => {
       // Content-address duplicated tool definitions (bead hgw3.3), captured
@@ -1612,13 +1621,7 @@ export function createFilesystemTurnRecordStorePort(
       // Refs resolve at the read boundary — only for records actually
       // returned — so every consumer above persistence sees fully inline
       // records. Fail closed: a dangling ref is a loud error (hgw3.3).
-      return rows.map(record => resolveTurnRecordStaticPrompt(
-        resolveTurnRecordWirePayload(
-          resolveTurnRecordToolDefinitions(record, sharedStore),
-          sharedStore,
-        ),
-        sharedStore,
-      ));
+      return rows.map(resolveStoredTurnRecord);
     },
     readTurnRecordPage: (channelId, limit, cursor) => {
       const page = readTurnRecordPageAcrossSegments(
@@ -1630,13 +1633,7 @@ export function createFilesystemTurnRecordStorePort(
       );
       return {
         ...page,
-        records: page.records.map(record => resolveTurnRecordStaticPrompt(
-          resolveTurnRecordWirePayload(
-            resolveTurnRecordToolDefinitions(record, sharedStore),
-            sharedStore,
-          ),
-          sharedStore,
-        )),
+        records: page.records.map(resolveStoredTurnRecord),
       };
     },
     readRecentTurnRecordUsage: (channelId, limit) => (

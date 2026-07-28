@@ -114,6 +114,7 @@ export async function startOptionalAdminTransportServer(
       {
         localCompanionId,
         knownCompanionIds: fleetCompanionIds,
+        config: options.config,
       },
     )
     : null;

@@ -185,6 +185,7 @@ export interface EditableSettings {
   profileSynthesisMinSourceMemories?: number;
   analysisWorkbenchMaxTokens?: number;
   analysisWorkbenchMaxWallTimeMs?: number;
+  analysisWorkbenchDirectResponseTimeoutMs?: number;
   analysisWorkbenchMaxSubQueries?: number;
   analysisWorkbenchExecutionTimeoutMs?: number;
   analysisWorkbenchOutputTruncation?: number;
@@ -352,6 +353,7 @@ export const RUNTIME_SETTINGS_KEYS = [
   'profileSynthesisMinSourceMemories',
   'analysisWorkbenchMaxTokens',
   'analysisWorkbenchMaxWallTimeMs',
+  'analysisWorkbenchDirectResponseTimeoutMs',
   'analysisWorkbenchMaxSubQueries',
   'analysisWorkbenchExecutionTimeoutMs',
   'analysisWorkbenchOutputTruncation',

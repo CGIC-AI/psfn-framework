@@ -280,6 +280,7 @@
   "profileSynthesisMinSourceMemories": 2,
   "analysisWorkbenchMaxTokens": 76000,
   "analysisWorkbenchMaxWallTimeMs": 300000,
+  "analysisWorkbenchDirectResponseTimeoutMs": 240000,
   "analysisWorkbenchMaxSubQueries": 24,
   "analysisWorkbenchExecutionTimeoutMs": 5000,
   "analysisWorkbenchOutputTruncation": 8192,

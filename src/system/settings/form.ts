@@ -25,6 +25,7 @@ import {
   normalizeFalEditModelSetting,
   normalizeImageProviderSetting,
 } from '../../primitives/images/types.js';
+import { PARENT_TURN_MAX_WALL_TIME_MS } from '../../core/agent/turn-limits.js';
 import {
   COMPACTION_THRESHOLD_PCT_RANGE,
   EXTRACTION_THRESHOLD_PCT_RANGE,
@@ -62,6 +63,10 @@ export const SETTINGS_VALIDATION = {
   memoryRefreshFailureAlertThreshold: { min: 1, max: 100 },
   analysisWorkbenchMaxTokens: { min: 1000, max: 1000000 },
   analysisWorkbenchMaxWallTimeMs: { min: 5000, max: 600000 },
+  analysisWorkbenchDirectResponseTimeoutMs: {
+    min: 1000,
+    max: PARENT_TURN_MAX_WALL_TIME_MS - 60_000,
+  },
   analysisWorkbenchMaxSubQueries: { min: 1, max: 100 },
   analysisWorkbenchExecutionTimeoutMs: { min: 500, max: 600000 },
   analysisWorkbenchOutputTruncation: { min: 256, max: 1000000 },

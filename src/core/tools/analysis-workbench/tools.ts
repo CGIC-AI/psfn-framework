@@ -25,7 +25,7 @@ export function createAnalysisWorkbenchTool(deps: REPLDeps): SubstrateAgentTool 
     execute: async (
       toolCallId: string,
       params: { task: string; maxIterations?: number; maxTokens?: number },
-      _signal?: AbortSignal,
+      signal?: AbortSignal,
     ): Promise<AgentToolResult<{ isError?: boolean }>> => {
       try {
         // Merge budget overrides from tool input
@@ -50,6 +50,7 @@ export function createAnalysisWorkbenchTool(deps: REPLDeps): SubstrateAgentTool 
             originType: 'tool',
             originStage: 'repl.analysis_workbench.tool',
           },
+          { signal },
         );
 
         if (effectiveDeps.costTelemetry) {

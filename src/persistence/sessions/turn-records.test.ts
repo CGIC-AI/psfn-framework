@@ -34,7 +34,7 @@ const fsFaults = vi.hoisted(() => ({
     fd: null as number | null,
     closed: false,
   },
-  statSyncCallback: {
+  opendirSyncCallback: {
     path: null as string | null,
     callback: null as (() => void) | null,
   },
@@ -74,15 +74,15 @@ vi.mock('node:fs', async (importOriginal) => {
       }
       return actual.readdirSync(path, options as never);
     }) as typeof actual.readdirSync,
-    statSync: ((path, options) => {
-      if (String(path) === fsFaults.statSyncCallback.path) {
-        const callback = fsFaults.statSyncCallback.callback;
-        fsFaults.statSyncCallback.path = null;
-        fsFaults.statSyncCallback.callback = null;
+    opendirSync: ((path, options) => {
+      if (String(path) === fsFaults.opendirSyncCallback.path) {
+        const callback = fsFaults.opendirSyncCallback.callback;
+        fsFaults.opendirSyncCallback.path = null;
+        fsFaults.opendirSyncCallback.callback = null;
         callback?.();
       }
-      return actual.statSync(path, options as never);
-    }) as typeof actual.statSync,
+      return actual.opendirSync(path, options);
+    }) as typeof actual.opendirSync,
     linkSync: ((existingPath, newPath) => {
       if (fsFaults.linkSyncClaim.remaining > 0) {
         fsFaults.linkSyncClaim.remaining -= 1;
@@ -108,8 +108,8 @@ afterEach(() => {
   fsFaults.trackedOpen.path = null;
   fsFaults.trackedOpen.fd = null;
   fsFaults.trackedOpen.closed = false;
-  fsFaults.statSyncCallback.path = null;
-  fsFaults.statSyncCallback.callback = null;
+  fsFaults.opendirSyncCallback.path = null;
+  fsFaults.opendirSyncCallback.callback = null;
 });
 
 const TURN_RECORDS_DIR = '_turn_records';
@@ -586,13 +586,8 @@ describe('turn-records rotation and bounded tail reads', () => {
     store.appendTurnRecord(records[0]!);
     store.appendTurnRecord(records[1]!);
 
-    const firstSegment = join(
-      sessionsDir,
-      TURN_RECORDS_DIR,
-      `${sanitizeChannelId(ROTATION_CHANNEL)}.00001.jsonl`,
-    );
-    fsFaults.statSyncCallback.path = firstSegment;
-    fsFaults.statSyncCallback.callback = () => {
+    fsFaults.opendirSyncCallback.path = join(sessionsDir, TURN_RECORDS_DIR);
+    fsFaults.opendirSyncCallback.callback = () => {
       store.appendTurnRecord(records[2]!);
       store.appendTurnRecord(records[3]!);
     };
@@ -607,6 +602,40 @@ describe('turn-records rotation and bounded tail reads', () => {
       records,
       exhausted: true,
     });
+  });
+
+  it('fails closed when segment 1 is missing but a higher sealed segment survives', () => {
+    const sessionsDir = mkdtempSync(join(tmpdir(), 'psfn-turn-records-page-leading-gap-'));
+    const dir = join(sessionsDir, TURN_RECORDS_DIR);
+    const sanitized = sanitizeChannelId(ROTATION_CHANNEL);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      join(dir, `${sanitized}.00005.jsonl`),
+      `${JSON.stringify(sequencedRecord(5))}\n`,
+      'utf8',
+    );
+
+    expect(() => createFilesystemTurnRecordStorePort(sessionsDir)
+      .readTurnRecordPage?.(ROTATION_CHANNEL, 2))
+      .toThrow(/sealed segments are non-contiguous.*minimum=5.*maximum=5/);
+  });
+
+  it('fails closed when a middle sealed segment is missing', () => {
+    const sessionsDir = mkdtempSync(join(tmpdir(), 'psfn-turn-records-page-middle-gap-'));
+    const dir = join(sessionsDir, TURN_RECORDS_DIR);
+    const sanitized = sanitizeChannelId(ROTATION_CHANNEL);
+    mkdirSync(dir, { recursive: true });
+    for (const segmentNumber of [1, 3]) {
+      writeFileSync(
+        join(dir, `${sanitized}.${String(segmentNumber).padStart(5, '0')}.jsonl`),
+        `${JSON.stringify(sequencedRecord(segmentNumber))}\n`,
+        'utf8',
+      );
+    }
+
+    expect(() => createFilesystemTurnRecordStorePort(sessionsDir)
+      .readTurnRecordPage?.(ROTATION_CHANNEL, 2))
+      .toThrow(/sealed segments are non-contiguous.*count=2.*maximum=3/);
   });
 
   it('keeps every later old-fat multi-segment cursor page bounded by its physical page size', () => {

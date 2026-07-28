@@ -54,6 +54,21 @@ export type TurnRecordIdentityLookup =
   | { readonly kind: 'duplicated' }
   | { readonly kind: 'unique'; readonly record: TurnRecord };
 
+export interface TurnRecordRecoveryScanStats {
+  bytesRead: number;
+  rowsScanned: number;
+  filesScanned: number;
+  candidatesYielded: number;
+  peakIdentityRowsInMemory: number;
+  sqliteCacheBytes: number;
+  maxRowBytes: number;
+}
+
+export interface TurnRecordRecoveryScanOptions {
+  signal?: AbortSignal;
+  stats?: TurnRecordRecoveryScanStats;
+}
+
 export interface TurnRecordStorePort {
   appendTurnRecord(record: TurnRecord): void;
   /** Reads the bounded newest tail ordered oldest-to-newest. */
@@ -77,11 +92,14 @@ export interface TurnRecordStorePort {
     limit: number,
   ): TurnRecordUsageRecord[];
   /**
-   * Streams normalized records without retaining a whole source archive.
-   * Production startup recovery uses this async path so historical scans yield
-   * to interactive traffic between small batches.
+   * Streams exact-unique recovery candidates from one physical snapshot,
+   * globally ordered by completedAt/turnId. Implementations must keep identity
+   * state out of process memory and close the snapshot promptly on cancellation.
    */
-  streamTurnRecordsForRecovery?(channelId: string): AsyncIterable<TurnRecord>;
+  streamTurnRecordsForRecovery?(
+    channelIds: readonly string[],
+    options?: TurnRecordRecoveryScanOptions,
+  ): AsyncIterable<TurnRecord>;
   /**
    * Resolves an exact identity from one snapshot without retaining or
    * normalizing unrelated historical bodies.

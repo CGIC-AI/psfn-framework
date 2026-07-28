@@ -14,22 +14,32 @@ export async function recoverHistoricalBackgroundWorkHandoffs<T>(
   defer: (record: T) => void,
 ): Promise<void> {
   const errors: unknown[] = [];
+  const retainedErrorsLimit = 16;
+  let suppressedErrors = 0;
   for await (const record of records) {
     try {
       await enqueue(record);
     } catch (error) {
       try {
         defer(record);
-        errors.push(error);
+        if (errors.length < retainedErrorsLimit) errors.push(error);
+        else suppressedErrors += 1;
       } catch (deferError) {
-        errors.push(new AggregateError(
+        const combined = new AggregateError(
           [error, deferError],
           'Historical background work handoff failed to enqueue and index for retry',
-        ));
+        );
+        if (errors.length < retainedErrorsLimit) errors.push(combined);
+        else suppressedErrors += 1;
       }
     }
   }
 
+  if (suppressedErrors > 0) {
+    errors.push(new Error(
+      `${suppressedErrors} additional historical background work handoff failures were suppressed`,
+    ));
+  }
   if (errors.length === 1) throw errors[0];
   if (errors.length > 1) {
     throw new AggregateError(errors, 'Multiple historical background work handoffs failed');

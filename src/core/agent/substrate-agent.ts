@@ -361,7 +361,9 @@ export class SubstrateAgent {
   private readonly turnSupportRuntime: TurnSupportRuntime;
   private readonly backgroundWorkSupervisor: BackgroundWorkSupervisor | null;
   private backgroundWorkHandoffsRecovered = false;
+  private backgroundWorkHandoffRecoveryEvidenceBlocked = false;
   private backgroundWorkHandoffRecoveryPromise: Promise<void> | null = null;
+  private backgroundWorkHandoffRecoveryAbortController: AbortController | null = null;
   private readonly toolRuntimeFacade: ToolRuntimeFacade;
   private readonly satellitePresencePort = createActiveEmanationSatellitePresencePort();
   private selfModelRuntimeRequired = false;
@@ -1537,10 +1539,15 @@ export class SubstrateAgent {
 
   private async recoverBackgroundWorkHandoffs(): Promise<void> {
     if (!this.backgroundWorkHandoffRecoveryPromise) {
+      const recoveryAbortController = new AbortController();
+      this.backgroundWorkHandoffRecoveryAbortController = recoveryAbortController;
       this.backgroundWorkHandoffRecoveryPromise = (async () => {
-        if (!this.backgroundWorkHandoffsRecovered) {
+        if (!this.backgroundWorkHandoffsRecovered
+          && !this.backgroundWorkHandoffRecoveryEvidenceBlocked) {
           const enumerationState = { complete: false };
-          const records = this.sessionManager.streamRecoverableBackgroundWorkTurnRecords();
+          const records = this.sessionManager.streamRecoverableBackgroundWorkTurnRecords(
+            recoveryAbortController.signal,
+          );
           const completionTrackedRecords = (async function* () {
             for await (const record of records) yield record;
             enumerationState.complete = true;
@@ -1568,14 +1575,26 @@ export class SubstrateAgent {
             if (jobs.length > 0) await this.backgroundWorkSupervisor!.enqueue(jobs);
           },
         );
-      })().finally(() => {
+      })().catch((error: unknown) => {
+        if (error instanceof Error && error.name === 'TurnRecordRecoveryEvidenceError') {
+          // Deterministic physical evidence cannot heal on the next scheduler
+          // tick. Surface it once, retain every durable row, and retry only
+          // after an operator repair/restart instead of spawning a tight loop.
+          this.backgroundWorkHandoffRecoveryEvidenceBlocked = true;
+        }
+        throw error;
+      }).finally(() => {
         this.backgroundWorkHandoffRecoveryPromise = null;
+        if (this.backgroundWorkHandoffRecoveryAbortController === recoveryAbortController) {
+          this.backgroundWorkHandoffRecoveryAbortController = null;
+        }
       });
     }
     await this.backgroundWorkHandoffRecoveryPromise;
   }
 
   async stopBackgroundWork(): Promise<void> {
+    this.backgroundWorkHandoffRecoveryAbortController?.abort();
     await this.backgroundWorkSupervisor?.stop();
   }
 

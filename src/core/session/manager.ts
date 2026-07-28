@@ -1431,7 +1431,7 @@ export class SessionManager implements SessionManagerTypeSurface {
    * eligibility is checked here so tombstoned or physically duplicated turns
    * never reach the queue replay path.
    */
-  streamRecoverableBackgroundWorkTurnRecords(): AsyncIterable<TurnRecord> {
+  streamRecoverableBackgroundWorkTurnRecords(signal?: AbortSignal): AsyncIterable<TurnRecord> {
     const sourceChannelIds = new Set<string>();
     for (const channel of this.store.listChannels()) {
       sourceChannelIds.add(channel.channelId);
@@ -1439,6 +1439,7 @@ export class SessionManager implements SessionManagerTypeSurface {
     }
     return this.store.streamRecoverableBackgroundWorkTurnRecords(
       [...sourceChannelIds],
+      { signal },
     );
   }
 

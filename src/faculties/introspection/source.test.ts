@@ -474,6 +474,80 @@ describe('turn-record introspection source', () => {
     ]);
   });
 
+  it('rolls back every session and channel cursor when a later channel row is oversized', async () => {
+    const channelA = 'discord:public-a';
+    const channelB = 'discord:public-b';
+    const aNewest = record({
+      turnId: '019d2326-d9e1-701d-bcee-250d2cbb0e5a',
+      requestId: 'request-a-newest',
+      channelId: channelA,
+      completedAt: 1_700_000_000_300,
+    });
+    const aOlder = record({
+      turnId: '019d2326-d9e1-701d-bcee-250d2cbb0e4a',
+      requestId: 'request-a-older',
+      channelId: channelA,
+      completedAt: 1_700_000_000_100,
+    });
+    const bRecord = record({
+      turnId: '019d2326-d9e1-701d-bcee-250d2cbb0e5b',
+      requestId: 'request-b',
+      channelId: channelB,
+      completedAt: 1_700_000_000_200,
+    });
+    const sessions = [
+      { sessionId: channelA, sourceChannelId: channelA },
+      { sessionId: channelB, sourceChannelId: channelB },
+    ];
+    const listRecentSessions = vi.fn((limit = 2, offset = 0) => (
+      sessions.slice(offset, offset + limit)
+    ));
+    const aNext = 'a-next' as TurnRecordPageCursor;
+    let rejectChannelB = true;
+    const readSourceTurnRecordPage = vi.fn(async (
+      channelId: string,
+      _limit: number,
+      cursor?: TurnRecordPageCursor,
+    ) => {
+      if (channelId === channelA) {
+        return cursor === aNext
+          ? { records: [aOlder], exhausted: true }
+          : { records: [aNewest], nextCursor: aNext, exhausted: false };
+      }
+      if (rejectChannelB) {
+        rejectChannelB = false;
+        const error = new Error('oversized channel B row') as NodeJS.ErrnoException;
+        error.code = 'EOVERFLOW';
+        throw error;
+      }
+      return { records: [bRecord], exhausted: true };
+    });
+    const source = createTurnRecordIntrospectionSource({
+      listRecentSessions,
+      readSourceTurnRecordPage,
+      isSessionRetiredOrQuarantined: () => false,
+      isSourceTurnRecordEligible: () => true,
+    });
+    const input = {
+      allowedPublicChannelIds: [channelA, channelB],
+      recentSessionLimit: 2,
+      recentTurnLimit: 1,
+      maxSourceChars: 1_000,
+    };
+
+    await expect(source.listCandidates(input)).rejects.toMatchObject({ code: 'EOVERFLOW' });
+    const retry = await source.listCandidates(input);
+
+    expect(retry.map(candidate => candidate.turnId)).toEqual([
+      bRecord.turnId,
+      aNewest.turnId,
+    ]);
+    expect(listRecentSessions.mock.calls.map(call => call[1])).toEqual([0, 0]);
+    expect(readSourceTurnRecordPage.mock.calls
+      .filter(call => call[0] === channelA)
+      .map(call => call[2])).toEqual([undefined, undefined]);
+  });
+
   it('continues after an empty filtered physical page until the snapshot honestly exhausts', async () => {
     const continuation = 'older-page' as TurnRecordPageCursor;
     const readSourceTurnRecordPage = vi.fn(async (

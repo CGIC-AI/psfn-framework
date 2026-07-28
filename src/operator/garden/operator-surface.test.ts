@@ -1358,6 +1358,20 @@ describe('Garden operator surface', () => {
     });
   });
 
+  it('stops admitting admin connections before draining shutdown connections', () => {
+    const source = readFileSync(new URL('./transport-server.ts', import.meta.url), 'utf8');
+    const stopStart = source.indexOf('async stop(): Promise<void>');
+    const stopEnd = source.indexOf('withdrawReadiness(): void', stopStart);
+    const stopSource = source.slice(stopStart, stopEnd);
+
+    expect(stopStart).toBeGreaterThanOrEqual(0);
+    expect(stopEnd).toBeGreaterThan(stopStart);
+    expect(stopSource.indexOf('this.beginServerClose()'))
+      .toBeLessThan(stopSource.indexOf('this.server.closeAllConnections()'));
+    expect(stopSource.indexOf('this.beginServerClose()'))
+      .toBeLessThan(stopSource.indexOf('this.telemetryTransport.close(resolve)'));
+  });
+
   it('returns clear 404 or 502 responses for wrong paths and closed network upstreams', async () => {
     const missingRes = await requestPort(harness.port, 'GET', '/api/admin/not-a-route');
     expect(missingRes.status).toBe(404);

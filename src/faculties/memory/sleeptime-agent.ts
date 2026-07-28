@@ -358,9 +358,9 @@ function evaluateSleeptimeOrientCandidacy(
 
 function summarizeSessionEntry(entry: SessionEntry): string {
   const rolePrefix = entry.role === 'assistant'
-    ? 'ASSISTANT'
+    ? 'ME'
     : entry.role === 'user'
-      ? 'USER'
+      ? 'THEM'
       : entry.role.toUpperCase();
   const collapsed = entry.content.replace(/\s+/g, ' ').trim();
   const clipped = collapsed.length > MAX_TRANSCRIPT_ENTRY_CHARS

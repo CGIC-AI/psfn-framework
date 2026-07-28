@@ -166,8 +166,8 @@ export function formatInternalStateContextBlock(
     : [
       formatEmotionTelemetryValidationForReflection(state),
       state.emotional.telemetry.status === 'suppressed'
-        ? 'VAD, mood, and discrete classifier labels were suppressed before reflection use.'
-        : 'VAD and mood were downweighted, and discrete classifier labels were withheld before reflection use.',
+        ? 'VAD, mood, and discrete emotion-automaton labels were suppressed before reflection use.'
+        : 'VAD and mood were downweighted, and discrete emotion-automaton labels were withheld before reflection use.',
       `Effective affect clue after validation is ${describeSignedValence(state.emotional.vad.valence)} and ${describeArousal(state.emotional.vad.arousal)}.`,
       ...(acacSummary ? [acacSummary] : []),
     ];

@@ -44,7 +44,9 @@ export function resolveReflectionIntrospectionPolicy(input: {
 // v3 (jy6s): scheduled private reflections use explicit companion-self memory
 // scope, retrieve prior reflection memories again, and give deliberation a
 // bounded read-only tool-grounding pass before synthesis.
-export const REFLECTION_INTROSPECTION_POLICY_BLOCK_VERSION = 3;
+// v4 (rqn1.3): companion-register wording — "foreground user turn" reads as
+// "foreground conversation turn" (charter 6.28/8.12); no semantic change.
+export const REFLECTION_INTROSPECTION_POLICY_BLOCK_VERSION = 4;
 
 const NULL_REPORT_GUIDANCE_LINE =
   '- "Nothing surfaced" is an acceptable outcome; record it as open reflection with limited reach, not as evidence that nothing is there.';
@@ -62,7 +64,7 @@ export function formatReflectionIntrospectionPolicyBlock(
 
   if (policy.toolUseMode === 'bounded_read_only_introspection') {
     lines.push(
-      '- This is a maintenance reflection turn, not a foreground user turn.',
+      '- This is a maintenance reflection turn, not a foreground conversation turn.',
       '- If deeper synthesis is necessary, you may use the core analysis_workbench tool.',
       `- Inside analysis_workbench, restrict evidence gathering to read-only introspection helpers: ${policy.thinkHelpers.join(', ')}.`,
       '- Do not call tool_search or toolset, and do not activate overlay or extended tools.',

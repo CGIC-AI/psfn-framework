@@ -5,6 +5,7 @@ import {
   type GatewayInlineImageRetentionOptions,
   type GatewayRetainedImageDescriptor,
 } from '../inline-image-retention.js';
+import { GatewayLLMRequestCancellation } from '../llm-request-cancellation.js';
 import { GatewayErrors } from '../protocol.js';
 import type { VisionIntakeImageScreenResult } from '../intake/vision-screener.js';
 import type { GatewayMethodRuntime } from './types.js';
@@ -46,6 +47,7 @@ function createHarness(options: {
     notifyRequester: vi.fn(),
     nextStreamRequestId: () => 'gateway-request-1',
     authenticatedCompanionId: () => undefined,
+    llmRequestCancellation: new GatewayLLMRequestCancellation(),
     audited: <P, R>(_method: string, handler: (params: P) => Promise<R>) => handler,
   } as unknown as GatewayMethodRuntime;
   registerIntakeImageMethods(runtime);

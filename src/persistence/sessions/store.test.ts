@@ -2006,6 +2006,49 @@ describe('SessionStore', () => {
     expect(fullReadSpy).not.toHaveBeenCalled();
   });
 
+  it('rejects stale derived-index authority after a sibling tombstone append', async () => {
+    const channelId = 'api:before-stale-derived-index';
+    const redactedTurnId = createTurnId();
+    const visibleTurnId = createTurnId();
+    const turnMetadata = (turnId: string, role: 'user' | 'assistant'): string => JSON.stringify({
+      turn: { schemaVersion: 1, turnId, requestId: `req-${turnId}`, role },
+    });
+    store.append({
+      channelId,
+      role: 'user',
+      content: 'stale-index private user',
+      timestamp: 1_000,
+      metadata: turnMetadata(redactedTurnId, 'user'),
+    });
+    store.append({
+      channelId,
+      role: 'assistant',
+      content: 'stale-index private assistant',
+      timestamp: 1_100,
+      metadata: turnMetadata(redactedTurnId, 'assistant'),
+    });
+    store.append({
+      channelId,
+      role: 'user',
+      content: 'stale-index visible user',
+      timestamp: 1_200,
+      metadata: turnMetadata(visibleTurnId, 'user'),
+    });
+
+    const indexPath = join(dir, '_channel_index.json');
+    const staleIndex = readFileSync(indexPath, 'utf8');
+    const reader = new SessionStore(dir);
+    await store.redactTurn(channelId, redactedTurnId, { timestamp: 1_300 });
+    // Model a sibling process that durably appended the privacy tombstone but
+    // crashed before publishing the derived index update.
+    writeFileSync(indexPath, staleIndex, 'utf8');
+
+    const entries = await reader.getEntriesBeforeAsync(channelId, 10, 10);
+
+    expect(entries.map(entry => entry.content)).toEqual(['stale-index visible user']);
+    expect(entries.every(entry => !entry.content.includes('stale-index private'))).toBe(true);
+  });
+
   it('restarts a paused async page under post-read tombstone authority', async () => {
     const channelId = 'api:before-concurrent-tombstone';
     const redactedTurnId = createTurnId();

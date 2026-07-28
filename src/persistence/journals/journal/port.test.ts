@@ -279,19 +279,14 @@ describe('session journal port', () => {
     expect(stats.maxRetainedLineBytes).toBeLessThanOrEqual(2 * 1024 * 1024);
     expect(stats.bytesRead).toBeLessThanOrEqual((2 * 1024 * 1024) + (64 * 1024));
 
-    const syncStats = {
-      bytesRead: 0,
-      readCalls: 0,
-      filesRead: 0,
-      maxRetainedLineBytes: 0,
-    };
-    expect(() => port.readJournalEntriesBefore(filePath, {
+    // The legacy synchronous API retains its historical lossless behavior for
+    // compatibility callers. Request-time/Garden paging uses the cooperative
+    // async API above and therefore receives the bounded EOVERFLOW contract.
+    expect(port.readJournalEntriesBefore(filePath, {
       beforeId: 2,
       messageLimit: 1,
       scanChunkBytes: 64 * 1024,
-      stats: syncStats,
-    })).toThrow(expect.objectContaining({ code: 'EOVERFLOW' }));
-    expect(syncStats.maxRetainedLineBytes).toBeLessThanOrEqual(2 * 1024 * 1024);
+    }).entries).toEqual([oversized]);
 
     const repaired = buildMessageJournalEntry(1, {
       channelId: 'ch1',

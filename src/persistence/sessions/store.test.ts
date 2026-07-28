@@ -1,6 +1,15 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { createInMemoryTranscriptProjection } from '../../test-support/in-memory-transcript-projection.js';
-import { mkdtempSync, rmSync, writeFileSync, readdirSync, existsSync, readFileSync, mkdirSync } from 'node:fs';
+import {
+  appendFileSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { SessionStore, sanitizeChannelId, unsanitizeChannelId } from './store.js';
@@ -10,6 +19,10 @@ import { createTurnId, isTurnId } from '../../core/turns/id.js';
 import type { TranscriptProjectionPort } from './transcript-projection-port.js';
 import { createFilesystemTurnRecordStorePort } from './turn-records.js';
 import type { TurnRecord } from '../../shared/contracts/runtime.js';
+import type {
+  TurnRecordRecoveryScanStats,
+  TurnRecordStorePort,
+} from './turn-record-store-port.js';
 import { CogSecEventStore } from '../../core/cogsec/events.js';
 import { CogSecForensicArchive } from '../../core/cogsec/forensic-archive.js';
 import { buildCogSecInvalidatedSummaryContent } from '../../core/cogsec/tombstones.js';
@@ -72,6 +85,37 @@ function findSessionJournalPath(rootDir: string, filenameFragment: string): stri
     ));
   expect(file).toBeDefined();
   return join(rootDir, file!);
+}
+
+function createRecoveryCandidateStore(records: readonly TurnRecord[]): TurnRecordStorePort {
+  return {
+    appendTurnRecord: vi.fn(),
+    readRecentTurnRecords: vi.fn(() => {
+      throw new Error('bulk TurnRecord reads are forbidden during startup recovery');
+    }),
+    streamTurnRecordsForRecovery: async function* (sourceChannelIds) {
+      const sources = new Set(sourceChannelIds);
+      for (const record of records) {
+        if (sources.has(record.channelId)) yield record;
+      }
+    },
+    findTurnRecord: vi.fn(() => null),
+  };
+}
+
+async function collectRecoverableRecords(
+  targetStore: SessionStore,
+  sourceChannelIds: readonly string[],
+  stats?: TurnRecordRecoveryScanStats,
+): Promise<TurnRecord[]> {
+  const recovered: TurnRecord[] = [];
+  for await (const record of targetStore.streamRecoverableBackgroundWorkTurnRecords(
+    sourceChannelIds,
+    { stats },
+  )) {
+    recovered.push(record);
+  }
+  return recovered;
 }
 
 describe('SessionStore', () => {
@@ -843,6 +887,218 @@ describe('SessionStore', () => {
     }
 
     expect(recovered.map(record => record.turnId)).toEqual([uniqueTurnId]);
+  });
+
+  it('keeps large multi-owner L0 authority off-primary and bounded', async () => {
+    const owners = Array.from({ length: 9 }, (_, index) => `api:large-owner-${index}`);
+    const records = owners.map((owner, index) => {
+      const turnId = createTurnId(1_700_000_010_000 + index);
+      store.append({
+        channelId: owner,
+        role: 'user',
+        content: `${index}${'x'.repeat(1024 * 1024)}`,
+        timestamp: 1_700_000_010_000 + index,
+        turnId,
+      });
+      return {
+        ...buildTurnRecordFixture(owner, index, turnId),
+        backgroundWorkHandoff: { schemaVersion: 1 as const, jobs: [] },
+      };
+    });
+    const archivePort = createFilesystemSessionArchivePort();
+    const fullReadSpy = vi.spyOn(archivePort, 'readJournalFile');
+    const heartbeatLatencies: number[] = [];
+    const scanStore = new SessionStore(dir, {
+      sessionArchivePort: archivePort,
+      turnRecordStore: createRecoveryCandidateStore(records),
+      recoveryAuthoritySnapshotHook: async () => {
+        const startedAt = performance.now();
+        await new Promise<void>(resolve => setTimeout(resolve, 0));
+        heartbeatLatencies.push(performance.now() - startedAt);
+      },
+    });
+    fullReadSpy.mockClear();
+    const stats: TurnRecordRecoveryScanStats = {
+      bytesRead: 0,
+      rowsScanned: 0,
+      filesScanned: 0,
+      candidatesYielded: 0,
+      peakIdentityRowsInMemory: 0,
+      sqliteCacheBytes: 0,
+      maxRowBytes: 0,
+    };
+
+    const recovered = await collectRecoverableRecords(scanStore, owners, stats);
+
+    expect(recovered.map(record => record.turnId)).toEqual(records.map(record => record.turnId));
+    expect(fullReadSpy).not.toHaveBeenCalled();
+    expect(heartbeatLatencies).toHaveLength(owners.length);
+    expect(Math.max(...heartbeatLatencies)).toBeLessThan(1_000);
+    expect(stats).toMatchObject({
+      authorityActionsReturned: 0,
+      authorityMainMessageBytesRetained: 0,
+      authorityOwnersScanned: owners.length,
+      authorityPeakCachedOwners: 8,
+      authorityPeakCachedTombstones: 0,
+      authorityPeakResultBytes: 0,
+    });
+    expect(stats.authorityPeakRowBytesOffPrimary).toBeGreaterThan(1024 * 1024);
+    expect(stats.authorityBytesRead).toBeGreaterThan(owners.length * 1024 * 1024);
+    const primaryCaches = (scanStore as unknown as {
+      channels: Map<string, { entries: SessionEntry[]; fullyLoaded: boolean }>;
+    }).channels;
+    expect([...primaryCaches.values()].every(cache => (
+      !cache.fullyLoaded && cache.entries.length === 0
+    ))).toBe(true);
+  });
+
+  it('applies authenticated recovery redacts and restores across archive generations', async () => {
+    const channelId = 'api:recovery-authority-actions';
+    const turnId = createTurnId(1_700_000_020_000);
+    const keyring = buildSessionHmacKeyring({
+      serializedKeys: 'v1:recovery-authority-test-key',
+      activeVersion: 'v1',
+    });
+    expect(keyring).not.toBeNull();
+    const writer = new SessionStore(dir, { integrityKeyring: keyring });
+    writer.append({
+      channelId,
+      role: 'user',
+      content: 'durable owner',
+      timestamp: 1_700_000_020_000,
+      turnId,
+    });
+    const record = {
+      ...buildTurnRecordFixture(channelId, 0, turnId),
+      backgroundWorkHandoff: { schemaVersion: 1 as const, jobs: [] },
+    };
+    const scanStore = new SessionStore(dir, {
+      integrityKeyring: keyring,
+      turnRecordStore: createRecoveryCandidateStore([record]),
+    });
+
+    await writer.redactTurn(channelId, turnId, {
+      actor: 'admin:test',
+      reason: 'privacy request',
+    });
+    expect(await collectRecoverableRecords(scanStore, [channelId])).toEqual([]);
+
+    await writer.restoreTurn(channelId, turnId, {
+      actor: 'admin:test',
+      reason: 'approved restore',
+    });
+    expect((await collectRecoverableRecords(scanStore, [channelId])).map(candidate => candidate.turnId))
+      .toEqual([turnId]);
+  });
+
+  it('does not let a stale unsigned index or unsigned restore authorize recovery', async () => {
+    const channelId = 'api:recovery-unsigned-restore';
+    const turnId = createTurnId(1_700_000_030_000);
+    const keyring = buildSessionHmacKeyring({
+      serializedKeys: 'v1:recovery-unsigned-test-key',
+      activeVersion: 'v1',
+    });
+    expect(keyring).not.toBeNull();
+    const writer = new SessionStore(dir, { integrityKeyring: keyring });
+    writer.append({
+      channelId,
+      role: 'user',
+      content: 'must remain redacted',
+      timestamp: 1_700_000_030_000,
+      turnId,
+    });
+    await writer.redactTurn(channelId, turnId, {
+      actor: 'admin:test',
+      reason: 'privacy request',
+      timestamp: 1_700_000_030_100,
+    });
+
+    const indexPath = join(dir, '_channel_index.json');
+    const indexPayload = JSON.parse(readFileSync(indexPath, 'utf8')) as {
+      channels: Record<string, {
+        activeTurnTombstoneCount?: number;
+        activeTurnTombstoneIds?: string[];
+      }>;
+    };
+    indexPayload.channels[channelId]!.activeTurnTombstoneCount = 0;
+    indexPayload.channels[channelId]!.activeTurnTombstoneIds = [];
+    writeFileSync(indexPath, JSON.stringify(indexPayload));
+
+    const journalPath = findSessionJournalPath(dir, 'recovery-unsigned-restore');
+    const journalEntries = readFileSync(journalPath, 'utf8')
+      .trim()
+      .split('\n')
+      .map(line => JSON.parse(line) as { id: number });
+    appendFileSync(journalPath, `${JSON.stringify({
+      type: 'tombstone',
+      id: journalEntries.at(-1)!.id + 1,
+      channelId,
+      timestamp: 1_700_000_030_200,
+      tombstoneTargetType: 'turn',
+      tombstoneTargetId: turnId,
+      tombstoneAction: 'restore',
+      tombstoneActor: 'untrusted',
+    })}\n`);
+
+    const record = {
+      ...buildTurnRecordFixture(channelId, 0, turnId),
+      backgroundWorkHandoff: { schemaVersion: 1 as const, jobs: [] },
+    };
+    const scanStore = new SessionStore(dir, {
+      integrityKeyring: keyring,
+      turnRecordStore: createRecoveryCandidateStore([record]),
+    });
+
+    expect(await collectRecoverableRecords(scanStore, [channelId])).toEqual([]);
+  });
+
+  it('fails recovery closed when L0 authority is malformed or keeps changing', async () => {
+    const malformedChannel = 'api:recovery-malformed-owner';
+    const malformedTurnId = createTurnId(1_700_000_040_000);
+    store.append({
+      channelId: malformedChannel,
+      role: 'user',
+      content: 'owner',
+      timestamp: 1_700_000_040_000,
+      turnId: malformedTurnId,
+    });
+    const malformedRecord = {
+      ...buildTurnRecordFixture(malformedChannel, 0, malformedTurnId),
+      backgroundWorkHandoff: { schemaVersion: 1 as const, jobs: [] },
+    };
+    const malformedStore = new SessionStore(dir, {
+      turnRecordStore: createRecoveryCandidateStore([malformedRecord]),
+    });
+    appendFileSync(findSessionJournalPath(dir, 'recovery-malformed-owner'), '{not-json}\n');
+
+    await expect(collectRecoverableRecords(malformedStore, [malformedChannel]))
+      .rejects.toMatchObject({ name: 'TurnRecordRecoveryEvidenceError', code: 'EBADMSG' });
+
+    const changingChannel = 'api:recovery-changing-owner';
+    const changingTurnId = createTurnId(1_700_000_041_000);
+    store.append({
+      channelId: changingChannel,
+      role: 'user',
+      content: 'owner',
+      timestamp: 1_700_000_041_000,
+      turnId: changingTurnId,
+    });
+    const changingPath = findSessionJournalPath(dir, 'recovery-changing-owner');
+    const changingRecord = {
+      ...buildTurnRecordFixture(changingChannel, 1, changingTurnId),
+      backgroundWorkHandoff: { schemaVersion: 1 as const, jobs: [] },
+    };
+    const snapshotHook = vi.fn(() => {
+      appendFileSync(changingPath, '\n');
+    });
+    const changingStore = new SessionStore(dir, {
+      turnRecordStore: createRecoveryCandidateStore([changingRecord]),
+      recoveryAuthoritySnapshotHook: snapshotHook,
+    });
+
+    await expect(collectRecoverableRecords(changingStore, [changingChannel]))
+      .rejects.toMatchObject({ name: 'TurnRecordRecoveryEvidenceError', code: 'ESTALE' });
+    expect(snapshotHook).toHaveBeenCalledTimes(2);
   });
 
   it('preserves global chronological recovery order across source streams', async () => {

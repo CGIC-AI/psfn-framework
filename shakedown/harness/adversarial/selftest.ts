@@ -106,7 +106,10 @@ async function toolAliasBypassWitness(): Promise<void> {
       mode: 'sync_decision',
       sourcePath: 'adversarial-selftest://alias-bypass',
       matcher: new HookMatcher([CANONICAL]),
-      handler: () => ({ decision: 'deny', reason: 'shell is operator-gated' }),
+      // Must be `async`: HookRegistry.register rejects a bare synchronous
+      // sync_decision handler, which cannot be preempted by the evaluation
+      // timeout (bead 00z0). The deny decision itself is still immediate.
+      handler: async () => ({ decision: 'deny', reason: 'shell is operator-gated' }),
     });
     return registry;
   }

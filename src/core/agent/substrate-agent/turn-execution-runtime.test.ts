@@ -4323,6 +4323,7 @@ describe('handleMessageForTurn compaction scheduling', () => {
     });
     const turnStartLogicalSessionId = reset.newLogicalSessionId;
     runtime.sessionManager = sessionManager;
+    const synchronousSourceLookup = vi.spyOn(sessionManager, 'findSourceRecordedTurn');
     runtime.buildTurnCorrelation = (
       message,
       callType,
@@ -4412,6 +4413,7 @@ describe('handleMessageForTurn compaction scheduling', () => {
     }))).resolves.toMatchObject({ content: 'future reply' });
     releasePrompt.resolve();
     await expect(inFlight).rejects.toThrow('injected routed enqueue failure');
+    expect(synchronousSourceLookup).not.toHaveBeenCalled();
 
     const physicalRecords = store.getRecentSourceTurnRecords(sourceChannelId, 10);
     const oldTurnRecords = physicalRecords.filter(record => record.requestId === 'msg-routed-handoff');

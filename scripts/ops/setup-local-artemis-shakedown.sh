@@ -451,6 +451,46 @@ function normalizeOwner(targetName, owner) {
   return owner;
 }
 
+function normalizeLocalChannelRouting(owner) {
+  if (!isRecord(owner)) {
+    throw new Error('local channels owner must be an object');
+  }
+  const wrapped = Object.prototype.hasOwnProperty.call(owner, 'channels');
+  if (wrapped && !isRecord(owner.channels)) {
+    throw new Error('local channels owner channels section must be an object');
+  }
+  const channels = { ...(wrapped ? owner.channels : owner) };
+  const discord = isRecord(channels.discord) ? { ...channels.discord } : {};
+  if (Object.prototype.hasOwnProperty.call(discord, 'accounts')) {
+    if (!Array.isArray(discord.accounts) || discord.accounts.length !== 1
+      || !isRecord(discord.accounts[0])) {
+      throw new Error('one-entry local fleet requires exactly one configured Discord account');
+    }
+    discord.accounts = [{
+      ...discord.accounts[0],
+      companionId,
+    }];
+  } else {
+    discord.companionId = companionId;
+  }
+
+  const telegram = isRecord(channels.telegram) ? { ...channels.telegram } : {};
+  if (Object.keys(telegram).length === 0) {
+    telegram.enabled = false;
+  }
+  telegram.companionId = companionId;
+
+  channels.discord = discord;
+  channels.telegram = telegram;
+  channels.api = {
+    ...(isRecord(channels.api) ? channels.api : {}),
+    companionId,
+  };
+  return wrapped
+    ? { ...owner, channels }
+    : channels;
+}
+
 function generateFleetAuthOwner(owner) {
   if (!isRecord(owner) || !isRecord(owner.hubDeviceAssertions)) {
     throw new Error('fleet-auth seed must contain the canonical owner-file structure');
@@ -528,6 +568,13 @@ for (const entry of fs.readdirSync(configDir)) {
   }
   migrated.push(targetName);
 }
+
+const channelsPath = path.join(systemDataDir, 'channels.json');
+const channelsOwner = fs.existsSync(channelsPath) ? readJson(channelsPath) : {};
+fs.writeFileSync(
+  channelsPath,
+  `${JSON.stringify(normalizeLocalChannelRouting(channelsOwner), null, 2)}\n`,
+);
 
 const companionCardPath = path.join(companionDataDir, 'companion.json');
 if (!fs.existsSync(companionCardPath)) {

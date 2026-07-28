@@ -11,6 +11,8 @@ import {
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
+import { resolveGatewayMultiCompanionConfig } from '../../src/boundary/gateway/multi-companion.js';
+import { loadRuntimeChannelsConfig } from '../../src/channels/backplane/config.js';
 import { verifyStartupOwnerFiles } from '../../src/system/config/startup-owner-files.js';
 
 const repoRoot = resolve(import.meta.dirname, '../..');
@@ -81,6 +83,50 @@ describe('local Artemis always-fleet bootstrap fixtures', () => {
     expect(fleetAuth.canonicalOrigin).toBe('https://psfn-gateway.local');
     expect(fleetAuth.hubDeviceAssertions.audience).toBe('https://psfn-gateway.local');
     expect(fleetAuth.verifierKeys[0].kid).not.toBe('replace-before-enable');
+
+    const channels = readJson(join(outputRoot, 'system-data/channels.json'));
+    expect(channels).toMatchObject({
+      discord: { companionId },
+      telegram: { enabled: false, companionId },
+      api: { companionId },
+    });
+    const channelsConfig = loadRuntimeChannelsConfig(join(outputRoot, 'system-data'), {});
+    const fleetRouting = resolveGatewayMultiCompanionConfig({
+      multiCompanion: true,
+      companionFleet: {
+        postgres: {
+          sharedMigrationRole: 'shared_schema_migration',
+          sharedMigrationDatabaseUrlRef: {
+            kind: 'env',
+            envName: 'SHARED_SCHEMA_MIGRATION_DATABASE_URL',
+          },
+        },
+        persistenceRoot: '/runtime',
+        workspacesRoot: '/runtime/workspaces',
+        sharedWorkspacePath: '/runtime/workspaces/shared',
+        companions: [{
+          companionId,
+          companionDataDir: `/runtime/companions/${companionId}`,
+          characterCardPath: `/runtime/companions/${companionId}/companion.json`,
+          postgresSchema: 'companion_default',
+          postgresRole: 'companion_default_runtime',
+          postgresDatabaseUrlRef: {
+            kind: 'env',
+            envName: 'COMPANION_DEFAULT_DATABASE_URL',
+          },
+          personalWorkspacePath: `/runtime/workspaces/personal/${companionId}`,
+        }],
+      },
+    }, channelsConfig, {
+      schemaVersion: 1,
+      enabled: false,
+      satellites: [],
+    });
+    expect(fleetRouting.channelRouting).toEqual({
+      discord: companionId,
+      telegram: companionId,
+      api: companionId,
+    });
 
     expect(readJson(join(outputRoot, 'companion-data/companion.json')).data.name)
       .toBe('Test Artemis');

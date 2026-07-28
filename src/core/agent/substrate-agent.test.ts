@@ -789,6 +789,39 @@ describe('SubstrateAgent construction', () => {
     expect(supervisor.tick).toHaveBeenCalledTimes(2);
   });
 
+  it('latches a recovery abort before recovery starts and still stops the supervisor', async () => {
+    const sessionManager = makeMockSessionManager();
+    const recoveryStream = vi.fn(() => (async function* () {
+      yield* [];
+    })());
+    Object.assign(sessionManager, {
+      streamRecoverableBackgroundWorkTurnRecords: recoveryStream,
+    });
+    const supervisor = {
+      enqueue: vi.fn(async () => undefined),
+      tick: vi.fn(async () => undefined),
+      stop: vi.fn(async () => undefined),
+    };
+    const agent = new SubstrateAgent(
+      new EventBus(),
+      makeMockLLMProvider(),
+      sessionManager,
+      'System prompt',
+      makeConfig(),
+    );
+    Object.assign(agent, { backgroundWorkSupervisor: supervisor });
+
+    agent.abortBackgroundWorkRecovery();
+    agent.abortBackgroundWorkRecovery();
+
+    await expect(agent.tickBackgroundWork()).rejects.toMatchObject({ name: 'AbortError' });
+    expect(recoveryStream).not.toHaveBeenCalled();
+    expect(supervisor.tick).toHaveBeenCalledOnce();
+
+    await expect(agent.stopBackgroundWork()).resolves.toBeUndefined();
+    expect(supervisor.stop).toHaveBeenCalledOnce();
+  });
+
   it('registers a response_control tool that rejects no_reply while a paid deliverable is pending', async () => {
     const config = makeConfig();
     const eventBus = new EventBus();

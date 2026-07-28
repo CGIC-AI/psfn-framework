@@ -275,6 +275,12 @@ const TEXT_REFERENCE_ALLOWLIST = [
     reason: 'The fixture observes the bounded cache of a disposable recovery index, not runtime persistence.',
   },
   {
+    path: 'src/app/agent/control-plane-shutdown.test.ts',
+    contains: "'snapshot.sqlite'",
+    classification: 'ephemeral-recovery-index',
+    reason: 'The shutdown regression locates only the disposable recovery scratch index to assert prompt cleanup.',
+  },
+  {
     path: 'src/persistence/sessions/turn-record-recovery-worker.ts',
     contains: 'sqliteCacheBytes',
     classification: 'ephemeral-recovery-index',

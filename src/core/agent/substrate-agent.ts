@@ -379,6 +379,7 @@ export class SubstrateAgent {
   private backgroundWorkHandoffRecoveryEvidenceBlocked = false;
   private backgroundWorkHandoffRecoveryPromise: Promise<void> | null = null;
   private backgroundWorkHandoffRecoveryAbortController: AbortController | null = null;
+  private backgroundWorkHandoffRecoveryAbortRequested = false;
   private readonly toolRuntimeFacade: ToolRuntimeFacade;
   private readonly satellitePresencePort = createActiveEmanationSatellitePresencePort();
   private selfModelRuntimeRequired = false;
@@ -1553,6 +1554,9 @@ export class SubstrateAgent {
   }
 
   private async recoverBackgroundWorkHandoffs(): Promise<void> {
+    if (this.backgroundWorkHandoffRecoveryAbortRequested) {
+      throw new DOMException('Background work handoff recovery was aborted', 'AbortError');
+    }
     if (!this.backgroundWorkHandoffRecoveryPromise) {
       const recoveryAbortController = new AbortController();
       this.backgroundWorkHandoffRecoveryAbortController = recoveryAbortController;
@@ -1609,8 +1613,18 @@ export class SubstrateAgent {
   }
 
   async stopBackgroundWork(): Promise<void> {
-    this.backgroundWorkHandoffRecoveryAbortController?.abort();
+    this.abortBackgroundWorkRecovery();
     await this.backgroundWorkSupervisor?.stop();
+  }
+
+  /**
+   * Synchronously latch recovery cancellation before the scheduler drains.
+   * The latch closes the race where an in-flight scheduler tick has started but
+   * has not yet installed its recovery AbortController.
+   */
+  abortBackgroundWorkRecovery(): void {
+    this.backgroundWorkHandoffRecoveryAbortRequested = true;
+    this.backgroundWorkHandoffRecoveryAbortController?.abort();
   }
 
   /** Abort the expected request's prompt and report whether its signal was actually tripped. */

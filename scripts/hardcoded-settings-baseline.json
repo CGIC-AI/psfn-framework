@@ -632,14 +632,10 @@
       "value": "8000"
     },
     {
-      "file": "src/boundary/integrations/journal/ops.ts",
+      "file": "src/boundary/integrations/journal/bounded-io.ts",
       "name": "MAX_SEARCH_SNIPPET_CHARS",
-      "value": "180"
-    },
-    {
-      "file": "src/boundary/integrations/journal/tools.ts",
-      "name": "MAX_READ_CHARS",
-      "value": "12_000"
+      "value": "180",
+      "note": "Code-owned model-output presentation bound carried forward from the journal surface; it limits deterministic search snippets independently of mutable runtime policy."
     },
     {
       "file": "src/boundary/integrations/vault/tools.ts",

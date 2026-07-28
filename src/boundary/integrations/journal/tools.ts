@@ -5,9 +5,7 @@ import type { SubstrateAgentTool } from '../../pi-agent/index.js';
 import type { JournalOperations } from './ops.js';
 import { textResult, textResultWithError } from '../../../core/tools/results.js';
 import { toErrorMessage } from '../../../shared/utils/errors.js';
-import { truncateToolOutputContent } from '../../../shared/utils/tool-output.js';
 
-const MAX_READ_CHARS = 12_000;
 const JOURNAL_ACTIONS = ['list', 'read', 'write', 'append', 'search'] as const;
 type JournalAction = typeof JOURNAL_ACTIONS[number];
 
@@ -18,6 +16,7 @@ interface JournalToolParams {
   content?: string;
   query?: string;
   limit?: number;
+  offset_bytes?: number;
 }
 
 function requireAction(value: unknown): JournalAction {
@@ -89,6 +88,11 @@ export function createJournalTool(ops: JournalOperations): SubstrateAgentTool {
         maximum: 100,
         description: 'Maximum search results for action=search.',
       })),
+      offset_bytes: Type.Optional(Type.Integer({
+        minimum: 0,
+        maximum: Number.MAX_SAFE_INTEGER,
+        description: 'Byte offset for action=read. Repeat with the returned next_offset_bytes until eof=true.',
+      })),
     }),
     execute: async (
       _toolCallId: string,
@@ -106,8 +110,16 @@ export function createJournalTool(ops: JournalOperations): SubstrateAgentTool {
             return textResult(`Journal notes (${result.notes.length}):\n${result.notes.map(note => `- ${note}`).join('\n')}`);
           }
           case 'read': {
-            const result = await ops.read(resolveNotePath(params));
-            return textResult(`=== ${result.path} ===\n${truncateToolOutputContent(result.content, MAX_READ_CHARS)}`);
+            const result = await ops.read(resolveNotePath(params), {
+              offsetBytes: params.offset_bytes,
+            });
+            return textResult(
+              `=== ${result.path} ===\n`
+              + `offset_bytes: ${String(result.offsetBytes)}\n`
+              + `next_offset_bytes: ${result.nextOffsetBytes === null ? 'null' : String(result.nextOffsetBytes)}\n`
+              + `eof: ${String(result.eof)}\n\n`
+              + result.content,
+            );
           }
           case 'write': {
             const result = await ops.write(resolveNotePath(params), requireNonEmpty(params.content, 'content'));
@@ -120,10 +132,19 @@ export function createJournalTool(ops: JournalOperations): SubstrateAgentTool {
           case 'search': {
             const result = await ops.search(requireNonEmpty(params.query, 'query'), params.limit);
             if (result.results.length === 0) {
-              return textResult(`No journal results for: ${result.query}`);
+              return textResult(
+                `No journal results for: ${result.query}\n`
+                + `Search complete: ${String(result.complete)}; scanned ${String(result.scannedFiles)} notes `
+                + `(${String(result.scannedBytes)} bytes).`,
+              );
             }
             const lines = result.results.map((entry, index) => `${index + 1}. ${entry.path}\n   ${entry.snippet}`);
-            return textResult(`Journal search: "${result.query}" (${result.results.length} results)\n\n${lines.join('\n')}`);
+            return textResult(
+              `Journal search: "${result.query}" (${String(result.results.length)} results)\n`
+              + `Search complete: ${String(result.complete)}; scanned ${String(result.scannedFiles)} notes `
+              + `(${String(result.scannedBytes)} bytes); more matches than limit: ${String(result.resultLimitReached)}.\n\n`
+              + lines.join('\n'),
+            );
           }
         }
         return textResultWithError(`journal failed for action=${action}: unsupported action`, true);

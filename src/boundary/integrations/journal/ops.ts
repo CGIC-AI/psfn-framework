@@ -1,9 +1,16 @@
-import { mkdir, readFile, readdir, stat, writeFile } from 'node:fs/promises';
+import { mkdir, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
-import { dirname, extname, join, normalize, relative, resolve, sep } from 'node:path';
+import { dirname, extname, normalize, relative, resolve, sep } from 'node:path';
+import {
+  appendJournalNoteAtomically,
+  listBoundedJournalPaths,
+  readJournalPage,
+  searchBoundedJournal,
+} from './bounded-io.js';
 
-const MAX_SEARCH_SNIPPET_CHARS = 180;
 const MARKDOWN_EXTENSIONS = new Set(['.md', '.markdown']);
+
+export { JOURNAL_IO_CONTRACT } from './bounded-io.js';
 
 export interface JournalListResult {
   root: string;
@@ -13,6 +20,14 @@ export interface JournalListResult {
 export interface JournalReadResult {
   path: string;
   content: string;
+  offsetBytes: number;
+  nextOffsetBytes: number | null;
+  eof: boolean;
+  truncated: boolean;
+}
+
+export interface JournalReadOptions {
+  offsetBytes?: number;
 }
 
 export interface JournalWriteResult {
@@ -24,11 +39,15 @@ export interface JournalWriteResult {
 export interface JournalSearchResult {
   query: string;
   results: Array<{ path: string; snippet: string }>;
+  complete: true;
+  resultLimitReached: boolean;
+  scannedFiles: number;
+  scannedBytes: number;
 }
 
 export interface JournalOperations {
   list(): Promise<JournalListResult>;
-  read(path: string): Promise<JournalReadResult>;
+  read(path: string, options?: JournalReadOptions): Promise<JournalReadResult>;
   write(path: string, content: string): Promise<JournalWriteResult>;
   append(path: string, content: string): Promise<JournalWriteResult>;
   search(query: string, limit?: number): Promise<JournalSearchResult>;
@@ -36,6 +55,7 @@ export interface JournalOperations {
 
 export class JournalOps implements JournalOperations {
   private readonly root: string;
+  private readonly mutationTails = new Map<string, Promise<void>>();
 
   constructor(root: string) {
     const normalizedRoot = root.trim();
@@ -53,52 +73,52 @@ export class JournalOps implements JournalOperations {
     };
   }
 
-  async read(path: string): Promise<JournalReadResult> {
+  async read(path: string, options: JournalReadOptions = {}): Promise<JournalReadResult> {
     const resolved = this.resolveNotePath(path);
-    const content = await readFile(resolved.absolutePath, 'utf8');
-    return { path: resolved.relativePath, content };
+    const page = await readJournalPage(
+      resolved.absolutePath,
+      options.offsetBytes ?? 0,
+    );
+    return { path: resolved.relativePath, ...page };
   }
 
   async write(path: string, content: string): Promise<JournalWriteResult> {
     const resolved = this.resolveNotePath(path);
     const normalizedContent = requireContent(content);
-    const created = !existsSync(resolved.absolutePath);
     await mkdir(dirname(resolved.absolutePath), { recursive: true });
-    await writeFile(resolved.absolutePath, normalizedContent.endsWith('\n') ? normalizedContent : `${normalizedContent}\n`, 'utf8');
-    return { path: resolved.relativePath, mode: 'write', created };
+    return this.withMutationLock(resolved.absolutePath, async () => {
+      const created = !existsSync(resolved.absolutePath);
+      await writeFile(
+        resolved.absolutePath,
+        normalizedContent.endsWith('\n') ? normalizedContent : `${normalizedContent}\n`,
+        'utf8',
+      );
+      return { path: resolved.relativePath, mode: 'write' as const, created };
+    });
   }
 
   async append(path: string, content: string): Promise<JournalWriteResult> {
     const resolved = this.resolveNotePath(path);
     const normalizedContent = requireContent(content);
-    const created = !existsSync(resolved.absolutePath);
     await mkdir(dirname(resolved.absolutePath), { recursive: true });
-    const existing = created ? '' : await readFile(resolved.absolutePath, 'utf8');
-    const separator = existing.length === 0 || existing.endsWith('\n') ? '' : '\n';
-    await writeFile(resolved.absolutePath, `${existing}${separator}${normalizedContent}\n`, 'utf8');
-    return { path: resolved.relativePath, mode: 'append', created };
+    return this.withMutationLock(resolved.absolutePath, async () => {
+      const created = await appendJournalNoteAtomically(
+        resolved.absolutePath,
+        normalizedContent,
+      );
+      return { path: resolved.relativePath, mode: 'append' as const, created };
+    });
   }
 
   async search(query: string, limit = 20): Promise<JournalSearchResult> {
     const normalizedQuery = normalizeRequiredText(query, 'query').toLowerCase();
     const normalizedLimit = Math.max(1, Math.min(100, Math.floor(Number.isFinite(limit) ? limit : 20)));
-    const notes = await this.listMarkdownNotes();
-    const results: Array<{ path: string; snippet: string }> = [];
-
-    for (const notePath of notes) {
-      if (results.length >= normalizedLimit) break;
-      const content = await readFile(join(this.root, notePath), 'utf8');
-      const matchIndex = content.toLowerCase().indexOf(normalizedQuery);
-      if (matchIndex < 0) continue;
-      results.push({
-        path: notePath,
-        snippet: buildSnippet(content, matchIndex),
-      });
-    }
+    await this.ensureRoot();
+    const result = await searchBoundedJournal(this.root, normalizedQuery, normalizedLimit);
 
     return {
       query: normalizedQuery,
-      results,
+      ...result,
     };
   }
 
@@ -134,27 +154,30 @@ export class JournalOps implements JournalOperations {
 
   private async listMarkdownNotes(): Promise<string[]> {
     await this.ensureRoot();
-    const notes: string[] = [];
-    await collectMarkdownNotes(this.root, this.root, notes);
-    return notes.sort((left, right) => left.localeCompare(right));
+    return listBoundedJournalPaths(this.root);
   }
-}
 
-async function collectMarkdownNotes(root: string, dir: string, notes: string[]): Promise<void> {
-  const entries = await readdir(dir, { withFileTypes: true });
-  for (const entry of entries) {
-    if (entry.name.startsWith('.')) continue;
-    const absolutePath = join(dir, entry.name);
-    if (entry.isDirectory()) {
-      await collectMarkdownNotes(root, absolutePath, notes);
-      continue;
+  private async withMutationLock<T>(
+    absolutePath: string,
+    operation: () => Promise<T>,
+  ): Promise<T> {
+    const previous = this.mutationTails.get(absolutePath) ?? Promise.resolve();
+    let release!: () => void;
+    const current = new Promise<void>((resolvePromise) => {
+      release = resolvePromise;
+    });
+    const tail = previous.then(() => current);
+    this.mutationTails.set(absolutePath, tail);
+
+    await previous;
+    try {
+      return await operation();
+    } finally {
+      release();
+      if (this.mutationTails.get(absolutePath) === tail) {
+        this.mutationTails.delete(absolutePath);
+      }
     }
-    if (!entry.isFile()) continue;
-    const extension = extname(entry.name).toLowerCase();
-    if (!MARKDOWN_EXTENSIONS.has(extension)) continue;
-    const fileStat = await stat(absolutePath);
-    if (!fileStat.isFile()) continue;
-    notes.push(relative(root, absolutePath).replace(/\\/g, '/'));
   }
 }
 
@@ -178,12 +201,4 @@ function requireContent(content: string): string {
     throw new Error('Journal content is required');
   }
   return normalized;
-}
-
-function buildSnippet(content: string, matchIndex: number): string {
-  const start = Math.max(0, matchIndex - Math.floor(MAX_SEARCH_SNIPPET_CHARS / 2));
-  const end = Math.min(content.length, start + MAX_SEARCH_SNIPPET_CHARS);
-  const prefix = start > 0 ? '...' : '';
-  const suffix = end < content.length ? '...' : '';
-  return `${prefix}${content.slice(start, end).replace(/\s+/g, ' ').trim()}${suffix}`;
 }

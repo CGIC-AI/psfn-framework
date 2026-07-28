@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import type { SessionEntry, CompactionSummary, JournalEntry } from '../../core/session/types.js';
@@ -11,6 +12,7 @@ import {
   buildGracefulShutdownMarkerJournalEntry,
   buildMessageJournalEntry,
   buildTurnTombstoneJournalEntry,
+  journalToTurnTombstoneEntry,
 } from '../journals/journal-utils.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
 import {
@@ -48,6 +50,7 @@ import {
   type SessionTailRow,
 } from './session-tail-cache-port.js';
 import { createFilesystemTurnRecordStorePort } from './turn-records.js';
+import { readTurnTombstoneAuthoritySnapshot } from './turn-tombstone-authority.js';
 import {
   slimTurnRecordSessionEntriesForAppend,
   resolveTurnRecordSessionEntries,
@@ -364,6 +367,15 @@ export class SessionStore implements TranscriptSearchPort {
   // module-level const, so it stays outside the hardcoded-settings scanner while
   // remaining overridable via SessionStoreOptions.maxHotChannels.
   private static readonly DEFAULT_HOT_CHANNEL_LIMIT = 1000;
+  private static readonly RECOVERY_AUTHORITY_LIMITS = Object.freeze({
+    cacheOwners: 8,
+    maxActionBytes: 256 * 1024,
+    maxActions: 4_096,
+    maxResultBytes: 2 * 1024 * 1024,
+    maxRowBytes: 32 * 1024 * 1024,
+    maxTombstones: 4_096,
+    scanChunkBytes: 64 * 1024,
+  });
   private sessionsDir: string;
   private channels: Map<string, ChannelCache> = new Map();
   private readonly maxHotChannels: number;
@@ -374,6 +386,13 @@ export class SessionStore implements TranscriptSearchPort {
     archiveFingerprint: string;
     tombstones: Set<string>;
   }>();
+  private recoveryTombstoneAuthority = new Map<string, {
+    archiveFingerprint: string;
+    baselineFingerprint: string;
+    tombstones: Set<string>;
+  }>();
+  private readonly recoveryAuthoritySnapshotHook:
+    ((ownerSessionId: string) => void | Promise<void>) | undefined;
   private importManifestPath: string;
   private transcriptProjection: TranscriptProjectionPort | null = null;
   private transcriptSearch: TranscriptSearchPort | null = null;
@@ -420,6 +439,7 @@ export class SessionStore implements TranscriptSearchPort {
     this.turnRecordStore = options.turnRecordStore ?? createFilesystemTurnRecordStorePort(this.sessionsDir);
     this.turnRecordEligibilityFence = options.turnRecordEligibilityFence ?? null;
     this.tailCache = options.tailCache ?? null;
+    this.recoveryAuthoritySnapshotHook = options.recoveryAuthoritySnapshotHook;
     for (const rootPath of this.journalRuntime.listPendingJournalChainRewriteRoots(this.sessionsDir)) {
       withSessionJournalWriteLock(rootPath, () => {
         this.journalRuntime.recoverJournalChainRewrite(rootPath);
@@ -1690,6 +1710,187 @@ export class SessionStore implements TranscriptSearchPort {
       requested = Math.min(Number.MAX_SAFE_INTEGER, requested * 2);
     }
   }
+  private async isRecoveryTurnEligible(
+    ownerSessionId: string,
+    turnId: string,
+    options: TurnRecordRecoveryScanOptions,
+  ): Promise<boolean> {
+    const limits = SessionStore.RECOVERY_AUTHORITY_LIMITS;
+    const resolveEvidence = (): {
+      archiveFingerprint: string;
+      archives: ReturnType<SessionJournalRuntime['openArchive']>[];
+      baselineFingerprint: string;
+      baselineTombstones: Set<string>;
+      channelId: string;
+      filePaths: string[];
+      sessionId: string;
+    } | null => {
+      this.refreshChannelIndexFromDisk();
+      const resolved = this.resolveExistingSession(ownerSessionId);
+      if (!resolved) return null;
+      const indexed = this.channelIndex.get(resolved.sessionId);
+      const indexedCount = normalizeOptionalNonNegativeNumber(
+        indexed?.activeTurnTombstoneCount,
+      ) ?? 0;
+      const baselineTombstones = new Set(indexed?.activeTurnTombstoneIds ?? []);
+      if (baselineTombstones.size !== indexedCount) {
+        throw this.recoveryAuthorityError(
+          `Unsigned L0 index tombstone evidence is inconsistent for ${ownerSessionId}`,
+        );
+      }
+      if (baselineTombstones.size > limits.maxTombstones) {
+        throw this.recoveryAuthorityError(
+          `L0 tombstone authority for ${ownerSessionId} exceeds `
+          + `${limits.maxTombstones} retained ids`,
+          'EOVERFLOW',
+        );
+      }
+      const archives = resolved.filePaths.map(filePath => (
+        this.journalRuntime.openArchive(resolved.channelId, filePath)
+      ));
+      const archiveFingerprint = this.journalRuntime.fingerprintArchiveChain(archives);
+      if (!archiveFingerprint) return null;
+      const baselineFingerprint = createHash('sha256')
+        .update([...baselineTombstones].sort().join('\0'))
+        .digest('hex');
+      return {
+        archiveFingerprint,
+        archives,
+        baselineFingerprint,
+        baselineTombstones,
+        channelId: resolved.channelId,
+        filePaths: [...resolved.filePaths],
+        sessionId: resolved.sessionId,
+      };
+    };
+
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      options.signal?.throwIfAborted();
+      const before = resolveEvidence();
+      if (!before) return false;
+      const cached = this.recoveryTombstoneAuthority.get(before.sessionId);
+      if (
+        cached?.archiveFingerprint === before.archiveFingerprint
+        && cached.baselineFingerprint === before.baselineFingerprint
+      ) {
+        this.recoveryTombstoneAuthority.delete(before.sessionId);
+        this.recoveryTombstoneAuthority.set(before.sessionId, cached);
+        return !cached.tombstones.has(turnId);
+      }
+
+      let snapshot;
+      try {
+        snapshot = await readTurnTombstoneAuthoritySnapshot({
+          channelId: before.channelId,
+          filePaths: before.filePaths,
+          maxActionBytes: limits.maxActionBytes,
+          maxActions: limits.maxActions,
+          maxResultBytes: limits.maxResultBytes,
+          maxRowBytes: limits.maxRowBytes,
+          onSnapshot: async () => {
+            await this.recoveryAuthoritySnapshotHook?.(ownerSessionId);
+          },
+          scanChunkBytes: limits.scanChunkBytes,
+          signal: options.signal,
+        });
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ESTALE' && attempt === 0) continue;
+        throw error;
+      }
+      const after = resolveEvidence();
+      if (
+        !after
+        || after.sessionId !== before.sessionId
+        || after.archiveFingerprint !== before.archiveFingerprint
+        || after.baselineFingerprint !== before.baselineFingerprint
+      ) {
+        if (attempt === 0) continue;
+        throw this.recoveryAuthorityError(
+          `L0 tombstone authority for ${ownerSessionId} changed repeatedly during recovery`,
+          'ESTALE',
+        );
+      }
+
+      const tombstones = new Set(before.baselineTombstones);
+      const actions = [...snapshot.actions].sort((left, right) => (
+        left.entry.id - right.entry.id
+        || left.archiveIndex - right.archiveIndex
+      ));
+      for (const action of actions) {
+        const normalized = this.journalRuntime.verifyAndNormalizeEntry(
+          action.entry,
+          [action.previousHmac],
+        );
+        const tombstone = journalToTurnTombstoneEntry(normalized.entry);
+        if (!tombstone) {
+          throw this.recoveryAuthorityError(
+            `L0 authority action for ${ownerSessionId} is not a valid turn tombstone`,
+            'EBADMSG',
+          );
+        }
+        if (tombstone.action === 'redact' || !normalized.verified) {
+          tombstones.add(tombstone.targetId);
+        } else {
+          tombstones.delete(tombstone.targetId);
+        }
+        if (tombstones.size > limits.maxTombstones) {
+          throw this.recoveryAuthorityError(
+            `L0 tombstone authority for ${ownerSessionId} exceeds `
+            + `${limits.maxTombstones} retained ids`,
+            'EOVERFLOW',
+          );
+        }
+      }
+
+      this.recoveryTombstoneAuthority.delete(before.sessionId);
+      this.recoveryTombstoneAuthority.set(before.sessionId, {
+        archiveFingerprint: before.archiveFingerprint,
+        baselineFingerprint: before.baselineFingerprint,
+        tombstones,
+      });
+      while (this.recoveryTombstoneAuthority.size > limits.cacheOwners) {
+        const oldest = this.recoveryTombstoneAuthority.keys().next().value as string | undefined;
+        if (!oldest) break;
+        this.recoveryTombstoneAuthority.delete(oldest);
+      }
+      const stats = options.stats;
+      if (stats) {
+        stats.authorityActionsReturned = (stats.authorityActionsReturned ?? 0)
+          + snapshot.stats.actionsReturned;
+        stats.authorityBytesRead = (stats.authorityBytesRead ?? 0) + snapshot.stats.bytesRead;
+        stats.authorityFilesScanned = (stats.authorityFilesScanned ?? 0)
+          + snapshot.stats.filesScanned;
+        stats.authorityMainMessageBytesRetained = 0;
+        stats.authorityOwnersScanned = (stats.authorityOwnersScanned ?? 0) + 1;
+        stats.authorityPeakCachedOwners = Math.max(
+          stats.authorityPeakCachedOwners ?? 0,
+          this.recoveryTombstoneAuthority.size,
+        );
+        stats.authorityPeakCachedTombstones = Math.max(
+          stats.authorityPeakCachedTombstones ?? 0,
+          ...[...this.recoveryTombstoneAuthority.values()].map(value => value.tombstones.size),
+        );
+        stats.authorityPeakResultBytes = Math.max(
+          stats.authorityPeakResultBytes ?? 0,
+          snapshot.stats.actionBytesReturned,
+        );
+        stats.authorityPeakRowBytesOffPrimary = Math.max(
+          stats.authorityPeakRowBytesOffPrimary ?? 0,
+          snapshot.stats.peakRowBytes,
+        );
+        stats.authorityRowsScanned = (stats.authorityRowsScanned ?? 0)
+          + snapshot.stats.rowsScanned;
+      }
+      return !tombstones.has(turnId);
+    }
+    return false;
+  }
+  private recoveryAuthorityError(message: string, code?: string): Error {
+    const error = new Error(message) as NodeJS.ErrnoException;
+    error.name = 'TurnRecordRecoveryEvidenceError';
+    if (code) error.code = code;
+    return error;
+  }
   /**
    * Bounded physical paging for introspection/metacognition.
    *
@@ -1746,8 +1947,7 @@ export class SessionStore implements TranscriptSearchPort {
       const sourceChannelId = record.channelId;
       if (!uniqueSourceSet.has(sourceChannelId)) continue;
       const logicalSessionId = record.sessionId ?? sourceChannelId;
-      const owner = this.ensureChannelFullyLoaded(logicalSessionId);
-      if (owner === null || owner.turnTombstones.has(record.turnId)) continue;
+      if (!await this.isRecoveryTurnEligible(logicalSessionId, record.turnId, options)) continue;
       yield record;
     }
   }

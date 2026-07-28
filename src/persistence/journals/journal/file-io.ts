@@ -74,7 +74,7 @@ function resolveJournalMessageTurnId(entry: JournalEntry): string {
   return backfillLegacyTurnId(fallbackSeed);
 }
 
-function parseJournalLine(line: string): JournalEntry {
+export function parseJournalLine(line: string): JournalEntry {
   const parsed = JSON.parse(line) as unknown;
   if (!parsed || typeof parsed !== 'object') {
     throw new Error('entry is not an object');

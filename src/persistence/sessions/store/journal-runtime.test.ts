@@ -330,17 +330,22 @@ describe('SessionJournalRuntime', () => {
     const observer = { recordIntegrityFailure: (event: (typeof events)[number]) => { events.push(event); } };
 
     const port = createFilesystemSessionArchivePort();
-    const provider = createKeyringIntegrityProvider(keyring);
-    if (!provider) throw new Error('Expected an integrity provider');
+    const keyringProvider = createKeyringIntegrityProvider(keyring);
+    if (!keyringProvider) throw new Error('Expected an integrity provider');
+    const provider = { sign: keyringProvider.sign, verify: vi.fn(keyringProvider.verify) };
     const runtime = new SessionJournalRuntime(provider, port, observer);
     const archive = runtime.openArchive(channelId, filePath);
     port.writeJournalFile(archive, [good, tampered2, tampered3]);
 
     // Limit larger than the session: the bounded scan covers the whole archive,
     // which previously short-circuited past the full-load funnel and never
-    // emitted an incident. The funnel must fire even on this path.
+    // emitted an incident. The scan is coverage-equivalent to a full load, so
+    // it emits the incident itself rather than replaying every row.
     const recent = runtime.readRecentEntriesFromTail(archive, 10);
     expect(events).toHaveLength(1);
+    // Emission must not cost a second verification pass over the same rows:
+    // one verify per entry, no full-load replay (bead g59z).
+    expect(provider.verify).toHaveBeenCalledTimes(3);
     expect(events[0]).toMatchObject({
       channelId,
       failedEntryCount: 2,

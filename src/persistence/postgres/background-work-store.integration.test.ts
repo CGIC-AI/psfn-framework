@@ -1805,26 +1805,38 @@ describe('PostgresBackgroundWorkStore', () => {
       await tombstoneMutation;
       expect(await rejectedTombstoneEffect).toBe(false);
 
-      // A duplicate canonical source is the equivalent uniqueness revocation:
-      // once that writer wins the fence, no effect may consume either copy.
+      // A duplicate canonical source under a DIFFERENT claimed owner is the
+      // equivalent uniqueness revocation. The append's owner-B fence must
+      // serialize with a consumer holding owner A for the same TurnID.
       const duplicateFirst = await prepareClaim('session-duplicate-first', createTurnId());
-      const duplicateHeld = deferred();
-      const allowDuplicate = deferred();
-      const duplicateMutation = secondFence.withTurnRecordEligibilityFence({
+      const consumerHeld = deferred();
+      const allowConsumerRelease = deferred();
+      const heldConsumer = firstFence.withTurnRecordEligibilityFence({
         logicalSessionId: duplicateFirst.record.sessionId!,
         turnId: duplicateFirst.record.turnId,
       }, async () => {
-        duplicateHeld.resolve();
-        await allowDuplicate.promise;
-        await unfencedWriter.appendTurnRecord(duplicateFirst.record);
+        consumerHeld.resolve();
+        await allowConsumerRelease.promise;
       });
-      await duplicateHeld.promise;
+      await consumerHeld.promise;
+      let crossOwnerAppendCompleted = false;
+      const crossOwnerDuplicate = writer.appendTurnRecord({
+        ...duplicateFirst.record,
+        sessionId: 'session-duplicate-second-owner',
+        requestId: `${duplicateFirst.record.requestId}-duplicate`,
+      }).then(() => {
+        crossOwnerAppendCompleted = true;
+      });
+      await new Promise(resolve => setImmediate(resolve));
+      expect(crossOwnerAppendCompleted).toBe(false);
+      allowConsumerRelease.resolve();
+      await Promise.all([heldConsumer, crossOwnerDuplicate]);
+      expect(crossOwnerAppendCompleted).toBe(true);
+
       const rejectedDuplicateEffect = persistClaimedEffect(
         duplicateFirst.claim,
         duplicateFirst.record,
       );
-      allowDuplicate.resolve();
-      await duplicateMutation;
       expect(await rejectedDuplicateEffect).toBe(false);
 
       const persisted = await inspectionPool.query<{ turn_id: string; content: string }>(
@@ -2933,7 +2945,11 @@ describe('PostgresBackgroundWorkStore', () => {
       expect(JSON.stringify(persisted)).not.toContain('felt worried and asked');
       expect(sessionStore.getRecentTurnRecords(channelId, 10).map(record => record.turnId))
         .toEqual([turnId]);
-      expect(sessionManager.isSourceRecordedTurnEligible(channelId, channelId, turnId)).toBe(true);
+      await expect(sessionManager.isSourceRecordedTurnEligible(
+        channelId,
+        channelId,
+        turnId,
+      )).resolves.toBe(true);
       await expect(sessionManager.withStableRecordedTurnEligibilitySnapshot(
         channelId,
         [turnId],

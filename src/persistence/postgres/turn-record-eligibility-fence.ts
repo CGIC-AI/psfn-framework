@@ -12,10 +12,10 @@ function requireFenceText(value: string, field: string): string {
 }
 
 function advisoryKey(scope: string, key: TurnRecordEligibilityFenceKey): string {
+  requireFenceText(key.logicalSessionId, 'logicalSessionId');
   return JSON.stringify([
-    'turn-record-source-eligibility-v1',
+    'turn-record-source-eligibility-v2',
     scope,
-    requireFenceText(key.logicalSessionId, 'logicalSessionId'),
     requireFenceText(key.turnId, 'turnId'),
   ]);
 }
@@ -66,10 +66,11 @@ export class PostgresTurnRecordEligibilityFence implements TurnRecordEligibility
     try {
       // SAFETY: these are the outer locks. Every multi-record consumer acquires
       // the canonical text keys lexicographically on one checked-out session;
-      // single-record writers are a subset of that same order. Callers acquire
-      // them before queue-effect receipts or session/TurnRecord filesystem
-      // locks; no writer may acquire an eligibility key while holding an inner
-      // lock.
+      // single-record writers are a subset of that same order. The key is
+      // TurnID-global within the companion scope, so a duplicate attributed to
+      // a different logical owner cannot race a consumer of the first copy.
+      // Callers acquire it before queue-effect receipts or session/TurnRecord
+      // filesystem locks; no writer may acquire it while holding an inner lock.
       for (const key of keys) {
         await client.query('SELECT pg_advisory_lock(hashtextextended($1, 0))', [key]);
         acquired.push(key);

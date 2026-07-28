@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { createInMemoryTranscriptProjection } from '../../test-support/in-memory-transcript-projection.js';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { SessionStore } from '../../persistence/sessions/store.js';
@@ -51,6 +51,12 @@ import {
   fingerprintBackgroundWorkTurnRecord,
   type MemoryExtractionBackgroundPayload,
 } from '../agent/background-work/types.js';
+import { recoverHistoricalBackgroundWorkHandoffs } from '../agent/background-work/tick-runtime.js';
+import {
+  BACKGROUND_WORK_HANDOFF_RECOVERY_BATCH_SIZE,
+  BackgroundWorkHandoffRetryCapacityError,
+} from '../agent/background-work/recovery-contract.js';
+import { sanitizeChannelId } from '../../persistence/sessions/store-file-contracts.js';
 import { CogSecEventStore } from '../cogsec/events.js';
 import { CogSecForensicArchive } from '../cogsec/forensic-archive.js';
 import {
@@ -381,6 +387,74 @@ describe('SessionManager', () => {
     mgr.deferBackgroundWorkHandoffRecovery(duplicated);
     expect(await mgr.recoverPendingBackgroundWorkHandoffs(1, enqueue)).toBe(0);
     expect(enqueue).toHaveBeenCalledOnce();
+  });
+
+  it('bounds a real startup worker outage without mutating or losing the durable archive', async () => {
+    const fencedStore = new SessionStore(dir, {
+      turnRecordEligibilityFence: createSerialTurnRecordEligibilityFence(),
+    });
+    const mgr = new SessionManager(fencedStore, makeConfig({ dataDir: dir }));
+    const sourceChannelId = 'api:handoff-capacity-worker';
+    mgr.recordUserMessage(
+      sourceChannelId,
+      'durable owner row',
+      'partner',
+      'Partner',
+    );
+    const records = Array.from(
+      { length: BACKGROUND_WORK_HANDOFF_RECOVERY_BATCH_SIZE * 3 },
+      (_, index) => makeBackgroundHandoffTurnRecord(
+        sourceChannelId,
+        1_742_100_000_000 + index,
+      ),
+    );
+    for (const record of records) await mgr.recordTurn(record);
+    const archivePath = join(
+      dir,
+      '_turn_records',
+      `${sanitizeChannelId(sourceChannelId)}.jsonl`,
+    );
+    const archiveBefore = readFileSync(archivePath);
+    let attempted = 0;
+
+    await expect(recoverHistoricalBackgroundWorkHandoffs(
+      mgr.streamRecoverableBackgroundWorkTurnRecords(),
+      async () => {
+        attempted += 1;
+        throw new Error('sustained enqueue outage');
+      },
+      record => mgr.deferWorkerValidatedBackgroundWorkHandoffRecovery(record),
+    )).rejects.toBeInstanceOf(BackgroundWorkHandoffRetryCapacityError);
+
+    expect(attempted).toBe(BACKGROUND_WORK_HANDOFF_RECOVERY_BATCH_SIZE + 1);
+    expect(readFileSync(archivePath)).toEqual(archiveBefore);
+    for (const record of records) {
+      expect(mgr.findSourceRecordedTurn(
+        record.channelId,
+        record.sessionId!,
+        record.turnId,
+      )).not.toBeNull();
+    }
+
+    await expect(mgr.recoverPendingBackgroundWorkHandoffs(
+      BACKGROUND_WORK_HANDOFF_RECOVERY_BATCH_SIZE,
+      async () => { throw new Error('sustained enqueue outage'); },
+    )).rejects.toBeInstanceOf(AggregateError);
+    expect(readFileSync(archivePath)).toEqual(archiveBefore);
+
+    expect(await mgr.recoverPendingBackgroundWorkHandoffs(
+      BACKGROUND_WORK_HANDOFF_RECOVERY_BATCH_SIZE,
+      async () => undefined,
+    )).toBe(BACKGROUND_WORK_HANDOFF_RECOVERY_BATCH_SIZE);
+
+    const rescanned: string[] = [];
+    await recoverHistoricalBackgroundWorkHandoffs(
+      mgr.streamRecoverableBackgroundWorkTurnRecords(),
+      async record => { rescanned.push(record.turnId); },
+      record => mgr.deferBackgroundWorkHandoffRecovery(record),
+    );
+    expect(rescanned).toEqual(records.map(record => record.turnId));
+    expect(readFileSync(archivePath)).toEqual(archiveBefore);
   });
 
   it('authorship guard re-tags internal-origin messages submitted as user speech', () => {

@@ -9,6 +9,10 @@ import {
 import { basename, dirname, join } from 'node:path';
 import type { TurnRecord } from '../../shared/contracts/runtime.js';
 import { parseTurnRecordBackgroundWorkHandoff } from '../../core/agent/background-work/types.js';
+import {
+  TurnRecordRecoveryEvidenceError,
+  isTurnRecordRecoveryEvidenceError,
+} from '../../core/agent/background-work/recovery-contract.js';
 import { fileIdentityKey } from '../jsonl-segments.js';
 import { sanitizeChannelId } from './store-file-contracts.js';
 import {
@@ -73,9 +77,7 @@ function postMessage(message: unknown): void {
 }
 
 function evidenceError(message: string, cause?: unknown): Error {
-  const error = new Error(message, { cause });
-  error.name = 'TurnRecordRecoveryEvidenceError';
-  return error;
+  return new TurnRecordRecoveryEvidenceError(message, { cause });
 }
 
 function openSnapshot(path: string, missingAllowed: boolean): SnapshotFile | null {
@@ -150,8 +152,8 @@ function captureSourceSnapshotBoundary(
         }
         return { activeSnapshot: pinned.active, maximumSealedSegmentNumber };
       } catch (error) {
-        if (error instanceof Error
-          && (error.name === 'AbortError' || error.name === 'TurnRecordRecoveryEvidenceError')) {
+        if ((error instanceof Error && error.name === 'AbortError')
+          || isTurnRecordRecoveryEvidenceError(error)) {
           throw error;
         }
         throw evidenceError(

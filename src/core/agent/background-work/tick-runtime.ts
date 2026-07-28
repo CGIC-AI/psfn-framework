@@ -1,4 +1,7 @@
-import { BackgroundWorkHandoffRetryCapacityError } from '../../session/manager/background-work-handoff-recovery.js';
+import {
+  BackgroundWorkHandoffRetryCapacityError,
+  isTurnRecordRecoveryEvidenceError,
+} from './recovery-contract.js';
 
 export interface BackgroundWorkTickOperations {
   recoverHandoffs(): Promise<void>;
@@ -22,7 +25,7 @@ export async function recoverHistoricalBackgroundWorkHandoffs<T>(
     try {
       await enqueue(record);
     } catch (error) {
-      if (isRecoveryEvidenceError(error)) throw error;
+      if (isTurnRecordRecoveryEvidenceError(error)) throw error;
       try {
         defer(record);
         if (errors.length < retainedErrorsLimit) errors.push(error);
@@ -36,7 +39,7 @@ export async function recoverHistoricalBackgroundWorkHandoffs<T>(
             ),
           });
         }
-        if (isRecoveryEvidenceError(deferError)) throw deferError;
+        if (isTurnRecordRecoveryEvidenceError(deferError)) throw deferError;
         const combined = new AggregateError(
           [error, deferError],
           'Historical background work handoff failed to enqueue and index for retry',
@@ -56,10 +59,6 @@ export async function recoverHistoricalBackgroundWorkHandoffs<T>(
   if (errors.length > 1) {
     throw new AggregateError(errors, 'Multiple historical background work handoffs failed');
   }
-}
-
-function isRecoveryEvidenceError(error: unknown): boolean {
-  return error instanceof Error && error.name === 'TurnRecordRecoveryEvidenceError';
 }
 
 /**

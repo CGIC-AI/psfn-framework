@@ -1322,8 +1322,8 @@ export class SessionManager implements SessionManagerTypeSurface {
     this.backgroundWorkHandoffRecovery.defer(record);
   }
 
-  hasPendingBackgroundWorkHandoffRecovery(): boolean {
-    return this.backgroundWorkHandoffRecovery.hasPending();
+  deferWorkerValidatedBackgroundWorkHandoffRecovery(record: TurnRecord): void {
+    this.backgroundWorkHandoffRecovery.deferWorkerValidatedProjection(record);
   }
 
   /**

@@ -668,6 +668,27 @@ export function createTurnRecordBackgroundWorkHandoff(
 export function parseTurnRecordBackgroundWorkHandoff(
   record: TurnRecord,
 ): EnqueueBackgroundWorkInput[] {
+  return parseTurnRecordBackgroundWorkHandoffWithExpectedFingerprint(
+    record,
+    fingerprintBackgroundWorkTurnRecord(record),
+  );
+}
+
+/**
+ * Re-validate the content-free startup projection after its isolated worker
+ * already proved the source-turn fingerprint against the full canonical row.
+ * Every remaining identity, payload, and job binding is still recomputed here.
+ */
+export function parseWorkerValidatedTurnRecordBackgroundWorkHandoffProjection(
+  record: TurnRecord,
+): EnqueueBackgroundWorkInput[] {
+  return parseTurnRecordBackgroundWorkHandoffWithExpectedFingerprint(record, null);
+}
+
+function parseTurnRecordBackgroundWorkHandoffWithExpectedFingerprint(
+  record: TurnRecord,
+  expectedTurnFingerprint: string | null,
+): EnqueueBackgroundWorkInput[] {
   const handoff = record.backgroundWorkHandoff;
   if (!handoff) return [];
   if (record.status !== 'completed'
@@ -675,7 +696,6 @@ export function parseTurnRecordBackgroundWorkHandoff(
     throw new Error('TurnRecord background work handoff is malformed');
   }
   const logicalSessionId = record.sessionId ?? record.channelId;
-  const expectedTurnFingerprint = fingerprintBackgroundWorkTurnRecord(record);
   const seenKinds = new Set<BackgroundWorkKind>();
   return handoff.jobs.map((job) => {
     if (!BACKGROUND_WORK_KINDS.includes(job.kind) || seenKinds.has(job.kind)) {
@@ -702,7 +722,8 @@ export function parseTurnRecordBackgroundWorkHandoff(
     if (payload.source.requestId !== record.requestId) bindingMismatches.push('payload.request_id');
     if (payload.source.channelId !== record.channelId) bindingMismatches.push('payload.channel_id');
     if (payload.source.createdAtMs !== record.completedAt) bindingMismatches.push('payload.created_at_ms');
-    if (payload.source.turnRecordFingerprint !== expectedTurnFingerprint) {
+    if (expectedTurnFingerprint !== null
+      && payload.source.turnRecordFingerprint !== expectedTurnFingerprint) {
       bindingMismatches.push('payload.turn_record_fingerprint');
     }
     if (job.payloadFingerprint !== fingerprintBackgroundWorkPayload(payload)) {

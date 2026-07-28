@@ -62,6 +62,7 @@ export interface SkillScanResult {
 export const DEFAULT_SKILL_COLLECTION_LIMITS: Readonly<SkillCollectionLimits> = Object.freeze({
   maxDiscoveryEntries: 16_384,
   maxCandidates: 2_048,
+  maxBinaryRequirements: 64,
   maxMetadataBytes: 16 * 1024 * 1024,
   maxRetainedBytes: 24 * 1024 * 1024,
   maxContentBytes: 16 * 1024 * 1024,

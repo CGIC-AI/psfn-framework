@@ -96,6 +96,7 @@ export interface SkillBudget {
 export interface SkillCollectionLimits {
   maxDiscoveryEntries: number;
   maxCandidates: number;
+  maxBinaryRequirements: number;
   maxMetadataBytes: number;
   maxRetainedBytes: number;
   maxContentBytes: number;

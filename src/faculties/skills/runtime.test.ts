@@ -11,6 +11,8 @@ function writeSkill(path: string, description: string, body: string): void {
     'name: memory-management',
     `description: ${description}`,
     'always: true',
+    'requires:',
+    '  binaries: [test]',
     '---',
     body,
     '',
@@ -90,11 +92,21 @@ describe('skills runtime', () => {
     writeSkill(skillPath, 'first description', '# Memory v1');
 
     try {
+      let blockEligibility = false;
+      let releaseStale = (): void => {};
+      let markStaleStarted = (): void => {};
+      const staleStarted = new Promise<void>(resolve => { markStaleStarted = resolve; });
       const runtime = new SkillsRuntime({
         dataDir,
         seedDir,
         repoRoot: root,
-        isBinaryAvailable: () => true,
+        isBinaryAvailable: async () => {
+          if (blockEligibility) {
+            markStaleStarted();
+            await new Promise<void>(resolve => { releaseStale = resolve; });
+          }
+          return true;
+        },
       });
 
       const snapshotOne = await runtime.getSnapshot();
@@ -112,14 +124,20 @@ describe('skills runtime', () => {
       expect(snapshotThree.promptXml).toContain('second description');
       expect(snapshotThree.promptXml).not.toContain('Memory v2');
 
-      const staleBuild = runtime.getSnapshot();
-      await new Promise<void>(resolveTurn => setImmediate(resolveTurn));
       writeSkill(skillPath, 'third description', '# Memory v3');
+      blockEligibility = true;
+      const staleBuildOne = runtime.getSnapshot();
+      const staleBuildTwo = runtime.getSnapshot();
+      await staleStarted;
+      writeSkill(skillPath, 'fourth current description', '# Memory v4 current');
+      blockEligibility = false;
       runtime.invalidate();
-      const currentBuild = runtime.getSnapshot();
-      const [staleCaller, currentCaller] = await Promise.all([staleBuild, currentBuild]);
-      expect(staleCaller.includedSkills[0]?.description).toBe('third description');
-      expect(currentCaller.includedSkills[0]?.description).toBe('third description');
+      const currentCaller = await runtime.getSnapshot();
+      releaseStale();
+      const [staleCallerOne, staleCallerTwo] = await Promise.all([staleBuildOne, staleBuildTwo]);
+      expect(staleCallerOne).toBe(currentCaller);
+      expect(staleCallerTwo).toBe(currentCaller);
+      expect(currentCaller.includedSkills[0]?.description).toBe('fourth current description');
       expect(await runtime.getSnapshot()).toBe(currentCaller);
     } finally {
       rmSync(root, { recursive: true, force: true });

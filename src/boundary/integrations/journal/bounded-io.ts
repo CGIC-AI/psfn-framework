@@ -1,17 +1,15 @@
 import { randomUUID } from 'node:crypto';
-import { constants } from 'node:fs';
 import {
-  copyFile,
   open,
   opendir,
   rename,
   rm,
   stat,
-  writeFile,
 } from 'node:fs/promises';
 import { basename, dirname, extname, join, relative } from 'node:path';
 import { setImmediate as yieldToEventLoop } from 'node:timers/promises';
 import { readUtf8TextFilePage } from '../filesystem/text-file-paging.js';
+import type { JournalMutationTarget } from './mutation-coordinator.js';
 
 const MARKDOWN_EXTENSIONS = new Set(['.md', '.markdown']);
 const MAX_SEARCH_SNIPPET_CHARS = 180;
@@ -72,32 +70,25 @@ export async function readJournalPage(
 }
 
 export async function appendJournalNoteAtomically(
-  absolutePath: string,
+  target: JournalMutationTarget,
   content: string,
 ): Promise<boolean> {
-  const created = !(await pathExists(absolutePath));
-  const parent = dirname(absolutePath);
+  const parent = dirname(target.stablePath);
   const temporaryPath = join(
     parent,
-    `.${basename(absolutePath)}.journal-append-${process.pid}-${randomUUID()}.tmp`,
+    `.${basename(target.stablePath)}.journal-append-${process.pid}-${randomUUID()}.tmp`,
   );
 
   // Make timer/admin work observable even when the source is already hot in
   // the kernel page cache. The expensive copy remains outside the JS heap.
   await yieldToEventLoop();
   try {
-    if (created) {
-      await writeFile(temporaryPath, '', {
-        encoding: 'utf8',
-        flag: 'wx',
-        mode: 0o666,
-      });
-    } else {
-      await copyFile(absolutePath, temporaryPath, constants.COPYFILE_EXCL);
-    }
-
-    const handle = await open(temporaryPath, 'a+');
+    const handle = await open(temporaryPath, 'wx+', 0o666);
     try {
+      await preserveExistingMetadata(target, handle);
+      if (target.existingHandle) {
+        await copyHandleCompletely(target.existingHandle, handle);
+      }
       const temporaryStats = await handle.stat();
       let separator = '';
       if (temporaryStats.size > 0) {
@@ -121,8 +112,38 @@ export async function appendJournalNoteAtomically(
 
     // The old note stays visible until this single namespace operation. A
     // failure before rename leaves it byte-for-byte untouched.
-    await rename(temporaryPath, absolutePath);
-    return created;
+    await target.assertNamespaceUnchanged();
+    await rename(temporaryPath, target.stablePath);
+    await target.assertParentAttached();
+    return !target.existed;
+  } finally {
+    await rm(temporaryPath, { force: true });
+  }
+}
+
+export async function writeJournalNoteAtomically(
+  target: JournalMutationTarget,
+  content: string,
+): Promise<boolean> {
+  const parent = dirname(target.stablePath);
+  const temporaryPath = join(
+    parent,
+    `.${basename(target.stablePath)}.journal-write-${process.pid}-${randomUUID()}.tmp`,
+  );
+
+  try {
+    const handle = await open(temporaryPath, 'wx', 0o666);
+    try {
+      await preserveExistingMetadata(target, handle);
+      await writeBufferCompletely(handle, Buffer.from(content, 'utf8'));
+      await handle.sync();
+    } finally {
+      await handle.close();
+    }
+    await target.assertNamespaceUnchanged();
+    await rename(temporaryPath, target.stablePath);
+    await target.assertParentAttached();
+    return !target.existed;
   } finally {
     await rm(temporaryPath, { force: true });
   }
@@ -259,14 +280,33 @@ async function* walkMarkdownFiles(
   }
 }
 
-async function pathExists(path: string): Promise<boolean> {
-  try {
-    await stat(path);
-    return true;
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false;
-    throw error;
+async function copyHandleCompletely(
+  source: Awaited<ReturnType<typeof open>>,
+  destination: Awaited<ReturnType<typeof open>>,
+): Promise<void> {
+  const buffer = Buffer.allocUnsafe(64 * 1024);
+  let position = 0;
+  for (;;) {
+    const { bytesRead } = await source.read(
+      buffer,
+      0,
+      buffer.length,
+      position,
+    );
+    if (bytesRead === 0) return;
+    await writeBufferCompletely(destination, buffer.subarray(0, bytesRead));
+    position += bytesRead;
   }
+}
+
+async function preserveExistingMetadata(
+  target: JournalMutationTarget,
+  destination: Awaited<ReturnType<typeof open>>,
+): Promise<void> {
+  if (!target.existingHandle) return;
+  const existingStats = await target.existingHandle.stat();
+  await destination.chown(existingStats.uid, existingStats.gid);
+  await destination.chmod(existingStats.mode & 0o7777);
 }
 
 async function writeBufferCompletely(

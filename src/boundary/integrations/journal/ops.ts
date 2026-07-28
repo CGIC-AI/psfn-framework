@@ -1,11 +1,11 @@
-import { mkdir, writeFile } from 'node:fs/promises';
-import { existsSync } from 'node:fs';
+import { mkdir } from 'node:fs/promises';
 import { dirname, extname, normalize, relative, resolve, sep } from 'node:path';
 import {
   appendJournalNoteAtomically,
   listBoundedJournalPaths,
   readJournalPage,
   searchBoundedJournal,
+  writeJournalNoteAtomically,
 } from './bounded-io.js';
 import { withJournalMutationLock } from './mutation-coordinator.js';
 
@@ -86,12 +86,10 @@ export class JournalOps implements JournalOperations {
     const resolved = this.resolveNotePath(path);
     const normalizedContent = requireContent(content);
     await mkdir(dirname(resolved.absolutePath), { recursive: true });
-    return withJournalMutationLock(this.root, resolved.absolutePath, async (canonicalPath) => {
-      const created = !existsSync(canonicalPath);
-      await writeFile(
-        canonicalPath,
+    return withJournalMutationLock(this.root, resolved.absolutePath, async (target) => {
+      const created = await writeJournalNoteAtomically(
+        target,
         normalizedContent.endsWith('\n') ? normalizedContent : `${normalizedContent}\n`,
-        'utf8',
       );
       return { path: resolved.relativePath, mode: 'write' as const, created };
     });
@@ -101,9 +99,9 @@ export class JournalOps implements JournalOperations {
     const resolved = this.resolveNotePath(path);
     const normalizedContent = requireContent(content);
     await mkdir(dirname(resolved.absolutePath), { recursive: true });
-    return withJournalMutationLock(this.root, resolved.absolutePath, async (canonicalPath) => {
+    return withJournalMutationLock(this.root, resolved.absolutePath, async (target) => {
       const created = await appendJournalNoteAtomically(
-        canonicalPath,
+        target,
         normalizedContent,
       );
       return { path: resolved.relativePath, mode: 'append' as const, created };

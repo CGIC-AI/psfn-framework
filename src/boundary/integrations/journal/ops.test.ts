@@ -3,6 +3,7 @@ import {
   mkdtempSync,
   readFileSync,
   readdirSync,
+  renameSync,
   rmSync,
   symlinkSync,
   unlinkSync,
@@ -16,6 +17,10 @@ import {
   JOURNAL_IO_CONTRACT,
   JournalOps,
 } from './ops.js';
+import {
+  appendJournalNoteAtomically,
+  writeJournalNoteAtomically,
+} from './bounded-io.js';
 import { withJournalMutationLock } from './mutation-coordinator.js';
 
 const { renameMock } = vi.hoisted(() => ({
@@ -226,6 +231,64 @@ describe('JournalOps governed I/O', () => {
     expect(readFileSync(outsideNotePath, 'utf8')).toBe('outside\n');
     expect(readdirSync(actualDirectory).filter(name => name.includes('journal-append'))).toEqual([]);
     expect(readdirSync(outsideDirectory).filter(name => name.includes('journal-append'))).toEqual([]);
+  });
+
+  it('fails closed when the final target becomes an external symlink after validation', async () => {
+    const notePath = join(root, 'note.md');
+    const preservedPath = join(root, 'preserved-note.md');
+    const outsideDirectory = mkdtempSync(join(tmpdir(), 'journal-outside-target-'));
+    cleanupPaths.push(outsideDirectory);
+    const outsideNotePath = join(outsideDirectory, 'note.md');
+    writeFileSync(notePath, 'inside\n', 'utf8');
+    writeFileSync(outsideNotePath, 'outside\n', 'utf8');
+
+    const mutation = withJournalMutationLock(
+      root,
+      notePath,
+      async target => appendJournalNoteAtomically(target, 'must not escape'),
+      {
+        beforeCommit() {
+          renameSync(notePath, preservedPath);
+          symlinkSync(outsideNotePath, notePath, 'file');
+        },
+      },
+    );
+
+    await expect(mutation).rejects.toThrow(/target changed before commit/);
+    expect(readFileSync(preservedPath, 'utf8')).toBe('inside\n');
+    expect(readFileSync(outsideNotePath, 'utf8')).toBe('outside\n');
+    expect(readdirSync(root).filter(name => name.includes('journal-'))).toEqual([]);
+    expect(readdirSync(outsideDirectory).filter(name => name.includes('journal-'))).toEqual([]);
+  });
+
+  it('fails closed when the canonical parent becomes an external symlink after validation', async () => {
+    const parentPath = join(root, 'notes');
+    const preservedParentPath = join(root, 'preserved-notes');
+    const notePath = join(parentPath, 'note.md');
+    const outsideDirectory = mkdtempSync(join(tmpdir(), 'journal-outside-parent-'));
+    cleanupPaths.push(outsideDirectory);
+    const outsideNotePath = join(outsideDirectory, 'note.md');
+    mkdirSync(parentPath);
+    writeFileSync(notePath, 'inside\n', 'utf8');
+    writeFileSync(outsideNotePath, 'outside\n', 'utf8');
+
+    const mutation = withJournalMutationLock(
+      root,
+      notePath,
+      async target => writeJournalNoteAtomically(target, 'replacement\n'),
+      {
+        beforeCommit() {
+          renameSync(parentPath, preservedParentPath);
+          symlinkSync(outsideDirectory, parentPath, 'dir');
+        },
+      },
+    );
+
+    await expect(mutation).rejects.toThrow(/parent changed before commit/);
+    expect(readFileSync(join(preservedParentPath, 'note.md'), 'utf8')).toBe('inside\n');
+    expect(readFileSync(outsideNotePath, 'utf8')).toBe('outside\n');
+    expect(readdirSync(preservedParentPath).filter(name => name.includes('journal-'))).toEqual([]);
+    expect(readdirSync(outsideDirectory).filter(name => name.includes('journal-'))).toEqual([]);
   });
 
   it('does not serialize mutations to unrelated paths or roots', async () => {

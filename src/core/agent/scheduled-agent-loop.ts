@@ -50,6 +50,11 @@ export function agentLoopWithScheduler(
         streamFn,
         schedulerOptions,
         continuationFuse,
+        // Drain queued follow-ups (intention whispers with wake_conditions
+        // [next_user_turn]) at the START of a live user turn so they shape the
+        // FIRST reply as pre-reply context, instead of injecting AFTER it as a
+        // continuation step (psfn-framework-8l9c).
+        true,
       );
     } catch (error) {
       terminateStreamWithError(stream, newMessages, error);
@@ -88,6 +93,10 @@ export function agentLoopContinueWithScheduler(
         streamFn,
         schedulerOptions,
         continuationFuse,
+        // Continuation runs (deferred-tool-handoff) are internal, not a fresh
+        // user turn: keep the existing end-of-loop follow-up drain so mid-run
+        // arrivals still take the ay73 user-facing boundary unchanged.
+        false,
       );
     } catch (error) {
       terminateStreamWithError(stream, newMessages, error);
@@ -103,6 +112,16 @@ function createAgentStream() {
   );
 }
 
+/**
+ * Internal follow-up notes (intention whispers, system notes, task reports) are
+ * enqueued as role 'custom'; genuine external follow-ups are role 'user'. Only
+ * the internal notes are eligible for the pre-reply start drain — external user
+ * follow-ups keep their end-of-loop continuation semantics.
+ */
+function isInternalFollowUpMessage(message: AgentMessage): boolean {
+  return (message as { role?: unknown }).role === 'custom';
+}
+
 async function runLoop(
   currentContext: LiveToolAgentContext,
   newMessages: AgentMessage[],
@@ -112,12 +131,31 @@ async function runLoop(
   streamFn: StreamFn | undefined,
   schedulerOptions: ToolCallSchedulerOptions,
   continuationFuse: ParentTurnContinuationFuse,
+  drainQueuedFollowUpsAtStart: boolean,
 ) {
   let firstTurn = true;
   let checkInMessageSent = false;
   let userFacingBoundaryMarked = false;
   const toolExecutionGuard = createToolCallExecutionGuard();
-  let pendingMessages = (await config.getSteeringMessages?.()) || [];
+  // Drain already-queued follow-ups BEFORE the first assistant step so
+  // pre-existing INTERNAL notes (intention whispers / system notes, role
+  // 'custom') become pre-reply context and shape the first reply
+  // (psfn-framework-8l9c). They are NOT boundary-marked: the reply they shape is
+  // the outward reply, and the model authors it once with the note visible, so a
+  // post-reply no_reply can never clobber it. Genuine EXTERNAL user follow-ups
+  // that were also queued are held back and processed through the existing
+  // end-of-loop drain so their continuation semantics are unchanged. Follow-ups
+  // that arrive mid-run are still drained at end-of-loop with the ay73
+  // user-facing boundary intact.
+  let heldExternalFollowUps: AgentMessage[] = [];
+  let startupInternalFollowUps: AgentMessage[] = [];
+  if (drainQueuedFollowUpsAtStart) {
+    const queued = (await config.getFollowUpMessages?.()) || [];
+    startupInternalFollowUps = queued.filter(isInternalFollowUpMessage);
+    heldExternalFollowUps = queued.filter(message => !isInternalFollowUpMessage(message));
+  }
+  const startupSteering = (await config.getSteeringMessages?.()) || [];
+  let pendingMessages = [...startupInternalFollowUps, ...startupSteering];
 
   for (;;) {
     let hasMoreToolCalls = false;
@@ -190,7 +228,14 @@ async function runLoop(
       }
     } while (hasMoreToolCalls || pendingMessages.length > 0);
 
-    const followUpMessages = (await config.getFollowUpMessages?.()) || [];
+    const freshFollowUps = (await config.getFollowUpMessages?.()) || [];
+    // External user follow-ups held back from the start drain are processed here
+    // exactly like mid-run arrivals, preserving their continuation + boundary
+    // semantics; internal notes were already consumed as pre-reply context.
+    const followUpMessages = heldExternalFollowUps.length > 0
+      ? [...heldExternalFollowUps, ...freshFollowUps]
+      : freshFollowUps;
+    heldExternalFollowUps = [];
     if (followUpMessages.length > 0) {
       // Queued follow-ups are internal runtime notes (intention whispers,
       // system notes) — draining them extends this run past the user-facing

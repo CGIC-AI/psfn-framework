@@ -205,9 +205,12 @@ describe('scheduled-agent-loop stream result contract', () => {
     expect(events.some((event) => event.type === 'message_end' && event.message?.role === 'assistant')).toBe(false);
   });
 
-  it('marks the user-facing boundary once when internal follow-ups drain into the run', async () => {
+  it('drains pre-queued follow-ups before the reply and marks the boundary only for mid-run drains', async () => {
     const streamFn = makeStreamFn('value');
     const events: any[] = [];
+    // First batch is already queued when the run starts (a pre-existing
+    // intention whisper); the second batch models a follow-up that arrives
+    // mid-run (a background completion) and is drained at end-of-loop.
     const whisperBatches: any[][] = [
       [{
         role: 'custom',
@@ -250,22 +253,90 @@ describe('scheduled-agent-loop stream result contract', () => {
     const boundaryIndexes = events
       .map((event, index) => (event.type === 'user_facing_boundary' ? index : -1))
       .filter(index => index >= 0);
+    // Only the mid-run drain marks the boundary; the start drain does not.
     expect(boundaryIndexes).toHaveLength(1);
 
-    // The boundary must precede the injected whisper and every later
-    // assistant message so bounded extraction excludes continuation text.
-    const firstWhisperEventIndex = events.findIndex(
-      (event) => event.type === 'message_end' && event.message?.role === 'custom',
-    );
-    expect(firstWhisperEventIndex).toBeGreaterThan(boundaryIndexes[0]!);
-
+    const customEndIndexes = events
+      .map((event, index) => (
+        event.type === 'message_end' && event.message?.role === 'custom' ? index : -1
+      ))
+      .filter(index => index >= 0);
     const assistantEndIndexes = events
       .map((event, index) => (
         event.type === 'message_end' && event.message?.role === 'assistant' ? index : -1
       ))
       .filter(index => index >= 0);
+
+    // The pre-queued whisper is drained at run START as pre-reply context: it
+    // appears before both the boundary and the first authored reply, so it
+    // shapes that reply rather than trailing it as a continuation.
+    expect(customEndIndexes[0]).toBeLessThan(boundaryIndexes[0]!);
+    expect(customEndIndexes[0]).toBeLessThan(assistantEndIndexes[0]!);
+    // The first reply is authored before the boundary (ay73: the outward reply
+    // stays user-facing and cannot be clobbered by later internal continuation).
     expect(assistantEndIndexes[0]).toBeLessThan(boundaryIndexes[0]!);
+    // The mid-run follow-up and its continuation reply fall after the boundary.
+    expect(customEndIndexes[1]).toBeGreaterThan(boundaryIndexes[0]!);
     expect(assistantEndIndexes.at(-1)).toBeGreaterThan(boundaryIndexes[0]!);
+  });
+
+  it('makes a pre-queued whisper visible to the reply it shapes without an extra continuation step', async () => {
+    const streamFn = makeStreamFn('value');
+    const events: any[] = [];
+    const whisperBatches: any[][] = [
+      [{
+        role: 'custom',
+        type: 'internalWhisper',
+        messageClass: 'internalWhisper',
+        content: 'Whisper: gently check on their arm.',
+        speakerName: 'Whisper',
+        timestamp: Date.now(),
+      }],
+    ];
+    const config = {
+      ...makeLoopConfig(),
+      // Snapshot the context per call so the assertion sees exactly what the
+      // model was given when it authored the reply (the live array is mutated
+      // in place as the assistant partial streams in).
+      convertToLlm: async (messages: any[]) => [...messages],
+      getFollowUpMessages: async () => whisperBatches.shift() ?? [],
+    };
+
+    const stream = agentLoopWithScheduler(
+      [{ role: 'user', content: [{ type: 'text', text: 'hi' }] } as any],
+      {
+        systemPrompt: 'system prompt',
+        messages: [],
+        tools: [],
+      } as any,
+      config as any,
+      new AbortController().signal,
+      streamFn as any,
+      { maxParallelToolCalls: 1 },
+    );
+
+    for await (const event of stream) {
+      events.push(event);
+    }
+
+    // Exactly one assistant step: the whisper shaped the reply in-line rather
+    // than triggering a post-reply continuation LLM call.
+    expect(streamFn).toHaveBeenCalledTimes(1);
+    // No boundary: a start-drained whisper is pre-reply context, not internal
+    // continuation.
+    expect(events.some((event) => event.type === 'user_facing_boundary')).toBe(false);
+
+    // The whisper was present in the context the model saw when authoring the
+    // reply, and it preceded the (absent) assistant message in that context.
+    const firstCallMessages = (streamFn.mock.calls[0]?.[1] as { messages: any[] }).messages;
+    const whisperIndex = firstCallMessages.findIndex(
+      (message: any) => message?.role === 'custom' && message?.type === 'internalWhisper',
+    );
+    const userIndex = firstCallMessages.findIndex((message: any) => message?.role === 'user');
+    expect(whisperIndex).toBeGreaterThanOrEqual(0);
+    expect(userIndex).toBeGreaterThanOrEqual(0);
+    expect(whisperIndex).toBeGreaterThan(userIndex);
+    expect(firstCallMessages.some((message: any) => message?.role === 'assistant')).toBe(false);
   });
 
   it('does not mark the boundary when the drained follow-up batch contains a user message', async () => {

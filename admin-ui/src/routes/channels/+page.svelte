@@ -5,6 +5,9 @@
     saveChannelEnvelopeLabel,
     getChannelDemotionNotice,
     demoteChannelToPublic,
+    getBearerApiCompanionPin,
+    setBearerApiCompanionPin,
+    type BearerApiCompanionPinData,
     type ChannelDemotionNotice,
     type ChannelEnvelopeData,
     type ChannelEnvelopeLabel,
@@ -35,6 +38,13 @@
   let demotionChannelId = $state<string | null>(null);
   let demotionAcknowledged = $state(false);
   let demotionLoading = $state(false);
+
+  // Companion Cluster: Bearer API pinned-companion control (vknn)
+  let bearerPin = $state<BearerApiCompanionPinData | null>(null);
+  let bearerPinSelection = $state('');
+  let bearerPinSaving = $state(false);
+  let bearerPinError = $state('');
+  let bearerPinMessage = $state('');
 
   const SOURCE_LABELS: Record<ChannelEnvelopeRow['source'], string> = {
     channel_label: 'channel-owned',
@@ -191,8 +201,40 @@
     }
   }
 
+  async function loadBearerPin(): Promise<void> {
+    bearerPinError = '';
+    try {
+      bearerPin = await getBearerApiCompanionPin();
+      bearerPinSelection = bearerPin.pinnedCompanionId ?? '';
+    } catch (e) {
+      bearerPinError = e instanceof Error ? e.message : 'Failed to load Bearer API pin';
+    }
+  }
+
+  async function submitBearerPin(): Promise<void> {
+    const companionId = bearerPinSelection.trim();
+    if (!companionId) {
+      bearerPinError = 'Select a companion to pin the Bearer API to';
+      return;
+    }
+    bearerPinSaving = true;
+    bearerPinError = '';
+    bearerPinMessage = '';
+    try {
+      const result = await setBearerApiCompanionPin(companionId);
+      bearerPin = result.data;
+      bearerPinSelection = result.data.pinnedCompanionId ?? '';
+      bearerPinMessage = result.message;
+    } catch (e) {
+      bearerPinError = e instanceof Error ? e.message : 'Failed to pin the Bearer API companion';
+    } finally {
+      bearerPinSaving = false;
+    }
+  }
+
   onMount(() => {
     void loadData();
+    void loadBearerPin();
   });
 </script>
 
@@ -226,6 +268,65 @@
         {loading ? 'Loading...' : 'Refresh'}
       </button>
     </div>
+  </div>
+
+  <!-- Companion Cluster: Bearer API pinned companion (vknn) -->
+  <div class="card-garden p-5 space-y-3">
+    <div>
+      <h2 class="text-base font-serif font-semibold text-shadow-900">
+        Companion Cluster &mdash; Bearer API pinned companion
+      </h2>
+      <p class="text-sm text-shadow-600 mt-1">
+        The inbound OpenAI-compatible Bearer API is pinned to exactly one Companion Cluster member
+        (channels.json <code class="font-mono">api.companionId</code>). Callers never select a
+        companion per request. A change takes effect after a gateway restart.
+      </p>
+    </div>
+    {#if bearerPinError}
+      <div class="p-3 border-l-4 border-l-wilt-400 bg-wilt-50 rounded">
+        <p class="text-sm text-shadow-800">{bearerPinError}</p>
+      </div>
+    {/if}
+    {#if bearerPinMessage}
+      <div class="p-3 border-l-4 border-l-gold-400 bg-gold-50 rounded">
+        <p class="text-sm text-shadow-800">{bearerPinMessage}</p>
+      </div>
+    {/if}
+    {#if bearerPin}
+      {#if bearerPin.companions.length === 0}
+        <p class="text-sm text-shadow-600">No registered companions are available to pin.</p>
+      {:else}
+        <div class="flex flex-wrap items-end gap-3">
+          <label class="block">
+            <span class="text-xs font-medium text-shadow-600 uppercase tracking-wide">Pinned companion</span>
+            <select
+              bind:value={bearerPinSelection}
+              disabled={bearerPinSaving}
+              class="mt-1 w-72 max-w-full text-sm rounded-lg border border-bark-300 px-3 py-2"
+            >
+              <option value="" disabled>Select a companion</option>
+              {#each bearerPin.companions as companion (companion.companionId)}
+                <option value={companion.companionId}>
+                  {companion.displayName}{companion.displayName === companion.companionId ? '' : ` (${companion.companionId})`}
+                </option>
+              {/each}
+            </select>
+          </label>
+          <button
+            onclick={submitBearerPin}
+            disabled={bearerPinSaving || !bearerPinSelection || bearerPinSelection === bearerPin.pinnedCompanionId}
+            class="text-sm px-4 py-2 rounded-lg bg-gold-200 text-shadow-900 hover:bg-gold-300
+                   transition-colors disabled:opacity-50 font-medium"
+          >
+            {bearerPinSaving ? 'Pinning...' : 'Pin companion'}
+          </button>
+        </div>
+        <p class="text-xs text-shadow-500">
+          Currently pinned:
+          <code class="font-mono">{bearerPin.pinnedCompanionId ?? 'none (single-companion default)'}</code>
+        </p>
+      {/if}
+    {/if}
   </div>
 
   {#if saveMessage}

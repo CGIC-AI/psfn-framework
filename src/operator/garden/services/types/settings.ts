@@ -177,6 +177,34 @@ export interface ConfigUpdateResult {
   status?: AdminSettingsStatus;
 }
 
+/**
+ * One registered companion the operator may pin the Bearer API to (vknn). The
+ * inbound OpenAI-compatible Bearer API is pinned to exactly one companion via
+ * channels.json `api.companionId`; callers never select per request.
+ */
+export interface BearerApiCompanionOption {
+  companionId: string;
+  displayName: string;
+}
+
+/**
+ * Companion Cluster view of the Bearer API pinned-companion setting (vknn): the
+ * currently pinned companion plus the registered-companion roster an operator
+ * may pin to.
+ */
+export interface BearerApiCompanionPinData {
+  /** Currently pinned companion id, or null when unset (single-companion default). */
+  pinnedCompanionId: string | null;
+  /** Registered companions the operator may pin. */
+  companions: BearerApiCompanionOption[];
+  /**
+   * The API channel resolves the pin once at gateway startup (api-surface builds
+   * the Bearer routing contract from channels.json `api.companionId`), so a pin
+   * change takes effect only after a gateway restart. There is no hot reload.
+   */
+  restartRequired: true;
+}
+
 /** One add/remove mutation against the intake-policy source lists (htm9.13). */
 export interface AdminIntakeSourceListMutationInput {
   action: 'add' | 'remove';
@@ -193,6 +221,18 @@ export interface AdminSettingsService {
   saveSubConfigJson(key: string, json: string, context?: import('../../garden-request-context.js').GardenRequestContext): ConfigUpdateResult;
   getChannelEnvelopeData(): AdminChannelEnvelopeData;
   saveChannelEnvelopeLabel(channelId: string, label: unknown): ConfigUpdateResult;
+  /**
+   * Companion Cluster (vknn): read the Bearer API pinned companion and the
+   * registered-companion roster the operator may pin.
+   */
+  getBearerApiCompanionPin(): BearerApiCompanionPinData;
+  /**
+   * Companion Cluster (vknn): pin the inbound OpenAI-compatible Bearer API to
+   * exactly one registered companion, persisted through the channels.json
+   * owner-file contract. Fails closed when the id is not a registered companion.
+   * This is a single pin, never per-request companion selection.
+   */
+  setBearerApiCompanionPin(companionId: unknown): ConfigUpdateResult;
   /**
    * Read the invite-only → public click-to-accept demotion notice for a channel
    * (jp36.6.2). Reports whether the channel is currently demotable so the Garden

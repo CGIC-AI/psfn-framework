@@ -64,6 +64,41 @@ export interface ChannelDemotionResponse {
   data: ChannelEnvelopeData;
 }
 
+// ── Companion Cluster Bearer API pin (vknn) ──
+// The inbound OpenAI-compatible Bearer API is pinned to exactly one companion
+// (channels.json api.companionId); this control selects that single pin. There
+// is no per-request companion selection.
+
+export interface BearerApiCompanionOption {
+  companionId: string;
+  displayName: string;
+}
+
+export interface BearerApiCompanionPinData {
+  pinnedCompanionId: string | null;
+  companions: BearerApiCompanionOption[];
+  /** A pin change takes effect only after a gateway restart (no hot reload). */
+  restartRequired: true;
+}
+
+export interface BearerApiCompanionPinSaveResponse {
+  ok: boolean;
+  message: string;
+  data: BearerApiCompanionPinData;
+}
+
+export function getBearerApiCompanionPin(): Promise<BearerApiCompanionPinData> {
+  return apiGet<BearerApiCompanionPinData>('/api/admin/channels/bearer-companion');
+}
+
+export function setBearerApiCompanionPin(
+  companionId: string,
+): Promise<BearerApiCompanionPinSaveResponse> {
+  return apiPost<BearerApiCompanionPinSaveResponse>('/api/admin/channels/bearer-companion', {
+    companionId,
+  });
+}
+
 export function getChannelEnvelopeData(): Promise<ChannelEnvelopeData> {
   return apiGet<ChannelEnvelopeData>('/api/admin/channels/context-envelope');
 }

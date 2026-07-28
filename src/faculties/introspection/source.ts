@@ -130,11 +130,14 @@ export function createTurnRecordIntrospectionSource(
     },
     isCandidateStillEligible: async (candidate) => {
       if (reader.isSessionRetiredOrQuarantined(candidate.ownerSessionId)) return false;
-      return await reader.isSourceTurnRecordEligible(
+      const eligible = await reader.isSourceTurnRecordEligible(
         candidate.channelId,
         candidate.ownerSessionId,
         candidate.turnId,
       );
+      // The exact archive lookup yields. A reset/quarantine that lands during
+      // it must invalidate the result before it crosses the audit boundary.
+      return eligible && !reader.isSessionRetiredOrQuarantined(candidate.ownerSessionId);
     },
   };
 }

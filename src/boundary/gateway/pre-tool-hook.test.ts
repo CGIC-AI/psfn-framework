@@ -36,7 +36,12 @@ function registerSync(
     name,
     sourcePath: 'test',
     matcher: new HookMatcher([...patterns]),
-    handler,
+    // The registry rejects bare-synchronous handlers (bead 00z0): only an
+    // async handler can yield to the fail-closed evaluation timeout. Wrap the
+    // (possibly synchronous) test handler so these evaluation-contract tests
+    // register through the real async seam; the delegate's return/throw/pending
+    // behavior is preserved exactly.
+    handler: async (context) => handler(context),
   });
 }
 
@@ -210,6 +215,71 @@ describe('HookRegistry.evaluatePreToolUse decisions', () => {
     expect(decision.outcome).toBe('block');
     expect(decision.blockingHook).toBe('garbage');
     expect(registry.stats().find(stat => stat.name === 'garbage')?.failures).toBe(1);
+  });
+});
+
+describe('HookRegistry sync_decision registration guard (00z0)', () => {
+  function registration(name: string, handler: PreToolUseHookHandler) {
+    return {
+      mode: 'sync_decision' as const,
+      name,
+      sourcePath: 'test',
+      matcher: new HookMatcher(['shell']),
+      handler,
+    };
+  }
+
+  it('rejects a bare-synchronous decision handler at registration time', () => {
+    const registry = new HookRegistry();
+    expect(() => registry.register(registration('sync', () => ({ decision: 'allow' }))))
+      .toThrow(/async function/);
+    // The rejection is total: nothing is registered, so no unpreemptable handler
+    // can ever be selected at evaluation time.
+    expect(registry.hasSyncDecisionHooks()).toBe(false);
+    expect(registry.list('sync_decision')).toHaveLength(0);
+  });
+
+  it('rejects a CPU-bound busy-loop handler at registration (not a hang, not an allow)', () => {
+    const registry = new HookRegistry();
+    let bodyRan = false;
+    // A synchronous busy-loop that would otherwise run to completion unpreempted
+    // and return `allow`, defeating any evaluation-time timeout.
+    const busyLoop: PreToolUseHookHandler = () => {
+      const deadline = Date.now() + 800;
+      while (Date.now() < deadline) {
+        bodyRan = true;
+      }
+      return { decision: 'allow' };
+    };
+
+    expect(() => registry.register(registration('busy', busyLoop))).toThrow(/async function/);
+    // The busy-loop body never executes: the call is blocked at the registration
+    // seam, so it can neither hang a turn nor silently allow.
+    expect(bodyRan).toBe(false);
+    expect(registry.hasSyncDecisionHooks()).toBe(false);
+  });
+
+  it('accepts a genuinely-async handler and evaluates its decision', async () => {
+    const registry = new HookRegistry();
+    expect(() => registry.register(registration(
+      'async-blocker',
+      async () => ({ decision: 'block', reason: 'nope' }),
+    ))).not.toThrow();
+
+    const decision = await registry.evaluatePreToolUse(contextFor('shell', { command: 'ls' }));
+    expect(decision.outcome).toBe('block');
+    expect(decision.blockingHook).toBe('async-blocker');
+  });
+
+  it('rejects a non-async function that merely returns a promise', () => {
+    // A bare function returning a promise is indistinguishable at registration
+    // from one that returns a value after a CPU-bound body, so it is rejected;
+    // operators must declare decision handlers `async`.
+    const registry = new HookRegistry();
+    expect(() => registry.register(registration(
+      'promise-returning',
+      () => Promise.resolve({ decision: 'allow' }),
+    ))).toThrow(/async function/);
   });
 });
 

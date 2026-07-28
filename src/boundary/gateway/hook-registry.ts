@@ -341,7 +341,11 @@ export interface SyncDecisionHookRegistration extends HookRegistrationBase {
   mode: 'sync_decision';
   /** Subject matcher over tool names/aliases for the decision path. */
   matcher: HookMatcher;
-  /** Decision handler; return value is normalized fail-closed (throw = block). */
+  /**
+   * Decision handler; return value is normalized fail-closed (throw = block).
+   * MUST be an `async` function: registration rejects a bare synchronous handler
+   * because it cannot be preempted by the evaluation timeout (bead 00z0).
+   */
   handler: PreToolUseHookHandler;
 }
 
@@ -373,6 +377,23 @@ interface HookRuntimeState {
  * than hanging; the abandoned handler promise is left to settle on its own. A
  * `timeoutMs <= 0` disables the timer.
  */
+/**
+ * True only for a function declared `async` (`AsyncFunction`). A bare
+ * synchronous handler — even one that eventually returns a value — cannot be
+ * preempted by {@link invokeWithTimeout}: `Promise.resolve().then(invoke)` still
+ * runs the synchronous body to completion on the microtask, so a CPU-bound loop
+ * blocks the event loop and the timeout timer never fires. Requiring an
+ * `AsyncFunction` at registration means the handler has at least one `await`
+ * boundary the fail-closed timeout can interleave with. This is the fail-closed
+ * seam for the sync_decision path (bead 00z0): a non-async decision handler is
+ * rejected at registration, before any production producer lands, rather than
+ * discovered as an unpreemptable hang mid-turn.
+ */
+function isAsyncFunction(fn: unknown): boolean {
+  return typeof fn === 'function'
+    && (fn as { constructor?: { name?: string } }).constructor?.name === 'AsyncFunction';
+}
+
 function invokeWithTimeout(
   invoke: () => unknown,
   timeoutMs: number,
@@ -457,6 +478,16 @@ export class HookRegistry {
       }
       if (typeof registration.handler !== 'function') {
         throw new Error(`Hook "${name}" handler must be a function`);
+      }
+      // Fail closed at the seam: only a genuinely-async handler can yield to the
+      // fail-closed evaluation timeout. A bare synchronous (including
+      // CPU-bound / busy-loop) handler is rejected here rather than allowed to
+      // run unpreempted at evaluation time. See {@link isAsyncFunction}.
+      if (!isAsyncFunction(registration.handler)) {
+        throw new Error(
+          `Hook "${name}" sync_decision handler must be an async function; a bare `
+          + 'synchronous handler cannot be preempted by the evaluation timeout',
+        );
       }
     }
 

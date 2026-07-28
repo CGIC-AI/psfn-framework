@@ -374,12 +374,12 @@ async function buildSkillListPayload(
   const includeContent = params.includeContent ?? false;
   const includedNames = new Set(snapshot.includedSkills.map(skill => skill.name));
   const categorySummary = await runtime.listCategorySummary();
+  const contentById = includeContent
+    ? await runtime.readSkillContents(evaluations.map(({ entry }) => entry))
+    : new Map<string, string>();
   const skills: Array<Record<string, unknown>> = [];
   for (const { entry, eligibility } of evaluations) {
-    let content: string | undefined;
-    if (includeContent) {
-      content = (await runtime.readSkillContent(entry.name))?.content;
-    }
+    const content = contentById.get(entry.id);
     skills.push({
       name: entry.name,
       category: entry.category,

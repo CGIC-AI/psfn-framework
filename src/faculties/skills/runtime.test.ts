@@ -111,6 +111,16 @@ describe('skills runtime', () => {
       expect(snapshotThree.promptXml).toContain('<skills_index>');
       expect(snapshotThree.promptXml).toContain('second description');
       expect(snapshotThree.promptXml).not.toContain('Memory v2');
+
+      const staleBuild = runtime.getSnapshot();
+      await new Promise<void>(resolveTurn => setImmediate(resolveTurn));
+      writeSkill(skillPath, 'third description', '# Memory v3');
+      runtime.invalidate();
+      const currentBuild = runtime.getSnapshot();
+      const [staleCaller, currentCaller] = await Promise.all([staleBuild, currentBuild]);
+      expect(staleCaller.includedSkills[0]?.description).toBe('third description');
+      expect(currentCaller.includedSkills[0]?.description).toBe('third description');
+      expect(await runtime.getSnapshot()).toBe(currentCaller);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -453,7 +463,7 @@ describe('skills runtime', () => {
         managedRootDir: managedRoot,
         isBinaryAvailable: () => true,
         collectionLimits: {
-          maxManagedContentBytes: 50_000,
+          maxContentBytes: 50_000,
           yieldEvery: 2,
         },
       });

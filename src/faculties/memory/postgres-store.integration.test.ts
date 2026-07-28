@@ -894,11 +894,13 @@ describe('postgres memory store integration', () => {
       expect(stats.total).toBe(4);
 
       // Privacy summary — internal artifact excluded. Every field matches the JS
-      // oracle EXCEPT consentGatedCount: `fromMemoryRow` drops boolean consent
-      // flags during hydration (decodeJsonObject keeps only numbers), so the JS
-      // path under-counted consent-gated rows. The SQL path reads the stored
-      // jsonb directly and is authoritative; a2 carries allowRecall:false.
-      const expectedPrivacy = { ...subjectAdminPrivacySummary(adminCorpus), consentGatedCount: 1 };
+      // oracle, consentGatedCount included: hydration preserves boolean consent
+      // flags (xnfks), so the JS path counts the same rows the SQL aggregate
+      // counts from the stored jsonb. Assert the oracle's own count first, so a
+      // hydration regression names itself here instead of surfacing as an opaque
+      // object mismatch — SQL returns 1 either way, and only the oracle moves.
+      const expectedPrivacy = subjectAdminPrivacySummary(adminCorpus);
+      expect(expectedPrivacy.consentGatedCount).toBe(1); // a2 carries allowRecall:false
       expect(await authorized.getAdminMemoryPrivacySummary()).toEqual(expectedPrivacy);
 
       // listAdminMemories: unfiltered + several filter shapes.

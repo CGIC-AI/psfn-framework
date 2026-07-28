@@ -562,6 +562,7 @@ export async function readJsonlLineAtOrAfterAsync(
       recordChunkRead(options.stats, priorRead.bytesRead);
       if (prior[0] !== NEWLINE_BYTE) {
         let foundBoundary = false;
+        let skippedPartialRowBytes = 0;
         while (startOffset < fileStat.size && !foundBoundary) {
           const bytesToRead = Math.min(boundedChunkBytes, fileStat.size - startOffset);
           const result = await handle.read(buffer, 0, bytesToRead, startOffset);
@@ -575,9 +576,24 @@ export async function readJsonlLineAtOrAfterAsync(
           recordChunkRead(options.stats, result.bytesRead);
           const newline = buffer.subarray(0, result.bytesRead).indexOf(NEWLINE_BYTE);
           if (newline >= 0) {
+            if (skippedPartialRowBytes + newline > options.maxLineBytes) {
+              throw oversizedJsonlLineError(
+                path,
+                options.maxLineBytes,
+                skippedPartialRowBytes + newline,
+              );
+            }
             startOffset += newline + 1;
             foundBoundary = true;
           } else {
+            skippedPartialRowBytes += result.bytesRead;
+            if (skippedPartialRowBytes > options.maxLineBytes) {
+              throw oversizedJsonlLineError(
+                path,
+                options.maxLineBytes,
+                skippedPartialRowBytes,
+              );
+            }
             startOffset += result.bytesRead;
           }
           await recordEventLoopYield(options.stats);

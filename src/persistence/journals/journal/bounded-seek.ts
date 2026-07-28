@@ -44,6 +44,42 @@ interface SeekSegment {
   identity: string;
 }
 
+function snapshotSeekSegments(activePath: string): SeekSegment[] {
+  const archivePaths = listNumberedJsonlSegments(activePath)
+    .sort((left, right) => left.segmentNumber - right.segmentNumber)
+    .map(segment => segment.path);
+  if (existsSync(activePath)) archivePaths.push(activePath);
+  return archivePaths
+    .map((path): SeekSegment => {
+      const fileStat = statSync(path);
+      return {
+        path,
+        size: fileStat.size,
+        identity: fileIdentityKey(fileStat),
+      };
+    })
+    .filter(segment => segment.size > 0);
+}
+
+function assertSeekSnapshotUnchanged(
+  activePath: string,
+  expected: readonly SeekSegment[],
+): void {
+  const observed = snapshotSeekSegments(activePath);
+  const unchanged = observed.length === expected.length
+    && observed.every((segment, index) => (
+      segment.path === expected[index]?.path
+      && segment.size === expected[index]?.size
+      && segment.identity === expected[index]?.identity
+    ));
+  if (unchanged) return;
+  const error = new Error(
+    `Journal segment snapshot changed during bounded seek of ${activePath}`,
+  ) as NodeJS.ErrnoException;
+  error.code = 'ESTALE';
+  throw error;
+}
+
 /**
  * Locate a bounded journal window without retaining or synchronously scanning
  * an unbounded seek row. The final backward page scan remains the established
@@ -185,20 +221,7 @@ export async function readJournalEntriesBeforeAsyncOnce(
     })
   );
 
-  const archivePaths = listNumberedJsonlSegments(params.filePath)
-    .sort((left, right) => left.segmentNumber - right.segmentNumber)
-    .map(segment => segment.path);
-  if (existsSync(params.filePath)) archivePaths.push(params.filePath);
-  const nonEmptySegments = archivePaths
-    .map((path): SeekSegment => {
-      const fileStat = statSync(path);
-      return {
-        path,
-        size: fileStat.size,
-        identity: fileIdentityKey(fileStat),
-      };
-    })
-    .filter(segment => segment.size > 0);
+  const nonEmptySegments = snapshotSeekSegments(params.filePath);
 
   let candidateIndex = -1;
   let low = 0;
@@ -242,9 +265,11 @@ export async function readJournalEntriesBeforeAsyncOnce(
     }
   }
 
-  return {
+  const result = {
     entries: parsedDescending.reverse(),
     quarantined,
     truncated,
   };
+  assertSeekSnapshotUnchanged(params.filePath, nonEmptySegments);
+  return result;
 }

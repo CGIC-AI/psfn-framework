@@ -625,8 +625,15 @@ export class ImageReferenceStore {
       ...transition,
       references: remaining,
     };
-    this.writeIndex(nextIndex);
+    // Remove the blob before committing the index. The index is the only lookup
+    // and deletion surface, so if we dropped the reference first and then failed
+    // to unlink the blob, the blob would become an unreachable, unretryable
+    // orphan. Unlinking first means an rm failure rejects with the reference
+    // still recorded — discoverable and safe to retry — while a successful rm is
+    // followed by the authoritative index commit. rm uses force so a retry after
+    // a partial success (blob gone, index not yet committed) is a no-op unlink.
     await rm(this.resolveReferencePath(reference.fileName), { force: true });
+    this.writeIndex(nextIndex);
   }
 
   private buildDefaultTransition(

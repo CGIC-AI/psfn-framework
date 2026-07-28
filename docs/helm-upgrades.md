@@ -951,7 +951,9 @@ RFC-4122 companion ID and map the existing primary into all three authorities:
    companion-data/card paths and Postgres schema must match the Helm entry.
 3. Put the matching roster and credential references in `fleet-auth.json`, and
    supply every referenced `FLEET_AUTH_*` credential through
-   `fleetAuth.credentialEnv`.
+   `fleetAuth.credentialEnv` (see [Provision Fleet SSO (Discord
+   OAuth)](#provision-fleet-sso-discord-oauth) for the full provisioning
+   contract).
 4. Set the primary `runtime.*` paths to
    `<fleet.runtimeRoot>/companions/<companion-id>` and
    `<fleet.runtimeRoot>/workspaces/personal/<companion-id>`. Mount the existing
@@ -1105,6 +1107,79 @@ gateway model/provider route must resolve. A simultaneous first rollout can
 show one agent restart if it exhausts its gateway RPC connect retries before
 the gateway is ready; it must recover on the next start and the restart count
 must then remain stable.
+
+### Provision Fleet SSO (Discord OAuth)
+
+`PSFN_FLEET_AUTH=1` replaces per-Garden `ADMIN_TOKEN` browser access with a
+single Discord OAuth login (see [Verify the cluster Garden
+origin](#verify-the-cluster-garden-origin) for the exposure consequences;
+_updated to match shipped implementation: the ratified link target "Choose the
+Garden administration topology" was renamed to this section, which now documents
+Cluster Auth as the sole Garden topology — a separate `ADMIN_TOKEN` browser path
+is no longer a choice_). This section is the operator-ratified provisioning
+contract (2026-07-19). `config/fleet-auth.seed.json` is the full key reference;
+the notes below cover only what the operator supplies and what the deployment
+must mint.
+
+Canonical origins are fixed per surface and the SSO redirect must match one of
+them exactly (_updated to match shipped implementation: the concrete
+per-deployment origins are kept in the ignored private live-ops note per the
+repository Private Deployment Data policy, not in this tracked doc — placeholders
+below_):
+
+- Test cluster Garden: `https://<test-garden-origin>` (a tailnet origin served
+  with `tailscale serve`).
+- Live fleet Garden: `https://<live-fleet-garden-origin>`.
+- The satellite hub stays on its own `https://<satellite-hub-origin>`. It is a
+  separate surface and is not part of Fleet SSO.
+
+Discord application (one per deployment; a single app with both redirects works,
+but separate apps are preferred to keep the blast radius small):
+
+- Redirect URI is exactly `<canonicalOrigin>/auth/discord/callback`.
+- Scopes are `identify` ONLY. Do not request any guild-membership scope.
+- Role assignment maps Discord user snowflakes to roles in `fleet-auth.json`
+  through `accountRoster` entries; `rolePolicy.disabledActionsByRole` then
+  constrains each `owner`/`admin`/`member`/`guest` role. `discordEvidenceMappings`
+  ships empty and exists only for guild-role-driven access (_updated to match
+  shipped implementation: the ratified text located the snowflake→role binding
+  under `rolePolicy`; the shipped binding is `accountRoster`, and `rolePolicy`
+  carries only `disabledActionsByRole`_).
+
+The operator supplies: the Discord client ID (owner file), the client secret as
+the k8s secret env `FLEET_AUTH_DISCORD_CLIENT_SECRET`, and the operator's own
+Discord user snowflake for the initial `owner` mapping.
+
+Our side of the contract:
+
+- Author `fleet-auth.json` from `config/fleet-auth.seed.json`: set
+  `canonicalOrigin`, `callbackPath` `/auth/discord/callback`, `provider.kind`
+  `discord`, and `tokenCustody` `discard`.
+- Mint as env-backed secrets: `FLEET_AUTH_TOKEN_ENCRYPTION_KEY`,
+  `FLEET_AUTH_SESSION_PEPPER` (>=32 bytes), `FLEET_AUTH_ASSERTION_PRIVATE_KEY`,
+  and a trusted-host recovery credential (`FLEET_AUTH_RECOVERY_CREDENTIAL`).
+- Set `PSFN_FLEET_AUTH=1` on both gateway and Garden. The gateway strips
+  `ADMIN_TOKEN` browser paths in this mode.
+- Terminate HTTPS at the EXACT canonical origin (`tailscale serve` for tailnet
+  domains) and route the full origin to the gateway API listener. The portal is
+  served at `/fleet`.
+
+`config/fleet-auth.seed.json` documents the remaining required keys —
+`verifierKeys`, `databaseRoles`, `ttls`, and `hubDeviceAssertions` — do not
+hand-invent them.
+
+Load-bearing coupling confirmed live: when `fleet-auth.json` is authored (the
+Fleet-Auth verifier is active) the fleet Garden HARD-REQUIRES the complete
+companions registry at runtime and fails closed with `Fleet Garden startup
+requires the complete companions registry` (_updated to match shipped
+implementation: the ratified quote appended "and Fleet Auth verifier"; the
+shipped error string ends at "registry"_). Provisioning the Fleet-Auth verifier
+without a companions registry leaves Garden down — scale Garden to 0 rather than
+crash-looping it. Multi-companion mode is derived from the `companions.json`
+roster (more than one entry), not an environment switch (_updated to match
+shipped implementation: the ratified text referenced a `PSFN_MULTI_COMPANION`
+env var that does not exist; `multiCompanion` is computed from
+`companions.length > 1` in load-config_).
 
 ### Verify the cluster Garden origin
 

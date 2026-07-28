@@ -1375,7 +1375,7 @@ describe('pre_tool_use end-to-end wiring (7ym.3)', () => {
       name: 'no-destructive-shell',
       sourcePath: 'test',
       matcher: new HookMatcher(['shell']),
-      handler: (ctx) => {
+      handler: async (ctx) => {
         const command = (ctx.input as { command?: string }).command ?? '';
         return command.includes('rm -rf')
           ? { decision: 'block', reason: 'destructive shell command refused' }
@@ -1444,7 +1444,7 @@ describe('pre_tool_use end-to-end wiring (7ym.3)', () => {
       name: 'context-probe',
       sourcePath: 'test',
       matcher: new HookMatcher(['shell']),
-      handler: (ctx) => {
+      handler: async (ctx) => {
         seenSession = ctx.sessionId;
         return { additionalContext: 'noted' };
       },

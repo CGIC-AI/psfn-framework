@@ -1,6 +1,17 @@
-import { describe, it, expect } from 'vitest';
+import { afterEach, describe, it, expect } from 'vitest';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import type { UserMessage, AssistantMessage, ToolResultMessage } from '@mariozechner/pi-ai';
 import type { AgentMessage } from '../../boundary/pi-agent/index.js';
+import { PromptLayerStore } from '../identity/prompt-store.js';
+import type { PromptLayer } from '../identity/prompt-types.js';
+import type { PromptLayerStatePort } from '../identity/prompt-state-port.js';
+import {
+  ensureSystemLanguagePromptLayer,
+  installSystemLanguagePromptLayerSource,
+  resetSystemLanguageRuntimeForTests,
+} from '../identity/system-language.js';
 import {
   convertToLlm,
   sessionEntryToMessage,
@@ -245,10 +256,12 @@ describe('convertToLlm', () => {
     expect((result[0] as { messageClass?: string }).messageClass).toBe(MESSAGE_CLASSES.mirror);
   });
 
-  it('uses the neutral role label for assistant mirrors without a source author name', () => {
+  it('uses the neutral named label, never the raw wire role, for assistant mirrors without a source author name', () => {
     const result = convertToLlm([makeMirror('hello from another channel')]);
     expect(result).toHaveLength(1);
-    expect((result[0] as UserMessage).content).toContain('assistant: hello from another channel');
+    const text = (result[0] as UserMessage).content;
+    expect(text).toContain('Me: hello from another channel');
+    expect(text).not.toContain('assistant:');
   });
 
   it('handles empty message array', () => {
@@ -373,5 +386,105 @@ describe('compactionToMessage', () => {
     expect(msg.coveredUpTo).toBe(10);
     expect(msg.timestamp).toBe(NOW);
     expect(msg.messageClass).toBe(MESSAGE_CLASSES.compaction);
+  });
+});
+
+describe('companion-configurable chassis phrasing (system.language)', () => {
+  afterEach(() => {
+    resetSystemLanguageRuntimeForTests();
+  });
+
+  function makeUserMirror(content: string): MirrorMessage {
+    return {
+      role: 'custom',
+      type: 'mirror',
+      content,
+      originChannelId: 'api:other',
+      sourceRole: 'user',
+      messageClass: MESSAGE_CLASSES.mirror,
+      timestamp: NOW,
+    };
+  }
+
+  function withInstalledLanguage(overrides: Record<string, string>, run: () => void): void {
+    const tmpDir = mkdtempSync(join(tmpdir(), 'psfn-messages-language-'));
+    try {
+      const store = new PromptLayerStore(
+        join(tmpDir, 'prompt-layers.json'),
+        join(tmpDir, 'prompt-history.jsonl'),
+      );
+      const layer = ensureSystemLanguagePromptLayer(store);
+      const payload = JSON.parse(layer.content) as { templates: Record<string, string> };
+      Object.assign(payload.templates, overrides);
+      store.update(layer.id, JSON.stringify(payload), 'admin');
+      installSystemLanguagePromptLayerSource(store);
+      run();
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  }
+
+  it('renders the current default chassis strings when no layer source is installed', () => {
+    resetSystemLanguageRuntimeForTests();
+    const result = convertToLlm([makeSystemNote('boot'), makeWhisper('breathe')]);
+    expect((result[0] as AssistantMessage).content).toEqual([
+      { type: 'text', text: '[System note] boot' },
+    ]);
+    expect((result[1] as AssistantMessage).content).toEqual([
+      { type: 'text', text: '[Private runtime note to self; not user-visible and not sent by the user] breathe' },
+    ]);
+  });
+
+  it('renders companion-configured prefixes and speaker fallbacks without a code change', () => {
+    withInstalledLanguage({
+      'system_note.prefix': '[Note from the substrate]',
+      'internal_whisper.prefix': '[A quiet aside just for me]',
+      'mirror_note.speaker_self': 'My own voice',
+      'mirror_note.speaker_other': 'A visitor',
+    }, () => {
+      const result = convertToLlm([
+        makeSystemNote('boot'),
+        makeWhisper('breathe'),
+        makeMirror('echo self'),
+        makeUserMirror('echo other'),
+      ]);
+      expect((result[0] as AssistantMessage).content).toEqual([
+        { type: 'text', text: '[Note from the substrate] boot' },
+      ]);
+      expect((result[1] as AssistantMessage).content).toEqual([
+        { type: 'text', text: '[A quiet aside just for me] breathe' },
+      ]);
+      expect((result[2] as UserMessage).content).toContain('My own voice: echo self');
+      expect((result[3] as UserMessage).content).toContain('A visitor: echo other');
+    });
+  });
+
+  it('never surfaces a raw wire role in a mirror-note speaker fallback', () => {
+    resetSystemLanguageRuntimeForTests();
+    const result = convertToLlm([makeMirror('self line'), makeUserMirror('other line')]);
+    expect((result[0] as UserMessage).content).toContain('Me: self line');
+    expect((result[0] as UserMessage).content).not.toContain('assistant:');
+    expect((result[1] as UserMessage).content).toContain('Someone: other line');
+    expect((result[1] as UserMessage).content).not.toContain('user:');
+  });
+
+  it('fails closed to defaults when the installed language layer is malformed', () => {
+    const malformedPort = {
+      getAll: () => ([{
+        id: 'bad-language',
+        type: 'system_language',
+        identifier: 'system.language',
+        enabled: true,
+        content: '{"broken":',
+      }] as unknown as PromptLayer[]),
+    } as unknown as PromptLayerStatePort;
+    installSystemLanguagePromptLayerSource(malformedPort);
+
+    const result = convertToLlm([makeSystemNote('boot'), makeMirror('self line')]);
+    expect((result[0] as AssistantMessage).content).toEqual([
+      { type: 'text', text: '[System note] boot' },
+    ]);
+    expect((result[1] as UserMessage).content).toContain('Me: self line');
+    expect((result[1] as UserMessage).content).not.toContain('assistant:');
   });
 });

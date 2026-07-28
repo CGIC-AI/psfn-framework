@@ -66,6 +66,16 @@ export interface TurnRecordRecoveryScanStats {
   peakIdentityRowsInMemory: number;
   sqliteCacheBytes: number;
   maxRowBytes: number;
+  authorityActionsReturned?: number;
+  authorityBytesRead?: number;
+  authorityFilesScanned?: number;
+  authorityMainMessageBytesRetained?: number;
+  authorityOwnersScanned?: number;
+  authorityPeakCachedOwners?: number;
+  authorityPeakCachedTombstones?: number;
+  authorityPeakResultBytes?: number;
+  authorityPeakRowBytesOffPrimary?: number;
+  authorityRowsScanned?: number;
 }
 
 export interface TurnRecordRecoveryScanOptions {

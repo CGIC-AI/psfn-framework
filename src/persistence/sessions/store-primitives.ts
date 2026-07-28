@@ -118,6 +118,8 @@ export interface SessionStoreOptions {
    * session-integrity incident. Absent keeps reads byte-identical.
    */
   integrityObserver?: SessionIntegrityObserver | null;
+  /** Test/observability seam after recovery pins an owner L0 snapshot. */
+  recoveryAuthoritySnapshotHook?: (ownerSessionId: string) => void | Promise<void>;
 }
 
 export interface SessionIntegrityProvider {

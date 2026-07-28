@@ -21,6 +21,8 @@ const entries = {
     'session-integrity-repair': 'src/app/maintenance/session-integrity-repair.ts',
     'turn-record-recovery-worker':
       'src/persistence/sessions/turn-record-recovery-worker.ts',
+    'turn-tombstone-authority-worker':
+      'src/persistence/sessions/turn-tombstone-authority-worker.ts',
     'verify-shell-sandbox-runtime':
       'src/app/maintenance/verify-shell-sandbox-runtime.ts',
     'preflight-startup-owner-files': 'scripts/preflight-startup-owner-files.ts',
@@ -33,7 +35,10 @@ export default defineConfig({
   target: 'node22',
   dts: {
     entry: Object.fromEntries(
-      Object.entries(entries).filter(([name]) => name !== 'turn-record-recovery-worker'),
+      Object.entries(entries).filter(([name]) => (
+        name !== 'turn-record-recovery-worker'
+        && name !== 'turn-tombstone-authority-worker'
+      )),
     ),
   },
   sourcemap: true,

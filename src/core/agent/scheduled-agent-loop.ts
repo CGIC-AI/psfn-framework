@@ -222,7 +222,7 @@ function buildLoopCheckInMessage(stepCount: number): AgentMessage {
       type: 'text',
       text: `[SYSTEM: Long-Horizon Check-In] You have used ${stepCount} assistant steps in this turn. `
         + 'Pause before the next tool call: state the current goal, what has been proven, what remains uncertain, '
-        + 'and whether to continue inline, delegate to a subagent/shard, create or claim a bead, or stop with partial findings. '
+        + 'and whether to continue inline, delegate to an automaton/shard, create or claim a bead, or stop with partial findings. '
         + 'Do not repeat failed tool calls; continue only when the next step directly advances the goal and fits the charge budget.',
     }],
     timestamp: Date.now(),

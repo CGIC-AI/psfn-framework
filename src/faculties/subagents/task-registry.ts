@@ -110,7 +110,7 @@ export class SubagentTaskRegistry {
   ): SubagentTaskRecord {
     const current = this.activeTasks.get(subagentId);
     if (!current) {
-      throw new Error(`Unknown subagent task "${subagentId}".`);
+      throw new Error(`Unknown automaton task "${subagentId}".`);
     }
     assertAllowedTransition(subagentId, current.lifecycleState, nextState);
     current.lifecycleState = nextState;
@@ -130,7 +130,7 @@ export class SubagentTaskRegistry {
   ): SubagentTaskRecord {
     const current = this.activeTasks.get(subagentId);
     if (!current) {
-      throw new Error(`Unknown subagent task "${subagentId}".`);
+      throw new Error(`Unknown automaton task "${subagentId}".`);
     }
     assertAllowedTransition(subagentId, current.lifecycleState, nextState);
     current.lifecycleState = nextState;
@@ -152,7 +152,7 @@ function assertAllowedTransition(
   next: SubagentTaskLifecycleState,
 ): void {
   if (!ALLOWED_TRANSITIONS[current].includes(next)) {
-    throw new Error(`Invalid subagent task transition for ${subagentId}: ${current} -> ${next}.`);
+    throw new Error(`Invalid automaton task transition for ${subagentId}: ${current} -> ${next}.`);
   }
 }
 

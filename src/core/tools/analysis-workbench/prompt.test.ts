@@ -10,7 +10,7 @@ describe('buildRLMSystemPrompt', () => {
     expect(prompt).toContain('large files, codebases, logs, datasets, transcripts, or evidence sets');
     expect(prompt).toContain('`await read_file(path, { offsetBytes? })`');
     expect(prompt).toContain('returns one bounded page with `content`, `offsetBytes`, `nextOffsetBytes`, `eof`, and `truncated`');
-    expect(prompt).toContain('Prefer running long reads in a bounded worker or subagent');
+    expect(prompt).toContain('Prefer running long reads in a bounded automaton');
     expect(prompt).toContain('Direct primary-channel use remains permitted');
     expect(prompt).toContain('Process each page incrementally instead of concatenating an unbounded whole file');
     expect(prompt).toContain('Routine orient actions, concern maintenance, scheduler/schedule work, and simple lookup must stay on direct active tools');

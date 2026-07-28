@@ -43,7 +43,7 @@ const READ_ACTIONS: ReadonlySet<string> = new Set([
   'exists',
   'timeline',
 ]);
-// Delete-class canonical mutations: never available from a subagent context,
+// Delete-class canonical mutations: never available from an automaton context,
 // at any tier or elevation (redact/restore are delete adjacency: redaction
 // soft-deletes the source, restore resurrects a soft-deleted memory).
 const DELETE_CLASS_ACTIONS: ReadonlySet<string> = new Set(['redact', 'delete', 'restore']);
@@ -111,7 +111,7 @@ export function resolveSubagentMemoryWritePolicy(input: {
   if (input.memoryWriteElevation) {
     const reason = input.memoryWriteElevation.reason.trim();
     if (!reason) {
-      throw new Error('Subagent memory-write elevation requires a non-empty reason.');
+      throw new Error('Automata memory-write elevation requires a non-empty reason.');
     }
     return { mode: 'elevated', reason };
   }
@@ -231,26 +231,26 @@ async function executeGovernedMutation(
 ): Promise<AgentToolResult<any>> {
   if (action === null) {
     return denyMutation(tool, context, toolCallId, action, 'unknown_action',
-      'Error: unrecognized memory action from a subagent context is denied (fail closed).');
+      'Error: unrecognized memory action from an automaton context is denied (fail closed).');
   }
   if (DELETE_CLASS_ACTIONS.has(action)) {
     return denyMutation(tool, context, toolCallId, action, 'delete_never_available',
-      `Error: memory ${action} is never available from a subagent context, at any tier or elevation (charter 6.11).`);
+      `Error: memory ${action} is never available from an automaton context, at any tier or elevation (charter 6.11).`);
   }
   if (action !== 'write' && action !== 'import' && action !== 'patch') {
     return denyMutation(tool, context, toolCallId, action, 'unsupported_action',
-      `Error: memory action "${action}" is not available from a subagent context (fail closed).`);
+      `Error: memory action "${action}" is not available from an automaton context (fail closed).`);
   }
   if (context.policy.mode === 'none') {
     return denyMutation(tool, context, toolCallId, action, 'memory_write_not_granted',
-      'Error: subagent memory writes are opt-in. Spawn the subagent with the "memory.write" capability '
+      'Error: automaton memory writes are opt-in. Spawn the automaton with the "memory.write" capability '
       + '(or an explicit audited memory-write elevation) to enable them.');
   }
   if (action === 'patch') {
     if (context.policy.mode !== 'elevated') {
       return denyMutation(tool, context, toolCallId, action, 'patch_requires_elevation',
         'Error: memory patch mutates canonical memory and requires an explicit per-spawn '
-        + 'memory-write elevation from a subagent context.');
+        + 'memory-write elevation from an automaton context.');
     }
     return executeStampedMutation(tool, context, toolCallId, action, params, signal);
   }
@@ -280,7 +280,7 @@ async function executeGovernedMutation(
   const classified = records.map(classifyImportRecord);
   if (classified.some(record => !record.valid)) {
     return denyMutation(tool, context, toolCallId, action, 'invalid_import_record',
-      'Error: every import record from a subagent context must declare non-empty text and a '
+      'Error: every import record from an automaton context must declare non-empty text and a '
       + 'valid memory type (fail closed).');
   }
   if (classified.every(record => !record.restricted)) {
@@ -345,7 +345,7 @@ async function stageForFoldReview(
     lineage = context.resolveLineage();
   } catch (error) {
     return denyMutation(tool, context, toolCallId, action, 'lineage_unavailable',
-      `Error: could not resolve subagent lineage for fold review: ${toErrorMessage(error)}. `
+      `Error: could not resolve automaton lineage for fold review: ${toErrorMessage(error)}. `
       + 'Nothing was written (fail closed).');
   }
   const stagedOutputs = resolveStagedShardMemoryOutputs(
@@ -397,7 +397,7 @@ async function stageForFoldReview(
     content: [{
       type: 'text',
       text: `${label} staged: ${stagedOutputs.length} candidate(s) pending fold review. `
-        + 'Emotional, relational, and boundary memory from a subagent context is never written '
+        + 'Emotional, relational, and boundary memory from an automaton context is never written '
         + 'directly; core reviews and promotes staged candidates.',
     }],
     details: {

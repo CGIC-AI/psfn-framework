@@ -85,7 +85,7 @@ describe('fs tool', () => {
     expect(longRead.truncated).toBe(true);
     expect(String(longRead.content)).toHaveLength(20_000);
     expect(longRead.next_action).toContain('analysis_workbench');
-    expect(longRead.next_action).toContain('subagent');
+    expect(longRead.next_action).toContain('automaton');
     expect(longRead.next_action).toContain('source path');
     expect(longRead.next_action).toContain('line or byte ranges');
     expect(searched).toMatchObject({

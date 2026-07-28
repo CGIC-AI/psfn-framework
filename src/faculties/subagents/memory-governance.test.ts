@@ -230,6 +230,9 @@ describe('createGovernedSubagentMemoryTool', () => {
       const result = await governed.execute('call-1', { action, memory_id: 'mem-1' }, undefined);
       expect(resultIsError(result)).toBe(true);
       expect(resultText(result)).toContain('never available');
+      // Register guard (rqn1.9): automaton-visible denial text stays in the
+      // automata register, never leaking the clinical "subagent" (6.28/8.12).
+      expect(resultText(result)).not.toMatch(/\bsubagent\b/iu);
     }
     expect(execute).not.toHaveBeenCalled();
     expect(recordPendingMemoryCandidates).not.toHaveBeenCalled();

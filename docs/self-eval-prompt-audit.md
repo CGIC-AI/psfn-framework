@@ -218,6 +218,12 @@ Rewrite (v2):
 - Output contract preserved: one plain-text paragraph, 60–120 words, no markdown
   (consumer `normalizeAppraisalSummary` only trims/clips — safe).
 
+Rewrite (v3) — companion register (charter 6.28/8.12, rqn1.9 batch D): the
+telemetry-boundary clause names the emotion-sensing signals *"fallible
+automata-derived signals"* instead of *"fallible classifier signals"*; no
+semantic change. `APPRAISAL_SYSTEM_PROMPT_VERSION` bumped 2 → 3 per this file's
+self-report-instrument versioning discipline.
+
 ### Passes (no change) — S4, S5, S6, S9, S11, S12, S13, S14
 
 - **S4** the re-voiced "[What this evidence is]" framing is the Law 30 first clause
@@ -281,7 +287,7 @@ version constants:
 | `REFLECTION_STARTER_PROMPT_VERSION` | `src/core/scheduler/heartbeat-template-runtime/reflection-starter-prompt.ts` | 1 |
 | `REFLECTION_INTROSPECTION_POLICY_BLOCK_VERSION` | `src/core/scheduler/reflection-introspection-policy.ts` | 3 |
 | `REFLECTION_CONTEXT_GUIDANCE_VERSION` | `src/persistence/journals/reflection-substrate.ts` | 3 |
-| `APPRAISAL_SYSTEM_PROMPT_VERSION` | `src/core/emotion/appraisal.ts` | 2 |
+| `APPRAISAL_SYSTEM_PROMPT_VERSION` | `src/core/emotion/appraisal.ts` | 3 |
 
 Note the migration refreshes the daily/weekly *default* templates' prompt/name/mode
 fields wholesale when the stored version is behind (pre-existing E6.2 behavior); it

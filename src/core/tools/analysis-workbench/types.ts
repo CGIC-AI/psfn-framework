@@ -16,6 +16,7 @@ import type {
   SandboxExecutionPortSeed,
   SandboxFileRead,
 } from '../../../shared/contracts/sandbox-analysis-contracts.js';
+import { PARENT_TURN_MAX_WALL_TIME_MS } from '../../agent/turn-limits.js';
 
 export type {
   NestedAnalysisOptions,
@@ -67,6 +68,16 @@ export interface REPLConfig {
   tierBudgets: Record<'nursery' | 'apprentice' | 'autonomous', TierAnalysisWorkbenchBudget>;
   rateLimit: AnalysisWorkbenchRateLimitConfig;
   cost: AnalysisWorkbenchCostConfig;
+  /**
+   * Total response-wait window for a Workbench invoked directly on a parent
+   * turn. Every direct root, nested, and sandbox completion shares this window;
+   * bounded workers retain the full tier wall budget. Expiry always releases
+   * the local tool wait and forwards an abort signal. Embedded providers honor
+   * that signal directly; split GatewayClient transport currently abandons its
+   * local RPC wait but requires a separate cancellable-RPC contract to tear
+   * down the gateway-side provider request.
+   */
+  directResponseTimeoutMs: number;
   outputTruncation: number;
   executionTimeoutMs: number;
 }
@@ -100,6 +111,17 @@ export const DEFAULT_REPL_TIER_BUDGETS: REPLConfig['tierBudgets'] = {
   },
 };
 
+export function validateAnalysisWorkbenchDirectResponseTimeoutMs(value: number): number {
+  const maximumMs = PARENT_TURN_MAX_WALL_TIME_MS - 60_000;
+  if (!Number.isSafeInteger(value) || value < 1 || value > maximumMs) {
+    throw new Error(
+      'Analysis Workbench directResponseTimeoutMs must be a positive safe integer '
+      + `no greater than ${maximumMs}ms so the parent turn retains 60000ms of response headroom`,
+    );
+  }
+  return value;
+}
+
 export const DEFAULT_REPL_CONFIG: REPLConfig = {
   budget: {
     maxIterations: 15,
@@ -119,6 +141,9 @@ export const DEFAULT_REPL_CONFIG: REPLConfig = {
     nurseryDailyCapUsd: 0.5,
     autonomousDailyWarningUsd: 5.0,
   },
+  directResponseTimeoutMs: validateAnalysisWorkbenchDirectResponseTimeoutMs(
+    PARENT_TURN_MAX_WALL_TIME_MS - 60_000,
+  ),
   outputTruncation: 8192,
   executionTimeoutMs: 5000,
 };

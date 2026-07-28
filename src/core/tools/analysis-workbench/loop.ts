@@ -14,7 +14,10 @@ import type {
   AnalysisWorkbenchResult,
   AnalysisWorkbenchStep,
 } from './types.js';
-import { createEmptyAnalysisWorkbenchDiagnostics } from './types.js';
+import {
+  createEmptyAnalysisWorkbenchDiagnostics,
+  validateAnalysisWorkbenchDirectResponseTimeoutMs,
+} from './types.js';
 import { REPLSandbox } from './sandbox.js';
 import type { SandboxBudgetRef } from './sandbox.js';
 import { buildRLMSystemPrompt } from './prompt.js';
@@ -26,7 +29,9 @@ import {
   createBudgetStatus,
   flattenEvidence,
   formatExecutionFeedback,
+  isBoundedAnalysisWorkerRequest,
   makeBudgetResult,
+  runAbortableAnalysisOperation,
   updateBudgetProgress,
   updateBudgetRuntime,
 } from './loop-helpers.js';
@@ -48,6 +53,7 @@ import {
   createSubjectAuthorizedMemoryStore,
   memorySubjectAccessContextFromCorrelation,
 } from '../../../faculties/memory/subject-authorized-store.js';
+import { abortError } from '../../../shared/utils/errors.js';
 
 const LLM_TIMEOUT_BUFFER_MS = 25;
 const LLM_TIMEOUT_REASON = 'llm timeout';
@@ -73,6 +79,7 @@ interface ReplGovernanceState {
 interface SharedAnalysisExecutionState {
   readonly startTime: number;
   readonly rootBudget: AnalysisWorkbenchBudget;
+  readonly directResponseDeadlineAtMs: number | null;
   readonly budgetRef: SandboxBudgetRef;
   totalInputTokens: number;
   totalOutputTokens: number;
@@ -88,6 +95,7 @@ interface AnalysisRunOptions {
   depth?: number;
   sharedState?: SharedAnalysisExecutionState;
   skipInvocationRateLimit?: boolean;
+  signal?: AbortSignal;
 }
 
 const GOVERNANCE_DEFAULT_DAY = '1970-01-01';
@@ -114,24 +122,14 @@ function pickMostConstrainedRemainingWallTimeMs(...values: Array<number | null>)
   return Math.min(...finiteValues);
 }
 
-async function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
-  if (timeoutMs <= 0) {
-    throw new LLMIterationTimeoutError(timeoutMs);
-  }
+function resolveDirectResponseTimeoutMs(config: REPLConfig): number {
+  return validateAnalysisWorkbenchDirectResponseTimeoutMs(config.directResponseTimeoutMs);
+}
 
-  return new Promise<T>((resolve, reject) => {
-    const timer = setTimeout(() => reject(new LLMIterationTimeoutError(timeoutMs)), timeoutMs);
-    promise.then(
-      (value) => {
-        clearTimeout(timer);
-        resolve(value);
-      },
-      (error) => {
-        clearTimeout(timer);
-        reject(error);
-      },
-    );
-  });
+function throwIfAnalysisAborted(signal: AbortSignal | undefined): void {
+  if (signal?.aborted) {
+    throw abortError(signal.reason, 'Analysis Workbench parent cancelled');
+  }
 }
 
 function resolveTierKey(tier: CapabilityTier): 'nursery' | 'apprentice' | 'autonomous' {
@@ -229,11 +227,13 @@ function resolveMemoryCeilingBytes(config: REPLConfig, tier: CapabilityTier): nu
 function createSharedAnalysisExecutionState(
   startTime: number,
   rootBudget: AnalysisWorkbenchBudget,
+  directResponseDeadlineAtMs: number | null,
   budgetRef: SandboxBudgetRef,
 ): SharedAnalysisExecutionState {
   return {
     startTime,
     rootBudget,
+    directResponseDeadlineAtMs,
     budgetRef,
     totalInputTokens: 0,
     totalOutputTokens: 0,
@@ -542,21 +542,28 @@ export async function runRLMLoop(
 
   const startTime = Date.now();
   const { config, llmProvider } = deps;
+  throwIfAnalysisAborted(runOptions.signal);
   const depth = runOptions.depth ?? 0;
   const isNestedRun = depth > 0;
   const chargePolicy = deps.chargePolicy ?? activeChargeContext?.chargePolicy;
   const tier = deps.getCapabilityTier?.() ?? 'autonomous';
   const budget = resolveEffectiveBudget(config, tier);
-  const sharedState = runOptions.sharedState ?? createSharedAnalysisExecutionState(
-    startTime,
-    budget,
-    {
-      subQueries: 0,
-      maxSubQueries: budget.maxSubQueries ?? 20,
-      toolCalls: 0,
-      maxToolCalls: budget.maxToolCalls ?? 50,
-    },
-  );
+  const sharedState = runOptions.sharedState ?? (() => {
+    const directResponseDeadlineAtMs = isBoundedAnalysisWorkerRequest(requestMetadata)
+      ? null
+      : startTime + resolveDirectResponseTimeoutMs(config);
+    return createSharedAnalysisExecutionState(
+      startTime,
+      budget,
+      directResponseDeadlineAtMs,
+      {
+        subQueries: 0,
+        maxSubQueries: budget.maxSubQueries ?? 20,
+        toolCalls: 0,
+        maxToolCalls: budget.maxToolCalls ?? 50,
+      },
+    );
+  })();
 
   const budgetStatus = createBudgetStatus();
   budgetStatus.warnings = sharedState.warnings;
@@ -625,8 +632,15 @@ export async function runRLMLoop(
       purpose: 'analysis_workbench',
     })
     : { allowed: false, reason: 'channel_type_not_allowed' as const };
+  const getCompletionTimeoutMs = (): number | null => pickMostConstrainedRemainingWallTimeMs(
+    getRemainingWallTimeMs(startTime, budget),
+    getRemainingWallTimeMs(sharedState.startTime, sharedState.rootBudget),
+    sharedState.directResponseDeadlineAtMs === null
+      ? null
+      : sharedState.directResponseDeadlineAtMs - Date.now(),
+  );
   const sandboxLLMProvider = Object.create(llmProvider) as typeof llmProvider;
-  sandboxLLMProvider.complete = async (context, purpose) => {
+  sandboxLLMProvider.complete = async (context, purpose, options) => {
     const incomingCorrelation = context.correlation;
     const originStage = normalizeMetadataValue(incomingCorrelation?.originStage)
       ?? normalizeMetadataValue(incomingCorrelation?.purpose)
@@ -667,11 +681,20 @@ export async function runRLMLoop(
       },
     };
     const { correlation: sandboxCorrelation, ...contextWithoutCorrelation } = correlatedContext;
-    const response = await completeWithWorkSpec(
-      llmProvider,
-      contextWithoutCorrelation,
-      buildLLMWorkSpec({ purpose, durable: false, correlation: sandboxCorrelation }),
-    );
+    const response = await runAbortableAnalysisOperation({
+      timeoutMs: getCompletionTimeoutMs(),
+      parentSignals: [runOptions.signal, options?.signal],
+      createTimeoutReason: timeoutMs => new LLMIterationTimeoutError(timeoutMs),
+      run: async signal => await completeWithWorkSpec(
+        llmProvider,
+        contextWithoutCorrelation,
+        buildLLMWorkSpec({ purpose, durable: false, correlation: sandboxCorrelation }),
+        {
+          signal,
+          ...(options?.modelHint ? { modelHint: options.modelHint } : {}),
+        },
+      ),
+    });
     sandboxTokenUsage.inputTokens += response.inputTokens;
     sandboxTokenUsage.outputTokens += response.outputTokens;
     return response;
@@ -711,6 +734,7 @@ export async function runRLMLoop(
           depth: depth + 1,
           sharedState,
           skipInvocationRateLimit: true,
+          signal: runOptions.signal,
         },
       );
       const childResult = deps.chargePolicy
@@ -850,6 +874,7 @@ export async function runRLMLoop(
   };
 
   while (localIterations < budget.maxIterations) {
+    throwIfAnalysisAborted(runOptions.signal);
     if (localIterations > 0) {
       const chargeInspection = inspectChargeSurface('analysisWorkbenchExtensionBand', {
         chargePolicy,
@@ -878,13 +903,13 @@ export async function runRLMLoop(
     }
 
     const iterationStart = Date.now();
-    const remainingBeforeLLM = pickMostConstrainedRemainingWallTimeMs(
-      getRemainingWallTimeMs(startTime, budget),
-      getRemainingWallTimeMs(sharedState.startTime, sharedState.rootBudget),
-    );
+    const remainingBeforeLLM = getCompletionTimeoutMs();
     if (remainingBeforeLLM !== null && remainingBeforeLLM <= 0) {
       finalizeBudgetStatus();
-      budgetStatus.exceeded = 'wall time';
+      budgetStatus.exceeded = sharedState.directResponseDeadlineAtMs !== null
+        && Date.now() >= sharedState.directResponseDeadlineAtMs
+        ? LLM_TIMEOUT_REASON
+        : 'wall time';
       break;
     }
 
@@ -900,22 +925,28 @@ export async function runRLMLoop(
         break;
       }
 
-      const runCompletion = async () => await completeWithWorkSpec(
-        llmProvider,
-        {
-          systemPrompt,
-          messages,
-        },
-        buildLLMWorkSpec({
-          purpose: 'reasoning',
-          durable: false,
-          correlation: buildAnalysisCorrelation(
-            requestMetadata,
-            'repl.analysis_workbench.iteration',
-            `iteration-${iterationNumber}`,
-          ),
-        }),
-      );
+      const runCompletion = async () => await runAbortableAnalysisOperation({
+        timeoutMs,
+        parentSignals: [runOptions.signal],
+        createTimeoutReason: timeoutMs => new LLMIterationTimeoutError(timeoutMs),
+        run: async signal => await completeWithWorkSpec(
+          llmProvider,
+          {
+            systemPrompt,
+            messages,
+          },
+          buildLLMWorkSpec({
+            purpose: 'reasoning',
+            durable: false,
+            correlation: buildAnalysisCorrelation(
+              requestMetadata,
+              'repl.analysis_workbench.iteration',
+              `iteration-${iterationNumber}`,
+            ),
+          }),
+          { signal },
+        ),
+      });
       const completion = iterationNumber > 1
         ? runWithChargedSurface('analysisWorkbenchExtensionBand', {
             chargePolicy,
@@ -926,9 +957,7 @@ export async function runRLMLoop(
             },
           }, runCompletion)
         : runCompletion();
-      response = timeoutMs === null
-        ? await completion
-        : await withTimeout(completion, timeoutMs);
+      response = await completion;
     } catch (error) {
       finalizeBudgetStatus();
       if (error instanceof LLMIterationTimeoutError) {
@@ -1007,6 +1036,7 @@ export async function runRLMLoop(
         const sandboxInputBefore = sandboxTokenUsage.inputTokens;
         const sandboxOutputBefore = sandboxTokenUsage.outputTokens;
         const result = await sandbox.execute(action.code, config.executionTimeoutMs, config.outputTruncation);
+        throwIfAnalysisAborted(runOptions.signal);
         const sandboxInputDelta = sandboxTokenUsage.inputTokens - sandboxInputBefore;
         const sandboxOutputDelta = sandboxTokenUsage.outputTokens - sandboxOutputBefore;
         if (sandboxInputDelta > 0 || sandboxOutputDelta > 0) {

@@ -130,6 +130,7 @@ const DIRECT_DEFINED_CONFIG_SETTINGS = [
   'profileSynthesisMinSourceMemories',
   'analysisWorkbenchMaxTokens',
   'analysisWorkbenchMaxWallTimeMs',
+  'analysisWorkbenchDirectResponseTimeoutMs',
   'analysisWorkbenchMaxSubQueries',
   'analysisWorkbenchExecutionTimeoutMs',
   'analysisWorkbenchOutputTruncation',
@@ -284,6 +285,8 @@ function getMemorySettingsSnapshot(config: SubstrateConfig) {
       config.profileSynthesisMinSourceMemories ?? null,
     analysisWorkbenchMaxTokens: config.analysisWorkbenchMaxTokens ?? null,
     analysisWorkbenchMaxWallTimeMs: config.analysisWorkbenchMaxWallTimeMs ?? null,
+    analysisWorkbenchDirectResponseTimeoutMs:
+      config.analysisWorkbenchDirectResponseTimeoutMs ?? null,
     analysisWorkbenchMaxSubQueries: config.analysisWorkbenchMaxSubQueries ?? null,
     analysisWorkbenchExecutionTimeoutMs:
       config.analysisWorkbenchExecutionTimeoutMs ?? null,
@@ -318,6 +321,7 @@ function getMemorySettingsSnapshot(config: SubstrateConfig) {
     | 'profileSynthesisMinSourceMemories'
     | 'analysisWorkbenchMaxTokens'
     | 'analysisWorkbenchMaxWallTimeMs'
+    | 'analysisWorkbenchDirectResponseTimeoutMs'
     | 'analysisWorkbenchMaxSubQueries'
     | 'analysisWorkbenchExecutionTimeoutMs'
     | 'analysisWorkbenchOutputTruncation'

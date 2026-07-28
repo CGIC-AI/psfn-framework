@@ -119,6 +119,7 @@ export const SETTINGS_GARDEN_FIELD_EXPOSURE = {
   uiThemeId: { sectionId: 'profile', surface: 'advanced' },
   analysisWorkbenchMaxTokens: { sectionId: 'analysis-workbench', surface: 'advanced' },
   analysisWorkbenchMaxWallTimeMs: { sectionId: 'analysis-workbench', surface: 'advanced' },
+  analysisWorkbenchDirectResponseTimeoutMs: { sectionId: 'analysis-workbench', surface: 'advanced' },
   analysisWorkbenchMaxSubQueries: { sectionId: 'analysis-workbench', surface: 'advanced' },
   analysisWorkbenchExecutionTimeoutMs: { sectionId: 'analysis-workbench', surface: 'advanced' },
   analysisWorkbenchOutputTruncation: { sectionId: 'analysis-workbench', surface: 'advanced' },

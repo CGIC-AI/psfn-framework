@@ -379,6 +379,8 @@ export interface SubstrateConfig {
   echoTtsModel?: string;
   analysisWorkbenchMaxTokens?: number;
   analysisWorkbenchMaxWallTimeMs?: number;
+  /** Shared response-wait window for direct-parent Workbench execution. */
+  analysisWorkbenchDirectResponseTimeoutMs?: number;
   analysisWorkbenchMaxSubQueries?: number;
   /** Per-code-block sandbox execution timeout (ms) for the analysis workbench. */
   analysisWorkbenchExecutionTimeoutMs?: number;

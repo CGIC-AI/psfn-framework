@@ -5,7 +5,11 @@ import type { CapabilityTier, SubstrateConfig } from '../../../system/config/run
 import type { Scheduler } from '../../../core/scheduler/scheduler.js';
 import { createComponentLogger } from '../../../shared/logger.js';
 import type { ToolRegistrarTarget } from '../../../core/agent/tool-registrar.js';
-import { DEFAULT_REPL_CONFIG, type REPLConfig } from '../../../core/tools/analysis-workbench/types.js';
+import {
+  DEFAULT_REPL_CONFIG,
+  type REPLConfig,
+  validateAnalysisWorkbenchDirectResponseTimeoutMs,
+} from '../../../core/tools/analysis-workbench/types.js';
 import type { MessageSender } from '../../../system/lifecycle/notifications.js';
 import type { LLMProviderPort } from '../../../core/agent/contracts.js';
 import { wireFilesystemRuntime, type FilesystemRuntimeTarget } from '../../../boundary/integrations/filesystem/runtime-wiring.js';
@@ -157,6 +161,11 @@ export function buildReplConfig(config: SubstrateConfig): REPLConfig {
   };
   if (config.analysisWorkbenchMaxTokens !== undefined) replConfig.budget.maxTokens = config.analysisWorkbenchMaxTokens;
   if (config.analysisWorkbenchMaxWallTimeMs !== undefined) replConfig.budget.maxWallTimeMs = config.analysisWorkbenchMaxWallTimeMs;
+  if (config.analysisWorkbenchDirectResponseTimeoutMs !== undefined) {
+    replConfig.directResponseTimeoutMs = validateAnalysisWorkbenchDirectResponseTimeoutMs(
+      config.analysisWorkbenchDirectResponseTimeoutMs,
+    );
+  }
   if (config.analysisWorkbenchMaxSubQueries !== undefined) replConfig.budget.maxSubQueries = config.analysisWorkbenchMaxSubQueries;
   if (config.analysisWorkbenchExecutionTimeoutMs !== undefined) replConfig.executionTimeoutMs = config.analysisWorkbenchExecutionTimeoutMs;
   if (config.analysisWorkbenchOutputTruncation !== undefined) replConfig.outputTruncation = config.analysisWorkbenchOutputTruncation;

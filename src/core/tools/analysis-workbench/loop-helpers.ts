@@ -7,6 +7,8 @@ import {
   type AnalysisWorkbenchResult,
   type AnalysisWorkbenchStep,
 } from './types.js';
+import { combineAbortSignal } from '../../../shared/utils/abort-signal.js';
+import { abortError } from '../../../shared/utils/errors.js';
 
 export interface StepBuilderInput {
   iteration: number;
@@ -32,6 +34,78 @@ export interface BudgetResultInput {
   steps?: AnalysisWorkbenchStep[];
   evidence?: AnalysisWorkbenchEvidence[];
   diagnostics?: AnalysisWorkbenchDiagnostics;
+}
+
+export interface AnalysisWorkerRequestMetadata {
+  workloadType?: string;
+  subagentId?: string;
+  shardId?: string;
+}
+
+export function isBoundedAnalysisWorkerRequest(
+  metadata: AnalysisWorkerRequestMetadata,
+): boolean {
+  return metadata.workloadType === 'subagent'
+    || metadata.workloadType === 'shard'
+    || Boolean(metadata.subagentId)
+    || Boolean(metadata.shardId);
+}
+
+/**
+ * Settle the local caller promptly when a parent or deadline aborts, while
+ * forwarding the composed signal to the operation. A split transport may only
+ * stop its local RPC wait unless that transport implements remote cancellation.
+ */
+export async function runAbortableAnalysisOperation<T>(options: {
+  timeoutMs: number | null;
+  parentSignals: Array<AbortSignal | undefined>;
+  createTimeoutReason: (timeoutMs: number) => unknown;
+  run: (signal: AbortSignal) => Promise<T>;
+}): Promise<T> {
+  if (options.timeoutMs !== null && options.timeoutMs <= 0) {
+    throw options.createTimeoutReason(options.timeoutMs);
+  }
+
+  const deadlineController = new AbortController();
+  const signal = options.parentSignals.reduce<AbortSignal>(
+    (combined, parentSignal) =>
+      combineAbortSignal(parentSignal, combined) ?? combined,
+    deadlineController.signal,
+  );
+  if (signal.aborted) {
+    throw signal.reason ?? abortError(undefined, 'Analysis Workbench completion aborted');
+  }
+
+  let rejectAbort!: (reason: unknown) => void;
+  const aborted = new Promise<never>((_resolve, reject) => {
+    rejectAbort = reject;
+  });
+  const rejectOnAbort = (): void => {
+    rejectAbort(
+      signal.reason
+      ?? abortError(undefined, 'Analysis Workbench completion aborted'),
+    );
+  };
+  signal.addEventListener('abort', rejectOnAbort, { once: true });
+
+  const timeoutMs = options.timeoutMs;
+  let timer: NodeJS.Timeout | undefined;
+  if (timeoutMs !== null) {
+    timer = setTimeout(() => {
+      if (!deadlineController.signal.aborted) {
+        deadlineController.abort(options.createTimeoutReason(timeoutMs));
+      }
+    }, timeoutMs);
+    timer.unref();
+  }
+
+  const operation = Promise.resolve().then(() => options.run(signal));
+  try {
+    return await Promise.race([operation, aborted]);
+  } finally {
+    if (timer) clearTimeout(timer);
+    signal.removeEventListener('abort', rejectOnAbort);
+  }
 }
 
 export function createBudgetStatus(): BudgetStatus {

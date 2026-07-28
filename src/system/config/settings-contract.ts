@@ -290,6 +290,7 @@ const SETTINGS_INTEGER_FIELDS = new Set<string>([
   'profileSynthesisMinSourceMemories',
   'analysisWorkbenchMaxTokens',
   'analysisWorkbenchMaxWallTimeMs',
+  'analysisWorkbenchDirectResponseTimeoutMs',
   'analysisWorkbenchMaxSubQueries',
   'analysisWorkbenchExecutionTimeoutMs',
   'analysisWorkbenchOutputTruncation',

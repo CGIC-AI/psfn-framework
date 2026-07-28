@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { runRLMLoop } from './loop.js';
+import { createAnalysisWorkbenchTool } from './tools.js';
 import type { LLMProviderPort } from '../../agent/contracts.js';
 import type { REPLDeps, REPLConfig } from './types.js';
 import { DEFAULT_REPL_CONFIG } from './types.js';
@@ -28,6 +29,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.useRealTimers();
   if (ORIGINAL_MODULE_REGISTRY_PATH === undefined) {
     delete process.env.MODULE_REGISTRY_PATH;
   } else {
@@ -618,6 +620,242 @@ describe('runRLMLoop', () => {
     expect(result.iterations).toBe(0);
     expect(result.budgetStatus.exceeded).toBe('llm timeout');
     expect(result.answer).toContain('timed out');
+  });
+
+  it('aborts a never-resolving direct-parent completion at the owned response deadline', async () => {
+    vi.useFakeTimers();
+    let providerSignal: AbortSignal | undefined;
+    const llm: LLMProviderPort = {
+      stream: vi.fn(),
+      complete: vi.fn(async (_context, _purpose, options) => {
+        providerSignal = options?.signal;
+        return await new Promise<LLMResponse>((_resolve, reject) => {
+          const rejectAfterAbort = (): void => {
+            setTimeout(() => reject(providerSignal?.reason ?? new Error('aborted')), 1);
+          };
+          if (providerSignal?.aborted) {
+            rejectAfterAbort();
+            return;
+          }
+          providerSignal?.addEventListener('abort', rejectAfterAbort, { once: true });
+        });
+      }),
+    };
+    const config: REPLConfig = {
+      ...makeConfig({ maxWallTimeMs: 200 }),
+      directResponseTimeoutMs: 50,
+    };
+
+    const pending = runRLMLoop(
+      'Never resolve',
+      makeDeps(llm, { config }),
+      { channelId: 'api:direct-timeout', requestId: 'direct-timeout' },
+    );
+    await vi.advanceTimersByTimeAsync(50);
+    const abortedAtOwnedDeadline = providerSignal?.aborted === true;
+    await vi.advanceTimersByTimeAsync(150);
+    const result = await pending;
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(abortedAtOwnedDeadline).toBe(true);
+    expect(result.truncated).toBe(true);
+    expect(result.iterations).toBe(0);
+    expect(result.totalInputTokens).toBe(0);
+    expect(result.totalOutputTokens).toBe(0);
+    expect(result.budgetStatus.exceeded).toBe('llm timeout');
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('rejects a direct response timeout that consumes the canonical parent headroom', async () => {
+    const config: REPLConfig = {
+      ...makeConfig({ maxWallTimeMs: 300_000 }),
+      directResponseTimeoutMs: 300_000,
+    };
+
+    await expect(runRLMLoop(
+      'Invalid direct response window',
+      makeDeps(sequentialLLM(['FINAL("must not run")']), { config }),
+    )).rejects.toThrow('parent turn retains 60000ms of response headroom');
+  });
+
+  it('recommends worker delegation without disabling direct Workbench use', () => {
+    const tool = createAnalysisWorkbenchTool(makeDeps(sequentialLLM(['FINAL("noop")'])));
+
+    expect(tool.description).toContain('bounded worker or automaton');
+    expect(tool.description).toContain('primary channel stays responsive');
+    expect(tool.description).toContain('direct use is permitted');
+  });
+
+  it('forwards parent cancellation to an embedded provider and settles the tool locally', async () => {
+    vi.useFakeTimers();
+    const parent = new AbortController();
+    let providerSignal: AbortSignal | undefined;
+    let enterProvider!: () => void;
+    const providerEntered = new Promise<void>((resolve) => {
+      enterProvider = resolve;
+    });
+    const llm: LLMProviderPort = {
+      stream: vi.fn(),
+      complete: vi.fn(async (_context, _purpose, options) => {
+        providerSignal = options?.signal;
+        enterProvider();
+        return await new Promise<LLMResponse>((_resolve, reject) => {
+          const rejectAborted = (): void => reject(
+            providerSignal?.reason ?? new Error('aborted'),
+          );
+          if (providerSignal?.aborted) {
+            rejectAborted();
+            return;
+          }
+          providerSignal?.addEventListener('abort', rejectAborted, { once: true });
+        });
+      }),
+    };
+    const config: REPLConfig = {
+      ...makeConfig({ maxWallTimeMs: 100 }),
+      directResponseTimeoutMs: 50,
+    };
+    const tool = createAnalysisWorkbenchTool(makeDeps(llm, { config }));
+
+    const pending = tool.execute('call-parent-cancel', { task: 'wait forever' }, parent.signal);
+    await providerEntered;
+    parent.abort(new Error('parent cancelled'));
+    const result = await pending;
+    const text = result.content[0]?.type === 'text' ? result.content[0].text : '';
+
+    expect(providerSignal?.aborted).toBe(true);
+    expect(result.details.isError).toBe(true);
+    expect(text).toContain('parent cancelled');
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('shares the direct response window across iterations while workers retain the full wall budget', async () => {
+    vi.useFakeTimers();
+    const config: REPLConfig = {
+      ...makeConfig({ maxWallTimeMs: 200 }),
+      directResponseTimeoutMs: 80,
+    };
+    const createDelayedProvider = (): LLMProviderPort => {
+      let call = 0;
+      return {
+        stream: vi.fn(),
+        complete: vi.fn(async (_context, _purpose, options) => {
+          call += 1;
+          const content = call === 1 ? 'Still reasoning' : 'FINAL("worker result")';
+          return await new Promise<LLMResponse>((resolve, reject) => {
+            const timer = setTimeout(() => resolve(mockResponse(content)), 30);
+            const rejectAborted = (): void => {
+              clearTimeout(timer);
+              reject(options?.signal?.reason ?? new Error('aborted'));
+            };
+            if (options?.signal?.aborted) {
+              rejectAborted();
+              return;
+            }
+            options?.signal?.addEventListener('abort', rejectAborted, { once: true });
+          });
+        }),
+      };
+    };
+
+    const directRun = runRLMLoop(
+      'Direct multi-pass',
+      makeDeps(createDelayedProvider(), { config }),
+      { channelId: 'api:direct-multi', requestId: 'direct-multi' },
+    );
+    await vi.advanceTimersByTimeAsync(90);
+    const directResult = await directRun;
+
+    const workerRun = runRLMLoop(
+      'Worker multi-pass',
+      makeDeps(createDelayedProvider(), { config }),
+      {
+        channelId: 'subagent:worker-1',
+        requestId: 'worker-multi',
+        subagentId: 'worker-1',
+        workloadType: 'subagent',
+      },
+    );
+    await vi.advanceTimersByTimeAsync(60);
+    const workerResult = await workerRun;
+
+    expect(directResult.iterations).toBe(1);
+    expect(directResult.budgetStatus.exceeded).toBe('llm timeout');
+    expect(workerResult.answer).toBe('worker result');
+    expect(workerResult.iterations).toBe(2);
+    expect(workerResult.budgetStatus.exceeded).toBeNull();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it.each([
+    {
+      name: 'nested_analysis',
+      firstResponse: '```repl\nawait nested_analysis("child task");\n```',
+    },
+    {
+      name: 'sandbox llm_query',
+      firstResponse: '```repl\nawait llm_query("child task");\n```',
+    },
+  ])('propagates parent cancellation through $name shared lifetime', async ({ firstResponse }) => {
+    vi.useFakeTimers();
+    const parent = new AbortController();
+    let childSignal: AbortSignal | undefined;
+    let enterChild!: () => void;
+    const childEntered = new Promise<void>((resolve) => {
+      enterChild = resolve;
+    });
+    let call = 0;
+    const llm: LLMProviderPort = {
+      stream: vi.fn(),
+      complete: vi.fn(async (_context, _purpose, options) => {
+        call += 1;
+        if (call === 1) {
+          return mockResponse(firstResponse);
+        }
+        childSignal = options?.signal;
+        enterChild();
+        return await new Promise<LLMResponse>((_resolve, reject) => {
+          const rejectAborted = (): void => reject(childSignal?.reason ?? new Error('aborted'));
+          if (childSignal?.aborted) {
+            rejectAborted();
+            return;
+          }
+          childSignal?.addEventListener('abort', rejectAborted, { once: true });
+        });
+      }),
+    };
+    const config: REPLConfig = {
+      ...makeConfig({ maxWallTimeMs: 100 }),
+      directResponseTimeoutMs: 50,
+    };
+    const pending = runRLMLoop(
+      'Shared cancellation',
+      makeDeps(llm, {
+        config,
+        getCapabilityTier: () => 'autonomous',
+        compositionalPolicy: {
+          enabled: true,
+          allowedTiers: ['autonomous'],
+          allowedChannelTypes: ['api'],
+          allowedPurposes: ['analysis_workbench'],
+        },
+      }),
+      { channelId: 'api:shared-cancel', requestId: 'shared-cancel' },
+      { signal: parent.signal },
+    );
+
+    await childEntered;
+    parent.abort(new Error('parent cancelled'));
+    const abortedWithParent = childSignal?.aborted === true;
+    await vi.advanceTimersByTimeAsync(100);
+    const outcome = await pending.then(
+      result => ({ result }),
+      error => ({ error }),
+    );
+
+    expect(abortedWithParent).toBe(true);
+    expect(outcome).toEqual({ error: expect.objectContaining({ message: 'parent cancelled' }) });
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it('records durationMs', async () => {

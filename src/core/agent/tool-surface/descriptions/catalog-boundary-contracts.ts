@@ -27,7 +27,7 @@ export const CATALOG_BOUNDARY_TOOL_CONTRACTS = {
   response_control: {
     purpose: 'Record an intentional decision to send no outward response for the current turn.',
     actions: [action('no_reply', [], ['reason'])],
-    output: 'It returns an audited disposition and never emits a user-visible sentinel.',
+    output: 'It returns an audited disposition and never emits a sentinel visible to the person.',
     guidance: 'Do not use it while a generated paid attachment still needs an ordinary reply for delivery.',
     example: { action: 'no_reply', reason: 'The message requests no response.' },
   },

@@ -144,10 +144,46 @@ spec:
               value: memory
             {{- end }}
           readinessProbe:
-            tcpSocket:
-              port: admin-https
+            exec:
+              command:
+                - node
+                - -e
+                - |
+                  const fs = require('node:fs');
+                  const https = require('node:https');
+                  const { X509Certificate } = require('node:crypto');
+                  const cert = fs.readFileSync(process.env.ADMIN_TRANSPORT_TLS_CERT_PATH);
+                  const spiffeUris = value => (value || '')
+                    .split(',')
+                    .map(entry => entry.trim())
+                    .filter(entry => entry.startsWith('URI:spiffe://'))
+                    .map(entry => entry.slice(4));
+                  const ownSpiffeUris = spiffeUris(new X509Certificate(cert).subjectAltName);
+                  if (ownSpiffeUris.length !== 1) process.exit(1);
+                  const ownSpiffeUri = ownSpiffeUris[0];
+                  const request = https.get({
+                    host: '127.0.0.1',
+                    port: Number(process.env.ADMIN_TRANSPORT_LISTEN_PORT),
+                    path: '/api/admin/__transport_probe__',
+                    ca: fs.readFileSync(process.env.ADMIN_TRANSPORT_TLS_CA_PATH),
+                    cert,
+                    key: fs.readFileSync(process.env.ADMIN_TRANSPORT_TLS_KEY_PATH),
+                    rejectUnauthorized: true,
+                    checkServerIdentity: (_host, peer) => (
+                      spiffeUris(peer.subjectaltname).includes(ownSpiffeUri)
+                        ? undefined
+                        : new Error('agent readiness peer SPIFFE identity mismatch')
+                    ),
+                    timeout: 1500,
+                  }, response => {
+                    response.resume();
+                    process.exit(response.statusCode === 200 ? 0 : 1);
+                  });
+                  request.once('timeout', () => request.destroy(new Error('agent readiness timed out')));
+                  request.once('error', () => process.exit(1));
             initialDelaySeconds: 15
             periodSeconds: 10
+            timeoutSeconds: 3
           livenessProbe:
             tcpSocket:
               port: admin-https

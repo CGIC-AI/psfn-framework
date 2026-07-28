@@ -4,10 +4,12 @@ import { createServer as createHttpsServer, type Server as HttpsServer, type Ser
 import { dirname } from 'node:path';
 import type { Duplex } from 'node:stream';
 import type { TLSSocket } from 'node:tls';
+import { X509Certificate } from 'node:crypto';
 import type { Lifecycle } from '../../shared/contracts/runtime.js';
 import { createComponentLogger } from '../../shared/logger.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
 import {
+  extractSpiffeUriSans,
   requireMtlsPeerFileConfig,
   verifyPeerCertificateSpiffeUri,
 } from '../../shared/net/mtls.js';
@@ -105,7 +107,9 @@ export class GardenAdminTransportServer implements Lifecycle {
   private readonly admission: GardenAdmissionMode;
   private readonly bufferedFleetBodies = new WeakMap<IncomingMessage, string>();
   private readonly companionId?: string;
+  private readonly selfCertificateSpiffeUri?: string;
   private serverClosePromise: Promise<void> | null = null;
+  private runtimeReady = false;
 
   constructor(
     private readonly config: GardenAdminTransportServerConfig,
@@ -117,6 +121,21 @@ export class GardenAdminTransportServer implements Lifecycle {
     };
     this.admission = resolveGardenAdmissionMode(modeSelection);
     this.companionId = config.config.companionId;
+    if (config.endpoint.mode === 'network') {
+      const tlsConfig = requireMtlsPeerFileConfig(
+        config.endpoint.tls,
+        'Garden admin transport server TLS',
+      );
+      const selfSpiffeUris = extractSpiffeUriSans(new X509Certificate(
+        readFileSync(tlsConfig.certPath),
+      ).subjectAltName);
+      if (selfSpiffeUris.length !== 1) {
+        throw new Error(
+          'Garden admin transport server certificate must carry exactly one SPIFFE URI SAN',
+        );
+      }
+      this.selfCertificateSpiffeUri = selfSpiffeUris[0];
+    }
     const appendAuditTimelineEntry = (
       actionType: AdminAuditActionType,
       decision: AdminAuditDecision,
@@ -262,6 +281,7 @@ export class GardenAdminTransportServer implements Lifecycle {
    * responsible for draining active connections and cleaning up socket state.
    */
   withdrawReadiness(): void {
+    this.runtimeReady = false;
     if (this.serverClosePromise) return;
     log.warn('Withdrawing Garden admin transport readiness', {
       endpoint: this.describeEndpoint(),
@@ -272,6 +292,14 @@ export class GardenAdminTransportServer implements Lifecycle {
         error: toErrorMessage(error),
       });
     });
+  }
+
+  /** Admit semantic health only after gateway auth and runtime initialization. */
+  markRuntimeReady(): void {
+    if (this.serverClosePromise) {
+      throw new Error('Cannot mark a closing Garden admin transport ready');
+    }
+    this.runtimeReady = true;
   }
 
   describeEndpoint(): Record<string, string | number> {
@@ -365,7 +393,7 @@ export class GardenAdminTransportServer implements Lifecycle {
     };
   }
 
-  private authorizePeer(req: IncomingMessage): string | null {
+  private authorizePeer(req: IncomingMessage, allowLoopbackSelfProbe: boolean): string | null {
     if (this.config.endpoint.mode !== 'network') {
       return null;
     }
@@ -380,20 +408,25 @@ export class GardenAdminTransportServer implements Lifecycle {
     if (Object.keys(peerCertificate).length === 0) {
       return 'peer TLS certificate is missing';
     }
-    return verifyPeerCertificateSpiffeUri(
+    const expectedPeerError = verifyPeerCertificateSpiffeUri(
       peerCertificate,
       this.config.endpoint.tls.expectedPeerSpiffeUri,
     );
+    if (!expectedPeerError) return null;
+    const remoteAddress = req.socket.remoteAddress;
+    const loopback = remoteAddress === '127.0.0.1'
+      || remoteAddress === '::1'
+      || remoteAddress === '::ffff:127.0.0.1';
+    if (allowLoopbackSelfProbe
+      && loopback
+      && this.selfCertificateSpiffeUri
+      && !verifyPeerCertificateSpiffeUri(peerCertificate, this.selfCertificateSpiffeUri)) {
+      return null;
+    }
+    return expectedPeerError;
   }
 
   private handleRequest(req: IncomingMessage, res: ServerResponse): void {
-    const rejectionReason = this.authorizePeer(req);
-    if (rejectionReason) {
-      log.warn('Rejected Garden admin transport peer', { reason: rejectionReason });
-      sendText(res, 403, 'Forbidden');
-      return;
-    }
-
     let requestPath: string;
     try {
       requestPath = parseCanonicalGardenRequestPath(req.url ?? '/').canonicalPath;
@@ -402,8 +435,20 @@ export class GardenAdminTransportServer implements Lifecycle {
       return;
     }
 
-    if ((req.method ?? 'GET') === 'GET' && requestPath === HEALTH_PROBE_PATH) {
-      sendJson(res, 200, { status: 'ok', mode: this.config.endpoint.mode });
+    const isHealthProbe = (req.method ?? 'GET') === 'GET'
+      && requestPath === HEALTH_PROBE_PATH;
+    const rejectionReason = this.authorizePeer(req, isHealthProbe);
+    if (rejectionReason) {
+      log.warn('Rejected Garden admin transport peer', { reason: rejectionReason });
+      sendText(res, 403, 'Forbidden');
+      return;
+    }
+
+    if (isHealthProbe) {
+      sendJson(res, this.runtimeReady ? 200 : 503, {
+        status: this.runtimeReady ? 'ok' : 'initializing',
+        mode: this.config.endpoint.mode,
+      });
       return;
     }
 
@@ -575,7 +620,7 @@ export class GardenAdminTransportServer implements Lifecycle {
   }
 
   private handleUpgrade(req: IncomingMessage, socket: Duplex, head: Buffer): void {
-    const rejectionReason = this.authorizePeer(req);
+    const rejectionReason = this.authorizePeer(req, false);
     if (rejectionReason) {
       log.warn('Rejected Garden admin transport websocket peer', { reason: rejectionReason });
       socket.write('HTTP/1.1 403 Forbidden\r\n\r\n');

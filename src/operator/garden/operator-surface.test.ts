@@ -7,9 +7,12 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { WebSocket } from 'ws';
-import { generateKeyPairSync, randomUUID } from 'node:crypto';
+import { generateKeyPairSync, randomUUID, X509Certificate } from 'node:crypto';
 import { EventBus } from '../../shared/event-bus.js';
-import { createSpiffeCheckServerIdentity } from '../../shared/net/mtls.js';
+import {
+  createSpiffeCheckServerIdentity,
+  extractSpiffeUriSans,
+} from '../../shared/net/mtls.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import { resetRuntimeTrustPolicy } from '../../system/trust/runtime-policy.js';
 import { GardenAdminTransportServer } from './transport-server.js';
@@ -123,6 +126,7 @@ function requestSocket(
 
 interface AdminTransportTlsFixture {
   serverTls: GardenAdminTransportTlsConfig;
+  rotatedServerTls: GardenAdminTransportTlsConfig;
   serverWithoutSpiffeTls: GardenAdminTransportTlsConfig;
   clientTls: GardenAdminTransportTlsConfig;
   clientWithoutSpiffeTls: GardenAdminTransportTlsConfig;
@@ -157,7 +161,7 @@ function createSignedCertificate(input: {
   commonName: string;
   caPrefix: string;
   subjectAltName?: string;
-  extendedKeyUsage: 'serverAuth' | 'clientAuth';
+  extendedKeyUsage: 'serverAuth' | 'clientAuth' | 'serverAuth,clientAuth';
 }): void {
   runOpenSsl([
     'req',
@@ -216,7 +220,15 @@ function createAdminTransportTlsFixture(dir: string): AdminTransportTlsFixture {
     commonName: 'agent-admin.local',
     caPrefix: 'ca',
     subjectAltName: `DNS:localhost,IP:127.0.0.1,URI:${AGENT_SPIFFE_URI}`,
-    extendedKeyUsage: 'serverAuth',
+    extendedKeyUsage: 'serverAuth,clientAuth',
+  });
+  createSignedCertificate({
+    dir,
+    prefix: 'agent-server-rotated',
+    commonName: 'agent-admin.local',
+    caPrefix: 'ca',
+    subjectAltName: `DNS:localhost,IP:127.0.0.1,URI:${AGENT_SPIFFE_URI}`,
+    extendedKeyUsage: 'serverAuth,clientAuth',
   });
   createSignedCertificate({
     dir,
@@ -255,6 +267,11 @@ function createAdminTransportTlsFixture(dir: string): AdminTransportTlsFixture {
       dir,
       certPrefix: 'agent-server',
       expectedPeerSpiffeUri: GARDEN_SPIFFE_URI,
+    }),
+    rotatedServerTls: buildTlsConfig({
+      dir,
+      certPrefix: 'agent-server-rotated',
+      expectedPeerSpiffeUri: AGENT_SPIFFE_URI,
     }),
     serverWithoutSpiffeTls: buildTlsConfig({
       dir,
@@ -315,6 +332,39 @@ function requestTransportPort(
     );
     req.on('error', reject);
     if (body) req.write(body);
+    req.end();
+  });
+}
+
+function requestSelfReadinessPort(
+  port: number,
+  tls: GardenAdminTransportTlsConfig,
+): Promise<{ status: number; headers: http.IncomingHttpHeaders; body: string }> {
+  const cert = readFileSync(tls.certPath);
+  const ownSpiffeUris = extractSpiffeUriSans(new X509Certificate(cert).subjectAltName);
+  if (ownSpiffeUris.length !== 1) {
+    throw new Error('agent readiness certificate must carry exactly one SPIFFE URI SAN');
+  }
+  return new Promise((resolve, reject) => {
+    const req = https.request(
+      {
+        hostname: '127.0.0.1',
+        port,
+        method: 'GET',
+        path: '/api/admin/__transport_probe__',
+        ca: readFileSync(tls.caPath),
+        cert,
+        key: readFileSync(tls.keyPath),
+        rejectUnauthorized: true,
+        checkServerIdentity: createSpiffeCheckServerIdentity(ownSpiffeUris[0]!),
+      },
+      (res) => {
+        let data = '';
+        res.on('data', (chunk: Buffer) => { data += chunk.toString(); });
+        res.on('end', () => resolve({ status: res.statusCode ?? 0, headers: res.headers, body: data }));
+      },
+    );
+    req.on('error', reject);
     req.end();
   });
 }
@@ -513,6 +563,7 @@ interface CreateHarnessOptions {
   serverIdentity?: 'valid' | 'missing-spiffe';
   timeoutMs?: number;
   fleetAuth?: boolean;
+  runtimeReady?: boolean;
 }
 
 function createTestConfig(tempDir: string, fleetAuth = false): SubstrateConfig {
@@ -862,6 +913,9 @@ async function createHarness(options: CreateHarnessOptions = {}): Promise<Harnes
   });
   await transportServer.init();
   await transportServer.start();
+  if (options.runtimeReady !== false) {
+    transportServer.markRuntimeReady();
+  }
 
   const port = await allocatePort();
   const operatorSurface = new GardenOperatorSurface({
@@ -1196,36 +1250,12 @@ describe('Garden operator surface', () => {
   });
 
   it('rejects agent server certificates missing the expected SPIFFE URI SAN', async () => {
-    let networkHarness: Harness | undefined;
-    try {
-      networkHarness = await createHarness({
+    await expect(createHarness({
         transportMode: 'network-mtls',
         serverIdentity: 'missing-spiffe',
         timeoutMs: 250,
-      });
-
-      const healthRes = await requestPort(networkHarness.port, 'GET', '/health');
-      expect(healthRes.status).toBe(503);
-      expect(JSON.parse(healthRes.body)).toMatchObject({
-        status: 'degraded',
-        dependencies: {
-          adminTransport: {
-            mode: 'network',
-            reachable: false,
-            status: 'degraded',
-            error: expect.stringContaining('missing SPIFFE URI SAN'),
-          },
-        },
-      });
-
-      const proxyRes = await requestPort(networkHarness.port, 'GET', '/api/admin/dashboard');
-      expect(proxyRes.status).toBe(502);
-      expect(proxyRes.body).toContain('admin transport unavailable');
-    } finally {
-      if (networkHarness) {
-        await destroyHarness(networkHarness);
-      }
-    }
+      }))
+      .rejects.toThrow('must carry exactly one SPIFFE URI SAN');
   });
 
   it('proxies persisted model usage routes through the operator surface', async () => {
@@ -1337,6 +1367,52 @@ describe('Garden operator surface', () => {
         }),
       },
     });
+  });
+
+  it('stays degraded until runtime initialization explicitly completes', async () => {
+    await destroyHarness(harness);
+    harness = await createHarness({ runtimeReady: false });
+
+    const initializing = await requestPort(harness.port, 'GET', '/health');
+    expect(initializing.status).toBe(503);
+
+    harness.transportServer.markRuntimeReady();
+    const ready = await requestPort(harness.port, 'GET', '/health');
+    expect(ready.status).toBe(200);
+  });
+
+  it('admits only a loopback same-agent SPIFFE probe across certificate rotation', async () => {
+    await destroyHarness(harness);
+    harness = await createHarness({
+      transportMode: 'network-mtls',
+      runtimeReady: false,
+    });
+    expect(harness.transportPort).toBeDefined();
+    expect(harness.tlsFixture).toBeDefined();
+
+    const initializing = await requestSelfReadinessPort(
+      harness.transportPort!,
+      harness.tlsFixture!.rotatedServerTls,
+    );
+    expect(initializing.status).toBe(503);
+    expect(JSON.parse(initializing.body)).toEqual({
+      status: 'initializing',
+      mode: 'network',
+    });
+    const nonHealth = await requestTransportPort(
+      harness.transportPort!,
+      'GET',
+      '/api/admin/dashboard',
+      harness.tlsFixture!.rotatedServerTls,
+    );
+    expect(nonHealth.status).toBe(403);
+
+    harness.transportServer.markRuntimeReady();
+    const ready = await requestSelfReadinessPort(
+      harness.transportPort!,
+      harness.tlsFixture!.rotatedServerTls,
+    );
+    expect(ready.status).toBe(200);
   });
 
   it('withdraws transport readiness before the remaining graceful shutdown completes', async () => {

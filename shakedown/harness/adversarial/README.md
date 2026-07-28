@@ -61,18 +61,21 @@ adversarial/
 | 4 | d269 / qgqw.3 canary egress clamp (send / tool / reply / stream) | `boundary/gateway/canary-egress-guard.ts` |
 | 5 | qg13 sink posture; jvbt provenance; d269 reply canary | `system/config/intake-policy-config.ts`, `intake-firewall-notice-templates.ts`, `canary-egress-guard.ts` |
 | 6 | 57gt journal break-glass default-deny + single-use | `operator/garden/services/privacy-break-glass-service.ts` |
-| 7 | 816w pre_tool_use hook tool-name/alias matcher (canonical ⇄ alias) | `boundary/gateway/hook-registry.ts` `evaluatePreToolUse`, `core/agent/tool-surface/registry.ts` |
+| 7 | 816w pre_tool_use hook tool-name/alias matcher (canonical ⇄ alias) + gate-site alias resolution | `boundary/gateway/hook-registry.ts` `evaluatePreToolUse`, `boundary/gateway/pre-tool-hook.ts` `createPreToolHookGate`, `core/agent/tool-surface/registry.ts` `resolveToolAliasMatchers` |
 
-> **Class 7 reachability.** The registry's alias-aware matching
-> (`evaluatePreToolUse` iterating `context.aliases`) is present on this branch
-> and is what the class-7 scenarios drive directly. The 816w gate-site
-> population of `context.aliases` — `resolveToolAliasMatchers` in
-> `pre-tool-hook.ts`, consumed by the fixed `createPreToolHookGate` — ships on
-> `feat/s11-egress`; here `createPreToolHookGate` still feeds `aliases: []`. The
-> scenarios reconstruct the resolved identifier set from the real tool registry
-> and assert the matching contract the fix relies on; `selftest.ts` carries the
-> find→fix witness that reproduces the empty-`aliases` bypass and confirms the
-> resolved set closes it.
+> **Class 7 coverage.** Two layers are exercised. (a) The registry's alias-aware
+> matching (`evaluatePreToolUse` iterating `context.aliases`) is driven directly
+> by the scenarios that reconstruct the identifier set from the real tool
+> registry (`s7_gated_tool_denied_via_alias`,
+> `s7_policy_written_on_alias_catches_canonical`,
+> `s7_canonical_control_and_policy_specificity`). (b) The gate site itself —
+> `createPreToolHookGate` wired with the production `resolveToolAliasMatchers` —
+> is driven end-to-end by `s7_gate_site_alias_denial`, so gate-site alias
+> resolution is load-bearing: a regression that fed an empty alias set would let
+> the alias slip the canonical policy and fail that scenario. `selftest.ts`
+> carries the find→fix witness at both layers (empty-`aliases` registry miss and
+> empty-resolver gate-site miss), confirming the resolved set / production
+> resolver closes each.
 
 ## Writing a scenario
 

@@ -29,9 +29,11 @@ import { join } from 'node:path';
 import { createIntakeL1Scanner } from '../../../src/core/cogsec/intake/scanners/index.ts';
 import { parseHarnessArgs } from './lib/args.ts';
 import { HookMatcher, HookRegistry } from '../../../src/boundary/gateway/hook-registry.ts';
+import { createPreToolHookGate } from '../../../src/boundary/gateway/pre-tool-hook.ts';
 import {
   getCanonicalToolSurface,
   getRetiredToolAlias,
+  resolveToolAliasMatchers,
 } from '../../../src/core/agent/tool-surface/registry.ts';
 import { runScenarios } from './lib/scenario.ts';
 import type { AdversarialScenario } from './lib/scenario.ts';
@@ -136,6 +138,45 @@ async function toolAliasBypassWitness(): Promise<void> {
     'post-fix (resolved aliases) CATCHES the alias invocation — fix verified',
     postFix.outcome === 'block' && postFix.blockingHook === 'gate:shell',
     `outcome=${postFix.outcome} blockingHook=${String(postFix.blockingHook)}`,
+  );
+
+  // GATE-SITE witness (ijtak.3): the two checks above pin the registry matching
+  // contract with a hand-built alias set. This pair drives the REAL production
+  // gate — createPreToolHookGate — end-to-end so gate-site alias resolution is
+  // load-bearing. FIND: a gate wired with an empty resolver (the pre-816w state)
+  // lets the alias slip. FIX: the shipped resolveToolAliasMatchers closes it.
+  const gatePreFix = createPreToolHookGate({
+    evaluator: gatedRegistry(),
+    getCorrelation: () => undefined,
+    resolveAliases: () => [],
+    onDecision: () => {},
+  });
+  const gatePreEval = await gatePreFix.evaluate({
+    toolName: ALIAS,
+    params: {},
+    tier: 'autonomous',
+  });
+  expect(
+    'gate-site pre-fix (empty resolver) MISSES the alias invocation — bypass reproduced',
+    gatePreEval?.outcome === 'allow' && gatePreEval.matchedHookCount === 0,
+    `outcome=${String(gatePreEval?.outcome)} matched=${String(gatePreEval?.matchedHookCount)}`,
+  );
+
+  const gateFixed = createPreToolHookGate({
+    evaluator: gatedRegistry(),
+    getCorrelation: () => undefined,
+    resolveAliases: resolveToolAliasMatchers,
+    onDecision: () => {},
+  });
+  const gatePostEval = await gateFixed.evaluate({
+    toolName: ALIAS,
+    params: {},
+    tier: 'autonomous',
+  });
+  expect(
+    'gate-site post-fix (resolveToolAliasMatchers) CATCHES the alias invocation — fix verified',
+    gatePostEval?.outcome === 'block' && gatePostEval.blockingHook === 'gate:shell',
+    `outcome=${String(gatePostEval?.outcome)} blockingHook=${String(gatePostEval?.blockingHook)}`,
   );
 }
 

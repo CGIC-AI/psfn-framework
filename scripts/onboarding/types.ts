@@ -1,7 +1,10 @@
-// ── Onboarding flow types (psfn-framework-wckv.1.1 / wckv.1.2) ──
+// ── Onboarding flow types (psfn-framework-wckv.1.1 / wckv.1.2 / wckv.1.3) ──
 // Shared shapes for the `npm run onboard` interactive flow. The interactive I/O
 // is expressed entirely through the {@link Prompter} seam so the pure planning
 // and generation code can be driven non-interactively from tests.
+
+import type { CharacterCardV2 } from '../../src/core/identity/types.js';
+import type { CompanionSource } from './companion-import.js';
 
 /** Install target the operator picks first. */
 export type InstallMode = 'compose' | 'kubernetes' | 'local';
@@ -77,4 +80,11 @@ export interface OnboardingPlan {
   envEntries: Array<{ envName: string; value: string; comment?: string }>;
   /** When true, existing owner files may be overwritten (operator confirmed). */
   updateExisting: boolean;
+  /**
+   * The companion definition to write alongside the owner files (wckv.1.3).
+   * Optional so unit tests that only exercise owner-file generation may omit it;
+   * the interactive flow always resolves one (imported or fresh-start).
+   */
+  companionSource?: CompanionSource;
+  card?: CharacterCardV2;
 }

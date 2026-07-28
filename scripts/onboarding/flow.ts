@@ -4,7 +4,7 @@
 // Every prompt happens before any write, so aborting mid-flow leaves zero files.
 
 import { randomUUID } from 'node:crypto';
-import { join, resolve } from 'node:path';
+import { basename, join, resolve } from 'node:path';
 import type {
   InstallMode,
   OnboardingPlan,
@@ -23,6 +23,13 @@ import {
 import { commitOwnerFiles, detectExistingOwnerFiles } from './config-generator.js';
 import { commitEnv, type EnvEntry } from './env-writer.js';
 import { checkProviderConnectivity, type ConnectivityResult } from './connectivity.js';
+import {
+  companionSourceLabel,
+  freshStart,
+  importCompanionFromFile,
+  type CompanionImportResult,
+} from './companion-import.js';
+import { DEFAULT_COMPANION_NAME } from '../../src/core/identity/companion-naming.js';
 
 export interface OnboardingDeps {
   prompter: Prompter;
@@ -72,8 +79,9 @@ export async function runOnboarding(deps: OnboardingDeps): Promise<OnboardingOut
     updateExisting = true;
   }
 
+  const companionId = randomUUID();
   const provider = await selectProvider(prompter, modeInfo.capturesHostSecret);
-  const models = await selectModels(prompter, deps.seedDir);
+  const models = await selectModels(prompter, deps.seedDir, provider.type);
   const voice = await selectVoice(prompter, modeInfo.capturesHostSecret);
 
   // Optional connectivity check (only when we hold a key value and are not k8s).
@@ -98,7 +106,19 @@ export async function runOnboarding(deps: OnboardingDeps): Promise<OnboardingOut
     }
   }
 
-  const envEntries = buildEnvEntries({ mode, roots, provider, voice, capturesHostSecret: modeInfo.capturesHostSecret });
+  // Optional companion import (CCv3 / SoulMD / plain markdown) or fresh start.
+  // Runs entirely before any write: a malformed definition throws here, so
+  // nothing lands on disk.
+  const companion = await selectCompanion(prompter);
+
+  const envEntries = buildEnvEntries({
+    mode,
+    roots,
+    provider,
+    voice,
+    companionId,
+    capturesHostSecret: modeInfo.capturesHostSecret,
+  });
 
   const plan: OnboardingPlan = {
     mode,
@@ -107,9 +127,11 @@ export async function runOnboarding(deps: OnboardingDeps): Promise<OnboardingOut
     provider,
     models,
     voice,
-    companionId: randomUUID(),
+    companionId,
     envEntries,
     updateExisting,
+    companionSource: companion.source,
+    card: companion.card,
   };
 
   // Commit: owner files first (validated internally), then .env.
@@ -120,11 +142,95 @@ export async function runOnboarding(deps: OnboardingDeps): Promise<OnboardingOut
     envWritten = true;
   }
 
-  prompter.info(`\nWrote ${writtenPaths.length} owner file(s).`);
+  prompter.info(`\nWrote ${writtenPaths.length} file(s) (owner files + companion card).`);
   if (envWritten) prompter.info(`Updated ${deps.envPath} with ${envEntries.length} entry/entries (secrets not shown).`);
   for (const line of modeGuidance(mode, provider)) prompter.info(line);
+  for (const line of firstChatGapNotes({ mode, companionId, provider, capturesHostSecret: modeInfo.capturesHostSecret })) {
+    prompter.info(line);
+  }
 
   return { plan, writtenPaths, envWritten };
+}
+
+/**
+ * Post-generation "what remains before first chat" note (wckv.1.3 review rider),
+ * grounded in what the chosen install mode actually needs. Docker Compose
+ * self-provides Postgres; local dev and Kubernetes do not.
+ */
+export function firstChatGapNotes(input: {
+  mode: InstallMode;
+  companionId: string;
+  provider: ProviderSelection;
+  capturesHostSecret: boolean;
+}): string[] {
+  const lines = ['', 'Before your first chat:'];
+  if (input.capturesHostSecret) {
+    lines.push(`  - COMPANION_ID was written to .env (${input.companionId}); it binds this runtime to the fleet manifest.`);
+  } else {
+    lines.push(`  - Set COMPANION_ID=${input.companionId} in the runtime environment (it binds to the fleet manifest).`);
+  }
+  switch (input.mode) {
+    case 'compose':
+      lines.push('  - Postgres is provided by the compose stack; no external database wiring is needed.');
+      break;
+    case 'local':
+      lines.push(
+        '  - Local dev does NOT provide Postgres. Set POSTGRES_DATABASE_URL (and run the runtime '
+        + 'migrations) before booting; the runtime persistence layer is Postgres-only.',
+      );
+      break;
+    case 'kubernetes':
+      lines.push(
+        `  - Provide the provider key (${input.provider.apiKeyEnvName}) and the database credentials `
+        + '(COMPANION_MAIN_DATABASE_URL / SHARED_SCHEMA_MIGRATION_DATABASE_URL, and POSTGRES_DATABASE_URL) '
+        + 'as cluster Secrets per the Helm chart.',
+      );
+      break;
+    default:
+      break;
+  }
+  return lines;
+}
+
+/**
+ * Ask whether the operator has an existing companion definition and import it,
+ * or scaffold a fresh one. All parsing/validation happens here (before any
+ * write); a malformed file throws a specific CompanionImportError.
+ */
+async function selectCompanion(prompter: Prompter): Promise<CompanionImportResult> {
+  const source = await prompter.choice('Do you have an existing companion definition to import?', [
+    { value: 'ccv3', label: 'Character Card V3 (.json / .png / .charx)', hint: 'reuses the card importer' },
+    { value: 'soulmd', label: 'SoulMD document (.md)', hint: 'structured markdown persona' },
+    { value: 'markdown', label: 'Plain persona markdown (Hermes / OpenClaw)', hint: 'imported as one lump' },
+    { value: 'fresh', label: 'Fresh start — scaffold a minimal blank companion', hint: 'no file needed' },
+  ]);
+
+  if (source === 'fresh') {
+    const name = await prompter.text('Companion name', { default: DEFAULT_COMPANION_NAME });
+    const result = freshStart(name);
+    prompter.info(`  ${result.summary}`);
+    return result;
+  }
+
+  const label = companionSourceLabel(source as 'ccv3' | 'soulmd' | 'markdown');
+  const sourcePath = resolve(await prompter.text(`Path to the ${label} file`, { allowEmpty: false }));
+
+  let result: CompanionImportResult;
+  if (source === 'markdown') {
+    const nameDefault = basename(sourcePath).replace(/\.[^.]+$/u, '') || DEFAULT_COMPANION_NAME;
+    const lumpName = await prompter.text('Companion name (persona is imported as one lump)', { default: nameDefault });
+    result = importCompanionFromFile('markdown', sourcePath, { lumpName });
+  } else {
+    result = importCompanionFromFile(source as 'ccv3' | 'soulmd', sourcePath);
+  }
+
+  prompter.info(`\n  ${result.summary}`);
+  for (const warning of result.warnings) prompter.info(`  warning: ${warning}`);
+  const confirmed = await prompter.confirm('Import this companion definition?', { default: true });
+  if (!confirmed) {
+    throw new OnboardingCancelled('Companion import declined; nothing was written.');
+  }
+  return result;
 }
 
 async function selectProvider(prompter: Prompter, capturesHostSecret: boolean): Promise<ProviderSelection> {
@@ -166,10 +272,23 @@ async function selectProvider(prompter: Prompter, capturesHostSecret: boolean): 
   };
 }
 
-async function selectModels(prompter: Prompter, seedDir: string): Promise<{ primaryModelSlug: string; extractionModelSlug: string }> {
+async function selectModels(
+  prompter: Prompter,
+  seedDir: string,
+  providerType: string,
+): Promise<{ primaryModelSlug: string; extractionModelSlug: string }> {
   const defaults = defaultModelSlugs(seedDir);
   const primaryModelSlug = await prompter.text('Primary chat model slug', { default: defaults.primary });
   const extractionModelSlug = await prompter.text('Background/extraction model slug', { default: defaults.extraction });
+  // The seed defaults are OpenRouter-flavored (provider/model slugs). When a
+  // different provider was chosen and a default was kept, flag it once.
+  const keptOpenRouterDefault = primaryModelSlug === defaults.primary || extractionModelSlug === defaults.extraction;
+  if (providerType !== 'openrouter' && keptOpenRouterDefault) {
+    prompter.info(
+      '  Note: the default model slugs are OpenRouter-flavored (provider/model form). Confirm they '
+      + 'match what your chosen provider serves, or re-run with provider-native slugs.',
+    );
+  }
   return { primaryModelSlug, extractionModelSlug };
 }
 
@@ -210,6 +329,7 @@ export function buildEnvEntries(input: {
   roots: PersistenceRootPlan;
   provider: ProviderSelection;
   voice: VoiceSelection;
+  companionId: string;
   capturesHostSecret: boolean;
 }): OnboardingPlan['envEntries'] {
   if (!input.capturesHostSecret) return [];
@@ -221,6 +341,13 @@ export function buildEnvEntries(input: {
       comment: 'Local dev shared runtime data root (generated by npm run onboard)',
     });
   }
+  // Bind the runtime to the generated fleet-manifest entry so the newcomer does
+  // not have to hand-copy the companion id (wckv.1.3 review rider).
+  entries.push({
+    envName: 'COMPANION_ID',
+    value: input.companionId,
+    comment: 'Companion identity bound to companions.json (generated by npm run onboard)',
+  });
   if (input.provider.apiKeyValue.length > 0) {
     entries.push({
       envName: input.provider.apiKeyEnvName,

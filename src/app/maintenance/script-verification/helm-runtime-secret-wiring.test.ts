@@ -1,4 +1,5 @@
 import { execFileSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { parseAllDocuments } from 'yaml';
 import { describe, expect, it } from 'vitest';
@@ -16,19 +17,31 @@ interface SecretKeyRefEnv {
   value?: string;
 }
 
+interface DeploymentContainer {
+  env?: SecretKeyRefEnv[];
+  name?: string;
+  readinessProbe?: {
+    exec?: { command?: string[] };
+    tcpSocket?: unknown;
+  };
+}
+
 interface DeploymentResource {
   kind?: string;
   metadata?: { name?: string };
   spec?: {
     template?: {
       spec?: {
-        containers?: Array<{
-          env?: SecretKeyRefEnv[];
-          name?: string;
-        }>;
+        containers?: DeploymentContainer[];
       };
     };
   };
+}
+
+interface CertificateResource {
+  kind?: string;
+  metadata?: { name?: string };
+  spec?: { usages?: string[] };
 }
 
 const renderedResources = parseAllDocuments(execFileSync(
@@ -56,6 +69,19 @@ function containerEnv(component: 'agent' | 'garden' | 'gateway'): SecretKeyRefEn
     throw new Error(`Missing rendered ${component} container in ${deploymentName}`);
   }
   return container.env ?? [];
+}
+
+function agentContainer(): DeploymentContainer {
+  const deployment = renderedResources.find((resource): resource is DeploymentResource => (
+    isRecord(resource)
+    && resource.kind === 'Deployment'
+    && isRecord(resource.metadata)
+    && resource.metadata.name === 'psfn-agent-11111111-1111-4111-8111-111111111111'
+  ));
+  const container = deployment?.spec?.template?.spec?.containers
+    ?.find(candidate => candidate.name === 'agent');
+  if (!container) throw new Error('Missing rendered fleet agent container');
+  return container;
 }
 
 function envByName(component: 'agent' | 'garden' | 'gateway'): Map<string, SecretKeyRefEnv> {
@@ -91,5 +117,43 @@ describe('Helm runtime secret wiring', () => {
       },
     });
     expect(envByName('garden').has('GATEWAY_SESSION_INTEGRITY_AUTH_TOKEN')).toBe(false);
+  });
+
+  it('renders semantic mTLS agent readiness instead of a TCP listener check', () => {
+    const readiness = agentContainer().readinessProbe;
+    expect(readiness?.tcpSocket).toBeUndefined();
+    const command = readiness?.exec?.command?.join('\n') ?? '';
+    expect(command).toContain('/api/admin/__transport_probe__');
+    expect(command).toContain('ownSpiffeUri');
+    expect(command).toContain('peer.subjectaltname');
+    expect(command).not.toContain('fingerprint');
+    expect(command).toContain('response.statusCode === 200');
+    const certificate = renderedResources.find((resource): resource is CertificateResource => (
+      isRecord(resource)
+      && resource.kind === 'Certificate'
+      && isRecord(resource.metadata)
+      && resource.metadata.name === 'psfn-agent-admin-11111111-1111-4111-8111-111111111111'
+    ));
+    expect(certificate?.spec?.usages).toEqual([
+      'digital signature',
+      'key encipherment',
+      'server auth',
+      'client auth',
+    ]);
+
+    const singleAgentTemplate = readFileSync(
+      join(process.cwd(), 'deploy', 'helm', 'psfn', 'templates', 'workloads.yaml'),
+      'utf8',
+    );
+    expect(singleAgentTemplate).toContain("path: '/api/admin/__transport_probe__'");
+    expect(singleAgentTemplate).toContain('ownSpiffeUri');
+    expect(singleAgentTemplate).toContain('peer.subjectaltname');
+
+    const agentMain = readFileSync(
+      join(process.cwd(), 'src', 'app', 'agent', 'main.ts'),
+      'utf8',
+    );
+    expect(agentMain.indexOf("await eventBus.emit('system.ready', {});"))
+      .toBeLessThan(agentMain.indexOf('adminTransport?.markRuntimeReady();'));
   });
 });

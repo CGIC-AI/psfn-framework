@@ -2076,6 +2076,7 @@ async function main(): Promise<void> {
   scheduler.start();
   await eventBus.emit('system.init', {});
   await eventBus.emit('system.ready', {});
+  adminTransport?.markRuntimeReady();
 
   // Send "I'm back" notification (fire-and-forget)
   lifecycleNotifier.notifyReady().catch((err) => {

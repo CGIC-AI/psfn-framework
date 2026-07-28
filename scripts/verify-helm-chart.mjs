@@ -144,9 +144,15 @@ function assertAgentReadinessUsesAdminTransport(deployment, label) {
   if (!agentContainer) {
     throw new Error(`${label} must render an agent container`);
   }
-  if (agentContainer.readinessProbe?.tcpSocket?.port !== 'admin-https') {
+  const readiness = agentContainer.readinessProbe;
+  const command = readiness?.exec?.command?.join('\n') ?? '';
+  if (readiness?.tcpSocket
+    || !command.includes('/api/admin/__transport_probe__')
+    || !command.includes('ownSpiffeUri')
+    || !command.includes('peer.subjectaltname')
+    || !command.includes('response.statusCode === 200')) {
     throw new Error(
-      `${label} readiness must probe the admin-https listener withdrawn on gateway disconnect`,
+      `${label} readiness must require the semantic same-agent SPIFFE admin health probe`,
     );
   }
 }

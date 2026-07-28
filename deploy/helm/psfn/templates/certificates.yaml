@@ -102,6 +102,11 @@ spec:
     - {{ printf "%s.%s.svc.cluster.local" (include "psfn.agentAdminServiceName" .) .Release.Namespace | quote }}
   uris:
     - {{ include "psfn.spiffeAgent" . | quote }}
+  usages:
+    - digital signature
+    - key encipherment
+    - server auth
+    - client auth
   issuerRef:
     {{- include "psfn.certIssuerRef" . | nindent 4 }}
 {{ else }}
@@ -152,6 +157,11 @@ spec:
     - {{ printf "%s.%s.svc.cluster.local" (include "psfn.fleetAgentAdminServiceName" $target) $root.Release.Namespace | quote }}
   uris:
     - {{ include "psfn.spiffeFleetAgent" $target | quote }}
+  usages:
+    - digital signature
+    - key encipherment
+    - server auth
+    - client auth
   issuerRef:
     {{- include "psfn.certIssuerRef" $root | nindent 4 }}
 {{ end }}

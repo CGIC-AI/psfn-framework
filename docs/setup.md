@@ -8,6 +8,137 @@ constraints, owner migrations, image import, Cluster Auth validation, and
 recovery boundaries. It is the required procedure; this setup guide remains
 the authority for initial configuration and ownership.
 
+## Which path to take
+
+There are two supported ways to stand PSFN up, plus one forthcoming guided one:
+
+- **Docker Compose smoke stack (start here).** The newcomer on-ramp: one
+  command from a clean checkout brings up the real split runtime — Postgres,
+  the secret-holding gateway, and one isolated agent — and drives one chat turn.
+  It self-seeds every owner file and a starter companion card, so you supply
+  only one provider key. See [Fastest path](#fastest-path-the-docker-compose-smoke-stack).
+- **Manual local split runtime (development).** You provision Postgres, lay the
+  owner files by hand, and launch `npm run split`. More moving parts, full
+  control. See [First Local Bring-Up](#first-local-bring-up).
+- **Kubernetes / Helm (experienced operators).** The reference deployment shape
+  (network-mode mTLS RPC, cert-manager, per-companion tenancy). This guide and
+  [`docs/operations.md`](./operations.md) plus [`docs/helm-upgrades.md`](./helm-upgrades.md)
+  cover it; it is not the newcomer on-ramp.
+
+An interactive onboarding script (`npm run onboard`) that walks install-mode
+selection, provider/model setup, and companion import is **in progress and not
+yet built** (bead `psfn-framework-wckv.1`). Until it lands, follow the Compose
+path below.
+
+## Deployment done: the public on-ramp definition
+
+This is the ratified bar for "a newcomer can deploy PSFN" (bead
+`psfn-framework-65rk.14`). Deployment is **done** when, from a fresh clone, **one
+documented command** brings up the split runtime (gateway + agent + Postgres)
+and drives **one chat turn** end to end through the OpenAI-compatible `/v1` edge,
+with the assistant reply persisted to Postgres — and the fail-closed laws hold in
+that reference install (Postgres-only, no SQLite; distinct non-overlapping
+system-data/companion-data roots; the agent on an internal-only network with no
+egress; the gateway as the sole secret holder).
+
+The command that meets this bar today is `npm run smoke:docker`
+(`scripts/smoke-docker.mjs`) over `docker/docker-compose.smoke.yml`. Pass
+criteria:
+
+- **Command:** `export OPENROUTER_API_KEY=sk-or-...` then `npm run smoke:docker`.
+- **Expected exit `0` — done:** the harness brought the stack up healthy,
+  confirmed the gateway↔agent RPC and the `memory`/`embeddings`/`scheduler`
+  plumbing via the gateway `/health` endpoint, POSTed one turn to
+  `/v1/chat/completions`, and got a persisted assistant reply.
+- **Proof artifact:** the log lines
+  `[smoke:docker] PASS  full turn: assistant reply persisted and returned: …`
+  followed by `[smoke:docker] PASS  Postgres persistence corroborated (public tables: N)`.
+- **Exit `2` — provider boundary (not fully done, but everything up to the model
+  call proven):** stack healthy, RPC connected, request accepted, the turn
+  failed only at the external provider egress. This is the expected result when
+  no `OPENROUTER_API_KEY` is set. A keyed exit-`0` run is the live-validation
+  step of the definition.
+- **Exit `1` — plumbing failure (not done):** the stack did not come up, the
+  gateway edge never became healthy, or the request failed before the provider.
+
+The Kubernetes/Helm path is the **experienced-operator equivalent**, not the
+newcomer on-ramp: ship the chart at `deploy/helm/psfn` with `npm run ship:kube`
+(`scripts/ops/ship-kube-update.sh`) and gate the rollout with
+`bash scripts/ops/validate-kube-rollout.sh --smoke` (rollout status for
+agent/gateway/garden, Garden health, the `/v1/models` companion route, and a
+two-turn chat smoke); `npm run verify:kube-rollout` runs the same validator
+without `--smoke`. See the [Kube lane](./shakedown.md#kube-lane).
+
+## Fastest path: the Docker Compose smoke stack
+
+Prerequisites: Docker and Docker Compose, plus Node 22+ to invoke the harness
+(`scripts/smoke-docker.mjs` uses only Node built-ins and the Docker CLI — no
+`npm install` is required). First run needs internet: the image build and a
+one-shot model-prefetch service download the in-process ML models (~hundreds of
+MB) into a shared cache while they still have egress, so the isolated agent can
+warm them offline.
+
+```bash
+git clone <repo-url> && cd psfn-framework
+export OPENROUTER_API_KEY=sk-or-...   # the single real secret a full turn needs
+npm run smoke:docker                  # up + one chat turn; exit 0 = persisted reply
+# equivalently, with no install: node scripts/smoke-docker.mjs
+```
+
+What the one command does (`scripts/smoke-docker.mjs` +
+`docker/docker-compose.smoke.yml`):
+
+1. Builds the runtime image and runs a one-shot `seed` service that lays the
+   split-root owner files into distinct `system-data` and `companion-data`
+   volumes, writes a starter companion card and a one-entry `companions.json`,
+   and derives the agent's two role-bound gateway proofs from the session HMAC
+   key (the agent never receives the raw key).
+2. Brings up Postgres (pgvector), the gateway, and the isolated agent with
+   `docker compose up -d --wait`.
+3. Asserts every container is healthy, confirms the gateway↔agent RPC and the
+   plumbing subsystems via `/health`, then POSTs one turn to
+   `/v1/chat/completions` and asserts a persisted assistant reply.
+
+Without a key the whole stack still comes up healthy and the harness exits `2`
+at the provider boundary (see the definition above). By default it tears the
+stack down (`docker compose down -v`) on exit; pass `--keep-up` to inspect it or
+`--no-up` to run against an already-running stack. Dev-only fixed
+secrets/identity and the published port are overridable via `PSFN_SMOKE_API_KEY`,
+`PSFN_SMOKE_COMPANION_ID`, `PSFN_SMOKE_SESSION_HMAC_KEY`, `PSFN_SMOKE_BACKUP_KEY`,
+and `PSFN_SMOKE_API_PORT`. The full lane writeup is in
+[`docs/shakedown.md`](./shakedown.md#docker-compose-smoke-lane).
+
+### Why the runtime is split (and fail-closed)
+
+The Compose stack is not a convenience wrapper around a monolith — it is the real
+topology. The **gateway** is the host-side, privileged process: it holds every
+secret (provider key, session HMAC key, backup key), owns all external egress,
+and serves the OpenAI-compatible `/v1` edge. The **agent** is the companion's
+isolated Core: no dotenv, no provider/egress secrets, on an internal-only network
+that fails closed if it can reach the internet, reaching the gateway only over a
+shared Unix socket. This is the same trust boundary the Kubernetes deployment
+enforces with a NetworkPolicy and mTLS RPC.
+
+Persistence is **two-root and fail-closed**: `system-data` (system-owned config
+and operator/runtime state) and `companion-data` (character, prompts, sessions,
+notes, memories) are distinct volumes that can never overlap — production layout
+rejects overlapping mutable roots. The runtime store is **Postgres-only**
+(`src/persistence/runtime-factory.ts`); there is no SQLite runtime path. See
+[`docs/architecture.md`](./architecture.md) and
+[`docs/specifications.md`](./specifications.md) for the full contracts.
+
+### Config ownership in one paragraph
+
+`.env` is for **secrets and wiring only** — provider keys, host/port/socket, the
+runtime mode/layout, and explicit bootstrap overrides. Every **mutable runtime
+setting** lives in a canonical JSON owner file under the system-owned config
+domain (`settings.json`, `models.json`, `providers.json`, and the rest — listed
+under [What Goes In JSON Owner Files](#what-goes-in-json-owner-files)).
+`.env.example` is a **bootstrap template only and is never the authority** for
+mutable settings; the runtime ignores mutable settings placed in `.env`. The
+Compose seed writes all the owner files for you; the manual path below lays them
+by hand.
+
 ## Prerequisites
 
 - Node.js 22+
@@ -53,17 +184,30 @@ The runtime ignores mutable settings that are owned by JSON files. Do not use `.
 
 Mutable runtime/admin configuration lives in canonical JSON owner files.
 
-Cluster-global owner files live under `SYSTEM_DATA_DIR`:
+Cluster-global owner files live under `SYSTEM_DATA_DIR`. Startup fails closed on
+the first missing one — the required set is verified in
+`src/system/config/startup-owner-files.ts` (`systemOwnerFileChecks`):
 
 - `settings.json`
 - `models.json`
 - `providers.json`
-- `channels.json`
 - `trust-policy.json`
-- `intake-policy.json`
 - `backup.json`
+- `companions.json` — the mandatory fleet manifest; required for every
+  deployment, including a cluster of one (see [Cluster topology](#cluster-topology)).
+- `intake-policy.json`
+- `partner-affect-shadow.json`
+- `fleet-auth.json` — conditional: required only when cluster human-auth is
+  enabled, and must be **absent** otherwise (`PSFN_FLEET_AUTH`; see
+  [Optional Surface Wiring](#cluster-authenticated-browser-origin)).
 
-Four whole owner files live under each companion's `COMPANION_DATA_DIR`:
+`channels.json` is also system-owned but is **not** a fail-closed startup owner:
+it has no seed file, loads safe defaults when absent, and is created or updated
+when channel settings are saved through Garden or the admin API.
+
+Four whole owner files live under each companion's `COMPANION_DATA_DIR`
+(`companionOwnerFileChecks` in the same module); startup never reads a
+system-root copy as a fallback:
 
 - `scheduler.json`
 - `capability-tier.json`
@@ -96,7 +240,9 @@ Startup verifies the seed-backed owner files before the split runtime comes up. 
 
 2. Intentionally copy the example owner files into their canonical owner roots
    and edit them for this deployment. This shared-root local example uses
-   `./data` for both roots:
+   `./data` for both roots. This list is the complete fail-closed startup set
+   from `src/system/config/startup-owner-files.ts`; a missing one aborts
+   startup:
 
    ```bash
    cp config/settings.seed.json ./data/settings.json
@@ -109,7 +255,25 @@ Startup verifies the seed-backed owner files before the split runtime comes up. 
    cp config/charge-policy.seed.json ./data/charge-policy.json
    cp config/backup.seed.json ./data/backup.json
    cp config/skills.seed.json ./data/skills.json
+   cp config/partner-affect-shadow.seed.json ./data/partner-affect-shadow.json
    ```
+
+   Then provide the mandatory fleet manifest. `config/companions.seed.json` ships
+   a **two-entry example** (Flagship + Aria); reduce it to a **one-entry**
+   manifest naming this deployment's `COMPANION_ID` and edit the
+   `companionDataDir`, `characterCardPath`, `postgresSchema`, `postgresRole`, and
+   `postgresDatabaseUrlRef` for your layout — startup does not reconstruct the
+   entry from `COMPANION_ID`. The full field contract is in
+   [Cluster topology](#cluster-topology).
+
+   ```bash
+   cp config/companions.seed.json ./data/companions.json
+   # then edit ./data/companions.json down to your single companion entry
+   ```
+
+   Do **not** seed `fleet-auth.json` for a local single-companion bring-up: leave
+   it absent and keep `PSFN_FLEET_AUTH` unset. `channels.json` is created on
+   demand and needs no seed.
 
    For production split roots, place the outputs from
    `scheduler.seed.json`, `capability-tier.seed.json`,
@@ -434,3 +598,60 @@ npm run smoke:chat
 npm run verify:settings-contract
 npm run verify:agent-docker-isolation
 ```
+
+## Troubleshooting
+
+PSFN fails closed by design: a misconfiguration aborts startup with a named
+error rather than booting into a degraded state. The top failure modes, their
+cause, and the fix:
+
+### Compose smoke path (`npm run smoke:docker`)
+
+- **Exit `2`, log says `PROVIDER BOUNDARY REACHED`.** Not an error — the stack
+  is healthy, the gateway↔agent RPC connected, and the turn ran up to the model
+  call. It means `OPENROUTER_API_KEY` is unset (or empty). Export a valid key and
+  re-run for exit `0`. If the key **is** set and you still see exit `2`, the
+  harness reports `OPENROUTER_API_KEY is set but the provider call still failed`
+  — check the key, its credit, and that the model in `models.json` is reachable
+  on OpenRouter.
+- **Exit `1`, `docker compose up did not reach a healthy state`.** A container
+  never became healthy within the wait timeout. Inspect with
+  `npm run smoke:docker -- --keep-up` then `docker compose -f docker/docker-compose.smoke.yml ps`
+  and `logs`. Common causes: the first-run model download had no internet (the
+  `model-prefetch` service needs egress), or Postgres never passed `pg_isready`.
+- **Exit `1`, `chat request transport failed before reaching the provider` /
+  plumbing signals (`companion_not_connected`, `econnrefused`, `no route`).**
+  The gateway came up but the agent's RPC never registered. Check the `agent`
+  container logs; a common cause is the agent tripping its network-isolation
+  guard (it must stay on the internal-only network).
+
+### Startup fail-closed rejections (any path)
+
+- **`Fleet authentication requires companions.json; deployments with one
+  companion must provide a one-entry fleet manifest`.** `companions.json` is
+  missing or invalid. Every deployment — including a cluster of one — requires
+  it. See [What Goes In JSON Owner Files](#what-goes-in-json-owner-files) and
+  [First Local Bring-Up](#first-local-bring-up) step 2.
+- **A named owner file is missing** (e.g. `partner-affect-shadow.json`,
+  `intake-policy.json`). Startup verifies the full owner set in
+  `src/system/config/startup-owner-files.ts` and aborts on the first missing
+  file. Lay every file listed under
+  [What Goes In JSON Owner Files](#what-goes-in-json-owner-files); the Compose
+  seed does this for you.
+- **`Missing character card at <path>: explicit companion identity is required
+  before startup`.** `CHARACTER_CARD_PATH` points at a file that does not exist.
+  Provide the card; keep it under runtime data, not the personal workspace.
+- **`SYSTEM_DATA_DIR and COMPANION_DATA_DIR must both be set together`.** You set
+  one split-root variable but not the other. Set both, or set neither and use the
+  shared-root `DATA_DIR` (continuous/local mode only).
+- **`… must point to different roots` / `… must not overlap in production
+  mode`.** In production the two data roots must be distinct and
+  non-overlapping. Give them isolated paths. The same rule rejects a
+  `WORKSPACE_PATH` that overlaps any runtime-state root.
+- **pgvector errors on first migration.** The runtime store is Postgres-only and
+  requires the `pgvector` extension. Use a pgvector-enabled image (the Compose
+  stack uses `pgvector/pgvector:pg17`) or install the extension before first
+  launch.
+- **Missing backup encryption key.** `backup.json` ships with encryption
+  `required`, so a missing `PSFN_BACKUP_ENCRYPTION_KEY` fails closed. Generate one
+  with `openssl rand -base64 48` and set it in `.env`.

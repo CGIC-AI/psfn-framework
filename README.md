@@ -62,14 +62,29 @@ builds by is [`docs/PSFN_PROJECT_CHARTER.md`](./docs/PSFN_PROJECT_CHARTER.md).
 
 ## Getting Started
 
-Prerequisites: Node.js 22+, PostgreSQL 16+ with pgvector, and one LLM provider
-credential. Then:
+**Fastest path — one command from a clean checkout** (Docker + Docker Compose,
+plus Node 22+ to invoke the harness). This brings up the real split runtime
+(Postgres + gateway + agent), self-seeds every owner file and a starter card, and
+drives one chat turn — exit `0` means a persisted assistant reply:
+
+```bash
+git clone <repo-url> && cd psfn-framework
+export OPENROUTER_API_KEY=sk-or-...   # the single real secret a full turn needs
+npm run smoke:docker                  # exit 0 = deployment done; exit 2 = no key set
+```
+
+This is the ratified "deployment done" bar for newcomers; the definition and
+pass criteria are in [`docs/setup.md`](./docs/setup.md#deployment-done-the-public-on-ramp-definition).
+
+For the manual local split runtime instead (you provision Postgres and lay the
+owner files yourself):
 
 ```bash
 git clone <repo-url> && cd psfn-framework
 npm install
 cp .env.example .env   # secrets and bootstrap wiring only
-npm run split          # gateway + agent
+# then lay the owner files — see docs/setup.md → First Local Bring-Up
+npm run split          # gateway + agent + operator
 ```
 
 Configuration lives in canonical JSON owner files, never `.env` sprawl. The

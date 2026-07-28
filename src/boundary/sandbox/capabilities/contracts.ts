@@ -8,6 +8,7 @@ import type { EventBus } from '../../../shared/event-bus.js';
 import type { CapabilityTier } from '../../../system/config/runtime-config-contracts.js';
 import type { ApprovalQueuePort } from '../../../system/capabilities/approval-queue-port.js';
 import type { ModuleRegistryMutation } from '../../../system/modules/types.js';
+import type { FsReadResult } from '../../gateway/protocol.js';
 import type {
   NestedAnalysisRunner,
   SandboxExecutionPort,
@@ -72,6 +73,10 @@ export type GatewayREPLCapabilities = {
   gitApplyPatch?: (filePath: string, content: string) => Promise<void>;
   gitCommit?: (message: string, intent: string, scope?: string) => Promise<GitCommitView>;
   fsRead?: (path: string) => Promise<string>;
+  fsReadDetailed?: (
+    path: string,
+    options?: { maxBytes?: number; offsetBytes?: number },
+  ) => Promise<FsReadResult>;
   fsWrite?: (path: string, content: string) => Promise<void>;
   fsList?: (glob?: string, maxEntries?: number) => Promise<FsListView>;
 };

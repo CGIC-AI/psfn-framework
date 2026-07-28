@@ -50,7 +50,9 @@ function buildRepositorySection(mutationPolicy?: REPLMutationPolicy): string[] {
 function buildFileAndWebSection(mutationPolicy?: REPLMutationPolicy): string[] {
   const lines = [
     '### File + Web Tools',
-    '- `await read_file(path)` — Read large file content through gateway fs policy checks; cite its path and relevant line or byte ranges in the bounded result',
+    '- `await read_file(path, { offsetBytes? })` — Read through gateway fs policy checks; returns one bounded page with `content`, `offsetBytes`, `nextOffsetBytes`, `eof`, and `truncated`',
+    '- Start at offset 0, then pass each `nextOffsetBytes` back as `offsetBytes` until `eof`. Repeating the same arguments returns the same page; when `eof` is false, require the next cursor to advance before continuing.',
+    '- Process each page incrementally instead of concatenating an unbounded whole file; cite the source path and relevant line or byte ranges in the bounded result.',
     '- `await list_files(glob?, maxEntries?)` — List workspace-relative files via gateway glob policy; returns `{ paths, truncated, scanLimitReached }`',
     '- `await web("fetch", url, { prompt? })` — Guarded remote page fetch via gateway SSRF defenses and the default web lane',
     '- `await web("browse", url, { prompt? })` — Uses the `local_crawler` web lane; policy must explicitly allow it',
@@ -76,6 +78,7 @@ function buildBasePrompt(
     '## How to use',
     '',
     'Use this workbench only for multi-stage analysis of large files, codebases, logs, datasets, transcripts, or evidence sets that would be harmful to stuff directly into the main conversation context.',
+    'Prefer running long reads in a bounded worker or subagent so the primary channel stays responsive. Direct primary-channel use remains permitted when appropriate, but it may occupy that turn for several minutes.',
     'Use it when a local document exceeds the direct fs read cap. Keep large raw material inside this temporary workbench, then return a bounded answer with the source path and relevant line or byte ranges before the workbench context is discarded.',
     'Do not use it for ordinary reasoning, tool discovery, missing schemas, simple lookup, simple file/session inspection, routine inspection, or state changes.',
     'Routine orient actions, concern maintenance, scheduler/schedule work, and simple lookup must stay on direct active tools such as orient, schedule, session, memory, repo, or filesystem tools.',

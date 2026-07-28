@@ -461,7 +461,13 @@ describe('REPLSandbox', () => {
   it('read_file/write_file/list_files/web helpers call gateway RPC capabilities', async () => {
     const llm = {
       ...mockLLM(),
-      fsRead: vi.fn(async (path: string) => `read:${path}`),
+      fsReadDetailed: vi.fn(async (path: string, options?: { offsetBytes?: number }) => ({
+        content: `read:${path}`,
+        offsetBytes: options?.offsetBytes ?? 0,
+        nextOffsetBytes: null,
+        eof: true,
+        truncated: false,
+      })),
       fsWrite: vi.fn(async () => {}),
       fsList: vi.fn(async () => ({
         paths: ['src/a.ts', 'src/b.ts'],
@@ -480,7 +486,7 @@ describe('REPLSandbox', () => {
 
     const result = await sandbox.execute(
       [
-        'const content = await read_file("/app/workspace/a.txt"); print(content);',
+        'const page = await read_file("/app/workspace/a.txt"); print(page.content, page.offsetBytes, page.eof);',
         'const write = await write_file("/app/workspace/out.txt", "hello"); print(write.ok);',
         'const listed = await list_files("src/**/*.ts", 10);',
         'print(Array.isArray(listed.paths), listed.paths.length, listed.truncated);',
@@ -490,11 +496,14 @@ describe('REPLSandbox', () => {
       8192,
     );
 
-    expect(result.output).toContain('read:/app/workspace/a.txt');
+    expect(result.output).toContain('read:/app/workspace/a.txt 0 true');
     expect(result.output).toContain('true');
     expect(result.output).toContain('true 2 false');
     expect(result.output).toContain('fetched:https://example.com');
-    expect((llm as any).fsRead).toHaveBeenCalledWith('/app/workspace/a.txt');
+    expect((llm as any).fsReadDetailed).toHaveBeenCalledWith('/app/workspace/a.txt', {
+      maxBytes: 20_000,
+      offsetBytes: 0,
+    });
     expect((llm as any).fsWrite).toHaveBeenCalledWith('/app/workspace/out.txt', 'hello');
     expect((llm as any).fsList).toHaveBeenCalledWith('src/**/*.ts', 10);
     expect((llm as any).webFetch).toHaveBeenCalledWith('https://example.com', undefined, 'default');
@@ -702,7 +711,13 @@ describe('REPLSandbox', () => {
   it('enforces max tool calls across read_file/write_file/list_files/web', async () => {
     const llm = {
       ...mockLLM(),
-      fsRead: vi.fn(async (path: string) => `read:${path}`),
+      fsReadDetailed: vi.fn(async (path: string, options?: { offsetBytes?: number }) => ({
+        content: `read:${path}`,
+        offsetBytes: options?.offsetBytes ?? 0,
+        nextOffsetBytes: null,
+        eof: true,
+        truncated: false,
+      })),
       fsWrite: vi.fn(async () => {}),
       fsList: vi.fn(async () => ({
         paths: ['one.ts'],
@@ -730,7 +745,7 @@ describe('REPLSandbox', () => {
         'const b = await web("fetch", "https://example.com");',
         'const c = await list_files("src/**/*.ts");',
         'const d = await write_file("out.txt", "hello");',
-        'print(a);',
+        'print(a.content);',
         'print(b);',
         'print(c.error);',
         'print(d.ok, d.error);',
@@ -742,7 +757,7 @@ describe('REPLSandbox', () => {
     expect(result.output).toContain('read:a.txt');
     expect(result.output).toContain('web');
     expect(result.output).toContain('max tool calls reached');
-    expect((llm as any).fsRead).toHaveBeenCalledTimes(1);
+    expect((llm as any).fsReadDetailed).toHaveBeenCalledTimes(1);
     expect((llm as any).webFetch).toHaveBeenCalledTimes(1);
     expect((llm as any).fsList).not.toHaveBeenCalled();
     expect((llm as any).fsWrite).not.toHaveBeenCalled();

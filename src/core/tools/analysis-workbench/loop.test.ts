@@ -880,7 +880,13 @@ describe('runRLMLoop', () => {
         'FINAL("done")',
       ]),
       {
-        fsRead: vi.fn(async (path: string) => `content:${path}`),
+        fsReadDetailed: vi.fn(async (path: string, options?: { offsetBytes?: number }) => ({
+          content: `content:${path}`,
+          offsetBytes: options?.offsetBytes ?? 0,
+          nextOffsetBytes: null,
+          eof: true,
+          truncated: false,
+        })),
       },
     ) as LLMProviderPort;
 
@@ -893,7 +899,7 @@ describe('runRLMLoop', () => {
     expect(result.budgetStatus.exceeded).toBe('tool-call limit');
     expect(result.budgetStatus.toolCalls).toBe(1);
     expect(result.steps[0].output).toContain('max tool calls reached');
-    expect((llm as any).fsRead).toHaveBeenCalledTimes(1);
+    expect((llm as any).fsReadDetailed).toHaveBeenCalledTimes(1);
     expect((llm.complete as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(1);
   });
 

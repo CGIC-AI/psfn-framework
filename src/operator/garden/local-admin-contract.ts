@@ -1,5 +1,7 @@
 import type { EmbeddingProviderPort } from '../../shared/contracts/embedding-provider.js';
 import { join } from 'node:path';
+import { createComponentLogger } from '../../shared/logger.js';
+import { toErrorMessage } from '../../shared/utils/errors.js';
 import type { ContactStorePort } from '../../core/contacts/contact-store-port.js';
 import type { PendingContactApprovalStore } from '../../core/contacts/pending-contact-approvals.js';
 import type { CharacterCardVersionStore } from '../../core/identity/card-versioning.js';
@@ -152,6 +154,8 @@ import { AdminRoomArbiterDataService } from './services/room-arbiter-service.js'
 import { AdminSharedWorkspaceService } from './services/shared-workspace-service.js';
 import { requireAuditOpaqueIdKeyring } from './audit-opaque-id-keyring.js';
 import type { BackgroundWorkStorePort } from '../../core/agent/background-work/store-port.js';
+
+const log = createComponentLogger('GardenAdminContract');
 
 export interface InProcessGardenAdminContractOptions {
   env?: NodeJS.ProcessEnv;
@@ -771,6 +775,27 @@ export function createObserverEvalSidecarAdminService(input: {
     && postgresDatabaseUrl
     ? createPostgresObserverEvalSidecarStore(postgresDatabaseUrl, {}, input.tenant)
     : null;
+
+  if (persistence) {
+    // psfn-framework-qicb.3: observe the sidecar store's startup schema-ensure
+    // ONCE, synchronously, at the Garden construction site. The store kicks off
+    // its `ready` (schema migration) promise in its constructor but — unlike the
+    // model-usage store — does not attach a rejection handler to it, so a
+    // kube-router netpol-programming race at pod start (a ~1s ECONNREFUSED
+    // window before the Postgres NetworkPolicy is programmed) would otherwise
+    // escape as a process-wide unhandled rejection. queryRuns awaits that same
+    // `ready` promise, which attaches a rejection handler to it in the same tick
+    // as construction; the netpol-race connection error is then handled here
+    // (logged once, content-free) instead of leaking to the process handler.
+    // The result is discarded — real Garden traffic reconnects against the
+    // by-then-settled pool. Normal operation is unchanged: one cheap read fires
+    // at startup and, on success, its rows are ignored.
+    void persistence.queryRuns({ limit: 1 }).catch((error: unknown) => {
+      log.warn('Observer eval sidecar startup connectivity failed; retrying on Garden traffic', {
+        error: toErrorMessage(error),
+      });
+    });
+  }
 
   return new AdminObserverEvalSidecarDataService({
     persistence,

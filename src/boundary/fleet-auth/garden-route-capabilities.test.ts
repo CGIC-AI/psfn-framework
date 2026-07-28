@@ -173,6 +173,23 @@ describe('Garden route capability catalogue', () => {
     });
   });
 
+  it('declares the Bearer API companion pin routes alongside the context-envelope channel controls', () => {
+    expect(resolveGardenRouteCapability('GET', '/api/admin/channels/bearer-companion')?.capability)
+      .toMatchObject({
+        id: 'GET /api/admin/channels/bearer-companion',
+        authorization: { action: 'channels.read', baseRole: 'admin' },
+      });
+    expect(resolveGardenRouteCapability('POST', '/api/admin/channels/bearer-companion')?.capability)
+      .toMatchObject({
+        id: 'POST /api/admin/channels/bearer-companion',
+        authorization: {
+          action: 'channels.manage',
+          baseRole: 'admin',
+          requirements: { assurance: 'webauthn_uv', confirmation: 'explicit' },
+        },
+      });
+  });
+
   it('fails construction for an active route without an exact catalogue declaration', () => {
     expect(() => compileGardenRouteDeclarations([{
       method: 'GET',

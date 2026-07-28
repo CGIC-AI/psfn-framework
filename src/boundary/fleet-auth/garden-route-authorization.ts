@@ -154,6 +154,7 @@ const routeAuthorizationGroups: readonly RouteAuthorizationGroup[] = [
     action: 'channels.read', area: 'channels', routeIds: [
       ...ids('GET', [
         '/api/admin/rooms', '/api/admin/rooms/:channelId/roster',
+        '/api/admin/channels/bearer-companion',
         '/api/admin/channels/context-envelope',
         '/api/admin/channels/context-envelope/demotion-notice',
       ]),
@@ -163,6 +164,7 @@ const routeAuthorizationGroups: readonly RouteAuthorizationGroup[] = [
   {
     action: 'channels.manage', area: 'channels',
     routeIds: ids('POST', [
+      '/api/admin/channels/bearer-companion',
       '/api/admin/channels/context-envelope',
       '/api/admin/channels/context-envelope/demote',
     ]),

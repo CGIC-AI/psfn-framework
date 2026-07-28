@@ -18,6 +18,7 @@ import {
   buildSubagentWorkSpec,
   createSubagentWorkSpecProvider,
 } from '../../../faculties/subagents/work-spec.js';
+import { GatewayLLMRequestCancellation } from '../llm-request-cancellation.js';
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -30,6 +31,7 @@ function createHarness(options: {
   usageEvents?: ModelUsageEventInput[];
   authorizeIcpConversationCorrelation?: GatewayMethodRuntime['authorizeIcpConversationCorrelation'];
   llmProvider?: GatewayMethodRuntime['llmProvider'];
+  audited?: GatewayMethodRuntime['audited'];
 } = {}) {
   const methods = new Map<string, (params: any) => Promise<any>>();
   const stream = vi.fn<LLMProviderPort['stream']>(async () => ({
@@ -127,10 +129,11 @@ function createHarness(options: {
     sendNtfy: vi.fn(async () => ({ status: 'debounced', topic: 'noop' })),
     nextStreamRequestId: () => 'gw-1',
     authenticatedCompanionId: () => undefined,
+    llmRequestCancellation: new GatewayLLMRequestCancellation(),
     ...(options.authorizeIcpConversationCorrelation
       ? { authorizeIcpConversationCorrelation: options.authorizeIcpConversationCorrelation }
       : {}),
-    audited: (_method, handler) => handler,
+    audited: options.audited ?? ((_method, handler) => handler),
     approvalBoundary: {
       gate: (_options) => async (params) => _options.handler(params),
     } as any,
@@ -159,11 +162,16 @@ function createLinkedGatewayClient(
   const connection = {
     send(frame: unknown): boolean {
       const request = frame as {
-        id: number;
+        id?: number;
         method: string;
         params: Record<string, unknown>;
       };
-      void invoke(request.method, request.params).then(
+      const result = Promise.resolve(invoke(request.method, request.params));
+      if (request.id === undefined) {
+        void result.catch(() => undefined);
+        return true;
+      }
+      void result.then(
         result => emitter.emit('message', {
           jsonrpc: '2.0',
           id: request.id,
@@ -195,6 +203,116 @@ function createLinkedGatewayClient(
 }
 
 describe('registerLLMMethods', () => {
+  it('reserves completion cancellation before an awaited audit and passes the aborted signal upstream', async () => {
+    let releaseAudit!: () => void;
+    const auditGate = new Promise<void>(resolve => {
+      releaseAudit = resolve;
+    });
+    let providerSignal: AbortSignal | undefined;
+    const complete = vi.fn<LLMProviderPort['complete']>(async (_context, _purpose, options) => {
+      providerSignal = options?.signal;
+      if (providerSignal?.aborted) throw providerSignal.reason;
+      return await new Promise((_resolve, reject) => {
+        providerSignal?.addEventListener('abort', () => reject(providerSignal?.reason), { once: true });
+      });
+    });
+    const harness = createHarness({
+      llmProvider: {
+        stream: vi.fn(),
+        complete,
+      },
+      audited: (_method, handler) => async params => {
+        await auditGate;
+        return await handler(params);
+      },
+    });
+    const cancellationId = '11111111-1111-4111-8111-111111111111';
+
+    const pending = harness.invoke('llm.complete', {
+      cancellationId,
+      model: '',
+      provider: '',
+      messages: [{ role: 'user', content: 'work' }],
+      systemPrompt: 'system',
+      purpose: 'background',
+    });
+    expect(harness.invoke('llm.cancel', { cancellationId })).toEqual({
+      cancelled: true,
+    });
+    releaseAudit();
+
+    await expect(pending).rejects.toThrow('cancelled by its owning connection');
+    expect(providerSignal?.aborted).toBe(true);
+    expect(complete).toHaveBeenCalledOnce();
+    expect(harness.invoke('llm.cancel', { cancellationId })).toEqual({
+      cancelled: false,
+    });
+  });
+
+  it('passes connection-scoped cancellation through streamed chat provider options', async () => {
+    let providerSignal: AbortSignal | undefined;
+    const stream = vi.fn<LLMProviderPort['stream']>(async (_context, _callbacks, options) => {
+      providerSignal = options?.signal;
+      return await new Promise((_resolve, reject) => {
+        providerSignal?.addEventListener('abort', () => reject(providerSignal?.reason), { once: true });
+      });
+    });
+    const harness = createHarness({
+      llmProvider: {
+        stream,
+        complete: vi.fn(),
+      },
+    });
+    const cancellationId = '22222222-2222-4222-8222-222222222222';
+
+    const pending = harness.invoke('llm.chat', {
+      cancellationId,
+      requestId: 'stream-request',
+      model: '',
+      provider: '',
+      messages: [{ role: 'user', content: 'work' }],
+      systemPrompt: 'system',
+      stream: true,
+    });
+    await vi.waitFor(() => expect(providerSignal).toBeInstanceOf(AbortSignal));
+    expect(harness.invoke('llm.cancel', { cancellationId })).toEqual({
+      cancelled: true,
+    });
+
+    await expect(pending).rejects.toThrow('cancelled by its owning connection');
+    expect(providerSignal?.aborted).toBe(true);
+  });
+
+  it('cancels a split-runtime GatewayClient completion through the gateway provider boundary', async () => {
+    let providerSignal: AbortSignal | undefined;
+    const complete = vi.fn<LLMProviderPort['complete']>(async (_context, _purpose, options) => {
+      providerSignal = options?.signal;
+      return await new Promise((_resolve, reject) => {
+        providerSignal?.addEventListener('abort', () => reject(providerSignal?.reason), { once: true });
+      });
+    });
+    const harness = createHarness({
+      llmProvider: {
+        stream: vi.fn(),
+        complete,
+      },
+    });
+    const gatewayClient = createLinkedGatewayClient(harness.invoke);
+    const controller = new AbortController();
+
+    const pending = gatewayClient.complete({
+      systemPrompt: 'system',
+      messages: [{ role: 'user', content: 'large analysis' }],
+    }, 'background', { signal: controller.signal });
+    await vi.waitFor(() => expect(providerSignal).toBeInstanceOf(AbortSignal));
+    controller.abort(new Error('workbench response deadline'));
+
+    await expect(pending).rejects.toThrow('workbench response deadline');
+    expect(providerSignal?.aborted).toBe(true);
+    expect(complete).toHaveBeenCalledOnce();
+    gatewayClient.destroy();
+  });
+
   it('forwards provider first-output observations as content-free requester notifications', async () => {
     const harness = createHarness();
     harness.stream.mockImplementationOnce(async (_context, callbacks) => {

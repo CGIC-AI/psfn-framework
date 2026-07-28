@@ -198,7 +198,10 @@ async function setupServer(
   let onConnectionCb: ((conn: GatewayRpcConnection) => void) | null = null;
   mockedCreateSocketServer.mockImplementation((_path, cb) => {
     onConnectionCb = cb;
-    return { close: vi.fn(), listen: vi.fn() } as any;
+    return {
+      close: vi.fn((done?: () => void) => done?.()),
+      listen: vi.fn(),
+    } as any;
   });
   server.start();
   return {
@@ -1206,6 +1209,100 @@ describe('GatewayServer multi-companion identify (flag on)', () => {
       method: 'gateway.companion.identify_required',
       decision: 'DENY',
     }));
+  });
+
+  it('scopes exact LLM cancellation, disconnect cleanup, and stop cleanup to owning connections', async () => {
+    const providerSignals: AbortSignal[] = [];
+    const complete = vi.fn(async (
+      _context: unknown,
+      _purpose: unknown,
+      options?: { signal?: AbortSignal },
+    ) => {
+      const signal = options?.signal;
+      if (!signal) throw new Error('test expected a cancellable provider signal');
+      providerSignals.push(signal);
+      if (signal.aborted) throw signal.reason;
+      return await new Promise((_resolve, reject) => {
+        signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+      });
+    });
+    const { server, connect } = await setupServer({
+      ...createMinimalOptions(),
+      llmProvider: {
+        stream: vi.fn(),
+        complete,
+      } as any,
+      multiCompanion: multiCompanion({}),
+    });
+    const connA = await connect();
+    const connB = await connect();
+    const companionA = '11111111-1111-4111-8111-111111111111';
+    const companionB = '22222222-2222-4222-8222-222222222222';
+    await identifyAgent(connA, companionA, 1);
+    await identifyAgent(connB, companionB, 2);
+
+    const sharedCancellationId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+    const startCompletion = (
+      conn: MockConnection,
+      id: number,
+      companionId: string,
+      cancellationId: string,
+    ): void => {
+      conn._emit({
+        jsonrpc: '2.0',
+        id,
+        method: 'llm.complete',
+        params: {
+          companionId,
+          cancellationId,
+          model: '',
+          provider: '',
+          messages: [{ role: 'user', content: 'work' }],
+          systemPrompt: 'system',
+          purpose: 'background',
+        },
+      });
+    };
+
+    startCompletion(connA, 10, companionA, sharedCancellationId);
+    await vi.waitFor(() => expect(providerSignals).toHaveLength(1));
+    startCompletion(connB, 11, companionB, sharedCancellationId);
+    await vi.waitFor(() => expect(providerSignals).toHaveLength(2));
+
+    const unidentified = await connect();
+    unidentified._emit({
+      jsonrpc: '2.0',
+      method: 'llm.cancel',
+      params: { cancellationId: sharedCancellationId },
+    });
+    await new Promise(resolve => setTimeout(resolve, 10));
+    expect(providerSignals[0].aborted).toBe(false);
+    expect(providerSignals[1].aborted).toBe(false);
+
+    expect((await invokeRpc(connA, 12, 'llm.cancel', {
+      companionId: companionA,
+      cancellationId: sharedCancellationId,
+    })).result).toEqual({ cancelled: true });
+    expect(providerSignals[0].aborted).toBe(true);
+    expect(providerSignals[1].aborted).toBe(false);
+    expect((await invokeRpc(connA, 13, 'llm.cancel', {
+      companionId: companionA,
+      cancellationId: sharedCancellationId,
+    })).result).toEqual({ cancelled: false });
+
+    startCompletion(
+      connA,
+      14,
+      companionA,
+      'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+    );
+    await vi.waitFor(() => expect(providerSignals).toHaveLength(3));
+    connA._emitClose();
+    await vi.waitFor(() => expect(providerSignals[2].aborted).toBe(true));
+    expect(providerSignals[1].aborted).toBe(false);
+
+    await server.stop();
+    expect(providerSignals[1].aborted).toBe(true);
   });
 
   it('disconnects a connection whose request claims another companion identity', async () => {

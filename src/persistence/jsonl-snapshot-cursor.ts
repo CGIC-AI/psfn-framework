@@ -2,6 +2,7 @@ import {
   closeSync,
   fstatSync,
   openSync,
+  opendirSync,
   statSync,
 } from 'node:fs';
 import { basename, dirname, extname, join } from 'node:path';
@@ -119,32 +120,46 @@ function openSnapshotSegment(path: string): SnapshotSegment | null {
   }
 }
 
-/**
- * Find the contiguous sealed high-water mark without listing or retaining the
- * archive. Supported rotation creates segment 1 then monotonically claims the
- * next number; a missing segment inside that sequence is handled fail-closed
- * when traversal reaches it.
- */
+/** Validate the complete sealed namespace while retaining constant state. */
 function findNewestSealedNumber(activePath: string): number {
-  if (readFileIdentity(segmentPath(activePath, 1)) === null) return 0;
-  let present = 1;
-  let absent = 2;
-  while (readFileIdentity(segmentPath(activePath, absent)) !== null) {
-    present = absent;
-    if (absent > Math.floor(Number.MAX_SAFE_INTEGER / 2)) {
-      throw new Error('JSONL segment number exceeds the supported safe-integer range');
-    }
-    absent *= 2;
+  const { directory, extension, stem } = segmentCoordinates(activePath);
+  let dir;
+  try {
+    dir = opendirSync(directory);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return 0;
+    throw error;
   }
-  while (absent - present > 1) {
-    const candidate = present + Math.floor((absent - present) / 2);
-    if (readFileIdentity(segmentPath(activePath, candidate)) === null) {
-      absent = candidate;
-    } else {
-      present = candidate;
+  let count = 0;
+  let minimum = Number.MAX_SAFE_INTEGER;
+  let maximum = 0;
+  try {
+    for (let entry = dir.readSync(); entry !== null; entry = dir.readSync()) {
+      const prefix = `${stem}.`;
+      if (!entry.name.startsWith(prefix) || !entry.name.endsWith(extension)) continue;
+      const digits = entry.name.slice(prefix.length, -extension.length);
+      if (!/^\d{5,}$/.test(digits)) continue;
+      const segmentNumber = Number(digits);
+      if (!Number.isSafeInteger(segmentNumber)
+        || segmentNumber <= 0
+        || entry.name !== segmentName(activePath, segmentNumber)) {
+        throw new Error(`JSONL snapshot has a non-canonical sealed segment: ${entry.name}`);
+      }
+      count += 1;
+      minimum = Math.min(minimum, segmentNumber);
+      maximum = Math.max(maximum, segmentNumber);
     }
+  } finally {
+    dir.closeSync();
   }
-  return present;
+  if (count === 0) return 0;
+  if (minimum !== 1 || count !== maximum) {
+    throw new Error(
+      `JSONL snapshot sealed segments are non-contiguous: `
+      + `count=${count}, minimum=${minimum}, maximum=${maximum}`,
+    );
+  }
+  return maximum;
 }
 
 function locatePinnedActive(

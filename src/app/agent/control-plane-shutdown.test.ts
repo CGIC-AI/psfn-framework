@@ -8,6 +8,7 @@ import {
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { BackgroundWorkHandoffRecoveryRuntime } from '../../core/agent/background-work/handoff-recovery-runtime.js';
 import { SubstrateAgent } from '../../core/agent/substrate-agent.js';
 import { Scheduler } from '../../core/scheduler/scheduler.js';
 import { createFilesystemTurnRecordStorePort } from '../../persistence/sessions/turn-records.js';
@@ -157,16 +158,23 @@ describe('agent control-plane recovery shutdown', () => {
     const scratchBaseline = listRecoveryScratchNames();
     const eventBus = new EventBus();
     const scheduler = new Scheduler(eventBus);
-    const recoveryController = new AbortController();
     const supervisorDrain = deferred();
     const order: string[] = [];
     let abortEvents = 0;
-    recoveryController.signal.addEventListener('abort', () => {
-      abortEvents += 1;
+    const store = createFilesystemTurnRecordStorePort(sessionsDir);
+    const recoveryRuntime = new BackgroundWorkHandoffRecoveryRuntime({
+      streamRecoverableBackgroundWorkTurnRecords: (signal) => {
+        signal?.addEventListener('abort', () => {
+          abortEvents += 1;
+        });
+        return store.streamTurnRecordsForRecovery!([sourceChannelId], { signal });
+      },
+      deferWorkerValidatedBackgroundWorkHandoffRecovery: () => undefined,
+      recoverPendingBackgroundWorkHandoffs: async () => 0,
     });
 
     const agentLoop = createAgentLoopDouble({
-      backgroundWorkHandoffRecoveryAbortController: recoveryController,
+      backgroundWorkHandoffRecoveryRuntime: recoveryRuntime,
       backgroundWorkSupervisor: {
         stop: async () => {
           order.push('supervisor-drain:start');
@@ -185,21 +193,13 @@ describe('agent control-plane recovery shutdown', () => {
       await originalSchedulerStop();
       order.push('scheduler-stop:end');
     };
-    const store = createFilesystemTurnRecordStorePort(sessionsDir);
     scheduler.register({
       id: 'recover-background-work',
       name: 'recover background work',
       type: 'every',
       intervalMs: 60_000,
       state: 'idle',
-      handler: async () => {
-        for await (const _record of store.streamTurnRecordsForRecovery!(
-          [sourceChannelId],
-          { signal: recoveryController.signal },
-        )) {
-          // The held rotation lock keeps the isolated recovery worker pending.
-        }
-      },
+      handler: () => recoveryRuntime.recover(async () => undefined),
     });
 
     let tickPromise: Promise<void> | undefined;
@@ -230,10 +230,10 @@ describe('agent control-plane recovery shutdown', () => {
       await stopPromise;
       await tickPromise;
       expect(order.at(-1)).toBe('supervisor-drain:end');
-      expect(order.filter(entry => entry === 'abort-recovery')).toHaveLength(2);
+      expect(order.filter(entry => entry === 'abort-recovery')).toHaveLength(1);
       expect(abortEvents).toBe(1);
     } finally {
-      recoveryController.abort();
+      recoveryRuntime.abort();
       supervisorDrain.resolve();
       await Promise.allSettled([
         ...(tickPromise ? [tickPromise] : []),

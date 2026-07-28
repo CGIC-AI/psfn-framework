@@ -49,6 +49,7 @@ import { createComponentLogger } from '../../shared/logger.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
 import { registerGatewayMethods } from './methods/index.js';
 import type { GatewayMethodRuntime, ShardBackendExecutor } from './methods/types.js';
+import { GatewayLLMRequestCancellation } from './llm-request-cancellation.js';
 import type { WelfareGrantVerifier } from './welfare-grant-verifier.js';
 import type { PolicyConfig } from './policy.js';
 import {
@@ -363,6 +364,10 @@ export class GatewayServer {
     GatewayRpcConnection,
     GatewayInlineImageRetention
   >();
+  private readonly llmRequestCancellationByConnection = new Map<
+    GatewayRpcConnection,
+    GatewayLLMRequestCancellation
+  >();
   private readonly options: GatewayServerOptions;
   private readonly sessionHmacKeyring: SessionHmacKeyring;
   private streamRequestCounter = 0;
@@ -655,11 +660,14 @@ export class GatewayServer {
   private registerMethods(target: JSONRPCServerAndClient, conn: GatewayRpcConnection): void {
     const inlineImageRetention = new GatewayInlineImageRetention();
     this.inlineImageRetentionByConnection.set(conn, inlineImageRetention);
+    const llmRequestCancellation = new GatewayLLMRequestCancellation();
+    this.llmRequestCancellationByConnection.set(conn, llmRequestCancellation);
     const resolveWorkspacePath = (): string => this.resolveConnectionWorkspacePath(conn);
     const resolvePolicyConfig = (): PolicyConfig => this.resolveConnectionPolicyConfig(conn);
     const runtime: GatewayMethodRuntime = {
       target,
       llmProvider: this.options.llmProvider,
+      llmRequestCancellation,
       embeddingService: this.options.embeddingService,
       ...(this.options.modelDiscovery ? { modelDiscovery: this.options.modelDiscovery } : {}),
       discordAdapter: this.resolveConnectionDiscordDock(conn),
@@ -2235,6 +2243,8 @@ export class GatewayServer {
     this.companionPostures.unbind(conn);
     this.inlineImageRetentionByConnection.get(conn)?.clear();
     this.inlineImageRetentionByConnection.delete(conn);
+    this.llmRequestCancellationByConnection.get(conn)?.abortAll();
+    this.llmRequestCancellationByConnection.delete(conn);
     this.rpcClients.delete(conn);
     this.connectionStatuses.delete(conn);
   }
@@ -3187,6 +3197,10 @@ export class GatewayServer {
       retention.clear();
     }
     this.inlineImageRetentionByConnection.clear();
+    for (const cancellation of this.llmRequestCancellationByConnection.values()) {
+      cancellation.abortAll();
+    }
+    this.llmRequestCancellationByConnection.clear();
     if (this.icpAutonomyBroker) {
       const companionIds = new Set([
         ...this.companionConnections.keys(),

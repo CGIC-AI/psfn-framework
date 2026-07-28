@@ -3,6 +3,8 @@ import { JSONRPCErrorException } from 'json-rpc-2.0';
 import { GatewayErrors } from '../protocol.js';
 import type {
   LLMChatParams,
+  LLMCancelParams,
+  LLMCancelResult,
   LLMCompleteParams,
   LLMDiscoverModelsParams,
   LLMDiscoverModelsResult,
@@ -123,11 +125,17 @@ export async function exposeModelCallGateBlocks<T>(operation: () => Promise<T>):
 function buildProviderCallOptions(
   workSpec: LLMWorkSpecWireParams | undefined,
   eligibilityCompanionId: string | undefined,
-): { workSpec?: LLMWorkSpecWireParams; eligibilityCompanionId?: string } | undefined {
-  if (!workSpec && !eligibilityCompanionId) return undefined;
+  signal?: AbortSignal,
+): {
+  workSpec?: LLMWorkSpecWireParams;
+  eligibilityCompanionId?: string;
+  signal?: AbortSignal;
+} | undefined {
+  if (!workSpec && !eligibilityCompanionId && !signal) return undefined;
   return {
     ...(workSpec ? { workSpec } : {}),
     ...(eligibilityCompanionId ? { eligibilityCompanionId } : {}),
+    ...(signal ? { signal } : {}),
   };
 }
 
@@ -218,10 +226,20 @@ async function authorizeIcpCorrelation<P extends GatewayCorrelationParams>(
   };
 }
 
-const llmDescriptors: Array<AuditedMethodDescriptor<any, unknown>> = [
+interface CancellableLlmMethodDescriptor<P extends { cancellationId?: string }, R> {
+  name: 'llm.chat' | 'llm.complete';
+  handler: (
+    params: P,
+    runtime: GatewayMethodRuntime,
+    signal: AbortSignal | undefined,
+  ) => Promise<R>;
+  summary: (params: P) => Record<string, unknown>;
+}
+
+const cancellableLlmDescriptors: Array<CancellableLlmMethodDescriptor<any, unknown>> = [
   {
     name: 'llm.chat',
-    handler: async (params: LLMChatParams, runtime) => {
+    handler: async (params: LLMChatParams, runtime, signal) => {
       const eligibilityCompanionId = runtime.authenticatedCompanionId();
       params = await authorizeIcpCorrelation(params, runtime);
       const workSpec = await resolveRpcWorkSpec(params.workSpec, runtime);
@@ -274,7 +292,7 @@ const llmDescriptors: Array<AuditedMethodDescriptor<any, unknown>> = [
           // agent-supplied params or correlation; absent both fields the
           // legacy no-options call shape is preserved, and the multi-companion
           // gateway's strict eligibility gate fails closed on the missing id.
-          buildProviderCallOptions(workSpec, eligibilityCompanionId),
+          buildProviderCallOptions(workSpec, eligibilityCompanionId, signal),
         )),
       );
       const response = applyGatewayCapturedProviderCost(
@@ -316,7 +334,7 @@ const llmDescriptors: Array<AuditedMethodDescriptor<any, unknown>> = [
   },
   {
     name: 'llm.complete',
-    handler: async (params: LLMCompleteParams, runtime) => {
+    handler: async (params: LLMCompleteParams, runtime, signal) => {
       const eligibilityCompanionId = runtime.authenticatedCompanionId();
       params = await authorizeIcpCorrelation(params, runtime);
       const workSpec = await resolveRpcWorkSpec(params.workSpec, runtime);
@@ -353,7 +371,7 @@ const llmDescriptors: Array<AuditedMethodDescriptor<any, unknown>> = [
           params.purpose,
           // d8vq.2 work spec + an52.3 server-injected eligibility identity;
           // see llm.chat above.
-          buildProviderCallOptions(workSpec, eligibilityCompanionId),
+          buildProviderCallOptions(workSpec, eligibilityCompanionId, signal),
         )),
       );
       const response = applyGatewayCapturedProviderCost(
@@ -395,6 +413,9 @@ const llmDescriptors: Array<AuditedMethodDescriptor<any, unknown>> = [
       })),
     }),
   },
+];
+
+const llmDescriptors: Array<AuditedMethodDescriptor<any, unknown>> = [
   {
     name: 'llm.embed',
     handler: async (params: LLMEmbedParams, runtime) => {
@@ -465,6 +486,41 @@ const llmDescriptors: Array<AuditedMethodDescriptor<any, unknown>> = [
 ];
 
 export function registerLLMMethods(runtime: GatewayMethodRuntime): void {
+  for (const descriptor of cancellableLlmDescriptors) {
+    runtime.target.addMethod(descriptor.name, (params: unknown) => {
+      const cancellationId = typeof params === 'object' && params !== null
+        ? (params as { cancellationId?: unknown }).cancellationId
+        : undefined;
+      return runtime.llmRequestCancellation.run(cancellationId, signal => {
+        const auditedHandler = runtime.audited(
+          descriptor.name,
+          (cleaned: any) => descriptor.handler(cleaned, runtime, signal),
+          descriptor.summary,
+        );
+        return auditedHandler(params as any);
+      });
+    });
+  }
+  runtime.target.addMethod('llm.cancel', (params: unknown): LLMCancelResult => {
+    if (typeof params !== 'object' || params === null) {
+      throw new Error('llm.cancel requires object params');
+    }
+    const result = {
+      cancelled: runtime.llmRequestCancellation.cancel(
+        (params as LLMCancelParams).cancellationId,
+      ),
+    };
+    void runtime.recordAuditEvent?.({
+      method: 'llm.cancel',
+      decision: 'ALLOW',
+      params: { cancelled: result.cancelled },
+    }).catch((error: unknown) => {
+      log.error('Failed to persist llm.cancel audit outcome', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    });
+    return result;
+  });
   registerAuditedDescriptors(runtime, llmDescriptors);
 }
 

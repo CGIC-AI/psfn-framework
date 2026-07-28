@@ -804,6 +804,7 @@ export class GatewayClient implements
           'llm.chat',
           requestParams,
           options?.signal,
+          'llm',
         );
       } catch (error) {
         if (!this.shouldResendInlineImages(error, referencedMessages.usedHintKeys)) throw error;
@@ -819,6 +820,7 @@ export class GatewayClient implements
             messages: context.messages,
           },
           options?.signal,
+          'llm',
         );
       }
 
@@ -919,6 +921,7 @@ export class GatewayClient implements
           'llm.complete',
           requestParams,
           options.signal,
+          'llm',
         );
       } catch (error) {
         if (!this.shouldResendInlineImages(error, referencedMessages.usedHintKeys)) throw error;
@@ -931,6 +934,7 @@ export class GatewayClient implements
           'llm.complete',
           { ...requestParams, messages: context.messages },
           options.signal,
+          'llm',
         );
       }
     } catch (error) {
@@ -1721,6 +1725,7 @@ export class GatewayClient implements
     method: string,
     params: Record<string, unknown>,
     signal?: AbortSignal,
+    remoteCancellation?: 'llm',
   ): Promise<T> {
     if (!signal) {
       return await this.rpcInstance.request(method, params) as T;
@@ -1729,6 +1734,9 @@ export class GatewayClient implements
     if (signal.aborted) {
       throw abortError(signal.reason);
     }
+
+    const cancellationId = remoteCancellation === 'llm' ? randomUUID() : undefined;
+    const requestParams = cancellationId ? { ...params, cancellationId } : params;
 
     return await new Promise<T>((resolve, reject) => {
       let settled = false;
@@ -1745,12 +1753,18 @@ export class GatewayClient implements
       };
 
       const onAbort = () => {
+        if (cancellationId) {
+          this.rpcInstance.notify('llm.cancel', {
+            cancellationId,
+            ...(this.companionId ? { companionId: this.companionId } : {}),
+          });
+        }
         finalize('reject', abortError(signal.reason));
       };
 
       signal.addEventListener('abort', onAbort, { once: true });
 
-      this.rpcInstance.request(method, params).then(
+      this.rpcInstance.request(method, requestParams).then(
         (result) => finalize('resolve', result),
         (error) => finalize('reject', error),
       );
@@ -2353,6 +2367,11 @@ export class GatewayClient implements
     }
     this.closedNotified = true;
     this.stopKeepalive();
+    this.rpcInstance.rejectAllPendingRequests(
+      event.source === 'error' && event.error
+        ? `Gateway connection error: ${event.error.message}`
+        : 'Gateway connection closed',
+    );
     this.fleetPostureProvider = null;
     this.inlineImageReferenceHints.clear();
     for (const handler of this.connectionCloseHandlers) {
@@ -2470,6 +2489,7 @@ export class GatewayClient implements
     if (this.isDestroying) return;
     this.isDestroying = true;
     this.stopKeepalive();
+    this.rpcInstance.rejectAllPendingRequests('Gateway client destroyed');
     this.sessionIntegrityVerifyCache.clear();
     this.inlineImageReferenceHints.clear();
     this.voiceStreams.clear();

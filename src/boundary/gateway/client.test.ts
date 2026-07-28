@@ -224,6 +224,92 @@ describe('GatewayClient streaming', () => {
     client = new GatewayClient(conn.conn, 1024);
   });
 
+  it('sends an exact completion cancellation notification and ignores a late provider result', async () => {
+    const controller = new AbortController();
+    const completion = client.complete({
+      systemPrompt: 'bounded work',
+      messages: [{ role: 'user', content: 'analyze' }],
+    }, 'background', { signal: controller.signal });
+    const request = conn.sent[0] as {
+      id: number;
+      method: string;
+      params: { cancellationId: string };
+    };
+
+    expect(request.method).toBe('llm.complete');
+    expect(request.params.cancellationId).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
+    );
+    controller.abort(new Error('workbench deadline'));
+
+    await expect(completion).rejects.toThrow('workbench deadline');
+    expect(conn.sent[1]).toEqual({
+      jsonrpc: '2.0',
+      method: 'llm.cancel',
+      params: {
+        cancellationId: request.params.cancellationId,
+      },
+    });
+
+    conn._emit({
+      jsonrpc: '2.0',
+      id: request.id,
+      result: {
+        content: 'late success',
+        model: 'background-model',
+        inputTokens: 20,
+        outputTokens: 4,
+        stopReason: 'stop',
+      },
+    });
+    await Promise.resolve();
+  });
+
+  it('uses the same cancellation protocol for streamed chat without changing signal-free calls', async () => {
+    const ordinary = client.complete({
+      systemPrompt: 'ordinary',
+      messages: [{ role: 'user', content: 'hello' }],
+    }, 'background');
+    const ordinaryRequest = conn.sent[0] as {
+      id: number;
+      params: Record<string, unknown>;
+    };
+    expect(ordinaryRequest.params).not.toHaveProperty('cancellationId');
+    conn._emit({
+      jsonrpc: '2.0',
+      id: ordinaryRequest.id,
+      result: {
+        content: 'done',
+        model: 'model',
+        inputTokens: 1,
+        outputTokens: 1,
+        stopReason: 'stop',
+      },
+    });
+    await ordinary;
+
+    const controller = new AbortController();
+    const streaming = client.stream(
+      { systemPrompt: 'stream', messages: [{ role: 'user', content: 'hello' }] },
+      { onText: vi.fn() },
+      { signal: controller.signal },
+    );
+    const request = conn.sent[1] as {
+      id: number;
+      params: { cancellationId: string };
+    };
+    controller.abort(new Error('barge in'));
+
+    await expect(streaming).rejects.toThrow('barge in');
+    expect(conn.sent[2]).toEqual({
+      jsonrpc: '2.0',
+      method: 'llm.cancel',
+      params: {
+        cancellationId: request.params.cancellationId,
+      },
+    });
+  });
+
   it('routes streamed callbacks by the transported work-spec request id', async () => {
     const parentCorrelation = {
       turnId: 'parent-turn',
@@ -3319,5 +3405,34 @@ describe('GatewayClient connection lifecycle', () => {
 
     expect(handler).toHaveBeenCalledTimes(1);
     expect(handler).toHaveBeenCalledWith({ source: 'close' });
+  });
+
+  it('rejects every pending JSON-RPC request when the gateway closes', async () => {
+    const first = client.getAvailableModels();
+    const second = client.complete({
+      systemPrompt: 'system',
+      messages: [{ role: 'user', content: 'work' }],
+    }, 'background');
+
+    conn._emitClose();
+
+    await expect(first).rejects.toThrow('Gateway connection closed');
+    await expect(second).rejects.toThrow('Gateway connection closed');
+  });
+
+  it('rejects pending JSON-RPC requests with the connection error', async () => {
+    const pending = client.getAvailableModels();
+
+    conn._emitError(new Error('socket reset'));
+
+    await expect(pending).rejects.toThrow('Gateway connection error: socket reset');
+  });
+
+  it('rejects pending JSON-RPC requests when explicitly destroyed', async () => {
+    const pending = client.getAvailableModels();
+
+    client.destroy();
+
+    await expect(pending).rejects.toThrow('Gateway client destroyed');
   });
 });

@@ -10,6 +10,7 @@ import type {
   SessionArchiveHandle,
   SessionArchivePort,
 } from '../../journals/journal/port.js';
+import type { SessionIntegrityFailureEvent } from '../../../shared/contracts/session-integrity.js';
 import {
   findLastPreviewableEntry,
   type ChannelCache,
@@ -44,6 +45,13 @@ interface JournalChainContext {
     quarantinedCount: number,
     loadedCount: number,
   ) => void;
+  /**
+   * Optional durable-incident seam (bead g59z). Called once per full journal
+   * load when one or more entries fail HMAC verification. Content-free; the
+   * full-load path is the funnel because bounded readers replay through it on
+   * verification failure. Absent in tests/paths with no observer wired.
+   */
+  recordIntegrityFailure?: (event: SessionIntegrityFailureEvent) => void;
 }
 
 function applyTurnTombstones(
@@ -128,6 +136,14 @@ function loadJournalArchiveChainAttempt(
   // full notice on its first rendered message (bead g59z).
   let runNoticeRendered = false;
   let maxId = 0;
+  // Structural, content-free accumulation of HMAC-failed entries for the
+  // durable-incident seam (bead g59z). A "run" is a contiguous stretch of
+  // verification failures, mirroring the render-side run-collapse semantics.
+  let failedEntryCount = 0;
+  let firstFailedEntryId = 0;
+  let lastFailedEntryId = 0;
+  let contiguousRunCount = 0;
+  let previousEntryFailed = false;
   for (const archive of archives) {
     const result = context.archivePort.readJournalFile(archive);
     let archiveContainsCompaction = false;
@@ -146,6 +162,18 @@ function loadJournalArchiveChainAttempt(
       runNoticeRendered = normalized.verified
         ? false
         : runNoticeRendered || normalized.renderedUnverifiedNotice;
+      if (!normalized.verified) {
+        failedEntryCount += 1;
+        const failedId = normalized.entry.id;
+        if (typeof failedId === 'number') {
+          if (firstFailedEntryId === 0 || failedId < firstFailedEntryId) firstFailedEntryId = failedId;
+          if (failedId > lastFailedEntryId) lastFailedEntryId = failedId;
+        }
+        if (!previousEntryFailed) contiguousRunCount += 1;
+        previousEntryFailed = true;
+      } else {
+        previousEntryFailed = false;
+      }
       applyJournalState(cache, normalized.entry);
       const message = journalToSessionEntry(normalized.entry);
       if (message) {
@@ -190,6 +218,22 @@ function loadJournalArchiveChainAttempt(
     cache.lastMessagePreview = preview.length > 120 ? `${preview.slice(0, 117)}...` : preview;
   }
   cache.activeTurnTombstoneCount = cache.turnTombstones.size;
+
+  // Durable-incident seam (bead g59z): one content-free event per stable load
+  // that surfaced HMAC failures. Fires only after the fingerprint check has
+  // confirmed a non-retried, single-generation read. Best-effort: recording is
+  // a side signal, never a gate on the fail-closed read itself.
+  if (failedEntryCount > 0 && context.recordIntegrityFailure) {
+    const firstId = firstFailedEntryId > 0 ? firstFailedEntryId : 1;
+    context.recordIntegrityFailure({
+      channelId: cache.channelId,
+      failedEntryCount,
+      firstFailedEntryId: firstId,
+      lastFailedEntryId: lastFailedEntryId >= firstId ? lastFailedEntryId : firstId,
+      contiguousRunCount: Math.max(1, contiguousRunCount),
+      detectedAtMs: Date.now(),
+    });
+  }
   return cache;
 }
 

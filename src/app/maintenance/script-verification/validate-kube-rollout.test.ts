@@ -134,7 +134,21 @@ if (joined.includes('psql')) {
   const sql = argv[argv.length - 1];
   if (sql.includes('pg_extension')) out('vector\n');
   if (sql.includes('model_usage_events')) out('OK|litellm|litellm|model-a|model-a|1700000000000\n');
-  if (sql.includes('session_messages_projection')) out('0\n');
+  // The bookkeeping check is a two-call contract. Call 1 discovers every schema
+  // holding the projection and returns the generated per-schema UNION ALL as
+  // text; call 2 runs that generated SQL. The discovery statement also mentions
+  // json_build_object and session_messages_projection, so it must be matched
+  // first on the marker only it carries.
+  if (sql.includes('pg_catalog.pg_tables')) {
+    out(
+      "select json_build_object('schema', 'companion_default', 'count', count(*)::text)::text from companion_default.session_messages_projection where author_name in ('CompletionHandoff','BackgroundContinuation')\n" +
+        'union all\n' +
+        "select json_build_object('schema', 'companion_second', 'count', count(*)::text)::text from companion_second.session_messages_projection where author_name in ('CompletionHandoff','BackgroundContinuation')\n",
+    );
+  }
+  if (sql.includes('json_build_object')) {
+    out('{"schema":"companion_default","count":"0"}\n{"schema":"companion_second","count":"0"}\n');
+  }
   fail('unexpected sql: ' + sql + '\n');
 }
 

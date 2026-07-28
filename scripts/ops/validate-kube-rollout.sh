@@ -1244,21 +1244,78 @@ console.log(`emosim /api/model contract ok: appraisal_dims=${dims} emotions=${em
 }
 
 check_zero_bookkeeping_writes() {
-  local sql
-  sql="select count(*) from session_messages_projection where author_name in ('CompletionHandoff','BackgroundContinuation');"
+  local discovery_sql
+  discovery_sql=$(cat <<'SQL'
+select string_agg(
+  format(
+    'select json_build_object(''schema'', %L, ''count'', count(*)::text)::text from %I.session_messages_projection where author_name in (''CompletionHandoff'',''BackgroundContinuation'')',
+    schemaname,
+    schemaname
+  ),
+  E'\nunion all\n'
+  order by schemaname
+)
+from pg_catalog.pg_tables
+where tablename = 'session_messages_projection';
+SQL
+)
+
+  local projection_sql
+  if ! projection_sql="$(run_postgres_sql "$discovery_sql" 2>&1)"; then
+    printf 'bookkeeping projection schema discovery failed: %s\n' "$projection_sql"
+    return 1
+  fi
+  if [[ -z "$projection_sql" ]]; then
+    printf 'no projection found in any schema\n'
+    return 1
+  fi
 
   local output
-  if ! output="$(run_postgres_sql "$sql" 2>&1)"; then
+  if ! output="$(run_postgres_sql "$projection_sql" 2>&1)"; then
     printf 'bookkeeping projection query failed: %s\n' "$output"
     return 1
   fi
-  output="$(printf '%s' "$output" | trim_text)"
-  if [[ "$output" != "0" ]]; then
-    printf 'bookkeeping projection rows present: %s\n' "${output:-<empty>}"
+
+  local summary
+  if ! summary="$(printf '%s\n' "$output" | node -e '
+const fs = require("node:fs");
+const lines = fs.readFileSync(0, "utf8").split(/\r?\n/).filter(Boolean);
+let results;
+try {
+  results = lines.map((line) => JSON.parse(line));
+} catch (error) {
+  console.error(`bookkeeping projection query returned invalid JSON: ${error.message}`);
+  process.exit(1);
+}
+if (results.length === 0) {
+  console.error("bookkeeping projection query returned no schema results");
+  process.exit(1);
+}
+for (const result of results) {
+  if (
+    typeof result.schema !== "string"
+    || typeof result.count !== "string"
+    || !/^\d+$/.test(result.count)
+  ) {
+    console.error(`bookkeeping projection query returned an invalid result: ${JSON.stringify(result)}`);
+    process.exit(1);
+  }
+}
+const violations = results.filter((result) => result.count !== "0");
+if (violations.length > 0) {
+  for (const result of violations) {
+    console.error(`bookkeeping projection rows present in schema ${result.schema}: ${result.count}`);
+  }
+  process.exit(1);
+}
+const schemas = results.map((result) => result.schema).sort();
+console.log(`bookkeeping projection rows=0; checked schemas=${schemas.join(", ")}`);
+' 2>&1)"; then
+    printf '%s\n' "$summary"
     return 1
   fi
 
-  printf 'bookkeeping projection rows=0\n'
+  printf '%s\n' "$summary"
 }
 
 check_gateway_smoke() {

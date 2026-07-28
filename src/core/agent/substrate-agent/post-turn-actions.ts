@@ -3,6 +3,7 @@ import type { AgentMessage } from '../../../boundary/pi-agent/index.js';
 import type { AgentResponse, InferredPostTurnAction, PostTurnActionCandidate, SubstrateMessage, TurnID } from '../../../shared/contracts/runtime.js';
 import type { IcpConversationCorrelation } from '../../../shared/contracts/icp-autonomy.js';
 import type { ContextManifest } from '../../session/context-manifest.js';
+import type { CapturedSessionReads } from '../../session/manager/captured-session-owner.js';
 import { toErrorMessage } from '../../../shared/utils/errors.js';
 
 export interface PostTurnInferenceContext {
@@ -15,6 +16,14 @@ export interface PostTurnInferenceContext {
   taskKind?: string;
   contextManifest?: ContextManifest;
   canonicalContactKey?: string;
+  /**
+   * The admitted turn's owner-bound session reads. Inferers run inside the
+   * turn's captured-owner scope, so any session-history read they perform (e.g.
+   * the intention post-turn appraisal transcript) must go through this facade
+   * rather than SessionManager.getRecentMessages, which the read-attribution
+   * guard rejects while a turn is admitted on the channel.
+   */
+  capturedSessionReads: CapturedSessionReads;
 }
 
 export type PostTurnActionInferer = (

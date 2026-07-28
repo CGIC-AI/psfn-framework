@@ -199,6 +199,7 @@ export async function schedulePostTurnWork(input: {
     ...(taskKind ? { taskKind } : {}),
     contextManifest: context.manifest,
     ...(canonicalContactKey ? { canonicalContactKey } : {}),
+    capturedSessionReads: sessionReads,
   });
   observability.emitObservedTurnStage('end', {
     durationMs: completedAt - startTime,

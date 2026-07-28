@@ -79,41 +79,59 @@ export function createTurnRecordIntrospectionSource(
   reader: IntrospectionTurnRecordReader,
 ): IntrospectionAuditSourcePort {
   let sessionOffset = 0;
-  const turnCursors = new Map<string, TurnRecordPageCursor>();
+  let turnCursors = new Map<string, TurnRecordPageCursor>();
 
-  const readSessionPage = (limit: number): RecentSessionSummary[] => {
-    let sessions = reader.listRecentSessions(limit, sessionOffset);
-    if (sessions.length === 0 && sessionOffset > 0) {
-      sessionOffset = 0;
-      sessions = reader.listRecentSessions(limit, sessionOffset);
+  const readSessionPage = (
+    limit: number,
+    currentOffset: number,
+  ): { sessions: RecentSessionSummary[]; nextOffset: number } => {
+    let pageOffset = currentOffset;
+    let sessions = reader.listRecentSessions(limit, pageOffset);
+    if (sessions.length === 0 && pageOffset > 0) {
+      pageOffset = 0;
+      sessions = reader.listRecentSessions(limit, pageOffset);
     }
-    sessionOffset = sessions.length < limit ? 0 : sessionOffset + sessions.length;
-    return sessions;
+    return {
+      sessions,
+      nextOffset: sessions.length < limit ? 0 : pageOffset + sessions.length,
+    };
   };
 
-  const readTurnPage = async (channelId: string, limit: number): Promise<TurnRecord[]> => {
+  const readTurnPage = async (
+    channelId: string,
+    limit: number,
+    stagedCursors: Map<string, TurnRecordPageCursor>,
+  ): Promise<TurnRecord[]> => {
     const page = await reader.readSourceTurnRecordPage(
       channelId,
       limit,
-      turnCursors.get(channelId),
+      stagedCursors.get(channelId),
     );
     if (page.exhausted) {
-      turnCursors.delete(channelId);
+      stagedCursors.delete(channelId);
     } else {
       if (!page.nextCursor) {
         throw new Error('TurnRecord page is not exhausted but supplied no continuation cursor');
       }
-      turnCursors.set(channelId, page.nextCursor);
+      stagedCursors.set(channelId, page.nextCursor);
     }
     return page.records;
   };
 
   const listCandidatesOnce: IntrospectionAuditSourcePort['listCandidates'] = async (input) => {
+    const stagedTurnCursors = new Map(turnCursors);
+    const sessionPage = readSessionPage(input.recentSessionLimit, sessionOffset);
     const allowed = new Set(input.allowedPublicChannelIds);
     const candidates: IntrospectionAuditCandidate[] = [];
-    for (const session of readSessionPage(input.recentSessionLimit)) {
+    for (const session of sessionPage.sessions) {
       if (!allowed.has(session.sourceChannelId)) continue;
-      for (const record of await readTurnPage(session.sourceChannelId, input.recentTurnLimit)) {
+      for (
+        const record of await readTurnPage(
+          session.sourceChannelId,
+          input.recentTurnLimit,
+          stagedTurnCursors,
+        )
+      ) {
         if (!allowed.has(record.channelId) || record.channelId !== session.sourceChannelId) continue;
         const ownerSessionId = record.sessionId ?? session.sourceChannelId;
         if (reader.isSessionRetiredOrQuarantined(ownerSessionId)) continue;
@@ -121,11 +139,14 @@ export function createTurnRecordIntrospectionSource(
         if (candidate) candidates.push(candidate);
       }
     }
-    return candidates
+    const result = candidates
       .sort((left, right) => left.occurredAt.localeCompare(right.occurredAt))
       .filter((candidate, index, all) => (
         all.findIndex(entry => entry.sourceRef === candidate.sourceRef) === index
       ));
+    sessionOffset = sessionPage.nextOffset;
+    turnCursors = stagedTurnCursors;
+    return result;
   };
 
   // The source owns mutable cursor state. Preserve the old synchronous

@@ -20,6 +20,10 @@ import type {
   ChannelIndexEntry,
   SessionIntegrityProvider,
 } from '../store-primitives.js';
+import type {
+  SessionIntegrityFailureEvent,
+  SessionIntegrityObserver,
+} from '../../../shared/contracts/session-integrity.js';
 import { applyJournalState } from './crash-recovery.js';
 import {
   fingerprintJournalArchiveChain,
@@ -71,13 +75,22 @@ export class SessionJournalRuntime {
   private archivePort: SessionArchivePort;
   private transcriptProjectionFailureLogged = false;
   private quarantineWarningKeysByPath: Map<string, string> = new Map();
+  private integrityObserver: SessionIntegrityObserver | null;
+  // In-memory per-channel dedup of the integrity-failure signal (bead g59z):
+  // a broken session is re-read every context build, so emit to the durable
+  // subscriber only when the structural failure signature changes. Mirrors the
+  // quarantine-warning dedup above. Durable dedup (one incident per session) is
+  // enforced independently by the subscriber.
+  private integritySignatureByChannel: Map<string, string> = new Map();
 
   constructor(
     integrityProvider: SessionIntegrityProvider | null,
     archivePort: SessionArchivePort = createFilesystemSessionArchivePort(),
+    integrityObserver: SessionIntegrityObserver | null = null,
   ) {
     this.integrityProvider = integrityProvider;
     this.archivePort = archivePort;
+    this.integrityObserver = integrityObserver;
     if (integrityProvider) {
       log.info('Session integrity mode: enabled (HMAC verification active)');
     } else {
@@ -248,16 +261,44 @@ export class SessionJournalRuntime {
     );
   }
 
+  private recordIntegrityFailure(event: SessionIntegrityFailureEvent): void {
+    if (!this.integrityObserver) return;
+    const signature = `${event.failedEntryCount}:${event.firstFailedEntryId}:${event.lastFailedEntryId}:${event.contiguousRunCount}`;
+    if (this.integritySignatureByChannel.get(event.channelId) === signature) return;
+    this.integritySignatureByChannel.set(event.channelId, signature);
+    // The subscriber owns durability; a recording failure must never break the
+    // fail-closed read path (which already fenced every failed entry).
+    try {
+      this.integrityObserver.recordIntegrityFailure(event);
+    } catch (error) {
+      log.warn('Session integrity incident recording failed; session read is unaffected', {
+        channelId: event.channelId,
+        error: toErrorMessage(error),
+      });
+    }
+  }
+
+  private chainContext() {
+    return {
+      archivePort: this.archivePort,
+      normalizeEntry: (entry: JournalEntry, candidates: readonly (string | null)[], previousEntryUnverified?: boolean) =>
+        this.verifyAndNormalizeEntry(entry, candidates, previousEntryUnverified),
+      warnAboutQuarantinedEntries: (
+        channelId: string,
+        archive: SessionArchiveHandle,
+        quarantinedCount: number,
+        loadedCount: number,
+      ): void => this.warnAboutQuarantinedEntries(channelId, archive, quarantinedCount, loadedCount),
+      recordIntegrityFailure: (event: SessionIntegrityFailureEvent): void => this.recordIntegrityFailure(event),
+    };
+  }
+
   loadChannel(archive: SessionArchiveHandle): ChannelCache {
     return this.loadChannelChain([archive]);
   }
 
   loadChannelChain(archives: readonly SessionArchiveHandle[]): ChannelCache {
-    return loadJournalArchiveChain({
-      archivePort: this.archivePort,
-      normalizeEntry: (entry, candidates, previousEntryUnverified) => this.verifyAndNormalizeEntry(entry, candidates, previousEntryUnverified),
-      warnAboutQuarantinedEntries: (...args) => this.warnAboutQuarantinedEntries(...args),
-    }, archives);
+    return loadJournalArchiveChain(this.chainContext(), archives);
   }
 
   readJournalEntries(archive: SessionArchiveHandle): JournalEntry[] {
@@ -414,11 +455,7 @@ export class SessionJournalRuntime {
     limit: number,
     tombstones: ReadonlySet<string> = new Set(),
   ): SessionEntry[] {
-    return readRecentEntriesFromJournalArchiveChain({
-      archivePort: this.archivePort,
-      normalizeEntry: (entry, candidates, previousEntryUnverified) => this.verifyAndNormalizeEntry(entry, candidates, previousEntryUnverified),
-      warnAboutQuarantinedEntries: (...args) => this.warnAboutQuarantinedEntries(...args),
-    }, archives, limit, tombstones);
+    return readRecentEntriesFromJournalArchiveChain(this.chainContext(), archives, limit, tombstones);
   }
 
   readEntriesInRangeFromChain(
@@ -427,11 +464,7 @@ export class SessionJournalRuntime {
     endId: number,
     tombstones: ReadonlySet<string> = new Set(),
   ): SessionEntry[] {
-    return readEntriesInRangeFromJournalArchiveChain({
-      archivePort: this.archivePort,
-      normalizeEntry: (entry, candidates, previousEntryUnverified) => this.verifyAndNormalizeEntry(entry, candidates, previousEntryUnverified),
-      warnAboutQuarantinedEntries: (...args) => this.warnAboutQuarantinedEntries(...args),
-    }, archives, startId, endId, tombstones);
+    return readEntriesInRangeFromJournalArchiveChain(this.chainContext(), archives, startId, endId, tombstones);
   }
 
   readTurnTombstoneAuthorityFromChain(

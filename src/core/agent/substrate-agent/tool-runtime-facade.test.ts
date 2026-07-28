@@ -825,9 +825,9 @@ describe('ToolRuntimeFacade maintenance core tool policy', () => {
       'contact',
       'session',
       'identity',
+      'analysis_workbench',
       'self_status',
       'system',
-      'analysis_workbench',
     ]);
 
     const skippedEvents = emitTelemetry.mock.calls
@@ -1001,9 +1001,9 @@ describe('ToolRuntimeFacade maintenance core tool policy', () => {
       'contact',
       'session',
       'identity',
+      'analysis_workbench',
       'subagent',
       'system',
-      'analysis_workbench',
     ]);
     expect(emitTelemetry).not.toHaveBeenCalledWith(
       'agent.tools.core_guardrail.skipped',

@@ -220,6 +220,149 @@ describe('local Artemis always-fleet bootstrap fixtures', () => {
     expect(script).not.toContain('PSFN_MULTI_COMPANION');
   });
 
+  it('builds the app Secret without mixing incompatible kubectl input modes', () => {
+    const root = temporaryRoot();
+    const binRoot = join(root, 'bin');
+    const assertionKey = join(root, 'assertion-private.pem');
+    const capturedSecret = join(root, 'secret.json');
+    const kubectlArguments = join(root, 'kubectl-arguments.txt');
+    mkdirSync(binRoot);
+
+    const scalarSecret = 'scalar-secret=with-equals';
+    const databaseUrl = 'postgresql://user:password@postgres:5432/psfn?sslmode=disable';
+    const privateKey = '-----BEGIN PRIVATE KEY-----\nline-one\nline-two\n-----END PRIVATE KEY-----\n';
+    writeFileSync(assertionKey, privateKey, { mode: 0o600 });
+
+    const kubectl = join(binRoot, 'kubectl');
+    writeFileSync(kubectl, `#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\\n' "$*" >>"$KUBECTL_ARGUMENTS_FILE"
+if [[ " $* " == *" create secret generic psfn-app "* ]]; then
+  env_file=""
+  mixed_input=0
+  for argument in "$@"; do
+    case "$argument" in
+      --from-env-file=*) env_file="\${argument#*=}" ;;
+      --from-file=*|--from-literal=*) mixed_input=1 ;;
+    esac
+  done
+  if ((mixed_input)); then
+    echo "from-env-file cannot be combined with from-file or from-literal" >&2
+    exit 1
+  fi
+  [[ -n "$env_file" ]]
+  [[ "$(stat -c '%a' "$env_file")" == "600" ]] || {
+    echo "app Secret env file must use mode 0600" >&2
+    exit 1
+  }
+  node -e '
+    const fs = require("node:fs");
+    const data = {};
+    for (const line of fs.readFileSync(process.argv[1], "utf8").split("\\n")) {
+      if (line.length === 0) continue;
+      const separator = line.indexOf("=");
+      if (separator < 1) process.exit(2);
+      data[line.slice(0, separator)] =
+        Buffer.from(line.slice(separator + 1), "utf8").toString("base64");
+    }
+    process.stdout.write(JSON.stringify({
+      apiVersion: "v1",
+      kind: "Secret",
+      metadata: { name: "psfn-app" },
+      data,
+    }));
+  ' "$env_file"
+  exit 0
+fi
+if [[ " $* " == *" apply -f - "* ]]; then
+  cat >"$KUBECTL_CAPTURE_FILE"
+  echo "secret/psfn-app configured"
+  exit 0
+fi
+echo "unexpected kubectl arguments" >&2
+exit 64
+`);
+    chmodSync(kubectl, 0o755);
+
+    const script = readFileSync(scriptPath, 'utf8');
+    const functionStart = script.indexOf('create_local_app_secret() {');
+    const functionEnd = script.indexOf('\n}\n\nwrite_local_postgres_secret()', functionStart);
+    expect(functionStart).toBeGreaterThanOrEqual(0);
+    expect(functionEnd).toBeGreaterThan(functionStart);
+    const functionSource = script.slice(functionStart, functionEnd + 2);
+    const writerStart = script.indexOf('write_app_secret_env() {');
+    const writerEnd = script.indexOf('\n}\n\ncapture_preserved_fleet_auth_credentials()', writerStart);
+    expect(writerStart).toBeGreaterThanOrEqual(0);
+    expect(writerEnd).toBeGreaterThan(writerStart);
+    const writerSource = script.slice(writerStart, writerEnd + 2);
+    const harness = join(root, 'run-create-local-app-secret.sh');
+    writeFileSync(harness, `#!/usr/bin/env bash
+set -euo pipefail
+NAMESPACE=psfn-test
+FLEET_AUTH_ASSERTION_PRIVATE_KEY_FILE="$ASSERTION_KEY_FILE"
+SECRET_ENV_FILE=""
+GATEWAY_SESSION_HMAC_KEY_VALUE=test-hmac-key
+COMPANION_AUTH_TOKEN=test-companion-token
+SESSION_INTEGRITY_AUTH_TOKEN=test-integrity-token
+FLEET_AUTH_DISCORD_CLIENT_SECRET_VALUE=test-discord-secret
+FLEET_AUTH_TOKEN_ENCRYPTION_KEY_VALUE=test-encryption-key
+FLEET_AUTH_SESSION_PEPPER_VALUE=test-session-pepper
+FLEET_AUTH_RECOVERY_CREDENTIAL_VALUE=test-recovery-credential
+FLEET_AUTH_RUNTIME_DATABASE_URL_VALUE=postgresql://fleet-runtime
+FLEET_AUTH_MIGRATION_DATABASE_URL_VALUE=postgresql://fleet-migration
+FLEET_AUTH_BACKUP_DATABASE_URL_VALUE=postgresql://fleet-backup
+COMPANION_DATABASE_URL_VALUE="$DATABASE_URL_FIXTURE"
+SHARED_SCHEMA_MIGRATION_DATABASE_URL_VALUE=postgresql://shared-migration
+prepare_gateway_credentials() { :; }
+random_secret() { printf 'generated-secret'; }
+${writerSource}
+${functionSource}
+create_local_app_secret
+`);
+    chmodSync(harness, 0o755);
+
+    const result = spawnSync('bash', [harness], {
+      cwd: repoRoot,
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        API_KEY: scalarSecret,
+        ASSERTION_KEY_FILE: assertionKey,
+        DATABASE_URL_FIXTURE: databaseUrl,
+        KUBECTL_ARGUMENTS_FILE: kubectlArguments,
+        KUBECTL_CAPTURE_FILE: capturedSecret,
+        OPENROUTER_API_KEY: '',
+        PATH: `${binRoot}:${process.env.PATH}`,
+        TMPDIR: root,
+      },
+    });
+
+    expect(result.status, result.stderr || result.stdout).toBe(0);
+    expect(result.stdout).not.toContain(scalarSecret);
+    expect(result.stderr).not.toContain(scalarSecret);
+    expect(result.stdout).not.toContain(privateKey);
+    expect(result.stderr).not.toContain(privateKey);
+
+    const args = readFileSync(kubectlArguments, 'utf8');
+    expect(args).toContain('--from-env-file=');
+    expect(args).not.toContain('--from-file=');
+    expect(args).not.toContain('--from-literal=');
+    expect(args).not.toContain(scalarSecret);
+    expect(args).not.toContain(privateKey);
+
+    const secret = readJson(capturedSecret);
+    expect(Buffer.from(secret.data.API_KEY, 'base64').toString('utf8')).toBe(scalarSecret);
+    expect(Buffer.from(secret.data.OPENROUTER_API_KEY, 'base64').toString('utf8')).toBe('');
+    expect(Buffer.from(secret.data.COMPANION_DEFAULT_DATABASE_URL, 'base64').toString('utf8'))
+      .toBe(databaseUrl);
+    expect(Buffer.from(
+      secret.data.FLEET_AUTH_ASSERTION_PRIVATE_KEY,
+      'base64',
+    ).toString('utf8')).toBe(privateKey);
+    expect(readdirSync(root).filter(name => name.startsWith('psfn-artemis-secret.')))
+      .toEqual([]);
+  });
+
   it('discovers the fleet agent deployment used by the post-rollout validator', () => {
     const root = temporaryRoot();
     const binRoot = join(root, 'bin');

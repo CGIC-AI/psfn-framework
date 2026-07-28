@@ -841,11 +841,19 @@ create_local_app_secret() {
   write_app_secret_env "$env_file"
   kubectl -n "$NAMESPACE" create secret generic psfn-app \
     --from-env-file="$env_file" \
-    --from-file="FLEET_AUTH_ASSERTION_PRIVATE_KEY=${FLEET_AUTH_ASSERTION_PRIVATE_KEY_FILE}" \
     --dry-run=client \
-    -o yaml \
+    -o json \
+    | node -e '
+      const fs = require("node:fs");
+      const secret = JSON.parse(fs.readFileSync(0, "utf8"));
+      secret.data ??= {};
+      secret.data.FLEET_AUTH_ASSERTION_PRIVATE_KEY =
+        fs.readFileSync(process.argv[1]).toString("base64");
+      process.stdout.write(JSON.stringify(secret));
+    ' "$FLEET_AUTH_ASSERTION_PRIVATE_KEY_FILE" \
     | kubectl apply -f -
   rm -f "$env_file"
+  SECRET_ENV_FILE=""
 }
 
 write_local_postgres_secret() {

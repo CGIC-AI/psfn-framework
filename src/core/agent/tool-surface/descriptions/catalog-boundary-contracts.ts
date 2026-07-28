@@ -44,8 +44,8 @@ export const CATALOG_BOUNDARY_TOOL_CONTRACTS = {
     output: 'It returns bounded file data and fails closed on unsafe paths or ambiguous mutation.',
     guidance:
       'Do not request more than 20,000 bytes from one read. Inspect larger files sequentially by passing each returned '
-      + 'next_offset_bytes as the next offset_bytes until eof. For a long document or evidence job, prefer a bounded subagent '
-      + 'worker or automaton using analysis_workbench so its temporary context can be discarded after a bounded result; direct '
+      + 'next_offset_bytes as the next offset_bytes until eof. For a long document or evidence job, prefer a bounded '
+      + 'automaton using analysis_workbench so its temporary context can be discarded after a bounded result; direct '
       + 'analysis_workbench use is still permitted but may occupy the primary turn for several minutes. Require '
       + 'provenance-bearing excerpts with the source path and line or byte ranges; do not rely on a summary-only handoff. '
       + 'Do not use fs for git state; use repo.',

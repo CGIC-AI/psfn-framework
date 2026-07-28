@@ -19,7 +19,7 @@ const clarifyDescriptors: Array<AuditedMethodDescriptor<ClarifyDeliverParams, Cl
       if (!deliver) {
         throw new Error(`clarify is not available: ${params.channel} is not wired to present choices`);
       }
-      return await deliver(params.clarification, params.target, params.timeoutMs);
+      return await deliver(params.clarification, params.target, params.timeoutMs, params.originatingUserId);
     },
     summary: (p: ClarifyDeliverParams) => ({
       channel: p.channel,

@@ -53,7 +53,26 @@ const DEFAULT_TYPING_INTERVAL_MS = 4_000;
 const DEFAULT_LONG_POLL_TIMEOUT_SECONDS = 20;
 const TELEGRAM_WEBHOOK_MAX_BODY_BYTES = 512 * 1_024;
 const THREAD_DELIMITER = '/thread/';
+/** Separator for the `(chatId, userId)` clarify-waiter map key. */
+const CLARIFY_WAITER_KEY_SEPARATOR = ' ';
 const MAX_CONTEXT_MAP_SIZE = 2_000;
+
+/** Compose the author-bound clarify-waiter map key for a chat/user pair. */
+function clarifyWaiterKey(chatId: string, userId: string): string {
+  return `${chatId}${CLARIFY_WAITER_KEY_SEPARATOR}${userId}`;
+}
+
+/**
+ * One-shot waiter for a pending clarification's plain-text reply (vvf.5.2).
+ * `tryAnswer` resolves the awaiting delivery only when the reply parses to a
+ * valid choice, returning `true` (the message is consumed); a parse-miss
+ * returns `false`, leaving the waiter pending so the message becomes a normal
+ * turn instead of being dropped. `cancel` retires the waiter as a no-answer.
+ */
+interface ClarifyReplyWaiter {
+  tryAnswer(reply: string): boolean;
+  cancel(): void;
+}
 const MAX_POLL_BACKOFF_MS = 30_000;
 /** Pseudo-URL scheme carried on Telegram attachments until bytes are resolved. */
 export const TELEGRAM_FILE_URL_PREFIX = 'telegram://file/';
@@ -326,10 +345,14 @@ export class TelegramAdapter implements ChannelAdapterPort {
   private longRunningStatusMessages = new Map<string, TelegramStatusMessageRef>();
   private streamResponses = new Map<string, TelegramStreamResponseState>();
   /**
-   * vvf.5.2: per-chat one-shot waiter for a pending clarification's reply. The
-   * next plain-text message from the chat resolves it (consumed, not turned).
+   * vvf.5.2: one-shot waiter for a pending clarification's reply, keyed by
+   * `(chatId, originatingUserId)` so only the author who was asked can answer
+   * (a different member of a group cannot answer another user's clarification).
+   * `tryAnswer` consumes the reply only when it parses to a valid choice; a
+   * parse-miss returns false, leaving the waiter pending and letting the message
+   * fall through to normal turn processing instead of being dropped.
    */
-  private readonly pendingClarifyReplies = new Map<string, (reply: string) => void>();
+  private readonly pendingClarifyReplies = new Map<string, ClarifyReplyWaiter>();
 
   constructor(
     telegramConfig: TelegramChannelConfig,
@@ -367,7 +390,9 @@ export class TelegramAdapter implements ChannelAdapterPort {
         clarification: PendingClarification,
         target: string,
         timeoutMs: number,
-      ): Promise<ClarifyDeliverResult> => this.deliverClarificationInternal(clarification, target, timeoutMs),
+        originatingUserId?: string,
+      ): Promise<ClarifyDeliverResult> =>
+        this.deliverClarificationInternal(clarification, target, timeoutMs, originatingUserId),
     };
     this.gateway = this;
     this.security = {
@@ -770,14 +795,17 @@ export class TelegramAdapter implements ChannelAdapterPort {
       }
     }
 
-    // vvf.5.2: a plain-text reply while a clarification is pending for this chat
-    // is the answer to that clarification, not a new turn. Consume it here so it
-    // never double-processes as a turn; commands are left to route normally.
+    // vvf.5.2: a plain-text reply from the SAME author who was asked, while a
+    // clarification is pending, is the answer to that clarification — consume it
+    // so it never double-processes as a turn. A reply that does not parse to a
+    // valid choice, or from any other member, is NOT consumed: it falls through
+    // to normal turn processing and the clarification stays pending until its
+    // own timeout. Commands are always left to route normally.
     if (!command && contentText) {
-      const clarifyWaiter = this.pendingClarifyReplies.get(chatId);
-      if (clarifyWaiter) {
-        this.pendingClarifyReplies.delete(chatId);
-        clarifyWaiter(contentText);
+      const clarifyWaiter = this.pendingClarifyReplies.get(
+        clarifyWaiterKey(chatId, String(message.from.id)),
+      );
+      if (clarifyWaiter && clarifyWaiter.tryAnswer(contentText)) {
         return;
       }
     }
@@ -1268,15 +1296,20 @@ export class TelegramAdapter implements ChannelAdapterPort {
     clarification: PendingClarification,
     target: string,
     timeoutMs: number,
+    originatingUserId?: string,
   ): Promise<ClarifyDeliverResult> {
     const parsed = this.parseChannelId(target);
     if (!parsed) {
       throw new Error(`Telegram clarify target is not a valid channel id: ${target}`);
     }
+    const boundUserId = originatingUserId?.trim();
+    if (!boundUserId) {
+      throw new Error('Telegram clarify requires an originating user to bind the reply');
+    }
     await this.sendTextInternal({ channelId: target }, formatClarificationPrompt(clarification));
 
     const noAnswer: ClarifyDeliverResult = { status: 'pending', channel: 'telegram', target };
-    const reply = await this.awaitClarifyReply(parsed.chatId, timeoutMs);
+    const reply = await this.awaitClarifyReply(clarification, parsed.chatId, boundUserId, timeoutMs);
     if (reply === null) {
       return noAnswer;
     }
@@ -1297,32 +1330,54 @@ export class TelegramAdapter implements ChannelAdapterPort {
   }
 
   /**
-   * Register a one-shot reply waiter for a chat, resolving with the next
-   * plain-text reply or `null` after `timeoutMs`. If a clarification is already
-   * pending for the chat it is retired as a no-answer to avoid a leaked waiter.
+   * Register a one-shot reply waiter bound to `(chatId, userId)`, resolving with
+   * the next matching plain-text reply that parses to a valid choice, or `null`
+   * after `timeoutMs`. Only the originating author can answer, and a reply that
+   * does not parse is left unconsumed (see {@link ClarifyReplyWaiter}). A waiter
+   * already pending for the same author/chat is retired as a no-answer to avoid
+   * a leaked waiter.
    */
-  private awaitClarifyReply(chatId: string, timeoutMs: number): Promise<string | null> {
-    const superseded = this.pendingClarifyReplies.get(chatId);
+  private awaitClarifyReply(
+    clarification: PendingClarification,
+    chatId: string,
+    userId: string,
+    timeoutMs: number,
+  ): Promise<string | null> {
+    const key = clarifyWaiterKey(chatId, userId);
+    const superseded = this.pendingClarifyReplies.get(key);
     if (superseded) {
-      this.pendingClarifyReplies.delete(chatId);
-      superseded('');
+      this.pendingClarifyReplies.delete(key);
+      superseded.cancel();
     }
     return new Promise<string | null>((resolve) => {
       let timer: ReturnType<typeof setTimeout>;
-      const handler = (reply: string): void => {
+      const cleanup = (): void => {
         clearTimeout(timer);
-        if (this.pendingClarifyReplies.get(chatId) === handler) {
-          this.pendingClarifyReplies.delete(chatId);
+        if (this.pendingClarifyReplies.get(key) === waiter) {
+          this.pendingClarifyReplies.delete(key);
         }
-        resolve(reply);
+      };
+      const waiter: ClarifyReplyWaiter = {
+        tryAnswer: (reply: string): boolean => {
+          // Only consume a reply that resolves to a valid choice; a parse-miss
+          // stays pending and lets the message fall through to a normal turn.
+          if (parseClarificationReply(clarification, reply) === null) {
+            return false;
+          }
+          cleanup();
+          resolve(reply);
+          return true;
+        },
+        cancel: (): void => {
+          cleanup();
+          resolve(null);
+        },
       };
       timer = setTimeout(() => {
-        if (this.pendingClarifyReplies.get(chatId) === handler) {
-          this.pendingClarifyReplies.delete(chatId);
-        }
+        cleanup();
         resolve(null);
       }, timeoutMs);
-      this.pendingClarifyReplies.set(chatId, handler);
+      this.pendingClarifyReplies.set(key, waiter);
     });
   }
 

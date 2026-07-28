@@ -72,11 +72,17 @@ export interface ChannelOutboundAdapter {
    * delivered choices at source; timeout / unrecognized reply / out-of-range
    * choice fail closed as a `pending` no-answer (never a fabricated selection,
    * never a silent drop).
+   *
+   * `originatingUserId` is the channel-native id of the turn's author; the
+   * channel binds the answer to that user so a different member of a shared
+   * channel/group cannot answer another user's clarification. Implementations
+   * fail closed when it is absent rather than accept an unbound answer.
    */
   deliverClarification?(
     clarification: PendingClarification,
     target: string,
     timeoutMs: number,
+    originatingUserId?: string,
   ): Promise<ClarifyDeliverResult>;
 }
 

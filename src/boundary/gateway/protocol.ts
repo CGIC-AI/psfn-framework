@@ -538,6 +538,15 @@ export interface ClarifyDeliverParams {
   readonly clarification: PendingClarification;
   /** Upper bound the channel waits for an answer before reporting no-answer. */
   readonly timeoutMs: number;
+  /**
+   * Channel-native id of the turn's originating user (Discord user snowflake /
+   * Telegram user id). Runtime-resolved from the turn's author, never model
+   * supplied. The rendering channel binds the answer to this author so a
+   * different member of a shared channel/group cannot answer another user's
+   * clarification. Absent only for turns with no resolvable human author, where
+   * the channel fails closed rather than accept an unbound answer.
+   */
+  readonly originatingUserId?: string;
 }
 
 /**

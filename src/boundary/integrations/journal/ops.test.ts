@@ -1,8 +1,11 @@
 import {
+  mkdirSync,
   mkdtempSync,
   readFileSync,
   readdirSync,
   rmSync,
+  symlinkSync,
+  unlinkSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -27,13 +30,18 @@ vi.mock('node:fs/promises', async (importOriginal) => {
 
 describe('JournalOps governed I/O', () => {
   let root: string;
+  let cleanupPaths: string[];
 
   beforeEach(() => {
+    cleanupPaths = [];
     root = mkdtempSync(join(tmpdir(), 'journal-ops-'));
+    cleanupPaths.push(root);
   });
 
   afterEach(() => {
-    rmSync(root, { recursive: true, force: true });
+    for (const path of cleanupPaths) {
+      rmSync(path, { recursive: true, force: true });
+    }
   });
 
   it('reads a large UTF-8 note in byte-safe pages with explicit progress', async () => {
@@ -126,7 +134,11 @@ describe('JournalOps governed I/O', () => {
     );
   });
 
-  it('atomically preserves every concurrent cross-instance append to large notes', async () => {
+  it('atomically preserves every concurrent append through directory symlink aliases', async () => {
+    const actualDirectory = join(root, 'actual');
+    const aliasDirectory = join(root, 'alias');
+    mkdirSync(actualDirectory);
+    symlinkSync(actualDirectory, aliasDirectory, 'dir');
     const original = 'x'.repeat(2 * 1024 * 1024);
     const firstOps = new JournalOps(root);
     const secondOps = new JournalOps(root);
@@ -135,16 +147,16 @@ describe('JournalOps governed I/O', () => {
       timerProgressed = true;
     });
 
-    for (let iteration = 0; iteration < 8; iteration += 1) {
+    for (let iteration = 0; iteration < 20; iteration += 1) {
       const noteName = `large-${String(iteration)}.md`;
-      const path = join(root, noteName);
+      const path = join(actualDirectory, noteName);
       const firstAppend = `first append ${String(iteration)}`;
       const secondAppend = `second append ${String(iteration)}`;
       writeFileSync(path, original, 'utf8');
 
       await Promise.all([
-        firstOps.append(noteName, firstAppend),
-        secondOps.append(noteName, secondAppend),
+        firstOps.append(`actual/${noteName}`, firstAppend),
+        secondOps.append(`alias/${noteName}`, secondAppend),
       ]);
 
       const persisted = readFileSync(path, 'utf8');
@@ -156,7 +168,64 @@ describe('JournalOps governed I/O', () => {
     await timer;
 
     expect(timerProgressedBeforeCompletion).toBe(true);
-    expect(readdirSync(root).filter(name => name.includes('journal-append'))).toEqual([]);
+    expect(readdirSync(actualDirectory).filter(name => name.includes('journal-append'))).toEqual([]);
+
+    await Promise.all([
+      firstOps.append('actual/new-note.md', 'first new append'),
+      secondOps.append('alias/new-note.md', 'second new append'),
+    ]);
+    const created = readFileSync(join(actualDirectory, 'new-note.md'), 'utf8');
+    expect(created.split('first new append')).toHaveLength(2);
+    expect(created.split('second new append')).toHaveLength(2);
+    expect(readdirSync(actualDirectory).filter(name => name.includes('journal-append'))).toEqual([]);
+  });
+
+  it('fails closed when a directory symlink alias changes while waiting for the lock', async () => {
+    const actualDirectory = join(root, 'actual');
+    const outsideDirectory = mkdtempSync(join(tmpdir(), 'journal-outside-'));
+    cleanupPaths.push(outsideDirectory);
+    const aliasDirectory = join(root, 'alias');
+    mkdirSync(actualDirectory);
+    symlinkSync(actualDirectory, aliasDirectory, 'dir');
+    const notePath = join(actualDirectory, 'note.md');
+    const outsideNotePath = join(outsideDirectory, 'note.md');
+    writeFileSync(notePath, 'inside\n', 'utf8');
+    writeFileSync(outsideNotePath, 'outside\n', 'utf8');
+
+    let releaseLock!: () => void;
+    const lockBlocked = new Promise<void>((resolvePromise) => {
+      releaseLock = resolvePromise;
+    });
+    let lockStarted!: () => void;
+    const started = new Promise<void>((resolvePromise) => {
+      lockStarted = resolvePromise;
+    });
+    const holdingMutation = withJournalMutationLock(root, notePath, async () => {
+      lockStarted();
+      await lockBlocked;
+    });
+    await started;
+
+    let aliasMutationSettled = false;
+    const aliasMutation = new JournalOps(root)
+      .append('alias/note.md', 'must not escape')
+      .finally(() => {
+        aliasMutationSettled = true;
+      });
+    await delay(20);
+    const aliasMutationSettledBeforeSwap = aliasMutationSettled;
+
+    unlinkSync(aliasDirectory);
+    symlinkSync(outsideDirectory, aliasDirectory, 'dir');
+    releaseLock();
+    await holdingMutation;
+
+    expect(aliasMutationSettledBeforeSwap).toBe(false);
+    await expect(aliasMutation).rejects.toThrow(/must stay inside|changed while waiting/);
+    expect(readFileSync(notePath, 'utf8')).toBe('inside\n');
+    expect(readFileSync(outsideNotePath, 'utf8')).toBe('outside\n');
+    expect(readdirSync(actualDirectory).filter(name => name.includes('journal-append'))).toEqual([]);
+    expect(readdirSync(outsideDirectory).filter(name => name.includes('journal-append'))).toEqual([]);
   });
 
   it('does not serialize mutations to unrelated paths or roots', async () => {
@@ -170,20 +239,24 @@ describe('JournalOps governed I/O', () => {
       blockedStarted = resolvePromise;
     });
 
-    const first = withJournalMutationLock(blockedPath, async () => {
+    const first = withJournalMutationLock(root, blockedPath, async () => {
       blockedStarted();
       await blocked;
     });
     await started;
 
     let samePathStarted = false;
-    const samePath = withJournalMutationLock(blockedPath, async () => {
+    const samePath = withJournalMutationLock(root, blockedPath, async () => {
       samePathStarted = true;
     });
+    const otherRoot = join(dirname(root), `${basename(root)}-other`);
+    mkdirSync(otherRoot);
+    cleanupPaths.push(otherRoot);
     await Promise.all([
-      withJournalMutationLock(join(root, 'other.md'), async () => undefined),
+      withJournalMutationLock(root, join(root, 'other.md'), async () => undefined),
       withJournalMutationLock(
-        join(dirname(root), `${basename(root)}-other`, 'blocked.md'),
+        otherRoot,
+        join(otherRoot, 'blocked.md'),
         async () => undefined,
       ),
     ]);
@@ -213,10 +286,10 @@ describe('JournalOps governed I/O', () => {
   it('releases a shared mutation lock after a failed operation', async () => {
     const path = join(root, 'retry.md');
 
-    await expect(withJournalMutationLock(path, async () => {
+    await expect(withJournalMutationLock(root, path, async () => {
       throw new Error('injected mutation failure');
     })).rejects.toThrow(/injected mutation failure/);
 
-    await expect(withJournalMutationLock(path, async () => 'retried')).resolves.toBe('retried');
+    await expect(withJournalMutationLock(root, path, async () => 'retried')).resolves.toBe('retried');
   });
 });

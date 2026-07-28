@@ -1,3 +1,4 @@
+import { EventEmitter } from 'node:events';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { DiscoveredModel } from '../../../primitives/llm/discovery.js';
 import type { GatewayMethodRuntime } from './types.js';
@@ -11,6 +12,12 @@ import { LLMClient } from '../../../primitives/llm/client.js';
 import { buildLLMWorkSpec } from '../../../primitives/llm/work-spec.js';
 import { toWorkSpecWireParams } from '../../../primitives/llm/work-spec-wire.js';
 import type { SubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
+import { GatewayClient } from '../client.js';
+import type { NdjsonConnection } from '../transport.js';
+import {
+  buildSubagentWorkSpec,
+  createSubagentWorkSpecProvider,
+} from '../../../faculties/subagents/work-spec.js';
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -143,6 +150,48 @@ function createHarness(options: {
     modelDiscovery,
     notifyRequester: runtime.notifyRequester,
   };
+}
+
+function createLinkedGatewayClient(
+  invoke: (method: string, params: Record<string, unknown>) => Promise<unknown>,
+): GatewayClient {
+  const emitter = new EventEmitter();
+  const connection = {
+    send(frame: unknown): boolean {
+      const request = frame as {
+        id: number;
+        method: string;
+        params: Record<string, unknown>;
+      };
+      void invoke(request.method, request.params).then(
+        result => emitter.emit('message', {
+          jsonrpc: '2.0',
+          id: request.id,
+          result,
+        }),
+        error => emitter.emit('message', {
+          jsonrpc: '2.0',
+          id: request.id,
+          error: {
+            code: typeof error === 'object'
+              && error !== null
+              && 'code' in error
+              && typeof error.code === 'number'
+              ? error.code
+              : -32603,
+            message: error instanceof Error ? error.message : String(error),
+          },
+        }),
+      );
+      return true;
+    },
+    sendHeartbeat: () => true,
+    onHeartbeat: (handler: () => void) => emitter.on('heartbeat', handler),
+    onMessage: (handler: (message: unknown) => void) => emitter.on('message', handler),
+    on: (event: string, handler: (...args: unknown[]) => void) => emitter.on(event, handler),
+    destroy: () => emitter.removeAllListeners(),
+  };
+  return new GatewayClient(connection as unknown as NdjsonConnection, 1024);
 }
 
 describe('registerLLMMethods', () => {
@@ -742,6 +791,21 @@ describe('registerLLMMethods work-spec accountability seam (psfn-framework-d8vq.
         chat: { model: 'z-ai/glm-5', provider: 'openrouter', maxTokens: 4096, contextWindow: 128_000 },
         background: { model: 'deepseek/deepseek-v3.2', provider: 'openrouter', maxTokens: 2048 },
       },
+      modelRegistry: {
+        schemaVersion: 1,
+        models: [{
+          id: 'background',
+          rank: 10,
+          identity: {
+            provider: 'openrouter',
+            model: 'deepseek/deepseek-v3.2',
+            source: { type: 'openrouter' },
+          },
+          purposes: [{ purpose: 'background', primary: true }],
+          capabilities: { maxOutputTokens: 2048 },
+          tuning: { maxOutputTokens: 2048 },
+        }],
+      },
     } as unknown as SubstrateConfig;
   }
 
@@ -767,6 +831,54 @@ describe('registerLLMMethods work-spec accountability seam (psfn-framework-d8vq.
     });
 
     expect(harness.complete.mock.calls[0]?.[2]).toEqual({ workSpec });
+  });
+
+  it('serves one correlated subagent stream across the real split boundary', async () => {
+    const providerStream = vi.fn<LLMProviderPort['stream']>(async () => ({
+      content: 'linked stream',
+      toolCalls: [],
+      model: 'deepseek/deepseek-v3.2',
+      inputTokens: 7,
+      outputTokens: 3,
+      stopReason: 'stop',
+    }));
+    const usageRecorder = {
+      recordUsageEvent: vi.fn(async (_event: ModelUsageEventInput) => undefined),
+    };
+    const servingClient = new LLMClient(makeServingConfig(), {
+      transport: {
+        stream: providerStream,
+        complete: vi.fn(),
+      },
+      usageRecorder,
+    });
+    const harness = createHarness({ llmProvider: servingClient });
+    const gatewayClient = createLinkedGatewayClient(harness.invoke);
+    const workSpec = buildSubagentWorkSpec({
+      correlation: {
+        requestId: 'linked-subagent-request',
+        turnId: 'linked-parent-turn',
+        channelId: 'linked-parent-channel',
+      },
+    });
+    const workerProvider = createSubagentWorkSpecProvider(gatewayClient, workSpec);
+
+    const response = await workerProvider.stream(
+      {
+        systemPrompt: 'linked system',
+        messages: [{ role: 'user', content: 'perform linked work' }],
+      },
+    );
+
+    expect(response.content).toBe('linked stream');
+    expect(providerStream).toHaveBeenCalledTimes(1);
+    expect(providerStream.mock.calls[0]?.[0].correlation).toMatchObject({
+      requestId: 'linked-subagent-request',
+      turnId: 'linked-parent-turn',
+      channelId: 'linked-parent-channel',
+      callType: 'background',
+      originStage: 'subagent.turn',
+    });
   });
 
   it('forwards a parsed work spec into the serving provider stream options', async () => {

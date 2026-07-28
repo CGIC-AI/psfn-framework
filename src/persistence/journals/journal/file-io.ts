@@ -279,6 +279,23 @@ export function listJournalArchivePaths(filePath: string): string[] {
   return paths;
 }
 
+export function listContiguousJournalArchivePaths(filePath: string): string[] {
+  const segments = listNumberedJsonlSegments(filePath)
+    .sort((left, right) => left.segmentNumber - right.segmentNumber);
+  for (let index = 0; index < segments.length; index += 1) {
+    const expected = index + 1;
+    if (segments[index]!.segmentNumber !== expected) {
+      throw new Error(
+        `Journal archive generation for ${filePath} is not contiguous: `
+        + `expected segment ${expected}, found ${segments[index]!.segmentNumber}`,
+      );
+    }
+  }
+  const paths = segments.map(segment => segment.path);
+  if (existsSync(filePath)) paths.push(filePath);
+  return paths;
+}
+
 export function fingerprintJournalArchive(filePath: string): string | null {
   const paths = listJournalArchivePaths(filePath);
   if (paths.length === 0) return null;

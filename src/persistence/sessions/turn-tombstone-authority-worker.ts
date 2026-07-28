@@ -4,10 +4,14 @@ import {
   openSync,
   readSync,
   statSync,
+  type Stats,
 } from 'node:fs';
 import type { JournalEntry } from '../../core/session/types.js';
 import { fileIdentityKey } from '../jsonl-segments.js';
-import { parseJournalLine } from '../journals/journal/file-io.js';
+import {
+  listContiguousJournalArchivePaths,
+  parseJournalLine,
+} from '../journals/journal/file-io.js';
 
 interface WorkerInput {
   channelId: string;
@@ -20,8 +24,9 @@ interface WorkerInput {
 }
 
 interface SnapshotFile {
-  fd: number;
+  ctimeMs: number;
   identity: string;
+  mtimeMs: number;
   path: string;
   size: number;
 }
@@ -37,6 +42,7 @@ interface AuthorityScanStats {
   actionsReturned: number;
   bytesRead: number;
   filesScanned: number;
+  peakOpenFiles: number;
   peakRowBytes: number;
   rowsScanned: number;
 }
@@ -60,55 +66,155 @@ function evidenceError(message: string, code?: string, cause?: unknown): Error {
   return error;
 }
 
-function openSnapshots(filePaths: readonly string[]): SnapshotFile[] {
+function isEvidenceError(error: unknown): error is Error {
+  return error instanceof Error && error.name === 'TurnRecordRecoveryEvidenceError';
+}
+
+function expandAuthorityPaths(filePaths: readonly string[]): string[] {
+  const paths: string[] = [];
+  const seenPaths = new Set<string>();
+  for (const rootPath of filePaths) {
+    let generation: string[];
+    try {
+      generation = listContiguousJournalArchivePaths(rootPath);
+    } catch (error) {
+      throw evidenceError(
+        `Cannot resolve a contiguous L0 authority generation for ${rootPath}`,
+        'ESTALE',
+        error,
+      );
+    }
+    if (generation.at(-1) !== rootPath) {
+      throw evidenceError(`L0 authority active generation is missing for ${rootPath}`, 'ESTALE');
+    }
+    for (const path of generation) {
+      if (seenPaths.has(path)) {
+        throw evidenceError(
+          `L0 authority chain for ${input.channelId} contains duplicate path ${path}`,
+          'ESTALE',
+        );
+      }
+      seenPaths.add(path);
+      paths.push(path);
+    }
+  }
+  return paths;
+}
+
+function captureSnapshots(filePaths: readonly string[]): SnapshotFile[] {
   const snapshots: SnapshotFile[] = [];
   const identities = new Set<string>();
   try {
-    for (const path of filePaths) {
-      const fd = openSync(path, 'r');
-      try {
-        const stat = fstatSync(fd);
-        const identity = fileIdentityKey(stat);
-        if (identities.has(identity)) {
-          throw evidenceError(
-            `L0 authority chain for ${input.channelId} contains duplicate file identity ${identity}`,
-          );
-        }
-        identities.add(identity);
-        snapshots.push({ fd, identity, path, size: stat.size });
-      } catch (error) {
-        closeSync(fd);
-        throw error;
+    for (const path of expandAuthorityPaths(filePaths)) {
+      const stat = statSync(path);
+      const identity = fileIdentityKey(stat);
+      if (identities.has(identity)) {
+        throw evidenceError(
+          `L0 authority chain for ${input.channelId} contains duplicate file identity ${identity}`,
+          'ESTALE',
+        );
       }
+      identities.add(identity);
+      snapshots.push({
+        ctimeMs: stat.ctimeMs,
+        identity,
+        mtimeMs: stat.mtimeMs,
+        path,
+        size: stat.size,
+      });
     }
     return snapshots;
   } catch (error) {
-    for (const snapshot of snapshots) closeSync(snapshot.fd);
+    if (isEvidenceError(error)) throw error;
     throw evidenceError(
       `Cannot capture L0 tombstone authority for ${input.channelId}`,
-      undefined,
+      'ESTALE',
       error,
     );
   }
 }
 
+function evidenceMatches(
+  snapshot: SnapshotFile,
+  stat: Stats,
+): boolean {
+  return fileIdentityKey(stat) === snapshot.identity
+    && stat.size === snapshot.size
+    && stat.mtimeMs === snapshot.mtimeMs
+    && stat.ctimeMs === snapshot.ctimeMs;
+}
+
+function assertEvidenceMatches(
+  snapshot: SnapshotFile,
+  stat: Stats,
+): void {
+  if (!evidenceMatches(snapshot, stat)) {
+    throw evidenceError(
+      `L0 authority evidence changed while scanning ${snapshot.path}`,
+      'ESTALE',
+    );
+  }
+}
+
+function verifySnapshotGeneration(snapshots: readonly SnapshotFile[]): void {
+  let currentPaths: string[];
+  try {
+    currentPaths = expandAuthorityPaths(input.filePaths);
+  } catch (error) {
+    if (isEvidenceError(error)) throw error;
+    throw evidenceError(
+      `Cannot revalidate L0 tombstone authority for ${input.channelId}`,
+      'ESTALE',
+      error,
+    );
+  }
+  if (
+    currentPaths.length !== snapshots.length
+    || currentPaths.some((path, index) => path !== snapshots[index]!.path)
+  ) {
+    throw evidenceError(
+      `L0 authority generation changed while scanning ${input.channelId}`,
+      'ESTALE',
+    );
+  }
+  for (const snapshot of snapshots) {
+    try {
+      assertEvidenceMatches(snapshot, statSync(snapshot.path));
+    } catch (error) {
+      if (isEvidenceError(error)) throw error;
+      throw evidenceError(
+        `L0 authority path changed while scanning ${snapshot.path}`,
+        'ESTALE',
+        error,
+      );
+    }
+  }
+}
+
 async function run(): Promise<void> {
-  const snapshots = openSnapshots(input.filePaths);
+  const snapshots = captureSnapshots(input.filePaths);
   const actions: AuthorityActionEvidence[] = [];
   const stats: AuthorityScanStats = {
     actionBytesReturned: 0,
     actionsReturned: 0,
     bytesRead: 0,
     filesScanned: 0,
+    peakOpenFiles: 0,
     peakRowBytes: 0,
     rowsScanned: 0,
   };
+  let openFiles = 0;
   let previousHmac: string | null = null;
-  try {
-    process.send?.({ type: 'snapshot' });
-    await waitForContinue();
-    for (let archiveIndex = 0; archiveIndex < snapshots.length; archiveIndex += 1) {
-      const snapshot = snapshots[archiveIndex]!;
+  process.send?.({ type: 'snapshot' });
+  await waitForContinue();
+  for (let archiveIndex = 0; archiveIndex < snapshots.length; archiveIndex += 1) {
+    const snapshot = snapshots[archiveIndex]!;
+    let fd: number | undefined;
+    try {
+      fd = openSync(snapshot.path, 'r');
+      openFiles += 1;
+      stats.peakOpenFiles = Math.max(stats.peakOpenFiles, openFiles);
+      assertEvidenceMatches(snapshot, fstatSync(fd));
       stats.filesScanned += 1;
       const chunk = Buffer.allocUnsafe(input.scanChunkBytes);
       let buffered: Buffer[] = [];
@@ -172,7 +278,7 @@ async function run(): Promise<void> {
 
       while (position < snapshot.size) {
         const bytesRead = readSync(
-          snapshot.fd,
+          fd,
           chunk,
           0,
           Math.min(chunk.length, snapshot.size - position),
@@ -206,36 +312,23 @@ async function run(): Promise<void> {
         }
       }
       if (bufferedBytes > 0) consumeLine(Buffer.alloc(0));
-    }
-
-    for (const snapshot of snapshots) {
-      const descriptorStat = fstatSync(snapshot.fd);
-      let pathStat;
-      try {
-        pathStat = statSync(snapshot.path);
-      } catch (error) {
-        throw evidenceError(
-          `L0 authority path changed while scanning ${snapshot.path}`,
-          'ESTALE',
-          error,
-        );
-      }
-      if (
-        fileIdentityKey(descriptorStat) !== snapshot.identity
-        || descriptorStat.size !== snapshot.size
-        || fileIdentityKey(pathStat) !== snapshot.identity
-        || pathStat.size !== snapshot.size
-      ) {
-        throw evidenceError(
-          `L0 authority evidence changed while scanning ${snapshot.path}`,
-          'ESTALE',
-        );
+      assertEvidenceMatches(snapshot, fstatSync(fd));
+    } catch (error) {
+      if (isEvidenceError(error)) throw error;
+      throw evidenceError(
+        `Cannot scan L0 tombstone authority ${snapshot.path}`,
+        (error as NodeJS.ErrnoException).code ?? 'EIO',
+        error,
+      );
+    } finally {
+      if (fd !== undefined) {
+        closeSync(fd);
+        openFiles -= 1;
       }
     }
-    process.send?.({ type: 'complete', actions, stats });
-  } finally {
-    for (const snapshot of snapshots) closeSync(snapshot.fd);
   }
+  verifySnapshotGeneration(snapshots);
+  process.send?.({ type: 'complete', actions, stats });
 }
 
 run().catch((error: unknown) => {

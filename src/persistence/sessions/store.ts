@@ -1812,11 +1812,7 @@ export class SessionStore implements TranscriptSearchPort {
       }
 
       const tombstones = new Set(before.baselineTombstones);
-      const actions = [...snapshot.actions].sort((left, right) => (
-        left.entry.id - right.entry.id
-        || left.archiveIndex - right.archiveIndex
-      ));
-      for (const action of actions) {
+      for (const action of snapshot.actions) {
         const normalized = this.journalRuntime.verifyAndNormalizeEntry(
           action.entry,
           [action.previousHmac],
@@ -1862,6 +1858,10 @@ export class SessionStore implements TranscriptSearchPort {
           + snapshot.stats.filesScanned;
         stats.authorityMainMessageBytesRetained = 0;
         stats.authorityOwnersScanned = (stats.authorityOwnersScanned ?? 0) + 1;
+        stats.authorityPeakOpenFilesOffPrimary = Math.max(
+          stats.authorityPeakOpenFilesOffPrimary ?? 0,
+          snapshot.stats.peakOpenFiles,
+        );
         stats.authorityPeakCachedOwners = Math.max(
           stats.authorityPeakCachedOwners ?? 0,
           this.recoveryTombstoneAuthority.size,

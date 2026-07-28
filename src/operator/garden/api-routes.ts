@@ -1013,10 +1013,17 @@ export function buildAdminApiRoutes(options: {
           sendJson(res, 200, { snapshot: null, managed: [], disabledSkills: [] });
           return;
         }
-        const snapshot = skillsRuntime.getSnapshot();
-        const managed = skillsRuntime.listManaged();
-        const disabledSkills = skillsRuntime.getDisabledSkills();
-        sendJson(res, 200, { snapshot, managed, disabledSkills });
+        void Promise.resolve(skillsRuntime.getSnapshot())
+          .then((snapshot) => {
+            const managed = skillsRuntime.listManaged();
+            const disabledSkills = skillsRuntime.getDisabledSkills();
+            sendJson(res, 200, { snapshot, managed, disabledSkills });
+          })
+          .catch((error: unknown) => {
+            sendJson(res, 500, {
+              error: toSanitizedMessage(error, 'Failed to load skills'),
+            });
+          });
       },
     },
     {

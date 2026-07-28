@@ -1,10 +1,12 @@
 import {
   existsSync,
   lstatSync,
-  readdirSync,
-  readFileSync,
-  statSync,
 } from 'node:fs';
+import {
+  open,
+  opendir,
+  stat,
+} from 'node:fs/promises';
 import {
   isAbsolute,
   join,
@@ -432,7 +434,7 @@ function toDisplayPath(root: string, absolutePath: string): string {
  * root is an existing directory first (scanSkillRoots does); a root that
  * disappears mid-walk fails loudly via readdirSync rather than yielding [].
  */
-function walkSkillFiles(baseDir: SkillDirectorySpec): SkillFileCandidate[] {
+async function walkSkillFiles(baseDir: SkillDirectorySpec): Promise<SkillFileCandidate[]> {
   const files: SkillFileCandidate[] = [];
   const stack = [baseDir.absolutePath];
 
@@ -440,8 +442,8 @@ function walkSkillFiles(baseDir: SkillDirectorySpec): SkillFileCandidate[] {
     const current = stack.pop();
     if (!current) continue;
 
-    const entries = readdirSync(current, { withFileTypes: true });
-    for (const entry of entries) {
+    const directory = await opendir(current);
+    for await (const entry of directory) {
       const absolutePath = join(current, entry.name);
       if (entry.isSymbolicLink()) continue;
       if (entry.isDirectory()) {
@@ -450,7 +452,7 @@ function walkSkillFiles(baseDir: SkillDirectorySpec): SkillFileCandidate[] {
       }
       if (!entry.isFile() || entry.name !== SKILL_FILE_NAME) continue;
 
-      const fileStats = statSync(absolutePath);
+      const fileStats = await stat(absolutePath);
       const relativeFromDirectory = toPosix(relative(baseDir.absolutePath, absolutePath));
       const relativePath = relativeFromDirectory
         ? `${baseDir.relativePath}/${relativeFromDirectory}`
@@ -480,6 +482,11 @@ export function parseSkillDocument(document: string, sourcePath: string): {
     frontmatter,
     body: parsed.body,
   };
+}
+
+export function parseSkillMetadata(documentPrefix: string, sourcePath: string): SkillFrontmatter {
+  const parsed = parseFrontmatter(documentPrefix);
+  return normalizeFrontmatter(parseYamlFrontmatter(parsed.yaml), sourcePath);
 }
 
 export function resolveSkillDirectories(
@@ -523,17 +530,24 @@ export function resolveSkillDirectories(
  * first skill creation, so its absence is expected and only surfaced via the
  * provenance payload.
  */
-export function scanSkillRoots(
+export async function scanSkillRoots(
   directories: SkillDirectorySpec[],
   options: ScanSkillRootsOptions = {},
-): SkillScanResult {
+): Promise<SkillScanResult> {
   const warnMissingRoot = options.warnMissingRoot ?? defaultWarnMissingRoot;
   const roots: SkillRootScan[] = [];
   const files: SkillFileCandidate[] = [];
 
   for (const directory of directories) {
-    const exists = existsSync(directory.absolutePath);
-    const isDirectory = exists && statSync(directory.absolutePath).isDirectory();
+    let rootStats;
+    try {
+      rootStats = await stat(directory.absolutePath);
+    } catch (error) {
+      const code = isRecord(error) && typeof error.code === 'string' ? error.code : '';
+      if (code !== 'ENOENT') throw error;
+    }
+    const exists = rootStats !== undefined;
+    const isDirectory = rootStats?.isDirectory() ?? false;
 
     if (!isDirectory) {
       const message = exists
@@ -558,7 +572,7 @@ export function scanSkillRoots(
       continue;
     }
 
-    const rootFiles = walkSkillFiles(directory);
+    const rootFiles = await walkSkillFiles(directory);
     roots.push({
       path: directory.relativePath,
       absolutePath: directory.absolutePath,
@@ -580,32 +594,121 @@ export function scanSkillRoots(
   return { files, roots };
 }
 
-export function scanSkillFiles(directories: SkillDirectorySpec[]): SkillFileCandidate[] {
-  return scanSkillRoots(directories).files;
+export async function scanSkillFiles(
+  directories: SkillDirectorySpec[],
+): Promise<SkillFileCandidate[]> {
+  return (await scanSkillRoots(directories)).files;
 }
 
-export function loadSkillEntries(files: SkillFileCandidate[]): {
+interface SkillDocumentReadOptions {
+  maxDocumentBytes?: number;
+  maxFrontmatterBytes?: number;
+}
+
+class OversizedSkillDocumentError extends Error {
+  constructor(
+    readonly actualBytes: number,
+    readonly maxBytes: number,
+    message: string,
+  ) {
+    super(message);
+    this.name = 'OversizedSkillDocumentError';
+  }
+}
+
+async function readStableSkillBytes(
+  path: string,
+  options: SkillDocumentReadOptions,
+  mode: 'frontmatter' | 'document',
+): Promise<Buffer> {
+  const maxDocumentBytes = options.maxDocumentBytes ?? 1_000_000;
+  const maxFrontmatterBytes = options.maxFrontmatterBytes ?? 64 * 1024;
+  const handle = await open(path, 'r');
+
+  try {
+    const before = await handle.stat();
+    if (before.size > maxDocumentBytes) {
+      throw new OversizedSkillDocumentError(
+        before.size,
+        maxDocumentBytes,
+        `SKILL.md is ${String(before.size)} bytes; hard limit is ${String(maxDocumentBytes)} bytes`,
+      );
+    }
+
+    const readLimit = mode === 'document'
+      ? before.size
+      : Math.min(before.size, maxFrontmatterBytes);
+    const bytes = Buffer.allocUnsafe(readLimit);
+    let bytesRead = 0;
+    while (bytesRead < readLimit) {
+      const result = await handle.read(bytes, bytesRead, readLimit - bytesRead, bytesRead);
+      if (result.bytesRead === 0) break;
+      bytesRead += result.bytesRead;
+    }
+
+    const after = await handle.stat();
+    if (after.size !== before.size || bytesRead !== readLimit) {
+      throw new Error('SKILL.md changed while it was being read; retry after the write completes');
+    }
+
+    const result = bytes.subarray(0, bytesRead);
+    if (
+      mode === 'frontmatter'
+      && before.size > maxFrontmatterBytes
+      && !/^---\s*\r?\n[\s\S]*?\r?\n---\s*(?:\r?\n|$)/.test(result.toString('utf8'))
+    ) {
+      throw new OversizedSkillDocumentError(
+        before.size,
+        maxFrontmatterBytes,
+        `SKILL.md frontmatter exceeds the ${String(maxFrontmatterBytes)} byte metadata limit`,
+      );
+    }
+    return result;
+  } finally {
+    await handle.close();
+  }
+}
+
+export async function readSkillContent(
+  file: Pick<SkillFileCandidate, 'absolutePath' | 'relativePath'>,
+  options: SkillDocumentReadOptions = {},
+): Promise<string> {
+  const document = (await readStableSkillBytes(file.absolutePath, options, 'document')).toString('utf8');
+  return parseSkillDocument(document, file.relativePath).body;
+}
+
+export async function loadSkillEntries(
+  files: SkillFileCandidate[],
+  options: SkillDocumentReadOptions = {},
+): Promise<{
   entries: SkillEntry[];
   skipped: SkillSkipRecord[];
-} {
+  metadataBytesRead: number;
+}> {
   const entries: SkillEntry[] = [];
   const skipped: SkillSkipRecord[] = [];
+  let metadataBytesRead = 0;
 
   for (const file of files) {
     try {
-      const document = readFileSync(file.absolutePath, 'utf-8');
-      const parsed = parseSkillDocument(document, file.relativePath);
+      const documentPrefixBytes = await readStableSkillBytes(
+        file.absolutePath,
+        options,
+        'frontmatter',
+      );
+      metadataBytesRead += documentPrefixBytes.byteLength;
+      const documentPrefix = documentPrefixBytes.toString('utf8');
+      const frontmatter = parseSkillMetadata(documentPrefix, file.relativePath);
       entries.push({
-        id: `${parsed.frontmatter.name}@${file.relativePath}`,
-        name: parsed.frontmatter.name,
-        description: parsed.frontmatter.description,
-        category: parsed.frontmatter.category,
-        createdAt: parsed.frontmatter.createdAt,
-        updatedAt: parsed.frontmatter.updatedAt,
-        version: parsed.frontmatter.version,
-        always: parsed.frontmatter.always,
-        requires: parsed.frontmatter.requires,
-        content: parsed.body,
+        id: `${frontmatter.name}@${file.relativePath}`,
+        name: frontmatter.name,
+        description: frontmatter.description,
+        category: frontmatter.category,
+        createdAt: frontmatter.createdAt,
+        updatedAt: frontmatter.updatedAt,
+        version: frontmatter.version,
+        always: frontmatter.always,
+        requires: frontmatter.requires,
         absolutePath: file.absolutePath,
         relativePath: file.relativePath,
         source: file.directory.source,
@@ -616,7 +719,7 @@ export function loadSkillEntries(files: SkillFileCandidate[]): {
     } catch (error) {
       const message = toErrorMessage(error);
       skipped.push({
-        kind: 'parse_error',
+        kind: error instanceof OversizedSkillDocumentError ? 'oversized' : 'parse_error',
         name: file.relativePath,
         relativePath: file.relativePath,
         source: file.directory.source,
@@ -625,7 +728,7 @@ export function loadSkillEntries(files: SkillFileCandidate[]): {
     }
   }
 
-  return { entries, skipped };
+  return { entries, skipped, metadataBytesRead };
 }
 
 export function applySkillPrecedence(entries: SkillEntry[]): {

@@ -148,7 +148,7 @@ export interface ManagedSkillRecord {
 }
 
 export interface AdminSkillsApi {
-  getSnapshot(): SkillSnapshot;
+  getSnapshot(): SkillSnapshot | Promise<SkillSnapshot>;
   listManaged(): ManagedSkillRecord[];
   createSkill(input: { name: string; category: string; content: string; description?: string }): ManagedSkillRecord;
   updateSkill(input: { name: string; content: string; description?: string }): ManagedSkillRecord;

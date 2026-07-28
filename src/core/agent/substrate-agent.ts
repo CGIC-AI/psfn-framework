@@ -2081,7 +2081,7 @@ export class SubstrateAgent {
     };
   }
 
-  private buildDynamicPromptTemplateVariables(
+  private async buildDynamicPromptTemplateVariables(
     message: SubstrateMessage,
     resolvedUserName: string,
     trustLevel: TrustLevel,
@@ -2100,7 +2100,7 @@ export class SubstrateAgent {
     conversationScope: ConversationScope,
     participantRelationshipEdges: readonly ParticipantRelationshipEdgeInput[],
     capturedSessionReads: CapturedSessionReads,
-  ): Record<string, string> {
+  ): Promise<Record<string, string>> {
     // Owner-bound read: this builder runs inside the admitted turn's captured
     // session scope, where the raw SessionManager.getRecentMessages fails closed
     // (assertMutableSessionReadAllowed). Read through the facade so recent
@@ -2142,6 +2142,7 @@ export class SubstrateAgent {
     // must agree on the same grant, including an injected custom shard access.
     const capabilityAccess = this.resolveCapabilityAccess();
 
+    const skillsContext = await this.skillsRuntime?.getPromptXml() ?? '';
     return buildDynamicPromptTemplateVariablesForTurn({
       message,
       conversationScope,
@@ -2164,7 +2165,7 @@ export class SubstrateAgent {
       activeToolCounts,
       extendedTools,
       coreToolNames,
-      skillsContext: this.skillsRuntime?.getPromptXml() ?? '',
+      skillsContext,
       activeConcerns: this.resolveActiveConcernsRuntimeData(canonicalContactKey),
       behavioralNotesBlock: this.buildBehavioralNotesContextBlock(canonicalContactKey),
       lastMessageReceivedAtMs: latestPriorMessage?.timestamp ?? null,
@@ -2246,7 +2247,7 @@ export class SubstrateAgent {
       activeToolCounts,
       extendedTools: [...this.toolRuntimeFacade.getExtendedTools()],
       coreToolNames: new Set(this.toolRuntimeFacade.getToolCatalog().core.map(tool => tool.name)),
-      skillsContext: this.skillsRuntime?.getPromptXml() ?? '',
+      skillsContext: this.skillsRuntime?.getCachedPromptXml() ?? '',
       behavioralNotesBlock: this.buildBehavioralNotesContextBlock(canonicalContactKey),
       formatTopEmotions: (discrete) => this.emotionSelfModelRuntime.formatTopEmotions(discrete),
       config: this.config as unknown as Record<string, unknown>,

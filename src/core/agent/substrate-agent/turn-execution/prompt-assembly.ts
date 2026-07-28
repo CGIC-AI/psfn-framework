@@ -287,7 +287,7 @@ export async function assembleTurnPrompt(input: {
   );
   variableNamespace.assignRecord(
     'turn',
-    runtime.buildDynamicPromptTemplateVariables(
+    await runtime.buildDynamicPromptTemplateVariables(
       message,
       authorContext.resolvedUserName,
       trustLevel,

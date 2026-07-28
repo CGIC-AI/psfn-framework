@@ -284,7 +284,7 @@ export interface TurnExecutionRuntime {
     // raw SessionManager: it runs inside the captured owner scope where mutable
     // reads fail closed (assertMutableSessionReadAllowed).
     capturedSessionReads: CapturedSessionReads,
-  ) => Record<string, string>;
+  ) => Promise<Record<string, string>>;
   setCurrentSelfModelState: (
     state: InternalState,
     snapshotRef: string,

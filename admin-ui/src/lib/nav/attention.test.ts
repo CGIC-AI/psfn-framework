@@ -1,5 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
+
+const apiGet = vi.fn();
+vi.mock('$lib/api/client', () => ({ apiGet: (path: string) => apiGet(path) }));
+
 import {
+  ATTENTION_SOURCES,
   mergeAttentionPollResults,
   updateAttentionCountsIfChanged,
 } from './attention';
@@ -41,6 +46,25 @@ describe('attention count reconciliation', () => {
       '/confirmations': 2,
       '/cognitive-security/approvals': 5,
     });
+  });
+
+  it('counts only open session_integrity incidents for the remediation badge (bead g59z)', async () => {
+    const source = ATTENTION_SOURCES.find((s) => s.path === '/cognitive-security/remediation');
+    expect(source).toBeDefined();
+
+    apiGet.mockReset();
+    apiGet.mockResolvedValueOnce({
+      events: [
+        { type: 'session_integrity', status: 'open' },
+        { type: 'session_integrity', status: 'applied' },
+        { type: 'content_poisoning', status: 'open' },
+        { type: 'session_integrity', status: 'open' },
+      ],
+    });
+
+    const count = await source!.fetchCount();
+    expect(apiGet).toHaveBeenCalledWith('/api/admin/session-routes/cogsec/events');
+    expect(count).toBe(2);
   });
 
   it('keeps the last count when a background source refresh fails', () => {

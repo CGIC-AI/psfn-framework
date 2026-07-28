@@ -53,6 +53,10 @@ interface IntakeQuarantineListLite {
   items?: Array<{ status: string }>;
 }
 
+interface CogSecEventListLite {
+  events?: Array<{ type: string; status: string }>;
+}
+
 async function confirmationsCount(): Promise<number> {
   const data = await apiGet<AdminConfirmationsData>('/api/admin/confirmations');
   if (!data.available) return 0;
@@ -74,9 +78,21 @@ async function graphProposalsCount(): Promise<number> {
   return data.proposals.filter((proposal) => proposal.status === 'pending').length;
 }
 
+// Open session-integrity (HMAC-chain) incidents awaiting operator review (bead
+// g59z). These are durable CogSec cases of type 'session_integrity' recorded
+// when a session's stored history fails verification; they surface on the
+// Cognitive Security > Remediation page.
+async function sessionIntegrityIncidentsCount(): Promise<number> {
+  const data = await apiGet<CogSecEventListLite>('/api/admin/session-routes/cogsec/events');
+  return (data.events ?? []).filter(
+    (event) => event.type === 'session_integrity' && event.status === 'open',
+  ).length;
+}
+
 export const ATTENTION_SOURCES: AttentionSource[] = [
   { path: '/confirmations', fetchCount: confirmationsCount },
   { path: '/contact-approvals', fetchCount: contactApprovalsCount },
   { path: '/cognitive-security/approvals', fetchCount: cogsecApprovalsCount },
+  { path: '/cognitive-security/remediation', fetchCount: sessionIntegrityIncidentsCount },
   { path: '/graph-proposals', fetchCount: graphProposalsCount },
 ];

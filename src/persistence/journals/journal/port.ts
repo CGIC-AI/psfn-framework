@@ -22,6 +22,7 @@ import {
   readJournalFile,
   readJournalFirstEntry,
   readJournalEntriesBefore,
+  readJournalEntriesBeforeAsync,
   readJournalTailEntries,
   readJournalMatchingEntriesBackward,
   scanJournalFileMetadata,
@@ -44,6 +45,10 @@ export interface SessionJournalPort {
   readJournalFile(filePath: string, options?: ReadJournalFileOptions): ReadJournalResult;
   readJournalFirstEntry(filePath: string): JournalEntry | null;
   readJournalEntriesBefore(filePath: string, options: ReadJournalBeforeOptions): ReadJournalBeforeResult;
+  readJournalEntriesBeforeAsync(
+    filePath: string,
+    options: ReadJournalBeforeOptions,
+  ): Promise<ReadJournalBeforeResult>;
   readJournalTailEntries(filePath: string, options: ReadJournalTailOptions): ReadJournalTailResult;
   readJournalMatchingEntriesBackward(filePath: string, options: ReadJournalMatchingOptions): ReadJournalMatchingResult;
   scanJournalFileMetadata(filePath: string, options?: ScanJournalMetadataOptions): JournalFileMetadata;
@@ -108,6 +113,10 @@ export interface SessionArchivePort {
     handle: SessionArchiveHandle,
     options: ReadJournalBeforeOptions,
   ): ReadJournalBeforeResult;
+  readJournalEntriesBeforeAsync(
+    handle: SessionArchiveHandle,
+    options: ReadJournalBeforeOptions,
+  ): Promise<ReadJournalBeforeResult>;
   readJournalTailEntries(handle: SessionArchiveHandle, options: ReadJournalTailOptions): ReadJournalTailResult;
   archiveByteLength(handle: SessionArchiveHandle): number;
   readJournalMatchingEntriesBackward(handle: SessionArchiveHandle, options: ReadJournalMatchingOptions): ReadJournalMatchingResult;
@@ -127,6 +136,7 @@ export function createFilesystemSessionJournalPort(): SessionJournalPort {
     readJournalFile,
     readJournalFirstEntry,
     readJournalEntriesBefore,
+    readJournalEntriesBeforeAsync,
     readJournalTailEntries,
     readJournalMatchingEntriesBackward,
     scanJournalFileMetadata,
@@ -191,6 +201,12 @@ export function createFilesystemSessionArchivePort(
     ),
     readJournalEntriesBefore: (handle, options) => (
       journalPort.readJournalEntriesBefore(requireFilesystemHandle(handle).filePath, options)
+    ),
+    readJournalEntriesBeforeAsync: async (handle, options) => (
+      await journalPort.readJournalEntriesBeforeAsync(
+        requireFilesystemHandle(handle).filePath,
+        options,
+      )
     ),
     readJournalTailEntries: (handle, options) => (
       journalPort.readJournalTailEntries(requireFilesystemHandle(handle).filePath, options)

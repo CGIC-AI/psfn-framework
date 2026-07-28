@@ -159,7 +159,7 @@ describe('session journal port', () => {
     expect(page.truncated).toBe(true);
   });
 
-  it('seeks to a deep unsegmented cursor without reading the archive prefix', () => {
+  it('seeks to a deep unsegmented cursor without reading the archive prefix', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'psfn-session-journal-before-deep-'));
     dirs.push(dir);
     const port = createFilesystemSessionJournalPort();
@@ -184,6 +184,23 @@ describe('session journal port', () => {
     expect(page.entries.map(entry => entry.id)).toEqual([8, 9, 10, 11]);
     expect(stats.bytesRead).toBeLessThan(128 * 1024);
     expect(stats.readCalls).toBeLessThan(300);
+
+    const asyncStats = {
+      bytesRead: 0,
+      readCalls: 0,
+      filesRead: 0,
+      maxRetainedLineBytes: 0,
+      eventLoopYields: 0,
+    };
+    const asyncPage = await port.readJournalEntriesBeforeAsync(filePath, {
+      beforeId: 12,
+      messageLimit: 3,
+      scanChunkBytes: 256,
+      stats: asyncStats,
+    });
+    expect(asyncPage.entries.map(entry => entry.id)).toEqual([8, 9, 10, 11]);
+    expect(asyncStats.bytesRead).toBeLessThan(128 * 1024);
+    expect(asyncStats.eventLoopYields).toBeGreaterThan(0);
   });
 
   it('finds a cursor across many sealed segments without opening every newer segment', () => {
@@ -216,6 +233,210 @@ describe('session journal port', () => {
 
     expect(page.entries.map(entry => entry.id)).toEqual([12, 13, 14, 15]);
     expect(stats.filesRead).toBeLessThan(20);
+  });
+
+  it('cooperatively rejects an oversized current seek row without retaining or truncating it', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'psfn-session-journal-oversized-seek-'));
+    dirs.push(dir);
+    const port = createFilesystemSessionJournalPort();
+    const filePath = join(dir, 'journal.jsonl');
+    const oversized = buildMessageJournalEntry(1, {
+      channelId: 'ch1',
+      role: 'user',
+      content: `private-current:${'x'.repeat(3 * 1024 * 1024)}`,
+      timestamp: 1_000,
+    });
+    writeFileSync(filePath, `${JSON.stringify(oversized)}\n`, 'utf8');
+
+    const stats = {
+      bytesRead: 0,
+      readCalls: 0,
+      filesRead: 0,
+      maxRetainedLineBytes: 0,
+      eventLoopYields: 0,
+    };
+    let timerFired = false;
+    const timer = new Promise<void>(resolve => {
+      setTimeout(() => {
+        timerFired = true;
+        resolve();
+      }, 0);
+    });
+
+    await expect(port.readJournalEntriesBeforeAsync(filePath, {
+      beforeId: 2,
+      messageLimit: 1,
+      scanChunkBytes: 64 * 1024,
+      stats,
+    })).rejects.toMatchObject({
+      code: 'EOVERFLOW',
+      message: expect.stringContaining('refusing to truncate or retain it'),
+    });
+    await timer;
+
+    expect(timerFired).toBe(true);
+    expect(stats.eventLoopYields).toBeGreaterThan(0);
+    expect(stats.maxRetainedLineBytes).toBeLessThanOrEqual(2 * 1024 * 1024);
+    expect(stats.bytesRead).toBeLessThanOrEqual((2 * 1024 * 1024) + (64 * 1024));
+
+    const syncStats = {
+      bytesRead: 0,
+      readCalls: 0,
+      filesRead: 0,
+      maxRetainedLineBytes: 0,
+    };
+    expect(() => port.readJournalEntriesBefore(filePath, {
+      beforeId: 2,
+      messageLimit: 1,
+      scanChunkBytes: 64 * 1024,
+      stats: syncStats,
+    })).toThrow(expect.objectContaining({ code: 'EOVERFLOW' }));
+    expect(syncStats.maxRetainedLineBytes).toBeLessThanOrEqual(2 * 1024 * 1024);
+
+    const repaired = buildMessageJournalEntry(1, {
+      channelId: 'ch1',
+      role: 'user',
+      content: 'repaired current',
+      timestamp: 1_000,
+    });
+    writeFileSync(filePath, `${JSON.stringify(repaired)}\n`, 'utf8');
+    const retried = await port.readJournalEntriesBeforeAsync(filePath, {
+      beforeId: 2,
+      messageLimit: 1,
+      scanChunkBytes: 127,
+    });
+    expect(retried.entries).toEqual([repaired]);
+    expect(retried.quarantined).toEqual([]);
+  });
+
+  it('cooperatively rejects an oversized trusted predecessor and retries from clean state', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'psfn-session-journal-oversized-predecessor-'));
+    dirs.push(dir);
+    const port = createFilesystemSessionJournalPort();
+    const filePath = join(dir, 'journal.jsonl');
+    const sealedPath = join(dir, 'journal.00001.jsonl');
+    const first = {
+      ...buildMessageJournalEntry(1, {
+        channelId: 'ch1',
+        role: 'user',
+        content: 'sealed first',
+        timestamp: 1_000,
+      }),
+      _hmac: 'sealed-first-hmac',
+    };
+    const oversizedPrevious = {
+      ...buildMessageJournalEntry(2, {
+        channelId: 'ch1',
+        role: 'assistant',
+        content: `private-predecessor:${'🜁'.repeat(800_000)}`,
+        timestamp: 2_000,
+      }),
+      _hmac: 'oversized-predecessor-hmac',
+    };
+    const active = {
+      ...buildMessageJournalEntry(3, {
+        channelId: 'ch1',
+        role: 'user',
+        content: 'active current',
+        timestamp: 3_000,
+      }),
+      _hmac: 'active-hmac',
+    };
+    writeFileSync(sealedPath, `${JSON.stringify(first)}\n${JSON.stringify(oversizedPrevious)}\n`, 'utf8');
+    writeFileSync(filePath, `${JSON.stringify(active)}\n`, 'utf8');
+
+    const stats = {
+      bytesRead: 0,
+      readCalls: 0,
+      filesRead: 0,
+      maxRetainedLineBytes: 0,
+      eventLoopYields: 0,
+    };
+    let timerFired = false;
+    const timer = new Promise<void>(resolve => {
+      setTimeout(() => {
+        timerFired = true;
+        resolve();
+      }, 0);
+    });
+    const trustCalls: Array<[number, string | null]> = [];
+    const trustSeekEntry = (entry: { id: number }, previousHmac: string | null): boolean => {
+      trustCalls.push([entry.id, previousHmac]);
+      return true;
+    };
+
+    await expect(port.readJournalEntriesBeforeAsync(filePath, {
+      beforeId: 4,
+      messageLimit: 1,
+      scanChunkBytes: 64 * 1024,
+      stats,
+      trustSeekEntry,
+    })).rejects.toMatchObject({ code: 'EOVERFLOW' });
+    await timer;
+    expect(timerFired).toBe(true);
+    expect(stats.eventLoopYields).toBeGreaterThan(0);
+    expect(stats.maxRetainedLineBytes).toBeLessThanOrEqual(2 * 1024 * 1024);
+    expect(trustCalls).not.toContainEqual([3, 'oversized-predecessor-hmac']);
+
+    const repairedPrevious = {
+      ...oversizedPrevious,
+      content: 'repaired predecessor',
+      _hmac: 'repaired-predecessor-hmac',
+    };
+    writeFileSync(sealedPath, `${JSON.stringify(first)}\n${JSON.stringify(repairedPrevious)}\n`, 'utf8');
+    trustCalls.length = 0;
+    const retried = await port.readJournalEntriesBeforeAsync(filePath, {
+      beforeId: 4,
+      messageLimit: 1,
+      scanChunkBytes: 127,
+      trustSeekEntry,
+    });
+
+    expect(trustCalls).toContainEqual([3, 'repaired-predecessor-hmac']);
+    expect(retried.entries.map(entry => entry.id)).toEqual([2, 3]);
+    expect(retried.quarantined).toEqual([]);
+  });
+
+  it('preserves exact UTF-8 rows across cooperative seek chunk boundaries', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'psfn-session-journal-utf8-seek-'));
+    dirs.push(dir);
+    const port = createFilesystemSessionJournalPort();
+    const filePath = join(dir, 'journal.jsonl');
+    const unicodeContent = `boundary:${'🜁🜂🜃🜄'.repeat(5_000)}`;
+    const entries = [
+      buildMessageJournalEntry(1, {
+        channelId: 'ch1',
+        role: 'user',
+        content: unicodeContent,
+        timestamp: 1_000,
+      }),
+      buildMessageJournalEntry(2, {
+        channelId: 'ch1',
+        role: 'assistant',
+        content: 'reply',
+        timestamp: 2_000,
+      }),
+    ];
+    writeFileSync(filePath, `${entries.map(entry => JSON.stringify(entry)).join('\n')}\n`, 'utf8');
+    const stats = {
+      bytesRead: 0,
+      readCalls: 0,
+      filesRead: 0,
+      maxRetainedLineBytes: 0,
+      eventLoopYields: 0,
+    };
+
+    const page = await port.readJournalEntriesBeforeAsync(filePath, {
+      beforeId: 3,
+      messageLimit: 2,
+      scanChunkBytes: 127,
+      stats,
+    });
+
+    expect(page.entries).toEqual(entries);
+    expect(page.entries[0]?.content).toBe(unicodeContent);
+    expect(stats.eventLoopYields).toBeGreaterThan(0);
+    expect(stats.maxRetainedLineBytes).toBeGreaterThan(127);
   });
 
   it('treats sealed segments as canonical for replay, metadata, tails, fingerprints, and rewrites', () => {

@@ -281,7 +281,9 @@ export class DiscordAdapter implements ChannelAdapterPort {
         clarification: PendingClarification,
         target: string,
         timeoutMs: number,
-      ): Promise<ClarifyDeliverResult> => this.deliverClarificationInternal(clarification, target, timeoutMs),
+        originatingUserId?: string,
+      ): Promise<ClarifyDeliverResult> =>
+        this.deliverClarificationInternal(clarification, target, timeoutMs, originatingUserId),
     };
     this.gateway = this;
     this.security = {
@@ -449,13 +451,29 @@ export class DiscordAdapter implements ChannelAdapterPort {
    * {@link deliverDiscordClarification} orchestration. A missing/non-text target
    * throws (a real delivery failure the caller surfaces); timeout is handled as
    * a structured no-answer by the orchestration, never as a fabricated choice.
+   *
+   * The answer is bound to `originatingUserId` (the turn's author): only that
+   * user's button press resolves the clarification, so a different member of a
+   * shared channel cannot answer it. A missing author id fails closed rather
+   * than accept an unbound answer.
+   *
+   * A `<channelId>:<threadId>` threading composite is resolved to the thread's
+   * own channel id before fetch (mirroring {@link resolveGuildForChannel}); the
+   * raw composite is not a fetchable snowflake and would otherwise throw, making
+   * clarify unavailable in threads.
    */
   private async deliverClarificationInternal(
     clarification: PendingClarification,
     target: string,
     timeoutMs: number,
+    originatingUserId?: string,
   ): Promise<ClarifyDeliverResult> {
-    const channel = await this.client.channels.fetch(target);
+    const boundUserId = originatingUserId?.trim();
+    if (!boundUserId) {
+      throw new Error('Discord clarify requires an originating user to bind the answer');
+    }
+    const fetchId = this.threading.fromThreadChannelId(target) ?? target;
+    const channel = await this.client.channels.fetch(fetchId);
     if (!channel?.isTextBased() || !('send' in channel)) {
       throw new Error(`Discord clarify target is not a sendable text channel: ${target}`);
     }
@@ -467,7 +485,7 @@ export class DiscordAdapter implements ChannelAdapterPort {
           content: formatClarificationMessage(pending),
           components,
         });
-        return this.buildClarifyMessageHandle(message, components, pending);
+        return this.buildClarifyMessageHandle(message, components, pending, boundUserId);
       },
     };
     return await deliverDiscordClarification(clarifyChannel, clarification, target, timeoutMs);
@@ -477,6 +495,7 @@ export class DiscordAdapter implements ChannelAdapterPort {
     message: Message,
     components: ActionRowBuilder<ButtonBuilder>[],
     clarification: PendingClarification,
+    originatingUserId: string,
   ): DiscordClarifyMessageHandle {
     const disable = async (): Promise<void> => {
       try {
@@ -499,7 +518,12 @@ export class DiscordAdapter implements ChannelAdapterPort {
           const interaction = await message.awaitMessageComponent({
             componentType: ComponentType.Button,
             time: timeoutMs,
-            filter: (i) => i.customId.startsWith(clarificationCustomIdPrefix(clarification.id)),
+            // Author binding: only the originating user's press resolves this
+            // clarification. Another member's press fails the filter, stays
+            // unclaimed, and the wait continues until its own timeout.
+            filter: (i) =>
+              i.user.id === originatingUserId
+              && i.customId.startsWith(clarificationCustomIdPrefix(clarification.id)),
           });
           return {
             customId: interaction.customId,

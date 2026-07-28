@@ -937,23 +937,26 @@ describe('TelegramAdapter clarify delivery', () => {
     question: 'Tea or coffee?',
     choices: ['Tea', 'Coffee', 'Water'],
   };
+  const ORIGINATING_USER = '42';
 
-  function replyUpdate(text: string) {
+  // A supergroup so multiple distinct users share one chat; author binding is
+  // meaningful only where more than one member can reply.
+  function replyUpdate(text: string, userId: number = Number(ORIGINATING_USER)) {
     return {
       update_id: 99,
       message: {
         message_id: 77,
         date: 1_700_000_000,
         text,
-        chat: { id: 111, type: 'private' as const },
-        from: { id: 42, is_bot: false, username: 'dm_user' },
+        chat: { id: -900, type: 'supergroup' as const },
+        from: { id: userId, is_bot: false, username: `user_${userId}` },
       },
     };
   }
 
   async function waitForPendingClarify(adapter: TelegramAdapter): Promise<void> {
     for (let i = 0; i < 200; i++) {
-      if ((adapter as any).pendingClarifyReplies.has('111')) return;
+      if ((adapter as any).pendingClarifyReplies.size > 0) return;
       await new Promise((r) => setTimeout(r, 1));
     }
     throw new Error('clarify waiter was never registered');
@@ -971,7 +974,9 @@ describe('TelegramAdapter clarify delivery', () => {
       return okResponse(message.channelId);
     });
 
-    const delivery = adapter.outbound.deliverClarification!(clarification, 'telegram:111', 1000);
+    const delivery = adapter.outbound.deliverClarification!(
+      clarification, 'telegram:-900', 1000, ORIGINATING_USER,
+    );
     await waitForPendingClarify(adapter);
     await (adapter as any).handleUpdate(replyUpdate('2'));
     const result = await delivery;
@@ -979,7 +984,7 @@ describe('TelegramAdapter clarify delivery', () => {
     expect(result).toEqual({
       status: 'resolved',
       channel: 'telegram',
-      target: 'telegram:111',
+      target: 'telegram:-900',
       selection: { clarificationId: 'clar-1', selectedIndex: 1, selectedChoice: 'Coffee' },
     });
     // The reply is consumed as the answer, never processed as a new turn.
@@ -994,7 +999,9 @@ describe('TelegramAdapter clarify delivery', () => {
     const adapter = new TelegramAdapter(makeConfig(), new EventBus(), { fetchImpl });
     adapter.onMessage(async (message) => okResponse(message.channelId));
 
-    const delivery = adapter.outbound.deliverClarification!(clarification, 'telegram:111', 1000);
+    const delivery = adapter.outbound.deliverClarification!(
+      clarification, 'telegram:-900', 1000, ORIGINATING_USER,
+    );
     await waitForPendingClarify(adapter);
     await (adapter as any).handleUpdate(replyUpdate('water'));
     const result = await delivery;
@@ -1008,14 +1015,32 @@ describe('TelegramAdapter clarify delivery', () => {
     const adapter = new TelegramAdapter(makeConfig(), new EventBus(), { fetchImpl });
     adapter.onMessage(async (message) => okResponse(message.channelId));
 
-    const result = await adapter.outbound.deliverClarification!(clarification, 'telegram:111', 20);
+    const result = await adapter.outbound.deliverClarification!(
+      clarification, 'telegram:-900', 20, ORIGINATING_USER,
+    );
 
-    expect(result).toEqual({ status: 'pending', channel: 'telegram', target: 'telegram:111' });
+    expect(result).toEqual({ status: 'pending', channel: 'telegram', target: 'telegram:-900' });
     expect(result.selection).toBeUndefined();
   });
 
-  it('fails closed on a malformed / out-of-range reply (no fabricated selection)', async () => {
-    const { fetchImpl } = makeFetchMock({ sendMessage: () => ({ message_id: 903 }) });
+  it('fails closed when no originating user is provided (no unbound answer)', async () => {
+    const { fetchImpl, calls } = makeFetchMock({ sendMessage: () => ({ message_id: 902 }) });
+    const adapter = new TelegramAdapter(makeConfig(), new EventBus(), { fetchImpl });
+    adapter.onMessage(async (message) => okResponse(message.channelId));
+
+    await expect(
+      adapter.outbound.deliverClarification!(clarification, 'telegram:-900', 1000, undefined),
+    ).rejects.toThrow('originating user');
+    // The prompt is never presented when the answer cannot be bound.
+    expect(calls.find((c) => c.method === 'sendMessage')).toBeUndefined();
+  });
+
+  it('does not let another member answer another user\'s clarification; the message becomes a normal turn', async () => {
+    const { fetchImpl } = makeFetchMock({
+      sendChatAction: () => true,
+      sendMessage: () => ({ message_id: 903 }),
+      editMessageText: () => true,
+    });
     const handled: SubstrateMessage[] = [];
     const adapter = new TelegramAdapter(makeConfig(), new EventBus(), { fetchImpl });
     adapter.onMessage(async (message) => {
@@ -1023,13 +1048,56 @@ describe('TelegramAdapter clarify delivery', () => {
       return okResponse(message.channelId);
     });
 
-    const delivery = adapter.outbound.deliverClarification!(clarification, 'telegram:111', 1000);
+    const delivery = adapter.outbound.deliverClarification!(
+      clarification, 'telegram:-900', 1000, ORIGINATING_USER,
+    );
     await waitForPendingClarify(adapter);
-    await (adapter as any).handleUpdate(replyUpdate('banana'));
-    const result = await delivery;
 
-    expect(result.status).toBe('pending');
-    expect(result.selection).toBeUndefined();
-    expect(handled).toHaveLength(0);
+    // A different member replies '1'. It must NOT resolve the clarification and
+    // must fall through to a normal turn rather than being dropped.
+    await (adapter as any).handleUpdate(replyUpdate('1', 99));
+    expect(handled).toHaveLength(1);
+    expect((adapter as any).pendingClarifyReplies.size).toBe(1);
+
+    // The originating user then answers and the clarification resolves.
+    await (adapter as any).handleUpdate(replyUpdate('1', Number(ORIGINATING_USER)));
+    const result = await delivery;
+    expect(result.status).toBe('resolved');
+    expect(result.selection?.selectedIndex).toBe(0);
+    // The originating user's valid answer was consumed, not turned.
+    expect(handled).toHaveLength(1);
+  });
+
+  it('falls a parse-miss reply through to a normal turn while keeping the clarification pending', async () => {
+    const { fetchImpl } = makeFetchMock({
+      sendChatAction: () => true,
+      sendMessage: () => ({ message_id: 904 }),
+      editMessageText: () => true,
+    });
+    const handled: SubstrateMessage[] = [];
+    const adapter = new TelegramAdapter(makeConfig(), new EventBus(), { fetchImpl });
+    adapter.onMessage(async (message) => {
+      handled.push(message);
+      return okResponse(message.channelId);
+    });
+
+    const delivery = adapter.outbound.deliverClarification!(
+      clarification, 'telegram:-900', 1000, ORIGINATING_USER,
+    );
+    await waitForPendingClarify(adapter);
+
+    // A parse-miss from the ORIGINATING user is NOT consumed: it becomes a turn
+    // and the clarification stays pending (previously the message was dropped).
+    await (adapter as any).handleUpdate(replyUpdate('banana'));
+    expect(handled).toHaveLength(1);
+    expect(handled[0].content).toBe('banana');
+    expect((adapter as any).pendingClarifyReplies.size).toBe(1);
+
+    // A subsequent valid reply still resolves the still-pending clarification.
+    await (adapter as any).handleUpdate(replyUpdate('3'));
+    const result = await delivery;
+    expect(result.status).toBe('resolved');
+    expect(result.selection).toEqual({ clarificationId: 'clar-1', selectedIndex: 2, selectedChoice: 'Water' });
+    expect(handled).toHaveLength(1);
   });
 });

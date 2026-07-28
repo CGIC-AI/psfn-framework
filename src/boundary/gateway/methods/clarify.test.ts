@@ -58,10 +58,13 @@ describe('clarify.deliver gateway method', () => {
     const { dock, deliver } = dockWithClarify(resolved);
     const handler = captureClarifyHandler({ discordAdapter: dock });
 
-    const result = await handler({ channel: 'discord', target: 'chan-1', clarification, timeoutMs: 5000 });
+    const result = await handler({
+      channel: 'discord', target: 'chan-1', clarification, timeoutMs: 5000, originatingUserId: 'author-1',
+    });
 
     expect(result).toEqual(resolved);
-    expect(deliver).toHaveBeenCalledWith(clarification, 'chan-1', 5000);
+    // The originating user is plumbed through so the dock can bind the answer.
+    expect(deliver).toHaveBeenCalledWith(clarification, 'chan-1', 5000, 'author-1');
   });
 
   it('routes a telegram clarification to the telegram dock', async () => {
@@ -70,10 +73,12 @@ describe('clarify.deliver gateway method', () => {
     const telegram = dockWithClarify(pending);
     const handler = captureClarifyHandler({ discordAdapter: discord.dock, telegramDock: telegram.dock });
 
-    const result = await handler({ channel: 'telegram', target: 'telegram:9', clarification, timeoutMs: 5000 });
+    const result = await handler({
+      channel: 'telegram', target: 'telegram:9', clarification, timeoutMs: 5000, originatingUserId: 'tg-user-1',
+    });
 
     expect(result).toEqual(pending);
-    expect(telegram.deliver).toHaveBeenCalledWith(clarification, 'telegram:9', 5000);
+    expect(telegram.deliver).toHaveBeenCalledWith(clarification, 'telegram:9', 5000, 'tg-user-1');
     expect(discord.deliver).not.toHaveBeenCalled();
   });
 

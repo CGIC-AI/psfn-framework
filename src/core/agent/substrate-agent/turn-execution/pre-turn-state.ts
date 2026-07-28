@@ -531,6 +531,9 @@ export async function prepareTurnIdentityState(input: {
     ...(authorContext.canonicalContactKey
       ? { viewerMemorySubjectContactId: authorContext.canonicalContactKey }
       : {}),
+    // Channel-native originating author id, so channel-side interactions (e.g.
+    // clarify delivery) can bind their answer back to exactly this user.
+    ...(message.authorId ? { viewerAuthorId: message.authorId } : {}),
     ...(message.isDirectMessage !== undefined ? { viewerIsDirectMessage: message.isDirectMessage } : {}),
     ...(canonicalEmbodimentContext ? { embodimentContext: canonicalEmbodimentContext } : {}),
   };

@@ -916,11 +916,15 @@ export function createGatewayClarificationPort(
       if (!route) {
         throw new Error(`clarify is not supported on channel "${channelId}"`);
       }
+      const originatingUserId = typeof requestContext?.viewerAuthorId === 'string'
+        ? requestContext.viewerAuthorId.trim()
+        : '';
       return await gateway.clarifyDeliver({
         channel: route.channel,
         target: route.target,
         clarification,
         timeoutMs: CLARIFY_DELIVERY_TIMEOUT_MS,
+        ...(originatingUserId ? { originatingUserId } : {}),
       });
     },
   };

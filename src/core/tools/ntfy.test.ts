@@ -708,7 +708,7 @@ describe('createGatewayClarificationPort', () => {
     const port = createGatewayClarificationPort(gateway);
 
     const result = await runWithRequestContext(
-      { channelId: 'telegram:77', purpose: 'agent.turn.prompt' },
+      { channelId: 'telegram:77', viewerAuthorId: 'user-42', purpose: 'agent.turn.prompt' },
       async () => port.deliver(clarification),
     );
 
@@ -718,6 +718,27 @@ describe('createGatewayClarificationPort', () => {
     expect(calls[0]!.target).toBe('telegram:77');
     expect(calls[0]!.clarification).toEqual(clarification);
     expect(calls[0]!.timeoutMs).toBeGreaterThan(0);
+    // The originating author is plumbed through so the channel binds the answer.
+    expect(calls[0]!.originatingUserId).toBe('user-42');
+  });
+
+  it('omits originatingUserId when the turn carries no resolvable author', async () => {
+    const calls: ClarifyDeliverParams[] = [];
+    const gateway = {
+      clarifyDeliver: async (params: ClarifyDeliverParams): Promise<ClarifyDeliverResult> => {
+        calls.push(params);
+        return { status: 'pending', channel: 'telegram', target: params.target };
+      },
+    };
+    const port = createGatewayClarificationPort(gateway);
+
+    await runWithRequestContext(
+      { channelId: 'telegram:77', purpose: 'agent.turn.prompt' },
+      async () => port.deliver(clarification),
+    );
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.originatingUserId).toBeUndefined();
   });
 
   it('fails closed when the turn has no channel context', async () => {

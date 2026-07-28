@@ -57,8 +57,31 @@ vi.mock('discord.js', () => {
 
   }
 
+    class MockButtonBuilder {
+      customId = '';
+      label = '';
+      style = 0;
+      disabled = false;
+      setCustomId(value: string): this { this.customId = value; return this; }
+      setLabel(value: string): this { this.label = value; return this; }
+      setStyle(value: number): this { this.style = value; return this; }
+      setDisabled(value: boolean): this { this.disabled = value; return this; }
+    }
+
+    class MockActionRowBuilder {
+      components: MockButtonBuilder[] = [];
+      addComponents(...items: MockButtonBuilder[]): this {
+        this.components.push(...items);
+        return this;
+      }
+    }
+
     return {
       Client: MockClient,
+      ActionRowBuilder: MockActionRowBuilder,
+      ButtonBuilder: MockButtonBuilder,
+      ButtonStyle: { Primary: 1, Secondary: 2, Success: 3, Danger: 4, Link: 5 },
+      ComponentType: { Button: 2 },
       Events: {
         MessageCreate: 'messageCreate',
         MessageReactionAdd: 'messageReactionAdd',
@@ -2997,5 +3020,127 @@ describe('DiscordAdapter typing flood control (psfn-framework-vvf.4)', () => {
     );
 
     expect((adapter as any).typingStrikes.size).toBe(0);
+  });
+});
+
+describe('DiscordAdapter clarify delivery (n8fi.3)', () => {
+  const clarification = {
+    id: 'clar-1',
+    question: 'Which one?',
+    choices: ['Alpha', 'Beta'],
+  };
+
+  function makeClarifyChannel() {
+    const message = {
+      edit: vi.fn(async () => {}),
+      awaitMessageComponent: vi.fn(
+        async (opts: { filter: (i: unknown) => boolean; time: number }) => {
+          if (nextInteraction && opts.filter(nextInteraction)) {
+            return nextInteraction;
+          }
+          // discord.js rejects when the window elapses with no matching press.
+          throw new Error('collector ended with no matching component');
+        },
+      ),
+    };
+    let nextInteraction: { customId: string; user: { id: string }; update: ReturnType<typeof vi.fn> } | null = null;
+    const channel = {
+      isTextBased: () => true,
+      send: vi.fn(async () => message),
+    };
+    return {
+      channel,
+      message,
+      arm(interaction: { customId: string; userId: string }) {
+        nextInteraction = {
+          customId: interaction.customId,
+          user: { id: interaction.userId },
+          update: vi.fn(async () => {}),
+        };
+        return nextInteraction;
+      },
+    };
+  }
+
+  beforeEach(() => {
+    discordMock.channelsById.clear();
+  });
+
+  it('binds the answer to the originating user; another member cannot resolve it', async () => {
+    const adapter = new DiscordAdapter(makeConfig(), new EventBus());
+    const clarify = makeClarifyChannel();
+    discordMock.channelsById.set('900000000000000001', clarify.channel);
+    // An interaction arrives from a DIFFERENT user than the originating author.
+    clarify.arm({ customId: 'clarify:clar-1:0', userId: 'intruder-id' });
+
+    const result = await adapter.outbound.deliverClarification!(
+      clarification,
+      '900000000000000001',
+      50,
+      'author-id',
+    );
+
+    // The intruder's press fails the filter, so no selection resolves.
+    expect(result.status).toBe('pending');
+    expect(result.selection).toBeUndefined();
+  });
+
+  it('resolves the selection when the originating user presses a choice', async () => {
+    const adapter = new DiscordAdapter(makeConfig(), new EventBus());
+    const clarify = makeClarifyChannel();
+    discordMock.channelsById.set('900000000000000001', clarify.channel);
+    const interaction = clarify.arm({ customId: 'clarify:clar-1:1', userId: 'author-id' });
+
+    const result = await adapter.outbound.deliverClarification!(
+      clarification,
+      '900000000000000001',
+      50,
+      'author-id',
+    );
+
+    expect(result.status).toBe('resolved');
+    expect(result.selection).toMatchObject({
+      clarificationId: 'clar-1',
+      selectedIndex: 1,
+      selectedChoice: 'Beta',
+    });
+    expect(interaction.update).toHaveBeenCalledTimes(1);
+  });
+
+  it('fails closed when no originating user is provided', async () => {
+    const adapter = new DiscordAdapter(makeConfig(), new EventBus());
+    const clarify = makeClarifyChannel();
+    discordMock.channelsById.set('900000000000000001', clarify.channel);
+
+    await expect(
+      adapter.outbound.deliverClarification!(clarification, '900000000000000001', 50, undefined),
+    ).rejects.toThrow('originating user');
+    // No message is ever presented when binding is impossible.
+    expect(clarify.channel.send).not.toHaveBeenCalled();
+  });
+
+  it('resolves a thread target by fetching the thread channel, not the composite id', async () => {
+    const adapter = new DiscordAdapter(makeConfig(), new EventBus());
+    const clarify = makeClarifyChannel();
+    // The thread is a first-class channel registered under its own snowflake.
+    discordMock.channelsById.set('987654321', clarify.channel);
+    clarify.arm({ customId: 'clarify:clar-1:0', userId: 'author-id' });
+
+    const result = await adapter.outbound.deliverClarification!(
+      clarification,
+      '123456789012345678:987654321',
+      50,
+      'author-id',
+    );
+
+    const client = discordMock.createdClients.at(-1) as {
+      channels: { fetch: ReturnType<typeof vi.fn> };
+    };
+    // The verbatim composite would throw; the thread segment is fetched instead.
+    expect(client.channels.fetch).toHaveBeenCalledWith('987654321');
+    expect(client.channels.fetch).not.toHaveBeenCalledWith('123456789012345678:987654321');
+    expect(clarify.channel.send).toHaveBeenCalledTimes(1);
+    expect(result.status).toBe('resolved');
+    expect(result.selection?.selectedIndex).toBe(0);
   });
 });

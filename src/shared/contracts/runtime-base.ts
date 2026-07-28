@@ -352,6 +352,13 @@ export interface CorrelationMetadata extends LLMRequestMetadata {
   viewerIsDirectMessage?: boolean;
   /** Canonical contact resolved at ingress for subject-authorized memory access. Never model supplied. */
   viewerMemorySubjectContactId?: string;
+  /**
+   * Channel-native id of the turn's originating human author (Discord user
+   * snowflake / Telegram user id). Runtime-resolved from the inbound message,
+   * never model supplied. Consumed where a channel-side interaction must be
+   * bound back to its author — e.g. clarify delivery restricting who may answer.
+   */
+  viewerAuthorId?: string;
   embodimentContext?: EmbodimentPresenceMetadata;
   /** Preserved across the turn, its nested model/tool calls, and post-turn work. */
   icpCorrelation?: IcpConversationCorrelation;

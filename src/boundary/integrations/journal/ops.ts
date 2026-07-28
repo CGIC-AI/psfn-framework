@@ -7,6 +7,7 @@ import {
   readJournalPage,
   searchBoundedJournal,
 } from './bounded-io.js';
+import { withJournalMutationLock } from './mutation-coordinator.js';
 
 const MARKDOWN_EXTENSIONS = new Set(['.md', '.markdown']);
 
@@ -55,7 +56,6 @@ export interface JournalOperations {
 
 export class JournalOps implements JournalOperations {
   private readonly root: string;
-  private readonly mutationTails = new Map<string, Promise<void>>();
 
   constructor(root: string) {
     const normalizedRoot = root.trim();
@@ -86,7 +86,7 @@ export class JournalOps implements JournalOperations {
     const resolved = this.resolveNotePath(path);
     const normalizedContent = requireContent(content);
     await mkdir(dirname(resolved.absolutePath), { recursive: true });
-    return this.withMutationLock(resolved.absolutePath, async () => {
+    return withJournalMutationLock(resolved.absolutePath, async () => {
       const created = !existsSync(resolved.absolutePath);
       await writeFile(
         resolved.absolutePath,
@@ -101,7 +101,7 @@ export class JournalOps implements JournalOperations {
     const resolved = this.resolveNotePath(path);
     const normalizedContent = requireContent(content);
     await mkdir(dirname(resolved.absolutePath), { recursive: true });
-    return this.withMutationLock(resolved.absolutePath, async () => {
+    return withJournalMutationLock(resolved.absolutePath, async () => {
       const created = await appendJournalNoteAtomically(
         resolved.absolutePath,
         normalizedContent,
@@ -157,28 +157,6 @@ export class JournalOps implements JournalOperations {
     return listBoundedJournalPaths(this.root);
   }
 
-  private async withMutationLock<T>(
-    absolutePath: string,
-    operation: () => Promise<T>,
-  ): Promise<T> {
-    const previous = this.mutationTails.get(absolutePath) ?? Promise.resolve();
-    let release!: () => void;
-    const current = new Promise<void>((resolvePromise) => {
-      release = resolvePromise;
-    });
-    const tail = previous.then(() => current);
-    this.mutationTails.set(absolutePath, tail);
-
-    await previous;
-    try {
-      return await operation();
-    } finally {
-      release();
-      if (this.mutationTails.get(absolutePath) === tail) {
-        this.mutationTails.delete(absolutePath);
-      }
-    }
-  }
 }
 
 function normalizeRequiredText(value: string, field: string): string {

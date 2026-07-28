@@ -108,7 +108,7 @@ export interface AdminContactsService {
   getContactDetail(contactId: string, context?: import('../../garden-request-context.js').GardenRequestContext): Promise<AdminContactDetailData | null>;
   updateContact(contactId: string, body: string, context?: import('../../garden-request-context.js').GardenRequestContext): Promise<ContactUpdateResult>;
   createContact(body: string, context?: import('../../garden-request-context.js').GardenRequestContext): Promise<ContactUpdateResult>;
-  deleteContact(contactId: string, context?: import('../../garden-request-context.js').GardenRequestContext): Promise<ContactUpdateResult>;
+  archiveContact(contactId: string, context?: import('../../garden-request-context.js').GardenRequestContext): Promise<ContactUpdateResult>;
   mergeContacts(targetId: string, body: string, context?: import('../../garden-request-context.js').GardenRequestContext): Promise<ContactUpdateResult>;
   unlinkChannelIdentity(contactId: string, body: string, context?: import('../../garden-request-context.js').GardenRequestContext): Promise<ContactUpdateResult>;
   deleteConversationChannel(contactId: string, body: string, context?: import('../../garden-request-context.js').GardenRequestContext): Promise<ContactUpdateResult>;

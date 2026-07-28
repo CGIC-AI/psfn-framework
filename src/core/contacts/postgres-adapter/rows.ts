@@ -19,6 +19,9 @@ export interface ContactRow {
   gender?: string | null;
   pronouns?: string | null;
   age?: number | null;
+  archived_at?: string | null;
+  /** Snapshot of released channel identities retained for archived history. */
+  channel_identities?: unknown;
 }
 
 export interface ContactIdentityRow {

@@ -498,7 +498,11 @@ export class AdminContactsDataService implements AdminContactsService {
     };
   }
 
-  async deleteContact(contactId: string, context?: GardenRequestContext): Promise<ContactUpdateResult> {
+  // bead psfn-framework-qgqw.1 (adjudication R10.3): contacts are archived,
+  // never deleted. The operator DELETE action archives — the contact row, its
+  // memories, audit trail, and snapshotted privacy links persist as grayed-out
+  // history while the contact is removed from live channel-identity resolution.
+  async archiveContact(contactId: string, context?: GardenRequestContext): Promise<ContactUpdateResult> {
     if (isOtherFleetContact(context, contactId)) return { ok: false, message: 'Contact not found' };
     const contactStore = this.deps.contactStore;
     if (!contactStore) {
@@ -511,14 +515,14 @@ export class AdminContactsDataService implements AdminContactsService {
     }
 
     if (contact.trustLevel === 'primary') {
-      return { ok: false, message: 'Cannot delete the primary contact' };
+      return { ok: false, message: 'Cannot archive the primary contact' };
     }
 
-    if (!await contactStore.deleteContact(contactId)) {
-      return { ok: false, message: 'Failed to delete contact' };
+    if (!await contactStore.archiveContact(contactId, requestActor(context))) {
+      return { ok: false, message: 'Failed to archive contact' };
     }
 
-    return { ok: true, message: 'Contact deleted' };
+    return { ok: true, message: 'Contact archived' };
   }
 
   async mergeContacts(

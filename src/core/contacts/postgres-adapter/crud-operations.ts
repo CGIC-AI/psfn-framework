@@ -1486,7 +1486,7 @@ const postgresContactCrudOperations: PostgresContactOperationMap = {
       this.pool,
       `
         SELECT id, discord_user_id, display_name, nickname, trust_level, relationship_type, is_machine_intelligence,
-               emotional_baseline, first_seen, last_seen, notes, timezone, gender, pronouns, age
+               emotional_baseline, first_seen, last_seen, notes, timezone, gender, pronouns, age, archived_at, channel_identities
         FROM contacts
         ORDER BY last_seen DESC
       `,
@@ -1654,6 +1654,74 @@ const postgresContactCrudOperations: PostgresContactOperationMap = {
 
   async getCanonicalContactKey(channel: ContactChannel, channelUserId: string): Promise<string | undefined> {
     return (await this.getByChannelIdentity(channel, channelUserId))?.id;
+  },
+
+  // bead psfn-framework-qgqw.1 (adjudication R10.3): contacts are archived,
+  // never deleted. Archiving preserves the contact row, its memories (contact_id
+  // untouched, unlike deleteContactDirect), audit trail, conversation history,
+  // and a snapshot of its privacy links, while releasing the live channel
+  // identity namespace (contact_channel_ids rows + discord_user_id) so a
+  // recreated/reused platform id resolves to a NEW person rather than
+  // resurrecting the archived one. Fail-closed: the primary contact can never be
+  // archived; a missing contact returns false; re-archiving is idempotent.
+  async archiveContact(id: string, actor?: string): Promise<boolean> {
+    const archived = await withPostgresClient(this.pool, async (client) => {
+      const existing = await client.query<{ trust_level: TrustLevel; discord_user_id: string | null; archived_at: string | null }>(`
+        SELECT trust_level, discord_user_id, archived_at FROM contacts WHERE id = $1 FOR UPDATE
+      `, [id]);
+      if (existing.rowCount !== 1) return false;
+      const row = existing.rows[0]!;
+      if (row.trust_level === 'primary') return false;
+      if (row.archived_at) return true; // idempotent: already archived
+
+      const identityRows = await client.query<{
+        channel: string;
+        channel_user_id: string;
+        privacy_level: string | null;
+        bonded: boolean | null;
+        first_seen: string;
+        last_seen: string;
+      }>(`
+        SELECT channel, channel_user_id, privacy_level, bonded, first_seen, last_seen
+        FROM contact_channel_ids
+        WHERE contact_id = $1
+        ORDER BY channel ASC, channel_user_id ASC
+      `, [id]);
+
+      const snapshot = identityRows.rows.map(identity => ({
+        channel: identity.channel,
+        channel_user_id: identity.channel_user_id,
+        privacy_level: identity.privacy_level,
+        bonded: identity.bonded === true,
+        first_seen: identity.first_seen,
+        last_seen: identity.last_seen,
+      }));
+      // A legacy contact may carry a discord identity only on the discord_user_id
+      // column without a matching contact_channel_ids row; preserve it in the
+      // snapshot so archived history keeps that privacy link too.
+      if (row.discord_user_id
+        && !snapshot.some(entry => entry.channel === 'discord' && entry.channel_user_id === row.discord_user_id)) {
+        snapshot.push({
+          channel: 'discord',
+          channel_user_id: row.discord_user_id,
+          privacy_level: null,
+          bonded: false,
+          first_seen: '',
+          last_seen: '',
+        });
+      }
+
+      const now = new Date().toISOString();
+      await client.query(
+        'UPDATE contacts SET archived_at = $1, channel_identities = $2::jsonb, discord_user_id = NULL WHERE id = $3',
+        [now, JSON.stringify(snapshot), id],
+      );
+      await client.query('DELETE FROM contact_channel_ids WHERE contact_id = $1', [id]);
+      await this.appendMutationAuditEntry(id, 'archived', null, now, actor, client);
+      return true;
+    });
+    if (archived) await this.syncContactExports();
+    return archived;
   },
 
   async deleteContactDirect(

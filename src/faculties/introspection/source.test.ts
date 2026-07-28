@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { SessionManager } from '../../core/session/manager.js';
 import { SessionStore } from '../../persistence/sessions/store.js';
+import type { TurnRecordPageCursor } from '../../persistence/sessions/turn-record-store-port.js';
 import type { TurnRecord } from '../../shared/contracts/runtime.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import { DEFAULT_INTROSPECTION_AUDIT_CONFIG } from '../../system/config/scheduler-config.js';
@@ -81,6 +82,29 @@ function record(overrides: Partial<TurnRecord> = {}): TurnRecord {
   };
 }
 
+function fixturePage(
+  records: readonly TurnRecord[],
+  limit: number,
+  cursor?: TurnRecordPageCursor,
+): {
+  records: TurnRecord[];
+  nextCursor?: TurnRecordPageCursor;
+  exhausted: boolean;
+} {
+  const offset = cursor ? Number(cursor) : 0;
+  const newestFirst = [...records].reverse();
+  const selected = newestFirst.slice(offset, offset + limit);
+  const nextOffset = offset + selected.length;
+  const exhausted = nextOffset >= newestFirst.length;
+  return {
+    records: selected.reverse(),
+    exhausted,
+    ...(!exhausted
+      ? { nextCursor: String(nextOffset) as TurnRecordPageCursor }
+      : {}),
+  };
+}
+
 describe('turn-record introspection source', () => {
   it('selects only explicit public verbatim turns in exact consent channels', () => {
     const intimateSentinel = 'PRIVATE_INTIMATE_SENTINEL';
@@ -89,8 +113,9 @@ describe('turn-record introspection source', () => {
         { sessionId: 'discord:public-room', sourceChannelId: 'discord:public-room' },
         { sessionId: 'discord:private-dm', sourceChannelId: 'discord:private-dm' },
       ],
-      getRecentTurnRecords: (channelId) => channelId === 'discord:public-room'
-        ? [
+      readSourceTurnRecordPage: (channelId) => ({
+        records: channelId === 'discord:public-room'
+          ? [
           record(),
           record({
             turnId: '019d2326-d9e1-701d-bcee-250d2cbb0e5f',
@@ -103,8 +128,8 @@ describe('turn-record introspection source', () => {
             },
             userMessage: { role: 'user', content: intimateSentinel, timestamp: 1_700_000_000_000 },
           }),
-        ]
-        : [record({
+          ]
+          : [record({
           channelId: 'discord:private-dm',
           auditPrivacy: {
             schemaVersion: 1,
@@ -114,7 +139,9 @@ describe('turn-record introspection source', () => {
             reason: 'direct_message',
           },
           userMessage: { role: 'user', content: intimateSentinel, timestamp: 1_700_000_000_000 },
-        })],
+          })],
+        exhausted: true,
+      }),
       isSessionRetiredOrQuarantined: () => false,
       isSourceTurnRecordEligible: () => true,
     });
@@ -133,7 +160,10 @@ describe('turn-record introspection source', () => {
   it('fails closed for legacy records without an audit privacy snapshot', () => {
     const source = createTurnRecordIntrospectionSource({
       listRecentSessions: () => [{ sessionId: 'discord:public-room', sourceChannelId: 'discord:public-room' }],
-      getRecentTurnRecords: () => [record({ auditPrivacy: undefined })],
+      readSourceTurnRecordPage: () => ({
+        records: [record({ auditPrivacy: undefined })],
+        exhausted: true,
+      }),
       isSessionRetiredOrQuarantined: () => false,
       isSourceTurnRecordEligible: () => true,
     });
@@ -151,9 +181,12 @@ describe('turn-record introspection source', () => {
         sessionId: 'session:logical-after-reset',
         sourceChannelId: 'discord:public-room',
       }],
-      getRecentTurnRecords: (sourceChannelId) => sourceChannelId === 'discord:public-room'
-        ? [record({ sessionId: 'session:logical-after-reset' })]
-        : [],
+      readSourceTurnRecordPage: (sourceChannelId) => ({
+        records: sourceChannelId === 'discord:public-room'
+          ? [record({ sessionId: 'session:logical-after-reset' })]
+          : [],
+        exhausted: true,
+      }),
       isSessionRetiredOrQuarantined: () => false,
       isSourceTurnRecordEligible: () => true,
     });
@@ -246,8 +279,8 @@ describe('turn-record introspection source', () => {
                 ?? session.channelId,
             }))
           ),
-          getRecentTurnRecords: (channelId, limit, offset) => (
-            reloadedStore.getRecentSourceTurnRecords(channelId, limit, offset)
+          readSourceTurnRecordPage: (channelId, limit, cursor) => (
+            reloadedStore.readSourceTurnRecordPage(channelId, limit, cursor)
           ),
           isSessionRetiredOrQuarantined: sessionId => (
             reloadedManager.isSessionRetiredOrQuarantined(sessionId)
@@ -256,12 +289,16 @@ describe('turn-record introspection source', () => {
             reloadedStore.isSourceTurnRecordEligible(channelId, ownerSessionId, turnId)
           ),
         });
-        const candidates = source.listCandidates({
+        const input = {
           allowedPublicChannelIds: [sourceChannelId],
-          recentSessionLimit: 10,
-          recentTurnLimit: 10,
+          recentSessionLimit: 1,
+          recentTurnLimit: 1,
           maxSourceChars: 1_000,
-        });
+        };
+        // The newest physical row has no durable owner. It consumes this page
+        // without widening the read or falsely exhausting the snapshot.
+        expect(source.listCandidates(input)).toEqual([]);
+        const candidates = source.listCandidates(input);
 
         expect(candidates.map(candidate => candidate.turnId)).toEqual([freshTurn.turnId]);
         expect(JSON.stringify(candidates)).not.toContain(oldPoisonedSentinel);
@@ -343,10 +380,11 @@ describe('turn-record introspection source', () => {
     }));
     const source = createTurnRecordIntrospectionSource({
       listRecentSessions: (limit = 1, offset = 0) => sessions.slice(offset, offset + limit),
-      getRecentTurnRecords: (channelId, limit, offset = 0) => {
-        if (channelId !== 'discord:public-room') return [];
-        const end = Math.max(0, turns.length - offset);
-        return turns.slice(Math.max(0, end - limit), end);
+      readSourceTurnRecordPage: (channelId, limit, cursor) => {
+        if (channelId !== 'discord:public-room') {
+          return { records: [], exhausted: true };
+        }
+        return fixturePage(turns, limit, cursor);
       },
       isSessionRetiredOrQuarantined: () => false,
       isSourceTurnRecordEligible: () => true,
@@ -363,5 +401,47 @@ describe('turn-record introspection source', () => {
     expect([...new Set(candidates.map(candidate => candidate.sourceRef))].sort()).toEqual(
       turns.map(turn => `turn:${turn.turnId}`).sort(),
     );
+  });
+
+  it('continues after an empty filtered physical page until the snapshot honestly exhausts', () => {
+    const continuation = 'older-page' as TurnRecordPageCursor;
+    const readSourceTurnRecordPage = vi.fn((
+      _channelId: string,
+      _limit: number,
+      cursor?: TurnRecordPageCursor,
+    ) => cursor === continuation
+      ? {
+        records: [record()],
+        exhausted: true,
+      }
+      : {
+        records: [],
+        nextCursor: continuation,
+        exhausted: false,
+      });
+    const source = createTurnRecordIntrospectionSource({
+      listRecentSessions: () => [{
+        sessionId: 'discord:public-room',
+        sourceChannelId: 'discord:public-room',
+      }],
+      readSourceTurnRecordPage,
+      isSessionRetiredOrQuarantined: () => false,
+      isSourceTurnRecordEligible: () => true,
+    });
+    const input = {
+      allowedPublicChannelIds: ['discord:public-room'],
+      recentSessionLimit: 10,
+      recentTurnLimit: 1,
+      maxSourceChars: 1_000,
+    };
+
+    expect(source.listCandidates(input)).toEqual([]);
+    expect(source.listCandidates(input)).toEqual([
+      expect.objectContaining({ turnId: record().turnId }),
+    ]);
+    expect(readSourceTurnRecordPage.mock.calls[1]?.[2]).toBe(continuation);
+    // Exhaustion reset is explicit: the next cycle starts a fresh snapshot.
+    expect(source.listCandidates(input)).toEqual([]);
+    expect(readSourceTurnRecordPage.mock.calls[2]?.[2]).toBeUndefined();
   });
 });

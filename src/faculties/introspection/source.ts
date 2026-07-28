@@ -1,4 +1,5 @@
 import type { TurnRecord } from '../../shared/contracts/runtime.js';
+import type { TurnRecordPageCursor } from '../../persistence/sessions/turn-record-store-port.js';
 import type {
   IntrospectionAuditCandidate,
   IntrospectionAuditSourcePort,
@@ -11,7 +12,15 @@ interface RecentSessionSummary {
 
 export interface IntrospectionTurnRecordReader {
   listRecentSessions(limit?: number, offset?: number): RecentSessionSummary[];
-  getRecentTurnRecords(channelId: string, limit: number, offset?: number): TurnRecord[];
+  readSourceTurnRecordPage(
+    channelId: string,
+    limit: number,
+    cursor?: TurnRecordPageCursor,
+  ): {
+    records: TurnRecord[];
+    nextCursor?: TurnRecordPageCursor;
+    exhausted: boolean;
+  };
   isSessionRetiredOrQuarantined(sessionId: string): boolean;
   isSourceTurnRecordEligible(
     sourceChannelId: string,
@@ -70,7 +79,7 @@ export function createTurnRecordIntrospectionSource(
   reader: IntrospectionTurnRecordReader,
 ): IntrospectionAuditSourcePort {
   let sessionOffset = 0;
-  const turnOffsets = new Map<string, number>();
+  const turnCursors = new Map<string, TurnRecordPageCursor>();
 
   const readSessionPage = (limit: number): RecentSessionSummary[] => {
     let sessions = reader.listRecentSessions(limit, sessionOffset);
@@ -83,14 +92,20 @@ export function createTurnRecordIntrospectionSource(
   };
 
   const readTurnPage = (channelId: string, limit: number): TurnRecord[] => {
-    let offset = turnOffsets.get(channelId) ?? 0;
-    let records = reader.getRecentTurnRecords(channelId, limit, offset);
-    if (records.length === 0 && offset > 0) {
-      offset = 0;
-      records = reader.getRecentTurnRecords(channelId, limit, offset);
+    const page = reader.readSourceTurnRecordPage(
+      channelId,
+      limit,
+      turnCursors.get(channelId),
+    );
+    if (page.exhausted) {
+      turnCursors.delete(channelId);
+    } else {
+      if (!page.nextCursor) {
+        throw new Error('TurnRecord page is not exhausted but supplied no continuation cursor');
+      }
+      turnCursors.set(channelId, page.nextCursor);
     }
-    turnOffsets.set(channelId, records.length < limit ? 0 : offset + records.length);
-    return records;
+    return page.records;
   };
 
   return {

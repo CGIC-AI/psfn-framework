@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { buildCompactionJournalEntry, buildMessageJournalEntry } from './entries.js';
@@ -437,6 +437,66 @@ describe('session journal port', () => {
     expect(page.entries[0]?.content).toBe(unicodeContent);
     expect(stats.eventLoopYields).toBeGreaterThan(0);
     expect(stats.maxRetainedLineBytes).toBeGreaterThan(127);
+  });
+
+  it('retries an identity-fenced cooperative seek after active-file rotation', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'psfn-session-journal-rotating-seek-'));
+    dirs.push(dir);
+    const port = createFilesystemSessionJournalPort();
+    const filePath = join(dir, 'journal.jsonl');
+    const sealedPath = join(dir, 'journal.00001.jsonl');
+    const initial = [
+      {
+        ...buildMessageJournalEntry(1, {
+          channelId: 'ch1',
+          role: 'user',
+          content: 'before rotation',
+          timestamp: 1_000,
+        }),
+        _hmac: 'hmac-1',
+      },
+      {
+        ...buildMessageJournalEntry(2, {
+          channelId: 'ch1',
+          role: 'assistant',
+          content: 'rotation boundary',
+          timestamp: 2_000,
+        }),
+        _hmac: 'hmac-2',
+      },
+    ];
+    const active = {
+      ...buildMessageJournalEntry(3, {
+        channelId: 'ch1',
+        role: 'user',
+        content: 'after rotation',
+        timestamp: 3_000,
+      }),
+      _hmac: 'hmac-3',
+    };
+    writeFileSync(filePath, `${initial.map(entry => JSON.stringify(entry)).join('\n')}\n`, 'utf8');
+    let rotated = false;
+    let trustCalls = 0;
+
+    const page = await port.readJournalEntriesBeforeAsync(filePath, {
+      beforeId: 3,
+      messageLimit: 1,
+      scanChunkBytes: 127,
+      trustSeekEntry: () => {
+        trustCalls += 1;
+        if (!rotated) {
+          rotated = true;
+          renameSync(filePath, sealedPath);
+          writeFileSync(filePath, `${JSON.stringify(active)}\n`, 'utf8');
+        }
+        return true;
+      },
+    });
+
+    expect(rotated).toBe(true);
+    expect(trustCalls).toBeGreaterThan(1);
+    expect(page.entries.map(entry => entry.id)).toEqual([1, 2]);
+    expect(page.quarantined).toEqual([]);
   });
 
   it('treats sealed segments as canonical for replay, metadata, tails, fingerprints, and rewrites', () => {

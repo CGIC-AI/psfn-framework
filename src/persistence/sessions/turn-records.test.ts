@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { ToolSchema, TurnRecord } from '../../shared/contracts/runtime.js';
+import { DUPLICATE_TOOL_CALL_SKIP_RESULT } from '../../shared/contracts/tool-call-outcome.js';
 import type { TurnSnapshotRecord } from '../../core/turns/observability.js';
 import type { TurnRecordStorePort } from './turn-record-store-port.js';
 import { backfillLegacyTurnId } from '../../core/turns/id.js';
@@ -26,6 +27,12 @@ import {
 const fsFaults = vi.hoisted(() => ({
   openSyncEnoent: { path: null as string | null, remaining: 0 },
   linkSyncClaim: { remaining: 0, claimContent: '' },
+  readdirSyncError: { path: null as string | null, remaining: 0 },
+  trackedOpen: {
+    path: null as string | null,
+    fd: null as number | null,
+    closed: false,
+  },
 }));
 
 vi.mock('node:fs', async (importOriginal) => {
@@ -42,8 +49,26 @@ vi.mock('node:fs', async (importOriginal) => {
         fsFaults.openSyncEnoent.remaining -= 1;
         throw enoent(path);
       }
-      return actual.openSync(path, flags, mode);
+      const fd = actual.openSync(path, flags, mode);
+      if (String(path) === fsFaults.trackedOpen.path) {
+        fsFaults.trackedOpen.fd = fd;
+      }
+      return fd;
     }) as typeof actual.openSync,
+    closeSync: ((fd) => {
+      if (fd === fsFaults.trackedOpen.fd) {
+        fsFaults.trackedOpen.closed = true;
+      }
+      return actual.closeSync(fd);
+    }) as typeof actual.closeSync,
+    readdirSync: ((path, options) => {
+      if (fsFaults.readdirSyncError.remaining > 0
+        && String(path) === fsFaults.readdirSyncError.path) {
+        fsFaults.readdirSyncError.remaining -= 1;
+        throw new Error(`Injected readdir failure for ${String(path)}`);
+      }
+      return actual.readdirSync(path, options as never);
+    }) as typeof actual.readdirSync,
     linkSync: ((existingPath, newPath) => {
       if (fsFaults.linkSyncClaim.remaining > 0) {
         fsFaults.linkSyncClaim.remaining -= 1;
@@ -64,6 +89,11 @@ afterEach(() => {
   fsFaults.openSyncEnoent.remaining = 0;
   fsFaults.linkSyncClaim.remaining = 0;
   fsFaults.linkSyncClaim.claimContent = '';
+  fsFaults.readdirSyncError.path = null;
+  fsFaults.readdirSyncError.remaining = 0;
+  fsFaults.trackedOpen.path = null;
+  fsFaults.trackedOpen.fd = null;
+  fsFaults.trackedOpen.closed = false;
 });
 
 const TURN_RECORDS_DIR = '_turn_records';
@@ -109,6 +139,98 @@ function createTurnRecord(overrides: Partial<TurnRecord> = {}): TurnRecord {
 }
 
 describe('turn-records', () => {
+  it('projects huge tool results into bounded content-free usage signals', () => {
+    const sessionsDir = mkdtempSync(join(tmpdir(), 'psfn-turn-records-usage-projection-'));
+    const turnRecordStore = createFilesystemTurnRecordStorePort(sessionsDir);
+    const hugeResult = `private-result:${'x'.repeat(2 * 1024 * 1024)}`;
+    const record = createTurnRecord({
+      toolCalls: [{
+        toolName: 'repo',
+        toolCallId: 'call-huge-result',
+        isError: true,
+        resultText: hugeResult,
+      }, {
+        toolName: 'memory',
+        toolCallId: 'call-legacy-duplicate',
+        isError: true,
+        resultText: DUPLICATE_TOOL_CALL_SKIP_RESULT,
+      }],
+    });
+    turnRecordStore.appendTurnRecord(record);
+    const readUsage = turnRecordStore.readRecentTurnRecordUsage;
+    expect(readUsage).toBeDefined();
+
+    const usage = readUsage!.call(turnRecordStore, record.channelId, 1);
+
+    expect(usage).toEqual([{
+      turnId: record.turnId,
+      startedAt: record.startedAt,
+      toolCalls: [{
+        toolName: 'repo',
+        outcome: 'execution_failure',
+        isError: true,
+      }, {
+        toolName: 'memory',
+        outcome: 'duplicate_skip',
+        isError: true,
+      }],
+    }]);
+    expect(JSON.stringify(usage)).not.toContain('private-result');
+    expect(JSON.stringify(usage).length).toBeLessThan(512);
+  });
+
+  it('streams a large recovery archive without monopolizing the event loop', async () => {
+    const sessionsDir = mkdtempSync(join(tmpdir(), 'psfn-turn-records-recovery-stream-'));
+    const turnRecordStore = createFilesystemTurnRecordStorePort(sessionsDir);
+    for (let index = 0; index < 64; index += 1) {
+      turnRecordStore.appendTurnRecord(createTurnRecord({
+        turnId: backfillLegacyTurnId(`recovery-stream-${String(index)}`),
+        requestId: `request-${String(index)}`,
+        startedAt: 1_742_000_000_000 + index,
+        completedAt: 1_742_000_000_500 + index,
+      }));
+    }
+    const stream = turnRecordStore.streamTurnRecordsForRecovery;
+    expect(stream).toBeDefined();
+    let eventLoopPulseObserved = false;
+    setImmediate(() => {
+      eventLoopPulseObserved = true;
+    });
+
+    let recovered = 0;
+    for await (const _record of stream!.call(
+      turnRecordStore,
+      'psfn-amica:test:pi5',
+    )) {
+      recovered += 1;
+    }
+
+    expect(recovered).toBe(64);
+    expect(eventLoopPulseObserved).toBe(true);
+  });
+
+  it('closes the pinned active recovery descriptor when segment discovery fails', async () => {
+    const sessionsDir = mkdtempSync(join(tmpdir(), 'psfn-turn-records-recovery-fd-'));
+    const turnRecordStore = createFilesystemTurnRecordStorePort(sessionsDir);
+    const record = createTurnRecord();
+    turnRecordStore.appendTurnRecord(record);
+    const activePath = activeSegmentPathFor(sessionsDir, record.channelId);
+    fsFaults.trackedOpen.path = activePath;
+    fsFaults.readdirSyncError.path = join(sessionsDir, TURN_RECORDS_DIR);
+    fsFaults.readdirSyncError.remaining = 1;
+    const stream = turnRecordStore.streamTurnRecordsForRecovery;
+    expect(stream).toBeDefined();
+
+    await expect((async () => {
+      for await (const _record of stream!.call(turnRecordStore, record.channelId)) {
+        // Segment discovery fails before the iterator can yield.
+      }
+    })()).rejects.toThrow('Injected readdir failure');
+
+    expect(fsFaults.trackedOpen.fd).not.toBeNull();
+    expect(fsFaults.trackedOpen.closed).toBe(true);
+  });
+
   it('persists and reads psfn-amica turn records', () => {
     const sessionsDir = mkdtempSync(join(tmpdir(), 'psfn-psfn-amica-turn-records-'));
     const record = createTurnRecord();

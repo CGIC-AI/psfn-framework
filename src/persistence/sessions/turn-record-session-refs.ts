@@ -326,9 +326,8 @@ function resolveRecentEntries(
   const ids = ref.items.filter((item): item is number => typeof item === 'number');
   const byId = new Map<number, SessionEntry>();
   if (ids.length > 0) {
-    const min = Math.min(...ids);
-    const max = Math.max(...ids);
-    for (const entry of resolve(ref.channelId, min, max)) {
+    const range = numericRange(ids);
+    for (const entry of resolve(ref.channelId, range.min, range.max)) {
       byId.set(entry.id, entry);
     }
   }
@@ -388,7 +387,8 @@ function gateInlineRecentEntries(
   // truth and passes through untouched.
   if (ids.length === 0 || channelId.length === 0) return { record, windowRedactionDetected: false };
   const byId = new Map<number, SessionEntry>();
-  for (const entry of resolve(channelId, Math.min(...ids), Math.max(...ids))) {
+  const range = numericRange(ids);
+  for (const entry of resolve(channelId, range.min, range.max)) {
     byId.set(entry.id, entry);
   }
   const recentEntries: SessionEntry[] = [];
@@ -414,6 +414,20 @@ function gateInlineRecentEntries(
     record: withSessionContext(record, { ...sessionContext, recentEntries }),
     windowRedactionDetected,
   };
+}
+
+function numericRange(values: readonly number[]): { min: number; max: number } {
+  if (values.length === 0) {
+    throw new Error('Cannot resolve an empty TurnRecord entry-id range');
+  }
+  let min = values[0]!;
+  let max = min;
+  for (let index = 1; index < values.length; index += 1) {
+    const value = values[index]!;
+    if (value < min) min = value;
+    if (value > max) max = value;
+  }
+  return { min, max };
 }
 
 // ── cross-channel continuity redaction gating ───────────────────────────────
@@ -842,7 +856,8 @@ function gateRenderedViews(
   const live = new Map<number, SessionEntry>();
   if (allIds.size > 0) {
     const ids = [...allIds];
-    for (const entry of resolve(channelId, Math.min(...ids), Math.max(...ids))) {
+    const range = numericRange(ids);
+    for (const entry of resolve(channelId, range.min, range.max)) {
       live.set(entry.id, entry);
     }
   }

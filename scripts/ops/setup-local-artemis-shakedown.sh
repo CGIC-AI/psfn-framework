@@ -460,7 +460,17 @@ function normalizeLocalChannelRouting(owner) {
     throw new Error('local channels owner channels section must be an object');
   }
   const channels = { ...(wrapped ? owner.channels : owner) };
-  const discord = isRecord(channels.discord) ? { ...channels.discord } : {};
+  function copyOptionalSection(sectionName) {
+    if (!Object.prototype.hasOwnProperty.call(channels, sectionName)) {
+      return {};
+    }
+    if (!isRecord(channels[sectionName])) {
+      throw new Error(`local channels owner ${sectionName} section must be an object`);
+    }
+    return { ...channels[sectionName] };
+  }
+
+  const discord = copyOptionalSection('discord');
   if (Object.prototype.hasOwnProperty.call(discord, 'accounts')) {
     if (!Array.isArray(discord.accounts) || discord.accounts.length !== 1
       || !isRecord(discord.accounts[0])) {
@@ -474,7 +484,7 @@ function normalizeLocalChannelRouting(owner) {
     discord.companionId = companionId;
   }
 
-  const telegram = isRecord(channels.telegram) ? { ...channels.telegram } : {};
+  const telegram = copyOptionalSection('telegram');
   if (Object.keys(telegram).length === 0) {
     telegram.enabled = false;
   }
@@ -483,7 +493,7 @@ function normalizeLocalChannelRouting(owner) {
   channels.discord = discord;
   channels.telegram = telegram;
   channels.api = {
-    ...(isRecord(channels.api) ? channels.api : {}),
+    ...copyOptionalSection('api'),
     companionId,
   };
   return wrapped

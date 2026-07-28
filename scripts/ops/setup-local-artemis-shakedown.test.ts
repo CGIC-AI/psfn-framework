@@ -138,6 +138,39 @@ describe('local Artemis always-fleet bootstrap fixtures', () => {
       .toContain('BEGIN PRIVATE KEY');
   });
 
+  it.each(['discord', 'telegram', 'api'])(
+    'rejects a malformed %s channel section instead of silently replacing it',
+    (section) => {
+      const root = temporaryRoot();
+      const fixtureRoot = join(root, 'fixture');
+      const outputRoot = join(root, 'prepared');
+      mkdirSync(join(fixtureRoot, 'system-data'), { recursive: true });
+      writeFileSync(
+        join(fixtureRoot, 'system-data/channels.json'),
+        JSON.stringify({ [section]: 'invalid' }),
+      );
+
+      const result = spawnSync('bash', [
+        scriptPath,
+        '--shakedown-root', fixtureRoot,
+        '--companion-id', companionId,
+        '--prepare-seed-only', outputRoot,
+      ], {
+        cwd: repoRoot,
+        encoding: 'utf8',
+        env: {
+          ...process.env,
+          PSFN_ARTEMIS_OWNER_DISCORD_ID: ownerDiscordId,
+        },
+      });
+
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain(
+        `local channels owner ${section} section must be an object`,
+      );
+    },
+  );
+
   it('splices missing owner keys without replacing existing scalar, object, or array values', () => {
     const root = temporaryRoot();
     const targetRoot = join(root, 'target');

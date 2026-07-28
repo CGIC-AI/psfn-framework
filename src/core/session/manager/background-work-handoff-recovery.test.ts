@@ -7,10 +7,9 @@ import {
   fingerprintBackgroundWorkTurnRecord,
   type MemoryExtractionBackgroundPayload,
 } from '../../agent/background-work/types.js';
-import {
-  BackgroundWorkHandoffRecovery,
-  BackgroundWorkHandoffRetryCapacityError,
-} from './background-work-handoff-recovery.js';
+import { BackgroundWorkHandoffRecovery } from './background-work-handoff-recovery.js';
+import { projectTurnRecordRecoveryCandidate } from '../../../persistence/sessions/turn-records.js';
+import { BackgroundWorkHandoffRetryCapacityError } from '../../agent/background-work/recovery-contract.js';
 
 function makeRecord(index: number): TurnRecord {
   const completedAt = 1_742_000_000_000 + index;
@@ -252,5 +251,36 @@ describe('BackgroundWorkHandoffRecovery', () => {
     expect(operation).not.toHaveBeenCalled();
     expect(recovery.hasPending()).toBe(false);
     expect(await recovery.recover(1, operation)).toBe(0);
+  });
+
+  it('accepts only content-free worker-validated projections and revalidates their surviving bindings', () => {
+    const valid = makeRecord(20);
+    const projection = projectTurnRecordRecoveryCandidate(valid);
+    const recordsByTurn = new Map([[valid.turnId, valid]]);
+    const recovery = new BackgroundWorkHandoffRecovery({
+      findSourceTurnRecord: (_sourceChannelId, _logicalSessionId, turnId) => (
+        recordsByTurn.get(turnId) ?? null
+      ),
+      isSourceTurnRecordEligible: () => true,
+      withSourceTurnRecordEligibilityFence: async (_source, _session, _turn, operation) => (
+        operation()
+      ),
+    }, 2);
+
+    recovery.deferWorkerValidatedProjection(projection);
+    expect(recovery.hasPending()).toBe(true);
+
+    const poisoned = projectTurnRecordRecoveryCandidate(makeRecord(21));
+    poisoned.backgroundWorkHandoff!.jobs[0]!.payloadFingerprint = '0'.repeat(64);
+    expect(() => recovery.deferWorkerValidatedProjection(poisoned)).toThrow(
+      expect.objectContaining({ name: 'TurnRecordRecoveryEvidenceError' }),
+    );
+
+    expect(() => recovery.deferWorkerValidatedProjection(makeRecord(22))).toThrow(
+      expect.objectContaining({
+        name: 'TurnRecordRecoveryEvidenceError',
+        message: expect.stringContaining('forbidden old-fat content'),
+      }),
+    );
   });
 });

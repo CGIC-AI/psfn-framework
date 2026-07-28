@@ -30,7 +30,7 @@ import {
   INTENTION_FOLLOW_UP_AUTHOR_ID,
   INTENTION_FOLLOW_UP_AUTHOR_NAME,
 } from '../intention/appraisal.js';
-import type { AgentResponse, Attachment, CorrelationMetadata, MessagePromptOverride, ResponseStyle, SubstrateMessage, TurnRecord } from '../../shared/contracts/runtime.js';
+import type { AgentResponse, Attachment, CorrelationMetadata, MessagePromptOverride, ResponseStyle, SubstrateMessage } from '../../shared/contracts/runtime.js';
 import type { PlacesRegistryConfig } from '../../shared/contracts/places-registry.js';
 import type { CapabilityTier, CoreSubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import type { ContactStorePort } from '../contacts/contact-store-port.js';
@@ -176,10 +176,6 @@ import {
 import type { TurnSessionIdentity } from './substrate-agent/turn-execution/contracts.js';
 import type { HumanAttentionPressurePort } from './fatigue/human-attention-pressure.js';
 import { createTurnExecutionRuntimeAdapter } from './substrate-agent/turn-execution-adapter.js';
-import {
-  parseTurnRecordBackgroundWorkHandoff,
-  type EnqueueBackgroundWorkInput,
-} from './background-work/types.js';
 import type { BackgroundWorkRuntimeTuning } from './background-work/config.js';
 import {
   CompletionNoticeBuffer,
@@ -217,14 +213,8 @@ import type {
   BackgroundWorkWelfarePolicy,
 } from './background-work/store-port.js';
 import { executePostTurnBackgroundWork } from './background-work/post-turn-runtime.js';
-import {
-  recoverHistoricalBackgroundWorkHandoffs,
-  runBackgroundWorkTick,
-} from './background-work/tick-runtime.js';
-import {
-  BACKGROUND_WORK_HANDOFF_RECOVERY_BATCH_SIZE,
-  BackgroundWorkHandoffRetryCapacityError,
-} from '../session/manager/background-work-handoff-recovery.js';
+import { runBackgroundWorkTick } from './background-work/tick-runtime.js';
+import { BackgroundWorkHandoffRecoveryRuntime } from './background-work/handoff-recovery-runtime.js';
 import type { ObserverEvalSidecarRuntime } from '../eval/observer-sidecar/types.js';
 import type { FatigueBudgetPort } from './fatigue/fatigue-budget.js';
 import type { IcpFatigueRegulationReservationPort } from './fatigue/regulation-reservation.js';
@@ -321,17 +311,6 @@ function requireBackgroundWorkWelfare(
   };
 }
 
-function workerValidatedRecoveryJobs(record: TurnRecord): EnqueueBackgroundWorkInput[] {
-  if (record.status !== 'completed' || !record.backgroundWorkHandoff) {
-    const error = new Error('Recovery worker returned a record without a completed handoff');
-    error.name = 'TurnRecordRecoveryEvidenceError';
-    throw error;
-  }
-  // The recovery port validates identity, payload, payload fingerprint, and
-  // source-turn fingerprint before it removes old-fat message content for IPC.
-  return record.backgroundWorkHandoff.jobs as EnqueueBackgroundWorkInput[];
-}
-
 const DEFAULT_TOOL_SCHEDULER_MAX_PARALLEL = 5;
 
 export type SubstrateAgentAbortResult = AgentRunAbortResult;
@@ -378,12 +357,7 @@ export class SubstrateAgent {
   readonly completionNotices = new CompletionNoticeBuffer();
   private readonly turnSupportRuntime: TurnSupportRuntime;
   private readonly backgroundWorkSupervisor: BackgroundWorkSupervisor | null;
-  private backgroundWorkHandoffsRecovered = false;
-  private backgroundWorkHandoffRecoveryCapacityBlocked = false;
-  private backgroundWorkHandoffRecoveryEvidenceBlocked = false;
-  private backgroundWorkHandoffRecoveryPromise: Promise<void> | null = null;
-  private backgroundWorkHandoffRecoveryAbortController: AbortController | null = null;
-  private backgroundWorkHandoffRecoveryAbortRequested = false;
+  private readonly backgroundWorkHandoffRecoveryRuntime: BackgroundWorkHandoffRecoveryRuntime;
   private readonly toolRuntimeFacade: ToolRuntimeFacade;
   private readonly satellitePresencePort = createActiveEmanationSatellitePresencePort();
   private selfModelRuntimeRequired = false;
@@ -681,6 +655,9 @@ export class SubstrateAgent {
     } else {
       this.backgroundWorkSupervisor = null;
     }
+    this.backgroundWorkHandoffRecoveryRuntime = new BackgroundWorkHandoffRecoveryRuntime(
+      this.sessionManager,
+    );
 
     const defaultStreamTransport = options.streamTransport ?? {
       stream: this.llmClient.stream.bind(this.llmClient),
@@ -1552,92 +1529,15 @@ export class SubstrateAgent {
       throw new Error('Durable background work supervisor is not configured');
     }
     await runBackgroundWorkTick({
-      recoverHandoffs: () => this.recoverBackgroundWorkHandoffs(),
+      recoverHandoffs: () => this.backgroundWorkHandoffRecoveryRuntime.recover(
+        jobs => supervisor.enqueue(jobs),
+      ),
       tick: () => supervisor.tick(),
     });
   }
 
-  private async recoverBackgroundWorkHandoffs(): Promise<void> {
-    if (this.backgroundWorkHandoffRecoveryAbortRequested) {
-      throw new DOMException('Background work handoff recovery was aborted', 'AbortError');
-    }
-    if (!this.backgroundWorkHandoffRecoveryPromise) {
-      const recoveryAbortController = new AbortController();
-      this.backgroundWorkHandoffRecoveryAbortController = recoveryAbortController;
-      this.backgroundWorkHandoffRecoveryPromise = (async () => {
-        const recoverPending = async (): Promise<void> => {
-          await this.sessionManager.recoverPendingBackgroundWorkHandoffs(
-            BACKGROUND_WORK_HANDOFF_RECOVERY_BATCH_SIZE,
-            async (record) => {
-              const jobs = parseTurnRecordBackgroundWorkHandoff(record);
-              if (jobs.length > 0) await this.backgroundWorkSupervisor!.enqueue(jobs);
-            },
-            recoveryAbortController.signal,
-          );
-        };
-        if (this.backgroundWorkHandoffRecoveryCapacityBlocked) {
-          await recoverPending();
-          if (!this.sessionManager.hasPendingBackgroundWorkHandoffRecovery()) {
-            // Capacity is available again. The durable archive remains the
-            // source of truth for every row that could not be indexed; perform
-            // exactly one fresh bounded snapshot on a later tick.
-            this.backgroundWorkHandoffRecoveryCapacityBlocked = false;
-          }
-          return;
-        }
-        if (!this.backgroundWorkHandoffsRecovered
-          && !this.backgroundWorkHandoffRecoveryEvidenceBlocked) {
-          const enumerationState = { complete: false };
-          const records = this.sessionManager.streamRecoverableBackgroundWorkTurnRecords(
-            recoveryAbortController.signal,
-          );
-          const completionTrackedRecords = (async function* () {
-            for await (const record of records) yield record;
-            enumerationState.complete = true;
-          })();
-          try {
-            await recoverHistoricalBackgroundWorkHandoffs(
-              completionTrackedRecords,
-              async (record) => {
-                const jobs = workerValidatedRecoveryJobs(record);
-                if (jobs.length > 0) await this.backgroundWorkSupervisor!.enqueue(jobs);
-              },
-              (record) => this.sessionManager.deferBackgroundWorkHandoffRecovery(record),
-            );
-          } finally {
-            // Enqueue failures are indexed for bounded retry after complete
-            // enumeration. A stream/read failure leaves the flag false so the
-            // next supervisor tick retries the historical scan.
-            if (enumerationState.complete) this.backgroundWorkHandoffsRecovered = true;
-          }
-        }
-        await recoverPending();
-      })().catch((error: unknown) => {
-        if (error instanceof BackgroundWorkHandoffRetryCapacityError) {
-          // Stop archive enumeration while the bounded retry batch is full.
-          // Scheduler ticks drain only this batch until it clears; then one
-          // fresh snapshot recovers the untouched durable remainder.
-          this.backgroundWorkHandoffRecoveryCapacityBlocked = true;
-        }
-        if (error instanceof Error && error.name === 'TurnRecordRecoveryEvidenceError') {
-          // Deterministic physical evidence cannot heal on the next scheduler
-          // tick. Surface it once, retain every durable row, and retry only
-          // after an operator repair/restart instead of spawning a tight loop.
-          this.backgroundWorkHandoffRecoveryEvidenceBlocked = true;
-        }
-        throw error;
-      }).finally(() => {
-        this.backgroundWorkHandoffRecoveryPromise = null;
-        if (this.backgroundWorkHandoffRecoveryAbortController === recoveryAbortController) {
-          this.backgroundWorkHandoffRecoveryAbortController = null;
-        }
-      });
-    }
-    await this.backgroundWorkHandoffRecoveryPromise;
-  }
-
   async stopBackgroundWork(): Promise<void> {
-    this.abortBackgroundWorkRecovery();
+    this.backgroundWorkHandoffRecoveryRuntime.abort();
     await this.backgroundWorkSupervisor?.stop();
   }
 
@@ -1647,8 +1547,7 @@ export class SubstrateAgent {
    * has not yet installed its recovery AbortController.
    */
   abortBackgroundWorkRecovery(): void {
-    this.backgroundWorkHandoffRecoveryAbortRequested = true;
-    this.backgroundWorkHandoffRecoveryAbortController?.abort();
+    this.backgroundWorkHandoffRecoveryRuntime.abort();
   }
 
   /** Abort the expected request's prompt and report whether its signal was actually tripped. */

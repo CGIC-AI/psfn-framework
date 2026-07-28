@@ -4,7 +4,10 @@ import {
   recoverHistoricalBackgroundWorkHandoffs,
   runBackgroundWorkTick,
 } from './tick-runtime.js';
-import { BackgroundWorkHandoffRetryCapacityError } from '../../session/manager/background-work-handoff-recovery.js';
+import {
+  BackgroundWorkHandoffRetryCapacityError,
+  TurnRecordRecoveryEvidenceError,
+} from './recovery-contract.js';
 
 describe('recoverHistoricalBackgroundWorkHandoffs', () => {
   it('continues the one-time scan and indexes every failed enqueue', async () => {
@@ -78,8 +81,7 @@ describe('recoverHistoricalBackgroundWorkHandoffs', () => {
   });
 
   it('never transfers deterministic evidence poison into the transient retry index', async () => {
-    const poison = new Error('invalid handoff fingerprint');
-    poison.name = 'TurnRecordRecoveryEvidenceError';
+    const poison = new TurnRecordRecoveryEvidenceError('invalid handoff fingerprint');
     const defer = vi.fn();
 
     await expect(recoverHistoricalBackgroundWorkHandoffs(

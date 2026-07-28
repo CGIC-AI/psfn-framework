@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { Agent, type AgentTool } from '../../boundary/pi-agent/index.js';
-import type { CanonicalModelRegistry, LLMContext, LLMResponse, ModelRegistryEntry, ModelSlot, SubstrateMessage, TurnRecord } from '../../shared/contracts/runtime.js';
+import type { CanonicalModelRegistry, LLMContext, LLMResponse, ModelRegistryEntry, ModelSlot, SubstrateMessage } from '../../shared/contracts/runtime.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import type { MemoryProvider, MemoryExtractor, LLMProviderPort } from './substrate-agent.js';
 import { SubstrateAgent as RuntimeSubstrateAgent } from './substrate-agent.js';
@@ -58,7 +58,7 @@ import { lifecycleKubernetesSettingsFixture } from '../../test-support/lifecycle
 import { makeContextManifestFixture } from '../../test-support/context-manifest.js';
 import { buildCompletionNotice } from './completion-notices.js';
 import { buildCompletionHandoff } from './completion-handoff.js';
-import { BackgroundWorkHandoffRetryCapacityError } from '../session/manager/background-work-handoff-recovery.js';
+import { TurnRecordRecoveryEvidenceError } from './background-work/recovery-contract.js';
 
 class SubstrateAgent extends RuntimeSubstrateAgent {
   constructor(...args: ConstructorParameters<typeof RuntimeSubstrateAgent>) {
@@ -753,8 +753,9 @@ describe('SubstrateAgent construction', () => {
   });
 
   it('does not retry or defer deterministic recovery evidence poison', async () => {
-    const evidenceError = new Error('invalid historical handoff fingerprint');
-    evidenceError.name = 'TurnRecordRecoveryEvidenceError';
+    const evidenceError = new TurnRecordRecoveryEvidenceError(
+      'invalid historical handoff fingerprint',
+    );
     const sessionManager = makeMockSessionManager();
     const recoveryStream = vi.fn(() => (async function* () {
       throw evidenceError;

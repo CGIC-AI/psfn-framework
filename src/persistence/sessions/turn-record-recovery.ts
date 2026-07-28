@@ -8,6 +8,10 @@ import type {
   TurnRecordRecoveryScanOptions,
   TurnRecordRecoveryScanStats,
 } from './turn-record-store-port.js';
+import {
+  TURN_RECORD_RECOVERY_EVIDENCE_ERROR_NAME,
+  TurnRecordRecoveryEvidenceError,
+} from '../../core/agent/background-work/recovery-contract.js';
 
 interface RecoveryWorkerOptions {
   maxRowBytes: number;
@@ -27,7 +31,9 @@ function abortError(): Error {
 }
 
 function workerError(message: Extract<RecoveryWorkerMessage, { type: 'error' }>): Error {
-  const error = new Error(message.message);
+  const error = message.name === TURN_RECORD_RECOVERY_EVIDENCE_ERROR_NAME
+    ? new TurnRecordRecoveryEvidenceError(message.message)
+    : new Error(message.message);
   error.name = message.name;
   if (message.stack) error.stack = message.stack;
   return error;

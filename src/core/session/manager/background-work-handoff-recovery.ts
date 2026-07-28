@@ -1,22 +1,15 @@
 import type { TurnRecord } from '../../../shared/contracts/runtime.js';
 import type { SessionStore } from '../../../persistence/sessions/store.js';
-import { parseTurnRecordBackgroundWorkHandoff } from '../../agent/background-work/types.js';
-
-export const BACKGROUND_WORK_HANDOFF_RECOVERY_BATCH_SIZE = 32;
-
-export class BackgroundWorkHandoffRetryCapacityError extends Error {
-  readonly capacity: number;
-
-  constructor(capacity: number, options?: ErrorOptions) {
-    super(
-      `Background work handoff retry capacity ${String(capacity)} is exhausted; `
-      + 'remaining durable handoffs require a later restart/rescan',
-      options,
-    );
-    this.name = 'BackgroundWorkHandoffRetryCapacityError';
-    this.capacity = capacity;
-  }
-}
+import {
+  parseTurnRecordBackgroundWorkHandoff,
+  parseWorkerValidatedTurnRecordBackgroundWorkHandoffProjection,
+} from '../../agent/background-work/types.js';
+import {
+  BACKGROUND_WORK_HANDOFF_RECOVERY_BATCH_SIZE,
+  BackgroundWorkHandoffRetryCapacityError,
+  TurnRecordRecoveryEvidenceError,
+  isTurnRecordRecoveryEvidenceError,
+} from '../../agent/background-work/recovery-contract.js';
 
 interface PendingBackgroundWorkHandoffReference {
   sourceChannelId: string;
@@ -48,12 +41,26 @@ export class BackgroundWorkHandoffRecovery {
   }
 
   defer(record: TurnRecord): void {
-    if (record.status !== 'completed' || !record.backgroundWorkHandoff) {
-      throw recoveryEvidenceError(
-        'Only completed TurnRecords with background work can be deferred for recovery',
-      );
-    }
-    assertValidRecoveryHandoff(record);
+    assertValidRecoveryHandoff(record, parseTurnRecordBackgroundWorkHandoff);
+    this.indexReference(record);
+  }
+
+  /**
+   * Index the content-free projection emitted only after the isolated startup
+   * worker validated its full source row. The projection parser re-proves all
+   * bindings that survive IPC without trying to hash content that was
+   * deliberately stripped before transfer.
+   */
+  deferWorkerValidatedProjection(record: TurnRecord): void {
+    assertContentFreeRecoveryProjection(record);
+    assertValidRecoveryHandoff(
+      record,
+      parseWorkerValidatedTurnRecordBackgroundWorkHandoffProjection,
+    );
+    this.indexReference(record);
+  }
+
+  private indexReference(record: TurnRecord): void {
     const reference = {
       sourceChannelId: record.channelId,
       logicalSessionId: record.sessionId ?? record.channelId,
@@ -116,7 +123,7 @@ export class BackgroundWorkHandoffRecovery {
               return false;
             }
             try {
-              assertValidRecoveryHandoff(current);
+              assertValidRecoveryHandoff(current, parseTurnRecordBackgroundWorkHandoff);
             } catch (error) {
               this.pending.delete(key);
               throw error;
@@ -130,7 +137,7 @@ export class BackgroundWorkHandoffRecovery {
         if (accepted) recovered += 1;
       } catch (error) {
         errors.push(error);
-        if (!isRecoveryEvidenceError(error) && this.pending.delete(key)) {
+        if (!isTurnRecordRecoveryEvidenceError(error) && this.pending.delete(key)) {
           this.pending.set(key, reference);
         }
       }
@@ -147,9 +154,17 @@ function referenceKey(reference: PendingBackgroundWorkHandoffReference): string 
   return `${reference.sourceChannelId}\u0000${reference.logicalSessionId}\u0000${reference.turnId}`;
 }
 
-function assertValidRecoveryHandoff(record: TurnRecord): void {
+function assertValidRecoveryHandoff(
+  record: TurnRecord,
+  parse: (candidate: TurnRecord) => unknown,
+): void {
+  if (record.status !== 'completed' || !record.backgroundWorkHandoff) {
+    throw recoveryEvidenceError(
+      'Only completed TurnRecords with background work can be deferred for recovery',
+    );
+  }
   try {
-    parseTurnRecordBackgroundWorkHandoff(record);
+    parse(record);
   } catch (error) {
     throw recoveryEvidenceError(
       `TurnRecord background work handoff is not safe to index for retry: ${
@@ -160,12 +175,23 @@ function assertValidRecoveryHandoff(record: TurnRecord): void {
   }
 }
 
-function recoveryEvidenceError(message: string, cause?: unknown): Error {
-  const error = new Error(message, cause === undefined ? undefined : { cause });
-  error.name = 'TurnRecordRecoveryEvidenceError';
-  return error;
+function assertContentFreeRecoveryProjection(record: TurnRecord): void {
+  if (record.userMessage.content !== ''
+    || record.assistantMessage !== undefined
+    || record.toolCalls.length !== 0
+    || record.extractedMemoryIds.length !== 0
+    || record.concernDeltaRefs.length !== 0
+    || record.contactDeltaRefs.length !== 0
+    || record.provenanceRefs.length !== 0) {
+    throw recoveryEvidenceError(
+      'Worker-validated TurnRecord recovery projection contains forbidden old-fat content',
+    );
+  }
 }
 
-function isRecoveryEvidenceError(error: unknown): boolean {
-  return error instanceof Error && error.name === 'TurnRecordRecoveryEvidenceError';
+function recoveryEvidenceError(message: string, cause?: unknown): Error {
+  return new TurnRecordRecoveryEvidenceError(
+    message,
+    cause === undefined ? undefined : { cause },
+  );
 }

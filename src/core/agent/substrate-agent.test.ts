@@ -440,7 +440,7 @@ function makeMockSessionManager(): SessionManager {
     hasRecordedTurn: vi.fn().mockReturnValue(false),
     findRecordedTurn: vi.fn().mockReturnValue(null),
     findSourceRecordedTurn: vi.fn().mockReturnValue(null),
-    findUniqueSourceRecordedTurn: vi.fn().mockReturnValue(null),
+    findUniqueSourceRecordedTurn: vi.fn().mockResolvedValue(null),
     appendSystemNote: vi.fn(),
     awaitPendingAutoCompaction: vi.fn().mockResolvedValue(undefined),
     hasPendingAutoCompaction: vi.fn(() => false),

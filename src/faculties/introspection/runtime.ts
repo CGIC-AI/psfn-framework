@@ -90,14 +90,14 @@ function assertConsentStillActive(
   }
 }
 
-function assertAuditStillAuthorized(
+async function assertAuditStillAuthorized(
   consentStore: Pick<IntrospectionConsentStore, 'load'>,
   baseline: IntrospectionConsentRevision,
   source: IntrospectionAuditSourcePort,
   candidate: IntrospectionAuditCandidate,
-): void {
+): Promise<void> {
   assertConsentStillActive(consentStore, baseline, candidate.channelId);
-  if (!source.isCandidateStillEligible(candidate)) {
+  if (!await source.isCandidateStillEligible(candidate)) {
     throw new IntrospectionSourceChangedDuringAuditError();
   }
 }
@@ -143,11 +143,11 @@ export class IntrospectionAuditRuntime {
     for (const candidate of candidates) {
       if (audited >= config.maxCandidatesPerRun) break;
       if (await this.options.persistence.hasAuditedSource(candidate.sourceRef)) continue;
-      assertAuditStillAuthorized(this.options.consentStore, consent, this.options.source, candidate);
+      await assertAuditStillAuthorized(this.options.consentStore, consent, this.options.source, candidate);
       const estimate = await this.options.auditor.estimateStableReply(candidate);
-      assertAuditStillAuthorized(this.options.consentStore, consent, this.options.source, candidate);
+      await assertAuditStillAuthorized(this.options.consentStore, consent, this.options.source, candidate);
       const comparison = await this.options.auditor.compareReplies(candidate, estimate.stableReply);
-      assertAuditStillAuthorized(this.options.consentStore, consent, this.options.source, candidate);
+      await assertAuditStillAuthorized(this.options.consentStore, consent, this.options.source, candidate);
       audited += 1;
       const createdAt = (this.options.now?.() ?? new Date()).toISOString();
       const provenance = {
@@ -156,7 +156,7 @@ export class IntrospectionAuditRuntime {
         consentActor: consent.actor,
       };
       if (!comparison.diverged) {
-        assertAuditStillAuthorized(this.options.consentStore, consent, this.options.source, candidate);
+        await assertAuditStillAuthorized(this.options.consentStore, consent, this.options.source, candidate);
         await this.options.persistence.appendAuditDecision({
           sourceRef: candidate.sourceRef,
           outcome: 'no_divergence',
@@ -169,7 +169,7 @@ export class IntrospectionAuditRuntime {
         continue;
       }
       if (comparison.confidence < config.minConfidence) {
-        assertAuditStillAuthorized(this.options.consentStore, consent, this.options.source, candidate);
+        await assertAuditStillAuthorized(this.options.consentStore, consent, this.options.source, candidate);
         await this.options.persistence.appendAuditDecision({
           sourceRef: candidate.sourceRef,
           outcome: 'below_confidence',
@@ -189,13 +189,13 @@ export class IntrospectionAuditRuntime {
         candidate.actualReply,
         estimate.stableReply,
       ]);
-      assertAuditStillAuthorized(this.options.consentStore, consent, this.options.source, candidate);
+      await assertAuditStillAuthorized(this.options.consentStore, consent, this.options.source, candidate);
       const reflection = await this.options.reflector.reflect({
         divergenceType: comparison.type,
         observation: comparison.observation,
         confidence: comparison.confidence,
       });
-      assertAuditStillAuthorized(this.options.consentStore, consent, this.options.source, candidate);
+      await assertAuditStillAuthorized(this.options.consentStore, consent, this.options.source, candidate);
       await this.options.persistence.appendLandmark({
         id: landmarkId(candidate.sourceRef, consent.hash),
         sourceRef: candidate.sourceRef,

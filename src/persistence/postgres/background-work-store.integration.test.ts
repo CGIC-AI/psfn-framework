@@ -1715,7 +1715,7 @@ describe('PostgresBackgroundWorkStore', () => {
       logicalSessionId: record.sessionId!,
       turnId: record.turnId,
     }, async () => {
-      if (!reader.isSourceTurnRecordEligible(
+      if (!await reader.isSourceTurnRecordEligible(
         record.channelId,
         record.sessionId!,
         record.turnId,

@@ -26,7 +26,7 @@ export interface IntrospectionTurnRecordReader {
     sourceChannelId: string,
     ownerSessionId: string,
     turnId: string,
-  ): boolean;
+  ): boolean | Promise<boolean>;
 }
 
 function toCandidate(
@@ -128,13 +128,13 @@ export function createTurnRecordIntrospectionSource(
           all.findIndex(entry => entry.sourceRef === candidate.sourceRef) === index
         ));
     },
-    isCandidateStillEligible: candidate => (
-      !reader.isSessionRetiredOrQuarantined(candidate.ownerSessionId)
-      && reader.isSourceTurnRecordEligible(
+    isCandidateStillEligible: async (candidate) => {
+      if (reader.isSessionRetiredOrQuarantined(candidate.ownerSessionId)) return false;
+      return await reader.isSourceTurnRecordEligible(
         candidate.channelId,
         candidate.ownerSessionId,
         candidate.turnId,
-      )
-    ),
+      );
+    },
   };
 }

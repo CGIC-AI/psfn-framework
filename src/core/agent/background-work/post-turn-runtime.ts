@@ -29,8 +29,7 @@ const SOURCE_RECORD_GRACE_MS = 60_000;
 export type PostTurnBackgroundSessionManager = Pick<
   SessionManager,
   | 'createCapturedSessionReads'
-  | 'isSourceRecordedTurnEligible'
-  | 'findSourceRecordedTurn'
+  | 'lookupSourceRecordedTurnEligibility'
   | 'withStableRecordedTurnEligibilitySnapshot'
   | 'withSourceRecordedTurnEligibilityFence'
 >;
@@ -61,30 +60,27 @@ type AdmittedPostTurnBackgroundRuntimeDependencies = Omit<
   sessionManager: AdmittedPostTurnBackgroundSessionManager;
 };
 
-function requireCanonicalTurnRecord(
+async function requireCanonicalTurnRecord(
   source: BackgroundWorkSourceRef,
   jobCreatedAtMs: number,
   dependencies: AdmittedPostTurnBackgroundRuntimeDependencies,
-): TurnRecord {
-  if (!dependencies.sessionManager.isSourceRecordedTurnEligible(
-    source.channelId,
-    source.logicalSessionId,
-    source.turnId,
-  )) {
-    throw new BackgroundWorkPermanentError('source_missing');
-  }
-  const record = dependencies.sessionManager.findSourceRecordedTurn(
+): Promise<TurnRecord> {
+  const eligibility = await dependencies.sessionManager.lookupSourceRecordedTurnEligibility(
     source.channelId,
     source.logicalSessionId,
     source.turnId,
   );
-  if (!record) {
+  if (eligibility.kind === 'missing') {
     const nowMs = (dependencies.now ?? Date.now)();
     if (nowMs - jobCreatedAtMs < SOURCE_RECORD_GRACE_MS) {
       throw new BackgroundWorkDeferredError('source_not_ready', 250);
     }
     throw new BackgroundWorkPermanentError('source_missing');
   }
+  if (eligibility.kind === 'ineligible') {
+    throw new BackgroundWorkPermanentError('source_missing');
+  }
+  const record = eligibility.record;
   if ((record.sessionId ?? record.channelId) !== source.logicalSessionId
     || record.channelId !== source.channelId
     || record.requestId !== source.requestId
@@ -264,7 +260,7 @@ async function runPostTurnBackgroundWork(
       ),
       async (recentEntries) => {
         await input.effects.assertOwned();
-        const record = requireCanonicalTurnRecord(payload.source, job.createdAtMs, dependencies);
+        const record = await requireCanonicalTurnRecord(payload.source, job.createdAtMs, dependencies);
         requireSourceSessionEntry(recentEntries, maxSessionEntryId);
         try {
           await input.effects.run('memory-extraction', async (crossBoundary) => {
@@ -332,7 +328,7 @@ async function runPostTurnBackgroundWork(
       ),
       async (recentEntries) => {
         await input.effects.assertOwned();
-        const record = requireCanonicalTurnRecord(payload.source, job.createdAtMs, dependencies);
+        const record = await requireCanonicalTurnRecord(payload.source, job.createdAtMs, dependencies);
         requireSourceSessionEntry(recentEntries, maxSessionEntryId);
         if (record.internalStateSnapshotRef !== payload.internalStateSnapshotRef) {
           throw new BackgroundWorkPermanentError('source_mismatch');
@@ -372,7 +368,7 @@ async function runPostTurnBackgroundWork(
       () => sessionReads.captureAutoCompactionRecentEntries(captureParams),
       async (recentEntries) => {
         await input.effects.assertOwned();
-        requireCanonicalTurnRecord(payload.source, job.createdAtMs, dependencies);
+        await requireCanonicalTurnRecord(payload.source, job.createdAtMs, dependencies);
         requireSourceSessionEntry(recentEntries, maxSessionEntryId);
         await input.effects.run('auto-compaction', async (assertOwned) => {
           await sessionReads.scheduleAutoCompactionBetweenTurns({
@@ -402,7 +398,7 @@ async function runPostTurnBackgroundWork(
       // TurnRecord writers. Queue ownership and canonical eligibility are both
       // proved only after it is held, and raw content never leaves its scope.
       await input.effects.assertOwned();
-      const record = requireCanonicalTurnRecord(payload.source, job.createdAtMs, dependencies);
+      const record = await requireCanonicalTurnRecord(payload.source, job.createdAtMs, dependencies);
       // Source-only audit: the sole production hook records a behavioral
       // pattern from this canonical message/response pair; it does not read a
       // session window. Keep it on the one-source fence unless that hook

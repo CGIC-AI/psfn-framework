@@ -9,8 +9,7 @@ interface PendingBackgroundWorkHandoffReference {
 
 type BackgroundWorkHandoffRecoveryStore = Pick<
   SessionStore,
-  | 'findSourceTurnRecord'
-  | 'isSourceTurnRecordEligible'
+  | 'findEligibleSourceTurnRecord'
   | 'withSourceTurnRecordEligibilityFence'
 >;
 
@@ -66,18 +65,13 @@ export class BackgroundWorkHandoffRecovery {
           reference.turnId,
           async () => {
             if (!this.pending.has(key)) return false;
-            const current = this.store.findSourceTurnRecord(
+            const current = await this.store.findEligibleSourceTurnRecord(
               reference.sourceChannelId,
               reference.logicalSessionId,
               reference.turnId,
             );
             if (current?.status !== 'completed'
-              || !current.backgroundWorkHandoff
-              || !this.store.isSourceTurnRecordEligible(
-                reference.sourceChannelId,
-                reference.logicalSessionId,
-                reference.turnId,
-              )) {
+              || !current.backgroundWorkHandoff) {
               this.pending.delete(key);
               return false;
             }

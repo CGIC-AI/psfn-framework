@@ -11,7 +11,10 @@ import {
   type CapturedSessionReadOperations,
 } from '../../session/manager/captured-session-owner.js';
 import type { TurnRecord } from '../../../shared/contracts/runtime.js';
-import { SessionStore } from '../../../persistence/sessions/store.js';
+import {
+  SessionStore,
+  type SourceTurnRecordEligibility,
+} from '../../../persistence/sessions/store.js';
 import type { SubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
 import type { SessionEntry } from '../../session/types.js';
 import { buildSessionMetadataWithIcpCorrelation } from '../../session/icp-correlation-metadata.js';
@@ -234,8 +237,11 @@ function makeDependencies(input: {
   boundedSnapshotLimit?: number;
   tuning?: BackgroundWorkPostTurnTuning;
 }) {
-  const findSourceRecordedTurn = vi.fn(() => input.record);
-  const isSourceRecordedTurnEligible = vi.fn(() => true);
+  const lookupSourceRecordedTurnEligibility = vi.fn(async (): Promise<SourceTurnRecordEligibility> => (
+    input.record
+      ? { kind: 'eligible' as const, record: input.record }
+      : { kind: 'missing' as const }
+  ));
   const maybeExtract = input.maybeExtract ?? vi.fn(async () => undefined);
   const triggerEmotionAppraisal = vi.fn(async () => undefined);
   const runIntentionPostTurnHooks = input.runIntentionPostTurnHooks
@@ -304,8 +310,7 @@ function makeDependencies(input: {
   ));
   const backgroundSessionManager = {
     createCapturedSessionReads,
-    findSourceRecordedTurn,
-    isSourceRecordedTurnEligible,
+    lookupSourceRecordedTurnEligibility,
     withSourceRecordedTurnEligibilityFence,
     withStableRecordedTurnEligibilitySnapshot,
   } satisfies PostTurnBackgroundRuntimeDependencies['sessionManager'];
@@ -323,8 +328,7 @@ function makeDependencies(input: {
       tuning: input.tuning ?? TEST_POST_TURN_TUNING,
       now: () => input.now ?? 100,
     },
-    findSourceRecordedTurn,
-    isSourceRecordedTurnEligible,
+    lookupSourceRecordedTurnEligibility,
     withSourceRecordedTurnEligibilityFence,
     getRecentMessagesAtOrBefore,
     withStableRecordedTurnEligibilitySnapshot,
@@ -788,8 +792,9 @@ describe('executePostTurnBackgroundWork', () => {
       execution,
       fixture.dependencies,
     ).finally(() => { postTurnCompleted = true; });
-    await Promise.resolve();
-    expect(execution.effects.run).toHaveBeenCalledOnce();
+    await vi.waitFor(() => {
+      expect(execution.effects.run).toHaveBeenCalledOnce();
+    });
 
     releaseGroup.resolve();
     const afterGroup = await Promise.race([
@@ -911,8 +916,9 @@ describe('executePostTurnBackgroundWork', () => {
     await groupStarted.promise;
 
     const postTurnPromise = executePostTurnBackgroundWork(execution, fixture.dependencies);
-    await Promise.resolve();
-    expect(execution.effects.run).toHaveBeenCalledOnce();
+    await vi.waitFor(() => {
+      expect(execution.effects.run).toHaveBeenCalledOnce();
+    });
 
     // Graceful shutdown flips acceptance before B's chained run starts.
     const stopping = extractor.stop({ timeoutMs: 5_000 });
@@ -955,7 +961,7 @@ describe('executePostTurnBackgroundWork', () => {
 
     await executePostTurnBackgroundWork(execution, fixture.dependencies);
 
-    expect(fixture.findSourceRecordedTurn).toHaveBeenCalledWith(
+    expect(fixture.lookupSourceRecordedTurnEligibility).toHaveBeenCalledWith(
       record.channelId,
       record.sessionId,
       record.turnId,
@@ -1199,7 +1205,7 @@ describe('executePostTurnBackgroundWork', () => {
     const record = makeTurnRecord();
     const execution = makeExecution(record);
     const fixture = makeDependencies({ record });
-    fixture.isSourceRecordedTurnEligible.mockReturnValue(false);
+    fixture.lookupSourceRecordedTurnEligibility.mockResolvedValue({ kind: 'ineligible' });
 
     await expect(executePostTurnBackgroundWork(execution, fixture.dependencies))
       .rejects.toEqual(expect.objectContaining<Partial<BackgroundWorkPermanentError>>({
@@ -1207,7 +1213,7 @@ describe('executePostTurnBackgroundWork', () => {
         reasonCode: 'source_missing',
       }));
 
-    expect(fixture.findSourceRecordedTurn).not.toHaveBeenCalled();
+    expect(fixture.lookupSourceRecordedTurnEligibility).toHaveBeenCalledOnce();
     expect(fixture.maybeExtract).not.toHaveBeenCalled();
   });
 
@@ -1237,7 +1243,7 @@ describe('executePostTurnBackgroundWork', () => {
         persistedResponses.push(context.response.content);
       }),
       beforeSourceEligibilityFence: () => {
-        fixture.isSourceRecordedTurnEligible.mockReturnValue(false);
+        fixture.lookupSourceRecordedTurnEligibility.mockResolvedValue({ kind: 'ineligible' });
       },
     });
 

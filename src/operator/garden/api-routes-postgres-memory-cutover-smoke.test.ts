@@ -900,7 +900,7 @@ function makeServices(): GardenAdminDomainServices {
       getContactDetail: async () => null,
       updateContact: async () => ({ ok: true, message: 'not used' }),
       createContact: async () => ({ ok: true, message: 'not used' }),
-      deleteContact: async () => ({ ok: true, message: 'not used' }),
+      archiveContact: async () => ({ ok: true, message: 'not used' }),
       mergeContacts: async () => ({ ok: true, message: 'not used' }),
       unlinkChannelIdentity: async () => ({ ok: true, message: 'not used' }),
       deleteConversationChannel: async () => ({ ok: true, message: 'not used' }),

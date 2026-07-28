@@ -706,6 +706,14 @@ export const POSTGRES_CONTACT_MIGRATIONS = [
   `ALTER TABLE contacts ADD COLUMN IF NOT EXISTS gender TEXT;`,
   `ALTER TABLE contacts ADD COLUMN IF NOT EXISTS pronouns TEXT;`,
   `ALTER TABLE contacts ADD COLUMN IF NOT EXISTS age INTEGER;`,
+  // bead psfn-framework-qgqw.1: contacts are archived, never deleted
+  // (adjudication R10.3). An archived contact's row, memories, audit, and
+  // snapshotted privacy links persist as grayed-out history; its live channel
+  // identities are released so a recreated/reused platform id mints a NEW
+  // contact rather than resurrecting the archived person. `archived_at` NULL =
+  // live; ISO timestamp = archived. Additive, nullable, backward-safe.
+  `ALTER TABLE contacts ADD COLUMN IF NOT EXISTS archived_at TEXT;`,
+  `CREATE INDEX IF NOT EXISTS idx_contacts_archived_at ON contacts(archived_at);`,
   `CREATE INDEX IF NOT EXISTS idx_contacts_trust ON contacts(trust_level);`,
   `CREATE INDEX IF NOT EXISTS idx_contacts_discord ON contacts(discord_user_id);`,
   `

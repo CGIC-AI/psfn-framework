@@ -1,21 +1,25 @@
 import {
   closeSync,
-  createReadStream,
   fstatSync,
   openSync,
+  read,
 } from 'node:fs';
-import { createInterface } from 'node:readline';
 import { backfillLegacyTurnId, parseTurnId } from '../../core/turns/id.js';
 import type { TurnRecord } from '../../shared/contracts/runtime.js';
 import { isRecord } from '../../shared/utils/types.js';
 import { fileIdentityKey } from '../jsonl-segments.js';
 import type { TurnRecordIdentityLookup } from './turn-record-store-port.js';
 
-const LOOKUP_YIELD_RECORDS = 8;
+const LOOKUP_READ_CHUNK_BYTES = 64 * 1024;
+const IDENTITY_TOKEN_BYTES = 512;
+const WANTED_FIELDS = new Set(['turnId', 'requestId', 'startedAt', 'completedAt']);
 
 export interface TurnRecordIdentityLookupStats {
   linesScanned: number;
   recordsNormalized: number;
+  bytesRead: number;
+  maxReadChunkBytes: number;
+  cacheHits: number;
 }
 
 export interface TurnRecordIdentitySnapshotOptions {
@@ -24,7 +28,7 @@ export interface TurnRecordIdentitySnapshotOptions {
   turnId: string;
   listRotatedPaths: () => string[];
   normalizeMatch: (raw: unknown) => TurnRecord;
-  onMalformedLine: (path: string, line: string, error: unknown) => void;
+  onMalformedLine: (path: string, rawLength: number, error: unknown) => void;
   stats?: TurnRecordIdentityLookupStats;
 }
 
@@ -35,102 +39,249 @@ interface IdentityFields {
   completedAt?: unknown;
 }
 
-function skipWhitespace(text: string, from: number): number {
-  let cursor = from;
-  while (cursor < text.length && /\s/u.test(text[cursor]!)) cursor += 1;
-  return cursor;
+interface IdentityProjection {
+  fields: IdentityFields;
+  error?: Error;
 }
 
-function stringTokenEnd(text: string, from: number): number {
-  if (text[from] !== '"') throw new Error('Expected a JSON string');
-  let escaped = false;
-  for (let cursor = from + 1; cursor < text.length; cursor += 1) {
-    const character = text[cursor]!;
-    if (escaped) {
-      escaped = false;
-      continue;
-    }
-    if (character === '\\') {
-      escaped = true;
-      continue;
-    }
-    if (character === '"') return cursor + 1;
-  }
-  throw new Error('Unterminated JSON string');
-}
+type ProjectionState =
+  | 'start'
+  | 'key-or-end'
+  | 'key'
+  | 'colon'
+  | 'value'
+  | 'string-value'
+  | 'composite-value'
+  | 'primitive-value'
+  | 'comma-or-end'
+  | 'done';
 
-function compositeTokenEnd(text: string, from: number): number {
-  const opening = text[from]!;
-  const expectedClosers = [opening === '{' ? '}' : ']'];
-  let cursor = from + 1;
-  while (cursor < text.length && expectedClosers.length > 0) {
-    const character = text[cursor]!;
-    if (character === '"') {
-      cursor = stringTokenEnd(text, cursor);
-      continue;
-    }
-    if (character === '{') expectedClosers.push('}');
-    else if (character === '[') expectedClosers.push(']');
-    else if (character === '}' || character === ']') {
-      if (expectedClosers.pop() !== character) {
-        throw new Error('Mismatched JSON composite delimiter');
-      }
-    }
-    cursor += 1;
-  }
-  if (expectedClosers.length > 0) throw new Error('Unterminated JSON composite');
-  return cursor;
-}
-
-function valueTokenEnd(text: string, from: number): number {
-  const cursor = skipWhitespace(text, from);
-  const character = text[cursor];
-  if (character === '"') return stringTokenEnd(text, cursor);
-  if (character === '{' || character === '[') return compositeTokenEnd(text, cursor);
-  let end = cursor;
-  while (end < text.length && text[end] !== ',' && text[end] !== '}') end += 1;
-  if (end === cursor) throw new Error('Missing JSON value');
-  return end;
+function isWhitespace(byte: number): boolean {
+  return byte === 0x20 || byte === 0x09 || byte === 0x0d;
 }
 
 /**
- * Reads four scalar identity fields while skipping nested message/tool bodies
- * byte-for-byte. Matching rows still go through the canonical full normalizer;
- * unrelated rows never materialize their content trees.
+ * Extracts only the four small top-level identity scalars. Large message and
+ * tool bodies pass through one byte at a time and are never accumulated.
+ * Matching rows are subsequently read and normalized in full.
  */
-function readIdentityFields(line: string): IdentityFields {
-  const fields: IdentityFields = {};
-  let cursor = skipWhitespace(line, 0);
-  if (line[cursor] !== '{') throw new Error('TurnRecord entry must be a JSON object');
-  cursor = skipWhitespace(line, cursor + 1);
-  while (cursor < line.length && line[cursor] !== '}') {
-    const keyEnd = stringTokenEnd(line, cursor);
-    const key = JSON.parse(line.slice(cursor, keyEnd)) as unknown;
-    if (typeof key !== 'string') throw new Error('TurnRecord field name must be a string');
-    cursor = skipWhitespace(line, keyEnd);
-    if (line[cursor] !== ':') throw new Error('TurnRecord field is missing its colon');
-    const valueStart = skipWhitespace(line, cursor + 1);
-    const valueEnd = valueTokenEnd(line, valueStart);
-    if (
-      key === 'turnId'
-      || key === 'requestId'
-      || key === 'startedAt'
-      || key === 'completedAt'
-    ) {
-      fields[key] = JSON.parse(line.slice(valueStart, valueEnd)) as unknown;
+class StreamingIdentityProjector {
+  private state: ProjectionState = 'start';
+  private readonly fields: IdentityFields = {};
+  private firstError: Error | undefined;
+  private token: number[] = [];
+  private tokenOverflow = false;
+  private escaped = false;
+  private currentKey: string | null = null;
+  private capturingValue = false;
+  private readonly compositeClosers: number[] = [];
+  private compositeString = false;
+  private compositeEscaped = false;
+
+  push(byte: number): void {
+    switch (this.state) {
+      case 'start':
+        if (isWhitespace(byte)) return;
+        if (byte !== 0x7b) {
+          this.fail('TurnRecord entry must be a JSON object');
+          return;
+        }
+        this.state = 'key-or-end';
+        return;
+      case 'key-or-end':
+        if (isWhitespace(byte)) return;
+        if (byte === 0x7d) {
+          this.state = 'done';
+          return;
+        }
+        if (byte !== 0x22) {
+          this.fail('TurnRecord field name must be a string');
+          return;
+        }
+        this.beginToken(byte);
+        this.escaped = false;
+        this.state = 'key';
+        return;
+      case 'key':
+        this.captureToken(byte);
+        if (this.escaped) {
+          this.escaped = false;
+          return;
+        }
+        if (byte === 0x5c) {
+          this.escaped = true;
+          return;
+        }
+        if (byte === 0x22) {
+          this.currentKey = this.parseToken('TurnRecord field name') as string | null;
+          this.state = 'colon';
+        }
+        return;
+      case 'colon':
+        if (isWhitespace(byte)) return;
+        if (byte !== 0x3a) {
+          this.fail('TurnRecord field is missing its colon');
+          return;
+        }
+        this.state = 'value';
+        return;
+      case 'value':
+        if (isWhitespace(byte)) return;
+        if (byte === 0x22) {
+          this.beginValueToken(byte);
+          this.escaped = false;
+          this.state = 'string-value';
+          return;
+        }
+        if (byte === 0x7b || byte === 0x5b) {
+          this.compositeClosers.push(byte === 0x7b ? 0x7d : 0x5d);
+          this.compositeString = false;
+          this.compositeEscaped = false;
+          this.state = 'composite-value';
+          return;
+        }
+        if (byte === 0x2c || byte === 0x7d) {
+          this.fail('Missing JSON value');
+          this.finishValueDelimiter(byte);
+          return;
+        }
+        this.beginValueToken(byte);
+        this.state = 'primitive-value';
+        return;
+      case 'string-value':
+        if (this.capturingValue) this.captureToken(byte);
+        if (this.escaped) {
+          this.escaped = false;
+          return;
+        }
+        if (byte === 0x5c) {
+          this.escaped = true;
+          return;
+        }
+        if (byte === 0x22) {
+          this.assignCurrentField(this.parseValueToken());
+          this.state = 'comma-or-end';
+        }
+        return;
+      case 'composite-value':
+        this.pushComposite(byte);
+        return;
+      case 'primitive-value':
+        if (byte === 0x2c || byte === 0x7d) {
+          this.assignCurrentField(this.parseValueToken());
+          this.finishValueDelimiter(byte);
+          return;
+        }
+        if (this.capturingValue) this.captureToken(byte);
+        return;
+      case 'comma-or-end':
+        if (isWhitespace(byte)) return;
+        if (byte === 0x2c || byte === 0x7d) {
+          this.finishValueDelimiter(byte);
+          return;
+        }
+        this.fail('TurnRecord fields must be comma separated');
+        return;
+      case 'done':
+        if (!isWhitespace(byte)) this.fail('Unexpected bytes after TurnRecord JSON object');
     }
-    cursor = skipWhitespace(line, valueEnd);
-    if (line[cursor] === ',') {
-      cursor = skipWhitespace(line, cursor + 1);
-      continue;
+  }
+
+  finish(): IdentityProjection {
+    if (this.state !== 'done' && !this.firstError) {
+      this.fail('Unterminated TurnRecord JSON object');
     }
-    if (line[cursor] !== '}') throw new Error('TurnRecord fields must be comma separated');
+    return {
+      fields: this.fields,
+      ...(this.firstError ? { error: this.firstError } : {}),
+    };
   }
-  if (line[cursor] !== '}') throw new Error('Unterminated TurnRecord JSON object');
-  if (skipWhitespace(line, cursor + 1) !== line.length) {
-    throw new Error('Unexpected bytes after TurnRecord JSON object');
+
+  private pushComposite(byte: number): void {
+    if (this.compositeString) {
+      if (this.compositeEscaped) {
+        this.compositeEscaped = false;
+      } else if (byte === 0x5c) {
+        this.compositeEscaped = true;
+      } else if (byte === 0x22) {
+        this.compositeString = false;
+      }
+      return;
+    }
+    if (byte === 0x22) {
+      this.compositeString = true;
+      return;
+    }
+    if (byte === 0x7b || byte === 0x5b) {
+      this.compositeClosers.push(byte === 0x7b ? 0x7d : 0x5d);
+      return;
+    }
+    if (byte !== 0x7d && byte !== 0x5d) return;
+    if (this.compositeClosers.pop() !== byte) {
+      this.fail('Mismatched JSON composite delimiter');
+      return;
+    }
+    if (this.compositeClosers.length === 0) {
+      this.assignCurrentField(undefined);
+      this.state = 'comma-or-end';
+    }
   }
-  return fields;
+
+  private finishValueDelimiter(byte: number): void {
+    this.currentKey = null;
+    this.state = byte === 0x2c ? 'key-or-end' : 'done';
+  }
+
+  private beginToken(byte: number): void {
+    this.token = [];
+    this.tokenOverflow = false;
+    this.captureToken(byte);
+  }
+
+  private beginValueToken(byte: number): void {
+    this.capturingValue = this.currentKey !== null && WANTED_FIELDS.has(this.currentKey);
+    if (this.capturingValue) this.beginToken(byte);
+  }
+
+  private parseValueToken(): unknown {
+    return this.capturingValue
+      ? this.parseToken('TurnRecord identity value')
+      : undefined;
+  }
+
+  private captureToken(byte: number): void {
+    if (this.tokenOverflow) return;
+    if (this.token.length >= IDENTITY_TOKEN_BYTES) {
+      this.tokenOverflow = true;
+      this.token = [];
+      return;
+    }
+    this.token.push(byte);
+  }
+
+  private parseToken(label: string): unknown {
+    if (this.tokenOverflow) {
+      this.fail(`${label} exceeds the bounded identity token limit`);
+      return undefined;
+    }
+    try {
+      return JSON.parse(Buffer.from(this.token).toString('utf8')) as unknown;
+    } catch {
+      this.fail(`${label} is malformed JSON`);
+      return undefined;
+    }
+  }
+
+  private assignCurrentField(value: unknown): void {
+    if (this.currentKey && WANTED_FIELDS.has(this.currentKey)) {
+      this.fields[this.currentKey as keyof IdentityFields] = value;
+    }
+    this.capturingValue = false;
+  }
+
+  private fail(message: string): void {
+    this.firstError ??= new Error(message);
+  }
 }
 
 function requiredString(value: unknown, fieldName: string): string {
@@ -147,8 +298,7 @@ function requiredTimestamp(value: unknown, fieldName: string): number {
   return Math.floor(value);
 }
 
-function projectTurnId(line: string, channelId: string): string {
-  const fields = readIdentityFields(line);
+function projectTurnId(fields: IdentityFields, channelId: string): string {
   const parsed = parseTurnId(fields.turnId, 'turnId');
   if (parsed) return parsed;
   const requestId = requiredString(fields.requestId, 'requestId');
@@ -184,13 +334,133 @@ function openSnapshot(path: string, missingIsAllowed: boolean): OpenSnapshot | n
   }
 }
 
+function readChunk(fd: number, buffer: Buffer, position: number): Promise<number> {
+  return new Promise((resolve, reject) => {
+    read(fd, buffer, 0, buffer.length, position, (error, bytesRead) => {
+      if (error) reject(error);
+      else resolve(bytesRead);
+    });
+  });
+}
+
+async function readLine(
+  fd: number,
+  start: number,
+  end: number,
+  stats?: TurnRecordIdentityLookupStats,
+): Promise<string> {
+  const buffers: Buffer[] = [];
+  let position = start;
+  while (position < end) {
+    const buffer = Buffer.allocUnsafe(Math.min(LOOKUP_READ_CHUNK_BYTES, end - position));
+    const bytesRead = await readChunk(fd, buffer, position);
+    if (bytesRead === 0) throw new Error('TurnRecord snapshot ended before the matching row');
+    buffers.push(buffer.subarray(0, bytesRead));
+    position += bytesRead;
+    if (stats) {
+      stats.bytesRead += bytesRead;
+      stats.maxReadChunkBytes = Math.max(stats.maxReadChunkBytes, bytesRead);
+    }
+  }
+  return Buffer.concat(buffers).toString('utf8').trim();
+}
+
+interface ScanResult {
+  record: TurnRecord | null;
+  ambiguous: boolean;
+}
+
+async function scanSnapshot(
+  path: string,
+  snapshot: OpenSnapshot,
+  channelId: string,
+  expectedTurnId: string,
+  normalizeMatch: (raw: unknown) => TurnRecord,
+  onMalformedLine: (path: string, rawLength: number, error: unknown) => void,
+  stats?: TurnRecordIdentityLookupStats,
+): Promise<ScanResult> {
+  const buffer = Buffer.allocUnsafe(LOOKUP_READ_CHUNK_BYTES);
+  let position = 0;
+  let lineStart = 0;
+  let projector = new StreamingIdentityProjector();
+  let record: TurnRecord | null = null;
+
+  const finishLine = async (lineEnd: number): Promise<boolean> => {
+    const rawLength = lineEnd - lineStart;
+    const projection = projector.finish();
+    projector = new StreamingIdentityProjector();
+    if (rawLength === 0) return false;
+    if (stats) stats.linesScanned += 1;
+    let projectedTurnId: string | null = null;
+    try {
+      projectedTurnId = projectTurnId(projection.fields, channelId);
+    } catch (error) {
+      onMalformedLine(path, rawLength, projection.error ?? error);
+      return false;
+    }
+    if (projection.error) {
+      onMalformedLine(path, rawLength, projection.error);
+      return projectedTurnId === expectedTurnId;
+    }
+    if (projectedTurnId !== expectedTurnId) return false;
+    try {
+      const line = await readLine(snapshot.fd, lineStart, lineEnd, stats);
+      const parsed = JSON.parse(line) as unknown;
+      if (!isRecord(parsed)) throw new Error('TurnRecord entry must be a JSON object');
+      const match = normalizeMatch(parsed);
+      if (stats) stats.recordsNormalized += 1;
+      if (record) return true;
+      record = match;
+      return false;
+    } catch (error) {
+      onMalformedLine(path, rawLength, error);
+      return true;
+    }
+  };
+
+  let ambiguous = false;
+  scan: while (position < snapshot.size) {
+    const readBuffer = buffer.subarray(
+      0,
+      Math.min(buffer.length, snapshot.size - position),
+    );
+    const bytesRead = await readChunk(
+      snapshot.fd,
+      readBuffer,
+      position,
+    );
+    if (bytesRead === 0) break;
+    if (stats) {
+      stats.bytesRead += bytesRead;
+      stats.maxReadChunkBytes = Math.max(stats.maxReadChunkBytes, bytesRead);
+    }
+    for (let offset = 0; offset < bytesRead; offset += 1) {
+      const byte = buffer[offset]!;
+      if (byte === 0x0a) {
+        const lineEnd = position + offset;
+        if (await finishLine(lineEnd)) {
+          ambiguous = true;
+          break scan;
+        }
+        lineStart = lineEnd + 1;
+      } else {
+        projector.push(byte);
+      }
+    }
+    position += bytesRead;
+    await new Promise<void>(resolve => setImmediate(resolve));
+  }
+  if (!ambiguous && lineStart < snapshot.size) {
+    ambiguous = await finishLine(snapshot.size);
+  }
+  return { record, ambiguous };
+}
+
 /**
  * Resolve zero/one/many exact identities from one pinned source generation.
- *
- * The active descriptor and byte length are captured before rotated paths are
- * listed. A concurrent append or rotation therefore belongs wholly to either
- * this lookup or the next one. Inode de-duplication handles the interrupted
- * hard-link rotation state without double counting.
+ * Reads are fixed-size and yield after every chunk, so even one enormous JSONL
+ * row cannot monopolize the primary agent loop or be buffered unless it is the
+ * exact row that must be returned.
  */
 export async function lookupTurnRecordIdentitySnapshot(
   options: TurnRecordIdentitySnapshotOptions,
@@ -208,48 +478,25 @@ export async function lookupTurnRecordIdentitySnapshot(
     activeHandedOff = active !== null;
     const scannedIdentities = new Set<string>();
     let unique: TurnRecord | null = null;
-    let linesSinceYield = 0;
     for (const item of paths) {
       const snapshot = item.snapshot ?? openSnapshot(item.path, false);
       if (!snapshot) continue;
-      if (scannedIdentities.has(snapshot.identity) || snapshot.size === 0) {
-        closeSync(snapshot.fd);
-        continue;
-      }
-      scannedIdentities.add(snapshot.identity);
-      const input = createReadStream(item.path, {
-        fd: snapshot.fd,
-        autoClose: true,
-        start: 0,
-        end: snapshot.size - 1,
-      });
-      const lines = createInterface({ input, crlfDelay: Infinity });
       try {
-        for await (const rawLine of lines) {
-          const line = rawLine.trim();
-          if (!line) continue;
-          if (options.stats) options.stats.linesScanned += 1;
-          try {
-            if (projectTurnId(line, options.channelId) === expectedTurnId) {
-              const parsed = JSON.parse(line) as unknown;
-              if (!isRecord(parsed)) throw new Error('TurnRecord entry must be a JSON object');
-              const record = options.normalizeMatch(parsed);
-              if (options.stats) options.stats.recordsNormalized += 1;
-              if (unique) return { kind: 'duplicated' };
-              unique = record;
-            }
-          } catch (error) {
-            options.onMalformedLine(item.path, line, error);
-          }
-          linesSinceYield += 1;
-          if (linesSinceYield >= LOOKUP_YIELD_RECORDS) {
-            linesSinceYield = 0;
-            await new Promise<void>(resolve => setImmediate(resolve));
-          }
-        }
+        if (scannedIdentities.has(snapshot.identity) || snapshot.size === 0) continue;
+        scannedIdentities.add(snapshot.identity);
+        const result = await scanSnapshot(
+          item.path,
+          snapshot,
+          options.channelId,
+          expectedTurnId,
+          options.normalizeMatch,
+          options.onMalformedLine,
+          options.stats,
+        );
+        if (result.ambiguous || (unique && result.record)) return { kind: 'duplicated' };
+        unique ??= result.record;
       } finally {
-        lines.close();
-        input.destroy();
+        closeSync(snapshot.fd);
       }
     }
     return unique ? { kind: 'unique', record: unique } : { kind: 'missing' };

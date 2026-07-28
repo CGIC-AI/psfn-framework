@@ -16,10 +16,12 @@ import {
   unlinkSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { writeJsonAtomic } from '../../src/shared/utils/fs.js';
 import { verifyStartupOwnerFiles } from '../../src/system/config/startup-owner-files.js';
 import { PER_COMPANION_OWNER_FILES } from '../../src/system/config/settings-contract.js';
+import { DEFAULT_COMPANION_CARD_FILE_NAME } from '../../src/core/identity/companion-naming.js';
+import { assertValidCharacterCard } from '../../src/core/identity/loader.js';
 import { isRecord } from '../../src/shared/utils/types.js';
 import type { OnboardingPlan } from './types.js';
 
@@ -143,7 +145,19 @@ export function buildModelsRegistry(plan: OnboardingPlan): unknown {
   };
 }
 
-/** Single-companion fleet manifest naming this deployment's companion id. */
+/**
+ * Single-companion fleet manifest naming this deployment's companion id.
+ *
+ * The manifest describes the ACTUAL on-disk layout this flow generates: the
+ * per-companion owner files and the character card land at the companion-data
+ * ROOT (that is where the single-companion runtime reads them from —
+ * `{companionDataDir}/{DEFAULT_COMPANION_CARD_FILE_NAME}` and the per-companion
+ * owners directly under the companion root). So the manifest points its
+ * companionDataDir/characterCardPath at that root, keeping the generated
+ * manifest self-consistent if a later operator flips the deployment to the
+ * fleet control plane (wckv.1.3 review rider). A genuine multi-companion split
+ * would re-lay each companion under its own subdir.
+ */
 export function buildCompanionsManifest(plan: OnboardingPlan): unknown {
   return {
     postgres: {
@@ -156,8 +170,8 @@ export function buildCompanionsManifest(plan: OnboardingPlan): unknown {
     companions: [
       {
         companionId: plan.companionId,
-        companionDataDir: 'companions/main',
-        characterCardPath: 'companions/main/character-card.json',
+        companionDataDir: '.',
+        characterCardPath: DEFAULT_COMPANION_CARD_FILE_NAME,
         postgresSchema: 'companion_main',
         postgresRole: 'companion_main_runtime',
         postgresDatabaseUrlRef: { kind: 'env', envName: 'COMPANION_MAIN_DATABASE_URL' },
@@ -202,11 +216,40 @@ export function ownerFileEntries(plan: OnboardingPlan): OwnerFileEntry[] {
   return entries;
 }
 
-/** Existing target owner files that a fresh run would collide with. */
+/**
+ * Absolute path where the companion's character card lands: the companion-data
+ * root, exactly where the single-companion runtime reads it
+ * (`{companionDataDir}/{DEFAULT_COMPANION_CARD_FILE_NAME}` in load-config).
+ */
+export function characterCardTargetPath(plan: OnboardingPlan): string {
+  return join(plan.roots.companionDataDir, DEFAULT_COMPANION_CARD_FILE_NAME);
+}
+
+/** The character-card write entry, when the plan carries a resolved card. */
+function characterCardEntry(plan: OnboardingPlan): OwnerFileEntry | undefined {
+  if (!plan.card) return undefined;
+  return {
+    name: DEFAULT_COMPANION_CARD_FILE_NAME,
+    path: characterCardTargetPath(plan),
+    value: plan.card,
+  };
+}
+
+/** Owner files plus the character card (when present): the full commit set. */
+function commitWriteEntries(plan: OnboardingPlan): OwnerFileEntry[] {
+  const cardEntry = characterCardEntry(plan);
+  return cardEntry ? [...ownerFileEntries(plan), cardEntry] : ownerFileEntries(plan);
+}
+
+/**
+ * Existing target files a fresh run would collide with — the owner files and
+ * the character card. The card path is checked unconditionally so the flow's
+ * early idempotency gate detects an existing companion even before a new card
+ * is resolved.
+ */
 export function detectExistingOwnerFiles(plan: OnboardingPlan): string[] {
-  return ownerFileEntries(plan)
-    .map((entry) => entry.path)
-    .filter((path) => existsSync(path));
+  const paths = [...ownerFileEntries(plan).map((entry) => entry.path), characterCardTargetPath(plan)];
+  return paths.filter((path) => existsSync(path));
 }
 
 /**
@@ -215,6 +258,12 @@ export function detectExistingOwnerFiles(plan: OnboardingPlan): string[] {
  * validation errors on failure. Leaves nothing in the target roots.
  */
 export function stageAndValidate(plan: OnboardingPlan): void {
+  // The character card is not a settings-contract owner file (the startup guard
+  // never reads it), so validate it here through the runtime's own validator
+  // before any owner file is staged — a malformed card fails before writes.
+  if (plan.card) {
+    assertValidCharacterCard(plan.card, characterCardTargetPath(plan));
+  }
   const stagingRoot = mkdtempSync(join(tmpdir(), 'psfn-onboard-stage-'));
   const stagingSystem = join(stagingRoot, 'system-data');
   const stagingCompanion = plan.roots.shared ? stagingSystem : join(stagingRoot, 'companion-data');
@@ -262,11 +311,12 @@ export function commitOwnerFiles(plan: OnboardingPlan): CommitResult {
 
   stageAndValidate(plan);
 
+  const writeEntries = commitWriteEntries(plan);
   const created: string[] = [];
   const backups: Array<{ original: string; backup: string }> = [];
   try {
-    for (const entry of ownerFileEntries(plan)) {
-      mkdirSync(ownerFileRoot(plan, entry.name), { recursive: true });
+    for (const entry of writeEntries) {
+      mkdirSync(dirname(entry.path), { recursive: true });
       if (existsSync(entry.path)) {
         const backup = `${entry.path}.onboard-bak-${process.pid}`;
         renameSync(entry.path, backup);
@@ -290,7 +340,7 @@ export function commitOwnerFiles(plan: OnboardingPlan): CommitResult {
     }
   }
 
-  return { writtenPaths: ownerFileEntries(plan).map((entry) => entry.path) };
+  return { writtenPaths: writeEntries.map((entry) => entry.path) };
 }
 
 function rollback(created: string[], backups: Array<{ original: string; backup: string }>): void {

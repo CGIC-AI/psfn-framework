@@ -100,7 +100,10 @@ function registryWithDenyPolicy(hookName: string, patterns: readonly string[]): 
     mode: 'sync_decision',
     sourcePath: 'adversarial-harness://tool-alias-bypass',
     matcher: new HookMatcher(patterns),
-    handler: () => ({ decision: 'deny', reason: `${hookName}: operator-gated tool` }),
+    // Must be `async`: HookRegistry.register rejects a bare synchronous
+    // sync_decision handler, which cannot be preempted by the evaluation
+    // timeout (bead 00z0). The deny decision itself is still immediate.
+    handler: async () => ({ decision: 'deny', reason: `${hookName}: operator-gated tool` }),
   });
   return registry;
 }

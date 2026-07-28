@@ -44,7 +44,7 @@ export async function* streamTurnRecordRecoverySnapshot(
   workerOptions: RecoveryWorkerOptions,
 ): AsyncGenerator<TurnRecord> {
   options.signal?.throwIfAborted();
-  const scratchDir = mkdtempSync(join(tmpdir(), 'psfn-turn-record-recovery-'));
+  const scratchDir = mkdtempSync(join(tmpdir(), 'turn-record-recovery-'));
   const sourceExtension = extname(fileURLToPath(import.meta.url));
   const workerUrl = new URL(`./turn-record-recovery-worker${sourceExtension}`, import.meta.url);
   const worker = fork(fileURLToPath(workerUrl), [], {

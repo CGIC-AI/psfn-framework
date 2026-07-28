@@ -1267,7 +1267,7 @@ export function createContactSetChannelPrivacyTool(contactStore: ContactStorePor
       privacyLevel: Type.Unsafe<ChannelPrivacyLevel>({
         type: 'string',
         enum: [...CHANNEL_PRIVACY_LEVELS],
-        description: 'Privacy level: private, invite_only, public, broadcast',
+        description: `Privacy level, one of: ${CHANNEL_PRIVACY_LEVELS.join(', ')}`,
       }),
     }),
     execute: async (

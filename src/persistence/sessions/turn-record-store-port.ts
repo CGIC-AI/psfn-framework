@@ -54,6 +54,10 @@ export type TurnRecordIdentityLookup =
   | { readonly kind: 'duplicated' }
   | { readonly kind: 'unique'; readonly record: TurnRecord };
 
+export interface TurnRecordIdentityLookupOptions {
+  signal?: AbortSignal;
+}
+
 export interface TurnRecordRecoveryScanStats {
   bytesRead: number;
   rowsScanned: number;
@@ -110,6 +114,7 @@ export interface TurnRecordStorePort {
   lookupTurnRecordIdentity?(
     channelId: string,
     turnId: string,
+    options?: TurnRecordIdentityLookupOptions,
   ): Promise<TurnRecordIdentityLookup>;
   findTurnRecord(channelId: string, turnId: string): TurnRecord | null;
 }

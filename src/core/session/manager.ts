@@ -1331,8 +1331,9 @@ export class SessionManager implements SessionManagerTypeSurface {
   async recoverPendingBackgroundWorkHandoffs(
     limit: number,
     operation: (record: TurnRecord) => Promise<void>,
+    signal?: AbortSignal,
   ): Promise<number> {
-    return this.backgroundWorkHandoffRecovery.recover(limit, operation);
+    return this.backgroundWorkHandoffRecovery.recover(limit, operation, signal);
   }
 
   hasRecordedTurn(channelId: string, turnId: string): boolean {

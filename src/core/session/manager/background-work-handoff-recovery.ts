@@ -43,6 +43,7 @@ export class BackgroundWorkHandoffRecovery {
   async recover(
     limit: number,
     operation: (record: TurnRecord) => Promise<void>,
+    signal?: AbortSignal,
   ): Promise<number> {
     if (!Number.isSafeInteger(limit) || limit < 1) {
       throw new Error('Background work handoff recovery limit must be a positive safe integer');
@@ -57,6 +58,7 @@ export class BackgroundWorkHandoffRecovery {
     let recovered = 0;
     const errors: unknown[] = [];
     for (const reference of selected) {
+      signal?.throwIfAborted();
       const key = referenceKey(reference);
       try {
         const accepted = await this.store.withSourceTurnRecordEligibilityFence(
@@ -69,7 +71,9 @@ export class BackgroundWorkHandoffRecovery {
               reference.sourceChannelId,
               reference.logicalSessionId,
               reference.turnId,
+              signal,
             );
+            signal?.throwIfAborted();
             if (current?.status !== 'completed'
               || !current.backgroundWorkHandoff) {
               this.pending.delete(key);
@@ -79,6 +83,7 @@ export class BackgroundWorkHandoffRecovery {
             this.pending.delete(key);
             return true;
           },
+          signal,
         );
         if (accepted) recovered += 1;
       } catch (error) {

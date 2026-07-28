@@ -1593,6 +1593,7 @@ export class SubstrateAgent {
             const jobs = parseTurnRecordBackgroundWorkHandoff(record);
             if (jobs.length > 0) await this.backgroundWorkSupervisor!.enqueue(jobs);
           },
+          recoveryAbortController.signal,
         );
       })().catch((error: unknown) => {
         if (error instanceof Error && error.name === 'TurnRecordRecoveryEvidenceError') {

@@ -29,6 +29,7 @@ export interface TurnRecordIdentitySnapshotOptions {
   listRotatedPaths: () => string[];
   normalizeMatch: (raw: unknown) => TurnRecord;
   onMalformedLine: (path: string, rawLength: number, error: unknown) => void;
+  signal?: AbortSignal;
   stats?: TurnRecordIdentityLookupStats;
 }
 
@@ -347,11 +348,13 @@ async function readLine(
   fd: number,
   start: number,
   end: number,
+  signal?: AbortSignal,
   stats?: TurnRecordIdentityLookupStats,
 ): Promise<string> {
   const buffers: Buffer[] = [];
   let position = start;
   while (position < end) {
+    signal?.throwIfAborted();
     const buffer = Buffer.allocUnsafe(Math.min(LOOKUP_READ_CHUNK_BYTES, end - position));
     const bytesRead = await readChunk(fd, buffer, position);
     if (bytesRead === 0) throw new Error('TurnRecord snapshot ended before the matching row');
@@ -377,6 +380,7 @@ async function scanSnapshot(
   expectedTurnId: string,
   normalizeMatch: (raw: unknown) => TurnRecord,
   onMalformedLine: (path: string, rawLength: number, error: unknown) => void,
+  signal?: AbortSignal,
   stats?: TurnRecordIdentityLookupStats,
 ): Promise<ScanResult> {
   const buffer = Buffer.allocUnsafe(LOOKUP_READ_CHUNK_BYTES);
@@ -406,7 +410,8 @@ async function scanSnapshot(
     }
     if (projectedTurnId !== expectedTurnId) return false;
     try {
-      const line = await readLine(snapshot.fd, lineStart, lineEnd, stats);
+      const line = await readLine(snapshot.fd, lineStart, lineEnd, signal, stats);
+      signal?.throwIfAborted();
       const parsed = JSON.parse(line) as unknown;
       if (!isRecord(parsed)) throw new Error('TurnRecord entry must be a JSON object');
       const match = normalizeMatch(parsed);
@@ -415,6 +420,7 @@ async function scanSnapshot(
       record = match;
       return false;
     } catch (error) {
+      signal?.throwIfAborted();
       onMalformedLine(path, rawLength, error);
       return true;
     }
@@ -422,6 +428,7 @@ async function scanSnapshot(
 
   let ambiguous = false;
   scan: while (position < snapshot.size) {
+    signal?.throwIfAborted();
     const readBuffer = buffer.subarray(
       0,
       Math.min(buffer.length, snapshot.size - position),
@@ -467,6 +474,7 @@ async function scanSnapshot(
 export async function lookupTurnRecordIdentitySnapshot(
   options: TurnRecordIdentitySnapshotOptions,
 ): Promise<TurnRecordIdentityLookup> {
+  options.signal?.throwIfAborted();
   const expectedTurnId = parseTurnId(options.turnId, 'turnId');
   if (!expectedTurnId) throw new Error('TurnRecord identity lookup requires a TurnID');
   const active = openSnapshot(options.activePath, true);
@@ -481,6 +489,7 @@ export async function lookupTurnRecordIdentitySnapshot(
     const scannedIdentities = new Set<string>();
     let unique: TurnRecord | null = null;
     for (const item of paths) {
+      options.signal?.throwIfAborted();
       const snapshot = item.snapshot ?? openSnapshot(item.path, false);
       if (!snapshot) continue;
       try {
@@ -493,6 +502,7 @@ export async function lookupTurnRecordIdentitySnapshot(
           expectedTurnId,
           options.normalizeMatch,
           options.onMalformedLine,
+          options.signal,
           options.stats,
         );
         if (result.ambiguous || (unique && result.record)) return { kind: 'duplicated' };

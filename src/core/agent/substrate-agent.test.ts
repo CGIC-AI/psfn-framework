@@ -822,6 +822,53 @@ describe('SubstrateAgent construction', () => {
     expect(supervisor.stop).toHaveBeenCalledOnce();
   });
 
+  it('propagates a recovery abort into a pending eligibility-fence wait', async () => {
+    let markRecoveryStarted!: () => void;
+    const recoveryStarted = new Promise<void>((resolve) => {
+      markRecoveryStarted = resolve;
+    });
+    let recoverySignal: AbortSignal | undefined;
+    const sessionManager = makeMockSessionManager();
+    Object.assign(sessionManager, {
+      streamRecoverableBackgroundWorkTurnRecords: vi.fn(() => (async function* () {
+        yield* [];
+      })()),
+      recoverPendingBackgroundWorkHandoffs: vi.fn(async (
+        _limit: number,
+        _operation: (record: unknown) => Promise<void>,
+        signal?: AbortSignal,
+      ) => {
+        recoverySignal = signal;
+        markRecoveryStarted();
+        await new Promise<void>((_resolve, reject) => {
+          signal?.addEventListener('abort', () => reject(signal.reason), { once: true });
+        });
+        return 0;
+      }),
+    });
+    const supervisor = {
+      enqueue: vi.fn(async () => undefined),
+      tick: vi.fn(async () => undefined),
+      stop: vi.fn(async () => undefined),
+    };
+    const agent = new SubstrateAgent(
+      new EventBus(),
+      makeMockLLMProvider(),
+      sessionManager,
+      'System prompt',
+      makeConfig(),
+    );
+    Object.assign(agent, { backgroundWorkSupervisor: supervisor });
+
+    const tick = agent.tickBackgroundWork();
+    await recoveryStarted;
+    agent.abortBackgroundWorkRecovery();
+
+    await expect(tick).rejects.toMatchObject({ name: 'AbortError' });
+    expect(recoverySignal?.aborted).toBe(true);
+    expect(supervisor.tick).toHaveBeenCalledOnce();
+  });
+
   it('registers a response_control tool that rejects no_reply while a paid deliverable is pending', async () => {
     const config = makeConfig();
     const eventBus = new EventBus();

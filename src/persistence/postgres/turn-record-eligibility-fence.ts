@@ -1,9 +1,14 @@
+import { setTimeout as delay } from 'node:timers/promises';
 import type { Pool, PoolClient } from 'pg';
 
+import { createComponentLogger } from '../../shared/logger.js';
+import { toErrorMessage } from '../../shared/utils/errors.js';
 import type {
   TurnRecordEligibilityFenceKey,
   TurnRecordEligibilityFencePort,
 } from '../sessions/turn-record-eligibility-fence-port.js';
+
+const log = createComponentLogger('PostgresTurnRecordEligibilityFence');
 
 function requireFenceText(value: string, field: string): string {
   const normalized = value.trim();
@@ -30,6 +35,81 @@ async function unlock(client: PoolClient, key: string): Promise<void> {
   }
 }
 
+async function lockInterruptibly(
+  client: PoolClient,
+  key: string,
+  signal: AbortSignal | undefined,
+): Promise<void> {
+  for (;;) {
+    signal?.throwIfAborted();
+    const result = await client.query<{ acquired: boolean }>(
+      'SELECT pg_try_advisory_lock(hashtextextended($1, 0)) AS acquired',
+      [key],
+    );
+    if (result.rows[0]?.acquired === true) return;
+    // A blocking pg_advisory_lock query cannot observe process shutdown.
+    // Polling keeps the server-side wait cancellable without abandoning a
+    // query that could acquire the lock and run its protected effect later.
+    await delay(50, undefined, signal ? { signal } : undefined);
+  }
+}
+
+function abortReason(signal: AbortSignal): unknown {
+  return signal.reason
+    ?? new DOMException('TurnRecord eligibility fence acquisition was aborted', 'AbortError');
+}
+
+async function connectInterruptibly(
+  pool: Pool,
+  signal: AbortSignal | undefined,
+): Promise<PoolClient> {
+  signal?.throwIfAborted();
+  const connection = pool.connect();
+  if (!signal) return await connection;
+
+  return await new Promise<PoolClient>((resolve, reject) => {
+    let settled = false;
+    const removeAbortListener = () => signal.removeEventListener('abort', onAbort);
+    const onAbort = () => {
+      if (settled) return;
+      settled = true;
+      removeAbortListener();
+      reject(abortReason(signal));
+    };
+    signal.addEventListener('abort', onAbort, { once: true });
+    if (signal.aborted) onAbort();
+
+    void connection.then(
+      (client) => {
+        if (settled) {
+          try {
+            client.release();
+          } catch (error) {
+            log.error('Failed to release a late eligibility-fence connection', {
+              error: toErrorMessage(error),
+            });
+          }
+          return;
+        }
+        settled = true;
+        removeAbortListener();
+        resolve(client);
+      },
+      (error: unknown) => {
+        if (settled) {
+          log.warn('Eligibility-fence connection failed after cancellation', {
+            error: toErrorMessage(error),
+          });
+          return;
+        }
+        settled = true;
+        removeAbortListener();
+        reject(error);
+      },
+    );
+  });
+}
+
 /**
  * A session-level advisory lock is deliberate here: the lock must stay held
  * while a background handler performs asynchronous durable effects. A
@@ -46,19 +126,21 @@ export class PostgresTurnRecordEligibilityFence implements TurnRecordEligibility
   async withTurnRecordEligibilityFence<T>(
     source: TurnRecordEligibilityFenceKey,
     operation: () => Promise<T>,
+    options?: { signal?: AbortSignal },
   ): Promise<T> {
-    return this.withTurnRecordEligibilityFences([source], operation);
+    return this.withTurnRecordEligibilityFences([source], operation, options);
   }
 
   async withTurnRecordEligibilityFences<T>(
     sources: readonly TurnRecordEligibilityFenceKey[],
     operation: () => Promise<T>,
+    options?: { signal?: AbortSignal },
   ): Promise<T> {
     if (sources.length === 0) {
       throw new Error('TurnRecord eligibility fence set cannot be empty');
     }
     const keys = [...new Set(sources.map(source => advisoryKey(this.scope, source)))].sort();
-    const client = await this.pool.connect();
+    const client = await connectInterruptibly(this.pool, options?.signal);
     const acquired: string[] = [];
     let operationCompleted = false;
     let operationResult: T | undefined;
@@ -72,9 +154,10 @@ export class PostgresTurnRecordEligibilityFence implements TurnRecordEligibility
       // Callers acquire it before queue-effect receipts or session/TurnRecord
       // filesystem locks; no writer may acquire it while holding an inner lock.
       for (const key of keys) {
-        await client.query('SELECT pg_advisory_lock(hashtextextended($1, 0))', [key]);
+        await lockInterruptibly(client, key, options?.signal);
         acquired.push(key);
       }
+      options?.signal?.throwIfAborted();
       operationResult = await operation();
       operationCompleted = true;
     } catch (error) {

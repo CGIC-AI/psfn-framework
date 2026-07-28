@@ -14,6 +14,7 @@ export interface TurnRecordEligibilityFencePort {
   withTurnRecordEligibilityFence<T>(
     key: TurnRecordEligibilityFenceKey,
     operation: () => Promise<T>,
+    options?: { signal?: AbortSignal },
   ): Promise<T>;
 
   /**
@@ -24,5 +25,6 @@ export interface TurnRecordEligibilityFencePort {
   withTurnRecordEligibilityFences<T>(
     keys: readonly TurnRecordEligibilityFenceKey[],
     operation: () => Promise<T>,
+    options?: { signal?: AbortSignal },
   ): Promise<T>;
 }

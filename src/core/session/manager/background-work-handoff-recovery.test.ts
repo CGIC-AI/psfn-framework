@@ -29,6 +29,74 @@ function makeRecord(index: number): TurnRecord {
 }
 
 describe('BackgroundWorkHandoffRecovery', () => {
+  it('forwards cancellation to the durable eligibility fence', async () => {
+    const record = makeRecord(0);
+    const controller = new AbortController();
+    const withFence = vi.fn(async (
+      _sourceChannelId: string,
+      _logicalSessionId: string,
+      _turnId: string,
+      operation: () => Promise<boolean>,
+      _signal?: AbortSignal,
+    ) => operation());
+    const recovery = new BackgroundWorkHandoffRecovery({
+      findEligibleSourceTurnRecord: async () => record,
+      withSourceTurnRecordEligibilityFence: withFence,
+    });
+    recovery.defer(record);
+
+    await expect(recovery.recover(
+      1,
+      async () => undefined,
+      controller.signal,
+    )).resolves.toBe(1);
+
+    expect(withFence).toHaveBeenCalledOnce();
+    expect(withFence.mock.calls[0]?.[4]).toBe(controller.signal);
+  });
+
+  it('does not enqueue when cancellation lands during the eligibility reread', async () => {
+    const record = makeRecord(0);
+    const controller = new AbortController();
+    let markLookupStarted!: () => void;
+    const lookupStarted = new Promise<void>((resolve) => {
+      markLookupStarted = resolve;
+    });
+    let finishLookup!: (value: TurnRecord) => void;
+    const lookupResult = new Promise<TurnRecord>((resolve) => {
+      finishLookup = resolve;
+    });
+    const findEligible = vi.fn(async (
+      _sourceChannelId: string,
+      _logicalSessionId: string,
+      _turnId: string,
+      _signal?: AbortSignal,
+    ) => {
+      markLookupStarted();
+      return await lookupResult;
+    });
+    const recovery = new BackgroundWorkHandoffRecovery({
+      findEligibleSourceTurnRecord: findEligible,
+      withSourceTurnRecordEligibilityFence: async (
+        _source,
+        _session,
+        _turn,
+        operation,
+      ) => operation(),
+    });
+    recovery.defer(record);
+    const operation = vi.fn(async () => undefined);
+
+    const pending = recovery.recover(1, operation, controller.signal);
+    await lookupStarted;
+    controller.abort();
+    finishLookup(record);
+
+    await expect(pending).rejects.toMatchObject({ name: 'AbortError' });
+    expect(findEligible.mock.calls[0]?.[3]).toBe(controller.signal);
+    expect(operation).not.toHaveBeenCalled();
+  });
+
   it('traverses only the requested batch size when the pending index is large', async () => {
     const records = Array.from({ length: 1_024 }, (_, index) => makeRecord(index));
     const recordsByTurn = new Map(records.map(record => [record.turnId, record]));

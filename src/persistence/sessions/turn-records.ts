@@ -2,11 +2,17 @@ import { isRecord } from '../../shared/utils/types.js';
 import { normalizeRuntimeFallbackProvenance } from '../../shared/runtime-fallback-provenance.js';
 import { join } from 'node:path';
 import {
+  closeSync,
+  createReadStream,
   existsSync,
+  fstatSync,
   linkSync,
+  openSync,
   statSync,
+  type Stats,
   unlinkSync,
 } from 'node:fs';
+import { createInterface } from 'node:readline';
 import { appendJsonLine } from '../jsonl.js';
 import { withCrossProcessWriteLock } from './cross-process-write-lock.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
@@ -41,8 +47,12 @@ import type {
   TurnStageTelemetryRecord,
 } from '../../core/turns/observability.js';
 import { cloneUnknownValue } from '../../core/turns/observability.js';
-import type { TurnRecordStorePort } from './turn-record-store-port.js';
+import type {
+  TurnRecordStorePort,
+  TurnRecordUsageRecord,
+} from './turn-record-store-port.js';
 import { parseIcpConversationCorrelation } from '../../shared/contracts/icp-autonomy.js';
+import { resolveToolCallOutcome } from '../../shared/contracts/tool-call-outcome.js';
 import {
   createTurnRecordSharedStore,
   resolveTurnRecordStaticPrompt,
@@ -1037,15 +1047,16 @@ export interface TurnRecordTailStats {
  * sequence — so line boundaries and unicode content survive chunk boundaries
  * intact. Lines longer than `chunkBytes` are reassembled across chunks.
  */
-function scanSegmentBackward(
+function scanSegmentBackward<T>(
   path: string,
   channelId: string,
   limit: number,
   chunkBytes: number,
   stats: TurnRecordTailStats | undefined,
   scannedFileIdentities: Set<string>,
-): TurnRecord[] {
-  const collected: TurnRecord[] = [];
+  project: (record: TurnRecord) => T,
+): T[] {
+  const collected: T[] = [];
   if (limit <= 0) return collected;
 
   scanJsonlFileBackward(path, {
@@ -1057,7 +1068,7 @@ function scanSegmentBackward(
     if (text.length === 0) return false;
     try {
       const parsed = JSON.parse(text) as unknown;
-      collected.push(normalizeTurnRecord(parsed, channelId));
+      collected.push(project(normalizeTurnRecord(parsed, channelId)));
     } catch (error) {
       quarantineTurnRecordLine(path, channelId, text, error);
       return false;
@@ -1078,15 +1089,16 @@ export interface ReadRecentTurnRecordsOptions {
  * Throws ENOENT if a listed file vanished before it could be opened (a
  * concurrent rotation won the race); the caller restarts from a fresh listing.
  */
-function readRecentTurnRecordsOnce(
+function readRecentTurnRecordProjectionOnce<T>(
   dir: string,
   sanitized: string,
   channelId: string,
   limit: number,
   chunkBytes: number,
+  project: (record: TurnRecord) => T,
   stats?: TurnRecordTailStats,
-): TurnRecord[] {
-  const collectedNewestFirst: TurnRecord[] = [];
+): T[] {
+  const collectedNewestFirst: T[] = [];
   const scannedFileIdentities = new Set<string>();
 
   const scanOne = (path: string): void => {
@@ -1100,6 +1112,7 @@ function readRecentTurnRecordsOnce(
       chunkBytes,
       stats,
       scannedFileIdentities,
+      project,
     );
     for (const record of records) collectedNewestFirst.push(record);
   };
@@ -1142,7 +1155,15 @@ export function readRecentTurnRecordsAcrossSegments(
 
   for (let attempt = 0; ; attempt++) {
     try {
-      return readRecentTurnRecordsOnce(dir, sanitized, channelId, limit, chunkBytes, options.stats);
+      return readRecentTurnRecordProjectionOnce(
+        dir,
+        sanitized,
+        channelId,
+        limit,
+        chunkBytes,
+        record => record,
+        options.stats,
+      );
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
       if (attempt >= TAIL_READ_ROTATION_RETRIES) {
@@ -1156,6 +1177,164 @@ export function readRecentTurnRecordsAcrossSegments(
         attempt: attempt + 1,
         error: toErrorMessage(error),
       });
+    }
+  }
+}
+
+/**
+ * Read the content-free projection consumed by the deterministic tool-usage
+ * evaluator. Each full JSON row is normalized and immediately projected while
+ * scanning; only the small projection is retained across rows. Session-context
+ * references and captured bodies are deliberately not resolved because this
+ * caller neither observes nor returns them.
+ */
+export function readRecentTurnRecordUsageAcrossSegments(
+  sessionsDir: string,
+  channelId: string,
+  limit: number,
+  options: ReadRecentTurnRecordsOptions = {},
+): TurnRecordUsageRecord[] {
+  if (limit <= 0) return [];
+
+  const sanitized = sanitizeChannelId(channelId);
+  const dir = turnRecordsDir(sessionsDir);
+  const chunkBytes = options.scanChunkBytes ?? TURN_RECORD_TAIL_SCAN_CHUNK_BYTES;
+
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return readRecentTurnRecordProjectionOnce(
+        dir,
+        sanitized,
+        channelId,
+        limit,
+        chunkBytes,
+        record => ({
+          turnId: record.turnId,
+          startedAt: record.startedAt,
+          toolCalls: record.toolCalls.map((toolCall) => {
+            const outcome = resolveToolCallOutcome(toolCall);
+            return {
+              toolName: toolCall.toolName,
+              ...(outcome ? { outcome } : {}),
+              ...(typeof toolCall.isError === 'boolean'
+                ? { isError: toolCall.isError }
+                : {}),
+            };
+          }),
+        }),
+        options.stats,
+      );
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+      if (attempt >= TAIL_READ_ROTATION_RETRIES) {
+        throw new Error(
+          `Turn-record usage tail read for channel ${channelId} kept losing races with segment rotation `
+          + `after ${TAIL_READ_ROTATION_RETRIES} restarts: ${toErrorMessage(error)}`,
+        );
+      }
+      log.warn('turn-record usage tail read raced a rotation; restarting from a fresh segment listing', {
+        channelId,
+        attempt: attempt + 1,
+        error: toErrorMessage(error),
+      });
+    }
+  }
+}
+
+/**
+ * Async, constant-retention scan for one-time startup recovery. Segment files
+ * are snapshotted oldest-to-newest and de-duplicated by inode, including the
+ * interrupted-rotation hard-link case. The iterator yields to the event loop
+ * after at most eight normalized rows so admin health and inbound delivery stay
+ * responsive while a large historical archive is inspected.
+ */
+async function* streamTurnRecordsForRecovery(
+  sessionsDir: string,
+  channelId: string,
+): AsyncGenerator<TurnRecord> {
+  const sanitized = sanitizeChannelId(channelId);
+  const dir = turnRecordsDir(sessionsDir);
+  const activePath = join(dir, `${sanitized}.jsonl`);
+  const scannedFileIdentities = new Set<string>();
+  let recordsSinceYield = 0;
+  const scanOpenSnapshot = async function* (
+    path: string,
+    fd: number,
+    snapshot: Stats,
+  ): AsyncGenerator<TurnRecord> {
+    const identity = fileIdentityKey(snapshot);
+    if (scannedFileIdentities.has(identity) || snapshot.size === 0) {
+      closeSync(fd);
+      return;
+    }
+    scannedFileIdentities.add(identity);
+    const input = createReadStream(path, {
+      fd,
+      autoClose: true,
+      start: 0,
+      end: snapshot.size - 1,
+    });
+    const lines = createInterface({ input, crlfDelay: Infinity });
+    try {
+      for await (const rawLine of lines) {
+        const line = rawLine.trim();
+        if (!line) continue;
+        try {
+          yield normalizeTurnRecord(JSON.parse(line) as unknown, channelId);
+        } catch (error) {
+          quarantineTurnRecordLine(path, channelId, line, error);
+        }
+        recordsSinceYield += 1;
+        if (recordsSinceYield >= 8) {
+          recordsSinceYield = 0;
+          await new Promise<void>(resolve => setImmediate(resolve));
+        }
+      }
+    } finally {
+      lines.close();
+      input.destroy();
+    }
+  };
+  const openSnapshot = (path: string): {
+    fd: number;
+    snapshot: Stats;
+  } | null => {
+    try {
+      const fd = openSync(path, 'r');
+      try {
+        return { fd, snapshot: fstatSync(fd) };
+      } catch (error) {
+        closeSync(fd);
+        throw error;
+      }
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
+      throw error;
+    }
+  };
+
+  // Pin the active inode before listing rotated segments. If rotation races
+  // this scan, the old active inode is either scanned through this descriptor
+  // or through its new numbered hard link (with inode de-duplication), while a
+  // new active file belongs to the next recovery snapshot.
+  const activeSnapshot = openSnapshot(activePath);
+  let activeSnapshotHandedOff = false;
+  try {
+    const rotatedPaths = listRotatedSegments(dir, sanitized)
+      .sort((left, right) => left.segmentNumber - right.segmentNumber)
+      .map(segment => segment.path);
+    for (const path of rotatedPaths) {
+      const opened = openSnapshot(path);
+      if (!opened) continue;
+      yield* scanOpenSnapshot(path, opened.fd, opened.snapshot);
+    }
+    if (activeSnapshot) {
+      activeSnapshotHandedOff = true;
+      yield* scanOpenSnapshot(activePath, activeSnapshot.fd, activeSnapshot.snapshot);
+    }
+  } finally {
+    if (activeSnapshot && !activeSnapshotHandedOff) {
+      closeSync(activeSnapshot.fd);
     }
   }
 }
@@ -1227,6 +1406,71 @@ function findTurnRecordAcrossSegments(
         attempt: attempt + 1,
         error: toErrorMessage(error),
       });
+    }
+  }
+}
+
+function countTurnRecordMatchesOnce(
+  dir: string,
+  sanitized: string,
+  channelId: string,
+  turnId: string,
+  chunkBytes: number,
+): number {
+  const scannedFileIdentities = new Set<string>();
+  let matches = 0;
+  const scanOne = (path: string): void => {
+    if (matches >= 2 || !existsSync(path)) return;
+    scanJsonlFileBackward(path, {
+      chunkBytes,
+      scannedFileIdentities,
+    }, (rawLine) => {
+      const line = rawLine.trim();
+      if (!line) return false;
+      try {
+        if (normalizeTurnRecord(JSON.parse(line) as unknown, channelId).turnId === turnId) {
+          matches += 1;
+        }
+      } catch (error) {
+        quarantineTurnRecordLine(path, channelId, line, error);
+      }
+      return matches >= 2;
+    });
+  };
+  scanOne(join(dir, `${sanitized}.jsonl`));
+  for (const segment of listRotatedSegments(dir, sanitized)
+    .sort((left, right) => right.segmentNumber - left.segmentNumber)) {
+    scanOne(segment.path);
+    if (matches >= 2) break;
+  }
+  return matches;
+}
+
+function countTurnRecordsByTurnIdAcrossSegments(
+  sessionsDir: string,
+  channelId: string,
+  turnId: string,
+  chunkBytes: number,
+): number {
+  const sanitized = sanitizeChannelId(channelId);
+  const dir = turnRecordsDir(sessionsDir);
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      return countTurnRecordMatchesOnce(
+        dir,
+        sanitized,
+        channelId,
+        turnId,
+        chunkBytes,
+      );
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+      if (attempt >= TAIL_READ_ROTATION_RETRIES) {
+        throw new Error(
+          `Turn-record identity count for channel ${channelId} kept losing races with segment rotation `
+          + `after ${TAIL_READ_ROTATION_RETRIES} restarts: ${toErrorMessage(error)}`,
+        );
+      }
     }
   }
 }
@@ -1312,6 +1556,25 @@ export function createFilesystemTurnRecordStorePort(
         sharedStore,
       ));
     },
+    readRecentTurnRecordUsage: (channelId, limit) => (
+      readRecentTurnRecordUsageAcrossSegments(
+        sessionsDir,
+        channelId,
+        limit,
+        { scanChunkBytes },
+      )
+    ),
+    streamTurnRecordsForRecovery: channelId => (
+      streamTurnRecordsForRecovery(sessionsDir, channelId)
+    ),
+    countTurnRecordsByTurnId: (channelId, turnId) => (
+      countTurnRecordsByTurnIdAcrossSegments(
+        sessionsDir,
+        channelId,
+        turnId,
+        scanChunkBytes,
+      )
+    ),
     findTurnRecord: (channelId, turnId) => {
       const record = findTurnRecordAcrossSegments(
         sessionsDir,

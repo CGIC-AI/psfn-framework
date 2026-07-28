@@ -1,10 +1,11 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import type { SessionEntry } from '../../core/session/types.js';
 import { buildContinuityEntryMetadata } from '../../core/session/continuity-provenance.js';
 import type { TurnRecord } from '../../shared/contracts/runtime.js';
+import type { TurnRecordStorePort } from './turn-record-store-port.js';
 import { createTurnId } from '../../core/turns/id.js';
 import { SessionStore } from './store.js';
 import {
@@ -113,6 +114,41 @@ function buildTurnRecord(
 }
 
 describe('SessionStore turn-record session-entry diet (psfn-framework-9ree)', () => {
+  it('reads tool-usage metadata without resolving old-fat session context', () => {
+    const dir = makeDir();
+    const channelId = 'api:usage-projection';
+    const turnId = createTurnId();
+    const readRecentTurnRecords = vi.fn(() => {
+      throw new Error('full TurnRecord read must not run for usage aggregation');
+    });
+    const readRecentTurnRecordUsage = vi.fn(() => [{
+      turnId,
+      startedAt: 1,
+      toolCalls: [{
+        toolName: 'repo',
+        outcome: 'success' as const,
+      }],
+    }]);
+    const turnRecordStore = {
+      appendTurnRecord: vi.fn(),
+      readRecentTurnRecords,
+      readRecentTurnRecordUsage,
+      findTurnRecord: vi.fn(() => null),
+    } as unknown as TurnRecordStorePort;
+    const store = new SessionStore(dir, { turnRecordStore });
+
+    const usage = (store as unknown as {
+      getRecentTurnRecordUsage(
+        sourceChannelId: string,
+        limit: number,
+      ): ReturnType<typeof readRecentTurnRecordUsage>;
+    }).getRecentTurnRecordUsage(channelId, 32);
+
+    expect(usage).toEqual(readRecentTurnRecordUsage());
+    expect(readRecentTurnRecordUsage).toHaveBeenCalledWith(channelId, 32);
+    expect(readRecentTurnRecords).not.toHaveBeenCalled();
+  });
+
   it('erases the verbatim recentEntries copy from disk and reconstructs it from L0 on read', () => {
     const dir = makeDir();
     const store = new SessionStore(dir);

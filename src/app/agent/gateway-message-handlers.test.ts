@@ -20,6 +20,12 @@ import {
   type ReservationPhasePort,
 } from './gateway-message-handlers.js';
 import type { EgressLeaseDecision } from '../../core/agent/arbiter/egress-lease-phase.js';
+import {
+  ROOM_EPISODE_CIRCUIT_BREAKER_ATTRIBUTION,
+  ROOM_EPISODE_CIRCUIT_BREAKER_PROTECTED_CONDITION,
+  ROOM_EPISODE_CIRCUIT_BREAKER_SUPPRESSED_ACTION,
+  type RoomEpisodeCircuitBreakerFiring,
+} from '../../core/agent/fatigue/room-episode-circuit-breaker.js';
 import type {
   ParticipationAppraisalResult,
   ParticipationCandidate,
@@ -2558,5 +2564,121 @@ describe('registerGatewayMessageHandlers — reservation phase wiring (jp36.5.1.
     expect(events[0]).toHaveProperty('timestamp');
     // §19 do-not-log: the generated reply / trigger text never rides egress telemetry.
     expect(JSON.stringify(events[0])).not.toContain('I wonder what');
+  });
+
+  it('surfaces the Law-36 breaker firing record on the audit trail and bus when a decision fires', async () => {
+    const reservation = makeReservationSnapshot();
+    const appraiser = replyingAppraiser('reply');
+    const reservationPhase: ReservationPhasePort = {
+      reserve: vi.fn(async (): Promise<ReservationDecision> => ({
+        outcome: 'reserved',
+        reservation,
+        episode: makeEpisodeSnapshot(),
+        replayed: false,
+      })),
+      settleAfterAppraisal: vi.fn(async () => 'retained' as const),
+      releaseIgnored: vi.fn(),
+    };
+    const firing: RoomEpisodeCircuitBreakerFiring = {
+      protectedCondition: ROOM_EPISODE_CIRCUIT_BREAKER_PROTECTED_CONDITION,
+      attribution: ROOM_EPISODE_CIRCUIT_BREAKER_ATTRIBUTION,
+      channelId: CHANNEL,
+      transition: 'closed_to_open',
+      actionSuppressed: ROOM_EPISODE_CIRCUIT_BREAKER_SUPPRESSED_ACTION,
+      signals: {
+        pressure: 9.5,
+        tripThreshold: 8,
+        resetThreshold: 4,
+        wrapUpThreshold: 6,
+        contributingEventCount: 12,
+      },
+      firedAtMs: 1_700_000_000_000,
+    };
+    const egressLeasePhase: EgressLeasePhasePort = {
+      grantReply: vi.fn(async (): Promise<EgressLeaseDecision> => ({
+        channelId: CHANNEL,
+        triggerEventId: SOURCE_MESSAGE_ID,
+        companionId: reservation.companionId,
+        outcome: 'breaker_suppressed',
+        breakerState: 'open',
+        breakerFiring: firing,
+      })),
+      releaseReact: vi.fn(),
+    };
+    const harness = createHarness({
+      passiveNameCandidateBuilder: createdBuilder(makeCandidate()),
+      participationAppraiser: appraiser,
+      reservationPhase,
+      egressLeasePhase,
+    });
+    const events: unknown[] = [];
+    harness.eventBus.on('participation.egress', (event) => {
+      events.push(event);
+    });
+
+    await harness.onDiscordMessage(observeMessage());
+
+    // Bus event carries the structural firing record.
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      outcome: 'settled',
+      leaseOutcome: 'breaker_suppressed',
+      breakerState: 'open',
+      breakerFiring: firing,
+    });
+    // Audit trail mirrors it.
+    expect(harness.safeguardAuditTrail.append).toHaveBeenCalledWith(
+      'participation.egress.settled',
+      expect.objectContaining({
+        breakerState: 'open',
+        breakerFiring: firing,
+      }),
+    );
+    // §19 do-not-log: the payload is content-free (enums/numbers/channelId only).
+    expect(JSON.stringify(events[0])).not.toContain('I wonder what');
+  });
+
+  it('omits breakerFiring from the audit trail and bus when a decision does not fire', async () => {
+    const reservation = makeReservationSnapshot();
+    const appraiser = replyingAppraiser('reply');
+    const reservationPhase: ReservationPhasePort = {
+      reserve: vi.fn(async (): Promise<ReservationDecision> => ({
+        outcome: 'reserved',
+        reservation,
+        episode: makeEpisodeSnapshot(),
+        replayed: false,
+      })),
+      settleAfterAppraisal: vi.fn(async () => 'retained' as const),
+      releaseIgnored: vi.fn(),
+    };
+    const egressLeasePhase: EgressLeasePhasePort = {
+      grantReply: vi.fn(async (): Promise<EgressLeaseDecision> => ({
+        channelId: CHANNEL,
+        triggerEventId: SOURCE_MESSAGE_ID,
+        companionId: reservation.companionId,
+        outcome: 'delivered',
+        breakerState: 'closed',
+      })),
+      releaseReact: vi.fn(),
+    };
+    const harness = createHarness({
+      passiveNameCandidateBuilder: createdBuilder(makeCandidate()),
+      participationAppraiser: appraiser,
+      reservationPhase,
+      egressLeasePhase,
+    });
+    const events: unknown[] = [];
+    harness.eventBus.on('participation.egress', (event) => {
+      events.push(event);
+    });
+
+    await harness.onDiscordMessage(observeMessage());
+
+    expect(events).toHaveLength(1);
+    expect(events[0]).not.toHaveProperty('breakerFiring');
+    const settledCall = (harness.safeguardAuditTrail.append as ReturnType<typeof vi.fn>).mock.calls
+      .find((call) => call[0] === 'participation.egress.settled');
+    expect(settledCall).toBeDefined();
+    expect(settledCall?.[1]).not.toHaveProperty('breakerFiring');
   });
 });

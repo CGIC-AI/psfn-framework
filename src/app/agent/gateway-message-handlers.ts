@@ -615,6 +615,7 @@ export function registerGatewayMessageHandlers(
         ...(egressDecision.declineReason ? { declineReason: egressDecision.declineReason } : {}),
         ...(egressDecision.drawOutcome ? { drawOutcome: egressDecision.drawOutcome } : {}),
         ...(egressDecision.breakerState ? { breakerState: egressDecision.breakerState } : {}),
+        ...(egressDecision.breakerFiring ? { breakerFiring: egressDecision.breakerFiring } : {}),
         ...(egressDecision.speakLeastWinner
           ? { yieldedTo: egressDecision.speakLeastWinner }
           : {}),
@@ -631,6 +632,7 @@ export function registerGatewayMessageHandlers(
         ...(egressDecision.declineReason ? { declineReason: egressDecision.declineReason } : {}),
         ...(egressDecision.drawOutcome ? { drawOutcome: egressDecision.drawOutcome } : {}),
         ...(egressDecision.breakerState ? { breakerState: egressDecision.breakerState } : {}),
+        ...(egressDecision.breakerFiring ? { breakerFiring: egressDecision.breakerFiring } : {}),
         ...(egressDecision.speakLeastWinner
           ? { yieldedTo: egressDecision.speakLeastWinner }
           : {}),

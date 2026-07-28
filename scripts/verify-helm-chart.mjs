@@ -138,6 +138,19 @@ function findParsedDocumentByKindName(rendered, kind, name) {
     .find(document => document?.kind === kind && document?.metadata?.name === name);
 }
 
+function assertAgentReadinessUsesAdminTransport(deployment, label) {
+  const agentContainer = deployment?.spec?.template?.spec?.containers
+    ?.find(container => container.name === 'agent');
+  if (!agentContainer) {
+    throw new Error(`${label} must render an agent container`);
+  }
+  if (agentContainer.readinessProbe?.tcpSocket?.port !== 'admin-https') {
+    throw new Error(
+      `${label} readiness must probe the admin-https listener withdrawn on gateway disconnect`,
+    );
+  }
+}
+
 function parseRenderedDocuments(rendered, label) {
   const parsed = parseAllDocuments(rendered);
   const errors = parsed.flatMap(document => document.errors);
@@ -480,6 +493,9 @@ if (defaultFleetAgents[0]?.metadata?.name
   !== 'psfn-agent-11111111-1111-4111-8111-111111111111') {
   throw new Error('default fleet-of-one render did not use the fleet agent naming contract');
 }
+const nonFleetAgent = findParsedDocumentByKindName(rendered, 'Deployment', 'psfn-agent');
+assertAgentReadinessUsesAdminTransport(nonFleetAgent, 'non-fleet agent');
+assertAgentReadinessUsesAdminTransport(defaultFleetAgents[0], 'default fleet agent');
 const defaultFleetGateway = defaultFleetDocuments.find(document => (
   document.kind === 'Deployment' && document.metadata?.name === 'psfn-gateway'
 ));
@@ -1317,6 +1333,7 @@ for (const companion of fleetGardenCompanions) {
   if (!fleetAgentContainer) {
     throw new Error(`${agentDeploymentName} must render an agent container`);
   }
+  assertAgentReadinessUsesAdminTransport(parsedAgentDeployment, agentDeploymentName);
   if (fleetAgentContainer.securityContext?.readOnlyRootFilesystem !== true) {
     throw new Error(
       `${agentDeploymentName} agent container must set securityContext.readOnlyRootFilesystem: true`,

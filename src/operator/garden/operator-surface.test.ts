@@ -1339,6 +1339,25 @@ describe('Garden operator surface', () => {
     });
   });
 
+  it('withdraws transport readiness before the remaining graceful shutdown completes', async () => {
+    harness.transportServer.withdrawReadiness();
+
+    const res = await requestPort(harness.port, 'GET', '/health');
+    expect(res.status).toBe(503);
+    expect(JSON.parse(res.body)).toEqual({
+      status: 'degraded',
+      uptime: expect.any(Number),
+      dependencies: {
+        adminTransport: expect.objectContaining({
+          mode: 'socket',
+          reachable: false,
+          status: 'degraded',
+          error: expect.any(String),
+        }),
+      },
+    });
+  });
+
   it('returns clear 404 or 502 responses for wrong paths and closed network upstreams', async () => {
     const missingRes = await requestPort(harness.port, 'GET', '/api/admin/not-a-route');
     expect(missingRes.status).toBe(404);

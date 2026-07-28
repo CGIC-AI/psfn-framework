@@ -105,6 +105,7 @@ export class GardenAdminTransportServer implements Lifecycle {
   private readonly admission: GardenAdmissionMode;
   private readonly bufferedFleetBodies = new WeakMap<IncomingMessage, string>();
   private readonly companionId?: string;
+  private serverClosePromise: Promise<void> | null = null;
 
   constructor(
     private readonly config: GardenAdminTransportServerConfig,
@@ -240,26 +241,34 @@ export class GardenAdminTransportServer implements Lifecycle {
     this.config.services.ownerFileReloadWatcher?.close();
     await this.config.services.icpAutonomy?.close?.();
     await this.config.services.roomArbiter?.close?.();
-    return await new Promise((resolve, reject) => {
-      this.server.closeAllConnections();
-      this.telemetryTransport.close(() => {
-        this.server.close((error) => {
-          try {
-            if (this.config.endpoint.mode === 'socket') {
-              this.cleanupSocketPath(this.config.endpoint.socketPath);
-            }
-          } catch (cleanupError) {
-            reject(cleanupError);
-            return;
-          }
+    this.server.closeAllConnections();
+    await new Promise<void>((resolve) => {
+      this.telemetryTransport.close(resolve);
+    });
+    await this.beginServerClose();
+    if (this.config.endpoint.mode === 'socket') {
+      this.cleanupSocketPath(this.config.endpoint.socketPath);
+    }
+  }
 
-          if (error) {
-            reject(error);
-            return;
-          }
-
-          resolve();
-        });
+  /**
+   * Stop accepting new admin transport connections immediately.
+   *
+   * Kubernetes readiness probes use this listener in both single-agent and
+   * fleet deployments. Withdrawing the listener makes a disconnected agent
+   * NotReady before slower database/background cleanup finishes. `stop()`
+   * reuses the same close promise, so the normal shutdown sequence remains
+   * responsible for draining active connections and cleaning up socket state.
+   */
+  withdrawReadiness(): void {
+    if (this.serverClosePromise) return;
+    log.warn('Withdrawing Garden admin transport readiness', {
+      endpoint: this.describeEndpoint(),
+    });
+    void this.beginServerClose().catch((error: unknown) => {
+      log.error('Garden admin transport readiness withdrawal failed', {
+        endpoint: this.describeEndpoint(),
+        error: toErrorMessage(error),
       });
     });
   }
@@ -304,6 +313,20 @@ export class GardenAdminTransportServer implements Lifecycle {
       return;
     }
     rmSync(socketPath, { force: true });
+  }
+
+  private beginServerClose(): Promise<void> {
+    if (this.serverClosePromise) return this.serverClosePromise;
+    this.serverClosePromise = new Promise<void>((resolve, reject) => {
+      this.server.close((error) => {
+        if (error) {
+          reject(error);
+          return;
+        }
+        resolve();
+      });
+    });
+    return this.serverClosePromise;
   }
 
   private createHttpServer(

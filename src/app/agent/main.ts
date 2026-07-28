@@ -126,6 +126,7 @@ import { registerGatewayMessageHandlers } from './gateway-message-handlers.js';
 import { registerIcpTargetChannelInitiationCommand } from './icp-target-channel-command.js';
 import { OutboundReplyDeduper } from '../../system/lifecycle/outbound-reply-dedupe.js';
 import { resolveGatewayConnectFailureExitCode } from './gateway-connect-failure.js';
+import { createGatewayDisconnectRecovery } from './gateway-disconnect-recovery.js';
 import { ObservedGroupMemoryScheduler } from '../../faculties/memory/extraction/group-observed-scheduler.js';
 import { PassiveNameCandidateBuilder } from '../../core/participation/passive-name-candidate.js';
 import { ParticipationAppraiser } from '../../core/participation/appraiser.js';
@@ -242,6 +243,10 @@ async function main(): Promise<void> {
   log.info('Initializing...');
   log.info('Lifecycle runtime contract resolved', runtimeStatusMeta);
   await enforceNetworkIsolationOnStartup();
+  const shutdownForceExitTimeoutMs = parsePositiveIntEnv(
+    process.env.SHUTDOWN_FORCE_EXIT_TIMEOUT_MS,
+    DEFAULT_SHUTDOWN_FORCE_EXIT_TIMEOUT_MS,
+  );
 
   // ── Connect to gateway ──
 
@@ -297,6 +302,18 @@ async function main(): Promise<void> {
     });
     process.exit(exitCode);
   }
+  let stopFn: () => Promise<void> = async () => {};
+  let withdrawReadiness = (): void => undefined;
+  const gatewayDisconnectRecovery = createGatewayDisconnectRecovery({
+    logger: log,
+    withdrawReadiness: () => withdrawReadiness(),
+    runGracefulShutdown: () => stopFn(),
+    exit: code => process.exit(code),
+    restartExitCode: resolveGatewayConnectFailureExitCode(lifecycleRuntimeContract.restart),
+    forceExitTimeoutMs: shutdownForceExitTimeoutMs,
+  });
+  const unregisterGatewayDisconnect = gateway.onDisconnect(gatewayDisconnectRecovery);
+
   // Self-report companion identity before any other traffic. Multi-companion
   // gateways reject unidentified agents fail-closed; a failure here is fatal.
   await gateway.identifyAsAgent();
@@ -304,32 +321,6 @@ async function main(): Promise<void> {
   const gatewayOps = createGatewayOpsPortFromClient(gateway);
   log.info('Connected to gateway', {
     ...(config.companionId ? { companionId: config.companionId } : {}),
-  });
-  let shuttingDown = false;
-  let stopFn: () => Promise<void> = async () => {};
-  // eslint-disable-next-line @typescript-eslint/no-misused-promises -- Callback API intentionally receives this Promise-returning lifecycle handler.
-  const unregisterGatewayDisconnect = gateway.onDisconnect(async (event) => {
-    if (shuttingDown) return;
-    shuttingDown = true;
-    log.error('Gateway connection lost; shutting down agent process', {
-      source: event.source,
-      error: event.error?.message,
-    });
-    // Fail closed on disconnect (bead imlb): the GatewayClient has no in-process
-    // reconnect, and surface routing (companionConnections) is only repopulated
-    // when the agent re-runs gateway.client.identify on a fresh connection. If a
-    // graceful stop fails we must NOT linger — a process left alive here is
-    // "connected but unregistered": it never re-identifies, so inbound channel
-    // routing keeps failing with companion_not_connected. Force the exit so the
-    // supervisor restarts the process and re-registers every surface.
-    try {
-      await stopFn();
-    } catch (error) {
-      log.error('Gateway disconnect shutdown failed; forcing exit so the supervisor restarts and re-registers surfaces', {
-        error: error instanceof Error ? error.message : String(error),
-      });
-    }
-    process.exit(resolveGatewayConnectFailureExitCode(lifecycleRuntimeContract.restart));
   });
 
   const persistenceRuntime = await createAgentPersistenceRuntime({
@@ -1224,6 +1215,7 @@ async function main(): Promise<void> {
     },
   });
   if (adminTransport) {
+    withdrawReadiness = () => adminTransport.withdrawReadiness();
     log.info('Garden admin transport listening', {
       endpoint: adminTransport.describeEndpoint(),
     });
@@ -2096,10 +2088,7 @@ async function main(): Promise<void> {
     logger: log,
     runGracefulShutdown: stopFn,
     exit: (code) => { process.exit(code); },
-    forceExitTimeoutMs: parsePositiveIntEnv(
-      process.env.SHUTDOWN_FORCE_EXIT_TIMEOUT_MS,
-      DEFAULT_SHUTDOWN_FORCE_EXIT_TIMEOUT_MS,
-    ),
+    forceExitTimeoutMs: shutdownForceExitTimeoutMs,
   });
 
   installSignalHandlers(shutdown, log);

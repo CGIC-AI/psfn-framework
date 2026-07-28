@@ -31,6 +31,7 @@ import { GatewayCapabilityTierResolver } from './capability-tier-resolver.js';
 import type { ResolvedCompanionsFleetConfig } from '../../system/config/companions-config.js';
 import { deriveShardCapabilityGrant } from '../../system/capabilities/shard-derivation.js';
 import { GatewayApiRuntime } from '../../channels/api/gateway-runtime.js';
+import { GatewayClient } from './client.js';
 
 // Mock the transport module to avoid real socket operations
 vi.mock('./transport.js', () => ({
@@ -193,6 +194,7 @@ async function setupServer(
 ): Promise<{
   server: GatewayServer;
   connect: (onSend?: (message: any, emit: (response: unknown) => void) => void) => Promise<MockConnection>;
+  connectClient: (companionId: string) => Promise<GatewayClient>;
 }> {
   const server = new GatewayServer(options);
   let onConnectionCb: ((conn: GatewayRpcConnection) => void) | null = null;
@@ -211,6 +213,67 @@ async function setupServer(
       onConnectionCb!(conn.conn);
       await new Promise(r => setTimeout(r, 5));
       return conn;
+    },
+    connectClient: async (companionId) => {
+      const clientEmitter = new EventEmitter();
+      const serverEmitter = new EventEmitter();
+      let closed = false;
+      const close = (peerEmitter: EventEmitter): void => {
+        if (closed) return;
+        closed = true;
+        queueMicrotask(() => peerEmitter.emit('close'));
+      };
+      const clientConnection = {
+        send(message: unknown): boolean {
+          if (closed) return false;
+          queueMicrotask(() => serverEmitter.emit('message', message));
+          return true;
+        },
+        onMessage(handler: (message: unknown) => void): void {
+          clientEmitter.on('message', handler);
+        },
+        on(event: string, handler: (...args: unknown[]) => void): void {
+          clientEmitter.on(event, handler);
+        },
+        destroy(): void {
+          close(serverEmitter);
+        },
+        get destroyed(): boolean {
+          return closed;
+        },
+      } as GatewayRpcConnection;
+      const serverConnection = {
+        send(message: unknown): boolean {
+          if (closed) return false;
+          queueMicrotask(() => clientEmitter.emit('message', message));
+          return true;
+        },
+        onMessage(handler: (message: unknown) => void): void {
+          serverEmitter.on('message', handler);
+        },
+        on(event: string, handler: (...args: unknown[]) => void): void {
+          serverEmitter.on(event, handler);
+        },
+        destroy(): void {
+          close(clientEmitter);
+        },
+        get destroyed(): boolean {
+          return closed;
+        },
+      } as GatewayRpcConnection;
+
+      onConnectionCb!(serverConnection);
+      const client = new GatewayClient(clientConnection, 16, {
+        companionId,
+        companionAuthToken: deriveCompanionAuthToken(
+          companionId,
+          'agent',
+          TEST_SESSION_HMAC_KEYRING,
+        ),
+        keepaliveIntervalMs: 60_000,
+      });
+      await client.identifyAsAgent();
+      return client;
     },
   };
 }
@@ -1303,6 +1366,64 @@ describe('GatewayServer multi-companion identify (flag on)', () => {
 
     await server.stop();
     expect(providerSignals[1].aborted).toBe(true);
+  });
+
+  it('aborts signal-free client LLM calls on connection disconnect and server stop', async () => {
+    const providerCalls: Array<{ kind: 'complete' | 'chat'; signal: AbortSignal }> = [];
+    const waitForAbort = async (
+      kind: 'complete' | 'chat',
+      signal?: AbortSignal,
+    ): Promise<never> => {
+      if (!signal) throw new Error('test expected a signal-free call to receive a gateway signal');
+      providerCalls.push({ kind, signal });
+      if (signal.aborted) throw signal.reason;
+      return await new Promise((_resolve, reject) => {
+        signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+      });
+    };
+    const { server, connectClient } = await setupServer({
+      ...createMinimalOptions(),
+      llmProvider: {
+        complete: vi.fn(async (
+          _context: unknown,
+          _purpose: unknown,
+          options?: { signal?: AbortSignal },
+        ) => await waitForAbort('complete', options?.signal)),
+        stream: vi.fn(async (
+          _context: unknown,
+          _callbacks: unknown,
+          options?: { signal?: AbortSignal },
+        ) => await waitForAbort('chat', options?.signal)),
+      } as any,
+      multiCompanion: multiCompanion({}),
+    });
+    const clientA = await connectClient('11111111-1111-4111-8111-111111111111');
+    const clientB = await connectClient('22222222-2222-4222-8222-222222222222');
+
+    const completion = clientA.complete({
+      systemPrompt: 'system',
+      messages: [{ role: 'user', content: 'complete without a caller signal' }],
+    }, 'background');
+    const streaming = clientB.stream(
+      {
+        systemPrompt: 'system',
+        messages: [{ role: 'user', content: 'stream without a caller signal' }],
+      },
+      { onText: vi.fn() },
+    );
+    await vi.waitFor(() => expect(providerCalls).toHaveLength(2));
+    expect(providerCalls.map(call => call.kind).sort()).toEqual(['chat', 'complete']);
+
+    clientA.destroy();
+    await expect(completion).rejects.toThrow('Gateway client destroyed');
+    await vi.waitFor(() => {
+      expect(providerCalls.find(call => call.kind === 'complete')?.signal.aborted).toBe(true);
+    });
+    expect(providerCalls.find(call => call.kind === 'chat')?.signal.aborted).toBe(false);
+
+    await server.stop();
+    await expect(streaming).rejects.toThrow();
+    expect(providerCalls.find(call => call.kind === 'chat')?.signal.aborted).toBe(true);
   });
 
   it.each([

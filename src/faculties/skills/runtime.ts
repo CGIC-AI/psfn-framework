@@ -6,24 +6,36 @@ import {
   type SkillsRuntimeConfig,
 } from '../../system/config/skills-config.js';
 import { filterEligibleSkills } from './filter.js';
-import { formatSkillsForPrompt } from './format.js';
+import {
+  compareSkillsForPrompt,
+  formatSkillsForPrompt,
+} from './format.js';
 import {
   applySkillPrecedence,
   buildSkillFileSignature,
+  cooperativeSort,
+  DEFAULT_SKILL_COLLECTION_LIMITS,
   loadSkillEntries,
   readSkillContent,
   resolveSkillDirectories,
   scanSkillRoots,
 } from './loader.js';
-import { SkillStore } from './store.js';
+import {
+  normalizeSkillCategory,
+  normalizeSkillDescription,
+  normalizeSkillName,
+  SkillStore,
+} from './store.js';
 import { SkillUsageTelemetryStore } from './telemetry.js';
 import type {
   SkillInvocationRecordInput,
+  SkillCollectionLimits,
   ManagedSkillOwnership,
   SkillDirectorySpec,
   SkillEvaluation,
   SkillLookupResult,
   SkillSnapshot,
+  SkillSkipRecord,
   SkillUsageStats,
 } from './types.js';
 
@@ -35,6 +47,7 @@ export interface SkillsRuntimeOptions {
   environment?: NodeJS.ProcessEnv;
   isBinaryAvailable?: (binaryName: string) => boolean;
   now?: () => Date;
+  collectionLimits?: Partial<SkillCollectionLimits>;
 }
 
 interface SkillSnapshotCache {
@@ -42,10 +55,17 @@ interface SkillSnapshotCache {
   snapshot: SkillSnapshot;
   evaluations: SkillEvaluation[];
   byName: Map<string, SkillEvaluation>;
+  managedEntries: SkillEvaluation['entry'][];
 }
 
-function hashSignature(payload: string): string {
-  return createHash('sha1').update(payload).digest('hex');
+async function hashSignature(payload: string, yieldEvery: number): Promise<string> {
+  const hash = createHash('sha1');
+  const chunkBytes = yieldEvery * 1024;
+  for (let offset = 0; offset < payload.length; offset += chunkBytes) {
+    hash.update(payload.slice(offset, offset + chunkBytes));
+    await new Promise<void>(resolveYield => setImmediate(resolveYield));
+  }
+  return hash.digest('hex');
 }
 
 function toPosix(path: string): string {
@@ -179,9 +199,61 @@ export class SkillsRuntime {
     this.telemetry.flush();
   }
 
-  /** List managed (user-created) skills. */
-  listManaged(): Array<{ name: string; description: string; category: string; version: number; content: string; createdAt: string; updatedAt: string }> {
-    return this.store.list().map(({ absolutePath: _, relativePath: __, ...rest }) => rest);
+  /** Build Garden's managed-skill view from the same bounded async cache. */
+  async listManaged(): Promise<{
+    managed: Array<{ name: string; description: string; category: string; version: number; content: string; createdAt: string; updatedAt: string }>;
+    skipped: SkillSkipRecord[];
+  }> {
+    const cache = await this.getOrCreateCache();
+    const limits = this.getCollectionLimits();
+    const totalBytes = cache.managedEntries.reduce((total, entry) => total + entry.size, 0);
+    if (totalBytes > limits.maxManagedContentBytes) {
+      return {
+        managed: [],
+        skipped: [{
+          kind: 'collection_limit',
+          name: 'managed skill collection',
+          relativePath: this.toRepoRelativePath(this.store.getManagedRootDir()),
+          source: 'custom',
+          reason: `Managed skill bodies require ${String(totalBytes)} bytes; aggregate read limit is ${String(limits.maxManagedContentBytes)} bytes`,
+          details: ['managed bodies were not read; no partial Garden list was returned'],
+        }],
+      };
+    }
+
+    const managed: Array<{
+      name: string;
+      description: string;
+      category: string;
+      version: number;
+      content: string;
+      createdAt: string;
+      updatedAt: string;
+    }> = [];
+    const managedRoot = this.store.getManagedRootDir();
+    for (const [index, entry] of cache.managedEntries.entries()) {
+      const categoryFromPath = relative(managedRoot, entry.absolutePath).split(sep)[0] ?? '';
+      managed.push({
+        name: normalizeSkillName(entry.name),
+        description: normalizeSkillDescription(entry.description),
+        category: normalizeSkillCategory(entry.category ?? categoryFromPath),
+        version: entry.version ?? 1,
+        content: await readSkillContent(entry),
+        createdAt: entry.createdAt ?? new Date(entry.birthtimeMs).toISOString(),
+        updatedAt: entry.updatedAt ?? new Date(entry.mtimeMs).toISOString(),
+      });
+      if ((index + 1) % limits.yieldEvery === 0) {
+        await new Promise<void>(resolveYield => setImmediate(resolveYield));
+      }
+    }
+    return {
+      managed: await cooperativeSort(
+        managed,
+        (left, right) => left.name.localeCompare(right.name),
+        limits.yieldEvery,
+      ),
+      skipped: [],
+    };
   }
 
   getManagedOwnership(): ManagedSkillOwnership {
@@ -242,8 +314,10 @@ export class SkillsRuntime {
     const repoRoot = requireSkillsRepoRoot(this.options.repoRoot);
     const configuredDirectories = resolveSkillDirectories(runtimeConfig, repoRoot);
     const directories = this.mergeManagedDirectory(configuredDirectories);
-    const scan = await scanSkillRoots(directories);
+    const limits = this.getCollectionLimits();
+    const scan = await scanSkillRoots(directories, { collectionLimits: limits });
     const files = scan.files;
+    const fileSignature = await buildSkillFileSignature(files, limits.yieldEvery);
 
     const signaturePayload = JSON.stringify({
       config: {
@@ -265,26 +339,54 @@ export class SkillsRuntime {
         exists: root.exists,
         message: root.message,
       })),
-      files: buildSkillFileSignature(files),
+      collection: scan.collection,
+      skipped: scan.skipped,
+      files: fileSignature,
     });
-    const fingerprint = hashSignature(signaturePayload);
+    const fingerprint = await hashSignature(signaturePayload, limits.yieldEvery);
 
     if (this.cache && !this.cache.fingerprint.localeCompare(fingerprint)) {
       return this.cache;
     }
 
-    const parsed = await loadSkillEntries(files);
-    const deduped = applySkillPrecedence(parsed.entries);
-    const eligibility = filterEligibleSkills(deduped.entries, {
-      runtimeConfig,
-      environment: this.options.environment,
-      isBinaryAvailable: this.options.isBinaryAvailable,
+    const parsed = await loadSkillEntries(files, {
+      collectionLimits: limits,
+      initialRetainedBytes: scan.collection.candidateBytesRetained,
     });
+    const deduped = await applySkillPrecedence(parsed.entries, limits.yieldEvery);
+    const eligibility: ReturnType<typeof filterEligibleSkills> = {
+      evaluations: [],
+      eligible: [],
+      skipped: [],
+    };
+    for (let offset = 0; offset < deduped.entries.length; offset += limits.yieldEvery) {
+      const chunk = filterEligibleSkills(
+        deduped.entries.slice(offset, offset + limits.yieldEvery),
+        {
+          runtimeConfig,
+          environment: this.options.environment,
+          isBinaryAvailable: this.options.isBinaryAvailable,
+        },
+      );
+      eligibility.evaluations.push(...chunk.evaluations);
+      eligibility.eligible.push(...chunk.eligible);
+      eligibility.skipped.push(...chunk.skipped);
+      await new Promise<void>(resolveYield => setImmediate(resolveYield));
+    }
 
-    const formatted = formatSkillsForPrompt(eligibility.eligible, {
-      maxSkills: runtimeConfig.maxLoadedSkills,
-      maxChars: runtimeConfig.maxSkillChars,
-    });
+    const promptOrdered = await cooperativeSort(
+      eligibility.eligible,
+      compareSkillsForPrompt,
+      limits.yieldEvery,
+    );
+    const formatted = formatSkillsForPrompt(
+      promptOrdered,
+      {
+        maxSkills: runtimeConfig.maxLoadedSkills,
+        maxChars: runtimeConfig.maxSkillChars,
+      },
+      { presorted: true },
+    );
 
     const snapshot: SkillSnapshot = {
       generatedAt: new Date().toISOString(),
@@ -298,9 +400,17 @@ export class SkillsRuntime {
       roots: scan.roots,
       scannedFiles: files.length,
       loadedSkills: deduped.entries.length,
+      collection: {
+        ...scan.collection,
+        metadataBytesRead: parsed.metadataBytesRead,
+        metadataBytesRetained: parsed.metadataBytesRetained,
+        limited: scan.collection.limited
+          || parsed.skipped.some(item => item.kind === 'collection_limit'),
+      },
       includedSkills: formatted.included,
       promptXml: formatted.xml,
       skipped: [
+        ...scan.skipped,
         ...parsed.skipped,
         ...deduped.skipped,
         ...eligibility.skipped,
@@ -309,8 +419,11 @@ export class SkillsRuntime {
     };
 
     const byName = new Map<string, SkillEvaluation>();
-    for (const evaluation of eligibility.evaluations) {
+    for (const [index, evaluation] of eligibility.evaluations.entries()) {
       byName.set(evaluation.entry.name.toLowerCase(), evaluation);
+      if ((index + 1) % limits.yieldEvery === 0) {
+        await new Promise<void>(resolveYield => setImmediate(resolveYield));
+      }
     }
 
     const nextCache = {
@@ -318,6 +431,7 @@ export class SkillsRuntime {
       snapshot,
       evaluations: eligibility.evaluations,
       byName,
+      managedEntries: parsed.entries.filter(entry => entry.source === 'custom'),
     };
 
     if (generation === this.cacheGeneration) {
@@ -330,6 +444,13 @@ export class SkillsRuntime {
     return loadSkillsConfig(this.options.dataDir, {
       seedDir: this.options.seedDir,
     });
+  }
+
+  private getCollectionLimits(): SkillCollectionLimits {
+    return {
+      ...DEFAULT_SKILL_COLLECTION_LIMITS,
+      ...this.options.collectionLimits,
+    };
   }
 
   private mergeManagedDirectory(

@@ -54,6 +54,7 @@ export interface SkillFileCandidate {
   relativePath: string;
   directory: SkillDirectorySpec;
   mtimeMs: number;
+  birthtimeMs: number;
   size: number;
 }
 
@@ -72,10 +73,11 @@ export interface SkillEntry {
   source: SkillSource;
   precedence: number;
   mtimeMs: number;
+  birthtimeMs: number;
   size: number;
 }
 
-export type SkillSkipKind = 'parse_error' | 'oversized' | 'shadowed' | 'ineligible' | 'budget';
+export type SkillSkipKind = 'parse_error' | 'oversized' | 'collection_limit' | 'shadowed' | 'ineligible' | 'budget';
 
 export interface SkillSkipRecord {
   kind: SkillSkipKind;
@@ -89,6 +91,25 @@ export interface SkillSkipRecord {
 export interface SkillBudget {
   maxSkills: number;
   maxChars: number;
+}
+
+export interface SkillCollectionLimits {
+  maxDiscoveryEntries: number;
+  maxCandidates: number;
+  maxMetadataBytes: number;
+  maxRetainedBytes: number;
+  maxManagedContentBytes: number;
+  yieldEvery: number;
+}
+
+export interface SkillCollectionStats {
+  discoveryEntries: number;
+  candidatesSeen: number;
+  candidateBytesRetained: number;
+  metadataBytesRead: number;
+  metadataBytesRetained: number;
+  limited: boolean;
+  limits: SkillCollectionLimits;
 }
 
 export interface SkillEligibilityResult {
@@ -121,6 +142,7 @@ export interface SkillSnapshot {
   roots: SkillRootScan[];
   scannedFiles: number;
   loadedSkills: number;
+  collection: SkillCollectionStats;
   includedSkills: SkillEntry[];
   promptXml: string;
   skipped: SkillSkipRecord[];

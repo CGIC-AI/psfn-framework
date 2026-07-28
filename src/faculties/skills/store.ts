@@ -59,7 +59,7 @@ function normalizeSegment(
   return normalized;
 }
 
-function normalizeDescription(description: string): string {
+export function normalizeSkillDescription(description: string): string {
   const normalized = description.trim();
   if (!normalized) {
     throw new Error('Skill description must be non-empty');
@@ -280,7 +280,7 @@ export class SkillStore {
       throw new Error(`Skill "${name}" already exists`);
     }
 
-    const description = normalizeDescription(input.description ?? deriveDescription(content));
+    const description = normalizeSkillDescription(input.description ?? deriveDescription(content));
     const timestamp = this.now().toISOString();
     const absolutePath = this.resolveSkillFilePath(category, name);
 
@@ -318,7 +318,7 @@ export class SkillStore {
     }
 
     const content = normalizeContent(input.content);
-    const description = normalizeDescription(input.description ?? existing.description);
+    const description = normalizeSkillDescription(input.description ?? existing.description);
     return this.applyExistingSkillWrite(existing, { content, description }, provenance, 'update');
   }
 
@@ -369,7 +369,7 @@ export class SkillStore {
       existing,
       {
         content: normalizeContent(restored.body),
-        description: normalizeDescription(restored.frontmatter.description),
+        description: normalizeSkillDescription(restored.frontmatter.description),
       },
       {
         updatedBy: normalizedProvenance.updatedBy,
@@ -480,7 +480,7 @@ export class SkillStore {
     const pathCategory = this.extractCategoryFromPath(absolutePath);
 
     const name = normalizeSkillName(parsed.frontmatter.name);
-    const description = normalizeDescription(parsed.frontmatter.description);
+    const description = normalizeSkillDescription(parsed.frontmatter.description);
     const category = normalizeSkillCategory(parsed.frontmatter.category ?? pathCategory);
     const version = parsed.frontmatter.version ?? 1;
     if (!Number.isInteger(version) || version < 1) {

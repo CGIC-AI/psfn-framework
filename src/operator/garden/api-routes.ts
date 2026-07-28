@@ -1013,11 +1013,27 @@ export function buildAdminApiRoutes(options: {
           sendJson(res, 200, { snapshot: null, managed: [], disabledSkills: [] });
           return;
         }
-        void Promise.resolve(skillsRuntime.getSnapshot())
-          .then((snapshot) => {
-            const managed = skillsRuntime.listManaged();
+        void Promise.all([
+          Promise.resolve(skillsRuntime.getSnapshot()),
+          skillsRuntime.listManaged(),
+        ])
+          .then(([snapshot, managedProjection]) => {
             const disabledSkills = skillsRuntime.getDisabledSkills();
-            sendJson(res, 200, { snapshot, managed, disabledSkills });
+            const boundedSnapshot = managedProjection.skipped.length > 0
+              ? {
+                  ...snapshot,
+                  collection: {
+                    ...snapshot.collection,
+                    limited: true,
+                  },
+                  skipped: [...snapshot.skipped, ...managedProjection.skipped],
+                }
+              : snapshot;
+            sendJson(res, 200, {
+              snapshot: boundedSnapshot,
+              managed: managedProjection.managed,
+              disabledSkills,
+            });
           })
           .catch((error: unknown) => {
             sendJson(res, 500, {

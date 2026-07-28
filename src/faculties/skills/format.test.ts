@@ -21,6 +21,7 @@ function makeEntry(
     source: 'bundled',
     precedence: 1,
     mtimeMs: 1,
+    birthtimeMs: 1,
     size: 1,
     ...overrides,
   };

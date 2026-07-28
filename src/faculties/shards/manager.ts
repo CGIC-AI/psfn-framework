@@ -105,6 +105,10 @@ import {
   createShardConfigurationControl,
   ShardConfigurationRegistry,
 } from './configuration-snapshot.js';
+import {
+  createGovernedShardTool,
+  GOVERNED_SHARD_TOOL_POLICIES,
+} from './tool-governance.js';
 
 const log = createComponentLogger('ShardManager');
 type ShardExecutionResult = Omit<ShardResult, 'completionHandoff'>;
@@ -132,6 +136,20 @@ const BLOCKED_SHARD_TOOL_NAMES = new Set([
   'undo_memory_delete',
   'scratchpad_read',
   'scratchpad_write',
+  // gjkh: canonical identity/purpose/trust surfaces are blocked at injection,
+  // mirroring the subagent seam's BLOCKED_SUBAGENT_TOOL_NAMES. Core stays
+  // authoritative for identity, values, and trust truth (charter 6.13), and a
+  // shard folds proposed changes back through origin-side review rather than
+  // mutating live state. The pre-existing contact_* split aliases already
+  // blocked even the reads, so the multiplexed `contact` tool
+  // (set_trust/set_relationship/link_identity/block = trust truth) joins them
+  // — otherwise an autonomous-tier ('*') shard would reach it live through the
+  // shard wrapper, which only stages memory mutations. `orient` is the sole
+  // exception: it keeps task-scoped reads under GOVERNED_SHARD_TOOL_POLICIES
+  // (mutations denied), matching p0le's disposition for orient.
+  'identity',
+  'north_star',
+  'contact',
   'contact_list',
   'contact_lookup',
   'contact_note',
@@ -145,7 +163,10 @@ const APPRENTICE_SHARD_TOOL_EXTRAS = [
 ] as const;
 export const DEFAULT_SHARD_TOOLSET = [
   'memory',
-  'contact',
+  // gjkh: `contact` was removed from the default toolset when it joined
+  // BLOCKED_SHARD_TOOL_NAMES (trust truth is core-authoritative, charter 6.13);
+  // naming a blocked tool in a toolset can never inject it, so keep the default
+  // honest rather than carrying a dead entry.
   'repo_status',
   'repo_diff',
 ] as const;
@@ -1575,7 +1596,21 @@ export class ShardManager implements ShardExecutionPort {
 
     return [
       createShardParentIcpTool(shardId, this.shardParentIcp),
-      ...selected.map(tool => this.toolSyncHelper.wrapShardTool(tool, shardId, memoryReviewContext)),
+      ...selected.map(tool => {
+        const wrapped = this.toolSyncHelper.wrapShardTool(tool, shardId, memoryReviewContext);
+        // gjkh: canonical multiplexed surfaces (orient) reach a shard loop only
+        // behind a read-pass / mutation-deny wrapper, reusing p0le's orient
+        // classification. identity/north_star/contact never get this far — they
+        // are blocked at injection (BLOCKED_SHARD_TOOL_NAMES).
+        const governancePolicy = GOVERNED_SHARD_TOOL_POLICIES.get(tool.name);
+        if (governancePolicy) {
+          return createGovernedShardTool(wrapped, governancePolicy, {
+            shardId,
+            auditTrail: this.auditTrail,
+          });
+        }
+        return wrapped;
+      }),
     ];
   }
 

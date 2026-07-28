@@ -1322,6 +1322,10 @@ export class SessionManager implements SessionManagerTypeSurface {
     this.backgroundWorkHandoffRecovery.defer(record);
   }
 
+  hasPendingBackgroundWorkHandoffRecovery(): boolean {
+    return this.backgroundWorkHandoffRecovery.hasPending();
+  }
+
   /**
    * Drain at most `limit` live enqueue failures. Each candidate is re-read
    * from the canonical TurnRecord store while the same cross-process fence

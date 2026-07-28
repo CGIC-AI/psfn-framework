@@ -1,3 +1,5 @@
+import { BackgroundWorkHandoffRetryCapacityError } from '../../session/manager/background-work-handoff-recovery.js';
+
 export interface BackgroundWorkTickOperations {
   recoverHandoffs(): Promise<void>;
   tick(): Promise<void>;
@@ -20,11 +22,21 @@ export async function recoverHistoricalBackgroundWorkHandoffs<T>(
     try {
       await enqueue(record);
     } catch (error) {
+      if (isRecoveryEvidenceError(error)) throw error;
       try {
         defer(record);
         if (errors.length < retainedErrorsLimit) errors.push(error);
         else suppressedErrors += 1;
       } catch (deferError) {
+        if (deferError instanceof BackgroundWorkHandoffRetryCapacityError) {
+          throw new BackgroundWorkHandoffRetryCapacityError(deferError.capacity, {
+            cause: new AggregateError(
+              [error, deferError],
+              'Historical background work handoff retry capacity was exhausted after enqueue failed',
+            ),
+          });
+        }
+        if (isRecoveryEvidenceError(deferError)) throw deferError;
         const combined = new AggregateError(
           [error, deferError],
           'Historical background work handoff failed to enqueue and index for retry',
@@ -44,6 +56,10 @@ export async function recoverHistoricalBackgroundWorkHandoffs<T>(
   if (errors.length > 1) {
     throw new AggregateError(errors, 'Multiple historical background work handoffs failed');
   }
+}
+
+function isRecoveryEvidenceError(error: unknown): boolean {
+  return error instanceof Error && error.name === 'TurnRecordRecoveryEvidenceError';
 }
 
 /**

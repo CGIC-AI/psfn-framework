@@ -1,12 +1,21 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { TurnRecord } from '../../../shared/contracts/runtime.js';
 import { createTurnId } from '../../turns/id.js';
-import { BackgroundWorkHandoffRecovery } from './background-work-handoff-recovery.js';
+import {
+  createBackgroundWorkIdentity,
+  fingerprintBackgroundWorkPayload,
+  fingerprintBackgroundWorkTurnRecord,
+  type MemoryExtractionBackgroundPayload,
+} from '../../agent/background-work/types.js';
+import {
+  BackgroundWorkHandoffRecovery,
+  BackgroundWorkHandoffRetryCapacityError,
+} from './background-work-handoff-recovery.js';
 
 function makeRecord(index: number): TurnRecord {
   const completedAt = 1_742_000_000_000 + index;
   const turnId = createTurnId(completedAt);
-  return {
+  const record: TurnRecord = {
     schemaVersion: 1,
     turnId,
     requestId: `request-${index}`,
@@ -24,8 +33,40 @@ function makeRecord(index: number): TurnRecord {
     contactDeltaRefs: [],
     versionPointers: { model: 'test/model' },
     provenanceRefs: [],
-    backgroundWorkHandoff: { schemaVersion: 1, jobs: [] },
   };
+  const payload: MemoryExtractionBackgroundPayload = {
+    schemaVersion: 1,
+    kind: 'memory_extraction',
+    source: {
+      schemaVersion: 1,
+      logicalSessionId: record.sessionId!,
+      channelId: record.channelId,
+      turnId,
+      requestId: record.requestId,
+      turnRecordFingerprint: fingerprintBackgroundWorkTurnRecord(record),
+      createdAtMs: completedAt,
+    },
+  };
+  record.backgroundWorkHandoff = {
+    schemaVersion: 1,
+    jobs: [{
+      ...createBackgroundWorkIdentity({
+        logicalSessionId: record.sessionId!,
+        turnId,
+        kind: payload.kind,
+      }),
+      logicalSessionId: record.sessionId!,
+      kind: payload.kind,
+      payload,
+      payloadFingerprint: fingerprintBackgroundWorkPayload(payload),
+      sourceTurnId: turnId,
+      sourceRequestId: record.requestId,
+      sourceChannelId: record.channelId,
+      createdAtMs: completedAt,
+      maxAttempts: 5,
+    }],
+  };
+  return record;
 }
 
 describe('BackgroundWorkHandoffRecovery', () => {
@@ -107,7 +148,7 @@ describe('BackgroundWorkHandoffRecovery', () => {
       withSourceTurnRecordEligibilityFence: async (_source, _session, _turn, operation) => (
         operation()
       ),
-    });
+    }, records.length);
     for (const record of records) recovery.defer(record);
 
     type PendingReference = {
@@ -135,5 +176,81 @@ describe('BackgroundWorkHandoffRecovery', () => {
     expect(await recovery.recover(32, operation)).toBe(32);
     expect(traversed).toBe(32);
     expect(operation).toHaveBeenCalledTimes(33);
+  });
+
+  it('fails closed at capacity without dropping durable rows and recovers fairly after an outage', async () => {
+    const records = Array.from({ length: 5 }, (_, index) => makeRecord(index));
+    const recordsByTurn = new Map(records.map(record => [record.turnId, record]));
+    const recovery = new BackgroundWorkHandoffRecovery({
+      findSourceTurnRecord: (_sourceChannelId, _logicalSessionId, turnId) => (
+        recordsByTurn.get(turnId) ?? null
+      ),
+      isSourceTurnRecordEligible: () => true,
+      withSourceTurnRecordEligibilityFence: async (_source, _session, _turn, operation) => (
+        operation()
+      ),
+    }, 3);
+
+    for (const record of records.slice(0, 3)) recovery.defer(record);
+    expect(() => recovery.defer(records[3]!)).toThrow(BackgroundWorkHandoffRetryCapacityError);
+    expect(recovery.hasPending()).toBe(true);
+    expect(recordsByTurn.size).toBe(5);
+
+    const outage = vi.fn(async () => {
+      throw new Error('backing store unavailable');
+    });
+    await expect(recovery.recover(3, outage)).rejects.toMatchObject({
+      errors: [
+        expect.objectContaining({ message: 'backing store unavailable' }),
+        expect.objectContaining({ message: 'backing store unavailable' }),
+        expect.objectContaining({ message: 'backing store unavailable' }),
+      ],
+    });
+    expect(outage.mock.calls.map(call => call[0].turnId)).toEqual(
+      records.slice(0, 3).map(record => record.turnId),
+    );
+    expect(recovery.hasPending()).toBe(true);
+    expect(recordsByTurn.size).toBe(5);
+
+    const accepted: string[] = [];
+    expect(await recovery.recover(3, async record => {
+      accepted.push(record.turnId);
+    })).toBe(3);
+    expect(accepted).toEqual(records.slice(0, 3).map(record => record.turnId));
+    expect(recovery.hasPending()).toBe(false);
+    expect(recordsByTurn.size).toBe(5);
+  });
+
+  it('rejects semantic poison before indexing and retires poison discovered during retry', async () => {
+    const valid = makeRecord(10);
+    const poisonedBeforeIndex = structuredClone(valid);
+    poisonedBeforeIndex.backgroundWorkHandoff!.jobs[0]!.payloadFingerprint = '0'.repeat(64);
+    const recordsByTurn = new Map([[valid.turnId, valid]]);
+    const recovery = new BackgroundWorkHandoffRecovery({
+      findSourceTurnRecord: (_sourceChannelId, _logicalSessionId, turnId) => (
+        recordsByTurn.get(turnId) ?? null
+      ),
+      isSourceTurnRecordEligible: () => true,
+      withSourceTurnRecordEligibilityFence: async (_source, _session, _turn, operation) => (
+        operation()
+      ),
+    }, 2);
+
+    expect(() => recovery.defer(poisonedBeforeIndex)).toThrow(
+      expect.objectContaining({ name: 'TurnRecordRecoveryEvidenceError' }),
+    );
+    expect(recovery.hasPending()).toBe(false);
+
+    recovery.defer(valid);
+    const poisonedOnDisk = structuredClone(valid);
+    poisonedOnDisk.backgroundWorkHandoff!.jobs[0]!.payloadFingerprint = 'f'.repeat(64);
+    recordsByTurn.set(valid.turnId, poisonedOnDisk);
+    const operation = vi.fn(async () => undefined);
+    await expect(recovery.recover(1, operation)).rejects.toMatchObject({
+      name: 'TurnRecordRecoveryEvidenceError',
+    });
+    expect(operation).not.toHaveBeenCalled();
+    expect(recovery.hasPending()).toBe(false);
+    expect(await recovery.recover(1, operation)).toBe(0);
   });
 });

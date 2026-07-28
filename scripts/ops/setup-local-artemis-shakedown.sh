@@ -1178,6 +1178,7 @@ GRANT USAGE ON SCHEMA extensions TO companion_default_runtime, shared_schema_mig
 CREATE SCHEMA companion_default AUTHORIZATION companion_default_runtime;
 REVOKE ALL ON SCHEMA companion_default FROM PUBLIC;
 GRANT USAGE, CREATE ON SCHEMA companion_default TO companion_default_runtime;
+ALTER ROLE companion_default_runtime IN DATABASE psfn SET search_path TO companion_default, extensions;
 SQL
   } | kubectl -n "$NAMESPACE" exec -i "$postgres_pod" -- \
     psql --set=ON_ERROR_STOP=1 --username=psfn --dbname=postgres

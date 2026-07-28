@@ -208,11 +208,15 @@ describe('local Artemis always-fleet bootstrap fixtures', () => {
     expect(script).toContain("printf 'SHARED_SCHEMA_MIGRATION_DATABASE_URL=%s\\n'");
     expect(script).toContain("printf 'COMPANION_DEFAULT_DATABASE_URL=%s\\n'");
     expect(script).toContain('ALTER ROLE companion_default_runtime WITH LOGIN NOINHERIT');
+    expect(script).toContain(
+      'ALTER ROLE companion_default_runtime IN DATABASE psfn SET search_path TO companion_default, extensions',
+    );
     expect(script).toContain('ALTER ROLE shared_schema_migration WITH LOGIN NOINHERIT');
     expect(script).toContain('CONNECTION LIMIT 60');
     expect(script).toContain('\\connect psfn\nCREATE SCHEMA IF NOT EXISTS extensions');
     expect(script).toContain('ALTER EXTENSION vector SET SCHEMA extensions');
     expect(script).toContain('CREATE SCHEMA companion_default AUTHORIZATION companion_default_runtime');
+    expect(script).not.toMatch(/GRANT\s+CREATE\s+ON\s+SCHEMA\s+public/i);
     expect(script).toContain(
       'provision_fleet_auth_database_roles\nreplace_postgres_runtime_database_url\ncreate_local_app_secret',
     );

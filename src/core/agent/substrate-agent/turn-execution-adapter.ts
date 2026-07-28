@@ -99,7 +99,7 @@ interface TurnExecutionAdapterCallbacks {
     conversationScope: import('../../session/conversation-scope.js').ConversationScope,
     participantRelationshipEdges: readonly ParticipantRelationshipEdgeInput[],
     capturedSessionReads: CapturedSessionReads,
-  ) => Record<string, string>;
+  ) => Promise<Record<string, string>>;
   setCurrentSelfModelState: (
     state: InternalState,
     snapshotRef: string,

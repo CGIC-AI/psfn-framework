@@ -364,13 +364,39 @@ function normalizeSkillAction(params: SkillToolParams): SkillToolAction {
   }
 }
 
-function buildSkillListPayload(runtime: SkillsRuntime, params: SkillListParams): Record<string, unknown> {
-  const snapshot = runtime.getSnapshot();
-  const evaluations = runtime.listSkillEvaluations();
+async function buildSkillListPayload(
+  runtime: SkillsRuntime,
+  params: SkillListParams,
+): Promise<Record<string, unknown>> {
+  const snapshot = await runtime.getSnapshot();
+  const evaluations = await runtime.listSkillEvaluations();
   const includeSkipped = params.includeSkipped ?? true;
   const includeContent = params.includeContent ?? false;
   const includedNames = new Set(snapshot.includedSkills.map(skill => skill.name));
-  const categorySummary = runtime.listCategorySummary();
+  const categorySummary = await runtime.listCategorySummary();
+  const skills: Array<Record<string, unknown>> = [];
+  for (const { entry, eligibility } of evaluations) {
+    let content: string | undefined;
+    if (includeContent) {
+      content = (await runtime.readSkillContent(entry.name))?.content;
+    }
+    skills.push({
+      name: entry.name,
+      category: entry.category,
+      description: entry.description,
+      version: entry.version ?? null,
+      createdAt: entry.createdAt ?? null,
+      updatedAt: entry.updatedAt ?? null,
+      source: entry.source,
+      ownership: resolveSkillOwnership(entry.source),
+      path: entry.relativePath,
+      inPromptIndex: includedNames.has(entry.name),
+      eligible: eligibility.eligible,
+      reasons: eligibility.reasons,
+      requires: entry.requires,
+      ...(content !== undefined ? { content } : {}),
+    });
+  }
 
   return {
     generatedAt: snapshot.generatedAt,
@@ -396,22 +422,7 @@ function buildSkillListPayload(runtime: SkillsRuntime, params: SkillListParams):
       path: skill.relativePath,
       requires: skill.requires,
     })),
-    skills: evaluations.map(({ entry, eligibility }) => ({
-      name: entry.name,
-      category: entry.category,
-      description: entry.description,
-      version: entry.version ?? null,
-      createdAt: entry.createdAt ?? null,
-      updatedAt: entry.updatedAt ?? null,
-      source: entry.source,
-      ownership: resolveSkillOwnership(entry.source),
-      path: entry.relativePath,
-      inPromptIndex: includedNames.has(entry.name),
-      eligible: eligibility.eligible,
-      reasons: eligibility.reasons,
-      requires: entry.requires,
-      ...(includeContent ? { content: entry.content } : {}),
-    })),
+    skills,
     ...(includeSkipped
       ? {
         skipped: snapshot.skipped.map(item => ({
@@ -427,11 +438,14 @@ function buildSkillListPayload(runtime: SkillsRuntime, params: SkillListParams):
   };
 }
 
-function buildSkillMetadata(runtime: SkillsRuntime, name: string): Record<string, unknown> | null {
-  const result = runtime.findSkill(name);
+async function buildSkillMetadata(
+  runtime: SkillsRuntime,
+  name: string,
+): Promise<Record<string, unknown> | null> {
+  const result = await runtime.findSkill(name);
   if (!result) return null;
   const { entry, eligible } = result;
-  const snapshot = runtime.getSnapshot();
+  const snapshot = await runtime.getSnapshot();
   const includedNames = new Set(snapshot.includedSkills.map(skill => skill.name));
   return {
     name: entry.name,
@@ -484,10 +498,13 @@ function buildStatsTotals(stats: ReturnType<SkillsRuntime['listSkillUsageStats']
   };
 }
 
-function buildSkillStatsPayload(runtime: SkillsRuntime, name?: string): Record<string, unknown> {
+async function buildSkillStatsPayload(
+  runtime: SkillsRuntime,
+  name?: string,
+): Promise<Record<string, unknown>> {
   const normalizedName = typeof name === 'string' ? name.trim() : '';
   if (normalizedName) {
-    const skill = buildSkillMetadata(runtime, normalizedName);
+    const skill = await buildSkillMetadata(runtime, normalizedName);
     const lookupName = typeof skill?.name === 'string' ? skill.name : normalizedName;
     const stats = runtime.getSkillUsageStats(lookupName);
     const status = skill
@@ -509,8 +526,8 @@ function buildSkillStatsPayload(runtime: SkillsRuntime, name?: string): Record<s
     };
   }
 
-  const snapshot = runtime.getSnapshot();
-  const evaluations = runtime.listSkillEvaluations();
+  const snapshot = await runtime.getSnapshot();
+  const evaluations = await runtime.listSkillEvaluations();
   const includedNames = new Set(snapshot.includedSkills.map(skill => skill.name));
   const stats = runtime.listSkillUsageStats();
   const statsByName = new Map(stats.map(item => [item.name.toLowerCase(), item]));
@@ -543,13 +560,16 @@ function buildSkillStatsPayload(runtime: SkillsRuntime, name?: string): Record<s
   };
 }
 
-function buildSkillViewPayload(runtime: SkillsRuntime, name: string): Record<string, unknown> | null {
-  const result = runtime.findSkill(name);
+async function buildSkillViewPayload(
+  runtime: SkillsRuntime,
+  name: string,
+): Promise<Record<string, unknown> | null> {
+  const result = await runtime.readSkillContent(name);
   if (!result) {
     return null;
   }
 
-  const { entry, eligible } = result;
+  const { entry, eligible } = result.lookup;
   return {
     name: entry.name,
     category: entry.category,
@@ -570,7 +590,7 @@ function buildSkillViewPayload(runtime: SkillsRuntime, name: string): Record<str
       missingConfig: eligible.missingConfig,
       disabledByConfig: eligible.disabledByConfig,
     },
-    content: entry.content,
+    content: result.content,
   };
 }
 
@@ -620,7 +640,7 @@ export function createSkillTool(
       try {
         switch (normalizeSkillAction(params)) {
           case 'list':
-            return textResult(JSON.stringify(buildSkillListPayload(runtime, params), null, 2));
+            return textResult(JSON.stringify(await buildSkillListPayload(runtime, params), null, 2));
           case 'view': {
             const name = typeof params.name === 'string' ? params.name.trim() : '';
             if (!name) {
@@ -628,13 +648,13 @@ export function createSkillTool(
             }
 
             const startedAt = Date.now();
-            const payload = buildSkillViewPayload(runtime, name);
+            const payload = await buildSkillViewPayload(runtime, name);
             if (!payload) {
               return textResultWithError(`Skill "${name}" not found`, true);
             }
             let telemetryWarning: string | null = null;
             try {
-              runtime.recordSkillInvocation(name, {
+              await runtime.recordSkillInvocation(name, {
                 outcome: 'success',
                 durationMs: Date.now() - startedAt,
               });
@@ -647,7 +667,7 @@ export function createSkillTool(
             }, null, 2));
           }
           case 'stats':
-            return textResult(JSON.stringify(buildSkillStatsPayload(runtime, params.name), null, 2));
+            return textResult(JSON.stringify(await buildSkillStatsPayload(runtime, params.name), null, 2));
           case 'create': {
             const name = typeof params.name === 'string' ? params.name : '';
             const category = typeof params.category === 'string' ? params.category : '';

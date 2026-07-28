@@ -67,7 +67,6 @@ export interface SkillEntry {
   version?: number;
   always: boolean;
   requires: SkillRequirementSpec;
-  content: string;
   absolutePath: string;
   relativePath: string;
   source: SkillSource;
@@ -76,7 +75,7 @@ export interface SkillEntry {
   size: number;
 }
 
-export type SkillSkipKind = 'parse_error' | 'shadowed' | 'ineligible' | 'budget';
+export type SkillSkipKind = 'parse_error' | 'oversized' | 'shadowed' | 'ineligible' | 'budget';
 
 export interface SkillSkipRecord {
   kind: SkillSkipKind;

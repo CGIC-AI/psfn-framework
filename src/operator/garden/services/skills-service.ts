@@ -28,7 +28,7 @@ export class AdminSkillsDataService implements AdminSkillsApi {
     }
   }
 
-  getSnapshot(): SkillSnapshot {
+  getSnapshot(): Promise<SkillSnapshot> {
     return this.runtime.getSnapshot();
   }
 

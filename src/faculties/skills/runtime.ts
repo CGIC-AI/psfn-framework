@@ -11,6 +11,7 @@ import {
   applySkillPrecedence,
   buildSkillFileSignature,
   loadSkillEntries,
+  readSkillContent,
   resolveSkillDirectories,
   scanSkillRoots,
 } from './loader.js';
@@ -64,6 +65,11 @@ export class SkillsRuntime {
   private store: SkillStore;
   private telemetry: SkillUsageTelemetryStore;
   private cache: SkillSnapshotCache | null = null;
+  private cacheGeneration = 0;
+  private cacheBuild: {
+    generation: number;
+    promise: Promise<SkillSnapshotCache>;
+  } | null = null;
 
   constructor(options: SkillsRuntimeOptions) {
     this.options = options;
@@ -79,22 +85,27 @@ export class SkillsRuntime {
 
   invalidate(): void {
     this.cache = null;
+    this.cacheGeneration += 1;
   }
 
-  getPromptXml(): string {
-    return this.getSnapshot().promptXml;
+  async getPromptXml(): Promise<string> {
+    return (await this.getSnapshot()).promptXml;
   }
 
-  getSnapshot(): SkillSnapshot {
-    return this.getOrCreateCache().snapshot;
+  getCachedPromptXml(): string {
+    return this.cache?.snapshot.promptXml ?? '';
   }
 
-  listSkillEvaluations(): SkillEvaluation[] {
-    return [...this.getOrCreateCache().evaluations];
+  async getSnapshot(): Promise<SkillSnapshot> {
+    return (await this.getOrCreateCache()).snapshot;
   }
 
-  listCategorySummary(): Array<{ category: string; total: number; included: number }> {
-    const cache = this.getOrCreateCache();
+  async listSkillEvaluations(): Promise<SkillEvaluation[]> {
+    return [...(await this.getOrCreateCache()).evaluations];
+  }
+
+  async listCategorySummary(): Promise<Array<{ category: string; total: number; included: number }>> {
+    const cache = await this.getOrCreateCache();
     const includedNames = new Set(cache.snapshot.includedSkills.map(skill => skill.name));
     const counts = new Map<string, { total: number; included: number }>();
     for (const evaluation of cache.evaluations) {
@@ -116,10 +127,10 @@ export class SkillsRuntime {
       .sort((left, right) => left.category.localeCompare(right.category));
   }
 
-  findSkill(name: string): SkillLookupResult | null {
+  async findSkill(name: string): Promise<SkillLookupResult | null> {
     const normalized = name.trim().toLowerCase();
     if (!normalized) return null;
-    const match = this.getOrCreateCache().byName.get(normalized);
+    const match = (await this.getOrCreateCache()).byName.get(normalized);
     if (!match) return null;
     return {
       entry: match.entry,
@@ -131,11 +142,23 @@ export class SkillsRuntime {
     return this.store;
   }
 
-  recordSkillInvocation(
+  async readSkillContent(name: string): Promise<{
+    lookup: SkillLookupResult;
+    content: string;
+  } | null> {
+    const lookup = await this.findSkill(name);
+    if (!lookup) return null;
+    return {
+      lookup,
+      content: await readSkillContent(lookup.entry),
+    };
+  }
+
+  async recordSkillInvocation(
     name: string,
     input: SkillInvocationRecordInput,
-  ): SkillUsageStats | null {
-    const result = this.findSkill(name);
+  ): Promise<SkillUsageStats | null> {
+    const result = await this.findSkill(name);
     if (!result) return null;
     return this.telemetry.record(result.entry.name, input);
   }
@@ -193,12 +216,33 @@ export class SkillsRuntime {
     this.invalidate();
   }
 
-  private getOrCreateCache(): SkillSnapshotCache {
+  private async getOrCreateCache(): Promise<SkillSnapshotCache> {
+    const generation = this.cacheGeneration;
+    if (this.cacheBuild?.generation === generation) {
+      return this.cacheBuild.promise;
+    }
+
+    const promise = this.buildCache(generation);
+    this.cacheBuild = { generation, promise };
+    try {
+      const cache = await promise;
+      if (generation !== this.cacheGeneration) {
+        return this.getOrCreateCache();
+      }
+      return cache;
+    } finally {
+      if (this.cacheBuild.promise === promise) {
+        this.cacheBuild = null;
+      }
+    }
+  }
+
+  private async buildCache(generation: number): Promise<SkillSnapshotCache> {
     const runtimeConfig = this.loadRuntimeConfig();
     const repoRoot = requireSkillsRepoRoot(this.options.repoRoot);
     const configuredDirectories = resolveSkillDirectories(runtimeConfig, repoRoot);
     const directories = this.mergeManagedDirectory(configuredDirectories);
-    const scan = scanSkillRoots(directories);
+    const scan = await scanSkillRoots(directories);
     const files = scan.files;
 
     const signaturePayload = JSON.stringify({
@@ -229,7 +273,7 @@ export class SkillsRuntime {
       return this.cache;
     }
 
-    const parsed = loadSkillEntries(files);
+    const parsed = await loadSkillEntries(files);
     const deduped = applySkillPrecedence(parsed.entries);
     const eligibility = filterEligibleSkills(deduped.entries, {
       runtimeConfig,
@@ -269,14 +313,17 @@ export class SkillsRuntime {
       byName.set(evaluation.entry.name.toLowerCase(), evaluation);
     }
 
-    this.cache = {
+    const nextCache = {
       fingerprint,
       snapshot,
       evaluations: eligibility.evaluations,
       byName,
     };
 
-    return this.cache;
+    if (generation === this.cacheGeneration) {
+      this.cache = nextCache;
+    }
+    return nextCache;
   }
 
   private loadRuntimeConfig(): SkillsRuntimeConfig {

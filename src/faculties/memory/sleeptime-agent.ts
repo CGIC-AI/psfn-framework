@@ -452,7 +452,15 @@ function formatEpisodeReviewBlock(episodes: readonly Episode[]): string {
   }
   const lines = episodes.map(episode => {
     const themes = episode.themes.length > 0 ? ` [themes: ${episode.themes.join(', ')}]` : '';
-    const meaning = episode.meaning ? `\n  what it meant to me: ${episode.meaning.text}` : '';
+    // Candidates, not verdicts (h4fp.6): an episode she has not yet given
+    // meaning to must never read as her settled lived past — the title and
+    // landmark are machine-drafted summaries awaiting her review. This block is
+    // governed by a prompt that calls the episodes below "what actually
+    // happened" and treats them as the evidence authority for durable memory
+    // writes, so an unmarked machine draft would read as settled ground truth.
+    const meaning = episode.meaning
+      ? `\n  what it meant to me: ${episode.meaning.text}`
+      : '\n  (unreviewed: machine-drafted summary — you have not yet given this episode its meaning)';
     return `- (${episode.startedAt} - ${episode.endedAt}) ${episode.title}: ${episode.landmark}${themes}${meaning}`;
   });
   return ["Today's consolidated episodes - the day being reviewed:", ...lines].join('\n');

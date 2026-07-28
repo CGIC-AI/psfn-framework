@@ -18,6 +18,7 @@ import type {
   PolicyDecision,
   RuntimeHealthResult,
 } from '../protocol.js';
+import type { GatewayLLMRequestCancellation } from '../llm-request-cancellation.js';
 import type { SessionHmacKeyring } from '../../../persistence/journals/journal-utils.js';
 import type { ApprovalBoundaryService } from '../approval-boundary.js';
 import type { IntakeScreeningService } from '../../../core/cogsec/intake/screening.js';
@@ -60,6 +61,8 @@ export type ShardBackendExecutor = (
 export interface GatewayMethodRuntime {
   target: JSONRPCServerAndClient;
   llmProvider: LLMProviderPort;
+  /** Cancellable provider calls owned exclusively by this authenticated connection. */
+  llmRequestCancellation: GatewayLLMRequestCancellation;
   embeddingService: EmbeddingProviderPort;
   modelDiscovery?: ModelDiscoveryBackend;
   discordAdapter: ChannelOutboundDock;

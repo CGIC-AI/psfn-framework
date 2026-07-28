@@ -144,6 +144,21 @@ export interface GatewayCorrelationParams {
   icpCorrelation?: IcpConversationCorrelation;
 }
 
+export interface GatewayLLMCancellationParams {
+  /** Opaque, connection-scoped request identity used only for exact cancellation. */
+  cancellationId?: string;
+}
+
+export interface LLMCancelParams {
+  cancellationId: string;
+  /** Optional authenticated routing claim; the gateway verifies it against the connection. */
+  companionId?: string;
+}
+
+export interface LLMCancelResult {
+  cancelled: boolean;
+}
+
 export interface GatewayInlineImageReferenceContent {
   type: 'gateway_image_ref';
   handle: string;
@@ -161,7 +176,7 @@ export interface GatewayLLMMessage extends Omit<ContextMessage, 'content'> {
   content: string | GatewayLLMContentBlock[];
 }
 
-export interface LLMChatParams extends GatewayCorrelationParams {
+export interface LLMChatParams extends GatewayCorrelationParams, GatewayLLMCancellationParams {
   model: string;
   provider: string;
   pin?: boolean;
@@ -197,7 +212,7 @@ export interface LLMChatParams extends GatewayCorrelationParams {
   workSpec?: LLMWorkSpecWireParams;
 }
 
-export interface LLMCompleteParams extends GatewayCorrelationParams {
+export interface LLMCompleteParams extends GatewayCorrelationParams, GatewayLLMCancellationParams {
   model: string;
   provider: string;
   pin?: boolean;
@@ -1020,6 +1035,7 @@ export interface IcpPermitInvalidateSelfParams {
 export interface GatewayMethods {
   'llm.chat': [LLMChatParams, LLMChatResult];
   'llm.complete': [LLMCompleteParams, LLMCompleteResult];
+  'llm.cancel': [LLMCancelParams, LLMCancelResult];
   'llm.embed': [LLMEmbedParams, LLMEmbedResult];
   'llm.discover_models': [LLMDiscoverModelsParams, LLMDiscoverModelsResult];
   'llm.invalidate_model_discovery': [LLMInvalidateModelDiscoveryParams, LLMInvalidateModelDiscoveryResult];

@@ -17,6 +17,7 @@ import { EventBus } from '../../shared/event-bus.js';
 import { TurnPerformanceTracker } from '../../shared/telemetry/turn-performance.js';
 import { CAPABILITY_TOKENS } from '../../system/capabilities/tokens.js';
 import { deriveShardCapabilityGrant } from '../../system/capabilities/shard-derivation.js';
+import { buildSubagentWorkSpec } from '../../faculties/subagents/work-spec.js';
 
 const TEST_COMPANION_ID = createCompanionId('11111111-1111-4111-8111-111111111111');
 const TEST_GATEWAY_ROUTING = {
@@ -218,6 +219,65 @@ describe('GatewayClient streaming', () => {
   beforeEach(() => {
     conn = createMockConnection();
     client = new GatewayClient(conn.conn, 1024);
+  });
+
+  it('flattens subagent work-spec correlation onto the split gateway request', async () => {
+    const parentCorrelation = {
+      turnId: 'parent-turn',
+      requestId: 'parent-request',
+      channelId: 'discord-channel',
+      callType: 'chat' as const,
+      purpose: 'agent.turn.prompt',
+      originType: 'chat' as const,
+      originStage: 'agent.turn.prompt',
+    };
+    const workSpec = buildSubagentWorkSpec({ correlation: parentCorrelation });
+
+    const streaming = client.stream(
+      {
+        systemPrompt: 'bounded worker',
+        messages: [{ role: 'user', content: 'analyze the attached evidence' }],
+        correlation: parentCorrelation,
+      },
+      undefined,
+      { workSpec },
+    );
+    const request = conn.sent[0] as {
+      id: number;
+      method: string;
+      params: Record<string, unknown> & { workSpec: Record<string, unknown> };
+    };
+
+    expect(request.method).toBe('llm.chat');
+    expect(request.params).toMatchObject({
+      requestId: 'parent-request',
+      turnId: 'parent-turn',
+      channelId: 'discord-channel',
+      callType: 'background',
+      originType: 'chat',
+      originStage: 'subagent.turn',
+      purpose: 'agent.turn.prompt',
+      workSpec: {
+        purpose: 'background',
+        lane: 'background_continuation',
+        durable: false,
+      },
+    });
+    expect(request.params.workSpec).not.toHaveProperty('correlation');
+
+    conn._emit({
+      jsonrpc: '2.0',
+      id: request.id,
+      result: {
+        content: 'worker completed',
+        toolCalls: [],
+        model: 'background-model',
+        inputTokens: 20,
+        outputTokens: 4,
+        stopReason: 'stop',
+      },
+    });
+    await expect(streaming).resolves.toMatchObject({ content: 'worker completed' });
   });
 
   it('sends screened inline image bytes in only the intake frame and references them in the main call', async () => {

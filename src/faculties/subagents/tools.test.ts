@@ -66,6 +66,8 @@ function createPort(): SubagentControlPort {
       turns: 1,
       workerLane: 'subagent',
       lifecycleState: 'completed',
+      outcome: 'completed',
+      completionHandoff: { status: 'delivered' },
       stateReason: 'completed',
       capabilities: ['general'],
       requiredCapabilities: [],
@@ -81,8 +83,19 @@ function createPort(): SubagentControlPort {
       turns: 0,
       workerLane: 'subagent',
       lifecycleState: 'cancelled',
+      outcome: 'cancelled',
+      completionHandoff: { status: 'delivered' },
       stateReason: 'cancel_requested',
       failureReason: 'operator_cancelled',
+      partial: {
+        remainingBudget: { remainingTurns: 0 },
+        latestCheckpoint: {
+          content: '',
+          turnsCompleted: 0,
+          model: '',
+          capturedAt: 110,
+        },
+      },
       capabilities: ['general'],
       requiredCapabilities: [],
     })),
@@ -131,6 +144,8 @@ function createPort(): SubagentControlPort {
         turns: 1,
         workerLane: 'subagent',
         lifecycleState: 'completed',
+        outcome: 'completed',
+        completionHandoff: { status: 'delivered' },
         stateReason: 'completed',
         capabilities: ['general'],
         requiredCapabilities: [],
@@ -257,7 +272,62 @@ describe('createSubagentTool', () => {
         lifecycleState: 'cancelled',
       },
     });
+    expect(waited.details.isError).toBeUndefined();
+    expect(cancelled.details.isError).toBeUndefined();
   });
+
+  it.each(['blocked', 'cancelled', 'budget_limited'] as const)(
+    'marks a terminal %s wait as a tool error while preserving the worker payload',
+    async (outcome) => {
+      const port = createPort();
+      vi.mocked(port.wait).mockResolvedValueOnce({
+        subagentId: 'subagent-1',
+        name: 'inspect',
+        content: 'partial evidence',
+        model: 'mock-model',
+        inputTokens: 10,
+        outputTokens: 5,
+        durationMs: 50,
+        turns: 1,
+        workerLane: 'subagent',
+        lifecycleState: outcome === 'cancelled' ? 'cancelled' : 'failed',
+        outcome,
+        completionHandoff: { status: 'delivered' },
+        stateReason: `worker_${outcome}`,
+        failureReason: `worker stopped: ${outcome}`,
+        partial: {
+          remainingBudget: { remainingTurns: 1 },
+          latestCheckpoint: {
+            content: 'partial evidence',
+            turnsCompleted: 1,
+            model: 'mock-model',
+            capturedAt: 150,
+          },
+        },
+        capabilities: ['general'],
+        requiredCapabilities: [],
+      });
+      const tool = createSubagentTool(port);
+
+      const waited = await tool.execute('call-wait-terminal', {
+        action: 'wait',
+        subagent_id: 'subagent-1',
+      });
+
+      expect(waited.details).toMatchObject({ isError: true });
+      expect(parseText(waited)).toMatchObject({
+        action: 'wait',
+        result: {
+          outcome,
+          content: 'partial evidence',
+          failureReason: `worker stopped: ${outcome}`,
+          partial: {
+            latestCheckpoint: { content: 'partial evidence' },
+          },
+        },
+      });
+    },
+  );
 
   it('infers a wait target when exactly one bounded worker task is visible', async () => {
     const port = createPort();

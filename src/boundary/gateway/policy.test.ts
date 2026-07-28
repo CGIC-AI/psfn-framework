@@ -435,6 +435,29 @@ describe('evaluatePolicy', () => {
     )).toBe('ALLOW');
   });
 
+  it('allows bounded fs.read paging and denies malformed byte limits or cursors', () => {
+    expect(evaluatePolicy(
+      {
+        method: 'fs.read',
+        params: { path: '/app/companion/modules/test.ts', maxBytes: 20_000, offsetBytes: 40_000 },
+      },
+      policyConfig,
+    )).toBe('ALLOW');
+
+    for (const params of [
+      { path: '/app/companion/modules/test.ts', maxBytes: 0 },
+      { path: '/app/companion/modules/test.ts', maxBytes: 1.5 },
+      { path: '/app/companion/modules/test.ts', maxBytes: 20_001 },
+      { path: '/app/companion/modules/test.ts', maxBytes: 200_001 },
+      { path: '/app/companion/modules/test.ts', offsetBytes: -1 },
+      { path: '/app/companion/modules/test.ts', offsetBytes: 1.5 },
+      { path: '/app/companion/modules/test.ts', offsetBytes: Number.MAX_SAFE_INTEGER + 1 },
+      { path: '/app/companion/modules/test.ts', offsetBytes: '20' },
+    ]) {
+      expect(evaluatePolicy({ method: 'fs.read', params }, policyConfig)).toBe('DENY');
+    }
+  });
+
   it('allows fs.write inside workspace', () => {
     expect(evaluatePolicy(
       { method: 'fs.write', params: { path: '/app/companion/notes.txt' } },

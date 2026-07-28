@@ -34,6 +34,10 @@ const fsFaults = vi.hoisted(() => ({
     fd: null as number | null,
     closed: false,
   },
+  statSyncCallback: {
+    path: null as string | null,
+    callback: null as (() => void) | null,
+  },
 }));
 
 vi.mock('node:fs', async (importOriginal) => {
@@ -70,6 +74,15 @@ vi.mock('node:fs', async (importOriginal) => {
       }
       return actual.readdirSync(path, options as never);
     }) as typeof actual.readdirSync,
+    statSync: ((path, options) => {
+      if (String(path) === fsFaults.statSyncCallback.path) {
+        const callback = fsFaults.statSyncCallback.callback;
+        fsFaults.statSyncCallback.path = null;
+        fsFaults.statSyncCallback.callback = null;
+        callback?.();
+      }
+      return actual.statSync(path, options as never);
+    }) as typeof actual.statSync,
     linkSync: ((existingPath, newPath) => {
       if (fsFaults.linkSyncClaim.remaining > 0) {
         fsFaults.linkSyncClaim.remaining -= 1;
@@ -95,6 +108,8 @@ afterEach(() => {
   fsFaults.trackedOpen.path = null;
   fsFaults.trackedOpen.fd = null;
   fsFaults.trackedOpen.closed = false;
+  fsFaults.statSyncCallback.path = null;
+  fsFaults.statSyncCallback.callback = null;
 });
 
 const TURN_RECORDS_DIR = '_turn_records';
@@ -530,29 +545,30 @@ describe('turn-records rotation and bounded tail reads', () => {
 
   it('pins a rotation snapshot without duplicating the moved active inode or admitting newer rows', () => {
     const sessionsDir = mkdtempSync(join(tmpdir(), 'psfn-turn-records-page-rotation-'));
-    const store = createFilesystemTurnRecordStorePort(sessionsDir, { segmentMaxBytes: 8 });
+    const store = createFilesystemTurnRecordStorePort(sessionsDir, { segmentMaxBytes: 1_024 });
     const records = Array.from({ length: 4 }, (_, index) => sequencedRecord(index));
     for (const record of records) store.appendTurnRecord(record);
 
-    const first = store.readTurnRecordPage?.(ROTATION_CHANNEL, 2);
+    const first = store.readTurnRecordPage?.(ROTATION_CHANNEL, 1);
     expect(first).toMatchObject({
-      records: records.slice(2),
+      records: records.slice(3),
       exhausted: false,
     });
     expect(first?.nextCursor).toBeDefined();
 
     // The snapshot's active inode rotates to a numbered segment and a new
-    // active record appears between pages. Continuation must relocate the
-    // pinned inode, count it once, and exclude the post-snapshot append.
+    // active record appears between pages. Continuation still has one row in
+    // the moved active inode: it must relocate that inode, count it once, and
+    // exclude the post-snapshot append.
     const postSnapshot = sequencedRecord(4);
     store.appendTurnRecord(postSnapshot);
     const second = store.readTurnRecordPage?.(
       ROTATION_CHANNEL,
-      2,
+      3,
       first?.nextCursor,
     );
     expect(second).toEqual({
-      records: records.slice(0, 2),
+      records: records.slice(0, 3),
       exhausted: true,
     });
 
@@ -560,6 +576,36 @@ describe('turn-records rotation and bounded tail reads', () => {
     expect(store.readTurnRecordPage?.(ROTATION_CHANNEL, 2)).toMatchObject({
       records: [records[3], postSnapshot],
       exhausted: false,
+    });
+  });
+
+  it('fences two rotations during capture immediately after the pinned active inode', () => {
+    const sessionsDir = mkdtempSync(join(tmpdir(), 'psfn-turn-records-page-capture-race-'));
+    const store = createFilesystemTurnRecordStorePort(sessionsDir, { segmentMaxBytes: 8 });
+    const records = Array.from({ length: 4 }, (_, index) => sequencedRecord(index));
+    store.appendTurnRecord(records[0]!);
+    store.appendTurnRecord(records[1]!);
+
+    const firstSegment = join(
+      sessionsDir,
+      TURN_RECORDS_DIR,
+      `${sanitizeChannelId(ROTATION_CHANNEL)}.00001.jsonl`,
+    );
+    fsFaults.statSyncCallback.path = firstSegment;
+    fsFaults.statSyncCallback.callback = () => {
+      store.appendTurnRecord(records[2]!);
+      store.appendTurnRecord(records[3]!);
+    };
+
+    // The capture pinned record 1 before the callback rotates record 1 and
+    // then record 2. Record 2 and the new active record 3 are post-snapshot.
+    expect(store.readTurnRecordPage?.(ROTATION_CHANNEL, 10)).toEqual({
+      records: records.slice(0, 2),
+      exhausted: true,
+    });
+    expect(store.readTurnRecordPage?.(ROTATION_CHANNEL, 10)).toEqual({
+      records,
+      exhausted: true,
     });
   });
 
@@ -588,7 +634,10 @@ describe('turn-records rotation and bounded tail reads', () => {
     let cursor: Parameters<typeof readTurnRecordPageAcrossSegments>[3];
     let exhausted = false;
     const seen: string[] = [];
+    const cursorBytes: number[] = [];
     let pages = 0;
+    fsFaults.readdirSyncError.path = dir;
+    fsFaults.readdirSyncError.remaining = 100;
     while (!exhausted) {
       const stats = { bytesRead: 0, linesRead: 0, normalizedRecords: 0 };
       const page = readTurnRecordPageAcrossSegments(
@@ -606,9 +655,11 @@ describe('turn-records rotation and bounded tail reads', () => {
       expect(stats.bytesRead).toBeLessThan(512 * 1024);
       exhausted = page.exhausted;
       cursor = page.nextCursor;
+      if (cursor) cursorBytes.push(Buffer.byteLength(cursor, 'utf8'));
     }
 
     expect(pages).toBe(recordCount / pageSize);
+    expect(Math.max(...cursorBytes)).toBeLessThan(1_024);
     expect(new Set(seen)).toEqual(new Set(records.map(record => record.turnId)));
     expect(seen).toHaveLength(recordCount);
   });

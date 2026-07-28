@@ -38,6 +38,7 @@ import { buildAdminSessionRoutes } from './routes/session-routes.js';
 import { ADMIN_DYNAMIC_JSON_HEADERS, ADMIN_POLLED_QUEUE_JSON_HEADERS, toSanitizedMessage } from './routes/shared.js';
 import { buildAdminSettingsRoutes } from './routes/settings-routes.js';
 import { buildAdminChannelEnvelopeRoutes } from './routes/channel-envelope-routes.js';
+import { buildAdminBearerCompanionRoutes } from './routes/bearer-companion-routes.js';
 import { buildAdminIntakeSourceListRoutes } from './routes/intake-source-list-routes.js';
 import { buildAdminIntakeQuarantineRoutes } from './routes/intake-quarantine-routes.js';
 import type { AdminIntakeQuarantineService } from './services/intake-quarantine-service.js';
@@ -970,6 +971,7 @@ export function buildAdminApiRoutes(options: {
     ...buildAdminConcernRoutes({ concernService, withBody }),
     ...buildAdminSettingsRoutes({ settingsService, appendAuditTimelineEntry, withBody }),
     ...buildAdminChannelEnvelopeRoutes({ settingsService, appendAuditTimelineEntry, withBody }),
+    ...buildAdminBearerCompanionRoutes({ settingsService, appendAuditTimelineEntry, withBody }),
     ...buildAdminIntakeSourceListRoutes({ settingsService, appendAuditTimelineEntry, withBody }),
     ...(intakeQuarantineService
       ? buildAdminIntakeQuarantineRoutes({

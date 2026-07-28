@@ -221,6 +221,10 @@ import {
   recoverHistoricalBackgroundWorkHandoffs,
   runBackgroundWorkTick,
 } from './background-work/tick-runtime.js';
+import {
+  BACKGROUND_WORK_HANDOFF_RECOVERY_BATCH_SIZE,
+  BackgroundWorkHandoffRetryCapacityError,
+} from '../session/manager/background-work-handoff-recovery.js';
 import type { ObserverEvalSidecarRuntime } from '../eval/observer-sidecar/types.js';
 import type { FatigueBudgetPort } from './fatigue/fatigue-budget.js';
 import type { IcpFatigueRegulationReservationPort } from './fatigue/regulation-reservation.js';
@@ -329,7 +333,6 @@ function workerValidatedRecoveryJobs(record: TurnRecord): EnqueueBackgroundWorkI
 }
 
 const DEFAULT_TOOL_SCHEDULER_MAX_PARALLEL = 5;
-const BACKGROUND_WORK_HANDOFF_RECOVERY_BATCH_SIZE = 32;
 
 export type SubstrateAgentAbortResult = AgentRunAbortResult;
 
@@ -376,6 +379,7 @@ export class SubstrateAgent {
   private readonly turnSupportRuntime: TurnSupportRuntime;
   private readonly backgroundWorkSupervisor: BackgroundWorkSupervisor | null;
   private backgroundWorkHandoffsRecovered = false;
+  private backgroundWorkHandoffRecoveryCapacityBlocked = false;
   private backgroundWorkHandoffRecoveryEvidenceBlocked = false;
   private backgroundWorkHandoffRecoveryPromise: Promise<void> | null = null;
   private backgroundWorkHandoffRecoveryAbortController: AbortController | null = null;
@@ -1561,6 +1565,26 @@ export class SubstrateAgent {
       const recoveryAbortController = new AbortController();
       this.backgroundWorkHandoffRecoveryAbortController = recoveryAbortController;
       this.backgroundWorkHandoffRecoveryPromise = (async () => {
+        const recoverPending = async (): Promise<void> => {
+          await this.sessionManager.recoverPendingBackgroundWorkHandoffs(
+            BACKGROUND_WORK_HANDOFF_RECOVERY_BATCH_SIZE,
+            async (record) => {
+              const jobs = parseTurnRecordBackgroundWorkHandoff(record);
+              if (jobs.length > 0) await this.backgroundWorkSupervisor!.enqueue(jobs);
+            },
+            recoveryAbortController.signal,
+          );
+        };
+        if (this.backgroundWorkHandoffRecoveryCapacityBlocked) {
+          await recoverPending();
+          if (!this.sessionManager.hasPendingBackgroundWorkHandoffRecovery()) {
+            // Capacity is available again. The durable archive remains the
+            // source of truth for every row that could not be indexed; perform
+            // exactly one fresh bounded snapshot on a later tick.
+            this.backgroundWorkHandoffRecoveryCapacityBlocked = false;
+          }
+          return;
+        }
         if (!this.backgroundWorkHandoffsRecovered
           && !this.backgroundWorkHandoffRecoveryEvidenceBlocked) {
           const enumerationState = { complete: false };
@@ -1587,15 +1611,14 @@ export class SubstrateAgent {
             if (enumerationState.complete) this.backgroundWorkHandoffsRecovered = true;
           }
         }
-        await this.sessionManager.recoverPendingBackgroundWorkHandoffs(
-          BACKGROUND_WORK_HANDOFF_RECOVERY_BATCH_SIZE,
-          async (record) => {
-            const jobs = parseTurnRecordBackgroundWorkHandoff(record);
-            if (jobs.length > 0) await this.backgroundWorkSupervisor!.enqueue(jobs);
-          },
-          recoveryAbortController.signal,
-        );
+        await recoverPending();
       })().catch((error: unknown) => {
+        if (error instanceof BackgroundWorkHandoffRetryCapacityError) {
+          // Stop archive enumeration while the bounded retry batch is full.
+          // Scheduler ticks drain only this batch until it clears; then one
+          // fresh snapshot recovers the untouched durable remainder.
+          this.backgroundWorkHandoffRecoveryCapacityBlocked = true;
+        }
         if (error instanceof Error && error.name === 'TurnRecordRecoveryEvidenceError') {
           // Deterministic physical evidence cannot heal on the next scheduler
           // tick. Surface it once, retain every durable row, and retry only

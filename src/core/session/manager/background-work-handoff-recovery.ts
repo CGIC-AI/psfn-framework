@@ -1,5 +1,22 @@
 import type { TurnRecord } from '../../../shared/contracts/runtime.js';
 import type { SessionStore } from '../../../persistence/sessions/store.js';
+import { parseTurnRecordBackgroundWorkHandoff } from '../../agent/background-work/types.js';
+
+export const BACKGROUND_WORK_HANDOFF_RECOVERY_BATCH_SIZE = 32;
+
+export class BackgroundWorkHandoffRetryCapacityError extends Error {
+  readonly capacity: number;
+
+  constructor(capacity: number, options?: ErrorOptions) {
+    super(
+      `Background work handoff retry capacity ${String(capacity)} is exhausted; `
+      + 'remaining durable handoffs require a later restart/rescan',
+      options,
+    );
+    this.name = 'BackgroundWorkHandoffRetryCapacityError';
+    this.capacity = capacity;
+  }
+}
 
 interface PendingBackgroundWorkHandoffReference {
   sourceChannelId: string;
@@ -21,18 +38,37 @@ type BackgroundWorkHandoffRecoveryStore = Pick<
 export class BackgroundWorkHandoffRecovery {
   private pending = new Map<string, PendingBackgroundWorkHandoffReference>();
 
-  constructor(private readonly store: BackgroundWorkHandoffRecoveryStore) {}
+  constructor(
+    private readonly store: BackgroundWorkHandoffRecoveryStore,
+    private readonly capacity = BACKGROUND_WORK_HANDOFF_RECOVERY_BATCH_SIZE,
+  ) {
+    if (!Number.isSafeInteger(capacity) || capacity < 1) {
+      throw new Error('Background work handoff retry capacity must be a positive safe integer');
+    }
+  }
 
   defer(record: TurnRecord): void {
     if (record.status !== 'completed' || !record.backgroundWorkHandoff) {
-      throw new Error('Only completed TurnRecords with background work can be deferred for recovery');
+      throw recoveryEvidenceError(
+        'Only completed TurnRecords with background work can be deferred for recovery',
+      );
     }
+    assertValidRecoveryHandoff(record);
     const reference = {
       sourceChannelId: record.channelId,
       logicalSessionId: record.sessionId ?? record.channelId,
       turnId: record.turnId,
     } satisfies PendingBackgroundWorkHandoffReference;
-    this.pending.set(referenceKey(reference), reference);
+    const key = referenceKey(reference);
+    if (this.pending.has(key)) return;
+    if (this.pending.size >= this.capacity) {
+      throw new BackgroundWorkHandoffRetryCapacityError(this.capacity);
+    }
+    this.pending.set(key, reference);
+  }
+
+  hasPending(): boolean {
+    return this.pending.size > 0;
   }
 
   /**
@@ -79,6 +115,12 @@ export class BackgroundWorkHandoffRecovery {
               this.pending.delete(key);
               return false;
             }
+            try {
+              assertValidRecoveryHandoff(current);
+            } catch (error) {
+              this.pending.delete(key);
+              throw error;
+            }
             await operation(current);
             this.pending.delete(key);
             return true;
@@ -88,7 +130,9 @@ export class BackgroundWorkHandoffRecovery {
         if (accepted) recovered += 1;
       } catch (error) {
         errors.push(error);
-        if (this.pending.delete(key)) this.pending.set(key, reference);
+        if (!isRecoveryEvidenceError(error) && this.pending.delete(key)) {
+          this.pending.set(key, reference);
+        }
       }
     }
     if (errors.length === 1) throw errors[0];
@@ -101,4 +145,27 @@ export class BackgroundWorkHandoffRecovery {
 
 function referenceKey(reference: PendingBackgroundWorkHandoffReference): string {
   return `${reference.sourceChannelId}\u0000${reference.logicalSessionId}\u0000${reference.turnId}`;
+}
+
+function assertValidRecoveryHandoff(record: TurnRecord): void {
+  try {
+    parseTurnRecordBackgroundWorkHandoff(record);
+  } catch (error) {
+    throw recoveryEvidenceError(
+      `TurnRecord background work handoff is not safe to index for retry: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+      error,
+    );
+  }
+}
+
+function recoveryEvidenceError(message: string, cause?: unknown): Error {
+  const error = new Error(message, cause === undefined ? undefined : { cause });
+  error.name = 'TurnRecordRecoveryEvidenceError';
+  return error;
+}
+
+function isRecoveryEvidenceError(error: unknown): boolean {
+  return error instanceof Error && error.name === 'TurnRecordRecoveryEvidenceError';
 }

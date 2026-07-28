@@ -4,6 +4,7 @@ import {
   recoverHistoricalBackgroundWorkHandoffs,
   runBackgroundWorkTick,
 } from './tick-runtime.js';
+import { BackgroundWorkHandoffRetryCapacityError } from '../../session/manager/background-work-handoff-recovery.js';
 
 describe('recoverHistoricalBackgroundWorkHandoffs', () => {
   it('continues the one-time scan and indexes every failed enqueue', async () => {
@@ -44,6 +45,52 @@ describe('recoverHistoricalBackgroundWorkHandoffs', () => {
     });
 
     expect(deferred).toEqual(records);
+  });
+
+  it('stops the snapshot immediately when the bounded retry index is full', async () => {
+    const visited: string[] = [];
+    let closed = false;
+    const records = (async function* () {
+      try {
+        for (let index = 0; index < 100; index += 1) {
+          const record = `record-${index}`;
+          visited.push(record);
+          yield record;
+        }
+      } finally {
+        closed = true;
+      }
+    })();
+    let retained = 0;
+
+    await expect(recoverHistoricalBackgroundWorkHandoffs(
+      records,
+      async () => { throw new Error('backing store unavailable'); },
+      () => {
+        if (retained === 3) throw new BackgroundWorkHandoffRetryCapacityError(3);
+        retained += 1;
+      },
+    )).rejects.toBeInstanceOf(BackgroundWorkHandoffRetryCapacityError);
+
+    expect(visited).toEqual(['record-0', 'record-1', 'record-2', 'record-3']);
+    expect(retained).toBe(3);
+    expect(closed).toBe(true);
+  });
+
+  it('never transfers deterministic evidence poison into the transient retry index', async () => {
+    const poison = new Error('invalid handoff fingerprint');
+    poison.name = 'TurnRecordRecoveryEvidenceError';
+    const defer = vi.fn();
+
+    await expect(recoverHistoricalBackgroundWorkHandoffs(
+      ['poison', 'unvisited'],
+      async record => {
+        if (record === 'poison') throw poison;
+      },
+      defer,
+    )).rejects.toBe(poison);
+
+    expect(defer).not.toHaveBeenCalled();
   });
 });
 

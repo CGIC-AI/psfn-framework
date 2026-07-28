@@ -134,12 +134,15 @@ export function createSubagentTool(port: SubagentControlPort): SubstrateAgentToo
 
           case 'wait': {
             const result = await port.wait(resolveWaitSubagentId(port, params.subagent_id));
-            return textResult(formatPayload({
+            const payload = formatPayload({
               action,
               surface: 'subagent',
               semantics: 'bounded_worker',
               result,
-            }));
+            });
+            return result.outcome === 'completed'
+              ? textResult(payload)
+              : textResultWithError(payload, true);
           }
 
           case 'cancel': {

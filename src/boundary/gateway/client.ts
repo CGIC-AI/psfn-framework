@@ -698,22 +698,43 @@ export class GatewayClient implements
     callbacks?: StreamCallbacks,
     options?: LLMProviderStreamOptions,
   ): Promise<LLMResponse> {
-    // Generate a unique per-request ID for routing streaming chunks
-    const requestId = context.correlation?.requestId?.trim()
+    // Keep one opaque fallback available even when private telemetry strips
+    // source correlation. Stream notifications still need a connection-local
+    // routing key that cannot expose the source request identifier.
+    const opaqueRoutingRequestId = `req-${++this.requestCounter}`;
+    const contextRequestId = context.correlation?.requestId?.trim()
       || context.correlation?.icpCorrelation?.requestId.trim()
-      || `req-${++this.requestCounter}`;
+      || opaqueRoutingRequestId;
     const callType = context.correlation?.callType
       ?? context.correlation?.originType
       ?? 'chat';
     const purpose = context.correlation?.purpose
       ?? context.correlation?.originStage
       ?? 'chat';
-    const usageCorrelation = buildOutboundUsageCorrelation(this.companionId, {
-      ...(context.correlation ?? {}),
-      requestId,
-      callType,
-      purpose,
-    });
+    // Autonomous streamed calls declare their correlation on the work spec.
+    // Resolve that option-level correlation through the same canonical seam as
+    // the in-process LLMClient before flattening it onto the gateway request.
+    // Interactive calls without a work spec intentionally retain the existing
+    // byte-for-byte correlation construction.
+    const resolvedStreamCorrelation = options?.workSpec
+      ? resolveCorrelationMetadata(
+          { ...(context.correlation ?? {}), requestId: contextRequestId },
+          options.workSpec.correlation,
+          options.workSpec.purpose,
+        )
+      : {
+          ...(context.correlation ?? {}),
+          requestId: contextRequestId,
+          callType,
+          purpose,
+        };
+    const streamRequestId = resolvedStreamCorrelation.telemetryVisibility === 'companion_private'
+      ? opaqueRoutingRequestId
+      : (resolvedStreamCorrelation.requestId.trim() || opaqueRoutingRequestId);
+    const usageCorrelation = buildOutboundUsageCorrelation(
+      this.companionId,
+      resolvedStreamCorrelation,
+    );
     const modelHint = normalizeModelHint(context.modelHint, OPTIONAL_MODEL_HINT_NORMALIZATION);
     const hintedModel = normalizeCorrelationText(modelHint?.model);
     const hintedProvider = normalizeCorrelationText(modelHint?.provider);
@@ -731,10 +752,10 @@ export class GatewayClient implements
 
     // Register chunk handler before sending the RPC so no chunks are missed
     if (callbacks?.onText) {
-      this.chunkHandlers.set(requestId, callbacks.onText);
+      this.chunkHandlers.set(streamRequestId, callbacks.onText);
     }
     if (callbacks?.onFirstOutput) {
-      this.firstOutputHandlers.set(requestId, callbacks.onFirstOutput);
+      this.firstOutputHandlers.set(streamRequestId, callbacks.onFirstOutput);
     }
 
     try {
@@ -746,6 +767,10 @@ export class GatewayClient implements
         model,  // gateway resolves roster defaults when hint fields are unset
         provider,
         ...usageCorrelation,
+        // This ID is transport routing, not source correlation. Private calls
+        // receive the opaque connection-local ID above after their source
+        // identifiers have been collapsed.
+        requestId: streamRequestId,
         ...(selectionSlotKey !== undefined ? { slotKey: selectionSlotKey } : {}),
         ...(modelHint?.pin !== undefined ? { pin: modelHint.pin } : {}),
         messages: referencedMessages.messages,
@@ -784,7 +809,7 @@ export class GatewayClient implements
         if (!this.shouldResendInlineImages(error, referencedMessages.usedHintKeys)) throw error;
         this.inlineImageReferenceHints.invalidate(referencedMessages.usedHintKeys);
         log.warn('Gateway retained image unavailable; resending explicit inline bytes once', {
-          requestId,
+          requestId: streamRequestId,
           imageCount: referencedMessages.usedHintKeys.length,
         });
         result = await this.requestWithAbortSignal<LLMChatResult>(
@@ -828,8 +853,8 @@ export class GatewayClient implements
       callbacks?.onError?.(err);
       throw err;
     } finally {
-      this.chunkHandlers.delete(requestId);
-      this.firstOutputHandlers.delete(requestId);
+      this.chunkHandlers.delete(streamRequestId);
+      this.firstOutputHandlers.delete(streamRequestId);
     }
   }
 

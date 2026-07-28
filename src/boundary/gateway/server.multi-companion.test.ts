@@ -1305,6 +1305,114 @@ describe('GatewayServer multi-companion identify (flag on)', () => {
     expect(providerSignals[1].aborted).toBe(true);
   });
 
+  it.each([
+    [
+      'llm.complete',
+      {
+        model: '',
+        provider: '',
+        messages: [{ role: 'user', content: 'work' }],
+        systemPrompt: 'system',
+        purpose: 'background',
+      },
+    ],
+    [
+      'llm.chat',
+      {
+        requestId: 'late-chat',
+        model: '',
+        provider: '',
+        messages: [{ role: 'user', content: 'work' }],
+        systemPrompt: 'system',
+        stream: true,
+      },
+    ],
+  ])('audits cancelled %s as failed when its provider ignores abort and resolves late', async (
+    method,
+    params,
+  ) => {
+    let releaseProvider!: (response: {
+      content: string;
+      toolCalls: [];
+      model: string;
+      inputTokens: number;
+      outputTokens: number;
+      stopReason: string;
+    }) => void;
+    const lateProvider = new Promise<{
+      content: string;
+      toolCalls: [];
+      model: string;
+      inputTokens: number;
+      outputTokens: number;
+      stopReason: string;
+    }>(resolve => {
+      releaseProvider = resolve;
+    });
+    const providerStarted = vi.fn();
+    const lateOperation = vi.fn(async () => {
+      providerStarted();
+      // Deliberately ignore the supplied signal and resolve after cancellation.
+      return await lateProvider;
+    });
+    const auditAppend = vi.fn(async () => 71);
+    const auditComplete = vi.fn(async () => undefined);
+    const { server, connect } = await setupServer({
+      ...createMinimalOptions(),
+      llmProvider: {
+        stream: method === 'llm.chat' ? lateOperation : vi.fn(),
+        complete: method === 'llm.complete' ? lateOperation : vi.fn(),
+      } as any,
+      auditStore: createMockAuditStore({
+        append: auditAppend,
+        complete: auditComplete,
+      }),
+      multiCompanion: multiCompanion({}),
+    });
+    const conn = await connect();
+    const companionId = '11111111-1111-4111-8111-111111111111';
+    await identifyAgent(conn, companionId, 1);
+    auditAppend.mockClear();
+    auditComplete.mockClear();
+    const cancellationId = method === 'llm.chat'
+      ? 'cccccccc-cccc-4ccc-8ccc-cccccccccccc'
+      : 'dddddddd-dddd-4ddd-8ddd-dddddddddddd';
+
+    const pending = invokeRpc(conn, 10, method, {
+      ...params,
+      companionId,
+      cancellationId,
+    });
+    await vi.waitFor(() => expect(providerStarted).toHaveBeenCalledOnce());
+    expect((await invokeRpc(conn, 11, 'llm.cancel', {
+      companionId,
+      cancellationId,
+    })).result).toEqual({ cancelled: true });
+    expect((await pending).error?.message).toContain('cancelled by its owning connection');
+    expect(auditComplete).not.toHaveBeenCalled();
+
+    releaseProvider({
+      content: 'late result',
+      toolCalls: [],
+      model: 'late-model',
+      inputTokens: 12,
+      outputTokens: 4,
+      stopReason: 'stop',
+    });
+    await vi.waitFor(() => expect(auditComplete).toHaveBeenCalledOnce());
+
+    expect(auditAppend).toHaveBeenCalledWith(expect.objectContaining({
+      method,
+      decision: 'ALLOW',
+    }));
+    expect(auditComplete).toHaveBeenCalledWith(
+      71,
+      expect.any(Number),
+      expect.stringContaining('cancelled by its owning connection'),
+    );
+    await server.stop();
+  });
+
   it('disconnects a connection whose request claims another companion identity', async () => {
     const auditAppend = vi.fn(async () => 9);
     const { server, connect } = await setupServer({

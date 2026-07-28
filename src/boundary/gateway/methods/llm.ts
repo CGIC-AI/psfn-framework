@@ -51,6 +51,7 @@ import {
 } from '../../../primitives/llm/model-call-gate.js';
 import { runWithRequestContext } from '../../../primitives/llm/request-context.js';
 import { createComponentLogger } from '../../../shared/logger.js';
+import { abortError } from '../../../shared/utils/errors.js';
 import {
   normalizeModelHint,
   OPTIONAL_MODEL_HINT_NORMALIZATION,
@@ -295,6 +296,7 @@ const cancellableLlmDescriptors: Array<CancellableLlmMethodDescriptor<any, unkno
           buildProviderCallOptions(workSpec, eligibilityCompanionId, signal),
         )),
       );
+      throwIfCancellableLlmRequestAborted(signal);
       const response = applyGatewayCapturedProviderCost(
         captured.result,
         captured.finalAttemptProviderCostEvidence,
@@ -374,6 +376,7 @@ const cancellableLlmDescriptors: Array<CancellableLlmMethodDescriptor<any, unkno
           buildProviderCallOptions(workSpec, eligibilityCompanionId, signal),
         )),
       );
+      throwIfCancellableLlmRequestAborted(signal);
       const response = applyGatewayCapturedProviderCost(
         captured.result,
         captured.finalAttemptProviderCostEvidence,
@@ -522,6 +525,11 @@ export function registerLLMMethods(runtime: GatewayMethodRuntime): void {
     return result;
   });
   registerAuditedDescriptors(runtime, llmDescriptors);
+}
+
+function throwIfCancellableLlmRequestAborted(signal: AbortSignal | undefined): void {
+  if (!signal?.aborted) return;
+  throw abortError(signal.reason, 'Gateway LLM request aborted');
 }
 
 function resolveRetainedImageReferences(

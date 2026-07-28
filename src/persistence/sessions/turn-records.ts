@@ -86,9 +86,13 @@ const TURN_RECORDS_DIR = '_turn_records';
 const TURN_RECORD_SCHEMA_VERSION = 1;
 const identityLookupCache = {
   maxEntries: 256,
+  maxRecordBytes: 256 * 1024,
+  maxRetainedBytes: 16 * 1024 * 1024,
+  retainedBytes: 0,
   entries: new Map<string, {
     generation: string;
     lookup: TurnRecordIdentityLookup;
+    retainedBytes: number;
   }>(),
 };
 
@@ -1506,6 +1510,39 @@ function cloneIdentityLookup(lookup: TurnRecordIdentityLookup): TurnRecordIdenti
     : lookup;
 }
 
+function boundedRetainedBytes(
+  value: unknown,
+  limit: number,
+  seen = new Set<object>(),
+): number | null {
+  if (value === null || value === undefined) return 0;
+  if (typeof value === 'string') {
+    const bytes = Buffer.byteLength(value, 'utf8');
+    return bytes <= limit ? bytes : null;
+  }
+  if (typeof value === 'number' || typeof value === 'boolean') return 8;
+  if (typeof value !== 'object' || seen.has(value)) return 0;
+  seen.add(value);
+  let total = 0;
+  const entries = Array.isArray(value)
+    ? value.map((entry, index) => [String(index), entry] as const)
+    : Object.entries(value);
+  for (const [key, entry] of entries) {
+    const keyBytes = Buffer.byteLength(key, 'utf8');
+    const entryBytes = boundedRetainedBytes(entry, limit - total - keyBytes, seen);
+    if (entryBytes === null || total + keyBytes + entryBytes > limit) return null;
+    total += keyBytes + entryBytes;
+  }
+  return total;
+}
+
+function removeCachedIdentityLookup(key: string): void {
+  const existing = identityLookupCache.entries.get(key);
+  if (!existing) return;
+  identityLookupCache.retainedBytes -= existing.retainedBytes;
+  identityLookupCache.entries.delete(key);
+}
+
 function identityLookupGeneration(
   dir: string,
   sanitizedChannelId: string,
@@ -1542,15 +1579,24 @@ function cacheIdentityLookup(
   generation: string,
   lookup: TurnRecordIdentityLookup,
 ): void {
-  identityLookupCache.entries.delete(key);
+  const retainedBytes = lookup.kind === 'unique'
+    ? boundedRetainedBytes(lookup.record, identityLookupCache.maxRecordBytes)
+    : 0;
+  removeCachedIdentityLookup(key);
+  if (retainedBytes === null) return;
   identityLookupCache.entries.set(key, {
     generation,
     lookup: cloneIdentityLookup(lookup),
+    retainedBytes,
   });
-  while (identityLookupCache.entries.size > identityLookupCache.maxEntries) {
+  identityLookupCache.retainedBytes += retainedBytes;
+  while (
+    identityLookupCache.entries.size > identityLookupCache.maxEntries
+    || identityLookupCache.retainedBytes > identityLookupCache.maxRetainedBytes
+  ) {
     const oldest = identityLookupCache.entries.keys().next().value as string | undefined;
     if (oldest === undefined) break;
-    identityLookupCache.entries.delete(oldest);
+    removeCachedIdentityLookup(oldest);
   }
 }
 
@@ -1567,8 +1613,9 @@ export async function lookupTurnRecordIdentityAcrossSegments(
   const cached = identityLookupCache.entries.get(cacheKey);
   if (generationBefore !== null && cached?.generation === generationBefore) {
     if (options.stats) options.stats.cacheHits += 1;
-    identityLookupCache.entries.delete(cacheKey);
+    removeCachedIdentityLookup(cacheKey);
     identityLookupCache.entries.set(cacheKey, cached);
+    identityLookupCache.retainedBytes += cached.retainedBytes;
     return cloneIdentityLookup(cached.lookup);
   }
   const lookup = await lookupTurnRecordIdentitySnapshot({

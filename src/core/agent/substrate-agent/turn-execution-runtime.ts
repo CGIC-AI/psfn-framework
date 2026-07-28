@@ -639,6 +639,7 @@ export async function handleMessageForTurn(
   let recoveredFatigueReservationOutcome: IcpFatigueReservationOutcome | null = null;
   let durableDeliveryFinalized = false;
   let durableRecoveryResponsePersisted = recoveredResponse !== undefined;
+  const completedTurnRecordState = { persisted: false };
   const invocationState: AgentInvocationMutableState = {
     turnMessages,
     turnStartMessageIndex: null,
@@ -1594,6 +1595,9 @@ export async function handleMessageForTurn(
       turnBudgetCharacteristics,
       observability,
       persistedUserMessageContent,
+      onTurnRecordPersisted: () => {
+        completedTurnRecordState.persisted = true;
+      },
     });
 
     observability.emitPerformanceStage('turn_complete', {
@@ -1691,12 +1695,9 @@ export async function handleMessageForTurn(
     // before the Postgres batch. If that batch fails, delivery recovery must
     // replay the manifest; appending a second failed record for the same turn
     // would destroy the source uniqueness gate and make recovery impossible.
-    const completedSourceRecord = runtime.sessionManager.findSourceRecordedTurn(
-      turnSessionIdentity.sourceChannelId,
-      turnSessionIdentity.logicalSessionId,
-      turnId,
-    );
-    if (completedSourceRecord?.status !== 'completed') {
+    const completedSourceRecordExists = completedTurnRecordState.persisted
+      || recoveredSourceRecord !== null;
+    if (!completedSourceRecordExists) {
       await runtime.sessionManager.recordTurn(runtime.buildTurnRecord({
         message,
         turnSessionIdentity,

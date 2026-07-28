@@ -142,6 +142,7 @@ export async function schedulePostTurnWork(input: {
   conversationScope: ConversationScope;
   turnBudgetCharacteristics: ContextBudgetTurnCharacteristics;
   persistedUserMessageContent?: string;
+  onTurnRecordPersisted?: () => void;
   observability: Pick<
     TurnExecutionObservability,
     'emitObservedTurnStage'
@@ -371,6 +372,7 @@ export async function schedulePostTurnWork(input: {
   // either side is recoverable: no queue row can outlive its canonical source,
   // and delivery/startup replay can safely re-enqueue the stable turn IDs.
   await runtime.sessionManager.recordTurn(turnRecord);
+  input.onTurnRecordPersisted?.();
   try {
     await runtime.enqueuePostTurnBackgroundWork(backgroundWorkInputs);
   } catch (error) {

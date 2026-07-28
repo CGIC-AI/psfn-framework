@@ -375,6 +375,122 @@ describe('turn-records', () => {
     )).resolves.toEqual({ kind: 'duplicated' });
   });
 
+  it('fails closed when a malformed row becomes undecidable before its identity', async () => {
+    const sessionsDir = mkdtempSync(join(tmpdir(), 'psfn-turn-records-exact-undecidable-'));
+    const channelId = 'psfn-amica:test:exact-undecidable';
+    const activePath = activeSegmentPathFor(sessionsDir, channelId);
+    mkdirSync(join(sessionsDir, TURN_RECORDS_DIR), { recursive: true });
+    const target = createTurnRecord({
+      channelId,
+      turnId: backfillLegacyTurnId('exact-undecidable'),
+      requestId: 'exact-undecidable',
+    });
+    writeFileSync(
+      activePath,
+      `${JSON.stringify(target)}\n{"bad" 0,"turnId":"${target.turnId}"}\n`,
+      'utf8',
+    );
+
+    await expect(lookupTurnRecordIdentityAcrossSegments(
+      sessionsDir,
+      channelId,
+      target.turnId,
+    )).resolves.toEqual({ kind: 'duplicated' });
+  });
+
+  it('fails closed instead of missing an oversized legacy identity token', async () => {
+    const sessionsDir = mkdtempSync(join(tmpdir(), 'psfn-turn-records-exact-legacy-large-'));
+    const channelId = 'psfn-amica:test:exact-legacy-large';
+    const activePath = activeSegmentPathFor(sessionsDir, channelId);
+    mkdirSync(join(sessionsDir, TURN_RECORDS_DIR), { recursive: true });
+    const requestId = `legacy-${'x'.repeat(2 * 1024)}`;
+    const record = createTurnRecord({ channelId, requestId });
+    const legacy = { ...record, turnId: undefined };
+    const expectedTurnId = backfillLegacyTurnId(
+      `${channelId}:${requestId}:${String(record.startedAt)}:${String(record.completedAt)}`,
+    );
+    writeFileSync(activePath, `${JSON.stringify(legacy)}\n`, 'utf8');
+
+    await expect(lookupTurnRecordIdentityAcrossSegments(
+      sessionsDir,
+      channelId,
+      expectedTurnId,
+    )).resolves.toEqual({ kind: 'duplicated' });
+  });
+
+  it('does not retain an old-fat unique record in the warm lookup cache', async () => {
+    const sessionsDir = mkdtempSync(join(tmpdir(), 'psfn-turn-records-exact-cache-bound-'));
+    const channelId = 'psfn-amica:test:exact-cache-bound';
+    const activePath = activeSegmentPathFor(sessionsDir, channelId);
+    mkdirSync(join(sessionsDir, TURN_RECORDS_DIR), { recursive: true });
+    const target = createTurnRecord({
+      channelId,
+      turnId: backfillLegacyTurnId('exact-cache-bound'),
+      requestId: 'exact-cache-bound',
+      userMessage: {
+        ...createTurnRecord().userMessage,
+        content: 'x'.repeat(2 * 1024 * 1024),
+      },
+    });
+    writeFileSync(activePath, `${JSON.stringify(target)}\n`, 'utf8');
+
+    await lookupTurnRecordIdentityAcrossSegments(sessionsDir, channelId, target.turnId);
+    const stats: TurnRecordIdentityLookupStats = {
+      linesScanned: 0,
+      recordsNormalized: 0,
+      bytesRead: 0,
+      maxReadChunkBytes: 0,
+      cacheHits: 0,
+    };
+    await expect(lookupTurnRecordIdentityAcrossSegments(
+      sessionsDir,
+      channelId,
+      target.turnId,
+      { stats },
+    )).resolves.toEqual({ kind: 'unique', record: target });
+    expect(stats.cacheHits).toBe(0);
+    expect(stats.bytesRead).toBeGreaterThan(2 * 1024 * 1024);
+  });
+
+  it('evicts warm identities at the cumulative retained-byte bound', async () => {
+    const sessionsDir = mkdtempSync(join(tmpdir(), 'psfn-turn-records-exact-cache-total-'));
+    const records = Array.from({ length: 72 }, (_, index) => createTurnRecord({
+      channelId: `psfn-amica:test:exact-cache-total-${String(index)}`,
+      turnId: backfillLegacyTurnId(`exact-cache-total-${String(index)}`),
+      requestId: `exact-cache-total-${String(index)}`,
+      userMessage: {
+        ...createTurnRecord().userMessage,
+        content: 'x'.repeat(240 * 1024),
+      },
+    }));
+    for (const record of records) {
+      const activePath = activeSegmentPathFor(sessionsDir, record.channelId);
+      mkdirSync(join(sessionsDir, TURN_RECORDS_DIR), { recursive: true });
+      writeFileSync(activePath, `${JSON.stringify(record)}\n`, 'utf8');
+      await lookupTurnRecordIdentityAcrossSegments(
+        sessionsDir,
+        record.channelId,
+        record.turnId,
+      );
+    }
+    const stats: TurnRecordIdentityLookupStats = {
+      linesScanned: 0,
+      recordsNormalized: 0,
+      bytesRead: 0,
+      maxReadChunkBytes: 0,
+      cacheHits: 0,
+    };
+
+    await expect(lookupTurnRecordIdentityAcrossSegments(
+      sessionsDir,
+      records[0]!.channelId,
+      records[0]!.turnId,
+      { stats },
+    )).resolves.toEqual({ kind: 'unique', record: records[0] });
+    expect(stats.cacheHits).toBe(0);
+    expect(stats.bytesRead).toBeGreaterThan(240 * 1024);
+  });
+
   it('distinguishes missing, unique, and duplicated exact identities', async () => {
     const sessionsDir = mkdtempSync(join(tmpdir(), 'psfn-turn-records-exact-states-'));
     const store = createFilesystemTurnRecordStorePort(sessionsDir);

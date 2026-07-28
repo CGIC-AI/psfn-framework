@@ -396,7 +396,9 @@ async function scanSnapshot(
       projectedTurnId = projectTurnId(projection.fields, channelId);
     } catch (error) {
       onMalformedLine(path, rawLength, projection.error ?? error);
-      return false;
+      // Once a row cannot be projected, this lookup cannot prove that the row
+      // belongs to a different TurnID. Treat it as ambiguity, never absence.
+      return true;
     }
     if (projection.error) {
       onMalformedLine(path, rawLength, projection.error);

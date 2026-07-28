@@ -23,10 +23,38 @@ export interface TurnRecordUsageRecord {
   readonly toolCalls: readonly TurnRecordUsageToolCall[];
 }
 
+/**
+ * Opaque continuation for a fixed physical TurnRecord snapshot.
+ *
+ * Callers may persist this value only for the lifetime of the backing store.
+ * Supplying no cursor explicitly starts a fresh snapshot.
+ */
+export type TurnRecordPageCursor = string & {
+  readonly __turnRecordPageCursor: unique symbol;
+};
+
+export interface TurnRecordPage {
+  /** Physical rows in ascending (oldest-first) order within this page. */
+  readonly records: TurnRecord[];
+  /** Present only while unread rows remain in the fixed snapshot. */
+  readonly nextCursor?: TurnRecordPageCursor;
+  /** True only when this page consumed the complete fixed snapshot. */
+  readonly exhausted: boolean;
+}
+
 export interface TurnRecordStorePort {
   appendTurnRecord(record: TurnRecord): void;
-  /** Reads a page ordered oldest-to-newest, with offset counted from the newest record. */
-  readRecentTurnRecords(channelId: string, limit: number, offset?: number): TurnRecord[];
+  /** Reads the bounded newest tail ordered oldest-to-newest. */
+  readRecentTurnRecords(channelId: string, limit: number): TurnRecord[];
+  /**
+   * Reads at most `limit` physical rows from a fixed newest-to-oldest snapshot.
+   * Optional for narrow test adapters; introspection fails closed when absent.
+   */
+  readTurnRecordPage?(
+    channelId: string,
+    limit: number,
+    cursor?: TurnRecordPageCursor,
+  ): TurnRecordPage;
   /**
    * Reads only the content-free fields needed by tool-usage aggregation.
    * Optional for narrow test adapters; production callers fail closed when the

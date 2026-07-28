@@ -14,6 +14,7 @@ import {
   createFilesystemTurnRecordStorePort,
   getQuarantinedTurnRecordLineCount,
   readRecentTurnRecordsAcrossSegments,
+  readTurnRecordPageAcrossSegments,
   type TurnRecordTailStats,
 } from './turn-records.js';
 
@@ -346,7 +347,7 @@ describe('turn-records', () => {
     expect(turnRecordStore.readRecentTurnRecords(channelId, 5)).toEqual([record]);
   });
 
-  it('round-trips logical session provenance and pages past the newest records', () => {
+  it('round-trips logical session provenance through a bounded snapshot cursor', () => {
     const sessionsDir = mkdtempSync(join(tmpdir(), 'turn-records-session-provenance-'));
     const turnRecordStore = createFilesystemTurnRecordStorePort(sessionsDir);
     const records = Array.from({ length: 4 }, (_, index) => createTurnRecord({
@@ -357,9 +358,14 @@ describe('turn-records', () => {
     }));
     for (const record of records) turnRecordStore.appendTurnRecord(record);
 
-    expect(turnRecordStore.readRecentTurnRecords(records[0]!.channelId, 2, 0)).toEqual(records.slice(2));
-    expect(turnRecordStore.readRecentTurnRecords(records[0]!.channelId, 2, 2)).toEqual(records.slice(0, 2));
-    expect(turnRecordStore.readRecentTurnRecords(records[0]!.channelId, 2, 4)).toEqual([]);
+    const first = turnRecordStore.readTurnRecordPage?.(records[0]!.channelId, 2);
+    expect(first).toMatchObject({ records: records.slice(2), exhausted: false });
+    const second = turnRecordStore.readTurnRecordPage?.(
+      records[0]!.channelId,
+      2,
+      first?.nextCursor,
+    );
+    expect(second).toEqual({ records: records.slice(0, 2), exhausted: true });
     expect(turnRecordStore.readRecentTurnRecords(records[0]!.channelId, 1)[0]?.sessionId)
       .toBe('session:logical-after-reset');
   });
@@ -520,6 +526,91 @@ describe('turn-records rotation and bounded tail reads', () => {
     expect(stats.bytesRead).toBeGreaterThan(0);
     expect(stats.bytesRead).toBeLessThan(fileSize / 4);
     expect(stats.bytesRead).toBeLessThan(4_096);
+  });
+
+  it('pins a rotation snapshot without duplicating the moved active inode or admitting newer rows', () => {
+    const sessionsDir = mkdtempSync(join(tmpdir(), 'psfn-turn-records-page-rotation-'));
+    const store = createFilesystemTurnRecordStorePort(sessionsDir, { segmentMaxBytes: 8 });
+    const records = Array.from({ length: 4 }, (_, index) => sequencedRecord(index));
+    for (const record of records) store.appendTurnRecord(record);
+
+    const first = store.readTurnRecordPage?.(ROTATION_CHANNEL, 2);
+    expect(first).toMatchObject({
+      records: records.slice(2),
+      exhausted: false,
+    });
+    expect(first?.nextCursor).toBeDefined();
+
+    // The snapshot's active inode rotates to a numbered segment and a new
+    // active record appears between pages. Continuation must relocate the
+    // pinned inode, count it once, and exclude the post-snapshot append.
+    const postSnapshot = sequencedRecord(4);
+    store.appendTurnRecord(postSnapshot);
+    const second = store.readTurnRecordPage?.(
+      ROTATION_CHANNEL,
+      2,
+      first?.nextCursor,
+    );
+    expect(second).toEqual({
+      records: records.slice(0, 2),
+      exhausted: true,
+    });
+
+    // Supplying no cursor is an explicit reset and begins a fresh snapshot.
+    expect(store.readTurnRecordPage?.(ROTATION_CHANNEL, 2)).toMatchObject({
+      records: [records[3], postSnapshot],
+      exhausted: false,
+    });
+  });
+
+  it('keeps every later old-fat multi-segment cursor page bounded by its physical page size', () => {
+    const sessionsDir = mkdtempSync(join(tmpdir(), 'psfn-turn-records-page-old-fat-'));
+    const recordCount = 48;
+    const pageSize = 3;
+    const oldFatBody = 'x'.repeat(128 * 1024);
+    const records = Array.from({ length: recordCount }, (_, index) => ({
+      ...sequencedRecord(index),
+      turnId: backfillLegacyTurnId(`bounded-page-old-fat-${String(index)}`),
+      assistantMessage: {
+        role: 'assistant' as const,
+        content: `${String(index)}:${oldFatBody}`,
+        timestamp: 1_742_000_000_500 + index * 1_000,
+      },
+    }));
+    for (const record of records) {
+      appendTurnRecordWithRotation(sessionsDir, record, 200 * 1024);
+    }
+    const dir = join(sessionsDir, TURN_RECORDS_DIR);
+    const sanitized = sanitizeChannelId(ROTATION_CHANNEL);
+    expect(readdirSync(dir).filter(name => name.startsWith(`${sanitized}.`)).length)
+      .toBeGreaterThan(10);
+
+    let cursor: Parameters<typeof readTurnRecordPageAcrossSegments>[3];
+    let exhausted = false;
+    const seen: string[] = [];
+    let pages = 0;
+    while (!exhausted) {
+      const stats = { bytesRead: 0, linesRead: 0, normalizedRecords: 0 };
+      const page = readTurnRecordPageAcrossSegments(
+        sessionsDir,
+        ROTATION_CHANNEL,
+        pageSize,
+        cursor,
+        { scanChunkBytes: 4 * 1024, stats },
+      );
+      pages += 1;
+      seen.push(...page.records.map(record => record.turnId));
+      expect(page.records.length).toBeLessThanOrEqual(pageSize);
+      expect(stats.linesRead).toBeLessThanOrEqual(pageSize);
+      expect(stats.normalizedRecords).toBeLessThanOrEqual(pageSize);
+      expect(stats.bytesRead).toBeLessThan(512 * 1024);
+      exhausted = page.exhausted;
+      cursor = page.nextCursor;
+    }
+
+    expect(pages).toBe(recordCount / pageSize);
+    expect(new Set(seen)).toEqual(new Set(records.map(record => record.turnId)));
+    expect(seen).toHaveLength(recordCount);
   });
 
   it('quarantines a trailing partial line from an interrupted append, keeping valid records', () => {
@@ -824,6 +915,8 @@ describe('turn-records content-addressed tool definitions (bead hgw3.3)', () => 
     // Fresh port: no in-memory memoization of the interned set.
     const freshStore = createFilesystemTurnRecordStorePort(sessionsDir);
     expect(() => freshStore.readRecentTurnRecords(record.channelId, 5))
+      .toThrow(/toolDefinitionsRef .* is dangling/);
+    expect(() => freshStore.readTurnRecordPage?.(record.channelId, 5))
       .toThrow(/toolDefinitionsRef .* is dangling/);
   });
 

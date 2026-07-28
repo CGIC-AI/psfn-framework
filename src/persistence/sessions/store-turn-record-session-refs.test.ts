@@ -375,8 +375,8 @@ describe('SessionStore top-level turn-message CogSec gating (psfn-framework-sm9l
 
     const introspection = createTurnRecordIntrospectionSource({
       listRecentSessions: () => [{ sessionId: channelId, sourceChannelId: channelId }],
-      getRecentTurnRecords: (sourceChannelId, limit, offset) => (
-        store.getRecentSourceTurnRecords(sourceChannelId, limit, offset)
+      readSourceTurnRecordPage: (sourceChannelId, limit, cursor) => (
+        store.readSourceTurnRecordPage(sourceChannelId, limit, cursor)
       ),
       isSessionRetiredOrQuarantined: () => false,
       isSourceTurnRecordEligible: (sourceChannelId, ownerSessionId, turnId) => (

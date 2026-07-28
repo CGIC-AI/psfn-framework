@@ -666,8 +666,8 @@ async function main(): Promise<void> {
         sourceChannelId: sessionManager.getSessionRouteForLogicalSession(session.sessionId)?.sourceChannelId
           ?? session.channelId,
       })),
-      getRecentTurnRecords: (sourceChannelId, limit, offset) => (
-        sessionStore.getRecentSourceTurnRecords(sourceChannelId, limit, offset)
+      readSourceTurnRecordPage: (sourceChannelId, limit, cursor) => (
+        sessionStore.readSourceTurnRecordPage(sourceChannelId, limit, cursor)
       ),
       isSessionRetiredOrQuarantined: sessionId => (
         sessionManager.isSessionRetiredOrQuarantined(sessionId)

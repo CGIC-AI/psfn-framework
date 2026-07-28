@@ -24,6 +24,8 @@ export interface JsonlScanOptions {
   chunkBytes: number;
   stats?: JsonlReadStats;
   scannedFileIdentities?: Set<string>;
+  /** Fail closed if the opened path no longer names the expected snapshot inode. */
+  expectedFileIdentity?: string;
 }
 
 export interface JsonlLineAtOffset {
@@ -77,9 +79,20 @@ function claimFileIdentity(
   fd: number,
   stats: JsonlReadStats | undefined,
   scannedFileIdentities: Set<string> | undefined,
+  expectedFileIdentity: string | undefined,
 ): { claimed: boolean; size: number } {
   const fileStat = fstatSync(fd);
   const identity = fileIdentityKey(fileStat);
+  if (
+    expectedFileIdentity !== undefined
+    && identity !== expectedFileIdentity
+  ) {
+    const error = new Error(
+      `JSONL snapshot identity changed: expected ${expectedFileIdentity}, found ${identity}`,
+    ) as NodeJS.ErrnoException;
+    error.code = 'ESTALE';
+    throw error;
+  }
   if (scannedFileIdentities?.has(identity)) {
     return { claimed: false, size: fileStat.size };
   }
@@ -99,7 +112,12 @@ export function scanJsonlFileBackward(
 ): boolean {
   const fd = openSync(path, 'r');
   try {
-    const claimed = claimFileIdentity(fd, options.stats, options.scannedFileIdentities);
+    const claimed = claimFileIdentity(
+      fd,
+      options.stats,
+      options.scannedFileIdentities,
+      options.expectedFileIdentity,
+    );
     if (!claimed.claimed || claimed.size <= 0) return false;
 
     const buffer = Buffer.allocUnsafe(options.chunkBytes);
@@ -141,7 +159,12 @@ export function readJsonlLineAtOrAfter(
 ): JsonlLineAtOffset | null {
   const fd = openSync(path, 'r');
   try {
-    const claimed = claimFileIdentity(fd, options.stats, options.scannedFileIdentities);
+    const claimed = claimFileIdentity(
+      fd,
+      options.stats,
+      options.scannedFileIdentities,
+      options.expectedFileIdentity,
+    );
     if (claimed.size <= 0) return null;
 
     const buffer = Buffer.allocUnsafe(options.chunkBytes);
@@ -204,7 +227,12 @@ export function readJsonlLineBefore(
 ): JsonlLineAtOffset | null {
   const fd = openSync(path, 'r');
   try {
-    const claimed = claimFileIdentity(fd, options.stats, options.scannedFileIdentities);
+    const claimed = claimFileIdentity(
+      fd,
+      options.stats,
+      options.scannedFileIdentities,
+      options.expectedFileIdentity,
+    );
     let position = Math.min(claimed.size, Math.max(0, Math.floor(exclusiveOffset)));
     if (position <= 0) return null;
 
@@ -257,7 +285,12 @@ export function scanJsonlFileForward(
 ): boolean {
   const fd = openSync(path, 'r');
   try {
-    const claimed = claimFileIdentity(fd, options.stats, options.scannedFileIdentities);
+    const claimed = claimFileIdentity(
+      fd,
+      options.stats,
+      options.scannedFileIdentities,
+      options.expectedFileIdentity,
+    );
     if (!claimed.claimed || claimed.size <= 0) return false;
 
     const buffer = Buffer.allocUnsafe(options.chunkBytes);

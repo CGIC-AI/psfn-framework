@@ -48,6 +48,8 @@ import type {
 } from '../../core/turns/observability.js';
 import { cloneUnknownValue } from '../../core/turns/observability.js';
 import type {
+  TurnRecordPage,
+  TurnRecordPageCursor,
   TurnRecordStorePort,
   TurnRecordUsageRecord,
 } from './turn-record-store-port.js';
@@ -68,6 +70,10 @@ import {
   scanJsonlFileBackward,
   type NumberedJsonlSegment,
 } from '../jsonl-segments.js';
+import {
+  readJsonlSnapshotPage,
+  type JsonlSnapshotPageStats,
+} from '../jsonl-snapshot-cursor.js';
 
 const log = createComponentLogger('TurnRecords');
 
@@ -1084,6 +1090,71 @@ export interface ReadRecentTurnRecordsOptions {
   stats?: TurnRecordTailStats;
 }
 
+export interface TurnRecordPageStats extends TurnRecordTailStats, JsonlSnapshotPageStats {
+  /** Rows that normalized successfully before shared-reference resolution. */
+  normalizedRecords: number;
+}
+
+export interface ReadTurnRecordPageOptions {
+  scanChunkBytes?: number;
+  stats?: TurnRecordPageStats;
+}
+
+/**
+ * Read one bounded physical page from a fixed active+rotated segment snapshot.
+ *
+ * Page order matches the historical recent-read contract (oldest-to-newest
+ * within each page), while continuation advances from newest toward older
+ * rows. Exactly `limit` physical JSONL rows at most are parsed per call.
+ */
+export function readTurnRecordPageAcrossSegments(
+  sessionsDir: string,
+  channelId: string,
+  limit: number,
+  cursor?: TurnRecordPageCursor,
+  options: ReadTurnRecordPageOptions = {},
+): TurnRecordPage {
+  if (!Number.isSafeInteger(limit) || limit <= 0) {
+    throw new Error('TurnRecord page limit must be a positive safe integer');
+  }
+  const sanitized = sanitizeChannelId(channelId);
+  const dir = turnRecordsDir(sessionsDir);
+  const page = readJsonlSnapshotPage(
+    join(dir, `${sanitized}.jsonl`),
+    channelId,
+    limit,
+    cursor,
+    {
+      chunkBytes: options.scanChunkBytes ?? TURN_RECORD_TAIL_SCAN_CHUNK_BYTES,
+      rotationRetries: TAIL_READ_ROTATION_RETRIES,
+      stats: options.stats,
+    },
+  );
+  const newestFirst: TurnRecord[] = [];
+  for (const raw of page.lines) {
+    const text = raw.line.trim();
+    if (!text) continue;
+    try {
+      newestFirst.push(normalizeTurnRecord(JSON.parse(text) as unknown, channelId));
+      if (options.stats) options.stats.normalizedRecords += 1;
+    } catch (error) {
+      quarantineTurnRecordLine(
+        raw.path,
+        channelId,
+        text,
+        error,
+      );
+    }
+  }
+  return {
+    records: newestFirst.reverse(),
+    exhausted: page.exhausted,
+    ...(page.nextCursor
+      ? { nextCursor: page.nextCursor as TurnRecordPageCursor }
+      : {}),
+  };
+}
+
 /**
  * One full tail pass over the active file plus rotated segments, newest first.
  * Throws ENOENT if a listed file vanished before it could be opened (a
@@ -1530,31 +1601,43 @@ export function createFilesystemTurnRecordStorePort(
       );
       appendTurnRecordWithRotation(sessionsDir, slimmed, segmentMaxBytes);
     },
-    readRecentTurnRecords: (channelId, limit, offset = 0) => {
-      if (limit <= 0 || offset < 0) return [];
-      // #49 introspection auditing pages back through history via `offset`.
-      // Read `limit + offset` newest records (oldest-first) across segments,
-      // then drop the newest `offset` — the trailing entries of the ascending
-      // window — to land on the requested page.
+    readRecentTurnRecords: (channelId, limit) => {
+      if (limit <= 0) return [];
       const rows = readRecentTurnRecordsAcrossSegments(
         sessionsDir,
         channelId,
-        limit + offset,
+        limit,
         { scanChunkBytes },
       );
-      const windowed = offset > 0
-        ? rows.slice(0, Math.max(0, rows.length - offset))
-        : rows;
       // Refs resolve at the read boundary — only for records actually
       // returned — so every consumer above persistence sees fully inline
       // records. Fail closed: a dangling ref is a loud error (hgw3.3).
-      return windowed.map(record => resolveTurnRecordStaticPrompt(
+      return rows.map(record => resolveTurnRecordStaticPrompt(
         resolveTurnRecordWirePayload(
           resolveTurnRecordToolDefinitions(record, sharedStore),
           sharedStore,
         ),
         sharedStore,
       ));
+    },
+    readTurnRecordPage: (channelId, limit, cursor) => {
+      const page = readTurnRecordPageAcrossSegments(
+        sessionsDir,
+        channelId,
+        limit,
+        cursor,
+        { scanChunkBytes },
+      );
+      return {
+        ...page,
+        records: page.records.map(record => resolveTurnRecordStaticPrompt(
+          resolveTurnRecordWirePayload(
+            resolveTurnRecordToolDefinitions(record, sharedStore),
+            sharedStore,
+          ),
+          sharedStore,
+        )),
+      };
     },
     readRecentTurnRecordUsage: (channelId, limit) => (
       readRecentTurnRecordUsageAcrossSegments(

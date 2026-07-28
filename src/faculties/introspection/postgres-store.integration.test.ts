@@ -209,9 +209,10 @@ describe('IntrospectionLandmarkPostgresStore integration', () => {
               sessionId: 'session:logical-after-reset',
               sourceChannelId: 'discord:public-room',
             }],
-            getRecentTurnRecords: (sourceChannelId) => sourceChannelId === 'discord:public-room'
-              ? records
-              : [],
+            readSourceTurnRecordPage: (sourceChannelId) => ({
+              records: sourceChannelId === 'discord:public-room' ? records : [],
+              exhausted: true,
+            }),
             isSessionRetiredOrQuarantined: () => false,
             isSourceTurnRecordEligible: () => true,
           });

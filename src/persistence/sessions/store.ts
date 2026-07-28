@@ -58,6 +58,8 @@ import {
 } from './turn-record-session-refs.js';
 import { slimTurnRecordMemoryCandidatesForAppend } from './turn-record-memory-refs.js';
 import type {
+  TurnRecordPage,
+  TurnRecordPageCursor,
   TurnRecordStorePort,
   TurnRecordUsageRecord,
 } from './turn-record-store-port.js';
@@ -1542,9 +1544,9 @@ export class SessionStore implements TranscriptSearchPort {
    * channel-exact, so routed sessions must use this path instead of widening a
    * source-channel decision to the whole logical session.
    */
-  getRecentSourceTurnRecords(sourceChannelId: string, limit: number, offset = 0): TurnRecord[] {
-    if (limit <= 0 || offset < 0) return [];
-    const target = Math.min(Number.MAX_SAFE_INTEGER, limit + offset);
+  getRecentSourceTurnRecords(sourceChannelId: string, limit: number): TurnRecord[] {
+    if (limit <= 0) return [];
+    const target = limit;
     let requested = Math.min(
       Number.MAX_SAFE_INTEGER,
       Math.max(target, target * TURN_RECORD_TOMBSTONE_OVERSCAN_FACTOR),
@@ -1562,13 +1564,44 @@ export class SessionStore implements TranscriptSearchPort {
       });
       const exhaustedHistory = records.length < requested;
       if (filtered.length >= target || exhaustedHistory) {
-        const end = Math.max(0, filtered.length - offset);
-        const start = Math.max(0, end - limit);
-        return filtered.slice(start, end)
+        return filtered.slice(-limit)
           .map(record => this.resolveTurnRecordSessionRefs(record));
       }
       requested = Math.min(Number.MAX_SAFE_INTEGER, requested * 2);
     }
+  }
+  /**
+   * Bounded physical paging for introspection/metacognition.
+   *
+   * Tombstoned or missing-owner rows consume their physical page slot instead
+   * of triggering overscan. `exhausted` and `nextCursor` therefore describe
+   * the complete fixed persistence snapshot, even when every returned record
+   * is filtered out. Shared refs and L0 session refs resolve only for the
+   * retained rows in this one page.
+   */
+  readSourceTurnRecordPage(
+    sourceChannelId: string,
+    limit: number,
+    cursor?: TurnRecordPageCursor,
+  ): TurnRecordPage {
+    const readPage = this.turnRecordStore.readTurnRecordPage;
+    if (!readPage) {
+      throw new Error('TurnRecord store does not support bounded cursor paging');
+    }
+    const page = readPage.call(this.turnRecordStore, sourceChannelId, limit, cursor);
+    const records = page.records
+      .filter((record) => {
+        if (record.channelId !== sourceChannelId) return false;
+        const ownerSessionId = record.sessionId ?? sourceChannelId;
+        const owner = this.ensureChannelFullyLoaded(ownerSessionId);
+        return owner !== null && !owner.turnTombstones.has(record.turnId);
+      })
+      .map(record => this.resolveTurnRecordSessionRefs(record));
+    return {
+      records,
+      exhausted: page.exhausted,
+      ...(page.nextCursor ? { nextCursor: page.nextCursor } : {}),
+    };
   }
   /**
    * One process-lifetime historical handoff scan. The filesystem adapter

@@ -47,7 +47,7 @@ export interface SkillsRuntimeOptions {
   repoRoot: string;
   managedRootDir?: string;
   environment?: NodeJS.ProcessEnv;
-  isBinaryAvailable?: (binaryName: string) => boolean;
+  isBinaryAvailable?: (binaryName: string) => boolean | Promise<boolean>;
   now?: () => Date;
   collectionLimits?: Partial<SkillCollectionLimits>;
 }
@@ -308,7 +308,8 @@ export class SkillsRuntime {
   private async getOrCreateCache(): Promise<SkillSnapshotCache> {
     const generation = this.cacheGeneration;
     if (this.cacheBuild?.generation === generation) {
-      return this.cacheBuild.promise;
+      const cache = await this.cacheBuild.promise;
+      return generation === this.cacheGeneration ? cache : this.getOrCreateCache();
     }
 
     const promise = this.buildCache(generation);
@@ -374,18 +375,19 @@ export class SkillsRuntime {
       initialRetainedBytes: scan.collection.candidateBytesRetained,
     });
     const deduped = await applySkillPrecedence(parsed.entries, limits.yieldEvery);
-    const eligibility: ReturnType<typeof filterEligibleSkills> = {
+    const eligibility: Awaited<ReturnType<typeof filterEligibleSkills>> = {
       evaluations: [],
       eligible: [],
       skipped: [],
     };
     for (let offset = 0; offset < deduped.entries.length; offset += limits.yieldEvery) {
-      const chunk = filterEligibleSkills(
+      const chunk = await filterEligibleSkills(
         deduped.entries.slice(offset, offset + limits.yieldEvery),
         {
           runtimeConfig,
           environment: this.options.environment,
           isBinaryAvailable: this.options.isBinaryAvailable,
+          maxBinaryRequirements: limits.maxBinaryRequirements,
         },
       );
       eligibility.evaluations.push(...chunk.evaluations);

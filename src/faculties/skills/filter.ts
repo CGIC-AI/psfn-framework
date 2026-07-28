@@ -1,5 +1,5 @@
 import { constants } from 'node:fs';
-import { accessSync } from 'node:fs';
+import { access } from 'node:fs/promises';
 import { delimiter, join } from 'node:path';
 import type { SkillsRuntimeConfig } from '../../system/config/skills-config.js';
 import type {
@@ -12,7 +12,8 @@ import type {
 export interface SkillEligibilityContext {
   runtimeConfig: SkillsRuntimeConfig;
   environment?: NodeJS.ProcessEnv;
-  isBinaryAvailable?: (binaryName: string) => boolean;
+  isBinaryAvailable?: (binaryName: string) => boolean | Promise<boolean>;
+  maxBinaryRequirements?: number;
 }
 
 function uniqStrings(values: string[]): string[] {
@@ -70,7 +71,7 @@ function binaryCandidates(binaryName: string): string[] {
   return [binaryName, ...extensions.map(ext => `${binaryName}${ext}`)];
 }
 
-export function defaultBinaryAvailable(binaryName: string): boolean {
+export async function defaultBinaryAvailable(binaryName: string): Promise<boolean> {
   if (!binaryName.trim()) return false;
 
   const pathEnv = process.env.PATH ?? '';
@@ -86,7 +87,7 @@ export function defaultBinaryAvailable(binaryName: string): boolean {
     for (const candidate of candidates) {
       const absolutePath = join(baseDir, candidate);
       try {
-        accessSync(absolutePath, constants.X_OK);
+        await access(absolutePath, constants.X_OK);
         return true;
       } catch {
         // Keep scanning PATH entries.
@@ -97,17 +98,23 @@ export function defaultBinaryAvailable(binaryName: string): boolean {
   return false;
 }
 
-export function evaluateSkillEligibility(
+export async function evaluateSkillEligibility(
   entry: SkillEntry,
   context: SkillEligibilityContext,
-): SkillEligibilityResult {
+): Promise<SkillEligibilityResult> {
   const runtimeConfig = context.runtimeConfig;
   const environment = context.environment ?? process.env;
   const checkBinary = context.isBinaryAvailable ?? defaultBinaryAvailable;
 
-  const missingBinaries = uniqStrings(
-    entry.requires.binaries.filter(binary => !checkBinary(binary)),
-  );
+  const binaries = uniqStrings(entry.requires.binaries);
+  const binaryLimit = context.maxBinaryRequirements ?? 64;
+  const binaryLimitExceeded = binaries.length > binaryLimit;
+  const missingBinaries: string[] = [];
+  if (!binaryLimitExceeded) {
+    for (const binary of binaries) {
+      if (!await checkBinary(binary)) missingBinaries.push(binary);
+    }
+  }
 
   const missingEnv = uniqStrings(
     entry.requires.env.filter((envVar) => {
@@ -126,6 +133,9 @@ export function evaluateSkillEligibility(
   const reasons: string[] = [];
   if (globallyDisabled) reasons.push('skills runtime is disabled in config');
   if (disabledByConfig) reasons.push('skill is disabled via skills.disabledSkills');
+  if (binaryLimitExceeded) {
+    reasons.push(`binary requirements exceed limit: ${String(binaries.length)} declared, maximum ${String(binaryLimit)}; none evaluated`);
+  }
   if (missingBinaries.length > 0) reasons.push(`missing binaries: ${missingBinaries.join(', ')}`);
   if (missingEnv.length > 0) reasons.push(`missing env vars: ${missingEnv.join(', ')}`);
   if (missingConfig.length > 0) reasons.push(`missing config flags: ${missingConfig.join(', ')}`);
@@ -140,20 +150,20 @@ export function evaluateSkillEligibility(
   };
 }
 
-export function filterEligibleSkills(
+export async function filterEligibleSkills(
   entries: SkillEntry[],
   context: SkillEligibilityContext,
-): {
+): Promise<{
   evaluations: SkillEvaluation[];
   eligible: SkillEntry[];
   skipped: SkillSkipRecord[];
-} {
+}> {
   const evaluations: SkillEvaluation[] = [];
   const eligible: SkillEntry[] = [];
   const skipped: SkillSkipRecord[] = [];
 
   for (const entry of entries) {
-    const eligibility = evaluateSkillEligibility(entry, context);
+    const eligibility = await evaluateSkillEligibility(entry, context);
     evaluations.push({ entry, eligibility });
 
     if (eligibility.eligible) {

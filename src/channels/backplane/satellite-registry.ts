@@ -32,7 +32,7 @@ import {
   satelliteEndpointAdmitsApiKeyPrincipal,
 } from '../../shared/contracts/satellite-registry.js';
 import type { ApiAuthPrincipal } from './http/auth.js';
-import { normalizeChannelPrivacy, type ChannelPrivacy } from '../../system/trust/context-envelope.js';
+import { CHANNEL_PRIVACY_VALUES, normalizeChannelPrivacy, type ChannelPrivacy } from '../../system/trust/context-envelope.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
 import { isRecord } from '../../shared/utils/types.js';
 import { createCompanionId } from '../../shared/routing/companion-id.js';
@@ -181,7 +181,7 @@ function parseChannelPrivacy(value: unknown, fieldName: string): ChannelPrivacy 
   const raw = parseConfiguredString(value, fieldName);
   const parsed = normalizeChannelPrivacy(raw);
   if (!parsed) {
-    throw new Error(`${fieldName} must be one of: private, invite_only, public, broadcast`);
+    throw new Error(`${fieldName} must be one of: ${CHANNEL_PRIVACY_VALUES.join(', ')}`);
   }
   return parsed;
 }

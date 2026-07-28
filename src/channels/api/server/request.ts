@@ -4,7 +4,7 @@ import type {
   MessagePromptOverride,
   ResponseStyle,
 } from '../../../shared/contracts/runtime.js';
-import { isChannelPrivacy, type ChannelPrivacy } from '../../../system/trust/context-envelope.js';
+import { CHANNEL_PRIVACY_VALUES, isChannelPrivacy, type ChannelPrivacy } from '../../../system/trust/context-envelope.js';
 import { readJsonBodyWithLimit } from '../../backplane/http/primitives.js';
 import type { ApiRuntimeChatRequest, ChatCompletionRequest } from '../types.js';
 import {
@@ -144,7 +144,7 @@ export function resolveChannelPrivacy(req: IncomingMessage): ChannelPrivacyResol
   if (!isChannelPrivacy(rawValue)) {
     return {
       ok: false,
-      error: 'X-Channel-Privacy must be one of: private, invite_only, public, broadcast',
+      error: `X-Channel-Privacy must be one of: ${CHANNEL_PRIVACY_VALUES.join(', ')}`,
     };
   }
   return { ok: true, value: rawValue };

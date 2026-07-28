@@ -25,7 +25,7 @@ import type {
 import type { EventBus } from '../../shared/event-bus.js';
 import { createEventBusSensorIngestPort, type SensorIngestPort } from '../../shared/telemetry/sensor-ingest-port.js';
 import type { SessionManager } from '../../core/session/manager.js';
-import { isChannelPrivacy, type ChannelPrivacy } from '../../system/trust/context-envelope.js';
+import { CHANNEL_PRIVACY_VALUES, isChannelPrivacy, type ChannelPrivacy } from '../../system/trust/context-envelope.js';
 import type {
   ApiChatCompletionCancelRpcParams,
   ApiChatCompletionCancelRpcResult,
@@ -1016,7 +1016,7 @@ export class AgentApiBackend {
     if (!isChannelPrivacy(rawValue)) {
       return {
         ok: false,
-        error: 'X-Channel-Privacy must be one of: private, invite_only, public, broadcast',
+        error: `X-Channel-Privacy must be one of: ${CHANNEL_PRIVACY_VALUES.join(', ')}`,
       };
     }
     return { ok: true, value: rawValue };

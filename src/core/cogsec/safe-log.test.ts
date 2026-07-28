@@ -148,6 +148,24 @@ describe('CogSec safe event log', () => {
     })).toEqual([]);
   });
 
+  it('hides session_integrity incidents from the companion but keeps them operator-visible (bead g59z)', () => {
+    const integrity = makeEvent({
+      caseId: 'cogsec_sessionintegrity_deadbeef',
+      type: 'session_integrity',
+      status: 'open',
+      sealedForensicPayloadRefs: [],
+      sealedForensicPayloadHashes: [],
+    });
+
+    // Operator surface (Garden) shows it.
+    expect(listOperatorVisibleCogSecEvents([integrity]).map(e => e.caseId))
+      .toContain('cogsec_sessionintegrity_deadbeef');
+    // Companion-facing surface omits it entirely.
+    expect(listAgentVisibleCogSecEvents([integrity])).toHaveLength(0);
+    // And it never appears in the prompt notice block.
+    expect(buildCogSecEventNoticeBlock([integrity])).toBe('');
+  });
+
   it('formats prompt notices without sealed refs, dirty text, or attack mechanics', () => {
     const block = buildCogSecEventNoticeBlock([makeEvent()], {
       channelIds: ['discord-channel-1'],

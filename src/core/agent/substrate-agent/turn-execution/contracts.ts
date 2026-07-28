@@ -391,6 +391,7 @@ export interface TurnExecutionRuntime {
     completedAt: number;
     contextManifest?: ContextManifest;
     canonicalContactKey?: string;
+    capturedSessionReads: CapturedSessionReads;
   }) => Promise<InferredPostTurnAction[]>;
   buildTurnRecord: (input: {
     message: SubstrateMessage;

@@ -262,6 +262,11 @@ export class TurnRecordEligibilitySnapshotInvalidError extends Error {
   }
 }
 
+export type SourceTurnRecordEligibility =
+  | { readonly kind: 'missing' }
+  | { readonly kind: 'ineligible' }
+  | { readonly kind: 'eligible'; readonly record: TurnRecord };
+
 function sessionEntrySnapshotMatches(
   left: readonly SessionEntry[],
   right: readonly SessionEntry[],
@@ -1297,7 +1302,7 @@ export class SessionStore implements TranscriptSearchPort {
           uniqueConsumed.set(`${reference.sourceChannelId}\u0000${reference.turnId}`, reference);
         }
         for (const reference of uniqueConsumed.values()) {
-          if (!this.isSourceTurnRecordEligible(
+          if (!await this.isSourceTurnRecordEligible(
             reference.sourceChannelId,
             normalizedSessionId,
             reference.turnId,
@@ -1371,40 +1376,94 @@ export class SessionStore implements TranscriptSearchPort {
    * and tombstone fences used by background work. Null means no record exists;
    * an existing ambiguous or ineligible source fails closed.
    */
-  findUniqueSourceTurnRecord(sourceChannelId: string, turnId: string): TurnRecord | null {
+  private async lookupSourceTurnRecordIdentity(
+    sourceChannelId: string,
+    turnId: string,
+  ) {
     const normalizedSourceChannelId = sourceChannelId.trim();
     const normalizedTurnId = turnId.trim();
     if (!normalizedSourceChannelId || !normalizedTurnId) {
       throw new Error('Source TurnRecord lookup requires a physical channel and turn id');
     }
-    const countMatches = this.turnRecordStore.countTurnRecordsByTurnId;
-    if (!countMatches) {
-      throw new Error('TurnRecord store does not support bounded exact-identity counts');
+    const lookup = this.turnRecordStore.lookupTurnRecordIdentity;
+    if (!lookup) {
+      throw new Error('TurnRecord store does not support snapshot-consistent exact identity lookup');
     }
-    const matchCount = countMatches.call(
+    return await lookup.call(
       this.turnRecordStore,
       normalizedSourceChannelId,
       normalizedTurnId,
     );
-    if (matchCount === 0) return null;
-    if (matchCount !== 1) {
+  }
+  private resolveEligibleSourceTurnRecord(
+    sourceChannelId: string,
+    ownerSessionId: string | null,
+    turnId: string,
+    record: TurnRecord,
+  ): TurnRecord | null {
+    const normalizedSourceChannelId = sourceChannelId.trim();
+    const normalizedTurnId = turnId.trim();
+    const declaredOwnerSessionId = record.sessionId ?? normalizedSourceChannelId;
+    if (record.channelId !== normalizedSourceChannelId
+      || (ownerSessionId !== null && declaredOwnerSessionId !== ownerSessionId.trim())) {
+      return null;
+    }
+    const owner = this.ensureChannelFullyLoaded(declaredOwnerSessionId);
+    if (owner === null || owner.turnTombstones.has(normalizedTurnId)) return null;
+    return this.resolveTurnRecordSessionRefs(record);
+  }
+  async findUniqueSourceTurnRecord(
+    sourceChannelId: string,
+    turnId: string,
+  ): Promise<TurnRecord | null> {
+    const lookup = await this.lookupSourceTurnRecordIdentity(sourceChannelId, turnId);
+    if (lookup.kind === 'missing') return null;
+    if (lookup.kind === 'duplicated') {
       throw new Error('Source TurnRecord is duplicated and cannot establish a recovery identity');
     }
-    const record = this.turnRecordStore.findTurnRecord(
-      normalizedSourceChannelId,
-      normalizedTurnId,
+    const eligible = this.resolveEligibleSourceTurnRecord(
+      sourceChannelId,
+      null,
+      turnId,
+      lookup.record,
     );
-    if (!record) {
-      throw new Error('Source TurnRecord identity changed during recovery lookup');
-    }
-    const logicalSessionId = record.sessionId ?? normalizedSourceChannelId;
-    const owner = this.ensureChannelFullyLoaded(logicalSessionId);
-    if (record.channelId !== normalizedSourceChannelId
-      || owner === null
-      || owner.turnTombstones.has(normalizedTurnId)) {
+    if (!eligible) {
       throw new Error('Source TurnRecord is tombstoned, missing its owner, or belongs to another source');
     }
-    return this.resolveTurnRecordSessionRefs(record);
+    return eligible;
+  }
+  async findEligibleSourceTurnRecord(
+    sourceChannelId: string,
+    ownerSessionId: string,
+    turnId: string,
+  ): Promise<TurnRecord | null> {
+    const eligibility = await this.lookupSourceTurnRecordEligibility(
+      sourceChannelId,
+      ownerSessionId,
+      turnId,
+    );
+    return eligibility.kind === 'eligible' ? eligibility.record : null;
+  }
+  async lookupSourceTurnRecordEligibility(
+    sourceChannelId: string,
+    ownerSessionId: string,
+    turnId: string,
+  ): Promise<SourceTurnRecordEligibility> {
+    if (!ownerSessionId.trim()) {
+      throw new Error('Source TurnRecord eligibility requires an owner session id');
+    }
+    const lookup = await this.lookupSourceTurnRecordIdentity(sourceChannelId, turnId);
+    if (lookup.kind === 'missing') return { kind: 'missing' };
+    if (lookup.kind === 'duplicated') return { kind: 'ineligible' };
+    const record = this.resolveEligibleSourceTurnRecord(
+      sourceChannelId,
+      ownerSessionId,
+      turnId,
+      lookup.record,
+    );
+    return record
+      ? { kind: 'eligible', record }
+      : { kind: 'ineligible' };
   }
   getRecentTurnRecords(channelId: string, limit: number): TurnRecord[] {
     if (limit <= 0) return [];
@@ -1680,22 +1739,16 @@ export class SessionStore implements TranscriptSearchPort {
       }));
     }
   }
-  isSourceTurnRecordEligible(
+  async isSourceTurnRecordEligible(
     sourceChannelId: string,
     ownerSessionId: string,
     turnId: string,
-  ): boolean {
-    const countMatches = this.turnRecordStore.countTurnRecordsByTurnId;
-    if (!countMatches
-      || countMatches.call(this.turnRecordStore, sourceChannelId, turnId) !== 1) {
-      return false;
-    }
-    const record = this.turnRecordStore.findTurnRecord(sourceChannelId, turnId);
-    if (!record) return false;
-    const declaredOwnerSessionId = record.sessionId ?? sourceChannelId;
-    if (record.channelId !== sourceChannelId || declaredOwnerSessionId !== ownerSessionId) return false;
-    const owner = this.ensureChannelFullyLoaded(ownerSessionId);
-    return owner !== null && !owner.turnTombstones.has(turnId);
+  ): Promise<boolean> {
+    return await this.findEligibleSourceTurnRecord(
+      sourceChannelId,
+      ownerSessionId,
+      turnId,
+    ) !== null;
   }
   async searchByKeywords(
     query: string,

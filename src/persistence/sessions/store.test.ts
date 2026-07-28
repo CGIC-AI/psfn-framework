@@ -705,24 +705,24 @@ describe('SessionStore', () => {
       .toBe(visibleTurnId);
     expect(store.findSourceTurnRecord(sourceChannelId, 'session:wrong-owner', visibleTurnId))
       .toBeNull();
-    expect(store.isSourceTurnRecordEligible(sourceChannelId, logicalSessionId, redactedTurnId))
-      .toBe(true);
+    await expect(store.isSourceTurnRecordEligible(sourceChannelId, logicalSessionId, redactedTurnId))
+      .resolves.toBe(true);
     await store.redactTurn(logicalSessionId, redactedTurnId, {
       actor: 'admin:test',
       reason: 'privacy request',
     });
     expect(store.getRecentSourceTurnRecords(sourceChannelId, 10).map(record => record.turnId))
       .toEqual([visibleTurnId]);
-    expect(store.isSourceTurnRecordEligible(sourceChannelId, logicalSessionId, redactedTurnId))
-      .toBe(false);
-    expect(store.isSourceTurnRecordEligible(sourceChannelId, logicalSessionId, visibleTurnId))
-      .toBe(true);
+    await expect(store.isSourceTurnRecordEligible(sourceChannelId, logicalSessionId, redactedTurnId))
+      .resolves.toBe(false);
+    await expect(store.isSourceTurnRecordEligible(sourceChannelId, logicalSessionId, visibleTurnId))
+      .resolves.toBe(true);
 
     const reloaded = new SessionStore(dir);
     expect(reloaded.getRecentSourceTurnRecords(sourceChannelId, 10).map(record => record.turnId))
       .toEqual([visibleTurnId]);
-    expect(reloaded.isSourceTurnRecordEligible(sourceChannelId, logicalSessionId, redactedTurnId))
-      .toBe(false);
+    await expect(reloaded.isSourceTurnRecordEligible(sourceChannelId, logicalSessionId, redactedTurnId))
+      .resolves.toBe(false);
   });
 
   it('derives one exact routed owner and rejects duplicated or tombstoned recovery sources', async () => {
@@ -748,20 +748,26 @@ describe('SessionStore', () => {
     void store.appendTurnRecord(unique);
     void store.appendTurnRecord(tombstoned);
 
-    expect(store.findUniqueSourceTurnRecord(sourceChannelId, uniqueTurnId)).toEqual(unique);
+    await expect(store.findUniqueSourceTurnRecord(sourceChannelId, uniqueTurnId))
+      .resolves.toEqual(unique);
     await store.redactTurn(logicalSessionId, tombstonedTurnId, {
       actor: 'admin:test',
       reason: 'privacy request',
     });
-    expect(() => store.findUniqueSourceTurnRecord(sourceChannelId, tombstonedTurnId))
-      .toThrow('tombstoned, missing its owner, or belongs to another source');
+    await expect(store.findUniqueSourceTurnRecord(sourceChannelId, tombstonedTurnId))
+      .rejects.toThrow('tombstoned, missing its owner, or belongs to another source');
 
-    void store.appendTurnRecord(unique);
-    expect(() => store.findUniqueSourceTurnRecord(sourceChannelId, uniqueTurnId))
-      .toThrow('duplicated and cannot establish a recovery identity');
+    await store.appendTurnRecord(unique);
+    await expect(store.findUniqueSourceTurnRecord(sourceChannelId, uniqueTurnId))
+      .rejects.toThrow('duplicated and cannot establish a recovery identity');
+    await expect(store.isSourceTurnRecordEligible(
+      sourceChannelId,
+      logicalSessionId,
+      uniqueTurnId,
+    )).resolves.toBe(false);
   });
 
-  it('uses content-free exact identity checks for recovered inbound delivery and eligibility', () => {
+  it('uses one content-free exact identity snapshot for recovered inbound delivery and eligibility', async () => {
     const sourceChannelId = 'api:exact-identity';
     const turnId = createTurnId(1_700_000_001_500);
     store.append({
@@ -772,7 +778,10 @@ describe('SessionStore', () => {
       turnId,
     });
     const record = buildTurnRecordFixture(sourceChannelId, 1, turnId);
-    const countTurnRecordsByTurnId = vi.fn(() => 1);
+    const lookupTurnRecordIdentity = vi.fn(async () => ({
+      kind: 'unique' as const,
+      record,
+    }));
     const findTurnRecord = vi.fn(() => record);
     const exactStore = new SessionStore(dir, {
       turnRecordStore: {
@@ -780,15 +789,22 @@ describe('SessionStore', () => {
         readRecentTurnRecords: vi.fn(() => {
           throw new Error('old-fat bulk read must not run for exact identity');
         }),
-        countTurnRecordsByTurnId,
+        lookupTurnRecordIdentity,
         findTurnRecord,
       },
     });
 
-    expect(exactStore.findUniqueSourceTurnRecord(sourceChannelId, turnId)).toEqual(record);
-    expect(exactStore.isSourceTurnRecordEligible(sourceChannelId, sourceChannelId, turnId)).toBe(true);
-    expect(countTurnRecordsByTurnId).toHaveBeenCalledTimes(2);
-    expect(findTurnRecord).toHaveBeenCalledTimes(2);
+    await expect(exactStore.findUniqueSourceTurnRecord(sourceChannelId, turnId))
+      .resolves.toEqual(record);
+    await expect(exactStore.isSourceTurnRecordEligible(sourceChannelId, sourceChannelId, turnId))
+      .resolves.toBe(true);
+    await expect(exactStore.isSourceTurnRecordEligible(
+      sourceChannelId,
+      'session:wrong-owner',
+      turnId,
+    )).resolves.toBe(false);
+    expect(lookupTurnRecordIdentity).toHaveBeenCalledTimes(3);
+    expect(findTurnRecord).not.toHaveBeenCalled();
   });
 
   it('streams all historical handoffs while excluding duplicated sources', async () => {

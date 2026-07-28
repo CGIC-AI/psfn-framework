@@ -177,11 +177,22 @@ function applySafeLogFilter<T extends CogSecEvent>(events: readonly T[], filter:
   return relevant.slice(0, limit);
 }
 
+/**
+ * Case types that are OPERATOR-ONLY and must never be surfaced into the
+ * companion's context (bead g59z). A session-integrity (HMAC) failure is an
+ * operator investigation signal; the companion already sees the inline
+ * `unverified_history` wrapper, and a separate cogsec notice for it would be
+ * both redundant and worded for sealed/tombstoned material it does not match.
+ */
+const AGENT_HIDDEN_CASE_TYPES: ReadonlySet<CogSecEvent['type']> = new Set(['session_integrity']);
+
 export function listAgentVisibleCogSecEvents(
   events: readonly CogSecEvent[],
   filter: CogSecSafeLogFilter = {},
 ): CogSecAgentVisibleEvent[] {
-  return applySafeLogFilter(events, filter).map(toAgentVisibleCogSecEvent);
+  return applySafeLogFilter(events, filter)
+    .filter(event => !AGENT_HIDDEN_CASE_TYPES.has(event.type))
+    .map(toAgentVisibleCogSecEvent);
 }
 
 export function listOperatorVisibleCogSecEvents(

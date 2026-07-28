@@ -227,12 +227,12 @@ describe('turn-record introspection source', () => {
       isSessionRetiredOrQuarantined: () => retired,
       isSourceTurnRecordEligible: async () => await eligibility,
     });
-    const candidate = source.listCandidates({
+    const candidate = (await source.listCandidates({
       allowedPublicChannelIds: ['discord:public-room'],
       recentSessionLimit: 1,
       recentTurnLimit: 1,
       maxSourceChars: 1_000,
-    })[0]!;
+    }))[0]!;
 
     const pending = source.isCandidateStillEligible(candidate);
     retired = true;

@@ -145,7 +145,7 @@ export class FakePostgresPool {
       return result();
     }
 
-    if (normalized.startsWith('select id, discord_user_id, display_name, nickname, trust_level, relationship_type, is_machine_intelligence, emotional_baseline, first_seen, last_seen, notes, timezone, gender, pronouns, age from contacts where id = $1 limit 1')) {
+    if (normalized.startsWith('select id, discord_user_id, display_name, nickname, trust_level, relationship_type, is_machine_intelligence, emotional_baseline, first_seen, last_seen, notes, timezone, gender, pronouns, age, archived_at, channel_identities from contacts where id = $1 limit 1')) {
       const row = this.contacts.get(String(values[0] ?? ''));
       return result(row ? [row] : []);
     }
@@ -248,7 +248,7 @@ export class FakePostgresPool {
       return result();
     }
 
-    if (normalized.startsWith('select id, discord_user_id, display_name, nickname, trust_level, relationship_type, is_machine_intelligence, emotional_baseline, first_seen, last_seen, notes, timezone, gender, pronouns, age from contacts order by last_seen desc')) {
+    if (normalized.startsWith('select id, discord_user_id, display_name, nickname, trust_level, relationship_type, is_machine_intelligence, emotional_baseline, first_seen, last_seen, notes, timezone, gender, pronouns, age, archived_at, channel_identities from contacts order by last_seen desc')) {
       return result([...this.contacts.values()]
         .sort((left, right) => right.last_seen.localeCompare(left.last_seen)));
     }

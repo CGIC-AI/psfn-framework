@@ -192,6 +192,7 @@ export function rowToContact(row: ContactRow, identities: ContactIdentityRow[], 
     firstSeen: row.first_seen,
     lastSeen: row.last_seen,
     ...(row.notes ? { notes: row.notes } : {}),
+    ...(normalizeTrimmed(row.archived_at ?? undefined) ? { archivedAt: normalizeTrimmed(row.archived_at ?? undefined) } : {}),
   };
 
   if (identities.length > 0) {

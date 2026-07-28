@@ -274,6 +274,16 @@ export interface ContactStorePort {
   ): Awaitable<Contact>;
   resolveUserId(discordUserId: string): Awaitable<Contact>;
   getCanonicalContactKey(channel: ContactChannel, channelUserId: string): Awaitable<string | undefined>;
+  /**
+   * Archive a contact instead of deleting it (adjudication R10.3, bead
+   * psfn-framework-qgqw.1). The contact row, its memories, audit trail,
+   * conversation history, and a snapshot of its privacy links persist as
+   * grayed-out history; its live channel identities are released so a
+   * recreated/reused platform id resolves to a NEW person. The primary contact
+   * cannot be archived (returns false); a missing contact returns false;
+   * re-archiving an already-archived contact is idempotent (returns true).
+   */
+  archiveContact(id: string, actor?: string): Awaitable<boolean>;
   deleteContact(id: string): Awaitable<boolean>;
   unlinkChannelIdentity(contactId: string, channel: string, channelUserId: string, actor?: string): Awaitable<boolean>;
   /** Reapprove one exact restored Discord ownership through the authenticated saga. */

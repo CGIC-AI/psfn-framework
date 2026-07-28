@@ -42,6 +42,32 @@ function clampRoomOffset(offset: number | undefined): number {
   return floored > 0 ? floored : 0;
 }
 
+// bead psfn-framework-qgqw.1: parse the archived-contact channel-identity
+// snapshot (stored in contacts.channel_identities at archive time) back into
+// ContactIdentityRow shape for read-only history hydration. Malformed entries
+// are skipped rather than silently corrupting the record.
+function archivedIdentitySnapshotToRows(contactId: string, snapshot: unknown): ContactIdentityRow[] {
+  if (!Array.isArray(snapshot)) return [];
+  const rows: ContactIdentityRow[] = [];
+  for (const entry of snapshot) {
+    if (typeof entry !== 'object' || entry === null) continue;
+    const record = entry as Record<string, unknown>;
+    const channel = typeof record.channel === 'string' ? record.channel : undefined;
+    const channelUserId = typeof record.channel_user_id === 'string' ? record.channel_user_id : undefined;
+    if (!channel || !channelUserId) continue;
+    rows.push({
+      contact_id: contactId,
+      channel,
+      channel_user_id: channelUserId,
+      privacy_level: typeof record.privacy_level === 'string' ? record.privacy_level : null,
+      bonded: typeof record.bonded === 'boolean' ? record.bonded : false,
+      first_seen: typeof record.first_seen === 'string' ? record.first_seen : '',
+      last_seen: typeof record.last_seen === 'string' ? record.last_seen : '',
+    });
+  }
+  return rows;
+}
+
 const postgresContactSharedOperations: PostgresContactOperationMap = {
   async tableExists(tableName: string): Promise<boolean> {
     const row = await queryOne<{ exists: boolean }>(
@@ -57,7 +83,7 @@ const postgresContactSharedOperations: PostgresContactOperationMap = {
       this.pool,
       `
         SELECT id, discord_user_id, display_name, nickname, trust_level, relationship_type, is_machine_intelligence,
-               emotional_baseline, first_seen, last_seen, notes, timezone, gender, pronouns, age
+               emotional_baseline, first_seen, last_seen, notes, timezone, gender, pronouns, age, archived_at, channel_identities
         FROM contacts
         WHERE id = $1
         LIMIT 1
@@ -110,7 +136,7 @@ const postgresContactSharedOperations: PostgresContactOperationMap = {
   },
 
   async loadContactByRow(row: ContactRow): Promise<Contact> {
-    const identities = await queryRows<ContactIdentityRow>(
+    let identities = await queryRows<ContactIdentityRow>(
       this.pool,
       `
         SELECT contact_id, channel, channel_user_id, privacy_level, bonded, first_seen, last_seen
@@ -120,6 +146,14 @@ const postgresContactSharedOperations: PostgresContactOperationMap = {
       `,
       [row.id],
     );
+    // Archived contacts (bead psfn-framework-qgqw.1) have their live channel
+    // identity rows released so a recreated/reused platform id mints a NEW
+    // contact. Their privacy links persist as a snapshot on the contact row for
+    // grayed-out history — rehydrate them here so the archived record stays
+    // readable without re-entering the live (channel, channel_user_id) namespace.
+    if (identities.length === 0 && row.archived_at) {
+      identities = archivedIdentitySnapshotToRows(row.id, row.channel_identities);
+    }
     const conversationChannels = await queryRows<ContactChannelActivityRow>(
       this.pool,
       `

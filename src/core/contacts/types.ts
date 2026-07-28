@@ -161,6 +161,7 @@ export const CONTACT_MUTATION_AUDIT_FIELDS = [
   'channel_bond',
   'channel_link',
   'conversation_channel',
+  'archived',
 ] as const;
 
 export type ContactMutationAuditField = typeof CONTACT_MUTATION_AUDIT_FIELDS[number];
@@ -312,6 +313,15 @@ export interface Contact {
   firstSeen: string;  // ISO timestamp
   lastSeen: string;   // ISO timestamp
   notes?: string;
+  /**
+   * Archive marker (bead psfn-framework-qgqw.1, adjudication R10.3): contacts
+   * are archived, never deleted. An absent value means the contact is live; an
+   * ISO timestamp means it was archived at that time. Archived contacts keep
+   * their row, memories, audit trail, and snapshotted privacy links as
+   * grayed-out history, but are excluded from live channel-identity resolution
+   * so a recreated/reused platform id resolves to a NEW person.
+   */
+  archivedAt?: string;
 }
 
 // ── Room roster (E4.1) ──

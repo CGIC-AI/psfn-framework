@@ -183,7 +183,7 @@ export function buildAdminContactRoutes(options: {
       method: 'DELETE',
       match: prefixedParamPath('/api/admin/contacts/', 'id'),
       handle: (_req, res, { id }, context) => {
-        contactsService.deleteContact(id, context).then(
+        contactsService.archiveContact(id, context).then(
           (result) => {
             if (!result.ok) {
               sendJson(res, result.message.includes('not found') ? 404 : 400, { error: result.message });
@@ -192,7 +192,7 @@ export function buildAdminContactRoutes(options: {
             sendJson(res, 200, result);
           },
           (error) => {
-            sendJson(res, 500, { error: toSanitizedMessage(error, 'Failed to delete contact') });
+            sendJson(res, 500, { error: toSanitizedMessage(error, 'Failed to archive contact') });
           },
         );
       },

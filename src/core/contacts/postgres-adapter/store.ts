@@ -99,6 +99,7 @@ export class PostgresContactStore implements ContactStorePort {
   declare resolveChannelIdentity: ContactStorePort['resolveChannelIdentity'];
   declare resolveUserId: ContactStorePort['resolveUserId'];
   declare getCanonicalContactKey: ContactStorePort['getCanonicalContactKey'];
+  declare archiveContact: ContactStorePort['archiveContact'];
   declare deleteContact: ContactStorePort['deleteContact'];
   declare unlinkChannelIdentity: ContactStorePort['unlinkChannelIdentity'];
   declare reapproveRestoredDiscordIdentity: ContactStorePort['reapproveRestoredDiscordIdentity'];

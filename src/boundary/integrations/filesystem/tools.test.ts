@@ -71,11 +71,17 @@ describe('fs tool', () => {
     expect(shortRead).toEqual({
       action: 'read',
       path: 'docs/notes.txt',
+      offset_bytes: 0,
+      next_offset_bytes: null,
+      eof: true,
       truncated: false,
       content: 'alpha\nbeta\nalpha\n',
     });
     expect(longRead.action).toBe('read');
     expect(longRead.path).toBe('docs/long.txt');
+    expect(longRead.offset_bytes).toBe(0);
+    expect(longRead.next_offset_bytes).toBe(20_000);
+    expect(longRead.eof).toBe(false);
     expect(longRead.truncated).toBe(true);
     expect(String(longRead.content)).toHaveLength(20_000);
     expect(longRead.next_action).toContain('analysis_workbench');
@@ -107,8 +113,60 @@ describe('fs tool', () => {
           maximum: 20_000,
           description: expect.stringContaining('hard cap'),
         },
+        offset_bytes: {
+          minimum: 0,
+          description: expect.stringContaining('next_offset_bytes'),
+        },
       },
     });
+  });
+
+  it('pages losslessly on UTF-8 byte boundaries and rejects a misaligned cursor', async () => {
+    const content = 'ab🙂cd€ef';
+    writeFileSync(join(workspace, 'docs', 'unicode.txt'), content, 'utf-8');
+    const tool = createFsTool(ops);
+
+    const first = JSON.parse(resultText(await tool.execute('page-1', {
+      action: 'read',
+      path: 'docs/unicode.txt',
+      max_bytes: 5,
+      offset_bytes: 0,
+    })));
+    const second = JSON.parse(resultText(await tool.execute('page-2', {
+      action: 'read',
+      path: 'docs/unicode.txt',
+      max_bytes: 5,
+      offset_bytes: first.next_offset_bytes,
+    })));
+    const third = JSON.parse(resultText(await tool.execute('page-3', {
+      action: 'read',
+      path: 'docs/unicode.txt',
+      max_bytes: 5,
+      offset_bytes: second.next_offset_bytes,
+    })));
+    const fourth = JSON.parse(resultText(await tool.execute('page-4', {
+      action: 'read',
+      path: 'docs/unicode.txt',
+      max_bytes: 5,
+      offset_bytes: third.next_offset_bytes,
+    })));
+
+    expect([first, second, third, fourth]).toMatchObject([
+      { content: 'ab', offset_bytes: 0, next_offset_bytes: 2, eof: false },
+      { content: '🙂c', offset_bytes: 2, next_offset_bytes: 7, eof: false },
+      { content: 'd€e', offset_bytes: 7, next_offset_bytes: 12, eof: false },
+      { content: 'f', offset_bytes: 12, next_offset_bytes: null, eof: true },
+    ]);
+    expect([first, second, third, fourth].map(page => page.content).join('')).toBe(content);
+
+    const misaligned = await tool.execute('page-misaligned', {
+      action: 'read',
+      path: 'docs/unicode.txt',
+      max_bytes: 5,
+      offset_bytes: 3,
+    });
+    expect(misaligned.details).toMatchObject({ isError: true });
+    expect(resultText(misaligned)).toContain('UTF-8 character boundary');
   });
 
   it('retargets broad searches to working folders and skips directories', async () => {

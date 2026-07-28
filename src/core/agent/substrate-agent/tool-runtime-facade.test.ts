@@ -800,7 +800,7 @@ describe('ToolRuntimeFacade maintenance core tool policy', () => {
     );
   });
 
-  it('keeps only the reflection allowlist of core tools active for maintenance turns', () => {
+  it('keeps the reflection allowlist of core tools active for maintenance turns', () => {
     const { facade, agent, emitTelemetry, correlation } = createFacade('reflection');
     facade.registerTool(makeTool('identity'), 'core');
     facade.registerTool(makeTool('system'), 'core');
@@ -821,21 +821,23 @@ describe('ToolRuntimeFacade maintenance core tool policy', () => {
     }, 'reflection', 'background', correlation, { intent: null });
 
     const tools = agent.setTools.mock.calls.at(-1)?.[0] as Array<{ name: string }>;
-    expect(tools.map(tool => tool.name)).toEqual(['contact', 'session', 'identity', 'self_status', 'system']);
+    expect(tools.map(tool => tool.name)).toEqual([
+      'contact',
+      'session',
+      'identity',
+      'self_status',
+      'system',
+      'analysis_workbench',
+    ]);
 
     const skippedEvents = emitTelemetry.mock.calls
       .filter(([eventName]) => eventName === 'agent.tools.core_guardrail.skipped');
     expect(skippedEvents).toEqual(expect.arrayContaining([
       ['agent.tools.core_guardrail.skipped', expect.objectContaining({ toolName: 'subagent', taskKind: 'reflection' })],
-      ['agent.tools.core_guardrail.skipped', expect.objectContaining({
-        toolName: 'analysis_workbench',
-        taskKind: 'reflection',
-        reason: 'analysis_workbench_worker_context_required',
-      })],
     ]));
   });
 
-  it('keeps analysis_workbench available only to the bounded whisper worker on reflection turns', () => {
+  it('keeps analysis_workbench available to bounded whisper workers on reflection turns', () => {
     const { facade, agent, emitTelemetry, correlation } = createFacade('reflection', ['repl.execute']);
     facade.registerTool(makeTool('session'), 'core');
     facade.registerTool(makeTool('analysis_workbench'), 'core');
@@ -975,7 +977,7 @@ describe('ToolRuntimeFacade maintenance core tool policy', () => {
     expect(names).toContain('self_status');
   });
 
-  it('routes analysis_workbench away from non-worker parent turns', () => {
+  it('allows direct analysis_workbench use from a parent turn', () => {
     const { facade, agent, emitTelemetry, correlation } = createFacade(null);
     facade.registerTool(makeTool('identity'), 'core');
     facade.registerTool(makeTool('system'), 'core');
@@ -995,8 +997,15 @@ describe('ToolRuntimeFacade maintenance core tool policy', () => {
     }, undefined, 'chat', correlation, { intent: null });
 
     const tools = agent.setTools.mock.calls.at(-1)?.[0] as Array<{ name: string }>;
-    expect(tools.map(tool => tool.name)).toEqual(['contact', 'session', 'identity', 'subagent', 'system']);
-    expect(emitTelemetry).toHaveBeenCalledWith(
+    expect(tools.map(tool => tool.name)).toEqual([
+      'contact',
+      'session',
+      'identity',
+      'subagent',
+      'system',
+      'analysis_workbench',
+    ]);
+    expect(emitTelemetry).not.toHaveBeenCalledWith(
       'agent.tools.core_guardrail.skipped',
       expect.objectContaining({
         toolName: 'analysis_workbench',
@@ -1063,7 +1072,7 @@ describe('ToolRuntimeFacade maintenance core tool policy', () => {
     );
   });
 
-  it('requires delegation for explicit large-evidence parent turns', () => {
+  it('allows direct analysis_workbench use for explicit large-evidence parent turns', () => {
     const { facade, agent, emitTelemetry, correlation } = createFacade(null);
     facade.registerTool(makeTool('session'), 'core');
     facade.registerTool(makeTool('analysis_workbench'), 'core');
@@ -1079,13 +1088,45 @@ describe('ToolRuntimeFacade maintenance core tool policy', () => {
     }, undefined, 'chat', correlation, { intent: 'memory' });
 
     const tools = agent.setTools.mock.calls.at(-1)?.[0] as Array<{ name: string }>;
-    expect(tools.map(tool => tool.name)).toEqual(['session']);
-    expect(emitTelemetry).toHaveBeenCalledWith(
+    expect(tools.map(tool => tool.name)).toEqual(['session', 'analysis_workbench']);
+    expect(emitTelemetry).not.toHaveBeenCalledWith(
       'agent.tools.core_guardrail.skipped',
       expect.objectContaining({
         toolName: 'analysis_workbench',
         intent: 'memory',
         reason: 'analysis_workbench_worker_context_required',
+      }),
+    );
+  });
+
+  it('makes analysis_workbench eligible when a parsed attachment carries large evidence', () => {
+    const { facade, agent, emitTelemetry, correlation } = createFacade(null);
+    facade.registerTool(makeTool('session'), 'core');
+    facade.registerTool(makeTool('analysis_workbench'), 'core');
+
+    facade.applyActiveToolsToAgentForTurn({
+      id: 'msg-parsed-attachment-1',
+      channelId: 'discord:analysis',
+      channelType: 'discord',
+      authorId: 'user-1',
+      authorName: 'User',
+      content: 'Please examine the attachment.',
+      attachments: [{
+        url: 'https://cdn.example.invalid/evidence.md',
+        contentType: 'text/markdown',
+        name: 'evidence.md',
+        parsedTextPath: 'downloads/parsed/evidence.md',
+      }],
+      timestamp: new Date('2026-04-23T12:00:00Z'),
+    }, undefined, 'chat', correlation, { intent: 'memory' });
+
+    const tools = agent.setTools.mock.calls.at(-1)?.[0] as Array<{ name: string }>;
+    expect(tools.map(tool => tool.name)).toEqual(['session', 'analysis_workbench']);
+    expect(emitTelemetry).not.toHaveBeenCalledWith(
+      'agent.tools.core_guardrail.skipped',
+      expect.objectContaining({
+        toolName: 'analysis_workbench',
+        reason: 'routine_intent_direct_tool_path',
       }),
     );
   });

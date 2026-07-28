@@ -1,4 +1,6 @@
 import type { FsListView, GatewayREPLCapabilities, SandboxBudgetRef } from './contracts.js';
+import { FILESYSTEM_DIRECT_READ_CONTRACT } from '../../integrations/filesystem/ops.js';
+import type { FsReadResult } from '../../gateway/protocol.js';
 import {
   consumeToolCallBudget,
   toErrorMessage,
@@ -11,8 +13,14 @@ const DEFAULT_LIST_FILES_MAX_ENTRIES = 200;
 const MAX_LIST_FILES_GLOB_LENGTH = 512;
 const MAX_WRITE_FILE_CONTENT_CHARS = 500_000;
 
+export interface ReadFileOptions {
+  offsetBytes?: number;
+}
+
+export type ReadFileResult = FsReadResult | { error: string };
+
 export interface ToolchainCapabilities {
-  read_file: (path: string) => Promise<string>;
+  read_file: (path: string, options?: ReadFileOptions) => Promise<ReadFileResult>;
   write_file: (path: string, content: string) => Promise<{ ok: boolean; error?: string }>;
   list_files: (glob?: string, maxEntries?: number) => Promise<FsListView | { error: string }>;
 }
@@ -57,26 +65,53 @@ function normalizeMaxEntries(value: unknown): number {
   return Math.max(1, Math.min(DEFAULT_LIST_FILES_MAX_ENTRIES, Math.floor(Number(value))));
 }
 
+function normalizeReadOffset(value: unknown): { offsetBytes: number } | { error: string } {
+  const offsetBytes = value ?? 0;
+  if (
+    typeof offsetBytes !== 'number'
+    || !Number.isSafeInteger(offsetBytes)
+    || offsetBytes < 0
+    || offsetBytes > FILESYSTEM_DIRECT_READ_CONTRACT.maxOffsetBytes
+  ) {
+    return {
+      error:
+        `offsetBytes must be a safe integer between 0 and `
+        + `${String(FILESYSTEM_DIRECT_READ_CONTRACT.maxOffsetBytes)}`,
+    };
+  }
+  return { offsetBytes };
+}
+
 export function createToolchainCapabilities(
   options: CreateToolchainCapabilitiesOptions,
 ): ToolchainCapabilities {
-  const read_file = async (path: string): Promise<string> => {
+  const read_file = async (
+    path: string,
+    readOptions?: ReadFileOptions,
+  ): Promise<ReadFileResult> => {
     if (!consumeToolCallBudget(options.budgetRef)) {
-      return `[Read file error: ${TOOL_CALL_BUDGET_EXCEEDED_MESSAGE}]`;
+      return { error: TOOL_CALL_BUDGET_EXCEEDED_MESSAGE };
     }
-    if (typeof options.gatewayCaps.fsRead !== 'function') {
-      return '[Read file unavailable: requires gateway fs.read policy and audit path]';
+    if (typeof options.gatewayCaps.fsReadDetailed !== 'function') {
+      return { error: 'read_file unavailable: requires governed gateway fs.read paging and audit path' };
     }
 
     const normalizedPath = normalizePath(path);
     if (!normalizedPath) {
-      return '[Read file error: path is required]';
+      return { error: 'path is required' };
+    }
+    const normalizedOffset = normalizeReadOffset(readOptions?.offsetBytes);
+    if ('error' in normalizedOffset) {
+      return normalizedOffset;
     }
 
     try {
-      return await options.gatewayCaps.fsRead(normalizedPath);
+      return await options.gatewayCaps.fsReadDetailed(normalizedPath, {
+        maxBytes: FILESYSTEM_DIRECT_READ_CONTRACT.maxBytes,
+        offsetBytes: normalizedOffset.offsetBytes,
+      });
     } catch (err) {
-      return `[Read file error: ${toErrorMessage(err)}]`;
+      return { error: toErrorMessage(err) };
     }
   };
 

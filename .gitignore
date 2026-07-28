@@ -68,9 +68,16 @@ admin-ui/.svelte-kit/
 # Beads / Dolt files (added by bd init)
 .beads-credential-key
 
-# ephemeral agent worktrees
-.claude/worktrees/
+# Local Claude Code tooling (agent config, hooks, skills incl. live-ops runbook)
+# and ephemeral agent worktrees; local-only, never product (psfn-framework-upx0.2).
+.claude/
 worktrees/
+
+# Local coding-assistant instructions; workflows under .github/ stay tracked.
+.github/copilot-instructions.md
+
+# Session context packets (scratch working notes, non-product).
+context_packets/
 
 # Provisioned ML model weights (never committed; see npm run provision:injection-model)
 models/

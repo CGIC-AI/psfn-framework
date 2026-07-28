@@ -1849,7 +1849,10 @@ describe('ShardManager', () => {
     await manager.spawn({ name: 'toolset-apprentice', task: 'test' });
 
     const injected = lastSetToolNames();
-    expect(injected).toContain('contact');
+    expect(injected).toContain('memory');
+    // gjkh: canonical contact is blocked at every shard tier — trust truth is
+    // core-authoritative (charter 6.13), matching the split contact_* aliases.
+    expect(injected).not.toContain('contact');
     expect(injected).not.toContain('contact_list');
     expect(injected).not.toContain('memory_import_batch');
   });
@@ -1927,6 +1930,77 @@ describe('ShardManager', () => {
 
   it('respects configured shard toolset overrides', async () => {
     const memory = makeTestTool('memory');
+    const repoDiff = makeTestTool('repo_diff');
+    const repoStatus = makeTestTool('repo_status');
+
+    const manager = createTestShardManager({
+      eventBus,
+      llmProvider: mockLLM(),
+      sessionStore,
+      embeddingService: null,
+      memoryProvider: null,
+      config: {
+        ...TEST_CONFIG,
+        capabilityTier: 'nursery',
+        shardToolsets: { nursery: ['repo_status'] },
+      },
+      parentSystemPrompt: 'test',
+      toolCatalogProvider: () => ({
+        core: [memory.tool, repoDiff.tool],
+        extended: [repoStatus.tool],
+      }),
+    });
+
+    await manager.spawn({ name: 'toolset-customized', task: 'test' });
+
+    const injected = lastSetToolNames();
+    expect(injected).toContain('repo_status');
+    expect(injected).not.toContain('memory');
+    expect(injected).not.toContain('repo_diff');
+  });
+
+  it('blocks canonical contact / identity / north_star even for an autonomous shard (psfn-framework-gjkh)', async () => {
+    // Adjudication: wrapShardTool only stages memory mutations; every other tool
+    // reaches an autonomous ('*') shard loop live. The canonical `contact` tool
+    // multiplexes set_trust/set_relationship/link_identity/block (trust truth),
+    // and identity/north_star are prompt-layer/purpose truth — all
+    // core-authoritative (charter 6.13). They join the already-blocked contact_*
+    // split aliases at injection rather than mutating live from a shard.
+    const memory = makeTestTool('memory');
+    const contact = makeTestTool('contact');
+    const identity = makeTestTool('identity');
+    const northStar = makeTestTool('north_star');
+    const orient = makeTestTool('orient');
+
+    const manager = createTestShardManager({
+      eventBus,
+      llmProvider: mockLLM(),
+      sessionStore,
+      embeddingService: null,
+      memoryProvider: null,
+      config: { ...TEST_CONFIG, capabilityTier: 'autonomous' },
+      parentSystemPrompt: 'test',
+      toolCatalogProvider: () => ({
+        core: [memory.tool, contact.tool],
+        extended: [identity.tool, northStar.tool, orient.tool],
+      }),
+    });
+
+    await manager.spawn({ name: 'toolset-canonical-blocked', task: 'test' });
+
+    const injected = lastSetToolNames();
+    expect(injected).toContain('memory');
+    // orient stays available but governed (read-pass / mutation-deny).
+    expect(injected).toContain('orient');
+    expect(injected).not.toContain('contact');
+    expect(injected).not.toContain('identity');
+    expect(injected).not.toContain('north_star');
+  });
+
+  it('blocks canonical contact even when a shard toolset override names it (psfn-framework-gjkh)', async () => {
+    // Fail closed: a blocked trust surface can never be re-enabled through a
+    // toolset override; BLOCKED_SHARD_TOOL_NAMES is applied before selection.
+    const memory = makeTestTool('memory');
     const contact = makeTestTool('contact');
     const repoStatus = makeTestTool('repo_status');
 
@@ -1939,7 +2013,7 @@ describe('ShardManager', () => {
       config: {
         ...TEST_CONFIG,
         capabilityTier: 'nursery',
-        shardToolsets: { nursery: ['contact'] },
+        shardToolsets: { nursery: ['contact', 'repo_status'] },
       },
       parentSystemPrompt: 'test',
       toolCatalogProvider: () => ({
@@ -1948,12 +2022,80 @@ describe('ShardManager', () => {
       }),
     });
 
-    await manager.spawn({ name: 'toolset-customized', task: 'test' });
+    await manager.spawn({ name: 'toolset-override-contact', task: 'test' });
 
     const injected = lastSetToolNames();
-    expect(injected).toContain('contact');
-    expect(injected).not.toContain('memory');
-    expect(injected).not.toContain('repo_status');
+    expect(injected).toContain('repo_status');
+    expect(injected).not.toContain('contact');
+  });
+
+  it('governs orient on an autonomous shard: reads pass, mutations denied and staged for fold review (psfn-framework-gjkh)', async () => {
+    const auditTrail = { append: vi.fn() };
+    const memory = makeTestTool('memory');
+    const orient = makeTestTool('orient');
+
+    const manager = createTestShardManager({
+      eventBus,
+      llmProvider: mockLLM(),
+      sessionStore,
+      embeddingService: null,
+      memoryProvider: null,
+      config: { ...TEST_CONFIG, capabilityTier: 'autonomous' },
+      parentSystemPrompt: 'test',
+      auditTrail,
+      toolCatalogProvider: () => ({
+        core: [memory.tool],
+        extended: [orient.tool],
+      }),
+    });
+
+    await manager.spawn({ name: 'toolset-orient-governed', task: 'test' });
+
+    const injectedTools = agentRunConfigs.at(-1)?.tools ?? [];
+    const injectedOrient = injectedTools.find(tool => tool.name === 'orient');
+    expect(injectedOrient).toBeDefined();
+
+    // Read passes through to the underlying tool.
+    orient.execute.mockClear();
+    const readResult = await injectedOrient!.execute(
+      'call-orient-read',
+      { action: 'values_list' } as never,
+      undefined,
+    );
+    expect(orient.execute).toHaveBeenCalledTimes(1);
+    expect((readResult.details as { isError?: boolean }).isError).not.toBe(true);
+
+    // Live values mutation is denied (never reaches the underlying tool).
+    orient.execute.mockClear();
+    const valuesMutation = await injectedOrient!.execute(
+      'call-orient-values',
+      { action: 'values_add', name: 'kindness', description: 'be kind' } as never,
+      undefined,
+    );
+    expect(orient.execute).not.toHaveBeenCalled();
+    expect((valuesMutation.details as { isError?: boolean }).isError).toBe(true);
+    expect((valuesMutation.details as { errorClass?: string }).errorClass).toBe('policy_blocked');
+
+    // Introspection-consent mutation is denied too.
+    orient.execute.mockClear();
+    const consentMutation = await injectedOrient!.execute(
+      'call-orient-consent',
+      { action: 'introspection_consent_set', enabled: true } as never,
+      undefined,
+    );
+    expect(orient.execute).not.toHaveBeenCalled();
+    expect((consentMutation.details as { isError?: boolean }).isError).toBe(true);
+
+    expect(auditTrail.append).toHaveBeenCalledWith('shard.tool.mutation.denied', expect.objectContaining({
+      toolName: 'orient',
+      action: 'values_add',
+      reason: 'mutation_not_permitted',
+    }));
+    expect(auditTrail.append).toHaveBeenCalledWith('shard.tool.mutation.denied', expect.objectContaining({
+      toolName: 'orient',
+      action: 'introspection_consent_set',
+      reason: 'mutation_not_permitted',
+    }));
   });
 
   it('keeps shard tool restrictions unchanged when a context pack is active', async () => {

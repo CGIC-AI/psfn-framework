@@ -2006,6 +2006,74 @@ describe('SessionStore', () => {
     expect(fullReadSpy).not.toHaveBeenCalled();
   });
 
+  it('restarts a paused async page under post-read tombstone authority', async () => {
+    const channelId = 'api:before-concurrent-tombstone';
+    const redactedTurnId = createTurnId();
+    const visibleTurnId = createTurnId();
+    const turnMetadata = (turnId: string, role: 'user' | 'assistant'): string => JSON.stringify({
+      turn: { schemaVersion: 1, turnId, requestId: `req-${turnId}`, role },
+    });
+    store.append({
+      channelId,
+      role: 'user',
+      content: 'concurrent private user',
+      timestamp: 1_000,
+      metadata: turnMetadata(redactedTurnId, 'user'),
+    });
+    store.append({
+      channelId,
+      role: 'assistant',
+      content: 'concurrent private assistant',
+      timestamp: 1_100,
+      metadata: turnMetadata(redactedTurnId, 'assistant'),
+    });
+    store.append({
+      channelId,
+      role: 'user',
+      content: 'concurrent visible user',
+      timestamp: 1_200,
+      metadata: turnMetadata(visibleTurnId, 'user'),
+    });
+
+    const archivePort = createFilesystemSessionArchivePort();
+    const readBefore = archivePort.readJournalEntriesBeforeAsync;
+    const seekCalls: Array<{ beforeId: number; messageLimit: number }> = [];
+    let markFirstReadComplete!: () => void;
+    const firstReadComplete = new Promise<void>(resolve => {
+      markFirstReadComplete = resolve;
+    });
+    let releaseFirstRead!: () => void;
+    const firstReadRelease = new Promise<void>(resolve => {
+      releaseFirstRead = resolve;
+    });
+    archivePort.readJournalEntriesBeforeAsync = async (archive, options) => {
+      const result = await readBefore(archive, options);
+      seekCalls.push({
+        beforeId: options.beforeId,
+        messageLimit: options.messageLimit,
+      });
+      if (seekCalls.length === 1) {
+        markFirstReadComplete();
+        await firstReadRelease;
+      }
+      return result;
+    };
+    const reader = new SessionStore(dir, { sessionArchivePort: archivePort });
+
+    const pending = reader.getEntriesBeforeAsync(channelId, 10, 10);
+    await firstReadComplete;
+    await store.redactTurn(channelId, redactedTurnId, { timestamp: 1_300 });
+    releaseFirstRead();
+    const entries = await pending;
+
+    expect(seekCalls).toEqual([
+      { beforeId: 10, messageLimit: 10 },
+      { beforeId: 10, messageLimit: 40 },
+    ]);
+    expect(entries.map(entry => entry.content)).toEqual(['concurrent visible user']);
+    expect(entries.every(entry => !entry.content.includes('concurrent private'))).toBe(true);
+  });
+
   it('caches lightweight session tails across repeated unchanged reads', () => {
     const channelId = 'api:tail-cache-repeat';
     appendSessionMessages(store, channelId, 8);

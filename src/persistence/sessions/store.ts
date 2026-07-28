@@ -258,7 +258,25 @@ type EntriesBeforeReadPlan =
       beforeId: number;
       limit: number;
       tombstones: ReadonlySet<string>;
+      archiveFingerprint: string;
     };
+
+const ASYNC_ENTRIES_BEFORE_AUTHORITY_LIMITS = Object.freeze({
+  retries: 2,
+});
+
+function entriesBeforeAuthorityMatches(
+  expected: Extract<EntriesBeforeReadPlan, { kind: 'archive' }>,
+  observed: Extract<EntriesBeforeReadPlan, { kind: 'archive' }>,
+): boolean {
+  return expected.channelId === observed.channelId
+    && expected.filePath === observed.filePath
+    && expected.beforeId === observed.beforeId
+    && expected.limit === observed.limit
+    && expected.archiveFingerprint === observed.archiveFingerprint
+    && expected.tombstones.size === observed.tombstones.size
+    && [...expected.tombstones].every(turnId => observed.tombstones.has(turnId));
+}
 
 export class TurnRecordEligibilitySnapshotChangedError extends Error {
   constructor() {
@@ -1922,6 +1940,12 @@ export class SessionStore implements TranscriptSearchPort {
         entries: eligible.length <= normalizedLimit ? eligible : eligible.slice(-normalizedLimit),
       };
     }
+    const archiveFingerprint = normalizeOptionalString(indexEntry.archiveFingerprint);
+    if (!archiveFingerprint) {
+      throw new Error(
+        `Cannot establish bounded-read journal authority for L0 session ${resolved.sessionId}`,
+      );
+    }
 
     return {
       kind: 'archive',
@@ -1930,6 +1954,7 @@ export class SessionStore implements TranscriptSearchPort {
       beforeId: normalizedBeforeId,
       limit: normalizedLimit,
       tombstones: indexedTurnTombstones,
+      archiveFingerprint,
     };
   }
   getEntriesBefore(channelId: string, beforeId: number, limit: number): SessionEntry[] {
@@ -1948,14 +1973,28 @@ export class SessionStore implements TranscriptSearchPort {
     beforeId: number,
     limit: number,
   ): Promise<SessionEntry[]> {
-    const plan = this.prepareEntriesBeforeRead(channelId, beforeId, limit);
-    if (plan.kind === 'complete') return plan.entries;
-    return await this.readEntriesBeforeFromArchiveAsync(
-      plan.channelId,
-      plan.filePath,
-      plan.beforeId,
-      plan.limit,
-      plan.tombstones,
+    let plan = this.prepareEntriesBeforeRead(channelId, beforeId, limit);
+    for (
+      let attempt = 0;
+      attempt <= ASYNC_ENTRIES_BEFORE_AUTHORITY_LIMITS.retries;
+      attempt += 1
+    ) {
+      if (plan.kind === 'complete') return plan.entries;
+      const entries = await this.readEntriesBeforeFromArchiveAsync(
+        plan.channelId,
+        plan.filePath,
+        plan.beforeId,
+        plan.limit,
+        plan.tombstones,
+      );
+      const observed = this.prepareEntriesBeforeRead(channelId, beforeId, limit);
+      if (observed.kind === 'complete') return observed.entries;
+      if (entriesBeforeAuthorityMatches(plan, observed)) return entries;
+      plan = observed;
+    }
+    throw new Error(
+      `L0 session ${channelId} changed repeatedly during an asynchronous bounded read; `
+      + 'refusing to return a page under stale turn-tombstone authority',
     );
   }
   getEntriesInRange(channelId: string, startId: number, endId: number): SessionEntry[] {

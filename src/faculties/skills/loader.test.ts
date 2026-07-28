@@ -7,6 +7,7 @@ import {
   applySkillPrecedence,
   loadSkillEntries,
   parseSkillDocument,
+  readSkillContent,
   resolveSkillDirectories,
   scanSkillFiles,
   scanSkillRoots,
@@ -95,7 +96,7 @@ describe('skills loader', () => {
     expect(() => resolveSkillDirectories(makeConfig(), '')).toThrow(/explicit repoRoot/i);
   });
 
-  it('keeps global root skills ahead of extra skill definitions when names collide', () => {
+  it('keeps global root skills ahead of extra skill definitions when names collide', async () => {
     const root = mkdtempSync(join(tmpdir(), 'skills-loader-'));
     try {
       writeSkill(root, 'skills/conversation', `
@@ -116,8 +117,8 @@ description: vendor version
       const directories = resolveSkillDirectories(makeConfig({
         extraDirectories: ['vendor/skills'],
       }), root);
-      const files = scanSkillFiles(directories);
-      const loaded = loadSkillEntries(files);
+      const files = await scanSkillFiles(directories);
+      const loaded = await loadSkillEntries(files);
       const deduped = applySkillPrecedence(loaded.entries);
 
       expect(files.length).toBe(2);
@@ -131,7 +132,7 @@ description: vendor version
     }
   });
 
-  it('reports per-root provenance and warns on a missing root instead of a silent empty scan', () => {
+  it('reports per-root provenance and warns on a missing root instead of a silent empty scan', async () => {
     const root = mkdtempSync(join(tmpdir(), 'skills-loader-roots-'));
     try {
       writeSkill(root, 'skills/git-ops', `
@@ -147,7 +148,7 @@ description: git workflow helpers
       }), root);
 
       const warnings: Array<{ message: string; context: Record<string, unknown> }> = [];
-      const scan = scanSkillRoots(directories, {
+      const scan = await scanSkillRoots(directories, {
         warnMissingRoot: (message, context) => warnings.push({ message, context }),
       });
 
@@ -179,7 +180,7 @@ description: git workflow helpers
     }
   });
 
-  it('warns when a skills root exists but is not a directory', () => {
+  it('warns when a skills root exists but is not a directory', async () => {
     const root = mkdtempSync(join(tmpdir(), 'skills-loader-notdir-'));
     try {
       mkdirSync(join(root, 'vendor'), { recursive: true });
@@ -197,7 +198,7 @@ description: git workflow helpers
       }), root);
 
       const warnings: Array<{ message: string; context: Record<string, unknown> }> = [];
-      const scan = scanSkillRoots(directories, {
+      const scan = await scanSkillRoots(directories, {
         warnMissingRoot: (message, context) => warnings.push({ message, context }),
       });
 
@@ -213,11 +214,11 @@ description: git workflow helpers
     }
   });
 
-  it('does not warn for a missing managed (custom) root but still reports it in provenance', () => {
+  it('does not warn for a missing managed (custom) root but still reports it in provenance', async () => {
     const root = mkdtempSync(join(tmpdir(), 'skills-loader-custom-'));
     try {
       const warnings: string[] = [];
-      const scan = scanSkillRoots([
+      const scan = await scanSkillRoots([
         {
           absolutePath: join(root, 'companion-data/skills'),
           relativePath: 'companion-data/skills',
@@ -240,6 +241,59 @@ description: git workflow helpers
         },
       ]);
       expect(warnings).toHaveLength(0);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('reads bounded metadata first and rejects oversized documents without partial instructions', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'skills-loader-bounds-'));
+    try {
+      writeSkill(root, 'skills/large-but-valid', `
+---
+name: large-but-valid
+description: metadata stays small
+---
+# Body
+${'body text '.repeat(40_000)}
+`);
+      writeSkill(root, 'skills/oversized', `
+---
+name: oversized
+description: must never load partially
+---
+${'x'.repeat(4_000)}
+`);
+
+      const files = await scanSkillFiles(resolveSkillDirectories(makeConfig(), root));
+      const valid = files.find(file => file.relativePath.includes('large-but-valid'));
+      const oversized = files.find(file => file.relativePath.includes('oversized'));
+      expect(valid).toBeDefined();
+      expect(oversized).toBeDefined();
+
+      const metadataOnly = await loadSkillEntries([valid!], {
+        maxDocumentBytes: 500_000,
+        maxFrontmatterBytes: 2_048,
+      });
+      expect(metadataOnly.entries).toHaveLength(1);
+      expect(metadataOnly.metadataBytesRead).toBeLessThanOrEqual(2_048);
+      expect(metadataOnly.entries[0]).not.toHaveProperty('content');
+
+      const rejected = await loadSkillEntries([oversized!], {
+        maxDocumentBytes: 1_024,
+        maxFrontmatterBytes: 512,
+      });
+      expect(rejected.entries).toHaveLength(0);
+      expect(rejected.metadataBytesRead).toBe(0);
+      expect(rejected.skipped).toEqual([
+        expect.objectContaining({
+          kind: 'oversized',
+          reason: expect.stringMatching(/hard limit is 1024 bytes/i),
+        }),
+      ]);
+
+      const explicitBody = await readSkillContent(valid!, { maxDocumentBytes: 500_000 });
+      expect(explicitBody).toContain('body text');
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

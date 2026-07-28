@@ -20,14 +20,18 @@ function writeSkill(path: string, description: string, body: string): void {
 function writeSkillsConfig(
   dataDir: string,
   seedDir: string,
-  overrides?: { extraDirectories?: string[] },
+  overrides?: {
+    extraDirectories?: string[];
+    maxLoadedSkills?: number;
+    maxSkillChars?: number;
+  },
 ): void {
   const payload = {
     enabled: true,
     directories: ['skills'],
     extraDirectories: overrides?.extraDirectories ?? [],
-    maxLoadedSkills: 32,
-    maxSkillChars: 100_000,
+    maxLoadedSkills: overrides?.maxLoadedSkills ?? 32,
+    maxSkillChars: overrides?.maxSkillChars ?? 100_000,
     disabledSkills: [],
   };
 
@@ -36,7 +40,7 @@ function writeSkillsConfig(
 }
 
 describe('skills runtime', () => {
-  it('uses explicit repoRoot even when process cwd drifts', () => {
+  it('uses explicit repoRoot even when process cwd drifts', async () => {
     const root = mkdtempSync(join(tmpdir(), 'skills-runtime-root-'));
     const launchCwd = mkdtempSync(join(tmpdir(), 'skills-runtime-cwd-'));
     const dataDir = join(root, 'data');
@@ -60,7 +64,7 @@ describe('skills runtime', () => {
         isBinaryAvailable: () => true,
       });
 
-      const snapshot = runtime.getSnapshot();
+      const snapshot = await runtime.getSnapshot();
       expect(snapshot.includedSkills[0]?.description).toBe('cwd proof');
       expect(snapshot.includedSkills[0]?.relativePath).toContain('skills/memory-management/SKILL.md');
     } finally {
@@ -70,7 +74,7 @@ describe('skills runtime', () => {
     }
   });
 
-  it('caches snapshots and invalidates when skill files change', () => {
+  it('caches snapshots and invalidates when skill files change', async () => {
     const root = mkdtempSync(join(tmpdir(), 'skills-runtime-'));
     const dataDir = join(root, 'data');
     const seedDir = join(root, 'config');
@@ -93,14 +97,14 @@ describe('skills runtime', () => {
         isBinaryAvailable: () => true,
       });
 
-      const snapshotOne = runtime.getSnapshot();
-      const snapshotTwo = runtime.getSnapshot();
+      const snapshotOne = await runtime.getSnapshot();
+      const snapshotTwo = await runtime.getSnapshot();
       expect(snapshotTwo).toBe(snapshotOne);
       expect(snapshotOne.includedSkills[0]?.description).toBe('first description');
 
       writeSkill(skillPath, 'second description', '# Memory v2');
 
-      const snapshotThree = runtime.getSnapshot();
+      const snapshotThree = await runtime.getSnapshot();
       expect(snapshotThree).not.toBe(snapshotOne);
       expect(snapshotThree.signature).not.toBe(snapshotOne.signature);
       expect(snapshotThree.includedSkills[0]?.description).toBe('second description');
@@ -143,7 +147,7 @@ describe('skills runtime', () => {
     }
   });
 
-  it('exposes scan provenance for every skills root in the snapshot', () => {
+  it('exposes scan provenance for every skills root in the snapshot', async () => {
     const root = mkdtempSync(join(tmpdir(), 'skills-runtime-provenance-'));
     const dataDir = join(root, 'data');
     const seedDir = join(root, 'config');
@@ -164,7 +168,7 @@ describe('skills runtime', () => {
         isBinaryAvailable: () => true,
       });
 
-      const snapshot = runtime.getSnapshot();
+      const snapshot = await runtime.getSnapshot();
 
       // managed (custom) root + configured 'skills' + missing 'vendor/skills'
       expect(snapshot.roots).toHaveLength(3);
@@ -193,7 +197,7 @@ describe('skills runtime', () => {
     }
   });
 
-  it('records content-free skill invocation success and failure metrics', () => {
+  it('records content-free skill invocation success and failure metrics', async () => {
     const root = mkdtempSync(join(tmpdir(), 'skills-runtime-telemetry-'));
     const dataDir = join(root, 'data');
     const seedDir = join(root, 'config');
@@ -214,18 +218,18 @@ describe('skills runtime', () => {
         isBinaryAvailable: () => true,
       });
 
-      expect(runtime.recordSkillInvocation('missing-skill', {
+      expect(await runtime.recordSkillInvocation('missing-skill', {
         outcome: 'success',
         durationMs: 10,
         occurredAt: '2026-06-29T10:00:00.000Z',
       })).toBeNull();
 
-      runtime.recordSkillInvocation('memory-management', {
+      await runtime.recordSkillInvocation('memory-management', {
         outcome: 'success',
         durationMs: 100,
         occurredAt: '2026-06-29T10:00:00.000Z',
       });
-      const stats = runtime.recordSkillInvocation('MEMORY-MANAGEMENT', {
+      const stats = await runtime.recordSkillInvocation('MEMORY-MANAGEMENT', {
         outcome: 'failure',
         durationMs: 300,
         occurredAt: '2026-06-29T10:01:00.000Z',
@@ -251,6 +255,98 @@ describe('skills runtime', () => {
       const persisted = readFileSync(join(dataDir, SKILL_USAGE_TELEMETRY_FILE_NAME), 'utf-8');
       expect(persisted).toContain('"invocationCount": 2');
       expect(persisted).not.toContain('Sensitive workflow body');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps prompt assembly cooperative across a large skill collection', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'skills-runtime-cooperative-'));
+    const dataDir = join(root, 'data');
+    const seedDir = join(root, 'config');
+    mkdirSync(dataDir, { recursive: true });
+    mkdirSync(seedDir, { recursive: true });
+    writeSkillsConfig(dataDir, seedDir, { maxLoadedSkills: 3 });
+
+    for (let index = 0; index < 160; index += 1) {
+      const name = `skill-${String(index).padStart(3, '0')}`;
+      const directory = join(root, 'skills', name);
+      mkdirSync(directory, { recursive: true });
+      writeFileSync(join(directory, 'SKILL.md'), [
+        '---',
+        `name: ${name}`,
+        `description: Description for ${name}`,
+        '---',
+        '# Instructions',
+        'bounded body '.repeat(500),
+      ].join('\n'));
+    }
+
+    try {
+      const runtime = new SkillsRuntime({
+        dataDir,
+        seedDir,
+        repoRoot: root,
+        isBinaryAvailable: () => true,
+      });
+      let resolved = false;
+      const snapshotPromise = runtime.getSnapshot().then((snapshot) => {
+        resolved = true;
+        return snapshot;
+      });
+
+      await new Promise<void>(resolveTurn => setImmediate(resolveTurn));
+      expect(resolved).toBe(false);
+
+      const snapshot = await snapshotPromise;
+      expect(snapshot.loadedSkills).toBe(160);
+      expect(snapshot.includedSkills.map(skill => skill.name)).toEqual([
+        'skill-000',
+        'skill-001',
+        'skill-002',
+      ]);
+      expect(snapshot.includedSkills.every(skill => !('content' in skill))).toBe(true);
+      expect(snapshot.skipped.filter(item => item.kind === 'budget')).toHaveLength(157);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('diagnoses an oversized SKILL.md and never injects a partial instruction', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'skills-runtime-oversized-'));
+    const dataDir = join(root, 'data');
+    const seedDir = join(root, 'config');
+    const skillDir = join(root, 'skills', 'oversized');
+    mkdirSync(dataDir, { recursive: true });
+    mkdirSync(seedDir, { recursive: true });
+    mkdirSync(skillDir, { recursive: true });
+    writeSkillsConfig(dataDir, seedDir);
+    writeFileSync(join(skillDir, 'SKILL.md'), [
+      '---',
+      'name: oversized',
+      'description: should be rejected',
+      '---',
+      '# Never inject this',
+      'x'.repeat(1_000_000),
+    ].join('\n'));
+
+    try {
+      const runtime = new SkillsRuntime({
+        dataDir,
+        seedDir,
+        repoRoot: root,
+        isBinaryAvailable: () => true,
+      });
+      const snapshot = await runtime.getSnapshot();
+      expect(snapshot.loadedSkills).toBe(0);
+      expect(snapshot.promptXml).toBe('');
+      expect(snapshot.skipped).toEqual([
+        expect.objectContaining({
+          kind: 'oversized',
+          name: 'skills/oversized/SKILL.md',
+          reason: expect.stringMatching(/hard limit/i),
+        }),
+      ]);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

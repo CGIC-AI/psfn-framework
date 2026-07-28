@@ -1,12 +1,22 @@
 import { appendFileSync, existsSync, linkSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fork } from 'node:child_process';
+import { build } from 'tsup';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { ToolSchema, TurnRecord } from '../../shared/contracts/runtime.js';
 import { DUPLICATE_TOOL_CALL_SKIP_RESULT } from '../../shared/contracts/tool-call-outcome.js';
 import type { TurnSnapshotRecord } from '../../core/turns/observability.js';
-import type { TurnRecordStorePort } from './turn-record-store-port.js';
+import type {
+  TurnRecordRecoveryScanStats,
+  TurnRecordStorePort,
+} from './turn-record-store-port.js';
 import { backfillLegacyTurnId } from '../../core/turns/id.js';
+import {
+  createBackgroundWorkIdentity,
+  fingerprintBackgroundWorkPayload,
+  fingerprintBackgroundWorkTurnRecord,
+} from '../../core/agent/background-work/types.js';
 import { createTurnRecordSharedStore } from './turn-record-shared-store.js';
 import { sanitizeChannelId } from './store-file-contracts.js';
 import {
@@ -156,6 +166,40 @@ function createTurnRecord(overrides: Partial<TurnRecord> = {}): TurnRecord {
   };
 }
 
+function withRecoveryHandoff(record: TurnRecord): TurnRecord {
+  const logicalSessionId = record.sessionId ?? record.channelId;
+  const payload = {
+    schemaVersion: 1 as const,
+    kind: 'memory_extraction' as const,
+    source: {
+      schemaVersion: 1 as const,
+      logicalSessionId,
+      channelId: record.channelId,
+      turnId: record.turnId,
+      requestId: record.requestId,
+      turnRecordFingerprint: fingerprintBackgroundWorkTurnRecord(record),
+      createdAtMs: record.completedAt,
+    },
+  };
+  const job = {
+    ...createBackgroundWorkIdentity({
+      logicalSessionId,
+      turnId: record.turnId,
+      kind: payload.kind,
+    }),
+    logicalSessionId,
+    kind: payload.kind,
+    payload,
+    payloadFingerprint: fingerprintBackgroundWorkPayload(payload),
+    sourceTurnId: record.turnId,
+    sourceRequestId: record.requestId,
+    sourceChannelId: record.channelId,
+    createdAtMs: record.completedAt,
+    maxAttempts: 3,
+  };
+  return { ...record, backgroundWorkHandoff: { schemaVersion: 1, jobs: [job] } };
+}
+
 describe('turn-records', () => {
   it('projects huge tool results into bounded content-free usage signals', () => {
     const sessionsDir = mkdtempSync(join(tmpdir(), 'psfn-turn-records-usage-projection-'));
@@ -201,12 +245,12 @@ describe('turn-records', () => {
     const sessionsDir = mkdtempSync(join(tmpdir(), 'psfn-turn-records-recovery-stream-'));
     const turnRecordStore = createFilesystemTurnRecordStorePort(sessionsDir);
     for (let index = 0; index < 64; index += 1) {
-      turnRecordStore.appendTurnRecord(createTurnRecord({
+      turnRecordStore.appendTurnRecord(withRecoveryHandoff(createTurnRecord({
         turnId: backfillLegacyTurnId(`recovery-stream-${String(index)}`),
         requestId: `request-${String(index)}`,
         startedAt: 1_742_000_000_000 + index,
         completedAt: 1_742_000_000_500 + index,
-      }));
+      })));
     }
     const stream = turnRecordStore.streamTurnRecordsForRecovery;
     expect(stream).toBeDefined();
@@ -218,7 +262,7 @@ describe('turn-records', () => {
     let recovered = 0;
     for await (const _record of stream!.call(
       turnRecordStore,
-      'psfn-amica:test:pi5',
+      ['psfn-amica:test:pi5'],
     )) {
       recovered += 1;
     }
@@ -547,26 +591,290 @@ describe('turn-records', () => {
       .resolves.toEqual({ kind: 'duplicated' });
   });
 
-  it('closes the pinned active recovery descriptor when segment discovery fails', async () => {
+  it('cancels a pinned recovery snapshot promptly', async () => {
     const sessionsDir = mkdtempSync(join(tmpdir(), 'psfn-turn-records-recovery-fd-'));
-    const turnRecordStore = createFilesystemTurnRecordStorePort(sessionsDir);
     const record = createTurnRecord();
+    const abortController = new AbortController();
+    const turnRecordStore = createFilesystemTurnRecordStorePort(sessionsDir, {
+      recoverySnapshotHook: () => { abortController.abort(); },
+    });
     turnRecordStore.appendTurnRecord(record);
-    const activePath = activeSegmentPathFor(sessionsDir, record.channelId);
-    fsFaults.trackedOpen.path = activePath;
-    fsFaults.readdirSyncError.path = join(sessionsDir, TURN_RECORDS_DIR);
-    fsFaults.readdirSyncError.remaining = 1;
     const stream = turnRecordStore.streamTurnRecordsForRecovery;
     expect(stream).toBeDefined();
+    const startedAt = Date.now();
 
     await expect((async () => {
-      for await (const _record of stream!.call(turnRecordStore, record.channelId)) {
-        // Segment discovery fails before the iterator can yield.
+      for await (const _record of stream!.call(
+        turnRecordStore,
+        [record.channelId],
+        { signal: abortController.signal },
+      )) {
+        // The snapshot hook aborts before physical scanning starts.
       }
-    })()).rejects.toThrow('Injected readdir failure');
+    })()).rejects.toMatchObject({ name: 'AbortError' });
 
-    expect(fsFaults.trackedOpen.fd).not.toBeNull();
-    expect(fsFaults.trackedOpen.closed).toBe(true);
+    expect(Date.now() - startedAt).toBeLessThan(1_000);
+  });
+
+  it('rejects duplicate handoffs across rotated segments from the same snapshot', async () => {
+    const sessionsDir = mkdtempSync(join(tmpdir(), 'psfn-turn-records-recovery-duplicate-'));
+    const turnRecordStore = createFilesystemTurnRecordStorePort(sessionsDir, {
+      segmentMaxBytes: 1,
+    });
+    const record = withRecoveryHandoff(createTurnRecord());
+    turnRecordStore.appendTurnRecord(record);
+    turnRecordStore.appendTurnRecord(record);
+
+    const recovered: TurnRecord[] = [];
+    for await (const candidate of turnRecordStore.streamTurnRecordsForRecovery!(
+      [record.channelId],
+    )) {
+      recovered.push(candidate);
+    }
+
+    expect(recovered).toEqual([]);
+  });
+
+  it('holds one source boundary across append and rotation during a scan', async () => {
+    const sessionsDir = mkdtempSync(join(tmpdir(), 'psfn-turn-records-recovery-snapshot-'));
+    const record = withRecoveryHandoff(createTurnRecord());
+    let snapshots = 0;
+    let turnRecordStore!: TurnRecordStorePort;
+    turnRecordStore = createFilesystemTurnRecordStorePort(sessionsDir, {
+      segmentMaxBytes: 1,
+      recoverySnapshotHook: () => {
+        if (snapshots++ === 0) turnRecordStore.appendTurnRecord(record);
+      },
+    });
+    turnRecordStore.appendTurnRecord(record);
+
+    const first: TurnRecord[] = [];
+    for await (const candidate of turnRecordStore.streamTurnRecordsForRecovery!(
+      [record.channelId],
+    )) {
+      first.push(candidate);
+    }
+    const second: TurnRecord[] = [];
+    for await (const candidate of turnRecordStore.streamTurnRecordsForRecovery!(
+      [record.channelId],
+    )) {
+      second.push(candidate);
+    }
+
+    expect(first.map(candidate => candidate.turnId)).toEqual([record.turnId]);
+    expect(second).toEqual([]);
+  });
+
+  it('orders recovery globally even when physical source rows are out of order', async () => {
+    const sessionsDir = mkdtempSync(join(tmpdir(), 'psfn-turn-records-recovery-order-'));
+    const turnRecordStore = createFilesystemTurnRecordStorePort(sessionsDir);
+    const records = [
+      withRecoveryHandoff(createTurnRecord({
+        channelId: 'api:order-a',
+        channelType: 'api',
+        turnId: backfillLegacyTurnId('order-latest'),
+        requestId: 'request-latest',
+        completedAt: 300,
+      })),
+      withRecoveryHandoff(createTurnRecord({
+        channelId: 'api:order-a',
+        channelType: 'api',
+        turnId: backfillLegacyTurnId('order-earliest'),
+        requestId: 'request-earliest',
+        completedAt: 100,
+      })),
+      withRecoveryHandoff(createTurnRecord({
+        channelId: 'discord:order-b',
+        channelType: 'discord',
+        turnId: backfillLegacyTurnId('order-middle'),
+        requestId: 'request-middle',
+        completedAt: 200,
+      })),
+      withRecoveryHandoff(createTurnRecord({
+        channelId: 'api:order-a',
+        channelType: 'api',
+        turnId: backfillLegacyTurnId('order-middle'),
+        requestId: 'request-middle-tie',
+        completedAt: 200,
+      })),
+    ];
+    records.forEach(record => turnRecordStore.appendTurnRecord(record));
+
+    const recovered: TurnRecord[] = [];
+    for await (const candidate of turnRecordStore.streamTurnRecordsForRecovery!(
+      ['discord:order-b', 'api:order-a'],
+    )) {
+      recovered.push(candidate);
+    }
+
+    const expectedOrder = [...records].sort((left, right) => (
+      left.completedAt - right.completedAt
+      || left.turnId.localeCompare(right.turnId)
+      || left.channelId.localeCompare(right.channelId)
+    ));
+    expect(recovered.map(candidate => candidate.requestId))
+      .toEqual(expectedOrder.map(candidate => candidate.requestId));
+  });
+
+  it('keeps the main event loop responsive for one huge old-fat row', async () => {
+    const sessionsDir = mkdtempSync(join(tmpdir(), 'psfn-turn-records-recovery-huge-row-'));
+    const turnRecordStore = createFilesystemTurnRecordStorePort(sessionsDir, {
+      scanChunkBytes: 64 * 1024,
+    });
+    const hugeResult = `old-fat-result:${'x'.repeat(8 * 1024 * 1024)}`;
+    const record = withRecoveryHandoff(createTurnRecord({
+      toolCalls: [{
+        toolName: 'repo',
+        toolCallId: 'call-huge-recovery',
+        resultText: hugeResult,
+      }],
+    }));
+    turnRecordStore.appendTurnRecord(record);
+    const stats: TurnRecordRecoveryScanStats = {
+      bytesRead: 0,
+      rowsScanned: 0,
+      filesScanned: 0,
+      candidatesYielded: 0,
+      peakIdentityRowsInMemory: 0,
+      sqliteCacheBytes: 0,
+      maxRowBytes: 0,
+    };
+    let pulses = 0;
+    let lastPulse = Date.now();
+    let maxPulseGap = 0;
+    const heartbeat = setInterval(() => {
+      const now = Date.now();
+      maxPulseGap = Math.max(maxPulseGap, now - lastPulse);
+      lastPulse = now;
+      pulses += 1;
+    }, 5);
+    const recovered: TurnRecord[] = [];
+    try {
+      for await (const candidate of turnRecordStore.streamTurnRecordsForRecovery!(
+        [record.channelId],
+        { stats },
+      )) {
+        recovered.push(candidate);
+      }
+    } finally {
+      clearInterval(heartbeat);
+    }
+
+    expect(pulses).toBeGreaterThan(5);
+    expect(maxPulseGap).toBeLessThan(100);
+    expect(recovered).toHaveLength(1);
+    expect(recovered[0]!.toolCalls).toEqual([]);
+    expect(JSON.stringify(recovered[0])).not.toContain('old-fat-result');
+    expect(stats).toMatchObject({
+      rowsScanned: 1,
+      candidatesYielded: 1,
+      peakIdentityRowsInMemory: 1,
+      sqliteCacheBytes: 4 * 1024 * 1024,
+      maxRowBytes: 128 * 1024 * 1024,
+    });
+    expect(stats.bytesRead).toBeGreaterThan(8 * 1024 * 1024);
+  });
+
+  it('fails closed on malformed rows and rows beyond the declared byte cap', async () => {
+    const malformedDir = mkdtempSync(join(tmpdir(), 'psfn-turn-records-recovery-malformed-'));
+    const malformedStore = createFilesystemTurnRecordStorePort(malformedDir);
+    const record = withRecoveryHandoff(createTurnRecord());
+    malformedStore.appendTurnRecord(record);
+    appendFileSync(activeSegmentPathFor(malformedDir, record.channelId), '{"broken":\n');
+
+    await expect((async () => {
+      for await (const _candidate of malformedStore.streamTurnRecordsForRecovery!(
+        [record.channelId],
+      )) {
+        // The complete physical snapshot must validate before the first yield.
+      }
+    })()).rejects.toMatchObject({ name: 'TurnRecordRecoveryEvidenceError' });
+
+    const cappedDir = mkdtempSync(join(tmpdir(), 'psfn-turn-records-recovery-row-cap-'));
+    const cappedStore = createFilesystemTurnRecordStorePort(cappedDir, {
+      recoveryMaxRowBytes: 1_024,
+    });
+    const oversized = withRecoveryHandoff(createTurnRecord({
+      toolCalls: [{
+        toolName: 'repo',
+        toolCallId: 'call-over-cap',
+        resultText: 'x'.repeat(2_048),
+      }],
+    }));
+    cappedStore.appendTurnRecord(oversized);
+
+    await expect((async () => {
+      for await (const _candidate of cappedStore.streamTurnRecordsForRecovery!(
+        [oversized.channelId],
+      )) {
+        // Oversized physical evidence is rejected, never skipped.
+      }
+    })()).rejects.toMatchObject({
+      name: 'TurnRecordRecoveryEvidenceError',
+      message: expect.stringContaining('exceeds 1024 bytes'),
+    });
+  });
+
+  it('launches the compiled recovery worker with the dynamic Node SQLite builtin', async () => {
+    const cacheRoot = join(process.cwd(), 'node_modules', '.cache');
+    mkdirSync(cacheRoot, { recursive: true });
+    const buildDir = mkdtempSync(join(cacheRoot, 'psfn-recovery-worker-smoke-'));
+    const sessionsDir = mkdtempSync(join(tmpdir(), 'psfn-recovery-worker-smoke-data-'));
+    const workerPath = join(buildDir, 'worker.js');
+    try {
+      await build({
+        entry: {
+          worker: join(process.cwd(), 'src/persistence/sessions/turn-record-recovery-worker.ts'),
+        },
+        outDir: buildDir,
+        clean: false,
+        dts: false,
+        format: ['esm'],
+        target: 'node22',
+        splitting: false,
+        skipNodeModulesBundle: true,
+        silent: true,
+      });
+      const compiled = readFileSync(workerPath, 'utf8');
+      expect(compiled).not.toMatch(/from ["']sqlite["']/u);
+
+      await new Promise<void>((resolve, reject) => {
+        const child = fork(workerPath, [], {
+          execArgv: ['--no-warnings'],
+          serialization: 'advanced',
+          stdio: ['ignore', 'ignore', 'inherit', 'ipc'],
+        });
+        const fail = (error: Error): void => {
+          clearTimeout(timeout);
+          child.kill();
+          reject(error);
+        };
+        const timeout = setTimeout(() => {
+          fail(new Error('Compiled TurnRecord recovery worker did not complete'));
+        }, 3_000);
+        child.once('error', fail);
+        child.on('message', (message: unknown) => {
+          if ((message as { type?: string }).type !== 'complete') return;
+          clearTimeout(timeout);
+          child.kill();
+          resolve();
+        });
+        child.send({
+          type: 'start',
+          input: {
+            databasePath: join(sessionsDir, 'snapshot.sqlite'),
+            maxRowBytes: 1_024,
+            scanChunkBytes: 256,
+            sessionsDir,
+            sourceChannelIds: [],
+            sqliteCacheBytes: 4_096,
+          },
+        });
+      });
+    } finally {
+      rmSync(buildDir, { recursive: true, force: true });
+      rmSync(sessionsDir, { recursive: true, force: true });
+    }
   });
 
   it('persists and reads psfn-amica turn records', () => {

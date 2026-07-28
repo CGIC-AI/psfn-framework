@@ -770,7 +770,7 @@ describe('AdminServer JSON API routes', () => {
       toolHealthProvider,
       skillsRuntime: {
         getSnapshot: () => null,
-        listManaged: () => [],
+        listManaged: async () => ({ managed: [], skipped: [] }),
         createSkill: vi.fn(),
         updateSkill: vi.fn(),
         deleteSkill: vi.fn(),

@@ -288,25 +288,38 @@ describe('skills runtime', () => {
         seedDir,
         repoRoot: root,
         isBinaryAvailable: () => true,
+        collectionLimits: {
+          maxMetadataBytes: 400_000,
+          maxRetainedBytes: 500_000,
+          yieldEvery: 2,
+        },
       });
-      let resolved = false;
-      const snapshotPromise = runtime.getSnapshot().then((snapshot) => {
-        resolved = true;
-        return snapshot;
+      let timerTicks = 0;
+      const timer = setInterval(() => { timerTicks += 1; }, 0);
+      const snapshot = await runtime.getSnapshot().finally(() => clearInterval(timer));
+
+      expect(timerTicks).toBeGreaterThan(2);
+      expect(snapshot.loadedSkills).toBe(0);
+      expect(snapshot.includedSkills).toEqual([]);
+      expect(snapshot.promptXml).toBe('');
+      expect(snapshot.collection).toMatchObject({
+        candidatesSeen: 160,
+        metadataBytesRead: 0,
+        metadataBytesRetained: 0,
+        limited: true,
       });
-
-      await new Promise<void>(resolveTurn => setImmediate(resolveTurn));
-      expect(resolved).toBe(false);
-
-      const snapshot = await snapshotPromise;
-      expect(snapshot.loadedSkills).toBe(160);
-      expect(snapshot.includedSkills.map(skill => skill.name)).toEqual([
-        'skill-000',
-        'skill-001',
-        'skill-002',
+      expect(snapshot.collection.candidateBytesRetained).toBeGreaterThan(0);
+      expect(snapshot.collection.candidateBytesRetained)
+        .toBeLessThan(snapshot.collection.limits.maxRetainedBytes);
+      expect(snapshot.skipped).toEqual([
+        expect.objectContaining({
+          kind: 'collection_limit',
+          reason: expect.stringMatching(/aggregate read limit/i),
+          details: expect.arrayContaining([
+            expect.stringMatching(/no partial skill set was accepted/i),
+          ]),
+        }),
       ]);
-      expect(snapshot.includedSkills.every(skill => !('content' in skill))).toBe(true);
-      expect(snapshot.skipped.filter(item => item.kind === 'budget')).toHaveLength(157);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -345,6 +358,114 @@ describe('skills runtime', () => {
           kind: 'oversized',
           name: 'skills/oversized/SKILL.md',
           reason: expect.stringMatching(/hard limit/i),
+        }),
+      ]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('builds Garden managed records from bounded async content reads', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'skills-runtime-managed-bounded-'));
+    const dataDir = join(root, 'data');
+    const seedDir = join(root, 'config');
+    const managedRoot = join(root, 'personal', 'skills');
+    mkdirSync(dataDir, { recursive: true });
+    mkdirSync(seedDir, { recursive: true });
+    writeSkillsConfig(dataDir, seedDir);
+
+    try {
+      const runtime = new SkillsRuntime({
+        dataDir,
+        seedDir,
+        repoRoot: root,
+        managedRootDir: managedRoot,
+        isBinaryAvailable: () => true,
+        now: () => new Date('2026-07-28T12:00:00.000Z'),
+      });
+      runtime.createSkill({
+        name: 'normal',
+        category: 'operator',
+        description: 'Normal managed skill',
+        content: '# Exact managed body',
+      });
+      const oversizedDir = join(managedRoot, 'operator', 'oversized');
+      mkdirSync(oversizedDir, { recursive: true });
+      writeFileSync(join(oversizedDir, 'SKILL.md'), [
+        '---',
+        'name: oversized',
+        'description: Never synchronously read this body',
+        'category: operator',
+        '---',
+        'x'.repeat(2_000_000),
+      ].join('\n'));
+
+      const snapshot = await runtime.getSnapshot();
+      const projection = await runtime.listManaged();
+      expect(projection.managed).toEqual([{
+        name: 'normal',
+        description: 'Normal managed skill',
+        category: 'operator',
+        version: 1,
+        content: '# Exact managed body',
+        createdAt: '2026-07-28T12:00:00.000Z',
+        updatedAt: '2026-07-28T12:00:00.000Z',
+      }]);
+      expect(projection.skipped).toEqual([]);
+      expect(snapshot.skipped).toEqual([
+        expect.objectContaining({
+          kind: 'oversized',
+          name: expect.stringContaining('operator/oversized/SKILL.md'),
+        }),
+      ]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('fails closed before Garden reads an aggregate managed-body overflow', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'skills-runtime-managed-collection-'));
+    const dataDir = join(root, 'data');
+    const seedDir = join(root, 'config');
+    const managedRoot = join(root, 'personal', 'skills');
+    mkdirSync(dataDir, { recursive: true });
+    mkdirSync(seedDir, { recursive: true });
+    writeSkillsConfig(dataDir, seedDir);
+    for (let index = 0; index < 8; index += 1) {
+      const name = `managed-${String(index).padStart(2, '0')}`;
+      const directory = join(managedRoot, 'operator', name);
+      mkdirSync(directory, { recursive: true });
+      writeFileSync(join(directory, 'SKILL.md'), [
+        '---',
+        `name: ${name}`,
+        `description: ${name}`,
+        'category: operator',
+        '---',
+        'b'.repeat(12_000),
+      ].join('\n'));
+    }
+
+    try {
+      const runtime = new SkillsRuntime({
+        dataDir,
+        seedDir,
+        repoRoot: root,
+        managedRootDir: managedRoot,
+        isBinaryAvailable: () => true,
+        collectionLimits: {
+          maxManagedContentBytes: 50_000,
+          yieldEvery: 2,
+        },
+      });
+      const projection = await runtime.listManaged();
+      expect(projection.managed).toEqual([]);
+      expect(projection.skipped).toEqual([
+        expect.objectContaining({
+          kind: 'collection_limit',
+          reason: expect.stringMatching(/aggregate read limit/i),
+          details: expect.arrayContaining([
+            expect.stringMatching(/no partial Garden list was returned/i),
+          ]),
         }),
       ]);
     } finally {

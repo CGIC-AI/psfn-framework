@@ -6,15 +6,19 @@ import type {
 } from './types.js';
 import { escapeXmlAttribute, escapeXmlText } from '../../shared/utils/escaping.js';
 
+export function compareSkillsForPrompt(left: SkillEntry, right: SkillEntry): number {
+  if (left.always !== right.always) {
+    return left.always ? -1 : 1;
+  }
+  if (left.precedence !== right.precedence) {
+    return left.precedence - right.precedence;
+  }
+  return left.name.localeCompare(right.name);
+}
+
 function sortSkillsForPrompt(entries: SkillEntry[]): SkillEntry[] {
   return [...entries].sort((left, right) => {
-    if (left.always !== right.always) {
-      return left.always ? -1 : 1;
-    }
-    if (left.precedence !== right.precedence) {
-      return left.precedence - right.precedence;
-    }
-    return left.name.localeCompare(right.name);
+    return compareSkillsForPrompt(left, right);
   });
 }
 
@@ -44,11 +48,12 @@ function budgetBoundedInteger(value: number, fallback: number): number {
 export function formatSkillsForPrompt(
   entries: SkillEntry[],
   budget: SkillBudget,
+  options: { presorted?: boolean } = {},
 ): SkillFormatResult {
   const maxSkills = budgetBoundedInteger(budget.maxSkills, 32);
   const maxChars = budgetBoundedInteger(budget.maxChars, 24_000);
 
-  const sorted = sortSkillsForPrompt(entries);
+  const sorted = options.presorted ? entries : sortSkillsForPrompt(entries);
   const included: SkillEntry[] = [];
   const excluded: SkillSkipRecord[] = [];
   const skillNodes: string[] = [];

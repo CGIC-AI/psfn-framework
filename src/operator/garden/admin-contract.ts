@@ -10,7 +10,10 @@ import type { SubstrateConfig } from '../../system/config/runtime-config-contrac
 import type { ReflectionTemplate } from '../../core/scheduler/reflection-policy.js';
 import type { RecurringCadence, ScheduledTask, TaskType } from '../../core/scheduler/types.js';
 import type { WakeWindowSnapshot } from '../../core/scheduler/temporal-wakeup.js';
-import type { SkillSnapshot } from '../../faculties/skills/types.js';
+import type {
+  SkillSkipRecord,
+  SkillSnapshot,
+} from '../../faculties/skills/types.js';
 import type { ValuesJournalEntry } from '../../faculties/values/store.js';
 import type { ReflectionJournalEntry } from '../../persistence/journals/reflection-journal.js';
 import type { ReflectionMetacognitionJournalEntry } from '../../persistence/journals/reflection-metacognition-journal.js';
@@ -149,7 +152,7 @@ export interface ManagedSkillRecord {
 
 export interface AdminSkillsApi {
   getSnapshot(): SkillSnapshot | Promise<SkillSnapshot>;
-  listManaged(): ManagedSkillRecord[];
+  listManaged(): Promise<{ managed: ManagedSkillRecord[]; skipped: SkillSkipRecord[] }>;
   createSkill(input: { name: string; category: string; content: string; description?: string }): ManagedSkillRecord;
   updateSkill(input: { name: string; content: string; description?: string }): ManagedSkillRecord;
   deleteSkill(name: string): void;

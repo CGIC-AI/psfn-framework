@@ -31,6 +31,7 @@ function makeEntry(overrides?: Partial<SkillEntry>): SkillEntry {
     source: 'bundled',
     precedence: 1,
     mtimeMs: 1,
+    birthtimeMs: 1,
     size: 1,
     ...overrides,
   };

@@ -119,7 +119,7 @@ description: vendor version
       }), root);
       const files = await scanSkillFiles(directories);
       const loaded = await loadSkillEntries(files);
-      const deduped = applySkillPrecedence(loaded.entries);
+      const deduped = await applySkillPrecedence(loaded.entries);
 
       expect(files.length).toBe(2);
       expect(deduped.entries).toHaveLength(1);
@@ -294,6 +294,50 @@ ${'x'.repeat(4_000)}
 
       const explicitBody = await readSkillContent(valid!, { maxDocumentBytes: 500_000 });
       expect(explicitBody).toContain('body text');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('fails closed at the candidate bound without retaining a partial collection', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'skills-loader-collection-bound-'));
+    try {
+      for (let index = 0; index < 6; index += 1) {
+        writeSkill(root, `skills/candidate-${String(index)}`, `
+---
+name: candidate-${String(index)}
+description: bounded candidate
+---
+# Body
+`);
+      }
+      let timerTicks = 0;
+      const timer = setInterval(() => { timerTicks += 1; }, 0);
+      const scan = await scanSkillRoots(
+        resolveSkillDirectories(makeConfig(), root),
+        {
+          collectionLimits: {
+            maxCandidates: 3,
+            yieldEvery: 1,
+          },
+        },
+      ).finally(() => clearInterval(timer));
+
+      expect(timerTicks).toBeGreaterThan(1);
+      expect(scan.files).toEqual([]);
+      expect(scan.collection).toMatchObject({
+        candidatesSeen: 4,
+        limited: true,
+      });
+      expect(scan.collection.candidateBytesRetained).toBeGreaterThan(0);
+      expect(scan.collection.candidateBytesRetained)
+        .toBeLessThan(scan.collection.limits.maxRetainedBytes);
+      expect(scan.skipped).toEqual([
+        expect.objectContaining({
+          kind: 'collection_limit',
+          reason: expect.stringMatching(/3 SKILL.md candidates/i),
+        }),
+      ]);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

@@ -22,6 +22,8 @@ import { toErrorMessage } from '../../shared/utils/errors.js';
 import { isRecord } from '../../shared/utils/types.js';
 import type {
   SkillDirectorySpec,
+  SkillCollectionLimits,
+  SkillCollectionStats,
   SkillEntry,
   SkillFileCandidate,
   SkillFrontmatter,
@@ -47,12 +49,24 @@ export type SkillRootWarnFn = (
 export interface ScanSkillRootsOptions {
   /** Override the WARN emitter (tests). Defaults to a rate-limited component logger. */
   warnMissingRoot?: SkillRootWarnFn;
+  collectionLimits?: Partial<SkillCollectionLimits>;
 }
 
 export interface SkillScanResult {
   files: SkillFileCandidate[];
   roots: SkillRootScan[];
+  skipped: SkillSkipRecord[];
+  collection: SkillCollectionStats;
 }
+
+export const DEFAULT_SKILL_COLLECTION_LIMITS: Readonly<SkillCollectionLimits> = Object.freeze({
+  maxDiscoveryEntries: 16_384,
+  maxCandidates: 2_048,
+  maxMetadataBytes: 16 * 1024 * 1024,
+  maxRetainedBytes: 24 * 1024 * 1024,
+  maxManagedContentBytes: 16 * 1024 * 1024,
+  yieldEvery: 32,
+});
 
 const defaultWarnMissingRoot: SkillRootWarnFn = (message, context) => {
   missingRootWarnLimiter(`skills-root:${context.absolutePath}`, () => {
@@ -62,6 +76,64 @@ const defaultWarnMissingRoot: SkillRootWarnFn = (message, context) => {
 
 function toPosix(path: string): string {
   return path.split(sep).join('/');
+}
+
+function normalizeCollectionLimits(
+  overrides: Partial<SkillCollectionLimits> = {},
+): SkillCollectionLimits {
+  const limits = { ...DEFAULT_SKILL_COLLECTION_LIMITS, ...overrides };
+  for (const [name, value] of Object.entries(limits)) {
+    if (!Number.isSafeInteger(value) || value < 1) {
+      throw new Error(`Invalid skill collection limit ${name}: expected a positive integer`);
+    }
+  }
+  return limits;
+}
+
+async function yieldToEventLoop(): Promise<void> {
+  await new Promise<void>(resolveYield => setImmediate(resolveYield));
+}
+
+async function maybeYield(index: number, every: number): Promise<void> {
+  if (index > 0 && index % every === 0) {
+    await yieldToEventLoop();
+  }
+}
+
+export async function cooperativeSort<T>(
+  values: T[],
+  compare: (left: T, right: T) => number,
+  yieldEvery: number,
+): Promise<T[]> {
+  const chunks: T[][] = [];
+  for (let offset = 0; offset < values.length; offset += yieldEvery) {
+    chunks.push(values.slice(offset, offset + yieldEvery).sort(compare));
+    await yieldToEventLoop();
+  }
+  while (chunks.length > 1) {
+    const merged: T[][] = [];
+    for (let index = 0; index < chunks.length; index += 2) {
+      const left = chunks[index] ?? [];
+      const right = chunks[index + 1] ?? [];
+      const next: T[] = [];
+      let leftIndex = 0;
+      let rightIndex = 0;
+      while (leftIndex < left.length || rightIndex < right.length) {
+        if (rightIndex >= right.length || (
+          leftIndex < left.length
+          && compare(left[leftIndex]!, right[rightIndex]!) <= 0
+        )) {
+          next.push(left[leftIndex++]!);
+        } else {
+          next.push(right[rightIndex++]!);
+        }
+        await maybeYield(next.length, yieldEvery);
+      }
+      merged.push(next);
+    }
+    chunks.splice(0, chunks.length, ...merged);
+  }
+  return chunks[0] ?? [];
 }
 
 function uniqStrings(values: string[]): string[] {
@@ -434,16 +506,33 @@ function toDisplayPath(root: string, absolutePath: string): string {
  * root is an existing directory first (scanSkillRoots does); a root that
  * disappears mid-walk fails loudly via readdirSync rather than yielding [].
  */
-async function walkSkillFiles(baseDir: SkillDirectorySpec): Promise<SkillFileCandidate[]> {
+interface SkillDiscoveryBudget {
+  limits: SkillCollectionLimits;
+  discoveryEntries: number;
+  candidatesSeen: number;
+  candidateBytesRetained: number;
+  limitedReason?: string;
+}
+
+async function walkSkillFiles(
+  baseDir: SkillDirectorySpec,
+  budget: SkillDiscoveryBudget,
+): Promise<SkillFileCandidate[]> {
   const files: SkillFileCandidate[] = [];
   const stack = [baseDir.absolutePath];
 
-  while (stack.length > 0) {
+  while (stack.length > 0 && !budget.limitedReason) {
     const current = stack.pop();
     if (!current) continue;
 
     const directory = await opendir(current);
     for await (const entry of directory) {
+      budget.discoveryEntries += 1;
+      if (budget.discoveryEntries > budget.limits.maxDiscoveryEntries) {
+        budget.limitedReason = `Skill discovery exceeded ${String(budget.limits.maxDiscoveryEntries)} filesystem entries`;
+        break;
+      }
+      await maybeYield(budget.discoveryEntries, budget.limits.yieldEvery);
       const absolutePath = join(current, entry.name);
       if (entry.isSymbolicLink()) continue;
       if (entry.isDirectory()) {
@@ -457,12 +546,24 @@ async function walkSkillFiles(baseDir: SkillDirectorySpec): Promise<SkillFileCan
       const relativePath = relativeFromDirectory
         ? `${baseDir.relativePath}/${relativeFromDirectory}`
         : baseDir.relativePath;
+      budget.candidatesSeen += 1;
+      const candidateBytes = Buffer.byteLength(absolutePath) + Buffer.byteLength(relativePath);
+      if (budget.candidatesSeen > budget.limits.maxCandidates) {
+        budget.limitedReason = `Skill collection exceeded ${String(budget.limits.maxCandidates)} SKILL.md candidates`;
+        break;
+      }
+      if (budget.candidateBytesRetained + candidateBytes > budget.limits.maxRetainedBytes) {
+        budget.limitedReason = `Skill candidate paths exceeded the ${String(budget.limits.maxRetainedBytes)} byte retained-data limit`;
+        break;
+      }
+      budget.candidateBytesRetained += candidateBytes;
 
       files.push({
         absolutePath,
         relativePath,
         directory: baseDir,
         mtimeMs: fileStats.mtimeMs,
+        birthtimeMs: fileStats.birthtimeMs,
         size: fileStats.size,
       });
     }
@@ -535,6 +636,13 @@ export async function scanSkillRoots(
   options: ScanSkillRootsOptions = {},
 ): Promise<SkillScanResult> {
   const warnMissingRoot = options.warnMissingRoot ?? defaultWarnMissingRoot;
+  const limits = normalizeCollectionLimits(options.collectionLimits);
+  const budget: SkillDiscoveryBudget = {
+    limits,
+    discoveryEntries: 0,
+    candidatesSeen: 0,
+    candidateBytesRetained: 0,
+  };
   const roots: SkillRootScan[] = [];
   const files: SkillFileCandidate[] = [];
 
@@ -572,7 +680,7 @@ export async function scanSkillRoots(
       continue;
     }
 
-    const rootFiles = await walkSkillFiles(directory);
+    const rootFiles = await walkSkillFiles(directory, budget);
     roots.push({
       path: directory.relativePath,
       absolutePath: directory.absolutePath,
@@ -582,16 +690,48 @@ export async function scanSkillRoots(
       precedence: directory.precedence,
     });
     files.push(...rootFiles);
+    if (budget.limitedReason) break;
   }
 
-  files.sort((left, right) => {
-    if (left.directory.precedence !== right.directory.precedence) {
-      return left.directory.precedence - right.directory.precedence;
-    }
-    return left.relativePath.localeCompare(right.relativePath);
-  });
-
-  return { files, roots };
+  const limited = budget.limitedReason !== undefined;
+  const reportedRoots = limited
+    ? roots.map(root => ({
+        ...root,
+        skillCount: 0,
+        message: budget.limitedReason,
+      }))
+    : roots;
+  const orderedFiles = limited
+    ? []
+    : await cooperativeSort(files, (left, right) => {
+        if (left.directory.precedence !== right.directory.precedence) {
+          return left.directory.precedence - right.directory.precedence;
+        }
+        return left.relativePath.localeCompare(right.relativePath);
+      }, limits.yieldEvery);
+  return {
+    files: limited ? [] : orderedFiles,
+    roots: reportedRoots,
+    skipped: limited
+      ? [{
+          kind: 'collection_limit',
+          name: 'skill collection',
+          relativePath: reportedRoots.at(-1)?.path ?? 'skills',
+          source: reportedRoots.at(-1)?.source ?? 'bundled',
+          reason: budget.limitedReason!,
+          details: ['collection work stopped; no partial skill set was accepted'],
+        }]
+      : [],
+    collection: {
+      discoveryEntries: budget.discoveryEntries,
+      candidatesSeen: budget.candidatesSeen,
+      candidateBytesRetained: budget.candidateBytesRetained,
+      metadataBytesRead: 0,
+      metadataBytesRetained: 0,
+      limited,
+      limits,
+    },
+  };
 }
 
 export async function scanSkillFiles(
@@ -603,6 +743,8 @@ export async function scanSkillFiles(
 interface SkillDocumentReadOptions {
   maxDocumentBytes?: number;
   maxFrontmatterBytes?: number;
+  collectionLimits?: Partial<SkillCollectionLimits>;
+  initialRetainedBytes?: number;
 }
 
 class OversizedSkillDocumentError extends Error {
@@ -684,12 +826,41 @@ export async function loadSkillEntries(
   entries: SkillEntry[];
   skipped: SkillSkipRecord[];
   metadataBytesRead: number;
+  metadataBytesRetained: number;
 }> {
   const entries: SkillEntry[] = [];
   const skipped: SkillSkipRecord[] = [];
   let metadataBytesRead = 0;
+  const limits = normalizeCollectionLimits(options.collectionLimits);
+  const maxDocumentBytes = options.maxDocumentBytes ?? 1_000_000;
+  const maxFrontmatterBytes = options.maxFrontmatterBytes ?? 64 * 1024;
+  const projectedMetadataBytes = files.reduce((total, file) => (
+    total + (file.size > maxDocumentBytes ? 0 : Math.min(file.size, maxFrontmatterBytes))
+  ), 0);
+  const initialRetainedBytes = options.initialRetainedBytes ?? 0;
+  if (
+    projectedMetadataBytes > limits.maxMetadataBytes
+    || initialRetainedBytes + projectedMetadataBytes > limits.maxRetainedBytes
+  ) {
+    const reason = projectedMetadataBytes > limits.maxMetadataBytes
+      ? `Skill metadata collection requires ${String(projectedMetadataBytes)} bytes; aggregate read limit is ${String(limits.maxMetadataBytes)} bytes`
+      : `Skill collection requires ${String(initialRetainedBytes + projectedMetadataBytes)} retained bytes; aggregate limit is ${String(limits.maxRetainedBytes)} bytes`;
+    return {
+      entries: [],
+      skipped: [{
+        kind: 'collection_limit',
+        name: 'skill collection',
+        relativePath: files[0]?.directory.relativePath ?? 'skills',
+        source: files[0]?.directory.source ?? 'bundled',
+        reason,
+        details: ['metadata reads were not started; no partial skill set was accepted'],
+      }],
+      metadataBytesRead: 0,
+      metadataBytesRetained: 0,
+    };
+  }
 
-  for (const file of files) {
+  for (const [index, file] of files.entries()) {
     try {
       const documentPrefixBytes = await readStableSkillBytes(
         file.absolutePath,
@@ -714,6 +885,7 @@ export async function loadSkillEntries(
         source: file.directory.source,
         precedence: file.directory.precedence,
         mtimeMs: file.mtimeMs,
+        birthtimeMs: file.birthtimeMs,
         size: file.size,
       });
     } catch (error) {
@@ -726,26 +898,36 @@ export async function loadSkillEntries(
         reason: message,
       });
     }
+    await maybeYield(index + 1, limits.yieldEvery);
   }
 
-  return { entries, skipped, metadataBytesRead };
+  return {
+    entries,
+    skipped,
+    metadataBytesRead,
+    metadataBytesRetained: metadataBytesRead,
+  };
 }
 
-export function applySkillPrecedence(entries: SkillEntry[]): {
+export async function applySkillPrecedence(
+  entries: SkillEntry[],
+  yieldEvery = DEFAULT_SKILL_COLLECTION_LIMITS.yieldEvery,
+): Promise<{
   entries: SkillEntry[];
   skipped: SkillSkipRecord[];
-} {
-  const ordered = [...entries].sort((left, right) => {
+}> {
+  const ordered = await cooperativeSort(entries, (left, right) => {
     if (left.precedence !== right.precedence) {
       return left.precedence - right.precedence;
     }
     return left.relativePath.localeCompare(right.relativePath);
-  });
+  }, yieldEvery);
 
   const chosen = new Map<string, SkillEntry>();
   const skipped: SkillSkipRecord[] = [];
 
-  for (const entry of ordered) {
+  for (const [index, entry] of ordered.entries()) {
+    await maybeYield(index + 1, yieldEvery);
     const existing = chosen.get(entry.name);
     if (!existing) {
       chosen.set(entry.name, entry);
@@ -768,11 +950,16 @@ export function applySkillPrecedence(entries: SkillEntry[]): {
   };
 }
 
-export function buildSkillFileSignature(files: SkillFileCandidate[]): string {
-  return files
-    .map(file => `${file.relativePath}|${file.mtimeMs}|${file.size}|${file.directory.precedence}`)
-    .sort()
-    .join('||');
+export async function buildSkillFileSignature(
+  files: SkillFileCandidate[],
+  yieldEvery = DEFAULT_SKILL_COLLECTION_LIMITS.yieldEvery,
+): Promise<string> {
+  const parts: string[] = [];
+  for (const [index, file] of files.entries()) {
+    parts.push(`${file.relativePath}|${file.mtimeMs}|${file.size}|${file.directory.precedence}`);
+    await maybeYield(index + 1, yieldEvery);
+  }
+  return parts.join('||');
 }
 
 export function safeFileExists(path: string): boolean {

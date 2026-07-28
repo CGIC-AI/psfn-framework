@@ -3,7 +3,10 @@ import type {
   AdminSkillsApi,
   ManagedSkillRecord,
 } from '../admin-contract.js';
-import type { SkillSnapshot } from '../../../faculties/skills/types.js';
+import type {
+  SkillSkipRecord,
+  SkillSnapshot,
+} from '../../../faculties/skills/types.js';
 import type { ConfigStorePort } from '../../../system/config/config-store.js';
 import { SKILLS_FILE_NAME } from '../../../system/config/skills-config.js';
 import { ownerFileScope } from '../../../system/config/settings-contract.js';
@@ -32,7 +35,7 @@ export class AdminSkillsDataService implements AdminSkillsApi {
     return this.runtime.getSnapshot();
   }
 
-  listManaged(): ManagedSkillRecord[] {
+  listManaged(): Promise<{ managed: ManagedSkillRecord[]; skipped: SkillSkipRecord[] }> {
     return this.runtime.listManaged();
   }
 

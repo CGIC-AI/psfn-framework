@@ -250,7 +250,7 @@ describe('AdminSessionDataService', () => {
       sessionManager: new SessionManager(store, makeConfig({ dataDir: dir })),
       eventBus: new EventBus(),
     });
-    const beforeSpy = vi.spyOn(store, 'getEntriesBefore');
+    const beforeSpy = vi.spyOn(store, 'getEntriesBeforeAsync');
     const rangeSpy = vi.spyOn(store, 'getEntriesInRange');
 
     const firstPage = await service.getSessionMessages(channelId);
@@ -319,7 +319,7 @@ describe('AdminSessionDataService', () => {
     }
 
     const archivePort = createFilesystemSessionArchivePort();
-    const boundedReadSpy = vi.spyOn(archivePort, 'readJournalEntriesBefore');
+    const boundedReadSpy = vi.spyOn(archivePort, 'readJournalEntriesBeforeAsync');
     const fullReadSpy = vi.spyOn(archivePort, 'readJournalFile');
     const reloadedStore = new SessionStore(dir, { sessionArchivePort: archivePort });
     boundedReadSpy.mockClear();

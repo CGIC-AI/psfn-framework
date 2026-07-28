@@ -249,6 +249,17 @@ export interface CogSecTombstoneChannelDiagnostic {
   messageIds: number[];
 }
 
+type EntriesBeforeReadPlan =
+  | { kind: 'complete'; entries: SessionEntry[] }
+  | {
+      kind: 'archive';
+      channelId: string;
+      filePath: string;
+      beforeId: number;
+      limit: number;
+      tombstones: ReadonlySet<string>;
+    };
+
 export class TurnRecordEligibilitySnapshotChangedError extends Error {
   constructor() {
     super('TurnRecord eligibility snapshot changed while acquiring consumed-record fences');
@@ -810,6 +821,20 @@ export class SessionStore implements TranscriptSearchPort {
     tombstones: ReadonlySet<string> = new Set(),
   ): SessionEntry[] {
     return this.journalRuntime.readEntriesBefore(
+      this.journalRuntime.openArchive(channelId, filePath),
+      beforeId,
+      limit,
+      tombstones,
+    );
+  }
+  private async readEntriesBeforeFromArchiveAsync(
+    channelId: string,
+    filePath: string,
+    beforeId: number,
+    limit: number,
+    tombstones: ReadonlySet<string> = new Set(),
+  ): Promise<SessionEntry[]> {
+    return await this.journalRuntime.readEntriesBeforeAsync(
       this.journalRuntime.openArchive(channelId, filePath),
       beforeId,
       limit,
@@ -1834,12 +1859,20 @@ export class SessionStore implements TranscriptSearchPort {
     return full ? full.entries.filter(predicate).slice(-normalizedLimit).reverse() : [];
   }
 
-  getEntriesBefore(channelId: string, beforeId: number, limit: number): SessionEntry[] {
+  private prepareEntriesBeforeRead(
+    channelId: string,
+    beforeId: number,
+    limit: number,
+  ): EntriesBeforeReadPlan {
     this.refreshChannelIndexFromDisk();
-    if (!Number.isFinite(beforeId) || !Number.isFinite(limit)) return [];
+    if (!Number.isFinite(beforeId) || !Number.isFinite(limit)) {
+      return { kind: 'complete', entries: [] };
+    }
     const normalizedBeforeId = Math.max(0, Math.floor(beforeId));
     const normalizedLimit = Math.max(0, Math.floor(limit));
-    if (normalizedBeforeId <= 0 || normalizedLimit <= 0) return [];
+    if (normalizedBeforeId <= 0 || normalizedLimit <= 0) {
+      return { kind: 'complete', entries: [] };
+    }
 
     const sessionId = this.resolveSessionId(channelId) ?? channelId;
     const cached = this.channels.get(sessionId) ?? this.loadExistingChannelCache(channelId);
@@ -1847,9 +1880,12 @@ export class SessionStore implements TranscriptSearchPort {
       const current = this.fullyLoadedCacheIsCurrent(cached)
         ? cached
         : this.ensureChannelFullyLoaded(channelId);
-      if (!current) return [];
+      if (!current) return { kind: 'complete', entries: [] };
       const eligible = current.entries.filter(entry => entry.id < normalizedBeforeId);
-      return eligible.length <= normalizedLimit ? eligible : eligible.slice(-normalizedLimit);
+      return {
+        kind: 'complete',
+        entries: eligible.length <= normalizedLimit ? eligible : eligible.slice(-normalizedLimit),
+      };
     }
 
     const resolved = cached
@@ -1860,7 +1896,7 @@ export class SessionStore implements TranscriptSearchPort {
         filePath: cached.resolvedPath,
       }
       : this.resolveExistingSession(channelId);
-    if (!resolved) return [];
+    if (!resolved) return { kind: 'complete', entries: [] };
     const indexEntry = this.ensureChannelIndexEntry(
       resolved.sessionId,
       resolved.channelId,
@@ -1869,7 +1905,9 @@ export class SessionStore implements TranscriptSearchPort {
     if (cached && !cached.fullyLoaded) {
       syncLightweightSessionCacheFromIndex({ cache: cached, indexEntry, sessionsDir: this.sessionsDir });
     }
-    if ((normalizeOptionalNonNegativeNumber(indexEntry.messageCount) ?? 0) === 0) return [];
+    if ((normalizeOptionalNonNegativeNumber(indexEntry.messageCount) ?? 0) === 0) {
+      return { kind: 'complete', entries: [] };
+    }
 
     const activeTurnTombstoneCount = normalizeOptionalNonNegativeNumber(indexEntry.activeTurnTombstoneCount) ?? 0;
     const indexedTurnTombstones = new Set(indexEntry.activeTurnTombstoneIds ?? []);
@@ -1877,17 +1915,47 @@ export class SessionStore implements TranscriptSearchPort {
     // privacy filter. Fall back to canonical replay only for that stale shape.
     if (activeTurnTombstoneCount > 0 && indexedTurnTombstones.size !== activeTurnTombstoneCount) {
       const full = this.ensureChannelFullyLoaded(channelId);
-      if (!full) return [];
+      if (!full) return { kind: 'complete', entries: [] };
       const eligible = full.entries.filter(entry => entry.id < normalizedBeforeId);
-      return eligible.length <= normalizedLimit ? eligible : eligible.slice(-normalizedLimit);
+      return {
+        kind: 'complete',
+        entries: eligible.length <= normalizedLimit ? eligible : eligible.slice(-normalizedLimit),
+      };
     }
 
+    return {
+      kind: 'archive',
+      channelId: resolved.channelId,
+      filePath: resolved.filePath,
+      beforeId: normalizedBeforeId,
+      limit: normalizedLimit,
+      tombstones: indexedTurnTombstones,
+    };
+  }
+  getEntriesBefore(channelId: string, beforeId: number, limit: number): SessionEntry[] {
+    const plan = this.prepareEntriesBeforeRead(channelId, beforeId, limit);
+    if (plan.kind === 'complete') return plan.entries;
     return this.readEntriesBeforeFromArchive(
-      resolved.channelId,
-      resolved.filePath,
-      normalizedBeforeId,
-      normalizedLimit,
-      indexedTurnTombstones,
+      plan.channelId,
+      plan.filePath,
+      plan.beforeId,
+      plan.limit,
+      plan.tombstones,
+    );
+  }
+  async getEntriesBeforeAsync(
+    channelId: string,
+    beforeId: number,
+    limit: number,
+  ): Promise<SessionEntry[]> {
+    const plan = this.prepareEntriesBeforeRead(channelId, beforeId, limit);
+    if (plan.kind === 'complete') return plan.entries;
+    return await this.readEntriesBeforeFromArchiveAsync(
+      plan.channelId,
+      plan.filePath,
+      plan.beforeId,
+      plan.limit,
+      plan.tombstones,
     );
   }
   getEntriesInRange(channelId: string, startId: number, endId: number): SessionEntry[] {

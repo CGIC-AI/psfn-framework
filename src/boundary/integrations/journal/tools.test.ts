@@ -1,4 +1,9 @@
-import { mkdtempSync, rmSync, readFileSync } from 'node:fs';
+import {
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -57,5 +62,40 @@ describe('journal tool', () => {
 
     expect((result.details as any).isError).toBe(true);
     expect(resultText(result as any)).toContain('must stay inside the journal root');
+  });
+
+  it('returns explicit byte progress for paged reads', async () => {
+    writeFileSync(join(root, 'large.md'), `${'🙂'.repeat(4_000)}\ntail\n`, 'utf8');
+    const tool = createJournalTool(new JournalOps(root));
+
+    const first = await tool.execute('read-1', { action: 'read', path: 'large.md' });
+    const firstText = resultText(first as any);
+    expect(firstText).toContain('offset_bytes: 0');
+    expect(firstText).toContain('next_offset_bytes: 12000');
+    expect(firstText).toContain('eof: false');
+    expect(firstText).not.toContain('tail');
+
+    const second = await tool.execute('read-2', {
+      action: 'read',
+      path: 'large.md',
+      offset_bytes: 12_000,
+    } as any);
+    const secondText = resultText(second as any);
+    expect(secondText).toContain('offset_bytes: 12000');
+    expect(secondText).toContain('next_offset_bytes: null');
+    expect(secondText).toContain('eof: true');
+    expect(secondText).toContain('tail');
+  });
+
+  it('surfaces bounded search refusal as an error instead of a partial result', async () => {
+    writeFileSync(join(root, 'first.md'), 'needle\n', 'utf8');
+    writeFileSync(join(root, 'oversized.md'), Buffer.alloc(200_001, 0x61));
+    const tool = createJournalTool(new JournalOps(root));
+
+    const result = await tool.execute('search-1', { action: 'search', query: 'needle' });
+
+    expect((result.details as any).isError).toBe(true);
+    expect(resultText(result as any)).toContain('Journal search bound exceeded');
+    expect(resultText(result as any)).not.toContain('first.md');
   });
 });

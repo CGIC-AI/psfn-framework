@@ -205,10 +205,24 @@ describe('first-party tool surface registry', () => {
   it('keeps journal canonical actions aligned with the actual tool schema', () => {
     const journalTool = createJournalTool({
       list: async () => ({ root: '/tmp/journal', notes: [] }),
-      read: async () => ({ path: 'note.md', content: '' }),
+      read: async () => ({
+        path: 'note.md',
+        content: '',
+        offsetBytes: 0,
+        nextOffsetBytes: null,
+        eof: true,
+        truncated: false,
+      }),
       write: async (path: string) => ({ path, mode: 'write', created: true }),
       append: async (path: string) => ({ path, mode: 'append', created: false }),
-      search: async (query: string) => ({ query, results: [] }),
+      search: async (query: string) => ({
+        query,
+        results: [],
+        complete: true,
+        resultLimitReached: false,
+        scannedFiles: 0,
+        scannedBytes: 0,
+      }),
     });
 
     expect(getCanonicalToolSurface('journal')?.actions?.slice().sort()).toEqual(

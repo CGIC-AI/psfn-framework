@@ -10,6 +10,29 @@ export interface ShellExecView {
   durationMs: number;
 }
 
+export interface SandboxFileReadOptions {
+  maxBytes?: number;
+  offsetBytes?: number;
+}
+
+export interface SandboxFileReadPage {
+  content: string;
+  offsetBytes: number;
+  nextOffsetBytes: number | null;
+  eof: boolean;
+  truncated: boolean;
+}
+
+/**
+ * Narrow governed file-page seam for Analysis Workbench. Production supplies
+ * the gateway filesystem operation; the LLM provider carries no filesystem
+ * authority.
+ */
+export type SandboxFileRead = (
+  path: string,
+  options?: SandboxFileReadOptions,
+) => Promise<SandboxFileReadPage>;
+
 export interface SandboxBrokerExecutionBoundary {
   kind: 'sandbox_broker';
   isolatedFromGatewaySecrets: true;

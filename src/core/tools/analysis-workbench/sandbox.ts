@@ -108,6 +108,7 @@ export class REPLSandbox {
 
     const toolchain = createToolchainCapabilities({
       gatewayCaps,
+      fileRead: this.deps.fileRead,
       budgetRef: this.budgetRef,
     });
 

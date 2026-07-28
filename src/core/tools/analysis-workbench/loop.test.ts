@@ -874,24 +874,21 @@ describe('runRLMLoop', () => {
   });
 
   it('enforces max tool-call budget across sandbox helper calls', async () => {
-    const llm = Object.assign(
-      sequentialLLM([
-        '```repl\nconst a = await read_file("a.txt"); const b = await read_file("b.txt"); print(a); print(b);\n```',
-        'FINAL("done")',
-      ]),
-      {
-        fsReadDetailed: vi.fn(async (path: string, options?: { offsetBytes?: number }) => ({
-          content: `content:${path}`,
-          offsetBytes: options?.offsetBytes ?? 0,
-          nextOffsetBytes: null,
-          eof: true,
-          truncated: false,
-        })),
-      },
-    ) as LLMProviderPort;
+    const llm = sequentialLLM([
+      '```repl\nconst a = await read_file("a.txt"); const b = await read_file("b.txt"); print(a); print(b);\n```',
+      'FINAL("done")',
+    ]);
+    const fileRead = vi.fn(async (path: string, options?: { offsetBytes?: number }) => ({
+      content: `content:${path}`,
+      offsetBytes: options?.offsetBytes ?? 0,
+      nextOffsetBytes: null,
+      eof: true,
+      truncated: false,
+    }));
 
     const deps = makeDeps(llm, {
       config: makeConfig({ maxToolCalls: 1, maxIterations: 5 }),
+      fileRead,
     });
     const result = await runRLMLoop('Tool budget test', deps);
 
@@ -899,7 +896,7 @@ describe('runRLMLoop', () => {
     expect(result.budgetStatus.exceeded).toBe('tool-call limit');
     expect(result.budgetStatus.toolCalls).toBe(1);
     expect(result.steps[0].output).toContain('max tool calls reached');
-    expect((llm as any).fsReadDetailed).toHaveBeenCalledTimes(1);
+    expect(fileRead).toHaveBeenCalledTimes(1);
     expect((llm.complete as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(1);
   });
 

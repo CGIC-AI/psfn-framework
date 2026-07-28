@@ -732,6 +732,7 @@ export async function runRLMLoop(
 
   const sandbox = new REPLSandbox({
     llmProvider: sandboxLLMProvider,
+    fileRead: deps.fileRead,
     executionPort: deps.executionPort ?? null,
     embeddingService: deps.embeddingService,
     memoryStore: deps.memoryStore,

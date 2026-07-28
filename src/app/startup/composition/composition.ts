@@ -83,7 +83,11 @@ import { ValuesJournalStore } from '../../../faculties/values/store.js';
 import type { IntrospectionConsentStore } from '../../../faculties/introspection/consent-store.js';
 import type { IntrospectionTurnSensitivityDecisions } from '../../../faculties/introspection/turn-sensitivity.js';
 import { DEFAULT_REPL_CONFIG, type REPLConfig } from '../../../core/tools/analysis-workbench/types.js';
-import type { SandboxExecutionPort, SandboxExecutionPortSeed } from '../../../boundary/sandbox/capabilities/contracts.js';
+import type {
+  SandboxExecutionPort,
+  SandboxExecutionPortSeed,
+  SandboxFileRead,
+} from '../../../boundary/sandbox/capabilities/contracts.js';
 import type { Scheduler } from '../../../core/scheduler/scheduler.js';
 import type { CapabilityTier } from '../../../system/config/runtime-config-contracts.js';
 import { loadCharacterCard, composeSystemPrompt } from '../../../core/identity/loader.js';
@@ -569,6 +573,7 @@ export interface ToolRuntimeOptions {
   agentLoop: SubstrateAgent;
   eventBus: EventBus;
   llmProvider: LLMProviderPort;
+  fileRead?: SandboxFileRead;
   sessionStore: SessionStore;
   embeddingService: EmbeddingProviderPort;
   memoryStore: MemoryStorePort;
@@ -676,6 +681,7 @@ export function wireShardAndThinkRuntime(options: ToolRuntimeOptions): ShardExec
 
   options.agentLoop.registerTool(createAnalysisWorkbenchTool({
     llmProvider: options.llmProvider,
+    fileRead: options.fileRead,
     embeddingService: options.embeddingService,
     memoryStore: options.memoryStore,
     sessionManager: options.sessionManager,

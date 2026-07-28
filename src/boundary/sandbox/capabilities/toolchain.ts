@@ -1,6 +1,9 @@
 import type { FsListView, GatewayREPLCapabilities, SandboxBudgetRef } from './contracts.js';
 import { FILESYSTEM_DIRECT_READ_CONTRACT } from '../../integrations/filesystem/ops.js';
-import type { FsReadResult } from '../../gateway/protocol.js';
+import type {
+  SandboxFileRead,
+  SandboxFileReadPage,
+} from '../../../shared/contracts/sandbox-analysis-contracts.js';
 import {
   consumeToolCallBudget,
   toErrorMessage,
@@ -17,7 +20,7 @@ export interface ReadFileOptions {
   offsetBytes?: number;
 }
 
-export type ReadFileResult = FsReadResult | { error: string };
+export type ReadFileResult = SandboxFileReadPage | { error: string };
 
 export interface ToolchainCapabilities {
   read_file: (path: string, options?: ReadFileOptions) => Promise<ReadFileResult>;
@@ -27,6 +30,7 @@ export interface ToolchainCapabilities {
 
 interface CreateToolchainCapabilitiesOptions {
   gatewayCaps: GatewayREPLCapabilities;
+  fileRead?: SandboxFileRead;
   budgetRef?: SandboxBudgetRef;
 }
 
@@ -92,7 +96,7 @@ export function createToolchainCapabilities(
     if (!consumeToolCallBudget(options.budgetRef)) {
       return { error: TOOL_CALL_BUDGET_EXCEEDED_MESSAGE };
     }
-    if (typeof options.gatewayCaps.fsReadDetailed !== 'function') {
+    if (typeof options.fileRead !== 'function') {
       return { error: 'read_file unavailable: requires governed gateway fs.read paging and audit path' };
     }
 
@@ -106,7 +110,7 @@ export function createToolchainCapabilities(
     }
 
     try {
-      return await options.gatewayCaps.fsReadDetailed(normalizedPath, {
+      return await options.fileRead(normalizedPath, {
         maxBytes: FILESYSTEM_DIRECT_READ_CONTRACT.maxBytes,
         offsetBytes: normalizedOffset.offsetBytes,
       });

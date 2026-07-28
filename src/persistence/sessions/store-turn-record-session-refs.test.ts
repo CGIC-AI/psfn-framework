@@ -359,7 +359,7 @@ describe('SessionStore top-level turn-message CogSec gating (psfn-framework-sm9l
     const found = store.findTurnRecord(channelId, record.turnId);
     const sourceRecent = store.getRecentSourceTurnRecords(channelId, 10);
     const sourceFound = store.findSourceTurnRecord(channelId, channelId, record.turnId);
-    const uniqueSource = store.findUniqueSourceTurnRecord(channelId, record.turnId);
+    const uniqueSource = await store.findUniqueSourceTurnRecord(channelId, record.turnId);
     for (const candidate of [
       recent[0],
       found,

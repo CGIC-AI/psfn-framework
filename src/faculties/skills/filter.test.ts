@@ -26,7 +26,6 @@ function makeEntry(overrides?: Partial<SkillEntry>): SkillEntry {
       env: ['OPENROUTER_API_KEY'],
       config: ['enabled'],
     },
-    content: '# Git Ops',
     absolutePath: '/repo/skills/git-ops/SKILL.md',
     relativePath: 'skills/git-ops/SKILL.md',
     source: 'bundled',

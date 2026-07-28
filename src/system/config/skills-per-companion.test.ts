@@ -78,7 +78,7 @@ describe('skills per-companion rooting (dnll.9)', () => {
       .toEqual(['system-only']);
   });
 
-  it('keeps enabled sets, personal skill roots, and telemetry isolated by companion', () => {
+  it('keeps enabled sets, personal skill roots, and telemetry isolated by companion', async () => {
     const root = makeDir('psfn-skills-runtime-');
     const systemDataDir = join(root, 'system');
     const companionA = join(root, 'companion-a');
@@ -107,8 +107,8 @@ describe('skills per-companion rooting (dnll.9)', () => {
       isBinaryAvailable: () => true,
     });
 
-    const includedA = runtimeA.getSnapshot().includedSkills.map(skill => skill.name);
-    const includedB = runtimeB.getSnapshot().includedSkills.map(skill => skill.name);
+    const includedA = (await runtimeA.getSnapshot()).includedSkills.map(skill => skill.name);
+    const includedB = (await runtimeB.getSnapshot()).includedSkills.map(skill => skill.name);
     expect(includedA).toContain('personal-a');
     expect(includedA).not.toContain('personal-b');
     expect(includedA).not.toContain('deployment-skill');
@@ -116,7 +116,7 @@ describe('skills per-companion rooting (dnll.9)', () => {
     expect(includedB).not.toContain('personal-a');
     expect(includedB).toContain('deployment-skill');
 
-    runtimeA.recordSkillInvocation('personal-a', {
+    await runtimeA.recordSkillInvocation('personal-a', {
       outcome: 'success',
       durationMs: 1,
     });

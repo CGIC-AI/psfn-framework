@@ -844,7 +844,7 @@ function createRuntime(params: {
     normalizeTurnPromptOverride: vi.fn(() => ({ mode: 'default' })),
     resolveResponseStyle: vi.fn(() => 'concise'),
     buildPromptTemplateVariables: vi.fn(() => ({})),
-    buildDynamicPromptTemplateVariables: vi.fn(() => ({ ...BASE_TURN_PROMPT_VARIABLES })),
+    buildDynamicPromptTemplateVariables: vi.fn(async () => ({ ...BASE_TURN_PROMPT_VARIABLES })),
     setCurrentSelfModelState: vi.fn(),
     setCurrentTurnDisclosureLineage: vi.fn(),
     buildRuntimeContext: vi.fn(() => ''),

@@ -287,7 +287,7 @@ describe('skills tools', () => {
         action: 'view',
         name: 'incident-runbook',
       });
-      runtime.recordSkillInvocation('incident-runbook', {
+      await runtime.recordSkillInvocation('incident-runbook', {
         outcome: 'failure',
         durationMs: 50,
         occurredAt: '2026-06-29T12:00:00.000Z',

@@ -16,7 +16,6 @@ function makeEntry(
       env: [],
       config: [],
     },
-    content: `# ${name}\nDetailed instructions for ${name}.`,
     absolutePath: `/repo/skills/${name}/SKILL.md`,
     relativePath: `skills/${name}/SKILL.md`,
     source: 'bundled',

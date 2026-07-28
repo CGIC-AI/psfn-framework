@@ -363,7 +363,7 @@ describe('managed skill write intake gating', () => {
     });
     const before = runtime.getStore().getByName('stable-skill');
     expect(before).not.toBeNull();
-    runtime.getSnapshot();
+    await runtime.getSnapshot();
     const update = vi.spyOn(runtime.getStore(), 'update');
     const invalidate = vi.spyOn(runtime, 'invalidate');
 

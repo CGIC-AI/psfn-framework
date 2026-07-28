@@ -212,6 +212,11 @@ export function buildAgentControlPlane(
       { step: 'unregister gateway disconnect hook', action: () => unregisterGatewayDisconnect() },
       { step: 'emit system.shutdown event', action: () => eventBus.emit('system.shutdown', {}) },
       { step: 'stop debug observer', action: () => stopDebugObserver() },
+      {
+        step: 'abort background work recovery',
+        action: () => agentLoop.abortBackgroundWorkRecovery(),
+        failClosed: true,
+      },
       { step: 'stop scheduler', action: () => scheduler.stop() },
       {
         step: 'stop durable background work supervisor',

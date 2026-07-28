@@ -41,6 +41,7 @@ describe('agent control plane', () => {
     expect(controlPlaneSource).toContain("executionMode: kubeLifecycle ? 'immediate' : 'deferred'");
     expect(controlPlaneSource).toContain('unregister deferred lifecycle actions');
     expect(controlPlaneSource).toContain('unregister gateway disconnect hook');
+    expect(controlPlaneSource).toContain("step: 'abort background work recovery'");
     expect(controlPlaneSource).toContain("step: 'stop durable background work supervisor'");
     expect(controlPlaneSource).toContain('failClosed: true');
     expect(controlPlaneSource).toContain('write graceful shutdown markers');
@@ -50,6 +51,17 @@ describe('agent control plane', () => {
     expect(readSource('main.ts')).toContain(
       'shutdownTargets.skillUsageTelemetry = coreRuntime.skillsRuntime',
     );
+    const abortRecoveryIndex = controlPlaneSource.indexOf(
+      "step: 'abort background work recovery'",
+    );
+    const stopSchedulerIndex = controlPlaneSource.indexOf("step: 'stop scheduler'");
+    const stopSupervisorIndex = controlPlaneSource.indexOf(
+      "step: 'stop durable background work supervisor'",
+      stopSchedulerIndex,
+    );
+    expect(abortRecoveryIndex).toBeGreaterThan(-1);
+    expect(stopSchedulerIndex).toBeGreaterThan(abortRecoveryIndex);
+    expect(stopSupervisorIndex).toBeGreaterThan(stopSchedulerIndex);
   });
 
   it('registers deferred handlers and the target command before starting restored actions', () => {

@@ -7,6 +7,7 @@ import {
   mkdtempSync,
   readFileSync,
   readdirSync,
+  renameSync,
   rmSync,
   writeFileSync,
 } from 'node:fs';
@@ -991,6 +992,119 @@ describe('SessionStore', () => {
       .toEqual([turnId]);
   });
 
+  it('keeps sealed signed tombstones authoritative over a stale unsigned index', async () => {
+    const channelId = 'api:recovery-sealed-authority';
+    const turnId = createTurnId(1_700_000_025_000);
+    const keyring = buildSessionHmacKeyring({
+      serializedKeys: 'v1:recovery-sealed-test-key',
+      activeVersion: 'v1',
+    });
+    expect(keyring).not.toBeNull();
+    const writer = new SessionStore(dir, { integrityKeyring: keyring });
+    writer.append({
+      channelId,
+      role: 'user',
+      content: 'sealed durable owner',
+      timestamp: 1_700_000_025_000,
+      turnId,
+    });
+    await writer.redactTurn(channelId, turnId, {
+      actor: 'admin:test',
+      reason: 'privacy request',
+      timestamp: 1_700_000_025_100,
+    });
+
+    const activePath = findSessionJournalPath(dir, 'recovery-sealed-authority');
+    const sealedPath = activePath.replace(/\.jsonl$/u, '.00001.jsonl');
+    renameSync(activePath, sealedPath);
+    writeFileSync(activePath, '');
+    const record = {
+      ...buildTurnRecordFixture(channelId, 0, turnId),
+      backgroundWorkHandoff: { schemaVersion: 1 as const, jobs: [] },
+    };
+    const scanStore = new SessionStore(dir, {
+      integrityKeyring: keyring,
+      turnRecordStore: createRecoveryCandidateStore([record]),
+    });
+
+    const indexPath = join(dir, '_channel_index.json');
+    const indexPayload = JSON.parse(readFileSync(indexPath, 'utf8')) as {
+      channels: Record<string, {
+        activeTurnTombstoneCount?: number;
+        activeTurnTombstoneIds?: string[];
+      }>;
+    };
+    indexPayload.channels[channelId]!.activeTurnTombstoneCount = 0;
+    indexPayload.channels[channelId]!.activeTurnTombstoneIds = [];
+    writeFileSync(indexPath, JSON.stringify(indexPayload));
+
+    expect(await collectRecoverableRecords(scanStore, [channelId])).toEqual([]);
+
+    const actionWriter = new SessionStore(dir, { integrityKeyring: keyring });
+    await actionWriter.restoreTurn(channelId, turnId, {
+      actor: 'admin:test',
+      reason: 'approved restore',
+      timestamp: 1_700_000_025_200,
+    });
+    expect((await collectRecoverableRecords(scanStore, [channelId])).map(candidate => candidate.turnId))
+      .toEqual([turnId]);
+
+    await actionWriter.redactTurn(channelId, turnId, {
+      actor: 'admin:test',
+      reason: 'privacy request reinstated',
+      timestamp: 1_700_000_025_300,
+    });
+    expect(await collectRecoverableRecords(scanStore, [channelId])).toEqual([]);
+  });
+
+  it('keeps recovery authority descriptors constant across a long L0 chain', async () => {
+    const channelId = 'api:recovery-low-fd-chain';
+    const turnId = createTurnId(1_700_000_027_000);
+    store.append({
+      channelId,
+      role: 'user',
+      content: 'root owner',
+      timestamp: 1_700_000_027_000,
+      turnId,
+    });
+    const rootPath = findSessionJournalPath(dir, 'recovery-low-fd-chain');
+    const rootStem = rootPath.slice(0, -'.jsonl'.length);
+    for (let segmentNumber = 2; segmentNumber <= 80; segmentNumber += 1) {
+      writeFileSync(
+        `${rootStem}.segment-${String(segmentNumber).padStart(4, '0')}.jsonl`,
+        `${JSON.stringify({
+          type: 'message',
+          id: segmentNumber,
+          channelId,
+          role: 'assistant',
+          content: `segment-${segmentNumber}`,
+          timestamp: 1_700_000_027_000 + segmentNumber,
+        })}\n`,
+      );
+    }
+    const record = {
+      ...buildTurnRecordFixture(channelId, 0, turnId),
+      backgroundWorkHandoff: { schemaVersion: 1 as const, jobs: [] },
+    };
+    const scanStore = new SessionStore(dir, {
+      turnRecordStore: createRecoveryCandidateStore([record]),
+    });
+    const stats: TurnRecordRecoveryScanStats = {
+      bytesRead: 0,
+      rowsScanned: 0,
+      filesScanned: 0,
+      candidatesYielded: 0,
+      peakIdentityRowsInMemory: 0,
+      sqliteCacheBytes: 0,
+      maxRowBytes: 0,
+    };
+
+    expect((await collectRecoverableRecords(scanStore, [channelId], stats))
+      .map(candidate => candidate.turnId)).toEqual([turnId]);
+    expect(stats.authorityFilesScanned).toBe(80);
+    expect(stats.authorityPeakOpenFilesOffPrimary).toBe(1);
+  });
+
   it('does not let a stale unsigned index or unsigned restore authorize recovery', async () => {
     const channelId = 'api:recovery-unsigned-restore';
     const turnId = createTurnId(1_700_000_030_000);
@@ -1053,6 +1167,30 @@ describe('SessionStore', () => {
   });
 
   it('fails recovery closed when L0 authority is malformed or keeps changing', async () => {
+    const gapChannel = 'api:recovery-gapped-generation';
+    const gapTurnId = createTurnId(1_700_000_039_000);
+    store.append({
+      channelId: gapChannel,
+      role: 'user',
+      content: 'owner',
+      timestamp: 1_700_000_039_000,
+      turnId: gapTurnId,
+    });
+    const gapPath = findSessionJournalPath(dir, 'recovery-gapped-generation');
+    renameSync(gapPath, gapPath.replace(/\.jsonl$/u, '.00001.jsonl'));
+    writeFileSync(gapPath.replace(/\.jsonl$/u, '.00003.jsonl'), '\n');
+    writeFileSync(gapPath, '');
+    const gapRecord = {
+      ...buildTurnRecordFixture(gapChannel, 0, gapTurnId),
+      backgroundWorkHandoff: { schemaVersion: 1 as const, jobs: [] },
+    };
+    const gapStore = new SessionStore(dir, {
+      turnRecordStore: createRecoveryCandidateStore([gapRecord]),
+    });
+
+    await expect(collectRecoverableRecords(gapStore, [gapChannel]))
+      .rejects.toMatchObject({ name: 'TurnRecordRecoveryEvidenceError', code: 'ESTALE' });
+
     const malformedChannel = 'api:recovery-malformed-owner';
     const malformedTurnId = createTurnId(1_700_000_040_000);
     store.append({

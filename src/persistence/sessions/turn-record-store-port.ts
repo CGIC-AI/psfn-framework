@@ -71,6 +71,7 @@ export interface TurnRecordRecoveryScanStats {
   authorityFilesScanned?: number;
   authorityMainMessageBytesRetained?: number;
   authorityOwnersScanned?: number;
+  authorityPeakOpenFilesOffPrimary?: number;
   authorityPeakCachedOwners?: number;
   authorityPeakCachedTombstones?: number;
   authorityPeakResultBytes?: number;

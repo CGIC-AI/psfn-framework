@@ -14,6 +14,7 @@ export interface TurnTombstoneAuthorityScanStats {
   actionsReturned: number;
   bytesRead: number;
   filesScanned: number;
+  peakOpenFiles: number;
   peakRowBytes: number;
   rowsScanned: number;
 }

@@ -1,7 +1,7 @@
 import type { Scheduler } from '../../scheduler/scheduler.js';
 import type { SubstrateAgent } from '../substrate-agent.js';
 import type { MemoryWriter } from '../../../faculties/memory/writer.js';
-import type { TurnRecord } from '../../../shared/contracts/runtime.js';
+import type { TurnRecordUsageRecord } from '../../../persistence/sessions/turn-record-store-port.js';
 import type { ToolUsageEvaluatorConfig } from '../../../system/config/scheduler-config.js';
 import {
   createToolUsageEvaluator,
@@ -23,7 +23,7 @@ export interface ToolUsageTurnRecordAccess {
   /** Logical-session/channel keys for this companion. */
   listChannelKeys: () => readonly string[];
   /** Tombstone-aware newest-first read of a channel's turn records. */
-  readRecentTurnRecords: (channelKey: string, limit: number) => readonly TurnRecord[];
+  readRecentTurnRecords: (channelKey: string, limit: number) => readonly TurnRecordUsageRecord[];
 }
 
 /**

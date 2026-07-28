@@ -1400,31 +1400,15 @@ export class SessionManager implements SessionManagerTypeSurface {
    * eligibility is checked here so tombstoned or physically duplicated turns
    * never reach the queue replay path.
    */
-  listRecoverableBackgroundWorkTurnRecords(): TurnRecord[] {
+  streamRecoverableBackgroundWorkTurnRecords(): AsyncIterable<TurnRecord> {
     const sourceChannelIds = new Set<string>();
     for (const channel of this.store.listChannels()) {
       sourceChannelIds.add(channel.channelId);
       sourceChannelIds.add(channel.sessionId);
     }
-    const recovered = new Map<string, TurnRecord>();
-    for (const sourceChannelId of sourceChannelIds) {
-      for (const record of this.store.getRecentSourceTurnRecords(
-        sourceChannelId,
-        Number.MAX_SAFE_INTEGER,
-      )) {
-        if (record.status !== 'completed' || !record.backgroundWorkHandoff) continue;
-        const logicalSessionId = record.sessionId ?? record.channelId;
-        if (!this.store.isSourceTurnRecordEligible(
-          record.channelId,
-          logicalSessionId,
-          record.turnId,
-        )) continue;
-        recovered.set(`${record.channelId}\u0000${record.turnId}`, record);
-      }
-    }
-    return [...recovered.values()].sort((left, right) => (
-      left.completedAt - right.completedAt || left.turnId.localeCompare(right.turnId)
-    ));
+    return this.store.streamRecoverableBackgroundWorkTurnRecords(
+      [...sourceChannelIds],
+    );
   }
 
   getRoleEnvelopeRefsForEntries(channelId: string, sessionEntryIds: readonly number[]): string[] {

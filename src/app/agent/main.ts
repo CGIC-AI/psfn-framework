@@ -814,7 +814,9 @@ async function main(): Promise<void> {
       agent: agentLoop,
       turnRecordAccess: {
         listChannelKeys: () => sessionStore.listChannels().map(channel => channel.sessionId),
-        readRecentTurnRecords: (channelKey, limit) => sessionStore.getRecentTurnRecords(channelKey, limit),
+        readRecentTurnRecords: (channelKey, limit) => (
+          sessionStore.getRecentTurnRecordUsage(channelKey, limit)
+        ),
       },
       getMemoryWriter: () => memoryWriter,
       config: schedulerConfig.toolUsageEvaluator,

@@ -761,6 +761,177 @@ describe('SessionStore', () => {
       .toThrow('duplicated and cannot establish a recovery identity');
   });
 
+  it('uses content-free exact identity checks for recovered inbound delivery and eligibility', () => {
+    const sourceChannelId = 'api:exact-identity';
+    const turnId = createTurnId(1_700_000_001_500);
+    store.append({
+      channelId: sourceChannelId,
+      role: 'user',
+      content: 'durable owner',
+      timestamp: 1_700_000_001_500,
+      turnId,
+    });
+    const record = buildTurnRecordFixture(sourceChannelId, 1, turnId);
+    const countTurnRecordsByTurnId = vi.fn(() => 1);
+    const findTurnRecord = vi.fn(() => record);
+    const exactStore = new SessionStore(dir, {
+      turnRecordStore: {
+        appendTurnRecord: vi.fn(),
+        readRecentTurnRecords: vi.fn(() => {
+          throw new Error('old-fat bulk read must not run for exact identity');
+        }),
+        countTurnRecordsByTurnId,
+        findTurnRecord,
+      },
+    });
+
+    expect(exactStore.findUniqueSourceTurnRecord(sourceChannelId, turnId)).toEqual(record);
+    expect(exactStore.isSourceTurnRecordEligible(sourceChannelId, sourceChannelId, turnId)).toBe(true);
+    expect(countTurnRecordsByTurnId).toHaveBeenCalledTimes(2);
+    expect(findTurnRecord).toHaveBeenCalledTimes(2);
+  });
+
+  it('streams all historical handoffs while excluding duplicated sources', async () => {
+    const sourceChannelId = 'api:streamed-recovery';
+    const uniqueTurnId = createTurnId(1_700_000_002_000);
+    const duplicatedTurnId = createTurnId(1_700_000_002_100);
+    store.append({
+      channelId: sourceChannelId,
+      role: 'user',
+      content: 'recovery owner',
+      timestamp: 1_700_000_002_000,
+      turnId: uniqueTurnId,
+    });
+    const handoff = (turnId: TurnRecord['turnId'], index: number): TurnRecord => ({
+      ...buildTurnRecordFixture(sourceChannelId, index, turnId),
+      backgroundWorkHandoff: { schemaVersion: 1, jobs: [] },
+    });
+    const unique = handoff(uniqueTurnId, 1);
+    const duplicated = handoff(duplicatedTurnId, 2);
+    const scanStore = new SessionStore(dir, {
+      turnRecordStore: {
+        appendTurnRecord: vi.fn(),
+        readRecentTurnRecords: vi.fn(() => {
+          throw new Error('bulk TurnRecord reads are forbidden during startup recovery');
+        }),
+        streamTurnRecordsForRecovery: async function* () {
+          yield unique;
+          yield duplicated;
+          yield { ...duplicated, backgroundWorkHandoff: undefined };
+        },
+        findTurnRecord: vi.fn(() => null),
+      },
+    });
+
+    const recovered: TurnRecord[] = [];
+    for await (const record of scanStore.streamRecoverableBackgroundWorkTurnRecords([
+      sourceChannelId,
+    ])) {
+      recovered.push(record);
+    }
+
+    expect(recovered.map(record => record.turnId)).toEqual([uniqueTurnId]);
+  });
+
+  it('preserves global chronological recovery order across source streams', async () => {
+    const sources = ['api:recovery-order-a', 'discord:recovery-order-b'];
+    const records = new Map(sources.map((sourceChannelId, sourceIndex) => {
+      store.append({
+        channelId: sourceChannelId,
+        role: 'user',
+        content: 'recovery owner',
+        timestamp: 1_700_000_002_500 + sourceIndex,
+        turnId: createTurnId(1_700_000_002_500 + sourceIndex),
+      });
+      return [sourceChannelId, [0, 2].map(offset => ({
+        ...buildTurnRecordFixture(
+          sourceChannelId,
+          offset,
+          createTurnId(1_700_000_002_500 + sourceIndex + offset * 2),
+        ),
+        completedAt: 1_700_000_002_500 + sourceIndex + offset * 2,
+        backgroundWorkHandoff: { schemaVersion: 1 as const, jobs: [] },
+      }))] as const;
+    }));
+    const scanStore = new SessionStore(dir, {
+      turnRecordStore: {
+        appendTurnRecord: vi.fn(),
+        readRecentTurnRecords: vi.fn(),
+        streamTurnRecordsForRecovery: async function* (sourceChannelId) {
+          yield* records.get(sourceChannelId) ?? [];
+        },
+        findTurnRecord: vi.fn(() => null),
+      },
+    });
+
+    const completedAt: number[] = [];
+    for await (const record of scanStore.streamRecoverableBackgroundWorkTurnRecords(sources)) {
+      completedAt.push(record.completedAt);
+    }
+
+    expect(completedAt).toEqual([...completedAt].sort((left, right) => left - right));
+  });
+
+  it('retains at most one full old-fat record while scanning a large recovery fixture', async () => {
+    const sourceChannelId = 'api:old-fat-recovery';
+    const fixtureRecords = 1_024;
+    const oldFatBody = 'x'.repeat(128 * 1024);
+    const turnIds = Array.from(
+      { length: fixtureRecords },
+      (_, index) => createTurnId(1_700_000_003_000 + index),
+    );
+    let inFlightRecords = 0;
+    let peakInFlightRecords = 0;
+    store.append({
+      channelId: sourceChannelId,
+      role: 'user',
+      content: 'recovery owner',
+      timestamp: 1_700_000_003_000,
+      turnId: createTurnId(1_700_000_003_000),
+    });
+    const scanStore = new SessionStore(dir, {
+      turnRecordStore: {
+        appendTurnRecord: vi.fn(),
+        readRecentTurnRecords: vi.fn(() => {
+          throw new Error('bulk TurnRecord reads are forbidden during startup recovery');
+        }),
+        streamTurnRecordsForRecovery: async function* () {
+          for (let index = 0; index < fixtureRecords; index += 1) {
+            const turnId = turnIds[index]!;
+            const record = {
+              ...buildTurnRecordFixture(sourceChannelId, index, turnId),
+              assistantMessage: {
+                role: 'assistant' as const,
+                content: oldFatBody,
+                timestamp: 1_700_000_003_500 + index,
+              },
+              backgroundWorkHandoff: { schemaVersion: 1 as const, jobs: [] },
+            };
+            inFlightRecords += 1;
+            peakInFlightRecords = Math.max(peakInFlightRecords, inFlightRecords);
+            try {
+              yield record;
+            } finally {
+              inFlightRecords -= 1;
+            }
+          }
+        },
+        findTurnRecord: vi.fn(() => null),
+      },
+    });
+
+    let recovered = 0;
+    for await (const _record of scanStore.streamRecoverableBackgroundWorkTurnRecords([
+      sourceChannelId,
+    ])) {
+      recovered += 1;
+    }
+
+    expect(recovered).toBe(fixtureRecords);
+    expect(peakInFlightRecords).toBe(1);
+    expect(inFlightRecords).toBe(0);
+  });
+
   it('bounds tombstone-filtered turn-record reads with iterative overscan instead of scanning the full archive', async () => {
     const channelId = 'api:tombstone-overscan';
     const requestedLimits: number[] = [];

@@ -17,7 +17,7 @@
 
 import type { ModelUsageRange } from '../../../shared/telemetry/model-usage.js';
 import { resolveModelUsageRange } from '../../../shared/telemetry/model-usage-range.js';
-import type { TurnRecord } from '../../../shared/contracts/runtime.js';
+import type { TurnRecordUsageRecord } from '../../../persistence/sessions/turn-record-store-port.js';
 import { isCanonicalFirstPartyToolName } from './registry.js';
 import type { ToolUsageStat } from './usage-ranking.js';
 import { resolveToolCallOutcome } from '../../../shared/contracts/tool-call-outcome.js';
@@ -67,7 +67,7 @@ export interface TurnRecordToolUsageSourceDeps {
    * Tombstone-aware reads are preferred (deleted turns excluded). The source
    * only reads — it never mutates the stream.
    */
-  readRecentTurnRecords: (channelKey: string, limit: number) => readonly TurnRecord[];
+  readRecentTurnRecords: (channelKey: string, limit: number) => readonly TurnRecordUsageRecord[];
   /** Durable window the ranking is computed over. */
   usageWindow: ToolUsageWindow;
   /** IANA timezone for calendar-range resolution; defaults to UTC. */
@@ -79,9 +79,9 @@ export interface TurnRecordToolUsageSourceDeps {
 }
 
 /** Newest-N records read from one channel before the per-channel cap trips. */
-const DEFAULT_MAX_TURN_RECORDS_PER_CHANNEL = 5_000;
+const DEFAULT_MAX_TURN_RECORDS_PER_CHANNEL = 32;
 /** Newest-N records read across all channels before the total cap trips. */
-const DEFAULT_MAX_TURN_RECORDS_TOTAL = 50_000;
+const DEFAULT_MAX_TURN_RECORDS_TOTAL = 128;
 
 function normalizeCap(value: number | undefined, fallback: number): number {
   if (typeof value !== 'number' || !Number.isFinite(value) || value < 1) return fallback;

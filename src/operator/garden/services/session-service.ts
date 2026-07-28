@@ -302,7 +302,18 @@ function makeCompactionInvalidator(sessionStore: SessionStore) {
 
 export class AdminSessionDataService implements AdminSessionService {
   private readonly turnObservability: AdminSessionTurnObservabilityStore;
-  private readonly cogSecEventStore?: CogSecEventStore;
+  /**
+   * Provider, not an instance. `CogSecEventStore` snapshots the events file
+   * into memory at construction and never reloads it, while the agent's
+   * session-integrity observer and the intake quarantine surfaces write that
+   * same file through their own short-lived stores. A Garden-lifetime instance
+   * would therefore serve the boot-time snapshot forever, and the operator
+   * attention badge would only ever reflect incidents that already existed when
+   * the process started — never one detected while it runs, which is the whole
+   * point of the badge (bead g59z). Mint per call, matching
+   * `local-admin-contract`'s `cogSecEvents` provider for the quarantine service.
+   */
+  private readonly cogSecEvents?: () => CogSecEventStore;
   private readonly cogSecForensicArchive?: CogSecForensicArchive;
 
   constructor(private readonly deps: {
@@ -314,34 +325,42 @@ export class AdminSessionDataService implements AdminSessionService {
     memoryStore?: MemoryStorePort | null;
     subsystemOutputRefStore?: Pick<BackgroundWorkStorePort, 'getSubsystemOutputProjection'> | null;
     config?: SubstrateConfig;
-    cogSecEventStore?: CogSecEventStore;
+    cogSecEvents?: () => CogSecEventStore;
     cogSecForensicArchive?: CogSecForensicArchive;
   }) {
     this.turnObservability = new AdminSessionTurnObservabilityStore({
       eventBus: deps.eventBus,
     });
-    if (deps.cogSecEventStore) {
-      this.cogSecEventStore = deps.cogSecEventStore;
-    }
     if (deps.cogSecForensicArchive) {
       this.cogSecForensicArchive = deps.cogSecForensicArchive;
     }
-    if ((!this.cogSecEventStore || !this.cogSecForensicArchive) && deps.config) {
+    if (deps.cogSecEvents) {
+      this.cogSecEvents = deps.cogSecEvents;
+    }
+    if ((!this.cogSecEvents || !this.cogSecForensicArchive) && deps.config) {
       const companionDataDir = resolveConfiguredCompanionDataDir(deps.config);
-      if (!this.cogSecEventStore) {
-        this.cogSecEventStore = new CogSecEventStore(resolveCogSecEventsPath(companionDataDir));
+      if (!this.cogSecEvents) {
+        const eventsPath = resolveCogSecEventsPath(companionDataDir);
+        this.cogSecEvents = (): CogSecEventStore => new CogSecEventStore(eventsPath);
       }
       if (!this.cogSecForensicArchive) {
+        // Stateless: it resolves paths under its root per call, so a single
+        // long-lived instance cannot go stale the way the event store can.
         this.cogSecForensicArchive = new CogSecForensicArchive(resolveCogSecForensicArchiveDir(companionDataDir));
       }
     }
   }
 
+  /**
+   * Returns a store reading current on-disk state. Each caller must resolve it
+   * once and reuse that instance for the whole operation: a multi-step
+   * read-modify-write like `applyCogSecRemediation` has to see its own writes.
+   */
   private requireCogSecEventStore(): CogSecEventStore {
-    if (!this.cogSecEventStore) {
+    if (!this.cogSecEvents) {
       throw new Error('CogSec event store is not configured');
     }
-    return this.cogSecEventStore;
+    return this.cogSecEvents();
   }
 
   private requireCogSecForensicArchive(): CogSecForensicArchive {

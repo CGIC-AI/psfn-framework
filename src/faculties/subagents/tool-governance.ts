@@ -176,7 +176,7 @@ const WIKI_POLICY: SubagentToolGovernancePolicy = {
     }
     // Mirrors normalizeAction in faculties/wiki/tools.ts: an omitted action
     // only ever resolves to a read (search/read/list) or an error, so the
-    // read defaults keep working from a subagent context.
+    // read defaults keep working from an automaton context.
     const hasQuery = typeof params.query === 'string' && params.query.trim().length > 0;
     const hasId = typeof params.id === 'string' && params.id.trim().length > 0;
     const hasWriteFields = typeof params.title === 'string' || typeof params.body === 'string';
@@ -304,11 +304,11 @@ function denyGovernedCall(
   });
   const summary = classification.kind === 'mutation'
     ? `Error: ${tool.name} action "${classification.action}" mutates companion-canonical state and is `
-      + 'not available from a subagent context (fail closed).'
+      + 'not available from an automaton context (fail closed).'
     : classification.kind === 'unknown'
-      ? `Error: unrecognized ${tool.name} action "${classification.action}" from a subagent context is `
+      ? `Error: unrecognized ${tool.name} action "${classification.action}" from an automaton context is `
         + 'denied (fail closed).'
-      : `Error: ${tool.name} calls from a subagent context must resolve to an explicit read action `
+      : `Error: ${tool.name} calls from an automaton context must resolve to an explicit read action `
         + '(fail closed).';
   return textResultWithError(
     `${summary} Read actions available: ${policy.readActionsHelp}. `

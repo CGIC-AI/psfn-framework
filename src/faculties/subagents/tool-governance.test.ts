@@ -110,7 +110,10 @@ describe('governed orient tool', () => {
       action,
       reason: 'mutation_not_permitted',
     });
-    expect(resultText(result)).toContain('not available from a subagent context');
+    expect(resultText(result)).toContain('not available from an automaton context');
+    // Register guard (rqn1.9): the denial text the automaton reads names the
+    // automata register, never the clinical "subagent" (charter 6.28/8.12).
+    expect(resultText(result)).not.toMatch(/\bsubagent\b/iu);
   });
 
   it('denies an unknown action (fail closed)', async () => {

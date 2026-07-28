@@ -279,10 +279,10 @@ export class SubagentFaculty implements SubagentControlPort {
         request,
         subagentId,
         'concurrency_limit',
-        `Subagent limit reached (${this.maxConcurrent} concurrent). Wait for active subagent tasks to finish.`,
+        `Automata limit reached (${this.maxConcurrent} concurrent). Wait for active automata tasks to finish.`,
       );
       throw new Error(
-        `Subagent limit reached (${this.maxConcurrent} concurrent). Wait for active subagent tasks to finish.`,
+        `Automata limit reached (${this.maxConcurrent} concurrent). Wait for active automata tasks to finish.`,
       );
     }
 
@@ -295,11 +295,11 @@ export class SubagentFaculty implements SubagentControlPort {
         request,
         subagentId,
         'missing_capabilities',
-        `Subagent routing denied: "${request.name}" is missing required capability tokens `
+        `Automata routing denied: "${request.name}" is missing required capability tokens `
         + `(${missingCapabilities.join(', ')}).`,
       );
       throw new Error(
-        `Subagent routing denied: "${request.name}" is missing required capability tokens `
+        `Automata routing denied: "${request.name}" is missing required capability tokens `
         + `(${missingCapabilities.join(', ')}).`,
       );
     }
@@ -310,7 +310,7 @@ export class SubagentFaculty implements SubagentControlPort {
     );
     if (capabilityGrant.deniedExplicitTokens.length > 0) {
       const deniedTokens = capabilityGrant.deniedExplicitTokens.join(', ');
-      const error = `Subagent capability request denied: "${request.name}" requested `
+      const error = `Automata capability request denied: "${request.name}" requested `
         + `${deniedTokens}, which the parent tier "${capabilityGrant.parentTier}" does not grant.`;
       await this.emitBlockedSpawnHandoff(
         request,
@@ -335,7 +335,7 @@ export class SubagentFaculty implements SubagentControlPort {
     if (memoryWritePolicy.mode === 'elevated') {
       if (!this.auditTrail) {
         throw new Error(
-          'Subagent memory-write elevation requires an audit trail before the worker can be registered.',
+          'Automata memory-write elevation requires an audit trail before the worker can be registered.',
         );
       }
       // Record the trusted programmatic grant before registration. A missing or
@@ -409,7 +409,7 @@ export class SubagentFaculty implements SubagentControlPort {
   async message(subagentId: string, message: string): Promise<SubagentRuntimeTaskView> {
     const handle = this.requireActiveHandle(subagentId);
     if (this.isCancellationRequested(handle)) {
-      throw new Error(`Subagent "${subagentId}" is cancelling and cannot accept new messages.`);
+      throw new Error(`Automaton "${subagentId}" is cancelling and cannot accept new messages.`);
     }
     const content = normalizeRequiredText(message, 'message');
     const followUp = this.buildControlMessage(handle.channelId, content);
@@ -425,7 +425,7 @@ export class SubagentFaculty implements SubagentControlPort {
     });
     const taskView = this.getRuntimeTaskView(subagentId, { transcriptLimit: 8 });
     if (!taskView) {
-      throw new Error(`Unknown subagent task "${subagentId}".`);
+      throw new Error(`Unknown automaton task "${subagentId}".`);
     }
     return taskView;
   }
@@ -441,7 +441,7 @@ export class SubagentFaculty implements SubagentControlPort {
       return cloneSubagentResult(recentResult);
     }
 
-    throw new Error(`Unknown subagent task "${subagentId}".`);
+    throw new Error(`Unknown automaton task "${subagentId}".`);
   }
 
   async cancel(subagentId: string, reason?: string): Promise<SubagentResult> {
@@ -451,7 +451,7 @@ export class SubagentFaculty implements SubagentControlPort {
       if (recentResult) {
         return cloneSubagentResult(recentResult);
       }
-      throw new Error(`Unknown subagent task "${subagentId}".`);
+      throw new Error(`Unknown automaton task "${subagentId}".`);
     }
 
     if (!this.isCancellationRequested(handle)) {
@@ -772,7 +772,7 @@ export class SubagentFaculty implements SubagentControlPort {
   private requireActiveHandle(subagentId: string): ActiveSubagentHandle {
     const handle = this.activeHandles.get(subagentId);
     if (!handle) {
-      throw new Error(`Unknown subagent task "${subagentId}".`);
+      throw new Error(`Unknown automaton task "${subagentId}".`);
     }
     return handle;
   }
@@ -1463,7 +1463,7 @@ export class SubagentFaculty implements SubagentControlPort {
     const tier = this.resolveCapabilityTier();
     if (tier === 'custom') {
       throw new Error(
-        'Subagent capability derivation for a custom parent requires an authoritative '
+        'Automata capability derivation for a custom parent requires an authoritative '
         + 'snapshotParentCapabilityGrant provider.',
       );
     }

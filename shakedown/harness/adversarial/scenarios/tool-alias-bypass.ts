@@ -11,32 +11,39 @@
 //    versa"). If matching were canonical-name-only, the alias would slip the
 //    gate entirely.
 //
-// REACHABILITY NOTE — the 816w end-to-end fix is NOT fully on this branch.
-//   The registry's alias-aware matching (`evaluatePreToolUse` iterating
-//   `context.aliases`) IS present here and is what these scenarios drive
-//   directly against the real production module. The gate-site population of
-//   `context.aliases` — the `resolveToolAliasMatchers` helper in
-//   `src/boundary/gateway/pre-tool-hook.ts` that the fixed `createPreToolHookGate`
-//   uses — ships with 816w on `feat/s11-egress`; on THIS branch
-//   `createPreToolHookGate` still hardcodes `aliases: []` (pre-tool-hook.ts).
-//   So these scenarios locally reconstruct, from the REAL first-party tool
-//   registry (`getRetiredToolAlias` / `getCanonicalToolSurface`), the identifier
-//   set the fixed gate will feed, and assert the matching contract the fix
-//   depends on. The `selftest.ts` witness (find→fix→rerun) reproduces the
-//   pre-816w miss (empty `aliases` → the alias slips the gate) and confirms the
-//   resolved set closes it, and stands as the regression witness for when the
-//   gate-site wiring lands on the assembled base.
+// COVERAGE NOTE — the 816w end-to-end fix is now fully on the assembled base.
+//   Two layers are exercised here:
+//     (a) The registry's alias-aware matching (`evaluatePreToolUse` iterating
+//         `context.aliases`). The scenarios that reconstruct the identifier set
+//         locally (`s7_gated_tool_denied_via_alias`,
+//         `s7_policy_written_on_alias_catches_canonical`,
+//         `s7_canonical_control_and_policy_specificity`) pin this matching
+//         contract directly against the real production module.
+//     (b) The gate site itself — `createPreToolHookGate` in
+//         `src/boundary/gateway/pre-tool-hook.ts` wired with the production
+//         `resolveToolAliasMatchers` (the 816w helper in
+//         `src/core/agent/tool-surface/registry.ts`). `s7_gate_site_alias_denial`
+//         drives that end-to-end so gate-site alias resolution is LOAD-BEARING:
+//         if `resolveToolAliasMatchers` regressed to feeding an empty alias set,
+//         the alias would slip the canonical policy and that scenario would fail.
+//   The `selftest.ts` witness (find→fix→rerun) carries both the empty-`aliases`
+//   registry miss and the empty-resolver gate-site miss, and confirms the
+//   resolved set / production resolver closes each.
 
 import {
   HookMatcher,
   HookRegistry,
 } from '../../../../src/boundary/gateway/hook-registry.ts';
+import {
+  createPreToolHookGate,
+} from '../../../../src/boundary/gateway/pre-tool-hook.ts';
 import type {
   PreToolUseHookContext,
 } from '../../../../src/boundary/gateway/pre-tool-hook.ts';
 import {
   getCanonicalToolSurface,
   getRetiredToolAlias,
+  resolveToolAliasMatchers,
 } from '../../../../src/core/agent/tool-surface/registry.ts';
 import type { AdversarialScenario } from '../lib/scenario.ts';
 
@@ -200,6 +207,59 @@ export const scenarios: AdversarialScenario[] = [
         'unrelated alias "web_fetch" is ALLOWED by the shell policy (specificity holds across aliases)',
         unrelatedAlias.outcome === 'allow' && unrelatedAlias.matchedHookCount === 0,
         `outcome=${unrelatedAlias.outcome} matched=${String(unrelatedAlias.matchedHookCount)}`,
+      );
+    },
+  },
+  {
+    id: 's7_gate_site_alias_denial',
+    scenarioClass: CLASS,
+    className: CLASS_NAME,
+    seam: '816w — createPreToolHookGate + resolveToolAliasMatchers (real gate site, end-to-end)',
+    attack:
+      'Operator gates a tool by its CANONICAL name; the adversary invokes it through a retired alias. This drives the REAL production gate (createPreToolHookGate) wired with the REAL alias resolver (resolveToolAliasMatchers) — no locally reconstructed alias set — so gate-site alias resolution is load-bearing: were the resolver to feed an empty set, the alias would slip.',
+    expectation:
+      'The gate resolves the alias to its canonical sibling via resolveToolAliasMatchers and the canonical policy hook fires and BLOCKS the alias invocation. An unrelated tool is still ALLOWED — the gate stays specific and is not a blanket deny.',
+    async run(t) {
+      for (const { canonical, alias } of GATED_ALIAS_PAIRS) {
+        const registry = registryWithDenyPolicy(`gate:${canonical}`, [canonical]);
+        // Real production gate: alias resolution is done INSIDE the gate by the
+        // shipped resolveToolAliasMatchers, not reconstructed in the test.
+        const gate = createPreToolHookGate({
+          evaluator: registry,
+          getCorrelation: () => undefined,
+          resolveAliases: resolveToolAliasMatchers,
+          onDecision: () => {},
+        });
+        const aliasEval = await gate.evaluate({
+          toolName: alias,
+          params: { note: 'seeded adversarial invocation' },
+          tier: 'autonomous',
+        });
+        t.check(
+          `gate-site: alias invocation "${alias}" is BLOCKED via canonical policy "gate:${canonical}"`,
+          aliasEval?.outcome === 'block' && aliasEval.blockingHook === `gate:${canonical}`,
+          `outcome=${String(aliasEval?.outcome)} blockingHook=${String(aliasEval?.blockingHook)}`,
+        );
+      }
+
+      // Negative control: the gate stays specific — an unrelated tool is allowed
+      // even though a shell policy is registered (no blanket deny at the gate).
+      const shellRegistry = registryWithDenyPolicy('gate:shell', ['shell']);
+      const shellGate = createPreToolHookGate({
+        evaluator: shellRegistry,
+        getCorrelation: () => undefined,
+        resolveAliases: resolveToolAliasMatchers,
+        onDecision: () => {},
+      });
+      const unrelated = await shellGate.evaluate({
+        toolName: 'web',
+        params: {},
+        tier: 'autonomous',
+      });
+      t.check(
+        'gate-site: unrelated tool "web" is ALLOWED by the shell policy (no blanket deny)',
+        unrelated?.outcome === 'allow' && unrelated.matchedHookCount === 0,
+        `outcome=${String(unrelated?.outcome)} matched=${String(unrelated?.matchedHookCount)}`,
       );
     },
   },

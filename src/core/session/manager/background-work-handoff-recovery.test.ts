@@ -181,10 +181,9 @@ describe('BackgroundWorkHandoffRecovery', () => {
     const records = Array.from({ length: 5 }, (_, index) => makeRecord(index));
     const recordsByTurn = new Map(records.map(record => [record.turnId, record]));
     const recovery = new BackgroundWorkHandoffRecovery({
-      findSourceTurnRecord: (_sourceChannelId, _logicalSessionId, turnId) => (
+      findEligibleSourceTurnRecord: async (_sourceChannelId, _logicalSessionId, turnId) => (
         recordsByTurn.get(turnId) ?? null
       ),
-      isSourceTurnRecordEligible: () => true,
       withSourceTurnRecordEligibilityFence: async (_source, _session, _turn, operation) => (
         operation()
       ),
@@ -226,10 +225,9 @@ describe('BackgroundWorkHandoffRecovery', () => {
     poisonedBeforeIndex.backgroundWorkHandoff!.jobs[0]!.payloadFingerprint = '0'.repeat(64);
     const recordsByTurn = new Map([[valid.turnId, valid]]);
     const recovery = new BackgroundWorkHandoffRecovery({
-      findSourceTurnRecord: (_sourceChannelId, _logicalSessionId, turnId) => (
+      findEligibleSourceTurnRecord: async (_sourceChannelId, _logicalSessionId, turnId) => (
         recordsByTurn.get(turnId) ?? null
       ),
-      isSourceTurnRecordEligible: () => true,
       withSourceTurnRecordEligibilityFence: async (_source, _session, _turn, operation) => (
         operation()
       ),
@@ -258,10 +256,9 @@ describe('BackgroundWorkHandoffRecovery', () => {
     const projection = projectTurnRecordRecoveryCandidate(valid);
     const recordsByTurn = new Map([[valid.turnId, valid]]);
     const recovery = new BackgroundWorkHandoffRecovery({
-      findSourceTurnRecord: (_sourceChannelId, _logicalSessionId, turnId) => (
+      findEligibleSourceTurnRecord: async (_sourceChannelId, _logicalSessionId, turnId) => (
         recordsByTurn.get(turnId) ?? null
       ),
-      isSourceTurnRecordEligible: () => true,
       withSourceTurnRecordEligibilityFence: async (_source, _session, _turn, operation) => (
         operation()
       ),

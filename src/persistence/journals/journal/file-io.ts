@@ -35,9 +35,13 @@ import {
   readJsonlLineBefore,
   scanJsonlFileBackward,
 } from '../../jsonl-segments.js';
+import { readJournalEntriesBeforeAsyncOnce } from './bounded-seek.js';
 
 const DEFAULT_JOURNAL_SCAN_CHUNK_BYTES = 64 * 1024;
 const JOURNAL_SEGMENT_READ_RETRIES = 3;
+const JOURNAL_SEEK_ROW_LIMITS = Object.freeze({
+  maxBytes: 2 * 1024 * 1024,
+});
 const log = createComponentLogger('Journal');
 
 function resolveJournalMessageTurnId(entry: JournalEntry): string {
@@ -583,6 +587,7 @@ function readJournalEntriesBeforeOnce(
   ): { entry: JournalEntry; startOffset: number; endOffset: number } | null => {
     const row = readJsonlLineAtOrAfter(path, offset, {
       chunkBytes: seekChunkBytes,
+      maxLineBytes: JOURNAL_SEEK_ROW_LIMITS.maxBytes,
       stats,
       scannedFileIdentities: seekFileIdentities,
     });
@@ -602,12 +607,14 @@ function readJournalEntriesBeforeOnce(
     const previousRow = row.startOffset > 0
       ? readJsonlLineBefore(path, row.startOffset, {
         chunkBytes: seekChunkBytes,
+        maxLineBytes: JOURNAL_SEEK_ROW_LIMITS.maxBytes,
         stats,
         scannedFileIdentities: seekFileIdentities,
       })
       : previousPath
         ? readJsonlLineBefore(previousPath, statSync(previousPath).size, {
           chunkBytes: seekChunkBytes,
+          maxLineBytes: JOURNAL_SEEK_ROW_LIMITS.maxBytes,
           stats,
           scannedFileIdentities: seekFileIdentities,
         })
@@ -781,6 +788,54 @@ export function readJournalEntriesBefore(
         options.trustSeekEntry,
         options.previousFileHmac ?? null,
       );
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT' || attempt >= JOURNAL_SEGMENT_READ_RETRIES) {
+        throw error;
+      }
+    }
+  }
+}
+
+/**
+ * Cooperative request-time variant of `readJournalEntriesBefore`.
+ *
+ * Sampled current/predecessor rows are read in fixed chunks with an explicit
+ * retained-byte ceiling. Oversized seek authority fails closed instead of
+ * monopolizing the primary event loop or being parsed as truncated JSON.
+ */
+export async function readJournalEntriesBeforeAsync(
+  filePath: string,
+  options: ReadJournalBeforeOptions,
+): Promise<ReadJournalBeforeResult> {
+  const beforeId = Number.isFinite(options.beforeId)
+    ? Math.max(0, Math.floor(options.beforeId))
+    : 0;
+  const messageLimit = Number.isFinite(options.messageLimit)
+    ? Math.max(0, Math.floor(options.messageLimit))
+    : 0;
+  if (beforeId <= 0 || messageLimit <= 0) {
+    return { entries: [], quarantined: [], truncated: false };
+  }
+  const requestedChunkBytes = options.scanChunkBytes ?? DEFAULT_JOURNAL_SCAN_CHUNK_BYTES;
+  const chunkBytes = Number.isFinite(requestedChunkBytes)
+    ? Math.max(1, Math.floor(requestedChunkBytes))
+    : DEFAULT_JOURNAL_SCAN_CHUNK_BYTES;
+
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      return await readJournalEntriesBeforeAsyncOnce({
+        filePath,
+        beforeId,
+        messageLimit,
+        includeBoundaryEntry: options.includeBoundaryEntry !== false,
+        chunkBytes,
+        maxSeekLineBytes: JOURNAL_SEEK_ROW_LIMITS.maxBytes,
+        stats: options.stats,
+        trustSeekEntry: options.trustSeekEntry,
+        previousFileHmac: options.previousFileHmac ?? null,
+        parseJournalLine,
+        appendQuarantinedLine,
+      });
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT' || attempt >= JOURNAL_SEGMENT_READ_RETRIES) {
         throw error;

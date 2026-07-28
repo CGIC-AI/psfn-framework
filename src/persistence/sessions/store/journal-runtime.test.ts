@@ -302,6 +302,148 @@ describe('SessionJournalRuntime', () => {
     expect(emitted).toBe(0);
   });
 
+  it('emits one content-free incident when a bounded tail read covers the whole broken session (bead g59z)', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'psfn-session-integrity-tail-emit-'));
+    dirs.push(dir);
+    const channelId = 'ch-tail-emit';
+    const filePath = join(dir, 'session.jsonl');
+    const keyring = buildSessionHmacKeyring({ serializedKeys: 'v1:g59z-tail-emit-key', activeVersion: 'v1' });
+    if (!keyring) throw new Error('Expected a test keyring');
+
+    let previousHmac: string | null = null;
+    const sign = (entry: JournalEntry): JournalEntry => {
+      const result = signJournalEntry(entry, keyring, previousHmac);
+      previousHmac = result._hmac ?? previousHmac;
+      return result;
+    };
+    const good = sign(buildMessageJournalEntry(1, {
+      channelId, role: 'user', content: 'trusted', timestamp: 1_000,
+    }));
+    const m2 = sign(buildMessageJournalEntry(2, { channelId, role: 'user', content: 'a', timestamp: 2_000 }));
+    const m3 = sign(buildMessageJournalEntry(3, { channelId, role: 'assistant', content: 'b', timestamp: 3_000 }));
+    const tampered2: JournalEntry = { ...m2, content: 'tampered-a' };
+    const tampered3: JournalEntry = { ...m3, content: 'tampered-b' };
+
+    const events: Array<Parameters<
+      import('../../../shared/contracts/session-integrity.js').SessionIntegrityObserver['recordIntegrityFailure']
+    >[0]> = [];
+    const observer = { recordIntegrityFailure: (event: (typeof events)[number]) => { events.push(event); } };
+
+    const port = createFilesystemSessionArchivePort();
+    const provider = createKeyringIntegrityProvider(keyring);
+    if (!provider) throw new Error('Expected an integrity provider');
+    const runtime = new SessionJournalRuntime(provider, port, observer);
+    const archive = runtime.openArchive(channelId, filePath);
+    port.writeJournalFile(archive, [good, tampered2, tampered3]);
+
+    // Limit larger than the session: the bounded scan covers the whole archive,
+    // which previously short-circuited past the full-load funnel and never
+    // emitted an incident. The funnel must fire even on this path.
+    const recent = runtime.readRecentEntriesFromTail(archive, 10);
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      channelId,
+      failedEntryCount: 2,
+      firstFailedEntryId: 2,
+      lastFailedEntryId: 3,
+    });
+    // No message content crosses the seam.
+    expect(JSON.stringify(events[0])).not.toContain('tampered');
+    // Render-side handling is unchanged: failed entries are still fenced with
+    // the unverified_history wrapper for the companion-visible transcript.
+    expect(recent).toHaveLength(3);
+    expect(recent[0]!.content).toBe('trusted');
+    expect(recent[1]!.content).toContain('<unverified_history>');
+    expect(recent[2]!.content).toContain('unverified_history');
+  });
+
+  it('emits an incident from a readEntriesBefore window that starts at the archive beginning (bead g59z)', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'psfn-session-integrity-before-emit-'));
+    dirs.push(dir);
+    const channelId = 'ch-before-emit';
+    const filePath = join(dir, 'session.jsonl');
+    const keyring = buildSessionHmacKeyring({ serializedKeys: 'v1:g59z-before-emit-key', activeVersion: 'v1' });
+    if (!keyring) throw new Error('Expected a test keyring');
+
+    let previousHmac: string | null = null;
+    const sign = (entry: JournalEntry): JournalEntry => {
+      const result = signJournalEntry(entry, keyring, previousHmac);
+      previousHmac = result._hmac ?? previousHmac;
+      return result;
+    };
+    const good = sign(buildMessageJournalEntry(1, {
+      channelId, role: 'user', content: 'trusted', timestamp: 1_000,
+    }));
+    const m2 = sign(buildMessageJournalEntry(2, { channelId, role: 'user', content: 'a', timestamp: 2_000 }));
+    const m3 = sign(buildMessageJournalEntry(3, { channelId, role: 'assistant', content: 'b', timestamp: 3_000 }));
+    const tampered2: JournalEntry = { ...m2, content: 'tampered-a' };
+    const tampered3: JournalEntry = { ...m3, content: 'tampered-b' };
+
+    const events: Array<Parameters<
+      import('../../../shared/contracts/session-integrity.js').SessionIntegrityObserver['recordIntegrityFailure']
+    >[0]> = [];
+    const observer = { recordIntegrityFailure: (event: (typeof events)[number]) => { events.push(event); } };
+
+    const port = createFilesystemSessionArchivePort();
+    const provider = createKeyringIntegrityProvider(keyring);
+    if (!provider) throw new Error('Expected an integrity provider');
+    const runtime = new SessionJournalRuntime(provider, port, observer);
+    const archive = runtime.openArchive(channelId, filePath);
+    port.writeJournalFile(archive, [good, tampered2, tampered3]);
+
+    // The bounded window starts at the physical archive beginning
+    // (oldestMessageIndex === 0), which previously skipped the canonical replay
+    // and with it the incident emission.
+    const messages = runtime.readEntriesBefore(archive, 4, 10);
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      channelId,
+      failedEntryCount: 2,
+      firstFailedEntryId: 2,
+      lastFailedEntryId: 3,
+    });
+    expect(JSON.stringify(events[0])).not.toContain('tampered');
+    expect(messages).toHaveLength(3);
+    expect(messages[1]!.content).toContain('<unverified_history>');
+  });
+
+  it('does not re-emit on a second identical bounded read of the same broken session (bead g59z)', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'psfn-session-integrity-tail-dedup-'));
+    dirs.push(dir);
+    const channelId = 'ch-tail-dedup';
+    const filePath = join(dir, 'session.jsonl');
+    const keyring = buildSessionHmacKeyring({ serializedKeys: 'v1:g59z-tail-dedup-key', activeVersion: 'v1' });
+    if (!keyring) throw new Error('Expected a test keyring');
+
+    let previousHmac: string | null = null;
+    const sign = (entry: JournalEntry): JournalEntry => {
+      const result = signJournalEntry(entry, keyring, previousHmac);
+      previousHmac = result._hmac ?? previousHmac;
+      return result;
+    };
+    const good = sign(buildMessageJournalEntry(1, {
+      channelId, role: 'user', content: 'trusted', timestamp: 1_000,
+    }));
+    const m2 = sign(buildMessageJournalEntry(2, { channelId, role: 'user', content: 'a', timestamp: 2_000 }));
+    const tampered2: JournalEntry = { ...m2, content: 'tampered-a' };
+
+    let emitted = 0;
+    const observer = { recordIntegrityFailure: () => { emitted += 1; } };
+    const port = createFilesystemSessionArchivePort();
+    const provider = createKeyringIntegrityProvider(keyring);
+    if (!provider) throw new Error('Expected an integrity provider');
+    const runtime = new SessionJournalRuntime(provider, port, observer);
+    const archive = runtime.openArchive(channelId, filePath);
+    port.writeJournalFile(archive, [good, tampered2]);
+
+    runtime.readRecentEntriesFromTail(archive, 10);
+    expect(emitted).toBe(1);
+    // A broken session is re-read on every context build; an unchanged failure
+    // signature must not re-emit.
+    runtime.readRecentEntriesFromTail(archive, 10);
+    expect(emitted).toBe(1);
+  });
+
   it('retries a full chain load when the archive generation changes during the read', () => {
     const dir = mkdtempSync(join(tmpdir(), 'psfn-session-chain-generation-'));
     dirs.push(dir);

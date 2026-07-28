@@ -48,8 +48,11 @@ interface JournalChainContext {
   /**
    * Optional durable-incident seam (bead g59z). Called once per full journal
    * load when one or more entries fail HMAC verification. Content-free; the
-   * full-load path is the funnel because bounded readers replay through it on
-   * verification failure. Absent in tests/paths with no observer wired.
+   * full-load path is the funnel because every bounded reader that detects a
+   * verification failure MUST replay through it unconditionally — no bounded
+   * path may return detected-failed rows without that replay, even when its
+   * scan already covered the whole archive. Absent in tests/paths with no
+   * observer wired.
    */
   recordIntegrityFailure?: (event: SessionIntegrityFailureEvent) => void;
 }
@@ -484,7 +487,6 @@ function readRecentEntriesFromJournalArchiveChainAttempt(
   const beforeFingerprint = fingerprintJournalArchiveChain(context.archivePort, archives);
   const blocks: JournalEntry[][] = [];
   let earliestArchiveIndex = archives.length;
-  let earliestTailTruncated = true;
   let remainingMessages = limit;
   for (let archiveIndex = archives.length - 1; archiveIndex >= 0; archiveIndex -= 1) {
     const archive = archives[archiveIndex]!;
@@ -504,7 +506,6 @@ function readRecentEntriesFromJournalArchiveChainAttempt(
     remainingMessages -= entries.filter(entry => entry.type === 'message').length;
     blocks.unshift(entries);
     earliestArchiveIndex = archiveIndex;
-    earliestTailTruncated = tail.truncated;
     if (remainingMessages <= 0) break;
   }
 
@@ -569,13 +570,12 @@ function readRecentEntriesFromJournalArchiveChainAttempt(
     );
   }
   if (verificationFailed) {
-    // When the bounded scan reached the physical beginning of the logical
-    // archive, this is already the canonical verification pass. Replaying the
-    // same rows would only duplicate integrity-provider work and cannot add a
-    // stronger chain anchor.
-    if (earliestArchiveIndex === 0 && !earliestTailTruncated) {
-      return messages.length <= limit ? messages : messages.slice(-limit);
-    }
+    // A detected failure ALWAYS replays through the full-load funnel, even when
+    // the bounded scan already covered the whole archive and could return its
+    // own rows. The duplicate integrity-provider pass only happens on this rare
+    // failure path and is the price of the funnel invariant: skipping it would
+    // silently bypass recordIntegrityFailure, so a small broken session would
+    // never produce a durable incident (bead g59z).
     const loaded = loadJournalArchiveChain(context, archives);
     return loaded.entries.length <= limit ? [...loaded.entries] : loaded.entries.slice(-limit);
   }

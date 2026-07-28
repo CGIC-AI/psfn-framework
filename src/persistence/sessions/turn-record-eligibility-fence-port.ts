@@ -5,8 +5,10 @@ export interface TurnRecordEligibilityFenceKey {
 
 /**
  * Serializes source-eligibility mutations with consumers of one canonical
- * TurnRecord. Implementations must coordinate across every runtime process
- * that can read or revoke the same companion session state.
+ * TurnRecord. Implementations must key synchronization by TurnID across all
+ * logical owners within one companion scope: logicalSessionId is attribution,
+ * not lock identity. This prevents a cross-owner duplicate from racing an
+ * effect that is consuming the first copy.
  */
 export interface TurnRecordEligibilityFencePort {
   withTurnRecordEligibilityFence<T>(

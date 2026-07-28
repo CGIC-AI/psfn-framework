@@ -18,6 +18,20 @@ type LiveToolAgentContext = AgentContext & {
   promptCacheBoundaries?: LLMSystemPromptCacheBoundaries;
 };
 
+/**
+ * The scheduled loop's config extends pi-agent-core's AgentLoopConfig with an
+ * optional re-enqueue hook. When a live user turn start-drains the follow-up
+ * queue (psfn-framework-8l9c) it destructively pulls every queued item; genuine
+ * EXTERNAL user follow-ups are held back for the end-of-loop drain. If the run
+ * exits early (first assistant step returns stopReason 'error'/'aborted', or a
+ * throw/abort) before that drain, those held follow-ups must be returned to the
+ * agent's follow-up queue so a journaled user follow-up is never dropped from
+ * processing. The host wires this to `agent.followUp`.
+ */
+export type ScheduledAgentLoopConfig = AgentLoopConfig & {
+  requeueFollowUpMessages?: (messages: AgentMessage[]) => void | Promise<void>;
+};
+
 export function agentLoopWithScheduler(
   prompts: AgentMessage[],
   context: AgentContext,
@@ -50,6 +64,11 @@ export function agentLoopWithScheduler(
         streamFn,
         schedulerOptions,
         continuationFuse,
+        // Drain queued follow-ups (intention whispers with wake_conditions
+        // [next_user_turn]) at the START of a live user turn so they shape the
+        // FIRST reply as pre-reply context, instead of injecting AFTER it as a
+        // continuation step (psfn-framework-8l9c).
+        true,
       );
     } catch (error) {
       terminateStreamWithError(stream, newMessages, error);
@@ -88,6 +107,11 @@ export function agentLoopContinueWithScheduler(
         streamFn,
         schedulerOptions,
         continuationFuse,
+        // Continuation runs (deferred-tool-handoff) are internal, not a fresh
+        // user turn: keep the existing end-of-loop follow-up drain so mid-run
+        // arrivals still take the ay73 user-facing boundary unchanged and mdxu
+        // dedupe behavior is byte-equivalent.
+        false,
       );
     } catch (error) {
       terminateStreamWithError(stream, newMessages, error);
@@ -103,116 +127,173 @@ function createAgentStream() {
   );
 }
 
+/**
+ * Internal follow-up notes (intention whispers, system notes, task reports) are
+ * enqueued as role 'custom'; genuine external follow-ups are role 'user'. Only
+ * the internal notes are eligible for the pre-reply start drain — external user
+ * follow-ups keep their end-of-loop continuation semantics (psfn-framework-8l9c).
+ */
+function isInternalFollowUpMessage(message: AgentMessage): boolean {
+  return (message as { role?: unknown }).role === 'custom';
+}
+
 async function runLoop(
   currentContext: LiveToolAgentContext,
   newMessages: AgentMessage[],
-  config: AgentLoopConfig,
+  config: ScheduledAgentLoopConfig,
   signal: AbortSignal,
   stream: ReturnType<typeof createAgentStream>,
   streamFn: StreamFn | undefined,
   schedulerOptions: ToolCallSchedulerOptions,
   continuationFuse: ParentTurnContinuationFuse,
+  drainQueuedFollowUpsAtStart: boolean,
 ) {
   let firstTurn = true;
   let checkInMessageSent = false;
   let userFacingBoundaryMarked = false;
   const toolExecutionGuard = createToolCallExecutionGuard();
-  let pendingMessages = (await config.getSteeringMessages?.()) || [];
 
-  for (;;) {
-    let hasMoreToolCalls = false;
-    let steeringAfterTools: AgentMessage[] | null = null;
+  // Drain already-queued follow-ups BEFORE the first assistant step so
+  // pre-existing INTERNAL notes (intention whispers / system notes, role
+  // 'custom') become pre-reply context and shape the first reply
+  // (psfn-framework-8l9c). They are NOT boundary-marked: the reply they shape is
+  // the outward reply, authored once with the note visible, so a post-reply
+  // no_reply can never clobber it. Genuine EXTERNAL user follow-ups that were
+  // also queued are held back and processed through the existing end-of-loop
+  // drain so their continuation + ay73 boundary semantics are unchanged.
+  // `getFollowUpMessages` is destructive (it drains the agent's follow-up
+  // queue), so held-back items must be re-enqueued on any early exit (see the
+  // `finally` below) or a journaled user follow-up would be silently dropped.
+  let heldExternalFollowUps: AgentMessage[] = [];
+  try {
+    let startupInternalFollowUps: AgentMessage[] = [];
+    if (drainQueuedFollowUpsAtStart) {
+      const queued = (await config.getFollowUpMessages?.()) || [];
+      startupInternalFollowUps = queued.filter(isInternalFollowUpMessage);
+      heldExternalFollowUps = queued.filter(message => !isInternalFollowUpMessage(message));
+    }
+    const startupSteering = (await config.getSteeringMessages?.()) || [];
+    let pendingMessages = [...startupInternalFollowUps, ...startupSteering];
 
-    do {
-      if (!firstTurn) {
-        stream.push({ type: 'turn_start' });
-      } else {
-        firstTurn = false;
-      }
+    for (;;) {
+      let hasMoreToolCalls = false;
+      let steeringAfterTools: AgentMessage[] | null = null;
 
-      if (pendingMessages.length > 0) {
-        for (const message of pendingMessages) {
-          stream.push({ type: 'message_start', message });
-          stream.push({ type: 'message_end', message });
+      do {
+        if (!firstTurn) {
+          stream.push({ type: 'turn_start' });
+        } else {
+          firstTurn = false;
+        }
+
+        if (pendingMessages.length > 0) {
+          for (const message of pendingMessages) {
+            stream.push({ type: 'message_start', message });
+            stream.push({ type: 'message_end', message });
+            currentContext.messages.push(message);
+            newMessages.push(message);
+          }
+          pendingMessages = [];
+        }
+
+        const assistantStepCount = continuationFuse.enterPrompt();
+        if (!checkInMessageSent && assistantStepCount === AGENT_LOOP_ASSISTANT_STEP_CHECK_IN_AT) {
+          const message = buildLoopCheckInMessage(assistantStepCount);
           currentContext.messages.push(message);
           newMessages.push(message);
+          stream.push({ type: 'message_start', message });
+          stream.push({ type: 'message_end', message });
+          checkInMessageSent = true;
         }
-        pendingMessages = [];
-      }
 
-      const assistantStepCount = continuationFuse.enterPrompt();
-      if (!checkInMessageSent && assistantStepCount === AGENT_LOOP_ASSISTANT_STEP_CHECK_IN_AT) {
-        const message = buildLoopCheckInMessage(assistantStepCount);
-        currentContext.messages.push(message);
+        const message = await streamAssistantResponse(currentContext, config, signal, stream, streamFn);
         newMessages.push(message);
-        stream.push({ type: 'message_start', message });
-        stream.push({ type: 'message_end', message });
-        checkInMessageSent = true;
-      }
-
-      const message = await streamAssistantResponse(currentContext, config, signal, stream, streamFn);
-      newMessages.push(message);
-      if (message.stopReason === 'error' || message.stopReason === 'aborted') {
-        stream.push({ type: 'turn_end', message, toolResults: [] });
-        stream.push({ type: 'agent_end', messages: newMessages });
-        stream.end(newMessages);
-        return;
-      }
-
-      const toolCalls = message.content.filter((content): content is ToolCall => content.type === 'toolCall');
-      hasMoreToolCalls = toolCalls.length > 0;
-      const toolResults: ToolResultMessage[] = [];
-      if (hasMoreToolCalls) {
-        const toolExecution = await executeToolCallsWithScheduler(
-          () => resolveCurrentTools(currentContext),
-          message,
-          config.getSteeringMessages,
-          { signal, stream },
-          {
-            ...schedulerOptions,
-            guard: toolExecutionGuard,
-          },
-        );
-        toolResults.push(...toolExecution.toolResults);
-        steeringAfterTools = toolExecution.steeringMessages ?? null;
-        for (const result of toolResults) {
-          currentContext.messages.push(result);
-          newMessages.push(result);
+        if (message.stopReason === 'error' || message.stopReason === 'aborted') {
+          stream.push({ type: 'turn_end', message, toolResults: [] });
+          stream.push({ type: 'agent_end', messages: newMessages });
+          stream.end(newMessages);
+          // `return` runs the `finally` below, re-enqueueing any held external
+          // follow-ups so this early exit never drops a journaled user message.
+          return;
         }
-      }
-      stream.push({ type: 'turn_end', message, toolResults });
 
-      if (steeringAfterTools && steeringAfterTools.length > 0) {
-        pendingMessages = steeringAfterTools;
-        steeringAfterTools = null;
-      } else {
-        pendingMessages = (await config.getSteeringMessages?.()) || [];
-      }
-    } while (hasMoreToolCalls || pendingMessages.length > 0);
+        const toolCalls = message.content.filter((content): content is ToolCall => content.type === 'toolCall');
+        hasMoreToolCalls = toolCalls.length > 0;
+        const toolResults: ToolResultMessage[] = [];
+        if (hasMoreToolCalls) {
+          const toolExecution = await executeToolCallsWithScheduler(
+            () => resolveCurrentTools(currentContext),
+            message,
+            config.getSteeringMessages,
+            { signal, stream },
+            {
+              ...schedulerOptions,
+              guard: toolExecutionGuard,
+            },
+          );
+          toolResults.push(...toolExecution.toolResults);
+          steeringAfterTools = toolExecution.steeringMessages ?? null;
+          for (const result of toolResults) {
+            currentContext.messages.push(result);
+            newMessages.push(result);
+          }
+        }
+        stream.push({ type: 'turn_end', message, toolResults });
 
-    const followUpMessages = (await config.getFollowUpMessages?.()) || [];
-    if (followUpMessages.length > 0) {
-      // Queued follow-ups are internal runtime notes (intention whispers,
-      // system notes) — draining them extends this run past the user-facing
-      // exchange. Mark the boundary once so downstream response extraction
-      // and no-reply scoping treat everything after it as internal
-      // continuation, never as the outward reply (psfn-framework-ay73).
-      // A batch containing a genuine user message stays user-facing.
-      const containsUserMessage = followUpMessages.some(
-        message => (message as { role?: unknown }).role === 'user',
-      );
-      if (!userFacingBoundaryMarked && !containsUserMessage) {
-        userFacingBoundaryMarked = true;
-        stream.push({ type: 'user_facing_boundary' });
+        if (steeringAfterTools && steeringAfterTools.length > 0) {
+          pendingMessages = steeringAfterTools;
+          steeringAfterTools = null;
+        } else {
+          pendingMessages = (await config.getSteeringMessages?.()) || [];
+        }
+      } while (hasMoreToolCalls || pendingMessages.length > 0);
+
+      const freshFollowUps = (await config.getFollowUpMessages?.()) || [];
+      // External user follow-ups held back from the start drain are processed
+      // here exactly like mid-run arrivals, preserving their continuation +
+      // ay73 boundary semantics; internal notes were already consumed as
+      // pre-reply context. Consuming them here clears the held set so the
+      // `finally` does not re-enqueue an already-delivered item.
+      const followUpMessages = heldExternalFollowUps.length > 0
+        ? [...heldExternalFollowUps, ...freshFollowUps]
+        : freshFollowUps;
+      heldExternalFollowUps = [];
+      if (followUpMessages.length > 0) {
+        // Queued follow-ups are internal runtime notes (intention whispers,
+        // system notes) — draining them extends this run past the user-facing
+        // exchange. Mark the boundary once so downstream response extraction
+        // and no-reply scoping treat everything after it as internal
+        // continuation, never as the outward reply (psfn-framework-ay73).
+        // A batch containing a genuine user message stays user-facing.
+        const containsUserMessage = followUpMessages.some(
+          message => (message as { role?: unknown }).role === 'user',
+        );
+        if (!userFacingBoundaryMarked && !containsUserMessage) {
+          userFacingBoundaryMarked = true;
+          stream.push({ type: 'user_facing_boundary' });
+        }
+        pendingMessages = followUpMessages;
+        continue;
       }
-      pendingMessages = followUpMessages;
-      continue;
+      break;
     }
-    break;
-  }
 
-  stream.push({ type: 'agent_end', messages: newMessages });
-  stream.end(newMessages);
+    stream.push({ type: 'agent_end', messages: newMessages });
+    stream.end(newMessages);
+  } finally {
+    // Any exit that leaves external follow-ups undelivered — the assistant
+    // step returning stopReason 'error'/'aborted', or a throw/abort out of the
+    // loop — must return them to the agent's follow-up queue. They were drained
+    // (removed) at run start and journaled at enqueue, so without this a held
+    // user follow-up would be dropped from all future processing
+    // (psfn-framework-8l9c). The normal end-of-loop drain clears the held set,
+    // so a fully processed run re-enqueues nothing.
+    if (heldExternalFollowUps.length > 0) {
+      const toRequeue = heldExternalFollowUps;
+      heldExternalFollowUps = [];
+      await config.requeueFollowUpMessages?.(toRequeue);
+    }
+  }
 }
 
 function buildLoopCheckInMessage(stepCount: number): AgentMessage {

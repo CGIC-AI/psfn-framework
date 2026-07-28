@@ -2,17 +2,11 @@ import { isRecord } from '../../shared/utils/types.js';
 import { normalizeRuntimeFallbackProvenance } from '../../shared/runtime-fallback-provenance.js';
 import { join } from 'node:path';
 import {
-  closeSync,
-  createReadStream,
   existsSync,
-  fstatSync,
   linkSync,
-  openSync,
   statSync,
-  type Stats,
   unlinkSync,
 } from 'node:fs';
-import { createInterface } from 'node:readline';
 import { appendJsonLine } from '../jsonl.js';
 import { withCrossProcessWriteLock } from './cross-process-write-lock.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
@@ -58,6 +52,7 @@ import {
   lookupTurnRecordIdentitySnapshot,
   type TurnRecordIdentityLookupStats,
 } from './turn-record-identity.js';
+import { streamTurnRecordRecoverySnapshot } from './turn-record-recovery.js';
 import { parseIcpConversationCorrelation } from '../../shared/contracts/icp-autonomy.js';
 import { resolveToolCallOutcome } from '../../shared/contracts/tool-call-outcome.js';
 import {
@@ -747,7 +742,7 @@ function parseBackgroundWorkHandoff(
   return { schemaVersion: 1, jobs };
 }
 
-function normalizeTurnRecord(raw: unknown, expectedChannelId: string): TurnRecord {
+export function normalizeTurnRecord(raw: unknown, expectedChannelId: string): TurnRecord {
   if (!isRecord(raw)) {
     throw new Error('TurnRecord entry must be a JSON object');
   }
@@ -877,6 +872,48 @@ function normalizeTurnRecord(raw: unknown, expectedChannelId: string): TurnRecor
     versionPointers,
     provenanceRefs: parseOptionalStringArray(raw.provenanceRefs, 'provenanceRefs'),
     ...(backgroundWorkHandoff ? { backgroundWorkHandoff } : {}),
+  };
+}
+
+/**
+ * Validate the complete durable row, then retain only fields used to prove and
+ * replay a background-work handoff. Old observability, tool result, prompt,
+ * and shared-store reference payloads never cross the recovery worker boundary.
+ */
+export function normalizeTurnRecordRecoveryCandidate(
+  raw: unknown,
+  expectedChannelId: string,
+): TurnRecord {
+  const record = normalizeTurnRecord(raw, expectedChannelId);
+  return {
+    schemaVersion: record.schemaVersion,
+    turnId: record.turnId,
+    requestId: record.requestId,
+    ...(record.sessionId ? { sessionId: record.sessionId } : {}),
+    channelId: record.channelId,
+    channelType: record.channelType,
+    startedAt: record.startedAt,
+    completedAt: record.completedAt,
+    status: record.status,
+    ...(record.continuationStop ? { continuationStop: record.continuationStop } : {}),
+    ...(record.location ? { location: record.location } : {}),
+    ...(record.auditPrivacy ? { auditPrivacy: record.auditPrivacy } : {}),
+    ...(record.channelPrivacy ? { channelPrivacy: record.channelPrivacy } : {}),
+    userMessage: record.userMessage,
+    ...(record.assistantMessage ? { assistantMessage: record.assistantMessage } : {}),
+    toolCalls: [],
+    ...(record.internalStateSnapshotRef
+      ? { internalStateSnapshotRef: record.internalStateSnapshotRef }
+      : {}),
+    extractedMemoryIds: [],
+    concernDeltaRefs: [],
+    contactDeltaRefs: [],
+    versionPointers: record.versionPointers,
+    provenanceRefs: [],
+    ...(record.backgroundWorkHandoff
+      ? { backgroundWorkHandoff: record.backgroundWorkHandoff }
+      : {}),
+    ...(record.icpCorrelation ? { icpCorrelation: record.icpCorrelation } : {}),
   };
 }
 
@@ -1340,104 +1377,6 @@ export function readRecentTurnRecordUsageAcrossSegments(
   }
 }
 
-/**
- * Async, constant-retention scan for one-time startup recovery. Segment files
- * are snapshotted oldest-to-newest and de-duplicated by inode, including the
- * interrupted-rotation hard-link case. The iterator yields to the event loop
- * after at most eight normalized rows so admin health and inbound delivery stay
- * responsive while a large historical archive is inspected.
- */
-async function* streamTurnRecordsForRecovery(
-  sessionsDir: string,
-  channelId: string,
-): AsyncGenerator<TurnRecord> {
-  const sanitized = sanitizeChannelId(channelId);
-  const dir = turnRecordsDir(sessionsDir);
-  const activePath = join(dir, `${sanitized}.jsonl`);
-  const scannedFileIdentities = new Set<string>();
-  let recordsSinceYield = 0;
-  const scanOpenSnapshot = async function* (
-    path: string,
-    fd: number,
-    snapshot: Stats,
-  ): AsyncGenerator<TurnRecord> {
-    const identity = fileIdentityKey(snapshot);
-    if (scannedFileIdentities.has(identity) || snapshot.size === 0) {
-      closeSync(fd);
-      return;
-    }
-    scannedFileIdentities.add(identity);
-    const input = createReadStream(path, {
-      fd,
-      autoClose: true,
-      start: 0,
-      end: snapshot.size - 1,
-    });
-    const lines = createInterface({ input, crlfDelay: Infinity });
-    try {
-      for await (const rawLine of lines) {
-        const line = rawLine.trim();
-        if (!line) continue;
-        try {
-          yield normalizeTurnRecord(JSON.parse(line) as unknown, channelId);
-        } catch (error) {
-          quarantineTurnRecordLine(path, channelId, line, error);
-        }
-        recordsSinceYield += 1;
-        if (recordsSinceYield >= 8) {
-          recordsSinceYield = 0;
-          await new Promise<void>(resolve => setImmediate(resolve));
-        }
-      }
-    } finally {
-      lines.close();
-      input.destroy();
-    }
-  };
-  const openSnapshot = (path: string): {
-    fd: number;
-    snapshot: Stats;
-  } | null => {
-    try {
-      const fd = openSync(path, 'r');
-      try {
-        return { fd, snapshot: fstatSync(fd) };
-      } catch (error) {
-        closeSync(fd);
-        throw error;
-      }
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
-      throw error;
-    }
-  };
-
-  // Pin the active inode before listing rotated segments. If rotation races
-  // this scan, the old active inode is either scanned through this descriptor
-  // or through its new numbered hard link (with inode de-duplication), while a
-  // new active file belongs to the next recovery snapshot.
-  const activeSnapshot = openSnapshot(activePath);
-  let activeSnapshotHandedOff = false;
-  try {
-    const rotatedPaths = listRotatedSegments(dir, sanitized)
-      .sort((left, right) => left.segmentNumber - right.segmentNumber)
-      .map(segment => segment.path);
-    for (const path of rotatedPaths) {
-      const opened = openSnapshot(path);
-      if (!opened) continue;
-      yield* scanOpenSnapshot(path, opened.fd, opened.snapshot);
-    }
-    if (activeSnapshot) {
-      activeSnapshotHandedOff = true;
-      yield* scanOpenSnapshot(activePath, activeSnapshot.fd, activeSnapshot.snapshot);
-    }
-  } finally {
-    if (activeSnapshot && !activeSnapshotHandedOff) {
-      closeSync(activeSnapshot.fd);
-    }
-  }
-}
-
 function findTurnRecordOnce(
   dir: string,
   sanitized: string,
@@ -1674,6 +1613,9 @@ export function appendTurnRecordWithRotation(
 export interface FilesystemTurnRecordStoreOptions {
   segmentMaxBytes?: number;
   scanChunkBytes?: number;
+  recoveryMaxRowBytes?: number;
+  /** Deterministic concurrency seam used by snapshot/rotation tests. */
+  recoverySnapshotHook?: (sourceChannelId: string) => void | Promise<void>;
 }
 
 export function createFilesystemTurnRecordStorePort(
@@ -1682,6 +1624,7 @@ export function createFilesystemTurnRecordStorePort(
 ): TurnRecordStorePort {
   const segmentMaxBytes = options.segmentMaxBytes ?? TURN_RECORD_SEGMENT_MAX_BYTES;
   const scanChunkBytes = options.scanChunkBytes ?? TURN_RECORD_TAIL_SCAN_CHUNK_BYTES;
+  const recoveryMaxRowBytes = options.recoveryMaxRowBytes ?? TURN_RECORD_SEGMENT_MAX_BYTES * 2;
   const sharedStore = createTurnRecordSharedStore(turnRecordsDir(sessionsDir));
   const resolveStoredTurnRecord = (record: TurnRecord): TurnRecord => (
     resolveTurnRecordStaticPrompt(
@@ -1747,8 +1690,18 @@ export function createFilesystemTurnRecordStorePort(
         { scanChunkBytes },
       )
     ),
-    streamTurnRecordsForRecovery: channelId => (
-      streamTurnRecordsForRecovery(sessionsDir, channelId)
+    streamTurnRecordsForRecovery: (channelIds, recoveryOptions = {}) => (
+      streamTurnRecordRecoverySnapshot(
+        sessionsDir,
+        channelIds,
+        recoveryOptions,
+        {
+          maxRowBytes: recoveryMaxRowBytes,
+          scanChunkBytes,
+          sqliteCacheBytes: 4 * 1024 * 1024,
+          onSourceSnapshot: options.recoverySnapshotHook,
+        },
+      )
     ),
     lookupTurnRecordIdentity: async (channelId, turnId) => {
       const lookup = await lookupTurnRecordIdentityAcrossSegments(

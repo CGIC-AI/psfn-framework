@@ -60,6 +60,7 @@ import { slimTurnRecordMemoryCandidatesForAppend } from './turn-record-memory-re
 import type {
   TurnRecordPage,
   TurnRecordPageCursor,
+  TurnRecordRecoveryScanOptions,
   TurnRecordStorePort,
   TurnRecordUsageRecord,
 } from './turn-record-store-port.js';
@@ -1663,80 +1664,31 @@ export class SessionStore implements TranscriptSearchPort {
     };
   }
   /**
-   * One process-lifetime historical handoff scan. The filesystem adapter
-   * streams normalized rows with event-loop yields, so startup recovery does
-   * not retain or resolve an entire old-fat archive before the agent can serve
-   * health and inbound traffic.
+   * One process-lifetime historical handoff snapshot. The filesystem adapter
+   * proves physical uniqueness and global order in one disk-backed pass, so no
+   * per-identity state or old-fat archive is retained on the main thread.
    *
-   * Uniqueness is proven across every physical row before any candidate is
-   * returned. Owner/tombstone state is then re-read from the authoritative L0
-   * journal. The k-way merge retains at most one candidate per physical source
-   * while preserving the previous global completedAt/turnId replay order. No
-   * history is truncated or accepted on partial evidence.
+   * Owner/tombstone state is re-read from the authoritative L0 journal before a
+   * candidate is returned. No history is truncated or accepted on partial
+   * evidence.
    */
   async *streamRecoverableBackgroundWorkTurnRecords(
     sourceChannelIds: readonly string[],
+    options: TurnRecordRecoveryScanOptions = {},
   ): AsyncGenerator<TurnRecord> {
     const streamSource = this.turnRecordStore.streamTurnRecordsForRecovery;
     if (!streamSource) {
       throw new Error('TurnRecord store does not support bounded background-work recovery scans');
     }
-    const seenCounts = new Map<string, number>();
-    const uniqueSources = [...new Set(sourceChannelIds)];
-    for (const sourceChannelId of uniqueSources) {
-      for await (const record of streamSource.call(this.turnRecordStore, sourceChannelId)) {
-        const key = `${sourceChannelId}\u0000${record.turnId}`;
-        seenCounts.set(key, (seenCounts.get(key) ?? 0) + 1);
-      }
-    }
-    const candidateStream = (sourceChannelId: string): AsyncIterable<TurnRecord> => {
-      const store = this;
-      return (async function* () {
-        for await (const record of streamSource.call(store.turnRecordStore, sourceChannelId)) {
-          if (record.status !== 'completed' || !record.backgroundWorkHandoff) continue;
-          const key = `${sourceChannelId}\u0000${record.turnId}`;
-          if (seenCounts.get(key) !== 1) continue;
-          const logicalSessionId = record.sessionId ?? record.channelId;
-          const owner = store.ensureChannelFullyLoaded(logicalSessionId);
-          if (record.channelId !== sourceChannelId
-            || owner === null
-            || owner.turnTombstones.has(record.turnId)) {
-            continue;
-          }
-          // Recovery consumes the handoff and its source fingerprint. Do not
-          // reconstruct frozen observability/session refs: that is the old-fat
-          // healing work which caused the startup stall.
-          yield record;
-        }
-      })();
-    };
-    const iterators = uniqueSources.map(sourceChannelId => (
-      candidateStream(sourceChannelId)[Symbol.asyncIterator]()
-    ));
-    const heads: Array<IteratorResult<TurnRecord>> = [];
-    try {
-      for (const iterator of iterators) heads.push(await iterator.next());
-      for (;;) {
-        let selected = -1;
-        for (let index = 0; index < heads.length; index += 1) {
-          const head = heads[index];
-          if (head.done) continue;
-          const current = selected < 0 ? undefined : heads[selected]?.value;
-          if (!current
-            || head.value.completedAt < current.completedAt
-            || (head.value.completedAt === current.completedAt
-              && head.value.turnId.localeCompare(current.turnId) < 0)) {
-            selected = index;
-          }
-        }
-        if (selected < 0) return;
-        yield heads[selected]!.value;
-        heads[selected] = await iterators[selected]!.next();
-      }
-    } finally {
-      await Promise.all(iterators.map(async (iterator, index) => {
-        if (!heads[index]?.done) await iterator.return?.();
-      }));
+    const uniqueSourceSet = new Set(sourceChannelIds);
+    const uniqueSources = [...uniqueSourceSet];
+    for await (const record of streamSource.call(this.turnRecordStore, uniqueSources, options)) {
+      const sourceChannelId = record.channelId;
+      if (!uniqueSourceSet.has(sourceChannelId)) continue;
+      const logicalSessionId = record.sessionId ?? sourceChannelId;
+      const owner = this.ensureChannelFullyLoaded(logicalSessionId);
+      if (owner === null || owner.turnTombstones.has(record.turnId)) continue;
+      yield record;
     }
   }
   async isSourceTurnRecordEligible(

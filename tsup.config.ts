@@ -1,7 +1,6 @@
 import { defineConfig } from 'tsup';
 
-export default defineConfig({
-  entry: {
+const entries = {
     index: 'src/app/startup/index.ts',
     'gateway-main': 'src/app/gateway/main.ts',
     'agent-main': 'src/app/agent/main.ts',
@@ -20,14 +19,23 @@ export default defineConfig({
     'system-owner-fleet-snapshot': 'src/app/maintenance/system-owner-fleet-snapshot.ts',
     'owner-upgrade-readiness-probe': 'src/app/maintenance/owner-upgrade-readiness-probe.ts',
     'session-integrity-repair': 'src/app/maintenance/session-integrity-repair.ts',
+    'turn-record-recovery-worker':
+      'src/persistence/sessions/turn-record-recovery-worker.ts',
     'verify-shell-sandbox-runtime':
       'src/app/maintenance/verify-shell-sandbox-runtime.ts',
     'preflight-startup-owner-files': 'scripts/preflight-startup-owner-files.ts',
     'provision-injection-model': 'scripts/provision-injection-model.ts',
-  },
+} as const;
+
+export default defineConfig({
+  entry: entries,
   format: ['esm'],
   target: 'node22',
-  dts: true,
+  dts: {
+    entry: Object.fromEntries(
+      Object.entries(entries).filter(([name]) => name !== 'turn-record-recovery-worker'),
+    ),
+  },
   sourcemap: true,
   clean: true,
   outDir: 'dist',

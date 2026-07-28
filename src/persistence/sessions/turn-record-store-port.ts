@@ -93,8 +93,11 @@ export interface TurnRecordStorePort {
   ): TurnRecordUsageRecord[];
   /**
    * Streams exact-unique recovery candidates from one physical snapshot,
-   * globally ordered by completedAt/turnId. Implementations must keep identity
-   * state out of process memory and close the snapshot promptly on cancellation.
+   * globally ordered by completedAt/turnId. Before yielding, implementations
+   * must validate every semantic handoff binding against the complete source
+   * row, then strip user/assistant content from the returned TurnRecord.
+   * Identity state stays out of process memory and cancellation closes the
+   * snapshot promptly.
    */
   streamTurnRecordsForRecovery?(
     channelIds: readonly string[],

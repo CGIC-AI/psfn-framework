@@ -58,6 +58,8 @@ export interface CrossProcessWriteLockOptions {
   staleMs: number;
   /** Total time to wait for acquisition before failing loudly. */
   timeoutMs: number;
+  /** Optional synchronous cancellation check, invoked while waiting and before ownership work. */
+  assertCanContinue?: () => void;
 }
 
 const SLEEP_STATE = new Int32Array(new SharedArrayBuffer(4));
@@ -234,6 +236,7 @@ export function withCrossProcessWriteLock<T>(
 
   let owned: LockInstanceIdentity;
   for (;;) {
+    options.assertCanContinue?.();
     const reclamationInProgress = reclaimTombstonePaths(lockPath).length > 0;
     if (reclamationInProgress) {
       if (recoverAbandonedReclamation(lockPath, options.staleMs)) continue;
@@ -275,6 +278,7 @@ export function withCrossProcessWriteLock<T>(
 
   let heartbeat: CrossProcessLockHeartbeat;
   try {
+    options.assertCanContinue?.();
     heartbeat = startCrossProcessLockHeartbeat({
       lockPath,
       ino: owned.ino,

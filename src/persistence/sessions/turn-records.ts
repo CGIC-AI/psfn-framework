@@ -136,6 +136,20 @@ const ROTATION_SEGMENT_CLAIM_ATTEMPTS = 100;
  */
 const TAIL_READ_ROTATION_RETRIES = 3;
 
+/** Serialize a boundary capture or rotation through the canonical channel lock. */
+export function withTurnRecordRotationLock<T>(
+  activePath: string,
+  operation: () => T,
+  assertCanContinue?: () => void,
+): T {
+  return withCrossProcessWriteLock(`${activePath}${ROTATION_LOCK_SUFFIX}`, {
+    pollMs: ROTATION_LOCK_POLL_MS,
+    staleMs: ROTATION_LOCK_STALE_MS,
+    timeoutMs: ROTATION_LOCK_TIMEOUT_MS,
+    ...(assertCanContinue ? { assertCanContinue } : {}),
+  }, operation);
+}
+
 /** Process-lifetime count of quarantined turn-record lines (finding: the
  * quarantine warn alone was easy to miss; this backs a stable counter event). */
 let quarantinedTurnRecordLineCount = 0;
@@ -876,15 +890,11 @@ export function normalizeTurnRecord(raw: unknown, expectedChannelId: string): Tu
 }
 
 /**
- * Validate the complete durable row, then retain only fields used to prove and
- * replay a background-work handoff. Old observability, tool result, prompt,
- * and shared-store reference payloads never cross the recovery worker boundary.
+ * Project a worker-validated handoff into the identity-only TurnRecord shape
+ * needed by startup replay and its bounded retry index. Raw user/assistant
+ * content and old observability/tool/shared-store payloads never cross IPC.
  */
-export function normalizeTurnRecordRecoveryCandidate(
-  raw: unknown,
-  expectedChannelId: string,
-): TurnRecord {
-  const record = normalizeTurnRecord(raw, expectedChannelId);
+export function projectTurnRecordRecoveryCandidate(record: TurnRecord): TurnRecord {
   return {
     schemaVersion: record.schemaVersion,
     turnId: record.turnId,
@@ -895,16 +905,12 @@ export function normalizeTurnRecordRecoveryCandidate(
     startedAt: record.startedAt,
     completedAt: record.completedAt,
     status: record.status,
-    ...(record.continuationStop ? { continuationStop: record.continuationStop } : {}),
-    ...(record.location ? { location: record.location } : {}),
-    ...(record.auditPrivacy ? { auditPrivacy: record.auditPrivacy } : {}),
-    ...(record.channelPrivacy ? { channelPrivacy: record.channelPrivacy } : {}),
-    userMessage: record.userMessage,
-    ...(record.assistantMessage ? { assistantMessage: record.assistantMessage } : {}),
+    userMessage: {
+      role: 'user',
+      content: '',
+      timestamp: record.userMessage.timestamp,
+    },
     toolCalls: [],
-    ...(record.internalStateSnapshotRef
-      ? { internalStateSnapshotRef: record.internalStateSnapshotRef }
-      : {}),
     extractedMemoryIds: [],
     concernDeltaRefs: [],
     contactDeltaRefs: [],
@@ -913,7 +919,6 @@ export function normalizeTurnRecordRecoveryCandidate(
     ...(record.backgroundWorkHandoff
       ? { backgroundWorkHandoff: record.backgroundWorkHandoff }
       : {}),
-    ...(record.icpCorrelation ? { icpCorrelation: record.icpCorrelation } : {}),
   };
 }
 
@@ -1039,11 +1044,7 @@ function maybeRotateActiveSegment(
     throw error;
   }
   if (preLockSize < segmentMaxBytes) return;
-  withCrossProcessWriteLock(`${activePath}${ROTATION_LOCK_SUFFIX}`, {
-    pollMs: ROTATION_LOCK_POLL_MS,
-    staleMs: ROTATION_LOCK_STALE_MS,
-    timeoutMs: ROTATION_LOCK_TIMEOUT_MS,
-  }, () => {
+  withTurnRecordRotationLock(activePath, () => {
     let size: number;
     try {
       size = statSync(activePath).size;

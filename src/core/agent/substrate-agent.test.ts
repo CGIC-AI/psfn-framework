@@ -751,6 +751,44 @@ describe('SubstrateAgent construction', () => {
     expect(agent.contactStore).toBeNull();
   });
 
+  it('does not retry or defer deterministic recovery evidence poison', async () => {
+    const evidenceError = new Error('invalid historical handoff fingerprint');
+    evidenceError.name = 'TurnRecordRecoveryEvidenceError';
+    const sessionManager = makeMockSessionManager();
+    const recoveryStream = vi.fn(() => (async function* () {
+      throw evidenceError;
+    })());
+    const defer = vi.fn();
+    const recoverPending = vi.fn(async () => 0);
+    Object.assign(sessionManager, {
+      streamRecoverableBackgroundWorkTurnRecords: recoveryStream,
+      deferBackgroundWorkHandoffRecovery: defer,
+      recoverPendingBackgroundWorkHandoffs: recoverPending,
+    });
+    const supervisor = {
+      enqueue: vi.fn(async () => undefined),
+      tick: vi.fn(async () => undefined),
+      stop: vi.fn(async () => undefined),
+    };
+    const agent = new SubstrateAgent(
+      new EventBus(),
+      makeMockLLMProvider(),
+      sessionManager,
+      'System prompt',
+      makeConfig(),
+    );
+    Object.assign(agent, { backgroundWorkSupervisor: supervisor });
+
+    await expect(agent.tickBackgroundWork()).rejects.toBe(evidenceError);
+    await expect(agent.tickBackgroundWork()).resolves.toBeUndefined();
+
+    expect(recoveryStream).toHaveBeenCalledOnce();
+    expect(supervisor.enqueue).not.toHaveBeenCalled();
+    expect(defer).not.toHaveBeenCalled();
+    expect(recoverPending).toHaveBeenCalledOnce();
+    expect(supervisor.tick).toHaveBeenCalledTimes(2);
+  });
+
   it('registers a response_control tool that rejects no_reply while a paid deliverable is pending', async () => {
     const config = makeConfig();
     const eventBus = new EventBus();

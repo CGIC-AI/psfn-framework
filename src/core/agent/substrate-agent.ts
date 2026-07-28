@@ -30,7 +30,7 @@ import {
   INTENTION_FOLLOW_UP_AUTHOR_ID,
   INTENTION_FOLLOW_UP_AUTHOR_NAME,
 } from '../intention/appraisal.js';
-import type { AgentResponse, Attachment, CorrelationMetadata, MessagePromptOverride, ResponseStyle, SubstrateMessage } from '../../shared/contracts/runtime.js';
+import type { AgentResponse, Attachment, CorrelationMetadata, MessagePromptOverride, ResponseStyle, SubstrateMessage, TurnRecord } from '../../shared/contracts/runtime.js';
 import type { PlacesRegistryConfig } from '../../shared/contracts/places-registry.js';
 import type { CapabilityTier, CoreSubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import type { ContactStorePort } from '../contacts/contact-store-port.js';
@@ -176,7 +176,10 @@ import {
 import type { TurnSessionIdentity } from './substrate-agent/turn-execution/contracts.js';
 import type { HumanAttentionPressurePort } from './fatigue/human-attention-pressure.js';
 import { createTurnExecutionRuntimeAdapter } from './substrate-agent/turn-execution-adapter.js';
-import { parseTurnRecordBackgroundWorkHandoff } from './background-work/types.js';
+import {
+  parseTurnRecordBackgroundWorkHandoff,
+  type EnqueueBackgroundWorkInput,
+} from './background-work/types.js';
 import type { BackgroundWorkRuntimeTuning } from './background-work/config.js';
 import {
   CompletionNoticeBuffer,
@@ -313,6 +316,18 @@ function requireBackgroundWorkWelfare(
     reserveSlots: welfare.reserveSlots,
   };
 }
+
+function workerValidatedRecoveryJobs(record: TurnRecord): EnqueueBackgroundWorkInput[] {
+  if (record.status !== 'completed' || !record.backgroundWorkHandoff) {
+    const error = new Error('Recovery worker returned a record without a completed handoff');
+    error.name = 'TurnRecordRecoveryEvidenceError';
+    throw error;
+  }
+  // The recovery port validates identity, payload, payload fingerprint, and
+  // source-turn fingerprint before it removes old-fat message content for IPC.
+  return record.backgroundWorkHandoff.jobs as EnqueueBackgroundWorkInput[];
+}
+
 const DEFAULT_TOOL_SCHEDULER_MAX_PARALLEL = 5;
 const BACKGROUND_WORK_HANDOFF_RECOVERY_BATCH_SIZE = 32;
 
@@ -1556,7 +1571,7 @@ export class SubstrateAgent {
             await recoverHistoricalBackgroundWorkHandoffs(
               completionTrackedRecords,
               async (record) => {
-                const jobs = parseTurnRecordBackgroundWorkHandoff(record);
+                const jobs = workerValidatedRecoveryJobs(record);
                 if (jobs.length > 0) await this.backgroundWorkSupervisor!.enqueue(jobs);
               },
               (record) => this.sessionManager.deferBackgroundWorkHandoffRecovery(record),

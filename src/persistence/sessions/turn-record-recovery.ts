@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { extname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -55,9 +55,11 @@ export async function* streamTurnRecordRecoverySnapshot(
     stdio: ['ignore', 'ignore', 'inherit', 'ipc'],
   });
   const messages: RecoveryWorkerMessage[] = [];
+  const abortPath = join(scratchDir, 'abort');
   let wake: (() => void) | undefined;
   let terminalError: Error | undefined;
   let exited = false;
+  const abortState = { requested: false };
   const onMessage = (message: RecoveryWorkerMessage): void => {
     messages.push(message);
     wake?.();
@@ -74,17 +76,20 @@ export async function* streamTurnRecordRecoverySnapshot(
     wake?.();
   };
   const onAbort = (): void => {
+    if (abortState.requested) return;
+    abortState.requested = true;
     terminalError = abortError();
-    worker.kill();
+    writeFileSync(abortPath, '', { flag: 'wx' });
+    if (worker.connected) worker.send({ type: 'abort' });
     wake?.();
   };
   worker.on('message', message => onMessage(message as RecoveryWorkerMessage));
   worker.on('error', onError);
   worker.on('exit', onExit);
-  options.signal?.addEventListener('abort', onAbort, { once: true });
   worker.send({
     type: 'start',
     input: {
+      abortPath,
       databasePath: join(scratchDir, 'snapshot.sqlite'),
       maxRowBytes: workerOptions.maxRowBytes,
       scanChunkBytes: workerOptions.scanChunkBytes,
@@ -93,12 +98,14 @@ export async function* streamTurnRecordRecoverySnapshot(
       sqliteCacheBytes: workerOptions.sqliteCacheBytes,
     },
   });
+  options.signal?.addEventListener('abort', onAbort, { once: true });
+  if (options.signal?.aborted) onAbort();
 
   const nextMessage = async (): Promise<RecoveryWorkerMessage> => {
     for (;;) {
+      if (terminalError) throw terminalError;
       const message = messages.shift();
       if (message) return message;
-      if (terminalError) throw terminalError;
       if (exited) throw new Error('TurnRecord recovery worker exited before completing its snapshot');
       await new Promise<void>(resolve => { wake = resolve; });
       wake = undefined;
@@ -124,7 +131,13 @@ export async function* streamTurnRecordRecoverySnapshot(
     }
   } finally {
     options.signal?.removeEventListener('abort', onAbort);
-    worker.kill();
+    if (abortState.requested && worker.exitCode === null && worker.signalCode === null) {
+      await Promise.race([
+        new Promise<void>(resolve => worker.once('exit', () => resolve())),
+        new Promise<void>(resolve => setTimeout(resolve, 250)),
+      ]);
+    }
+    if (worker.exitCode === null && worker.signalCode === null) worker.kill();
     if (worker.exitCode === null && worker.signalCode === null) {
       await new Promise<void>(resolve => worker.once('exit', () => resolve()));
     }

@@ -414,9 +414,22 @@ export function evaluatePolicy(ctx: PolicyContext, policyConfig: PolicyConfig): 
 
     case 'fs.read':
     case 'fs.write': {
-      const path = (params as Record<string, unknown>).path;
+      const filesystemParams = params as Record<string, unknown>;
+      const path = filesystemParams.path;
       if (typeof path !== 'string' || path.trim().length === 0) {
         return 'DENY';
+      }
+      if (method === 'fs.read') {
+        const maxBytes = filesystemParams.maxBytes;
+        const offsetBytes = filesystemParams.offsetBytes;
+        if (
+          (maxBytes !== undefined
+            && !isPositiveIntegerInRange(maxBytes, 1, 20_000))
+          || (offsetBytes !== undefined
+            && !isPositiveIntegerInRange(offsetBytes, 0, Number.MAX_SAFE_INTEGER))
+        ) {
+          return 'DENY';
+        }
       }
 
       const workspaceRoot = resolveWorkspaceRoot(policyConfig.workspacePath);

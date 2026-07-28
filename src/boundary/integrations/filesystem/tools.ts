@@ -19,7 +19,7 @@ const DEFAULT_SEARCH_MAX_BYTES_PER_FILE = 40_000;
 const MAX_SEARCH_MAX_BYTES_PER_FILE = 200_000;
 const MAX_CONTEXT_LINES = 2;
 const LARGE_DOCUMENT_HANDOFF =
-  'This file exceeds the fs 20,000-byte hard read cap. Use analysis_workbench for temporary large-context analysis, '
+  'Continue paging this file with the returned next_offset_bytes. For longer analysis, use analysis_workbench, '
   + 'or use a bounded subagent instructed to return provenance-bearing excerpts with the source path and line or byte ranges. '
   + 'Bring those excerpts or a durable artifact back before the worker is discarded; do not rely on a summary-only handoff.';
 
@@ -53,6 +53,27 @@ function requireString(value: unknown, field: string): string {
 function requireStringField(value: unknown, field: string): string {
   if (typeof value !== 'string') {
     throw new Error(`${field} is required.`);
+  }
+  return value;
+}
+
+function optionalSafeIntegerInRange(
+  value: unknown,
+  field: string,
+  defaultValue: number,
+  minimum: number,
+  maximum: number,
+): number {
+  if (value === undefined) return defaultValue;
+  if (
+    typeof value !== 'number'
+    || !Number.isSafeInteger(value)
+    || value < minimum
+    || value > maximum
+  ) {
+    throw new Error(
+      `${field} must be a safe integer between ${String(minimum)} and ${String(maximum)}`,
+    );
   }
   return value;
 }
@@ -122,6 +143,11 @@ export function createFsTool(ops: FilesystemOperations): SubstrateAgentTool {
         description:
           `Used with action=read. Read at most this many bytes; ${String(MAX_READ_CHARS)} is a hard cap. `
           + 'Use analysis_workbench or a bounded subagent for larger documents.',
+      })),
+      offset_bytes: Type.Optional(Type.Integer({
+        minimum: 0,
+        description:
+          'Used with action=read. Byte cursor for the page; start at 0, then pass the returned next_offset_bytes.',
       })),
       query: Type.Optional(Type.String({
         description: 'Used with action=search. Literal text or regex pattern to find.',
@@ -207,12 +233,30 @@ export function createFsTool(ops: FilesystemOperations): SubstrateAgentTool {
 
           case 'read': {
             const path = requireString(params.path, 'path');
+            const maxBytes = optionalSafeIntegerInRange(
+              params.max_bytes,
+              'max_bytes',
+              MAX_READ_CHARS,
+              1,
+              MAX_READ_CHARS,
+            );
+            const offsetBytes = optionalSafeIntegerInRange(
+              params.offset_bytes,
+              'offset_bytes',
+              0,
+              0,
+              Number.MAX_SAFE_INTEGER,
+            );
             const result = await ops.read(path, {
-              maxBytes: typeof params.max_bytes === 'number' ? params.max_bytes : MAX_READ_CHARS,
+              maxBytes,
+              offsetBytes,
             });
             return textResult(JSON.stringify({
               action: 'read',
               path,
+              offset_bytes: result.offsetBytes,
+              next_offset_bytes: result.nextOffsetBytes,
+              eof: result.eof,
               truncated: result.truncated,
               ...(result.truncated ? { next_action: LARGE_DOCUMENT_HANDOFF } : {}),
               content: result.content,

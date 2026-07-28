@@ -1,4 +1,4 @@
-import { glob as fsGlob, open, readFile, stat, writeFile } from 'node:fs/promises';
+import { glob as fsGlob, readFile, stat, writeFile } from 'node:fs/promises';
 import { setImmediate as yieldToEventLoop } from 'node:timers/promises';
 import { join, relative } from 'node:path';
 import {
@@ -19,6 +19,7 @@ import type {
   FilesystemWriteOptions,
   FilesystemWriteResult,
 } from './ops.js';
+import { readUtf8TextFilePage } from './text-file-paging.js';
 
 const DEFAULT_LIST_GLOB = '**/*';
 const DEFAULT_DIRECTORY_LIST_GLOB = '*';
@@ -385,26 +386,23 @@ async function collectLineMatches(
   return matches;
 }
 
-export async function readTextFile(path: string, maxBytes?: number): Promise<FilesystemReadResult> {
-  const boundedMaxBytes = clampFiniteInteger(maxBytes, 0, 0, MAX_SEARCH_MAX_BYTES_PER_FILE);
-  if (boundedMaxBytes <= 0) {
+export async function readTextFile(
+  path: string,
+  maxBytes?: number,
+  offsetBytes?: number,
+): Promise<FilesystemReadResult> {
+  const pagingRequested = maxBytes !== undefined || offsetBytes !== undefined;
+  if (!pagingRequested) {
     return {
       content: await readFile(path, 'utf-8'),
+      offsetBytes: 0,
+      nextOffsetBytes: null,
+      eof: true,
       truncated: false,
     };
   }
 
-  const handle = await open(path, 'r');
-  try {
-    const buffer = Buffer.alloc(boundedMaxBytes + 1);
-    const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
-    return {
-      content: buffer.subarray(0, Math.min(bytesRead, boundedMaxBytes)).toString('utf-8'),
-      truncated: bytesRead > boundedMaxBytes,
-    };
-  } finally {
-    await handle.close();
-  }
+  return readUtf8TextFilePage(path, maxBytes ?? 20_000, offsetBytes ?? 0);
 }
 
 export async function listWorkspaceFiles(

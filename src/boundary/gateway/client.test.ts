@@ -2889,16 +2889,28 @@ describe('GatewayClient filesystem RPC wrappers', () => {
   });
 
   it('routes filesystem methods with typed payloads', async () => {
-    const readPromise = client.fsReadDetailed('notes.txt', { maxBytes: 12 });
+    const readPromise = client.fsReadDetailed('notes.txt', { maxBytes: 12, offsetBytes: 24 });
     const readReq = conn.sent[0] as { id: number; method: string; params: Record<string, unknown> };
     expect(readReq.method).toBe('fs.read');
-    expect(readReq.params).toEqual({ path: 'notes.txt', maxBytes: 12 });
+    expect(readReq.params).toEqual({ path: 'notes.txt', maxBytes: 12, offsetBytes: 24 });
     conn._emit({
       jsonrpc: '2.0',
       id: readReq.id,
-      result: { content: 'hello', truncated: false },
+      result: {
+        content: 'hello',
+        offsetBytes: 24,
+        nextOffsetBytes: null,
+        eof: true,
+        truncated: false,
+      },
     });
-    await expect(readPromise).resolves.toEqual({ content: 'hello', truncated: false });
+    await expect(readPromise).resolves.toEqual({
+      content: 'hello',
+      offsetBytes: 24,
+      nextOffsetBytes: null,
+      eof: true,
+      truncated: false,
+    });
 
     const listPromise = client.fsList(undefined, 25, { path: 'downloads' });
     const listReq = conn.sent[1] as { id: number; method: string; params: Record<string, unknown> };

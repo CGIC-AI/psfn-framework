@@ -1457,14 +1457,18 @@ export class GatewayClient implements
 
   // ── Filesystem ──
 
-  async fsReadDetailed(path: string, options?: { maxBytes?: number }): Promise<FsReadResult> {
+  async fsReadDetailed(
+    path: string,
+    options?: { maxBytes?: number; offsetBytes?: number },
+  ): Promise<FsReadResult> {
     return await this.rpcInstance.request('fs.read', {
       path,
       ...(typeof options?.maxBytes === 'number' ? { maxBytes: options.maxBytes } : {}),
+      ...(typeof options?.offsetBytes === 'number' ? { offsetBytes: options.offsetBytes } : {}),
     }) as FsReadResult;
   }
 
-  async fsRead(path: string, options?: { maxBytes?: number }): Promise<string> {
+  async fsRead(path: string, options?: { maxBytes?: number; offsetBytes?: number }): Promise<string> {
     const result = await this.fsReadDetailed(path, options);
     return result.content;
   }

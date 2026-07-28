@@ -110,6 +110,24 @@ export interface MemoryProvenance {
   sourceMessageIds?: number[];
   sourceSpanStartMessageId?: number;
   sourceSpanEndMessageId?: number;
+  /**
+   * Latest source-message instant (epoch ms) of the conversation this memory was
+   * extracted from — the memory's admission (conversation) time, NOT the
+   * extraction instant (`PurrMemory.extractedAt`). Threaded from the source
+   * messages' timestamps at extraction time so the disclosure collector can
+   * resolve the source channel's classification epoch AS-OF the conversation,
+   * not as-of a later (possibly deferred, post-demotion) extraction.
+   *
+   * The LATEST source-message instant is the safe bound: it is the last moment
+   * content actually entered the memory, so counting a channel's demotions up to
+   * it never counts a widening that post-dates the conversation (the deferred-
+   * extraction bug, psfn-framework-qgqw.2 / bible §9.3). Absent ⇒ the epoch
+   * as-of instant is UNKNOWN and `collectDisclosureMemorySources` fails closed
+   * (stamps no epoch), denying auto-share to any since-demoted (epoch-tracked)
+   * room while staying inert for never-demoted rooms. It must NEVER fall back to
+   * `extractedAt`, which is exactly the widening this field prevents.
+   */
+  sourceConversationAt?: number;
 }
 export interface MemoryScopeRef {
   kind: MemoryScopeKind;
@@ -410,6 +428,15 @@ function normalizeOptionalPositiveInteger(value: unknown): number | undefined {
     : undefined;
 }
 
+// A conversation instant (epoch ms). Fail closed: anything non-finite or
+// non-positive is dropped so the disclosure collector treats it as UNKNOWN
+// rather than resolving a spurious epoch. Never coerces from `extractedAt`.
+function normalizeOptionalFiniteTimestamp(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0
+    ? value
+    : undefined;
+}
+
 function normalizePositiveIntegerArray(value: unknown): number[] {
   if (!Array.isArray(value)) return [];
   return [...new Set(value)]
@@ -498,6 +525,10 @@ export function normalizeMemoryProvenance(value: unknown): MemoryProvenance | un
   const sourceSpanEndMessageId = normalizeOptionalPositiveInteger(record.sourceSpanEndMessageId);
   if (sourceSpanEndMessageId !== undefined) {
     provenance.sourceSpanEndMessageId = sourceSpanEndMessageId;
+  }
+  const sourceConversationAt = normalizeOptionalFiniteTimestamp(record.sourceConversationAt);
+  if (sourceConversationAt !== undefined) {
+    provenance.sourceConversationAt = sourceConversationAt;
   }
   const actor = normalizeOptionalString(record.actor);
   if (actor && ['companion', 'operator', 'system', 'shard', 'subagent', 'repl'].includes(actor)) {

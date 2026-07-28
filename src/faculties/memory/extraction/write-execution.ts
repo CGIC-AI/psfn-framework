@@ -44,6 +44,9 @@ export function buildExtractionFactRoutingTelemetry(
     ...(routing.sourceSpanEndMessageId
       ? { sourceSpanEndMessageId: routing.sourceSpanEndMessageId }
       : {}),
+    ...(routing.sourceConversationAt !== undefined
+      ? { sourceConversationAt: routing.sourceConversationAt }
+      : {}),
     routingReason: routing.reason,
   };
 }

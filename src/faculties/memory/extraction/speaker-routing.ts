@@ -36,6 +36,8 @@ export interface ExtractionFactRouting {
   sourceMessageIds?: number[];
   sourceSpanStartMessageId?: number;
   sourceSpanEndMessageId?: number;
+  /** Latest source-message instant (epoch ms) of the routed fact's conversation. */
+  sourceConversationAt?: number;
   routingReason: ExtractionFactRoutingReason;
 }
 
@@ -74,6 +76,8 @@ export type FactRoutingDecision =
     sourceMessageIds?: number[];
     sourceSpanStartMessageId?: number;
     sourceSpanEndMessageId?: number;
+    /** Latest source-message instant (epoch ms) of this fact's conversation. */
+    sourceConversationAt?: number;
     reason: ExtractionFactRoutingReason;
   }
   | {
@@ -110,12 +114,31 @@ export async function buildSpeakerRoutingContext(
   };
 }
 
+/**
+ * The latest message instant (epoch ms) across a set of source entries, or
+ * undefined when none carry a usable timestamp. This is the safe upper bound on
+ * the conversation's admission time for epoch resolution: it never post-dates the
+ * conversation, so it excludes any channel demotion that happened after the last
+ * message was sent (the deferred-extraction over-share, psfn-framework-qgqw.2).
+ */
+function latestSourceEntryTimestamp(entries: readonly SessionEntry[]): number | undefined {
+  let latest: number | undefined;
+  for (const entry of entries) {
+    const ts = entry.timestamp;
+    if (typeof ts === 'number' && Number.isFinite(ts) && ts > 0 && (latest === undefined || ts > latest)) {
+      latest = ts;
+    }
+  }
+  return latest;
+}
+
 export function resolveFactRouting(
   fact: ExtractedFact,
   context: SpeakerRoutingContext,
   triggerContactId: string | undefined,
   options: FactRoutingOptions = {},
 ): FactRoutingDecision {
+  const conversationAt = latestSourceEntryTimestamp(context.entries);
   const structuredRouting = resolveStructuredFactRouting(
     fact,
     context,
@@ -134,6 +157,7 @@ export function resolveFactRouting(
       ...(speaker && speaker.entries.length > 0
         ? { addressMode: inferAddressMode(speaker.entries, options) }
         : {}),
+      ...(conversationAt !== undefined ? { sourceConversationAt: conversationAt } : {}),
       reason: 'single_speaker_transcript',
     };
   }
@@ -163,6 +187,7 @@ export function resolveFactRouting(
     ...(match.speaker.entries.length > 0
       ? { addressMode: inferAddressMode(match.speaker.entries, options) }
       : {}),
+    ...(conversationAt !== undefined ? { sourceConversationAt: conversationAt } : {}),
     reason: match.reason,
   };
 }
@@ -270,6 +295,9 @@ function buildStructuredRoute(params: {
     params.attribution.sourceSpanStartMessageId ?? sourceMessageIds[0];
   const sourceSpanEndMessageId =
     params.attribution.sourceSpanEndMessageId ?? sourceMessageIds.at(-1);
+  // Per-fact conversation instant: the latest of THIS fact's attributed source
+  // messages (the tightest safe bound) rather than the whole transcript window.
+  const sourceConversationAt = latestSourceEntryTimestamp(params.sourceEntries);
 
   return {
     status: 'route',
@@ -287,6 +315,7 @@ function buildStructuredRoute(params: {
     sourceMessageIds,
     ...(sourceSpanStartMessageId ? { sourceSpanStartMessageId } : {}),
     ...(sourceSpanEndMessageId ? { sourceSpanEndMessageId } : {}),
+    ...(sourceConversationAt !== undefined ? { sourceConversationAt } : {}),
     reason: params.reason,
   };
 }

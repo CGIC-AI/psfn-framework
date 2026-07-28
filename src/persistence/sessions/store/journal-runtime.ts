@@ -763,10 +763,14 @@ export class SessionJournalRuntime {
     // A boundary-backed partial chain cannot safely distinguish a tampered
     // boundary/window from a key transition. Replay the canonical archive so
     // integrity normalization remains byte-identical to full history reads —
-    // and replay even when the window already started at the archive beginning,
-    // because the full-load path is the durable-incident funnel: returning
-    // detected-failed rows without it would skip recordIntegrityFailure
-    // (bead g59z).
+    // and replay even when the window already started at the archive beginning.
+    // Unlike the tail reader, this window is never coverage-equivalent to a full
+    // load: it is capped at `beforeId`, so its own tally would understate a
+    // failure run that continues past the cursor, and the loop below does not
+    // track run-collapse state, so its rows would repeat the full
+    // unverified_history boilerplate per entry. Replaying gets both the
+    // canonical incident and the collapsed rendering (bead g59z). The extra
+    // verification pass only happens on the rare detected-failure path.
     if (verificationFailed) {
       const loaded = this.loadChannel(archive);
       const eligible = loaded.entries.filter(entry => entry.id < beforeId);

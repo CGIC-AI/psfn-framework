@@ -46,15 +46,63 @@ interface JournalChainContext {
     loadedCount: number,
   ) => void;
   /**
-   * Optional durable-incident seam (bead g59z). Called once per full journal
-   * load when one or more entries fail HMAC verification. Content-free; the
-   * full-load path is the funnel because every bounded reader that detects a
-   * verification failure MUST replay through it unconditionally — no bounded
-   * path may return detected-failed rows without that replay, even when its
-   * scan already covered the whole archive. Absent in tests/paths with no
-   * observer wired.
+   * Optional durable-incident seam (bead g59z). Called once per stable scan
+   * that surfaced one or more HMAC verification failures. Content-free.
+   *
+   * The invariant is "no reader returns detected-failed rows without emitting
+   * an incident" — NOT "every reader replays through the full load". A bounded
+   * reader may emit directly only when its scan is provably coverage-equivalent
+   * to a full load (same archives, same start index, same candidate seed), so
+   * the event it produces is byte-identical to the funnel's. Every other
+   * bounded reader must replay through `loadJournalArchiveChain`. Absent in
+   * tests/paths with no observer wired.
    */
   recordIntegrityFailure?: (event: SessionIntegrityFailureEvent) => void;
+}
+
+/**
+ * Content-free tally of HMAC-failed entries for the durable-incident seam
+ * (bead g59z). A "run" is a contiguous stretch of verification failures,
+ * mirroring the render-side run-collapse semantics. Shared by every scan that
+ * is allowed to emit, so the event shape does not depend on which reader
+ * produced it.
+ */
+class IntegrityFailureTally {
+  private failedEntryCount = 0;
+  private firstFailedEntryId = 0;
+  private lastFailedEntryId = 0;
+  private contiguousRunCount = 0;
+  private previousEntryFailed = false;
+
+  observe(entry: JournalEntry, verified: boolean): void {
+    if (verified) {
+      this.previousEntryFailed = false;
+      return;
+    }
+    this.failedEntryCount += 1;
+    const failedId = entry.id;
+    if (typeof failedId === 'number') {
+      if (this.firstFailedEntryId === 0 || failedId < this.firstFailedEntryId) {
+        this.firstFailedEntryId = failedId;
+      }
+      if (failedId > this.lastFailedEntryId) this.lastFailedEntryId = failedId;
+    }
+    if (!this.previousEntryFailed) this.contiguousRunCount += 1;
+    this.previousEntryFailed = true;
+  }
+
+  emit(context: JournalChainContext, channelId: string): void {
+    if (this.failedEntryCount === 0 || !context.recordIntegrityFailure) return;
+    const firstId = this.firstFailedEntryId > 0 ? this.firstFailedEntryId : 1;
+    context.recordIntegrityFailure({
+      channelId,
+      failedEntryCount: this.failedEntryCount,
+      firstFailedEntryId: firstId,
+      lastFailedEntryId: this.lastFailedEntryId >= firstId ? this.lastFailedEntryId : firstId,
+      contiguousRunCount: Math.max(1, this.contiguousRunCount),
+      detectedAtMs: Date.now(),
+    });
+  }
 }
 
 function applyTurnTombstones(
@@ -139,14 +187,7 @@ function loadJournalArchiveChainAttempt(
   // full notice on its first rendered message (bead g59z).
   let runNoticeRendered = false;
   let maxId = 0;
-  // Structural, content-free accumulation of HMAC-failed entries for the
-  // durable-incident seam (bead g59z). A "run" is a contiguous stretch of
-  // verification failures, mirroring the render-side run-collapse semantics.
-  let failedEntryCount = 0;
-  let firstFailedEntryId = 0;
-  let lastFailedEntryId = 0;
-  let contiguousRunCount = 0;
-  let previousEntryFailed = false;
+  const failures = new IntegrityFailureTally();
   for (const archive of archives) {
     const result = context.archivePort.readJournalFile(archive);
     let archiveContainsCompaction = false;
@@ -165,18 +206,7 @@ function loadJournalArchiveChainAttempt(
       runNoticeRendered = normalized.verified
         ? false
         : runNoticeRendered || normalized.renderedUnverifiedNotice;
-      if (!normalized.verified) {
-        failedEntryCount += 1;
-        const failedId = normalized.entry.id;
-        if (typeof failedId === 'number') {
-          if (firstFailedEntryId === 0 || failedId < firstFailedEntryId) firstFailedEntryId = failedId;
-          if (failedId > lastFailedEntryId) lastFailedEntryId = failedId;
-        }
-        if (!previousEntryFailed) contiguousRunCount += 1;
-        previousEntryFailed = true;
-      } else {
-        previousEntryFailed = false;
-      }
+      failures.observe(normalized.entry, normalized.verified);
       applyJournalState(cache, normalized.entry);
       const message = journalToSessionEntry(normalized.entry);
       if (message) {
@@ -226,17 +256,7 @@ function loadJournalArchiveChainAttempt(
   // that surfaced HMAC failures. Fires only after the fingerprint check has
   // confirmed a non-retried, single-generation read. Best-effort: recording is
   // a side signal, never a gate on the fail-closed read itself.
-  if (failedEntryCount > 0 && context.recordIntegrityFailure) {
-    const firstId = firstFailedEntryId > 0 ? firstFailedEntryId : 1;
-    context.recordIntegrityFailure({
-      channelId: cache.channelId,
-      failedEntryCount,
-      firstFailedEntryId: firstId,
-      lastFailedEntryId: lastFailedEntryId >= firstId ? lastFailedEntryId : firstId,
-      contiguousRunCount: Math.max(1, contiguousRunCount),
-      detectedAtMs: Date.now(),
-    });
-  }
+  failures.emit(context, cache.channelId);
   return cache;
 }
 
@@ -487,6 +507,7 @@ function readRecentEntriesFromJournalArchiveChainAttempt(
   const beforeFingerprint = fingerprintJournalArchiveChain(context.archivePort, archives);
   const blocks: JournalEntry[][] = [];
   let earliestArchiveIndex = archives.length;
+  let earliestTailTruncated = true;
   let remainingMessages = limit;
   for (let archiveIndex = archives.length - 1; archiveIndex >= 0; archiveIndex -= 1) {
     const archive = archives[archiveIndex]!;
@@ -506,6 +527,7 @@ function readRecentEntriesFromJournalArchiveChainAttempt(
     remainingMessages -= entries.filter(entry => entry.type === 'message').length;
     blocks.unshift(entries);
     earliestArchiveIndex = archiveIndex;
+    earliestTailTruncated = tail.truncated;
     if (remainingMessages <= 0) break;
   }
 
@@ -545,6 +567,7 @@ function readRecentEntriesFromJournalArchiveChainAttempt(
   const messages: SessionEntry[] = [];
   let verificationFailed = false;
   let runNoticeRendered = false;
+  const failures = new IntegrityFailureTally();
   for (let index = oldestMessageIndex; index < rawEntries.length; index += 1) {
     const normalized = context.normalizeEntry(rawEntries[index]!, previousHmacCandidates, runNoticeRendered);
     previousHmacCandidates = normalized.nextHmacCandidates;
@@ -552,6 +575,7 @@ function readRecentEntriesFromJournalArchiveChainAttempt(
       ? false
       : runNoticeRendered || normalized.renderedUnverifiedNotice;
     verificationFailed ||= !normalized.verified;
+    failures.observe(normalized.entry, normalized.verified);
     const message = journalToSessionEntry(normalized.entry);
     if (message) messages.push(message);
   }
@@ -570,12 +594,18 @@ function readRecentEntriesFromJournalArchiveChainAttempt(
     );
   }
   if (verificationFailed) {
-    // A detected failure ALWAYS replays through the full-load funnel, even when
-    // the bounded scan already covered the whole archive and could return its
-    // own rows. The duplicate integrity-provider pass only happens on this rare
-    // failure path and is the price of the funnel invariant: skipping it would
-    // silently bypass recordIntegrityFailure, so a small broken session would
-    // never produce a durable incident (bead g59z).
+    // Coverage equivalence: the bounded scan started at archive 0, read that
+    // archive to its physical start, and began at entry index 0, so it walked
+    // exactly the entries a full load walks, seeded with the same null
+    // candidate. Its tally is therefore byte-identical to the funnel's and it
+    // may emit the incident itself (bead g59z) instead of re-verifying every
+    // row a second time. Any weaker window — a truncated tail, a higher
+    // archive, or a scan that skipped leading non-message entries — cannot make
+    // that claim and must replay through the canonical full load.
+    if (earliestArchiveIndex === 0 && !earliestTailTruncated && oldestMessageIndex === 0) {
+      failures.emit(context, archives.at(-1)!.channelId);
+      return messages.length <= limit ? messages : messages.slice(-limit);
+    }
     const loaded = loadJournalArchiveChain(context, archives);
     return loaded.entries.length <= limit ? [...loaded.entries] : loaded.entries.slice(-limit);
   }

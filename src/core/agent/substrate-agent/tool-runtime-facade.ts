@@ -71,7 +71,6 @@ import {
   buildRuntimeToolCatalogEntry,
   type RuntimeToolCatalogSnapshot,
 } from '../tool-catalog.js';
-import { resolveTurnWorkerExecutionPolicy } from './model-runtime.js';
 import { resolveIcpAutonomyCandidateSchedulerOrigin } from '../../icp/candidate-scheduler-origin.js';
 import { getRequestContext } from '../../../primitives/llm/request-context.js';
 import { createIcpCandidateScopedNotifyTool } from './icp-candidate-notify-tool.js';
@@ -187,15 +186,17 @@ function isRoutineIntentForAnalysisWorkbench(intent: string | null | undefined):
   return intent === 'memory' || intent === 'ops' || intent === 'reflection';
 }
 
-function explicitlyRequestsLargeEvidenceAnalysis(content: string): boolean {
-  return /\banalysis_workbench\b/i.test(content)
-    || /\blarge[-\s]context\b/i.test(content)
-    || /\blarge\s+(file|files|codebase|codebases|log|logs|transcript|transcripts|dataset|datasets|evidence\s+set|evidence)\b/i.test(content)
-    || /\bmulti[-\s]stage\s+analysis\b/i.test(content);
-}
+function hasAnalysisWorkbenchEligibleInput(message: SubstrateMessage): boolean {
+  const contentExplicitlyRequestsAnalysis = /\banalysis_workbench\b/i.test(message.content)
+    || /\blarge[-\s]context\b/i.test(message.content)
+    || /\blarge\s+(file|files|codebase|codebases|log|logs|transcript|transcripts|dataset|datasets|evidence\s+set|evidence)\b/i.test(message.content)
+    || /\bmulti[-\s]stage\s+analysis\b/i.test(message.content);
+  const hasParsedAttachment = message.attachments?.some(
+    attachment => typeof attachment.parsedTextPath === 'string'
+      && attachment.parsedTextPath.trim().length > 0,
+  ) ?? false;
 
-function isWorkerExecutionTurn(message: SubstrateMessage): boolean {
-  return resolveTurnWorkerExecutionPolicy(message) !== null;
+  return contentExplicitlyRequestsAnalysis || hasParsedAttachment;
 }
 
 function resolveMaintenanceIdentityAction(params: Record<string, unknown>): string | null {
@@ -965,16 +966,10 @@ export class ToolRuntimeFacade {
     correlation: CorrelationMetadata | null,
   ): ActiveToolResolution {
     return this.applySatelliteCapabilityToolPolicy(
-      this.applyAnalysisWorkbenchWorkerContextPolicy(
-        this.applyRoutineIntentCoreToolPolicy(
-          this.applyMaintenanceCoreToolPolicy(
-            this.resolveActiveTools(),
-            taskKind,
-            correlation,
-          ),
-          message,
+      this.applyRoutineIntentCoreToolPolicy(
+        this.applyMaintenanceCoreToolPolicy(
+          this.resolveActiveTools(),
           taskKind,
-          intent,
           correlation,
         ),
         message,
@@ -1050,7 +1045,7 @@ export class ToolRuntimeFacade {
     intent: string | null | undefined,
     correlation: CorrelationMetadata | null,
   ): ActiveToolResolution {
-    if (!isRoutineIntentForAnalysisWorkbench(intent) || explicitlyRequestsLargeEvidenceAnalysis(message.content)) {
+    if (!isRoutineIntentForAnalysisWorkbench(intent) || hasAnalysisWorkbenchEligibleInput(message)) {
       return resolution;
     }
 
@@ -1071,71 +1066,6 @@ export class ToolRuntimeFacade {
           taskKind: taskKind ?? null,
           intent,
           reason: 'routine_intent_direct_tool_path',
-        });
-        continue;
-      }
-
-      filteredTools.push(tool);
-      if (source) {
-        filteredSnapshotTools.push({ toolName: tool.name, source });
-      }
-    }
-
-    if (!removed) {
-      return resolution;
-    }
-
-    const counts: AdaptiveToolSnapshotTelemetry['counts'] = {
-      core: 0,
-      extended: 0,
-      total: filteredSnapshotTools.length,
-    };
-    for (const entry of filteredSnapshotTools) {
-      if (entry.source === 'core') counts.core += 1;
-      else counts.extended += 1;
-    }
-
-    return {
-      tools: filteredTools,
-      snapshotTools: filteredSnapshotTools,
-      promotedSkipped: resolution.promotedSkipped.map(entry => ({
-        ...entry,
-        ...(entry.missingTokens ? { missingTokens: [...entry.missingTokens] } : {}),
-      })),
-      counts,
-    };
-  }
-
-  private applyAnalysisWorkbenchWorkerContextPolicy(
-    resolution: ActiveToolResolution,
-    message: SubstrateMessage,
-    taskKind: string | null | undefined,
-    intent: string | null | undefined,
-    correlation: CorrelationMetadata | null,
-  ): ActiveToolResolution {
-    if (isWorkerExecutionTurn(message)) {
-      return resolution;
-    }
-
-    const sourceByToolName = new Map(
-      resolution.snapshotTools.map((entry) => [entry.toolName, entry.source] as const),
-    );
-    const filteredTools: AgentTool<any>[] = [];
-    const filteredSnapshotTools: AdaptiveToolSnapshotTool[] = [];
-    let removed = false;
-
-    for (const tool of resolution.tools) {
-      const source = sourceByToolName.get(tool.name);
-      if (tool.name === 'analysis_workbench' && source === 'core') {
-        removed = true;
-        this.emitTelemetry('agent.tools.core_guardrail.skipped', {
-          ...this.withAdaptiveCorrelation(correlation ?? undefined, 'agent.tools.core_guardrail.skipped'),
-          toolName: tool.name,
-          taskKind: taskKind ?? null,
-          intent: intent ?? null,
-          channelId: message.channelId,
-          reason: 'analysis_workbench_worker_context_required',
-          recommendation: 'delegate_large_evidence_analysis_to_subagent_or_shard',
         });
         continue;
       }

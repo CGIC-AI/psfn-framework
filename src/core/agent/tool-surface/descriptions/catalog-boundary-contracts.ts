@@ -36,15 +36,17 @@ export const CATALOG_BOUNDARY_TOOL_CONTRACTS = {
       'Read and safely mutate files within the configured personal-file boundary; one direct read has a hard cap of 20,000 bytes.',
     actions: [
       action('list', [], ['path', 'glob', 'max_entries', 'max_scanned_entries']),
-      action('read', ['path'], ['max_bytes']),
+      action('read', ['path'], ['max_bytes', 'offset_bytes']),
       action('search', ['query'], ['glob', 'mode', 'max_matches', 'max_files', 'max_bytes_per_file', 'context_lines']),
       action('write', ['path', 'content'], ['overwrite']),
       action('edit', ['path', 'old_text', 'new_text'], ['replace_all']),
     ],
     output: 'It returns bounded file data and fails closed on unsafe paths or ambiguous mutation.',
     guidance:
-      'Do not request more than 20,000 bytes from one read. For a larger document or evidence set, use analysis_workbench '
-      + 'so its temporary context can be discarded after a bounded result, or use a bounded subagent instructed to return '
+      'Do not request more than 20,000 bytes from one read. Inspect larger files sequentially by passing each returned '
+      + 'next_offset_bytes as the next offset_bytes until eof. For a long document or evidence job, prefer a bounded subagent '
+      + 'worker or automaton using analysis_workbench so its temporary context can be discarded after a bounded result; direct '
+      + 'analysis_workbench use is still permitted but may occupy the primary turn for several minutes. Require '
       + 'provenance-bearing excerpts with the source path and line or byte ranges; do not rely on a summary-only handoff. '
       + 'Do not use fs for git state; use repo.',
     example: { action: 'search', query: 'TODO', glob: 'notes/**/*.md' },
@@ -114,8 +116,10 @@ export const CATALOG_BOUNDARY_TOOL_CONTRACTS = {
     actions: [action('analyze', ['task'], ['maxIterations', 'maxTokens'], { id: 'analyze', actionField: false })],
     output: 'It returns a bounded synthesis and does not mutate source state.',
     guidance:
-      'Use it when material is too large for the fs 20,000-byte direct-read cap, and bring only the bounded answer plus '
-      + 'source paths and relevant line or byte ranges back into the conversation before its temporary context is discarded. '
+      'Use it when material is too large for the fs 20,000-byte direct-read cap. Prefer delegating long analyses to a '
+      + 'bounded worker or automaton so the primary channel stays responsive; direct use is permitted when capability '
+      + 'policy allows it, but the call may occupy the primary turn for several minutes. Bring only the bounded answer '
+      + 'plus source paths and relevant line or byte ranges back into the conversation before its temporary context is discarded. '
       + 'Do not use it for routine reasoning, simple lookup, schema confusion, or ordinary orient and schedule work; '
       + 'use the relevant callable semantic tool.',
     example: { task: 'Compare the failure signatures across these large logs and cite the decisive lines.' },

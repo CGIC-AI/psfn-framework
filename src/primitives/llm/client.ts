@@ -1587,6 +1587,7 @@ export class LLMClient {
           modelHint,
           correlation,
           estimatedInputTokens,
+          signal: options?.signal,
           ...(options?.eligibilityCompanionId
             ? { eligibilityCompanionId: options.eligibilityCompanionId }
             : {}),
@@ -2071,26 +2072,34 @@ export class LLMClient {
 
     const candidates = this.resolveCandidates(purpose, options.modelHint);
     return this.fallbackRunner.run(purpose, candidates, async (candidate, attempt) => {
-      const effectiveCandidate = this.applyWorkSpecOutputCap(
-        this.applyPurposeOutputLimits(purpose, candidate),
-        options.outputTokenCap,
-      );
-      options.onCandidateSelected?.(effectiveCandidate);
-      await this.evaluateBudgetPreflight(
-        purpose,
-        effectiveCandidate,
-        options.estimatedInputTokens ?? 0,
-        options.correlation,
-      );
-      this.enforceImportRoutingPolicy(purpose, effectiveCandidate);
-      return await this.runWithModelCallGate(
-        purpose,
-        effectiveCandidate,
-        options.correlation,
-        preemptSignal => execute(effectiveCandidate, attempt, preemptSignal),
-        options.signal,
-        options.preemptionProtected,
-      );
+      throwIfFallbackAborted(options.signal);
+      try {
+        const effectiveCandidate = this.applyWorkSpecOutputCap(
+          this.applyPurposeOutputLimits(purpose, candidate),
+          options.outputTokenCap,
+        );
+        options.onCandidateSelected?.(effectiveCandidate);
+        await this.evaluateBudgetPreflight(
+          purpose,
+          effectiveCandidate,
+          options.estimatedInputTokens ?? 0,
+          options.correlation,
+        );
+        this.enforceImportRoutingPolicy(purpose, effectiveCandidate);
+        const result = await this.runWithModelCallGate(
+          purpose,
+          effectiveCandidate,
+          options.correlation,
+          preemptSignal => execute(effectiveCandidate, attempt, preemptSignal),
+          options.signal,
+          options.preemptionProtected,
+        );
+        throwIfFallbackAborted(options.signal);
+        return result;
+      } catch (error) {
+        throwIfFallbackAborted(options.signal);
+        throw error;
+      }
     }, options.correlation);
   }
 }
@@ -2103,6 +2112,13 @@ function throwIfTransportAborted(signal: AbortSignal): void {
   if (!signal.aborted) return;
   throw markErrorAsNonRetryable(
     abortError(signal.reason, 'LLM provider request aborted'),
+  );
+}
+
+function throwIfFallbackAborted(signal: AbortSignal | undefined): void {
+  if (!signal?.aborted) return;
+  throw new NonRecoverableFallbackError(
+    abortError(signal.reason, 'LLM request aborted before fallback'),
   );
 }
 

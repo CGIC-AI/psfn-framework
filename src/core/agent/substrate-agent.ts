@@ -1539,18 +1539,27 @@ export class SubstrateAgent {
     if (!this.backgroundWorkHandoffRecoveryPromise) {
       this.backgroundWorkHandoffRecoveryPromise = (async () => {
         if (!this.backgroundWorkHandoffsRecovered) {
-          const records = this.sessionManager.listRecoverableBackgroundWorkTurnRecords();
-          // Enumeration is intentionally once per process. Enqueue failures move
-          // into the source-keyed retry index drained in bounded batches below.
-          this.backgroundWorkHandoffsRecovered = true;
-          await recoverHistoricalBackgroundWorkHandoffs(
-            records,
-            async (record) => {
-              const jobs = parseTurnRecordBackgroundWorkHandoff(record);
-              if (jobs.length > 0) await this.backgroundWorkSupervisor!.enqueue(jobs);
-            },
-            (record) => this.sessionManager.deferBackgroundWorkHandoffRecovery(record),
-          );
+          const enumerationState = { complete: false };
+          const records = this.sessionManager.streamRecoverableBackgroundWorkTurnRecords();
+          const completionTrackedRecords = (async function* () {
+            for await (const record of records) yield record;
+            enumerationState.complete = true;
+          })();
+          try {
+            await recoverHistoricalBackgroundWorkHandoffs(
+              completionTrackedRecords,
+              async (record) => {
+                const jobs = parseTurnRecordBackgroundWorkHandoff(record);
+                if (jobs.length > 0) await this.backgroundWorkSupervisor!.enqueue(jobs);
+              },
+              (record) => this.sessionManager.deferBackgroundWorkHandoffRecovery(record),
+            );
+          } finally {
+            // Enqueue failures are indexed for bounded retry after complete
+            // enumeration. A stream/read failure leaves the flag false so the
+            // next supervisor tick retries the historical scan.
+            if (enumerationState.complete) this.backgroundWorkHandoffsRecovered = true;
+          }
         }
         await this.sessionManager.recoverPendingBackgroundWorkHandoffs(
           BACKGROUND_WORK_HANDOFF_RECOVERY_BATCH_SIZE,

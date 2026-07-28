@@ -9,12 +9,12 @@ export interface BackgroundWorkTickOperations {
  * scheduler tick to enumerate the full TurnRecord history again.
  */
 export async function recoverHistoricalBackgroundWorkHandoffs<T>(
-  records: readonly T[],
+  records: Iterable<T> | AsyncIterable<T>,
   enqueue: (record: T) => Promise<void>,
   defer: (record: T) => void,
 ): Promise<void> {
   const errors: unknown[] = [];
-  for (const record of records) {
+  for await (const record of records) {
     try {
       await enqueue(record);
     } catch (error) {

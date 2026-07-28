@@ -6,7 +6,7 @@
 // runs the full evaluator, proving the actual-invocation signal (memory, repo)
 // now feeds the ordering, which the old `model_usage_events` source never did.
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -210,5 +210,19 @@ describe('turn-record tool usage source (durable, real store)', () => {
     expect(aggregate.turnRecordsScanned).toBe(2);
     expect(aggregate.truncated).toBe(true);
     expect(aggregate.stats.find(s => s.toolName === 'repo')?.successes).toBe(2);
+  });
+
+  it('keeps the implicit synchronous scan inside the agent readiness budget', () => {
+    const readRecentTurnRecords = vi.fn((): TurnRecord[] => []);
+    const source = createTurnRecordToolUsageSource({
+      listChannelKeys: () => ['one'],
+      readRecentTurnRecords,
+      usageWindow: 'today',
+      timezone: 'UTC',
+    });
+
+    source.aggregate(Date.UTC(2026, 6, 15, 18, 0, 0));
+
+    expect(readRecentTurnRecords).toHaveBeenCalledExactlyOnceWith('one', 32);
   });
 });

@@ -57,7 +57,10 @@ import {
   type TurnRecordWireBodyWithheld,
 } from './turn-record-session-refs.js';
 import { slimTurnRecordMemoryCandidatesForAppend } from './turn-record-memory-refs.js';
-import type { TurnRecordStorePort } from './turn-record-store-port.js';
+import type {
+  TurnRecordStorePort,
+  TurnRecordUsageRecord,
+} from './turn-record-store-port.js';
 import type { TurnRecordEligibilityFencePort } from './turn-record-eligibility-fence-port.js';
 import type { TranscriptSearchPort } from './transcript-search-port.js';
 import {
@@ -1372,15 +1375,26 @@ export class SessionStore implements TranscriptSearchPort {
     if (!normalizedSourceChannelId || !normalizedTurnId) {
       throw new Error('Source TurnRecord lookup requires a physical channel and turn id');
     }
-    const matches = this.turnRecordStore.readRecentTurnRecords(
+    const countMatches = this.turnRecordStore.countTurnRecordsByTurnId;
+    if (!countMatches) {
+      throw new Error('TurnRecord store does not support bounded exact-identity counts');
+    }
+    const matchCount = countMatches.call(
+      this.turnRecordStore,
       normalizedSourceChannelId,
-      Number.MAX_SAFE_INTEGER,
-    ).filter(record => record.turnId === normalizedTurnId);
-    if (matches.length === 0) return null;
-    if (matches.length !== 1) {
+      normalizedTurnId,
+    );
+    if (matchCount === 0) return null;
+    if (matchCount !== 1) {
       throw new Error('Source TurnRecord is duplicated and cannot establish a recovery identity');
     }
-    const record = matches[0]!;
+    const record = this.turnRecordStore.findTurnRecord(
+      normalizedSourceChannelId,
+      normalizedTurnId,
+    );
+    if (!record) {
+      throw new Error('Source TurnRecord identity changed during recovery lookup');
+    }
     const logicalSessionId = record.sessionId ?? normalizedSourceChannelId;
     const owner = this.ensureChannelFullyLoaded(logicalSessionId);
     if (record.channelId !== normalizedSourceChannelId
@@ -1428,6 +1442,59 @@ export class SessionStore implements TranscriptSearchPort {
       .map(record => this.resolveTurnRecordSessionRefs(record));
   }
   /**
+   * Content-free deterministic-analytics read. Unlike getRecentTurnRecords,
+   * this path never reconstructs session context or captured provider bodies,
+   * so a metadata-only background task cannot resurrect, retain, or repeatedly
+   * heal historical conversation content.
+   */
+  getRecentTurnRecordUsage(channelId: string, limit: number): TurnRecordUsageRecord[] {
+    if (limit <= 0) return [];
+    const readUsage = this.turnRecordStore.readRecentTurnRecordUsage;
+    if (!readUsage) {
+      throw new Error('TurnRecord store does not support the content-free usage projection');
+    }
+    this.refreshChannelIndexFromDisk();
+    const sessionId = this.resolveSessionId(channelId) ?? channelId;
+    const cached = this.channels.get(sessionId) ?? this.loadExistingChannelCache(channelId);
+    const resolved = this.resolveExistingSession(channelId) ?? (cached
+      ? {
+        sessionId,
+        channelId: cached.channelId,
+        filePaths: cached.archivePaths,
+      }
+      : null);
+    if (!resolved) {
+      return readUsage.call(this.turnRecordStore, sessionId, limit);
+    }
+    const indexEntry = this.ensureChannelIndexEntry(
+      resolved.sessionId,
+      resolved.channelId,
+      resolved.filePaths,
+    );
+    if (cached) {
+      syncLightweightSessionCacheFromIndex({
+        cache: cached,
+        indexEntry,
+        sessionsDir: this.sessionsDir,
+      });
+    }
+    const tombstones = this.resolveJournalAuthoritativeTurnTombstones({
+      sessionId: resolved.sessionId,
+      channelId: resolved.channelId,
+      filePaths: resolved.filePaths,
+      cache: cached ?? undefined,
+    });
+    if (tombstones.size === 0) {
+      return readUsage.call(this.turnRecordStore, sessionId, limit);
+    }
+    return this.readTombstoneFilteredTurnRecordUsage(
+      sessionId,
+      limit,
+      tombstones,
+      readUsage,
+    );
+  }
+  /**
    * Bounded iterative overscan for tombstone-filtered turn-record reads:
    * request a small multiple of the limit, filter tombstoned turns, and only
    * widen (doubling) while the segment files still have older records to
@@ -1452,6 +1519,23 @@ export class SessionStore implements TranscriptSearchPort {
       requested = Math.min(Number.MAX_SAFE_INTEGER, requested * 2);
     }
   }
+  private readTombstoneFilteredTurnRecordUsage(
+    sessionId: string,
+    limit: number,
+    tombstones: ReadonlySet<string>,
+    readUsage: NonNullable<TurnRecordStorePort['readRecentTurnRecordUsage']>,
+  ): TurnRecordUsageRecord[] {
+    let requested = Math.max(limit, limit * TURN_RECORD_TOMBSTONE_OVERSCAN_FACTOR);
+    for (;;) {
+      const records = readUsage.call(this.turnRecordStore, sessionId, requested);
+      const filtered = records.filter(record => !tombstones.has(record.turnId));
+      const exhaustedHistory = records.length < requested;
+      if (filtered.length >= limit || exhaustedHistory) {
+        return filtered.length > limit ? filtered.slice(-limit) : filtered;
+      }
+      requested = Math.min(Number.MAX_SAFE_INTEGER, requested * 2);
+    }
+  }
   /**
    * Reads the physical turn-record stream for an exact source channel without
    * resolving it through a logical-session alias. Introspection consent is
@@ -1460,32 +1544,121 @@ export class SessionStore implements TranscriptSearchPort {
    */
   getRecentSourceTurnRecords(sourceChannelId: string, limit: number, offset = 0): TurnRecord[] {
     if (limit <= 0 || offset < 0) return [];
-    const records = this.turnRecordStore.readRecentTurnRecords(
-      sourceChannelId,
+    const target = Math.min(Number.MAX_SAFE_INTEGER, limit + offset);
+    let requested = Math.min(
       Number.MAX_SAFE_INTEGER,
+      Math.max(target, target * TURN_RECORD_TOMBSTONE_OVERSCAN_FACTOR),
     );
-    const filtered = records.filter((record) => {
-      const ownerSessionId = record.sessionId ?? sourceChannelId;
-      const owner = this.ensureChannelFullyLoaded(ownerSessionId);
-      if (!owner) return false;
-      return !owner.turnTombstones.has(record.turnId);
-    });
-    const end = Math.max(0, filtered.length - offset);
-    const start = Math.max(0, end - limit);
-    return filtered.slice(start, end)
-      .map(record => this.resolveTurnRecordSessionRefs(record));
+    for (;;) {
+      const records = this.turnRecordStore.readRecentTurnRecords(
+        sourceChannelId,
+        requested,
+      );
+      const filtered = records.filter((record) => {
+        const ownerSessionId = record.sessionId ?? sourceChannelId;
+        const owner = this.ensureChannelFullyLoaded(ownerSessionId);
+        if (!owner) return false;
+        return !owner.turnTombstones.has(record.turnId);
+      });
+      const exhaustedHistory = records.length < requested;
+      if (filtered.length >= target || exhaustedHistory) {
+        const end = Math.max(0, filtered.length - offset);
+        const start = Math.max(0, end - limit);
+        return filtered.slice(start, end)
+          .map(record => this.resolveTurnRecordSessionRefs(record));
+      }
+      requested = Math.min(Number.MAX_SAFE_INTEGER, requested * 2);
+    }
+  }
+  /**
+   * One process-lifetime historical handoff scan. The filesystem adapter
+   * streams normalized rows with event-loop yields, so startup recovery does
+   * not retain or resolve an entire old-fat archive before the agent can serve
+   * health and inbound traffic.
+   *
+   * Uniqueness is proven across every physical row before any candidate is
+   * returned. Owner/tombstone state is then re-read from the authoritative L0
+   * journal. The k-way merge retains at most one candidate per physical source
+   * while preserving the previous global completedAt/turnId replay order. No
+   * history is truncated or accepted on partial evidence.
+   */
+  async *streamRecoverableBackgroundWorkTurnRecords(
+    sourceChannelIds: readonly string[],
+  ): AsyncGenerator<TurnRecord> {
+    const streamSource = this.turnRecordStore.streamTurnRecordsForRecovery;
+    if (!streamSource) {
+      throw new Error('TurnRecord store does not support bounded background-work recovery scans');
+    }
+    const seenCounts = new Map<string, number>();
+    const uniqueSources = [...new Set(sourceChannelIds)];
+    for (const sourceChannelId of uniqueSources) {
+      for await (const record of streamSource.call(this.turnRecordStore, sourceChannelId)) {
+        const key = `${sourceChannelId}\u0000${record.turnId}`;
+        seenCounts.set(key, (seenCounts.get(key) ?? 0) + 1);
+      }
+    }
+    const candidateStream = (sourceChannelId: string): AsyncIterable<TurnRecord> => {
+      const store = this;
+      return (async function* () {
+        for await (const record of streamSource.call(store.turnRecordStore, sourceChannelId)) {
+          if (record.status !== 'completed' || !record.backgroundWorkHandoff) continue;
+          const key = `${sourceChannelId}\u0000${record.turnId}`;
+          if (seenCounts.get(key) !== 1) continue;
+          const logicalSessionId = record.sessionId ?? record.channelId;
+          const owner = store.ensureChannelFullyLoaded(logicalSessionId);
+          if (record.channelId !== sourceChannelId
+            || owner === null
+            || owner.turnTombstones.has(record.turnId)) {
+            continue;
+          }
+          // Recovery consumes the handoff and its source fingerprint. Do not
+          // reconstruct frozen observability/session refs: that is the old-fat
+          // healing work which caused the startup stall.
+          yield record;
+        }
+      })();
+    };
+    const iterators = uniqueSources.map(sourceChannelId => (
+      candidateStream(sourceChannelId)[Symbol.asyncIterator]()
+    ));
+    const heads: Array<IteratorResult<TurnRecord>> = [];
+    try {
+      for (const iterator of iterators) heads.push(await iterator.next());
+      for (;;) {
+        let selected = -1;
+        for (let index = 0; index < heads.length; index += 1) {
+          const head = heads[index];
+          if (head.done) continue;
+          const current = selected < 0 ? undefined : heads[selected]?.value;
+          if (!current
+            || head.value.completedAt < current.completedAt
+            || (head.value.completedAt === current.completedAt
+              && head.value.turnId.localeCompare(current.turnId) < 0)) {
+            selected = index;
+          }
+        }
+        if (selected < 0) return;
+        yield heads[selected]!.value;
+        heads[selected] = await iterators[selected]!.next();
+      }
+    } finally {
+      await Promise.all(iterators.map(async (iterator, index) => {
+        if (!heads[index]?.done) await iterator.return?.();
+      }));
+    }
   }
   isSourceTurnRecordEligible(
     sourceChannelId: string,
     ownerSessionId: string,
     turnId: string,
   ): boolean {
-    const matches = this.turnRecordStore.readRecentTurnRecords(
-      sourceChannelId,
-      Number.MAX_SAFE_INTEGER,
-    ).filter(record => record.turnId === turnId);
-    if (matches.length !== 1) return false;
-    const record = matches[0];
+    const countMatches = this.turnRecordStore.countTurnRecordsByTurnId;
+    if (!countMatches
+      || countMatches.call(this.turnRecordStore, sourceChannelId, turnId) !== 1) {
+      return false;
+    }
+    const record = this.turnRecordStore.findTurnRecord(sourceChannelId, turnId);
+    if (!record) return false;
     const declaredOwnerSessionId = record.sessionId ?? sourceChannelId;
     if (record.channelId !== sourceChannelId || declaredOwnerSessionId !== ownerSessionId) return false;
     const owner = this.ensureChannelFullyLoaded(ownerSessionId);

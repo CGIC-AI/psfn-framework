@@ -71,7 +71,7 @@ function sourceFor(
 ): IntrospectionAuditSourcePort {
   return {
     listCandidates: () => candidates,
-    isCandidateStillEligible,
+    isCandidateStillEligible: async candidate => isCandidateStillEligible(candidate),
   };
 }
 

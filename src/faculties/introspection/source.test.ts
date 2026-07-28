@@ -264,11 +264,11 @@ describe('turn-record introspection source', () => {
         const reloadedManager = new SessionManager(reloadedStore, config);
         expect(reloadedStore.getRecentSourceTurnRecords(sourceChannelId, 10).map(entry => entry.turnId))
           .toEqual([oldTurn.turnId, freshTurn.turnId]);
-        expect(reloadedStore.isSourceTurnRecordEligible(
+        await expect(reloadedStore.isSourceTurnRecordEligible(
           sourceChannelId,
           missingOwnerTurn.sessionId ?? sourceChannelId,
           missingOwnerTurn.turnId,
-        )).toBe(false);
+        )).resolves.toBe(false);
 
         const source = createTurnRecordIntrospectionSource({
           listRecentSessions: (limit, offset) => (
@@ -305,7 +305,7 @@ describe('turn-record introspection source', () => {
         expect(JSON.stringify(candidates)).not.toContain(missingOwnerSentinel);
         expect(JSON.stringify(candidates)).toContain(freshSentinel);
         const freshCandidate = candidates[0];
-        expect(source.isCandidateStillEligible(freshCandidate)).toBe(true);
+        await expect(source.isCandidateStillEligible(freshCandidate)).resolves.toBe(true);
 
         const consentStore = new IntrospectionConsentStore(join(root, 'introspection-consent.jsonl'));
         consentStore.append({
@@ -356,7 +356,7 @@ describe('turn-record introspection source', () => {
         resolveLookup?.(false);
 
         await expect(running).rejects.toThrow(/source.*no longer eligible/i);
-        expect(source.isCandidateStillEligible(freshCandidate)).toBe(false);
+        await expect(source.isCandidateStillEligible(freshCandidate)).resolves.toBe(false);
         expect(estimateStableReply).not.toHaveBeenCalled();
         expect(compareReplies).not.toHaveBeenCalled();
         expect(reflect).not.toHaveBeenCalled();

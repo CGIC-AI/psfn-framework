@@ -1355,16 +1355,47 @@ export class SessionManager implements SessionManagerTypeSurface {
     return this.store.findSourceTurnRecord(sourceChannelId, logicalSessionId, turnId);
   }
 
-  findUniqueSourceRecordedTurn(sourceChannelId: string, turnId: string): TurnRecord | null {
-    return this.store.findUniqueSourceTurnRecord(sourceChannelId, turnId);
+  async findUniqueSourceRecordedTurn(
+    sourceChannelId: string,
+    turnId: string,
+  ): Promise<TurnRecord | null> {
+    return await this.store.findUniqueSourceTurnRecord(sourceChannelId, turnId);
   }
 
-  isSourceRecordedTurnEligible(
+  async findEligibleSourceRecordedTurn(
     sourceChannelId: string,
     logicalSessionId: string,
     turnId: string,
-  ): boolean {
-    return this.store.isSourceTurnRecordEligible(sourceChannelId, logicalSessionId, turnId);
+  ): Promise<TurnRecord | null> {
+    return await this.store.findEligibleSourceTurnRecord(
+      sourceChannelId,
+      logicalSessionId,
+      turnId,
+    );
+  }
+
+  async lookupSourceRecordedTurnEligibility(
+    sourceChannelId: string,
+    logicalSessionId: string,
+    turnId: string,
+  ) {
+    return await this.store.lookupSourceTurnRecordEligibility(
+      sourceChannelId,
+      logicalSessionId,
+      turnId,
+    );
+  }
+
+  async isSourceRecordedTurnEligible(
+    sourceChannelId: string,
+    logicalSessionId: string,
+    turnId: string,
+  ): Promise<boolean> {
+    return await this.store.isSourceTurnRecordEligible(
+      sourceChannelId,
+      logicalSessionId,
+      turnId,
+    );
   }
 
   async withSourceRecordedTurnEligibilityFence<T>(

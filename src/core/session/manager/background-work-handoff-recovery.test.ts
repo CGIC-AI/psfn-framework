@@ -33,10 +33,9 @@ describe('BackgroundWorkHandoffRecovery', () => {
     const records = Array.from({ length: 1_024 }, (_, index) => makeRecord(index));
     const recordsByTurn = new Map(records.map(record => [record.turnId, record]));
     const recovery = new BackgroundWorkHandoffRecovery({
-      findSourceTurnRecord: (_sourceChannelId, _logicalSessionId, turnId) => (
+      findEligibleSourceTurnRecord: async (_sourceChannelId, _logicalSessionId, turnId) => (
         recordsByTurn.get(turnId) ?? null
       ),
-      isSourceTurnRecordEligible: () => true,
       withSourceTurnRecordEligibilityFence: async (_source, _session, _turn, operation) => (
         operation()
       ),

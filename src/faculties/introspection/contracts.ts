@@ -82,7 +82,7 @@ export interface IntrospectionAuditSourcePort {
     recentTurnLimit: number;
     maxSourceChars: number;
   }): IntrospectionAuditCandidate[];
-  isCandidateStillEligible(candidate: IntrospectionAuditCandidate): boolean;
+  isCandidateStillEligible(candidate: IntrospectionAuditCandidate): Promise<boolean>;
 }
 
 export interface IntrospectionLandmarkAppendInput {

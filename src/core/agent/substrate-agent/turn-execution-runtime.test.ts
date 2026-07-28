@@ -637,7 +637,7 @@ function createRuntime(params: {
     hasRecordedTurn: vi.fn(() => false),
     findRecordedTurn: vi.fn(() => null),
     findSourceRecordedTurn: vi.fn(() => null),
-    findUniqueSourceRecordedTurn: vi.fn(() => null),
+    findUniqueSourceRecordedTurn: vi.fn(async () => null),
     resolveSessionForIngress: vi.fn((channelId: string) => channelId),
     appendSystemNote: vi.fn(),
     appendContextSystemNote: vi.fn(),

@@ -455,7 +455,7 @@ export async function handleMessageForTurn(
     activeLogicalSessionId,
   );
   const recoveredSourceRecord = recoveredResponse
-    ? runtime.sessionManager.findUniqueSourceRecordedTurn(message.channelId, turnId)
+    ? await runtime.sessionManager.findUniqueSourceRecordedTurn(message.channelId, turnId)
     : null;
   if (recoveredSourceRecord && recoveredSourceRecord.status !== 'completed') {
     throw new Error('Recovered delivery source TurnRecord is not completed');

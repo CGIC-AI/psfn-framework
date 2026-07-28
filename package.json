@@ -47,6 +47,7 @@
     "gate:canary": "node scripts/ci/run-local-gate.mjs --canary",
     "pr:publish": "node scripts/ci/publish-pr.mjs",
     "pr:wait": "node scripts/ci/wait-for-pr.mjs",
+    "onboard": "tsx scripts/onboarding/index.ts",
     "chat": "tsx src/app/cli/chat-cli.ts",
     "session:repair": "tsx src/app/maintenance/session-repair.ts",
     "session:repair:transcript-projection": "tsx src/app/maintenance/transcript-projection-repair.ts",

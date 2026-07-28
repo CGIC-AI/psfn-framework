@@ -97,7 +97,12 @@ async function assertAuditStillAuthorized(
   candidate: IntrospectionAuditCandidate,
 ): Promise<void> {
   assertConsentStillActive(consentStore, baseline, candidate.channelId);
-  if (!await source.isCandidateStillEligible(candidate)) {
+  const eligible = await source.isCandidateStillEligible(candidate);
+  // Eligibility can require an archive scan. Consent is mutable while that
+  // scan yields, so the result cannot authorize the next disclosure boundary
+  // until the consent revision is checked again.
+  assertConsentStillActive(consentStore, baseline, candidate.channelId);
+  if (!eligible) {
     throw new IntrospectionSourceChangedDuringAuditError();
   }
 }

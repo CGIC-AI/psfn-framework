@@ -67,11 +67,13 @@ const CANDIDATE: IntrospectionAuditCandidate = {
 
 function sourceFor(
   candidates: IntrospectionAuditCandidate[] = [CANDIDATE],
-  isCandidateStillEligible: (candidate: IntrospectionAuditCandidate) => boolean = () => true,
+  isCandidateStillEligible: (
+    candidate: IntrospectionAuditCandidate,
+  ) => boolean | Promise<boolean> = () => true,
 ): IntrospectionAuditSourcePort {
   return {
     listCandidates: () => candidates,
-    isCandidateStillEligible: async candidate => isCandidateStillEligible(candidate),
+    isCandidateStillEligible: async candidate => await isCandidateStillEligible(candidate),
   };
 }
 
@@ -283,6 +285,42 @@ describe('scheduled blinded introspection audit', () => {
 
     await expect(running).rejects.toThrow(/consent changed/i);
     expect(compareReplies).not.toHaveBeenCalled();
+    expect(persistence.decisions).toEqual([]);
+    expect(persistence.landmarks).toEqual([]);
+  });
+
+  it('rejects consent revoked while asynchronous source eligibility is pending', async () => {
+    root = mkdtempSync(join(tmpdir(), 'introspection-runtime-eligibility-consent-race-'));
+    const consentStore = activeConsentStore(root);
+    const eligibilityStarted = deferred<void>();
+    const eligibilityResult = deferred<boolean>();
+    const estimateStableReply = vi.fn();
+    const persistence = new MemoryPersistence();
+    const runtime = new IntrospectionAuditRuntime({
+      config: { ...DEFAULT_INTROSPECTION_AUDIT_CONFIG, enabled: true },
+      consentStore,
+      source: sourceFor([CANDIDATE], async () => {
+        eligibilityStarted.resolve();
+        return await eligibilityResult.promise;
+      }),
+      auditor: { estimateStableReply, compareReplies: vi.fn() },
+      reflector: { reflect: vi.fn() },
+      persistence,
+    });
+
+    const running = runtime.runOnce();
+    await eligibilityStarted.promise;
+    consentStore.append({
+      enabled: false,
+      allowedPublicChannelIds: [],
+      actor: { kind: 'companion', turnId: 'revoke-turn', requestId: 'revoke-request' },
+      reason: 'revoke while eligibility lookup yields',
+      createdAt: '2026-07-13T09:01:00.000Z',
+    });
+    eligibilityResult.resolve(true);
+
+    await expect(running).rejects.toThrow(/consent changed/i);
+    expect(estimateStableReply).not.toHaveBeenCalled();
     expect(persistence.decisions).toEqual([]);
     expect(persistence.landmarks).toEqual([]);
   });

@@ -209,6 +209,38 @@ describe('turn-record introspection source', () => {
     })]);
   });
 
+  it('rejects a candidate retired while exact source eligibility is pending', async () => {
+    let retired = false;
+    let resolveEligibility: ((eligible: boolean) => void) | undefined;
+    const eligibility = new Promise<boolean>((resolve) => {
+      resolveEligibility = resolve;
+    });
+    const source = createTurnRecordIntrospectionSource({
+      listRecentSessions: () => [{
+        sessionId: 'session:public-room-active',
+        sourceChannelId: 'discord:public-room',
+      }],
+      readSourceTurnRecordPage: () => ({
+        records: [record({ sessionId: 'session:public-room-active' })],
+        exhausted: true,
+      }),
+      isSessionRetiredOrQuarantined: () => retired,
+      isSourceTurnRecordEligible: async () => await eligibility,
+    });
+    const candidate = source.listCandidates({
+      allowedPublicChannelIds: ['discord:public-room'],
+      recentSessionLimit: 1,
+      recentTurnLimit: 1,
+      maxSourceChars: 1_000,
+    })[0]!;
+
+    const pending = source.isCandidateStillEligible(candidate);
+    retired = true;
+    resolveEligibility?.(true);
+
+    await expect(pending).resolves.toBe(false);
+  });
+
   it.each(['break_glass_quarantine', 'fresh_split'] as const)(
     'excludes retired and ownerless source records after a %s route reload',
     async (mode) => {

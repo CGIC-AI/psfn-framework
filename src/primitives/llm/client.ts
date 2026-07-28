@@ -38,6 +38,7 @@ import {
   mergeSystemContextIntoSystemPrompt,
 } from './message-conversion.js';
 import { createComponentLogger } from '../../shared/logger.js';
+import { abortError } from '../../shared/utils/errors.js';
 import { FallbackRunner, NonRecoverableFallbackError } from './fallback.js';
 import type { ImportPolicyAuditRecord, RoutingCandidate, RoutingPurpose } from './routing.js';
 import {
@@ -1183,11 +1184,13 @@ export class LLMClient {
                 retryOwner: 'caller',
               },
             );
-            return await this.runTransportWithCircuitBreaker(
+            const response = await this.runTransportWithCircuitBreaker(
               'llm.stream',
               candidateTarget,
               async () => await transport.stream(transportContext, callbacks, { signal: transportSignal }),
             );
+            throwIfTransportAborted(transportSignal);
+            return response;
           }
           const { model, apiKey } = this.getModelAndKey(candidateTarget);
           const requestOptions = this.buildRequestOptions(candidateTarget, apiKey, {
@@ -1434,6 +1437,7 @@ export class LLMClient {
               throw err;
             }
 
+            throwIfTransportAborted(transportSignal);
             if (response) {
               try {
                 assertUsableProviderResponse(response, candidateTarget);
@@ -1668,6 +1672,7 @@ export class LLMClient {
                 candidateTarget,
                 executeTransport,
               );
+          throwIfTransportAborted(transportSignal);
           assertUsableProviderResponse(response, candidateTarget);
           return response;
         }
@@ -1753,6 +1758,7 @@ export class LLMClient {
             }
             throw err;
           }
+          throwIfTransportAborted(transportSignal);
           let usageDetails: LLMUsageDetails;
           try {
             const responseWithLegacyTokenCounts = response as typeof response & {
@@ -2091,6 +2097,13 @@ export class LLMClient {
 
 function isAbortError(error: Error): boolean {
   return error.name === 'AbortError' || /aborted|abort|cancelled|canceled/i.test(error.message);
+}
+
+function throwIfTransportAborted(signal: AbortSignal): void {
+  if (!signal.aborted) return;
+  throw markErrorAsNonRetryable(
+    abortError(signal.reason, 'LLM provider request aborted'),
+  );
 }
 
 /**

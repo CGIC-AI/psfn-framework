@@ -743,6 +743,7 @@ async function main(): Promise<void> {
     agentLoop,
     eventBus,
     llmProvider,
+    fileRead: gatewayOps.filesystem.read,
     sessionStore,
     embeddingService: gateway,
     memoryStore,

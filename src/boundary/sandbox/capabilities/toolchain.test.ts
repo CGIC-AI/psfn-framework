@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { readUtf8TextFilePage } from '../../integrations/filesystem/text-file-paging.js';
-import type { GatewayREPLCapabilities } from './contracts.js';
+import type { SandboxFileRead } from '../../../shared/contracts/sandbox-analysis-contracts.js';
 import { createToolchainCapabilities } from './toolchain.js';
 
 const roots: string[] = [];
@@ -22,7 +22,7 @@ describe('createToolchainCapabilities read_file', () => {
     const expected = 'prefix🙂漢字 café e\u0301 — line\n'.repeat(2_500);
     writeFileSync(filePath, expected, 'utf8');
 
-    const fsReadDetailed = vi.fn<NonNullable<GatewayREPLCapabilities['fsReadDetailed']>>(
+    const fileRead = vi.fn<SandboxFileRead>(
       async (_path, options) => readUtf8TextFilePage(
         filePath,
         options?.maxBytes ?? 20_000,
@@ -30,7 +30,8 @@ describe('createToolchainCapabilities read_file', () => {
       ),
     );
     const { read_file } = createToolchainCapabilities({
-      gatewayCaps: { fsReadDetailed },
+      gatewayCaps: {},
+      fileRead,
     });
 
     const first = await read_file('large.md');
@@ -70,7 +71,7 @@ describe('createToolchainCapabilities read_file', () => {
       truncated: false,
       nextOffsetBytes: null,
     });
-    expect(fsReadDetailed.mock.calls.map(([, options]) => options)).toEqual([
+    expect(fileRead.mock.calls.map(([, options]) => options)).toEqual([
       { maxBytes: 20_000, offsetBytes: 0 },
       { maxBytes: 20_000, offsetBytes: 0 },
       ...pages.slice(1).map(page => ({

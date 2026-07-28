@@ -14,11 +14,19 @@ import {
   type GatewayToolMetadataCoverage,
   type RuntimeMode,
 } from '../../../core/agent/tool-wiring-validator.js';
-import type { LLMProviderPort } from '../../../core/agent/contracts.js';
+import {
+  createLLMProviderPort,
+  type LLMProviderPort,
+} from '../../../core/agent/contracts.js';
 import type { LLMResponse } from '../../../shared/contracts/runtime.js';
 import type { ModuleRegistryMutation } from '../../../system/modules/types.js';
-import type { SandboxExecutionPort } from '../../../boundary/sandbox/capabilities/contracts.js';
+import type {
+  SandboxExecutionPort,
+  SandboxFileRead,
+} from '../../../boundary/sandbox/capabilities/contracts.js';
 import { withChildProcessSandboxExecutionPort } from '../../../boundary/sandbox/sandbox-execution-port.js';
+import { createGatewayOpsPortFromClient } from '../../../boundary/gateway/gateway-ops-port.js';
+import type { GatewayClient } from '../../../boundary/gateway/client.js';
 import { wireShardAndThinkRuntime } from './composition.js';
 import type { CapabilityGrantSnapshot } from '../../../system/capabilities/access.js';
 
@@ -82,6 +90,20 @@ function makeShellExecScript(): string {
     '```repl',
     'const result = await shell_exec("node", ["-v"]);',
     'FINAL(JSON.stringify({ ok: result.ok, stdout: result.stdout }));',
+    '```',
+  ].join('\n');
+}
+
+function makePagedReadScript(): string {
+  return [
+    '```repl',
+    'const first = await read_file("large.md");',
+    'if ("error" in first) {',
+    '  FINAL(JSON.stringify(first));',
+    '} else {',
+    '  const second = await read_file("large.md", { offsetBytes: first.nextOffsetBytes });',
+    '  FINAL(JSON.stringify({ first: first.content, second: second.content, eof: second.eof }));',
+    '}',
     '```',
   ].join('\n');
 }
@@ -180,8 +202,9 @@ function moduleWithMismatchedGatewayMetadata(toolName: string): string {
 
 function wireSplitThinkTool(options: {
   tier: CapabilityTier;
-  llmProvider: GatewayLLMProvider;
+  llmProvider: LLMProviderPort;
   eventBus: EventBus;
+  fileRead?: SandboxFileRead;
   moduleInstallConfirmationQueue?: ConfirmationQueue | null;
   onModuleRegistryMutation?: (mutation: ModuleRegistryMutation) => Promise<void> | void;
   executionPort?: SandboxExecutionPort | null;
@@ -205,6 +228,7 @@ function wireSplitThinkTool(options: {
     moduleInstallConfirmationQueue: options.moduleInstallConfirmationQueue ?? null,
     onModuleRegistryMutation: options.onModuleRegistryMutation,
     executionPort: options.executionPort ?? null,
+    fileRead: options.fileRead,
   });
   return target;
 }
@@ -405,6 +429,61 @@ describe('wireShardAndThinkRuntime split-mode module wiring', () => {
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
+  });
+
+  it('preserves governed paged reads after production LLM provider narrowing', async () => {
+    const fsReadDetailed = vi.fn(async (
+      _path: string,
+      options?: { maxBytes?: number; offsetBytes?: number },
+    ) => {
+      const offsetBytes = options?.offsetBytes ?? 0;
+      return offsetBytes === 0
+        ? {
+            content: 'page-zero🙂',
+            offsetBytes,
+            nextOffsetBytes: 20_000,
+            eof: false,
+            truncated: true,
+          }
+        : {
+            content: 'page-one終',
+            offsetBytes,
+            nextOffsetBytes: null,
+            eof: true,
+            truncated: false,
+          };
+    });
+    const gateway = {
+      stream: vi.fn(),
+      complete: vi.fn(async () => mockResponse(makePagedReadScript())),
+      fsReadDetailed,
+    } as unknown as GatewayClient;
+    const llmProvider = createLLMProviderPort(gateway);
+    const gatewayOps = createGatewayOpsPortFromClient(gateway);
+    const target = wireSplitThinkTool({
+      tier: 'autonomous',
+      llmProvider,
+      eventBus: new EventBus(),
+      fileRead: gatewayOps.filesystem.read,
+    });
+
+    const analysisWorkbench = findAnalysisWorkbenchTool(target);
+    const result = await analysisWorkbench.execute('call-file-read', {
+      task: 'read both pages',
+    });
+    const text = extractText(result);
+
+    expect(text).toContain('"first":"page-zero🙂"');
+    expect(text).toContain('"second":"page-one終"');
+    expect(text).toContain('"eof":true');
+    expect(fsReadDetailed).toHaveBeenNthCalledWith(1, 'large.md', {
+      maxBytes: 20_000,
+      offsetBytes: 0,
+    });
+    expect(fsReadDetailed).toHaveBeenNthCalledWith(2, 'large.md', {
+      maxBytes: 20_000,
+      offsetBytes: 20_000,
+    });
   });
 
   it('routes analysis workbench code execution through the sandbox execution port', async () => {

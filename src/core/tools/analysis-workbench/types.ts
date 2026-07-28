@@ -11,7 +11,11 @@ import type { CapabilityTier, CompositionalPolicyConfig } from '../../../system/
 import type { ChargePolicyConfig } from '../../../system/config/charge-policy-config.js';
 import type { ApprovalQueuePort } from '../../../system/capabilities/approval-queue-port.js';
 import type { ModuleRegistryMutation } from '../../../system/modules/types.js';
-import type { SandboxExecutionPort, SandboxExecutionPortSeed } from '../../../shared/contracts/sandbox-analysis-contracts.js';
+import type {
+  SandboxExecutionPort,
+  SandboxExecutionPortSeed,
+  SandboxFileRead,
+} from '../../../shared/contracts/sandbox-analysis-contracts.js';
 
 export type {
   NestedAnalysisOptions,
@@ -121,6 +125,7 @@ export const DEFAULT_REPL_CONFIG: REPLConfig = {
 
 export interface REPLDeps {
   llmProvider: LLMProviderPort;
+  fileRead?: SandboxFileRead;
   executionPort?: SandboxExecutionPort | SandboxExecutionPortSeed | null;
   embeddingService: EmbeddingProviderPort | null;
   memoryStore: MemoryStorePort | null;

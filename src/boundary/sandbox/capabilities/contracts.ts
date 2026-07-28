@@ -8,11 +8,11 @@ import type { EventBus } from '../../../shared/event-bus.js';
 import type { CapabilityTier } from '../../../system/config/runtime-config-contracts.js';
 import type { ApprovalQueuePort } from '../../../system/capabilities/approval-queue-port.js';
 import type { ModuleRegistryMutation } from '../../../system/modules/types.js';
-import type { FsReadResult } from '../../gateway/protocol.js';
 import type {
   NestedAnalysisRunner,
   SandboxExecutionPort,
   SandboxExecutionPortSeed,
+  SandboxFileRead,
 } from '../../../shared/contracts/sandbox-analysis-contracts.js';
 
 export type {
@@ -26,6 +26,7 @@ export type {
   SandboxExecutionBoundary,
   SandboxExecutionPort,
   SandboxExecutionPortSeed,
+  SandboxFileRead,
   SandboxHostHelper,
   ShellExecView,
 } from '../../../shared/contracts/sandbox-analysis-contracts.js';
@@ -73,10 +74,6 @@ export type GatewayREPLCapabilities = {
   gitApplyPatch?: (filePath: string, content: string) => Promise<void>;
   gitCommit?: (message: string, intent: string, scope?: string) => Promise<GitCommitView>;
   fsRead?: (path: string) => Promise<string>;
-  fsReadDetailed?: (
-    path: string,
-    options?: { maxBytes?: number; offsetBytes?: number },
-  ) => Promise<FsReadResult>;
   fsWrite?: (path: string, content: string) => Promise<void>;
   fsList?: (glob?: string, maxEntries?: number) => Promise<FsListView>;
 };
@@ -98,6 +95,7 @@ export interface ScheduleMutationResult {
 
 export interface SandboxDeps {
   llmProvider: LLMProviderPort;
+  fileRead?: SandboxFileRead;
   executionPort?: SandboxExecutionPort | SandboxExecutionPortSeed | null;
   embeddingService: EmbeddingProviderPort | null;
   memoryStore: MemoryStorePort | null;

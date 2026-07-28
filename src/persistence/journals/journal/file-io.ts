@@ -587,7 +587,6 @@ function readJournalEntriesBeforeOnce(
   ): { entry: JournalEntry; startOffset: number; endOffset: number } | null => {
     const row = readJsonlLineAtOrAfter(path, offset, {
       chunkBytes: seekChunkBytes,
-      maxLineBytes: JOURNAL_SEEK_ROW_LIMITS.maxBytes,
       stats,
       scannedFileIdentities: seekFileIdentities,
     });
@@ -607,14 +606,12 @@ function readJournalEntriesBeforeOnce(
     const previousRow = row.startOffset > 0
       ? readJsonlLineBefore(path, row.startOffset, {
         chunkBytes: seekChunkBytes,
-        maxLineBytes: JOURNAL_SEEK_ROW_LIMITS.maxBytes,
         stats,
         scannedFileIdentities: seekFileIdentities,
       })
       : previousPath
         ? readJsonlLineBefore(previousPath, statSync(previousPath).size, {
           chunkBytes: seekChunkBytes,
-          maxLineBytes: JOURNAL_SEEK_ROW_LIMITS.maxBytes,
           stats,
           scannedFileIdentities: seekFileIdentities,
         })

@@ -306,13 +306,13 @@ describe('AdminSessionDataService server-side hot transcript reads', () => {
     expect(canonicalRead).toHaveBeenCalled();
   });
 
-  it('keeps older-page pagination on the canonical bounded range reader', async () => {
+  it('keeps older-page pagination on the canonical bounded async range reader', async () => {
     const channelId = 'api:older-page';
     appendMessage(store, channelId, 'first', 1_000);
     appendMessage(store, channelId, 'second', 2_000);
     await store.flushSessionTailWrites();
     const service = makeService(store, dir);
-    const boundedRead = vi.spyOn(store, 'getEntriesBefore');
+    const boundedRead = vi.spyOn(store, 'getEntriesBeforeAsync');
 
     const older = await service.getSessionMessagesForAdminRead(channelId, {
       beforeId: 2,

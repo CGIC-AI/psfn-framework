@@ -5206,40 +5206,77 @@ describe('LLMClient model budget gates and usage metering', () => {
     expect(usageRecorder.recordUsageEvent).not.toHaveBeenCalled();
   });
 
-  it('discards a late direct stream result after cancellation without success cost, retry, or fallback', async () => {
+  it('stops two-candidate stream fallback after a timeout-shaped caller abort', async () => {
     const usageRecorder = { recordUsageEvent: vi.fn(async () => undefined) };
     const providerStarted = createDeferred<void>();
     const providerRelease = createDeferred<void>();
     let transportSignal: AbortSignal | undefined;
+    let providerAttempts = 0;
     mocks.streamSimple.mockImplementation((
       _model: unknown,
       _context: unknown,
       options: { signal?: AbortSignal },
-    ) => (async function* lateStream() {
-      transportSignal = options.signal;
-      providerStarted.resolve();
-      // Deliberately ignore the signal and finish after cancellation.
-      await providerRelease.promise;
-      yield {
-        type: 'done',
-        message: {
-          model: 'z-ai/glm-5',
-          usage: { input: 100, output: 20 },
-          content: [{ type: 'text', text: 'late stream result' }],
-        },
-        reason: 'stop',
-      };
-    })());
+    ) => {
+      providerAttempts += 1;
+      const attempt = providerAttempts;
+      return (async function* lateStream() {
+        if (attempt === 1) {
+          transportSignal = options.signal;
+          providerStarted.resolve();
+          // Deliberately ignore the signal and finish after cancellation.
+          await providerRelease.promise;
+        }
+        yield {
+          type: 'done',
+          message: {
+            model: attempt === 1 ? 'z-ai/glm-5' : 'openai/gpt-5.4-nano',
+            usage: { input: 100, output: 20 },
+            content: [{ type: 'text', text: attempt === 1 ? 'late stream result' : 'fallback result' }],
+          },
+          reason: 'stop',
+        };
+      })();
+    });
     const callbacks = {
       onDone: vi.fn(),
       onError: vi.fn(),
     };
-    const client = new LLMClient(makeConfig({ retryMaxAttempts: 3 }), {
+    const config = makeConfig({ retryMaxAttempts: 0 });
+    config.modelRegistry = {
+      schemaVersion: 1,
+      models: [
+        {
+          id: 'abort-primary',
+          rank: 10,
+          identity: {
+            provider: 'openrouter',
+            model: 'z-ai/glm-5',
+            source: { type: 'openrouter' },
+          },
+          purposes: [{ purpose: 'chat', primary: true }],
+          capabilities: { maxOutputTokens: 4096, contextWindow: 128_000 },
+          tuning: { maxOutputTokens: 4096 },
+        },
+        {
+          id: 'abort-fallback',
+          rank: 20,
+          identity: {
+            provider: 'openrouter',
+            model: 'openai/gpt-5.4-nano',
+            source: { type: 'openrouter' },
+          },
+          purposes: [{ purpose: 'chat', primary: false }],
+          capabilities: { maxOutputTokens: 2048, contextWindow: 128_000 },
+          tuning: { maxOutputTokens: 2048 },
+        },
+      ],
+    };
+    const client = new LLMClient(config, {
       litellmBaseUrl: 'http://litellm.test/v1',
       usageRecorder,
     });
     const controller = new AbortController();
-    const abortReason = new Error('503 workbench stream deadline');
+    const abortReason = new Error('Request timed out after 250ms');
 
     const pending = client.stream(
       {
@@ -5255,6 +5292,7 @@ describe('LLMClient model budget gates and usage metering', () => {
     providerRelease.resolve();
 
     await expect(pending).rejects.toBe(abortReason);
+    expect(providerAttempts).toBe(1);
     expect(mocks.streamSimple).toHaveBeenCalledTimes(1);
     expect(usageRecorder.recordUsageEvent).not.toHaveBeenCalled();
     expect(callbacks.onDone).not.toHaveBeenCalled();

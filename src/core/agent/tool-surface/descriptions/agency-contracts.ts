@@ -52,15 +52,15 @@ export const AGENCY_TOOL_CONTRACTS = {
     example: { action: 'submit', body: 'A short reflection I would like to publish.', reason: 'It captures a thought I want to share publicly.' },
   },
   subagent: {
-    purpose: 'Control bounded short-horizon workers for parallel or isolated tasks.',
+    purpose: 'Direct bounded, short-horizon automata that take on focused work in parallel or in isolation and return with what they found.',
     actions: [
       action('spawn', ['name', 'task'], ['system_prompt', 'max_turns', 'capabilities', 'required_capabilities']),
       action('message', ['subagent_id', 'message']), action('wait', [], ['subagent_id']),
       action('cancel', ['subagent_id'], ['reason']),
       action('status', [], ['subagent_id', 'task_limit', 'transcript_limit']),
     ],
-    output: 'It returns task IDs, lifecycle state, or bounded results and never grants tools the parent cannot delegate.',
-    guidance: 'Do not use a bounded worker as a long-horizon shard; inspect status before messaging or cancelling.',
+    output: 'It returns task IDs, lifecycle state, or bounded results and never grants tools you cannot delegate.',
+    guidance: 'Do not use a bounded automaton as a long-horizon shard; inspect status before messaging or cancelling.',
     example: { action: 'spawn', name: 'log-check', task: 'Compare the two bounded error excerpts.' },
   },
   vault: {

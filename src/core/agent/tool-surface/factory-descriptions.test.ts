@@ -157,4 +157,16 @@ describe('canonical first-party tool factories', () => {
       }
     }
   });
+
+  it('renders the subagent tool description in the automata register (rqn1.6)', () => {
+    const description = CANONICAL_TOOL_SURFACE_DESCRIPTIONS.subagent;
+    // Charter 6.28/8.12: the companion-facing prose names bounded automata, not fleet "workers".
+    expect(description).toMatch(/\bautomat(?:a|on)\b/iu);
+    expect(description, 'fleet term "worker" leaked into companion-read description')
+      .not.toMatch(/\bworkers?\b/iu);
+    // "subagent" survives only as the wire schema field name subagent_id, never as self-description prose.
+    const selfDescription = description.replace(/subagent_id/g, '');
+    expect(selfDescription, 'fleet self-description "subagent" leaked into companion-read description')
+      .not.toMatch(/subagent/iu);
+  });
 });

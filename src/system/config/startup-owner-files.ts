@@ -3,7 +3,7 @@ import {
   copyFileSync,
   unlinkSync,
 } from 'node:fs';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import type { EditableSettings, SettingsDomainSplit } from '../settings.js';
 import { SETTINGS_FILE_NAME } from '../settings/contracts.js';
 import { splitSettingsByDomain, loadSettings } from '../settings.js';
@@ -358,6 +358,67 @@ function companionOwnerFileChecks(input: {
       ),
     },
   ];
+}
+
+/**
+ * Owner files whose loader tolerates absence: a missing owner file is not an
+ * error, so no seed needs to be staged for {@link verifyStartupOwnerFiles} to
+ * pass. Today this is only fleet-auth.json — {@link resolveFleetAuthOwnerFile}
+ * returns `undefined` (fleet auth disabled) when the file is absent and the
+ * deprecated env flag is unset, and its distributed seed intentionally carries a
+ * `replace-before-enable` placeholder key that fails validation until an
+ * operator provisions real keys. Every other checked owner fails closed on a
+ * missing file and therefore requires a staged seed.
+ */
+export const OPTIONAL_WHEN_MISSING_OWNER_FILES: ReadonlySet<string> = new Set<string>([
+  FLEET_AUTH_FILE_NAME,
+]);
+
+/** Static description of one owner-file check, independent of runtime roots. */
+export interface OwnerFileSeedDescriptor {
+  label: string;
+  ownerFileName: string;
+  seedFileName: string;
+  scope: 'system' | 'companion';
+  /** True when the loader tolerates a missing owner file (no seed required). */
+  optionalWhenMissing: boolean;
+}
+
+const OWNER_FILE_DESCRIPTOR_PLACEHOLDER_DIR = '__owner-file-descriptor-placeholder__';
+
+function toOwnerFileSeedDescriptor(
+  check: OwnerFileCheck,
+  scope: 'system' | 'companion',
+): OwnerFileSeedDescriptor {
+  const ownerFileName = basename(check.dataPath);
+  return {
+    label: check.label,
+    ownerFileName,
+    seedFileName: basename(check.seedPath),
+    scope,
+    optionalWhenMissing: OPTIONAL_WHEN_MISSING_OWNER_FILES.has(ownerFileName),
+  };
+}
+
+/**
+ * Canonical description of every owner-file check {@link verifyStartupOwnerFiles}
+ * runs, derived from the same check builders. Consumers (e.g. the repository
+ * `verify:startup-owner-files` seed script) use this to stay in parity with the
+ * guard instead of duplicating the owner list and silently drifting when a new
+ * required owner is added. Only static metadata (label, owner/seed file names,
+ * rooting scope) is read; the checks are never executed here, so the placeholder
+ * roots are safe.
+ */
+export function describeStartupOwnerFileChecks(): OwnerFileSeedDescriptor[] {
+  const system = systemOwnerFileChecks(
+    { dataDir: OWNER_FILE_DESCRIPTOR_PLACEHOLDER_DIR },
+    OWNER_FILE_DESCRIPTOR_PLACEHOLDER_DIR,
+  ).map(check => toOwnerFileSeedDescriptor(check, 'system'));
+  const companion = companionOwnerFileChecks({
+    companionDataDir: OWNER_FILE_DESCRIPTOR_PLACEHOLDER_DIR,
+    seedDir: OWNER_FILE_DESCRIPTOR_PLACEHOLDER_DIR,
+  }).map(check => toOwnerFileSeedDescriptor(check, 'companion'));
+  return [...system, ...companion];
 }
 
 function runOwnerFileChecks(checks: readonly OwnerFileCheck[]): StartupOwnerFileVerificationResult {

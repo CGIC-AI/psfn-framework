@@ -37,6 +37,10 @@ export const SYSTEM_LANGUAGE_TEMPLATE_KEYS = [
   'wake_return.last_time_here',
   'wake_return.recent_continuity',
   'wake_return.default_pending_intent',
+  'system_note.prefix',
+  'internal_whisper.prefix',
+  'mirror_note.speaker_self',
+  'mirror_note.speaker_other',
 ] as const;
 
 export type SystemLanguageTemplateKey = typeof SYSTEM_LANGUAGE_TEMPLATE_KEYS[number];
@@ -101,6 +105,10 @@ export const DEFAULT_SYSTEM_LANGUAGE_TEMPLATES: Readonly<SystemLanguageTemplateM
   'wake_return.last_time_here': 'Last time here: {{summary}}.',
   'wake_return.recent_continuity': 'Recent continuity: {{summary}}.',
   'wake_return.default_pending_intent': 'No urgent follow-up or pending intent found in available continuity context.',
+  'system_note.prefix': '[System note]',
+  'internal_whisper.prefix': '[Private runtime note to self; not user-visible and not sent by the user]',
+  'mirror_note.speaker_self': 'Me',
+  'mirror_note.speaker_other': 'Someone',
 });
 
 const ALLOWED_PLACEHOLDERS: Record<SystemLanguageTemplateKey, readonly string[]> = {
@@ -130,6 +138,10 @@ const ALLOWED_PLACEHOLDERS: Record<SystemLanguageTemplateKey, readonly string[]>
   'wake_return.last_time_here': ['summary'],
   'wake_return.recent_continuity': ['summary'],
   'wake_return.default_pending_intent': [],
+  'system_note.prefix': [],
+  'internal_whisper.prefix': [],
+  'mirror_note.speaker_self': [],
+  'mirror_note.speaker_other': [],
 };
 
 const REQUIRED_PLACEHOLDERS: Partial<Record<SystemLanguageTemplateKey, readonly string[]>> = {

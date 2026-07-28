@@ -79,7 +79,6 @@ interface MirrorSessionMetadata {
 
 const MAX_MIRROR_RENDER_CHARS = 180;
 const LEGACY_OR_CANONICAL_MUSING_CHANNEL_PATTERN = /^internal:reflection:(musing|whisper)$/i;
-const PRIVATE_INTERNAL_WHISPER_PREFIX = '[Private runtime note to self; not user-visible and not sent by the user]';
 
 function createInternalAssistantMessage(
   content: string,
@@ -196,13 +195,13 @@ export function convertToLlm(messages: AgentMessage[]): Message[] {
       result.push(message);
     } else if (isSystemNoteMessage(msg)) {
       result.push(createInternalAssistantMessage(
-        `[System note] ${msg.content}`,
+        `${renderSystemLanguageTemplate('system_note.prefix')} ${msg.content}`,
         msg.timestamp,
         MESSAGE_CLASSES.systemNote,
       ));
     } else if (isInternalWhisperMessage(msg)) {
       result.push(createInternalAssistantMessage(
-        `${PRIVATE_INTERNAL_WHISPER_PREFIX} ${msg.content}`,
+        `${renderSystemLanguageTemplate('internal_whisper.prefix')} ${msg.content}`,
         msg.timestamp,
         MESSAGE_CLASSES.internalWhisper,
       ));
@@ -211,7 +210,15 @@ export function convertToLlm(messages: AgentMessage[]): Message[] {
       // Skip in LLM conversion.
       continue;
     } else if (isMirrorMessage(msg)) {
-      const speaker = msg.sourceAuthorName?.trim() || msg.sourceRole;
+      // Charter 8.12: a missing author name must never surface the raw wire role
+      // ("user"/"assistant") to the companion; fall back to a named, companion-
+      // configurable neutral label instead.
+      const speaker = msg.sourceAuthorName?.trim()
+        || renderSystemLanguageTemplate(
+          msg.sourceRole === 'assistant'
+            ? 'mirror_note.speaker_self'
+            : 'mirror_note.speaker_other',
+        );
       const message = {
         role: 'user',
         content: `[Mirror note from ${msg.originChannelId}] ${speaker}: ${compactMirrorText(msg.content)}`,

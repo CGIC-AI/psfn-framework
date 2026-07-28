@@ -16,11 +16,11 @@ export interface IntrospectionTurnRecordReader {
     channelId: string,
     limit: number,
     cursor?: TurnRecordPageCursor,
-  ): {
+  ): Promise<{
     records: TurnRecord[];
     nextCursor?: TurnRecordPageCursor;
     exhausted: boolean;
-  };
+  }>;
   isSessionRetiredOrQuarantined(sessionId: string): boolean;
   isSourceTurnRecordEligible(
     sourceChannelId: string,
@@ -91,8 +91,8 @@ export function createTurnRecordIntrospectionSource(
     return sessions;
   };
 
-  const readTurnPage = (channelId: string, limit: number): TurnRecord[] => {
-    const page = reader.readSourceTurnRecordPage(
+  const readTurnPage = async (channelId: string, limit: number): Promise<TurnRecord[]> => {
+    const page = await reader.readSourceTurnRecordPage(
       channelId,
       limit,
       turnCursors.get(channelId),
@@ -108,25 +108,35 @@ export function createTurnRecordIntrospectionSource(
     return page.records;
   };
 
+  const listCandidatesOnce: IntrospectionAuditSourcePort['listCandidates'] = async (input) => {
+    const allowed = new Set(input.allowedPublicChannelIds);
+    const candidates: IntrospectionAuditCandidate[] = [];
+    for (const session of readSessionPage(input.recentSessionLimit)) {
+      if (!allowed.has(session.sourceChannelId)) continue;
+      for (const record of await readTurnPage(session.sourceChannelId, input.recentTurnLimit)) {
+        if (!allowed.has(record.channelId) || record.channelId !== session.sourceChannelId) continue;
+        const ownerSessionId = record.sessionId ?? session.sourceChannelId;
+        if (reader.isSessionRetiredOrQuarantined(ownerSessionId)) continue;
+        const candidate = toCandidate(record, ownerSessionId, input.maxSourceChars);
+        if (candidate) candidates.push(candidate);
+      }
+    }
+    return candidates
+      .sort((left, right) => left.occurredAt.localeCompare(right.occurredAt))
+      .filter((candidate, index, all) => (
+        all.findIndex(entry => entry.sourceRef === candidate.sourceRef) === index
+      ));
+  };
+
+  // The source owns mutable cursor state. Preserve the old synchronous
+  // one-at-a-time semantics when scheduler/admin callers overlap async reads.
+  let pendingCandidateRead: Promise<void> = Promise.resolve();
+
   return {
     listCandidates: (input) => {
-      const allowed = new Set(input.allowedPublicChannelIds);
-      const candidates: IntrospectionAuditCandidate[] = [];
-      for (const session of readSessionPage(input.recentSessionLimit)) {
-        if (!allowed.has(session.sourceChannelId)) continue;
-        for (const record of readTurnPage(session.sourceChannelId, input.recentTurnLimit)) {
-          if (!allowed.has(record.channelId) || record.channelId !== session.sourceChannelId) continue;
-          const ownerSessionId = record.sessionId ?? session.sourceChannelId;
-          if (reader.isSessionRetiredOrQuarantined(ownerSessionId)) continue;
-          const candidate = toCandidate(record, ownerSessionId, input.maxSourceChars);
-          if (candidate) candidates.push(candidate);
-        }
-      }
-      return candidates
-        .sort((left, right) => left.occurredAt.localeCompare(right.occurredAt))
-        .filter((candidate, index, all) => (
-          all.findIndex(entry => entry.sourceRef === candidate.sourceRef) === index
-        ));
+      const read = pendingCandidateRead.then(() => listCandidatesOnce(input));
+      pendingCandidateRead = read.then(() => undefined, () => undefined);
+      return read;
     },
     isCandidateStillEligible: async (candidate) => {
       if (reader.isSessionRetiredOrQuarantined(candidate.ownerSessionId)) return false;

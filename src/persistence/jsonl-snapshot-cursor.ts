@@ -10,7 +10,7 @@ import { toErrorMessage } from '../shared/utils/errors.js';
 import { isRecord } from '../shared/utils/types.js';
 import {
   fileIdentityKey,
-  readJsonlLineBefore,
+  readJsonlLineBeforeAsync,
   type JsonlLineAtOffset,
   type JsonlReadStats,
 } from './jsonl-segments.js';
@@ -32,6 +32,7 @@ export interface JsonlSnapshotPage {
 
 export interface ReadJsonlSnapshotPageOptions {
   chunkBytes: number;
+  maxLineBytes: number;
   rotationRetries: number;
   stats?: JsonlSnapshotPageStats;
 }
@@ -339,18 +340,19 @@ function locateCurrentSegment(
   );
 }
 
-function readCurrentLine(
+async function readCurrentLine(
   activePath: string,
   state: SnapshotCursorPayload,
   options: ReadJsonlSnapshotPageOptions,
-): (JsonlLineAtOffset & { path: string }) | null {
+): Promise<(JsonlLineAtOffset & { path: string }) | null> {
   for (let attempt = 0; ; attempt += 1) {
     const current = state.current;
     if (!current) return null;
     const path = locateCurrentSegment(activePath, state);
     try {
-      const line = readJsonlLineBefore(path, state.exclusiveOffset, {
+      const line = await readJsonlLineBeforeAsync(path, state.exclusiveOffset, {
         chunkBytes: options.chunkBytes,
+        maxLineBytes: options.maxLineBytes,
         stats: options.stats,
         expectedFileIdentity: current.identity,
       });
@@ -392,13 +394,13 @@ function advanceSegment(activePath: string, state: SnapshotCursorPayload): void 
  * Read at most `limit` physical rows from one fixed active+numbered snapshot.
  * Cursor state retains one segment descriptor regardless of archive length.
  */
-export function readJsonlSnapshotPage(
+export async function readJsonlSnapshotPage(
   activePath: string,
   sourceId: string,
   limit: number,
   cursor: string | undefined,
   options: ReadJsonlSnapshotPageOptions,
-): JsonlSnapshotPage {
+): Promise<JsonlSnapshotPage> {
   if (!Number.isSafeInteger(limit) || limit <= 0) {
     throw new Error('JSONL snapshot page limit must be a positive safe integer');
   }
@@ -411,7 +413,7 @@ export function readJsonlSnapshotPage(
       advanceSegment(activePath, state);
       continue;
     }
-    const line = readCurrentLine(activePath, state, options);
+    const line = await readCurrentLine(activePath, state, options);
     if (!line) {
       advanceSegment(activePath, state);
       continue;

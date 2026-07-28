@@ -105,7 +105,7 @@ describe('fs tool', () => {
 
     expect(tool.description).toContain('20,000 bytes');
     expect(tool.description).toContain('analysis_workbench');
-    expect(tool.description).toContain('bounded subagent');
+    expect(tool.description).toContain('bounded automaton');
     expect(tool.description).toContain('provenance-bearing excerpts');
     expect(tool.parameters).toMatchObject({
       properties: {

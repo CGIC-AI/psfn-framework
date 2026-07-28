@@ -40,6 +40,7 @@ import type {
   AcquireEgressLeaseDeclineReason,
   RoomEpisodeBreakerState,
 } from '../core/agent/arbiter/speaking-arbiter-store-port.js';
+import type { RoomEpisodeCircuitBreakerFiring } from '../core/agent/fatigue/room-episode-circuit-breaker.js';
 import type { SocialPotEnforcementOutcome } from '../core/agent/fatigue/social-pot-enforcement.js';
 import type { PartnerAffectShadowTelemetryEvent } from './contracts/partner-affect.js';
 import type { IcpConversationCostBreakerEvent } from './telemetry/model-usage.js';
@@ -217,6 +218,13 @@ export interface ParticipationEgressEvent {
   drawOutcome?: SocialPotEnforcementOutcome;
   /** settled only: the Law-36 room-episode breaker state at the decision. */
   breakerState?: RoomEpisodeBreakerState;
+  /**
+   * settled only, present ONLY on a fresh trip (transition into `open`): the
+   * charter §8.11 auditable firing record. Fully structural — enums, numbers,
+   * and the channel id only (pressure/thresholds/contributing signals/
+   * attribution:system_circuit_breaker) — never companion prose or trigger text.
+   */
+  breakerFiring?: RoomEpisodeCircuitBreakerFiring;
   /** settled + `yielded_speak_least` only: the opaque winner companion id. */
   yieldedTo?: string;
   /** settled + `gate_error` only: the stage that failed. */

@@ -101,6 +101,7 @@ import type { RuntimeMode } from '../../../core/agent/tool-wiring-validator.js';
 import type { ConcernStorePort } from '../../../core/intention/concern-store-port.js';
 import {
   migrateLegacyPersistenceLayout,
+  resolveCogSecEventsPath,
   resolveConfiguredCompanionDataDir,
   resolveCoreMemoryPath,
   resolveContinuityDir,
@@ -116,6 +117,8 @@ import {
   resolveValuesJournalPath,
 } from '../../../persistence/layout.js';
 import { createDefaultPostgresSessionAdapters } from '../../../persistence/sessions/postgres-adapters.js';
+import { CogSecEventStore } from '../../../core/cogsec/events.js';
+import { createSessionIntegrityIncidentObserver } from '../../../core/cogsec/session-integrity-incident.js';
 import { createPostgresShardSchemaLifecycle } from '../../../persistence/postgres/shard-schema-lifecycle.js';
 import { FatigueLedger } from '../../../shared/telemetry/fatigue-ledger.js';
 
@@ -193,6 +196,17 @@ function createSessionComposition(
   if (!turnRecordEligibilityFence) {
     throw new Error('PostgreSQL session composition requires a TurnRecord eligibility fence');
   }
+  // Durable session-integrity incident seam (bead g59z): when a keyring makes
+  // HMAC verification active, a full journal load that surfaces a broken chain
+  // records one operator-only CogSec incident per session in the canonical
+  // cogsec-events.json store that Garden already reads. The provider mints a
+  // fresh store per write (concurrent gateway/Garden writers).
+  const cogSecEventsPath = resolveCogSecEventsPath(companionDataDir);
+  const integrityObserver = options.sessionIntegrityProvider
+    ? createSessionIntegrityIncidentObserver({
+      cogSecEvents: () => new CogSecEventStore(cogSecEventsPath),
+    })
+    : null;
   const sessionStore = new SessionStore(sessionsDir, {
     integrityProvider: options.sessionIntegrityProvider ?? null,
     sessionArchivePort: sessionAdapters.sessionArchivePort,
@@ -200,6 +214,7 @@ function createSessionComposition(
     turnRecordStore: sessionAdapters.turnRecordStore,
     turnRecordEligibilityFence,
     tailCache: sessionTailCache,
+    integrityObserver,
   });
   const sessionManager = new SessionManager(
     sessionStore,

@@ -17,6 +17,11 @@ export type CogSecCaseType =
   | 'policy_drift'
   | 'content_poisoning'
   | 'intake_firewall'
+  // Session L0 HMAC-chain verification failure (bead g59z). Operator-only: a
+  // broken chain means stored history was altered or corrupted and needs human
+  // investigation. Excluded from agent-visible notices (see safe-log.ts) so the
+  // alert reaches the operator in Garden, not the companion's context.
+  | 'session_integrity'
   | 'unknown';
 
 export type CogSecSeverity = 'low' | 'medium' | 'high' | 'critical';
@@ -206,6 +211,7 @@ const CASE_TYPES: ReadonlySet<CogSecCaseType> = new Set([
   'policy_drift',
   'content_poisoning',
   'intake_firewall',
+  'session_integrity',
   'unknown',
 ]);
 const SEVERITIES: ReadonlySet<CogSecSeverity> = new Set(['low', 'medium', 'high', 'critical']);

@@ -81,11 +81,11 @@ export type SubagentExecutionEnvelope = BoundedSubagentLaunchEnvelope;
 
 function normalizeText(value: unknown, fieldName: string): string {
   if (typeof value !== 'string') {
-    throw new Error(`Bounded subagent launch requires a string ${fieldName}.`);
+    throw new Error(`Bounded automaton launch requires a string ${fieldName}.`);
   }
   const trimmed = value.trim();
   if (!trimmed) {
-    throw new Error(`Bounded subagent launch requires a non-empty ${fieldName}.`);
+    throw new Error(`Bounded automaton launch requires a non-empty ${fieldName}.`);
   }
   return trimmed;
 }

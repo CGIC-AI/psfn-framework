@@ -252,6 +252,34 @@ describe('SubagentFaculty', () => {
     expect(compiledDefault.maxConcurrentTasks).toBe(8);
   });
 
+  // Register guard (rqn1.9): faculty lookup failures propagate through the
+  // subagent-tool catch into companion-visible failure text, so they must read
+  // in the automata register (charter 6.28/8.12) and never leak "subagent".
+  it('names unknown-task lookups in the automata register (rqn1.9)', async () => {
+    const faculty = new SubagentFaculty({
+      eventBus,
+      llmProvider: mockLLM(),
+      sessionStore,
+      embeddingService: null,
+      memoryProvider: null,
+      config: TEST_CONFIG,
+      parentSystemPrompt: 'test prompt',
+    });
+
+    for (const op of ['wait', 'cancel'] as const) {
+      let message = '';
+      try {
+        await (op === 'wait'
+          ? faculty.wait('missing-task')
+          : faculty.cancel('missing-task'));
+      } catch (error) {
+        message = error instanceof Error ? error.message : String(error);
+      }
+      expect(message, `${op} rejection`).toMatch(/Unknown automaton task "missing-task"/);
+      expect(message, `${op} rejection register`).not.toMatch(/\bsubagent\b/iu);
+    }
+  });
+
   it('executes bounded subagent tasks with an independent registry and lifecycle', async () => {
     mockSubagentContent = 'task completed';
     const lifecycleEvents: Array<{

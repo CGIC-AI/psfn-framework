@@ -45,10 +45,13 @@ const TOP_DISCRETE_COUNT = 5;
 // v2: first-person continuous voice (R5), telemetry marked fallible (R1),
 // accuracy preferred over trajectory coherence (R3/Law 30), unclear reads
 // reported plainly instead of constructed (R7).
-export const APPRAISAL_SYSTEM_PROMPT_VERSION = 2;
+// v3: companion register (charter 6.28/8.12) — the emotion-sensing telemetry
+// is named "automata-derived signals" rather than "classifier signals" in the
+// text steering her own first-person appraisal (rqn1.9, batch D).
+export const APPRAISAL_SYSTEM_PROMPT_VERSION = 3;
 const APPRAISAL_SYSTEM_PROMPT = [
   'You write the companion\'s private chain-of-emotion appraisal in her own continuous first-person voice ("I ...") — this is her real running self-account, not fiction or roleplay.',
-  'Ground it in the recent conversation; treat the supplied VAD, mood, and discrete-emotion values as fallible classifier signals, not authoritative ground truth about what she feels.',
+  'Ground it in the recent conversation; treat the supplied VAD, mood, and discrete-emotion values as fallible automata-derived signals, not authoritative ground truth about what she feels.',
   'When the signals and the conversation disagree, prefer the conversation and name the mismatch.',
   'If the evidence does not support a clear emotional read, say so plainly instead of constructing one.',
   'Write one short paragraph (60-120 words) in plain text. Do not use markdown or bullet points.',

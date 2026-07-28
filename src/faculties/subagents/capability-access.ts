@@ -39,7 +39,7 @@ function assertParentSnapshotCoherent(snapshot: CapabilityGrantSnapshot): readon
     || grantedTokens.some(token => !expectedSet.has(token))
   ) {
     throw new Error(
-      'Subagent capability derivation requires an atomic parent snapshot whose effective '
+      'Automata capability derivation requires an atomic parent snapshot whose effective '
       + 'tokens match its tier and customTokens.',
     );
   }

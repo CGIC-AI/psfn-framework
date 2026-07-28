@@ -20,8 +20,8 @@ const MAX_SEARCH_MAX_BYTES_PER_FILE = 200_000;
 const MAX_CONTEXT_LINES = 2;
 const LARGE_DOCUMENT_HANDOFF =
   'Continue paging this file with the returned next_offset_bytes. For longer analysis, use analysis_workbench, '
-  + 'or use a bounded subagent instructed to return provenance-bearing excerpts with the source path and line or byte ranges. '
-  + 'Bring those excerpts or a durable artifact back before the worker is discarded; do not rely on a summary-only handoff.';
+  + 'or use a bounded automaton instructed to return provenance-bearing excerpts with the source path and line or byte ranges. '
+  + 'Bring those excerpts or a durable artifact back before the automaton is discarded; do not rely on a summary-only handoff.';
 
 type FilesystemAction = 'list' | 'read' | 'search' | 'write' | 'edit';
 
@@ -142,7 +142,7 @@ export function createFsTool(ops: FilesystemOperations): SubstrateAgentTool {
         maximum: MAX_READ_CHARS,
         description:
           `Used with action=read. Read at most this many bytes; ${String(MAX_READ_CHARS)} is a hard cap. `
-          + 'Use analysis_workbench or a bounded subagent for larger documents.',
+          + 'Use analysis_workbench or a bounded automaton for larger documents.',
       })),
       offset_bytes: Type.Optional(Type.Integer({
         minimum: 0,

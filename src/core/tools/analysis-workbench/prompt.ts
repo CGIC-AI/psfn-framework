@@ -78,7 +78,7 @@ function buildBasePrompt(
     '## How to use',
     '',
     'Use this workbench only for multi-stage analysis of large files, codebases, logs, datasets, transcripts, or evidence sets that would be harmful to stuff directly into the main conversation context.',
-    'Prefer running long reads in a bounded worker or subagent so the primary channel stays responsive. Direct primary-channel use remains permitted when appropriate, but it may occupy that turn for several minutes.',
+    'Prefer running long reads in a bounded automaton so the primary channel stays responsive. Direct primary-channel use remains permitted when appropriate, but it may occupy that turn for several minutes.',
     'Use it when a local document exceeds the direct fs read cap. Keep large raw material inside this temporary workbench, then return a bounded answer with the source path and relevant line or byte ranges before the workbench context is discarded.',
     'Do not use it for ordinary reasoning, tool discovery, missing schemas, simple lookup, simple file/session inspection, routine inspection, or state changes.',
     'Routine orient actions, concern maintenance, scheduler/schedule work, and simple lookup must stay on direct active tools such as orient, schedule, session, memory, repo, or filesystem tools.',

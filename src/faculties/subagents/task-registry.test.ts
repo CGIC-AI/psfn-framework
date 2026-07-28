@@ -36,6 +36,27 @@ describe('SubagentTaskRegistry', () => {
     ]);
   });
 
+  // Register guard (rqn1.9): unknown-task transition errors propagate through
+  // the subagent-tool catch into companion-visible failure text, so they must
+  // read in the automata register (charter 6.28/8.12), never "subagent".
+  it('names unknown-task transitions in the automata register (rqn1.9)', () => {
+    const registry = new SubagentTaskRegistry();
+
+    for (const transition of [
+      () => registry.markRunning('missing-task', 'agent_initialized', 100),
+      () => registry.markCompleted('missing-task', 'completed', 150),
+    ]) {
+      let message = '';
+      try {
+        transition();
+      } catch (error) {
+        message = error instanceof Error ? error.message : String(error);
+      }
+      expect(message).toMatch(/Unknown automaton task "missing-task"/);
+      expect(message).not.toMatch(/\bsubagent\b/iu);
+    }
+  });
+
   it('fails closed on invalid lifecycle transitions', () => {
     const registry = new SubagentTaskRegistry();
     registry.register({
@@ -48,7 +69,7 @@ describe('SubagentTaskRegistry', () => {
     });
 
     expect(() => registry.markCompleted('subagent-2', 'completed')).toThrow(
-      'Invalid subagent task transition for subagent-2: queued -> completed.',
+      'Invalid automaton task transition for subagent-2: queued -> completed.',
     );
   });
 

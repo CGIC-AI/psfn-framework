@@ -17,7 +17,10 @@ import { EventBus } from '../../shared/event-bus.js';
 import { TurnPerformanceTracker } from '../../shared/telemetry/turn-performance.js';
 import { CAPABILITY_TOKENS } from '../../system/capabilities/tokens.js';
 import { deriveShardCapabilityGrant } from '../../system/capabilities/shard-derivation.js';
-import { buildSubagentWorkSpec } from '../../faculties/subagents/work-spec.js';
+import {
+  buildSubagentWorkSpec,
+  createSubagentWorkSpecProvider,
+} from '../../faculties/subagents/work-spec.js';
 
 const TEST_COMPANION_ID = createCompanionId('11111111-1111-4111-8111-111111111111');
 const TEST_GATEWAY_ROUTING = {
@@ -221,7 +224,7 @@ describe('GatewayClient streaming', () => {
     client = new GatewayClient(conn.conn, 1024);
   });
 
-  it('flattens subagent work-spec correlation onto the split gateway request', async () => {
+  it('routes streamed callbacks by the transported work-spec request id', async () => {
     const parentCorrelation = {
       turnId: 'parent-turn',
       requestId: 'parent-request',
@@ -231,7 +234,14 @@ describe('GatewayClient streaming', () => {
       originType: 'chat' as const,
       originStage: 'agent.turn.prompt',
     };
-    const workSpec = buildSubagentWorkSpec({ correlation: parentCorrelation });
+    const workSpec = buildSubagentWorkSpec({
+      correlation: {
+        ...parentCorrelation,
+        requestId: 'worker-request',
+      },
+    });
+    const chunks: string[] = [];
+    const firstOutputs: Array<Record<string, unknown>> = [];
 
     const streaming = client.stream(
       {
@@ -239,7 +249,10 @@ describe('GatewayClient streaming', () => {
         messages: [{ role: 'user', content: 'analyze the attached evidence' }],
         correlation: parentCorrelation,
       },
-      undefined,
+      {
+        onText: text => chunks.push(text),
+        onFirstOutput: observation => firstOutputs.push(observation),
+      },
       { workSpec },
     );
     const request = conn.sent[0] as {
@@ -250,7 +263,7 @@ describe('GatewayClient streaming', () => {
 
     expect(request.method).toBe('llm.chat');
     expect(request.params).toMatchObject({
-      requestId: 'parent-request',
+      requestId: 'worker-request',
       turnId: 'parent-turn',
       channelId: 'discord-channel',
       callType: 'background',
@@ -266,6 +279,19 @@ describe('GatewayClient streaming', () => {
     expect(request.params.workSpec).not.toHaveProperty('correlation');
 
     conn._emit({
+      method: 'llm.chunk',
+      params: { requestId: 'worker-request', text: 'worker ' },
+    });
+    conn._emit({
+      method: 'llm.first_output',
+      params: {
+        requestId: 'worker-request',
+        kind: 'text',
+        monotonicAtMs: 123,
+        timestampMs: 456,
+      },
+    });
+    conn._emit({
       jsonrpc: '2.0',
       id: request.id,
       result: {
@@ -278,6 +304,182 @@ describe('GatewayClient streaming', () => {
       },
     });
     await expect(streaming).resolves.toMatchObject({ content: 'worker completed' });
+    expect(chunks).toEqual(['worker ']);
+    expect(firstOutputs).toEqual([{
+      kind: 'text',
+      monotonicAtMs: 123,
+      timestampMs: 456,
+    }]);
+  });
+
+  it('uses an opaque routing id without exposing private source correlation', async () => {
+    const sourceCorrelation = {
+      turnId: 'private-source-turn',
+      requestId: 'private-source-request',
+      channelId: 'private-source-channel',
+      telemetryVisibility: 'companion_private' as const,
+    };
+    const workSpec = buildSubagentWorkSpec({ correlation: sourceCorrelation });
+    const chunks: string[] = [];
+
+    const streaming = client.stream(
+      {
+        systemPrompt: 'private bounded worker',
+        messages: [{ role: 'user', content: 'analyze private evidence' }],
+        correlation: sourceCorrelation,
+      },
+      { onText: text => chunks.push(text) },
+      { workSpec },
+    );
+    const request = conn.sent[0] as {
+      id: number;
+      params: Record<string, unknown> & { requestId: string };
+    };
+
+    expect(request.params).toMatchObject({
+      telemetryVisibility: 'companion_private',
+      callType: 'background',
+      purpose: 'companion_private.background',
+    });
+    expect(request.params.requestId).toMatch(/^req-\d+$/);
+    expect(request.params.requestId).not.toBe(sourceCorrelation.requestId);
+    expect(request.params).not.toHaveProperty('turnId');
+    expect(request.params).not.toHaveProperty('channelId');
+
+    conn._emit({
+      method: 'llm.chunk',
+      params: { requestId: request.params.requestId, text: 'private chunk' },
+    });
+    conn._emit({
+      jsonrpc: '2.0',
+      id: request.id,
+      result: {
+        content: 'private worker completed',
+        toolCalls: [],
+        model: 'background-model',
+        inputTokens: 20,
+        outputTokens: 4,
+        stopReason: 'stop',
+      },
+    });
+
+    await expect(streaming).resolves.toMatchObject({ content: 'private worker completed' });
+    expect(chunks).toEqual(['private chunk']);
+  });
+
+  it('flattens injected subagent correlation on matching-purpose complete calls', async () => {
+    const parentCorrelation = {
+      turnId: 'parent-complete-turn',
+      requestId: 'parent-complete-request',
+      channelId: 'discord-channel',
+      callType: 'chat' as const,
+      purpose: 'agent.turn.prompt',
+      originType: 'chat' as const,
+      originStage: 'agent.turn.prompt',
+    };
+    const workSpec = buildSubagentWorkSpec({ correlation: parentCorrelation });
+    const workerProvider = createSubagentWorkSpecProvider(client, workSpec);
+
+    const completion = workerProvider.complete(
+      {
+        systemPrompt: 'bounded worker',
+        messages: [{ role: 'user', content: 'analyze the attached evidence' }],
+        correlation: parentCorrelation,
+      },
+      'background',
+      { correlation: { requestId: 'caller-complete-request' } },
+    );
+    const request = conn.sent[0] as {
+      id: number;
+      method: string;
+      params: Record<string, unknown> & { workSpec: Record<string, unknown> };
+    };
+
+    expect(request.method).toBe('llm.complete');
+    expect(request.params).toMatchObject({
+      requestId: 'caller-complete-request',
+      turnId: 'parent-complete-turn',
+      channelId: 'discord-channel',
+      callType: 'background',
+      originType: 'chat',
+      originStage: 'subagent.turn',
+      purpose: 'background',
+      workSpec: {
+        purpose: 'background',
+        lane: 'background_continuation',
+        durable: false,
+      },
+    });
+    expect(request.params.workSpec).not.toHaveProperty('correlation');
+
+    conn._emit({
+      jsonrpc: '2.0',
+      id: request.id,
+      result: {
+        content: 'worker completed',
+        model: 'background-model',
+        inputTokens: 20,
+        outputTokens: 4,
+        stopReason: 'stop',
+      },
+    });
+    await expect(completion).resolves.toMatchObject({ content: 'worker completed' });
+  });
+
+  it('does not let caller completion correlation downgrade a private subagent spec', async () => {
+    const privateSpec = buildSubagentWorkSpec({
+      correlation: {
+        telemetryVisibility: 'companion_private',
+        requestId: 'private-spec-request',
+        channelId: 'private-spec-channel',
+      },
+    });
+    const workerProvider = createSubagentWorkSpecProvider(client, privateSpec);
+
+    const completion = workerProvider.complete(
+      {
+        systemPrompt: 'private bounded worker',
+        messages: [{ role: 'user', content: 'analyze private evidence' }],
+        correlation: {
+          requestId: 'context-request',
+          channelId: 'context-channel',
+          telemetryVisibility: 'operator_visible',
+        },
+      },
+      'background',
+      {
+        correlation: {
+          requestId: 'caller-request',
+          telemetryVisibility: 'operator_visible',
+        },
+      },
+    );
+    const request = conn.sent[0] as {
+      id: number;
+      params: Record<string, unknown>;
+    };
+
+    expect(request.params).toMatchObject({
+      telemetryVisibility: 'companion_private',
+      callType: 'background',
+      purpose: 'background',
+      originStage: 'companion_private.background',
+    });
+    expect(request.params).not.toHaveProperty('requestId');
+    expect(request.params).not.toHaveProperty('channelId');
+
+    conn._emit({
+      jsonrpc: '2.0',
+      id: request.id,
+      result: {
+        content: 'private worker completed',
+        model: 'background-model',
+        inputTokens: 20,
+        outputTokens: 4,
+        stopReason: 'stop',
+      },
+    });
+    await expect(completion).resolves.toMatchObject({ content: 'private worker completed' });
   });
 
   it('sends screened inline image bytes in only the intake frame and references them in the main call', async () => {

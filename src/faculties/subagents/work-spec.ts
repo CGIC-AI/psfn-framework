@@ -10,6 +10,7 @@
 
 import type { CorrelationMetadata, LLMWorkSpec } from '../../shared/contracts/runtime.js';
 import type { LLMProviderPort } from '../../core/agent/contracts.js';
+import { resolveCorrelationMetadata } from '../../primitives/llm/correlation.js';
 import { buildLLMWorkSpec } from '../../primitives/llm/work-spec.js';
 import { COMPANION_PRIVATE_BACKGROUND_TELEMETRY } from '../../shared/telemetry/model-usage.js';
 
@@ -102,11 +103,43 @@ export function createSubagentWorkSpecProvider(
       ...(options ?? {}),
       workSpec: options?.workSpec ?? spec,
     }),
-    complete: (context, purpose, options) => provider.complete(context, purpose, {
-      ...(options ?? {}),
-      ...(options?.workSpec === undefined && purpose === spec.purpose
-        ? { workSpec: spec }
-        : {}),
-    }),
+    complete: (context, purpose, options) => {
+      const injectSubagentSpec = options?.workSpec === undefined && purpose === spec.purpose;
+      const hasInjectedCorrelation = injectSubagentSpec && (
+        spec.correlation !== undefined || options?.correlation !== undefined
+      );
+      const preservePrivateCorrelation = spec.correlation?.telemetryVisibility === 'companion_private'
+        || options?.correlation?.telemetryVisibility === 'companion_private';
+      const injectedCorrelation = hasInjectedCorrelation
+        ? (
+            preservePrivateCorrelation
+              ? resolveCorrelationMetadata(
+                  spec.correlation,
+                  {
+                    ...(options?.correlation ?? {}),
+                    telemetryVisibility: 'companion_private',
+                  },
+                  purpose,
+                )
+              : {
+                  ...(spec.correlation ?? {}),
+                  ...(options?.correlation ?? {}),
+                }
+          )
+        : undefined;
+      return provider.complete(context, purpose, {
+        ...(options ?? {}),
+        ...(injectSubagentSpec
+          ? {
+              workSpec: spec,
+              // Completion providers resolve explicit option correlation rather
+              // than workSpec.correlation. Merge partial caller overrides onto
+              // the injected spec so omitted lane fields remain attributable;
+              // either side declaring companion_private collapses the result.
+              ...(injectedCorrelation ? { correlation: injectedCorrelation } : {}),
+            }
+          : {}),
+      });
+    },
   };
 }

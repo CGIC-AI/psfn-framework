@@ -11,6 +11,7 @@ import type { LLMProviderPort as LLMProvider } from '../../core/agent/contracts.
 import { SUBAGENT_WORKER_LANE } from '../../core/agent/worker-lanes.js';
 import type {
   CanonicalModelRegistry,
+  LLMContext,
   LLMResponse,
   ModelRegistryEntry,
   ModelSlot,
@@ -1510,13 +1511,68 @@ describe('subagent work spec seam (mmo9.7.7)', () => {
       complete: vi.fn(async () => response),
     };
     const wrapped = createSubagentWorkSpecProvider(inner, spec);
+    const callerCompletionContext: LLMContext = {
+      systemPrompt: '',
+      messages: [],
+    };
+    const privateCompletionContext: LLMContext = {
+      systemPrompt: '',
+      messages: [],
+    };
 
     // Purpose matches the spec (background) → attributed.
     await wrapped.complete({ messages: [] } as any, 'background');
     expect(inner.complete).toHaveBeenLastCalledWith(
       { messages: [] },
       'background',
-      expect.objectContaining({ workSpec: spec }),
+      expect.objectContaining({
+        workSpec: spec,
+        correlation: expect.objectContaining(spec.correlation ?? {}),
+      }),
+    );
+
+    const callerCorrelation = {
+      requestId: 'caller-owned-request',
+    };
+    await wrapped.complete(
+      callerCompletionContext,
+      'background',
+      { correlation: callerCorrelation },
+    );
+    expect(inner.complete).toHaveBeenLastCalledWith(
+      callerCompletionContext,
+      'background',
+      expect.objectContaining({
+        workSpec: spec,
+        correlation: expect.objectContaining({
+          ...spec.correlation,
+          requestId: 'caller-owned-request',
+        }),
+      }),
+    );
+
+    const privateSpec = buildSubagentWorkSpec({
+      correlation: {
+        telemetryVisibility: 'companion_private',
+        channelId: 'private-source-channel',
+        requestId: 'private-source-request',
+      },
+    });
+    const privateWrapped = createSubagentWorkSpecProvider(inner, privateSpec);
+    await privateWrapped.complete(privateCompletionContext, 'background');
+    expect(inner.complete).toHaveBeenLastCalledWith(
+      privateCompletionContext,
+      'background',
+      expect.objectContaining({
+        workSpec: privateSpec,
+        correlation: expect.objectContaining({
+          callType: 'background',
+          purpose: COMPANION_PRIVATE_BACKGROUND_PURPOSE,
+          originType: 'background',
+          originStage: COMPANION_PRIVATE_BACKGROUND_PURPOSE,
+          telemetryVisibility: 'companion_private',
+        }),
+      }),
     );
 
     // Purpose differs → never mis-attributed (fail closed): no workSpec injected.

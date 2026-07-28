@@ -14,8 +14,10 @@ import type {
   AdminIcpFatigueView,
 } from '../../operator/garden/services/types/icp-autonomy.js';
 import { isRfc4122Uuid } from '../../shared/utils/types.js';
+import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import { createPostgresPool, queryRows } from '../postgres.js';
 import { SHARED_SCHEMA_NAME } from './migrations.js';
+import { resolveFleetLedgerPoolScope } from './tenant-pool-scope.js';
 import { PostgresIcpSharedAutonomyStore } from './icp-shared-autonomy-store.js';
 
 const MAX_ADMIN_ROWS = 100;
@@ -240,12 +242,19 @@ export class PostgresIcpAdminProjectionStore implements IcpAdminProjectionStore 
     options: {
       localCompanionId: string;
       knownCompanionIds: readonly string[];
+      config: Pick<SubstrateConfig, 'multiCompanion'>;
     },
   ): Promise<PostgresIcpAdminProjectionStore> {
     if (!isRfc4122Uuid(options.localCompanionId)
       || !options.knownCompanionIds.includes(options.localCompanionId)) {
       throw new Error('ICP admin projection requires a known local companion identity');
     }
+    // The cost pool reads the fleet-wide ledger (icp_conversation_cost_decisions
+    // in `public`). Resolve its scope deliberately before opening any pool so an
+    // ambiguous (single-companion) construction fails closed here rather than
+    // silently opening a pool on the libpq default `"$user", public` search_path
+    // (psfn-framework-vzh0u; same accidental-default class as psfn-framework-3ack).
+    const fleetLedgerScope = resolveFleetLedgerPoolScope(options.config);
     const sharedPool = createPostgresPool(databaseUrl, {
       applicationName: 'psfn-icp-admin-projection',
       allowExitOnIdle: true,
@@ -255,6 +264,10 @@ export class PostgresIcpAdminProjectionStore implements IcpAdminProjectionStore 
     const costPool = createPostgresPool(databaseUrl, {
       applicationName: 'psfn-icp-admin-cost-projection',
       allowExitOnIdle: true,
+      // Pin the fleet ledger schema explicitly; the aggregation across
+      // companions is intentional (shared budget pool), the schema is not left
+      // to the connection default.
+      schema: fleetLedgerScope.schema,
       max: 1,
     });
     try {

@@ -1224,6 +1224,7 @@ export class SessionStore implements TranscriptSearchPort {
     logicalSessionId: string,
     turnId: string,
     operation: () => Promise<T>,
+    signal?: AbortSignal,
   ): Promise<T> {
     if (!sourceChannelId.trim()) {
       throw new Error('TurnRecord eligibility fence sourceChannelId cannot be empty');
@@ -1234,7 +1235,7 @@ export class SessionStore implements TranscriptSearchPort {
     return this.turnRecordEligibilityFence.withTurnRecordEligibilityFence({
       logicalSessionId,
       turnId,
-    }, operation);
+    }, operation, { signal });
   }
   /**
    * Captures a bounded content window, locks every TurnID represented in that
@@ -1380,6 +1381,7 @@ export class SessionStore implements TranscriptSearchPort {
   private async lookupSourceTurnRecordIdentity(
     sourceChannelId: string,
     turnId: string,
+    signal?: AbortSignal,
   ) {
     const normalizedSourceChannelId = sourceChannelId.trim();
     const normalizedTurnId = turnId.trim();
@@ -1394,6 +1396,7 @@ export class SessionStore implements TranscriptSearchPort {
       this.turnRecordStore,
       normalizedSourceChannelId,
       normalizedTurnId,
+      { signal },
     );
   }
   private resolveEligibleSourceTurnRecord(
@@ -1437,11 +1440,13 @@ export class SessionStore implements TranscriptSearchPort {
     sourceChannelId: string,
     ownerSessionId: string,
     turnId: string,
+    signal?: AbortSignal,
   ): Promise<TurnRecord | null> {
     const eligibility = await this.lookupSourceTurnRecordEligibility(
       sourceChannelId,
       ownerSessionId,
       turnId,
+      signal,
     );
     return eligibility.kind === 'eligible' ? eligibility.record : null;
   }
@@ -1449,11 +1454,13 @@ export class SessionStore implements TranscriptSearchPort {
     sourceChannelId: string,
     ownerSessionId: string,
     turnId: string,
+    signal?: AbortSignal,
   ): Promise<SourceTurnRecordEligibility> {
     if (!ownerSessionId.trim()) {
       throw new Error('Source TurnRecord eligibility requires an owner session id');
     }
-    const lookup = await this.lookupSourceTurnRecordIdentity(sourceChannelId, turnId);
+    const lookup = await this.lookupSourceTurnRecordIdentity(sourceChannelId, turnId, signal);
+    signal?.throwIfAborted();
     if (lookup.kind === 'missing') return { kind: 'missing' };
     if (lookup.kind === 'duplicated') return { kind: 'ineligible' };
     const record = this.resolveEligibleSourceTurnRecord(

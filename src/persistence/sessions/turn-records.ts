@@ -1452,6 +1452,7 @@ function findTurnRecordAcrossSegments(
 export { type TurnRecordIdentityLookupStats } from './turn-record-identity.js';
 
 export interface LookupTurnRecordIdentityOptions {
+  signal?: AbortSignal;
   stats?: TurnRecordIdentityLookupStats;
 }
 
@@ -1557,6 +1558,7 @@ export async function lookupTurnRecordIdentityAcrossSegments(
   turnId: string,
   options: LookupTurnRecordIdentityOptions = {},
 ): Promise<TurnRecordIdentityLookup> {
+  options.signal?.throwIfAborted();
   const sanitized = sanitizeChannelId(channelId);
   const dir = turnRecordsDir(sessionsDir);
   const cacheKey = `${dir}\0${channelId}\0${turnId}`;
@@ -1580,8 +1582,10 @@ export async function lookupTurnRecordIdentityAcrossSegments(
     onMalformedLine: (path, line, error) => {
       quarantineTurnRecordLine(path, channelId, line, error);
     },
+    ...(options.signal ? { signal: options.signal } : {}),
     ...(options.stats ? { stats: options.stats } : {}),
   });
+  options.signal?.throwIfAborted();
   const generationAfter = identityLookupGeneration(dir, sanitized);
   if (generationBefore !== null && generationAfter === generationBefore) {
     cacheIdentityLookup(cacheKey, generationAfter, lookup);
@@ -1704,11 +1708,12 @@ export function createFilesystemTurnRecordStorePort(
         },
       )
     ),
-    lookupTurnRecordIdentity: async (channelId, turnId) => {
+    lookupTurnRecordIdentity: async (channelId, turnId, lookupOptions = {}) => {
       const lookup = await lookupTurnRecordIdentityAcrossSegments(
         sessionsDir,
         channelId,
         turnId,
+        lookupOptions,
       );
       if (lookup.kind !== 'unique') return lookup;
       return {

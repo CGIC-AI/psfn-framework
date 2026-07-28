@@ -400,6 +400,47 @@ describe('turn-records', () => {
     });
   });
 
+  it('cancels an exact identity scan between bounded chunks', async () => {
+    const sessionsDir = mkdtempSync(join(tmpdir(), 'psfn-turn-records-exact-abort-'));
+    const channelId = 'psfn-amica:test:exact-abort';
+    const activePath = activeSegmentPathFor(sessionsDir, channelId);
+    mkdirSync(join(sessionsDir, TURN_RECORDS_DIR), { recursive: true });
+    const unrelated = createTurnRecord({
+      channelId,
+      turnId: backfillLegacyTurnId('exact-abort-unrelated'),
+      requestId: 'exact-abort-unrelated',
+      userMessage: {
+        ...createTurnRecord().userMessage,
+        content: 'x'.repeat(4 * 1024 * 1024),
+      },
+    });
+    const target = createTurnRecord({
+      channelId,
+      turnId: backfillLegacyTurnId('exact-abort-target'),
+      requestId: 'exact-abort-target',
+    });
+    writeFileSync(activePath, `${JSON.stringify(unrelated)}\n${JSON.stringify(target)}\n`, 'utf8');
+    const stats: TurnRecordIdentityLookupStats = {
+      linesScanned: 0,
+      recordsNormalized: 0,
+      bytesRead: 0,
+      maxReadChunkBytes: 0,
+      cacheHits: 0,
+    };
+    const controller = new AbortController();
+    setImmediate(() => controller.abort());
+
+    await expect(lookupTurnRecordIdentityAcrossSegments(
+      sessionsDir,
+      channelId,
+      target.turnId,
+      { signal: controller.signal, stats },
+    )).rejects.toMatchObject({ name: 'AbortError' });
+
+    expect(stats.bytesRead).toBeLessThan(4 * 1024 * 1024);
+    expect(stats.recordsNormalized).toBe(0);
+  });
+
   it('fails closed when a malformed row claims the matching TurnID', async () => {
     const sessionsDir = mkdtempSync(join(tmpdir(), 'psfn-turn-records-exact-malformed-match-'));
     const channelId = 'psfn-amica:test:exact-malformed-match';

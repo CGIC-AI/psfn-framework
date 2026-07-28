@@ -60,6 +60,7 @@ import type { ModelUsageEventInput } from '../../shared/telemetry/model-usage.js
 import type { IcpConversationCostAccountingPort } from '../../shared/telemetry/model-usage.js';
 import type { GatewayRpcConnection } from '../../boundary/gateway/transport.js';
 import type { GatewayMethodRuntime } from '../../boundary/gateway/methods/types.js';
+import { GatewayLLMRequestCancellation } from '../../boundary/gateway/llm-request-cancellation.js';
 import type { ChargePolicyConfig } from '../../shared/contracts/charge-policy.js';
 import { makeTestFatiguePolicyConfig } from '../../test-support/charge-policy.js';
 import {
@@ -3392,6 +3393,7 @@ describe('LLMClient model budget gates and usage metering', () => {
       getRuntimeHealth: () => ({ checkedAt: 0, services: [] }),
       nextStreamRequestId: () => 'gateway-stream-1',
       authenticatedCompanionId: () => undefined,
+      llmRequestCancellation: new GatewayLLMRequestCancellation(),
       audited: (_method, handler) => handler,
     };
     registerLLMMethods(runtime);
@@ -5152,6 +5154,111 @@ describe('LLMClient model budget gates and usage metering', () => {
       'stream:chat-1',
       'complete:background:bg-2',
     ]);
+  });
+
+  it('discards a late direct completion after cancellation without success cost, retry, or fallback', async () => {
+    const usageRecorder = { recordUsageEvent: vi.fn(async () => undefined) };
+    const providerStarted = createDeferred<void>();
+    const providerRelease = createDeferred<{
+      content: Array<{ type: 'text'; text: string }>;
+      model: string;
+      usage: { input: number; output: number };
+      stopReason: string;
+    }>();
+    let transportSignal: AbortSignal | undefined;
+    mocks.completeSimple.mockImplementation(async (
+      _model: unknown,
+      _context: unknown,
+      options: { signal?: AbortSignal },
+    ) => {
+      transportSignal = options.signal;
+      providerStarted.resolve();
+      // Deliberately ignore the signal and resolve after cancellation.
+      return await providerRelease.promise;
+    });
+    const client = new LLMClient(makeConfig({ retryMaxAttempts: 3 }), {
+      litellmBaseUrl: 'http://litellm.test/v1',
+      usageRecorder,
+    });
+    const controller = new AbortController();
+    const abortReason = new Error('503 workbench response deadline');
+
+    const pending = client.complete(
+      {
+        systemPrompt: 'System',
+        messages: [{ role: 'user', content: 'Analyze this large file' }],
+      },
+      'background',
+      { signal: controller.signal },
+    );
+    await providerStarted.promise;
+    controller.abort(abortReason);
+    expect(transportSignal?.aborted).toBe(true);
+    providerRelease.resolve({
+      content: [{ type: 'text', text: 'late completion' }],
+      model: 'deepseek/deepseek-v3.2',
+      usage: { input: 100, output: 20 },
+      stopReason: 'stop',
+    });
+
+    await expect(pending).rejects.toBe(abortReason);
+    expect(mocks.completeSimple).toHaveBeenCalledTimes(1);
+    expect(usageRecorder.recordUsageEvent).not.toHaveBeenCalled();
+  });
+
+  it('discards a late direct stream result after cancellation without success cost, retry, or fallback', async () => {
+    const usageRecorder = { recordUsageEvent: vi.fn(async () => undefined) };
+    const providerStarted = createDeferred<void>();
+    const providerRelease = createDeferred<void>();
+    let transportSignal: AbortSignal | undefined;
+    mocks.streamSimple.mockImplementation((
+      _model: unknown,
+      _context: unknown,
+      options: { signal?: AbortSignal },
+    ) => (async function* lateStream() {
+      transportSignal = options.signal;
+      providerStarted.resolve();
+      // Deliberately ignore the signal and finish after cancellation.
+      await providerRelease.promise;
+      yield {
+        type: 'done',
+        message: {
+          model: 'z-ai/glm-5',
+          usage: { input: 100, output: 20 },
+          content: [{ type: 'text', text: 'late stream result' }],
+        },
+        reason: 'stop',
+      };
+    })());
+    const callbacks = {
+      onDone: vi.fn(),
+      onError: vi.fn(),
+    };
+    const client = new LLMClient(makeConfig({ retryMaxAttempts: 3 }), {
+      litellmBaseUrl: 'http://litellm.test/v1',
+      usageRecorder,
+    });
+    const controller = new AbortController();
+    const abortReason = new Error('503 workbench stream deadline');
+
+    const pending = client.stream(
+      {
+        systemPrompt: 'System',
+        messages: [{ role: 'user', content: 'Analyze this large file' }],
+      },
+      callbacks,
+      { signal: controller.signal },
+    );
+    await providerStarted.promise;
+    controller.abort(abortReason);
+    expect(transportSignal?.aborted).toBe(true);
+    providerRelease.resolve();
+
+    await expect(pending).rejects.toBe(abortReason);
+    expect(mocks.streamSimple).toHaveBeenCalledTimes(1);
+    expect(usageRecorder.recordUsageEvent).not.toHaveBeenCalled();
+    expect(callbacks.onDone).not.toHaveBeenCalled();
+    expect(callbacks.onError).toHaveBeenCalledWith(abortReason);
   });
 
   it('aborts the in-flight stream transport when EITHER the caller cancellation OR the gate preempt signal fires (mmo9.5.1 + mmo9.6.1 merge)', async () => {

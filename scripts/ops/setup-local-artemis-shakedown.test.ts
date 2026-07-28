@@ -20,6 +20,13 @@ const scriptPath = join(repoRoot, 'scripts/ops/setup-local-artemis-shakedown.sh'
 const validatorPath = join(repoRoot, 'scripts/ops/validate-kube-rollout.sh');
 const companionId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 const ownerDiscordId = '123456789012345678';
+const canonicalTestingHarness = {
+  principalId: 'testing-harness',
+  tokenRef: {
+    kind: 'env',
+    envName: 'TESTING_HARNESS_API_KEY',
+  },
+};
 const temporaryRoots: string[] = [];
 
 function temporaryRoot(): string {
@@ -43,6 +50,21 @@ function runScript(args: string[]) {
 
 function readJson(path: string): Record<string, any> {
   return JSON.parse(readFileSync(path, 'utf8')) as Record<string, any>;
+}
+
+function assertCanonicalTestingHarnessOwner(channels: Record<string, any>): void {
+  expect(channels.api?.testingHarness).toEqual(canonicalTestingHarness);
+}
+
+function assertTestingHarnessSecret(secret: Record<string, any>): string {
+  const encoded = secret.data?.TESTING_HARNESS_API_KEY;
+  expect(typeof encoded).toBe('string');
+  if (typeof encoded !== 'string') {
+    throw new Error('Secret data must include TESTING_HARNESS_API_KEY');
+  }
+  const value = Buffer.from(encoded, 'base64').toString('utf8');
+  expect(value.length).toBeGreaterThanOrEqual(16);
+  return value;
 }
 
 afterEach(() => {
@@ -88,8 +110,12 @@ describe('local Artemis always-fleet bootstrap fixtures', () => {
     expect(channels).toMatchObject({
       discord: { companionId },
       telegram: { enabled: false, companionId },
-      api: { companionId },
+      api: {
+        companionId,
+        testingHarness: canonicalTestingHarness,
+      },
     });
+    assertCanonicalTestingHarnessOwner(channels);
     const channelsConfig = loadRuntimeChannelsConfig(join(outputRoot, 'system-data'), {});
     const fleetRouting = resolveGatewayMultiCompanionConfig({
       multiCompanion: true,
@@ -136,6 +162,60 @@ describe('local Artemis always-fleet bootstrap fixtures', () => {
     }
     expect(readFileSync(join(outputRoot, 'fleet-auth-assertion-private.pem'), 'utf8'))
       .toContain('BEGIN PRIVATE KEY');
+  });
+
+  it('preserves an operator-provided testing-harness principal override', () => {
+    const root = temporaryRoot();
+    const fixtureRoot = join(root, 'fixture');
+    const outputRoot = join(root, 'prepared');
+    const testingHarness = {
+      principalId: 'testing-harness',
+      tokenRef: {
+        kind: 'env',
+        envName: 'TESTING_HARNESS_API_KEY',
+      },
+    };
+    mkdirSync(join(fixtureRoot, 'system-data'), { recursive: true });
+    writeFileSync(
+      join(fixtureRoot, 'system-data/channels.json'),
+      JSON.stringify({ api: { testingHarness } }),
+    );
+
+    runScript([
+      '--shakedown-root', fixtureRoot,
+      '--companion-id', companionId,
+      '--prepare-seed-only', outputRoot,
+    ]);
+
+    expect(readJson(join(outputRoot, 'system-data/channels.json')).api)
+      .toEqual({ testingHarness, companionId });
+  });
+
+  it('preserves a malformed nested testing-harness section so parsing fails closed', () => {
+    const root = temporaryRoot();
+    const fixtureRoot = join(root, 'fixture');
+    const outputRoot = join(root, 'prepared');
+    mkdirSync(join(fixtureRoot, 'system-data'), { recursive: true });
+    writeFileSync(
+      join(fixtureRoot, 'system-data/channels.json'),
+      JSON.stringify({ api: { testingHarness: 'invalid' } }),
+    );
+
+    runScript([
+      '--shakedown-root', fixtureRoot,
+      '--companion-id', companionId,
+      '--prepare-seed-only', outputRoot,
+    ]);
+
+    expect(() => loadRuntimeChannelsConfig(join(outputRoot, 'system-data'), {}))
+      .toThrow('channels.json.testingHarness must be an object');
+  });
+
+  it('distinguishes the pre-door owner and Secret fixture shapes from the required pair', () => {
+    expect(() => assertCanonicalTestingHarnessOwner({ api: { companionId } })).toThrow();
+    expect(() => assertTestingHarnessSecret({
+      data: { API_KEY: Buffer.from('legacy-api-key').toString('base64') },
+    })).toThrow();
   });
 
   it.each(['discord', 'telegram', 'api'])(
@@ -312,6 +392,7 @@ describe('local Artemis always-fleet bootstrap fixtures', () => {
     mkdirSync(binRoot);
 
     const scalarSecret = 'scalar-secret=with-equals';
+    const testingHarnessSecret = 'testing-harness-secret=with-equals';
     const databaseUrl = 'postgresql://user:password@postgres:5432/psfn?sslmode=disable';
     const privateKey = '-----BEGIN PRIVATE KEY-----\nline-one\nline-two\n-----END PRIVATE KEY-----\n';
     writeFileSync(assertionKey, privateKey, { mode: 0o600 });
@@ -397,7 +478,9 @@ FLEET_AUTH_BACKUP_DATABASE_URL_VALUE=postgresql://fleet-backup
 COMPANION_DATABASE_URL_VALUE="$DATABASE_URL_FIXTURE"
 SHARED_SCHEMA_MIGRATION_DATABASE_URL_VALUE=postgresql://shared-migration
 prepare_gateway_credentials() { :; }
-random_secret() { printf 'generated-secret'; }
+random_secret() {
+  node -e 'process.stdout.write(require("node:crypto").randomBytes(32).toString("hex"))'
+}
 ${writerSource}
 ${functionSource}
 create_local_app_secret
@@ -410,6 +493,7 @@ create_local_app_secret
       env: {
         ...process.env,
         API_KEY: scalarSecret,
+        TESTING_HARNESS_API_KEY: testingHarnessSecret,
         ASSERTION_KEY_FILE: assertionKey,
         DATABASE_URL_FIXTURE: databaseUrl,
         KUBECTL_ARGUMENTS_FILE: kubectlArguments,
@@ -423,6 +507,8 @@ create_local_app_secret
     expect(result.status, result.stderr || result.stdout).toBe(0);
     expect(result.stdout).not.toContain(scalarSecret);
     expect(result.stderr).not.toContain(scalarSecret);
+    expect(result.stdout).not.toContain(testingHarnessSecret);
+    expect(result.stderr).not.toContain(testingHarnessSecret);
     expect(result.stdout).not.toContain(privateKey);
     expect(result.stderr).not.toContain(privateKey);
 
@@ -431,10 +517,13 @@ create_local_app_secret
     expect(args).not.toContain('--from-file=');
     expect(args).not.toContain('--from-literal=');
     expect(args).not.toContain(scalarSecret);
+    expect(args).not.toContain(testingHarnessSecret);
     expect(args).not.toContain(privateKey);
 
     const secret = readJson(capturedSecret);
     expect(Buffer.from(secret.data.API_KEY, 'base64').toString('utf8')).toBe(scalarSecret);
+    const testingHarnessApiKey = assertTestingHarnessSecret(secret);
+    expect(testingHarnessApiKey).toBe(testingHarnessSecret);
     expect(Buffer.from(secret.data.OPENROUTER_API_KEY, 'base64').toString('utf8')).toBe('');
     expect(Buffer.from(secret.data.COMPANION_DEFAULT_DATABASE_URL, 'base64').toString('utf8'))
       .toBe(databaseUrl);
@@ -442,6 +531,33 @@ create_local_app_secret
       secret.data.FLEET_AUTH_ASSERTION_PRIVATE_KEY,
       'base64',
     ).toString('utf8')).toBe(privateKey);
+
+    const generatedResult = spawnSync('bash', [harness], {
+      cwd: repoRoot,
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        API_KEY: scalarSecret,
+        TESTING_HARNESS_API_KEY: '',
+        ASSERTION_KEY_FILE: assertionKey,
+        DATABASE_URL_FIXTURE: databaseUrl,
+        KUBECTL_ARGUMENTS_FILE: kubectlArguments,
+        KUBECTL_CAPTURE_FILE: capturedSecret,
+        OPENROUTER_API_KEY: '',
+        PATH: `${binRoot}:${process.env.PATH}`,
+        TMPDIR: root,
+      },
+    });
+    expect(generatedResult.status, generatedResult.stderr || generatedResult.stdout).toBe(0);
+    const generatedSecret = readJson(capturedSecret);
+    const generatedTestingHarnessApiKey = assertTestingHarnessSecret(generatedSecret);
+    expect(generatedTestingHarnessApiKey).toMatch(/^[a-f0-9]{64}$/);
+    expect(generatedTestingHarnessApiKey).not.toBe(
+      Buffer.from(generatedSecret.data.ADMIN_TOKEN, 'base64').toString('utf8'),
+    );
+    expect(generatedResult.stdout).not.toContain(generatedTestingHarnessApiKey);
+    expect(generatedResult.stderr).not.toContain(generatedTestingHarnessApiKey);
+    expect(readFileSync(kubectlArguments, 'utf8')).not.toContain(generatedTestingHarnessApiKey);
     expect(readdirSync(root).filter(name => name.startsWith('psfn-artemis-secret.')))
       .toEqual([]);
   });

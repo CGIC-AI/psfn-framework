@@ -86,10 +86,10 @@ export class JournalOps implements JournalOperations {
     const resolved = this.resolveNotePath(path);
     const normalizedContent = requireContent(content);
     await mkdir(dirname(resolved.absolutePath), { recursive: true });
-    return withJournalMutationLock(resolved.absolutePath, async () => {
-      const created = !existsSync(resolved.absolutePath);
+    return withJournalMutationLock(this.root, resolved.absolutePath, async (canonicalPath) => {
+      const created = !existsSync(canonicalPath);
       await writeFile(
-        resolved.absolutePath,
+        canonicalPath,
         normalizedContent.endsWith('\n') ? normalizedContent : `${normalizedContent}\n`,
         'utf8',
       );
@@ -101,9 +101,9 @@ export class JournalOps implements JournalOperations {
     const resolved = this.resolveNotePath(path);
     const normalizedContent = requireContent(content);
     await mkdir(dirname(resolved.absolutePath), { recursive: true });
-    return withJournalMutationLock(resolved.absolutePath, async () => {
+    return withJournalMutationLock(this.root, resolved.absolutePath, async (canonicalPath) => {
       const created = await appendJournalNoteAtomically(
-        resolved.absolutePath,
+        canonicalPath,
         normalizedContent,
       );
       return { path: resolved.relativePath, mode: 'append' as const, created };

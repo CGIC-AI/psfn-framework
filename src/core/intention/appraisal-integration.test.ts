@@ -9,8 +9,26 @@ import { EventBus } from '../../shared/event-bus.js';
 import { Scheduler } from '../scheduler/scheduler.js';
 import { InternalStateComputer } from '../self-model/state.js';
 import type { AgentResponse, InferredPostTurnAction, SubstrateMessage } from '../../shared/contracts/runtime.js';
+import type { CapturedSessionReads } from '../session/manager/captured-session-owner.js';
+import type { SessionEntry } from '../session/types.js';
 import { INTENTION_OUTBOUND_MESSAGE_ACTION_KIND } from './appraisal.js';
 import type { OutreachOutboxAppendInput, OutreachOutboxRecord } from './outreach-outbox.js';
+
+// Post-turn inferers run inside the turn's admitted captured-owner scope, so the
+// intention post-turn appraisal reads its transcript through the turn's
+// owner-bound CapturedSessionReads (psfn-framework-pmqm) rather than the guarded
+// SessionManager.getRecentMessages. Production always threads a real
+// CapturedSessionReads; these integration tests exercise the inferer directly,
+// so they supply the same owner-bound read facade. The double returns no prior
+// entries, matching each test's `sessionManager.getRecentMessages` mock, so the
+// appraisal transcript is built from the current turn alone.
+function makeCapturedSessionReads(
+  recentEntries: readonly SessionEntry[] = [],
+): CapturedSessionReads {
+  return {
+    getRecentMessages: (_limit?: number): SessionEntry[] => [...recentEntries],
+  } as unknown as CapturedSessionReads;
+}
 
 function makeMessage(): SubstrateMessage {
   return {
@@ -500,6 +518,7 @@ describe('intention appraisal runtime integration', () => {
         turnMessages: [],
         turnId: 'turn-intention-1' as any,
         completedAt: Date.now(),
+        capturedSessionReads: makeCapturedSessionReads(),
       } as any);
       expect(inferred).toEqual([]);
 
@@ -628,6 +647,7 @@ describe('intention appraisal runtime integration', () => {
         turnMessages: [],
         turnId: 'turn-intention-internal-1' as any,
         completedAt: Date.now(),
+        capturedSessionReads: makeCapturedSessionReads(),
       } as any);
 
       await Promise.resolve();
@@ -740,6 +760,7 @@ describe('intention appraisal runtime integration', () => {
         turnMessages: [],
         turnId: 'turn-intention-scheduled-1' as any,
         completedAt: Date.now(),
+        capturedSessionReads: makeCapturedSessionReads(),
       } as any);
 
       await new Promise(resolve => setTimeout(resolve, 60));
@@ -887,6 +908,7 @@ describe('intention appraisal runtime integration', () => {
         canonicalContactKey: 'contact-primary',
         turnId: 'turn-intention-motivation-1' as any,
         completedAt: Date.now(),
+        capturedSessionReads: makeCapturedSessionReads(),
       } as any);
       await Promise.resolve();
       await Promise.resolve();
@@ -902,6 +924,7 @@ describe('intention appraisal runtime integration', () => {
         canonicalContactKey: 'contact-primary',
         turnId: 'turn-intention-motivation-2' as any,
         completedAt: Date.now(),
+        capturedSessionReads: makeCapturedSessionReads(),
       } as any);
       await new Promise(resolve => setTimeout(resolve, 60));
       for (let index = 0; index < 3; index += 1) {

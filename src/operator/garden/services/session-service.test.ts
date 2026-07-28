@@ -17,8 +17,13 @@ import { createTurnId } from '../../../core/turns/id.js';
 import { CogSecEventStore } from '../../../core/cogsec/events.js';
 import { CogSecForensicArchive } from '../../../core/cogsec/forensic-archive.js';
 import {
+  createSessionIntegrityIncidentObserver,
+  sessionIntegrityCaseId,
+} from '../../../core/cogsec/session-integrity-incident.js';
+import {
   resolveCogSecEventsPath,
   resolveCogSecForensicArchiveDir,
+  resolveConfiguredCompanionDataDir,
 } from '../../../persistence/layout.js';
 import type { SubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
 import type { MemoryStorePort } from '../../../faculties/memory/memory-store-port.js';
@@ -824,6 +829,67 @@ describe('AdminSessionDataService', () => {
       }),
     ]);
     expect(JSON.stringify(preview)).not.toContain('DIRTY_OLD_LOGICAL_SESSION_TEXT');
+  });
+
+  it('surfaces a session-integrity incident recorded after the service was constructed (bead g59z)', async () => {
+    const config = makeConfig({ dataDir: dir });
+    const channelId = 'api:integrity-after-boot';
+
+    // Garden builds this service once per process (local-admin-contract →
+    // agent/main). The operator case that matters is an HMAC failure detected
+    // while the process is already running, so construct the service FIRST and
+    // record the incident afterwards.
+    const service = new AdminSessionDataService({
+      sessionStore: store,
+      sessionManager: new SessionManager(store, config),
+      eventBus: new EventBus(),
+      config,
+    });
+    expect((await service.listCogSecEvents()).events).toHaveLength(0);
+
+    const eventsPath = resolveCogSecEventsPath(resolveConfiguredCompanionDataDir(config));
+    const observer = createSessionIntegrityIncidentObserver({
+      cogSecEvents: () => new CogSecEventStore(eventsPath),
+    });
+    observer.recordIntegrityFailure({
+      channelId,
+      failedEntryCount: 3,
+      firstFailedEntryId: 4,
+      lastFailedEntryId: 6,
+      contiguousRunCount: 1,
+      detectedAtMs: Date.now(),
+    });
+
+    // The badge (admin-ui/src/lib/nav/attention.ts) counts exactly this shape
+    // off this route. A store cached at construction would still report zero.
+    const listed = await service.listCogSecEvents();
+    const openIntegrity = listed.events.filter(
+      event => event.type === 'session_integrity' && event.status === 'open',
+    );
+    expect(openIntegrity).toHaveLength(1);
+    expect(openIntegrity[0]).toMatchObject({
+      caseId: sessionIntegrityCaseId(channelId),
+      severity: 'high',
+      sourceChannelId: channelId,
+    });
+
+    // A later read of the same broken session updates the one incident rather
+    // than adding a second, and the refreshed range is visible immediately.
+    observer.recordIntegrityFailure({
+      channelId,
+      failedEntryCount: 5,
+      firstFailedEntryId: 4,
+      lastFailedEntryId: 8,
+      contiguousRunCount: 2,
+      detectedAtMs: Date.now(),
+    });
+    const relisted = (await service.listCogSecEvents()).events
+      .filter(event => event.type === 'session_integrity');
+    expect(relisted).toHaveLength(1);
+    expect(relisted[0]?.safeSummary).toContain('ids 4-8');
+    expect(relisted[0]?.affectedRanges).toEqual([
+      expect.objectContaining({ startEntryId: 4, endEntryId: 8 }),
+    ]);
   });
 
   it('returns persisted turn observability without requiring live event-bus state', async () => {

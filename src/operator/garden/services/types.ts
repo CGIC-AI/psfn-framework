@@ -247,6 +247,8 @@ export type {
   AdminSettingsData,
   SettingsValidationError,
   ConfigUpdateResult,
+  BearerApiCompanionOption,
+  BearerApiCompanionPinData,
   AdminSettingsService,
   AdminIntakeSourceListMutationInput,
   AdminChannelEnvelopeRow,

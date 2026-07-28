@@ -78,6 +78,8 @@ import type {
   AdminSettingsService,
   AdminVoiceProviderData,
   AdminVoiceProviderOption,
+  BearerApiCompanionOption,
+  BearerApiCompanionPinData,
   ConfigUpdateResult,
   EffectiveBackgroundMaintenanceState,
   EffectiveChargeQuotaState,
@@ -1276,6 +1278,80 @@ export class AdminSettingsDataService implements AdminSettingsService {
         message: label === null || label === undefined
           ? `Channel envelope label removed for ${channelId}`
           : `Channel envelope label saved for ${channelId}`,
+      };
+    } catch (error) {
+      return { ok: false, message: toErrorMessage(error) };
+    }
+  }
+
+  // ── Companion Cluster Bearer API pin (vknn) ──
+
+  /**
+   * Registered companions the Bearer API may be pinned to. In the multi-companion
+   * runtime this is the companions.json roster; single-companion runtimes expose
+   * their one configured companion. The Bearer pin must name one of these.
+   */
+  private bearerApiCompanionRoster(): BearerApiCompanionOption[] {
+    const fleet = this.deps.config.companionFleet;
+    if (fleet) {
+      return fleet.companions.map(companion => ({
+        companionId: companion.companionId,
+        displayName: companion.displayName ?? companion.companionId,
+      }));
+    }
+    const single = this.deps.config.companionId;
+    return single ? [{ companionId: single, displayName: single }] : [];
+  }
+
+  /**
+   * Read the Bearer API pinned companion (channels.json api.companionId) plus the
+   * registered-companion roster the Companion Cluster control offers.
+   */
+  getBearerApiCompanionPin(): BearerApiCompanionPinData {
+    const { scopedRoot } = this.loadChannelsOwnerScopes();
+    const apiSection = isRecord(scopedRoot.api) ? scopedRoot.api : {};
+    const pinnedRaw = apiSection.companionId;
+    const pinnedCompanionId = typeof pinnedRaw === 'string' && pinnedRaw.trim().length > 0
+      ? pinnedRaw.trim()
+      : null;
+    return {
+      pinnedCompanionId,
+      companions: this.bearerApiCompanionRoster(),
+      restartRequired: true,
+    };
+  }
+
+  /**
+   * Pin the inbound OpenAI-compatible Bearer API to exactly one registered
+   * companion. Fails closed when the id is missing or is not a Companion Cluster
+   * member; the write goes through the channels.json owner-file contract, which
+   * re-validates the api section (UUID format) fail-closed. This only writes
+   * `api.companionId` — it never enables per-request companion selection.
+   */
+  setBearerApiCompanionPin(companionId: unknown): ConfigUpdateResult {
+    if (typeof companionId !== 'string' || companionId.trim().length === 0) {
+      return { ok: false, message: 'companionId must be a non-empty string' };
+    }
+    const requested = companionId.trim();
+    if (!this.bearerApiCompanionRoster().some(option => option.companionId === requested)) {
+      return {
+        ok: false,
+        message: `companionId ${requested} is not a registered companion; the Bearer API can only be `
+          + 'pinned to a Companion Cluster member',
+      };
+    }
+    try {
+      const { root, scopedRoot, hasWrapper } = this.loadChannelsOwnerScopes();
+      const existingApi = isRecord(scopedRoot.api) ? scopedRoot.api : {};
+      const nextScoped = { ...scopedRoot, api: { ...existingApi, companionId: requested } };
+      const nextRoot = hasWrapper ? { ...root, channels: nextScoped } : nextScoped;
+      // saveChannelsOwnerFile re-validates the api section fail-closed.
+      this.deps.configStore.saveChannelsOwnerFile(nextRoot);
+      invalidatePromptCacheAfterOwnerMutation(this.deps.config, 'owner-file:channels');
+      return {
+        ok: true,
+        message: `Bearer API pinned to companion ${requested}. Restart the gateway for the API `
+          + 'channel to pick up the new pin.',
       };
     } catch (error) {
       return { ok: false, message: toErrorMessage(error) };

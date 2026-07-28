@@ -135,7 +135,9 @@ describe('HookRegistry registration', () => {
       name: 'future-pre-tool',
       sourcePath: 'test',
       matcher: new HookMatcher(['web.*']),
-      handler: () => {
+      // Async handler: the registry rejects bare-synchronous decision handlers
+      // (bead 00z0) because they cannot yield to the evaluation timeout.
+      handler: async () => {
         syncInvoked += 1;
         return { decision: 'allow' };
       },

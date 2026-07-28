@@ -25,13 +25,11 @@
 		"moduleResolution": "bundler",
 		"module": "esnext",
 		"noEmit": true,
-		"target": "esnext",
-		"types": [
-			"node"
-		]
+		"target": "esnext"
 	},
 	"include": [
 		"ambient.d.ts",
+		"env.d.ts",
 		"non-ambient.d.ts",
 		"./types/**/$types.d.ts",
 		"../vite.config.js",

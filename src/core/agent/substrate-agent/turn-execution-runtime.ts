@@ -441,19 +441,6 @@ export async function handleMessageForTurn(
     ? { retrievalMode: temporalRetrievalMode }
     : undefined;
   const turnCallType = runtime.resolveTurnCallType(message, taskKind);
-  const activeLogicalSessionId = runtime.sessionManager.resolveSessionForIngress(
-    message.channelId,
-  ).trim();
-  if (!activeLogicalSessionId) {
-    throw new Error('Turn execution requires a logical session id');
-  }
-  let turnCorrelationBase = runtime.buildTurnCorrelation(
-    message,
-    turnCallType,
-    turnId,
-    requestId,
-    activeLogicalSessionId,
-  );
   const recoveredSourceRecord = recoveredResponse
     ? await runtime.sessionManager.findUniqueSourceRecordedTurn(message.channelId, turnId)
     : null;
@@ -463,7 +450,23 @@ export async function handleMessageForTurn(
   const recoveredLogicalSessionId = recoveredSourceRecord
     ? (recoveredSourceRecord.sessionId ?? recoveredSourceRecord.channelId).trim()
     : '';
+  // A recovered exact-record miss must resolve the live route after the async
+  // archive lookup. A reset during that lookup owns future work; capturing the
+  // route before awaiting would admit this turn into the retired session.
+  const activeLogicalSessionId = recoveredLogicalSessionId
+    ? ''
+    : runtime.sessionManager.resolveSessionForIngress(message.channelId).trim();
   const logicalSessionId = recoveredLogicalSessionId || activeLogicalSessionId;
+  if (!logicalSessionId) {
+    throw new Error('Turn execution requires a logical session id');
+  }
+  let turnCorrelationBase = runtime.buildTurnCorrelation(
+    message,
+    turnCallType,
+    turnId,
+    requestId,
+    logicalSessionId,
+  );
   const turnSessionIdentity: TurnSessionIdentity = Object.freeze({
     sourceChannelId: message.channelId,
     logicalSessionId,
@@ -1524,16 +1527,9 @@ export async function handleMessageForTurn(
       durableFatigueReservation = null;
     }
 
-    const recoveredSourceTurnId = recoveredResponse?.metadata.turnId
-      ? parseTurnId(recoveredResponse.metadata.turnId, 'Recovered response metadata.turnId')
-      : turnId;
     const recoveredTurnRecord = recoveredResponse === undefined
       ? null
-      : recoveredSourceRecord ?? runtime.sessionManager.findSourceRecordedTurn(
-          turnSessionIdentity.sourceChannelId,
-          turnSessionIdentity.logicalSessionId,
-          recoveredSourceTurnId,
-        );
+      : recoveredSourceRecord;
     if (recoveredTurnRecord?.status === 'completed') {
       const replayJobs = parseTurnRecordBackgroundWorkHandoff(recoveredTurnRecord);
       if (replayJobs.length > 0) {

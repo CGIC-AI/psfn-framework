@@ -2805,6 +2805,7 @@ describe('handleMessageForTurn fatigue enforcement', () => {
         hasRecordedTurn: vi.fn(() => recordedTurn?.status === 'completed'),
         findRecordedTurn: vi.fn(() => recordedTurn),
         findSourceRecordedTurn: vi.fn(() => recordedTurn),
+        findUniqueSourceRecordedTurn: vi.fn(async () => recordedTurn),
       },
     });
     if (noReply) runtime.extractResponseText = vi.fn(() => '');
@@ -3168,6 +3169,7 @@ describe('handleMessageForTurn fatigue enforcement', () => {
       sessionManager: {
         findRecordedTurn: vi.fn(() => completedTurnRecord),
         findSourceRecordedTurn: vi.fn(() => completedTurnRecord),
+        findUniqueSourceRecordedTurn: vi.fn(async () => completedTurnRecord),
         recordTurn,
       },
     });
@@ -4708,6 +4710,99 @@ describe('handleMessageForTurn compaction scheduling', () => {
     expect(enqueuePostTurnBackgroundWork).toHaveBeenCalledTimes(2);
     expect(enqueuePostTurnBackgroundWork.mock.calls[1]?.[0]).toEqual(recordedJobs);
     expect(store.getRecentSourceTurnRecords(channelId, 10)).toHaveLength(1);
+  });
+
+  it('resolves the active route after a deferred recovered-record miss', async () => {
+    const eventBus = new EventBus();
+    const runtime = createRuntime({
+      eventBus,
+      sessionManager: {} as SessionManager,
+      buildContext: vi.fn(async () => ({
+        systemPrompt: 'System prompt',
+        messages: [],
+        manifest: makeContextManifestFixture(),
+      })),
+      scheduleAutoCompactionBetweenTurns: vi.fn(async () => undefined),
+      awaitPendingAutoCompaction: vi.fn(async () => undefined),
+      recordUserMessage: vi.fn(() => null),
+      recordAssistantMessage: vi.fn(() => null),
+    });
+    const lookupStarted = createDeferred<void>();
+    const releaseLookup = createDeferred<void>();
+    runtime.sessionManager.findUniqueSourceRecordedTurn = vi.fn(async () => {
+      lookupStarted.resolve();
+      await releaseLookup.promise;
+      return null;
+    });
+    let activeOwner = 'logical-owner-before-reset';
+    runtime.sessionManager.resolveSessionForIngress = vi.fn(() => activeOwner);
+    const localCompanionId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+    const peerCompanionId = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+    const channelId = `companion-dm:${localCompanionId}:${peerCompanionId}`;
+    const turnId = createTurnId();
+    const correlation: IcpConversationCorrelation = {
+      conversationId: '44444444-4444-4444-8444-444444444444',
+      rootInitiationId: '99999999-9999-4999-8999-999999999999',
+      initiatedByCompanionId: localCompanionId,
+      localCompanionId,
+      peerCompanionId,
+      peerContactId: 'contact-deferred-route',
+      channelId,
+      turnId,
+      messageId: 'msg-deferred-recovery-route',
+      requestId: 'msg-deferred-recovery-route',
+      chargeLane: 'companion_social',
+      surface: 'companion_dm',
+      costPurpose: 'conversation_turn',
+      costOriginStage: 'reply',
+      fatigueDecision: 'not_evaluated',
+    };
+    runtime.config.companionId = localCompanionId;
+    runtime.resolveAuthorContext = vi.fn(() => machineIntelligenceAuthorContext({
+      canonicalContactKey: correlation.peerContactId,
+    }));
+    const message = createMessage('msg-deferred-recovery-route', {
+      channelId,
+      channelType: 'companion',
+      authorId: peerCompanionId,
+      authorName: 'Peer companion',
+      isDirectMessage: true,
+      routing: {
+        source: 'companion',
+        icpCorrelation: correlation,
+      },
+    });
+    const recoveredResponse: AgentResponse = {
+      content: 'already delivered',
+      channelId,
+      metadata: {
+        model: 'test-model',
+        inputTokens: 0,
+        outputTokens: 0,
+        durationMs: 1,
+        turnId,
+        requestId: message.id,
+        icpCorrelation: correlation,
+      },
+    };
+
+    const recovery = handleMessageForTurn(runtime, message, {
+      recoveredResponse,
+      finalizeDelivery: vi.fn(async () => undefined),
+    });
+    await lookupStarted.promise;
+    expect(runtime.sessionManager.resolveSessionForIngress).not.toHaveBeenCalled();
+    activeOwner = 'logical-owner-after-reset';
+    releaseLookup.resolve();
+
+    await expect(recovery).resolves.toEqual(recoveredResponse);
+    expect(runtime.sessionManager.resolveSessionForIngress).toHaveBeenCalledTimes(1);
+    expect(runtime.sessionManager.findSourceRecordedTurn).not.toHaveBeenCalled();
+    expect(runtime.sessionManager.recordTurn).toHaveBeenCalledWith(expect.objectContaining({
+      channelId,
+      sessionId: activeOwner,
+      turnId,
+    }));
   });
 
   it.each([

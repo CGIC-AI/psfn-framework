@@ -383,7 +383,7 @@ describe('SessionStore top-level turn-message CogSec gating (psfn-framework-sm9l
         store.isSourceTurnRecordEligible(sourceChannelId, ownerSessionId, turnId)
       ),
     });
-    const introspectionCandidates = introspection.listCandidates({
+    const introspectionCandidates = await introspection.listCandidates({
       allowedPublicChannelIds: [channelId],
       recentSessionLimit: 10,
       recentTurnLimit: 10,

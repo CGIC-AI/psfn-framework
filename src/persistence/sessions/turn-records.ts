@@ -114,6 +114,16 @@ export const TURN_RECORD_SEGMENT_MAX_BYTES = 64 * 1024 * 1024;
 const TURN_RECORD_TAIL_SCAN_CHUNK_BYTES = 256 * 1024;
 
 /**
+ * Request-time introspection never retains a physical row beyond this bound.
+ * Larger legacy rows fail loudly rather than being truncated or copied onto
+ * the primary heap. Historical repair/recovery uses its separate streaming
+ * path and is intentionally unaffected.
+ */
+const TURN_RECORD_CURSOR_ROW_LIMITS = Object.freeze({
+  maxBytes: 2 * 1024 * 1024,
+});
+
+/**
  * Rotation lock parameters. Rotation shares the mkdir-based cross-process lock
  * mechanism the session-journal write path uses (agent, gateway, and garden
  * all mount the sessions dir), scoped per channel via the active-file path.
@@ -1124,25 +1134,26 @@ export interface ReadTurnRecordPageOptions {
  * within each page), while continuation advances from newest toward older
  * rows. Exactly `limit` physical JSONL rows at most are parsed per call.
  */
-export function readTurnRecordPageAcrossSegments(
+export async function readTurnRecordPageAcrossSegments(
   sessionsDir: string,
   channelId: string,
   limit: number,
   cursor?: TurnRecordPageCursor,
   options: ReadTurnRecordPageOptions = {},
-): TurnRecordPage {
+): Promise<TurnRecordPage> {
   if (!Number.isSafeInteger(limit) || limit <= 0) {
     throw new Error('TurnRecord page limit must be a positive safe integer');
   }
   const sanitized = sanitizeChannelId(channelId);
   const dir = turnRecordsDir(sessionsDir);
-  const page = readJsonlSnapshotPage(
+  const page = await readJsonlSnapshotPage(
     join(dir, `${sanitized}.jsonl`),
     channelId,
     limit,
     cursor,
     {
       chunkBytes: options.scanChunkBytes ?? TURN_RECORD_TAIL_SCAN_CHUNK_BYTES,
+      maxLineBytes: TURN_RECORD_CURSOR_ROW_LIMITS.maxBytes,
       rotationRetries: TAIL_READ_ROTATION_RETRIES,
       stats: options.stats,
     },
@@ -1715,8 +1726,8 @@ export function createFilesystemTurnRecordStorePort(
       // records. Fail closed: a dangling ref is a loud error (hgw3.3).
       return rows.map(resolveStoredTurnRecord);
     },
-    readTurnRecordPage: (channelId, limit, cursor) => {
-      const page = readTurnRecordPageAcrossSegments(
+    readTurnRecordPage: async (channelId, limit, cursor) => {
+      const page = await readTurnRecordPageAcrossSegments(
         sessionsDir,
         channelId,
         limit,

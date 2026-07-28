@@ -81,7 +81,7 @@ export interface IntrospectionAuditSourcePort {
     recentSessionLimit: number;
     recentTurnLimit: number;
     maxSourceChars: number;
-  }): IntrospectionAuditCandidate[];
+  }): Promise<IntrospectionAuditCandidate[]>;
   isCandidateStillEligible(candidate: IntrospectionAuditCandidate): Promise<boolean>;
 }
 

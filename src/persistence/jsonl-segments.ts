@@ -6,7 +6,9 @@ import {
   readSync,
   readdirSync,
 } from 'node:fs';
+import { open as openFile } from 'node:fs/promises';
 import { basename, dirname, extname, join } from 'node:path';
+import { setImmediate as yieldToEventLoop } from 'node:timers/promises';
 
 const NEWLINE_BYTE = 0x0a;
 
@@ -18,6 +20,10 @@ export interface JsonlReadStats {
   bytesRead: number;
   readCalls?: number;
   filesRead?: number;
+  /** Maximum physical-row bytes retained by one incremental read. */
+  maxRetainedLineBytes?: number;
+  /** Explicit cooperative yields completed during asynchronous reads. */
+  eventLoopYields?: number;
 }
 
 export interface JsonlScanOptions {
@@ -26,6 +32,11 @@ export interface JsonlScanOptions {
   scannedFileIdentities?: Set<string>;
   /** Fail closed if the opened path no longer names the expected snapshot inode. */
   expectedFileIdentity?: string;
+}
+
+export interface AsyncJsonlLineScanOptions extends JsonlScanOptions {
+  /** Fail closed before retaining a physical row larger than this limit. */
+  maxLineBytes: number;
 }
 
 export interface JsonlLineAtOffset {
@@ -73,6 +84,35 @@ function recordChunkRead(stats: JsonlReadStats | undefined, bytesRead: number): 
   if (!stats) return;
   stats.bytesRead += bytesRead;
   if (stats.readCalls !== undefined) stats.readCalls += 1;
+}
+
+function recordRetainedLineBytes(stats: JsonlReadStats | undefined, bytes: number): void {
+  if (stats?.maxRetainedLineBytes === undefined) return;
+  stats.maxRetainedLineBytes = Math.max(stats.maxRetainedLineBytes, bytes);
+}
+
+async function recordEventLoopYield(stats: JsonlReadStats | undefined): Promise<void> {
+  await yieldToEventLoop();
+  if (stats?.eventLoopYields !== undefined) stats.eventLoopYields += 1;
+}
+
+function assertPositiveByteLimit(value: number, label: string): void {
+  if (!Number.isSafeInteger(value) || value <= 0) {
+    throw new Error(`${label} must be a positive safe integer`);
+  }
+}
+
+function oversizedJsonlLineError(
+  path: string,
+  maxLineBytes: number,
+  observedBytes: number,
+): NodeJS.ErrnoException {
+  const error = new Error(
+    `JSONL row in ${path} exceeds the ${maxLineBytes}-byte cursor safety limit `
+    + `(observed at least ${observedBytes} bytes); refusing to truncate or retain it`,
+  ) as NodeJS.ErrnoException;
+  error.code = 'EOVERFLOW';
+  return error;
 }
 
 function claimFileIdentity(
@@ -274,6 +314,119 @@ export function readJsonlLineBefore(
       : null;
   } finally {
     closeSync(fd);
+  }
+}
+
+/**
+ * Asynchronously read the complete row before an exclusive offset.
+ *
+ * Unlike the legacy synchronous primitive, this path yields between fixed-size
+ * reads and fails before retaining more than `maxLineBytes`. It is intended for
+ * request-time cursor work where an old-fat physical row must never monopolize
+ * the primary event loop or grow the primary heap without bound.
+ */
+export async function readJsonlLineBeforeAsync(
+  path: string,
+  exclusiveOffset: number,
+  options: AsyncJsonlLineScanOptions,
+): Promise<JsonlLineAtOffset | null> {
+  assertPositiveByteLimit(options.chunkBytes, 'JSONL scan chunkBytes');
+  assertPositiveByteLimit(options.maxLineBytes, 'JSONL scan maxLineBytes');
+  const handle = await openFile(path, 'r');
+  try {
+    const fileStat = await handle.stat();
+    const identity = fileIdentityKey(fileStat);
+    if (
+      options.expectedFileIdentity !== undefined
+      && identity !== options.expectedFileIdentity
+    ) {
+      const error = new Error(
+        `JSONL snapshot identity changed: expected ${options.expectedFileIdentity}, found ${identity}`,
+      ) as NodeJS.ErrnoException;
+      error.code = 'ESTALE';
+      throw error;
+    }
+    if (!options.scannedFileIdentities?.has(identity)) {
+      options.scannedFileIdentities?.add(identity);
+      recordFileRead(options.stats);
+    }
+    let position = Math.min(fileStat.size, Math.max(0, Math.floor(exclusiveOffset)));
+    if (position <= 0) return null;
+
+    const boundedChunkBytes = Math.min(options.chunkBytes, options.maxLineBytes);
+    const buffer = Buffer.allocUnsafe(boundedChunkBytes);
+    const chunks: Buffer[] = [];
+    let retainedBytes = 0;
+    let rowEnd = position;
+    let ignoredTrailingNewline = false;
+    while (position > 0) {
+      const bytesToRead = Math.min(boundedChunkBytes, position);
+      position -= bytesToRead;
+      let bytesRead = 0;
+      while (bytesRead < bytesToRead) {
+        const result = await handle.read(
+          buffer,
+          bytesRead,
+          bytesToRead - bytesRead,
+          position + bytesRead,
+        );
+        if (result.bytesRead <= 0) {
+          const error = new Error(
+            `JSONL snapshot row became unavailable during a bounded read of ${path}`,
+          ) as NodeJS.ErrnoException;
+          error.code = 'ESTALE';
+          throw error;
+        }
+        recordChunkRead(options.stats, result.bytesRead);
+        bytesRead += result.bytesRead;
+      }
+      let sliceEnd = bytesRead;
+      if (
+        !ignoredTrailingNewline
+        && position + bytesRead === rowEnd
+        && buffer[bytesRead - 1] === NEWLINE_BYTE
+      ) {
+        sliceEnd -= 1;
+        rowEnd -= 1;
+        ignoredTrailingNewline = true;
+      }
+      let sliceStart = 0;
+      for (let index = sliceEnd - 1; index >= 0; index -= 1) {
+        if (buffer[index] !== NEWLINE_BYTE) continue;
+        sliceStart = index + 1;
+        break;
+      }
+      const retainedSliceBytes = sliceEnd - sliceStart;
+      if (retainedBytes + retainedSliceBytes > options.maxLineBytes) {
+        throw oversizedJsonlLineError(
+          path,
+          options.maxLineBytes,
+          retainedBytes + retainedSliceBytes,
+        );
+      }
+      chunks.unshift(Buffer.from(buffer.subarray(sliceStart, sliceEnd)));
+      retainedBytes += retainedSliceBytes;
+      recordRetainedLineBytes(options.stats, retainedBytes);
+      if (sliceStart > 0) {
+        return {
+          line: Buffer.concat(chunks, retainedBytes).toString('utf8'),
+          startOffset: position + sliceStart,
+          endOffset: rowEnd + (ignoredTrailingNewline ? 1 : 0),
+        };
+      }
+      ignoredTrailingNewline = true;
+      await recordEventLoopYield(options.stats);
+    }
+
+    return chunks.length > 0
+      ? {
+        line: Buffer.concat(chunks, retainedBytes).toString('utf8'),
+        startOffset: 0,
+        endOffset: rowEnd + (rowEnd < exclusiveOffset ? 1 : 0),
+      }
+      : null;
+  } finally {
+    await handle.close();
   }
 }
 

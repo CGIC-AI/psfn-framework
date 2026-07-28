@@ -1638,16 +1638,16 @@ export class SessionStore implements TranscriptSearchPort {
    * is filtered out. Shared refs and L0 session refs resolve only for the
    * retained rows in this one page.
    */
-  readSourceTurnRecordPage(
+  async readSourceTurnRecordPage(
     sourceChannelId: string,
     limit: number,
     cursor?: TurnRecordPageCursor,
-  ): TurnRecordPage {
+  ): Promise<TurnRecordPage> {
     const readPage = this.turnRecordStore.readTurnRecordPage;
     if (!readPage) {
       throw new Error('TurnRecord store does not support bounded cursor paging');
     }
-    const page = readPage.call(this.turnRecordStore, sourceChannelId, limit, cursor);
+    const page = await readPage.call(this.turnRecordStore, sourceChannelId, limit, cursor);
     const records = page.records
       .filter((record) => {
         if (record.channelId !== sourceChannelId) return false;

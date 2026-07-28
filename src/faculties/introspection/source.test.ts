@@ -106,14 +106,14 @@ function fixturePage(
 }
 
 describe('turn-record introspection source', () => {
-  it('selects only explicit public verbatim turns in exact consent channels', () => {
+  it('selects only explicit public verbatim turns in exact consent channels', async () => {
     const intimateSentinel = 'PRIVATE_INTIMATE_SENTINEL';
     const source = createTurnRecordIntrospectionSource({
       listRecentSessions: () => [
         { sessionId: 'discord:public-room', sourceChannelId: 'discord:public-room' },
         { sessionId: 'discord:private-dm', sourceChannelId: 'discord:private-dm' },
       ],
-      readSourceTurnRecordPage: (channelId) => ({
+      readSourceTurnRecordPage: async (channelId) => ({
         records: channelId === 'discord:public-room'
           ? [
           record(),
@@ -146,7 +146,7 @@ describe('turn-record introspection source', () => {
       isSourceTurnRecordEligible: () => true,
     });
 
-    const candidates = source.listCandidates({
+    const candidates = await source.listCandidates({
       allowedPublicChannelIds: ['discord:public-room'],
       recentSessionLimit: 10,
       recentTurnLimit: 10,
@@ -157,31 +157,31 @@ describe('turn-record introspection source', () => {
     expect(JSON.stringify(candidates)).not.toContain(intimateSentinel);
   });
 
-  it('fails closed for legacy records without an audit privacy snapshot', () => {
+  it('fails closed for legacy records without an audit privacy snapshot', async () => {
     const source = createTurnRecordIntrospectionSource({
       listRecentSessions: () => [{ sessionId: 'discord:public-room', sourceChannelId: 'discord:public-room' }],
-      readSourceTurnRecordPage: () => ({
+      readSourceTurnRecordPage: async () => ({
         records: [record({ auditPrivacy: undefined })],
         exhausted: true,
       }),
       isSessionRetiredOrQuarantined: () => false,
       isSourceTurnRecordEligible: () => true,
     });
-    expect(source.listCandidates({
+    await expect(source.listCandidates({
       allowedPublicChannelIds: ['discord:public-room'],
       recentSessionLimit: 10,
       recentTurnLimit: 10,
       maxSourceChars: 1_000,
-    })).toEqual([]);
+    })).resolves.toEqual([]);
   });
 
-  it('reads routed turns from the source stream without widening consent to the logical session', () => {
+  it('reads routed turns from the source stream without widening consent to the logical session', async () => {
     const source = createTurnRecordIntrospectionSource({
       listRecentSessions: () => [{
         sessionId: 'session:logical-after-reset',
         sourceChannelId: 'discord:public-room',
       }],
-      readSourceTurnRecordPage: (sourceChannelId) => ({
+      readSourceTurnRecordPage: async (sourceChannelId) => ({
         records: sourceChannelId === 'discord:public-room'
           ? [record({ sessionId: 'session:logical-after-reset' })]
           : [],
@@ -196,14 +196,14 @@ describe('turn-record introspection source', () => {
       maxSourceChars: 1_000,
     };
 
-    expect(source.listCandidates({
+    await expect(source.listCandidates({
       ...input,
       allowedPublicChannelIds: ['session:logical-after-reset'],
-    })).toEqual([]);
-    expect(source.listCandidates({
+    })).resolves.toEqual([]);
+    await expect(source.listCandidates({
       ...input,
       allowedPublicChannelIds: ['discord:public-room'],
-    })).toEqual([expect.objectContaining({
+    })).resolves.toEqual([expect.objectContaining({
       channelId: 'discord:public-room',
       provenanceRefs: expect.arrayContaining(['session:session:logical-after-reset']),
     })]);
@@ -329,8 +329,8 @@ describe('turn-record introspection source', () => {
         };
         // The newest physical row has no durable owner. It consumes this page
         // without widening the read or falsely exhausting the snapshot.
-        expect(source.listCandidates(input)).toEqual([]);
-        const candidates = source.listCandidates(input);
+        await expect(source.listCandidates(input)).resolves.toEqual([]);
+        const candidates = await source.listCandidates(input);
 
         expect(candidates.map(candidate => candidate.turnId)).toEqual([freshTurn.turnId]);
         expect(JSON.stringify(candidates)).not.toContain(oldPoisonedSentinel);
@@ -400,7 +400,7 @@ describe('turn-record introspection source', () => {
     },
   );
 
-  it('advances a bounded cursor through older sessions and turns across repeated runs', () => {
+  it('advances a bounded cursor through older sessions and turns across repeated runs', async () => {
     const sessions = [
       { sessionId: 'discord:newer-room', sourceChannelId: 'discord:newer-room' },
       { sessionId: 'discord:public-room', sourceChannelId: 'discord:public-room' },
@@ -412,7 +412,7 @@ describe('turn-record introspection source', () => {
     }));
     const source = createTurnRecordIntrospectionSource({
       listRecentSessions: (limit = 1, offset = 0) => sessions.slice(offset, offset + limit),
-      readSourceTurnRecordPage: (channelId, limit, cursor) => {
+      readSourceTurnRecordPage: async (channelId, limit, cursor) => {
         if (channelId !== 'discord:public-room') {
           return { records: [], exhausted: true };
         }
@@ -428,16 +428,55 @@ describe('turn-record introspection source', () => {
       recentTurnLimit: 2,
       maxSourceChars: 1_000,
     };
-    const candidates = Array.from({ length: 6 }, () => source.listCandidates(input)).flat();
+    const candidates = [];
+    for (let index = 0; index < 6; index += 1) {
+      candidates.push(...await source.listCandidates(input));
+    }
 
     expect([...new Set(candidates.map(candidate => candidate.sourceRef))].sort()).toEqual(
       turns.map(turn => `turn:${turn.turnId}`).sort(),
     );
   });
 
-  it('continues after an empty filtered physical page until the snapshot honestly exhausts', () => {
+  it('serializes overlapping async reads so cursor pages are not duplicated', async () => {
+    const turns = Array.from({ length: 3 }, (_, index) => record({
+      turnId: `019d2326-d9e1-701d-bcee-250d2cbb0e${index + 1}e`,
+      requestId: `request-overlap-${index + 1}`,
+      completedAt: 1_700_000_000_100 + index,
+    }));
+    const source = createTurnRecordIntrospectionSource({
+      listRecentSessions: () => [{
+        sessionId: 'discord:public-room',
+        sourceChannelId: 'discord:public-room',
+      }],
+      readSourceTurnRecordPage: async (_channelId, limit, cursor) => {
+        await new Promise<void>(resolve => setImmediate(resolve));
+        return fixturePage(turns, limit, cursor);
+      },
+      isSessionRetiredOrQuarantined: () => false,
+      isSourceTurnRecordEligible: () => true,
+    });
+    const input = {
+      allowedPublicChannelIds: ['discord:public-room'],
+      recentSessionLimit: 10,
+      recentTurnLimit: 1,
+      maxSourceChars: 1_000,
+    };
+
+    const pages = await Promise.all([
+      source.listCandidates(input),
+      source.listCandidates(input),
+    ]);
+
+    expect(pages.flat().map(candidate => candidate.turnId)).toEqual([
+      turns[2]!.turnId,
+      turns[1]!.turnId,
+    ]);
+  });
+
+  it('continues after an empty filtered physical page until the snapshot honestly exhausts', async () => {
     const continuation = 'older-page' as TurnRecordPageCursor;
-    const readSourceTurnRecordPage = vi.fn((
+    const readSourceTurnRecordPage = vi.fn(async (
       _channelId: string,
       _limit: number,
       cursor?: TurnRecordPageCursor,
@@ -467,13 +506,13 @@ describe('turn-record introspection source', () => {
       maxSourceChars: 1_000,
     };
 
-    expect(source.listCandidates(input)).toEqual([]);
-    expect(source.listCandidates(input)).toEqual([
+    await expect(source.listCandidates(input)).resolves.toEqual([]);
+    await expect(source.listCandidates(input)).resolves.toEqual([
       expect.objectContaining({ turnId: record().turnId }),
     ]);
     expect(readSourceTurnRecordPage.mock.calls[1]?.[2]).toBe(continuation);
     // Exhaustion reset is explicit: the next cycle starts a fresh snapshot.
-    expect(source.listCandidates(input)).toEqual([]);
+    await expect(source.listCandidates(input)).resolves.toEqual([]);
     expect(readSourceTurnRecordPage.mock.calls[2]?.[2]).toBeUndefined();
   });
 });

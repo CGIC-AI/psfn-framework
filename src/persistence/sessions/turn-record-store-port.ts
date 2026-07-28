@@ -66,7 +66,7 @@ export interface TurnRecordStorePort {
     channelId: string,
     limit: number,
     cursor?: TurnRecordPageCursor,
-  ): TurnRecordPage;
+  ): Promise<TurnRecordPage>;
   /**
    * Reads only the content-free fields needed by tool-usage aggregation.
    * Optional for narrow test adapters; production callers fail closed when the

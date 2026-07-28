@@ -684,7 +684,7 @@ describe('turn-records', () => {
     expect(turnRecordStore.readRecentTurnRecords(channelId, 5)).toEqual([record]);
   });
 
-  it('round-trips logical session provenance through a bounded snapshot cursor', () => {
+  it('round-trips logical session provenance through a bounded snapshot cursor', async () => {
     const sessionsDir = mkdtempSync(join(tmpdir(), 'turn-records-session-provenance-'));
     const turnRecordStore = createFilesystemTurnRecordStorePort(sessionsDir);
     const records = Array.from({ length: 4 }, (_, index) => createTurnRecord({
@@ -695,9 +695,9 @@ describe('turn-records', () => {
     }));
     for (const record of records) turnRecordStore.appendTurnRecord(record);
 
-    const first = turnRecordStore.readTurnRecordPage?.(records[0]!.channelId, 2);
+    const first = await turnRecordStore.readTurnRecordPage?.(records[0]!.channelId, 2);
     expect(first).toMatchObject({ records: records.slice(2), exhausted: false });
-    const second = turnRecordStore.readTurnRecordPage?.(
+    const second = await turnRecordStore.readTurnRecordPage?.(
       records[0]!.channelId,
       2,
       first?.nextCursor,
@@ -865,13 +865,13 @@ describe('turn-records rotation and bounded tail reads', () => {
     expect(stats.bytesRead).toBeLessThan(4_096);
   });
 
-  it('pins a rotation snapshot without duplicating the moved active inode or admitting newer rows', () => {
+  it('pins a rotation snapshot without duplicating the moved active inode or admitting newer rows', async () => {
     const sessionsDir = mkdtempSync(join(tmpdir(), 'psfn-turn-records-page-rotation-'));
     const store = createFilesystemTurnRecordStorePort(sessionsDir, { segmentMaxBytes: 1_024 });
     const records = Array.from({ length: 4 }, (_, index) => sequencedRecord(index));
     for (const record of records) store.appendTurnRecord(record);
 
-    const first = store.readTurnRecordPage?.(ROTATION_CHANNEL, 1);
+    const first = await store.readTurnRecordPage?.(ROTATION_CHANNEL, 1);
     expect(first).toMatchObject({
       records: records.slice(3),
       exhausted: false,
@@ -884,7 +884,7 @@ describe('turn-records rotation and bounded tail reads', () => {
     // exclude the post-snapshot append.
     const postSnapshot = sequencedRecord(4);
     store.appendTurnRecord(postSnapshot);
-    const second = store.readTurnRecordPage?.(
+    const second = await store.readTurnRecordPage?.(
       ROTATION_CHANNEL,
       3,
       first?.nextCursor,
@@ -895,13 +895,13 @@ describe('turn-records rotation and bounded tail reads', () => {
     });
 
     // Supplying no cursor is an explicit reset and begins a fresh snapshot.
-    expect(store.readTurnRecordPage?.(ROTATION_CHANNEL, 2)).toMatchObject({
+    await expect(store.readTurnRecordPage?.(ROTATION_CHANNEL, 2)).resolves.toMatchObject({
       records: [records[3], postSnapshot],
       exhausted: false,
     });
   });
 
-  it('fences two rotations during capture immediately after the pinned active inode', () => {
+  it('fences two rotations during capture immediately after the pinned active inode', async () => {
     const sessionsDir = mkdtempSync(join(tmpdir(), 'psfn-turn-records-page-capture-race-'));
     const store = createFilesystemTurnRecordStorePort(sessionsDir, { segmentMaxBytes: 8 });
     const records = Array.from({ length: 4 }, (_, index) => sequencedRecord(index));
@@ -916,17 +916,17 @@ describe('turn-records rotation and bounded tail reads', () => {
 
     // The capture pinned record 1 before the callback rotates record 1 and
     // then record 2. Record 2 and the new active record 3 are post-snapshot.
-    expect(store.readTurnRecordPage?.(ROTATION_CHANNEL, 10)).toEqual({
+    await expect(store.readTurnRecordPage?.(ROTATION_CHANNEL, 10)).resolves.toEqual({
       records: records.slice(0, 2),
       exhausted: true,
     });
-    expect(store.readTurnRecordPage?.(ROTATION_CHANNEL, 10)).toEqual({
+    await expect(store.readTurnRecordPage?.(ROTATION_CHANNEL, 10)).resolves.toEqual({
       records,
       exhausted: true,
     });
   });
 
-  it('fails closed when segment 1 is missing but a higher sealed segment survives', () => {
+  it('fails closed when segment 1 is missing but a higher sealed segment survives', async () => {
     const sessionsDir = mkdtempSync(join(tmpdir(), 'psfn-turn-records-page-leading-gap-'));
     const dir = join(sessionsDir, TURN_RECORDS_DIR);
     const sanitized = sanitizeChannelId(ROTATION_CHANNEL);
@@ -937,12 +937,12 @@ describe('turn-records rotation and bounded tail reads', () => {
       'utf8',
     );
 
-    expect(() => createFilesystemTurnRecordStorePort(sessionsDir)
+    await expect(createFilesystemTurnRecordStorePort(sessionsDir)
       .readTurnRecordPage?.(ROTATION_CHANNEL, 2))
-      .toThrow(/sealed segments are non-contiguous.*minimum=5.*maximum=5/);
+      .rejects.toThrow(/sealed segments are non-contiguous.*minimum=5.*maximum=5/);
   });
 
-  it('fails closed when a middle sealed segment is missing', () => {
+  it('fails closed when a middle sealed segment is missing', async () => {
     const sessionsDir = mkdtempSync(join(tmpdir(), 'psfn-turn-records-page-middle-gap-'));
     const dir = join(sessionsDir, TURN_RECORDS_DIR);
     const sanitized = sanitizeChannelId(ROTATION_CHANNEL);
@@ -955,12 +955,12 @@ describe('turn-records rotation and bounded tail reads', () => {
       );
     }
 
-    expect(() => createFilesystemTurnRecordStorePort(sessionsDir)
+    await expect(createFilesystemTurnRecordStorePort(sessionsDir)
       .readTurnRecordPage?.(ROTATION_CHANNEL, 2))
-      .toThrow(/sealed segments are non-contiguous.*count=2.*maximum=3/);
+      .rejects.toThrow(/sealed segments are non-contiguous.*count=2.*maximum=3/);
   });
 
-  it('keeps every later old-fat multi-segment cursor page bounded by its physical page size', () => {
+  it('keeps every later old-fat multi-segment cursor page bounded by its physical page size', async () => {
     const sessionsDir = mkdtempSync(join(tmpdir(), 'psfn-turn-records-page-old-fat-'));
     const recordCount = 48;
     const pageSize = 3;
@@ -991,7 +991,7 @@ describe('turn-records rotation and bounded tail reads', () => {
     fsFaults.readdirSyncError.remaining = 100;
     while (!exhausted) {
       const stats = { bytesRead: 0, linesRead: 0, normalizedRecords: 0 };
-      const page = readTurnRecordPageAcrossSegments(
+      const page = await readTurnRecordPageAcrossSegments(
         sessionsDir,
         ROTATION_CHANNEL,
         pageSize,
@@ -1013,6 +1013,86 @@ describe('turn-records rotation and bounded tail reads', () => {
     expect(Math.max(...cursorBytes)).toBeLessThan(1_024);
     expect(new Set(seen)).toEqual(new Set(records.map(record => record.turnId)));
     expect(seen).toHaveLength(recordCount);
+  });
+
+  it('yields to primary callbacks and fails before retaining an oversized physical row', async () => {
+    const sessionsDir = mkdtempSync(join(tmpdir(), 'psfn-turn-records-page-oversized-row-'));
+    const dir = join(sessionsDir, TURN_RECORDS_DIR);
+    mkdirSync(dir, { recursive: true });
+    const oversized = {
+      ...sequencedRecord(0),
+      assistantMessage: {
+        role: 'assistant' as const,
+        content: `oversized:${'x'.repeat(5 * 1024 * 1024)}`,
+        timestamp: 1_742_000_000_500,
+      },
+    };
+    writeFileSync(
+      activeSegmentPathFor(sessionsDir, ROTATION_CHANNEL),
+      `${JSON.stringify(oversized)}\n`,
+      'utf8',
+    );
+
+    const stats = {
+      bytesRead: 0,
+      readCalls: 0,
+      filesRead: 0,
+      linesRead: 0,
+      normalizedRecords: 0,
+      maxRetainedLineBytes: 0,
+      eventLoopYields: 0,
+    };
+    let primaryTimerRan = false;
+    const primaryTimer = new Promise<void>((resolve) => {
+      setTimeout(() => {
+        primaryTimerRan = true;
+        resolve();
+      }, 0);
+    });
+    const read = readTurnRecordPageAcrossSegments(
+      sessionsDir,
+      ROTATION_CHANNEL,
+      1,
+      undefined,
+      { scanChunkBytes: 64 * 1024, stats },
+    );
+    const rejected = expect(read).rejects.toThrow(
+      /exceeds the 2097152-byte cursor safety limit.*refusing to truncate or retain/,
+    );
+
+    await primaryTimer;
+    expect(primaryTimerRan).toBe(true);
+    await rejected;
+    expect(stats.eventLoopYields).toBeGreaterThan(0);
+    expect(stats.maxRetainedLineBytes).toBeLessThanOrEqual(2 * 1024 * 1024);
+    expect(stats.bytesRead).toBeLessThanOrEqual((2 * 1024 * 1024) + (64 * 1024));
+    expect(stats.normalizedRecords).toBe(0);
+    expect(stats.linesRead).toBe(0);
+  });
+
+  it('preserves UTF-8 rows split across asynchronous cursor chunks', async () => {
+    const sessionsDir = mkdtempSync(join(tmpdir(), 'psfn-turn-records-page-utf8-'));
+    const store = createFilesystemTurnRecordStorePort(sessionsDir);
+    const content = `prefix-${'🙂'.repeat(20_000)}-suffix`;
+    const expected = {
+      ...sequencedRecord(0),
+      assistantMessage: {
+        role: 'assistant' as const,
+        content,
+        timestamp: 1_742_000_000_500,
+      },
+    };
+    store.appendTurnRecord(expected);
+
+    const page = await readTurnRecordPageAcrossSegments(
+      sessionsDir,
+      ROTATION_CHANNEL,
+      1,
+      undefined,
+      { scanChunkBytes: 127 },
+    );
+
+    expect(page).toEqual({ records: [expected], exhausted: true });
   });
 
   it('quarantines a trailing partial line from an interrupted append, keeping valid records', () => {
@@ -1310,7 +1390,7 @@ describe('turn-records content-addressed tool definitions (bead hgw3.3)', () => 
       .toThrow(/corrupt.*does not match ref/);
   });
 
-  it('fails loudly on a dangling toolDefinitionsRef', () => {
+  it('fails loudly on a dangling toolDefinitionsRef', async () => {
     const sessionsDir = mkdtempSync(join(tmpdir(), 'psfn-turn-records-tooldefs-dangling-'));
     const record = createSnapshotTurnRecord(buildToolDefinitions('gone'));
     createFilesystemTurnRecordStorePort(sessionsDir).appendTurnRecord(record);
@@ -1322,8 +1402,8 @@ describe('turn-records content-addressed tool definitions (bead hgw3.3)', () => 
     const freshStore = createFilesystemTurnRecordStorePort(sessionsDir);
     expect(() => freshStore.readRecentTurnRecords(record.channelId, 5))
       .toThrow(/toolDefinitionsRef .* is dangling/);
-    expect(() => freshStore.readTurnRecordPage?.(record.channelId, 5))
-      .toThrow(/toolDefinitionsRef .* is dangling/);
+    await expect(freshStore.readTurnRecordPage?.(record.channelId, 5))
+      .rejects.toThrow(/toolDefinitionsRef .* is dangling/);
   });
 
   it('rejects a record carrying both inline toolDefinitions and a ref', () => {

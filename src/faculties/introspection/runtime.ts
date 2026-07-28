@@ -137,7 +137,7 @@ export class IntrospectionAuditRuntime {
     if (!consent.enabled) {
       return { reason: 'consent_disabled', candidates: 0, audited: 0, landmarksCreated: 0 };
     }
-    const candidates = this.options.source.listCandidates({
+    const candidates = await this.options.source.listCandidates({
       allowedPublicChannelIds: consent.allowedPublicChannelIds,
       recentSessionLimit: config.recentSessionLimit,
       recentTurnLimit: config.recentTurnLimit,

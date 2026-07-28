@@ -17,6 +17,7 @@ import {
   DEFAULT_SKILL_COLLECTION_LIMITS,
   loadSkillEntries,
   readSkillContent,
+  readSkillContents as readSkillContentBatch,
   resolveSkillDirectories,
   scanSkillRoots,
 } from './loader.js';
@@ -33,6 +34,7 @@ import type {
   ManagedSkillOwnership,
   SkillDirectorySpec,
   SkillEvaluation,
+  SkillEntry,
   SkillLookupResult,
   SkillSnapshot,
   SkillSkipRecord,
@@ -174,6 +176,16 @@ export class SkillsRuntime {
     };
   }
 
+  async readSkillContents(entries: SkillEntry[]): Promise<Map<string, string>> {
+    const limits = this.getCollectionLimits();
+    const contents = await readSkillContentBatch(
+      entries,
+      limits.maxContentBytes,
+      limits.yieldEvery,
+    );
+    return new Map(entries.map((entry, index) => [entry.id, contents[index]!]));
+  }
+
   async recordSkillInvocation(
     name: string,
     input: SkillInvocationRecordInput,
@@ -207,7 +219,7 @@ export class SkillsRuntime {
     const cache = await this.getOrCreateCache();
     const limits = this.getCollectionLimits();
     const totalBytes = cache.managedEntries.reduce((total, entry) => total + entry.size, 0);
-    if (totalBytes > limits.maxManagedContentBytes) {
+    if (totalBytes > limits.maxContentBytes) {
       return {
         managed: [],
         skipped: [{
@@ -215,7 +227,7 @@ export class SkillsRuntime {
           name: 'managed skill collection',
           relativePath: this.toRepoRelativePath(this.store.getManagedRootDir()),
           source: 'custom',
-          reason: `Managed skill bodies require ${String(totalBytes)} bytes; aggregate read limit is ${String(limits.maxManagedContentBytes)} bytes`,
+          reason: `Managed skill bodies require ${String(totalBytes)} bytes; aggregate read limit is ${String(limits.maxContentBytes)} bytes`,
           details: ['managed bodies were not read; no partial Garden list was returned'],
         }],
       };
@@ -231,6 +243,11 @@ export class SkillsRuntime {
       updatedAt: string;
     }> = [];
     const managedRoot = this.store.getManagedRootDir();
+    const contents = await readSkillContentBatch(
+      cache.managedEntries,
+      limits.maxContentBytes,
+      limits.yieldEvery,
+    );
     for (const [index, entry] of cache.managedEntries.entries()) {
       const categoryFromPath = relative(managedRoot, entry.absolutePath).split(sep)[0] ?? '';
       managed.push({
@@ -238,7 +255,7 @@ export class SkillsRuntime {
         description: normalizeSkillDescription(entry.description),
         category: normalizeSkillCategory(entry.category ?? categoryFromPath),
         version: entry.version ?? 1,
-        content: await readSkillContent(entry),
+        content: contents[index]!,
         createdAt: entry.createdAt ?? new Date(entry.birthtimeMs).toISOString(),
         updatedAt: entry.updatedAt ?? new Date(entry.mtimeMs).toISOString(),
       });
@@ -295,7 +312,8 @@ export class SkillsRuntime {
     }
 
     const promise = this.buildCache(generation);
-    this.cacheBuild = { generation, promise };
+    const build = { generation, promise };
+    this.cacheBuild = build;
     try {
       const cache = await promise;
       if (generation !== this.cacheGeneration) {
@@ -303,10 +321,12 @@ export class SkillsRuntime {
       }
       return cache;
     } finally {
-      if (this.cacheBuild.promise === promise) {
-        this.cacheBuild = null;
-      }
+      this.finishCacheBuild(build);
     }
+  }
+
+  private finishCacheBuild(build: NonNullable<SkillsRuntime['cacheBuild']>): void {
+    if (this.cacheBuild === build) this.cacheBuild = null;
   }
 
   private async buildCache(generation: number): Promise<SkillSnapshotCache> {

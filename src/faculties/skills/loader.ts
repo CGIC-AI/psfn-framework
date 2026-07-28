@@ -64,7 +64,7 @@ export const DEFAULT_SKILL_COLLECTION_LIMITS: Readonly<SkillCollectionLimits> = 
   maxCandidates: 2_048,
   maxMetadataBytes: 16 * 1024 * 1024,
   maxRetainedBytes: 24 * 1024 * 1024,
-  maxManagedContentBytes: 16 * 1024 * 1024,
+  maxContentBytes: 16 * 1024 * 1024,
   yieldEvery: 32,
 });
 
@@ -745,6 +745,7 @@ interface SkillDocumentReadOptions {
   maxFrontmatterBytes?: number;
   collectionLimits?: Partial<SkillCollectionLimits>;
   initialRetainedBytes?: number;
+  aggregateBudget?: SkillReadBudget;
 }
 
 class OversizedSkillDocumentError extends Error {
@@ -755,6 +756,18 @@ class OversizedSkillDocumentError extends Error {
   ) {
     super(message);
     this.name = 'OversizedSkillDocumentError';
+  }
+}
+
+interface SkillReadBudget {
+  chargedBytes: number;
+  maxBytes: number;
+}
+
+class SkillCollectionLimitError extends Error {
+  constructor(readBytes: number, maxBytes: number) {
+    super(`Skill collection would read ${String(readBytes)} bytes; aggregate read limit is ${String(maxBytes)} bytes`);
+    this.name = 'SkillCollectionLimitError';
   }
 }
 
@@ -780,6 +793,11 @@ async function readStableSkillBytes(
     const readLimit = mode === 'document'
       ? before.size
       : Math.min(before.size, maxFrontmatterBytes);
+    const budget = options.aggregateBudget;
+    if (budget && budget.chargedBytes + readLimit > budget.maxBytes) {
+      throw new SkillCollectionLimitError(budget.chargedBytes + readLimit, budget.maxBytes);
+    }
+    if (budget) budget.chargedBytes += readLimit;
     const bytes = Buffer.allocUnsafe(readLimit);
     let bytesRead = 0;
     while (bytesRead < readLimit) {
@@ -819,6 +837,20 @@ export async function readSkillContent(
   return parseSkillDocument(document, file.relativePath).body;
 }
 
+export async function readSkillContents(
+  files: Array<Pick<SkillFileCandidate, 'absolutePath' | 'relativePath'>>,
+  maxBytes: number,
+  yieldEvery: number,
+): Promise<string[]> {
+  const aggregateBudget: SkillReadBudget = { chargedBytes: 0, maxBytes };
+  const contents: string[] = [];
+  for (const [index, file] of files.entries()) {
+    contents.push(await readSkillContent(file, { aggregateBudget }));
+    await maybeYield(index + 1, yieldEvery);
+  }
+  return contents;
+}
+
 export async function loadSkillEntries(
   files: SkillFileCandidate[],
   options: SkillDocumentReadOptions = {},
@@ -830,7 +862,6 @@ export async function loadSkillEntries(
 }> {
   const entries: SkillEntry[] = [];
   const skipped: SkillSkipRecord[] = [];
-  let metadataBytesRead = 0;
   const limits = normalizeCollectionLimits(options.collectionLimits);
   const maxDocumentBytes = options.maxDocumentBytes ?? 1_000_000;
   const maxFrontmatterBytes = options.maxFrontmatterBytes ?? 64 * 1024;
@@ -838,6 +869,13 @@ export async function loadSkillEntries(
     total + (file.size > maxDocumentBytes ? 0 : Math.min(file.size, maxFrontmatterBytes))
   ), 0);
   const initialRetainedBytes = options.initialRetainedBytes ?? 0;
+  const aggregateBudget: SkillReadBudget = {
+    chargedBytes: 0,
+    maxBytes: Math.min(
+      limits.maxMetadataBytes,
+      Math.max(0, limits.maxRetainedBytes - initialRetainedBytes),
+    ),
+  };
   if (
     projectedMetadataBytes > limits.maxMetadataBytes
     || initialRetainedBytes + projectedMetadataBytes > limits.maxRetainedBytes
@@ -864,10 +902,9 @@ export async function loadSkillEntries(
     try {
       const documentPrefixBytes = await readStableSkillBytes(
         file.absolutePath,
-        options,
+        { ...options, aggregateBudget },
         'frontmatter',
       );
-      metadataBytesRead += documentPrefixBytes.byteLength;
       const documentPrefix = documentPrefixBytes.toString('utf8');
       const frontmatter = parseSkillMetadata(documentPrefix, file.relativePath);
       entries.push({
@@ -890,6 +927,21 @@ export async function loadSkillEntries(
       });
     } catch (error) {
       const message = toErrorMessage(error);
+      if (error instanceof SkillCollectionLimitError) {
+        return {
+          entries: [],
+          skipped: [...skipped, {
+            kind: 'collection_limit',
+            name: 'skill collection',
+            relativePath: file.directory.relativePath,
+            source: file.directory.source,
+            reason: message,
+            details: ['stable post-open bytes were charged; no partial skill set was accepted'],
+          }],
+          metadataBytesRead: aggregateBudget.chargedBytes,
+          metadataBytesRetained: aggregateBudget.chargedBytes,
+        };
+      }
       skipped.push({
         kind: error instanceof OversizedSkillDocumentError ? 'oversized' : 'parse_error',
         name: file.relativePath,
@@ -904,8 +956,8 @@ export async function loadSkillEntries(
   return {
     entries,
     skipped,
-    metadataBytesRead,
-    metadataBytesRetained: metadataBytesRead,
+    metadataBytesRead: aggregateBudget.chargedBytes,
+    metadataBytesRetained: aggregateBudget.chargedBytes,
   };
 }
 

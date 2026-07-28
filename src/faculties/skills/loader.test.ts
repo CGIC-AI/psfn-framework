@@ -8,6 +8,7 @@ import {
   loadSkillEntries,
   parseSkillDocument,
   readSkillContent,
+  readSkillContents,
   resolveSkillDirectories,
   scanSkillFiles,
   scanSkillRoots,
@@ -338,6 +339,38 @@ description: bounded candidate
           reason: expect.stringMatching(/3 SKILL.md candidates/i),
         }),
       ]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('charges post-open growth against aggregate metadata and content limits', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'skills-loader-post-open-bound-'));
+    try {
+      writeSkill(root, 'skills/first', '---\nname: first\ndescription: first\n---\nsmall');
+      writeSkill(root, 'skills/second', '---\nname: second\ndescription: second\n---\nsmall');
+      const files = await scanSkillFiles(resolveSkillDirectories(makeConfig(), root));
+      for (const file of files) {
+        writeFileSync(file.absolutePath, [
+          '---',
+          `name: ${file.relativePath.includes('first') ? 'first' : 'second'}`,
+          'description: grew after discovery',
+          '---',
+          'x'.repeat(700),
+        ].join('\n'));
+      }
+
+      const metadata = await loadSkillEntries(files, {
+        collectionLimits: { maxMetadataBytes: 1_000, maxRetainedBytes: 2_000 },
+      });
+      expect(metadata.entries).toEqual([]);
+      expect(metadata.metadataBytesRead).toBeLessThanOrEqual(1_000);
+      expect(metadata.skipped.at(-1)).toMatchObject({
+        kind: 'collection_limit',
+        reason: expect.stringMatching(/aggregate read limit/i),
+      });
+      await expect(readSkillContents(files, 1_000, 1))
+        .rejects.toThrow(/aggregate read limit/i);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

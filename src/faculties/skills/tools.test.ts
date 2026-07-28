@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -244,6 +244,51 @@ describe('skills tools', () => {
       });
       expect(readText(missingView)).toContain('not found');
       expect(missingView.details.isError).toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('bounds list content in one indexed batch without per-skill rediscovery', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'skills-tools-content-bound-'));
+    const dataDir = join(root, 'data');
+    const seedDir = join(root, 'config');
+    mkdirSync(dataDir, { recursive: true });
+    writeSkillsConfig(dataDir, seedDir);
+    for (let index = 0; index < 8; index += 1) {
+      const name = `listed-${String(index)}`;
+      const directory = join(root, 'skills', name);
+      mkdirSync(directory, { recursive: true });
+      writeFileSync(join(directory, 'SKILL.md'), [
+        '---',
+        `name: ${name}`,
+        `description: ${name}`,
+        '---',
+        'PRIVATE-BODY '.repeat(1_000),
+      ].join('\n'));
+    }
+
+    try {
+      const runtime = new SkillsRuntime({
+        dataDir,
+        seedDir,
+        repoRoot: root,
+        isBinaryAvailable: () => true,
+        collectionLimits: { maxContentBytes: 50_000, yieldEvery: 2 },
+      });
+      const findSpy = vi.spyOn(runtime, 'findSkill');
+      let timerTicks = 0;
+      const timer = setInterval(() => { timerTicks += 1; }, 0);
+      const result = await createSkillTool(runtime).execute('bounded-list', {
+        action: 'list',
+        includeContent: true,
+      }).finally(() => clearInterval(timer));
+
+      expect(result.details.isError).toBe(true);
+      expect(readText(result)).toMatch(/aggregate read limit/i);
+      expect(readText(result)).not.toContain('PRIVATE-BODY');
+      expect(findSpy).not.toHaveBeenCalled();
+      expect(timerTicks).toBeGreaterThan(1);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

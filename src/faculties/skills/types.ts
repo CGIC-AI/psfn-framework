@@ -98,7 +98,7 @@ export interface SkillCollectionLimits {
   maxCandidates: number;
   maxMetadataBytes: number;
   maxRetainedBytes: number;
-  maxManagedContentBytes: number;
+  maxContentBytes: number;
   yieldEvery: number;
 }
 

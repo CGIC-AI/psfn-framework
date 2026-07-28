@@ -13,7 +13,11 @@
 import type { Agent, AgentLoopConfig, AgentMessage, AgentTool } from '@mariozechner/pi-agent-core';
 import type { LLMSystemPromptCacheBoundaries } from '../../shared/contracts/runtime.js';
 import { getRequestContext } from '../../primitives/llm/request-context.js';
-import { agentLoopContinueWithScheduler, agentLoopWithScheduler } from '../../core/agent/scheduled-agent-loop.js';
+import {
+  agentLoopContinueWithScheduler,
+  agentLoopWithScheduler,
+  type ScheduledAgentLoopConfig,
+} from '../../core/agent/scheduled-agent-loop.js';
 import {
   ParentTurnContinuationFuse,
   type ParentTurnContinuationFuseLimits,
@@ -73,6 +77,8 @@ type PatchedAgent = {
   runPromptMessages: (messages: AgentMessage[], options?: PatchedRunOptions) => Promise<void>;
   runContinuation: () => Promise<void>;
   createLoopConfig: (options?: PatchedRunOptions) => AgentLoopConfig;
+  /** Public Agent surface: enqueue an internal follow-up onto the follow-up queue. */
+  followUp: (message: AgentMessage) => void;
   processEvents: (event: unknown) => Promise<void>;
   activeRun?: {
     promise: Promise<void>;
@@ -184,7 +190,17 @@ export function installAgentToolSchedulerPatch(
         : [...initialTurnTools],
       ...(promptCacheBoundaries ? { promptCacheBoundaries } : {}),
     };
-    const config = this.createLoopConfig(options);
+    const config = this.createLoopConfig(options) as ScheduledAgentLoopConfig;
+    // Re-enqueue hook: when a fresh user turn start-drains the follow-up queue
+    // (psfn-framework-8l9c) and then exits early (assistant error/abort or a
+    // throw) before delivering held-back EXTERNAL user follow-ups, the loop
+    // returns them here so the journaled user message is processed by a later
+    // run instead of being silently dropped.
+    config.requeueFollowUpMessages = (messages: AgentMessage[]): void => {
+      for (const message of messages) {
+        this.followUp(message);
+      }
+    };
 
     let resolveRun: () => void = () => {};
     const runPromise = new Promise<void>((resolve) => {

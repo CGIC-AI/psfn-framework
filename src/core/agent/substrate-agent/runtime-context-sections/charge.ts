@@ -25,7 +25,7 @@ const CHARGE_SURFACE_PROMPT_LABELS: Record<ChargePolicySurface, string> = {
   localImageGeneration: 'local image generation',
   paidImageGeneration: 'paid image/video generation',
   analysisWorkbenchExtensionBand: 'analysis_workbench extension pass after the first iteration',
-  subagentLaunch: 'subagent launch',
+  subagentLaunch: 'automata launch',
   shardLaunch: 'shard launch',
   externalModelConsult: 'external model consult',
   moaRoundBase: 'multi-model deliberation round',

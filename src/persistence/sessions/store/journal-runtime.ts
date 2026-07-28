@@ -762,8 +762,12 @@ export class SessionJournalRuntime {
 
     // A boundary-backed partial chain cannot safely distinguish a tampered
     // boundary/window from a key transition. Replay the canonical archive so
-    // integrity normalization remains byte-identical to full history reads.
-    if (verificationFailed && oldestMessageIndex > 0) {
+    // integrity normalization remains byte-identical to full history reads —
+    // and replay even when the window already started at the archive beginning,
+    // because the full-load path is the durable-incident funnel: returning
+    // detected-failed rows without it would skip recordIntegrityFailure
+    // (bead g59z).
+    if (verificationFailed) {
       const loaded = this.loadChannel(archive);
       const eligible = loaded.entries.filter(entry => entry.id < beforeId);
       return eligible.length <= limit ? eligible : eligible.slice(-limit);

@@ -257,6 +257,9 @@ describe('turn-records', () => {
     const stats: TurnRecordIdentityLookupStats = {
       linesScanned: 0,
       recordsNormalized: 0,
+      bytesRead: 0,
+      maxReadChunkBytes: 0,
+      cacheHits: 0,
     };
     let eventLoopPulseObserved = false;
     setImmediate(() => {
@@ -271,8 +274,105 @@ describe('turn-records', () => {
     );
 
     expect(lookup).toEqual({ kind: 'unique', record: records[731] });
-    expect(stats).toEqual({ linesScanned: 1_024, recordsNormalized: 1 });
+    expect(stats).toMatchObject({
+      linesScanned: 1_024,
+      recordsNormalized: 1,
+      cacheHits: 0,
+    });
+    expect(stats.bytesRead).toBeGreaterThan(128 * 1024 * 1_024);
+    expect(stats.maxReadChunkBytes).toBeLessThanOrEqual(64 * 1024);
     expect(eventLoopPulseObserved).toBe(true);
+  });
+
+  it('time-slices one huge unrelated row without buffering it and caches a warm lookup', async () => {
+    const sessionsDir = mkdtempSync(join(tmpdir(), 'psfn-turn-records-exact-huge-row-'));
+    const channelId = 'psfn-amica:test:exact-huge-row';
+    const activePath = activeSegmentPathFor(sessionsDir, channelId);
+    mkdirSync(join(sessionsDir, TURN_RECORDS_DIR), { recursive: true });
+    const unrelated = createTurnRecord({
+      channelId,
+      turnId: backfillLegacyTurnId('exact-huge-unrelated'),
+      requestId: 'exact-huge-unrelated',
+      userMessage: {
+        ...createTurnRecord().userMessage,
+        content: 'x'.repeat(16 * 1024 * 1024),
+      },
+    });
+    const target = createTurnRecord({
+      channelId,
+      turnId: backfillLegacyTurnId('exact-huge-target'),
+      requestId: 'exact-huge-target',
+    });
+    writeFileSync(activePath, `${JSON.stringify(unrelated)}\n${JSON.stringify(target)}\n`, 'utf8');
+    const coldStats: TurnRecordIdentityLookupStats = {
+      linesScanned: 0,
+      recordsNormalized: 0,
+      bytesRead: 0,
+      maxReadChunkBytes: 0,
+      cacheHits: 0,
+    };
+    let pulseCount = 0;
+    const pulse = setInterval(() => {
+      pulseCount += 1;
+    }, 0);
+
+    const cold = await lookupTurnRecordIdentityAcrossSegments(
+      sessionsDir,
+      channelId,
+      target.turnId,
+      { stats: coldStats },
+    );
+    clearInterval(pulse);
+
+    expect(cold).toEqual({ kind: 'unique', record: target });
+    expect(coldStats.recordsNormalized).toBe(1);
+    expect(coldStats.bytesRead).toBeGreaterThan(16 * 1024 * 1024);
+    expect(coldStats.maxReadChunkBytes).toBeLessThanOrEqual(64 * 1024);
+    expect(pulseCount).toBeGreaterThan(1);
+
+    const warmStats: TurnRecordIdentityLookupStats = {
+      linesScanned: 0,
+      recordsNormalized: 0,
+      bytesRead: 0,
+      maxReadChunkBytes: 0,
+      cacheHits: 0,
+    };
+    await expect(lookupTurnRecordIdentityAcrossSegments(
+      sessionsDir,
+      channelId,
+      target.turnId,
+      { stats: warmStats },
+    )).resolves.toEqual({ kind: 'unique', record: target });
+    expect(warmStats).toEqual({
+      linesScanned: 0,
+      recordsNormalized: 0,
+      bytesRead: 0,
+      maxReadChunkBytes: 0,
+      cacheHits: 1,
+    });
+  });
+
+  it('fails closed when a malformed row claims the matching TurnID', async () => {
+    const sessionsDir = mkdtempSync(join(tmpdir(), 'psfn-turn-records-exact-malformed-match-'));
+    const channelId = 'psfn-amica:test:exact-malformed-match';
+    const activePath = activeSegmentPathFor(sessionsDir, channelId);
+    mkdirSync(join(sessionsDir, TURN_RECORDS_DIR), { recursive: true });
+    const target = createTurnRecord({
+      channelId,
+      turnId: backfillLegacyTurnId('exact-malformed-match'),
+      requestId: 'exact-malformed-match',
+    });
+    writeFileSync(
+      activePath,
+      `${JSON.stringify(target)}\n{"turnId":"${target.turnId}","requestId":}\n`,
+      'utf8',
+    );
+
+    await expect(lookupTurnRecordIdentityAcrossSegments(
+      sessionsDir,
+      channelId,
+      target.turnId,
+    )).resolves.toEqual({ kind: 'duplicated' });
   });
 
   it('distinguishes missing, unique, and duplicated exact identities', async () => {

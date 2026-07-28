@@ -84,6 +84,13 @@ const log = createComponentLogger('TurnRecords');
 
 const TURN_RECORDS_DIR = '_turn_records';
 const TURN_RECORD_SCHEMA_VERSION = 1;
+const identityLookupCache = {
+  maxEntries: 256,
+  entries: new Map<string, {
+    generation: string;
+    lookup: TurnRecordIdentityLookup;
+  }>(),
+};
 
 /**
  * Size cap for a single active turn-record segment file. When an append notices
@@ -1010,14 +1017,15 @@ function maybeRotateActiveSegment(
 function quarantineTurnRecordLine(
   path: string,
   channelId: string,
-  rawLine: string,
+  rawLine: string | number,
   error: unknown,
 ): void {
+  const rawLength = typeof rawLine === 'number' ? rawLine : rawLine.length;
   const reason = toErrorMessage(error);
   log.warn('quarantined unparseable turn-record line', {
     path,
     channelId,
-    rawLength: rawLine.length,
+    rawLength,
     reason,
   });
   // Stable counter event: quarantining keeps reads alive but makes the served
@@ -1035,7 +1043,7 @@ function quarantineTurnRecordLine(
     appendJsonLine(`${path}.quarantine`, {
       quarantinedAt: Date.now(),
       channelId,
-      rawLength: rawLine.length,
+      rawLength,
       reason,
     });
   } catch (sidecarError) {
@@ -1492,7 +1500,61 @@ export interface LookupTurnRecordIdentityOptions {
   stats?: TurnRecordIdentityLookupStats;
 }
 
-export function lookupTurnRecordIdentityAcrossSegments(
+function cloneIdentityLookup(lookup: TurnRecordIdentityLookup): TurnRecordIdentityLookup {
+  return lookup.kind === 'unique'
+    ? { kind: 'unique', record: structuredClone(lookup.record) }
+    : lookup;
+}
+
+function identityLookupGeneration(
+  dir: string,
+  sanitizedChannelId: string,
+): string | null {
+  const activePath = join(dir, `${sanitizedChannelId}.jsonl`);
+  const paths = [
+    activePath,
+    ...listRotatedSegments(dir, sanitizedChannelId)
+      .sort((left, right) => right.segmentNumber - left.segmentNumber)
+      .map(segment => segment.path),
+  ];
+  const identities: string[] = [];
+  for (const path of paths) {
+    try {
+      const stats = statSync(path);
+      identities.push([
+        path,
+        fileIdentityKey(stats),
+        stats.size,
+        stats.mtimeMs,
+        stats.ctimeMs,
+      ].join(':'));
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+      if (path !== activePath) return null;
+      identities.push(`${activePath}:missing`);
+    }
+  }
+  return identities.join('|');
+}
+
+function cacheIdentityLookup(
+  key: string,
+  generation: string,
+  lookup: TurnRecordIdentityLookup,
+): void {
+  identityLookupCache.entries.delete(key);
+  identityLookupCache.entries.set(key, {
+    generation,
+    lookup: cloneIdentityLookup(lookup),
+  });
+  while (identityLookupCache.entries.size > identityLookupCache.maxEntries) {
+    const oldest = identityLookupCache.entries.keys().next().value as string | undefined;
+    if (oldest === undefined) break;
+    identityLookupCache.entries.delete(oldest);
+  }
+}
+
+export async function lookupTurnRecordIdentityAcrossSegments(
   sessionsDir: string,
   channelId: string,
   turnId: string,
@@ -1500,7 +1562,16 @@ export function lookupTurnRecordIdentityAcrossSegments(
 ): Promise<TurnRecordIdentityLookup> {
   const sanitized = sanitizeChannelId(channelId);
   const dir = turnRecordsDir(sessionsDir);
-  return lookupTurnRecordIdentitySnapshot({
+  const cacheKey = `${dir}\0${channelId}\0${turnId}`;
+  const generationBefore = identityLookupGeneration(dir, sanitized);
+  const cached = identityLookupCache.entries.get(cacheKey);
+  if (generationBefore !== null && cached?.generation === generationBefore) {
+    if (options.stats) options.stats.cacheHits += 1;
+    identityLookupCache.entries.delete(cacheKey);
+    identityLookupCache.entries.set(cacheKey, cached);
+    return cloneIdentityLookup(cached.lookup);
+  }
+  const lookup = await lookupTurnRecordIdentitySnapshot({
     activePath: join(dir, `${sanitized}.jsonl`),
     channelId,
     turnId,
@@ -1513,6 +1584,11 @@ export function lookupTurnRecordIdentityAcrossSegments(
     },
     ...(options.stats ? { stats: options.stats } : {}),
   });
+  const generationAfter = identityLookupGeneration(dir, sanitized);
+  if (generationBefore !== null && generationAfter === generationBefore) {
+    cacheIdentityLookup(cacheKey, generationAfter, lookup);
+  }
+  return lookup;
 }
 
 /**

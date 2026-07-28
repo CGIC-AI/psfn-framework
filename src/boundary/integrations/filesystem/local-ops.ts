@@ -11,6 +11,7 @@ import type {
   FilesystemWriteOptions,
   FilesystemWriteResult,
 } from './ops.js';
+import { normalizeFilesystemReadOptions } from './ops.js';
 import { resolveWorkspaceFsPathFromRoot, resolveWorkspaceRoot } from '../../gateway/filesystem-paths.js';
 import { isInsideAllowedPaths } from '../../gateway/policy.js';
 import {
@@ -36,7 +37,12 @@ export class WorkspaceFilesystemOps implements FilesystemOperations {
     if (!isInsideAllowedPaths(resolvedPath, [this.workspaceRoot])) {
       throw new Error('fs read path must stay inside the workspace root');
     }
-    return readTextFile(resolvedPath, options?.maxBytes);
+    const normalizedOptions = normalizeFilesystemReadOptions(options);
+    return readTextFile(
+      resolvedPath,
+      normalizedOptions.maxBytes,
+      normalizedOptions.offsetBytes,
+    );
   }
 
   async list(

@@ -65,7 +65,10 @@ function createGatewayOpsPort(port: GatewayOpsPort): GatewayOpsPort {
         : {}),
     },
     filesystem: {
-      read: (path: string, options?: { maxBytes?: number }) => port.filesystem.read(path, options),
+      read: (
+        path: string,
+        options?: { maxBytes?: number; offsetBytes?: number },
+      ) => port.filesystem.read(path, options),
       list: (glob?: string, maxEntries?: number, options?: FilesystemListOptions) => (
         port.filesystem.list(glob, maxEntries, options)
       ),
@@ -112,7 +115,10 @@ export function createGatewayOpsPortFromClient(gateway: GatewayClient): GatewayO
       },
     },
     filesystem: {
-      read: (path: string, options?: { maxBytes?: number }) => gateway.fsReadDetailed(path, options),
+      read: (
+        path: string,
+        options?: { maxBytes?: number; offsetBytes?: number },
+      ) => gateway.fsReadDetailed(path, options),
       list: (glob?: string, maxEntries = 200, options?: FilesystemListOptions) => (
         gateway.fsList(glob, maxEntries, options)
       ),

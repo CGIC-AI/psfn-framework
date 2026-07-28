@@ -27,6 +27,7 @@ import {
   readTextFile,
   searchWorkspaceFiles,
 } from '../../integrations/filesystem/workspace-ops.js';
+import { normalizeFilesystemReadOptions } from '../../integrations/filesystem/ops.js';
 
 function resolveReadRoot(runtime: GatewayMethodRuntime): string {
   const workspaceRoot = resolveWorkspaceRoot(runtime.workspacePath);
@@ -197,9 +198,17 @@ const fsDescriptors: Array<GatedMethodDescriptor<any, unknown>> = [
     handler: async (params: FsReadParams, runtime) => {
       const resolvedPath = await resolveReadPath(params.path, runtime);
       assertPersonalWorkspacePath(resolvedPath, runtime, 'returnNormalized');
-      return await readTextFile(resolvedPath, params.maxBytes);
+      const options = normalizeFilesystemReadOptions({
+        ...(params.maxBytes !== undefined ? { maxBytes: params.maxBytes } : {}),
+        ...(params.offsetBytes !== undefined ? { offsetBytes: params.offsetBytes } : {}),
+      });
+      return await readTextFile(resolvedPath, options.maxBytes, options.offsetBytes);
     },
-    summary: (p: FsReadParams) => ({ path: p.path, maxBytes: p.maxBytes }),
+    summary: (p: FsReadParams) => ({
+      path: p.path,
+      maxBytes: p.maxBytes,
+      offsetBytes: p.offsetBytes,
+    }),
     approvalAction: 'read',
     approvalScope: (p: FsReadParams) => p.path,
   },

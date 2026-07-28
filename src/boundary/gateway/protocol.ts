@@ -306,6 +306,7 @@ export interface WebSearchParams {
 export interface FsReadParams {
   path: string;
   maxBytes?: number;
+  offsetBytes?: number;
 }
 
 export interface FsWriteParams {
@@ -724,6 +725,9 @@ export interface WebSearchResult {
 
 export interface FsReadResult {
   content: string;
+  offsetBytes: number;
+  nextOffsetBytes: number | null;
+  eof: boolean;
   truncated: boolean;
 }
 

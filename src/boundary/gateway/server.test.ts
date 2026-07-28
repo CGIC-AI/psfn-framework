@@ -532,7 +532,13 @@ describe('GatewayServer', () => {
       });
 
       const readResponse = await invokeRpc(conn, 960, 'fs.read', { path: relativeReadPath });
-      expect(readResponse.result.content).toBe('hello from workspace');
+      expect(readResponse.result).toEqual({
+        content: 'hello from workspace',
+        offsetBytes: 0,
+        nextOffsetBytes: null,
+        eof: true,
+        truncated: false,
+      });
 
       const writeResponse = await invokeRpc(conn, 961, 'fs.write', {
         path: relativeWritePath,
@@ -540,6 +546,80 @@ describe('GatewayServer', () => {
       });
       expect(writeResponse.result).toEqual({ success: true });
       expect(readFileSync(join(workspace, relativeWritePath), 'utf-8')).toBe('written in workspace');
+    } finally {
+      rmSync(workspace, { recursive: true, force: true });
+    }
+  });
+
+  it('caps optionless fs.read RPC pages and rejects larger direct page requests', async () => {
+    const workspace = mkdtempSync(join(tmpdir(), 'gw-fs-direct-cap-'));
+    writeFileSync(join(workspace, 'large.txt'), 'x'.repeat(20_001), 'utf-8');
+
+    try {
+      const { conn } = await setupServerConnection({
+        ...createMinimalOptions(),
+        policyConfig: {
+          workspacePath: workspace,
+        },
+      });
+
+      const bounded = await invokeRpc(conn, 979, 'fs.read', { path: 'large.txt' });
+      expect(bounded.error).toBeUndefined();
+      expect(bounded.result).toMatchObject({
+        content: 'x'.repeat(20_000),
+        offsetBytes: 0,
+        nextOffsetBytes: 20_000,
+        eof: false,
+        truncated: true,
+      });
+
+      const overCap = await invokeRpc(conn, 980, 'fs.read', {
+        path: 'large.txt',
+        maxBytes: 20_001,
+      });
+      expect(overCap.result).toBeUndefined();
+      expect(overCap.error).toBeDefined();
+    } finally {
+      rmSync(workspace, { recursive: true, force: true });
+    }
+  });
+
+  it('serves lossless cursor-based fs.read pages through the gateway', async () => {
+    const workspace = mkdtempSync(join(tmpdir(), 'gw-fs-paged-read-'));
+    const content = 'ab🙂cd€ef';
+    writeFileSync(join(workspace, 'unicode.txt'), content, 'utf-8');
+
+    try {
+      const { conn } = await setupServerConnection({
+        ...createMinimalOptions(),
+        policyConfig: {
+          workspacePath: workspace,
+        },
+      });
+
+      const pages: Array<Record<string, unknown>> = [];
+      let offsetBytes = 0;
+      for (let requestId = 980; requestId < 984; requestId += 1) {
+        const response = await invokeRpc(conn, requestId, 'fs.read', {
+          path: 'unicode.txt',
+          maxBytes: 5,
+          offsetBytes,
+        });
+        expect(response.error).toBeUndefined();
+        pages.push(response.result as Record<string, unknown>);
+        if (response.result.nextOffsetBytes === null) {
+          break;
+        }
+        offsetBytes = response.result.nextOffsetBytes;
+      }
+
+      expect(pages).toMatchObject([
+        { content: 'ab', offsetBytes: 0, nextOffsetBytes: 2, eof: false, truncated: true },
+        { content: '🙂c', offsetBytes: 2, nextOffsetBytes: 7, eof: false, truncated: true },
+        { content: 'd€e', offsetBytes: 7, nextOffsetBytes: 12, eof: false, truncated: true },
+        { content: 'f', offsetBytes: 12, nextOffsetBytes: null, eof: true, truncated: false },
+      ]);
+      expect(pages.map(page => page.content).join('')).toBe(content);
     } finally {
       rmSync(workspace, { recursive: true, force: true });
     }

@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { GatewayFilesystemOps } from './gateway-ops.js';
 import { WorkspaceFilesystemOps } from './local-ops.js';
 import { registerFilesystemTools, wireFilesystemRuntime, type FilesystemRuntimeTarget } from './runtime-wiring.js';
+import { readTextFile } from './workspace-ops.js';
 
 function createMockTarget(): FilesystemRuntimeTarget & { registerTool: ReturnType<typeof vi.fn> } {
   return {
@@ -16,7 +17,13 @@ describe('filesystem runtime wiring', () => {
   it('registers the unified fs tool as core', () => {
     const target = createMockTarget();
     const ops = {
-      read: vi.fn(async () => ({ content: 'hello', truncated: false })),
+      read: vi.fn(async () => ({
+        content: 'hello',
+        offsetBytes: 0,
+        nextOffsetBytes: null,
+        eof: true,
+        truncated: false,
+      })),
       list: vi.fn(async () => ({
         paths: ['a.txt'],
         scannedEntries: 1,
@@ -45,11 +52,17 @@ describe('filesystem runtime wiring', () => {
     expect(target.registerTool.mock.calls.every((call: any[]) => call[1] === 'core')).toBe(true);
   });
 
-  it('attaches gateway wiring metadata in gateway mode', () => {
+  it('attaches gateway wiring metadata and enforces the direct-read cap in gateway mode', async () => {
     const target = createMockTarget();
     const gatewayOps = {
       filesystem: {
-        read: vi.fn(async () => ({ content: 'content', truncated: false })),
+        read: vi.fn(async () => ({
+          content: 'content',
+          offsetBytes: 0,
+          nextOffsetBytes: null,
+          eof: true,
+          truncated: false,
+        })),
         list: vi.fn(async () => ({
           paths: [],
           scannedEntries: 0,
@@ -73,7 +86,8 @@ describe('filesystem runtime wiring', () => {
       },
     };
 
-    registerFilesystemTools(target, new GatewayFilesystemOps(gatewayOps), { gatewayMode: true });
+    const ops = new GatewayFilesystemOps(gatewayOps);
+    registerFilesystemTools(target, ops, { gatewayMode: true });
 
     expect(target.registerTool.mock.calls[0]?.[0].wiringMeta?.requiredGatewayMethods).toEqual([
       'fs.read',
@@ -82,6 +96,13 @@ describe('filesystem runtime wiring', () => {
       'fs.write',
       'fs.edit',
     ]);
+    await expect(ops.read('notes.txt', { maxBytes: 20_001 })).rejects.toThrow('max_bytes');
+    expect(gatewayOps.filesystem.read).not.toHaveBeenCalled();
+    await expect(ops.read('notes.txt')).resolves.toMatchObject({ content: 'content' });
+    expect(gatewayOps.filesystem.read).toHaveBeenCalledWith('notes.txt', {
+      maxBytes: 20_000,
+      offsetBytes: 0,
+    });
   });
 
   it('wires local workspace filesystem ops with unified read/list/search/write/edit behavior', async () => {
@@ -105,11 +126,43 @@ describe('filesystem runtime wiring', () => {
       });
 
       const content = await ops.read('memories/memorybook.txt');
-      expect(content).toEqual({ content: 'remember this\n', truncated: false });
+      expect(content).toEqual({
+        content: 'remember this\n',
+        offsetBytes: 0,
+        nextOffsetBytes: null,
+        eof: true,
+        truncated: false,
+      });
 
       const searched = await ops.search({ query: 'remember', glob: 'memories/**/*.txt' });
       expect(searched.matches).toEqual([
         expect.objectContaining({ path: 'memories/memorybook.txt', line: 1, column: 1 }),
+      ]);
+
+      const largePath = join(workspace, 'memories', 'large.txt');
+      const largeContent = `${`${'x'.repeat(100)}\n`.repeat(200)}needle`;
+      writeFileSync(largePath, largeContent, 'utf-8');
+      await expect(ops.read('memories/large.txt', { maxBytes: 20_001 }))
+        .rejects.toThrow('max_bytes');
+      await expect(ops.read('memories/large.txt')).resolves.toMatchObject({
+        content: largeContent.slice(0, 20_000),
+        offsetBytes: 0,
+        nextOffsetBytes: 20_000,
+        eof: false,
+        truncated: true,
+      });
+      await expect(readTextFile(largePath)).resolves.toMatchObject({
+        content: largeContent,
+        eof: true,
+        truncated: false,
+      });
+      const searchedPastDirectCap = await ops.search({
+        query: 'needle',
+        glob: 'memories/large.txt',
+        maxBytesPerFile: 40_000,
+      });
+      expect(searchedPastDirectCap.matches).toEqual([
+        expect.objectContaining({ path: 'memories/large.txt', line: 201, column: 1 }),
       ]);
 
       const written = await ops.write({ path: 'memories/new.txt', content: 'fresh\n' });

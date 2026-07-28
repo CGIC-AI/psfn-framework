@@ -169,6 +169,37 @@ describe('fs tool', () => {
     expect(resultText(misaligned)).toContain('UTF-8 character boundary');
   });
 
+  it('rejects a page size too small for the next UTF-8 code point instead of returning a stuck cursor', async () => {
+    writeFileSync(join(workspace, 'docs', 'emoji.txt'), '🙂tail', 'utf-8');
+    const tool = createFsTool(ops);
+
+    const result = await tool.execute('page-too-small', {
+      action: 'read',
+      path: 'docs/emoji.txt',
+      max_bytes: 3,
+      offset_bytes: 0,
+    });
+
+    expect(result.details).toMatchObject({ isError: true });
+    expect(resultText(result)).toContain('max_bytes');
+    expect(resultText(result)).toContain('4 bytes');
+  });
+
+  it('fails closed when a direct read tries to exceed the 20,000-byte page cap', async () => {
+    const tool = createFsTool(ops);
+
+    const result = await tool.execute('page-over-cap', {
+      action: 'read',
+      path: 'docs/notes.txt',
+      max_bytes: 20_001,
+      offset_bytes: 0,
+    });
+
+    expect(result.details).toMatchObject({ isError: true });
+    expect(resultText(result)).toContain('max_bytes');
+    expect(resultText(result)).toContain('20000');
+  });
+
   it('retargets broad searches to working folders and skips directories', async () => {
     mkdirSync(join(workspace, 'downloads'), { recursive: true });
     mkdirSync(join(workspace, 'docs', 'nested'), { recursive: true });

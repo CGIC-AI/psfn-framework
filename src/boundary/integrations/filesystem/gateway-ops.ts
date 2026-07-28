@@ -12,6 +12,7 @@ import type {
   FilesystemWriteOptions,
   FilesystemWriteResult,
 } from './ops.js';
+import { normalizeFilesystemReadOptions } from './ops.js';
 
 export class GatewayFilesystemOps implements FilesystemOperations {
   private readonly filesystemOps: FilesystemOperations;
@@ -21,7 +22,7 @@ export class GatewayFilesystemOps implements FilesystemOperations {
   }
 
   async read(path: string, options?: FilesystemReadOptions): Promise<FilesystemReadResult> {
-    return this.filesystemOps.read(path, options);
+    return this.filesystemOps.read(path, normalizeFilesystemReadOptions(options));
   }
 
   async list(

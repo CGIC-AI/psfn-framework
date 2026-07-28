@@ -2,10 +2,46 @@ export type FilesystemSearchMode = 'literal' | 'regex';
 
 export interface FilesystemReadOptions {
   maxBytes?: number;
+  offsetBytes?: number;
+}
+
+export const FILESYSTEM_DIRECT_READ_CONTRACT = Object.freeze({
+  defaultMaxBytes: 20_000,
+  maxBytes: 20_000,
+  maxOffsetBytes: Number.MAX_SAFE_INTEGER,
+});
+
+export function normalizeFilesystemReadOptions(
+  options: FilesystemReadOptions = {},
+): Required<FilesystemReadOptions> {
+  const maxBytes = options.maxBytes ?? FILESYSTEM_DIRECT_READ_CONTRACT.defaultMaxBytes;
+  const offsetBytes = options.offsetBytes ?? 0;
+  if (
+    !Number.isSafeInteger(maxBytes)
+    || maxBytes < 1
+    || maxBytes > FILESYSTEM_DIRECT_READ_CONTRACT.maxBytes
+  ) {
+    throw new Error(
+      `max_bytes must be a safe integer between 1 and ${String(FILESYSTEM_DIRECT_READ_CONTRACT.maxBytes)}`,
+    );
+  }
+  if (
+    !Number.isSafeInteger(offsetBytes)
+    || offsetBytes < 0
+    || offsetBytes > FILESYSTEM_DIRECT_READ_CONTRACT.maxOffsetBytes
+  ) {
+    throw new Error(
+      `offset_bytes must be a safe integer between 0 and ${String(FILESYSTEM_DIRECT_READ_CONTRACT.maxOffsetBytes)}`,
+    );
+  }
+  return { maxBytes, offsetBytes };
 }
 
 export interface FilesystemReadResult {
   content: string;
+  offsetBytes: number;
+  nextOffsetBytes: number | null;
+  eof: boolean;
   truncated: boolean;
 }
 

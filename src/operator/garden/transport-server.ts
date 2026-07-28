@@ -241,11 +241,12 @@ export class GardenAdminTransportServer implements Lifecycle {
     this.config.services.ownerFileReloadWatcher?.close();
     await this.config.services.icpAutonomy?.close?.();
     await this.config.services.roomArbiter?.close?.();
+    const serverClosePromise = this.beginServerClose();
     this.server.closeAllConnections();
     await new Promise<void>((resolve) => {
       this.telemetryTransport.close(resolve);
     });
-    await this.beginServerClose();
+    await serverClosePromise;
     if (this.config.endpoint.mode === 'socket') {
       this.cleanupSocketPath(this.config.endpoint.socketPath);
     }

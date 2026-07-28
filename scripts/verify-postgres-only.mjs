@@ -268,6 +268,90 @@ const TEXT_REFERENCE_ALLOWLIST = [
     classification: 'sandbox-cli-tool',
     reason: 'The workbench prompt names the sandbox CLI toolset; sqlite3 here is local-file analysis tooling, not a store.',
   },
+  {
+    path: 'src/persistence/sessions/store.test.ts',
+    contains: 'sqliteCacheBytes',
+    classification: 'ephemeral-recovery-index',
+    reason: 'The fixture observes the bounded cache of a disposable recovery index, not runtime persistence.',
+  },
+  {
+    path: 'src/persistence/sessions/turn-record-recovery-worker.ts',
+    contains: 'sqliteCacheBytes',
+    classification: 'ephemeral-recovery-index',
+    reason: 'The isolated worker bounds a disposable index under the OS temporary directory; it is never canonical state.',
+  },
+  {
+    path: 'src/persistence/sessions/turn-record-recovery-worker.ts',
+    contains: 'input.sqliteCacheBytes',
+    classification: 'ephemeral-recovery-index',
+    reason: 'The isolated worker copies the same bounded disposable-index cache setting into scan statistics.',
+  },
+  {
+    path: 'src/persistence/sessions/turn-record-recovery-worker.ts',
+    contains: "const sqliteModuleSpecifier = ['node', 'sqlite'].join(':');",
+    classification: 'ephemeral-recovery-index',
+    reason: 'Node SQLite is loaded only inside the isolated worker to build its disposable recovery index.',
+  },
+  {
+    path: 'src/persistence/sessions/turn-record-recovery-worker.ts',
+    contains: "const { DatabaseSync } = await import(sqliteModuleSpecifier) as typeof import('node:sqlite');",
+    classification: 'ephemeral-recovery-index',
+    reason: 'The typed dynamic import is confined to the disposable recovery-index worker.',
+  },
+  {
+    path: 'src/persistence/sessions/turn-record-recovery.ts',
+    contains: 'sqliteCacheBytes',
+    classification: 'ephemeral-recovery-index',
+    reason: 'This value only bounds the isolated worker scratch index and cannot select a persistence backend.',
+  },
+  {
+    path: 'src/persistence/sessions/turn-record-recovery.ts',
+    contains: 'workerOptions.sqliteCacheBytes',
+    classification: 'ephemeral-recovery-index',
+    reason: 'The parent forwards the same bounded cache setting only to its disposable recovery-index worker.',
+  },
+  {
+    path: 'src/persistence/sessions/turn-record-recovery.ts',
+    contains: "'snapshot.sqlite'",
+    classification: 'ephemeral-recovery-index',
+    reason: 'The snapshot index lives under a fresh OS temporary directory and is removed when the scan ends.',
+  },
+  {
+    path: 'src/persistence/sessions/turn-record-store-port.ts',
+    contains: 'sqliteCacheBytes',
+    classification: 'ephemeral-recovery-index',
+    reason: 'Recovery statistics expose the bounded scratch-index cache, not an application persistence backend.',
+  },
+  {
+    path: 'src/persistence/sessions/turn-records.test.ts',
+    contains: 'sqliteCacheBytes',
+    classification: 'ephemeral-recovery-index',
+    reason: 'The tests assert the isolated recovery scratch index remains bounded.',
+  },
+  {
+    path: 'src/persistence/sessions/turn-records.test.ts',
+    contains: 'dynamic Node SQLite builtin',
+    classification: 'ephemeral-recovery-index',
+    reason: 'The smoke test names the implementation used only by the isolated disposable recovery index.',
+  },
+  {
+    path: 'src/persistence/sessions/turn-records.test.ts',
+    contains: '/from ["\']sqlite["\']/u',
+    classification: 'ephemeral-recovery-index',
+    reason: 'The smoke assertion prevents an incompatible static import in the isolated recovery worker bundle.',
+  },
+  {
+    path: 'src/persistence/sessions/turn-records.test.ts',
+    contains: "'snapshot.sqlite'",
+    classification: 'ephemeral-recovery-index',
+    reason: 'The worker smoke fixture points only at its temporary disposable index.',
+  },
+  {
+    path: 'src/persistence/sessions/turn-records.ts',
+    contains: 'sqliteCacheBytes',
+    classification: 'ephemeral-recovery-index',
+    reason: 'The filesystem adapter fixes a bounded cache for the disposable recovery index; it does not select persistence.',
+  },
 ];
 
 function parseRoot(argv) {

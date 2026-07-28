@@ -42,6 +42,18 @@ export interface TurnRecordPage {
   readonly exhausted: boolean;
 }
 
+/**
+ * One generation-stable answer for an exact physical-channel + TurnID lookup.
+ *
+ * Callers must not reconstruct this result with separate count/find operations:
+ * doing so admits a mutation between the two observations. `duplicated` is a
+ * first-class fail-closed state rather than an arbitrary selected record.
+ */
+export type TurnRecordIdentityLookup =
+  | { readonly kind: 'missing' }
+  | { readonly kind: 'duplicated' }
+  | { readonly kind: 'unique'; readonly record: TurnRecord };
+
 export interface TurnRecordStorePort {
   appendTurnRecord(record: TurnRecord): void;
   /** Reads the bounded newest tail ordered oldest-to-newest. */
@@ -70,7 +82,13 @@ export interface TurnRecordStorePort {
    * to interactive traffic between small batches.
    */
   streamTurnRecordsForRecovery?(channelId: string): AsyncIterable<TurnRecord>;
-  /** Counts exact identity matches up to two without retaining the source archive. */
-  countTurnRecordsByTurnId?(channelId: string, turnId: string): number;
+  /**
+   * Resolves an exact identity from one snapshot without retaining or
+   * normalizing unrelated historical bodies.
+   */
+  lookupTurnRecordIdentity?(
+    channelId: string,
+    turnId: string,
+  ): Promise<TurnRecordIdentityLookup>;
   findTurnRecord(channelId: string, turnId: string): TurnRecord | null;
 }

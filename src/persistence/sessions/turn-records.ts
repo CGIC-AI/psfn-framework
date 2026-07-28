@@ -50,9 +50,14 @@ import { cloneUnknownValue } from '../../core/turns/observability.js';
 import type {
   TurnRecordPage,
   TurnRecordPageCursor,
+  TurnRecordIdentityLookup,
   TurnRecordStorePort,
   TurnRecordUsageRecord,
 } from './turn-record-store-port.js';
+import {
+  lookupTurnRecordIdentitySnapshot,
+  type TurnRecordIdentityLookupStats,
+} from './turn-record-identity.js';
 import { parseIcpConversationCorrelation } from '../../shared/contracts/icp-autonomy.js';
 import { resolveToolCallOutcome } from '../../shared/contracts/tool-call-outcome.js';
 import {
@@ -1481,69 +1486,33 @@ function findTurnRecordAcrossSegments(
   }
 }
 
-function countTurnRecordMatchesOnce(
-  dir: string,
-  sanitized: string,
-  channelId: string,
-  turnId: string,
-  chunkBytes: number,
-): number {
-  const scannedFileIdentities = new Set<string>();
-  let matches = 0;
-  const scanOne = (path: string): void => {
-    if (matches >= 2 || !existsSync(path)) return;
-    scanJsonlFileBackward(path, {
-      chunkBytes,
-      scannedFileIdentities,
-    }, (rawLine) => {
-      const line = rawLine.trim();
-      if (!line) return false;
-      try {
-        if (normalizeTurnRecord(JSON.parse(line) as unknown, channelId).turnId === turnId) {
-          matches += 1;
-        }
-      } catch (error) {
-        quarantineTurnRecordLine(path, channelId, line, error);
-      }
-      return matches >= 2;
-    });
-  };
-  scanOne(join(dir, `${sanitized}.jsonl`));
-  for (const segment of listRotatedSegments(dir, sanitized)
-    .sort((left, right) => right.segmentNumber - left.segmentNumber)) {
-    scanOne(segment.path);
-    if (matches >= 2) break;
-  }
-  return matches;
+export { type TurnRecordIdentityLookupStats } from './turn-record-identity.js';
+
+export interface LookupTurnRecordIdentityOptions {
+  stats?: TurnRecordIdentityLookupStats;
 }
 
-function countTurnRecordsByTurnIdAcrossSegments(
+export function lookupTurnRecordIdentityAcrossSegments(
   sessionsDir: string,
   channelId: string,
   turnId: string,
-  chunkBytes: number,
-): number {
+  options: LookupTurnRecordIdentityOptions = {},
+): Promise<TurnRecordIdentityLookup> {
   const sanitized = sanitizeChannelId(channelId);
   const dir = turnRecordsDir(sessionsDir);
-  for (let attempt = 0; ; attempt += 1) {
-    try {
-      return countTurnRecordMatchesOnce(
-        dir,
-        sanitized,
-        channelId,
-        turnId,
-        chunkBytes,
-      );
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
-      if (attempt >= TAIL_READ_ROTATION_RETRIES) {
-        throw new Error(
-          `Turn-record identity count for channel ${channelId} kept losing races with segment rotation `
-          + `after ${TAIL_READ_ROTATION_RETRIES} restarts: ${toErrorMessage(error)}`,
-        );
-      }
-    }
-  }
+  return lookupTurnRecordIdentitySnapshot({
+    activePath: join(dir, `${sanitized}.jsonl`),
+    channelId,
+    turnId,
+    listRotatedPaths: () => listRotatedSegments(dir, sanitized)
+      .sort((left, right) => right.segmentNumber - left.segmentNumber)
+      .map(segment => segment.path),
+    normalizeMatch: raw => normalizeTurnRecord(raw, channelId),
+    onMalformedLine: (path, line, error) => {
+      quarantineTurnRecordLine(path, channelId, line, error);
+    },
+    ...(options.stats ? { stats: options.stats } : {}),
+  });
 }
 
 /**
@@ -1647,14 +1616,24 @@ export function createFilesystemTurnRecordStorePort(
     streamTurnRecordsForRecovery: channelId => (
       streamTurnRecordsForRecovery(sessionsDir, channelId)
     ),
-    countTurnRecordsByTurnId: (channelId, turnId) => (
-      countTurnRecordsByTurnIdAcrossSegments(
+    lookupTurnRecordIdentity: async (channelId, turnId) => {
+      const lookup = await lookupTurnRecordIdentityAcrossSegments(
         sessionsDir,
         channelId,
         turnId,
-        scanChunkBytes,
-      )
-    ),
+      );
+      if (lookup.kind !== 'unique') return lookup;
+      return {
+        kind: 'unique',
+        record: resolveTurnRecordStaticPrompt(
+          resolveTurnRecordWirePayload(
+            resolveTurnRecordToolDefinitions(lookup.record, sharedStore),
+            sharedStore,
+          ),
+          sharedStore,
+        ),
+      };
+    },
     findTurnRecord: (channelId, turnId) => {
       const record = findTurnRecordAcrossSegments(
         sessionsDir,

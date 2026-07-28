@@ -13,8 +13,10 @@ import {
   appendTurnRecordWithRotation,
   createFilesystemTurnRecordStorePort,
   getQuarantinedTurnRecordLineCount,
+  lookupTurnRecordIdentityAcrossSegments,
   readRecentTurnRecordsAcrossSegments,
   readTurnRecordPageAcrossSegments,
+  type TurnRecordIdentityLookupStats,
   type TurnRecordTailStats,
 } from './turn-records.js';
 
@@ -223,6 +225,110 @@ describe('turn-records', () => {
 
     expect(recovered).toBe(64);
     expect(eventLoopPulseObserved).toBe(true);
+  });
+
+  it('looks up one exact identity without synchronously normalizing a large archive', async () => {
+    const sessionsDir = mkdtempSync(join(tmpdir(), 'psfn-turn-records-exact-large-'));
+    const channelId = 'psfn-amica:test:exact-large';
+    const activePath = activeSegmentPathFor(sessionsDir, channelId);
+    mkdirSync(join(sessionsDir, TURN_RECORDS_DIR), { recursive: true });
+    const target = createTurnRecord({
+      channelId,
+      turnId: backfillLegacyTurnId('exact-large-target'),
+      requestId: 'exact-large-target',
+    });
+    const largeBody = 'x'.repeat(128 * 1024);
+    const records = Array.from({ length: 1_024 }, (_, index) => createTurnRecord({
+      channelId,
+      turnId: index === 731
+        ? target.turnId
+        : backfillLegacyTurnId(`exact-large-${String(index)}`),
+      requestId: `exact-large-${String(index)}`,
+      userMessage: {
+        ...target.userMessage,
+        content: largeBody,
+      },
+    }));
+    writeFileSync(
+      activePath,
+      `${records.map(record => JSON.stringify(record)).join('\n')}\n`,
+      'utf8',
+    );
+    const stats: TurnRecordIdentityLookupStats = {
+      linesScanned: 0,
+      recordsNormalized: 0,
+    };
+    let eventLoopPulseObserved = false;
+    setImmediate(() => {
+      eventLoopPulseObserved = true;
+    });
+
+    const lookup = await lookupTurnRecordIdentityAcrossSegments(
+      sessionsDir,
+      channelId,
+      target.turnId,
+      { stats },
+    );
+
+    expect(lookup).toEqual({ kind: 'unique', record: records[731] });
+    expect(stats).toEqual({ linesScanned: 1_024, recordsNormalized: 1 });
+    expect(eventLoopPulseObserved).toBe(true);
+  });
+
+  it('distinguishes missing, unique, and duplicated exact identities', async () => {
+    const sessionsDir = mkdtempSync(join(tmpdir(), 'psfn-turn-records-exact-states-'));
+    const store = createFilesystemTurnRecordStorePort(sessionsDir);
+    const unique = createTurnRecord({
+      turnId: backfillLegacyTurnId('exact-state-unique'),
+      requestId: 'exact-state-unique',
+    });
+    const duplicated = createTurnRecord({
+      turnId: backfillLegacyTurnId('exact-state-duplicated'),
+      requestId: 'exact-state-duplicated-a',
+    });
+    store.appendTurnRecord(unique);
+    store.appendTurnRecord(duplicated);
+    store.appendTurnRecord({
+      ...duplicated,
+      requestId: 'exact-state-duplicated-b',
+    });
+
+    const lookup = store.lookupTurnRecordIdentity;
+    expect(lookup).toBeDefined();
+    await expect(lookup!.call(store, unique.channelId, backfillLegacyTurnId('missing')))
+      .resolves.toEqual({ kind: 'missing' });
+    await expect(lookup!.call(store, unique.channelId, unique.turnId))
+      .resolves.toEqual({ kind: 'unique', record: unique });
+    await expect(lookup!.call(store, duplicated.channelId, duplicated.turnId))
+      .resolves.toEqual({ kind: 'duplicated' });
+  });
+
+  it('keeps one exact lookup on its pinned generation when a writer appends a duplicate', async () => {
+    const sessionsDir = mkdtempSync(join(tmpdir(), 'psfn-turn-records-exact-generation-'));
+    const store = createFilesystemTurnRecordStorePort(sessionsDir, { segmentMaxBytes: 8 });
+    const target = createTurnRecord({
+      turnId: backfillLegacyTurnId('exact-generation-target'),
+      requestId: 'exact-generation-target',
+    });
+    store.appendTurnRecord(target);
+    for (let index = 0; index < 64; index += 1) {
+      store.appendTurnRecord(createTurnRecord({
+        turnId: backfillLegacyTurnId(`exact-generation-padding-${String(index)}`),
+        requestId: `exact-generation-padding-${String(index)}`,
+      }));
+    }
+    const lookup = store.lookupTurnRecordIdentity;
+    expect(lookup).toBeDefined();
+    const firstLookup = lookup!.call(store, target.channelId, target.turnId);
+    await new Promise<void>(resolve => setImmediate(resolve));
+    const siblingWriter = createFilesystemTurnRecordStorePort(sessionsDir, {
+      segmentMaxBytes: 8,
+    });
+    siblingWriter.appendTurnRecord({ ...target, requestId: 'exact-generation-duplicate' });
+
+    await expect(firstLookup).resolves.toEqual({ kind: 'unique', record: target });
+    await expect(lookup!.call(store, target.channelId, target.turnId))
+      .resolves.toEqual({ kind: 'duplicated' });
   });
 
   it('closes the pinned active recovery descriptor when segment discovery fails', async () => {
@@ -800,7 +906,7 @@ describe('turn-records rotation/read concurrency (hgw3 review findings)', () => 
     ]);
   });
 
-  it('completes an interrupted rotation (active hard-linked to a segment) without duplicating records', () => {
+  it('completes an interrupted rotation (active hard-linked to a segment) without duplicating records', async () => {
     const sessionsDir = mkdtempSync(join(tmpdir(), 'psfn-turn-records-interrupted-'));
     const dir = join(sessionsDir, TURN_RECORDS_DIR);
     const sanitized = sanitizeChannelId(ROTATION_CHANNEL);
@@ -814,6 +920,10 @@ describe('turn-records rotation/read concurrency (hgw3 review findings)', () => 
 
     // Reads must not double-count the shared inode ((dev, ino) dedupe).
     expect(store.readRecentTurnRecords(ROTATION_CHANNEL, 10)).toEqual([sequencedRecord(0)]);
+    await expect(store.lookupTurnRecordIdentity!(
+      ROTATION_CHANNEL,
+      sequencedRecord(0).turnId,
+    )).resolves.toEqual({ kind: 'unique', record: sequencedRecord(0) });
 
     // The next over-cap append completes the rotation (drops the active name)
     // instead of linking the same content under a second segment number.

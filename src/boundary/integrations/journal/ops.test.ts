@@ -6,13 +6,24 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   JOURNAL_IO_CONTRACT,
   JournalOps,
 } from './ops.js';
+import { withJournalMutationLock } from './mutation-coordinator.js';
+
+const { renameMock } = vi.hoisted(() => ({
+  renameMock: vi.fn(),
+}));
+
+vi.mock('node:fs/promises', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs/promises')>();
+  renameMock.mockImplementation(actual.rename);
+  return { ...actual, rename: renameMock };
+});
 
 describe('JournalOps governed I/O', () => {
   let root: string;
@@ -115,28 +126,97 @@ describe('JournalOps governed I/O', () => {
     );
   });
 
-  it('atomically appends to a large note without losing concurrent appends', async () => {
-    const path = join(root, 'large.md');
-    const original = 'x'.repeat(4 * 1024 * 1024);
-    writeFileSync(path, original, 'utf8');
-    const ops = new JournalOps(root);
+  it('atomically preserves every concurrent cross-instance append to large notes', async () => {
+    const original = 'x'.repeat(2 * 1024 * 1024);
+    const firstOps = new JournalOps(root);
+    const secondOps = new JournalOps(root);
     let timerProgressed = false;
     const timer = delay(0).then(() => {
       timerProgressed = true;
     });
 
-    await Promise.all([
-      ops.append('large.md', 'first append'),
-      ops.append('large.md', 'second append'),
-    ]);
+    for (let iteration = 0; iteration < 8; iteration += 1) {
+      const noteName = `large-${String(iteration)}.md`;
+      const path = join(root, noteName);
+      const firstAppend = `first append ${String(iteration)}`;
+      const secondAppend = `second append ${String(iteration)}`;
+      writeFileSync(path, original, 'utf8');
+
+      await Promise.all([
+        firstOps.append(noteName, firstAppend),
+        secondOps.append(noteName, secondAppend),
+      ]);
+
+      const persisted = readFileSync(path, 'utf8');
+      expect(persisted.startsWith(`${original}\n`)).toBe(true);
+      expect(persisted.split(firstAppend)).toHaveLength(2);
+      expect(persisted.split(secondAppend)).toHaveLength(2);
+    }
     const timerProgressedBeforeCompletion = timerProgressed;
     await timer;
 
-    const persisted = readFileSync(path, 'utf8');
     expect(timerProgressedBeforeCompletion).toBe(true);
-    expect(persisted.startsWith(`${original}\n`)).toBe(true);
-    expect(persisted.match(/first append/g)).toHaveLength(1);
-    expect(persisted.match(/second append/g)).toHaveLength(1);
     expect(readdirSync(root).filter(name => name.includes('journal-append'))).toEqual([]);
+  });
+
+  it('does not serialize mutations to unrelated paths or roots', async () => {
+    const blockedPath = join(root, 'blocked.md');
+    let releaseBlocked!: () => void;
+    const blocked = new Promise<void>((resolvePromise) => {
+      releaseBlocked = resolvePromise;
+    });
+    let blockedStarted!: () => void;
+    const started = new Promise<void>((resolvePromise) => {
+      blockedStarted = resolvePromise;
+    });
+
+    const first = withJournalMutationLock(blockedPath, async () => {
+      blockedStarted();
+      await blocked;
+    });
+    await started;
+
+    let samePathStarted = false;
+    const samePath = withJournalMutationLock(blockedPath, async () => {
+      samePathStarted = true;
+    });
+    await Promise.all([
+      withJournalMutationLock(join(root, 'other.md'), async () => undefined),
+      withJournalMutationLock(
+        join(dirname(root), `${basename(root)}-other`, 'blocked.md'),
+        async () => undefined,
+      ),
+    ]);
+
+    expect(samePathStarted).toBe(false);
+    releaseBlocked();
+    await Promise.all([first, samePath]);
+    expect(samePathStarted).toBe(true);
+  });
+
+  it('preserves the original note and removes its temp file when commit fails', async () => {
+    const path = join(root, 'failure.md');
+    const original = 'original journal note\n';
+    writeFileSync(path, original, 'utf8');
+    renameMock.mockRejectedValueOnce(
+      new Error('injected commit failure'),
+    );
+
+    await expect(new JournalOps(root).append('failure.md', 'lost append')).rejects.toThrow(
+      /injected commit failure/,
+    );
+
+    expect(readFileSync(path, 'utf8')).toBe(original);
+    expect(readdirSync(root).filter(name => name.includes('journal-append'))).toEqual([]);
+  });
+
+  it('releases a shared mutation lock after a failed operation', async () => {
+    const path = join(root, 'retry.md');
+
+    await expect(withJournalMutationLock(path, async () => {
+      throw new Error('injected mutation failure');
+    })).rejects.toThrow(/injected mutation failure/);
+
+    await expect(withJournalMutationLock(path, async () => 'retried')).resolves.toBe('retried');
   });
 });

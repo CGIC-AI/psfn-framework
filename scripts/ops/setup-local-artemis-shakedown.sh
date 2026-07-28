@@ -493,6 +493,13 @@ function normalizeLocalChannelRouting(owner) {
   channels.discord = discord;
   channels.telegram = telegram;
   channels.api = {
+    testingHarness: {
+      principalId: 'testing-harness',
+      tokenRef: {
+        kind: 'env',
+        envName: 'TESTING_HARNESS_API_KEY',
+      },
+    },
     ...copyOptionalSection('api'),
     companionId,
   };
@@ -826,6 +833,7 @@ write_app_secret_env() {
   {
     printf 'API_KEY=%s\n' "${API_KEY:-$(random_secret)}"
     printf 'ADMIN_TOKEN=%s\n' "${ADMIN_TOKEN:-$(random_secret)}"
+    printf 'TESTING_HARNESS_API_KEY=%s\n' "${TESTING_HARNESS_API_KEY:-$(random_secret)}"
     printf 'GATEWAY_SESSION_HMAC_KEY=%s\n' "$GATEWAY_SESSION_HMAC_KEY_VALUE"
     printf 'GATEWAY_COMPANION_AUTH_TOKEN=%s\n' "$COMPANION_AUTH_TOKEN"
     printf 'GATEWAY_SESSION_INTEGRITY_AUTH_TOKEN=%s\n' "$SESSION_INTEGRITY_AUTH_TOKEN"

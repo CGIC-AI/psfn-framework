@@ -71,6 +71,10 @@ export interface JournalBoundedReadStats {
   bytesRead: number;
   readCalls: number;
   filesRead: number;
+  /** Maximum physical seek-row bytes retained by one cooperative read. */
+  maxRetainedLineBytes?: number;
+  /** Explicit event-loop yields completed while locating a journal window. */
+  eventLoopYields?: number;
 }
 
 export interface ReadJournalBeforeOptions {

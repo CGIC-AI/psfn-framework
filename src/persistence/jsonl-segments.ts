@@ -39,6 +39,11 @@ export interface AsyncJsonlLineScanOptions extends JsonlScanOptions {
   maxLineBytes: number;
 }
 
+export interface JsonlLineScanOptions extends JsonlScanOptions {
+  /** Optional retained/scan ceiling for legacy synchronous line readers. */
+  maxLineBytes?: number;
+}
+
 export interface JsonlLineAtOffset {
   line: string;
   startOffset: number;
@@ -195,8 +200,11 @@ export function scanJsonlFileBackward(
 export function readJsonlLineAtOrAfter(
   path: string,
   offset: number,
-  options: JsonlScanOptions,
+  options: JsonlLineScanOptions,
 ): JsonlLineAtOffset | null {
+  if (options.maxLineBytes !== undefined) {
+    assertPositiveByteLimit(options.maxLineBytes, 'JSONL scan maxLineBytes');
+  }
   const fd = openSync(path, 'r');
   try {
     const claimed = claimFileIdentity(
@@ -207,7 +215,11 @@ export function readJsonlLineAtOrAfter(
     );
     if (claimed.size <= 0) return null;
 
-    const buffer = Buffer.allocUnsafe(options.chunkBytes);
+    const buffer = Buffer.allocUnsafe(
+      options.maxLineBytes === undefined
+        ? options.chunkBytes
+        : Math.min(options.chunkBytes, options.maxLineBytes),
+    );
     let startOffset = Math.min(claimed.size, Math.max(0, Math.floor(offset)));
     if (startOffset > 0 && startOffset < claimed.size) {
       const prior = Buffer.allocUnsafe(1);
@@ -215,44 +227,85 @@ export function readJsonlLineAtOrAfter(
       recordChunkRead(options.stats, priorBytes);
       if (priorBytes > 0 && prior[0] !== NEWLINE_BYTE) {
         let foundBoundary = false;
+        let skippedPartialRowBytes = 0;
         while (startOffset < claimed.size && !foundBoundary) {
-          const bytesToRead = Math.min(options.chunkBytes, claimed.size - startOffset);
+          const bytesToRead = Math.min(buffer.length, claimed.size - startOffset);
           const bytesRead = readSync(fd, buffer, 0, bytesToRead, startOffset);
           if (bytesRead <= 0) break;
           recordChunkRead(options.stats, bytesRead);
           for (let index = 0; index < bytesRead; index += 1) {
             if (buffer[index] !== NEWLINE_BYTE) continue;
+            if (
+              options.maxLineBytes !== undefined
+              && skippedPartialRowBytes + index > options.maxLineBytes
+            ) {
+              throw oversizedJsonlLineError(
+                path,
+                options.maxLineBytes,
+                skippedPartialRowBytes + index,
+              );
+            }
             startOffset += index + 1;
             foundBoundary = true;
             break;
           }
-          if (!foundBoundary) startOffset += bytesRead;
+          if (!foundBoundary) {
+            skippedPartialRowBytes += bytesRead;
+            if (
+              options.maxLineBytes !== undefined
+              && skippedPartialRowBytes > options.maxLineBytes
+            ) {
+              throw oversizedJsonlLineError(path, options.maxLineBytes, skippedPartialRowBytes);
+            }
+            startOffset += bytesRead;
+          }
         }
       }
     }
     if (startOffset >= claimed.size) return null;
 
     const chunks: Buffer[] = [];
+    let retainedBytes = 0;
     let position = startOffset;
     while (position < claimed.size) {
-      const bytesToRead = Math.min(options.chunkBytes, claimed.size - position);
+      const bytesToRead = Math.min(buffer.length, claimed.size - position);
       const bytesRead = readSync(fd, buffer, 0, bytesToRead, position);
       if (bytesRead <= 0) break;
       recordChunkRead(options.stats, bytesRead);
       const newline = buffer.subarray(0, bytesRead).indexOf(NEWLINE_BYTE);
       if (newline >= 0) {
+        if (
+          options.maxLineBytes !== undefined
+          && retainedBytes + newline > options.maxLineBytes
+        ) {
+          throw oversizedJsonlLineError(path, options.maxLineBytes, retainedBytes + newline);
+        }
         chunks.push(Buffer.from(buffer.subarray(0, newline)));
+        retainedBytes += newline;
+        recordRetainedLineBytes(options.stats, retainedBytes);
         return {
-          line: Buffer.concat(chunks).toString('utf8'),
+          line: Buffer.concat(chunks, retainedBytes).toString('utf8'),
           startOffset,
           endOffset: position + newline + 1,
         };
       }
+      if (
+        options.maxLineBytes !== undefined
+        && retainedBytes + bytesRead > options.maxLineBytes
+      ) {
+        throw oversizedJsonlLineError(path, options.maxLineBytes, retainedBytes + bytesRead);
+      }
       chunks.push(Buffer.from(buffer.subarray(0, bytesRead)));
+      retainedBytes += bytesRead;
+      recordRetainedLineBytes(options.stats, retainedBytes);
       position += bytesRead;
     }
     return chunks.length > 0
-      ? { line: Buffer.concat(chunks).toString('utf8'), startOffset, endOffset: claimed.size }
+      ? {
+        line: Buffer.concat(chunks, retainedBytes).toString('utf8'),
+        startOffset,
+        endOffset: claimed.size,
+      }
       : null;
   } finally {
     closeSync(fd);
@@ -263,8 +316,11 @@ export function readJsonlLineAtOrAfter(
 export function readJsonlLineBefore(
   path: string,
   exclusiveOffset: number,
-  options: JsonlScanOptions,
+  options: JsonlLineScanOptions,
 ): JsonlLineAtOffset | null {
+  if (options.maxLineBytes !== undefined) {
+    assertPositiveByteLimit(options.maxLineBytes, 'JSONL scan maxLineBytes');
+  }
   const fd = openSync(path, 'r');
   try {
     const claimed = claimFileIdentity(
@@ -276,12 +332,17 @@ export function readJsonlLineBefore(
     let position = Math.min(claimed.size, Math.max(0, Math.floor(exclusiveOffset)));
     if (position <= 0) return null;
 
-    const buffer = Buffer.allocUnsafe(options.chunkBytes);
+    const buffer = Buffer.allocUnsafe(
+      options.maxLineBytes === undefined
+        ? options.chunkBytes
+        : Math.min(options.chunkBytes, options.maxLineBytes),
+    );
     const chunks: Buffer[] = [];
+    let retainedBytes = 0;
     let rowEnd = position;
     let ignoredTrailingNewline = false;
     while (position > 0) {
-      const bytesToRead = Math.min(options.chunkBytes, position);
+      const bytesToRead = Math.min(buffer.length, position);
       position -= bytesToRead;
       const bytesRead = readSync(fd, buffer, 0, bytesToRead, position);
       if (bytesRead <= 0) break;
@@ -294,20 +355,41 @@ export function readJsonlLineBefore(
       }
       for (let index = sliceEnd - 1; index >= 0; index -= 1) {
         if (buffer[index] !== NEWLINE_BYTE) continue;
+        const retainedSliceBytes = sliceEnd - index - 1;
+        if (
+          options.maxLineBytes !== undefined
+          && retainedBytes + retainedSliceBytes > options.maxLineBytes
+        ) {
+          throw oversizedJsonlLineError(
+            path,
+            options.maxLineBytes,
+            retainedBytes + retainedSliceBytes,
+          );
+        }
         chunks.unshift(Buffer.from(buffer.subarray(index + 1, sliceEnd)));
+        retainedBytes += retainedSliceBytes;
+        recordRetainedLineBytes(options.stats, retainedBytes);
         return {
-          line: Buffer.concat(chunks).toString('utf8'),
+          line: Buffer.concat(chunks, retainedBytes).toString('utf8'),
           startOffset: position + index + 1,
           endOffset: rowEnd + (ignoredTrailingNewline ? 1 : 0),
         };
       }
+      if (
+        options.maxLineBytes !== undefined
+        && retainedBytes + sliceEnd > options.maxLineBytes
+      ) {
+        throw oversizedJsonlLineError(path, options.maxLineBytes, retainedBytes + sliceEnd);
+      }
       chunks.unshift(Buffer.from(buffer.subarray(0, sliceEnd)));
+      retainedBytes += sliceEnd;
+      recordRetainedLineBytes(options.stats, retainedBytes);
       ignoredTrailingNewline = true;
     }
 
     return chunks.length > 0
       ? {
-        line: Buffer.concat(chunks).toString('utf8'),
+        line: Buffer.concat(chunks, retainedBytes).toString('utf8'),
         startOffset: 0,
         endOffset: rowEnd + (rowEnd < exclusiveOffset ? 1 : 0),
       }
@@ -423,6 +505,128 @@ export async function readJsonlLineBeforeAsync(
         line: Buffer.concat(chunks, retainedBytes).toString('utf8'),
         startOffset: 0,
         endOffset: rowEnd + (rowEnd < exclusiveOffset ? 1 : 0),
+      }
+      : null;
+  } finally {
+    await handle.close();
+  }
+}
+
+/**
+ * Asynchronously read the complete row starting at or after a byte offset.
+ *
+ * A partial row at the requested offset is skipped cooperatively, matching
+ * `readJsonlLineAtOrAfter`. The returned row is retained only up to
+ * `maxLineBytes`; larger rows fail closed before decoding or truncation.
+ */
+export async function readJsonlLineAtOrAfterAsync(
+  path: string,
+  offset: number,
+  options: AsyncJsonlLineScanOptions,
+): Promise<JsonlLineAtOffset | null> {
+  assertPositiveByteLimit(options.chunkBytes, 'JSONL scan chunkBytes');
+  assertPositiveByteLimit(options.maxLineBytes, 'JSONL scan maxLineBytes');
+  const handle = await openFile(path, 'r');
+  try {
+    const fileStat = await handle.stat();
+    const identity = fileIdentityKey(fileStat);
+    if (
+      options.expectedFileIdentity !== undefined
+      && identity !== options.expectedFileIdentity
+    ) {
+      const error = new Error(
+        `JSONL snapshot identity changed: expected ${options.expectedFileIdentity}, found ${identity}`,
+      ) as NodeJS.ErrnoException;
+      error.code = 'ESTALE';
+      throw error;
+    }
+    if (!options.scannedFileIdentities?.has(identity)) {
+      options.scannedFileIdentities?.add(identity);
+      recordFileRead(options.stats);
+    }
+    if (fileStat.size <= 0) return null;
+
+    const boundedChunkBytes = Math.min(options.chunkBytes, options.maxLineBytes);
+    const buffer = Buffer.allocUnsafe(boundedChunkBytes);
+    let startOffset = Math.min(fileStat.size, Math.max(0, Math.floor(offset)));
+    if (startOffset > 0 && startOffset < fileStat.size) {
+      const prior = Buffer.allocUnsafe(1);
+      const priorRead = await handle.read(prior, 0, 1, startOffset - 1);
+      if (priorRead.bytesRead !== 1) {
+        const error = new Error(
+          `JSONL snapshot row became unavailable during a bounded read of ${path}`,
+        ) as NodeJS.ErrnoException;
+        error.code = 'ESTALE';
+        throw error;
+      }
+      recordChunkRead(options.stats, priorRead.bytesRead);
+      if (prior[0] !== NEWLINE_BYTE) {
+        let foundBoundary = false;
+        while (startOffset < fileStat.size && !foundBoundary) {
+          const bytesToRead = Math.min(boundedChunkBytes, fileStat.size - startOffset);
+          const result = await handle.read(buffer, 0, bytesToRead, startOffset);
+          if (result.bytesRead !== bytesToRead) {
+            const error = new Error(
+              `JSONL snapshot row became unavailable during a bounded read of ${path}`,
+            ) as NodeJS.ErrnoException;
+            error.code = 'ESTALE';
+            throw error;
+          }
+          recordChunkRead(options.stats, result.bytesRead);
+          const newline = buffer.subarray(0, result.bytesRead).indexOf(NEWLINE_BYTE);
+          if (newline >= 0) {
+            startOffset += newline + 1;
+            foundBoundary = true;
+          } else {
+            startOffset += result.bytesRead;
+          }
+          await recordEventLoopYield(options.stats);
+        }
+      }
+    }
+    if (startOffset >= fileStat.size) return null;
+
+    const chunks: Buffer[] = [];
+    let retainedBytes = 0;
+    let position = startOffset;
+    while (position < fileStat.size) {
+      const bytesToRead = Math.min(boundedChunkBytes, fileStat.size - position);
+      const result = await handle.read(buffer, 0, bytesToRead, position);
+      if (result.bytesRead !== bytesToRead) {
+        const error = new Error(
+          `JSONL snapshot row became unavailable during a bounded read of ${path}`,
+        ) as NodeJS.ErrnoException;
+        error.code = 'ESTALE';
+        throw error;
+      }
+      recordChunkRead(options.stats, result.bytesRead);
+      const newline = buffer.subarray(0, result.bytesRead).indexOf(NEWLINE_BYTE);
+      const retainedSliceBytes = newline >= 0 ? newline : result.bytesRead;
+      if (retainedBytes + retainedSliceBytes > options.maxLineBytes) {
+        throw oversizedJsonlLineError(
+          path,
+          options.maxLineBytes,
+          retainedBytes + retainedSliceBytes,
+        );
+      }
+      chunks.push(Buffer.from(buffer.subarray(0, retainedSliceBytes)));
+      retainedBytes += retainedSliceBytes;
+      recordRetainedLineBytes(options.stats, retainedBytes);
+      if (newline >= 0) {
+        return {
+          line: Buffer.concat(chunks, retainedBytes).toString('utf8'),
+          startOffset,
+          endOffset: position + newline + 1,
+        };
+      }
+      position += result.bytesRead;
+      await recordEventLoopYield(options.stats);
+    }
+    return chunks.length > 0
+      ? {
+        line: Buffer.concat(chunks, retainedBytes).toString('utf8'),
+        startOffset,
+        endOffset: fileStat.size,
       }
       : null;
   } finally {

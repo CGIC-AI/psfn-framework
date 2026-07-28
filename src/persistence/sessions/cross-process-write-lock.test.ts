@@ -65,6 +65,22 @@ describe('withCrossProcessWriteLock', () => {
     expect(existsSync(lockPath)).toBe(false);
   });
 
+  it('releases ownership when cancellation arrives immediately after acquisition', () => {
+    let checks = 0;
+    const cancellation = new DOMException('cancelled', 'AbortError');
+
+    expect(() => withCrossProcessWriteLock(lockPath, {
+      ...OPTIONS,
+      assertCanContinue: () => {
+        checks += 1;
+        if (checks === 2) throw cancellation;
+      },
+    }, () => 'never')).toThrow(cancellation);
+
+    expect(checks).toBe(2);
+    expect(existsSync(lockPath)).toBe(false);
+  });
+
   it('fails loudly on timeout while a FRESH lock is held (never proceeds without the lock)', () => {
     mkdirSync(lockPath);
     expect(() => withCrossProcessWriteLock(lockPath, { ...OPTIONS, timeoutMs: 40 }, () => 'never'))

@@ -1,18 +1,25 @@
 import {
   closeSync,
+  existsSync,
   fstatSync,
   openSync,
   opendirSync,
   readSync,
 } from 'node:fs';
-import { basename, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import type { TurnRecord } from '../../shared/contracts/runtime.js';
+import { parseTurnRecordBackgroundWorkHandoff } from '../../core/agent/background-work/types.js';
 import { fileIdentityKey } from '../jsonl-segments.js';
 import { sanitizeChannelId } from './store-file-contracts.js';
-import { normalizeTurnRecordRecoveryCandidate } from './turn-records.js';
+import {
+  normalizeTurnRecord,
+  projectTurnRecordRecoveryCandidate,
+  withTurnRecordRotationLock,
+} from './turn-records.js';
 import type { TurnRecordRecoveryScanStats } from './turn-record-store-port.js';
 
 interface WorkerInput {
+  abortPath: string;
   databasePath: string;
   maxRowBytes: number;
   scanChunkBytes: number;
@@ -25,6 +32,11 @@ interface SnapshotFile {
   fd: number;
   path: string;
   size: number;
+}
+
+interface SourceSnapshotBoundary {
+  activeSnapshot: SnapshotFile | null;
+  maximumSealedSegmentNumber: number;
 }
 
 const sqliteModuleSpecifier = ['node', 'sqlite'].join(':');
@@ -45,7 +57,7 @@ const stats: TurnRecordRecoveryScanStats = {
 };
 
 function assertNotAborted(): void {
-  if (!process.connected) {
+  if (!process.connected || existsSync(input.abortPath)) {
     throw new DOMException('TurnRecord recovery snapshot was aborted', 'AbortError');
   }
 }
@@ -83,7 +95,75 @@ function openSnapshot(path: string, missingAllowed: boolean): SnapshotFile | nul
 
 function segmentPattern(activePath: string): RegExp {
   const escaped = basename(activePath, '.jsonl').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  return new RegExp(`^${escaped}\\.\\d{5,}\\.jsonl$`);
+  return new RegExp(`^${escaped}\\.(\\d{5,})\\.jsonl$`);
+}
+
+function segmentPath(activePath: string, segmentNumber: number): string {
+  return join(
+    dirname(activePath),
+    `${basename(activePath, '.jsonl')}.${String(segmentNumber).padStart(5, '0')}.jsonl`,
+  );
+}
+
+function captureSourceSnapshotBoundary(
+  directory: string,
+  activePath: string,
+  sourceChannelId: string,
+): SourceSnapshotBoundary {
+  if (!existsSync(directory)) {
+    return { activeSnapshot: null, maximumSealedSegmentNumber: 0 };
+  }
+  const pinned = { active: null as SnapshotFile | null };
+  try {
+    return withTurnRecordRotationLock(activePath, () => {
+      try {
+        assertNotAborted();
+        pinned.active = openSnapshot(activePath, true);
+        let sealedSegmentCount = 0;
+        let maximumSealedSegmentNumber = 0;
+        const pattern = segmentPattern(activePath);
+        const directoryHandle = opendirSync(directory);
+        try {
+          for (;;) {
+            const entry = directoryHandle.readSync();
+            if (!entry) break;
+            if (!entry.isFile()) continue;
+            const match = pattern.exec(entry.name);
+            if (!match) continue;
+            const segmentNumber = Number(match[1]);
+            if (!Number.isSafeInteger(segmentNumber) || segmentNumber < 1) {
+              throw evidenceError(
+                `TurnRecord recovery segment number is invalid for ${sourceChannelId}: ${entry.name}`,
+              );
+            }
+            sealedSegmentCount += 1;
+            maximumSealedSegmentNumber = Math.max(maximumSealedSegmentNumber, segmentNumber);
+          }
+        } finally {
+          directoryHandle.closeSync();
+        }
+        if (sealedSegmentCount !== maximumSealedSegmentNumber) {
+          throw evidenceError(
+            `TurnRecord recovery segment fence is ambiguous for ${sourceChannelId}: `
+            + `found ${sealedSegmentCount} files through segment ${maximumSealedSegmentNumber}`,
+          );
+        }
+        return { activeSnapshot: pinned.active, maximumSealedSegmentNumber };
+      } catch (error) {
+        if (error instanceof Error
+          && (error.name === 'AbortError' || error.name === 'TurnRecordRecoveryEvidenceError')) {
+          throw error;
+        }
+        throw evidenceError(
+          `TurnRecord recovery could not capture the segment fence for ${sourceChannelId}`,
+          error,
+        );
+      }
+    }, assertNotAborted);
+  } catch (error) {
+    if (pinned.active) closeSync(pinned.active.fd);
+    throw error;
+  }
 }
 
 async function run(): Promise<void> {
@@ -97,7 +177,9 @@ async function run(): Promise<void> {
       PRAGMA cache_size = -${Math.max(1, Math.floor(input.sqliteCacheBytes / 1024))};
       CREATE TABLE files (
         identity TEXT PRIMARY KEY,
-        source_channel TEXT NOT NULL
+        source_channel TEXT NOT NULL,
+        origin_kind TEXT NOT NULL,
+        alias_segment INTEGER
       );
       CREATE TABLE records (
         source_channel TEXT NOT NULL,
@@ -109,10 +191,13 @@ async function run(): Promise<void> {
       ) WITHOUT ROWID;
     `);
     const claimFile = database.prepare(
-      'INSERT OR IGNORE INTO files(identity, source_channel) VALUES (?, ?)',
+      'INSERT OR IGNORE INTO files(identity, source_channel, origin_kind) VALUES (?, ?, ?)',
     );
     const readFileOwner = database.prepare(
-      'SELECT source_channel FROM files WHERE identity = ?',
+      'SELECT source_channel, origin_kind, alias_segment FROM files WHERE identity = ?',
+    );
+    const markActiveAlias = database.prepare(
+      'UPDATE files SET alias_segment = ? WHERE identity = ? AND alias_segment IS NULL',
     );
     const indexRecord = database.prepare(`
       INSERT INTO records(source_channel, turn_id, occurrences, completed_at, recovery_json)
@@ -121,17 +206,35 @@ async function run(): Promise<void> {
         occurrences = 2,
         recovery_json = NULL
     `);
-    const scanFile = (snapshot: SnapshotFile, sourceChannelId: string): void => {
+    const scanFile = (
+      snapshot: SnapshotFile,
+      sourceChannelId: string,
+      originKind: 'active' | 'segment',
+      segmentNumber?: number,
+    ): void => {
       const identity = fileIdentityKey(fstatSync(snapshot.fd));
-      const claimed = Number(claimFile.run(identity, sourceChannelId).changes) === 1;
+      const claimed = Number(claimFile.run(identity, sourceChannelId, originKind).changes) === 1;
       if (!claimed) {
-        const owner = readFileOwner.get(identity) as { source_channel: string };
+        const owner = readFileOwner.get(identity) as {
+          source_channel: string;
+          origin_kind: 'active' | 'segment';
+          alias_segment: number | null;
+        };
         if (owner.source_channel !== sourceChannelId) {
           throw evidenceError(
             `TurnRecord recovery inode is shared by multiple sources: ${identity}`,
           );
         }
-        return;
+        if (originKind === 'segment'
+          && segmentNumber !== undefined
+          && owner.origin_kind === 'active'
+          && owner.alias_segment === null
+          && Number(markActiveAlias.run(segmentNumber, identity).changes) === 1) {
+          return;
+        }
+        throw evidenceError(
+          `TurnRecord recovery file identity is ambiguous for ${sourceChannelId}: ${identity}`,
+        );
       }
       if (snapshot.size === 0) return;
       stats.filesScanned += 1;
@@ -155,10 +258,10 @@ async function run(): Promise<void> {
         assertNotAborted();
         let record: TurnRecord;
         try {
-          record = normalizeTurnRecordRecoveryCandidate(
-            JSON.parse(line) as unknown,
-            sourceChannelId,
-          );
+          record = normalizeTurnRecord(JSON.parse(line) as unknown, sourceChannelId);
+          if (record.status === 'completed' && record.backgroundWorkHandoff) {
+            parseTurnRecordBackgroundWorkHandoff(record);
+          }
         } catch (error) {
           throw evidenceError(
             `Invalid TurnRecord recovery row in ${snapshot.path}: `
@@ -168,7 +271,7 @@ async function run(): Promise<void> {
         }
         stats.rowsScanned += 1;
         const candidate = record.status === 'completed' && record.backgroundWorkHandoff
-          ? JSON.stringify(record)
+          ? JSON.stringify(projectTurnRecordRecoveryCandidate(record))
           : null;
         indexRecord.run(
           sourceChannelId,
@@ -217,37 +320,39 @@ async function run(): Promise<void> {
       const sanitized = sanitizeChannelId(sourceChannelId);
       const directory = join(input.sessionsDir, '_turn_records');
       const activePath = join(directory, `${sanitized}.jsonl`);
-      activeSnapshot = openSnapshot(activePath, true);
+      const boundary = captureSourceSnapshotBoundary(directory, activePath, sourceChannelId);
+      activeSnapshot = boundary.activeSnapshot;
       postMessage({ type: 'sourceSnapshot', sourceChannelId });
       await waitForContinue();
       assertNotAborted();
-      try {
-        const directoryHandle = opendirSync(directory);
-        try {
-          const pattern = segmentPattern(activePath);
-          for (;;) {
-            const entry = directoryHandle.readSync();
-            if (!entry) break;
-            if (!entry.isFile() || !pattern.test(entry.name)) continue;
-            const snapshot = openSnapshot(join(directory, entry.name), false)!;
-            try {
-              scanFile(snapshot, sourceChannelId);
-            } finally {
-              closeSync(snapshot.fd);
-            }
-          }
-        } finally {
-          directoryHandle.closeSync();
-        }
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== 'ENOENT' || activeSnapshot) throw error;
-      }
       if (activeSnapshot) {
         try {
-          scanFile(activeSnapshot, sourceChannelId);
+          scanFile(activeSnapshot, sourceChannelId, 'active');
         } finally {
           closeSync(activeSnapshot.fd);
           activeSnapshot = null;
+        }
+      }
+      for (
+        let segmentNumber = 1;
+        segmentNumber <= boundary.maximumSealedSegmentNumber;
+        segmentNumber += 1
+      ) {
+        const path = segmentPath(activePath, segmentNumber);
+        let snapshot: SnapshotFile;
+        try {
+          snapshot = openSnapshot(path, false)!;
+        } catch (error) {
+          throw evidenceError(
+            `TurnRecord recovery fenced segment ${segmentNumber} is missing for `
+            + `${sourceChannelId}: ${path}`,
+            error,
+          );
+        }
+        try {
+          scanFile(snapshot, sourceChannelId, 'segment', segmentNumber);
+        } finally {
+          closeSync(snapshot.fd);
         }
       }
     }
@@ -275,10 +380,15 @@ async function run(): Promise<void> {
 
 run().catch((error: unknown) => {
   const normalized = error instanceof Error ? error : new Error(String(error));
-  postMessage({
+  const message = {
     type: 'error',
     name: normalized.name,
     message: normalized.message,
     stack: normalized.stack,
-  });
+  };
+  if (process.connected) {
+    process.send!(message, () => {
+      if (process.connected) process.disconnect();
+    });
+  }
 });

@@ -990,6 +990,9 @@ export class MemoryExtractor {
           ...(routing?.sourceSpanEndMessageId
             ? { sourceSpanEndMessageId: routing.sourceSpanEndMessageId }
             : {}),
+          ...(routing?.sourceConversationAt !== undefined
+            ? { sourceConversationAt: routing.sourceConversationAt }
+            : {}),
         }
         : undefined,
       sensitivity: fact.sensitivity,

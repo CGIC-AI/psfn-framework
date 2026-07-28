@@ -71,7 +71,7 @@ function collectArtifactSensitivitySources(input: {
 // source channel — so the outbound disclosure accumulator can fold them (bible
 // §9.2 item 2). Parallel to the sensitivity-only artifact provenance above and
 // keyed identically (`memory:<id>`) so both project the same admitted set.
-function collectDisclosureMemorySources(input: {
+export function collectDisclosureMemorySources(input: {
   selectedForPrompt: readonly ScoredMemory[];
   emotionalContinuityMemories: readonly PurrMemory[];
 }): DisclosureMemorySource[] {
@@ -80,14 +80,24 @@ function collectDisclosureMemorySources(input: {
     const ref = `memory:${memory.id}`;
     const subjectContactId = memory.contactId?.trim() || memory.provenance?.subjectContactId?.trim();
     const sourceChannelId = memory.provenance?.channelId?.trim();
-    // jp36.6.4: stamp the classification epoch the source channel was at WHEN THE
-    // MEMORY WAS FORMED (extractedAt), NOT the current epoch — a memory formed
-    // before a channel's invite-only → public demotion keeps its old (lower or
-    // absent) epoch and is denied auto-share to the since-demoted room by
-    // jp36.6.3's gate. Untracked-as-of-formation channels resolve to undefined and
-    // the field is omitted, matching the pre-epoch behavior byte-for-byte.
-    const sourceChannelEpoch = sourceChannelId
-      ? channelClassificationEpochAsOf(sourceChannelId, new Date(memory.extractedAt))
+    // jp36.6.4 / psfn-framework-qgqw.2: stamp the classification epoch the source
+    // channel was at AS-OF THE CONVERSATION the memory was formed from — the
+    // latest source-message instant (`provenance.sourceConversationAt`), NOT the
+    // extraction instant (`extractedAt`). Deferred extraction (e.g. sleeptime
+    // running after a restart) makes `extractedAt` post-date an invite-only →
+    // public demotion, which would resolve the CURRENT (widened) epoch and make
+    // pre-demotion content wrongly auto-eligible to the now-public room. Anchoring
+    // to the conversation instant keeps such content at its old (lower or absent)
+    // epoch so jp36.6.3's gate denies the auto-share.
+    //
+    // Fail closed on absence: when the conversation instant is missing (legacy
+    // provenance persisted before this field, or a producer that cannot supply
+    // it) we stamp NO epoch rather than falling back to `extractedAt`. An omitted
+    // epoch denies auto-share to any epoch-tracked (since-demoted) room while
+    // staying inert for never-demoted channels — the conservative direction.
+    const sourceConversationAt = memory.provenance?.sourceConversationAt;
+    const sourceChannelEpoch = sourceChannelId && sourceConversationAt !== undefined
+      ? channelClassificationEpochAsOf(sourceChannelId, new Date(sourceConversationAt))
       : undefined;
     byRef.set(ref, {
       ref,

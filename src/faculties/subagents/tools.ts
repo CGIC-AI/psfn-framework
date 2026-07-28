@@ -39,17 +39,17 @@ export function createSubagentTool(port: SubagentControlPort): SubstrateAgentToo
         Type.Literal('wait'),
         Type.Literal('cancel'),
         Type.Literal('status'),
-      ], { description: 'Subagent control action. Default: spawn.' })),
-      subagent_id: Type.Optional(Type.String({ description: 'Subagent id for message, wait, cancel, or status.' })),
-      name: Type.Optional(Type.String({ description: 'Short label for a spawned subagent.' })),
-      task: Type.Optional(Type.String({ description: 'Initial bounded task for a spawned subagent.' })),
-      message: Type.Optional(Type.String({ description: 'Follow-up instruction for an active subagent.' })),
+      ], { description: 'Automata control action. Default: spawn.' })),
+      subagent_id: Type.Optional(Type.String({ description: 'The automaton id (the subagent_id returned by spawn or status) to message, wait on, cancel, or check status for.' })),
+      name: Type.Optional(Type.String({ description: 'Short label for a spawned automaton.' })),
+      task: Type.Optional(Type.String({ description: 'Initial bounded task for a spawned automaton.' })),
+      message: Type.Optional(Type.String({ description: 'Follow-up instruction for an active automaton.' })),
       reason: Type.Optional(Type.String({ description: 'Optional cancellation note.' })),
-      system_prompt: Type.Optional(Type.String({ description: 'Optional subagent system prompt override.' })),
+      system_prompt: Type.Optional(Type.String({ description: 'Optional automaton system prompt override.' })),
       max_turns: Type.Optional(Type.Number({
         minimum: 1,
         maximum: 16,
-        description: 'Optional max turns for the bounded worker loop.',
+        description: 'Optional max turns for the bounded automaton loop.',
       })),
       capabilities: Type.Optional(Type.Array(Type.String({ minLength: 1 }), {
         description: 'Optional advertised capability tokens for routing diagnostics.',
@@ -162,7 +162,7 @@ export function createSubagentTool(port: SubagentControlPort): SubstrateAgentToo
                 ...(typeof transcriptLimit === 'number' ? { transcriptLimit } : {}),
               });
               if (!detail) {
-                return textResultWithError(`Unknown subagent task "${params.subagent_id}".`, true);
+                return textResultWithError(`Unknown automaton task "${params.subagent_id}".`, true);
               }
               return textResult(formatPayload({
                 action,
@@ -184,7 +184,7 @@ export function createSubagentTool(port: SubagentControlPort): SubstrateAgentToo
           }
         }
       } catch (error) {
-        return textResultWithError(`subagent ${action} failed: ${toErrorMessage(error)}`, true);
+        return textResultWithError(`automata ${action} failed: ${toErrorMessage(error)}`, true);
       }
     },
   };
@@ -251,7 +251,7 @@ function resolveWaitSubagentId(port: SubagentControlPort, value: string | undefi
 
   throw new Error(
     candidates.size > 1
-      ? 'subagent_id is required because multiple subagent tasks are visible.'
+      ? 'subagent_id is required because multiple automata tasks are visible.'
       : 'subagent_id is required. Use the subagent_id from the spawn result or run action=status first.',
   );
 }

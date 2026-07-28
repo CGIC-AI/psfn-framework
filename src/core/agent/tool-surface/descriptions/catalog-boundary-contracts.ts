@@ -44,7 +44,7 @@ export const CATALOG_BOUNDARY_TOOL_CONTRACTS = {
     output: 'It returns bounded file data and fails closed on unsafe paths or ambiguous mutation.',
     guidance:
       'Do not request more than 20,000 bytes from one read. For a larger document or evidence set, use analysis_workbench '
-      + 'so its temporary context can be discarded after a bounded result, or use a bounded subagent instructed to return '
+      + 'so its temporary context can be discarded after a bounded result, or dispatch a bounded automaton instructed to return '
       + 'provenance-bearing excerpts with the source path and line or byte ranges; do not rely on a summary-only handoff. '
       + 'Do not use fs for git state; use repo.',
     example: { action: 'search', query: 'TODO', glob: 'notes/**/*.md' },

@@ -265,16 +265,18 @@ describe('GatewayClient streaming', () => {
     await Promise.resolve();
   });
 
-  it('uses the same cancellation protocol for streamed chat without changing signal-free calls', async () => {
+  it('mints cancellation identities for signal-free completion and streamed chat calls', async () => {
     const ordinary = client.complete({
       systemPrompt: 'ordinary',
       messages: [{ role: 'user', content: 'hello' }],
     }, 'background');
     const ordinaryRequest = conn.sent[0] as {
       id: number;
-      params: Record<string, unknown>;
+      params: { cancellationId: string };
     };
-    expect(ordinaryRequest.params).not.toHaveProperty('cancellationId');
+    expect(ordinaryRequest.params.cancellationId).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
+    );
     conn._emit({
       jsonrpc: '2.0',
       id: ordinaryRequest.id,
@@ -288,26 +290,30 @@ describe('GatewayClient streaming', () => {
     });
     await ordinary;
 
-    const controller = new AbortController();
     const streaming = client.stream(
       { systemPrompt: 'stream', messages: [{ role: 'user', content: 'hello' }] },
       { onText: vi.fn() },
-      { signal: controller.signal },
     );
     const request = conn.sent[1] as {
       id: number;
       params: { cancellationId: string };
     };
-    controller.abort(new Error('barge in'));
-
-    await expect(streaming).rejects.toThrow('barge in');
-    expect(conn.sent[2]).toEqual({
+    expect(request.params.cancellationId).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
+    );
+    expect(request.params.cancellationId).not.toBe(ordinaryRequest.params.cancellationId);
+    conn._emit({
       jsonrpc: '2.0',
-      method: 'llm.cancel',
-      params: {
-        cancellationId: request.params.cancellationId,
+      id: request.id,
+      result: {
+        content: 'streamed',
+        model: 'model',
+        inputTokens: 1,
+        outputTokens: 1,
+        stopReason: 'stop',
       },
     });
+    await streaming;
   });
 
   it('routes streamed callbacks by the transported work-spec request id', async () => {

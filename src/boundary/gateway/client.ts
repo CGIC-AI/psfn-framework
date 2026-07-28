@@ -1727,16 +1727,16 @@ export class GatewayClient implements
     signal?: AbortSignal,
     remoteCancellation?: 'llm',
   ): Promise<T> {
+    const cancellationId = remoteCancellation === 'llm' ? randomUUID() : undefined;
+    const requestParams = cancellationId ? { ...params, cancellationId } : params;
+
     if (!signal) {
-      return await this.rpcInstance.request(method, params) as T;
+      return await this.rpcInstance.request(method, requestParams) as T;
     }
 
     if (signal.aborted) {
       throw abortError(signal.reason);
     }
-
-    const cancellationId = remoteCancellation === 'llm' ? randomUUID() : undefined;
-    const requestParams = cancellationId ? { ...params, cancellationId } : params;
 
     return await new Promise<T>((resolve, reject) => {
       let settled = false;

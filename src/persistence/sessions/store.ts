@@ -401,6 +401,7 @@ export class SessionStore implements TranscriptSearchPort {
     this.journalRuntime = new SessionJournalRuntime(
       integrityProvider,
       options.sessionArchivePort ?? createFilesystemSessionArchivePort(),
+      options.integrityObserver ?? null,
     );
     mkdirSync(sessionsDir, { recursive: true });
     if (options.transcriptProjection !== undefined) {

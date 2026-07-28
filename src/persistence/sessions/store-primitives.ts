@@ -12,6 +12,7 @@ import type { TranscriptProjectionPort } from './transcript-projection-port.js';
 import type { TranscriptSearchPort } from './transcript-search-port.js';
 import type { TurnRecordStorePort } from './turn-record-store-port.js';
 import type { TurnRecordEligibilityFencePort } from './turn-record-eligibility-fence-port.js';
+import type { SessionIntegrityObserver } from '../../shared/contracts/session-integrity.js';
 export {
   IMPORT_MANIFEST_FILENAME,
   READABLE_SESSION_FILENAME,
@@ -110,6 +111,13 @@ export interface SessionStoreOptions {
    * default window (~1k). Must be >= 1.
    */
   maxHotChannels?: number;
+  /**
+   * Bead g59z: durable-incident subscriber for session HMAC-chain verification
+   * failures. When set, a full journal load that surfaces failed entries emits
+   * one content-free event so Garden can record a durable, operator-visible
+   * session-integrity incident. Absent keeps reads byte-identical.
+   */
+  integrityObserver?: SessionIntegrityObserver | null;
 }
 
 export interface SessionIntegrityProvider {

@@ -27,6 +27,24 @@ describe('recoverHistoricalBackgroundWorkHandoffs', () => {
     expect(attempts).toEqual(['first', 'second', 'third']);
     expect(deferred).toEqual(['first', 'third']);
   });
+
+  it('bounds retained failures while still attempting and indexing the full snapshot', async () => {
+    const records = Array.from({ length: 100 }, (_, index) => `record-${index}`);
+    const deferred: string[] = [];
+
+    await expect(recoverHistoricalBackgroundWorkHandoffs(
+      records,
+      async (record) => { throw new Error(`failed: ${record}`); },
+      record => { deferred.push(record); },
+    )).rejects.toMatchObject({
+      errors: [
+        ...records.slice(0, 16).map(record => expect.objectContaining({ message: `failed: ${record}` })),
+        expect.objectContaining({ message: '84 additional historical background work handoff failures were suppressed' }),
+      ],
+    });
+
+    expect(deferred).toEqual(records);
+  });
 });
 
 describe('runBackgroundWorkTick', () => {

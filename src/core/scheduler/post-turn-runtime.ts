@@ -538,7 +538,10 @@ export function wirePostTurnRuntime(
   };
 
   const triggerIntentionPostTurnAppraisal = (
-    context: Pick<PostTurnInfererContext, 'message' | 'response' | 'canonicalContactKey' | 'completedAt'>,
+    context: Pick<
+      PostTurnInfererContext,
+      'message' | 'response' | 'canonicalContactKey' | 'completedAt' | 'capturedSessionReads'
+    >,
   ): void => {
     if (!intentionAppraisal || !telemetryEventBus) {
       return;
@@ -556,7 +559,13 @@ export function wirePostTurnRuntime(
 
     void (async () => {
       try {
-        const recentSessionEntries = runtimeOptions.sessionManager?.getRecentMessages(resolvedSessionId, 12) ?? [];
+        // The appraisal fires from a post-turn inferer that runs inside the
+        // turn's admitted captured-owner scope. SessionManager.getRecentMessages
+        // fails closed under that scope (the read-attribution guard), so read
+        // the transcript through the turn's owner-bound CapturedSessionReads,
+        // which resolves the owner's logical session without weakening the
+        // guard. This holds for any persistent single-channel principal.
+        const recentSessionEntries = context.capturedSessionReads.getRecentMessages(12);
         const recentMessages = buildPostTurnAppraisalTranscript({
           recentSessionEntries,
           currentUserMessage: {
@@ -1506,6 +1515,7 @@ export function wirePostTurnRuntime(
       response,
       turnMessages,
       canonicalContactKey,
+      capturedSessionReads,
     }) => {
       const inferred = shouldUseCompositionalAppraisal(message.channelId)
         ? await inferComposedDeferredPostTurnActions({
@@ -1534,6 +1544,7 @@ export function wirePostTurnRuntime(
         response,
         canonicalContactKey,
         completedAt: Date.now(),
+        capturedSessionReads,
       });
       return inferred;
     };

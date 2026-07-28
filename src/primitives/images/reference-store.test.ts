@@ -1,8 +1,23 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ImageReferenceStore } from './reference-store.js';
+
+// Controllable failure injection for the blob unlink in delete(). Hoisted so the
+// vi.mock factory can close over it while individual tests toggle shouldFail.
+const rmControl = vi.hoisted(() => ({ shouldFail: false }));
+
+vi.mock('node:fs/promises', async () => {
+  const actual = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
+  return {
+    ...actual,
+    rm: (...args: Parameters<typeof actual.rm>) =>
+      (rmControl.shouldFail
+        ? Promise.reject(new Error('injected rm failure'))
+        : actual.rm(...args)),
+  };
+});
 
 let tempRoot: string | null = null;
 
@@ -43,6 +58,7 @@ function resolveReferencePathForTest(store: ImageReferenceStore, fileName: strin
 }
 
 afterEach(() => {
+  rmControl.shouldFail = false;
   if (tempRoot) {
     rmSync(tempRoot, { recursive: true, force: true });
     tempRoot = null;
@@ -172,5 +188,64 @@ describe('ImageReferenceStore lineage, promotion, and rollback', () => {
     expect(list.references[0]?.lineage).toEqual({ source: { kind: 'upload' }, derivedGenerationIds: [] });
     expect(list.defaultHistory).toEqual([]);
     expect(list.defaultReferenceId).toBe('legacy-id');
+  });
+});
+
+describe('ImageReferenceStore deletion recoverability', () => {
+  it('keeps the reference reachable and deletion retryable when the blob unlink fails', async () => {
+    const dir = makeCompanionDataDir();
+    const store = new ImageReferenceStore(dir);
+    await store.add({
+      filename: 'anchor.png',
+      contentType: 'image/png',
+      data: Buffer.from([1]),
+      setDefault: true,
+    });
+    const target = await store.add({
+      filename: 'target.png',
+      contentType: 'image/png',
+      data: Buffer.from([2, 3]),
+    });
+    const blobPath = resolveReferencePathForTest(store, target.fileName);
+    expect(existsSync(blobPath)).toBe(true);
+
+    // Blob unlink fails: delete must reject WITHOUT dropping the reference from
+    // the index, so the blob stays discoverable (the index is the only lookup
+    // and deletion surface) rather than becoming an unreachable orphan.
+    rmControl.shouldFail = true;
+    await expect(store.delete(target.id)).rejects.toThrow('injected rm failure');
+
+    const afterFailed = await store.list();
+    expect(afterFailed.references.map((entry) => entry.id)).toContain(target.id);
+    expect(existsSync(blobPath)).toBe(true);
+    expect(await store.getBlob(target.id)).not.toBeNull();
+
+    // Retry once the filesystem recovers: deletion now completes and removes
+    // both the index entry and the blob.
+    rmControl.shouldFail = false;
+    await store.delete(target.id);
+
+    const afterSuccess = await store.list();
+    expect(afterSuccess.references.map((entry) => entry.id)).not.toContain(target.id);
+    expect(existsSync(blobPath)).toBe(false);
+    expect(await store.getBlob(target.id)).toBeNull();
+  });
+
+  it('removes both the index entry and the blob on a successful delete', async () => {
+    const dir = makeCompanionDataDir();
+    const store = new ImageReferenceStore(dir);
+    const uploaded = await store.add({
+      filename: 'only.png',
+      contentType: 'image/png',
+      data: Buffer.from([7]),
+      setDefault: true,
+    });
+    const blobPath = resolveReferencePathForTest(store, uploaded.fileName);
+    expect(existsSync(blobPath)).toBe(true);
+
+    await store.delete(uploaded.id);
+
+    expect((await store.list()).references).toHaveLength(0);
+    expect(existsSync(blobPath)).toBe(false);
   });
 });

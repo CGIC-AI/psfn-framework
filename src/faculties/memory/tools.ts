@@ -298,6 +298,11 @@ function formatEpisodicTimeline(
     }
     if (episode.meaning?.text) {
       lines.push(`  Meaning: ${truncateTimelineText(episode.meaning.text, 180)}`);
+    } else {
+      // Candidates, not verdicts (h4fp.6): an episode she has not yet given
+      // meaning to must never read as her settled lived past — the title and
+      // landmark above are machine-drafted summaries awaiting her review.
+      lines.push('  (unreviewed: machine-drafted summary — you have not yet given this episode its meaning)');
     }
   }
 

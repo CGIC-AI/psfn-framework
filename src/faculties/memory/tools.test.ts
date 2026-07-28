@@ -586,6 +586,60 @@ describe('createMemoryTool', () => {
     expect(rangeText).not.toContain('Late-day wrap');
   });
 
+  it('marks meaning-less timeline episodes unreviewed so machine summaries never read as her settled past (h4fp.6)', async () => {
+    const store = mockUnifiedStore();
+    const episodicStore = makeEpisodicTimelineStore([
+      makeEpisode({
+        id: 'episode-authored',
+        title: 'Authored evening',
+        landmark: 'A machine-drafted landmark she has already reviewed.',
+        startedAt: '2026-03-30T09:00:00.000Z',
+        endedAt: '2026-03-30T09:10:00.000Z',
+        meaning: {
+          text: 'This is what that evening actually meant to me.',
+          recordedAt: '2026-03-31T04:00:00.000Z',
+          source: 'companion_dream_pass',
+        },
+      }),
+      makeEpisode({
+        id: 'episode-unreviewed',
+        title: 'Unreviewed morning',
+        landmark: 'A machine-drafted landmark awaiting her review.',
+        startedAt: '2026-03-30T12:00:00.000Z',
+        endedAt: '2026-03-30T12:10:00.000Z',
+      }),
+    ]);
+    const tool = createMemoryTool(writer as unknown as MemoryWriter, store as unknown as MemoryStorePort, {
+      episodicStore,
+    });
+
+    const result = await tool.execute('memory-call-timeline-unreviewed', {
+      action: 'timeline',
+      date: '2026-03-30',
+      channel_id: 'api:test',
+      trust_level: 'primary',
+      channel_visibility: 'private',
+      limit: 10,
+    });
+
+    const lines = resultText(result as any).split('\n');
+    // Exactly one marker: her authored episode keeps its meaning and gains no
+    // marker, while the meaning-less one must never render as her lived past.
+    const markerLines = lines.filter(line => line.includes('unreviewed: machine-drafted summary'));
+    expect(markerLines).toHaveLength(1);
+
+    const authoredIndex = lines.findIndex(line => line.includes('Authored evening'));
+    const unreviewedIndex = lines.findIndex(line => line.includes('Unreviewed morning'));
+    expect(authoredIndex).toBeGreaterThanOrEqual(0);
+    expect(unreviewedIndex).toBeGreaterThan(authoredIndex);
+    const authoredBlock = lines.slice(authoredIndex, unreviewedIndex).join('\n');
+    expect(authoredBlock).toContain('Meaning: This is what that evening actually meant to me.');
+    expect(authoredBlock).not.toContain('unreviewed: machine-drafted summary');
+    expect(lines.slice(unreviewedIndex).join('\n')).toContain(
+      '  (unreviewed: machine-drafted summary — you have not yet given this episode its meaning)',
+    );
+  });
+
   it('filters hidden off-channel timeline episodes by existing episodic visibility rules', async () => {
     const store = mockUnifiedStore();
     const episodicStore = makeEpisodicTimelineStore([

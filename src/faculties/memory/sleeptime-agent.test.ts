@@ -576,6 +576,72 @@ describe('SleeptimeMemoryAgent', () => {
     expect(openingPrompt).toContain('flaky handshake');
   });
 
+  it('marks meaning-less review episodes unreviewed so machine drafts never read as her settled past (h4fp.6)', async () => {
+    const handleMessage = vi.fn().mockResolvedValue({
+      content: JSON.stringify({
+        orient: {
+          persona: 'Sitting with the authored evening.',
+          human: 'They reviewed the morning together.',
+          goals: 'Keep reviewing the day honestly.',
+        },
+        memory_writes: [],
+      }),
+    });
+    const agent = new SleeptimeMemoryAgent(makeAgentOptions({
+      agent: { handleMessage },
+      episodicStore: makeEpisodeReader([
+        {
+          id: 'ep-authored',
+          title: 'Authored evening',
+          landmark: 'A machine-drafted landmark she has already reviewed',
+          startedAt: '2026-07-22T01:00:00.000Z',
+          endedAt: '2026-07-22T02:00:00.000Z',
+          themes: ['reflection'],
+          meaning: {
+            text: 'This is what that evening actually meant to me.',
+            recordedAt: '2026-07-23T04:00:00.000Z',
+            source: 'companion_dream_pass',
+          },
+        },
+        {
+          id: 'ep-unreviewed',
+          title: 'Unreviewed morning',
+          landmark: 'A machine-drafted landmark awaiting her review',
+          startedAt: '2026-07-22T03:00:00.000Z',
+          endedAt: '2026-07-22T04:00:00.000Z',
+          themes: ['planning'],
+        },
+      ]),
+      sessionManager: {
+        resolveSessionChannelId: vi.fn((channelId: string) => channelId),
+        getRecentMessages: vi.fn().mockReturnValue([
+          { id: 1, channelId: 'terminal:test', role: 'user', content: 'A long evening and a slow morning.', timestamp: Date.now() },
+        ]),
+      },
+    }));
+
+    await agent.execute(makeSleeptimeAction());
+
+    const openingPrompt = (handleMessage.mock.calls[0]?.[0] as { content: string }).content;
+    const lines = openingPrompt.split('\n');
+    // Exactly one marker. The governing prompt calls the episodes below "what
+    // actually happened" and treats them as the evidence authority for durable
+    // memory writes, so an unmarked machine draft would read as ground truth.
+    const markerLines = lines.filter(line => line.includes('unreviewed: machine-drafted summary'));
+    expect(markerLines).toHaveLength(1);
+
+    const authoredIndex = lines.findIndex(line => line.includes('Authored evening'));
+    const unreviewedIndex = lines.findIndex(line => line.includes('Unreviewed morning'));
+    expect(authoredIndex).toBeGreaterThanOrEqual(0);
+    expect(unreviewedIndex).toBeGreaterThan(authoredIndex);
+    const authoredBlock = lines.slice(authoredIndex, unreviewedIndex).join('\n');
+    expect(authoredBlock).toContain('what it meant to me: This is what that evening actually meant to me.');
+    expect(authoredBlock).not.toContain('unreviewed: machine-drafted summary');
+    expect(lines[unreviewedIndex + 1]).toBe(
+      '  (unreviewed: machine-drafted summary — you have not yet given this episode its meaning)',
+    );
+  });
+
   it('shares day episodes inside one logical session while excluding unrelated sessions (1gpol)', async () => {
     const currentEpisode = {
       id: 'ep-current',

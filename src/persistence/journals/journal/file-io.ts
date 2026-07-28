@@ -789,7 +789,11 @@ export function readJournalEntriesBefore(
         options.previousFileHmac ?? null,
       );
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'ENOENT' || attempt >= JOURNAL_SEGMENT_READ_RETRIES) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (
+        (code !== 'ENOENT' && code !== 'ESTALE')
+        || attempt >= JOURNAL_SEGMENT_READ_RETRIES
+      ) {
         throw error;
       }
     }
@@ -837,7 +841,11 @@ export async function readJournalEntriesBeforeAsync(
         appendQuarantinedLine,
       });
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'ENOENT' || attempt >= JOURNAL_SEGMENT_READ_RETRIES) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (
+        (code !== 'ENOENT' && code !== 'ESTALE')
+        || attempt >= JOURNAL_SEGMENT_READ_RETRIES
+      ) {
         throw error;
       }
     }

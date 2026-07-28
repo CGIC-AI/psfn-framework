@@ -492,7 +492,7 @@ export class PostgresEpisodicStore implements EpisodicStorePort {
               jsonb_set(episode_json, '{threadId}', to_jsonb($2::text), true),
               '{updatedAt}', to_jsonb($3::text), true
             ),
-            updated_at = $3
+            updated_at = $3::timestamptz
         WHERE id = ANY($1::text[])
       `, [ids, toThreadId, nowIso]);
 

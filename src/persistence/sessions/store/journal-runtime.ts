@@ -34,6 +34,7 @@ import {
   type SessionArchiveHandle,
   type SessionArchivePort,
 } from '../../journals/journal/port.js';
+import type { ReadJournalBeforeResult } from '../../journals/journal/types.js';
 
 const log = createComponentLogger('SessionStore');
 
@@ -641,6 +642,55 @@ export class SessionJournalRuntime {
         }
         : {}),
     });
+    return this.normalizeEntriesBeforeWindow(
+      archive,
+      beforeId,
+      limit,
+      boundedMessageLimit,
+      tombstones,
+      window,
+    );
+  }
+
+  async readEntriesBeforeAsync(
+    archive: SessionArchiveHandle,
+    beforeId: number,
+    limit: number,
+    tombstones: ReadonlySet<string> = new Set(),
+  ): Promise<SessionEntry[]> {
+    const boundedMessageLimit = tombstones.size > 0
+      ? Math.max(limit * 4, limit + tombstones.size * 4)
+      : limit;
+    const window = await this.archivePort.readJournalEntriesBeforeAsync(archive, {
+      beforeId,
+      messageLimit: boundedMessageLimit,
+      includeBoundaryEntry: true,
+      ...(this.integrityProvider
+        ? {
+          trustSeekEntry: (entry: JournalEntry, previousHmac: string | null): boolean => (
+            this.integrityProvider?.verify(entry, previousHmac).verified === true
+          ),
+        }
+        : {}),
+    });
+    return this.normalizeEntriesBeforeWindow(
+      archive,
+      beforeId,
+      limit,
+      boundedMessageLimit,
+      tombstones,
+      window,
+    );
+  }
+
+  private normalizeEntriesBeforeWindow(
+    archive: SessionArchiveHandle,
+    beforeId: number,
+    limit: number,
+    boundedMessageLimit: number,
+    tombstones: ReadonlySet<string>,
+    window: ReadJournalBeforeResult,
+  ): SessionEntry[] {
     if (window.quarantined.length > 0) {
       this.warnAboutQuarantinedEntries(
         archive.channelId,

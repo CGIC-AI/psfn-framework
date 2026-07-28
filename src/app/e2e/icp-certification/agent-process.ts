@@ -400,6 +400,7 @@ async function main(): Promise<void> {
         localCompanionId: companionId,
         knownCompanionIds: startup.config.companionFleet?.companions.map(entry => entry.companionId)
           ?? [companionId],
+        config: startup.config,
       })
     : undefined;
   const gardenIcpAutonomy = candidateStore && projectionStore

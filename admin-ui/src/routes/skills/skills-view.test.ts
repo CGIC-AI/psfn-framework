@@ -2,8 +2,26 @@ import { describe, expect, it } from 'vitest';
 import type { SkillRootScan } from '$lib/types';
 import {
   buildSkillRootViews,
+  findManagedSkillRecord,
   formatMissingSkillRoot,
 } from './skills-view';
+
+describe('managed skill content projection', () => {
+  it('returns bounded managed content for an included skill name', () => {
+    const managedSkill = {
+      name: 'operator-notes',
+      description: 'Operator-managed instructions',
+      category: 'operator',
+      version: 3,
+      content: '# Exact managed body',
+      createdAt: '2026-07-28T12:00:00.000Z',
+      updatedAt: '2026-07-29T12:00:00.000Z',
+    };
+
+    expect(findManagedSkillRecord([managedSkill], 'OPERATOR-NOTES')?.content)
+      .toBe('# Exact managed body');
+  });
+});
 
 describe('skills missing-root degradation', () => {
   it('names the exact missing root while leaving each root independently reportable', () => {

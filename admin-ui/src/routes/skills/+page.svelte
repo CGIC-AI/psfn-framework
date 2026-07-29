@@ -17,6 +17,7 @@
   import { scopeGardenPath } from '$lib/fleet/companion-scope';
   import {
     buildSkillRootViews,
+    findManagedSkillRecord,
     formatMissingSkillRoot,
   } from './skills-view';
 
@@ -57,16 +58,12 @@
     return NATIVE_BEHAVIOR_SKILLS.includes(name.toLowerCase());
   }
 
-  function isManaged(name: string): boolean {
-    return managed.some(m => m.name.toLowerCase() === name.toLowerCase());
-  }
-
   function isDisabled(name: string): boolean {
     return disabledSkills.includes(name);
   }
 
   function getManagedRecord(name: string): ManagedSkill | undefined {
-    return managed.find(m => m.name.toLowerCase() === name.toLowerCase());
+    return findManagedSkillRecord(managed, name);
   }
 
   function toggleExpand(id: string) {
@@ -79,10 +76,15 @@
     expandedSkills = next;
   }
 
-  function startEdit(skill: SkillEntry) {
+  function startEdit(skill: UnifiedSkill) {
+    const record = getManagedRecord(skill.name);
+    if (record?.content === undefined) {
+      actionError = `Content is unavailable for "${skill.name}"; editing was not opened.`;
+      return;
+    }
     editingSkill = skill.id;
-    editContent = skill.content;
-    editDescription = skill.description;
+    editContent = record.content;
+    editDescription = record.description;
     actionError = '';
   }
 
@@ -93,7 +95,7 @@
     actionError = '';
   }
 
-  async function saveEdit(skill: SkillEntry) {
+  async function saveEdit(skill: UnifiedSkill) {
     savingSkill = skill.id;
     actionError = '';
     try {
@@ -180,7 +182,7 @@
     id: string;
     name: string;
     description: string;
-    content: string;
+    content: string | undefined;
     source: string;
     relativePath: string;
     always: boolean;
@@ -204,12 +206,13 @@
     for (const skill of snapshot.includedSkills) {
       const name = skill.name;
       if (isNativeBehavior(name)) continue; // Filter out native behavior skills
+      const managedRecord = getManagedRecord(name);
       seenNames.add(name.toLowerCase());
       skills.push({
         id: skill.id,
         name,
         description: skill.description,
-        content: skill.content,
+        content: managedRecord?.content,
         source: skill.source,
         relativePath: skill.relativePath,
         always: skill.always,
@@ -217,8 +220,8 @@
         included: true,
         disabled: isDisabled(name),
         native: false,
-        managed: isManaged(name),
-        size: skill.size || skill.content.length,
+        managed: managedRecord !== undefined,
+        size: skill.size || managedRecord?.content.length || 0,
       });
     }
 
@@ -226,19 +229,20 @@
     for (const skipped of snapshot.skipped) {
       if (seenNames.has(skipped.name.toLowerCase())) continue;
       if (isNativeBehavior(skipped.name)) continue;
+      const managedRecord = getManagedRecord(skipped.name);
       seenNames.add(skipped.name.toLowerCase());
       skills.push({
         id: `skipped-${skipped.name}`,
         name: skipped.name,
         description: '',
-        content: '',
+        content: managedRecord?.content,
         source: skipped.source,
         relativePath: skipped.relativePath,
         always: false,
         included: false,
         disabled: isDisabled(skipped.name),
         native: false,
-        managed: isManaged(skipped.name),
+        managed: managedRecord !== undefined,
         skipReason: skipped.reason,
         skipDetails: skipped.details,
         size: 0,
@@ -677,18 +681,7 @@
                 {#if skill.managed}
                   <button
                     onclick={() => {
-                      const entry = snapshot?.includedSkills.find(s => s.name === skill.name);
-                      if (entry) startEdit(entry);
-                      else {
-                        // For skipped managed skills, use the managed record
-                        const rec = getManagedRecord(skill.name);
-                        if (rec) {
-                          editingSkill = skill.id;
-                          editContent = rec.content;
-                          editDescription = rec.description;
-                          actionError = '';
-                        }
-                      }
+                      startEdit(skill);
                       if (!expanded) toggleExpand(skill.id);
                     }}
                     class="text-sm px-3 py-1 rounded-lg border border-bark-300
@@ -749,14 +742,7 @@
                         Cancel
                       </button>
                       <button
-                        onclick={() => {
-                          const entry = snapshot?.includedSkills.find(s => s.name === skill.name);
-                          if (entry) saveEdit(entry);
-                          else {
-                            // Construct a minimal SkillEntry for the save call
-                            saveEdit({ name: skill.name } as SkillEntry);
-                          }
-                        }}
+                        onclick={() => saveEdit(skill)}
                         disabled={isSaving || !editContent.trim()}
                         class="px-3 py-1.5 text-sm rounded-lg font-medium
                                bg-gold-500 text-white hover:bg-gold-600
@@ -770,10 +756,10 @@
                   <!-- Read-only content view -->
                   <div>
                     <p class="text-xs text-shadow-500 uppercase tracking-wide mb-2">Prompt Content</p>
-                    {#if skill.content}
+                    {#if skill.content !== undefined}
                       <pre class="text-sm font-mono text-shadow-800 bg-bark-50 border border-bark-200 rounded-lg p-4 whitespace-pre-wrap overflow-x-auto max-h-96 overflow-y-auto">{skill.content}</pre>
                     {:else}
-                      <p class="text-sm text-shadow-500 italic">Content not available (skill was filtered before loading).</p>
+                      <p class="text-sm text-shadow-500 italic">Content not available.</p>
                     {/if}
                   </div>
                 {/if}

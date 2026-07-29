@@ -558,6 +558,25 @@ export interface EventMap {
   };
   /** Content-free monotonic foreground timing envelope (mmo9.2). */
   'agent.turn.performance': TurnPerformanceEvent;
+  /**
+   * Runtime datetime-contradiction guard activation (psfn-framework-upx0.13).
+   * Content-free Garden-visible telemetry: signal ids, attempt count, and the
+   * guard outcome only — never the companion's response text.
+   * `retry_scheduled` fires when the first detection triggers the
+   * strengthened-anchor retry; `retry_cleared` when the retried response no
+   * longer disputes the anchor; `system_note_appended` when the retry still
+   * disputed it and the concern was surfaced as a system note while her reply
+   * stayed verbatim (psfn-framework-zagpk).
+   */
+  'agent.datetime_guard.activation': {
+    channelId: string;
+    turnId: string;
+    stage: 'initial' | 'retry';
+    outcome: 'retry_scheduled' | 'retry_cleared' | 'system_note_appended';
+    matchedSignals: string[];
+    attempts: number;
+    timestamp: number;
+  } & EventCorrelationFields;
   /** First substantive text/thinking/tool event observed at the provider stream boundary. */
   'agent.provider.first_output': LLMStreamFirstOutputObservation & {
     provider: string;

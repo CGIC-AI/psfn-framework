@@ -7198,6 +7198,10 @@ describe('handleMessageForTurn pre-response concurrency', () => {
   it('preserves a contradictory retry verbatim and surfaces the concern as a system note', async () => {
     const dataDir = makeTempDir();
     const eventBus = new EventBus();
+    const guardActivations: EventMap['agent.datetime_guard.activation'][] = [];
+    eventBus.on('agent.datetime_guard.activation', (event) => {
+      guardActivations.push(event);
+    });
     const { runtime, store, sessionManager } = createPersistenceBackedRuntime(dataDir, eventBus);
     runtime.buildDynamicPromptTemplateVariables = vi.fn(() => ({
       ...BASE_TURN_PROMPT_VARIABLES,
@@ -7291,6 +7295,86 @@ describe('handleMessageForTurn pre-response concurrency', () => {
       content: expect.stringContaining('authoritative runtime current_datetime anchor'),
       provenance: expect.objectContaining({ kind: 'system_note' }),
     }));
+
+    // psfn-framework-upx0.13: guard activations surface as typed, content-free
+    // bus events for Garden visibility — signal ids and outcomes, not her text.
+    expect(guardActivations).toHaveLength(2);
+    expect(guardActivations[0]).toMatchObject({
+      channelId: 'ch1',
+      stage: 'initial',
+      outcome: 'retry_scheduled',
+      matchedSignals: ['clock_is_off', 'cannot_be_right'],
+      attempts: 1,
+    });
+    expect(guardActivations[1]).toMatchObject({
+      channelId: 'ch1',
+      stage: 'retry',
+      outcome: 'system_note_appended',
+      matchedSignals: ['time_is_wrong', 'are_you_sure'],
+      attempts: 2,
+    });
+    for (const activation of guardActivations) {
+      expect(typeof activation.turnId).toBe('string');
+      expect(activation.turnId.length).toBeGreaterThan(0);
+      expect(JSON.stringify(activation)).not.toContain('The clock is off');
+    }
+  });
+
+  it('does not treat a non-datetime "are you sure?" reply as a datetime contradiction (psfn-framework-upx0.13)', async () => {
+    const dataDir = makeTempDir();
+    const eventBus = new EventBus();
+    const guardActivations: EventMap['agent.datetime_guard.activation'][] = [];
+    eventBus.on('agent.datetime_guard.activation', (event) => {
+      guardActivations.push(event);
+    });
+    const { runtime, store } = createPersistenceBackedRuntime(dataDir, eventBus);
+    runtime.buildDynamicPromptTemplateVariables = vi.fn(() => ({
+      ...BASE_TURN_PROMPT_VARIABLES,
+      active_timezone: 'America/New_York',
+      runtime_current_weekday: 'Wednesday',
+      runtime_current_date_human: 'March 18, 2026',
+      runtime_current_time_human: '9:30 AM',
+      runtime_current_datetime_iso: '2026-03-18T09:30:00.000-04:00',
+      runtime_current_today: '2026-03-18',
+      runtime_current_yesterday: '2026-03-17',
+      runtime_current_tomorrow: '2026-03-19',
+      runtime_current_part_of_day: 'late morning',
+    }));
+    const validNonDatetimeReply = 'Are you sure you want me to delete all three branches? That seems drastic, but it must be a bug report waiting to happen if we keep them.';
+    runtime.agent.prompt = vi.fn(async (promptMessage: { content: string }) => {
+      (runtime.agent.state.messages as any[]).push({ role: 'user', content: promptMessage.content });
+      (runtime.agent.state.messages as any[]).push({
+        role: 'assistant',
+        content: [{ type: 'text', text: validNonDatetimeReply }],
+        api: 'openai-completions',
+        provider: 'test',
+        model: 'test-model',
+        usage: {
+          input: 1,
+          output: 1,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 2,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
+        stopReason: 'stop',
+        timestamp: Date.now(),
+      });
+    });
+
+    const response = await handleMessageForTurn(runtime, createMessage('msg-datetime-false-positive', {
+      content: 'Clean up the old branches?',
+    }));
+
+    // The reply passes through untouched: no retry, no diagnostics, no events.
+    expect(runtime.agent.prompt).toHaveBeenCalledTimes(1);
+    expect(response.content).toBe(validNonDatetimeReply);
+    expect(response.metadata.diagnostics?.runtimeContradiction).toBeUndefined();
+    expect(guardActivations).toEqual([]);
+
+    const assistantEntries = store.getRecent('ch1', 10).filter(entry => entry.role === 'assistant');
+    expect(assistantEntries).toHaveLength(1);
+    expect(assistantEntries[0]).toMatchObject({ content: validNonDatetimeReply });
   });
 
   it('retries empty vision prompt recovery three times before returning a visible fallback reply', async () => {

@@ -32,6 +32,9 @@ import {
 import {
   wireSpeakingArbiterLane,
 } from './startup/speaking-arbiter-lane.js';
+import {
+  wireDriftReviewLanes,
+} from './startup/drift-review-lanes.js';
 import { trustOrd } from '../../system/trust/types.js';
 import { registerWeightedThoughtOutreachTask } from '../../core/scheduler/weighted-thought-outreach-lane.js';
 import { createLlmNudgeEvaluator } from '../../core/intention/weighted-thought-nudge-evaluator.js';
@@ -70,7 +73,6 @@ import {
 import { createAgentPersistenceRuntime } from '../../persistence/runtime-factory.js';
 import { CompanionPresenceRuntime } from '../../core/agent/companion-presence-runtime.js';
 import {
-  resolveDriftReviewCardsPath,
   resolveChargeLedgerPath,
   resolveIntakeQuarantinePath,
   resolveIntrospectionValuesFindingsPath,
@@ -88,9 +90,6 @@ import {
 } from '../../faculties/memory/social-graph/proposals.js';
 import { createContactTrackingGate } from '../../core/contacts/tracking-gate.js';
 import { rehydratePersistedInternalState } from '../../core/self-model/internal-state-persistence.js';
-import { createPostgresObserverEvalSidecarStore } from '../../core/eval/observer-sidecar/persistence.js';
-import { resolveConfigTenantPoolScope } from '../../persistence/postgres/tenant-pool-scope.js';
-import { createEmoSimDyadRelationshipAdvisoryProvider } from '../../core/eval/observer-sidecar/dyad-relationship-advisory-provider.js';
 import { ModuleLoader } from '../../system/modules/loader.js';
 import { DEFAULT_GATEWAY_TOOL_METADATA_COVERAGE } from '../../core/agent/tool-wiring-validator.js';
 import { registerGatewayMessageHandlers } from './gateway-message-handlers.js';
@@ -134,9 +133,6 @@ import { maybeCreateIntakeScreeningService } from '../../core/cogsec/intake/scre
 import { loadPartnerAffectShadowConfig } from '../../system/config/partner-affect-shadow-config.js';
 import { createPartnerAffectShadowIngestBridge } from '../../core/emotion/partner-affect/shadow-ingest-bridge.js';
 import { createIntakeQuarantineStore } from '../../core/cogsec/intake/quarantine-store.js';
-import { createDriftReviewCardStore } from '../../core/cogsec/drift/drift-review-card-store.js';
-import { createDriftVelocityEvidencePort } from '../../core/cogsec/drift/drift-evidence-adapters.js';
-import { createSecondArrowEvidencePort } from '../../core/cogsec/drift/second-arrow-evidence-adapters.js';
 import { emitGardenQueueChanged } from '../../shared/garden-queue-change.js';
 import { enforceNetworkIsolationOnStartup } from './startup-guards.js';
 import {
@@ -1416,109 +1412,20 @@ async function main(): Promise<void> {
     outboundReplyGuard,
   });
 
-  // ── Slow-poisoning drift-velocity review lane (htm9.14) ──
-  // Deterministic nightly aggregation (zero LLM, zero turn latency) over the
-  // per-contact valence series, memory-write rows, quarantine risk labels,
-  // and retrieval recency. Findings become operator review cards on the
-  // Garden Cognitive Security tab; the lane never mutates memories, trust,
-  // or emotion, and the companion never sees it.
-  const driftVelocityReview = intakePolicy.driftDetection.enabled
-    ? {
-      evidence: createDriftVelocityEvidencePort({
-        contactStore,
-        memoryStore,
-        quarantineStore: intakePolicy.mode !== 'off'
-          ? createIntakeQuarantineStore(
-            resolveIntakeQuarantinePath(pathSnapshot.companionDataDir),
-            {
-              itemTtlHours: intakePolicy.quarantine.itemTtlHours,
-              maxHeldItems: intakePolicy.quarantine.maxHeldItems,
-            },
-          )
-          : null,
-      }),
-      cardStore: createDriftReviewCardStore(
-        resolveDriftReviewCardsPath(pathSnapshot.companionDataDir),
-      ),
-      config: intakePolicy.driftDetection,
-      watermarks: {
-        getContactMaintenanceWatermark: (processor: string) =>
-          contactStore.getContactMaintenanceWatermark(processor),
-        setContactMaintenanceWatermark: (processor: string, lastRunAt: string) =>
-          contactStore.setContactMaintenanceWatermark(processor, lastRunAt),
-      },
-    }
-    : null;
-  if (!driftVelocityReview) {
-    log.info('Drift-velocity review lane disabled by intake-policy driftDetection.enabled');
-  }
-
-  // ── Second-arrow rumination review lane (htm9.15) ──
-  // Deterministic nightly clustering (zero LLM, zero turn latency) over
-  // recent memory writes' STORED embeddings, active concerns, and the
-  // per-contact affect series. Findings become operator review cards (same
-  // store, kind 'second_arrow') proposing consolidation of near-duplicate
-  // rumination stacks; the lane never mutates memories, concerns, or emotion.
-  const secondArrowEnabled = intakePolicy.driftDetection.enabled
-    && intakePolicy.driftDetection.secondArrow.enabled;
-  const secondArrowReview = secondArrowEnabled && memoryStore.listActiveMemoryEmbeddingsSince
-    ? {
-      evidence: createSecondArrowEvidencePort({
-        memoryStore,
-        contactStore,
-        concernStore: intentionRuntime.concernStore,
-      }),
-      cardStore: driftVelocityReview?.cardStore
-        ?? createDriftReviewCardStore(resolveDriftReviewCardsPath(pathSnapshot.companionDataDir)),
-      config: intakePolicy.driftDetection.secondArrow,
-      watermarks: {
-        getContactMaintenanceWatermark: (processor: string) =>
-          contactStore.getContactMaintenanceWatermark(processor),
-        setContactMaintenanceWatermark: (processor: string, lastRunAt: string) =>
-          contactStore.setContactMaintenanceWatermark(processor, lastRunAt),
-      },
-    }
-    : null;
-  if (!secondArrowReview) {
-    if (secondArrowEnabled) {
-      // Enabled but the store cannot serve stored embeddings: loud, never silent.
-      log.error(
-        'Second-arrow review lane NOT wired: memory store lacks listActiveMemoryEmbeddingsSince '
-        + '(stored-embedding reads); rumination detection is disabled until the store provides it',
-      );
-    } else {
-      log.info('Second-arrow review lane disabled by intake-policy driftDetection.secondArrow.enabled');
-    }
-  }
-
-  // ── emo_sim directed-relationship advisory (oth4.6) ──
-  // Read-only ADVISORY over the observer-sidecar's persisted emo_sim affect
-  // model, fed into the nightly contact trust/relationship review as one more
-  // signal the companion weighs. It never mutates trust or relationship state.
-  // Wired only when the sidecar is active, persists observations, and exposes a
-  // companion agent name; otherwise the review simply omits the signal. The
-  // Postgres store here is the SAME memoized instance the sidecar writes to.
-  const dyadEmosimAgentName = observerEvalSidecar.config?.adapter?.agentName?.trim();
-  const dyadRelationshipAdvisoryProvider =
-    observerEvalSidecar.observer
-    && observerEvalSidecar.config?.persistence?.enabled === true
-    && dyadEmosimAgentName
-      ? createEmoSimDyadRelationshipAdvisoryProvider({
-        getLatestObservation: () =>
-          createPostgresObserverEvalSidecarStore(
-            postgresDatabaseUrl,
-            {},
-            resolveConfigTenantPoolScope(config),
-          ).getLatestObservation(),
-      })
-      : null;
-  if (!dyadRelationshipAdvisoryProvider) {
-    log.info('emo_sim dyad relationship advisory not wired for trust-drift review', {
-      sidecarActive: Boolean(observerEvalSidecar.observer),
-      persistenceEnabled: observerEvalSidecar.config?.persistence?.enabled === true,
-      hasAgentName: Boolean(dyadEmosimAgentName),
+  // ── Drift review lanes (htm9.14/htm9.15) + emo_sim dyad advisory (oth4.6):
+  // extracted to startup/drift-review-lanes.ts (charter 12.1 split).
+  const { driftVelocityReview, secondArrowReview, dyadRelationshipAdvisoryProvider } =
+    wireDriftReviewLanes({
+      intakePolicy,
+      contactStore,
+      memoryStore,
+      concernStore: intentionRuntime.concernStore,
+      companionDataDir: pathSnapshot.companionDataDir,
+      observerEvalSidecar,
+      postgresDatabaseUrl,
+      config,
+      log,
     });
-  }
 
   // Policy-driven multi-template reflection system.
   await wireReflectionRuntime(

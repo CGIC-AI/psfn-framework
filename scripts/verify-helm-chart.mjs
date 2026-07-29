@@ -1520,6 +1520,56 @@ assertIncludes(
 );
 const fleetGardenContainer = fleetGardenDeployment.spec?.template?.spec?.containers
   ?.find(container => container.name === 'garden');
+// Fleet Garden readiness probe timing coupling (psfn-framework-cwxqr /
+// psfn-framework-gxd61). The exec probe does a local socket connect plus one
+// mTLS HTTPS transport probe per registered companion, each bounded by an
+// internal timeout stamped into the rendered script. The kubelet-facing outer
+// timeoutSeconds MUST strictly exceed that internal budget, or the probe is
+// killed at the 1s kubelet default mid-check and the pod flaps Ready=False
+// while healthy. This assertion — plus the two render-failure cases below —
+// prevents any regression back to the 8s-inside-default-1s contract.
+{
+  const readiness = fleetGardenContainer?.readinessProbe;
+  const execCommand = readiness?.exec?.command?.join('\n') ?? '';
+  if (!execCommand.includes("path: '/api/admin/__transport_probe__'")) {
+    throw new Error('fleet Garden readiness must remain the semantic mTLS transport exec probe, not a bare socket check');
+  }
+  const internalTimeouts = [...execCommand.matchAll(/(?:setTimeout\(|timeout:\s*)(\d+)/gu)]
+    .map(match => Number(match[1]));
+  if (internalTimeouts.length < 2) {
+    throw new Error(`fleet Garden readiness must stamp its internal socket + HTTPS timeouts, found ${internalTimeouts.length}`);
+  }
+  const maxInternalMs = Math.max(...internalTimeouts);
+  const timeoutSeconds = readiness?.timeoutSeconds;
+  if (typeof timeoutSeconds !== 'number') {
+    throw new Error('fleet Garden readiness must declare an explicit timeoutSeconds (kubelet defaults to 1s otherwise)');
+  }
+  if (timeoutSeconds * 1000 <= maxInternalMs) {
+    throw new Error(
+      `fleet Garden readiness outer timeoutSeconds (${timeoutSeconds}s) must strictly exceed its internal budget (${maxInternalMs}ms)`,
+    );
+  }
+  const periodSeconds = readiness?.periodSeconds;
+  if (typeof periodSeconds !== 'number' || periodSeconds <= timeoutSeconds) {
+    throw new Error(
+      `fleet Garden readiness periodSeconds (${periodSeconds}) must strictly exceed timeoutSeconds (${timeoutSeconds}) so probes cannot overlap`,
+    );
+  }
+  if (typeof readiness?.failureThreshold !== 'number' || readiness.failureThreshold < 1) {
+    throw new Error('fleet Garden readiness must declare a bounded failureThreshold for a sane flap window');
+  }
+}
+// Zero headroom makes the derived outer timeout equal the 8s internal budget,
+// which the template must reject.
+assertRenderFails(
+  [...fleetGardenRenderArgs(), '--set', 'workloads.garden.readiness.timeoutHeadroomSeconds=0'],
+  'must strictly exceed internalCheckTimeoutMs',
+);
+// A period below the derived outer timeout would let probes overlap; reject it.
+assertRenderFails(
+  [...fleetGardenRenderArgs(), '--set', 'workloads.garden.readiness.periodSeconds=5'],
+  'must strictly exceed the derived outer timeoutSeconds',
+);
 const fleetGardenVolumeNames = new Set(
   (fleetGardenDeployment.spec?.template?.spec?.volumes ?? []).map(volume => volume.name),
 );

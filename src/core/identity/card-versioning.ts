@@ -14,6 +14,7 @@ import { assertValidCharacterCard, loadCharacterCard } from './loader.js';
 import { appendJsonLine, readJsonLines } from '../../persistence/jsonl.js';
 import { writeJsonAtomic } from '../../shared/utils/fs.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
+import { detectDestructiveTextReplace } from '../../shared/utils/destructive-replace.js';
 
 const MUTABLE_CARD_FIELDS = [
   'name',
@@ -68,10 +69,6 @@ interface DestructivePatchRisk {
   previousLength: number;
   nextLength: number;
 }
-
-const MIN_DESTRUCTIVE_REPLACE_SOURCE_LENGTH = 400;
-const MIN_DESTRUCTIVE_REPLACE_REMOVED_CHARS = 200;
-const MAX_SAFE_REMAINING_RATIO = 0.6;
 
 const PROTECTED_AUTONOMOUS_UPDATE_FIELDS = [
   'name',
@@ -211,15 +208,9 @@ function detectDestructivePatchRisks(
 
     const previousLength = trimmedTextLength(currentRecord[field]);
     const nextLength = trimmedTextLength(nextRecord[field]);
-    const removedChars = previousLength - nextLength;
-    const remainingRatio = previousLength > 0 ? nextLength / previousLength : 1;
-
-    if (
-      previousLength >= MIN_DESTRUCTIVE_REPLACE_SOURCE_LENGTH
-      && removedChars >= MIN_DESTRUCTIVE_REPLACE_REMOVED_CHARS
-      && remainingRatio <= MAX_SAFE_REMAINING_RATIO
-    ) {
-      return [{ field, previousLength, nextLength }];
+    const risk = detectDestructiveTextReplace(previousLength, nextLength);
+    if (risk) {
+      return [{ field, previousLength: risk.previousLength, nextLength: risk.nextLength }];
     }
 
     return [];

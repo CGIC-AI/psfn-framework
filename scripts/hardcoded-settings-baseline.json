@@ -1870,21 +1870,6 @@
       "value": "1_024"
     },
     {
-      "file": "src/core/identity/card-versioning.ts",
-      "name": "MAX_SAFE_REMAINING_RATIO",
-      "value": "0.6"
-    },
-    {
-      "file": "src/core/identity/card-versioning.ts",
-      "name": "MIN_DESTRUCTIVE_REPLACE_REMOVED_CHARS",
-      "value": "200"
-    },
-    {
-      "file": "src/core/identity/card-versioning.ts",
-      "name": "MIN_DESTRUCTIVE_REPLACE_SOURCE_LENGTH",
-      "value": "400"
-    },
-    {
       "file": "src/core/identity/importer.ts",
       "name": "LOREBOOK_KEYWORD_LIMIT",
       "value": "6"
@@ -4545,6 +4530,24 @@
       "file": "src/shared/telemetry/provider-cost-evidence.ts",
       "name": "MAX_PROVIDER_COST_EVIDENCE_SOURCES",
       "value": "128"
+    },
+    {
+      "file": "src/shared/utils/destructive-replace.ts",
+      "name": "MAX_SAFE_REMAINING_RATIO",
+      "value": "0.6",
+      "note": "Code-owned charter 9.5 destructive-replace safety threshold moved from card-versioning.ts; shared by persona and skill self-mod governance so the two surfaces cannot drift."
+    },
+    {
+      "file": "src/shared/utils/destructive-replace.ts",
+      "name": "MIN_DESTRUCTIVE_REPLACE_REMOVED_CHARS",
+      "value": "200",
+      "note": "Code-owned charter 9.5 destructive-replace safety threshold moved from card-versioning.ts; shared by persona and skill self-mod governance so the two surfaces cannot drift."
+    },
+    {
+      "file": "src/shared/utils/destructive-replace.ts",
+      "name": "MIN_DESTRUCTIVE_REPLACE_SOURCE_LENGTH",
+      "value": "400",
+      "note": "Code-owned charter 9.5 destructive-replace safety threshold moved from card-versioning.ts; shared by persona and skill self-mod governance so the two surfaces cannot drift."
     },
     {
       "file": "src/shared/utils/escaping.ts",

@@ -67,8 +67,6 @@ function makeChargePolicy(): ChargePolicyConfig {
     surfaceCosts: {
       ownerFileInspection: 0,
       localFilesystem: 0,
-      memoryRead: 0,
-      memoryWrite: 0,
       localEmbedding: 0,
       externalEmbedding: 0,
       localImageGeneration: 0,

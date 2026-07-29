@@ -240,11 +240,41 @@ describe('createMemoryTool', () => {
       tags: ['identity', 'preference'],
       sourceRef: 'source:tool:memory|action:write|invocation:memory-call-1',
       sourceType: 'tool_write',
+      // ca980: a live-turn write carries the conversation instant (now); the
+      // write happens IN the conversation so wall-clock is the correct anchor.
       provenance: {
         toolName: 'memory',
         toolCallId: 'memory-call-1',
+        sourceConversationAt: expect.any(Number),
       },
     }));
+  });
+
+  it('stamps the live-turn conversation instant on a fresh write, but not on a historical import (ca980)', async () => {
+    const store = mockUnifiedStore();
+    const tool = createMemoryTool(writer as unknown as MemoryWriter, store as unknown as MemoryStorePort);
+    const importTool = createMemoryImportTool(writer as unknown as MemoryWriter);
+
+    const before = Date.now();
+    await tool.execute('memory-call-live', {
+      action: 'write',
+      text: 'V shipped the disclosure-epoch fix today',
+      type: 'episodic',
+    });
+    const after = Date.now();
+
+    const writeProvenance = writer.write.mock.calls[0][0].provenance as { sourceConversationAt?: number };
+    expect(writeProvenance.sourceConversationAt).toBeGreaterThanOrEqual(before);
+    expect(writeProvenance.sourceConversationAt).toBeLessThanOrEqual(after);
+
+    // A bulk import restores HISTORICAL content — it must NOT claim now() as its
+    // conversation time (that would over-share pre-demotion content), so the
+    // import path leaves sourceConversationAt unstamped and fails closed.
+    await importTool.execute('import-live', {
+      records: [{ text: 'restored legacy memory', type: 'semantic', occurred_at: '2024-01-01T00:00:00Z' }],
+    });
+    const imported = writer.importBatch.mock.calls[0][0][0] as { provenance: { sourceConversationAt?: number } };
+    expect(imported.provenance.sourceConversationAt).toBeUndefined();
   });
 
   it('stamps request-context sessionId so a testing-session write is fenced', async () => {
@@ -1102,6 +1132,7 @@ describe('createMemoryTool', () => {
         toolCallId: 'memory-call-7',
         shardId: 'shard-1',
         actor: 'shard',
+        sourceConversationAt: expect.any(Number),
       },
     }));
     expect(writer.importBatch).toHaveBeenCalledWith([
@@ -1144,6 +1175,7 @@ describe('createMemoryTool', () => {
         toolCallId: 'memory-call-subagent-write',
         subagentId: 'subagent-42',
         actor: 'subagent',
+        sourceConversationAt: expect.any(Number),
       },
     }));
     expect(writer.importBatch).toHaveBeenCalledWith([
@@ -1227,6 +1259,7 @@ describe('createMemoryWriteTool', () => {
       provenance: {
         toolName: 'memory_write',
         toolCallId: 'call-1',
+        sourceConversationAt: expect.any(Number),
       },
     }));
   });

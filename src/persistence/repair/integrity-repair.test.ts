@@ -10,7 +10,11 @@ import {
   signJournalEntry,
   verifyJournalEntryIntegrity,
 } from '../journals/journal-utils.js';
-import { runSessionIntegrityRepair } from './integrity-repair.js';
+import {
+  runSessionIntegrityRepair,
+  SESSION_INTEGRITY_REPAIR_AUDIT_EVENT,
+  type SessionIntegrityRepairAuditSink,
+} from './integrity-repair.js';
 import type { JournalEntry } from '../../core/session/types.js';
 import { makeRolledFilePath } from '../sessions/store/channel-filenames.js';
 
@@ -70,6 +74,7 @@ describe('runSessionIntegrityRepair', () => {
       backupDir: harness.backupDir,
       keyring: keyring!,
       repoRoot: harness.root,
+      reason: 'test',
     });
     expect(report.journal.modifiedFiles).toBe(1);
     expect(report.journal.modifiedEntries).toBe(2);
@@ -144,6 +149,7 @@ describe('runSessionIntegrityRepair', () => {
       backupDir: harness.backupDir,
       keyring: keyring!,
       repoRoot: harness.root,
+      reason: 'test',
     });
     expect(report.journal.modifiedFiles).toBe(1);
     expect(report.journal.modifiedEntries).toBe(2);
@@ -208,6 +214,7 @@ describe('runSessionIntegrityRepair', () => {
       backupDir: harness.backupDir,
       keyring: keyring!,
       repoRoot: harness.root,
+      reason: 'test',
     });
     expect(report.journal.modifiedFiles).toBe(1);
     expect(report.journal.modifiedEntries).toBe(1);
@@ -292,6 +299,7 @@ describe('runSessionIntegrityRepair', () => {
       backupDir: harness.backupDir,
       keyring: keyring!,
       repoRoot: harness.root,
+      reason: 'test',
     });
     expect(report.journal.modifiedFiles).toBe(1);
     expect(report.journal.modifiedEntries).toBe(1);
@@ -345,6 +353,7 @@ describe('runSessionIntegrityRepair', () => {
       backupDir: harness.backupDir,
       keyring: keyring!,
       repoRoot: harness.root,
+      reason: 'test',
     });
 
     expect(report.journal.modifiedFiles).toBe(2);
@@ -374,5 +383,140 @@ describe('runSessionIntegrityRepair', () => {
       'root reply',
       'segment prompt',
     ]);
+  });
+});
+
+function createAuditSpy(): SessionIntegrityRepairAuditSink & {
+  records: Array<{ event: string; details: Record<string, unknown> }>;
+} {
+  const records: Array<{ event: string; details: Record<string, unknown> }> = [];
+  return {
+    records,
+    append(event, details): void {
+      records.push({ event, details });
+    },
+  };
+}
+
+describe('runSessionIntegrityRepair audit + usage record (psfn-framework-31n1i)', () => {
+  it('emits one durable, content-free record with counts, channels, reason, and outcome on success', () => {
+    const harness = createHarness();
+    const keyring = buildSessionHmacKeyring({ serializedKeys: 'v1:repair-key', activeVersion: 'v1' });
+    expect(keyring).not.toBeNull();
+
+    const filePath = join(harness.sessionsDir, '20260325_api-legacy_user_000001.jsonl');
+    writeJournal(filePath, [
+      buildMessageJournalEntry(1, { channelId: 'api:legacy', role: 'user', content: 'legacy hello', timestamp: 1000 }),
+      buildMessageJournalEntry(2, { channelId: 'api:legacy', role: 'assistant', content: 'legacy hi', timestamp: 2000 }),
+    ]);
+
+    const audit = createAuditSpy();
+    runSessionIntegrityRepair({
+      sessionsDir: harness.sessionsDir,
+      backupDir: harness.backupDir,
+      keyring: keyring!,
+      repoRoot: harness.root,
+      reason: 'operator re-sign after hotfix churn',
+      audit,
+    });
+
+    expect(audit.records).toHaveLength(1);
+    const [record] = audit.records;
+    expect(record.event).toBe(SESSION_INTEGRITY_REPAIR_AUDIT_EVENT);
+    expect(record.details).toMatchObject({
+      reason: 'operator re-sign after hotfix churn',
+      outcome: 'completed',
+      scannedFiles: 1,
+      modifiedFiles: 1,
+      modifiedEntries: 2,
+      channelIds: ['api:legacy'],
+      rebuiltChannelIndex: true,
+    });
+    // Content-free: the record never carries message text.
+    const serialized = JSON.stringify(record.details);
+    expect(serialized).not.toContain('legacy hello');
+    expect(serialized).not.toContain('legacy hi');
+  });
+
+  it('fails closed without an operator reason and records nothing', () => {
+    const harness = createHarness();
+    const keyring = buildSessionHmacKeyring({ serializedKeys: 'v1:repair-key', activeVersion: 'v1' });
+    expect(keyring).not.toBeNull();
+    const audit = createAuditSpy();
+
+    expect(() => runSessionIntegrityRepair({
+      sessionsDir: harness.sessionsDir,
+      backupDir: harness.backupDir,
+      keyring: keyring!,
+      repoRoot: harness.root,
+      reason: '   ',
+      audit,
+    })).toThrow(/non-empty operator reason/u);
+    expect(audit.records).toHaveLength(0);
+  });
+
+  it('records the attempt and failed outcome when a later chain aborts a partially-applied run, then rethrows', () => {
+    const harness = createHarness();
+    const keyring = buildSessionHmacKeyring({ serializedKeys: 'v1:repair-key', activeVersion: 'v1' });
+    expect(keyring).not.toBeNull();
+
+    // Chain "alpha" sorts first and re-signs cleanly; chain "bravo" carries a
+    // malformed line that aborts the run after alpha was already rewritten.
+    const alphaPath = join(harness.sessionsDir, '20260325_api-alpha_user_000001.jsonl');
+    writeJournal(alphaPath, [
+      buildMessageJournalEntry(1, { channelId: 'api:alpha', role: 'user', content: 'alpha one', timestamp: 1000 }),
+      buildMessageJournalEntry(2, { channelId: 'api:alpha', role: 'assistant', content: 'alpha two', timestamp: 2000 }),
+    ]);
+    const bravoPath = join(harness.sessionsDir, '20260325_api-bravo_user_000002.jsonl');
+    mkdirSync(dirname(bravoPath), { recursive: true });
+    const bravoValid = buildMessageJournalEntry(1, {
+      channelId: 'api:bravo', role: 'user', content: 'bravo one', timestamp: 1000,
+    });
+    writeFileSync(bravoPath, `${JSON.stringify(bravoValid)}\nNOT_VALID_JSON\n`, 'utf8');
+
+    const audit = createAuditSpy();
+    expect(() => runSessionIntegrityRepair({
+      sessionsDir: harness.sessionsDir,
+      backupDir: harness.backupDir,
+      keyring: keyring!,
+      repoRoot: harness.root,
+      reason: 'operator re-sign after hotfix churn',
+      audit,
+    })).toThrow(/malformed journal file/u);
+
+    expect(audit.records).toHaveLength(1);
+    const [record] = audit.records;
+    expect(record.event).toBe(SESSION_INTEGRITY_REPAIR_AUDIT_EVENT);
+    expect(record.details.outcome).toBe('failed');
+    expect(typeof record.details.errorMessage).toBe('string');
+    expect(record.details.rebuiltChannelIndex).toBe(false);
+    // Partial progress is captured: alpha was already re-signed before bravo aborted.
+    expect(record.details.modifiedEntries).toBeGreaterThan(0);
+    expect(record.details.channelIds).toEqual(
+      expect.arrayContaining(['api:alpha', 'api:bravo']),
+    );
+    expect(record.details.reason).toBe('operator re-sign after hotfix churn');
+  });
+
+  it('emits no record when no audit sink is wired (repair behavior unchanged)', () => {
+    const harness = createHarness();
+    const keyring = buildSessionHmacKeyring({ serializedKeys: 'v1:repair-key', activeVersion: 'v1' });
+    expect(keyring).not.toBeNull();
+    const filePath = join(harness.sessionsDir, '20260325_api-plain_user_000001.jsonl');
+    writeJournal(filePath, [
+      buildMessageJournalEntry(1, { channelId: 'api:plain', role: 'user', content: 'plain hello', timestamp: 1000 }),
+    ]);
+
+    // No audit sink: the run still succeeds and re-signs exactly as before.
+    const report = runSessionIntegrityRepair({
+      sessionsDir: harness.sessionsDir,
+      backupDir: harness.backupDir,
+      keyring: keyring!,
+      repoRoot: harness.root,
+      reason: 'no-sink run',
+    });
+    expect(report.journal.modifiedFiles).toBe(1);
+    expect(report.journal.modifiedEntries).toBe(1);
+    expect(report.rebuiltChannelIndex).toBe(true);
   });
 });

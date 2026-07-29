@@ -1344,10 +1344,16 @@ describe('postgres memory store integration', () => {
       })).total).toBe(0);
 
       await memoryStore.backfillMemorySubjectClassifications({ resetCheckpoint: true });
+      // bead psfn-framework-qgqw.6 (adjudication R10.3): a merge now archives the
+      // source instead of hard-deleting it, so the merged-away contact survives
+      // as a valid historical subject. Its subject memory therefore reclassifies
+      // as bound to that (archived) contact — "memories persist as grayed-out
+      // history" — rather than becoming an unknown_subject_contact ambiguity that
+      // only arose because the old merge destroyed the source row.
       expect(await memoryStore.getMemorySubjectClassification('merge-subject-memory')).toMatchObject({
-        subjectClass: 'ambiguous',
+        subjectClass: 'single_contact',
         status: 'current',
-        reasonClass: 'unknown_subject_contact',
+        reasonClass: 'explicit_single_subject',
       });
 
       await memoryStore.insertMemory(makeMemory({
@@ -1417,11 +1423,17 @@ describe('postgres memory store integration', () => {
           last_accessed: '1800000000000',
           access_count: 7,
         });
-        expect(row.rows[0]).toMatchObject({
-          status: 'current',
-          subject_class: 'ambiguous',
-          retired_subject_count: '0',
-        });
+        // bead psfn-framework-qgqw.6 (adjudication R10.3): a merge archives the
+        // source rather than hard-deleting it, so the merged-away contact
+        // survives as a valid historical subject — its subject memory stays bound
+        // to that (archived) contact (single_contact, link retained). The delete
+        // verb still destroys the source row, so its subject reclassifies to an
+        // unknown-contact ambiguity with the source link retired.
+        expect(row.rows[0]).toMatchObject(
+          operation === 'merge'
+            ? { status: 'current', subject_class: 'single_contact', retired_subject_count: '1' }
+            : { status: 'current', subject_class: 'ambiguous', retired_subject_count: '0' },
+        );
       });
     },
     INTEGRATION_TIMEOUT_MS,

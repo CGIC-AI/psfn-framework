@@ -15,7 +15,7 @@ import type { IcpInitiationCandidate } from '../../icp/initiation-candidate.js';
 import type { IcpInitiationPermit } from '../../../shared/contracts/icp-autonomy.js';
 import { runWithRequestContext } from '../../../primitives/llm/request-context.js';
 import type { SubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
-import { listCanonicalToolSurfaces } from '../tool-surface/registry.js';
+import { listCanonicalToolSurfaces, listRetiredToolAliases } from '../tool-surface/registry.js';
 import { getCanonicalToolSurfaceDescription } from '../tool-surface/descriptions.js';
 
 function makeTool(name: string, execute = vi.fn(async () => ({
@@ -738,6 +738,37 @@ describe('ToolRuntimeFacade maintenance core tool policy', () => {
       'core tool registration includes retired first-party tool aliases: media->generate_image',
     );
     expect(() => facade.registerTool(makeTool('selfie_create'), 'core')).not.toThrow();
+  });
+
+  it('rejects retired split-surface aliases with live factories that the narrow drift guard omitted (as1wr)', () => {
+    const { facade } = createFacade(null);
+    // These four names each carry a live exported factory (createMemoryWriteTool,
+    // createScratchpadReadTool, createContactListTool, createContactLookupTool)
+    // and are declared exposure:'retired', but the hand-typed model-facing drift
+    // guard list omitted them. A single registerTool(createMemoryWriteTool(...))
+    // would have re-exposed a split surface Law 33 forbids, uncaught. The funnel
+    // now runs the comprehensive registry-derived guard, so each throws.
+    for (const alias of ['memory_write', 'scratchpad_read', 'contact_list', 'contact_lookup']) {
+      expect(() => facade.registerTool(makeTool(alias), 'core'), alias).toThrow(
+        `core tool registration includes retired first-party tool aliases: ${alias}->`,
+      );
+    }
+  });
+
+  it('automatically enforces every exposure:retired split surface at registration (no drifting hand-typed list, as1wr)', () => {
+    // The registration guard derives its rejection set from the registry's own
+    // exposure:'retired' declarations, so a newly retired split surface is
+    // enforced with no second hand-typed list to keep in sync. Every such alias
+    // without a charter exception must be rejected by the registration funnel.
+    const retiredSplitSurfaces = listRetiredToolAliases()
+      .filter(alias => alias.exposure === 'retired' && !alias.charterException);
+    expect(retiredSplitSurfaces.length).toBeGreaterThan(0);
+    for (const alias of retiredSplitSurfaces) {
+      const { facade } = createFacade(null);
+      expect(() => facade.registerTool(makeTool(alias.alias), 'extended'), alias.alias).toThrow(
+        `extended tool registration includes retired first-party tool aliases: ${alias.alias}->${alias.canonicalName}`,
+      );
+    }
   });
 
   it('presents social/expressive tools before admin and boundary tools', () => {

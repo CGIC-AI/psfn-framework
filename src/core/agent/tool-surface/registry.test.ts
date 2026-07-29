@@ -156,6 +156,27 @@ describe('first-party tool surface registry', () => {
     )).toThrow();
   });
 
+  it('derives the drift guard from every exposure:retired alias so it cannot drift (as1wr)', () => {
+    const guardSet = new Set(MODEL_FACING_DRIFT_GUARD_RETIRED_TOOL_ALIASES);
+    const retiredExposureAliases = listRetiredToolAliases()
+      .filter(alias => alias.exposure === 'retired')
+      .map(alias => alias.alias);
+    // Every standalone retired split surface (each still backed by a live
+    // factory) is present in the guard automatically.
+    for (const alias of retiredExposureAliases) {
+      expect(guardSet.has(alias), alias).toBe(true);
+    }
+    // Specifically the four split surfaces the old hand-typed array omitted while
+    // their factories stayed exported and callable.
+    for (const alias of ['memory_write', 'scratchpad_read', 'contact_list', 'contact_lookup']) {
+      expect(getRetiredToolAlias(alias)?.exposure, alias).toBe('retired');
+      expect(guardSet.has(alias), alias).toBe(true);
+      expect(() => assertNoModelFacingDriftGuardToolAliases([alias], 'drift check')).toThrow(
+        `drift check includes retired first-party tool aliases: ${alias}->`,
+      );
+    }
+  });
+
   it('keeps canonical action metadata free of legacy callable names', () => {
     for (const entry of CANONICAL_FIRST_PARTY_TOOL_SURFACES) {
       expect(entry.actions ?? []).not.toEqual(

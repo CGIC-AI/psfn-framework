@@ -4,11 +4,21 @@ import { CANONICAL_TOOL_SURFACE_DESCRIPTIONS } from '../../core/agent/tool-surfa
 import { textResult, textResultWithError } from '../../core/tools/results.js';
 import type { SkillsRuntime } from './runtime.js';
 import type { SkillOwnership, SkillSource } from './types.js';
+import { detectDestructiveSkillContentReplace, type ManagedSkillRecord } from './store.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
 import type { IntakeEnvelopeSnapshot } from '../../shared/contracts/intake-envelope.js';
 import type { IntakeScreeningService } from '../../core/cogsec/intake/screening.js';
 import type { IntakeSinkGate } from '../../core/cogsec/intake/sink-gates.js';
 import { INTAKE_FIREWALL_NOTICE_TEMPLATES } from '../../core/cogsec/intake-firewall-notice-templates.js';
+import type { CapabilityTier } from '../../system/config/runtime-config-contracts.js';
+import {
+  withCapabilityRequirement,
+  resolveSkillToolCapabilityRequirement,
+} from '../../system/capabilities/requirements.js';
+import type {
+  ApprovalQueuePort,
+  ConfirmationQueueEntry,
+} from '../../system/capabilities/approval-queue-port.js';
 
 const SKILL_TOOL_ACTION_NAMES = [
   'list',
@@ -21,6 +31,8 @@ const SKILL_TOOL_ACTION_NAMES = [
   'skill_create',
   'update',
   'skill_update',
+  'history',
+  'rollback',
 ] as const;
 const SKILL_TOOL_ACTION_HELP = [
   'list',
@@ -28,10 +40,13 @@ const SKILL_TOOL_ACTION_HELP = [
   'stats',
   'create',
   'update',
+  'history',
+  'rollback',
 ].join(', ');
 
 type SkillToolActionName = (typeof SKILL_TOOL_ACTION_NAMES)[number];
-type SkillToolAction = 'list' | 'view' | 'stats' | 'create' | 'update';
+type SkillToolAction = 'list' | 'view' | 'stats' | 'create' | 'update' | 'history' | 'rollback';
+type SkillWriteAction = 'create' | 'update' | 'rollback';
 
 function resolveSkillOwnership(source: SkillSource): SkillOwnership {
   switch (source) {
@@ -54,6 +69,184 @@ interface SkillToolParams extends SkillListParams {
   category?: string;
   content?: string;
   description?: string;
+  version?: number;
+  reason?: string;
+}
+
+/**
+ * Charter 9.5 category-2 governance over managed skill writes: the capability
+ * tier decides whether a write applies directly or queues as an operator
+ * proposal on the shared Garden confirmation queue. Skill writes fail closed
+ * when this is not wired — there is no ungoverned write path.
+ */
+export interface SkillWriteGovernance {
+  getCapabilityTier: () => CapabilityTier;
+  confirmationQueue?: ApprovalQueuePort;
+}
+
+type SkillWriteGovernanceDecision =
+  | { kind: 'apply' }
+  | { kind: 'queue'; queue: ApprovalQueuePort; tier: CapabilityTier; cause: 'tier' | 'destructive' }
+  | { kind: 'refuse'; message: string };
+
+/**
+ * Tiering (deliberately conservative, per bead psfn-framework-9xe2n):
+ * - governance unwired: every write refuses (fail closed — the pre-existing
+ *   "unwired means allowed" posture was the bug).
+ * - non-autonomous tier: every write (create/update/rollback) queues for
+ *   operator confirmation; refuse when no queue is configured.
+ * - autonomous tier: creates (purely additive), non-destructive updates, and
+ *   rollbacks (restore of a journaled prior version) apply directly — every
+ *   one is journaled with provenance and reversible via rollback, which is
+ *   what justifies the lighter tier for conditionally-loaded skills.
+ *   Heuristically destructive updates NEVER apply silently: they queue, with
+ *   no self-service override flag.
+ */
+function resolveSkillWriteGovernanceDecision(
+  governance: SkillWriteGovernance | undefined,
+  action: SkillWriteAction,
+  destructive: boolean,
+): SkillWriteGovernanceDecision {
+  if (!governance) {
+    return {
+      kind: 'refuse',
+      message: `skill action=${action} is refused: skill write governance (capability tier + confirmation queue) is not wired. Managed skill writes fail closed without governance.`,
+    };
+  }
+  const tier = governance.getCapabilityTier();
+  const queue = governance.confirmationQueue;
+  if (tier !== 'autonomous') {
+    if (!queue) {
+      return {
+        kind: 'refuse',
+        message: `skill action=${action} in ${tier} tier requires confirmation queue support, but no queue is configured.`,
+      };
+    }
+    return { kind: 'queue', queue, tier, cause: 'tier' };
+  }
+  if (destructive) {
+    if (!queue) {
+      return {
+        kind: 'refuse',
+        message: `Destructive skill ${action} blocked: the change removes most of the existing skill body and requires operator confirmation, but no confirmation queue is configured.`,
+      };
+    }
+    return { kind: 'queue', queue, tier, cause: 'destructive' };
+  }
+  return { kind: 'apply' };
+}
+
+function normalizeReason(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const trimmed = value.trim();
+  return trimmed ? trimmed : undefined;
+}
+
+function requireProposalString(params: Record<string, unknown>, key: string): string {
+  const value = params[key];
+  if (typeof value !== 'string' || !value.trim()) {
+    throw new Error(`Approved skill proposal is missing required field "${key}"`);
+  }
+  return value;
+}
+
+function applyApprovedSkillWrite(
+  runtime: SkillsRuntime,
+  kind: SkillWriteAction,
+  params: Record<string, unknown>,
+): ManagedSkillRecord {
+  const store = runtime.getStore();
+  const name = requireProposalString(params, 'name');
+  const reason = normalizeReason(params.reason);
+  const provenance = { updatedBy: 'admin:confirmation', ...(reason ? { reason } : {}) };
+  const description = typeof params.description === 'string' ? params.description : undefined;
+
+  let record: ManagedSkillRecord;
+  switch (kind) {
+    case 'create': {
+      record = store.create({
+        name,
+        category: requireProposalString(params, 'category'),
+        content: requireProposalString(params, 'content'),
+        ...(description !== undefined ? { description } : {}),
+      }, provenance);
+      break;
+    }
+    case 'update': {
+      const existing = store.getByName(name);
+      if (!existing) {
+        throw new Error(`Skill "${name}" no longer exists; the approved update cannot apply`);
+      }
+      const baseVersion = params.baseVersion;
+      if (typeof baseVersion !== 'number') {
+        throw new Error('Approved skill update proposal is missing its numeric baseVersion');
+      }
+      if (existing.version !== baseVersion) {
+        throw new Error(
+          `Skill "${name}" changed since this proposal (now v${existing.version}, proposed against v${baseVersion}); re-propose against the current version`,
+        );
+      }
+      record = store.update({
+        name,
+        content: requireProposalString(params, 'content'),
+        ...(description !== undefined ? { description } : {}),
+      }, provenance);
+      break;
+    }
+    case 'rollback': {
+      const version = params.version;
+      if (typeof version !== 'number') {
+        throw new Error('Approved skill rollback proposal requires a numeric version');
+      }
+      record = store.rollback(name, version, provenance);
+      break;
+    }
+  }
+  runtime.invalidate();
+  return record;
+}
+
+function enqueueSkillWriteProposal(
+  runtime: SkillsRuntime,
+  queue: ApprovalQueuePort,
+  proposal: {
+    kind: SkillWriteAction;
+    scope: string;
+    params: Record<string, unknown>;
+    companionReason: string;
+  },
+): ConfirmationQueueEntry {
+  return queue.enqueue(
+    {
+      method: `skills.skill.${proposal.kind}`,
+      action: proposal.kind,
+      scope: proposal.scope,
+      params: proposal.params,
+      companionReason: proposal.companionReason,
+    },
+    async (approvedParams: Record<string, unknown>) => {
+      applyApprovedSkillWrite(runtime, proposal.kind, approvedParams);
+    },
+  );
+}
+
+function queuedSkillWriteResult(
+  kind: SkillWriteAction,
+  name: string,
+  entry: ConfirmationQueueEntry,
+  cause: 'tier' | 'destructive',
+): ReturnType<typeof textResult> {
+  return textResult(JSON.stringify({
+    action: 'queued',
+    kind,
+    name,
+    proposalId: entry.id,
+    cause,
+    message: `Skill ${kind} queued for operator confirmation (id: ${entry.id}). `
+      + (cause === 'destructive'
+        ? 'The change would remove most of the existing skill body, so it needs approval on the admin Confirmations page.'
+        : 'Skill writes at this capability tier need approval on the admin Confirmations page.'),
+  }, null, 2));
 }
 
 export interface SkillWriteIntakeRuntime {
@@ -162,6 +355,10 @@ function normalizeSkillAction(params: SkillToolParams): SkillToolAction {
     case 'update':
     case 'skill_update':
       return 'update';
+    case 'history':
+      return 'history';
+    case 'rollback':
+      return 'rollback';
     default:
       throw new Error(`action must be one of: ${SKILL_TOOL_ACTION_HELP}`);
   }
@@ -380,8 +577,9 @@ function buildSkillViewPayload(runtime: SkillsRuntime, name: string): Record<str
 export function createSkillTool(
   runtime: SkillsRuntime,
   intake?: SkillWriteIntakeRuntime,
+  governance?: SkillWriteGovernance,
 ): SubstrateAgentTool {
-  return {
+  const tool: SubstrateAgentTool = {
     name: 'skill',
     label: 'skill',
     description: CANONICAL_TOOL_SURFACE_DESCRIPTIONS.skill,
@@ -398,7 +596,7 @@ export function createSkillTool(
       })),
       name: Type.Optional(Type.String({
         minLength: 1,
-        description: 'Required for action=view|create|update. Optional for action=stats; omit to list summaries.',
+        description: 'Required for action=view|create|update|history|rollback. Optional for action=stats; omit to list summaries.',
       })),
       category: Type.Optional(Type.String({
         minLength: 1,
@@ -410,6 +608,12 @@ export function createSkillTool(
       })),
       description: Type.Optional(Type.String({
         description: 'Optional one-line summary used in prompt index.',
+      })),
+      version: Type.Optional(Type.Number({
+        description: 'Required for action=rollback: the journaled version to restore. Optional for action=history: return that version with its full document.',
+      })),
+      reason: Type.Optional(Type.String({
+        description: 'Optional short rationale recorded as provenance for action=create|update|rollback.',
       })),
     }),
     execute: async (_toolCallId: string, params: SkillToolParams) => {
@@ -467,6 +671,30 @@ export function createSkillTool(
             if (!screened.allowed) {
               return textResult(INTAKE_FIREWALL_NOTICE_TEMPLATES.sinkHeld);
             }
+
+            const reason = normalizeReason(params.reason);
+            const decision = resolveSkillWriteGovernanceDecision(governance, 'create', false);
+            if (decision.kind === 'refuse') {
+              return textResultWithError(decision.message, true);
+            }
+            if (decision.kind === 'queue') {
+              const entry = enqueueSkillWriteProposal(runtime, decision.queue, {
+                kind: 'create',
+                scope: `${name.trim()} (new)`,
+                params: {
+                  name,
+                  category,
+                  content: screened.content,
+                  ...(screened.description !== undefined
+                    ? { description: screened.description }
+                    : {}),
+                  ...(reason ? { reason } : {}),
+                },
+                companionReason: reason ?? `Skill create proposed by ${decision.tier} tier`,
+              });
+              return queuedSkillWriteResult('create', name.trim(), entry, decision.cause);
+            }
+
             const created = runtime.getStore().create({
               name,
               category,
@@ -474,7 +702,7 @@ export function createSkillTool(
                 ? { description: screened.description }
                 : {}),
               content: screened.content,
-            });
+            }, { updatedBy: 'agent', ...(reason ? { reason } : {}) });
             runtime.invalidate();
 
             return textResult(JSON.stringify({
@@ -507,13 +735,54 @@ export function createSkillTool(
             if (!screened.allowed) {
               return textResult(INTAKE_FIREWALL_NOTICE_TEMPLATES.sinkHeld);
             }
+
+            const existing = runtime.getStore().getByName(name);
+            if (!existing) {
+              return textResultWithError(`Skill "${name.trim()}" does not exist`, true);
+            }
+
+            const reason = normalizeReason(params.reason);
+            const destructiveRisk = detectDestructiveSkillContentReplace(
+              existing.content,
+              screened.content,
+            );
+            const decision = resolveSkillWriteGovernanceDecision(
+              governance,
+              'update',
+              destructiveRisk !== null,
+            );
+            if (decision.kind === 'refuse') {
+              return textResultWithError(decision.message, true);
+            }
+            if (decision.kind === 'queue') {
+              const destructiveNote = destructiveRisk
+                ? ` Destructive replace: ${destructiveRisk.previousLength}->${destructiveRisk.nextLength} chars.`
+                : '';
+              const entry = enqueueSkillWriteProposal(runtime, decision.queue, {
+                kind: 'update',
+                scope: `${existing.name} (v${existing.version})`,
+                params: {
+                  name: existing.name,
+                  content: screened.content,
+                  ...(screened.description !== undefined
+                    ? { description: screened.description }
+                    : {}),
+                  ...(reason ? { reason } : {}),
+                  baseVersion: existing.version,
+                },
+                companionReason:
+                  `${reason ?? `Skill update proposed by ${decision.tier} tier`}${destructiveNote}`,
+              });
+              return queuedSkillWriteResult('update', existing.name, entry, decision.cause);
+            }
+
             const updated = runtime.getStore().update({
               name,
               ...(screened.description !== undefined
                 ? { description: screened.description }
                 : {}),
               content: screened.content,
-            });
+            }, { updatedBy: 'agent', ...(reason ? { reason } : {}) });
             runtime.invalidate();
 
             return textResult(JSON.stringify({
@@ -527,6 +796,107 @@ export function createSkillTool(
               path: updated.relativePath,
             }, null, 2));
           }
+          case 'history': {
+            const name = typeof params.name === 'string' ? params.name.trim() : '';
+            if (!name) {
+              return textResultWithError('skill action=history requires a non-empty name.', true);
+            }
+            const entries = runtime.getStore().getHistory(name);
+            const requestedVersion = typeof params.version === 'number' ? params.version : null;
+            if (requestedVersion !== null) {
+              const entry = entries.find((candidate) => candidate.version === requestedVersion);
+              if (!entry) {
+                return textResultWithError(
+                  `Skill "${name}" has no history entry for version ${requestedVersion}`,
+                  true,
+                );
+              }
+              return textResult(JSON.stringify({
+                action: 'history',
+                name,
+                version: requestedVersion,
+                entry: {
+                  action: entry.action,
+                  version: entry.version,
+                  timestamp: entry.timestamp,
+                  updatedBy: entry.updatedBy,
+                  reason: entry.reason ?? null,
+                  previousVersion: entry.previousVersion,
+                  previousChecksum: entry.previousChecksum,
+                  newChecksum: entry.newChecksum,
+                  document: entry.newDocument,
+                },
+              }, null, 2));
+            }
+            return textResult(JSON.stringify({
+              action: 'history',
+              name,
+              entries: entries.map((entry) => ({
+                action: entry.action,
+                version: entry.version,
+                timestamp: entry.timestamp,
+                updatedBy: entry.updatedBy,
+                reason: entry.reason ?? null,
+                previousVersion: entry.previousVersion,
+                previousChecksum: entry.previousChecksum,
+                newChecksum: entry.newChecksum,
+                previousLength: entry.previousDocument?.length ?? null,
+                newLength: entry.newDocument.length,
+              })),
+            }, null, 2));
+          }
+          case 'rollback': {
+            const name = typeof params.name === 'string' ? params.name.trim() : '';
+            if (!name) {
+              return textResultWithError('skill action=rollback requires a non-empty name.', true);
+            }
+            const version = params.version;
+            if (typeof version !== 'number' || !Number.isInteger(version) || version < 1) {
+              return textResultWithError('skill action=rollback requires a positive integer version.', true);
+            }
+
+            const existing = runtime.getStore().getByName(name);
+            if (!existing) {
+              return textResultWithError(`Skill "${name}" does not exist`, true);
+            }
+
+            const reason = normalizeReason(params.reason);
+            const decision = resolveSkillWriteGovernanceDecision(governance, 'rollback', false);
+            if (decision.kind === 'refuse') {
+              return textResultWithError(decision.message, true);
+            }
+            if (decision.kind === 'queue') {
+              const entry = enqueueSkillWriteProposal(runtime, decision.queue, {
+                kind: 'rollback',
+                scope: `${existing.name} (v${existing.version})`,
+                params: {
+                  name: existing.name,
+                  version,
+                  ...(reason ? { reason } : {}),
+                },
+                companionReason: reason
+                  ?? `Skill rollback to version ${version} proposed by ${decision.tier} tier`,
+              });
+              return queuedSkillWriteResult('rollback', existing.name, entry, decision.cause);
+            }
+
+            const restored = runtime.getStore().rollback(name, version, {
+              updatedBy: 'agent:rollback',
+              ...(reason ? { reason } : {}),
+            });
+            runtime.invalidate();
+
+            return textResult(JSON.stringify({
+              action: 'rolled_back',
+              name: restored.name,
+              category: restored.category,
+              restoredFromVersion: version,
+              version: restored.version,
+              updatedAt: restored.updatedAt,
+              ownership: 'personal',
+              path: restored.relativePath,
+            }, null, 2));
+          }
         }
       } catch (error) {
         const message = toErrorMessage(error);
@@ -534,4 +904,9 @@ export function createSkillTool(
       }
     },
   };
+
+  // Explicit action-aware capability annotation (parity with peer self-mod
+  // tools such as persona_update); delegates to the central skill resolver so
+  // the annotation and the unified requirement table cannot drift.
+  return withCapabilityRequirement(tool, resolveSkillToolCapabilityRequirement);
 }

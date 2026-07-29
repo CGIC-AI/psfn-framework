@@ -33,12 +33,16 @@ describe('skills runtime wiring', () => {
         dataDir,
         seedDir,
         repoRoot: root,
+      }, {
+        getCapabilityTier: () => 'autonomous',
       });
 
       expect(runtime).toBe(target.skillsRuntime);
       expect(registerTool).toHaveBeenCalledTimes(1);
       expect(registerTool.mock.calls[0]?.[0]?.name).toBe('skill');
       expect(registerTool.mock.calls[0]?.[1]).toBe('core');
+      // Parity with peer self-mod tools: explicit capability annotation.
+      expect(registerTool.mock.calls[0]?.[0]?.requiredCapability).toBeDefined();
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -72,6 +76,8 @@ describe('skills runtime wiring', () => {
       wireSkillsRuntime(target, {
         dataDir,
         repoRoot: root,
+      }, {
+        getCapabilityTier: () => 'autonomous',
       }, {
         getIntakeSinkGate: () => gate,
         getIntakeScreening: () => null,

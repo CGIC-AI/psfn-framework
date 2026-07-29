@@ -367,7 +367,7 @@ export const CANONICAL_FIRST_PARTY_TOOL_SURFACES: readonly CanonicalToolSurfaceE
     domain: 'knowledge',
     exposure: 'core',
     description: CANONICAL_TOOL_SURFACE_DESCRIPTIONS.skill,
-    actions: ['list', 'view', 'stats', 'create', 'update'],
+    actions: ['list', 'view', 'stats', 'create', 'update', 'history', 'rollback'],
     capabilityMetadata: { kind: 'action_aware', source: CAPABILITIES_REQUIREMENTS },
     retiredAliases: [
       retiredAlias('skill_list', 'skill', 'hidden', 'list', 'Skill discovery belongs on skill.'),

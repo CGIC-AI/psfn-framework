@@ -750,7 +750,8 @@ Operational rules:
 - PostgreSQL long-term memory requires the `pgvector` extension. Startup and migrations fail closed when `pgvector` is unavailable; there is no supported fallback to `DOUBLE PRECISION[]` scanning.
 - If a backend or projection strategy changes, run `npm run lint`, `npm run build`, and targeted parity tests for the affected domains before treating the change as safe.
 - If projection drift is suspected, repair from the archive before trusting search results or operator views.
-- Use `npm run session:repair:transcript-projection` to rebuild the searchable transcript projection from authoritative JSONL L0 after drift, backend migration, or recovery work.
+- Projection drift records carry a `kind`. Best-effort `sync` drift (a failed ordinary append) leaves search available. Fail-closed `redaction` drift (a CogSec/turn redaction failed to propagate to the projection, so the projection may still hold content canon has redacted) is durable, excludes the affected session from transcript keyword search until repair succeeds, and raises an operator-only Cognitive Security incident (`cogsec_projectiondrift_*`, `session_integrity` class) in Garden.
+- Use `npm run session:repair:transcript-projection` to rebuild the searchable transcript projection from authoritative JSONL L0 after drift, backend migration, or recovery work. A successful channel rebuild clears both drift kinds and restores search for the session.
 - The repair utility accepts `--data-dir` and `--sessions-dir` overrides and targets the configured PostgreSQL session projection backend through the port layer.
 
 ### Persistent external testing-harness channel

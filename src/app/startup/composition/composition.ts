@@ -123,6 +123,7 @@ import {
 import { createDefaultPostgresSessionAdapters } from '../../../persistence/sessions/postgres-adapters.js';
 import { CogSecEventStore } from '../../../core/cogsec/events.js';
 import { createSessionIntegrityIncidentObserver } from '../../../core/cogsec/session-integrity-incident.js';
+import { createProjectionDriftIncidentObserver } from '../../../core/cogsec/projection-drift-incident.js';
 import { createPostgresShardSchemaLifecycle } from '../../../persistence/postgres/shard-schema-lifecycle.js';
 import { FatigueLedger } from '../../../shared/telemetry/fatigue-ledger.js';
 
@@ -269,8 +270,19 @@ export async function composeSessionRuntimeAsync(
         throw new Error('Multi-companion session composition requires config.postgresRole');
       })()
     : undefined;
+  // Redaction projection-drift incident seam (bead 6oott): a failed
+  // redaction-driven projection write records one operator-only CogSec
+  // incident (session_integrity class, projectiondrift caseId prefix) in the
+  // canonical cogsec-events.json store that Garden already reads. Search is
+  // fail-closed by the durable drift record itself; this is the operator
+  // signal pointing at transcript-projection-repair. Mirrors the g59z
+  // session-integrity observer wiring below.
+  const redactionDriftObserver = createProjectionDriftIncidentObserver({
+    cogSecEvents: () => new CogSecEventStore(resolveCogSecEventsPath(companionDataDir)),
+  });
   const sessionAdapters = await createDefaultPostgresSessionAdapters(databaseUrl, {
     sessionsDir,
+    redactionDriftObserver,
     ...(postgresSchema ? { schema: postgresSchema } : {}),
     ...(postgresRole ? { role: postgresRole } : {}),
   });

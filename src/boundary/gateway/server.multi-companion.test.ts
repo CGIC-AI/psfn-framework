@@ -1426,6 +1426,41 @@ describe('GatewayServer multi-companion identify (flag on)', () => {
     expect(providerCalls.find(call => call.kind === 'chat')?.signal.aborted).toBe(true);
   });
 
+  it('zn2iy: aborts an in-flight client embed on connection disconnect', async () => {
+    let providerSignal: AbortSignal | undefined;
+    const embedBatch = vi.fn(async (
+      _texts: string[],
+      options?: { signal?: AbortSignal },
+    ): Promise<Float32Array[]> => {
+      providerSignal = options?.signal;
+      // llm.embed is now registered in the connection-scoped cancellation
+      // registry (zn2iy), so even a signal-free client embed carries a
+      // gateway-minted cancellationId and receives a gateway AbortSignal.
+      if (!providerSignal) throw new Error('test expected a gateway signal for the embed');
+      if (providerSignal.aborted) throw providerSignal.reason;
+      return await new Promise<Float32Array[]>((_resolve, reject) => {
+        providerSignal!.addEventListener('abort', () => reject(providerSignal!.reason), { once: true });
+      });
+    });
+    const { connectClient } = await setupServer({
+      ...createMinimalOptions(),
+      embeddingService: { embed: vi.fn(), embedBatch, dims: 3 } as any,
+      multiCompanion: multiCompanion({}),
+    });
+    const clientA = await connectClient('11111111-1111-4111-8111-111111111111');
+
+    const embedding = clientA.embedBatch(['embed without a caller signal']);
+    await vi.waitFor(() => expect(providerSignal).toBeInstanceOf(AbortSignal));
+    expect(providerSignal?.aborted).toBe(false);
+
+    clientA.destroy();
+    await expect(embedding).rejects.toThrow();
+    // Disconnect fires the registry's abortAll, tearing down the upstream
+    // embedding provider instead of leaving a zombie that finishes after the
+    // caller is gone.
+    await vi.waitFor(() => expect(providerSignal?.aborted).toBe(true));
+  });
+
   it.each([
     [
       'llm.complete',
@@ -1476,7 +1511,10 @@ describe('GatewayServer multi-companion identify (flag on)', () => {
       // Deliberately ignore the supplied signal and resolve after cancellation.
       return await lateProvider;
     });
-    const auditAppend = vi.fn(async () => 71);
+    // oetdv: llm.cancel is itself audited now, so distinguish its audit id (99)
+    // from the target method's (71) to keep the assertions method-scoped.
+    const auditAppend = vi.fn(async (entry: { method?: string }) =>
+      entry.method === 'llm.cancel' ? 99 : 71);
     const auditComplete = vi.fn(async () => undefined);
     const { server, connect } = await setupServer({
       ...createMinimalOptions(),
@@ -1510,7 +1548,10 @@ describe('GatewayServer multi-companion identify (flag on)', () => {
       cancellationId,
     })).result).toEqual({ cancelled: true });
     expect((await pending).error?.message).toContain('cancelled by its owning connection');
-    expect(auditComplete).not.toHaveBeenCalled();
+    // The target method's audit (id 71) stays open until its late provider
+    // resolves; only llm.cancel's own audit (id 99) may have completed by now.
+    expect(auditComplete).not.toHaveBeenCalledWith(71, expect.anything(), expect.anything());
+    expect(auditComplete).not.toHaveBeenCalledWith(71, expect.anything());
 
     releaseProvider({
       content: 'late result',
@@ -1520,17 +1561,19 @@ describe('GatewayServer multi-companion identify (flag on)', () => {
       outputTokens: 4,
       stopReason: 'stop',
     });
-    await vi.waitFor(() => expect(auditComplete).toHaveBeenCalledOnce());
+    // Wait specifically for the TARGET method's audit (id 71) to complete as a
+    // failure once its late provider resolves. llm.cancel's own audit (id 99)
+    // completed earlier and must not satisfy this wait.
+    await vi.waitFor(() => expect(auditComplete).toHaveBeenCalledWith(
+      71,
+      expect.any(Number),
+      expect.stringContaining('cancelled by its owning connection'),
+    ));
 
     expect(auditAppend).toHaveBeenCalledWith(expect.objectContaining({
       method,
       decision: 'ALLOW',
     }));
-    expect(auditComplete).toHaveBeenCalledWith(
-      71,
-      expect.any(Number),
-      expect.stringContaining('cancelled by its owning connection'),
-    );
     await server.stop();
   });
 

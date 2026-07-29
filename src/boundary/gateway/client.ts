@@ -986,6 +986,11 @@ export class GatewayClient implements
         ...buildOutboundUsageCorrelation(this.companionId, getRequestContext()),
       },
       options.signal,
+      // zn2iy: like llm.chat/llm.complete, mint a cancellationId and fire
+      // llm.cancel on abort so the gateway's connection-scoped registry aborts
+      // the upstream embedding provider instead of only releasing this local
+      // JSON-RPC wrapper while the provider keeps running.
+      'llm',
     );
 
     return result.embeddings.map(e => new Float32Array(e));

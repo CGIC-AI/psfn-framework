@@ -681,7 +681,7 @@ describe('runRLMLoop', () => {
   it('recommends worker delegation without disabling direct Workbench use', () => {
     const tool = createAnalysisWorkbenchTool(makeDeps(sequentialLLM(['FINAL("noop")'])));
 
-    expect(tool.description).toContain('bounded worker or automaton');
+    expect(tool.description).toContain('bounded automaton');
     expect(tool.description).toContain('primary channel stays responsive');
     expect(tool.description).toContain('direct use is permitted');
   });

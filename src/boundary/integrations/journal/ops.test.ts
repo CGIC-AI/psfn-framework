@@ -112,7 +112,7 @@ describe('JournalOps governed I/O', () => {
     expect(result.results[0]?.path).toBe('large.md');
   });
 
-  it('fails before returning partial search results when one note exceeds the input bound', async () => {
+  it('skips an oversized note and reports the incomplete search explicitly', async () => {
     writeFileSync(join(root, 'first.md'), 'needle\n', 'utf8');
     writeFileSync(
       join(root, 'oversized.md'),
@@ -120,23 +120,39 @@ describe('JournalOps governed I/O', () => {
     );
     const ops = new JournalOps(root);
 
-    await expect(ops.search('needle')).rejects.toThrow(
-      /Journal search bound exceeded.*read a known note with journal read paging/is,
-    );
+    await expect(ops.search('needle')).resolves.toMatchObject({
+      complete: false,
+      totalFiles: 2,
+      scannedFiles: 1,
+      skippedOversizedFiles: ['oversized.md'],
+      results: [{ path: 'first.md' }],
+    });
   });
 
-  it('fails before materializing a corpus beyond the governed file count', async () => {
-    for (let index = 0; index <= JOURNAL_IO_CONTRACT.searchMaxFiles; index += 1) {
+  it('returns deterministic incomplete list and search metadata beyond the file bounds', async () => {
+    const totalFiles = JOURNAL_IO_CONTRACT.searchMaxFiles + 5;
+    for (let index = 0; index < totalFiles; index += 1) {
       writeFileSync(join(root, `note-${String(index).padStart(3, '0')}.md`), 'small\n', 'utf8');
     }
     const ops = new JournalOps(root);
 
-    await expect(ops.search('small')).rejects.toThrow(
-      /Journal search bound exceeded.*Markdown files/s,
-    );
-    await expect(ops.list()).rejects.toThrow(
-      /Journal list bound exceeded.*Markdown files/s,
-    );
+    const search = await ops.search('small');
+    expect(search).toMatchObject({
+      complete: false,
+      totalFiles,
+      scannedFiles: JOURNAL_IO_CONTRACT.searchMaxFiles,
+      skippedOversizedFiles: [],
+    });
+    expect(search.results[0]?.path).toBe('note-000.md');
+
+    const list = await ops.list();
+    expect(list).toMatchObject({
+      truncated: true,
+      totalFiles,
+    });
+    expect(list.notes).toHaveLength(JOURNAL_IO_CONTRACT.listMaxFiles);
+    expect(list.notes[0]).toBe('note-000.md');
+    expect(list.notes.at(-1)).toBe('note-199.md');
   });
 
   it('atomically preserves every concurrent append through directory symlink aliases', async () => {
@@ -343,6 +359,42 @@ describe('JournalOps governed I/O', () => {
     );
 
     expect(readFileSync(path, 'utf8')).toBe(original);
+    expect(readdirSync(root).filter(name => name.includes('journal-append'))).toEqual([]);
+  });
+
+  it('fails closed when the source note is replaced while append copies it', async () => {
+    const notePath = join(root, 'concurrent.md');
+    const replacement = 'concurrent replacement\n';
+    writeFileSync(notePath, 'x'.repeat(128 * 1024), 'utf8');
+
+    const mutation = withJournalMutationLock(root, notePath, async (target) => {
+      const source = target.existingHandle;
+      if (!source) throw new Error('expected an existing journal note');
+      let replaced = false;
+      const racingSource = {
+        stat: source.stat.bind(source),
+        read: async (
+          buffer: NodeJS.ArrayBufferView,
+          offset: number,
+          length: number,
+          position: number | null,
+        ) => {
+          const result = await source.read(buffer, offset, length, position);
+          if (!replaced && result.bytesRead > 0) {
+            replaced = true;
+            writeFileSync(notePath, replacement, 'utf8');
+          }
+          return result;
+        },
+      } as unknown as NonNullable<typeof target.existingHandle>;
+      return appendJournalNoteAtomically(
+        { ...target, existingHandle: racingSource },
+        'must not overwrite the concurrent replacement',
+      );
+    });
+
+    await expect(mutation).rejects.toThrow(/modified concurrently/i);
+    expect(readFileSync(notePath, 'utf8')).toBe(replacement);
     expect(readdirSync(root).filter(name => name.includes('journal-append'))).toEqual([]);
   });
 

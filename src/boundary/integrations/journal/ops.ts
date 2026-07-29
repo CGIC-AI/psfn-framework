@@ -16,6 +16,8 @@ export { JOURNAL_IO_CONTRACT } from './bounded-io.js';
 export interface JournalListResult {
   root: string;
   notes: string[];
+  truncated: boolean;
+  totalFiles: number;
 }
 
 export interface JournalReadResult {
@@ -40,10 +42,12 @@ export interface JournalWriteResult {
 export interface JournalSearchResult {
   query: string;
   results: Array<{ path: string; snippet: string }>;
-  complete: true;
+  complete: boolean;
   resultLimitReached: boolean;
   scannedFiles: number;
   scannedBytes: number;
+  totalFiles: number;
+  skippedOversizedFiles: string[];
 }
 
 export interface JournalOperations {
@@ -67,9 +71,12 @@ export class JournalOps implements JournalOperations {
 
   async list(): Promise<JournalListResult> {
     await this.ensureRoot();
+    const result = await this.listMarkdownNotes();
     return {
       root: this.root,
-      notes: await this.listMarkdownNotes(),
+      notes: result.paths,
+      truncated: result.truncated,
+      totalFiles: result.totalFiles,
     };
   }
 
@@ -150,7 +157,7 @@ export class JournalOps implements JournalOperations {
     };
   }
 
-  private async listMarkdownNotes(): Promise<string[]> {
+  private async listMarkdownNotes(): ReturnType<typeof listBoundedJournalPaths> {
     await this.ensureRoot();
     return listBoundedJournalPaths(this.root);
   }

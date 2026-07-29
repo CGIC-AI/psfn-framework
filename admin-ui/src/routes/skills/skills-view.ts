@@ -1,8 +1,15 @@
-import type { SkillRootScan } from '$lib/types';
+import type { ManagedSkill, SkillRootScan } from '$lib/types';
 
 export interface SkillRootView {
   root: SkillRootScan;
   degradationMessage?: string;
+}
+
+export function findManagedSkillRecord(
+  managedSkills: ManagedSkill[],
+  name: string,
+): ManagedSkill | undefined {
+  return managedSkills.find(skill => skill.name.toLowerCase() === name.toLowerCase());
 }
 
 export function formatMissingSkillRoot(root: SkillRootScan): string {

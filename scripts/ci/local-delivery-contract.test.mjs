@@ -244,15 +244,15 @@ test('delivery-only gate stays fast while product changes retain full validation
 
 test('local tool doctor pins UBS while accepting supported Node releases', () => {
   assert.doesNotThrow(() =>
-    validateToolReport({ nodeVersion: 'v24.13.1', ubsVersion: 'UBS Meta-Runner v5.3.5' }),
+    validateToolReport({ nodeVersion: 'v24.13.1', ubsVersion: 'UBS Meta-Runner v5.3.7' }),
   );
   assert.throws(
-    () => validateToolReport({ nodeVersion: 'v20.19.0', ubsVersion: 'UBS Meta-Runner v5.3.5' }),
+    () => validateToolReport({ nodeVersion: 'v20.19.0', ubsVersion: 'UBS Meta-Runner v5.3.7' }),
     /Node >=22/,
   );
   assert.throws(
     () => validateToolReport({ nodeVersion: 'v24.13.1', ubsVersion: 'UBS Meta-Runner v5.4.0' }),
-    /UBS 5\.3\.5/,
+    /UBS 5\.3\.7/,
   );
 });
 

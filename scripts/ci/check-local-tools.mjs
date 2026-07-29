@@ -3,7 +3,7 @@
 import { execFileSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
 
-const REQUIRED_UBS_VERSION = '5.3.5';
+const REQUIRED_UBS_VERSION = '5.3.7';
 
 function run(executable, args) {
   try {

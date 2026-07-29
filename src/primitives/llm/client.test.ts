@@ -5156,7 +5156,7 @@ describe('LLMClient model budget gates and usage metering', () => {
     ]);
   });
 
-  it('discards a late direct completion after cancellation without success cost, retry, or fallback', async () => {
+  it('records a marked usage event for a resolved-under-abort completion, then surfaces the abort without retry or fallback', async () => {
     const usageRecorder = { recordUsageEvent: vi.fn(async () => undefined) };
     const providerStarted = createDeferred<void>();
     const providerRelease = createDeferred<{
@@ -5203,7 +5203,14 @@ describe('LLMClient model budget gates and usage metering', () => {
 
     await expect(pending).rejects.toBe(abortReason);
     expect(mocks.completeSimple).toHaveBeenCalledTimes(1);
-    expect(usageRecorder.recordUsageEvent).not.toHaveBeenCalled();
+    // i24ax: the provider resolved and produced billable tokens, so the call is
+    // recorded exactly once with a cancelledAfterCompletion marker (which also
+    // settles the ICP reservation via recordUsageEvent) BEFORE the abort surfaces.
+    expect(usageRecorder.recordUsageEvent).toHaveBeenCalledTimes(1);
+    const event = usageRecorder.recordUsageEvent.mock.calls[0]?.[0];
+    expect(event?.status).toBe('success');
+    expect(event?.settlement).toBe('complete');
+    expect(event?.metadata).toMatchObject({ cancelledAfterCompletion: true });
   });
 
   it('stops two-candidate stream fallback after a timeout-shaped caller abort', async () => {
@@ -5294,7 +5301,13 @@ describe('LLMClient model budget gates and usage metering', () => {
     await expect(pending).rejects.toBe(abortReason);
     expect(providerAttempts).toBe(1);
     expect(mocks.streamSimple).toHaveBeenCalledTimes(1);
-    expect(usageRecorder.recordUsageEvent).not.toHaveBeenCalled();
+    // i24ax: the first candidate's stream completed under abort, so it records
+    // exactly one marked usage event (settling the reservation) and then throws a
+    // non-retryable abort — fallback to the second candidate never runs.
+    expect(usageRecorder.recordUsageEvent).toHaveBeenCalledTimes(1);
+    const event = usageRecorder.recordUsageEvent.mock.calls[0]?.[0];
+    expect(event?.status).toBe('success');
+    expect(event?.metadata).toMatchObject({ cancelledAfterCompletion: true });
     expect(callbacks.onDone).not.toHaveBeenCalled();
     expect(callbacks.onError).toHaveBeenCalledWith(abortReason);
   });

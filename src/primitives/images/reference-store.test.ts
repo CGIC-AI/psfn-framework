@@ -231,6 +231,47 @@ describe('ImageReferenceStore deletion recoverability', () => {
     expect(await store.getBlob(target.id)).toBeNull();
   });
 
+  it('returns null from getBlob when the index entry exists but the blob file is gone', async () => {
+    const dir = makeCompanionDataDir();
+    const store = new ImageReferenceStore(dir);
+    const uploaded = await store.add({
+      filename: 'ref.png',
+      contentType: 'image/png',
+      data: Buffer.from([9]),
+      setDefault: true,
+    });
+    const blobPath = resolveReferencePathForTest(store, uploaded.fileName);
+    expect(existsSync(blobPath)).toBe(true);
+
+    // Remove the blob out-of-band while the index still advertises the
+    // reference — the crash-window state xyd7's rm-before-writeIndex ordering
+    // can leave behind. getBlob's not-found contract must return null here,
+    // uniform with the empty-id and missing-entry cases, rather than leaking a
+    // raw ENOENT (which also embeds the on-disk companion-data path).
+    rmSync(blobPath);
+    expect((await store.list()).references.map((entry) => entry.id)).toContain(uploaded.id);
+    await expect(store.getBlob(uploaded.id)).resolves.toBeNull();
+  });
+
+  it('propagates a non-ENOENT filesystem error from getBlob', async () => {
+    const dir = makeCompanionDataDir();
+    const store = new ImageReferenceStore(dir);
+    const uploaded = await store.add({
+      filename: 'ref.png',
+      contentType: 'image/png',
+      data: Buffer.from([9]),
+      setDefault: true,
+    });
+    const blobPath = resolveReferencePathForTest(store, uploaded.fileName);
+
+    // Replace the blob file with a directory so the read fails with EISDIR — an
+    // error class that is NOT missing-file. getBlob must reject rather than
+    // mask it as a not-found null, so only the ENOENT case is contract-uniform.
+    rmSync(blobPath);
+    mkdirSync(blobPath);
+    await expect(store.getBlob(uploaded.id)).rejects.toThrow();
+  });
+
   it('removes both the index entry and the blob on a successful delete', async () => {
     const dir = makeCompanionDataDir();
     const store = new ImageReferenceStore(dir);

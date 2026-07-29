@@ -99,6 +99,16 @@ partner review first. Trust goes both ways (the operator holds himself to the
 same standard when quoting shared messages). A formal partner-review surface
 for this can come later; her formal write-and-publish path comes first.
 
+### 5.1 Log-to-artifact import (companion-keeper lineage)
+
+A more advanced system that takes conversation logs and creates companion
+artifacts (persona, memories, structure) can come later — a retired codebase
+that does exactly this already exists and can be brought into the family:
+<https://github.com/axAilotl/companion-keeper>. Until then, the onboarding
+importer covers card/soul-file formats (CCv2/CCv3 SillyTavern, SoulMD from
+OpenClaw/Hermes, plain markdown); log-derived artifact generation is this
+future element, not a bead.
+
 ### 6. The operator-persona experiment
 
 An experimental peer on the same framework: a copy of the operator's own

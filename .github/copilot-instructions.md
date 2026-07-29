@@ -1,42 +1,35 @@
 # GitHub Copilot Instructions
 
+**[AGENTS.md](../AGENTS.md) is the operating contract for this repository** —
+issue tracking, the delivery loop, validation gates, configuration ownership,
+parallel-work safety, and session completion. Read it first and follow it; when
+this file and AGENTS.md disagree, AGENTS.md wins. [CLAUDE.md](../CLAUDE.md) adds
+repo orientation.
+
 ## Issue Tracking with bd
 
-This project uses **bd (beads)** for issue tracking - a Git-backed tracker designed for AI-supervised coding workflows.
-
-**Key Features:**
-- Dependency-aware issue tracking
-- Auto-sync with Git via JSONL
-- AI-optimized CLI with JSON output
-- Built-in daemon for background operations
-- MCP server integration for Claude and other AI assistants
-
-### Critical Rules
-
-- Use bd for ALL task tracking
-- Run `bd sync` at the end of every session
-- Always include `.beads/issues.jsonl` when committing changes
-- Avoid markdown TODO lists
+This project uses **bd (beads)** for all tracked work. Run `bd prime` at the
+start of a session for the full command reference and workflow.
 
 ### Essential Commands
 
 ```bash
-bd ready --json
-bd create <title> -t bug|feature|task -p 0-4 --json
-bd update <id> --status in_progress --json
-bd close <id> --reason "Done" --json
-bd sync
+bd ready --json                # Find unblocked work
+bd show <id> --json            # View issue details
+bd update <id> --claim --json  # Claim work
+bd create "Title" --description "Self-contained details" -t task -p 2 --json
+bd close <id> --reason "Done, with evidence" --json
 ```
 
-### Workflow Expectations
+### Rules (see AGENTS.md for the authoritative version)
 
-1. Check `bd ready --json` for unblocked work.
-2. Claim and work through `bd update <id> --status in_progress`.
-3. Create `/ link new issues with `discovered-from` if you uncover more work.
-4. Close via `bd close <id> --reason "Done"` when completed.
-
-### Additional Guidance
-
-- Use `bd <command> --help` when learning new flags.
-- Run `bd ready --json` before asking what to work on.
-- Store AI planning docs in `history/` to keep the root clean.
+- Use `bd` for all task tracking; do not create markdown TODO lists.
+- Do **not** rely on `bd sync`; this repo uses the `bd dolt` subcommands against
+  a local shared Dolt server. Verify it with `bd dolt show` or `bd dolt test`.
+- `.beads/` is intentionally git-ignored local export/runtime state. Do not
+  `git add .beads`. The single un-ignored `.beads/issues.jsonl` snapshot is only
+  committed by off-machine remote-lane workers, per AGENTS.md.
+- Keep issue descriptions self-contained (summary, files, steps, acceptance) and
+  link discovered follow-up work with `discovered-from:<parent-id>`.
+- Keep AI planning and scratch documents out of tracked product docs; use beads
+  and, when a scratch file is genuinely needed, `working_docs/`.

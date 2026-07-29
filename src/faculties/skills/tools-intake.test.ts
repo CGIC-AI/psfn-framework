@@ -32,8 +32,13 @@ import {
 import { SkillsRuntime } from './runtime.js';
 import {
   createSkillTool,
+  type SkillWriteGovernance,
   type SkillWriteIntakeRuntime,
 } from './tools.js';
+
+const AUTONOMOUS_GOVERNANCE: SkillWriteGovernance = {
+  getCapabilityTier: () => 'autonomous',
+};
 
 const POLICY_PATH = join(process.cwd(), 'config', 'intake-policy.seed.json');
 const RULES_PATH = join(process.cwd(), 'config', 'intake-l1-rules.json');
@@ -137,7 +142,7 @@ describe('managed skill write intake gating', () => {
     const tool = createSkillTool(runtime, makeIntakeRuntime({
       mode: 'enforce',
       audits,
-    }));
+    }), AUTONOMOUS_GOVERNANCE);
 
     const created = await tool.execute('create-clean', {
       action: 'create',
@@ -189,7 +194,7 @@ describe('managed skill write intake gating', () => {
     const tool = createSkillTool(runtime, makeIntakeRuntime({
       mode: 'enforce',
       audits,
-    }));
+    }), AUTONOMOUS_GOVERNANCE);
 
     const result = await tool.execute('create-hostile', {
       action: 'create',
@@ -214,7 +219,7 @@ describe('managed skill write intake gating', () => {
     const runtime = makeRuntime();
     const create = vi.spyOn(runtime.getStore(), 'create');
     const invalidate = vi.spyOn(runtime, 'invalidate');
-    const tool = createSkillTool(runtime, makeIntakeRuntime({ mode: 'enforce' }));
+    const tool = createSkillTool(runtime, makeIntakeRuntime({ mode: 'enforce' }), AUTONOMOUS_GOVERNANCE);
 
     const result = await tool.execute('create-hostile-description', {
       action: 'create',
@@ -242,7 +247,7 @@ describe('managed skill write intake gating', () => {
           state: 'quarantined',
         }),
       ],
-    }));
+    }), AUTONOMOUS_GOVERNANCE);
 
     const result = await tool.execute('create-tainted', {
       action: 'create',
@@ -270,7 +275,7 @@ describe('managed skill write intake gating', () => {
           riskLabels: ['exfil/canary_leak'],
         }),
       ],
-    }));
+    }), AUTONOMOUS_GOVERNANCE);
 
     const result = await tool.execute('create-multi-envelope', {
       action: 'create',
@@ -294,7 +299,7 @@ describe('managed skill write intake gating', () => {
     const tool = createSkillTool(runtime, makeIntakeRuntime({
       mode: 'shadow',
       audits,
-    }));
+    }), AUTONOMOUS_GOVERNANCE);
 
     const result = await tool.execute('create-shadow', {
       action: 'create',
@@ -325,7 +330,7 @@ describe('managed skill write intake gating', () => {
       activeEnvelopes: [
         makeSnapshot({ envelopeId: 'otherwise-clean-upstream' }),
       ],
-    }));
+    }), AUTONOMOUS_GOVERNANCE);
 
     const result = await tool.execute('create-unscreened', {
       action: 'create',
@@ -349,7 +354,7 @@ describe('managed skill write intake gating', () => {
 
   it('leaves an existing file and runtime cache untouched after a denied update', async () => {
     const runtime = makeRuntime();
-    const tool = createSkillTool(runtime, makeIntakeRuntime({ mode: 'enforce' }));
+    const tool = createSkillTool(runtime, makeIntakeRuntime({ mode: 'enforce' }), AUTONOMOUS_GOVERNANCE);
     await tool.execute('create-before-denial', {
       action: 'create',
       name: 'stable-skill',

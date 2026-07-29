@@ -811,6 +811,15 @@ export async function invokeAgentForTurn(input: {
       channelId: message.channelId,
       matchedSignals: runtimeContradictionDetection.matchedSignals,
     });
+    void runtime.eventBus.emit('agent.datetime_guard.activation', {
+      channelId: message.channelId,
+      turnId,
+      stage: 'initial',
+      outcome: 'retry_scheduled',
+      matchedSignals: [...runtimeContradictionDetection.matchedSignals],
+      attempts: 1,
+      timestamp: Date.now(),
+    });
 
     const preRetryTurnUsage = turnUsage;
     const strengthenedSystemPrompt = buildRuntimeDatetimeAnchorRetryPrompt(providerSystemPrompt);
@@ -881,6 +890,15 @@ export async function invokeAgentForTurn(input: {
         buildRuntimeDatetimeContradictionSystemNote(),
         'runtime_datetime_contradiction_guard',
       );
+      void runtime.eventBus.emit('agent.datetime_guard.activation', {
+        channelId: message.channelId,
+        turnId,
+        stage: 'retry',
+        outcome: 'system_note_appended',
+        matchedSignals: [...retryContradictionDetection.matchedSignals],
+        attempts: 2,
+        timestamp: Date.now(),
+      });
     } else {
       runtimeContradictionDiagnostic = {
         ...runtimeContradictionDiagnostic,
@@ -891,6 +909,15 @@ export async function invokeAgentForTurn(input: {
       runtimeContradictionDiagnostics = {
         runtimeContradiction: runtimeContradictionDiagnostic,
       };
+      void runtime.eventBus.emit('agent.datetime_guard.activation', {
+        channelId: message.channelId,
+        turnId,
+        stage: 'retry',
+        outcome: 'retry_cleared',
+        matchedSignals: [],
+        attempts: 2,
+        timestamp: Date.now(),
+      });
     }
   }
   if (isVisionTurn && responseText.trim().length === 0) {

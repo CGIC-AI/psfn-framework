@@ -1,5 +1,6 @@
 import type { MemorySourceType, MemoryType } from '../../faculties/memory/types.js';
 import { isIntakeFirewallNoticeText } from './intake-firewall-notice-templates.js';
+import { isRuntimeFallbackNoticeText } from '../../shared/runtime-fallback-provenance.js';
 import type { IntakeSinkGateDecision } from './intake/sink-gates.js';
 
 export type CogSecMemoryRiskClass =
@@ -175,6 +176,24 @@ export function evaluateCogSecMemoryCandidacy(
       riskClass: 'A_harmless_fact',
       reasonCodes: ['intake_firewall_quarantine_notice'],
       safeSummary: 'Excluded intake-firewall quarantine notice from memory extraction.',
+    };
+  }
+
+  // Runtime-authored fallback replies (e.g. the fixed vision-unavailable
+  // notice) are delivered channel output but are NOT companion-authored speech
+  // (psfn-framework-zagpk, charter Law 17): letting one become durable memory
+  // would record a runtime template as her authentic self-report. The primary
+  // exclusion is the `runtimeFallbackProvenance` marker on the persisted
+  // session entry (consumed by extraction transcript eligibility); this
+  // text-level check is the belt-and-suspenders backstop for candidacy callers
+  // that only see synthesized text, keyed on the fixed signature phrase every
+  // runtime fallback template is load-time-guaranteed to carry.
+  if (isRuntimeFallbackNoticeText(text)) {
+    return {
+      disposition: 'reject',
+      riskClass: 'A_harmless_fact',
+      reasonCodes: ['runtime_fallback_notice'],
+      safeSummary: 'Excluded runtime-authored fallback notice from memory extraction.',
     };
   }
 

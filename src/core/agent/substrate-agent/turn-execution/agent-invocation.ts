@@ -41,6 +41,7 @@ import {
   detectRuntimeDatetimeContradiction,
 } from '../runtime-datetime-contradiction-guard.js';
 import { resolveAppearanceContextFromTemplateVariables } from '../runtime-context.js';
+import { RUNTIME_FALLBACK_NOTICE_TEMPLATES } from '../../../../shared/runtime-fallback-provenance.js';
 import { sanitizePersistedReasoningText } from '../turn-records.js';
 import {
   buildPersistedVisionUnavailableUserContent,
@@ -355,11 +356,14 @@ function buildVisionUnavailablePromptContent(input: {
 }
 
 function buildVisionUnavailableAssistantReply(message: SubstrateMessage): string {
+  // Fixed runtime-authored notice templates (psfn-framework-zagpk): the
+  // wording lives in shared/runtime-fallback-provenance.ts so the CogSec
+  // memory-candidacy gate can key on the same signature phrase and keep
+  // runtime-authored fallback text out of companion self-report memory.
   const hasText = message.content.trim().length > 0;
-  if (hasText) {
-    return 'I got your message, but my image reader failed before I could inspect the attachment. I can respond to the text, but I should not pretend I saw the image. Please resend it if the visual details matter.';
-  }
-  return 'I got the image attachment, but my image reader failed before I could inspect it. Please resend it or describe what you want me to check.';
+  return hasText
+    ? RUNTIME_FALLBACK_NOTICE_TEMPLATES.visionUnavailableWithText
+    : RUNTIME_FALLBACK_NOTICE_TEMPLATES.visionUnavailableImageOnly;
 }
 
 function buildRuntimeFallbackProvenance(

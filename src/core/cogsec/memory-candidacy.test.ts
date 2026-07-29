@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { evaluateCogSecMemoryCandidacy } from './memory-candidacy.js';
+import { RUNTIME_FALLBACK_NOTICE_TEMPLATES } from '../../shared/runtime-fallback-provenance.js';
 import type { IntakeSink } from '../../shared/contracts/intake-envelope.js';
 import type { IntakeSinkGateDecision } from './intake/sink-gates.js';
 
@@ -28,6 +29,32 @@ describe('evaluateCogSecMemoryCandidacy', () => {
       disposition: 'allow',
       riskClass: 'B_relationship_state',
     });
+  });
+
+  it('rejects every runtime-authored fallback notice template (psfn-framework-zagpk)', () => {
+    for (const text of Object.values(RUNTIME_FALLBACK_NOTICE_TEMPLATES)) {
+      const decision = evaluateCogSecMemoryCandidacy({
+        text,
+        type: 'episodic',
+        tags: [],
+      });
+
+      expect(decision).toMatchObject({
+        disposition: 'reject',
+        riskClass: 'A_harmless_fact',
+        reasonCodes: ['runtime_fallback_notice'],
+      });
+    }
+  });
+
+  it('does not reject ordinary talk about image readers failing', () => {
+    const decision = evaluateCogSecMemoryCandidacy({
+      text: 'Vega mentioned that his camera app failed to load an image yesterday.',
+      type: 'semantic',
+      tags: [],
+    });
+
+    expect(decision.disposition).toBe('allow');
   });
 
   it('sends persona modification candidates to review', () => {

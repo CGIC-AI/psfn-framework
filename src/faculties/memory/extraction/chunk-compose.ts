@@ -1,5 +1,6 @@
 import type { SessionEntry } from '../../../core/session/types.js';
 import { isNonConversationalSessionEntry } from '../../../core/session/manager-primitives.js';
+import { isRuntimeAuthoredFallbackSessionEntry } from '../../../core/session/runtime-fallback-provenance.js';
 import {
   normalizeMemoryTags,
   type ExtractedFact,
@@ -14,7 +15,13 @@ import {
 export const EXTRACTION_COMPOSITION_CHUNK_SIZE = 10;
 
 export function isExtractionTranscriptEntry(entry: SessionEntry): boolean {
+  // Runtime-authored fallback replies (vision-unavailable notices etc.) are
+  // delivered channel output but are NOT companion-authored speech; extracting
+  // them would fabricate her self-report (psfn-framework-zagpk, charter Law
+  // 17). Their persisted entries carry `metadata.runtimeFallbackProvenance`
+  // and are excluded from extraction transcripts here.
   return !isNonConversationalSessionEntry(entry)
+    && !isRuntimeAuthoredFallbackSessionEntry(entry)
     && (entry.role === 'assistant' || entry.role === 'user');
 }
 

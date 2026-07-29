@@ -4,6 +4,7 @@ import { countMessageTokens } from '../../../primitives/llm/tokens.js';
 import type { SessionStore } from '../../../persistence/sessions/store.js';
 import type { SessionEntry } from '../../../core/session/types.js';
 import { isNonConversationalSessionEntry } from '../../../core/session/manager-primitives.js';
+import { isRuntimeAuthoredFallbackSessionEntry } from '../../../core/session/runtime-fallback-provenance.js';
 import type { SubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
 import type { TurnID } from '../../../shared/contracts/runtime.js';
 import type {
@@ -47,7 +48,11 @@ function toTokenMessage(entry: { role: string; content: string }): { role: strin
 }
 
 function isCountableExtractionEntry(entry: SessionEntry): boolean {
+  // Mirrors isExtractionTranscriptEntry (chunk-compose.ts): runtime-authored
+  // fallback entries are never extractable companion speech, so they must not
+  // count toward extraction trigger thresholds either (psfn-framework-zagpk).
   return !isNonConversationalSessionEntry(entry)
+    && !isRuntimeAuthoredFallbackSessionEntry(entry)
     && (entry.role === 'assistant' || entry.role === 'user');
 }
 

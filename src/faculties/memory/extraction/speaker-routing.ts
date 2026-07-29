@@ -120,8 +120,12 @@ export async function buildSpeakerRoutingContext(
  * the conversation's admission time for epoch resolution: it never post-dates the
  * conversation, so it excludes any channel demotion that happened after the last
  * message was sent (the deferred-extraction over-share, psfn-framework-qgqw.2).
+ *
+ * Exported so other conversation-time producers (sleeptime review, group
+ * backfill) stamp `provenance.sourceConversationAt` from the SAME bound as the
+ * extractor rather than from a later run clock (psfn-framework-ca980).
  */
-function latestSourceEntryTimestamp(entries: readonly SessionEntry[]): number | undefined {
+export function latestSourceEntryTimestamp(entries: readonly SessionEntry[]): number | undefined {
   let latest: number | undefined;
   for (const entry of entries) {
     const ts = entry.timestamp;

@@ -193,6 +193,23 @@ function stampRequestContextProvenance(): Pick<MemoryProvenance, 'sessionId'> {
   return sessionId && sessionId.trim().length > 0 ? { sessionId } : {};
 }
 
+/**
+ * Conversation-time bound for a memory the companion authors DURING a live turn
+ * (psfn-framework-ca980). Unlike deferred producers (sleeptime/episodic run long
+ * after the conversation), a tool write executes synchronously inside the turn
+ * the companion is having, so wall-clock now IS the conversation instant: the
+ * request context carries no turn timestamp (CorrelationMetadata has none), but
+ * the write happening IN the conversation makes `Date.now()` the correct, safe
+ * anchor — a channel demotion cannot post-date content authored this instant, so
+ * resolving the channel's CURRENT epoch is right (the content is authored under
+ * the current classification). Applied ONLY to fresh live-turn writes: import
+ * (historical `occurred_at`) and patch/redact of existing memories must NOT claim
+ * now as their conversation time, so they stay unstamped and fail closed.
+ */
+function liveTurnConversationInstant(): Pick<MemoryProvenance, 'sourceConversationAt'> {
+  return { sourceConversationAt: Date.now() };
+}
+
 function buildToolSourceContext(
   toolName: string,
   toolCallId: string,
@@ -514,7 +531,7 @@ export function createMemoryWriteTool(
           tags,
           sourceRef: sourceContext.sourceRef,
           sourceType: sourceContext.sourceType,
-          provenance: sourceContext.provenance,
+          provenance: { ...sourceContext.provenance, ...liveTurnConversationInstant() },
           sensitivity: normalizedParams.sensitivity,
         });
 
@@ -1091,7 +1108,7 @@ export function createMemoryTool(
               tags: parseTags(normalizedParams.tags),
               sourceRef: sourceContext.sourceRef,
               sourceType: sourceContext.sourceType,
-              provenance: sourceContext.provenance,
+              provenance: { ...sourceContext.provenance, ...liveTurnConversationInstant() },
               sensitivity: normalizedParams.sensitivity,
             });
 

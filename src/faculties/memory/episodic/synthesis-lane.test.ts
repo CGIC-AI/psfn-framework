@@ -6,6 +6,26 @@ import {
   EPISODE_SYNTHESIS_ACTION_KIND,
   type EpisodeSynthesisGateEvent,
 } from './synthesis-lane.js';
+import { collectDisclosureMemorySources } from '../retrieval/active-context-refresh.js';
+import type { ScoredMemory } from '../retrieval/types.js';
+import type { PurrMemory, MemoryProvenance } from '../types.js';
+import {
+  resetRuntimeChannelClassificationEpochs,
+  setRuntimeChannelClassificationEpochs,
+} from '../../../system/trust/runtime-classification-epochs.js';
+import { DEMOTION_EPOCH_NOTICE_VERSION } from '../../../system/trust/context-envelope.js';
+import { destinationEpochEligible } from '../../../core/cogsec/disclosure/decision.js';
+import type { DisclosureDestinationConstraint } from '../../../core/cogsec/disclosure/contracts.js';
+
+function synthMemory(provenance: MemoryProvenance, extractedAt: number): ScoredMemory {
+  const memory: PurrMemory = {
+    id: 'mem-synth', text: 'synthetic', type: 'reflection',
+    importance: 0.6, confidence: 0.8, emotionalValence: 0, salience: 0.6,
+    sourceRef: 'source:test', extractedAt, lastAccessed: extractedAt, accessCount: 0,
+    tags: [], sensitivity: 'public', provenance,
+  };
+  return { memory } as unknown as ScoredMemory;
+}
 
 const COMPANION_NAME = 'Purrsephone';
 const COMPANION_AUTHOR_ID = 'bot-companion-1';
@@ -411,6 +431,99 @@ describe('EpisodeSynthesisLane', () => {
       ]),
       tags: expect.arrayContaining(['behavioral_summary', 'evidence_chain', 'episode_arc:recurrence']),
     }));
+  });
+
+  // psfn-framework-ca980 — a behavioral summary must carry the arc's episode
+  // source-content time (target episode `endedAt`), not the deferred synthesis run
+  // clock, so a room widened after that content denies the auto-share.
+  it('stamps the arc target episode source-content end as the disclosure conversation time (ca980)', async () => {
+    const CHANNEL = 'discord:room-1';
+    const DEMOTION_1 = Date.parse('2026-02-01T00:00:00.000Z');
+    const DEMOTION_2 = Date.parse('2026-04-01T00:00:00.000Z');
+    // Target episode's newest source content lands BETWEEN the two demotions → epoch 1.
+    const TARGET_ENDED_AT = new Date(DEMOTION_1 + 60_000).toISOString();
+
+    const memoryWriter = { write: vi.fn().mockResolvedValue({ action: 'created' }) };
+    const harness = makeHarness({ entries: mentionEntries(12), memoryWriter });
+    harness.synthesizer.run.mockResolvedValue({
+      consideredEntries: 12,
+      candidateEpisodeCount: 2,
+      // The arc's TARGET is always a just-created episode this run (see synthesis
+      // buildArcInput); its endedAt is the resolvable source-content bound.
+      createdEpisodes: [{ id: 'episode-2', endedAt: TARGET_ENDED_AT }],
+      skippedEpisodeIds: [],
+      linkedArcs: [{
+        id: 'arc-recurrence-1',
+        sourceEpisodeId: 'episode-1',
+        targetEpisodeId: 'episode-2',
+        arcKind: 'recurrence',
+        confidence: 0.78,
+        themes: ['atlas', 'validation'],
+      }],
+    });
+
+    await harness.lane.execute(timerAction());
+
+    expect(memoryWriter.write).toHaveBeenCalledTimes(1);
+    const provenance = memoryWriter.write.mock.calls[0][0].provenance as MemoryProvenance;
+    expect(provenance.sourceConversationAt).toBe(Date.parse(TARGET_ENDED_AT));
+    expect(provenance.channelId).toBe(CHANNEL);
+
+    try {
+      const demotion = (at: number) => ({
+        channelId: CHANNEL, from: 'invite_only' as const, to: 'public' as const,
+        at: new Date(at).toISOString(), acceptedBy: 'operator:test',
+        noticeVersion: DEMOTION_EPOCH_NOTICE_VERSION,
+      });
+      setRuntimeChannelClassificationEpochs([demotion(DEMOTION_1), demotion(DEMOTION_2)]);
+
+      const sources = collectDisclosureMemorySources({
+        selectedForPrompt: [synthMemory(provenance, DEMOTION_2 + 60_000)],
+        emotionalContinuityMemories: [],
+      });
+      expect(sources[0].sourceChannelEpoch).toBe(1);
+      const room1: DisclosureDestinationConstraint = {
+        kind: 'public_room', channelIds: [CHANNEL], channelEpochs: { [CHANNEL]: 1 },
+      };
+      expect(destinationEpochEligible([room1], { kind: 'public_room', channelId: CHANNEL, currentEpoch: 2 })).toBe(false);
+
+      // Control: post-widening episode content resolves epoch 2 and shares.
+      const postWiden = collectDisclosureMemorySources({
+        selectedForPrompt: [synthMemory(
+          { channelId: CHANNEL, sourceConversationAt: DEMOTION_2 + 60_000 },
+          DEMOTION_2 + 120_000,
+        )],
+        emotionalContinuityMemories: [],
+      });
+      expect(postWiden[0].sourceChannelEpoch).toBe(2);
+      const room2: DisclosureDestinationConstraint = {
+        kind: 'public_room', channelIds: [CHANNEL], channelEpochs: { [CHANNEL]: 2 },
+      };
+      expect(destinationEpochEligible([room2], { kind: 'public_room', channelId: CHANNEL, currentEpoch: 2 })).toBe(true);
+    } finally {
+      resetRuntimeChannelClassificationEpochs();
+    }
+  });
+
+  it('fails closed (no conversation stamp) when the arc target episode is unresolvable (ca980)', async () => {
+    const memoryWriter = { write: vi.fn().mockResolvedValue({ action: 'created' }) };
+    const harness = makeHarness({ entries: mentionEntries(12), memoryWriter });
+    harness.synthesizer.run.mockResolvedValue({
+      consideredEntries: 12,
+      candidateEpisodeCount: 2,
+      createdEpisodes: [], // target 'episode-2' not present → no resolvable endedAt
+      skippedEpisodeIds: [],
+      linkedArcs: [{
+        id: 'arc-recurrence-1', sourceEpisodeId: 'episode-1', targetEpisodeId: 'episode-2',
+        arcKind: 'recurrence', confidence: 0.78, themes: ['atlas'],
+      }],
+    });
+
+    await harness.lane.execute(timerAction());
+
+    expect(memoryWriter.write).toHaveBeenCalledTimes(1);
+    const provenance = memoryWriter.write.mock.calls[0][0].provenance as MemoryProvenance;
+    expect(provenance.sourceConversationAt).toBeUndefined();
   });
 
   it('skips retired sessions with a typed reason', async () => {

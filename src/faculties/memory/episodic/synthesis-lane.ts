@@ -1,5 +1,6 @@
 import { createComponentLogger } from '../../../shared/logger.js';
 import type { InferredPostTurnAction, PostTurnActionCandidate, SubstrateMessage } from '../../../shared/contracts/runtime.js';
+import type { Episode, EpisodeArc } from '../../../shared/contracts/episodic-memory.js';
 import type { SessionEntry } from '../../../core/session/types.js';
 import type { SessionManager } from '../../../core/session/manager.js';
 import {
@@ -82,6 +83,35 @@ function isConversational(entry: SessionEntry): boolean {
     && entry.content.replace(/\s+/g, ' ').trim().length > 0;
 }
 
+/**
+ * Conversation-time bound for an arc-derived behavioral summary (ca980): the
+ * latest source-content end instant across the arc's endpoint episodes, resolved
+ * from this run's `createdEpisodes`. An arc's target episode is always one just
+ * created this run (synthesis links each new canonical episode to a prior one),
+ * so the target's `endedAt` — the newest source content the summary is about — is
+ * always resolvable; the older source endpoint is folded in when it too was
+ * created this run. This is the episode-granularity analogue of the extractor's
+ * latest source-message instant: it never post-dates the arc's newest content, so
+ * a demotion after it is not counted and pre-demotion content is denied to a
+ * since-widened room. Absent/unparseable ⇒ undefined, and the disclosure
+ * collector fails closed rather than coercing to the run clock.
+ */
+function arcSourceConversationAt(
+  arc: EpisodeArc,
+  episodesById: ReadonlyMap<string, Episode>,
+): number | undefined {
+  let latest: number | undefined;
+  for (const episodeId of [arc.targetEpisodeId, arc.sourceEpisodeId]) {
+    const endedAt = episodesById.get(episodeId)?.endedAt;
+    if (endedAt === undefined) continue;
+    const ms = Date.parse(endedAt);
+    if (Number.isFinite(ms) && ms > 0 && (latest === undefined || ms > latest)) {
+      latest = ms;
+    }
+  }
+  return latest;
+}
+
 function buildBehavioralSummaryWrites(input: {
   sessionId: string;
   actionId: string;
@@ -92,9 +122,11 @@ function buildBehavioralSummaryWrites(input: {
     .filter(arc => arc.confidence >= 0.7)
     .filter(arc => arc.arcKind !== 'same_theme')
     .slice(0, MAX_BEHAVIORAL_SUMMARY_WRITES);
+  const episodesById = new Map(input.synthesis.createdEpisodes.map(episode => [episode.id, episode]));
   return arcs.map(arc => {
     const themes = arc.themes.slice(0, 3).join(', ') || 'recent continuity';
     const sourceRef = `source:episode_synthesis|session:${input.sessionId}|episode_arc:${arc.id}`;
+    const sourceConversationAt = arcSourceConversationAt(arc, episodesById);
     return {
       text: `Episode evidence chain shows a ${arc.arcKind.replace(/_/g, ' ')} pattern around ${themes}.`,
       type: 'reflection',
@@ -109,6 +141,7 @@ function buildBehavioralSummaryWrites(input: {
         sessionId: input.sessionId,
         actor: 'system',
         reason: 'episode_synthesis_behavioral_summary',
+        ...(sourceConversationAt !== undefined ? { sourceConversationAt } : {}),
       },
       provenanceRefs: [
         sourceRef,

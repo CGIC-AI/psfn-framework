@@ -420,6 +420,42 @@ const cancellableLlmDescriptors: Array<CancellableLlmMethodDescriptor<any, unkno
 
 const llmDescriptors: Array<AuditedMethodDescriptor<any, unknown>> = [
   {
+    // oetdv: route llm.cancel through the same audited wrapper as its siblings
+    // (audit-then-act, real durationMs, runtime-health tracking, durable audit
+    // even under an audit-store outage) instead of the previous raw addMethod
+    // that acted first and fired-and-forgot the audit. The summary lifts the
+    // cancellationId into the audit row so the record identifies what was
+    // killed, and invalid input throws a typed JSON-RPC error inside the
+    // GatewayErrors block rather than a bare Error flattened to code 0.
+    name: 'llm.cancel',
+    // Boundary input is untrusted: a malformed RPC frame can carry a non-object
+    // or a non-UUID cancellationId, so the handler validates at runtime rather
+    // than trusting the LLMCancelParams shape.
+    handler: async (params: unknown, runtime): Promise<LLMCancelResult> => {
+      if (typeof params !== 'object' || params === null) {
+        throw new JSONRPCErrorException(
+          'llm.cancel requires object params',
+          GatewayErrors.INVALID_LLM_CANCELLATION,
+        );
+      }
+      const { cancellationId } = params as LLMCancelParams;
+      try {
+        return { cancelled: runtime.llmRequestCancellation.cancel(cancellationId) };
+      } catch (error) {
+        throw new JSONRPCErrorException(
+          error instanceof Error ? error.message : 'Invalid llm.cancel request',
+          GatewayErrors.INVALID_LLM_CANCELLATION,
+        );
+      }
+    },
+    summary: (params: unknown) => {
+      const cancellationId = typeof params === 'object' && params !== null
+        ? (params as LLMCancelParams).cancellationId
+        : undefined;
+      return typeof cancellationId === 'string' ? { cancellationId } : {};
+    },
+  },
+  {
     name: 'llm.embed',
     handler: async (params: LLMEmbedParams, runtime) => {
       const startedAtMs = Date.now();
@@ -504,26 +540,6 @@ export function registerLLMMethods(runtime: GatewayMethodRuntime): void {
       });
     });
   }
-  runtime.target.addMethod('llm.cancel', (params: unknown): LLMCancelResult => {
-    if (typeof params !== 'object' || params === null) {
-      throw new Error('llm.cancel requires object params');
-    }
-    const result = {
-      cancelled: runtime.llmRequestCancellation.cancel(
-        (params as LLMCancelParams).cancellationId,
-      ),
-    };
-    void runtime.recordAuditEvent?.({
-      method: 'llm.cancel',
-      decision: 'ALLOW',
-      params: { cancelled: result.cancelled },
-    }).catch((error: unknown) => {
-      log.error('Failed to persist llm.cancel audit outcome', {
-        error: error instanceof Error ? error.message : String(error),
-      });
-    });
-    return result;
-  });
   registerAuditedDescriptors(runtime, llmDescriptors);
 }
 

@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { buildShardLineageEnvelope } from './result-lineage.js';
 import {
+  buildShardMemoryOutputProvenanceTags,
   createShardTaggedOutput,
+  isEmotionalOrRelationalShardMemory,
   resolveStagedShardMemoryOutputs,
 } from './output-review.js';
 
@@ -102,5 +104,40 @@ describe('output review staging', () => {
       'memory_tag:archive',
       'memory_tag:identity',
     ]));
+  });
+});
+
+describe('isEmotionalOrRelationalShardMemory (bead 6arrc)', () => {
+  it('flags every restricted memory type, not only emotional', () => {
+    expect(isEmotionalOrRelationalShardMemory('emotional', [])).toBe(true);
+    expect(isEmotionalOrRelationalShardMemory('relational', [])).toBe(true);
+    expect(isEmotionalOrRelationalShardMemory('boundary', [])).toBe(true);
+  });
+
+  it('flags relational and boundary/consent tag hints', () => {
+    expect(isEmotionalOrRelationalShardMemory('semantic', ['partner'])).toBe(true);
+    expect(isEmotionalOrRelationalShardMemory('semantic', ['boundary_note'])).toBe(true);
+    expect(isEmotionalOrRelationalShardMemory('procedural', ['consent'])).toBe(true);
+  });
+
+  it('flags restricted lived-history content hints', () => {
+    expect(isEmotionalOrRelationalShardMemory('semantic', [], 'from her childhood in Ohio')).toBe(true);
+    expect(isEmotionalOrRelationalShardMemory('semantic', [], 'a note about the grief he carries')).toBe(true);
+  });
+
+  it('leaves neutral memories unflagged', () => {
+    expect(isEmotionalOrRelationalShardMemory('semantic', ['archive'])).toBe(false);
+    expect(isEmotionalOrRelationalShardMemory('procedural', ['workflow'], 'deploy steps')).toBe(false);
+  });
+
+  it('stamps the interpretive provenance tag for a boundary type with no tags', () => {
+    expect(buildShardMemoryOutputProvenanceTags('boundary', [], undefined, 'never bring up X'))
+      .toContain('interpretive:emotional_or_relational');
+    // Content hint alone (neutral type/tags) still stamps it.
+    expect(buildShardMemoryOutputProvenanceTags('semantic', [], undefined, 'her childhood home'))
+      .toContain('interpretive:emotional_or_relational');
+    // A genuinely neutral memory is not stamped.
+    expect(buildShardMemoryOutputProvenanceTags('semantic', ['archive'], undefined, 'deploy steps'))
+      .not.toContain('interpretive:emotional_or_relational');
   });
 });

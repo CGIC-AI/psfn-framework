@@ -124,6 +124,76 @@ describe('ShardFoldReviewController', () => {
     });
   });
 
+  it('flags a boundary-typed shard fold with the heightened-review signal even with no tags (bead 6arrc)', async () => {
+    dir = mkdtempSync(join(tmpdir(), 'psfn-fold-review-'));
+    const storePath = join(dir, 'state', 'shard-fold-reviews.json');
+    const shardId = 'shard-review-boundary';
+    const lineage = buildLineage(shardId);
+    const controller = new ShardFoldReviewController(storePath);
+    // A boundary/consent interpretation with no tags: previously reached the
+    // queue as an ordinary staged memory (the classifier only knew 'emotional'
+    // types + relationship-ish tags), inviting under-scrutinized bulk approval.
+    const stagedOutputs = resolveStagedShardMemoryOutputs(
+      { channelId: 'api:review', task: 'inspect fold review', lineage },
+      'memory_import_batch',
+      'import-call-boundary',
+      {
+        records: [{
+          text: 'The operator asked me never to bring up their sister.',
+          type: 'boundary',
+          tags: [],
+        }],
+        source: 'backup',
+      },
+    );
+    expect(stagedOutputs).toHaveLength(1);
+    expect(stagedOutputs[0].provenanceTags).toContain('interpretive:emotional_or_relational');
+
+    await controller.recordPendingMemoryCandidates({
+      shardId,
+      channelId: 'api:review',
+      task: 'inspect fold review',
+      lineage,
+      outputs: stagedOutputs,
+    });
+
+    const review = await controller.getFoldReview(shardId);
+    expect(review?.blockingReasons).toEqual(expect.arrayContaining([
+      'emotional_or_relational_interpretation_requires_core_review',
+    ]));
+    expect(review?.visibilitySignals).toMatchObject({
+      emotionalOrRelational: true,
+      emotionalOrRelationalOutputIds: [stagedOutputs[0].outputId],
+    });
+  });
+
+  it('flags a relational-typed shard fold with the heightened-review signal (bead 6arrc)', async () => {
+    dir = mkdtempSync(join(tmpdir(), 'psfn-fold-review-'));
+    const storePath = join(dir, 'state', 'shard-fold-reviews.json');
+    const shardId = 'shard-review-relational';
+    const lineage = buildLineage(shardId);
+    const controller = new ShardFoldReviewController(storePath);
+    const stagedOutputs = resolveStagedShardMemoryOutputs(
+      { channelId: 'api:review', task: 'inspect fold review', lineage },
+      'memory_import_batch',
+      'import-call-relational',
+      {
+        records: [{ text: 'We agreed to check in weekly.', type: 'relational', tags: [] }],
+        source: 'backup',
+      },
+    );
+    expect(stagedOutputs[0].provenanceTags).toContain('interpretive:emotional_or_relational');
+    await controller.recordPendingMemoryCandidates({
+      shardId,
+      channelId: 'api:review',
+      task: 'inspect fold review',
+      lineage,
+      outputs: stagedOutputs,
+    });
+    const review = await controller.getFoldReview(shardId);
+    expect(review?.visibilitySignals.emotionalOrRelational).toBe(true);
+  });
+
   it('fails closed when approval is requested without memory promotion dependencies', async () => {
     dir = mkdtempSync(join(tmpdir(), 'psfn-fold-review-'));
     const storePath = join(dir, 'state', 'shard-fold-reviews.json');

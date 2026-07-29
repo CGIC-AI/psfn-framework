@@ -205,6 +205,26 @@ function parseIcpCostBreakerConfig(
   };
 }
 
+/**
+ * Law 38 retired surfaces (emh3p.5): memory read/write are core selfhood —
+ * they are not charge surfaces at all, so they must not be configurable.
+ * Owner files carrying the retired keys fail closed with the reason and the
+ * remedy, not a bare unknown-key error.
+ */
+const RETIRED_SELFHOOD_CHARGE_SURFACES = ['memoryRead', 'memoryWrite'] as const;
+
+function assertNoRetiredSelfhoodSurfaces(raw: unknown, fieldPath: string): void {
+  if (!isRecord(raw)) return;
+  const retired = RETIRED_SELFHOOD_CHARGE_SURFACES.filter(key => key in raw);
+  if (retired.length > 0) {
+    throw new Error(
+      `Invalid charge policy at ${fieldPath}: ${retired.join(', ')} `
+      + 'are retired charge surfaces. Memory read/write are core selfhood and are never metered '
+      + '(charter Law 38) — delete these keys from the owner file.',
+    );
+  }
+}
+
 function parseFixedNumericMap<T extends string>(
   raw: unknown,
   fieldPath: string,
@@ -863,6 +883,8 @@ export function validateChargePolicyConfig(
     `${sourcePath}.runChargeQuotaByLane`,
     CHARGE_POLICY_RUNTIME_LANE_VALUES,
   );
+  assertNoRetiredSelfhoodSurfaces(raw.surfaceCosts, `${sourcePath}.surfaceCosts`);
+  assertNoRetiredSelfhoodSurfaces(raw.surfaceRationales, `${sourcePath}.surfaceRationales`);
   const surfaceCosts = parseFixedNumericMap(
     raw.surfaceCosts,
     `${sourcePath}.surfaceCosts`,

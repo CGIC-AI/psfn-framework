@@ -48,21 +48,6 @@ const READ_ACTIONS: ReadonlySet<string> = new Set([
 // soft-deletes the source, restore resurrects a soft-deleted memory).
 const DELETE_CLASS_ACTIONS: ReadonlySet<string> = new Set(['redact', 'delete', 'restore']);
 
-/** Memory classes where core remains authoritative (mirrors shard fold-back, charter 6.13). */
-const RESTRICTED_MEMORY_TYPES: ReadonlySet<MemoryType> = new Set([
-  'emotional',
-  'relational',
-  'boundary',
-]);
-const BOUNDARY_TAG_HINT = /boundary|consent/;
-const RESTRICTED_CONTENT_HINTS: readonly RegExp[] = [
-  /\bchildhood\b/iu,
-  /\bupbringing\b/iu,
-  /\b(?:grew|growing)\s+up\b/iu,
-  /\b(?:as|when)\s+(?:i|you|they|he|she|the\s+operator|the\s+partner)\s+(?:was|were)\s+(?:an?\s+)?(?:child|kid|teenager)\b/iu,
-  /\b(?:trauma|traumatic|abuse|grief|grieving|bereavement|heartbreak)\b/iu,
-];
-
 export interface SubagentMemoryWriteElevation {
   reason: string;
 }
@@ -121,9 +106,10 @@ export function resolveSubagentMemoryWritePolicy(input: {
 }
 
 /**
- * Restricted classes reuse the canonical memory taxonomy plus the shard
- * fold-back classifier — no new classifier. An undeterminable type is the
- * restricted class (fail closed).
+ * Restricted classes reuse the shard fold-back classifier verbatim (types, tag
+ * hints, and content hints) — one source of truth, so the subagent queue and
+ * the shard fold-review queue never diverge (bead 6arrc). An undeterminable
+ * type is the restricted class (fail closed).
  */
 export function isRestrictedSubagentMemoryCandidate(
   type: MemoryType | undefined,
@@ -131,10 +117,7 @@ export function isRestrictedSubagentMemoryCandidate(
   text = '',
 ): boolean {
   if (!type) return true;
-  if (RESTRICTED_MEMORY_TYPES.has(type)) return true;
-  if (isEmotionalOrRelationalShardMemory(type, tags)) return true;
-  if (tags.some(tag => BOUNDARY_TAG_HINT.test(tag))) return true;
-  return RESTRICTED_CONTENT_HINTS.some(pattern => pattern.test(text));
+  return isEmotionalOrRelationalShardMemory(type, tags, text);
 }
 
 /**

@@ -51,7 +51,7 @@ export class CompanionImportError extends Error {
 }
 
 const SOURCE_LABELS: Record<CompanionSource, string> = {
-  ccv3: 'Character Card V3',
+  ccv3: 'Character Card V2/V3',
   soulmd: 'SoulMD document',
   markdown: 'plain persona markdown',
   fresh: 'fresh start',
@@ -179,13 +179,44 @@ function parseMarkdown(text: string): ParsedMarkdown {
   return { frontmatter, title, lead: leadLines.join('\n').trim(), sections };
 }
 
+// The alias vocabulary deliberately covers the heading conventions of
+// OpenClaw/Hermes soul documents (core identity, voice, vibe, boundaries,
+// backstory, …) alongside generic card-style headings, so a SOUL.md imports
+// into sensible fields instead of lumping everything into the profile.
 const SECTION_FIELD_MAP: Array<{ field: keyof CharacterData; aliases: readonly string[] }> = [
-  { field: 'description', aliases: ['description', 'about', 'profile', 'summary', 'bio', 'overview'] },
-  { field: 'personality', aliases: ['personality', 'persona', 'traits', 'character'] },
-  { field: 'scenario', aliases: ['scenario', 'setting', 'world', 'context', 'background'] },
+  {
+    field: 'description',
+    aliases: [
+      'description', 'about', 'profile', 'summary', 'bio', 'overview',
+      'identity', 'core identity', 'who you are', 'who i am', 'who she is', 'who he is', 'who they are',
+      'appearance', 'looks',
+    ],
+  },
+  {
+    field: 'personality',
+    aliases: [
+      'personality', 'persona', 'traits', 'character',
+      'vibe', 'temperament', 'nature', 'disposition', 'essence', 'soul',
+      'voice', 'speech style', 'speaking style', 'how you speak', 'how you talk', 'tone',
+      'likes and dislikes', 'interests', 'values',
+    ],
+  },
+  {
+    field: 'scenario',
+    aliases: [
+      'scenario', 'setting', 'world', 'context', 'background',
+      'backstory', 'history', 'origin', 'lore',
+    ],
+  },
   { field: 'first_mes', aliases: ['first message', 'first_mes', 'greeting', 'intro', 'introduction', 'opening'] },
   { field: 'mes_example', aliases: ['example dialogue', 'examples', 'example messages', 'sample dialogue', 'mes_example'] },
-  { field: 'system_prompt', aliases: ['system prompt', 'system_prompt', 'instructions', 'directives'] },
+  {
+    field: 'system_prompt',
+    aliases: [
+      'system prompt', 'system_prompt', 'instructions', 'directives',
+      'boundaries', 'limits', 'hard lines', 'rules',
+    ],
+  },
   { field: 'post_history_instructions', aliases: ['post history instructions', 'post_history_instructions', 'jailbreak'] },
 ];
 

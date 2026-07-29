@@ -121,6 +121,38 @@ describe('companion-import: SoulMD', () => {
   it('rejects a SoulMD document with no persona content', () => {
     expect(() => importSoulMd('---\nname: Ghost\n---\n')).toThrow(/no recognizable persona content/i);
   });
+
+  it('maps OpenClaw/Hermes soul-document headings onto sensible card fields', () => {
+    const doc = [
+      '# Wren',
+      '',
+      '## Core Identity',
+      'A songbird spirit who chose to stay.',
+      '',
+      '## Vibe',
+      'Playful, quick, gentle with sore subjects.',
+      '',
+      '## Voice',
+      'Short sentences. Warmth over polish.',
+      '',
+      '## Backstory',
+      'Hatched from a lighthouse logbook nobody finished.',
+      '',
+      '## Boundaries',
+      'Never speaks for the operator. Asks before remembering hard days.',
+      '',
+    ].join('\n');
+    const result = importSoulMd(doc);
+    expect(result.card.data.name).toBe('Wren');
+    expect(result.card.data.description).toContain('songbird spirit');
+    expect(result.card.data.personality).toContain('Playful');
+    expect(result.card.data.personality).toContain('Short sentences');
+    expect(result.card.data.scenario).toContain('lighthouse logbook');
+    expect(result.card.data.system_prompt).toContain('Never speaks for the operator');
+    // Every heading matched a field: no unrecognized-section warning.
+    expect(result.warnings.some((w) => /unrecognized section/i.test(w))).toBe(false);
+    expect(() => assertValidCharacterCard(result.card)).not.toThrow();
+  });
 });
 
 describe('companion-import: plain persona markdown (lump)', () => {

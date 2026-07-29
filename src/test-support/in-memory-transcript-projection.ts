@@ -2,8 +2,10 @@ import { isCogSecTombstoneSessionEntry } from '../core/cogsec/tombstones.js';
 import type { SessionEntry } from '../core/session/types.js';
 import {
   type KeywordSearchableTranscriptProjection,
+  type ReplaceChannelEntriesOptions,
   type SessionSearchHit,
   type TranscriptProjectionDrift,
+  type TranscriptProjectionDriftKind,
   type TranscriptSearchOptions,
 } from '../persistence/sessions/transcript-projection-port.js';
 import { classifyChannelDisclosure } from '../system/trust/policy.js';
@@ -53,10 +55,18 @@ export class InMemoryTranscriptProjection implements KeywordSearchableTranscript
       entries.set(entry.id, { ...entry, channelId });
     }
     this.entriesByChannel.set(channelId, entries);
-    this.driftByChannel.delete(channelId);
+    // Mirrors production: an ordinary successful write clears best-effort
+    // 'sync' drift but never a fail-closed 'redaction' record (bead 6oott).
+    if (this.driftByChannel.get(channelId)?.kind !== 'redaction') {
+      this.driftByChannel.delete(channelId);
+    }
   }
 
-  replaceChannelEntries(channelId: string, entries: readonly SessionEntry[]): void {
+  replaceChannelEntries(
+    channelId: string,
+    entries: readonly SessionEntry[],
+    _options: ReplaceChannelEntriesOptions = {},
+  ): void {
     const projected = new Map<number, ProjectedEntry>();
     for (const entry of entries) {
       if (!isCogSecTombstoneSessionEntry(entry)) {
@@ -64,6 +74,7 @@ export class InMemoryTranscriptProjection implements KeywordSearchableTranscript
       }
     }
     this.entriesByChannel.set(channelId, projected);
+    // A full successful replacement matches canon: clears drift of any kind.
     this.driftByChannel.delete(channelId);
   }
 
@@ -71,9 +82,15 @@ export class InMemoryTranscriptProjection implements KeywordSearchableTranscript
     return this.entriesByChannel.get(channelId)?.size ?? 0;
   }
 
-  markProjectionDrift(channelId: string, reason?: string): void {
+  markProjectionDrift(
+    channelId: string,
+    reason?: string,
+    kind: TranscriptProjectionDriftKind = 'sync',
+  ): void {
+    const existing = this.driftByChannel.get(channelId);
     this.driftByChannel.set(channelId, {
       channelId,
+      kind: existing?.kind === 'redaction' ? 'redaction' : kind,
       ...(reason ? { reason } : {}),
       markedAt: Date.now(),
     });
@@ -105,6 +122,8 @@ export class InMemoryTranscriptProjection implements KeywordSearchableTranscript
 
     const hits: SessionSearchHit[] = [];
     for (const [channelId, entries] of channels) {
+      // Mirrors production: fail closed under unresolved redaction drift.
+      if (this.driftByChannel.get(channelId)?.kind === 'redaction') continue;
       for (const entry of entries?.values() ?? []) {
         const normalizedContent = entry.content.toLowerCase();
         if (!terms.every(term => normalizedContent.includes(term))) continue;

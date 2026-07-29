@@ -12,10 +12,14 @@ import { POSTGRES_TRANSCRIPT_MIGRATIONS } from '../postgres/migrations.js';
 import type { SessionArchivePort } from '../journals/journal/port.js';
 import { createFilesystemSessionArchivePort } from '../journals/journal/port.js';
 import { isCogSecTombstoneSessionEntry } from '../../core/cogsec/tombstones.js';
+import { createComponentLogger } from '../../shared/logger.js';
+import type { RedactionProjectionDriftObserver } from '../../shared/contracts/projection-drift.js';
 import type {
   KeywordSearchableTranscriptProjection,
+  ReplaceChannelEntriesOptions,
   SessionSearchHit,
   TranscriptProjectionDrift,
+  TranscriptProjectionDriftKind,
   TranscriptSearchOptions,
 } from './transcript-projection-port.js';
 import type { TurnRecordStorePort } from './turn-record-store-port.js';
@@ -29,6 +33,8 @@ import {
 
 const DEFAULT_SEARCH_LIMIT = 10;
 const MAX_SEARCH_LIMIT = 100;
+
+const log = createComponentLogger('TranscriptProjection');
 
 interface ProjectionMessageMetadataRow {
   channel_id: string;
@@ -55,6 +61,7 @@ interface ProjectionDriftRow {
   channel_id: string;
   reason: string | null;
   marked_at: number;
+  kind: string | null;
 }
 
 interface SearchRow {
@@ -86,6 +93,13 @@ export interface PostgresTranscriptProjectionOptions {
   applicationName?: string;
   schema?: string;
   role?: string;
+  /**
+   * Operator-visibility seam (bead 6oott): notified when a redaction-driven
+   * projection write fails after its bounded retry, and on startup for
+   * redaction drift preloaded from the durable record. Optional — search is
+   * fail-closed by the durable drift record with or without an observer.
+   */
+  redactionDriftObserver?: RedactionProjectionDriftObserver;
 }
 
 export interface PostgresSessionAdapters {
@@ -169,11 +183,17 @@ async function preloadProjectionMessageMetadata(
   return byChannel;
 }
 
+function normalizeDriftKind(value: string | null | undefined): TranscriptProjectionDriftKind {
+  // Fail closed: 'sync' is the only kind with best-effort semantics, so any
+  // unexpected stored value is treated as the stricter 'redaction' class.
+  return value === 'sync' ? 'sync' : 'redaction';
+}
+
 async function preloadDrift(pool: Pool): Promise<Map<string, TranscriptProjectionDrift>> {
   const rows = await queryRows<ProjectionDriftRow>(
     pool,
     `
-      SELECT channel_id, reason, marked_at
+      SELECT channel_id, reason, marked_at, kind
       FROM session_projection_drift
       ORDER BY marked_at DESC, channel_id ASC
     `,
@@ -182,11 +202,31 @@ async function preloadDrift(pool: Pool): Promise<Map<string, TranscriptProjectio
   for (const row of rows) {
     drift.set(row.channel_id, {
       channelId: row.channel_id,
+      kind: normalizeDriftKind(row.kind),
       ...(row.reason ? { reason: row.reason } : {}),
       markedAt: normalizeTimestamp(row.marked_at),
     });
   }
   return drift;
+}
+
+async function persistDriftRecord(client: PoolClient, drift: TranscriptProjectionDrift): Promise<void> {
+  // No-downgrade guard: a concurrent or later 'sync' mark must never relax an
+  // existing fail-closed 'redaction' record.
+  await client.query(
+    `
+      INSERT INTO session_projection_drift (channel_id, reason, marked_at, kind)
+      VALUES ($1, $2, $3, $4)
+      ON CONFLICT (channel_id) DO UPDATE SET
+        reason = EXCLUDED.reason,
+        marked_at = EXCLUDED.marked_at,
+        kind = CASE
+          WHEN session_projection_drift.kind = 'redaction' THEN 'redaction'
+          ELSE EXCLUDED.kind
+        END
+    `,
+    [drift.channelId, drift.reason ?? null, drift.markedAt, drift.kind],
+  );
 }
 
 async function upsertProjectionRecord(client: PoolClient, record: ProjectionRecord): Promise<boolean> {
@@ -241,38 +281,146 @@ class PostgresTranscriptProjection implements KeywordSearchableTranscriptProject
   private readonly pool: Pool;
   private readonly messageMetadataByChannel: Map<string, ProjectionMessageMetadata>;
   private readonly driftByChannel: Map<string, TranscriptProjectionDrift>;
+  private readonly redactionDriftObserver: RedactionProjectionDriftObserver | null;
+  /**
+   * Redaction drift captured in-memory whose durable row could not be written
+   * yet (the database was failing at capture time). Flushed before every
+   * subsequent write and search; until it lands, the in-memory record keeps
+   * in-process search fail-closed (bead 6oott).
+   */
+  private readonly pendingDurableDriftChannels = new Set<string>();
   private writeChain: Promise<void> = Promise.resolve();
 
   constructor(
     pool: Pool,
     messageMetadataByChannel: Map<string, ProjectionMessageMetadata>,
     driftByChannel: Map<string, TranscriptProjectionDrift>,
+    redactionDriftObserver: RedactionProjectionDriftObserver | null = null,
   ) {
     this.pool = pool;
     this.messageMetadataByChannel = messageMetadataByChannel;
     this.driftByChannel = driftByChannel;
+    this.redactionDriftObserver = redactionDriftObserver;
   }
 
+  /**
+   * Serialized best-effort write chain. Redaction-classified work gets the
+   * fail-closed contract (bead 6oott): one bounded retry, then a DURABLE
+   * `redaction` drift record instead of the in-memory-only `sync` capture.
+   * Ordinary work keeps the pre-existing best-effort semantics.
+   */
   private enqueueWrite(
     channelId: string,
     work: (client: PoolClient) => Promise<void>,
+    options: { redaction?: boolean; onCommitted?: () => void } = {},
   ): void {
     this.writeChain = this.writeChain
       .then(async () => {
         try {
-          await withPostgresClient(this.pool, work);
+          await this.runProjectionWrite(work);
+          options.onCommitted?.();
         } catch (error) {
+          if (options.redaction === true) {
+            // One bounded retry for transient failures (each attempt is a full
+            // transaction, so the retry re-runs against a clean rollback).
+            try {
+              await this.runProjectionWrite(work);
+              options.onCommitted?.();
+              return;
+            } catch (retryError) {
+              await this.captureRedactionWriteFailure(channelId, retryError);
+              return;
+            }
+          }
           this.captureWriteFailure(channelId, error);
         }
       });
   }
 
+  private async runProjectionWrite(work: (client: PoolClient) => Promise<void>): Promise<void> {
+    const flushedPendingDrift: string[] = [];
+    await withPostgresClient(this.pool, async (client) => {
+      for (const channelId of this.pendingDurableDriftChannels) {
+        const drift = this.driftByChannel.get(channelId);
+        if (drift) {
+          await persistDriftRecord(client, drift);
+        }
+        flushedPendingDrift.push(channelId);
+      }
+      await work(client);
+    });
+    // Only clear pending markers after the transaction committed.
+    for (const channelId of flushedPendingDrift) {
+      this.pendingDurableDriftChannels.delete(channelId);
+    }
+  }
+
   private captureWriteFailure(channelId: string, error: unknown): void {
+    const existing = this.driftByChannel.get(channelId);
     this.driftByChannel.set(channelId, {
       channelId,
+      // No-downgrade: an ordinary failure on a channel already fail-closed for
+      // a redaction keeps the stricter kind.
+      kind: existing?.kind === 'redaction' ? 'redaction' : 'sync',
       reason: error instanceof Error ? error.message : String(error),
       markedAt: Date.now(),
     });
+  }
+
+  private async captureRedactionWriteFailure(channelId: string, error: unknown): Promise<void> {
+    const drift: TranscriptProjectionDrift = {
+      channelId,
+      kind: 'redaction',
+      reason: error instanceof Error ? error.message : String(error),
+      markedAt: Date.now(),
+    };
+    this.driftByChannel.set(channelId, drift);
+    this.notifyRedactionDriftObserver(drift);
+    try {
+      await withPostgresClient(this.pool, client => persistDriftRecord(client, drift));
+      this.pendingDurableDriftChannels.delete(channelId);
+    } catch (persistError) {
+      // Not a swallow: the in-memory record keeps in-process search fail-closed
+      // right now, the pending marker retries durability on every subsequent
+      // write and search, and a database this broken fails search outright.
+      this.pendingDurableDriftChannels.add(channelId);
+      log.warn('Redaction projection drift captured but durable record write failed; will retry', {
+        channelId,
+        driftReason: drift.reason,
+        error: persistError instanceof Error ? persistError.message : String(persistError),
+      });
+    }
+  }
+
+  private notifyRedactionDriftObserver(drift: TranscriptProjectionDrift): void {
+    if (!this.redactionDriftObserver) return;
+    try {
+      this.redactionDriftObserver.recordRedactionProjectionDrift({
+        channelId: drift.channelId,
+        reason: drift.reason ?? 'unknown projection write failure',
+        markedAtMs: drift.markedAt,
+      });
+    } catch (error) {
+      // The incident is the operator signal, not the enforcement: search is
+      // already fail-closed by the drift record itself.
+      log.warn('Redaction projection drift incident recording failed; search remains fail-closed', {
+        channelId: drift.channelId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  /** Startup re-surface: notify the observer for preloaded redaction drift. */
+  notifyPreloadedRedactionDrift(): void {
+    for (const drift of this.driftByChannel.values()) {
+      if (drift.kind === 'redaction') {
+        this.notifyRedactionDriftObserver(drift);
+      }
+    }
+  }
+
+  private hasRedactionDrift(channelId: string): boolean {
+    return this.driftByChannel.get(channelId)?.kind === 'redaction';
   }
 
   private getMessageMetadata(channelId: string): ProjectionMessageMetadata {
@@ -348,14 +496,32 @@ class PostgresTranscriptProjection implements KeywordSearchableTranscriptProject
     });
   }
 
+  /**
+   * Ordinary-write drift clearing: a single successful write only proves the
+   * channel is writable again, so it may clear best-effort `sync` drift but
+   * never a fail-closed `redaction` record (a successful append does not
+   * remove a surviving redacted row). Redaction drift clears only via a full
+   * successful channel replacement, explicit clearProjectionDrift (repair), or
+   * purge.
+   */
+  private takeClearableSyncDrift(channelId: string): boolean {
+    const existing = this.driftByChannel.get(channelId);
+    if (!existing || existing.kind === 'redaction') return false;
+    this.driftByChannel.delete(channelId);
+    this.pendingDurableDriftChannels.delete(channelId);
+    return true;
+  }
+
   upsertSessionEntry(
     entry: import('../../core/session/types.js').SessionEntry,
     options: { channelId?: string } = {},
   ): void {
     const channelId = options.channelId ?? entry.channelId;
     if (isCogSecTombstoneSessionEntry(entry)) {
+      // A tombstone upsert is a redaction propagation: its projection DELETE
+      // failing leaves the original content row standing (bead 6oott).
       const prediction = this.predictProjectionDelete(channelId, entry.id);
-      const clearTrackedDrift = this.driftByChannel.delete(channelId);
+      const clearTrackedDrift = this.takeClearableSyncDrift(channelId);
 
       this.enqueueWrite(channelId, async (client) => {
         const deleted = await deleteProjectionRecord(client, channelId, entry.id);
@@ -364,18 +530,18 @@ class PostgresTranscriptProjection implements KeywordSearchableTranscriptProject
           await client.query(
             `
               DELETE FROM session_projection_drift
-              WHERE channel_id = $1
+              WHERE channel_id = $1 AND kind <> 'redaction'
             `,
             [channelId],
           );
         }
-      });
+      }, { redaction: true });
       return;
     }
 
     const record = toProjectionRecord(entry, options);
     const prediction = this.predictProjectionUpsert(record.channelId, record.messageId);
-    const clearTrackedDrift = this.driftByChannel.delete(record.channelId);
+    const clearTrackedDrift = this.takeClearableSyncDrift(record.channelId);
 
     this.enqueueWrite(record.channelId, async (client) => {
       const inserted = await upsertProjectionRecord(client, record);
@@ -389,7 +555,7 @@ class PostgresTranscriptProjection implements KeywordSearchableTranscriptProject
         await client.query(
           `
             DELETE FROM session_projection_drift
-            WHERE channel_id = $1
+            WHERE channel_id = $1 AND kind <> 'redaction'
           `,
           [record.channelId],
         );
@@ -400,12 +566,23 @@ class PostgresTranscriptProjection implements KeywordSearchableTranscriptProject
   replaceChannelEntries(
     channelId: string,
     entries: readonly import('../../core/session/types.js').SessionEntry[],
+    options: ReplaceChannelEntriesOptions = {},
   ): void {
+    // Redaction inference backstop (bead 6oott): canon entries that still carry
+    // CogSec tombstone markers mean this replacement is what strips redacted
+    // content out of the projection — if it fails, the original rows survive.
+    // Callers on redaction paths also pass options.redaction explicitly.
+    const redaction = options.redaction === true
+      || entries.some(entry => isCogSecTombstoneSessionEntry(entry));
     const records = entries
       .filter(entry => !isCogSecTombstoneSessionEntry(entry))
       .map(entry => toProjectionRecord(entry, { channelId }));
     this.replaceCachedChannel(channelId, records.map(record => record.messageId));
-    const clearTrackedDrift = this.driftByChannel.delete(channelId);
+    // Best-effort 'sync' drift keeps its pre-6oott synchronous clear (callers
+    // like repair read listProjectionDrift before the queued write flushes).
+    // Fail-closed 'redaction' drift is only cleared after the replacement
+    // commits (onCommitted below).
+    this.takeClearableSyncDrift(channelId);
 
     this.enqueueWrite(channelId, async (client) => {
       await client.query(
@@ -418,15 +595,26 @@ class PostgresTranscriptProjection implements KeywordSearchableTranscriptProject
       for (const record of records) {
         await upsertProjectionRecord(client, record);
       }
-      if (clearTrackedDrift) {
-        await client.query(
-          `
-            DELETE FROM session_projection_drift
-            WHERE channel_id = $1
-          `,
-          [channelId],
-        );
-      }
+      // A full successful replacement makes the projection match canon, so it
+      // clears drift of ANY kind — including fail-closed redaction drift. The
+      // durable clear runs inside the write transaction; on failure it rolls
+      // back and the drift record stays authoritative.
+      await client.query(
+        `
+          DELETE FROM session_projection_drift
+          WHERE channel_id = $1
+        `,
+        [channelId],
+      );
+    }, {
+      redaction,
+      // In-memory drift clears only after the transaction committed, so a
+      // commit failure can never leave the in-memory fail-closed record
+      // weakened while the durable row survives the rollback.
+      onCommitted: () => {
+        this.driftByChannel.delete(channelId);
+        this.pendingDurableDriftChannels.delete(channelId);
+      },
     });
   }
 
@@ -434,29 +622,35 @@ class PostgresTranscriptProjection implements KeywordSearchableTranscriptProject
     return this.messageMetadataByChannel.get(channelId)?.count ?? 0;
   }
 
-  markProjectionDrift(channelId: string, reason?: string): void {
+  markProjectionDrift(
+    channelId: string,
+    reason?: string,
+    kind: TranscriptProjectionDriftKind = 'sync',
+  ): void {
+    // No-downgrade: marking 'sync' drift on a channel already fail-closed for
+    // a redaction keeps the stricter kind (mirrored durably by
+    // persistDriftRecord's conflict clause).
+    const existing = this.driftByChannel.get(channelId);
+    const effectiveKind = existing?.kind === 'redaction' ? 'redaction' : kind;
     const drift = {
       channelId,
+      kind: effectiveKind,
       ...(reason ? { reason } : {}),
       markedAt: Date.now(),
     } satisfies TranscriptProjectionDrift;
     this.driftByChannel.set(channelId, drift);
     this.enqueueWrite(channelId, async (client) => {
-      await client.query(
-        `
-          INSERT INTO session_projection_drift (channel_id, reason, marked_at)
-          VALUES ($1, $2, $3)
-          ON CONFLICT (channel_id) DO UPDATE SET
-            reason = EXCLUDED.reason,
-            marked_at = EXCLUDED.marked_at
-        `,
-        [channelId, reason ?? null, drift.markedAt],
-      );
-    });
+      await persistDriftRecord(client, drift);
+    }, { redaction: effectiveKind === 'redaction' });
+    if (effectiveKind === 'redaction') {
+      this.notifyRedactionDriftObserver(drift);
+    }
   }
 
   clearProjectionDrift(channelId: string): void {
+    // Explicit repair/operator action: clears drift of any kind.
     this.driftByChannel.delete(channelId);
+    this.pendingDurableDriftChannels.delete(channelId);
     this.enqueueWrite(channelId, async (client) => {
       await client.query(
         `
@@ -478,6 +672,36 @@ class PostgresTranscriptProjection implements KeywordSearchableTranscriptProject
     await this.writeChain;
   }
 
+  /**
+   * Best-effort retry of durable-drift rows whose insert failed at capture
+   * time. A failure here is logged, not thrown: the in-memory record already
+   * fail-closes in-process search, and a database that cannot accept this
+   * write fails the search query itself.
+   */
+  private async flushPendingDurableDrift(): Promise<void> {
+    if (this.pendingDurableDriftChannels.size === 0) return;
+    const flushed: string[] = [];
+    try {
+      await withPostgresClient(this.pool, async (client) => {
+        for (const channelId of this.pendingDurableDriftChannels) {
+          const drift = this.driftByChannel.get(channelId);
+          if (drift) {
+            await persistDriftRecord(client, drift);
+          }
+          flushed.push(channelId);
+        }
+      });
+      for (const channelId of flushed) {
+        this.pendingDurableDriftChannels.delete(channelId);
+      }
+    } catch (error) {
+      log.warn('Pending durable drift flush failed; in-memory fail-closed filter remains active', {
+        channels: [...this.pendingDurableDriftChannels],
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
   async purgeSession(
     input: Parameters<SessionDatabasePurgePort['purgeSession']>[0],
   ): ReturnType<SessionDatabasePurgePort['purgeSession']> {
@@ -485,6 +709,7 @@ class PostgresTranscriptProjection implements KeywordSearchableTranscriptProject
     const report = await purgeTestingSessionPostgresData(this.pool, input);
     this.messageMetadataByChannel.delete(input.channelId);
     this.driftByChannel.delete(input.channelId);
+    this.pendingDurableDriftChannels.delete(input.channelId);
     return report;
   }
 
@@ -496,8 +721,15 @@ class PostgresTranscriptProjection implements KeywordSearchableTranscriptProject
     const normalizedQuery = query.trim();
     if (!normalizedQuery) return [];
     await this.flushPendingWrites();
+    await this.flushPendingDurableDrift();
     const boundedLimit = normalizeSearchLimit(limit);
     const scopedChannelId = options.channelId?.trim() || undefined;
+    // Fail closed under known redaction drift (bead 6oott, charter Law
+    // 22/6.23): a channel whose redaction failed to project may still hold
+    // content canon has redacted, so its rows are excluded until repair clears
+    // the record. The SQL predicate keys on the DURABLE record (covers
+    // restarts and other processes sharing the database); the in-memory filter
+    // below covers a drift record whose durable write has not landed yet.
     const rows = await queryRows<SearchRow>(
       this.pool,
       `
@@ -520,13 +752,19 @@ class PostgresTranscriptProjection implements KeywordSearchableTranscriptProject
         FROM session_messages_projection
         WHERE search_vector @@ websearch_to_tsquery('simple', $1)
           AND ($3::text IS NULL OR channel_id = $3)
+          AND NOT EXISTS (
+            SELECT 1
+            FROM session_projection_drift drift
+            WHERE drift.channel_id = session_messages_projection.channel_id
+              AND drift.kind = 'redaction'
+          )
         ORDER BY score DESC, timestamp DESC, message_id DESC
         LIMIT $2
       `,
       [normalizedQuery, boundedLimit, scopedChannelId ?? null],
     );
 
-    return rows.map(row => ({
+    return rows.filter(row => !this.hasRedactionDrift(row.channel_id)).map(row => ({
       channelId: row.channel_id,
       messageId: Math.floor(row.message_id),
       role: row.role,
@@ -556,7 +794,17 @@ export async function createPostgresTranscriptProjection(
     preloadProjectionMessageMetadata(pool),
     preloadDrift(pool),
   ]);
-  return new PostgresTranscriptProjection(pool, messageMetadataByChannel, driftByChannel);
+  const projection = new PostgresTranscriptProjection(
+    pool,
+    messageMetadataByChannel,
+    driftByChannel,
+    options.redactionDriftObserver ?? null,
+  );
+  // Re-surface unresolved redaction drift after a restart: the durable record
+  // already fail-closes search; this keeps the operator incident alive even if
+  // the process died between drift capture and incident recording.
+  projection.notifyPreloadedRedactionDrift();
+  return projection;
 }
 
 export async function createDefaultPostgresSessionAdapters(

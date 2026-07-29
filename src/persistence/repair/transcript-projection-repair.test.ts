@@ -26,7 +26,7 @@ interface ProjectedMessageRecord {
 
 class FakePostgresPool {
   records: ProjectedMessageRecord[] = [];
-  drift = new Map<string, { reason: string | null; markedAt: number }>();
+  drift = new Map<string, { reason: string | null; markedAt: number; kind: string }>();
 
   async connect(): Promise<PoolClient> {
     return {
@@ -43,6 +43,7 @@ class FakePostgresPool {
       || normalized === 'rollback'
       || normalized.startsWith('create table')
       || normalized.startsWith('create index')
+      || normalized.startsWith('alter table')
     ) {
       return { rows: [], command: 'OK', rowCount: 0, oid: 0, fields: [] } as QueryResult;
     }
@@ -75,11 +76,12 @@ class FakePostgresPool {
       return { rows, command: 'SELECT', rowCount: rows.length, oid: 0, fields: [] } as QueryResult;
     }
 
-    if (normalized.startsWith('select channel_id, reason, marked_at from session_projection_drift')) {
+    if (normalized.startsWith('select channel_id, reason, marked_at, kind from session_projection_drift')) {
       const rows = [...this.drift.entries()].map(([channelId, drift]) => ({
         channel_id: channelId,
         reason: drift.reason,
         marked_at: drift.markedAt,
+        kind: drift.kind,
       }));
       return {
         rows,
@@ -124,9 +126,12 @@ class FakePostgresPool {
     }
 
     if (normalized.startsWith('insert into session_projection_drift')) {
+      const existing = this.drift.get(String(values[0] ?? ''));
       this.drift.set(String(values[0] ?? ''), {
         reason: values[1] == null ? null : String(values[1]),
         markedAt: Number(values[2] ?? Date.now()),
+        // Mirrors the production no-downgrade conflict clause.
+        kind: existing?.kind === 'redaction' ? 'redaction' : (values[3] == null ? 'sync' : String(values[3])),
       });
       return { rows: [], command: 'INSERT', rowCount: 1, oid: 0, fields: [] } as QueryResult;
     }

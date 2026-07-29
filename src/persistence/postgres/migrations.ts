@@ -1211,10 +1211,16 @@ export const POSTGRES_TRANSCRIPT_MIGRATIONS = [
   CREATE TABLE IF NOT EXISTS session_projection_drift (
     channel_id TEXT PRIMARY KEY,
     reason TEXT,
-    marked_at BIGINT NOT NULL
+    marked_at BIGINT NOT NULL,
+    kind TEXT NOT NULL DEFAULT 'sync'
   );
   `,
   `CREATE INDEX IF NOT EXISTS idx_session_projection_drift_marked_at ON session_projection_drift(marked_at DESC, channel_id ASC);`,
+  // Bead 6oott: distinguish best-effort 'sync' drift from fail-closed
+  // 'redaction' drift (a redaction-carrying projection write failed, so the
+  // projection may still hold content canon has redacted). Existing rows
+  // backfill to 'sync', matching their pre-migration best-effort semantics.
+  `ALTER TABLE session_projection_drift ADD COLUMN IF NOT EXISTS kind TEXT NOT NULL DEFAULT 'sync';`,
 ];
 
 export const POSTGRES_INTERNAL_STATE_MIGRATIONS = [

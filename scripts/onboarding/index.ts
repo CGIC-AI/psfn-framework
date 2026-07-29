@@ -16,8 +16,13 @@ Usage:
 
 Options:
   --seed-dir <dir>   Owner-file seed directory (default: ./config or $CONFIG_DIR)
-  --env-file <path>  .env bootstrap path to write (default: ./.env)
+  --env-path <path>  .env bootstrap path to write (default: ./.env)
   -h, --help         Show this help
+
+Note: node's runtime reserves --env-file for its own env loader and consumes
+it wherever it appears on the command line, so this installer's flag is
+spelled --env-path. If you pass --env-file, node itself will try to LOAD that
+file (and exit if it does not exist) before onboarding starts.
 
 What it does:
   1. Asks the install mode — Docker Compose, Kubernetes, or local dev.
@@ -59,7 +64,13 @@ function parseArgs(argv: readonly string[]): CliOptions {
       case '--seed-dir':
         options.seedDir = resolve(requireValue(argv, ++i, arg));
         break;
+      // node's runtime consumes --env-file wherever it appears on the command
+      // line (its env loader is position-independent), so that spelling can
+      // never reach this parser. --env-path is the collision-free flag; the
+      // --env-file case stays only so any invocation shape that DOES deliver
+      // it keeps working instead of erroring as unknown.
       case '--env-file':
+      case '--env-path':
         options.envPath = resolve(requireValue(argv, ++i, arg));
         break;
       default:
@@ -82,9 +93,10 @@ async function main(): Promise<void> {
     return;
   }
 
+  const prompter = createReadlinePrompter();
   try {
     await runOnboarding({
-      prompter: createReadlinePrompter(),
+      prompter,
       seedDir: options.seedDir,
       envPath: options.envPath,
     });
@@ -100,6 +112,8 @@ async function main(): Promise<void> {
       return;
     }
     throw error;
+  } finally {
+    prompter.dispose?.();
   }
 }
 

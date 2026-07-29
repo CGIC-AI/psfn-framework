@@ -1437,7 +1437,10 @@ export class LLMClient {
               throw err;
             }
 
-            throwIfTransportAborted(transportSignal);
+            // i24ax: same resolve-under-abort seam as the completion path — a
+            // completed stream produced billable tokens, so record + settle
+            // before surfacing the abort rather than dropping the usage event.
+            const cancelledAfterCompletion = transportSignal.aborted;
             if (response) {
               try {
                 assertUsableProviderResponse(response, candidateTarget);
@@ -1506,9 +1509,12 @@ export class LLMClient {
                     emptyToolArgsAttempt: attemptIndex,
                     emptyArgsRetries: attemptIndex,
                     toolCallCount: response.toolCalls.length,
+                    ...(cancelledAfterCompletion ? { cancelledAfterCompletion: true } : {}),
                   },
                 },
               );
+              // i24ax: recorded + settled; now surface the cancellation.
+              throwIfTransportAborted(transportSignal);
               return response;
             }
 
@@ -1556,9 +1562,12 @@ export class LLMClient {
                   emptyToolArgsAttempt: attemptIndex,
                   emptyArgsRetries: attemptIndex,
                   partialOutputChars: content.length + reasoning.length,
+                  ...(cancelledAfterCompletion ? { cancelledAfterCompletion: true } : {}),
                 },
               },
             );
+            // i24ax: recorded + settled; surface a mid-stream cancellation.
+            throwIfTransportAborted(transportSignal);
             return incompleteResponse;
           }, streamRetryConfig, {
             circuitBreaker: {
@@ -1759,7 +1768,12 @@ export class LLMClient {
             }
             throw err;
           }
-          throwIfTransportAborted(transportSignal);
+          // i24ax: do NOT discard a resolved-under-abort provider result. The
+          // provider already produced (and billed) tokens, so the usage event
+          // must be recorded and the ICP reservation settled BEFORE we surface
+          // the abort — otherwise the spend is lost to the budget SUM and the
+          // pre-taken reservation strands pending forever (no sweeper).
+          const cancelledAfterCompletion = transportSignal.aborted;
           let usageDetails: LLMUsageDetails;
           try {
             const responseWithLegacyTokenCounts = response as typeof response & {
@@ -1853,9 +1867,17 @@ export class LLMClient {
               settlement: 'complete',
               stopReason: response.stopReason,
               providerObservability,
-              metadata: { completionPurpose: purpose, routingPurpose, emptyArgsRetries },
+              metadata: {
+                completionPurpose: purpose,
+                routingPurpose,
+                emptyArgsRetries,
+                ...(cancelledAfterCompletion ? { cancelledAfterCompletion: true } : {}),
+              },
             },
           );
+          // i24ax: usage now durably recorded and the reservation settled; surface
+          // the cancellation to the caller exactly as the pre-fix code did.
+          throwIfTransportAborted(transportSignal);
           return response;
         };
 

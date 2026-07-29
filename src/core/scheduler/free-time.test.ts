@@ -959,14 +959,16 @@ describe('free-time return summary lane', () => {
     expect(summary).toBe('Wandered the wiki and wrote a poem.');
   });
 
-  it('agent main wires summarizeActivity with the free_time_return purpose and the freeTime-owned budget', () => {
-    const source = readFileSync(resolve('src/app/agent/main.ts'), 'utf-8');
+  it('the free-time lane wires summarizeActivity with the free_time_return purpose and the freeTime-owned budget', () => {
+    // The wiring moved from agent/main.ts to the extracted lane module
+    // (charter 12.1 split, emh3p.1); the contract being pinned is unchanged.
+    const source = readFileSync(resolve('src/app/agent/startup/free-time-lane.ts'), 'utf-8');
     const start = source.indexOf('registerFreeTimeTasks({');
     expect(start).toBeGreaterThan(-1);
-    const block = source.slice(start, source.indexOf('registerWeightedThoughtOutreachTask', start));
+    const block = source.slice(start);
     expect(block).toContain("purpose: 'free_time_return'");
-    expect(block).toContain('schedulerConfig.freeTime.returnNote.summaryMaxTokens');
-    expect(block).not.toContain('temporalWakeup.morningWake.catchUpSummaryMaxTokens');
+    expect(block).toContain('config.returnNote.summaryMaxTokens');
+    expect(block).not.toContain('catchUpSummaryMaxTokens');
   });
 });
 

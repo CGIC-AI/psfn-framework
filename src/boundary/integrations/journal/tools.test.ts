@@ -87,15 +87,37 @@ describe('journal tool', () => {
     expect(secondText).toContain('tail');
   });
 
-  it('surfaces bounded search refusal as an error instead of a partial result', async () => {
+  it('surfaces skipped oversized notes as explicit incomplete search metadata', async () => {
     writeFileSync(join(root, 'first.md'), 'needle\n', 'utf8');
     writeFileSync(join(root, 'oversized.md'), Buffer.alloc(200_001, 0x61));
     const tool = createJournalTool(new JournalOps(root));
 
     const result = await tool.execute('search-1', { action: 'search', query: 'needle' });
 
-    expect((result.details as any).isError).toBe(true);
-    expect(resultText(result as any)).toContain('Journal search bound exceeded');
-    expect(resultText(result as any)).not.toContain('first.md');
+    expect((result.details as any).isError).not.toBe(true);
+    expect(resultText(result as any)).toContain('Search complete: false');
+    expect(resultText(result as any)).toContain('scanned 1 of 2 notes');
+    expect(resultText(result as any)).toContain('Skipped oversized notes: oversized.md');
+    expect(resultText(result as any)).toContain('first.md');
+  });
+
+  it('surfaces truncated list and file-count-limited search metadata', async () => {
+    for (let index = 0; index < 205; index += 1) {
+      writeFileSync(join(root, `note-${String(index).padStart(3, '0')}.md`), 'needle\n');
+    }
+    const tool = createJournalTool(new JournalOps(root));
+
+    const listed = await tool.execute('list-1', { action: 'list' });
+    const listText = resultText(listed as any);
+    expect(listText).toContain('Journal notes (200 of 205)');
+    expect(listText).toContain('List truncated: true');
+    expect(listText).toContain('- note-199.md');
+    expect(listText).not.toContain('- note-200.md');
+
+    const searched = await tool.execute('search-1', { action: 'search', query: 'needle' });
+    const searchText = resultText(searched as any);
+    expect((searched.details as any).isError).not.toBe(true);
+    expect(searchText).toContain('Search complete: false');
+    expect(searchText).toContain('scanned 200 of 205 notes');
   });
 });

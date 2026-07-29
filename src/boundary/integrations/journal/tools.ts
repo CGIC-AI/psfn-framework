@@ -107,7 +107,11 @@ export function createJournalTool(ops: JournalOperations): SubstrateAgentTool {
             if (result.notes.length === 0) {
               return textResult('Journal is empty.');
             }
-            return textResult(`Journal notes (${result.notes.length}):\n${result.notes.map(note => `- ${note}`).join('\n')}`);
+            return textResult(
+              `Journal notes (${String(result.notes.length)} of ${String(result.totalFiles)}):\n`
+              + `List truncated: ${String(result.truncated)}\n`
+              + result.notes.map(note => `- ${note}`).join('\n'),
+            );
           }
           case 'read': {
             const result = await ops.read(resolveNotePath(params), {
@@ -134,15 +138,13 @@ export function createJournalTool(ops: JournalOperations): SubstrateAgentTool {
             if (result.results.length === 0) {
               return textResult(
                 `No journal results for: ${result.query}\n`
-                + `Search complete: ${String(result.complete)}; scanned ${String(result.scannedFiles)} notes `
-                + `(${String(result.scannedBytes)} bytes).`,
+                + formatSearchMetadata(result),
               );
             }
             const lines = result.results.map((entry, index) => `${index + 1}. ${entry.path}\n   ${entry.snippet}`);
             return textResult(
               `Journal search: "${result.query}" (${String(result.results.length)} results)\n`
-              + `Search complete: ${String(result.complete)}; scanned ${String(result.scannedFiles)} notes `
-              + `(${String(result.scannedBytes)} bytes); more matches than limit: ${String(result.resultLimitReached)}.\n\n`
+              + `${formatSearchMetadata(result)}\n\n`
               + lines.join('\n'),
             );
           }
@@ -153,4 +155,15 @@ export function createJournalTool(ops: JournalOperations): SubstrateAgentTool {
       }
     },
   };
+}
+
+function formatSearchMetadata(result: Awaited<ReturnType<JournalOperations['search']>>): string {
+  const skipped = result.skippedOversizedFiles.length > 0
+    ? `\nSkipped oversized notes: ${result.skippedOversizedFiles.join(', ')}`
+    : '';
+  return `Search complete: ${String(result.complete)}; `
+    + `scanned ${String(result.scannedFiles)} of ${String(result.totalFiles)} notes `
+    + `(${String(result.scannedBytes)} bytes); `
+    + `more matches than limit: ${String(result.resultLimitReached)}.`
+    + skipped;
 }

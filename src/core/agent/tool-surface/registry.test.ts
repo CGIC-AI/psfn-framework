@@ -204,7 +204,12 @@ describe('first-party tool surface registry', () => {
 
   it('keeps journal canonical actions aligned with the actual tool schema', () => {
     const journalTool = createJournalTool({
-      list: async () => ({ root: '/tmp/journal', notes: [] }),
+      list: async () => ({
+        root: '/tmp/journal',
+        notes: [],
+        truncated: false,
+        totalFiles: 0,
+      }),
       read: async () => ({
         path: 'note.md',
         content: '',
@@ -222,6 +227,8 @@ describe('first-party tool surface registry', () => {
         resultLimitReached: false,
         scannedFiles: 0,
         scannedBytes: 0,
+        totalFiles: 0,
+        skippedOversizedFiles: [],
       }),
     });
 

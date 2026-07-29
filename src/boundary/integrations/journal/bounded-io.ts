@@ -17,9 +17,9 @@ const MAX_SEARCH_SNIPPET_CHARS = 180;
 /**
  * Code-owned safety contract for the local Markdown journal.
  *
- * Reads always page. Search is deliberately all-or-error: the complete
- * candidate corpus is statted against these bounds before any note content is
- * materialized, so a refusal can never look like a valid empty/partial result.
+ * Reads always page. List and search report explicit completeness metadata
+ * when their file bounds omit notes. Corpus-byte and tree-entry violations
+ * still fail before any valid-looking partial search result is returned.
  */
 export const JOURNAL_IO_CONTRACT = Object.freeze({
   readPageBytes: 12_000,
@@ -41,10 +41,18 @@ export interface JournalPage {
 
 export interface BoundedJournalSearchResult {
   results: Array<{ path: string; snippet: string }>;
-  complete: true;
+  complete: boolean;
   resultLimitReached: boolean;
   scannedFiles: number;
   scannedBytes: number;
+  totalFiles: number;
+  skippedOversizedFiles: string[];
+}
+
+export interface BoundedJournalListResult {
+  paths: string[];
+  truncated: boolean;
+  totalFiles: number;
 }
 
 interface SearchCandidate {
@@ -154,7 +162,12 @@ export async function searchBoundedJournal(
   normalizedQuery: string,
   limit: number,
 ): Promise<BoundedJournalSearchResult> {
-  const candidates = await collectBoundedSearchCandidates(root);
+  const {
+    candidates,
+    complete,
+    skippedOversizedFiles,
+    totalFiles,
+  } = await collectBoundedSearchCandidates(root);
   const results: Array<{ path: string; snippet: string }> = [];
   let resultLimitReached = false;
   let scannedBytes = 0;
@@ -186,56 +199,66 @@ export async function searchBoundedJournal(
 
   return {
     results,
-    complete: true,
+    complete,
     resultLimitReached,
     scannedFiles: candidates.length,
     scannedBytes,
+    totalFiles,
+    skippedOversizedFiles,
   };
 }
 
-export async function listBoundedJournalPaths(root: string): Promise<string[]> {
+export async function listBoundedJournalPaths(root: string): Promise<BoundedJournalListResult> {
   const state: JournalScanState = { operation: 'list', scannedEntries: 0 };
   const paths: string[] = [];
   for await (const candidate of walkMarkdownFiles(root, root, state)) {
-    if (paths.length >= JOURNAL_IO_CONTRACT.listMaxFiles) {
-      throw new Error(
-        `Journal list bound exceeded: the journal contains more than `
-        + `${String(JOURNAL_IO_CONTRACT.listMaxFiles)} Markdown files. `
-        + 'Search for a specific term, read a known note, or archive/narrow the journal root.',
-      );
-    }
     paths.push(candidate.relativePath);
   }
-  return paths.sort((left, right) => left.localeCompare(right));
+  paths.sort((left, right) => left.localeCompare(right));
+  return {
+    paths: paths.slice(0, JOURNAL_IO_CONTRACT.listMaxFiles),
+    truncated: paths.length > JOURNAL_IO_CONTRACT.listMaxFiles,
+    totalFiles: paths.length,
+  };
 }
 
-async function collectBoundedSearchCandidates(root: string): Promise<SearchCandidate[]> {
+async function collectBoundedSearchCandidates(root: string): Promise<{
+  candidates: SearchCandidate[];
+  complete: boolean;
+  skippedOversizedFiles: string[];
+  totalFiles: number;
+}> {
   const state: JournalScanState = { operation: 'search', scannedEntries: 0 };
-  const candidates: SearchCandidate[] = [];
-  let corpusBytes = 0;
-
+  const discovered: SearchCandidate[] = [];
   for await (const candidate of walkMarkdownFiles(root, root, state)) {
-    if (candidate.size > JOURNAL_IO_CONTRACT.searchMaxFileBytes) {
-      throw searchBoundError(
-        `note "${candidate.relativePath}" is ${String(candidate.size)} bytes; `
-        + `the per-note maximum is ${String(JOURNAL_IO_CONTRACT.searchMaxFileBytes)} bytes`,
-      );
-    }
-    if (candidates.length >= JOURNAL_IO_CONTRACT.searchMaxFiles) {
-      throw searchBoundError(
-        `the corpus contains more than ${String(JOURNAL_IO_CONTRACT.searchMaxFiles)} Markdown files`,
-      );
-    }
+    discovered.push(candidate);
+  }
+  discovered.sort((left, right) => left.relativePath.localeCompare(right.relativePath));
+
+  const selected = discovered.slice(0, JOURNAL_IO_CONTRACT.searchMaxFiles);
+  const skippedOversizedFiles = selected
+    .filter(candidate => candidate.size > JOURNAL_IO_CONTRACT.searchMaxFileBytes)
+    .map(candidate => candidate.relativePath);
+  const candidates = selected.filter(
+    candidate => candidate.size <= JOURNAL_IO_CONTRACT.searchMaxFileBytes,
+  );
+  let corpusBytes = 0;
+  for (const candidate of candidates) {
     if (corpusBytes + candidate.size > JOURNAL_IO_CONTRACT.searchMaxCorpusBytes) {
       throw searchBoundError(
         `the corpus exceeds ${String(JOURNAL_IO_CONTRACT.searchMaxCorpusBytes)} bytes`,
       );
     }
-    candidates.push(candidate);
     corpusBytes += candidate.size;
   }
 
-  return candidates.sort((left, right) => left.relativePath.localeCompare(right.relativePath));
+  return {
+    candidates,
+    complete: discovered.length <= JOURNAL_IO_CONTRACT.searchMaxFiles
+      && skippedOversizedFiles.length === 0,
+    skippedOversizedFiles,
+    totalFiles: discovered.length,
+  };
 }
 
 async function* walkMarkdownFiles(
@@ -284,6 +307,7 @@ async function copyHandleCompletely(
   source: Awaited<ReturnType<typeof open>>,
   destination: Awaited<ReturnType<typeof open>>,
 ): Promise<void> {
+  const preflightStats = await source.stat();
   const buffer = Buffer.allocUnsafe(64 * 1024);
   let position = 0;
   for (;;) {
@@ -293,9 +317,19 @@ async function copyHandleCompletely(
       buffer.length,
       position,
     );
-    if (bytesRead === 0) return;
+    if (bytesRead === 0) break;
     await writeBufferCompletely(destination, buffer.subarray(0, bytesRead));
     position += bytesRead;
+  }
+  const completedStats = await source.stat();
+  if (
+    completedStats.size !== preflightStats.size
+    || completedStats.mtimeMs !== preflightStats.mtimeMs
+    || position !== preflightStats.size
+  ) {
+    throw new Error(
+      'Journal append source was modified concurrently while its existing content was copied',
+    );
   }
 }
 

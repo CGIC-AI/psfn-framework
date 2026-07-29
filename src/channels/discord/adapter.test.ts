@@ -2225,7 +2225,7 @@ describe('DiscordAdapter status visibility', () => {
     await (adapter as any).onDiscordMessage(makeDiscordIncomingMessage(channelId, interactive.channel));
 
     expect(interactive.sent.some(msg => msg.includes('Connection hiccup, retrying (2/3)'))).toBe(true);
-    expect(interactive.edits).toContain('Having trouble reaching my thoughts. Please try again.');
+    expect(interactive.edits).toContain('[System retry exhausted] The companion cannot reach remote inference after repeated attempts. Please try again.');
   });
 
   it('shows rate-limited long-running analysis status updates and clears them on completion', async () => {

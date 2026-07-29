@@ -641,7 +641,7 @@ describe('registerGatewayMessageHandlers', () => {
     });
     expect(harness.gateway.discordSend).toHaveBeenCalledWith(
       'discord:general',
-      '[System delivery error] The runtime could not complete that turn. Please retry your message.',
+      '[System delivery error] The companion could not complete that reply. Please try again.',
     );
     expect(harness.gateway.discordSendMedia).not.toHaveBeenCalled();
   });
@@ -676,7 +676,7 @@ describe('registerGatewayMessageHandlers', () => {
       expect(handleMessage).toHaveBeenCalledTimes(2);
       expect(harness.gateway.discordSend).toHaveBeenCalledWith(
         'discord:general',
-        '[System delivery error] The runtime could not complete that turn. Please retry your message.',
+        '[System delivery error] The companion could not complete that reply. Please try again.',
       );
       expect(harness.gateway.discordSend).toHaveBeenCalledWith(
         'discord:other',

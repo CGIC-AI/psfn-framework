@@ -44,6 +44,8 @@ const OBSERVER_EVAL_RUN_PREFIX = 'observer-eval-sidecar';
 const DAY_MS = 86_400_000;
 const OBSERVER_EVAL_LEVER_MIN_RETENTION_DAYS = 90;
 
+const configLog = createComponentLogger('ObserverEvalSidecarConfig');
+
 export function createObserverEvalSidecarRuntimeFromConfig(
   config: Pick<SubstrateConfig, 'observerEvalSidecar' | 'persistenceBackend'>,
   dependencies: { postgresDatabaseUrl?: string; eventBus?: EventBus; tenant?: TenantPoolScope },
@@ -129,7 +131,26 @@ function createObserverEvalSidecarPersistence(
   // instead of defaulting to the primary tenant's `public` (psfn-framework-3ack).
   // This is the memoized first creation in the agent process, so it decides the
   // scope the advisory read path later reuses.
-  return createPostgresObserverEvalSidecarStore(postgresDatabaseUrl, {}, tenant);
+  const store = createPostgresObserverEvalSidecarStore(postgresDatabaseUrl, {}, tenant);
+  // psfn-framework-qicb.4: mirror the Garden-side startup probe (qicb.3) on the
+  // agent process. The store kicks off its schema-ensure `ready` promise in its
+  // constructor without attaching a rejection handler, so a startup Postgres
+  // connectivity blip (e.g. the kube-router netpol-programming race, a ~1s
+  // ECONNREFUSED window) would otherwise escape as a process-wide unhandled
+  // rejection through the agent's signal-shutdown handler. Await it once here so
+  // the rejection is handled at the source; queryRuns attaches a rejection
+  // handler to the same `ready` promise in the same tick as construction. The
+  // result is discarded. This does NOT retry — the `ready` promise is assigned
+  // once and a rejection stays rejected, so on genuine startup failure the
+  // sidecar telemetry stays down until process restart; the sidecar is disabled
+  // by default and non-authoritative, so that is acceptable.
+  void store.queryRuns({ limit: 1 }).catch((error: unknown) => {
+    configLog.warn(
+      'Observer eval sidecar startup connectivity failed; sidecar telemetry stays down until process restart',
+      { error: error instanceof Error ? error.message : String(error) },
+    );
+  });
+  return store;
 }
 
 interface EmoSimObserverEvalSidecarOptions {

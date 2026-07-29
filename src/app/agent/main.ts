@@ -38,11 +38,11 @@ import {
 import {
   registerIntrospectionLane,
 } from './startup/introspection-lane.js';
+import {
+  registerWeightedThoughtOutreachLane,
+} from './startup/weighted-thought-outreach-lane.js';
 import { trustOrd } from '../../system/trust/types.js';
-import { registerWeightedThoughtOutreachTask } from '../../core/scheduler/weighted-thought-outreach-lane.js';
-import { createLlmNudgeEvaluator } from '../../core/intention/weighted-thought-nudge-evaluator.js';
 import { recordWeightedThought } from '../../core/intention/weighted-thought-store-port.js';
-import { createWeightedThoughtContradictionDamper } from '../../core/intention/weighted-thought-contradiction.js';
 import { RunChargeLedger } from '../../shared/telemetry/charge-ledger.js';
 import { getRequestContext } from '../../primitives/llm/request-context.js';
 import { createFileOutreachOutboxStore } from '../../core/intention/outreach-outbox.js';
@@ -1253,54 +1253,21 @@ async function main(): Promise<void> {
     chargePolicy: config.chargePolicy,
     personalProjects,
   });
-  // ── Weighted-thought outreach lane (E?/1xb.2) ──
-  // Internal-state-driven outreach: a weighted thought crossing threshold
-  // produces an LLM nudge the companion accepts or declines; accepted nudges
-  // ride the existing durable-outbox delivery path. Disabled by default
-  // (scheduler.json weightedThoughtOutreach.enabled) and fail-closed on channel
-  // resolution — primary heartbeat DM only until a group-continuation policy
-  // approver is wired.
-  if (persistenceRuntime.weightedThoughtStore) {
-    registerWeightedThoughtOutreachTask({
-      scheduler,
-      eventBus,
-      config: schedulerConfig.weightedThoughtOutreach,
-      quietHours: schedulerConfig.episodicProcessing,
-      store: persistenceRuntime.weightedThoughtStore,
-      nudgeEvaluator: createLlmNudgeEvaluator({
-        llmProvider,
-        characterName: card.data.name,
-      }),
-      ...(icpWeightedThoughtCandidateAdapter
-        ? { icpCandidateAdapter: icpWeightedThoughtCandidateAdapter }
-        : {}),
-      channelPolicy: {
-        ...(heartbeatChannelId ? { primaryChannelId: heartbeatChannelId } : {}),
-        primaryChannelType: 'discord',
-      },
-      // Evaluate the quiet-hours gate in the recipient's timezone (2tli).
-      resolveContactTimeZone: async contactId => (
-        (await contactStore.getById(contactId))?.timezone ?? null
-      ),
-    });
-    // ── Charter Law 27 contradiction dampening (g1v99) ──
-    // "Said fine but context suggests otherwise should reduce weight rather than
-    // zero it out." When a care concern resolves while its resolution VAD still
-    // signals non-positive affect with no genuine relief, the surface closure and
-    // the affective signals disagree; the resolving contact's active weighted
-    // thoughts are dampened (reduced, never zeroed) so they defer yet persist.
-    // Subscribes to the same resolution-appraisal event the arc recorder uses.
-    eventBus.on(
-      'intention.concern.resolution_appraisal',
-      createWeightedThoughtContradictionDamper({
-        concernStore: intentionRuntime.concernStore,
-        thoughtStore: persistenceRuntime.weightedThoughtStore,
-        lifecycleConfig: schedulerConfig.weightedThoughtOutreach.lifecycle,
-      }),
-    );
-  } else if (schedulerConfig.weightedThoughtOutreach.enabled) {
-    log.warn('weightedThoughtOutreach enabled but no weighted-thought store is available; lane not registered');
-  }
+  // ── Weighted-thought outreach lane (E?/1xb.2) + Law 27 contradiction
+  // dampening: extracted to startup/weighted-thought-outreach-lane.ts.
+  registerWeightedThoughtOutreachLane({
+    scheduler,
+    schedulerConfig,
+    eventBus,
+    log,
+    weightedThoughtStore: persistenceRuntime.weightedThoughtStore,
+    llmProvider,
+    companionName: card.data.name,
+    heartbeatChannelId,
+    contactStore,
+    concernStore: intentionRuntime.concernStore,
+    icpWeightedThoughtCandidateAdapter,
+  });
 
   // ── Social-desire consent-moment lane (epic oth4, bead oth4.2): extracted
   // to startup/social-desire-lane.ts (charter 12.1 split).

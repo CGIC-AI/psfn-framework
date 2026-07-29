@@ -20,6 +20,8 @@ export interface Prompter {
   text(question: string, options?: { default?: string; allowEmpty?: boolean }): Promise<string>;
   secret(question: string): Promise<string>;
   confirm(question: string, options?: { default?: boolean }): Promise<boolean>;
+  /** Release the input source when the flow ends (interactive impls hold stdin open). */
+  dispose?(): void;
 }
 
 export interface PrompterChoiceOption {

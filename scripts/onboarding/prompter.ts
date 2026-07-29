@@ -1,6 +1,12 @@
 // ── readline-backed interactive prompter (psfn-framework-wckv.1.1) ──
 // The only place that touches stdin/stdout. Uses node's built-in readline (no
 // external prompt-UI dependency). Secret input is masked and never echoed.
+//
+// One readline Interface serves the whole flow (psfn-framework-63s6a): lines
+// that arrive before a question is asked — the normal case for piped input,
+// where the OS delivers every answer in one chunk — queue up and are consumed
+// in order, instead of firing 'line' with no listener and being discarded the
+// way a per-question Interface loses them.
 
 import { createInterface, type Interface } from 'node:readline';
 import { stdin, stdout } from 'node:process';
@@ -14,7 +20,73 @@ export class OnboardingAbort extends Error {
   }
 }
 
+interface Waiter {
+  resolve(line: string): void;
+  reject(error: Error): void;
+}
+
+/**
+ * Shared line source over a single readline Interface. Lines received while no
+ * question is pending are buffered; EOF/Ctrl-C aborts every waiting and future
+ * question once the buffer is drained.
+ */
+class LineSource {
+  private rl: Interface | undefined;
+  private readonly buffered: string[] = [];
+  private readonly waiters: Waiter[] = [];
+  private closed = false;
+
+  private ensureInterface(): void {
+    if (this.rl || this.closed) return;
+    this.rl = createInterface({ input: stdin, output: stdout });
+    this.rl.on('line', (line) => {
+      const waiter = this.waiters.shift();
+      if (waiter) waiter.resolve(line);
+      else this.buffered.push(line);
+    });
+    this.rl.on('close', () => {
+      this.closed = true;
+      // Buffered lines stay consumable; only unanswered questions abort.
+      for (const waiter of this.waiters.splice(0)) {
+        waiter.reject(new OnboardingAbort());
+      }
+    });
+  }
+
+  next(query: string): Promise<string> {
+    stdout.write(query);
+    if (this.buffered.length > 0) {
+      return Promise.resolve(this.buffered.shift() as string);
+    }
+    if (this.closed) {
+      return Promise.reject(new OnboardingAbort());
+    }
+    this.ensureInterface();
+    return new Promise<string>((resolve, reject) => {
+      this.waiters.push({ resolve, reject });
+    });
+  }
+
+  /** Suspend line delivery while a raw-mode reader owns stdin. */
+  pause(): void {
+    this.rl?.pause();
+  }
+
+  resume(): void {
+    if (!this.closed) this.rl?.resume();
+  }
+
+  dispose(): void {
+    this.closed = true;
+    this.rl?.close();
+    this.rl = undefined;
+  }
+}
+
 export function createReadlinePrompter(): Prompter {
+  const lines = new LineSource();
+  const askLine = (query: string): Promise<string> => lines.next(query);
+
   return {
     info(message: string): void {
       stdout.write(`${message}\n`);
@@ -48,7 +120,7 @@ export function createReadlinePrompter(): Prompter {
     },
 
     async secret(question: string): Promise<string> {
-      return askSecret(`${question}: `);
+      return askSecret(`${question}: `, lines);
     },
 
     async confirm(question: string, opts: { default?: boolean } = {}): Promise<boolean> {
@@ -61,24 +133,11 @@ export function createReadlinePrompter(): Prompter {
         stdout.write('Please answer y or n.\n');
       }
     },
+
+    dispose(): void {
+      lines.dispose();
+    },
   };
-}
-
-function withInterface<T>(run: (rl: Interface) => Promise<T>): Promise<T> {
-  const rl = createInterface({ input: stdin, output: stdout });
-  return run(rl).finally(() => rl.close());
-}
-
-function askLine(query: string): Promise<string> {
-  return withInterface(
-    (rl) => new Promise<string>((resolve, reject) => {
-      rl.question(query, (answer) => resolve(answer));
-      rl.on('close', () => {
-        // close without an answer (Ctrl-C / EOF) => abort.
-        reject(new OnboardingAbort());
-      });
-    }),
-  );
 }
 
 /**
@@ -86,10 +145,13 @@ function askLine(query: string): Promise<string> {
  * value. Off a TTY (piped input), reads a plain line without masking — safe
  * because there is no terminal to leak to and tests use a scripted prompter.
  */
-function askSecret(query: string): Promise<string> {
+function askSecret(query: string, lines: LineSource): Promise<string> {
   if (!stdin.isTTY) {
-    return askLine(query);
+    return lines.next(query);
   }
+  // The shared readline Interface must not compete for bytes while raw mode
+  // owns stdin, or masked keystrokes would also surface as buffered lines.
+  lines.pause();
   return new Promise<string>((resolve, reject) => {
     stdout.write(query);
     let value = '';
@@ -99,8 +161,8 @@ function askSecret(query: string): Promise<string> {
 
     const cleanup = (): void => {
       stdin.setRawMode(previousRaw);
-      stdin.pause();
       stdin.removeListener('data', onData);
+      lines.resume();
     };
 
     const onData = (chunk: Buffer): void => {

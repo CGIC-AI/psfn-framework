@@ -18,9 +18,19 @@ interface ProjectedMessageRecord {
 
 class FakePostgresPool {
   records: ProjectedMessageRecord[] = [];
-  drift = new Map<string, { reason: string | null; markedAt: number }>();
+  drift = new Map<string, { reason: string | null; markedAt: number; kind: string }>();
   failWriteForChannel: string | null = null;
+  failDeleteForChannel: string | null = null;
+  failDriftInsertForChannel: string | null = null;
+  /** When > 0, decremented on each forced failure; failures stop at 0. */
+  remainingForcedFailures = Number.POSITIVE_INFINITY;
   readonly statements: string[] = [];
+
+  private consumeForcedFailure(channelId: string): void {
+    if (this.remainingForcedFailures <= 0) return;
+    this.remainingForcedFailures -= 1;
+    throw new Error(`forced write failure for ${channelId}`);
+  }
 
   async connect(): Promise<PoolClient> {
     return {
@@ -38,6 +48,7 @@ class FakePostgresPool {
       || normalized === 'rollback'
       || normalized.startsWith('create table')
       || normalized.startsWith('create index')
+      || normalized.startsWith('alter table')
     ) {
       return { rows: [], command: 'OK', rowCount: 0, oid: 0, fields: [] } as QueryResult;
     }
@@ -70,11 +81,12 @@ class FakePostgresPool {
       return { rows, command: 'SELECT', rowCount: rows.length, oid: 0, fields: [] } as QueryResult;
     }
 
-    if (normalized.startsWith('select channel_id, reason, marked_at from session_projection_drift')) {
+    if (normalized.startsWith('select channel_id, reason, marked_at, kind from session_projection_drift')) {
       const rows = [...this.drift.entries()].map(([channelId, value]) => ({
         channel_id: channelId,
         reason: value.reason,
         marked_at: value.markedAt,
+        kind: value.kind,
       }));
       return {
         rows,
@@ -87,6 +99,9 @@ class FakePostgresPool {
 
     if (normalized.startsWith('delete from session_messages_projection where channel_id =') && normalized.includes('and message_id =')) {
       const channelId = String(values[0] ?? '');
+      if (this.failDeleteForChannel === channelId) {
+        this.consumeForcedFailure(channelId);
+      }
       const messageId = Number(values[1] ?? 0);
       const previousRecordCount = this.records.length;
       this.records = this.records.filter(record => (
@@ -103,6 +118,9 @@ class FakePostgresPool {
 
     if (normalized.startsWith('delete from session_messages_projection where channel_id =')) {
       const channelId = String(values[0] ?? '');
+      if (this.failDeleteForChannel === channelId) {
+        this.consumeForcedFailure(channelId);
+      }
       this.records = this.records.filter(record => record.channelId !== channelId);
       return { rows: [], command: 'DELETE', rowCount: 1, oid: 0, fields: [] } as QueryResult;
     }
@@ -110,7 +128,7 @@ class FakePostgresPool {
     if (normalized.startsWith('insert into session_messages_projection')) {
       const channelId = String(values[0] ?? '');
       if (this.failWriteForChannel === channelId) {
-        throw new Error(`forced write failure for ${channelId}`);
+        this.consumeForcedFailure(channelId);
       }
       const next: ProjectedMessageRecord = {
         channelId,
@@ -140,14 +158,28 @@ class FakePostgresPool {
     }
 
     if (normalized.startsWith('delete from session_projection_drift where channel_id =')) {
-      this.drift.delete(String(values[0] ?? ''));
+      const channelId = String(values[0] ?? '');
+      const existing = this.drift.get(channelId);
+      // Mirrors the production `AND kind <> 'redaction'` guard used by
+      // ordinary-write drift clearing.
+      if (existing && !(normalized.includes("kind <> 'redaction'") && existing.kind === 'redaction')) {
+        this.drift.delete(channelId);
+      }
       return { rows: [], command: 'DELETE', rowCount: 1, oid: 0, fields: [] } as QueryResult;
     }
 
     if (normalized.startsWith('insert into session_projection_drift')) {
-      this.drift.set(String(values[0] ?? ''), {
+      const channelId = String(values[0] ?? '');
+      if (this.failDriftInsertForChannel === channelId) {
+        throw new Error(`forced drift insert failure for ${channelId}`);
+      }
+      const existing = this.drift.get(channelId);
+      const incomingKind = values[3] == null ? 'sync' : String(values[3]);
+      this.drift.set(channelId, {
         reason: values[1] == null ? null : String(values[1]),
         markedAt: Number(values[2] ?? Date.now()),
+        // Mirrors the production no-downgrade conflict clause.
+        kind: existing?.kind === 'redaction' ? 'redaction' : incomingKind,
       });
       return { rows: [], command: 'INSERT', rowCount: 1, oid: 0, fields: [] } as QueryResult;
     }
@@ -158,6 +190,8 @@ class FakePostgresPool {
       const scopedChannelId = values[2] == null ? null : String(values[2]);
       const matches = this.records
         .filter(record => scopedChannelId === null || record.channelId === scopedChannelId)
+        // Mirrors the production NOT EXISTS redaction-drift predicate.
+        .filter(record => this.drift.get(record.channelId)?.kind !== 'redaction')
         .filter(record => {
           const haystack = record.content.toLowerCase();
           return tokens.every(token => haystack.includes(token));
@@ -566,6 +600,277 @@ describe('postgres session adapters', () => {
     expect(adapters.transcriptProjection.countProjectedMessages('api:postgres-cogsec')).toBe(1);
     await expect(adapters.transcriptSearch.searchByKeywords('clean postgres')).resolves.toHaveLength(1);
     await expect(adapters.transcriptSearch.searchByKeywords('cogsec_20260701T000000Z_pg')).resolves.toHaveLength(0);
+  });
+
+  it('fails closed when a redaction projection delete keeps failing: durable redaction drift and search exclusion', async () => {
+    const sessionsDir = mkdtempSync(join(tmpdir(), 'psfn-pg-redaction-drift-'));
+    dirs.push(sessionsDir);
+    const channelId = 'api:redaction-drift';
+    const pool = new FakePostgresPool();
+    const observed: Array<{ channelId: string; reason: string }> = [];
+    const adapters = await createDefaultPostgresSessionAdapters('postgres://unused', {
+      sessionsDir,
+      pool: pool as unknown as Pool,
+      redactionDriftObserver: {
+        recordRedactionProjectionDrift: event => {
+          observed.push({ channelId: event.channelId, reason: event.reason });
+        },
+      },
+    });
+
+    adapters.transcriptProjection.upsertSessionEntry({
+      id: 1,
+      channelId,
+      role: 'user',
+      content: 'secret leaked needle',
+      timestamp: 1_000,
+    });
+    adapters.transcriptProjection.upsertSessionEntry({
+      id: 2,
+      channelId: 'api:redaction-drift-other',
+      role: 'user',
+      content: 'unrelated healthy needle',
+      timestamp: 2_000,
+    });
+    await expect(adapters.transcriptSearch.searchByKeywords('needle')).resolves.toHaveLength(2);
+
+    // The exact leak mechanism: the redaction tombstone's projection DELETE
+    // fails, so the original content row SURVIVES in the projection table.
+    pool.failDeleteForChannel = channelId;
+    adapters.transcriptProjection.upsertSessionEntry({
+      id: 1,
+      channelId,
+      role: 'user',
+      content: '[CogSec redaction: cogsec_20260722T000000Z_leak]',
+      metadata: JSON.stringify({
+        kind: 'cogsec_l0_tombstone',
+        caseId: 'cogsec_20260722T000000Z_leak',
+        redactedAt: '2026-07-22T00:00:00.000Z',
+      }),
+      timestamp: 1_000,
+    });
+    await adapters.transcriptProjection.flushPendingWrites?.();
+
+    // Original row survived in the store...
+    expect(pool.records.some(record => record.channelId === channelId && record.messageId === 1)).toBe(true);
+    // ...but search fails closed for the channel instead of serving it.
+    const hits = await adapters.transcriptSearch.searchByKeywords('needle');
+    expect(hits.map(hit => hit.channelId)).toEqual(['api:redaction-drift-other']);
+    // The drift record is durable (survives restarts) and redaction-kind.
+    expect(pool.drift.get(channelId)?.kind).toBe('redaction');
+    expect(adapters.transcriptProjection.listProjectionDrift()).toEqual([
+      expect.objectContaining({ channelId, kind: 'redaction' }),
+    ]);
+    // Operator incident seam observed the failure.
+    expect(observed).toEqual([
+      expect.objectContaining({ channelId, reason: expect.stringContaining('forced write failure') }),
+    ]);
+
+    // An ordinary successful append does NOT clear redaction drift.
+    pool.failDeleteForChannel = null;
+    adapters.transcriptProjection.upsertSessionEntry({
+      id: 3,
+      channelId,
+      role: 'assistant',
+      content: 'later ordinary needle',
+      timestamp: 3_000,
+    });
+    await adapters.transcriptProjection.flushPendingWrites?.();
+    expect(pool.drift.get(channelId)?.kind).toBe('redaction');
+    await expect(adapters.transcriptSearch.searchByKeywords('needle')).resolves.toEqual([
+      expect.objectContaining({ channelId: 'api:redaction-drift-other' }),
+    ]);
+
+    // Repair-equivalent full replacement from canon clears the drift and
+    // restores search for the channel without the redacted content.
+    adapters.transcriptProjection.replaceChannelEntries(channelId, [
+      {
+        id: 1,
+        channelId,
+        role: 'user',
+        content: '[CogSec redaction: cogsec_20260722T000000Z_leak]',
+        timestamp: 1_000,
+      },
+      {
+        id: 3,
+        channelId,
+        role: 'assistant',
+        content: 'later ordinary needle',
+        timestamp: 3_000,
+      },
+    ]);
+    await adapters.transcriptProjection.flushPendingWrites?.();
+    expect(pool.drift.has(channelId)).toBe(false);
+    const repaired = await adapters.transcriptSearch.searchByKeywords('needle');
+    expect(repaired.map(hit => `${hit.channelId}:${hit.messageId}`).sort()).toEqual([
+      'api:redaction-drift-other:2',
+      `${channelId}:3`,
+    ]);
+    await expect(adapters.transcriptSearch.searchByKeywords('secret leaked')).resolves.toHaveLength(0);
+  });
+
+  it('recovers a transiently failing redaction delete with one bounded retry and records no drift', async () => {
+    const sessionsDir = mkdtempSync(join(tmpdir(), 'psfn-pg-redaction-retry-'));
+    dirs.push(sessionsDir);
+    const channelId = 'api:redaction-retry';
+    const pool = new FakePostgresPool();
+    const adapters = await createDefaultPostgresSessionAdapters('postgres://unused', {
+      sessionsDir,
+      pool: pool as unknown as Pool,
+    });
+
+    adapters.transcriptProjection.upsertSessionEntry({
+      id: 1,
+      channelId,
+      role: 'user',
+      content: 'transient retry needle',
+      timestamp: 1_000,
+    });
+    await adapters.transcriptProjection.flushPendingWrites?.();
+
+    pool.failDeleteForChannel = channelId;
+    pool.remainingForcedFailures = 1;
+    adapters.transcriptProjection.upsertSessionEntry({
+      id: 1,
+      channelId,
+      role: 'user',
+      content: '[CogSec redaction: cogsec_20260722T000000Z_retry]',
+      metadata: JSON.stringify({
+        kind: 'cogsec_l0_tombstone',
+        caseId: 'cogsec_20260722T000000Z_retry',
+        redactedAt: '2026-07-22T00:00:00.000Z',
+      }),
+      timestamp: 1_000,
+    });
+    await adapters.transcriptProjection.flushPendingWrites?.();
+
+    expect(pool.records.filter(record => record.channelId === channelId)).toHaveLength(0);
+    expect(adapters.transcriptProjection.listProjectionDrift()).toEqual([]);
+    await expect(adapters.transcriptSearch.searchByKeywords('transient retry')).resolves.toHaveLength(0);
+  });
+
+  it('keeps in-process search fail-closed and retries durability when the drift row write itself fails', async () => {
+    const sessionsDir = mkdtempSync(join(tmpdir(), 'psfn-pg-redaction-pending-'));
+    dirs.push(sessionsDir);
+    const channelId = 'api:redaction-pending';
+    const pool = new FakePostgresPool();
+    const adapters = await createDefaultPostgresSessionAdapters('postgres://unused', {
+      sessionsDir,
+      pool: pool as unknown as Pool,
+    });
+
+    adapters.transcriptProjection.upsertSessionEntry({
+      id: 1,
+      channelId,
+      role: 'user',
+      content: 'pending durable needle',
+      timestamp: 1_000,
+    });
+    await adapters.transcriptProjection.flushPendingWrites?.();
+
+    pool.failDeleteForChannel = channelId;
+    pool.failDriftInsertForChannel = channelId;
+    adapters.transcriptProjection.upsertSessionEntry({
+      id: 1,
+      channelId,
+      role: 'user',
+      content: '[CogSec redaction: cogsec_20260722T000000Z_pending]',
+      metadata: JSON.stringify({
+        kind: 'cogsec_l0_tombstone',
+        caseId: 'cogsec_20260722T000000Z_pending',
+        redactedAt: '2026-07-22T00:00:00.000Z',
+      }),
+      timestamp: 1_000,
+    });
+    await adapters.transcriptProjection.flushPendingWrites?.();
+
+    // Durable row could not land, but the in-memory record still fail-closes
+    // in-process search.
+    expect(pool.drift.has(channelId)).toBe(false);
+    await expect(adapters.transcriptSearch.searchByKeywords('pending durable')).resolves.toHaveLength(0);
+
+    // Once the database accepts writes again, the next search flushes the
+    // pending durable record.
+    pool.failDriftInsertForChannel = null;
+    await adapters.transcriptSearch.searchByKeywords('pending durable');
+    expect(pool.drift.get(channelId)?.kind).toBe('redaction');
+  });
+
+  it('keeps ordinary append failures best-effort: sync drift, search still serves the channel', async () => {
+    const sessionsDir = mkdtempSync(join(tmpdir(), 'psfn-pg-sync-drift-'));
+    dirs.push(sessionsDir);
+    const channelId = 'api:sync-drift';
+    const pool = new FakePostgresPool();
+    const adapters = await createDefaultPostgresSessionAdapters('postgres://unused', {
+      sessionsDir,
+      pool: pool as unknown as Pool,
+    });
+
+    adapters.transcriptProjection.upsertSessionEntry({
+      id: 1,
+      channelId,
+      role: 'user',
+      content: 'existing best effort needle',
+      timestamp: 1_000,
+    });
+    await adapters.transcriptProjection.flushPendingWrites?.();
+
+    pool.failWriteForChannel = channelId;
+    adapters.transcriptProjection.upsertSessionEntry({
+      id: 2,
+      channelId,
+      role: 'assistant',
+      content: 'lost append',
+      timestamp: 2_000,
+    });
+    await adapters.transcriptProjection.flushPendingWrites?.();
+
+    expect(adapters.transcriptProjection.listProjectionDrift()).toEqual([
+      expect.objectContaining({ channelId, kind: 'sync' }),
+    ]);
+    // Best-effort semantics preserved: the channel's existing rows still serve.
+    await expect(adapters.transcriptSearch.searchByKeywords('best effort')).resolves.toEqual([
+      expect.objectContaining({ channelId, messageId: 1 }),
+    ]);
+  });
+
+  it('never downgrades redaction drift through markProjectionDrift and re-surfaces it to a fresh adapter', async () => {
+    const sessionsDir = mkdtempSync(join(tmpdir(), 'psfn-pg-redaction-restart-'));
+    dirs.push(sessionsDir);
+    const channelId = 'api:redaction-restart';
+    const pool = new FakePostgresPool();
+    const adapters = await createDefaultPostgresSessionAdapters('postgres://unused', {
+      sessionsDir,
+      pool: pool as unknown as Pool,
+    });
+
+    adapters.transcriptProjection.markProjectionDrift(channelId, 'redaction failed', 'redaction');
+    await adapters.transcriptProjection.flushPendingWrites?.();
+    expect(pool.drift.get(channelId)?.kind).toBe('redaction');
+
+    adapters.transcriptProjection.markProjectionDrift(channelId, 'later ordinary drift');
+    await adapters.transcriptProjection.flushPendingWrites?.();
+    expect(pool.drift.get(channelId)?.kind).toBe('redaction');
+    expect(adapters.transcriptProjection.listProjectionDrift()).toEqual([
+      expect.objectContaining({ channelId, kind: 'redaction' }),
+    ]);
+
+    // "Restart": a fresh adapter over the same database preloads the durable
+    // record, keeps search fail-closed, and re-notifies the operator seam.
+    const observed: string[] = [];
+    const restarted = await createDefaultPostgresSessionAdapters('postgres://unused', {
+      sessionsDir,
+      pool: pool as unknown as Pool,
+      redactionDriftObserver: {
+        recordRedactionProjectionDrift: event => {
+          observed.push(event.channelId);
+        },
+      },
+    });
+    expect(observed).toEqual([channelId]);
+    expect(restarted.transcriptProjection.listProjectionDrift()).toEqual([
+      expect.objectContaining({ channelId, kind: 'redaction' }),
+    ]);
   });
 
   it('tracks projection drift when queued postgres writes fail', async () => {

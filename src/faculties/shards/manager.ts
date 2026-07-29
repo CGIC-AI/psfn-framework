@@ -167,8 +167,15 @@ export const DEFAULT_SHARD_TOOLSET = [
   // BLOCKED_SHARD_TOOL_NAMES (trust truth is core-authoritative, charter 6.13);
   // naming a blocked tool in a toolset can never inject it, so keep the default
   // honest rather than carrying a dead entry.
-  'repo_status',
-  'repo_diff',
+  //
+  // as1wr: `repo_status`/`repo_diff` were retired hidden aliases (collapsed into
+  // the multiplexed `repo` tool's `inspect` action); a toolset naming them
+  // resolves to nothing, so they under-provisioned no capability and were dead
+  // entries. Dropped to keep the default honest and reference only live tool
+  // names. Re-granting repo inspection to shards is a separate capability
+  // decision — the live surface is the whole `repo` tool (inspect + patch +
+  // commit + branch + publish), which must be weighed against shard isolation,
+  // not restored implicitly by re-adding a dead alias.
 ] as const;
 
 const DEFAULT_SHARD_TOOLSETS_BY_TIER: Readonly<Record<CapabilityTier, readonly string[]>> = {

@@ -5,6 +5,15 @@ import { isStrictSubpath, resolveIdentityAssetsDir } from '../../persistence/lay
 import { writeJsonAtomic } from '../../shared/utils/fs.js';
 import { isRecord } from '../../shared/utils/types.js';
 
+function isFileNotFoundError(error: unknown): boolean {
+  return (
+    error !== null
+    && typeof error === 'object'
+    && 'code' in error
+    && (error as { code?: unknown }).code === 'ENOENT'
+  );
+}
+
 const REFERENCE_IMAGE_DIR_NAME = 'image-references';
 const REFERENCE_IMAGE_INDEX_FILE = 'image-references.json';
 const REFERENCE_SCHEMA_VERSION = 1;
@@ -682,7 +691,21 @@ export class ImageReferenceStore {
     const index = await this.readIndex();
     const reference = index.references.find((candidate) => candidate.id === cleanId);
     if (!reference) return null;
-    const data = await readFile(this.resolveReferencePath(reference.fileName));
+    let data: Buffer;
+    try {
+      data = await readFile(this.resolveReferencePath(reference.fileName));
+    } catch (error) {
+      // The index entry exists but the blob file is gone. This is reachable
+      // through the deliberate rm-before-writeIndex ordering in delete()
+      // (psfn-framework-xyd7): a crash between the unlink and the index commit
+      // leaves the index advertising a reference whose blob no longer exists.
+      // Return null so getBlob's not-found contract stays uniform with the
+      // empty-id and missing-entry cases above, instead of leaking a raw ENOENT
+      // (which also embeds the on-disk companion-data path) to callers. Every
+      // other error class still propagates.
+      if (isFileNotFoundError(error)) return null;
+      throw error;
+    }
     return {
       id: reference.id,
       fileName: reference.fileName,
@@ -747,7 +770,7 @@ export class ImageReferenceStore {
         references,
       };
     } catch (error) {
-      if (error && typeof error === 'object' && 'code' in error && error.code === 'ENOENT') {
+      if (isFileNotFoundError(error)) {
         return { schemaVersion: REFERENCE_SCHEMA_VERSION, defaultHistory: [], references: [] };
       }
       throw error;

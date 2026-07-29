@@ -221,8 +221,11 @@ describe('registerLLMMethods', () => {
         stream: vi.fn(),
         complete,
       },
-      audited: (_method, handler) => async params => {
-        await auditGate;
+      // Gate ONLY the completion's audit so a fast cancel races the slow
+      // provider handler. llm.cancel is itself audited now (oetdv), and its
+      // audit is fast in production, so it must not be frozen by this gate.
+      audited: (method, handler) => async params => {
+        if (method === 'llm.complete') await auditGate;
         return await handler(params);
       },
     });
@@ -236,7 +239,7 @@ describe('registerLLMMethods', () => {
       systemPrompt: 'system',
       purpose: 'background',
     });
-    expect(harness.invoke('llm.cancel', { cancellationId })).toEqual({
+    await expect(harness.invoke('llm.cancel', { cancellationId })).resolves.toEqual({
       cancelled: true,
     });
     releaseAudit();
@@ -244,9 +247,52 @@ describe('registerLLMMethods', () => {
     await expect(pending).rejects.toThrow('cancelled by its owning connection');
     expect(providerSignal?.aborted).toBe(true);
     expect(complete).toHaveBeenCalledOnce();
-    expect(harness.invoke('llm.cancel', { cancellationId })).toEqual({
+    await expect(harness.invoke('llm.cancel', { cancellationId })).resolves.toEqual({
       cancelled: false,
     });
+  });
+
+  it('oetdv: routes llm.cancel through the audited wrapper with the cancellationId in the audit summary', async () => {
+    const auditCalls: Array<{ method: string; summary: Record<string, unknown> | undefined }> = [];
+    const harness = createHarness({
+      audited: (method, handler, summary) => async (params) => {
+        // Audit-then-act: capture the summary BEFORE running the handler, exactly
+        // like the real gateway wrapper, so the cancellationId lands in the row.
+        auditCalls.push({ method, summary: summary?.(params) });
+        return await handler(params);
+      },
+    });
+    const cancellationId = '33333333-3333-4333-8333-333333333333';
+
+    // An unknown id is harmless and bounded (cancelled:false) but must still be
+    // audited with its cancellationId so the record identifies what was targeted.
+    await expect(harness.invoke('llm.cancel', { cancellationId })).resolves.toEqual({
+      cancelled: false,
+    });
+    expect(auditCalls).toContainEqual({ method: 'llm.cancel', summary: { cancellationId } });
+  });
+
+  it('oetdv: rejects a malformed llm.cancel with a typed gateway error inside the errors block and still audits it', async () => {
+    const auditFailures: Array<{ method: string; error: unknown }> = [];
+    const harness = createHarness({
+      audited: (method, handler) => async (params) => {
+        try {
+          return await handler(params);
+        } catch (error) {
+          auditFailures.push({ method, error });
+          throw error;
+        }
+      },
+    });
+
+    await expect(
+      harness.invoke('llm.cancel', { cancellationId: 'not-a-canonical-uuid' }),
+    ).rejects.toMatchObject({ code: GatewayErrors.INVALID_LLM_CANCELLATION });
+    // The malformed cancel is observable: the audited wrapper saw the typed
+    // failure rather than a silent bare-Error no-op.
+    expect(auditFailures).toHaveLength(1);
+    expect(auditFailures[0]?.method).toBe('llm.cancel');
+    expect(auditFailures[0]?.error).toMatchObject({ code: GatewayErrors.INVALID_LLM_CANCELLATION });
   });
 
   it('passes connection-scoped cancellation through streamed chat provider options', async () => {
@@ -275,7 +321,7 @@ describe('registerLLMMethods', () => {
       stream: true,
     });
     await vi.waitFor(() => expect(providerSignal).toBeInstanceOf(AbortSignal));
-    expect(harness.invoke('llm.cancel', { cancellationId })).toEqual({
+    await expect(harness.invoke('llm.cancel', { cancellationId })).resolves.toEqual({
       cancelled: true,
     });
 

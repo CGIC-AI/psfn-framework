@@ -1273,4 +1273,12 @@ export const GatewayErrors = {
    * provider I/O — fail closed, never silently substituted.
    */
   UNKNOWN_MODEL_SELECTION_SLOT: -32020,
+  /**
+   * oetdv: an `llm.cancel` request was structurally invalid (non-object params,
+   * missing cancellationId, or a non-canonical UUID). Surfaced as a typed
+   * gateway error instead of a bare Error flattened to JSON-RPC code 0, so a
+   * malformed cancel is observable in the audit trail rather than a silent
+   * console.warn no-op while the provider keeps burning tokens.
+   */
+  INVALID_LLM_CANCELLATION: -32021,
 } as const;

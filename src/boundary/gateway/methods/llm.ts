@@ -228,7 +228,7 @@ async function authorizeIcpCorrelation<P extends GatewayCorrelationParams>(
 }
 
 interface CancellableLlmMethodDescriptor<P extends { cancellationId?: string }, R> {
-  name: 'llm.chat' | 'llm.complete';
+  name: 'llm.chat' | 'llm.complete' | 'llm.embed';
   handler: (
     params: P,
     runtime: GatewayMethodRuntime,
@@ -416,6 +416,64 @@ const cancellableLlmDescriptors: Array<CancellableLlmMethodDescriptor<any, unkno
       })),
     }),
   },
+  {
+    // zn2iy: route llm.embed through the SAME governed cancellation registry as
+    // llm.chat/llm.complete so an aborted or disconnected agent connection tears
+    // down the upstream embedding provider instead of leaving a zombie that
+    // finishes and records cost after the caller is gone. Connection close fires
+    // the registry's abortAll (the dominant split-runtime protection, needing no
+    // caller signal); an explicit caller abort additionally routes llm.cancel.
+    name: 'llm.embed',
+    handler: async (params: LLMEmbedParams, runtime, signal): Promise<{ embeddings: number[][] }> => {
+      const startedAtMs = Date.now();
+      const logicalCallId = `embedding:${randomUUID()}`;
+      const recordsUsageInternally = embeddingRecordsUsageInternally(runtime);
+      const correlation = buildCorrelation({
+        ...params,
+        callType: params.callType ?? 'memory',
+        purpose: params.purpose ?? 'embedding',
+        originType: params.originType ?? 'memory',
+        originStage: params.originStage ?? 'embedding',
+      });
+      let result: EmbeddingBatchProviderUsageResult;
+      try {
+        result = await runWithRequestContext(
+          correlation,
+          async () => await embedBatchWithProviderUsage(runtime, params.texts, signal),
+        );
+      } catch (error) {
+        if (!recordsUsageInternally) {
+          await recordEmbeddingUsage(
+            runtime,
+            params,
+            logicalCallId,
+            startedAtMs,
+            'failure',
+            extractProviderAttemptUsageDetails(error),
+            error,
+          );
+        }
+        throw error;
+      }
+      // zn2iy: a provider that ignores the signal can resolve under an already-
+      // aborted request. Surface the cancellation BEFORE recording success so no
+      // late success/cost telemetry is written for a request whose caller is
+      // gone (embed takes no ICP reservation, so there is nothing to strand).
+      throwIfCancellableLlmRequestAborted(signal);
+      if (!recordsUsageInternally) {
+        await recordEmbeddingUsage(
+          runtime,
+          params,
+          logicalCallId,
+          startedAtMs,
+          'success',
+          result.usageDetails,
+        );
+      }
+      return { embeddings: result.embeddings.map(e => Array.from(e)) };
+    },
+    summary: (p: LLMEmbedParams) => ({ textCount: p.texts.length }),
+  },
 ];
 
 const llmDescriptors: Array<AuditedMethodDescriptor<any, unknown>> = [
@@ -454,53 +512,6 @@ const llmDescriptors: Array<AuditedMethodDescriptor<any, unknown>> = [
         : undefined;
       return typeof cancellationId === 'string' ? { cancellationId } : {};
     },
-  },
-  {
-    name: 'llm.embed',
-    handler: async (params: LLMEmbedParams, runtime) => {
-      const startedAtMs = Date.now();
-      const logicalCallId = `embedding:${randomUUID()}`;
-      const recordsUsageInternally = embeddingRecordsUsageInternally(runtime);
-      const correlation = buildCorrelation({
-        ...params,
-        callType: params.callType ?? 'memory',
-        purpose: params.purpose ?? 'embedding',
-        originType: params.originType ?? 'memory',
-        originStage: params.originStage ?? 'embedding',
-      });
-      let result: EmbeddingBatchProviderUsageResult;
-      try {
-        result = await runWithRequestContext(
-          correlation,
-          async () => await embedBatchWithProviderUsage(runtime, params.texts),
-        );
-      } catch (error) {
-        if (!recordsUsageInternally) {
-          await recordEmbeddingUsage(
-            runtime,
-            params,
-            logicalCallId,
-            startedAtMs,
-            'failure',
-            extractProviderAttemptUsageDetails(error),
-            error,
-          );
-        }
-        throw error;
-      }
-      if (!recordsUsageInternally) {
-        await recordEmbeddingUsage(
-          runtime,
-          params,
-          logicalCallId,
-          startedAtMs,
-          'success',
-          result.usageDetails,
-        );
-      }
-      return { embeddings: result.embeddings.map(e => Array.from(e)) };
-    },
-    summary: (p: LLMEmbedParams) => ({ textCount: p.texts.length }),
   },
   {
     name: 'llm.discover_models',
@@ -615,14 +626,19 @@ function embeddingRecordsUsageInternally(runtime: GatewayMethodRuntime): boolean
 async function embedBatchWithProviderUsage(
   runtime: GatewayMethodRuntime,
   texts: string[],
+  signal: AbortSignal | undefined,
 ): Promise<EmbeddingBatchProviderUsageResult> {
   const provider = runtime.embeddingService as GatewayMethodRuntime['embeddingService'] & {
-    embedBatchWithUsage?: (input: string[]) => Promise<EmbeddingBatchProviderUsageResult>;
+    embedBatchWithUsage?: (
+      input: string[],
+      options?: { signal?: AbortSignal },
+    ) => Promise<EmbeddingBatchProviderUsageResult>;
   };
+  const options = signal ? { signal } : undefined;
   if (provider.embedBatchWithUsage) {
-    return await provider.embedBatchWithUsage(texts);
+    return await provider.embedBatchWithUsage(texts, options);
   }
-  return { embeddings: await provider.embedBatch(texts) };
+  return { embeddings: await provider.embedBatch(texts, options) };
 }
 
 async function recordEmbeddingUsage(

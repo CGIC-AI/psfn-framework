@@ -14,13 +14,24 @@ import { hasProviderCostEvidenceConflict } from '../../shared/telemetry/provider
 import { getRequestContext } from '../../primitives/llm/request-context.js';
 import { getRunChargeSnapshot } from '../../shared/telemetry/run-charge.js';
 
+/** zn2iy: optional per-call cancellation, forwarded to the wrapped provider. */
+interface EmbeddingUsageCancellation {
+  signal?: AbortSignal;
+}
+
 interface EmbeddingProviderWithUsage extends EmbeddingRuntimeProvider {
-  embedBatchWithUsage?(texts: string[]): Promise<EmbeddingBatchWithUsageResult>;
+  embedBatchWithUsage?(
+    texts: string[],
+    options?: EmbeddingUsageCancellation,
+  ): Promise<EmbeddingBatchWithUsageResult>;
 }
 
 export interface AccountedEmbeddingRuntimeProvider extends EmbeddingRuntimeProvider {
   readonly recordsModelUsageInternally: true;
-  embedBatchWithUsage(texts: string[]): Promise<EmbeddingBatchWithUsageResult>;
+  embedBatchWithUsage(
+    texts: string[],
+    options?: EmbeddingUsageCancellation,
+  ): Promise<EmbeddingBatchWithUsageResult>;
 }
 
 export interface EmbeddingUsageAccountingOptions {
@@ -151,15 +162,18 @@ export function withEmbeddingUsageAccounting(
     });
   };
 
-  const embedBatchWithUsage = async (texts: string[]): Promise<EmbeddingBatchWithUsageResult> => {
+  const embedBatchWithUsage = async (
+    texts: string[],
+    options?: EmbeddingUsageCancellation,
+  ): Promise<EmbeddingBatchWithUsageResult> => {
     if (texts.length === 0) return { embeddings: [] };
     const logicalCallId = `embedding:${randomUUID()}`;
     const startedAtMs = Date.now();
     let result: EmbeddingBatchWithUsageResult;
     try {
       result = provider.embedBatchWithUsage
-        ? await provider.embedBatchWithUsage(texts)
-        : { embeddings: await provider.embedBatch(texts) };
+        ? await provider.embedBatchWithUsage(texts, options)
+        : { embeddings: await provider.embedBatch(texts, options) };
     } catch (error) {
       await record(
         logicalCallId,
@@ -180,12 +194,12 @@ export function withEmbeddingUsageAccounting(
     model: provider.model,
     dims: provider.dims,
     recordsModelUsageInternally: true,
-    async embed(text: string): Promise<Float32Array> {
-      const result = await embedBatchWithUsage([text]);
+    async embed(text: string, options?: EmbeddingUsageCancellation): Promise<Float32Array> {
+      const result = await embedBatchWithUsage([text], options);
       return result.embeddings[0];
     },
-    async embedBatch(texts: string[]): Promise<Float32Array[]> {
-      return (await embedBatchWithUsage(texts)).embeddings;
+    async embedBatch(texts: string[], options?: EmbeddingUsageCancellation): Promise<Float32Array[]> {
+      return (await embedBatchWithUsage(texts, options)).embeddings;
     },
     embedBatchWithUsage,
   };

@@ -13,10 +13,34 @@ export interface SessionSearchHit {
   snippet: string;
 }
 
+/**
+ * Drift severity classes (bead 6oott).
+ *
+ * - `sync`: an ordinary best-effort projection write failed. The projection may
+ *   be stale but serves nothing canon has redacted; search stays available.
+ * - `redaction`: a redaction/tombstone-carrying mutation failed, so the
+ *   projection may still hold content canon has redacted (charter Law 22/6.23).
+ *   Search must fail closed for the channel until repair clears the record.
+ */
+export type TranscriptProjectionDriftKind = 'sync' | 'redaction';
+
 export interface TranscriptProjectionDrift {
   channelId: string;
+  kind: TranscriptProjectionDriftKind;
   reason?: string;
   markedAt: number;
+}
+
+export interface ReplaceChannelEntriesOptions {
+  /**
+   * Marks the replacement as redaction-driven (CogSec tombstone rewrite, turn
+   * redaction). A failed redaction-driven replacement must be recorded as
+   * durable `redaction` drift instead of best-effort `sync` drift.
+   * Implementations must additionally infer redaction relevance when the
+   * provided entries contain CogSec tombstone markers, so callers that forget
+   * this flag still fail closed.
+   */
+  redaction?: boolean;
 }
 
 export interface TranscriptSearchOptions {
@@ -26,9 +50,13 @@ export interface TranscriptSearchOptions {
 
 export interface TranscriptProjectionPort {
   upsertSessionEntry(entry: SessionEntry, options?: { channelId?: string }): void;
-  replaceChannelEntries(channelId: string, entries: readonly SessionEntry[]): void;
+  replaceChannelEntries(
+    channelId: string,
+    entries: readonly SessionEntry[],
+    options?: ReplaceChannelEntriesOptions,
+  ): void;
   countProjectedMessages(channelId: string): number;
-  markProjectionDrift(channelId: string, reason?: string): void;
+  markProjectionDrift(channelId: string, reason?: string, kind?: TranscriptProjectionDriftKind): void;
   clearProjectionDrift(channelId: string): void;
   listProjectionDrift(): TranscriptProjectionDrift[];
   /**

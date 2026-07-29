@@ -154,6 +154,7 @@ export const POSTGRES_PARITY_MATRIX = [
     integrityContract: [
       'The projection is rebuilt from L0 and never becomes alternate conversation truth.',
       'Drift is explicit and repair clears it only after a successful replacement.',
+      'A failed redaction-carrying write records durable redaction drift and keyword search fails closed for that channel until repair clears it.',
     ],
     validation: {
       countParity: ['Compare projected rows per channel to active journal entries.'],

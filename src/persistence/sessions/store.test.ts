@@ -1523,6 +1523,7 @@ describe('SessionStore', () => {
     expect(projection.markProjectionDrift).toHaveBeenCalledWith(
       'api:projection-failure',
       'projection unavailable',
+      'sync',
     );
     expect(projectionBackedStore.getRecent('api:projection-failure', 10)).toEqual([
       expect.objectContaining({

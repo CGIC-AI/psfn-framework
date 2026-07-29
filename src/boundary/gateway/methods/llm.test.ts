@@ -359,6 +359,58 @@ describe('registerLLMMethods', () => {
     gatewayClient.destroy();
   });
 
+  it('zn2iy: cancels a split-runtime GatewayClient embed through the gateway embedding provider boundary', async () => {
+    let providerSignal: AbortSignal | undefined;
+    const embedBatch = vi.fn(async (
+      _texts: string[],
+      options?: { signal?: AbortSignal },
+    ): Promise<Float32Array[]> => {
+      providerSignal = options?.signal;
+      return await new Promise<Float32Array[]>((_resolve, reject) => {
+        providerSignal?.addEventListener('abort', () => reject(providerSignal?.reason), { once: true });
+      });
+    });
+    const harness = createHarness({
+      embeddingService: { embed: vi.fn(), embedBatch, dims: 3 } as any,
+    });
+    const gatewayClient = createLinkedGatewayClient(harness.invoke);
+    const controller = new AbortController();
+
+    const pending = gatewayClient.embedBatch(['analyze this large file'], {
+      signal: controller.signal,
+    });
+    await vi.waitFor(() => expect(providerSignal).toBeInstanceOf(AbortSignal));
+    controller.abort(new Error('retrieval deadline'));
+
+    await expect(pending).rejects.toThrow('retrieval deadline');
+    // The exact upstream embedding provider signal aborts (not merely the local
+    // JSON-RPC wrapper), so the provider work tears down after the caller cancels.
+    await vi.waitFor(() => expect(providerSignal?.aborted).toBe(true));
+    expect(embedBatch).toHaveBeenCalledOnce();
+    gatewayClient.destroy();
+  });
+
+  it('zn2iy: leaves a signal-free (background) embed uncancellable and unaffected', async () => {
+    let providerSignal: AbortSignal | undefined | 'unset' = 'unset';
+    const embedBatch = vi.fn(async (
+      _texts: string[],
+      options?: { signal?: AbortSignal },
+    ): Promise<Float32Array[]> => {
+      providerSignal = options?.signal;
+      return [new Float32Array([1, 2, 3])];
+    });
+    const harness = createHarness({
+      embeddingService: { embed: vi.fn(), embedBatch, dims: 3 } as any,
+    });
+
+    // A durable background caller omits the signal deliberately; the provider
+    // still runs to completion with no cancellation lifetime attached.
+    await expect(harness.invoke('llm.embed', { texts: ['durable background'] }))
+      .resolves.toEqual({ embeddings: [[1, 2, 3]] });
+    expect(embedBatch).toHaveBeenCalledWith(['durable background'], undefined);
+    expect(providerSignal).toBeUndefined();
+  });
+
   it('forwards provider first-output observations as content-free requester notifications', async () => {
     const harness = createHarness();
     harness.stream.mockImplementationOnce(async (_context, callbacks) => {
@@ -861,7 +913,9 @@ describe('registerLLMMethods', () => {
       embeddings: [[1, 2, 3]],
     });
 
-    expect(embeddingService.embedBatchWithUsage).toHaveBeenCalledWith(['first']);
+    // zn2iy: llm.embed now forwards an optional cancellation option; with no
+    // caller signal it is undefined (deliberate non-cancellation).
+    expect(embeddingService.embedBatchWithUsage).toHaveBeenCalledWith(['first'], undefined);
     expect(embeddingService.embedBatch).not.toHaveBeenCalled();
     expect(usageEvents).toMatchObject([{
       attempt: 1,

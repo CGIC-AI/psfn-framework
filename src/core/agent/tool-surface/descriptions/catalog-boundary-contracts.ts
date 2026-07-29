@@ -117,7 +117,7 @@ export const CATALOG_BOUNDARY_TOOL_CONTRACTS = {
     output: 'It returns a bounded synthesis and does not mutate source state.',
     guidance:
       'Use it when material is too large for the fs 20,000-byte direct-read cap. Prefer delegating long analyses to a '
-      + 'bounded worker or automaton so the primary channel stays responsive; direct use is permitted when capability '
+      + 'bounded automaton so the primary channel stays responsive; direct use is permitted when capability '
       + 'policy allows it, but the call may occupy the primary turn for several minutes. Bring only the bounded answer '
       + 'plus source paths and relevant line or byte ranges back into the conversation before its temporary context is discarded. '
       + 'Do not use it for routine reasoning, simple lookup, schema confusion, or ordinary orient and schedule work; '

@@ -362,6 +362,13 @@
       "measuredBaselineMs": null,
       "baselineSource": "inherited",
       "note": "Pre-policy 120s override (repo-standard integration cap). Registered as measurement debt: pinned to its current value so any change forces a re-measured registry update. No independent baseline measured under this bead (timing wiring scoped to the restore suite)."
+    },
+    {
+      "file": "src/persistence/sessions/transcript-projection-redaction-drift.integration.test.ts",
+      "timeoutMs": 120000,
+      "measuredBaselineMs": 11400,
+      "baselineSource": "measured",
+      "note": "Bead 6oott redaction projection-drift fail-closed suite. Measured 11.4s standalone (harness container start + two real-Postgres tests); 120s matches the repo-standard integration cap to absorb harness-semaphore queueing under full-suite parallelism (headroom ratio >10x)."
     }
   ]
 }

@@ -9,7 +9,7 @@
 
 import type { SubstrateAgent } from '../../../core/agent/substrate-agent.js';
 import type { SubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
-import type { SchedulerConfig } from '../../../system/config/runtime-config-contracts.js';
+import type { SchedulerRuntimeConfig as SchedulerConfig } from '../../../system/config/scheduler-config.js';
 import type { LLMProviderPort } from '../../../core/agent/contracts.js';
 import { ParticipationAppraiser } from '../../../core/participation/appraiser.js';
 import { PassiveNameCandidateBuilder } from '../../../core/participation/passive-name-candidate.js';
@@ -23,8 +23,8 @@ import type { ObservedGroupMemoryScheduler } from '../../../faculties/memory/ext
 import type { SessionStore } from '../../../persistence/sessions/store.js';
 import type { OutboundReplyDeduper } from '../../../system/lifecycle/outbound-reply-dedupe.js';
 import { classifyChannelDisclosure } from '../../../system/trust/policy.js';
-import type { createAgentPersistenceRuntime } from '../../persistence/runtime-factory.js';
-import type { buildAgentCoreRuntime } from '../core-runtime.js';
+import type { createAgentPersistenceRuntime } from '../../../persistence/runtime-factory.js';
+import type { AgentCoreRuntime } from '../core-runtime.js';
 
 export interface SpeakingArbiterLaneDeps {
   config: SubstrateConfig;
@@ -34,9 +34,9 @@ export interface SpeakingArbiterLaneDeps {
   companionName: string;
   observedGroupMemoryScheduler: ObservedGroupMemoryScheduler;
   sessionStore: SessionStore;
-  persistenceRuntime: ReturnType<typeof createAgentPersistenceRuntime>;
-  coreRuntime: ReturnType<typeof buildAgentCoreRuntime>['coreRuntime'];
-  gatewaySender: { send: (channelId: string, content: string) => Promise<unknown> };
+  persistenceRuntime: Awaited<ReturnType<typeof createAgentPersistenceRuntime>>;
+  coreRuntime: AgentCoreRuntime;
+  gatewaySender: { send: (channelId: string, content: string) => Promise<void> };
   outboundReplyGuard: OutboundReplyDeduper;
 }
 

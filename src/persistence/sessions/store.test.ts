@@ -2049,6 +2049,47 @@ describe('SessionStore', () => {
     expect(entries.every(entry => !entry.content.includes('stale-index private'))).toBe(true);
   });
 
+  it('confines the missing-fingerprint fail-closed to the async bounded read (psfn-framework-k4uei)', async () => {
+    // Force a derived index entry whose archiveFingerprint cannot be established
+    // (legacy/incomplete shape). The fingerprint is only load-bearing for the
+    // asynchronous request-time revalidation, so the synchronous getEntriesBefore
+    // — used by auto-compaction and ICP projection — must still read the archive,
+    // while the async path fails closed because it can no longer detect an L0
+    // mutation mid-read. The reader stays lightweight (not fully loaded) so both
+    // reads take the bounded archive plan rather than the in-cache complete path.
+    const channelId = 'api:before-missing-fingerprint';
+    appendSessionMessages(store, channelId, 4);
+
+    const stripFingerprint = (reader: SessionStore): void => {
+      const target = reader as unknown as {
+        ensureChannelIndexEntry: (...args: unknown[]) => Record<string, unknown>;
+      };
+      const original = target.ensureChannelIndexEntry.bind(target);
+      vi.spyOn(target, 'ensureChannelIndexEntry').mockImplementation((...args: unknown[]) => {
+        const { archiveFingerprint: _dropped, ...rest } = original(...args);
+        return rest;
+      });
+    };
+
+    // Async request-time path fails closed on the missing revalidation authority.
+    const asyncReader = new SessionStore(dir);
+    stripFingerprint(asyncReader);
+    await expect(asyncReader.getEntriesBeforeAsync(channelId, 10, 10)).rejects.toThrow(
+      /Cannot establish bounded-read journal authority/u,
+    );
+
+    // Synchronous path is unaffected: it never revalidates, so it reads the page.
+    const syncReader = new SessionStore(dir);
+    stripFingerprint(syncReader);
+    const syncEntries = syncReader.getEntriesBefore(channelId, 10, 10);
+    expect(syncEntries.map(entry => entry.content)).toEqual([
+      'Message 0',
+      'Message 1',
+      'Message 2',
+      'Message 3',
+    ]);
+  });
+
   it('restarts a paused async page under post-read tombstone authority', async () => {
     const channelId = 'api:before-concurrent-tombstone';
     const redactedTurnId = createTurnId();

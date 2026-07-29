@@ -69,6 +69,25 @@ describe('AdminContactsDataService', () => {
     expect(result.mutationAudits).toEqual([]);
   });
 
+  it('surfaces archivedAt on the contact list and detail after archiving (klbgi)', async () => {
+    const { contactStore, service } = await createServiceHarness();
+    const live = await contactStore.upsert({ displayName: 'Still Here' });
+    const gone = await contactStore.upsert({ displayName: 'Archived One' });
+    expect(await contactStore.archiveContact(gone.id, 'operator:test')).toBe(true);
+
+    // The admin list response must carry archivedAt so the UI can gray out and
+    // filter archived contacts (bead psfn-framework-klbgi).
+    const list = await service.listContacts();
+    const archivedRow = list.contacts.find(contact => contact.id === gone.id);
+    const liveRow = list.contacts.find(contact => contact.id === live.id);
+    expect(archivedRow?.archivedAt).toBeTruthy();
+    expect(liveRow?.archivedAt).toBeUndefined();
+
+    // The detail response carries it too.
+    const detail = await service.getContactDetail(gone.id);
+    expect(detail?.contact.archivedAt).toBeTruthy();
+  });
+
   it('returns a fleet profile only on the exact current-subject detail', async () => {
     const { contactStore, service, profiles } = await createServiceHarness();
     const current = await contactStore.upsert({ displayName: 'Current Contact' });

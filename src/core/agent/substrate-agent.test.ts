@@ -1528,8 +1528,8 @@ describe('SubstrateAgent.registerTool', () => {
     } as any, 'core');
 
     agent.registerTool({
-      name: 'memory_write',
-      label: 'memory_write',
+      name: 'stateful_write_probe',
+      label: 'stateful_write_probe',
       description: 'stateful write tool',
       parameters: { type: 'object' as const, properties: {} },
       execute: vi.fn<any>().mockResolvedValue({ content: [{ type: 'text', text: 'ok' }], details: {} }),
@@ -1546,7 +1546,7 @@ describe('SubstrateAgent.registerTool', () => {
     const catalog = agent.getToolCatalog();
     const repoStatus = [...catalog.extended].find(tool => tool.name === 'repo_status') as any;
     const subagent = [...catalog.core].find(tool => tool.name === 'subagent') as any;
-    const memoryWrite = [...catalog.core].find(tool => tool.name === 'memory_write') as any;
+    const memoryWrite = [...catalog.core].find(tool => tool.name === 'stateful_write_probe') as any;
     const scheduleTask = [...catalog.extended].find(tool => tool.name === 'schedule_task') as any;
 
     expect(repoStatus?.wiringMeta?.concurrency).toMatchObject({
@@ -1572,7 +1572,7 @@ describe('SubstrateAgent.registerTool', () => {
     expect(memoryWrite?.wiringMeta?.concurrency).toMatchObject({
       class: 'exclusive',
       exclusivityKeyPolicy: 'category_tool_name',
-      exclusivityKey: 'core:memory_write',
+      exclusivityKey: 'core:stateful_write_probe',
       interruptibility: 'cooperative',
       eligibility: {
         foreground: true,

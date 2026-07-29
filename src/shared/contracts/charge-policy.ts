@@ -13,8 +13,6 @@ export const CHARGE_POLICY_RUNTIME_LANE_VALUES = [
 export const CHARGE_POLICY_SURFACE_VALUES = [
   'ownerFileInspection',
   'localFilesystem',
-  'memoryRead',
-  'memoryWrite',
   'localEmbedding',
   'externalEmbedding',
   'localImageGeneration',

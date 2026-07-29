@@ -18,8 +18,6 @@ import type { RunChargeSnapshot } from '../../../../shared/telemetry/run-charge.
 const CHARGE_SURFACE_PROMPT_LABELS: Record<ChargePolicySurface, string> = {
   ownerFileInspection: 'owner-file inspection',
   localFilesystem: 'local filesystem read',
-  memoryRead: 'memory read',
-  memoryWrite: 'memory write through direct memory tools',
   localEmbedding: 'local embedding',
   externalEmbedding: 'external embedding',
   localImageGeneration: 'local image generation',

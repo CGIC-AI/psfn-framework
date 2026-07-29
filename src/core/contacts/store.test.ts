@@ -542,7 +542,15 @@ describe('Postgres contact store behavior', () => {
 
       const merged = await store.mergeContacts(source.id, target.id);
       expect(merged).toBe(true);
-      expect(await store.getById(source.id)).toBeUndefined();
+      // bead psfn-framework-qgqw.6 (adjudication R10.3): the merge folds the
+      // source into the target but archives the source row rather than deleting
+      // it, recording a `merged` audit entry that names the target.
+      const archivedSource = await store.getById(source.id);
+      expect(archivedSource).toBeDefined();
+      expect(archivedSource?.archivedAt).toBeTruthy();
+      const sourceAudit = await store.listMutationAuditEntries({ contactId: source.id });
+      const mergeAudit = sourceAudit.find(entry => entry.field === 'merged');
+      expect(mergeAudit?.newValue).toBe(target.id);
 
       const sourceIdentityResolved = await store.getByChannelIdentity('api', 'source-api-id');
       expect(sourceIdentityResolved?.id).toBe(target.id);
@@ -998,7 +1006,11 @@ describe('Postgres contact store behavior', () => {
       expect(resolved?.trustLevel).toBe('primary');
       // Duplicate reconciliation preserves the more-established explicit relationship.
       expect(resolved?.relationshipType).toBe('partner');
-      expect(await store.getById(duplicate.id)).toBeUndefined();
+      // bead psfn-framework-qgqw.6 (adjudication R10.3): the autonomous
+      // duplicate-merge fold archives the reconciled-away duplicate rather than
+      // hard-deleting it, and its identities resolve live to the canonical owner.
+      const archivedDuplicate = await store.getById(duplicate.id);
+      expect(archivedDuplicate?.archivedAt).toBeTruthy();
       expect((await store.getByChannelIdentity('api', 'primary-api-alias'))?.id).toBe(owner.id);
     });
   });

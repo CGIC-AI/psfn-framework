@@ -162,6 +162,7 @@ export const CONTACT_MUTATION_AUDIT_FIELDS = [
   'channel_link',
   'conversation_channel',
   'archived',
+  'merged',
 ] as const;
 
 export type ContactMutationAuditField = typeof CONTACT_MUTATION_AUDIT_FIELDS[number];

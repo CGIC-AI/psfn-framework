@@ -332,7 +332,9 @@ describe('authenticated contact lifecycle coordinator', () => {
     try {
       await store.upsert({ id: 'contact-b', displayName: 'Contact B' });
       await expect(store.mergeContacts('contact-b', 'contact-a')).resolves.toBe(true);
-      expect(await store.getById('contact-b')).toBeUndefined();
+      // bead psfn-framework-qgqw.6 (adjudication R10.3): the merge folds the
+      // source but archives it rather than hard-deleting the row.
+      expect((await store.getById('contact-b'))?.archivedAt).toBeTruthy();
       await expect(store.mergeContacts('contact-b', 'contact-a')).resolves.toBe(true);
       await store.upsert({ id: 'contact-delete', displayName: 'Delete Me' });
       await expect(store.deleteContact('contact-delete')).resolves.toBe(true);

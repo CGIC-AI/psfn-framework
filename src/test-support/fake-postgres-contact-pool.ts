@@ -845,6 +845,20 @@ export class FakePostgresPool {
       return { ...result(), rowCount: existed ? 1 : 0 };
     }
 
+    // bead psfn-framework-qgqw.1 / qgqw.6 (adjudication R10.3): archive the
+    // contact row (used by archiveContact and the merge fold) instead of
+    // deleting it — set the archive marker + released-identity snapshot and
+    // clear the live discord identity.
+    if (normalized.startsWith('update contacts set archived_at = $1, channel_identities = $2::jsonb, discord_user_id = null where id = $3')) {
+      const row = this.contacts.get(String(values[2] ?? ''));
+      if (row) {
+        row.archived_at = values[0] == null ? null : String(values[0]);
+        row.channel_identities = typeof values[1] === 'string' ? JSON.parse(values[1]) : values[1];
+        row.discord_user_id = null;
+      }
+      return { ...result(), rowCount: row ? 1 : 0 };
+    }
+
     if (normalized.startsWith("update contacts set trust_level = 'primary', trust_version = trust_version + 1 where id = $1 and trust_level <> 'primary'")) {
       const row = this.contacts.get(String(values[0] ?? ''));
       if (row && row.trust_level !== 'primary') {

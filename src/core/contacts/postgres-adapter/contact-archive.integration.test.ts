@@ -175,3 +175,77 @@ describe('contact archive semantics (qgqw.1)', () => {
     }
   });
 });
+
+describe('contact merge archival semantics (qgqw.6)', () => {
+  it('folds a merged-away source into the target and archives it instead of hard-deleting', async () => {
+    const { store, pool } = await freshStore();
+    try {
+      const source = await store.upsert({
+        displayName: 'Merge Source',
+        channels: [{ channel: 'discord', userId: 'discord-merge-source', privacyLevel: 'invite_only', firstSeen: '', lastSeen: '' }],
+      });
+      const target = await store.upsert({
+        displayName: 'Merge Target',
+        channels: [{ channel: 'telegram', userId: 'tg-merge-target', privacyLevel: 'invite_only', firstSeen: '', lastSeen: '' }],
+      });
+
+      // Direct-store mergeContacts (no lifecycle gateway) is exactly the fold the
+      // autonomous duplicate-merge callers use (crud-operations.ts:1470 and the
+      // coordinator's maintenance path both call this same mergeContacts).
+      await expect(store.mergeContacts(source.id, target.id)).resolves.toBe(true);
+
+      // The source ROW survives, archived — never DELETE FROM contacts.
+      const archivedSource = await store.getById(source.id);
+      expect(archivedSource).toBeDefined();
+      expect(archivedSource?.archivedAt).toBeTruthy();
+
+      // The source's contact_mutation_audit trail survives (no ON DELETE CASCADE)
+      // and a merge-specific `merged` entry names the target contact id.
+      const audit = await store.listMutationAuditEntries({ contactId: source.id });
+      const mergeEntry = audit.find(entry => entry.field === 'merged');
+      expect(mergeEntry).toBeDefined();
+      expect(mergeEntry?.newValue).toBe(target.id);
+
+      // Live resolution for the source's platform id lands on the TARGET (merge
+      // semantics: the identity was folded, not orphaned).
+      const liveOwner = await store.getByChannelIdentity('discord', 'discord-merge-source');
+      expect(liveOwner?.id).toBe(target.id);
+      expect(liveOwner?.archivedAt).toBeUndefined();
+
+      // The archived source keeps a readable, grayed-out history of the identity
+      // it held, hydrated from the snapshot.
+      expect(archivedSource?.channels?.some(c => c.channel === 'discord' && c.userId === 'discord-merge-source')).toBe(true);
+
+      // The target absorbed the folded identity alongside its own.
+      const reloadedTarget = await store.getById(target.id);
+      expect(reloadedTarget?.channels?.some(c => c.channel === 'discord' && c.userId === 'discord-merge-source')).toBe(true);
+      expect(reloadedTarget?.channels?.some(c => c.channel === 'telegram' && c.userId === 'tg-merge-target')).toBe(true);
+    } finally {
+      await pool.end();
+    }
+  });
+
+  it('archives a discord-only (legacy) source folded on the autonomous duplicate path', async () => {
+    const { store, pool } = await freshStore();
+    try {
+      // A contact carrying only discord_user_id (no contact_channel_ids row) is
+      // the typical shape an autonomous duplicate-merge detects. The target has
+      // no discord id, so the fold carries the source's discord id to the target.
+      const source = await store.upsert({ displayName: 'Dup Source', discordUserId: 'discord-dup-source' });
+      const target = await store.upsert({ displayName: 'Canonical' });
+
+      await expect(store.mergeContacts(source.id, target.id)).resolves.toBe(true);
+
+      const archivedSource = await store.getById(source.id);
+      expect(archivedSource?.archivedAt).toBeTruthy();
+      // Live resolution for the folded discord id now lands on the target.
+      await expect(store.getByDiscordUserId('discord-dup-source')).resolves.toMatchObject({ id: target.id });
+      // The archived source itself no longer claims the live discord id.
+      expect(archivedSource?.discordUserId).toBeUndefined();
+      // Its history still records the discord identity it used to hold.
+      expect(archivedSource?.channels?.some(c => c.channel === 'discord' && c.userId === 'discord-dup-source')).toBe(true);
+    } finally {
+      await pool.end();
+    }
+  });
+});

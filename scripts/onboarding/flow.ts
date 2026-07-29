@@ -199,7 +199,7 @@ export function firstChatGapNotes(input: {
  */
 async function selectCompanion(prompter: Prompter): Promise<CompanionImportResult> {
   const source = await prompter.choice('Do you have an existing companion definition to import?', [
-    { value: 'ccv3', label: 'Character Card V3 (.json / .png / .charx)', hint: 'reuses the card importer' },
+    { value: 'ccv3', label: 'Character Card V2/V3 (.json / .png / .charx)', hint: 'SillyTavern-style cards; reuses the card importer' },
     { value: 'soulmd', label: 'SoulMD document (.md)', hint: 'structured markdown persona' },
     { value: 'markdown', label: 'Plain persona markdown (Hermes / OpenClaw)', hint: 'imported as one lump' },
     { value: 'fresh', label: 'Fresh start — scaffold a minimal blank companion', hint: 'no file needed' },

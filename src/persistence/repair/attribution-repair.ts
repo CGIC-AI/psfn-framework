@@ -9,18 +9,20 @@ import {
 } from 'node:fs';
 import { dirname, join, relative } from 'node:path';
 import type { TurnRecord, TurnRecordMessage } from '../../shared/contracts/runtime.js';
-import type { SessionHmacKeyring } from '../journals/journal-utils.js';
-import {
-  parseJournalText,
-  signJournalEntry,
-} from '../journals/journal-utils.js';
-import { createFilesystemSessionArchivePort } from '../journals/journal/port.js';
 import { normalizeSessionEntryAttribution } from '../../core/session/entry-attribution.js';
-import type { JournalEntry } from '../../core/session/types.js';
 import { primeChannelIndexFromDisk } from '../sessions/store/channel-index.js';
-import { discoverSessionFileChains } from '../sessions/store/session-file-chains.js';
-import { withSessionJournalWriteLock } from '../sessions/store/session-journal-write-lock.js';
 import { CHANNEL_INDEX_FILENAME } from '../sessions/store-primitives.js';
+
+// Attribution repair corrects the DERIVED surfaces only. The canonical L0
+// session chains are append-only history and are never rewritten here (Charter
+// Law 2 / 6.20 L0 append-only, 7.5 repair must not rewrite canonical) — the
+// runtime already normalizes role/author at read time
+// (`normalizeSessionEntryAttribution`, see src/core/session/manager/context-support.ts
+// and src/core/intention/appraisal/formatting.ts), so canonical entries present
+// with correct attribution without mutating the sealed bytes. This tool rebuilds
+// the derived `_turn_records` mirror and the derived channel index, mirroring the
+// sanctioned transcript-projection-repair pattern (rebuild derived state FROM
+// canon, never rewrite canon).
 
 const INTENTION_AUTHOR_ID = 'system:intention';
 const INTENTION_AUTHOR_NAME = 'Intention Appraisal';
@@ -35,32 +37,13 @@ export interface AttributionRepairCounts {
 
 export interface AttributionRepairReport {
   backupsDir: string;
-  journal: AttributionRepairCounts;
   turnRecords: AttributionRepairCounts;
   rebuiltChannelIndex: boolean;
 }
 
 interface RepairPaths {
   sessionsDir: string;
-  continuityDir: string;
-  reflectionsDir: string;
   backupDir: string;
-}
-
-function parseMetadataObject(metadata: string | undefined): Record<string, unknown> | null {
-  if (!metadata) return null;
-  try {
-    const parsed = JSON.parse(metadata) as unknown;
-    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
-    return parsed as Record<string, unknown>;
-  } catch {
-    return null;
-  }
-}
-
-function serializeMetadataObject(value: Record<string, unknown> | null, fallback: string | undefined): string | undefined {
-  if (!value) return fallback;
-  return JSON.stringify(value);
 }
 
 function deriveSystemAuthorId(entry: {
@@ -96,88 +79,6 @@ function deriveSystemAuthorId(entry: {
   if (isScheduledPrompt) return SCHEDULER_AUTHOR_ID;
 
   return authorId;
-}
-
-function repairMetadataRole(metadata: string | undefined, role: 'user' | 'assistant' | 'system'): string | undefined {
-  const parsed = parseMetadataObject(metadata);
-  if (!parsed) return metadata;
-
-  const turnValue = parsed.turn;
-  if (!turnValue || typeof turnValue !== 'object' || Array.isArray(turnValue)) {
-    return metadata;
-  }
-
-  const turn = turnValue as Record<string, unknown>;
-  if (turn.role === role && turn.speakerRole === role) {
-    return metadata;
-  }
-
-  turn.role = role;
-  turn.speakerRole = role;
-  parsed.turn = turn;
-  return serializeMetadataObject(parsed, metadata);
-}
-
-function repairJournalEntry(entry: JournalEntry): { entry: JournalEntry; modified: boolean } {
-  if (entry.type !== 'message' || typeof entry.content !== 'string' || typeof entry.role !== 'string') {
-    return { entry, modified: false };
-  }
-
-  const metadataObject = parseMetadataObject(entry.metadata);
-  const turnValue = metadataObject?.turn;
-  const turn = turnValue && typeof turnValue === 'object' && !Array.isArray(turnValue)
-    ? turnValue as Record<string, unknown>
-    : null;
-  const requestId = typeof turn?.requestId === 'string' ? turn.requestId : undefined;
-  const sourceMessageId = typeof turn?.sourceMessageId === 'string' ? turn.sourceMessageId : undefined;
-
-  const normalized = normalizeSessionEntryAttribution({
-    role: entry.role,
-    content: entry.content,
-    authorId: entry.authorId,
-    authorName: entry.authorName,
-    metadata: entry.metadata,
-    channelId: entry.channelId,
-    requestId,
-    sourceMessageId,
-  });
-  const nextRole = normalized.role === 'tool' ? entry.role : normalized.role;
-  const nextAuthorId = normalized.role === 'system'
-    ? deriveSystemAuthorId({
-      channelId: entry.channelId,
-      authorId: entry.authorId,
-      authorName: entry.authorName,
-      content: entry.content,
-      metadata: entry.metadata,
-      requestId,
-      sourceMessageId,
-    })
-    : entry.authorId;
-  const nextAuthorName = normalized.authorName ?? entry.authorName;
-  const nextMetadata = nextRole === 'system' || nextRole === 'assistant' || nextRole === 'user'
-    ? repairMetadataRole(entry.metadata, nextRole)
-    : entry.metadata;
-
-  const modified = (
-    nextRole !== entry.role
-    || nextAuthorId !== entry.authorId
-    || nextAuthorName !== entry.authorName
-    || nextMetadata !== entry.metadata
-  );
-  if (!modified) {
-    return { entry, modified: false };
-  }
-
-  return {
-    modified: true,
-    entry: {
-      ...entry,
-      role: nextRole,
-      authorId: nextAuthorId,
-      authorName: nextAuthorName,
-      metadata: nextMetadata,
-    },
-  };
 }
 
 function repairTurnRecordMessage(
@@ -239,80 +140,6 @@ function writeTextAtomic(filePath: string, content: string): void {
   renameSync(tempPath, filePath);
 }
 
-function rewriteJournalChainUnderLock(
-  filePaths: readonly string[],
-  keyring: SessionHmacKeyring | null,
-  backupDir: string,
-  repoRoot: string,
-  archivePort: ReturnType<typeof createFilesystemSessionArchivePort>,
-  renewLease: () => void,
-): { modifiedEntries: number; modifiedFiles: number } {
-  const originalEntriesByFile = filePaths.map((filePath) => {
-    const parsed = parseJournalText(readFileSync(filePath, 'utf-8'));
-    renewLease();
-    if (parsed.quarantined.length > 0) {
-      throw new Error(`Refusing to rewrite malformed journal file: ${filePath}`);
-    }
-    return parsed.entries;
-  });
-  const hasIntegrity = originalEntriesByFile.some(entries => entries.some(entry => (
-    typeof entry._hmac === 'string' || typeof entry._hmacKeyVersion === 'string'
-  )));
-  if (hasIntegrity && !keyring) {
-    throw new Error(`Cannot rewrite signed journal chain without HMAC keyring: ${filePaths[0]}`);
-  }
-
-  let modifiedEntries = 0;
-  const repairedEntriesByFile = originalEntriesByFile.map(entries => entries.map((entry) => {
-    renewLease();
-    const repaired = repairJournalEntry(entry);
-    if (repaired.modified) modifiedEntries += 1;
-    return repaired.entry;
-  }));
-  if (modifiedEntries === 0) return { modifiedEntries: 0, modifiedFiles: 0 };
-
-  for (const filePath of filePaths) {
-    ensureBackup(filePath, backupDir, repoRoot);
-    renewLease();
-  }
-
-  let previousHmac: string | null = null;
-  const rewrittenByFile = repairedEntriesByFile.map(entries => entries.map((entry) => {
-      renewLease();
-      const { _hmac, _hmacKeyVersion, ...unsigned } = entry;
-      if (!hasIntegrity) return unsigned;
-      const signed = signJournalEntry(unsigned, keyring!, previousHmac);
-      previousHmac = signed._hmac ?? null;
-      return signed;
-    }));
-  const firstEntry = originalEntriesByFile.find(entries => entries.length > 0)?.[0];
-  const archives = filePaths.map(filePath => archivePort.openArchive(firstEntry?.channelId ?? 'unknown', filePath));
-  archivePort.rewriteJournalChain(archives, rewrittenByFile, renewLease);
-  return { modifiedEntries, modifiedFiles: filePaths.length };
-}
-
-function rewriteJournalChain(
-  filePaths: readonly string[],
-  keyring: SessionHmacKeyring | null,
-  backupDir: string,
-  repoRoot: string,
-): { modifiedEntries: number; modifiedFiles: number } {
-  const rootPath = filePaths[0];
-  if (!rootPath) return { modifiedEntries: 0, modifiedFiles: 0 };
-  const archivePort = createFilesystemSessionArchivePort();
-  return withSessionJournalWriteLock(rootPath, (renewLease) => {
-    archivePort.recoverJournalChainRewrite(rootPath);
-    return rewriteJournalChainUnderLock(
-      filePaths,
-      keyring,
-      backupDir,
-      repoRoot,
-      archivePort,
-      renewLease,
-    );
-  });
-}
-
 function rewriteTurnRecordFile(filePath: string, backupDir: string, repoRoot: string): number {
   const lines = readFileSync(filePath, 'utf-8')
     .split('\n')
@@ -360,55 +187,23 @@ function rebuildSessionChannelIndex(sessionsDir: string): void {
   });
 }
 
-function collectJsonlFiles(
-  dirPath: string,
-  options: { excludeSubdirs?: string[]; excludeFiles?: string[] } = {},
-): string[] {
+function collectJsonlFiles(dirPath: string): string[] {
   if (!existsSync(dirPath)) return [];
-  const excluded = new Set(options.excludeSubdirs ?? []);
-  const excludedFiles = new Set(options.excludeFiles ?? []);
   const files: string[] = [];
   for (const name of readdirSync(dirPath)) {
-    if (excluded.has(name)) continue;
-    if (excludedFiles.has(name)) continue;
-    const filePath = join(dirPath, name);
     if (name.endsWith('.jsonl')) {
-      files.push(filePath);
+      files.push(join(dirPath, name));
     }
   }
   return files.sort();
 }
 
 export function runAttributionRepair(
-  params: RepairPaths & { keyring: SessionHmacKeyring | null; repoRoot: string },
+  params: RepairPaths & { repoRoot: string },
 ): AttributionRepairReport {
   mkdirSync(params.backupDir, { recursive: true });
 
-  const discoveredSessions = discoverSessionFileChains(params.sessionsDir);
-  if (discoveredSessions.incompleteChains.length > 0) {
-    throw new Error(
-      `Refusing attribution repair with incomplete L0 chains: ${JSON.stringify(discoveredSessions.incompleteChains)}`,
-    );
-  }
-  const journalChains = [
-    ...discoveredSessions.chains.map(chain => chain.filePaths),
-    ...collectJsonlFiles(params.continuityDir).map(filePath => [filePath]),
-    ...collectJsonlFiles(params.reflectionsDir, { excludeFiles: ['journal.jsonl'] }).map(filePath => [filePath]),
-  ];
-  const journalFiles = journalChains.flat();
   const turnRecordFiles = collectJsonlFiles(join(params.sessionsDir, TURN_RECORDS_DIR));
-
-  const journalReport: AttributionRepairCounts = {
-    scannedFiles: journalFiles.length,
-    modifiedFiles: 0,
-    modifiedEntries: 0,
-  };
-  for (const filePaths of journalChains) {
-    const modified = rewriteJournalChain(filePaths, params.keyring, params.backupDir, params.repoRoot);
-    journalReport.modifiedFiles += modified.modifiedFiles;
-    journalReport.modifiedEntries += modified.modifiedEntries;
-  }
-
   const turnRecordReport: AttributionRepairCounts = {
     scannedFiles: turnRecordFiles.length,
     modifiedFiles: 0,
@@ -425,7 +220,6 @@ export function runAttributionRepair(
 
   return {
     backupsDir: params.backupDir,
-    journal: journalReport,
     turnRecords: turnRecordReport,
     rebuiltChannelIndex: true,
   };

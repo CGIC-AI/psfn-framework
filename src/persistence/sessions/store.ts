@@ -258,7 +258,12 @@ type EntriesBeforeReadPlan =
       beforeId: number;
       limit: number;
       tombstones: ReadonlySet<string>;
-      archiveFingerprint: string;
+      // Load-bearing only for the asynchronous request-time revalidation path
+      // (getEntriesBeforeAsync): a missing fingerprint means an L0 mutation
+      // mid-read cannot be detected, so that path fails closed. The synchronous
+      // getEntriesBefore does not revalidate and reads without it, so this stays
+      // optional here (psfn-framework-k4uei).
+      archiveFingerprint?: string;
     };
 
 const ASYNC_ENTRIES_BEFORE_AUTHORITY_LIMITS = Object.freeze({
@@ -1945,13 +1950,13 @@ export class SessionStore implements TranscriptSearchPort {
         entries: eligible.length <= normalizedLimit ? eligible : eligible.slice(-normalizedLimit),
       };
     }
+    // The archive fingerprint is only consumed by the asynchronous
+    // request-time revalidation in getEntriesBeforeAsync; a missing fingerprint
+    // is failed closed there, not here. Keeping the check off this shared helper
+    // means the synchronous getEntriesBefore (auto-compaction, ICP projection),
+    // which never revalidates, does not inherit that fail-closed behavior it was
+    // never meant to have (psfn-framework-k4uei).
     const archiveFingerprint = normalizeOptionalString(indexEntry.archiveFingerprint);
-    if (!archiveFingerprint) {
-      throw new Error(
-        `Cannot establish bounded-read journal authority for L0 session ${resolved.sessionId}`,
-      );
-    }
-
     return {
       kind: 'archive',
       channelId: resolved.channelId,
@@ -1959,7 +1964,7 @@ export class SessionStore implements TranscriptSearchPort {
       beforeId: normalizedBeforeId,
       limit: normalizedLimit,
       tombstones: indexedTurnTombstones,
-      archiveFingerprint,
+      ...(archiveFingerprint ? { archiveFingerprint } : {}),
     };
   }
   getEntriesBefore(channelId: string, beforeId: number, limit: number): SessionEntry[] {
@@ -1985,6 +1990,17 @@ export class SessionStore implements TranscriptSearchPort {
       attempt += 1
     ) {
       if (plan.kind === 'complete') return plan.entries;
+      if (!plan.archiveFingerprint) {
+        // Async request-time reads revalidate the returned page against the
+        // archive fingerprint after the cooperative read (see the retry below).
+        // Without a fingerprint that authority check cannot detect an L0
+        // mutation mid-read, so fail closed here — this is the throw's intended
+        // scope, narrowed off the shared prepareEntriesBeforeRead so the
+        // synchronous path is unaffected (psfn-framework-k4uei).
+        throw new Error(
+          `Cannot establish bounded-read journal authority for L0 session ${channelId}`,
+        );
+      }
       const entries = await this.readEntriesBeforeFromArchiveAsync(
         plan.channelId,
         plan.filePath,

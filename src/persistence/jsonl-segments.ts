@@ -39,11 +39,6 @@ export interface AsyncJsonlLineScanOptions extends JsonlScanOptions {
   maxLineBytes: number;
 }
 
-export interface JsonlLineScanOptions extends JsonlScanOptions {
-  /** Optional retained/scan ceiling for legacy synchronous line readers. */
-  maxLineBytes?: number;
-}
-
 export interface JsonlLineAtOffset {
   line: string;
   startOffset: number;
@@ -200,11 +195,8 @@ export function scanJsonlFileBackward(
 export function readJsonlLineAtOrAfter(
   path: string,
   offset: number,
-  options: JsonlLineScanOptions,
+  options: JsonlScanOptions,
 ): JsonlLineAtOffset | null {
-  if (options.maxLineBytes !== undefined) {
-    assertPositiveByteLimit(options.maxLineBytes, 'JSONL scan maxLineBytes');
-  }
   const fd = openSync(path, 'r');
   try {
     const claimed = claimFileIdentity(
@@ -215,11 +207,7 @@ export function readJsonlLineAtOrAfter(
     );
     if (claimed.size <= 0) return null;
 
-    const buffer = Buffer.allocUnsafe(
-      options.maxLineBytes === undefined
-        ? options.chunkBytes
-        : Math.min(options.chunkBytes, options.maxLineBytes),
-    );
+    const buffer = Buffer.allocUnsafe(options.chunkBytes);
     let startOffset = Math.min(claimed.size, Math.max(0, Math.floor(offset)));
     if (startOffset > 0 && startOffset < claimed.size) {
       const prior = Buffer.allocUnsafe(1);
@@ -227,7 +215,6 @@ export function readJsonlLineAtOrAfter(
       recordChunkRead(options.stats, priorBytes);
       if (priorBytes > 0 && prior[0] !== NEWLINE_BYTE) {
         let foundBoundary = false;
-        let skippedPartialRowBytes = 0;
         while (startOffset < claimed.size && !foundBoundary) {
           const bytesToRead = Math.min(buffer.length, claimed.size - startOffset);
           const bytesRead = readSync(fd, buffer, 0, bytesToRead, startOffset);
@@ -235,28 +222,11 @@ export function readJsonlLineAtOrAfter(
           recordChunkRead(options.stats, bytesRead);
           for (let index = 0; index < bytesRead; index += 1) {
             if (buffer[index] !== NEWLINE_BYTE) continue;
-            if (
-              options.maxLineBytes !== undefined
-              && skippedPartialRowBytes + index > options.maxLineBytes
-            ) {
-              throw oversizedJsonlLineError(
-                path,
-                options.maxLineBytes,
-                skippedPartialRowBytes + index,
-              );
-            }
             startOffset += index + 1;
             foundBoundary = true;
             break;
           }
           if (!foundBoundary) {
-            skippedPartialRowBytes += bytesRead;
-            if (
-              options.maxLineBytes !== undefined
-              && skippedPartialRowBytes > options.maxLineBytes
-            ) {
-              throw oversizedJsonlLineError(path, options.maxLineBytes, skippedPartialRowBytes);
-            }
             startOffset += bytesRead;
           }
         }
@@ -274,12 +244,6 @@ export function readJsonlLineAtOrAfter(
       recordChunkRead(options.stats, bytesRead);
       const newline = buffer.subarray(0, bytesRead).indexOf(NEWLINE_BYTE);
       if (newline >= 0) {
-        if (
-          options.maxLineBytes !== undefined
-          && retainedBytes + newline > options.maxLineBytes
-        ) {
-          throw oversizedJsonlLineError(path, options.maxLineBytes, retainedBytes + newline);
-        }
         chunks.push(Buffer.from(buffer.subarray(0, newline)));
         retainedBytes += newline;
         recordRetainedLineBytes(options.stats, retainedBytes);
@@ -288,12 +252,6 @@ export function readJsonlLineAtOrAfter(
           startOffset,
           endOffset: position + newline + 1,
         };
-      }
-      if (
-        options.maxLineBytes !== undefined
-        && retainedBytes + bytesRead > options.maxLineBytes
-      ) {
-        throw oversizedJsonlLineError(path, options.maxLineBytes, retainedBytes + bytesRead);
       }
       chunks.push(Buffer.from(buffer.subarray(0, bytesRead)));
       retainedBytes += bytesRead;
@@ -316,11 +274,8 @@ export function readJsonlLineAtOrAfter(
 export function readJsonlLineBefore(
   path: string,
   exclusiveOffset: number,
-  options: JsonlLineScanOptions,
+  options: JsonlScanOptions,
 ): JsonlLineAtOffset | null {
-  if (options.maxLineBytes !== undefined) {
-    assertPositiveByteLimit(options.maxLineBytes, 'JSONL scan maxLineBytes');
-  }
   const fd = openSync(path, 'r');
   try {
     const claimed = claimFileIdentity(
@@ -332,11 +287,7 @@ export function readJsonlLineBefore(
     let position = Math.min(claimed.size, Math.max(0, Math.floor(exclusiveOffset)));
     if (position <= 0) return null;
 
-    const buffer = Buffer.allocUnsafe(
-      options.maxLineBytes === undefined
-        ? options.chunkBytes
-        : Math.min(options.chunkBytes, options.maxLineBytes),
-    );
+    const buffer = Buffer.allocUnsafe(options.chunkBytes);
     const chunks: Buffer[] = [];
     let retainedBytes = 0;
     let rowEnd = position;
@@ -356,16 +307,6 @@ export function readJsonlLineBefore(
       for (let index = sliceEnd - 1; index >= 0; index -= 1) {
         if (buffer[index] !== NEWLINE_BYTE) continue;
         const retainedSliceBytes = sliceEnd - index - 1;
-        if (
-          options.maxLineBytes !== undefined
-          && retainedBytes + retainedSliceBytes > options.maxLineBytes
-        ) {
-          throw oversizedJsonlLineError(
-            path,
-            options.maxLineBytes,
-            retainedBytes + retainedSliceBytes,
-          );
-        }
         chunks.unshift(Buffer.from(buffer.subarray(index + 1, sliceEnd)));
         retainedBytes += retainedSliceBytes;
         recordRetainedLineBytes(options.stats, retainedBytes);
@@ -374,12 +315,6 @@ export function readJsonlLineBefore(
           startOffset: position + index + 1,
           endOffset: rowEnd + (ignoredTrailingNewline ? 1 : 0),
         };
-      }
-      if (
-        options.maxLineBytes !== undefined
-        && retainedBytes + sliceEnd > options.maxLineBytes
-      ) {
-        throw oversizedJsonlLineError(path, options.maxLineBytes, retainedBytes + sliceEnd);
       }
       chunks.unshift(Buffer.from(buffer.subarray(0, sliceEnd)));
       retainedBytes += sliceEnd;

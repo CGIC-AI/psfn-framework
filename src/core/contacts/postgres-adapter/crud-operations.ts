@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import type { PoolClient } from 'pg';
 import { v7 as uuidv7 } from 'uuid';
 import type {
   ChannelPrivacyLevel,
@@ -70,6 +71,66 @@ import {
 
 function hasOwnTimezone(partial: Partial<Contact>): boolean {
   return Object.prototype.hasOwnProperty.call(partial, 'timezone');
+}
+
+/** One released channel identity retained on the archived contact row for history. */
+interface ArchivedChannelIdentitySnapshotEntry {
+  channel: string;
+  channel_user_id: string;
+  privacy_level: string | null;
+  bonded: boolean;
+  first_seen: string;
+  last_seen: string;
+}
+
+// bead psfn-framework-qgqw.1 / qgqw.6 (adjudication R10.3): capture a contact's
+// live channel identities as a JSON snapshot before the live namespace is
+// released. Shared by archiveContact (delete verb) and mergeContactsDirect
+// (merge verb) so an archived-or-folded source keeps a readable, grayed-out
+// history of the identities it held. A legacy contact may carry a discord
+// identity only on the discord_user_id column with no matching
+// contact_channel_ids row; preserve it in the snapshot too.
+async function snapshotContactChannelIdentities(
+  client: PoolClient,
+  contactId: string,
+  discordUserId: string | null,
+): Promise<ArchivedChannelIdentitySnapshotEntry[]> {
+  const identityRows = await client.query<{
+    channel: string;
+    channel_user_id: string;
+    privacy_level: string | null;
+    bonded: boolean | null;
+    first_seen: string;
+    last_seen: string;
+  }>(
+    `
+      SELECT contact_id, channel, channel_user_id, privacy_level, bonded, first_seen, last_seen
+      FROM contact_channel_ids
+      WHERE contact_id = $1
+      ORDER BY channel ASC, channel_user_id ASC
+    `,
+    [contactId],
+  );
+  const snapshot: ArchivedChannelIdentitySnapshotEntry[] = identityRows.rows.map(identity => ({
+    channel: identity.channel,
+    channel_user_id: identity.channel_user_id,
+    privacy_level: identity.privacy_level,
+    bonded: identity.bonded === true,
+    first_seen: identity.first_seen,
+    last_seen: identity.last_seen,
+  }));
+  if (discordUserId
+    && !snapshot.some(entry => entry.channel === 'discord' && entry.channel_user_id === discordUserId)) {
+    snapshot.push({
+      channel: 'discord',
+      channel_user_id: discordUserId,
+      privacy_level: null,
+      bonded: false,
+      first_seen: '',
+      last_seen: '',
+    });
+  }
+  return snapshot;
 }
 
 function normalizeTimezoneValue(value: string | undefined): string | null {
@@ -582,6 +643,17 @@ const postgresContactCrudOperations: PostgresContactOperationMap = {
       const targetRow = lockedRows.get(targetContactId);
       if (!sourceRow || !targetRow) return false;
 
+      // bead psfn-framework-qgqw.6 (adjudication R10.3): a merge folds the source
+      // into the target but must NOT hard-delete the source row. Snapshot the
+      // source's live channel identities BEFORE they are reassigned to the target
+      // below, so the archived-source history stays readable while the live
+      // namespace resolves to the target.
+      const archivedIdentitySnapshot = await snapshotContactChannelIdentities(
+        client,
+        sourceContactId,
+        sourceRow.discord_user_id,
+      );
+
       await client.query('UPDATE contact_channel_ids SET contact_id = $1 WHERE contact_id = $2', [targetContactId, sourceContactId]);
       await client.query('UPDATE contact_channel_activity SET contact_id = $1 WHERE contact_id = $2', [targetContactId, sourceContactId]);
 
@@ -738,7 +810,21 @@ const postgresContactCrudOperations: PostgresContactOperationMap = {
         await client.query('DELETE FROM social_graph_entities WHERE id = $1', [sourceEntity.id]);
       }
 
-      await client.query('DELETE FROM contacts WHERE id = $1', [sourceContactId]);
+      // bead psfn-framework-qgqw.6 (adjudication R10.3): archive the folded source
+      // instead of deleting it. The row, its contact_mutation_audit trail, and a
+      // snapshot of its (now target-owned) channel identities survive as
+      // grayed-out history; the live identity namespace was already released to
+      // the target by the reassignment above, and discord_user_id is cleared so
+      // the archived source no longer looks like a live identity owner. A
+      // `merged` audit entry records the target contact id so a wrongly-merged
+      // fold is auditable. This is the same fold used by the autonomous
+      // duplicate-merge path (it also routes through mergeContactsDirect).
+      const archivedAt = new Date().toISOString();
+      await client.query(
+        'UPDATE contacts SET archived_at = $1, channel_identities = $2::jsonb, discord_user_id = NULL WHERE id = $3',
+        [archivedAt, JSON.stringify(archivedIdentitySnapshot), sourceContactId],
+      );
+      await this.appendMutationAuditEntry(sourceContactId, 'merged', null, targetContactId, 'system:contact-merge', client);
       await client.query(
         `
           UPDATE contacts
@@ -1674,42 +1760,7 @@ const postgresContactCrudOperations: PostgresContactOperationMap = {
       if (row.trust_level === 'primary') return false;
       if (row.archived_at) return true; // idempotent: already archived
 
-      const identityRows = await client.query<{
-        channel: string;
-        channel_user_id: string;
-        privacy_level: string | null;
-        bonded: boolean | null;
-        first_seen: string;
-        last_seen: string;
-      }>(`
-        SELECT channel, channel_user_id, privacy_level, bonded, first_seen, last_seen
-        FROM contact_channel_ids
-        WHERE contact_id = $1
-        ORDER BY channel ASC, channel_user_id ASC
-      `, [id]);
-
-      const snapshot = identityRows.rows.map(identity => ({
-        channel: identity.channel,
-        channel_user_id: identity.channel_user_id,
-        privacy_level: identity.privacy_level,
-        bonded: identity.bonded === true,
-        first_seen: identity.first_seen,
-        last_seen: identity.last_seen,
-      }));
-      // A legacy contact may carry a discord identity only on the discord_user_id
-      // column without a matching contact_channel_ids row; preserve it in the
-      // snapshot so archived history keeps that privacy link too.
-      if (row.discord_user_id
-        && !snapshot.some(entry => entry.channel === 'discord' && entry.channel_user_id === row.discord_user_id)) {
-        snapshot.push({
-          channel: 'discord',
-          channel_user_id: row.discord_user_id,
-          privacy_level: null,
-          bonded: false,
-          first_seen: '',
-          last_seen: '',
-        });
-      }
+      const snapshot = await snapshotContactChannelIdentities(client, id, row.discord_user_id);
 
       const now = new Date().toISOString();
       await client.query(

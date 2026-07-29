@@ -83,7 +83,7 @@ export const AGENCY_TOOL_CONTRACTS = {
       action('search', ['query'], ['limit']),
     ],
     output: 'It returns note paths or bounded markdown and writes only journal documents.',
-    guidance: 'Read long notes page by page using each next_offset_bytes value. Prefer a bounded subagent or analysis-workbench worker for lengthy multi-note analysis so the primary channel stays responsive. Do not use journal for same-day scratch work, follow-ups, typed facts, or reference knowledge; use their semantic tools.',
+    guidance: 'Read long notes page by page using each next_offset_bytes value. Prefer a bounded automaton or the analysis workbench for lengthy multi-note analysis so the primary channel stays responsive. Do not use journal for same-day scratch work, follow-ups, typed facts, or reference knowledge; use their semantic tools.',
     example: { action: 'write', title: 'Garden observations', content: 'The basil recovered after moving into indirect light.' },
   },
 } as const satisfies Record<string, CanonicalToolSurfaceContract>;

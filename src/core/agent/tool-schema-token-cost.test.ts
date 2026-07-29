@@ -80,8 +80,8 @@ describe('full callable catalog schema token cost', () => {
       afterTokens: 20_407,
       deltaTokens: 3_460,
       beforeBytes: 79_908,
-      afterBytes: 95_144,
-      providerSchemaHash: 'bb72ceede92d52f2fa1d2d97399395d831ea37868b267c91c0451b9bd724a861',
+      afterBytes: 95_142,
+      providerSchemaHash: 'cc106dfd3bb6244e287768ae429cb81943fc8d77d927065d5c0c01ade1b84fd1',
       parameterSchemaHash: 'd33d598f2082b6b0f09c73f0827844b778b4b08935dba8d84587a189f62ff8e2',
     });
 

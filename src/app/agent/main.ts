@@ -23,22 +23,11 @@ import { ProactiveOutboundDispatcher } from '../../core/intention/proactive-outb
 import {
   registerTemporalWakeupLane,
 } from './startup/temporal-wakeup-lane.js';
-import { registerFreeTimeTasks } from '../../core/scheduler/free-time.js';
 import {
-  FreeTimeWorkspaceResolver,
-  type FreeTimeProjectRecord,
-  type FreeTimeWorkspaceContext,
-} from '../../core/scheduler/free-time-workspace-resolver.js';
-import type { PersonalProjectWorkContext } from '../../faculties/wiki/personal-projects.js';
-import {
-  FreeTimeChooser,
-  createFreeTimeRoomChannelResolver,
-  type FreeTimeProjectSummary,
-} from '../../core/scheduler/free-time-chooser.js';
-import { InMemoryRestWindowPolicy } from '../../core/scheduler/rest-window-policy.js';
-import { classifyChannelDisclosure, getVisibilityDisclosureCeiling } from '../../system/trust/policy.js';
+  registerFreeTimeLane,
+} from './startup/free-time-lane.js';
+import { classifyChannelDisclosure } from '../../system/trust/policy.js';
 import { trustOrd } from '../../system/trust/types.js';
-import { deriveConversationScopeEnvelope } from '../../core/session/conversation-scope.js';
 import { registerWeightedThoughtOutreachTask } from '../../core/scheduler/weighted-thought-outreach-lane.js';
 import { createLlmNudgeEvaluator } from '../../core/intention/weighted-thought-nudge-evaluator.js';
 import { recordWeightedThought } from '../../core/intention/weighted-thought-store-port.js';
@@ -59,13 +48,8 @@ import {
 import { composeCompanionDmChannelId } from '../../shared/contracts/companion-channels.js';
 import { createCompanionId } from '../../shared/routing/companion-id.js';
 import { CanonicalCompanionPeerValidationError } from '../../core/icp/agent-facing-autonomy.js';
-import {
-  getRunChargeSnapshot,
-  runWithChargeContext,
-} from '../../shared/telemetry/run-charge.js';
 import { RunChargeLedger } from '../../shared/telemetry/charge-ledger.js';
 import { getRequestContext } from '../../primitives/llm/request-context.js';
-import { summarizeRecentSessionEntries } from '../../core/session/manager/compaction-service.js';
 import { createFileOutreachOutboxStore } from '../../core/intention/outreach-outbox.js';
 import { registerMemoryTools } from '../../faculties/memory/runtime-wiring.js';
 import {
@@ -1332,164 +1316,22 @@ async function main(): Promise<void> {
     companionName: card.data.name,
   });
 
-  // ── Free-time lanes (E8.1) ──
-  // Self-directed time: two entry lanes (quiet-hours inside the rest window;
-  // idle after a long partner gap) share one bounded, budget-capped, multi-turn
-  // agent-loop block on an INTERNAL channel. The ordinary default prompt stack
-  // supplies identity and policy; her normal tools apply and outputs are
-  // durable only. Deterministic gates run
-  // before any spend; the block runs inside a 'background' charge context and
-  // ends gracefully when the per-block turn/charge budget is exhausted. After a
-  // block WITH activity, a "while you were away" note is placed on the partner
-  // session via the shared summarizer; empty "loafed" blocks surface nothing.
-  //
-  // Companion free-time chooser (jp36.2.1.2): supersedes the LRU auto-select.
-  // The companion picks rest / private wander / resume / create through ONE
-  // cheap background call; rest ends the block with no free-time turn and
-  // persists silence so she is not re-prompted this quiet period. The
-  // roomChannelResolver sources its disclosure ceiling from
-  // getVisibilityDisclosureCeiling (the resolver's documented port obligation),
-  // and public_room retrieval is clamped to 'public' inside the resolver. v1
-  // personal projects are private-only, so today's live menu is rest / private
-  // wander / resume(private); the manifest-v2 room/publication binding and the
-  // lane→continuity-session merge are jp36.2.4 / jp36.2.2.
-  const freeTimeRoomChannelResolver = createFreeTimeRoomChannelResolver(
-    (channelId) => deriveConversationScopeEnvelope({
-      channelId,
-      kind: 'group',
-      // Fail-closed roster: a project-bound room resolved outside a live
-      // conversation has no roster snapshot; the conservative envelope holds
-      // until jp36.2.4 supplies the manifest-v2 room binding.
-      recentSpeakerCount: 0,
-    }),
-    getVisibilityDisclosureCeiling,
-  );
-  // Map a manifest-v2 durable work context (faculties/wiki) onto the resolver's
-  // structurally-identical FreeTimeWorkspaceContext (jp36.2.4 seam). Explicit
-  // per-kind reconstruction keeps optional fields honest under
-  // exactOptionalPropertyTypes and localizes the cross-module shape coupling.
-  const toFreeTimeWorkspaceContext = (
-    workContext: PersonalProjectWorkContext,
-  ): FreeTimeWorkspaceContext => {
-    switch (workContext.kind) {
-      case 'private':
-        return workContext.returnTarget
-          ? { kind: 'private', returnTarget: workContext.returnTarget }
-          : { kind: 'private' };
-      case 'room':
-        return { kind: 'room', channelId: workContext.channelId };
-      case 'publication':
-        return workContext.surfaceRef
-          ? { kind: 'publication', mode: workContext.mode, surfaceRef: workContext.surfaceRef }
-          : { kind: 'publication', mode: workContext.mode };
-      default: {
-        const unknown = workContext as { kind?: unknown };
-        throw new Error(`unknown personal-project work-context kind: ${String(unknown.kind)}`);
-      }
-    }
-  };
-  const workContextLabel = (workContext: PersonalProjectWorkContext): string => {
-    switch (workContext.kind) {
-      case 'private':
-        return 'private';
-      case 'room':
-        return 'room';
-      case 'publication':
-        return workContext.mode === 'public_clean' ? 'publication' : 'publication review draft';
-      default:
-        return 'private';
-    }
-  };
-  const freeTimeResolver = new FreeTimeWorkspaceResolver({
-    projectDirectory: (projectRef: string): FreeTimeProjectRecord | null => {
-      const normalizedRef = projectRef.startsWith('project:') ? projectRef : `project:${projectRef}`;
-      const match = personalProjects.listProjects().find(project => project.ref === normalizedRef);
-      // Unknown ref → null so the resolver fails closed on it. A known project
-      // serves its durable manifest-v2 work context (jp36.2.4); v1 manifests were
-      // upgraded to a private context on read, so resume inherits without a
-      // reclassification prompt (bible §10.1/§10.5).
-      return match
-        ? { projectRef: match.ref, workspace: toFreeTimeWorkspaceContext(match.workContext) }
-        : null;
-    },
-    roomChannelResolver: freeTimeRoomChannelResolver,
-  });
-  const freeTimeRestWindowPolicy = new InMemoryRestWindowPolicy();
-  const freeTimeChooser = new FreeTimeChooser({
-    llmProvider,
-    resolver: freeTimeResolver,
-    restWindowPolicy: freeTimeRestWindowPolicy,
-    listResumableProjects: (): FreeTimeProjectSummary[] => personalProjects.listProjects()
-      .filter(project => project.status === 'active')
-      .map(project => ({
-        projectRef: project.ref,
-        title: project.title,
-        workContextLabel: workContextLabel(project.workContext),
-        focusHint: project.nextStep,
-      })),
-    companionName: card.data.name,
-    // Free-time chooser tunables (incl. the rest / silence-persistence window)
-    // are owned by scheduler.json socialAutonomy.freeTimeChooser (jp36.8.2).
-    settings: schedulerConfig.socialAutonomy.freeTimeChooser,
-    ...(config.companionId ? { companionId: config.companionId } : {}),
-  });
-  registerFreeTimeTasks({
+  // ── Free-time lanes (E8.1): self-directed time, extracted to
+  // startup/free-time-lane.ts (charter 12.1 split).
+  registerFreeTimeLane({
     scheduler,
     sessionManager,
     config: schedulerConfig.freeTime,
     restWindow: schedulerConfig.episodicProcessing,
+    chooserSettings: schedulerConfig.socialAutonomy.freeTimeChooser,
     eventBus,
-    // The whole block runs inside a 'background' charge context so per-turn LLM
-    // spend accumulates against the background lane; getRunChargeSnapshot lets
-    // the runner read cumulative spend before each turn for the hard cap.
-    runBlock: ({ run }) => {
-      const chargePolicy = config.chargePolicy;
-      if (!chargePolicy) {
-        // No charge policy → run with a zero reader; the turn cap still bounds.
-        return run(() => 0);
-      }
-      return runWithChargeContext({
-        chargePolicy,
-        eventBus,
-        lane: 'background',
-        correlation: getRequestContext(),
-      }, () => run(() => getRunChargeSnapshot()?.spentByLane.background ?? 0));
-    },
-    // One free-time turn through the ordinary agent loop on the internal
-    // channel. Internal channelId => isInternalSessionId() true => the loop
-    // cannot dispatch outward to a partner channel. The default identity stack
-    // and her normal tools apply (no restricted reflection policy). A "silent"
-    // reply ends the block; staying quiet / loafing is a valid outcome.
-    invokeTurn: async ({ lane, channelId, turnIndex, content }) => {
-      const response = await agentLoop.handleMessage({
-        id: `free-time-${lane}-${turnIndex}-${Date.now()}`,
-        channelId,
-        channelType: 'terminal',
-        authorId: 'scheduler',
-        authorName: 'Free Time',
-        content,
-        timestamp: new Date(),
-      });
-      return { content: response.content };
-    },
-    // Shared summarizer, free-time lane identity: distinct purpose/originStage
-    // ('free_time_return') and a freeTime-owned token budget — never borrowed
-    // from the morning-wake catch-up lane.
-    summarizeActivity: async ({ channelId, entries }) => summarizeRecentSessionEntries({
-      channelId,
-      entries,
-      characterName: card.data.name,
-      llmProvider,
-      promptRegistry: promptState.registry,
-      maxTokens: schedulerConfig.freeTime.returnNote.summaryMaxTokens,
-      purpose: 'free_time_return',
-    }),
-    loadProjectContext: async () => (
-      await personalProjects.resumeNextActiveProject()
-    )?.context ?? null,
-    // Companion chooser drives rest / workspace selection; rest persists silence
-    // for the quiet period (fails closed to rest, never a forced workspace).
-    chooseWorkspace: ({ lane, nowMs }) => freeTimeChooser.chooseWorkspace({ lane, nowMs }),
+    agentLoop,
+    llmProvider,
+    promptRegistry: promptState.registry,
+    companionName: card.data.name,
+    companionId: config.companionId,
+    chargePolicy: config.chargePolicy,
+    personalProjects,
   });
   // ── Weighted-thought outreach lane (E?/1xb.2) ──
   // Internal-state-driven outreach: a weighted thought crossing threshold

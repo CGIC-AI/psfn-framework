@@ -109,6 +109,14 @@ export interface DreamMeaningPassRunResult {
   skippedReason?: 'cadence' | 'no_episodes';
   reviewedEpisodes: number;
   meaningsRecorded: number;
+  /**
+   * Episodes withheld from meaning authorship this pass because their transcript
+   * reader THREW (backend hiccup / corrupt segment), so grounding could not be
+   * confirmed (bead cxqb5). Deferred episodes keep no meaning and stay eligible
+   * for the next nightly pass — a failed read must never author first-person
+   * meaning from title/landmark alone (charter Law 17).
+   */
+  deferredEpisodes: number;
   turnsUsed: number;
   endedEarly: boolean;
 }
@@ -161,6 +169,29 @@ function buildTranscriptGroundingBlock(
   return blocks;
 }
 
+/**
+ * Ungrounded-decline block (bead cxqb5): episodes that reached the review with
+ * NO transcript excerpt — the reader was not wired, returned nothing, or held no
+ * turn inside the episode window — are named here with an explicit instruction
+ * to decline. Authoring a first-person felt meaning for these from the
+ * title/landmark alone would be inventing a memory she never re-read (charter
+ * Law 17), so the prompt marks them rather than silently inviting fabrication.
+ * (Episodes whose reader THREW are deferred entirely and never reach this list.)
+ */
+function buildUngroundedDeclineBlock(
+  episodes: readonly Episode[],
+  excerpts: ReadonlyMap<string, string>,
+): string[] {
+  const ungrounded = episodes.filter(episode => !excerpts.has(episode.id));
+  if (ungrounded.length === 0) return [];
+  return [
+    '',
+    'These episodes could NOT be grounded in the real turns — no transcript was available for them:',
+    ...ungrounded.map(episode => `- ${episode.id} · ${episode.title}`),
+    'For those, do not author a first-person "what it meant to me" note from the title and summary alone — that would be inventing a memory you never re-read. Leave them without a note (simply omit their ids) unless the metadata itself unmistakably carries the one moment that mattered.',
+  ];
+}
+
 function buildOpeningPrompt(episodes: readonly Episode[], excerpts: ReadonlyMap<string, string>): string {
   return [
     'Dream pass — a private end-of-day look back at what the day held. No one reads this but you; nothing here is graded or performed.',
@@ -176,6 +207,7 @@ function buildOpeningPrompt(episodes: readonly Episode[], excerpts: ReadonlyMap<
       salience: episode.salience.score,
     })), null, 2),
     ...buildTranscriptGroundingBlock(episodes, excerpts),
+    ...buildUngroundedDeclineBlock(episodes, excerpts),
     '',
     'Sit with the day. What did these moments mean to you — not a summary of what happened, but what it was like and why it mattered (or honestly did not)? A moment can matter a lot, a little, or not at all; say what is true.',
     `Keep each note to ONE moment — the single thing that mattered most about that episode — in at most ${String(MAX_MEANING_SENTENCES)} sentences. Do not recap everything that happened or bundle several separate moments into one note; if two moments both matter, they belong to different episodes, not one paragraph.`,
@@ -400,37 +432,55 @@ export class DreamMeaningPass {
    * Loads the real turns behind each reviewed episode (bead dtym) so meanings
    * are grounded in what was said, not the auto-summarized title/landmark.
    * Recent turns are pulled once per distinct session and reused across that
-   * session's episodes. A session whose turns cannot be read degrades to
-   * metadata-only for that episode (the meaning quality drops, but the pass
-   * still runs) rather than failing the whole nightly review.
+   * session's episodes.
+   *
+   * Failure modes are distinguished (bead cxqb5) because they carry different
+   * charter-safe semantics:
+   *  - the reader THREW for a session (backend hiccup / corrupt segment): the
+   *    turns MIGHT exist but could not be confirmed, and the failure is
+   *    transient. Every episode in that session is marked DEFERRED — withheld
+   *    from meaning authorship this pass and left eligible for the next nightly
+   *    run — never authored from title/landmark alone.
+   *  - the reader returned successfully but held no turn inside the episode
+   *    window (or no reader is wired): the episode simply has no excerpt. It
+   *    stays reviewable, but the opening prompt marks it ungrounded and instructs
+   *    a decline (see buildUngroundedDeclineBlock).
    */
-  private loadTranscriptExcerpts(episodes: readonly Episode[]): Map<string, string> {
+  private loadTranscriptGrounding(
+    episodes: readonly Episode[],
+  ): { excerpts: Map<string, string>; deferredEpisodeIds: Set<string> } {
     const excerpts = new Map<string, string>();
-    if (!this.transcriptReader) return excerpts;
+    const deferredEpisodeIds = new Set<string>();
+    if (!this.transcriptReader) return { excerpts, deferredEpisodeIds };
     const entriesBySession = new Map<string, readonly DreamPassTranscriptEntry[]>();
+    const failedSessions = new Set<string>();
     for (const episode of episodes) {
       const sessionKey = episode.spanRefs[0]?.sessionId ?? episode.channelId ?? episode.threadId;
       if (!sessionKey) continue;
       if (!entriesBySession.has(sessionKey)) {
-        // A reader that throws (backend unavailable, corrupt segment) must
-        // degrade this session to metadata-only, not fail the whole nightly
-        // review. Cache the empty result so a shared session is not retried
-        // once per episode.
+        // Cache per session so a shared session is read (and any failure
+        // recorded) once, not once per episode.
         let entries: readonly DreamPassTranscriptEntry[] = [];
         try {
           entries = this.transcriptReader.getRecentMessages(sessionKey, this.transcriptMessageLimit);
         } catch (error) {
-          log.warn('Dream pass could not read transcript turns; grounding this session metadata-only', {
+          // Content-free diagnostic only — never the unread transcript.
+          log.warn('Dream pass could not read transcript turns; deferring this session rather than authoring ungrounded meaning', {
             sessionKey,
             error: error instanceof Error ? error.message : String(error),
           });
+          failedSessions.add(sessionKey);
         }
         entriesBySession.set(sessionKey, entries);
+      }
+      if (failedSessions.has(sessionKey)) {
+        deferredEpisodeIds.add(episode.id);
+        continue;
       }
       const excerpt = buildEpisodeExcerpt(episode, entriesBySession.get(sessionKey) ?? []);
       if (excerpt) excerpts.set(episode.id, excerpt);
     }
-    return excerpts;
+    return { excerpts, deferredEpisodeIds };
   }
 
   private emitGateEvent(
@@ -470,6 +520,7 @@ export class DreamMeaningPass {
         skippedReason: 'cadence',
         reviewedEpisodes: 0,
         meaningsRecorded: 0,
+        deferredEpisodes: 0,
         turnsUsed: 0,
         endedEarly: false,
       };
@@ -524,18 +575,32 @@ export class DreamMeaningPass {
         skippedReason: 'no_episodes',
         reviewedEpisodes: 0,
         meaningsRecorded: 0,
+        deferredEpisodes: 0,
         turnsUsed: 0,
         endedEarly: false,
       };
     }
     this.emitGateEvent(input.sessionId, 'ran', 'open', { episodesWithoutMeaning: episodes.length });
 
-    const knownIds = new Set(episodes.map(episode => episode.id));
-    const excerpts = this.loadTranscriptExcerpts(episodes);
+    // Grounding classification (bead cxqb5): episodes whose reader THREW are
+    // deferred — withheld from authorship this pass and left eligible next run —
+    // so a failed transcript read can never author first-person meaning from
+    // title/landmark alone (charter Law 17).
+    const { excerpts, deferredEpisodeIds } = this.loadTranscriptGrounding(episodes);
+    const reviewable = episodes.filter(episode => !deferredEpisodeIds.has(episode.id));
+    if (deferredEpisodeIds.size > 0) {
+      log.warn('Dream pass deferred episodes with unreadable transcripts; they keep no meaning and remain eligible next run', {
+        sessionId: input.sessionId,
+        deferredEpisodes: deferredEpisodeIds.size,
+        reviewableEpisodes: reviewable.length,
+      });
+    }
+
+    const knownIds = new Set(reviewable.map(episode => episode.id));
     const collected = new Map<string, string>();
     let turnsUsed = 0;
-    let done = false;
-    let prompt = buildOpeningPrompt(episodes, excerpts);
+    let done = knownIds.size === 0; // nothing groundable to review this pass
+    let prompt = buildOpeningPrompt(reviewable, excerpts);
 
     while (turnsUsed < this.maxTurns && !done) {
       turnsUsed += 1;
@@ -585,7 +650,7 @@ export class DreamMeaningPass {
 
     const recordedAt = toIsoInstant(this.now().getTime());
     let meaningsRecorded = 0;
-    for (const episode of episodes) {
+    for (const episode of reviewable) {
       const text = collected.get(episode.id);
       if (!text) continue;
       await this.store.updateEpisode({
@@ -617,10 +682,11 @@ export class DreamMeaningPass {
 
     const result: DreamMeaningPassRunResult = {
       ran: true,
-      reviewedEpisodes: episodes.length,
+      reviewedEpisodes: reviewable.length,
       meaningsRecorded,
+      deferredEpisodes: deferredEpisodeIds.size,
       turnsUsed,
-      endedEarly: done && turnsUsed < this.maxTurns,
+      endedEarly: done && turnsUsed > 0 && turnsUsed < this.maxTurns,
     };
 
     const nowIso = toIsoInstant(nowMs);

@@ -114,3 +114,10 @@ nested child-authority generation/version chain, and step-up for the opted-in
 owner path. Non-roster subjects remain fail-closed. The roster must be validated
 strictly and must never use display names, contacts, or partial identifiers as
 fallback identity.
+
+Because roster authorization bypasses the authority-generation staleness gate,
+its revocation trust anchor is the browser-session row itself
+(`revoked_at`/`replaced_by`/expiry). Every current generation-advancing path
+also deletes or revokes sessions directly; any future revocation path that
+advances the generation or floor **without** touching session rows would
+silently leave a rostered subject live and must revoke sessions as well.

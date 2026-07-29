@@ -1113,9 +1113,13 @@ export class SessionStore implements TranscriptSearchPort {
       return !tombstones.has(turnId);
     });
   }
-  private syncTranscriptProjectionForChannel(channelId: string, entries: readonly SessionEntry[]): void {
+  private syncTranscriptProjectionForChannel(
+    channelId: string,
+    entries: readonly SessionEntry[],
+    options: { redaction?: boolean } = {},
+  ): void {
     if (!this.transcriptProjection) return;
-    this.transcriptProjection.replaceChannelEntries(channelId, entries);
+    this.transcriptProjection.replaceChannelEntries(channelId, entries, options);
   }
   private readCachedRecentEntries(
     cache: ChannelCache,
@@ -2121,7 +2125,9 @@ export class SessionStore implements TranscriptSearchPort {
       const sessionKey = this.resolveCacheSessionKey(cache);
       this.setChannelCache(sessionKey, reloaded);
       this.upsertChannelIndex(sessionKey, snapshotIndexEntry(reloaded));
-      this.syncTranscriptProjectionForChannel(reloaded.channelId, reloaded.entries);
+      // Redaction propagation (bead 6oott): a failure here must fail closed
+      // (durable redaction drift + search exclusion), never best-effort drift.
+      this.syncTranscriptProjectionForChannel(reloaded.channelId, reloaded.entries, { redaction: true });
 
       const currentEvent = options.eventStore.getEvent(caseId) ?? event;
       const affectedMessageRanges = [
@@ -2625,7 +2631,13 @@ export class SessionStore implements TranscriptSearchPort {
           full.activeTurnTombstoneCount = full.turnTombstones.size;
           syncLastMessageMetadataFromEntries(full);
           this.upsertChannelIndex(channelId, snapshotIndexEntry(full));
-          this.syncTranscriptProjectionForChannel(channelId, full.entries);
+          // Turn redaction removes entries from the projected set, so a failed
+          // sync may leave redacted content searchable — fail closed (bead
+          // 6oott). A restore failure only over-hides, which is safe as
+          // ordinary best-effort drift.
+          this.syncTranscriptProjectionForChannel(channelId, full.entries, {
+            redaction: action === 'redact',
+          });
         }
       },
     ));

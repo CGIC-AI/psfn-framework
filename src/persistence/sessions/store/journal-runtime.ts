@@ -400,7 +400,13 @@ export class SessionJournalRuntime {
     try {
       transcriptProjection.upsertSessionEntry(entry);
     } catch (error) {
-      transcriptProjection.markProjectionDrift(entry.channelId, toErrorMessage(error));
+      // A synchronously-failing tombstone index is a failed redaction
+      // propagation: mark fail-closed 'redaction' drift (bead 6oott).
+      transcriptProjection.markProjectionDrift(
+        entry.channelId,
+        toErrorMessage(error),
+        isCogSecTombstoneSessionEntry(entry) ? 'redaction' : 'sync',
+      );
       if (!this.transcriptProjectionFailureLogged) {
         this.transcriptProjectionFailureLogged = true;
         log.warn('Transcript projection write failed; canonical archive append remains authoritative', {

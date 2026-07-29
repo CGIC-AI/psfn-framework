@@ -30,9 +30,9 @@ import { composeCompanionDmChannelId } from '../../../shared/contracts/companion
 import type { ChannelType } from '../../../shared/contracts/runtime.js';
 import type { EventBus } from '../../../shared/event-bus.js';
 import { createCompanionId } from '../../../shared/routing/companion-id.js';
-import type { SchedulerConfig } from '../../../system/config/runtime-config-contracts.js';
+import type { SchedulerRuntimeConfig as SchedulerConfig } from '../../../system/config/scheduler-config.js';
 import type { AgentSchedulerRuntime } from '../scheduler-runtime.js';
-import type { createAgentPersistenceRuntime } from '../../persistence/runtime-factory.js';
+import type { createAgentPersistenceRuntime } from '../../../persistence/runtime-factory.js';
 
 export interface SocialDesireLaneDeps {
   schedulerConfig: SchedulerConfig;
@@ -40,7 +40,7 @@ export interface SocialDesireLaneDeps {
   postTurnActions: AgentSchedulerRuntime['postTurnActions'];
   eventBus: EventBus;
   log: Logger;
-  socialDesireStore: ReturnType<typeof createAgentPersistenceRuntime>['socialDesireStore'];
+  socialDesireStore: Awaited<ReturnType<typeof createAgentPersistenceRuntime>>['socialDesireStore'];
   outreachOutbox: OutreachOutboxStore;
   heartbeatChannel: { channelId: string; channelType: ChannelType } | undefined;
   contactStore: ContactStorePort;

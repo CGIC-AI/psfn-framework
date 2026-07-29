@@ -16,13 +16,13 @@ import { deriveConversationScopeEnvelope } from '../../../core/session/conversat
 import { summarizeRecentSessionEntries } from '../../../core/session/manager/compaction-service.js';
 import { registerFreeTimeTasks, type FreeTimeRuntimeOptions } from '../../../core/scheduler/free-time.js';
 import {
-  createFreeTimeRoomChannelResolver,
   FreeTimeWorkspaceResolver,
   type FreeTimeProjectRecord,
   type FreeTimeWorkspaceContext,
 } from '../../../core/scheduler/free-time-workspace-resolver.js';
 import {
   FreeTimeChooser,
+  createFreeTimeRoomChannelResolver,
   type FreeTimeProjectSummary,
 } from '../../../core/scheduler/free-time-chooser.js';
 import { InMemoryRestWindowPolicy } from '../../../core/scheduler/rest-window-policy.js';
@@ -33,7 +33,7 @@ import type { ChargePolicyConfig } from '../../../shared/contracts/charge-policy
 import { getRunChargeSnapshot, runWithChargeContext } from '../../../shared/telemetry/run-charge.js';
 import { getRequestContext } from '../../../primitives/llm/request-context.js';
 import { getVisibilityDisclosureCeiling } from '../../../system/trust/policy.js';
-import type { SchedulerConfig } from '../../../system/config/runtime-config-contracts.js';
+import type { SchedulerRuntimeConfig as SchedulerConfig } from '../../../system/config/scheduler-config.js';
 
 export interface FreeTimeLaneDeps {
   scheduler: FreeTimeRuntimeOptions['scheduler'];

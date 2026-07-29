@@ -29,22 +29,38 @@ interface Waiter {
  * Shared line source over a single readline Interface. Lines received while no
  * question is pending are buffered; EOF/Ctrl-C aborts every waiting and future
  * question once the buffer is drained.
+ *
+ * The input/output streams are injectable for testing; production always uses
+ * the process stdin/stdout.
  */
-class LineSource {
+export class LineSource {
   private rl: Interface | undefined;
   private readonly buffered: string[] = [];
   private readonly waiters: Waiter[] = [];
   private closed = false;
+  // True only while a raw-mode reader (askSecret) owns stdin. During this window
+  // the readline Interface is fully detached — not merely paused — so no keystroke
+  // of the secret can reach the 'line' buffer, and a deliberate close() must not
+  // be mistaken for EOF/Ctrl-D.
+  private suspended = false;
+
+  constructor(
+    private readonly input: NodeJS.ReadableStream = stdin,
+    private readonly output: NodeJS.WritableStream = stdout,
+  ) {}
 
   private ensureInterface(): void {
-    if (this.rl || this.closed) return;
-    this.rl = createInterface({ input: stdin, output: stdout });
+    if (this.rl || this.closed || this.suspended) return;
+    this.rl = createInterface({ input: this.input, output: this.output });
     this.rl.on('line', (line) => {
       const waiter = this.waiters.shift();
       if (waiter) waiter.resolve(line);
       else this.buffered.push(line);
     });
     this.rl.on('close', () => {
+      // A close initiated by suspendForRaw() is deliberate, not end-of-input:
+      // the source stays open and the Interface is recreated on the next ask.
+      if (this.suspended) return;
       this.closed = true;
       // Buffered lines stay consumable; only unanswered questions abort.
       for (const waiter of this.waiters.splice(0)) {
@@ -54,7 +70,7 @@ class LineSource {
   }
 
   next(query: string): Promise<string> {
-    stdout.write(query);
+    this.output.write(query);
     if (this.buffered.length > 0) {
       return Promise.resolve(this.buffered.shift() as string);
     }
@@ -67,17 +83,30 @@ class LineSource {
     });
   }
 
-  /** Suspend line delivery while a raw-mode reader owns stdin. */
-  pause(): void {
-    this.rl?.pause();
+  /**
+   * Fully detach readline so a raw-mode reader can own stdin exclusively.
+   * Closing the Interface (rather than pausing it) removes readline's stdin
+   * listeners entirely: a plain rl.pause() leaves the 'line'/'data' listeners
+   * attached, and askSecret's stdin.resume() would re-deliver every secret
+   * keystroke to readline too, surfacing the whole secret as a buffered line.
+   * `buffered` is preserved; the source is NOT marked closed.
+   */
+  suspendForRaw(): void {
+    if (this.closed) return;
+    this.suspended = true;
+    this.rl?.close();
+    this.rl = undefined;
   }
 
-  resume(): void {
-    if (!this.closed) this.rl?.resume();
+  /** Re-arm line delivery after raw-mode capture releases stdin. */
+  resumeAfterRaw(): void {
+    // The Interface is recreated lazily by the next next()/ask.
+    this.suspended = false;
   }
 
   dispose(): void {
     this.closed = true;
+    this.suspended = false;
     this.rl?.close();
     this.rl = undefined;
   }
@@ -149,9 +178,12 @@ function askSecret(query: string, lines: LineSource): Promise<string> {
   if (!stdin.isTTY) {
     return lines.next(query);
   }
-  // The shared readline Interface must not compete for bytes while raw mode
-  // owns stdin, or masked keystrokes would also surface as buffered lines.
-  lines.pause();
+  // The shared readline Interface must be fully detached — not merely paused —
+  // while raw mode owns stdin. A paused Interface keeps its listeners attached,
+  // so stdin.resume() below would re-feed every masked keystroke to readline and
+  // the whole secret would surface as a buffered 'line' (leaking into the next
+  // answer). suspendForRaw() closes the Interface so no keystroke can reach it.
+  lines.suspendForRaw();
   return new Promise<string>((resolve, reject) => {
     stdout.write(query);
     let value = '';
@@ -162,7 +194,7 @@ function askSecret(query: string, lines: LineSource): Promise<string> {
     const cleanup = (): void => {
       stdin.setRawMode(previousRaw);
       stdin.removeListener('data', onData);
-      lines.resume();
+      lines.resumeAfterRaw();
     };
 
     const onData = (chunk: Buffer): void => {

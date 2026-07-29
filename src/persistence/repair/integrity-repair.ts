@@ -5,6 +5,7 @@ import {
   readFileSync,
 } from 'node:fs';
 import { dirname, join, relative } from 'node:path';
+import { toErrorMessage } from '../../shared/utils/errors.js';
 import type { SessionHmacKeyring } from '../journals/journal-utils.js';
 import {
   parseJournalText,
@@ -30,11 +31,43 @@ export interface SessionIntegrityRepairReport {
   rebuiltChannelIndex: boolean;
 }
 
+/**
+ * Minimal append-only audit sink for integrity-repair runs. Structurally
+ * satisfied by {@link import('../../system/capabilities/safeguards.js').SafeguardAuditTrail};
+ * kept as a narrow local interface so the repair module does not depend on the
+ * capabilities layer and so tests can inject a fake without the filesystem.
+ */
+export interface SessionIntegrityRepairAuditSink {
+  append(event: string, details: Record<string, unknown>): void;
+}
+
+/**
+ * Structured audit event name for an integrity-repair run. Emitted to the
+ * safeguard audit trail (operator-visible in Garden) so a sanctioned re-sign of
+ * the L0 HMAC chain is durably traceable — when it ran, why, over which
+ * channels, how many entries were re-sealed, and whether it succeeded. The
+ * record is content-free: only structural counts, channel identifiers, the
+ * operator's reason, and an outcome — never message text.
+ */
+export const SESSION_INTEGRITY_REPAIR_AUDIT_EVENT = 'session_integrity_repair';
+
 interface RepairParams {
   sessionsDir: string;
   backupDir: string;
   keyring: SessionHmacKeyring;
   repoRoot: string;
+  /**
+   * Required operator reason for this run (fail closed on blank). Recorded in
+   * the durable audit event so every re-sign carries its justification.
+   */
+  reason: string;
+  /**
+   * Optional durable audit sink. Real runs (the CLI) always wire the safeguard
+   * audit trail; tests that only assert byte-unchanged repair behavior may omit
+   * it. When present, exactly one record is emitted per run — on success and on
+   * failure alike (attempt + outcome).
+   */
+  audit?: SessionIntegrityRepairAuditSink;
 }
 
 function ensureBackup(filePath: string, backupDir: string, repoRoot: string): void {
@@ -140,36 +173,78 @@ function rebuildSessionChannelIndex(sessionsDir: string): void {
 }
 
 export function runSessionIntegrityRepair(params: RepairParams): SessionIntegrityRepairReport {
-  mkdirSync(params.backupDir, { recursive: true });
-
-  const discovered = discoverSessionFileChains(params.sessionsDir);
-  if (discovered.incompleteChains.length > 0) {
-    throw new Error(`Refusing integrity repair with incomplete L0 chains: ${JSON.stringify(discovered.incompleteChains)}`);
+  const reason = params.reason.trim();
+  if (reason.length === 0) {
+    // Fail closed: every sanctioned re-sign must carry an operator reason so the
+    // durable audit record is never anonymous.
+    throw new Error('Session integrity repair requires a non-empty operator reason');
   }
-  const journalFiles = discovered.chains.flatMap(chain => chain.filePaths);
 
+  // Accumulators declared before the work so the audit record captures partial
+  // progress even when a later chain aborts the run.
   const journalReport: SessionIntegrityRepairCounts = {
-    scannedFiles: journalFiles.length,
+    scannedFiles: 0,
     modifiedFiles: 0,
     modifiedEntries: 0,
   };
+  const channelIds = new Set<string>();
+  let rebuiltChannelIndex = false;
 
-  for (const chain of discovered.chains) {
-    const modified = rewriteJournalChain(
-      chain.filePaths,
-      params.keyring,
-      params.backupDir,
-      params.repoRoot,
-    );
-    journalReport.modifiedFiles += modified.modifiedFiles;
-    journalReport.modifiedEntries += modified.modifiedEntries;
-  }
-
-  rebuildSessionChannelIndex(params.sessionsDir);
-
-  return {
-    backupsDir: params.backupDir,
-    journal: journalReport,
-    rebuiltChannelIndex: true,
+  const emitAudit = (
+    outcome: 'completed' | 'failed',
+    extra: Record<string, unknown> = {},
+  ): void => {
+    if (!params.audit) return;
+    params.audit.append(SESSION_INTEGRITY_REPAIR_AUDIT_EVENT, {
+      reason,
+      outcome,
+      backupsDir: params.backupDir,
+      channelIds: [...channelIds],
+      scannedFiles: journalReport.scannedFiles,
+      modifiedFiles: journalReport.modifiedFiles,
+      modifiedEntries: journalReport.modifiedEntries,
+      rebuiltChannelIndex,
+      ...extra,
+    });
   };
+
+  try {
+    mkdirSync(params.backupDir, { recursive: true });
+
+    const discovered = discoverSessionFileChains(params.sessionsDir);
+    if (discovered.incompleteChains.length > 0) {
+      throw new Error(`Refusing integrity repair with incomplete L0 chains: ${JSON.stringify(discovered.incompleteChains)}`);
+    }
+    for (const chain of discovered.chains) {
+      if (chain.channelId) channelIds.add(chain.channelId);
+    }
+    journalReport.scannedFiles = discovered.chains.flatMap(chain => chain.filePaths).length;
+
+    for (const chain of discovered.chains) {
+      const modified = rewriteJournalChain(
+        chain.filePaths,
+        params.keyring,
+        params.backupDir,
+        params.repoRoot,
+      );
+      journalReport.modifiedFiles += modified.modifiedFiles;
+      journalReport.modifiedEntries += modified.modifiedEntries;
+    }
+
+    rebuildSessionChannelIndex(params.sessionsDir);
+    rebuiltChannelIndex = true;
+
+    const report: SessionIntegrityRepairReport = {
+      backupsDir: params.backupDir,
+      journal: journalReport,
+      rebuiltChannelIndex: true,
+    };
+    emitAudit('completed');
+    return report;
+  } catch (error) {
+    // Record the attempt and its outcome even on partial failure, then rethrow;
+    // the repair behavior is unchanged (the error still propagates to the CLI).
+    emitAudit('failed', { errorMessage: toErrorMessage(error) });
+    throw error;
+  }
 }

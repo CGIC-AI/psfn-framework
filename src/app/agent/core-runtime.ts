@@ -469,6 +469,12 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
       managedRootDir: resolvePersonalSkillsDir(pathSnapshot.workspaceRoot),
     },
     {
+      // Charter 9.5 category-2 governance: skill writes ride the same
+      // capability tier + Garden confirmation queue as card/prompt proposals.
+      getCapabilityTier: () => capabilityRuntime.getTier(),
+      confirmationQueue: cardProposalQueue,
+    },
+    {
       getIntakeSinkGate: () => intakeSinkGate,
       getIntakeScreening: () => skillWriteIntakeScreening,
       getActiveTurnIntakeEnvelopes: () => agentLoop.getActiveTurnIntakeEnvelopes(),

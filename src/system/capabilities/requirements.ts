@@ -190,13 +190,24 @@ function resolveSessionRequirement(action: string | null): CapabilityRequirement
   return IDENTITY_READ_RUNTIME_WRITE;
 }
 
-const SKILL_READ_ACTIONS = new Set(['list', 'skill_list', 'view', 'skill_view', 'stats', 'skill_stats']);
-const SKILL_WRITE_ACTIONS = new Set(['create', 'skill_create', 'update', 'skill_update']);
+const SKILL_READ_ACTIONS = new Set(['list', 'skill_list', 'view', 'skill_view', 'stats', 'skill_stats', 'history']);
+const SKILL_WRITE_ACTIONS = new Set(['create', 'skill_create', 'update', 'skill_update', 'rollback']);
 
 function resolveSkillRequirement(action: string | null): CapabilityRequirement {
   if (action === null || actionIn(action, SKILL_READ_ACTIONS)) return 'identity.read';
   if (actionIn(action, SKILL_WRITE_ACTIONS)) return 'identity.write.runtime';
   return IDENTITY_READ_RUNTIME_WRITE;
+}
+
+/**
+ * Action-aware capability requirement for the unified skill tool, exported so
+ * the tool factory can annotate itself via withCapabilityRequirement (parity
+ * with peer self-modification tools) without duplicating the central mapping.
+ */
+export function resolveSkillToolCapabilityRequirement(
+  params: Record<string, unknown>,
+): CapabilityRequirement {
+  return resolveSkillRequirement(normalizeAction(params));
 }
 
 function resolveSubagentRequirement(action: string | null): CapabilityRequirement {

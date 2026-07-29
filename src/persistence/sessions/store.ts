@@ -93,6 +93,7 @@ import {
 import { SessionJournalRuntime } from './store/journal-runtime.js';
 import { resolveSessionEntryTurnContext } from '../../core/session/turn-provenance.js';
 import { backfillLegacyTurnId, parseTurnId } from '../../core/turns/id.js';
+import { isTurnRecordRecoveryEvidenceError } from '../../core/agent/background-work/recovery-contract.js';
 import { indexedChannelId, resolvePrimarySessionId } from './store/session-index-keys.js';
 import { withSessionJournalWriteLock } from './store/session-journal-write-lock.js';
 import { rollSessionArchiveIfNeeded } from './store/session-rollover.js';
@@ -1943,11 +1944,26 @@ export class SessionStore implements TranscriptSearchPort {
     }
     const uniqueSourceSet = new Set(sourceChannelIds);
     const uniqueSources = [...uniqueSourceSet];
+    const evidenceBlockedOwners = new Set<string>();
     for await (const record of streamSource.call(this.turnRecordStore, uniqueSources, options)) {
       const sourceChannelId = record.channelId;
       if (!uniqueSourceSet.has(sourceChannelId)) continue;
       const logicalSessionId = record.sessionId ?? sourceChannelId;
-      if (!await this.isRecoveryTurnEligible(logicalSessionId, record.turnId, options)) continue;
+      if (evidenceBlockedOwners.has(logicalSessionId)) continue;
+      try {
+        if (!await this.isRecoveryTurnEligible(logicalSessionId, record.turnId, options)) continue;
+      } catch (error) {
+        if (!isTurnRecordRecoveryEvidenceError(error)) throw error;
+        evidenceBlockedOwners.add(logicalSessionId);
+        const rawCode = (error as NodeJS.ErrnoException).code;
+        const errno = typeof rawCode === 'string' && rawCode ? rawCode : 'UNKNOWN';
+        log.warn(
+          `Skipping background-work handoff recovery owner ${logicalSessionId} (${errno})`,
+          { errno, ownerSessionId: logicalSessionId },
+        );
+        options.onEvidenceOwnerSkipped?.({ errno, ownerSessionId: logicalSessionId });
+        continue;
+      }
       yield record;
     }
   }

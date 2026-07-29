@@ -33,6 +33,10 @@ import {
   resolveCogSecEventsPath,
   resolveCogSecForensicArchiveDir,
 } from '../layout.js';
+import {
+  clearDiagnosticLogRingBufferForTests,
+  getRecentDiagnosticLogRecords,
+} from '../../shared/logger.js';
 
 function appendSessionMessages(
   targetStore: SessionStore,
@@ -1166,7 +1170,7 @@ describe('SessionStore', () => {
     expect(await collectRecoverableRecords(scanStore, [channelId])).toEqual([]);
   });
 
-  it('fails recovery closed when L0 authority is malformed or keeps changing', async () => {
+  it('skips only owners with malformed recovery authority and retries them next pass', async () => {
     const gapChannel = 'api:recovery-gapped-generation';
     const gapTurnId = createTurnId(1_700_000_039_000);
     store.append({
@@ -1188,8 +1192,7 @@ describe('SessionStore', () => {
       turnRecordStore: createRecoveryCandidateStore([gapRecord]),
     });
 
-    await expect(collectRecoverableRecords(gapStore, [gapChannel]))
-      .rejects.toMatchObject({ name: 'TurnRecordRecoveryEvidenceError', code: 'ESTALE' });
+    expect(await collectRecoverableRecords(gapStore, [gapChannel])).toEqual([]);
 
     const malformedChannel = 'api:recovery-malformed-owner';
     const malformedTurnId = createTurnId(1_700_000_040_000);
@@ -1200,18 +1203,48 @@ describe('SessionStore', () => {
       timestamp: 1_700_000_040_000,
       turnId: malformedTurnId,
     });
-    const malformedRecord = {
+    const validChannels = [
+      'api:recovery-valid-owner-b',
+      'api:recovery-valid-owner-c',
+    ];
+    const validRecords = validChannels.map((channelId, index) => {
+      const turnId = createTurnId(1_700_000_040_100 + index);
+      store.append({
+        channelId,
+        role: 'user',
+        content: 'owner',
+        timestamp: 1_700_000_040_100 + index,
+        turnId,
+      });
+      return {
+        ...buildTurnRecordFixture(channelId, index + 1, turnId),
+        backgroundWorkHandoff: { schemaVersion: 1 as const, jobs: [] },
+      };
+    });
+    const malformedRecord: TurnRecord = {
       ...buildTurnRecordFixture(malformedChannel, 0, malformedTurnId),
       backgroundWorkHandoff: { schemaVersion: 1 as const, jobs: [] },
     };
     const malformedStore = new SessionStore(dir, {
-      turnRecordStore: createRecoveryCandidateStore([malformedRecord]),
+      turnRecordStore: createRecoveryCandidateStore([malformedRecord, ...validRecords]),
     });
     appendFileSync(findSessionJournalPath(dir, 'recovery-malformed-owner'), '{not-json}\n');
+    clearDiagnosticLogRingBufferForTests();
 
-    await expect(collectRecoverableRecords(malformedStore, [malformedChannel]))
-      .rejects.toMatchObject({ name: 'TurnRecordRecoveryEvidenceError', code: 'EBADMSG' });
+    const sourceChannels = [malformedChannel, ...validChannels];
+    expect((await collectRecoverableRecords(malformedStore, sourceChannels))
+      .map(record => record.channelId)).toEqual(validChannels);
+    expect((await collectRecoverableRecords(malformedStore, sourceChannels))
+      .map(record => record.channelId)).toEqual(validChannels);
 
+    const malformedWarnings = getRecentDiagnosticLogRecords()
+      .filter(record => record.component === 'SessionStore'
+        && record.message.includes(malformedChannel)
+        && record.message.includes('EBADMSG'));
+    expect(malformedWarnings).toHaveLength(2);
+  });
+
+  it('defers a repeatedly changing owner until a later quiet recovery pass', async () => {
     const changingChannel = 'api:recovery-changing-owner';
     const changingTurnId = createTurnId(1_700_000_041_000);
     store.append({
@@ -1226,17 +1259,21 @@ describe('SessionStore', () => {
       ...buildTurnRecordFixture(changingChannel, 1, changingTurnId),
       backgroundWorkHandoff: { schemaVersion: 1 as const, jobs: [] },
     };
+    let keepChanging = true;
     const snapshotHook = vi.fn(() => {
-      appendFileSync(changingPath, '\n');
+      if (keepChanging) appendFileSync(changingPath, '\n');
     });
     const changingStore = new SessionStore(dir, {
       turnRecordStore: createRecoveryCandidateStore([changingRecord]),
       recoveryAuthoritySnapshotHook: snapshotHook,
     });
 
-    await expect(collectRecoverableRecords(changingStore, [changingChannel]))
-      .rejects.toMatchObject({ name: 'TurnRecordRecoveryEvidenceError', code: 'ESTALE' });
+    expect(await collectRecoverableRecords(changingStore, [changingChannel])).toEqual([]);
     expect(snapshotHook).toHaveBeenCalledTimes(2);
+
+    keepChanging = false;
+    expect((await collectRecoverableRecords(changingStore, [changingChannel]))
+      .map(record => record.turnId)).toEqual([changingTurnId]);
   });
 
   it('preserves global chronological recovery order across source streams', async () => {

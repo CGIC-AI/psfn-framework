@@ -10,6 +10,7 @@ import { basename, dirname, join } from 'node:path';
 import type { TurnRecord } from '../../shared/contracts/runtime.js';
 import { parseTurnRecordBackgroundWorkHandoff } from '../../core/agent/background-work/types.js';
 import {
+  TURN_RECORD_RECOVERY_STRUCTURAL_EVIDENCE_CODE,
   TurnRecordRecoveryEvidenceError,
   isTurnRecordRecoveryEvidenceError,
 } from '../../core/agent/background-work/recovery-contract.js';
@@ -77,7 +78,13 @@ function postMessage(message: unknown): void {
 }
 
 function evidenceError(message: string, cause?: unknown): Error {
-  return new TurnRecordRecoveryEvidenceError(message, { cause });
+  const causeCode = (cause as NodeJS.ErrnoException | undefined)?.code;
+  return new TurnRecordRecoveryEvidenceError(message, {
+    cause,
+    code: typeof causeCode === 'string' && causeCode
+      ? causeCode
+      : TURN_RECORD_RECOVERY_STRUCTURAL_EVIDENCE_CODE,
+  });
 }
 
 function openSnapshot(path: string, missingAllowed: boolean): SnapshotFile | null {
@@ -384,6 +391,7 @@ run().catch((error: unknown) => {
   const normalized = error instanceof Error ? error : new Error(String(error));
   const message = {
     type: 'error',
+    code: (normalized as NodeJS.ErrnoException).code,
     name: normalized.name,
     message: normalized.message,
     stack: normalized.stack,

@@ -3,6 +3,9 @@ import type {
   TurnID,
   TurnRecord,
 } from '../../shared/contracts/runtime.js';
+import type {
+  TurnRecordRecoveryEvidenceSkip,
+} from '../../core/agent/background-work/recovery-contract.js';
 
 /**
  * Content-free projection used by deterministic usage aggregation.
@@ -80,6 +83,7 @@ export interface TurnRecordRecoveryScanStats {
 }
 
 export interface TurnRecordRecoveryScanOptions {
+  onEvidenceOwnerSkipped?: (skip: TurnRecordRecoveryEvidenceSkip) => void;
   signal?: AbortSignal;
   stats?: TurnRecordRecoveryScanStats;
 }

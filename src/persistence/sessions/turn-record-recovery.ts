@@ -24,7 +24,7 @@ type RecoveryWorkerMessage =
   | { type: 'sourceSnapshot'; sourceChannelId: string }
   | { type: 'record'; record: TurnRecord }
   | { type: 'complete'; stats: TurnRecordRecoveryScanStats }
-  | { type: 'error'; name: string; message: string; stack?: string };
+  | { type: 'error'; code?: string; name: string; message: string; stack?: string };
 
 function abortError(): Error {
   return new DOMException('TurnRecord recovery snapshot was aborted', 'AbortError');
@@ -32,7 +32,7 @@ function abortError(): Error {
 
 function workerError(message: Extract<RecoveryWorkerMessage, { type: 'error' }>): Error {
   const error = message.name === TURN_RECORD_RECOVERY_EVIDENCE_ERROR_NAME
-    ? new TurnRecordRecoveryEvidenceError(message.message)
+    ? new TurnRecordRecoveryEvidenceError(message.message, { code: message.code })
     : new Error(message.message);
   error.name = message.name;
   if (message.stack) error.stack = message.stack;

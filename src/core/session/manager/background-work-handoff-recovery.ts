@@ -7,6 +7,7 @@ import {
 import {
   BACKGROUND_WORK_HANDOFF_RECOVERY_BATCH_SIZE,
   BackgroundWorkHandoffRetryCapacityError,
+  TURN_RECORD_RECOVERY_STRUCTURAL_EVIDENCE_CODE,
   TurnRecordRecoveryEvidenceError,
   isTurnRecordRecoveryEvidenceError,
 } from '../../agent/background-work/recovery-contract.js';
@@ -192,6 +193,9 @@ function assertContentFreeRecoveryProjection(record: TurnRecord): void {
 function recoveryEvidenceError(message: string, cause?: unknown): Error {
   return new TurnRecordRecoveryEvidenceError(
     message,
-    cause === undefined ? undefined : { cause },
+    {
+      ...(cause === undefined ? {} : { cause }),
+      code: TURN_RECORD_RECOVERY_STRUCTURAL_EVIDENCE_CODE,
+    },
   );
 }

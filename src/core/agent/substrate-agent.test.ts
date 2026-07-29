@@ -4627,7 +4627,8 @@ describe('SubstrateAgent.handleMessage', () => {
       config,
     );
     agent.skillsRuntime = {
-      getPromptXml: vi.fn().mockReturnValue('<skills_index><skill name=\"conversation\" /></skills_index>'),
+      getPromptXml: vi.fn().mockResolvedValue('<skills_index><skill name=\"conversation\" /></skills_index>'),
+      getCachedPromptXml: vi.fn().mockReturnValue('<skills_index><skill name=\"conversation\" /></skills_index>'),
     } as any;
 
     await agent.handleMessage(makeMessage());

@@ -254,6 +254,32 @@ workloads:
     writableMounts:
       - /app/system-data
       - /app/tmp
+    # Fleet Garden readiness exec-probe timing. In the fleet shape the readiness
+    # probe opens a local TCP socket to the Garden admin listener and performs
+    # one mTLS HTTPS transport probe per registered companion, all concurrently.
+    # internalCheckTimeoutMs bounds each of those network checks (it is stamped
+    # into both the socket.setTimeout and the https.get timeout of the rendered
+    # probe script). The kubelet-facing outer probe timeout is DERIVED in
+    # deploy/helm/psfn/templates/workloads.yaml as
+    #   ceil(internalCheckTimeoutMs / 1000) + timeoutHeadroomSeconds
+    # and a template assertion fails the render unless that outer timeout
+    # strictly exceeds the internal budget AND periodSeconds strictly exceeds
+    # the derived outer timeout (so probes cannot overlap). The two budgets are
+    # therefore coupled at render time, not by comment.
+    #
+    # Total failure window with the defaults below (internal 8s -> outer 10s,
+    # period 15s, failureThreshold 3): a genuinely unavailable Garden flips to
+    # Ready=False after ~failureThreshold * periodSeconds = 45s, while a single
+    # slow-but-recovering mTLS check no longer trips the historical 1s kubelet
+    # default that produced >1000 spurious readiness-timeout events. Fail-closed
+    # readiness is preserved: a hung or unreachable listener still exits the
+    # probe non-zero within the outer timeout.
+    readiness:
+      internalCheckTimeoutMs: 8000
+      timeoutHeadroomSeconds: 2
+      periodSeconds: 15
+      failureThreshold: 3
+      initialDelaySeconds: 10
 
 identity:
   seedStarterCard: true

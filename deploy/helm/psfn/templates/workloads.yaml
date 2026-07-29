@@ -652,6 +652,28 @@ spec:
             {{- end }}
           readinessProbe:
             {{- if .Values.fleet.enabled }}
+            {{- /*
+              Couple the fleet Garden readiness exec probe's internal network
+              budget to the kubelet-facing outer timeout at render time so the
+              two can never drift back into the >inner-inside-1s-default
+              mismatch that caused live Ready=False flapping. See
+              deploy/helm/psfn/values.yaml (workloads.garden.readiness).
+            */}}
+            {{- $gardenReadiness := .Values.workloads.garden.readiness -}}
+            {{- $internalMs := $gardenReadiness.internalCheckTimeoutMs | int -}}
+            {{- $headroomSeconds := $gardenReadiness.timeoutHeadroomSeconds | int -}}
+            {{- $periodSeconds := $gardenReadiness.periodSeconds | int -}}
+            {{- $failureThreshold := $gardenReadiness.failureThreshold | int -}}
+            {{- $initialDelaySeconds := $gardenReadiness.initialDelaySeconds | int -}}
+            {{- /* ceil(internalMs / 1000) + headroom */ -}}
+            {{- $innerSeconds := div (add $internalMs 999) 1000 -}}
+            {{- $timeoutSeconds := add $innerSeconds $headroomSeconds -}}
+            {{- if le (mul $timeoutSeconds 1000) $internalMs -}}
+            {{- fail (printf "workloads.garden.readiness: derived outer timeoutSeconds (%d) must strictly exceed internalCheckTimeoutMs (%dms); raise timeoutHeadroomSeconds" $timeoutSeconds $internalMs) -}}
+            {{- end -}}
+            {{- if le $periodSeconds $timeoutSeconds -}}
+            {{- fail (printf "workloads.garden.readiness: periodSeconds (%d) must strictly exceed the derived outer timeoutSeconds (%d) so probes cannot overlap" $periodSeconds $timeoutSeconds) -}}
+            {{- end }}
             exec:
               command:
                 - node
@@ -668,7 +690,7 @@ spec:
                   };
                   const localListener = new Promise((resolve, reject) => {
                     const socket = net.connect(Number(process.env.ADMIN_PORT), '127.0.0.1');
-                    socket.setTimeout(8000);
+                    socket.setTimeout({{ $internalMs }});
                     socket.once('connect', () => {
                       socket.destroy();
                       resolve();
@@ -694,7 +716,7 @@ spec:
                           ? undefined
                           : new Error(`${companionId} certificate lacks ${expected}`);
                       },
-                      timeout: 8000,
+                      timeout: {{ $internalMs }},
                     }, response => {
                       response.resume();
                       if (response.statusCode === 200) resolve();
@@ -706,12 +728,16 @@ spec:
                   Promise.all([localListener, ...targetChecks])
                     .then(() => process.exit(0))
                     .catch(() => process.exit(1));
+            initialDelaySeconds: {{ $initialDelaySeconds }}
+            periodSeconds: {{ $periodSeconds }}
+            timeoutSeconds: {{ $timeoutSeconds }}
+            failureThreshold: {{ $failureThreshold }}
             {{- else }}
             tcpSocket:
               port: {{ ternary "https-garden" "http-garden" .Values.fleetAuth.enabled }}
-            {{- end }}
             initialDelaySeconds: 10
             periodSeconds: 10
+            {{- end }}
           livenessProbe:
             tcpSocket:
               port: {{ ternary "https-garden" "http-garden" .Values.fleetAuth.enabled }}

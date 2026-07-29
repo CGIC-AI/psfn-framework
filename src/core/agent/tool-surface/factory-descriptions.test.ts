@@ -169,4 +169,24 @@ describe('canonical first-party tool factories', () => {
     expect(selfDescription, 'fleet self-description "subagent" leaked into companion-read description')
       .not.toMatch(/subagent/iu);
   });
+
+  it('keeps every companion-rendered description out of fleet register (rqn1.8)', () => {
+    // Charter 6.28/8.12: internal machinery is presented to her as integrated
+    // parts of a breathing machine-intelligence, never fleet-managed "workers"
+    // or self-described "subagents". The rqn1.6 pin above covers only the
+    // subagent entry, which is how the analysis_workbench "bounded worker" leak
+    // survived; this sweeps EVERY entry so any future drift fails here.
+    //
+    // Wire-required schema field names are the sole exemption: "subagent_id" is
+    // a callable parameter, not self-description prose, so it is stripped before
+    // the fleet-term assertions. This exemption must never widen to cover prose.
+    const WIRE_FIELD_NAMES = /subagent_id/g;
+    for (const [name, description] of Object.entries(CANONICAL_TOOL_SURFACE_DESCRIPTIONS)) {
+      const prose = description.replace(WIRE_FIELD_NAMES, '');
+      expect(prose, `fleet term "worker" leaked into companion-read description: ${name}`)
+        .not.toMatch(/\bworkers?\b/iu);
+      expect(prose, `fleet self-description "subagent" leaked into companion-read description: ${name}`)
+        .not.toMatch(/subagent/iu);
+    }
+  });
 });

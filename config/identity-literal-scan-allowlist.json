@@ -728,7 +728,7 @@
     },
     {
       "path": "src/channels/backplane/places-mermaid.ts",
-      "contains": "%% PSFN world map \u2014 sites, places, affordances, and bound satellites.",
+      "contains": "%% PSFN world map — sites, places, affordances, and bound satellites.",
       "reason": "The generated operator-facing Mermaid artifact retains its explicit product title.",
       "pattern": "identity-proper-name"
     },
@@ -2392,6 +2392,36 @@
       "path": "scripts/smoke-docker.mjs",
       "contains": "'psql', '-U', 'psfn', '-d', 'psfn'",
       "reason": "Disposable smoke-stack Postgres uses project-scoped throwaway user/database names; credentials are dev-only and the stack is torn down after the run.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "scripts/onboarding/config-generator.ts",
+      "contains": "psfn-onboard-stage-",
+      "reason": "Onboarding staging mkdtemp prefix; host-local temp path name, never persisted into generated configuration.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "scripts/onboarding/flow.ts",
+      "contains": "PSFN onboarding — configure",
+      "reason": "User-facing installer banner naming the product.",
+      "pattern": "identity-proper-name"
+    },
+    {
+      "path": "scripts/onboarding/flow.ts",
+      "contains": "How do you want to run PSFN?",
+      "reason": "User-facing installer mode prompt naming the product.",
+      "pattern": "identity-proper-name"
+    },
+    {
+      "path": "scripts/onboarding/index.ts",
+      "contains": "PSFN onboarding",
+      "reason": "CLI help header naming the product.",
+      "pattern": "identity-proper-name"
+    },
+    {
+      "path": "scripts/onboarding/modes.ts",
+      "contains": "deploy/helm/psfn",
+      "reason": "Kubernetes-mode help text citing the repository chart path verbatim.",
       "pattern": "identity-legacy-slug"
     }
   ]

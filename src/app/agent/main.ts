@@ -43,6 +43,7 @@ import { deriveConversationScopeEnvelope } from '../../core/session/conversation
 import { registerWeightedThoughtOutreachTask } from '../../core/scheduler/weighted-thought-outreach-lane.js';
 import { createLlmNudgeEvaluator } from '../../core/intention/weighted-thought-nudge-evaluator.js';
 import { recordWeightedThought } from '../../core/intention/weighted-thought-store-port.js';
+import { createWeightedThoughtContradictionDamper } from '../../core/intention/weighted-thought-contradiction.js';
 import { registerSocialDesireOutreachTask } from '../../core/scheduler/social-desire-outreach-lane.js';
 import { createLlmSocialDesireConsentEvaluator } from '../../core/intention/social-desire-consent-evaluator.js';
 import {
@@ -1591,6 +1592,21 @@ async function main(): Promise<void> {
         (await contactStore.getById(contactId))?.timezone ?? null
       ),
     });
+    // ── Charter Law 27 contradiction dampening (g1v99) ──
+    // "Said fine but context suggests otherwise should reduce weight rather than
+    // zero it out." When a care concern resolves while its resolution VAD still
+    // signals non-positive affect with no genuine relief, the surface closure and
+    // the affective signals disagree; the resolving contact's active weighted
+    // thoughts are dampened (reduced, never zeroed) so they defer yet persist.
+    // Subscribes to the same resolution-appraisal event the arc recorder uses.
+    eventBus.on(
+      'intention.concern.resolution_appraisal',
+      createWeightedThoughtContradictionDamper({
+        concernStore: intentionRuntime.concernStore,
+        thoughtStore: persistenceRuntime.weightedThoughtStore,
+        lifecycleConfig: schedulerConfig.weightedThoughtOutreach.lifecycle,
+      }),
+    );
   } else if (schedulerConfig.weightedThoughtOutreach.enabled) {
     log.warn('weightedThoughtOutreach enabled but no weighted-thought store is available; lane not registered');
   }

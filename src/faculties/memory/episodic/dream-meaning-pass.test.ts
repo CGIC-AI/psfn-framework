@@ -281,7 +281,7 @@ describe('DreamMeaningPass', () => {
     expect(openingPrompt).not.toContain('Unrelated chatter');
   });
 
-  it('degrades to metadata-only when the transcript reader throws (bead dtym)', async () => {
+  it('defers an episode whose transcript reader throws rather than authoring ungrounded meaning (bead cxqb5)', async () => {
     const store = makeStore();
     await store.createEpisode(episodeInput('a', '2026-06-09T20:00:00.000Z', '2026-06-09T21:00:00.000Z'));
 
@@ -293,13 +293,89 @@ describe('DreamMeaningPass', () => {
     const handleMessage = vi.fn(async () => ({ content: meaningBlock({ a: 'It mattered.' }) }));
     const pass = new DreamMeaningPass(store, { handleMessage }, { now: () => NOW, transcriptReader });
 
-    // A throwing reader must never fail the whole nightly review.
+    // A throwing reader must never fail the whole nightly review — but it also
+    // must never let her author a first-person meaning about turns she could not
+    // read (charter Law 17). The only episode is deferred, so nothing is stored.
     const result = await pass.run({ sessionId: 'discord:main' });
     expect(result.ran).toBe(true);
-    expect(result.meaningsRecorded).toBe(1);
+    expect(result.deferredEpisodes).toBe(1);
+    expect(result.reviewedEpisodes).toBe(0);
+    expect(result.meaningsRecorded).toBe(0);
+    // She is never even prompted to author from an unread transcript.
+    expect(handleMessage).not.toHaveBeenCalled();
+
+    // No fabricated meaning was written; the episode stays eligible.
+    const episode = await store.getEpisode('a');
+    expect(episode?.meaning).toBeUndefined();
+  });
+
+  it('re-grounds and records a deferred episode on the next pass once the reader recovers (bead cxqb5)', async () => {
+    const store = makeStore();
+    await store.createEpisode(episodeInput('a', '2026-06-09T20:00:00.000Z', '2026-06-09T21:00:00.000Z'));
+
+    const failing = {
+      getRecentMessages: vi.fn(() => {
+        throw new Error('session backend offline');
+      }),
+    };
+    const firstPass = new DreamMeaningPass(store, { handleMessage: vi.fn(async () => ({ content: meaningBlock({ a: 'It mattered.' }) })) }, {
+      now: () => NOW,
+      transcriptReader: failing,
+    });
+    const first = await firstPass.run({ sessionId: 'discord:main' });
+    expect(first.deferredEpisodes).toBe(1);
+    expect(first.meaningsRecorded).toBe(0);
+    expect((await store.getEpisode('a'))?.meaning).toBeUndefined();
+
+    // Next nightly pass (past cadence), the reader is healthy and returns the
+    // real in-window turns: the previously-deferred episode is now grounded and
+    // recorded — deferral was a retry, not a permanent skip.
+    const recovered = {
+      getRecentMessages: vi.fn(() => [
+        {
+          role: 'user',
+          content: 'I finally got the telescope aligned on Saturn tonight.',
+          timestamp: Date.parse('2026-06-09T20:30:00.000Z'),
+        },
+      ]),
+    };
+    const nextPass = new DreamMeaningPass(store, { handleMessage: vi.fn(async () => ({ content: meaningBlock({ a: 'Saturn through the telescope stayed with me.' }) })) }, {
+      now: () => new Date('2026-06-11T07:30:00.000Z'),
+      transcriptReader: recovered,
+    });
+    const second = await nextPass.run({ sessionId: 'discord:main' });
+    expect(second.deferredEpisodes).toBe(0);
+    expect(second.meaningsRecorded).toBe(1);
+    expect((await store.getEpisode('a'))?.meaning?.text).toContain('Saturn');
+  });
+
+  it('marks a reader-returned-empty episode ungrounded and instructs a decline, without deferring it (bead cxqb5)', async () => {
+    const store = makeStore();
+    await store.createEpisode(episodeInput('a', '2026-06-09T20:00:00.000Z', '2026-06-09T21:00:00.000Z'));
+
+    // Reader succeeds but holds no turn inside the episode window: the material
+    // genuinely is not there (not a transient failure), so the episode stays
+    // reviewable but the prompt marks it ungrounded and asks her to decline.
+    const transcriptReader = {
+      getRecentMessages: vi.fn(() => [
+        {
+          role: 'user',
+          content: 'Unrelated chatter hours after the episode ended.',
+          timestamp: Date.parse('2026-06-10T06:00:00.000Z'),
+        },
+      ]),
+    };
+    const handleMessage = vi.fn(async () => ({ content: meaningBlock({}) }));
+    const pass = new DreamMeaningPass(store, { handleMessage }, { now: () => NOW, transcriptReader });
+
+    const result = await pass.run({ sessionId: 'discord:main' });
+    expect(result.deferredEpisodes).toBe(0);
+    expect(result.reviewedEpisodes).toBe(1);
 
     const openingPrompt = (handleMessage.mock.calls[0][0] as { content: string }).content;
     expect(openingPrompt).not.toContain('what was actually said');
+    expect(openingPrompt).toContain('could NOT be grounded');
+    expect(openingPrompt).toContain('inventing a memory you never re-read');
   });
 
   it('reviews metadata-only when no transcript reader is wired', async () => {

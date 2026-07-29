@@ -738,6 +738,7 @@ describe('turn-records', () => {
     const scenarios = [
       {
         name: 'missing',
+        expectedCode: 'ENOENT',
         arrange: (activePath: string) => {
           const sealedPath = sealedSegmentPathFor(activePath, 1);
           writeFileSync(sealedPath, readFileSync(activePath));
@@ -746,6 +747,7 @@ describe('turn-records', () => {
       },
       {
         name: 'gap',
+        expectedCode: 'ESTRUCTURAL',
         arrange: (activePath: string) => {
           writeFileSync(sealedSegmentPathFor(activePath, 2), readFileSync(activePath));
           return () => undefined;
@@ -753,6 +755,7 @@ describe('turn-records', () => {
       },
       {
         name: 'identity',
+        expectedCode: 'ESTRUCTURAL',
         arrange: (activePath: string) => {
           linkSync(activePath, sealedSegmentPathFor(activePath, 1));
           linkSync(activePath, sealedSegmentPathFor(activePath, 2));
@@ -776,7 +779,10 @@ describe('turn-records', () => {
         for await (const _candidate of store.streamTurnRecordsForRecovery!([record.channelId])) {
           // Ambiguous physical evidence must fail the complete snapshot.
         }
-      })()).rejects.toMatchObject({ name: 'TurnRecordRecoveryEvidenceError' });
+      })()).rejects.toMatchObject({
+        name: 'TurnRecordRecoveryEvidenceError',
+        code: scenario.expectedCode,
+      });
     }
   });
 
@@ -939,6 +945,7 @@ describe('turn-records', () => {
       }
     })()).rejects.toMatchObject({
       name: 'TurnRecordRecoveryEvidenceError',
+      code: 'ESTRUCTURAL',
       message: expect.stringContaining('payload_fingerprint'),
     });
 
@@ -958,7 +965,10 @@ describe('turn-records', () => {
       )) {
         // The complete physical snapshot must validate before the first yield.
       }
-    })()).rejects.toMatchObject({ name: 'TurnRecordRecoveryEvidenceError' });
+    })()).rejects.toMatchObject({
+      name: 'TurnRecordRecoveryEvidenceError',
+      code: 'ESTRUCTURAL',
+    });
 
     const cappedDir = mkdtempSync(join(tmpdir(), 'psfn-turn-records-recovery-row-cap-'));
     const cappedStore = createFilesystemTurnRecordStorePort(cappedDir, {
@@ -981,6 +991,7 @@ describe('turn-records', () => {
       }
     })()).rejects.toMatchObject({
       name: 'TurnRecordRecoveryEvidenceError',
+      code: 'ESTRUCTURAL',
       message: expect.stringContaining('exceeds 1024 bytes'),
     });
   });

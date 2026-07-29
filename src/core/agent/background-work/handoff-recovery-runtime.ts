@@ -6,13 +6,18 @@ import {
 import {
   BACKGROUND_WORK_HANDOFF_RECOVERY_BATCH_SIZE,
   BackgroundWorkHandoffRetryCapacityError,
+  TURN_RECORD_RECOVERY_STRUCTURAL_EVIDENCE_CODE,
   TurnRecordRecoveryEvidenceError,
   isTurnRecordRecoveryEvidenceError,
+  type TurnRecordRecoveryEvidenceSkip,
 } from './recovery-contract.js';
 import { recoverHistoricalBackgroundWorkHandoffs } from './tick-runtime.js';
 
 export interface BackgroundWorkHandoffRecoverySessionPort {
-  streamRecoverableBackgroundWorkTurnRecords(signal?: AbortSignal): AsyncIterable<TurnRecord>;
+  streamRecoverableBackgroundWorkTurnRecords(
+    signal?: AbortSignal,
+    onEvidenceOwnerSkipped?: (skip: TurnRecordRecoveryEvidenceSkip) => void,
+  ): AsyncIterable<TurnRecord>;
   deferWorkerValidatedBackgroundWorkHandoffRecovery(record: TurnRecord): void;
   recoverPendingBackgroundWorkHandoffs(
     limit: number,
@@ -51,9 +56,6 @@ export class BackgroundWorkHandoffRecoveryRuntime {
         .catch((error: unknown) => {
           if (error instanceof BackgroundWorkHandoffRetryCapacityError) {
             this.capacityBlocked = true;
-          }
-          if (isTurnRecordRecoveryEvidenceError(error)) {
-            this.evidenceBlocked = true;
           }
           throw error;
         })
@@ -94,9 +96,19 @@ export class BackgroundWorkHandoffRecoveryRuntime {
       this.capacityBlocked = false;
       return;
     }
-    if (!this.historicalSnapshotRecovered && !this.evidenceBlocked) {
-      const enumerationState = { complete: false };
-      const records = this.sessions.streamRecoverableBackgroundWorkTurnRecords(signal);
+    if (this.evidenceBlocked) {
+      await recoverPending();
+      // Structural stream poison gets one quiet tick before a later full
+      // enumeration can prove the source clean and reset the latch.
+      this.evidenceBlocked = false;
+      return;
+    }
+    if (!this.historicalSnapshotRecovered) {
+      const enumerationState = { complete: false, evidenceOwnerSkipped: false };
+      const records = this.sessions.streamRecoverableBackgroundWorkTurnRecords(
+        signal,
+        () => { enumerationState.evidenceOwnerSkipped = true; },
+      );
       const completionTrackedRecords = (async function* () {
         for await (const record of records) yield record;
         enumerationState.complete = true;
@@ -110,10 +122,18 @@ export class BackgroundWorkHandoffRecoveryRuntime {
           },
           record => this.sessions.deferWorkerValidatedBackgroundWorkHandoffRecovery(record),
         );
+      } catch (error) {
+        if (isDeterministicRecoveryEvidenceError(error)) {
+          this.evidenceBlocked = true;
+        }
+        throw error;
       } finally {
         // A complete snapshot need not be enumerated again. Capacity and stream
         // failures leave this false so the explicit latches govern one rescan.
-        if (enumerationState.complete) this.historicalSnapshotRecovered = true;
+        if (enumerationState.complete && !enumerationState.evidenceOwnerSkipped) {
+          this.historicalSnapshotRecovered = true;
+          this.evidenceBlocked = false;
+        }
       }
     }
     await recoverPending();
@@ -124,9 +144,19 @@ function workerValidatedRecoveryJobs(record: TurnRecord): EnqueueBackgroundWorkI
   if (record.status !== 'completed' || !record.backgroundWorkHandoff) {
     throw new TurnRecordRecoveryEvidenceError(
       'Recovery worker returned a record without a completed handoff',
+      { code: TURN_RECORD_RECOVERY_STRUCTURAL_EVIDENCE_CODE },
     );
   }
   // The recovery worker validates identity, payload, payload fingerprint, and
   // source-turn fingerprint before it removes old-fat content for IPC.
   return record.backgroundWorkHandoff.jobs as EnqueueBackgroundWorkInput[];
+}
+
+function isDeterministicRecoveryEvidenceError(error: unknown): boolean {
+  if (error instanceof AggregateError) {
+    return error.errors.some(candidate => isDeterministicRecoveryEvidenceError(candidate));
+  }
+  if (!isTurnRecordRecoveryEvidenceError(error)) return false;
+  const code = (error as NodeJS.ErrnoException).code;
+  return code === TURN_RECORD_RECOVERY_STRUCTURAL_EVIDENCE_CODE;
 }

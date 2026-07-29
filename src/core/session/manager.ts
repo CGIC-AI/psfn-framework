@@ -17,6 +17,9 @@ import {
   type CrossChannelContinuityPort,
 } from './cross-channel-continuity-port.js';
 import type { TranscriptSearchPort } from '../../persistence/sessions/transcript-search-port.js';
+import type {
+  TurnRecordRecoveryEvidenceSkip,
+} from '../agent/background-work/recovery-contract.js';
 import type { UserContinuityStore } from './continuity.js';
 import type { SessionEntry, SessionEntryRole } from './types.js';
 import { detectInternalOriginForUserAttribution } from './entry-attribution.js';
@@ -1436,7 +1439,10 @@ export class SessionManager implements SessionManagerTypeSurface {
    * eligibility is checked here so tombstoned or physically duplicated turns
    * never reach the queue replay path.
    */
-  streamRecoverableBackgroundWorkTurnRecords(signal?: AbortSignal): AsyncIterable<TurnRecord> {
+  streamRecoverableBackgroundWorkTurnRecords(
+    signal?: AbortSignal,
+    onEvidenceOwnerSkipped?: (skip: TurnRecordRecoveryEvidenceSkip) => void,
+  ): AsyncIterable<TurnRecord> {
     const sourceChannelIds = new Set<string>();
     for (const channel of this.store.listChannels()) {
       sourceChannelIds.add(channel.channelId);
@@ -1444,7 +1450,7 @@ export class SessionManager implements SessionManagerTypeSurface {
     }
     return this.store.streamRecoverableBackgroundWorkTurnRecords(
       [...sourceChannelIds],
-      { signal },
+      { onEvidenceOwnerSkipped, signal },
     );
   }
 

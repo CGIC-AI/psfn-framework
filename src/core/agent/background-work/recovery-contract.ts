@@ -1,5 +1,15 @@
 export const BACKGROUND_WORK_HANDOFF_RECOVERY_BATCH_SIZE = 32;
 export const TURN_RECORD_RECOVERY_EVIDENCE_ERROR_NAME = 'TurnRecordRecoveryEvidenceError';
+export const TURN_RECORD_RECOVERY_STRUCTURAL_EVIDENCE_CODE = 'ESTRUCTURAL';
+
+export interface TurnRecordRecoveryEvidenceSkip {
+  errno: string;
+  ownerSessionId: string;
+}
+
+export interface TurnRecordRecoveryEvidenceErrorOptions extends ErrorOptions {
+  code?: string;
+}
 
 export class BackgroundWorkHandoffRetryCapacityError extends Error {
   readonly capacity: number;
@@ -16,9 +26,12 @@ export class BackgroundWorkHandoffRetryCapacityError extends Error {
 }
 
 export class TurnRecordRecoveryEvidenceError extends Error {
-  constructor(message: string, options?: ErrorOptions) {
+  readonly code?: string;
+
+  constructor(message: string, options?: TurnRecordRecoveryEvidenceErrorOptions) {
     super(message, options);
     this.name = TURN_RECORD_RECOVERY_EVIDENCE_ERROR_NAME;
+    if (options?.code) this.code = options.code;
   }
 }
 

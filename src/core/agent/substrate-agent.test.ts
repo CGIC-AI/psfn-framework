@@ -58,7 +58,10 @@ import { lifecycleKubernetesSettingsFixture } from '../../test-support/lifecycle
 import { makeContextManifestFixture } from '../../test-support/context-manifest.js';
 import { buildCompletionNotice } from './completion-notices.js';
 import { buildCompletionHandoff } from './completion-handoff.js';
-import { TurnRecordRecoveryEvidenceError } from './background-work/recovery-contract.js';
+import {
+  TURN_RECORD_RECOVERY_STRUCTURAL_EVIDENCE_CODE,
+  TurnRecordRecoveryEvidenceError,
+} from './background-work/recovery-contract.js';
 
 class SubstrateAgent extends RuntimeSubstrateAgent {
   constructor(...args: ConstructorParameters<typeof RuntimeSubstrateAgent>) {
@@ -752,9 +755,10 @@ describe('SubstrateAgent construction', () => {
     expect(agent.contactStore).toBeNull();
   });
 
-  it('does not retry or defer deterministic recovery evidence poison', async () => {
+  it('backs off before retrying deterministic recovery evidence poison', async () => {
     const evidenceError = new TurnRecordRecoveryEvidenceError(
       'invalid historical handoff fingerprint',
+      { code: TURN_RECORD_RECOVERY_STRUCTURAL_EVIDENCE_CODE },
     );
     const sessionManager = makeMockSessionManager();
     const recoveryStream = vi.fn(() => (async function* () {

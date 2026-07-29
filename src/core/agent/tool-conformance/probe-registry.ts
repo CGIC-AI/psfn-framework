@@ -341,6 +341,11 @@ export const TOOL_CONFORMANCE_ACTION_REGISTRY:
     stats: SCHEMA_ASSERT,
     create: SCHEMA_ASSERT,
     update: SCHEMA_ASSERT,
+    // 9xe2n governance surface: history reads a named skill's journal (args
+    // not safely assumable), rollback is destructive — schema-only, like the
+    // other write actions.
+    history: SCHEMA_ASSERT,
+    rollback: SCHEMA_ASSERT,
   },
   wiki: {
     list: safeRead({ action: 'list' }),

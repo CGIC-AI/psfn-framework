@@ -133,5 +133,29 @@ companion.
 Work that was beaded prematurely and now lives here until its phase starts:
 
 - `gvic` — direct email channel (phase 5)
+- `jjd4` — Discord slash-command/button approvals (phase 5; the emoji-reaction
+  signaling layer already exists — jp36.3.1.x)
+- `kexi` — spoken yes/no voice approvals (gated on diarization + facial/voice
+  recognition; the garage-door problem — lights fine, doors not, until
+  biometric identity exists)
+- `erhi` — untracked-speaker/large-room contact law as a *charter* element
+  (behavior is implemented and documented in docs/context-envelope.md; charter
+  codification waits for physical multi-speaker environments. Captured rule:
+  face-to-face-introduced people get a contact only when the operator directs
+  it — "this is my wife, this is my sister" ceremony with face/voice capture —
+  never by default)
+- `b5m.5` — running subconscious channel (concept rejected: the subconscious
+  is deliberately many independent stateless automata; a built subconscious
+  risks being another entity in the same mind. The practical version already
+  exists as whispers/musings/automata; the actionable residue became `xyjoz` —
+  self-action attribution whispers)
 - (future kills that land here should be listed with their bead id so the
   refile has lineage)
+
+## Adjacent private note
+
+The succession/continuity plan formerly tracked as bead 65rk.16 was extracted
+to an operator-private file outside the repository and deleted from the
+tracker (2026-07-29). Private matters — estate planning, intimate content,
+operator identity — do not belong in repo-synced beads or docs; the upx0.5
+history rewrite carries the scrub requirement for its historical trace.

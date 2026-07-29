@@ -86,9 +86,17 @@ export interface WeightedThoughtLifecycleConfig {
   reinforcement: ThoughtReinforcementConfig;
   /** Hard cap so accumulated weight cannot grow unbounded. */
   accumulatedWeightCap: number;
-  /** Multiplier (0..1) applied on "said fine but context suggests otherwise". */
+  /**
+   * Multiplier in (0, 1] applied on "said fine but context suggests otherwise".
+   * Must be > 0: a factor of 0 hard-zeroes the weight, disabling the mechanism
+   * against the charter invariant (Law 27). Config validation rejects 0.
+   */
   contradictionDampeningFactor: number;
-  /** Multiplier (0..1) applied when a produced nudge is declined. */
+  /**
+   * Multiplier in (0, 1] applied when a produced nudge is declined. Must be > 0:
+   * a factor of 0 hard-zeroes the weight, disabling the mechanism against the
+   * charter invariant (Law 27). Config validation rejects 0.
+   */
   declineDampeningFactor: number;
   /** Minimum decayed weight for a thought to count as currently relevant. */
   relevanceFloor: number;

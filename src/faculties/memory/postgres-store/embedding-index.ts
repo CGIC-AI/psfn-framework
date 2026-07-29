@@ -17,7 +17,11 @@ const log = createComponentLogger('L2EmbeddingAnnIndex');
  * and every ANN query orders by the identical cast expression so the planner
  * uses the index. The partial predicate admits only vectors matching the active
  * runtime dimension, so an operator can re-embed a corpus incrementally without
- * one stale vector breaking the new index or every semantic query.
+ * one stale vector breaking the new index or every semantic query. A rebuild
+ * reclaims a same-name index whose stored predicate predates this partial
+ * clause (see the predicate-drift reclamation in
+ * {@link buildL2EmbeddingAnnIndexConcurrently}), so upgraded deployments adopt
+ * the dimension isolation rather than silently keeping the weaker index.
  */
 /**
  * Base (dimension-agnostic) name shared by every generation of the L2 embedding
@@ -143,6 +147,7 @@ export interface L2EmbeddingAnnIndexBuildOutcome {
 interface L2EmbeddingAnnSiblingIndex {
   indexName: string;
   isValid: boolean;
+  hasDimensionPredicate: boolean;
 }
 
 /**
@@ -154,8 +159,9 @@ interface L2EmbeddingAnnSiblingIndex {
 async function findL2EmbeddingAnnSiblingIndexes(
   client: PoolClient,
 ): Promise<L2EmbeddingAnnSiblingIndex[]> {
-  const result = await client.query<{ index_name: string; is_valid: boolean }>(
-    `SELECT c.relname AS index_name, i.indisvalid AS is_valid
+  const result = await client.query<{ index_name: string; is_valid: boolean; index_def: string }>(
+    `SELECT c.relname AS index_name, i.indisvalid AS is_valid,
+            pg_get_indexdef(i.indexrelid) AS index_def
        FROM pg_index i
        JOIN pg_class c ON c.oid = i.indexrelid
        JOIN pg_class t ON t.oid = i.indrelid
@@ -169,7 +175,17 @@ async function findL2EmbeddingAnnSiblingIndexes(
     // Fail closed against anything that does not match the exact family shape,
     // so a name read from the catalogue can never smuggle SQL into DROP INDEX.
     .filter(row => L2_EMBEDDING_ANN_INDEX_NAME_PATTERN.test(row.index_name))
-    .map(row => ({ indexName: row.index_name, isValid: row.is_valid === true }));
+    .map(row => ({
+      indexName: row.index_name,
+      isValid: row.is_valid === true,
+      // A current-name index built before the partial-predicate change carries
+      // the weaker `WHERE embedding IS NOT NULL` def and lacks `vector_dims`. It
+      // is still valid but no longer matches the dimension-isolating build, so
+      // an upgraded deployment would otherwise keep it forever under the
+      // name-keyed IF NOT EXISTS. Flag that drift so it is reclaimed like any
+      // other stale sibling.
+      hasDimensionPredicate: /vector_dims/i.test(row.index_def),
+    }));
 }
 
 /**
@@ -209,17 +225,26 @@ export async function buildL2EmbeddingAnnIndexConcurrently(
     client = await pool.connect();
     const siblings = await findL2EmbeddingAnnSiblingIndexes(client);
     for (const sibling of siblings) {
-      const isCurrentValid = sibling.indexName === indexName && sibling.isValid;
-      if (isCurrentValid) continue;
-      // Drop: a different-dimension sibling, the legacy un-suffixed index, or an
-      // INVALID current-name index from a previously interrupted build.
+      const isCurrentUsable = sibling.indexName === indexName
+        && sibling.isValid
+        && sibling.hasDimensionPredicate;
+      if (isCurrentUsable) continue;
+      // Drop: a different-dimension sibling, the legacy un-suffixed index, an
+      // INVALID current-name index from a previously interrupted build, or a
+      // valid current-name index built before the partial dimension predicate
+      // (name-keyed IF NOT EXISTS would otherwise keep the drifted def forever).
+      const reason = sibling.indexName !== indexName
+        ? 'stale_dimension'
+        : !sibling.isValid
+          ? 'invalid_current'
+          : 'predicate_drift';
       log.warn(
-        'Dropping stale or invalid L2 embedding ANN index before rebuild',
+        'Dropping stale, invalid, or predicate-drifted L2 embedding ANN index before rebuild',
         {
           droppedIndex: sibling.indexName,
           currentIndex: indexName,
           embeddingDims: dims,
-          reason: sibling.indexName === indexName ? 'invalid_current' : 'stale_dimension',
+          reason,
           wasValid: sibling.isValid,
         },
       );

@@ -184,33 +184,86 @@ function normalizeShardMemorySensitivity(value: unknown): SensitivityLevel | und
   return VALID_SENSITIVITY_LEVELS.includes(normalized) ? normalized : undefined;
 }
 
-export function isEmotionalOrRelationalShardMemory(memoryType: string | undefined, tags: readonly string[]): boolean {
-  if (memoryType?.trim().toLowerCase() === 'emotional') {
+/**
+ * Canonical memory types where core stays authoritative and a shard-derived
+ * interpretation must carry the heightened-review provenance tag (charter 6.13).
+ * `relational` and `boundary` are first-class MemoryTypes (memory-retrieval-
+ * policy), not only `emotional` — omitting them let a boundary/consent
+ * interpretation reach the fold-review queue as an ordinary staged memory
+ * (bead 6arrc). Kept in sync with the subagent governance classifier by being
+ * its single source of truth (memory-governance reuses this module).
+ */
+const RESTRICTED_SHARD_MEMORY_TYPES: ReadonlySet<string> = new Set([
+  'emotional',
+  'relational',
+  'boundary',
+]);
+/** Tag substrings marking a relational/contact interpretation. */
+const RELATIONAL_TAG_HINTS: readonly string[] = [
+  'relationship',
+  'relational',
+  'contact',
+  'partner',
+  'family',
+  'friend',
+];
+/** Tag substrings marking a boundary/consent interpretation. */
+const BOUNDARY_TAG_HINTS: readonly string[] = ['boundary', 'consent'];
+/**
+ * Free-text hints for restricted lived-history content (childhood, upbringing,
+ * trauma, grief). Mirrors the subagent governance content hints so both queues
+ * flag the same material.
+ */
+export const RESTRICTED_SHARD_CONTENT_HINTS: readonly RegExp[] = [
+  /\bchildhood\b/iu,
+  /\bupbringing\b/iu,
+  /\b(?:grew|growing)\s+up\b/iu,
+  /\b(?:as|when)\s+(?:i|you|they|he|she|the\s+operator|the\s+partner)\s+(?:was|were)\s+(?:an?\s+)?(?:child|kid|teenager)\b/iu,
+  /\b(?:trauma|traumatic|abuse|grief|grieving|bereavement|heartbreak)\b/iu,
+];
+
+/**
+ * Single authoritative classifier for shard-derived interpretations that must
+ * stay core-authoritative (charter 6.13). Flags the restricted memory TYPES
+ * ({emotional, relational, boundary}), relational and boundary/consent TAG
+ * hints, and restricted lived-history CONTENT hints. Both the shard fold-back
+ * provenance path and the subagent governance path consume this, so the
+ * fold-review queue never receives an asymmetric under-scrutinized boundary or
+ * relational interpretation (bead 6arrc).
+ */
+export function isEmotionalOrRelationalShardMemory(
+  memoryType: string | undefined,
+  tags: readonly string[],
+  text = '',
+): boolean {
+  const normalizedType = memoryType?.trim().toLowerCase();
+  if (normalizedType && RESTRICTED_SHARD_MEMORY_TYPES.has(normalizedType)) {
     return true;
   }
-  return tags.some(tag => (
-    tag.includes('relationship')
-    || tag.includes('relational')
-    || tag.includes('contact')
-    || tag.includes('partner')
-    || tag.includes('family')
-    || tag.includes('friend')
-  ));
+  if (tags.some(tag => RELATIONAL_TAG_HINTS.some(hint => tag.includes(hint)))) {
+    return true;
+  }
+  if (tags.some(tag => BOUNDARY_TAG_HINTS.some(hint => tag.includes(hint)))) {
+    return true;
+  }
+  return RESTRICTED_SHARD_CONTENT_HINTS.some(pattern => pattern.test(text));
 }
 
 export function buildShardMemoryOutputProvenanceTags(
   memoryType: unknown,
   rawTags: unknown,
   sensitivity: unknown,
+  text: unknown = '',
 ): string[] {
   const tags = parseShardMemoryTags(rawTags);
   const normalizedType = typeof memoryType === 'string' ? memoryType.trim().toLowerCase() : '';
   const normalizedSensitivity = typeof sensitivity === 'string' ? sensitivity.trim().toLowerCase() : '';
+  const memoryText = typeof text === 'string' ? text : '';
   return [
     ...(normalizedType ? [`memory_type:${normalizedType}`] : []),
     ...(normalizedSensitivity ? [`sensitivity:${normalizedSensitivity}`] : []),
     ...tags.map(tag => `memory_tag:${tag}`),
-    ...(isEmotionalOrRelationalShardMemory(normalizedType || undefined, tags)
+    ...(isEmotionalOrRelationalShardMemory(normalizedType || undefined, tags, memoryText)
       ? ['interpretive:emotional_or_relational']
       : []),
   ];
@@ -249,6 +302,7 @@ export function resolveStagedShardMemoryOutputs(
       memoryType,
       candidateTags,
       sensitivity,
+      text,
     );
     const provenance = createShardTaggedOutputProvenance(shard, source, {
       sourceToolName: toolName,
@@ -310,6 +364,7 @@ export function resolveStagedShardMemoryOutputs(
         memoryType,
         candidateTags,
         sensitivity,
+        text,
       );
       const provenance = createShardTaggedOutputProvenance(shard, 'memory_import_batch', {
         sourceToolName: toolName,

@@ -14,6 +14,16 @@ import {
   SLEEPTIME_MEMORY_ACTION_KIND,
   type SleeptimeMemoryAgentOptions,
 } from './sleeptime-agent.js';
+import { collectDisclosureMemorySources } from './retrieval/active-context-refresh.js';
+import type { ScoredMemory } from './retrieval/types.js';
+import type { PurrMemory, MemoryProvenance } from './types.js';
+import {
+  resetRuntimeChannelClassificationEpochs,
+  setRuntimeChannelClassificationEpochs,
+} from '../../system/trust/runtime-classification-epochs.js';
+import { DEMOTION_EPOCH_NOTICE_VERSION } from '../../system/trust/context-envelope.js';
+import { destinationEpochEligible } from '../../core/cogsec/disclosure/decision.js';
+import type { DisclosureDestinationConstraint } from '../../core/cogsec/disclosure/contracts.js';
 
 /** start == end means the window covers the whole day. */
 function alwaysOpenRestWindow(): EpisodicProcessingRestWindowConfig {
@@ -76,6 +86,32 @@ function makeSleeptimeAction(overrides: Partial<InferredPostTurnAction> = {}): I
 
 function makeReviewAgent(content: string) {
   return { handleMessage: vi.fn(async () => ({ content })) };
+}
+
+/**
+ * Wrap a captured producer provenance in a synthetic retrieved memory so the real
+ * disclosure collector resolves its source-channel epoch (ca980). `extractedAt`
+ * is deliberately set post-demotion to mirror deferred extraction; the collector
+ * must ignore it and anchor to `provenance.sourceConversationAt`.
+ */
+function synthMemory(provenance: MemoryProvenance, extractedAt: number): ScoredMemory {
+  const memory: PurrMemory = {
+    id: 'mem-synth',
+    text: 'synthetic',
+    type: 'semantic',
+    importance: 0.6,
+    confidence: 0.8,
+    emotionalValence: 0,
+    salience: 0.6,
+    sourceRef: 'source:test',
+    extractedAt,
+    lastAccessed: extractedAt,
+    accessCount: 0,
+    tags: [],
+    sensitivity: 'public',
+    provenance,
+  };
+  return { memory } as unknown as ScoredMemory;
 }
 
 function makeEpisodeReader(episodes: unknown[] = []) {
@@ -378,6 +414,103 @@ describe('SleeptimeMemoryAgent', () => {
         }),
       );
     } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  // psfn-framework-ca980 — a fresh sleeptime memory must carry the CONVERSATION
+  // instant (latest reviewed source-entry), not the deferred sleeptime run clock,
+  // so a room demoted AFTER the reviewed conversation denies the auto-share.
+  it('stamps the latest reviewed source-entry instant as the disclosure conversation time (ca980)', async () => {
+    const CHANNEL = 'terminal:test';
+    const DEMOTION_1 = Date.parse('2026-02-01T00:00:00.000Z');
+    const DEMOTION_2 = Date.parse('2026-04-01T00:00:00.000Z');
+    // The reviewed conversation ended BETWEEN the two demotions → epoch 1.
+    const CONVERSATION_AT = DEMOTION_1 + 60_000;
+
+    const tempDir = mkdtempSync(join(tmpdir(), 'sleeptime-ca980-'));
+    try {
+      const coreMemoryStore = new CoreMemoryStore(join(tempDir, 'core-memory.json'));
+      const reviewAgent = makeReviewAgent(JSON.stringify({
+        orient: {
+          persona: 'Warm, direct, and practical conversational style.',
+          human: 'Primary user prefers concise answers.',
+          goals: 'Track unresolved commitments.',
+        },
+        memory_writes: [{
+          text: 'User prefers concise replies during coding sessions.',
+          type: 'semantic',
+          importance: 0.82,
+          confidence: 0.9,
+          emotionalValence: 0.2,
+          tags: ['preferences', 'coding'],
+          sensitivity: 'public',
+        }],
+      }));
+      const sessionManager = {
+        resolveSessionChannelId: vi.fn((channelId: string) => channelId),
+        getRecentMessages: vi.fn().mockReturnValue([
+          { id: 1, channelId: CHANNEL, role: 'user', content: 'Please keep answers concise while we debug.', timestamp: CONVERSATION_AT - 120_000 },
+          { id: 2, channelId: CHANNEL, role: 'assistant', content: 'Understood, I will prioritize concise replies.', timestamp: CONVERSATION_AT - 60_000 },
+          { id: 3, channelId: CHANNEL, role: 'user', content: 'Great — concise replies during coding sessions please.', timestamp: CONVERSATION_AT },
+        ]),
+      };
+      const memoryWriter = { write: vi.fn().mockResolvedValue({ action: 'created' }) };
+      const agent = new SleeptimeMemoryAgent(makeAgentOptions({
+        agent: reviewAgent,
+        sessionManager,
+        coreMemoryStore,
+        memoryWriter,
+        orientationRewriteGate: { minNewEntriesSinceRewrite: 1, refreshAfterQuietDays: 1 },
+      }));
+
+      await agent.execute(makeSleeptimeAction({ payload: { sessionId: CHANNEL }, sourceMessageId: 'msg-1' }));
+
+      expect(memoryWriter.write).toHaveBeenCalledTimes(1);
+      const provenance = memoryWriter.write.mock.calls[0][0].provenance as MemoryProvenance;
+      // Stamped from the latest reviewed source-entry, NOT the run clock (now()).
+      expect(provenance.sourceConversationAt).toBe(CONVERSATION_AT);
+      expect(provenance.channelId).toBe(CHANNEL);
+
+      // End-to-end epoch gate: the room saw a SECOND widening after the reviewed
+      // conversation. The disclosure collector resolves the between-demotions epoch
+      // (1) and the now-epoch-2 room denies the auto-share of pre-widening content.
+      const demotion = (at: number) => ({
+        channelId: CHANNEL,
+        from: 'invite_only' as const,
+        to: 'public' as const,
+        at: new Date(at).toISOString(),
+        acceptedBy: 'operator:test',
+        noticeVersion: DEMOTION_EPOCH_NOTICE_VERSION,
+      });
+      setRuntimeChannelClassificationEpochs([demotion(DEMOTION_1), demotion(DEMOTION_2)]);
+
+      const sources = collectDisclosureMemorySources({
+        selectedForPrompt: [synthMemory(provenance, DEMOTION_2 + 60_000)],
+        emotionalContinuityMemories: [],
+      });
+      expect(sources[0].sourceChannelEpoch).toBe(1);
+      const room2: DisclosureDestinationConstraint = {
+        kind: 'public_room', channelIds: [CHANNEL], channelEpochs: { [CHANNEL]: 1 },
+      };
+      expect(destinationEpochEligible([room2], { kind: 'public_room', channelId: CHANNEL, currentEpoch: 2 })).toBe(false);
+
+      // Control: a memory whose conversation content POST-DATES the second widening
+      // resolves epoch 2 and shares correctly into the epoch-2 room.
+      const postWiden = collectDisclosureMemorySources({
+        selectedForPrompt: [synthMemory(
+          { channelId: CHANNEL, sourceConversationAt: DEMOTION_2 + 60_000 },
+          DEMOTION_2 + 120_000,
+        )],
+        emotionalContinuityMemories: [],
+      });
+      expect(postWiden[0].sourceChannelEpoch).toBe(2);
+      const room2Current: DisclosureDestinationConstraint = {
+        kind: 'public_room', channelIds: [CHANNEL], channelEpochs: { [CHANNEL]: 2 },
+      };
+      expect(destinationEpochEligible([room2Current], { kind: 'public_room', channelId: CHANNEL, currentEpoch: 2 })).toBe(true);
+    } finally {
+      resetRuntimeChannelClassificationEpochs();
       rmSync(tempDir, { recursive: true, force: true });
     }
   });

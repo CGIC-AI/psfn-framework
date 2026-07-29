@@ -20,6 +20,7 @@ import type { InferredPostTurnAction, PostTurnActionCandidate, SubstrateMessage 
 import { createComponentLogger } from '../../shared/logger.js';
 import type { SessionEntry } from '../../core/session/types.js';
 import type { SessionManager } from '../../core/session/manager.js';
+import { latestSourceEntryTimestamp } from './extraction/speaker-routing.js';
 import { isTestingSessionId } from '../../core/session/session-id.js';
 import {
   DEFAULT_ORIENTATION_REWRITE_GATE,
@@ -500,6 +501,16 @@ function buildSleepTimeMemoryWritePayload(input: {
   actionId: string;
   sourceMessageId?: string;
   evidenceCount: number;
+  /**
+   * Latest instant (epoch ms) of the reviewed source transcript — the memory's
+   * conversation-time bound. Derived from the reviewed session entries (the same
+   * bound the extractor stamps), NOT from the sleeptime run's clock: sleeptime
+   * runs deferred (next rest window, possibly after a restart), so `now()` would
+   * post-date the conversation and could resolve a since-widened epoch, wrongly
+   * auto-sharing pre-demotion content (psfn-framework-ca980 / qgqw.2). Absent ⇒
+   * omitted, so the disclosure collector fails closed rather than coercing.
+   */
+  sourceConversationAt?: number;
 }): MemoryWriteOptions {
   const sourceRef = `source:sleeptime|session:${input.sessionId}|message:${input.sourceMessageId ?? 'unknown'}`;
   const repeatedFact = input.evidenceCount >= 2 && input.memory.confidence >= 0.72 && input.memory.importance >= 0.65;
@@ -517,6 +528,7 @@ function buildSleepTimeMemoryWritePayload(input: {
       sessionId: input.sessionId,
       actor: 'system',
       reason: 'sleeptime',
+      ...(input.sourceConversationAt !== undefined ? { sourceConversationAt: input.sourceConversationAt } : {}),
       ...(input.sourceMessageId ? { sourceMessageIds: [Number(input.sourceMessageId)].filter(Number.isFinite) } : {}),
     },
     provenanceRefs: [
@@ -783,6 +795,11 @@ export class SleeptimeMemoryAgent {
       this.coreMemoryStore.rethink(acceptance.blocks, { scope: coreMemoryScope });
     }
 
+    // Conversation-time bound for disclosure-epoch resolution (ca980): the latest
+    // reviewed source-entry instant, the SAME safe upper bound the extractor
+    // stamps. Never the sleeptime run clock — this pass runs deferred, so `now()`
+    // would post-date the conversation and risk resolving a since-widened epoch.
+    const sourceConversationAt = latestSourceEntryTimestamp(recentEntries);
     let writtenCount = 0;
     let reviewQueuedCount = 0;
     let ungroundedRejectedCount = 0;
@@ -817,6 +834,7 @@ export class SleeptimeMemoryAgent {
         actionId: action.id,
         sourceMessageId: action.sourceMessageId,
         evidenceCount,
+        ...(sourceConversationAt !== undefined ? { sourceConversationAt } : {}),
       });
       try {
         const result = await this.memoryWriter.write(writePayload);

@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import {
   existsSync,
   lstatSync,
@@ -9,10 +10,16 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { dirname, join, relative, resolve, sep } from 'node:path';
+import { appendJsonLine, readJsonLines } from '../../persistence/jsonl.js';
+import {
+  detectDestructiveTextReplace,
+  type DestructiveTextReplaceRisk,
+} from '../../shared/utils/destructive-replace.js';
 import { parseSkillDocument } from './loader.js';
 
 const MANAGED_SKILLS_DIR = 'skills';
 const SKILL_FILE_NAME = 'SKILL.md';
+const SKILL_HISTORY_FILE_NAME = 'SKILL.history.jsonl';
 const SKILL_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
 const SKILL_CATEGORY_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
 const MAX_DESCRIPTION_CHARS = 240;
@@ -151,6 +158,65 @@ export interface SkillUpdateInput {
   description?: string;
 }
 
+/**
+ * Who performed a managed-skill write, recorded in the per-skill history
+ * journal (charter 9.5 category-2 provenance). Required on every mutation —
+ * there is no anonymous write path.
+ */
+export interface SkillWriteProvenance {
+  updatedBy: string;
+  reason?: string;
+}
+
+export type SkillHistoryAction = 'create' | 'update' | 'rollback';
+
+/**
+ * One append-only line in `<skill dir>/SKILL.history.jsonl`. `newDocument` is
+ * the full rendered SKILL.md text after the action, so any prior version can
+ * be restored byte-exactly. `previous*` fields are null for the create entry.
+ */
+export interface ManagedSkillHistoryEntry {
+  action: SkillHistoryAction;
+  /** Skill version resulting from this action. */
+  version: number;
+  timestamp: string;
+  updatedBy: string;
+  reason?: string;
+  previousVersion: number | null;
+  previousChecksum: string | null;
+  newChecksum: string;
+  previousDocument: string | null;
+  newDocument: string;
+}
+
+function documentChecksum(document: string): string {
+  return createHash('sha256').update(document).digest('hex').slice(0, 16);
+}
+
+function normalizeProvenance(provenance: SkillWriteProvenance): SkillWriteProvenance {
+  const updatedBy = provenance.updatedBy.trim();
+  if (!updatedBy) {
+    throw new Error('Skill write provenance requires a non-empty updatedBy');
+  }
+  const reason = provenance.reason?.trim();
+  return { updatedBy, ...(reason ? { reason } : {}) };
+}
+
+/**
+ * Destructive-replace heuristic over skill body content (shared thresholds
+ * with character-card versioning). Returns the risk when the update removes
+ * most of a long existing skill body, otherwise null.
+ */
+export function detectDestructiveSkillContentReplace(
+  previousContent: string,
+  nextContent: string,
+): DestructiveTextReplaceRisk | null {
+  return detectDestructiveTextReplace(
+    previousContent.trim().length,
+    nextContent.trim().length,
+  );
+}
+
 interface SkillStoreOptions {
   repoRoot: string;
   managedRootDir?: string;
@@ -204,10 +270,11 @@ export class SkillStore {
     return matches[0] ?? null;
   }
 
-  create(input: SkillCreateInput): ManagedSkillRecord {
+  create(input: SkillCreateInput, provenance: SkillWriteProvenance): ManagedSkillRecord {
     const name = normalizeSkillName(input.name);
     const category = normalizeSkillCategory(input.category);
     const content = normalizeContent(input.content);
+    const normalizedProvenance = normalizeProvenance(provenance);
     const existing = this.getByName(name);
     if (existing) {
       throw new Error(`Skill "${name}" already exists`);
@@ -217,7 +284,7 @@ export class SkillStore {
     const timestamp = this.now().toISOString();
     const absolutePath = this.resolveSkillFilePath(category, name);
 
-    this.writeSkillDocument(absolutePath, {
+    const document = renderSkillDocument({
       name,
       description,
       category,
@@ -226,11 +293,24 @@ export class SkillStore {
       version: 1,
       content,
     });
+    this.appendHistoryEntry(absolutePath, {
+      action: 'create',
+      version: 1,
+      timestamp,
+      updatedBy: normalizedProvenance.updatedBy,
+      ...(normalizedProvenance.reason ? { reason: normalizedProvenance.reason } : {}),
+      previousVersion: null,
+      previousChecksum: null,
+      newChecksum: documentChecksum(document),
+      previousDocument: null,
+      newDocument: document,
+    });
+    this.writeSkillDocument(absolutePath, document);
 
     return this.readSkillRecord(absolutePath);
   }
 
-  update(input: SkillUpdateInput): ManagedSkillRecord {
+  update(input: SkillUpdateInput, provenance: SkillWriteProvenance): ManagedSkillRecord {
     const name = normalizeSkillName(input.name);
     const existing = this.getByName(name);
     if (!existing) {
@@ -239,17 +319,106 @@ export class SkillStore {
 
     const content = normalizeContent(input.content);
     const description = normalizeDescription(input.description ?? existing.description);
-    const updatedAt = this.now().toISOString();
+    return this.applyExistingSkillWrite(existing, { content, description }, provenance, 'update');
+  }
 
-    this.writeSkillDocument(existing.absolutePath, {
+  /**
+   * Append-only per-skill history journal, oldest first. Every create/update/
+   * rollback appends one entry carrying the full document text, so any prior
+   * version remains restorable after later overwrites.
+   */
+  getHistory(name: string): ManagedSkillHistoryEntry[] {
+    const existing = this.getByName(normalizeSkillName(name));
+    if (!existing) {
+      throw new Error(`Skill "${name}" does not exist`);
+    }
+    return this.readHistoryEntries(existing.absolutePath);
+  }
+
+  /**
+   * Restore the skill document exactly as it was at `version`, as a NEW
+   * version (append-only: rollback itself is journaled and reversible). The
+   * restored body/description are byte-exact from the journaled document.
+   */
+  rollback(
+    name: string,
+    version: number,
+    provenance: SkillWriteProvenance,
+  ): ManagedSkillRecord {
+    const normalizedName = normalizeSkillName(name);
+    const existing = this.getByName(normalizedName);
+    if (!existing) {
+      throw new Error(`Skill "${normalizedName}" does not exist`);
+    }
+    if (!Number.isInteger(version) || version < 1) {
+      throw new Error(`Skill rollback requires a positive integer version, got ${String(version)}`);
+    }
+
+    const entry = this.readHistoryEntries(existing.absolutePath)
+      .find((candidate) => candidate.version === version);
+    if (!entry) {
+      throw new Error(
+        `Skill "${normalizedName}" has no history entry for version ${version}; `
+        + 'only journaled versions can be restored',
+      );
+    }
+
+    const restored = parseSkillDocument(entry.newDocument, `history:v${version}`);
+    const normalizedProvenance = normalizeProvenance(provenance);
+    return this.applyExistingSkillWrite(
+      existing,
+      {
+        content: normalizeContent(restored.body),
+        description: normalizeDescription(restored.frontmatter.description),
+      },
+      {
+        updatedBy: normalizedProvenance.updatedBy,
+        reason: normalizedProvenance.reason ?? `Rollback to version ${version}`,
+      },
+      'rollback',
+    );
+  }
+
+  private applyExistingSkillWrite(
+    existing: ManagedSkillRecord,
+    next: { content: string; description: string },
+    provenance: SkillWriteProvenance,
+    action: Extract<SkillHistoryAction, 'update' | 'rollback'>,
+  ): ManagedSkillRecord {
+    const normalizedProvenance = normalizeProvenance(provenance);
+    const timestamp = this.now().toISOString();
+    const previousDocument = readFileSync(existing.absolutePath, 'utf-8');
+    const previousChecksum = documentChecksum(previousDocument);
+
+    const nextDocument = renderSkillDocument({
       name: existing.name,
-      description,
+      description: next.description,
       category: existing.category,
       createdAt: existing.createdAt,
-      updatedAt,
+      updatedAt: timestamp,
       version: existing.version + 1,
-      content,
+      content: next.content,
     });
+
+    // No-op writes (identical body + description) do not burn a version or a
+    // history entry — mirrors character-card checksum short-circuiting.
+    if (next.content === existing.content && next.description === existing.description) {
+      return existing;
+    }
+
+    this.appendHistoryEntry(existing.absolutePath, {
+      action,
+      version: existing.version + 1,
+      timestamp,
+      updatedBy: normalizedProvenance.updatedBy,
+      ...(normalizedProvenance.reason ? { reason: normalizedProvenance.reason } : {}),
+      previousVersion: existing.version,
+      previousChecksum,
+      newChecksum: documentChecksum(nextDocument),
+      previousDocument,
+      newDocument: nextDocument,
+    });
+    this.writeSkillDocument(existing.absolutePath, nextDocument);
 
     return this.readSkillRecord(existing.absolutePath);
   }
@@ -346,10 +515,28 @@ export class SkillStore {
     return absolutePath;
   }
 
-  private writeSkillDocument(absolutePath: string, payload: SkillDocumentPayload): void {
+  private writeSkillDocument(absolutePath: string, document: string): void {
     ensurePathWithinRoot(this.managedRootDir, absolutePath);
     mkdirSync(dirname(absolutePath), { recursive: true });
-    writeFileSync(absolutePath, renderSkillDocument(payload), 'utf-8');
+    writeFileSync(absolutePath, document, 'utf-8');
+  }
+
+  private resolveHistoryPath(skillDocumentPath: string): string {
+    const historyPath = join(dirname(skillDocumentPath), SKILL_HISTORY_FILE_NAME);
+    ensurePathWithinRoot(this.managedRootDir, historyPath);
+    return historyPath;
+  }
+
+  private appendHistoryEntry(skillDocumentPath: string, entry: ManagedSkillHistoryEntry): void {
+    appendJsonLine(this.resolveHistoryPath(skillDocumentPath), entry);
+  }
+
+  private readHistoryEntries(skillDocumentPath: string): ManagedSkillHistoryEntry[] {
+    return readJsonLines<ManagedSkillHistoryEntry>(
+      this.resolveHistoryPath(skillDocumentPath),
+      raw => raw as ManagedSkillHistoryEntry,
+      { warnLabel: 'Skipping unreadable managed skill history line' },
+    ).entries;
   }
 
   private toDisplayPath(absolutePath: string): string {

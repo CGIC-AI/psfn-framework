@@ -49,13 +49,22 @@ describe('evaluateSegmentGates', () => {
     })).toEqual({ action: 'commit' });
   });
 
-  it('catches a contradiction phrase that straddles a segment boundary', () => {
-    // "are you" already committed, "sure" arrives in the candidate.
+  it('catches a datetime-adjacent contradiction phrase that straddles a segment boundary', () => {
+    // "are you" already committed, "sure" arrives in the candidate; "clock"
+    // provides the datetime adjacency the upx0.13 guard requires.
+    expect(evaluateSegmentGates({
+      cumulativeCommitted: 'Wait, are you ',
+      candidate: 'sure the clock is right?',
+      config: ANCHORED,
+    })).toEqual({ action: 'abort', reason: 'runtime_datetime_contradiction' });
+  });
+
+  it('commits a straddling broad phrase with no datetime reference (upx0.13 adjacency contract)', () => {
     expect(evaluateSegmentGates({
       cumulativeCommitted: 'Wait, are you ',
       candidate: 'sure about that?',
       config: ANCHORED,
-    })).toEqual({ action: 'abort', reason: 'runtime_datetime_contradiction' });
+    })).toEqual({ action: 'commit' });
   });
 
   it('prioritizes the image-claim reason deterministically', () => {

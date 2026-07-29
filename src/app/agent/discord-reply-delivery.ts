@@ -2,9 +2,9 @@ import type { AgentResponse, Attachment } from '../../shared/contracts/runtime.j
 import { toErrorMessage } from '../../shared/utils/errors.js';
 
 export const DISCORD_TURN_FAILURE_NOTICE =
-  '[System delivery error] The runtime could not complete that turn. Please retry your message.';
+  '[System delivery error] The companion could not complete that reply. Please try again.';
 export const DISCORD_DELIVERY_FAILURE_NOTICE =
-  '[System delivery error] The runtime could not deliver part of the response. Please retry your message.';
+  '[System delivery error] The companion could not deliver part of that reply. Please try again.';
 
 export type DiscordFailureStage = 'handle_message' | 'text_delivery' | 'media_delivery';
 

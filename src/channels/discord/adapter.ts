@@ -1416,7 +1416,7 @@ export class DiscordAdapter implements ChannelAdapterPort {
         await this.setStatus(
           channelId,
           'retry',
-          'Having trouble reaching my thoughts. Please try again.',
+          '[System retry exhausted] The companion cannot reach remote inference after repeated attempts. Please try again.',
         );
       }
     }));

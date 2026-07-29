@@ -60,6 +60,8 @@ import type {
   TurnExecutionRuntime,
 } from './turn-execution-runtime.js';
 import { handleMessageForTurn } from './turn-execution-runtime.js';
+import { isExtractionTranscriptEntry } from '../../../faculties/memory/extraction/chunk-compose.js';
+import { evaluateCogSecMemoryCandidacy } from '../../cogsec/memory-candidacy.js';
 import { PromptCacheTurnRuntime } from './turn-execution/prompt-cache-runtime.js';
 import { CompletionNoticeBuffer } from '../completion-notices.js';
 import { TurnSupportRuntime } from './turn-support-runtime.js';
@@ -7175,6 +7177,21 @@ describe('handleMessageForTurn pre-response concurrency', () => {
         model: 'runtime-fallback',
         strategy: 'runtime_nonfabricating_notice',
       },
+    });
+
+    // psfn-framework-zagpk acceptance: the persisted runtime-authored fallback
+    // entry must not be eligible for companion self-report extraction, and its
+    // text must be rejected by the CogSec memory-candidacy backstop. Drive the
+    // REAL downstream checks against the exact persisted entry shape.
+    expect(assistantEntry).toBeDefined();
+    expect(isExtractionTranscriptEntry(assistantEntry!)).toBe(false);
+    expect(evaluateCogSecMemoryCandidacy({
+      text: assistantEntry!.content,
+      type: 'episodic',
+      tags: [],
+    })).toMatchObject({
+      disposition: 'reject',
+      reasonCodes: ['runtime_fallback_notice'],
     });
   });
 

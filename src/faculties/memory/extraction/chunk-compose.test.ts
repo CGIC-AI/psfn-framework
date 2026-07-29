@@ -4,6 +4,7 @@ import {
   formatExtractionTranscript,
   isExtractionTranscriptEntry,
 } from './chunk-compose.js';
+import { buildSessionMetadataWithRuntimeFallbackProvenance } from '../../../core/session/runtime-fallback-provenance.js';
 
 describe('chunk-compose extraction transcript filtering', () => {
   it('treats only user and assistant entries as extraction transcript content', () => {
@@ -35,5 +36,48 @@ describe('chunk-compose extraction transcript filtering', () => {
       [1, 3],
       [5],
     ]);
+  });
+
+  it('excludes runtime-authored fallback entries from extraction transcripts (psfn-framework-zagpk)', () => {
+    // The exact persisted shape: role assistant + the metadata the runtime
+    // fallback path writes through buildSessionMetadataWithRuntimeFallbackProvenance.
+    const fallbackMetadata = buildSessionMetadataWithRuntimeFallbackProvenance(undefined, {
+      schemaVersion: 1,
+      authoredBy: 'runtime',
+      model: 'runtime-fallback',
+      strategy: 'runtime_nonfabricating_notice',
+    });
+    const entries = [
+      { id: 1, channelId: 'api:test', role: 'user', content: 'here is a picture', timestamp: 1, authorName: 'V' },
+      {
+        id: 2,
+        channelId: 'api:test',
+        role: 'assistant',
+        content: 'I got the image attachment, but my image reader failed before I could inspect it.',
+        timestamp: 2,
+        authorName: 'Purr',
+        metadata: fallbackMetadata,
+      },
+      { id: 3, channelId: 'api:test', role: 'assistant', content: 'Her genuine reply', timestamp: 3, authorName: 'Purr' },
+    ] as const;
+
+    expect(entries.filter(isExtractionTranscriptEntry).map(entry => entry.id)).toEqual([1, 3]);
+    expect(formatExtractionTranscript(entries)).toBe([
+      '[message_id:1] V: here is a picture',
+      '[message_id:3] Purr: Her genuine reply',
+    ].join('\n'));
+  });
+
+  it('fails closed on a malformed provenance marker: still excluded from extraction', () => {
+    const entry = {
+      id: 7,
+      channelId: 'api:test',
+      role: 'assistant',
+      content: 'notice text',
+      timestamp: 7,
+      metadata: JSON.stringify({ runtimeFallbackProvenance: { schemaVersion: 999 } }),
+    } as const;
+
+    expect(isExtractionTranscriptEntry(entry)).toBe(false);
   });
 });

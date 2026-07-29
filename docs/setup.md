@@ -25,10 +25,21 @@ There are two supported ways to stand PSFN up, plus one forthcoming guided one:
   [`docs/operations.md`](./operations.md) plus [`docs/helm-upgrades.md`](./helm-upgrades.md)
   cover it; it is not the newcomer on-ramp.
 
-An interactive onboarding script (`npm run onboard`) that walks install-mode
-selection, provider/model setup, and companion import is **in progress and not
-yet built** (bead `psfn-framework-wckv.1`). Until it lands, follow the Compose
-path below.
+An interactive onboarding script, `npm run onboard`, walks you through the
+setup questions in order: install mode (Compose, Kubernetes, or local dev),
+provider and model choice, optional voice, an optional connectivity check, and
+importing a companion — a SillyTavern-style Character Card (V2/V3 as
+`.json`/`.png`/`.charx`), a SoulMD document, a plain persona markdown file from
+OpenClaw/Hermes, or a fresh start. It generates the canonical JSON owner files
+for your chosen mode, validates them against the same settings contract startup
+enforces, and writes your secrets to `.env` — nothing is written until the
+final confirm, so it is always safe to abort and start over. If you are not
+sure where to begin, begin there:
+
+```bash
+npm install        # the onboarding script runs from the repo's dev install
+npm run onboard
+```
 
 ## Deployment done: the public on-ramp definition
 
@@ -107,6 +118,41 @@ secrets/identity and the published port are overridable via `PSFN_SMOKE_API_KEY`
 `PSFN_SMOKE_COMPANION_ID`, `PSFN_SMOKE_SESSION_HMAC_KEY`, `PSFN_SMOKE_BACKUP_KEY`,
 and `PSFN_SMOKE_API_PORT`. The full lane writeup is in
 [`docs/shakedown.md`](./shakedown.md#docker-compose-smoke-lane).
+
+### Your first conversation
+
+An exit-`0` smoke run proves the plumbing with one turn and then tears the
+stack down. To actually sit down and talk, keep it up:
+
+```bash
+export OPENROUTER_API_KEY=sk-or-...
+npm run smoke:docker -- --keep-up
+```
+
+The stack stays running with the gateway's OpenAI-compatible edge published on
+`http://127.0.0.1:13000` (override with `PSFN_SMOKE_API_PORT`). Any
+OpenAI-compatible chat client can point at it; the dev API key is
+`psfn-smoke-api-key-please-rotate` unless you overrode `PSFN_SMOKE_API_KEY`.
+From the terminal:
+
+```bash
+curl -s http://127.0.0.1:13000/v1/chat/completions \
+  -H "Authorization: Bearer psfn-smoke-api-key-please-rotate" \
+  -H "Content-Type: application/json" \
+  -d '{"model": "companion", "messages": [{"role": "user", "content": "Hi — first day. What should I call you?"}]}'
+```
+
+Conversation state persists across turns and restarts: the reply you get is a
+turn in a real session archived to the companion-data volume and mirrored to
+Postgres, not a stateless completion. When you are done exploring, take the
+stack down with
+`docker compose -f docker/docker-compose.smoke.yml down` (add `-v` to also
+discard the data volumes and start completely fresh next time).
+
+The smoke stack boots a starter companion. When you want your own — an
+existing card, a soul document, or a persona you have been carrying between
+frameworks — run `npm run onboard` and choose the import step; it previews
+exactly what it parsed and writes nothing until you confirm.
 
 ### Why the runtime is split (and fail-closed)
 
@@ -627,11 +673,56 @@ cause, and the fix:
 
 ### Startup fail-closed rejections (any path)
 
-- **`Fleet authentication requires companions.json; deployments with one
-  companion must provide a one-entry fleet manifest`.** `companions.json` is
-  missing or invalid. Every deployment — including a cluster of one — requires
-  it. See [What Goes In JSON Owner Files](#what-goes-in-json-owner-files) and
-  [First Local Bring-Up](#first-local-bring-up) step 2.
+- **`The fleet manifest is required but missing at <path>. Every PSFN
+  deployment is a fleet of one or more companions…`.** `companions.json` is
+  missing. Every deployment — including a cluster of one — requires a fleet
+  manifest with at least one entry. See
+  [What Goes In JSON Owner Files](#what-goes-in-json-owner-files) and
+  [First Local Bring-Up](#first-local-bring-up) step 2. (Deployments with
+  fleet authentication enabled see the variant `Fleet authentication requires
+  companions.json; single-companion deployments must provide a one-entry fleet
+  manifest` — same file, same fix.)
+- **`COMPANION_ID is required. Set an explicit deployment identity in .env
+  before startup`.** Both processes need to know which companion they serve.
+  Set `COMPANION_ID` in `.env` to a lowercase UUID — the onboarding script
+  generates one for you, or `uuidgen | tr 'A-Z' 'a-z'` does.
+- **`POSTGRES_DATABASE_URL is required for runtime persistence`** (or the
+  agent-side `Agent core runtime requires POSTGRES_DATABASE_URL`). The runtime
+  store is Postgres-only, and the process was started without a database URL.
+  Set `POSTGRES_DATABASE_URL` in `.env`; the Compose stack wires this for you.
+- **`<label> owner-file validation failed at <path>: <cause>`.** The named
+  owner file (settings, models, providers, companions, trust-policy, backup,
+  intake-policy, partner-affect-shadow, or a per-companion scheduler /
+  capability-tier / charge-policy / skills file) is missing, is not valid
+  JSON, or fails its schema. The `<cause>` names the exact field. Repair the
+  file in place — startup deliberately never overwrites an owner file from a
+  seed or example template.
+- **`Outbound network access is reachable from the agent container`.** The
+  isolated agent found it can reach the internet, which the split trust model
+  forbids. On Compose/Kubernetes this signals real broken isolation — fix the
+  network. On a bare local `npm run split`, the host has no isolation to
+  offer, so this fires on every first run: set
+  `ALLOW_AGENT_OUTBOUND_NETWORK=true` in `.env` for local development and
+  accept the loud DEGRADED warning it logs in exchange.
+- **`GATEWAY_SESSION_INTEGRITY_AUTH_TOKEN is required for the isolated
+  session-integrity role`.** The agent was launched directly (`npm run agent`)
+  without the proof the launcher derives. Launch through `npm run split`,
+  which derives the role-bound tokens from the session HMAC key for you.
+- **`Gateway connection could not be established; exiting for supervised
+  restart`.** The agent gave up waiting for the gateway socket. Almost always
+  the gateway itself failed to start — scroll up to its own fail-closed error,
+  fix that first, and relaunch.
+- **`Unsupported PSFN_RUNTIME_LAYOUT_MODE "<x>"`.** Typo in the layout mode.
+  Accepted values: `continuous`, `dev`, `production`, `prod`.
+- **`DATA_DIR shared-root mode is forbidden when PSFN runtime layout mode is
+  production`.** Production requires the isolated split roots. Set
+  `SYSTEM_DATA_DIR` and `COMPANION_DATA_DIR` and drop `DATA_DIR`.
+- **`Invalid character card at <path>: …`** (including `missing name or
+  personality`). The card file exists but is malformed or incomplete. Repair
+  the JSON, or re-import through `npm run onboard`, which validates the card
+  against this same check before writing anything.
+- **`DISCORD_TOKEN is required when DISCORD_BOT_ID is configured`** (and the
+  mirror image). The Discord pair travels together — set both or neither.
 - **A named owner file is missing** (e.g. `partner-affect-shadow.json`,
   `intake-policy.json`). Startup verifies the full owner set in
   `src/system/config/startup-owner-files.ts` and aborts on the first missing

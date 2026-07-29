@@ -14,8 +14,94 @@ import {
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 import type { JournalEntry } from '../../../core/session/types.js';
 import { isRecord } from '../../../shared/utils/types.js';
+import { parseJournalText } from './file-io.js';
 
 const CHAIN_REWRITE_MANIFEST_SUFFIX = '.chain-rewrite-manifest.json';
+
+// The L0 journal is the companion's canonical, append-only history. The only
+// destructive-in-place operation the charter sanctions on it is redaction:
+// removing/replacing an entry's payload (content/summary and its provenance
+// metadata) while its identity and authorship are preserved exactly, or
+// re-signing an otherwise byte-identical entry. Anything else — rewriting the
+// role/author of a canonical entry, reordering, inserting, or dropping entries —
+// is a rewrite of history and must fail closed here (Charter Law 2 / 6.20 L0
+// append-only, 7.4 supersede over destructive rewrite, 7.5 repair must not
+// rewrite canonical). Growth of the chain is append-only and never travels
+// through this primitive; corrections that are not redactions belong in a
+// derived mirror or an in-stream supersede entry.
+const REDACTION_IMMUTABLE_FIELDS: readonly (keyof JournalEntry)[] = [
+  'type',
+  'id',
+  'channelId',
+  'timestamp',
+  'role',
+  'authorId',
+  'authorName',
+  'discordMessageId',
+  'originChannelId',
+  'channelVisibility',
+  'coveredUpTo',
+  'marker',
+  'tombstoneTargetType',
+  'tombstoneTargetId',
+  'tombstoneAction',
+  'tombstoneActor',
+  'tombstoneReason',
+];
+
+function assertRedactionOnlyRewrite(
+  original: readonly JournalEntry[],
+  replacement: readonly JournalEntry[],
+  targetPath: string,
+): void {
+  if (original.length !== replacement.length) {
+    throw new Error(
+      'L0 chain rewrite must preserve entry count '
+      + `(redaction supersedes entries in place; growth is append-only): ${basename(targetPath)}`,
+    );
+  }
+  for (let index = 0; index < original.length; index += 1) {
+    const originalEntry = original[index]!;
+    const replacementEntry = replacement[index]!;
+    for (const field of REDACTION_IMMUTABLE_FIELDS) {
+      if (originalEntry[field] !== replacementEntry[field]) {
+        throw new Error(
+          `L0 chain rewrite may not alter '${field}' on entry id=${originalEntry.id}; `
+          + `only redaction of an entry's content/summary is permitted: ${basename(targetPath)}`,
+        );
+      }
+    }
+    const contentChanged = originalEntry.content !== replacementEntry.content;
+    const summaryChanged = originalEntry.summary !== replacementEntry.summary;
+    const metadataChanged = originalEntry.metadata !== replacementEntry.metadata;
+    if (metadataChanged && !contentChanged && !summaryChanged) {
+      throw new Error(
+        `L0 chain rewrite may not alter metadata without redacting content on entry id=${originalEntry.id}: `
+        + basename(targetPath),
+      );
+    }
+  }
+}
+
+function assertRedactionOnlyChainRewrite(
+  targetPaths: readonly string[],
+  replacementByTarget: readonly (readonly JournalEntry[])[],
+  renewLease?: () => void,
+): void {
+  targetPaths.forEach((targetPath, index) => {
+    // Derive the originals from disk, never from the caller: trusting a
+    // caller-supplied "original" would let an arbitrary rewrite masquerade as a
+    // redaction by claiming the replacement is already the original.
+    const parsed = parseJournalText(readFileSync(targetPath, 'utf8'));
+    if (parsed.quarantined.length > 0) {
+      throw new Error(
+        `Refusing L0 chain rewrite over a malformed journal file: ${basename(targetPath)}`,
+      );
+    }
+    assertRedactionOnlyRewrite(parsed.entries, replacementByTarget[index]!, targetPath);
+    renewLease?.();
+  });
+}
 
 interface ChainRewriteFile {
   targetPath: string;
@@ -272,6 +358,9 @@ export function rewriteJournalChainTransaction(params: {
     );
   }
   assertNoPendingJournalChainRewrite(rootPath);
+  // Fail closed before any artifact is created if the replacement is not a
+  // redaction/re-sign of the on-disk canonical entries.
+  assertRedactionOnlyChainRewrite(params.targetPaths, params.entriesByTarget, params.renewLease);
   const originalFingerprints = params.targetPaths.map(fingerprintTarget);
   const transactionId = `${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
   const files = params.targetPaths.map((targetPath) => ({

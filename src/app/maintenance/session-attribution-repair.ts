@@ -1,6 +1,5 @@
 import '../../shared/utils/load-dotenv.js';
 import { join } from 'node:path';
-import { createSessionHmacBoundaryService } from '../../persistence/journals/hmac-boundary.js';
 import { runAttributionRepair } from '../../persistence/repair/attribution-repair.js';
 import {
   bootstrapMaintenanceRuntime,
@@ -39,22 +38,18 @@ function runCli(): Promise<unknown> {
     label: 'Attribution repair',
     parseArgs,
     printUsage,
-    resolveKeyring: runtime => createSessionHmacBoundaryService({
-      env: process.env,
-      credentialVault: runtime.config.credentialVault,
-    }).resolveKeyring(),
-    runRepair: ({ keyring, runtime }) => runAttributionRepair({
+    // Canonical L0 chains are never rewritten here, so no HMAC keyring is needed;
+    // only the derived `_turn_records` mirror and channel index are corrected.
+    resolveKeyring: () => null,
+    runRepair: ({ runtime }) => runAttributionRepair({
       sessionsDir: join(runtime.dataDir, 'sessions'),
-      continuityDir: join(runtime.dataDir, 'contacts', 'continuity'),
-      reflectionsDir: join(runtime.dataDir, 'notes', 'reflections'),
       backupDir: runtime.backupDir,
-      keyring,
       repoRoot: process.cwd(),
     }),
     reportFields: (report, { runtime }) => [
       `Attribution repair complete for ${runtime.dataDir}`,
       `Backups: ${report.backupsDir}`,
-      `Journal files: scanned=${report.journal.scannedFiles} modified=${report.journal.modifiedFiles} entries=${report.journal.modifiedEntries}`,
+      'Canonical L0 chains: not rewritten (append-only; attribution normalized at read time)',
       `Turn records: scanned=${report.turnRecords.scannedFiles} modified=${report.turnRecords.modifiedFiles} records=${report.turnRecords.modifiedEntries}`,
       `Session channel index rebuilt: ${report.rebuiltChannelIndex ? 'yes' : 'no'}`,
     ],

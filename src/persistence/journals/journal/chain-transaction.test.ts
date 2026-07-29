@@ -48,8 +48,30 @@ function entry(id: number): JournalEntry {
   };
 }
 
+// A valid redaction of `entry(id)`: only the payload (content) changes; every
+// identity/authorship field is preserved, so the redaction-only invariant admits it.
+function redactedEntry(id: number): JournalEntry {
+  return { ...entry(id), content: `[redacted ${id}]` };
+}
+
 function writeEntries(filePath: string, entries: readonly JournalEntry[]): void {
   writeFileSync(filePath, `${entries.map(item => JSON.stringify(item)).join('\n')}\n`, 'utf8');
+}
+
+function journalLine(item: JournalEntry): string {
+  return `${JSON.stringify(item)}\n`;
+}
+
+// Seed a chain whose on-disk originals are valid journal entries so the
+// redaction-only invariant can compare replacements against real canon.
+function seedJournalHarness(): { dir: string; rootPath: string; segmentPath: string } {
+  const dir = mkdtempSync(join(tmpdir(), 'psfn-chain-transaction-'));
+  roots.push(dir);
+  const rootPath = join(dir, 'session.jsonl');
+  const segmentPath = join(dir, 'session.segment-0002.jsonl');
+  writeEntries(rootPath, [entry(1)]);
+  writeEntries(segmentPath, [entry(2)]);
+  return { dir, rootPath, segmentPath };
 }
 
 function transactionArtifacts(dir: string): string[] {
@@ -70,19 +92,63 @@ async function waitForFile(filePath: string): Promise<void> {
 
 describe('journal chain rewrite transactions', () => {
   it('leaves every original untouched when staging a later segment fails', () => {
-    const { dir, rootPath, segmentPath } = createHarness();
+    const { dir, rootPath, segmentPath } = seedJournalHarness();
 
     expect(() => rewriteJournalChainTransaction({
       targetPaths: [rootPath, segmentPath],
-      entriesByTarget: [[entry(1)], [entry(2)]],
+      entriesByTarget: [[redactedEntry(1)], [redactedEntry(2)]],
       writeEntries: (filePath, entries) => {
         if (filePath.startsWith(segmentPath)) throw new Error('injected staging failure');
         writeEntries(filePath, entries);
       },
     })).toThrow('injected staging failure');
 
-    expect(readFileSync(rootPath, 'utf8')).toBe('old root\n');
-    expect(readFileSync(segmentPath, 'utf8')).toBe('old segment\n');
+    expect(readFileSync(rootPath, 'utf8')).toBe(journalLine(entry(1)));
+    expect(readFileSync(segmentPath, 'utf8')).toBe(journalLine(entry(2)));
+    expect(transactionArtifacts(dir)).toEqual([]);
+  });
+
+  it('rejects a rewrite that alters an entry\'s authorship instead of redacting it', () => {
+    const { dir, rootPath, segmentPath } = seedJournalHarness();
+
+    expect(() => rewriteJournalChainTransaction({
+      targetPaths: [rootPath, segmentPath],
+      // Non-redaction: mutates role/author of a canonical entry. This is exactly
+      // the attribution-repair pattern the primitive must refuse.
+      entriesByTarget: [[{ ...entry(1), role: 'assistant', authorId: 'forged', authorName: 'Forged' }], [entry(2)]],
+      writeEntries,
+    })).toThrow(/may not alter 'role'/);
+
+    expect(readFileSync(rootPath, 'utf8')).toBe(journalLine(entry(1)));
+    expect(readFileSync(segmentPath, 'utf8')).toBe(journalLine(entry(2)));
+    // Fails closed before any staging/backup/manifest artifact exists.
+    expect(transactionArtifacts(dir)).toEqual([]);
+  });
+
+  it('rejects a rewrite that inserts or drops entries', () => {
+    const { dir, rootPath, segmentPath } = seedJournalHarness();
+
+    expect(() => rewriteJournalChainTransaction({
+      targetPaths: [rootPath, segmentPath],
+      entriesByTarget: [[entry(1), entry(3)], [entry(2)]],
+      writeEntries,
+    })).toThrow(/must preserve entry count/);
+
+    expect(readFileSync(rootPath, 'utf8')).toBe(journalLine(entry(1)));
+    expect(transactionArtifacts(dir)).toEqual([]);
+  });
+
+  it('commits a content redaction that preserves entry identity', () => {
+    const { dir, rootPath, segmentPath } = seedJournalHarness();
+
+    rewriteJournalChainTransaction({
+      targetPaths: [rootPath, segmentPath],
+      entriesByTarget: [[redactedEntry(1)], [redactedEntry(2)]],
+      writeEntries,
+    });
+
+    expect(readFileSync(rootPath, 'utf8')).toBe(journalLine(redactedEntry(1)));
+    expect(readFileSync(segmentPath, 'utf8')).toBe(journalLine(redactedEntry(2)));
     expect(transactionArtifacts(dir)).toEqual([]);
   });
 
@@ -140,8 +206,10 @@ describe('journal chain rewrite transactions', () => {
   });
 
   it('recovers a published staging manifest after the rewriting process is killed', async () => {
-    const { dir, rootPath, segmentPath } = createHarness();
+    const { dir, rootPath, segmentPath } = seedJournalHarness();
     const markerPath = join(dir, 'child-staged.marker');
+    // Replacements are redactions of the seeded originals (entry 1/2): identity
+    // fields match, only content differs, so the invariant admits the rewrite.
     const childSource = `
       const { writeFileSync } = await import('node:fs');
       const { rewriteJournalChainTransaction } = await import(process.env.TRANSACTION_MODULE_URL);
@@ -150,7 +218,7 @@ describe('journal chain rewrite transactions', () => {
       const markerPath = process.env.MARKER_PATH;
       rewriteJournalChainTransaction({
         targetPaths: [rootPath, segmentPath],
-        entriesByTarget: [[{ type: 'message', id: 1, channelId: 'api:child', role: 'user', content: 'root', timestamp: 1 }], [{ type: 'message', id: 2, channelId: 'api:child', role: 'assistant', content: 'segment', timestamp: 2 }]],
+        entriesByTarget: [[{ type: 'message', id: 1, channelId: 'api:transaction', role: 'user', content: '[redacted 1]', timestamp: 1 }], [{ type: 'message', id: 2, channelId: 'api:transaction', role: 'assistant', content: '[redacted 2]', timestamp: 2 }]],
         writeEntries: (filePath, entries) => {
           writeFileSync(filePath, entries.map(entry => JSON.stringify(entry)).join('\\n') + '\\n', 'utf8');
           if (filePath.startsWith(segmentPath)) {
@@ -187,8 +255,8 @@ describe('journal chain rewrite transactions', () => {
     expect(existsSync(pendingJournalChainRewriteManifestPath(rootPath))).toBe(true);
     expect(transactionArtifacts(dir).some(filename => filename.endsWith('.backup'))).toBe(true);
     recoverJournalChainRewrite(rootPath);
-    expect(readFileSync(rootPath, 'utf8')).toBe('old root\n');
-    expect(readFileSync(segmentPath, 'utf8')).toBe('old segment\n');
+    expect(readFileSync(rootPath, 'utf8')).toBe(journalLine(entry(1)));
+    expect(readFileSync(segmentPath, 'utf8')).toBe(journalLine(entry(2)));
     expect(transactionArtifacts(dir)).toEqual([]);
   });
 
@@ -245,36 +313,36 @@ describe('journal chain rewrite transactions', () => {
   });
 
   it('rolls back when a fault lands after the prepared phase is durable', () => {
-    const { dir, rootPath, segmentPath } = createHarness();
+    const { dir, rootPath, segmentPath } = seedJournalHarness();
 
     expect(() => rewriteJournalChainTransaction({
       targetPaths: [rootPath, segmentPath],
-      entriesByTarget: [[entry(1)], [entry(2)]],
+      entriesByTarget: [[redactedEntry(1)], [redactedEntry(2)]],
       writeEntries,
       onDurablePhase: (phase) => {
         if (phase === 'prepared') throw new Error('injected power boundary fault');
       },
     })).toThrow('injected power boundary fault');
 
-    expect(readFileSync(rootPath, 'utf8')).toBe('old root\n');
-    expect(readFileSync(segmentPath, 'utf8')).toBe('old segment\n');
+    expect(readFileSync(rootPath, 'utf8')).toBe(journalLine(entry(1)));
+    expect(readFileSync(segmentPath, 'utf8')).toBe(journalLine(entry(2)));
     expect(transactionArtifacts(dir)).toEqual([]);
   });
 
   it('keeps the durable installed generation when a fault lands after commit', () => {
-    const { dir, rootPath, segmentPath } = createHarness();
+    const { dir, rootPath, segmentPath } = seedJournalHarness();
 
     expect(() => rewriteJournalChainTransaction({
       targetPaths: [rootPath, segmentPath],
-      entriesByTarget: [[entry(1)], [entry(2)]],
+      entriesByTarget: [[redactedEntry(1)], [redactedEntry(2)]],
       writeEntries,
       onDurablePhase: (phase) => {
         if (phase === 'committed') throw new Error('injected post-commit fault');
       },
     })).not.toThrow();
 
-    expect(readFileSync(rootPath, 'utf8')).toContain('"id":1');
-    expect(readFileSync(segmentPath, 'utf8')).toContain('"id":2');
+    expect(readFileSync(rootPath, 'utf8')).toContain('[redacted 1]');
+    expect(readFileSync(segmentPath, 'utf8')).toContain('[redacted 2]');
     expect(transactionArtifacts(dir)).toEqual([]);
   });
 

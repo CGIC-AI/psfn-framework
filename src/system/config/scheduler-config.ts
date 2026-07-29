@@ -674,7 +674,17 @@ export interface WeightedThoughtLifecycleSettings {
   };
   reinforcement: WeightedThoughtReinforcementConfig;
   accumulatedWeightCap: number;
+  /**
+   * Multiplier applied to a decayed weight on "said fine but context suggests
+   * otherwise". Valid range (0, 1]: 0 is rejected because it would hard-zero the
+   * weight, disabling the mechanism against Charter Law 27.
+   */
   contradictionDampeningFactor: number;
+  /**
+   * Multiplier applied to a decayed weight when a produced nudge is declined.
+   * Valid range (0, 1]: 0 is rejected because it would hard-zero the weight,
+   * disabling the mechanism against Charter Law 27.
+   */
   declineDampeningFactor: number;
   relevanceFloor: number;
 }
@@ -1056,6 +1066,23 @@ function toUnitFactor(value: unknown, field: string): number {
     throw new Error(`Invalid scheduler config: ${field} must be a number in [0, 1]`);
   }
   return value;
+}
+
+/**
+ * A dampening factor multiplied against a decayed weight. The valid range is the
+ * half-open interval (0, 1]: a factor of 0 would hard-zero the weight on the
+ * first application, silently disabling the mechanism and contradicting the
+ * charter invariant that dampening "reduces weight rather than zeroing it out"
+ * (Law 27 / 6.24). Fail closed — reject 0 and out-of-range rather than clamp.
+ */
+function toPositiveUnitFactor(value: unknown, field: string): number {
+  const factor = toUnitFactor(value, field);
+  if (!(factor > 0)) {
+    throw new Error(
+      `Invalid scheduler config: ${field} must be in (0, 1] — a factor of 0 hard-zeroes the weighted thought, disabling the dampening mechanism against Charter Law 27; use a small positive value to dampen without zeroing`,
+    );
+  }
+  return factor;
 }
 
 function toLocalTime(value: unknown, field: string): string {
@@ -1833,11 +1860,11 @@ function validateWeightedThoughtOutreachConfig(
         ),
       },
       accumulatedWeightCap: toNumberAtLeast(lifecycleRaw.accumulatedWeightCap, 'weightedThoughtOutreach.lifecycle.accumulatedWeightCap', 0),
-      contradictionDampeningFactor: toUnitFactor(
+      contradictionDampeningFactor: toPositiveUnitFactor(
         lifecycleRaw.contradictionDampeningFactor,
         'weightedThoughtOutreach.lifecycle.contradictionDampeningFactor',
       ),
-      declineDampeningFactor: toUnitFactor(
+      declineDampeningFactor: toPositiveUnitFactor(
         lifecycleRaw.declineDampeningFactor,
         'weightedThoughtOutreach.lifecycle.declineDampeningFactor',
       ),

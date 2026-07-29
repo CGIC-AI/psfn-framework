@@ -327,6 +327,54 @@ describe('scheduler config seed defaults', () => {
     }
   });
 
+  it('rejects weighted-thought dampening factors of 0 that would zero the mechanism', () => {
+    for (const field of ['contradictionDampeningFactor', 'declineDampeningFactor'] as const) {
+      const config = buildValidSchedulerConfig();
+      const outreach = structuredClone(DEFAULT_WEIGHTED_THOUGHT_OUTREACH_CONFIG);
+      outreach.lifecycle[field] = 0;
+      config.weightedThoughtOutreach = outreach;
+
+      expect(() => validateSchedulerConfig(config, 'test')).toThrow(
+        new RegExp(`weightedThoughtOutreach\\.lifecycle\\.${field} must be in \\(0, 1\\]`, 'u'),
+      );
+    }
+  });
+
+  it('rejects weighted-thought dampening factors outside (0, 1]', () => {
+    for (const field of ['contradictionDampeningFactor', 'declineDampeningFactor'] as const) {
+      for (const bad of [-0.1, 1.1]) {
+        const config = buildValidSchedulerConfig();
+        const outreach = structuredClone(DEFAULT_WEIGHTED_THOUGHT_OUTREACH_CONFIG);
+        outreach.lifecycle[field] = bad;
+        config.weightedThoughtOutreach = outreach;
+
+        expect(() => validateSchedulerConfig(config, 'test')).toThrow(
+          new RegExp(`weightedThoughtOutreach\\.lifecycle\\.${field}`, 'u'),
+        );
+      }
+    }
+  });
+
+  it('accepts a small positive dampening factor and preserves it', () => {
+    const config = buildValidSchedulerConfig();
+    const outreach = structuredClone(DEFAULT_WEIGHTED_THOUGHT_OUTREACH_CONFIG);
+    outreach.lifecycle.contradictionDampeningFactor = 0.01;
+    outreach.lifecycle.declineDampeningFactor = 1;
+    config.weightedThoughtOutreach = outreach;
+
+    const validated = validateSchedulerConfig(config, 'test');
+    expect(validated.weightedThoughtOutreach.lifecycle.contradictionDampeningFactor).toBe(0.01);
+    expect(validated.weightedThoughtOutreach.lifecycle.declineDampeningFactor).toBe(1);
+  });
+
+  it('leaves the default dampening factors unchanged', () => {
+    const config = buildValidSchedulerConfig();
+    config.weightedThoughtOutreach = structuredClone(DEFAULT_WEIGHTED_THOUGHT_OUTREACH_CONFIG);
+    const validated = validateSchedulerConfig(config, 'test');
+    expect(validated.weightedThoughtOutreach.lifecycle.contradictionDampeningFactor).toBe(0.6);
+    expect(validated.weightedThoughtOutreach.lifecycle.declineDampeningFactor).toBe(0.5);
+  });
+
   it('reads seed defaults without requiring a data directory', () => {
     withSeedDir((seedDir) => {
       const config = buildValidSchedulerConfig();

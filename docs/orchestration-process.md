@@ -100,7 +100,9 @@ attestation and cache without warming. Never share `node_modules` or `dist`
 between worktrees; install each worktree with
 `npm ci --offline --ignore-scripts` (normally about 15 seconds after prewarm).
 
-A bead is an ownership boundary, not automatically a paid PR boundary. Batch compatible small beads into one coherent unit; do not buy a standalone Greptile review for a routine tiny patch when it can safely join the next unit. Target at most 25 files, 1,500 counted changed lines, and 5 commits; the hard limits remain 25 files, 2,000 lines, and 8 commits. Do not mix unrelated work or pad a diff.
+A bead is an ownership boundary, never a paid PR boundary. Every external review costs the same flat fee whether the diff is 100 lines or 2,000, so the unit of publication is the **train**: assemble compatible completed beads into one coherent PR near the budget target. Target at most 25 files, 1,500 counted changed lines, and 5 commits; the hard limits remain 25 files, 2,000 lines, and 8 commits. Do not mix unrelated work or pad a diff.
+
+Publication floor: do not open a standalone PR for a small diff (roughly under 500 counted lines) while other compatible beads are completed or in flight — hold it for the train. A standalone small PR requires a recorded reason on its bead (security-urgent fix, conflict isolation, unblocking a dependent wave); "it was ready" is not a reason. The 2026-07-28 incident — fourteen single-fix PRs in one day, each paying a full external review, exhausting the review budget and stranding every remaining lane unpublished — is the failure mode this floor exists to prevent.
 
 When a coherent feature completes its final check, publish it the same session
 through `npm run pr:publish`. An independent lane validates the exact head and
@@ -210,6 +212,10 @@ Keep the two tiers distinct: the per-bead loop owns bead-local correctness and r
 
 An implementation bead closes only after its integrated PR is merged. Record the worker and integrated commits, source and gate evidence, exact PR head, `ci-required`, Greptile, and merge. A green worktree or open PR is not completion. Manual, live, deployment, and release proof remain separate validation beads.
 
+Closure happens **in the same motion as the merge**: the session that merges a train closes every bead whose content that train delivered (with the evidence above) and refreshes the committed `.beads/issues.jsonl` export in that train or an immediately following chore commit. Closes must not ride a later train — deferred closes are how other instances see phantom open work and re-litigate finished lanes.
+
+Cross-instance status must not lie between trains: `in_progress` means a live lane owns the bead right now. A lane that stops working a bead for any reason — parked, blocked, handed off, session ending — resets it from `in_progress` before the session ends, with a note saying where the work stands.
+
 ## Blocking Risk Standard
 
 IMPORTANT corresponds to tracker priority P0/P1. A finding receives IMPORTANT treatment only when it materially affects at least one of:
@@ -238,6 +244,8 @@ Nonblocking observations belong in the report. Do not create backlog noise for t
 Create a follow-up bead only for an outstanding important issue under the blocking risk standard.
 
 Create or reuse one wave-specific epic named `<wave> fixes`. Every remaining important defect from the wave is a child of that epic.
+
+Findings produced by remediation-phase or final-check reviews follow the same rule with no exception: a verified IMPORTANT finding becomes a child of the wave's fixes epic — never a standalone top-level bead — and is scheduled into the wave's own landing train or the immediately next one, not left to drift. Everything from those late reviews that falls below the Blocking Risk Standard goes in the handoff report only. Late reviews systematically drift toward pedantic and speculative findings; the standard, not reviewer confidence, decides what earns a bead. A wave whose reviews mint more open beads than the wave closes is a review-calibration failure to raise with the operator, not a normal outcome.
 
 Close the fixes epic as soon as all of its real children are complete.
 
@@ -351,6 +359,29 @@ On failure, return the evidence to the owning lane. Make at most the one
 already-authorized evidence-driven corrective commit, gate the new exact head,
 and publish it once. A second failure is an operator-visible blocker. Keep stable
 checkpoints green; never force-push or rewrite a shared branch.
+
+### Publish-or-park (no stranded heads)
+
+Every lane ends a session in exactly one of two states: **published** — its
+content is on a PR train that merged or is awaiting checks — or **parked** — a
+bead note records the branch, the exact gated head, the gate attestation, and
+the specific blocker preventing publication, where the operator can see it. A
+branch that passed the local gate but never entered the publish pipeline, with
+nothing recording that fact, is a protocol violation: it is exactly how
+finished, reviewed work goes missing while its beads claim progress.
+
+Reserve the word **done** for merged-to-main with the bead closed. Earlier
+states are named precisely — "implemented", "gated at `<head>`", "published,
+awaiting checks" — in reports, handoffs, and bead notes alike. Declaring done
+one step early is the root cause of cross-instance "done / not done"
+contradictions.
+
+If a required external check is unavailable — review credit exhausted, a
+retired or never-posting check, a platform outage — publication halts as an
+**operator-visible blocker**: park every affected lane with the note above,
+stop opening further PRs into the dead pipeline, and surface the blocker in the
+wave handoff and to the operator directly. Do not keep queueing publishes that
+each burn a timeout window against a check that cannot pass.
 
 Bead state remains on the authoritative local Dolt server. Run
 `bd dolt commit --json`; only push Dolt state when a real remote is configured

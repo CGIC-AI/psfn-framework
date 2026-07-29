@@ -258,7 +258,10 @@ For every multi-PR wave, use this order:
 - **Bounded loop**: implement → reviews → **one remediation pass** (verified IMPORTANT/P0-P1 findings only) → one final check → move on. No successive review/remediation cycles.
 - **Minimize paid review cycles**: when a small follow-up correction is discovered while a suitable related PR is still open, update that existing PR instead of opening a standalone PR. Validate corrections locally before publishing; do not create extra PRs for fixes that can safely ride an existing in-scope PR.
 - **IMPORTANT ≙ P0/P1** and only for: partner-data security/privacy/isolation, companion welfare/consent/autonomy, real data loss or secret exposure, a broken core acceptance path, or a mandatory gate (lint).
-- **Leftover IMPORTANT defects** go to the wave's `<wave> fixes` epic as self-contained beads for a fresh agent; the completed implementation bead still closes. **Nonblocking observations go in the handoff report only — never beads, never merge blockers.**
+- **Leftover IMPORTANT defects** go to the wave's `<wave> fixes` epic as self-contained beads for a fresh agent — including verified findings from remediation-phase and final-check reviews, which are never standalone top-level beads and ride the wave's own landing train or the immediately next one; the completed implementation bead still closes. **Nonblocking observations go in the handoff report only — never beads, never merge blockers.**
+- **Done vocabulary**: "done" is reserved for merged-to-main with the bead closed. Earlier states are named precisely — "implemented", "gated at `<head>`", "published, awaiting checks" — in reports, handoffs, and bead notes alike. Declaring done one step early is the root cause of cross-instance "done / not done" contradictions.
+- **Publish-or-park**: every lane ends a session either published (content on a merged or checks-pending train PR) or parked (a bead note records branch, exact gated head, and the specific blocker, operator-visible). A gated head with no PR and no parked note is a protocol violation. If a required external check is unavailable (review credit exhausted, retired check, outage), park the affected lanes and surface an operator-visible blocker; do not queue more publishes into a dead pipeline.
+- **Close at merge**: the session that merges a train closes every bead the train delivered — with commit, PR-head, and check evidence — and refreshes the committed `.beads/issues.jsonl` export in the same train or an immediately following chore commit; closes must not ride a later train. A lane that stops working a bead resets its `in_progress` status before its session ends.
 - For high-risk areas (config ownership, gateway policy, trust/privacy, persistence, deployment, durable memory writes) and recurring bug classes, additionally apply `docs/adversarial-review-and-bugfixing-practices.md`; consult it when the task warrants, not at every session start.
 
 ## Change Size And GitHub CI
@@ -271,8 +274,14 @@ dump.
 - Hard per-commit limit: 15 files or 800 counted changed lines.
 - Each commit must be one coherent change. Do not mix unrelated beads,
   remediation, generated artifacts, or another branch's history into it.
-- Prefer one bead per PR. Split implementation waves into independently green,
-  inactive or backward-safe tracer PRs, then use a small activation PR.
+- A bead is an ownership boundary, not a PR boundary. Assemble compatible
+  completed beads into one train PR near the budget target — every paid
+  external review costs the same flat fee regardless of diff size. Do not open
+  a standalone PR for a small diff (roughly under 500 counted lines) while
+  compatible beads are completed or in flight; a standalone small PR needs a
+  recorded reason on its bead (security-urgent, conflict isolation, unblocking
+  a dependent wave). Split oversized waves into independently green tracer PRs
+  plus a small activation PR — split down to the budget, never below it.
 - Use an integration branch only when partial delivery to `main` is genuinely
   unsafe. Bead PRs into that branch still obey the normal limits. A final pure
   rollup may use the exception below only when every included commit was
@@ -442,7 +451,8 @@ Use parallel streams only when the dependency graph supports it. Prefer up to th
 
 ### Integration branch policy
 
-- Prefer independently safe, small PRs to `main`, with a final small activation
+- Prefer independently safe PRs to `main`, batched into trains per the Change
+  Size rules (do not pay a review per tiny diff), with a final small activation
   PR. Create a dedicated integration branch only when partial delivery is unsafe
   or the effort requires combined manual verification.
 - Create each worktree from the integration branch and merge each completed stream back into the integration branch, not directly into the protected release branch.

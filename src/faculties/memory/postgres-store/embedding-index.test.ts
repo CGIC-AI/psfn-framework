@@ -58,6 +58,71 @@ describe('L2 embedding ANN index background build', () => {
       error: connectionError,
     });
   });
+
+  it('reclaims a valid same-name index whose stored predicate predates the dimension clause', async () => {
+    const currentName = `${L2_EMBEDDING_ANN_INDEX_BASE_NAME}_d4`;
+    const queries: string[] = [];
+    const client = {
+      query: vi.fn(async (sql: string) => {
+        queries.push(sql);
+        if (sql.includes('pg_get_indexdef')) {
+          return {
+            rows: [
+              // Valid, correctly named, but built under the OLD predicate — no
+              // vector_dims clause. Must be dropped, not kept by IF NOT EXISTS.
+              {
+                index_name: currentName,
+                is_valid: true,
+                index_def: `CREATE INDEX ${currentName} ON l2_memories USING hnsw `
+                  + '((embedding::vector(4)) vector_cosine_ops) WHERE embedding IS NOT NULL',
+              },
+            ],
+          };
+        }
+        return { rows: [] };
+      }),
+      release: vi.fn(),
+    };
+    const pool = { connect: vi.fn().mockResolvedValue(client) } as unknown as Pool;
+
+    const outcome = await buildL2EmbeddingAnnIndexConcurrently(pool, 4);
+
+    expect(outcome).toMatchObject({ status: 'ready', indexName: currentName });
+    expect(outcome.droppedIndexes).toContain(currentName);
+    expect(queries.some(q => q.includes(`DROP INDEX CONCURRENTLY IF EXISTS "${currentName}"`))).toBe(true);
+    expect(queries.some(q => q.startsWith('CREATE INDEX CONCURRENTLY'))).toBe(true);
+  });
+
+  it('keeps a valid same-name index that already carries the dimension predicate', async () => {
+    const currentName = `${L2_EMBEDDING_ANN_INDEX_BASE_NAME}_d4`;
+    const queries: string[] = [];
+    const client = {
+      query: vi.fn(async (sql: string) => {
+        queries.push(sql);
+        if (sql.includes('pg_get_indexdef')) {
+          return {
+            rows: [
+              {
+                index_name: currentName,
+                is_valid: true,
+                index_def: `CREATE INDEX ${currentName} ON l2_memories USING hnsw `
+                  + '((embedding::vector(4)) vector_cosine_ops) '
+                  + 'WHERE embedding IS NOT NULL AND vector_dims(embedding) = 4',
+              },
+            ],
+          };
+        }
+        return { rows: [] };
+      }),
+      release: vi.fn(),
+    };
+    const pool = { connect: vi.fn().mockResolvedValue(client) } as unknown as Pool;
+
+    const outcome = await buildL2EmbeddingAnnIndexConcurrently(pool, 4);
+
+    expect(outcome).toMatchObject({ status: 'ready', indexName: currentName, droppedIndexes: [] });
+    expect(queries.some(q => q.startsWith('DROP INDEX'))).toBe(false);
+  });
 });
 
 describe('embeddingAnnOrderExpression', () => {

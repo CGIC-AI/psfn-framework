@@ -169,16 +169,20 @@ export class SkillsRuntime {
     };
   }
 
-  /** Create a new managed skill. */
+  /**
+   * Create a new managed skill via the operator admin surface. Garden is the
+   * operator-facing approval authority, so its direct writes carry operator
+   * provenance and do not queue.
+   */
   createSkill(input: { name: string; category: string; content: string; description?: string }): { name: string; description: string; category: string; version: number; content: string; createdAt: string; updatedAt: string } {
-    const record = this.store.create(input);
+    const record = this.store.create(input, { updatedBy: 'operator:garden' });
     this.invalidate();
     return { name: record.name, description: record.description, category: record.category, version: record.version, content: record.content, createdAt: record.createdAt, updatedAt: record.updatedAt };
   }
 
-  /** Update an existing managed skill. */
+  /** Update an existing managed skill via the operator admin surface. */
   updateSkill(input: { name: string; content: string; description?: string }): { name: string; description: string; category: string; version: number; content: string; createdAt: string; updatedAt: string } {
-    const record = this.store.update(input);
+    const record = this.store.update(input, { updatedBy: 'operator:garden' });
     this.invalidate();
     return { name: record.name, description: record.description, category: record.category, version: record.version, content: record.content, createdAt: record.createdAt, updatedAt: record.updatedAt };
   }

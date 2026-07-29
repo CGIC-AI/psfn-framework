@@ -160,6 +160,14 @@ export class FakePostgresPool {
       return result(row ? [row] : []);
     }
 
+    // bead psfn-framework-qgqw.1: archiveContact's lock read.
+    if (normalized.startsWith('select trust_level, discord_user_id, archived_at from contacts where id = $1 for update')) {
+      const row = this.contacts.get(String(values[0] ?? ''));
+      return result(row
+        ? [{ trust_level: row.trust_level, discord_user_id: row.discord_user_id ?? null, archived_at: row.archived_at ?? null }]
+        : []);
+    }
+
     if (normalized.startsWith('select id, discord_user_id, display_name, nickname, trust_level, relationship_type, is_machine_intelligence, emotional_baseline, first_seen, last_seen, notes, timezone, gender, pronouns, age from contacts where discord_user_id = $1 limit 1')) {
       const needle = String(values[0] ?? '');
       const row = [...this.contacts.values()].find(contact => contact.discord_user_id === needle);

@@ -35,6 +35,16 @@
   let saveMessage = $state('');
   let saveOk = $state(true);
 
+  // bead psfn-framework-klbgi (adjudication R10.3): contacts are archived, never
+  // deleted. Archived contacts persist as read-only history and must stay
+  // visually distinct and filterable. Default to live-only; the operator opts in
+  // to seeing archived history.
+  let showArchived = $state(false);
+  const visibleContacts = $derived(
+    (data?.contacts ?? []).filter((c) => showArchived || !c.archivedAt),
+  );
+  const archivedCount = $derived((data?.contacts ?? []).filter((c) => c.archivedAt).length);
+
   // Expanded edit panel
   let editingContactId = $state<string | null>(null);
   let editDisplayName = $state('');
@@ -512,20 +522,31 @@
     }
   }
 
-  async function handleDelete(contactId: string) {
-    if (!confirm('Delete this contact? L2 memories will be orphaned (kept but unlinked). This cannot be undone.')) return;
+  // bead psfn-framework-klbgi (adjudication R10.3): the DELETE route archives the
+  // contact, it does not destroy it. Memories, audit trail, and identity history
+  // are kept as read-only history; only the live channel identities are released,
+  // so a recreated/reused platform id resolves to a NEW person. Archiving is not
+  // reversible from this UI today (no unarchive path exists).
+  async function handleArchive(contactId: string) {
+    if (!confirm(
+      'Archive this contact? Their memories, mutation audit trail, and identity '
+      + 'history are kept as read-only history. Their live channel identities are '
+      + 'released, so a recreated or reused platform id will resolve to a NEW '
+      + 'person, not this one. This is not a hard delete, but it cannot be undone '
+      + 'from here.',
+    )) return;
     saving = true;
     try {
       const result = await deleteContact(contactId);
       if (result.ok) {
         data = await listContacts();
         editingContactId = null;
-        flash(true, result.message || 'Contact deleted');
+        flash(true, result.message || 'Contact archived');
       } else {
-        flash(false, result.message || 'Delete failed');
+        flash(false, result.message || 'Archive failed');
       }
     } catch (e) {
-      flash(false, e instanceof Error ? e.message : 'Failed to delete contact');
+      flash(false, e instanceof Error ? e.message : 'Failed to archive contact');
     } finally {
       saving = false;
     }
@@ -822,22 +843,42 @@
       {/if}
     </div>
 
+    <!-- Archived filter: default live-only, opt in to read-only history -->
+    <div class="flex items-center justify-end mb-3">
+      <label class="inline-flex items-center gap-2 text-sm text-shadow-600 cursor-pointer select-none">
+        <input type="checkbox" bind:checked={showArchived}
+          class="rounded border-bark-300 text-gold-600 focus:ring-gold-300" />
+        Show archived
+        {#if archivedCount > 0}
+          <span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-bark-200 text-shadow-600">
+            {archivedCount}
+          </span>
+        {/if}
+      </label>
+    </div>
+
     <!-- Contact Cards Grid -->
     <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-      {#each data.contacts as contact (contact.id)}
+      {#each visibleContacts as contact (contact.id)}
         {@const channels = getChannels(contact.id)}
         {@const profile = getProfile(contact.id)}
         {@const graph = getSocialGraph(contact.id)}
         {@const relationshipScore = getRelationshipScore(contact.id)}
         {@const badge = trustBadge(contact.trustLevel)}
 
-        <div class="card-garden p-5 flex flex-col gap-3 {editingContactId === contact.id ? 'ring-2 ring-gold-400' : ''}">
+        <div class="card-garden p-5 flex flex-col gap-3 {editingContactId === contact.id ? 'ring-2 ring-gold-400' : ''} {contact.archivedAt ? 'opacity-60 grayscale' : ''}">
           <!-- Header: Name + Trust Badge -->
           <div class="flex items-start justify-between gap-2">
             <div class="min-w-0">
               <h3 class="text-base font-serif font-semibold text-shadow-900 truncate">
                 {contactDisplayName(contact)}
               </h3>
+              {#if contact.archivedAt}
+                <span class="inline-flex items-center gap-1 px-2 py-0.5 mt-0.5 rounded-full text-xs font-medium bg-bark-200 text-shadow-600"
+                  title="Archived on {contact.archivedAt}. Read-only history; live identities released.">
+                  Archived
+                </span>
+              {/if}
               {#if contact.nickname && contact.nickname.toLowerCase() !== contact.displayName.toLowerCase()}
                 <p class="text-sm text-shadow-600 truncate">aka {contact.nickname}</p>
               {/if}
@@ -1440,12 +1481,17 @@
                          hover:bg-bark-200 transition-colors border border-bark-300">
                   Cancel
                 </button>
-                {#if contact.trustLevel !== 'primary'}
-                  <button onclick={() => handleDelete(contact.id)} disabled={saving}
+                {#if contact.trustLevel !== 'primary' && !contact.archivedAt}
+                  <button onclick={() => handleArchive(contact.id)} disabled={saving}
+                    title="Archive this contact (keeps history, releases live identities). Not a hard delete."
                     class="ml-auto px-4 py-2 text-sm font-medium rounded-lg border border-wilt-300 text-wilt-600
                            hover:bg-wilt-50 disabled:opacity-50 transition-colors">
-                    Delete Contact
+                    Archive Contact
                   </button>
+                {:else if contact.archivedAt}
+                  <span class="ml-auto px-4 py-2 text-sm font-medium text-shadow-500 italic">
+                    Archived (read-only history)
+                  </span>
                 {/if}
               </div>
             </div>

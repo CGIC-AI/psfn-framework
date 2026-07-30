@@ -5,6 +5,10 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { AgentResponse, InferredPostTurnAction, SubstrateMessage } from '../../../shared/contracts/runtime.js';
 import { EventBus } from '../../../shared/event-bus.js';
 import {
+  clearDiagnosticLogRingBufferForTests,
+  getRecentDiagnosticLogRecords,
+} from '../../../shared/logger.js';
+import {
   BACKGROUND_CONTINUATION_RUNTIME_CLASS,
   MAINTENANCE_REFLECTION_RUNTIME_CLASS,
 } from '../../../core/agent/worker-lanes.js';
@@ -130,6 +134,7 @@ function readQuarantineSidecar(path: string): Array<{
 describe('wirePostTurnActionRuntime', () => {
   beforeEach(() => {
     resetCompletionHandoffDedupeForTests();
+    clearDiagnosticLogRingBufferForTests();
   });
 
   it('deduplicates queued actions and executes once after idle', async () => {
@@ -345,7 +350,7 @@ describe('wirePostTurnActionRuntime', () => {
     })).not.toThrow();
   });
 
-  it('drops oldest maintenance work when the maintenance lane queue budget is exceeded', async () => {
+  it('keeps oldest maintenance work and drops the newest action when the lane budget is exceeded', async () => {
     const nowSpy = vi.spyOn(Date, 'now');
     try {
       nowSpy.mockReturnValue(1_700_000_350_000);
@@ -387,9 +392,9 @@ describe('wirePostTurnActionRuntime', () => {
       });
 
       expect(runtime.listQueued().map((entry) => entry.dedupeKey)).toEqual([
+        'maintenance:0',
         'maintenance:1',
         'maintenance:2',
-        'maintenance:3',
       ]);
       expect(runtime.listQueued().map((entry) => entry.runtimeClass)).toEqual([
         MAINTENANCE_REFLECTION_RUNTIME_CLASS,
@@ -399,9 +404,15 @@ describe('wirePostTurnActionRuntime', () => {
       expect(phases).toEqual(expect.arrayContaining([
         expect.objectContaining({
           phase: 'dropped_budget',
-          dedupeKey: 'maintenance:0',
+          dedupeKey: 'maintenance:3',
           runtimeClass: MAINTENANCE_REFLECTION_RUNTIME_CLASS,
           chargeLane: 'maintenance',
+        }),
+      ]));
+      expect(getRecentDiagnosticLogRecords()).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          level: 'warn',
+          message: expect.stringContaining('maintenance-3'),
         }),
       ]));
     } finally {
@@ -461,16 +472,16 @@ describe('wirePostTurnActionRuntime', () => {
       expect(runtime.listQueued().map((entry) => entry.dedupeKey)).toEqual([
         'maintenance:1',
         'maintenance:2',
-        'maintenance:3',
+        'maintenance:old',
       ]);
       expect(telemetry).toEqual(expect.arrayContaining([
         expect.objectContaining({
           phase: 'dropped_budget',
-          dedupeKey: 'maintenance:old',
+          dedupeKey: 'maintenance:3',
           queueDepth: 3,
         }),
       ]));
-      expect(telemetry).not.toEqual(expect.arrayContaining([
+      expect(telemetry).toEqual(expect.arrayContaining([
         expect.objectContaining({
           phase: 'queued',
           dedupeKey: 'maintenance:old',
@@ -488,7 +499,7 @@ describe('wirePostTurnActionRuntime', () => {
           droppedCount: 1,
           recentDrops: [
             expect.objectContaining({
-              dedupeKey: 'maintenance:old',
+              dedupeKey: 'maintenance:3',
               queueDepth: 3,
               maxQueuedActions: 3,
               backPressureMode: 'defer_until_idle',
@@ -503,7 +514,7 @@ describe('wirePostTurnActionRuntime', () => {
         saturated: true,
         droppedCount: 1,
         lastDrop: expect.objectContaining({
-          dedupeKey: 'maintenance:old',
+          dedupeKey: 'maintenance:3',
         }),
       });
     } finally {

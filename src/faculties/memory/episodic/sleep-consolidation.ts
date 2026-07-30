@@ -742,6 +742,11 @@ export class SleepCycleEpisodeConsolidator {
     });
     result.reviewedEpisodes = canonicalEpisodes.length;
     if (result.candidateEpisodesReviewed === 0 && canonicalEpisodes.length === 0) {
+      log.warn('Sleep consolidation skipped because no candidate or canonical episodes were available', {
+        sessionId: input.sessionId,
+        reviewFrom,
+        reviewTo,
+      });
       return result;
     }
     const repairEligible: Episode[] = [];

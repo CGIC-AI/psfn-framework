@@ -68,7 +68,7 @@ describe('admin subsystem-health routes', () => {
         },
       ],
     };
-    const service: AdminSubsystemHealthService = { getSnapshot: () => snapshot };
+    const service: AdminSubsystemHealthService = { getSnapshot: async () => snapshot };
 
     const response = await invokeGet(service);
     expect(response.statusCode).toBe(200);

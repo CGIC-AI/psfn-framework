@@ -1,7 +1,10 @@
 import { sendJson } from '../../../channels/backplane/http/primitives.js';
+import { createComponentLogger } from '../../../shared/logger.js';
 import type { AdminSubsystemHealthService } from '../services/subsystem-health-service.js';
 import { exactPath } from '../route-matchers.js';
 import type { AdminApiRoute } from './types.js';
+
+const log = createComponentLogger('AdminSubsystemHealthRoutes');
 
 /**
  * Subsystem-health routes (E5.6). Exposes live background-lane health derived
@@ -23,7 +26,12 @@ export function buildAdminSubsystemHealthRoutes(options: {
           sendJson(res, 503, { error: 'Subsystem health backend unavailable' });
           return;
         }
-        sendJson(res, 200, subsystemHealth.getSnapshot());
+        void subsystemHealth.getSnapshot()
+          .then(snapshot => sendJson(res, 200, snapshot))
+          .catch((error: unknown) => {
+            log.error('Subsystem health snapshot failed', { error: String(error) });
+            sendJson(res, 503, { error: 'Subsystem health backend unavailable' });
+          });
       },
     },
   ];

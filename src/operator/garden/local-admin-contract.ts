@@ -35,6 +35,9 @@ import type { GroupMemoryBackfillExtractorPort } from '../../faculties/memory/ex
 import type {
   EpisodicStorePort,
 } from '../../faculties/memory/episodic/store-port.js';
+import {
+  DEFAULT_PASS_INTERVAL_MS as DREAM_MEANING_PASS_INTERVAL_MS,
+} from '../../faculties/memory/episodic/dream-meaning-pass.js';
 import type { ShardExecutionPort } from '../../faculties/shards/port.js';
 import type { SkillsRuntime } from '../../faculties/skills/runtime.js';
 import { ValuesJournalStore } from '../../faculties/values/store.js';
@@ -125,7 +128,10 @@ import {
 } from './services/observer-eval-sidecar-service.js';
 import { AdminPromptsDataService } from './services/prompts-service.js';
 import { AdminSchedulerService } from './services/scheduler-service.js';
-import { AdminSubsystemHealthDataService } from './services/subsystem-health-service.js';
+import {
+  AdminSubsystemHealthDataService,
+  type EpisodicWatermarkLaneDefinition,
+} from './services/subsystem-health-service.js';
 import { createAdminToolConformanceService } from './services/tool-conformance-service.js';
 import type { ToolConformanceRunner } from '../../core/agent/tool-conformance/runner.js';
 import { AdminSessionDataService } from './services/session-service.js';
@@ -157,6 +163,44 @@ import type { BackgroundWorkStorePort } from '../../core/agent/background-work/s
 import type { OperatorAlertSinkConfiguration } from '../../shared/contracts/operator-alerting.js';
 
 const log = createComponentLogger('GardenAdminContract');
+
+export function buildEpisodicWatermarkLaneDefinitions(config: {
+  episodeSynthesis: { timerIntervalMinutes: number };
+  arcFormation: { passIntervalDays: number };
+}): readonly EpisodicWatermarkLaneDefinition[] {
+  return [
+    {
+      processor: 'episodic_synthesis',
+      label: 'Episode synthesis watermark',
+      description: 'Durable candidate-episode synthesis progress.',
+      intervalMs: config.episodeSynthesis.timerIntervalMinutes * 60_000,
+    },
+    {
+      processor: 'sleep_consolidation',
+      label: 'Sleep consolidation watermark',
+      description: 'Durable nightly episode-consolidation progress.',
+      intervalMs: 24 * 60 * 60_000,
+    },
+    {
+      processor: 'dream_meaning',
+      label: 'Dream meaning watermark',
+      description: 'Durable first-person episode-meaning progress.',
+      intervalMs: DREAM_MEANING_PASS_INTERVAL_MS,
+    },
+    {
+      processor: 'wiki_pass',
+      label: 'Sleeptime wiki watermark',
+      description: 'Durable nightly wiki synthesis progress.',
+      intervalMs: 24 * 60 * 60_000,
+    },
+    {
+      processor: 'arc_formation',
+      label: 'Arc formation watermark',
+      description: 'Durable cross-day episodic arc-formation progress.',
+      intervalMs: config.arcFormation.passIntervalDays * 24 * 60 * 60_000,
+    },
+  ];
+}
 
 export interface InProcessGardenAdminContractOptions {
   env?: NodeJS.ProcessEnv;
@@ -360,6 +404,10 @@ export function createInProcessGardenAdminContract(
     eventBus: options.eventBus,
     scheduler: schedulerService,
     ...(options.operatorAlerting ? { operatorAlerting: options.operatorAlerting } : {}),
+    watermarkProvider: options.episodicStore ?? null,
+    watermarkDefinitions: () => (
+      buildEpisodicWatermarkLaneDefinitions(configStore.loadScheduler())
+    ),
   });
   const partnerAffectShadow = options.partnerAffectShadowStore
     ? new AdminPartnerAffectShadowDataService({

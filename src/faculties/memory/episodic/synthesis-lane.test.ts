@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { SessionEntry } from '../../../core/session/types.js';
 import type { EpisodeSynthesisLaneConfig } from '../../../system/config/scheduler-config.js';
 import {
@@ -16,6 +16,10 @@ import {
 import { DEMOTION_EPOCH_NOTICE_VERSION } from '../../../system/trust/context-envelope.js';
 import { destinationEpochEligible } from '../../../core/cogsec/disclosure/decision.js';
 import type { DisclosureDestinationConstraint } from '../../../core/cogsec/disclosure/contracts.js';
+import {
+  clearDiagnosticLogRingBufferForTests,
+  getRecentDiagnosticLogRecords,
+} from '../../../shared/logger.js';
 
 function synthMemory(provenance: MemoryProvenance, extractedAt: number): ScoredMemory {
   const memory: PurrMemory = {
@@ -82,6 +86,7 @@ function makeHarness(options: {
   scope?: 'direct' | 'group';
   config?: EpisodeSynthesisLaneConfig;
   memoryWriter?: { write: ReturnType<typeof vi.fn> };
+  now?: () => number;
 } = {}) {
   const entriesRef = { current: options.entries ?? [] };
   const sessionManager = {
@@ -134,6 +139,7 @@ function makeHarness(options: {
     companionAuthorIds: [COMPANION_AUTHOR_ID],
     ...(options.memoryWriter ? { memoryWriter: options.memoryWriter } : {}),
     onGateEvent: (event) => { gateEvents.push(event); },
+    ...(options.now ? { now: options.now } : {}),
   });
   return { lane, entriesRef, sessionManager, synthesizer, watermarkStore, scopeClassifier, gateEvents };
 }
@@ -153,6 +159,10 @@ function timerAction() {
 }
 
 describe('EpisodeSynthesisLane', () => {
+  beforeEach(() => {
+    clearDiagnosticLogRingBufferForTests();
+  });
+
   it('fails closed on invalid gate config', () => {
     expect(() => makeHarness({ config: gateConfig({ minRelevantTurns: 0 }) })).toThrow(
       'config.minRelevantTurns must be an integer >= 1',
@@ -183,6 +193,25 @@ describe('EpisodeSynthesisLane', () => {
       newEntryCount: 0,
       minRelevantTurns: 10,
     });
+    expect(getRecentDiagnosticLogRecords()[0]?.message).toContain('no new messages');
+  });
+
+  it('Gate 1 treats a future processing watermark as invalid so current traffic can recover the lane', async () => {
+    const now = Date.parse('2026-06-01T12:00:00.000Z');
+    const harness = makeHarness({
+      entries: mentionEntries(12),
+      watermarkEndedAt: '2026-07-15T00:00:00.000Z',
+      now: () => now,
+    });
+
+    await harness.lane.execute(timerAction());
+
+    expect(harness.synthesizer.run).toHaveBeenCalledTimes(1);
+    expect(harness.gateEvents[0]).toMatchObject({
+      outcome: 'processed',
+      newEntryCount: 12,
+      relevantTurnCount: 12,
+    });
   });
 
   it('holds below the relevance minimum and processes the accumulated chunk next period (9 -> 25)', async () => {
@@ -196,6 +225,7 @@ describe('EpisodeSynthesisLane', () => {
       relevantTurnCount: 9,
       minRelevantTurns: 10,
     });
+    expect(getRecentDiagnosticLogRecords()[0]?.message).toContain('below the relevance minimum');
 
     // Synthesis never ran, so the watermark did not advance; the next period
     // sees the full accumulated chunk (9 held + 16 new = 25 relevant turns).
@@ -395,6 +425,7 @@ describe('EpisodeSynthesisLane', () => {
       outcome: 'skipped',
       reason: 'testing_session',
     });
+    expect(getRecentDiagnosticLogRecords()[0]?.message).toContain('testing session');
   });
 
   it('writes deterministic behavioral summaries from high-confidence synthesis arcs', async () => {
@@ -538,5 +569,6 @@ describe('EpisodeSynthesisLane', () => {
       outcome: 'skipped',
       reason: 'session_retired',
     });
+    expect(getRecentDiagnosticLogRecords()[0]?.message).toContain('retired or quarantined session');
   });
 });

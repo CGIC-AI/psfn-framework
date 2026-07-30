@@ -21,6 +21,9 @@
   const schedulerLanes = $derived(
     (snapshot?.lanes ?? []).filter(lane => lane.source === 'scheduler'),
   );
+  const watermarkLanes = $derived(
+    (snapshot?.lanes ?? []).filter(lane => lane.source === 'watermark'),
+  );
 
   // ── Status presentation (honest: never/stale/failed are visually distinct) ──
   const STATUS_META: Record<SubsystemLaneStatus, { label: string; badge: string; accent: string }> = {
@@ -54,6 +57,14 @@
   function formatClock(ts: number | null): string {
     if (ts === null || !Number.isFinite(ts)) return '--';
     return new Date(ts).toLocaleString();
+  }
+
+  function formatInterval(intervalMs: number | undefined): string {
+    if (!intervalMs || !Number.isFinite(intervalMs)) return '--';
+    const hours = intervalMs / 3_600_000;
+    return hours >= 24 && Number.isInteger(hours / 24)
+      ? `${hours / 24}d`
+      : `${hours}h`;
   }
 
   function countEntries(counts: Record<string, number>): Array<[string, number]> {
@@ -105,8 +116,8 @@
     <div>
       <h1 class="text-2xl font-serif font-bold text-shadow-900">Subsystem Health</h1>
       <p class="text-sm text-shadow-600 mt-1">
-        Live health of background lanes from the event bus and scheduler. Event-lane history spans
-        only since the current process started -- it is not durable.
+        Live health from the event bus, durable episodic watermarks, and scheduler. Event-lane
+        history spans only since the current process started -- it is not durable.
       </p>
     </div>
     <button
@@ -221,6 +232,72 @@
           </article>
         {/each}
       </div>
+    </section>
+
+    <!-- Durable episodic processor watermarks -->
+    <section class="space-y-3">
+      <h2 class="text-base font-serif font-semibold text-shadow-900">
+        Episodic processor watermarks
+        <span class="text-xs font-sans font-normal text-shadow-500">(durable progress)</span>
+      </h2>
+      {#if watermarkLanes.length === 0}
+        <div class="card-garden p-6 text-sm text-shadow-500">
+          No durable episodic watermark state available.
+        </div>
+      {:else}
+        <div class="card-garden overflow-hidden">
+          <table class="w-full text-sm">
+            <thead>
+              <tr class="bg-bark-50 border-b border-bark-100 text-left text-xs text-shadow-500 uppercase tracking-wide">
+                <th class="px-4 py-2 font-medium">Processor</th>
+                <th class="px-4 py-2 font-medium">Status</th>
+                <th class="px-4 py-2 font-medium">Last advance</th>
+                <th class="px-4 py-2 font-medium">Expected cadence</th>
+                <th class="px-4 py-2 font-medium">Detail</th>
+              </tr>
+            </thead>
+            <tbody>
+              {#each watermarkLanes as lane (lane.id)}
+                {@const meta = statusMeta(lane.status)}
+                <tr class="border-b border-bark-100 last:border-b-0">
+                  <td class="px-4 py-2">
+                    <p class="text-shadow-800">{lane.label}</p>
+                    <p class="text-xs text-shadow-500">{lane.description}</p>
+                  </td>
+                  <td class="px-4 py-2">
+                    <span class="inline-block px-2 py-0.5 rounded-full text-xs font-semibold {meta.badge}">
+                      {meta.label}
+                    </span>
+                  </td>
+                  <td class="px-4 py-2 text-shadow-600">
+                    {#if lane.status === 'never'}
+                      <span class="italic text-shadow-500">{neverFiredNote(lane)}</span>
+                    {:else}
+                      {formatRelative(lane.lastRunAt ?? lane.lastEventAt)}
+                    {/if}
+                  </td>
+                  <td class="px-4 py-2 text-shadow-600">{formatInterval(lane.intervalMs)}</td>
+                  <td class="px-4 py-2">
+                    {#if lane.lastError}
+                      <span class="text-wilt-600 font-mono break-words">{lane.lastError}</span>
+                    {:else if lane.status === 'stale' && lane.nextRunDueAt}
+                      <span class="text-gold-700">overdue since {formatRelative(lane.nextRunDueAt)}</span>
+                    {:else if (lane.counts.blockedScopeCount ?? 0) > 0}
+                      <span class="text-wilt-600">
+                        {lane.counts.blockedScopeCount} blocked scope(s)
+                      </span>
+                    {:else}
+                      <span class="text-shadow-500">
+                        {lane.counts.scopeCount ?? 0} scope(s)
+                      </span>
+                    {/if}
+                  </td>
+                </tr>
+              {/each}
+            </tbody>
+          </table>
+        </div>
+      {/if}
     </section>
 
     <!-- Scheduler lanes -->

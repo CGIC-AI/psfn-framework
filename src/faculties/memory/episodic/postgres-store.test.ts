@@ -953,6 +953,46 @@ describe('PostgresEpisodicStore', () => {
     }));
   });
 
+  it('aggregates durable health for every processor without a global row-page blind spot', async () => {
+    const pool = new FakeEpisodicPool();
+    const store = makeStore(pool);
+    for (let index = 0; index < 101; index += 1) {
+      const updatedAt = new Date(Date.parse('2026-03-30T12:00:00.000Z') + index).toISOString();
+      await store.upsertProcessingWatermark({
+        id: `watermark-synthesis-${String(index)}`,
+        processor: 'episodic_synthesis',
+        sourceRef: `terminal:${String(index)}`,
+        processedEndedAt: updatedAt,
+        lastProcessedAt: updatedAt,
+        updatedAt,
+        ...(index === 0 ? { status: 'blocked' as const } : {}),
+      });
+    }
+    await store.upsertProcessingWatermark({
+      id: 'watermark-arc-stale',
+      processor: 'arc_formation',
+      sourceRef: 'terminal:daily',
+      processedEndedAt: '2026-03-01T00:00:00.000Z',
+      lastProcessedAt: '2026-03-01T00:00:00.000Z',
+      updatedAt: '2026-03-01T00:00:00.000Z',
+    });
+
+    await expect(store.listProcessingWatermarkHealth()).resolves.toMatchObject([
+      {
+        processor: 'arc_formation',
+        scopeCount: 1,
+        blockedScopeCount: 0,
+        latestWatermark: { id: 'watermark-arc-stale' },
+      },
+      {
+        processor: 'episodic_synthesis',
+        scopeCount: 101,
+        blockedScopeCount: 1,
+        latestWatermark: { id: 'watermark-synthesis-100' },
+      },
+    ]);
+  });
+
   it('persists candidate reconciliation decisions and episode lineage rows', async () => {
     const pool = new FakeEpisodicPool();
     const store = makeStore(pool);

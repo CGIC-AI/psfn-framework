@@ -51,6 +51,7 @@ import type {
   EpisodeTimeSearchOptions,
   EpisodeUpdateInput,
   EpisodicProcessingWatermark,
+  EpisodicProcessingWatermarkHealthSummary,
   EpisodicProcessingWatermarkScope,
   EpisodicProcessingWatermarkWriteInput,
   EpisodicStoreOptions,
@@ -93,6 +94,19 @@ import {
   type PostgresEpisodeRow,
   type PostgresProcessingWatermarkRow,
 } from './postgres-store/rows.js';
+
+type PostgresProcessingWatermarkHealthRow = PostgresProcessingWatermarkRow & {
+  scope_count: number | string;
+  blocked_scope_count: number | string;
+};
+
+function parseWatermarkHealthCount(value: number | string, field: string): number {
+  const parsed = typeof value === 'number' ? value : Number(value);
+  if (!Number.isSafeInteger(parsed) || parsed < 0) {
+    throw new Error(`Episodic watermark health ${field} must be a non-negative integer`);
+  }
+  return parsed;
+}
 
 export function createPostgresEpisodicStore(
   databaseUrl: string,
@@ -948,6 +962,37 @@ export class PostgresEpisodicStore implements EpisodicStorePort {
       normalized.sessionId ?? '',
     ]);
     return row ? mapWatermarkRow(row) : undefined;
+  }
+
+  async listProcessingWatermarkHealth(): Promise<EpisodicProcessingWatermarkHealthSummary[]> {
+    const rows = await queryRows<PostgresProcessingWatermarkHealthRow>(this.pool, `
+      WITH ranked_watermarks AS (
+        SELECT
+          watermarks.*,
+          ROW_NUMBER() OVER (
+            PARTITION BY watermarks.processor
+            ORDER BY watermarks.last_processed_at DESC, watermarks.updated_at DESC, watermarks.id ASC
+          ) AS processor_rank,
+          (COUNT(*) OVER (PARTITION BY watermarks.processor))::integer AS scope_count,
+          (
+            COUNT(*) FILTER (
+              WHERE watermarks.status = 'blocked'
+                OR watermarks.reconciliation_status = 'blocked'
+            ) OVER (PARTITION BY watermarks.processor)
+          )::integer AS blocked_scope_count
+        FROM l01_processing_watermarks AS watermarks
+      )
+      SELECT *
+      FROM ranked_watermarks
+      WHERE processor_rank = 1
+      ORDER BY processor ASC
+    `);
+    return rows.map((row) => ({
+      processor: row.processor,
+      latestWatermark: mapWatermarkRow(row),
+      scopeCount: parseWatermarkHealthCount(row.scope_count, 'scope_count'),
+      blockedScopeCount: parseWatermarkHealthCount(row.blocked_scope_count, 'blocked_scope_count'),
+    }));
   }
 
   async upsertProcessingWatermark(

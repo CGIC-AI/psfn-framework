@@ -277,6 +277,11 @@ export class EpisodeSynthesisLane {
     const trigger = this.resolveActionTrigger(action);
 
     if (isTestingSessionId(sessionId)) {
+      log.warn('Episode synthesis skipped for testing session', {
+        sessionId,
+        actionId: action.id,
+        trigger,
+      });
       this.emitGateEvent({
         sessionId,
         channelId: sessionId,
@@ -290,6 +295,11 @@ export class EpisodeSynthesisLane {
     }
 
     if (this.sessionManager.isSessionRetiredOrQuarantined?.(sessionId)) {
+      log.warn('Episode synthesis skipped for retired or quarantined session', {
+        sessionId,
+        actionId: action.id,
+        trigger,
+      });
       this.emitGateEvent({
         sessionId,
         channelId: sessionId,
@@ -319,10 +329,25 @@ export class EpisodeSynthesisLane {
     const processedEndedAtMs = watermark?.processedEndedAt
       ? Date.parse(watermark.processedEndedAt)
       : Number.NaN;
-    const newEntries = Number.isFinite(processedEndedAtMs)
+    const watermarkIsFutureDated = Number.isFinite(processedEndedAtMs)
+      && processedEndedAtMs > this.now();
+    if (watermarkIsFutureDated) {
+      log.warn('Episode synthesis watermark is ahead of the runtime clock; evaluating all retained entries', {
+        sessionId,
+        channelId,
+        processedEndedAt: watermark?.processedEndedAt,
+      });
+    }
+    const newEntries = Number.isFinite(processedEndedAtMs) && !watermarkIsFutureDated
       ? entries.filter(entry => entry.timestamp > processedEndedAtMs)
       : entries;
     if (newEntries.length === 0) {
+      log.warn('Episode synthesis skipped because there are no new messages after the watermark', {
+        sessionId,
+        actionId: action.id,
+        trigger,
+        processedEndedAt: watermark?.processedEndedAt,
+      });
       this.emitGateEvent({
         sessionId,
         channelId,
@@ -348,6 +373,14 @@ export class EpisodeSynthesisLane {
         }) !== 'not_relevant'
       )).length;
     if (relevantTurnCount < this.config.minRelevantTurns) {
+      log.warn('Episode synthesis skipped below the relevance minimum', {
+        sessionId,
+        actionId: action.id,
+        trigger,
+        newEntryCount: newEntries.length,
+        relevantTurnCount,
+        minRelevantTurns: this.config.minRelevantTurns,
+      });
       this.emitGateEvent({
         sessionId,
         channelId,

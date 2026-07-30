@@ -846,7 +846,7 @@ export function wirePostTurnActionRuntime(
       .filter((candidate) => candidate.runtimeClass === entry.runtimeClass)
       .sort((left, right) => left.action.inferredAt - right.action.inferredAt || left.nextRunAt - right.nextRunAt);
     const overflow = Math.max(0, sameClassEntries.length - runtimeProfile.maxQueuedActions);
-    const droppedEntries = sameClassEntries.slice(0, overflow);
+    const droppedEntries = overflow > 0 ? sameClassEntries.slice(-overflow) : [];
     if (overflow > 0) {
       for (const droppedEntry of droppedEntries) {
         candidateQueue.delete(droppedEntry.action.dedupeKey);
@@ -872,6 +872,12 @@ export function wirePostTurnActionRuntime(
     }
     for (const droppedEntry of droppedEntries) {
       const reason = `Runtime class queue budget exhausted for ${droppedEntry.runtimeClass}`;
+      log.warn(`Post-turn action "${droppedEntry.action.id}" dropped by runtime lane queue budget`, {
+        actionId: droppedEntry.action.id,
+        actionKind: droppedEntry.action.kind,
+        runtimeClass: droppedEntry.runtimeClass,
+        error: reason,
+      });
       recordDrop(droppedEntry, reason);
       emitTelemetry('dropped_budget', droppedEntry, {
         error: reason,

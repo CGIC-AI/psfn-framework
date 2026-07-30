@@ -606,6 +606,10 @@ export class FakeEpisodicPool {
       return queryResult(this.filterBatchArcRows(normalized, values));
     }
 
+    if (normalized.startsWith('with ranked_watermarks as')) {
+      return queryResult(this.processingWatermarkHealthRows());
+    }
+
     if (normalized.startsWith('select * from l01_processing_watermarks')) {
       return queryResult(this.filterWatermarkRows(values));
     }
@@ -737,7 +741,7 @@ export class FakeEpisodicPool {
       const limit = Number(values[0] ?? this.watermarks.size);
       return [...this.watermarks.values()]
         .sort((left, right) => (
-          left.updated_at.localeCompare(right.updated_at)
+          right.updated_at.localeCompare(left.updated_at)
           || left.id.localeCompare(right.id)
         ))
         .slice(0, limit);
@@ -754,6 +758,42 @@ export class FakeEpisodicPool {
       && (row.thread_id ?? '') === threadId
       && (row.session_id ?? '') === sessionId
     ));
+  }
+
+  private processingWatermarkHealthRows(): Array<StoredWatermarkRow & {
+    processor_rank: number;
+    scope_count: number;
+    blocked_scope_count: number;
+  }> {
+    const byProcessor = new Map<string, StoredWatermarkRow[]>();
+    for (const row of this.watermarks.values()) {
+      const entries = byProcessor.get(row.processor) ?? [];
+      entries.push(row);
+      byProcessor.set(row.processor, entries);
+    }
+    return [...byProcessor.entries()]
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([, entries]) => {
+        const latest = entries
+          .slice()
+          .sort((left, right) => (
+            right.last_processed_at.localeCompare(left.last_processed_at)
+            || right.updated_at.localeCompare(left.updated_at)
+            || left.id.localeCompare(right.id)
+          ))
+          .at(0);
+        if (!latest) {
+          throw new Error('Fake episodic pool processor group unexpectedly empty');
+        }
+        return {
+          ...latest,
+          processor_rank: 1,
+          scope_count: entries.length,
+          blocked_scope_count: entries.filter(entry => (
+            entry.status === 'blocked' || entry.reconciliation_status === 'blocked'
+          )).length,
+        };
+      });
   }
 
   private filterMessageClaimRows(normalized: string, values: readonly unknown[]): StoredMessageClaimRow[] {

@@ -16,6 +16,10 @@ import {
   buildConsolidatedEpisodeInput,
   buildMergeChains,
 } from './sleep-consolidation.js';
+import {
+  clearDiagnosticLogRingBufferForTests,
+  getRecentDiagnosticLogRecords,
+} from '../../../shared/logger.js';
 
 const NOW = new Date('2026-06-10T08:00:00.000Z');
 
@@ -78,6 +82,22 @@ describe('SleepCycleEpisodeConsolidator', () => {
       }),
     } as { content: string };
   }
+
+  it('warns when no candidate or canonical episodes are available for the pass', async () => {
+    clearDiagnosticLogRingBufferForTests();
+    const consolidator = new SleepCycleEpisodeConsolidator(
+      makeStore(),
+      { getRecentMessages: () => [] },
+      { complete: vi.fn() },
+      { now: () => NOW },
+    );
+
+    const result = await consolidator.run({ sessionId: 'discord:main' });
+
+    expect(result.candidateEpisodesReviewed).toBe(0);
+    expect(result.reviewedEpisodes).toBe(0);
+    expect(getRecentDiagnosticLogRecords()[0]?.message).toContain('no candidate or canonical episodes');
+  });
 
   it('merges contiguous same-scope episodes into one sitting and refines it', async () => {
     const store = makeStore();

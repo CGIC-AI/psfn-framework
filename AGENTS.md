@@ -221,8 +221,11 @@ For every multi-PR wave, use this order:
 
 1. Run `npm run gate:canary` from a clean checkout exactly at `origin/main`
    before branch fanout. It fetches first; unconditionally runs CI rules, lint,
-   build, typecheck, repository hygiene, Semgrep rules, and tests; and logs why
-   empty-diff change-budget, Semgrep-diff, and UBS stages skip. Its
+   build, typecheck, repository hygiene, startup-owner-files, Semgrep rules,
+   and tests; and logs why empty-diff change-budget, commit-identities,
+   Semgrep-diff, and UBS stages skip. Branch gates additionally verify that
+   every commit in the base-to-head range has an allowlisted author and
+   committer email (`verify:commit-identities`). Its
    `kind: 'canary'` attestation under `.git/local-delivery-gate/` records the
    base SHA, gate version, and timestamp. A red canary stops the wave; fix
    `main` first.
@@ -296,7 +299,10 @@ excluded.
 The `change-budget:exception` label is maintainer-only in intent. It requires a
 non-empty `## Change-budget exception` PR section and is only for an indivisible
 generated migration, pure rename, atomic cross-interface change, or reviewed
-integration rollup. It is not for a feature wave that should be split.
+integration rollup. It is not for a feature wave that should be split. Apply it
+at publication time with `npm run pr:publish -- ... --label
+change-budget:exception` so the first CI run already sees it (a label added
+after creation is invisible until the next PR event).
 
 The change-budget check reads that label and rationale from the open PR through
 authenticated `gh` when available. Offline runs must provide the explicit
@@ -518,7 +524,8 @@ Required sequence:
    git status
    ```
 6. Open or update the PR only through `npm run pr:publish` (pass `--title` and
-   `--body-file` after `--` for a new PR). It handles ready-before-push ordering
+   `--body-file` after `--` for a new PR; repeat `--label` for any labels that
+   must be visible to the first CI run). It handles ready-before-push ordering
    and waits for CI and Greptile on the exact attested SHA. Do not merge or close
    the bead unless the required checks pass; SHA drift or a skipped check is a
    defect, not a reason to close/reopen the PR.

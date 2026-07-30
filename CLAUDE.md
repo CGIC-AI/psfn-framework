@@ -151,6 +151,9 @@ coherent review unit and publish its attested exact head with:
 npm run pr:publish -- --title "<title>" --body-file <path>
 ```
 
+Repeat `--label <name>` for labels that must be visible to the first CI run
+(e.g. `change-budget:exception`).
+
 For an existing PR with no metadata change, run `npm run pr:publish`. The wrapper
 makes a draft ready before pushing (and creates new PRs non-draft), then rejects
 SHA drift or skipped CI/Greptile checks. It requires the authenticated `gh` user

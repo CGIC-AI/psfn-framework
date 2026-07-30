@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import { execFileSync, spawnSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 
 import {
@@ -24,11 +25,16 @@ function run(executable, args, { stdio = 'pipe' } = {}) {
 }
 
 function parseArguments(argv) {
-  const options = { base: 'main', title: '', bodyFile: '' };
+  const options = { base: 'main', title: '', bodyFile: '', labels: [] };
   for (let index = 0; index < argv.length; index += 1) {
     if (argv[index] === '--base') options.base = argv[++index] ?? '';
     else if (argv[index] === '--title') options.title = argv[++index] ?? '';
     else if (argv[index] === '--body-file') options.bodyFile = argv[++index] ?? '';
+    else if (argv[index] === '--label') {
+      const label = argv[++index] ?? '';
+      if (!label) throw new Error('--label requires a label name');
+      options.labels.push(label);
+    }
     else throw new Error(`Unknown argument: ${argv[index]}`);
   }
   if (!options.base) throw new Error('--base requires a branch');
@@ -36,20 +42,30 @@ function parseArguments(argv) {
 }
 
 function currentPr(branch, runCommand = run) {
-  const prs = JSON.parse(
-    runCommand('gh', [
-      'pr',
-      'list',
-      '--head',
-      branch,
-      '--state',
-      'open',
-      '--limit',
-      '2',
-      '--json',
-      'number,url,isDraft',
-    ]),
-  );
+  const raw = runCommand('gh', [
+    'pr',
+    'list',
+    '--head',
+    branch,
+    '--state',
+    'open',
+    '--limit',
+    '2',
+    '--json',
+    'number,url,isDraft',
+  ]);
+  let prs;
+  try {
+    prs = JSON.parse(raw);
+  } catch (error) {
+    throw new Error(
+      `GitHub returned malformed PR data for branch ${branch}: ${errorMessage(error)}`,
+      { cause: error },
+    );
+  }
+  if (!Array.isArray(prs)) {
+    throw new Error(`GitHub returned malformed PR data for branch ${branch}: expected an array`);
+  }
   if (prs.length > 1) throw new Error(`Multiple open PRs found for branch ${branch}`);
   if (prs[0] && (
     !Number.isInteger(prs[0].number)
@@ -59,6 +75,51 @@ function currentPr(branch, runCommand = run) {
     throw new Error(`GitHub returned malformed PR data for branch ${branch}`);
   }
   return prs[0] ?? null;
+}
+
+function errorMessage(error) {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function updateExistingPrMetadata(prNumber, { title, bodyFile }, runCommand = run) {
+  if (!title && !bodyFile) return;
+
+  try {
+    const args = [
+      'api',
+      '--method',
+      'PATCH',
+      `repos/{owner}/{repo}/pulls/${prNumber}`,
+    ];
+    if (title) args.push('-f', `title=${title}`);
+    if (bodyFile) args.push('-f', `body=${readFileSync(bodyFile, 'utf8')}`);
+    runCommand('gh', args, { stdio: 'inherit' });
+  } catch (error) {
+    throw new Error(
+      `Failed to update metadata for PR #${prNumber} before push: ${errorMessage(error)}`,
+      { cause: error },
+    );
+  }
+}
+
+function applyExistingPrLabels(prNumber, labels, runCommand = run) {
+  if (labels.length === 0) return;
+
+  try {
+    const args = [
+      'api',
+      '--method',
+      'POST',
+      `repos/{owner}/{repo}/issues/${prNumber}/labels`,
+    ];
+    for (const label of labels) args.push('-f', `labels[]=${label}`);
+    runCommand('gh', args, { stdio: 'inherit' });
+  } catch (error) {
+    throw new Error(
+      `Failed to apply labels to PR #${prNumber} before push: ${errorMessage(error)}`,
+      { cause: error },
+    );
+  }
 }
 
 function requireConfiguredStatusActor(runCommand = run) {
@@ -76,6 +137,29 @@ function requireConfiguredStatusActor(runCommand = run) {
       `Authenticated gh user ${actual || '(unknown)'} is not the configured local-gate status issuer`,
     );
   }
+}
+
+function validateLabels(labels, runCommand = run) {
+  for (const label of labels) {
+    try {
+      runCommand('gh', [
+        'api',
+        `repos/{owner}/{repo}/labels/${encodeURIComponent(label)}`,
+      ]);
+    } catch (error) {
+      throw new Error(
+        `Label "${label}" does not exist or is not accessible; `
+        + `fix or remove that --label before publishing: ${errorMessage(error)}`,
+        { cause: error },
+      );
+    }
+  }
+}
+
+function markPrReady(reference, runCommand = run) {
+  const args = ['pr', 'ready'];
+  if (reference !== undefined) args.push(String(reference));
+  runCommand('gh', args, { stdio: 'inherit' });
 }
 
 function pushBranch(branch, head, { runCommand = run, spawnCommand = spawnSync } = {}) {
@@ -136,21 +220,20 @@ export async function publishPr(argv = process.argv.slice(2), {
   const validation = validateGateAttestation(readGateAttestation(state.attestationPath), state).result;
   if (!validation.valid) throw new Error(validation.reason);
   requireConfiguredStatusActor(runCommand);
+  validateLabels(options.labels, runCommand);
 
   const existing = currentPr(branch, runCommand);
   if (!existing && (!options.title || !options.bodyFile)) {
     throw new Error('A new PR requires --title and --body-file; this prevents an unreviewable empty body.');
   }
-  if (existing && (options.title || options.bodyFile)) {
-    const editArgs = ['pr', 'edit', String(existing.number)];
-    if (options.title) editArgs.push('--title', options.title);
-    if (options.bodyFile) editArgs.push('--body-file', options.bodyFile);
-    runCommand('gh', editArgs, { stdio: 'inherit' });
+  if (existing) {
+    updateExistingPrMetadata(existing.number, options, runCommand);
+    applyExistingPrLabels(existing.number, options.labels, runCommand);
   }
 
   const flippedReady = existing?.isDraft === true;
   if (flippedReady) {
-    runCommand('gh', ['pr', 'ready', String(existing.number)], { stdio: 'inherit' });
+    markPrReady(existing.number, runCommand);
   }
   try {
     pushBranch(branch, state.head, { runCommand, spawnCommand });
@@ -173,22 +256,50 @@ export async function publishPr(argv = process.argv.slice(2), {
   }
   publishRemoteAttestation(state, runCommand);
   if (!existing) {
-    runCommand(
-      'gh',
-      [
-        'pr',
-        'create',
-        '--base',
-        options.base,
-        '--head',
-        branch,
-        '--title',
-        options.title,
-        '--body-file',
-        options.bodyFile,
-      ],
-      { stdio: 'inherit' },
-    );
+    const createArgs = [
+      'pr',
+      'create',
+      '--base',
+      options.base,
+      '--head',
+      branch,
+      '--title',
+      options.title,
+      '--body-file',
+      options.bodyFile,
+    ];
+    if (options.labels.length > 0) createArgs.push('--draft');
+    for (const label of options.labels) createArgs.push('--label', label);
+    try {
+      runCommand(
+        'gh',
+        createArgs,
+        { stdio: 'inherit' },
+      );
+    } catch (error) {
+      if (options.labels.length > 0) {
+        throw new Error(
+          `Creating the labeled draft PR failed. Because gh creates the PR before applying labels, `
+          + `a PR may now exist in draft with missing labels. Inspect it with `
+          + `\`gh pr list --head ${branch}\`; if present, apply every requested label and run `
+          + `\`gh pr ready\`: ${errorMessage(error)}`,
+          { cause: error },
+        );
+      }
+      throw error;
+    }
+    if (options.labels.length > 0) {
+      try {
+        markPrReady(undefined, runCommand);
+      } catch (error) {
+        throw new Error(
+          `The new PR was created in draft with its labels but could not be marked ready; `
+          + `it remains in draft. Run \`gh pr ready\` from this branch after fixing the error: `
+          + errorMessage(error),
+          { cause: error },
+        );
+      }
+    }
   }
 
   const pr = currentPr(branch, runCommand);

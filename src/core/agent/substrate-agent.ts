@@ -23,8 +23,6 @@ import { createMemoryAppCache } from '../../shared/cache/memory-cache.js';
 import type { AppCache } from '../../shared/cache/types.js';
 import { RUNTIME_LAYOUT_MODE, resolveRuntimeLayoutMode } from '../../persistence/layout.js';
 import type { SessionManager } from '../session/manager.js';
-import type { CapturedSessionReads } from '../session/manager/captured-session-owner.js';
-import type { ConversationScope } from '../session/conversation-scope.js';
 import { formatAttributedSystemContent } from '../session/entry-attribution.js';
 import {
   INTENTION_FOLLOW_UP_AUTHOR_ID,
@@ -39,7 +37,6 @@ import type { ContactTrackingGate } from '../contacts/tracking-gate.js';
 import type { ImageVisionReviewer } from '../../primitives/images/types.js';
 import type { VisionIntakeImageScreenerPort } from './substrate-agent/vision-attachments.js';
 import type { LLMProviderPort, MemoryProvider, MemoryExtractor, ScratchpadProvider, WikiRetrievalPort } from './contracts.js';
-import type { TrustLevel } from '../../system/trust/types.js';
 import {
   classifyChannelDisclosure,
   resolveChannelResponseStyle,
@@ -56,7 +53,6 @@ import {
 import type { ChannelPromptRegistryPort } from '../../channels/backplane/registry-port.js';
 import type { MessageHandlerOptions } from '../../channels/backplane/types.js';
 import type { PromptComposer } from '../identity/prompt-composer.js';
-import { resolveCompanionIdFromConfig } from '../identity/companion-runtime.js';
 import {
   createSubstrateStreamFn,
   type SubstrateStreamTransport,
@@ -107,9 +103,8 @@ import type { RuntimeToolCatalogSnapshot } from './tool-catalog.js';
 import { createTurnId } from '../turns/id.js';
 import { EmotionState, type VADVector } from '../emotion/state.js';
 import type { EmotionObserver } from '../emotion/observer.js';
-import { EmotionAppraisal, type EmotionAppraisalEntry } from '../emotion/appraisal.js';
+import { EmotionAppraisal } from '../emotion/appraisal.js';
 import type { ActiveConcernContextProvider } from '../intention/concern-store-port.js';
-import type { ActiveConcernRuntimeData } from '../intention/concerns.js';
 import type { PendingFollowUpContextProvider } from '../intention/pending-follow-ups.js';
 import type { BehavioralPatternContextProvider } from '../intention/patterns.js';
 import {
@@ -136,7 +131,6 @@ import {
   invalidateStaticPromptPrefixCache,
   logStaticPromptPrefixCacheEvent,
   resolveConfiguredCharacterName,
-  resolveRuntimePromptGuidanceVariables,
 } from './substrate-agent/prompt-runtime-helpers.js';
 import {
   countResolvableSpeakerContactsForTurn,
@@ -146,29 +140,19 @@ import {
   type IntentionPostTurnHook,
   type PostTurnActionInferer,
 } from './substrate-agent/post-turn-actions.js';
-import { resolveSituatedPlaceRef } from './substrate-agent/runtime-context-sections/situated-presence.js';
 import { resolveTurnSituatedFallbackPlaceId } from './substrate-agent/runtime-context-sections/turn-presence-mode.js';
 import type { CompanionPresenceTurnPort } from './companion-presence-runtime.js';
 import { SessionPresenceOverrideState } from './session-presence-override.js';
 import {
-  buildBehavioralNotesContextBlock as buildBehavioralNotesContextBlockForTurn,
-  buildDynamicPromptTemplateVariables as buildDynamicPromptTemplateVariablesForTurn,
-  buildPromptTemplateVariables as buildPromptTemplateVariablesForTurn,
-  buildRuntimeContext as buildRuntimeContextForTurn,
-  buildScratchpadContextBlock as buildScratchpadContextBlockForTurn,
-  getPersonaAdaptation as getPersonaAdaptationForTurn,
-  resolveActiveConcernsRuntimeData as resolveActiveConcernsRuntimeDataForTurn,
   resolveContinuitySubjectKey,
-  resolveAuthorContext as resolveAuthorContextForTurn,
   type CompanionSubstrateHealthContext,
-  type ParticipantRelationshipEdgeInput,
   type ResolvedAuthorContext,
-  type UserRuntimeProfile,
 } from './substrate-agent/runtime-context.js';
 import { SituatedEmanationTracker } from './substrate-agent/runtime-context-sections/situated-emanation.js';
 import { createVirtualRoomFollower, type VirtualRoomFollower } from './virtual-room-follow.js';
 import { installContextCoherenceMonitor } from './context-coherence-monitor.js';
 import { EmotionSelfModelRuntime } from './substrate-agent/emotion-self-model-runtime.js';
+import { PromptContextBuilder } from './substrate-agent/prompt-context-builder.js';
 import {
   handleMessageForTurn,
   type TurnDeliveryLifecycle,
@@ -188,7 +172,6 @@ import {
 } from './substrate-agent/model-runtime.js';
 import {
   buildTurnBudgetCharacteristics as buildTurnBudgetCharacteristicsForRuntime,
-  resolveAvailableReactions as resolveAvailableReactionsForRuntime,
   resolveChannelType as resolveChannelTypeForRuntime,
   resolveTaskKind as resolveTaskKindForRuntime,
 } from './substrate-agent/channel-routing-runtime.js';
@@ -365,6 +348,7 @@ export class SubstrateAgent {
   private readonly fatigueBudget: FatigueBudgetPort | null;
   private readonly humanAttentionPressure: HumanAttentionPressurePort | null;
   private readonly fatigueRegulationReservations: IcpFatigueRegulationReservationPort | null;
+  private readonly promptContextBuilder: PromptContextBuilder;
   private durableChargeRecorder: DurableRunChargeRecorder | null = null;
   private durableChargeProbe: DurableRunChargeProbe | null = null;
   private currentInternalState: InternalState | null = null;
@@ -760,6 +744,39 @@ export class SubstrateAgent {
         throw error;
       }
     }
+
+    // Per-turn prompt/context input assembly (charter 12.1 split, emh3p.2).
+    this.promptContextBuilder = new PromptContextBuilder({
+      config: this.config,
+      resolveCharacterPromptVariables: this.resolveCharacterPromptVariables,
+      getAgentModelId: () => this.agent.state.model.id,
+      getAgentModelContextWindow: () => this.agent.state.model as { contextWindow?: unknown } | undefined,
+      getAgentUserFacingBoundaryIndex: () => (this.agent.state as { userFacingBoundaryIndex?: unknown }).userFacingBoundaryIndex,
+      getCharacterName: () => this.characterName,
+      setCharacterName: (name) => {
+        this.characterName = name;
+      },
+      toolRuntimeFacade: this.toolRuntimeFacade,
+      getInternalStateContinuityGap: () => this.internalStateContinuityGap,
+      noteInternalStateContinuityGapRendered: () => {
+        this.internalStateContinuityGapRenderCount += 1;
+      },
+      getSkillsRuntime: () => this.skillsRuntime,
+      getCompanionPresence: () => this.companionPresence,
+      placesRegistryConfig: this.placesRegistryConfig,
+      getChannelRegistry: () => this.channelRegistry,
+      emotionSelfModelRuntime: this.emotionSelfModelRuntime,
+      getCompanionSubstrateHealthContext: () => this.companionSubstrateHealthContext,
+      situatedEmanationTracker: this.situatedEmanationTracker,
+      resolveSituatedFallbackPlaceIdForTurn: (message) => this.resolveSituatedFallbackPlaceIdForTurn(message),
+      getActiveConcernProvider: () => this.activeConcernProvider,
+      getBehavioralPatternProvider: () => this.behavioralPatternProvider,
+      getScratchpadProvider: () => this.scratchpadProvider,
+      getContactStore: () => this.contactStore,
+      contactTrackingGate: this.contactTrackingGate,
+      resolveCapabilityAccess: () => this.resolveCapabilityAccess(),
+      log,
+    });
   }
 
   /** Ensure the model is resolved before calling agent.prompt() */
@@ -1148,7 +1165,7 @@ export class SubstrateAgent {
   }
 
   private async trySteerActiveRun(message: SubstrateMessage): Promise<boolean> {
-    const authorContext = await this.resolveAuthorContext(message);
+    const authorContext = await this.promptContextBuilder.resolveAuthorContext(message);
     if (!this.turnQueueIngress.canQueueIntoActiveOrdinaryRun()) return false;
     const turnSessionIdentity = this.requireActiveTurnSessionIdentity();
     this.turnSupportRuntime.recordUserMessage(
@@ -1268,7 +1285,7 @@ export class SubstrateAgent {
       : message.content;
     const authorContext: ResolvedAuthorContext | null = isSystemOriginated
       ? null
-      : await this.resolveAuthorContext(message);
+      : await this.promptContextBuilder.resolveAuthorContext(message);
     if (!this.turnQueueIngress.canQueueIntoActiveOrdinaryRun()) return false;
     const turnSessionIdentity = this.requireActiveTurnSessionIdentity();
     if (isSystemOriginated) {
@@ -1368,7 +1385,7 @@ export class SubstrateAgent {
       return;
     }
 
-    const authorContext = await this.resolveAuthorContext(message);
+    const authorContext = await this.promptContextBuilder.resolveAuthorContext(message);
     const continuitySubjectKey = resolveContinuitySubjectKey({
       canonicalContactKey: authorContext.canonicalContactKey,
       subjectIdentityKey: authorContext.subjectIdentityKey,
@@ -1694,7 +1711,7 @@ export class SubstrateAgent {
           turnMessage,
           taskKind,
         ),
-        resolveAuthorContext: (turnMessage) => this.resolveAuthorContext(turnMessage),
+        resolveAuthorContext: (turnMessage) => this.promptContextBuilder.resolveAuthorContext(turnMessage),
         countResolvableSpeakerContacts: (turnMessage, speakers) => countResolvableSpeakerContactsForTurn({
           message: turnMessage,
           speakers,
@@ -1716,7 +1733,7 @@ export class SubstrateAgent {
         captureAuthoritativeSystemPrompt: (systemPrompt) => {
           this.currentAuthoritativeSystemPrompt = systemPrompt.trim() || null;
         },
-        buildScratchpadContextBlock: () => this.buildScratchpadContextBlock(),
+        buildScratchpadContextBlock: () => this.promptContextBuilder.buildScratchpadContextBlock(),
         normalizeTurnPromptOverride: (turnMessage) => this.normalizeTurnPromptOverride(turnMessage),
         resolveResponseStyle: (turnMessage, channelType, channelMeta) => this.resolveResponseStyle(
           turnMessage,
@@ -1731,7 +1748,7 @@ export class SubstrateAgent {
           canonicalContactKey,
           subjectIdentityKey,
           now,
-        ) => this.buildPromptTemplateVariables(
+        ) => this.promptContextBuilder.buildPromptTemplateVariables(
           turnMessage,
           resolvedUserName,
           trustLevel,
@@ -1759,7 +1776,7 @@ export class SubstrateAgent {
           conversationScope,
           participantRelationshipEdges,
           capturedSessionReads,
-        ) => this.buildDynamicPromptTemplateVariables(
+        ) => this.promptContextBuilder.buildDynamicPromptTemplateVariables(
           turnMessage,
           resolvedUserName,
           trustLevel,
@@ -1809,7 +1826,7 @@ export class SubstrateAgent {
           metacognitiveFlags,
           emotionAppraisalChain,
           conversationScope,
-        ) => this.buildRuntimeContext(
+        ) => this.promptContextBuilder.buildRuntimeContext(
           turnMessage,
           resolvedUserName,
           trustLevel,
@@ -1844,7 +1861,7 @@ export class SubstrateAgent {
           internalState,
           metacognitiveFlags,
           templateVariables,
-        ) => this.getPersonaAdaptation(
+        ) => this.promptContextBuilder.getPersonaAdaptation(
           trustLevel,
           internalState,
           metacognitiveFlags,
@@ -1857,13 +1874,13 @@ export class SubstrateAgent {
         extractResponseText: () => extractResponseTextForRuntime({
           assistantMessage: getLatestAssistantMessageForRuntime(
             this.agent.state.messages,
-            this.getUserFacingBoundaryIndex(),
+            this.promptContextBuilder.getUserFacingBoundaryIndex(),
           ),
           logger: log,
         }),
         getLatestAssistantMessage: () => getLatestAssistantMessageForRuntime(
           this.agent.state.messages,
-          this.getUserFacingBoundaryIndex(),
+          this.promptContextBuilder.getUserFacingBoundaryIndex(),
         ),
       },
     }), message, deliveryLifecycle);
@@ -1956,279 +1973,6 @@ export class SubstrateAgent {
     observation: import('../session/icp-delivery-recovery.js').IcpDeliveryObservation,
   ): void {
     this.sessionManager.recordIcpDeliveryObservation(observation);
-  }
-
-  // ── Private helpers ──
-
-  /**
-   * Index into agent state messages where internal follow-up continuation
-   * began for the current run, set by the patched agent loop when queued
-   * whispers/system notes drain into a live run. Assistant text past this
-   * index is internal processing, not the outward reply.
-   */
-  private getUserFacingBoundaryIndex(): number | undefined {
-    const boundary = (this.agent.state as { userFacingBoundaryIndex?: unknown }).userFacingBoundaryIndex;
-    return typeof boundary === 'number' && Number.isInteger(boundary) && boundary >= 0
-      ? boundary
-      : undefined;
-  }
-
-  private buildPromptTemplateVariables(
-    message: SubstrateMessage,
-    resolvedUserName: string,
-    trustLevel: TrustLevel,
-    channelType: string | undefined,
-    canonicalContactKey: string | undefined,
-    subjectIdentityKey: string | undefined,
-    now: Date,
-  ): Record<string, string> {
-    const characterPromptVariables = this.resolveCharacterPromptVariables();
-    const runtimePromptGuidanceVariables = resolveRuntimePromptGuidanceVariables(this.config);
-    const { templateVariables, runtimeCharacterName } = buildPromptTemplateVariablesForTurn({
-      message,
-      resolvedUserName,
-      trustLevel,
-      channelType,
-      canonicalContactKey,
-      subjectIdentityKey,
-      now,
-      characterPromptVariables,
-      modelId: this.agent.state.model.id,
-      fallbackCharacterName: this.characterName,
-    });
-    this.characterName = runtimeCharacterName;
-    return {
-      ...templateVariables,
-      ...runtimePromptGuidanceVariables,
-    };
-  }
-
-  private async buildDynamicPromptTemplateVariables(
-    message: SubstrateMessage,
-    resolvedUserName: string,
-    trustLevel: TrustLevel,
-    relationshipType: ResolvedAuthorContext['relationshipType'] | undefined,
-    channelType: string | undefined,
-    canonicalContactKey: string | undefined,
-    subjectIdentityKey: string | undefined,
-    responseStyle: ResponseStyle = 'concise',
-    now: Date = new Date(),
-    taskKind: string | undefined,
-    templateVariables: Record<string, string>,
-    internalState: InternalState,
-    metacognitiveFlags: readonly MetacognitiveFlag[],
-    emotionAppraisalChain: readonly EmotionAppraisalEntry[],
-    currentUserRuntimeProfile: UserRuntimeProfile | undefined,
-    conversationScope: ConversationScope,
-    participantRelationshipEdges: readonly ParticipantRelationshipEdgeInput[],
-    capturedSessionReads: CapturedSessionReads,
-  ): Promise<Record<string, string>> {
-    // Owner-bound read: this builder runs inside the admitted turn's captured
-    // session scope, where the raw SessionManager.getRecentMessages fails closed
-    // (assertMutableSessionReadAllowed). Read through the facade so recent
-    // history is scoped to the turn owner, not whatever session is active-context.
-    const recentMessages = capturedSessionReads.getRecentMessages(32);
-    const latestPriorMessage = [...recentMessages]
-      .reverse()
-      .find((entry, index) => {
-        if (entry.role === 'system' || entry.role === 'tool') return false;
-        if (
-          index === 0
-          && entry.role === 'user'
-          && entry.authorId === message.authorId
-          && entry.content === message.content
-        ) {
-          return false;
-        }
-        return true;
-      });
-    const activeToolCounts = this.toolRuntimeFacade.resolveActiveToolCounts();
-    const analysisWorkbenchAvailable = this.toolRuntimeFacade
-      .getAdaptiveToolRuntimeState()
-      .activeTools
-      .some(entry => entry.toolName === 'analysis_workbench');
-    const extendedTools = [...this.toolRuntimeFacade.getExtendedTools()];
-    const coreToolNames = new Set(
-      this.toolRuntimeFacade.getToolCatalog().core.map(tool => tool.name),
-    );
-
-    // A continuity gap stays visible for the first turn after restart, then
-    // clears (see setCurrentSelfModelState). The gap variables render through
-    // the runtime.continuity_notice layer.
-    if (this.internalStateContinuityGap) {
-      this.internalStateContinuityGapRenderCount += 1;
-    }
-
-    // One access resolution feeds BOTH the advertised tier and the advertised
-    // token set (mus2.1): the prompt tool guide and the capability tool gates
-    // must agree on the same grant, including an injected custom shard access.
-    const capabilityAccess = this.resolveCapabilityAccess();
-
-    const skillsContext = await this.skillsRuntime?.getPromptXml() ?? '';
-    return buildDynamicPromptTemplateVariablesForTurn({
-      message,
-      conversationScope,
-      resolvedUserName,
-      trustLevel,
-      relationshipType,
-      channelType,
-      canonicalContactKey,
-      subjectIdentityKey,
-      responseStyle,
-      now,
-      taskKind,
-      templateVariables,
-      internalState,
-      metacognitiveFlags,
-      emotionAppraisalChain,
-      modelId: this.agent.state.model.id,
-      capabilityTier: capabilityAccess.getTier(),
-      capabilityGrantedTokens: capabilityAccess.getGrantedTokens(),
-      activeToolCounts,
-      extendedTools,
-      coreToolNames,
-      skillsContext,
-      activeConcerns: this.resolveActiveConcernsRuntimeData(canonicalContactKey),
-      behavioralNotesBlock: this.buildBehavioralNotesContextBlock(canonicalContactKey),
-      lastMessageReceivedAtMs: latestPriorMessage?.timestamp ?? null,
-      recentChannelEntries: recentMessages,
-      currentUserRuntimeProfile,
-      participantRelationshipEdges,
-      analysisWorkbenchAvailable,
-      internalStateContinuityGap: this.internalStateContinuityGap,
-      config: this.config as Record<string, unknown>,
-    });
-  }
-
-  /** Build a runtime context block with live operational overlays for this turn. */
-  private buildRuntimeContext(
-    message: SubstrateMessage,
-    resolvedUserName: string,
-    trustLevel: TrustLevel,
-    relationshipType: ResolvedAuthorContext['relationshipType'] | undefined,
-    channelType: string | undefined,
-    canonicalContactKey?: string,
-    subjectIdentityKey?: string,
-    responseStyle: ResponseStyle = 'concise',
-    now: Date = new Date(),
-    taskKind?: string,
-    templateVariables?: Record<string, string>,
-    internalState?: InternalState,
-    metacognitiveFlags: readonly MetacognitiveFlag[] = [],
-    emotionAppraisalChain: readonly EmotionAppraisalEntry[] = [],
-    conversationScope?: ConversationScope,
-  ): string {
-    const activeToolCounts = this.toolRuntimeFacade.resolveActiveToolCounts();
-    // Dual-presence fallback (vinz.29): single per-turn resolution shared by
-    // the co-presence read below AND the rendered situated block, so "Also
-    // here:" always agrees with "Here:" — including on mindspace (plain-chat)
-    // turns that foreground the twin of the last-known physical room.
-    const situatedFallbackPlaceId = this.resolveSituatedFallbackPlaceIdForTurn(message);
-    // Co-presence (W5a): resolved against the SAME place resolution the
-    // situated block performs — turn place first, then the dual-presence
-    // fallback (deliberate virtual move, session/default twin, or a
-    // physical-origin emanation fallback) — so "Also here:" agrees with the rendered "Here:" on
-    // placeless turns too; null companionPresence (flag-off) yields no
-    // coPresent input and byte-identical rendering.
-    const situatedPlace = this.companionPresence
-      ? resolveSituatedPlaceRef(
-        message,
-        this.placesRegistryConfig,
-        situatedFallbackPlaceId,
-      )
-      : undefined;
-    const coPresent = situatedPlace
-      ? this.companionPresence?.getCoPresent(situatedPlace)
-      : undefined;
-    // Curated reaction surface (jp36.3.1.2): resolved from the turn's channel
-    // adapter (standard subset plus guild-custom emojis with a configured
-    // one-line meaning). Undefined on channels that expose no reaction surface.
-    const reactionSurface = resolveAvailableReactionsForRuntime(message, this.channelRegistry);
-    return buildRuntimeContextForTurn({
-      message,
-      ...(conversationScope ? { conversationScope } : {}),
-      resolvedUserName,
-      trustLevel,
-      relationshipType,
-      channelType,
-      canonicalContactKey,
-      subjectIdentityKey,
-      responseStyle,
-      now,
-      taskKind,
-      templateVariables,
-      internalState,
-      metacognitiveFlags,
-      emotionAppraisalChain,
-      modelId: this.agent.state.model.id,
-      contextWindow: resolveContextWindowForRuntime(
-        this.config,
-        this.agent.state.model as { contextWindow?: unknown } | undefined,
-      ),
-      capabilityTier: this.resolveCapabilityAccess().getTier(),
-      activeToolCounts,
-      extendedTools: [...this.toolRuntimeFacade.getExtendedTools()],
-      coreToolNames: new Set(this.toolRuntimeFacade.getToolCatalog().core.map(tool => tool.name)),
-      skillsContext: this.skillsRuntime?.getCachedPromptXml() ?? '',
-      behavioralNotesBlock: this.buildBehavioralNotesContextBlock(canonicalContactKey),
-      formatTopEmotions: (discrete) => this.emotionSelfModelRuntime.formatTopEmotions(discrete),
-      config: this.config as unknown as Record<string, unknown>,
-      substrateHealth: this.companionSubstrateHealthContext,
-      ...(this.placesRegistryConfig ? { placesRegistry: this.placesRegistryConfig } : {}),
-      ...(coPresent && coPresent.length > 0 ? { coPresent } : {}),
-      emanationTracker: this.situatedEmanationTracker,
-      ...(situatedFallbackPlaceId ? { situatedFallbackPlaceId } : {}),
-      ...(reactionSurface ? { reactionSurface } : {}),
-    });
-  }
-
-  private resolveActiveConcernsRuntimeData(canonicalContactKey?: string): ActiveConcernRuntimeData | undefined {
-    return resolveActiveConcernsRuntimeDataForTurn({
-      activeConcernProvider: this.activeConcernProvider,
-      canonicalContactKey,
-      logger: log,
-    });
-  }
-
-  private buildBehavioralNotesContextBlock(canonicalContactKey?: string): string {
-    return buildBehavioralNotesContextBlockForTurn({
-      behavioralPatternProvider: this.behavioralPatternProvider,
-      canonicalContactKey,
-      logger: log,
-    });
-  }
-
-  private buildScratchpadContextBlock(): string {
-    return buildScratchpadContextBlockForTurn({
-      scratchpadProvider: this.scratchpadProvider,
-      logger: log,
-    });
-  }
-
-  private getPersonaAdaptation(
-    trustLevel: TrustLevel,
-    internalState: InternalState,
-    metacognitiveFlags: readonly MetacognitiveFlag[],
-    templateVariables?: Record<string, string>,
-  ): string | null {
-    return getPersonaAdaptationForTurn({
-      trustLevel,
-      internalState,
-      metacognitiveFlags,
-      templateVariables,
-      config: this.config as unknown as Record<string, unknown>,
-    });
-  }
-
-  private async resolveAuthorContext(message: SubstrateMessage): Promise<ResolvedAuthorContext> {
-    return resolveAuthorContextForTurn({
-      message,
-      contactStore: this.contactStore,
-      logger: log,
-      companionIdentityKey: resolveCompanionIdFromConfig(this.config),
-      companionDisplayName: this.characterName,
-      ...(this.contactTrackingGate ? { contactTracking: this.contactTrackingGate } : {}),
-    });
   }
 
 }

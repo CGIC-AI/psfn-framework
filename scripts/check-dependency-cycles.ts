@@ -1,24 +1,19 @@
 #!/usr/bin/env tsx
 
-import { readdirSync, readFileSync } from 'node:fs';
-import { createRequire } from 'node:module';
-import { dirname, extname, join, relative, resolve } from 'node:path';
+import { readFileSync } from 'node:fs';
+import { relative, resolve } from 'node:path';
 import process from 'node:process';
 import { isRecord } from '../src/shared/utils/types.js';
-
-const require = createRequire(import.meta.url);
-const ts = require('typescript');
+import {
+  buildImportGraph,
+  collectSourceFiles,
+  toPosix,
+} from './lib/import-graph.js';
 
 const SOURCE_ROOT = resolve(process.cwd(), 'src');
 const DEFAULT_BASELINE_PATH = resolve(process.cwd(), 'config/dependency-cycle-baseline.json');
 const PROJECT_PREFIX = ['P', 'S', 'F', 'N'].join('');
 const REMEDIATION_BEAD = `${PROJECT_PREFIX}-7hue`;
-const SOURCE_EXTENSIONS = ['.ts', '.tsx', '.mts', '.cts'];
-const JS_IMPORT_EXTENSIONS = ['.js', '.mjs', '.cjs'];
-
-function toPosix(pathValue) {
-  return pathValue.split('\\').join('/');
-}
 
 function printUsage() {
   console.log('Usage: tsx scripts/check-dependency-cycles.ts [options]');
@@ -62,142 +57,6 @@ function parseArgs(argv) {
     includeTests,
     baselinePath,
   };
-}
-
-function isSourceFile(pathValue) {
-  return SOURCE_EXTENSIONS.includes(extname(pathValue));
-}
-
-function collectSourceFiles(rootDir, includeTests) {
-  const output = [];
-  const stack = [rootDir];
-
-  while (stack.length > 0) {
-    const current = stack.pop();
-    if (!current) continue;
-    const entries = readdirSync(current, { withFileTypes: true });
-    for (const entry of entries) {
-      const absolute = join(current, entry.name);
-      if (entry.isDirectory()) {
-        stack.push(absolute);
-        continue;
-      }
-      if (!entry.isFile() || !isSourceFile(absolute)) {
-        continue;
-      }
-      if (!includeTests && absolute.endsWith('.test.ts')) {
-        continue;
-      }
-      output.push(resolve(absolute));
-    }
-  }
-
-  output.sort();
-  return output;
-}
-
-function extractImportSpecifiers(filePath) {
-  const sourceText = readFileSync(filePath, 'utf-8');
-  const sourceFile = ts.createSourceFile(
-    filePath,
-    sourceText,
-    ts.ScriptTarget.Latest,
-    true,
-    ts.ScriptKind.TS,
-  );
-  const specifiers = new Set();
-
-  function addSpecifier(moduleSpecifier) {
-    if (!moduleSpecifier || !ts.isStringLiteralLike(moduleSpecifier)) {
-      return;
-    }
-    const value = moduleSpecifier.text.trim();
-    if (value.startsWith('.')) {
-      specifiers.add(value);
-    }
-  }
-
-  function visit(node) {
-    if (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) {
-      addSpecifier(node.moduleSpecifier);
-    } else if (
-      ts.isImportEqualsDeclaration(node)
-      && ts.isExternalModuleReference(node.moduleReference)
-    ) {
-      addSpecifier(node.moduleReference.expression);
-    } else if (
-      ts.isCallExpression(node)
-      && node.expression.kind === ts.SyntaxKind.ImportKeyword
-      && node.arguments.length === 1
-      && ts.isStringLiteralLike(node.arguments[0])
-    ) {
-      addSpecifier(node.arguments[0]);
-    }
-
-    ts.forEachChild(node, visit);
-  }
-
-  visit(sourceFile);
-  return [...specifiers];
-}
-
-function resolveImportToSource(importerPath, specifier) {
-  const importerDir = dirname(importerPath);
-  const rawTarget = resolve(importerDir, specifier);
-  const targetExt = extname(rawTarget);
-  const candidates = [];
-
-  if (targetExt.length === 0) {
-    for (const extension of SOURCE_EXTENSIONS) {
-      candidates.push(`${rawTarget}${extension}`);
-    }
-    for (const extension of SOURCE_EXTENSIONS) {
-      candidates.push(join(rawTarget, `index${extension}`));
-    }
-  } else {
-    if (SOURCE_EXTENSIONS.includes(targetExt)) {
-      candidates.push(rawTarget);
-    }
-    if (JS_IMPORT_EXTENSIONS.includes(targetExt)) {
-      const base = rawTarget.slice(0, -targetExt.length);
-      for (const extension of SOURCE_EXTENSIONS) {
-        candidates.push(`${base}${extension}`);
-      }
-    }
-  }
-
-  for (const candidate of candidates) {
-    const absolute = resolve(candidate);
-    if (absolute.startsWith(SOURCE_ROOT)) {
-      return absolute;
-    }
-  }
-
-  return null;
-}
-
-function buildGraph(files) {
-  const fileSet = new Set(files);
-  const graph = new Map();
-  let edgeCount = 0;
-
-  for (const filePath of files) {
-    const imports = extractImportSpecifiers(filePath);
-    const targets = new Set();
-
-    for (const specifier of imports) {
-      const resolvedTarget = resolveImportToSource(filePath, specifier);
-      if (!resolvedTarget || !fileSet.has(resolvedTarget)) {
-        continue;
-      }
-      targets.add(resolvedTarget);
-    }
-
-    edgeCount += targets.size;
-    graph.set(filePath, [...targets].sort());
-  }
-
-  return { graph, edgeCount };
 }
 
 function canonicalizeCycle(cycle) {
@@ -324,7 +183,7 @@ function main() {
     const options = parseArgs(process.argv.slice(2));
     const baseline = loadBaseline(options.baselinePath);
     const files = collectSourceFiles(SOURCE_ROOT, options.includeTests);
-    const { graph, edgeCount } = buildGraph(files);
+    const { graph, edgeCount } = buildImportGraph(files, SOURCE_ROOT);
     const cycles = detectCycles(graph);
 
     console.log(

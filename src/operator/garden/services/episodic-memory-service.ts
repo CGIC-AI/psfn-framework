@@ -7,8 +7,14 @@ import {
 import type {
   EpisodicStorePort,
 } from '../../../faculties/memory/episodic/store-port.js';
-import { createSubjectAuthorizedEpisodicStore } from '../../../faculties/memory/episodic/subject-authorized-store.js';
-import type { GardenRequestContext } from '../garden-request-context.js';
+import {
+  createSubjectAuthorizedEpisodicStore,
+  isEpisodeVisibleToSubject,
+} from '../../../faculties/memory/episodic/subject-authorized-store.js';
+import type {
+  FleetGardenRequestContext,
+  GardenRequestContext,
+} from '../garden-request-context.js';
 import type {
   AdminEpisodicEpisodeDetailData,
   AdminEpisodicEpisodeListData,
@@ -132,12 +138,25 @@ function averageSalience(episodes: readonly Episode[]): number {
 export class AdminEpisodicMemoryDataService implements AdminEpisodicMemoryService {
   constructor(private readonly store: AdminEpisodicStore) {}
 
+  private subjectContext(
+    context: GardenRequestContext | undefined,
+  ): FleetGardenRequestContext | null {
+    if (!context || context.kind !== 'fleet_principal') return null;
+    if (context.resource.area !== 'memory'
+      || (context.subjectRelation !== 'self' && context.subjectRelation !== 'self_or_co_subject')) {
+      throw new Error('Garden memory access requires an exact request-local subject relation');
+    }
+    return context;
+  }
+
   /**
    * Subject-authorized episodic projection (88u3). For a fleet principal,
-   * every read is delegated to a service instance over the
-   * subject-authorized episodic store, which admits only episodes whose
-   * explicitly attributed participants include the request's authenticated
-   * contact binding (and arcs whose endpoints are both visible). Mirrors the
+   * every returned row is filtered by the subject-authorized episodic
+   * predicate, which admits only episodes whose explicitly attributed
+   * participants include the request's authenticated contact binding (and
+   * arcs whose endpoints are both visible). The list path retains only the
+   * raw candidate count long enough to report an owner-only withheld count;
+   * foreign episode rows never enter the response. Mirrors the
    * memory service's request-local subject scoping: the subject comes from
    * the signed capability's contact binding, never request parameters, and
    * role never widens visibility. Legacy/public contexts keep the
@@ -147,13 +166,10 @@ export class AdminEpisodicMemoryDataService implements AdminEpisodicMemoryServic
   private subjectProjection(
     context: GardenRequestContext | undefined,
   ): AdminEpisodicMemoryDataService | null {
-    if (!context || context.kind !== 'fleet_principal') return null;
-    if (context.resource.area !== 'memory'
-      || (context.subjectRelation !== 'self' && context.subjectRelation !== 'self_or_co_subject')) {
-      throw new Error('Garden memory access requires an exact request-local subject relation');
-    }
+    const fleetContext = this.subjectContext(context);
+    if (!fleetContext) return null;
     return new AdminEpisodicMemoryDataService(createSubjectAuthorizedEpisodicStore(this.store, {
-      viewerContactId: context.actor.contactId,
+      viewerContactId: fleetContext.actor.contactId,
     }));
   }
 
@@ -161,8 +177,7 @@ export class AdminEpisodicMemoryDataService implements AdminEpisodicMemoryServic
     params?: URLSearchParams,
     context?: GardenRequestContext,
   ): Promise<AdminEpisodicEpisodeListData> {
-    const projected = this.subjectProjection(context);
-    if (projected) return await projected.listEpisodes(params);
+    const fleetContext = this.subjectContext(context);
     const limit = parsePositiveInteger(
       params?.get('limit'),
       DEFAULT_EPISODE_LIST_LIMIT,
@@ -177,12 +192,24 @@ export class AdminEpisodicMemoryDataService implements AdminEpisodicMemoryServic
       throw new Error('from must be before or equal to to');
     }
 
-    const episodes = (await this.loadEpisodeCandidates({ threadId, from, to }))
+    const candidates = await this.loadEpisodeCandidates({ threadId, from, to });
+    const episodes = (fleetContext
+      ? candidates.filter(episode => (
+        isEpisodeVisibleToSubject(episode, fleetContext.actor.contactId)
+      ))
+      : candidates)
       .sort(compareEpisodeRecency);
     const page = episodes.slice(offset, offset + limit);
 
     return {
       episodes: page,
+      ...(fleetContext?.actor.role === 'owner'
+        ? {
+          withheldBySubjectAuthorizationCount: candidates.length - episodes.length,
+        }
+        : context === undefined || context.kind === 'legacy_operator'
+          ? { withheldBySubjectAuthorizationCount: 0 }
+          : {}),
       pagination: {
         limit,
         offset,

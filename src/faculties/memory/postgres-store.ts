@@ -56,6 +56,7 @@ import type {
   MemorySubjectAdminResult,
   MemorySubjectBackfillOptions,
   MemorySubjectBackfillResult,
+  MemorySubjectClassificationCoverage,
   EmbeddingSearchAuthorization,
 } from './memory-store-port.js';
 import { InactiveMemoryUpdateError, normalizeMemorySalienceUpdates } from './memory-store-port.js';
@@ -122,6 +123,9 @@ import {
   memoryEvolutionKey,
   memoryKey,
 } from './postgres-store/utils.js';
+import {
+  inspectMemorySubjectClassificationCoverage,
+} from './postgres-store/subject-coverage.js';
 import {
   assertExistingMemorySchemaHasEmbeddingColumn,
   validatePostgresMemorySchema,
@@ -193,6 +197,8 @@ export interface PostgresMemoryStoreOptions {
   role?: string;
   /** Disable only for bounded-backfill tests; production startup drains this before hydration. */
   subjectBackfill?: false | MemorySubjectBackfillOptions;
+  /** Factory-owned startup snapshot exposed to Garden health. */
+  startupSubjectClassificationCoverage?: MemorySubjectClassificationCoverage;
   /**
    * Detected at startup, not caller-supplied: whether the connected pgvector
    * supports `hnsw.iterative_scan` (>= 0.8), used to make ANN + subject-filter
@@ -243,7 +249,22 @@ export async function createPostgresMemoryStoreFromPool(
   if (options.subjectBackfill !== false) {
     await runMemorySubjectBackfillToCompletion(pool, embeddingDims, options.subjectBackfill);
   }
-  const store = new PostgresMemoryStore(pool, embeddingDims, { ...options, annIterativeScanAvailable });
+  const startupSubjectClassificationCoverage =
+    await inspectMemorySubjectClassificationCoverage(pool);
+  if (startupSubjectClassificationCoverage.missingCurrentClassificationCount > 0) {
+    log.warn('Memory subject classification coverage is incomplete at startup', {
+      ...startupSubjectClassificationCoverage,
+    });
+  } else {
+    log.info('Memory subject classification coverage is complete at startup', {
+      ...startupSubjectClassificationCoverage,
+    });
+  }
+  const store = new PostgresMemoryStore(pool, embeddingDims, {
+    ...options,
+    annIterativeScanAvailable,
+    startupSubjectClassificationCoverage,
+  });
   await store.waitUntilReady();
   // Kick the dimension-parameterized HNSW ANN index build OFF the boot critical
   // path. It runs CONCURRENTLY in the background so a large existing corpus can
@@ -266,6 +287,7 @@ class PostgresMemoryStore implements MemoryStorePort {
   private readonly pool: Pool;
   private readonly embeddingDims: number;
   private readonly annIterativeScanAvailable: boolean;
+  private readonly startupSubjectClassificationCoverage: MemorySubjectClassificationCoverage;
   /** Background HNSW ANN index build; kicked off once, off the boot critical path. */
   private annIndexBuild: Promise<L2EmbeddingAnnIndexBuildOutcome> | null = null;
   private annIndexBuildStatus: 'idle' | 'building' | 'ready' | 'degraded' = 'idle';
@@ -292,10 +314,17 @@ class PostgresMemoryStore implements MemoryStorePort {
   private contactProfiles = new Map<string, ContactProfileArtifact>();
   private scratchpadEntries = new Map<string, ScratchpadEntry>();
 
-  constructor(pool: Pool, embeddingDims: number, options: PostgresMemoryStoreOptions = {}) {
+  constructor(
+    pool: Pool,
+    embeddingDims: number,
+    options: PostgresMemoryStoreOptions & {
+      startupSubjectClassificationCoverage: MemorySubjectClassificationCoverage;
+    },
+  ) {
     this.pool = pool;
     this.embeddingDims = embeddingDims;
     this.annIterativeScanAvailable = options.annIterativeScanAvailable ?? false;
+    this.startupSubjectClassificationCoverage = options.startupSubjectClassificationCoverage;
     this.journal = options.journal ?? null;
     this.scratchpadMirrorPath = options.scratchpadMirrorPath?.trim() ? options.scratchpadMirrorPath.trim() : null;
     this.initialization = this.initialize();
@@ -303,6 +332,10 @@ class PostgresMemoryStore implements MemoryStorePort {
 
   async waitUntilReady(): Promise<void> {
     await this.initialization;
+  }
+
+  getStartupMemorySubjectClassificationCoverage(): MemorySubjectClassificationCoverage {
+    return { ...this.startupSubjectClassificationCoverage };
   }
 
   /**

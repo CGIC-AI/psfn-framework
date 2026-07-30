@@ -778,7 +778,7 @@
       {/if}
     </div>
 
-    <div class="grid grid-cols-2 gap-3 lg:grid-cols-7">
+    <div class="grid grid-cols-2 gap-3 lg:grid-cols-8">
       <div class="rounded-xl border border-bark-200 bg-bark-50 p-3">
         <p class="text-xs uppercase tracking-[0.16em] text-shadow-500">Active</p>
         <p class="mt-2 font-serif text-2xl text-shadow-900">{privacySummary?.activeMemoryCount ?? 0}</p>
@@ -787,6 +787,12 @@
         <p class="text-xs uppercase tracking-[0.16em] text-shadow-500">Matching</p>
         <p class="mt-2 font-serif text-2xl text-shadow-900">{privacySummary?.matchingMemoryCount ?? 0}</p>
       </div>
+      {#if !searchActive && data?.withheldBySubjectAuthorizationCount !== undefined}
+        <div class="rounded-xl border border-gold-200 bg-gold-50 p-3">
+          <p class="text-xs uppercase tracking-[0.16em] text-gold-800">Subject-Withheld</p>
+          <p class="mt-2 font-serif text-2xl text-gold-800">{data.withheldBySubjectAuthorizationCount}</p>
+        </div>
+      {/if}
       <div class="rounded-xl border border-wilt-200 bg-wilt-50 p-3">
         <p class="text-xs uppercase tracking-[0.16em] text-wilt-700">High Sensitivity</p>
         <p class="mt-2 font-serif text-2xl text-wilt-700">{privacySummary?.highSensitivityCount ?? 0}</p>
@@ -818,6 +824,9 @@
     </div>
 
     <p class="text-xs leading-relaxed text-shadow-600">
+      {#if !searchActive && data?.withheldBySubjectAuthorizationCount !== undefined}
+        {data.withheldBySubjectAuthorizationCount} {data.withheldBySubjectAuthorizationCount === 1 ? 'memory is' : 'memories are'} withheld by subject authorization for the current filters.
+      {/if}
       Retrieval-time exclusions are shown per turn in Prompt Monitor under Memory -> withheld summary. Use those counts to explain why context was narrowed, then use this page to inspect safe operator-level metadata and adjust contact trust or consent policy deliberately.
     </p>
   </div>

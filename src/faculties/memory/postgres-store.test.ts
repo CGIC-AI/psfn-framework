@@ -299,6 +299,20 @@ class FakeMemoryPool {
       } as QueryResult;
     }
 
+    if (normalized.includes('as current_classification_count')
+      && normalized.includes('from l2_memories memory')) {
+      return {
+        rows: [{
+          total_memory_count: String(this.memories.size),
+          current_classification_count: String(this.memories.size),
+        }],
+        rowCount: 1,
+        command: 'SELECT',
+        oid: 0,
+        fields: [],
+      } as QueryResult;
+    }
+
     if (normalized.startsWith('select pg_try_advisory_xact_lock')) {
       return {
         rows: [{ locked: true }],

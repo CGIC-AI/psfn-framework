@@ -30,6 +30,8 @@ export interface MemorySubjectAccessContext {
    * and policy gates still decide whether any candidate reaches a prompt.
    */
   includeCompanionPrivateRecallCandidates?: boolean;
+  /** Owner-facing aggregate only; never widens row authorization. */
+  reportWithheldByAuthorization?: boolean;
 }
 
 const COMPANION_PRIVATE_RECALL_ACTIONS = new Set<MemorySubjectQueryAuthorization['action']>([
@@ -229,6 +231,8 @@ export const MEMORY_STORE_METHOD_POLICY: Record<keyof MemoryStorePort, SubjectPr
   // by their consumers; the bead requires the retrieval-cache getter keep working.
   getSalienceMaintenanceRevision: 'pass-through-safe',
   getRetrievalCorpusVersion: 'pass-through-safe',
+  // Startup aggregate counts only; no memory identity, body, or subject rows.
+  getStartupMemorySubjectClassificationCoverage: 'pass-through-safe',
   // Capability-free transaction boundary. Used by MemoryWriter.patch/patchMemory
   // through the subject store (memory tool action=patch). The operations inside
   // the handler run through this same authorized proxy (e.g. updateMemory ->
@@ -496,6 +500,12 @@ export function createSubjectAuthorizedMemoryStore(
             memories: page.memories,
             total: page.total,
             privacySummary: summary.privacySummary,
+            ...(currentContext().reportWithheldByAuthorization
+              ? {
+                withheldBySubjectAuthorizationCount:
+                  page.withheldBySubjectAuthorizationCount ?? 0,
+              }
+              : {}),
           };
         };
       }

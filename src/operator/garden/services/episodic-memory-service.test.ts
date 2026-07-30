@@ -357,10 +357,12 @@ describe('subject-authorized episodic projection (88u3)', () => {
     expect(listed.episodes.map(episode => episode.id).sort())
       .toEqual(['episode-own-1', 'episode-shared-1']);
     expect(listed.pagination.total).toBe(2);
+    expect(listed.withheldBySubjectAuthorizationCount).toBeUndefined();
 
     // Legacy operator context keeps the unpartitioned view.
     const legacy = await service.listEpisodes();
     expect(legacy.episodes).toHaveLength(4);
+    expect(legacy.withheldBySubjectAuthorizationCount).toBe(0);
   });
 
   it('hides foreign and unattributed episodes across detail, provenance, arcs, and threads', async () => {
@@ -411,5 +413,6 @@ describe('subject-authorized episodic projection (88u3)', () => {
     );
     expect(listed.episodes.map(episode => episode.id).sort())
       .toEqual(['episode-own-1', 'episode-shared-1']);
+    expect(listed.withheldBySubjectAuthorizationCount).toBe(2);
   });
 });

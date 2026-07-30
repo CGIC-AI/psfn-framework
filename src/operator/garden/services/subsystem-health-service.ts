@@ -15,6 +15,9 @@
 
 import type { EventBus, EventMap } from '../../../shared/event-bus.js';
 import type { OperatorAlertSinkConfiguration } from '../../../shared/contracts/operator-alerting.js';
+import type {
+  MemorySubjectClassificationCoverage,
+} from '../../../faculties/memory/memory-store-port.js';
 import { createComponentLogger } from '../../../shared/logger.js';
 import { toErrorMessage } from '../../../shared/utils/errors.js';
 import {
@@ -131,6 +134,11 @@ interface EventLaneDefinition {
 }
 
 const EVENT_LANE_DEFINITIONS: readonly EventLaneDefinition[] = [
+  {
+    id: 'subject_classification_coverage',
+    label: 'Memory subject classification coverage',
+    description: 'Startup coverage of current, evidence-matched memory subject classifications.',
+  },
   {
     id: 'near_turn',
     label: 'Near-turn memory lane',
@@ -279,6 +287,7 @@ export class AdminSubsystemHealthDataService implements AdminSubsystemHealthServ
     now?: () => number;
     processStartedAt?: number;
     operatorAlerting?: SubsystemHealthSnapshot['operatorAlerting'];
+    startupMemorySubjectClassificationCoverage?: MemorySubjectClassificationCoverage;
   }) {
     this.ringLimit = Number.isFinite(deps.ringLimit)
       ? Math.max(1, Math.floor(deps.ringLimit as number))
@@ -299,6 +308,22 @@ export class AdminSubsystemHealthDataService implements AdminSubsystemHealthServ
     for (const def of EVENT_LANE_DEFINITIONS) {
       this.lanes.set(def.id, { lastEvent: null, observedEventCount: 0, recent: [] });
     }
+
+    const coverage = deps.startupMemorySubjectClassificationCoverage;
+    if (coverage) {
+      const incomplete = coverage.missingCurrentClassificationCount > 0;
+      this.record('subject_classification_coverage', {
+        at: coverage.checkedAt,
+        outcome: incomplete ? 'degraded' : 'ran',
+        ...(incomplete ? { reason: 'missing_current_classifications' } : {}),
+        counts: {
+          totalMemoryCount: coverage.totalMemoryCount,
+          currentClassificationCount: coverage.currentClassificationCount,
+          missingCurrentClassificationCount: coverage.missingCurrentClassificationCount,
+        },
+      });
+    }
+
     this.subscribe(deps.eventBus);
   }
 

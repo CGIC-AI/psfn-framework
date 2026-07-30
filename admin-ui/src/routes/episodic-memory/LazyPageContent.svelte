@@ -275,6 +275,16 @@
     </div>
   {/if}
 
+  {#if episodeData?.withheldBySubjectAuthorizationCount !== undefined}
+    <div class="rounded-xl border border-gold-200 bg-gold-50 p-4">
+      <p class="text-sm text-gold-800">
+        {episodeData.withheldBySubjectAuthorizationCount}
+        {episodeData.withheldBySubjectAuthorizationCount === 1 ? 'episode is' : 'episodes are'}
+        withheld by subject authorization for the current filters.
+      </p>
+    </div>
+  {/if}
+
   <div class="grid grid-cols-1 gap-5 xl:grid-cols-[minmax(20rem,28rem)_minmax(0,1fr)]">
     <section class="space-y-4">
       <div class="card-garden p-4 space-y-3">

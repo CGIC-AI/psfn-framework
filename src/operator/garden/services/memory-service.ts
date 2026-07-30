@@ -230,6 +230,7 @@ export class AdminMemoryDataService implements AdminMemoryService {
         this.deps.fleetMemoryStore ?? this.deps.memoryStore,
         Object.freeze({
           viewerContactId: context.actor.contactId,
+          reportWithheldByAuthorization: context.actor.role === 'owner',
         }),
       ),
     }, this.bodyGate, context);
@@ -444,6 +445,15 @@ export class AdminMemoryDataService implements AdminMemoryService {
     const total = result.total;
     return {
       memories: await Promise.all(memories.map(memory => this.toRequestMemoryView(sessionKey, memory))),
+      ...((this.requestContext === undefined
+        || this.requestContext.kind === 'legacy_operator'
+        || (this.requestContext.kind === 'fleet_principal'
+          && this.requestContext.actor.role === 'owner'))
+        ? {
+          withheldBySubjectAuthorizationCount:
+            result.withheldBySubjectAuthorizationCount ?? 0,
+        }
+        : {}),
       contactsById: await this.buildContactSummaryMap(),
       privacySummary: buildPrivacySummary(result.privacySummary, total, memories.length),
       pagination: {

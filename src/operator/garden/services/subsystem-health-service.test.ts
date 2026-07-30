@@ -65,6 +65,35 @@ describe('AdminSubsystemHealthDataService', () => {
     }
   });
 
+  it('surfaces the startup memory-subject classification coverage count', async () => {
+    const bus = new EventBus();
+    const service = new AdminSubsystemHealthDataService({
+      eventBus: bus,
+      processStartedAt: 1_000,
+      now: () => 5_000,
+      startupMemorySubjectClassificationCoverage: {
+        checkedAt: 4_000,
+        totalMemoryCount: 12,
+        currentClassificationCount: 9,
+        missingCurrentClassificationCount: 3,
+      },
+    });
+
+    const lane = laneById((await service.getSnapshot()).lanes, 'subject_classification_coverage');
+    expect(lane).toMatchObject({
+      status: 'degraded',
+      lastOutcome: 'degraded',
+      lastReason: 'missing_current_classifications',
+      lastEventAt: 4_000,
+      counts: {
+        totalMemoryCount: 12,
+        currentClassificationCount: 9,
+        missingCurrentClassificationCount: 3,
+      },
+      observedEventCount: 1,
+    });
+  });
+
   it('captures episode-synthesis skips with the gate reason', async () => {
     const bus = new EventBus();
     const service = new AdminSubsystemHealthDataService({ eventBus: bus });

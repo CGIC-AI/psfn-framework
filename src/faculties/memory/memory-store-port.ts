@@ -279,7 +279,12 @@ export interface MemorySubjectAdminQuery {
 }
 
 export type MemorySubjectAdminResult =
-  | { kind: 'memories'; memories: MemorySearchResult[]; total: number }
+  | {
+    kind: 'memories';
+    memories: MemorySearchResult[];
+    total: number;
+    withheldBySubjectAuthorizationCount?: number;
+  }
   | { kind: 'privacy_summary'; privacySummary: MemoryAdminPrivacySummary }
   | { kind: 'stats'; stats: MemoryStoreStats };
 
@@ -318,6 +323,13 @@ export interface MemorySubjectBackfillResult {
   classifierVersion: number;
   reasonCounts: Record<string, number>;
   durationMs: number;
+}
+
+export interface MemorySubjectClassificationCoverage {
+  checkedAt: number;
+  totalMemoryCount: number;
+  currentClassificationCount: number;
+  missingCurrentClassificationCount: number;
 }
 
 export interface MemoryStoreStats {
@@ -394,6 +406,8 @@ export interface MemoryAdminListResult {
   memories: PurrMemory[];
   total: number;
   privacySummary: MemoryAdminPrivacySummary;
+  /** Present only when an authorized owner-facing projection requested it. */
+  withheldBySubjectAuthorizationCount?: number;
 }
 
 export interface MemorySoftDeleteOptions {
@@ -483,6 +497,8 @@ interface MemoryStorePortBackend extends ScratchpadProvider {
   getSalienceMaintenanceRevision?(): number;
   /** Monotonic in-process signal for mutations that can change retrieval output. */
   getRetrievalCorpusVersion?(): Awaitable<number>;
+  /** Immutable startup diagnostic; contains counts only, never subject rows. */
+  getStartupMemorySubjectClassificationCoverage?(): MemorySubjectClassificationCoverage;
   insertMemory(memory: PurrMemory, embedding: Float32Array): Awaitable<void>;
   persistMemoryWrite(input: MemoryWriteCommit): Awaitable<void>;
   runInTransaction<T>(handler: () => T): Awaitable<T>;
@@ -600,6 +616,8 @@ export interface MemoryStorePort extends ScratchpadProvider {
   getSalienceMaintenanceRevision?(): number;
   /** Postgres exposes this to let active retrieval skip an unchanged corpus. */
   getRetrievalCorpusVersion?(): Awaitable<number>;
+  /** Immutable startup diagnostic; contains counts only, never subject rows. */
+  getStartupMemorySubjectClassificationCoverage?(): MemorySubjectClassificationCoverage;
   insertMemory(memory: PurrMemory, embedding: Float32Array): Promise<void>;
   persistMemoryWrite(input: MemoryWriteCommit): Promise<void>;
   runInTransaction<T>(handler: () => T): Promise<T>;
@@ -716,6 +734,13 @@ export function createMemoryStorePort(store: MemoryStorePortBackend): MemoryStor
       : {}),
     ...(store.getRetrievalCorpusVersion
       ? { getRetrievalCorpusVersion: async () => await store.getRetrievalCorpusVersion!() }
+      : {}),
+    ...(store.getStartupMemorySubjectClassificationCoverage
+      ? {
+        getStartupMemorySubjectClassificationCoverage: () => (
+          store.getStartupMemorySubjectClassificationCoverage!()
+        ),
+      }
       : {}),
     insertMemory: async (memory, embedding) => {
       await store.insertMemory(memory, embedding);

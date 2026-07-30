@@ -25,6 +25,14 @@ export interface EpisodicSubjectAccessContext {
   viewerContactId: string;
 }
 
+export function isEpisodeVisibleToSubject(
+  episode: Episode,
+  viewerContactId: string,
+): boolean {
+  const normalized = viewerContactId.trim();
+  return normalized.length > 0 && episode.participantContactIds.includes(normalized);
+}
+
 /**
  * Project the broad episodic store into a subject-scoped read store (88u3):
  * an episode is visible only when the viewer contact is one of its explicitly
@@ -44,7 +52,7 @@ export function createSubjectAuthorizedEpisodicStore(
   }
 
   const isVisible = (episode: Episode): boolean => (
-    episode.participantContactIds.includes(viewerContactId)
+    isEpisodeVisibleToSubject(episode, viewerContactId)
   );
   const filterEpisodes = (episodes: readonly Episode[]): Episode[] => episodes.filter(isVisible);
   const filterArcsToVisibleEndpoints = async (

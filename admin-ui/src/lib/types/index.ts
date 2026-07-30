@@ -299,6 +299,8 @@ export interface AdminMemoryPrivacySummary {
 
 export interface AdminMemoryListData {
   memories: AdminUiPurrMemory[];
+  /** Owner-only aggregate; omitted for non-owner principals. */
+  withheldBySubjectAuthorizationCount?: number;
   contactsById: Record<string, AdminMemoryContactSummary>;
   privacySummary: AdminMemoryPrivacySummary;
   pagination: {

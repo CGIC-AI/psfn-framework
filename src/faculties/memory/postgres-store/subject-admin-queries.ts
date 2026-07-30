@@ -51,10 +51,14 @@ interface StatsRow {
   salience_sum: PgNumeric | null;
 }
 
-type EmptyAdminPageRow = { [Key in keyof MemoryRow]: null } & { authorized_total: PgNumeric | null };
-type AdminPageRow = (MemoryRow & { authorized_total: PgNumeric | null }) | EmptyAdminPageRow;
+type AdminPageTotals = {
+  authorized_total: PgNumeric | null;
+  all_total: PgNumeric | null;
+};
+type EmptyAdminPageRow = { [Key in keyof MemoryRow]: null } & AdminPageTotals;
+type AdminPageRow = (MemoryRow & AdminPageTotals) | EmptyAdminPageRow;
 
-function hasAdminPage(row: AdminPageRow): row is MemoryRow & { authorized_total: PgNumeric | null } {
+function hasAdminPage(row: AdminPageRow): row is MemoryRow & AdminPageTotals {
   return row.id !== null;
 }
 
@@ -180,19 +184,29 @@ async function queryAdminPage(
   }
   filterClauses.push(INTERNAL_ARTIFACT_EXCLUSION_SQL);
   const { where, values } = appendAuthorizationPredicate(input, filterValues, filterClauses);
+  const allWhere = [...ACTIVE_CLAUSES, ...filterClauses].join('\n  AND ');
   const limit = clampLimit(options.limit, 50, 1, 500);
   const offset = clampLimit(options.offset, 0, 0, 100_000);
   const limitParam = `$${values.length + 1}`;
   const offsetParam = `$${values.length + 2}`;
   const rows = await pool.query<AdminPageRow>(
     `
-    WITH authorized AS MATERIALIZED (
+    WITH all_matching AS MATERIALIZED (
+      SELECT memory.id
+      FROM l2_memories memory
+      WHERE ${allWhere}
+    ),
+    authorized AS MATERIALIZED (
       SELECT ${MEMORY_SUBJECT_SELECT_COLUMNS}
       FROM l2_memories memory
       WHERE ${where}
     )
-    SELECT page.*, totals.authorized_total
-    FROM (SELECT COUNT(*) AS authorized_total FROM authorized) totals
+    SELECT page.*, totals.authorized_total, totals.all_total
+    FROM (
+      SELECT
+        (SELECT COUNT(*) FROM authorized) AS authorized_total,
+        (SELECT COUNT(*) FROM all_matching) AS all_total
+    ) totals
     LEFT JOIN LATERAL (
       SELECT * FROM authorized
       ORDER BY extracted_at DESC, id DESC
@@ -203,10 +217,19 @@ async function queryAdminPage(
     [...values, limit, offset],
   );
   const total = Number(rows.rows.at(0)?.authorized_total ?? 0);
+  const allTotal = Number(rows.rows.at(0)?.all_total ?? 0);
+  if (!Number.isSafeInteger(total) || !Number.isSafeInteger(allTotal) || allTotal < total) {
+    throw new Error('Memory subject admin coverage counts are inconsistent');
+  }
   const memories = rows.rows
     .filter(hasAdminPage)
     .map(row => ({ ...fromMemoryRow(row), similarity: 1 }));
-  return { kind: 'memories', memories, total };
+  return {
+    kind: 'memories',
+    memories,
+    total,
+    withheldBySubjectAuthorizationCount: allTotal - total,
+  };
 }
 
 async function querySourcePrefixSlice(

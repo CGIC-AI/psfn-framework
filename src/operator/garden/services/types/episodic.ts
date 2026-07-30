@@ -9,6 +9,8 @@ import type { GardenRequestContext } from '../../garden-request-context.js';
 
 export interface AdminEpisodicEpisodeListData {
   episodes: Episode[];
+  /** Owner-only count; omitted for non-owner principals to avoid existence leakage. */
+  withheldBySubjectAuthorizationCount?: number;
   pagination: {
     limit: number;
     offset: number;

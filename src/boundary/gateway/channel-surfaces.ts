@@ -84,12 +84,39 @@ export interface LoadGatewayChannelSurfacesInput {
    * attachment text at ingest. Null when intake-policy mode is 'off'.
    */
   intakeScreening: IntakeScreeningService | null;
+  /**
+   * Fleet-only exact owner resolver. Every routed channel adapter receives
+   * its owning companion's screening/quarantine composition; missing or
+   * unknown identities must throw rather than falling back to another store.
+   */
+  intakeScreeningForCompanion?: (
+    companionId: CompanionId,
+  ) => IntakeScreeningService | null;
   log: RuntimeChannelLifecycleLogger;
   enableDiscordEvidenceLifecycle?: boolean;
 }
 
 export interface GatewayChannelStartupLogger extends RuntimeChannelLifecycleLogger {
   info(message: string, meta?: Record<string, unknown>): void;
+}
+
+function resolveChannelIntakeScreening(
+  input: LoadGatewayChannelSurfacesInput,
+  companionId: CompanionId | undefined,
+  surface: string,
+): IntakeScreeningService | null {
+  if (!input.bootstrap.server.multiCompanion.enabled) {
+    return input.intakeScreening;
+  }
+  if (!companionId) {
+    throw new Error(`Multi-companion ${surface} surface is missing companionId routing`);
+  }
+  if (!input.intakeScreeningForCompanion) {
+    throw new Error(
+      `Multi-companion ${surface} surface has no companion-owned intake screening resolver`,
+    );
+  }
+  return input.intakeScreeningForCompanion(companionId);
 }
 
 export async function initGatewayChannelSurfaces(
@@ -129,7 +156,11 @@ export async function loadGatewayChannelSurfaces(
           account.companionId,
           `discord account ${account.accountId}`,
         ),
-        intakeScreening: input.intakeScreening,
+        intakeScreening: resolveChannelIntakeScreening(
+          input,
+          account.companionId,
+          `discord account ${account.accountId}`,
+        ),
         allowedBotUserIds: account.allowedBotUserIds,
         ...(account.customEmojiMeanings
           ? { customEmojiMeanings: account.customEmojiMeanings }
@@ -160,7 +191,11 @@ export async function loadGatewayChannelSurfaces(
           discordChannelConfig.companionId,
           'discord',
         ),
-        intakeScreening: input.intakeScreening,
+        intakeScreening: resolveChannelIntakeScreening(
+          input,
+          discordChannelConfig.companionId,
+          'discord',
+        ),
         enableDiscordEvidenceLifecycle: input.enableDiscordEvidenceLifecycle,
       }),
     ];
@@ -174,7 +209,11 @@ export async function loadGatewayChannelSurfaces(
         input.bootstrap.channelsConfig.telegram.companionId,
         'telegram',
       ),
-      intakeScreening: input.intakeScreening,
+      intakeScreening: resolveChannelIntakeScreening(
+        input,
+        input.bootstrap.channelsConfig.telegram.companionId,
+        'telegram',
+      ),
       // Owner-file backed ingest caps (zet.7); Discord resolves the same
       // limits internally from its SubstrateConfig.
       documentIngestLimits: resolveDocumentIngestLimits(input.config),

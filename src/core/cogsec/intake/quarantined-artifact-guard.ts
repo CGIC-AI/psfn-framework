@@ -78,6 +78,14 @@ export interface QuarantinedArtifactAccessGuardOptions {
   now?: () => number;
 }
 
+export interface UnionQuarantinedArtifactAccessGuardOptions {
+  /** Every companion-owned quarantine store served by this gateway. */
+  stores: readonly QuarantinedArtifactPathPort[];
+  /** Shared system-owned firewall mode. */
+  mode: 'shadow' | 'enforce';
+  now?: () => number;
+}
+
 function lookupEntry(
   store: QuarantinedArtifactPathPort,
   path: string,
@@ -178,6 +186,50 @@ export function createQuarantinedArtifactAccessGuard(
         envelopeId: entry.id,
         noticeText: INTAKE_FIREWALL_NOTICE_TEMPLATES.withheldContent,
       };
+    },
+  };
+}
+
+/**
+ * Fleet-wide view over companion-owned quarantine stores.
+ *
+ * The guard deliberately has no caller-companion filter: a held artifact is a
+ * physical gateway deny regardless of which authenticated companion invokes
+ * fs.read, fs.search, or shell.exec. Each child store reloads from disk per
+ * operation, so this union stays current without sharing mutable snapshots.
+ */
+export function createUnionQuarantinedArtifactAccessGuard(
+  options: UnionQuarantinedArtifactAccessGuardOptions,
+): QuarantinedArtifactAccessGuard {
+  if (options.stores.length === 0) {
+    throw new Error('Fleet quarantined-artifact access guard requires at least one store');
+  }
+  const guards = options.stores.map(store => createQuarantinedArtifactAccessGuard({
+    store,
+    mode: options.mode,
+    ...(options.now ? { now: options.now } : {}),
+  }));
+
+  return {
+    check(path, context) {
+      for (const guard of guards) {
+        const verdict = guard.check(path, context);
+        if (verdict.withheld) return verdict;
+      }
+      return { withheld: false };
+    },
+
+    listEnforcedArtifactPaths() {
+      if (options.mode !== 'enforce') return [];
+      const paths = new Set<string>();
+      // A failure from any store propagates: the gateway cannot launch a
+      // sandbox while even one companion's physical deny set is unknown.
+      for (const guard of guards) {
+        for (const path of guard.listEnforcedArtifactPaths()) {
+          paths.add(path);
+        }
+      }
+      return [...paths];
     },
   };
 }

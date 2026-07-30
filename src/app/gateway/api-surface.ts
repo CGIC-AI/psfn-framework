@@ -126,6 +126,10 @@ export interface StartOptionalGatewayApiServerOptions extends GatewayApiSurfaceB
    * real injection channel. Null when the firewall mode is 'off'.
    */
   intakeScreening?: IntakeScreeningService | null;
+  /** Fleet-only exact resolver for the companion owning an API/satellite ingress. */
+  intakeScreeningForCompanion?: (
+    companionId: string,
+  ) => IntakeScreeningService | null;
   /** Companion event relay surface (w9hj.1); `/v1/companion/*` 503s without it. */
   companionRelay?: Omit<CompanionRelayHttpDeps, 'stimuli'>;
   /** Present only in gateway fleet-auth mode; owns all browser OAuth/session authority. */
@@ -156,6 +160,23 @@ export interface StartOptionalGatewayApiServerOptions extends GatewayApiSurfaceB
       input: Parameters<HubDeviceHumanAttachmentPort['fenceDevice']>[0],
     ): ReturnType<HubDeviceHumanAttachmentPort['fenceDevice']>;
   };
+}
+
+function resolveMessageIntakeScreening(
+  options: StartOptionalGatewayApiServerOptions,
+  message: SubstrateMessage,
+): IntakeScreeningService | null | undefined {
+  if (!options.intakeScreeningForCompanion) {
+    return options.intakeScreening;
+  }
+  const satellite = message.routing?.satellite;
+  const companionId = satellite?.addressedCompanionId
+    ?? satellite?.sharedDevice?.primaryCompanionId
+    ?? options.channelsConfig?.api.companionId;
+  if (!companionId) {
+    throw new Error('Fleet API intake screening cannot resolve an owning companionId');
+  }
+  return options.intakeScreeningForCompanion(companionId);
 }
 
 function resolveGatewayHubDeviceCompanionId(
@@ -775,7 +796,7 @@ export async function startOptionalGatewayApiServer(
     config: options.config,
     eligibilityGate: options.eligibilityGate,
     handleAssistantTurn: async ({ request, principal, transportSession, sessionId, transcript, signal, channelPrefix }) => {
-      const message = await screenVoiceTranscriptMessage(buildVoiceMessage({
+      const inboundMessage = buildVoiceMessage({
         request,
         principal,
         connectionId: transportSession.connectionId,
@@ -784,7 +805,11 @@ export async function startOptionalGatewayApiServer(
         channelPrefix,
         satelliteRegistryProvider: options.satelliteRegistryProvider,
         ...(trustedProxyClientCertToken ? { trustedProxyClientCertToken } : {}),
-      }), options.intakeScreening);
+      });
+      const message = await screenVoiceTranscriptMessage(
+        inboundMessage,
+        resolveMessageIntakeScreening(options, inboundMessage),
+      );
       const result = await options.gateway.requestAgentVoiceStream(message, { signal });
       return result.content;
     },
@@ -798,7 +823,10 @@ export async function startOptionalGatewayApiServer(
         stimuli: new CompanionStimulusIngress({
           cooldownMs: COMPANION_STIMULUS_COOLDOWN_MS,
           deliver: async (message) => {
-            const screened = await screenCompanionStimulusMessage(message, options.intakeScreening);
+            const screened = await screenCompanionStimulusMessage(
+              message,
+              resolveMessageIntakeScreening(options, message),
+            );
             const result = await options.gateway.requestAgentVoiceStream(screened);
             const response = result.content.trim();
             return response ? { response } : {};

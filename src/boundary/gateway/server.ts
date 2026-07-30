@@ -270,6 +270,15 @@ export interface GatewayServerOptions extends OptionalCompanionRoutingBinding {
   /** Cognition intake firewall screening (htm9.2); absent when mode is 'off'. */
   intakeScreening?: IntakeScreeningService;
   /**
+   * Fleet-only exact resolver for the authenticated companion's screening
+   * composition. It must throw on a missing/unknown identity.
+   */
+  intakeScreeningProvider?: (
+    companionId?: string,
+  ) => IntakeScreeningService | null;
+  /** Shared system-owned mode used by gateway-global egress guards in fleet mode. */
+  intakeScreeningMode?: 'off' | 'shadow' | 'enforce';
+  /**
    * Quarantined-artifact access guard (hrmrq.54): blocks fs reads, searches,
    * writes, and edits of quarantined on-disk artifacts and records attempts.
    * Absent when the intake firewall is off.
@@ -284,6 +293,10 @@ export interface GatewayServerOptions extends OptionalCompanionRoutingBinding {
   cogSecEvents?: Pick<CogSecEventStore, 'createEvent'>;
   /** Vision intake screener (htm9.8); absent when off/disabled/backend-less. */
   visionIntake?: GatewayVisionIntakeScreener;
+  /** Fleet-only exact resolver for companion-owned vision screening. */
+  visionIntakeProvider?: (
+    companionId?: string,
+  ) => GatewayVisionIntakeScreener | null;
   policyConfig: PolicyConfig;
   ntfy?: GatewayNtfyConfig;
   auditStore?: GatewayAuditStorePort;
@@ -524,7 +537,7 @@ export class GatewayServer {
     this.inboundChannelReplay = new GatewayInboundChannelReplay({
       onDrop: drop => this.alertInboundChannelDrop(drop),
     });
-    const cogSecMode = options.intakeScreening?.mode ?? 'off';
+    const cogSecMode = options.intakeScreeningMode ?? options.intakeScreening?.mode ?? 'off';
     this.canaryEgressGuard = cogSecMode === 'off'
       ? null
       : createCanaryEgressGuard({
@@ -701,6 +714,14 @@ export class GatewayServer {
     this.llmRequestCancellationByConnection.set(conn, llmRequestCancellation);
     const resolveWorkspacePath = (): string => this.resolveConnectionWorkspacePath(conn);
     const resolvePolicyConfig = (): PolicyConfig => this.resolveConnectionPolicyConfig(conn);
+    const resolveIntakeScreening = (): IntakeScreeningService | undefined =>
+      this.options.intakeScreeningProvider
+        ? this.options.intakeScreeningProvider(this.authenticatedCompanionId(conn)) ?? undefined
+        : this.options.intakeScreening;
+    const resolveVisionIntake = (): GatewayVisionIntakeScreener | undefined =>
+      this.options.visionIntakeProvider
+        ? this.options.visionIntakeProvider(this.authenticatedCompanionId(conn)) ?? undefined
+        : this.options.visionIntake;
     const runtime: GatewayMethodRuntime = {
       target,
       llmProvider: this.options.llmProvider,
@@ -713,11 +734,11 @@ export class GatewayServer {
       imageConfig: this.options.imageConfig,
       ...(this.options.modelUsageRecorder ? { modelUsageRecorder: this.options.modelUsageRecorder } : {}),
       ...(this.options.credentialVault ? { credentialVault: this.options.credentialVault } : {}),
-      ...(this.options.intakeScreening ? { intakeScreening: this.options.intakeScreening } : {}),
+      get intakeScreening() { return resolveIntakeScreening(); },
       ...(this.options.quarantinedArtifactGuard
         ? { quarantinedArtifactGuard: this.options.quarantinedArtifactGuard }
         : {}),
-      ...(this.options.visionIntake ? { visionIntake: this.options.visionIntake } : {}),
+      get visionIntake() { return resolveVisionIntake(); },
       inlineImageRetention,
       get policyConfig() { return resolvePolicyConfig(); },
       get workspacePath() { return resolveWorkspacePath(); },

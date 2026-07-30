@@ -947,6 +947,63 @@ describe('GatewayServer multi-companion identify (flag on)', () => {
     expect(stream).toHaveBeenCalledTimes(1);
   });
 
+  it('resolves fleet vision screening from each authenticated companion identity', async () => {
+    const screenA = vi.fn(async () => ({
+      kind: 'screened' as const,
+      mode: 'enforce' as const,
+      flagged: false,
+      withheld: false,
+    }));
+    const screenB = vi.fn(async () => ({
+      kind: 'screened' as const,
+      mode: 'enforce' as const,
+      flagged: false,
+      withheld: false,
+    }));
+    const visionIntakeProvider = vi.fn((companionId?: string) => {
+      if (companionId === '11111111-1111-4111-8111-111111111111') {
+        return { screenImage: screenA };
+      }
+      if (companionId === '22222222-2222-4222-8222-222222222222') {
+        return { screenImage: screenB };
+      }
+      throw new Error(`unknown screening owner ${String(companionId)}`);
+    });
+    const { connect } = await setupServer({
+      ...createMinimalOptions(),
+      visionIntakeProvider,
+      multiCompanion: multiCompanion({}),
+    });
+    const connA = await connect();
+    const connB = await connect();
+    await identifyAgent(connA, '11111111-1111-4111-8111-111111111111', 1);
+    await identifyAgent(connB, '22222222-2222-4222-8222-222222222222', 2);
+
+    await invokeRpc(connA, 3, 'intake.screen_image', {
+      companionId: '11111111-1111-4111-8111-111111111111',
+      imageBase64: 'aGVsbG8=',
+      mimeType: 'image/png',
+      originRef: 'discord:account-a:message:attachment:0',
+      requestScope: 'turn-a',
+    });
+    await invokeRpc(connB, 4, 'intake.screen_image', {
+      companionId: '22222222-2222-4222-8222-222222222222',
+      imageBase64: 'aGVsbG8=',
+      mimeType: 'image/png',
+      originRef: 'discord:account-b:message:attachment:0',
+      requestScope: 'turn-b',
+    });
+
+    expect(screenA).toHaveBeenCalledTimes(1);
+    expect(screenB).toHaveBeenCalledTimes(1);
+    expect(visionIntakeProvider).toHaveBeenCalledWith(
+      '11111111-1111-4111-8111-111111111111',
+    );
+    expect(visionIntakeProvider).toHaveBeenCalledWith(
+      '22222222-2222-4222-8222-222222222222',
+    );
+  });
+
   it('clears retained inline images when the authenticated connection closes', async () => {
     const options = createMinimalOptions();
     const stream = vi.mocked(options.llmProvider.stream);

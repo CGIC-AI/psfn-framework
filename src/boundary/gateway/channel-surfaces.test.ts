@@ -1,8 +1,12 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
+  loadGatewayChannelSurfaces,
+  stopGatewayChannelSurfaces,
   wireGatewayChannelMessages,
   type WireGatewayChannelMessagesInput,
 } from './channel-surfaces.js';
+import { EventBus } from '../../shared/event-bus.js';
+import { createCompanionId } from '../../shared/routing/companion-id.js';
 
 function createInput(): {
   input: WireGatewayChannelMessagesInput;
@@ -174,5 +178,94 @@ describe('wireGatewayChannelMessages multi-account discord (W1-P2)', () => {
 
     const call = (setup.input.gateway.notifyChannelMessage as any).mock.calls[0];
     expect(call).toHaveLength(3);
+  });
+});
+
+describe('loadGatewayChannelSurfaces fleet intake ownership', () => {
+  it('injects each multi-account adapter with its owning companion screening service', async () => {
+    const companionA = createCompanionId(
+      'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      'test companion A',
+    );
+    const companionB = createCompanionId(
+      'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+      'test companion B',
+    );
+    const screeningA = { mode: 'enforce', screen: vi.fn() };
+    const screeningB = { mode: 'enforce', screen: vi.fn() };
+    const screeningForCompanion = vi.fn((companionId: string) => {
+      if (companionId === companionA) return screeningA;
+      if (companionId === companionB) return screeningB;
+      throw new Error(`unknown companion ${companionId}`);
+    });
+    const bootstrap = {
+      workspaceRoot: '/single-workspace-must-not-be-used',
+      server: {
+        multiCompanion: {
+          enabled: true,
+          personalWorkspaceByCompanionId: {
+            [companionA]: '/workspaces/a',
+            [companionB]: '/workspaces/b',
+          },
+        },
+      },
+      channelsConfig: {
+        discord: {
+          heartbeatChannelId: '',
+          allowedBotUserIds: [],
+          groupMemory: {},
+          accounts: [
+            {
+              accountId: 'account-a',
+              companionId: companionA,
+              tokenEnvVar: 'DISCORD_A',
+              token: 'token-a',
+              heartbeatChannelId: '',
+              allowedBotUserIds: [],
+              groupMemory: {},
+            },
+            {
+              accountId: 'account-b',
+              companionId: companionB,
+              tokenEnvVar: 'DISCORD_B',
+              token: 'token-b',
+              heartbeatChannelId: '',
+              allowedBotUserIds: [],
+              groupMemory: {},
+            },
+          ],
+        },
+        telegram: {
+          enabled: false,
+          token: '',
+          allowedUsers: [],
+          mode: 'polling',
+          pollIntervalMs: 1_000,
+          webhook: { url: '', secret: '', host: '', port: 1, path: '' },
+          companionId: companionB,
+        },
+      },
+    };
+
+    const surfaces = await loadGatewayChannelSurfaces({
+      config: {
+        discordBackfillOnStartup: false,
+        sttProvider: 'disabled',
+        ttsProvider: 'disabled',
+      } as any,
+      bootstrap: bootstrap as any,
+      eventBus: new EventBus(),
+      eligibilityGate: undefined as any,
+      intakeScreening: null,
+      intakeScreeningForCompanion: screeningForCompanion as any,
+      log: { error: vi.fn(), warn: vi.fn() },
+    });
+
+    expect((surfaces.discordAccounts?.[0]?.adapter as any).intakeScreening).toBe(screeningA);
+    expect((surfaces.discordAccounts?.[1]?.adapter as any).intakeScreening).toBe(screeningB);
+    expect(screeningForCompanion).toHaveBeenCalledWith(companionA);
+    expect(screeningForCompanion).toHaveBeenCalledWith(companionB);
+
+    await stopGatewayChannelSurfaces(surfaces);
   });
 });

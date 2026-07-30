@@ -488,10 +488,12 @@ export async function runExtractionOrchestration(
       contactIds: [...new Set(sideEffects.contactIds)],
     };
   } catch (error) {
-    // A durable drain requeue is an intentional retryable control signal, not an
-    // integrity failure — surface it unwrapped so the post-turn seam can defer
-    // the job and its receipt for a later run (u5bv.11).
+    // Durable drain requeues and model-call preemptions are intentional
+    // retryable control signals, not integrity failures. Surface them unwrapped
+    // so the post-turn seam can defer the job and its receipt for a later run
+    // (u5bv.11, hrmrq.90).
     if (error instanceof ExtractionDrainRequeueError) throw error;
+    if (error instanceof Error && error.name === 'ModelCallPreemptedError') throw error;
     const wrapped = error instanceof ExtractionIntegrityError
       ? error
       : new ExtractionIntegrityError(

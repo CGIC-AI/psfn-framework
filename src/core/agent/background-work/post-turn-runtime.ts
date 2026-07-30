@@ -197,6 +197,19 @@ function requireSourceSessionEntry(
   }
 }
 
+function errorCauseChainHasName(error: unknown, expectedName: string): boolean {
+  const visited = new Set<Error>();
+  let current = error;
+  while (current instanceof Error && !visited.has(current)) {
+    if (current.name === expectedName) {
+      return true;
+    }
+    visited.add(current);
+    current = current.cause;
+  }
+  return false;
+}
+
 /**
  * Post-turn background executor with model-call-gate preemption mapping.
  *
@@ -224,7 +237,7 @@ export async function executePostTurnBackgroundWork(
       await runPostTurnBackgroundWork(input, admittedDependencies, sessionReads);
     });
   } catch (error) {
-    if (error instanceof Error && error.name === 'ModelCallPreemptedError') {
+    if (errorCauseChainHasName(error, 'ModelCallPreemptedError')) {
       throw new BackgroundWorkDeferredError(
         'foreground_active',
         dependencies.tuning.foregroundPreemptionDeferDelayMs,

@@ -1021,6 +1021,32 @@ export function wirePostTurnActionRuntime(
       emitTelemetry('succeeded', entry);
     } catch (error) {
       const errorText = String(error);
+      if (error instanceof Error && error.name === 'ModelCallPreemptedError') {
+        entry.attempt = Math.max(0, entry.attempt - 1);
+        const delayMs = Math.max(1, Math.min(maxRetryDelayMs, baseRetryDelayMs));
+        entry.nextRunAt = Date.now() + delayMs;
+        persistQueue();
+        log.info('Deferred action rescheduled after model-call preemption', {
+          actionId: entry.action.id,
+          actionKind: entry.action.kind,
+          nextRunAt: entry.nextRunAt,
+          delayMs,
+          error: errorText,
+        });
+        emitTelemetry('rescheduled', entry, {
+          error: errorText,
+          delayMs,
+          nextRetryAt: entry.nextRunAt,
+        });
+        emitCompletionHandoff(entry, 'progress', {
+          summary: `Post-turn action "${entry.action.kind}" was preempted and is waiting to resume.`,
+          validationPerformed: ['post_turn_action_lifecycle_nonterminal', 'model_call_preempted'],
+          recommendedNextAction: 'Keep the task visible while higher-priority work completes.',
+          partialResult: true,
+          lifecycleSequence: `preempted:${entry.attempt}:${entry.nextRunAt}`,
+        });
+        return true;
+      }
       if (entry.attempt > entry.maxRetries) {
         queue.delete(entry.action.dedupeKey);
         persistQueue();

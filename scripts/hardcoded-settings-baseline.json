@@ -1404,12 +1404,12 @@
     {
       "file": "src/core/agent/tool-surface/turn-record-usage-source.ts",
       "name": "DEFAULT_MAX_TURN_RECORDS_PER_CHANNEL",
-      "value": "5_000"
+      "value": "32"
     },
     {
       "file": "src/core/agent/tool-surface/turn-record-usage-source.ts",
       "name": "DEFAULT_MAX_TURN_RECORDS_TOTAL",
-      "value": "50_000"
+      "value": "128"
     },
     {
       "file": "src/core/agent/turn-limits.ts",
@@ -2277,9 +2277,10 @@
       "value": "6 * 60 * 60_000"
     },
     {
-      "file": "src/core/scheduler/post-turn-runtime.ts",
+      "file": "src/core/scheduler/post-turn-outbound-gates.ts",
       "name": "INTENTION_FOLLOW_UP_ACTIVATION_MIN_INTERVAL_MS",
-      "value": "5 * 60_000"
+      "value": "5 * 60_000",
+      "note": "Rate guard for follow-up activation (anti-spam); code-owned protocol constant moved verbatim from post-turn-runtime.ts in the emh3p.4 extraction."
     },
     {
       "file": "src/core/scheduler/reflection-guardrail-telemetry.ts",

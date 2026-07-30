@@ -81,7 +81,7 @@ import {
   parseCompanionMessageFailureReport,
 } from './companion-delivery-failures.js';
 import type { IntakeScreeningService } from '../../core/cogsec/intake/screening.js';
-import type { QuarantinedArtifactReadGuard } from '../../core/cogsec/intake/quarantined-artifact-guard.js';
+import type { QuarantinedArtifactAccessGuard } from '../../core/cogsec/intake/quarantined-artifact-guard.js';
 import type { CogSecEventStore } from '../../core/cogsec/events.js';
 import { createCanaryEgressGuard, type CanaryEgressGuard } from './canary-egress-guard.js';
 import {
@@ -270,11 +270,11 @@ export interface GatewayServerOptions extends OptionalCompanionRoutingBinding {
   /** Cognition intake firewall screening (htm9.2); absent when mode is 'off'. */
   intakeScreening?: IntakeScreeningService;
   /**
-   * Quarantined-artifact read guard (hrmrq.54): blocks fs read/search of a
-   * quarantined item's on-disk artifacts and records the attempted access.
+   * Quarantined-artifact access guard (hrmrq.54): blocks fs reads, searches,
+   * writes, and edits of quarantined on-disk artifacts and records attempts.
    * Absent when the intake firewall is off.
    */
-  quarantinedArtifactGuard?: QuarantinedArtifactReadGuard;
+  quarantinedArtifactGuard?: QuarantinedArtifactAccessGuard;
   /**
    * CogSec event store (htm9.18). When present, a canary token leaking into an
    * outbound method is recorded as a durable CogSecEvent (token sha256 only)

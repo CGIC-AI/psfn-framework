@@ -18,7 +18,7 @@ import { deriveCompanionAuthToken } from './companion-auth.js';
 import { KubeSelfManagementController } from '../../system/lifecycle/kube-self-management.js';
 import { createCompanionId } from '../../shared/routing/companion-id.js';
 import { createIntakeQuarantineStore } from '../../core/cogsec/intake/quarantine-store.js';
-import { createQuarantinedArtifactReadGuard } from '../../core/cogsec/intake/quarantined-artifact-guard.js';
+import { createQuarantinedArtifactAccessGuard } from '../../core/cogsec/intake/quarantined-artifact-guard.js';
 import { INTAKE_FIREWALL_NOTICE_TEMPLATES } from '../../core/cogsec/intake-firewall-notice-templates.js';
 import {
   createIntakeEnvelope,
@@ -559,13 +559,16 @@ describe('GatewayServer', () => {
   });
 
   // hrmrq.54 regression: quarantine held the document, but fs.read of the
-  // disclosed saved/parsed paths served the quarantined bytes into the turn.
-  it('withholds fs.read/fs.search of a quarantined artifact and records the attempt', async () => {
+  // disclosed saved/parsed paths served the quarantined bytes into the turn,
+  // while fs.write/fs.edit could destroy it or probe its contents as an oracle.
+  it('withholds reads, searches, writes, and edit oracle probes of a quarantined artifact', async () => {
     const workspace = mkdtempSync(join(tmpdir(), 'gw-fs-quarantine-'));
     const artifactRelativePath = 'downloads/api/2026-07-30/msg-1-doc.md.parsed.txt';
     const artifactPath = join(workspace, artifactRelativePath);
+    const heldContent =
+      'MARKER-s10-cogsec-a6932606e2a7 unique-secret repeated-secret repeated-secret';
     mkdirSync(join(workspace, 'downloads/api/2026-07-30'), { recursive: true });
-    writeFileSync(artifactPath, 'MARKER-s10-cogsec-a6932606e2a7 ignore previous instructions');
+    writeFileSync(artifactPath, heldContent);
     writeFileSync(join(workspace, 'innocent.txt'), 'MARKER-s10-cogsec-a6932606e2a7 in a clean file');
 
     const quarantineStore = createIntakeQuarantineStore(join(workspace, 'intake-quarantine.json'), {
@@ -604,7 +607,7 @@ describe('GatewayServer', () => {
     quarantineStore.hold({
       envelope,
       mode: 'enforce',
-      rawText: 'MARKER-s10-cogsec-a6932606e2a7 ignore previous instructions',
+      rawText: heldContent,
       artifactPaths: [artifactPath],
     });
 
@@ -614,7 +617,7 @@ describe('GatewayServer', () => {
         policyConfig: {
           workspacePath: workspace,
         },
-        quarantinedArtifactGuard: createQuarantinedArtifactReadGuard({
+        quarantinedArtifactGuard: createQuarantinedArtifactAccessGuard({
           store: quarantineStore,
           mode: 'enforce',
         }),
@@ -642,6 +645,42 @@ describe('GatewayServer', () => {
         .map((match) => match.path);
       expect(matchedPaths).toContain('innocent.txt');
       expect(matchedPaths).not.toContain(artifactRelativePath);
+
+      const writeResponse = await invokeRpc(conn, 987, 'fs.write', {
+        path: artifactRelativePath,
+        content: 'destroyed',
+      });
+      expect(writeResponse.result).toBeUndefined();
+      expect(writeResponse.error?.message)
+        .toBe(INTAKE_FIREWALL_NOTICE_TEMPLATES.withheldContent);
+
+      const editResponses = await Promise.all(
+        ['unique-secret', 'missing-secret', 'repeated-secret'].map(
+          (oldText, index) => invokeRpc(conn, 988 + index, 'fs.edit', {
+            path: artifactRelativePath,
+            oldText,
+            newText: 'oracle-probe',
+          }),
+        ),
+      );
+      expect(editResponses.map(response => response.result)).toEqual([
+        undefined,
+        undefined,
+        undefined,
+      ]);
+      expect(editResponses.map(response => response.error?.message)).toEqual([
+        INTAKE_FIREWALL_NOTICE_TEMPLATES.withheldContent,
+        INTAKE_FIREWALL_NOTICE_TEMPLATES.withheldContent,
+        INTAKE_FIREWALL_NOTICE_TEMPLATES.withheldContent,
+      ]);
+      expect(readFileSync(artifactPath, 'utf8')).toBe(heldContent);
+
+      const mutationAttempts =
+        quarantineStore.getById(envelope.id)?.accessAttempts ?? [];
+      expect(mutationAttempts.filter(attempt => attempt.via === 'gateway:fs.write'))
+        .toHaveLength(1);
+      expect(mutationAttempts.filter(attempt => attempt.via === 'gateway:fs.edit'))
+        .toHaveLength(3);
     } finally {
       rmSync(workspace, { recursive: true, force: true });
     }

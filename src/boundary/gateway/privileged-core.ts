@@ -22,7 +22,7 @@ import {
 import { GatewayServer } from './server.js';
 import type { WelfareGrantVerifier } from './welfare-grant-verifier.js';
 import { CogSecEventStore } from '../../core/cogsec/events.js';
-import { createQuarantinedArtifactReadGuard } from '../../core/cogsec/intake/quarantined-artifact-guard.js';
+import { createQuarantinedArtifactAccessGuard } from '../../core/cogsec/intake/quarantined-artifact-guard.js';
 import { resolveCogSecEventsPath } from '../../persistence/layout.js';
 import type { StartupConfigHydrationResult } from '../../app/startup/support/bootstrap-helpers.js';
 import type { IcpSharedAutonomyStorePort } from '../../core/icp/autonomy-store-ports.js';
@@ -277,7 +277,7 @@ export async function buildGatewayPrivilegedCore(
       // on-disk artifacts and record the attempted access on the queue entry.
       ...(intakeScreening.screening && intakeScreening.quarantine
         ? {
-            quarantinedArtifactGuard: createQuarantinedArtifactReadGuard({
+            quarantinedArtifactGuard: createQuarantinedArtifactAccessGuard({
               store: intakeScreening.quarantine,
               mode: intakeScreening.screening.mode,
             }),

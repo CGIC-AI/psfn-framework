@@ -25,7 +25,7 @@ import {
   maybeCreateIntakeScreeningService,
   renderIntakeWithheldContentPlaceholder,
 } from '../../../core/cogsec/intake/screening.js';
-import { createQuarantinedArtifactReadGuard } from '../../../core/cogsec/intake/quarantined-artifact-guard.js';
+import { createQuarantinedArtifactAccessGuard } from '../../../core/cogsec/intake/quarantined-artifact-guard.js';
 import { CogSecEventStore } from '../../../core/cogsec/events.js';
 import { resolveCogSecEventsPath } from '../../../persistence/layout.js';
 import { validateIntakePolicy } from '../../../system/config/intake-policy-config.js';
@@ -264,7 +264,7 @@ describe('L2/L3 escalation wired into the live gateway screening path', () => {
     await composition.dispose();
   });
 
-  it('hrmrq.54 B1: an L1-clean document flagged only by L2/L3 registers its artifact paths on the escalation hold, and the read guard withholds them with an audited attempt', async () => {
+  it('hrmrq.54 B1: an L1-clean document flagged only by L2/L3 registers its artifact paths on the escalation hold, and the access guard withholds them with an audited attempt', async () => {
     const transport = routingFetch({
       [L2_MODEL]: { verdict: L2_FLAGGING_VERDICT },
       [L3_MODEL]: { verdict: L3_FLAGGED_VERDICT },
@@ -305,7 +305,7 @@ describe('L2/L3 escalation wired into the live gateway screening path', () => {
     ]));
 
     // The read gate covers both artifacts and audits every attempt.
-    const guard = createQuarantinedArtifactReadGuard({
+    const guard = createQuarantinedArtifactAccessGuard({
       store: composition.quarantine!,
       mode: 'enforce',
     });

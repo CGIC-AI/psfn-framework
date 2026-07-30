@@ -757,6 +757,9 @@ export async function runRLMLoop(
   const sandbox = new REPLSandbox({
     llmProvider: sandboxLLMProvider,
     fileRead: deps.fileRead,
+    ...(deps.fsReadMaxBytes !== undefined
+      ? { fsReadMaxBytes: deps.fsReadMaxBytes }
+      : {}),
     executionPort: deps.executionPort ?? null,
     embeddingService: deps.embeddingService,
     memoryStore: deps.memoryStore,

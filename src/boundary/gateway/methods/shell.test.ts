@@ -15,8 +15,8 @@ import {
 import { INTAKE_FIREWALL_NOTICE_TEMPLATES } from '../../../core/cogsec/intake-firewall-notice-templates.js';
 import { createIntakeQuarantineStore } from '../../../core/cogsec/intake/quarantine-store.js';
 import {
-  createQuarantinedArtifactReadGuard,
-  type QuarantinedArtifactReadGuard,
+  createQuarantinedArtifactAccessGuard,
+  type QuarantinedArtifactAccessGuard,
 } from '../../../core/cogsec/intake/quarantined-artifact-guard.js';
 
 type ShellExecutor = (typeof import('../../sandbox/execution/shell-runner.js'))[
@@ -40,7 +40,7 @@ vi.mock('../../sandbox/execution/shell-runner.js', async (importOriginal) => {
 
 function createHarness(
   policyConfig: PolicyConfig,
-  options: { quarantinedArtifactGuard?: QuarantinedArtifactReadGuard; workspacePath?: string } = {},
+  options: { quarantinedArtifactGuard?: QuarantinedArtifactAccessGuard; workspacePath?: string } = {},
 ): { invoke(params: Record<string, unknown>): Promise<any> } {
   const methods = new Map<string, (params: Record<string, unknown>) => Promise<any>>();
   const runtime: GatewayMethodRuntime = {
@@ -202,7 +202,7 @@ describe('registerShellMethods', () => {
     function quarantineFixture(mode: 'shadow' | 'enforce'): {
       workspace: string;
       artifactPath: string;
-      guard: QuarantinedArtifactReadGuard;
+      guard: QuarantinedArtifactAccessGuard;
       store: ReturnType<typeof createIntakeQuarantineStore>;
       envelopeId: string;
     } {
@@ -222,7 +222,7 @@ describe('registerShellMethods', () => {
         rawText: MARKER,
         artifactPaths: [artifactPath, `${artifactPath}.parsed.txt`],
       });
-      const guard = createQuarantinedArtifactReadGuard({ store, mode });
+      const guard = createQuarantinedArtifactAccessGuard({ store, mode });
       return { workspace, artifactPath, guard, store, envelopeId: envelope.id };
     }
 
@@ -339,7 +339,7 @@ describe('registerShellMethods', () => {
 
     it('fails the exec closed when the enforce-mode deny set cannot be enumerated', async () => {
       const fixture = quarantineFixture('enforce');
-      const brokenGuard: QuarantinedArtifactReadGuard = {
+      const brokenGuard: QuarantinedArtifactAccessGuard = {
         check: () => ({ withheld: false }),
         listEnforcedArtifactPaths: () => {
           throw new Error('corrupt quarantine file');

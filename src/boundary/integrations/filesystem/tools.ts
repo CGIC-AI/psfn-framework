@@ -5,7 +5,10 @@ import type { SubstrateAgentTool } from '../../pi-agent/index.js';
 import type { FilesystemOperations } from './ops.js';
 import { textResult, textResultWithError } from '../../../core/tools/results.js';
 import { toErrorMessage } from '../../../shared/utils/errors.js';
-import { FILESYSTEM_READ_PAGE_CONTRACT } from '../../../shared/contracts/filesystem.js';
+import {
+  FILESYSTEM_READ_PAGE_CONTRACT,
+  validateFilesystemReadMaxBytes,
+} from '../../../shared/contracts/filesystem.js';
 
 const DEFAULT_LIST_MAX_ENTRIES = 200;
 const MAX_LIST_MAX_ENTRIES = 500;
@@ -105,19 +108,9 @@ export interface CreateFsToolOptions {
 }
 
 function resolveDefaultReadMaxBytes(value: number | undefined): number {
-  const configured = value ?? FILESYSTEM_READ_PAGE_CONTRACT.defaultMaxBytes;
-  if (
-    !Number.isSafeInteger(configured)
-    || configured < FILESYSTEM_READ_PAGE_CONTRACT.minBytes
-    || configured > FILESYSTEM_READ_PAGE_CONTRACT.maxBytes
-  ) {
-    throw new Error(
-      `fsReadMaxBytes must be a safe integer between `
-      + `${String(FILESYSTEM_READ_PAGE_CONTRACT.minBytes)} and `
-      + `${String(FILESYSTEM_READ_PAGE_CONTRACT.maxBytes)}`,
-    );
-  }
-  return configured;
+  return validateFilesystemReadMaxBytes(
+    value ?? FILESYSTEM_READ_PAGE_CONTRACT.defaultMaxBytes,
+  );
 }
 
 export function createFsTool(

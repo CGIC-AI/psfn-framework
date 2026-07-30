@@ -29,6 +29,7 @@ interface SessionMetadataEnvelope {
 
 export interface SessionEntryTurnContext {
   turnId: TurnID;
+  turnIdSource: 'persisted' | 'backfilled';
   requestId?: string;
   sourceMessageId?: string;
   replyToMessageId?: string;
@@ -152,6 +153,7 @@ export function resolveSessionEntryTurnContext(
   if (rawTurn === undefined) {
     return {
       turnId: backfillLegacyTurnId(legacySeed(entry)),
+      turnIdSource: 'backfilled',
     };
   }
 
@@ -159,14 +161,29 @@ export function resolveSessionEntryTurnContext(
     throw new Error('Session metadata turn field must be an object');
   }
 
-  const turnId = parseTurnId(rawTurn.turnId, 'metadata.turn.turnId')
-    ?? backfillLegacyTurnId(legacySeed(entry));
+  let turnId: TurnID;
+  let turnIdSource: SessionEntryTurnContext['turnIdSource'];
+  if (rawTurn.turnId === undefined) {
+    turnId = backfillLegacyTurnId(legacySeed(entry));
+    turnIdSource = 'backfilled';
+  } else {
+    if (typeof rawTurn.turnId !== 'string' || !rawTurn.turnId.trim()) {
+      throw new Error('Session turn metadata field "turnId" must be a non-empty UUIDv7 string');
+    }
+    const parsedTurnId = parseTurnId(rawTurn.turnId, 'metadata.turn.turnId');
+    if (!parsedTurnId) {
+      throw new Error('Session turn metadata field "turnId" must be a non-empty UUIDv7 string');
+    }
+    turnId = parsedTurnId;
+    turnIdSource = 'persisted';
+  }
   const requestId = parseOptionalStringField(rawTurn.requestId, 'metadata.turn.requestId');
   const sourceMessageId = parseOptionalStringField(rawTurn.sourceMessageId, 'metadata.turn.sourceMessageId');
   const replyToMessageId = parseOptionalStringField(rawTurn.replyToMessageId, 'metadata.turn.replyToMessageId');
 
   return {
     turnId,
+    turnIdSource,
     ...(requestId ? { requestId } : {}),
     ...(sourceMessageId ? { sourceMessageId } : {}),
     ...(replyToMessageId ? { replyToMessageId } : {}),

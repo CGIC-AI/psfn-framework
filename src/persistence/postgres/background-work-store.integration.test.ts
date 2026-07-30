@@ -2046,7 +2046,7 @@ describe('PostgresBackgroundWorkStore', () => {
         [sourceTurnId],
         () => consumer.getRecent(logicalSessionId, 10),
         async () => { duplicateEffectRan = true; },
-      )).rejects.toThrow('Consumed TurnRecord is missing, duplicated, tombstoned');
+      )).rejects.toThrow('Consumed TurnRecord is duplicated, tombstoned');
       expect(duplicateEffectRan).toBe(false);
     } finally {
       rmSync(sessionsDir, { recursive: true, force: true });

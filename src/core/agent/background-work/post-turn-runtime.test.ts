@@ -153,14 +153,17 @@ function makeExecution(record: TurnRecord): {
   };
 }
 
-function makeEmotionExecution(record: TurnRecord) {
+function makeEmotionExecution(
+  record: TurnRecord,
+  internalStateSnapshotRef = record.internalStateSnapshotRef!,
+) {
   const base = makeExecution(record);
   const payload: EmotionAppraisalBackgroundPayload = {
     schemaVersion: 1,
     kind: 'emotion_appraisal',
     source: base.payload.source,
     emotionSessionId: record.sessionId!,
-    internalStateSnapshotRef: record.internalStateSnapshotRef!,
+    internalStateSnapshotRef,
     appraisalState: {
       schemaVersion: 1,
       emotional: {
@@ -1064,8 +1067,18 @@ describe('executePostTurnBackgroundWork', () => {
   });
 
   it('runs emotion appraisal from a hash-bound aggregate projection', async () => {
-    const record = makeTurnRecord();
-    const execution = makeEmotionExecution(record);
+    const selfSnapshotRef = 'internal-state-v1:test-snapshot';
+    const record = makeTurnRecord({
+      internalStateSnapshotRef: [
+        'trust:regular',
+        'contact:contact-1',
+        'prompt:prompt-v1',
+        'memory:memory-v1',
+        'session:session-v1',
+        `self:${selfSnapshotRef}`,
+      ].join('|'),
+    });
+    const execution = makeEmotionExecution(record, selfSnapshotRef);
     const { payload } = execution;
     const appraisalEntry: SessionEntry = {
       id: 2,
@@ -1322,6 +1335,7 @@ describe('executePostTurnBackgroundWork', () => {
     } as SubstrateConfig;
     const sessionManager = new SessionManager(store, config);
     const failedContent = 'FAILED ICP A PRIVATE OUTPUT MUST NEVER ENTER A DURABLE EFFECT';
+    const unboundContent = 'PRE-TURN-RECORD L0 HISTORY MUST NOT REJECT NEW BACKGROUND WORK';
     const safeOlderContext = [
       `successful B safe older context 0 ${'O'.repeat(160)}`,
       `successful B safe older context 1 ${'O'.repeat(160)}`,
@@ -1332,6 +1346,7 @@ describe('executePostTurnBackgroundWork', () => {
     );
     const successfulInput = `successful B input ${'U'.repeat(640)}`;
     const successfulOutput = `successful B output ${'A'.repeat(640)}`;
+    const successfulSelfSnapshotRef = 'internal-state-v1:successful-b';
     const failedRecord = makeTurnRecord({
       turnId: icpCorrelation.turnId,
       requestId: ICP_SOURCE,
@@ -1346,9 +1361,22 @@ describe('executePostTurnBackgroundWork', () => {
       requestId: 'request-successful-b',
       userMessage: { role: 'user', content: successfulInput, timestamp: 90 },
       assistantMessage: { role: 'assistant', content: successfulOutput, timestamp: 100 },
+      internalStateSnapshotRef: [
+        'trust:regular',
+        'contact:contact-peer',
+        'prompt:none',
+        'memory:none',
+        'session:none',
+        `self:${successfulSelfSnapshotRef}`,
+      ].join('|'),
     });
 
     try {
+      sessionManager.appendContextSystemNote(
+        ICP_CHANNEL,
+        unboundContent,
+        'pre-turn-record-context-note',
+      );
       for (const content of safeOlderContext) {
         sessionManager.recordUserMessage(
           ICP_CHANNEL,
@@ -1502,7 +1530,7 @@ describe('executePostTurnBackgroundWork', () => {
         kind: 'emotion_appraisal',
         source,
         emotionSessionId: ICP_CHANNEL,
-        internalStateSnapshotRef: successfulRecord.internalStateSnapshotRef!,
+        internalStateSnapshotRef: successfulSelfSnapshotRef,
         appraisalState: {
           schemaVersion: 1,
           emotional: {
@@ -1563,9 +1591,11 @@ describe('executePostTurnBackgroundWork', () => {
           successfulOutput,
         ]);
         expect(JSON.stringify(entries)).not.toContain(failedContent);
+        expect(JSON.stringify(entries)).not.toContain(unboundContent);
       }
       expect(complete).toHaveBeenCalled();
       expect(JSON.stringify(complete.mock.calls)).not.toContain(failedContent);
+      expect(JSON.stringify(complete.mock.calls)).not.toContain(unboundContent);
       const summaries = store.getCompactionSummaries(ICP_CHANNEL);
       expect(summaries).toHaveLength(1);
       expect(summaries[0]?.summary).toContain('successful B');

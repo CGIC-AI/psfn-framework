@@ -88,6 +88,8 @@ import { ConfirmationQueue } from '../../../system/capabilities/confirmation-que
 import { createApprovalQueuePortFromConfirmationQueue } from '../../../system/capabilities/approval-queue-port.js';
 import type { IcpConversationCorrelation } from '../../../shared/contracts/icp-autonomy.js';
 import { makeContextManifestFixture } from '../../../test-support/context-manifest.js';
+import { extractTurnRecordSelfSnapshotRef } from '../../../shared/contracts/turn-record-internal-state-ref.js';
+import { buildTurnRecord } from './turn-records.js';
 
 const TEST_FLEET_COMPANION_ID = '11111111-1111-4111-8111-111111111111';
 
@@ -3958,6 +3960,17 @@ describe('handleMessageForTurn compaction scheduling', () => {
     });
     const maybeExtract = vi.fn(async () => undefined);
     runtime.memoryExtractor = { maybeExtract };
+    runtime.buildTurnRecord = vi.fn((input) => {
+      const { turnSessionIdentity, ...turnRecordInput } = input;
+      return buildTurnRecord({
+        ...turnRecordInput,
+        sessionId: turnSessionIdentity.logicalSessionId,
+        hashPromptText: runtime.hashPromptText,
+        // This harness stubs provider messages with string content; the producer
+        // contract under test does not depend on tool-call reconstruction.
+        turnMessages: [],
+      });
+    });
     const correlation = {
       conversationId: '44444444-4444-4444-8444-444444444444',
       rootInitiationId: '99999999-9999-4999-8999-999999999999',
@@ -4044,6 +4057,10 @@ describe('handleMessageForTurn compaction scheduling', () => {
         },
       },
     });
+    const recordedTurn = (runtime.sessionManager.recordTurn as ReturnType<typeof vi.fn>)
+      .mock.calls[0]?.[0] as TurnRecord;
+    expect(extractTurnRecordSelfSnapshotRef(recordedTurn.internalStateSnapshotRef))
+      .toBe(emotionPayload?.internalStateSnapshotRef);
     expect(emotionPayload).not.toHaveProperty('internalState');
     expect(emotionPayload?.appraisalState).not.toHaveProperty('attention.activeConcerns');
     expect(emotionPayload?.appraisalState).not.toHaveProperty('attention.salientEntities');
@@ -4816,8 +4833,8 @@ describe('handleMessageForTurn compaction scheduling', () => {
     const scheduleAutoCompactionBetweenTurns = vi.fn(async () => undefined);
     const awaitPendingAutoCompaction = vi.fn(async () => undefined);
     const recordUserMessage = vi.fn(() => null);
-    const recordSystemMessage = vi.fn(() => null);
-    const recordAssistantMessage = vi.fn(() => null);
+    const recordSystemMessage = vi.fn(() => taskKind === 'reflection' ? null : 1);
+    const recordAssistantMessage = vi.fn(() => taskKind === 'reflection' ? null : 2);
     const runtime = createRuntime({
       eventBus,
       sessionManager: {} as SessionManager,
@@ -4878,15 +4895,21 @@ describe('handleMessageForTurn compaction scheduling', () => {
     expect(buildPromptPrefixCacheKeyMock.mock.calls[0]?.[3]).toBe(DEFAULT_COMPANION_ID);
     expect(buildContext.mock.calls[0]?.[4]).toBe(DEFAULT_COMPANION_ID);
     expect(scheduleAutoCompactionBetweenTurns).not.toHaveBeenCalled();
-    expect(runtime.enqueuePostTurnBackgroundWork).toHaveBeenCalledWith(expect.arrayContaining([
-      expect.objectContaining({
-        kind: 'auto_compaction',
-        payload: expect.objectContaining({
+    const jobs = (runtime.enqueuePostTurnBackgroundWork as ReturnType<typeof vi.fn>)
+      .mock.calls[0]?.[0] as Array<{ kind: string; payload: Record<string, unknown> }>;
+    if (taskKind === 'reflection') {
+      expect(jobs.map(job => job.kind)).toEqual(['intention_post_turn_hooks']);
+    } else {
+      expect(jobs).toEqual(expect.arrayContaining([
+        expect.objectContaining({
           kind: 'auto_compaction',
-          userId: DEFAULT_COMPANION_ID,
+          payload: expect.objectContaining({
+            kind: 'auto_compaction',
+            userId: DEFAULT_COMPANION_ID,
+          }),
         }),
-      }),
-    ]));
+      ]));
+    }
     expect((runtime.agent.prompt as ReturnType<typeof vi.fn>).mock.calls[0]?.[0]).toMatchObject({
       role: 'custom',
       type: 'systemNote',

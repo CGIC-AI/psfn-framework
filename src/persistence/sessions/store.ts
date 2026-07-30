@@ -93,6 +93,13 @@ import {
 import { SessionJournalRuntime } from './store/journal-runtime.js';
 import { resolveSessionEntryTurnContext } from '../../core/session/turn-provenance.js';
 import { backfillLegacyTurnId, parseTurnId } from '../../core/turns/id.js';
+import {
+  selectEligibleTurnRecordSnapshotEntries,
+  sessionEntrySnapshotMatches,
+  TurnRecordEligibilitySnapshotChangedError,
+  TurnRecordEligibilitySnapshotInvalidError,
+  type SourceTurnRecordEligibility,
+} from './turn-record-eligibility-snapshot.js';
 import { isTurnRecordRecoveryEvidenceError } from '../../core/agent/background-work/recovery-contract.js';
 import { indexedChannelId, resolvePrimarySessionId } from './store/session-index-keys.js';
 import { withSessionJournalWriteLock } from './store/session-journal-write-lock.js';
@@ -287,45 +294,11 @@ function entriesBeforeAuthorityMatches(
     && [...expected.tombstones].every(turnId => observed.tombstones.has(turnId));
 }
 
-export class TurnRecordEligibilitySnapshotChangedError extends Error {
-  constructor() {
-    super('TurnRecord eligibility snapshot changed while acquiring consumed-record fences');
-    this.name = 'TurnRecordEligibilitySnapshotChangedError';
-  }
-}
-
-export class TurnRecordEligibilitySnapshotInvalidError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = 'TurnRecordEligibilitySnapshotInvalidError';
-  }
-}
-
-export type SourceTurnRecordEligibility =
-  | { readonly kind: 'missing' }
-  | { readonly kind: 'ineligible' }
-  | { readonly kind: 'eligible'; readonly record: TurnRecord };
-
-function sessionEntrySnapshotMatches(
-  left: readonly SessionEntry[],
-  right: readonly SessionEntry[],
-): boolean {
-  if (left.length !== right.length) return false;
-  return left.every((entry, index) => {
-    const candidate = right[index]!;
-    return entry.id === candidate.id
-      && entry.channelId === candidate.channelId
-      && entry.role === candidate.role
-      && entry.content === candidate.content
-      && entry.authorId === candidate.authorId
-      && entry.authorName === candidate.authorName
-      && entry.timestamp === candidate.timestamp
-      && entry.discordMessageId === candidate.discordMessageId
-      && entry.metadata === candidate.metadata
-      && entry.originChannelId === candidate.originChannelId
-      && entry.channelVisibility === candidate.channelVisibility;
-  });
-}
+export {
+  TurnRecordEligibilitySnapshotChangedError,
+  TurnRecordEligibilitySnapshotInvalidError,
+};
+export type { SourceTurnRecordEligibility };
 
 export interface CogSecTombstoneDiagnostic {
   caseId: string;
@@ -1369,26 +1342,18 @@ export class SessionStore implements TranscriptSearchPort {
           throw new TurnRecordEligibilitySnapshotChangedError();
         }
 
-        const uniqueConsumed = new Map<string, { sourceChannelId: string; turnId: string }>();
-        for (const entry of current) {
-          const reference = {
-            sourceChannelId: entry.originChannelId?.trim() || entry.channelId,
-            turnId: resolveSessionEntryTurnContext(entry).turnId,
-          };
-          uniqueConsumed.set(`${reference.sourceChannelId}\u0000${reference.turnId}`, reference);
-        }
-        for (const reference of uniqueConsumed.values()) {
-          if (!await this.isSourceTurnRecordEligible(
-            reference.sourceChannelId,
-            normalizedSessionId,
-            reference.turnId,
-          )) {
-            throw new TurnRecordEligibilitySnapshotInvalidError(
-              'Consumed TurnRecord is missing, duplicated, tombstoned, or belongs to another session',
-            );
-          }
-        }
-        return operation(current);
+        const eligibleEntries = await selectEligibleTurnRecordSnapshotEntries({
+          entries: current,
+          logicalSessionId: normalizedSessionId,
+          lookupEligibility: (sourceChannelId, logicalOwnerSessionId, turnId) => (
+            this.lookupSourceTurnRecordEligibility(
+              sourceChannelId,
+              logicalOwnerSessionId,
+              turnId,
+            )
+          ),
+        });
+        return operation(eligibleEntries);
       },
     );
   }

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { EventBus } from '../../../shared/event-bus.js';
+import { buildTurnPerformanceEvent } from '../../../shared/telemetry/turn-performance.js';
 import {
   AdminSubsystemHealthDataService,
   type SubsystemLaneHealth,
@@ -128,6 +129,106 @@ describe('AdminSubsystemHealthDataService', () => {
     expect(lane.counts.extracted).toBe(4);
     expect(lane.counts.accepted).toBe(3);
     expect(lane.counts.written).toBe(3);
+  });
+
+  it('makes per-kind background-job failure rates loud', async () => {
+    const bus = new EventBus();
+    const service = new AdminSubsystemHealthDataService({ eventBus: bus });
+    const emitBackgroundTerminal = async (
+      traceId: string,
+      kind: 'memory_extraction' | 'emotion_appraisal' | 'auto_compaction',
+      state: 'succeeded' | 'failed',
+      reason: 'completed' | 'source_missing' | 'source_mismatch',
+      timestampMs: number,
+    ) => bus.emit('agent.turn.performance', buildTurnPerformanceEvent({
+      traceId,
+      stage: 'background_job_state',
+      backgroundJobKind: kind,
+      backgroundJobState: state,
+      backgroundJobReason: reason,
+      timestampMs,
+      monotonicAtMs: timestampMs,
+    }));
+
+    await emitBackgroundTerminal(
+      'auto-1',
+      'auto_compaction',
+      'failed',
+      'source_missing',
+      1,
+    );
+    await emitBackgroundTerminal(
+      'auto-2',
+      'auto_compaction',
+      'failed',
+      'source_mismatch',
+      2,
+    );
+    await emitBackgroundTerminal(
+      'memory-1',
+      'memory_extraction',
+      'succeeded',
+      'completed',
+      3,
+    );
+    await emitBackgroundTerminal(
+      'memory-2',
+      'memory_extraction',
+      'failed',
+      'source_missing',
+      4,
+    );
+    await emitBackgroundTerminal(
+      'memory-2',
+      'memory_extraction',
+      'failed',
+      'source_missing',
+      4,
+    );
+    await emitBackgroundTerminal(
+      'emotion-1',
+      'emotion_appraisal',
+      'succeeded',
+      'completed',
+      5,
+    );
+
+    expect(laneById(service.getSnapshot().lanes, 'background_work:auto_compaction'))
+      .toMatchObject({
+        status: 'failed',
+        lastOutcome: 'failed',
+        lastReason: 'source_mismatch',
+        counts: {
+          succeeded: 0,
+          failed: 2,
+          terminal: 2,
+          successRatePct: 0,
+        },
+      });
+    expect(laneById(service.getSnapshot().lanes, 'background_work:memory_extraction'))
+      .toMatchObject({
+        status: 'degraded',
+        counts: {
+          succeeded: 1,
+          failed: 1,
+          terminal: 2,
+          successRatePct: 50,
+        },
+      });
+    expect(laneById(service.getSnapshot().lanes, 'background_work:emotion_appraisal'))
+      .toMatchObject({
+        status: 'ok',
+        counts: {
+          succeeded: 1,
+          failed: 0,
+          terminal: 1,
+          successRatePct: 100,
+        },
+      });
+    expect(laneById(
+      service.getSnapshot().lanes,
+      'background_work:intention_post_turn_hooks',
+    ).status).toBe('never');
   });
 
   it('bounds the ring buffer to the configured limit', async () => {

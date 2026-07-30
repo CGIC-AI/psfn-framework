@@ -1733,6 +1733,38 @@ describe('GatewayClient authenticated identification', () => {
     await expect(identified).resolves.toBeUndefined();
   });
 
+  it('declares application readiness with an empty authenticated control frame', async () => {
+    const conn = createMockConnection();
+    const client = new GatewayClient(conn.conn, 1024, {
+      companionId: TEST_COMPANION_ID,
+    });
+
+    const declaring = client.declareRuntimeReady();
+    const request = conn.sent[0] as {
+      id: number;
+      method: string;
+      params: Record<string, unknown>;
+    };
+    expect(request).toMatchObject({
+      method: 'gateway.client.ready',
+      params: {},
+    });
+    conn._emit({ jsonrpc: '2.0', id: request.id, result: { success: true } });
+    await expect(declaring).resolves.toBeUndefined();
+  });
+
+  it('rejects malformed runtime-ready acknowledgements', async () => {
+    const conn = createMockConnection();
+    const client = new GatewayClient(conn.conn, 1024, {
+      companionId: TEST_COMPANION_ID,
+    });
+
+    const declaring = client.declareRuntimeReady();
+    const request = conn.sent[0] as { id: number };
+    conn._emit({ jsonrpc: '2.0', id: request.id, result: { success: true, extra: true } });
+    await expect(declaring).rejects.toThrow('invalid runtime-ready acknowledgement');
+  });
+
   it('publishes only the bounded posture envelope after deterministic runtime wiring', async () => {
     const conn = createMockConnection();
     const client = new GatewayClient(conn.conn, 1024, {

@@ -152,6 +152,12 @@
       "value": "30_000"
     },
     {
+      "file": "src/boundary/gateway/inbound-channel-replay.ts",
+      "name": "MAX_INBOUND_CHANNEL_REPLAY_MESSAGES_PER_COMPANION",
+      "value": "100",
+      "note": "Code-owned denial-of-service ceiling that bounds deploy-window inbound message retention per companion; operator expansion would weaken gateway memory isolation."
+    },
+    {
       "file": "src/boundary/gateway/client.ts",
       "name": "DEFAULT_SESSION_INTEGRITY_RPC_TIMEOUT_MS",
       "value": "3_000"

@@ -134,6 +134,11 @@ import {
 } from './shared-satellite-response-arbiter.js';
 import { GatewayFleetPostureCache } from './fleet-posture-cache.js';
 import type { FleetCompanionPostureSummary } from '../../shared/telemetry/fleet-posture.js';
+import {
+  GatewayInboundChannelReplay,
+  inboundChannelMessageId,
+  type InboundChannelReplayDrop,
+} from './inbound-channel-replay.js';
 
 const log = createComponentLogger('Gateway');
 const DEFAULT_CONNECTION_HEALTHCHECK_STALE_AFTER_MS = 90_000;
@@ -161,6 +166,7 @@ interface GatewayConnectionStatus {
   lastHealthcheckAt: number;
   lastTransitionAt: number;
   healthcheckStaleAfterMs: number;
+  runtimeReadyDeclared: boolean;
   failureReason?: string;
   /** Multi-companion (W1): companionId this connection identified as. */
   companionId?: CompanionId;
@@ -170,7 +176,7 @@ const GATEWAY_CONNECTION_STATE_TRANSITIONS:
 Readonly<Record<GatewayConnectionState, readonly GatewayConnectionState[]>> = {
   registering: ['ready', 'degraded', 'offline'],
   ready: ['degraded', 'offline'],
-  degraded: ['ready', 'offline'],
+  degraded: ['registering', 'ready', 'offline'],
   offline: [],
 };
 
@@ -404,6 +410,7 @@ export class GatewayServer {
   private readonly companionViolationLog: CompanionViolationEvent[] = [];
   private readonly companionPostures = new GatewayFleetPostureCache<GatewayRpcConnection>();
   private readonly companionDeliveryFailureReceipts = new CompanionDeliveryFailureReceipts();
+  private readonly inboundChannelReplay: GatewayInboundChannelReplay;
   private readonly icpAutonomyBroker: GatewayIcpAutonomyBroker | null;
   private readonly pendingIcpInvalidations = new Map<string, PendingIcpInvalidation>();
   /**
@@ -510,6 +517,9 @@ export class GatewayServer {
       ...(options.operatorTelegramChatId
         ? { telegramChatId: options.operatorTelegramChatId }
         : {}),
+    });
+    this.inboundChannelReplay = new GatewayInboundChannelReplay({
+      onDrop: drop => this.alertInboundChannelDrop(drop),
     });
     const cogSecMode = options.intakeScreening?.mode ?? 'off';
     this.canaryEgressGuard = cogSecMode === 'off'
@@ -781,6 +791,7 @@ export class GatewayServer {
       audited: (method, handler, paramsSummary) => this.audited(method, handler, paramsSummary),
     });
     target.addMethod('gateway.client.identify', (params: unknown) => this.identifyConnection(conn, params));
+    target.addMethod('gateway.client.ready', (params: unknown) => this.markConnectionReady(conn, params));
     target.addMethod(
       'gateway.client.health',
       (params: unknown) => this.recordConnectionPosture(conn, params),
@@ -1709,6 +1720,7 @@ export class GatewayServer {
       lastHealthcheckAt: Date.now(),
       lastTransitionAt: Date.now(),
       healthcheckStaleAfterMs: DEFAULT_CONNECTION_HEALTHCHECK_STALE_AFTER_MS,
+      runtimeReadyDeclared: !this.multiCompanion.enabled,
     });
     this.appendConnectionTransition(conn, 'none', 'registering', 'connection_opened');
 
@@ -1751,7 +1763,10 @@ export class GatewayServer {
         if (verdict !== 'pass') {
           return;
         }
-        if ((message as Record<string, unknown>).method !== 'gateway.client.identify') {
+        if (
+          !this.multiCompanion.enabled
+          && (message as Record<string, unknown>).method !== 'gateway.client.identify'
+        ) {
           this.transitionConnectionState(conn, 'ready', 'rpc_message_received');
         }
         const releaseInFlightHealthcheck = this.beginInFlightHealthcheck(conn);
@@ -1837,8 +1852,119 @@ export class GatewayServer {
       this.refreshConnectionHealth();
       return this.notifyAll(method, params);
     }
-    const route = this.resolveCompanionAgent(surface, discordAccountId);
-    return this.notifyOne(route.conn, method, params) ? 1 : 0;
+    const companionId = this.resolveRoutedCompanionId(surface, discordAccountId);
+    this.refreshConnectionHealth();
+    this.flushInboundChannelReplay(companionId);
+
+    if (this.inboundChannelReplay.size(companionId) === 0) {
+      const conn = this.resolveReadyCompanionConnection(companionId);
+      if (conn && this.notifyOne(conn, method, params)) {
+        return 1;
+      }
+    }
+
+    const queueDepth = this.inboundChannelReplay.enqueue({
+      companionId,
+      surface,
+      method,
+      params,
+      ...(discordAccountId ? { discordAccountId } : {}),
+      enqueuedAt: Date.now(),
+    });
+    const messageId = inboundChannelMessageId(params);
+    log.warn('Inbound channel message queued until companion is ready', {
+      companionId,
+      surface,
+      method,
+      queueDepth,
+      ...(messageId ? { messageId } : {}),
+    });
+    // The gateway accepted durable-in-process responsibility for this
+    // notification. Returning positive keeps the adapter from treating a
+    // safely queued deploy-window message as an immediate delivery failure.
+    return 1;
+  }
+
+  private flushInboundChannelReplay(companionId: CompanionId): void {
+    const conn = this.resolveReadyCompanionConnection(companionId);
+    if (!conn) return;
+
+    let replayed = 0;
+    let notification = this.inboundChannelReplay.peek(companionId);
+    while (notification) {
+      if (!this.notifyOne(conn, notification.method, notification.params)) {
+        break;
+      }
+      this.inboundChannelReplay.removeHead(companionId, notification);
+      replayed += 1;
+      notification = this.inboundChannelReplay.peek(companionId);
+    }
+    if (replayed > 0) {
+      log.info('Replayed queued inbound channel messages', {
+        companionId,
+        replayed,
+        remaining: this.inboundChannelReplay.size(companionId),
+      });
+    }
+  }
+
+  private alertInboundChannelDrop(drop: InboundChannelReplayDrop): void {
+    const { notification, reason } = drop;
+    const messageId = inboundChannelMessageId(notification.params);
+    const details = {
+      companionId: notification.companionId,
+      surface: notification.surface,
+      method: notification.method,
+      reason,
+      enqueuedAt: notification.enqueuedAt,
+      ...(messageId ? { messageId } : {}),
+    };
+    log.error('Inbound channel replay queue dropped a message', details);
+    this.recordCompanionViolation('inbound_channel_message_dropped', details);
+    const startedAt = Date.now();
+    const auditDrop = async (): Promise<void> => {
+      try {
+        const auditId = await this.audit(
+          'gateway.companion.inbound_channel_message_dropped',
+          'DENY',
+          details,
+        );
+        await this.auditComplete(
+          auditId,
+          startedAt,
+          'Inbound channel message dropped before replay',
+        );
+      } catch (error) {
+        log.error('Failed to persist inbound channel drop audit', {
+          ...details,
+          error: toErrorMessage(error),
+        });
+      }
+    };
+    const deliverAlert = async (): Promise<void> => {
+      try {
+        await this.operatorAlertDispatcher.dispatch({
+          title: 'Inbound companion message dropped',
+          priority: 5,
+          message: [
+            `Gateway replay queue dropped an inbound ${notification.surface} message.`,
+            `Companion: ${notification.companionId}`,
+            `Reason: ${reason}`,
+            ...(messageId ? [`Message ID: ${messageId}`] : []),
+          ].join('\n'),
+          sender: {
+            kind: 'system',
+            provenance: 'system.operator_alert.inbound_channel_drop',
+          },
+        });
+      } catch (error) {
+        log.error('Failed to deliver inbound channel drop alert', {
+          ...details,
+          error: toErrorMessage(error),
+        });
+      }
+    };
+    void Promise.all([auditDrop(), deliverAlert()]);
   }
 
   /**
@@ -2963,7 +3089,19 @@ export class GatewayServer {
       this.companionLastSeen.set(status.companionId, status.lastHealthcheckAt);
     }
     if (status.state === 'degraded' && status.stateReason === 'healthcheck_stale') {
-      this.transitionConnectionState(conn, 'ready', 'healthcheck_recovered');
+      if (
+        this.multiCompanion.enabled
+        && status.role === 'agent'
+        && !status.runtimeReadyDeclared
+      ) {
+        this.transitionConnectionState(
+          conn,
+          'registering',
+          'healthcheck_recovered_pending_runtime_ready',
+        );
+      } else {
+        this.transitionConnectionState(conn, 'ready', 'healthcheck_recovered');
+      }
     }
   }
 
@@ -3006,7 +3144,7 @@ export class GatewayServer {
     }
     status.stateReason = reason;
 
-    if (nextState === 'ready') {
+    if (nextState === 'ready' || nextState === 'registering') {
       status.health = 'healthy';
       delete status.failureReason;
     } else if (nextState === 'degraded') {
@@ -3014,11 +3152,14 @@ export class GatewayServer {
       if (failureReason) {
         status.failureReason = failureReason;
       }
-    } else if (nextState === 'offline' && failureReason) {
+    } else if (failureReason) {
       status.failureReason = failureReason;
     }
 
     this.appendConnectionTransition(conn, currentState, nextState, reason, failureReason);
+    if (nextState === 'ready' && status.role === 'agent' && status.companionId) {
+      this.flushInboundChannelReplay(status.companionId);
+    }
   }
 
   private appendConnectionTransition(
@@ -3089,6 +3230,25 @@ export class GatewayServer {
       status.companionId,
       params.posture,
     );
+    return { success: true };
+  }
+
+  private markConnectionReady(
+    conn: GatewayRpcConnection,
+    params: unknown,
+  ): { success: true } {
+    if (!isRecord(params) || Object.keys(params).length !== 0) {
+      throw new Error('gateway.client.ready accepts only an empty object');
+    }
+    const status = this.connectionStatuses.get(conn);
+    if (status?.role !== 'agent') {
+      throw new Error('gateway.client.ready requires an authenticated companion agent');
+    }
+    if (this.multiCompanion.enabled && !status.companionId) {
+      throw new Error('gateway.client.ready requires an identified companion agent');
+    }
+    status.runtimeReadyDeclared = true;
+    this.transitionConnectionState(conn, 'ready', 'agent_runtime_ready');
     return { success: true };
   }
 
@@ -3220,7 +3380,11 @@ export class GatewayServer {
     }
 
     status.role = params.role;
-    this.transitionConnectionState(conn, 'ready', `client_identified:${params.role}`);
+    if (params.role === 'agent' && this.multiCompanion.enabled) {
+      this.transitionConnectionState(conn, 'registering', 'client_identified:agent');
+    } else {
+      this.transitionConnectionState(conn, 'ready', `client_identified:${params.role}`);
+    }
     return {
       success: true,
       role: params.role,

@@ -145,6 +145,8 @@ async function identify(
     authToken: deriveCompanionAuthToken(companionId, 'agent', KEYRING),
   });
   expect(response.error).toBeUndefined();
+  const ready = await invoke(connection, id + 10_000, 'gateway.client.ready', {});
+  expect(ready.error).toBeUndefined();
 }
 
 function posture(

@@ -436,6 +436,8 @@ async function identify(conn: MockConnection, companionId: string, id: number): 
     authToken: deriveCompanionAuthToken(companionId, 'agent', KEYRING),
   });
   expect(response.result).toMatchObject({ success: true, companionId });
+  const ready = await invoke(conn, id + 10_000, 'gateway.client.ready', {});
+  expect(ready.result).toEqual({ success: true });
 }
 
 function candidate(candidateId: string, localCompanionId = A, peerCompanionId = B) {
@@ -583,6 +585,7 @@ async function setup(
       companionAuthToken: deriveCompanionAuthToken(companionId, 'agent', KEYRING),
     });
     await client.identifyAsAgent();
+    await client.declareRuntimeReady();
     return client;
   };
   return { server, connect, connectClient, store, llmProvider, eventBus };

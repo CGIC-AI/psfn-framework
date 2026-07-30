@@ -7,7 +7,9 @@ import {
   createToolCallExecutionGuard,
   executeToolCallsWithScheduler,
   getToolResultIntakeScreening,
+  getToolResultInvocationAudit,
 } from './tool-call-scheduler.js';
+import { buildTurnRecord } from './substrate-agent/turn-records.js';
 import type { ToolCallOutcome } from '../../shared/contracts/tool-call-outcome.js';
 
 type ObservedToolResult = ToolResultMessage & { outcome: ToolCallOutcome };
@@ -91,6 +93,88 @@ function makeConcurrencyMeta(
 }
 
 describe('tool-call-scheduler', () => {
+  it('carries invocation audit metadata on tool results for result-only turn persistence', async () => {
+    const world = makeTool(
+      'world',
+      async () => ({ content: [{ type: 'text', text: 'listed' }], details: {} }),
+      { concurrency: makeConcurrencyMeta('exclusive') },
+    );
+    const assistantMessage = {
+      ...makeAssistantToolCalls([{ name: 'world', arguments: { action: 'list' } }]),
+      content: [
+        { type: 'thinking' as const, thinking: 'Need to inspect the world.' },
+        {
+          type: 'toolCall' as const,
+          id: 'call-1',
+          name: 'world',
+          arguments: { action: 'list' },
+          thoughtSignature: 'sig-world',
+        },
+      ],
+    };
+
+    const result = await executeToolCallsWithScheduler(
+      [world],
+      assistantMessage,
+      undefined,
+      { stream: { push: () => undefined } },
+      { maxParallelToolCalls: 1 },
+    );
+
+    expect(getToolResultInvocationAudit(result.toolResults[0]!)).toEqual({
+      arguments: { action: 'list' },
+      rationale: 'Need to inspect the world.',
+      thoughtSignature: 'sig-world',
+    });
+    expect(JSON.stringify(result.toolResults[0])).not.toContain('psfnToolInvocation');
+
+    const turnRecord = buildTurnRecord({
+      message: {
+        id: 'source-message-live-composition',
+        channelId: 'api:test',
+        channelType: 'api',
+        authorId: 'user-1',
+        authorName: 'User',
+        content: 'Inspect the world.',
+        timestamp: new Date(1_700_000_000_000),
+      },
+      turnId: '019d2326-d9e1-701d-bcee-250d2cbb0e4e',
+      requestId: 'req-live-composition',
+      startedAt: 1_700_000_000_000,
+      completedAt: 1_700_000_000_250,
+      userSessionEntryId: 1,
+      assistantSessionEntryId: 2,
+      response: {
+        content: 'Done.',
+        channelId: 'api:test',
+        metadata: {
+          model: 'test-model',
+          inputTokens: 10,
+          outputTokens: 5,
+          durationMs: 250,
+        },
+      },
+      turnMessages: result.toolResults,
+      promptMode: 'default',
+      promptText: 'system prompt',
+      contextMessageCount: 1,
+      memoryContextChars: 0,
+      trustLevel: 'regular',
+      speakerRole: 'user',
+      retrievalProvenanceRefs: [],
+      hashPromptText: () => 'prompt-hash',
+    });
+
+    expect(turnRecord.toolCalls).toEqual([
+      expect.objectContaining({
+        toolName: 'world',
+        arguments: { action: 'list' },
+        rationale: 'Need to inspect the world.',
+        provenanceRefs: ['source:tool:world|invocation:call-1'],
+      }),
+    ]);
+  });
+
   it('withholds thrown internal diagnostics from the companion and emits full-detail telemetry', async () => {
     const invariantMessage =
       'SessionManager.resolveSessionChannelId cannot apply mutable active-context resolution '

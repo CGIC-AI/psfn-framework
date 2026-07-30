@@ -1518,6 +1518,10 @@ async function main(): Promise<void> {
   scheduler.start();
   await eventBus.emit('system.init', {});
   await eventBus.emit('system.ready', {});
+  // Identification happens before the runtime is composed. Publish readiness
+  // only after every inbound notification handler is installed so the gateway
+  // can replay deploy-window traffic without racing startup registration.
+  await gateway.declareRuntimeReady();
   adminTransport?.markRuntimeReady();
 
   // Send "I'm back" notification (fire-and-forget)

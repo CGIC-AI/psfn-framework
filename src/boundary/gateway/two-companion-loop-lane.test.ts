@@ -247,6 +247,13 @@ class LaneAgent {
       },
     });
     await new Promise(r => setTimeout(r, 10));
+    this.connection._emit({
+      jsonrpc: '2.0',
+      id: ++this.rpcCounter + 1_000,
+      method: 'gateway.client.ready',
+      params: {},
+    });
+    await new Promise(r => setTimeout(r, 10));
   }
 
   evaluateInbound(message: SubstrateMessage): FatigueTurnDecision {

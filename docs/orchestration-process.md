@@ -86,12 +86,17 @@ from the resulting feature branch.
 The clean-main canary is mandatory before any multi-PR wave fans out. It fetches
 first, refuses a dirty tree or a checkout that is not exactly `origin/main`, and
 runs the whole-repository `ci-rules`, lint, build, typecheck,
-repository-hygiene, Semgrep-rules, and test gates. Empty-diff checks
-(`change-budget`, `semgrep-diff`, and UBS) skip with a logged reason. A passing
-run records a `kind: 'canary'` attestation containing the base SHA, gate version,
-and timestamp under `.git/local-delivery-gate/`. A red canary stops the wave:
-fix `main` before creating branches or worktrees. This prevents baseline defects
-or a gate-version change from invalidating every branch attestation after fanout.
+repository-hygiene, startup-owner-files, Semgrep-rules, and test gates.
+Empty-diff checks (`change-budget`, commit identities, `semgrep-diff`, and UBS)
+skip with a logged reason. Every branch gate and the complementary GitHub CI
+lane run `verify:commit-identities` over the exact base-to-head range; both the
+author and committer email of every commit must be explicitly allowlisted, while
+`verify:repository-hygiene` continues to scan tracked content for public-release
+identity and sanitize violations. A passing canary run records a
+`kind: 'canary'` attestation containing the base SHA, gate version, and timestamp
+under `.git/local-delivery-gate/`. A red canary stops the wave: fix `main` before
+creating branches or worktrees. This prevents baseline defects or a gate-version
+change from invalidating every branch attestation after fanout.
 
 Run `npm run prewarm` once per wave, and again after any lockfile change. It
 populates the shared npm cache, proves the cache with an offline install, and

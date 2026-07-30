@@ -1,3 +1,6 @@
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
   describeStartupOwnerFileChecks,
@@ -72,5 +75,23 @@ describe('verify-startup-owner-files parity', () => {
     const result = verifyRepositoryOwnerFileSeeds();
     expect(result.errors).toEqual([]);
     expect(result.ok).toBe(true);
+  });
+
+  it('ignores ambient CONFIG_DIR and validates this repository seeds', () => {
+    const poisonedConfigDir = mkdtempSync(join(tmpdir(), 'poisoned-owner-seeds-'));
+    const previousConfigDir = process.env.CONFIG_DIR;
+    process.env.CONFIG_DIR = poisonedConfigDir;
+    try {
+      const result = verifyRepositoryOwnerFileSeeds();
+      expect(result.errors).toEqual([]);
+      expect(result.ok).toBe(true);
+    } finally {
+      if (previousConfigDir === undefined) {
+        delete process.env.CONFIG_DIR;
+      } else {
+        process.env.CONFIG_DIR = previousConfigDir;
+      }
+      rmSync(poisonedConfigDir, { recursive: true, force: true });
+    }
   });
 });

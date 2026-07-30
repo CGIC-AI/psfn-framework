@@ -1670,6 +1670,7 @@ npm run verify:settings-contract
 npm run verify:supply-chain      # dependency-update gate; see "Dependency Update Policy"
 npm run verify:typecheck-baseline
 npm run verify:repository-hygiene
+npm run verify:commit-identities -- --base <base-sha> --head <head-sha>
 npm run verify:agent-docker-isolation
 npm run test:group-harness
 npm run test:prompt-goldens

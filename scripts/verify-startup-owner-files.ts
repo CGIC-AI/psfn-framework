@@ -35,6 +35,8 @@ export const OWNER_FILE_SEEDS = [
   ['partner-affect-shadow.seed.json', 'partner-affect-shadow.json'],
 ] as const satisfies ReadonlyArray<readonly [string, string]>;
 
+const REPOSITORY_CONFIG_DIR = fileURLToPath(new URL('../config/', import.meta.url));
+
 /**
  * Fail with a specific drift error if OWNER_FILE_SEEDS is out of parity with the
  * owner checks {@link verifyStartupOwnerFiles} actually runs. This makes the
@@ -90,7 +92,7 @@ export function assertOwnerFileSeedParity(
 export function verifyRepositoryOwnerFileSeeds(): StartupOwnerFileSeedVerdict {
   assertOwnerFileSeedParity();
 
-  const seedDir = resolve(process.env.CONFIG_DIR?.trim() || 'config');
+  const seedDir = REPOSITORY_CONFIG_DIR;
   const fixtureRoot = mkdtempSync(join(tmpdir(), 'owner-seed-verification-'));
   const systemDataDir = join(fixtureRoot, 'system-data');
   const companionDataDir = join(fixtureRoot, 'companion-data');
@@ -139,5 +141,12 @@ const invokedDirectly =
   process.argv[1] !== undefined
   && resolve(process.argv[1]) === fileURLToPath(import.meta.url);
 if (invokedDirectly) {
-  main();
+  try {
+    main();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    process.stderr.write('Repository owner-file seed validation failed:\n');
+    process.stderr.write(`- ${message}\n`);
+    process.exitCode = 1;
+  }
 }

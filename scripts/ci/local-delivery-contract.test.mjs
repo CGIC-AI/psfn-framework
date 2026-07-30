@@ -161,7 +161,9 @@ test('delivery-only gate stays fast while product changes retain full validation
   assert.deepEqual(deliveryNames, [
     'ci-rules',
     'change-budget',
+    'commit-identities',
     'lint-changed',
+    'startup-owner-files',
     'semgrep-diff',
     'ubs',
     'changed-workflow-analysis',
@@ -181,15 +183,29 @@ test('delivery-only gate stays fast while product changes retain full validation
       .filter(({ skip }) => !skip)
       .map(({ name }) => name);
     assert.ok(names.includes(specialist), `${path} must run ${specialist}`);
-    for (const rootGate of ['lint', 'build', 'typecheck', 'repository-hygiene', 'tests']) {
+    for (const rootGate of [
+      'lint',
+      'build',
+      'typecheck',
+      'repository-hygiene',
+      'tests',
+    ]) {
       assert.ok(!names.includes(rootGate), `${path} must not run root ${rootGate}`);
     }
+    assert.ok(names.includes('startup-owner-files'), `${path} must run startup-owner-files`);
   }
 
   const lockfileNames = buildGatePlan({ paths: ['package-lock.json'] })
     .filter(({ skip }) => !skip)
     .map(({ name }) => name);
-  for (const rootGate of ['lint', 'build', 'typecheck', 'repository-hygiene', 'tests']) {
+  for (const rootGate of [
+    'lint',
+    'build',
+    'typecheck',
+    'repository-hygiene',
+    'startup-owner-files',
+    'tests',
+  ]) {
     assert.ok(lockfileNames.includes(rootGate), `root lockfile must run ${rootGate}`);
   }
 
@@ -203,11 +219,17 @@ test('delivery-only gate stays fast while product changes retain full validation
   });
   const names = plan.map(({ name }) => name);
 
-  assert.deepEqual(names.slice(0, 3), ['ci-rules', 'change-budget', 'lint']);
+  assert.deepEqual(names.slice(0, 4), [
+    'ci-rules',
+    'change-budget',
+    'commit-identities',
+    'lint',
+  ]);
   for (const required of [
     'build',
     'typecheck',
     'repository-hygiene',
+    'startup-owner-files',
     'semgrep-rules',
     'semgrep-diff',
     'ubs',
@@ -432,11 +454,20 @@ function makeCanaryRepository() {
 test('canary plan forces whole-repo gates on and skips diff-scoped gates explicitly', () => {
   const plan = buildGatePlan({ paths: [], canary: true });
   const active = plan.filter(({ skip }) => !skip).map(({ name }) => name);
-  for (const gate of ['ci-rules', 'lint', 'build', 'typecheck', 'repository-hygiene', 'semgrep-rules', 'tests']) {
+  for (const gate of [
+    'ci-rules',
+    'lint',
+    'build',
+    'typecheck',
+    'repository-hygiene',
+    'startup-owner-files',
+    'semgrep-rules',
+    'tests',
+  ]) {
     assert.ok(active.includes(gate), `canary must run ${gate} against main`);
   }
   // Diff-scoped gates are skipped with an explicit, logged reason — never silent.
-  for (const gate of ['change-budget', 'semgrep-diff', 'ubs']) {
+  for (const gate of ['change-budget', 'commit-identities', 'semgrep-diff', 'ubs']) {
     const entry = plan.find(({ name }) => name === gate);
     assert.equal(entry.skip, true, `canary must skip ${gate}`);
     assert.match(entry.skipReason ?? '', /canary/, `canary must state why ${gate} is skipped`);
@@ -464,10 +495,18 @@ test('clean-main canary runs the full gate against main and records an attestati
   assert.equal(attestation.kind, 'canary');
   assert.equal(attestation.base, main);
   assert.equal(attestation.gateVersion, GATE_VERSION);
-  for (const gate of ['ci-rules', 'lint', 'build', 'typecheck', 'repository-hygiene', 'tests']) {
+  for (const gate of [
+    'ci-rules',
+    'lint',
+    'build',
+    'typecheck',
+    'repository-hygiene',
+    'startup-owner-files',
+    'tests',
+  ]) {
     assert.ok(executed.includes(gate), `canary must run ${gate}`);
   }
-  for (const gate of ['change-budget', 'semgrep-diff', 'ubs']) {
+  for (const gate of ['change-budget', 'commit-identities', 'semgrep-diff', 'ubs']) {
     assert.ok(skipped.includes(gate), `canary must skip ${gate}`);
   }
   const written = JSON.parse(
@@ -912,6 +951,10 @@ test('GitHub CI is one complementary delta lane without label-triggered reruns',
   assert.match(
     workflow,
     /node scripts\/ci\/run-zizmor-changed\.mjs --format=github --base "\$BASE_SHA" --head "\$HEAD_SHA"/,
+  );
+  assert.match(
+    workflow,
+    /npm run verify:commit-identities -- --base "\$BASE_SHA" --head "\$HEAD_SHA"/,
   );
 });
 

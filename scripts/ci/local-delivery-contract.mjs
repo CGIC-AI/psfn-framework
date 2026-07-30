@@ -18,7 +18,7 @@ export const REMOTE_ATTESTATION_CONTEXT = 'local-gate/v1';
 // result and whole-gate attestation is invalidated and forced to rerun. It is
 // embedded in every stage record and in the final attestation; a mismatch is a
 // hard reuse invalidation.
-export const GATE_VERSION = 2;
+export const GATE_VERSION = 3;
 
 // Schema version for a single per-stage record on disk. Independent of the
 // whole-gate attestation schema so the two can evolve separately.
@@ -247,11 +247,11 @@ export function buildGatePlan({
   const matches = (pattern) => paths.some((path) => pattern.test(path));
   const scope = detectChangeScope(paths);
   // Canary validates origin/main itself against an empty diff (base == head).
-  // The whole-repo gates (lint, build, typecheck, repository-hygiene, tests,
-  // ci-rules, and the semgrep ruleset self-test) are meaningful independent of
-  // any diff, so canary forces them on. Every diff-scoped gate is meaningless on
-  // an empty diff and is skipped EXPLICITLY with a logged reason — never
-  // silently.
+  // The whole-repo gates (lint, build, typecheck, repository-hygiene,
+  // startup-owner-files, tests, ci-rules, and the semgrep ruleset self-test)
+  // are meaningful independent of any diff, so canary forces them on. Every
+  // diff-scoped gate is meaningless on an empty diff and is skipped EXPLICITLY
+  // with a logged reason — never silently.
   const rootRuntime = canary || scope.root_runtime;
   const ubsPaths = scannablePaths.filter((path) => /\.(?:[cm]?[jt]s|[jt]sx|svelte)$/.test(path));
   const workflowPaths = paths.filter((path) =>
@@ -274,6 +274,20 @@ export function buildGatePlan({
       ],
       canary ? { skip: true, skipReason: 'canary: origin/main has no diff to budget' } : {},
     ),
+    command(
+      'commit-identities',
+      'npm',
+      [
+        'run',
+        'verify:commit-identities',
+        '--',
+        '--base',
+        base,
+        '--head',
+        head,
+      ],
+      canary ? { skip: true, skipReason: 'canary: origin/main has no commit range' } : {},
+    ),
     rootRuntime
       ? command('lint', 'npm', ['run', 'lint'], { nodeHeapMb: 6144 })
       : command('lint-changed', 'npm', ['run', 'lint:changed', '--', '--base', base]),
@@ -286,6 +300,7 @@ export function buildGatePlan({
           command('repository-hygiene', 'npm', ['run', 'verify:repository-hygiene']),
         ]
       : []),
+    command('startup-owner-files', 'npm', ['run', 'verify:startup-owner-files']),
     // Canary runs the semgrep ruleset self-test unconditionally (it validates the
     // committed rules, not a diff); otherwise it runs only when the rules change.
     command('semgrep-rules', 'npm', ['run', 'semgrep:test'], {

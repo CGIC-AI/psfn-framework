@@ -61,6 +61,9 @@ jobs:
           fi
           node scripts/ci/check-change-budget.mjs "${args[@]}"
 
+      - name: Enforce commit identity allowlist
+        run: npm run verify:commit-identities -- --base "$BASE_SHA" --head "$HEAD_SHA"
+
       - name: Detect clean-environment coverage
         id: scope
         run: node scripts/ci/detect-change-scope.mjs --base "$BASE_SHA" --head "$HEAD_SHA"

@@ -33,4 +33,3 @@ export function isRecoverableEvidenceGroundingExhaustion(error: unknown): boolea
   }
   return classifyLLMError(error).category === 'timeout';
 }
-

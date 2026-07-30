@@ -209,13 +209,6 @@ export async function apiDownload(path: string): Promise<ApiDownload> {
   return { blob: await res.blob(), filename };
 }
 
-export async function apiPost<T>(path: string, body?: unknown): Promise<T> {
-  const serializedBody = body !== undefined ? JSON.stringify(body) : undefined;
-  const res = await apiFetch(path, {
-    method: 'POST',
-    headers: serializedBody === undefined
-      ? authHeaders()
-      : { ...authHeaders(), 'Content-Type': 'application/json' },
 export interface ApiPostOptions {
   /**
    * Extra request headers for one call (e.g. a single-use audited escalation
@@ -230,9 +223,15 @@ export async function apiPost<T>(
   body?: unknown,
   options?: ApiPostOptions,
 ): Promise<T> {
+  // An undefined body must produce a genuinely body-less request with no
+  // Content-Type — several catalogue routes declare body:forbidden and the
+  // capability boundary enforces byte length (psfn-framework-hrmrq.28).
+  const serializedBody = body !== undefined ? JSON.stringify(body) : undefined;
   const res = await apiFetch(path, {
     method: 'POST',
-    headers: { ...options?.headers, ...authHeaders(), 'Content-Type': 'application/json' },
+    headers: serializedBody === undefined
+      ? { ...options?.headers, ...authHeaders() }
+      : { ...options?.headers, ...authHeaders(), 'Content-Type': 'application/json' },
     credentials: 'include',
     body: serializedBody,
   });

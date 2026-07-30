@@ -141,7 +141,7 @@ export async function revealMemoryEscalated(
   if (typeof grant.grantId !== 'string' || !grant.grantId) {
     throw new Error('Escalation grant response is malformed');
   }
-  return apiPost<AdminMemoryDetailData>(target, {}, {
+  return apiPost<AdminMemoryDetailData>(`/api/admin/memory/${encodeURIComponent(id)}/reveal`, {}, {
     headers: { [FLEET_ESCALATION_GRANT_HEADER]: grant.grantId },
   });
 }

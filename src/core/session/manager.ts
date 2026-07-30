@@ -27,7 +27,6 @@ import type { SessionSearchHit } from '../../persistence/sessions/transcript-pro
 import type { EventBus } from '../../shared/event-bus.js';
 import type { InternalRoleEnvelopeLedger } from '../internal-role-envelopes/types.js';
 import { classifyChannelEnvelope, type ChannelMeta } from '../../system/trust/policy.js';
-import { countTokens } from '../../primitives/llm/tokens.js';
 import { createComponentLogger } from '../../shared/logger.js';
 import {
   COMPACTION_SUMMARY_PROMPT_KEY,
@@ -42,7 +41,6 @@ import {
   type ConversationScopeSpeaker,
 } from './conversation-scope.js';
 import {
-  resolveAdaptiveContextBudgetProfile,
   resolveSessionHistoryBudget,
   type ContextBudgetTurnCharacteristics,
 } from '../../shared/context-budget.js';
@@ -69,8 +67,6 @@ import {
 import {
   buildSessionContext,
   captureTurnSessionContext,
-  DEFAULT_OBSERVATION_MASKING_WINDOW,
-  applyObservationMasking,
 } from './manager/context-builder.js';
 import {
   buildSessionMetadataWithTurn,
@@ -97,7 +93,7 @@ import type {
   PreCompactionExtractionContext,
   PreCompactionExtractionHandler,
 } from './manager/contracts.js';
-import { runAutoCompaction } from './manager/compaction-service.js';
+import { AutoCompactionLane } from './manager/auto-compaction-lane.js';
 import type { TurnSessionContextSnapshot } from '../turns/snapshot.js';
 import {
   buildToolObservationMetadata,
@@ -111,7 +107,6 @@ import type { IntakeScreeningService } from '../cogsec/intake/screening.js';
 import type { IntakeSinkGate } from '../cogsec/intake/sink-gates.js';
 import type { ContextManifestMemorySeed } from './context-manifest.js';
 import {
-  applyFocusCompactionRanges,
   FocusKnowledgeStore,
   type FocusProjectContextSummary,
 } from './focus-knowledge.js';
@@ -158,7 +153,6 @@ import {
   type SourceChannelSessionRoute,
 } from './session-routes.js';
 import {
-  roomContentWindowFloorMs,
   type RoomContentWindow,
   type RoomContentWindowPort,
 } from './room-content-window.js';
@@ -241,22 +235,6 @@ export interface RecordToolObservationResult {
   intakeSnapshot: IntakeEnvelopeSnapshot | null;
 }
 
-function resolveCompactionTokenCount(input: {
-  count?: number;
-  text?: string;
-  field: 'systemPrompt' | 'memoriesBlock';
-}): number {
-  if (input.count !== undefined) {
-    if (!Number.isSafeInteger(input.count) || input.count < 0) {
-      throw new Error(`Auto-compaction ${input.field}TokenCount must be a non-negative safe integer`);
-    }
-    return input.count;
-  }
-  if (input.text === undefined) {
-    throw new Error(`Auto-compaction requires ${input.field} or ${input.field}TokenCount`);
-  }
-  return countTokens(input.text);
-}
 
 export class SessionManager implements SessionManagerTypeSurface {
   private store: SessionStore;
@@ -271,6 +249,7 @@ export class SessionManager implements SessionManagerTypeSurface {
   private continuityArtifactStore: SessionContinuityArtifactStore;
   private sessionRouteStore: SessionRouteStore;
   private compressionGuidelineRuntime: CompressionGuidelineRuntime;
+  private readonly autoCompactionLane: AutoCompactionLane;
   private preCompactionExtractionHandler: PreCompactionExtractionHandler | null;
   private coreMemoryProvider: SessionCoreMemoryProvider | null;
   /**
@@ -335,6 +314,25 @@ export class SessionManager implements SessionManagerTypeSurface {
     this.preCompactionExtractionHandler = null;
     this.coreMemoryProvider = null;
     this.internalRoleEnvelopeLedger = null;
+    // Between-turns auto-compaction lane (charter 12.1 split, emh3p.3).
+    this.autoCompactionLane = new AutoCompactionLane({
+      config: this.config,
+      eventBus: this.eventBus,
+      promptRegistry: this.promptRegistry,
+      compactionBoundaryStore: this.compactionBoundaryStore,
+      pendingAutoCompactions: this.pendingAutoCompactions,
+      getPreCompactionExtractionHandler: () => this.preCompactionExtractionHandler,
+      compressionGuidelineRuntime: this.compressionGuidelineRuntime,
+      getCoreMemoryProvider: () => this.coreMemoryProvider,
+      assertMutableSessionReadAllowed: (callSite) => this.assertMutableSessionReadAllowed(callSite),
+      resolveSessionChannelId: (channelId) => this.resolveSessionChannelId(channelId),
+      resolveCompactionPromptText: (basePrompt) => this.resolveCompactionPromptText(basePrompt),
+      buildCoreMemoryFormatContext: (scope) => this.buildCoreMemoryFormatContext(scope),
+      resolveConversationScopeForResolvedChannel: (resolvedChannelId, input) => this.resolveConversationScopeForResolvedChannel(resolvedChannelId, input),
+      getFocusCompactionRanges: (channelId) => this.getFocusCompactionRanges(channelId),
+      resolveRoomContentWindow: (resolvedChannelId) => this.resolveRoomContentWindow(resolvedChannelId),
+      log,
+    });
   }
 
   private resolveContextCharacterName(): string | undefined {
@@ -526,10 +524,10 @@ export class SessionManager implements SessionManagerTypeSurface {
         this.getRoleEnvelopeRefsForEntriesForResolvedChannel(logicalSessionId, sessionEntryIds)
       ),
       scheduleAutoCompactionBetweenTurns: (params) => (
-        this.scheduleAutoCompactionBetweenTurnsForResolvedChannel(logicalSessionId, params)
+        this.autoCompactionLane.scheduleForResolvedChannel(logicalSessionId, params)
       ),
       captureAutoCompactionRecentEntries: (params) => (
-        this.captureAutoCompactionRecentEntriesForResolvedChannel(logicalSessionId, params)
+        this.autoCompactionLane.captureForResolvedChannel(logicalSessionId, params)
       ),
       hasPendingAutoCompaction: () => this.pendingAutoCompactions.has(logicalSessionId),
       getActiveFocusMemoryScopeQuery: () => (
@@ -1071,171 +1069,13 @@ export class SessionManager implements SessionManagerTypeSurface {
   }
 
   scheduleAutoCompactionBetweenTurns(params: AutoCompactionBetweenTurnsParams): Promise<void> {
-    this.assertMutableSessionReadAllowed(
-      'SessionManager.scheduleAutoCompactionBetweenTurns',
-    );
-    const { channelId, ...capturedParams } = params;
-    return this.scheduleAutoCompactionBetweenTurnsForResolvedChannel(
-      this.resolveSessionChannelId(channelId),
-      capturedParams,
-    );
-  }
-
-  private scheduleAutoCompactionBetweenTurnsForResolvedChannel(
-    resolvedChannelId: string,
-    params: Omit<AutoCompactionBetweenTurnsParams, 'channelId'>,
-  ): Promise<void> {
-    if (!shouldPersistSessionChannel(resolvedChannelId)) {
-      return Promise.resolve();
-    }
-
-    const previous = this.pendingAutoCompactions.get(resolvedChannelId) ?? Promise.resolve();
-    const next = previous
-      .catch((error) => {
-        log.error('Auto-compaction queue continuation failed', {
-          channelId: resolvedChannelId,
-          error: error instanceof Error ? error.message : String(error),
-        });
-      })
-      .then(async () => {
-        const adaptiveProfile = params.adaptiveProfile ?? resolveAdaptiveContextBudgetProfile(
-          this.config,
-          params.turnBudgetCharacteristics,
-        );
-        const recent = params.capturedRecentEntries !== undefined
-          ? [...params.capturedRecentEntries]
-          : this.captureAutoCompactionRecentEntriesForResolvedChannel(resolvedChannelId, {
-              adaptiveProfile,
-              ...(params.turnBudgetCharacteristics
-                ? { turnBudgetCharacteristics: params.turnBudgetCharacteristics }
-                : {}),
-            });
-        const coreMemoryBlock = this.coreMemoryProvider
-          ?.formatForContext(this.buildCoreMemoryFormatContext(
-            // Between-turns work resolves its own scope at drain time; the
-            // session store may have advanced since the turn that scheduled it.
-            this.resolveConversationScopeForResolvedChannel(resolvedChannelId, {
-              ...(params.channelMeta ? { channelMeta: params.channelMeta } : {}),
-              ...(params.userId ? { userId: params.userId } : {}),
-            }),
-          ))
-          .trim() ?? '';
-        const baseCompactionPrompt = this.promptRegistry?.getPrompt(COMPACTION_SUMMARY_PROMPT_KEY)
-          ?? getDefaultPromptText(COMPACTION_SUMMARY_PROMPT_KEY);
-        const systemTokens = resolveCompactionTokenCount({
-          count: params.systemPromptTokenCount,
-          text: params.systemPrompt,
-          field: 'systemPrompt',
-        })
-          + countTokens(coreMemoryBlock)
-          + resolveCompactionTokenCount({
-            count: params.memoriesTokenCount,
-            text: params.memoriesBlock,
-            field: 'memoriesBlock',
-          });
-        await runAutoCompaction({
-          channelId: resolvedChannelId,
-          recent,
-          channelVisibility: classifyChannelEnvelope(resolvedChannelId, params.channelMeta).privacy,
-          systemTokens,
-          compactionPromptText: params.compactionPromptText
-            ?? this.resolveCompactionPromptText(baseCompactionPrompt),
-          llmProvider: params.llmProvider,
-          store: this.compactionBoundaryStore,
-          config: this.config,
-          ...(params.icpCorrelation ? { icpCorrelation: params.icpCorrelation } : {}),
-          eventBus: this.eventBus,
-          promptRegistry: this.promptRegistry,
-          preCompactionExtractionHandler: this.preCompactionExtractionHandler,
-          onCompactionComplete: ({ channelId, originalContext, compressedContext, capturedAt }) => {
-            this.compressionGuidelineRuntime.recordCompactionTrajectory({
-              channelId,
-              originalContext,
-              compressedContext,
-              capturedAt,
-            });
-          },
-          userId: params.userId,
-          ...(params.throwOnFailure === true ? { throwOnFailure: true } : {}),
-          ...(params.assertEffectAllowed
-            ? { assertEffectAllowed: params.assertEffectAllowed }
-            : {}),
-        });
-      })
-      .finally(() => {
-        if (this.pendingAutoCompactions.get(resolvedChannelId) === next) {
-          this.pendingAutoCompactions.delete(resolvedChannelId);
-        }
-      });
-
-    this.pendingAutoCompactions.set(resolvedChannelId, next);
-    return next;
+    return this.autoCompactionLane.scheduleBetweenTurns(params);
   }
 
   captureAutoCompactionRecentEntries(
     params: AutoCompactionRecentEntriesCaptureParams,
   ): SessionEntry[] {
-    this.assertMutableSessionReadAllowed(
-      'SessionManager.captureAutoCompactionRecentEntries',
-    );
-    const { channelId, ...capturedParams } = params;
-    return this.captureAutoCompactionRecentEntriesForResolvedChannel(
-      this.resolveSessionChannelId(channelId),
-      capturedParams,
-    );
-  }
-
-  private captureAutoCompactionRecentEntriesForResolvedChannel(
-    resolvedChannelId: string,
-    params: Omit<AutoCompactionRecentEntriesCaptureParams, 'channelId'>,
-  ): SessionEntry[] {
-    const adaptiveProfile = params.adaptiveProfile ?? resolveAdaptiveContextBudgetProfile(
-      this.config,
-      params.turnBudgetCharacteristics,
-    );
-    const historyBudget = resolveSessionHistoryBudget(this.config, {
-      ...(params.turnBudgetCharacteristics ? { turn: params.turnBudgetCharacteristics } : {}),
-      adaptiveProfile,
-    });
-    const maxSessionEntryId = params.maxSessionEntryId;
-    if (maxSessionEntryId !== undefined
-      && (!Number.isSafeInteger(maxSessionEntryId) || maxSessionEntryId < 1)) {
-      throw new Error('Auto-compaction maxSessionEntryId must be a positive safe integer');
-    }
-    const boundedStore = maxSessionEntryId === undefined
-      ? this.compactionBoundaryStore
-      : {
-          getRecent: (channelId: string, limit: number): SessionEntry[] => (
-            this.compactionBoundaryStore.getEntriesBefore(
-              channelId,
-              maxSessionEntryId + 1,
-              limit,
-            )
-          ),
-        };
-    let recent = collectRecentEntriesWithinTokenBudget({
-      store: boundedStore,
-      channelId: resolvedChannelId,
-      estimatedCount: historyBudget.estimatedCount,
-      tokenBudget: historyBudget.tokenBudget,
-      turnBudgetCharacteristics: params.turnBudgetCharacteristics,
-      ...(params.now ? { now: params.now } : {}),
-    }).entries;
-    // A compaction summary is a served surface: never let it reintroduce room
-    // content from before the current presence window.
-    const roomWindow = this.resolveRoomContentWindow(resolvedChannelId);
-    if (roomWindow.kind !== 'unwindowed') {
-      const floor = roomContentWindowFloorMs(roomWindow);
-      recent = recent.filter(entry => entry.timestamp >= floor);
-    }
-    recent = applyFocusCompactionRanges(
-      recent,
-      this.getFocusCompactionRanges(resolvedChannelId),
-    ).entries;
-    return applyObservationMasking(
-      recent,
-      this.config.observationMaskingWindow ?? DEFAULT_OBSERVATION_MASKING_WINDOW,
-    ).entries;
+    return this.autoCompactionLane.captureRecentEntries(params);
   }
 
   recordToolObservation(

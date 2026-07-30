@@ -24,10 +24,16 @@ import {
 import { validateGardenRequestMetadata } from '../../boundary/fleet-auth/request-capability-target.js';
 import {
   createLegacyGardenRequestContext,
-  gardenRequestServiceBoundaryDenial,
   type GardenRequestContext,
 } from './garden-request-context.js';
 import { gardenRequestCompanionScopeDenial } from './garden-companion-scope.js';
+import { createComponentLogger } from '../../shared/logger.js';
+import {
+  denyFleetGardenServiceBoundary,
+  getGardenDenialsLastHour,
+} from './garden-denial-observability.js';
+
+const log = createComponentLogger('GardenAdminRoutes');
 
 interface AdminRouteDeclaration {
   method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
@@ -75,11 +81,7 @@ export function dispatchAdminRoute(
         headers: req.headers,
       }).query,
     });
-    const boundaryDenial = gardenRequestServiceBoundaryDenial(requestContext);
-    if (boundaryDenial) {
-      sendJson(res, 403, { error: boundaryDenial });
-      return true;
-    }
+    if (denyFleetGardenServiceBoundary(res, log, requestContext)) return true;
     // Invariant 11 (docs/garden-control-plane.md): the companion whose direct-DB
     // service instances handle this route is `companionId` (the connection-bound
     // companion whose stores were captured at construction). Refuse to run any
@@ -175,7 +177,11 @@ export function buildAdminRoutes(deps: AdminRouteDependencies): AdminRoute[] {
       method: 'GET',
       match: exactPath('/health'),
       handle: (_req, res) => {
-        sendJson(res, 200, { status: 'ok', uptime: process.uptime() });
+        sendJson(res, 200, {
+          status: 'ok',
+          uptime: process.uptime(),
+          gardenDenialsLastHour: getGardenDenialsLastHour(),
+        });
       },
     },
     ...buildAdminApiRoutes({

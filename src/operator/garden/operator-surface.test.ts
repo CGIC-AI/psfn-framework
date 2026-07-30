@@ -1142,6 +1142,7 @@ describe('Garden operator surface', () => {
       expect(JSON.parse(healthRes.body)).toEqual({
         status: 'ok',
         uptime: expect.any(Number),
+        gardenDenialsLastHour: expect.any(Number),
         dependencies: {
           adminTransport: {
             mode: 'network',
@@ -1358,6 +1359,7 @@ describe('Garden operator surface', () => {
     expect(JSON.parse(res.body)).toEqual({
       status: 'degraded',
       uptime: expect.any(Number),
+      gardenDenialsLastHour: expect.any(Number),
       dependencies: {
         adminTransport: expect.objectContaining({
           mode: 'socket',
@@ -1423,6 +1425,7 @@ describe('Garden operator surface', () => {
     expect(JSON.parse(res.body)).toEqual({
       status: 'degraded',
       uptime: expect.any(Number),
+      gardenDenialsLastHour: expect.any(Number),
       dependencies: {
         adminTransport: expect.objectContaining({
           mode: 'socket',
@@ -1586,6 +1589,7 @@ describe('Garden operator surface', () => {
       expect(JSON.parse(res.body)).toEqual({
         status: 'degraded',
         uptime: expect.any(Number),
+        gardenDenialsLastHour: expect.any(Number),
         dependencies: {
           adminTransport: {
             mode: 'socket',
@@ -1608,6 +1612,7 @@ describe('Garden operator surface', () => {
     expect(JSON.parse(res.body)).toEqual({
       status: 'ok',
       uptime: expect.any(Number),
+      gardenDenialsLastHour: expect.any(Number),
       dependencies: {
         adminTransport: {
           mode: 'socket',

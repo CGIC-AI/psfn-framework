@@ -14,7 +14,9 @@ import {
 import {
   compileAgentGardenRequestTarget,
   compileOperatorGardenRequestTarget,
+  validateGardenRequestMetadata,
   type CompiledGardenRequestTarget,
+  type ValidatedGardenRequestMetadata,
 } from '../../boundary/fleet-auth/request-capability-target.js';
 import {
   REQUEST_CAPABILITY_ASSERTION_HEADERS,
@@ -29,7 +31,12 @@ import {
 import type { FleetAuthVerifierConfig } from '../../system/config/fleet-auth-config.js';
 import { createCompanionId, type CompanionId } from '../../shared/routing/companion-id.js';
 import { sendText, type HttpLogger } from '../../channels/backplane/http/primitives.js';
+import { createComponentLogger } from '../../shared/logger.js';
 import { timingSafeStringEqual } from '../../shared/utils/secret-compare.js';
+import {
+  recordGardenDenial,
+  type GardenDenialReasonCode,
+} from './garden-denial-observability.js';
 
 // Canonical envelope codec lives in the fleet-auth boundary; re-exported here
 // for the operator-side call sites that historically imported it from this
@@ -42,6 +49,7 @@ export {
 export type { GardenCapabilityContext } from '../../boundary/fleet-auth/garden-capability-context.js';
 
 const REQUEST_CAPABILITY_HEADER = REQUEST_CAPABILITY_ASSERTION_HEADERS[0];
+const log = createComponentLogger('GardenAdmission');
 
 const FLEET_CALLER_AUTHORITY_HEADERS = Object.freeze([
   'authorization',
@@ -221,19 +229,65 @@ export async function admitFleetGardenRequest(input: {
   headers: IncomingHttpHeaders;
   body: Buffer;
 }): Promise<FleetGardenAdmissionResult> {
+  let metadata: ValidatedGardenRequestMetadata | undefined;
+  let metadataError: unknown;
+  let principalId: string | undefined;
+  const deny = (
+    status: Extract<FleetGardenAdmissionResult, { decision: 'deny' }>['status'],
+    message: string,
+    reasonCode: GardenDenialReasonCode,
+    error?: unknown,
+  ): Extract<FleetGardenAdmissionResult, { decision: 'deny' }> => {
+    recordGardenDenial(log, {
+      reasonCode,
+      status,
+      routeId: metadata?.routeId,
+      action: metadata?.action,
+      principalId,
+      ...(error !== undefined
+        ? { errorName: error instanceof Error ? error.name : typeof error }
+        : {}),
+    });
+    return { decision: 'deny', status, message };
+  };
+  const resolveMetadata = (): void => {
+    try {
+      metadata = validateGardenRequestMetadata({
+        rawTarget: input.rawTarget,
+        method: input.method,
+        headers: input.headers,
+      });
+    } catch (error) {
+      metadataError = error;
+      // Admission's target compiler below owns the authoritative rejection.
+      // Earlier header denials include this failure class in their log.
+    }
+  };
   let token: string | undefined;
   let encodedContext: string | undefined;
   try {
     token = firstHeader(input.headers, REQUEST_CAPABILITY_HEADER);
     encodedContext = firstHeader(input.headers, GARDEN_CAPABILITY_CONTEXT_HEADER);
-  } catch {
+  } catch (error) {
     stripFleetCallerAuthority(input.headers);
-    return { decision: 'deny', status: 400, message: 'Invalid Garden capability headers' };
+    resolveMetadata();
+    return deny(
+      400,
+      'Invalid Garden capability headers',
+      'invalid_capability_headers',
+      error ?? metadataError,
+    );
   }
   const forbiddenCallerAuthority = hasForbiddenFleetCallerAuthority(input.headers);
   stripFleetCallerAuthority(input.headers);
+  resolveMetadata();
   if (forbiddenCallerAuthority) {
-    return { decision: 'deny', status: 400, message: 'Browser authority headers are forbidden' };
+    return deny(
+      400,
+      'Browser authority headers are forbidden',
+      'browser_authority_forbidden',
+      metadataError,
+    );
   }
 
   let target: CompiledGardenRequestTarget<Buffer>;
@@ -250,34 +304,48 @@ export async function admitFleetGardenRequest(input: {
     });
   } catch (error) {
     const routeMissing = error instanceof Error && /route .* is not declared/u.test(error.message);
-    return {
-      decision: 'deny',
-      status: routeMissing ? 404 : 400,
-      message: routeMissing ? 'Not found' : 'Invalid Garden request target',
-    };
+    const reasonCode: GardenDenialReasonCode = routeMissing
+      ? 'route_not_declared'
+      : error instanceof Error && /body is forbidden/u.test(error.message)
+        ? 'request_body_forbidden'
+        : error instanceof Error && /body is required/u.test(error.message)
+          ? 'request_body_required'
+          : error instanceof Error && /body exceeds/u.test(error.message)
+            ? 'request_body_too_large'
+            : 'request_target_invalid';
+    return deny(
+      routeMissing ? 404 : 400,
+      routeMissing ? 'Not found' : 'Invalid Garden request target',
+      reasonCode,
+      error,
+    );
   }
 
   switch (target.authorization.publicAccess) {
     case 'always':
       if (token || encodedContext) {
-        return { decision: 'deny', status: 400, message: 'Public routes do not accept authority' };
+        return deny(400, 'Public routes do not accept authority', 'public_route_authority_forbidden');
       }
       return { decision: 'allow', target };
     case 'feature_off_only':
-      return { decision: 'deny', status: 404, message: 'Not found' };
+      return deny(404, 'Not found', 'feature_off');
     case 'never':
       break;
   }
   if (!token
     || !encodedContext
     || token.length > GARDEN_CAPABILITY_PROTOCOL_BOUNDS.capabilityLength) {
-    return { decision: 'deny', status: 401, message: 'Fleet Garden capability required' };
+    return deny(401, 'Fleet Garden capability required', 'capability_required');
   }
 
   let context: GardenCapabilityContext;
-  let verified: VerifiedRequestCapability;
   try {
     context = parseGardenCapabilityContext(encodedContext, input.admission.companionId);
+  } catch (error) {
+    return deny(403, 'Invalid Fleet Garden capability', 'capability_context_invalid', error);
+  }
+  let verified: VerifiedRequestCapability;
+  try {
     if (input.admission.audience === 'operator') {
       if (context.parent) throw new Error('operator capability cannot contain a parent');
       try {
@@ -307,12 +375,13 @@ export async function admitFleetGardenRequest(input: {
         throw new Error('agent audience mismatch');
       }
     }
-  } catch {
-    return { decision: 'deny', status: 403, message: 'Invalid Fleet Garden capability' };
+  } catch (error) {
+    return deny(403, 'Invalid Fleet Garden capability', 'capability_invalid', error);
   }
+  principalId = verified.authContext.principalId;
   if (verified.authContext.provider === 'testing_harness'
     && input.admission.testingHarness?.enabled !== true) {
-    return { decision: 'deny', status: 403, message: 'Invalid Fleet Garden capability' };
+    return deny(403, 'Invalid Fleet Garden capability', 'capability_testing_harness_disabled');
   }
 
   let replay: RequestCapabilityReplayOutcome;
@@ -320,14 +389,14 @@ export async function admitFleetGardenRequest(input: {
     replay = await input.admission.replay.consume(
       compileRequestCapabilityReplayConsumption({ token, verified, target }),
     );
-  } catch {
-    return { decision: 'deny', status: 503, message: 'Fleet Garden replay authority unavailable' };
+  } catch (error) {
+    return deny(503, 'Fleet Garden replay authority unavailable', 'replay_authority_unavailable', error);
   }
   switch (replay.outcome) {
     case 'mismatch':
-      return { decision: 'deny', status: 403, message: 'Fleet Garden capability replay mismatch' };
+      return deny(403, 'Fleet Garden capability replay mismatch', 'capability_replay_mismatch');
     case 'replayed':
-      return { decision: 'deny', status: 409, message: 'Fleet Garden capability already consumed' };
+      return deny(409, 'Fleet Garden capability already consumed', 'capability_already_consumed');
     case 'consumed':
       break;
   }

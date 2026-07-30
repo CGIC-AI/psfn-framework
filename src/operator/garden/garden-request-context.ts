@@ -293,3 +293,13 @@ export function gardenRequestServiceBoundaryDenial(
   }
   return null;
 }
+
+export function gardenRequestServiceBoundaryDenialCode(
+  context: GardenRequestContext,
+): 'subject_bound_session_required' | 'subject_authorized_memory_required' | null {
+  const denial = gardenRequestServiceBoundaryDenial(context);
+  if (!denial) return null;
+  return context.resource.area === 'sessions'
+    ? 'subject_bound_session_required'
+    : 'subject_authorized_memory_required';
+}

@@ -4,6 +4,7 @@ import { Readable } from 'node:stream';
 import { describe, expect, it, vi } from 'vitest';
 import {
   buildFleetSsoProxyRequestHeaders,
+  fleetGardenUpgradeClose,
   GatewayFleetSsoRouter,
   resolveFleetSsoBrowserOrigin,
 } from './fleet-sso-router.js';
@@ -19,6 +20,17 @@ import {
   admitFleetGardenRequest,
   InMemoryRequestCapabilityReplayPort,
 } from '../../operator/garden/garden-admission.js';
+
+describe('Fleet Garden WebSocket rejection close contract', () => {
+  it.each([
+    [400, 4400, 'Invalid Garden stream request'],
+    [401, 4401, 'Garden stream authentication required'],
+    [404, 4404, 'Garden stream unavailable'],
+    [503, 4503, 'Garden stream service unavailable'],
+  ] as const)('maps HTTP %s to close code %s with a browser-visible reason', (status, code, reason) => {
+    expect(fleetGardenUpgradeClose(status)).toEqual({ code, reason });
+  });
+});
 
 function request(headers: IncomingMessage['headers'], encrypted = false): Pick<IncomingMessage, 'headers' | 'socket'> {
   return {

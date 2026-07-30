@@ -5,12 +5,14 @@ import {
   disconnectGardenEventBus,
   getTelemetryEvents,
   getGardenEventCacheError,
+  getGardenEventBusConnectionError,
   hydrateGardenEventBus,
   isGardenEventBusConnected,
   isGardenEventBusPaused,
   pauseGardenEventBus,
   resumeGardenEventBus,
 } from '$lib/events/garden-event-bus.svelte';
+import type { WsConnectionError } from '$lib/api/websocket';
 
 export function getEvents(): TelemetryEvent[] {
   return getTelemetryEvents();
@@ -18,6 +20,10 @@ export function getEvents(): TelemetryEvent[] {
 
 export function getTelemetryCacheError(): string | null {
   return getGardenEventCacheError();
+}
+
+export function getTelemetryConnectionError(): WsConnectionError | null {
+  return getGardenEventBusConnectionError();
 }
 
 export function hydrateTelemetryCache(): Promise<void> {

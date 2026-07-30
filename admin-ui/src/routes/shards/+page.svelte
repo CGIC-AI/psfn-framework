@@ -3,6 +3,7 @@
   import { base } from '$app/paths';
   import {
     getEvents,
+    getTelemetryConnectionError,
     isConnected,
     connectTelemetry,
     disconnectTelemetry,
@@ -169,6 +170,14 @@
       {:else}
         <span class="inline-flex rounded-full h-2.5 w-2.5 bg-wilt-400"></span>
         <span class="text-sm text-wilt-600 font-medium">Disconnected</span>
+        {#if getTelemetryConnectionError()}
+          <span class="text-xs text-wilt-600" role="status">
+            {#if getTelemetryConnectionError()?.code !== null}
+              Code {getTelemetryConnectionError()?.code}:
+            {/if}
+            {getTelemetryConnectionError()?.reason}
+          </span>
+        {/if}
         <button
           onclick={() => connectTelemetry()}
           class="text-sm px-3 py-1.5 rounded-lg border border-moss-300 bg-moss-50 text-moss-700

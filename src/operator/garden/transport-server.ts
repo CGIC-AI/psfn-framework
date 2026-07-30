@@ -50,9 +50,13 @@ import {
 import {
   createFleetGardenRequestContext,
   createLegacyGardenRequestContext,
-  gardenRequestServiceBoundaryDenial,
   type GardenRequestContext,
 } from './garden-request-context.js';
+import {
+  denyFleetGardenServiceBoundary,
+  getGardenDenialsLastHour,
+  recordGardenDenial,
+} from './garden-denial-observability.js';
 
 const log = createComponentLogger('GardenAdminTransport');
 const ADMIN_MAX_BODY_SIZE = 65_536;
@@ -89,11 +93,7 @@ function dispatchAdminApiRoute(
         headers: req.headers,
       }).query,
     });
-    const boundaryDenial = gardenRequestServiceBoundaryDenial(requestContext);
-    if (boundaryDenial) {
-      sendJson(res, 403, { error: boundaryDenial });
-      return true;
-    }
+    if (denyFleetGardenServiceBoundary(res, log, requestContext)) return true;
     route.handle(req, res, params, requestContext);
     return true;
   }
@@ -430,7 +430,14 @@ export class GardenAdminTransportServer implements Lifecycle {
     let requestPath: string;
     try {
       requestPath = parseCanonicalGardenRequestPath(req.url ?? '/').canonicalPath;
-    } catch {
+    } catch (error) {
+      if (this.admission.kind === 'fleet-principal') {
+        recordGardenDenial(log, {
+          reasonCode: 'request_target_invalid',
+          status: 400,
+          errorName: error instanceof Error ? error.name : typeof error,
+        });
+      }
       sendText(res, 400, 'Invalid request target');
       return;
     }
@@ -439,7 +446,10 @@ export class GardenAdminTransportServer implements Lifecycle {
       && requestPath === HEALTH_PROBE_PATH;
     const rejectionReason = this.authorizePeer(req, isHealthProbe);
     if (rejectionReason) {
-      log.warn('Rejected Garden admin transport peer', { reason: rejectionReason });
+      recordGardenDenial(log, {
+        reasonCode: 'transport_peer_forbidden',
+        status: 403,
+      });
       sendText(res, 403, 'Forbidden');
       return;
     }
@@ -448,6 +458,7 @@ export class GardenAdminTransportServer implements Lifecycle {
       sendJson(res, this.runtimeReady ? 200 : 503, {
         status: this.runtimeReady ? 'ok' : 'initializing',
         mode: this.config.endpoint.mode,
+        gardenDenialsLastHour: getGardenDenialsLastHour(),
       });
       return;
     }
@@ -492,6 +503,12 @@ export class GardenAdminTransportServer implements Lifecycle {
       || requestPath !== '/api/admin/model-usage'
       || !isFleetModelUsageInternalRequestTarget(requestTarget)
       || !this.companionId) {
+      recordGardenDenial(log, {
+        reasonCode: 'internal_model_usage_denied',
+        status: 403,
+        routeId: 'GET /api/admin/model-usage',
+        action: 'models.read',
+      });
       sendText(res, 403, 'Forbidden');
       return;
     }
@@ -508,7 +525,14 @@ export class GardenAdminTransportServer implements Lifecycle {
         headers: req.headers,
         body: Buffer.alloc(0),
       });
-    } catch {
+    } catch (error) {
+      recordGardenDenial(log, {
+        reasonCode: 'internal_model_usage_admission_failed',
+        status: 403,
+        routeId: 'GET /api/admin/model-usage',
+        action: 'models.read',
+        errorName: error instanceof Error ? error.name : typeof error,
+      });
       sendText(res, 403, 'Forbidden');
       return;
     }
@@ -518,12 +542,22 @@ export class GardenAdminTransportServer implements Lifecycle {
     const authorizedRequestTarget = admitted.decision === 'allow'
       ? admitted.verified?.authContext.fleetModelUsageRequestTarget
       : undefined;
-    if (admitted.decision !== 'allow'
-      || admitted.target.canonicalPath !== '/api/admin/fleet-model-usage'
+    if (admitted.decision !== 'allow') {
+      sendText(res, 403, 'Forbidden');
+      return;
+    }
+    if (admitted.target.canonicalPath !== '/api/admin/fleet-model-usage'
       || admitted.target.method !== 'GET'
       || admitted.target.action !== 'models.read'
       || !authorizedCompanionIds?.includes(this.companionId)
       || authorizedRequestTarget !== requestTarget) {
+      recordGardenDenial(log, {
+        reasonCode: 'internal_model_usage_scope_denied',
+        status: 403,
+        routeId: admitted.target.resource.routeId,
+        action: admitted.target.action,
+        principalId: admitted.verified?.authContext.principalId,
+      });
       sendText(res, 403, 'Forbidden');
       return;
     }
@@ -551,10 +585,30 @@ export class GardenAdminTransportServer implements Lifecycle {
       }).canonicalPath;
     } catch (error) {
       if (error instanceof GardenRequestTargetError && error.code === 'authority_forbidden') {
+        if (context?.kind === 'fleet_principal') {
+          recordGardenDenial(log, {
+            reasonCode: 'browser_authority_forbidden',
+            status: 403,
+            routeId: context.resource.routeId,
+            action: context.action,
+            principalId: context.actor.principalId,
+            errorName: error.name,
+          });
+        }
         sendJson(res, 403, { error: 'Cross-tenant authority selector is forbidden' });
       } else if (error instanceof GardenRequestTargetError && error.code === 'route_not_declared') {
         sendText(res, 404, `Not found: ${requestPath}`);
       } else {
+        if (context?.kind === 'fleet_principal') {
+          recordGardenDenial(log, {
+            reasonCode: 'request_target_invalid',
+            status: 400,
+            routeId: context.resource.routeId,
+            action: context.action,
+            principalId: context.actor.principalId,
+            errorName: error instanceof Error ? error.name : typeof error,
+          });
+        }
         sendText(res, 400, 'Invalid request target');
       }
       return;
@@ -622,7 +676,10 @@ export class GardenAdminTransportServer implements Lifecycle {
   private handleUpgrade(req: IncomingMessage, socket: Duplex, head: Buffer): void {
     const rejectionReason = this.authorizePeer(req, false);
     if (rejectionReason) {
-      log.warn('Rejected Garden admin transport websocket peer', { reason: rejectionReason });
+      recordGardenDenial(log, {
+        reasonCode: 'transport_peer_forbidden',
+        status: 403,
+      });
       socket.write('HTTP/1.1 403 Forbidden\r\n\r\n');
       socket.destroy();
       return;
